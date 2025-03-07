@@ -37,6 +37,9 @@ impl<'db> ItemKind<'db> {
             ast::ItemKind::Enum(enum_) => {
                 Enum::lower_ast(ctxt, enum_);
             }
+            ast::ItemKind::Msg(_) => {
+                todo!() // xxx
+            }
             ast::ItemKind::TypeAlias(alias) => {
                 TypeAlias::lower_ast(ctxt, alias);
             }

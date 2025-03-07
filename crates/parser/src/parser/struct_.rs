@@ -61,7 +61,7 @@ impl super::Parse for RecordFieldDefListScope {
     }
 }
 
-define_scope! { RecordFieldDefScope, RecordFieldDef }
+define_scope! { pub(crate) RecordFieldDefScope, RecordFieldDef }
 impl super::Parse for RecordFieldDefScope {
     type Error = Recovery<ErrProof>;
 

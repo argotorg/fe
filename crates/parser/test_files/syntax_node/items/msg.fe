@@ -1,0 +1,20 @@
+msg Erc20Msg {
+  // Transfers `amount` tokens to `to`, returns success
+  Transfer { to: Address, amount: u256 } -> bool,
+  // Returns the balance of `addr`
+  Balance { addr: Address } -> u256,
+  // Returns the total token supply
+  TotalSupply -> u256,
+  // Returns the remaining allowance that `spender` can spend from `owner`
+  Allowance { owner: Address, spender: Address } -> u256,
+  // Approves `spender` to spend `amount` tokens, returns success
+  Approve { spender: Address, amount: u256 } -> bool,
+  // Transfers `amount` tokens from `from` to `to` using allowance, returns success
+  TransferFrom { from: Address, to: Address, amount: u256 } -> bool,
+  // Optional: Returns the token's name
+  Name -> string,
+  // Optional: Returns the token's symbol
+  Symbol -> string,
+  // Optional: Returns the number of decimals
+  Decimals -> u8
+}
