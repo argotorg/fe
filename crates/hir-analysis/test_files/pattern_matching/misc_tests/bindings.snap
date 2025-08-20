@@ -3,7 +3,7 @@ source: crates/hir-analysis/tests/pattern_matching.rs
 expression: diagnostic_output
 input_file: test_files/pattern_matching/misc_tests/bindings.fe
 ---
-Misc test file bindings.fe has 11 diagnostic(s):
+Misc test file bindings.fe has 12 diagnostic(s):
 
 error[8-0014]: type must be known here
    ┌─ bindings.fe:35:47
@@ -17,14 +17,14 @@ error[8-0014]: type must be known here
 53 │         (Option::Some(a), Option::Some(b)) => a + b
    │                                               ^ type must be known here
 
-error[8-0024]: argument label mismatch
-    ┌─ bindings.fe:200:26
-    │
-194 │ fn identity<T>(value: T) -> T {
-    │    -------- function defined here
-    ·
-200 │     let value = identity(Option::None)
-    │                          ^^^^^^^^^^^^ expected `value` label
+error[8-0031]: type annotation is needed
+   ┌─ bindings.fe:33:31
+   │
+33 │     let pair = (Option::None, Option::None)
+   │                               ^^^^^^^^^^^^
+   │                               │
+   │                               type annotation is needed
+   │                               consider giving `: Option<_>` here
 
 error[8-0031]: type annotation is needed
    ┌─ bindings.fe:37:10
@@ -52,6 +52,15 @@ error[8-0031]: type annotation is needed
    │                        │
    │                        type annotation is needed
    │                        consider giving `: Option<_>` here
+
+error[8-0031]: type annotation is needed
+   ┌─ bindings.fe:51:31
+   │
+51 │     let pair = (Option::None, Option::Some(42))
+   │                               ^^^^^^^^^^^^^^^^
+   │                               │
+   │                               type annotation is needed
+   │                               consider giving `: Option<{integer}>` here
 
 error[8-0031]: type annotation is needed
    ┌─ bindings.fe:55:10

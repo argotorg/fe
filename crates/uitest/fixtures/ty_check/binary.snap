@@ -3,38 +3,47 @@ source: crates/uitest/tests/ty_check.rs
 expression: diags
 input_file: fixtures/ty_check/binary.fe
 ---
-error[8-0016]: `std::ops::Add` trait is not implemented
+error[8-0000]: type mismatch
+  ┌─ binary.fe:6:6
+  │
+6 │     (f && f) || f
+  │      ^ expected `bool`, but `Foo` is given
+
+error[8-0000]: type mismatch
+  ┌─ binary.fe:6:11
+  │
+6 │     (f && f) || f
+  │           ^ expected `bool`, but `Foo` is given
+
+error[8-0000]: type mismatch
+  ┌─ binary.fe:6:17
+  │
+6 │     (f && f) || f
+  │                 ^ expected `bool`, but `Foo` is given
+
+error[8-0016]: `core::ops::Add` trait is not implemented
   ┌─ binary.fe:4:5
   │
 4 │     f + f
   │     ^^^^^
   │     │
   │     `+` can't be applied to `Foo`
-  │     Try implementing `std::ops::Add` for `Foo`
+  │     Try implementing `core::ops::Add` for `Foo`
 
-error[8-0016]: `std::ops::And` trait is not implemented
-  ┌─ binary.fe:6:6
-  │
-6 │     (f && f) || f
-  │      ^^^^^^
-  │      │
-  │      `&&` can't be applied to `Foo`
-  │      Try implementing `std::ops::And` for `Foo`
-
-error[8-0016]: `std::ops::Eq` trait is not implemented
+error[8-0016]: `core::ops::Eq` trait is not implemented
   ┌─ binary.fe:7:5
   │
 7 │     f == f
   │     ^^^^^^
   │     │
   │     `==` can't be applied to `Foo`
-  │     Try implementing `std::ops::Eq` for `Foo`
+  │     Try implementing `core::ops::Eq` for `Foo`
 
-error[8-0016]: `std::ops::Ord` trait is not implemented
+error[8-0016]: `core::ops::Ord` trait is not implemented
   ┌─ binary.fe:8:5
   │
 8 │     f < f
   │     ^^^^^
   │     │
   │     `<` can't be applied to `Foo`
-  │     Try implementing `std::ops::Ord` for `Foo`
+  │     Try implementing `core::ops::Ord` for `Foo`

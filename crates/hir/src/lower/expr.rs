@@ -41,13 +41,15 @@ impl<'db> Expr<'db> {
             ast::ExprKind::Bin(bin) => {
                 let lhs = Self::push_to_body_opt(ctxt, bin.lhs());
                 let rhs = Self::push_to_body_opt(ctxt, bin.rhs());
-                let op = bin.op().map(BinOp::lower_ast).into();
+                let op = bin.op().expect("parser guarantees op presence");
+                let op = BinOp::lower_ast(op);
                 Self::Bin(lhs, rhs, op)
             }
 
             ast::ExprKind::Un(un) => {
                 let expr = Self::push_to_body_opt(ctxt, un.expr());
-                let op = un.op().map(UnOp::lower_ast).into();
+                let op = un.op().expect("parser guarantees op presence");
+                let op = UnOp::lower_ast(op);
                 Self::Un(expr, op)
             }
 
@@ -115,7 +117,7 @@ impl<'db> Expr<'db> {
             ast::ExprKind::Index(index) => {
                 let indexed = Self::push_to_body_opt(ctxt, index.expr());
                 let index = Self::push_to_body_opt(ctxt, index.index());
-                Self::Index(indexed, index)
+                Self::Bin(indexed, index, BinOp::Index)
             }
 
             ast::ExprKind::Tuple(tup) => {
@@ -182,9 +184,9 @@ impl<'db> Expr<'db> {
             ast::ExprKind::AugAssign(aug_assign) => {
                 let lhs = Self::push_to_body_opt(ctxt, aug_assign.lhs_expr());
                 let rhs = Self::push_to_body_opt(ctxt, aug_assign.rhs_expr());
-                let binop = aug_assign.op().map(ArithBinOp::lower_ast).unwrap();
-
-                Self::AugAssign(lhs, rhs, binop)
+                let op = aug_assign.op().expect("parser guarantees op presence");
+                let op = ArithBinOp::lower_ast(op);
+                Self::AugAssign(lhs, rhs, op)
             }
         };
 

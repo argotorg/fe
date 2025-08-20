@@ -112,24 +112,52 @@ impl<'db> PathId<'db> {
         }
     }
 
-    pub fn push(
+    pub fn replace_root(
         self,
+        from: IdentId<'db>,
+        to: IdentId<'db>,
         db: &'db dyn HirDb,
-        ident: Partial<IdentId<'db>>,
-        generic_args: GenericArgListId<'db>,
-    ) -> Self {
-        Self::new(
-            db,
-            PathKind::Ident {
-                ident,
-                generic_args,
-            },
-            Some(self),
-        )
+    ) -> PathId<'db> {
+        match self.parent(db) {
+            Some(parent) => parent.replace_root(from, to, db).push(db, self.kind(db)),
+            None => {
+                let kind = match self.kind(db) {
+                    PathKind::Ident {
+                        ident,
+                        generic_args,
+                    } if ident == from => PathKind::Ident {
+                        ident: Partial::Present(to),
+                        generic_args,
+                    },
+                    kind => kind,
+                };
+                PathId::new(db, kind, None)
+            }
+        }
+    }
+
+    pub fn is_core_lib_path(self, db: &'db dyn HirDb) -> bool {
+        match self.parent(db) {
+            Some(parent) => parent.is_core_lib_path(db),
+            None => self
+                .as_ident(db)
+                .map(|id| id.data(db) == "core")
+                .unwrap_or_default(),
+        }
+    }
+
+    pub fn push(self, db: &'db dyn HirDb, kind: PathKind<'db>) -> Self {
+        Self::new(db, kind, Some(self))
     }
 
     pub fn push_ident(self, db: &'db dyn HirDb, ident: IdentId<'db>) -> Self {
-        self.push(db, Partial::Present(ident), GenericArgListId::none(db))
+        self.push(
+            db,
+            PathKind::Ident {
+                ident: Partial::Present(ident),
+                generic_args: GenericArgListId::none(db),
+            },
+        )
     }
 
     pub fn ident(self, db: &'db dyn HirDb) -> Partial<IdentId<'db>> {

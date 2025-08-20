@@ -8,10 +8,8 @@ pub enum Expr<'db> {
     Lit(LitKind<'db>),
     Block(Vec<StmtId>),
     /// The first `ExprId` is the lhs, the second is the rhs.
-    ///
-    /// and a `BinOp`.
-    Bin(ExprId, ExprId, Partial<BinOp>),
-    Un(ExprId, Partial<UnOp>),
+    Bin(ExprId, ExprId, BinOp),
+    Un(ExprId, UnOp),
     /// (callee, call args)
     Call(ExprId, Vec<CallArg<'db>>),
     /// (receiver, method_name, generic args, call args)
@@ -27,8 +25,6 @@ pub enum Expr<'db> {
     RecordInit(Partial<PathId<'db>>, Vec<Field<'db>>),
     Field(ExprId, Partial<FieldIndex<'db>>),
     Tuple(Vec<ExprId>),
-    /// The first `ExprId` is the indexed expression, the second is the index.
-    Index(ExprId, ExprId),
     Array(Vec<ExprId>),
 
     /// The size of the rep should be the body instead of expression, because it
@@ -85,6 +81,8 @@ pub enum BinOp {
     Arith(ArithBinOp),
     Comp(CompBinOp),
     Logical(LogicalBinOp),
+    /// `[]`
+    Index,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]

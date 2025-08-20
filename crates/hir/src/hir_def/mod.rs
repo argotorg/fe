@@ -216,6 +216,18 @@ impl<T> Partial<T> {
     }
 }
 
+impl<T> PartialEq<T> for Partial<T>
+where
+    T: PartialEq,
+{
+    fn eq(&self, other: &T) -> bool {
+        match self {
+            Self::Present(a) => a == other,
+            _ => false,
+        }
+    }
+}
+
 impl<T> Default for Partial<T> {
     fn default() -> Self {
         Self::Absent

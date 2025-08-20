@@ -1,0 +1,157 @@
+pub trait Add<T = Self> {
+    type Output = Self
+
+    fn add(self, _ other: T) -> Self::Output
+}
+
+// Arithmetic binary operators
+pub trait Sub<T = Self> {
+    type Output = Self
+
+    fn sub(self, _ other: T) -> Self::Output
+}
+
+pub trait Mul<T = Self> {
+    type Output = Self
+    fn mul(self, _ other: T) -> Self::Output
+}
+
+pub trait Div<T = Self> {
+    type Output = Self
+
+    fn div(self, _ other: T) -> Self::Output
+}
+
+pub trait Rem<T = Self> {
+    type Output = Self
+
+    fn rem(self, _ other: T) -> Self::Output
+}
+
+pub trait Pow<T = Self> {
+    type Output = Self
+
+    fn pow(self, _ other: T) -> Self::Output
+}
+
+// Bitwise binary operators
+pub trait BitAnd<T = Self> {
+    type Output = Self
+
+    fn bitand(self, _ other: T) -> Self::Output
+}
+
+pub trait BitOr<T = Self> {
+    type Output = Self
+
+    fn bitor(self, _ other: T) -> Self::Output
+}
+
+pub trait BitXor<T = Self> {
+    type Output = Self
+
+    fn bitxor(self, _ other: T) -> Self::Output
+}
+
+// Shift operators
+pub trait Shl<T = Self> {
+    type Output = Self
+
+    fn shl(self, _ other: T) -> Self::Output
+}
+
+pub trait Shr<T = Self> {
+    type Output = Self
+
+    fn shr(self, _ other: T) -> Self::Output
+}
+
+// Unary operators
+pub trait UnaryPlus {
+    type Output = Self
+
+    fn add(self) -> Self::Output
+}
+
+pub trait Neg {
+    type Output = Self
+
+    fn neg(self) -> Self::Output
+}
+
+pub trait Not {
+    type Output = Self
+
+    fn not(self) -> Self::Output
+}
+
+pub trait BitNot {
+    type Output = Self
+
+    fn bit_not(self) -> Self::Output
+}
+
+// Comparison operators
+pub trait Eq<T = Self> {
+    fn eq(self, _ other: T) -> bool
+    fn ne(self, _ other: T) -> bool
+}
+
+pub trait Ord<T = Self> {
+    fn lt(self, _ other: T) -> bool
+    fn le(self, _ other: T) -> bool
+    fn gt(self, _ other: T) -> bool
+    fn ge(self, _ other: T) -> bool
+}
+
+// Indexing operator
+pub trait Index<I> {
+    type Output
+
+    fn index(self, _ index: I) -> Self::Output
+}
+
+// Augmented assignment operators (return unit)
+pub trait AddAssign<T = Self> {
+    fn add_assign(mut self, _ other: T)
+}
+
+pub trait SubAssign<T = Self> {
+    fn sub_assign(mut self, _ other: T)
+}
+
+pub trait MulAssign<T = Self> {
+    fn mul_assign(mut self, _ other: T)
+}
+
+pub trait DivAssign<T = Self> {
+    fn div_assign(mut self, _ other: T)
+}
+
+pub trait RemAssign<T = Self> {
+    fn rem_assign(mut self, _ other: T)
+}
+
+pub trait PowAssign<T = Self> {
+    fn pow_assign(mut self, _ other: T)
+}
+
+pub trait ShlAssign<T = Self> {
+    fn shl_assign(mut self, _ other: T)
+}
+
+pub trait ShrAssign<T = Self> {
+    fn shr_assign(mut self, _ other: T)
+}
+
+pub trait BitAndAssign<T = Self> {
+    fn bitand_assign(mut self, _ other: T)
+}
+
+pub trait BitOrAssign<T = Self> {
+    fn bitor_assign(mut self, _ other: T)
+}
+
+pub trait BitXorAssign<T = Self> {
+    fn bitxor_assign(mut self, _ other: T)
+}

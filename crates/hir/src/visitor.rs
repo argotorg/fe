@@ -1107,11 +1107,6 @@ pub fn walk_expr<'db, V>(
             }
         }
 
-        Expr::Index(lhs_id, rhs_id) => {
-            visit_node_in_body!(visitor, ctxt, lhs_id, expr);
-            visit_node_in_body!(visitor, ctxt, rhs_id, expr);
-        }
-
         Expr::Array(elems) => {
             for elem_id in elems {
                 visit_node_in_body!(visitor, ctxt, elem_id, expr);

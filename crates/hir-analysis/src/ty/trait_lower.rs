@@ -11,6 +11,7 @@ use salsa::Update;
 use super::{
     binder::Binder,
     const_ty::ConstTyId,
+    fold::{TyFoldable, TyFolder},
     func_def::FuncDef,
     trait_def::{does_impl_trait_conflict, Implementor, TraitDef, TraitInstId},
     trait_resolution::PredicateListId,
@@ -101,14 +102,26 @@ pub(crate) fn lower_impl_trait<'db>(
         })
         .collect();
 
+    // Merge trait associated type defaults into the implementor, but evaluated in
+    // the trait's own scope and then instantiated with this impl's concrete args
+    // (including Self). This ensures defaults like `type Output = Self` resolve
+    // to the implementor's concrete self type rather than remaining as `Self`.
+    let trait_scope = trait_.def(db).trait_(db).scope();
     for t in trait_.def(db).trait_(db).types(db).iter() {
         let (Some(name), Some(default)) = (t.name.to_opt(), t.default) else {
             continue;
         };
-        types
-            .entry(name)
-            .or_insert_with(|| lower_hir_ty(db, default, scope, assumptions));
+
+        types.entry(name).or_insert_with(|| {
+            // Lower the default in the trait scope so `Self` and trait params are visible
+            let lowered = lower_hir_ty(db, default, trait_scope, assumptions);
+            // Instantiate all trait parameters (including `Self` at idx 0) with
+            // this implementor's concrete arguments so `Self` becomes the impl's
+            // self type and other generics (if used) are substituted too.
+            Binder::bind(lowered).instantiate(db, trait_.args(db))
+        });
     }
+
     let implementor = Implementor::new(db, trait_, params, types, impl_trait);
 
     Some(Binder::bind(implementor))
@@ -130,13 +143,35 @@ pub(crate) fn lower_trait_ref<'db>(
     match resolve_path(db, path, scope, assumptions, false) {
         Ok(PathRes::Trait(t)) => {
             let mut args = t.args(db).clone();
+
+            // Substitute all occurrences of `Self` with `self_ty`
+            struct SelfSubst<'db> {
+                db: &'db dyn HirAnalysisDb,
+                self_ty: TyId<'db>,
+            }
+            impl<'db> TyFolder<'db> for SelfSubst<'db> {
+                fn db(&self) -> &'db dyn HirAnalysisDb {
+                    self.db
+                }
+                fn fold_ty(&mut self, ty: TyId<'db>) -> TyId<'db> {
+                    match ty.data(self.db) {
+                        TyData::TyParam(p) if p.is_trait_self() => self.self_ty,
+                        _ => ty.super_fold_with(self),
+                    }
+                }
+            }
+
+            let mut folder = SelfSubst { db, self_ty };
             args[0] = self_ty;
-            Ok(TraitInstId::new(
-                db,
-                t.def(db),
-                args,
-                t.assoc_type_bindings(db),
-            ))
+            args.iter_mut()
+                .skip(1)
+                .for_each(|a| *a = a.fold_with(&mut folder));
+            let mut assoc_bindings = t.assoc_type_bindings(db).clone();
+            assoc_bindings
+                .iter_mut()
+                .for_each(|(_, ty)| *ty = (*ty).fold_with(&mut folder));
+
+            Ok(TraitInstId::new(db, t.def(db), args, assoc_bindings))
         }
         Ok(res) => Err(TraitRefLowerError::InvalidDomain(res)),
         Err(e) => Err(TraitRefLowerError::PathResError(e)),

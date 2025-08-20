@@ -1,5 +1,6 @@
 pub use option::Option
 pub use default::Default
+pub use ops::*
 
 extern {
     pub fn panic() -> !

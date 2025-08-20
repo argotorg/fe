@@ -1,0 +1,123 @@
+---
+source: crates/hir-analysis/tests/ty_check.rs
+expression: res
+input_file: test_files/ty_check/core_method_resolution.fe
+---
+note: 
+   ┌─ core_method_resolution.fe:3:17
+   │  
+ 3 │   fn f() -> usize {
+   │ ╭─────────────────^
+ 4 │ │     let x = Option::Some(10)
+ 5 │ │     let y = Option::default()
+ 6 │ │ 
+   · │
+11 │ │     }
+12 │ │ }
+   │ ╰─^ usize
+
+note: 
+  ┌─ core_method_resolution.fe:4:9
+  │
+4 │     let x = Option::Some(10)
+  │         ^ Option<usize>
+
+note: 
+  ┌─ core_method_resolution.fe:4:13
+  │
+4 │     let x = Option::Some(10)
+  │             ^^^^^^^^^^^^ fn Some<usize>
+
+note: 
+  ┌─ core_method_resolution.fe:4:13
+  │
+4 │     let x = Option::Some(10)
+  │             ^^^^^^^^^^^^^^^^ Option<usize>
+
+note: 
+  ┌─ core_method_resolution.fe:4:26
+  │
+4 │     let x = Option::Some(10)
+  │                          ^^ usize
+
+note: 
+  ┌─ core_method_resolution.fe:5:9
+  │
+5 │     let y = Option::default()
+  │         ^ Option<usize>
+
+note: 
+  ┌─ core_method_resolution.fe:5:13
+  │
+5 │     let y = Option::default()
+  │             ^^^^^^^^^^^^^^^ fn default<Option<usize>>
+
+note: 
+  ┌─ core_method_resolution.fe:5:13
+  │
+5 │     let y = Option::default()
+  │             ^^^^^^^^^^^^^^^^^ Option<usize>
+
+note: 
+   ┌─ core_method_resolution.fe:7:5
+   │  
+ 7 │ ╭     if y.is_some() {
+ 8 │ │         y.unwrap()
+ 9 │ │     } else {
+10 │ │         x.unwrap_or_default()
+11 │ │     }
+   │ ╰─────^ usize
+
+note: 
+  ┌─ core_method_resolution.fe:7:8
+  │
+7 │     if y.is_some() {
+  │        ^ Option<usize>
+
+note: 
+  ┌─ core_method_resolution.fe:7:8
+  │
+7 │     if y.is_some() {
+  │        ^^^^^^^^^^^ bool
+
+note: 
+  ┌─ core_method_resolution.fe:7:20
+  │  
+7 │       if y.is_some() {
+  │ ╭────────────────────^
+8 │ │         y.unwrap()
+9 │ │     } else {
+  │ ╰─────^ usize
+
+note: 
+  ┌─ core_method_resolution.fe:8:9
+  │
+8 │         y.unwrap()
+  │         ^ Option<usize>
+
+note: 
+  ┌─ core_method_resolution.fe:8:9
+  │
+8 │         y.unwrap()
+  │         ^^^^^^^^^^ usize
+
+note: 
+   ┌─ core_method_resolution.fe:9:12
+   │  
+ 9 │       } else {
+   │ ╭────────────^
+10 │ │         x.unwrap_or_default()
+11 │ │     }
+   │ ╰─────^ usize
+
+note: 
+   ┌─ core_method_resolution.fe:10:9
+   │
+10 │         x.unwrap_or_default()
+   │         ^ Option<usize>
+
+note: 
+   ┌─ core_method_resolution.fe:10:9
+   │
+10 │         x.unwrap_or_default()
+   │         ^^^^^^^^^^^^^^^^^^^^^ usize

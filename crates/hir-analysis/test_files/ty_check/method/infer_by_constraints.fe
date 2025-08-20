@@ -1,3 +1,5 @@
+use core::todo
+
 struct S<T> {
     t: T,
 }
@@ -23,11 +25,6 @@ impl<T> Foo<u32, u32> for S<T> {
         (1, 1)
     }
 }
-
-extern {
-    fn todo() -> !
-}
-
 
 fn bar() -> (u64, i32) {
     let s = S::new()
