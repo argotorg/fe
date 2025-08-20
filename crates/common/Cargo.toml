@@ -15,7 +15,7 @@ paste.workspace = true
 salsa.workspace = true
 serde-semver.workspace = true
 smol_str.workspace = true
-rust-embed = { version = "8.5.0", features = ["debug-embed"] }
+rust-embed = "8.5.0"
 toml = "0.8.8"
 tracing.workspace = true
 petgraph.workspace = true

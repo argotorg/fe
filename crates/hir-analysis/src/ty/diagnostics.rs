@@ -316,7 +316,7 @@ pub enum BodyDiag<'db> {
     AmbiguousTrait {
         primary: DynLazySpan<'db>,
         method_name: IdentId<'db>,
-        traits: ThinVec<Trait<'db>>,
+        traits: ThinVec<TraitInstId<'db>>,
     },
 
     AmbiguousTraitInst {
@@ -407,15 +407,12 @@ impl<'db> BodyDiag<'db> {
         }
     }
 
-    pub(super) fn ops_trait_not_implemented<T>(
+    pub(super) fn ops_trait_not_implemented(
         db: &'db dyn HirAnalysisDb,
         span: DynLazySpan<'db>,
         ty: TyId<'db>,
-        ops: T,
-    ) -> Self
-    where
-        T: TraitOps,
-    {
+        ops: &dyn TraitOps,
+    ) -> Self {
         let ty = ty.pretty_print(db).to_string();
         let op = ops.op_symbol(db);
         let trait_path = ops.trait_path(db);

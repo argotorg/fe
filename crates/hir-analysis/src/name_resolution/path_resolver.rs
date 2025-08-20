@@ -248,12 +248,11 @@ impl<'db> PathResError<'db> {
                         candidates,
                     }
                 }
-                MethodSelectionError::AmbiguousTraitMethod(trait_defs) => {
-                    let traits = trait_defs.into_iter().map(|d| d.trait_(db)).collect();
+                MethodSelectionError::AmbiguousTraitMethod(trait_insts) => {
                     PathResDiag::AmbiguousTrait {
                         primary: span,
                         method_name: ident,
-                        traits,
+                        trait_insts,
                     }
                 }
                 MethodSelectionError::InvisibleInherentMethod(func) => {
@@ -641,6 +640,7 @@ where
                     ident,
                     parent_scope,
                     assumptions,
+                    None,
                 ) {
                     Ok(cand) => {
                         let r = PathRes::Method(ty, cand);

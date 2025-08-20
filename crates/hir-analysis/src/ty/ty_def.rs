@@ -92,6 +92,15 @@ impl<'db> TyId<'db> {
         }
     }
 
+    pub fn is_integral_var(self, db: &dyn HirAnalysisDb) -> bool {
+        match self.data(db) {
+            TyData::TyVar(var) => {
+                matches!(var.sort, TyVarSort::Integral)
+            }
+            _ => false,
+        }
+    }
+
     /// Returns `true` if the type is a bool type.
     pub fn is_bool(self, db: &dyn HirAnalysisDb) -> bool {
         match self.data(db) {
@@ -320,7 +329,6 @@ impl<'db> TyId<'db> {
         matches!(self.base_ty(db).data(db), TyData::TyBase(TyBase::Prim(_)))
     }
 
-    /// Returns `true` if the base type is a user defined `enum` type.
     pub(crate) fn as_enum(self, db: &'db dyn HirAnalysisDb) -> Option<Enum<'db>> {
         let base_ty = self.base_ty(db);
         if_chain! {

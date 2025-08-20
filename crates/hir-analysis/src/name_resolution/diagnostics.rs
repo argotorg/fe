@@ -84,7 +84,7 @@ pub enum PathResDiag<'db> {
     AmbiguousTrait {
         primary: DynLazySpan<'db>,
         method_name: IdentId<'db>,
-        traits: ThinVec<Trait<'db>>,
+        trait_insts: ThinVec<TraitInstId<'db>>,
     },
     InvisibleAmbiguousTrait {
         primary: DynLazySpan<'db>,

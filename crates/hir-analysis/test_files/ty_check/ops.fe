@@ -1,0 +1,88 @@
+use core::ops::{Not, Add, Index, AddAssign, Eq}
+use core::option::{
+    Option,
+    // TODO: Option::{self, Some, None} doesn't work
+    // https://github.com/argotorg/fe/issues/1113
+    Option::{Some, None}
+}
+
+enum Ok {
+    No, Yes
+}
+
+impl Not for Ok {
+    fn not(self) -> Ok {
+        match self {
+            Ok::No => Ok::Yes
+            Ok::Yes => Ok::No
+        }
+    }
+}
+
+fn flip(ok: Ok) -> Ok {
+    !ok
+}
+
+impl Eq for Ok {
+    fn eq(self, _ other: Ok) -> bool {
+        match (self, other) {
+            (Ok::Yes, Ok::Yes) | (Ok::No, Ok::No) => true
+            _ => false
+         }
+    }
+    fn ne(self, _ other: Ok) -> bool {
+        !self.eq(other)
+    }
+}
+
+impl AddAssign for Ok {
+    fn add_assign(mut self, _ other: Ok) {
+        if other == Ok::Yes {
+            self = Ok::Yes
+        }
+    }
+}
+
+struct Point {
+    x: i32,
+    y: i32,
+}
+
+impl Add for Point {
+    fn add(self, _ p: Point) -> Point {
+        Point {
+            x: self.x + p.x,
+            y: self.y + p.y,
+        }
+    }
+}
+
+impl Add<i32> for Point {
+    fn add(self, _ n: i32) -> Point {
+        Point {
+            x: self.x + n,
+            y: self.y + n,
+        }
+    }
+}
+
+impl Index<usize> for Point {
+    type Output = Option<i32>
+    fn index(self, _ i: usize) -> Option<i32> {
+        match i {
+            0 => Some(self.x)
+            1 => Some(self.y)
+            _ => None
+        }
+    }
+}
+
+fn f(a: Point, b: Point) {
+    let c = a + b
+    let c2 = Add::add(a, b)
+    // let c3 = Add::add(a, 100) TODO: fix `type annotation is needed`
+    let d = c + as_i32(100)
+    let x = d[0]
+}
+
+fn as_i32(_ x: i32) -> i32 { x }

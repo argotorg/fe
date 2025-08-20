@@ -4,7 +4,7 @@ extern {
     fn todo() -> !
 }
 
-trait Extract 
+trait Extract
 where Self: * -> *
 {
     fn extract<T>(self: Self<T>) -> T
@@ -54,7 +54,7 @@ impl Clone for bool {
 fn foo() -> i32 {
     let s = S::new(false)
     extract(s)
-    
+
     let opt = Some(1)
     extract(opt)
 }
