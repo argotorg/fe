@@ -170,7 +170,15 @@ where
                     _ => Err(UnificationError::TypeMismatch),
                 }
             }
-            (TyData::AssocTy(t1), TyData::AssocTy(t2)) if t1 == t2 => Ok(()),
+            (TyData::AssocTy(a1), TyData::AssocTy(a2)) => {
+                if a1 == a2 {
+                    Ok(())
+                } else if a1.name == a2.name {
+                    self.unify(a1.trait_, a2.trait_)
+                } else {
+                    Err(UnificationError::TypeMismatch)
+                }
+            }
             (TyData::AssocTy(_), _) | (_, TyData::AssocTy(_)) => {
                 // Associated types should be resolved before unification
                 Err(UnificationError::TypeMismatch)
