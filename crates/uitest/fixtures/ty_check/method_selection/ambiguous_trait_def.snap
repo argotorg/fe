@@ -21,3 +21,12 @@ error[8-0031]: type annotation is needed
    │         │
    │         type annotation is needed
    │         consider giving `: Foo<_>` here
+
+error[8-0031]: type annotation is needed
+   ┌─ ambiguous_trait_def.fe:38:9
+   │
+38 │     let y = f.foo()
+   │         ^
+   │         │
+   │         type annotation is needed
+   │         consider giving `: Type` here

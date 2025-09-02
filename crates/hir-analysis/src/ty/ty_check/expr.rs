@@ -249,18 +249,47 @@ impl<'db> TyChecker<'db> {
             None,
         ) {
             Ok(candidate) => candidate,
-            Err(diag) => {
-                let diag = body_diag_from_method_selection_err(
-                    self.db,
-                    diag,
-                    Spanned::new(
-                        canonical_r_ty.value.value,
-                        receiver.span(self.body()).into(),
-                    ),
-                    Spanned::new(method_name, call_span.method_name().into()),
-                );
-                self.push_diag(diag);
-                return ExprProp::invalid(self.db);
+            Err(err) => {
+                match err {
+                    MethodSelectionError::AmbiguousTraitMethod(insts) => {
+                        // Defer resolution using return-type constraints
+                        let ret_ty = self.fresh_ty();
+                        let typed = ExprProp::new(ret_ty, true);
+                        self.env.type_expr(expr, typed);
+                        // Instantiate candidates with fresh inference vars so
+                        // later unifications can bind their parameters.
+                        let cands: Vec<_> = insts
+                            .into_iter()
+                            .map(|inst| {
+                                self.table.instantiate_with_fresh_vars(
+                                    crate::ty::binder::Binder::bind(inst),
+                                )
+                            })
+                            .collect();
+
+                        self.env.register_pending_method(super::env::PendingMethod {
+                            expr,
+                            recv_ty: receiver_prop.ty,
+                            method_name,
+                            candidates: cands,
+                            span: call_span.method_name().into(),
+                        });
+                        return typed;
+                    }
+                    _ => {
+                        let diag = body_diag_from_method_selection_err(
+                            self.db,
+                            err,
+                            Spanned::new(
+                                canonical_r_ty.value.value,
+                                receiver.span(self.body()).into(),
+                            ),
+                            Spanned::new(method_name, call_span.method_name().into()),
+                        );
+                        self.push_diag(diag);
+                        return ExprProp::invalid(self.db);
+                    }
+                }
             }
         };
 

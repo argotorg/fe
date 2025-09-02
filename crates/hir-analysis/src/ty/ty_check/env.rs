@@ -5,6 +5,7 @@ use hir::{
     },
     span::DynLazySpan,
 };
+
 use num_bigint::BigUint;
 use rustc_hash::FxHashMap;
 use salsa::Update;
@@ -16,14 +17,15 @@ use crate::{
         canonical::{Canonical, Canonicalized},
         const_ty::{ConstTyData, ConstTyId, EvaluatedConstTy},
         diagnostics::{BodyDiag, FuncBodyDiag, TraitConstraintDiag, TyDiagCollection},
-        fold::{TyFoldable, TyFolder},
+        fold::{AssocTySubst, TyFoldable, TyFolder},
         func_def::{lower_func, FuncDef},
+        normalize::normalize_ty,
         trait_def::TraitInstId,
         trait_resolution::{
             constraint::collect_func_def_constraints, is_goal_satisfiable, GoalSatisfiability,
             PredicateListId,
         },
-        ty_def::{InvalidCause, TyData, TyId, TyVarSort},
+        ty_def::{InvalidCause, TyBase, TyData, TyId, TyVarSort},
         ty_lower::lower_hir_ty,
         unify::UnificationTable,
     },
@@ -38,7 +40,7 @@ pub(super) struct TyCheckEnv<'db> {
     expr_ty: FxHashMap<ExprId, ExprProp<'db>>,
     callables: FxHashMap<ExprId, Callable<'db>>,
 
-    pending_confirmations: Vec<(TraitInstId<'db>, DynLazySpan<'db>)>,
+    deferred: Vec<DeferredTask<'db>>,
 
     var_env: Vec<BlockEnv<'db>>,
     pending_vars: FxHashMap<IdentId<'db>, LocalBinding<'db>>,
@@ -58,7 +60,7 @@ impl<'db> TyCheckEnv<'db> {
             pat_ty: FxHashMap::default(),
             expr_ty: FxHashMap::default(),
             callables: FxHashMap::default(),
-            pending_confirmations: Vec::new(),
+            deferred: Vec::new(),
             var_env: vec![BlockEnv::new(func.scope(), 0)],
             pending_vars: FxHashMap::default(),
             loop_stack: Vec::new(),
@@ -244,7 +246,11 @@ impl<'db> TyCheckEnv<'db> {
     }
 
     pub(super) fn register_confirmation(&mut self, inst: TraitInstId<'db>, span: DynLazySpan<'db>) {
-        self.pending_confirmations.push((inst, span))
+        self.deferred.push(DeferredTask::Confirm { inst, span })
+    }
+
+    pub(super) fn register_pending_method(&mut self, pending: PendingMethod<'db>) {
+        self.deferred.push(DeferredTask::Method(pending))
     }
 
     /// Completes the type checking environment by finalizing pending trait
@@ -272,7 +278,8 @@ impl<'db> TyCheckEnv<'db> {
         sink: &mut Vec<FuncBodyDiag<'db>>,
     ) -> TypedBody<'db> {
         let mut prober = Prober { table };
-        self.perform_pending_confirmation(&mut prober, sink);
+        // Resolve all deferred tasks (confirmations + method disambiguations)
+        self.perform_deferred(&mut prober, sink);
 
         self.expr_ty
             .values_mut()
@@ -322,86 +329,159 @@ impl<'db> TyCheckEnv<'db> {
     /// iteratively probing and unifying trait instances until a fixed point
     /// is reached. If any trait instance remains ambiguous, a diagnostic is
     /// generated and added to the diagnostics vector.
-    ///
-    /// # Arguments
-    ///
-    /// * `prober` - A mutable reference to the [`Prober`] used for type
-    ///   unification and probing.
-    ///
-    /// # Returns
-    ///
-    /// * A vector of `FuncBodyDiag` containing diagnostics related to ambiguous
-    ///   trait instances.
-    fn perform_pending_confirmation(
-        &self,
+    fn perform_deferred(
+        &mut self,
         prober: &mut Prober<'db, '_>,
         sink: &mut Vec<FuncBodyDiag<'db>>,
     ) {
+        let db = self.db;
+        let scope = self.scope();
         let assumptions = self.assumptions();
-        let mut changed = true;
-        let hir_db = self.db;
-        let ingot = self.body().top_mod(hir_db).ingot(hir_db);
-        // Try to perform confirmation until all pending confirmations reaches to
-        // the fixed point.
-        while changed {
-            changed = false;
-            for (inst, _) in &self.pending_confirmations {
-                let inst = inst.fold_with(prober);
-                let canonical_inst = Canonicalized::new(self.db, inst);
-                if let GoalSatisfiability::Satisfied(solution) =
-                    is_goal_satisfiable(self.db, ingot, canonical_inst.value, assumptions)
-                {
-                    let solution = canonical_inst.extract_solution(prober.table, *solution);
-                    prober.table.unify(inst, solution).unwrap();
+        let ingot = self.body().top_mod(db).ingot(db);
 
-                    // We need compare old and new inst in a canonical form since a new inst might
-                    // introduce new type variable in some cases.
-                    // In other word, we need to check ⍺-equivalence to know whether the
-                    // confirmation step move forward.
-                    let new_canonical_inst = Canonical::new(self.db, inst.fold_with(prober.table));
-                    changed |= new_canonical_inst != canonical_inst.value;
+        let compute_return_ty = |prober: &mut Prober<'db, '_>,
+                                 recv_ty: TyId<'db>,
+                                 inst: TraitInstId<'db>,
+                                 method_name: IdentId<'db>| {
+            let trait_method = inst.def(db).methods(db).get(&method_name).unwrap();
+            let func_ty = trait_method.instantiate_with_inst(prober.table, recv_ty, inst);
+            let (base, gen_args) = func_ty.decompose_ty_app(db);
+            let TyData::TyBase(TyBase::Func(func_def)) = base.data(db) else {
+                unreachable!();
+            };
+            let mut ret = func_def.ret_ty(db).instantiate(db, gen_args);
+            let mut subst = AssocTySubst::new(db, inst);
+            ret = ret.fold_with(&mut subst);
+            normalize_ty(db, ret, scope, assumptions)
+        };
+
+        let is_viable = |prober: &mut Prober<'db, '_>,
+                         pending: &PendingMethod<'db>,
+                         expr_ty: TyId<'db>,
+                         inst: &TraitInstId<'db>| {
+            let snap = prober.table.snapshot();
+            let recv_ty = pending.recv_ty.fold_with(prober);
+            let inst_self = prober.table.instantiate_to_term(inst.self_ty(db));
+            if prober.table.unify(inst_self, recv_ty).is_err() {
+                prober.table.rollback_to(snap);
+                return false;
+            }
+            let ret_ty = compute_return_ty(prober, recv_ty, *inst, pending.method_name);
+            let ok = prober.table.unify(expr_ty, ret_ty).is_ok();
+            prober.table.rollback_to(snap);
+            ok
+        };
+
+        // Fixed-point pass over deferred tasks
+        let mut progressed = true;
+        while progressed {
+            progressed = false;
+            let mut next: Vec<DeferredTask<'db>> = Vec::new();
+            for task in self.deferred.drain(..) {
+                match task {
+                    DeferredTask::Confirm { inst, span } => {
+                        let inst = inst.fold_with(prober);
+                        let canonical_inst = Canonicalized::new(db, inst);
+                        match is_goal_satisfiable(db, ingot, canonical_inst.value, assumptions) {
+                            GoalSatisfiability::Satisfied(solution) => {
+                                let solution =
+                                    canonical_inst.extract_solution(prober.table, *solution);
+                                prober.table.unify(inst, solution).unwrap();
+                                let new_can = Canonical::new(db, inst.fold_with(prober.table));
+                                if new_can != canonical_inst.value {
+                                    progressed = true;
+                                }
+                            }
+                            _ => next.push(DeferredTask::Confirm { inst, span }),
+                        }
+                    }
+                    DeferredTask::Method(pending) => {
+                        let recv_ty = pending.recv_ty.fold_with(prober);
+                        let expr_ty = self.expr_ty[&pending.expr].ty.fold_with(prober);
+                        if expr_ty.has_invalid(db) {
+                            next.push(DeferredTask::Method(pending));
+                            continue;
+                        }
+                        let viable: Vec<_> = pending
+                            .candidates
+                            .iter()
+                            .copied()
+                            .filter(|inst| is_viable(prober, &pending, expr_ty, inst))
+                            .collect();
+                        if let [inst] = viable.as_slice() {
+                            let ret_ty =
+                                compute_return_ty(prober, recv_ty, *inst, pending.method_name);
+                            prober.table.unify(expr_ty, ret_ty).unwrap();
+                            progressed = true;
+                        } else {
+                            next.push(DeferredTask::Method(pending));
+                        }
+                    }
                 }
             }
+            self.deferred = next;
         }
 
-        // Finds ambiguous trait inst and emits diags.
-        for (inst, span) in &self.pending_confirmations {
-            let inst = inst.fold_with(prober);
-            let canonical_inst = Canonicalized::new(self.db, inst);
-            match is_goal_satisfiable(self.db, ingot, canonical_inst.value, assumptions) {
-                GoalSatisfiability::NeedsConfirmation(ambiguous) => {
-                    let cands = ambiguous
+        // Emit diagnostics for remaining tasks
+        for task in self.deferred.drain(..) {
+            match task {
+                DeferredTask::Confirm { inst, span } => {
+                    let inst = inst.fold_with(prober);
+                    let canonical_inst = Canonicalized::new(db, inst);
+                    match is_goal_satisfiable(db, ingot, canonical_inst.value, assumptions) {
+                        GoalSatisfiability::NeedsConfirmation(ambiguous) => {
+                            let cands = ambiguous
+                                .iter()
+                                .map(|s| canonical_inst.extract_solution(prober.table, *s))
+                                .collect::<ThinVec<_>>();
+                            if !inst.self_ty(db).has_var(db) {
+                                sink.push(
+                                    BodyDiag::AmbiguousTraitInst {
+                                        primary: span.clone(),
+                                        cands,
+                                    }
+                                    .into(),
+                                )
+                            }
+                        }
+                        GoalSatisfiability::UnSat(subgoal) => {
+                            if !inst.self_ty(db).has_var(db) {
+                                let unsat = subgoal
+                                    .map(|s| canonical_inst.extract_solution(prober.table, s));
+                                sink.push(
+                                    TyDiagCollection::from(TraitConstraintDiag::TraitBoundNotSat {
+                                        span: span.clone(),
+                                        primary_goal: inst,
+                                        unsat_subgoal: unsat,
+                                    })
+                                    .into(),
+                                )
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+                DeferredTask::Method(pending) => {
+                    let expr_ty = self.expr_ty[&pending.expr].ty.fold_with(prober);
+                    if expr_ty.has_invalid(self.db) {
+                        continue;
+                    }
+                    let viable: ThinVec<_> = pending
+                        .candidates
                         .iter()
-                        .map(|solution| canonical_inst.extract_solution(prober.table, *solution))
-                        .collect::<ThinVec<_>>();
-
-                    if !inst.self_ty(self.db).has_var(self.db) {
-                        let diag = BodyDiag::AmbiguousTraitInst {
-                            primary: span.clone(),
-                            cands,
-                        };
-                        sink.push(diag.into())
+                        .copied()
+                        .filter(|inst| is_viable(prober, &pending, expr_ty, inst))
+                        .collect();
+                    if viable.len() > 1 {
+                        sink.push(
+                            BodyDiag::AmbiguousTrait {
+                                primary: pending.span.clone(),
+                                method_name: pending.method_name,
+                                traits: viable,
+                            }
+                            .into(),
+                        );
                     }
-                }
-
-                GoalSatisfiability::UnSat(subgoal) => {
-                    // Emit diagnostic for unsatisfied trait bound
-                    // These are constraints that were explicitly registered for confirmation,
-                    // not general WF checks, so we need to emit diagnostics for them
-                    if !inst.self_ty(self.db).has_var(self.db) {
-                        let unsat_subgoal =
-                            subgoal.map(|s| canonical_inst.extract_solution(prober.table, s));
-                        let diag = TraitConstraintDiag::TraitBoundNotSat {
-                            span: span.clone(),
-                            primary_goal: inst,
-                            unsat_subgoal,
-                        };
-                        sink.push(TyDiagCollection::from(diag).into())
-                    }
-                }
-
-                _ => {
-                    // Other cases (Satisfied, ContainsInvalid) are handled elsewhere
                 }
             }
         }
@@ -556,4 +636,21 @@ impl<'db> TyFolder<'db> for Prober<'db, '_> {
             ty.super_fold_with(self)
         }
     }
+}
+#[derive(Debug, Clone)]
+pub(super) struct PendingMethod<'db> {
+    pub expr: hir::hir_def::ExprId,
+    pub recv_ty: TyId<'db>,
+    pub method_name: hir::hir_def::IdentId<'db>,
+    pub candidates: Vec<TraitInstId<'db>>,
+    pub span: DynLazySpan<'db>,
+}
+
+#[derive(Debug, Clone)]
+enum DeferredTask<'db> {
+    Confirm {
+        inst: TraitInstId<'db>,
+        span: DynLazySpan<'db>,
+    },
+    Method(PendingMethod<'db>),
 }

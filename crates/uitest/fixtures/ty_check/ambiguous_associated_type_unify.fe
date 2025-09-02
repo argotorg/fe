@@ -1,0 +1,67 @@
+trait Producer {
+    type Output
+    fn produce(self) -> Self::Output
+}
+
+trait Transformer {
+    type Output
+    fn transform(self) -> Self::Output
+}
+
+struct Dual {}
+
+// Dual implements both traits with different Output types
+impl Producer for Dual {
+    type Output = i32
+    fn produce(self) -> i32 { 42 }
+}
+
+impl Transformer for Dual {
+    type Output = bool
+    fn transform(self) -> bool { true }
+}
+
+fn use_producer<T>(_ t: T) -> T::Output
+where T: Producer
+{
+    t.produce()
+}
+
+fn use_transformer<T>(_ t: T) -> T::Output
+where T: Transformer
+{
+    t.transform()
+}
+
+fn both_traits<T>(_ t: T, _ t2: T)
+where T: Producer + Transformer
+{
+    let x: T::Output = t.produce()
+    let y: T::Output = t2.transform()
+
+    let z: <T as Producer>::Output = t.produce()
+}
+
+// Test with a generic that tries to unify outputs
+fn try_unify<T>(_ t: T) -> T::Output
+where T: Producer + Transformer
+{
+    // This is ambiguous - which trait's Output are we returning?
+    // With Dual, Producer::Output = i32 but Transformer::Output = bool
+    if true {
+        t.produce()   // Returns Producer::Output (i32 for Dual)
+    } else {
+        t.transform() // Returns Transformer::Output (bool for Dual)
+        // These have different types but same associated type name!
+    }
+}
+
+fn main() {
+    let d = Dual {}
+
+    let a: i32 = use_producer(d)
+    let b: bool = use_transformer(d)
+
+    both_traits(d, d)
+    let result = try_unify(d)
+}
