@@ -1,0 +1,52 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/ambiguous_associated_type_unify.fe
+---
+error[2-0009]: ambiguous associated type `Output`
+   ┌─ ambiguous_associated_type_unify.fe:39:15
+   │
+ 1 │ trait Producer {
+   │       -------- candidate: `Producer`
+   ·
+ 6 │ trait Transformer {
+   │       ----------- candidate: `Transformer`
+   ·
+39 │     let x: T::Output = t.produce()
+   │               ^^^^^^ associated type `Output` is ambiguous
+   │
+   = specify the trait explicitly: `<Type as Trait>::Output`
+
+error[2-0009]: ambiguous associated type `Output`
+   ┌─ ambiguous_associated_type_unify.fe:40:15
+   │
+ 1 │ trait Producer {
+   │       -------- candidate: `Producer`
+   ·
+ 6 │ trait Transformer {
+   │       ----------- candidate: `Transformer`
+   ·
+40 │     let y: T::Output = t2.transform()
+   │               ^^^^^^ associated type `Output` is ambiguous
+   │
+   = specify the trait explicitly: `<Type as Trait>::Output`
+
+error[2-0009]: ambiguous associated type `Output`
+   ┌─ ambiguous_associated_type_unify.fe:46:31
+   │
+ 1 │ trait Producer {
+   │       -------- candidate: `Producer`
+   ·
+ 6 │ trait Transformer {
+   │       ----------- candidate: `Transformer`
+   ·
+46 │ fn try_unify<T>(_ t: T) -> T::Output
+   │                               ^^^^^^ associated type `Output` is ambiguous
+   │
+   = specify the trait explicitly: `<Type as Trait>::Output`
+
+error[8-0000]: type mismatch
+   ┌─ ambiguous_associated_type_unify.fe:54:9
+   │
+54 │         t.transform() // Returns Transformer::Output (bool for Dual)
+   │         ^^^^^^^^^^^^^ expected `T::Output`, but `T::Output` is given
