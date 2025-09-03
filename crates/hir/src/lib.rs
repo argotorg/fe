@@ -5,6 +5,9 @@ pub mod hir_def;
 pub mod lower;
 pub mod span;
 pub mod visitor;
+pub mod path_view;
+pub mod source_index;
+pub mod path_anchor;
 
 pub use common::{file::File, file::Workspace, ingot::Ingot};
 #[salsa::db]

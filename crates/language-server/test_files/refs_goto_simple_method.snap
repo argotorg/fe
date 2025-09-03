@@ -1,0 +1,26 @@
+---
+source: crates/language-server/tests/references_snap.rs
+assertion_line: 128
+expression: snapshot
+---
+0: struct Container {
+1:     pub value: u32
+2: }
+3: 
+4: impl Container {
+5:     pub fn get(self) -> u32 {
+6:         self.value
+7:     }
+8: }
+9: 
+10: fn test() {
+11:     let container = Container { value: 42 }
+12:     let result = container.get()
+13: }
+14: 
+---
+cursor (6, 8): 2 refs -> goto_simple_method.fe: 5:15; 6:8
+cursor (6, 13): 1 refs -> goto_simple_method.fe: goto_simple_method::Container @ 1:8
+cursor (11, 8): 2 refs -> goto_simple_method.fe: goto_simple_method::test::{fn_body} @ 11:8; goto_simple_method::test::{fn_body} @ 12:17
+cursor (12, 8): 1 refs -> goto_simple_method.fe: goto_simple_method::test::{fn_body} @ 12:8
+cursor (12, 17): 2 refs -> goto_simple_method.fe: goto_simple_method::test::{fn_body} @ 11:8; goto_simple_method::test::{fn_body} @ 12:17

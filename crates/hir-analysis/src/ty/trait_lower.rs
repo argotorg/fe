@@ -18,7 +18,7 @@ use super::{
     ty_lower::{collect_generic_params, lower_hir_ty},
 };
 use crate::{
-    name_resolution::{resolve_path, PathRes, PathResError},
+    name_resolution::{resolve_with_policy, DomainPreference, PathRes, PathResError},
     ty::{
         func_def::lower_func,
         trait_resolution::constraint::collect_constraints,
@@ -127,7 +127,7 @@ pub(crate) fn lower_trait_ref<'db>(
         return Err(TraitRefLowerError::Ignored);
     };
 
-    match resolve_path(db, path, scope, assumptions, false) {
+    match resolve_with_policy(db, path, scope, assumptions, DomainPreference::Type) {
         Ok(PathRes::Trait(t)) => {
             let mut args = t.args(db).clone();
             args[0] = self_ty;

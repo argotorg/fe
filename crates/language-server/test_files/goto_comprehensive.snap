@@ -1,0 +1,87 @@
+---
+source: crates/language-server/src/functionality/goto.rs
+assertion_line: 287
+expression: snapshot
+input_file: test_files/goto_comprehensive.fe
+---
+0: // Test struct field access resolution
+1: struct Container {
+2:     pub value: u32
+3: }
+4: 
+5: impl Container {
+6:     pub fn get(self) -> u32 {
+7:         self.value
+8:     }
+9: }
+10: 
+11: // Test enum variant resolution
+12: enum Color {
+13:     Red,
+14:     Green { intensity: u32 },
+15:     Blue(u32)
+16: }
+17: 
+18: fn test_field_access() {
+19:     let container = Container { value: 43 }
+20: 
+21:     // This should resolve to the field definition
+22:     let val = container.value
+23: 
+24:     // This should resolve to the method definition
+25:     let retrieved = container.get()
+26: 
+27:     // Test local variable references
+28:     let copy_container = container  // should resolve to line 20
+29:     let copy_val = val             // should resolve to line 23
+30: }
+31: 
+32: fn test_enum_variants() {
+33:     // These should resolve to the specific variants, not the enum
+34:     let red = Color::Red
+35:     let green = Color::Green { intensity: 50 }
+36:     let blue = Color::Blue(100)
+37: 
+38:     // Test pattern matching field resolution
+39:     match green {
+40:         Color::Green { intensity } => {
+41:             // 'intensity' here should resolve to the field in the enum variant
+42:             let _val = intensity
+43:         }
+44:         _ => {}
+45:     }
+46: }
+47: 
+48: pub trait Inner {
+49:     fn foo(self) -> i32
+50: }
+51: 
+52: pub struct Wrapper<S: Inner> {
+53:     pub inner: S,
+54: }
+55: 
+56: impl<S: Inner> Wrapper<S> {
+57:     pub fn foo(mut self, mut dog: i32) -> i32 {
+58:         self.inner.foo() // collect_constraints_from_func_def
+59:         dog
+60:     }
+61: }
+62: 
+---
+cursor position (5, 5), path: goto_comprehensive::Container
+cursor position (6, 15), path: goto_comprehensive::Container
+cursor position (19, 20), path: goto_comprehensive::Container
+cursor position (34, 14), path: goto_comprehensive::Color
+cursor position (34, 21), path: goto_comprehensive::Color::Red
+cursor position (35, 16), path: goto_comprehensive::Color
+cursor position (35, 23), path: goto_comprehensive::Color::Green
+cursor position (36, 15), path: goto_comprehensive::Color
+cursor position (36, 22), path: goto_comprehensive::Color::Blue
+cursor position (40, 8), path: goto_comprehensive::Color
+cursor position (40, 15), path: goto_comprehensive::Color::Green
+cursor position (49, 11), path: goto_comprehensive::Inner
+cursor position (52, 22), path: goto_comprehensive::Inner
+cursor position (53, 15), path: goto_comprehensive::Wrapper::S
+cursor position (56, 8), path: goto_comprehensive::Inner
+cursor position (56, 15), path: goto_comprehensive::Wrapper
+cursor position (57, 19), path: goto_comprehensive::Wrapper

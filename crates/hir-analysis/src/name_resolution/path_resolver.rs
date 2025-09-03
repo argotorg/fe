@@ -2,7 +2,7 @@ use common::indexmap::IndexMap;
 use either::Either;
 use hir::{
     hir_def::{
-        scope_graph::ScopeId, Enum, EnumVariant, GenericParamOwner, IdentId, ImplTrait, ItemKind,
+        scope_graph::ScopeId, Body, Enum, EnumVariant, ExprId, GenericParamOwner, IdentId, ImplTrait, ItemKind,
         Partial, PathId, PathKind, Trait, TypeBound, TypeId, VariantKind,
     },
     span::DynLazySpan,
@@ -269,6 +269,77 @@ impl<'db> PathResError<'db> {
             },
         };
         Some(diag)
+    }
+}
+
+impl<'db> PathResError<'db> {
+    /// Compute an anchored DynLazySpan for a path error occurring in a body expression,
+    /// using centralized path anchor selection rules.
+    pub fn anchor_dyn_span_for_body_expr(
+        &self,
+        db: &'db dyn HirAnalysisDb,
+        body: Body<'db>,
+        expr: ExprId,
+        full_path: PathId<'db>,
+    ) -> DynLazySpan<'db> {
+        let seg_idx = self.failed_at.segment_index(db);
+        let path_lazy = expr.span(body).into_path_expr().path();
+        let view = hir::path_view::HirPathAdapter::new(db, full_path);
+        let anchor = match &self.kind {
+            PathResErrorKind::ArgNumMismatch { .. }
+            | PathResErrorKind::ArgKindMisMatch { .. }
+            | PathResErrorKind::ArgTypeMismatch { .. } => hir::path_anchor::PathAnchor {
+                seg_idx,
+                kind: hir::path_anchor::PathAnchorKind::Segment,
+            },
+            _ => hir::path_anchor::AnchorPicker::pick_invalid_segment(&view, seg_idx),
+        };
+        hir::path_anchor::map_path_anchor_to_dyn_lazy(path_lazy, anchor)
+    }
+
+    /// Anchor a path error occurring in a pattern path (e.g., `Foo::Bar` in patterns).
+    pub fn anchor_dyn_span_for_body_path_pat(
+        &self,
+        db: &'db dyn HirAnalysisDb,
+        body: Body<'db>,
+        pat: hir::hir_def::PatId,
+        full_path: PathId<'db>,
+    ) -> DynLazySpan<'db> {
+        let seg_idx = self.failed_at.segment_index(db);
+        let path_lazy = pat.span(body).into_path_pat().path();
+        let view = hir::path_view::HirPathAdapter::new(db, full_path);
+        let anchor = hir::path_anchor::AnchorPicker::pick_invalid_segment(&view, seg_idx);
+        hir::path_anchor::map_path_anchor_to_dyn_lazy(path_lazy, anchor)
+    }
+
+    /// Anchor a path error occurring in a tuple pattern path (e.g., `Variant(..)`).
+    pub fn anchor_dyn_span_for_body_path_tuple_pat(
+        &self,
+        db: &'db dyn HirAnalysisDb,
+        body: Body<'db>,
+        pat: hir::hir_def::PatId,
+        full_path: PathId<'db>,
+    ) -> DynLazySpan<'db> {
+        let seg_idx = self.failed_at.segment_index(db);
+        let path_lazy = pat.span(body).into_path_tuple_pat().path();
+        let view = hir::path_view::HirPathAdapter::new(db, full_path);
+        let anchor = hir::path_anchor::AnchorPicker::pick_invalid_segment(&view, seg_idx);
+        hir::path_anchor::map_path_anchor_to_dyn_lazy(path_lazy, anchor)
+    }
+
+    /// Anchor a path error occurring in a record pattern path (e.g., `Variant { .. }`).
+    pub fn anchor_dyn_span_for_body_record_pat(
+        &self,
+        db: &'db dyn HirAnalysisDb,
+        body: Body<'db>,
+        pat: hir::hir_def::PatId,
+        full_path: PathId<'db>,
+    ) -> DynLazySpan<'db> {
+        let seg_idx = self.failed_at.segment_index(db);
+        let path_lazy = pat.span(body).into_record_pat().path();
+        let view = hir::path_view::HirPathAdapter::new(db, full_path);
+        let anchor = hir::path_anchor::AnchorPicker::pick_invalid_segment(&view, seg_idx);
+        hir::path_anchor::map_path_anchor_to_dyn_lazy(path_lazy, anchor)
     }
 }
 

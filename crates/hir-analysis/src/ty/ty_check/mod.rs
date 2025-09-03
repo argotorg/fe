@@ -38,6 +38,7 @@ use crate::{
     ty::ty_def::{inference_keys, TyFlags},
     HirAnalysisDb,
 };
+use hir::{path_anchor::{AnchorPicker, map_path_anchor_to_dyn_lazy}, path_view::HirPathAdapter};
 
 #[salsa::tracked(return_ref)]
 pub fn check_func_body<'db>(
@@ -50,6 +51,28 @@ pub fn check_func_body<'db>(
 
     checker.run();
     checker.finish()
+}
+
+/// Facade: Return the inferred type of a specific expression in a function body.
+/// Leverages the cached result of `check_func_body` without recomputing.
+pub fn type_of_expr<'db>(
+    db: &'db dyn HirAnalysisDb,
+    func: Func<'db>,
+    expr: ExprId,
+) -> Option<TyId<'db>> {
+    let (_diags, typed) = check_func_body(db, func).clone();
+    Some(typed.expr_prop(db, expr).ty)
+}
+
+/// Facade: Return the inferred type of a specific pattern in a function body.
+/// Leverages the cached result of `check_func_body` without recomputing.
+pub fn type_of_pat<'db>(
+    db: &'db dyn HirAnalysisDb,
+    func: Func<'db>,
+    pat: PatId,
+) -> Option<TyId<'db>> {
+    let (_diags, typed) = check_func_body(db, func).clone();
+    Some(typed.pat_ty(db, pat))
 }
 
 pub struct TyChecker<'db> {
@@ -248,6 +271,11 @@ impl<'db> TyChecker<'db> {
         }
     }
 
+    // TODO(deprecate): Legacy internal resolver used by TyChecker that still
+    // takes `resolve_tail_as_value`. Prefer `name_resolution::resolve_with_policy`
+    // at call sites when possible. This function remains to handle TyChecker-
+    // specific concerns (observer visibility reporting, instantiation) and
+    // should be slimmed to delegate to the policy wrapper over time.
     fn resolve_path(
         &mut self,
         path: PathId<'db>,
@@ -278,9 +306,12 @@ impl<'db> TyChecker<'db> {
         };
 
         if let Some((path, deriv_span)) = invisible {
-            let span = span.clone().segment(path.segment_index(self.db)).ident();
+            let seg_idx = path.segment_index(self.db);
+            let view = HirPathAdapter::new(self.db, path);
+            let anchor = AnchorPicker::pick_visibility_error(&view, seg_idx);
+            let anchored = map_path_anchor_to_dyn_lazy(span.clone(), anchor);
             let ident = path.ident(self.db);
-            let diag = PathResDiag::Invisible(span.into(), *ident.unwrap(), deriv_span);
+            let diag = PathResDiag::Invisible(anchored.into(), *ident.unwrap(), deriv_span);
             self.diags.push(diag.into());
         }
 
@@ -374,6 +405,103 @@ impl<'db> TraitMethod<'db> {
         let mut subst = AssocTySubst::new(db, inst);
         instantiated.fold_with(&mut subst)
     }
+}
+
+/// Public helper: return the declaration name span of the local/param binding
+/// referenced by the given `expr` in `func`'s body, if any.
+pub fn binding_def_span_for_expr<'db>(
+    db: &'db dyn HirAnalysisDb,
+    func: hir::hir_def::item::Func<'db>,
+    expr: hir::hir_def::ExprId,
+) -> Option<hir::span::DynLazySpan<'db>> {
+    let (_diags, typed) = check_func_body(db, func).clone();
+    let body = typed.body?;
+    let prop = typed.expr_prop(db, expr);
+    let Some(binding) = prop.binding() else { return None };
+    match binding {
+        crate::ty::ty_check::env::LocalBinding::Local { pat, .. } => Some(pat.span(body).into()),
+        crate::ty::ty_check::env::LocalBinding::Param { idx, .. } => {
+            // Prefer name span; label spans are not part of binding identity here.
+            Some(func.span().params().param(idx).name().into())
+        }
+    }
+}
+
+/// Stable identity for a local binding within a function body: either a local pattern
+/// or a function parameter at index.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum BindingKey<'db> {
+    LocalPat(hir::hir_def::PatId),
+    FuncParam(hir::hir_def::item::Func<'db>, u16),
+}
+
+/// Get the binding key for an expression that references a local binding, if any.
+pub fn expr_binding_key_for_expr<'db>(
+    db: &'db dyn HirAnalysisDb,
+    func: hir::hir_def::item::Func<'db>,
+    expr: hir::hir_def::ExprId,
+) -> Option<BindingKey<'db>> {
+    let (_diags, typed) = check_func_body(db, func).clone();
+    let prop = typed.expr_prop(db, expr);
+    let binding = prop.binding()?;
+    match binding {
+        crate::ty::ty_check::env::LocalBinding::Local { pat, .. } => Some(BindingKey::LocalPat(pat)),
+        crate::ty::ty_check::env::LocalBinding::Param { idx, .. } => {
+            Some(BindingKey::FuncParam(func, idx as u16))
+        }
+    }
+}
+
+/// Return the declaration name span for a binding key in the given function.
+pub fn binding_def_span_in_func<'db>(
+    db: &'db dyn HirAnalysisDb,
+    func: hir::hir_def::item::Func<'db>,
+    key: BindingKey<'db>,
+) -> Option<hir::span::DynLazySpan<'db>> {
+    match key {
+        BindingKey::LocalPat(pat) => {
+            let (_d, typed) = check_func_body(db, func).clone();
+            let body = typed.body?;
+            Some(pat.span(body).into())
+        }
+        BindingKey::FuncParam(f, idx) => {
+            let f = f; // param belongs to this function
+            Some(f.span().params().param(idx as usize).name().into())
+        }
+    }
+}
+
+/// Return all reference spans (including the declaration) for a binding key within the given function.
+pub fn binding_refs_in_func<'db>(
+    db: &'db dyn HirAnalysisDb,
+    func: hir::hir_def::item::Func<'db>,
+    key: BindingKey<'db>,
+) -> Vec<hir::span::DynLazySpan<'db>> {
+    let (_d, typed) = check_func_body(db, func).clone();
+    let Some(body) = typed.body else { return vec![] };
+
+    // Include declaration span first
+    let mut out = Vec::new();
+    if let Some(def) = binding_def_span_in_func(db, func, key) { out.push(def); }
+
+    // Collect expression references: restrict to Expr::Path occurrences
+    for (expr, _prop) in typed.expr_ty.iter() {
+        let prop = typed.expr_prop(db, *expr);
+        let Some(binding) = prop.binding() else { continue };
+        let matches = match (key, binding) {
+            (BindingKey::LocalPat(pat), crate::ty::ty_check::env::LocalBinding::Local { pat: bp, .. }) => pat == bp,
+            (BindingKey::FuncParam(_, idx), crate::ty::ty_check::env::LocalBinding::Param { idx: bidx, .. }) => idx as usize == bidx,
+            _ => false,
+        };
+        if !matches { continue }
+        // Anchor reference at the tail ident of the path expression
+        let expr_data = body.exprs(db)[*expr].clone();
+        if let hir::hir_def::Partial::Present(hir::hir_def::Expr::Path(_)) = expr_data {
+            let span = (*expr).span(body).into_path_expr().path().segment(0).ident().into();
+            out.push(span);
+        }
+    }
+    out
 }
 
 struct TyCheckerFinalizer<'db> {

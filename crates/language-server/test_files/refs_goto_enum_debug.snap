@@ -1,0 +1,25 @@
+---
+source: crates/language-server/tests/references_snap.rs
+assertion_line: 128
+expression: snapshot
+---
+0: enum Color {
+1:     Red,
+2:     Green { intensity: u32 },
+3:     Blue(u32)
+4: }
+5: 
+6: fn test() {
+7:     let red = Color::Red
+8:     let green = Color::Green { intensity: 50 }
+9:     let blue = Color::Blue(100)
+10: }
+11: 
+---
+cursor (7, 8): 1 refs -> goto_enum_debug.fe: goto_enum_debug::test::{fn_body} @ 7:8
+cursor (7, 14): 1 refs -> goto_enum_debug.fe: goto_enum_debug::Color @ 0:5
+cursor (7, 21): 2 refs -> goto_enum_debug.fe: goto_enum_debug::Color @ 1:4; goto_enum_debug::test::{fn_body} @ 7:21
+cursor (8, 8): 1 refs -> goto_enum_debug.fe: goto_enum_debug::test::{fn_body} @ 8:8
+cursor (9, 8): 1 refs -> goto_enum_debug.fe: goto_enum_debug::test::{fn_body} @ 9:8
+cursor (9, 15): 1 refs -> goto_enum_debug.fe: goto_enum_debug::Color @ 0:5
+cursor (9, 22): 2 refs -> goto_enum_debug.fe: goto_enum_debug::Color @ 3:4; goto_enum_debug::test::{fn_body} @ 9:22

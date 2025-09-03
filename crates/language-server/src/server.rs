@@ -9,7 +9,7 @@ use async_lsp::lsp_types::notification::{
     self, DidChangeTextDocument, DidChangeWatchedFiles, DidOpenTextDocument, DidSaveTextDocument,
     Initialized,
 };
-use async_lsp::lsp_types::request::{GotoDefinition, HoverRequest, Shutdown};
+use async_lsp::lsp_types::request::{GotoDefinition, HoverRequest, References, Shutdown};
 use async_lsp::ClientSocket;
 use async_std::stream::StreamExt;
 use futures_batch::ChunksTimeoutStreamExt;
@@ -42,6 +42,7 @@ pub(crate) fn setup(
         // mutating handlers
         .handle_request_mut::<Initialize>(handlers::initialize)
         .handle_request_mut::<GotoDefinition>(goto::handle_goto_definition)
+        .handle_request::<References>(crate::functionality::references::handle_references)
         .handle_event_mut::<FileChange>(handlers::handle_file_change)
         .handle_event::<FilesNeedDiagnostics>(handlers::handle_files_need_diagnostics)
         // non-mutating handlers

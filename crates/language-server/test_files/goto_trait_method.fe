@@ -1,0 +1,15 @@
+struct Wrapper {}
+
+trait Greeter {
+    fn greet(self) -> u32
+}
+
+impl Greeter for Wrapper {
+    fn greet(self) -> u32 { 1 }
+}
+
+fn main() {
+    let w = Wrapper {}
+    let a = w.greet()
+}
+

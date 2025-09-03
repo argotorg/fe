@@ -21,7 +21,7 @@ use super::{
     diagnostics::{ImplDiag, TraitConstraintDiag, TraitLowerDiag, TyDiagCollection, TyLowerDiag},
     func_def::FuncDef,
     method_cmp::compare_impl_method,
-    method_table::probe_method,
+    method_table::probe_method, // TODO(deprecate): prefer method facade helpers for listing methods
     normalize::normalize_ty,
     trait_def::{ingot_trait_env, Implementor, TraitDef},
     trait_lower::{lower_trait, lower_trait_ref, TraitRefLowerError},
@@ -35,7 +35,9 @@ use super::{
     visitor::{walk_ty, TyVisitor},
 };
 use crate::{
-    name_resolution::{diagnostics::PathResDiag, resolve_path, ExpectedPathKind, PathRes},
+    name_resolution::{
+        diagnostics::PathResDiag, resolve_with_policy, DomainPreference, ExpectedPathKind, PathRes,
+    },
     ty::{
         adt_def::AdtDef,
         binder::Binder,
@@ -547,12 +549,12 @@ fn check_param_defined_in_parent<'db>(
     let parent_scope = scope.parent_item(db)?.scope();
     let path = PathId::from_ident(db, name);
 
-    match resolve_path(
+    match resolve_with_policy(
         db,
         path,
         parent_scope,
         PredicateListId::empty_list(db),
-        false,
+        DomainPreference::Type,
     ) {
         Ok(r @ PathRes::Ty(ty)) if ty.is_param(db) => {
             Some(TyLowerDiag::GenericParamAlreadyDefinedInParent {
@@ -1517,7 +1519,13 @@ fn find_const_ty_param<'db>(
     scope: ScopeId<'db>,
 ) -> Option<ConstTyId<'db>> {
     let path = PathId::from_ident(db, ident);
-    let Ok(PathRes::Ty(ty)) = resolve_path(db, path, scope, PredicateListId::empty_list(db), true)
+    let Ok(PathRes::Ty(ty)) = resolve_with_policy(
+        db,
+        path,
+        scope,
+        PredicateListId::empty_list(db),
+        DomainPreference::Value,
+    )
     else {
         return None;
     };

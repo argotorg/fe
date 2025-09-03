@@ -1,0 +1,14 @@
+fn test_locals() {
+    let x = 42
+    let y = x  // cursor on 'x' should goto line 2
+
+    const MY_CONST: u32 = 100
+    let z = MY_CONST  // cursor on 'MY_CONST' should goto line 5
+
+    // Function parameter test
+    let result = helper(x)  // cursor on 'x' should goto line 2
+}
+
+fn helper(param: u32) -> u32 {
+    param + 1  // cursor on 'param' should goto parameter declaration
+}

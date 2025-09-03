@@ -1,5 +1,7 @@
 use hir::{
     hir_def::{scope_graph::ScopeId, PathId, TypeId},
+    path_anchor::{map_path_anchor_to_dyn_lazy, AnchorPicker},
+    path_view::HirPathAdapter,
     span::{path::LazyPathSpan, types::LazyTySpan},
     visitor::{prelude::DynLazySpan, walk_path, walk_type, Visitor, VisitorCtxt},
 };
@@ -113,20 +115,12 @@ impl<'db> Visitor<'db> for HirTyErrVisitor<'db> {
             Ok(res) => res,
 
             Err(err) => {
-                let segment_idx = err.failed_at.segment_index(self.db);
-                // Use the HIR path to check if the corresponding segment is a QualifiedType.
-                let seg_hir = path.segment(self.db, segment_idx).unwrap_or(path);
-                let segment = path_span.segment(segment_idx);
-                let segment_span = match seg_hir.kind(self.db) {
-                    hir::hir_def::PathKind::QualifiedType { .. } => {
-                        segment.qualified_type().trait_qualifier().name()
-                    }
-                    _ => segment.ident(),
-                };
-
-                if let Some(diag) =
-                    err.into_diag(self.db, path, segment_span.into(), ExpectedPathKind::Type)
-                {
+                // Use centralized anchor selection to choose the best segment span.
+                let seg_idx = err.failed_at.segment_index(self.db);
+                let view = HirPathAdapter::new(self.db, path);
+                let anchor = AnchorPicker::pick_invalid_segment(&view, seg_idx);
+                let span = map_path_anchor_to_dyn_lazy(path_span, anchor);
+                if let Some(diag) = err.into_diag(self.db, path, span.into(), ExpectedPathKind::Type) {
                     self.diags.push(diag.into());
                 }
                 return;
@@ -140,9 +134,12 @@ impl<'db> Visitor<'db> for HirTyErrVisitor<'db> {
                 .push(PathResDiag::ExpectedType(span.into(), ident, res.kind_name()).into());
         }
         if let Some((path, deriv_span)) = invisible {
-            let span = path_span.segment(path.segment_index(self.db)).ident();
+            let seg_idx = path.segment_index(self.db);
+            let view = HirPathAdapter::new(self.db, path);
+            let anchor = AnchorPicker::pick_visibility_error(&view, seg_idx);
+            let anchored = map_path_anchor_to_dyn_lazy(path_span.clone(), anchor);
             let ident = path.ident(self.db);
-            let diag = PathResDiag::Invisible(span.into(), *ident.unwrap(), deriv_span);
+            let diag = PathResDiag::Invisible(anchored.into(), *ident.unwrap(), deriv_span);
             self.diags.push(diag.into());
         }
 

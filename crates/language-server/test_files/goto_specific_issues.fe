@@ -1,0 +1,29 @@
+type Foo = u32
+
+// Test case 1: Multi-segment path resolution
+mod nested {
+    pub const NESTED_CONST: Foo = 100
+}
+
+fn test_nested() {
+    // Cursor on NESTED_CONST should resolve to the constant
+    let a = nested::NESTED_CONST
+}
+
+// Test case 2: Local variable in method call
+struct Container {
+    pub value: Foo
+}
+
+impl Container {
+    pub fn get(self) -> Foo {
+        self.value
+    }
+}
+
+fn test_container() {
+    let container = Container { value: 42 }
+    // Cursor on container should resolve to the local variable
+    let result = container.get()
+}
+

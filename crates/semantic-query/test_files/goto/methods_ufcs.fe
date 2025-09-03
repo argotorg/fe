@@ -1,0 +1,12 @@
+struct Wrapper {}
+
+impl Wrapper {
+  pub fn new() -> Wrapper { Wrapper {} }
+  pub fn from_val() -> Wrapper { Wrapper::new() }
+}
+
+fn main() {
+  let w1 = Wrapper::new()
+  let w2 = Wrapper::from_val()
+}
+

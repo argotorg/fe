@@ -3,7 +3,9 @@ use parser::ast;
 use super::FileLowerCtxt;
 use crate::{
     hir_def::{
-        Body, BodyKind, BodySourceMap, Expr, ExprId, NodeStore, Partial, Pat, PatId, Stmt, StmtId,
+        params::{GenericArg, GenericArgListId},
+        Body, BodyKind, BodyPathIndex, BodySourceMap, Expr, ExprId, NodeStore, Partial, Pat, PatId,
+        PathId, Stmt, StmtId, TypeId, TypeKind, TupleTypeId,
         TrackedItemId, TrackedItemVariant,
     },
     span::HirOrigin,
@@ -33,6 +35,7 @@ pub(super) struct BodyCtxt<'ctxt, 'db> {
     pub(super) exprs: NodeStore<ExprId, Partial<Expr<'db>>>,
     pub(super) pats: NodeStore<PatId, Partial<Pat<'db>>>,
     pub(super) source_map: BodySourceMap,
+    pub(super) path_index: BodyPathIndex<'db>,
 }
 
 impl<'ctxt, 'db> BodyCtxt<'ctxt, 'db> {
@@ -41,6 +44,78 @@ impl<'ctxt, 'db> BodyCtxt<'ctxt, 'db> {
         self.source_map.expr_map.insert(expr_id, origin);
 
         expr_id
+    }
+
+    /// Record all PathId occurrences reachable from a TypeId, including nested
+    /// tuple/array elements and generic args on path segments.
+    pub(super) fn record_type_paths(&mut self, ty: TypeId<'db>) {
+        match ty.data(self.f_ctxt.db()) {
+            TypeKind::Path(p) => {
+                if let Partial::Present(pid) = p {
+                    // Record the path itself.
+                    let idx = self.path_index.entries.len();
+                    self.path_index.entries.insert(idx, *pid);
+                    // Record any type paths inside generic args of each segment.
+                    self.record_path_generic_arg_types(*pid);
+                }
+            }
+            TypeKind::Ptr(inner) => {
+                if let Partial::Present(inner) = inner {
+                    self.record_type_paths(*inner);
+                }
+            }
+            TypeKind::Tuple(tup) => {
+                self.record_tuple_type_paths(*tup);
+            }
+            TypeKind::Array(elem, _len) => {
+                if let Partial::Present(elem) = elem {
+                    self.record_type_paths(*elem);
+                }
+            }
+            TypeKind::Never => {}
+        }
+    }
+
+    fn record_tuple_type_paths(&mut self, tup: TupleTypeId<'db>) {
+        for part in tup.data(self.f_ctxt.db()).iter() {
+            if let Partial::Present(ty) = part {
+                self.record_type_paths(*ty);
+            }
+        }
+    }
+
+    /// Walk generic args of each segment in a PathId and record type paths.
+    fn record_path_generic_arg_types(&mut self, path: PathId<'db>) {
+        let db = self.f_ctxt.db();
+        let segs = path.len(db);
+        for i in 0..segs {
+            if let Some(seg) = path.segment(db, i) {
+                let args = seg.generic_args(db);
+                self.record_generic_arg_types(args);
+            }
+        }
+    }
+
+    /// Record type-paths present in a generic arg list.
+    pub(super) fn record_generic_arg_types(&mut self, args: GenericArgListId<'db>) {
+        let db = self.f_ctxt.db();
+        for arg in args.data(db).iter() {
+            match arg {
+                GenericArg::Type(t) => {
+                    if let Partial::Present(ty) = t.ty {
+                        self.record_type_paths(ty);
+                    }
+                }
+                GenericArg::AssocType(a) => {
+                    if let Partial::Present(ty) = a.ty {
+                        self.record_type_paths(ty);
+                    }
+                }
+                GenericArg::Const(_c) => {
+                    // no PathId inside const generic bodies yet
+                }
+            }
+        }
     }
 
     pub(super) fn push_invalid_expr(&mut self, origin: HirOrigin<ast::Expr>) -> ExprId {
@@ -84,6 +159,7 @@ impl<'ctxt, 'db> BodyCtxt<'ctxt, 'db> {
             exprs: NodeStore::new(),
             pats: NodeStore::new(),
             source_map: BodySourceMap::default(),
+            path_index: BodyPathIndex::default(),
         }
     }
 
@@ -100,6 +176,7 @@ impl<'ctxt, 'db> BodyCtxt<'ctxt, 'db> {
             self.f_ctxt.top_mod(),
             self.source_map,
             origin,
+            self.path_index,
         );
 
         self.f_ctxt.leave_item_scope(body);

@@ -1,0 +1,12 @@
+---
+source: crates/semantic-query/tests/refs_snap.rs
+assertion_line: 123
+expression: snapshot
+---
+0: mod root { pub mod sub { pub struct Name {} } }
+1: 
+2: use root::sub::Name
+3: use root::sub
+4: use root
+5: 
+---

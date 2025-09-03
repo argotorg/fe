@@ -1,0 +1,60 @@
+---
+source: crates/language-server/tests/references_snap.rs
+assertion_line: 128
+expression: snapshot
+---
+0: use core
+1: 
+2: struct MyStruct {
+3:     pub field: u32
+4: }
+5: 
+6: const MY_CONST: u32 = 42
+7: 
+8: fn my_function() -> u32 {
+9:     MY_CONST + 10
+10: }
+11: 
+12: fn another_function(param: MyStruct) -> u32 {
+13:     param.field + my_function()
+14: }
+15: 
+16: fn main() {
+17:     let x: MyStruct = MyStruct { field: 5 }
+18:     let y = my_function()
+19:     let z = another_function(x)
+20:     let c = MY_CONST
+21:     
+22:     core::todo()
+23: }
+24: 
+25: mod nested {
+26:     pub const NESTED_CONST: u32 = 100
+27:     
+28:     pub fn nested_function() -> u32 {
+29:         NESTED_CONST * 2
+30:     }
+31: }
+32: 
+33: fn test_nested() {
+34:     let a = nested::NESTED_CONST
+35:     let b = nested::nested_function()
+36: }
+37: 
+---
+cursor (13, 4): 2 refs -> goto_values.fe: goto_values::another_function @ 12:20; goto_values::another_function::{fn_body} @ 13:4
+cursor (13, 10): 1 refs -> goto_values.fe: goto_values::MyStruct @ 3:8
+cursor (13, 18): 3 refs -> goto_values.fe: goto_values::another_function::{fn_body} @ 13:18; goto_values::main::{fn_body} @ 18:12; goto_values::my_function @ 8:3
+cursor (17, 8): 2 refs -> goto_values.fe: goto_values::main::{fn_body} @ 17:8; goto_values::main::{fn_body} @ 19:29
+cursor (18, 8): 1 refs -> goto_values.fe: goto_values::main::{fn_body} @ 18:8
+cursor (18, 12): 3 refs -> goto_values.fe: goto_values::another_function::{fn_body} @ 13:18; goto_values::main::{fn_body} @ 18:12; goto_values::my_function @ 8:3
+cursor (19, 8): 1 refs -> goto_values.fe: goto_values::main::{fn_body} @ 19:8
+cursor (19, 12): 2 refs -> goto_values.fe: goto_values::another_function @ 12:3; goto_values::main::{fn_body} @ 19:12
+cursor (19, 29): 2 refs -> goto_values.fe: goto_values::main::{fn_body} @ 17:8; goto_values::main::{fn_body} @ 19:29
+cursor (20, 8): 1 refs -> goto_values.fe: goto_values::main::{fn_body} @ 20:8
+cursor (22, 10): 2 refs -> goto_values.fe: goto_values::main::{fn_body} @ 22:10 | lib.fe: goto_values::my_function @ 5:11
+cursor (34, 8): 1 refs -> goto_values.fe: goto_values::test_nested::{fn_body} @ 34:8
+cursor (34, 12): 1 refs -> goto_values.fe: goto_values::nested @ 25:4
+cursor (35, 8): 1 refs -> goto_values.fe: goto_values::test_nested::{fn_body} @ 35:8
+cursor (35, 12): 1 refs -> goto_values.fe: goto_values::nested @ 25:4
+cursor (35, 20): 2 refs -> goto_values.fe: goto_values::nested::nested_function @ 28:11; goto_values::test_nested::{fn_body} @ 35:20

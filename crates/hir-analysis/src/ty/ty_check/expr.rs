@@ -13,7 +13,7 @@ use crate::{
     name_resolution::{
         diagnostics::PathResDiag,
         is_scope_visible_from,
-        method_selection::{select_method_candidate, MethodCandidate, MethodSelectionError},
+        method_selection::{MethodCandidate, MethodSelectionError},
         resolve_name_res, resolve_query, EarlyNameQueryId, ExpectedPathKind, NameDomain,
         NameResBucket, PathRes, QueryDirective,
     },
@@ -321,7 +321,7 @@ impl<'db> TyChecker<'db> {
         let assumptions = self.env.assumptions();
 
         let canonical_r_ty = Canonicalized::new(self.db, receiver_prop.ty);
-        let candidate = match select_method_candidate(
+        let candidate = match crate::name_resolution::method_selection::select_method_candidate(
             self.db,
             canonical_r_ty.value,
             method_name,
@@ -437,11 +437,8 @@ impl<'db> TyChecker<'db> {
             match self.resolve_path(*path, true, span.clone().path()) {
                 Ok(r) => ResolvedPathInBody::Reso(r),
                 Err(err) => {
-                    let span = expr
-                        .span(self.body())
-                        .into_path_expr()
-                        .path()
-                        .segment(err.failed_at.segment_index(self.db));
+                    // Use centralized path anchor selection instead of a fixed segment span.
+                    let span = err.anchor_dyn_span_for_body_expr(self.db, self.body(), expr, *path);
 
                     let expected_kind = if matches!(self.parent_expr(), Some(Expr::Call(..))) {
                         ExpectedPathKind::Function
@@ -557,7 +554,10 @@ impl<'db> TyChecker<'db> {
                     };
                     ExprProp::new(self.table.instantiate_to_term(method_ty), true)
                 }
-                PathRes::Mod(_) | PathRes::FuncParam(..) => todo!(),
+                PathRes::Mod(_) | PathRes::FuncParam(..) => {
+                    // Not a value in expression position
+                    ExprProp::invalid(self.db)
+                }
             },
         }
     }

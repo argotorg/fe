@@ -1,0 +1,22 @@
+---
+source: crates/semantic-query/tests/refs_snap.rs
+assertion_line: 123
+expression: snapshot
+---
+0: struct Container { value: i32 }
+1: 
+2: impl Container {
+3:   pub fn get(self) -> i32 { self.value }
+4: }
+5: 
+6: fn test() {
+7:   let c = Container { value: 42 }
+8:   let r = c.get()
+9: }
+10: 
+---
+cursor (3, 28): 2 refs -> methods_call.fe: 3:13; 3:28
+cursor (3, 33): 1 refs -> methods_call.fe: methods_call::Container @ 0:19
+cursor (7, 6): 2 refs -> methods_call.fe: methods_call::test::{fn_body} @ 7:6; methods_call::test::{fn_body} @ 8:10
+cursor (8, 6): 1 refs -> methods_call.fe: methods_call::test::{fn_body} @ 8:6
+cursor (8, 10): 2 refs -> methods_call.fe: methods_call::test::{fn_body} @ 7:6; methods_call::test::{fn_body} @ 8:10

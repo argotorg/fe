@@ -1,0 +1,21 @@
+---
+source: crates/semantic-query/tests/refs_snap.rs
+assertion_line: 123
+expression: snapshot
+---
+0: struct Point { x: i32, y: i32 }
+1: 
+2: fn main() {
+3:   let p = Point { x: 1, y: 2 }
+4:   let a = p.x
+5:   let b = p.y
+6: }
+7: 
+---
+cursor (3, 6): 3 refs -> fields.fe: fields::main::{fn_body} @ 3:6; fields::main::{fn_body} @ 4:10; fields::main::{fn_body} @ 5:10
+cursor (4, 6): 1 refs -> fields.fe: fields::main::{fn_body} @ 4:6
+cursor (4, 10): 3 refs -> fields.fe: fields::main::{fn_body} @ 3:6; fields::main::{fn_body} @ 4:10; fields::main::{fn_body} @ 5:10
+cursor (4, 12): 1 refs -> fields.fe: fields::Point @ 0:15
+cursor (5, 6): 1 refs -> fields.fe: fields::main::{fn_body} @ 5:6
+cursor (5, 10): 3 refs -> fields.fe: fields::main::{fn_body} @ 3:6; fields::main::{fn_body} @ 4:10; fields::main::{fn_body} @ 5:10
+cursor (5, 12): 1 refs -> fields.fe: fields::Point @ 0:23

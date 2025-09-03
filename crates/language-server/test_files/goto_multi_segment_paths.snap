@@ -1,0 +1,31 @@
+---
+source: crates/language-server/src/functionality/goto.rs
+assertion_line: 289
+expression: snapshot
+input_file: test_files/goto_multi_segment_paths.fe
+---
+0: // Test that multi-segment path resolution works correctly
+1: mod a {
+2:     pub mod b {
+3:         pub mod c {
+4:             type Foo
+5:             pub const DEEP_CONST: Foo = 42
+6:         }
+7:     }
+8: }
+9: 
+10: fn test_segments() {
+11:     // Multi-segment path - each segment should have its own cursor position
+12:     let x = a::b::c::DEEP_CONST
+13: 
+14:     // Two-segment path
+15:     let y = a::b
+16: }
+17: 
+---
+cursor position (5, 34), path: goto_multi_segment_paths::a::b::c::Foo
+cursor position (12, 12), path: goto_multi_segment_paths::a
+cursor position (12, 15), path: goto_multi_segment_paths::a::b
+cursor position (12, 18), path: goto_multi_segment_paths::a::b::c
+cursor position (15, 12), path: goto_multi_segment_paths::a
+cursor position (15, 15), path: goto_multi_segment_paths::a::b

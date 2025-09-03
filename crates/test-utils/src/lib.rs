@@ -1,6 +1,7 @@
 #[doc(hidden)]
 pub mod _macro_support;
 pub mod url_utils;
+pub mod snap;
 pub use tracing::Level;
 use tracing::{
     level_filters::LevelFilter,

@@ -1,0 +1,31 @@
+---
+source: crates/semantic-query/tests/goto_snap.rs
+assertion_line: 130
+expression: snapshot
+input_file: test_files/goto/methods_ufcs.fe
+---
+0: struct Wrapper {}
+1: 
+2: impl Wrapper {
+3:   pub fn new() -> Wrapper { Wrapper {} }
+4:   pub fn from_val() -> Wrapper { Wrapper::new() }
+5: }
+6: 
+7: fn main() {
+8:   let w1 = Wrapper::new()
+9:   let w2 = Wrapper::from_val()
+10: }
+11: 
+---
+cursor position (2, 5), 1 defs -> methods_ufcs::Wrapper
+cursor position (3, 18), 1 defs -> methods_ufcs::Wrapper
+cursor position (3, 28), 1 defs -> methods_ufcs::Wrapper
+cursor position (4, 23), 1 defs -> methods_ufcs::Wrapper
+cursor position (4, 33), 1 defs -> methods_ufcs::Wrapper
+cursor position (4, 42), 1 defs -> methods_ufcs::Wrapper::new
+cursor position (8, 6), 1 defs -> 
+cursor position (8, 11), 1 defs -> methods_ufcs::Wrapper
+cursor position (8, 20), 1 defs -> methods_ufcs::Wrapper::new
+cursor position (9, 6), 1 defs -> 
+cursor position (9, 11), 1 defs -> methods_ufcs::Wrapper
+cursor position (9, 20), 1 defs -> methods_ufcs::Wrapper::from_val

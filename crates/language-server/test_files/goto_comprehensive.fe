@@ -1,0 +1,63 @@
+// Test struct field access resolution
+struct Container {
+    pub value: u32
+}
+
+impl Container {
+    pub fn get(self) -> u32 {
+        self.value
+    }
+}
+
+// Test enum variant resolution
+enum Color {
+    Red,
+    Green { intensity: u32 },
+    Blue(u32)
+}
+
+fn test_field_access() {
+    let container = Container { value: 43 }
+
+    // This should resolve to the field definition
+    let val = container.value
+
+    // This should resolve to the method definition
+    let retrieved = container.get()
+
+    // Test local variable references
+    let copy_container = container  // should resolve to line 20
+    let copy_val = val             // should resolve to line 23
+}
+
+fn test_enum_variants() {
+    // These should resolve to the specific variants, not the enum
+    let red = Color::Red
+    let green = Color::Green { intensity: 50 }
+    let blue = Color::Blue(100)
+
+    // Test pattern matching field resolution
+    match green {
+        Color::Green { intensity } => {
+            // 'intensity' here should resolve to the field in the enum variant
+            let _val = intensity
+        }
+        _ => {}
+    }
+}
+
+pub trait Inner {
+    fn foo(self) -> i32
+}
+
+pub struct Wrapper<S: Inner> {
+    pub inner: S,
+}
+
+impl<S: Inner> Wrapper<S> {
+    pub fn foo(mut self, mut dog: i32) -> i32 {
+        self.inner.foo() // collect_constraints_from_func_def
+        dog
+    }
+}
+

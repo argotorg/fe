@@ -1,0 +1,12 @@
+enum Color {
+    Red,
+    Green { intensity: u32 },
+    Blue(u32)
+}
+
+fn test() {
+    let red = Color::Red
+    let green = Color::Green { intensity: 50 }
+    let blue = Color::Blue(100)
+}
+

@@ -70,6 +70,10 @@ impl<'db> Expr<'db> {
                     IdentId::lower_token_partial(ctxt.f_ctxt, method_call.method_name());
                 let generic_args =
                     GenericArgListId::lower_ast_opt(ctxt.f_ctxt, method_call.generic_args());
+                // Record any type paths used in generic args.
+                if !generic_args.is_empty(ctxt.f_ctxt.db()) {
+                    ctxt.record_generic_arg_types(generic_args);
+                }
                 let args = method_call
                     .args()
                     .map(|args| {
@@ -83,11 +87,19 @@ impl<'db> Expr<'db> {
 
             ast::ExprKind::Path(path) => {
                 let path = PathId::lower_ast_partial(ctxt.f_ctxt, path.path());
+                if let crate::hir_def::Partial::Present(pid) = path {
+                    let idx = ctxt.path_index.entries.len();
+                    ctxt.path_index.entries.insert(idx, pid);
+                }
                 Self::Path(path)
             }
 
             ast::ExprKind::RecordInit(record_init) => {
                 let path = PathId::lower_ast_partial(ctxt.f_ctxt, record_init.path());
+                if let crate::hir_def::Partial::Present(pid) = path {
+                    let idx = ctxt.path_index.entries.len();
+                    ctxt.path_index.entries.insert(idx, pid);
+                }
                 let fields = record_init
                     .fields()
                     .map(|fields| {

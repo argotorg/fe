@@ -1,0 +1,23 @@
+---
+source: crates/language-server/src/functionality/goto.rs
+assertion_line: 915
+expression: snapshot
+input_file: test_files/test_local_goto.fe
+---
+0: fn test_locals() {
+1:     let x = 42;
+2:     let y = x;  // cursor on 'x' should goto line 2
+3:     
+4:     const MY_CONST: u32 = 100;
+5:     let z = MY_CONST;  // cursor on 'MY_CONST' should goto line 5
+6:     
+7:     // Function parameter test
+8:     let result = helper(x);  // cursor on 'x' should goto line 2
+9: }
+10: 
+11: fn helper(param: u32) -> u32 {
+12:     param + 1  // cursor on 'param' should goto parameter declaration
+13: }
+---
+cursor position (8, 17), path: test_local_goto::helper
+cursor position (12, 4), path: test_local_goto::helper::param

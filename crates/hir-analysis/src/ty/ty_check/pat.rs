@@ -220,7 +220,14 @@ impl<'db> TyChecker<'db> {
                     TyId::invalid(self.db, InvalidCause::Other)
                 }
 
-                Err(_) => TyId::invalid(self.db, InvalidCause::Other),
+                Err(err) => {
+                    // Anchor the failing segment using centralized picker.
+                    let span = err.anchor_dyn_span_for_body_path_pat(self.db, self.body(), pat, *path);
+                    if let Some(diag) = err.into_diag(self.db, *path, span.into(), crate::name_resolution::ExpectedPathKind::Value) {
+                        self.push_diag(diag);
+                    }
+                    TyId::invalid(self.db, InvalidCause::Other)
+                }
             }
         }
     }
@@ -283,7 +290,18 @@ impl<'db> TyChecker<'db> {
                     return TyId::invalid(self.db, InvalidCause::Other);
                 }
             },
-            Err(_) => return TyId::invalid(self.db, InvalidCause::Other),
+            Err(err) => {
+                let span = err.anchor_dyn_span_for_body_path_tuple_pat(self.db, self.body(), pat, *path);
+                if let Some(diag) = err.into_diag(
+                    self.db,
+                    *path,
+                    span.into(),
+                    crate::name_resolution::ExpectedPathKind::Value,
+                ) {
+                    self.push_diag(diag);
+                }
+                return TyId::invalid(self.db, InvalidCause::Other);
+            }
         };
 
         let expected_len = expected_elems.len(self.db);
@@ -412,7 +430,18 @@ impl<'db> TyChecker<'db> {
                     TyId::invalid(self.db, InvalidCause::Other)
                 }
             },
-            Err(_) => TyId::invalid(self.db, InvalidCause::Other),
+            Err(err) => {
+                let span = err.anchor_dyn_span_for_body_record_pat(self.db, self.body(), pat, *path);
+                if let Some(diag) = err.into_diag(
+                    self.db,
+                    *path,
+                    span.into(),
+                    crate::name_resolution::ExpectedPathKind::Value,
+                ) {
+                    self.push_diag(diag);
+                }
+                TyId::invalid(self.db, InvalidCause::Other)
+            }
         }
     }
 

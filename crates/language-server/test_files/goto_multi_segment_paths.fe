@@ -1,0 +1,18 @@
+// Test that multi-segment path resolution works correctly
+mod a {
+    pub mod b {
+        pub mod c {
+            type Foo
+            pub const DEEP_CONST: Foo = 42
+        }
+    }
+}
+
+fn test_segments() {
+    // Multi-segment path - each segment should have its own cursor position
+    let x = a::b::c::DEEP_CONST
+
+    // Two-segment path
+    let y = a::b
+}
+

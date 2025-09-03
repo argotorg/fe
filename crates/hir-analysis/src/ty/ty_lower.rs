@@ -13,7 +13,7 @@ use super::{
     ty_def::{InvalidCause, Kind, TyData, TyId, TyParam},
 };
 use crate::name_resolution::{
-    resolve_ident_to_bucket, resolve_path, NameDomain, NameResKind, PathRes,
+    resolve_ident_to_bucket, resolve_with_policy, DomainPreference, NameDomain, NameResKind, PathRes,
 };
 use crate::{ty::binder::Binder, HirAnalysisDb};
 
@@ -81,7 +81,7 @@ fn lower_path<'db>(
         return TyId::invalid(db, InvalidCause::ParseError);
     };
 
-    match resolve_path(db, path, scope, assumptions, false) {
+    match resolve_with_policy(db, path, scope, assumptions, DomainPreference::Type) {
         Ok(PathRes::Ty(ty) | PathRes::TyAlias(_, ty) | PathRes::Func(ty)) => ty,
         Ok(_) => TyId::invalid(db, InvalidCause::Other),
         Err(_) => TyId::invalid(db, InvalidCause::PathResolutionFailed { path }),

@@ -1,0 +1,12 @@
+---
+source: crates/semantic-query/tests/goto_snap.rs
+assertion_line: 114
+expression: snapshot
+input_file: test_files/goto/ambiguous_last_segment.fe
+---
+0: mod m { pub fn ambiguous() {} pub mod ambiguous {} }
+1: 
+2: use m::ambiguous
+3: 
+---
+

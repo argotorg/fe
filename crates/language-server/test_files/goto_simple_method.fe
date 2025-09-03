@@ -1,0 +1,15 @@
+struct Container {
+    pub value: u32
+}
+
+impl Container {
+    pub fn get(self) -> u32 {
+        self.value
+    }
+}
+
+fn test() {
+    let container = Container { value: 42 }
+    let result = container.get()
+}
+

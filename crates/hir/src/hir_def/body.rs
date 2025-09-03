@@ -20,6 +20,7 @@ use crate::{
     visitor::prelude::*,
     HirDb,
 };
+// duplicate imports removed
 
 #[salsa::tracked]
 #[derive(Debug)]
@@ -45,6 +46,8 @@ pub struct Body<'db> {
     pub(crate) source_map: BodySourceMap,
     #[return_ref]
     pub(crate) origin: HirOrigin<ast::Expr>,
+    #[return_ref]
+    pub(crate) path_index: BodyPathIndex<'db>,
 }
 
 impl<'db> Body<'db> {
@@ -232,6 +235,18 @@ where
             source_to_node: IndexMap::default(),
             node_to_source: SecondaryMap::new(),
         }
+    }
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Hash)]
+pub struct BodyPathIndex<'db> {
+    pub entries: IndexMap<usize, super::PathId<'db>>,
+}
+
+unsafe impl<'db> Update for BodyPathIndex<'db> {
+    unsafe fn maybe_update(old_ptr: *mut Self, new_val: Self) -> bool {
+        let old_val = unsafe { &mut *old_ptr };
+        Update::maybe_update(&mut old_val.entries, new_val.entries)
     }
 }
 
