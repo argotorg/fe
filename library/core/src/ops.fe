@@ -66,13 +66,6 @@ pub trait Shr<T = Self> {
     fn shr(self, _ other: T) -> Self::Output
 }
 
-// Unary operators
-pub trait UnaryPlus {
-    type Output = Self
-
-    fn add(self) -> Self::Output
-}
-
 pub trait Neg {
     type Output = Self
 

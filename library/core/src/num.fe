@@ -355,7 +355,6 @@ extern {
 }
 
 // u8 impls
-impl UnaryPlus for u8 { fn add(self) -> u8 { self } }
 impl BitNot for u8 { fn bit_not(self) -> u8 { __bitnot_u8(self) } }
 impl Add for u8 { fn add(self, _ other: u8) -> u8 { __add_u8(self, other) } }
 impl Sub for u8 { fn sub(self, _ other: u8) -> u8 { __sub_u8(self, other) } }
@@ -392,7 +391,6 @@ impl BitXorAssign for u8 { fn bitxor_assign(mut self, _ other: u8) { self = self
 impl Default for u8 { fn default() -> Self { 0 } }
 
 // i8 impls
-impl UnaryPlus for i8 { fn add(self) -> i8 { self } }
 impl Neg for i8 { fn neg(self) -> i8 { __neg_i8(self) } }
 impl BitNot for i8 { fn bit_not(self) -> i8 { __bitnot_i8(self) } }
 impl Add for i8 { fn add(self, _ other: i8) -> i8 { __add_i8(self, other) } }
@@ -430,7 +428,6 @@ impl BitXorAssign for i8 { fn bitxor_assign(mut self, _ other: i8) { self = self
 impl Default for i8 { fn default() -> Self { 0 } }
 
 // i16 impls
-impl UnaryPlus for i16 { fn add(self) -> i16 { self } }
 impl Neg for i16 { fn neg(self) -> i16 { __neg_i16(self) } }
 impl BitNot for i16 { fn bit_not(self) -> i16 { __bitnot_i16(self) } }
 impl Add for i16 { fn add(self, _ other: i16) -> i16 { __add_i16(self, other) } }
@@ -468,7 +465,6 @@ impl BitXorAssign for i16 { fn bitxor_assign(mut self, _ other: i16) { self = se
 impl Default for i16 { fn default() -> Self { 0 } }
 
 // u16 impls
-impl UnaryPlus for u16 { fn add(self) -> u16 { self } }
 impl BitNot for u16 { fn bit_not(self) -> u16 { __bitnot_u16(self) } }
 impl Add for u16 { fn add(self, _ other: u16) -> u16 { __add_u16(self, other) } }
 impl Sub for u16 { fn sub(self, _ other: u16) -> u16 { __sub_u16(self, other) } }
@@ -506,7 +502,6 @@ impl Default for u16 { fn default() -> Self { 0 } }
 
 
 // i32 impls
-impl UnaryPlus for i32 { fn add(self) -> i32 { self } }
 impl Neg for i32 { fn neg(self) -> i32 { __neg_i32(self) } }
 impl BitNot for i32 { fn bit_not(self) -> i32 { __bitnot_i32(self) } }
 impl Add for i32 { fn add(self, _ other: i32) -> i32 { __add_i32(self, other) } }
@@ -544,7 +539,6 @@ impl BitXorAssign for i32 { fn bitxor_assign(mut self, _ other: i32) { self = se
 impl Default for i32 { fn default() -> Self { 0 } }
 
 // u32 impls
-impl UnaryPlus for u32 { fn add(self) -> u32 { self } }
 impl BitNot for u32 { fn bit_not(self) -> u32 { __bitnot_u32(self) } }
 impl Add for u32 { fn add(self, _ other: u32) -> u32 { __add_u32(self, other) } }
 impl Sub for u32 { fn sub(self, _ other: u32) -> u32 { __sub_u32(self, other) } }
@@ -581,7 +575,6 @@ impl BitXorAssign for u32 { fn bitxor_assign(mut self, _ other: u32) { self = se
 impl Default for u32 { fn default() -> Self { 0 } }
 
 // i64 impls
-impl UnaryPlus for i64 { fn add(self) -> i64 { self } }
 impl Neg for i64 { fn neg(self) -> i64 { __neg_i64(self) } }
 impl BitNot for i64 { fn bit_not(self) -> i64 { __bitnot_i64(self) } }
 impl Add for i64 { fn add(self, _ other: i64) -> i64 { __add_i64(self, other) } }
@@ -619,7 +612,6 @@ impl BitXorAssign for i64 { fn bitxor_assign(mut self, _ other: i64) { self = se
 impl Default for i64 { fn default() -> Self { 0 } }
 
 // i128 impls
-impl UnaryPlus for i128 { fn add(self) -> i128 { self } }
 impl Neg for i128 { fn neg(self) -> i128 { __neg_i128(self) } }
 impl BitNot for i128 { fn bit_not(self) -> i128 { __bitnot_i128(self) } }
 impl Add for i128 { fn add(self, _ other: i128) -> i128 { __add_i128(self, other) } }
@@ -657,7 +649,6 @@ impl BitXorAssign for i128 { fn bitxor_assign(mut self, _ other: i128) { self = 
 impl Default for i128 { fn default() -> Self { 0 } }
 
 // u64 impls
-impl UnaryPlus for u64 { fn add(self) -> u64 { self } }
 impl BitNot for u64 { fn bit_not(self) -> u64 { __bitnot_u64(self) } }
 impl Add for u64 { fn add(self, _ other: u64) -> u64 { __add_u64(self, other) } }
 impl Sub for u64 { fn sub(self, _ other: u64) -> u64 { __sub_u64(self, other) } }
@@ -694,7 +685,6 @@ impl BitXorAssign for u64 { fn bitxor_assign(mut self, _ other: u64) { self = se
 impl Default for u64 { fn default() -> Self { 0 } }
 
 // u128 impls
-impl UnaryPlus for u128 { fn add(self) -> u128 { self } }
 impl BitNot for u128 { fn bit_not(self) -> u128 { __bitnot_u128(self) } }
 impl Add for u128 { fn add(self, _ other: u128) -> u128 { __add_u128(self, other) } }
 impl Sub for u128 { fn sub(self, _ other: u128) -> u128 { __sub_u128(self, other) } }
@@ -731,7 +721,6 @@ impl BitXorAssign for u128 { fn bitxor_assign(mut self, _ other: u128) { self = 
 impl Default for u128 { fn default() -> Self { 0 } }
 
 // usize impls
-impl UnaryPlus for usize { fn add(self) -> usize { self } }
 impl BitNot for usize { fn bit_not(self) -> usize { __bitnot_usize(self) } }
 impl Add for usize { fn add(self, _ other: usize) -> usize { __add_usize(self, other) } }
 impl Sub for usize { fn sub(self, _ other: usize) -> usize { __sub_usize(self, other) } }
@@ -757,7 +746,6 @@ impl Ord for usize {
 impl Default for usize { fn default() -> Self { 0 } }
 
 // i256 impls
-impl UnaryPlus for i256 { fn add(self) -> i256 { self } }
 impl Neg for i256 { fn neg(self) -> i256 { __neg_i256(self) } }
 impl BitNot for i256 { fn bit_not(self) -> i256 { __bitnot_i256(self) } }
 impl Add for i256 { fn add(self, _ other: i256) -> i256 { __add_i256(self, other) } }
@@ -795,7 +783,6 @@ impl BitXorAssign for i256 { fn bitxor_assign(mut self, _ other: i256) { self = 
 impl Default for i256 { fn default() -> Self { 0 } }
 
 // u256 impls
-impl UnaryPlus for u256 { fn add(self) -> u256 { self } }
 impl BitNot for u256 { fn bit_not(self) -> u256 { __bitnot_u256(self) } }
 impl Add for u256 { fn add(self, _ other: u256) -> u256 { __add_u256(self, other) } }
 impl Sub for u256 { fn sub(self, _ other: u256) -> u256 { __sub_u256(self, other) } }
@@ -832,7 +819,6 @@ impl BitXorAssign for u256 { fn bitxor_assign(mut self, _ other: u256) { self = 
 impl Default for u256 { fn default() -> Self { 0 } }
 
 // isize impls
-impl UnaryPlus for isize { fn add(self) -> isize { self } }
 impl Neg for isize { fn neg(self) -> isize { __neg_isize(self) } }
 impl BitNot for isize { fn bit_not(self) -> isize { __bitnot_isize(self) } }
 impl Add for isize { fn add(self, _ other: isize) -> isize { __add_isize(self, other) } }

@@ -111,6 +111,10 @@ impl<'db> TyChecker<'db> {
             unreachable!()
         };
         let prop = self.check_expr_unknown(*lhs);
+        if *op == UnOp::Plus {
+            // TODO: remove support for unary plus? what should it do?
+            return prop;
+        }
         if prop.ty.has_invalid(self.db) {
             return ExprProp::invalid(self.db);
         }
@@ -155,7 +159,7 @@ impl<'db> TyChecker<'db> {
         }
 
         if matches!(op, BinOp::Index) && lhs.ty.is_array(self.db) {
-            // Built-in array indexing (xxx move to trait impl)
+            // Built-in array indexing (TODO: move to trait impl)
             let args = lhs.ty.generic_args(self.db);
             let elem_ty = args[0];
             let index_ty = args[1].const_ty_ty(self.db).unwrap();
@@ -1335,13 +1339,8 @@ impl TraitOps for BinOp {
                 }
             }
 
-            BinOp::Logical(logical_op) => {
-                use hir::hir_def::LogicalBinOp::*;
-
-                match logical_op {
-                    And => ["And", "and", "&&"],
-                    Or => ["Or", "or", "||"],
-                }
+            BinOp::Logical(_) => {
+                unreachable!()
             }
 
             BinOp::Index => ["Index", "index", "[]"],

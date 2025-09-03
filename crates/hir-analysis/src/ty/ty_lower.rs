@@ -233,7 +233,7 @@ pub(crate) fn lower_generic_arg_list<'db>(
             }
 
             GenericArg::AssocType(_assoc_type_arg) => {
-                // xxx
+                // TODO: ?
                 TyId::invalid(db, InvalidCause::Other)
             }
         })

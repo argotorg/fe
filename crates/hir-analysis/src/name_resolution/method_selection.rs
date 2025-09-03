@@ -49,7 +49,6 @@ impl<'db> TraitMethodCand<'db> {
     }
 }
 
-// xxx #[salsa::tracked]
 pub(crate) fn select_method_candidate<'db>(
     db: &'db dyn HirAnalysisDb,
     receiver: Canonical<TyId<'db>>,

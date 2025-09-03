@@ -447,7 +447,7 @@ ast_node! {
 ast_node! {
     pub struct ImplItemList,
     SK::ImplItemList,
-    IntoIterator<Item=Func>, // xxx ImplTraitItem
+    IntoIterator<Item=Func>, // TODO: ImplTraitItem
 }
 
 ast_node! {
