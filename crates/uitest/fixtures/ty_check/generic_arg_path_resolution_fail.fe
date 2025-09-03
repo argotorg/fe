@@ -36,7 +36,6 @@ struct S2<T> {
 
 // Case 4: Associated type on concrete type that doesn't implement the trait
 struct Concrete {}
-// xxx this shouldn't be a conflicting trait impl!
 impl Tr1 for S1<Concrete> {
     type Foo = Concrete::Bar  // Error: Concrete doesn't have associated type Bar
 

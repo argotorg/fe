@@ -172,7 +172,7 @@ impl<'db> PathResError<'db> {
         expected: ExpectedPathKind,
     ) -> Option<PathResDiag<'db>> {
         let failed_at = self.failed_at;
-        let ident = failed_at.ident(db).to_opt()?; // xxx PathKind::QualifiedType
+        let ident = failed_at.ident(db).to_opt()?; // TODO: handle PathKind::QualifiedType
 
         let diag = match self.kind {
             PathResErrorKind::ParseError => return None,
@@ -343,7 +343,7 @@ impl<'db> PathRes<'db> {
             PathRes::Func(ty) => PathRes::Func(f(ty)),
             PathRes::Const(ty) => PathRes::Const(f(ty)),
             PathRes::EnumVariant(v) => PathRes::EnumVariant(ResolvedVariant { ty: f(v.ty), ..v }),
-            // xxx map over candidate ty?
+            // TODO: map over candidate ty?
             PathRes::Method(ty, candidate) => PathRes::Method(f(ty), candidate),
             r @ (PathRes::Trait(_) | PathRes::Mod(_) | PathRes::FuncParam(..)) => r,
         }
