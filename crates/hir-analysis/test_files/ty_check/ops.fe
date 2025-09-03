@@ -1,10 +1,5 @@
 use core::ops::{Not, Add, Index, AddAssign, Eq}
-use core::option::{
-    Option,
-    // TODO: Option::{self, Some, None} doesn't work
-    // https://github.com/argotorg/fe/issues/1113
-    Option::{Some, None}
-}
+use core::option::Option::{self, Some, None}
 
 enum Ok {
     No, Yes
