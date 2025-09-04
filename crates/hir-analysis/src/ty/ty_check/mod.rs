@@ -23,7 +23,7 @@ use salsa::Update;
 
 use super::{
     diagnostics::{BodyDiag, FuncBodyDiag, TyDiagCollection, TyLowerDiag},
-    fold::{TyFoldable, TyFolder},
+    fold::TyFoldable,
     trait_def::{TraitInstId, TraitMethod},
     trait_resolution::PredicateListId,
     ty_def::{InvalidCause, Kind, TyId, TyVarSort},
@@ -212,8 +212,8 @@ impl<'db> TyChecker<'db> {
         };
 
         // Resolve associated types before unification
-        let actual = actual.fold_with(&mut self.table);
-        let expected = expected.fold_with(&mut self.table);
+        let actual = actual.fold_with(self.db, &mut self.table);
+        let expected = expected.fold_with(self.db, &mut self.table);
         let actual = self.normalize_ty(actual);
         let expected = self.normalize_ty(expected);
 
@@ -221,7 +221,7 @@ impl<'db> TyChecker<'db> {
             Ok(()) => {
                 // FIXME: This is a temporary workaround, this should be removed when we
                 // implement subtyping.
-                let actual = actual.fold_with(&mut self.table);
+                let actual = actual.fold_with(self.db, &mut self.table);
                 if actual.is_never(self.db) {
                     expected
                 } else {
@@ -230,8 +230,8 @@ impl<'db> TyChecker<'db> {
             }
 
             Err(UnificationError::TypeMismatch) => {
-                let actual = actual.fold_with(&mut self.table);
-                let expected = expected.fold_with(&mut self.table);
+                let actual = actual.fold_with(self.db, &mut self.table);
+                let expected = expected.fold_with(self.db, &mut self.table);
                 self.push_diag(BodyDiag::TypeMismatch {
                     span,
                     expected,
@@ -291,7 +291,7 @@ impl<'db> TyChecker<'db> {
     fn normalize_ty(&mut self, ty: TyId<'db>) -> TyId<'db> {
         normalize_ty(
             self.db,
-            ty.fold_with(&mut self.table),
+            ty.fold_with(self.db, &mut self.table),
             self.env.scope(),
             self.env.assumptions(),
         )
@@ -361,7 +361,7 @@ impl<'db> TraitMethod<'db> {
         receiver_ty: TyId<'db>,
         inst: TraitInstId<'db>,
     ) -> TyId<'db> {
-        let db = table.db();
+        let db = table.db;
         let ty = TyId::foldl(db, TyId::func(db, self.0), inst.args(db));
 
         let inst_self = table.instantiate_to_term(inst.self_ty(db));
@@ -371,8 +371,8 @@ impl<'db> TraitMethod<'db> {
 
         // Apply associated type substitutions from the trait instance
         use crate::ty::fold::{AssocTySubst, TyFoldable};
-        let mut subst = AssocTySubst::new(db, inst);
-        instantiated.fold_with(&mut subst)
+        let mut subst = AssocTySubst::new(inst);
+        instantiated.fold_with(db, &mut subst)
     }
 }
 

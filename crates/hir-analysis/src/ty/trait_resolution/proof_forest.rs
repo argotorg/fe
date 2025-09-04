@@ -14,7 +14,7 @@ use crate::{
     ty::{
         binder::Binder,
         canonical::{Canonical, Canonicalized},
-        fold::{TyFoldable, TyFolder},
+        fold::TyFoldable,
         normalize::normalize_ty,
         trait_def::{Implementor, TraitInstId, impls_for_trait},
         ty_def::{TyData, TyId},
@@ -325,7 +325,7 @@ impl GeneratorNode {
         let g_node = &mut pf.g_nodes[self];
         let solution = g_node
             .goal
-            .canonicalize_solution(table.db(), table, g_node.extracted_goal);
+            .canonicalize_solution(table.db, table, g_node.extracted_goal);
         if g_node.solutions.insert(solution) {
             for &c_node in g_node.dependents.iter() {
                 let ordered_c_node = OrderedConsumerNode {
@@ -353,7 +353,7 @@ impl GeneratorNode {
     /// otherwise.
     fn step(self, pf: &mut ProofForest) -> bool {
         let g_node = &mut pf.g_nodes[self];
-        let db = g_node.table.db();
+        let db = pf.db;
 
         while let Some(&cand) = g_node.cands.get(g_node.next_cand) {
             g_node.next_cand += 1;
@@ -395,11 +395,13 @@ impl GeneratorNode {
             if constraints.list(db).is_empty() {
                 self.register_solution_with(pf, &mut table);
             } else {
-                let sub_goals = constraints
-                    .list(db)
-                    .iter()
-                    .map(|c| c.fold_with(&mut table))
-                    .collect();
+                let sub_goals = {
+                    constraints
+                        .list(db)
+                        .iter()
+                        .map(|c| c.fold_with(db, &mut table))
+                        .collect()
+                };
                 let child = pf.new_consumer_node(self, sub_goals, table);
                 pf.g_nodes[self].children.push(child);
             }
@@ -485,6 +487,7 @@ impl ConsumerNode {
         }
 
         let mut table = c_node.table.clone();
+        let db = pf.db;
 
         // Extract solution to the current env.
         let (pending_inst, canonicalized_pending_inst) = &c_node.query;
@@ -492,41 +495,41 @@ impl ConsumerNode {
 
         // Normalize both instances before unification
         let normalized_pending = {
-            let scope = pending_inst.ingot(table.db()).root_mod(table.db()).scope();
+            let scope = pending_inst.ingot(db).root_mod(db).scope();
             let assumptions = pf.g_nodes[c_node.root].assumptions;
 
             // Normalize each argument
             let normalized_args: Vec<_> = pending_inst
-                .args(table.db())
+                .args(db)
                 .iter()
-                .map(|&arg| normalize_ty(table.db(), arg.fold_with(&mut table), scope, assumptions))
+                .map(|&arg| normalize_ty(db, arg.fold_with(db, &mut table), scope, assumptions))
                 .collect();
 
             TraitInstId::new(
-                table.db(),
-                pending_inst.def(table.db()),
+                db,
+                pending_inst.def(db),
                 normalized_args,
-                pending_inst.assoc_type_bindings(table.db()).clone(),
+                pending_inst.assoc_type_bindings(db).clone(),
             )
         };
 
         let normalized_solution = {
             use crate::ty::trait_def::TraitInstId;
-            let scope = solution.ingot(table.db()).root_mod(table.db()).scope();
+            let scope = solution.ingot(db).root_mod(db).scope();
             let assumptions = pf.g_nodes[c_node.root].assumptions;
 
             // Normalize each argument
             let normalized_args: Vec<_> = solution
-                .args(table.db())
+                .args(db)
                 .iter()
-                .map(|&arg| normalize_ty(table.db(), arg.fold_with(&mut table), scope, assumptions))
+                .map(|&arg| normalize_ty(db, arg.fold_with(db, &mut table), scope, assumptions))
                 .collect();
 
             TraitInstId::new(
-                table.db(),
-                solution.def(table.db()),
+                db,
+                solution.def(db),
                 normalized_args,
-                solution.assoc_type_bindings(table.db()).clone(),
+                solution.assoc_type_bindings(db).clone(),
             )
         };
 
@@ -551,18 +554,17 @@ impl ConsumerNode {
             pf.c_nodes[self].children.push(child);
         }
 
-        maximum_ty_depth(pf.db, solution) <= MAXIMUM_TYPE_DEPTH
+        maximum_ty_depth(db, solution) <= MAXIMUM_TYPE_DEPTH
     }
 
     fn unresolved_subgoal<'db>(self, pf: &mut ProofForest<'db>) -> Option<Solution<'db>> {
         let c_node = &mut pf.c_nodes[self];
         if c_node.children.len() != 1 {
             let unsat = c_node.query.0;
-            let unsat = pf.g_nodes[c_node.root].goal.canonicalize_solution(
-                c_node.table.db(),
-                &mut c_node.table,
-                unsat,
-            );
+            let unsat =
+                pf.g_nodes[c_node.root]
+                    .goal
+                    .canonicalize_solution(pf.db, &mut c_node.table, unsat);
             return Some(unsat);
         }
 

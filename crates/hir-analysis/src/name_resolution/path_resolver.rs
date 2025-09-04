@@ -788,7 +788,7 @@ pub fn find_associated_type<'db>(
             if table.unify(lhs_ty, pred_self_ty).is_ok()
                 && let Some(assoc_ty) = trait_inst.assoc_ty(db, name)
             {
-                let folded = assoc_ty.fold_with(&mut table);
+                let folded = assoc_ty.fold_with(db, &mut table);
                 candidates.push((trait_inst, folded));
             }
             table.rollback_to(snapshot);
@@ -803,7 +803,7 @@ pub fn find_associated_type<'db>(
         if table.unify(lhs_ty, impl_.self_ty(db)).is_ok()
             && let Some(ty) = impl_.assoc_ty(db, name)
         {
-            let folded = ty.fold_with(&mut table);
+            let folded = ty.fold_with(db, &mut table);
             candidates.push((impl_.trait_(db), folded));
         }
         table.rollback_to(snapshot);
@@ -824,7 +824,7 @@ pub fn find_associated_type<'db>(
             if table.unify(ty_with_subst, trait_inst.self_ty(db)).is_ok()
                 && let Some(assoc_ty) = trait_inst.assoc_ty(db, name)
             {
-                let folded = assoc_ty.fold_with(&mut table);
+                let folded = assoc_ty.fold_with(db, &mut table);
                 candidates.push((trait_inst, folded));
             }
             table.rollback_to(snapshot);
@@ -839,12 +839,12 @@ pub fn find_associated_type<'db>(
                 let TypeBound::Trait(trait_ref) = bound else {
                     todo!("assoc ty kind bounds")
                 };
-                let self_ty = ty_with_subst.fold_with(&mut table);
+                let self_ty = ty_with_subst.fold_with(db, &mut table);
 
                 if let Ok(inst) = lower_trait_ref(db, self_ty, *trait_ref, scope, assumptions)
                     && let Some(assoc_ty) = inst.assoc_ty(db, name)
                 {
-                    let folded = assoc_ty.fold_with(&mut table);
+                    let folded = assoc_ty.fold_with(db, &mut table);
                     candidates.push((inst, folded));
                 }
             }

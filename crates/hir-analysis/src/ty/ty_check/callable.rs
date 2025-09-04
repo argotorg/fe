@@ -45,14 +45,14 @@ impl<'db> TyVisitable<'db> for Callable<'db> {
 }
 
 impl<'db> TyFoldable<'db> for Callable<'db> {
-    fn super_fold_with<F>(self, folder: &mut F) -> Self
+    fn super_fold_with<F>(self, db: &'db dyn HirAnalysisDb, folder: &mut F) -> Self
     where
         F: TyFolder<'db>,
     {
         Self {
             func_def: self.func_def,
-            generic_args: self.generic_args.fold_with(folder),
-            trait_inst: self.trait_inst.map(|i| i.fold_with(folder)),
+            generic_args: self.generic_args.fold_with(db, folder),
+            trait_inst: self.trait_inst.map(|i| i.fold_with(db, folder)),
         }
     }
 }
@@ -95,8 +95,8 @@ impl<'db> Callable<'db> {
     pub fn ret_ty(&self, db: &'db dyn HirAnalysisDb) -> TyId<'db> {
         let ret = self.func_def.ret_ty(db).instantiate(db, &self.generic_args);
         if let Some(inst) = self.trait_inst {
-            let mut subst = AssocTySubst::new(db, inst);
-            ret.fold_with(&mut subst)
+            let mut subst = AssocTySubst::new(inst);
+            ret.fold_with(db, &mut subst)
         } else {
             ret
         }
@@ -106,8 +106,8 @@ impl<'db> Callable<'db> {
         let mut ty = TyId::func(db, self.func_def);
         ty = TyId::foldl(db, ty, &self.generic_args);
         if let Some(inst) = self.trait_inst {
-            let mut subst = AssocTySubst::new(db, inst);
-            ty.fold_with(&mut subst)
+            let mut subst = AssocTySubst::new(inst);
+            ty.fold_with(db, &mut subst)
         } else {
             ty
         }
@@ -212,8 +212,8 @@ impl<'db> Callable<'db> {
 
             let mut expected = expected.instantiate(db, &self.generic_args);
             if let Some(inst) = self.trait_inst {
-                let mut subst = AssocTySubst::new(db, inst);
-                expected = expected.fold_with(&mut subst);
+                let mut subst = AssocTySubst::new(inst);
+                expected = expected.fold_with(db, &mut subst);
             }
             let expected = tc.normalize_ty(expected);
             tc.equate_ty(given.expr_prop.ty, expected, given.expr_span);

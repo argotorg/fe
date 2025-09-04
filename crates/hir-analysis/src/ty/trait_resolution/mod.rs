@@ -239,8 +239,8 @@ impl<'db> PredicateListId<'db> {
 
                 // Also substitute `Self` and associated types using current predicate's
                 // assoc-type bindings so derived bounds are as concrete as possible.
-                let mut subst = AssocTySubst::new(db, pred);
-                let inst = inst.fold_with(&mut subst);
+                let mut subst = AssocTySubst::new(pred);
+                let inst = inst.fold_with(db, &mut subst);
 
                 if all_predicates.insert(inst) {
                     // New predicate added, add to worklist for further processing
@@ -277,8 +277,8 @@ impl<'db> PredicateListId<'db> {
                             // the original predicate's trait instance (e.g. map
                             // `<Self as IntoIterator>::Item` to the concrete binding from
                             // `<T as IntoIterator>` when available).
-                            let mut subst = AssocTySubst::new(db, pred);
-                            let trait_inst = trait_inst.fold_with(&mut subst);
+                            let mut subst = AssocTySubst::new(pred);
+                            let trait_inst = trait_inst.fold_with(db, &mut subst);
 
                             if all_predicates.insert(trait_inst) {
                                 // New predicate added, add to worklist

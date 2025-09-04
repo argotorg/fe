@@ -218,7 +218,7 @@ fn compare_ty<'db>(
     let impl_m_arg_tys = impl_m.arg_tys(db);
     let trait_m_arg_tys = trait_m.arg_tys(db);
 
-    let mut substituter = AssocTySubst::new(db, trait_inst);
+    let mut substituter = AssocTySubst::new(trait_inst);
     let assumptions =
         collect_func_def_constraints(db, impl_m.hir_def(db), true).instantiate_identity();
 
@@ -231,7 +231,7 @@ fn compare_ty<'db>(
         let impl_m_ty = impl_m_ty.instantiate_identity();
 
         // 2) Substitute associated types using the provided trait instance.
-        let trait_m_ty_substituted = trait_m_ty.fold_with(&mut substituter);
+        let trait_m_ty_substituted = trait_m_ty.fold_with(db, &mut substituter);
 
         // 3) Normalize both types to resolve any further nested associated types.
         let trait_m_ty_normalized =
@@ -258,7 +258,7 @@ fn compare_ty<'db>(
     let trait_m_ret_ty = trait_m.ret_ty(db).instantiate(db, map_to_impl);
 
     // Substitute and normalize the return type as well.
-    let trait_m_ret_ty_substituted = trait_m_ret_ty.fold_with(&mut substituter);
+    let trait_m_ret_ty_substituted = trait_m_ret_ty.fold_with(db, &mut substituter);
     let trait_m_ret_ty_normalized = normalize_ty(
         db,
         trait_m_ret_ty_substituted,

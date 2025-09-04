@@ -19,8 +19,8 @@ where
     T: TyFoldable<'db>,
 {
     pub fn new(db: &'db dyn HirAnalysisDb, value: T) -> Self {
-        let mut c = Canonicalizer::new(db);
-        let value = value.fold_with(&mut c);
+        let mut c = Canonicalizer::default();
+        let value = value.fold_with(db, &mut c);
         Canonical { value }
     }
 
@@ -77,7 +77,7 @@ where
         S: UnificationStore<'db>,
         U: TyFoldable<'db> + Clone + Update,
     {
-        let solution = solution.fold_with(table);
+        let solution = solution.fold_with(db, table);
 
         // Make the substitution so that it maps back from probed type variable to
         // canonical type variables.
@@ -86,7 +86,7 @@ where
             .into_iter()
             .filter_map(|var| {
                 let ty = TyId::ty_var(db, var.sort, var.kind, var.key);
-                let probed = ty.fold_with(table);
+                let probed = ty.fold_with(db, table);
                 if probed.is_ty_var(db) {
                     Some((probed, ty))
                 } else {
@@ -94,12 +94,11 @@ where
                 }
             });
         let mut canonicalizer = Canonicalizer {
-            db,
             subst: canonical_vars.collect(),
         };
 
         Solution {
-            value: solution.fold_with(&mut canonicalizer),
+            value: solution.fold_with(db, &mut canonicalizer),
         }
     }
 }
@@ -118,8 +117,8 @@ where
     T: TyFoldable<'db>,
 {
     pub fn new(db: &'db dyn HirAnalysisDb, value: T) -> Self {
-        let mut canonicalizer = Canonicalizer::new(db);
-        let value = value.fold_with(&mut canonicalizer);
+        let mut canonicalizer = Canonicalizer::default();
+        let value = value.fold_with(db, &mut canonicalizer);
         let map = canonicalizer
             .subst
             .into_iter()
@@ -152,8 +151,9 @@ where
         S: UnificationStore<'db>,
     {
         let map = self.subst.clone();
+        let db = table.db;
         let mut extractor = SolutionExtractor::new(table, map);
-        solution.value.fold_with(&mut extractor)
+        solution.value.fold_with(db, &mut extractor)
     }
 }
 
@@ -177,20 +177,13 @@ where
 
 /// A struct that helps in converting types to their canonical form.
 /// It maintains a mapping from original type variables to canonical variables.
+#[derive(Default)]
 struct Canonicalizer<'db> {
-    db: &'db dyn HirAnalysisDb,
     // A substitution from original type variables to canonical variables.
     subst: FxHashMap<TyId<'db>, TyId<'db>>,
 }
 
 impl<'db> Canonicalizer<'db> {
-    fn new(db: &'db dyn HirAnalysisDb) -> Self {
-        Canonicalizer {
-            db,
-            subst: FxHashMap::default(),
-        }
-    }
-
     fn canonical_var(&mut self, var: &TyVar<'db>) -> TyVar<'db> {
         let key = self.subst.len() as u32;
         TyVar {
@@ -202,39 +195,35 @@ impl<'db> Canonicalizer<'db> {
 }
 
 impl<'db> TyFolder<'db> for Canonicalizer<'db> {
-    fn db(&self) -> &'db dyn HirAnalysisDb {
-        self.db
-    }
-
-    fn fold_ty(&mut self, ty: TyId<'db>) -> TyId<'db> {
+    fn fold_ty(&mut self, db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> TyId<'db> {
         if let Some(&canonical) = self.subst.get(&ty) {
             return canonical;
         }
 
-        match ty.data(self.db) {
+        match ty.data(db) {
             TyData::TyVar(var) => {
                 let canonical_var = self.canonical_var(var);
-                let canonical_ty = TyId::new(self.db, TyData::TyVar(canonical_var));
+                let canonical_ty = TyId::new(db, TyData::TyVar(canonical_var));
 
                 self.subst.insert(ty, canonical_ty);
                 canonical_ty
             }
 
             TyData::ConstTy(const_ty) => {
-                if let ConstTyData::TyVar(var, const_ty_ty) = const_ty.data(self.db) {
+                if let ConstTyData::TyVar(var, const_ty_ty) = const_ty.data(db) {
                     let canonical_var = self.canonical_var(var);
                     let const_ty =
-                        ConstTyId::new(self.db, ConstTyData::TyVar(canonical_var, *const_ty_ty));
-                    let canonical_ty = TyId::const_ty(self.db, const_ty);
+                        ConstTyId::new(db, ConstTyData::TyVar(canonical_var, *const_ty_ty));
+                    let canonical_ty = TyId::const_ty(db, const_ty);
 
                     self.subst.insert(ty, canonical_ty);
                     canonical_ty
                 } else {
-                    ty.super_fold_with(self)
+                    ty.super_fold_with(db, self)
                 }
             }
 
-            _ => ty.super_fold_with(self),
+            _ => ty.super_fold_with(db, self),
         }
     }
 }
@@ -265,16 +254,12 @@ impl<'db, S> TyFolder<'db> for SolutionExtractor<'_, 'db, S>
 where
     S: UnificationStore<'db>,
 {
-    fn db(&self) -> &'db dyn HirAnalysisDb {
-        self.table.db()
-    }
-
-    fn fold_ty(&mut self, ty: TyId<'db>) -> TyId<'db> {
+    fn fold_ty(&mut self, db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> TyId<'db> {
         if let Some(&ty) = self.subst.get(&ty) {
             return ty;
         }
 
-        match ty.data(self.db()) {
+        match ty.data(db) {
             TyData::TyVar(var) => {
                 let new_ty = self.table.new_var(var.sort, &var.kind);
                 self.subst.insert(ty, new_ty);
@@ -282,17 +267,17 @@ where
             }
 
             TyData::ConstTy(const_ty) => {
-                if let ConstTyData::TyVar(var, const_ty_ty) = const_ty.data(self.db()) {
+                if let ConstTyData::TyVar(var, const_ty_ty) = const_ty.data(db) {
                     let new_key = self.table.new_key(&var.kind, var.sort);
-                    let new_ty = TyId::const_ty_var(self.db(), *const_ty_ty, new_key);
+                    let new_ty = TyId::const_ty_var(db, *const_ty_ty, new_key);
                     self.subst.insert(ty, new_ty);
                     new_ty
                 } else {
-                    ty.super_fold_with(self)
+                    ty.super_fold_with(db, self)
                 }
             }
 
-            _ => ty.super_fold_with(self),
+            _ => ty.super_fold_with(db, self),
         }
     }
 }

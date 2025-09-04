@@ -283,16 +283,16 @@ impl<'db> TyCheckEnv<'db> {
 
         self.expr_ty
             .values_mut()
-            .for_each(|ty| *ty = ty.fold_with(&mut prober));
+            .for_each(|ty| *ty = ty.fold_with(self.db, &mut prober));
 
         self.pat_ty
             .values_mut()
-            .for_each(|ty| *ty = ty.fold_with(&mut prober));
+            .for_each(|ty| *ty = ty.fold_with(self.db, &mut prober));
 
         let callables = self
             .callables
             .into_iter()
-            .map(|(expr, callable)| (expr, callable.fold_with(&mut prober)))
+            .map(|(expr, callable)| (expr, callable.fold_with(self.db, &mut prober)))
             .collect();
 
         TypedBody {
@@ -350,8 +350,8 @@ impl<'db> TyCheckEnv<'db> {
                 unreachable!();
             };
             let mut ret = func_def.ret_ty(db).instantiate(db, gen_args);
-            let mut subst = AssocTySubst::new(db, inst);
-            ret = ret.fold_with(&mut subst);
+            let mut subst = AssocTySubst::new(inst);
+            ret = ret.fold_with(self.db, &mut subst);
             normalize_ty(db, ret, scope, assumptions)
         };
 
@@ -360,7 +360,7 @@ impl<'db> TyCheckEnv<'db> {
                          expr_ty: TyId<'db>,
                          inst: &TraitInstId<'db>| {
             let snap = prober.table.snapshot();
-            let recv_ty = pending.recv_ty.fold_with(prober);
+            let recv_ty = pending.recv_ty.fold_with(self.db, prober);
             let inst_self = prober.table.instantiate_to_term(inst.self_ty(db));
             if prober.table.unify(inst_self, recv_ty).is_err() {
                 prober.table.rollback_to(snap);
@@ -380,14 +380,14 @@ impl<'db> TyCheckEnv<'db> {
             for task in self.deferred.drain(..) {
                 match task {
                     DeferredTask::Confirm { inst, span } => {
-                        let inst = inst.fold_with(prober);
+                        let inst = inst.fold_with(self.db, prober);
                         let canonical_inst = Canonicalized::new(db, inst);
                         match is_goal_satisfiable(db, ingot, canonical_inst.value, assumptions) {
                             GoalSatisfiability::Satisfied(solution) => {
                                 let solution =
                                     canonical_inst.extract_solution(prober.table, *solution);
                                 prober.table.unify(inst, solution).unwrap();
-                                let new_can = Canonical::new(db, inst.fold_with(prober.table));
+                                let new_can = Canonical::new(db, inst.fold_with(db, prober.table));
                                 if new_can != canonical_inst.value {
                                     progressed = true;
                                 }
@@ -396,8 +396,8 @@ impl<'db> TyCheckEnv<'db> {
                         }
                     }
                     DeferredTask::Method(pending) => {
-                        let recv_ty = pending.recv_ty.fold_with(prober);
-                        let expr_ty = self.expr_ty[&pending.expr].ty.fold_with(prober);
+                        let recv_ty = pending.recv_ty.fold_with(self.db, prober);
+                        let expr_ty = self.expr_ty[&pending.expr].ty.fold_with(self.db, prober);
                         if expr_ty.has_invalid(db) {
                             next.push(DeferredTask::Method(pending));
                             continue;
@@ -426,7 +426,7 @@ impl<'db> TyCheckEnv<'db> {
         for task in self.deferred.drain(..) {
             match task {
                 DeferredTask::Confirm { inst, span } => {
-                    let inst = inst.fold_with(prober);
+                    let inst = inst.fold_with(self.db, prober);
                     let canonical_inst = Canonicalized::new(db, inst);
                     match is_goal_satisfiable(db, ingot, canonical_inst.value, assumptions) {
                         GoalSatisfiability::NeedsConfirmation(ambiguous) => {
@@ -462,7 +462,7 @@ impl<'db> TyCheckEnv<'db> {
                     }
                 }
                 DeferredTask::Method(pending) => {
-                    let expr_ty = self.expr_ty[&pending.expr].ty.fold_with(prober);
+                    let expr_ty = self.expr_ty[&pending.expr].ty.fold_with(self.db, prober);
                     if expr_ty.has_invalid(self.db) {
                         continue;
                     }
@@ -614,26 +614,21 @@ struct Prober<'db, 'a> {
 }
 
 impl<'db> TyFolder<'db> for Prober<'db, '_> {
-    fn db(&self) -> &'db dyn HirAnalysisDb {
-        self.table.db()
-    }
-
-    fn fold_ty(&mut self, ty: TyId<'db>) -> TyId<'db> {
-        let ty = self.table.fold_ty(ty);
-        let TyData::TyVar(var) = ty.data(self.db()) else {
-            return ty.super_fold_with(self);
+    fn fold_ty(&mut self, db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> TyId<'db> {
+        let ty = self.table.fold_ty(db, ty);
+        let TyData::TyVar(var) = ty.data(db) else {
+            return ty.super_fold_with(db, self);
         };
 
         // String type variable fallback.
         if let TyVarSort::String(len) = var.sort {
-            let ty = TyId::new(self.db(), TyData::TyBase(PrimTy::String.into()));
-            let len = EvaluatedConstTy::LitInt(IntegerId::new(self.db(), BigUint::from(len)));
-            let len =
-                ConstTyData::Evaluated(len, ty.applicable_ty(self.db()).unwrap().const_ty.unwrap());
-            let len = TyId::const_ty(self.db(), ConstTyId::new(self.db(), len));
-            TyId::app(self.db(), ty, len)
+            let ty = TyId::new(db, TyData::TyBase(PrimTy::String.into()));
+            let len = EvaluatedConstTy::LitInt(IntegerId::new(db, BigUint::from(len)));
+            let len = ConstTyData::Evaluated(len, ty.applicable_ty(db).unwrap().const_ty.unwrap());
+            let len = TyId::const_ty(db, ConstTyId::new(db, len));
+            TyId::app(db, ty, len)
         } else {
-            ty.super_fold_with(self)
+            ty.super_fold_with(db, self)
         }
     }
 }

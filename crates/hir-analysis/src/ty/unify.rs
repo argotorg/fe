@@ -118,8 +118,8 @@ where
             return Err(UnificationError::TypeMismatch);
         }
 
-        let ty1 = ty1.fold_with(self);
-        let ty2 = ty2.fold_with(self);
+        let ty1 = ty1.fold_with(self.db, self);
+        let ty2 = ty2.fold_with(self.db, self);
 
         match (ty1.data(self.db), ty2.data(self.db)) {
             (TyData::TyVar(_), TyData::TyVar(_)) => self.unify_var_var(ty1, ty2),
@@ -507,17 +507,13 @@ impl<'db, U> TyFolder<'db> for UnificationTableBase<'db, U>
 where
     U: UnificationStore<'db>,
 {
-    fn db(&self) -> &'db dyn HirAnalysisDb {
-        self.db
-    }
-
-    fn fold_ty(&mut self, ty: TyId<'db>) -> TyId<'db> {
+    fn fold_ty(&mut self, db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> TyId<'db> {
         let mut resolver = TyVarResolver {
             table: self,
             var_stack: vec![],
         };
 
-        ty.fold_with(&mut resolver)
+        ty.fold_with(db, &mut resolver)
     }
 }
 
@@ -533,12 +529,7 @@ impl<'db, U> TyFolder<'db> for TyVarResolver<'_, 'db, U>
 where
     U: UnificationStore<'db>,
 {
-    fn db(&self) -> &'db dyn HirAnalysisDb {
-        self.table.db
-    }
-
-    fn fold_ty(&mut self, ty: TyId<'db>) -> TyId<'db> {
-        let db = self.table.db;
+    fn fold_ty(&mut self, db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> TyId<'db> {
         let (shallow_resolved, key) = match ty.data(db) {
             TyData::TyVar(var) if !self.var_stack.contains(&var.key) => {
                 match self.table.probe_impl(var.key) {
@@ -557,21 +548,21 @@ where
                     }
                 }
                 _ => {
-                    return ty.super_fold_with(self);
+                    return ty.super_fold_with(db, self);
                 }
             },
             TyData::AssocTy(_) => {
                 // Associated types should be resolved before unification
                 // by the normalization process
-                return ty.super_fold_with(self);
+                return ty.super_fold_with(db, self);
             }
             _ => {
-                return ty.super_fold_with(self);
+                return ty.super_fold_with(db, self);
             }
         };
 
         self.var_stack.push(key);
-        let resolved = shallow_resolved.fold_with(self);
+        let resolved = shallow_resolved.fold_with(self.table.db, self);
         self.var_stack.pop();
         resolved
     }

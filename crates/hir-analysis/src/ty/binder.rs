@@ -78,8 +78,8 @@ where
     /// A new instance of the type contained within the binder with the
     /// arguments applied.
     pub fn instantiate(self, db: &'db dyn HirAnalysisDb, args: &[TyId<'db>]) -> T {
-        let mut folder = InstantiateFolder { db, args };
-        self.value.fold_with(&mut folder)
+        let mut folder = InstantiateFolder { args };
+        self.value.fold_with(db, &mut folder)
     }
 
     /// Instantiates the binder with a custom function.
@@ -100,29 +100,23 @@ where
         F: FnMut(TyId<'db>) -> TyId<'db>,
     {
         let mut folder = InstantiateWithFolder {
-            db,
             f,
             params: FxHashMap::default(),
         };
-        self.value.fold_with(&mut folder)
+        self.value.fold_with(db, &mut folder)
     }
 }
 
 struct InstantiateFolder<'db, 'a> {
-    db: &'db dyn HirAnalysisDb,
     args: &'a [TyId<'db>],
 }
 
 impl<'db> TyFolder<'db> for InstantiateFolder<'db, '_> {
-    fn db(&self) -> &'db dyn HirAnalysisDb {
-        self.db
-    }
-
-    fn fold_ty(&mut self, ty: TyId<'db>) -> TyId<'db> {
-        match ty.data(self.db) {
+    fn fold_ty(&mut self, db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> TyId<'db> {
+        match ty.data(db) {
             TyData::TyParam(param) => return self.args[param.idx],
             TyData::ConstTy(const_ty) => {
-                if let ConstTyData::TyParam(param, _) = const_ty.data(self.db) {
+                if let ConstTyData::TyParam(param, _) = const_ty.data(db) {
                     return self.args[param.idx];
                 }
             }
@@ -134,23 +128,23 @@ impl<'db> TyFolder<'db> for InstantiateFolder<'db, '_> {
 
                 // Fold the self type and generic arguments of the trait instance
                 let mut folded_generic_args = vec![];
-                for &arg in trait_inst.args(self.db) {
-                    folded_generic_args.push(self.fold_ty(arg));
+                for &arg in trait_inst.args(db) {
+                    folded_generic_args.push(self.fold_ty(db, arg));
                 }
 
                 // If any types changed, create a new trait instance with substituted types
-                if folded_generic_args != *trait_inst.args(self.db) {
+                if folded_generic_args != *trait_inst.args(db) {
                     // If we couldn't resolve to a concrete type, create a new trait instance
                     let new_trait_inst = TraitInstId::new(
-                        self.db,
-                        trait_inst.def(self.db),
+                        db,
+                        trait_inst.def(db),
                         folded_generic_args,
-                        trait_inst.assoc_type_bindings(self.db).clone(),
+                        trait_inst.assoc_type_bindings(db).clone(),
                     );
 
                     // Return a new associated type with the updated trait instance
                     return TyId::new(
-                        self.db,
+                        db,
                         TyData::AssocTy(AssocTy {
                             trait_: new_trait_inst,
                             name: assoc_ty.name,
@@ -162,7 +156,7 @@ impl<'db> TyFolder<'db> for InstantiateFolder<'db, '_> {
             _ => {}
         }
 
-        ty.super_fold_with(self)
+        ty.super_fold_with(db, self)
     }
 }
 
@@ -170,7 +164,6 @@ struct InstantiateWithFolder<'db, F>
 where
     F: FnMut(TyId<'db>) -> TyId<'db>,
 {
-    db: &'db dyn HirAnalysisDb,
     f: F,
     params: FxHashMap<usize, TyId<'db>>,
 }
@@ -179,12 +172,8 @@ impl<'db, F> TyFolder<'db> for InstantiateWithFolder<'db, F>
 where
     F: FnMut(TyId<'db>) -> TyId<'db>,
 {
-    fn db(&self) -> &'db dyn HirAnalysisDb {
-        self.db
-    }
-
-    fn fold_ty(&mut self, ty: TyId<'db>) -> TyId<'db> {
-        match ty.data(self.db) {
+    fn fold_ty(&mut self, db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> TyId<'db> {
+        match ty.data(db) {
             TyData::TyParam(param) => {
                 match self.params.entry(param.idx) {
                     Entry::Occupied(entry) => return *entry.get(),
@@ -196,7 +185,7 @@ where
                 };
             }
             TyData::ConstTy(const_ty) => {
-                if let ConstTyData::TyParam(param, _) = const_ty.data(self.db) {
+                if let ConstTyData::TyParam(param, _) = const_ty.data(db) {
                     match self.params.entry(param.idx) {
                         Entry::Occupied(entry) => return *entry.get(),
                         Entry::Vacant(entry) => {
@@ -211,6 +200,6 @@ where
             _ => {}
         }
 
-        ty.super_fold_with(self)
+        ty.super_fold_with(db, self)
     }
 }

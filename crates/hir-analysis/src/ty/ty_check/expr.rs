@@ -990,8 +990,9 @@ impl<'db> TyChecker<'db> {
                     if let TyData::TyBase(TyBase::Func(func_def)) = base.data(self.db) {
                         let mut expected_rhs =
                             func_def.arg_tys(self.db)[1].instantiate(self.db, gen_args);
-                        let mut subst = AssocTySubst::new(self.db, inst);
-                        expected_rhs = self.normalize_ty(expected_rhs.fold_with(&mut subst));
+                        let mut subst = AssocTySubst::new(inst);
+                        expected_rhs =
+                            self.normalize_ty(expected_rhs.fold_with(self.db, &mut subst));
                         self.check_expr(rhs_expr, expected_rhs);
                     }
                 }
@@ -1019,9 +1020,9 @@ impl<'db> TyChecker<'db> {
                     let (base, gen_args) = candidate_func_ty.decompose_ty_app(self.db);
                     let expected_rhs =
                         if let TyData::TyBase(TyBase::Func(func_def)) = base.data(self.db) {
-                            let mut subst = AssocTySubst::new(self.db, inst);
+                            let mut subst = AssocTySubst::new(inst);
                             let ty = func_def.arg_tys(self.db)[1].instantiate(self.db, gen_args);
-                            self.normalize_ty(ty.fold_with(&mut subst))
+                            self.normalize_ty(ty.fold_with(self.db, &mut subst))
                         } else {
                             unreachable!("candidate func ty should be a func");
                         };

@@ -321,16 +321,13 @@ impl<'db> GenericParamTypeSet<'db> {
             mapping: &'a [Option<TyId<'db>>],
         }
         impl<'a, 'db> TyFolder<'db> for ParamSubst<'a, 'db> {
-            fn db(&self) -> &'db dyn HirAnalysisDb {
-                self.db
-            }
-            fn fold_ty(&mut self, ty: TyId<'db>) -> TyId<'db> {
+            fn fold_ty(&mut self, db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> TyId<'db> {
                 match ty.data(self.db) {
                     TyData::TyParam(param) => {
                         if let Some(Some(rep)) = self.mapping.get(param.idx) {
                             return *rep;
                         }
-                        ty.super_fold_with(self)
+                        ty.super_fold_with(db, self)
                     }
                     TyData::ConstTy(const_ty) => {
                         if let super::const_ty::ConstTyData::TyParam(param, _) =
@@ -339,9 +336,9 @@ impl<'db> GenericParamTypeSet<'db> {
                         {
                             return *rep;
                         }
-                        ty.super_fold_with(self)
+                        ty.super_fold_with(db, self)
                     }
-                    _ => ty.super_fold_with(self),
+                    _ => ty.super_fold_with(db, self),
                 }
             }
         }
@@ -359,7 +356,7 @@ impl<'db> GenericParamTypeSet<'db> {
                             db,
                             mapping: &mapping,
                         };
-                        lowered.fold_with(&mut subst)
+                        lowered.fold_with(db, &mut subst)
                     };
                     mapping[i] = Some(lowered);
                     result.push(lowered);

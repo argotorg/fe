@@ -152,13 +152,10 @@ pub(crate) fn lower_trait_ref<'db>(
                 self_ty: TyId<'db>,
             }
             impl<'db> TyFolder<'db> for SelfSubst<'db> {
-                fn db(&self) -> &'db dyn HirAnalysisDb {
-                    self.db
-                }
-                fn fold_ty(&mut self, ty: TyId<'db>) -> TyId<'db> {
+                fn fold_ty(&mut self, db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> TyId<'db> {
                     match ty.data(self.db) {
                         TyData::TyParam(p) if p.is_trait_self() => self.self_ty,
-                        _ => ty.super_fold_with(self),
+                        _ => ty.super_fold_with(db, self),
                     }
                 }
             }
@@ -167,11 +164,11 @@ pub(crate) fn lower_trait_ref<'db>(
             args[0] = self_ty;
             args.iter_mut()
                 .skip(1)
-                .for_each(|a| *a = a.fold_with(&mut folder));
+                .for_each(|a| *a = a.fold_with(db, &mut folder));
             let mut assoc_bindings = t.assoc_type_bindings(db).clone();
             assoc_bindings
                 .iter_mut()
-                .for_each(|(_, ty)| *ty = (*ty).fold_with(&mut folder));
+                .for_each(|(_, ty)| *ty = (*ty).fold_with(db, &mut folder));
 
             Ok(TraitInstId::new(db, t.def(db), args, assoc_bindings))
         }

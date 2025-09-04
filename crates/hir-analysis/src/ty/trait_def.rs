@@ -360,7 +360,7 @@ pub(super) fn does_impl_trait_conflict(
 
     // Check each constraint to see if it would be satisfiable
     for &constraint in merged_constraints.list(db) {
-        let constraint = Canonicalized::new(db, constraint.fold_with(&mut table));
+        let constraint = Canonicalized::new(db, constraint.fold_with(db, &mut table));
 
         // Check if this constraint is satisfiable
         match is_goal_satisfiable(db, ingot, constraint.value, PredicateListId::empty_list(db)) {

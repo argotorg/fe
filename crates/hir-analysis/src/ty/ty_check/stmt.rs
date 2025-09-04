@@ -51,7 +51,9 @@ impl<'db> TyChecker<'db> {
         };
 
         let expr_ty = self.fresh_ty();
-        let typed_expr = self.check_expr(*expr, expr_ty).fold_with(&mut self.table);
+        let typed_expr = self
+            .check_expr(*expr, expr_ty)
+            .fold_with(self.db, &mut self.table);
         let expr_ty = typed_expr.ty;
 
         let (base, arg) = expr_ty.decompose_ty_app(self.db);
@@ -143,7 +145,7 @@ impl<'db> TyChecker<'db> {
         let returned_ty = if let Some(expr) = expr {
             let returned_ty = self.fresh_ty();
             self.check_expr(*expr, returned_ty);
-            returned_ty.fold_with(&mut self.table)
+            returned_ty.fold_with(self.db, &mut self.table)
         } else {
             TyId::unit(self.db)
         };

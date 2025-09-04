@@ -40,7 +40,7 @@ pub fn normalize_ty<'db>(
         cache: FxHashMap::default(),
     };
 
-    ty.fold_with(&mut normalizer)
+    ty.fold_with(db, &mut normalizer)
 }
 
 struct TypeNormalizer<'db> {
@@ -52,11 +52,7 @@ struct TypeNormalizer<'db> {
 }
 
 impl<'db> TyFolder<'db> for TypeNormalizer<'db> {
-    fn db(&self) -> &'db dyn HirAnalysisDb {
-        self.db
-    }
-
-    fn fold_ty(&mut self, ty: TyId<'db>) -> TyId<'db> {
+    fn fold_ty(&mut self, db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> TyId<'db> {
         match ty.data(self.db) {
             TyData::TyParam(p @ TyParam { owner, .. }) if p.is_trait_self() => {
                 if let Some(impl_) = owner.resolve_to::<ImplTrait>(self.db)
@@ -66,7 +62,7 @@ impl<'db> TyFolder<'db> for TypeNormalizer<'db> {
                         collect_constraints(self.db, impl_.into()).instantiate_identity();
                     let lowered = lower_hir_ty(self.db, hir_ty, impl_.scope(), impl_assumptions);
                     // Continue folding the lowered type so it reaches normal form
-                    return self.fold_ty(lowered);
+                    return self.fold_ty(db, lowered);
                 }
                 ty
             }
@@ -82,17 +78,17 @@ impl<'db> TyFolder<'db> for TypeNormalizer<'db> {
                 }
 
                 if let Some(replacement) = self.try_resolve_assoc_ty(ty, assoc_ty) {
-                    let normalized = self.fold_ty(replacement);
+                    let normalized = self.fold_ty(db, replacement);
                     self.cache.insert(*assoc_ty, Some(normalized));
                     return normalized;
                 }
 
                 // Not resolved; still fold internals (e.g., normalize self type)
-                let folded = ty.super_fold_with(self);
+                let folded = ty.super_fold_with(db, self);
                 self.cache.insert(*assoc_ty, Some(folded));
                 folded
             }
-            _ => ty.super_fold_with(self),
+            _ => ty.super_fold_with(db, self),
         }
     }
 }
@@ -114,12 +110,12 @@ impl<'db> TypeNormalizer<'db> {
             let mut table = UnificationTable::new(self.db);
             // Normalize self types before attempting unification to avoid
             // requiring a second outer pass for resolution.
-            let lhs_self = self.fold_ty(assoc.trait_.self_ty(self.db));
-            let rhs_self = self.fold_ty(pred.self_ty(self.db));
+            let lhs_self = self.fold_ty(self.db, assoc.trait_.self_ty(self.db));
+            let rhs_self = self.fold_ty(self.db, pred.self_ty(self.db));
             if table.unify(lhs_self, rhs_self).is_ok()
                 && let Some(&bound) = pred.assoc_type_bindings(self.db).get(&assoc.name)
             {
-                return Some(bound.fold_with(&mut table));
+                return Some(bound.fold_with(self.db, &mut table));
             }
         }
 
@@ -129,7 +125,7 @@ impl<'db> TypeNormalizer<'db> {
         //    normalize to that type.
         //    Search by the trait's self type: `SelfTy::assoc.name`.
         // Normalize the trait's self type before candidate search.
-        let self_ty = self.fold_ty(assoc.trait_.self_ty(self.db));
+        let self_ty = self.fold_ty(self.db, assoc.trait_.self_ty(self.db));
         let mut raw_cands = find_associated_type(
             self.db,
             self.scope,
@@ -146,7 +142,7 @@ impl<'db> TypeNormalizer<'db> {
         let mut dedup: IndexMap<TyId<'db>, ()> = IndexMap::new();
         for (_, t) in raw_cands.into_iter() {
             // Continue folding so nested associated types are also normalized
-            let norm_t = self.fold_ty(t);
+            let norm_t = self.fold_ty(self.db, t);
             dedup.entry(norm_t).or_insert(());
         }
 
