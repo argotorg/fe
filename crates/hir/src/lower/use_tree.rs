@@ -2,7 +2,7 @@ use parser::ast::{self, prelude::*};
 
 use super::FileLowerCtxt;
 use crate::{
-    hir_def::{use_tree::*, IdentId, ItemModifier, Partial, TrackedItemVariant, Use},
+    hir_def::{IdentId, ItemModifier, Partial, TrackedItemVariant, Use, use_tree::*},
     span::{HirOrigin, UseDesugared},
 };
 

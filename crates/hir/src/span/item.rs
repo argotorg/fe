@@ -14,10 +14,10 @@ use crate::{
         Trait, TypeAlias, Use,
     },
     span::{
+        DesugaredOrigin, DesugaredUseFocus,
         params::LazyTraitRefSpan,
         transition::{LazyArg, LazyTransitionFn, ResolvedOrigin, ResolvedOriginKind},
         use_tree::LazyUsePathSpan,
-        DesugaredOrigin, DesugaredUseFocus,
     },
 };
 

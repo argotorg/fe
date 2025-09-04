@@ -1,5 +1,5 @@
 use super::{GenericArgListId, IdentId, TraitRefId, TypeId};
-use crate::{hir_def::Partial, HirDb};
+use crate::{HirDb, hir_def::Partial};
 
 #[salsa::interned]
 #[derive(Debug)]

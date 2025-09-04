@@ -1,9 +1,9 @@
-use adt_def::{lower_adt, AdtDef, AdtRef};
+use adt_def::{AdtDef, AdtRef, lower_adt};
 use def_analysis::check_recursive_adt;
 use diagnostics::{DefConflictError, TraitLowerDiag, TyLowerDiag};
 use hir::hir_def::{
-    scope_graph::{ScopeGraph, ScopeId},
     IdentId, ItemKind, TopLevelMod, TypeAlias,
+    scope_graph::{ScopeGraph, ScopeId},
 };
 use rustc_hash::{FxHashMap, FxHashSet};
 use smallvec1::SmallVec;
@@ -17,8 +17,8 @@ use self::def_analysis::{
     analyze_adt, analyze_func, analyze_impl, analyze_impl_trait, analyze_trait,
 };
 use crate::{
-    analysis_pass::ModuleAnalysisPass, diagnostics::DiagnosticVoucher,
-    ty::def_analysis::DefAnalyzer, HirAnalysisDb,
+    HirAnalysisDb, analysis_pass::ModuleAnalysisPass, diagnostics::DiagnosticVoucher,
+    ty::def_analysis::DefAnalyzer,
 };
 
 pub mod adt_def;
@@ -69,11 +69,11 @@ impl ModuleAnalysisPass for AdtDefAnalysisPass {
         for adt in adts {
             diags.extend(analyze_adt(db, adt).iter().map(|d| d.to_voucher()));
             let adt = lower_adt(db, adt);
-            if !cycle_participants.contains(&adt) {
-                if let Some(cycle) = check_recursive_adt(db, adt) {
-                    diags.push(Box::new(TyLowerDiag::RecursiveType(cycle.clone())) as _);
-                    cycle_participants.extend(cycle.iter().map(|m| m.adt));
-                }
+            if !cycle_participants.contains(&adt)
+                && let Some(cycle) = check_recursive_adt(db, adt)
+            {
+                diags.push(Box::new(TyLowerDiag::RecursiveType(cycle.clone())) as _);
+                cycle_participants.extend(cycle.iter().map(|m| m.adt));
             }
         }
         diags
@@ -179,11 +179,11 @@ impl ModuleAnalysisPass for TraitAnalysisPass {
 
         for hir_trait in top_mod.all_traits(db) {
             let trait_ = lower_trait(db, *hir_trait);
-            if !cycle_participants.contains(&trait_) {
-                if let Some(cycle) = super_trait_cycle(db, trait_) {
-                    diags.push(Box::new(TraitLowerDiag::CyclicSuperTraits(cycle.clone())) as _);
-                    cycle_participants.extend(cycle.iter());
-                }
+            if !cycle_participants.contains(&trait_)
+                && let Some(cycle) = super_trait_cycle(db, trait_)
+            {
+                diags.push(Box::new(TraitLowerDiag::CyclicSuperTraits(cycle.clone())) as _);
+                cycle_participants.extend(cycle.iter());
             }
             diags.extend(analyze_trait(db, *hir_trait).iter().map(|d| d.to_voucher()))
         }

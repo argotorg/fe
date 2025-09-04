@@ -1,8 +1,8 @@
 use common::ingot::Ingot;
 use hir::{
     hir_def::{
-        scope_graph::ScopeId, Contract, Enum, FieldDefListId, GenericParamOwner, IdentId, ItemKind,
-        Partial, Struct, TypeId as HirTyId, VariantDefListId, VariantKind,
+        Contract, Enum, FieldDefListId, GenericParamOwner, IdentId, ItemKind, Partial, Struct,
+        TypeId as HirTyId, VariantDefListId, VariantKind, scope_graph::ScopeId,
     },
     span::DynLazySpan,
 };
@@ -12,7 +12,7 @@ use super::{
     binder::Binder,
     trait_resolution::constraint::collect_adt_constraints,
     ty_def::{InvalidCause, TyId},
-    ty_lower::{collect_generic_params, lower_hir_ty, GenericParamTypeSet},
+    ty_lower::{GenericParamTypeSet, collect_generic_params, lower_hir_ty},
 };
 use crate::HirAnalysisDb;
 

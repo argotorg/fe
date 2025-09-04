@@ -1,7 +1,7 @@
 use hir::hir_def::{
-    scope_graph::ScopeId, GenericArg, GenericArgListId, GenericParam, GenericParamOwner, IdentId,
-    ItemKind, KindBound as HirKindBound, Partial, PathId, TypeAlias as HirTypeAlias, TypeBound,
-    TypeId as HirTyId, TypeKind as HirTyKind,
+    GenericArg, GenericArgListId, GenericParam, GenericParamOwner, IdentId, ItemKind,
+    KindBound as HirKindBound, Partial, PathId, TypeAlias as HirTypeAlias, TypeBound,
+    TypeId as HirTyId, TypeKind as HirTyKind, scope_graph::ScopeId,
 };
 use salsa::Update;
 use smallvec::smallvec;
@@ -9,13 +9,13 @@ use smallvec::smallvec;
 use super::{
     const_ty::{ConstTyData, ConstTyId},
     fold::{TyFoldable, TyFolder},
-    trait_resolution::{constraint::collect_constraints, PredicateListId},
+    trait_resolution::{PredicateListId, constraint::collect_constraints},
     ty_def::{InvalidCause, Kind, TyData, TyId, TyParam},
 };
 use crate::name_resolution::{
-    resolve_ident_to_bucket, resolve_path, NameDomain, NameResKind, PathRes,
+    NameDomain, NameResKind, PathRes, resolve_ident_to_bucket, resolve_path,
 };
-use crate::{ty::binder::Binder, HirAnalysisDb};
+use crate::{HirAnalysisDb, ty::binder::Binder};
 
 /// Lowers the given HirTy to `TyId`.
 #[salsa::tracked]
@@ -335,10 +335,9 @@ impl<'db> GenericParamTypeSet<'db> {
                     TyData::ConstTy(const_ty) => {
                         if let super::const_ty::ConstTyData::TyParam(param, _) =
                             const_ty.data(self.db)
+                            && let Some(Some(rep)) = self.mapping.get(param.idx)
                         {
-                            if let Some(Some(rep)) = self.mapping.get(param.idx) {
-                                return *rep;
-                            }
+                            return *rep;
                         }
                         ty.super_fold_with(self)
                     }

@@ -80,30 +80,32 @@ where
     V: Update,
 {
     unsafe fn maybe_update(old_pointer: *mut Self, new_map: Self) -> bool {
-        let old_map = unsafe { &mut *old_pointer };
+        unsafe {
+            let old_map = &mut *old_pointer;
 
-        // Check if the keys in both maps are the same w.r.t the key order.
-        let is_key_same = old_map.len() == new_map.len()
-            && old_map
-                .keys()
-                .zip(new_map.keys())
-                .all(|(old, new)| old == new);
+            // Check if the keys in both maps are the same w.r.t the key order.
+            let is_key_same = old_map.len() == new_map.len()
+                && old_map
+                    .keys()
+                    .zip(new_map.keys())
+                    .all(|(old, new)| old == new);
 
-        // If the keys are different, update entire map.
-        if !is_key_same {
-            old_map.clear();
-            old_map.0.extend(new_map.0);
-            return true;
+            // If the keys are different, update entire map.
+            if !is_key_same {
+                old_map.clear();
+                old_map.0.extend(new_map.0);
+                return true;
+            }
+
+            // Update values if it's different.
+            let mut changed = false;
+            for (i, new_value) in new_map.0.into_values().enumerate() {
+                let old_value = &mut old_map[i];
+                changed |= V::maybe_update(old_value, new_value);
+            }
+
+            changed
         }
-
-        // Update values if it's different.
-        let mut changed = false;
-        for (i, new_value) in new_map.0.into_values().enumerate() {
-            let old_value = &mut old_map[i];
-            changed |= V::maybe_update(old_value, new_value);
-        }
-
-        changed
     }
 }
 

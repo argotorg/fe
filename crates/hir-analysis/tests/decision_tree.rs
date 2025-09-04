@@ -1,13 +1,13 @@
 mod test_db;
 use std::path::Path;
 
-use ascii_tree::{write_tree, Tree};
-use dir_test::{dir_test, Fixture};
+use ascii_tree::{Tree, write_tree};
+use dir_test::{Fixture, dir_test};
 use fe_hir_analysis::ty::{
-    decision_tree::{build_decision_tree, DecisionTree, Occurrence},
+    decision_tree::{DecisionTree, Occurrence, build_decision_tree},
     pattern_analysis::PatternMatrix,
     simplified_pattern::ConstructorKind,
-    ty_check::{check_func_body, TypedBody},
+    ty_check::{TypedBody, check_func_body},
     ty_def::{TyData, TyId},
 };
 use hir::hir_def::LitKind;
@@ -171,40 +171,40 @@ impl<'db> Visitor<'db> for DecisionTreeVisitor<'db, '_> {
         expr_id: ExprId,
         expr: &Expr<'db>,
     ) {
-        if let Expr::Match(_scrutinee, arms) = expr {
-            if let Some(arms) = arms.clone().to_opt() {
-                let body = ctxt.body();
-                let patterns: Vec<_> = arms
-                    .iter()
-                    .filter_map(|arm| arm.pat.data(self.db, body).clone().to_opt())
-                    .collect();
+        if let Expr::Match(_scrutinee, arms) = expr
+            && let Some(arms) = arms.clone().to_opt()
+        {
+            let body = ctxt.body();
+            let patterns: Vec<_> = arms
+                .iter()
+                .filter_map(|arm| arm.pat.data(self.db, body).clone().to_opt())
+                .collect();
 
-                if !patterns.is_empty() {
-                    // Get the actual scrutinee type from the typed body
-                    let scrutinee_ty = if let Some(ref typed_body) = self.typed_body {
-                        typed_body.expr_ty(self.db, *_scrutinee)
-                    } else {
-                        TyId::new(self.db, TyData::Never)
-                    };
+            if !patterns.is_empty() {
+                // Get the actual scrutinee type from the typed body
+                let scrutinee_ty = if let Some(ref typed_body) = self.typed_body {
+                    typed_body.expr_ty(self.db, *_scrutinee)
+                } else {
+                    TyId::new(self.db, TyData::Never)
+                };
 
-                    let matrix = PatternMatrix::from_hir_patterns(
-                        self.db,
-                        &patterns,
-                        body,
-                        body.scope(),
-                        scrutinee_ty,
-                    );
+                let matrix = PatternMatrix::from_hir_patterns(
+                    self.db,
+                    &patterns,
+                    body,
+                    body.scope(),
+                    scrutinee_ty,
+                );
 
-                    let tree = build_decision_tree(self.db, &matrix);
-                    let visualization = render_decision_tree(self.db, &tree);
+                let tree = build_decision_tree(self.db, &matrix);
+                let visualization = render_decision_tree(self.db, &tree);
 
-                    let func_name = self.current_func.as_deref().unwrap_or("unknown");
-                    let prop = format!("Decision Tree for {func_name}:\n{visualization}");
+                let func_name = self.current_func.as_deref().unwrap_or("unknown");
+                let prop = format!("Decision Tree for {func_name}:\n{visualization}");
 
-                    if let Some(span) = ctxt.span() {
-                        self.prop_formatter
-                            .push_prop(self.top_mod, span.into(), prop);
-                    }
+                if let Some(span) = ctxt.span() {
+                    self.prop_formatter
+                        .push_prop(self.top_mod, span.into(), prop);
                 }
             }
         }

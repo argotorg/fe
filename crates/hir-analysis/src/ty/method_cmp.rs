@@ -8,7 +8,7 @@ use super::{
     normalize::normalize_ty,
     trait_def::{TraitInstId, TraitMethod},
     trait_resolution::{
-        constraint::collect_func_def_constraints, is_goal_satisfiable, GoalSatisfiability,
+        GoalSatisfiability, constraint::collect_func_def_constraints, is_goal_satisfiable,
     },
     ty_def::TyId,
 };

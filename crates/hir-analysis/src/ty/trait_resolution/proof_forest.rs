@@ -4,23 +4,23 @@
 use std::collections::BinaryHeap;
 
 use common::{indexmap::IndexSet, ingot::Ingot};
-use cranelift_entity::{entity_impl, PrimaryMap};
+use cranelift_entity::{PrimaryMap, entity_impl};
 use hir::hir_def::HirIngot;
 use rustc_hash::{FxHashMap, FxHashSet};
 
 use super::{GoalSatisfiability, PredicateListId};
 use crate::{
+    HirAnalysisDb,
     ty::{
         binder::Binder,
         canonical::{Canonical, Canonicalized},
         fold::{TyFoldable, TyFolder},
         normalize::normalize_ty,
-        trait_def::{impls_for_trait, Implementor, TraitInstId},
+        trait_def::{Implementor, TraitInstId, impls_for_trait},
         ty_def::{TyData, TyId},
         unify::PersistentUnificationTable,
         visitor::{TyVisitable, TyVisitor},
     },
-    HirAnalysisDb,
 };
 const MAXIMUM_SOLUTION_NUM: usize = 2;
 /// The maximum depth of any type that the solver will consider.

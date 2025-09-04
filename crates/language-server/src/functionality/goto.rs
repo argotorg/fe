@@ -1,14 +1,14 @@
 use async_lsp::ResponseError;
 use common::InputDb;
 use hir::{
-    hir_def::{scope_graph::ScopeId, ItemKind, PathId, TopLevelMod},
+    SpannedHirDb,
+    hir_def::{ItemKind, PathId, TopLevelMod, scope_graph::ScopeId},
     lower::map_file_to_mod,
     span::{DynLazySpan, LazySpan},
-    visitor::{prelude::LazyPathSpan, Visitor, VisitorCtxt},
-    SpannedHirDb,
+    visitor::{Visitor, VisitorCtxt, prelude::LazyPathSpan},
 };
 use hir_analysis::{
-    name_resolution::{resolve_path, PathResErrorKind},
+    name_resolution::{PathResErrorKind, resolve_path},
     ty::trait_resolution::PredicateListId,
 };
 use tracing::error;
@@ -171,7 +171,7 @@ pub async fn handle_goto_definition(
 #[cfg(test)]
 mod tests {
     use common::ingot::IngotKind;
-    use dir_test::{dir_test, Fixture};
+    use dir_test::{Fixture, dir_test};
     use std::collections::BTreeMap;
     use test_utils::snap_test;
     use url::Url;

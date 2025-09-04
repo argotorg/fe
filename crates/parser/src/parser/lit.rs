@@ -2,7 +2,7 @@ use std::convert::Infallible;
 
 use crate::SyntaxKind;
 
-use super::{define_scope, token_stream::TokenStream, Parser};
+use super::{Parser, define_scope, token_stream::TokenStream};
 
 define_scope! { pub(crate) LitScope, Lit }
 impl super::Parse for LitScope {

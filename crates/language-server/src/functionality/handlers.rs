@@ -2,10 +2,10 @@ use crate::backend::Backend;
 
 use async_lsp::lsp_types::FileChangeType;
 use async_lsp::{
+    ErrorCode, LanguageClient, ResponseError,
     lsp_types::{
         Hover, HoverParams, InitializeParams, InitializeResult, InitializedParams, LogMessageParams,
     },
-    ErrorCode, LanguageClient, ResponseError,
 };
 
 use common::InputDb;
@@ -273,10 +273,8 @@ pub async fn handle_file_change(
                     .update(&mut backend.db, url.clone(), contents);
 
                 // If a fe.toml was created, discover and load all files in the new ingot
-                if is_fe_toml {
-                    if let Some(ingot_dir) = path.parent() {
-                        load_ingot_files(backend, ingot_dir).await?;
-                    }
+                if is_fe_toml && let Some(ingot_dir) = path.parent() {
+                    load_ingot_files(backend, ingot_dir).await?;
                 }
             }
         }
@@ -300,10 +298,8 @@ pub async fn handle_file_change(
                     .update(&mut backend.db, url.clone(), contents);
 
                 // If fe.toml was modified, re-scan the ingot for any new files
-                if is_fe_toml {
-                    if let Some(ingot_dir) = path.parent() {
-                        load_ingot_files(backend, ingot_dir).await?;
-                    }
+                if is_fe_toml && let Some(ingot_dir) = path.parent() {
+                    load_ingot_files(backend, ingot_dir).await?;
                 }
             }
         }
@@ -416,7 +412,9 @@ pub async fn handle_hover_request(
         return Ok(None);
     };
     let Some(file) = backend.db.workspace().get(&backend.db, &url) else {
-        warn!("handle_hover_request failed to get file for url: `{url}` (original path: `{path_str}`)");
+        warn!(
+            "handle_hover_request failed to get file for url: `{url}` (original path: `{path_str}`)"
+        );
         return Ok(None);
     };
 

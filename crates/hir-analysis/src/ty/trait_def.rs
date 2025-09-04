@@ -16,23 +16,23 @@ use super::{
     canonical::{Canonical, Canonicalized},
     diagnostics::{TraitConstraintDiag, TyDiagCollection},
     fold::TyFoldable as _,
-    func_def::{lower_func, FuncDef},
+    func_def::{FuncDef, lower_func},
     trait_lower::collect_implementor_methods,
     trait_resolution::{
-        check_trait_inst_wf,
+        GoalSatisfiability, PredicateListId, WellFormedness, check_trait_inst_wf,
         constraint::{collect_constraints, collect_super_traits},
-        is_goal_satisfiable, GoalSatisfiability, PredicateListId, WellFormedness,
+        is_goal_satisfiable,
     },
     ty_def::{Kind, TyId},
     ty_lower::GenericParamTypeSet,
     unify::UnificationTable,
 };
 use crate::{
+    HirAnalysisDb,
     ty::{
         trait_lower::collect_trait_impls, trait_resolution::constraint::super_trait_cycle,
         ty_lower::collect_generic_params,
     },
-    HirAnalysisDb,
 };
 
 /// Returns [`TraitEnv`] for the given ingot.

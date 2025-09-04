@@ -1,7 +1,7 @@
 use cranelift_entity::entity_impl;
 
 use super::{Body, ExprId, Partial, PatId, TypeId};
-use crate::{span::stmt::LazyStmtSpan, HirDb};
+use crate::{HirDb, span::stmt::LazyStmtSpan};
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, salsa::Update)]
 pub enum Stmt<'db> {

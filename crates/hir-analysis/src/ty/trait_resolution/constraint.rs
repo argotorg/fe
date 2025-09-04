@@ -1,13 +1,14 @@
 use common::indexmap::IndexSet;
 use either::Either;
 use hir::hir_def::{
-    scope_graph::ScopeId, types::TypeId as HirTypeId, GenericParam, GenericParamOwner, ItemKind,
-    TraitRefId, TypeBound,
+    GenericParam, GenericParamOwner, ItemKind, TraitRefId, TypeBound, scope_graph::ScopeId,
+    types::TypeId as HirTypeId,
 };
 
 use crate::{
+    HirAnalysisDb,
     ty::{
-        adt_def::{lower_adt, AdtDef},
+        adt_def::{AdtDef, lower_adt},
         binder::Binder,
         func_def::HirFuncDefKind,
         trait_def::{TraitDef, TraitInstId},
@@ -17,7 +18,6 @@ use crate::{
         ty_lower::{collect_generic_params, lower_hir_ty},
         unify::InferenceKey,
     },
-    HirAnalysisDb,
 };
 
 /// Returns a constraints list which is derived from the given type.
@@ -79,10 +79,10 @@ pub(crate) fn collect_super_traits<'db>(
             .unwrap_or_default()
         {
             for bound in &pred.bounds {
-                if let TypeBound::Trait(bound) = bound {
-                    if let Ok(inst) = lower_trait_ref(db, self_param, *bound, scope, assumptions) {
-                        super_traits.insert(Binder::bind(inst));
-                    }
+                if let TypeBound::Trait(bound) = bound
+                    && let Ok(inst) = lower_trait_ref(db, self_param, *bound, scope, assumptions)
+                {
+                    super_traits.insert(Binder::bind(inst));
                 }
             }
         }
@@ -114,10 +114,10 @@ pub fn super_trait_cycle_impl<'db>(
 
     let chain = [chain, &[trait_]].concat();
     for t in bounds {
-        if let Some(cycle) = super_trait_cycle_impl(db, t.skip_binder().def(db), &chain) {
-            if cycle.contains(&trait_) {
-                return Some(cycle.clone());
-            }
+        if let Some(cycle) = super_trait_cycle_impl(db, t.skip_binder().def(db), &chain)
+            && cycle.contains(&trait_)
+        {
+            return Some(cycle.clone());
         }
     }
     None

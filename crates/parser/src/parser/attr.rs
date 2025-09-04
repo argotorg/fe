@@ -2,7 +2,7 @@ use std::convert::Infallible;
 use unwrap_infallible::UnwrapInfallible;
 
 use super::{
-    define_scope, parse_list, token_stream::TokenStream, Checkpoint, ErrProof, Parser, Recovery,
+    Checkpoint, ErrProof, Parser, Recovery, define_scope, parse_list, token_stream::TokenStream,
 };
 
 use crate::{ExpectedKind, SyntaxKind};

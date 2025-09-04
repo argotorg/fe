@@ -4,11 +4,11 @@ use common::{
     indexmap::IndexMap,
     ingot::Ingot,
 };
-use cranelift_entity::{entity_impl, EntityRef, PrimaryMap};
+use cranelift_entity::{EntityRef, PrimaryMap, entity_impl};
 use salsa::Update;
 
 use super::{IdentId, TopLevelMod};
-use crate::{lower::map_file_to_mod_impl, HirDb};
+use crate::{HirDb, lower::map_file_to_mod_impl};
 
 /// This tree represents the structure of an ingot.
 /// Internal modules are not included in this tree, instead, they are included
@@ -74,22 +74,24 @@ where
     V: Update,
 {
     unsafe fn maybe_update(old_pointer: *mut Self, new_vec: Self) -> bool {
-        let old_vec: &mut PMap<K, V> = unsafe { &mut *old_pointer };
+        unsafe {
+            let old_vec: &mut PMap<K, V> = &mut *old_pointer;
 
-        if old_vec.0.len() != new_vec.0.len() {
-            return true;
+            if old_vec.0.len() != new_vec.0.len() {
+                return true;
+            }
+
+            let mut changed = false;
+            for (old_element, new_element) in old_vec
+                .0
+                .values_mut()
+                .zip(new_vec.0.into_iter().map(|(_, v)| v))
+            {
+                changed |= V::maybe_update(old_element, new_element);
+            }
+
+            changed
         }
-
-        let mut changed = false;
-        for (old_element, new_element) in old_vec
-            .0
-            .values_mut()
-            .zip(new_vec.0.into_iter().map(|(_, v)| v))
-        {
-            changed |= V::maybe_update(old_element, new_element);
-        }
-
-        changed
     }
 }
 
@@ -172,14 +174,14 @@ pub(crate) fn module_tree_impl<'db>(db: &'db dyn HirDb, ingot: Ingot<'db>) -> Mo
             continue;
         }
 
-        if let Some(IngotFileKind::Source) = child_file.kind(db) {
-            if let Some(parent_id) = find_parent_module(db, child_file, root_file, &path_map) {
-                let child_mod = map_file_to_mod_impl(db, child_file);
-                let child_id = mod_map[&child_mod];
+        if let Some(IngotFileKind::Source) = child_file.kind(db)
+            && let Some(parent_id) = find_parent_module(db, child_file, root_file, &path_map)
+        {
+            let child_mod = map_file_to_mod_impl(db, child_file);
+            let child_id = mod_map[&child_mod];
 
-                module_tree[parent_id].children.push(child_id);
-                module_tree[child_id].parent = Some(parent_id);
-            }
+            module_tree[parent_id].children.push(child_id);
+            module_tree[child_id].parent = Some(parent_id);
         }
     }
 
@@ -249,7 +251,7 @@ entity_impl!(ModuleTreeNodeId);
 #[cfg(test)]
 mod tests {
 
-    use common::{ingot::IngotBaseUrl, InputDb};
+    use common::{InputDb, ingot::IngotBaseUrl};
     use url::Url;
 
     use crate::{lower, test_db::TestDb};

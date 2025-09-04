@@ -2,8 +2,8 @@
 
 use common::{indexmap::IndexMap, ingot::Ingot};
 use hir::hir_def::{
-    params::GenericArg, scope_graph::ScopeId, AssocTypeGenericArg, HirIngot, IdentId, ImplTrait,
-    Partial, PathId, Trait, TraitRefId,
+    AssocTypeGenericArg, HirIngot, IdentId, ImplTrait, Partial, PathId, Trait, TraitRefId,
+    params::GenericArg, scope_graph::ScopeId,
 };
 use rustc_hash::FxHashMap;
 use salsa::Update;
@@ -13,20 +13,20 @@ use super::{
     const_ty::ConstTyId,
     fold::{TyFoldable, TyFolder},
     func_def::FuncDef,
-    trait_def::{does_impl_trait_conflict, Implementor, TraitDef, TraitInstId},
+    trait_def::{Implementor, TraitDef, TraitInstId, does_impl_trait_conflict},
     trait_resolution::PredicateListId,
     ty_def::{InvalidCause, TyId},
     ty_lower::{collect_generic_params, lower_hir_ty},
 };
 use crate::{
-    name_resolution::{resolve_path, PathRes, PathResError},
+    HirAnalysisDb,
+    name_resolution::{PathRes, PathResError, resolve_path},
     ty::{
         func_def::lower_func,
         trait_resolution::constraint::collect_constraints,
         ty_def::{Kind, TyData},
         ty_lower::lower_opt_hir_ty,
     },
-    HirAnalysisDb,
 };
 
 type TraitImplTable<'db> = FxHashMap<TraitDef<'db>, Vec<Binder<Implementor<'db>>>>;
@@ -273,7 +273,7 @@ pub(crate) fn lower_trait_ref_impl<'db>(
                 return Err(TraitArgError::ArgTypeMismatch {
                     expected: None,
                     given: Some(given),
-                })
+                });
             }
             _ => return Err(TraitArgError::Ignored),
         }

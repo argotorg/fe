@@ -2,6 +2,9 @@
 members = ["crates/*"]
 resolver = "2"
 
+[workspace.package]
+edition = "2024"
+
 [workspace.dependencies]
 common = { path = "crates/common", package = "fe-common" }
 driver = { path = "crates/driver", package = "fe-driver" }

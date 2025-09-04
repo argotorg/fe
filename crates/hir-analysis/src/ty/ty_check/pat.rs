@@ -3,7 +3,7 @@ use std::ops::Range;
 use either::Either;
 use hir::hir_def::{Partial, Pat, PatId, VariantKind};
 
-use super::{env::LocalBinding, path::RecordInitChecker, RecordLike, TyChecker};
+use super::{RecordLike, TyChecker, env::LocalBinding, path::RecordInitChecker};
 use crate::{
     name_resolution::PathRes,
     ty::{

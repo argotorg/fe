@@ -1,6 +1,6 @@
 use rowan::ast::AstNode;
 
-use crate::{syntax_kind::SyntaxKind as SK, SyntaxToken};
+use crate::{SyntaxToken, syntax_kind::SyntaxKind as SK};
 
 use super::ast_node;
 

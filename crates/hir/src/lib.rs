@@ -41,12 +41,12 @@ impl<T> SpannedHirDb for T where T: HirDb {}
 
 #[cfg(test)]
 mod test_db {
-    use common::{define_input_db, file::File, InputDb};
+    use common::{InputDb, define_input_db, file::File};
     use derive_more::TryIntoError;
     use url::Url;
 
     use crate::{
-        hir_def::{scope_graph::ScopeGraph, ItemKind, TopLevelMod},
+        hir_def::{ItemKind, TopLevelMod, scope_graph::ScopeGraph},
         lower::{map_file_to_mod, scope_graph},
         span::LazySpan,
     };

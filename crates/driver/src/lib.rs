@@ -7,18 +7,18 @@ pub mod files;
 use std::{collections::HashMap, mem::take};
 
 use common::{
+    InputDb,
     graph::{EdgeWeight, JoinEdge},
     tree::display_dependency_tree,
-    InputDb,
 };
 pub use db::DriverDataBase;
 
 use common::config::Config;
 use hir::hir_def::TopLevelMod;
 use resolver::{
+    ResolutionHandler, Resolver,
     files::{FilesResolutionDiagnostic, FilesResolutionError, FilesResolver, FilesResource},
     graph::{DiGraph, GraphResolutionHandler, GraphResolver, GraphResolverImpl},
-    ResolutionHandler, Resolver,
 };
 use url::Url;
 
@@ -80,10 +80,10 @@ pub fn init_ingot(db: &mut DriverDataBase, ingot_url: &Url) -> Vec<IngotInitDiag
         let mut configs = HashMap::new();
         for node_idx in cyclic_subgraph.node_indices() {
             let url = &cyclic_subgraph[node_idx];
-            if let Some(ingot) = db.workspace().containing_ingot(db, url.clone()) {
-                if let Some(config) = ingot.config(db) {
-                    configs.insert(url.clone(), config);
-                }
+            if let Some(ingot) = db.workspace().containing_ingot(db, url.clone())
+                && let Some(config) = ingot.config(db)
+            {
+                configs.insert(url.clone(), config);
             }
         }
 

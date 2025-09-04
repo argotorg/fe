@@ -6,9 +6,9 @@ use super::{
     transition::{ChainInitiator, ResolvedOrigin, SpanTransitionChain},
 };
 use crate::{
-    hir_def::{Body, PatId},
-    span::{path::LazyPathSpan, LazyLitSpan},
     SpannedHirDb,
+    hir_def::{Body, PatId},
+    span::{LazyLitSpan, path::LazyPathSpan},
 };
 
 define_lazy_span_node!(LazyPatSpan, ast::Pat,);

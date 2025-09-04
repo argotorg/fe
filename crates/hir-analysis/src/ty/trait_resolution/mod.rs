@@ -6,17 +6,17 @@ use super::{
     ty_def::{TyFlags, TyId},
 };
 use crate::{
+    HirAnalysisDb,
     ty::{
         normalize::normalize_ty,
         trait_resolution::{constraint::ty_constraints, proof_forest::ProofForest},
         unify::UnificationTable,
         visitor::collect_flags,
     },
-    HirAnalysisDb,
 };
 use common::indexmap::IndexSet;
 use constraint::collect_constraints;
-use hir::{hir_def::HirIngot, Ingot};
+use hir::{Ingot, hir_def::HirIngot};
 use salsa::Update;
 
 pub(crate) mod constraint;

@@ -5,8 +5,8 @@ use super::{
     unify::UnificationTable,
 };
 use crate::{
-    ty::ty_def::{Kind, TyBase, TyData, TyVarSort},
     HirAnalysisDb,
+    ty::ty_def::{Kind, TyBase, TyData, TyVarSort},
 };
 
 #[salsa::interned]

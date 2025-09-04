@@ -1,17 +1,17 @@
 use common::ingot::Ingot;
 use hir::{
-    hir_def::{scope_graph::ScopeId, EnumVariant, Func, FuncParamName, IdentId, Partial},
+    hir_def::{EnumVariant, Func, FuncParamName, IdentId, Partial, scope_graph::ScopeId},
     span::DynLazySpan,
 };
 
 use super::{binder::Binder, ty_def::TyId, ty_lower::GenericParamTypeSet};
 use crate::{
+    HirAnalysisDb,
     ty::{
         trait_resolution::constraint::collect_func_def_constraints,
         ty_def::InvalidCause,
         ty_lower::{collect_generic_params, lower_hir_ty},
     },
-    HirAnalysisDb,
 };
 
 /// Lower func to [`FuncDef`]. This function returns `None` iff the function

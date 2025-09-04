@@ -4,7 +4,7 @@ use camino::Utf8PathBuf;
 use url::Url;
 pub use workspace::Workspace;
 
-use crate::{ingot::Ingot, InputDb};
+use crate::{InputDb, ingot::Ingot};
 
 #[salsa::input(constructor = __new_impl)]
 #[derive(Debug)]

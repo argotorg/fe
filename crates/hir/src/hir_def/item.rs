@@ -9,23 +9,23 @@ use common::{file::File, ingot::Ingot};
 use parser::ast;
 
 use super::{
-    scope_graph::{ScopeGraph, ScopeId},
     AttrListId, Body, FuncParamListId, FuncParamName, GenericParam, GenericParamListId, HirIngot,
     IdentId, Partial, TupleTypeId, TypeBound, TypeId, UseAlias, WhereClauseId,
+    scope_graph::{ScopeGraph, ScopeId},
 };
 use crate::{
+    HirDb,
     hir_def::TraitRefId,
     lower,
     span::{
+        DynLazySpan, HirOrigin,
         item::{
             LazyConstSpan, LazyContractSpan, LazyEnumSpan, LazyFuncSpan, LazyImplSpan,
             LazyImplTraitSpan, LazyItemSpan, LazyModSpan, LazyStructSpan, LazyTopModSpan,
             LazyTraitSpan, LazyTraitTypeSpan, LazyTypeAliasSpan, LazyUseSpan, LazyVariantDefSpan,
         },
         params::{LazyGenericParamListSpan, LazyWhereClauseSpan},
-        DynLazySpan, HirOrigin,
     },
-    HirDb,
 };
 
 #[derive(

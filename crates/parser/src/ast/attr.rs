@@ -1,4 +1,4 @@
-use rowan::ast::{support, AstNode};
+use rowan::ast::{AstNode, support};
 
 use super::ast_node;
 use crate::{FeLang, SyntaxKind as SK, SyntaxToken};
@@ -127,7 +127,7 @@ pub trait AttrListOwner: AstNode<Language = FeLang> {
 mod tests {
     use crate::{
         lexer::Lexer,
-        parser::{attr::AttrListScope, Parser},
+        parser::{Parser, attr::AttrListScope},
     };
 
     use wasm_bindgen_test::wasm_bindgen_test;

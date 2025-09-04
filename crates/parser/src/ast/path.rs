@@ -1,7 +1,7 @@
-use rowan::ast::{support, AstNode};
+use rowan::ast::{AstNode, support};
 
-use super::{ast_node, AstChildren, GenericArgsOwner};
-use crate::{syntax_node::SyntaxToken, SyntaxKind as SK};
+use super::{AstChildren, GenericArgsOwner, ast_node};
+use crate::{SyntaxKind as SK, syntax_node::SyntaxToken};
 
 ast_node! {
     /// A path.
@@ -107,7 +107,7 @@ mod tests {
     use super::*;
     use crate::{
         lexer::Lexer,
-        parser::{path::PathScope, Parser},
+        parser::{Parser, path::PathScope},
     };
 
     use wasm_bindgen_test::wasm_bindgen_test;

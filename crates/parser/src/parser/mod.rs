@@ -4,7 +4,7 @@ pub(crate) use item::ItemListScope;
 use smallvec::SmallVec;
 
 use self::token_stream::{BackTrackableTokenStream, LexicalToken, TokenStream};
-use crate::{syntax_node::SyntaxNode, ExpectedKind, GreenNode, ParseError, SyntaxKind, TextRange};
+use crate::{ExpectedKind, GreenNode, ParseError, SyntaxKind, TextRange, syntax_node::SyntaxNode};
 
 pub mod token_stream;
 

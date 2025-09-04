@@ -6,7 +6,7 @@ use super::{
     ty_def::{Kind, TyId},
 };
 use crate::{
-    diagnostics::DiagnosticVoucher, name_resolution::diagnostics::PathResDiag, HirAnalysisDb,
+    HirAnalysisDb, diagnostics::DiagnosticVoucher, name_resolution::diagnostics::PathResDiag,
 };
 use either::Either;
 use hir::{
@@ -15,9 +15,9 @@ use hir::{
         PathId, Trait, TypeAlias as HirTypeAlias,
     },
     span::{
+        DynLazySpan,
         expr::LazyMethodCallExprSpan,
         params::{LazyGenericParamSpan, LazyTraitRefSpan},
-        DynLazySpan,
     },
 };
 use salsa::Update;

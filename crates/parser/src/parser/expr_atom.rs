@@ -4,17 +4,16 @@ use rowan::Checkpoint;
 use unwrap_infallible::UnwrapInfallible;
 
 use super::{
-    define_scope,
+    ErrProof, Parser, Recovery, define_scope,
     expr::{parse_expr, parse_expr_no_struct},
     item::ItemScope,
     parse_list, parse_pat,
     stmt::parse_stmt,
     token_stream::TokenStream,
-    ErrProof, Parser, Recovery,
 };
 use crate::{
-    parser::{lit, path},
     ExpectedKind, SyntaxKind, TextRange,
+    parser::{lit, path},
 };
 
 // Must be kept in sync with `parse_expr_atom`

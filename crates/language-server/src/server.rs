@@ -1,16 +1,16 @@
 use crate::fallback::WithFallbackService;
 use crate::functionality::handlers::{FileChange, FilesNeedDiagnostics, NeedsDiagnostics};
 use crate::logging;
-use crate::lsp_actor::service::LspActorService;
 use crate::lsp_actor::LspActor;
+use crate::lsp_actor::service::LspActorService;
 use crate::lsp_streams::RouterStreams;
 use act_locally::builder::ActorBuilder;
+use async_lsp::ClientSocket;
 use async_lsp::lsp_types::notification::{
     self, DidChangeTextDocument, DidChangeWatchedFiles, DidOpenTextDocument, DidSaveTextDocument,
     Initialized,
 };
 use async_lsp::lsp_types::request::{GotoDefinition, HoverRequest, Shutdown};
-use async_lsp::ClientSocket;
 use async_std::stream::StreamExt;
 use futures_batch::ChunksTimeoutStreamExt;
 // use serde_json::Value;

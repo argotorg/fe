@@ -1,7 +1,7 @@
 use hir::{
     hir_def::{
-        prim_ty::PrimTy, scope_graph::ScopeId, Body, BodyKind, Expr, ExprId, Func, IdentId,
-        IntegerId, Partial, Pat, PatId, Stmt, StmtId,
+        Body, BodyKind, Expr, ExprId, Func, IdentId, IntegerId, Partial, Pat, PatId, Stmt, StmtId,
+        prim_ty::PrimTy, scope_graph::ScopeId,
     },
     span::DynLazySpan,
 };
@@ -13,23 +13,23 @@ use thin_vec::ThinVec;
 
 use super::{Callable, TypedBody};
 use crate::{
+    HirAnalysisDb,
     ty::{
         canonical::{Canonical, Canonicalized},
         const_ty::{ConstTyData, ConstTyId, EvaluatedConstTy},
         diagnostics::{BodyDiag, FuncBodyDiag, TraitConstraintDiag, TyDiagCollection},
         fold::{AssocTySubst, TyFoldable, TyFolder},
-        func_def::{lower_func, FuncDef},
+        func_def::{FuncDef, lower_func},
         normalize::normalize_ty,
         trait_def::TraitInstId,
         trait_resolution::{
-            constraint::collect_func_def_constraints, is_goal_satisfiable, GoalSatisfiability,
-            PredicateListId,
+            GoalSatisfiability, PredicateListId, constraint::collect_func_def_constraints,
+            is_goal_satisfiable,
         },
         ty_def::{InvalidCause, TyBase, TyData, TyId, TyVarSort},
         ty_lower::lower_hir_ty,
         unify::UnificationTable,
     },
-    HirAnalysisDb,
 };
 
 pub(super) struct TyCheckEnv<'db> {

@@ -1,10 +1,11 @@
 #[cfg(test)]
-use driver::{init_ingot, DriverDataBase};
+use driver::{DriverDataBase, init_ingot};
 use std::path::Path;
 use url::Url;
 
 /// Load all files from an ingot directory into the database
 /// This is similar to what happens during initialization or when a new fe.toml is created
+#[allow(clippy::print_stderr)]
 #[cfg(test)]
 pub fn load_ingot_from_directory(db: &mut DriverDataBase, ingot_dir: &Path) {
     let ingot_url =

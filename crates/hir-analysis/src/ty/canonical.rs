@@ -7,7 +7,7 @@ use super::{
     ty_def::{TyData, TyId, TyVar},
     unify::{InferenceKey, UnificationStore, UnificationTableBase},
 };
-use crate::{ty::ty_def::collect_variables, HirAnalysisDb};
+use crate::{HirAnalysisDb, ty::ty_def::collect_variables};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Canonical<T> {

@@ -13,9 +13,9 @@ pub(super) use expr::TraitOps;
 use hir::{
     hir_def::{Body, Expr, ExprId, Func, LitKind, Partial, Pat, PatId, PathId, TypeId as HirTyId},
     span::{
-        expr::LazyExprSpan, pat::LazyPatSpan, path::LazyPathSpan, types::LazyTySpan, DynLazySpan,
+        DynLazySpan, expr::LazyExprSpan, pat::LazyPatSpan, path::LazyPathSpan, types::LazyTySpan,
     },
-    visitor::{walk_expr, walk_pat, Visitor, VisitorCtxt},
+    visitor::{Visitor, VisitorCtxt, walk_expr, walk_pat},
 };
 
 use rustc_hash::{FxHashMap, FxHashSet};
@@ -32,11 +32,11 @@ use super::{
 };
 use crate::ty::{normalize::normalize_ty, ty_error::collect_ty_lower_errors};
 use crate::{
-    name_resolution::{
-        diagnostics::PathResDiag, resolve_path_with_observer, PathRes, PathResError,
-    },
-    ty::ty_def::{inference_keys, TyFlags},
     HirAnalysisDb,
+    name_resolution::{
+        PathRes, PathResError, diagnostics::PathResDiag, resolve_path_with_observer,
+    },
+    ty::ty_def::{TyFlags, inference_keys},
 };
 
 #[salsa::tracked(return_ref)]
@@ -416,13 +416,13 @@ impl<'db> Visitor<'db> for TyCheckerFinalizer<'db> {
 
         // We need this additional check for method call because the callable type is
         // not tied to the expression type.
-        if let Expr::MethodCall(..) = expr_data {
-            if let Some(callable) = self.body.callable_expr(expr) {
-                let callable_ty = callable.ty(self.db);
-                let span = ctxt.span().unwrap().into_method_call_expr().method_name();
-                self.check_unknown(callable_ty, span.clone().into());
-                self.check_wf(callable_ty, span.into())
-            }
+        if let Expr::MethodCall(..) = expr_data
+            && let Some(callable) = self.body.callable_expr(expr)
+        {
+            let callable_ty = callable.ty(self.db);
+            let span = ctxt.span().unwrap().into_method_call_expr().method_name();
+            self.check_unknown(callable_ty, span.clone().into());
+            self.check_wf(callable_ty, span.into())
         }
 
         walk_expr(self, ctxt, expr);

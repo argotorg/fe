@@ -3,8 +3,8 @@ use camino::Utf8Path;
 use codespan_reporting::files as cs_files;
 use common::{diagnostics::CompleteDiagnostic, file::File};
 use driver::DriverDataBase;
-use hir::lower::map_file_to_mod;
 use hir::Ingot;
+use hir::lower::map_file_to_mod;
 use hir_analysis::analysis_pass::{AnalysisPassManager, ParsingPass};
 use hir_analysis::name_resolution::ImportAnalysisPass;
 use hir_analysis::ty::{

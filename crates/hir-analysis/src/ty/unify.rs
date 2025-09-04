@@ -11,11 +11,11 @@ use super::{
     binder::Binder,
     fold::{TyFoldable, TyFolder},
     trait_def::{Implementor, TraitInstId},
-    ty_def::{inference_keys, ApplicableTyProp, Kind, TyData, TyId, TyVar, TyVarSort},
+    ty_def::{ApplicableTyProp, Kind, TyData, TyId, TyVar, TyVarSort, inference_keys},
 };
 use crate::{
-    ty::const_ty::{ConstTyData, EvaluatedConstTy},
     HirAnalysisDb,
+    ty::const_ty::{ConstTyData, EvaluatedConstTy},
 };
 
 pub(crate) type UnificationTable<'db> = UnificationTableBase<'db, InPlace<InferenceKey<'db>>>;

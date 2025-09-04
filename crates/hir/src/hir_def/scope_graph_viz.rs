@@ -1,14 +1,14 @@
 use std::{
-    collections::{hash_map::Entry, VecDeque},
+    collections::{VecDeque, hash_map::Entry},
     io,
 };
 
-use cranelift_entity::{entity_impl, PrimaryMap};
+use cranelift_entity::{PrimaryMap, entity_impl};
 use dot2::label::Text;
 use rustc_hash::{FxHashMap, FxHashSet};
 
 use super::scope_graph::{EdgeKind, ScopeGraph, ScopeId};
-use crate::{hir_def::ItemKind, HirDb};
+use crate::{HirDb, hir_def::ItemKind};
 
 type NodeId = usize;
 

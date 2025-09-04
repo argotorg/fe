@@ -24,8 +24,10 @@ where
     T: salsa::Update,
 {
     unsafe fn maybe_update(old_pointer: *mut Self, new_value: Self) -> bool {
-        let old_value = unsafe { &mut *old_pointer };
-        T::maybe_update(&mut old_value.value, new_value.value)
+        unsafe {
+            let old_value = &mut *old_pointer;
+            T::maybe_update(&mut old_value.value, new_value.value)
+        }
     }
 }
 

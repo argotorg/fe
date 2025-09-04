@@ -31,10 +31,10 @@ impl Workspace {
     ) -> Result<File, InputIndexError> {
         // Check if the file is already associated with another URL
         let paths = self.paths(db);
-        if let Some(existing_url) = paths.get(&file) {
-            if existing_url != &url {
-                return Err(InputIndexError::CannotReuseInput);
-            }
+        if let Some(existing_url) = paths.get(&file)
+            && existing_url != &url
+        {
+            return Err(InputIndexError::CannotReuseInput);
         }
 
         let files = self.files(db);

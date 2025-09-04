@@ -1,15 +1,15 @@
 use hir::{
-    hir_def::{scope_graph::ScopeId, PathId, TypeId},
+    hir_def::{PathId, TypeId, scope_graph::ScopeId},
     span::{path::LazyPathSpan, types::LazyTySpan},
-    visitor::{prelude::DynLazySpan, walk_path, walk_type, Visitor, VisitorCtxt},
+    visitor::{Visitor, VisitorCtxt, prelude::DynLazySpan, walk_path, walk_type},
 };
 
 use crate::{
+    HirAnalysisDb,
     name_resolution::{
-        diagnostics::PathResDiag, resolve_path_with_observer, ExpectedPathKind, PathRes,
+        ExpectedPathKind, PathRes, diagnostics::PathResDiag, resolve_path_with_observer,
     },
     ty::visitor::TyVisitor,
-    HirAnalysisDb,
 };
 
 use super::{

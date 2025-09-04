@@ -5,14 +5,13 @@ use unwrap_infallible::UnwrapInfallible;
 use crate::{ExpectedKind, ParseError, SyntaxKind};
 
 use super::{
-    define_scope,
+    ErrProof, Parser, Recovery, define_scope,
     expr::parse_expr,
     expr_atom::{BlockExprScope, LitExprScope},
     parse_list,
     path::PathScope,
     token_stream::TokenStream,
     type_::{is_type_start, parse_type},
-    ErrProof, Parser, Recovery,
 };
 
 define_scope! {

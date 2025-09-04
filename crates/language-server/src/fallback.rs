@@ -57,10 +57,10 @@ where
         + CanHandle<AnyNotification>
         + CanHandle<AnyEvent>,
     B: LspService<
-        Response = Value,
-        Error = ResponseError,
-        Future = Pin<Box<dyn Future<Output = Result<Value, ResponseError>> + Send + 'static>>,
-    >,
+            Response = Value,
+            Error = ResponseError,
+            Future = Pin<Box<dyn Future<Output = Result<Value, ResponseError>> + Send + 'static>>,
+        >,
 {
     fn notify(&mut self, notif: AnyNotification) -> ControlFlow<async_lsp::Result<()>> {
         if self.primary.can_handle(&notif) {

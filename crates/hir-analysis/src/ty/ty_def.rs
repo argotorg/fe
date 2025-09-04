@@ -9,9 +9,9 @@ use common::{
 };
 use hir::{
     hir_def::{
+        Body, Enum, GenericParamOwner, IdentId, IntegerId, PathId, TypeAlias as HirTypeAlias,
         prim_ty::{IntTy as HirIntTy, PrimTy as HirPrimTy, UintTy as HirUintTy},
         scope_graph::ScopeId,
-        Body, Enum, GenericParamOwner, IdentId, IntegerId, PathId, TypeAlias as HirTypeAlias,
     },
     span::DynLazySpan,
 };
@@ -33,8 +33,8 @@ use super::{
     visitor::{TyVisitable, TyVisitor},
 };
 use crate::{
-    ty::{adt_def::AdtRef, trait_resolution::check_ty_wf, ty_error::emit_invalid_ty_error},
     HirAnalysisDb,
+    ty::{adt_def::AdtRef, trait_resolution::check_ty_wf, ty_error::emit_invalid_ty_error},
 };
 
 #[salsa::interned]
@@ -472,7 +472,7 @@ impl<'db> TyId<'db> {
 
     /// Check if this type contains an associated type of a type parameter
     pub fn contains_assoc_ty_of_param(self, db: &'db dyn HirAnalysisDb) -> bool {
-        use crate::ty::visitor::{walk_ty, TyVisitable, TyVisitor};
+        use crate::ty::visitor::{TyVisitable, TyVisitor, walk_ty};
 
         struct AssocTyOfParamChecker<'db> {
             db: &'db dyn HirAnalysisDb,

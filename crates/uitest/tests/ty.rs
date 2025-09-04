@@ -1,5 +1,5 @@
 use common::InputDb;
-use dir_test::{dir_test, Fixture};
+use dir_test::{Fixture, dir_test};
 use driver::DriverDataBase;
 use test_utils::snap_test;
 

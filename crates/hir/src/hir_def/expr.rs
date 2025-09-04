@@ -1,7 +1,7 @@
 use cranelift_entity::entity_impl;
 
 use super::{Body, GenericArgListId, IdentId, IntegerId, LitKind, Partial, PatId, PathId, StmtId};
-use crate::{span::expr::LazyExprSpan, HirDb};
+use crate::{HirDb, span::expr::LazyExprSpan};
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, salsa::Update)]
 pub enum Expr<'db> {

@@ -2,7 +2,7 @@ use common::file::File;
 use parser::GreenNode;
 use salsa::Accumulator;
 
-use crate::{hir_def::TopLevelMod, HirDb};
+use crate::{HirDb, hir_def::TopLevelMod};
 
 #[salsa::tracked]
 pub fn parse_file_impl<'db>(db: &'db dyn HirDb, top_mod: TopLevelMod<'db>) -> GreenNode {

@@ -3,12 +3,11 @@ use std::convert::identity;
 use crate::{ParseError, SyntaxKind};
 
 use super::{
-    define_scope,
+    Parser, define_scope,
     expr::{is_lshift, is_lt_eq},
     param::{GenericArgListScope, TraitRefScope},
     token_stream::TokenStream,
     type_::parse_type,
-    Parser,
 };
 
 define_scope! {
@@ -79,7 +78,7 @@ impl super::Parse for QualifiedTypeScope {
                     &[SyntaxKind::PathType],
                     None,
                     parser.end_of_prev_token,
-                ))
+                ));
             }
         }
         parser.bump_expected(SyntaxKind::AsKw);
