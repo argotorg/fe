@@ -7,7 +7,6 @@ use hir::{
     },
     span::DynLazySpan,
 };
-use if_chain::if_chain;
 use smallvec::{SmallVec, smallvec};
 use thin_vec::ThinVec;
 
@@ -715,14 +714,13 @@ where
         _ => None,
     });
 
-    let res = if_chain! {
-        if is_tail && resolve_tail_as_value;
-        if let Ok(res) = bucket.pick(NameDomain::VALUE);
-        then {
-            res.clone()
-        } else {
-            pick_type_domain_from_bucket(parent_res, bucket, path)?
-        }
+    let res = if is_tail
+        && resolve_tail_as_value
+        && let Ok(res) = bucket.pick(NameDomain::VALUE)
+    {
+        res.clone()
+    } else {
+        pick_type_domain_from_bucket(parent_res, bucket, path)?
     };
 
     let r = resolve_name_res(db, &res, parent_ty, path, scope, assumptions)?;
