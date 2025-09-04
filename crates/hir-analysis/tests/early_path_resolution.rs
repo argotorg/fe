@@ -1,9 +1,9 @@
 mod test_db;
 use std::path::Path;
 
-use dir_test::{dir_test, Fixture};
+use dir_test::{Fixture, dir_test};
 use fe_hir_analysis::{
-    name_resolution::{resolve_path, NameDomain},
+    name_resolution::{NameDomain, resolve_path},
     ty::trait_resolution::PredicateListId,
 };
 use hir::{

@@ -6,18 +6,19 @@
 
 use std::collections::hash_map::Entry;
 
-use hir::hir_def::{scope_graph::ScopeId, ImplTrait};
+use common::indexmap::IndexMap;
+use hir::hir_def::{ImplTrait, scope_graph::ScopeId};
 use rustc_hash::FxHashMap;
 
 use super::{
     canonical::Canonical,
     fold::{TyFoldable, TyFolder},
-    trait_resolution::{constraint::collect_constraints, PredicateListId},
+    trait_resolution::{PredicateListId, constraint::collect_constraints},
     ty_def::{AssocTy, TyData, TyId, TyParam},
     ty_lower::lower_hir_ty,
     unify::UnificationTable,
 };
-use crate::{name_resolution::find_associated_type, HirAnalysisDb};
+use crate::{HirAnalysisDb, name_resolution::find_associated_type};
 
 /// Normalizes a type by resolving all associated types to concrete types when possible.
 ///
@@ -58,15 +59,14 @@ impl<'db> TyFolder<'db> for TypeNormalizer<'db> {
     fn fold_ty(&mut self, ty: TyId<'db>) -> TyId<'db> {
         match ty.data(self.db) {
             TyData::TyParam(p @ TyParam { owner, .. }) if p.is_trait_self() => {
-                if let Some(impl_) = owner.resolve_to::<ImplTrait>(self.db) {
-                    if let Some(hir_ty) = impl_.ty(self.db).to_opt() {
-                        let impl_assumptions =
-                            collect_constraints(self.db, impl_.into()).instantiate_identity();
-                        let lowered =
-                            lower_hir_ty(self.db, hir_ty, impl_.scope(), impl_assumptions);
-                        // Continue folding the lowered type so it reaches normal form
-                        return self.fold_ty(lowered);
-                    }
+                if let Some(impl_) = owner.resolve_to::<ImplTrait>(self.db)
+                    && let Some(hir_ty) = impl_.ty(self.db).to_opt()
+                {
+                    let impl_assumptions =
+                        collect_constraints(self.db, impl_.into()).instantiate_identity();
+                    let lowered = lower_hir_ty(self.db, hir_ty, impl_.scope(), impl_assumptions);
+                    // Continue folding the lowered type so it reaches normal form
+                    return self.fold_ty(lowered);
                 }
                 ty
             }
@@ -116,19 +116,21 @@ impl<'db> TypeNormalizer<'db> {
             // requiring a second outer pass for resolution.
             let lhs_self = self.fold_ty(assoc.trait_.self_ty(self.db));
             let rhs_self = self.fold_ty(pred.self_ty(self.db));
-            if table.unify(lhs_self, rhs_self).is_ok() {
-                if let Some(&bound) = pred.assoc_type_bindings(self.db).get(&assoc.name) {
-                    return Some(bound.fold_with(&mut table));
-                }
+            if table.unify(lhs_self, rhs_self).is_ok()
+                && let Some(&bound) = pred.assoc_type_bindings(self.db).get(&assoc.name)
+            {
+                return Some(bound.fold_with(&mut table));
             }
         }
 
         // 3) Fall back to the general associated type search used by path resolution,
-        //    but restrict results to the same trait as `assoc`.
+        //    but restrict results to the same trait as `assoc` and deduplicate by
+        //    the resulting type. If all viable candidates agree on a single type,
+        //    normalize to that type.
         //    Search by the trait's self type: `SelfTy::assoc.name`.
         // Normalize the trait's self type before candidate search.
         let self_ty = self.fold_ty(assoc.trait_.self_ty(self.db));
-        let mut cands = find_associated_type(
+        let mut raw_cands = find_associated_type(
             self.db,
             self.scope,
             Canonical::new(self.db, self_ty),
@@ -137,11 +139,24 @@ impl<'db> TypeNormalizer<'db> {
         );
 
         // Keep only candidates from the same trait as `assoc`.
-        cands.retain(|(inst, _)| inst.def(self.db) == assoc.trait_.def(self.db));
-        match cands.as_slice() {
-            [] => None,
-            // Unique candidate: return it if it actually changes the type
-            [(_, t)] if *t != ty => Some(*t),
+        raw_cands.retain(|(inst, _)| inst.def(self.db) == assoc.trait_.def(self.db));
+
+        // Deduplicate by normalized result type (to handle cases where multiple
+        // impls yield the same associated type, e.g., Output = Self for all impls).
+        let mut dedup: IndexMap<TyId<'db>, ()> = IndexMap::new();
+        for (_, t) in raw_cands.into_iter() {
+            // Continue folding so nested associated types are also normalized
+            let norm_t = self.fold_ty(t);
+            dedup.entry(norm_t).or_insert(());
+        }
+
+        match dedup.len() {
+            0 => None,
+            1 => {
+                let (unique, _) = dedup.first().unwrap();
+                // Only replace if we're actually making progress
+                if *unique != ty { Some(*unique) } else { None }
+            }
             _ => None,
         }
     }

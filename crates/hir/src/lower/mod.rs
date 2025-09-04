@@ -2,17 +2,17 @@ use common::{file::File, ingot::Ingot};
 use num_bigint::BigUint;
 use num_traits::Num;
 use parser::{
-    ast::{self, prelude::*},
     SyntaxNode, SyntaxToken,
+    ast::{self, prelude::*},
 };
 
 use self::{item::lower_module_items, scope_builder::ScopeGraphBuilder};
 use crate::{
-    hir_def::{
-        module_tree_impl, scope_graph::ScopeGraph, ExprId, IdentId, IntegerId, ItemKind, LitKind,
-        ModuleTree, Partial, StringId, TopLevelMod, TrackedItemId, TrackedItemVariant,
-    },
     HirDb, LowerHirDb,
+    hir_def::{
+        ExprId, IdentId, IntegerId, ItemKind, LitKind, ModuleTree, Partial, StringId, TopLevelMod,
+        TrackedItemId, TrackedItemVariant, module_tree_impl, scope_graph::ScopeGraph,
+    },
 };
 pub use parse::parse_file_impl;
 

@@ -3,8 +3,8 @@ use parser::ast::{self, prelude::*};
 use super::FileLowerCtxt;
 use crate::{
     hir_def::{
-        item::*, AttrListId, Body, FuncParamListId, GenericParamListId, IdentId, TraitRefId,
-        TupleTypeId, TypeBound, TypeId, WhereClauseId,
+        AttrListId, Body, FuncParamListId, GenericParamListId, IdentId, TraitRefId, TupleTypeId,
+        TypeBound, TypeId, WhereClauseId, item::*,
     },
     span::HirOrigin,
 };

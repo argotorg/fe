@@ -16,23 +16,23 @@ use super::{
     canonical::{Canonical, Canonicalized},
     diagnostics::{TraitConstraintDiag, TyDiagCollection},
     fold::TyFoldable as _,
-    func_def::{lower_func, FuncDef},
+    func_def::{FuncDef, lower_func},
     trait_lower::collect_implementor_methods,
     trait_resolution::{
-        check_trait_inst_wf,
+        GoalSatisfiability, PredicateListId, WellFormedness, check_trait_inst_wf,
         constraint::{collect_constraints, collect_super_traits},
-        is_goal_satisfiable, GoalSatisfiability, PredicateListId, WellFormedness,
+        is_goal_satisfiable,
     },
     ty_def::{Kind, TyId},
     ty_lower::GenericParamTypeSet,
     unify::UnificationTable,
 };
 use crate::{
+    HirAnalysisDb,
     ty::{
         trait_lower::collect_trait_impls, trait_resolution::constraint::super_trait_cycle,
         ty_lower::collect_generic_params,
     },
-    HirAnalysisDb,
 };
 
 /// Returns [`TraitEnv`] for the given ingot.
@@ -157,7 +157,6 @@ pub(crate) fn impls_for_ty<'db>(
         if table.unify(key, ty.base_ty(db)).is_ok() {
             cands.push(insts);
         }
-
         table.rollback_to(snapshot);
     }
 
@@ -396,6 +395,19 @@ pub struct TraitInstId<'db> {
 }
 
 impl<'db> TraitInstId<'db> {
+    pub fn with_fresh_vars(
+        db: &'db dyn HirAnalysisDb,
+        def: TraitDef<'db>,
+        table: &mut UnificationTable<'db>,
+    ) -> Self {
+        let args = def
+            .params(db)
+            .iter()
+            .map(|ty| table.new_var_from_param(*ty))
+            .collect::<Vec<_>>();
+        Self::new(db, def, args, IndexMap::new())
+    }
+
     pub fn assoc_ty_bindings(self, db: &'db dyn HirAnalysisDb) -> Vec<(IdentId<'db>, TyId<'db>)> {
         self.assoc_type_bindings(db)
             .iter()
@@ -506,6 +518,7 @@ pub struct TraitDef<'db> {
 
 #[salsa::tracked]
 impl<'db> TraitDef<'db> {
+    #[salsa::tracked(return_ref)]
     pub fn methods(self, db: &'db dyn HirAnalysisDb) -> IndexMap<IdentId<'db>, TraitMethod<'db>> {
         let mut methods = IndexMap::<IdentId<'db>, TraitMethod<'db>>::default();
         for method in self.trait_(db).methods(db) {

@@ -1,7 +1,7 @@
 use hir::{
-    hir_def::{scope_graph::ScopeId, Attr, ItemKind},
-    span::LazySpan,
     HirDb, SpannedHirDb,
+    hir_def::{Attr, ItemKind, scope_graph::ScopeId},
+    span::LazySpan,
 };
 
 pub fn get_docstring(db: &dyn HirDb, scope: ScopeId) -> Option<String> {

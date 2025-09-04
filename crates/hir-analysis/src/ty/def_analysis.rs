@@ -5,9 +5,9 @@
 use common::indexmap::IndexSet;
 use hir::{
     hir_def::{
-        scope_graph::ScopeId, EnumVariant, FieldDef, FieldParent, Func, GenericParam,
-        GenericParamListId, GenericParamOwner, IdentId, Impl as HirImpl, ImplTrait, ItemKind,
-        PathId, Trait, TraitRefId, TypeAlias, TypeBound, TypeId as HirTyId, VariantKind,
+        EnumVariant, FieldDef, FieldParent, Func, GenericParam, GenericParamListId,
+        GenericParamOwner, IdentId, Impl as HirImpl, ImplTrait, ItemKind, PathId, Trait,
+        TraitRefId, TypeAlias, TypeBound, TypeId as HirTyId, VariantKind, scope_graph::ScopeId,
     },
     visitor::prelude::*,
 };
@@ -15,7 +15,7 @@ use rustc_hash::{FxHashMap, FxHashSet};
 use smallvec1::SmallVec;
 
 use super::{
-    adt_def::{lower_adt, AdtRef},
+    adt_def::{AdtRef, lower_adt},
     canonical::Canonical,
     const_ty::ConstTyId,
     diagnostics::{ImplDiag, TraitConstraintDiag, TraitLowerDiag, TyDiagCollection, TyLowerDiag},
@@ -23,33 +23,33 @@ use super::{
     method_cmp::compare_impl_method,
     method_table::probe_method,
     normalize::normalize_ty,
-    trait_def::{ingot_trait_env, Implementor, TraitDef},
-    trait_lower::{lower_trait, lower_trait_ref, TraitRefLowerError},
+    trait_def::{Implementor, TraitDef, ingot_trait_env},
+    trait_lower::{TraitRefLowerError, lower_trait, lower_trait_ref},
     trait_resolution::{
-        constraint::{collect_adt_constraints, collect_constraints, collect_func_def_constraints},
         PredicateListId,
+        constraint::{collect_adt_constraints, collect_constraints, collect_func_def_constraints},
     },
     ty_def::{InvalidCause, TyData, TyId, TyParam},
     ty_error::collect_ty_lower_errors,
     ty_lower::{collect_generic_params, lower_kind},
-    visitor::{walk_ty, TyVisitor},
+    visitor::{TyVisitor, walk_ty},
 };
 use crate::{
-    name_resolution::{diagnostics::PathResDiag, resolve_path, ExpectedPathKind, PathRes},
+    HirAnalysisDb,
+    name_resolution::{ExpectedPathKind, PathRes, diagnostics::PathResDiag, resolve_path},
     ty::{
         adt_def::AdtDef,
         binder::Binder,
         canonical::Canonicalized,
         func_def::lower_func,
-        trait_def::{does_impl_trait_conflict, TraitInstId},
+        trait_def::{TraitInstId, does_impl_trait_conflict},
         trait_lower::lower_impl_trait,
         trait_resolution::{
-            constraint::super_trait_cycle, is_goal_satisfiable, GoalSatisfiability,
+            GoalSatisfiability, constraint::super_trait_cycle, is_goal_satisfiable,
         },
         ty_lower::lower_hir_ty,
         visitor::TyVisitable,
     },
-    HirAnalysisDb,
 };
 
 /// This function implements analysis for the ADT definition.
@@ -1075,10 +1075,9 @@ pub(crate) fn check_recursive_adt_impl<'db>(
 
                 if let Some(cycle) =
                     check_recursive_adt_impl(db, lower_adt(db, field_adt_ref), &chain)
+                    && cycle.iter().any(|m| m.adt == adt)
                 {
-                    if cycle.iter().any(|m| m.adt == adt) {
-                        return Some(cycle);
-                    }
+                    return Some(cycle);
                 }
                 chain.pop();
             }
@@ -1149,7 +1148,7 @@ fn analyze_trait_ref<'db>(
                     ExpectedPathKind::Trait,
                 )?
                 .into(),
-            )
+            );
         }
 
         Err(TraitRefLowerError::InvalidDomain(res)) => {
@@ -1160,7 +1159,7 @@ fn analyze_trait_ref<'db>(
                     res.kind_name(),
                 )
                 .into(),
-            )
+            );
         }
 
         Err(TraitRefLowerError::Ignored) => {

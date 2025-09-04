@@ -1,5 +1,5 @@
 use super::{Body, IdentId, Partial, PathId};
-use crate::{hir_def::TypeId, HirDb};
+use crate::{HirDb, hir_def::TypeId};
 
 #[salsa::interned]
 #[derive(Debug)]

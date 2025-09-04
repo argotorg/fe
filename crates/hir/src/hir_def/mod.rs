@@ -182,15 +182,17 @@ where
     T: Update,
 {
     unsafe fn maybe_update(old_ptr: *mut Self, new_val: Self) -> bool {
-        use Partial::*;
+        unsafe {
+            use Partial::*;
 
-        let old_val = unsafe { &mut *old_ptr };
-        match (old_val, new_val) {
-            (Present(old), Present(new)) => T::maybe_update(old, new),
-            (Absent, Absent) => false,
-            (old_value, new_value) => {
-                *old_value = new_value;
-                true
+            let old_val = &mut *old_ptr;
+            match (old_val, new_val) {
+                (Present(old), Present(new)) => T::maybe_update(old, new),
+                (Absent, Absent) => false,
+                (old_value, new_value) => {
+                    *old_value = new_value;
+                    true
+                }
             }
         }
     }
@@ -213,6 +215,18 @@ impl<T> Partial<T> {
 
     pub fn is_present(&self) -> bool {
         matches!(self, Self::Present(_))
+    }
+}
+
+impl<T> PartialEq<T> for Partial<T>
+where
+    T: PartialEq,
+{
+    fn eq(&self, other: &T) -> bool {
+        match self {
+            Self::Present(a) => a == other,
+            _ => false,
+        }
     }
 }
 

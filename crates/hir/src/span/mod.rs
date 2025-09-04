@@ -1,14 +1,14 @@
 use common::diagnostics::Span;
-use parser::ast::{self, prelude::*, AstPtr, SyntaxNodePtr};
+use parser::ast::{self, AstPtr, SyntaxNodePtr, prelude::*};
 use salsa::Update;
 
 use crate::{
+    HirDb, SpannedHirDb,
     hir_def::{
         Body, Const, Contract, Enum, Func, Impl, ImplTrait, Mod, Struct, TopLevelMod, Trait,
         TypeAlias, Use,
     },
     lower::top_mod_ast,
-    HirDb, SpannedHirDb,
 };
 
 pub mod attr;
@@ -25,6 +25,7 @@ pub(crate) mod transition;
 
 pub mod lazy_spans {
     pub use super::{
+        DynLazySpan, LazyLitSpan, LazySpan, LazySpanAtom,
         attr::{
             LazyAttrArgListSpan, LazyAttrArgSpan, LazyAttrListSpan, LazyAttrSpan,
             LazyDocCommentAttrSpan, LazyNormalAttrSpan,
@@ -58,7 +59,6 @@ pub mod lazy_spans {
             LazyArrayTypeSpan, LazyPathTypeSpan, LazyPtrTypeSpan, LazyTupleTypeSpan, LazyTySpan,
         },
         use_tree::{LazyUseAliasSpan, LazyUsePathSegmentSpan, LazyUsePathSpan},
-        DynLazySpan, LazyLitSpan, LazySpan, LazySpanAtom,
     };
 }
 

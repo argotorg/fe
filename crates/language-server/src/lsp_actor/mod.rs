@@ -2,8 +2,8 @@ pub(crate) mod registration;
 pub(crate) mod service;
 
 use async_lsp::{
-    lsp_types::{notification::Notification, request::Request},
     AnyEvent, AnyNotification, AnyRequest, ResponseError,
+    lsp_types::{notification::Notification, request::Request},
 };
 use service::LspActorKey;
 use std::collections::HashMap;
@@ -27,9 +27,9 @@ pub trait LspActor<S: 'static> {
     fn handle_request<R: Request>(
         &mut self,
         handler: impl for<'a> AsyncFunc<'a, S, R::Params, R::Result, ResponseError>
-            + Send
-            + Sync
-            + 'static,
+        + Send
+        + Sync
+        + 'static,
     ) -> &mut Self;
     fn handle_notification<N: Notification>(
         &mut self,
@@ -42,16 +42,16 @@ pub trait LspActor<S: 'static> {
     fn handle_request_mut<R: Request>(
         &mut self,
         handler: impl for<'a> AsyncMutatingFunc<'a, S, R::Params, R::Result, ResponseError>
-            + Send
-            + Sync
-            + 'static,
+        + Send
+        + Sync
+        + 'static,
     ) -> &mut Self;
     fn handle_notification_mut<N: Notification>(
         &mut self,
         handler: impl for<'a> AsyncMutatingFunc<'a, S, N::Params, (), ResponseError>
-            + Send
-            + Sync
-            + 'static,
+        + Send
+        + Sync
+        + 'static,
     ) -> &mut Self;
     fn handle_event_mut<E: Send + Sync + 'static>(
         &mut self,
@@ -135,11 +135,11 @@ mod tests {
 
     use super::*;
     use act_locally::builder::ActorBuilder;
-    use async_lsp::{
-        lsp_types::{InitializeParams, InitializeResult},
-        RequestId,
-    };
     use async_lsp::{AnyNotification, AnyRequest, LspService, ResponseError};
+    use async_lsp::{
+        RequestId,
+        lsp_types::{InitializeParams, InitializeResult},
+    };
     use serde_json::json;
     use service::LspActorService;
     use std::ops::ControlFlow;

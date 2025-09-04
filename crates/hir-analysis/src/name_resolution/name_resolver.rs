@@ -3,14 +3,14 @@ use std::{cmp, fmt, mem};
 use bitflags::bitflags;
 use hir::{
     hir_def::{
+        Enum, EnumVariant, GenericParam, GenericParamOwner, HirIngot, IdentId, ItemKind, Mod,
+        TopLevelMod, Trait, Use,
         prim_ty::PrimTy,
         scope_graph::{
             AnonEdge, EdgeKind, FieldEdge, GenericParamEdge, IngotEdge, LexEdge, ModEdge, ScopeId,
             SelfEdge, SelfTyEdge, SuperEdge, TraitEdge, TraitTypeEdge, TypeEdge, ValueEdge,
             VariantEdge,
         },
-        Enum, EnumVariant, GenericParam, GenericParamOwner, HirIngot, IdentId, ItemKind, Mod,
-        TopLevelMod, Trait, Use,
     },
     span::DynLazySpan,
 };
@@ -533,11 +533,11 @@ impl<'db, 'a> NameResolver<'db, 'a> {
         }
 
         // 3. Look for the name in the glob imports.
-        if query.directive(self.db).allow_glob {
-            if let Some(imported) = self.importer.glob_imports(self.db, query.scope(self.db)) {
-                for res in imported.name_res_for(query.name(self.db)) {
-                    bucket.push(res);
-                }
+        if query.directive(self.db).allow_glob
+            && let Some(imported) = self.importer.glob_imports(self.db, query.scope(self.db))
+        {
+            for res in imported.name_res_for(query.name(self.db)) {
+                bucket.push(res);
             }
         }
 

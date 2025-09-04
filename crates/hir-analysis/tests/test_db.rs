@@ -13,8 +13,8 @@ use codespan_reporting::{
     },
 };
 use common::{
-    core::HasBuiltinCore, define_input_db, diagnostics::Span, file::File, indexmap::IndexMap,
-    InputDb,
+    InputDb, core::HasBuiltinCore, define_input_db, diagnostics::Span, file::File,
+    indexmap::IndexMap,
 };
 use driver::diagnostics::{CsDbWrapper, ToCsDiag};
 use fe_hir_analysis::{
@@ -26,10 +26,10 @@ use fe_hir_analysis::{
     },
 };
 use hir::{
+    SpannedHirDb,
     hir_def::TopLevelMod,
     lower,
     span::{DynLazySpan, LazySpan},
-    SpannedHirDb,
 };
 use rustc_hash::FxHashMap;
 use test_utils::url_utils::UrlExt;

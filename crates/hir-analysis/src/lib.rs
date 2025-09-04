@@ -1,4 +1,4 @@
-use hir::{span::DynLazySpan, HirDb};
+use hir::{HirDb, span::DynLazySpan};
 pub mod analysis_pass;
 pub mod diagnostics;
 

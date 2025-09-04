@@ -6,7 +6,7 @@ use hir::lower::map_file_to_mod;
 use tracing::info;
 
 use super::{
-    goto::{get_goto_target_scopes_for_cursor, Cursor},
+    goto::{Cursor, get_goto_target_scopes_for_cursor},
     item_info::{get_docstring, get_item_definition_markdown, get_item_path_markdown},
 };
 use crate::util::to_offset_from_position;
@@ -36,13 +36,11 @@ pub fn hover_helper(
             let definition_source = get_item_definition_markdown(db, item);
             let docs = get_docstring(db, *scope);
 
-            let result = [pretty_path, definition_source, docs]
+            [pretty_path, definition_source, docs]
                 .iter()
                 .filter_map(|info| info.clone().map(|info| format!("{info}\n")))
                 .collect::<Vec<String>>()
-                .join("\n");
-
-            result
+                .join("\n")
         })
         .collect::<Vec<String>>();
 

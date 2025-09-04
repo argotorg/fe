@@ -11,11 +11,11 @@ use super::{
     binder::Binder,
     fold::{TyFoldable, TyFolder},
     trait_def::{Implementor, TraitInstId},
-    ty_def::{inference_keys, ApplicableTyProp, Kind, TyData, TyId, TyVar, TyVarSort},
+    ty_def::{ApplicableTyProp, Kind, TyData, TyId, TyVar, TyVarSort, inference_keys},
 };
 use crate::{
-    ty::const_ty::{ConstTyData, EvaluatedConstTy},
     HirAnalysisDb,
+    ty::const_ty::{ConstTyData, EvaluatedConstTy},
 };
 
 pub(crate) type UnificationTable<'db> = UnificationTableBase<'db, InPlace<InferenceKey<'db>>>;
@@ -170,7 +170,15 @@ where
                     _ => Err(UnificationError::TypeMismatch),
                 }
             }
-            (TyData::AssocTy(t1), TyData::AssocTy(t2)) if t1 == t2 => Ok(()),
+            (TyData::AssocTy(a1), TyData::AssocTy(a2)) => {
+                if a1 == a2 {
+                    Ok(())
+                } else if a1.name == a2.name {
+                    self.unify(a1.trait_, a2.trait_)
+                } else {
+                    Err(UnificationError::TypeMismatch)
+                }
+            }
             (TyData::AssocTy(_), _) | (_, TyData::AssocTy(_)) => {
                 // Associated types should be resolved before unification
                 Err(UnificationError::TypeMismatch)

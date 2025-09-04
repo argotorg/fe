@@ -1,11 +1,11 @@
-use hir::hir_def::{scope_graph::ScopeId, ItemKind, Use};
+use hir::hir_def::{ItemKind, Use, scope_graph::ScopeId};
 
 use crate::{
+    HirAnalysisDb,
     ty::{
         const_ty::ConstTyData,
         ty_def::{TyBase, TyData, TyId},
     },
-    HirAnalysisDb,
 };
 
 /// Return `true` if the given `scope` is visible from `from_scope`.

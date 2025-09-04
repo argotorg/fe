@@ -1,0 +1,868 @@
+use super::ops::*
+use super::default::Default
+
+// Extern intrinsics for u8
+extern {
+    fn __add_u8(_: u8, _: u8) -> u8
+    fn __sub_u8(_: u8, _: u8) -> u8
+    fn __mul_u8(_: u8, _: u8) -> u8
+    fn __div_u8(_: u8, _: u8) -> u8
+    fn __rem_u8(_: u8, _: u8) -> u8
+    fn __pow_u8(_: u8, _: u8) -> u8
+    fn __shl_u8(_: u8, _: u8) -> u8
+    fn __shr_u8(_: u8, _: u8) -> u8
+    fn __bitand_u8(_: u8, _: u8) -> u8
+    fn __bitor_u8(_: u8, _: u8) -> u8
+    fn __bitxor_u8(_: u8, _: u8) -> u8
+
+    fn __eq_u8(_: u8, _: u8) -> bool
+    fn __ne_u8(_: u8, _: u8) -> bool
+    fn __lt_u8(_: u8, _: u8) -> bool
+    fn __le_u8(_: u8, _: u8) -> bool
+    fn __gt_u8(_: u8, _: u8) -> bool
+    fn __ge_u8(_: u8, _: u8) -> bool
+
+    fn __bitnot_u8(_: u8) -> u8
+}
+
+// Extern intrinsics for i8
+extern {
+    fn __add_i8(_: i8, _: i8) -> i8
+    fn __sub_i8(_: i8, _: i8) -> i8
+    fn __mul_i8(_: i8, _: i8) -> i8
+    fn __div_i8(_: i8, _: i8) -> i8
+    fn __rem_i8(_: i8, _: i8) -> i8
+    fn __pow_i8(_: i8, _: i8) -> i8
+    fn __shl_i8(_: i8, _: i8) -> i8
+    fn __shr_i8(_: i8, _: i8) -> i8
+    fn __bitand_i8(_: i8, _: i8) -> i8
+    fn __bitor_i8(_: i8, _: i8) -> i8
+    fn __bitxor_i8(_: i8, _: i8) -> i8
+
+    fn __eq_i8(_: i8, _: i8) -> bool
+    fn __ne_i8(_: i8, _: i8) -> bool
+    fn __lt_i8(_: i8, _: i8) -> bool
+    fn __le_i8(_: i8, _: i8) -> bool
+    fn __gt_i8(_: i8, _: i8) -> bool
+    fn __ge_i8(_: i8, _: i8) -> bool
+
+    fn __neg_i8(_: i8) -> i8
+    fn __bitnot_i8(_: i8) -> i8
+}
+
+// Extern intrinsics for i16
+extern {
+    fn __add_i16(_: i16, _: i16) -> i16
+    fn __sub_i16(_: i16, _: i16) -> i16
+    fn __mul_i16(_: i16, _: i16) -> i16
+    fn __div_i16(_: i16, _: i16) -> i16
+    fn __rem_i16(_: i16, _: i16) -> i16
+    fn __pow_i16(_: i16, _: i16) -> i16
+    fn __shl_i16(_: i16, _: i16) -> i16
+    fn __shr_i16(_: i16, _: i16) -> i16
+    fn __bitand_i16(_: i16, _: i16) -> i16
+    fn __bitor_i16(_: i16, _: i16) -> i16
+    fn __bitxor_i16(_: i16, _: i16) -> i16
+
+    fn __eq_i16(_: i16, _: i16) -> bool
+    fn __ne_i16(_: i16, _: i16) -> bool
+    fn __lt_i16(_: i16, _: i16) -> bool
+    fn __le_i16(_: i16, _: i16) -> bool
+    fn __gt_i16(_: i16, _: i16) -> bool
+    fn __ge_i16(_: i16, _: i16) -> bool
+
+    fn __neg_i16(_: i16) -> i16
+    fn __bitnot_i16(_: i16) -> i16
+}
+
+// Extern intrinsics for u16
+extern {
+    fn __add_u16(_: u16, _: u16) -> u16
+    fn __sub_u16(_: u16, _: u16) -> u16
+    fn __mul_u16(_: u16, _: u16) -> u16
+    fn __div_u16(_: u16, _: u16) -> u16
+    fn __rem_u16(_: u16, _: u16) -> u16
+    fn __pow_u16(_: u16, _: u16) -> u16
+    fn __shl_u16(_: u16, _: u16) -> u16
+    fn __shr_u16(_: u16, _: u16) -> u16
+    fn __bitand_u16(_: u16, _: u16) -> u16
+    fn __bitor_u16(_: u16, _: u16) -> u16
+    fn __bitxor_u16(_: u16, _: u16) -> u16
+
+    fn __eq_u16(_: u16, _: u16) -> bool
+    fn __ne_u16(_: u16, _: u16) -> bool
+    fn __lt_u16(_: u16, _: u16) -> bool
+    fn __le_u16(_: u16, _: u16) -> bool
+    fn __gt_u16(_: u16, _: u16) -> bool
+    fn __ge_u16(_: u16, _: u16) -> bool
+
+    fn __bitnot_u16(_: u16) -> u16
+}
+
+// Extern intrinsics for i32
+extern {
+    fn __add_i32(_: i32, _: i32) -> i32
+    fn __sub_i32(_: i32, _: i32) -> i32
+    fn __mul_i32(_: i32, _: i32) -> i32
+    fn __div_i32(_: i32, _: i32) -> i32
+    fn __rem_i32(_: i32, _: i32) -> i32
+    fn __pow_i32(_: i32, _: i32) -> i32
+    fn __shl_i32(_: i32, _: i32) -> i32
+    fn __shr_i32(_: i32, _: i32) -> i32
+    fn __bitand_i32(_: i32, _: i32) -> i32
+    fn __bitor_i32(_: i32, _: i32) -> i32
+    fn __bitxor_i32(_: i32, _: i32) -> i32
+
+    fn __eq_i32(_: i32, _: i32) -> bool
+    fn __ne_i32(_: i32, _: i32) -> bool
+    fn __lt_i32(_: i32, _: i32) -> bool
+    fn __le_i32(_: i32, _: i32) -> bool
+    fn __gt_i32(_: i32, _: i32) -> bool
+    fn __ge_i32(_: i32, _: i32) -> bool
+
+    fn __neg_i32(_: i32) -> i32
+    fn __bitnot_i32(_: i32) -> i32
+}
+
+// Extern intrinsics for u32
+extern {
+    fn __add_u32(_: u32, _: u32) -> u32
+    fn __sub_u32(_: u32, _: u32) -> u32
+    fn __mul_u32(_: u32, _: u32) -> u32
+    fn __div_u32(_: u32, _: u32) -> u32
+    fn __rem_u32(_: u32, _: u32) -> u32
+    fn __pow_u32(_: u32, _: u32) -> u32
+    fn __shl_u32(_: u32, _: u32) -> u32
+    fn __shr_u32(_: u32, _: u32) -> u32
+    fn __bitand_u32(_: u32, _: u32) -> u32
+    fn __bitor_u32(_: u32, _: u32) -> u32
+    fn __bitxor_u32(_: u32, _: u32) -> u32
+
+    fn __eq_u32(_: u32, _: u32) -> bool
+    fn __ne_u32(_: u32, _: u32) -> bool
+    fn __lt_u32(_: u32, _: u32) -> bool
+    fn __le_u32(_: u32, _: u32) -> bool
+    fn __gt_u32(_: u32, _: u32) -> bool
+    fn __ge_u32(_: u32, _: u32) -> bool
+
+    fn __bitnot_u32(_: u32) -> u32
+}
+
+// Extern intrinsics for i64
+extern {
+    fn __add_i64(_: i64, _: i64) -> i64
+    fn __sub_i64(_: i64, _: i64) -> i64
+    fn __mul_i64(_: i64, _: i64) -> i64
+    fn __div_i64(_: i64, _: i64) -> i64
+    fn __rem_i64(_: i64, _: i64) -> i64
+    fn __pow_i64(_: i64, _: i64) -> i64
+    fn __shl_i64(_: i64, _: i64) -> i64
+    fn __shr_i64(_: i64, _: i64) -> i64
+    fn __bitand_i64(_: i64, _: i64) -> i64
+    fn __bitor_i64(_: i64, _: i64) -> i64
+    fn __bitxor_i64(_: i64, _: i64) -> i64
+
+    fn __eq_i64(_: i64, _: i64) -> bool
+    fn __ne_i64(_: i64, _: i64) -> bool
+    fn __lt_i64(_: i64, _: i64) -> bool
+    fn __le_i64(_: i64, _: i64) -> bool
+    fn __gt_i64(_: i64, _: i64) -> bool
+    fn __ge_i64(_: i64, _: i64) -> bool
+
+    fn __neg_i64(_: i64) -> i64
+     fn __bitnot_i64(_: i64) -> i64
+}
+
+// Extern intrinsics for i128
+extern {
+    fn __add_i128(_: i128, _: i128) -> i128
+    fn __sub_i128(_: i128, _: i128) -> i128
+    fn __mul_i128(_: i128, _: i128) -> i128
+    fn __div_i128(_: i128, _: i128) -> i128
+    fn __rem_i128(_: i128, _: i128) -> i128
+    fn __pow_i128(_: i128, _: i128) -> i128
+    fn __shl_i128(_: i128, _: i128) -> i128
+    fn __shr_i128(_: i128, _: i128) -> i128
+    fn __bitand_i128(_: i128, _: i128) -> i128
+    fn __bitor_i128(_: i128, _: i128) -> i128
+    fn __bitxor_i128(_: i128, _: i128) -> i128
+
+    fn __eq_i128(_: i128, _: i128) -> bool
+    fn __ne_i128(_: i128, _: i128) -> bool
+    fn __lt_i128(_: i128, _: i128) -> bool
+    fn __le_i128(_: i128, _: i128) -> bool
+    fn __gt_i128(_: i128, _: i128) -> bool
+    fn __ge_i128(_: i128, _: i128) -> bool
+
+    fn __neg_i128(_: i128) -> i128
+    fn __bitnot_i128(_: i128) -> i128
+}
+
+// Extern intrinsics for u64
+extern {
+    fn __add_u64(_: u64, _: u64) -> u64
+    fn __sub_u64(_: u64, _: u64) -> u64
+    fn __mul_u64(_: u64, _: u64) -> u64
+    fn __div_u64(_: u64, _: u64) -> u64
+    fn __rem_u64(_: u64, _: u64) -> u64
+    fn __pow_u64(_: u64, _: u64) -> u64
+    fn __shl_u64(_: u64, _: u64) -> u64
+    fn __shr_u64(_: u64, _: u64) -> u64
+    fn __bitand_u64(_: u64, _: u64) -> u64
+    fn __bitor_u64(_: u64, _: u64) -> u64
+    fn __bitxor_u64(_: u64, _: u64) -> u64
+
+    fn __eq_u64(_: u64, _: u64) -> bool
+    fn __ne_u64(_: u64, _: u64) -> bool
+    fn __lt_u64(_: u64, _: u64) -> bool
+    fn __le_u64(_: u64, _: u64) -> bool
+    fn __gt_u64(_: u64, _: u64) -> bool
+    fn __ge_u64(_: u64, _: u64) -> bool
+
+     fn __bitnot_u64(_: u64) -> u64
+}
+
+// Extern intrinsics for u128
+extern {
+    fn __add_u128(_: u128, _: u128) -> u128
+    fn __sub_u128(_: u128, _: u128) -> u128
+    fn __mul_u128(_: u128, _: u128) -> u128
+    fn __div_u128(_: u128, _: u128) -> u128
+    fn __rem_u128(_: u128, _: u128) -> u128
+    fn __pow_u128(_: u128, _: u128) -> u128
+    fn __shl_u128(_: u128, _: u128) -> u128
+    fn __shr_u128(_: u128, _: u128) -> u128
+    fn __bitand_u128(_: u128, _: u128) -> u128
+    fn __bitor_u128(_: u128, _: u128) -> u128
+    fn __bitxor_u128(_: u128, _: u128) -> u128
+
+    fn __eq_u128(_: u128, _: u128) -> bool
+    fn __ne_u128(_: u128, _: u128) -> bool
+    fn __lt_u128(_: u128, _: u128) -> bool
+    fn __le_u128(_: u128, _: u128) -> bool
+    fn __gt_u128(_: u128, _: u128) -> bool
+    fn __ge_u128(_: u128, _: u128) -> bool
+
+    fn __bitnot_u128(_: u128) -> u128
+}
+
+// Extern intrinsics for usize
+extern {
+    fn __add_usize(_: usize, _: usize) -> usize
+    fn __sub_usize(_: usize, _: usize) -> usize
+    fn __mul_usize(_: usize, _: usize) -> usize
+    fn __div_usize(_: usize, _: usize) -> usize
+    fn __rem_usize(_: usize, _: usize) -> usize
+    fn __pow_usize(_: usize, _: usize) -> usize
+    fn __shl_usize(_: usize, _: usize) -> usize
+    fn __shr_usize(_: usize, _: usize) -> usize
+    fn __bitand_usize(_: usize, _: usize) -> usize
+    fn __bitor_usize(_: usize, _: usize) -> usize
+    fn __bitxor_usize(_: usize, _: usize) -> usize
+
+    fn __eq_usize(_: usize, _: usize) -> bool
+    fn __ne_usize(_: usize, _: usize) -> bool
+    fn __lt_usize(_: usize, _: usize) -> bool
+    fn __le_usize(_: usize, _: usize) -> bool
+    fn __gt_usize(_: usize, _: usize) -> bool
+    fn __ge_usize(_: usize, _: usize) -> bool
+
+     fn __bitnot_usize(_: usize) -> usize
+}
+
+// Extern intrinsics for i256
+extern {
+    fn __add_i256(_: i256, _: i256) -> i256
+    fn __sub_i256(_: i256, _: i256) -> i256
+    fn __mul_i256(_: i256, _: i256) -> i256
+    fn __div_i256(_: i256, _: i256) -> i256
+    fn __rem_i256(_: i256, _: i256) -> i256
+    fn __pow_i256(_: i256, _: i256) -> i256
+    fn __shl_i256(_: i256, _: i256) -> i256
+    fn __shr_i256(_: i256, _: i256) -> i256
+    fn __bitand_i256(_: i256, _: i256) -> i256
+    fn __bitor_i256(_: i256, _: i256) -> i256
+    fn __bitxor_i256(_: i256, _: i256) -> i256
+
+    fn __eq_i256(_: i256, _: i256) -> bool
+    fn __ne_i256(_: i256, _: i256) -> bool
+    fn __lt_i256(_: i256, _: i256) -> bool
+    fn __le_i256(_: i256, _: i256) -> bool
+    fn __gt_i256(_: i256, _: i256) -> bool
+    fn __ge_i256(_: i256, _: i256) -> bool
+
+    fn __neg_i256(_: i256) -> i256
+    fn __bitnot_i256(_: i256) -> i256
+}
+
+// Extern intrinsics for u256
+extern {
+    fn __add_u256(_: u256, _: u256) -> u256
+    fn __sub_u256(_: u256, _: u256) -> u256
+    fn __mul_u256(_: u256, _: u256) -> u256
+    fn __div_u256(_: u256, _: u256) -> u256
+    fn __rem_u256(_: u256, _: u256) -> u256
+    fn __pow_u256(_: u256, _: u256) -> u256
+    fn __shl_u256(_: u256, _: u256) -> u256
+    fn __shr_u256(_: u256, _: u256) -> u256
+    fn __bitand_u256(_: u256, _: u256) -> u256
+    fn __bitor_u256(_: u256, _: u256) -> u256
+    fn __bitxor_u256(_: u256, _: u256) -> u256
+
+    fn __eq_u256(_: u256, _: u256) -> bool
+    fn __ne_u256(_: u256, _: u256) -> bool
+    fn __lt_u256(_: u256, _: u256) -> bool
+    fn __le_u256(_: u256, _: u256) -> bool
+    fn __gt_u256(_: u256, _: u256) -> bool
+    fn __ge_u256(_: u256, _: u256) -> bool
+
+    fn __bitnot_u256(_: u256) -> u256
+}
+
+// Extern intrinsics for isize
+extern {
+    fn __add_isize(_: isize, _: isize) -> isize
+    fn __sub_isize(_: isize, _: isize) -> isize
+    fn __mul_isize(_: isize, _: isize) -> isize
+    fn __div_isize(_: isize, _: isize) -> isize
+    fn __rem_isize(_: isize, _: isize) -> isize
+    fn __pow_isize(_: isize, _: isize) -> isize
+    fn __shl_isize(_: isize, _: isize) -> isize
+    fn __shr_isize(_: isize, _: isize) -> isize
+    fn __bitand_isize(_: isize, _: isize) -> isize
+    fn __bitor_isize(_: isize, _: isize) -> isize
+    fn __bitxor_isize(_: isize, _: isize) -> isize
+
+    fn __eq_isize(_: isize, _: isize) -> bool
+    fn __ne_isize(_: isize, _: isize) -> bool
+    fn __lt_isize(_: isize, _: isize) -> bool
+    fn __le_isize(_: isize, _: isize) -> bool
+    fn __gt_isize(_: isize, _: isize) -> bool
+    fn __ge_isize(_: isize, _: isize) -> bool
+
+    fn __neg_isize(_: isize) -> isize
+    fn __bitnot_isize(_: isize) -> isize
+}
+
+// Extern intrinsics for bool
+extern {
+    fn __not_bool(_: bool) -> bool
+    fn __bitand_bool(_: bool, _: bool) -> bool
+    fn __bitor_bool(_: bool, _: bool) -> bool
+    fn __bitxor_bool(_: bool, _: bool) -> bool
+    fn __eq_bool(_: bool, _: bool) -> bool
+    fn __ne_bool(_: bool, _: bool) -> bool
+}
+
+// u8 impls
+impl BitNot for u8 { fn bit_not(self) -> u8 { __bitnot_u8(self) } }
+impl Add for u8 { fn add(self, _ other: u8) -> u8 { __add_u8(self, other) } }
+impl Sub for u8 { fn sub(self, _ other: u8) -> u8 { __sub_u8(self, other) } }
+impl Mul for u8 { fn mul(self, _ other: u8) -> u8 { __mul_u8(self, other) } }
+impl Div for u8 { fn div(self, _ other: u8) -> u8 { __div_u8(self, other) } }
+impl Rem for u8 { fn rem(self, _ other: u8) -> u8 { __rem_u8(self, other) } }
+impl Pow for u8 { fn pow(self, _ other: u8) -> u8 { __pow_u8(self, other) } }
+impl Shl for u8 { fn shl(self, _ other: u8) -> u8 { __shl_u8(self, other) } }
+impl Shr for u8 { fn shr(self, _ other: u8) -> u8 { __shr_u8(self, other) } }
+impl BitAnd for u8 { fn bitand(self, _ other: u8) -> u8 { __bitand_u8(self, other) } }
+impl BitOr for u8 { fn bitor(self, _ other: u8) -> u8 { __bitor_u8(self, other) } }
+impl BitXor for u8 { fn bitxor(self, _ other: u8) -> u8 { __bitxor_u8(self, other) } }
+impl Eq for u8 {
+    fn eq(self, _ other: u8) -> bool { __eq_u8(self, other) }
+    fn ne(self, _ other: u8) -> bool { __ne_u8(self, other) }
+}
+impl Ord for u8 {
+    fn lt(self, _ other: u8) -> bool { __lt_u8(self, other) }
+    fn le(self, _ other: u8) -> bool { __le_u8(self, other) }
+    fn gt(self, _ other: u8) -> bool { __gt_u8(self, other) }
+    fn ge(self, _ other: u8) -> bool { __ge_u8(self, other) }
+}
+impl AddAssign for u8 { fn add_assign(mut self, _ other: u8) { self = self + other } }
+impl SubAssign for u8 { fn sub_assign(mut self, _ other: u8) { self = self - other } }
+impl MulAssign for u8 { fn mul_assign(mut self, _ other: u8) { self = self * other } }
+impl DivAssign for u8 { fn div_assign(mut self, _ other: u8) { self = self / other } }
+impl RemAssign for u8 { fn rem_assign(mut self, _ other: u8) { self = self % other } }
+impl PowAssign for u8 { fn pow_assign(mut self, _ other: u8) { self = self ** other } }
+impl ShlAssign for u8 { fn shl_assign(mut self, _ other: u8) { self = self << other } }
+impl ShrAssign for u8 { fn shr_assign(mut self, _ other: u8) { self = self >> other } }
+impl BitAndAssign for u8 { fn bitand_assign(mut self, _ other: u8) { self = self & other } }
+impl BitOrAssign for u8 { fn bitor_assign(mut self, _ other: u8) { self = self | other } }
+impl BitXorAssign for u8 { fn bitxor_assign(mut self, _ other: u8) { self = self ^ other } }
+impl Default for u8 { fn default() -> Self { 0 } }
+
+// i8 impls
+impl Neg for i8 { fn neg(self) -> i8 { __neg_i8(self) } }
+impl BitNot for i8 { fn bit_not(self) -> i8 { __bitnot_i8(self) } }
+impl Add for i8 { fn add(self, _ other: i8) -> i8 { __add_i8(self, other) } }
+impl Sub for i8 { fn sub(self, _ other: i8) -> i8 { __sub_i8(self, other) } }
+impl Mul for i8 { fn mul(self, _ other: i8) -> i8 { __mul_i8(self, other) } }
+impl Div for i8 { fn div(self, _ other: i8) -> i8 { __div_i8(self, other) } }
+impl Rem for i8 { fn rem(self, _ other: i8) -> i8 { __rem_i8(self, other) } }
+impl Pow for i8 { fn pow(self, _ other: i8) -> i8 { __pow_i8(self, other) } }
+impl Shl for i8 { fn shl(self, _ other: i8) -> i8 { __shl_i8(self, other) } }
+impl Shr for i8 { fn shr(self, _ other: i8) -> i8 { __shr_i8(self, other) } }
+impl BitAnd for i8 { fn bitand(self, _ other: i8) -> i8 { __bitand_i8(self, other) } }
+impl BitOr for i8 { fn bitor(self, _ other: i8) -> i8 { __bitor_i8(self, other) } }
+impl BitXor for i8 { fn bitxor(self, _ other: i8) -> i8 { __bitxor_i8(self, other) } }
+impl Eq for i8 {
+    fn eq(self, _ other: i8) -> bool { __eq_i8(self, other) }
+    fn ne(self, _ other: i8) -> bool { __ne_i8(self, other) }
+}
+impl Ord for i8 {
+    fn lt(self, _ other: i8) -> bool { __lt_i8(self, other) }
+    fn le(self, _ other: i8) -> bool { __le_i8(self, other) }
+    fn gt(self, _ other: i8) -> bool { __gt_i8(self, other) }
+    fn ge(self, _ other: i8) -> bool { __ge_i8(self, other) }
+}
+impl AddAssign for i8 { fn add_assign(mut self, _ other: i8) { self = self + other } }
+impl SubAssign for i8 { fn sub_assign(mut self, _ other: i8) { self = self - other } }
+impl MulAssign for i8 { fn mul_assign(mut self, _ other: i8) { self = self * other } }
+impl DivAssign for i8 { fn div_assign(mut self, _ other: i8) { self = self / other } }
+impl RemAssign for i8 { fn rem_assign(mut self, _ other: i8) { self = self % other } }
+impl PowAssign for i8 { fn pow_assign(mut self, _ other: i8) { self = self ** other } }
+impl ShlAssign for i8 { fn shl_assign(mut self, _ other: i8) { self = self << other } }
+impl ShrAssign for i8 { fn shr_assign(mut self, _ other: i8) { self = self >> other } }
+impl BitAndAssign for i8 { fn bitand_assign(mut self, _ other: i8) { self = self & other } }
+impl BitOrAssign for i8 { fn bitor_assign(mut self, _ other: i8) { self = self | other } }
+impl BitXorAssign for i8 { fn bitxor_assign(mut self, _ other: i8) { self = self ^ other } }
+impl Default for i8 { fn default() -> Self { 0 } }
+
+// i16 impls
+impl Neg for i16 { fn neg(self) -> i16 { __neg_i16(self) } }
+impl BitNot for i16 { fn bit_not(self) -> i16 { __bitnot_i16(self) } }
+impl Add for i16 { fn add(self, _ other: i16) -> i16 { __add_i16(self, other) } }
+impl Sub for i16 { fn sub(self, _ other: i16) -> i16 { __sub_i16(self, other) } }
+impl Mul for i16 { fn mul(self, _ other: i16) -> i16 { __mul_i16(self, other) } }
+impl Div for i16 { fn div(self, _ other: i16) -> i16 { __div_i16(self, other) } }
+impl Rem for i16 { fn rem(self, _ other: i16) -> i16 { __rem_i16(self, other) } }
+impl Pow for i16 { fn pow(self, _ other: i16) -> i16 { __pow_i16(self, other) } }
+impl Shl for i16 { fn shl(self, _ other: i16) -> i16 { __shl_i16(self, other) } }
+impl Shr for i16 { fn shr(self, _ other: i16) -> i16 { __shr_i16(self, other) } }
+impl BitAnd for i16 { fn bitand(self, _ other: i16) -> i16 { __bitand_i16(self, other) } }
+impl BitOr for i16 { fn bitor(self, _ other: i16) -> i16 { __bitor_i16(self, other) } }
+impl BitXor for i16 { fn bitxor(self, _ other: i16) -> i16 { __bitxor_i16(self, other) } }
+impl Eq for i16 {
+    fn eq(self, _ other: i16) -> bool { __eq_i16(self, other) }
+    fn ne(self, _ other: i16) -> bool { __ne_i16(self, other) }
+}
+impl Ord for i16 {
+    fn lt(self, _ other: i16) -> bool { __lt_i16(self, other) }
+    fn le(self, _ other: i16) -> bool { __le_i16(self, other) }
+    fn gt(self, _ other: i16) -> bool { __gt_i16(self, other) }
+    fn ge(self, _ other: i16) -> bool { __ge_i16(self, other) }
+}
+impl AddAssign for i16 { fn add_assign(mut self, _ other: i16) { self = self + other } }
+impl SubAssign for i16 { fn sub_assign(mut self, _ other: i16) { self = self - other } }
+impl MulAssign for i16 { fn mul_assign(mut self, _ other: i16) { self = self * other } }
+impl DivAssign for i16 { fn div_assign(mut self, _ other: i16) { self = self / other } }
+impl RemAssign for i16 { fn rem_assign(mut self, _ other: i16) { self = self % other } }
+impl PowAssign for i16 { fn pow_assign(mut self, _ other: i16) { self = self ** other } }
+impl ShlAssign for i16 { fn shl_assign(mut self, _ other: i16) { self = self << other } }
+impl ShrAssign for i16 { fn shr_assign(mut self, _ other: i16) { self = self >> other } }
+impl BitAndAssign for i16 { fn bitand_assign(mut self, _ other: i16) { self = self & other } }
+impl BitOrAssign for i16 { fn bitor_assign(mut self, _ other: i16) { self = self | other } }
+impl BitXorAssign for i16 { fn bitxor_assign(mut self, _ other: i16) { self = self ^ other } }
+impl Default for i16 { fn default() -> Self { 0 } }
+
+// u16 impls
+impl BitNot for u16 { fn bit_not(self) -> u16 { __bitnot_u16(self) } }
+impl Add for u16 { fn add(self, _ other: u16) -> u16 { __add_u16(self, other) } }
+impl Sub for u16 { fn sub(self, _ other: u16) -> u16 { __sub_u16(self, other) } }
+impl Mul for u16 { fn mul(self, _ other: u16) -> u16 { __mul_u16(self, other) } }
+impl Div for u16 { fn div(self, _ other: u16) -> u16 { __div_u16(self, other) } }
+impl Rem for u16 { fn rem(self, _ other: u16) -> u16 { __rem_u16(self, other) } }
+impl Pow for u16 { fn pow(self, _ other: u16) -> u16 { __pow_u16(self, other) } }
+impl Shl for u16 { fn shl(self, _ other: u16) -> u16 { __shl_u16(self, other) } }
+impl Shr for u16 { fn shr(self, _ other: u16) -> u16 { __shr_u16(self, other) } }
+impl BitAnd for u16 { fn bitand(self, _ other: u16) -> u16 { __bitand_u16(self, other) } }
+impl BitOr for u16 { fn bitor(self, _ other: u16) -> u16 { __bitor_u16(self, other) } }
+impl BitXor for u16 { fn bitxor(self, _ other: u16) -> u16 { __bitxor_u16(self, other) } }
+impl Eq for u16 {
+    fn eq(self, _ other: u16) -> bool { __eq_u16(self, other) }
+    fn ne(self, _ other: u16) -> bool { __ne_u16(self, other) }
+}
+impl Ord for u16 {
+    fn lt(self, _ other: u16) -> bool { __lt_u16(self, other) }
+    fn le(self, _ other: u16) -> bool { __le_u16(self, other) }
+    fn gt(self, _ other: u16) -> bool { __gt_u16(self, other) }
+    fn ge(self, _ other: u16) -> bool { __ge_u16(self, other) }
+}
+impl AddAssign for u16 { fn add_assign(mut self, _ other: u16) { self = self + other } }
+impl SubAssign for u16 { fn sub_assign(mut self, _ other: u16) { self = self - other } }
+impl MulAssign for u16 { fn mul_assign(mut self, _ other: u16) { self = self * other } }
+impl DivAssign for u16 { fn div_assign(mut self, _ other: u16) { self = self / other } }
+impl RemAssign for u16 { fn rem_assign(mut self, _ other: u16) { self = self % other } }
+impl PowAssign for u16 { fn pow_assign(mut self, _ other: u16) { self = self ** other } }
+impl ShlAssign for u16 { fn shl_assign(mut self, _ other: u16) { self = self << other } }
+impl ShrAssign for u16 { fn shr_assign(mut self, _ other: u16) { self = self >> other } }
+impl BitAndAssign for u16 { fn bitand_assign(mut self, _ other: u16) { self = self & other } }
+impl BitOrAssign for u16 { fn bitor_assign(mut self, _ other: u16) { self = self | other } }
+impl BitXorAssign for u16 { fn bitxor_assign(mut self, _ other: u16) { self = self ^ other } }
+impl Default for u16 { fn default() -> Self { 0 } }
+
+
+// i32 impls
+impl Neg for i32 { fn neg(self) -> i32 { __neg_i32(self) } }
+impl BitNot for i32 { fn bit_not(self) -> i32 { __bitnot_i32(self) } }
+impl Add for i32 { fn add(self, _ other: i32) -> i32 { __add_i32(self, other) } }
+impl Sub for i32 { fn sub(self, _ other: i32) -> i32 { __sub_i32(self, other) } }
+impl Mul for i32 { fn mul(self, _ other: i32) -> i32 { __mul_i32(self, other) } }
+impl Div for i32 { fn div(self, _ other: i32) -> i32 { __div_i32(self, other) } }
+impl Rem for i32 { fn rem(self, _ other: i32) -> i32 { __rem_i32(self, other) } }
+impl Pow for i32 { fn pow(self, _ other: i32) -> i32 { __pow_i32(self, other) } }
+impl Shl for i32 { fn shl(self, _ other: i32) -> i32 { __shl_i32(self, other) } }
+impl Shr for i32 { fn shr(self, _ other: i32) -> i32 { __shr_i32(self, other) } }
+impl BitAnd for i32 { fn bitand(self, _ other: i32) -> i32 { __bitand_i32(self, other) } }
+impl BitOr for i32 { fn bitor(self, _ other: i32) -> i32 { __bitor_i32(self, other) } }
+impl BitXor for i32 { fn bitxor(self, _ other: i32) -> i32 { __bitxor_i32(self, other) } }
+impl Eq for i32 {
+    fn eq(self, _ other: i32) -> bool { __eq_i32(self, other) }
+    fn ne(self, _ other: i32) -> bool { __ne_i32(self, other) }
+}
+impl Ord for i32 {
+    fn lt(self, _ other: i32) -> bool { __lt_i32(self, other) }
+    fn le(self, _ other: i32) -> bool { __le_i32(self, other) }
+    fn gt(self, _ other: i32) -> bool { __gt_i32(self, other) }
+    fn ge(self, _ other: i32) -> bool { __ge_i32(self, other) }
+}
+impl AddAssign for i32 { fn add_assign(mut self, _ other: i32) { self = self + other } }
+impl SubAssign for i32 { fn sub_assign(mut self, _ other: i32) { self = self - other } }
+impl MulAssign for i32 { fn mul_assign(mut self, _ other: i32) { self = self * other } }
+impl DivAssign for i32 { fn div_assign(mut self, _ other: i32) { self = self / other } }
+impl RemAssign for i32 { fn rem_assign(mut self, _ other: i32) { self = self % other } }
+impl PowAssign for i32 { fn pow_assign(mut self, _ other: i32) { self = self ** other } }
+impl ShlAssign for i32 { fn shl_assign(mut self, _ other: i32) { self = self << other } }
+impl ShrAssign for i32 { fn shr_assign(mut self, _ other: i32) { self = self >> other } }
+impl BitAndAssign for i32 { fn bitand_assign(mut self, _ other: i32) { self = self & other } }
+impl BitOrAssign for i32 { fn bitor_assign(mut self, _ other: i32) { self = self | other } }
+impl BitXorAssign for i32 { fn bitxor_assign(mut self, _ other: i32) { self = self ^ other } }
+impl Default for i32 { fn default() -> Self { 0 } }
+
+// u32 impls
+impl BitNot for u32 { fn bit_not(self) -> u32 { __bitnot_u32(self) } }
+impl Add for u32 { fn add(self, _ other: u32) -> u32 { __add_u32(self, other) } }
+impl Sub for u32 { fn sub(self, _ other: u32) -> u32 { __sub_u32(self, other) } }
+impl Mul for u32 { fn mul(self, _ other: u32) -> u32 { __mul_u32(self, other) } }
+impl Div for u32 { fn div(self, _ other: u32) -> u32 { __div_u32(self, other) } }
+impl Rem for u32 { fn rem(self, _ other: u32) -> u32 { __rem_u32(self, other) } }
+impl Pow for u32 { fn pow(self, _ other: u32) -> u32 { __pow_u32(self, other) } }
+impl Shl for u32 { fn shl(self, _ other: u32) -> u32 { __shl_u32(self, other) } }
+impl Shr for u32 { fn shr(self, _ other: u32) -> u32 { __shr_u32(self, other) } }
+impl BitAnd for u32 { fn bitand(self, _ other: u32) -> u32 { __bitand_u32(self, other) } }
+impl BitOr for u32 { fn bitor(self, _ other: u32) -> u32 { __bitor_u32(self, other) } }
+impl BitXor for u32 { fn bitxor(self, _ other: u32) -> u32 { __bitxor_u32(self, other) } }
+impl Eq for u32 {
+    fn eq(self, _ other: u32) -> bool { __eq_u32(self, other) }
+    fn ne(self, _ other: u32) -> bool { __ne_u32(self, other) }
+}
+impl Ord for u32 {
+    fn lt(self, _ other: u32) -> bool { __lt_u32(self, other) }
+    fn le(self, _ other: u32) -> bool { __le_u32(self, other) }
+    fn gt(self, _ other: u32) -> bool { __gt_u32(self, other) }
+    fn ge(self, _ other: u32) -> bool { __ge_u32(self, other) }
+}
+impl AddAssign for u32 { fn add_assign(mut self, _ other: u32) { self = self + other } }
+impl SubAssign for u32 { fn sub_assign(mut self, _ other: u32) { self = self - other } }
+impl MulAssign for u32 { fn mul_assign(mut self, _ other: u32) { self = self * other } }
+impl DivAssign for u32 { fn div_assign(mut self, _ other: u32) { self = self / other } }
+impl RemAssign for u32 { fn rem_assign(mut self, _ other: u32) { self = self % other } }
+impl PowAssign for u32 { fn pow_assign(mut self, _ other: u32) { self = self ** other } }
+impl ShlAssign for u32 { fn shl_assign(mut self, _ other: u32) { self = self << other } }
+impl ShrAssign for u32 { fn shr_assign(mut self, _ other: u32) { self = self >> other } }
+impl BitAndAssign for u32 { fn bitand_assign(mut self, _ other: u32) { self = self & other } }
+impl BitOrAssign for u32 { fn bitor_assign(mut self, _ other: u32) { self = self | other } }
+impl BitXorAssign for u32 { fn bitxor_assign(mut self, _ other: u32) { self = self ^ other } }
+impl Default for u32 { fn default() -> Self { 0 } }
+
+// i64 impls
+impl Neg for i64 { fn neg(self) -> i64 { __neg_i64(self) } }
+impl BitNot for i64 { fn bit_not(self) -> i64 { __bitnot_i64(self) } }
+impl Add for i64 { fn add(self, _ other: i64) -> i64 { __add_i64(self, other) } }
+impl Sub for i64 { fn sub(self, _ other: i64) -> i64 { __sub_i64(self, other) } }
+impl Mul for i64 { fn mul(self, _ other: i64) -> i64 { __mul_i64(self, other) } }
+impl Div for i64 { fn div(self, _ other: i64) -> i64 { __div_i64(self, other) } }
+impl Rem for i64 { fn rem(self, _ other: i64) -> i64 { __rem_i64(self, other) } }
+impl Pow for i64 { fn pow(self, _ other: i64) -> i64 { __pow_i64(self, other) } }
+impl Shl for i64 { fn shl(self, _ other: i64) -> i64 { __shl_i64(self, other) } }
+impl Shr for i64 { fn shr(self, _ other: i64) -> i64 { __shr_i64(self, other) } }
+impl BitAnd for i64 { fn bitand(self, _ other: i64) -> i64 { __bitand_i64(self, other) } }
+impl BitOr for i64 { fn bitor(self, _ other: i64) -> i64 { __bitor_i64(self, other) } }
+impl BitXor for i64 { fn bitxor(self, _ other: i64) -> i64 { __bitxor_i64(self, other) } }
+impl Eq for i64 {
+    fn eq(self, _ other: i64) -> bool { __eq_i64(self, other) }
+    fn ne(self, _ other: i64) -> bool { __ne_i64(self, other) }
+}
+impl Ord for i64 {
+    fn lt(self, _ other: i64) -> bool { __lt_i64(self, other) }
+    fn le(self, _ other: i64) -> bool { __le_i64(self, other) }
+    fn gt(self, _ other: i64) -> bool { __gt_i64(self, other) }
+    fn ge(self, _ other: i64) -> bool { __ge_i64(self, other) }
+}
+impl AddAssign for i64 { fn add_assign(mut self, _ other: i64) { self = self + other } }
+impl SubAssign for i64 { fn sub_assign(mut self, _ other: i64) { self = self - other } }
+impl MulAssign for i64 { fn mul_assign(mut self, _ other: i64) { self = self * other } }
+impl DivAssign for i64 { fn div_assign(mut self, _ other: i64) { self = self / other } }
+impl RemAssign for i64 { fn rem_assign(mut self, _ other: i64) { self = self % other } }
+impl PowAssign for i64 { fn pow_assign(mut self, _ other: i64) { self = self ** other } }
+impl ShlAssign for i64 { fn shl_assign(mut self, _ other: i64) { self = self << other } }
+impl ShrAssign for i64 { fn shr_assign(mut self, _ other: i64) { self = self >> other } }
+impl BitAndAssign for i64 { fn bitand_assign(mut self, _ other: i64) { self = self & other } }
+impl BitOrAssign for i64 { fn bitor_assign(mut self, _ other: i64) { self = self | other } }
+impl BitXorAssign for i64 { fn bitxor_assign(mut self, _ other: i64) { self = self ^ other } }
+impl Default for i64 { fn default() -> Self { 0 } }
+
+// i128 impls
+impl Neg for i128 { fn neg(self) -> i128 { __neg_i128(self) } }
+impl BitNot for i128 { fn bit_not(self) -> i128 { __bitnot_i128(self) } }
+impl Add for i128 { fn add(self, _ other: i128) -> i128 { __add_i128(self, other) } }
+impl Sub for i128 { fn sub(self, _ other: i128) -> i128 { __sub_i128(self, other) } }
+impl Mul for i128 { fn mul(self, _ other: i128) -> i128 { __mul_i128(self, other) } }
+impl Div for i128 { fn div(self, _ other: i128) -> i128 { __div_i128(self, other) } }
+impl Rem for i128 { fn rem(self, _ other: i128) -> i128 { __rem_i128(self, other) } }
+impl Pow for i128 { fn pow(self, _ other: i128) -> i128 { __pow_i128(self, other) } }
+impl Shl for i128 { fn shl(self, _ other: i128) -> i128 { __shl_i128(self, other) } }
+impl Shr for i128 { fn shr(self, _ other: i128) -> i128 { __shr_i128(self, other) } }
+impl BitAnd for i128 { fn bitand(self, _ other: i128) -> i128 { __bitand_i128(self, other) } }
+impl BitOr for i128 { fn bitor(self, _ other: i128) -> i128 { __bitor_i128(self, other) } }
+impl BitXor for i128 { fn bitxor(self, _ other: i128) -> i128 { __bitxor_i128(self, other) } }
+impl Eq for i128 {
+    fn eq(self, _ other: i128) -> bool { __eq_i128(self, other) }
+    fn ne(self, _ other: i128) -> bool { __ne_i128(self, other) }
+}
+impl Ord for i128 {
+    fn lt(self, _ other: i128) -> bool { __lt_i128(self, other) }
+    fn le(self, _ other: i128) -> bool { __le_i128(self, other) }
+    fn gt(self, _ other: i128) -> bool { __gt_i128(self, other) }
+    fn ge(self, _ other: i128) -> bool { __ge_i128(self, other) }
+}
+impl AddAssign for i128 { fn add_assign(mut self, _ other: i128) { self = self + other } }
+impl SubAssign for i128 { fn sub_assign(mut self, _ other: i128) { self = self - other } }
+impl MulAssign for i128 { fn mul_assign(mut self, _ other: i128) { self = self * other } }
+impl DivAssign for i128 { fn div_assign(mut self, _ other: i128) { self = self / other } }
+impl RemAssign for i128 { fn rem_assign(mut self, _ other: i128) { self = self % other } }
+impl PowAssign for i128 { fn pow_assign(mut self, _ other: i128) { self = self ** other } }
+impl ShlAssign for i128 { fn shl_assign(mut self, _ other: i128) { self = self << other } }
+impl ShrAssign for i128 { fn shr_assign(mut self, _ other: i128) { self = self >> other } }
+impl BitAndAssign for i128 { fn bitand_assign(mut self, _ other: i128) { self = self & other } }
+impl BitOrAssign for i128 { fn bitor_assign(mut self, _ other: i128) { self = self | other } }
+impl BitXorAssign for i128 { fn bitxor_assign(mut self, _ other: i128) { self = self ^ other } }
+impl Default for i128 { fn default() -> Self { 0 } }
+
+// u64 impls
+impl BitNot for u64 { fn bit_not(self) -> u64 { __bitnot_u64(self) } }
+impl Add for u64 { fn add(self, _ other: u64) -> u64 { __add_u64(self, other) } }
+impl Sub for u64 { fn sub(self, _ other: u64) -> u64 { __sub_u64(self, other) } }
+impl Mul for u64 { fn mul(self, _ other: u64) -> u64 { __mul_u64(self, other) } }
+impl Div for u64 { fn div(self, _ other: u64) -> u64 { __div_u64(self, other) } }
+impl Rem for u64 { fn rem(self, _ other: u64) -> u64 { __rem_u64(self, other) } }
+impl Pow for u64 { fn pow(self, _ other: u64) -> u64 { __pow_u64(self, other) } }
+impl Shl for u64 { fn shl(self, _ other: u64) -> u64 { __shl_u64(self, other) } }
+impl Shr for u64 { fn shr(self, _ other: u64) -> u64 { __shr_u64(self, other) } }
+impl BitAnd for u64 { fn bitand(self, _ other: u64) -> u64 { __bitand_u64(self, other) } }
+impl BitOr for u64 { fn bitor(self, _ other: u64) -> u64 { __bitor_u64(self, other) } }
+impl BitXor for u64 { fn bitxor(self, _ other: u64) -> u64 { __bitxor_u64(self, other) } }
+impl Eq for u64 {
+    fn eq(self, _ other: u64) -> bool { __eq_u64(self, other) }
+    fn ne(self, _ other: u64) -> bool { __ne_u64(self, other) }
+}
+impl Ord for u64 {
+    fn lt(self, _ other: u64) -> bool { __lt_u64(self, other) }
+    fn le(self, _ other: u64) -> bool { __le_u64(self, other) }
+    fn gt(self, _ other: u64) -> bool { __gt_u64(self, other) }
+    fn ge(self, _ other: u64) -> bool { __ge_u64(self, other) }
+}
+impl AddAssign for u64 { fn add_assign(mut self, _ other: u64) { self = self + other } }
+impl SubAssign for u64 { fn sub_assign(mut self, _ other: u64) { self = self - other } }
+impl MulAssign for u64 { fn mul_assign(mut self, _ other: u64) { self = self * other } }
+impl DivAssign for u64 { fn div_assign(mut self, _ other: u64) { self = self / other } }
+impl RemAssign for u64 { fn rem_assign(mut self, _ other: u64) { self = self % other } }
+impl PowAssign for u64 { fn pow_assign(mut self, _ other: u64) { self = self ** other } }
+impl ShlAssign for u64 { fn shl_assign(mut self, _ other: u64) { self = self << other } }
+impl ShrAssign for u64 { fn shr_assign(mut self, _ other: u64) { self = self >> other } }
+impl BitAndAssign for u64 { fn bitand_assign(mut self, _ other: u64) { self = self & other } }
+impl BitOrAssign for u64 { fn bitor_assign(mut self, _ other: u64) { self = self | other } }
+impl BitXorAssign for u64 { fn bitxor_assign(mut self, _ other: u64) { self = self ^ other } }
+impl Default for u64 { fn default() -> Self { 0 } }
+
+// u128 impls
+impl BitNot for u128 { fn bit_not(self) -> u128 { __bitnot_u128(self) } }
+impl Add for u128 { fn add(self, _ other: u128) -> u128 { __add_u128(self, other) } }
+impl Sub for u128 { fn sub(self, _ other: u128) -> u128 { __sub_u128(self, other) } }
+impl Mul for u128 { fn mul(self, _ other: u128) -> u128 { __mul_u128(self, other) } }
+impl Div for u128 { fn div(self, _ other: u128) -> u128 { __div_u128(self, other) } }
+impl Rem for u128 { fn rem(self, _ other: u128) -> u128 { __rem_u128(self, other) } }
+impl Pow for u128 { fn pow(self, _ other: u128) -> u128 { __pow_u128(self, other) } }
+impl Shl for u128 { fn shl(self, _ other: u128) -> u128 { __shl_u128(self, other) } }
+impl Shr for u128 { fn shr(self, _ other: u128) -> u128 { __shr_u128(self, other) } }
+impl BitAnd for u128 { fn bitand(self, _ other: u128) -> u128 { __bitand_u128(self, other) } }
+impl BitOr for u128 { fn bitor(self, _ other: u128) -> u128 { __bitor_u128(self, other) } }
+impl BitXor for u128 { fn bitxor(self, _ other: u128) -> u128 { __bitxor_u128(self, other) } }
+impl Eq for u128 {
+    fn eq(self, _ other: u128) -> bool { __eq_u128(self, other) }
+    fn ne(self, _ other: u128) -> bool { __ne_u128(self, other) }
+}
+impl Ord for u128 {
+    fn lt(self, _ other: u128) -> bool { __lt_u128(self, other) }
+    fn le(self, _ other: u128) -> bool { __le_u128(self, other) }
+    fn gt(self, _ other: u128) -> bool { __gt_u128(self, other) }
+    fn ge(self, _ other: u128) -> bool { __ge_u128(self, other) }
+}
+impl AddAssign for u128 { fn add_assign(mut self, _ other: u128) { self = self + other } }
+impl SubAssign for u128 { fn sub_assign(mut self, _ other: u128) { self = self - other } }
+impl MulAssign for u128 { fn mul_assign(mut self, _ other: u128) { self = self * other } }
+impl DivAssign for u128 { fn div_assign(mut self, _ other: u128) { self = self / other } }
+impl RemAssign for u128 { fn rem_assign(mut self, _ other: u128) { self = self % other } }
+impl PowAssign for u128 { fn pow_assign(mut self, _ other: u128) { self = self ** other } }
+impl ShlAssign for u128 { fn shl_assign(mut self, _ other: u128) { self = self << other } }
+impl ShrAssign for u128 { fn shr_assign(mut self, _ other: u128) { self = self >> other } }
+impl BitAndAssign for u128 { fn bitand_assign(mut self, _ other: u128) { self = self & other } }
+impl BitOrAssign for u128 { fn bitor_assign(mut self, _ other: u128) { self = self | other } }
+impl BitXorAssign for u128 { fn bitxor_assign(mut self, _ other: u128) { self = self ^ other } }
+impl Default for u128 { fn default() -> Self { 0 } }
+
+// usize impls
+impl BitNot for usize { fn bit_not(self) -> usize { __bitnot_usize(self) } }
+impl Add for usize { fn add(self, _ other: usize) -> usize { __add_usize(self, other) } }
+impl Sub for usize { fn sub(self, _ other: usize) -> usize { __sub_usize(self, other) } }
+impl Mul for usize { fn mul(self, _ other: usize) -> usize { __mul_usize(self, other) } }
+impl Div for usize { fn div(self, _ other: usize) -> usize { __div_usize(self, other) } }
+impl Rem for usize { fn rem(self, _ other: usize) -> usize { __rem_usize(self, other) } }
+impl Pow for usize { fn pow(self, _ other: usize) -> usize { __pow_usize(self, other) } }
+impl Shl for usize { fn shl(self, _ other: usize) -> usize { __shl_usize(self, other) } }
+impl Shr for usize { fn shr(self, _ other: usize) -> usize { __shr_usize(self, other) } }
+impl BitAnd for usize { fn bitand(self, _ other: usize) -> usize { __bitand_usize(self, other) } }
+impl BitOr for usize { fn bitor(self, _ other: usize) -> usize { __bitor_usize(self, other) } }
+impl BitXor for usize { fn bitxor(self, _ other: usize) -> usize { __bitxor_usize(self, other) } }
+impl Eq for usize {
+    fn eq(self, _ other: usize) -> bool { __eq_usize(self, other) }
+    fn ne(self, _ other: usize) -> bool { __ne_usize(self, other) }
+}
+impl Ord for usize {
+    fn lt(self, _ other: usize) -> bool { __lt_usize(self, other) }
+    fn le(self, _ other: usize) -> bool { __le_usize(self, other) }
+    fn gt(self, _ other: usize) -> bool { __gt_usize(self, other) }
+    fn ge(self, _ other: usize) -> bool { __ge_usize(self, other) }
+}
+impl Default for usize { fn default() -> Self { 0 } }
+
+// i256 impls
+impl Neg for i256 { fn neg(self) -> i256 { __neg_i256(self) } }
+impl BitNot for i256 { fn bit_not(self) -> i256 { __bitnot_i256(self) } }
+impl Add for i256 { fn add(self, _ other: i256) -> i256 { __add_i256(self, other) } }
+impl Sub for i256 { fn sub(self, _ other: i256) -> i256 { __sub_i256(self, other) } }
+impl Mul for i256 { fn mul(self, _ other: i256) -> i256 { __mul_i256(self, other) } }
+impl Div for i256 { fn div(self, _ other: i256) -> i256 { __div_i256(self, other) } }
+impl Rem for i256 { fn rem(self, _ other: i256) -> i256 { __rem_i256(self, other) } }
+impl Pow for i256 { fn pow(self, _ other: i256) -> i256 { __pow_i256(self, other) } }
+impl Shl for i256 { fn shl(self, _ other: i256) -> i256 { __shl_i256(self, other) } }
+impl Shr for i256 { fn shr(self, _ other: i256) -> i256 { __shr_i256(self, other) } }
+impl BitAnd for i256 { fn bitand(self, _ other: i256) -> i256 { __bitand_i256(self, other) } }
+impl BitOr for i256 { fn bitor(self, _ other: i256) -> i256 { __bitor_i256(self, other) } }
+impl BitXor for i256 { fn bitxor(self, _ other: i256) -> i256 { __bitxor_i256(self, other) } }
+impl Eq for i256 {
+    fn eq(self, _ other: i256) -> bool { __eq_i256(self, other) }
+    fn ne(self, _ other: i256) -> bool { __ne_i256(self, other) }
+}
+impl Ord for i256 {
+    fn lt(self, _ other: i256) -> bool { __lt_i256(self, other) }
+    fn le(self, _ other: i256) -> bool { __le_i256(self, other) }
+    fn gt(self, _ other: i256) -> bool { __gt_i256(self, other) }
+    fn ge(self, _ other: i256) -> bool { __ge_i256(self, other) }
+}
+impl AddAssign for i256 { fn add_assign(mut self, _ other: i256) { self = self + other } }
+impl SubAssign for i256 { fn sub_assign(mut self, _ other: i256) { self = self - other } }
+impl MulAssign for i256 { fn mul_assign(mut self, _ other: i256) { self = self * other } }
+impl DivAssign for i256 { fn div_assign(mut self, _ other: i256) { self = self / other } }
+impl RemAssign for i256 { fn rem_assign(mut self, _ other: i256) { self = self % other } }
+impl PowAssign for i256 { fn pow_assign(mut self, _ other: i256) { self = self ** other } }
+impl ShlAssign for i256 { fn shl_assign(mut self, _ other: i256) { self = self << other } }
+impl ShrAssign for i256 { fn shr_assign(mut self, _ other: i256) { self = self >> other } }
+impl BitAndAssign for i256 { fn bitand_assign(mut self, _ other: i256) { self = self & other } }
+impl BitOrAssign for i256 { fn bitor_assign(mut self, _ other: i256) { self = self | other } }
+impl BitXorAssign for i256 { fn bitxor_assign(mut self, _ other: i256) { self = self ^ other } }
+impl Default for i256 { fn default() -> Self { 0 } }
+
+// u256 impls
+impl BitNot for u256 { fn bit_not(self) -> u256 { __bitnot_u256(self) } }
+impl Add for u256 { fn add(self, _ other: u256) -> u256 { __add_u256(self, other) } }
+impl Sub for u256 { fn sub(self, _ other: u256) -> u256 { __sub_u256(self, other) } }
+impl Mul for u256 { fn mul(self, _ other: u256) -> u256 { __mul_u256(self, other) } }
+impl Div for u256 { fn div(self, _ other: u256) -> u256 { __div_u256(self, other) } }
+impl Rem for u256 { fn rem(self, _ other: u256) -> u256 { __rem_u256(self, other) } }
+impl Pow for u256 { fn pow(self, _ other: u256) -> u256 { __pow_u256(self, other) } }
+impl Shl for u256 { fn shl(self, _ other: u256) -> u256 { __shl_u256(self, other) } }
+impl Shr for u256 { fn shr(self, _ other: u256) -> u256 { __shr_u256(self, other) } }
+impl BitAnd for u256 { fn bitand(self, _ other: u256) -> u256 { __bitand_u256(self, other) } }
+impl BitOr for u256 { fn bitor(self, _ other: u256) -> u256 { __bitor_u256(self, other) } }
+impl BitXor for u256 { fn bitxor(self, _ other: u256) -> u256 { __bitxor_u256(self, other) } }
+impl Eq for u256 {
+    fn eq(self, _ other: u256) -> bool { __eq_u256(self, other) }
+    fn ne(self, _ other: u256) -> bool { __ne_u256(self, other) }
+}
+impl Ord for u256 {
+    fn lt(self, _ other: u256) -> bool { __lt_u256(self, other) }
+    fn le(self, _ other: u256) -> bool { __le_u256(self, other) }
+    fn gt(self, _ other: u256) -> bool { __gt_u256(self, other) }
+    fn ge(self, _ other: u256) -> bool { __ge_u256(self, other) }
+}
+impl AddAssign for u256 { fn add_assign(mut self, _ other: u256) { self = self + other } }
+impl SubAssign for u256 { fn sub_assign(mut self, _ other: u256) { self = self - other } }
+impl MulAssign for u256 { fn mul_assign(mut self, _ other: u256) { self = self * other } }
+impl DivAssign for u256 { fn div_assign(mut self, _ other: u256) { self = self / other } }
+impl RemAssign for u256 { fn rem_assign(mut self, _ other: u256) { self = self % other } }
+impl PowAssign for u256 { fn pow_assign(mut self, _ other: u256) { self = self ** other } }
+impl ShlAssign for u256 { fn shl_assign(mut self, _ other: u256) { self = self << other } }
+impl ShrAssign for u256 { fn shr_assign(mut self, _ other: u256) { self = self >> other } }
+impl BitAndAssign for u256 { fn bitand_assign(mut self, _ other: u256) { self = self & other } }
+impl BitOrAssign for u256 { fn bitor_assign(mut self, _ other: u256) { self = self | other } }
+impl BitXorAssign for u256 { fn bitxor_assign(mut self, _ other: u256) { self = self ^ other } }
+impl Default for u256 { fn default() -> Self { 0 } }
+
+// isize impls
+impl Neg for isize { fn neg(self) -> isize { __neg_isize(self) } }
+impl BitNot for isize { fn bit_not(self) -> isize { __bitnot_isize(self) } }
+impl Add for isize { fn add(self, _ other: isize) -> isize { __add_isize(self, other) } }
+impl Sub for isize { fn sub(self, _ other: isize) -> isize { __sub_isize(self, other) } }
+impl Mul for isize { fn mul(self, _ other: isize) -> isize { __mul_isize(self, other) } }
+impl Div for isize { fn div(self, _ other: isize) -> isize { __div_isize(self, other) } }
+impl Rem for isize { fn rem(self, _ other: isize) -> isize { __rem_isize(self, other) } }
+impl Pow for isize { fn pow(self, _ other: isize) -> isize { __pow_isize(self, other) } }
+impl Shl for isize { fn shl(self, _ other: isize) -> isize { __shl_isize(self, other) } }
+impl Shr for isize { fn shr(self, _ other: isize) -> isize { __shr_isize(self, other) } }
+impl BitAnd for isize { fn bitand(self, _ other: isize) -> isize { __bitand_isize(self, other) } }
+impl BitOr for isize { fn bitor(self, _ other: isize) -> isize { __bitor_isize(self, other) } }
+impl BitXor for isize { fn bitxor(self, _ other: isize) -> isize { __bitxor_isize(self, other) } }
+impl Eq for isize {
+    fn eq(self, _ other: isize) -> bool { __eq_isize(self, other) }
+    fn ne(self, _ other: isize) -> bool { __ne_isize(self, other) }
+}
+impl Ord for isize {
+    fn lt(self, _ other: isize) -> bool { __lt_isize(self, other) }
+    fn le(self, _ other: isize) -> bool { __le_isize(self, other) }
+    fn gt(self, _ other: isize) -> bool { __gt_isize(self, other) }
+    fn ge(self, _ other: isize) -> bool { __ge_isize(self, other) }
+}
+impl AddAssign for isize { fn add_assign(mut self, _ other: isize) { self = self + other } }
+impl SubAssign for isize { fn sub_assign(mut self, _ other: isize) { self = self - other } }
+impl MulAssign for isize { fn mul_assign(mut self, _ other: isize) { self = self * other } }
+impl DivAssign for isize { fn div_assign(mut self, _ other: isize) { self = self / other } }
+impl RemAssign for isize { fn rem_assign(mut self, _ other: isize) { self = self % other } }
+impl PowAssign for isize { fn pow_assign(mut self, _ other: isize) { self = self ** other } }
+impl ShlAssign for isize { fn shl_assign(mut self, _ other: isize) { self = self << other } }
+impl ShrAssign for isize { fn shr_assign(mut self, _ other: isize) { self = self >> other } }
+impl BitAndAssign for isize { fn bitand_assign(mut self, _ other: isize) { self = self & other } }
+impl BitOrAssign for isize { fn bitor_assign(mut self, _ other: isize) { self = self | other } }
+impl BitXorAssign for isize { fn bitxor_assign(mut self, _ other: isize) { self = self ^ other } }
+impl Default for isize { fn default() -> Self { 0 } }
+
+// bool impls
+impl Not for bool { fn not(self) -> bool { __not_bool(self) } }
+impl BitAnd for bool { fn bitand(self, _ other: bool) -> bool { __bitand_bool(self, other) } }
+impl BitOr for bool { fn bitor(self, _ other: bool) -> bool { __bitor_bool(self, other) } }
+impl BitXor for bool { fn bitxor(self, _ other: bool) -> bool { __bitxor_bool(self, other) } }
+impl BitOrAssign for bool { fn bitor_assign(mut self, _ other: bool) { self = self | other } }
+impl Eq for bool {
+    fn eq(self, _ other: bool) -> bool { __eq_bool(self, other) }
+    fn ne(self, _ other: bool) -> bool { __ne_bool(self, other) }
+}
+impl Default for bool { fn default() -> Self { false } }

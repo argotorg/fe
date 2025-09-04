@@ -5,11 +5,11 @@ pub use radix_immutable::StringPrefixView;
 use smol_str::SmolStr;
 use url::Url;
 
+use crate::InputDb;
 use crate::config::{Config, ConfigDiagnostic};
 use crate::core::BUILTIN_CORE_BASE_URL;
 use crate::file::{File, Workspace};
 use crate::urlext::UrlExt;
-use crate::InputDb;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum IngotKind {
@@ -201,16 +201,13 @@ impl Workspace {
                 .directory()
                 .expect("Config URL should have a directory");
 
-            Some(Ingot::new(
-                db,
-                base_url.clone(),
-                None,
-                if base_url.scheme().contains("core") {
-                    IngotKind::Core
-                } else {
-                    IngotKind::Local
-                },
-            ))
+            let kind = if base_url.scheme().contains("core") {
+                IngotKind::Core
+            } else {
+                IngotKind::Local
+            };
+
+            Some(Ingot::new(db, base_url.clone(), None, kind))
         } else {
             // Make a standalone ingot if no config is found
             let base = location.directory().unwrap_or_else(|| location.clone());

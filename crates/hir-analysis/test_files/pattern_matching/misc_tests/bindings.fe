@@ -83,7 +83,7 @@ fn test_conditional_type() -> i32 {
     } else {
         Option::None
     }
-    
+
     match value {
         Option::Some(n) => n
         Option::None => 0
@@ -101,7 +101,7 @@ fn generic_match<T>(opt: Option<T>) -> bool {
 // Test nested generic patterns
 fn test_nested_generics() -> i32 {
     let nested: Option<Result<i32, bool>> = Option::Some(Result::Ok(42))
-    
+
     match nested {
         Option::Some(Result::Ok(val)) => val
         Option::Some(Result::Err(_)) => -1
@@ -123,7 +123,7 @@ fn test_match_expression() -> i32 {
         Option::Some(x) => x * 2
         Option::None => 0
     }
-    
+
     result
 }
 
@@ -131,7 +131,7 @@ fn test_match_expression() -> i32 {
 fn test_multiple_matches() -> i32 {
     let opt1 = Option::Some(10)
     let opt2 = Option::Some(20)
-    
+
     let sum = match opt1 {
         Option::Some(a) => {
             match opt2 {
@@ -146,7 +146,7 @@ fn test_multiple_matches() -> i32 {
             }
         }
     }
-    
+
     sum
 }
 
@@ -164,18 +164,18 @@ fn test_literal_patterns(opt: Option<i32>) -> i32 {
 fn test_different_instantiations() -> i32 {
     let int_opt: Option<i32> = Option::Some(42)
     let bool_opt: Option<bool> = Option::Some(true)
-    
+
     let result1 = match int_opt {
         Option::Some(x) => x
         Option::None => 0
     }
-    
+
     let result2 = match bool_opt {
         Option::Some(true) => 1
         Option::Some(false) => 0
         Option::None => -1
     }
-    
+
     result1 + result2
 }
 
@@ -183,7 +183,7 @@ fn test_different_instantiations() -> i32 {
 fn test_unknown_error_type() -> i32 {
     // The Ok value has a literal, but Err type is unknown
     let result = Result::Ok(100)
-    
+
     match result {
         Result::Ok(val) => val
         Result::Err(_) => 0
@@ -191,14 +191,14 @@ fn test_unknown_error_type() -> i32 {
 }
 
 // Generic function return without context
-fn identity<T>(value: T) -> T {
+fn identity<T>(_ value: T) -> T {
     value
 }
 
 fn test_generic_return() -> i32 {
     // The return type of identity can't be inferred without context
     let value = identity(Option::None)
-    
+
     match value {
         Option::Some(x) => x
         Option::None => 0
@@ -209,7 +209,7 @@ fn test_generic_return() -> i32 {
 fn test_partial_generic_info() -> i32 {
     // Inner Option type can't be inferred
     let outer = Result::Ok(Option::None)
-    
+
     match outer {
         Result::Ok(Option::Some(val)) => val
         Result::Ok(Option::None) => 0

@@ -1,8 +1,8 @@
-use crate::{diagnostics::DiagnosticVoucher, HirAnalysisDb};
+use crate::{HirAnalysisDb, diagnostics::DiagnosticVoucher};
 use hir::{
+    ParserError,
     hir_def::{ModuleTree, TopLevelMod},
     lower::parse_file_impl,
-    ParserError,
 };
 
 /// All analysis passes that run analysis on the HIR top level module

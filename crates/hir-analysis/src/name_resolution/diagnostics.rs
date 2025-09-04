@@ -8,9 +8,9 @@ use thin_vec::ThinVec;
 
 use super::NameRes;
 use crate::{
+    HirAnalysisDb,
     ty::ty_def::Kind,
     ty::{func_def::FuncDef, trait_def::TraitInstId, ty_def::TyId},
-    HirAnalysisDb,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Update)]
@@ -84,7 +84,7 @@ pub enum PathResDiag<'db> {
     AmbiguousTrait {
         primary: DynLazySpan<'db>,
         method_name: IdentId<'db>,
-        traits: ThinVec<Trait<'db>>,
+        trait_insts: ThinVec<TraitInstId<'db>>,
     },
     InvisibleAmbiguousTrait {
         primary: DynLazySpan<'db>,

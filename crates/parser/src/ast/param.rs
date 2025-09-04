@@ -1,7 +1,7 @@
-use rowan::ast::{support, AstNode};
+use rowan::ast::{AstNode, support};
 
 use super::ast_node;
-use crate::{ast::Type, FeLang, SyntaxKind as SK, SyntaxToken};
+use crate::{FeLang, SyntaxKind as SK, SyntaxToken, ast::Type};
 
 ast_node! {
     /// A list of parameters.
@@ -466,8 +466,8 @@ mod tests {
         ast::TypeKind,
         lexer::Lexer,
         parser::{
-            param::{GenericArgListScope, GenericParamListScope, WhereClauseScope},
             Parser,
+            param::{GenericArgListScope, GenericParamListScope, WhereClauseScope},
         },
     };
 

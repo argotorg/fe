@@ -1,4 +1,4 @@
-use rowan::ast::{support, AstNode};
+use rowan::ast::{AstNode, support};
 
 use super::ast_node;
 

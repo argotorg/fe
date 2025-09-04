@@ -8,15 +8,15 @@ use rustc_hash::FxHashSet;
 use salsa::Update;
 
 use super::{
-    scope_graph_viz::ScopeGraphFormatter, AssocTyDecl, AttrListId, Body, Const, Contract, Enum,
-    EnumVariant, ExprId, FieldDef, FieldParent, Func, FuncParam, FuncParamName, GenericParam,
-    IdentId, Impl, ImplTrait, ItemKind, Mod, TopLevelMod, Trait, TypeAlias, Use, VariantDef,
-    VariantKind, Visibility,
+    AssocTyDecl, AttrListId, Body, Const, Contract, Enum, EnumVariant, ExprId, FieldDef,
+    FieldParent, Func, FuncParam, FuncParamName, GenericParam, IdentId, Impl, ImplTrait, ItemKind,
+    Mod, TopLevelMod, Trait, TypeAlias, Use, VariantDef, VariantKind, Visibility,
+    scope_graph_viz::ScopeGraphFormatter,
 };
 use crate::{
+    HirDb,
     hir_def::{BodyKind, GenericParamOwner},
     span::DynLazySpan,
-    HirDb,
 };
 
 /// Represents a scope relation graph in a top-level module.
@@ -686,8 +686,8 @@ mod tests {
 
     use crate::{
         hir_def::{
-            scope_graph::{FieldParent, ScopeId},
             ItemKind,
+            scope_graph::{FieldParent, ScopeId},
         },
         test_db::TestDb,
     };

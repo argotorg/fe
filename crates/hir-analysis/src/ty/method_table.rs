@@ -6,13 +6,13 @@ use salsa::Update;
 use super::{
     binder::Binder,
     canonical::Canonical,
-    func_def::{lower_func, FuncDef},
+    func_def::{FuncDef, lower_func},
     trait_resolution::constraint::collect_constraints,
     ty_def::{InvalidCause, TyBase, TyId},
     ty_lower::lower_hir_ty,
     unify::UnificationTable,
 };
-use crate::{ty::ty_def::TyData, HirAnalysisDb};
+use crate::{HirAnalysisDb, ty::ty_def::TyData};
 
 #[salsa::tracked(return_ref)]
 pub(crate) fn collect_methods<'db>(
@@ -118,10 +118,10 @@ impl<'db> MethodBucket<'db> {
             let cand_ty = table.instantiate_with_fresh_vars(cand_ty);
             let cand_ty = table.instantiate_to_term(cand_ty);
 
-            if table.unify(cand_ty, ty).is_ok() {
-                if let Some(func) = funcs.get(&name) {
-                    methods.push(*func)
-                }
+            if table.unify(cand_ty, ty).is_ok()
+                && let Some(func) = funcs.get(&name)
+            {
+                methods.push(*func)
             }
             table.rollback_to(snapshot);
         }

@@ -9,13 +9,12 @@ use common::{
 };
 use hir::{
     hir_def::{
+        Body, Enum, GenericParamOwner, IdentId, IntegerId, PathId, TypeAlias as HirTypeAlias,
         prim_ty::{IntTy as HirIntTy, PrimTy as HirPrimTy, UintTy as HirUintTy},
         scope_graph::ScopeId,
-        Body, Enum, GenericParamOwner, IdentId, IntegerId, PathId, TypeAlias as HirTypeAlias,
     },
     span::DynLazySpan,
 };
-use if_chain::if_chain;
 use num_bigint::BigUint;
 use rustc_hash::FxHashSet;
 use salsa::Update;
@@ -33,8 +32,8 @@ use super::{
     visitor::{TyVisitable, TyVisitor},
 };
 use crate::{
-    ty::{adt_def::AdtRef, trait_resolution::check_ty_wf, ty_error::emit_invalid_ty_error},
     HirAnalysisDb,
+    ty::{adt_def::AdtRef, trait_resolution::check_ty_wf, ty_error::emit_invalid_ty_error},
 };
 
 #[salsa::interned]
@@ -85,6 +84,15 @@ impl<'db> TyId<'db> {
     pub fn is_integral(self, db: &dyn HirAnalysisDb) -> bool {
         match self.data(db) {
             TyData::TyBase(ty_base) => ty_base.is_integral(),
+            TyData::TyVar(var) => {
+                matches!(var.sort, TyVarSort::Integral)
+            }
+            _ => false,
+        }
+    }
+
+    pub fn is_integral_var(self, db: &dyn HirAnalysisDb) -> bool {
+        match self.data(db) {
             TyData::TyVar(var) => {
                 matches!(var.sort, TyVarSort::Integral)
             }
@@ -320,17 +328,14 @@ impl<'db> TyId<'db> {
         matches!(self.base_ty(db).data(db), TyData::TyBase(TyBase::Prim(_)))
     }
 
-    /// Returns `true` if the base type is a user defined `enum` type.
     pub(crate) fn as_enum(self, db: &'db dyn HirAnalysisDb) -> Option<Enum<'db>> {
         let base_ty = self.base_ty(db);
-        if_chain! {
-            if let Some(adt_ref) = base_ty.adt_ref(db);
-            if let AdtRef::Enum(enum_) = adt_ref;
-            then {
-                Some(enum_)
-            } else {
-                None
-            }
+        if let Some(adt_ref) = base_ty.adt_ref(db)
+            && let AdtRef::Enum(enum_) = adt_ref
+        {
+            Some(enum_)
+        } else {
+            None
         }
     }
 
@@ -464,7 +469,7 @@ impl<'db> TyId<'db> {
 
     /// Check if this type contains an associated type of a type parameter
     pub fn contains_assoc_ty_of_param(self, db: &'db dyn HirAnalysisDb) -> bool {
-        use crate::ty::visitor::{walk_ty, TyVisitable, TyVisitor};
+        use crate::ty::visitor::{TyVisitable, TyVisitor, walk_ty};
 
         struct AssocTyOfParamChecker<'db> {
             db: &'db dyn HirAnalysisDb,

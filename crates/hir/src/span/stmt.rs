@@ -6,9 +6,9 @@ use super::{
     transition::{ChainInitiator, ResolvedOrigin, SpanTransitionChain},
 };
 use crate::{
+    SpannedHirDb,
     hir_def::{Body, StmtId},
     span::types::LazyTySpan,
-    SpannedHirDb,
 };
 
 define_lazy_span_node!(LazyStmtSpan, ast::Stmt,);

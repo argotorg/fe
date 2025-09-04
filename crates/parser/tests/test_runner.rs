@@ -1,12 +1,11 @@
 #![allow(unused)]
 
 use fe_parser::{
-    lexer,
+    SyntaxKind, lexer,
     parser::{
-        expr::parse_expr, item::ItemListScope, parse_pat, stmt::parse_stmt, Parser, RootScope,
+        Parser, RootScope, expr::parse_expr, item::ItemListScope, parse_pat, stmt::parse_stmt,
     },
     syntax_node::SyntaxNode,
-    SyntaxKind,
 };
 use tracing::error;
 

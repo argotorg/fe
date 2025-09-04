@@ -5,9 +5,9 @@ use codespan_reporting::term::{
     self,
     termcolor::{BufferWriter, ColorChoice},
 };
-use dir_test::{dir_test, Fixture};
+use dir_test::{Fixture, dir_test};
 use driver::diagnostics::{CsDbWrapper, ToCsDiag};
-use test_db::{initialize_analysis_pass, HirAnalysisTestDb};
+use test_db::{HirAnalysisTestDb, initialize_analysis_pass};
 use test_utils::snap_test;
 
 #[dir_test(

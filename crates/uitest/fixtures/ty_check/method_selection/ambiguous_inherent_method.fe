@@ -7,7 +7,7 @@ trait Default {
     fn default() -> Self
 }
 
-impl<T> Default for Foo<T> 
+impl<T> Default for Foo<T>
 where T: Default
 {
     fn default() -> Self {

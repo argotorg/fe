@@ -3,11 +3,11 @@
 //! This module contains the conversion logic from HIR patterns to a simplified
 //! representation that's easier to work with during pattern analysis.
 
-use crate::name_resolution::{resolve_path, PathRes, ResolvedVariant};
-use crate::ty::ty_def::TyId;
 use crate::HirAnalysisDb;
+use crate::name_resolution::{PathRes, ResolvedVariant, resolve_path};
+use crate::ty::ty_def::TyId;
 use hir::hir_def::{
-    scope_graph::ScopeId, Body as HirBody, LitKind, Partial, Pat as HirPat, PathId, VariantKind,
+    Body as HirBody, LitKind, Partial, Pat as HirPat, PathId, VariantKind, scope_graph::ScopeId,
 };
 use hir::hir_def::{EnumVariant, FieldParent, IdentId, PatId};
 use rustc_hash::FxHashMap;
@@ -199,13 +199,12 @@ impl<'db> SimplifiedPattern<'db> {
             }
             Ok(PathRes::Ty(ty_id)) => {
                 // For type paths, check if this is an imported enum variant
-                if let Some(expected_ty) = expected_ty {
-                    if let Some(variant) =
+                if let Some(expected_ty) = expected_ty
+                    && let Some(variant) =
                         Self::try_resolve_enum_variant_from_ty(path_id, db, expected_ty)
-                    {
-                        let ctor = ConstructorKind::Variant(variant.variant, expected_ty);
-                        return Some((ctor, expected_ty));
-                    }
+                {
+                    let ctor = ConstructorKind::Variant(variant.variant, expected_ty);
+                    return Some((ctor, expected_ty));
                 }
                 // Handle struct/tuple types
                 let ctor = ConstructorKind::Type(ty_id);
@@ -229,19 +228,19 @@ impl<'db> SimplifiedPattern<'db> {
         let path_name = path_ident.data(db);
 
         for (idx, variant_def) in variants.data(db).iter().enumerate() {
-            if let Partial::Present(variant_name) = variant_def.name {
-                if variant_name.data(db) == path_name {
-                    let variant = EnumVariant {
-                        enum_: expected_enum,
-                        idx: idx as u16,
-                    };
+            if let Partial::Present(variant_name) = variant_def.name
+                && variant_name.data(db) == path_name
+            {
+                let variant = EnumVariant {
+                    enum_: expected_enum,
+                    idx: idx as u16,
+                };
 
-                    return Some(ResolvedVariant {
-                        ty: expected_ty,
-                        variant,
-                        path: *path_id,
-                    });
-                }
+                return Some(ResolvedVariant {
+                    ty: expected_ty,
+                    variant,
+                    path: *path_id,
+                });
             }
         }
 

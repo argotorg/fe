@@ -1,6 +1,7 @@
 use crate::{ExpectedKind, SyntaxKind};
 
 use super::{
+    ErrProof, Parser, Recovery,
     attr::parse_attr_list,
     define_scope,
     func::FuncScope,
@@ -8,7 +9,6 @@ use super::{
     parse_list,
     token_stream::TokenStream,
     type_::parse_type,
-    ErrProof, Parser, Recovery,
 };
 
 define_scope! { pub(crate) StructScope, Struct }

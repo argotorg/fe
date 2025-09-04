@@ -4,6 +4,7 @@
 //! [`CompleteDiagnostic`].
 
 use crate::{
+    HirAnalysisDb,
     name_resolution::diagnostics::{ImportDiag, PathResDiag},
     ty::{
         diagnostics::{
@@ -14,14 +15,13 @@ use crate::{
         ty_check::RecordLike,
         ty_def::{TyData, TyVarSort},
     },
-    HirAnalysisDb,
 };
 use common::diagnostics::{
     CompleteDiagnostic, DiagnosticPass, GlobalErrorCode, LabelStyle, Severity, Span, SpanKind,
     SubDiagnostic,
 };
 use either::Either;
-use hir::{hir_def::FieldIndex, span::LazySpan, ParserError, SpannedHirDb};
+use hir::{ParserError, SpannedHirDb, hir_def::FieldIndex, span::LazySpan};
 use itertools::Itertools;
 
 /// All diagnostics accumulated in salsa-db should implement
@@ -205,26 +205,25 @@ impl DiagnosticVoucher for PathResDiag<'_> {
                 let message =
                     format!("no method named `{method_str}` found for {recv_kind} `{recv_name}`");
 
-                if let Some(ty) = recv_ty {
-                    if let Some(field_ty) = RecordLike::Type(*ty).record_field_ty(db, *method_name)
-                    {
-                        return CompleteDiagnostic {
-                            severity: Severity::Error,
-                            message,
-                            sub_diagnostics: vec![SubDiagnostic {
-                                style: LabelStyle::Primary,
-                                message: format!(
-                                    "field `{}` in `{}` has type `{}`",
-                                    method_str,
-                                    recv_name,
-                                    field_ty.pretty_print(db)
-                                ),
-                                span: primary.resolve(db),
-                            }],
-                            notes: vec![],
-                            error_code,
-                        };
-                    }
+                if let Some(ty) = recv_ty
+                    && let Some(field_ty) = RecordLike::Type(*ty).record_field_ty(db, *method_name)
+                {
+                    return CompleteDiagnostic {
+                        severity: Severity::Error,
+                        message,
+                        sub_diagnostics: vec![SubDiagnostic {
+                            style: LabelStyle::Primary,
+                            message: format!(
+                                "field `{}` in `{}` has type `{}`",
+                                method_str,
+                                recv_name,
+                                field_ty.pretty_print(db)
+                            ),
+                            span: primary.resolve(db),
+                        }],
+                        notes: vec![],
+                        error_code,
+                    };
                 }
 
                 CompleteDiagnostic {
@@ -416,7 +415,12 @@ impl DiagnosticVoucher for PathResDiag<'_> {
                 }
             }
 
-            Self::ArgNumMismatch { span, ident, expected, given } => CompleteDiagnostic {
+            Self::ArgNumMismatch {
+                span,
+                ident,
+                expected,
+                given,
+            } => CompleteDiagnostic {
                 severity: Severity::Error,
                 message: format!(
                     "incorrect number of generic arguments for `{}`; expected {expected}, given {given}",
@@ -431,7 +435,12 @@ impl DiagnosticVoucher for PathResDiag<'_> {
                 error_code,
             },
 
-            Self::ArgKindMismatch { span, ident, expected, given } => CompleteDiagnostic {
+            Self::ArgKindMismatch {
+                span,
+                ident,
+                expected,
+                given,
+            } => CompleteDiagnostic {
                 severity: Severity::Error,
                 message: format!("invalid type argument kind for `{}`", ident.data(db)),
                 sub_diagnostics: vec![SubDiagnostic {
@@ -447,23 +456,37 @@ impl DiagnosticVoucher for PathResDiag<'_> {
                 error_code,
             },
 
-            Self::ArgTypeMismatch { span, ident, expected, given } => {
+            Self::ArgTypeMismatch {
+                span,
+                ident,
+                expected,
+                given,
+            } => {
                 let (header, message) = match (expected, given) {
                     (Some(exp), Some(giv)) => (
                         format!("const type mismatch for `{}`", ident.data(db)),
-                        format!("expected `{}`, given `{}`",
+                        format!(
+                            "expected `{}`, given `{}`",
                             exp.pretty_print(db),
-                            giv.pretty_print(db))
+                            giv.pretty_print(db)
+                        ),
                     ),
 
-                    (Some(exp), None) => (format!(
-                        "const generic argument expected for `{}`",
-                        ident.data(db),
-                    ), format!("expected const argument of type `{}`", exp.pretty_print(db))),
+                    (Some(exp), None) => (
+                        format!("const generic argument expected for `{}`", ident.data(db),),
+                        format!("expected const argument of type `{}`", exp.pretty_print(db)),
+                    ),
                     (None, Some(giv)) => (
                         "unexpected const generic argument".to_string(),
-                        format!("expected type generic argument, given const `{}`", giv.pretty_print(db))),
-                    (None, None) => ("invalid const argument".to_string(), "unexpected const argument".to_string()),
+                        format!(
+                            "expected type generic argument, given const `{}`",
+                            giv.pretty_print(db)
+                        ),
+                    ),
+                    (None, None) => (
+                        "invalid const argument".to_string(),
+                        "unexpected const argument".to_string(),
+                    ),
                 };
                 CompleteDiagnostic {
                     severity: Severity::Error,
@@ -490,7 +513,11 @@ impl DiagnosticVoucher for PathResDiag<'_> {
                 error_code,
             },
 
-            Self::AmbiguousInherentMethod { primary, method_name, candidates } => {
+            Self::AmbiguousInherentMethod {
+                primary,
+                method_name,
+                candidates,
+            } => {
                 let method_name = method_name.data(db);
                 let mut sub_diagnostics = vec![SubDiagnostic {
                     style: LabelStyle::Primary,
@@ -515,7 +542,11 @@ impl DiagnosticVoucher for PathResDiag<'_> {
                 }
             }
 
-            Self::AmbiguousTrait { primary, method_name, traits } => {
+            Self::AmbiguousTrait {
+                primary,
+                method_name,
+                trait_insts,
+            } => {
                 let method_name = method_name.data(db);
                 let mut sub_diagnostics = vec![SubDiagnostic {
                     style: LabelStyle::Primary,
@@ -523,11 +554,13 @@ impl DiagnosticVoucher for PathResDiag<'_> {
                     span: primary.resolve(db),
                 }];
 
-                for trait_ in traits {
-                    let trait_name = trait_.name(db).unwrap().data(db);
+                for inst in trait_insts {
                     sub_diagnostics.push(SubDiagnostic {
                         style: LabelStyle::Secondary,
-                        message: format!("candidate: `{trait_name}::{method_name}`"),
+                        message: format!(
+                            "candidate: `{}::{method_name}`",
+                            inst.pretty_print(db, false)
+                        ),
                         span: primary.resolve(db),
                     });
                 }
@@ -1860,10 +1893,12 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                 }];
 
                 for trait_ in traits {
-                    let trait_name = trait_.name(db).unwrap().data(db);
                     sub_diagnostics.push(SubDiagnostic {
                         style: LabelStyle::Secondary,
-                        message: format!("candidate: `{trait_name}::{method_name}`"),
+                        message: format!(
+                            "candidate: `{}::{method_name}`",
+                            trait_.pretty_print(db, false)
+                        ),
                         span: primary.resolve(db),
                     });
                 }

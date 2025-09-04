@@ -5,7 +5,7 @@ use smol_str::SmolStr;
 use std::collections::HashMap;
 use url::Url;
 
-use crate::{config::DependencyArguments, InputDb};
+use crate::{InputDb, config::DependencyArguments};
 
 #[salsa::input]
 #[derive(Debug)]

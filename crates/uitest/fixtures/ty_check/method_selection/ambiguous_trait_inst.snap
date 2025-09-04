@@ -3,15 +3,15 @@ source: crates/uitest/tests/ty_check.rs
 expression: diags
 input_file: fixtures/ty_check/method_selection/ambiguous_trait_inst.fe
 ---
-error[8-0027]: ambiguous trait implementation
-   ┌─ ambiguous_trait_inst.fe:23:13
+error[8-0026]: multiple trait candidates found
+   ┌─ ambiguous_trait_inst.fe:23:15
    │
 23 │     let y = f.foo()
-   │             ^^^^^^^
-   │             │
-   │             multiple implementations are found
-   │             candidate: Trait<u32>
-   │             candidate: Trait<i32>
+   │               ^^^
+   │               │
+   │               `foo` is ambiguous
+   │               candidate: `Trait<u32>::foo`
+   │               candidate: `Trait<i32>::foo`
 
 error[8-0031]: type annotation is needed
    ┌─ ambiguous_trait_inst.fe:23:9

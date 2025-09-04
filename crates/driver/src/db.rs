@@ -6,9 +6,9 @@ use codespan_reporting::term::{
 use common::file::File;
 use common::{define_input_db, diagnostics::CompleteDiagnostic};
 use hir::{
+    Ingot,
     hir_def::TopLevelMod,
     lower::{map_file_to_mod, module_tree},
-    Ingot,
 };
 use hir_analysis::{
     analysis_pass::{AnalysisPassManager, ParsingPass},

@@ -1,4 +1,4 @@
-use dir_test::{dir_test, Fixture};
+use dir_test::{Fixture, dir_test};
 use std::process::Command;
 use test_utils::snap_test;
 

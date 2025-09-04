@@ -6,9 +6,9 @@ use super::{
     transition::{ChainInitiator, ResolvedOrigin, SpanTransitionChain},
 };
 use crate::{
-    hir_def::{Body, ExprId},
-    span::{params::LazyGenericArgListSpan, path::LazyPathSpan, LazyLitSpan, LazySpanAtom},
     SpannedHirDb,
+    hir_def::{Body, ExprId},
+    span::{LazyLitSpan, LazySpanAtom, params::LazyGenericArgListSpan, path::LazyPathSpan},
 };
 
 define_lazy_span_node!(LazyExprSpan, ast::Expr,);

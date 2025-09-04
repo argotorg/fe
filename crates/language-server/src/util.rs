@@ -2,10 +2,10 @@ use async_lsp::lsp_types::{
     DiagnosticRelatedInformation, DiagnosticSeverity, NumberOrString, Position,
 };
 use common::{
-    diagnostics::{CompleteDiagnostic, Severity, Span},
     InputDb,
+    diagnostics::{CompleteDiagnostic, Severity, Span},
 };
-use hir::{hir_def::scope_graph::ScopeId, span::LazySpan, SpannedHirDb};
+use hir::{SpannedHirDb, hir_def::scope_graph::ScopeId, span::LazySpan};
 use rustc_hash::FxHashMap;
 use tracing::error;
 

@@ -1,10 +1,9 @@
 use parser::ast;
 
 use super::{
-    define_lazy_span_node,
+    LazySpanAtom, define_lazy_span_node,
     params::{LazyGenericArgListSpan, LazyTraitRefSpan},
     types::LazyTySpan,
-    LazySpanAtom,
 };
 
 define_lazy_span_node!(

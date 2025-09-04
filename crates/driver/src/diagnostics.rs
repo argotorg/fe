@@ -3,9 +3,9 @@ use std::ops::Range;
 use camino::Utf8Path;
 use codespan_reporting as cs;
 use common::{
+    InputDb,
     diagnostics::{LabelStyle, Severity},
     file::File,
-    InputDb,
 };
 use cs::{diagnostic as cs_diag, files as cs_files};
 use hir_analysis::diagnostics::{DiagnosticVoucher, SpannedHirAnalysisDb};

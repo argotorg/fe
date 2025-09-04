@@ -1,12 +1,12 @@
 //! This module implements import and export resolution for HIR.
 use std::{
-    collections::{hash_map::Entry, VecDeque},
+    collections::{VecDeque, hash_map::Entry},
     mem,
 };
 
 use common::{indexmap::IndexMap, ingot::Ingot};
 use hir::{
-    hir_def::{prim_ty::PrimTy, scope_graph::ScopeId, HirIngot, IdentId, Use},
+    hir_def::{HirIngot, IdentId, Use, prim_ty::PrimTy, scope_graph::ScopeId},
     span::DynLazySpan,
 };
 use itertools::Itertools;
@@ -15,14 +15,14 @@ use salsa::Update;
 use thin_vec::ThinVec;
 
 use super::{
+    EarlyNameQueryId,
     diagnostics::ImportDiag,
     name_resolver::{
         NameDerivation, NameDomain, NameRes, NameResBucket, NameResKind, NameResolutionError,
         NameResolutionResult, NameResolver, QueryDirective,
     },
-    EarlyNameQueryId,
 };
-use crate::{name_resolution::visibility_checker::is_use_visible, HirAnalysisDb};
+use crate::{HirAnalysisDb, name_resolution::visibility_checker::is_use_visible};
 
 pub(crate) struct ImportResolver<'db> {
     db: &'db dyn HirAnalysisDb,

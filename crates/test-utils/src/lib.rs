@@ -3,11 +3,11 @@ pub mod _macro_support;
 pub mod url_utils;
 pub use tracing::Level;
 use tracing::{
-    level_filters::LevelFilter,
-    subscriber::{set_default, DefaultGuard},
     Subscriber,
+    level_filters::LevelFilter,
+    subscriber::{DefaultGuard, set_default},
 };
-use tracing_subscriber::{layer::SubscriberExt, EnvFilter};
+use tracing_subscriber::{EnvFilter, layer::SubscriberExt};
 use tracing_tree::HierarchicalLayer;
 
 pub fn setup_tracing_with_filter(filter: &str) -> DefaultGuard {

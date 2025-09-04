@@ -1,7 +1,7 @@
 use cranelift_entity::entity_impl;
 
 use super::{Body, IdentId, LitKind, Partial, PathId};
-use crate::{span::pat::LazyPatSpan, HirDb};
+use crate::{HirDb, span::pat::LazyPatSpan};
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, salsa::Update)]
 pub enum Pat<'db> {

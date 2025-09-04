@@ -1,13 +1,13 @@
 use std::convert::Infallible;
 
-use super::{define_scope, path::PathScope, token_stream::TokenStream, ErrProof, Parser, Recovery};
+use super::{ErrProof, Parser, Recovery, define_scope, path::PathScope, token_stream::TokenStream};
 use crate::{
+    ParseError, SyntaxKind,
     parser::{
-        lit::{is_lit, LitScope},
+        lit::{LitScope, is_lit},
         parse_list,
         token_stream::LexicalToken,
     },
-    ParseError, SyntaxKind,
 };
 
 pub fn parse_pat<S: TokenStream>(parser: &mut Parser<S>) -> Result<(), Recovery<ErrProof>> {

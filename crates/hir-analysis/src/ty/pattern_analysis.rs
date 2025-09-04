@@ -2,13 +2,13 @@
 //! Based on "Warnings for pattern matching" by Luc Maranget
 
 use super::simplified_pattern::{
-    ctor_variant_num, ConstructorKind, SimplifiedPattern, SimplifiedPatternKind,
+    ConstructorKind, SimplifiedPattern, SimplifiedPatternKind, ctor_variant_num,
 };
-use crate::ty::ty_def::TyId;
-use crate::ty::AdtRef;
 use crate::HirAnalysisDb;
+use crate::ty::AdtRef;
+use crate::ty::ty_def::TyId;
 use common::indexmap::IndexSet;
-use hir::hir_def::{scope_graph::ScopeId, Body as HirBody, LitKind, Pat as HirPat};
+use hir::hir_def::{Body as HirBody, LitKind, Pat as HirPat, scope_graph::ScopeId};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PatternMatrix<'db> {

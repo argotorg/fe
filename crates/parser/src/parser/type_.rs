@@ -1,13 +1,12 @@
 use std::convert::Infallible;
 
 use super::{
-    define_scope,
+    Checkpoint, ErrProof, Parser, Recovery, define_scope,
     expr::parse_expr,
     param::GenericArgListScope,
     parse_list,
-    path::{is_path_segment, PathScope},
+    path::{PathScope, is_path_segment},
     token_stream::TokenStream,
-    Checkpoint, ErrProof, Parser, Recovery,
 };
 use crate::{ExpectedKind, ParseError, SyntaxKind};
 

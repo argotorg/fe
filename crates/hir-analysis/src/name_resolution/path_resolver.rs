@@ -2,45 +2,44 @@ use common::indexmap::IndexMap;
 use either::Either;
 use hir::{
     hir_def::{
-        scope_graph::ScopeId, Enum, EnumVariant, GenericParamOwner, IdentId, ImplTrait, ItemKind,
-        Partial, PathId, PathKind, Trait, TypeBound, TypeId, VariantKind,
+        Enum, EnumVariant, GenericParamOwner, IdentId, ImplTrait, ItemKind, Partial, PathId,
+        PathKind, Trait, TypeBound, TypeId, VariantKind, scope_graph::ScopeId,
     },
     span::DynLazySpan,
 };
-use if_chain::if_chain;
-use smallvec::{smallvec, SmallVec};
+use smallvec::{SmallVec, smallvec};
 use thin_vec::ThinVec;
 
 use super::{
+    EarlyNameQueryId, ExpectedPathKind, NameDomain,
     diagnostics::PathResDiag,
     is_scope_visible_from,
-    method_selection::{select_method_candidate, MethodCandidate, MethodSelectionError},
+    method_selection::{MethodCandidate, MethodSelectionError, select_method_candidate},
     name_resolver::{NameRes, NameResBucket, NameResolutionError},
     resolve_query,
     visibility_checker::is_ty_visible_from,
-    EarlyNameQueryId, ExpectedPathKind, NameDomain,
 };
 use crate::{
+    HirAnalysisDb,
     name_resolution::{NameResKind, QueryDirective},
     ty::{
-        adt_def::{lower_adt, AdtRef},
+        adt_def::{AdtRef, lower_adt},
         binder::Binder,
         canonical::{Canonical, Canonicalized},
         fold::TyFoldable,
-        func_def::{lower_func, FuncDef, HirFuncDefKind},
+        func_def::{FuncDef, HirFuncDefKind, lower_func},
         normalize::normalize_ty,
-        trait_def::{impls_for_ty_with_constraints, TraitInstId},
+        trait_def::{TraitInstId, impls_for_ty_with_constraints},
         trait_lower::{
-            lower_trait, lower_trait_ref, lower_trait_ref_impl, TraitArgError, TraitRefLowerError,
+            TraitArgError, TraitRefLowerError, lower_trait, lower_trait_ref, lower_trait_ref_impl,
         },
         trait_resolution::PredicateListId,
         ty_def::{InvalidCause, Kind, TyData, TyId},
         ty_lower::{
-            collect_generic_params, lower_generic_arg_list, lower_hir_ty, lower_type_alias, TyAlias,
+            TyAlias, collect_generic_params, lower_generic_arg_list, lower_hir_ty, lower_type_alias,
         },
         unify::UnificationTable,
     },
-    HirAnalysisDb,
 };
 
 pub type PathResolutionResult<'db, T> = Result<T, PathResError<'db>>;
@@ -172,7 +171,7 @@ impl<'db> PathResError<'db> {
         expected: ExpectedPathKind,
     ) -> Option<PathResDiag<'db>> {
         let failed_at = self.failed_at;
-        let ident = failed_at.ident(db).to_opt()?; // xxx PathKind::QualifiedType
+        let ident = failed_at.ident(db).to_opt()?; // TODO: handle PathKind::QualifiedType
 
         let diag = match self.kind {
             PathResErrorKind::ParseError => return None,
@@ -248,12 +247,11 @@ impl<'db> PathResError<'db> {
                         candidates,
                     }
                 }
-                MethodSelectionError::AmbiguousTraitMethod(trait_defs) => {
-                    let traits = trait_defs.into_iter().map(|d| d.trait_(db)).collect();
+                MethodSelectionError::AmbiguousTraitMethod(trait_insts) => {
                     PathResDiag::AmbiguousTrait {
                         primary: span,
                         method_name: ident,
-                        traits,
+                        trait_insts,
                     }
                 }
                 MethodSelectionError::InvisibleInherentMethod(func) => {
@@ -344,7 +342,7 @@ impl<'db> PathRes<'db> {
             PathRes::Func(ty) => PathRes::Func(f(ty)),
             PathRes::Const(ty) => PathRes::Const(f(ty)),
             PathRes::EnumVariant(v) => PathRes::EnumVariant(ResolvedVariant { ty: f(v.ty), ..v }),
-            // xxx map over candidate ty?
+            // TODO: map over candidate ty?
             PathRes::Method(ty, candidate) => PathRes::Method(f(ty), candidate),
             r @ (PathRes::Trait(_) | PathRes::Mod(_) | PathRes::FuncParam(..)) => r,
         }
@@ -604,12 +602,12 @@ where
     match parent_res {
         Some(PathRes::Ty(ty) | PathRes::TyAlias(_, ty)) => {
             // Fast path: `<A as Trait>::Assoc` — return the projection directly.
-            if let TyData::QualifiedTy(trait_inst) = ty.data(db) {
-                if let Some(assoc_ty) = trait_inst.assoc_ty(db, ident) {
-                    let r = PathRes::Ty(assoc_ty);
-                    observer(path, &r);
-                    return Ok(r);
-                }
+            if let TyData::QualifiedTy(trait_inst) = ty.data(db)
+                && let Some(assoc_ty) = trait_inst.assoc_ty(db, ident)
+            {
+                let r = PathRes::Ty(assoc_ty);
+                observer(path, &r);
+                return Ok(r);
             }
 
             // Try to resolve as an enum variant
@@ -620,16 +618,16 @@ where
                 let query = make_query(db, path, enum_.scope());
                 let bucket = resolve_query(db, query);
 
-                if let Ok(res) = bucket.pick(NameDomain::VALUE) {
-                    if let Some(var) = res.enum_variant() {
-                        let reso = PathRes::EnumVariant(ResolvedVariant {
-                            ty,
-                            variant: var,
-                            path,
-                        });
-                        observer(path, &reso);
-                        return Ok(reso);
-                    }
+                if let Ok(res) = bucket.pick(NameDomain::VALUE)
+                    && let Some(var) = res.enum_variant()
+                {
+                    let reso = PathRes::EnumVariant(ResolvedVariant {
+                        ty,
+                        variant: var,
+                        path,
+                    });
+                    observer(path, &reso);
+                    return Ok(reso);
                 }
             }
 
@@ -641,6 +639,7 @@ where
                     ident,
                     parent_scope,
                     assumptions,
+                    None,
                 ) {
                     Ok(cand) => {
                         let r = PathRes::Method(ty, cand);
@@ -715,14 +714,13 @@ where
         _ => None,
     });
 
-    let res = if_chain! {
-        if is_tail && resolve_tail_as_value;
-        if let Ok(res) = bucket.pick(NameDomain::VALUE);
-        then {
-            res.clone()
-        } else {
-            pick_type_domain_from_bucket(parent_res, bucket, path)?
-        }
+    let res = if is_tail
+        && resolve_tail_as_value
+        && let Ok(res) = bucket.pick(NameDomain::VALUE)
+    {
+        res.clone()
+    } else {
+        pick_type_domain_from_bucket(parent_res, bucket, path)?
     };
 
     let r = resolve_name_res(db, &res, parent_ty, path, scope, assumptions)?;
@@ -766,16 +764,13 @@ pub fn find_associated_type<'db>(
                     let assoc_ty = TyId::assoc_ty(db, trait_inst, name);
                     return smallvec![(trait_inst, assoc_ty)];
                 }
-            } else if let Some(impl_trait) = param.owner.resolve_to::<ImplTrait>(db) {
-                if let Some(trait_ref) = impl_trait.trait_ref(db).to_opt() {
-                    if let Ok(trait_inst) =
-                        lower_trait_ref(db, ty.value, trait_ref, impl_trait.scope(), assumptions)
-                    {
-                        if let Some(assoc_ty) = trait_inst.assoc_ty(db, name) {
-                            return smallvec![(trait_inst, assoc_ty)];
-                        }
-                    }
-                }
+            } else if let Some(impl_trait) = param.owner.resolve_to::<ImplTrait>(db)
+                && let Some(trait_ref) = impl_trait.trait_ref(db).to_opt()
+                && let Ok(trait_inst) =
+                    lower_trait_ref(db, ty.value, trait_ref, impl_trait.scope(), assumptions)
+                && let Some(assoc_ty) = trait_inst.assoc_ty(db, name)
+            {
+                return smallvec![(trait_inst, assoc_ty)];
             }
         }
     }
@@ -790,11 +785,11 @@ pub fn find_associated_type<'db>(
             let pred_self_ty =
                 table.instantiate_with_fresh_vars(Binder::bind(trait_inst.self_ty(db)));
 
-            if table.unify(lhs_ty, pred_self_ty).is_ok() {
-                if let Some(assoc_ty) = trait_inst.assoc_ty(db, name) {
-                    let folded = assoc_ty.fold_with(&mut table);
-                    candidates.push((trait_inst, folded));
-                }
+            if table.unify(lhs_ty, pred_self_ty).is_ok()
+                && let Some(assoc_ty) = trait_inst.assoc_ty(db, name)
+            {
+                let folded = assoc_ty.fold_with(&mut table);
+                candidates.push((trait_inst, folded));
             }
             table.rollback_to(snapshot);
         }
@@ -805,11 +800,11 @@ pub fn find_associated_type<'db>(
         let snapshot = table.snapshot();
         let impl_ = table.instantiate_with_fresh_vars(impl_);
 
-        if table.unify(lhs_ty, impl_.self_ty(db)).is_ok() {
-            if let Some(ty) = impl_.assoc_ty(db, name) {
-                let folded = ty.fold_with(&mut table);
-                candidates.push((impl_.trait_(db), folded));
-            }
+        if table.unify(lhs_ty, impl_.self_ty(db)).is_ok()
+            && let Some(ty) = impl_.assoc_ty(db, name)
+        {
+            let folded = ty.fold_with(&mut table);
+            candidates.push((impl_.trait_(db), folded));
         }
         table.rollback_to(snapshot);
     }
@@ -826,11 +821,11 @@ pub fn find_associated_type<'db>(
         for &trait_inst in assumptions.list(db) {
             let snapshot = table.snapshot();
             // Allow unification to account for type variables in either side
-            if table.unify(ty_with_subst, trait_inst.self_ty(db)).is_ok() {
-                if let Some(assoc_ty) = trait_inst.assoc_ty(db, name) {
-                    let folded = assoc_ty.fold_with(&mut table);
-                    candidates.push((trait_inst, folded));
-                }
+            if table.unify(ty_with_subst, trait_inst.self_ty(db)).is_ok()
+                && let Some(assoc_ty) = trait_inst.assoc_ty(db, name)
+            {
+                let folded = assoc_ty.fold_with(&mut table);
+                candidates.push((trait_inst, folded));
             }
             table.rollback_to(snapshot);
         }
@@ -846,11 +841,11 @@ pub fn find_associated_type<'db>(
                 };
                 let self_ty = ty_with_subst.fold_with(&mut table);
 
-                if let Ok(inst) = lower_trait_ref(db, self_ty, *trait_ref, scope, assumptions) {
-                    if let Some(assoc_ty) = inst.assoc_ty(db, name) {
-                        let folded = assoc_ty.fold_with(&mut table);
-                        candidates.push((inst, folded));
-                    }
+                if let Ok(inst) = lower_trait_ref(db, self_ty, *trait_ref, scope, assumptions)
+                    && let Some(assoc_ty) = inst.assoc_ty(db, name)
+                {
+                    let folded = assoc_ty.fold_with(&mut table);
+                    candidates.push((inst, folded));
                 }
             }
         }
