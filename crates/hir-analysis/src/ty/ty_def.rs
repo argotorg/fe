@@ -15,7 +15,6 @@ use hir::{
     },
     span::DynLazySpan,
 };
-use if_chain::if_chain;
 use num_bigint::BigUint;
 use rustc_hash::FxHashSet;
 use salsa::Update;
@@ -331,14 +330,12 @@ impl<'db> TyId<'db> {
 
     pub(crate) fn as_enum(self, db: &'db dyn HirAnalysisDb) -> Option<Enum<'db>> {
         let base_ty = self.base_ty(db);
-        if_chain! {
-            if let Some(adt_ref) = base_ty.adt_ref(db);
-            if let AdtRef::Enum(enum_) = adt_ref;
-            then {
-                Some(enum_)
-            } else {
-                None
-            }
+        if let Some(adt_ref) = base_ty.adt_ref(db)
+            && let AdtRef::Enum(enum_) = adt_ref
+        {
+            Some(enum_)
+        } else {
+            None
         }
     }
 

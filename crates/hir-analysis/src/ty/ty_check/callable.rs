@@ -6,7 +6,6 @@ use hir::{
         params::LazyGenericArgListSpan,
     },
 };
-use if_chain::if_chain;
 use salsa::Update;
 
 use super::{ExprProp, TyChecker};
@@ -198,19 +197,17 @@ impl<'db> Callable<'db> {
             .zip(self.func_def.arg_tys(db).iter())
             .enumerate()
         {
-            if_chain! {
-                if let Some(expected_label) = self.func_def.param_label(db, i);
-                if !expected_label.is_self(db);
-                if Some(expected_label) != given.label;
-                then {
-                    let diag = BodyDiag::CallArgLabelMismatch {
-                        primary: given.label_span.unwrap_or(given.expr_span.clone()),
-                        def_span: self.func_def.name_span(db),
-                        given: given.label,
-                        expected: expected_label,
-                    };
-                    tc.push_diag(diag);
-                }
+            if let Some(expected_label) = self.func_def.param_label(db, i)
+                && !expected_label.is_self(db)
+                && Some(expected_label) != given.label
+            {
+                let diag = BodyDiag::CallArgLabelMismatch {
+                    primary: given.label_span.unwrap_or(given.expr_span.clone()),
+                    def_span: self.func_def.name_span(db),
+                    given: given.label,
+                    expected: expected_label,
+                };
+                tc.push_diag(diag);
             }
 
             let mut expected = expected.instantiate(db, &self.generic_args);

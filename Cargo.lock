@@ -887,7 +887,6 @@ dependencies = [
  "fe-driver",
  "fe-hir",
  "fe-test-utils",
- "if_chain",
  "indexmap",
  "itertools 0.14.0",
  "num-bigint",
@@ -1336,12 +1335,6 @@ dependencies = [
  "icu_normalizer",
  "icu_properties",
 ]
-
-[[package]]
-name = "if_chain"
-version = "1.0.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cb56e1aa765b4b4f3aadfab769793b7087bb03a4ea4920644a6d238e2df5b9ed"
 
 [[package]]
 name = "indexmap"

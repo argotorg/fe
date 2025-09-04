@@ -15,7 +15,6 @@ cranelift-entity = "0.115"
 derive_more.workspace = true
 either = "1.13"
 ena = { version = "0.14", features = ["persistent"] }
-if_chain = "1.0"
 indexmap = "2.0"
 itertools = "0.14"
 num-bigint.workspace = true
