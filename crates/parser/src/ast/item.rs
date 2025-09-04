@@ -1,6 +1,6 @@
-use rowan::ast::{support, AstNode};
+use rowan::ast::{AstNode, support};
 
-use super::{ast_node, TraitRef, TupleType, TypeBoundList};
+use super::{TraitRef, TupleType, TypeBoundList, ast_node};
 use crate::{FeLang, SyntaxKind as SK, SyntaxToken};
 
 ast_node! {
@@ -502,7 +502,7 @@ mod tests {
 
     use super::*;
     use crate::{
-        ast::{prelude::*, ExprKind, TypeKind},
+        ast::{ExprKind, TypeKind, prelude::*},
         lexer::Lexer,
         parser::{ItemListScope, Parser},
     };

@@ -1,7 +1,7 @@
 use parser::ast;
 
 use super::FileLowerCtxt;
-use crate::hir_def::{attr::*, IdentId, StringId};
+use crate::hir_def::{IdentId, StringId, attr::*};
 
 impl<'db> AttrListId<'db> {
     pub(super) fn lower_ast(ctxt: &mut FileLowerCtxt<'db>, ast: ast::AttrList) -> Self {

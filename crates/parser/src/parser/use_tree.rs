@@ -1,8 +1,8 @@
 use std::{cell::Cell, convert::identity, rc::Rc};
 
-use crate::{parser::path::is_path_segment, ParseError, SyntaxKind, TextRange};
+use crate::{ParseError, SyntaxKind, TextRange, parser::path::is_path_segment};
 
-use super::{define_scope, parse_list, token_stream::TokenStream, ErrProof, Parser, Recovery};
+use super::{ErrProof, Parser, Recovery, define_scope, parse_list, token_stream::TokenStream};
 
 define_scope! { pub(crate) UseTreeScope, UseTree }
 impl super::Parse for UseTreeScope {
@@ -126,7 +126,7 @@ impl super::Parse for UseTreeAliasScope {
                 return Err(ParseError::Msg(
                     "expected identifier or `_`".into(),
                     TextRange::empty(parser.current_pos),
-                ))
+                ));
             }
         };
         Ok(())

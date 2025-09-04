@@ -1,7 +1,7 @@
 mod test_db;
 use std::path::Path;
 
-use dir_test::{dir_test, Fixture};
+use dir_test::{Fixture, dir_test};
 use fe_hir_analysis::ty::ty_check::check_func_body;
 use test_db::HirAnalysisTestDb;
 use test_utils::snap_test;

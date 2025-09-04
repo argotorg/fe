@@ -1,8 +1,8 @@
 use async_lsp::{
-    lsp_types::{LogMessageParams, MessageType},
     ClientSocket, LanguageClient,
+    lsp_types::{LogMessageParams, MessageType},
 };
-use tracing::{subscriber::set_default, Level, Metadata};
+use tracing::{Level, Metadata, subscriber::set_default};
 use tracing_subscriber::{fmt::MakeWriter, layer::SubscriberExt};
 use tracing_tree::HierarchicalLayer;
 

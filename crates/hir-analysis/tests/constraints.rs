@@ -1,7 +1,7 @@
 mod test_db;
 use std::path::Path;
 
-use dir_test::{dir_test, Fixture};
+use dir_test::{Fixture, dir_test};
 use test_db::HirAnalysisTestDb;
 
 #[dir_test(

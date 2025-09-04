@@ -1,9 +1,9 @@
 use hir::{
     hir_def::{CallArg as HirCallArg, ExprId, GenericArgListId, IdentId},
     span::{
+        DynLazySpan,
         expr::{LazyCallArgListSpan, LazyCallArgSpan},
         params::LazyGenericArgListSpan,
-        DynLazySpan,
     },
 };
 use if_chain::if_chain;
@@ -11,6 +11,7 @@ use salsa::Update;
 
 use super::{ExprProp, TyChecker};
 use crate::{
+    HirAnalysisDb,
     ty::{
         diagnostics::{BodyDiag, FuncBodyDiag},
         fold::{AssocTySubst, TyFoldable, TyFolder},
@@ -21,7 +22,6 @@ use crate::{
         ty_lower::lower_generic_arg_list,
         visitor::{TyVisitable, TyVisitor},
     },
-    HirAnalysisDb,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Update)]

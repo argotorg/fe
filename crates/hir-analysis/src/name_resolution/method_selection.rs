@@ -1,22 +1,22 @@
 use common::indexmap::IndexSet;
-use hir::hir_def::{scope_graph::ScopeId, IdentId, Trait};
+use hir::hir_def::{IdentId, Trait, scope_graph::ScopeId};
 use rustc_hash::FxHashSet;
 use thin_vec::ThinVec;
 
 use crate::{
+    HirAnalysisDb,
     name_resolution::{available_traits_in_scope, is_scope_visible_from},
     ty::{
         binder::Binder,
         canonical::{Canonical, Canonicalized, Solution},
         func_def::FuncDef,
         method_table::probe_method,
-        trait_def::{impls_for_ty, TraitDef, TraitInstId, TraitMethod},
+        trait_def::{TraitDef, TraitInstId, TraitMethod, impls_for_ty},
         trait_lower::lower_trait,
-        trait_resolution::{is_goal_satisfiable, GoalSatisfiability, PredicateListId},
+        trait_resolution::{GoalSatisfiability, PredicateListId, is_goal_satisfiable},
         ty_def::TyId,
         unify::UnificationTable,
     },
-    HirAnalysisDb,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, salsa::Update)]

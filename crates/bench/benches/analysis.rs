@@ -1,6 +1,6 @@
 use camino::{Utf8Path, Utf8PathBuf};
-use common::{core::HasBuiltinCore, InputDb};
-use criterion::{criterion_group, criterion_main, Criterion, SamplingMode};
+use common::{InputDb, core::HasBuiltinCore};
+use criterion::{Criterion, SamplingMode, criterion_group, criterion_main};
 use driver::DriverDataBase;
 use url::Url;
 use walkdir::WalkDir;

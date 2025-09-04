@@ -2,7 +2,7 @@ use parser::ast::{self, prelude::*};
 
 use super::FileLowerCtxt;
 use crate::{
-    hir_def::{use_tree::*, IdentId, ItemModifier, Partial, TrackedItemVariant, Use},
+    hir_def::{IdentId, ItemModifier, Partial, TrackedItemVariant, Use, use_tree::*},
     span::{HirOrigin, UseDesugared},
 };
 
@@ -150,9 +150,10 @@ fn decompose_subtree<'db>(
     if let Some(path) = subtree.path() {
         let segs: Vec<ast::UsePathSegment> = path.into_iter().collect();
 
-        let is_self_only = segs.len() == 1 && segs[0]
-            .kind()
-            .is_some_and(|k| matches!(k, ast::UsePathSegmentKind::Self_(_)));
+        let is_self_only = segs.len() == 1
+            && segs[0]
+                .kind()
+                .is_some_and(|k| matches!(k, ast::UsePathSegmentKind::Self_(_)));
 
         for seg in segs {
             succ_desugared.push_seg(&seg);

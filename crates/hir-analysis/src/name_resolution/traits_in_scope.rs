@@ -1,7 +1,7 @@
 use common::indexmap::IndexSet;
-use hir::hir_def::{scope_graph::ScopeId, Body, ExprId, ItemKind, Mod, TopLevelMod, Trait};
+use hir::hir_def::{Body, ExprId, ItemKind, Mod, TopLevelMod, Trait, scope_graph::ScopeId};
 
-use crate::{name_resolution::resolve_imports, HirAnalysisDb};
+use crate::{HirAnalysisDb, name_resolution::resolve_imports};
 
 /// Returns the all traits that are available in the given scope.
 pub fn available_traits_in_scope<'db>(

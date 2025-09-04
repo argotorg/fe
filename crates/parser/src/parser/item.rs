@@ -3,19 +3,19 @@ use std::{cell::Cell, convert::Infallible, rc::Rc};
 use unwrap_infallible::UnwrapInfallible;
 
 use super::{
+    ErrProof, Parser, Recovery,
     attr::{self, parse_attr_list},
     define_scope,
     expr::parse_expr,
     func::FuncDefScope,
-    param::{parse_generic_params_opt, parse_where_clause_opt, TraitRefScope, TypeBoundListScope},
+    param::{TraitRefScope, TypeBoundListScope, parse_generic_params_opt, parse_where_clause_opt},
     parse_list,
     struct_::RecordFieldDefListScope,
     token_stream::{LexicalToken, TokenStream},
-    type_::{parse_type, TupleTypeScope},
+    type_::{TupleTypeScope, parse_type},
     use_tree::UseTreeScope,
-    ErrProof, Parser, Recovery,
 };
-use crate::{parser::func::FuncScope, ExpectedKind, SyntaxKind};
+use crate::{ExpectedKind, SyntaxKind, parser::func::FuncScope};
 
 define_scope! {
     #[doc(hidden)]

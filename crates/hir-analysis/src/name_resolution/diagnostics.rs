@@ -8,9 +8,9 @@ use thin_vec::ThinVec;
 
 use super::NameRes;
 use crate::{
+    HirAnalysisDb,
     ty::ty_def::Kind,
     ty::{func_def::FuncDef, trait_def::TraitInstId, ty_def::TyId},
-    HirAnalysisDb,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Update)]

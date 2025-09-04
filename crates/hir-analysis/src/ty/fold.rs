@@ -11,8 +11,8 @@ use super::{
     visitor::TyVisitable,
 };
 use crate::{
-    ty::const_ty::{ConstTyData, ConstTyId},
     HirAnalysisDb,
+    ty::const_ty::{ConstTyData, ConstTyId},
 };
 
 pub trait TyFoldable<'db>
@@ -76,8 +76,8 @@ impl<'db> TyFoldable<'db> for TyId<'db> {
 
             AssocTy(assoc) => {
                 let folded_trait = assoc.trait_.fold_with(folder);
-                let ty = TyId::assoc_ty(folder.db(), folded_trait, assoc.name);
-                ty
+
+                TyId::assoc_ty(folder.db(), folded_trait, assoc.name)
             }
 
             QualifiedTy(trait_inst) => {

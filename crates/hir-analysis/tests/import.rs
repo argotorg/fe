@@ -1,10 +1,10 @@
 mod test_db;
 use std::path::Path;
 
-use dir_test::{dir_test, Fixture};
+use dir_test::{Fixture, dir_test};
 use fe_hir_analysis::{
     analysis_pass::ModuleAnalysisPass,
-    name_resolution::{resolve_imports, ImportAnalysisPass, NameDerivation, ResolvedImports},
+    name_resolution::{ImportAnalysisPass, NameDerivation, ResolvedImports, resolve_imports},
 };
 use hir::hir_def::Use;
 use rustc_hash::FxHashMap;

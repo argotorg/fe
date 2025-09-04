@@ -3,9 +3,9 @@ use std::collections::HashMap;
 use camino::Utf8PathBuf;
 use common::{config::Config, graph::EdgeWeight, tree::display_dependency_tree};
 use resolver::{
+    ResolutionHandler, Resolver,
     files::{FilesResolver, FilesResource},
     graph::{DiGraph, GraphResolutionHandler, GraphResolver},
-    ResolutionHandler, Resolver,
 };
 use url::Url;
 

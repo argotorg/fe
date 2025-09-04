@@ -2,7 +2,7 @@ use parser::ast;
 
 use super::body::BodyCtxt;
 use crate::{
-    hir_def::{pat::*, IdentId, LitKind, PathId},
+    hir_def::{IdentId, LitKind, PathId, pat::*},
     span::HirOrigin,
 };
 

@@ -1,3 +1,4 @@
+#![allow(clippy::print_stderr, clippy::print_stdout)]
 mod check;
 mod tree;
 

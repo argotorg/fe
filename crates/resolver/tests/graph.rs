@@ -1,10 +1,10 @@
 use core::panic;
 use std::{collections::HashMap, hash::Hash, marker::PhantomData};
 
-use dir_test::{dir_test, Fixture};
+use dir_test::{Fixture, dir_test};
 use fe_resolver::{
-    graph::{GraphResolutionHandler, GraphResolver, GraphResolverImpl},
     ResolutionHandler, Resolver,
+    graph::{GraphResolutionHandler, GraphResolver, GraphResolverImpl},
 };
 use test_utils::snap_test;
 

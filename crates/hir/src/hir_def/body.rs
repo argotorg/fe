@@ -12,13 +12,13 @@ use rustc_hash::FxHashMap;
 use salsa::Update;
 
 use super::{
-    scope_graph::ScopeId, Expr, ExprId, Partial, Pat, PatId, Stmt, StmtId, TopLevelMod,
-    TrackedItemId,
+    Expr, ExprId, Partial, Pat, PatId, Stmt, StmtId, TopLevelMod, TrackedItemId,
+    scope_graph::ScopeId,
 };
 use crate::{
-    span::{item::LazyBodySpan, HirOrigin},
-    visitor::prelude::*,
     HirDb,
+    span::{HirOrigin, item::LazyBodySpan},
+    visitor::prelude::*,
 };
 
 #[salsa::tracked]
@@ -143,19 +143,21 @@ where
     V: Update,
 {
     unsafe fn maybe_update(old_ptr: *mut Self, new_val: Self) -> bool {
-        let old_val = unsafe { &mut *old_ptr };
-        if old_val.len() != new_val.len() {
-            *old_val = new_val;
-            return true;
-        }
+        unsafe {
+            let old_val = &mut *old_ptr;
+            if old_val.len() != new_val.len() {
+                *old_val = new_val;
+                return true;
+            }
 
-        let mut changed = false;
-        for (k, v) in new_val.0.into_iter() {
-            let old_val = &mut old_val[k];
-            changed |= Update::maybe_update(old_val, v);
-        }
+            let mut changed = false;
+            for (k, v) in new_val.0.into_iter() {
+                let old_val = &mut old_val[k];
+                changed |= Update::maybe_update(old_val, v);
+            }
 
-        changed
+            changed
+        }
     }
 }
 

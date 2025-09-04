@@ -1,10 +1,9 @@
 use super::{
-    define_scope,
+    ErrProof, Parser, Recovery, define_scope,
     expr_atom::BlockExprScope,
-    param::{parse_generic_params_opt, parse_where_clause_opt, FuncParamListScope},
+    param::{FuncParamListScope, parse_generic_params_opt, parse_where_clause_opt},
     token_stream::TokenStream,
     type_::parse_type,
-    ErrProof, Parser, Recovery,
 };
 use crate::{ExpectedKind, SyntaxKind};
 

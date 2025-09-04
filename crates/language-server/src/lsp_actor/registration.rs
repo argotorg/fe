@@ -6,23 +6,23 @@ use act_locally::{
     types::ActorError,
 };
 use async_lsp::{
-    lsp_types::{notification::Notification, request::Request},
     AnyEvent, ResponseError,
+    lsp_types::{notification::Notification, request::Request},
 };
 use tracing::error;
 
 use super::{
-    service::{LspActorKey, LspActorService},
     LspActor,
+    service::{LspActorKey, LspActorService},
 };
 
 impl<S: 'static> LspActor<S> for LspActorService<S> {
     fn handle_request<R: Request>(
         &mut self,
         handler: impl for<'b> AsyncFunc<'b, S, R::Params, R::Result, ResponseError>
-            + 'static
-            + Send
-            + Sync,
+        + 'static
+        + Send
+        + Sync,
     ) -> &mut Self {
         let param_handler = Box::new(
             move |params: Box<dyn Message>| -> Result<Box<dyn Message>, ActorError> {
@@ -69,9 +69,9 @@ impl<S: 'static> LspActor<S> for LspActorService<S> {
     fn handle_request_mut<R: Request>(
         &mut self,
         handler: impl for<'b> AsyncMutatingFunc<'b, S, R::Params, R::Result, ResponseError>
-            + 'static
-            + Send
-            + Sync,
+        + 'static
+        + Send
+        + Sync,
     ) -> &mut Self {
         let param_handler = Box::new(
             move |params: Box<dyn Message>| -> Result<Box<dyn Message>, ActorError> {
@@ -145,9 +145,9 @@ impl<S: 'static> LspActor<S> for LspActorService<S> {
     fn handle_notification_mut<N: Notification>(
         &mut self,
         handler: impl for<'b> AsyncMutatingFunc<'b, S, N::Params, (), ResponseError>
-            + 'static
-            + Send
-            + Sync,
+        + 'static
+        + Send
+        + Sync,
     ) -> &mut Self {
         let param_handler = Box::new(
             move |params: Box<dyn Message>| -> Result<Box<dyn Message>, ActorError> {

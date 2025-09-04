@@ -8,9 +8,9 @@ use hir::hir_def::{
 };
 
 use super::{
+    RecordLike, Typeable,
     env::{ExprProp, LocalBinding, TyCheckEnv},
     path::ResolvedPathInBody,
-    RecordLike, Typeable,
 };
 use crate::ty::{
     diagnostics::{BodyDiag, FuncBodyDiag},
@@ -21,21 +21,21 @@ use crate::ty::{
 };
 use crate::ty::{trait_def::TraitDef, trait_lower::lower_trait};
 use crate::{
+    HirAnalysisDb, Spanned,
     name_resolution::{
+        EarlyNameQueryId, ExpectedPathKind, NameDomain, NameResBucket, PathRes, QueryDirective,
         diagnostics::PathResDiag,
         is_scope_visible_from,
-        method_selection::{select_method_candidate, MethodCandidate, MethodSelectionError},
-        resolve_ident_to_bucket, resolve_name_res, resolve_path, resolve_query, EarlyNameQueryId,
-        ExpectedPathKind, NameDomain, NameResBucket, PathRes, QueryDirective,
+        method_selection::{MethodCandidate, MethodSelectionError, select_method_candidate},
+        resolve_ident_to_bucket, resolve_name_res, resolve_path, resolve_query,
     },
     ty::{
         canonical::Canonicalized,
         const_ty::ConstTyId,
         normalize::normalize_ty,
-        ty_check::{path::RecordInitChecker, TyChecker},
+        ty_check::{TyChecker, path::RecordInitChecker},
         ty_def::{InvalidCause, TyId},
     },
-    HirAnalysisDb, Spanned,
 };
 
 impl<'db> TyChecker<'db> {
@@ -643,18 +643,18 @@ impl<'db> TyChecker<'db> {
             FieldIndex::Ident(label) => {
                 let record_like = RecordLike::from_ty(lhs_ty);
                 if let Some(field_ty) = record_like.record_field_ty(self.db, *label) {
-                    if let Some(scope) = record_like.record_field_scope(self.db, *label) {
-                        if !is_scope_visible_from(self.db, scope, self.env.scope()) {
-                            // Check the visibility of the field.
-                            let diag = PathResDiag::Invisible(
-                                expr.span(self.body()).into_field_expr().accessor().into(),
-                                *label,
-                                scope.name_span(self.db),
-                            );
+                    if let Some(scope) = record_like.record_field_scope(self.db, *label)
+                        && !is_scope_visible_from(self.db, scope, self.env.scope())
+                    {
+                        // Check the visibility of the field.
+                        let diag = PathResDiag::Invisible(
+                            expr.span(self.body()).into_field_expr().accessor().into(),
+                            *label,
+                            scope.name_span(self.db),
+                        );
 
-                            self.push_diag(diag);
-                            return ExprProp::invalid(self.db);
-                        }
+                        self.push_diag(diag);
+                        return ExprProp::invalid(self.db);
                     }
                     return ExprProp::new(field_ty, typed_lhs.is_mut);
                 }

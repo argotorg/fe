@@ -5,11 +5,11 @@ pub use radix_immutable::StringPrefixView;
 use smol_str::SmolStr;
 use url::Url;
 
+use crate::InputDb;
 use crate::config::{Config, ConfigDiagnostic};
 use crate::core::BUILTIN_CORE_BASE_URL;
 use crate::file::{File, Workspace};
 use crate::urlext::UrlExt;
-use crate::InputDb;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum IngotKind {

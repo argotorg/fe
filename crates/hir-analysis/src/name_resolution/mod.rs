@@ -15,15 +15,15 @@ pub use name_resolver::{
     NameResolutionError, QueryDirective,
 };
 pub use path_resolver::{
-    find_associated_type, resolve_ident_to_bucket, resolve_name_res, resolve_path,
-    resolve_path_with_observer, PathRes, PathResError, PathResErrorKind, ResolvedVariant,
+    PathRes, PathResError, PathResErrorKind, ResolvedVariant, find_associated_type,
+    resolve_ident_to_bucket, resolve_name_res, resolve_path, resolve_path_with_observer,
 };
 use tracing::debug;
 pub use traits_in_scope::available_traits_in_scope;
 pub(crate) use visibility_checker::is_scope_visible_from;
 
 use self::{diagnostics::ImportDiag, import_resolver::DefaultImporter};
-use crate::{analysis_pass::ModuleAnalysisPass, diagnostics::DiagnosticVoucher, HirAnalysisDb};
+use crate::{HirAnalysisDb, analysis_pass::ModuleAnalysisPass, diagnostics::DiagnosticVoucher};
 
 #[salsa::tracked(return_ref)]
 pub fn resolve_query<'db>(

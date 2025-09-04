@@ -3,8 +3,8 @@ use rust_embed::Embed;
 use url::Url;
 
 use crate::{
-    ingot::{Ingot, IngotBaseUrl},
     InputDb,
+    ingot::{Ingot, IngotBaseUrl},
 };
 
 pub static BUILTIN_CORE_BASE_URL: &str = "builtin-core:///";

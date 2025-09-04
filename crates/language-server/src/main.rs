@@ -22,21 +22,23 @@ use async_lsp::tracing::TracingLayer;
 use async_std::net::TcpListener;
 use clap::Parser;
 use cli::{CliArgs, Commands};
-use futures::io::AsyncReadExt;
 use futures::StreamExt;
+use futures::io::AsyncReadExt;
 use logging::setup_panic_hook;
 use server::setup;
 use tracing::instrument::WithSubscriber;
 use tracing::{error, info};
 
 use async_lsp::client_monitor::ClientProcessMonitorLayer;
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use tower::ServiceBuilder;
 
 #[tokio::main]
 async fn main() {
-    std::env::set_var("RUST_BACKTRACE", "full");
+    unsafe {
+        std::env::set_var("RUST_BACKTRACE", "full");
+    }
     setup_panic_hook();
 
     // Parse CLI arguments

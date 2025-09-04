@@ -1,14 +1,14 @@
-use cranelift_entity::{entity_impl, PrimaryMap};
+use cranelift_entity::{PrimaryMap, entity_impl};
 use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::{
+    HirDb,
     hir_def::{
-        scope_graph::{EdgeKind, Scope, ScopeEdge, ScopeGraph, ScopeId},
         Body, Enum, EnumVariant, ExprId, FieldDefListId, FieldParent, FuncParamListId,
         FuncParamName, GenericParamListId, HirIngot, ItemKind, TopLevelMod, TrackedItemId,
         TrackedItemVariant, Trait, Use, VariantDefListId, VariantKind, Visibility,
+        scope_graph::{EdgeKind, Scope, ScopeEdge, ScopeGraph, ScopeId},
     },
-    HirDb,
 };
 
 /// An [`ScopeGraph`] builder that is used to construct the scope in the hir

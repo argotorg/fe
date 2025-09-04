@@ -1,9 +1,9 @@
 use parser::ast::{self, prelude::*};
 
-use super::{define_lazy_span_node, LazySpanAtom};
+use super::{LazySpanAtom, define_lazy_span_node};
 use crate::span::{
-    transition::{LazyArg, LazyTransitionFn, ResolvedOrigin, ResolvedOriginKind},
     DesugaredOrigin,
+    transition::{LazyArg, LazyTransitionFn, ResolvedOrigin, ResolvedOriginKind},
 };
 
 define_lazy_span_node!(LazyUsePathSpan);

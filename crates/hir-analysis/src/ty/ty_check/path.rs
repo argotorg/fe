@@ -2,22 +2,22 @@ use std::collections::hash_map::Entry;
 
 use hir::{
     hir_def::{
-        scope_graph::ScopeId, FieldDefListId as HirFieldDefListId, FieldParent, IdentId,
-        VariantKind as HirVariantKind,
+        FieldDefListId as HirFieldDefListId, FieldParent, IdentId, VariantKind as HirVariantKind,
+        scope_graph::ScopeId,
     },
     span::DynLazySpan,
 };
 use rustc_hash::FxHashMap;
 
-use super::{env::LocalBinding, TyChecker};
+use super::{TyChecker, env::LocalBinding};
 use crate::{
-    name_resolution::{diagnostics::PathResDiag, is_scope_visible_from, PathRes, ResolvedVariant},
+    HirAnalysisDb,
+    name_resolution::{PathRes, ResolvedVariant, diagnostics::PathResDiag, is_scope_visible_from},
     ty::{
         adt_def::{AdtDef, AdtField, AdtRef},
         diagnostics::{BodyDiag, FuncBodyDiag},
         ty_def::{InvalidCause, TyData, TyId},
     },
-    HirAnalysisDb,
 };
 
 impl<'db> TyId<'db> {

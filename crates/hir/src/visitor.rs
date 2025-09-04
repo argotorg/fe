@@ -1,33 +1,33 @@
 use std::{marker::PhantomData, mem};
 
 use crate::{
+    HirDb,
     hir_def::{
-        attr, scope_graph::ScopeId, Body, CallArg, Const, Contract, Enum, EnumVariant, Expr,
-        ExprId, Field, FieldDef, FieldDefListId, FieldIndex, FieldParent, Func, FuncParam,
-        FuncParamListId, FuncParamName, GenericArg, GenericArgListId, GenericParam,
-        GenericParamListId, IdentId, Impl, ImplTrait, ItemKind, KindBound, LitKind, MatchArm, Mod,
-        Partial, Pat, PatId, PathId, PathKind, Stmt, StmtId, Struct, TopLevelMod, Trait,
-        TraitRefId, TupleTypeId, TypeAlias, TypeBound, TypeId, TypeKind, Use, UseAlias, UsePathId,
-        UsePathSegment, VariantDef, VariantDefListId, VariantKind, WhereClauseId, WherePredicate,
+        Body, CallArg, Const, Contract, Enum, EnumVariant, Expr, ExprId, Field, FieldDef,
+        FieldDefListId, FieldIndex, FieldParent, Func, FuncParam, FuncParamListId, FuncParamName,
+        GenericArg, GenericArgListId, GenericParam, GenericParamListId, IdentId, Impl, ImplTrait,
+        ItemKind, KindBound, LitKind, MatchArm, Mod, Partial, Pat, PatId, PathId, PathKind, Stmt,
+        StmtId, Struct, TopLevelMod, Trait, TraitRefId, TupleTypeId, TypeAlias, TypeBound, TypeId,
+        TypeKind, Use, UseAlias, UsePathId, UsePathSegment, VariantDef, VariantDefListId,
+        VariantKind, WhereClauseId, WherePredicate, attr, scope_graph::ScopeId,
     },
     span::{
-        item::LazySuperTraitListSpan, lazy_spans::*, params::LazyTraitRefSpan,
-        transition::ChainRoot, SpanDowncast,
+        SpanDowncast, item::LazySuperTraitListSpan, lazy_spans::*, params::LazyTraitRefSpan,
+        transition::ChainRoot,
     },
-    HirDb,
 };
 
 pub mod prelude {
     pub use super::{
-        walk_arm, walk_attribute, walk_attribute_list, walk_body, walk_call_arg,
-        walk_call_arg_list, walk_const, walk_contract, walk_enum, walk_expr, walk_field,
-        walk_field_def, walk_field_def_list, walk_field_list, walk_func, walk_func_param,
-        walk_func_param_list, walk_generic_arg, walk_generic_arg_list, walk_generic_param,
-        walk_generic_param_list, walk_impl, walk_impl_trait, walk_item, walk_kind_bound, walk_mod,
-        walk_pat, walk_path, walk_stmt, walk_struct, walk_super_trait_list, walk_top_mod,
-        walk_trait, walk_trait_ref, walk_type, walk_type_alias, walk_type_bound,
-        walk_type_bound_list, walk_use, walk_use_path, walk_variant_def, walk_variant_def_list,
-        walk_where_clause, walk_where_predicate, Visitor, VisitorCtxt,
+        Visitor, VisitorCtxt, walk_arm, walk_attribute, walk_attribute_list, walk_body,
+        walk_call_arg, walk_call_arg_list, walk_const, walk_contract, walk_enum, walk_expr,
+        walk_field, walk_field_def, walk_field_def_list, walk_field_list, walk_func,
+        walk_func_param, walk_func_param_list, walk_generic_arg, walk_generic_arg_list,
+        walk_generic_param, walk_generic_param_list, walk_impl, walk_impl_trait, walk_item,
+        walk_kind_bound, walk_mod, walk_pat, walk_path, walk_stmt, walk_struct,
+        walk_super_trait_list, walk_top_mod, walk_trait, walk_trait_ref, walk_type,
+        walk_type_alias, walk_type_bound, walk_type_bound_list, walk_use, walk_use_path,
+        walk_variant_def, walk_variant_def_list, walk_where_clause, walk_where_predicate,
     };
     pub use crate::span::lazy_spans::*;
 }
