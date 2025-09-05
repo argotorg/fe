@@ -1,9 +1,0 @@
-struct MyStruct {
-    pub field: u32
-}
-
-fn main() {
-    let obj = MyStruct { field: 42 }
-    let val = obj.field
-}
-

@@ -1,8 +1,11 @@
 use hir::hir_def::{scope_graph::ScopeId, IdentId};
 
 use crate::{
-    name_resolution::{method_selection::{select_method_candidate, MethodCandidate}, PathRes},
-    ty::{trait_resolution::PredicateListId, func_def::FuncDef},
+    name_resolution::{
+        method_selection::{select_method_candidate, MethodCandidate},
+        PathRes,
+    },
+    ty::{func_def::FuncDef, trait_resolution::PredicateListId},
     HirAnalysisDb,
 };
 
@@ -18,18 +21,24 @@ pub fn find_method_id<'db>(
 ) -> Option<FuncDef<'db>> {
     match select_method_candidate(db, receiver_ty, method_name, scope, assumptions) {
         Ok(MethodCandidate::InherentMethod(fd)) => Some(fd),
-        Ok(MethodCandidate::TraitMethod(tm)) | Ok(MethodCandidate::NeedsConfirmation(tm)) => Some(tm.method.0),
+        Ok(MethodCandidate::TraitMethod(tm)) | Ok(MethodCandidate::NeedsConfirmation(tm)) => {
+            Some(tm.method.0)
+        }
         Err(_) => None,
     }
 }
 
 /// Extract the underlying function definition for a resolved method PathRes.
 /// Returns None if the PathRes is not a method.
-pub fn method_func_def_from_res<'db>(res: &PathRes<'db>) -> Option<FuncDef<'db>> {
+pub fn method_func_def_from_res<'db>(
+    res: &crate::name_resolution::PathRes<'db>,
+) -> Option<FuncDef<'db>> {
     match res {
         PathRes::Method(_, cand) => match cand {
             MethodCandidate::InherentMethod(fd) => Some(*fd),
-            MethodCandidate::TraitMethod(tm) | MethodCandidate::NeedsConfirmation(tm) => Some(tm.method.0),
+            MethodCandidate::TraitMethod(tm) | MethodCandidate::NeedsConfirmation(tm) => {
+                Some(tm.method.0)
+            }
         },
         _ => None,
     }

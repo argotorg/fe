@@ -1,0 +1,82 @@
+---
+source: crates/semantic-query/tests/symbol_keys_snap.rs
+expression: out
+input_file: test_files/use_alias_and_glob.snap
+---
+Symbol: local in use_alias_and_glob::f
+help: definitions + references
+   ┌─ use_alias_and_glob.fe:12:7
+   │
+12 │   let _a: N
+   │       ^^
+   │       │
+   │       def: defined here @ 12:7 (1 refs)
+   │       ref: 12:7
+
+
+
+Symbol: local in use_alias_and_glob::f
+help: definitions + references
+   ┌─ use_alias_and_glob.fe:14:7
+   │
+14 │   let _c: sub::Name
+   │       ^^
+   │       │
+   │       def: defined here @ 14:7 (1 refs)
+   │       ref: 14:7
+
+
+
+Symbol: local in use_alias_and_glob::f
+help: definitions + references
+   ┌─ use_alias_and_glob.fe:15:7
+   │
+15 │   let _d: Alt
+   │       ^^
+   │       │
+   │       def: defined here @ 15:7 (1 refs)
+   │       ref: 15:7
+
+
+
+Symbol: local in use_alias_and_glob::f
+help: definitions + references
+   ┌─ use_alias_and_glob.fe:13:7
+   │
+13 │   let _b: Name
+   │       ^^
+   │       │
+   │       def: defined here @ 13:7 (1 refs)
+   │       ref: 13:7
+
+
+
+Symbol: use_alias_and_glob::root::sub::Alt
+help: definitions + references
+   ┌─ use_alias_and_glob.fe:4:20
+   │
+ 4 │         pub struct Alt {}
+   │                    ^^^
+   │                    │
+   │                    def: defined here @ 4:20 (2 refs)
+   │                    ref: 4:20
+   ·
+15 │   let _d: Alt
+   │           ^^^ ref: 15:11
+
+
+
+Symbol: use_alias_and_glob::root::sub::Name
+help: definitions + references
+   ┌─ use_alias_and_glob.fe:3:20
+   │
+ 3 │         pub struct Name {}
+   │                    ^^^^
+   │                    │
+   │                    def: defined here @ 3:20 (3 refs)
+   │                    ref: 3:20
+   ·
+12 │   let _a: N
+   │           ^ ref: 12:11
+13 │   let _b: Name
+   │           ^^^^ ref: 13:11

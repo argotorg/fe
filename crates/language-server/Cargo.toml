@@ -8,6 +8,7 @@ description = "An LSP language server for Fe lang"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
+
 [dependencies]
 act-locally = "0.1.1"
 anyhow = "1.0.95"

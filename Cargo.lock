@@ -904,6 +904,7 @@ dependencies = [
  "fe-common",
  "fe-driver",
  "fe-hir",
+ "fe-parser",
  "fe-test-utils",
  "if_chain",
  "indexmap",
@@ -997,6 +998,7 @@ dependencies = [
  "fe-hir-analysis",
  "fe-parser",
  "fe-test-utils",
+ "rustc-hash 2.1.1",
  "salsa",
  "tracing",
  "url",
@@ -1006,11 +1008,14 @@ dependencies = [
 name = "fe-test-utils"
 version = "0.1.0"
 dependencies = [
+ "codespan-reporting",
+ "fe-common",
  "fe-hir",
  "fe-parser",
  "insta",
  "rstest",
  "rstest_reuse",
+ "termcolor",
  "tracing",
  "tracing-subscriber",
  "tracing-tree 0.3.1",

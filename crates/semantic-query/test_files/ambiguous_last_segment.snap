@@ -1,0 +1,5 @@
+---
+source: crates/semantic-query/tests/symbol_keys_snap.rs
+expression: out
+---
+

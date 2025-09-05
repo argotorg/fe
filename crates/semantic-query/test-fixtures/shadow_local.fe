@@ -1,0 +1,1 @@
+fn f(x: i32) -> i32 { let x = 1; return x }

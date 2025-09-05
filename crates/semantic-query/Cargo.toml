@@ -17,6 +17,7 @@ hir-analysis.workspace = true
 salsa.workspace = true
 tracing.workspace = true
 url.workspace = true
+rustc-hash.workspace = true
 
 [dev-dependencies]
 async-lsp = { git = "https://github.com/micahscopes/async-lsp", branch = "pub-inner-type-id" }

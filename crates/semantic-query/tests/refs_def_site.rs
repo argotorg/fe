@@ -17,23 +17,11 @@ fn line_col_from_offset(text: &str, offset: parser::TextSize) -> (usize, usize) 
     (line, col)
 }
 
-fn offset_from_line_col(text: &str, line: usize, col: usize) -> parser::TextSize {
-    let mut cur_line = 0usize;
-    let mut idx = 0usize;
-    for ch in text.chars() {
-        if cur_line == line { break; }
-        idx += 1;
-        if ch == '\n' { cur_line += 1; }
-    }
-    let total = (idx + col) as u32;
-    total.into()
-}
-
 #[test]
 fn def_site_method_refs_include_ufcs() {
     // Load the existing fixture used by snapshots
     let fixture_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("test_files/goto/methods_ufcs.fe");
+        .join("test_files/methods_ufcs.fe");
     let content = std::fs::read_to_string(&fixture_path).expect("fixture present");
 
     let mut db = DriverDataBase::default();
@@ -58,7 +46,7 @@ fn def_site_method_refs_include_ufcs() {
         }
     }
     let cursor = cursor.expect("found def-site method name");
-    let refs = SemanticIndex::find_references_at_cursor(&db, &db, top, cursor);
+    let refs = SemanticIndex::find_references_at_cursor(&db, top, cursor);
     assert!(refs.len() >= 3, "expected at least 3 refs, got {}", refs.len());
 
     // Collect (line,col) pairs for readability
@@ -74,5 +62,43 @@ fn def_site_method_refs_include_ufcs() {
     let expected = vec![(3, 9), (4, 42), (8, 20)];
     for p in expected.iter() {
         assert!(pairs.contains(p), "missing expected reference at {:?}, got {:?}", p, pairs);
+    }
+}
+
+#[test]
+fn round_trip_invariant_param_and_local() {
+    let content = r#"
+fn main(x: i32) -> i32 { let y = x; return y }
+"#;
+    let tmp = std::env::temp_dir().join("round_trip_param_local.fe");
+    std::fs::write(&tmp, content).unwrap();
+    let mut db = DriverDataBase::default();
+    let file = db
+        .workspace()
+        .touch(&mut db, Url::from_file_path(&tmp).unwrap(), Some(content.to_string()));
+    let top = map_file_to_mod(&db, file);
+
+    // Cursor on parameter usage 'x'  
+    let cursor_x = parser::TextSize::from(content.find(" x; ").unwrap() as u32 + 1);
+    if let Some(key) = SemanticIndex::symbol_identity_at_cursor(&db, top, cursor_x) {
+        if let Some((_tm, def_span)) = SemanticIndex::definition_for_symbol(&db, key) {
+            let refs = SemanticIndex::references_for_symbol(&db, top, key);
+            let def_resolved = def_span.resolve(&db).expect("def span resolve");
+            assert!(refs.iter().any(|r| r.span.resolve(&db) == Some(def_resolved.clone())), "param def-site missing from refs");
+        }
+    } else {
+        panic!("failed to resolve symbol at cursor_x");
+    }
+
+    // Cursor on local 'y' usage (in return statement)  
+    let cursor_y = parser::TextSize::from(content.rfind("return y").unwrap() as u32 + 7);
+    if let Some(key) = SemanticIndex::symbol_identity_at_cursor(&db, top, cursor_y) {
+        if let Some((_tm, def_span)) = SemanticIndex::definition_for_symbol(&db, key) {
+            let refs = SemanticIndex::references_for_symbol(&db, top, key);
+            let def_resolved = def_span.resolve(&db).expect("def span resolve");
+            assert!(refs.iter().any(|r| r.span.resolve(&db) == Some(def_resolved.clone())), "local def-site missing from refs");
+        }
+    } else {
+        panic!("failed to resolve symbol at cursor_y");
     }
 }

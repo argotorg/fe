@@ -2,8 +2,9 @@ use anyhow::Error;
 use async_lsp::lsp_types::Hover;
 
 use common::file::File;
-use fe_semantic_query::SemanticIndex;
+use fe_semantic_query::Api;
 use hir::lower::map_file_to_mod;
+use hir::span::LazySpan;
 use tracing::info;
 
 use super::goto::Cursor;
@@ -25,29 +26,25 @@ pub fn hover_helper(
 
     let top_mod = map_file_to_mod(db, file);
 
-    // Prefer structured hover; fall back to legacy Markdown string
-    if let Some(h) = SemanticIndex::hover_info_for_symbol_at_cursor(db, db, top_mod, cursor) {
+    // Prefer structured hover; emit None if not available (legacy markdown removed)
+    let api = Api::new(db);
+    if let Some(h) = api.hover_info_for_symbol_at_cursor(top_mod, cursor) {
         let mut parts: Vec<String> = Vec::new();
         if let Some(sig) = h.signature {
             parts.push(format!("```fe\n{}\n```", sig));
         }
         if let Some(doc) = h.documentation { parts.push(doc); }
         let value = if parts.is_empty() { String::new() } else { parts.join("\n\n") };
+        let range = h
+            .span
+            .resolve(db)
+            .and_then(|sp| crate::util::to_lsp_range_from_span(sp, db).ok());
         let result = async_lsp::lsp_types::Hover {
             contents: async_lsp::lsp_types::HoverContents::Markup(async_lsp::lsp_types::MarkupContent {
                 kind: async_lsp::lsp_types::MarkupKind::Markdown,
                 value,
             }),
-            range: None,
-        };
-        return Ok(Some(result));
-    } else if let Some(h) = SemanticIndex::hover_at_cursor(db, db, top_mod, cursor) {
-        let result = async_lsp::lsp_types::Hover {
-            contents: async_lsp::lsp_types::HoverContents::Markup(async_lsp::lsp_types::MarkupContent {
-                kind: async_lsp::lsp_types::MarkupKind::Markdown,
-                value: h.contents,
-            }),
-            range: None,
+            range,
         };
         return Ok(Some(result));
     }

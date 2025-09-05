@@ -1,0 +1,59 @@
+---
+source: crates/semantic-query/tests/symbol_keys_snap.rs
+expression: out
+input_file: test_files/locals.snap
+---
+Symbol: local in locals::test_locals
+help: definitions + references
+  ┌─ locals.fe:2:7
+  │
+2 │   let a = x
+  │       ^
+  │       │
+  │       def: defined here @ 2:7 (2 refs)
+  │       ref: 2:7
+3 │   let x = a + y
+  │           ^ ref: 3:11
+
+
+
+Symbol: local in locals::test_locals
+help: definitions + references
+  ┌─ locals.fe:3:7
+  │
+3 │   let x = a + y
+  │       ^
+  │       │
+  │       def: defined here @ 3:7 (2 refs)
+  │       ref: 3:7
+4 │   x
+  │   ^ ref: 4:3
+
+
+
+Symbol: param#0 of locals::test_locals
+help: definitions + references
+  ┌─ locals.fe:1:16
+  │
+1 │ fn test_locals(x: i32, y: i32) -> i32 {
+  │                ^
+  │                │
+  │                def: defined here @ 1:16 (2 refs)
+  │                ref: 1:16
+2 │   let a = x
+  │           ^ ref: 2:11
+
+
+
+Symbol: param#1 of locals::test_locals
+help: definitions + references
+  ┌─ locals.fe:1:24
+  │
+1 │ fn test_locals(x: i32, y: i32) -> i32 {
+  │                        ^
+  │                        │
+  │                        def: defined here @ 1:24 (2 refs)
+  │                        ref: 1:24
+2 │   let a = x
+3 │   let x = a + y
+  │               ^ ref: 3:15

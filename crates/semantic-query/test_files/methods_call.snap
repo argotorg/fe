@@ -1,0 +1,90 @@
+---
+source: crates/semantic-query/tests/symbol_keys_snap.rs
+expression: out
+input_file: test_files/methods_call.snap
+---
+Symbol: local in methods_call::test
+help: definitions + references
+  ┌─ methods_call.fe:9:7
+  │
+9 │   let r = c.get()
+  │       ^
+  │       │
+  │       def: defined here @ 9:7 (1 refs)
+  │       ref: 9:7
+
+
+
+Symbol: local in methods_call::test
+help: definitions + references
+  ┌─ methods_call.fe:8:7
+  │
+8 │   let c = Container { value: 42 }
+  │       ^
+  │       │
+  │       def: defined here @ 8:7 (2 refs)
+  │       ref: 8:7
+9 │   let r = c.get()
+  │           ^ ref: 9:11
+
+
+
+Symbol: method get
+help: definitions + references
+  ┌─ methods_call.fe:4:10
+  │
+4 │   pub fn get(self) -> i32 { self.value }
+  │          ^^^
+  │          │
+  │          def: defined here @ 4:10 (2 refs)
+  │          ref: 4:10
+  ·
+9 │   let r = c.get()
+  │             ^^^ ref: 9:13
+
+
+
+Symbol: methods_call::Container
+help: definitions + references
+  ┌─ methods_call.fe:1:8
+  │
+1 │ struct Container { value: i32 }
+  │        ^^^^^^^^^
+  │        │
+  │        def: defined here @ 1:8 (4 refs)
+  │        ref: 1:8
+2 │ 
+3 │ impl Container {
+  │      ^^^^^^^^^ ref: 3:6
+4 │   pub fn get(self) -> i32 { self.value }
+  │              ^^^^ ref: 4:14
+  ·
+8 │   let c = Container { value: 42 }
+  │           ^^^^^^^^^ ref: 8:11
+
+
+
+Symbol: methods_call::Container::value
+help: definitions + references
+  ┌─ methods_call.fe:1:20
+  │
+1 │ struct Container { value: i32 }
+  │                    ^^^^^
+  │                    │
+  │                    def: defined here @ 1:20 (2 refs)
+  │                    ref: 1:20
+  ·
+4 │   pub fn get(self) -> i32 { self.value }
+  │                                  ^^^^^ ref: 4:34
+
+
+
+Symbol: param#0 of 
+help: definitions + references
+  ┌─ methods_call.fe:4:14
+  │
+4 │   pub fn get(self) -> i32 { self.value }
+  │              ^^^^           ^^^^ ref: 4:29
+  │              │               
+  │              def: defined here @ 4:14 (2 refs)
+  │              ref: 4:14

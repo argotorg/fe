@@ -19,3 +19,6 @@ tracing-tree = "0.3.0"
 hir = { workspace = true }
 parser = { workspace = true }
 url = { workspace = true }
+common = { workspace = true }
+codespan-reporting = { workspace = true }
+termcolor = "1"

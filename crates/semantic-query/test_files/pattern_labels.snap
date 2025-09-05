@@ -1,0 +1,117 @@
+---
+source: crates/semantic-query/tests/symbol_keys_snap.rs
+expression: out
+input_file: test_files/pattern_labels.snap
+---
+Symbol: local in pattern_labels::test
+help: definitions + references
+   ┌─ pattern_labels.fe:10:15
+   │
+10 │   let Point { x, y } = p
+   │               ^
+   │               │
+   │               def: defined here @ 10:15 (1 refs)
+   │               ref: 10:15
+
+
+
+Symbol: local in pattern_labels::test
+help: definitions + references
+   ┌─ pattern_labels.fe:12:20
+   │
+12 │     Color::Green { intensity } => intensity
+   │                    ^^^^^^^^^      ^^^^^^^^^ ref: 12:35
+   │                    │               
+   │                    def: defined here @ 12:20 (2 refs)
+   │                    ref: 12:20
+
+
+
+Symbol: local in pattern_labels::test
+help: definitions + references
+   ┌─ pattern_labels.fe:10:18
+   │
+10 │   let Point { x, y } = p
+   │                  ^
+   │                  │
+   │                  def: defined here @ 10:18 (1 refs)
+   │                  ref: 10:18
+
+
+
+Symbol: param#0 of pattern_labels::test
+help: definitions + references
+   ┌─ pattern_labels.fe:9:9
+   │
+ 9 │ fn test(p: Point, c: Color) -> i32 {
+   │         ^
+   │         │
+   │         def: defined here @ 9:9 (2 refs)
+   │         ref: 9:9
+10 │   let Point { x, y } = p
+   │                        ^ ref: 10:24
+
+
+
+Symbol: param#1 of pattern_labels::test
+help: definitions + references
+   ┌─ pattern_labels.fe:9:19
+   │
+ 9 │ fn test(p: Point, c: Color) -> i32 {
+   │                   ^
+   │                   │
+   │                   def: defined here @ 9:19 (2 refs)
+   │                   ref: 9:19
+10 │   let Point { x, y } = p
+11 │   match c {
+   │         ^ ref: 11:9
+
+
+
+Symbol: pattern_labels::Color
+help: definitions + references
+   ┌─ pattern_labels.fe:1:6
+   │
+ 1 │ enum Color {
+   │      ^^^^^
+   │      │
+   │      def: defined here @ 1:6 (3 refs)
+   │      ref: 1:6
+   ·
+ 9 │ fn test(p: Point, c: Color) -> i32 {
+   │                      ^^^^^ ref: 9:22
+   ·
+12 │     Color::Green { intensity } => intensity
+   │     ^^^^^ ref: 12:5
+
+
+
+Symbol: pattern_labels::Color::Green
+help: definitions + references
+   ┌─ pattern_labels.fe:3:3
+   │
+ 3 │   Green { intensity: i32 },
+   │   ^^^^^
+   │   │
+   │   def: defined here @ 3:3 (2 refs)
+   │   ref: 3:3
+   ·
+12 │     Color::Green { intensity } => intensity
+   │            ^^^^^ ref: 12:12
+
+
+
+Symbol: pattern_labels::Point
+help: definitions + references
+   ┌─ pattern_labels.fe:7:8
+   │
+ 7 │ struct Point { x: i32, y: i32 }
+   │        ^^^^^
+   │        │
+   │        def: defined here @ 7:8 (3 refs)
+   │        ref: 7:8
+ 8 │ 
+ 9 │ fn test(p: Point, c: Color) -> i32 {
+   │            ^^^^^ ref: 9:12
+10 │   let Point { x, y } = p
+   │       ^^^^^ ref: 10:7

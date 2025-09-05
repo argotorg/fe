@@ -20,6 +20,7 @@ use hir::{
 
 use rustc_hash::{FxHashMap, FxHashSet};
 use salsa::Update;
+use hir::span::LazySpan;
 
 use super::{
     diagnostics::{BodyDiag, FuncBodyDiag, TyDiagCollection, TyLowerDiag},
@@ -51,6 +52,46 @@ pub fn check_func_body<'db>(
 
     checker.run();
     checker.finish()
+}
+
+/// Optimized binding lookup: return a sorted interval map of local/param bindings in a function.
+/// Enables O(log N) lookups by offset instead of linear scans.
+#[salsa::tracked(return_ref)]
+pub fn binding_rangemap_for_func<'db>(
+    db: &'db dyn crate::diagnostics::SpannedHirAnalysisDb,
+    func: Func<'db>,
+) -> Vec<BindingRangeEntry<'db>> {
+    let (_diags, typed) = check_func_body(db, func).clone();
+    let Some(body) = typed.body else { return Vec::new() };
+
+    let mut entries = Vec::new();
+    
+    // Collect all Path expressions that have bindings
+    for (expr, _ty) in typed.expr_ty.iter() {
+        let expr_data = body.exprs(db)[*expr].clone();
+        if let hir::hir_def::Partial::Present(hir::hir_def::Expr::Path(_)) = expr_data {
+            if let Some(key) = expr_binding_key_for_expr(db, func, *expr) {
+                let e_span = (*expr).span(body);
+                if let Some(sp) = e_span.resolve(db) {
+                    entries.push(BindingRangeEntry {
+                        start: sp.range.start(),
+                        end: sp.range.end(),
+                        key,
+                    });
+                }
+            }
+        }
+    }
+    
+    // Sort by start offset, then by width (narrower spans first for nested ranges)
+    entries.sort_by(|a, b| {
+        match a.start.cmp(&b.start) {
+            std::cmp::Ordering::Equal => (a.end - a.start).cmp(&(b.end - b.start)),
+            ord => ord,
+        }
+    });
+    
+    entries
 }
 
 /// Facade: Return the inferred type of a specific expression in a function body.
@@ -429,10 +470,18 @@ pub fn binding_def_span_for_expr<'db>(
 
 /// Stable identity for a local binding within a function body: either a local pattern
 /// or a function parameter at index.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, salsa::Update)]
 pub enum BindingKey<'db> {
     LocalPat(hir::hir_def::PatId),
     FuncParam(hir::hir_def::item::Func<'db>, u16),
+}
+
+/// Entry in the binding range map for fast local variable lookups
+#[derive(Debug, Clone, PartialEq, Eq, Hash, salsa::Update)]
+pub struct BindingRangeEntry<'db> {
+    pub start: parser::TextSize,
+    pub end: parser::TextSize,
+    pub key: BindingKey<'db>,
 }
 
 /// Get the binding key for an expression that references a local binding, if any.
@@ -451,6 +500,7 @@ pub fn expr_binding_key_for_expr<'db>(
         }
     }
 }
+
 
 /// Return the declaration name span for a binding key in the given function.
 pub fn binding_def_span_in_func<'db>(
@@ -503,6 +553,9 @@ pub fn binding_refs_in_func<'db>(
     }
     out
 }
+
+ 
+
 
 struct TyCheckerFinalizer<'db> {
     db: &'db dyn HirAnalysisDb,

@@ -26,6 +26,6 @@ struct Numbers {
 
 impl Calculatable for Numbers {
   fn calculate(self) {
-    self.x + self.y
+    self.x + self.y; self.y
   }
 }

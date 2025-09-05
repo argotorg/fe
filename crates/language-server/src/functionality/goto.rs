@@ -1,6 +1,6 @@
 use async_lsp::ResponseError;
 use common::InputDb;
-use fe_semantic_query::SemanticIndex;
+use fe_semantic_query::Api;
 use hir::{lower::map_file_to_mod, span::LazySpan};
 // use tracing::error;
 
@@ -32,8 +32,9 @@ pub async fn handle_goto_definition(
 
     // Prefer identity-driven single definition; fall back to candidates for ambiguous cases.
     let mut locs: Vec<async_lsp::lsp_types::Location> = Vec::new();
-    if let Some(key) = SemanticIndex::symbol_identity_at_cursor(&backend.db, &backend.db, top_mod, cursor) {
-        if let Some((_tm, span)) = SemanticIndex::definition_for_symbol(&backend.db, &backend.db, key) {
+    let api = Api::new(&backend.db);
+    if let Some(key) = api.symbol_identity_at_cursor(top_mod, cursor) {
+        if let Some((_tm, span)) = api.definition_for_symbol(key) {
             if let Some(resolved) = span.resolve(&backend.db) {
                 let url = resolved.file.url(&backend.db).expect("Failed to get file URL");
                 let range = crate::util::to_lsp_range_from_span(resolved, &backend.db)
@@ -43,7 +44,7 @@ pub async fn handle_goto_definition(
         }
     }
     if locs.is_empty() {
-        let candidates = SemanticIndex::goto_candidates_at_cursor(&backend.db, &backend.db, top_mod, cursor);
+        let candidates = api.goto_candidates_at_cursor(top_mod, cursor);
         for def in candidates.into_iter() {
             if let Some(span) = def.span.resolve(&backend.db) {
                 let url = span.file.url(&backend.db).expect("Failed to get file URL");
@@ -73,7 +74,7 @@ mod tests {
     use driver::DriverDataBase;
     use tracing::error;
 
-    use hir::{hir_def::{TopLevelMod, ItemKind, PathId, scope_graph::ScopeId}, span::{DynLazySpan, LazySpan}, visitor::{VisitorCtxt, prelude::LazyPathSpan, Visitor}, SpannedHirDb};
+    use hir::{hir_def::{TopLevelMod, PathId, scope_graph::ScopeId}, span::LazySpan, visitor::{VisitorCtxt, prelude::LazyPathSpan, Visitor}};
 use hir_analysis::{name_resolution::{resolve_with_policy, DomainPreference, PathResErrorKind}, ty::trait_resolution::PredicateListId};
 
     #[derive(Default)]
@@ -88,29 +89,6 @@ use hir_analysis::{name_resolution::{resolve_with_policy, DomainPreference, Path
                 self.paths.push((path, scope, span));
             }
         }
-    }
-
-    fn find_enclosing_item<'db>(
-        db: &'db dyn SpannedHirDb,
-        top_mod: TopLevelMod<'db>,
-        cursor: Cursor,
-    ) -> Option<ItemKind<'db>> {
-        let items = top_mod.scope_graph(db).items_dfs(db);
-        let mut best: Option<(ItemKind<'db>, u32)> = None;
-        for item in items {
-            let lazy = DynLazySpan::from(item.span());
-            let Some(span) = lazy.resolve(db) else { continue };
-            if span.range.contains(cursor) {
-                let width = span.range.end() - span.range.start();
-                let width: u32 = width.into();
-                match best {
-                    None => best = Some((item, width)),
-                    Some((_, w)) if width < w => best = Some((item, width)),
-                    _ => {}
-                }
-            }
-        }
-        best.map(|(i, _)| i)
     }
 
     fn find_path_surrounding_cursor<'db>(

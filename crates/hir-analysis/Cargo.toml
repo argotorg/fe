@@ -30,6 +30,7 @@ common.workspace = true
 test-utils.workspace = true
 hir.workspace = true
 url.workspace = true
+parser.workspace = true
 
 [dev-dependencies]
 ascii_tree = "0.1"

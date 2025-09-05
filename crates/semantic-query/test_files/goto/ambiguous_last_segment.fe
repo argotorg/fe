@@ -1,4 +1,0 @@
-mod m { pub fn ambiguous() {} pub mod ambiguous {} }
-
-use m::ambiguous
-

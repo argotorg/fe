@@ -1,6 +1,6 @@
 use common::InputDb;
 use driver::DriverDataBase;
-use fe_semantic_query::SemanticIndex;
+use fe_semantic_query::Api;
 use hir::lower::map_file_to_mod;
 use url::Url;
 
@@ -20,7 +20,8 @@ fn f() { let _x: m::Foo }
     let file = touch(&mut db, &tmp, content);
     let top_mod = map_file_to_mod(&db, file);
     let cursor = content.find("Foo }").unwrap() as u32;
-    let candidates = SemanticIndex::goto_candidates_at_cursor(&db, &db, top_mod, parser::TextSize::from(cursor));
+    let api = Api::new(&db);
+    let candidates = api.goto_candidates_at_cursor(top_mod, parser::TextSize::from(cursor));
     assert_eq!(candidates.len(), 1, "expected scalar goto for unambiguous target");
 }
 
@@ -39,7 +40,7 @@ fn f() { let _x: T }
     let file = touch(&mut db, &tmp, content);
     let top_mod = map_file_to_mod(&db, file);
     let cursor = content.rfind("T }").unwrap() as u32;
-    let candidates = SemanticIndex::goto_candidates_at_cursor(&db, &db, top_mod, parser::TextSize::from(cursor));
+    let api = Api::new(&db);
+    let candidates = api.goto_candidates_at_cursor(top_mod, parser::TextSize::from(cursor));
     assert!(candidates.len() >= 2, "expected array goto for ambiguous target; got {}", candidates.len());
 }
-
