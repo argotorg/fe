@@ -361,7 +361,7 @@ impl GeneratorNode {
             let mut table = g_node.table.clone();
             let gen_cand = table.instantiate_with_fresh_vars(cand);
 
-            // xxx require candidates to be pre-normalized
+            // TODO: require candidates to be pre-normalized
             // Normalize trait instance arguments before unification
             let normalized_gen_cand = {
                 let trait_inst = gen_cand.trait_(db);

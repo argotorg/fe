@@ -13,7 +13,7 @@ use super::{ExprProp, TyChecker};
 use crate::{
     ty::{
         diagnostics::{BodyDiag, FuncBodyDiag},
-        fold::{TyFoldable, TyFolder},
+        fold::{AssocTySubst, TyFoldable, TyFolder},
         func_def::FuncDef,
         trait_def::TraitInstId,
         trait_resolution::constraint::collect_func_def_constraints,
@@ -28,6 +28,9 @@ use crate::{
 pub struct Callable<'db> {
     pub func_def: FuncDef<'db>,
     generic_args: Vec<TyId<'db>>,
+    /// The originating trait instance if this callable comes from a trait method
+    /// (e.g., operator overloading, method call, indexing). None for inherent functions.
+    pub trait_inst: Option<TraitInstId<'db>>,
 }
 
 impl<'db> TyVisitable<'db> for Callable<'db> {
@@ -35,7 +38,10 @@ impl<'db> TyVisitable<'db> for Callable<'db> {
     where
         V: TyVisitor<'db> + ?Sized,
     {
-        self.generic_args.visit_with(visitor)
+        self.generic_args.visit_with(visitor);
+        if let Some(inst) = self.trait_inst {
+            inst.visit_with(visitor);
+        }
     }
 }
 
@@ -47,6 +53,7 @@ impl<'db> TyFoldable<'db> for Callable<'db> {
         Self {
             func_def: self.func_def,
             generic_args: self.generic_args.fold_with(folder),
+            trait_inst: self.trait_inst.map(|i| i.fold_with(folder)),
         }
     }
 }
@@ -56,6 +63,7 @@ impl<'db> Callable<'db> {
         db: &'db dyn HirAnalysisDb,
         ty: TyId<'db>,
         span: DynLazySpan<'db>,
+        trait_inst: Option<TraitInstId<'db>>,
     ) -> Result<Self, FuncBodyDiag<'db>> {
         let (base, args) = ty.decompose_ty_app(db);
 
@@ -73,6 +81,7 @@ impl<'db> Callable<'db> {
         Ok(Self {
             func_def: *func_def,
             generic_args: args.to_vec(),
+            trait_inst,
         })
     }
 
@@ -80,13 +89,29 @@ impl<'db> Callable<'db> {
         &self.generic_args
     }
 
+    pub fn trait_inst(&self) -> Option<TraitInstId<'db>> {
+        self.trait_inst
+    }
+
     pub fn ret_ty(&self, db: &'db dyn HirAnalysisDb) -> TyId<'db> {
-        self.func_def.ret_ty(db).instantiate(db, &self.generic_args)
+        let ret = self.func_def.ret_ty(db).instantiate(db, &self.generic_args);
+        if let Some(inst) = self.trait_inst {
+            let mut subst = AssocTySubst::new(db, inst);
+            ret.fold_with(&mut subst)
+        } else {
+            ret
+        }
     }
 
     pub fn ty(&self, db: &'db dyn HirAnalysisDb) -> TyId<'db> {
-        let ty = TyId::func(db, self.func_def);
-        TyId::foldl(db, ty, &self.generic_args)
+        let mut ty = TyId::func(db, self.func_def);
+        ty = TyId::foldl(db, ty, &self.generic_args);
+        if let Some(inst) = self.trait_inst {
+            let mut subst = AssocTySubst::new(db, inst);
+            ty.fold_with(&mut subst)
+        } else {
+            ty
+        }
     }
 
     pub(super) fn unify_generic_args(
@@ -188,7 +213,11 @@ impl<'db> Callable<'db> {
                 }
             }
 
-            let expected = expected.instantiate(db, &self.generic_args);
+            let mut expected = expected.instantiate(db, &self.generic_args);
+            if let Some(inst) = self.trait_inst {
+                let mut subst = AssocTySubst::new(db, inst);
+                expected = expected.fold_with(&mut subst);
+            }
             let expected = tc.normalize_ty(expected);
             tc.equate_ty(given.expr_prop.ty, expected, given.expr_span);
         }

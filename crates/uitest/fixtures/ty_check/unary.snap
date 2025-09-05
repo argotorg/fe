@@ -3,29 +3,20 @@ source: crates/uitest/tests/ty_check.rs
 expression: diags
 input_file: fixtures/ty_check/unary.fe
 ---
-error[8-0016]: `std::ops::UnaryPlus` trait is not implemented
-  ┌─ unary.fe:5:5
-  │
-5 │     +f
-  │     ^^
-  │     │
-  │     `+` can't be applied to `Foo`
-  │     Try implementing `std::ops::UnaryPlus` for `Foo`
-
-error[8-0016]: `std::ops::Neg` trait is not implemented
+error[8-0016]: `core::ops::Neg` trait is not implemented
   ┌─ unary.fe:6:5
   │
 6 │     -f
   │     ^^
   │     │
   │     `-` can't be applied to `Foo`
-  │     Try implementing `std::ops::Neg` for `Foo`
+  │     Try implementing `core::ops::Neg` for `Foo`
 
-error[8-0016]: `std::ops::Not` trait is not implemented
+error[8-0016]: `core::ops::Not` trait is not implemented
   ┌─ unary.fe:7:5
   │
 7 │     !f
   │     ^^
   │     │
   │     `!` can't be applied to `Foo`
-  │     Try implementing `std::ops::Not` for `Foo`
+  │     Try implementing `core::ops::Not` for `Foo`

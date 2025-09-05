@@ -1,6 +1,5 @@
 ---
 source: crates/uitest/tests/ty_check.rs
-assertion_line: 20
 expression: diags
 input_file: fixtures/ty_check/generic_arg_path_resolution_fail.fe
 ---
@@ -17,13 +16,13 @@ error[2-0002]: `NonExistent` is not found
    │            ^^^^^^^^^^^ `NonExistent` is not found
 
 error[2-0002]: `Bar` is not found
-   ┌─ generic_arg_path_resolution_fail.fe:41:26
+   ┌─ generic_arg_path_resolution_fail.fe:40:26
    │
-41 │     type Foo = Concrete::Bar  // Error: Concrete doesn't have associated type Bar
+40 │     type Foo = Concrete::Bar  // Error: Concrete doesn't have associated type Bar
    │                          ^^^ `Bar` is not found
 
 error[2-0002]: `Missing` is not found
-   ┌─ generic_arg_path_resolution_fail.fe:54:26
+   ┌─ generic_arg_path_resolution_fail.fe:53:26
    │
-54 │     type Foo = T::Inner::Missing  // Error: T::Inner doesn't have associated type Missing
+53 │     type Foo = T::Inner::Missing  // Error: T::Inner doesn't have associated type Missing
    │                          ^^^^^^^ `Missing` is not found

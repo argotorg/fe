@@ -1,14 +1,13 @@
-use common::indexmap::{IndexMap, IndexSet};
+use common::indexmap::IndexSet;
 use hir::hir_def::{scope_graph::ScopeId, IdentId, Trait};
-use itertools::Itertools;
 use rustc_hash::FxHashSet;
 use thin_vec::ThinVec;
 
 use crate::{
     name_resolution::{available_traits_in_scope, is_scope_visible_from},
     ty::{
+        binder::Binder,
         canonical::{Canonical, Canonicalized, Solution},
-        fold::TyFoldable,
         func_def::FuncDef,
         method_table::probe_method,
         trait_def::{impls_for_ty, TraitDef, TraitInstId, TraitMethod},
@@ -56,12 +55,14 @@ pub(crate) fn select_method_candidate<'db>(
     method_name: IdentId<'db>,
     scope: ScopeId<'db>,
     assumptions: PredicateListId<'db>,
+    trait_: Option<TraitDef<'db>>,
 ) -> Result<MethodCandidate<'db>, MethodSelectionError<'db>> {
     if receiver.value.is_ty_var(db) {
         return Err(MethodSelectionError::ReceiverTypeMustBeKnown);
     }
 
-    let candidates = assemble_method_candidates(db, receiver, method_name, scope, assumptions);
+    let candidates =
+        assemble_method_candidates(db, receiver, method_name, scope, assumptions, trait_);
 
     let selector = MethodSelector {
         db,
@@ -80,6 +81,7 @@ fn assemble_method_candidates<'db>(
     method_name: IdentId<'db>,
     scope: ScopeId<'db>,
     assumptions: PredicateListId<'db>,
+    trait_: Option<TraitDef<'db>>,
 ) -> AssembledCandidates<'db> {
     CandidateAssembler {
         db,
@@ -87,6 +89,7 @@ fn assemble_method_candidates<'db>(
         method_name,
         scope,
         assumptions,
+        trait_,
         candidates: AssembledCandidates::default(),
     }
     .assemble()
@@ -102,12 +105,15 @@ struct CandidateAssembler<'db> {
     scope: ScopeId<'db>,
     /// The assumptions for the type bound in the current scope.
     assumptions: PredicateListId<'db>,
+    trait_: Option<TraitDef<'db>>,
     candidates: AssembledCandidates<'db>,
 }
 
 impl<'db> CandidateAssembler<'db> {
     fn assemble(mut self) -> AssembledCandidates<'db> {
-        self.assemble_inherent_method_candidates();
+        if self.trait_.is_none() {
+            self.assemble_inherent_method_candidates();
+        }
         self.assemble_trait_method_candidates();
         self.candidates
     }
@@ -125,13 +131,13 @@ impl<'db> CandidateAssembler<'db> {
 
     fn assemble_trait_method_candidates(&mut self) {
         let ingot = self.scope.ingot(self.db);
+
+        for &imp in impls_for_ty(self.db, ingot, self.receiver_ty) {
+            self.insert_trait_method_cand(imp.skip_binder().trait_(self.db));
+        }
+
         let mut table = UnificationTable::new(self.db);
         let extracted_receiver_ty = self.receiver_ty.extract_identity(&mut table);
-
-        for &implementor in impls_for_ty(self.db, ingot, self.receiver_ty) {
-            let trait_def = implementor.skip_binder().trait_def(self.db);
-            self.insert_trait_method_cand(trait_def)
-        }
 
         for &pred in self.assumptions.list(self.db) {
             let snapshot = table.snapshot();
@@ -139,10 +145,10 @@ impl<'db> CandidateAssembler<'db> {
             let self_ty = table.instantiate_to_term(self_ty);
 
             if table.unify(extracted_receiver_ty, self_ty).is_ok() {
-                self.insert_trait_method_cand_with_inst(pred.def(self.db), pred);
+                self.insert_trait_method_cand(pred);
                 for super_trait in pred.def(self.db).super_traits(self.db) {
                     let super_trait = super_trait.instantiate(self.db, pred.args(self.db));
-                    self.insert_trait_method_cand_with_inst(super_trait.def(self.db), super_trait);
+                    self.insert_trait_method_cand(super_trait);
                 }
             }
 
@@ -150,20 +156,17 @@ impl<'db> CandidateAssembler<'db> {
         }
     }
 
-    fn insert_trait_method_cand(&mut self, trait_def: TraitDef<'db>) {
-        if let Some(&trait_method) = trait_def.methods(self.db).get(&self.method_name) {
-            self.candidates.insert_trait(trait_def, trait_method);
-        }
+    fn allow_trait(&self, trait_def: TraitDef<'db>) -> bool {
+        self.trait_.map(|t| t == trait_def).unwrap_or(true)
     }
 
-    fn insert_trait_method_cand_with_inst(
-        &mut self,
-        trait_def: TraitDef<'db>,
-        trait_inst: TraitInstId<'db>,
-    ) {
+    fn insert_trait_method_cand(&mut self, inst: TraitInstId<'db>) {
+        let trait_def = inst.def(self.db);
+        if !self.allow_trait(trait_def) {
+            return;
+        }
         if let Some(&trait_method) = trait_def.methods(self.db).get(&self.method_name) {
-            self.candidates
-                .insert_trait_with_inst(trait_def, trait_method, trait_inst);
+            self.candidates.traits.insert((inst, trait_method));
         }
     }
 }
@@ -234,15 +237,15 @@ impl<'db> MethodSelector<'db> {
         let traits = &self.candidates.traits;
 
         if traits.len() == 1 {
-            let (def, method) = traits.iter().next().unwrap();
-            return Ok(self.find_inst(*def, *method));
+            let (inst, method) = traits.iter().next().unwrap();
+            return Ok(self.check_inst(*inst, *method));
         }
 
         let available_traits = self.available_traits();
         let visible_traits: Vec<_> = traits
             .iter()
             .copied()
-            .filter(|cand| available_traits.contains(&cand.0))
+            .filter(|(inst, _method)| available_traits.contains(&inst.def(self.db)))
             .collect();
 
         match visible_traits.len() {
@@ -251,14 +254,17 @@ impl<'db> MethodSelector<'db> {
                     Err(MethodSelectionError::NotFound)
                 } else {
                     // Suggests trait imports.
-                    let traits = traits.iter().map(|(def, _)| def.trait_(self.db)).collect();
+                    let traits = traits
+                        .iter()
+                        .map(|(inst, _)| inst.def(self.db).trait_(self.db))
+                        .collect();
                     Err(MethodSelectionError::InvisibleTraitMethod(traits))
                 }
             }
 
             1 => {
                 let (def, method) = visible_traits[0];
-                Ok(self.find_inst(def, method))
+                Ok(self.check_inst(def, method))
             }
 
             _ => Err(MethodSelectionError::AmbiguousTraitMethod(
@@ -275,39 +281,14 @@ impl<'db> MethodSelector<'db> {
     /// checks if the goal is satisfiable given the current assumptions.
     /// Depending on the result, it either returns a confirmed trait method
     /// candidate or one that needs further confirmation.
-    ///
-    /// # Arguments
-    ///
-    /// * `def` - The trait definition.
-    /// * `method` - The trait method.
-    ///
-    /// # Returns
-    ///
-    /// A `Candidate` representing the found trait method instance.
-    fn find_inst(&self, def: TraitDef<'db>, method: TraitMethod<'db>) -> MethodCandidate<'db> {
+    fn check_inst(&self, inst: TraitInstId<'db>, method: TraitMethod<'db>) -> MethodCandidate<'db> {
         let mut table = UnificationTable::new(self.db);
-        let receiver = self.receiver.extract_identity(&mut table);
-        let receiver = table.instantiate_to_term(receiver); // xxx remove?
+        // Seed the table with receiver's canonical variables so that subsequent
+        // canonicalization can safely probe them.
+        let _ = self.receiver.extract_identity(&mut table);
 
-        // Check if we have a stored trait instance with associated type bindings
-        let cand = if let Some(&stored_inst) = self.candidates.trait_instances.get(&(def, method)) {
-            // Use the stored instance which includes associated type bindings
-            stored_inst
-        } else {
-            // Create a fresh instance without bindings
-            let inst_args = def
-                .params(self.db)
-                .iter()
-                .map(|ty| table.new_var_from_param(*ty))
-                .collect_vec();
-            TraitInstId::new(self.db, def, inst_args, IndexMap::new())
-        };
-
-        // Unify receiver and method self.
-        method.instantiate_with_inst(&mut table, receiver, cand);
-
-        let cand = cand.fold_with(&mut table);
-        let canonical_cand = Canonicalized::new(self.db, cand);
+        let canonical_cand = Canonicalized::new(self.db, inst);
+        let inst = table.instantiate_with_fresh_vars(Binder::bind(inst));
 
         match is_goal_satisfiable(
             self.db,
@@ -318,13 +299,13 @@ impl<'db> MethodSelector<'db> {
             GoalSatisfiability::Satisfied(solution) => {
                 // Map back the solution to the current context.
                 let solution = canonical_cand.extract_solution(&mut table, *solution);
-
-                // Unify candidate to solution.
-                table.unify(cand, solution).unwrap();
+                // Replace TyParams in the solved instance with fresh inference vars so
+                // downstream unification can bind them (e.g., T = u32).
+                let solution = table.instantiate_with_fresh_vars(Binder::bind(solution));
 
                 MethodCandidate::TraitMethod(TraitMethodCand::new(
                     self.receiver
-                        .canonicalize_solution(self.db, &mut table, cand),
+                        .canonicalize_solution(self.db, &mut table, solution),
                     method,
                 ))
             }
@@ -334,7 +315,7 @@ impl<'db> MethodSelector<'db> {
             | GoalSatisfiability::UnSat(_) => {
                 MethodCandidate::NeedsConfirmation(TraitMethodCand::new(
                     self.receiver
-                        .canonicalize_solution(self.db, &mut table, cand),
+                        .canonicalize_solution(self.db, &mut table, inst),
                     method,
                 ))
             }
@@ -373,7 +354,7 @@ impl<'db> MethodSelector<'db> {
 #[derive(Debug, Clone, PartialEq, Eq, Hash, salsa::Update)]
 pub enum MethodSelectionError<'db> {
     AmbiguousInherentMethod(ThinVec<FuncDef<'db>>),
-    AmbiguousTraitMethod(ThinVec<TraitDef<'db>>),
+    AmbiguousTraitMethod(ThinVec<TraitInstId<'db>>),
     NotFound,
     InvisibleInherentMethod(FuncDef<'db>),
     InvisibleTraitMethod(ThinVec<Trait<'db>>),
@@ -383,27 +364,11 @@ pub enum MethodSelectionError<'db> {
 #[derive(Default)]
 struct AssembledCandidates<'db> {
     inherent_methods: FxHashSet<FuncDef<'db>>,
-    traits: IndexSet<(TraitDef<'db>, TraitMethod<'db>)>,
-    // Store trait instances with their associated type bindings
-    trait_instances: IndexMap<(TraitDef<'db>, TraitMethod<'db>), TraitInstId<'db>>,
+    traits: IndexSet<(TraitInstId<'db>, TraitMethod<'db>)>,
 }
 
 impl<'db> AssembledCandidates<'db> {
     fn insert_inherent_method(&mut self, method: FuncDef<'db>) {
         self.inherent_methods.insert(method);
-    }
-
-    fn insert_trait(&mut self, def: TraitDef<'db>, method: TraitMethod<'db>) {
-        self.traits.insert((def, method));
-    }
-
-    fn insert_trait_with_inst(
-        &mut self,
-        def: TraitDef<'db>,
-        method: TraitMethod<'db>,
-        inst: TraitInstId<'db>,
-    ) {
-        self.traits.insert((def, method));
-        self.trait_instances.insert((def, method), inst);
     }
 }

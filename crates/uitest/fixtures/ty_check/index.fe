@@ -1,7 +1,22 @@
-struct Foo {} 
+struct Foo {}
+struct Bar {}
 
-pub fn foo(x: [i32; 10]) -> i32 {
+impl core::ops::Index<i32> for Bar {
+    type Output = bool
+
+    fn index(self, _ i: i32) -> bool {
+        if i % 2 == 0 {
+            true
+        } else {
+            false
+        }
+    }
+}
+
+pub fn foo(x: [i32; 10]) -> bool {
     x[false]
     let f = Foo { }
     f[1]
+    let b = Bar {  }
+    b[5]
 }

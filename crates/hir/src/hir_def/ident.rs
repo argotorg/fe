@@ -27,6 +27,7 @@ macro_rules! define_keywords {
 
 define_keywords! {
     (ingot, "ingot"),
+    (core, "core"),
     (super, "super"),
     (self, "self"),
     (self_ty, "Self"),

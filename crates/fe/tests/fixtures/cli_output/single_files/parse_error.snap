@@ -1,6 +1,5 @@
 ---
 source: crates/fe/tests/cli_output.rs
-assertion_line: 77
 expression: output
 input_file: tests/fixtures/cli_output/single_files/parse_error.fe
 ---
@@ -18,6 +17,15 @@ error[1-0001]: `if` expression requires a body
   │
 6 │     }
   │      ^ expected `{`
+
+error[8-0000]: type mismatch
+  ┌─ parse_error.fe:4:8
+  │  
+4 │       if x > {  // Missing comparison value
+  │ ╭────────^
+5 │ │         return true
+6 │ │     }
+  │ ╰─────^ expected `bool`, but `{integer}` is given
 
 error[8-0013]: returned type mismatch
   ┌─ parse_error.fe:5:9

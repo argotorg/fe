@@ -32,7 +32,7 @@ struct NestedImpl<T> {
 
 impl<T> Nested for NestedImpl<T> {
     type Middle = SimpleImpl<T>
-    
+
     // Bug: Self::Middle::Output should resolve to T
     // but it's not properly substituting the type parameter
     fn get_nested(self) -> Self::Middle::Output {

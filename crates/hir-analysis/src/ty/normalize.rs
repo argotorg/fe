@@ -6,6 +6,7 @@
 
 use std::collections::hash_map::Entry;
 
+use common::indexmap::IndexMap;
 use hir::hir_def::{scope_graph::ScopeId, ImplTrait};
 use rustc_hash::FxHashMap;
 
@@ -124,11 +125,13 @@ impl<'db> TypeNormalizer<'db> {
         }
 
         // 3) Fall back to the general associated type search used by path resolution,
-        //    but restrict results to the same trait as `assoc`.
+        //    but restrict results to the same trait as `assoc` and deduplicate by
+        //    the resulting type. If all viable candidates agree on a single type,
+        //    normalize to that type.
         //    Search by the trait's self type: `SelfTy::assoc.name`.
         // Normalize the trait's self type before candidate search.
         let self_ty = self.fold_ty(assoc.trait_.self_ty(self.db));
-        let mut cands = find_associated_type(
+        let mut raw_cands = find_associated_type(
             self.db,
             self.scope,
             Canonical::new(self.db, self_ty),
@@ -137,11 +140,28 @@ impl<'db> TypeNormalizer<'db> {
         );
 
         // Keep only candidates from the same trait as `assoc`.
-        cands.retain(|(inst, _)| inst.def(self.db) == assoc.trait_.def(self.db));
-        match cands.as_slice() {
-            [] => None,
-            // Unique candidate: return it if it actually changes the type
-            [(_, t)] if *t != ty => Some(*t),
+        raw_cands.retain(|(inst, _)| inst.def(self.db) == assoc.trait_.def(self.db));
+
+        // Deduplicate by normalized result type (to handle cases where multiple
+        // impls yield the same associated type, e.g., Output = Self for all impls).
+        let mut dedup: IndexMap<TyId<'db>, ()> = IndexMap::new();
+        for (_, t) in raw_cands.into_iter() {
+            // Continue folding so nested associated types are also normalized
+            let norm_t = self.fold_ty(t);
+            dedup.entry(norm_t).or_insert(());
+        }
+
+        match dedup.len() {
+            0 => None,
+            1 => {
+                let (unique, _) = dedup.first().unwrap();
+                // Only replace if we're actually making progress
+                if *unique != ty {
+                    Some(*unique)
+                } else {
+                    None
+                }
+            }
             _ => None,
         }
     }

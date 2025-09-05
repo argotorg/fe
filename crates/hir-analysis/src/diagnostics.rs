@@ -514,7 +514,7 @@ impl DiagnosticVoucher for PathResDiag<'_> {
                 }
             }
 
-            Self::AmbiguousTrait { primary, method_name, traits } => {
+            Self::AmbiguousTrait { primary, method_name, trait_insts } => {
                 let method_name = method_name.data(db);
                 let mut sub_diagnostics = vec![SubDiagnostic {
                     style: LabelStyle::Primary,
@@ -522,11 +522,10 @@ impl DiagnosticVoucher for PathResDiag<'_> {
                     span: primary.resolve(db),
                 }];
 
-                for trait_ in traits {
-                    let trait_name = trait_.name(db).unwrap().data(db);
+                for inst in trait_insts {
                     sub_diagnostics.push(SubDiagnostic {
                         style: LabelStyle::Secondary,
-                        message: format!("candidate: `{trait_name}::{method_name}`"),
+                        message: format!("candidate: `{}::{method_name}`", inst.pretty_print(db, false)),
                         span: primary.resolve(db),
                     });
                 }
@@ -1859,10 +1858,12 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                 }];
 
                 for trait_ in traits {
-                    let trait_name = trait_.name(db).unwrap().data(db);
                     sub_diagnostics.push(SubDiagnostic {
                         style: LabelStyle::Secondary,
-                        message: format!("candidate: `{trait_name}::{method_name}`"),
+                        message: format!(
+                            "candidate: `{}::{method_name}`",
+                            trait_.pretty_print(db, false)
+                        ),
                         span: primary.resolve(db),
                     });
                 }

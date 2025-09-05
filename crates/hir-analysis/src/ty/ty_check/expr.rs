@@ -1,7 +1,10 @@
+use std::panic;
+
+use common::ingot::IngotKind;
 use either::Either;
 use hir::hir_def::{
-    ArithBinOp, BinOp, Expr, ExprId, FieldIndex, GenericArgListId, IdentId, Partial, Pat, PatId,
-    PathId, UnOp, VariantKind,
+    ArithBinOp, BinOp, Expr, ExprId, FieldIndex, IdentId, Partial, Pat, PatId, PathId, UnOp,
+    VariantKind,
 };
 
 use super::{
@@ -9,20 +12,27 @@ use super::{
     path::ResolvedPathInBody,
     RecordLike, Typeable,
 };
+use crate::ty::{
+    diagnostics::{BodyDiag, FuncBodyDiag},
+    fold::{AssocTySubst, TyFoldable as _},
+    trait_def::TraitInstId,
+    ty_check::callable::Callable,
+    ty_def::{TyBase, TyData},
+};
+use crate::ty::{trait_def::TraitDef, trait_lower::lower_trait};
 use crate::{
     name_resolution::{
         diagnostics::PathResDiag,
         is_scope_visible_from,
         method_selection::{select_method_candidate, MethodCandidate, MethodSelectionError},
-        resolve_name_res, resolve_query, EarlyNameQueryId, ExpectedPathKind, NameDomain,
-        NameResBucket, PathRes, QueryDirective,
+        resolve_ident_to_bucket, resolve_name_res, resolve_path, resolve_query, EarlyNameQueryId,
+        ExpectedPathKind, NameDomain, NameResBucket, PathRes, QueryDirective,
     },
     ty::{
         canonical::Canonicalized,
         const_ty::ConstTyId,
-        diagnostics::{BodyDiag, FuncBodyDiag},
         normalize::normalize_ty,
-        ty_check::{callable::Callable, path::RecordInitChecker, TyChecker},
+        ty_check::{path::RecordInitChecker, TyChecker},
         ty_def::{InvalidCause, TyId},
     },
     HirAnalysisDb, Spanned,
@@ -43,14 +53,13 @@ impl<'db> TyChecker<'db> {
             Expr::Lit(lit) => ExprProp::new(self.lit_ty(lit), true),
             Expr::Block(..) => self.check_block(expr, expr_data, expected),
             Expr::Un(..) => self.check_unary(expr, expr_data),
-            Expr::Bin(..) => self.check_binary(expr, expr_data),
+            Expr::Bin(lhs, rhs, op) => self.check_binary(expr, *lhs, *rhs, *op),
             Expr::Call(..) => self.check_call(expr, expr_data),
             Expr::MethodCall(..) => self.check_method_call(expr, expr_data),
             Expr::Path(..) => self.check_path(expr, expr_data),
             Expr::RecordInit(..) => self.check_record_init(expr, expr_data),
             Expr::Field(..) => self.check_field(expr, expr_data),
             Expr::Tuple(..) => self.check_tuple(expr, expr_data, expected),
-            Expr::Index(..) => self.check_index(expr, expr_data),
             Expr::Array(..) => self.check_array(expr, expr_data, expected),
             Expr::ArrayRep(..) => self.check_array_rep(expr, expr_data, expected),
             Expr::If(..) => self.check_if(expr, expr_data),
@@ -64,6 +73,11 @@ impl<'db> TyChecker<'db> {
         actual.ty = normalize_ty(self.db, actual.ty, self.env.scope(), self.env.assumptions());
         actual.ty = self.unify_ty(typeable, actual.ty, expected);
         actual
+    }
+
+    pub(super) fn check_expr_unknown(&mut self, expr: ExprId) -> ExprProp<'db> {
+        let t = self.fresh_ty();
+        self.check_expr(expr, t)
     }
 
     fn check_block(
@@ -96,183 +110,95 @@ impl<'db> TyChecker<'db> {
         let Expr::Un(lhs, op) = expr_data else {
             unreachable!()
         };
-        let Partial::Present(op) = op else {
-            return ExprProp::invalid(self.db);
-        };
-
-        let expr_ty = self.fresh_ty();
-        let typed_expr = self.check_expr(*lhs, expr_ty);
-        let expr_ty = typed_expr.ty;
-
-        if expr_ty.has_invalid(self.db) {
+        let prop = self.check_expr_unknown(*lhs);
+        if *op == UnOp::Plus {
+            // TODO: remove support for unary plus? what should it do?
+            return prop;
+        }
+        if prop.ty.has_invalid(self.db) {
             return ExprProp::invalid(self.db);
         }
 
-        match op {
-            UnOp::Plus | UnOp::Minus => {
-                if expr_ty.is_integral(self.db) {
-                    return typed_expr;
-                }
-            }
-
-            UnOp::Not => {
-                if expr_ty.is_bool(self.db) {
-                    return typed_expr;
-                }
-            }
-
-            UnOp::BitNot => {
-                if expr_ty.is_integral(self.db) {
-                    return typed_expr;
-                }
-            }
+        if prop.ty.is_integral_var(self.db) && matches!(op, UnOp::Plus | UnOp::Minus | UnOp::BitNot)
+        {
+            return prop;
         }
 
-        let base_ty = expr_ty.base_ty(self.db);
+        let base_ty = prop.ty.base_ty(self.db);
         if base_ty.is_ty_var(self.db) {
             let diag = BodyDiag::TypeMustBeKnown(lhs.span(self.body()).into());
             self.push_diag(diag);
             return ExprProp::invalid(self.db);
         }
 
-        // TODO: We need to check if the type implements a trait corresponding to the
-        // operator when these traits are defined in `std`.
-        let diag = BodyDiag::ops_trait_not_implemented(
-            self.db,
-            expr.span(self.body()).into(),
-            expr_ty,
-            *op,
-        );
-        self.push_diag(diag);
-
-        ExprProp::invalid(self.db)
+        self.check_ops_trait(expr, prop.ty, op, None)
     }
 
-    fn check_binary(&mut self, expr: ExprId, expr_data: &Expr<'db>) -> ExprProp<'db> {
-        let Expr::Bin(lhs, rhs, op) = expr_data else {
-            unreachable!()
-        };
-        let Partial::Present(op) = op else {
-            return ExprProp::invalid(self.db);
-        };
+    fn check_binary(
+        &mut self,
+        expr: ExprId,
+        lhs_expr: ExprId,
+        rhs_expr: ExprId,
+        op: BinOp,
+    ) -> ExprProp<'db> {
+        // Logical operands must be bools
+        if matches!(op, BinOp::Logical(_)) {
+            let bool = TyId::bool(self.db);
+            let lhs = self.check_expr(lhs_expr, bool);
+            let rhs = self.check_expr(rhs_expr, bool);
+            return if lhs.ty.is_bool(self.db) && rhs.ty.is_bool(self.db) {
+                ExprProp::new(bool, true)
+            } else {
+                ExprProp::invalid(self.db)
+            };
+        }
 
-        let lhs_ty = self.fresh_ty();
-        let typed_lhs = self.check_expr(*lhs, lhs_ty);
-        let lhs_ty = typed_lhs.ty;
-        if lhs_ty.has_invalid(self.db) {
+        let lhs = self.check_expr_unknown(lhs_expr);
+        if lhs.ty.has_invalid(self.db) {
             return ExprProp::invalid(self.db);
         }
 
-        match op {
-            BinOp::Arith(arith_op) => {
-                use hir::hir_def::ArithBinOp::*;
-
-                let typed_rhs = self.check_expr(*rhs, lhs_ty);
-                let rhs_ty = typed_rhs.ty;
-                if rhs_ty.has_invalid(self.db) {
-                    return ExprProp::invalid(self.db);
-                }
-
-                match arith_op {
-                    Add | Sub | Mul | Div | Rem | Pow | LShift | RShift => {
-                        if lhs_ty.is_integral(self.db) {
-                            return typed_rhs;
-                        }
-                    }
-
-                    BitAnd | BitOr | BitXor => {
-                        if lhs_ty.is_integral(self.db) | lhs_ty.is_bool(self.db) {
-                            return typed_rhs;
-                        }
-                    }
-                }
-            }
-
-            BinOp::Comp(comp_op) => {
-                use hir::hir_def::CompBinOp::*;
-
-                let typed_rhs = self.check_expr(*rhs, lhs_ty);
-                let rhs_ty = typed_rhs.ty;
-                if rhs_ty.has_invalid(self.db) {
-                    return ExprProp::invalid(self.db);
-                }
-
-                match comp_op {
-                    Eq | NotEq => {
-                        if lhs_ty.is_integral(self.db) | lhs_ty.is_bool(self.db) {
-                            let ty = TyId::bool(self.db);
-                            return ExprProp::new(ty, true);
-                        }
-                    }
-
-                    Lt | LtEq | Gt | GtEq => {
-                        if lhs_ty.is_integral(self.db) {
-                            let ty = TyId::bool(self.db);
-                            return ExprProp::new(ty, true);
-                        }
-                    }
-                }
-            }
-
-            BinOp::Logical(logical_op) => {
-                use hir::hir_def::LogicalBinOp::*;
-
-                let typed_rhs = self.check_expr(*rhs, lhs_ty);
-                let rhs_ty = typed_rhs.ty;
-                if rhs_ty.has_invalid(self.db) {
-                    return ExprProp::invalid(self.db);
-                }
-
-                match logical_op {
-                    And | Or => {
-                        if lhs_ty.is_bool(self.db) & rhs_ty.is_bool(self.db) {
-                            let ty = TyId::bool(self.db);
-                            return ExprProp::new(ty, true);
-                        }
-                    }
-                }
-            }
+        if matches!(op, BinOp::Index) && lhs.ty.is_array(self.db) {
+            // Built-in array indexing (TODO: move to trait impl)
+            let args = lhs.ty.generic_args(self.db);
+            let elem_ty = args[0];
+            let index_ty = args[1].const_ty_ty(self.db).unwrap();
+            self.check_expr(rhs_expr, index_ty);
+            return ExprProp::new(elem_ty, lhs.is_mut);
+        } else if lhs.ty.is_integral_var(self.db) {
+            // Avoid 'type must be known' diagnostics when lhs is an unknown integer ty
+            self.check_expr(rhs_expr, lhs.ty);
+            return lhs;
         }
 
-        let lhs_base_ty = lhs_ty.base_ty(self.db);
-        if lhs_base_ty.is_ty_var(self.db) {
-            let diag = BodyDiag::TypeMustBeKnown(lhs.span(self.body()).into());
+        // Fail if lhs ty is unknown
+        if lhs.ty.base_ty(self.db).is_ty_var(self.db) {
+            self.check_expr_unknown(rhs_expr);
+            let diag = BodyDiag::TypeMustBeKnown(lhs_expr.span(self.body()).into());
             self.push_diag(diag);
             return ExprProp::invalid(self.db);
         }
 
-        // TODO: We need to check if the type implements a trait corresponding to the
-        // operator when these traits are defined in `std`.
-        let diag = BodyDiag::ops_trait_not_implemented(
-            self.db,
-            expr.span(self.body()).into(),
-            lhs_ty,
-            *op,
-        );
-        self.push_diag(diag);
-
-        ExprProp::invalid(self.db)
+        self.check_ops_trait(expr, lhs.ty, &op, Some(rhs_expr))
     }
 
     fn check_call(&mut self, expr: ExprId, expr_data: &Expr<'db>) -> ExprProp<'db> {
         let Expr::Call(callee, args) = expr_data else {
             unreachable!()
         };
-        let callee_ty = self.fresh_ty();
-        let callee_ty = self.check_expr(*callee, callee_ty).ty;
-
+        let callee_ty = self.check_expr_unknown(*callee).ty;
         if callee_ty.has_invalid(self.db) {
             return ExprProp::invalid(self.db);
         }
 
-        let mut callable = match Callable::new(self.db, callee_ty, callee.span(self.body()).into())
-        {
-            Ok(callable) => callable,
-            Err(diag) => {
-                self.push_diag(diag);
-                return ExprProp::invalid(self.db);
-            }
-        };
+        let mut callable =
+            match Callable::new(self.db, callee_ty, callee.span(self.body()).into(), None) {
+                Ok(callable) => callable,
+                Err(diag) => {
+                    self.push_diag(diag);
+                    return ExprProp::invalid(self.db);
+                }
+            };
 
         let call_span = expr.span(self.body()).into_call_expr();
 
@@ -312,13 +238,10 @@ impl<'db> TyChecker<'db> {
             return ExprProp::invalid(self.db);
         };
 
-        let receiver_prop = self.fresh_ty();
-        let receiver_prop = self.check_expr(*receiver, receiver_prop);
+        let receiver_prop = self.check_expr_unknown(*receiver);
         if receiver_prop.ty.has_invalid(self.db) {
             return ExprProp::invalid(self.db);
         }
-
-        let assumptions = self.env.assumptions();
 
         let canonical_r_ty = Canonicalized::new(self.db, receiver_prop.ty);
         let candidate = match select_method_candidate(
@@ -326,21 +249,51 @@ impl<'db> TyChecker<'db> {
             canonical_r_ty.value,
             method_name,
             self.env.scope(),
-            assumptions,
+            self.env.assumptions(),
+            None,
         ) {
             Ok(candidate) => candidate,
-            Err(diag) => {
-                let diag = body_diag_from_method_selection_err(
-                    self.db,
-                    diag,
-                    Spanned::new(
-                        canonical_r_ty.value.value,
-                        receiver.span(self.body()).into(),
-                    ),
-                    Spanned::new(method_name, call_span.method_name().into()),
-                );
-                self.push_diag(diag);
-                return ExprProp::invalid(self.db);
+            Err(err) => {
+                match err {
+                    MethodSelectionError::AmbiguousTraitMethod(insts) => {
+                        // Defer resolution using return-type constraints
+                        let ret_ty = self.fresh_ty();
+                        let typed = ExprProp::new(ret_ty, true);
+                        self.env.type_expr(expr, typed);
+                        // Instantiate candidates with fresh inference vars so
+                        // later unifications can bind their parameters.
+                        let cands: Vec<_> = insts
+                            .into_iter()
+                            .map(|inst| {
+                                self.table.instantiate_with_fresh_vars(
+                                    crate::ty::binder::Binder::bind(inst),
+                                )
+                            })
+                            .collect();
+
+                        self.env.register_pending_method(super::env::PendingMethod {
+                            expr,
+                            recv_ty: receiver_prop.ty,
+                            method_name,
+                            candidates: cands,
+                            span: call_span.method_name().into(),
+                        });
+                        return typed;
+                    }
+                    _ => {
+                        let diag = body_diag_from_method_selection_err(
+                            self.db,
+                            err,
+                            Spanned::new(
+                                canonical_r_ty.value.value,
+                                receiver.span(self.body()).into(),
+                            ),
+                            Spanned::new(method_name, call_span.method_name().into()),
+                        );
+                        self.push_diag(diag);
+                        return ExprProp::invalid(self.db);
+                    }
+                }
             }
         };
 
@@ -352,9 +305,9 @@ impl<'db> TyChecker<'db> {
 
             MethodCandidate::TraitMethod(cand) => {
                 let inst = canonical_r_ty.extract_solution(&mut self.table, cand.inst);
-                let trait_method = cand.method;
                 let func_ty =
-                    trait_method.instantiate_with_inst(&mut self.table, receiver_prop.ty, inst);
+                    cand.method
+                        .instantiate_with_inst(&mut self.table, receiver_prop.ty, inst);
                 (func_ty, Some(inst))
             }
 
@@ -369,8 +322,12 @@ impl<'db> TyChecker<'db> {
             }
         };
 
-        let mut callable = match Callable::new(self.db, func_ty, receiver.span(self.body()).into())
-        {
+        let mut callable = match Callable::new(
+            self.db,
+            func_ty,
+            receiver.span(self.body()).into(),
+            trait_inst,
+        ) {
             Ok(callable) => callable,
             Err(diag) => {
                 self.push_diag(diag);
@@ -404,15 +361,6 @@ impl<'db> TyChecker<'db> {
         callable.check_constraints(self, call_span.method_name().into());
 
         let ret_ty = callable.ret_ty(self.db);
-
-        // Apply associated type substitutions if this is a trait method
-        let ret_ty = if let Some(inst) = trait_inst {
-            use crate::ty::fold::{AssocTySubst, TyFoldable};
-            let mut subst = AssocTySubst::new(self.db, inst);
-            ret_ty.fold_with(&mut subst)
-        } else {
-            ret_ty
-        };
 
         // Normalize the return type to resolve any associated types
         let normalized_ret_ty = self.normalize_ty(ret_ty);
@@ -755,43 +703,35 @@ impl<'db> TyChecker<'db> {
         ExprProp::new(ty, true)
     }
 
-    fn check_index(&mut self, expr: ExprId, expr_data: &Expr<'db>) -> ExprProp<'db> {
-        let Expr::Index(lhs, index) = expr_data else {
-            unreachable!()
+    /// Resolve a trait path like `core::ops::Index` by using the path's parent
+    /// as the module and the last segment as the trait name. Returns a base
+    /// trait instance whose generic args are the trait's own params
+    /// (placeholders), avoiding the need for explicit non-Self args.
+    fn resolve_core_trait(&self, trait_path: PathId<'db>) -> Option<TraitDef<'db>> {
+        let scope = self.env.scope();
+        let assumptions = self.env.assumptions();
+        let mut module_path = trait_path.parent(self.db)?;
+
+        // If we are inside the core ingot, replace `core` with `ingot` in the trait path.
+        let ingot = self.env.body().top_mod(self.db).ingot(self.db);
+        if ingot.kind(self.db) == IngotKind::Core && trait_path.is_core_lib_path(self.db) {
+            module_path = module_path.replace_root(
+                IdentId::make_core(self.db),
+                IdentId::make_ingot(self.db),
+                self.db,
+            );
+        }
+        let trait_name = trait_path.ident(self.db).to_opt()?;
+        let Ok(PathRes::Mod(mod_scope)) =
+            resolve_path(self.db, module_path, scope, assumptions, false)
+        else {
+            panic!("failed to resolve `{}`", module_path.pretty_print(self.db));
         };
 
-        let lhs_ty = self.fresh_ty();
-        let typed_lhs = self.check_expr(*lhs, lhs_ty);
-        let lhs_ty = typed_lhs.ty;
-        let (lhs_base, args) = lhs_ty.decompose_ty_app(self.db);
-
-        if lhs_base.is_ty_var(self.db) {
-            let diag = BodyDiag::TypeMustBeKnown(lhs.span(self.body()).into());
-            self.push_diag(diag);
-            return ExprProp::invalid(self.db);
-        }
-
-        if lhs_base.has_invalid(self.db) {
-            return ExprProp::invalid(self.db);
-        }
-
-        if lhs_base.is_array(self.db) {
-            let elem_ty = args[0];
-            let index_ty = args[1].const_ty_ty(self.db).unwrap();
-            self.check_expr(*index, index_ty);
-            return ExprProp::new(elem_ty, typed_lhs.is_mut);
-        }
-
-        // TODO: We need to check if the type implements the `Index` trait when `Index`
-        // is defined in `std`.
-        let diag = BodyDiag::ops_trait_not_implemented(
-            self.db,
-            expr.span(self.body()).into(),
-            lhs_ty,
-            IndexingOp {},
-        );
-        self.push_diag(diag);
-        ExprProp::invalid(self.db)
+        let bucket =
+            resolve_ident_to_bucket(self.db, PathId::from_ident(self.db, trait_name), mod_scope);
+        let nameres = bucket.pick(NameDomain::TYPE).as_ref().ok()?;
+        Some(lower_trait(self.db, nameres.trait_()?))
     }
 
     fn check_array(
@@ -930,7 +870,7 @@ impl<'db> TyChecker<'db> {
         for (i, is_reachable) in reachability.iter().enumerate() {
             if !is_reachable {
                 let (_current_hir_pat, current_pat_id) = &hir_pats_with_ids[i];
-                let diag = crate::ty::diagnostics::BodyDiag::UnreachablePattern {
+                let diag = BodyDiag::UnreachablePattern {
                     primary: current_pat_id.span(self.body()).into(),
                 };
                 self.push_diag(diag);
@@ -945,7 +885,7 @@ impl<'db> TyChecker<'db> {
             self.env.scope(),
             scrutinee_ty,
         ) {
-            let diag = crate::ty::diagnostics::BodyDiag::NonExhaustiveMatch {
+            let diag = BodyDiag::NonExhaustiveMatch {
                 primary: expr.span(self.body()).into(),
                 scrutinee_ty,
                 missing_patterns,
@@ -973,57 +913,173 @@ impl<'db> TyChecker<'db> {
     }
 
     fn check_aug_assign(&mut self, expr: ExprId, expr_data: &Expr<'db>) -> ExprProp<'db> {
-        use ArithBinOp::*;
-
         let Expr::AugAssign(lhs, rhs, op) = expr_data else {
             unreachable!()
         };
 
-        let unit_ty = TyId::unit(self.db);
+        let unit = ExprProp::new(TyId::unit(self.db), true);
 
-        let lhs_ty = self.fresh_ty();
-        let typed_lhs = self.check_expr(*lhs, lhs_ty);
+        let typed_lhs = self.check_expr_unknown(*lhs);
         let lhs_ty = typed_lhs.ty;
         if lhs_ty.has_invalid(self.db) {
-            return ExprProp::new(unit_ty, true);
+            return unit;
         }
+        self.check_assign_lhs(*lhs, &typed_lhs);
 
-        match op {
-            Add | Sub | Mul | Div | Rem | Pow | LShift | RShift => {
-                self.check_expr(*rhs, lhs_ty);
-                if lhs_ty.is_integral(self.db) {
-                    self.check_assign_lhs(*lhs, &typed_lhs);
-                    return ExprProp::new(unit_ty, true);
-                }
-            }
-
-            BitAnd | BitOr | BitXor => {
-                self.check_expr(*rhs, lhs_ty);
-                if lhs_ty.is_integral(self.db) | lhs_ty.is_bool(self.db) {
-                    self.check_assign_lhs(*lhs, &typed_lhs);
-                    return ExprProp::new(unit_ty, true);
-                }
-            }
+        // Avoid 'type must be known' diagnostics for unknown integer ty
+        if lhs_ty.is_integral_var(self.db) {
+            self.check_expr(*rhs, lhs_ty);
+            return unit;
         }
 
         let lhs_base_ty = lhs_ty.base_ty(self.db);
         if lhs_base_ty.is_ty_var(self.db) {
             let diag = BodyDiag::TypeMustBeKnown(lhs.span(self.body()).into());
             self.push_diag(diag);
-            return ExprProp::invalid(self.db);
+            return unit;
         }
 
-        // TODO: We need to check if the type implements a trait corresponding to the
-        // operator when these traits are defined in `std`.
-        let diag = BodyDiag::ops_trait_not_implemented(
-            self.db,
-            expr.span(self.body()).into(),
-            lhs_ty,
-            AugAssignOp(*op),
-        );
-        self.push_diag(diag);
+        self.check_ops_trait(expr, lhs_ty, &AugAssignOp(*op), Some(*rhs));
 
-        ExprProp::invalid(self.db)
+        // Return unit ty even if trait resolution fails
+        unit
+    }
+
+    /// Resolve a core::ops trait method for an operator on a given LHS type and
+    /// optionally check the RHS against the inferred method parameter type.
+    /// Returns the fully-instantiated function type and concrete trait instance.
+    fn check_ops_trait(
+        &mut self,
+        expr: ExprId,
+        lhs_ty: TyId<'db>,
+        op: &dyn TraitOps,
+        rhs_expr: Option<ExprId>,
+    ) -> ExprProp<'db> {
+        let Some(trait_def) = self.resolve_core_trait(op.trait_path(self.db)) else {
+            panic!("failed to resolve core::ops trait");
+        };
+
+        let c_lhs_ty = Canonicalized::new(self.db, lhs_ty);
+
+        let (method, inst) = match select_method_candidate(
+            self.db,
+            c_lhs_ty.value,
+            op.trait_method(self.db),
+            self.env.scope(),
+            self.env.assumptions(),
+            Some(trait_def),
+        ) {
+            Ok(MethodCandidate::InherentMethod(_)) => unreachable!(),
+            Ok(
+                res @ (MethodCandidate::TraitMethod(cand)
+                | MethodCandidate::NeedsConfirmation(cand)),
+            ) => {
+                let inst = c_lhs_ty.extract_solution(&mut self.table, cand.inst);
+                if matches!(res, MethodCandidate::NeedsConfirmation(_)) {
+                    self.env
+                        .register_confirmation(inst, expr.span(self.body()).into());
+                }
+
+                let func_ty = cand
+                    .method
+                    .instantiate_with_inst(&mut self.table, lhs_ty, inst);
+
+                if let Some(rhs_expr) = rhs_expr {
+                    // Derive expected RHS type from the instantiated function type
+                    let (base, gen_args) = func_ty.decompose_ty_app(self.db);
+                    if let TyData::TyBase(TyBase::Func(func_def)) = base.data(self.db) {
+                        let mut expected_rhs =
+                            func_def.arg_tys(self.db)[1].instantiate(self.db, gen_args);
+                        let mut subst = AssocTySubst::new(self.db, inst);
+                        expected_rhs = self.normalize_ty(expected_rhs.fold_with(&mut subst));
+                        self.check_expr(rhs_expr, expected_rhs);
+                    }
+                }
+
+                (func_ty, inst)
+            }
+            Err(MethodSelectionError::AmbiguousTraitMethod(insts)) => {
+                let Some(rhs_expr) = rhs_expr else {
+                    unreachable!("unary core::ops ambiguity");
+                };
+
+                let rhs = self.check_expr_unknown(rhs_expr);
+                if rhs.ty.has_invalid(self.db) {
+                    return ExprProp::invalid(self.db);
+                }
+
+                let method_ident = op.trait_method(self.db);
+                let trait_method = trait_def.methods(self.db).get(&method_ident).unwrap();
+
+                let mut viable: Vec<(TyId<'db>, TraitInstId<'db>, TyId<'db>)> = Vec::new();
+                for inst in insts.iter().copied() {
+                    let snapshot = self.table.snapshot();
+                    let candidate_func_ty =
+                        trait_method.instantiate_with_inst(&mut self.table, lhs_ty, inst);
+                    let (base, gen_args) = candidate_func_ty.decompose_ty_app(self.db);
+                    let expected_rhs =
+                        if let TyData::TyBase(TyBase::Func(func_def)) = base.data(self.db) {
+                            let mut subst = AssocTySubst::new(self.db, inst);
+                            let ty = func_def.arg_tys(self.db)[1].instantiate(self.db, gen_args);
+                            self.normalize_ty(ty.fold_with(&mut subst))
+                        } else {
+                            unreachable!("candidate func ty should be a func");
+                        };
+                    let unifies = self.table.unify(rhs.ty, expected_rhs).is_ok();
+                    self.table.rollback_to(snapshot);
+                    if unifies {
+                        viable.push((candidate_func_ty, inst, expected_rhs));
+                    }
+                }
+
+                match viable.len() {
+                    0 => {
+                        let diag = BodyDiag::ops_trait_not_implemented(
+                            self.db,
+                            expr.span(self.body()).into(),
+                            lhs_ty,
+                            op,
+                        );
+                        self.push_diag(diag);
+                        return ExprProp::invalid(self.db);
+                    }
+                    1 => {
+                        let (func_ty, inst, expected_rhs) = viable.pop().unwrap();
+                        self.env
+                            .register_confirmation(inst, expr.span(self.body()).into());
+                        self.unify_ty(Typeable::Expr(rhs_expr, rhs), rhs.ty, expected_rhs);
+                        (func_ty, inst)
+                    }
+                    _ => {
+                        self.push_diag(BodyDiag::AmbiguousTraitInst {
+                            primary: expr.span(self.body()).into(),
+                            cands: viable.into_iter().map(|(_, inst, _)| inst).collect(),
+                        });
+                        return ExprProp::invalid(self.db);
+                    }
+                }
+            }
+            Err(MethodSelectionError::NotFound) => {
+                let diag = BodyDiag::ops_trait_not_implemented(
+                    self.db,
+                    expr.span(self.body()).into(),
+                    lhs_ty,
+                    op,
+                );
+                self.push_diag(diag);
+                return ExprProp::invalid(self.db);
+            }
+            Err(err) => {
+                unreachable!("unexpected error: {err:?}");
+            }
+        };
+
+        let callable = Callable::new(self.db, method, expr.span(self.body()).into(), Some(inst))
+            .expect("failed to create Callable for core::ops trait method");
+
+        let ret_ty = self.normalize_ty(callable.ret_ty(self.db));
+        self.env.register_callable(expr, callable);
+        ExprProp::new(ret_ty, true)
     }
 
     fn check_assign_lhs(&mut self, lhs: ExprId, typed_lhs: &ExprProp<'db>) {
@@ -1086,7 +1142,8 @@ impl<'db> TyChecker<'db> {
         };
 
         match expr_data {
-            Expr::Field(lhs, ..) | Expr::Index(lhs, ..) => self.find_base_binding(*lhs),
+            Expr::Field(lhs, ..) => self.find_base_binding(*lhs),
+            Expr::Bin(lhs, _rhs, op) if *op == BinOp::Index => self.find_base_binding(*lhs),
             Expr::Path(..) => self.env.typed_expr(expr)?.binding(),
             _ => None,
         }
@@ -1100,10 +1157,11 @@ impl<'db> TyChecker<'db> {
             return false;
         };
 
-        matches!(
-            expr_data,
-            Expr::Path(..) | Expr::Field(..) | Expr::Index(..)
-        )
+        match expr_data {
+            Expr::Path(..) | Expr::Field(..) => true,
+            Expr::Bin(_, _, op) if *op == BinOp::Index => true,
+            _ => false,
+        }
     }
 }
 
@@ -1126,16 +1184,12 @@ fn body_diag_from_method_selection_err<'db>(
             .into()
         }
 
-        MethodSelectionError::AmbiguousTraitMethod(traits) => {
-            let traits = traits.into_iter().map(|def| def.trait_(db)).collect();
-
-            BodyDiag::AmbiguousTrait {
-                primary: method.span,
-                method_name: method.data,
-                traits,
-            }
-            .into()
+        MethodSelectionError::AmbiguousTraitMethod(traits) => BodyDiag::AmbiguousTrait {
+            primary: method.span,
+            method_name: method.data,
+            traits,
         }
+        .into(),
 
         MethodSelectionError::NotFound => {
             let base_ty = receiver.data.base_ty(db);
@@ -1212,22 +1266,22 @@ fn resolve_ident_expr<'db>(
 /// This traits are intended to be implemented by the operators that can work as
 /// a syntax sugar for a trait method. For example, binary `+` operator
 /// implements this trait to be able to work as a syntax sugar for
-/// `std::ops::Add` trait method.
+/// `core::ops::Add` trait method.
 ///
-/// TODO: We need to refine this trait definition to connect std library traits
+/// TODO: We need to refine this trait definition to connect core library traits
 /// smoothly.
 pub(crate) trait TraitOps {
     fn trait_path<'db>(&self, db: &'db dyn HirAnalysisDb) -> PathId<'db> {
-        let path = std_ops_path(db);
-        path.push(
-            db,
-            Partial::Present(self.trait_name(db)),
-            GenericArgListId::none(db),
-        )
+        let path = core_ops_path(db);
+        path.push_ident(db, self.trait_name(db))
     }
 
     fn trait_name<'db>(&self, db: &'db dyn HirAnalysisDb) -> IdentId<'db> {
         self.triple(db)[0]
+    }
+
+    fn trait_method<'db>(&self, db: &'db dyn HirAnalysisDb) -> IdentId<'db> {
+        self.triple(db)[1]
     }
 
     fn op_symbol<'db>(&self, db: &'db dyn HirAnalysisDb) -> IdentId<'db> {
@@ -1285,36 +1339,18 @@ impl TraitOps for BinOp {
                 }
             }
 
-            BinOp::Logical(logical_op) => {
-                use hir::hir_def::LogicalBinOp::*;
-
-                match logical_op {
-                    And => ["And", "and", "&&"],
-                    Or => ["Or", "or", "||"],
-                }
+            BinOp::Logical(_) => {
+                unreachable!()
             }
+
+            BinOp::Index => ["Index", "index", "[]"],
         };
 
         triple.map(|s| IdentId::new(db, s.to_string()))
     }
 }
 
-struct IndexingOp {}
-
-impl TraitOps for IndexingOp {
-    fn triple<'db>(&self, db: &'db dyn HirAnalysisDb) -> [IdentId<'db>; 3] {
-        let name = "Index";
-        let method_name = "index";
-        let symbol = "[]";
-
-        [
-            IdentId::new(db, name.to_string()),
-            IdentId::new(db, method_name.to_string()),
-            IdentId::new(db, symbol.to_string()),
-        ]
-    }
-}
-
+#[derive(Clone, Copy, Debug)]
 struct AugAssignOp(ArithBinOp);
 
 impl TraitOps for AugAssignOp {
@@ -1338,8 +1374,8 @@ impl TraitOps for AugAssignOp {
     }
 }
 
-fn std_ops_path(db: &dyn HirAnalysisDb) -> PathId<'_> {
-    let std_ = IdentId::new(db, "std".to_string());
+fn core_ops_path(db: &dyn HirAnalysisDb) -> PathId<'_> {
+    let core = IdentId::new(db, "core".to_string());
     let ops_ = IdentId::new(db, "ops".to_string());
-    PathId::from_ident(db, std_).push_ident(db, ops_)
+    PathId::from_ident(db, core).push_ident(db, ops_)
 }

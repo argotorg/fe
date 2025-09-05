@@ -77,7 +77,7 @@ note:
 51 │ ╭ {
 52 │ │     x.into_iter().next()
 53 │ │ }
-   │ ╰─^ T::Item
+   │ ╰─^ T::IntoIter::Item
 
 note: 
    ┌─ trait_projection.fe:52:5
@@ -95,4 +95,4 @@ note:
    ┌─ trait_projection.fe:52:5
    │
 52 │     x.into_iter().next()
-   │     ^^^^^^^^^^^^^^^^^^^^ T::Item
+   │     ^^^^^^^^^^^^^^^^^^^^ T::IntoIter::Item
