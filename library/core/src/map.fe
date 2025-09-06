@@ -1,0 +1,97 @@
+use ingot::codec::{Encode, Decode}
+use ingot::operators::{Add, Sub, AddAssign, SubAssign}
+use ingot::default::{Default}
+
+pub trait Hasher {
+    fn hash<T: Encode>(mut self, key: T) -> u256
+}
+
+pub trait MapStorage<T, U> {
+    fn get(mut self, key: T) -> U
+    fn set(mut self, key: T, value: U) -> bool
+    fn entry(mut self, key: T) -> Entry<T, U, Self>
+}
+
+pub struct Map<T, U, S: MapStorage<T, U>> {
+    pub storage: S
+}
+
+impl<T, U, S: MapStorage<T, U>> Map<T, U, S>
+    where T: Encode, U: Encode, U: Decode
+{
+    pub fn get(mut self, key: T) -> U {
+        self.storage.get(key)
+    }
+
+    pub fn set(mut self, key: T, value: U) -> bool {
+        self.storage.set(key, value)
+    }
+
+    pub fn entry(mut self, key: T) -> Entry<T, U, S> {
+        self.storage.entry(key)
+    }
+}
+
+pub enum Entry<T, U, S: MapStorage<T, U>> {
+    Occupied { pub key: T, pub value: U, pub index: u256, pub storage: S },
+    Vacant { pub key: T, pub storage: S }
+}
+
+impl<T, U, S: MapStorage<T, U>> Entry<T, U, S>
+    where U: Default
+{
+    pub fn or_insert(mut self, value: U) -> U {
+        match self {
+            Entry::Occupied { value: v, .. } => v
+            Entry::Vacant { key, mut storage } => {
+                storage.set(key, value)
+                value
+            }
+        }
+    }
+
+    pub fn value(self) -> U {
+        match self {
+            Entry::Occupied { value, .. } => value
+            Entry::Vacant { .. } => U::default()
+        }
+    }
+}
+
+impl<K, V, S> AddAssign<V> for Entry<K, V, S>
+    where 
+        S: MapStorage<K, V>,
+        V: Add
+{
+    fn add_assign(mut self, rhs: V) {
+        match self {
+            Entry::Occupied { key, value, index, mut storage } => {
+                let new_value = value.add(rhs: rhs)
+                storage.set(key: key, value: new_value)
+                self = Entry::Occupied { key, value: new_value, index, storage }
+            }
+            Entry::Vacant { key, storage } => {
+                self = Entry::Vacant { key, storage }
+            }
+        }
+    }
+}
+
+impl<K, V, S> SubAssign<V> for Entry<K, V, S>
+    where 
+        S: MapStorage<K, V>,
+        V: Sub
+{
+    fn sub_assign(mut self, rhs: V) {
+        match self {
+            Entry::Occupied { key, value, index, mut storage } => {
+                let new_value = value.sub(rhs: rhs)
+                storage.set(key: key, value: new_value)
+                self = Entry::Occupied { key, value: new_value, index, storage }
+            }
+            Entry::Vacant { key, storage } => {
+                self = Entry::Vacant { key, storage }
+            }
+        }
+    }
+}

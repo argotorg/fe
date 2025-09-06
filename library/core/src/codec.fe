@@ -1,0 +1,106 @@
+pub struct BufferResult<T> {
+    pub value: T,
+    pub is_error: bool
+}
+
+pub trait Buffer {
+    fn write_word(mut self, offset: u256, w: u256) -> bool
+    fn read_word(mut self, offset: u256) -> BufferResult<u256>
+    fn len(self) -> u256
+}
+
+pub struct Cursor<B: Buffer> {
+    pub inner: B,
+    pub pos: u256
+}
+
+impl<B: Buffer> Write for Cursor<B> {
+    fn write_word(mut self, w: u256) -> bool {
+        if self.pos > self.inner.len() {
+            return false
+        }
+        self.inner.write_word(offset: self.pos, w)
+        self.pos += 32
+        true
+    }
+}
+
+impl<B: Buffer> Read for Cursor<B> {
+    fn read_word(mut self) -> BufferResult<u256> {
+        if self.pos > self.inner.len() {
+            return BufferResult { value: 0, is_error: true }
+        }
+        let word: u256 = self.inner.read_word(offset: self.pos).value
+        self.pos += 32
+        BufferResult { value: word, is_error: false }
+    }
+}
+
+pub trait Write {
+    fn write_word(mut self, w: u256) -> bool
+}
+
+pub trait Read {
+    fn read_word(mut self) -> BufferResult<u256>
+}
+
+pub trait Decode {
+    fn decode<R: Read>(mut r: R) -> BufferResult<Self>
+    fn decode_size() -> usize
+}
+
+pub trait Encode {
+    fn encode<W: Write>(self, mut _ w: W) -> bool
+    fn encode_size() -> usize
+}
+
+impl Decode for u256 {
+    fn decode<R: Read>(mut r: R) -> BufferResult<u256> {
+        r.read_word()
+    }
+    fn decode_size() -> usize {
+        32
+    }
+}
+
+impl Encode for u256 {
+    fn encode<W: Write>(self, mut _ w: W) -> bool {
+        w.write_word(w: self)
+    }
+
+    fn encode_size() -> usize {
+        32
+    }
+}
+
+impl Encode for (u256, u256) {
+    fn encode<W: Write>(self, mut _ w: W) -> bool {
+        let (a, b) = self
+        if !a.encode(w) {
+            return false
+        }
+        b.encode(w)
+    }
+
+    fn encode_size() -> usize {
+        64  // 2 * 32 bytes (size of two u256)
+    }
+}
+
+impl Decode for (u256, u256) {
+    fn decode<R: Read>(mut r: R) -> BufferResult<(u256, u256)> {
+        let a = u256::decode(r)
+        if a.is_error {
+            return BufferResult { value: (0, 0), is_error: true }
+        }
+        let b = u256::decode(r)
+        if b.is_error {
+            return BufferResult { value: (0, 0), is_error: true }
+        }
+        BufferResult { value: (a.value, b.value), is_error: false }
+    }
+
+    fn decode_size() -> usize {
+        64  // 2 * 32 bytes (size of two u256)
+    }
+} 
