@@ -20,7 +20,7 @@ pub use name_resolver::{
 // NOTE: `resolve_path` is the low-level resolver that still requires callers to
 // pass a boolean domain hint. Prefer `resolve_with_policy` for new call-sites
 // to avoid boolean flags at API boundaries.
-pub use method_api::{find_method_id, method_func_def_from_res};
+pub use method_api::method_func_def_from_res;
 pub use path_resolver::{
     find_associated_type, resolve_ident_to_bucket, resolve_name_res, resolve_path,
     resolve_path_with_observer, PathRes, PathResError, PathResErrorKind, ResolvedVariant,

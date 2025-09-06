@@ -1,0 +1,10 @@
+---
+source: crates/language-server/src/lsp_diagnostics.rs
+assertion_line: 238
+expression: snapshot
+---
+File: file:///home/micah/hacker-stuff-2023/fe-stuff/fe/crates/language-server/test_projects/comprehensive/src/lib.fe
+  - code:8-0000 severity:Error @ 38:3..38:8
+    type mismatch
+expected `()`, but `i32` is given
+

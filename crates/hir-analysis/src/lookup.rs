@@ -1,10 +1,9 @@
+use hir::hir_def::{scope_graph::ScopeId, ItemKind, PathId, TopLevelMod};
 use hir::SpannedHirDb;
-use hir::hir_def::{TopLevelMod, scope_graph::ScopeId, ItemKind, PathId};
-use parser::TextSize;
 
-use crate::{HirAnalysisDb, diagnostics::SpannedHirAnalysisDb};
 use crate::name_resolution::{resolve_with_policy, DomainPreference, PathRes};
-use crate::ty::{trait_resolution::PredicateListId, func_def::FuncDef};
+use crate::ty::{func_def::FuncDef, trait_resolution::PredicateListId};
+use crate::{diagnostics::SpannedHirAnalysisDb, HirAnalysisDb};
 
 /// Generic semantic identity at a source offset.
 /// This is compiler-facing and independent of any IDE layer types.
@@ -14,14 +13,19 @@ pub enum SymbolIdentity<'db> {
     EnumVariant(hir::hir_def::EnumVariant<'db>),
     FuncParam(hir::hir_def::ItemKind<'db>, u16),
     Method(FuncDef<'db>),
-    Local(hir::hir_def::item::Func<'db>, crate::ty::ty_check::BindingKey<'db>),
+    Local(
+        hir::hir_def::item::Func<'db>,
+        crate::ty::ty_check::BindingKey<'db>,
+    ),
 }
 
-
-fn enclosing_func<'db>(db: &'db dyn SpannedHirDb, mut scope: ScopeId<'db>) -> Option<hir::hir_def::item::Func<'db>> {
+fn enclosing_func<'db>(
+    db: &'db dyn SpannedHirDb,
+    mut scope: ScopeId<'db>,
+) -> Option<hir::hir_def::item::Func<'db>> {
     for _ in 0..16 {
-        if let Some(item) = scope.to_item() {
-            if let ItemKind::Func(f) = item { return Some(f); }
+        if let Some(ItemKind::Func(f)) = scope.to_item() {
+            return Some(f);
         }
         scope = scope.parent(db)?;
     }
@@ -32,7 +36,9 @@ fn map_path_res<'db>(db: &'db dyn HirAnalysisDb, res: PathRes<'db>) -> Option<Sy
     match res {
         PathRes::EnumVariant(v) => Some(SymbolIdentity::EnumVariant(v.variant)),
         PathRes::FuncParam(item, idx) => Some(SymbolIdentity::FuncParam(item, idx)),
-        PathRes::Method(..) => crate::name_resolution::method_func_def_from_res(&res).map(SymbolIdentity::Method),
+        PathRes::Method(..) => {
+            crate::name_resolution::method_func_def_from_res(&res).map(SymbolIdentity::Method)
+        }
         _ => res.as_scope(db).map(SymbolIdentity::Scope),
     }
 }
@@ -46,7 +52,7 @@ pub fn identity_for_occurrence<'db>(
     occ: &hir::source_index::OccurrencePayload<'db>,
 ) -> Vec<SymbolIdentity<'db>> {
     use hir::source_index::OccurrencePayload as OP;
-    
+
     match *occ {
         OP::ItemHeaderName { scope, .. } => match scope {
             hir::hir_def::scope_graph::ScopeId::Item(ItemKind::Func(f)) => {
@@ -57,54 +63,90 @@ pub fn identity_for_occurrence<'db>(
                 }
                 vec![SymbolIdentity::Scope(scope)]
             }
-            hir::hir_def::scope_graph::ScopeId::FuncParam(item, idx) => vec![SymbolIdentity::FuncParam(item, idx)],
+            hir::hir_def::scope_graph::ScopeId::FuncParam(item, idx) => {
+                vec![SymbolIdentity::FuncParam(item, idx)]
+            }
             hir::hir_def::scope_graph::ScopeId::Variant(v) => vec![SymbolIdentity::EnumVariant(v)],
             other => vec![SymbolIdentity::Scope(other)],
         },
-        OP::MethodName { scope, receiver, ident, body, .. } => {
+        OP::MethodName {
+            scope,
+            receiver,
+            ident,
+            body,
+            ..
+        } => {
             if let Some(func) = enclosing_func(db, body.scope()) {
-                use crate::ty::{ty_check::check_func_body, canonical::Canonical};
-                use crate::name_resolution::method_selection::{select_method_candidate, MethodSelectionError};
-                
+                use crate::name_resolution::method_selection::{
+                    select_method_candidate, MethodSelectionError,
+                };
+                use crate::ty::{canonical::Canonical, ty_check::check_func_body};
+
                 let (_diags, typed) = check_func_body(db, func).clone();
                 let recv_ty = typed.expr_prop(db, receiver).ty;
                 let assumptions = PredicateListId::empty_list(db);
-                
-                match select_method_candidate(db, Canonical::new(db, recv_ty), ident, scope, assumptions) {
+
+                match select_method_candidate(
+                    db,
+                    Canonical::new(db, recv_ty),
+                    ident,
+                    scope,
+                    assumptions,
+                ) {
                     Ok(cand) => {
                         use crate::name_resolution::method_selection::MethodCandidate;
                         let fd = match cand {
                             MethodCandidate::InherentMethod(fd) => fd,
-                            MethodCandidate::TraitMethod(tm) | MethodCandidate::NeedsConfirmation(tm) => tm.method.0,
+                            MethodCandidate::TraitMethod(tm)
+                            | MethodCandidate::NeedsConfirmation(tm) => tm.method.0,
                         };
                         vec![SymbolIdentity::Method(fd)]
                     }
-                    Err(MethodSelectionError::AmbiguousInherentMethod(methods)) => {
-                        methods.iter().map(|fd| SymbolIdentity::Method(*fd)).collect()
-                    }
-                    Err(MethodSelectionError::AmbiguousTraitMethod(traits)) => {
-                        traits.iter().filter_map(|trait_def| {
-                            trait_def.methods(db).get(&ident)
+                    Err(MethodSelectionError::AmbiguousInherentMethod(methods)) => methods
+                        .iter()
+                        .map(|fd| SymbolIdentity::Method(*fd))
+                        .collect(),
+                    Err(MethodSelectionError::AmbiguousTraitMethod(traits)) => traits
+                        .iter()
+                        .filter_map(|trait_def| {
+                            trait_def
+                                .methods(db)
+                                .get(&ident)
                                 .map(|tm| SymbolIdentity::Method(tm.0))
-                        }).collect()
-                    }
-                    Err(_) => vec![]
+                        })
+                        .collect(),
+                    Err(_) => vec![],
                 }
             } else {
                 vec![]
             }
         }
-        OP::PathExprSeg { body, expr, scope, path, seg_idx, .. } => {
+        OP::PathExprSeg {
+            body,
+            expr,
+            scope,
+            path,
+            seg_idx,
+            ..
+        } => {
             if let Some(func) = enclosing_func(db, body.scope()) {
                 if let Some(bkey) = crate::ty::ty_check::expr_binding_key_for_expr(db, func, expr) {
                     return vec![match bkey {
-                        crate::ty::ty_check::BindingKey::FuncParam(f, idx) => SymbolIdentity::FuncParam(ItemKind::Func(f), idx),
+                        crate::ty::ty_check::BindingKey::FuncParam(f, idx) => {
+                            SymbolIdentity::FuncParam(ItemKind::Func(f), idx)
+                        }
                         other => SymbolIdentity::Local(func, other),
                     }];
                 }
             }
             let seg_path: PathId<'db> = path.segment(db, seg_idx).unwrap_or(path);
-            if let Ok(res) = resolve_with_policy(db, seg_path, scope, PredicateListId::empty_list(db), DomainPreference::Either) {
+            if let Ok(res) = resolve_with_policy(
+                db,
+                seg_path,
+                scope,
+                PredicateListId::empty_list(db),
+                DomainPreference::Either,
+            ) {
                 if let Some(identity) = map_path_res(db, res) {
                     vec![identity]
                 } else {
@@ -118,29 +160,53 @@ pub fn identity_for_occurrence<'db>(
         }
         OP::PathPatSeg { body, pat, .. } => {
             if let Some(func) = enclosing_func(db, body.scope()) {
-                vec![SymbolIdentity::Local(func, crate::ty::ty_check::BindingKey::LocalPat(pat))]
+                vec![SymbolIdentity::Local(
+                    func,
+                    crate::ty::ty_check::BindingKey::LocalPat(pat),
+                )]
             } else {
                 vec![]
             }
         }
-        OP::FieldAccessName { body, ident, receiver, .. } => {
+        OP::FieldAccessName {
+            body,
+            ident,
+            receiver,
+            ..
+        } => {
             if let Some(func) = enclosing_func(db, body.scope()) {
                 let (_d, typed) = crate::ty::ty_check::check_func_body(db, func).clone();
                 let recv_ty = typed.expr_prop(db, receiver).ty;
-                if let Some(sc) = crate::ty::ty_check::RecordLike::from_ty(recv_ty).record_field_scope(db, ident) {
+                if let Some(sc) =
+                    crate::ty::ty_check::RecordLike::from_ty(recv_ty).record_field_scope(db, ident)
+                {
                     return vec![SymbolIdentity::Scope(sc)];
                 }
             }
             vec![]
         }
-        OP::PatternLabelName { scope, ident, constructor_path, .. } => {
+        OP::PatternLabelName {
+            scope,
+            ident,
+            constructor_path,
+            ..
+        } => {
             if let Some(p) = constructor_path {
-                if let Ok(res) = resolve_with_policy(db, p, scope, PredicateListId::empty_list(db), DomainPreference::Either) {
+                if let Ok(res) = resolve_with_policy(
+                    db,
+                    p,
+                    scope,
+                    PredicateListId::empty_list(db),
+                    DomainPreference::Either,
+                ) {
                     use crate::name_resolution::PathRes as PR;
                     let target = match res {
-                        PR::EnumVariant(v) => crate::ty::ty_check::RecordLike::from_variant(v).record_field_scope(db, ident),
-                        PR::Ty(ty) => crate::ty::ty_check::RecordLike::from_ty(ty).record_field_scope(db, ident),
-                        PR::TyAlias(_, ty) => crate::ty::ty_check::RecordLike::from_ty(ty).record_field_scope(db, ident),
+                        PR::EnumVariant(v) => crate::ty::ty_check::RecordLike::from_variant(v)
+                            .record_field_scope(db, ident),
+                        PR::Ty(ty) => crate::ty::ty_check::RecordLike::from_ty(ty)
+                            .record_field_scope(db, ident),
+                        PR::TyAlias(_, ty) => crate::ty::ty_check::RecordLike::from_ty(ty)
+                            .record_field_scope(db, ident),
                         _ => None,
                     };
                     if let Some(target) = target {
@@ -155,39 +221,66 @@ pub fn identity_for_occurrence<'db>(
             let (_d, imports) = crate::name_resolution::resolve_imports(db, ing);
             if let Some(named) = imports.named_resolved.get(&scope) {
                 if let Some(bucket) = named.get(&ident) {
-                    if let Ok(nr) = bucket.pick_any(&[crate::name_resolution::NameDomain::TYPE, crate::name_resolution::NameDomain::VALUE]).as_ref() {
-                        if let crate::name_resolution::NameResKind::Scope(sc) = nr.kind {
-                            return vec![SymbolIdentity::Scope(sc)];
-                        }
-                    }
-                }
-            }
-            vec![]
-        }
-        OP::UsePathSeg { scope, path, seg_idx, .. } => {
-            if seg_idx + 1 != path.segment_len(db) {
-                return vec![];
-            }
-            if let Some(seg) = path.data(db).get(seg_idx).and_then(|p| p.to_opt()) {
-                if let hir::hir_def::UsePathSegment::Ident(ident) = seg {
-                    let ing = top_mod.ingot(db);
-                    let (_d, imports) = crate::name_resolution::resolve_imports(db, ing);
-                    if let Some(named) = imports.named_resolved.get(&scope) {
-                        if let Some(bucket) = named.get(&ident) {
-                            if let Ok(nr) = bucket.pick_any(&[crate::name_resolution::NameDomain::TYPE, crate::name_resolution::NameDomain::VALUE]).as_ref() {
-                                if let crate::name_resolution::NameResKind::Scope(sc) = nr.kind {
-                                    return vec![SymbolIdentity::Scope(sc)];
-                                }
+                    if let Ok(nr) = bucket
+                        .pick_any(&[
+                            crate::name_resolution::NameDomain::TYPE,
+                            crate::name_resolution::NameDomain::VALUE,
+                        ])
+                        .as_ref()
+                    {
+                        match nr.kind {
+                            crate::name_resolution::NameResKind::Scope(sc) => {
+                                return vec![SymbolIdentity::Scope(sc)];
                             }
+                            crate::name_resolution::NameResKind::Prim(_) => {}
                         }
                     }
                 }
             }
             vec![]
         }
-        OP::PathSeg { scope, path, seg_idx, .. } => {
+        OP::UsePathSeg {
+            scope,
+            path,
+            seg_idx,
+            ..
+        } => {
+            // Convert UsePathId to PathId for resolution using same logic as PathExprSeg
+            if let Some(path_id) = convert_use_path_to_path_id(db, path, seg_idx) {
+                if let Ok(res) = resolve_with_policy(
+                    db,
+                    path_id,
+                    scope,
+                    PredicateListId::empty_list(db),
+                    DomainPreference::Either,
+                ) {
+                    if let Some(identity) = map_path_res(db, res) {
+                        vec![identity]
+                    } else {
+                        vec![]
+                    }
+                } else {
+                    // Try ambiguous candidates like regular PathSeg
+                    find_ambiguous_candidates_for_path_seg(db, top_mod, scope, path_id, 0)
+                }
+            } else {
+                vec![]
+            }
+        }
+        OP::PathSeg {
+            scope,
+            path,
+            seg_idx,
+            ..
+        } => {
             let seg_path: PathId<'db> = path.segment(db, seg_idx).unwrap_or(path);
-            if let Ok(res) = resolve_with_policy(db, seg_path, scope, PredicateListId::empty_list(db), DomainPreference::Either) {
+            if let Ok(res) = resolve_with_policy(
+                db,
+                seg_path,
+                scope,
+                PredicateListId::empty_list(db),
+                DomainPreference::Either,
+            ) {
                 if let Some(identity) = map_path_res(db, res) {
                     vec![identity]
                 } else {
@@ -201,6 +294,34 @@ pub fn identity_for_occurrence<'db>(
     }
 }
 
+/// Convert UsePathId to PathId for resolution
+fn convert_use_path_to_path_id<'db>(
+    db: &'db dyn SpannedHirAnalysisDb,
+    use_path: hir::hir_def::UsePathId<'db>,
+    up_to_seg_idx: usize,
+) -> Option<hir::hir_def::PathId<'db>> {
+    // Build PathId by converting each UsePathSegment up to seg_idx to PathKind::Ident
+    let mut path_id: Option<hir::hir_def::PathId<'db>> = None;
+
+    for (i, seg) in use_path.data(db).iter().enumerate() {
+        if i > up_to_seg_idx {
+            break;
+        }
+
+        if let Some(hir::hir_def::UsePathSegment::Ident(ident)) = seg.to_opt() {
+            path_id = Some(match path_id {
+                Some(parent) => parent.push_ident(db, ident),
+                None => hir::hir_def::PathId::from_ident(db, ident),
+            });
+        } else {
+            // Skip invalid segments
+            continue;
+        }
+    }
+
+    path_id
+}
+
 /// Find multiple candidates for ambiguous import cases
 fn find_ambiguous_candidates_for_path_seg<'db>(
     db: &'db dyn SpannedHirAnalysisDb,
@@ -210,37 +331,37 @@ fn find_ambiguous_candidates_for_path_seg<'db>(
     seg_idx: usize,
 ) -> Vec<SymbolIdentity<'db>> {
     use crate::name_resolution::NameDomain;
-    
+
     // Get the identifier from the path segment
     let seg_path = path.segment(db, seg_idx).unwrap_or(path);
     let Some(ident) = seg_path.as_ident(db) else {
         return vec![];
     };
-    
+
     // Check imports for this scope - walk up the scope hierarchy to find where imports are resolved
     let ing = top_mod.ingot(db);
     let (_diags, imports) = crate::name_resolution::resolve_imports(db, ing);
-    
+
     // Try current scope first, then walk up the hierarchy
     let mut current_scope = Some(scope);
     let (_import_scope, named) = loop {
         let Some(sc) = current_scope else {
             return vec![];
         };
-        
+
         if let Some(named) = imports.named_resolved.get(&sc) {
             break (sc, named);
         }
-        
+
         // Walk up to parent scope
         current_scope = sc.parent(db);
     };
     let Some(bucket) = named.get(&ident) else {
         return vec![];
     };
-    
+
     let mut candidates = Vec::new();
-    
+
     // Check both TYPE and VALUE domains for multiple resolutions
     for domain in [NameDomain::TYPE, NameDomain::VALUE] {
         match bucket.pick(domain) {
@@ -262,32 +383,6 @@ fn find_ambiguous_candidates_for_path_seg<'db>(
             }
         }
     }
-    
+
     candidates
-}
-
-/// Resolve the semantic identity (definition-level target) at a given source offset.
-/// Uses half-open span policy in the HIR occurrence index.
-/// Returns the first identity found, or None if no identities are found.
-pub fn identity_at_offset<'db>(
-    db: &'db dyn SpannedHirAnalysisDb,
-    top_mod: TopLevelMod<'db>,
-    offset: TextSize,
-) -> Option<SymbolIdentity<'db>> {
-    use hir::source_index::{occurrences_at_offset, OccurrencePayload as OP};
-
-    // Get the most specific occurrence at this offset and map it to a symbol identity
-    let occs = occurrences_at_offset(db, top_mod, offset);
-    
-    // Prefer contextual occurrences (PathExprSeg/PathPatSeg) over generic ones
-    let best_occ = occs.iter().min_by_key(|o| match o {
-        OP::PathExprSeg{..} | OP::PathPatSeg{..} => 0u8,
-        _ => 1u8,
-    });
-    
-    if let Some(occ) = best_occ {
-        identity_for_occurrence(db, top_mod, occ).into_iter().next()
-    } else {
-        None
-    }
 }

@@ -1,0 +1,40 @@
+/// A comprehensive single-project fixture to exercise diagnostics
+
+mod stuff {
+  pub mod calculations {
+    pub fn return_three() -> i32 { 3 }
+    pub fn return_four() -> i32 { 4 }
+    pub fn return_five() -> i32 { 5 }
+
+    /// Intentionally ambiguous: both a module and a function named `ambiguous`
+    pub mod ambiguous { }
+    pub fn ambiguous() {}
+  }
+
+  pub mod shapes {
+    pub struct Point { x: i32, y: i32 }
+
+    pub trait ContainerTrait {
+      fn get(self) -> i32
+    }
+
+    impl ContainerTrait for Point {
+      // Intentionally written with `self` usage to exercise method diagnostics
+      fn get(self) -> i32 { self.x + self.y }
+    }
+  }
+}
+
+use stuff::calculations::return_three
+use stuff::calculations::return_four
+use stuff::calculations::ambiguous
+
+pub fn compute() {
+  let x = return_three()
+  let y = return_four()
+  // call the function named ambiguous, not the module
+  ambiguous()
+  // simple arithmetic to keep values used
+  x + y
+}
+

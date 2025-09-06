@@ -16,12 +16,14 @@ use crate::{
 };
 use common::indexmap::IndexSet;
 use constraint::collect_constraints;
-use hir::{hir_def::{HirIngot, Func}, Ingot};
+use hir::{
+    hir_def::HirIngot,
+    Ingot,
+};
 use salsa::Update;
 
 pub(crate) mod constraint;
 mod proof_forest;
-
 
 #[salsa::tracked(return_ref)]
 pub fn is_goal_satisfiable<'db>(
@@ -36,30 +38,6 @@ pub fn is_goal_satisfiable<'db>(
     };
 
     ProofForest::new(db, ingot, goal, assumptions).solve()
-}
-
-/// A minimal, user-facing explanation of trait goal satisfiability.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum GoalExplanation<'db> {
-    Success,
-    ContainsInvalid,
-    NeedsConfirmation,
-    Failure { subgoal: Option<super::trait_def::TraitInstId<'db>> },
-}
-
-/// Facade: Explain why a goal is (not) satisfiable, reusing existing solver.
-pub fn explain_goal<'db>(
-    db: &'db dyn HirAnalysisDb,
-    ingot: Ingot<'db>,
-    goal: Canonical<TraitInstId<'db>>,
-    assumptions: PredicateListId<'db>,
-) -> GoalExplanation<'db> {
-    match is_goal_satisfiable(db, ingot, goal, assumptions) {
-        GoalSatisfiability::Satisfied(_) => GoalExplanation::Success,
-        GoalSatisfiability::ContainsInvalid => GoalExplanation::ContainsInvalid,
-        GoalSatisfiability::NeedsConfirmation(_) => GoalExplanation::NeedsConfirmation,
-        GoalSatisfiability::UnSat(sub) => GoalExplanation::Failure { subgoal: sub.map(|s| s.value) },
-    }
 }
 
 /// Checks if the given type is well-formed, i.e., the arguments of the given
@@ -317,14 +295,4 @@ impl<'db> PredicateListId<'db> {
 
         Self::new(db, all_predicates.into_iter().collect::<Vec<_>>())
     }
-}
-
-/// Public helper: collect full assumptions (constraints) applicable to a function definition,
-/// including parent trait/impl bounds when relevant.
-pub fn func_assumptions_for_func<'db>(
-    db: &'db dyn HirAnalysisDb,
-    func: Func<'db>,
-) -> PredicateListId<'db> {
-    constraint::collect_func_def_constraints(db, super::func_def::HirFuncDefKind::Func(func), true)
-        .instantiate_identity()
 }

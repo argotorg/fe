@@ -17,18 +17,6 @@ help: definitions + references
 
 Symbol: local in use_alias_and_glob::f
 help: definitions + references
-   ┌─ use_alias_and_glob.fe:14:7
-   │
-14 │   let _c: sub::Name
-   │       ^^
-   │       │
-   │       def: defined here @ 14:7 (1 refs)
-   │       ref: 14:7
-
-
-
-Symbol: local in use_alias_and_glob::f
-help: definitions + references
    ┌─ use_alias_and_glob.fe:15:7
    │
 15 │   let _d: Alt
@@ -41,6 +29,18 @@ help: definitions + references
 
 Symbol: local in use_alias_and_glob::f
 help: definitions + references
+   ┌─ use_alias_and_glob.fe:14:7
+   │
+14 │   let _c: sub::Name
+   │       ^^
+   │       │
+   │       def: defined here @ 14:7 (1 refs)
+   │       ref: 14:7
+
+
+
+Symbol: local in use_alias_and_glob::f
+help: definitions + references
    ┌─ use_alias_and_glob.fe:13:7
    │
 13 │   let _b: Name
@@ -48,6 +48,40 @@ help: definitions + references
    │       │
    │       def: defined here @ 13:7 (1 refs)
    │       ref: 13:7
+
+
+
+Symbol: use_alias_and_glob::root
+help: definitions + references
+  ┌─ use_alias_and_glob.fe:1:5
+  │
+1 │ mod root {
+  │     ^^^^
+  │     │
+  │     def: defined here @ 1:5 (3 refs)
+  │     ref: 1:5
+  ·
+8 │ use root::sub::Name as N
+  │     ^^^^ ref: 8:5
+9 │ use root::sub::*
+  │     ^^^^ ref: 9:5
+
+
+
+Symbol: use_alias_and_glob::root::sub
+help: definitions + references
+  ┌─ use_alias_and_glob.fe:2:13
+  │
+2 │     pub mod sub {
+  │             ^^^
+  │             │
+  │             def: defined here @ 2:13 (3 refs)
+  │             ref: 2:13
+  ·
+8 │ use root::sub::Name as N
+  │           ^^^ ref: 8:11
+9 │ use root::sub::*
+  │           ^^^ ref: 9:11
 
 
 
@@ -73,8 +107,11 @@ help: definitions + references
  3 │         pub struct Name {}
    │                    ^^^^
    │                    │
-   │                    def: defined here @ 3:20 (3 refs)
+   │                    def: defined here @ 3:20 (4 refs)
    │                    ref: 3:20
+   ·
+ 8 │ use root::sub::Name as N
+   │                ^^^^ ref: 8:16
    ·
 12 │   let _a: N
    │           ^ ref: 12:11

@@ -128,14 +128,10 @@ fn collect_unified_occurrences<'db>(
     db: &'db dyn SpannedHirDb,
     top_mod: TopLevelMod<'db>,
 ) -> Vec<OccurrencePayload<'db>> {
+    #[derive(Default)]
     struct Collector<'db> {
         occ: Vec<OccurrencePayload<'db>>,
         suppress_generic_for_path: Option<PathId<'db>>,
-    }
-    impl<'db> Default for Collector<'db> {
-        fn default() -> Self {
-            Self { occ: Vec::new(), suppress_generic_for_path: None }
-        }
     }
 
     impl<'db, 'ast: 'db> Visitor<'ast> for Collector<'db> {
@@ -228,54 +224,52 @@ fn collect_unified_occurrences<'db>(
                         }
                     }
                 }
-                Expr::Field(receiver, field_name) => {
-                    if let Partial::Present(crate::hir_def::FieldIndex::Ident(ident)) = field_name {
-                        if let Some(span) = ctxt.span() {
-                            let scope = ctxt.scope();
-                            let body = ctxt.body();
-                            let name_span: DynLazySpan<'db> =
-                                span.into_field_expr().accessor().into();
-                            self.occ.push(OccurrencePayload::FieldAccessName {
-                                scope,
-                                body,
-                                ident: *ident,
-                                receiver: *receiver,
-                                span: name_span,
-                            });
-                        }
+                Expr::Field(
+                    receiver,
+                    Partial::Present(crate::hir_def::FieldIndex::Ident(ident)),
+                ) => {
+                    if let Some(span) = ctxt.span() {
+                        let scope = ctxt.scope();
+                        let body = ctxt.body();
+                        let name_span: DynLazySpan<'db> = span.into_field_expr().accessor().into();
+                        self.occ.push(OccurrencePayload::FieldAccessName {
+                            scope,
+                            body,
+                            ident: *ident,
+                            receiver: *receiver,
+                            span: name_span,
+                        });
                     }
                 }
-                Expr::Path(path) => {
-                    if let Partial::Present(path) = path {
-                        if let Some(span) = ctxt.span() {
-                            let scope = ctxt.scope();
-                            let body = ctxt.body();
-                            let tail = path.segment_index(ctxt.db());
-                            for i in 0..=tail {
-                                let seg_span: DynLazySpan<'db> = span
-                                    .clone()
-                                    .into_path_expr()
-                                    .path()
-                                    .segment(i)
-                                    .ident()
-                                    .into();
-                                self.occ.push(OccurrencePayload::PathExprSeg {
-                                    scope,
-                                    body,
-                                    expr: id,
-                                    path: *path,
-                                    seg_idx: i,
-                                    span: seg_span,
-                                });
-                            }
-                            // Avoid emitting generic PathSeg for this path by suppressing
-                            // it during the recursive walk of this expression.
-                            let prev = self.suppress_generic_for_path;
-                            self.suppress_generic_for_path = Some(*path);
-                            crate::visitor::walk_expr(self, ctxt, id);
-                            self.suppress_generic_for_path = prev;
-                            return;
+                Expr::Path(Partial::Present(path)) => {
+                    if let Some(span) = ctxt.span() {
+                        let scope = ctxt.scope();
+                        let body = ctxt.body();
+                        let tail = path.segment_index(ctxt.db());
+                        for i in 0..=tail {
+                            let seg_span: DynLazySpan<'db> = span
+                                .clone()
+                                .into_path_expr()
+                                .path()
+                                .segment(i)
+                                .ident()
+                                .into();
+                            self.occ.push(OccurrencePayload::PathExprSeg {
+                                scope,
+                                body,
+                                expr: id,
+                                path: *path,
+                                seg_idx: i,
+                                span: seg_span,
+                            });
                         }
+                        // Avoid emitting generic PathSeg for this path by suppressing
+                        // it during the recursive walk of this expression.
+                        let prev = self.suppress_generic_for_path;
+                        self.suppress_generic_for_path = Some(*path);
+                        crate::visitor::walk_expr(self, ctxt, id);
+                        self.suppress_generic_for_path = prev;
+                        return;
                     }
                 }
                 _ => {}
@@ -317,36 +311,34 @@ fn collect_unified_occurrences<'db>(
                         }
                     }
                 }
-                Pat::Path(path, _is_mut) => {
-                    if let Partial::Present(path) = path {
-                        if let Some(span) = ctxt.span() {
-                            let scope = ctxt.scope();
-                            let body = ctxt.body();
-                            let tail = path.segment_index(ctxt.db());
-                            for i in 0..=tail {
-                                let seg_span: DynLazySpan<'db> = span
-                                    .clone()
-                                    .into_path_pat()
-                                    .path()
-                                    .segment(i)
-                                    .ident()
-                                    .into();
-                                self.occ.push(OccurrencePayload::PathPatSeg {
-                                    scope,
-                                    body,
-                                    pat,
-                                    path: *path,
-                                    seg_idx: i,
-                                    span: seg_span,
-                                });
-                            }
-                            // Suppress generic PathSeg emission for this pattern path.
-                            let prev = self.suppress_generic_for_path;
-                            self.suppress_generic_for_path = Some(*path);
-                            crate::visitor::walk_pat(self, ctxt, pat);
-                            self.suppress_generic_for_path = prev;
-                            return;
+                Pat::Path(Partial::Present(path), _is_mut) => {
+                    if let Some(span) = ctxt.span() {
+                        let scope = ctxt.scope();
+                        let body = ctxt.body();
+                        let tail = path.segment_index(ctxt.db());
+                        for i in 0..=tail {
+                            let seg_span: DynLazySpan<'db> = span
+                                .clone()
+                                .into_path_pat()
+                                .path()
+                                .segment(i)
+                                .ident()
+                                .into();
+                            self.occ.push(OccurrencePayload::PathPatSeg {
+                                scope,
+                                body,
+                                pat,
+                                path: *path,
+                                seg_idx: i,
+                                span: seg_span,
+                            });
                         }
+                        // Suppress generic PathSeg emission for this pattern path.
+                        let prev = self.suppress_generic_for_path;
+                        self.suppress_generic_for_path = Some(*path);
+                        crate::visitor::walk_pat(self, ctxt, pat);
+                        self.suppress_generic_for_path = prev;
+                        return;
                     }
                 }
                 _ => {}
@@ -362,7 +354,7 @@ fn collect_unified_occurrences<'db>(
     for it in top_mod.all_items(db).iter() {
         if let Some(name) = it.name_span() {
             let sc = crate::hir_def::scope_graph::ScopeId::from_item(*it);
-            let name_dyn: DynLazySpan<'db> = name.into();
+            let name_dyn: DynLazySpan<'db> = name;
             coll.occ.push(OccurrencePayload::ItemHeaderName {
                 scope: sc,
                 span: name_dyn,
@@ -400,10 +392,12 @@ fn collect_unified_occurrences<'db>(
     // when both cover the exact same textual span. Build a set of spans covered
     // by contextual occurrences, then drop PathSeg entries that overlap exactly.
     use rustc_hash::FxHashSet;
-    let mut contextual_spans: FxHashSet<(parser::TextSize, parser::TextSize)> = FxHashSet::default();
+    let mut contextual_spans: FxHashSet<(parser::TextSize, parser::TextSize)> =
+        FxHashSet::default();
     for o in coll.occ.iter() {
         match o {
-            OccurrencePayload::PathExprSeg { span, .. } | OccurrencePayload::PathPatSeg { span, .. } => {
+            OccurrencePayload::PathExprSeg { span, .. }
+            | OccurrencePayload::PathPatSeg { span, .. } => {
                 if let Some(sp) = span.clone().resolve(db) {
                     contextual_spans.insert((sp.range.start(), sp.range.end()));
                 }
@@ -447,4 +441,65 @@ pub fn occurrences_at_offset<'db>(
         .filter(|e| e.start <= offset && offset < e.end)
         .map(|e| e.payload.clone())
         .collect()
+}
+
+impl<'db> OccurrencePayload<'db> {
+    /// Returns true if this occurrence should be included in rename operations.
+    /// Filters out language keywords like 'self', 'Self', 'super', etc.
+    pub fn rename_allowed(&self, db: &'db dyn crate::SpannedHirDb) -> bool {
+        use crate::hir_def::scope_graph::ScopeId;
+
+        match self {
+            // Path-based occurrences: check if they resolve to language keywords
+            OccurrencePayload::PathSeg { path, seg_idx, .. }
+            | OccurrencePayload::PathExprSeg { path, seg_idx, .. }
+            | OccurrencePayload::PathPatSeg { path, seg_idx, .. } => {
+                Self::check_path_segment_keyword(db, *path, *seg_idx)
+            }
+
+            // Direct IdentId occurrences: check for language keywords
+            OccurrencePayload::UseAliasName { ident, .. }
+            | OccurrencePayload::MethodName { ident, .. }
+            | OccurrencePayload::FieldAccessName { ident, .. }
+            | OccurrencePayload::PatternLabelName { ident, .. } => {
+                !Self::is_language_keyword(db, *ident)
+            }
+
+            // Use path segments are always safe to rename
+            OccurrencePayload::UsePathSeg { .. } => true,
+
+            // ItemHeaderName: exclude definitions, but allow function parameters (except self)
+            OccurrencePayload::ItemHeaderName { scope, .. } => {
+                match scope {
+                    ScopeId::FuncParam(_, _) => {
+                        if let Some(param_name) = scope.name(db) {
+                            !param_name.is_self(db)
+                        } else {
+                            true
+                        }
+                    }
+                    _ => false, // Item definitions should not be renamed
+                }
+            }
+        }
+    }
+
+    /// Helper: check if a path segment at the given index is a language keyword
+    fn check_path_segment_keyword(
+        db: &'db dyn crate::SpannedHirDb,
+        path: crate::hir_def::PathId<'db>,
+        seg_idx: usize,
+    ) -> bool {
+        if let Some(seg) = path.segment(db, seg_idx) {
+            if let Some(ident) = seg.as_ident(db) {
+                return !Self::is_language_keyword(db, ident);
+            }
+        }
+        true // Default to allow if we can't resolve the segment
+    }
+
+    /// Helper: check if an IdentId represents a language keyword
+    fn is_language_keyword(db: &'db dyn crate::SpannedHirDb, ident: IdentId<'db>) -> bool {
+        ident.is_self(db) || ident.is_super(db) || ident.is_self_ty(db)
+    }
 }

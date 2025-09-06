@@ -8,6 +8,11 @@ use cranelift_entity::{entity_impl, EntityRef, PrimaryMap};
 use salsa::Update;
 
 use super::{IdentId, TopLevelMod};
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum StaleReferenceError {
+    StaleTopLevelMod,
+}
 use crate::{lower::map_file_to_mod_impl, HirDb};
 
 /// This tree represents the structure of an ingot.
@@ -100,13 +105,21 @@ impl ModuleTree<'_> {
     }
 
     /// Returns the tree node id of the given top level module.
-    pub fn tree_node(&self, top_mod: TopLevelMod) -> ModuleTreeNodeId {
-        self.mod_map[&top_mod]
+    /// Returns Err if the TopLevelMod is stale (not found in this tree).
+    pub fn tree_node(&self, top_mod: TopLevelMod) -> Result<ModuleTreeNodeId, StaleReferenceError> {
+        self.mod_map
+            .get(&top_mod)
+            .copied()
+            .ok_or(StaleReferenceError::StaleTopLevelMod)
     }
 
     /// Returns the tree node data of the given top level module.
-    pub fn tree_node_data(&self, top_mod: TopLevelMod) -> &ModuleTreeNode<'_> {
-        &self.module_tree.0[self.tree_node(top_mod)]
+    /// Returns Err if the TopLevelMod is stale (not found in this tree).
+    pub fn tree_node_data(
+        &self,
+        top_mod: TopLevelMod,
+    ) -> Result<&ModuleTreeNode<'_>, StaleReferenceError> {
+        self.tree_node(top_mod).map(|id| &self.module_tree.0[id])
     }
 
     /// Returns the root of the tree, which corresponds to the ingot root file.
@@ -123,19 +136,23 @@ impl ModuleTree<'_> {
         self.mod_map.keys().copied()
     }
 
-    pub fn parent(&self, top_mod: TopLevelMod) -> Option<TopLevelMod<'_>> {
-        let node = self.tree_node_data(top_mod);
-        node.parent.map(|id| self.module_tree.0[id].top_mod)
+    pub fn parent(
+        &self,
+        top_mod: TopLevelMod,
+    ) -> Result<Option<TopLevelMod<'_>>, StaleReferenceError> {
+        let node = self.tree_node_data(top_mod)?;
+        Ok(node.parent.map(|id| self.module_tree.0[id].top_mod))
     }
 
-    pub fn children(&self, top_mod: TopLevelMod) -> impl Iterator<Item = TopLevelMod<'_>> + '_ {
-        self.tree_node_data(top_mod)
-            .children
-            .iter()
-            .map(move |&id| {
-                let node = &self.module_tree.0[id];
-                node.top_mod
-            })
+    pub fn children(
+        &self,
+        top_mod: TopLevelMod,
+    ) -> Result<impl Iterator<Item = TopLevelMod<'_>> + '_, StaleReferenceError> {
+        let node = self.tree_node_data(top_mod)?;
+        Ok(node.children.iter().map(move |&id| {
+            let node = &self.module_tree.0[id];
+            node.top_mod
+        }))
     }
 }
 
@@ -291,17 +308,17 @@ mod tests {
         assert_eq!(root_node.children.len(), 2);
 
         for &child in &root_node.children {
-            if child == local_tree.tree_node(mod1_mod) {
+            if child == local_tree.tree_node(mod1_mod).unwrap() {
                 let child = local_tree.node_data(child);
                 assert_eq!(child.parent, Some(local_tree.root()));
                 assert_eq!(child.children.len(), 1);
-                assert_eq!(child.children[0], local_tree.tree_node(foo_mod));
-            } else if child == local_tree.tree_node(mod2_mod) {
+                assert_eq!(child.children[0], local_tree.tree_node(foo_mod).unwrap());
+            } else if child == local_tree.tree_node(mod2_mod).unwrap() {
                 let child = local_tree.node_data(child);
                 assert_eq!(child.parent, Some(local_tree.root()));
                 assert_eq!(child.children.len(), 2);
-                assert_eq!(child.children[0], local_tree.tree_node(bar_mod));
-                assert_eq!(child.children[1], local_tree.tree_node(baz_mod));
+                assert_eq!(child.children[0], local_tree.tree_node(bar_mod).unwrap());
+                assert_eq!(child.children[1], local_tree.tree_node(baz_mod).unwrap());
             } else {
                 panic!("unexpected child")
             }

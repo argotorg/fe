@@ -33,17 +33,25 @@ pub fn hover_helper(
         if let Some(sig) = h.signature {
             parts.push(format!("```fe\n{}\n```", sig));
         }
-        if let Some(doc) = h.documentation { parts.push(doc); }
-        let value = if parts.is_empty() { String::new() } else { parts.join("\n\n") };
+        if let Some(doc) = h.documentation {
+            parts.push(doc);
+        }
+        let value = if parts.is_empty() {
+            String::new()
+        } else {
+            parts.join("\n\n")
+        };
         let range = h
             .span
             .resolve(db)
             .and_then(|sp| crate::util::to_lsp_range_from_span(sp, db).ok());
         let result = async_lsp::lsp_types::Hover {
-            contents: async_lsp::lsp_types::HoverContents::Markup(async_lsp::lsp_types::MarkupContent {
-                kind: async_lsp::lsp_types::MarkupKind::Markdown,
-                value,
-            }),
+            contents: async_lsp::lsp_types::HoverContents::Markup(
+                async_lsp::lsp_types::MarkupContent {
+                    kind: async_lsp::lsp_types::MarkupKind::Markdown,
+                    value,
+                },
+            ),
             range,
         };
         return Ok(Some(result));

@@ -13,7 +13,8 @@ use super::{
     ty_def::{InvalidCause, Kind, TyData, TyId, TyParam},
 };
 use crate::name_resolution::{
-    resolve_ident_to_bucket, resolve_with_policy, DomainPreference, NameDomain, NameResKind, PathRes,
+    resolve_ident_to_bucket, resolve_with_policy, DomainPreference, NameDomain, NameResKind,
+    PathRes,
 };
 use crate::{ty::binder::Binder, HirAnalysisDb};
 

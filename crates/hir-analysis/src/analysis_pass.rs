@@ -41,6 +41,22 @@ impl AnalysisPassManager {
         diags
     }
 
+    /// Stable alternative to run_on_module that uses File as the key.
+    /// This prevents issues with stale TopLevelMod references during incremental recompilation.
+    pub fn run_on_file<'db, DB>(
+        &mut self,
+        db: &'db DB,
+        file: common::file::File,
+    ) -> Vec<Box<dyn DiagnosticVoucher + 'db>>
+    where
+        DB: HirAnalysisDb + hir::LowerHirDb,
+    {
+        // Convert File to fresh TopLevelMod using the stable API
+        let top_mod = hir::lower::map_file_to_mod(db, file);
+        // Use the existing analysis logic
+        self.run_on_module(db, top_mod)
+    }
+
     pub fn run_on_module_tree<'db>(
         &mut self,
         db: &'db dyn HirAnalysisDb,

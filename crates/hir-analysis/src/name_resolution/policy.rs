@@ -35,5 +35,3 @@ pub fn resolve_with_policy<'db>(
         }
     }
 }
-
-// Legacy convenience wrapper removed; prefer `resolve_with_policy` directly

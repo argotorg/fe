@@ -14,6 +14,12 @@ pub(crate) fn server_capabilities() -> ServerCapabilities {
         definition_provider: Some(async_lsp::lsp_types::OneOf::Left(true)),
         // find all references
         references_provider: Some(async_lsp::lsp_types::OneOf::Left(true)),
+        // goto implementation
+        implementation_provider: Some(
+            async_lsp::lsp_types::ImplementationProviderCapability::Simple(true),
+        ),
+        // rename symbols
+        rename_provider: Some(async_lsp::lsp_types::OneOf::Left(true)),
         // support for workspace add/remove changes
         workspace: Some(async_lsp::lsp_types::WorkspaceServerCapabilities {
             workspace_folders: Some(async_lsp::lsp_types::WorkspaceFoldersServerCapabilities {

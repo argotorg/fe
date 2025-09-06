@@ -1,5 +1,32 @@
 ---
 source: crates/semantic-query/tests/symbol_keys_snap.rs
 expression: out
+input_file: test_files/ambiguous_last_segment.snap
 ---
+Symbol: ambiguous_last_segment::m
+help: definitions + references
+  ┌─ ambiguous_last_segment.fe:1:5
+  │
+1 │ mod m {
+  │     ^
+  │     │
+  │     def: defined here @ 1:5 (2 refs)
+  │     ref: 1:5
+  ·
+6 │ use m::ambiguous
+  │     ^ ref: 6:5
 
+
+
+Symbol: ambiguous_last_segment::m::ambiguous
+help: definitions + references
+  ┌─ ambiguous_last_segment.fe:2:12
+  │
+2 │     pub fn ambiguous() {}
+  │            ^^^^^^^^^
+  │            │
+  │            def: defined here @ 2:12 (2 refs)
+  │            ref: 2:12
+  ·
+6 │ use m::ambiguous
+  │        ^^^^^^^^^ ref: 6:8

@@ -1,8 +1,0 @@
-pub fn why() {
-  let x = 5
-  x
-}
-
-pub struct Why {
-  pub x: i32
-}

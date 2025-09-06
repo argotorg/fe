@@ -12,20 +12,6 @@ pub enum SegmentKind {
     QualifiedType,
 }
 
-/// Unified anchor choice used by diagnostics and navigation to pick a span
-/// within a segment. Span resolution is performed outside analysis.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub enum AnchorChoice {
-    /// Anchor the identifier portion of the segment.
-    Ident,
-    /// Anchor the generic argument list of the segment.
-    GenericArgs,
-    /// Anchor the whole segment.
-    Segment,
-    /// Anchor the trait name within a qualified type segment.
-    QualifiedTraitName,
-}
-
 /// Minimal, structural facts about a path segment.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct SegmentInfo {
@@ -63,7 +49,10 @@ impl PathView for HirPathAdapter<'_> {
     fn segment_info(&self, idx: usize) -> Option<SegmentInfo> {
         let seg = self.path.segment(self.db, idx)?;
         let info = match seg.kind(self.db) {
-            PathKind::Ident { ident, generic_args } => SegmentInfo {
+            PathKind::Ident {
+                ident,
+                generic_args,
+            } => SegmentInfo {
                 kind: SegmentKind::Plain,
                 has_ident: ident.is_present(),
                 has_generic_args: !generic_args.is_empty(self.db),
@@ -77,4 +66,3 @@ impl PathView for HirPathAdapter<'_> {
         Some(info)
     }
 }
-

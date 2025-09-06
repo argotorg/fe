@@ -1525,8 +1525,7 @@ fn find_const_ty_param<'db>(
         scope,
         PredicateListId::empty_list(db),
         DomainPreference::Value,
-    )
-    else {
+    ) else {
         return None;
     };
     match ty.data(db) {

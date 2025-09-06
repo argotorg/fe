@@ -11,14 +11,12 @@ impl<'db> Stmt<'db> {
         let (stmt, origin_kind) = match ast.kind() {
             ast::StmtKind::Let(let_) => {
                 let pat = Pat::lower_ast_opt(ctxt, let_.pat());
-                let ty = let_
-                    .type_annotation()
-                    .map(|ty| {
-                        let ty = TypeId::lower_ast(ctxt.f_ctxt, ty);
-                        // Record type path occurrences in this body.
-                        ctxt.record_type_paths(ty);
-                        ty
-                    });
+                let ty = let_.type_annotation().map(|ty| {
+                    let ty = TypeId::lower_ast(ctxt.f_ctxt, ty);
+                    // Record type path occurrences in this body.
+                    ctxt.record_type_paths(ty);
+                    ty
+                });
                 let init = let_.initializer().map(|init| Expr::lower_ast(ctxt, init));
                 (Stmt::Let(pat, ty, init), HirOrigin::raw(&ast))
             }

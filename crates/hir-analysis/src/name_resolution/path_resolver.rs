@@ -2,8 +2,8 @@ use common::indexmap::IndexMap;
 use either::Either;
 use hir::{
     hir_def::{
-        scope_graph::ScopeId, Body, Enum, EnumVariant, ExprId, GenericParamOwner, IdentId, ImplTrait, ItemKind,
-        Partial, PathId, PathKind, Trait, TypeBound, TypeId, VariantKind,
+        scope_graph::ScopeId, Body, Enum, EnumVariant, ExprId, GenericParamOwner, IdentId,
+        ImplTrait, ItemKind, Partial, PathId, PathKind, Trait, TypeBound, TypeId, VariantKind,
     },
     span::DynLazySpan,
 };

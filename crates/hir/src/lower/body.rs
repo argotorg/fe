@@ -5,8 +5,7 @@ use crate::{
     hir_def::{
         params::{GenericArg, GenericArgListId},
         Body, BodyKind, BodyPathIndex, BodySourceMap, Expr, ExprId, NodeStore, Partial, Pat, PatId,
-        PathId, Stmt, StmtId, TypeId, TypeKind, TupleTypeId,
-        TrackedItemId, TrackedItemVariant,
+        PathId, Stmt, StmtId, TrackedItemId, TrackedItemVariant, TupleTypeId, TypeId, TypeKind,
     },
     span::HirOrigin,
 };

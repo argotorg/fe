@@ -1,11 +1,8 @@
+use crate::span::DynLazySpan;
 use crate::{
     path_view::{PathView, SegmentKind},
-    span::lazy_spans::{LazyMethodCallExprSpan, LazyPathSpan},
-    SpannedHirDb,
-    span::LazySpan,
+    span::lazy_spans::LazyPathSpan,
 };
-use common::diagnostics::Span;
-use crate::span::DynLazySpan;
 
 /// The kind of sub-span to select within a path segment.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -42,64 +39,54 @@ impl AnchorPicker {
         Self::pick_preferred(view, seg_idx)
     }
 
-    /// Generic mismatch at `seg_idx`: prefer generic args if present.
-    pub fn pick_generic_mismatch<V: PathView>(view: &V, seg_idx: usize) -> PathAnchor {
-        if let Some(info) = view.segment_info(seg_idx) {
-            if info.has_generic_args {
-                return PathAnchor { seg_idx, kind: PathAnchorKind::GenericArgs };
-            }
-        }
-        PathAnchor { seg_idx, kind: PathAnchorKind::Segment }
-    }
-
     /// Visibility error at `seg_idx`: prefer ident if present.
     pub fn pick_visibility_error<V: PathView>(view: &V, seg_idx: usize) -> PathAnchor {
         if let Some(info) = view.segment_info(seg_idx) {
             if info.has_ident {
-                return PathAnchor { seg_idx, kind: PathAnchorKind::Ident };
+                return PathAnchor {
+                    seg_idx,
+                    kind: PathAnchorKind::Ident,
+                };
             }
         }
-        PathAnchor { seg_idx, kind: PathAnchorKind::Segment }
+        PathAnchor {
+            seg_idx,
+            kind: PathAnchorKind::Segment,
+        }
     }
 
     fn pick_preferred<V: PathView>(view: &V, seg_idx: usize) -> PathAnchor {
         match view.segment_info(seg_idx) {
             Some(info) => match info.kind {
-                SegmentKind::QualifiedType => PathAnchor { seg_idx, kind: PathAnchorKind::TraitName },
+                SegmentKind::QualifiedType => PathAnchor {
+                    seg_idx,
+                    kind: PathAnchorKind::TraitName,
+                },
                 SegmentKind::Plain => {
                     if info.has_ident {
-                        PathAnchor { seg_idx, kind: PathAnchorKind::Ident }
+                        PathAnchor {
+                            seg_idx,
+                            kind: PathAnchorKind::Ident,
+                        }
                     } else if info.has_generic_args {
-                        PathAnchor { seg_idx, kind: PathAnchorKind::GenericArgs }
+                        PathAnchor {
+                            seg_idx,
+                            kind: PathAnchorKind::GenericArgs,
+                        }
                     } else {
-                        PathAnchor { seg_idx, kind: PathAnchorKind::Segment }
+                        PathAnchor {
+                            seg_idx,
+                            kind: PathAnchorKind::Segment,
+                        }
                     }
                 }
             },
-            None => PathAnchor { seg_idx, kind: PathAnchorKind::Segment },
+            None => PathAnchor {
+                seg_idx,
+                kind: PathAnchorKind::Segment,
+            },
         }
     }
-}
-
-/// Map a structural path anchor to a concrete `Span` using HIR lazy spans.
-pub fn map_path_anchor_to_span(
-    db: &dyn SpannedHirDb,
-    lazy_path: &LazyPathSpan<'_>,
-    anchor: PathAnchor,
-) -> Option<Span> {
-    let seg = lazy_path.clone().segment(anchor.seg_idx);
-    let span = match anchor.kind {
-        PathAnchorKind::Ident => seg.ident().resolve(db),
-        PathAnchorKind::GenericArgs => seg.generic_args().resolve(db),
-        PathAnchorKind::Segment => seg.into_atom().resolve(db),
-        PathAnchorKind::TraitName => seg.qualified_type().trait_qualifier().name().resolve(db),
-    };
-    span
-}
-
-/// Return the span of the method name in a method call expression.
-pub fn method_name_span(db: &dyn SpannedHirDb, call: &LazyMethodCallExprSpan<'_>) -> Option<Span> {
-    call.clone().method_name().resolve(db)
 }
 
 /// Map to a DynLazySpan without resolving to a concrete Span.

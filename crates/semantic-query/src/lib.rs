@@ -5,14 +5,14 @@ mod refs;
 
 use crate::identity::{occurrence_symbol_target, occurrence_symbol_targets, OccTarget};
 use hir::{
-    hir_def::{scope_graph::ScopeId, TopLevelMod},
+    hir_def::{scope_graph::ScopeId, HirIngot, TopLevelMod},
     source_index::{unified_occurrence_rangemap_for_top_mod, OccurrencePayload},
     span::{DynLazySpan, LazySpan},
 };
 use hir_analysis::diagnostics::SpannedHirAnalysisDb;
 use hir_analysis::ty::func_def::FuncDef;
 use parser::TextSize;
-use rustc_hash::FxHashMap;
+use rustc_hash::{FxHashMap, FxHashSet};
 
 /// Unified semantic query API. Performs occurrence lookup once and provides
 /// all IDE features (goto, hover, references) from that single resolution.
@@ -48,8 +48,9 @@ impl<'db> SemanticQuery<'db> {
     pub fn goto_definition(&self) -> Vec<DefinitionLocation<'db>> {
         // Always check for all possible identities (including ambiguous cases)
         if let Some(ref occ) = self.occurrence {
-            let identities = hir_analysis::lookup::identity_for_occurrence(self.db, self.top_mod, occ);
-            
+            let identities =
+                hir_analysis::lookup::identity_for_occurrence(self.db, self.top_mod, occ);
+
             let mut definitions = Vec::new();
             for identity in identities {
                 let key = identity_to_symbol_key(identity);
@@ -59,7 +60,7 @@ impl<'db> SemanticQuery<'db> {
             }
             return definitions;
         }
-        
+
         Vec::new()
     }
 
@@ -82,8 +83,143 @@ impl<'db> SemanticQuery<'db> {
         find_refs_for_symbol(self.db, self.top_mod, key)
     }
 
+    pub fn find_rename_locations(&self) -> Vec<Reference<'db>> {
+        let Some(key) = self.symbol_key else {
+            return Vec::new();
+        };
+
+        // Check for special cases that should block or require special handling
+        if self.is_rename_blocked(&key) {
+            return Vec::new();
+        }
+
+        // For rename, we want only actual symbol name occurrences, not semantic references
+        self.find_symbol_occurrences()
+    }
+
+    pub fn find_symbol_occurrences(&self) -> Vec<Reference<'db>> {
+        let Some(key) = self.symbol_key else {
+            return Vec::new();
+        };
+
+        // Use the shared implementation, filtering for rename-allowed occurrences only
+        find_refs_for_symbol_with_filter(self.db, self.top_mod, key, true)
+    }
+
+    pub fn find_implementations(&self) -> Vec<DefinitionLocation<'db>> {
+        let Some(key) = self.symbol_key else {
+            return Vec::new();
+        };
+
+        match key {
+            SymbolKey::Method(fd) => {
+                // Find implementing methods for trait methods
+                let mut implementations = Vec::new();
+                for impl_method in
+                    crate::refs::implementing_methods_for_trait_method(self.db, self.top_mod, fd)
+                {
+                    if let Some(span) = impl_method.scope(self.db).name_span(self.db) {
+                        if let Some(tm) = span.top_mod(self.db) {
+                            implementations.push(DefinitionLocation { top_mod: tm, span });
+                        }
+                    }
+                }
+                implementations
+            }
+            SymbolKey::Scope(scope_id) => {
+                // Check if this is a trait scope
+                if let Some(hir::hir_def::ItemKind::Trait(trait_def)) = scope_id.to_item() {
+                    return self.find_trait_implementations(trait_def);
+                }
+                Vec::new()
+            }
+            _ => {
+                // For other symbol types, there are no implementations
+                Vec::new()
+            }
+        }
+    }
+
+    fn find_trait_implementations(
+        &self,
+        trait_def: hir::hir_def::item::Trait<'db>,
+    ) -> Vec<DefinitionLocation<'db>> {
+        let mut implementations = Vec::new();
+
+        // Find all impl blocks that implement this trait
+        for impl_trait in self.top_mod.all_impl_traits(self.db) {
+            let Some(trait_ref) = impl_trait.trait_ref(self.db).to_opt() else {
+                continue;
+            };
+            let hir::hir_def::Partial::Present(path) = trait_ref.path(self.db) else {
+                continue;
+            };
+
+            // Resolve the trait reference to see if it matches our trait
+            let assumptions =
+                hir_analysis::ty::trait_resolution::PredicateListId::empty_list(self.db);
+            let Ok(hir_analysis::name_resolution::PathRes::Trait(trait_inst)) =
+                hir_analysis::name_resolution::resolve_with_policy(
+                    self.db,
+                    path,
+                    impl_trait.scope(),
+                    assumptions,
+                    hir_analysis::name_resolution::DomainPreference::Type,
+                )
+            else {
+                continue;
+            };
+
+            if trait_inst.def(self.db).trait_(self.db) == trait_def {
+                // This impl block implements our trait - use the trait_ref span
+                let span = impl_trait.span().trait_ref();
+                if let Some(tm) = span.top_mod(self.db) {
+                    implementations.push(DefinitionLocation {
+                        top_mod: tm,
+                        span: hir::span::DynLazySpan::from(span),
+                    });
+                }
+            }
+        }
+
+        implementations
+    }
+
     pub fn symbol_key(&self) -> Option<SymbolKey<'db>> {
         self.symbol_key
+    }
+
+    /// Check if renaming this symbol should be blocked or requires special handling
+    fn is_rename_blocked(&self, key: &SymbolKey<'db>) -> bool {
+        match key {
+            SymbolKey::Scope(scope_id) => {
+                // Check if this is a module scope that might need special handling
+                if let Some(item) = scope_id.to_item() {
+                    if let hir::hir_def::ItemKind::Mod(_mod_def) = item {
+                        // Get the module name to check for special cases
+                        if let Some(name) = item.name(self.db) {
+                            let name_str = name.data(self.db);
+
+                            // Block renaming if this looks like an ingot root or special module
+                            if name_str == "ingot" || name_str == "main" || name_str == "lib" {
+                                return true;
+                            }
+                        }
+
+                        // For now, block all module renames as they may require file system operations
+                        // TODO: In the future, implement proper module rename with file operations
+                        return true;
+                    }
+                }
+                false
+            }
+            SymbolKey::Method(_func_def) => {
+                // Allow renaming all functions including main
+                false
+            }
+            // Allow renaming other symbols (EnumVariant, FuncParam, Local)
+            _ => false,
+        }
     }
 
     // Test support methods
@@ -128,7 +264,6 @@ impl<'db> SemanticQuery<'db> {
         map
     }
 }
-
 
 pub struct DefinitionLocation<'db> {
     pub top_mod: TopLevelMod<'db>,
@@ -215,11 +350,15 @@ fn occ_target_to_symbol_key<'db>(t: OccTarget<'db>) -> SymbolKey<'db> {
     }
 }
 
-fn identity_to_symbol_key<'db>(identity: hir_analysis::lookup::SymbolIdentity<'db>) -> SymbolKey<'db> {
+fn identity_to_symbol_key<'db>(
+    identity: hir_analysis::lookup::SymbolIdentity<'db>,
+) -> SymbolKey<'db> {
     match identity {
         hir_analysis::lookup::SymbolIdentity::Scope(sc) => SymbolKey::Scope(sc),
         hir_analysis::lookup::SymbolIdentity::EnumVariant(v) => SymbolKey::EnumVariant(v),
-        hir_analysis::lookup::SymbolIdentity::FuncParam(item, idx) => SymbolKey::FuncParam(item, idx),
+        hir_analysis::lookup::SymbolIdentity::FuncParam(item, idx) => {
+            SymbolKey::FuncParam(item, idx)
+        }
         hir_analysis::lookup::SymbolIdentity::Method(fd) => SymbolKey::Method(fd),
         hir_analysis::lookup::SymbolIdentity::Local(func, bkey) => SymbolKey::Local(func, bkey),
     }
@@ -274,13 +413,21 @@ fn find_refs_for_symbol<'db>(
     top_mod: TopLevelMod<'db>,
     key: SymbolKey<'db>,
 ) -> Vec<Reference<'db>> {
-    use std::collections::HashSet;
+    find_refs_for_symbol_with_filter(db, top_mod, key, false)
+}
+
+fn find_refs_for_symbol_with_filter<'db>(
+    db: &'db dyn SpannedHirAnalysisDb,
+    top_mod: TopLevelMod<'db>,
+    key: SymbolKey<'db>,
+    only_rename_allowed: bool,
+) -> Vec<Reference<'db>> {
     let mut out: Vec<Reference<'db>> = Vec::new();
-    let mut seen: HashSet<(common::file::File, parser::TextSize, parser::TextSize)> =
-        HashSet::new();
+    let mut seen: FxHashSet<(common::file::File, parser::TextSize, parser::TextSize)> =
+        FxHashSet::default();
 
     // 1) Always include def-site first when available.
-    if let Some((tm, def_span)) = def_span_for_symbol(db, key.clone()) {
+    if let Some((tm, def_span)) = def_span_for_symbol(db, key) {
         if let Some(sp) = def_span.resolve(db) {
             seen.insert((sp.file, sp.range.start(), sp.range.end()));
         }
@@ -290,45 +437,54 @@ fn find_refs_for_symbol<'db>(
         });
     }
 
-    // 2) Single pass over occurrence index for this module.
-    for occ in unified_occurrence_rangemap_for_top_mod(db, top_mod).iter() {
-        // Skip header-name occurrences; def-site is already injected above.
-        match &occ.payload {
-            OccurrencePayload::ItemHeaderName { .. } => continue,
-            _ => {}
-        }
-
-        // Resolve occurrence to a symbol identity and anchor appropriately.
-        let Some(target) = occurrence_symbol_target(db, top_mod, &occ.payload) else {
-            continue;
-        };
-        // Custom matcher to allow associated functions (scopes) to match method occurrences
-        let matches = match (key, target) {
-            (SymbolKey::Scope(sc), OccTarget::Scope(sc2)) => sc == sc2,
-            (SymbolKey::Scope(sc), OccTarget::Method(fd)) => fd.scope(db) == sc,
-            (SymbolKey::EnumVariant(v), OccTarget::EnumVariant(v2)) => v == v2,
-            (SymbolKey::FuncParam(it, idx), OccTarget::FuncParam(it2, idx2)) => {
-                it == it2 && idx == idx2
-            }
-            (SymbolKey::Method(fd), OccTarget::Method(fd2)) => fd == fd2,
-            (SymbolKey::Local(func, bkey), OccTarget::Local(func2, bkey2)) => {
-                func == func2 && bkey == bkey2
-            }
-            _ => false,
-        };
-        if !matches {
-            continue;
-        }
-
-        let span = compute_reference_span(db, &occ.payload, target, top_mod);
-
-        if let Some(sp) = span.resolve(db) {
-            let k = (sp.file, sp.range.start(), sp.range.end());
-            if !seen.insert(k) {
+    // 2) Search across all modules in the ingot for references.
+    for &module in top_mod.ingot(db).all_modules(db) {
+        for occ in unified_occurrence_rangemap_for_top_mod(db, module).iter() {
+            // Skip header-name occurrences; def-site is already injected above.
+            if let OccurrencePayload::ItemHeaderName { .. } = &occ.payload {
                 continue;
             }
+
+            // Resolve occurrence to a symbol identity and anchor appropriately.
+            let Some(target) = occurrence_symbol_target(db, module, &occ.payload) else {
+                continue;
+            };
+            // Custom matcher to allow associated functions (scopes) to match method occurrences
+            let matches = match (key, target) {
+                (SymbolKey::Scope(sc), OccTarget::Scope(sc2)) => sc == sc2,
+                (SymbolKey::Scope(sc), OccTarget::Method(fd)) => fd.scope(db) == sc,
+                (SymbolKey::EnumVariant(v), OccTarget::EnumVariant(v2)) => v == v2,
+                (SymbolKey::FuncParam(it, idx), OccTarget::FuncParam(it2, idx2)) => {
+                    it == it2 && idx == idx2
+                }
+                (SymbolKey::Method(fd), OccTarget::Method(fd2)) => fd == fd2,
+                (SymbolKey::Local(func, bkey), OccTarget::Local(func2, bkey2)) => {
+                    func == func2 && bkey == bkey2
+                }
+                _ => false,
+            };
+            if !matches {
+                continue;
+            }
+
+            // If filtering for rename operations, check if this occurrence allows renaming
+            if only_rename_allowed && !occ.payload.rename_allowed(db) {
+                continue;
+            }
+
+            let span = compute_reference_span(db, &occ.payload, target, module);
+
+            if let Some(sp) = span.resolve(db) {
+                let k = (sp.file, sp.range.start(), sp.range.end());
+                if !seen.insert(k) {
+                    continue;
+                }
+            }
+            out.push(Reference {
+                top_mod: module,
+                span,
+            });
         }
-        out.push(Reference { top_mod, span });
     }
 
     // 3) Method extras: include implementing method def headers in this module for trait methods.

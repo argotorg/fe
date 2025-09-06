@@ -1,0 +1,96 @@
+---
+source: crates/semantic-query/tests/symbol_keys_snap.rs
+expression: out
+input_file: test_files/use_braces.snap
+---
+Symbol: local in use_braces::test_use_braces
+help: definitions + references
+   ┌─ use_braces.fe:14:9
+   │
+14 │     let y = return_four()
+   │         ^
+   │         │
+   │         def: defined here @ 14:9 (1 refs)
+   │         ref: 14:9
+
+
+
+Symbol: local in use_braces::test_use_braces
+help: definitions + references
+   ┌─ use_braces.fe:13:9
+   │
+13 │     let x = return_three()
+   │         ^
+   │         │
+   │         def: defined here @ 13:9 (1 refs)
+   │         ref: 13:9
+
+
+
+Symbol: use_braces::stuff
+help: definitions + references
+   ┌─ use_braces.fe:1:5
+   │
+ 1 │ mod stuff {
+   │     ^^^^^
+   │     │
+   │     def: defined here @ 1:5 (3 refs)
+   │     ref: 1:5
+   ·
+ 9 │ use stuff::calculations::return_three
+   │     ^^^^^ ref: 9:5
+10 │ use stuff::calculations::return_four
+   │     ^^^^^ ref: 10:5
+
+
+
+Symbol: use_braces::stuff::calculations
+help: definitions + references
+   ┌─ use_braces.fe:2:13
+   │
+ 2 │     pub mod calculations {
+   │             ^^^^^^^^^^^^
+   │             │
+   │             def: defined here @ 2:13 (3 refs)
+   │             ref: 2:13
+   ·
+ 9 │ use stuff::calculations::return_three
+   │            ^^^^^^^^^^^^ ref: 9:12
+10 │ use stuff::calculations::return_four
+   │            ^^^^^^^^^^^^ ref: 10:12
+
+
+
+Symbol: use_braces::stuff::calculations::return_four
+help: definitions + references
+   ┌─ use_braces.fe:4:16
+   │
+ 4 │         pub fn return_four() -> i32 { 4 }
+   │                ^^^^^^^^^^^
+   │                │
+   │                def: defined here @ 4:16 (3 refs)
+   │                ref: 4:16
+   ·
+10 │ use stuff::calculations::return_four
+   │                          ^^^^^^^^^^^ ref: 10:26
+   ·
+14 │     let y = return_four()
+   │             ^^^^^^^^^^^ ref: 14:13
+
+
+
+Symbol: use_braces::stuff::calculations::return_three
+help: definitions + references
+   ┌─ use_braces.fe:3:16
+   │
+ 3 │         pub fn return_three() -> i32 { 3 }
+   │                ^^^^^^^^^^^^
+   │                │
+   │                def: defined here @ 3:16 (3 refs)
+   │                ref: 3:16
+   ·
+ 9 │ use stuff::calculations::return_three
+   │                          ^^^^^^^^^^^^ ref: 9:26
+   ·
+13 │     let x = return_three()
+   │             ^^^^^^^^^^^^ ref: 13:13

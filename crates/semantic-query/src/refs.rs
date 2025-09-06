@@ -54,4 +54,3 @@ pub(crate) fn implementing_methods_for_trait_method<'db>(
     }
     out
 }
-

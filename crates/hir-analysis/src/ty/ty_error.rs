@@ -120,7 +120,7 @@ impl<'db> Visitor<'db> for HirTyErrVisitor<'db> {
                 let view = HirPathAdapter::new(self.db, path);
                 let anchor = AnchorPicker::pick_invalid_segment(&view, seg_idx);
                 let span = map_path_anchor_to_dyn_lazy(path_span, anchor);
-                if let Some(diag) = err.into_diag(self.db, path, span.into(), ExpectedPathKind::Type) {
+                if let Some(diag) = err.into_diag(self.db, path, span, ExpectedPathKind::Type) {
                     self.diags.push(diag.into());
                 }
                 return;
@@ -139,7 +139,7 @@ impl<'db> Visitor<'db> for HirTyErrVisitor<'db> {
             let anchor = AnchorPicker::pick_visibility_error(&view, seg_idx);
             let anchored = map_path_anchor_to_dyn_lazy(path_span.clone(), anchor);
             let ident = path.ident(self.db);
-            let diag = PathResDiag::Invisible(anchored.into(), *ident.unwrap(), deriv_span);
+            let diag = PathResDiag::Invisible(anchored, *ident.unwrap(), deriv_span);
             self.diags.push(diag.into());
         }
 

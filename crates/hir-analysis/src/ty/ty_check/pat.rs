@@ -222,8 +222,14 @@ impl<'db> TyChecker<'db> {
 
                 Err(err) => {
                     // Anchor the failing segment using centralized picker.
-                    let span = err.anchor_dyn_span_for_body_path_pat(self.db, self.body(), pat, *path);
-                    if let Some(diag) = err.into_diag(self.db, *path, span.into(), crate::name_resolution::ExpectedPathKind::Value) {
+                    let span =
+                        err.anchor_dyn_span_for_body_path_pat(self.db, self.body(), pat, *path);
+                    if let Some(diag) = err.into_diag(
+                        self.db,
+                        *path,
+                        span,
+                        crate::name_resolution::ExpectedPathKind::Value,
+                    ) {
                         self.push_diag(diag);
                     }
                     TyId::invalid(self.db, InvalidCause::Other)
@@ -291,11 +297,12 @@ impl<'db> TyChecker<'db> {
                 }
             },
             Err(err) => {
-                let span = err.anchor_dyn_span_for_body_path_tuple_pat(self.db, self.body(), pat, *path);
+                let span =
+                    err.anchor_dyn_span_for_body_path_tuple_pat(self.db, self.body(), pat, *path);
                 if let Some(diag) = err.into_diag(
                     self.db,
                     *path,
-                    span.into(),
+                    span,
                     crate::name_resolution::ExpectedPathKind::Value,
                 ) {
                     self.push_diag(diag);
@@ -431,11 +438,12 @@ impl<'db> TyChecker<'db> {
                 }
             },
             Err(err) => {
-                let span = err.anchor_dyn_span_for_body_record_pat(self.db, self.body(), pat, *path);
+                let span =
+                    err.anchor_dyn_span_for_body_record_pat(self.db, self.body(), pat, *path);
                 if let Some(diag) = err.into_diag(
                     self.db,
                     *path,
-                    span.into(),
+                    span,
                     crate::name_resolution::ExpectedPathKind::Value,
                 ) {
                     self.push_diag(diag);

@@ -446,7 +446,7 @@ impl<'db> TyChecker<'db> {
                         ExpectedPathKind::Value
                     };
 
-                    if let Some(diag) = err.into_diag(self.db, *path, span.into(), expected_kind) {
+                    if let Some(diag) = err.into_diag(self.db, *path, span, expected_kind) {
                         self.push_diag(diag)
                     }
                     ResolvedPathInBody::Invalid

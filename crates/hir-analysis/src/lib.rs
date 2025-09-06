@@ -8,9 +8,9 @@ pub trait HirAnalysisDb: HirDb {}
 #[salsa::db]
 impl<T> HirAnalysisDb for T where T: HirDb {}
 
+pub mod lookup;
 pub mod name_resolution;
 pub mod ty;
-pub mod lookup;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Spanned<'db, T> {

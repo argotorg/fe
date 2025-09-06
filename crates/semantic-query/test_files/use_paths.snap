@@ -1,5 +1,53 @@
 ---
 source: crates/semantic-query/tests/symbol_keys_snap.rs
 expression: out
+input_file: test_files/use_paths.snap
 ---
+Symbol: use_paths::root
+help: definitions + references
+  ┌─ use_paths.fe:1:5
+  │
+1 │ mod root { pub mod sub { pub struct Name {} } }
+  │     ^^^^
+  │     │
+  │     def: defined here @ 1:5 (4 refs)
+  │     ref: 1:5
+2 │ 
+3 │ use root::sub::Name
+  │     ^^^^ ref: 3:5
+4 │ use root::sub
+  │     ^^^^ ref: 4:5
+5 │ use root
+  │     ^^^^ ref: 5:5
 
+
+
+Symbol: use_paths::root::sub
+help: definitions + references
+  ┌─ use_paths.fe:1:20
+  │
+1 │ mod root { pub mod sub { pub struct Name {} } }
+  │                    ^^^
+  │                    │
+  │                    def: defined here @ 1:20 (3 refs)
+  │                    ref: 1:20
+2 │ 
+3 │ use root::sub::Name
+  │           ^^^ ref: 3:11
+4 │ use root::sub
+  │           ^^^ ref: 4:11
+
+
+
+Symbol: use_paths::root::sub::Name
+help: definitions + references
+  ┌─ use_paths.fe:1:37
+  │
+1 │ mod root { pub mod sub { pub struct Name {} } }
+  │                                     ^^^^
+  │                                     │
+  │                                     def: defined here @ 1:37 (2 refs)
+  │                                     ref: 1:37
+2 │ 
+3 │ use root::sub::Name
+  │                ^^^^ ref: 3:16

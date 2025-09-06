@@ -3,7 +3,6 @@ use camino::Utf8Path;
 use codespan_reporting::files as cs_files;
 use common::{diagnostics::CompleteDiagnostic, file::File};
 use driver::DriverDataBase;
-use hir::lower::map_file_to_mod;
 use hir::Ingot;
 use hir_analysis::analysis_pass::{AnalysisPassManager, ParsingPass};
 use hir_analysis::name_resolution::ImportAnalysisPass;
@@ -33,12 +32,17 @@ impl LspDiagnostics for DriverDataBase {
         let ingot_files = ingot.files(self);
 
         for (url, file) in ingot_files.iter() {
+            // Only analyze source files; skip config and non-source entries
+            if file.kind(self) != Some(common::file::IngotFileKind::Source) {
+                continue;
+            }
+
             // initialize an empty diagnostic list for this file
             // (to clear any previous diagnostics)
             result.entry(url.clone()).or_default();
 
-            let top_mod = map_file_to_mod(self, file);
-            let diagnostics = pass_manager.run_on_module(self, top_mod);
+            // Use the stable file-based API to prevent stale TopLevelMod references
+            let diagnostics = pass_manager.run_on_file(self, file);
             let mut finalized_diags: Vec<CompleteDiagnostic> = diagnostics
                 .iter()
                 .map(|d| d.to_complete(self).clone())
@@ -133,4 +137,106 @@ fn initialize_analysis_pass() -> AnalysisPassManager {
     pass_manager.add_module_pass(Box::new(FuncAnalysisPass {}));
     pass_manager.add_module_pass(Box::new(BodyAnalysisPass {}));
     pass_manager
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::test_utils::load_ingot_from_directory;
+    use async_lsp::lsp_types::{Diagnostic, NumberOrString};
+    use common::InputDb;
+    use driver::DriverDataBase;
+    use std::collections::BTreeMap;
+    use std::path::PathBuf;
+    use test_utils::snap_test;
+    use url::Url;
+
+    fn code_to_string(code: &Option<NumberOrString>) -> String {
+        match code {
+            Some(NumberOrString::String(s)) => s.clone(),
+            Some(NumberOrString::Number(n)) => n.to_string(),
+            None => String::new(),
+        }
+    }
+
+    // Produce a stable, human-readable snapshot of diagnostics per file.
+    fn format_diagnostics(map: &rustc_hash::FxHashMap<Url, Vec<Diagnostic>>) -> String {
+        // Sort by URI for determinism
+        let mut by_uri: BTreeMap<String, Vec<Diagnostic>> = BTreeMap::new();
+        for (uri, diags) in map.iter() {
+            by_uri
+                .entry(uri.to_string())
+                .or_insert_with(Vec::new)
+                .extend(diags.iter().cloned());
+        }
+
+        let mut out = String::new();
+        for (uri, mut diags) in by_uri {
+            // Stable sort: code, start line/char, end line/char, message prefix
+            diags.sort_by(|a, b| {
+                let ac = code_to_string(&a.code);
+                let bc = code_to_string(&b.code);
+                (
+                    ac,
+                    a.range.start.line,
+                    a.range.start.character,
+                    a.range.end.line,
+                    a.range.end.character,
+                    a.message.clone(),
+                )
+                    .cmp(&(
+                        bc,
+                        b.range.start.line,
+                        b.range.start.character,
+                        b.range.end.line,
+                        b.range.end.character,
+                        b.message.clone(),
+                    ))
+            });
+
+            out.push_str(&format!("File: {}\n", uri));
+            for d in diags {
+                let code = code_to_string(&d.code);
+                let sev = d.severity.map(|s| format!("{:?}", s)).unwrap_or_default();
+                out.push_str(&format!(
+                    "  - code:{} severity:{} @ {}:{}..{}:{}\n    {}\n",
+                    code,
+                    sev,
+                    d.range.start.line + 1,
+                    d.range.start.character + 1,
+                    d.range.end.line + 1,
+                    d.range.end.character + 1,
+                    d.message.trim()
+                ));
+            }
+            out.push('\n');
+        }
+        out
+    }
+
+    #[test]
+    fn diagnostics_snapshot_comprehensive_project() {
+        let mut db = DriverDataBase::default();
+        let project_dir: PathBuf =
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("test_projects/comprehensive");
+
+        // Load the test project into the DB (mirrors server initialization)
+        load_ingot_from_directory(&mut db, &project_dir);
+
+        // Find the ingot from the directory URL
+        let ingot_url =
+            Url::from_directory_path(&project_dir).expect("failed to convert project dir to URL");
+        let ingot = db
+            .workspace()
+            .containing_ingot(&db, ingot_url)
+            .expect("ingot should be discoverable");
+
+        // Compute diagnostics per file using the server path
+        let map = db.diagnostics_for_ingot(ingot);
+        let snapshot = format_diagnostics(&map);
+
+        // Write snapshot alongside the project, like other dir-test layouts
+        let snap_path = project_dir.join("diagnostics.snap");
+        snap_test!(snapshot, snap_path.to_str().unwrap());
+    }
 }

@@ -12,7 +12,12 @@ fn line_col_from_offset(text: &str, offset: parser::TextSize) -> (usize, usize) 
         if i == Into::<usize>::into(offset) {
             return (line, col);
         }
-        if ch == '\n' { line += 1; col = 0; } else { col += 1; }
+        if ch == '\n' {
+            line += 1;
+            col = 0;
+        } else {
+            col += 1;
+        }
     }
     (line, col)
 }
@@ -20,14 +25,16 @@ fn line_col_from_offset(text: &str, offset: parser::TextSize) -> (usize, usize) 
 #[test]
 fn def_site_method_refs_include_ufcs() {
     // Load the existing fixture used by snapshots
-    let fixture_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("test_files/methods_ufcs.fe");
+    let fixture_path =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("test_files/methods_ufcs.fe");
     let content = std::fs::read_to_string(&fixture_path).expect("fixture present");
 
     let mut db = DriverDataBase::default();
-    let file = db
-        .workspace()
-        .touch(&mut db, Url::from_file_path(&fixture_path).unwrap(), Some(content.clone()));
+    let file = db.workspace().touch(
+        &mut db,
+        Url::from_file_path(&fixture_path).unwrap(),
+        Some(content.clone()),
+    );
     let top = map_file_to_mod(&db, file);
 
     // Cursor at def-site method name: resolve exactly from HIR
@@ -47,7 +54,11 @@ fn def_site_method_refs_include_ufcs() {
     }
     let cursor = cursor.expect("found def-site method name");
     let refs = SemanticQuery::at_cursor(&db, top, cursor).find_references();
-    assert!(refs.len() >= 3, "expected at least 3 refs, got {}", refs.len());
+    assert!(
+        refs.len() >= 3,
+        "expected at least 3 refs, got {}",
+        refs.len()
+    );
 
     // Collect (line,col) pairs for readability
     let mut pairs: Vec<(usize, usize)> = refs
@@ -59,9 +70,14 @@ fn def_site_method_refs_include_ufcs() {
     pairs.dedup();
 
     // Expect exact presence of def (3,9) and both UFCS call sites: (4,42) and (8,20)
-    let expected = vec![(3, 9), (4, 42), (8, 20)];
+    let expected = [(3, 9), (4, 42), (8, 20)];
     for p in expected.iter() {
-        assert!(pairs.contains(p), "missing expected reference at {:?}, got {:?}", p, pairs);
+        assert!(
+            pairs.contains(p),
+            "missing expected reference at {:?}, got {:?}",
+            p,
+            pairs
+        );
     }
 }
 
@@ -73,30 +89,40 @@ fn main(x: i32) -> i32 { let y = x; return y }
     let tmp = std::env::temp_dir().join("round_trip_param_local.fe");
     std::fs::write(&tmp, content).unwrap();
     let mut db = DriverDataBase::default();
-    let file = db
-        .workspace()
-        .touch(&mut db, Url::from_file_path(&tmp).unwrap(), Some(content.to_string()));
+    let file = db.workspace().touch(
+        &mut db,
+        Url::from_file_path(&tmp).unwrap(),
+        Some(content.to_string()),
+    );
     let top = map_file_to_mod(&db, file);
 
-    // Cursor on parameter usage 'x'  
+    // Cursor on parameter usage 'x'
     let cursor_x = parser::TextSize::from(content.find(" x; ").unwrap() as u32 + 1);
     if let Some(key) = SemanticQuery::at_cursor(&db, top, cursor_x).symbol_key() {
         if let Some((_tm, def_span)) = SemanticQuery::definition_for_symbol(&db, key) {
             let refs = SemanticQuery::references_for_symbol(&db, top, key);
             let def_resolved = def_span.resolve(&db).expect("def span resolve");
-            assert!(refs.iter().any(|r| r.span.resolve(&db) == Some(def_resolved.clone())), "param def-site missing from refs");
+            assert!(
+                refs.iter()
+                    .any(|r| r.span.resolve(&db) == Some(def_resolved.clone())),
+                "param def-site missing from refs"
+            );
         }
     } else {
         panic!("failed to resolve symbol at cursor_x");
     }
 
-    // Cursor on local 'y' usage (in return statement)  
+    // Cursor on local 'y' usage (in return statement)
     let cursor_y = parser::TextSize::from(content.rfind("return y").unwrap() as u32 + 7);
     if let Some(key) = SemanticQuery::at_cursor(&db, top, cursor_y).symbol_key() {
         if let Some((_tm, def_span)) = SemanticQuery::definition_for_symbol(&db, key) {
             let refs = SemanticQuery::references_for_symbol(&db, top, key);
             let def_resolved = def_span.resolve(&db).expect("def span resolve");
-            assert!(refs.iter().any(|r| r.span.resolve(&db) == Some(def_resolved.clone())), "local def-site missing from refs");
+            assert!(
+                refs.iter()
+                    .any(|r| r.span.resolve(&db) == Some(def_resolved.clone())),
+                "local def-site missing from refs"
+            );
         }
     } else {
         panic!("failed to resolve symbol at cursor_y");

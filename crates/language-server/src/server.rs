@@ -43,6 +43,12 @@ pub(crate) fn setup(
         .handle_request_mut::<Initialize>(handlers::initialize)
         .handle_request_mut::<GotoDefinition>(goto::handle_goto_definition)
         .handle_request::<References>(crate::functionality::references::handle_references)
+        .handle_request::<crate::functionality::implementations::GotoImplementation>(
+            crate::functionality::implementations::handle_goto_implementation,
+        )
+        .handle_request::<crate::functionality::rename::Rename>(
+            crate::functionality::rename::handle_rename,
+        )
         .handle_event_mut::<FileChange>(handlers::handle_file_change)
         .handle_event::<FilesNeedDiagnostics>(handlers::handle_files_need_diagnostics)
         // non-mutating handlers
@@ -65,6 +71,7 @@ pub(crate) fn setup(
 fn setup_streams(client: ClientSocket, router: &mut Router<()>) {
     info!("setting up streams");
 
+    // Simple approach: just use the file-based diagnostics API which is already safer
     let mut diagnostics_stream = router
         .event_stream::<NeedsDiagnostics>()
         .chunks_timeout(500, std::time::Duration::from_millis(30))

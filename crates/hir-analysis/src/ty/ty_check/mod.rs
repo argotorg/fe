@@ -20,7 +20,6 @@ use hir::{
 
 use rustc_hash::{FxHashMap, FxHashSet};
 use salsa::Update;
-use hir::span::LazySpan;
 
 use super::{
     diagnostics::{BodyDiag, FuncBodyDiag, TyDiagCollection, TyLowerDiag},
@@ -39,7 +38,10 @@ use crate::{
     ty::ty_def::{inference_keys, TyFlags},
     HirAnalysisDb,
 };
-use hir::{path_anchor::{AnchorPicker, map_path_anchor_to_dyn_lazy}, path_view::HirPathAdapter};
+use hir::{
+    path_anchor::{map_path_anchor_to_dyn_lazy, AnchorPicker},
+    path_view::HirPathAdapter,
+};
 
 #[salsa::tracked(return_ref)]
 pub fn check_func_body<'db>(
@@ -52,68 +54,6 @@ pub fn check_func_body<'db>(
 
     checker.run();
     checker.finish()
-}
-
-/// Optimized binding lookup: return a sorted interval map of local/param bindings in a function.
-/// Enables O(log N) lookups by offset instead of linear scans.
-#[salsa::tracked(return_ref)]
-pub fn binding_rangemap_for_func<'db>(
-    db: &'db dyn crate::diagnostics::SpannedHirAnalysisDb,
-    func: Func<'db>,
-) -> Vec<BindingRangeEntry<'db>> {
-    let (_diags, typed) = check_func_body(db, func).clone();
-    let Some(body) = typed.body else { return Vec::new() };
-
-    let mut entries = Vec::new();
-    
-    // Collect all Path expressions that have bindings
-    for (expr, _ty) in typed.expr_ty.iter() {
-        let expr_data = body.exprs(db)[*expr].clone();
-        if let hir::hir_def::Partial::Present(hir::hir_def::Expr::Path(_)) = expr_data {
-            if let Some(key) = expr_binding_key_for_expr(db, func, *expr) {
-                let e_span = (*expr).span(body);
-                if let Some(sp) = e_span.resolve(db) {
-                    entries.push(BindingRangeEntry {
-                        start: sp.range.start(),
-                        end: sp.range.end(),
-                        key,
-                    });
-                }
-            }
-        }
-    }
-    
-    // Sort by start offset, then by width (narrower spans first for nested ranges)
-    entries.sort_by(|a, b| {
-        match a.start.cmp(&b.start) {
-            std::cmp::Ordering::Equal => (a.end - a.start).cmp(&(b.end - b.start)),
-            ord => ord,
-        }
-    });
-    
-    entries
-}
-
-/// Facade: Return the inferred type of a specific expression in a function body.
-/// Leverages the cached result of `check_func_body` without recomputing.
-pub fn type_of_expr<'db>(
-    db: &'db dyn HirAnalysisDb,
-    func: Func<'db>,
-    expr: ExprId,
-) -> Option<TyId<'db>> {
-    let (_diags, typed) = check_func_body(db, func).clone();
-    Some(typed.expr_prop(db, expr).ty)
-}
-
-/// Facade: Return the inferred type of a specific pattern in a function body.
-/// Leverages the cached result of `check_func_body` without recomputing.
-pub fn type_of_pat<'db>(
-    db: &'db dyn HirAnalysisDb,
-    func: Func<'db>,
-    pat: PatId,
-) -> Option<TyId<'db>> {
-    let (_diags, typed) = check_func_body(db, func).clone();
-    Some(typed.pat_ty(db, pat))
 }
 
 pub struct TyChecker<'db> {
@@ -352,7 +292,7 @@ impl<'db> TyChecker<'db> {
             let anchor = AnchorPicker::pick_visibility_error(&view, seg_idx);
             let anchored = map_path_anchor_to_dyn_lazy(span.clone(), anchor);
             let ident = path.ident(self.db);
-            let diag = PathResDiag::Invisible(anchored.into(), *ident.unwrap(), deriv_span);
+            let diag = PathResDiag::Invisible(anchored, *ident.unwrap(), deriv_span);
             self.diags.push(diag.into());
         }
 
@@ -448,26 +388,6 @@ impl<'db> TraitMethod<'db> {
     }
 }
 
-/// Public helper: return the declaration name span of the local/param binding
-/// referenced by the given `expr` in `func`'s body, if any.
-pub fn binding_def_span_for_expr<'db>(
-    db: &'db dyn HirAnalysisDb,
-    func: hir::hir_def::item::Func<'db>,
-    expr: hir::hir_def::ExprId,
-) -> Option<hir::span::DynLazySpan<'db>> {
-    let (_diags, typed) = check_func_body(db, func).clone();
-    let body = typed.body?;
-    let prop = typed.expr_prop(db, expr);
-    let Some(binding) = prop.binding() else { return None };
-    match binding {
-        crate::ty::ty_check::env::LocalBinding::Local { pat, .. } => Some(pat.span(body).into()),
-        crate::ty::ty_check::env::LocalBinding::Param { idx, .. } => {
-            // Prefer name span; label spans are not part of binding identity here.
-            Some(func.span().params().param(idx).name().into())
-        }
-    }
-}
-
 /// Stable identity for a local binding within a function body: either a local pattern
 /// or a function parameter at index.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, salsa::Update)]
@@ -476,16 +396,9 @@ pub enum BindingKey<'db> {
     FuncParam(hir::hir_def::item::Func<'db>, u16),
 }
 
-/// Entry in the binding range map for fast local variable lookups
-#[derive(Debug, Clone, PartialEq, Eq, Hash, salsa::Update)]
-pub struct BindingRangeEntry<'db> {
-    pub start: parser::TextSize,
-    pub end: parser::TextSize,
-    pub key: BindingKey<'db>,
-}
-
 /// Get the binding key for an expression that references a local binding, if any.
-pub fn expr_binding_key_for_expr<'db>(
+#[salsa::tracked]
+pub(crate) fn expr_binding_key_for_expr<'db>(
     db: &'db dyn HirAnalysisDb,
     func: hir::hir_def::item::Func<'db>,
     expr: hir::hir_def::ExprId,
@@ -494,15 +407,17 @@ pub fn expr_binding_key_for_expr<'db>(
     let prop = typed.expr_prop(db, expr);
     let binding = prop.binding()?;
     match binding {
-        crate::ty::ty_check::env::LocalBinding::Local { pat, .. } => Some(BindingKey::LocalPat(pat)),
+        crate::ty::ty_check::env::LocalBinding::Local { pat, .. } => {
+            Some(BindingKey::LocalPat(pat))
+        }
         crate::ty::ty_check::env::LocalBinding::Param { idx, .. } => {
             Some(BindingKey::FuncParam(func, idx as u16))
         }
     }
 }
 
-
 /// Return the declaration name span for a binding key in the given function.
+#[salsa::tracked]
 pub fn binding_def_span_in_func<'db>(
     db: &'db dyn HirAnalysisDb,
     func: hir::hir_def::item::Func<'db>,
@@ -515,47 +430,11 @@ pub fn binding_def_span_in_func<'db>(
             Some(pat.span(body).into())
         }
         BindingKey::FuncParam(f, idx) => {
-            let f = f; // param belongs to this function
+            // param belongs to this function
             Some(f.span().params().param(idx as usize).name().into())
         }
     }
 }
-
-/// Return all reference spans (including the declaration) for a binding key within the given function.
-pub fn binding_refs_in_func<'db>(
-    db: &'db dyn HirAnalysisDb,
-    func: hir::hir_def::item::Func<'db>,
-    key: BindingKey<'db>,
-) -> Vec<hir::span::DynLazySpan<'db>> {
-    let (_d, typed) = check_func_body(db, func).clone();
-    let Some(body) = typed.body else { return vec![] };
-
-    // Include declaration span first
-    let mut out = Vec::new();
-    if let Some(def) = binding_def_span_in_func(db, func, key) { out.push(def); }
-
-    // Collect expression references: restrict to Expr::Path occurrences
-    for (expr, _prop) in typed.expr_ty.iter() {
-        let prop = typed.expr_prop(db, *expr);
-        let Some(binding) = prop.binding() else { continue };
-        let matches = match (key, binding) {
-            (BindingKey::LocalPat(pat), crate::ty::ty_check::env::LocalBinding::Local { pat: bp, .. }) => pat == bp,
-            (BindingKey::FuncParam(_, idx), crate::ty::ty_check::env::LocalBinding::Param { idx: bidx, .. }) => idx as usize == bidx,
-            _ => false,
-        };
-        if !matches { continue }
-        // Anchor reference at the tail ident of the path expression
-        let expr_data = body.exprs(db)[*expr].clone();
-        if let hir::hir_def::Partial::Present(hir::hir_def::Expr::Path(_)) = expr_data {
-            let span = (*expr).span(body).into_path_expr().path().segment(0).ident().into();
-            out.push(span);
-        }
-    }
-    out
-}
-
- 
-
 
 struct TyCheckerFinalizer<'db> {
     db: &'db dyn HirAnalysisDb,
