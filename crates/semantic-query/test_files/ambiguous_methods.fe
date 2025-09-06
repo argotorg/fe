@@ -1,0 +1,22 @@
+struct Container { value: i32 }
+
+trait TraitA {
+    fn get(self) -> i32
+}
+
+trait TraitB {
+    fn get(self) -> i32
+}
+
+impl TraitA for Container {
+    fn get(self) -> i32 { self.value }
+}
+
+impl TraitB for Container {
+    fn get(self) -> i32 { self.value + 1 }
+}
+
+fn test() {
+    let c = Container { value: 42 }
+    let r = c.get()
+}

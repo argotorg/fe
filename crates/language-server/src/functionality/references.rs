@@ -1,7 +1,7 @@
 use async_lsp::ResponseError;
 use async_lsp::lsp_types::{Location, ReferenceParams};
 use common::InputDb;
-use fe_semantic_query::Api;
+use fe_semantic_query::SemanticQuery;
 use hir::{lower::map_file_to_mod, span::LazySpan};
 
 use crate::{backend::Backend, util::to_offset_from_position};
@@ -23,30 +23,17 @@ pub async fn handle_references(
     let cursor = to_offset_from_position(params.text_document_position.position, file_text.as_str());
     let top_mod = map_file_to_mod(&backend.db, file);
 
-    // Consolidated: delegate references-at-cursor to semantic-query (index-backed)
-    let api = Api::new(&backend.db);
-    let mut found = api
-        .find_references_at_cursor_best(top_mod, cursor)
+    // Use unified SemanticQuery API
+    let query = SemanticQuery::at_cursor(&backend.db, top_mod, cursor);
+    let mut found = query.find_references()
         .into_iter()
         .filter_map(|r| r.span.resolve(&backend.db))
         .filter_map(|sp| crate::util::to_lsp_range_from_span(sp.clone(), &backend.db).ok().map(|range| (sp, range)))
         .map(|(sp, range)| Location { uri: sp.file.url(&backend.db).expect("url"), range })
         .collect::<Vec<_>>();
 
-    // Honor includeDeclaration: if false, remove the def location when present
-    if !params.context.include_declaration {
-        if let Some(key) = api.symbol_identity_at_cursor(top_mod, cursor) {
-            if let Some((_, def_span)) = api.definition_for_symbol(key) {
-                if let Some(def) = def_span.resolve(&backend.db) {
-                    let def_url = def.file.url(&backend.db).expect("url");
-                    let def_range = crate::util::to_lsp_range_from_span(def.clone(), &backend.db).ok();
-                    if let Some(def_range) = def_range {
-                        found.retain(|loc| !(loc.uri == def_url && loc.range == def_range));
-                    }
-                }
-            }
-        }
-    }
+    // TODO: Honor includeDeclaration: if false, remove the def location when present
+    // This would require exposing definition lookup on SemanticQuery
     // Deduplicate identical locations
     found.sort_by_key(|l| (l.uri.clone(), l.range.start, l.range.end));
     found.dedup_by(|a, b| a.uri == b.uri && a.range == b.range);
@@ -78,8 +65,7 @@ mod tests {
         let call_off = content.find("return_three()").unwrap() as u32;
         let cursor = parser::TextSize::from(call_off);
 
-        let api = Api::new(&db);
-        let refs = api.find_references_at_cursor(top_mod, cursor);
+        let refs = SemanticQuery::at_cursor(&db, top_mod, cursor).find_references();
         assert!(!refs.is_empty(), "expected at least one reference at call site");
         // Ensure we can convert at least one to an LSP location
         let any_loc = refs

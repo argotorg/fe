@@ -1,40 +1,13 @@
 use common::InputDb;
 use dir_test::{dir_test, Fixture};
 use driver::DriverDataBase;
-use fe_semantic_query::SemanticIndex;
+use fe_semantic_query::SemanticQuery;
 use hir::{lower::map_file_to_mod, span::LazySpan as _, SpannedHirDb};
 use hir_analysis::HirAnalysisDb;
 use test_utils::snap_test;
 use test_utils::snap::{codespan_render_defs_refs, line_col_from_cursor};
 use url::Url;
 
-fn to_lsp_location_from_span(
-    db: &dyn InputDb,
-    span: common::diagnostics::Span,
-) -> Option<async_lsp::lsp_types::Location> {
-    let url = span.file.url(db)?;
-    let text = span.file.text(db);
-    let starts: Vec<usize> = text
-        .lines()
-        .scan(0, |st, ln| {
-            let o = *st;
-            *st += ln.len() + 1;
-            Some(o)
-        })
-        .collect();
-    let idx = |off: parser::TextSize| starts.binary_search(&Into::<usize>::into(off)).unwrap_or_else(|n| n.saturating_sub(1));
-    let sl = idx(span.range.start());
-    let el = idx(span.range.end());
-    let sc: usize = Into::<usize>::into(span.range.start()) - starts[sl];
-    let ec: usize = Into::<usize>::into(span.range.end()) - starts[el];
-    Some(async_lsp::lsp_types::Location {
-        uri: url,
-        range: async_lsp::lsp_types::Range {
-            start: async_lsp::lsp_types::Position::new(sl as u32, sc as u32),
-            end: async_lsp::lsp_types::Position::new(el as u32, ec as u32),
-        },
-    })
-}
 
 fn symbol_label<'db>(db: &'db dyn SpannedHirDb, adb: &'db dyn HirAnalysisDb, key: &fe_semantic_query::SymbolKey<'db>) -> String {
     use fe_semantic_query::SymbolKey;
@@ -78,7 +51,7 @@ fn symbol_keys_snapshot(fx: Fixture<&str>) {
     if modules.is_empty() { modules.push(top); }
 
     // Build symbol index across modules
-    let map = SemanticIndex::build_symbol_index_for_modules(&db, &modules);
+    let map = SemanticQuery::build_symbol_index_for_modules(&db, &modules);
 
     // Stable ordering of symbol keys via labels
     let mut entries: Vec<(String, fe_semantic_query::SymbolKey)> = map
@@ -90,9 +63,9 @@ fn symbol_keys_snapshot(fx: Fixture<&str>) {
     let mut out = String::new();
     for (label, key) in entries {
         // Gather def
-        let def_opt = SemanticIndex::definition_for_symbol(&db, key).and_then(|(_tm, span)| span.resolve(&db));
+        let def_opt = SemanticQuery::definition_for_symbol(&db, key).and_then(|(_tm, span)| span.resolve(&db));
         // Gather refs across modules
-        let refs = SemanticIndex::references_for_symbol(&db, top, key.clone());
+        let refs = SemanticQuery::references_for_symbol(&db, top, key.clone());
         let mut refs_by_file: std::collections::BTreeMap<common::file::File, Vec<common::diagnostics::Span>> = Default::default();
         for r in refs {
             if let Some(sp) = r.span.resolve(&db) {

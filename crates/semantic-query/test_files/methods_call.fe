@@ -1,5 +1,13 @@
 struct Container { value: i32 }
 
+trait ContainerTrait {
+    fn get(self) -> i32
+}
+
+impl ContainerTrait for Container {
+    fn get(self) -> i32 { self.value }
+}
+
 impl Container {
   pub fn get(self) -> i32 { self.value }
 }
@@ -8,4 +16,3 @@ fn test() {
   let c = Container { value: 42 }
   let r = c.get()
 }
-

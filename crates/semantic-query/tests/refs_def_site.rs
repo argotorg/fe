@@ -1,6 +1,6 @@
 use common::InputDb;
 use driver::DriverDataBase;
-use fe_semantic_query::SemanticIndex;
+use fe_semantic_query::SemanticQuery;
 use hir::lower::map_file_to_mod;
 use hir::span::LazySpan as _;
 use url::Url;
@@ -46,7 +46,7 @@ fn def_site_method_refs_include_ufcs() {
         }
     }
     let cursor = cursor.expect("found def-site method name");
-    let refs = SemanticIndex::find_references_at_cursor(&db, top, cursor);
+    let refs = SemanticQuery::at_cursor(&db, top, cursor).find_references();
     assert!(refs.len() >= 3, "expected at least 3 refs, got {}", refs.len());
 
     // Collect (line,col) pairs for readability
@@ -80,9 +80,9 @@ fn main(x: i32) -> i32 { let y = x; return y }
 
     // Cursor on parameter usage 'x'  
     let cursor_x = parser::TextSize::from(content.find(" x; ").unwrap() as u32 + 1);
-    if let Some(key) = SemanticIndex::symbol_identity_at_cursor(&db, top, cursor_x) {
-        if let Some((_tm, def_span)) = SemanticIndex::definition_for_symbol(&db, key) {
-            let refs = SemanticIndex::references_for_symbol(&db, top, key);
+    if let Some(key) = SemanticQuery::at_cursor(&db, top, cursor_x).symbol_key() {
+        if let Some((_tm, def_span)) = SemanticQuery::definition_for_symbol(&db, key) {
+            let refs = SemanticQuery::references_for_symbol(&db, top, key);
             let def_resolved = def_span.resolve(&db).expect("def span resolve");
             assert!(refs.iter().any(|r| r.span.resolve(&db) == Some(def_resolved.clone())), "param def-site missing from refs");
         }
@@ -92,9 +92,9 @@ fn main(x: i32) -> i32 { let y = x; return y }
 
     // Cursor on local 'y' usage (in return statement)  
     let cursor_y = parser::TextSize::from(content.rfind("return y").unwrap() as u32 + 7);
-    if let Some(key) = SemanticIndex::symbol_identity_at_cursor(&db, top, cursor_y) {
-        if let Some((_tm, def_span)) = SemanticIndex::definition_for_symbol(&db, key) {
-            let refs = SemanticIndex::references_for_symbol(&db, top, key);
+    if let Some(key) = SemanticQuery::at_cursor(&db, top, cursor_y).symbol_key() {
+        if let Some((_tm, def_span)) = SemanticQuery::definition_for_symbol(&db, key) {
+            let refs = SemanticQuery::references_for_symbol(&db, top, key);
             let def_resolved = def_span.resolve(&db).expect("def span resolve");
             assert!(refs.iter().any(|r| r.span.resolve(&db) == Some(def_resolved.clone())), "local def-site missing from refs");
         }

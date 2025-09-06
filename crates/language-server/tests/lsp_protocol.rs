@@ -1,6 +1,6 @@
 use common::InputDb;
 use driver::DriverDataBase;
-use fe_semantic_query::Api;
+use fe_semantic_query::SemanticQuery;
 use hir::{lower::map_file_to_mod, span::LazySpan};
 use url::Url;
 
@@ -20,8 +20,7 @@ fn f() { let _x: T }
     let file = db.workspace().touch(&mut db, Url::from_file_path(tmp).unwrap(), Some(content.to_string()));
     let top_mod = map_file_to_mod(&db, file);
     let cursor = content.rfind("T }").unwrap() as u32;
-    let api = Api::new(&db);
-    let candidates = api.goto_candidates_at_cursor(top_mod, parser::TextSize::from(cursor));
+    let candidates = SemanticQuery::at_cursor(&db, top_mod, parser::TextSize::from(cursor)).goto_definition();
     
     // LSP protocol: multiple candidates should be returned as array for client to handle
     assert!(candidates.len() >= 2, "Expected multiple candidates for ambiguous symbol, got {}", candidates.len());
@@ -40,8 +39,7 @@ fn f() { let _x: m::Foo }
     let file = db.workspace().touch(&mut db, Url::from_file_path(tmp).unwrap(), Some(content.to_string()));
     let top_mod = map_file_to_mod(&db, file);
     let cursor = content.find("Foo }").unwrap() as u32;
-    let api = Api::new(&db);
-    let candidates = api.goto_candidates_at_cursor(top_mod, parser::TextSize::from(cursor));
+    let candidates = SemanticQuery::at_cursor(&db, top_mod, parser::TextSize::from(cursor)).goto_definition();
     
     // LSP protocol: single candidate should be returned as scalar for efficiency
     assert_eq!(candidates.len(), 1, "Expected single candidate for unambiguous symbol");
@@ -59,8 +57,7 @@ fn main() { let p = Point { x: 42 }; let val = p.x; }
     let file = db.workspace().touch(&mut db, Url::from_file_path(tmp).unwrap(), Some(content.to_string()));
     let top_mod = map_file_to_mod(&db, file);
     let cursor = parser::TextSize::from(content.rfind("p.x").unwrap() as u32 + 2);
-    let api = Api::new(&db);
-    let refs = api.find_references_at_cursor(top_mod, cursor);
+    let refs = SemanticQuery::at_cursor(&db, top_mod, cursor).find_references();
     
     // LSP protocol: references should include both definition and usage sites
     assert!(!refs.is_empty(), "Expected at least one reference location");
@@ -85,11 +82,11 @@ fn f() { let x = 1; let _y = x; }
     let off = content.rfind("x;").unwrap() as u32;
     let cursor = parser::TextSize::from(off);
 
-    let api = fe_semantic_query::Api::new(&db);
-    let key = api.symbol_identity_at_cursor(top_mod, cursor).expect("symbol at cursor");
-    let (_tm, def_span) = api.definition_for_symbol(key).expect("def span");
+    let query = SemanticQuery::at_cursor(&db, top_mod, cursor);
+    let key = query.symbol_key().expect("symbol at cursor");
+    let (_tm, def_span) = SemanticQuery::definition_for_symbol(&db, key).expect("def span");
 
-    let refs = api.find_references_at_cursor(top_mod, cursor);
+    let refs = query.find_references();
     let def_res = def_span.resolve(&db).expect("resolve def span");
     let found = refs.into_iter().any(|r| {
         if let Some(sp) = r.span.resolve(&db) {

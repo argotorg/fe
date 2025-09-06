@@ -1,6 +1,6 @@
 use async_lsp::ResponseError;
 use common::InputDb;
-use fe_semantic_query::Api;
+use fe_semantic_query::SemanticQuery;
 use hir::{lower::map_file_to_mod, span::LazySpan};
 // use tracing::error;
 
@@ -30,28 +30,16 @@ pub async fn handle_goto_definition(
     let cursor: Cursor = to_offset_from_position(params.position, file_text.as_str());
     let top_mod = map_file_to_mod(&backend.db, file);
 
-    // Prefer identity-driven single definition; fall back to candidates for ambiguous cases.
+    // Use unified SemanticQuery API
     let mut locs: Vec<async_lsp::lsp_types::Location> = Vec::new();
-    let api = Api::new(&backend.db);
-    if let Some(key) = api.symbol_identity_at_cursor(top_mod, cursor) {
-        if let Some((_tm, span)) = api.definition_for_symbol(key) {
-            if let Some(resolved) = span.resolve(&backend.db) {
-                let url = resolved.file.url(&backend.db).expect("Failed to get file URL");
-                let range = crate::util::to_lsp_range_from_span(resolved, &backend.db)
-                    .map_err(|e| ResponseError::new(async_lsp::ErrorCode::INTERNAL_ERROR, format!("{e}")))?;
-                locs.push(async_lsp::lsp_types::Location { uri: url, range });
-            }
-        }
-    }
-    if locs.is_empty() {
-        let candidates = api.goto_candidates_at_cursor(top_mod, cursor);
-        for def in candidates.into_iter() {
-            if let Some(span) = def.span.resolve(&backend.db) {
-                let url = span.file.url(&backend.db).expect("Failed to get file URL");
-                let range = crate::util::to_lsp_range_from_span(span, &backend.db)
-                    .map_err(|e| ResponseError::new(async_lsp::ErrorCode::INTERNAL_ERROR, format!("{e}")))?;
-                locs.push(async_lsp::lsp_types::Location { uri: url, range });
-            }
+    let query = SemanticQuery::at_cursor(&backend.db, top_mod, cursor);
+    let candidates = query.goto_definition();
+    for def in candidates.into_iter() {
+        if let Some(span) = def.span.resolve(&backend.db) {
+            let url = span.file.url(&backend.db).expect("Failed to get file URL");
+            let range = crate::util::to_lsp_range_from_span(span, &backend.db)
+                .map_err(|e| ResponseError::new(async_lsp::ErrorCode::INTERNAL_ERROR, format!("{e}")))?;
+            locs.push(async_lsp::lsp_types::Location { uri: url, range });
         }
     }
     match locs.len() {

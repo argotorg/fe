@@ -2,7 +2,7 @@ use anyhow::Error;
 use async_lsp::lsp_types::Hover;
 
 use common::file::File;
-use fe_semantic_query::Api;
+use fe_semantic_query::SemanticQuery;
 use hir::lower::map_file_to_mod;
 use hir::span::LazySpan;
 use tracing::info;
@@ -26,9 +26,9 @@ pub fn hover_helper(
 
     let top_mod = map_file_to_mod(db, file);
 
-    // Prefer structured hover; emit None if not available (legacy markdown removed)
-    let api = Api::new(db);
-    if let Some(h) = api.hover_info_for_symbol_at_cursor(top_mod, cursor) {
+    // Use unified SemanticQuery API
+    let query = SemanticQuery::at_cursor(db, top_mod, cursor);
+    if let Some(h) = query.hover_info() {
         let mut parts: Vec<String> = Vec::new();
         if let Some(sig) = h.signature {
             parts.push(format!("```fe\n{}\n```", sig));
