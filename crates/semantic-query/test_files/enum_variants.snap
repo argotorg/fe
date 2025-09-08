@@ -1,0 +1,102 @@
+---
+source: crates/semantic-query/tests/symbol_keys_snap.rs
+expression: out
+input_file: test_files/enum_variants.snap
+---
+Symbol: enum_variants::Color
+help: definitions + references
+  ┌─ enum_variants.fe:1:6
+  │
+1 │ enum Color { Red, Green { intensity: i32 }, Blue(i32) }
+  │      ^^^^^
+  │      │
+  │      def: defined here @ 1:6 (4 refs)
+  │      ref: 1:6
+  ·
+4 │   let r = Color::Red
+  │           ^^^^^ ref: 4:11
+5 │   let g = Color::Green { intensity: 5 }
+  │           ^^^^^ ref: 5:11
+6 │   let b = Color::Blue(3)
+  │           ^^^^^ ref: 6:11
+
+
+
+Symbol: enum_variants::Color::Blue
+help: definitions + references
+  ┌─ enum_variants.fe:1:45
+  │
+1 │ enum Color { Red, Green { intensity: i32 }, Blue(i32) }
+  │                                             ^^^^
+  │                                             │
+  │                                             def: defined here @ 1:45 (2 refs)
+  │                                             ref: 1:45
+  ·
+6 │   let b = Color::Blue(3)
+  │                  ^^^^ ref: 6:18
+
+
+
+Symbol: enum_variants::Color::Green
+help: definitions + references
+  ┌─ enum_variants.fe:1:19
+  │
+1 │ enum Color { Red, Green { intensity: i32 }, Blue(i32) }
+  │                   ^^^^^
+  │                   │
+  │                   def: defined here @ 1:19 (2 refs)
+  │                   ref: 1:19
+  ·
+5 │   let g = Color::Green { intensity: 5 }
+  │                  ^^^^^ ref: 5:18
+
+
+
+Symbol: enum_variants::Color::Red
+help: definitions + references
+  ┌─ enum_variants.fe:1:14
+  │
+1 │ enum Color { Red, Green { intensity: i32 }, Blue(i32) }
+  │              ^^^
+  │              │
+  │              def: defined here @ 1:14 (2 refs)
+  │              ref: 1:14
+  ·
+4 │   let r = Color::Red
+  │                  ^^^ ref: 4:18
+
+
+
+Symbol: local in enum_variants::main
+help: definitions + references
+  ┌─ enum_variants.fe:4:7
+  │
+4 │   let r = Color::Red
+  │       ^
+  │       │
+  │       def: defined here @ 4:7 (1 refs)
+  │       ref: 4:7
+
+
+
+Symbol: local in enum_variants::main
+help: definitions + references
+  ┌─ enum_variants.fe:6:7
+  │
+6 │   let b = Color::Blue(3)
+  │       ^
+  │       │
+  │       def: defined here @ 6:7 (1 refs)
+  │       ref: 6:7
+
+
+
+Symbol: local in enum_variants::main
+help: definitions + references
+  ┌─ enum_variants.fe:5:7
+  │
+5 │   let g = Color::Green { intensity: 5 }
+  │       ^
+  │       │
+  │       def: defined here @ 5:7 (1 refs)
+  │       ref: 5:7

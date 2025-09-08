@@ -1,0 +1,6 @@
+mod root { pub mod sub { pub struct Name {} } }
+
+use root::sub::Name
+use root::sub
+use root
+

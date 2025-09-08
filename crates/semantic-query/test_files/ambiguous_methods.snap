@@ -1,0 +1,161 @@
+---
+source: crates/semantic-query/tests/symbol_keys_snap.rs
+expression: out
+---
+Symbol: ambiguous_methods::Container
+help: definitions + references
+   ┌─ ambiguous_methods.fe:1:8
+   │
+ 1 │ struct Container { value: i32 }
+   │        ^^^^^^^^^
+   │        │
+   │        def: defined here @ 1:8 (6 refs)
+   │        ref: 1:8
+   ·
+11 │ impl TraitA for Container {
+   │                 ^^^^^^^^^ ref: 11:17
+12 │     fn get(self) -> i32 { self.value }
+   │            ^^^^ ref: 12:12
+   ·
+15 │ impl TraitB for Container {
+   │                 ^^^^^^^^^ ref: 15:17
+16 │     fn get(self) -> i32 { self.value + 1 }
+   │            ^^^^ ref: 16:12
+   ·
+20 │     let c = Container { value: 42 }
+   │             ^^^^^^^^^ ref: 20:13
+
+
+
+Symbol: ambiguous_methods::Container::value
+help: definitions + references
+   ┌─ ambiguous_methods.fe:1:20
+   │
+ 1 │ struct Container { value: i32 }
+   │                    ^^^^^
+   │                    │
+   │                    def: defined here @ 1:20 (3 refs)
+   │                    ref: 1:20
+   ·
+12 │     fn get(self) -> i32 { self.value }
+   │                                ^^^^^ ref: 12:32
+   ·
+16 │     fn get(self) -> i32 { self.value + 1 }
+   │                                ^^^^^ ref: 16:32
+
+
+
+Symbol: ambiguous_methods::TraitA
+help: definitions + references
+   ┌─ ambiguous_methods.fe:3:7
+   │
+ 3 │ trait TraitA {
+   │       ^^^^^^
+   │       │
+   │       def: defined here @ 3:7 (3 refs)
+   │       ref: 3:7
+ 4 │     fn get(self) -> i32
+   │            ^^^^ ref: 4:12
+   ·
+11 │ impl TraitA for Container {
+   │      ^^^^^^ ref: 11:6
+
+
+
+Symbol: ambiguous_methods::TraitA::get::get
+help: definitions + references
+   ┌─ ambiguous_methods.fe:4:8
+   │
+ 4 │     fn get(self) -> i32
+   │        ^^^
+   │        │
+   │        def: defined here @ 4:8 (3 refs)
+   │        ref: 4:8
+   ·
+12 │     fn get(self) -> i32 { self.value }
+   │        ^^^ ref: 12:8
+   ·
+21 │     let r = c.get()
+   │               ^^^ ref: 21:15
+
+
+
+Symbol: ambiguous_methods::TraitB
+help: definitions + references
+   ┌─ ambiguous_methods.fe:7:7
+   │
+ 7 │ trait TraitB {
+   │       ^^^^^^
+   │       │
+   │       def: defined here @ 7:7 (3 refs)
+   │       ref: 7:7
+ 8 │     fn get(self) -> i32
+   │            ^^^^ ref: 8:12
+   ·
+15 │ impl TraitB for Container {
+   │      ^^^^^^ ref: 15:6
+
+
+
+Symbol: ambiguous_methods::TraitB::get::get
+help: definitions + references
+   ┌─ ambiguous_methods.fe:8:8
+   │
+ 8 │     fn get(self) -> i32
+   │        ^^^
+   │        │
+   │        def: defined here @ 8:8 (2 refs)
+   │        ref: 8:8
+   ·
+16 │     fn get(self) -> i32 { self.value + 1 }
+   │        ^^^ ref: 16:8
+
+
+
+Symbol: local in ambiguous_methods::test
+help: definitions + references
+   ┌─ ambiguous_methods.fe:20:9
+   │
+20 │     let c = Container { value: 42 }
+   │         ^
+   │         │
+   │         def: defined here @ 20:9 (2 refs)
+   │         ref: 20:9
+21 │     let r = c.get()
+   │             ^ ref: 21:13
+
+
+
+Symbol: local in ambiguous_methods::test
+help: definitions + references
+   ┌─ ambiguous_methods.fe:21:9
+   │
+21 │     let r = c.get()
+   │         ^
+   │         │
+   │         def: defined here @ 21:9 (1 refs)
+   │         ref: 21:9
+
+
+
+Symbol: param#0 of 
+help: definitions + references
+   ┌─ ambiguous_methods.fe:16:12
+   │
+16 │     fn get(self) -> i32 { self.value + 1 }
+   │            ^^^^           ^^^^ ref: 16:27
+   │            │               
+   │            def: defined here @ 16:12 (2 refs)
+   │            ref: 16:12
+
+
+
+Symbol: param#0 of 
+help: definitions + references
+   ┌─ ambiguous_methods.fe:12:12
+   │
+12 │     fn get(self) -> i32 { self.value }
+   │            ^^^^           ^^^^ ref: 12:27
+   │            │               
+   │            def: defined here @ 12:12 (2 refs)
+   │            ref: 12:12

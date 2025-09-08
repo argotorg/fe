@@ -2,13 +2,12 @@ use anyhow::Error;
 use async_lsp::lsp_types::Hover;
 
 use common::file::File;
+use fe_semantic_query::SemanticQuery;
 use hir::lower::map_file_to_mod;
+use hir::span::LazySpan;
 use tracing::info;
 
-use super::{
-    goto::{get_goto_target_scopes_for_cursor, Cursor},
-    item_info::{get_docstring, get_item_definition_markdown, get_item_path_markdown},
-};
+use super::goto::Cursor;
 use crate::util::to_offset_from_position;
 use driver::DriverDataBase;
 
@@ -26,36 +25,36 @@ pub fn hover_helper(
     );
 
     let top_mod = map_file_to_mod(db, file);
-    let goto_info = &get_goto_target_scopes_for_cursor(db, top_mod, cursor).unwrap_or_default();
 
-    let scopes_info = goto_info
-        .iter()
-        .map(|scope| {
-            let item = scope.item();
-            let pretty_path = get_item_path_markdown(db, item);
-            let definition_source = get_item_definition_markdown(db, item);
-            let docs = get_docstring(db, *scope);
-
-            let result = [pretty_path, definition_source, docs]
-                .iter()
-                .filter_map(|info| info.clone().map(|info| format!("{info}\n")))
-                .collect::<Vec<String>>()
-                .join("\n");
-
-            result
-        })
-        .collect::<Vec<String>>();
-
-    let info = scopes_info.join("\n---\n");
-
-    let result = async_lsp::lsp_types::Hover {
-        contents: async_lsp::lsp_types::HoverContents::Markup(
-            async_lsp::lsp_types::MarkupContent {
-                kind: async_lsp::lsp_types::MarkupKind::Markdown,
-                value: info,
-            },
-        ),
-        range: None,
-    };
-    Ok(Some(result))
+    // Use unified SemanticQuery API
+    let query = SemanticQuery::at_cursor(db, top_mod, cursor);
+    if let Some(h) = query.hover_info() {
+        let mut parts: Vec<String> = Vec::new();
+        if let Some(sig) = h.signature {
+            parts.push(format!("```fe\n{}\n```", sig));
+        }
+        if let Some(doc) = h.documentation {
+            parts.push(doc);
+        }
+        let value = if parts.is_empty() {
+            String::new()
+        } else {
+            parts.join("\n\n")
+        };
+        let range = h
+            .span
+            .resolve(db)
+            .and_then(|sp| crate::util::to_lsp_range_from_span(sp, db).ok());
+        let result = async_lsp::lsp_types::Hover {
+            contents: async_lsp::lsp_types::HoverContents::Markup(
+                async_lsp::lsp_types::MarkupContent {
+                    kind: async_lsp::lsp_types::MarkupKind::Markdown,
+                    value,
+                },
+            ),
+            range,
+        };
+        return Ok(Some(result));
+    }
+    Ok(None)
 }

@@ -1,0 +1,15 @@
+enum Color {
+  Red,
+  Green { intensity: i32 },
+  Blue,
+}
+
+struct Point { x: i32, y: i32 }
+
+fn test(p: Point, c: Color) -> i32 {
+  let Point { x, y } = p
+  match c {
+    Color::Green { intensity } => intensity
+    _ => 0
+  }
+}

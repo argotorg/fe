@@ -31,11 +31,19 @@ impl<'db> Pat<'db> {
 
             ast::PatKind::Path(path_ast) => {
                 let path = PathId::lower_ast_partial(ctxt.f_ctxt, path_ast.path());
+                if let crate::hir_def::Partial::Present(pid) = path {
+                    let idx = ctxt.path_index.entries.len();
+                    ctxt.path_index.entries.insert(idx, pid);
+                }
                 Pat::Path(path, path_ast.mut_token().is_some())
             }
 
             ast::PatKind::PathTuple(path_tup) => {
                 let path = PathId::lower_ast_partial(ctxt.f_ctxt, path_tup.path());
+                if let crate::hir_def::Partial::Present(pid) = path {
+                    let idx = ctxt.path_index.entries.len();
+                    ctxt.path_index.entries.insert(idx, pid);
+                }
                 let elems = match path_tup.elems() {
                     Some(elems) => elems.iter().map(|pat| Pat::lower_ast(ctxt, pat)).collect(),
                     None => vec![],
@@ -45,6 +53,10 @@ impl<'db> Pat<'db> {
 
             ast::PatKind::Record(record) => {
                 let path = PathId::lower_ast_partial(ctxt.f_ctxt, record.path());
+                if let crate::hir_def::Partial::Present(pid) = path {
+                    let idx = ctxt.path_index.entries.len();
+                    ctxt.path_index.entries.insert(idx, pid);
+                }
                 let fields = match record.fields() {
                     Some(fields) => fields
                         .iter()

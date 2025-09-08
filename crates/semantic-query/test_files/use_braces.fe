@@ -1,0 +1,15 @@
+mod stuff {
+    pub mod calculations {
+        pub fn return_three() -> i32 { 3 }
+        pub fn return_four() -> i32 { 4 }
+        pub fn return_five() -> i32 { 5 }
+    }
+}
+
+use stuff::calculations::return_three
+use stuff::calculations::return_four
+
+pub fn test_use_braces() {
+    let x = return_three()
+    let y = return_four()
+}

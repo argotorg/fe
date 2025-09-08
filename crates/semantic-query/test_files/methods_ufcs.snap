@@ -1,0 +1,86 @@
+---
+source: crates/semantic-query/tests/symbol_keys_snap.rs
+expression: out
+input_file: test_files/methods_ufcs.snap
+---
+Symbol: local in methods_ufcs::main
+help: definitions + references
+  ┌─ methods_ufcs.fe:9:7
+  │
+9 │   let w1 = Wrapper::new()
+  │       ^^
+  │       │
+  │       def: defined here @ 9:7 (1 refs)
+  │       ref: 9:7
+
+
+
+Symbol: local in methods_ufcs::main
+help: definitions + references
+   ┌─ methods_ufcs.fe:10:7
+   │
+10 │   let w2 = Wrapper::from_val()
+   │       ^^
+   │       │
+   │       def: defined here @ 10:7 (1 refs)
+   │       ref: 10:7
+
+
+
+Symbol: method from_val
+help: definitions + references
+   ┌─ methods_ufcs.fe:5:10
+   │
+ 5 │   pub fn from_val() -> Wrapper { Wrapper::new() }
+   │          ^^^^^^^^
+   │          │
+   │          def: defined here @ 5:10 (2 refs)
+   │          ref: 5:10
+   ·
+10 │   let w2 = Wrapper::from_val()
+   │                     ^^^^^^^^ ref: 10:21
+
+
+
+Symbol: method new
+help: definitions + references
+  ┌─ methods_ufcs.fe:4:10
+  │
+4 │   pub fn new() -> Wrapper { Wrapper {} }
+  │          ^^^
+  │          │
+  │          def: defined here @ 4:10 (3 refs)
+  │          ref: 4:10
+5 │   pub fn from_val() -> Wrapper { Wrapper::new() }
+  │                                           ^^^ ref: 5:43
+  ·
+9 │   let w1 = Wrapper::new()
+  │                     ^^^ ref: 9:21
+
+
+
+Symbol: methods_ufcs::Wrapper
+help: definitions + references
+   ┌─ methods_ufcs.fe:1:8
+   │
+ 1 │ struct Wrapper {}
+   │        ^^^^^^^
+   │        │
+   │        def: defined here @ 1:8 (8 refs)
+   │        ref: 1:8
+ 2 │ 
+ 3 │ impl Wrapper {
+   │      ^^^^^^^ ref: 3:6
+ 4 │   pub fn new() -> Wrapper { Wrapper {} }
+   │                   ^^^^^^^   ^^^^^^^ ref: 4:29
+   │                   │          
+   │                   ref: 4:19
+ 5 │   pub fn from_val() -> Wrapper { Wrapper::new() }
+   │                        ^^^^^^^   ^^^^^^^ ref: 5:34
+   │                        │          
+   │                        ref: 5:24
+   ·
+ 9 │   let w1 = Wrapper::new()
+   │            ^^^^^^^ ref: 9:12
+10 │   let w2 = Wrapper::from_val()
+   │            ^^^^^^^ ref: 10:12

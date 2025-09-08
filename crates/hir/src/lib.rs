@@ -3,6 +3,9 @@ pub use lower::parse::ParserError;
 
 pub mod hir_def;
 pub mod lower;
+pub mod path_anchor;
+pub mod path_view;
+pub mod source_index;
 pub mod span;
 pub mod visitor;
 

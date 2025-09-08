@@ -1,0 +1,101 @@
+---
+source: crates/semantic-query/tests/symbol_keys_snap.rs
+expression: out
+input_file: test_files/leftmost_and_use.snap
+---
+Symbol: leftmost_and_use::stuff
+help: definitions + references
+   ┌─ leftmost_and_use.fe:2:5
+   │
+ 2 │ mod stuff {
+   │     ^^^^^
+   │     │
+   │     def: defined here @ 2:5 (2 refs)
+   │     ref: 2:5
+   ·
+11 │   let _a: stuff::calculations::ambiguous
+   │           ^^^^^ ref: 11:11
+
+
+
+Symbol: leftmost_and_use::stuff::calculations
+help: definitions + references
+   ┌─ leftmost_and_use.fe:3:13
+   │
+ 3 │     pub mod calculations {
+   │             ^^^^^^^^^^^^
+   │             │
+   │             def: defined here @ 3:13 (2 refs)
+   │             ref: 3:13
+   ·
+11 │   let _a: stuff::calculations::ambiguous
+   │                  ^^^^^^^^^^^^ ref: 11:18
+
+
+
+Symbol: leftmost_and_use::stuff::calculations::ambiguous
+help: definitions + references
+   ┌─ leftmost_and_use.fe:4:16
+   │
+ 4 │         pub fn ambiguous() {}
+   │                ^^^^^^^^^
+   │                │
+   │                def: defined here @ 4:16 (2 refs)
+   │                ref: 4:16
+   ·
+11 │   let _a: stuff::calculations::ambiguous
+   │                                ^^^^^^^^^ ref: 11:32
+
+
+
+Symbol: leftmost_and_use::things
+help: definitions + references
+   ┌─ leftmost_and_use.fe:1:5
+   │
+ 1 │ mod things { pub struct Why {} }
+   │     ^^^^^^
+   │     │
+   │     def: defined here @ 1:5 (2 refs)
+   │     ref: 1:5
+   ·
+10 │   let _u: things::Why
+   │           ^^^^^^ ref: 10:11
+
+
+
+Symbol: leftmost_and_use::things::Why
+help: definitions + references
+   ┌─ leftmost_and_use.fe:1:25
+   │
+ 1 │ mod things { pub struct Why {} }
+   │                         ^^^
+   │                         │
+   │                         def: defined here @ 1:25 (2 refs)
+   │                         ref: 1:25
+   ·
+10 │   let _u: things::Why
+   │                   ^^^ ref: 10:19
+
+
+
+Symbol: local in leftmost_and_use::f
+help: definitions + references
+   ┌─ leftmost_and_use.fe:10:7
+   │
+10 │   let _u: things::Why
+   │       ^^
+   │       │
+   │       def: defined here @ 10:7 (1 refs)
+   │       ref: 10:7
+
+
+
+Symbol: local in leftmost_and_use::f
+help: definitions + references
+   ┌─ leftmost_and_use.fe:11:7
+   │
+11 │   let _a: stuff::calculations::ambiguous
+   │       ^^
+   │       │
+   │       def: defined here @ 11:7 (1 refs)
+   │       ref: 11:7

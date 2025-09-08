@@ -5,7 +5,7 @@ use common::{
     diagnostics::{CompleteDiagnostic, Severity, Span},
     InputDb,
 };
-use hir::{hir_def::scope_graph::ScopeId, span::LazySpan, SpannedHirDb};
+// (hir scope helpers no longer used here)
 use rustc_hash::FxHashMap;
 use tracing::error;
 
@@ -53,14 +53,7 @@ pub fn to_lsp_range_from_span(
     })
 }
 
-pub fn to_lsp_location_from_scope(
-    db: &dyn SpannedHirDb,
-    scope: ScopeId,
-) -> Result<async_lsp::lsp_types::Location, Box<dyn std::error::Error>> {
-    let lazy_span = scope.name_span(db).ok_or("Failed to get name span")?;
-    let span = lazy_span.resolve(db).ok_or("Failed to resolve span")?;
-    to_lsp_location_from_span(db, span)
-}
+// (removed unused to_lsp_location_from_scope)
 
 pub fn severity_to_lsp(is_primary: bool, severity: Severity) -> DiagnosticSeverity {
     // We set the severity to `HINT` for a secondary diags.

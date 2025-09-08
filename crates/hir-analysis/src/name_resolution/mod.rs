@@ -1,9 +1,12 @@
 pub mod diagnostics;
 
 mod import_resolver;
+// locals_api was removed; use ty::ty_check directly
+mod method_api;
 pub(crate) mod method_selection;
 mod name_resolver;
 mod path_resolver;
+mod policy;
 pub(crate) mod traits_in_scope;
 mod visibility_checker;
 
@@ -14,10 +17,15 @@ pub use name_resolver::{
     EarlyNameQueryId, NameDerivation, NameDomain, NameRes, NameResBucket, NameResKind,
     NameResolutionError, QueryDirective,
 };
+// NOTE: `resolve_path` is the low-level resolver that still requires callers to
+// pass a boolean domain hint. Prefer `resolve_with_policy` for new call-sites
+// to avoid boolean flags at API boundaries.
+pub use method_api::method_func_def_from_res;
 pub use path_resolver::{
     find_associated_type, resolve_ident_to_bucket, resolve_name_res, resolve_path,
     resolve_path_with_observer, PathRes, PathResError, PathResErrorKind, ResolvedVariant,
 };
+pub use policy::{resolve_with_policy, DomainPreference};
 use tracing::debug;
 pub use traits_in_scope::available_traits_in_scope;
 pub(crate) use visibility_checker::is_scope_visible_from;

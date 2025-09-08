@@ -38,6 +38,10 @@ use crate::{
     ty::ty_def::{inference_keys, TyFlags},
     HirAnalysisDb,
 };
+use hir::{
+    path_anchor::{map_path_anchor_to_dyn_lazy, AnchorPicker},
+    path_view::HirPathAdapter,
+};
 
 #[salsa::tracked(return_ref)]
 pub fn check_func_body<'db>(
@@ -248,6 +252,11 @@ impl<'db> TyChecker<'db> {
         }
     }
 
+    // TODO(deprecate): Legacy internal resolver used by TyChecker that still
+    // takes `resolve_tail_as_value`. Prefer `name_resolution::resolve_with_policy`
+    // at call sites when possible. This function remains to handle TyChecker-
+    // specific concerns (observer visibility reporting, instantiation) and
+    // should be slimmed to delegate to the policy wrapper over time.
     fn resolve_path(
         &mut self,
         path: PathId<'db>,
@@ -278,9 +287,12 @@ impl<'db> TyChecker<'db> {
         };
 
         if let Some((path, deriv_span)) = invisible {
-            let span = span.clone().segment(path.segment_index(self.db)).ident();
+            let seg_idx = path.segment_index(self.db);
+            let view = HirPathAdapter::new(self.db, path);
+            let anchor = AnchorPicker::pick_visibility_error(&view, seg_idx);
+            let anchored = map_path_anchor_to_dyn_lazy(span.clone(), anchor);
             let ident = path.ident(self.db);
-            let diag = PathResDiag::Invisible(span.into(), *ident.unwrap(), deriv_span);
+            let diag = PathResDiag::Invisible(anchored, *ident.unwrap(), deriv_span);
             self.diags.push(diag.into());
         }
 
@@ -373,6 +385,54 @@ impl<'db> TraitMethod<'db> {
         use crate::ty::fold::{AssocTySubst, TyFoldable};
         let mut subst = AssocTySubst::new(db, inst);
         instantiated.fold_with(&mut subst)
+    }
+}
+
+/// Stable identity for a local binding within a function body: either a local pattern
+/// or a function parameter at index.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, salsa::Update)]
+pub enum BindingKey<'db> {
+    LocalPat(hir::hir_def::PatId),
+    FuncParam(hir::hir_def::item::Func<'db>, u16),
+}
+
+/// Get the binding key for an expression that references a local binding, if any.
+#[salsa::tracked]
+pub(crate) fn expr_binding_key_for_expr<'db>(
+    db: &'db dyn HirAnalysisDb,
+    func: hir::hir_def::item::Func<'db>,
+    expr: hir::hir_def::ExprId,
+) -> Option<BindingKey<'db>> {
+    let (_diags, typed) = check_func_body(db, func).clone();
+    let prop = typed.expr_prop(db, expr);
+    let binding = prop.binding()?;
+    match binding {
+        crate::ty::ty_check::env::LocalBinding::Local { pat, .. } => {
+            Some(BindingKey::LocalPat(pat))
+        }
+        crate::ty::ty_check::env::LocalBinding::Param { idx, .. } => {
+            Some(BindingKey::FuncParam(func, idx as u16))
+        }
+    }
+}
+
+/// Return the declaration name span for a binding key in the given function.
+#[salsa::tracked]
+pub fn binding_def_span_in_func<'db>(
+    db: &'db dyn HirAnalysisDb,
+    func: hir::hir_def::item::Func<'db>,
+    key: BindingKey<'db>,
+) -> Option<hir::span::DynLazySpan<'db>> {
+    match key {
+        BindingKey::LocalPat(pat) => {
+            let (_d, typed) = check_func_body(db, func).clone();
+            let body = typed.body?;
+            Some(pat.span(body).into())
+        }
+        BindingKey::FuncParam(f, idx) => {
+            // param belongs to this function
+            Some(f.span().params().param(idx as usize).name().into())
+        }
     }
 }
 

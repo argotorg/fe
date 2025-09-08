@@ -3,7 +3,7 @@
 //! This module contains the conversion logic from HIR patterns to a simplified
 //! representation that's easier to work with during pattern analysis.
 
-use crate::name_resolution::{resolve_path, PathRes, ResolvedVariant};
+use crate::name_resolution::{resolve_with_policy, DomainPreference, PathRes, ResolvedVariant};
 use crate::ty::ty_def::TyId;
 use crate::HirAnalysisDb;
 use hir::hir_def::{
@@ -191,7 +191,13 @@ impl<'db> SimplifiedPattern<'db> {
             return None;
         };
 
-        match resolve_path(db, *path_id, scope, PredicateListId::empty_list(db), true) {
+        match resolve_with_policy(
+            db,
+            *path_id,
+            scope,
+            PredicateListId::empty_list(db),
+            DomainPreference::Value,
+        ) {
             Ok(PathRes::EnumVariant(variant)) => {
                 let ty = expected_ty.unwrap_or(variant.ty);
                 let ctor = ConstructorKind::Variant(variant.variant, ty);

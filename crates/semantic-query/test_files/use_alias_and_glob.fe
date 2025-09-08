@@ -1,0 +1,16 @@
+mod root {
+    pub mod sub {
+        pub struct Name {}
+        pub struct Alt {}
+    }
+}
+
+use root::sub::Name as N
+use root::sub::*
+
+fn f() {
+  let _a: N
+  let _b: Name
+  let _c: sub::Name
+  let _d: Alt
+}

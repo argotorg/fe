@@ -1,0 +1,8 @@
+enum Color { Red, Green { intensity: i32 }, Blue(i32) }
+
+fn main() {
+  let r = Color::Red
+  let g = Color::Green { intensity: 5 }
+  let b = Color::Blue(3)
+}
+

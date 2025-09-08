@@ -84,14 +84,16 @@ impl<'db> ScopeGraphBuilder<'db> {
                 ScopeId::Item(top_mod.ingot(self.db).root_mod(self.db).into()),
                 EdgeKind::ingot(),
             );
-            for child in top_mod.child_top_mods(self.db) {
-                let child_name = child.name(self.db);
-                let edge = EdgeKind::mod_(child_name);
-                self.graph
-                    .add_external_edge(item_node, ScopeId::Item(child.into()), edge)
+            if let Ok(children) = top_mod.child_top_mods(self.db) {
+                for child in children {
+                    let child_name = child.name(self.db);
+                    let edge = EdgeKind::mod_(child_name);
+                    self.graph
+                        .add_external_edge(item_node, ScopeId::Item(child.into()), edge)
+                }
             }
 
-            if let Some(parent) = top_mod.parent(self.db) {
+            if let Ok(Some(parent)) = top_mod.parent(self.db) {
                 let edge = EdgeKind::super_();
                 self.graph
                     .add_external_edge(item_node, ScopeId::Item(parent.into()), edge);

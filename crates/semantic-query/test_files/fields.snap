@@ -1,0 +1,87 @@
+---
+source: crates/semantic-query/tests/symbol_keys_snap.rs
+expression: out
+input_file: test_files/fields.snap
+---
+Symbol: fields::Point
+help: definitions + references
+  ┌─ fields.fe:1:8
+  │
+1 │ struct Point { x: i32, y: i32 }
+  │        ^^^^^
+  │        │
+  │        def: defined here @ 1:8 (2 refs)
+  │        ref: 1:8
+  ·
+4 │   let p = Point { x: 1, y: 2 }
+  │           ^^^^^ ref: 4:11
+
+
+
+Symbol: fields::Point::x
+help: definitions + references
+  ┌─ fields.fe:1:16
+  │
+1 │ struct Point { x: i32, y: i32 }
+  │                ^
+  │                │
+  │                def: defined here @ 1:16 (2 refs)
+  │                ref: 1:16
+  ·
+5 │   let a = p.x
+  │             ^ ref: 5:13
+
+
+
+Symbol: fields::Point::y
+help: definitions + references
+  ┌─ fields.fe:1:24
+  │
+1 │ struct Point { x: i32, y: i32 }
+  │                        ^
+  │                        │
+  │                        def: defined here @ 1:24 (2 refs)
+  │                        ref: 1:24
+  ·
+6 │   let b = p.y
+  │             ^ ref: 6:13
+
+
+
+Symbol: local in fields::main
+help: definitions + references
+  ┌─ fields.fe:5:7
+  │
+5 │   let a = p.x
+  │       ^
+  │       │
+  │       def: defined here @ 5:7 (1 refs)
+  │       ref: 5:7
+
+
+
+Symbol: local in fields::main
+help: definitions + references
+  ┌─ fields.fe:6:7
+  │
+6 │   let b = p.y
+  │       ^
+  │       │
+  │       def: defined here @ 6:7 (1 refs)
+  │       ref: 6:7
+
+
+
+Symbol: local in fields::main
+help: definitions + references
+  ┌─ fields.fe:4:7
+  │
+4 │   let p = Point { x: 1, y: 2 }
+  │       ^
+  │       │
+  │       def: defined here @ 4:7 (3 refs)
+  │       ref: 4:7
+5 │   let a = p.x
+  │           ^ ref: 5:11
+6 │   let b = p.y
+  │           ^ ref: 6:11

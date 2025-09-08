@@ -1,5 +1,6 @@
 #[doc(hidden)]
 pub mod _macro_support;
+pub mod snap;
 pub mod url_utils;
 pub use tracing::Level;
 use tracing::{

@@ -21,7 +21,7 @@ pub fn load_ingot_from_directory(db: &mut DriverDataBase, ingot_dir: &Path) {
             }
             _ => {
                 // Log other diagnostics but don't panic
-                eprintln!("Test ingot diagnostic for {ingot_dir:?}: {diagnostic}");
+                tracing::debug!("Test ingot diagnostic for {ingot_dir:?}: {diagnostic}");
             }
         }
     }

@@ -21,7 +21,9 @@ use tracing::{error, info, warn};
 pub struct FilesNeedDiagnostics(pub Vec<NeedsDiagnostics>);
 
 #[derive(Debug)]
-pub struct NeedsDiagnostics(pub url::Url);
+pub struct NeedsDiagnostics {
+    pub uri: url::Url,
+}
 
 impl std::fmt::Display for FilesNeedDiagnostics {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -31,7 +33,7 @@ impl std::fmt::Display for FilesNeedDiagnostics {
 
 impl std::fmt::Display for NeedsDiagnostics {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "FileNeedsDiagnostics({})", self.0)
+        write!(f, "FileNeedsDiagnostics({})", self.uri)
     }
 }
 
@@ -148,7 +150,7 @@ pub async fn initialized(
         .collect();
 
     for url in all_files {
-        let _ = backend.client.emit(NeedsDiagnostics(url));
+        let _ = backend.client.emit(NeedsDiagnostics { uri: url });
     }
 
     let _ = backend.client.clone().log_message(LogMessageParams {
@@ -315,7 +317,7 @@ pub async fn handle_file_change(
         }
     }
 
-    let _ = backend.client.emit(NeedsDiagnostics(message.uri));
+    let _ = backend.client.emit(NeedsDiagnostics { uri: message.uri });
     Ok(())
 }
 
@@ -352,7 +354,7 @@ async fn load_ingot_files(
         .collect();
 
     for url in all_files {
-        let _ = backend.client.emit(NeedsDiagnostics(url));
+        let _ = backend.client.emit(NeedsDiagnostics { uri: url });
     }
 
     Ok(())
@@ -367,7 +369,7 @@ pub async fn handle_files_need_diagnostics(
 
     let ingots_need_diagnostics: FxHashSet<_> = need_diagnostics
         .iter()
-        .filter_map(|NeedsDiagnostics(url)| {
+        .filter_map(|NeedsDiagnostics { uri: url }| {
             // url is already a url::Url
             backend
                 .db

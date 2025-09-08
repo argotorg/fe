@@ -430,7 +430,10 @@ impl<'db> TopLevelMod<'db> {
     pub fn child_top_mods(
         self,
         db: &'db dyn HirDb,
-    ) -> impl Iterator<Item = TopLevelMod<'db>> + 'db {
+    ) -> Result<
+        impl Iterator<Item = TopLevelMod<'db>> + 'db,
+        crate::hir_def::module_tree::StaleReferenceError,
+    > {
         // let ingot = self.index(db).containing_ingot(db, location)
         let module_tree = self.ingot(db).module_tree(db);
         module_tree.children(self)
@@ -454,7 +457,10 @@ impl<'db> TopLevelMod<'db> {
         s_graph.items_dfs(db)
     }
 
-    pub fn parent(self, db: &'db dyn HirDb) -> Option<TopLevelMod<'db>> {
+    pub fn parent(
+        self,
+        db: &'db dyn HirDb,
+    ) -> Result<Option<TopLevelMod<'db>>, crate::hir_def::module_tree::StaleReferenceError> {
         let module_tree = self.ingot(db).module_tree(db);
         module_tree.parent(self)
     }
