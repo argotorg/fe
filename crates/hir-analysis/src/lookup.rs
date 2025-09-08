@@ -8,7 +8,7 @@ use crate::{diagnostics::SpannedHirAnalysisDb, HirAnalysisDb};
 /// Generic semantic identity at a source offset.
 /// This is compiler-facing and independent of any IDE layer types.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum SymbolIdentity<'db> {
+pub enum SymbolKey<'db> {
     Scope(hir::hir_def::scope_graph::ScopeId<'db>),
     EnumVariant(hir::hir_def::EnumVariant<'db>),
     FuncParam(hir::hir_def::ItemKind<'db>, u16),
@@ -32,14 +32,14 @@ fn enclosing_func<'db>(
     None
 }
 
-fn map_path_res<'db>(db: &'db dyn HirAnalysisDb, res: PathRes<'db>) -> Option<SymbolIdentity<'db>> {
+fn map_path_res<'db>(db: &'db dyn HirAnalysisDb, res: PathRes<'db>) -> Option<SymbolKey<'db>> {
     match res {
-        PathRes::EnumVariant(v) => Some(SymbolIdentity::EnumVariant(v.variant)),
-        PathRes::FuncParam(item, idx) => Some(SymbolIdentity::FuncParam(item, idx)),
+        PathRes::EnumVariant(v) => Some(SymbolKey::EnumVariant(v.variant)),
+        PathRes::FuncParam(item, idx) => Some(SymbolKey::FuncParam(item, idx)),
         PathRes::Method(..) => {
-            crate::name_resolution::method_func_def_from_res(&res).map(SymbolIdentity::Method)
+            crate::name_resolution::method_func_def_from_res(&res).map(SymbolKey::Method)
         }
-        _ => res.as_scope(db).map(SymbolIdentity::Scope),
+        _ => res.as_scope(db).map(SymbolKey::Scope),
     }
 }
 
@@ -50,7 +50,7 @@ pub fn identity_for_occurrence<'db>(
     db: &'db dyn SpannedHirAnalysisDb,
     top_mod: TopLevelMod<'db>,
     occ: &hir::source_index::OccurrencePayload<'db>,
-) -> Vec<SymbolIdentity<'db>> {
+) -> Vec<SymbolKey<'db>> {
     use hir::source_index::OccurrencePayload as OP;
 
     match *occ {
@@ -58,16 +58,16 @@ pub fn identity_for_occurrence<'db>(
             hir::hir_def::scope_graph::ScopeId::Item(ItemKind::Func(f)) => {
                 if let Some(fd) = crate::ty::func_def::lower_func(db, f) {
                     if fd.is_method(db) {
-                        return vec![SymbolIdentity::Method(fd)];
+                        return vec![SymbolKey::Method(fd)];
                     }
                 }
-                vec![SymbolIdentity::Scope(scope)]
+                vec![SymbolKey::Scope(scope)]
             }
             hir::hir_def::scope_graph::ScopeId::FuncParam(item, idx) => {
-                vec![SymbolIdentity::FuncParam(item, idx)]
+                vec![SymbolKey::FuncParam(item, idx)]
             }
-            hir::hir_def::scope_graph::ScopeId::Variant(v) => vec![SymbolIdentity::EnumVariant(v)],
-            other => vec![SymbolIdentity::Scope(other)],
+            hir::hir_def::scope_graph::ScopeId::Variant(v) => vec![SymbolKey::EnumVariant(v)],
+            other => vec![SymbolKey::Scope(other)],
         },
         OP::MethodName {
             scope,
@@ -100,19 +100,18 @@ pub fn identity_for_occurrence<'db>(
                             MethodCandidate::TraitMethod(tm)
                             | MethodCandidate::NeedsConfirmation(tm) => tm.method.0,
                         };
-                        vec![SymbolIdentity::Method(fd)]
+                        vec![SymbolKey::Method(fd)]
                     }
-                    Err(MethodSelectionError::AmbiguousInherentMethod(methods)) => methods
-                        .iter()
-                        .map(|fd| SymbolIdentity::Method(*fd))
-                        .collect(),
+                    Err(MethodSelectionError::AmbiguousInherentMethod(methods)) => {
+                        methods.iter().map(|fd| SymbolKey::Method(*fd)).collect()
+                    }
                     Err(MethodSelectionError::AmbiguousTraitMethod(traits)) => traits
                         .iter()
                         .filter_map(|trait_def| {
                             trait_def
                                 .methods(db)
                                 .get(&ident)
-                                .map(|tm| SymbolIdentity::Method(tm.0))
+                                .map(|tm| SymbolKey::Method(tm.0))
                         })
                         .collect(),
                     Err(_) => vec![],
@@ -133,9 +132,9 @@ pub fn identity_for_occurrence<'db>(
                 if let Some(bkey) = crate::ty::ty_check::expr_binding_key_for_expr(db, func, expr) {
                     return vec![match bkey {
                         crate::ty::ty_check::BindingKey::FuncParam(f, idx) => {
-                            SymbolIdentity::FuncParam(ItemKind::Func(f), idx)
+                            SymbolKey::FuncParam(ItemKind::Func(f), idx)
                         }
-                        other => SymbolIdentity::Local(func, other),
+                        other => SymbolKey::Local(func, other),
                     }];
                 }
             }
@@ -160,7 +159,7 @@ pub fn identity_for_occurrence<'db>(
         }
         OP::PathPatSeg { body, pat, .. } => {
             if let Some(func) = enclosing_func(db, body.scope()) {
-                vec![SymbolIdentity::Local(
+                vec![SymbolKey::Local(
                     func,
                     crate::ty::ty_check::BindingKey::LocalPat(pat),
                 )]
@@ -180,7 +179,7 @@ pub fn identity_for_occurrence<'db>(
                 if let Some(sc) =
                     crate::ty::ty_check::RecordLike::from_ty(recv_ty).record_field_scope(db, ident)
                 {
-                    return vec![SymbolIdentity::Scope(sc)];
+                    return vec![SymbolKey::Scope(sc)];
                 }
             }
             vec![]
@@ -210,7 +209,7 @@ pub fn identity_for_occurrence<'db>(
                         _ => None,
                     };
                     if let Some(target) = target {
-                        return vec![SymbolIdentity::Scope(target)];
+                        return vec![SymbolKey::Scope(target)];
                     }
                 }
             }
@@ -230,7 +229,7 @@ pub fn identity_for_occurrence<'db>(
                     {
                         match nr.kind {
                             crate::name_resolution::NameResKind::Scope(sc) => {
-                                return vec![SymbolIdentity::Scope(sc)];
+                                return vec![SymbolKey::Scope(sc)];
                             }
                             crate::name_resolution::NameResKind::Prim(_) => {}
                         }
@@ -329,7 +328,7 @@ fn find_ambiguous_candidates_for_path_seg<'db>(
     scope: ScopeId<'db>,
     path: PathId<'db>,
     seg_idx: usize,
-) -> Vec<SymbolIdentity<'db>> {
+) -> Vec<SymbolKey<'db>> {
     use crate::name_resolution::NameDomain;
 
     // Get the identifier from the path segment
@@ -367,14 +366,14 @@ fn find_ambiguous_candidates_for_path_seg<'db>(
         match bucket.pick(domain) {
             Ok(name_res) => {
                 if let crate::name_resolution::NameResKind::Scope(sc) = name_res.kind {
-                    candidates.push(SymbolIdentity::Scope(sc));
+                    candidates.push(SymbolKey::Scope(sc));
                 }
             }
             Err(crate::name_resolution::NameResolutionError::Ambiguous(ambiguous_candidates)) => {
                 // This is exactly what we want for ambiguous imports!
                 for name_res in ambiguous_candidates {
                     if let crate::name_resolution::NameResKind::Scope(sc) = name_res.kind {
-                        candidates.push(SymbolIdentity::Scope(sc));
+                        candidates.push(SymbolKey::Scope(sc));
                     }
                 }
             }

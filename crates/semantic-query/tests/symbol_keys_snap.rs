@@ -3,6 +3,7 @@ use dir_test::{dir_test, Fixture};
 use driver::DriverDataBase;
 use fe_semantic_query::SemanticQuery;
 use hir::{lower::map_file_to_mod, span::LazySpan as _, SpannedHirDb};
+use hir_analysis::lookup::SymbolKey;
 use hir_analysis::HirAnalysisDb;
 use test_utils::snap::{codespan_render_defs_refs, line_col_from_cursor};
 use test_utils::snap_test;
@@ -11,9 +12,8 @@ use url::Url;
 fn symbol_label<'db>(
     db: &'db dyn SpannedHirDb,
     adb: &'db dyn HirAnalysisDb,
-    key: &fe_semantic_query::SymbolKey<'db>,
+    key: &hir_analysis::lookup::SymbolKey<'db>,
 ) -> String {
-    use fe_semantic_query::SymbolKey;
     match key {
         SymbolKey::Scope(sc) => sc.pretty_path(db).unwrap_or("<scope>".into()),
         SymbolKey::EnumVariant(v) => v.scope().pretty_path(db).unwrap_or("<variant>".into()),
@@ -67,7 +67,7 @@ fn symbol_keys_snapshot(fx: Fixture<&str>) {
     let map = SemanticQuery::build_symbol_index_for_modules(&db, &modules);
 
     // Stable ordering of symbol keys via labels
-    let mut entries: Vec<(String, fe_semantic_query::SymbolKey)> = map
+    let mut entries: Vec<(String, hir_analysis::lookup::SymbolKey)> = map
         .keys()
         .map(|k| (symbol_label(&db, &db, k), k.clone()))
         .collect();

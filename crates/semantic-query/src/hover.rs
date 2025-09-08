@@ -1,4 +1,5 @@
 use hir_analysis::diagnostics::SpannedHirAnalysisDb;
+use hir_analysis::lookup::SymbolKey;
 
 use hir::hir_def::scope_graph::ScopeId;
 use hir::source_index::OccurrencePayload;
@@ -18,8 +19,7 @@ pub(crate) fn hover_for_occurrence<'db>(
     top_mod: hir::hir_def::TopLevelMod<'db>,
 ) -> Option<HoverSemantics<'db>> {
     // Use the canonical occurrence interpreter to get the symbol target
-    let target = crate::identity::occurrence_symbol_target(db, top_mod, occ)?;
-    let symbol_key = crate::occ_target_to_symbol_key(target);
+    let symbol_key = crate::identity::occurrence_symbol_target(db, top_mod, occ)?;
 
     // Get the span from the occurrence
     let span = get_span_from_occurrence(occ);
@@ -44,11 +44,11 @@ pub(crate) fn get_span_from_occurrence<'db>(occ: &OccurrencePayload<'db>) -> Dyn
 
 fn hover_data_from_symbol_key<'db>(
     db: &'db dyn SpannedHirAnalysisDb,
-    symbol_key: crate::SymbolKey<'db>,
+    symbol_key: SymbolKey<'db>,
     span: DynLazySpan<'db>,
 ) -> Option<HoverSemantics<'db>> {
     match symbol_key {
-        crate::SymbolKey::Scope(sc) => {
+        SymbolKey::Scope(sc) => {
             let signature = sc.pretty_path(db);
             let documentation = get_docstring(db, sc);
             let kind = sc.kind_name();
@@ -59,7 +59,7 @@ fn hover_data_from_symbol_key<'db>(
                 kind,
             })
         }
-        crate::SymbolKey::Method(fd) => {
+        SymbolKey::Method(fd) => {
             let meth = fd.name(db).data(db).to_string();
             let signature = Some(format!("method: {}", meth));
             let documentation = get_docstring(db, fd.scope(db));
@@ -70,7 +70,7 @@ fn hover_data_from_symbol_key<'db>(
                 kind: "method",
             })
         }
-        crate::SymbolKey::Local(_func, bkey) => {
+        SymbolKey::Local(_func, bkey) => {
             let signature = Some(format!("local binding: {:?}", bkey));
             Some(HoverSemantics {
                 span,
@@ -79,7 +79,7 @@ fn hover_data_from_symbol_key<'db>(
                 kind: "local",
             })
         }
-        crate::SymbolKey::FuncParam(item, idx) => {
+        SymbolKey::FuncParam(item, idx) => {
             let signature = Some(format!("parameter {} of {:?}", idx, item));
             Some(HoverSemantics {
                 span,
@@ -88,7 +88,7 @@ fn hover_data_from_symbol_key<'db>(
                 kind: "parameter",
             })
         }
-        crate::SymbolKey::EnumVariant(v) => {
+        SymbolKey::EnumVariant(v) => {
             let sc = v.scope();
             let signature = sc.pretty_path(db);
             let documentation = get_docstring(db, sc);

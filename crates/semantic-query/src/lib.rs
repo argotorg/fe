@@ -3,14 +3,14 @@ mod hover;
 mod identity;
 mod refs;
 
-use crate::identity::{occurrence_symbol_target, occurrence_symbol_targets, OccTarget};
+use crate::identity::{occurrence_symbol_target, occurrence_symbol_targets};
 use hir::{
     hir_def::{scope_graph::ScopeId, HirIngot, TopLevelMod},
     source_index::{unified_occurrence_rangemap_for_top_mod, OccurrencePayload},
     span::{DynLazySpan, LazySpan},
 };
 use hir_analysis::diagnostics::SpannedHirAnalysisDb;
-use hir_analysis::ty::func_def::FuncDef;
+use hir_analysis::lookup::SymbolKey;
 use parser::TextSize;
 use rustc_hash::{FxHashMap, FxHashSet};
 
@@ -34,8 +34,7 @@ impl<'db> SemanticQuery<'db> {
         let occurrence = pick_best_occurrence_at_cursor(db, top_mod, cursor);
         let symbol_key = occurrence
             .as_ref()
-            .and_then(|occ| occurrence_symbol_target(db, top_mod, occ))
-            .map(occ_target_to_symbol_key);
+            .and_then(|occ| occurrence_symbol_target(db, top_mod, occ));
 
         Self {
             db,
@@ -53,8 +52,7 @@ impl<'db> SemanticQuery<'db> {
 
             let mut definitions = Vec::new();
             for identity in identities {
-                let key = identity_to_symbol_key(identity);
-                if let Some((top_mod, span)) = def_span_for_symbol(self.db, key) {
+                if let Some((top_mod, span)) = def_span_for_symbol(self.db, identity) {
                     definitions.push(DefinitionLocation { top_mod, span });
                 }
             }
@@ -253,9 +251,8 @@ impl<'db> SemanticQuery<'db> {
                 // Use the canonical occurrence interpreter to get all symbol targets (including ambiguous)
                 let targets = occurrence_symbol_targets(db, m, &occ.payload);
                 for target in targets {
-                    let key = occ_target_to_symbol_key(target);
                     let span = compute_reference_span(db, &occ.payload, target, m);
-                    map.entry(key)
+                    map.entry(target)
                         .or_default()
                         .push(Reference { top_mod: m, span });
                 }
@@ -283,18 +280,6 @@ pub struct HoverData<'db> {
 pub struct Reference<'db> {
     pub top_mod: TopLevelMod<'db>,
     pub span: DynLazySpan<'db>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum SymbolKey<'db> {
-    Scope(ScopeId<'db>),
-    EnumVariant(hir::hir_def::EnumVariant<'db>),
-    FuncParam(hir::hir_def::ItemKind<'db>, u16),
-    Method(FuncDef<'db>),
-    Local(
-        hir::hir_def::item::Func<'db>,
-        hir_analysis::ty::ty_check::BindingKey<'db>,
-    ),
 }
 
 // Simple helper functions
@@ -337,30 +322,6 @@ fn kind_priority(occ: &OccurrencePayload<'_>) -> u8 {
         | OccurrencePayload::UsePathSeg { .. } => 1,
         OccurrencePayload::PathSeg { .. } => 2,
         OccurrencePayload::ItemHeaderName { .. } => 3,
-    }
-}
-
-fn occ_target_to_symbol_key<'db>(t: OccTarget<'db>) -> SymbolKey<'db> {
-    match t {
-        OccTarget::Scope(sc) => SymbolKey::Scope(sc),
-        OccTarget::EnumVariant(v) => SymbolKey::EnumVariant(v),
-        OccTarget::FuncParam(item, idx) => SymbolKey::FuncParam(item, idx),
-        OccTarget::Method(fd) => SymbolKey::Method(fd),
-        OccTarget::Local(func, bkey) => SymbolKey::Local(func, bkey),
-    }
-}
-
-fn identity_to_symbol_key<'db>(
-    identity: hir_analysis::lookup::SymbolIdentity<'db>,
-) -> SymbolKey<'db> {
-    match identity {
-        hir_analysis::lookup::SymbolIdentity::Scope(sc) => SymbolKey::Scope(sc),
-        hir_analysis::lookup::SymbolIdentity::EnumVariant(v) => SymbolKey::EnumVariant(v),
-        hir_analysis::lookup::SymbolIdentity::FuncParam(item, idx) => {
-            SymbolKey::FuncParam(item, idx)
-        }
-        hir_analysis::lookup::SymbolIdentity::Method(fd) => SymbolKey::Method(fd),
-        hir_analysis::lookup::SymbolIdentity::Local(func, bkey) => SymbolKey::Local(func, bkey),
     }
 }
 
@@ -451,14 +412,14 @@ fn find_refs_for_symbol_with_filter<'db>(
             };
             // Custom matcher to allow associated functions (scopes) to match method occurrences
             let matches = match (key, target) {
-                (SymbolKey::Scope(sc), OccTarget::Scope(sc2)) => sc == sc2,
-                (SymbolKey::Scope(sc), OccTarget::Method(fd)) => fd.scope(db) == sc,
-                (SymbolKey::EnumVariant(v), OccTarget::EnumVariant(v2)) => v == v2,
-                (SymbolKey::FuncParam(it, idx), OccTarget::FuncParam(it2, idx2)) => {
+                (SymbolKey::Scope(sc), SymbolKey::Scope(sc2)) => sc == sc2,
+                (SymbolKey::Scope(sc), SymbolKey::Method(fd)) => fd.scope(db) == sc,
+                (SymbolKey::EnumVariant(v), SymbolKey::EnumVariant(v2)) => v == v2,
+                (SymbolKey::FuncParam(it, idx), SymbolKey::FuncParam(it2, idx2)) => {
                     it == it2 && idx == idx2
                 }
-                (SymbolKey::Method(fd), OccTarget::Method(fd2)) => fd == fd2,
-                (SymbolKey::Local(func, bkey), OccTarget::Local(func2, bkey2)) => {
+                (SymbolKey::Method(fd), SymbolKey::Method(fd2)) => fd == fd2,
+                (SymbolKey::Local(func, bkey), SymbolKey::Local(func2, bkey2)) => {
                     func == func2 && bkey == bkey2
                 }
                 _ => false,
@@ -510,7 +471,7 @@ fn find_refs_for_symbol_with_filter<'db>(
 fn compute_reference_span<'db>(
     db: &'db dyn SpannedHirAnalysisDb,
     occ: &OccurrencePayload<'db>,
-    target: OccTarget<'db>,
+    target: SymbolKey<'db>,
     _m: TopLevelMod<'db>,
 ) -> DynLazySpan<'db> {
     match occ {
@@ -523,7 +484,7 @@ fn compute_reference_span<'db>(
         } => {
             let view = hir::path_view::HirPathAdapter::new(db, *path);
             match target {
-                OccTarget::Scope(sc) => crate::anchor::anchor_for_scope_match(
+                SymbolKey::Scope(sc) => crate::anchor::anchor_for_scope_match(
                     db,
                     &view,
                     path_lazy.clone(),
