@@ -3,6 +3,7 @@ use dir_test::{dir_test, Fixture};
 use driver::DriverDataBase;
 use fe_semantic_query::SemanticQuery;
 use hir::{lower::map_file_to_mod, span::LazySpan as _, SpannedHirDb};
+use hir_analysis::lookup::SymbolKey;
 use hir_analysis::HirAnalysisDb;
 use test_utils::snap::{codespan_render_defs_refs, line_col_from_cursor};
 use test_utils::snap_test;
@@ -11,9 +12,8 @@ use url::Url;
 fn symbol_label<'db>(
     db: &'db dyn SpannedHirDb,
     adb: &'db dyn HirAnalysisDb,
-    key: &fe_semantic_query::SymbolKey<'db>,
+    key: &hir_analysis::lookup::SymbolKey<'db>,
 ) -> String {
-    use fe_semantic_query::SymbolKey;
     match key {
         SymbolKey::Scope(sc) => sc.pretty_path(db).unwrap_or("<scope>".into()),
         SymbolKey::EnumVariant(v) => v.scope().pretty_path(db).unwrap_or("<variant>".into()),
@@ -67,9 +67,9 @@ fn symbol_keys_snapshot(fx: Fixture<&str>) {
     let map = SemanticQuery::build_symbol_index_for_modules(&db, &modules);
 
     // Stable ordering of symbol keys via labels
-    let mut entries: Vec<(String, fe_semantic_query::SymbolKey)> = map
+    let mut entries: Vec<(String, hir_analysis::lookup::SymbolKey)> = map
         .keys()
-        .map(|k| (symbol_label(&db, &db, k), k.clone()))
+        .map(|k| (symbol_label(&db, &db, k), *k))
         .collect();
     entries.sort_by(|a, b| a.0.cmp(&b.0));
 
@@ -79,7 +79,7 @@ fn symbol_keys_snapshot(fx: Fixture<&str>) {
         let def_opt = SemanticQuery::definition_for_symbol(&db, key)
             .and_then(|(_tm, span)| span.resolve(&db));
         // Gather refs across modules
-        let refs = SemanticQuery::references_for_symbol(&db, top, key.clone());
+        let refs = SemanticQuery::references_for_symbol(&db, top, key);
         let mut refs_by_file: std::collections::BTreeMap<
             common::file::File,
             Vec<common::diagnostics::Span>,
@@ -118,7 +118,7 @@ fn symbol_keys_snapshot(fx: Fixture<&str>) {
             if let Some(def) = def_opt.as_ref().filter(|d| d.file == f) {
                 let s: usize = Into::<usize>::into(def.range.start());
                 let e: usize = Into::<usize>::into(def.range.end());
-                let (l0, c0) = line_col_from_cursor(def.range.start(), &content);
+                let (l0, c0) = line_col_from_cursor(def.range.start(), content);
                 let (l, c) = (l0 + 1, c0 + 1);
                 // total refs count across all files
                 let total_refs = refs_by_file.values().map(|v| v.len()).sum::<usize>();
@@ -134,14 +134,14 @@ fn symbol_keys_snapshot(fx: Fixture<&str>) {
                 for sp in spans {
                     let s: usize = Into::<usize>::into(sp.range.start());
                     let e: usize = Into::<usize>::into(sp.range.end());
-                    let (l0, c0) = line_col_from_cursor(sp.range.start(), &content);
+                    let (l0, c0) = line_col_from_cursor(sp.range.start(), content);
                     let (l, c) = (l0 + 1, c0 + 1);
                     refs_same.push((s..e, format!("{}:{}", l, c)));
                 }
             }
 
             // Render codespan for this file for this symbol
-            let block = codespan_render_defs_refs(&name, &content, &defs_same, &refs_same);
+            let block = codespan_render_defs_refs(&name, content, &defs_same, &refs_same);
             out.push_str(&block);
             out.push('\n');
         }

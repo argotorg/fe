@@ -16,10 +16,7 @@ use crate::{
 };
 use common::indexmap::IndexSet;
 use constraint::collect_constraints;
-use hir::{
-    hir_def::HirIngot,
-    Ingot,
-};
+use hir::{hir_def::HirIngot, Ingot};
 use salsa::Update;
 
 pub(crate) mod constraint;

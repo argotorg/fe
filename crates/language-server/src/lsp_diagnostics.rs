@@ -41,8 +41,8 @@ impl LspDiagnostics for DriverDataBase {
             // (to clear any previous diagnostics)
             result.entry(url.clone()).or_default();
 
-            // Use the stable file-based API to prevent stale TopLevelMod references
-            let diagnostics = pass_manager.run_on_file(self, file);
+            let top_mod = hir::lower::map_file_to_mod(self, file);
+            let diagnostics = pass_manager.run_on_module(self, top_mod);
             let mut finalized_diags: Vec<CompleteDiagnostic> = diagnostics
                 .iter()
                 .map(|d| d.to_complete(self).clone())
@@ -166,7 +166,7 @@ mod tests {
         for (uri, diags) in map.iter() {
             by_uri
                 .entry(uri.to_string())
-                .or_insert_with(Vec::new)
+                .or_default()
                 .extend(diags.iter().cloned());
         }
 
