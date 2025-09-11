@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"enum":["FileKind","Utf8Component"],"fn":["common_prefix"],"struct":["File","SourceFileId","Utf8Path","Utf8PathBuf"]};

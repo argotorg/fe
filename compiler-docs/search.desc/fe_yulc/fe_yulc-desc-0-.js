@@ -1,0 +1,1 @@
+searchState.loadedDescShard("fe_yulc", 0, "Compile a map of Yul contracts to a map of bytecode …\nCompiles a single Yul contract to bytecode.\nReturns the argument unchanged.\nReturns the argument unchanged.\nCalls <code>U::from(self)</code>.\nCalls <code>U::from(self)</code>.")

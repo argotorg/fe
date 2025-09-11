@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"enum":["LabelStyle","Severity"],"fn":["diagnostics_string","print_diagnostics"],"mod":["cs"],"struct":["Diagnostic","Label"]};

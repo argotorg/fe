@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"mod":["contract","event","function","types"]};

@@ -1,0 +1,465 @@
+<!DOCTYPE HTML>
+<html lang="en" class="light" dir="ltr">
+    <head>
+        <!-- Book generated using mdBook -->
+        <meta charset="UTF-8">
+        <title>Precompiles - The Fe Guide</title>
+
+
+        <!-- Custom HTML head -->
+        
+        <meta name="description" content="">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <meta name="theme-color" content="#ffffff">
+
+        <link rel="icon" href="../favicon.svg">
+        <link rel="shortcut icon" href="../favicon.png">
+        <link rel="stylesheet" href="../css/variables.css">
+        <link rel="stylesheet" href="../css/general.css">
+        <link rel="stylesheet" href="../css/chrome.css">
+        <link rel="stylesheet" href="../css/print.css" media="print">
+
+        <!-- Fonts -->
+        <link rel="stylesheet" href="../FontAwesome/css/font-awesome.css">
+        <link rel="stylesheet" href="../fonts/fonts.css">
+
+        <!-- Highlight.js Stylesheets -->
+        <link rel="stylesheet" href="../highlight.css">
+        <link rel="stylesheet" href="../tomorrow-night.css">
+        <link rel="stylesheet" href="../ayu-highlight.css">
+
+        <!-- Custom theme stylesheets -->
+        <link rel="stylesheet" href="../theme/reference.css">
+
+    </head>
+    <body class="sidebar-visible no-js">
+    <div id="body-container">
+        <!-- Provide site root to javascript -->
+        <script>
+            var path_to_root = "../";
+            var default_theme = window.matchMedia("(prefers-color-scheme: dark)").matches ? "navy" : "light";
+        </script>
+
+        <!-- Work around some values being stored in localStorage wrapped in quotes -->
+        <script>
+            try {
+                var theme = localStorage.getItem('mdbook-theme');
+                var sidebar = localStorage.getItem('mdbook-sidebar');
+
+                if (theme.startsWith('"') && theme.endsWith('"')) {
+                    localStorage.setItem('mdbook-theme', theme.slice(1, theme.length - 1));
+                }
+
+                if (sidebar.startsWith('"') && sidebar.endsWith('"')) {
+                    localStorage.setItem('mdbook-sidebar', sidebar.slice(1, sidebar.length - 1));
+                }
+            } catch (e) { }
+        </script>
+
+        <!-- Set the theme before any content is loaded, prevents flash -->
+        <script>
+            var theme;
+            try { theme = localStorage.getItem('mdbook-theme'); } catch(e) { }
+            if (theme === null || theme === undefined) { theme = default_theme; }
+            var html = document.querySelector('html');
+            html.classList.remove('light')
+            html.classList.add(theme);
+            var body = document.querySelector('body');
+            body.classList.remove('no-js')
+            body.classList.add('js');
+        </script>
+
+        <input type="checkbox" id="sidebar-toggle-anchor" class="hidden">
+
+        <!-- Hide / unhide sidebar before it is displayed -->
+        <script>
+            var body = document.querySelector('body');
+            var sidebar = null;
+            var sidebar_toggle = document.getElementById("sidebar-toggle-anchor");
+            if (document.body.clientWidth >= 1080) {
+                try { sidebar = localStorage.getItem('mdbook-sidebar'); } catch(e) { }
+                sidebar = sidebar || 'visible';
+            } else {
+                sidebar = 'hidden';
+            }
+            sidebar_toggle.checked = sidebar === 'visible';
+            body.classList.remove('sidebar-visible');
+            body.classList.add("sidebar-" + sidebar);
+        </script>
+
+        <nav id="sidebar" class="sidebar" aria-label="Table of contents">
+            <div class="sidebar-scrollbox">
+                <ol class="chapter"><li class="chapter-item expanded affix "><a href="../index.html">Introduction</a></li><li class="chapter-item expanded "><a href="../quickstart/index.html"><strong aria-hidden="true">1.</strong> Quickstart</a><a class="toggle"><div>❱</div></a></li><li><ol class="section"><li class="chapter-item "><a href="../quickstart/first_contract.html"><strong aria-hidden="true">1.1.</strong> Write your first contract</a></li><li class="chapter-item "><a href="../quickstart/deploy_contract.html"><strong aria-hidden="true">1.2.</strong> Deploying a contract to a testnet</a></li></ol></li><li class="chapter-item expanded "><a href="../user-guide/index.html"><strong aria-hidden="true">2.</strong> Using Fe</a><a class="toggle"><div>❱</div></a></li><li><ol class="section"><li class="chapter-item "><a href="../user-guide/installation.html"><strong aria-hidden="true">2.1.</strong> Installation</a></li><li class="chapter-item "><a href="../user-guide/projects.html"><strong aria-hidden="true">2.2.</strong> Using projects</a></li><li class="chapter-item "><a href="../user-guide/tutorials/index.html"><strong aria-hidden="true">2.3.</strong> Tutorials</a><a class="toggle"><div>❱</div></a></li><li><ol class="section"><li class="chapter-item "><a href="../user-guide/tutorials/auction.html"><strong aria-hidden="true">2.3.1.</strong> Open auction</a></li></ol></li><li class="chapter-item "><a href="../user-guide/example_contracts/index.html"><strong aria-hidden="true">2.4.</strong> Example Contracts</a><a class="toggle"><div>❱</div></a></li><li><ol class="section"><li class="chapter-item "><a href="../user-guide/example_contracts/auction_contract.html"><strong aria-hidden="true">2.4.1.</strong> Open auction</a></li></ol></li><li class="chapter-item "><a href="../user-guide/external_links.html"><strong aria-hidden="true">2.5.</strong> Useful external links</a></li></ol></li><li class="chapter-item expanded "><a href="../development/index.html"><strong aria-hidden="true">3.</strong> Development</a><a class="toggle"><div>❱</div></a></li><li><ol class="section"><li class="chapter-item "><a href="../development/build.html"><strong aria-hidden="true">3.1.</strong> Build & Test</a></li><li class="chapter-item "><a href="../development/release.html"><strong aria-hidden="true">3.2.</strong> Release</a></li></ol></li><li class="chapter-item expanded "><a href="../std/index.html"><strong aria-hidden="true">4.</strong> Standard Library</a><a class="toggle"><div>❱</div></a></li><li><ol class="section"><li class="chapter-item expanded "><a href="../std/precompiles.html" class="active"><strong aria-hidden="true">4.1.</strong> Precompiles</a></li></ol></li><li class="chapter-item expanded "><a href="../spec/index.html"><strong aria-hidden="true">5.</strong> Specification (WIP)</a><a class="toggle"><div>❱</div></a></li><li><ol class="section"><li class="chapter-item "><a href="../spec/notation.html"><strong aria-hidden="true">5.1.</strong> Notation</a></li><li class="chapter-item "><a href="../spec/lexical_structure/index.html"><strong aria-hidden="true">5.2.</strong> Lexical Structure</a><a class="toggle"><div>❱</div></a></li><li><ol class="section"><li class="chapter-item "><a href="../spec/lexical_structure/keywords.html"><strong aria-hidden="true">5.2.1.</strong> Keywords</a></li><li class="chapter-item "><a href="../spec/lexical_structure/identifiers.html"><strong aria-hidden="true">5.2.2.</strong> Identifiers</a></li><li class="chapter-item "><a href="../spec/lexical_structure/tokens.html"><strong aria-hidden="true">5.2.3.</strong> Tokens</a></li></ol></li><li class="chapter-item "><a href="../spec/comments.html"><strong aria-hidden="true">5.3.</strong> Comments</a></li><li class="chapter-item "><a href="../spec/items/index.html"><strong aria-hidden="true">5.4.</strong> Items</a><a class="toggle"><div>❱</div></a></li><li><ol class="section"><li class="chapter-item "><a href="../spec/items/visibility_and_privacy.html"><strong aria-hidden="true">5.4.1.</strong> Visibility and Privacy</a></li><li class="chapter-item "><a href="../spec/items/structs.html"><strong aria-hidden="true">5.4.2.</strong> Structs</a></li><li class="chapter-item "><a href="../spec/items/traits.html"><strong aria-hidden="true">5.4.3.</strong> Traits</a></li><li class="chapter-item "><a href="../spec/items/enums.html"><strong aria-hidden="true">5.4.4.</strong> Enums</a></li><li class="chapter-item "><a href="../spec/items/type_aliases.html"><strong aria-hidden="true">5.4.5.</strong> Type Aliases</a></li><li class="chapter-item "><a href="../spec/items/contracts.html"><strong aria-hidden="true">5.4.6.</strong> Contracts</a></li><li class="chapter-item "><a href="../spec/items/functions/index.html"><strong aria-hidden="true">5.4.7.</strong> Functions</a><a class="toggle"><div>❱</div></a></li><li><ol class="section"><li class="chapter-item "><a href="../spec/items/functions/context.html"><strong aria-hidden="true">5.4.7.1.</strong> Context</a></li><li class="chapter-item "><a href="../spec/items/functions/self.html"><strong aria-hidden="true">5.4.7.2.</strong> Self</a></li></ol></li></ol></li><li class="chapter-item "><a href="../spec/statements/index.html"><strong aria-hidden="true">5.5.</strong> Statements</a><a class="toggle"><div>❱</div></a></li><li><ol class="section"><li class="chapter-item "><a href="../spec/statements/pragma.html"><strong aria-hidden="true">5.5.1.</strong> pragma Statement</a></li><li class="chapter-item "><a href="../spec/statements/const.html"><strong aria-hidden="true">5.5.2.</strong> const Statement</a></li><li class="chapter-item "><a href="../spec/statements/let.html"><strong aria-hidden="true">5.5.3.</strong> let Statement</a></li><li class="chapter-item "><a href="../spec/statements/assign.html"><strong aria-hidden="true">5.5.4.</strong> Assignment Statement</a></li><li class="chapter-item "><a href="../spec/statements/augassign.html"><strong aria-hidden="true">5.5.5.</strong> Augmenting Assignment Statement</a></li><li class="chapter-item "><a href="../spec/statements/revert.html"><strong aria-hidden="true">5.5.6.</strong> revert Statement</a></li><li class="chapter-item "><a href="../spec/statements/return.html"><strong aria-hidden="true">5.5.7.</strong> return Statement</a></li><li class="chapter-item "><a href="../spec/statements/if.html"><strong aria-hidden="true">5.5.8.</strong> if Statement</a></li><li class="chapter-item "><a href="../spec/statements/for.html"><strong aria-hidden="true">5.5.9.</strong> for Statement</a></li><li class="chapter-item "><a href="../spec/statements/while.html"><strong aria-hidden="true">5.5.10.</strong> while Statement</a></li><li class="chapter-item "><a href="../spec/statements/break.html"><strong aria-hidden="true">5.5.11.</strong> break Statement</a></li><li class="chapter-item "><a href="../spec/statements/continue.html"><strong aria-hidden="true">5.5.12.</strong> continue Statement</a></li><li class="chapter-item "><a href="../spec/statements/match.html"><strong aria-hidden="true">5.5.13.</strong> match Statement</a></li><li class="chapter-item "><a href="../spec/statements/assert.html"><strong aria-hidden="true">5.5.14.</strong> assert Statement</a></li></ol></li><li class="chapter-item "><a href="../spec/expressions/index.html"><strong aria-hidden="true">5.6.</strong> Expressions</a><a class="toggle"><div>❱</div></a></li><li><ol class="section"><li class="chapter-item "><a href="../spec/expressions/call.html"><strong aria-hidden="true">5.6.1.</strong> Call expressions</a></li><li class="chapter-item "><a href="../spec/expressions/tuple.html"><strong aria-hidden="true">5.6.2.</strong> Tuple expressions</a></li><li class="chapter-item "><a href="../spec/expressions/list.html"><strong aria-hidden="true">5.6.3.</strong> List expressions</a></li><li class="chapter-item "><a href="../spec/expressions/struct.html"><strong aria-hidden="true">5.6.4.</strong> Struct expressions</a></li><li class="chapter-item "><a href="../spec/expressions/indexing.html"><strong aria-hidden="true">5.6.5.</strong> Index expressions</a></li><li class="chapter-item "><a href="../spec/expressions/attribute.html"><strong aria-hidden="true">5.6.6.</strong> Attribute expressions</a></li><li class="chapter-item "><a href="../spec/expressions/name.html"><strong aria-hidden="true">5.6.7.</strong> Name expressions</a></li><li class="chapter-item "><a href="../spec/expressions/path.html"><strong aria-hidden="true">5.6.8.</strong> Path expressions</a></li><li class="chapter-item "><a href="../spec/expressions/literal.html"><strong aria-hidden="true">5.6.9.</strong> Literal expressions</a></li><li class="chapter-item "><a href="../spec/expressions/arithmetic_operators.html"><strong aria-hidden="true">5.6.10.</strong> Arithmetic Operators</a></li><li class="chapter-item "><a href="../spec/expressions/comparison_operators.html"><strong aria-hidden="true">5.6.11.</strong> Comparison Operators</a></li><li class="chapter-item "><a href="../spec/expressions/boolean_operators.html"><strong aria-hidden="true">5.6.12.</strong> Boolean Operators</a></li><li class="chapter-item "><a href="../spec/expressions/unary_operators.html"><strong aria-hidden="true">5.6.13.</strong> Unary Operators</a></li></ol></li><li class="chapter-item "><a href="../spec/type_system/index.html"><strong aria-hidden="true">5.7.</strong> Type System</a><a class="toggle"><div>❱</div></a></li><li><ol class="section"><li class="chapter-item "><a href="../spec/type_system/types/index.html"><strong aria-hidden="true">5.7.1.</strong> Types</a><a class="toggle"><div>❱</div></a></li><li><ol class="section"><li class="chapter-item "><a href="../spec/type_system/types/boolean.html"><strong aria-hidden="true">5.7.1.1.</strong> Boolean Type</a></li><li class="chapter-item "><a href="../spec/type_system/types/contract.html"><strong aria-hidden="true">5.7.1.2.</strong> Contract Type</a></li><li class="chapter-item "><a href="../spec/type_system/types/numeric.html"><strong aria-hidden="true">5.7.1.3.</strong> Numeric Types</a></li><li class="chapter-item "><a href="../spec/type_system/types/tuple.html"><strong aria-hidden="true">5.7.1.4.</strong> Tuple Types</a></li><li class="chapter-item "><a href="../spec/type_system/types/array.html"><strong aria-hidden="true">5.7.1.5.</strong> Array Types</a></li><li class="chapter-item "><a href="../spec/type_system/types/struct.html"><strong aria-hidden="true">5.7.1.6.</strong> Struct Types</a></li><li class="chapter-item "><a href="../spec/type_system/types/enum.html"><strong aria-hidden="true">5.7.1.7.</strong> Enum Types</a></li><li class="chapter-item "><a href="../spec/type_system/types/address.html"><strong aria-hidden="true">5.7.1.8.</strong> Address Type</a></li><li class="chapter-item "><a href="../spec/type_system/types/map.html"><strong aria-hidden="true">5.7.1.9.</strong> Map Type</a></li><li class="chapter-item "><a href="../spec/type_system/types/string.html"><strong aria-hidden="true">5.7.1.10.</strong> String Type</a></li><li class="chapter-item "><a href="../spec/type_system/types/unit.html"><strong aria-hidden="true">5.7.1.11.</strong> Unit Type</a></li><li class="chapter-item "><a href="../spec/type_system/types/function.html"><strong aria-hidden="true">5.7.1.12.</strong> Function Type</a></li></ol></li></ol></li><li class="chapter-item "><a href="../spec/data_layout/index.html"><strong aria-hidden="true">5.8.</strong> Data Layout</a><a class="toggle"><div>❱</div></a></li><li><ol class="section"><li class="chapter-item "><a href="../spec/data_layout/stack.html"><strong aria-hidden="true">5.8.1.</strong> Stack</a></li><li class="chapter-item "><a href="../spec/data_layout/storage/index.html"><strong aria-hidden="true">5.8.2.</strong> Storage</a><a class="toggle"><div>❱</div></a></li><li><ol class="section"><li class="chapter-item "><a href="../spec/data_layout/storage/constant_size_values_in_storage.html"><strong aria-hidden="true">5.8.2.1.</strong> Constant size values in storage</a></li><li class="chapter-item "><a href="../spec/data_layout/storage/maps_in_storage.html"><strong aria-hidden="true">5.8.2.2.</strong> Maps in storage</a></li><li class="chapter-item "><a href="../spec/data_layout/storage/to_mem_function.html"><strong aria-hidden="true">5.8.2.3.</strong> to_mem() function</a></li></ol></li><li class="chapter-item "><a href="../spec/data_layout/memory/index.html"><strong aria-hidden="true">5.8.3.</strong> Memory</a><a class="toggle"><div>❱</div></a></li><li><ol class="section"><li class="chapter-item "><a href="../spec/data_layout/memory/sequence_types_in_memory.html"><strong aria-hidden="true">5.8.3.1.</strong> Sequence types in memory</a></li></ol></li></ol></li></ol></li><li class="chapter-item expanded "><a href="../contributing.html"><strong aria-hidden="true">6.</strong> Contributing</a></li><li class="chapter-item expanded "><a href="../release_notes.html"><strong aria-hidden="true">7.</strong> Release Notes</a></li><li class="chapter-item expanded "><a href="../code_of_conduct.html"><strong aria-hidden="true">8.</strong> Code of Conduct</a></li></ol>
+            </div>
+            <div id="sidebar-resize-handle" class="sidebar-resize-handle"></div>
+        </nav>
+
+        <!-- Track and set sidebar scroll position -->
+        <script>
+            var sidebarScrollbox = document.querySelector('#sidebar .sidebar-scrollbox');
+            sidebarScrollbox.addEventListener('click', function(e) {
+                if (e.target.tagName === 'A') {
+                    sessionStorage.setItem('sidebar-scroll', sidebarScrollbox.scrollTop);
+                }
+            }, { passive: true });
+            var sidebarScrollTop = sessionStorage.getItem('sidebar-scroll');
+            sessionStorage.removeItem('sidebar-scroll');
+            if (sidebarScrollTop) {
+                // preserve sidebar scroll position when navigating via links within sidebar
+                sidebarScrollbox.scrollTop = sidebarScrollTop;
+            } else {
+                // scroll sidebar to current active section when navigating via "next/previous chapter" buttons
+                var activeSection = document.querySelector('#sidebar .active');
+                if (activeSection) {
+                    activeSection.scrollIntoView({ block: 'center' });
+                }
+            }
+        </script>
+
+        <div id="page-wrapper" class="page-wrapper">
+
+            <div class="page">
+                                <div id="menu-bar-hover-placeholder"></div>
+                <div id="menu-bar" class="menu-bar sticky">
+                    <div class="left-buttons">
+                        <label id="sidebar-toggle" class="icon-button" for="sidebar-toggle-anchor" title="Toggle Table of Contents" aria-label="Toggle Table of Contents" aria-controls="sidebar">
+                            <i class="fa fa-bars"></i>
+                        </label>
+                        <button id="theme-toggle" class="icon-button" type="button" title="Change theme" aria-label="Change theme" aria-haspopup="true" aria-expanded="false" aria-controls="theme-list">
+                            <i class="fa fa-paint-brush"></i>
+                        </button>
+                        <ul id="theme-list" class="theme-popup" aria-label="Themes" role="menu">
+                            <li role="none"><button role="menuitem" class="theme" id="light">Light</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="rust">Rust</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="coal">Coal</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="navy">Navy</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="ayu">Ayu</button></li>
+                        </ul>
+                        <button id="search-toggle" class="icon-button" type="button" title="Search. (Shortkey: s)" aria-label="Toggle Searchbar" aria-expanded="false" aria-keyshortcuts="S" aria-controls="searchbar">
+                            <i class="fa fa-search"></i>
+                        </button>
+                    </div>
+
+                    <h1 class="menu-title">The Fe Guide</h1>
+
+                    <div class="right-buttons">
+                        <a href="../print.html" title="Print this book" aria-label="Print this book">
+                            <i id="print-button" class="fa fa-print"></i>
+                        </a>
+
+                    </div>
+                </div>
+
+                <div id="search-wrapper" class="hidden">
+                    <form id="searchbar-outer" class="searchbar-outer">
+                        <input type="search" id="searchbar" name="searchbar" placeholder="Search this book ..." aria-controls="searchresults-outer" aria-describedby="searchresults-header">
+                    </form>
+                    <div id="searchresults-outer" class="searchresults-outer hidden">
+                        <div id="searchresults-header" class="searchresults-header"></div>
+                        <ul id="searchresults">
+                        </ul>
+                    </div>
+                </div>
+
+                <!-- Apply ARIA attributes after the sidebar and the sidebar toggle button are added to the DOM -->
+                <script>
+                    document.getElementById('sidebar-toggle').setAttribute('aria-expanded', sidebar === 'visible');
+                    document.getElementById('sidebar').setAttribute('aria-hidden', sidebar !== 'visible');
+                    Array.from(document.querySelectorAll('#sidebar a')).forEach(function(link) {
+                        link.setAttribute('tabIndex', sidebar === 'visible' ? 0 : -1);
+                    });
+                </script>
+
+                <div id="content" class="content">
+                    <main>
+                        <h1 id="precompiles"><a class="header" href="#precompiles">Precompiles</a></h1>
+<p>Precompiles are EVM functions that are prebuilt and optimized as part of the Fe standard library. There are currently nine precompiles available in Fe. The first four precompiles were defined in the original <a href="https://ethereum.github.io/yellowpaper/paper.pdf">Ethereum Yellow Paper</a> (<code>ec_recover</code>, <code>SHA2_256</code>, <code>ripemd_160</code>, <code>identity)</code>. Four more were added during the <a href="https://ethereum.org/en/history/#byzantium">Byzantium fork</a> (<code>mod_exp</code>, <code>ec_add</code>, <code>ec_mul</code> and <code>ec_pairing</code>). A final precompile, <code>blake2f</code> was added in <a href="https://github.com/ethereum/EIPs/issues/152">EIP-152</a> during the <a href="https://ethereum.org/en/history/#istanbul">Istanbul fork</a>.</p>
+<p>The nine precompiles available in the Fe standard library are:</p>
+<ul>
+<li><a href="#ecrecover"><code>ec_recover</code></a></li>
+<li><a href="#sha2256"><code>SHA2 256</code></a></li>
+<li><a href="#Ripemd160"><code>ripemd160</code></a></li>
+<li><a href="#identity"><code>identity</code></a></li>
+<li><a href="#modexp"><code>mod_exp</code></a></li>
+<li><a href="#ecadd"><code>ec_add</code></a></li>
+<li><a href="#ecmul"><code>ec_mul</code></a></li>
+<li><a href="#ecpairing"><code>ec_pairing</code></a></li>
+<li><a href="#blake2f"><code>blake2f</code></a></li>
+</ul>
+<p>These precompiles are imported as follows:</p>
+<pre><code class="language-fe ignore ignore">use std::precompiles
+</code></pre>
+<h2 id="ec_recover"><a class="header" href="#ec_recover"><code>ec_recover</code></a></h2>
+<p><code>ec_recover</code> is a cryptographic function that retrieves a signer's address from a signed message. It is the fundamental operation used for verifying signatures in Ethereum. Ethereum uses the  Elliptic Curve Digital Signature Algorithm (ECDSA) for verifying signatures. This algorithm uses two parameters, <code>r</code> and <code>s</code>. Ethereum's implementation also uses an additional 'recovery identifier' parameter, <code>v</code>, which is used to identify the correct elliptic curve point from those that can be calculated from <code>r</code> and <code>s</code> alone.</p>
+<h3 id="parameters"><a class="header" href="#parameters">Parameters</a></h3>
+<ul>
+<li><code>hash</code>: the hash of the signed message, <code>u256</code></li>
+<li><code>v</code>: the recovery identifier, a number in the range 27-30, <code>u256</code></li>
+<li><code>r</code>: elliptic curve parameter, <code>u256</code></li>
+<li><code>s</code>: elliptic curve parameter, <code>u256</code></li>
+</ul>
+<h3 id="returns"><a class="header" href="#returns">Returns</a></h3>
+<p><code>ec_recover</code> returns an address.</p>
+<h3 id="function-signature"><a class="header" href="#function-signature">Function signature</a></h3>
+<pre><code class="language-fe ignore ignore">pub fn ec_recover(hash: u256, v: u256, r: u256, s: u256) -&gt; address
+</code></pre>
+<h3 id="example"><a class="header" href="#example">Example</a></h3>
+<pre><code class="language-fe ignore ignore">let result: address = precompiles::ec_recover(
+    hash: 0x456e9aea5e197a1f1af7a3e85a3212fa4049a3ba34c2289b4c860fc0b0c64ef3,
+    v: 28,
+    r: 0x9242685bf161793cc25603c231bc2f568eb630ea16aa137d2664ac8038825608,
+    s: 0x4f8ae3bd7535248d0bd448298cc2e2071e56992d0774dc340c368ae950852ada
+)
+</code></pre>
+<h2 id="sha2_256"><a class="header" href="#sha2_256"><code>SHA2_256</code></a></h2>
+<p><code>SHA2_256</code> is a hash function. a hash function generates a unique string of characters of fixed length from arbitrary input data.</p>
+<h3 id="parameters-1"><a class="header" href="#parameters-1">Parameters</a></h3>
+<ul>
+<li><code>buf</code>: a sequence of bytes to hash, <code>MemoryBuffer</code></li>
+</ul>
+<h3 id="returns-1"><a class="header" href="#returns-1">Returns</a></h3>
+<p><code>SHA2_256</code> returns a hash as a <code>u256</code></p>
+<h3 id="function-signature-1"><a class="header" href="#function-signature-1">Function signature</a></h3>
+<pre><code class="language-fe ignore ignore">pub fn sha2_256(buf input_buf: MemoryBuffer) -&gt; u256
+</code></pre>
+<h3 id="example-1"><a class="header" href="#example-1">Example</a></h3>
+<pre><code class="language-fe ignore">let buf: MemoryBuffer = MemoryBuffer::from_u8(value: 0xff)
+let result: u256 = precompiles::sha2_256(buf)
+</code></pre>
+<h2 id="ripemd_160"><a class="header" href="#ripemd_160"><code>ripemd_160</code></a></h2>
+<p><code>ripemd_160</code> is a hash function that is rarely used in Ethereum, but is included in many crypto libraries as it is used in Bitcoin core.</p>
+<h3 id="parameters-2"><a class="header" href="#parameters-2">Parameters</a></h3>
+<ul>
+<li><code>input_buf</code>: a sequence of bytes to hash, <code>MemoryBuffer</code></li>
+</ul>
+<h3 id="returns-2"><a class="header" href="#returns-2">Returns</a></h3>
+<p><code>ripemd_160</code> returns a hash as a <code>u256</code></p>
+<h3 id="function-signature-2"><a class="header" href="#function-signature-2">Function signature</a></h3>
+<pre><code class="language-fe ignore">pub fn ripemd_160(buf input_buf: MemoryBuffer) -&gt; u256
+
+</code></pre>
+<h3 id="example-2"><a class="header" href="#example-2">Example</a></h3>
+<pre><code class="language-fe ignore">let buf: MemoryBuffer = MemoryBuffer::from_u8(value: 0xff)
+let result: u256 = precompiles::ripemd_160(buf)
+</code></pre>
+<h2 id="identity"><a class="header" href="#identity"><code>identity</code></a></h2>
+<p><code>identity</code> is a function that simply echoes the input of the function as its output. This can be used for efficient data copying.</p>
+<h3 id="parameters-3"><a class="header" href="#parameters-3">Parameters</a></h3>
+<ul>
+<li><code>input_buf</code>: a sequence of bytes to hash, <code>MemoryBuffer</code></li>
+</ul>
+<h3 id="returns-3"><a class="header" href="#returns-3">Returns</a></h3>
+<p><code>identity</code> returns a sequence of bytes, <code>MemoryBuffer</code></p>
+<h3 id="function-signature-3"><a class="header" href="#function-signature-3">Function signature</a></h3>
+<pre><code class="language-fe ignore">pub fn identity(buf input_buf: MemoryBuffer) -&gt; MemoryBuffer
+
+</code></pre>
+<h3 id="example-3"><a class="header" href="#example-3">Example</a></h3>
+<pre><code class="language-fe ignore">let buf: MemoryBuffer = MemoryBuffer::from_u8(value: 0x42)
+let mut result: MemoryBufferReader = precompiles::identity(buf).reader()
+</code></pre>
+<h2 id="mod_exp"><a class="header" href="#mod_exp"><code>mod_exp</code></a></h2>
+<p><code>mod_exp</code> is a modular exponentiation function required for elliptic curve operations.</p>
+<h3 id="parameters-4"><a class="header" href="#parameters-4">Parameters</a></h3>
+<ul>
+<li>b: <code>MemoryBuffer</code>: the base (i.e. the number being raised to a power), <code>MemoryBuffer</code></li>
+<li>e: <code>MemoryBuffer</code>: the exponent (i.e. the power <code>b</code> is raised to), <code>MemoryBuffer</code></li>
+<li>m: <code>MemoryBuffer</code>: the modulus, <code>MemoryBuffer</code></li>
+<li>b_size: <code>u256</code>: the length of <code>b</code> in bytes, <code>u256</code></li>
+<li>e_size: <code>u256</code>: the length of <code>e</code> in bytes, <code>u256</code></li>
+<li>m_size: <code>u256</code>: then length of <code>m</code> in bytes, <code>u256</code></li>
+</ul>
+<h3 id="returns-4"><a class="header" href="#returns-4">Returns</a></h3>
+<p><code>mod_exp</code> returns a sequence of bytes, <code>MemoryBuffer</code></p>
+<h3 id="function-signature-4"><a class="header" href="#function-signature-4">Function signature</a></h3>
+<pre><code class="language-fe ignore">pub fn mod_exp(
+    b_size: u256,
+    e_size: u256,
+    m_size: u256,
+    b: MemoryBuffer,
+    e: MemoryBuffer,
+    m: MemoryBuffer,
+) -&gt; MemoryBuffer
+
+</code></pre>
+<h3 id="example-4"><a class="header" href="#example-4">Example</a></h3>
+<pre><code class="language-fe ignore">let mut result: MemoryBufferReader = precompiles::mod_exp(
+    b_size: 1,
+    e_size: 1,
+    m_size: 1,
+    b: MemoryBuffer::from_u8(value: 8),
+    e: MemoryBuffer::from_u8(value: 9),
+    m: MemoryBuffer::from_u8(value: 10),
+).reader()
+</code></pre>
+<h2 id="ec_add"><a class="header" href="#ec_add"><code>ec_add</code></a></h2>
+<p><code>ec_add</code> does point addition on elliptic curves.</p>
+<h3 id="parameters-5"><a class="header" href="#parameters-5">Parameters</a></h3>
+<ul>
+<li><code>x1</code>: x-coordinate 1, <code>u256</code></li>
+<li><code>y1</code>: y coordinate 1, <code>u256</code></li>
+<li><code>x2</code>: x coordinate 2, <code>u256</code></li>
+<li><code>y2</code>: y coordinate 2, <code>u256</code></li>
+</ul>
+<h3 id="function-signature-5"><a class="header" href="#function-signature-5">Function signature</a></h3>
+<pre><code class="language-fe ignore">pub fn ec_add(x1: u256, y1: u256, x2: u256, y2: u256)-&gt; (u256,u256)
+</code></pre>
+<h3 id="returns-5"><a class="header" href="#returns-5">Returns</a></h3>
+<p><code>ec_add</code> returns a tuple of <code>u256</code>, <code>(u256, u256)</code>.</p>
+<h3 id="example-5"><a class="header" href="#example-5">Example</a></h3>
+<pre><code class="language-fe ignore">let (x, y): (u256, u256) = precompiles::ec_add(x1: 1, y1: 2, x2: 1, y2: 2)
+</code></pre>
+<h2 id="ec_mul"><a class="header" href="#ec_mul"><code>ec_mul</code></a></h2>
+<p><code>ec_mul</code> is for multiplying elliptic curve points.</p>
+<h3 id="parameters-6"><a class="header" href="#parameters-6">Parameters</a></h3>
+<ul>
+<li><code>x</code>: x-coordinate, <code>u256</code></li>
+<li><code>y</code>: y coordinate, <code>u256</code></li>
+<li><code>s</code>: multiplier, <code>u256</code></li>
+</ul>
+<h3 id="function-signature-6"><a class="header" href="#function-signature-6">Function signature</a></h3>
+<pre><code class="language-fe ignore">pub fn ec_mul(x: u256, y: u256, s: u256)-&gt; (u256,u256)
+</code></pre>
+<h3 id="returns-6"><a class="header" href="#returns-6">Returns</a></h3>
+<p><code>ec_mul</code> returns a tuple of <code>u256</code>, <code>(u256, u256)</code>.</p>
+<h3 id="example-6"><a class="header" href="#example-6">Example</a></h3>
+<pre><code class="language-fe ignore">let (x, y): (u256, u256) = precompiles::ec_mul(
+    x: 1,
+    y: 2,
+    s: 2
+)
+</code></pre>
+<h2 id="ec_pairing"><a class="header" href="#ec_pairing"><code>ec_pairing</code></a></h2>
+<p><code>ec_pairing</code> does elliptic curve pairing - a form of encrypted multiplication.</p>
+<h3 id="parameters-7"><a class="header" href="#parameters-7">Parameters</a></h3>
+<ul>
+<li><code>input_buf</code>: sequence of bytes representing the result of the elliptic curve operation <code>(G1 * G2) ^ k</code>, as <code>MemoryBuffer</code></li>
+</ul>
+<h3 id="returns-7"><a class="header" href="#returns-7">Returns</a></h3>
+<p><code>ec_pairing</code> returns a <code>bool</code> indicating whether the pairing is satisfied (<code>true</code>) or not (<code>false</code>).</p>
+<h3 id="example-7"><a class="header" href="#example-7">Example</a></h3>
+<pre><code class="language-fe ignore">    let mut input_buf: MemoryBuffer = MemoryBuffer::new(len: 384)
+    let mut writer: MemoryBufferWriter = buf.writer()
+
+    writer.write(value: 0x2cf44499d5d27bb186308b7af7af02ac5bc9eeb6a3d147c186b21fb1b76e18da)
+    writer.write(value: 0x2c0f001f52110ccfe69108924926e45f0b0c868df0e7bde1fe16d3242dc715f6)
+    writer.write(value: 0x1fb19bb476f6b9e44e2a32234da8212f61cd63919354bc06aef31e3cfaff3ebc)
+    writer.write(value: 0x22606845ff186793914e03e21df544c34ffe2f2f3504de8a79d9159eca2d98d9)
+    writer.write(value: 0x2bd368e28381e8eccb5fa81fc26cf3f048eea9abfdd85d7ed3ab3698d63e4f90)
+    writer.write(value: 0x2fe02e47887507adf0ff1743cbac6ba291e66f59be6bd763950bb16041a0a85e)
+    writer.write(value: 0x0000000000000000000000000000000000000000000000000000000000000001)
+    writer.write(value: 0x30644e72e131a029b85045b68181585d97816a916871ca8d3c208c16d87cfd45)
+    writer.write(value: 0x1971ff0471b09fa93caaf13cbf443c1aede09cc4328f5a62aad45f40ec133eb4)
+    writer.write(value: 0x091058a3141822985733cbdddfed0fd8d6c104e9e9eff40bf5abfef9ab163bc7)
+    writer.write(value: 0x2a23af9a5ce2ba2796c1f4e453a370eb0af8c212d9dc9acd8fc02c2e907baea2)
+    writer.write(value: 0x23a8eb0b0996252cb548a4487da97b02422ebc0e834613f954de6c7e0afdc1fc)
+
+    assert precompiles::ec_pairing(buf)
+}
+</code></pre>
+<h2 id="blake_2f"><a class="header" href="#blake_2f"><code>blake_2f</code></a></h2>
+<p><code>blake_2f</code> is a compression algorithm for the cryptographic hash function <code>BLAKE2b</code>. It takes as an argument the state vector <code>h</code>, message block vector <code>m</code>, offset counter <code>t</code>, final block indicator flag <code>f</code>, and number of rounds <code>rounds</code>. The state vector provided as the first parameter is modified by the function.</p>
+<h3 id="parameters-8"><a class="header" href="#parameters-8">Parameters</a></h3>
+<ul>
+<li><code>h</code>: the state vector, <code>Array&lt;u64, 8&gt;</code></li>
+<li><code>m</code>: message block vector, <code>Array&lt;u64, 16&gt;</code></li>
+<li><code>t</code>: offset counter, <code>Array&lt;u64, 2&gt;</code></li>
+<li><code>f</code>: bool</li>
+<li><code>rounds</code>: number of rounds of mixing, <code>u32</code></li>
+</ul>
+<h3 id="returns-8"><a class="header" href="#returns-8">Returns</a></h3>
+<p><code>blake_2f</code> returns a modified state vector, <code>Array&lt;u64, 8&gt;</code></p>
+<h3 id="function-signature-7"><a class="header" href="#function-signature-7">Function signature</a></h3>
+<pre><code class="language-fe ignore">pub fn blake_2f(rounds: u32, h: Array&lt;u64, 8&gt;, m: Array&lt;u64, 16&gt;, t: Array&lt;u64, 2&gt;, f: bool) -&gt;  Array&lt;u64, 8&gt;
+</code></pre>
+<h3 id="example-8"><a class="header" href="#example-8">Example</a></h3>
+<pre><code class="language-fe ignore">let result: Array&lt;u64, 8&gt; = precompiles::blake_2f(
+    rounds: 12,
+    h: [
+        0x48c9bdf267e6096a,
+        0x3ba7ca8485ae67bb,
+        0x2bf894fe72f36e3c,
+        0xf1361d5f3af54fa5,
+        0xd182e6ad7f520e51,
+        0x1f6c3e2b8c68059b,
+        0x6bbd41fbabd9831f,
+        0x79217e1319cde05b,
+    ],
+    m: [
+        0x6162630000000000,
+        0x0000000000000000,
+        0x0000000000000000,
+        0x0000000000000000,
+        0x0000000000000000,
+        0x0000000000000000,
+        0x0000000000000000,
+        0x0000000000000000,
+        0x0000000000000000,
+        0x0000000000000000,
+        0x0000000000000000,
+        0x0000000000000000,
+        0x0000000000000000,
+        0x0000000000000000,
+        0x0000000000000000,
+        0x0000000000000000,
+    ],
+    t: [
+        0x0300000000000000,
+        0x0000000000000000,
+    ],
+    f: true
+)
+</code></pre>
+
+                    </main>
+
+                    <nav class="nav-wrapper" aria-label="Page navigation">
+                        <!-- Mobile navigation buttons -->
+                            <a rel="prev" href="../std/index.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                                <i class="fa fa-angle-left"></i>
+                            </a>
+
+                            <a rel="next prefetch" href="../spec/index.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                                <i class="fa fa-angle-right"></i>
+                            </a>
+
+                        <div style="clear: both"></div>
+                    </nav>
+                </div>
+            </div>
+
+            <nav class="nav-wide-wrapper" aria-label="Page navigation">
+                    <a rel="prev" href="../std/index.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                        <i class="fa fa-angle-left"></i>
+                    </a>
+
+                    <a rel="next prefetch" href="../spec/index.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                        <i class="fa fa-angle-right"></i>
+                    </a>
+            </nav>
+
+        </div>
+
+
+
+
+        <script>
+            window.playground_copyable = true;
+        </script>
+
+
+        <script src="../elasticlunr.min.js"></script>
+        <script src="../mark.min.js"></script>
+        <script src="../searcher.js"></script>
+
+        <script src="../clipboard.min.js"></script>
+        <script src="../highlight.js"></script>
+        <script src="../book.js"></script>
+
+        <!-- Custom JS scripts -->
+        <script src="../theme/custom-highlight.js"></script>
+
+
+    </div>
+    </body>
+</html>

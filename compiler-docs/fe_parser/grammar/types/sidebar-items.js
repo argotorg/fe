@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"fn":["parse_enum_def","parse_field","parse_generic_args","parse_impl_def","parse_opt_qualifier","parse_path_tail","parse_struct_def","parse_trait_def","parse_type_alias","parse_type_desc","parse_variant"]};

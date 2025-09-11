@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"enum":["DependencyKind","FileLoader","ProjectMode"],"fn":["get_project_root"],"struct":["BuildFiles","Dependency","GitDependency","LocalDependency","ProjectFiles"],"trait":["DependencyResolver"]};

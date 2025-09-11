@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"enum":["ConstructorKind","LiteralConstructor","SimplifiedPatternKind"],"struct":["PatternMatrix","PatternRowVec","SigmaSet","SimplifiedPattern"]};

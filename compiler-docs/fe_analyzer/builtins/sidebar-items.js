@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"enum":["ContractTypeMethod","GlobalFunction","Intrinsic","ValueMethod"],"struct":["GlobalFunctionIter","IntrinsicIter"]};

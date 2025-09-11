@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"fn":["fetch_and_checkout"]};

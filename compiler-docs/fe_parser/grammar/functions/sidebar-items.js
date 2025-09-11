@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"fn":["parse_assert_stmt","parse_fn_def","parse_fn_sig","parse_for_stmt","parse_generic_param","parse_generic_params","parse_if_stmt","parse_match_arms","parse_match_stmt","parse_pattern","parse_return_stmt","parse_revert_stmt","parse_single_word_stmt","parse_stmt","parse_unsafe_block","parse_while_stmt"]};
