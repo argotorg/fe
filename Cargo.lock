@@ -798,6 +798,7 @@ dependencies = [
  "fe-driver",
  "fe-resolver",
  "fe-test-utils",
+ "smol_str",
  "tracing",
  "url",
 ]
@@ -847,6 +848,7 @@ dependencies = [
  "fe-hir-analysis",
  "fe-resolver",
  "salsa",
+ "smol_str",
  "tracing",
  "url",
 ]

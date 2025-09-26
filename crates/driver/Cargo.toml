@@ -15,6 +15,7 @@ doctest = false
 camino.workspace = true
 codespan-reporting.workspace = true
 salsa.workspace = true
+smol_str.workspace = true
 
 common.workspace = true
 hir.workspace = true

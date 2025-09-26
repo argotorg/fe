@@ -4,25 +4,27 @@ pub mod db;
 pub mod diagnostics;
 pub mod files;
 
-use std::{collections::HashMap, mem::take};
+use std::collections::HashMap;
 
 use common::{
     InputDb,
-    graph::{EdgeWeight, JoinEdge},
-    tree::display_dependency_tree,
+    dependencies::{DependencyArguments, display_tree::display_tree},
 };
 pub use db::DriverDataBase;
+use smol_str::SmolStr;
 
-use common::config::Config;
 use hir::hir_def::TopLevelMod;
 use resolver::{
     ResolutionHandler, Resolver,
     files::{FilesResolutionDiagnostic, FilesResolutionError, FilesResolver, FilesResource},
-    graph::{DiGraph, GraphResolutionHandler, GraphResolver, GraphResolverImpl},
+    graph::{
+        DiGraph, GraphResolutionHandler, GraphResolver, GraphResolverImpl, petgraph::visit::EdgeRef,
+    },
 };
 use url::Url;
 
-pub type IngotGraphResolver<'a> = GraphResolverImpl<FilesResolver, InputHandler<'a>, EdgeWeight>;
+pub type IngotGraphResolver<'a> =
+    GraphResolverImpl<FilesResolver, InputHandler<'a>, (SmolStr, DependencyArguments)>;
 
 pub fn ingot_graph_resolver<'a>() -> IngotGraphResolver<'a> {
     let files_resolver = FilesResolver::new()
@@ -101,7 +103,7 @@ pub fn init_ingot(db: &mut DriverDataBase, ingot_url: &Url) -> Vec<IngotInitDiag
         let tree_root = ingot_url.clone();
 
         // Generate the tree display string
-        let tree_display = display_dependency_tree(&cyclic_subgraph, &tree_root, &configs);
+        let tree_display = display_tree(&cyclic_subgraph, &tree_root, &configs);
 
         diagnostics.push(IngotInitDiagnostics::IngotDependencyCycle { tree_display });
     }
@@ -135,20 +137,13 @@ pub enum IngotInitDiagnostics {
     FileError {
         diagnostic: FilesResolutionDiagnostic,
     },
-    MissingFeToml {
-        ingot_url: Url,
-    },
-    InvalidToml {
+    ConfigParseError {
         ingot_url: Url,
         error: String,
     },
-    ConfigValidation {
+    ConfigDiagnostics {
         ingot_url: Url,
-        diagnostic: common::config::ConfigDiagnostic,
-    },
-    MissingRootFile {
-        ingot_url: Url,
-        is_main_ingot: bool,
+        diagnostics: Vec<common::config::ConfigDiagnostic>,
     },
 }
 
@@ -167,32 +162,25 @@ impl std::fmt::Display for IngotInitDiagnostics {
             IngotInitDiagnostics::FileError { diagnostic } => {
                 write!(f, "File resolution error: {diagnostic}")
             }
-            IngotInitDiagnostics::MissingFeToml { ingot_url } => {
-                write!(f, "Missing fe.toml file in ingot: {ingot_url}")
-            }
-            IngotInitDiagnostics::InvalidToml { ingot_url, error } => {
+            IngotInitDiagnostics::ConfigParseError { ingot_url, error } => {
                 write!(f, "Invalid fe.toml file in ingot {ingot_url}: {error}")
             }
-            IngotInitDiagnostics::ConfigValidation {
+            IngotInitDiagnostics::ConfigDiagnostics {
                 ingot_url,
-                diagnostic,
+                diagnostics,
             } => {
-                write!(f, "Config validation error at {ingot_url}: {diagnostic}")
-            }
-            IngotInitDiagnostics::MissingRootFile {
-                ingot_url,
-                is_main_ingot,
-            } => {
-                if *is_main_ingot {
+                if diagnostics.len() == 1 {
                     write!(
                         f,
-                        "Missing root file (src/lib.fe) in current ingot: {ingot_url}"
+                        "Erroneous fe.toml file in {ingot_url}: {}",
+                        diagnostics[0]
                     )
                 } else {
-                    write!(
-                        f,
-                        "Missing root file (src/lib.fe) in dependency: {ingot_url}"
-                    )
+                    writeln!(f, "Erroneous fe.toml file in {ingot_url}:")?;
+                    for diagnostic in diagnostics {
+                        writeln!(f, "  • {diagnostic}")?;
+                    }
+                    Ok(())
                 }
             }
         }
@@ -201,7 +189,6 @@ impl std::fmt::Display for IngotInitDiagnostics {
 
 pub struct InputHandler<'a> {
     pub db: &'a mut dyn InputDb,
-    pub join_edges: Vec<JoinEdge>,
     pub diagnostics: Vec<IngotInitDiagnostics>,
     pub main_ingot_url: Url,
 }
@@ -210,7 +197,6 @@ impl<'a> InputHandler<'a> {
     pub fn from_db(db: &'a mut dyn InputDb, main_ingot_url: Url) -> Self {
         Self {
             db,
-            join_edges: vec![],
             diagnostics: vec![],
             main_ingot_url,
         }
@@ -218,7 +204,7 @@ impl<'a> InputHandler<'a> {
 }
 
 impl<'a> ResolutionHandler<FilesResolver> for InputHandler<'a> {
-    type Item = Vec<(Url, EdgeWeight)>;
+    type Item = Vec<(Url, (SmolStr, DependencyArguments))>;
 
     fn handle_resolution(&mut self, ingot_url: &Url, resource: FilesResource) -> Self::Item {
         let mut config = None;
@@ -230,7 +216,7 @@ impl<'a> ResolutionHandler<FilesResolver> for InputHandler<'a> {
                     Url::from_file_path(file.path).unwrap(),
                     Some(file.content.clone()),
                 );
-                config = Some(file.content);
+                config = Some(file.content.clone());
             } else {
                 self.db.workspace().touch(
                     self.db,
@@ -240,49 +226,59 @@ impl<'a> ResolutionHandler<FilesResolver> for InputHandler<'a> {
             }
         }
 
-        if let Some(content) = config {
-            let config = match Config::parse(&content) {
-                Ok(config) => config,
-                Err(err) => {
-                    // Add invalid config as a diagnostic
-                    tracing::error!(target: "resolver", "Failed to parse fe.toml: {:?}", err);
-                    self.diagnostics.push(IngotInitDiagnostics::InvalidToml {
-                        ingot_url: ingot_url.clone(),
-                        error: err.to_string(),
-                    });
-                    return vec![];
-                }
-            };
-
-            // Check for config validation diagnostics (invalid names, versions, etc.)
-            for diagnostic in &config.diagnostics {
-                self.diagnostics
-                    .push(IngotInitDiagnostics::ConfigValidation {
-                        ingot_url: ingot_url.clone(),
-                        diagnostic: diagnostic.clone(),
-                    });
-            }
-
-            // Missing src/lib.fe file is now handled by the FilesResolver diagnostics
-
-            // let weights: HashSet<Url> = self.db.graph().node_weights().cloned().collect();
-
-            config
-                .forward_edges(ingot_url)
-                .into_iter()
-                .filter_map(|(url, weight)| {
-                    if self.db.graph().contains_url(self.db, &url) {
-                        self.join_edges.push(JoinEdge {
-                            origin: ingot_url.clone(),
-                            destination: url,
-                            weight,
+        if config.is_some() {
+            if let Some(ingot) = self
+                .db
+                .workspace()
+                .containing_ingot(self.db, ingot_url.clone())
+            {
+                // Check for config parse errors first
+                if let Some(parse_error) = ingot.config_parse_error(self.db) {
+                    self.diagnostics
+                        .push(IngotInitDiagnostics::ConfigParseError {
+                            ingot_url: ingot_url.clone(),
+                            error: parse_error,
                         });
-                        None
-                    } else {
-                        Some((url, weight))
+                    vec![]
+                } else if let Some(parsed_config) = ingot.config(self.db) {
+                    // Check for config validation diagnostics (invalid names, versions, etc.)
+                    if !parsed_config.diagnostics.is_empty() {
+                        self.diagnostics
+                            .push(IngotInitDiagnostics::ConfigDiagnostics {
+                                ingot_url: ingot_url.clone(),
+                                diagnostics: parsed_config.diagnostics.clone(),
+                            });
                     }
-                })
-                .collect()
+
+                    parsed_config
+                        .dependencies(ingot_url)
+                        .into_iter()
+                        .filter_map(|dependency| {
+                            if self.db.graph().contains_url(self.db, &dependency.url) {
+                                // URL already exists in graph - add edge immediately
+                                self.db.graph().add_dependency(
+                                    self.db,
+                                    ingot_url,
+                                    &dependency.url,
+                                    dependency.alias,
+                                    dependency.arguments,
+                                );
+                                None
+                            } else {
+                                // URL doesn't exist - needs to be resolved
+                                Some((dependency.url, (dependency.alias, dependency.arguments)))
+                            }
+                        })
+                        .collect()
+                } else {
+                    // No config file found at this ingot
+                    vec![]
+                }
+            } else {
+                // This shouldn't happen since we found a config file
+                tracing::error!("Unable to locate ingot for config: {}", ingot_url);
+                vec![]
+            }
         } else {
             // No fe.toml file found - this will be reported by the FilesResolver as a diagnostic
             vec![]
@@ -290,17 +286,31 @@ impl<'a> ResolutionHandler<FilesResolver> for InputHandler<'a> {
     }
 }
 
-impl<'a> GraphResolutionHandler<Url, DiGraph<Url, EdgeWeight>> for InputHandler<'a> {
+impl<'a> GraphResolutionHandler<Url, DiGraph<Url, (SmolStr, DependencyArguments)>>
+    for InputHandler<'a>
+{
     type Item = ();
 
     fn handle_graph_resolution(
         &mut self,
         _ingot_url: &Url,
-        graph: DiGraph<Url, EdgeWeight>,
+        graph: DiGraph<Url, (SmolStr, DependencyArguments)>,
     ) -> Self::Item {
-        // Update the graph singleton in the database with the resolved graph
-        self.db
-            .graph()
-            .join_graph(self.db, graph, take(&mut self.join_edges));
+        let dependency_graph = self.db.graph();
+
+        // Add edges from the resolved graph to the database dependency graph
+        // Note: edges to existing URLs are already added in handle_resolution
+        for edge in graph.edge_references() {
+            let from_url = &graph[edge.source()];
+            let to_url = &graph[edge.target()];
+            let (alias, arguments) = edge.weight();
+            dependency_graph.add_dependency(
+                self.db,
+                from_url,
+                to_url,
+                alias.clone(),
+                arguments.clone(),
+            );
+        }
     }
 }

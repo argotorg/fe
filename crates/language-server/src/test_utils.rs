@@ -16,8 +16,8 @@ pub fn load_ingot_from_directory(db: &mut DriverDataBase, ingot_dir: &Path) {
     // In tests, we might want to panic on serious errors
     for diagnostic in &diagnostics {
         match diagnostic {
-            driver::IngotInitDiagnostics::MissingFeToml { .. }
-            | driver::IngotInitDiagnostics::InvalidToml { .. } => {
+            driver::IngotInitDiagnostics::ConfigParseError { .. }
+            | driver::IngotInitDiagnostics::ConfigDiagnostics { .. } => {
                 panic!("Failed to resolve test ingot at {ingot_dir:?}: {diagnostic}");
             }
             _ => {

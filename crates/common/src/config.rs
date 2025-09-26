@@ -1,26 +1,32 @@
-use std::{fmt::Display, str::FromStr};
+use std::fmt::Display;
 
 use camino::Utf8PathBuf;
 use smol_str::SmolStr;
 use toml::Value;
 use url::Url;
 
-use crate::{graph::EdgeWeight, ingot::Version, urlext::UrlExt};
+use crate::{
+    dependencies::{Dependency, DependencyArguments},
+    ingot::Version,
+    urlext::UrlExt,
+};
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Config {
     pub metadata: IngotMetadata,
-    pub dependencies: Vec<Dependency>,
+    pub dependency_entries: Vec<DependencyEntry>,
     pub diagnostics: Vec<ConfigDiagnostic>,
 }
 
 impl Config {
-    pub fn parse(content: &str) -> Result<Self, <Value as FromStr>::Err> {
+    pub fn parse(content: &str) -> Result<Self, String> {
         let mut diagnostics = Vec::new();
         let mut metadata = IngotMetadata::default();
         let mut dependencies = Vec::new();
 
-        let parsed: Value = content.parse()?;
+        let parsed: Value = content
+            .parse()
+            .map_err(|e: toml::de::Error| e.to_string())?;
 
         if let Some(table) = parsed.get("ingot").and_then(|value| value.as_table()) {
             if let Some(name) = table.get("name") {
@@ -63,7 +69,11 @@ impl Config {
 
                 match value {
                     Value::String(path) => {
-                        dependencies.push(Dependency::path(alias.into(), Utf8PathBuf::from(path)));
+                        dependencies.push(DependencyEntry::new(
+                            alias.into(),
+                            Utf8PathBuf::from(path),
+                            DependencyArguments::default(),
+                        ));
                     }
                     Value::Table(table) => {
                         let path = table.get("path").and_then(|value| value.as_str());
@@ -87,7 +97,7 @@ impl Config {
                                         .push(ConfigDiagnostic::InvalidVersion(version.into()));
                                 }
                             }
-                            dependencies.push(Dependency::path_with_arguments(
+                            dependencies.push(DependencyEntry::new(
                                 alias.into(),
                                 Utf8PathBuf::from(path),
                                 arguments,
@@ -110,28 +120,21 @@ impl Config {
 
         Ok(Self {
             metadata,
-            dependencies,
+            dependency_entries: dependencies,
             diagnostics,
         })
     }
 
-    pub fn forward_edges(&self, base_url: &Url) -> Vec<(Url, EdgeWeight)> {
-        self.dependencies
+    pub fn dependencies(&self, base_url: &Url) -> Vec<Dependency> {
+        self.dependency_entries
             .iter()
             .map(|dependency| {
-                let (url, alias, arguments) = match &dependency.description {
-                    DependencyDescription::Path(path) => (
-                        base_url.join_directory(path).unwrap(),
-                        dependency.alias.clone(),
-                        DependencyArguments::default(),
-                    ),
-                    DependencyDescription::PathWithParameters { path, parameters } => (
-                        base_url.join_directory(path).unwrap(),
-                        dependency.alias.clone(),
-                        parameters.clone(),
-                    ),
-                };
-                (url, EdgeWeight { alias, arguments })
+                let url = base_url.join_directory(&dependency.path).unwrap();
+                Dependency {
+                    url,
+                    alias: dependency.alias.clone(),
+                    arguments: dependency.arguments.clone(),
+                }
             })
             .collect()
     }
@@ -158,44 +161,20 @@ pub struct IngotMetadata {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum DependencyDescription {
-    Path(Utf8PathBuf),
-    PathWithParameters {
-        path: Utf8PathBuf,
-        parameters: DependencyArguments,
-    },
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct Dependency {
+pub struct DependencyEntry {
     pub alias: SmolStr,
-    pub description: DependencyDescription,
+    pub path: Utf8PathBuf,
+    pub arguments: DependencyArguments,
 }
 
-impl Dependency {
-    pub fn path(alias: SmolStr, path: Utf8PathBuf) -> Self {
+impl DependencyEntry {
+    pub fn new(alias: SmolStr, path: Utf8PathBuf, arguments: DependencyArguments) -> Self {
         Self {
             alias,
-            description: DependencyDescription::Path(path),
+            path,
+            arguments,
         }
     }
-
-    pub fn path_with_arguments(
-        alias: SmolStr,
-        path: Utf8PathBuf,
-        parameters: DependencyArguments,
-    ) -> Self {
-        Self {
-            alias,
-            description: DependencyDescription::PathWithParameters { path, parameters },
-        }
-    }
-}
-
-#[derive(Debug, Default, Clone, PartialEq, Eq, Hash)]
-pub struct DependencyArguments {
-    pub name: Option<SmolStr>,
-    pub version: Option<Version>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -208,7 +187,6 @@ pub enum ConfigDiagnostic {
     InvalidDependencyAlias(SmolStr),
     InvalidDependencyName(SmolStr),
     InvalidDependencyVersion(SmolStr),
-    InvalidTomlSyntax(String),
     MissingDependencyPath {
         alias: SmolStr,
         description: String,
@@ -237,7 +215,6 @@ impl Display for ConfigDiagnostic {
             Self::InvalidDependencyVersion(version) => {
                 write!(f, "Invalid dependency version \"{version}\"")
             }
-            Self::InvalidTomlSyntax(err) => write!(f, "Invalid TOML syntax: {err}"),
             Self::MissingDependencyPath { alias, description } => write!(
                 f,
                 "The dependency \"{alias}\" is missing a path argument \"{description}\""

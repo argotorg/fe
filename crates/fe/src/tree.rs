@@ -1,12 +1,16 @@
 use std::collections::HashMap;
 
 use camino::Utf8PathBuf;
-use common::{config::Config, graph::EdgeWeight, tree::display_dependency_tree};
+use common::{
+    config::Config,
+    dependencies::{DependencyArguments, display_tree::display_tree},
+};
 use resolver::{
     ResolutionHandler, Resolver,
     files::{FilesResolver, FilesResource},
     graph::{DiGraph, GraphResolutionHandler, GraphResolver},
 };
+use smol_str::SmolStr;
 use url::Url;
 
 pub fn print_tree(path: &Utf8PathBuf) {
@@ -66,7 +70,7 @@ pub fn print_tree(path: &Utf8PathBuf) {
 }
 
 pub type IngotGraphResolver =
-    resolver::graph::GraphResolverImpl<FilesResolver, TreeHandler, EdgeWeight>;
+    resolver::graph::GraphResolverImpl<FilesResolver, TreeHandler, (SmolStr, DependencyArguments)>;
 
 pub fn tree_resolver() -> IngotGraphResolver {
     let files_resolver = FilesResolver::new().with_required_file("fe.toml");
@@ -79,7 +83,7 @@ pub struct TreeHandler {
 }
 
 impl ResolutionHandler<FilesResolver> for TreeHandler {
-    type Item = Vec<(Url, EdgeWeight)>;
+    type Item = Vec<(Url, (SmolStr, DependencyArguments))>;
 
     fn handle_resolution(&mut self, ingot_url: &Url, resource: FilesResource) -> Self::Item {
         tracing::trace!(target: "resolver", "Handling ingot resolution for: {}", ingot_url);
@@ -100,11 +104,15 @@ impl ResolutionHandler<FilesResolver> for TreeHandler {
                     }
 
                     self.configs.insert(ingot_url.clone(), config.clone());
-                    let dependencies = config.forward_edges(ingot_url);
-                    for (url, _) in &dependencies {
-                        tracing::trace!(target: "resolver", "Found dependency: {} -> {}", ingot_url, url);
-                    }
-                    dependencies
+                    let dependencies = config.dependencies(ingot_url);
+                    let result: Vec<(Url, (SmolStr, DependencyArguments))> = dependencies
+                        .into_iter()
+                        .map(|dep| {
+                            tracing::trace!(target: "resolver", "Found dependency: {} -> {}", ingot_url, dep.url);
+                            (dep.url, (dep.alias, dep.arguments))
+                        })
+                        .collect();
+                    result
                 }
                 Err(err) => {
                     tracing::warn!(target: "resolver", "Failed to parse config for ingot {}: {}", ingot_url, err);
@@ -119,14 +127,14 @@ impl ResolutionHandler<FilesResolver> for TreeHandler {
     }
 }
 
-impl GraphResolutionHandler<Url, DiGraph<Url, EdgeWeight>> for TreeHandler {
+impl GraphResolutionHandler<Url, DiGraph<Url, (SmolStr, DependencyArguments)>> for TreeHandler {
     type Item = String;
 
     fn handle_graph_resolution(
         &mut self,
         ingot_url: &Url,
-        graph: DiGraph<Url, EdgeWeight>,
+        graph: DiGraph<Url, (SmolStr, DependencyArguments)>,
     ) -> Self::Item {
-        display_dependency_tree(&graph, ingot_url, &self.configs)
+        display_tree(&graph, ingot_url, &self.configs)
     }
 }

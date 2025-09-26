@@ -6,7 +6,7 @@ use smol_str::SmolStr;
 use url::Url;
 
 use crate::InputDb;
-use crate::config::{Config, ConfigDiagnostic};
+use crate::config::Config;
 use crate::core::BUILTIN_CORE_BASE_URL;
 use crate::file::{File, Workspace};
 use crate::urlext::UrlExt;
@@ -105,21 +105,24 @@ impl<'db> Ingot<'db> {
     }
 
     #[salsa::tracked]
+    pub fn config_file(self, db: &'db dyn InputDb) -> Option<File> {
+        db.workspace().containing_ingot_config(db, self.base(db))
+    }
+
+    #[salsa::tracked]
+    fn parse_config(self, db: &'db dyn InputDb) -> Option<Result<Config, String>> {
+        self.config_file(db)
+            .map(|config_file| Config::parse(config_file.text(db)))
+    }
+
+    #[salsa::tracked]
     pub fn config(self, db: &'db dyn InputDb) -> Option<Config> {
-        db.workspace()
-            .containing_ingot_config(db, self.base(db))
-            .map(|config_file| match Config::parse(config_file.text(db)) {
-                Ok(config) => config,
-                Err(err) => {
-                    // Create a Config with just the parse error as a diagnostic
-                    let diagnostics = vec![ConfigDiagnostic::InvalidTomlSyntax(err.to_string())];
-                    Config {
-                        metadata: Default::default(),
-                        diagnostics,
-                        dependencies: Vec::new(),
-                    }
-                }
-            })
+        self.parse_config(db).and_then(|result| result.ok())
+    }
+
+    #[salsa::tracked]
+    pub fn config_parse_error(self, db: &'db dyn InputDb) -> Option<String> {
+        self.parse_config(db).and_then(|result| result.err())
     }
 
     #[salsa::tracked]
@@ -132,9 +135,9 @@ impl<'db> Ingot<'db> {
         let base_url = self.base(db);
         let mut deps = match self.config(db) {
             Some(config) => config
-                .forward_edges(&base_url)
+                .dependencies(&base_url)
                 .into_iter()
-                .map(|(url, weight)| (weight.alias, url))
+                .map(|dependency| (dependency.alias, dependency.url))
                 .collect(),
             None => vec![],
         };

@@ -2,7 +2,9 @@ use petgraph::graph::{DiGraph, NodeIndex};
 use std::collections::{HashMap, HashSet};
 use url::Url;
 
-use crate::{config::Config, graph::EdgeWeight};
+use super::DependencyArguments;
+use crate::config::Config;
+use smol_str::SmolStr;
 
 #[derive(Clone)]
 enum TreePrefix {
@@ -29,8 +31,8 @@ impl TreePrefix {
     }
 }
 
-pub fn display_dependency_tree(
-    graph: &DiGraph<Url, EdgeWeight>,
+pub fn display_tree(
+    graph: &DiGraph<Url, (SmolStr, DependencyArguments)>,
     root_url: &Url,
     configs: &HashMap<Url, Config>,
 ) -> String {
@@ -61,7 +63,7 @@ pub fn display_dependency_tree(
 }
 
 struct TreeContext<'a> {
-    graph: &'a DiGraph<Url, EdgeWeight>,
+    graph: &'a DiGraph<Url, (SmolStr, DependencyArguments)>,
     configs: &'a HashMap<Url, Config>,
     cycle_nodes: &'a HashSet<NodeIndex>,
 }
@@ -137,7 +139,7 @@ fn print_node_with_alias(
             child_prefix,
             output,
             seen,
-            Some(&edge.weight().alias),
+            Some(&edge.weight().0),
         );
     }
 
