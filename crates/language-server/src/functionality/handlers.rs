@@ -136,7 +136,7 @@ pub async fn initialized(
     backend: &Backend,
     _message: InitializedParams,
 ) -> Result<(), ResponseError> {
-    info!("language server initialized! recieved notification!");
+    info!("language server initialized! received notification!");
 
     // Get all files from the workspace
     let all_files: Vec<_> = backend

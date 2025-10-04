@@ -136,7 +136,7 @@ where
     /// solution in the context of the original query environment.
     ///
     /// # Parameters
-    /// - `table`: The unification table in the original query environement.
+    /// - `table`: The unification table in the original query environment.
     /// - `solution`: The solution to extract.
     ///
     /// # Returns
