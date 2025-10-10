@@ -12,6 +12,8 @@ impl Backend {
     pub fn new(client: ClientSocket) -> Self {
         let db = DriverDataBase::default();
 
+        tracing::info!("Initializing backend");
+
         let workers = tokio::runtime::Builder::new_multi_thread()
             .worker_threads(1)
             .enable_all()

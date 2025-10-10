@@ -9,6 +9,7 @@ pub mod urlext;
 
 use dependencies::DependencyGraph;
 use file::Workspace;
+pub use tracing;
 
 #[salsa::db]
 // Each database must implement InputDb explicitly with its own storage mechanism
@@ -49,6 +50,7 @@ macro_rules! impl_db_default {
             $db_type: $crate::core::HasBuiltinCore,
         {
             fn default() -> Self {
+                $crate::tracing::info!("Initializing database");
                 let mut db = Self {
                     storage: salsa::Storage::default(),
                     index: None,

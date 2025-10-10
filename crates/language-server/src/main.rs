@@ -33,6 +33,7 @@ use async_lsp::client_monitor::ClientProcessMonitorLayer;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use tower::ServiceBuilder;
+use tracing_subscriber::fmt::time;
 
 #[tokio::main]
 async fn main() {
@@ -59,7 +60,9 @@ async fn main() {
 async fn start_stdio_server() {
     let (server, client) = async_lsp::MainLoop::new_server(|client| {
         let tracing_layer = TracingLayer::default();
-        let lsp_service = setup(client.clone(), "LSP actor".to_string());
+
+        let pid = std::process::id();
+        let lsp_service = setup(client.clone(), format!("LSP actor {}", pid));
         ServiceBuilder::new()
             .layer(LifecycleLayer::default())
             .layer(CatchUnwindLayer::default())
