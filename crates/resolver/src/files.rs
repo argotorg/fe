@@ -166,11 +166,11 @@ impl Resolver for FilesResolver {
     where
         H: crate::ResolutionHandler<Self>,
     {
-        tracing::trace!(target: "resolver", "Starting file resolution for URL: {}", ingot_url);
+        tracing::info!(target: "resolver", "Starting file resolution for URL: {}", ingot_url);
         let mut files = vec![];
 
         let ingot_path = Utf8PathBuf::from(ingot_url.path());
-        tracing::trace!(target: "resolver", "Resolving files in path: {}", ingot_path);
+        tracing::info!(target: "resolver", "Resolving files in path: {}", ingot_path);
 
         // Check if the directory exists
         if !ingot_path.exists() || !ingot_path.is_dir() {
@@ -204,7 +204,7 @@ impl Resolver for FilesResolver {
                 // If required file exists, load it
                 match fs::read_to_string(&required_path) {
                     Ok(content) => {
-                        tracing::trace!(target: "resolver", "Successfully read required file: {}", required_path);
+                        tracing::info!(target: "resolver", "Successfully read required file: {}", required_path);
                         files.push(File {
                             path: required_path,
                             content,
@@ -238,7 +238,7 @@ impl Resolver for FilesResolver {
 
                                     match fs::read_to_string(&path) {
                                         Ok(content) => {
-                                            tracing::trace!(target: "resolver", "Successfully read file: {}", path);
+                                            tracing::info!(target: "resolver", "Successfully read file: {}", path);
                                             files.push(File { path, content });
                                         }
                                         Err(error) => {
@@ -261,7 +261,7 @@ impl Resolver for FilesResolver {
             }
         }
 
-        tracing::trace!(target: "resolver", "File resolution completed successfully, found {} files", files.len());
+        tracing::info!(target: "resolver", "File resolution completed successfully, found {} files", files.len());
         let resource = FilesResource { files };
         Ok(handler.handle_resolution(ingot_url, resource))
     }

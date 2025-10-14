@@ -36,7 +36,13 @@ pub fn ingot_graph_resolver<'a>() -> IngotGraphResolver<'a> {
 }
 
 pub fn init_ingot(db: &mut DriverDataBase, ingot_url: &Url) -> Vec<IngotInitDiagnostics> {
-    tracing::trace!(target: "resolver", "Starting workspace ingot resolution for: {}", ingot_url);
+    tracing::info!(target: "resolver", "Starting workspace ingot resolution for: {}", ingot_url);
+
+    // Log the dependency graph URLs for debugging (before resolution)
+    let urls = db.graph().all_urls(db);
+    let urls_display: Vec<_> = urls.iter().map(|url| url.to_string()).collect();
+    tracing::info!(target: "resolver", "Dependency graph URL set (before resolution): {}", urls_display.join(", "));
+
     let mut diagnostics: Vec<IngotInitDiagnostics> = {
         let mut handler = InputHandler::from_db(db, ingot_url.clone());
         let mut ingot_graph_resolver = ingot_graph_resolver();
@@ -75,6 +81,11 @@ pub fn init_ingot(db: &mut DriverDataBase, ingot_url: &Url) -> Vec<IngotInitDiag
         all_diagnostics
     };
 
+    // Log the dependency graph URLs for debugging (after resolution)
+    let urls = db.graph().all_urls(db);
+    let urls_display: Vec<_> = urls.iter().map(|url| url.to_string()).collect();
+    tracing::info!(target: "resolver", "Dependency graph URL set (after resolution): {}", urls_display.join(", "));
+
     // Check for cycles after graph resolution (now that handler is dropped)
     let cyclic_subgraph = db.graph().cyclic_subgraph(db);
 
@@ -109,7 +120,7 @@ pub fn init_ingot(db: &mut DriverDataBase, ingot_url: &Url) -> Vec<IngotInitDiag
     }
 
     if diagnostics.is_empty() {
-        tracing::trace!(target: "resolver", "Ingot resolution completed successfully for: {}", ingot_url);
+        tracing::info!(target: "resolver", "Ingot resolution completed successfully for: {}", ingot_url);
     } else {
         tracing::warn!(target: "resolver", "Ingot resolution completed with {} diagnostics for: {}", diagnostics.len(), ingot_url);
     }

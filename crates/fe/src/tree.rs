@@ -86,7 +86,7 @@ impl ResolutionHandler<FilesResolver> for TreeHandler {
     type Item = Vec<(Url, (SmolStr, DependencyArguments))>;
 
     fn handle_resolution(&mut self, ingot_url: &Url, resource: FilesResource) -> Self::Item {
-        tracing::trace!(target: "resolver", "Handling ingot resolution for: {}", ingot_url);
+        tracing::info!(target: "resolver", "Handling ingot resolution for: {}", ingot_url);
 
         // Look for fe.toml file
         if let Some(config_file) = resource
@@ -96,7 +96,7 @@ impl ResolutionHandler<FilesResolver> for TreeHandler {
         {
             match Config::parse(&config_file.content) {
                 Ok(config) => {
-                    tracing::trace!(target: "resolver", "Successfully parsed config for ingot: {}", ingot_url);
+                    tracing::info!(target: "resolver", "Successfully parsed config for ingot: {}", ingot_url);
 
                     // Report config validation diagnostics
                     for diagnostic in &config.diagnostics {
@@ -108,7 +108,7 @@ impl ResolutionHandler<FilesResolver> for TreeHandler {
                     let result: Vec<(Url, (SmolStr, DependencyArguments))> = dependencies
                         .into_iter()
                         .map(|dep| {
-                            tracing::trace!(target: "resolver", "Found dependency: {} -> {}", ingot_url, dep.url);
+                            tracing::info!(target: "resolver", "Found dependency: {} -> {}", ingot_url, dep.url);
                             (dep.url, (dep.alias, dep.arguments))
                         })
                         .collect();
