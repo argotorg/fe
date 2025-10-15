@@ -144,6 +144,9 @@ pub enum SyntaxKind {
     /// `break`
     #[token("break")]
     BreakKw,
+    /// `uses`
+    #[token("uses")]
+    UsesKw,
     /// `continue`
     #[token("continue")]
     ContinueKw,
@@ -450,6 +453,13 @@ pub enum SyntaxKind {
     /// `_ x: mut i32`
     FnParam,
 
+    /// `uses` clause attached to a function signature
+    UsesClause,
+    /// `uses` parameter list
+    UsesParamList,
+    /// a single `uses` parameter
+    UsesParam,
+
     /// `foo::Trait1 + Trait2`
     TypeBoundList,
     /// `TraitBound` or `TypeKind`.
@@ -571,6 +581,7 @@ impl SyntaxKind {
             SyntaxKind::TrueKw => "`true`",
             SyntaxKind::FalseKw => "`false`",
             SyntaxKind::BreakKw => "`break`",
+            SyntaxKind::UsesKw => "`uses`",
             SyntaxKind::ContinueKw => "`continue`",
             SyntaxKind::ContractKw => "`contract`",
             SyntaxKind::FnKw => "`fn`",
@@ -715,6 +726,9 @@ impl SyntaxKind {
             SyntaxKind::KindBoundMono => "kind bound",
             SyntaxKind::WhereClause => "`where` clause",
             SyntaxKind::WherePredicate => "`where` predicate",
+            SyntaxKind::UsesClause => "`uses` clause",
+            SyntaxKind::UsesParamList => "`uses` parameter list",
+            SyntaxKind::UsesParam => "`uses` parameter",
             SyntaxKind::Root => "module",
             SyntaxKind::Error => todo!(),
         }
@@ -765,6 +779,7 @@ impl SyntaxKind {
                 | SyntaxKind::TrueKw
                 | SyntaxKind::FalseKw
                 | SyntaxKind::BreakKw
+                | SyntaxKind::UsesKw
                 | SyntaxKind::ContinueKw
                 | SyntaxKind::ContractKw
                 | SyntaxKind::FnKw

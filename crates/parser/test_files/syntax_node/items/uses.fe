@@ -1,0 +1,6 @@
+fn f() uses Ctx {}
+
+fn g() uses mut Ctx {}
+
+fn h() uses (Ctx, mut Storage, c: Ctx, mut f: Foo) {}
+

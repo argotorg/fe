@@ -92,6 +92,11 @@ impl Func {
     pub fn body(&self) -> Option<super::BlockExpr> {
         support::child(self.syntax())
     }
+
+    /// Returns the optional `uses` clause of the function.
+    pub fn uses_clause(&self) -> Option<super::UsesClause> {
+        support::child(self.syntax())
+    }
 }
 
 ast_node! {
