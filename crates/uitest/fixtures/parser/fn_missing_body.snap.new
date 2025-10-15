@@ -1,7 +1,8 @@
 ---
 source: crates/uitest/tests/parser.rs
+assertion_line: 26
 expression: diags
-input_file: crates/uitest/fixtures/parser/fn_missing_body.fe
+input_file: fixtures/parser/fn_missing_body.fe
 ---
 error[1-0001]: expected `{`, `where` or `uses`
   ┌─ fn_missing_body.fe:1:28
@@ -14,4 +15,3 @@ error[1-0001]: unexpected syntax while parsing function definition
   │
 3 │ fn bar<T>() asdf
   │             ^^^^ unexpected
-

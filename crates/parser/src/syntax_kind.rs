@@ -284,12 +284,18 @@ pub enum SyntaxKind {
     ArrayExpr,
     /// `[x; 4]`
     ArrayRepExpr,
+    /// `(Effect = value, ..)` list for `with`
+    WithParamList,
+    /// `Effect = value` entry for `with`
+    WithParam,
     /// `1`
     LitExpr,
     /// `if x { 1 } else { 2 }`
     IfExpr,
     /// `match x { pat => { .. } }`
     MatchExpr,
+    /// `with (Effect = value, ..) { Block }`
+    WithExpr,
     /// `(1 + 2)`
     ParenExpr,
     /// x = 1
@@ -650,9 +656,12 @@ impl SyntaxKind {
             SyntaxKind::FieldExpr => "field",
             SyntaxKind::TupleExpr => "tuple expression",
             SyntaxKind::ArrayRepExpr => "array expression",
+            SyntaxKind::WithParamList => "`with` parameter list",
+            SyntaxKind::WithParam => "`with` parameter",
             SyntaxKind::LitExpr => "literal expression",
             SyntaxKind::IfExpr => "`if` expression",
             SyntaxKind::MatchExpr => "`match` expression",
+            SyntaxKind::WithExpr => "`with` expression",
             SyntaxKind::ParenExpr => "parenthesized expression",
             SyntaxKind::AssignExpr => "assignment expression",
             SyntaxKind::AugAssignExpr => "augmented assignment expression",

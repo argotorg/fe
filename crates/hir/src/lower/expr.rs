@@ -171,6 +171,15 @@ impl<'db> Expr<'db> {
                 Self::Match(scrutinee, arm)
             }
 
+            ast::ExprKind::With(with_) => {
+                // Temporarily lower `with (...) { body }` to just the body expression.
+                // Proper effect handling will be added in later stages.
+                let body_expr = with_
+                    .body()
+                    .and_then(|b| ast::Expr::cast(b.syntax().clone()));
+                return Self::push_to_body_opt(ctxt, body_expr);
+            }
+
             ast::ExprKind::Paren(paren) => {
                 return Self::push_to_body_opt(ctxt, paren.expr());
             }
