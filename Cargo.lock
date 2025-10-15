@@ -845,7 +845,6 @@ dependencies = [
  "codespan-reporting",
  "fe-common",
  "fe-hir",
- "fe-hir-analysis",
  "fe-resolver",
  "salsa",
  "smol_str",
@@ -857,25 +856,6 @@ dependencies = [
 name = "fe-hir"
 version = "0.26.0"
 dependencies = [
- "camino",
- "cranelift-entity",
- "derive_more",
- "dot2",
- "fe-common",
- "fe-parser",
- "num-bigint",
- "num-traits",
- "paste",
- "rustc-hash 2.1.1",
- "salsa",
- "thin-vec",
- "url",
-]
-
-[[package]]
-name = "fe-hir-analysis"
-version = "0.26.0"
-dependencies = [
  "ascii_tree",
  "bitflags 2.9.1",
  "camino",
@@ -883,15 +863,18 @@ dependencies = [
  "cranelift-entity",
  "derive_more",
  "dir-test",
+ "dot2",
  "either",
  "ena",
  "fe-common",
  "fe-driver",
- "fe-hir",
+ "fe-parser",
  "fe-test-utils",
  "indexmap",
  "itertools 0.14.0",
  "num-bigint",
+ "num-traits",
+ "paste",
  "rustc-hash 2.1.1",
  "salsa",
  "smallvec 1.15.1",
@@ -917,7 +900,6 @@ dependencies = [
  "fe-common",
  "fe-driver",
  "fe-hir",
- "fe-hir-analysis",
  "fe-parser",
  "fe-test-utils",
  "futures",
@@ -986,7 +968,7 @@ dependencies = [
  "dir-test",
  "fe-common",
  "fe-driver",
- "fe-hir-analysis",
+ "fe-hir",
  "fe-test-utils",
  "url",
  "wasm-bindgen-test",

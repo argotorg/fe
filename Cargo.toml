@@ -9,7 +9,6 @@ edition = "2024"
 common = { path = "crates/common", package = "fe-common" }
 driver = { path = "crates/driver", package = "fe-driver" }
 hir = { path = "crates/hir", package = "fe-hir" }
-hir-analysis = { path = "crates/hir-analysis", package = "fe-hir-analysis" }
 parser = { path = "crates/parser", package = "fe-parser" }
 test-utils = { path = "crates/test-utils", package = "fe-test-utils" }
 resolver = { path = "crates/resolver", package = "fe-resolver" }
