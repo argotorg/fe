@@ -1,7 +1,7 @@
 use hir::{
     hir_def::{
-        Body, BodyKind, Expr, ExprId, Func, IdentId, IntegerId, Partial, Pat, PatId, Stmt, StmtId,
-        prim_ty::PrimTy, scope_graph::ScopeId,
+        Body, BodyKind, EffectParam, Expr, ExprId, Func, IdentId, IntegerId, Partial, Pat, PatId,
+        PathId, Stmt, StmtId, TraitRefId, prim_ty::PrimTy, scope_graph::ScopeId,
     },
     span::DynLazySpan,
 };
@@ -12,6 +12,7 @@ use salsa::Update;
 use thin_vec::ThinVec;
 
 use super::{Callable, TypedBody};
+use crate::name_resolution::PathRes;
 use crate::{
     HirAnalysisDb,
     ty::{
@@ -22,11 +23,12 @@ use crate::{
         func_def::{FuncDef, lower_func},
         normalize::normalize_ty,
         trait_def::TraitInstId,
+        trait_lower::{TraitRefLowerError, lower_trait_ref},
         trait_resolution::{
             GoalSatisfiability, PredicateListId, constraint::collect_func_def_constraints,
             is_goal_satisfiable,
         },
-        ty_def::{InvalidCause, TyBase, TyData, TyId, TyVarSort},
+        ty_def::{InvalidCause, TyBase, TyData, TyId, TyParam, TyVarSort},
         ty_lower::lower_hir_ty,
         unify::UnificationTable,
     },
@@ -42,6 +44,8 @@ pub(super) struct TyCheckEnv<'db> {
 
     deferred: Vec<DeferredTask<'db>>,
 
+    effect_env: EffectEnv<'db>,
+    effect_bounds: ThinVec<TraitInstId<'db>>,
     var_env: Vec<BlockEnv<'db>>,
     pending_vars: FxHashMap<IdentId<'db>, LocalBinding<'db>>,
     loop_stack: Vec<StmtId>,
@@ -61,6 +65,8 @@ impl<'db> TyCheckEnv<'db> {
             expr_ty: FxHashMap::default(),
             callables: FxHashMap::default(),
             deferred: Vec::new(),
+            effect_env: EffectEnv::new(),
+            effect_bounds: ThinVec::new(),
             var_env: vec![BlockEnv::new(func.scope(), 0)],
             pending_vars: FxHashMap::default(),
             loop_stack: Vec::new(),
@@ -97,7 +103,68 @@ impl<'db> TyCheckEnv<'db> {
             env.var_env.last_mut().unwrap().register_var(name, var);
         }
 
+        env.seed_effects(func);
+
         Ok(env)
+    }
+
+    fn seed_effects(&mut self, func: Func<'db>) {
+        let effect_data: &[EffectParam<'db>] = func.effects(self.db).data(self.db);
+        let assumptions = self.assumptions();
+        for (idx, effect) in effect_data.iter().enumerate() {
+            let Some(key_path) = effect.key_path.to_opt() else {
+                continue;
+            };
+
+            // Create an effect type param E and try to interpret key as a trait bound on E
+            let ident = effect.name.to_opt().unwrap_or_else(|| {
+                key_path
+                    .ident(self.db)
+                    .to_opt()
+                    .unwrap_or(IdentId::new(self.db, "_effect".to_string()))
+            });
+            let e_ty = TyId::new(
+                self.db,
+                TyData::TyParam(TyParam::effect_param(ident, idx, func.scope())),
+            );
+
+            let trait_ref = TraitRefId::new(self.db, Partial::Present(key_path));
+            let provided_ty =
+                match lower_trait_ref(self.db, e_ty, trait_ref, func.scope(), assumptions) {
+                    Ok(inst) => {
+                        self.effect_bounds.push(inst);
+                        e_ty
+                    }
+                    Err(TraitRefLowerError::InvalidDomain(
+                        PathRes::Ty(ty) | PathRes::TyAlias(_, ty),
+                    )) if ty.is_star_kind(self.db) => ty,
+                    _ => TyId::invalid(self.db, InvalidCause::Other),
+                };
+
+            let provided = ProvidedEffect {
+                origin: EffectOrigin::Param {
+                    func,
+                    index: idx,
+                    name: effect.name.to_opt(),
+                },
+                ty: provided_ty,
+                is_mut: effect.is_mut,
+            };
+            self.effect_env.insert(key_path, provided);
+
+            if let Some(ident) = effect.name.to_opt() {
+                let binding = LocalBinding::EffectParam {
+                    ident,
+                    key_path,
+                    func,
+                    is_mut: effect.is_mut,
+                };
+                self.var_env
+                    .last_mut()
+                    .expect("function scope exists")
+                    .register_var(ident, binding);
+            }
+        }
     }
 
     pub(super) fn typed_expr(&self, expr: ExprId) -> Option<ExprProp<'db>> {
@@ -135,10 +202,13 @@ impl<'db> TyCheckEnv<'db> {
     pub(super) fn assumptions(&self) -> PredicateListId<'db> {
         match self.hir_func() {
             Some(func) => {
-                // Include all implied bounds (super traits and associated type bounds)
-                collect_func_def_constraints(self.db, func.into(), true)
-                    .instantiate_identity()
-                    .extend_all_bounds(self.db)
+                // Base constraints from function and its context
+                let base =
+                    collect_func_def_constraints(self.db, func.into(), true).instantiate_identity();
+                // Merge in effect-derived bounds, then extend
+                let mut preds = base.list(self.db).to_vec();
+                preds.extend(self.effect_bounds.iter().copied());
+                PredicateListId::new(self.db, preds).extend_all_bounds(self.db)
             }
             None => PredicateListId::empty_list(self.db),
         }
@@ -157,7 +227,33 @@ impl<'db> TyCheckEnv<'db> {
                 .unwrap_or_else(|| TyId::invalid(self.db, InvalidCause::Other)),
 
             LocalBinding::Param { ty, .. } => ty,
+
+            LocalBinding::EffectParam { key_path, .. } => self
+                .effect_env
+                .lookup(key_path)
+                .map(|binding| binding.ty)
+                .unwrap_or_else(|| TyId::invalid(self.db, InvalidCause::Other)),
         }
+    }
+
+    pub(super) fn push_effect_frame(&mut self) {
+        self.effect_env.push_frame();
+    }
+
+    pub(super) fn pop_effect_frame(&mut self) {
+        self.effect_env.pop_frame();
+    }
+
+    pub(super) fn insert_effect_binding(
+        &mut self,
+        key_path: PathId<'db>,
+        binding: ProvidedEffect<'db>,
+    ) {
+        self.effect_env.insert(key_path, binding);
+    }
+
+    pub(super) fn effect_binding(&self, key_path: PathId<'db>) -> Option<ProvidedEffect<'db>> {
+        self.effect_env.lookup(key_path)
     }
 
     pub(super) fn enter_scope(&mut self, block: ExprId) {
@@ -512,6 +608,68 @@ impl<'db> BlockEnv<'db> {
     }
 }
 
+#[derive(Default)]
+struct EffectFrame<'db> {
+    bindings: FxHashMap<PathId<'db>, ProvidedEffect<'db>>,
+}
+
+pub(super) struct EffectEnv<'db> {
+    frames: Vec<EffectFrame<'db>>,
+}
+
+impl<'db> EffectEnv<'db> {
+    pub fn new() -> Self {
+        Self {
+            frames: vec![EffectFrame::default()],
+        }
+    }
+
+    pub fn push_frame(&mut self) {
+        self.frames.push(EffectFrame::default());
+    }
+
+    pub fn pop_frame(&mut self) {
+        if self.frames.len() == 1 {
+            return;
+        }
+        self.frames.pop();
+    }
+
+    pub fn insert(&mut self, key: PathId<'db>, binding: ProvidedEffect<'db>) {
+        self.frames
+            .last_mut()
+            .expect("EffectEnv must always have at least one frame")
+            .bindings
+            .insert(key, binding);
+    }
+
+    pub fn lookup(&self, key: PathId<'db>) -> Option<ProvidedEffect<'db>> {
+        self.frames
+            .iter()
+            .rev()
+            .find_map(|frame| frame.bindings.get(&key).copied())
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub(super) struct ProvidedEffect<'db> {
+    pub origin: EffectOrigin<'db>,
+    pub ty: TyId<'db>,
+    pub is_mut: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub(super) enum EffectOrigin<'db> {
+    Param {
+        func: Func<'db>,
+        index: usize,
+        name: Option<IdentId<'db>>,
+    },
+    With {
+        value_expr: ExprId,
+    },
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Update)]
 pub struct ExprProp<'db> {
     pub ty: TyId<'db>,
@@ -560,6 +718,12 @@ pub(crate) enum LocalBinding<'db> {
         ty: TyId<'db>,
         is_mut: bool,
     },
+    EffectParam {
+        ident: IdentId<'db>,
+        key_path: PathId<'db>,
+        func: Func<'db>,
+        is_mut: bool,
+    },
 }
 
 impl<'db> LocalBinding<'db> {
@@ -569,7 +733,9 @@ impl<'db> LocalBinding<'db> {
 
     pub(super) fn is_mut(&self) -> bool {
         match self {
-            LocalBinding::Local { is_mut, .. } | LocalBinding::Param { is_mut, .. } => *is_mut,
+            LocalBinding::Local { is_mut, .. }
+            | LocalBinding::Param { is_mut, .. }
+            | LocalBinding::EffectParam { is_mut, .. } => *is_mut,
         }
     }
 
@@ -595,6 +761,8 @@ impl<'db> LocalBinding<'db> {
 
                 func_params.data(hir_db)[*idx].name().unwrap()
             }
+
+            Self::EffectParam { ident, .. } => *ident,
         }
     }
 
@@ -605,6 +773,7 @@ impl<'db> LocalBinding<'db> {
                 let hir_func = env.func().unwrap().hir_func_def(env.db).unwrap();
                 hir_func.span().params().param(*idx).name().into()
             }
+            LocalBinding::EffectParam { func, .. } => func.span().name().into(),
         }
     }
 }

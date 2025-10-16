@@ -4,22 +4,28 @@ use common::ingot::IngotKind;
 use either::Either;
 use hir::hir_def::{
     ArithBinOp, BinOp, Expr, ExprId, FieldIndex, IdentId, Partial, Pat, PatId, PathId, UnOp,
-    VariantKind,
+    VariantKind, WithBinding, scope_graph::ScopeId,
 };
 
 use super::{
     RecordLike, Typeable,
-    env::{ExprProp, LocalBinding, TyCheckEnv},
+    env::{EffectOrigin, ExprProp, LocalBinding, ProvidedEffect, TyCheckEnv},
     path::ResolvedPathInBody,
 };
 use crate::ty::{
+    binder::Binder,
+    canonical::Canonicalized,
     diagnostics::{BodyDiag, FuncBodyDiag},
     fold::{AssocTySubst, TyFoldable as _},
-    trait_def::TraitInstId,
+    trait_def::{TraitDef, TraitInstId},
+    trait_lower::lower_trait,
+    trait_resolution::{
+        GoalSatisfiability, PredicateListId, constraint::collect_func_def_constraints,
+        is_goal_satisfiable,
+    },
     ty_check::callable::Callable,
     ty_def::{TyBase, TyData},
 };
-use crate::ty::{trait_def::TraitDef, trait_lower::lower_trait};
 use crate::{
     HirAnalysisDb, Spanned,
     name_resolution::{
@@ -30,13 +36,17 @@ use crate::{
         resolve_ident_to_bucket, resolve_name_res, resolve_path, resolve_query,
     },
     ty::{
-        canonical::Canonicalized,
         const_ty::ConstTyId,
         normalize::normalize_ty,
         ty_check::{TyChecker, path::RecordInitChecker},
         ty_def::{InvalidCause, TyId},
     },
 };
+
+enum EffectRequirement<'db> {
+    Type(TyId<'db>),
+    Trait(TraitInstId<'db>),
+}
 
 impl<'db> TyChecker<'db> {
     pub(super) fn check_expr(&mut self, expr: ExprId, expected: TyId<'db>) -> ExprProp<'db> {
@@ -66,7 +76,7 @@ impl<'db> TyChecker<'db> {
             Expr::Match(..) => self.check_match(expr, expr_data),
             Expr::Assign(..) => self.check_assign(expr, expr_data),
             Expr::AugAssign(..) => self.check_aug_assign(expr, expr_data),
-            Expr::With(_, body) => self.check_expr(*body, expected),
+            Expr::With(bindings, body) => self.check_with(bindings, *body, expected),
         };
         self.env.leave_expr();
 
@@ -183,6 +193,38 @@ impl<'db> TyChecker<'db> {
         self.check_ops_trait(expr, lhs.ty, &op, Some(rhs_expr))
     }
 
+    fn check_with(
+        &mut self,
+        bindings: &[WithBinding<'db>],
+        body_expr: ExprId,
+        expected: TyId<'db>,
+    ) -> ExprProp<'db> {
+        self.env.push_effect_frame();
+
+        for binding in bindings {
+            let value_prop = self.check_expr_unknown(binding.value);
+            let Some(key_path) = binding.key_path.to_opt() else {
+                continue;
+            };
+
+            let is_mut = value_prop.binding().map(|b| b.is_mut()).unwrap_or(false);
+
+            let provided = ProvidedEffect {
+                origin: EffectOrigin::With {
+                    value_expr: binding.value,
+                },
+                ty: value_prop.ty,
+                is_mut,
+            };
+
+            self.env.insert_effect_binding(key_path, provided);
+        }
+
+        let result = self.check_expr(body_expr, expected);
+        self.env.pop_effect_frame();
+        result
+    }
+
     fn check_call(&mut self, expr: ExprId, expr_data: &Expr<'db>) -> ExprProp<'db> {
         let Expr::Call(callee, args) = expr_data else {
             unreachable!()
@@ -223,11 +265,161 @@ impl<'db> TyChecker<'db> {
 
         callable.check_args(self, args, call_span.args(), None);
 
+        self.check_callable_effects(expr, &callable);
+
         let ret_ty = callable.ret_ty(self.db);
         // Normalize the return type to resolve any associated types
         let normalized_ret_ty = self.normalize_ty(ret_ty);
         self.env.register_callable(expr, callable);
         ExprProp::new(normalized_ret_ty, true)
+    }
+
+    fn check_callable_effects(&mut self, expr: ExprId, callable: &Callable<'db>) {
+        let Some(func) = callable.func_def.hir_func_def(self.db) else {
+            return;
+        };
+
+        let effect_params = func.effects(self.db).data(self.db);
+        if effect_params.is_empty() {
+            return;
+        }
+
+        let call_span = expr.span(self.body());
+        let callee_assumptions = collect_func_def_constraints(self.db, func.into(), true)
+            .instantiate_identity()
+            .extend_all_bounds(self.db);
+
+        for effect in effect_params {
+            let Some(key_path) = effect.key_path.to_opt() else {
+                continue;
+            };
+
+            let provided = match self.env.effect_binding(key_path) {
+                Some(binding) => binding,
+                None => {
+                    let diag = BodyDiag::MissingEffect {
+                        primary: call_span.clone().into(),
+                        func: callable.func_def,
+                        key: key_path,
+                    };
+                    self.push_diag(diag);
+                    continue;
+                }
+            };
+
+            if effect.is_mut && !provided.is_mut {
+                let provided_span = match provided.origin {
+                    EffectOrigin::With { value_expr } => Some(value_expr.span(self.body()).into()),
+                    EffectOrigin::Param { .. } => None,
+                };
+                let diag = BodyDiag::EffectMutabilityMismatch {
+                    primary: call_span.clone().into(),
+                    func: callable.func_def,
+                    key: key_path,
+                    provided_span,
+                };
+                self.push_diag(diag);
+                continue;
+            }
+
+            let Some(requirement) = self.resolve_effect_requirement(
+                key_path,
+                callable,
+                func.scope(),
+                callee_assumptions,
+                provided.ty,
+            ) else {
+                continue;
+            };
+
+            match requirement {
+                EffectRequirement::Type(expected) => {
+                    if self.table.unify(expected, provided.ty).is_err() {
+                        let provided_span = match provided.origin {
+                            EffectOrigin::With { value_expr } => {
+                                Some(value_expr.span(self.body()).into())
+                            }
+                            EffectOrigin::Param { .. } => None,
+                        };
+                        let diag = BodyDiag::EffectTypeMismatch {
+                            primary: call_span.clone().into(),
+                            func: callable.func_def,
+                            key: key_path,
+                            expected,
+                            given: provided.ty,
+                            provided_span,
+                        };
+                        self.push_diag(diag);
+                    }
+                }
+                EffectRequirement::Trait(trait_req) => {
+                    let canonical = Canonicalized::new(self.db, trait_req);
+                    let ingot = self.env.body().top_mod(self.db).ingot(self.db);
+                    match is_goal_satisfiable(
+                        self.db,
+                        ingot,
+                        canonical.value,
+                        self.env.assumptions(),
+                    ) {
+                        GoalSatisfiability::UnSat(_) => {
+                            let provided_span = match provided.origin {
+                                EffectOrigin::With { value_expr } => {
+                                    Some(value_expr.span(self.body()).into())
+                                }
+                                EffectOrigin::Param { .. } => None,
+                            };
+                            let diag = BodyDiag::EffectTraitUnsatisfied {
+                                primary: call_span.clone().into(),
+                                func: callable.func_def,
+                                key: key_path,
+                                trait_req,
+                                given: provided.ty,
+                                provided_span,
+                            };
+                            self.push_diag(diag);
+                        }
+                        GoalSatisfiability::ContainsInvalid => {}
+                        _ => {}
+                    }
+                }
+            }
+        }
+    }
+
+    fn resolve_effect_requirement(
+        &mut self,
+        key_path: PathId<'db>,
+        callable: &Callable<'db>,
+        scope: ScopeId<'db>,
+        assumptions: PredicateListId<'db>,
+        provided_ty: TyId<'db>,
+    ) -> Option<EffectRequirement<'db>> {
+        let path_res = resolve_path(self.db, key_path, scope, assumptions, false).ok()?;
+
+        match path_res {
+            PathRes::Ty(ty) | PathRes::TyAlias(_, ty) => {
+                let mut expected = Binder::bind(ty).instantiate(self.db, callable.generic_args());
+                if let Some(inst) = callable.trait_inst() {
+                    let mut subst = AssocTySubst::new(inst);
+                    expected = expected.fold_with(self.db, &mut subst);
+                }
+                Some(EffectRequirement::Type(expected))
+            }
+            PathRes::Trait(trait_inst) => {
+                let mut instantiation_args = Vec::with_capacity(1 + callable.generic_args().len());
+                instantiation_args.push(provided_ty);
+                instantiation_args.extend_from_slice(callable.generic_args());
+
+                let mut trait_req =
+                    Binder::bind(trait_inst).instantiate(self.db, &instantiation_args);
+                if let Some(inst) = callable.trait_inst() {
+                    let mut subst = AssocTySubst::new(inst);
+                    trait_req = trait_req.fold_with(self.db, &mut subst);
+                }
+                Some(EffectRequirement::Trait(trait_req))
+            }
+            _ => None,
+        }
     }
 
     fn check_method_call(&mut self, expr: ExprId, expr_data: &Expr<'db>) -> ExprProp<'db> {
