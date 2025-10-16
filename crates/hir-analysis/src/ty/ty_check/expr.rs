@@ -4,12 +4,12 @@ use common::ingot::IngotKind;
 use either::Either;
 use hir::hir_def::{
     ArithBinOp, BinOp, Expr, ExprId, FieldIndex, IdentId, Partial, Pat, PatId, PathId, UnOp,
-    VariantKind,
+    VariantKind, WithBinding,
 };
 
 use super::{
     RecordLike, Typeable,
-    env::{ExprProp, LocalBinding, TyCheckEnv},
+    env::{EffectOrigin, ExprProp, LocalBinding, ProvidedEffect, TyCheckEnv},
     path::ResolvedPathInBody,
 };
 use crate::ty::{
@@ -66,7 +66,7 @@ impl<'db> TyChecker<'db> {
             Expr::Match(..) => self.check_match(expr, expr_data),
             Expr::Assign(..) => self.check_assign(expr, expr_data),
             Expr::AugAssign(..) => self.check_aug_assign(expr, expr_data),
-            Expr::With(_, body) => self.check_expr(*body, expected),
+            Expr::With(bindings, body) => self.check_with(bindings, *body, expected),
         };
         self.env.leave_expr();
 
@@ -181,6 +181,38 @@ impl<'db> TyChecker<'db> {
         }
 
         self.check_ops_trait(expr, lhs.ty, &op, Some(rhs_expr))
+    }
+
+    fn check_with(
+        &mut self,
+        bindings: &[WithBinding<'db>],
+        body_expr: ExprId,
+        expected: TyId<'db>,
+    ) -> ExprProp<'db> {
+        self.env.push_effect_frame();
+
+        for binding in bindings {
+            let value_prop = self.check_expr_unknown(binding.value);
+            let Some(key_path) = binding.key_path.to_opt() else {
+                continue;
+            };
+
+            let is_mut = value_prop.binding().map(|b| b.is_mut()).unwrap_or(false);
+
+            let provided = ProvidedEffect {
+                origin: EffectOrigin::With {
+                    value_expr: binding.value,
+                },
+                ty: value_prop.ty,
+                is_mut,
+            };
+
+            self.env.insert_effect_binding(key_path, provided);
+        }
+
+        let result = self.check_expr(body_expr, expected);
+        self.env.pop_effect_frame();
+        result
     }
 
     fn check_call(&mut self, expr: ExprId, expr_data: &Expr<'db>) -> ExprProp<'db> {
