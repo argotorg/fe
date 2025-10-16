@@ -226,6 +226,10 @@ impl<'db> TyCheckEnv<'db> {
         self.effect_env.insert(key_path, binding);
     }
 
+    pub(super) fn effect_binding(&self, key_path: PathId<'db>) -> Option<ProvidedEffect<'db>> {
+        self.effect_env.lookup(key_path)
+    }
+
     pub(super) fn enter_scope(&mut self, block: ExprId) {
         let new_scope = match block.data(self.db, self.body) {
             Partial::Present(Expr::Block(_)) => ScopeId::Block(self.body, block),

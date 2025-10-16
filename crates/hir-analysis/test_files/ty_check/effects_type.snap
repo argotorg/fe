@@ -1,0 +1,139 @@
+---
+source: crates/hir-analysis/tests/ty_check.rs
+expression: res
+input_file: test_files/ty_check/effects_type.fe
+---
+note: 
+   ┌─ effects_type.fe:9:1
+   │  
+ 9 │ ╭ {
+10 │ │     let _ = ctx
+11 │ │     st.value = amount
+12 │ │ }
+   │ ╰─^ ()
+
+note: 
+   ┌─ effects_type.fe:10:9
+   │
+10 │     let _ = ctx
+   │         ^ Ctx
+
+note: 
+   ┌─ effects_type.fe:10:13
+   │
+10 │     let _ = ctx
+   │             ^^^ Ctx
+
+note: 
+   ┌─ effects_type.fe:11:5
+   │
+11 │     st.value = amount
+   │     ^^ Storage
+
+note: 
+   ┌─ effects_type.fe:11:5
+   │
+11 │     st.value = amount
+   │     ^^^^^^^^ u8
+
+note: 
+   ┌─ effects_type.fe:11:5
+   │
+11 │     st.value = amount
+   │     ^^^^^^^^^^^^^^^^^ ()
+
+note: 
+   ┌─ effects_type.fe:11:16
+   │
+11 │     st.value = amount
+   │                ^^^^^^ u8
+
+note: 
+   ┌─ effects_type.fe:14:20
+   │  
+14 │   pub fn caller_ok() {
+   │ ╭────────────────────^
+15 │ │     let ctx = Ctx {}
+16 │ │     let mut st = Storage { value: 0 }
+17 │ │     with (Ctx = ctx, Storage = st) {
+18 │ │         transfer(amount: 5)
+19 │ │     }
+20 │ │ }
+   │ ╰─^ ()
+
+note: 
+   ┌─ effects_type.fe:15:9
+   │
+15 │     let ctx = Ctx {}
+   │         ^^^ Ctx
+
+note: 
+   ┌─ effects_type.fe:15:15
+   │
+15 │     let ctx = Ctx {}
+   │               ^^^^^^ Ctx
+
+note: 
+   ┌─ effects_type.fe:16:9
+   │
+16 │     let mut st = Storage { value: 0 }
+   │         ^^^^^^ Storage
+
+note: 
+   ┌─ effects_type.fe:16:18
+   │
+16 │     let mut st = Storage { value: 0 }
+   │                  ^^^^^^^^^^^^^^^^^^^^ Storage
+
+note: 
+   ┌─ effects_type.fe:16:35
+   │
+16 │     let mut st = Storage { value: 0 }
+   │                                   ^ u8
+
+note: 
+   ┌─ effects_type.fe:17:5
+   │  
+17 │ ╭     with (Ctx = ctx, Storage = st) {
+18 │ │         transfer(amount: 5)
+19 │ │     }
+   │ ╰─────^ ()
+
+note: 
+   ┌─ effects_type.fe:17:17
+   │
+17 │     with (Ctx = ctx, Storage = st) {
+   │                 ^^^ Ctx
+
+note: 
+   ┌─ effects_type.fe:17:32
+   │
+17 │     with (Ctx = ctx, Storage = st) {
+   │                                ^^ Storage
+
+note: 
+   ┌─ effects_type.fe:17:36
+   │  
+17 │       with (Ctx = ctx, Storage = st) {
+   │ ╭────────────────────────────────────^
+18 │ │         transfer(amount: 5)
+19 │ │     }
+   │ ╰─────^ ()
+
+note: 
+   ┌─ effects_type.fe:18:9
+   │
+18 │         transfer(amount: 5)
+   │         ^^^^^^^^ fn transfer
+
+note: 
+   ┌─ effects_type.fe:18:9
+   │
+18 │         transfer(amount: 5)
+   │         ^^^^^^^^^^^^^^^^^^^ ()
+
+note: 
+   ┌─ effects_type.fe:18:26
+   │
+18 │         transfer(amount: 5)
+   │                          ^ u8

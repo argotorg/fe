@@ -1,0 +1,98 @@
+---
+source: crates/hir-analysis/tests/ty_check.rs
+expression: res
+input_file: test_files/ty_check/effects_trait.fe
+---
+note: 
+   ┌─ effects_trait.fe:8:24
+   │  
+ 8 │       fn log(self) -> u8 {
+   │ ╭────────────────────────^
+ 9 │ │         1
+10 │ │     }
+   │ ╰─────^ u8
+
+note: 
+  ┌─ effects_trait.fe:9:9
+  │
+9 │         1
+  │         ^ u8
+
+note: 
+   ┌─ effects_trait.fe:15:1
+   │  
+15 │ ╭ {
+16 │ │     logger.log()
+17 │ │ }
+   │ ╰─^ invalid(Other)
+
+note: 
+   ┌─ effects_trait.fe:16:5
+   │
+16 │     logger.log()
+   │     ^^^^^^ invalid(NotAType(effects_trait::Logger))
+
+note: 
+   ┌─ effects_trait.fe:16:5
+   │
+16 │     logger.log()
+   │     ^^^^^^^^^^^^ invalid(Other)
+
+note: 
+   ┌─ effects_trait.fe:19:31
+   │  
+19 │   pub fn provide_logger() -> u8 {
+   │ ╭───────────────────────────────^
+20 │ │     let logger = Console {}
+21 │ │     with (Logger = logger) {
+22 │ │         log_once()
+23 │ │     }
+24 │ │ }
+   │ ╰─^ u8
+
+note: 
+   ┌─ effects_trait.fe:20:9
+   │
+20 │     let logger = Console {}
+   │         ^^^^^^ Console
+
+note: 
+   ┌─ effects_trait.fe:20:18
+   │
+20 │     let logger = Console {}
+   │                  ^^^^^^^^^^ Console
+
+note: 
+   ┌─ effects_trait.fe:21:5
+   │  
+21 │ ╭     with (Logger = logger) {
+22 │ │         log_once()
+23 │ │     }
+   │ ╰─────^ u8
+
+note: 
+   ┌─ effects_trait.fe:21:20
+   │
+21 │     with (Logger = logger) {
+   │                    ^^^^^^ Console
+
+note: 
+   ┌─ effects_trait.fe:21:28
+   │  
+21 │       with (Logger = logger) {
+   │ ╭────────────────────────────^
+22 │ │         log_once()
+23 │ │     }
+   │ ╰─────^ u8
+
+note: 
+   ┌─ effects_trait.fe:22:9
+   │
+22 │         log_once()
+   │         ^^^^^^^^ fn log_once
+
+note: 
+   ┌─ effects_trait.fe:22:9
+   │
+22 │         log_once()
+   │         ^^^^^^^^^^ u8
