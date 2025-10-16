@@ -338,8 +338,8 @@ impl UsesParam {
         }
     }
 
-    /// The type of the uses parameter.
-    pub fn ty(&self) -> Option<super::Type> {
+    /// The path key of the uses parameter.
+    pub fn path(&self) -> Option<super::Path> {
         support::child(self.syntax())
     }
 }
@@ -764,13 +764,9 @@ mod tests {
         assert!(uc.param_list().is_none());
         let p = uc.param().expect("expected single uses param");
         assert!(p.mut_token().is_none());
-        match p.ty().unwrap().kind() {
-            TypeKind::Path(pt) => {
-                let seg = pt.path().unwrap().segments().next().unwrap();
-                assert_eq!(seg.ident().unwrap().text(), "Ctx");
-            }
-            _ => panic!("expected path type"),
-        }
+        let path = p.path().expect("missing path key");
+        let seg = path.segments().next().unwrap();
+        assert_eq!(seg.ident().unwrap().text(), "Ctx");
     }
 
     #[test]
@@ -780,13 +776,9 @@ mod tests {
         let uc = f.uses_clause().expect("missing uses clause");
         let p = uc.param().expect("expected single uses param");
         assert!(p.mut_token().is_some());
-        match p.ty().unwrap().kind() {
-            TypeKind::Path(pt) => {
-                let seg = pt.path().unwrap().segments().next().unwrap();
-                assert_eq!(seg.ident().unwrap().text(), "Ctx");
-            }
-            _ => panic!("expected path type"),
-        }
+        let path = p.path().expect("missing path key");
+        let seg = path.segments().next().unwrap();
+        assert_eq!(seg.ident().unwrap().text(), "Ctx");
     }
 
     #[test]
@@ -800,45 +792,29 @@ mod tests {
 
         // 0: Ctx
         assert!(params[0].mut_token().is_none());
-        match params[0].ty().unwrap().kind() {
-            TypeKind::Path(pt) => {
-                let seg = pt.path().unwrap().segments().next().unwrap();
-                assert_eq!(seg.ident().unwrap().text(), "Ctx");
-            }
-            _ => panic!("expected path type"),
-        }
+        let path0 = params[0].path().expect("missing path");
+        let seg0 = path0.segments().next().unwrap();
+        assert_eq!(seg0.ident().unwrap().text(), "Ctx");
 
         // 1: mut Storage
         assert!(params[1].mut_token().is_some());
-        match params[1].ty().unwrap().kind() {
-            TypeKind::Path(pt) => {
-                let seg = pt.path().unwrap().segments().next().unwrap();
-                assert_eq!(seg.ident().unwrap().text(), "Storage");
-            }
-            _ => panic!("expected path type"),
-        }
+        let path1 = params[1].path().expect("missing path");
+        let seg1 = path1.segments().next().unwrap();
+        assert_eq!(seg1.ident().unwrap().text(), "Storage");
 
         // 2: c: Ctx
         let n = params[2].name().expect("missing name");
         assert_eq!(n.syntax().text(), "c");
-        match params[2].ty().unwrap().kind() {
-            TypeKind::Path(pt) => {
-                let seg = pt.path().unwrap().segments().next().unwrap();
-                assert_eq!(seg.ident().unwrap().text(), "Ctx");
-            }
-            _ => panic!("expected path type"),
-        }
+        let path2 = params[2].path().expect("missing path");
+        let seg2 = path2.segments().next().unwrap();
+        assert_eq!(seg2.ident().unwrap().text(), "Ctx");
 
         // 3: mut f: Foo
         assert!(params[3].mut_token().is_some());
         let n = params[3].name().expect("missing name");
         assert_eq!(n.syntax().text(), "f");
-        match params[3].ty().unwrap().kind() {
-            TypeKind::Path(pt) => {
-                let seg = pt.path().unwrap().segments().next().unwrap();
-                assert_eq!(seg.ident().unwrap().text(), "Foo");
-            }
-            _ => panic!("expected path type"),
-        }
+        let path3 = params[3].path().expect("missing path");
+        let seg3 = path3.segments().next().unwrap();
+        assert_eq!(seg3.ident().unwrap().text(), "Foo");
     }
 }

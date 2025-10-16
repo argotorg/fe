@@ -66,6 +66,7 @@ impl<'db> TyChecker<'db> {
             Expr::Match(..) => self.check_match(expr, expr_data),
             Expr::Assign(..) => self.check_assign(expr, expr_data),
             Expr::AugAssign(..) => self.check_aug_assign(expr, expr_data),
+            Expr::With(_, body) => self.check_expr(*body, expected),
         };
         self.env.leave_expr();
 

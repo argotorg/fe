@@ -214,8 +214,8 @@ impl super::Parse for WithParamScope {
     fn parse<S: TokenStream>(&mut self, parser: &mut Parser<S>) -> Result<(), Self::Error> {
         parser.set_newline_as_trivia(false);
 
-        // effect_name
-        parser.bump_expected(SyntaxKind::Ident);
+        // effect key path
+        parser.or_recover(|p| p.parse(path::PathScope::default()))?;
         parser.bump_expected(SyntaxKind::Eq);
 
         // effect_value is always a full expression now

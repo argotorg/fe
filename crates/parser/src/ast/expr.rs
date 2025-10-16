@@ -353,13 +353,9 @@ ast_node! {
     SK::WithParam,
 }
 impl WithParam {
-    /// Returns the effect name (left-hand identifier).
-    pub fn name(&self) -> Option<SyntaxToken> {
-        // The first ident token in the node
-        self.syntax().children_with_tokens().find_map(|c| match c {
-            rowan::NodeOrToken::Token(t) if t.kind() == SK::Ident => Some(t),
-            _ => None,
-        })
+    /// Returns the effect key path on the left-hand side.
+    pub fn path(&self) -> Option<super::Path> {
+        support::child(self.syntax())
     }
 
     pub fn eq(&self) -> Option<SyntaxToken> {

@@ -1,5 +1,6 @@
 pub mod attr;
 pub mod body;
+pub mod effects;
 pub mod expr;
 pub mod ident;
 pub mod item;
@@ -19,6 +20,7 @@ pub(crate) mod module_tree;
 pub use attr::*;
 pub use body::*;
 use common::ingot::{Ingot, IngotKind};
+pub use effects::*;
 pub use expr::*;
 pub use ident::*;
 pub use item::*;

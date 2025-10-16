@@ -3,6 +3,7 @@ use super::{
     expr_atom::BlockExprScope,
     param::{parse_generic_params_opt, parse_where_clause_opt},
     parse_list,
+    path::PathScope,
     token_stream::TokenStream,
     type_::parse_type,
 };
@@ -239,15 +240,14 @@ impl super::Parse for UsesParamScope {
             if !parser.bump_if(SyntaxKind::Ident) {
                 parser.bump_expected(SyntaxKind::Underscore);
             }
-            // colon and type
             parser.bump_expected(SyntaxKind::Colon);
-            parse_type(parser, None)?;
+            parser.or_recover(|p| p.parse(PathScope::default()))?;
             return Ok(());
         }
 
-        // Unlabeled form: optional `mut` followed by a type
+        // Unlabeled form: optional `mut` followed by a Path key
         parser.bump_if(SyntaxKind::MutKw);
-        parse_type(parser, None)?;
+        parser.or_recover(|p| p.parse(PathScope::default()))?;
         Ok(())
     }
 }

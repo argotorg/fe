@@ -11,7 +11,9 @@ Root@0..79
     WithParamList@5..41
       LParen@5..6 "("
       WithParam@6..18
-        Ident@6..13 "Storage"
+        Path@6..13
+          PathSegment@6..13
+            Ident@6..13 "Storage"
         WhiteSpace@13..14 " "
         Eq@14..15 "="
         WhiteSpace@15..16 " "
@@ -22,7 +24,9 @@ Root@0..79
       Comma@18..19 ","
       WhiteSpace@19..20 " "
       WithParam@20..40
-        Ident@20..23 "Ctx"
+        Path@20..23
+          PathSegment@20..23
+            Ident@20..23 "Ctx"
         WhiteSpace@23..24 " "
         Eq@24..25 "="
         WhiteSpace@25..26 " "
@@ -60,7 +64,9 @@ Root@0..79
     WithParamList@56..70
       LParen@56..57 "("
       WithParam@57..69
-        Ident@57..64 "Storage"
+        Path@57..64
+          PathSegment@57..64
+            Ident@57..64 "Storage"
         WhiteSpace@64..65 " "
         Eq@65..66 "="
         WhiteSpace@66..67 " "

@@ -19,10 +19,9 @@ Root@0..99
           UsesKw@7..11 "uses"
           WhiteSpace@11..12 " "
           UsesParam@12..15
-            PathType@12..15
-              Path@12..15
-                PathSegment@12..15
-                  Ident@12..15 "Ctx"
+            Path@12..15
+              PathSegment@12..15
+                Ident@12..15 "Ctx"
         WhiteSpace@15..16 " "
         BlockExpr@16..18
           LBrace@16..17 "{"
@@ -43,10 +42,9 @@ Root@0..99
           UsesParam@32..39
             MutKw@32..35 "mut"
             WhiteSpace@35..36 " "
-            PathType@36..39
-              Path@36..39
-                PathSegment@36..39
-                  Ident@36..39 "Ctx"
+            Path@36..39
+              PathSegment@36..39
+                Ident@36..39 "Ctx"
         WhiteSpace@39..40 " "
         BlockExpr@40..42
           LBrace@40..41 "{"
@@ -67,29 +65,26 @@ Root@0..99
           UsesParamList@56..94
             LParen@56..57 "("
             UsesParam@57..60
-              PathType@57..60
-                Path@57..60
-                  PathSegment@57..60
-                    Ident@57..60 "Ctx"
+              Path@57..60
+                PathSegment@57..60
+                  Ident@57..60 "Ctx"
             Comma@60..61 ","
             WhiteSpace@61..62 " "
             UsesParam@62..73
               MutKw@62..65 "mut"
               WhiteSpace@65..66 " "
-              PathType@66..73
-                Path@66..73
-                  PathSegment@66..73
-                    Ident@66..73 "Storage"
+              Path@66..73
+                PathSegment@66..73
+                  Ident@66..73 "Storage"
             Comma@73..74 ","
             WhiteSpace@74..75 " "
             UsesParam@75..81
               Ident@75..76 "c"
               Colon@76..77 ":"
               WhiteSpace@77..78 " "
-              PathType@78..81
-                Path@78..81
-                  PathSegment@78..81
-                    Ident@78..81 "Ctx"
+              Path@78..81
+                PathSegment@78..81
+                  Ident@78..81 "Ctx"
             Comma@81..82 ","
             WhiteSpace@82..83 " "
             UsesParam@83..93
@@ -98,14 +93,12 @@ Root@0..99
               Ident@87..88 "f"
               Colon@88..89 ":"
               WhiteSpace@89..90 " "
-              PathType@90..93
-                Path@90..93
-                  PathSegment@90..93
-                    Ident@90..93 "Foo"
+              Path@90..93
+                PathSegment@90..93
+                  Ident@90..93 "Foo"
             RParen@93..94 ")"
         WhiteSpace@94..95 " "
         BlockExpr@95..97
           LBrace@95..96 "{"
           RBrace@96..97 "}"
   Newline@97..99 "\n\n"
-
