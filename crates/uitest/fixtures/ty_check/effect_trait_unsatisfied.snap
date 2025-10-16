@@ -1,0 +1,12 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/effect_trait_unsatisfied.fe
+---
+error[8-0039]: effect `Logger` supplied to `needs_logger` does not satisfy `Logger`
+   ┌─ effect_trait_unsatisfied.fe:23:9
+   │
+22 │     with (Logger = Silent {}) {
+   │                    --------- effect `Logger` is provided here
+23 │         needs_logger()
+   │         ^^^^^^^^^^^^^^ `Silent` must implement `Logger` for effect `Logger`

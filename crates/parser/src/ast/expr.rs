@@ -22,6 +22,7 @@ ast_node! {
     | SK::LitExpr
     | SK::IfExpr
     | SK::MatchExpr
+    | SK::WithExpr
     | SK::ParenExpr
     | SK::AssignExpr
     | SK::AugAssignExpr,
@@ -50,6 +51,7 @@ impl Expr {
             SK::LitExpr => ExprKind::Lit(AstNode::cast(self.syntax().clone()).unwrap()),
             SK::IfExpr => ExprKind::If(AstNode::cast(self.syntax().clone()).unwrap()),
             SK::MatchExpr => ExprKind::Match(AstNode::cast(self.syntax().clone()).unwrap()),
+            SK::WithExpr => ExprKind::With(AstNode::cast(self.syntax().clone()).unwrap()),
             SK::ParenExpr => ExprKind::Paren(AstNode::cast(self.syntax().clone()).unwrap()),
             SK::AssignExpr => ExprKind::Assign(AstNode::cast(self.syntax().clone()).unwrap()),
             SK::AugAssignExpr => ExprKind::AugAssign(AstNode::cast(self.syntax().clone()).unwrap()),
@@ -326,6 +328,47 @@ impl MatchExpr {
 }
 
 ast_node! {
+    /// `with (Effect = value, ..) { .. }`
+    pub struct WithExpr,
+    SK::WithExpr
+}
+impl WithExpr {
+    pub fn params(&self) -> Option<WithParamList> {
+        support::child(self.syntax())
+    }
+
+    pub fn body(&self) -> Option<BlockExpr> {
+        support::child(self.syntax())
+    }
+}
+
+ast_node! {
+    pub struct WithParamList,
+    SK::WithParamList,
+    IntoIterator<Item=WithParam>,
+}
+
+ast_node! {
+    pub struct WithParam,
+    SK::WithParam,
+}
+impl WithParam {
+    /// Returns the effect key path on the left-hand side.
+    pub fn path(&self) -> Option<super::Path> {
+        support::child(self.syntax())
+    }
+
+    pub fn eq(&self) -> Option<SyntaxToken> {
+        support::token(self.syntax(), SK::Eq)
+    }
+
+    /// Returns the value expression if the value is an expression.
+    pub fn value_expr(&self) -> Option<Expr> {
+        support::child(self.syntax())
+    }
+}
+
+ast_node! {
     /// `(expr)`
     pub struct ParenExpr,
     SK::ParenExpr
@@ -397,6 +440,7 @@ pub enum ExprKind {
     ArrayRep(ArrayRepExpr),
     If(IfExpr),
     Match(MatchExpr),
+    With(WithExpr),
     Paren(ParenExpr),
     Assign(AssignExpr),
     AugAssign(AugAssignExpr),

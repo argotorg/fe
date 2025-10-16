@@ -824,6 +824,7 @@ macro_rules! define_scope_struct {
         }
         impl Default for $scope_name {
             fn default() -> Self {
+                #[allow(unused_imports)]
                 use crate::SyntaxKind::*;
                 Self {
                     __inner: std::cell::Cell::new($kind).into(),

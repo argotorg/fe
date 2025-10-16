@@ -1,0 +1,16 @@
+pub struct Storage {
+    value: u8,
+}
+
+pub fn needs_mut_storage()
+  uses mut Storage
+{
+    ()
+}
+
+pub fn mut_mismatch() {
+    let st = Storage { value: 0 }
+    with (Storage = st) {
+        needs_mut_storage()
+    }
+}

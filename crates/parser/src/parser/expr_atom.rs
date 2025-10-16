@@ -1,8 +1,9 @@
-use std::convert::Infallible;
+use std::convert::{Infallible, identity};
 
 use rowan::Checkpoint;
 use unwrap_infallible::UnwrapInfallible;
 
+use super::token_stream::LexicalToken;
 use super::{
     ErrProof, Parser, Recovery, define_scope,
     expr::{parse_expr, parse_expr_no_struct},
@@ -36,6 +37,38 @@ pub(super) fn parse_expr_atom<S: TokenStream>(
     match parser.current_kind() {
         Some(IfKw) => parser.parse_cp(IfExprScope::default(), None),
         Some(MatchKw) => parser.parse_cp(MatchExprScope::default(), None),
+        Some(SyntaxKind::Ident) => {
+            // Contextual 'with': only treat as with-block when:
+            // ident text is "with" AND we can parse a WithParamList AND next is '{'
+            let is_with = parser.dry_run(|p| {
+                let is_with_ident = p
+                    .current_token()
+                    .map(|t| t.text() == "with")
+                    .unwrap_or(false);
+                if !is_with_ident {
+                    return false;
+                }
+                p.bump();
+                // Must start with '(' for with param list
+                if p.current_kind() != Some(SyntaxKind::LParen) {
+                    return false;
+                }
+                // Try parse the with param list
+                if !p
+                    .parse_ok(WithParamListScope::default())
+                    .is_ok_and(identity)
+                {
+                    return false;
+                }
+                // Require a block immediately after
+                p.current_kind() == Some(SyntaxKind::LBrace)
+            });
+            if is_with {
+                parser.parse_cp(WithExprScope::default(), None)
+            } else {
+                parser.parse_cp(PathExprScope::new(allow_record_init), None)
+            }
+        }
         Some(LBrace) => parser.parse_cp(BlockExprScope::default(), None),
         Some(LParen) => parser.parse_cp(ParenScope::default(), None),
         Some(LBracket) => parser.parse_cp(ArrayScope::default(), None),
@@ -126,6 +159,67 @@ impl super::Parse for IfExprScope {
             parse_expr(parser)?;
         }
         Ok(())
+    }
+}
+
+define_scope! { WithExprScope, WithExpr }
+impl super::Parse for WithExprScope {
+    type Error = Recovery<ErrProof>;
+
+    fn parse<S: TokenStream>(&mut self, parser: &mut Parser<S>) -> Result<(), Self::Error> {
+        // Expect `with` identifier
+        let is_with = parser
+            .current_token()
+            .map(|t| t.text() == "with")
+            .unwrap_or(false);
+        if !is_with {
+            return parser.error_and_recover("expected `with`");
+        }
+        parser.bump();
+
+        parser.set_scope_recovery_stack(&[SyntaxKind::LParen, SyntaxKind::LBrace]);
+        // Parse with parameter list: (Effect = value, ...)
+        parser.parse(WithParamListScope::default())?;
+        // Done with LParen recovery token
+        parser.pop_recovery_stack();
+
+        // Parse block body (required)
+        if parser.current_kind() != Some(SyntaxKind::LBrace) {
+            return parser.error_and_recover("`with` block requires a body `{ ... }`");
+        }
+        parser.parse(BlockExprScope::default())?;
+        Ok(())
+    }
+}
+
+define_scope! { WithParamListScope, WithParamList, (RParen, Comma) }
+impl super::Parse for WithParamListScope {
+    type Error = Recovery<ErrProof>;
+
+    fn parse<S: TokenStream>(&mut self, parser: &mut Parser<S>) -> Result<(), Self::Error> {
+        parse_list(
+            parser,
+            false,
+            SyntaxKind::WithParamList,
+            (SyntaxKind::LParen, SyntaxKind::RParen),
+            |parser| parser.parse(WithParamScope::default()),
+        )
+    }
+}
+
+define_scope! { WithParamScope, WithParam }
+impl super::Parse for WithParamScope {
+    type Error = Recovery<ErrProof>;
+
+    fn parse<S: TokenStream>(&mut self, parser: &mut Parser<S>) -> Result<(), Self::Error> {
+        parser.set_newline_as_trivia(false);
+
+        // effect key path
+        parser.or_recover(|p| p.parse(path::PathScope::default()))?;
+        parser.bump_expected(SyntaxKind::Eq);
+
+        // effect_value is always a full expression now
+        parse_expr(parser)
     }
 }
 

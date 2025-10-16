@@ -144,6 +144,9 @@ pub enum SyntaxKind {
     /// `break`
     #[token("break")]
     BreakKw,
+    /// `uses`
+    #[token("uses")]
+    UsesKw,
     /// `continue`
     #[token("continue")]
     ContinueKw,
@@ -281,12 +284,18 @@ pub enum SyntaxKind {
     ArrayExpr,
     /// `[x; 4]`
     ArrayRepExpr,
+    /// `(Effect = value, ..)` list for `with`
+    WithParamList,
+    /// `Effect = value` entry for `with`
+    WithParam,
     /// `1`
     LitExpr,
     /// `if x { 1 } else { 2 }`
     IfExpr,
     /// `match x { pat => { .. } }`
     MatchExpr,
+    /// `with (Effect = value, ..) { Block }`
+    WithExpr,
     /// `(1 + 2)`
     ParenExpr,
     /// x = 1
@@ -450,6 +459,13 @@ pub enum SyntaxKind {
     /// `_ x: mut i32`
     FnParam,
 
+    /// `uses` clause attached to a function signature
+    UsesClause,
+    /// `uses` parameter list
+    UsesParamList,
+    /// a single `uses` parameter
+    UsesParam,
+
     /// `foo::Trait1 + Trait2`
     TypeBoundList,
     /// `TraitBound` or `TypeKind`.
@@ -571,6 +587,7 @@ impl SyntaxKind {
             SyntaxKind::TrueKw => "`true`",
             SyntaxKind::FalseKw => "`false`",
             SyntaxKind::BreakKw => "`break`",
+            SyntaxKind::UsesKw => "`uses`",
             SyntaxKind::ContinueKw => "`continue`",
             SyntaxKind::ContractKw => "`contract`",
             SyntaxKind::FnKw => "`fn`",
@@ -639,9 +656,12 @@ impl SyntaxKind {
             SyntaxKind::FieldExpr => "field",
             SyntaxKind::TupleExpr => "tuple expression",
             SyntaxKind::ArrayRepExpr => "array expression",
+            SyntaxKind::WithParamList => "`with` parameter list",
+            SyntaxKind::WithParam => "`with` parameter",
             SyntaxKind::LitExpr => "literal expression",
             SyntaxKind::IfExpr => "`if` expression",
             SyntaxKind::MatchExpr => "`match` expression",
+            SyntaxKind::WithExpr => "`with` expression",
             SyntaxKind::ParenExpr => "parenthesized expression",
             SyntaxKind::AssignExpr => "assignment expression",
             SyntaxKind::AugAssignExpr => "augmented assignment expression",
@@ -715,6 +735,9 @@ impl SyntaxKind {
             SyntaxKind::KindBoundMono => "kind bound",
             SyntaxKind::WhereClause => "`where` clause",
             SyntaxKind::WherePredicate => "`where` predicate",
+            SyntaxKind::UsesClause => "`uses` clause",
+            SyntaxKind::UsesParamList => "`uses` parameter list",
+            SyntaxKind::UsesParam => "`uses` parameter",
             SyntaxKind::Root => "module",
             SyntaxKind::Error => todo!(),
         }
@@ -765,6 +788,7 @@ impl SyntaxKind {
                 | SyntaxKind::TrueKw
                 | SyntaxKind::FalseKw
                 | SyntaxKind::BreakKw
+                | SyntaxKind::UsesKw
                 | SyntaxKind::ContinueKw
                 | SyntaxKind::ContractKw
                 | SyntaxKind::FnKw

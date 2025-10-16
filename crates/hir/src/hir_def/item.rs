@@ -9,8 +9,9 @@ use common::{file::File, ingot::Ingot};
 use parser::ast;
 
 use super::{
-    AttrListId, Body, FuncParamListId, FuncParamName, GenericParam, GenericParamListId, HirIngot,
-    IdentId, Partial, TupleTypeId, TypeBound, TypeId, UseAlias, WhereClauseId,
+    AttrListId, Body, EffectParamListId, FuncParamListId, FuncParamName, GenericParam,
+    GenericParamListId, HirIngot, IdentId, Partial, TupleTypeId, TypeBound, TypeId, UseAlias,
+    WhereClauseId,
     scope_graph::{ScopeGraph, ScopeId},
 };
 use crate::{
@@ -620,10 +621,10 @@ pub struct Func<'db> {
     pub generic_params: GenericParamListId<'db>,
     pub where_clause: WhereClauseId<'db>,
     pub params: Partial<FuncParamListId<'db>>,
+    pub effects: EffectParamListId<'db>,
     pub ret_ty: Option<TypeId<'db>>,
     pub modifier: ItemModifier,
     pub body: Option<Body<'db>>,
-    pub is_extern: bool,
     pub top_mod: TopLevelMod<'db>,
 
     #[return_ref]
