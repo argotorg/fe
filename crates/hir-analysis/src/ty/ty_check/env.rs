@@ -32,10 +32,7 @@ use crate::{
         unify::UnificationTable,
     },
 };
-use crate::{
-    name_resolution::{PathRes, resolve_path},
-    ty::trait_resolution::PredicateListId,
-};
+use crate::name_resolution::{PathRes, resolve_path};
 
 pub(super) struct TyCheckEnv<'db> {
     db: &'db dyn HirAnalysisDb,
@@ -49,6 +46,7 @@ pub(super) struct TyCheckEnv<'db> {
 
     effect_env: EffectEnv<'db>,
     effect_bounds: ThinVec<TraitInstId<'db>>,
+    assumptions: PredicateListId<'db>,
     var_env: Vec<BlockEnv<'db>>,
     pending_vars: FxHashMap<IdentId<'db>, LocalBinding<'db>>,
     loop_stack: Vec<StmtId>,
@@ -61,6 +59,10 @@ impl<'db> TyCheckEnv<'db> {
             return Err(());
         };
 
+        // Compute base assumptions (without effect-derived bounds) up-front
+        let base_preds = collect_func_def_constraints(db, func.into(), true).instantiate_identity();
+        let base_assumptions = base_preds.extend_all_bounds(db);
+
         let mut env = Self {
             db,
             body,
@@ -70,6 +72,7 @@ impl<'db> TyCheckEnv<'db> {
             deferred: Vec::new(),
             effect_env: EffectEnv::new(),
             effect_bounds: ThinVec::new(),
+            assumptions: base_assumptions,
             var_env: vec![BlockEnv::new(func.scope(), 0)],
             pending_vars: FxHashMap::default(),
             loop_stack: Vec::new(),
@@ -106,7 +109,13 @@ impl<'db> TyCheckEnv<'db> {
             env.var_env.last_mut().unwrap().register_var(name, var);
         }
 
+        // Seed effect parameters using only base assumptions
         env.seed_effects(func);
+
+        // Finalize assumptions by merging in effect-derived bounds
+        let mut preds = base_preds.list(db).to_vec();
+        preds.extend(env.effect_bounds.iter().copied());
+        env.assumptions = PredicateListId::new(db, preds).extend_all_bounds(db);
 
         Ok(env)
     }
@@ -206,20 +215,7 @@ impl<'db> TyCheckEnv<'db> {
         }
     }
 
-    pub(super) fn assumptions(&self) -> PredicateListId<'db> {
-        match self.hir_func() {
-            Some(func) => {
-                // Base constraints from function and its context
-                let base =
-                    collect_func_def_constraints(self.db, func.into(), true).instantiate_identity();
-                // Merge in effect-derived bounds, then extend
-                let mut preds = base.list(self.db).to_vec();
-                preds.extend(self.effect_bounds.iter().copied());
-                PredicateListId::new(self.db, preds).extend_all_bounds(self.db)
-            }
-            None => PredicateListId::empty_list(self.db),
-        }
-    }
+    pub(super) fn assumptions(&self) -> PredicateListId<'db> { self.assumptions }
 
     pub(super) fn body(&self) -> Body<'db> {
         self.body
