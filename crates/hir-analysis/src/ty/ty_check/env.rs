@@ -12,7 +12,6 @@ use salsa::Update;
 use thin_vec::ThinVec;
 
 use super::{Callable, TypedBody};
-use crate::name_resolution::PathRes;
 use crate::{
     HirAnalysisDb,
     ty::{
@@ -32,6 +31,10 @@ use crate::{
         ty_lower::lower_hir_ty,
         unify::UnificationTable,
     },
+};
+use crate::{
+    name_resolution::{PathRes, resolve_path},
+    ty::trait_resolution::PredicateListId,
 };
 
 pub(super) struct TyCheckEnv<'db> {
@@ -150,7 +153,11 @@ impl<'db> TyCheckEnv<'db> {
                 ty: provided_ty,
                 is_mut: effect.is_mut,
             };
-            self.effect_env.insert(key_path, provided);
+            if let Some(key) =
+                self.effect_key_for_path_in_scope(key_path, func.scope(), assumptions)
+            {
+                self.effect_env.insert(key, provided);
+            }
 
             if let Some(ident) = effect.name.to_opt() {
                 let binding = LocalBinding::EffectParam {
@@ -228,11 +235,18 @@ impl<'db> TyCheckEnv<'db> {
 
             LocalBinding::Param { ty, .. } => ty,
 
-            LocalBinding::EffectParam { key_path, .. } => self
-                .effect_env
-                .lookup(key_path)
-                .map(|binding| binding.ty)
-                .unwrap_or_else(|| TyId::invalid(self.db, InvalidCause::Other)),
+            LocalBinding::EffectParam { key_path, func, .. } => {
+                if let Some(key) =
+                    self.effect_key_for_path_in_scope(key_path, func.scope(), self.assumptions())
+                {
+                    self.effect_env
+                        .lookup(key)
+                        .map(|binding| binding.ty)
+                        .unwrap_or_else(|| TyId::invalid(self.db, InvalidCause::Other))
+                } else {
+                    TyId::invalid(self.db, InvalidCause::Other)
+                }
+            }
         }
     }
 
@@ -249,11 +263,21 @@ impl<'db> TyCheckEnv<'db> {
         key_path: PathId<'db>,
         binding: ProvidedEffect<'db>,
     ) {
-        self.effect_env.insert(key_path, binding);
+        if let Some(key) =
+            self.effect_key_for_path_in_scope(key_path, self.scope(), self.assumptions())
+        {
+            self.effect_env.insert(key, binding);
+        }
     }
 
-    pub(super) fn effect_binding(&self, key_path: PathId<'db>) -> Option<ProvidedEffect<'db>> {
-        self.effect_env.lookup(key_path)
+    pub(super) fn effect_binding_in_scope(
+        &self,
+        key_path: PathId<'db>,
+        scope: ScopeId<'db>,
+        assumptions: PredicateListId<'db>,
+    ) -> Option<ProvidedEffect<'db>> {
+        let key = self.effect_key_for_path_in_scope(key_path, scope, assumptions)?;
+        self.effect_env.lookup(key)
     }
 
     pub(super) fn enter_scope(&mut self, block: ExprId) {
@@ -610,7 +634,7 @@ impl<'db> BlockEnv<'db> {
 
 #[derive(Default)]
 struct EffectFrame<'db> {
-    bindings: FxHashMap<PathId<'db>, ProvidedEffect<'db>>,
+    bindings: FxHashMap<ScopeId<'db>, ProvidedEffect<'db>>,
 }
 
 pub(super) struct EffectEnv<'db> {
@@ -635,7 +659,7 @@ impl<'db> EffectEnv<'db> {
         self.frames.pop();
     }
 
-    pub fn insert(&mut self, key: PathId<'db>, binding: ProvidedEffect<'db>) {
+    pub fn insert(&mut self, key: ScopeId<'db>, binding: ProvidedEffect<'db>) {
         self.frames
             .last_mut()
             .expect("EffectEnv must always have at least one frame")
@@ -643,7 +667,7 @@ impl<'db> EffectEnv<'db> {
             .insert(key, binding);
     }
 
-    pub fn lookup(&self, key: PathId<'db>) -> Option<ProvidedEffect<'db>> {
+    pub fn lookup(&self, key: ScopeId<'db>) -> Option<ProvidedEffect<'db>> {
         self.frames
             .iter()
             .rev()
@@ -817,4 +841,23 @@ enum DeferredTask<'db> {
         span: DynLazySpan<'db>,
     },
     Method(PendingMethod<'db>),
+}
+
+impl<'db> TyCheckEnv<'db> {
+    /// Compute a normalized effect key for a given `key_path` resolved in `scope`
+    /// under `assumptions`. The key corresponds to the resolved item’s definition
+    /// scope, so that different instantiations match.
+    pub(super) fn effect_key_for_path_in_scope(
+        &self,
+        key_path: PathId<'db>,
+        scope: ScopeId<'db>,
+        assumptions: PredicateListId<'db>,
+    ) -> Option<ScopeId<'db>> {
+        let path_res = resolve_path(self.db, key_path, scope, assumptions, false).ok()?;
+        match path_res {
+            PathRes::Ty(ty) | PathRes::TyAlias(_, ty) => ty.as_scope(self.db),
+            PathRes::Trait(trait_inst) => Some(trait_inst.def(self.db).trait_(self.db).scope()),
+            _ => None,
+        }
+    }
 }

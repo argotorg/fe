@@ -294,7 +294,10 @@ impl<'db> TyChecker<'db> {
                 continue;
             };
 
-            let provided = match self.env.effect_binding(key_path) {
+            let provided = match self
+                .env
+                .effect_binding_in_scope(key_path, func.scope(), callee_assumptions)
+            {
                 Some(binding) => binding,
                 None => {
                     let diag = BodyDiag::MissingEffect {
