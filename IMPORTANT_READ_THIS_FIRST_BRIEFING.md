@@ -202,7 +202,13 @@ This design makes `ImplTrait` the single, context-rich touchpoint for consumers 
 
 *   **`analysis::ty::adt_def::AdtDef`**
     *   **Purpose**: Wraps `Struct`, `Contract`, or `Enum` to provide a unified analysis view.
-    *   **Consolidation Pointer**: Decompose and move logic to the respective HIR items. For example, `struct.fields_with_types(db)`. The `AdtField` sub-wrapper is a good pattern to follow.
+    *   **Consolidation Pointer**: Apply the **decompose-then-migrate** pattern:
+        1. Replace `AdtDef` with an enum (e.g., `AdtRef`) that separates `Struct`, `Contract`, and `Enum` variants
+        2. Migrate the simplest case first (likely `Struct`) - add methods directly to `Struct` HIR item
+        3. Leave complex cases temporarily encapsulated in their enum variants
+        4. Incrementally migrate remaining variants as capacity allows
+    *   **Example**: `struct.fields_with_types(db)` instead of `lower_adt(db, struct).fields_with_types(db)`
+    *   **Note**: The `AdtField` sub-wrapper demonstrates good patterns to follow
 
 ### Key Salsa Queries & Abstractions
 
@@ -486,15 +492,22 @@ pub(crate) struct Implementor<'db> {
 
 ---
 
-### AdtDef (Plan Carefully)
+### AdtDef (Apply Decompose-Then-Migrate Pattern)
 
 **Location:** `crates/hir/src/analysis/ty/adt_def.rs`
 
 **Purpose:** Unified interface over `Struct`, `Contract`, `Enum`
 
-**Complexity:** HIGH - Sean said this "needs to be decomposed"
+**Strategy (Following FuncDef Pattern):**
 
-May require decomposition rather than simple elimination. The `AdtField` sub-wrapper already demonstrates some desired patterns.
+1. **Replace with enum:** Create `AdtRef` enum with variants for `Struct`, `Contract`, `Enum`
+2. **Migrate incrementally:** Start with `Struct` - add methods like `fields_with_types(db)` directly to `Struct` HIR item
+3. **Encapsulate complex cases:** Leave `Contract` and `Enum` logic in their enum variants temporarily
+4. **Clean API goal:** `struct.fields_with_types(db)` instead of `lower_adt(db, struct).fields_with_types(db)`
+
+**Complexity:** MEDIUM-HIGH - Multi-purpose wrapper requiring decomposition, but pattern is now proven with `FuncDef`/`CallableDef`
+
+**Note:** The `AdtField` sub-wrapper demonstrates good patterns to follow
 
 ---
 
@@ -575,5 +588,14 @@ Do these in separate passes when possible.
 
 **Document Non-Obvious Code**
 When encountering special-case logic, ask "Why?" before changing it. If the answer isn't obvious, it's a potential trap.
+
+**Pattern: Decompose Then Migrate**
+Multi-purpose wrappers (like `AdtDef`) should be replaced with enums separating responsibilities. Migrate simplest variant first, leave complex cases encapsulated temporarily. Goal: Clean HIR API, not just struct deletion.
+
+**Salsa Workaround for Non-Tracked Structs**
+Can't add tracked methods to non-tracked structs (e.g., `EnumVariant`). Solution: Add tracked method to parent tracked struct with index parameter. Child delegates: `child.method(db)` → `child.parent.parent_method(db, child.idx)`.
+
+**Refactoring Checklist**
+Search for wrapper extraction methods: `hir_def()`, `hir_X()`. Replace with pattern matching or direct use. Watch for signature changes: methods losing `db` parameter. Use targeted test failures to find incomplete implementations.
 
 **Bottom Line**: Understand the code first (via targeted tests + tracing through examples), then refactor. Changing code we don't fully understand causes churn. Understanding the code first has the added benefit of being educational both for you (the agent) and myself (the human).  Thanks for doing that!
