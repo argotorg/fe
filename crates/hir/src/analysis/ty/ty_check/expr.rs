@@ -298,7 +298,7 @@ impl<'db> TyChecker<'db> {
 
         let (func_ty, trait_inst) = match candidate {
             MethodCandidate::InherentMethod(func_def) => {
-                let func_ty = TyId::func(self.db, func_def.hir_def(self.db));
+                let func_ty = TyId::func(self.db, func_def);
                 (self.table.instantiate_to_term(func_ty), None)
             }
 
@@ -479,7 +479,7 @@ impl<'db> TyChecker<'db> {
                     let method_ty = match candidate {
                         MethodCandidate::InherentMethod(func_def) => {
                             // TODO: move this to path resolver
-                            let mut method_ty = TyId::func(self.db, func_def.hir_def(self.db));
+                            let mut method_ty = TyId::func(self.db, func_def);
                             for &arg in receiver_ty.generic_args(self.db) {
                                 // If the method is defined in "specialized" impl block
                                 // of a generic type (eg `impl Option<i32>`), then
@@ -1221,7 +1221,7 @@ fn body_diag_from_method_selection_err<'db>(
         }
 
         MethodSelectionError::InvisibleInherentMethod(func) => {
-            PathResDiag::Invisible(method.span, method.data, func.name_span(db).into()).into()
+            PathResDiag::Invisible(method.span, method.data, func.name_span().into()).into()
         }
 
         MethodSelectionError::InvisibleTraitMethod(traits) => BodyDiag::InvisibleAmbiguousTrait {

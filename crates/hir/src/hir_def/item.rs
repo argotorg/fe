@@ -830,6 +830,8 @@ pub struct Enum<'db> {
     #[return_ref]
     pub(crate) origin: HirOrigin<ast::Enum>,
 }
+
+#[salsa::tracked]
 impl<'db> Enum<'db> {
     pub fn span(self) -> LazyEnumSpan<'db> {
         LazyEnumSpan::new(self)
@@ -841,6 +843,21 @@ impl<'db> Enum<'db> {
 
     pub fn scope(self) -> ScopeId<'db> {
         ScopeId::from_item(self.into())
+    }
+
+    /// Returns the argument types for a variant constructor.
+    /// This is a salsa-tracked query to cache the Vec and return a reference.
+    #[salsa::tracked(return_ref)]
+    pub fn variant_arg_tys(
+        self,
+        db: &'db dyn crate::analysis::HirAnalysisDb,
+        idx: u16,
+    ) -> Vec<crate::analysis::ty::binder::Binder<crate::analysis::ty::ty_def::TyId<'db>>> {
+        use crate::analysis::ty::adt_def::lower_adt;
+
+        let adt = lower_adt(db, self.into());
+        let field_types = adt.fields(db).get(idx as usize).unwrap().iter_types(db);
+        field_types.collect()
     }
 }
 
@@ -881,7 +898,7 @@ impl<'db> EnumVariant<'db> {
 
     /// Returns the argument types for this variant constructor.
     /// Returns `None` if this is a Unit variant (not callable).
-    pub fn arg_tys(
+    pub fn arg_tys_opt(
         self,
         db: &'db dyn crate::analysis::HirAnalysisDb,
     ) -> Option<Vec<crate::analysis::ty::binder::Binder<crate::analysis::ty::ty_def::TyId<'db>>>> {
@@ -895,6 +912,15 @@ impl<'db> EnumVariant<'db> {
         let adt = lower_adt(db, self.enum_.into());
         let field_types = adt.fields(db).get(self.idx as usize).unwrap().iter_types(db);
         Some(field_types.collect())
+    }
+
+    /// Returns the argument types for this variant constructor.
+    /// Should only be called for tuple variants (CallableDef::VariantCtor).
+    pub fn arg_tys(
+        self,
+        db: &'db dyn crate::analysis::HirAnalysisDb,
+    ) -> &'db [crate::analysis::ty::binder::Binder<crate::analysis::ty::ty_def::TyId<'db>>] {
+        self.enum_.variant_arg_tys(db, self.idx)
     }
 
     /// Returns the return type for this variant constructor (the enum type with params).

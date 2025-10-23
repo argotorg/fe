@@ -947,9 +947,10 @@ impl<'db> Visitor<'db> for DefAnalyzer<'db> {
         ctxt: &mut VisitorCtxt<'db, LazyFuncSpan<'db>>,
         hir_func: crate::hir_def::Func<'db>,
     ) {
-        let Some(func) = lower_func(self.db, hir_func) else {
+        let Some(_name) = hir_func.name(self.db).to_opt() else {
             return;
         };
+        let func = CallableDef::Func(hir_func);
 
         // We need to check the conflict only when the function is defined in the `impl`
         // block since this check requires the ingot-wide method table(i.e., which is
@@ -1223,7 +1224,7 @@ impl<'db> DefKind<'db> {
             Self::Trait(def) => def.scope(),
             Self::ImplTrait(def) => def.hir_impl_trait(db).scope(),
             Self::Impl(hir_impl) => hir_impl.scope(),
-            Self::Func(def) => def.scope(db),
+            Self::Func(def) => def.scope(),
             Self::TypeAlias(alias) => alias.scope(),
         }
     }

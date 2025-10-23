@@ -84,11 +84,7 @@ impl<'db> CallableDef<'db> {
     pub fn arg_tys(self, db: &'db dyn HirAnalysisDb) -> &'db [Binder<TyId<'db>>] {
         match self {
             Self::Func(func) => func.arg_tys(db),
-            Self::VariantCtor(_var) => {
-                // For now, return empty slice for variant constructors
-                // since they need special handling
-                &[]
-            }
+            Self::VariantCtor(var) => var.arg_tys(db),
         }
     }
 
