@@ -876,6 +876,50 @@ impl<'db> EnumVariant<'db> {
     pub fn span(self) -> LazyVariantDefSpan<'db> {
         self.enum_.variant_span(self.idx as usize)
     }
+
+    // Analysis methods (type lowering)
+
+    /// Returns the argument types for this variant constructor.
+    /// Returns `None` if this is a Unit variant (not callable).
+    pub fn arg_tys(
+        self,
+        db: &'db dyn crate::analysis::HirAnalysisDb,
+    ) -> Option<Vec<crate::analysis::ty::binder::Binder<crate::analysis::ty::ty_def::TyId<'db>>>> {
+        use crate::analysis::ty::adt_def::lower_adt;
+
+        // Only tuple variants are callable
+        if !matches!(self.kind(db), VariantKind::Tuple(_)) {
+            return None;
+        }
+
+        let adt = lower_adt(db, self.enum_.into());
+        let field_types = adt.fields(db).get(self.idx as usize).unwrap().iter_types(db);
+        Some(field_types.collect())
+    }
+
+    /// Returns the return type for this variant constructor (the enum type with params).
+    pub fn return_ty(
+        self,
+        db: &'db dyn crate::analysis::HirAnalysisDb,
+    ) -> crate::analysis::ty::binder::Binder<crate::analysis::ty::ty_def::TyId<'db>> {
+        use crate::analysis::ty::{adt_def::lower_adt, binder::Binder, ty_def::TyId};
+
+        let adt = lower_adt(db, self.enum_.into());
+        let mut ret_ty = TyId::adt(db, adt);
+        ret_ty = TyId::foldl(db, ret_ty, adt.param_set(db).params(db));
+        Binder::bind(ret_ty)
+    }
+
+    /// Returns the generic parameter set (inherited from the parent enum).
+    pub fn param_set(
+        self,
+        db: &'db dyn crate::analysis::HirAnalysisDb,
+    ) -> crate::analysis::ty::ty_lower::GenericParamTypeSet<'db> {
+        use crate::analysis::ty::adt_def::lower_adt;
+
+        let adt = lower_adt(db, self.enum_.into());
+        *adt.param_set(db)
+    }
 }
 
 #[salsa::tracked]
