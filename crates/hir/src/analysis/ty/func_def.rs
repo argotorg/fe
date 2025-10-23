@@ -61,7 +61,7 @@ pub fn lower_func<'db>(
 #[salsa::tracked]
 #[derive(Debug)]
 pub struct FuncDef<'db> {
-    pub hir_def: HirFuncDefKind<'db>,
+    pub hir_def: CallableDef<'db>,
 
     pub name: IdentId<'db>,
 
@@ -114,7 +114,7 @@ impl<'db> FuncDef<'db> {
     }
 
     pub fn hir_func_def(self, db: &'db dyn HirAnalysisDb) -> Option<Func<'db>> {
-        if let HirFuncDefKind::Func(func) = self.hir_def(db) {
+        if let CallableDef::Func(func) = self.hir_def(db) {
             Some(func)
         } else {
             None
@@ -139,12 +139,12 @@ impl<'db> FuncDef<'db> {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, derive_more::From, salsa::Update)]
-pub enum HirFuncDefKind<'db> {
+pub enum CallableDef<'db> {
     Func(Func<'db>),
     VariantCtor(EnumVariant<'db>),
 }
 
-impl<'db> HirFuncDefKind<'db> {
+impl<'db> CallableDef<'db> {
     pub fn name_span(self) -> DynLazySpan<'db> {
         match self {
             Self::Func(func) => func.span().name().into(),

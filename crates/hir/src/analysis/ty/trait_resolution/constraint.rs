@@ -10,7 +10,7 @@ use crate::analysis::{
     ty::{
         adt_def::{AdtDef, lower_adt},
         binder::Binder,
-        func_def::HirFuncDefKind,
+        func_def::CallableDef,
         trait_def::TraitInstId,
         trait_lower::{lower_impl_trait, lower_trait_ref},
         trait_resolution::PredicateListId,
@@ -137,12 +137,12 @@ pub(crate) fn collect_adt_constraints<'db>(
 #[salsa::tracked]
 pub(crate) fn collect_func_def_constraints<'db>(
     db: &'db dyn HirAnalysisDb,
-    func: HirFuncDefKind<'db>,
+    func: CallableDef<'db>,
     include_parent: bool,
 ) -> Binder<PredicateListId<'db>> {
     let hir_func = match func {
-        HirFuncDefKind::Func(func) => func,
-        HirFuncDefKind::VariantCtor(var) => {
+        CallableDef::Func(func) => func,
+        CallableDef::VariantCtor(var) => {
             let adt = lower_adt(db, var.enum_.into());
             if include_parent {
                 return collect_adt_constraints(db, adt);

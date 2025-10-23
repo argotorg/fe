@@ -27,7 +27,7 @@ use crate::analysis::{
         binder::Binder,
         canonical::{Canonical, Canonicalized},
         fold::TyFoldable,
-        func_def::{FuncDef, HirFuncDefKind, lower_func},
+        func_def::{CallableDef, FuncDef, lower_func},
         normalize::normalize_ty,
         trait_def::{TraitInstId, impls_for_ty_with_constraints},
         trait_lower::{
@@ -554,7 +554,7 @@ impl<'db> ResolvedVariant<'db> {
 
         Some(FuncDef::new(
             db,
-            HirFuncDefKind::VariantCtor(self.variant),
+            CallableDef::VariantCtor(self.variant),
             self.variant.def(db).name.unwrap(),
             *adt.param_set(db),
             arg_tys,
