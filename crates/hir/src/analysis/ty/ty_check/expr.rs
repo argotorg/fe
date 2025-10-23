@@ -998,7 +998,20 @@ impl<'db> TyChecker<'db> {
                         let mut subst = AssocTySubst::new(inst);
                         expected_rhs =
                             self.normalize_ty(expected_rhs.fold_with(self.db, &mut subst));
-                        self.check_expr(rhs_expr, expected_rhs);
+
+                        // Check RHS type. If it doesn't match, emit trait error instead of type mismatch
+                        let rhs_prop = self.check_expr_unknown(rhs_expr);
+                        if self.table.unify(rhs_prop.ty, expected_rhs).is_err() {
+                            // RHS type doesn't match - this means the trait isn't implemented
+                            let diag = BodyDiag::ops_trait_not_implemented(
+                                self.db,
+                                expr.span(self.body()).into(),
+                                lhs_ty,
+                                op,
+                            );
+                            self.push_diag(diag);
+                            return ExprProp::invalid(self.db);
+                        }
                     }
                 }
 

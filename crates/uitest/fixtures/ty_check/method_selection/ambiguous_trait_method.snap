@@ -10,5 +10,5 @@ error[2-0016]: multiple trait candidates found
    │          ^^^
    │          │
    │          `foo` is ambiguous
-   │          candidate: `Trait1::foo`
    │          candidate: `Trait2::foo`
+   │          candidate: `Trait1::foo`
