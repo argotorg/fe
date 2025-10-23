@@ -23,8 +23,8 @@ use super::{
     method_cmp::compare_impl_method,
     method_table::probe_method,
     normalize::normalize_ty,
-    trait_def::{Implementor, TraitDef, ingot_trait_env},
-    trait_lower::{TraitRefLowerError, lower_trait, lower_trait_ref},
+    trait_def::{Implementor, ingot_trait_env},
+    trait_lower::{TraitRefLowerError, lower_trait_ref},
     trait_resolution::{
         PredicateListId,
         constraint::{collect_adt_constraints, collect_constraints, collect_func_def_constraints},
@@ -145,7 +145,6 @@ pub fn analyze_trait<'db>(
     let mut diags = analyzer.analyze();
 
     // Check associated type defaults satisfy their bounds
-    let _trait_def = lower_trait(db, trait_);
     let assumptions = collect_constraints(db, trait_.into()).instantiate_identity();
 
     for assoc_type in trait_.types(db) {
@@ -291,12 +290,11 @@ impl<'db> DefAnalyzer<'db> {
     }
 
     fn for_trait(db: &'db dyn HirAnalysisDb, trait_: Trait<'db>) -> Self {
-        let def = lower_trait(db, trait_);
         let assumptions = collect_constraints(db, trait_.into()).instantiate_identity();
         Self {
             db,
-            def: def.into(),
-            self_ty: def.self_param(db).into(),
+            def: DefKind::Trait(trait_),
+            self_ty: trait_.self_param(db).into(),
             diags: vec![],
             assumptions,
             current_ty: None,
@@ -334,7 +332,7 @@ impl<'db> DefAnalyzer<'db> {
         assumptions: PredicateListId<'db>,
     ) -> Self {
         let self_ty = match func.hir_func_def(db).unwrap().scope().parent(db).unwrap() {
-            ScopeId::Item(ItemKind::Trait(trait_)) => lower_trait(db, trait_).self_param(db).into(),
+            ScopeId::Item(ItemKind::Trait(trait_)) => trait_.self_param(db).into(),
             ScopeId::Item(ItemKind::ImplTrait(impl_trait)) => match impl_trait.ty(db).to_opt() {
                 Some(hir_ty) => lower_hir_ty(
                     db,
@@ -499,7 +497,6 @@ impl<'db> DefAnalyzer<'db> {
             },
 
             DefKind::Trait(trait_) => {
-                let trait_ = trait_.trait_(self.db);
                 let mut ctxt = VisitorCtxt::with_trait(self.db, trait_);
                 self.visit_trait(&mut ctxt, trait_);
             }
@@ -875,7 +872,7 @@ impl<'db> Visitor<'db> for DefAnalyzer<'db> {
         let DefKind::Trait(def) = self.def else {
             unreachable!()
         };
-        let name_span = def.trait_(self.db).span().name().into();
+        let name_span = def.span().name().into();
         self.current_ty = Some((self.def.trait_self_param(self.db), name_span));
         walk_super_trait_list(self, ctxt, super_traits);
     }
@@ -1184,7 +1181,7 @@ fn analyze_trait_ref<'db>(
 #[derive(Clone, Copy, Debug, derive_more::From)]
 enum DefKind<'db> {
     Adt(AdtDef<'db>),
-    Trait(TraitDef<'db>),
+    Trait(Trait<'db>),
     ImplTrait(Implementor<'db>),
     Impl(HirImpl<'db>),
     Func(FuncDef<'db>),
@@ -1211,7 +1208,7 @@ impl<'db> DefKind<'db> {
         }
     }
 
-    fn super_trait_cycle(self, db: &'db dyn HirAnalysisDb) -> Option<&'db Vec<TraitDef<'db>>> {
+    fn super_trait_cycle(self, db: &'db dyn HirAnalysisDb) -> Option<&'db Vec<Trait<'db>>> {
         if let Self::Trait(def) = self {
             super_trait_cycle(db, def).as_ref()
         } else {
@@ -1222,7 +1219,7 @@ impl<'db> DefKind<'db> {
     fn scope(self, db: &'db dyn HirAnalysisDb) -> ScopeId<'db> {
         match self {
             Self::Adt(def) => def.adt_ref(db).scope(),
-            Self::Trait(def) => def.trait_(db).scope(),
+            Self::Trait(def) => def.scope(),
             Self::ImplTrait(def) => def.hir_impl_trait(db).scope(),
             Self::Impl(hir_impl) => hir_impl.scope(),
             Self::Func(def) => def.scope(db),
@@ -1363,7 +1360,7 @@ fn analyze_impl_trait_specific_error<'db>(
 
     let trait_def = trait_inst.def(db);
     let trait_constraints =
-        collect_constraints(db, trait_def.trait_(db).into()).instantiate(db, trait_inst.args(db));
+        collect_constraints(db, trait_def.into()).instantiate(db, trait_inst.args(db));
     let assumptions = implementor.instantiate_identity().constraints(db);
 
     let is_satisfied = |goal: TraitInstId<'db>, span: DynLazySpan<'db>, diags: &mut Vec<_>| {
@@ -1394,16 +1391,15 @@ fn analyze_impl_trait_specific_error<'db>(
     // 7. Checks if the implementor ty satisfies the super trait constraints.
     let target_ty_span: DynLazySpan = impl_trait.span().ty().into();
 
-    for &super_trait in trait_def.super_traits(db) {
+    for &super_trait in trait_def.super_trait_insts(db) {
         let super_trait = super_trait.instantiate(db, trait_inst.args(db));
         is_satisfied(super_trait, target_ty_span.clone(), &mut diags)
     }
 
     // 8. Check that all required associated types are implemented,
     //    and that they satisfy their bounds
-    let trait_hir = trait_def.trait_(db);
     let impl_types = implementor.instantiate_identity().types(db);
-    for assoc_type in trait_hir.types(db) {
+    for assoc_type in trait_def.types(db) {
         let Some(name) = assoc_type.name.to_opt() else {
             continue;
         };
@@ -1414,7 +1410,7 @@ fn analyze_impl_trait_specific_error<'db>(
                 ImplDiag::MissingAssociatedType {
                     primary: impl_trait.span().ty().into(),
                     type_name: name,
-                    trait_: trait_hir,
+                    trait_: trait_def,
                 }
                 .into(),
             );
@@ -1472,7 +1468,7 @@ fn analyze_impl_trait_method<'db>(
 ) -> Vec<TyDiagCollection<'db>> {
     let mut diags = vec![];
     let impl_methods = implementor.methods(db);
-    let hir_trait = implementor.trait_def(db).trait_(db);
+    let hir_trait = implementor.trait_def(db);
     let trait_methods = implementor.trait_def(db).methods(db);
     let mut required_methods: IndexSet<_> = trait_methods
         .iter()

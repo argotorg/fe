@@ -917,7 +917,7 @@ impl<'db> Trait<'db> {
         ScopeId::from_item(self.into())
     }
 
-    pub fn methods(self, db: &'db dyn HirDb) -> impl Iterator<Item = Func<'db>> + 'db {
+    pub(crate) fn child_funcs(self, db: &'db dyn HirDb) -> impl Iterator<Item = Func<'db>> + 'db {
         let s_graph = self.top_mod(db).scope_graph(db);
         let scope = ScopeId::from_item(self.into());
         s_graph.child_items(scope).filter_map(|item| match item {
@@ -930,6 +930,89 @@ impl<'db> Trait<'db> {
         self.types(db)
             .iter()
             .find(|trait_type| trait_type.name.to_opt() == Some(name))
+    }
+}
+
+// Analysis methods for Trait
+#[salsa::tracked]
+impl<'db> Trait<'db> {
+    #[salsa::tracked(return_ref)]
+    pub fn methods(
+        self,
+        db: &'db dyn crate::analysis::HirAnalysisDb,
+    ) -> common::indexmap::IndexMap<IdentId<'db>, crate::analysis::ty::trait_def::TraitMethod<'db>> {
+        use crate::analysis::ty::func_def::lower_func;
+        use common::indexmap::IndexMap;
+
+        let mut methods = IndexMap::<IdentId<'db>, crate::analysis::ty::trait_def::TraitMethod<'db>>::default();
+        for method in self.child_funcs(db) {
+            let Some(func) = lower_func(db, method) else {
+                continue;
+            };
+            let name = func.name(db);
+            let trait_method = crate::analysis::ty::trait_def::TraitMethod(func);
+            // We can simply ignore the conflict here because it's already
+            // handled by the def analysis pass
+            methods.entry(name).or_insert(trait_method);
+        }
+        methods
+    }
+
+    pub fn params(
+        self,
+        db: &'db dyn crate::analysis::HirAnalysisDb,
+    ) -> &'db [crate::analysis::ty::ty_def::TyId<'db>] {
+        self.param_set(db).params(db)
+    }
+
+    #[salsa::tracked(return_ref)]
+    pub fn param_set(
+        self,
+        db: &'db dyn crate::analysis::HirAnalysisDb,
+    ) -> crate::analysis::ty::ty_lower::GenericParamTypeSet<'db> {
+        crate::analysis::ty::ty_lower::collect_generic_params(db, self.into())
+    }
+
+    pub fn self_param(
+        self,
+        db: &'db dyn crate::analysis::HirAnalysisDb,
+    ) -> crate::analysis::ty::ty_def::TyId<'db> {
+        self.param_set(db).trait_self(db).unwrap()
+    }
+
+    pub fn original_params(
+        self,
+        db: &'db dyn crate::analysis::HirAnalysisDb,
+    ) -> &'db [crate::analysis::ty::ty_def::TyId<'db>] {
+        self.param_set(db).explicit_params(db)
+    }
+
+    pub fn expected_implementor_kind(
+        self,
+        db: &'db dyn crate::analysis::HirAnalysisDb,
+    ) -> &'db crate::analysis::ty::ty_def::Kind {
+        self.self_param(db).kind(db)
+    }
+
+    pub fn ingot(self, db: &'db dyn crate::analysis::HirAnalysisDb) -> Ingot<'db> {
+        self.top_mod(db).ingot(db)
+    }
+
+    pub fn super_trait_insts(
+        self,
+        db: &'db dyn crate::analysis::HirAnalysisDb,
+    ) -> &'db common::indexmap::IndexSet<crate::analysis::ty::binder::Binder<crate::analysis::ty::trait_def::TraitInstId<'db>>> {
+        use std::sync::OnceLock;
+        use crate::analysis::ty::trait_resolution::constraint::{collect_super_traits, super_trait_cycle};
+        use common::indexmap::IndexSet;
+
+        static EMPTY: OnceLock<IndexSet<crate::analysis::ty::binder::Binder<crate::analysis::ty::trait_def::TraitInstId>>> = OnceLock::new();
+
+        if super_trait_cycle(db, self).is_some() {
+            EMPTY.get_or_init(IndexSet::new)
+        } else {
+            collect_super_traits(db, self)
+        }
     }
 }
 

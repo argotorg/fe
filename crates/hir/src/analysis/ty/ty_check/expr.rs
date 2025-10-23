@@ -1,7 +1,7 @@
 use std::panic;
 
 use crate::hir_def::{
-    ArithBinOp, BinOp, Expr, ExprId, FieldIndex, IdentId, Partial, Pat, PatId, PathId, UnOp,
+    ArithBinOp, BinOp, Expr, ExprId, FieldIndex, IdentId, Partial, Pat, PatId, PathId, Trait, UnOp,
     VariantKind,
 };
 use common::ingot::IngotKind;
@@ -19,7 +19,6 @@ use crate::analysis::ty::{
     ty_check::callable::Callable,
     ty_def::{TyBase, TyData},
 };
-use crate::analysis::ty::{trait_def::TraitDef, trait_lower::lower_trait};
 use crate::analysis::{
     HirAnalysisDb, Spanned,
     name_resolution::{
@@ -447,7 +446,7 @@ impl<'db> TyChecker<'db> {
                 PathRes::Trait(trait_) => {
                     let diag = BodyDiag::NotValue {
                         primary: path_expr_span.clone().into(),
-                        given: Either::Left(trait_.def(self.db).trait_(self.db).into()),
+                        given: Either::Left(trait_.def(self.db).into()),
                     };
                     self.push_diag(diag);
                     ExprProp::invalid(self.db)
@@ -577,7 +576,7 @@ impl<'db> TyChecker<'db> {
             PathRes::Trait(trait_) => {
                 let diag = BodyDiag::NotValue {
                     primary: span.into(),
-                    given: Either::Left(trait_.def(self.db).trait_(self.db).into()),
+                    given: Either::Left(trait_.def(self.db).into()),
                 };
                 self.push_diag(diag);
                 ExprProp::invalid(self.db)
@@ -709,7 +708,7 @@ impl<'db> TyChecker<'db> {
     /// as the module and the last segment as the trait name. Returns a base
     /// trait instance whose generic args are the trait's own params
     /// (placeholders), avoiding the need for explicit non-Self args.
-    fn resolve_core_trait(&self, trait_path: PathId<'db>) -> Option<TraitDef<'db>> {
+    fn resolve_core_trait(&self, trait_path: PathId<'db>) -> Option<Trait<'db>> {
         let scope = self.env.scope();
         let assumptions = self.env.assumptions();
         let mut module_path = trait_path.parent(self.db)?;
@@ -733,7 +732,7 @@ impl<'db> TyChecker<'db> {
         let bucket =
             resolve_ident_to_bucket(self.db, PathId::from_ident(self.db, trait_name), mod_scope);
         let nameres = bucket.pick(NameDomain::TYPE).as_ref().ok()?;
-        Some(lower_trait(self.db, nameres.trait_()?))
+        nameres.trait_()
     }
 
     fn check_array(

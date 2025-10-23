@@ -31,7 +31,7 @@ use crate::analysis::{
         normalize::normalize_ty,
         trait_def::{TraitInstId, impls_for_ty_with_constraints},
         trait_lower::{
-            TraitArgError, TraitRefLowerError, lower_trait, lower_trait_ref, lower_trait_ref_impl,
+            TraitArgError, TraitRefLowerError, lower_trait_ref, lower_trait_ref_impl,
         },
         trait_resolution::PredicateListId,
         ty_def::{InvalidCause, Kind, TyData, TyId},
@@ -425,7 +425,7 @@ impl<'db> PathRes<'db> {
             PathRes::Ty(ty) | PathRes::Func(ty) => ty.as_scope(db),
             PathRes::Const(const_, _) => Some(const_.scope()),
             PathRes::TyAlias(alias, _) => Some(alias.alias.scope()),
-            PathRes::Trait(trait_) => Some(trait_.def(db).trait_(db).scope()),
+            PathRes::Trait(trait_) => Some(trait_.def(db).scope()),
             PathRes::EnumVariant(variant) => Some(variant.enum_(db).scope()),
             PathRes::FuncParam(item, idx) => Some(ScopeId::FuncParam(*item, *idx)),
             PathRes::Mod(scope) => Some(*scope),
@@ -852,7 +852,7 @@ pub fn find_associated_type<'db>(
                 if trait_.assoc_ty(db, name).is_some() {
                     let trait_inst = TraitInstId::new(
                         db,
-                        lower_trait(db, trait_),
+                        trait_,
                         vec![ty.value],
                         IndexMap::new(),
                     );
@@ -927,9 +927,8 @@ pub fn find_associated_type<'db>(
 
         // Also check bounds defined on the associated type in the trait definition
         let trait_def = assoc_ty.trait_.def(db);
-        let trait_ = trait_def.trait_(db);
 
-        if let Some(assoc_ty_decl) = trait_.assoc_ty(db, assoc_ty.name) {
+        if let Some(assoc_ty_decl) = trait_def.assoc_ty(db, assoc_ty.name) {
             for bound in &assoc_ty_decl.bounds {
                 let TypeBound::Trait(trait_ref) = bound else {
                     todo!("assoc ty kind bounds")
@@ -1091,15 +1090,13 @@ pub fn resolve_name_res<'db>(
             }
 
             ScopeId::TraitType(t, idx) => {
-                let trait_def = lower_trait(db, t);
                 let trait_type = &t.types(db)[idx as usize];
 
-                let params = collect_generic_params(db, t.into());
-                let self_ty = params.trait_self(db).unwrap();
+                let self_ty = t.self_param(db);
 
                 let mut trait_args = vec![self_ty];
                 trait_args.extend_from_slice(args);
-                let trait_inst = TraitInstId::new(db, trait_def, &trait_args, IndexMap::new());
+                let trait_inst = TraitInstId::new(db, t, &trait_args, IndexMap::new());
 
                 // Create an associated type reference
                 let assoc_ty_name = trait_type.name.unwrap();

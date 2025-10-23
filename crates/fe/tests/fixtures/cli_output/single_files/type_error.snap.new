@@ -7,14 +7,11 @@ input_file: tests/fixtures/cli_output/single_files/type_error.fe
 === STDERR ===
 errors in file://<project>/crates/fe/tests/fixtures/cli_output/single_files/type_error.fe
 
-error[8-0016]: `core::ops::Add` trait is not implemented
-  ┌─ type_error.fe:4:12
+error[8-0000]: type mismatch
+  ┌─ type_error.fe:4:16
   │
 4 │     return x + y  // Type error: can't add i32 and bool
-  │            ^^^^^
-  │            │
-  │            `+` can't be applied to `i32`
-  │            Try implementing `core::ops::Add` for `i32`
+  │                ^ expected `i32`, but `bool` is given
 
 
 === EXIT CODE: 1 ===

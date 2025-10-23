@@ -1,5 +1,5 @@
 use crate::hir_def::{
-    IdentId, ItemKind, TopLevelMod, TypeAlias,
+    IdentId, ItemKind, TopLevelMod, Trait, TypeAlias,
     scope_graph::{ScopeGraph, ScopeId},
 };
 use adt_def::{AdtDef, AdtRef, lower_adt};
@@ -7,8 +7,7 @@ use def_analysis::check_recursive_adt;
 use diagnostics::{DefConflictError, TraitLowerDiag, TyLowerDiag};
 use rustc_hash::{FxHashMap, FxHashSet};
 use smallvec1::SmallVec;
-use trait_def::TraitDef;
-use trait_lower::lower_trait;
+// TraitDef and lower_trait have been eliminated
 use trait_resolution::constraint::{collect_constraints, super_trait_cycle};
 use ty_def::{InvalidCause, TyData};
 use ty_lower::lower_type_alias;
@@ -175,12 +174,11 @@ impl ModuleAnalysisPass for TraitAnalysisPass {
         top_mod: TopLevelMod<'db>,
     ) -> Vec<Box<dyn DiagnosticVoucher + 'db>> {
         let mut diags = vec![];
-        let mut cycle_participants = FxHashSet::<TraitDef<'db>>::default();
+        let mut cycle_participants = FxHashSet::<Trait<'db>>::default();
 
         for hir_trait in top_mod.all_traits(db) {
-            let trait_ = lower_trait(db, *hir_trait);
-            if !cycle_participants.contains(&trait_)
-                && let Some(cycle) = super_trait_cycle(db, trait_)
+            if !cycle_participants.contains(hir_trait)
+                && let Some(cycle) = super_trait_cycle(db, *hir_trait)
             {
                 diags.push(Box::new(TraitLowerDiag::CyclicSuperTraits(cycle.clone())) as _);
                 cycle_participants.extend(cycle.iter());

@@ -13,7 +13,7 @@ use super::{
     const_ty::ConstTyId,
     fold::{TyFoldable, TyFolder},
     func_def::FuncDef,
-    trait_def::{Implementor, TraitDef, TraitInstId, does_impl_trait_conflict},
+    trait_def::{Implementor, TraitInstId, does_impl_trait_conflict},
     trait_resolution::PredicateListId,
     ty_def::{InvalidCause, TyId},
     ty_lower::{collect_generic_params, lower_hir_ty},
@@ -29,12 +29,9 @@ use crate::analysis::{
     },
 };
 
-type TraitImplTable<'db> = FxHashMap<TraitDef<'db>, Vec<Binder<Implementor<'db>>>>;
+type TraitImplTable<'db> = FxHashMap<Trait<'db>, Vec<Binder<Implementor<'db>>>>;
 
-#[salsa::tracked]
-pub(crate) fn lower_trait<'db>(db: &'db dyn HirAnalysisDb, trait_: Trait<'db>) -> TraitDef<'db> {
-    TraitDef::new(db, trait_)
-}
+// lower_trait has been eliminated - use Trait directly
 
 /// Collect all trait implementors in the ingot.
 /// The returned table doesn't contain the const(external) ingot
@@ -106,8 +103,8 @@ pub(crate) fn lower_impl_trait<'db>(
     // the trait's own scope and then instantiated with this impl's concrete args
     // (including Self). This ensures defaults like `type Output = Self` resolve
     // to the implementor's concrete self type rather than remaining as `Self`.
-    let trait_scope = trait_.def(db).trait_(db).scope();
-    for t in trait_.def(db).trait_(db).types(db).iter() {
+    let trait_scope = trait_.def(db).scope();
+    for t in trait_.def(db).types(db).iter() {
         let (Some(name), Some(default)) = (t.name.to_opt(), t.default) else {
             continue;
         };
@@ -201,8 +198,7 @@ pub(crate) fn lower_trait_ref_impl<'db>(
     assumptions: PredicateListId<'db>,
     t: Trait<'db>,
 ) -> Result<TraitInstId<'db>, TraitArgError<'db>> {
-    let trait_def = lower_trait(db, t);
-    let trait_params: &[TyId<'db>] = trait_def.params(db);
+    let trait_params: &[TyId<'db>] = t.params(db);
     let args = path.generic_args(db).data(db);
 
     // Lower provided explicit args (excluding Self)
@@ -219,11 +215,11 @@ pub(crate) fn lower_trait_ref_impl<'db>(
         .collect();
 
     // Fill trailing defaults using the trait's param set. Bind Self (idx 0).
-    let non_self_completed = trait_def
+    let non_self_completed = t
         .param_set(db)
         .complete_explicit_args_with_defaults(
             db,
-            Some(trait_def.self_param(db)),
+            Some(t.self_param(db)),
             &provided_explicit,
             assumptions,
         );
@@ -236,7 +232,7 @@ pub(crate) fn lower_trait_ref_impl<'db>(
     }
 
     let mut final_args: Vec<TyId<'db>> = Vec::with_capacity(trait_params.len());
-    final_args.push(trait_def.self_param(db));
+    final_args.push(t.self_param(db));
     final_args.extend(non_self_completed);
 
     for (expected_ty, actual_ty) in trait_params.iter().zip(final_args.iter_mut()).skip(1) {
@@ -289,7 +285,7 @@ pub(crate) fn lower_trait_ref_impl<'db>(
         })
         .collect();
 
-    Ok(TraitInstId::new(db, trait_def, final_args, assoc_bindings))
+    Ok(TraitInstId::new(db, t, final_args, assoc_bindings))
 }
 
 #[salsa::tracked(return_ref)]

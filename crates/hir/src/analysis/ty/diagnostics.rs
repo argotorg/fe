@@ -1,7 +1,7 @@
 use super::{
     def_analysis::AdtCycleMember,
     func_def::FuncDef,
-    trait_def::{TraitDef, TraitInstId},
+    trait_def::TraitInstId,
     ty_check::{RecordLike, TraitOps},
     ty_def::{Kind, TyId},
 };
@@ -474,7 +474,7 @@ pub enum TraitLowerDiag<'db> {
         conflict_with: ImplTrait<'db>,
     },
 
-    CyclicSuperTraits(Vec<TraitDef<'db>>),
+    CyclicSuperTraits(Vec<Trait<'db>>),
 }
 
 impl TraitLowerDiag<'_> {

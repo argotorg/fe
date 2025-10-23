@@ -187,7 +187,7 @@ impl<'db> TyChecker<'db> {
                 Ok(PathRes::Trait(trait_)) => {
                     let diag = BodyDiag::NotValue {
                         primary: span.into(),
-                        given: Either::Left(trait_.def(self.db).trait_(self.db).into()),
+                        given: Either::Left(trait_.def(self.db).into()),
                     };
                     self.push_diag(diag);
                     TyId::invalid(self.db, InvalidCause::Other)
@@ -250,7 +250,7 @@ impl<'db> TyChecker<'db> {
                 PathRes::Trait(trait_) => {
                     let diag = BodyDiag::NotValue {
                         primary: span.into(),
-                        given: Either::Left(trait_.def(self.db).trait_(self.db).into()),
+                        given: Either::Left(trait_.def(self.db).into()),
                     };
                     self.push_diag(diag);
                     return TyId::invalid(self.db, InvalidCause::Other);
@@ -381,7 +381,7 @@ impl<'db> TyChecker<'db> {
                 PathRes::Trait(trait_) => {
                     let diag = BodyDiag::NotValue {
                         primary: span.into(),
-                        given: Either::Left(trait_.def(self.db).trait_(self.db).into()),
+                        given: Either::Left(trait_.def(self.db).into()),
                     };
                     self.push_diag(diag);
                     TyId::invalid(self.db, InvalidCause::Other)

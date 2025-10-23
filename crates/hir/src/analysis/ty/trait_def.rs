@@ -183,7 +183,7 @@ pub(crate) fn impls_for_ty<'db>(
 /// implementors which can be used in the ingot.
 #[derive(Debug, PartialEq, Eq, Clone, Update)]
 pub(crate) struct TraitEnv<'db> {
-    pub(super) impls: FxHashMap<TraitDef<'db>, Vec<Binder<Implementor<'db>>>>,
+    pub(super) impls: FxHashMap<Trait<'db>, Vec<Binder<Implementor<'db>>>>,
     hir_to_implementor: FxHashMap<ImplTrait<'db>, Binder<Implementor<'db>>>,
 
     /// This maintains a mapping from the base type to the implementors.
@@ -272,7 +272,7 @@ impl<'db> Implementor<'db> {
     }
 
     /// Returns the trait definition that this implementor implements.
-    pub(crate) fn trait_def(self, db: &'db dyn HirAnalysisDb) -> TraitDef<'db> {
+    pub(crate) fn trait_def(self, db: &'db dyn HirAnalysisDb) -> Trait<'db> {
         self.trait_(db).def(db)
     }
 
@@ -384,7 +384,7 @@ pub(super) fn does_impl_trait_conflict(
 #[salsa::interned]
 #[derive(Debug)]
 pub struct TraitInstId<'db> {
-    pub def: TraitDef<'db>,
+    pub def: Trait<'db>,
     /// Regular type and const parameters: [Self, ExplicitTypeParam1, ..., ExplicitConstParamN]
     #[return_ref]
     pub args: Vec<TyId<'db>>,
@@ -397,7 +397,7 @@ pub struct TraitInstId<'db> {
 impl<'db> TraitInstId<'db> {
     pub fn with_fresh_vars(
         db: &'db dyn HirAnalysisDb,
-        def: TraitDef<'db>,
+        def: Trait<'db>,
         table: &mut UnificationTable<'db>,
     ) -> Self {
         let args = def
@@ -419,7 +419,7 @@ impl<'db> TraitInstId<'db> {
         if let Some(ty) = self.assoc_type_bindings(db).get(&name) {
             return Some(*ty);
         }
-        if self.def(db).trait_(db).assoc_ty(db, name).is_some() {
+        if self.def(db).assoc_ty(db, name).is_some() {
             return Some(TyId::assoc_ty(db, self, name));
         }
         None
@@ -431,7 +431,7 @@ impl<'db> TraitInstId<'db> {
             let self_ty = self.self_ty(db);
             format! {"{}: {}", self_ty.pretty_print(db), inst}
         } else {
-            let mut s = self.def(db).name(db).unwrap_or("<unknown>").to_string();
+            let mut s = self.def(db).name(db).to_opt().unwrap_or_else(|| IdentId::new(db, "<unknown>".to_string())).data(db).to_string();
 
             let mut args = self.args(db).iter().map(|ty| ty.pretty_print(db));
             // Skip the first type parameter since it's the implementor type.
@@ -509,48 +509,7 @@ impl<'db> TraitInstId<'db> {
     }
 }
 
-/// Represents a trait definition.
-#[salsa::tracked]
-#[derive(Debug)]
-pub struct TraitDef<'db> {
-    pub trait_: Trait<'db>,
-}
-
-#[salsa::tracked]
-impl<'db> TraitDef<'db> {
-    #[salsa::tracked(return_ref)]
-    pub fn methods(self, db: &'db dyn HirAnalysisDb) -> IndexMap<IdentId<'db>, TraitMethod<'db>> {
-        let mut methods = IndexMap::<IdentId<'db>, TraitMethod<'db>>::default();
-        for method in self.trait_(db).methods(db) {
-            let Some(func) = lower_func(db, method) else {
-                continue;
-            };
-            let name = func.name(db);
-            let trait_method = TraitMethod(func);
-            // We can simply ignore the conflict here because it's already
-            // handled by the def analysis pass
-            methods.entry(name).or_insert(trait_method);
-        }
-        methods
-    }
-
-    pub fn params(self, db: &'db dyn HirAnalysisDb) -> &'db [TyId<'db>] {
-        self.param_set(db).params(db)
-    }
-
-    #[salsa::tracked(return_ref)]
-    pub fn param_set(self, db: &'db dyn HirAnalysisDb) -> GenericParamTypeSet<'db> {
-        collect_generic_params(db, self.trait_(db).into())
-    }
-
-    pub fn self_param(self, db: &'db dyn HirAnalysisDb) -> TyId<'db> {
-        self.param_set(db).trait_self(db).unwrap()
-    }
-
-    pub fn original_params(self, db: &'db dyn HirAnalysisDb) -> &'db [TyId<'db>] {
-        self.param_set(db).explicit_params(db)
-    }
-}
+// TraitDef has been eliminated - use Trait directly via TraitInstId.def(db)
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy, Hash, salsa::Update)]
 pub struct TraitMethod<'db>(pub FuncDef<'db>);
@@ -558,39 +517,6 @@ pub struct TraitMethod<'db>(pub FuncDef<'db>);
 impl TraitMethod<'_> {
     pub fn has_default_impl(self, db: &dyn HirAnalysisDb) -> bool {
         self.0.hir_func_def(db).unwrap().body(db).is_some()
-    }
-}
-
-impl<'db> TraitDef<'db> {
-    /// Returns the type kind that implementor type must have.
-    pub(crate) fn expected_implementor_kind(self, db: &'db dyn HirAnalysisDb) -> &'db Kind {
-        self.self_param(db).kind(db)
-    }
-
-    /// Returns `ingot` in which this trait is defined.
-    pub(crate) fn ingot(self, db: &'db dyn HirAnalysisDb) -> Ingot<'db> {
-        self.trait_(db).top_mod(db).ingot(db)
-    }
-
-    pub fn super_traits(
-        self,
-        db: &'db dyn HirAnalysisDb,
-    ) -> &'db IndexSet<Binder<TraitInstId<'db>>> {
-        use std::sync::OnceLock;
-        static EMPTY: OnceLock<IndexSet<Binder<TraitInstId>>> = OnceLock::new();
-
-        if super_trait_cycle(db, self).is_some() {
-            EMPTY.get_or_init(IndexSet::new)
-        } else {
-            collect_super_traits(db, self)
-        }
-    }
-
-    fn name(self, db: &'db dyn HirAnalysisDb) -> Option<&'db str> {
-        self.trait_(db)
-            .name(db)
-            .to_opt()
-            .map(|name| name.data(db).as_str())
     }
 }
 

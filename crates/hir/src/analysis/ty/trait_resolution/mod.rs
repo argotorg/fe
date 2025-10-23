@@ -122,7 +122,7 @@ pub(crate) fn check_trait_inst_wf<'db>(
     trait_inst: TraitInstId<'db>,
     assumptions: PredicateListId<'db>,
 ) -> WellFormedness<'db> {
-    let constraints = collect_constraints(db, trait_inst.def(db).trait_(db).into())
+    let constraints = collect_constraints(db, trait_inst.def(db).into())
         .instantiate(db, trait_inst.args(db));
 
     // Normalize constraints after instantiation to resolve associated types
@@ -233,7 +233,7 @@ impl<'db> PredicateListId<'db> {
 
         while let Some(pred) = worklist.pop() {
             // 1. Collect super traits
-            for &super_trait in pred.def(db).super_traits(db).iter() {
+            for &super_trait in pred.def(db).super_trait_insts(db).iter() {
                 // Instantiate with current predicate's args
                 let inst = super_trait.instantiate(db, pred.args(db));
 
@@ -249,7 +249,7 @@ impl<'db> PredicateListId<'db> {
             }
 
             // 2. Collect associated type bounds
-            let hir_trait = pred.def(db).trait_(db);
+            let hir_trait = pred.def(db);
             for trait_type in hir_trait.types(db) {
                 // Get the associated type name
                 let Some(assoc_ty_name) = trait_type.name.to_opt() else {

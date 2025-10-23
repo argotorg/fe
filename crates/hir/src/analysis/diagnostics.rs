@@ -11,14 +11,13 @@ use crate::analysis::{
             BodyDiag, DefConflictError, FuncBodyDiag, ImplDiag, TraitConstraintDiag,
             TraitLowerDiag, TyDiagCollection, TyLowerDiag,
         },
-        trait_def::TraitDef,
         ty_check::RecordLike,
         ty_def::{TyData, TyVarSort},
     },
 };
 use crate::{
     ParserError, SpannedHirDb,
-    hir_def::{FieldIndex, PathKind},
+    hir_def::{FieldIndex, PathKind, Trait},
     span::LazySpan,
 };
 use common::diagnostics::{
@@ -200,7 +199,7 @@ impl DiagnosticVoucher for PathResDiag<'_> {
                         RecordLike::Type(*ty).kind_name(db),
                     ),
                     Either::Right(trait_) => {
-                        let name = trait_.def(db).trait_(db).name(db).unwrap().data(db);
+                        let name = trait_.def(db).name(db).unwrap().data(db);
                         (name, None, "trait".to_string())
                     }
                 };
@@ -311,7 +310,7 @@ impl DiagnosticVoucher for PathResDiag<'_> {
                 }];
 
                 for (trait_inst, ty) in candidates {
-                    let trait_def = trait_inst.def(db).trait_(db);
+                    let trait_def = trait_inst.def(db);
                     let trait_name = trait_def.name(db).unwrap().data(db);
                     let span = trait_def.span().name().resolve(db);
 
@@ -2115,7 +2114,7 @@ impl DiagnosticVoucher for TraitLowerDiag<'_> {
             },
 
             Self::CyclicSuperTraits(traits) => {
-                let span = |t: &TraitDef| t.trait_(db).span().name().resolve(db);
+                let span = |t: &Trait| t.span().name().resolve(db);
                 CompleteDiagnostic {
                     severity: Severity::Error,
                     message: "cyclic trait bounds are not allowed".to_string(),
