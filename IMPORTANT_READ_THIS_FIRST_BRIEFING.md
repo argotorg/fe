@@ -554,3 +554,26 @@ The refactoring is successful when:
 
 - **Meeting transcript:** `iffy-transcription-of-fe-meeting-oct-21.srt` (in this repo)
 - **Failed first attempt branch:** `hir-api-rework` (for reference only)
+
+---
+
+## Ongoing Learnings
+
+**Run Targeted Tests During Refactoring**
+Don't wait until the end. After changing a file, run its specific tests immediately:
+```bash
+cargo test <specific_test_name> --quiet
+```
+Catch regressions instantly rather than debugging them later.
+
+**One Refactoring Pattern at a Time**
+Separate type substitutions from semantic changes:
+- Type substitution: `TraitDef` → `Trait` (mechanical)
+- Semantic change: removing `lower_trait` calls (changes meaning)
+
+Do these in separate passes when possible.
+
+**Document Non-Obvious Code**
+When encountering special-case logic, ask "Why?" before changing it. If the answer isn't obvious, it's a potential trap.
+
+**Bottom Line**: Understand the code first (via targeted tests + tracing through examples), then refactor. Changing code we don't fully understand causes churn.
