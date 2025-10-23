@@ -629,6 +629,7 @@ pub struct Func<'db> {
     #[return_ref]
     pub(crate) origin: HirOrigin<ast::Func>,
 }
+#[salsa::tracked]
 impl<'db> Func<'db> {
     pub fn span(self) -> LazyFuncSpan<'db> {
         LazyFuncSpan::new(self)
@@ -674,6 +675,75 @@ impl<'db> Func<'db> {
     pub fn param_label_or_name(self, db: &'db dyn HirDb, idx: usize) -> Option<FuncParamName<'db>> {
         let param = self.params(db).to_opt()?.data(db).get(idx)?;
         param.label.or(param.name.to_opt())
+    }
+
+    // Analysis methods (type lowering)
+
+    #[salsa::tracked(return_ref)]
+    pub fn arg_tys(
+        self,
+        db: &'db dyn crate::analysis::HirAnalysisDb,
+    ) -> Vec<crate::analysis::ty::binder::Binder<crate::analysis::ty::ty_def::TyId<'db>>> {
+        use crate::analysis::ty::{
+            binder::Binder,
+            trait_resolution::constraint::collect_func_def_constraints,
+            ty_def::{InvalidCause, TyId},
+            ty_lower::lower_hir_ty,
+        };
+
+        let assumptions = collect_func_def_constraints(db, self.into(), true).instantiate_identity();
+
+        match self.params(db) {
+            Partial::Present(params) => params
+                .data(db)
+                .iter()
+                .map(|arg| {
+                    let ty = arg
+                        .ty
+                        .to_opt()
+                        .map(|ty| lower_hir_ty(db, ty, self.scope(), assumptions))
+                        .unwrap_or_else(|| TyId::invalid(db, InvalidCause::ParseError));
+                    Binder::bind(ty)
+                })
+                .collect(),
+            Partial::Absent => vec![],
+        }
+    }
+
+    #[salsa::tracked]
+    pub fn return_ty(
+        self,
+        db: &'db dyn crate::analysis::HirAnalysisDb,
+    ) -> crate::analysis::ty::binder::Binder<crate::analysis::ty::ty_def::TyId<'db>> {
+        use crate::analysis::ty::{
+            binder::Binder,
+            trait_resolution::constraint::collect_func_def_constraints,
+            ty_def::TyId,
+            ty_lower::lower_hir_ty,
+        };
+
+        let assumptions = collect_func_def_constraints(db, self.into(), true).instantiate_identity();
+        let ty = self
+            .ret_ty(db) // Access the field
+            .map(|ty| lower_hir_ty(db, ty, self.scope(), assumptions))
+            .unwrap_or_else(|| TyId::unit(db));
+        Binder::bind(ty)
+    }
+
+    #[salsa::tracked]
+    pub fn param_set(
+        self,
+        db: &'db dyn crate::analysis::HirAnalysisDb,
+    ) -> crate::analysis::ty::ty_lower::GenericParamTypeSet<'db> {
+        crate::analysis::ty::ty_lower::collect_generic_params(db, self.into())
+    }
+
+    pub fn receiver_ty(
+        self,
+        db: &'db dyn crate::analysis::HirAnalysisDb,
+    ) -> Option<crate::analysis::ty::binder::Binder<crate::analysis::ty::ty_def::TyId<'db>>> {
+        self.is_method(db)
+            .then(|| self.arg_tys(db).first().copied().unwrap())
     }
 }
 

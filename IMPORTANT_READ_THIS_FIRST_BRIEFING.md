@@ -576,4 +576,4 @@ Do these in separate passes when possible.
 **Document Non-Obvious Code**
 When encountering special-case logic, ask "Why?" before changing it. If the answer isn't obvious, it's a potential trap.
 
-**Bottom Line**: Understand the code first (via targeted tests + tracing through examples), then refactor. Changing code we don't fully understand causes churn.
+**Bottom Line**: Understand the code first (via targeted tests + tracing through examples), then refactor. Changing code we don't fully understand causes churn. Understanding the code first has the added benefit of being educational both for you (the agent) and myself (the human).  Thanks for doing that!

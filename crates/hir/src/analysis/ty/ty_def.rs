@@ -200,11 +200,11 @@ impl<'db> TyId<'db> {
         Self::new(db, TyData::TyBase(TyBase::Prim(PrimTy::Ptr)))
     }
 
-    pub(super) fn tuple(db: &'db dyn HirAnalysisDb, n: usize) -> Self {
+    pub(crate) fn tuple(db: &'db dyn HirAnalysisDb, n: usize) -> Self {
         Self::new(db, TyData::TyBase(TyBase::tuple(n)))
     }
 
-    pub(super) fn tuple_with_elems(db: &'db dyn HirAnalysisDb, elems: &[TyId<'db>]) -> Self {
+    pub(crate) fn tuple_with_elems(db: &'db dyn HirAnalysisDb, elems: &[TyId<'db>]) -> Self {
         let base = TyBase::tuple(elems.len());
         let mut ty = Self::new(db, TyData::TyBase(base));
         for &elem in elems {
@@ -233,7 +233,7 @@ impl<'db> TyId<'db> {
         TyId::app(db, array, len)
     }
 
-    pub(super) fn unit(db: &'db dyn HirAnalysisDb) -> Self {
+    pub(crate) fn unit(db: &'db dyn HirAnalysisDb) -> Self {
         Self::tuple(db, 0)
     }
 
