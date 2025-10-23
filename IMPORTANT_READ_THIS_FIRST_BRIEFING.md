@@ -176,9 +176,29 @@ This is an inventory of the key abstractions in the `hir::analysis` module and p
     *   **Example**: `func.arg_tys(db)` and `func.ret_ty(db)`
 
 *   **`analysis::ty::trait_def::Implementor`**
-    *   **Purpose**: Represents a lowered `impl Trait` block, caching resolved types and constraints.
-    *   **Consolidation Pointer**: Move logic into methods on `ImplTrait`, like `impl_trait.self_ty(db)` and `impl_trait.methods(db)`.
-    *   **Complexity**: The main challenge is handling `Binder<Implementor>` - see detailed strategy below.
+    *   **Purpose**: Represents a lowered, semantic representation of an `impl Trait` block, caching resolved types and constraints.
+    *   **Consolidation Pointer**: The logic will be moved into methods on `ImplTrait`. The `Implementor` struct will be renamed to `TraitImplData` and become a `pub(crate)` implementation detail.
+    *   **Complexity**: HIGH. This is the most complex part of the refactor and was the primary cause of the previous failure.
+
+**CRITICAL COMPLEXITY: The `Binder` and the Syntactic/Semantic Divide**
+
+-   A generic `impl<T> Foo for T` is a template. The `Binder` is the mechanism that allows the compiler to substitute `T` with a concrete type (e.g., `u32`) to check if the `impl` applies.
+-   To do this, the `Binder` must wrap a **semantic**, `TyFoldable` data structure. It needs to know about `TyId`s and other semantic types to perform substitutions.
+-   The `ImplTrait` struct is **syntactic**; it contains `PathId`s and other source-level information. It is not `TyFoldable`. You cannot substitute a semantic `TyId` into a syntactic `PathId`.
+-   This means an intermediate, semantic data structure **must exist**. This is the role of `Implementor`. The previous refactor failed when it tried to eliminate this structure without a correct replacement, leading to inconsistent type substitutions.
+
+**The Correct Strategy: Containment, Not Elimination**
+
+The goal is to make the semantic data structure an invisible implementation detail.
+
+1.  **Rename and Contain**: Rename `Implementor` to `TraitImplData` and make it `pub(crate)`. Its purpose is to be the semantic, `TyFoldable` payload for the `Binder`.
+2.  **Isolate Lowering**: The `lower_impl_trait` function, which creates the `Binder<TraitImplData>`, will be kept but also made `pub(crate)`.
+3.  **Create the Public API**:
+    -   A `pub(crate)` `#[salsa::tracked]` method will be added to `ImplTrait`: `fn data(self, db) -> Binder<TraitImplData>`. This will be the single internal entry point to the lowered form.
+    -   All **public** analysis methods (`self_ty`, `trait_inst`, `methods`, etc.) will be added to `ImplTrait`.
+    -   These public methods will use `self.data(db)` internally to get the semantic information they need.
+
+This design makes `ImplTrait` the single, context-rich touchpoint for consumers of the API, while correctly handling the complexities of generic `impl` blocks under the hood.
 
 *   **`analysis::ty::adt_def::AdtDef`**
     *   **Purpose**: Wraps `Struct`, `Contract`, or `Enum` to provide a unified analysis view.
@@ -202,11 +222,11 @@ These are not one-to-one wrappers, but represent significant analysis logic that
 
 *   **`check_func_body` (`ty_check/mod.rs`)**
     *   **Purpose**: Performs type checking for a function body.
-    *   **Consolidation Pointer**: This is the "body-level traversal" work. The logic should be moved into methods on `Expr`, `Stmt`, and `Pat` wrappers.
+    *   **Consolidation Pointer**: The logic will be encapsulated within a single high-level analysis method, such as `func.type_check(db)`. This method will be the public API for body analysis.
 
 *   **`TyCheckEnv` (`ty_check/env.rs`)**
     *   **Purpose**: A stateful environment for type checking a function body.
-    *   **Consolidation Pointer**: As body-level traversal is implemented, the state in `TyCheckEnv` (like `expr_stack`, `loop_stack`, etc.) should be eliminated in favor of context-rich wrappers on `Expr`, `Stmt`, and `Pat`.
+    *   **Consolidation Pointer**: This will be replaced by a temporary, `pub(crate)` context struct (e.g., `TyCheckCtxt`). This context object will be created and used exclusively as an *internal implementation detail* of the main `func.type_check(db)` method. It will be passed through the internal expression/statement traversal, but will not be exposed to consumers of the HIR API. This avoids creating new persistent wrappers for every expression and statement.
 
 ---
 
@@ -236,7 +256,7 @@ Instead of stopping to fix each regression, work continued, creating a pile of b
 
 When `constraints_standalone__specialized` failed, we spent hours debugging complex trait resolution and method selection logic instead of stepping back to understand the root cause.
 
-**What actually happened:** The `Binder<Implementor>` struct automatically applied type substitutions to `self_ty`, `trait_inst`, and `constraints` together. After elimination, these became separate operations that didn't share substitutions.
+**What actually happened:** The `Binder<Implementor>` struct was a single, semantic unit. When `Binder::instantiate` was called on it, it correctly substituted generic type parameters across all its fields (`self_ty`, `trait_inst`, `constraints`) within a single, shared unification context. The attempt to eliminate `Implementor` by creating separate `Binder<TyId>`, `Binder<TraitInstId>`, etc., on the `ImplTrait` node broke this atomicity. Each `instantiate` call created a new, independent unification context, leading to inconsistent substitutions and incorrect type inference.
 
 **What we did:** Tried complex workarounds in method selection logic, creating new candidate types and verification strategies, getting deeper into the weeds.
 
