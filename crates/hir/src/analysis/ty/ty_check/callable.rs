@@ -14,7 +14,7 @@ use crate::analysis::{
     ty::{
         diagnostics::{BodyDiag, FuncBodyDiag},
         fold::{AssocTySubst, TyFoldable, TyFolder},
-        func_def::FuncDef,
+        func_def::CallableDef,
         trait_def::TraitInstId,
         trait_resolution::constraint::collect_func_def_constraints,
         ty_def::{TyBase, TyData, TyId},
@@ -25,7 +25,7 @@ use crate::analysis::{
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Update)]
 pub struct Callable<'db> {
-    pub func_def: FuncDef<'db>,
+    pub func_def: CallableDef<'db>,
     generic_args: Vec<TyId<'db>>,
     /// The originating trait instance if this callable comes from a trait method
     /// (e.g., operator overloading, method call, indexing). None for inherent functions.
@@ -131,7 +131,7 @@ impl<'db> Callable<'db> {
         if current_args.len() != given_args.len() {
             let diag = BodyDiag::CallGenericArgNumMismatch {
                 primary: span.into(),
-                def_span: self.func_def.name_span(db),
+                def_span: self.func_def.name_span(),
                 given: given_args.len(),
                 expected: current_args.len(),
             };
@@ -165,7 +165,7 @@ impl<'db> Callable<'db> {
         if given_arity != expected_arity {
             let diag = BodyDiag::CallArgNumMismatch {
                 primary: span.into(),
-                def_span: self.func_def.name_span(db),
+                def_span: self.func_def.name_span(),
                 given: given_arity,
                 expected: expected_arity,
             };
@@ -203,7 +203,7 @@ impl<'db> Callable<'db> {
             {
                 let diag = BodyDiag::CallArgLabelMismatch {
                     primary: given.label_span.unwrap_or(given.expr_span.clone()),
-                    def_span: self.func_def.name_span(db),
+                    def_span: self.func_def.name_span(),
                     given: given.label,
                     expected: expected_label,
                 };
@@ -264,7 +264,7 @@ impl<'db> Callable<'db> {
         let db = tc.db;
 
         // Get the function's constraints
-        let constraints = collect_func_def_constraints(db, self.func_def.hir_def(db), true);
+        let constraints = collect_func_def_constraints(db, self.func_def, true);
 
         // Instantiate constraints with the actual type arguments
         let instantiated = constraints.instantiate(db, &self.generic_args);

@@ -298,7 +298,7 @@ impl<'db> TyChecker<'db> {
 
         let (func_ty, trait_inst) = match candidate {
             MethodCandidate::InherentMethod(func_def) => {
-                let func_ty = TyId::func(self.db, func_def);
+                let func_ty = TyId::func(self.db, func_def.hir_def(self.db));
                 (self.table.instantiate_to_term(func_ty), None)
             }
 
@@ -479,7 +479,7 @@ impl<'db> TyChecker<'db> {
                     let method_ty = match candidate {
                         MethodCandidate::InherentMethod(func_def) => {
                             // TODO: move this to path resolver
-                            let mut method_ty = TyId::func(self.db, func_def);
+                            let mut method_ty = TyId::func(self.db, func_def.hir_def(self.db));
                             for &arg in receiver_ty.generic_args(self.db) {
                                 // If the method is defined in "specialized" impl block
                                 // of a generic type (eg `impl Option<i32>`), then

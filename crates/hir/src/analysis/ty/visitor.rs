@@ -3,7 +3,7 @@ use common::indexmap::IndexSet;
 use super::{
     adt_def::AdtDef,
     const_ty::{ConstTyData, ConstTyId},
-    func_def::FuncDef,
+    func_def::CallableDef,
     trait_def::{Implementor, TraitInstId},
     trait_resolution::PredicateListId,
     ty_check::ExprProp,
@@ -58,7 +58,7 @@ pub trait TyVisitor<'db> {
     fn visit_adt(&mut self, adt: AdtDef<'db>) {}
 
     #[allow(unused_variables)]
-    fn visit_func(&mut self, func: FuncDef<'db>) {}
+    fn visit_func(&mut self, func: CallableDef<'db>) {}
 
     #[allow(unused_variables)]
     fn visit_const_ty(&mut self, const_ty: &ConstTyId<'db>) {

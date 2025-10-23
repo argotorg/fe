@@ -188,4 +188,62 @@ impl<'db> CallableDef<'db> {
             Self::VariantCtor(var) => var.span().tuple_type().elem_ty(idx).into(),
         }
     }
+
+    /// Get the generic parameters for this callable.
+    pub fn params(self, db: &'db dyn HirAnalysisDb) -> &'db [TyId<'db>] {
+        match self {
+            Self::Func(func) => func.param_set(db).params(db),
+            Self::VariantCtor(var) => {
+                use super::adt_def::lower_adt;
+                let adt = lower_adt(db, var.enum_.into());
+                adt.params(db)
+            }
+        }
+    }
+
+    /// Get the name of this callable.
+    pub fn name(self, db: &'db dyn HirAnalysisDb) -> IdentId<'db> {
+        match self {
+            Self::Func(func) => func.name(db).to_opt().unwrap(),
+            Self::VariantCtor(var) => {
+                IdentId::new(db, var.name(db).unwrap().to_string())
+            }
+        }
+    }
+
+    /// Get the argument types for this callable.
+    pub fn arg_tys(self, db: &'db dyn HirAnalysisDb) -> &'db [Binder<TyId<'db>>] {
+        match self {
+            Self::Func(func) => func.arg_tys(db),
+            Self::VariantCtor(var) => {
+                // For now, return empty slice for variant constructors
+                // since they need special handling
+                &[]
+            }
+        }
+    }
+
+    /// Get the return type for this callable.
+    pub fn ret_ty(self, db: &'db dyn HirAnalysisDb) -> Binder<TyId<'db>> {
+        match self {
+            Self::Func(func) => func.return_ty(db),
+            Self::VariantCtor(var) => var.return_ty(db),
+        }
+    }
+
+    /// Get the offset to explicit parameters position.
+    pub fn offset_to_explicit_params_position(self, db: &'db dyn HirAnalysisDb) -> usize {
+        match self {
+            Self::Func(func) => func.param_set(db).offset_to_explicit_params_position(db),
+            Self::VariantCtor(_) => 0, // Variant constructors don't have implicit self parameters
+        }
+    }
+
+    /// Get the label for a specific parameter.
+    pub fn param_label(self, db: &'db dyn HirAnalysisDb, idx: usize) -> Option<IdentId<'db>> {
+        match self {
+            Self::Func(func) => func.param_label(db, idx),
+            Self::VariantCtor(_) => None, // Variant constructors don't have parameter labels
+        }
+    }
 }

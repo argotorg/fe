@@ -531,7 +531,12 @@ impl<'db> ResolvedVariant<'db> {
     }
 
     pub fn constructor_func_ty(&self, db: &'db dyn HirAnalysisDb) -> Option<TyId<'db>> {
-        let mut ty = TyId::func(db, self.to_funcdef(db)?);
+        // Only tuple variants are callable
+        if !matches!(self.variant.kind(db), VariantKind::Tuple(_)) {
+            return None;
+        }
+
+        let mut ty = TyId::func(db, CallableDef::VariantCtor(self.variant));
 
         for &arg in self.ty.generic_args(db) {
             if ty.applicable_ty(db).is_some() {
@@ -973,8 +978,8 @@ pub fn resolve_name_res<'db>(
                 ItemKind::TopMod(_) | ItemKind::Mod(_) => PathRes::Mod(scope_id),
 
                 ItemKind::Func(func) => {
-                    let func_def = lower_func(db, func).unwrap();
-                    let ty = TyId::func(db, func_def);
+                    let callable = CallableDef::Func(func);
+                    let ty = TyId::func(db, callable);
                     PathRes::Func(TyId::foldl(db, ty, args))
                 }
                 ItemKind::Const(const_) => {

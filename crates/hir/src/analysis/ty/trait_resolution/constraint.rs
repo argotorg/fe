@@ -29,9 +29,9 @@ pub(crate) fn ty_constraints<'db>(
     let (base, args) = ty.decompose_ty_app(db);
     let (params, base_constraints) = match base.data(db) {
         TyData::TyBase(TyBase::Adt(adt)) => (adt.params(db), collect_adt_constraints(db, *adt)),
-        TyData::TyBase(TyBase::Func(func_def)) => (
-            func_def.params(db),
-            collect_func_def_constraints(db, func_def.hir_def(db), true),
+        TyData::TyBase(TyBase::Func(callable)) => (
+            callable.params(db),
+            collect_func_def_constraints(db, *callable, true),
         ),
         _ => {
             return PredicateListId::empty_list(db);
