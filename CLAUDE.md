@@ -1,0 +1,2 @@
+- DO NOT add claude as a contributor to git commits.  We are paying for claude code, I'm not a walking advertisement... and besides, I recommend claude all the time in person.  DON'T stigmatize me.
+- after compaction, first thing to do is read IMPORTANT_READ_THIS_FIRST_BRIEFING.md !!! VERY IMPORTANT!

@@ -1,0 +1,255 @@
+1
+00:00:06,000 --> 00:00:09,120
+I mean it could very well be that that got deleted here.
+
+2
+00:00:09,360 --> 00:00:12,000
+Um but yeah.
+
+3
+00:00:13,440 --> 00:00:46,000
+Um basically um yeah what I'm suggesting is like the well the the stuff like um retrieving that just so you don't drive yourself crazy, I think some stuff was deleted in this weird push.
+
+4
+00:00:47,440 --> 00:00:49,840
+Um oh yeah oh that's right.
+
+5
+00:00:53,280 --> 00:03:43,040
+Uh but yeah like um uh like this so in the in the process so basically I would I would say um well all of the all of the more recent commits maybe like set those aside uh maybe some of them could be jerked over if they're doing stuff that's not related to function bodies but um yeah uh but like the so if you look in like def analyzer for trait the very first thing it does is call lower trait and that's the one that's the like super egregious example that we talked about before where trait def is just this completely useless wrapper around the HIR trait item yeah and so like that should go away um and then all of the methods that are defined on trait def um should be moved to the HIR trait thing um but as an example yeah yeah no no but I remember we talked about it and I didn't I didn't get it down so this I would like to make sure I get this noted so um you're saying all these should be moved to trait oops fuck what did I do what's going on to that sorry I don't know what happened there we go yeah um so yeah like basically all I'm doing here is looking at depth analyzer and then in places where this like calls these functions like lower trade um I don't know lower adt is a little bit tricky because ADT like we mentioned before is like a wrapper around yeah I think if I remember right there's a bunch of struct contract there's a bunch of stuff in there that we talked about sort of decomposing into separate um yeah yeah methods.
+
+6
+00:03:47,680 --> 00:04:08,640
+So yeah it's like these um uh like so we're here um def analyzer for funk you know we're doing lower trade and we're also doing like um lower HIR tie.
+
+7
+00:04:09,360 --> 00:04:15,280
+So ideally that would just be a method on this infiltrate thing.
+
+8
+00:04:16,800 --> 00:04:20,320
+I guess the tie method right now returns an HIR type ID.
+
+9
+00:04:20,720 --> 00:04:37,520
+So like that's a thing that should change so that basically instead of instead of the user of the infiltrate item calling lowerHIRTI the method on the infiltrate item should do that internally.
+
+10
+00:04:38,480 --> 00:04:44,160
+So the like short term goal would be to get rid of most of these lower HIR type calls for example.
+
+11
+00:04:44,800 --> 00:04:55,440
+And those would be stuck into tie methods Yeah so like this these tie methods here are like on this infiltrate tie method.
+
+12
+00:04:55,760 --> 00:05:02,080
+Right now they're returning the raw I guess it's a field like this field should be private.
+
+13
+00:05:02,800 --> 00:05:13,120
+And then we add a tie method that returns type ID that returns tie ID which does internally the lower HIR tie thing.
+
+14
+00:05:13,440 --> 00:07:37,760
+Uh-huh yeah yeah that makes sense yeah and that would be that's a much more straightforward uh extension of just the basic um API change than whatever else was going on in the yeah so the goal like I think the short term goal should be to eliminate most of these analysis wrappers like trait dev is a wrapper around the HIR trait item implementer uh which we talked about before is basically the same uh like this is a thing that could be decomposed um and this like this transformation will be a little bit tricky and I think needs to be human driven you know because this is like implementer is used like in a binder and then yeah um it's like this is typable thing you know imploldable for implementer um and so this like this stuff has to be reworked so it's typable for implilate but implementer fundamentally is just a wrapper around the HIR item um for these things like all of these fields in implementer could just be methods presumably on the on the input fruit um item so let me restate it to make sure I have it right so we have a number of different wrappers around HIR items that um that sort of like accumulate information that's resulted resulting from various different uh like analysis like soft the query things, right?
+
+15
+00:07:37,920 --> 00:07:48,240
+So it's like we're we're taking HR items or running some analysis or type checking or something and then we're returning wrappers around them.
+
+16
+00:07:48,400 --> 00:08:00,080
+And the idea is to flatten those wrappers into these these methods on that are defined on the HR items themselves.
+
+17
+00:08:00,240 --> 00:08:03,360
+Is that more or less the idea?
+
+18
+00:08:03,680 --> 00:08:18,160
+Uh yeah sort of like the wrappers um another purpose that the wrappers serve is that like the wrappers are kind of doing two things.
+
+19
+00:08:18,320 --> 00:08:43,680
+One is um that for a lot of them um like the the actual the function that builds the wrapper is doing a decent amount of work um to like construct the wrapper because the wrapper is storing stuff inside of it like analysis results inside of it or like I see you know whatever sort of transformed stuff.
+
+20
+00:08:44,080 --> 00:08:55,840
+So they're kind of they're kind of um they're encoding the constructors are encoding like logic of how to execute the analysis stuff.
+
+21
+00:08:56,080 --> 00:09:03,040
+And then the other purpose is that they're just a place to put methods on there that are outside of the HIR crate.
+
+22
+00:09:03,600 --> 00:09:18,640
+Oh sure um so it's like all the methods that are getting analysisy kind of stuff um and so you know the the of merging these two is that we don't have drivers.
+
+23
+00:09:19,280 --> 00:09:40,640
+Right right right right right and so we potentially like I don't know if this all works out you know we're we're potentially cutting a lot of code and we're cutting a lot of like surface area if we don't have these this additional layer which is just a wrapper around the HIR layer and adding analysis stuff to it.
+
+24
+00:09:43,200 --> 00:09:55,360
+So yeah I mean my like my inclination and like you don't have to do this of course but my inclination would be to just try to go depth first on one of them.
+
+25
+00:09:55,600 --> 00:09:55,920
+Yeah.
+
+26
+00:09:56,240 --> 00:10:07,920
+You know like like trait depth for example is the most egregious one where the wrapper literally does nothing other than provide a like a method surface um in the analysis crate.
+
+27
+00:10:08,880 --> 00:10:24,480
+And then just like yeah but that first I might want to completely eliminate the wrapper make you know the fields of the HIR item private and the ones that should be private.
+
+28
+00:10:28,320 --> 00:11:00,480
+And modify all the places in the code base that need to be modified of course and then go to a more complicated one like um like I don't know if funk is complicated or like implilate is definitely one of the like implate's kind of medium complicated because the implementer wrapper's called implementer um and that's so that has some stuff inside of it also has some methods.
+
+29
+00:11:00,880 --> 00:11:06,240
+Impiltrate has a wrapper called implementer.
+
+30
+00:11:07,200 --> 00:11:42,720
+Yeah and then that's like implementer is used in um like all the like tie visible unifiable um tie foldable um and I like those things it'll be easy enough to just use implate there.
+
+31
+00:11:46,000 --> 00:11:54,160
+But yeah um basically it's like implementers used in more kind of weird machinery so it'll take a bit more work.
+
+32
+00:11:55,520 --> 00:12:07,920
+Those are all methods you were just describing those are like traits typeable, unifiable time visitable if you just search for uses of of implementer you'll see.
+
+33
+00:12:08,720 --> 00:12:08,960
+Okay.
+
+34
+00:12:10,800 --> 00:13:00,560
+But uh like trait should be lower impultrate is the function that builds the implementer but also binder oh right it's wrapped in a binder too yeah um but the idea the idea though is that that lower implilate thing contains a lot of the high level logic of how to run the analysis as well as the implementer constructor method too maybe and then or maybe that is the implementer constructor method.
+
+35
+00:13:03,120 --> 00:13:03,920
+What's that?
+
+36
+00:13:05,360 --> 00:16:01,200
+Yeah yeah yeah okay and then lower lower implate is is the constructor for okay yeah yeah yeah um yeah okay yeah so like looking at lower infiltrate um you know there's like kind of doing doing the obvious things like okay first what's the type that this infiltrate is for and then what's the trait that this infiltrate is for and then um you know we get the generic grams we get the associated types um more associated type stuff um this part's a bit complicated uh but the idea is the idea is that I think multiple methods basically yeah yeah yeah at least some of it if not all of it yeah I think like all of this could just be programmed into different methods including this binder bind thing um like the binder bind call is an interesting thing anyway it's just a wrapper one thing um so yeah anybody that needs like an implementer that's wrapped in a binder um they can kind of get their own I guess they can get their own maybe or we can just add like a dot bound um method or something too but yeah um so you know if if I were doing this by hand I would like kind of do a piecemeal like I wouldn't eliminate this lower infiltrate function right away I would just like move each chunk into methods right like to get the tie of an infiltrate call method to get the trait you'd sort of migrate these pieces into infiltrate methods and then when you're done you would just you know refactor the the lower infiltrate function to make sure that all those methods are doing the same thing and then maybe later on like whatever's using lower infiltrate or maybe there's the possibility to just move that whole thing in to or wait no we wouldn't even need well lower infiltrate should just go away.
+
+37
+00:16:01,440 --> 00:16:05,840
+It should just go away because we don't need we don't need to have a binder implementer anymore.
+
+38
+00:16:06,000 --> 00:16:10,160
+We just we can just get the info we want when we need it.
+
+39
+00:16:10,800 --> 00:16:30,400
+Implementer should go away altogether um you know so like this this this little bit of refactoring on its own is a you know decent sized commit where you have to you know replace all uses of implementer um with infiltrate and make sure that they've got you know the right methods on it and stuff.
+
+40
+00:16:33,760 --> 00:16:58,560
+But yeah I think you know a targeted thing of like bot you know um whatever uh these methods to infiltrate and after that uh remove the implementer struct and just use infiltrate in its place.
+
+41
+00:16:59,360 --> 00:17:33,920
+Um yeah basically no thank you thanks for the refresher a lot of information to absorb I'm actually recording our conversation now Sean so that I can listen back and then um yeah so then the big picture is that I think it helps me to understand that there's a number of these wrappers they I've written in the notes there's there's these wrappers are in the analysis module now like which used to be HR analysis crate.
+
+42
+00:17:34,160 --> 00:17:37,920
+And they're basically just it should be pretty self-evident.
+
+43
+00:17:38,560 --> 00:17:47,280
+I don't know how many there are in total um you might have just mentioned all of them really but um there's basically one around each item.
+
+44
+00:17:47,680 --> 00:20:14,000
+One around each item yeah and they're like the analysis like things call yeah there's there's at least one that's more complicated than implementer uh maybe generic arg which I guess isn't an item but um but it is a scope uh um it's a it's a there's a it's a wrapper around the scope I guess it's it's it's generic param um there's like this type RAM precursor stuff okay that does some more complicated yeah so that like some of the I guess yeah I guess start at the item level um certainly try to get rid of all the item wrappers and then there's also wrappers around the other um scopes like if you look at scope ID um let's see if I'll scope ID is item generic RAM associate types questionable I see so there's there's wrappers around around each of these as well yeah so basically um yeah like generic param um it's not a wrapper around generic param it's around it's a wrapper around the set of generic params um so there's like there's a generic param list ID and then there's a generic param type set is the wrapper okay and rap wrapper's not a great word because it's um it's it's more complicated than it's it's almost like a different representation in a way yeah like like with the lowering function um I think it's called lower generic program or we like this thing.
+
+45
+00:20:16,080 --> 00:23:03,280
+I don't think so um this like I don't know generic well start start with uh start with the items um yeah this generic param type set thing um yeah I guess it's created by this collect generic params function but the the the idea is though that is that maybe there's a similar pattern that we could employ for these scope related uh like information accumulation structures is that the idea like that we could implement methods on scope ID itself or uh no no I'm just like just look at scope ID for the things that have wrappers just like to figure out what has wrappers um because these are like the the things that are considered to be scopes are um sort of um you know they're not necessarily items but they're uh kind of high level enough um or like important enough that they probably have analysis wrappers or like complicated analysis code that um uh that that warrants having a node like thing I see right because a and the node like thing would would be um maybe kind of similar to the wrapper but yeah well maybe I don't want to quite say that because the wrappers today or like the existing HR analysis things aren't necessarily the the kind of format we want to use for this kind of structure we want to use.
+
+46
+00:23:08,640 --> 00:23:27,360
+I'm not really sure like we could maybe after you get the item level stuff taken care of and and it's all like cleaned up we could look at the at this next level down particularly the generic params is kind of a weird one.
+
+47
+00:23:29,040 --> 00:25:08,800
+If you look at collect generic params you know there's this generic param type collector and it builds up these generic param precursors or whatever um which is like this thing that can be evaluated um and so it's it's very much like Yoshi style code of these a bunch of these objects that um you know like the param precursor thing yeah is like a thing that that can be evaluated um type param precursor um oh yeah then there's the original index business um and then all of this like all of this is related to the type application stuff like the tie foldable you know because if you've got like if you've got a struct a generic struct um foo with some generic parameter t you can apply foo to another type right and so and then you it is it's also related to the higher kind of type stuff because foo on its own uh you know has one um you know where like foo on its own can still be applied right if you've got like a result type that has two holes and you can apply it to one thing then now you've got a thing that yeah yeah you're currying it.
+
+48
+00:25:10,080 --> 00:25:17,840
+And so that's what this like all this this type RAM stuff plays into all of that.
+
+49
+00:25:18,080 --> 00:25:29,440
+So it's it's all you know kind of a very nice right so and so anyway I would say we're wait on those focus on the other level.
+
+50
+00:25:30,000 --> 00:26:18,160
+But um it seems like the point your point in bringing up was just that in HIR analysis I mean you kind of just gave an overview like we have some straightforward more or less straightforward um wrapper data types for each HIR item and then we also have all these scope variants that have one or more um sort of analysis level types that that are kind of like bunches of functions and accumulators of information.
+
+51
+00:26:18,320 --> 00:27:03,760
+So they have there's constructors that produce these things and they might they might run some some queries to get the information and then they'll produce this sort of wrapper like struct that has the scope but also has some some additional information that's been gathered and then also those things themselves have some methods and and I think it sounds like you're suggesting that you know it would be nice if if this functionality was also kind of in line with our new traversal API.
+
+52
+00:27:06,400 --> 00:27:25,280
+Meaning we wouldn't necessarily need to have all the logic in these constructor functions like um we would just have nice node like things that have enough context that you that they can have methods that that do all the stuff.
+
+53
+00:27:27,680 --> 00:28:37,040
+Yeah and and things that are lists like the generic param list and the generic arg list um I guess kind of TBD how much we want to change those or you know versus just use their current structure but I think that'll require like some more co-reading um but it sounds like at the very least um some of these things um the the these these these sorry I had a phone call these these lower methods or these lower X or whatever uh uh queries like they're doing too much uh lifting and they're and it they're not the logic in them is not easily reusable.
+
+54
+00:28:38,240 --> 00:28:50,400
+So the idea is to move toward having the the pieces of the of machinery that are in there be like exposed and reusable.
+
+55
+00:28:51,920 --> 00:29:40,880
+Yeah yeah I mean like the um it's kind of uh I guess the motivation is kind of coming from the other side like I want um I mean sort of uh I I don't disagree with what you said um uh but that's not necessarily the motivation you're imagining yeah it's like the um like if we go back to the discussion about how you know the the language server needs to be careful to do things in the same way that the compiler does um that's basically because of all these functions like lower HIR time and lower importate and stuff.
+
+56
+00:29:41,200 --> 00:29:41,760
+Sure.
+
+57
+00:29:42,080 --> 00:30:16,960
+Which yeah where you have to pass in these arguments like this you know the scope and the assumptions basically um and so ideally we can just shit can those functions or not not shit can them but like hide the uses of them internally in these node like things um to some extent we can shit can right some of them but some of them we might be able to flatten out altogether but others of them we'll just we'll just tuck them into like nice public methods on objects that have enough information to run those functions.
+
+58
+00:30:17,840 --> 00:31:40,080
+Yeah yeah yeah so if you're ever like looking for motivation for what to change next um go to the def analyzer and like uh look at you know um you know look at or just like look at I guess look at these uh so-called lowering functions um like lower HIR tie and uh lower you know whatever well these whatever these lower lower functions are and see where they're used um and you know look at getting rid of those uses no this is really helpful Sean I think I'm it's helping me to you know absorb the big picture it's like essentially like all of the formerly the HIR analysis crate is like what we want to uh the the the lower like like like some of the higher level queries that existed in there like the lower this lower that functions probably some others that aren't named the same way.
+
+59
+00:31:40,320 --> 00:33:22,160
+But like all the high level queries and the visitors um whatever um the visitors um and then the more importantly all these different like structs that are defined in the analysis context these are like this is like the substance of what we want to convert into this graph traversal API right so like um I think you're giving me a good idea of exactly what that looks like um just yeah to tie it all together yeah um I'm imagining like a you know kind of top down hierarchy of objects um that represent the source code you know so if you look at a file each item in that file you know we they're an item but there's there's an object internally that represents it and from that object you can dig downward you know so given a function you can get its params and given a param you can get its name and a tie and you know or you can get the function's return type and then if you have a function's return type um because your cursor is on a function's return type and we've got some index that points you know from span to function return type um then you can get to the function signature.
+
+60
+00:33:22,320 --> 00:33:29,360
+Like you can climb upward basically from these kind of lower level things.
+
+61
+00:33:29,600 --> 00:33:32,880
+I guess function return type is a little questionable.
+
+62
+00:33:33,680 --> 00:35:16,480
+I'm not sure about that actually um that's like the type ID uh situation usually maybe we don't necessarily want to have a node for that a node for that I don't know but but I mean we'll do no but I mean um that's that's a detail though right like uh yeah yeah because we'd still be able to get the return type it's just maybe we don't I'm just thinking about like you know if you if the user's cursor is on a struct field um then like maybe we've got this like index from span to these kind of graph node things and so we see that the user's cursor is on this struct field and then from that struct field node we can traverse upward to the actual struct definition um easily you know without because the you know because we've got this traversable graph of nodes that go down to some level um I mean is this this is where we exactly how far that goes but well but the the alternative we discussed I think this is this is relevant we discussed having like a trait right for some of these high level like LSP like functionality bits and then theoretically it wouldn't matter if if we have a literal node I don't know what what this actually means a literal node like thing or if we just have some some implementation in one of these you know on for one of these traits.
+
+63
+00:35:16,720 --> 00:35:45,680
+So yeah the trait implementation would wrap either existing like HIR traversal methods or uh provide something that's a little more um involved I guess right and then we can build an index over these things something like that.
+
+64
+00:35:47,440 --> 00:36:12,320
+Uh well my my nephew is here to help me with some health stuff so well hey yeah I gotta eat something thanks a lot I'll keep you posted like I'll manage your awesome yeah thanks guys uh I'm gonna try to find the window oh there we go
