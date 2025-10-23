@@ -1055,16 +1055,15 @@ impl<'db> Trait<'db> {
         self,
         db: &'db dyn crate::analysis::HirAnalysisDb,
     ) -> common::indexmap::IndexMap<IdentId<'db>, crate::analysis::ty::trait_def::TraitMethod<'db>> {
-        use crate::analysis::ty::func_def::lower_func;
         use common::indexmap::IndexMap;
 
         let mut methods = IndexMap::<IdentId<'db>, crate::analysis::ty::trait_def::TraitMethod<'db>>::default();
         for method in self.child_funcs(db) {
-            let Some(func) = lower_func(db, method) else {
+            let Some(name) = method.name(db).to_opt() else {
                 continue;
             };
-            let name = func.name(db);
-            let trait_method = crate::analysis::ty::trait_def::TraitMethod(func);
+            let callable = crate::analysis::ty::func_def::CallableDef::Func(method);
+            let trait_method = crate::analysis::ty::trait_def::TraitMethod(callable);
             // We can simply ignore the conflict here because it's already
             // handled by the def analysis pass
             methods.entry(name).or_insert(trait_method);

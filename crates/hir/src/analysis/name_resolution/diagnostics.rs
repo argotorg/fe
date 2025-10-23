@@ -10,7 +10,7 @@ use super::NameRes;
 use crate::analysis::{
     HirAnalysisDb,
     ty::ty_def::Kind,
-    ty::{func_def::FuncDef, trait_def::TraitInstId, ty_def::TyId},
+    ty::{func_def::CallableDef, trait_def::TraitInstId, ty_def::TyId},
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Update)]
@@ -83,7 +83,7 @@ pub enum PathResDiag<'db> {
     AmbiguousInherentMethod {
         primary: DynLazySpan<'db>,
         method_name: IdentId<'db>,
-        candidates: ThinVec<FuncDef<'db>>,
+        candidates: ThinVec<CallableDef<'db>>,
     },
     AmbiguousTrait {
         primary: DynLazySpan<'db>,

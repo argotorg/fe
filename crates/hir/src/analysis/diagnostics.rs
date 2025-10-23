@@ -11,6 +11,7 @@ use crate::analysis::{
             BodyDiag, DefConflictError, FuncBodyDiag, ImplDiag, TraitConstraintDiag,
             TraitLowerDiag, TyDiagCollection, TyLowerDiag,
         },
+        func_def::CallableDef,
         ty_check::RecordLike,
         ty_def::{TyData, TyVarSort},
     },
@@ -544,7 +545,7 @@ impl DiagnosticVoucher for PathResDiag<'_> {
                     sub_diagnostics.push(SubDiagnostic {
                         style: LabelStyle::Secondary,
                         message: format!("`{method_name}` is defined here"),
-                        span: cand.name_span(db).resolve(db),
+                        span: cand.name_span().resolve(db),
                     });
                 }
 
@@ -1882,7 +1883,7 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                     sub_diagnostics.push(SubDiagnostic {
                         style: LabelStyle::Secondary,
                         message: format!("`{method_name}` is defined here"),
-                        span: cand.name_span(db).resolve(db),
+                        span: cand.name_span().resolve(db),
                     });
                 }
 
@@ -2298,12 +2299,12 @@ impl DiagnosticVoucher for ImplDiag<'_> {
                     SubDiagnostic {
                         style: LabelStyle::Primary,
                         message: "".into(),
-                        span: primary.name_span(db).resolve(db),
+                        span: primary.name_span().resolve(db),
                     },
                     SubDiagnostic {
                         style: LabelStyle::Primary,
                         message: "".into(),
-                        span: conflict_with.name_span(db).resolve(db),
+                        span: conflict_with.name_span().resolve(db),
                     },
                 ],
                 notes: vec![],
@@ -2367,7 +2368,7 @@ impl DiagnosticVoucher for ImplDiag<'_> {
                             trait_params.len(),
                             impl_params.len(),
                         ),
-                        span: impl_m.name_span(db).resolve(db),
+                        span: impl_m.name_span().resolve(db),
                     }],
                     notes: vec![],
                     error_code,
@@ -2391,13 +2392,10 @@ impl DiagnosticVoucher for ImplDiag<'_> {
                     sub_diagnostics: vec![SubDiagnostic {
                         style: LabelStyle::Primary,
                         message,
-                        span: impl_m
-                            .hir_func_def(db)
-                            .unwrap()
-                            .span()
-                            .generic_params()
-                            .param(*param_idx)
-                            .resolve(db),
+                        span: match impl_m {
+                            CallableDef::Func(f) => f.span().generic_params().param(*param_idx).resolve(db),
+                            CallableDef::VariantCtor(v) => v.span().tuple_type().resolve(db),
+                        },
                     }],
                     notes: vec![],
                     error_code,
@@ -2414,7 +2412,7 @@ impl DiagnosticVoucher for ImplDiag<'_> {
                         trait_m.arg_tys(db).len(),
                         impl_m.arg_tys(db).len(),
                     ),
-                    span: impl_m.param_list_span(db).resolve(db),
+                    span: impl_m.param_list_span().resolve(db),
                 }],
                 notes: vec![],
                 error_code,
@@ -2441,12 +2439,12 @@ impl DiagnosticVoucher for ImplDiag<'_> {
                                 .unwrap()
                                 .pretty_print(db),
                         ),
-                        span: impl_m.param_span(db, *param_idx).resolve(db),
+                        span: impl_m.param_span(*param_idx).resolve(db),
                     },
                     SubDiagnostic {
                         style: LabelStyle::Secondary,
                         message: "argument label defined here".to_string(),
-                        span: trait_m.param_span(db, *param_idx).resolve(db),
+                        span: trait_m.param_span(*param_idx).resolve(db),
                     },
                 ],
                 notes: vec![],
@@ -2473,12 +2471,12 @@ impl DiagnosticVoucher for ImplDiag<'_> {
                                 trait_m_ty.pretty_print(db),
                                 impl_m_ty.pretty_print(db)
                             ),
-                            span: impl_m.param_span(db, *param_idx).resolve(db),
+                            span: impl_m.param_span(*param_idx).resolve(db),
                         },
                         SubDiagnostic {
                             style: LabelStyle::Secondary,
                             message: "trait requires this type".to_string(),
-                            span: trait_m.param_span(db, *param_idx).resolve(db),
+                            span: trait_m.param_span(*param_idx).resolve(db),
                         },
                     ],
                     notes: vec![],
@@ -2505,17 +2503,18 @@ impl DiagnosticVoucher for ImplDiag<'_> {
                                 trait_ty.pretty_print(db),
                                 impl_ty.pretty_print(db),
                             ),
-                            span: impl_m.hir_func_def(db).unwrap().span().ret_ty().resolve(db),
+                            span: match impl_m {
+                                CallableDef::Func(f) => f.span().ret_ty().resolve(db),
+                                CallableDef::VariantCtor(v) => v.span().tuple_type().resolve(db),
+                            },
                         },
                         SubDiagnostic {
                             style: LabelStyle::Secondary,
                             message: "trait requires this return type".to_string(),
-                            span: trait_m
-                                .hir_func_def(db)
-                                .unwrap()
-                                .span()
-                                .ret_ty()
-                                .resolve(db),
+                            span: match trait_m {
+                                CallableDef::Func(f) => f.span().ret_ty().resolve(db),
+                                CallableDef::VariantCtor(v) => v.span().tuple_type().resolve(db),
+                            },
                         },
                     ],
                     notes: vec![],

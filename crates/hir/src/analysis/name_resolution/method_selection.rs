@@ -9,7 +9,7 @@ use crate::analysis::{
     ty::{
         binder::Binder,
         canonical::{Canonical, Canonicalized, Solution},
-        func_def::FuncDef,
+        func_def::CallableDef,
         method_table::probe_method,
         trait_def::{TraitInstId, TraitMethod, impls_for_ty},
         trait_resolution::{GoalSatisfiability, PredicateListId, is_goal_satisfiable},
@@ -20,7 +20,7 @@ use crate::analysis::{
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, salsa::Update)]
 pub enum MethodCandidate<'db> {
-    InherentMethod(FuncDef<'db>),
+    InherentMethod(CallableDef<'db>),
     TraitMethod(TraitMethodCand<'db>),
     NeedsConfirmation(TraitMethodCand<'db>),
 }
@@ -28,7 +28,7 @@ pub enum MethodCandidate<'db> {
 impl<'db> MethodCandidate<'db> {
     pub fn name(&self, db: &'db dyn HirAnalysisDb) -> IdentId<'db> {
         match self {
-            MethodCandidate::InherentMethod(func_def) => func_def.name(db),
+            MethodCandidate::InherentMethod(callable) => callable.name(db),
             MethodCandidate::TraitMethod(cand) | MethodCandidate::NeedsConfirmation(cand) => {
                 cand.method.0.name(db)
             }
@@ -321,8 +321,8 @@ impl<'db> MethodSelector<'db> {
         }
     }
 
-    fn is_inherent_method_visible(&self, def: FuncDef) -> bool {
-        is_scope_visible_from(self.db, def.scope(self.db), self.scope)
+    fn is_inherent_method_visible(&self, def: CallableDef) -> bool {
+        is_scope_visible_from(self.db, def.scope(), self.scope)
     }
 
     fn available_traits(&self) -> IndexSet<Trait<'db>> {
@@ -351,22 +351,22 @@ impl<'db> MethodSelector<'db> {
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, salsa::Update)]
 pub enum MethodSelectionError<'db> {
-    AmbiguousInherentMethod(ThinVec<FuncDef<'db>>),
+    AmbiguousInherentMethod(ThinVec<CallableDef<'db>>),
     AmbiguousTraitMethod(ThinVec<TraitInstId<'db>>),
     NotFound,
-    InvisibleInherentMethod(FuncDef<'db>),
+    InvisibleInherentMethod(CallableDef<'db>),
     InvisibleTraitMethod(ThinVec<Trait<'db>>),
     ReceiverTypeMustBeKnown,
 }
 
 #[derive(Default)]
 struct AssembledCandidates<'db> {
-    inherent_methods: FxHashSet<FuncDef<'db>>,
+    inherent_methods: FxHashSet<CallableDef<'db>>,
     traits: IndexSet<(TraitInstId<'db>, TraitMethod<'db>)>,
 }
 
 impl<'db> AssembledCandidates<'db> {
-    fn insert_inherent_method(&mut self, method: FuncDef<'db>) {
+    fn insert_inherent_method(&mut self, method: CallableDef<'db>) {
         self.inherent_methods.insert(method);
     }
 }

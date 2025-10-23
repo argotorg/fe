@@ -27,7 +27,7 @@ use crate::analysis::{
         binder::Binder,
         canonical::{Canonical, Canonicalized},
         fold::TyFoldable,
-        func_def::{CallableDef, FuncDef, lower_func},
+        func_def::CallableDef,
         normalize::normalize_ty,
         trait_def::{TraitInstId, impls_for_ty_with_constraints},
         trait_lower::{
@@ -327,7 +327,7 @@ impl<'db> PathResError<'db> {
                     }
                 }
                 MethodSelectionError::InvisibleInherentMethod(func) => {
-                    PathResDiag::Invisible(span, ident, func.name_span(db).into())
+                    PathResDiag::Invisible(span, ident, func.name_span().into())
                 }
                 MethodSelectionError::InvisibleTraitMethod(traits) => {
                     PathResDiag::InvisibleAmbiguousTrait {
@@ -441,9 +441,9 @@ impl<'db> PathRes<'db> {
                 // Method visibility depends on the method's defining scope
                 // (function or trait method), not the receiver type.
                 let method_scope = match cand {
-                    MethodCandidate::InherentMethod(func_def) => func_def.scope(db),
+                    MethodCandidate::InherentMethod(func_def) => func_def.scope(),
                     MethodCandidate::TraitMethod(c) | MethodCandidate::NeedsConfirmation(c) => {
-                        c.method.0.scope(db)
+                        c.method.0.scope()
                     }
                 };
                 is_scope_visible_from(db, method_scope, from_scope)
@@ -546,25 +546,12 @@ impl<'db> ResolvedVariant<'db> {
         Some(ty)
     }
 
-    pub fn to_funcdef(&self, db: &'db dyn HirAnalysisDb) -> Option<FuncDef<'db>> {
+    pub fn to_funcdef(&self, db: &'db dyn HirAnalysisDb) -> Option<CallableDef<'db>> {
         if !matches!(self.variant.kind(db), VariantKind::Tuple(_)) {
             return None;
         }
 
-        let arg_tys = self.iter_field_types(db).collect();
-        let adt = self.ty.adt_def(db).unwrap();
-
-        let mut ret_ty = TyId::adt(db, adt);
-        ret_ty = TyId::foldl(db, ret_ty, adt.param_set(db).params(db));
-
-        Some(FuncDef::new(
-            db,
-            CallableDef::VariantCtor(self.variant),
-            self.variant.def(db).name.unwrap(),
-            *adt.param_set(db),
-            arg_tys,
-            Binder::bind(ret_ty),
-        ))
+        Some(CallableDef::VariantCtor(self.variant))
     }
 }
 

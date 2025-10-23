@@ -5,7 +5,7 @@ use crate::{
     span::DynLazySpan,
 };
 use common::{
-    indexmap::{IndexMap, IndexSet},
+    indexmap::IndexMap,
     ingot::Ingot,
 };
 use rustc_hash::FxHashMap;
@@ -16,23 +16,19 @@ use super::{
     canonical::{Canonical, Canonicalized},
     diagnostics::{TraitConstraintDiag, TyDiagCollection},
     fold::TyFoldable as _,
-    func_def::{FuncDef, lower_func},
+    func_def::CallableDef,
     trait_lower::collect_implementor_methods,
     trait_resolution::{
         GoalSatisfiability, PredicateListId, WellFormedness, check_trait_inst_wf,
-        constraint::{collect_constraints, collect_super_traits},
+        constraint::collect_constraints,
         is_goal_satisfiable,
     },
-    ty_def::{Kind, TyId},
-    ty_lower::GenericParamTypeSet,
+    ty_def::TyId,
     unify::UnificationTable,
 };
 use crate::analysis::{
     HirAnalysisDb,
-    ty::{
-        trait_lower::collect_trait_impls, trait_resolution::constraint::super_trait_cycle,
-        ty_lower::collect_generic_params,
-    },
+    ty::trait_lower::collect_trait_impls,
 };
 
 /// Returns [`TraitEnv`] for the given ingot.
@@ -294,7 +290,7 @@ impl<'db> Implementor<'db> {
     pub(super) fn methods(
         self,
         db: &'db dyn HirAnalysisDb,
-    ) -> &'db IndexMap<IdentId<'db>, FuncDef<'db>> {
+    ) -> &'db IndexMap<IdentId<'db>, CallableDef<'db>> {
         collect_implementor_methods(db, self)
     }
 
@@ -512,11 +508,14 @@ impl<'db> TraitInstId<'db> {
 // TraitDef has been eliminated - use Trait directly via TraitInstId.def(db)
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy, Hash, salsa::Update)]
-pub struct TraitMethod<'db>(pub FuncDef<'db>);
+pub struct TraitMethod<'db>(pub CallableDef<'db>);
 
 impl TraitMethod<'_> {
     pub fn has_default_impl(self, db: &dyn HirAnalysisDb) -> bool {
-        self.0.hir_func_def(db).unwrap().body(db).is_some()
+        match self.0 {
+            CallableDef::Func(func) => func.body(db).is_some(),
+            CallableDef::VariantCtor(_) => false,
+        }
     }
 }
 

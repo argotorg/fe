@@ -19,7 +19,7 @@ use super::{
     canonical::Canonical,
     const_ty::ConstTyId,
     diagnostics::{ImplDiag, TraitConstraintDiag, TraitLowerDiag, TyDiagCollection, TyLowerDiag},
-    func_def::FuncDef,
+    func_def::CallableDef,
     method_cmp::compare_impl_method,
     method_table::probe_method,
     normalize::normalize_ty,
@@ -41,7 +41,6 @@ use crate::analysis::{
         adt_def::AdtDef,
         binder::Binder,
         canonical::Canonicalized,
-        func_def::lower_func,
         trait_def::{TraitInstId, does_impl_trait_conflict},
         trait_lower::lower_impl_trait,
         trait_resolution::{
@@ -257,9 +256,10 @@ pub fn analyze_func<'db>(
     db: &'db dyn HirAnalysisDb,
     func: Func<'db>,
 ) -> Vec<TyDiagCollection<'db>> {
-    let Some(func_def) = lower_func(db, func) else {
+    let Some(_name) = func.name(db).to_opt() else {
         return Vec::new();
     };
+    let func_def = CallableDef::Func(func);
 
     let assumptions = collect_func_def_constraints(db, func.into(), true).instantiate_identity();
     let analyzer = DefAnalyzer::for_func(db, func_def, assumptions);
@@ -328,10 +328,10 @@ impl<'db> DefAnalyzer<'db> {
 
     fn for_func(
         db: &'db dyn HirAnalysisDb,
-        func: FuncDef<'db>,
+        func: CallableDef<'db>,
         assumptions: PredicateListId<'db>,
     ) -> Self {
-        let self_ty = match func.hir_func_def(db).unwrap().scope().parent(db).unwrap() {
+        let self_ty = match func.scope().parent(db).unwrap() {
             ScopeId::Item(ItemKind::Trait(trait_)) => trait_.self_param(db).into(),
             ScopeId::Item(ItemKind::ImplTrait(impl_trait)) => match impl_trait.ty(db).to_opt() {
                 Some(hir_ty) => lower_hir_ty(
@@ -443,7 +443,7 @@ impl<'db> DefAnalyzer<'db> {
         true
     }
 
-    fn check_method_conflict(&mut self, func: FuncDef<'db>) -> bool {
+    fn check_method_conflict(&mut self, func: CallableDef<'db>) -> bool {
         let self_ty = func
             .receiver_ty(self.db)
             .map_or_else(|| self.self_ty.unwrap(), |ty| ty.instantiate_identity());
@@ -513,9 +513,10 @@ impl<'db> DefAnalyzer<'db> {
             }
 
             DefKind::Func(func) => {
-                let hir_func = func.hir_func_def(self.db).unwrap();
-                let mut ctxt = VisitorCtxt::with_func(self.db, hir_func);
-                self.visit_func(&mut ctxt, hir_func);
+                if let CallableDef::Func(hir_func) = func {
+                    let mut ctxt = VisitorCtxt::with_func(self.db, hir_func);
+                    self.visit_func(&mut ctxt, hir_func);
+                }
             }
 
             DefKind::TypeAlias(type_alias) => {
@@ -1184,7 +1185,7 @@ enum DefKind<'db> {
     Trait(Trait<'db>),
     ImplTrait(Implementor<'db>),
     Impl(HirImpl<'db>),
-    Func(FuncDef<'db>),
+    Func(CallableDef<'db>),
     TypeAlias(TypeAlias<'db>),
 }
 

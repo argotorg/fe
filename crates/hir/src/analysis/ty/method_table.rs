@@ -6,7 +6,7 @@ use salsa::Update;
 use super::{
     binder::Binder,
     canonical::Canonical,
-    func_def::{FuncDef, lower_func},
+    func_def::CallableDef,
     trait_resolution::constraint::collect_constraints,
     ty_def::{InvalidCause, TyBase, TyId},
     ty_lower::lower_hir_ty,
@@ -32,7 +32,7 @@ pub(crate) fn probe_method<'db>(
     ingot: Ingot<'db>,
     ty: Canonical<TyId<'db>>,
     name: IdentId<'db>,
-) -> Vec<FuncDef<'db>> {
+) -> Vec<CallableDef<'db>> {
     let table = collect_methods(db, ingot);
     table.probe(db, ty, name)
 }
@@ -48,7 +48,7 @@ impl<'db> MethodTable<'db> {
         db: &'db dyn HirAnalysisDb,
         ty: Canonical<TyId<'db>>,
         name: IdentId<'db>,
-    ) -> Vec<FuncDef<'db>> {
+    ) -> Vec<CallableDef<'db>> {
         let mut table = UnificationTable::new(db);
         let ty = ty.extract_identity(&mut table);
         let Some(base) = Self::extract_ty_base(ty, db) else {
@@ -72,15 +72,15 @@ impl<'db> MethodTable<'db> {
         self
     }
 
-    fn insert(&mut self, db: &'db dyn HirAnalysisDb, ty: TyId<'db>, func: FuncDef<'db>) {
+    fn insert(&mut self, db: &'db dyn HirAnalysisDb, ty: TyId<'db>, callable: CallableDef<'db>) {
         let Some(base) = Self::extract_ty_base(ty, db) else {
             return;
         };
 
-        let name = func.name(db);
+        let name = callable.name(db);
         let bucket = self.buckets.entry(*base).or_insert_with(MethodBucket::new);
         let methods = bucket.methods.entry(Binder::bind(ty)).or_default();
-        methods.insert(name, func);
+        methods.insert(name, callable);
     }
 
     fn extract_ty_base(ty: TyId<'db>, db: &'db dyn HirAnalysisDb) -> Option<&'db TyBase<'db>> {
@@ -94,7 +94,7 @@ impl<'db> MethodTable<'db> {
 
 #[derive(Debug, Clone, PartialEq, Eq, Update)]
 struct MethodBucket<'db> {
-    methods: FxHashMap<Binder<TyId<'db>>, FxHashMap<IdentId<'db>, FuncDef<'db>>>,
+    methods: FxHashMap<Binder<TyId<'db>>, FxHashMap<IdentId<'db>, CallableDef<'db>>>,
 }
 
 impl<'db> MethodBucket<'db> {
@@ -109,9 +109,9 @@ impl<'db> MethodBucket<'db> {
         table: &mut UnificationTable<'db>,
         ty: TyId<'db>,
         name: IdentId<'db>,
-    ) -> Vec<FuncDef<'db>> {
+    ) -> Vec<CallableDef<'db>> {
         let mut methods = vec![];
-        for (&cand_ty, funcs) in self.methods.iter() {
+        for (&cand_ty, callables) in self.methods.iter() {
             let snapshot = table.snapshot();
 
             let ty = table.instantiate_to_term(ty);
@@ -119,9 +119,9 @@ impl<'db> MethodBucket<'db> {
             let cand_ty = table.instantiate_to_term(cand_ty);
 
             if table.unify(cand_ty, ty).is_ok()
-                && let Some(func) = funcs.get(&name)
+                && let Some(callable) = callables.get(&name)
             {
-                methods.push(*func)
+                methods.push(*callable)
             }
             table.rollback_to(snapshot);
         }
@@ -159,11 +159,11 @@ impl<'db> MethodCollector<'db> {
             }
 
             for func in impl_.funcs(self.db) {
-                let Some(func) = lower_func(self.db, func) else {
+                if func.name(self.db).to_opt().is_none() {
                     continue;
                 };
 
-                self.insert(ty, func)
+                self.insert(ty, CallableDef::Func(func))
             }
         }
     }
@@ -172,18 +172,21 @@ impl<'db> MethodCollector<'db> {
         self.method_table.finalize()
     }
 
-    fn insert(&mut self, ty: TyId<'db>, func: FuncDef<'db>) {
-        let ty = match func.receiver_ty(self.db) {
-            Some(ty) => ty.instantiate_identity(),
-            None => ty,
+    fn insert(&mut self, ty: TyId<'db>, callable: CallableDef<'db>) {
+        let ty = match callable {
+            CallableDef::Func(func) if func.is_method(self.db) => {
+                let receiver = func.arg_tys(self.db).first().unwrap();
+                receiver.instantiate_identity()
+            }
+            _ => ty,
         };
 
         if self
             .method_table
-            .probe(self.db, Canonical::new(self.db, ty), func.name(self.db))
+            .probe(self.db, Canonical::new(self.db, ty), callable.name(self.db))
             .is_empty()
         {
-            self.method_table.insert(self.db, ty, func)
+            self.method_table.insert(self.db, ty, callable)
         }
     }
 }

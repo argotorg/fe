@@ -4,7 +4,7 @@ use super::{
     canonical::Canonical,
     diagnostics::{ImplDiag, TyDiagCollection},
     fold::{AssocTySubst, TyFoldable},
-    func_def::FuncDef,
+    func_def::CallableDef,
     normalize::normalize_ty,
     trait_def::{TraitInstId, TraitMethod},
     trait_resolution::{
@@ -40,7 +40,7 @@ use crate::analysis::HirAnalysisDb;
 ///   collected.
 pub(super) fn compare_impl_method<'db>(
     db: &'db dyn HirAnalysisDb,
-    impl_m: FuncDef<'db>,
+    impl_m: CallableDef<'db>,
     trait_m: TraitMethod<'db>,
     trait_inst: TraitInstId<'db>,
     sink: &mut Vec<TyDiagCollection<'db>>,
@@ -80,8 +80,8 @@ pub(super) fn compare_impl_method<'db>(
 /// Returns `false` if the comparison fails.
 fn compare_generic_param_num<'db>(
     db: &'db dyn HirAnalysisDb,
-    impl_m: FuncDef<'db>,
-    trait_m: FuncDef<'db>,
+    impl_m: CallableDef<'db>,
+    trait_m: CallableDef<'db>,
     sink: &mut Vec<TyDiagCollection<'db>>,
 ) -> bool {
     let impl_params = impl_m.explicit_params(db);
@@ -99,8 +99,8 @@ fn compare_generic_param_num<'db>(
 /// Returns `false` if the comparison fails.
 fn compare_generic_param_kind<'db>(
     db: &'db dyn HirAnalysisDb,
-    impl_m: FuncDef<'db>,
-    trait_m: FuncDef<'db>,
+    impl_m: CallableDef<'db>,
+    trait_m: CallableDef<'db>,
     sink: &mut Vec<TyDiagCollection<'db>>,
 ) -> bool {
     let mut err = false;
@@ -134,8 +134,8 @@ fn compare_generic_param_kind<'db>(
 /// Returns `false` if the comparison fails.
 fn compare_arity<'db>(
     db: &'db dyn HirAnalysisDb,
-    impl_m: FuncDef<'db>,
-    trait_m: FuncDef<'db>,
+    impl_m: CallableDef<'db>,
+    trait_m: CallableDef<'db>,
     sink: &mut Vec<TyDiagCollection<'db>>,
 ) -> bool {
     let impl_m_arity = impl_m.arg_tys(db).len();
@@ -155,8 +155,8 @@ fn compare_arity<'db>(
 /// Returns `false` if the comparison fails.
 fn compare_arg_label<'db>(
     db: &'db dyn HirAnalysisDb,
-    impl_m: FuncDef<'db>,
-    trait_m: FuncDef<'db>,
+    impl_m: CallableDef<'db>,
+    trait_m: CallableDef<'db>,
     sink: &mut Vec<TyDiagCollection<'db>>,
 ) -> bool {
     let mut err = false;
@@ -208,8 +208,8 @@ fn compare_arg_label<'db>(
 /// Returns `false` if the comparison fails.
 fn compare_ty<'db>(
     db: &'db dyn HirAnalysisDb,
-    impl_m: FuncDef<'db>,
-    trait_m: FuncDef<'db>,
+    impl_m: CallableDef<'db>,
+    trait_m: CallableDef<'db>,
     map_to_impl: &[TyId<'db>],
     trait_inst: TraitInstId<'db>,
     sink: &mut Vec<TyDiagCollection<'db>>,
@@ -294,8 +294,8 @@ fn compare_ty<'db>(
 /// Returns `false` if the comparison fails.
 fn compare_constraints<'db>(
     db: &'db dyn HirAnalysisDb,
-    impl_m: FuncDef<'db>,
-    trait_m: FuncDef<'db>,
+    impl_m: CallableDef<'db>,
+    trait_m: CallableDef<'db>,
     map_to_impl: &[TyId<'db>],
     sink: &mut Vec<TyDiagCollection<'db>>,
 ) -> bool {
