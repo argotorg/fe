@@ -177,28 +177,89 @@ This is an inventory of the key abstractions in the `hir::analysis` module and p
 
 *   **`analysis::ty::trait_def::Implementor`**
     *   **Purpose**: Represents a lowered, semantic representation of an `impl Trait` block, caching resolved types and constraints.
-    *   **Consolidation Pointer**: The logic will be moved into methods on `ImplTrait`. The `Implementor` struct will be renamed to `TraitImplData` and become a `pub(crate)` implementation detail.
-    *   **Complexity**: HIGH. This is the most complex part of the refactor and was the primary cause of the previous failure.
+    *   **Historical Context**: `Implementor` exists because `hir` and `hir-analysis` were separate crates. When merged, it became a legacy artifact like `FuncDef` - this makes it much less intimidating than it initially appears.
+    *   **Key Fact**: `Implementor` is `#[salsa::interned]` - it's already a first-class salsa type, not just a wrapper. This means it's well-architected; we're refactoring the API surface, not fixing bad design.
+    *   **Complexity**: MEDIUM-HIGH (less scary than initially thought - similar to FuncDef pattern we just completed)
 
-**CRITICAL COMPLEXITY: The `Binder` and the Syntactic/Semantic Divide**
+**Understanding the `Binder` Situation**
 
--   A generic `impl<T> Foo for T` is a template. The `Binder` is the mechanism that allows the compiler to substitute `T` with a concrete type (e.g., `u32`) to check if the `impl` applies.
--   To do this, the `Binder` must wrap a **semantic**, `TyFoldable` data structure. It needs to know about `TyId`s and other semantic types to perform substitutions.
--   The `ImplTrait` struct is **syntactic**; it contains `PathId`s and other source-level information. It is not `TyFoldable`. You cannot substitute a semantic `TyId` into a syntactic `PathId`.
--   This means an intermediate, semantic data structure **must exist**. This is the role of `Implementor`. The previous refactor failed when it tried to eliminate this structure without a correct replacement, leading to inconsistent type substitutions.
+**What is `Binder`?**
+- For generic impls like `impl<T> Display for Option<T>`, the `Binder` enables type substitution
+- It tracks how many type variables exist and allows substituting them with concrete types
+- Example: `Binder<Implementor>` with `num_vars=1` can substitute `T` with `i32` to check if `Option<i32>` implements `Display`
 
-**The Correct Strategy: Containment, Not Elimination**
+**Why `Binder<Implementor>` exists today:**
+- `Binder` requires a `TyFoldable` payload (can substitute type variables)
+- `ImplTrait` is syntactic (has `PathId`s), not semantic (no `TyId`s)
+- So `Implementor` holds the semantic data that `Binder` can work with
 
-The goal is to make the semantic data structure an invisible implementation detail.
+**CRITICAL INSIGHT FROM SEAN (from meeting transcript):**
+> "we don't need to have a binder implementer anymore. We just get the info when we need it"
 
-1.  **Rename and Contain**: Rename `Implementor` to `TraitImplData` and make it `pub(crate)`. Its purpose is to be the semantic, `TyFoldable` payload for the `Binder`.
-2.  **Isolate Lowering**: The `lower_impl_trait` function, which creates the `Binder<TraitImplData>`, will be kept but also made `pub(crate)`.
-3.  **Create the Public API**:
-    -   A `pub(crate)` `#[salsa::tracked]` method will be added to `ImplTrait`: `fn data(self, db) -> Binder<TraitImplData>`. This will be the single internal entry point to the lowered form.
-    -   All **public** analysis methods (`self_ty`, `trait_inst`, `methods`, etc.) will be added to `ImplTrait`.
-    -   These public methods will use `self.data(db)` internally to get the semantic information they need.
+This suggests we can eliminate precomputed `Binder<Implementor>` storage and instead:
+1. Add analysis methods directly to `ImplTrait`
+2. Create `Binder` on-demand only when truly needed
+3. Most queries don't need the bundled `Binder` - they can call individual methods
 
-This design makes `ImplTrait` the single, context-rich touchpoint for consumers of the API, while correctly handling the complexities of generic `impl` blocks under the hood.
+**Current Storage (to investigate during refactor):**
+- `TraitEnv` stores `Vec<Binder<Implementor>>`
+- Need to understand: Can this become `Vec<ImplTrait>` instead?
+- Or: Do we create `Binder` wrappers on-demand when querying?
+
+**Consolidation Strategy (Refined)**
+
+**Phase 1: Add Individual Query Methods to `ImplTrait`**
+```rust
+#[salsa::tracked]
+impl<'db> ImplTrait<'db> {
+    #[salsa::tracked]
+    pub fn self_ty(self, db: &'db dyn HirAnalysisDb) -> TyId<'db> {
+        // Lower HIR type directly - salsa caches result
+        let hir_ty = self.ty(db).to_opt()?;
+        lower_hir_ty(db, hir_ty, self.scope(), ...)
+    }
+
+    #[salsa::tracked]
+    pub fn trait_inst(self, db: &'db dyn HirAnalysisDb) -> TraitInstId<'db> {
+        // Lower trait ref directly - salsa caches result
+        lower_trait_ref(db, self.trait_ref(db), ...)
+    }
+
+    // ... other methods from Implementor
+}
+```
+
+**Phase 2: Understand Binder Requirements**
+- Audit all `Binder<Implementor>` usage sites
+- Determine which genuinely need bundled substitution
+- vs. which can use individual queries
+
+**Phase 3: Decide on Internal Data Strategy**
+Two possible approaches (TBD during implementation):
+
+**Option A: Keep minimal `TraitImplData` for Binder (conservative)**
+```rust
+// Internal, pub(crate) only
+#[salsa::interned]
+pub(crate) struct TraitImplData<'db> {
+    // Minimal semantic data for TyFoldable
+}
+
+impl<'db> ImplTrait<'db> {
+    // Internal accessor if truly needed
+    pub(crate) fn as_binder(self, db) -> Binder<TraitImplData> { ... }
+}
+```
+
+**Option B: Eliminate intermediate struct entirely (ambitious)**
+- All queries are individual methods
+- Create ad-hoc structures on-demand if Binder needed
+- Most call sites use methods directly
+
+**Critical Difference from FuncDef:**
+- `FuncDef` was pure wrapper → eliminated completely
+- `Implementor` has real semantic data → likely needs minimal internal representation
+- But the public API still becomes methods on `ImplTrait`
 
 *   **`analysis::ty::adt_def::AdtDef`**
     *   **Purpose**: Wraps `Struct`, `Contract`, or `Enum` to provide a unified analysis view.
@@ -457,12 +518,15 @@ pub struct TraitDef<'db> {
 
 ---
 
-### Implementor (Complex - Plan Carefully)
+### Implementor (Less Scary Than It Looks)
 
 **Location:** `crates/hir/src/analysis/ty/trait_def.rs`
 
+**Historical Context:** Artifact of two-crate split (`hir` / `hir-analysis`) - similar to `FuncDef`
+
 **Structure:**
 ```rust
+#[salsa::interned]  // Already well-architected!
 pub(crate) struct Implementor<'db> {
     trait_: TraitInstId<'db>,
     params: Vec<TyId<'db>>,
@@ -471,24 +535,39 @@ pub(crate) struct Implementor<'db> {
 }
 ```
 
-**Constructor:** `lower_impl_trait(db, impl_trait)` - performs significant analysis
+**Key Insight:** `Implementor` is `#[salsa::interned]` - this is NOT bad design, it's exactly what we want. The elimination is about removing the intermediate wrapper layer, not fixing a mistake.
 
-**CRITICAL COMPLEXITY: `Binder<Implementor>`**
+**The Binder Challenge:**
 
-- `Implementor` is almost always used as `Binder<Implementor>`
-- `Binder` allows generic trait implementations to be instantiated with concrete types
-- `Implementor` implements `TyFoldable`, `TyVisitable`, `Unifiable` - required for `Binder`
-- **We cannot simply replace `Binder<Implementor>` with `Binder<ImplTrait>`**
+Almost always used as `Binder<Implementor>` which enables:
+- Generic trait implementations to be instantiated with concrete types
+- Type variable substitution during unification (via `TyFoldable`)
+- Example: `impl<T> Display for Option<T>` becomes `Binder<Implementor>` that can be instantiated with concrete `T`
 
-**Strategy (Must Plan Before Implementing):**
+**Sean's Strategy:** "Lower impl trait should just go away... we don't need to have a binder implementer anymore. We can just get the info we want when we need it."
 
-1. **Phase 0: In-depth Analysis (CRITICAL)**: Before writing code, choose a strategy for handling `Binder`. Most likely path: create a new, minimal, non-salsa-tracked struct that can be wrapped in `Binder`. Methods on `ImplTrait` would create this struct on-the-fly.
-2. **Phase 1: Add `impl` block to `ImplTrait`**
-3. **Phase 2: Migrate Logic** to new methods
-4. **Phase 3: Address `Binder`** - Update all `Binder<Implementor>` usage sites
-5. **Phase 4: Final Elimination**
+Instead of precomputing and storing `Binder<Implementor>`, create it on-demand only when generic substitution is needed.
 
-**Complexity:** MEDIUM-HIGH
+**Two Possible Approaches:**
+
+**Option A (Conservative):**
+- Keep minimal `TraitImplData` struct as `pub(crate)` (for Binder only)
+- Add all public methods to `ImplTrait` that internally create `TraitImplData`
+- Update `TraitEnv` to store `Vec<ImplTrait>` instead of `Vec<Binder<Implementor>>`
+
+**Option B (Ambitious - Sean's Vision):**
+- Eliminate intermediate struct entirely
+- `ImplTrait` methods compute trait info directly when needed
+- Create `Binder` wrappers on-the-fly only for call sites that need generic substitution
+- May require investigating which `Binder<Implementor>` uses genuinely need the bundled structure
+
+**Next Steps:**
+1. Audit `Binder<Implementor>` usage sites (18 occurrences across 4 files)
+2. Identify which truly require generic substitution machinery
+3. Choose Option A vs B based on usage patterns
+4. Apply proven FuncDef/CallableDef pattern where applicable
+
+**Complexity:** MEDIUM-HIGH (but tractable with FuncDef learnings)
 
 ---
 
