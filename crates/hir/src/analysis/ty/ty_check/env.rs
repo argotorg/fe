@@ -19,7 +19,6 @@ use crate::analysis::{
         const_ty::{ConstTyData, ConstTyId, EvaluatedConstTy},
         diagnostics::{BodyDiag, FuncBodyDiag, TraitConstraintDiag, TyDiagCollection},
         fold::{AssocTySubst, TyFoldable, TyFolder},
-        func_def::{FuncDef, lower_func},
         normalize::normalize_ty,
         trait_def::TraitInstId,
         trait_resolution::{
@@ -119,10 +118,8 @@ impl<'db> TyCheckEnv<'db> {
 
     /// Returns a function if the `body` being checked has `BodyKind::FuncBody`.
     /// If the `body` has `BodyKind::Anonymous`, returns None
-    pub(super) fn func(&self) -> Option<FuncDef<'db>> {
-        let func = self.hir_func()?;
-
-        lower_func(self.db, func)
+    pub(super) fn func(&self) -> Option<Func<'db>> {
+        self.hir_func()
     }
 
     fn hir_func(&self) -> Option<Func<'db>> {
@@ -587,9 +584,7 @@ impl<'db> LocalBinding<'db> {
 
             Self::Param { idx, .. } => {
                 let func = env.func().unwrap();
-                let Partial::Present(func_params) =
-                    func.hir_func_def(env.db).unwrap().params(hir_db)
-                else {
+                let Partial::Present(func_params) = func.params(hir_db) else {
                     unreachable!();
                 };
 
@@ -602,7 +597,7 @@ impl<'db> LocalBinding<'db> {
         match self {
             LocalBinding::Local { pat, .. } => pat.span(env.body).into(),
             LocalBinding::Param { idx, .. } => {
-                let hir_func = env.func().unwrap().hir_func_def(env.db).unwrap();
+                let hir_func = env.func().unwrap();
                 hir_func.span().params().param(*idx).name().into()
             }
         }
