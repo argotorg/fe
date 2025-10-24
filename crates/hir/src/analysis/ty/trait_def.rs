@@ -54,10 +54,24 @@ pub(crate) fn impls_for_trait<'db>(
         .iter()
         .filter(|impl_| {
             let snapshot = table.snapshot();
-            let impl_trait = table.instantiate_with_fresh_vars(**impl_);
+
+            let impl_trait = impl_.skip_binder();
+
+            // Create fresh vars for the generic params
+            let params = crate::analysis::ty::ty_lower::collect_generic_params(db, (*impl_trait).into())
+                .params(db);
+            let fresh_vars: Vec<_> = params
+                .iter()
+                .map(|param| table.new_var_from_param(*param))
+                .collect();
+
+            // Get trait_inst and instantiate with fresh vars
             let is_ok = impl_trait
                 .trait_inst(db)
-                .map(|inst| table.unify(inst, trait_).is_ok())
+                .map(|inst| {
+                    let inst = Binder::bind(inst).instantiate(db, &fresh_vars);
+                    table.unify(inst, trait_).is_ok()
+                })
                 .unwrap_or(false);
             table.rollback_to(snapshot);
             is_ok
@@ -261,16 +275,35 @@ pub(super) fn does_impl_trait_conflict(
     b: Binder<ImplTrait>,
 ) -> bool {
     let mut table = UnificationTable::new(db);
-    let a_impl = table.instantiate_with_fresh_vars(a);
-    let b_impl = table.instantiate_with_fresh_vars(b);
+    let a_impl = a.skip_binder();
+    let b_impl = b.skip_binder();
 
-    // Get trait instances from impl traits
+    // Create fresh vars for a
+    let a_params = crate::analysis::ty::ty_lower::collect_generic_params(db, (*a_impl).into())
+        .params(db);
+    let a_fresh_vars: Vec<_> = a_params
+        .iter()
+        .map(|param| table.new_var_from_param(*param))
+        .collect();
+
+    // Create fresh vars for b
+    let b_params = crate::analysis::ty::ty_lower::collect_generic_params(db, (*b_impl).into())
+        .params(db);
+    let b_fresh_vars: Vec<_> = b_params
+        .iter()
+        .map(|param| table.new_var_from_param(*param))
+        .collect();
+
+    // Get trait instances from impl traits and instantiate
     let Some(a_trait) = a_impl.trait_inst(db) else {
         return false;
     };
+    let a_trait = Binder::bind(a_trait).instantiate(db, &a_fresh_vars);
+
     let Some(b_trait) = b_impl.trait_inst(db) else {
         return false;
     };
+    let b_trait = Binder::bind(b_trait).instantiate(db, &b_fresh_vars);
 
     if table.unify(a_trait, b_trait).is_err() {
         return false;
@@ -287,12 +320,26 @@ pub(super) fn does_impl_trait_conflict(
         return false;
     };
 
+    // Instantiate constraints from both impls with their fresh vars
+    let a_constraints_instantiated: Vec<_> = a_constraints
+        .list(db)
+        .iter()
+        .map(|c| Binder::bind(*c).instantiate(db, &a_fresh_vars))
+        .collect();
+    let b_constraints_instantiated: Vec<_> = b_constraints
+        .list(db)
+        .iter()
+        .map(|c| Binder::bind(*c).instantiate(db, &b_fresh_vars))
+        .collect();
+
     // Check if all constraints from both implementations would be satisfiable
     // when the types are unified
-    let merged_constraints = a_constraints.merge(db, b_constraints);
+    let all_constraints = a_constraints_instantiated
+        .iter()
+        .chain(b_constraints_instantiated.iter());
 
     // Check each constraint to see if it would be satisfiable
-    for &constraint in merged_constraints.list(db) {
+    for constraint in all_constraints {
         let constraint = Canonicalized::new(db, constraint.fold_with(db, &mut table));
 
         // Check if this constraint is satisfiable

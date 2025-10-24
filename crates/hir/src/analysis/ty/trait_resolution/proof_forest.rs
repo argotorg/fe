@@ -359,12 +359,21 @@ impl GeneratorNode {
             g_node.next_cand += 1;
 
             let mut table = g_node.table.clone();
-            let gen_cand = table.instantiate_with_fresh_vars(cand);
+            let gen_cand = cand.skip_binder();
 
-            // Compute trait instance from ImplTrait
+            // Create fresh vars for the generic params
+            let params = crate::analysis::ty::ty_lower::collect_generic_params(db, (*gen_cand).into())
+                .params(db);
+            let fresh_vars: Vec<_> = params
+                .iter()
+                .map(|param| table.new_var_from_param(*param))
+                .collect();
+
+            // Compute trait instance from ImplTrait and instantiate with fresh vars
             let Some(trait_inst) = gen_cand.trait_inst(db) else {
                 continue;
             };
+            let trait_inst = Binder::bind(trait_inst).instantiate(db, &fresh_vars);
 
             // TODO: require candidates to be pre-normalized
             // Normalize trait instance arguments before unification
@@ -403,7 +412,11 @@ impl GeneratorNode {
                     constraints
                         .list(db)
                         .iter()
-                        .map(|c| c.fold_with(db, &mut table))
+                        .map(|c| {
+                            // Instantiate constraint with fresh vars, then fold with table
+                            let c = Binder::bind(*c).instantiate(db, &fresh_vars);
+                            c.fold_with(db, &mut table)
+                        })
                         .collect()
                 };
                 let child = pf.new_consumer_node(self, sub_goals, table);

@@ -885,15 +885,26 @@ pub fn find_associated_type<'db>(
     // check all impls for ty
     for impl_ in impls_for_ty_with_constraints(db, ingot, ty, assumptions) {
         let snapshot = table.snapshot();
-        let impl_trait = table.instantiate_with_fresh_vars(impl_);
+        let impl_trait = impl_.skip_binder();
+
+        // Create fresh vars for the generic params
+        let params = crate::analysis::ty::ty_lower::collect_generic_params(db, (*impl_trait).into())
+            .params(db);
+        let fresh_vars: Vec<_> = params
+            .iter()
+            .map(|param| table.new_var_from_param(*param))
+            .collect();
 
         let impl_self_ty = impl_trait.self_ty(db);
+        let impl_self_ty = Binder::bind(impl_self_ty).instantiate(db, &fresh_vars);
 
         if table.unify(lhs_ty, impl_self_ty).is_ok()
             && let Some(ty) = impl_trait.assoc_ty(db, name)
         {
+            let ty = Binder::bind(ty).instantiate(db, &fresh_vars);
             let folded = ty.fold_with(db, &mut table);
             if let Some(trait_inst) = impl_trait.trait_inst(db) {
+                let trait_inst = Binder::bind(trait_inst).instantiate(db, &fresh_vars);
                 candidates.push((trait_inst, folded));
             }
         }

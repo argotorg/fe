@@ -1301,9 +1301,9 @@ fn analyze_impl_trait_specific_error<'db>(
         return Err(diags);
     }
 
-    // 4. Conflict checking is done during trait impl collection in `collect_trait_impls`
-
+    // 4. Check if conflict occurs
     let current_impl = Binder::bind(impl_trait);
+    analyze_conflict_impl(db, current_impl, &mut diags);
 
     // 5. Checks if implementor type satisfies the kind bound which is required by
     //    the trait.
@@ -1426,6 +1426,42 @@ fn analyze_impl_trait_specific_error<'db>(
         Ok(current_impl)
     } else {
         Err(diags)
+    }
+}
+
+fn analyze_conflict_impl<'db>(
+    db: &'db dyn HirAnalysisDb,
+    impl_trait: Binder<ImplTrait<'db>>,
+    diags: &mut Vec<TyDiagCollection<'db>>,
+) {
+    use crate::analysis::ty::trait_def::{does_impl_trait_conflict, ingot_trait_env};
+
+    let Some(trait_def) = impl_trait.skip_binder().trait_def(db) else {
+        return;
+    };
+
+    let env = ingot_trait_env(db, trait_def.ingot(db));
+    let Some(impls) = env.impls.get(&trait_def) else {
+        return;
+    };
+
+    for cand in impls {
+        // Skip checking an impl against itself
+        if cand.skip_binder() == impl_trait.skip_binder() {
+            continue;
+        }
+
+        if does_impl_trait_conflict(db, *cand, impl_trait) {
+            diags.push(
+                TraitLowerDiag::ConflictTraitImpl {
+                    primary: *cand.skip_binder(),
+                    conflict_with: *impl_trait.skip_binder(),
+                }
+                .into(),
+            );
+
+            return;
+        }
     }
 }
 
