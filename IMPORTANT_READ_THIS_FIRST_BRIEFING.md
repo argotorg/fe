@@ -206,60 +206,147 @@ This suggests we can eliminate precomputed `Binder<Implementor>` storage and ins
 - Need to understand: Can this become `Vec<ImplTrait>` instead?
 - Or: Do we create `Binder` wrappers on-demand when querying?
 
-**Consolidation Strategy (Refined)**
+**Consolidation Strategy: The Hybrid Approach (RECOMMENDED)**
 
-**Phase 1: Add Individual Query Methods to `ImplTrait`**
+This approach combines the best of caching and atomic instantiation, as validated against the briefing principles.
+
+**The Problem with Naive Elimination:**
+The first attempt to eliminate `Implementor` failed because `Binder<Implementor>` provided **atomic instantiation** - when you called `.instantiate()`, it created fresh type variables once and substituted them consistently across all fields (`self_ty`, `trait_inst`, `constraints`). Breaking this into separate method calls broke this atomicity, requiring callers to manually manage fresh vars at 6+ call sites.
+
+**The Solution: Split Pure and Stateful Logic**
+
+**Step 1: Create Internal `TraitImplData` (pub(crate), #[salsa::interned])**
 ```rust
-#[salsa::tracked]
-impl<'db> ImplTrait<'db> {
-    #[salsa::tracked]
-    pub fn self_ty(self, db: &'db dyn HirAnalysisDb) -> TyId<'db> {
-        // Lower HIR type directly - salsa caches result
-        let hir_ty = self.ty(db).to_opt()?;
-        lower_hir_ty(db, hir_ty, self.scope(), ...)
-    }
+// In analysis/ty/trait_def.rs or similar
+// This is INTERNAL ONLY - not exposed in public API
 
-    #[salsa::tracked]
-    pub fn trait_inst(self, db: &'db dyn HirAnalysisDb) -> TraitInstId<'db> {
-        // Lower trait ref directly - salsa caches result
-        lower_trait_ref(db, self.trait_ref(db), ...)
-    }
-
-    // ... other methods from Implementor
-}
-```
-
-**Phase 2: Understand Binder Requirements**
-- Audit all `Binder<Implementor>` usage sites
-- Determine which genuinely need bundled substitution
-- vs. which can use individual queries
-
-**Phase 3: Decide on Internal Data Strategy**
-Two possible approaches (TBD during implementation):
-
-**Option A: Keep minimal `TraitImplData` for Binder (conservative)**
-```rust
-// Internal, pub(crate) only
 #[salsa::interned]
 pub(crate) struct TraitImplData<'db> {
-    // Minimal semantic data for TyFoldable
+    pub self_ty: TyId<'db>,
+    pub trait_inst: Option<TraitInstId<'db>>,
+    pub constraints: PredicateListId<'db>,
+    pub params: Vec<TyId<'db>>,
+    // ... other semantic fields
 }
 
-impl<'db> ImplTrait<'db> {
-    // Internal accessor if truly needed
-    pub(crate) fn as_binder(self, db) -> Binder<TraitImplData> { ... }
+// Must implement TyFoldable so it works with Binder
+impl<'db> TyFoldable<'db> for TraitImplData<'db> { ... }
+```
+
+**Step 2: Add Cached Query to Compute TraitImplData**
+```rust
+// In impl<'db> ImplTrait<'db> block (in hir_def/item.rs)
+
+/// (Internal) Lowers this syntactic `ImplTrait` into semantic representation.
+/// This does the expensive work of resolving paths and lowering types.
+/// THIS IS CACHED BY SALSA - called once per ImplTrait.
+#[salsa::tracked]
+pub(crate) fn trait_impl_data(self, db: &'db dyn HirAnalysisDb) -> TraitImplData<'db> {
+    let scope = self.scope();
+    let assumptions = collect_constraints(db, self.into()).instantiate_identity();
+
+    let self_ty = self.ty(db).to_opt()
+        .map(|ty| lower_hir_ty(db, ty, scope, assumptions))
+        .unwrap_or_else(|| TyId::invalid(db, InvalidCause::Other));
+
+    let trait_inst = self.trait_ref(db).to_opt()
+        .and_then(|tr| lower_trait_ref(db, self_ty, tr, scope, assumptions).ok());
+
+    let constraints = self.impl_constraints(db);
+    let params = collect_generic_params(db, self.into()).params(db).to_vec();
+
+    TraitImplData::new(db, self_ty, trait_inst, constraints, params)
 }
 ```
 
-**Option B: Eliminate intermediate struct entirely (ambitious)**
-- All queries are individual methods
-- Create ad-hoc structures on-demand if Binder needed
-- Most call sites use methods directly
+**Step 3: Add Public Generic (Uninstantiated) Methods**
+```rust
+// Clean public API for accessing generic data - all cached!
 
-**Critical Difference from FuncDef:**
-- `FuncDef` was pure wrapper → eliminated completely
-- `Implementor` has real semantic data → likely needs minimal internal representation
-- But the public API still becomes methods on `ImplTrait`
+#[salsa::tracked]
+pub fn self_ty(self, db: &'db dyn HirAnalysisDb) -> TyId<'db> {
+    self.trait_impl_data(db).self_ty(db)
+}
+
+#[salsa::tracked]
+pub fn trait_inst(self, db: &'db dyn HirAnalysisDb) -> Option<TraitInstId<'db>> {
+    self.trait_impl_data(db).trait_inst(db)
+}
+```
+
+**Step 4: Add Public Instantiation Method (Atomic, Stateful)**
+```rust
+/// Instantiates this impl with fresh type variables for unification.
+/// This creates fresh vars ONCE and substitutes them atomically across
+/// all fields, ensuring correctness.
+///
+/// NOT CACHED (takes &mut UnificationTable), but BENEFITS from the
+/// cached trait_impl_data query internally.
+pub fn instantiated(
+    self,
+    db: &'db dyn HirAnalysisDb,
+    table: &mut UnificationTable<'db>,
+) -> InstantiatedTraitImpl<'db> {
+    // 1. Get cached template (fast if called before)
+    let data_template = self.trait_impl_data(db);
+
+    // 2. Create fresh vars ONCE
+    let fresh_vars: Vec<TyId> = data_template.params(db)
+        .iter()
+        .map(|p| table.new_var_from_param(*p))
+        .collect();
+
+    // 3. Instantiate atomically with shared vars
+    let binder = Binder::bind(data_template);
+    let instantiated = binder.instantiate(db, &fresh_vars);
+
+    // 4. Return simple struct with results
+    InstantiatedTraitImpl {
+        self_ty: instantiated.self_ty(db),
+        trait_inst: instantiated.trait_inst(db),
+        constraints: instantiated.constraints(db),
+    }
+}
+```
+
+**Step 5: Return Struct for Instantiated Data**
+```rust
+/// Simple data struct returned by instantiated() method.
+/// Not salsa-tracked, just a convenient return value.
+pub struct InstantiatedTraitImpl<'db> {
+    pub self_ty: TyId<'db>,
+    pub trait_inst: Option<TraitInstId<'db>>,
+    pub constraints: PredicateListId<'db>,
+}
+```
+
+**Usage at Call Sites:**
+```rust
+// For generic (uninstantiated) access - cached, cheap
+let self_ty = impl_trait.self_ty(db);
+let trait_inst = impl_trait.trait_inst(db);
+
+// For instantiated access - atomic, correct
+let inst = impl_trait.instantiated(db, &mut table);
+// Now inst.self_ty, inst.trait_inst, inst.constraints all share same fresh vars
+```
+
+**Why This is the Right Approach:**
+1. ✅ **Restores atomic instantiation** - eliminates manual fresh var management at call sites
+2. ✅ **Leverages Salsa caching** - expensive lowering work cached in `trait_impl_data`
+3. ✅ **Clean public API** - complexity hidden, methods on `ImplTrait` directly
+4. ✅ **Matches "Option A (Conservative)"** from briefing exactly
+5. ✅ **Prevents the atomicity bug** that caused the first refactor attempt to fail
+6. ✅ **No code duplication** - 6+ manual fresh var creation sites eliminated
+
+**What Gets Eliminated:**
+- `Implementor` as a public-facing wrapper struct (DELETED)
+- Manual fresh var creation at call sites (ELIMINATED)
+- `lower_impl_trait()` standalone function (DELETED)
+
+**What Remains (Internal Only):**
+- `TraitImplData` as `pub(crate)` interned struct (implementation detail)
+- `trait_impl_data()` as `pub(crate)` cached query (implementation detail)
 
 *   **`analysis::ty::adt_def::AdtDef`**
     *   **Purpose**: Wraps `Struct`, `Contract`, or `Enum` to provide a unified analysis view.
