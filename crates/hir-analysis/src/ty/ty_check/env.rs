@@ -628,9 +628,20 @@ impl<'db> BlockEnv<'db> {
     }
 }
 
+/// A key for looking up effect bindings.
+/// This includes the definition scope and any type arguments, so that
+/// `SomeTrait<u8>` and `SomeTrait<u16>` are distinct keys.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub(super) enum EffectKey<'db> {
+    /// A concrete type (e.g., `Storage`)
+    Type(ScopeId<'db>),
+    /// A trait with type arguments (e.g., `SomeTrait<u8>`)
+    Trait(TraitInstId<'db>),
+}
+
 #[derive(Default)]
 struct EffectFrame<'db> {
-    bindings: FxHashMap<ScopeId<'db>, ProvidedEffect<'db>>,
+    bindings: FxHashMap<EffectKey<'db>, ProvidedEffect<'db>>,
 }
 
 pub(super) struct EffectEnv<'db> {
@@ -655,7 +666,7 @@ impl<'db> EffectEnv<'db> {
         self.frames.pop();
     }
 
-    pub fn insert(&mut self, key: ScopeId<'db>, binding: ProvidedEffect<'db>) {
+    pub fn insert(&mut self, key: EffectKey<'db>, binding: ProvidedEffect<'db>) {
         self.frames
             .last_mut()
             .expect("EffectEnv must always have at least one frame")
@@ -663,7 +674,7 @@ impl<'db> EffectEnv<'db> {
             .insert(key, binding);
     }
 
-    pub fn lookup(&self, key: ScopeId<'db>) -> Option<ProvidedEffect<'db>> {
+    pub fn lookup(&self, key: EffectKey<'db>) -> Option<ProvidedEffect<'db>> {
         self.frames
             .iter()
             .rev()
@@ -841,18 +852,20 @@ enum DeferredTask<'db> {
 
 impl<'db> TyCheckEnv<'db> {
     /// Compute a normalized effect key for a given `key_path` resolved in `scope`
-    /// under `assumptions`. The key corresponds to the resolved item’s definition
-    /// scope, so that different instantiations match.
+    /// under `assumptions`. The key includes type arguments so that different
+    /// instantiations (e.g., `SomeTrait<u8>` vs `SomeTrait<u16>`) are distinct.
     pub(super) fn effect_key_for_path_in_scope(
         &self,
         key_path: PathId<'db>,
         scope: ScopeId<'db>,
         assumptions: PredicateListId<'db>,
-    ) -> Option<ScopeId<'db>> {
+    ) -> Option<EffectKey<'db>> {
         let path_res = resolve_path(self.db, key_path, scope, assumptions, false).ok()?;
         match path_res {
-            PathRes::Ty(ty) | PathRes::TyAlias(_, ty) => ty.as_scope(self.db),
-            PathRes::Trait(trait_inst) => Some(trait_inst.def(self.db).trait_(self.db).scope()),
+            PathRes::Ty(ty) | PathRes::TyAlias(_, ty) => {
+                ty.as_scope(self.db).map(EffectKey::Type)
+            }
+            PathRes::Trait(trait_inst) => Some(EffectKey::Trait(trait_inst)),
             _ => None,
         }
     }
