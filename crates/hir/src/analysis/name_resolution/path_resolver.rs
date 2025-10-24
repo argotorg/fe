@@ -23,7 +23,7 @@ use crate::analysis::{
     HirAnalysisDb,
     name_resolution::{NameResKind, QueryDirective},
     ty::{
-        adt_def::{AdtRef, lower_adt},
+        adt_def::AdtRef,
         binder::Binder,
         canonical::{Canonical, Canonicalized},
         fold::TyFoldable,
@@ -1154,11 +1154,10 @@ fn ty_from_adtref<'db>(
     args: &[TyId<'db>],
     assumptions: PredicateListId<'db>,
 ) -> PathResolutionResult<'db, TyId<'db>> {
-    let adt = lower_adt(db, adt_ref);
-    let ty = TyId::adt(db, adt);
+    let ty = TyId::adt(db, adt_ref);
     // Fill trailing defaults (if any)
     let completed_args =
-        adt.param_set(db)
+        adt_ref.param_set(db)
             .complete_explicit_args_with_defaults(db, None, args, assumptions);
     let applied = TyId::foldl(db, ty, &completed_args);
     if let TyData::Invalid(InvalidCause::TooManyGenericArgs { expected, given }) = applied.data(db)

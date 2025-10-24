@@ -1,7 +1,7 @@
 use crate::{
     hir_def::{
-        Contract, Enum, FieldDefListId, GenericParamOwner, IdentId, ItemKind, Partial, Struct,
-        TypeId as HirTyId, VariantDefListId, VariantKind, scope_graph::ScopeId,
+        Contract, Enum, GenericParamOwner, IdentId, ItemKind, Partial, Struct,
+        TypeId as HirTyId, scope_graph::ScopeId,
     },
     span::DynLazySpan,
 };
@@ -12,141 +12,9 @@ use super::{
     binder::Binder,
     trait_resolution::constraint::collect_adt_constraints,
     ty_def::{InvalidCause, TyId},
-    ty_lower::{GenericParamTypeSet, collect_generic_params, lower_hir_ty},
+    ty_lower::{GenericParamTypeSet, lower_hir_ty},
 };
 use crate::analysis::HirAnalysisDb;
-
-/// Lower HIR ADT definition(`struct/enum/contract`) to [`AdtDef`].
-#[salsa::tracked]
-pub fn lower_adt<'db>(db: &'db dyn HirAnalysisDb, adt: AdtRef<'db>) -> AdtDef<'db> {
-    let scope = adt.scope();
-
-    let (params, variants) = match adt {
-        AdtRef::Contract(c) => (
-            GenericParamTypeSet::empty(db, scope),
-            vec![collect_field_types(db, scope, c.fields(db))],
-        ),
-        AdtRef::Struct(s) => (
-            collect_generic_params(db, s.into()),
-            vec![collect_field_types(db, scope, s.fields(db))],
-        ),
-        AdtRef::Enum(e) => (
-            collect_generic_params(db, e.into()),
-            collect_enum_variant_types(db, scope, e.variants(db)),
-        ),
-    };
-
-    AdtDef::new(db, adt, params, variants)
-}
-
-fn collect_field_types<'db>(
-    db: &'db dyn HirAnalysisDb,
-    scope: ScopeId<'db>,
-    fields: FieldDefListId<'db>,
-) -> AdtField<'db> {
-    let fields = fields.data(db).iter().map(|field| field.ty).collect();
-    AdtField::new(fields, scope)
-}
-
-fn collect_enum_variant_types<'db>(
-    db: &'db dyn HirAnalysisDb,
-    scope: ScopeId<'db>,
-    variants: VariantDefListId<'db>,
-) -> Vec<AdtField<'db>> {
-    variants
-        .data(db)
-        .iter()
-        .map(|variant| {
-            let tys = match variant.kind {
-                VariantKind::Tuple(tuple_id) => tuple_id.data(db).clone(),
-                VariantKind::Record(fields) => {
-                    fields.data(db).iter().map(|field| field.ty).collect()
-                }
-                VariantKind::Unit => vec![],
-            };
-            AdtField::new(tys, scope)
-        })
-        .collect()
-}
-
-/// Represents a ADT type definition.
-#[salsa::tracked]
-#[derive(Debug)]
-pub struct AdtDef<'db> {
-    pub adt_ref: AdtRef<'db>,
-
-    /// Type parameters of the ADT.
-    #[return_ref]
-    pub param_set: GenericParamTypeSet<'db>,
-
-    /// Fields of the ADT, if the ADT is an enum, this represents variants.
-    /// Otherwise, `fields[0]` represents all fields of the struct.
-    #[return_ref]
-    pub fields: Vec<AdtField<'db>>,
-}
-
-impl<'db> AdtDef<'db> {
-    pub(crate) fn name(self, db: &'db dyn HirAnalysisDb) -> Option<IdentId<'db>> {
-        self.adt_ref(db).name(db)
-    }
-
-    pub fn name_span(self, db: &'db dyn HirAnalysisDb) -> DynLazySpan<'db> {
-        self.adt_ref(db).name_span(db)
-    }
-
-    pub(crate) fn params(self, db: &'db dyn HirAnalysisDb) -> &'db [TyId<'db>] {
-        self.param_set(db).params(db)
-    }
-
-    pub(crate) fn original_params(self, db: &'db dyn HirAnalysisDb) -> &'db [TyId<'db>] {
-        self.param_set(db).explicit_params(db)
-    }
-
-    pub(crate) fn is_struct(self, db: &dyn HirAnalysisDb) -> bool {
-        matches!(self.adt_ref(db), AdtRef::Struct(_))
-    }
-
-    pub fn scope(self, db: &'db dyn HirAnalysisDb) -> ScopeId<'db> {
-        self.adt_ref(db).scope()
-    }
-
-    pub(crate) fn variant_ty_span(
-        self,
-        db: &'db dyn HirAnalysisDb,
-        field_idx: usize,
-        ty_idx: usize,
-    ) -> DynLazySpan<'db> {
-        match self.adt_ref(db) {
-            AdtRef::Enum(e) => {
-                let span = e.variant_span(field_idx);
-                match e.variants(db).data(db)[field_idx].kind {
-                    VariantKind::Tuple(_) => span.tuple_type().elem_ty(ty_idx).into(),
-                    VariantKind::Record(_) => span.fields().field(ty_idx).ty().into(),
-                    VariantKind::Unit => unreachable!(),
-                }
-            }
-
-            AdtRef::Struct(s) => s.span().fields().field(field_idx).ty().into(),
-
-            AdtRef::Contract(c) => c.span().fields().field(field_idx).ty().into(),
-        }
-    }
-
-    pub(crate) fn ingot(self, db: &'db dyn HirAnalysisDb) -> Ingot<'db> {
-        match self.adt_ref(db) {
-            AdtRef::Enum(e) => e.top_mod(db).ingot(db),
-            AdtRef::Struct(s) => s.top_mod(db).ingot(db),
-            AdtRef::Contract(c) => c.top_mod(db).ingot(db),
-        }
-    }
-
-    pub(crate) fn as_generic_param_owner(
-        self,
-        db: &'db dyn HirAnalysisDb,
-    ) -> Option<GenericParamOwner<'db>> {
-        self.adt_ref(db).generic_owner()
-    }
-}
 
 /// This struct represents a field of an ADT. If the ADT is an enum, this
 /// represents a variant.
@@ -167,16 +35,13 @@ impl<'db> AdtField<'db> {
         // Get ADT definition from scope to determine appropriate assumptions
         let assumptions = match self.scope {
             ScopeId::Item(ItemKind::Struct(struct_)) => {
-                let adt_def = lower_adt(db, struct_.into());
-                collect_adt_constraints(db, adt_def).instantiate_identity()
+                collect_adt_constraints(db, struct_.into()).instantiate_identity()
             }
             ScopeId::Item(ItemKind::Enum(enum_)) => {
-                let adt_def = lower_adt(db, enum_.into());
-                collect_adt_constraints(db, adt_def).instantiate_identity()
+                collect_adt_constraints(db, enum_.into()).instantiate_identity()
             }
             ScopeId::Item(ItemKind::Contract(contract)) => {
-                let adt_def = lower_adt(db, contract.into());
-                collect_adt_constraints(db, adt_def).instantiate_identity()
+                collect_adt_constraints(db, contract.into()).instantiate_identity()
             }
             _ => unreachable!(),
         };
@@ -202,7 +67,7 @@ impl<'db> AdtField<'db> {
         self.tys.len()
     }
 
-    pub(super) fn new(tys: Vec<Partial<HirTyId<'db>>>, scope: ScopeId<'db>) -> Self {
+    pub(crate) fn new(tys: Vec<Partial<HirTyId<'db>>>, scope: ScopeId<'db>) -> Self {
         Self { tys, scope }
     }
 }
@@ -265,5 +130,82 @@ impl<'db> AdtRef<'db> {
             AdtRef::Struct(s) => Some(s.into()),
             AdtRef::Contract(_) => None,
         }
+    }
+
+    // Semantic methods that delegate to HIR items directly.
+    // These provide a unified interface across Struct/Enum/Contract.
+
+    pub(crate) fn params(self, db: &'db dyn HirAnalysisDb) -> &'db [TyId<'db>] {
+        self.param_set(db).params(db)
+    }
+
+    pub(crate) fn original_params(self, db: &'db dyn HirAnalysisDb) -> &'db [TyId<'db>] {
+        self.param_set(db).explicit_params(db)
+    }
+
+    pub(crate) fn ingot(self, db: &'db dyn HirAnalysisDb) -> Ingot<'db> {
+        match self {
+            AdtRef::Enum(e) => e.top_mod(db).ingot(db),
+            AdtRef::Struct(s) => s.top_mod(db).ingot(db),
+            AdtRef::Contract(c) => c.top_mod(db).ingot(db),
+        }
+    }
+
+    pub(crate) fn is_struct(self) -> bool {
+        matches!(self, AdtRef::Struct(_))
+    }
+
+    pub(crate) fn fields(self, db: &'db dyn HirAnalysisDb) -> &'db [AdtField<'db>] {
+        match self {
+            AdtRef::Enum(e) => e.ty_fields(db),
+            AdtRef::Struct(s) => std::slice::from_ref(s.ty_fields(db)),
+            AdtRef::Contract(c) => std::slice::from_ref(c.ty_fields(db)),
+        }
+    }
+
+    pub(crate) fn param_set(self, db: &'db dyn HirAnalysisDb) -> &'db GenericParamTypeSet<'db> {
+        match self {
+            AdtRef::Enum(e) => e.ty_param_set(db),
+            AdtRef::Struct(s) => s.ty_param_set(db),
+            AdtRef::Contract(c) => c.ty_param_set(db),
+        }
+    }
+
+    pub(crate) fn variant_ty_span(
+        self,
+        db: &'db dyn HirAnalysisDb,
+        field_idx: usize,
+        ty_idx: usize,
+    ) -> DynLazySpan<'db> {
+        use crate::hir_def::VariantKind;
+        match self {
+            AdtRef::Enum(e) => {
+                let span = e.variant_span(field_idx);
+                match e.variants(db).data(db)[field_idx].kind {
+                    VariantKind::Tuple(_) => span.tuple_type().elem_ty(ty_idx).into(),
+                    VariantKind::Record(_) => span.fields().field(ty_idx).ty().into(),
+                    VariantKind::Unit => unreachable!(),
+                }
+            }
+
+            AdtRef::Struct(s) => s.span().fields().field(field_idx).ty().into(),
+
+            AdtRef::Contract(c) => c.span().fields().field(field_idx).ty().into(),
+        }
+    }
+
+    pub(crate) fn as_generic_param_owner(self) -> Option<GenericParamOwner<'db>> {
+        self.generic_owner()
+    }
+}
+
+impl<'db> super::ty_def::HasKind for AdtRef<'db> {
+    fn kind(&self, db: &dyn HirAnalysisDb) -> super::ty_def::Kind {
+        use super::ty_def::Kind;
+        let mut kind = Kind::Star;
+        for param in self.params(db).iter().rev() {
+            kind = Kind::Abs(Box::new((param.kind(db).clone(), kind)));
+        }
+        kind
     }
 }

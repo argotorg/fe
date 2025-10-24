@@ -8,7 +8,7 @@ use either::Either;
 use crate::analysis::{
     HirAnalysisDb,
     ty::{
-        adt_def::{AdtDef, lower_adt},
+        adt_def::AdtRef,
         binder::Binder,
         func_def::CallableDef,
         trait_def::TraitInstId,
@@ -126,9 +126,9 @@ pub fn super_trait_cycle_impl<'db>(
 /// Collect constraints that are specified by the given ADT definition.
 pub(crate) fn collect_adt_constraints<'db>(
     db: &'db dyn HirAnalysisDb,
-    adt: AdtDef<'db>,
+    adt: AdtRef<'db>,
 ) -> Binder<PredicateListId<'db>> {
-    let Some(owner) = adt.as_generic_param_owner(db) else {
+    let Some(owner) = adt.as_generic_param_owner() else {
         return Binder::bind(PredicateListId::empty_list(db));
     };
     collect_constraints(db, owner)
@@ -143,9 +143,8 @@ pub(crate) fn collect_func_def_constraints<'db>(
     let hir_func = match func {
         CallableDef::Func(func) => func,
         CallableDef::VariantCtor(var) => {
-            let adt = lower_adt(db, var.enum_.into());
             if include_parent {
-                return collect_adt_constraints(db, adt);
+                return collect_adt_constraints(db, var.enum_.into());
             } else {
                 return Binder::bind(PredicateListId::empty_list(db));
             }

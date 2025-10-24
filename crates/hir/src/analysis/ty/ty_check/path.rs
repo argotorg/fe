@@ -14,7 +14,7 @@ use crate::analysis::{
     HirAnalysisDb,
     name_resolution::{PathRes, ResolvedVariant, diagnostics::PathResDiag, is_scope_visible_from},
     ty::{
-        adt_def::{AdtDef, AdtField, AdtRef},
+        adt_def::{AdtField, AdtRef},
         diagnostics::{BodyDiag, FuncBodyDiag},
         ty_def::{InvalidCause, TyData, TyId},
     },
@@ -22,15 +22,15 @@ use crate::analysis::{
 
 impl<'db> TyId<'db> {
     pub(crate) fn adt_ref(&self, db: &'db dyn HirAnalysisDb) -> Option<AdtRef<'db>> {
-        self.adt_def(db).map(|def| def.adt_ref(db))
-    }
-
-    pub(crate) fn adt_def(&self, db: &'db dyn HirAnalysisDb) -> Option<AdtDef<'db>> {
         let base = self.decompose_ty_app(db).0;
         match base.data(db) {
             TyData::TyBase(base) => base.adt(),
             _ => None,
         }
+    }
+
+    pub(crate) fn adt_def(&self, db: &'db dyn HirAnalysisDb) -> Option<AdtRef<'db>> {
+        self.adt_ref(db)
     }
 }
 
@@ -182,10 +182,10 @@ impl<'db> RecordLike<'db> {
     ) -> Option<TyId<'db>> {
         match self {
             RecordLike::Type(ty) => {
-                let adt_def = ty.adt_def(db)?;
-                let (hir_field_list_id, adt_field_list_ref) = match adt_def.adt_ref(db) {
-                    AdtRef::Struct(s) => Some((s.fields(db), &adt_def.fields(db)[0])),
-                    AdtRef::Contract(c) => Some((c.fields(db), &adt_def.fields(db)[0])),
+                let adt_ref = ty.adt_def(db)?;
+                let (hir_field_list_id, adt_field_list_ref) = match adt_ref {
+                    AdtRef::Struct(s) => Some((s.fields(db), &adt_ref.fields(db)[0])),
+                    AdtRef::Contract(c) => Some((c.fields(db), &adt_ref.fields(db)[0])),
                     _ => None,
                 }?;
 
@@ -200,10 +200,10 @@ impl<'db> RecordLike<'db> {
                 }
             }
             RecordLike::Variant(variant) => {
-                let adt_def = variant.ty.adt_def(db)?;
+                let adt_ref = variant.ty.adt_def(db)?;
                 let (hir_field_list_id, adt_field_list_ref) = match variant.kind(db) {
                     HirVariantKind::Record(fields_id) => {
-                        Some((fields_id, &adt_def.fields(db)[variant.variant.idx as usize]))
+                        Some((fields_id, &adt_ref.fields(db)[variant.variant.idx as usize]))
                     }
                     _ => None,
                 }?;
@@ -227,18 +227,18 @@ impl<'db> RecordLike<'db> {
     ) -> Option<(HirFieldDefListId<'db>, &'db AdtField<'db>)> {
         match self {
             RecordLike::Type(ty) => {
-                let adt_def = ty.adt_def(db)?;
-                match adt_def.adt_ref(db) {
-                    AdtRef::Struct(s) => Some((s.fields(db), &adt_def.fields(db)[0])),
-                    AdtRef::Contract(c) => Some((c.fields(db), &adt_def.fields(db)[0])),
+                let adt_ref = ty.adt_def(db)?;
+                match adt_ref {
+                    AdtRef::Struct(s) => Some((s.fields(db), &adt_ref.fields(db)[0])),
+                    AdtRef::Contract(c) => Some((c.fields(db), &adt_ref.fields(db)[0])),
                     _ => None,
                 }
             }
             RecordLike::Variant(variant) => {
-                let adt_def = variant.ty.adt_def(db)?;
+                let adt_ref = variant.ty.adt_def(db)?;
                 match variant.kind(db) {
                     HirVariantKind::Record(fields_id) => {
-                        Some((fields_id, &adt_def.fields(db)[variant.variant.idx as usize]))
+                        Some((fields_id, &adt_ref.fields(db)[variant.variant.idx as usize]))
                     }
                     _ => None,
                 }

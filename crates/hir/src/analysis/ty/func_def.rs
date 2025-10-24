@@ -63,9 +63,9 @@ impl<'db> CallableDef<'db> {
         match self {
             Self::Func(func) => func.param_set(db).params(db),
             Self::VariantCtor(var) => {
-                use super::adt_def::lower_adt;
-                let adt = lower_adt(db, var.enum_.into());
-                adt.params(db)
+                use super::adt_def::AdtRef;
+                let adt_ref: AdtRef = var.enum_.into();
+                adt_ref.params(db)
             }
         }
     }
@@ -117,9 +117,9 @@ impl<'db> CallableDef<'db> {
         match self {
             Self::Func(func) => func.param_set(db).explicit_params(db),
             Self::VariantCtor(var) => {
-                use super::adt_def::lower_adt;
-                let adt = lower_adt(db, var.enum_.into());
-                adt.params(db)
+                use super::adt_def::AdtRef;
+                let adt_ref: AdtRef = var.enum_.into();
+                adt_ref.params(db)
             }
         }
     }

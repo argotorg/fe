@@ -361,7 +361,7 @@ impl<'db> ConstructorKind<'db> {
             Self::Variant(v, _) if matches!(v.kind(db), VariantKind::Record(..)) => {
                 Some(FieldParent::Variant(*v))
             }
-            Self::Type(ty) => match ty.adt_def(db)?.adt_ref(db) {
+            Self::Type(ty) => match ty.adt_def(db)? {
                 AdtRef::Struct(struct_def) => Some(FieldParent::Struct(struct_def)),
                 _ => None,
             },

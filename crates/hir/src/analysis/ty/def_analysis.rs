@@ -15,7 +15,7 @@ use rustc_hash::{FxHashMap, FxHashSet};
 use smallvec1::SmallVec;
 
 use super::{
-    adt_def::{AdtRef, lower_adt},
+    adt_def::AdtRef,
     canonical::Canonical,
     const_ty::ConstTyId,
     diagnostics::{ImplDiag, TraitConstraintDiag, TraitLowerDiag, TyDiagCollection, TyLowerDiag},
@@ -37,7 +37,6 @@ use crate::analysis::{
     HirAnalysisDb,
     name_resolution::{ExpectedPathKind, PathRes, diagnostics::PathResDiag, resolve_path},
     ty::{
-        adt_def::AdtDef,
         binder::Binder,
         canonical::Canonicalized,
         trait_def::TraitInstId,
@@ -275,11 +274,10 @@ pub struct DefAnalyzer<'db> {
 
 impl<'db> DefAnalyzer<'db> {
     fn for_adt(db: &'db dyn HirAnalysisDb, adt: AdtRef<'db>) -> Self {
-        let def = lower_adt(db, adt);
-        let assumptions = collect_adt_constraints(db, def).instantiate_identity();
+        let assumptions = collect_adt_constraints(db, adt).instantiate_identity();
         Self {
             db,
-            def: def.into(),
+            def: adt.into(),
             self_ty: None,
             diags: vec![],
             assumptions,
@@ -469,7 +467,7 @@ impl<'db> DefAnalyzer<'db> {
 
     pub(crate) fn analyze(mut self) -> Vec<TyDiagCollection<'db>> {
         match self.def {
-            DefKind::Adt(def) => match def.adt_ref(self.db) {
+            DefKind::Adt(def) => match def {
                 AdtRef::Struct(struct_) => {
                     let mut ctxt = VisitorCtxt::with_struct(self.db, struct_);
                     self.visit_struct(&mut ctxt, struct_);
@@ -1039,14 +1037,14 @@ impl<'db> Visitor<'db> for DefAnalyzer<'db> {
 #[salsa::tracked(return_ref)]
 pub(crate) fn check_recursive_adt<'db>(
     db: &'db dyn HirAnalysisDb,
-    adt: AdtDef<'db>,
+    adt: AdtRef<'db>,
 ) -> Option<Vec<AdtCycleMember<'db>>> {
     check_recursive_adt_impl(db, adt, &[])
 }
 
 pub(crate) fn check_recursive_adt_impl<'db>(
     db: &'db dyn HirAnalysisDb,
-    adt: AdtDef<'db>,
+    adt: AdtRef<'db>,
     chain: &[AdtCycleMember<'db>],
 ) -> Option<Vec<AdtCycleMember<'db>>> {
     if chain.iter().any(|m| m.adt == adt) {
@@ -1066,7 +1064,7 @@ pub(crate) fn check_recursive_adt_impl<'db>(
                 });
 
                 if let Some(cycle) =
-                    check_recursive_adt_impl(db, lower_adt(db, field_adt_ref), &chain)
+                    check_recursive_adt_impl(db, field_adt_ref, &chain)
                     && cycle.iter().any(|m| m.adt == adt)
                 {
                     return Some(cycle);
@@ -1080,7 +1078,7 @@ pub(crate) fn check_recursive_adt_impl<'db>(
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash, salsa::Update)]
 pub struct AdtCycleMember<'db> {
-    pub adt: AdtDef<'db>,
+    pub adt: AdtRef<'db>,
     pub field_idx: u16,
     pub ty_idx: u16,
 }
@@ -1105,8 +1103,8 @@ impl<'db> TyId<'db> {
                 }
             }
 
-            fn visit_adt(&mut self, adt: AdtDef<'db>) {
-                self.adts.insert(adt.adt_ref(self.db));
+            fn visit_adt(&mut self, adt: AdtRef<'db>) {
+                self.adts.insert(adt);
             }
         }
 
@@ -1171,7 +1169,7 @@ fn analyze_trait_ref<'db>(
 
 #[derive(Clone, Copy, Debug, derive_more::From)]
 enum DefKind<'db> {
-    Adt(AdtDef<'db>),
+    Adt(AdtRef<'db>),
     Trait(Trait<'db>),
     ImplTrait(crate::hir_def::ImplTrait<'db>),
     Impl(HirImpl<'db>),
@@ -1209,7 +1207,7 @@ impl<'db> DefKind<'db> {
 
     fn scope(self, db: &'db dyn HirAnalysisDb) -> ScopeId<'db> {
         match self {
-            Self::Adt(def) => def.adt_ref(db).scope(),
+            Self::Adt(def) => def.scope(),
             Self::Trait(def) => def.scope(),
             Self::ImplTrait(def) => def.scope(),
             Self::Impl(hir_impl) => hir_impl.scope(),

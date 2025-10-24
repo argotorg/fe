@@ -21,7 +21,6 @@ use salsa::Update;
 use smallvec::SmallVec;
 
 use super::{
-    adt_def::AdtDef,
     const_ty::{ConstTyData, ConstTyId, EvaluatedConstTy},
     diagnostics::{TraitConstraintDiag, TyDiagCollection},
     func_def::CallableDef,
@@ -117,7 +116,7 @@ impl<'db> TyId<'db> {
     /// Returns `IngotDescription` that declares the type.
     pub fn ingot(self, db: &'db dyn HirAnalysisDb) -> Option<Ingot<'db>> {
         match self.data(db) {
-            TyData::TyBase(TyBase::Adt(adt)) => adt.ingot(db).into(),
+            TyData::TyBase(TyBase::Adt(adt)) => Some(adt.ingot(db)),
             TyData::TyBase(TyBase::Func(def)) => def.ingot(db).into(),
             TyData::TyApp(lhs, _) => lhs.ingot(db),
             _ => None,
@@ -258,7 +257,7 @@ impl<'db> TyId<'db> {
         Self::new(db, TyData::QualifiedTy(trait_))
     }
 
-    pub(crate) fn adt(db: &'db dyn HirAnalysisDb, adt: AdtDef<'db>) -> Self {
+    pub(crate) fn adt(db: &'db dyn HirAnalysisDb, adt: AdtRef<'db>) -> Self {
         Self::new(db, TyData::TyBase(TyBase::Adt(adt)))
     }
 
@@ -320,7 +319,7 @@ impl<'db> TyId<'db> {
     pub(crate) fn is_struct(self, db: &dyn HirAnalysisDb) -> bool {
         let base_ty = self.base_ty(db);
         match base_ty.data(db) {
-            TyData::TyBase(TyBase::Adt(adt)) => adt.is_struct(db),
+            TyData::TyBase(TyBase::Adt(adt)) => adt.is_struct(),
             _ => false,
         }
     }
@@ -345,7 +344,7 @@ impl<'db> TyId<'db> {
             TyData::TyParam(param) => Some(param.scope(db)),
             TyData::AssocTy(assoc_ty) => Some(assoc_ty.scope(db)),
             TyData::QualifiedTy(trait_inst) => Some(trait_inst.def(db).scope()),
-            TyData::TyBase(TyBase::Adt(adt)) => Some(adt.scope(db)),
+            TyData::TyBase(TyBase::Adt(adt)) => Some(adt.scope()),
             TyData::TyBase(TyBase::Func(func)) => Some(func.scope()),
             TyData::TyBase(TyBase::Prim(..)) => None,
             TyData::ConstTy(const_ty) => match const_ty.data(db) {
@@ -659,9 +658,9 @@ impl<'db> TyId<'db> {
         if self.is_tuple(db) {
             let (_, elems) = self.decompose_ty_app(db);
             elems.len()
-        } else if let Some(adt_def) = self.adt_def(db) {
-            match adt_def.adt_ref(db) {
-                AdtRef::Struct(_) => adt_def.fields(db)[0].num_types(),
+        } else if let Some(adt_ref) = self.adt_def(db) {
+            match adt_ref {
+                AdtRef::Struct(_) => adt_ref.fields(db)[0].num_types(),
                 _ => 0,
             }
         } else {
@@ -674,12 +673,12 @@ impl<'db> TyId<'db> {
         if self.is_tuple(db) {
             let (_, elems) = self.decompose_ty_app(db);
             elems.to_vec()
-        } else if let Some(adt_def) = self.adt_def(db) {
-            match adt_def.adt_ref(db) {
+        } else if let Some(adt_ref) = self.adt_def(db) {
+            match adt_ref {
                 AdtRef::Struct(_) => {
                     let args = self.generic_args(db);
-                    (0..adt_def.fields(db)[0].num_types())
-                        .map(|idx| adt_def.fields(db)[0].ty(db, idx).instantiate(db, args))
+                    (0..adt_ref.fields(db)[0].num_types())
+                        .map(|idx| adt_ref.fields(db)[0].ty(db, idx).instantiate(db, args))
                         .collect()
                 }
                 _ => vec![],
@@ -1052,7 +1051,7 @@ enum Variant {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, derive_more::From, Update)]
 pub enum TyBase<'db> {
     Prim(PrimTy),
-    Adt(AdtDef<'db>),
+    Adt(AdtRef<'db>),
     Func(CallableDef<'db>),
 }
 
@@ -1116,7 +1115,7 @@ impl<'db> TyBase<'db> {
         }
     }
 
-    pub(super) fn adt(self) -> Option<AdtDef<'db>> {
+    pub(super) fn adt(self) -> Option<AdtRef<'db>> {
         match self {
             Self::Adt(adt) => Some(adt),
             _ => None,
@@ -1259,17 +1258,6 @@ impl HasKind for PrimTy {
     }
 }
 
-impl HasKind for AdtDef<'_> {
-    fn kind(&self, db: &dyn HirAnalysisDb) -> Kind {
-        let mut kind = Kind::Star;
-        for param in self.params(db).iter().rev() {
-            kind = Kind::abs(param.kind(db).clone(), kind);
-        }
-
-        kind
-    }
-}
-
 impl HasKind for CallableDef<'_> {
     fn kind(&self, db: &dyn HirAnalysisDb) -> Kind {
         let mut kind = Kind::Star;
@@ -1277,9 +1265,8 @@ impl HasKind for CallableDef<'_> {
         let params = match self {
             CallableDef::Func(func) => func.param_set(db).params(db),
             CallableDef::VariantCtor(var) => {
-                use super::adt_def::lower_adt;
-                let adt = lower_adt(db, var.enum_.into());
-                adt.params(db)
+                let adt_ref: AdtRef = var.enum_.into();
+                adt_ref.params(db)
             }
         };
 

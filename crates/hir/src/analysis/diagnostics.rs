@@ -830,7 +830,7 @@ impl DiagnosticVoucher for TyLowerDiag<'_> {
                     let mut subs = vec![SubDiagnostic {
                         style: LabelStyle::Primary,
                         message: "recursive type definition here".to_string(),
-                        span: head.adt.adt_ref(db).name_span(db).resolve(db),
+                        span: head.adt.name_span(db).resolve(db),
                     }];
                     subs.extend(cycle.iter().map(|m| {
                         SubDiagnostic {

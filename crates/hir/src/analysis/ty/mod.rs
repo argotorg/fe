@@ -2,7 +2,7 @@ use crate::hir_def::{
     IdentId, ItemKind, TopLevelMod, Trait, TypeAlias,
     scope_graph::{ScopeGraph, ScopeId},
 };
-use adt_def::{AdtDef, AdtRef, lower_adt};
+use adt_def::AdtRef;
 use def_analysis::check_recursive_adt;
 use diagnostics::{DefConflictError, TraitLowerDiag, TyLowerDiag};
 use rustc_hash::{FxHashMap, FxHashSet};
@@ -63,11 +63,10 @@ impl ModuleAnalysisPass for AdtDefAnalysisPass {
             .chain(top_mod.all_contracts(db).iter().copied().map(AdtRef::from));
 
         let mut diags = vec![];
-        let mut cycle_participants = FxHashSet::<AdtDef<'db>>::default();
+        let mut cycle_participants = FxHashSet::<AdtRef<'db>>::default();
 
         for adt in adts {
             diags.extend(analyze_adt(db, adt).iter().map(|d| d.to_voucher()));
-            let adt = lower_adt(db, adt);
             if !cycle_participants.contains(&adt)
                 && let Some(cycle) = check_recursive_adt(db, adt)
             {

@@ -1,7 +1,7 @@
 use common::indexmap::IndexSet;
 
 use super::{
-    adt_def::AdtDef,
+    adt_def::AdtRef,
     const_ty::{ConstTyData, ConstTyId},
     func_def::CallableDef,
     trait_def::TraitInstId,
@@ -55,7 +55,7 @@ pub trait TyVisitor<'db> {
     fn visit_prim(&mut self, prim: &PrimTy) {}
 
     #[allow(unused_variables)]
-    fn visit_adt(&mut self, adt: AdtDef<'db>) {}
+    fn visit_adt(&mut self, adt: AdtRef<'db>) {}
 
     #[allow(unused_variables)]
     fn visit_func(&mut self, func: CallableDef<'db>) {}

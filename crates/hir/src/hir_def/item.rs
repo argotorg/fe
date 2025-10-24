@@ -764,6 +764,7 @@ pub struct Struct<'db> {
     #[return_ref]
     pub(crate) origin: HirOrigin<ast::Struct>,
 }
+#[salsa::tracked]
 impl<'db> Struct<'db> {
     pub fn span(self) -> LazyStructSpan<'db> {
         LazyStructSpan::new(self)
@@ -786,6 +787,32 @@ impl<'db> Struct<'db> {
     pub fn format_initializer_args(self, db: &dyn HirDb) -> String {
         self.fields(db).format_initializer_args(db)
     }
+
+    /// Returns the type parameter set for this struct.
+    /// This method performs the same computation as `lower_adt().param_set()`,
+    /// but with direct Salsa caching on the HIR item instead of manual materialization.
+    #[salsa::tracked(return_ref)]
+    pub fn ty_param_set(
+        self,
+        db: &'db dyn crate::analysis::HirAnalysisDb,
+    ) -> crate::analysis::ty::ty_lower::GenericParamTypeSet<'db> {
+        use crate::analysis::ty::ty_lower::collect_generic_params;
+        collect_generic_params(db, self.into())
+    }
+
+    /// Returns the field types for this struct.
+    /// This method performs the same computation as `lower_adt().fields()`,
+    /// but with direct Salsa caching on the HIR item instead of manual materialization.
+    #[salsa::tracked(return_ref)]
+    pub fn ty_fields(
+        self,
+        db: &'db dyn crate::analysis::HirAnalysisDb,
+    ) -> crate::analysis::ty::adt_def::AdtField<'db> {
+        use crate::analysis::ty::adt_def::AdtField;
+        let scope = self.scope();
+        let fields_data = self.fields(db).data(db).iter().map(|field| field.ty).collect();
+        AdtField::new(fields_data, scope)
+    }
 }
 
 #[salsa::tracked]
@@ -803,6 +830,7 @@ pub struct Contract<'db> {
     #[return_ref]
     pub(crate) origin: HirOrigin<ast::Contract>,
 }
+#[salsa::tracked]
 impl<'db> Contract<'db> {
     pub fn span(self) -> LazyContractSpan<'db> {
         LazyContractSpan::new(self)
@@ -810,6 +838,31 @@ impl<'db> Contract<'db> {
 
     pub fn scope(self) -> ScopeId<'db> {
         ScopeId::from_item(self.into())
+    }
+
+    /// Returns the field types for this contract.
+    /// This method performs the same computation as `lower_adt().fields()`,
+    /// but with direct Salsa caching on the HIR item instead of manual materialization.
+    #[salsa::tracked(return_ref)]
+    pub fn ty_fields(
+        self,
+        db: &'db dyn crate::analysis::HirAnalysisDb,
+    ) -> crate::analysis::ty::adt_def::AdtField<'db> {
+        use crate::analysis::ty::adt_def::AdtField;
+        let scope = self.scope();
+        let fields_data = self.fields(db).data(db).iter().map(|field| field.ty).collect();
+        AdtField::new(fields_data, scope)
+    }
+
+    /// Returns an empty parameter set for contracts (they don't have generic parameters).
+    /// This method exists to provide a uniform interface with Struct and Enum.
+    #[salsa::tracked(return_ref)]
+    pub fn ty_param_set(
+        self,
+        db: &'db dyn crate::analysis::HirAnalysisDb,
+    ) -> crate::analysis::ty::ty_lower::GenericParamTypeSet<'db> {
+        use crate::analysis::ty::ty_lower::GenericParamTypeSet;
+        GenericParamTypeSet::empty(db, self.scope())
     }
 }
 
@@ -853,11 +906,50 @@ impl<'db> Enum<'db> {
         db: &'db dyn crate::analysis::HirAnalysisDb,
         idx: u16,
     ) -> Vec<crate::analysis::ty::binder::Binder<crate::analysis::ty::ty_def::TyId<'db>>> {
-        use crate::analysis::ty::adt_def::lower_adt;
-
-        let adt = lower_adt(db, self.into());
-        let field_types = adt.fields(db).get(idx as usize).unwrap().iter_types(db);
+        let field_types = self.ty_fields(db).get(idx as usize).unwrap().iter_types(db);
         field_types.collect()
+    }
+
+    /// Returns the type parameter set for this enum.
+    /// This method performs the same computation as `lower_adt().param_set()`,
+    /// but with direct Salsa caching on the HIR item instead of manual materialization.
+    #[salsa::tracked(return_ref)]
+    pub fn ty_param_set(
+        self,
+        db: &'db dyn crate::analysis::HirAnalysisDb,
+    ) -> crate::analysis::ty::ty_lower::GenericParamTypeSet<'db> {
+        use crate::analysis::ty::ty_lower::collect_generic_params;
+        collect_generic_params(db, self.into())
+    }
+
+    /// Returns the field types for all variants of this enum.
+    /// This method performs the same computation as `lower_adt().fields()`,
+    /// but with direct Salsa caching on the HIR item instead of manual materialization.
+    #[salsa::tracked(return_ref)]
+    pub fn ty_fields(
+        self,
+        db: &'db dyn crate::analysis::HirAnalysisDb,
+    ) -> Vec<crate::analysis::ty::adt_def::AdtField<'db>> {
+        use crate::analysis::ty::adt_def::AdtField;
+        use crate::hir_def::VariantKind;
+
+        let scope = self.scope();
+        let variants = self.variants(db);
+
+        variants
+            .data(db)
+            .iter()
+            .map(|variant| {
+                let tys = match variant.kind {
+                    VariantKind::Tuple(tuple_id) => tuple_id.data(db).clone(),
+                    VariantKind::Record(fields) => {
+                        fields.data(db).iter().map(|field| field.ty).collect()
+                    }
+                    VariantKind::Unit => vec![],
+                };
+                AdtField::new(tys, scope)
+            })
+            .collect()
     }
 }
 
@@ -902,15 +994,15 @@ impl<'db> EnumVariant<'db> {
         self,
         db: &'db dyn crate::analysis::HirAnalysisDb,
     ) -> Option<Vec<crate::analysis::ty::binder::Binder<crate::analysis::ty::ty_def::TyId<'db>>>> {
-        use crate::analysis::ty::adt_def::lower_adt;
+        use crate::analysis::ty::adt_def::AdtRef;
 
         // Only tuple variants are callable
         if !matches!(self.kind(db), VariantKind::Tuple(_)) {
             return None;
         }
 
-        let adt = lower_adt(db, self.enum_.into());
-        let field_types = adt.fields(db).get(self.idx as usize).unwrap().iter_types(db);
+        let adt_ref: AdtRef = self.enum_.into();
+        let field_types = adt_ref.fields(db).get(self.idx as usize).unwrap().iter_types(db);
         Some(field_types.collect())
     }
 
@@ -928,11 +1020,11 @@ impl<'db> EnumVariant<'db> {
         self,
         db: &'db dyn crate::analysis::HirAnalysisDb,
     ) -> crate::analysis::ty::binder::Binder<crate::analysis::ty::ty_def::TyId<'db>> {
-        use crate::analysis::ty::{adt_def::lower_adt, binder::Binder, ty_def::TyId};
+        use crate::analysis::ty::{adt_def::AdtRef, binder::Binder, ty_def::TyId};
 
-        let adt = lower_adt(db, self.enum_.into());
-        let mut ret_ty = TyId::adt(db, adt);
-        ret_ty = TyId::foldl(db, ret_ty, adt.param_set(db).params(db));
+        let adt_ref: AdtRef = self.enum_.into();
+        let mut ret_ty = TyId::adt(db, adt_ref);
+        ret_ty = TyId::foldl(db, ret_ty, adt_ref.param_set(db).params(db));
         Binder::bind(ret_ty)
     }
 
@@ -941,10 +1033,10 @@ impl<'db> EnumVariant<'db> {
         self,
         db: &'db dyn crate::analysis::HirAnalysisDb,
     ) -> crate::analysis::ty::ty_lower::GenericParamTypeSet<'db> {
-        use crate::analysis::ty::adt_def::lower_adt;
+        use crate::analysis::ty::adt_def::AdtRef;
 
-        let adt = lower_adt(db, self.enum_.into());
-        *adt.param_set(db)
+        let adt_ref: AdtRef = self.enum_.into();
+        *adt_ref.param_set(db)
     }
 }
 

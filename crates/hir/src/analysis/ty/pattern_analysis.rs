@@ -365,15 +365,15 @@ impl<'db> SigmaSet<'db> {
             ctors.insert(ConstructorKind::Literal(LitKind::Bool(false), ty));
         } else if ty.is_tuple(db) {
             ctors.insert(ConstructorKind::Type(ty));
-        } else if let Some(adt_def) = ty.adt_def(db) {
-            if let AdtRef::Enum(enum_def) = adt_def.adt_ref(db) {
+        } else if let Some(adt_ref) = ty.adt_def(db) {
+            if let AdtRef::Enum(enum_def) = adt_ref {
                 let variants_list = enum_def.variants(db);
                 for (idx, _) in variants_list.data(db).iter().enumerate() {
                     let variant = crate::hir_def::EnumVariant::new(enum_def, idx);
                     let ctor = ConstructorKind::Variant(variant, ty);
                     ctors.insert(ctor);
                 }
-            } else if let AdtRef::Struct(_struct_def) = adt_def.adt_ref(db) {
+            } else if let AdtRef::Struct(_struct_def) = adt_ref {
                 ctors.insert(ConstructorKind::Type(ty));
             }
         }
