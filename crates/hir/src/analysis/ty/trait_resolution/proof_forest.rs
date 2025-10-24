@@ -361,19 +361,11 @@ impl GeneratorNode {
             let mut table = g_node.table.clone();
             let gen_cand = cand.skip_binder();
 
-            // Create fresh vars for the generic params
-            let params = crate::analysis::ty::ty_lower::collect_generic_params(db, (*gen_cand).into())
-                .params(db);
-            let fresh_vars: Vec<_> = params
-                .iter()
-                .map(|param| table.new_var_from_param(*param))
-                .collect();
-
-            // Compute trait instance from ImplTrait and instantiate with fresh vars
-            let Some(trait_inst) = gen_cand.trait_inst(db) else {
+            // Use the new instantiated() API for atomic fresh var instantiation
+            let inst_data = (*gen_cand).instantiated(db, &mut table);
+            let Some(trait_inst) = inst_data.trait_inst else {
                 continue;
             };
-            let trait_inst = Binder::bind(trait_inst).instantiate(db, &fresh_vars);
 
             // TODO: require candidates to be pre-normalized
             // Normalize trait instance arguments before unification
@@ -403,18 +395,16 @@ impl GeneratorNode {
                 continue;
             }
 
-            let constraints = gen_cand.impl_constraints(db);
-
-            if constraints.list(db).is_empty() {
+            // Constraints are already instantiated in inst_data
+            if inst_data.constraints.list(db).is_empty() {
                 self.register_solution_with(pf, &mut table);
             } else {
                 let sub_goals = {
-                    constraints
+                    inst_data.constraints
                         .list(db)
                         .iter()
                         .map(|c| {
-                            // Instantiate constraint with fresh vars, then fold with table
-                            let c = Binder::bind(*c).instantiate(db, &fresh_vars);
+                            // Constraints are already instantiated, just fold with table
                             c.fold_with(db, &mut table)
                         })
                         .collect()

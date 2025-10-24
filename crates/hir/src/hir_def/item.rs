@@ -1376,11 +1376,16 @@ impl<'db> ImplTrait<'db> {
     ///
     /// NOT CACHED (takes &mut UnificationTable), but BENEFITS from the
     /// cached trait_impl_data query internally.
-    pub(crate) fn instantiated(
+    ///
+    /// Generic over UnificationStore to work with both InPlace and Persistent tables.
+    pub(crate) fn instantiated<U>(
         self,
         db: &'db dyn crate::analysis::HirAnalysisDb,
-        table: &mut crate::analysis::ty::unify::UnificationTable<'db>,
-    ) -> InstantiatedTraitImpl<'db> {
+        table: &mut crate::analysis::ty::unify::UnificationTableBase<'db, U>,
+    ) -> InstantiatedTraitImpl<'db>
+    where
+        U: crate::analysis::ty::unify::UnificationStore<'db>,
+    {
         use crate::analysis::ty::binder::Binder;
 
         // 1. Get cached template (fast if called before)
