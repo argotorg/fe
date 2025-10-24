@@ -4,12 +4,12 @@ use super::{
     adt_def::AdtDef,
     const_ty::{ConstTyData, ConstTyId},
     func_def::CallableDef,
-    trait_def::{Implementor, TraitInstId},
+    trait_def::TraitInstId,
     trait_resolution::PredicateListId,
     ty_check::ExprProp,
     ty_def::{AssocTy, InvalidCause, PrimTy, TyBase, TyData, TyFlags, TyId, TyParam, TyVar},
 };
-use crate::analysis::HirAnalysisDb;
+use crate::{analysis::HirAnalysisDb, hir_def::ImplTrait};
 
 pub trait TyVisitable<'db> {
     fn visit_with<V>(&self, visitor: &mut V)
@@ -175,13 +175,14 @@ impl<'db> TyVisitable<'db> for TraitInstId<'db> {
     }
 }
 
-impl<'db> TyVisitable<'db> for Implementor<'db> {
+impl<'db> TyVisitable<'db> for ImplTrait<'db> {
     fn visit_with<V>(&self, visitor: &mut V)
     where
         V: TyVisitor<'db> + ?Sized,
     {
+        // ImplTrait is just an ID - visit the computed params
         let db = visitor.db();
-        self.params(db).visit_with(visitor);
+        self.impl_params(db).visit_with(visitor);
     }
 }
 

@@ -13,22 +13,21 @@ use super::{
     const_ty::ConstTyId,
     fold::{TyFoldable, TyFolder},
     func_def::CallableDef,
-    trait_def::{Implementor, TraitInstId, does_impl_trait_conflict},
+    trait_def::{TraitInstId, does_impl_trait_conflict},
     trait_resolution::PredicateListId,
     ty_def::{InvalidCause, TyId},
-    ty_lower::{collect_generic_params, lower_hir_ty},
+    ty_lower::lower_hir_ty,
 };
 use crate::analysis::{
     HirAnalysisDb,
     name_resolution::{PathRes, PathResError, resolve_path},
     ty::{
-        trait_resolution::constraint::collect_constraints,
         ty_def::{Kind, TyData},
         ty_lower::lower_opt_hir_ty,
     },
 };
 
-type TraitImplTable<'db> = FxHashMap<Trait<'db>, Vec<Binder<Implementor<'db>>>>;
+type TraitImplTable<'db> = FxHashMap<Trait<'db>, Vec<Binder<ImplTrait<'db>>>>;
 
 // lower_trait has been eliminated - use Trait directly
 
@@ -50,77 +49,6 @@ pub(crate) fn collect_trait_impls<'db>(
 
     let impl_traits = ingot.all_impl_traits(db);
     ImplementorCollector::new(db, const_impls).collect(impl_traits)
-}
-
-/// Returns the corresponding implementors for the given [`ImplTrait`].
-/// If the implementor type or the trait reference is ill-formed, returns
-/// `None`.
-#[salsa::tracked]
-pub(crate) fn lower_impl_trait<'db>(
-    db: &'db dyn HirAnalysisDb,
-    impl_trait: ImplTrait<'db>,
-) -> Option<Binder<Implementor<'db>>> {
-    let scope = impl_trait.scope();
-
-    let assumptions = collect_constraints(db, impl_trait.into()).instantiate_identity();
-
-    let hir_ty = impl_trait.ty(db).to_opt()?;
-    let ty = lower_hir_ty(db, hir_ty, scope, assumptions);
-    if ty.has_invalid(db) {
-        return None;
-    }
-
-    let trait_ = lower_trait_ref(
-        db,
-        ty,
-        impl_trait.trait_ref(db).to_opt()?,
-        impl_trait.scope(),
-        assumptions,
-    )
-    .ok()?;
-
-    let impl_trait_ingot = impl_trait.top_mod(db).ingot(db);
-
-    if Some(impl_trait_ingot) != ty.ingot(db) && impl_trait_ingot != trait_.def(db).ingot(db) {
-        return None;
-    }
-
-    let params = collect_generic_params(db, impl_trait.into())
-        .params(db)
-        .to_vec();
-
-    let mut types: IndexMap<_, _> = impl_trait
-        .types(db)
-        .iter()
-        .filter_map(|t| match (t.name.to_opt(), t.ty.to_opt()) {
-            (Some(name), Some(ty)) => Some((name, lower_hir_ty(db, ty, scope, assumptions))),
-            _ => None,
-        })
-        .collect();
-
-    // Merge trait associated type defaults into the implementor, but evaluated in
-    // the trait's own scope and then instantiated with this impl's concrete args
-    // (including Self). This ensures defaults like `type Output = Self` resolve
-    // to the implementor's concrete self type rather than remaining as `Self`.
-    let trait_scope = trait_.def(db).scope();
-    for t in trait_.def(db).types(db).iter() {
-        let (Some(name), Some(default)) = (t.name.to_opt(), t.default) else {
-            continue;
-        };
-
-        types.entry(name).or_insert_with(|| {
-            // Lower the default in the trait scope so `Self` and trait params are visible
-            let lowered = lower_hir_ty(db, default, trait_scope, assumptions);
-            // Instantiate all trait parameters (including `Self` at idx 0) with
-            // this implementor's concrete arguments so `Self` becomes the impl's
-            // self type and other generics (if used) are substituted too.
-            Binder::bind(lowered).instantiate(db, trait_.args(db))
-        });
-    }
-
-    let implementor = Implementor::new(db, trait_, params, types, impl_trait);
-
-    Some(Binder::bind(implementor))
 }
 
 /// Lower a trait reference to a trait instance.
@@ -290,10 +218,10 @@ pub(crate) fn lower_trait_ref_impl<'db>(
 #[salsa::tracked(return_ref)]
 pub(crate) fn collect_implementor_methods<'db>(
     db: &'db dyn HirAnalysisDb,
-    implementor: Implementor<'db>,
+    impl_trait: ImplTrait<'db>,
 ) -> IndexMap<IdentId<'db>, CallableDef<'db>> {
     let mut methods = IndexMap::default();
-    for method in implementor.hir_impl_trait(db).methods(db) {
+    for method in impl_trait.methods(db) {
         if let Some(name) = method.name(db).to_opt() {
             let callable = CallableDef::Func(method);
             methods.insert(name, callable);
@@ -328,25 +256,31 @@ impl<'db> ImplementorCollector<'db> {
     }
 
     fn collect(mut self, impl_traits: &[ImplTrait<'db>]) -> TraitImplTable<'db> {
-        for &impl_ in impl_traits {
-            let Some(implementor) = lower_impl_trait(self.db, impl_) else {
+        for &impl_trait in impl_traits {
+            let impl_trait_binder = Binder::bind(impl_trait);
+
+            // Check if valid (has trait_inst and trait_def)
+            let Some(trait_def) = impl_trait.trait_def(self.db) else {
                 continue;
             };
 
-            if !self.does_conflict(implementor) {
+            if !self.does_conflict(impl_trait_binder) {
                 self.impl_table
-                    .entry(implementor.instantiate_identity().trait_def(self.db))
+                    .entry(trait_def)
                     .or_default()
-                    .push(implementor);
+                    .push(impl_trait_binder);
             }
         }
 
         self.impl_table
     }
 
-    /// Returns `true` if `implementor` conflicts with any existing implementor.
-    fn does_conflict(&mut self, implementor: Binder<Implementor>) -> bool {
-        let def = implementor.instantiate_identity().trait_def(self.db);
+    /// Returns `true` if `impl_trait` conflicts with any existing impl trait.
+    fn does_conflict(&mut self, impl_trait: Binder<ImplTrait>) -> bool {
+        let Some(def) = impl_trait.skip_binder().trait_def(self.db) else {
+            return false;
+        };
+
         for impl_map in self
             .const_impl_maps
             .iter()
@@ -356,7 +290,7 @@ impl<'db> ImplementorCollector<'db> {
                 continue;
             };
             for already_implemented in impls {
-                if does_impl_trait_conflict(self.db, *already_implemented, implementor) {
+                if does_impl_trait_conflict(self.db, *already_implemented, impl_trait) {
                     return true;
                 }
             }

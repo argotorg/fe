@@ -132,7 +132,9 @@ impl<'db> CandidateAssembler<'db> {
         let ingot = self.scope.ingot(self.db);
 
         for &imp in impls_for_ty(self.db, ingot, self.receiver_ty) {
-            self.insert_trait_method_cand(imp.skip_binder().trait_(self.db));
+            if let Some(trait_inst) = imp.skip_binder().trait_inst(self.db) {
+                self.insert_trait_method_cand(trait_inst);
+            }
         }
 
         let mut table = UnificationTable::new(self.db);

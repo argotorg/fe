@@ -1,10 +1,10 @@
 use std::hash::Hash;
 
-use crate::hir_def::IdentId;
+use crate::hir_def::{IdentId, ImplTrait};
 use common::indexmap::{IndexMap, IndexSet};
 
 use super::{
-    trait_def::{Implementor, TraitInstId},
+    trait_def::TraitInstId,
     trait_resolution::PredicateListId,
     ty_check::ExprProp,
     ty_def::{TyData, TyId},
@@ -156,26 +156,15 @@ impl<'db> TyFoldable<'db> for TraitInstId<'db> {
     }
 }
 
-impl<'db> TyFoldable<'db> for Implementor<'db> {
-    fn super_fold_with<F>(self, db: &'db dyn HirAnalysisDb, folder: &mut F) -> Self
+impl<'db> TyFoldable<'db> for ImplTrait<'db> {
+    fn super_fold_with<F>(self, _db: &'db dyn HirAnalysisDb, _folder: &mut F) -> Self
     where
         F: TyFolder<'db>,
     {
-        let trait_inst = self.trait_(db).fold_with(db, folder);
-        let params = self
-            .params(db)
-            .iter()
-            .map(|ty| ty.fold_with(db, folder))
-            .collect::<Vec<_>>();
-        let hir_impl_trait = self.hir_impl_trait(db);
-
-        let types = self
-            .types(db)
-            .iter()
-            .map(|(ident, ty)| (*ident, ty.fold_with(db, folder)))
-            .collect::<IndexMap<_, _>>();
-
-        Implementor::new(db, trait_inst, params, types, hir_impl_trait)
+        // ImplTrait is just a salsa ID - folding is a no-op.
+        // The semantic data (trait_inst, params, assoc_types) is computed on-demand
+        // and folded when retrieved.
+        self
     }
 }
 

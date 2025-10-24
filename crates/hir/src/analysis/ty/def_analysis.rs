@@ -23,8 +23,8 @@ use super::{
     method_cmp::compare_impl_method,
     method_table::probe_method,
     normalize::normalize_ty,
-    trait_def::{Implementor, ingot_trait_env},
-    trait_lower::{TraitRefLowerError, lower_trait_ref},
+    trait_def::ingot_trait_env,
+    trait_lower::{TraitRefLowerError, collect_implementor_methods, lower_trait_ref},
     trait_resolution::{
         PredicateListId,
         constraint::{collect_adt_constraints, collect_constraints, collect_func_def_constraints},
@@ -42,7 +42,6 @@ use crate::analysis::{
         binder::Binder,
         canonical::Canonicalized,
         trait_def::{TraitInstId, does_impl_trait_conflict},
-        trait_lower::lower_impl_trait,
         trait_resolution::{
             GoalSatisfiability, constraint::super_trait_cycle, is_goal_satisfiable,
         },
@@ -314,12 +313,13 @@ impl<'db> DefAnalyzer<'db> {
         }
     }
 
-    fn for_trait_impl(db: &'db dyn HirAnalysisDb, implementor: Implementor<'db>) -> Self {
-        let assumptions = implementor.constraints(db);
+    fn for_trait_impl(db: &'db dyn HirAnalysisDb, impl_trait: crate::hir_def::ImplTrait<'db>) -> Self {
+        let assumptions = impl_trait.impl_constraints(db);
+        let self_ty = impl_trait.self_ty(db).unwrap_or_else(|| TyId::invalid(db, InvalidCause::Other));
         Self {
             db,
-            def: implementor.into(),
-            self_ty: implementor.self_ty(db).into(),
+            def: impl_trait.into(),
+            self_ty: self_ty.into(),
             diags: vec![],
             assumptions,
             current_ty: None,
@@ -501,8 +501,7 @@ impl<'db> DefAnalyzer<'db> {
                 self.visit_trait(&mut ctxt, trait_);
             }
 
-            DefKind::ImplTrait(implementor) => {
-                let impl_trait = implementor.hir_impl_trait(self.db);
+            DefKind::ImplTrait(impl_trait) => {
                 let mut ctxt = VisitorCtxt::with_impl_trait(self.db, impl_trait);
                 self.visit_impl_trait(&mut ctxt, impl_trait);
             }
@@ -1184,7 +1183,7 @@ fn analyze_trait_ref<'db>(
 enum DefKind<'db> {
     Adt(AdtDef<'db>),
     Trait(Trait<'db>),
-    ImplTrait(Implementor<'db>),
+    ImplTrait(crate::hir_def::ImplTrait<'db>),
     Impl(HirImpl<'db>),
     Func(CallableDef<'db>),
     TypeAlias(TypeAlias<'db>),
@@ -1195,7 +1194,7 @@ impl<'db> DefKind<'db> {
         match self {
             Self::Adt(def) => def.original_params(db),
             Self::Trait(def) => def.original_params(db),
-            Self::ImplTrait(def) => def.original_params(db),
+            Self::ImplTrait(def) => collect_generic_params(db, def.into()).params(db),
             Self::Impl(hir_impl) => collect_generic_params(db, hir_impl.into()).params(db),
             Self::Func(def) => def.explicit_params(db),
             Self::TypeAlias(alias) => collect_generic_params(db, alias.into()).explicit_params(db),
@@ -1222,7 +1221,7 @@ impl<'db> DefKind<'db> {
         match self {
             Self::Adt(def) => def.adt_ref(db).scope(),
             Self::Trait(def) => def.scope(),
-            Self::ImplTrait(def) => def.hir_impl_trait(db).scope(),
+            Self::ImplTrait(def) => def.scope(),
             Self::Impl(hir_impl) => hir_impl.scope(),
             Self::Func(def) => def.scope(),
             Self::TypeAlias(alias) => alias.scope(),
@@ -1241,7 +1240,7 @@ impl<'db> DefKind<'db> {
 fn analyze_impl_trait_specific_error<'db>(
     db: &'db dyn HirAnalysisDb,
     impl_trait: ImplTrait<'db>,
-) -> Result<Binder<Implementor<'db>>, Vec<TyDiagCollection<'db>>> {
+) -> Result<Binder<ImplTrait<'db>>, Vec<TyDiagCollection<'db>>> {
     let mut diags = vec![];
     // We don't need to report error because it should be reported from the parser.
     let (Some(trait_ref), Some(ty)) = (
@@ -1303,57 +1302,24 @@ fn analyze_impl_trait_specific_error<'db>(
         return Err(diags);
     }
 
-    let trait_env = ingot_trait_env(db, impl_trait_ingot);
-    let Some(implementor) = trait_env.map_impl_trait(impl_trait) else {
-        // Lower impl trait never fails if the trait ref and implementor type is
-        // well-formed.
-        let current_impl = lower_impl_trait(db, impl_trait).unwrap();
+    // 4. Conflict checking is done during trait impl collection in `collect_trait_impls`
 
-        // 4. Checks if conflict occurs.
-        // If there is no implementor type even if the trait ref and implementor type is
-        // well-formed, it means that the conflict does occur.
-        analyze_conflict_impl(db, current_impl, &mut diags);
-        return Err(diags);
-    };
-
-    fn analyze_conflict_impl<'db>(
-        db: &'db dyn HirAnalysisDb,
-        implementor: Binder<Implementor<'db>>,
-        diags: &mut Vec<TyDiagCollection<'db>>,
-    ) {
-        let trait_ = implementor.skip_binder().trait_(db);
-        let env = ingot_trait_env(db, trait_.ingot(db));
-        let Some(impls) = env.impls.get(&trait_.def(db)) else {
-            return;
-        };
-
-        for cand in impls {
-            if does_impl_trait_conflict(db, *cand, implementor) {
-                diags.push(
-                    TraitLowerDiag::ConflictTraitImpl {
-                        primary: cand.skip_binder().hir_impl_trait(db),
-                        conflict_with: implementor.skip_binder().hir_impl_trait(db),
-                    }
-                    .into(),
-                );
-
-                return;
-            }
-        }
-    }
+    let current_impl = Binder::bind(impl_trait);
 
     // 5. Checks if implementor type satisfies the kind bound which is required by
     //    the trait.
-    let expected_kind = implementor
-        .instantiate_identity()
+    let expected_kind = current_impl
+        .skip_binder()
         .trait_def(db)
+        .unwrap()
         .expected_implementor_kind(db);
     if ty.kind(db) != expected_kind {
+        let actual_ty = current_impl.skip_binder().self_ty(db).unwrap_or(ty);
         diags.push(
             TraitConstraintDiag::TraitArgKindMismatch {
                 span: impl_trait.span().trait_ref(),
                 expected: expected_kind.clone(),
-                actual: implementor.instantiate_identity().self_ty(db),
+                actual: actual_ty,
             }
             .into(),
         );
@@ -1363,7 +1329,7 @@ fn analyze_impl_trait_specific_error<'db>(
     let trait_def = trait_inst.def(db);
     let trait_constraints =
         collect_constraints(db, trait_def.into()).instantiate(db, trait_inst.args(db));
-    let assumptions = implementor.instantiate_identity().constraints(db);
+    let assumptions = current_impl.skip_binder().impl_constraints(db);
 
     let is_satisfied = |goal: TraitInstId<'db>, span: DynLazySpan<'db>, diags: &mut Vec<_>| {
         let canonical_goal = Canonicalized::new(db, goal);
@@ -1400,7 +1366,7 @@ fn analyze_impl_trait_specific_error<'db>(
 
     // 8. Check that all required associated types are implemented,
     //    and that they satisfy their bounds
-    let impl_types = implementor.instantiate_identity().types(db);
+    let impl_types = impl_trait.assoc_types(db);
     for assoc_type in trait_def.types(db) {
         let Some(name) = assoc_type.name.to_opt() else {
             continue;
@@ -1458,7 +1424,7 @@ fn analyze_impl_trait_specific_error<'db>(
     }
 
     if diags.is_empty() {
-        Ok(implementor)
+        Ok(current_impl)
     } else {
         Err(diags)
     }
@@ -1466,12 +1432,14 @@ fn analyze_impl_trait_specific_error<'db>(
 
 fn analyze_impl_trait_method<'db>(
     db: &'db dyn HirAnalysisDb,
-    implementor: Implementor<'db>,
+    impl_trait: crate::hir_def::ImplTrait<'db>,
 ) -> Vec<TyDiagCollection<'db>> {
     let mut diags = vec![];
-    let impl_methods = implementor.methods(db);
-    let hir_trait = implementor.trait_def(db);
-    let trait_methods = implementor.trait_def(db).methods(db);
+    let impl_methods = collect_implementor_methods(db, impl_trait);
+    let Some(hir_trait) = impl_trait.trait_def(db) else {
+        return diags;
+    };
+    let trait_methods = hir_trait.methods(db);
     let mut required_methods: IndexSet<_> = trait_methods
         .iter()
         .filter_map(|(name, &trait_method)| {
@@ -1487,7 +1455,7 @@ fn analyze_impl_trait_method<'db>(
         let Some(trait_m) = trait_methods.get(name) else {
             diags.push(
                 ImplDiag::MethodNotDefinedInTrait {
-                    primary: implementor.hir_impl_trait(db).span().trait_ref().into(),
+                    primary: impl_trait.span().trait_ref().into(),
                     method_name: *name,
                     trait_: hir_trait,
                 }
@@ -1496,7 +1464,10 @@ fn analyze_impl_trait_method<'db>(
             continue;
         };
 
-        compare_impl_method(db, *impl_m, *trait_m, implementor.trait_(db), &mut diags);
+        let Some(trait_inst) = impl_trait.trait_inst(db) else {
+            continue;
+        };
+        compare_impl_method(db, *impl_m, *trait_m, trait_inst, &mut diags);
 
         required_methods.remove(name);
     }
@@ -1504,7 +1475,7 @@ fn analyze_impl_trait_method<'db>(
     if !required_methods.is_empty() {
         diags.push(
             ImplDiag::NotAllTraitItemsImplemented {
-                primary: implementor.hir_impl_trait(db).span().ty().into(),
+                primary: impl_trait.span().ty().into(),
                 not_implemented: required_methods.into_iter().collect(),
             }
             .into(),

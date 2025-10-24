@@ -12,7 +12,7 @@ use crate::analysis::{
         binder::Binder,
         func_def::CallableDef,
         trait_def::TraitInstId,
-        trait_lower::{lower_impl_trait, lower_trait_ref},
+        trait_lower::lower_trait_ref,
         trait_resolution::PredicateListId,
         ty_def::{TyBase, TyData, TyId, TyVarSort},
         ty_lower::{collect_generic_params, lower_hir_ty},
@@ -163,8 +163,8 @@ pub(crate) fn collect_func_def_constraints<'db>(
         Some(ItemKind::Impl(impl_)) => collect_constraints(db, impl_.into()),
 
         Some(ItemKind::ImplTrait(impl_trait)) => {
-            // Only include constraints if the impl trait lowers successfully
-            if lower_impl_trait(db, impl_trait).is_none() {
+            // Only include constraints if the impl trait is valid
+            if impl_trait.trait_inst(db).is_none() {
                 return func_constraints;
             }
             collect_constraints(db, impl_trait.into())

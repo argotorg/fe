@@ -885,13 +885,20 @@ pub fn find_associated_type<'db>(
     // check all impls for ty
     for impl_ in impls_for_ty_with_constraints(db, ingot, ty, assumptions) {
         let snapshot = table.snapshot();
-        let impl_ = table.instantiate_with_fresh_vars(impl_);
+        let impl_trait = table.instantiate_with_fresh_vars(impl_);
 
-        if table.unify(lhs_ty, impl_.self_ty(db)).is_ok()
-            && let Some(ty) = impl_.assoc_ty(db, name)
+        let Some(impl_self_ty) = impl_trait.self_ty(db) else {
+            table.rollback_to(snapshot);
+            continue;
+        };
+
+        if table.unify(lhs_ty, impl_self_ty).is_ok()
+            && let Some(ty) = impl_trait.assoc_ty(db, name)
         {
             let folded = ty.fold_with(db, &mut table);
-            candidates.push((impl_.trait_(db), folded));
+            if let Some(trait_inst) = impl_trait.trait_inst(db) {
+                candidates.push((trait_inst, folded));
+            }
         }
         table.rollback_to(snapshot);
     }

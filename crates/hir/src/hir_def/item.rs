@@ -1217,6 +1217,132 @@ impl<'db> ImplTrait<'db> {
     }
 }
 
+// Semantic analysis methods for ImplTrait - these compute lowered trait implementation info
+// These replace the need for the Implementor struct
+impl<'db> ImplTrait<'db> {
+    /// Returns the lowered trait instance for this impl.
+    /// This is the core semantic information: which trait is being implemented with what args.
+    pub(crate) fn trait_inst(
+        self,
+        db: &'db dyn crate::analysis::HirAnalysisDb,
+    ) -> Option<crate::analysis::ty::trait_def::TraitInstId<'db>> {
+        use crate::analysis::ty::trait_lower::lower_trait_ref;
+        use crate::analysis::ty::trait_resolution::constraint::collect_constraints;
+        use crate::analysis::ty::ty_lower::lower_hir_ty;
+
+        let scope = self.scope();
+        let assumptions = collect_constraints(db, self.into()).instantiate_identity();
+
+        let hir_ty = self.ty(db).to_opt()?;
+        let ty = lower_hir_ty(db, hir_ty, scope, assumptions);
+        if ty.has_invalid(db) {
+            return None;
+        }
+
+        let trait_ref = self.trait_ref(db).to_opt()?;
+        lower_trait_ref(db, ty, trait_ref, scope, assumptions).ok()
+    }
+
+    /// Returns the self type of this impl (the type implementing the trait).
+    pub(crate) fn self_ty(
+        self,
+        db: &'db dyn crate::analysis::HirAnalysisDb,
+    ) -> Option<crate::analysis::ty::ty_def::TyId<'db>> {
+        use crate::analysis::ty::trait_resolution::constraint::collect_constraints;
+        use crate::analysis::ty::ty_lower::lower_hir_ty;
+
+        let scope = self.scope();
+        let assumptions = collect_constraints(db, self.into()).instantiate_identity();
+        let hir_ty = self.ty(db).to_opt()?;
+        let ty = lower_hir_ty(db, hir_ty, scope, assumptions);
+
+        if ty.has_invalid(db) {
+            None
+        } else {
+            Some(ty)
+        }
+    }
+
+    /// Returns the trait being implemented.
+    pub(crate) fn trait_def(
+        self,
+        db: &'db dyn crate::analysis::HirAnalysisDb,
+    ) -> Option<crate::hir_def::Trait<'db>> {
+        self.trait_inst(db).map(|inst| inst.def(db))
+    }
+
+    /// Returns the generic parameters for this impl block.
+    pub(crate) fn impl_params(
+        self,
+        db: &'db dyn crate::analysis::HirAnalysisDb,
+    ) -> Vec<crate::analysis::ty::ty_def::TyId<'db>> {
+        use crate::analysis::ty::ty_lower::collect_generic_params;
+
+        collect_generic_params(db, self.into())
+            .params(db)
+            .to_vec()
+    }
+
+    /// Returns all associated types defined in this impl, including trait defaults.
+    pub(crate) fn assoc_types(
+        self,
+        db: &'db dyn crate::analysis::HirAnalysisDb,
+    ) -> common::indexmap::IndexMap<IdentId<'db>, crate::analysis::ty::ty_def::TyId<'db>> {
+        use crate::analysis::ty::binder::Binder;
+        use crate::analysis::ty::trait_resolution::constraint::collect_constraints;
+        use crate::analysis::ty::ty_lower::lower_hir_ty;
+
+        let scope = self.scope();
+        let assumptions = collect_constraints(db, self.into()).instantiate_identity();
+
+        let mut types: common::indexmap::IndexMap<_, _> = self.types(db)
+            .iter()
+            .filter_map(|t| match (t.name.to_opt(), t.ty.to_opt()) {
+                (Some(name), Some(ty)) => Some((name, lower_hir_ty(db, ty, scope, assumptions))),
+                _ => None,
+            })
+            .collect();
+
+        // Merge trait associated type defaults
+        if let Some(trait_inst) = self.trait_inst(db) {
+            let trait_def = trait_inst.def(db);
+            let trait_scope = trait_def.scope();
+
+            for t in trait_def.types(db).iter() {
+                let (Some(name), Some(default)) = (t.name.to_opt(), t.default) else {
+                    continue;
+                };
+
+                types.entry(name).or_insert_with(|| {
+                    let lowered = lower_hir_ty(db, default, trait_scope, assumptions);
+                    Binder::bind(lowered).instantiate(db, trait_inst.args(db))
+                });
+            }
+        }
+
+        types
+    }
+
+    /// Returns a specific associated type by name.
+    pub(crate) fn assoc_ty(
+        self,
+        db: &'db dyn crate::analysis::HirAnalysisDb,
+        name: IdentId<'db>,
+    ) -> Option<crate::analysis::ty::ty_def::TyId<'db>> {
+        self.assoc_types(db).get(&name).copied()
+    }
+
+    /// Returns the constraints (where clauses) for this impl.
+    pub(crate) fn impl_constraints(
+        self,
+        db: &'db dyn crate::analysis::HirAnalysisDb,
+    ) -> crate::analysis::ty::trait_resolution::PredicateListId<'db> {
+        use crate::analysis::ty::trait_resolution::constraint::collect_constraints;
+
+        collect_constraints(db, self.into()).instantiate_identity()
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, salsa::Update)]
 pub struct AssocTyDef<'db> {
     pub name: Partial<IdentId<'db>>,

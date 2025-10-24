@@ -10,12 +10,12 @@ use num_bigint::BigUint;
 use super::{
     binder::Binder,
     fold::{TyFoldable, TyFolder},
-    trait_def::{Implementor, TraitInstId},
+    trait_def::TraitInstId,
     ty_def::{ApplicableTyProp, Kind, TyData, TyId, TyVar, TyVarSort, inference_keys},
 };
-use crate::analysis::{
-    HirAnalysisDb,
-    ty::const_ty::{ConstTyData, EvaluatedConstTy},
+use crate::{
+    analysis::{HirAnalysisDb, ty::const_ty::{ConstTyData, EvaluatedConstTy}},
+    hir_def::ImplTrait,
 };
 
 pub(crate) type UnificationTable<'db> = UnificationTableBase<'db, InPlace<InferenceKey<'db>>>;
@@ -492,14 +492,20 @@ impl<'db> Unifiable<'db> for TraitInstId<'db> {
     }
 }
 
-impl<'db> Unifiable<'db> for Implementor<'db> {
+impl<'db> Unifiable<'db> for ImplTrait<'db> {
     fn unify<U: UnificationStore<'db>>(
         self,
         table: &mut UnificationTableBase<'db, U>,
         other: Self,
     ) -> UnificationResult {
         let db = table.db;
-        table.unify(self.trait_(db), other.trait_(db))
+        let self_trait = self.trait_inst(db);
+        let other_trait = other.trait_inst(db);
+
+        match (self_trait, other_trait) {
+            (Some(a), Some(b)) => table.unify(a, b),
+            _ => Err(UnificationError::TypeMismatch),
+        }
     }
 }
 

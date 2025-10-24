@@ -3,7 +3,7 @@
 
 use std::collections::BinaryHeap;
 
-use crate::hir_def::HirIngot;
+use crate::hir_def::{HirIngot, ImplTrait};
 use common::{indexmap::IndexSet, ingot::Ingot};
 use cranelift_entity::{PrimaryMap, entity_impl};
 use rustc_hash::{FxHashMap, FxHashSet};
@@ -16,7 +16,7 @@ use crate::analysis::{
         canonical::{Canonical, Canonicalized},
         fold::TyFoldable,
         normalize::normalize_ty,
-        trait_def::{Implementor, TraitInstId, impls_for_trait},
+        trait_def::{TraitInstId, impls_for_trait},
         ty_def::{TyData, TyId},
         unify::PersistentUnificationTable,
         visitor::{TyVisitable, TyVisitor},
@@ -268,7 +268,7 @@ struct GeneratorNodeData<'db> {
     ///  A list of consumer nodes that depend on this generator node.
     dependents: Vec<ConsumerNode>,
     ///  A list of candidate implementors for the trait.
-    cands: &'db [Binder<Implementor<'db>>],
+    cands: &'db [Binder<ImplTrait<'db>>],
     /// The list of assumptions for the goal.
     assumptions: PredicateListId<'db>,
     /// The index of the next candidate to be tried.
@@ -361,10 +361,14 @@ impl GeneratorNode {
             let mut table = g_node.table.clone();
             let gen_cand = table.instantiate_with_fresh_vars(cand);
 
+            // Compute trait instance from ImplTrait
+            let Some(trait_inst) = gen_cand.trait_inst(db) else {
+                continue;
+            };
+
             // TODO: require candidates to be pre-normalized
             // Normalize trait instance arguments before unification
             let normalized_gen_cand = {
-                let trait_inst = gen_cand.trait_(db);
                 let scope = g_node.goal.value.ingot(db).root_mod(db).scope();
 
                 // Normalize each argument
@@ -390,7 +394,7 @@ impl GeneratorNode {
                 continue;
             }
 
-            let constraints = gen_cand.constraints(db);
+            let constraints = gen_cand.impl_constraints(db);
 
             if constraints.list(db).is_empty() {
                 self.register_solution_with(pf, &mut table);
