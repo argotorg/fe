@@ -99,8 +99,19 @@ pub(crate) fn impls_for_ty_with_constraints<'db>(
         .filter(|impl_| {
             let snapshot = table.snapshot();
 
-            let impl_trait = table.instantiate_with_fresh_vars(*impl_);
+            let impl_trait = impl_.skip_binder();
+
+            // Create fresh vars for the generic params
+            let params = crate::analysis::ty::ty_lower::collect_generic_params(db, (*impl_trait).into())
+                .params(db);
+            let fresh_vars: Vec<_> = params
+                .iter()
+                .map(|param| table.new_var_from_param(*param))
+                .collect();
+
+            // Get self_ty and instantiate with fresh vars
             let impl_ty = impl_trait.self_ty(db);
+            let impl_ty = Binder::bind(impl_ty).instantiate(db, &fresh_vars);
             let impl_ty = table.instantiate_to_term(impl_ty);
             let ty = table.instantiate_to_term(ty);
             let unifies = table.unify(impl_ty, ty).is_ok();
@@ -114,6 +125,9 @@ pub(crate) fn impls_for_ty_with_constraints<'db>(
                 }
 
                 for &constraint in impl_constraints.list(db) {
+                    // Instantiate constraint with fresh vars, then fold with table to substitute
+                    let constraint = Binder::bind(constraint).instantiate(db, &fresh_vars);
+                    let constraint = constraint.fold_with(db, &mut table);
                     let constraint = Canonicalized::new(db, constraint);
                     match is_goal_satisfiable(db, ingot, constraint.value, assumptions) {
                         GoalSatisfiability::UnSat(_) => {
@@ -165,8 +179,19 @@ pub(crate) fn impls_for_ty<'db>(
         .filter(|impl_| {
             let snapshot = table.snapshot();
 
-            let impl_trait = table.instantiate_with_fresh_vars(*impl_);
+            let impl_trait = impl_.skip_binder();
+
+            // Create fresh vars for the generic params
+            let params = crate::analysis::ty::ty_lower::collect_generic_params(db, (*impl_trait).into())
+                .params(db);
+            let fresh_vars: Vec<_> = params
+                .iter()
+                .map(|param| table.new_var_from_param(*param))
+                .collect();
+
+            // Get self_ty and instantiate with fresh vars
             let impl_ty = impl_trait.self_ty(db);
+            let impl_ty = Binder::bind(impl_ty).instantiate(db, &fresh_vars);
             let impl_ty = table.instantiate_to_term(impl_ty);
             let ty = table.instantiate_to_term(ty);
             let is_ok = table.unify(impl_ty, ty).is_ok();

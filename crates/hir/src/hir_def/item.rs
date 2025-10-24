@@ -1249,12 +1249,10 @@ impl<'db> ImplTrait<'db> {
         self,
         db: &'db dyn crate::analysis::HirAnalysisDb,
     ) -> crate::analysis::ty::ty_def::TyId<'db> {
-        use crate::analysis::ty::trait_resolution::PredicateListId;
         use crate::analysis::ty::ty_lower::lower_hir_ty;
 
         let scope = self.scope();
-        // Don't use assumptions when lowering the self type to avoid potential Salsa cycles.
-        // The self type doesn't need constraint information to be lowered.
+        let assumptions = self.impl_constraints(db);
         let Some(hir_ty) = self.ty(db).to_opt() else {
             return crate::analysis::ty::ty_def::TyId::invalid(
                 db,
@@ -1262,7 +1260,7 @@ impl<'db> ImplTrait<'db> {
             );
         };
 
-        lower_hir_ty(db, hir_ty, scope, PredicateListId::empty_list(db))
+        lower_hir_ty(db, hir_ty, scope, assumptions)
     }
 
     /// Returns the trait being implemented.
