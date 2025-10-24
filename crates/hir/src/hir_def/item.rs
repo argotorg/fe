@@ -1169,7 +1169,7 @@ pub struct ImplTrait<'db> {
     id: TrackedItemId<'db>,
 
     pub trait_ref: Partial<TraitRefId<'db>>,
-    pub ty: Partial<TypeId<'db>>,
+    pub(crate) raw_ty: Partial<TypeId<'db>>,
     pub attributes: AttrListId<'db>,
     pub generic_params: GenericParamListId<'db>,
     pub where_clause: WhereClauseId<'db>,
@@ -1240,7 +1240,7 @@ impl<'db> ImplTrait<'db> {
         let assumptions = collect_constraints(db, self.into()).instantiate_identity();
 
         // Lower self_ty
-        let self_ty = self.ty(db).to_opt()
+        let self_ty = self.raw_ty(db).to_opt()
             .map(|ty| lower_hir_ty(db, ty, scope, assumptions))
             .unwrap_or_else(|| TyId::invalid(db, InvalidCause::Other));
 
@@ -1272,7 +1272,7 @@ impl<'db> ImplTrait<'db> {
     /// Returns the lowered trait instance for this impl.
     /// This is the core semantic information: which trait is being implemented with what args.
     #[salsa::tracked]
-    pub(crate) fn trait_inst(
+    pub fn trait_inst(
         self,
         db: &'db dyn crate::analysis::HirAnalysisDb,
     ) -> Option<crate::analysis::ty::trait_def::TraitInstId<'db>> {
@@ -1280,10 +1280,10 @@ impl<'db> ImplTrait<'db> {
         self.trait_impl_data(db).trait_inst(db)
     }
 
-    /// Returns the self type of this impl (the type implementing the trait).
+    /// Returns the type being implemented (the self type of this impl).
     /// Returns an invalid type if the impl's type is malformed.
     #[salsa::tracked]
-    pub(crate) fn self_ty(
+    pub fn ty(
         self,
         db: &'db dyn crate::analysis::HirAnalysisDb,
     ) -> crate::analysis::ty::ty_def::TyId<'db> {

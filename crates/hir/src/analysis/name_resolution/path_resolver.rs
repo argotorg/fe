@@ -895,7 +895,7 @@ pub fn find_associated_type<'db>(
             .map(|param| table.new_var_from_param(*param))
             .collect();
 
-        let impl_self_ty = impl_trait.self_ty(db);
+        let impl_self_ty = impl_trait.ty(db);
         let impl_self_ty = Binder::bind(impl_self_ty).instantiate(db, &fresh_vars);
 
         if table.unify(lhs_ty, impl_self_ty).is_ok()
@@ -1046,14 +1046,10 @@ pub fn resolve_name_res<'db>(
                     args,
                     assumptions,
                 )?),
-                ItemKind::ImplTrait(impl_) => PathRes::Ty(impl_typeid_to_ty(
-                    db,
-                    path,
-                    impl_.ty(db),
-                    scope,
-                    args,
-                    assumptions,
-                )?),
+                ItemKind::ImplTrait(impl_) => {
+                    let ty = impl_.ty(db);
+                    PathRes::Ty(TyId::foldl(db, ty, args))
+                },
 
                 ItemKind::Trait(t) => {
                     if path.is_self_ty(db) {

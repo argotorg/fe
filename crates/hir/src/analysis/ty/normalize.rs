@@ -56,7 +56,7 @@ impl<'db> TyFolder<'db> for TypeNormalizer<'db> {
         match ty.data(self.db) {
             TyData::TyParam(p @ TyParam { owner, .. }) if p.is_trait_self() => {
                 if let Some(impl_) = owner.resolve_to::<ImplTrait>(self.db)
-                    && let Some(hir_ty) = impl_.ty(self.db).to_opt()
+                    && let Some(hir_ty) = impl_.raw_ty(self.db).to_opt()
                 {
                     let impl_assumptions =
                         collect_constraints(self.db, impl_.into()).instantiate_identity();

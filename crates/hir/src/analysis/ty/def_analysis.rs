@@ -314,7 +314,7 @@ impl<'db> DefAnalyzer<'db> {
 
     fn for_trait_impl(db: &'db dyn HirAnalysisDb, impl_trait: crate::hir_def::ImplTrait<'db>) -> Self {
         let assumptions = impl_trait.impl_constraints(db);
-        let self_ty = impl_trait.self_ty(db);
+        let self_ty = impl_trait.ty(db);
         Self {
             db,
             def: impl_trait.into(),
@@ -332,16 +332,7 @@ impl<'db> DefAnalyzer<'db> {
     ) -> Self {
         let self_ty = match func.scope().parent(db).unwrap() {
             ScopeId::Item(ItemKind::Trait(trait_)) => trait_.self_param(db).into(),
-            ScopeId::Item(ItemKind::ImplTrait(impl_trait)) => match impl_trait.ty(db).to_opt() {
-                Some(hir_ty) => lower_hir_ty(
-                    db,
-                    hir_ty,
-                    impl_trait.scope(),
-                    collect_constraints(db, impl_trait.into()).instantiate_identity(),
-                )
-                .into(),
-                _ => TyId::invalid(db, InvalidCause::ParseError).into(),
-            },
+            ScopeId::Item(ItemKind::ImplTrait(impl_trait)) => impl_trait.ty(db).into(),
             ScopeId::Item(ItemKind::Impl(impl_)) => match impl_.ty(db).to_opt() {
                 Some(hir_ty) => lower_hir_ty(
                     db,
@@ -1244,7 +1235,7 @@ fn analyze_impl_trait_specific_error<'db>(
     // We don't need to report error because it should be reported from the parser.
     let (Some(trait_ref), Some(ty)) = (
         impl_trait.trait_ref(db).to_opt(),
-        impl_trait.ty(db).to_opt(),
+        impl_trait.raw_ty(db).to_opt(),
     ) else {
         return Err(diags);
     };
@@ -1313,7 +1304,7 @@ fn analyze_impl_trait_specific_error<'db>(
         .unwrap()
         .expected_implementor_kind(db);
     if ty.kind(db) != expected_kind {
-        let actual_ty = current_impl.skip_binder().self_ty(db);
+        let actual_ty = current_impl.skip_binder().ty(db);
         diags.push(
             TraitConstraintDiag::TraitArgKindMismatch {
                 span: impl_trait.span().trait_ref(),

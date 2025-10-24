@@ -218,7 +218,7 @@ impl<'db> TraitEnv<'db> {
 
                 for impl_trait in impl_traits {
                     // Compute self_ty from ImplTrait on-demand
-                    let self_ty = impl_trait.skip_binder().self_ty(db);
+                    let self_ty = impl_trait.skip_binder().ty(db);
                     ty_to_implementors
                         .entry(Binder::bind(self_ty.base_ty(db)))
                         .or_default()

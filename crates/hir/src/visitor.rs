@@ -808,7 +808,7 @@ pub fn walk_impl_trait<'db, V>(
         )
     }
 
-    if let Some(ty) = impl_trait.ty(ctxt.db).to_opt() {
+    if let Some(ty) = impl_trait.raw_ty(ctxt.db).to_opt() {
         ctxt.with_new_ctxt(
             |span| span.ty(),
             |ctxt| {
