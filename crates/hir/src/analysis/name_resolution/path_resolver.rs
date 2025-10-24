@@ -887,10 +887,7 @@ pub fn find_associated_type<'db>(
         let snapshot = table.snapshot();
         let impl_trait = table.instantiate_with_fresh_vars(impl_);
 
-        let Some(impl_self_ty) = impl_trait.self_ty(db) else {
-            table.rollback_to(snapshot);
-            continue;
-        };
+        let impl_self_ty = impl_trait.self_ty(db);
 
         if table.unify(lhs_ty, impl_self_ty).is_ok()
             && let Some(ty) = impl_trait.assoc_ty(db, name)

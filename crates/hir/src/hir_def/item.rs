@@ -1244,23 +1244,25 @@ impl<'db> ImplTrait<'db> {
     }
 
     /// Returns the self type of this impl (the type implementing the trait).
+    /// Returns an invalid type if the impl's type is malformed.
     pub(crate) fn self_ty(
         self,
         db: &'db dyn crate::analysis::HirAnalysisDb,
-    ) -> Option<crate::analysis::ty::ty_def::TyId<'db>> {
-        use crate::analysis::ty::trait_resolution::constraint::collect_constraints;
+    ) -> crate::analysis::ty::ty_def::TyId<'db> {
+        use crate::analysis::ty::trait_resolution::PredicateListId;
         use crate::analysis::ty::ty_lower::lower_hir_ty;
 
         let scope = self.scope();
-        let assumptions = collect_constraints(db, self.into()).instantiate_identity();
-        let hir_ty = self.ty(db).to_opt()?;
-        let ty = lower_hir_ty(db, hir_ty, scope, assumptions);
+        // Don't use assumptions when lowering the self type to avoid potential Salsa cycles.
+        // The self type doesn't need constraint information to be lowered.
+        let Some(hir_ty) = self.ty(db).to_opt() else {
+            return crate::analysis::ty::ty_def::TyId::invalid(
+                db,
+                crate::analysis::ty::ty_def::InvalidCause::Other,
+            );
+        };
 
-        if ty.has_invalid(db) {
-            None
-        } else {
-            Some(ty)
-        }
+        lower_hir_ty(db, hir_ty, scope, PredicateListId::empty_list(db))
     }
 
     /// Returns the trait being implemented.

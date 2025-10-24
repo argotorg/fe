@@ -100,10 +100,7 @@ pub(crate) fn impls_for_ty_with_constraints<'db>(
             let snapshot = table.snapshot();
 
             let impl_trait = table.instantiate_with_fresh_vars(*impl_);
-            let Some(impl_ty) = impl_trait.self_ty(db) else {
-                table.rollback_to(snapshot);
-                return false;
-            };
+            let impl_ty = impl_trait.self_ty(db);
             let impl_ty = table.instantiate_to_term(impl_ty);
             let ty = table.instantiate_to_term(ty);
             let unifies = table.unify(impl_ty, ty).is_ok();
@@ -169,10 +166,7 @@ pub(crate) fn impls_for_ty<'db>(
             let snapshot = table.snapshot();
 
             let impl_trait = table.instantiate_with_fresh_vars(*impl_);
-            let Some(impl_ty) = impl_trait.self_ty(db) else {
-                table.rollback_to(snapshot);
-                return false;
-            };
+            let impl_ty = impl_trait.self_ty(db);
             let impl_ty = table.instantiate_to_term(impl_ty);
             let ty = table.instantiate_to_term(ty);
             let is_ok = table.unify(impl_ty, ty).is_ok();
@@ -218,12 +212,11 @@ impl<'db> TraitEnv<'db> {
 
                 for impl_trait in impl_traits {
                     // Compute self_ty from ImplTrait on-demand
-                    if let Some(self_ty) = impl_trait.skip_binder().self_ty(db) {
-                        ty_to_implementors
-                            .entry(Binder::bind(self_ty.base_ty(db)))
-                            .or_default()
-                            .push(*impl_trait);
-                    }
+                    let self_ty = impl_trait.skip_binder().self_ty(db);
+                    ty_to_implementors
+                        .entry(Binder::bind(self_ty.base_ty(db)))
+                        .or_default()
+                        .push(*impl_trait);
                 }
             }
         }

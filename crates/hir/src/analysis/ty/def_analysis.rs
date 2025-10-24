@@ -23,7 +23,6 @@ use super::{
     method_cmp::compare_impl_method,
     method_table::probe_method,
     normalize::normalize_ty,
-    trait_def::ingot_trait_env,
     trait_lower::{TraitRefLowerError, collect_implementor_methods, lower_trait_ref},
     trait_resolution::{
         PredicateListId,
@@ -41,7 +40,7 @@ use crate::analysis::{
         adt_def::AdtDef,
         binder::Binder,
         canonical::Canonicalized,
-        trait_def::{TraitInstId, does_impl_trait_conflict},
+        trait_def::TraitInstId,
         trait_resolution::{
             GoalSatisfiability, constraint::super_trait_cycle, is_goal_satisfiable,
         },
@@ -315,7 +314,7 @@ impl<'db> DefAnalyzer<'db> {
 
     fn for_trait_impl(db: &'db dyn HirAnalysisDb, impl_trait: crate::hir_def::ImplTrait<'db>) -> Self {
         let assumptions = impl_trait.impl_constraints(db);
-        let self_ty = impl_trait.self_ty(db).unwrap_or_else(|| TyId::invalid(db, InvalidCause::Other));
+        let self_ty = impl_trait.self_ty(db);
         Self {
             db,
             def: impl_trait.into(),
@@ -1314,7 +1313,7 @@ fn analyze_impl_trait_specific_error<'db>(
         .unwrap()
         .expected_implementor_kind(db);
     if ty.kind(db) != expected_kind {
-        let actual_ty = current_impl.skip_binder().self_ty(db).unwrap_or(ty);
+        let actual_ty = current_impl.skip_binder().self_ty(db);
         diags.push(
             TraitConstraintDiag::TraitArgKindMismatch {
                 span: impl_trait.span().trait_ref(),
