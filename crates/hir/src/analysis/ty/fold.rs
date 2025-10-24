@@ -156,6 +156,30 @@ impl<'db> TyFoldable<'db> for TraitInstId<'db> {
     }
 }
 
+impl<'db> TyFoldable<'db> for crate::analysis::ty::trait_def::TraitImplData<'db> {
+    fn super_fold_with<F>(self, db: &'db dyn HirAnalysisDb, folder: &mut F) -> Self
+    where
+        F: TyFolder<'db>,
+    {
+        let self_ty = self.self_ty(db).fold_with(db, folder);
+        let trait_inst = self.trait_inst(db).map(|inst| inst.fold_with(db, folder));
+        let constraints = self.constraints(db).fold_with(db, folder);
+        let params = self
+            .params(db)
+            .iter()
+            .map(|ty| ty.fold_with(db, folder))
+            .collect::<Vec<_>>();
+
+        crate::analysis::ty::trait_def::TraitImplData::new(
+            db,
+            self_ty,
+            trait_inst,
+            constraints,
+            params,
+        )
+    }
+}
+
 impl<'db> TyFoldable<'db> for ImplTrait<'db> {
     fn super_fold_with<F>(self, _db: &'db dyn HirAnalysisDb, _folder: &mut F) -> Self
     where

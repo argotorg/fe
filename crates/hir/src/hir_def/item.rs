@@ -1219,48 +1219,76 @@ impl<'db> ImplTrait<'db> {
 
 // Semantic analysis methods for ImplTrait - these compute lowered trait implementation info
 // These replace the need for the Implementor struct
+#[salsa::tracked]
 impl<'db> ImplTrait<'db> {
-    /// Returns the lowered trait instance for this impl.
-    /// This is the core semantic information: which trait is being implemented with what args.
-    pub(crate) fn trait_inst(
+    /// (Internal) Lowers this syntactic `ImplTrait` into semantic representation.
+    /// This does the expensive work of resolving paths and lowering types.
+    /// THIS IS CACHED BY SALSA - called once per ImplTrait.
+    ///
+    /// This is the core query that other methods (`self_ty`, `trait_inst`) delegate to.
+    #[salsa::tracked]
+    pub(crate) fn trait_impl_data(
         self,
         db: &'db dyn crate::analysis::HirAnalysisDb,
-    ) -> Option<crate::analysis::ty::trait_def::TraitInstId<'db>> {
+    ) -> crate::analysis::ty::trait_def::TraitImplData<'db> {
         use crate::analysis::ty::trait_lower::lower_trait_ref;
         use crate::analysis::ty::trait_resolution::constraint::collect_constraints;
-        use crate::analysis::ty::ty_lower::lower_hir_ty;
+        use crate::analysis::ty::ty_lower::{collect_generic_params, lower_hir_ty};
+        use crate::analysis::ty::ty_def::{InvalidCause, TyId};
 
         let scope = self.scope();
         let assumptions = collect_constraints(db, self.into()).instantiate_identity();
 
-        let hir_ty = self.ty(db).to_opt()?;
-        let ty = lower_hir_ty(db, hir_ty, scope, assumptions);
-        if ty.has_invalid(db) {
-            return None;
-        }
+        // Lower self_ty
+        let self_ty = self.ty(db).to_opt()
+            .map(|ty| lower_hir_ty(db, ty, scope, assumptions))
+            .unwrap_or_else(|| TyId::invalid(db, InvalidCause::Other));
 
-        let trait_ref = self.trait_ref(db).to_opt()?;
-        lower_trait_ref(db, ty, trait_ref, scope, assumptions).ok()
+        // Lower trait_inst (only if self_ty is valid)
+        let trait_inst = if self_ty.has_invalid(db) {
+            None
+        } else {
+            self.trait_ref(db).to_opt()
+                .and_then(|tr| lower_trait_ref(db, self_ty, tr, scope, assumptions).ok())
+        };
+
+        // Get constraints
+        let constraints = assumptions;
+
+        // Get generic params
+        let params = collect_generic_params(db, self.into())
+            .params(db)
+            .to_vec();
+
+        crate::analysis::ty::trait_def::TraitImplData::new(
+            db,
+            self_ty,
+            trait_inst,
+            constraints,
+            params,
+        )
+    }
+
+    /// Returns the lowered trait instance for this impl.
+    /// This is the core semantic information: which trait is being implemented with what args.
+    #[salsa::tracked]
+    pub(crate) fn trait_inst(
+        self,
+        db: &'db dyn crate::analysis::HirAnalysisDb,
+    ) -> Option<crate::analysis::ty::trait_def::TraitInstId<'db>> {
+        // Delegate to cached query
+        self.trait_impl_data(db).trait_inst(db)
     }
 
     /// Returns the self type of this impl (the type implementing the trait).
     /// Returns an invalid type if the impl's type is malformed.
+    #[salsa::tracked]
     pub(crate) fn self_ty(
         self,
         db: &'db dyn crate::analysis::HirAnalysisDb,
     ) -> crate::analysis::ty::ty_def::TyId<'db> {
-        use crate::analysis::ty::ty_lower::lower_hir_ty;
-
-        let scope = self.scope();
-        let assumptions = self.impl_constraints(db);
-        let Some(hir_ty) = self.ty(db).to_opt() else {
-            return crate::analysis::ty::ty_def::TyId::invalid(
-                db,
-                crate::analysis::ty::ty_def::InvalidCause::Other,
-            );
-        };
-
-        lower_hir_ty(db, hir_ty, scope, assumptions)
+        // Delegate to cached query
+        self.trait_impl_data(db).self_ty(db)
     }
 
     /// Returns the trait being implemented.
@@ -1272,15 +1300,13 @@ impl<'db> ImplTrait<'db> {
     }
 
     /// Returns the generic parameters for this impl block.
+    #[salsa::tracked(return_ref)]
     pub(crate) fn impl_params(
         self,
         db: &'db dyn crate::analysis::HirAnalysisDb,
     ) -> Vec<crate::analysis::ty::ty_def::TyId<'db>> {
-        use crate::analysis::ty::ty_lower::collect_generic_params;
-
-        collect_generic_params(db, self.into())
-            .params(db)
-            .to_vec()
+        // Delegate to cached query
+        self.trait_impl_data(db).params(db).clone()
     }
 
     /// Returns all associated types defined in this impl, including trait defaults.
@@ -1333,14 +1359,60 @@ impl<'db> ImplTrait<'db> {
     }
 
     /// Returns the constraints (where clauses) for this impl.
+    #[salsa::tracked]
     pub(crate) fn impl_constraints(
         self,
         db: &'db dyn crate::analysis::HirAnalysisDb,
     ) -> crate::analysis::ty::trait_resolution::PredicateListId<'db> {
-        use crate::analysis::ty::trait_resolution::constraint::collect_constraints;
-
-        collect_constraints(db, self.into()).instantiate_identity()
+        // Delegate to cached query
+        self.trait_impl_data(db).constraints(db)
     }
+
+    /// Instantiates this impl with fresh type variables for unification.
+    /// This creates fresh vars ONCE and substitutes them atomically across
+    /// all fields, ensuring correctness.
+    ///
+    /// This is the KEY METHOD that eliminates manual fresh var management at call sites.
+    ///
+    /// NOT CACHED (takes &mut UnificationTable), but BENEFITS from the
+    /// cached trait_impl_data query internally.
+    pub(crate) fn instantiated(
+        self,
+        db: &'db dyn crate::analysis::HirAnalysisDb,
+        table: &mut crate::analysis::ty::unify::UnificationTable<'db>,
+    ) -> InstantiatedTraitImpl<'db> {
+        use crate::analysis::ty::binder::Binder;
+
+        // 1. Get cached template (fast if called before)
+        let data_template = self.trait_impl_data(db);
+
+        // 2. Create fresh vars ONCE
+        let fresh_vars: Vec<crate::analysis::ty::ty_def::TyId<'db>> = data_template
+            .params(db)
+            .iter()
+            .map(|p| table.new_var_from_param(*p))
+            .collect();
+
+        // 3. Instantiate atomically with shared vars
+        let binder = Binder::bind(data_template);
+        let instantiated = binder.instantiate(db, &fresh_vars);
+
+        // 4. Return simple struct with results
+        InstantiatedTraitImpl {
+            self_ty: instantiated.self_ty(db),
+            trait_inst: instantiated.trait_inst(db),
+            constraints: instantiated.constraints(db),
+        }
+    }
+}
+
+/// Simple data struct returned by `ImplTrait::instantiated()` method.
+/// Not salsa-tracked, just a convenient return value holding instantiated impl data.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct InstantiatedTraitImpl<'db> {
+    pub self_ty: crate::analysis::ty::ty_def::TyId<'db>,
+    pub trait_inst: Option<crate::analysis::ty::trait_def::TraitInstId<'db>>,
+    pub constraints: crate::analysis::ty::trait_resolution::PredicateListId<'db>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, salsa::Update)]

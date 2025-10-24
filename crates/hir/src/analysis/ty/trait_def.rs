@@ -489,6 +489,28 @@ impl<'db> TraitInstId<'db> {
     }
 }
 
+/// Internal semantic data for an `impl Trait` block.
+/// This struct is used to cache the expensive lowering work and enable atomic instantiation.
+///
+/// This is `pub(crate)` - an implementation detail, not part of the public HIR API.
+/// External code should use methods on `ImplTrait` instead.
+#[salsa::interned]
+#[derive(Debug)]
+pub(crate) struct TraitImplData<'db> {
+    /// The type that implements the trait (the "self" type)
+    pub self_ty: TyId<'db>,
+
+    /// The trait being implemented, with its arguments
+    pub trait_inst: Option<TraitInstId<'db>>,
+
+    /// Where clause constraints on this impl
+    pub constraints: PredicateListId<'db>,
+
+    /// Generic parameters of this impl (used for instantiation)
+    #[return_ref]
+    pub params: Vec<TyId<'db>>,
+}
+
 // TraitDef has been eliminated - use Trait directly via TraitInstId.def(db)
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy, Hash, salsa::Update)]

@@ -175,6 +175,21 @@ impl<'db> TyVisitable<'db> for TraitInstId<'db> {
     }
 }
 
+impl<'db> TyVisitable<'db> for crate::analysis::ty::trait_def::TraitImplData<'db> {
+    fn visit_with<V>(&self, visitor: &mut V)
+    where
+        V: TyVisitor<'db> + ?Sized,
+    {
+        let db = visitor.db();
+        self.self_ty(db).visit_with(visitor);
+        if let Some(trait_inst) = self.trait_inst(db) {
+            trait_inst.visit_with(visitor);
+        }
+        self.constraints(db).visit_with(visitor);
+        self.params(db).visit_with(visitor);
+    }
+}
+
 impl<'db> TyVisitable<'db> for ImplTrait<'db> {
     fn visit_with<V>(&self, visitor: &mut V)
     where
