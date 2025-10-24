@@ -149,11 +149,64 @@ The main benefit of this pattern is avoiding the upfront cost of collecting all 
 
 ## 3. Core Refactoring Principles
 
-- **High-Level Goal**: Flatten the `analysis` module wrappers around HIR items. There is roughly one wrapper per HIR item (`TraitDef` for `Trait`, `Implementor` for `ImplTrait`, etc.).
-- **Wrapper Purpose**: These wrappers currently serve two functions: providing an API surface for analysis-level logic and containing complex constructor logic that performs analysis.
-- **The Problem**: This leads to brittle, hard-to-maintain code where consumers like the Language Server must manually pass around context (`scope`, `assumptions`) and re-implement analysis logic.
-- **The Solution**: Decompose the logic from the wrapper constructors into methods on the HIR items themselves (e.g., `ImplTrait`). This makes the API more robust and easier to use.
-- **Implementation**: Transition to the new API by removing `pub` visibility on HIR item fields (where appropriate) and providing `#[salsa::tracked]` methods for traversal and analysis.
+### The Anti-Pattern: Manual Materialization
+
+The current codebase suffers from **unnecessary manual caching** - analysis results are pre-computed in constructor functions and materialized into tracked wrapper structs, even though Salsa already provides automatic caching.
+
+**Old Pattern (Manual Materialization):**
+```rust
+// Constructor does expensive analysis, stores results in tracked struct
+#[salsa::tracked]
+pub fn lower_adt(db: &dyn HirAnalysisDb, adt: AdtRef) -> AdtDef {
+    let param_set = collect_generic_params(db, ...);  // Analysis work
+    let fields = collect_field_types(db, ...);        // Analysis work
+    AdtDef::new(db, adt, param_set, fields)           // Materialize results
+}
+
+#[salsa::tracked]
+struct AdtDef {
+    adt_ref: AdtRef,                    // Back-reference to HIR item
+    param_set: GenericParamTypeSet,     // Cached result
+    fields: Vec<AdtField>,              // Cached result
+}
+```
+
+**New Pattern (Salsa-Cached Methods):**
+```rust
+#[salsa::tracked]
+pub struct Struct {
+    pub(crate) raw_fields: FieldDefListId,  // Syntactic data
+}
+
+impl Struct {
+    // Analysis logic in methods - Salsa caches automatically!
+    #[salsa::tracked]
+    pub fn fields(self, db: &dyn HirAnalysisDb) -> Vec<AdtField> {
+        collect_field_types(db, self.scope(), self.raw_fields(db))
+    }
+
+    #[salsa::tracked]
+    pub fn params(self, db: &dyn HirAnalysisDb) -> Vec<TyId> {
+        collect_generic_params(db, self.into()).params(db)
+    }
+}
+```
+
+**Key Insight:** Don't pre-compute and store analysis results in wrapper structs. Instead, make analysis results available as cached methods on the HIR items themselves. Salsa already provides the caching - we don't need to manually materialize it.
+
+### High-Level Goals
+
+- **Eliminate Manual Caching**: Replace tracked wrapper structs that materialize analysis results with tracked methods on HIR items that compute results on-demand (Salsa caches them automatically)
+- **Use Lightweight Enums for Polymorphism**: When multiple HIR items need uniform treatment (e.g., `Struct | Enum | Contract`), use lightweight enums like `AdtRef` or `CallableDef`, not heavy wrapper structs with materialized data
+- **Context-Rich Traversal**: HIR items should have enough context (via their fields) to perform analysis internally without requiring callers to thread `scope` and `assumptions` everywhere
+- **Clean Public API**: Analysis complexity is hidden behind simple method names on HIR items (`.ty()`, `.fields()`, `.params()`)
+
+### The Refactoring Strategy
+
+- **Wrapper Purpose**: These wrappers currently serve two functions: (1) providing an API surface for analysis-level logic, and (2) containing complex constructor logic that pre-computes and materializes analysis results into tracked struct fields.
+- **The Problem**: This leads to brittle, hard-to-maintain code where consumers like the Language Server must manually pass around context (`scope`, `assumptions`) and re-implement analysis logic. It also creates unnecessary manual caching that Salsa already handles.
+- **The Solution**: Factor analysis logic from wrapper constructors into tracked methods on the HIR items themselves. The HIR items maintain context needed for traversal, and Salsa caches the method results automatically.
+- **Implementation**: Transition to the new API by making HIR item fields `pub(crate)` (syntactic data) and providing `#[salsa::tracked]` public methods (semantic analysis).
 - **Phased Approach**: Get larger chunks working first. Take a step back on fine-grained node wrappers for `expr`/`pat`/`stmt` until the primary item-level wrappers are handled.
 - **Scope-level Wrappers**: There are also analysis-like structs for `ScopeId` variants (e.g., `GenericParamTypeSet`). These are more complex and should be addressed after the item-level wrappers are complete.
 
