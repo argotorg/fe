@@ -137,3 +137,93 @@ note:
    │
 18 │         put(amount: 5)
    │                     ^ u8
+
+note: 
+   ┌─ effects_generic_type.fe:22:29
+   │  
+22 │   pub fn caller_ok_explicit() {
+   │ ╭─────────────────────────────^
+23 │ │     let ctx = Ctx {}
+24 │ │     let mut st = Storage<u8> { value: 0 }
+25 │ │     with (Ctx = ctx, Storage<u8> = st) {
+26 │ │         put(amount: 5)
+27 │ │     }
+28 │ │ }
+   │ ╰─^ ()
+
+note: 
+   ┌─ effects_generic_type.fe:23:9
+   │
+23 │     let ctx = Ctx {}
+   │         ^^^ Ctx
+
+note: 
+   ┌─ effects_generic_type.fe:23:15
+   │
+23 │     let ctx = Ctx {}
+   │               ^^^^^^ Ctx
+
+note: 
+   ┌─ effects_generic_type.fe:24:9
+   │
+24 │     let mut st = Storage<u8> { value: 0 }
+   │         ^^^^^^ Storage<u8>
+
+note: 
+   ┌─ effects_generic_type.fe:24:18
+   │
+24 │     let mut st = Storage<u8> { value: 0 }
+   │                  ^^^^^^^^^^^^^^^^^^^^^^^^ Storage<u8>
+
+note: 
+   ┌─ effects_generic_type.fe:24:39
+   │
+24 │     let mut st = Storage<u8> { value: 0 }
+   │                                       ^ u8
+
+note: 
+   ┌─ effects_generic_type.fe:25:5
+   │  
+25 │ ╭     with (Ctx = ctx, Storage<u8> = st) {
+26 │ │         put(amount: 5)
+27 │ │     }
+   │ ╰─────^ ()
+
+note: 
+   ┌─ effects_generic_type.fe:25:17
+   │
+25 │     with (Ctx = ctx, Storage<u8> = st) {
+   │                 ^^^ Ctx
+
+note: 
+   ┌─ effects_generic_type.fe:25:36
+   │
+25 │     with (Ctx = ctx, Storage<u8> = st) {
+   │                                    ^^ Storage<u8>
+
+note: 
+   ┌─ effects_generic_type.fe:25:40
+   │  
+25 │       with (Ctx = ctx, Storage<u8> = st) {
+   │ ╭────────────────────────────────────────^
+26 │ │         put(amount: 5)
+27 │ │     }
+   │ ╰─────^ ()
+
+note: 
+   ┌─ effects_generic_type.fe:26:9
+   │
+26 │         put(amount: 5)
+   │         ^^^ fn put<u8>
+
+note: 
+   ┌─ effects_generic_type.fe:26:9
+   │
+26 │         put(amount: 5)
+   │         ^^^^^^^^^^^^^^ ()
+
+note: 
+   ┌─ effects_generic_type.fe:26:21
+   │
+26 │         put(amount: 5)
+   │                     ^ u8

@@ -1,11 +1,10 @@
 ---
 source: crates/hir-analysis/tests/ty_check.rs
-assertion_line: 48
 expression: res
-input_file: test_files/ty_check/nested_generic_effects.fe
+input_file: test_files/ty_check/effects_nested_generic_trait.fe
 ---
 note: 
-   ┌─ nested_generic_effects.fe:10:24
+   ┌─ effects_nested_generic_trait.fe:10:24
    │  
 10 │       fn get(self) -> u8 {
    │ ╭────────────────────────^
@@ -14,13 +13,13 @@ note:
    │ ╰─────^ u8
 
 note: 
-   ┌─ nested_generic_effects.fe:11:9
+   ┌─ effects_nested_generic_trait.fe:11:9
    │
 11 │         42
    │         ^^ u8
 
 note: 
-   ┌─ nested_generic_effects.fe:16:25
+   ┌─ effects_nested_generic_trait.fe:16:25
    │  
 16 │       fn get(self) -> u16 {
    │ ╭─────────────────────────^
@@ -29,13 +28,13 @@ note:
    │ ╰─────^ u16
 
 note: 
-   ┌─ nested_generic_effects.fe:17:9
+   ┌─ effects_nested_generic_trait.fe:17:9
    │
 17 │         100
    │         ^^^ u16
 
 note: 
-   ┌─ nested_generic_effects.fe:23:1
+   ┌─ effects_nested_generic_trait.fe:23:1
    │  
 23 │ ╭ {
 24 │ │     cap.get()
@@ -43,19 +42,19 @@ note:
    │ ╰─^ u8
 
 note: 
-   ┌─ nested_generic_effects.fe:24:5
+   ┌─ effects_nested_generic_trait.fe:24:5
    │
 24 │     cap.get()
    │     ^^^ cap: SomeTrait
 
 note: 
-   ┌─ nested_generic_effects.fe:24:5
+   ┌─ effects_nested_generic_trait.fe:24:5
    │
 24 │     cap.get()
    │     ^^^^^^^^^ u8
 
 note: 
-   ┌─ nested_generic_effects.fe:29:1
+   ┌─ effects_nested_generic_trait.fe:29:1
    │  
 29 │ ╭ {
 30 │ │     cap.get()
@@ -63,19 +62,19 @@ note:
    │ ╰─^ u16
 
 note: 
-   ┌─ nested_generic_effects.fe:30:5
+   ┌─ effects_nested_generic_trait.fe:30:5
    │
 30 │     cap.get()
    │     ^^^ cap: SomeTrait
 
 note: 
-   ┌─ nested_generic_effects.fe:30:5
+   ┌─ effects_nested_generic_trait.fe:30:5
    │
 30 │     cap.get()
    │     ^^^^^^^^^ u16
 
 note: 
-   ┌─ nested_generic_effects.fe:33:29
+   ┌─ effects_nested_generic_trait.fe:33:29
    │  
 33 │   pub fn x() -> (u8, u16, u8) {
    │ ╭─────────────────────────────^
@@ -88,7 +87,7 @@ note:
    │ ╰─^ (u8, u16, u8)
 
 note: 
-   ┌─ nested_generic_effects.fe:34:5
+   ┌─ effects_nested_generic_trait.fe:34:5
    │  
 34 │ ╭     with (SomeTrait<u8> = Foo{}) {
 35 │ │         let result_f1 = f()
@@ -100,13 +99,13 @@ note:
    │ ╰─────^ (u8, u16, u8)
 
 note: 
-   ┌─ nested_generic_effects.fe:34:27
+   ┌─ effects_nested_generic_trait.fe:34:27
    │
 34 │     with (SomeTrait<u8> = Foo{}) {
    │                           ^^^^^ Foo
 
 note: 
-   ┌─ nested_generic_effects.fe:34:34
+   ┌─ effects_nested_generic_trait.fe:34:34
    │  
 34 │       with (SomeTrait<u8> = Foo{}) {
    │ ╭──────────────────────────────────^
@@ -119,25 +118,25 @@ note:
    │ ╰─────^ (u8, u16, u8)
 
 note: 
-   ┌─ nested_generic_effects.fe:35:13
+   ┌─ effects_nested_generic_trait.fe:35:13
    │
 35 │         let result_f1 = f()
    │             ^^^^^^^^^ u8
 
 note: 
-   ┌─ nested_generic_effects.fe:35:25
+   ┌─ effects_nested_generic_trait.fe:35:25
    │
 35 │         let result_f1 = f()
    │                         ^ fn f
 
 note: 
-   ┌─ nested_generic_effects.fe:35:25
+   ┌─ effects_nested_generic_trait.fe:35:25
    │
 35 │         let result_f1 = f()
    │                         ^^^ u8
 
 note: 
-   ┌─ nested_generic_effects.fe:36:9
+   ┌─ effects_nested_generic_trait.fe:36:9
    │  
 36 │ ╭         with (SomeTrait<u16> = Bar{}) {
 37 │ │             let result_f2 = f()  // should work, using Foo
@@ -147,13 +146,13 @@ note:
    │ ╰─────────^ (u8, u16, u8)
 
 note: 
-   ┌─ nested_generic_effects.fe:36:32
+   ┌─ effects_nested_generic_trait.fe:36:32
    │
 36 │         with (SomeTrait<u16> = Bar{}) {
    │                                ^^^^^ Bar
 
 note: 
-   ┌─ nested_generic_effects.fe:36:39
+   ┌─ effects_nested_generic_trait.fe:36:39
    │  
 36 │           with (SomeTrait<u16> = Bar{}) {
    │ ╭───────────────────────────────────────^
@@ -164,61 +163,61 @@ note:
    │ ╰─────────^ (u8, u16, u8)
 
 note: 
-   ┌─ nested_generic_effects.fe:37:17
+   ┌─ effects_nested_generic_trait.fe:37:17
    │
 37 │             let result_f2 = f()  // should work, using Foo
    │                 ^^^^^^^^^ u8
 
 note: 
-   ┌─ nested_generic_effects.fe:37:29
+   ┌─ effects_nested_generic_trait.fe:37:29
    │
 37 │             let result_f2 = f()  // should work, using Foo
    │                             ^ fn f
 
 note: 
-   ┌─ nested_generic_effects.fe:37:29
+   ┌─ effects_nested_generic_trait.fe:37:29
    │
 37 │             let result_f2 = f()  // should work, using Foo
    │                             ^^^ u8
 
 note: 
-   ┌─ nested_generic_effects.fe:38:17
+   ┌─ effects_nested_generic_trait.fe:38:17
    │
 38 │             let result_g = g()   // should work, using Bar
    │                 ^^^^^^^^ u16
 
 note: 
-   ┌─ nested_generic_effects.fe:38:28
+   ┌─ effects_nested_generic_trait.fe:38:28
    │
 38 │             let result_g = g()   // should work, using Bar
    │                            ^ fn g
 
 note: 
-   ┌─ nested_generic_effects.fe:38:28
+   ┌─ effects_nested_generic_trait.fe:38:28
    │
 38 │             let result_g = g()   // should work, using Bar
    │                            ^^^ u16
 
 note: 
-   ┌─ nested_generic_effects.fe:39:13
+   ┌─ effects_nested_generic_trait.fe:39:13
    │
 39 │             (result_f1, result_g, result_f2)
    │             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ (u8, u16, u8)
 
 note: 
-   ┌─ nested_generic_effects.fe:39:14
+   ┌─ effects_nested_generic_trait.fe:39:14
    │
 39 │             (result_f1, result_g, result_f2)
    │              ^^^^^^^^^ u8
 
 note: 
-   ┌─ nested_generic_effects.fe:39:25
+   ┌─ effects_nested_generic_trait.fe:39:25
    │
 39 │             (result_f1, result_g, result_f2)
    │                         ^^^^^^^^ u16
 
 note: 
-   ┌─ nested_generic_effects.fe:39:35
+   ┌─ effects_nested_generic_trait.fe:39:35
    │
 39 │             (result_f1, result_g, result_f2)
    │                                   ^^^^^^^^^ u8

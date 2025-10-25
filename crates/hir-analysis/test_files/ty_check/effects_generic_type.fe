@@ -19,3 +19,10 @@ pub fn caller_ok_generic() {
     }
 }
 
+pub fn caller_ok_explicit() {
+    let ctx = Ctx {}
+    let mut st = Storage<u8> { value: 0 }
+    with (Ctx = ctx, Storage<u8> = st) {
+        put(amount: 5)
+    }
+}

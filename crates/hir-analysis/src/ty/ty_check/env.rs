@@ -259,10 +259,42 @@ impl<'db> TyCheckEnv<'db> {
         key_path: PathId<'db>,
         binding: ProvidedEffect<'db>,
     ) {
-        if let Some(key) =
-            self.effect_key_for_path_in_scope(key_path, self.scope(), self.assumptions())
-        {
+        // First, try to create a key from the provided type itself, which includes
+        // full type arguments. This handles cases like `with (Storage = st)` where
+        // `st: Storage<u8>` - we want the key to be `Storage<u8>`, not just `Storage`.
+        let key = self.effect_key_from_provided_ty(key_path, binding.ty)
+            .or_else(|| self.effect_key_for_path_in_scope(key_path, self.scope(), self.assumptions()));
+
+        if let Some(key) = key {
             self.effect_env.insert(key, binding);
+        }
+    }
+
+    /// Try to create an effect key from the provided value's type.
+    /// This ensures that `with (Storage = st)` where `st: Storage<u8>` creates a key for `Storage<u8>`.
+    fn effect_key_from_provided_ty(
+        &self,
+        key_path: PathId<'db>,
+        provided_ty: TyId<'db>,
+    ) -> Option<EffectKey<'db>> {
+        // Resolve the key_path to see what kind of thing it is
+        let path_res = resolve_path(self.db, key_path, self.scope(), self.assumptions(), false).ok()?;
+
+        match path_res {
+            PathRes::Ty(resolved_ty) | PathRes::TyAlias(_, resolved_ty) => {
+                // Check if the provided type's base matches the resolved type's base
+                if provided_ty.base_ty(self.db).as_scope(self.db) == resolved_ty.base_ty(self.db).as_scope(self.db) {
+                    // Use the provided type (which includes generic arguments)
+                    Some(EffectKey::Type(provided_ty))
+                } else {
+                    None
+                }
+            }
+            PathRes::Trait(_) => {
+                // For traits, fall back to path-based resolution
+                None
+            }
+            _ => None,
         }
     }
 
@@ -272,8 +304,60 @@ impl<'db> TyCheckEnv<'db> {
         scope: ScopeId<'db>,
         assumptions: PredicateListId<'db>,
     ) -> Option<ProvidedEffect<'db>> {
-        let key = self.effect_key_for_path_in_scope(key_path, scope, assumptions)?;
-        self.effect_env.lookup(key)
+        // First try exact match
+        if let Some(key) = self.effect_key_for_path_in_scope(key_path, scope, assumptions) {
+            if let Some(binding) = self.effect_env.lookup(key) {
+                return Some(binding);
+            }
+        }
+
+        // If no exact match, try unification-based lookup
+        // This handles cases like: provided `Storage<u8>`, required `Storage<T>`
+        self.find_unifiable_effect(key_path, scope, assumptions)
+    }
+
+    /// Find an effect binding that can unify with the required type.
+    /// Returns None if no candidates found, or Some if exactly one candidate found.
+    /// If multiple candidates exist, returns the first one (we'll handle ambiguity later).
+    fn find_unifiable_effect(
+        &self,
+        key_path: PathId<'db>,
+        scope: ScopeId<'db>,
+        assumptions: PredicateListId<'db>,
+    ) -> Option<ProvidedEffect<'db>> {
+        // Resolve the required type/trait
+        let path_res = resolve_path(self.db, key_path, scope, assumptions, false).ok()?;
+
+        let mut candidates = Vec::new();
+
+        // Search through all available effects in all frames
+        for frame in self.effect_env.frames.iter().rev() {
+            for (effect_key, provided) in &frame.bindings {
+                match (&path_res, effect_key) {
+                    // Type vs Type: check if base types match
+                    (PathRes::Ty(required_ty) | PathRes::TyAlias(_, required_ty), EffectKey::Type(provided_ty)) => {
+                        // Check if the base types are the same (e.g., both are Storage)
+                        let required_base = required_ty.base_ty(self.db);
+                        let provided_base = provided_ty.base_ty(self.db);
+
+                        if required_base.as_scope(self.db) == provided_base.as_scope(self.db) {
+                            candidates.push(*provided);
+                        }
+                    }
+                    // Trait vs Trait: check if trait definitions match
+                    (PathRes::Trait(required_trait), EffectKey::Trait(provided_trait)) => {
+                        if required_trait.def(self.db) == provided_trait.def(self.db) {
+                            candidates.push(*provided);
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+
+        // For now, return the first candidate if exactly one, or first if multiple
+        // TODO: Handle ambiguity diagnostics
+        candidates.first().copied()
     }
 
     pub(super) fn enter_scope(&mut self, block: ExprId) {
@@ -630,11 +714,12 @@ impl<'db> BlockEnv<'db> {
 
 /// A key for looking up effect bindings.
 /// This includes the definition scope and any type arguments, so that
-/// `SomeTrait<u8>` and `SomeTrait<u16>` are distinct keys.
+/// `SomeTrait<u8>` and `SomeTrait<u16>` are distinct keys, and
+/// `Storage<u8>` and `Storage<u16>` are also distinct.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(super) enum EffectKey<'db> {
-    /// A concrete type (e.g., `Storage`)
-    Type(ScopeId<'db>),
+    /// A type with its full generic arguments (e.g., `Storage<u8>`)
+    Type(TyId<'db>),
     /// A trait with type arguments (e.g., `SomeTrait<u8>`)
     Trait(TraitInstId<'db>),
 }
@@ -853,7 +938,9 @@ enum DeferredTask<'db> {
 impl<'db> TyCheckEnv<'db> {
     /// Compute a normalized effect key for a given `key_path` resolved in `scope`
     /// under `assumptions`. The key includes type arguments so that different
-    /// instantiations (e.g., `SomeTrait<u8>` vs `SomeTrait<u16>`) are distinct.
+    /// instantiations are distinct:
+    /// - `SomeTrait<u8>` vs `SomeTrait<u16>` (traits)
+    /// - `Storage<u8>` vs `Storage<u16>` (types)
     pub(super) fn effect_key_for_path_in_scope(
         &self,
         key_path: PathId<'db>,
@@ -863,7 +950,8 @@ impl<'db> TyCheckEnv<'db> {
         let path_res = resolve_path(self.db, key_path, scope, assumptions, false).ok()?;
         match path_res {
             PathRes::Ty(ty) | PathRes::TyAlias(_, ty) => {
-                ty.as_scope(self.db).map(EffectKey::Type)
+                // Use the full TyId which includes generic arguments
+                Some(EffectKey::Type(ty))
             }
             PathRes::Trait(trait_inst) => Some(EffectKey::Trait(trait_inst)),
             _ => None,
