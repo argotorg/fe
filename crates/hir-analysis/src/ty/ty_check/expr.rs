@@ -294,13 +294,22 @@ impl<'db> TyChecker<'db> {
                 continue;
             };
 
-            let provided = match self
-                .env
-                .effect_binding_in_scope(key_path, func.scope(), callee_assumptions)
-            {
-                Some(binding) => binding,
-                None => {
+            let cands =
+                self.env
+                    .effect_candidates_in_scope(key_path, func.scope(), callee_assumptions);
+            let provided = match cands.as_slice() {
+                [] => {
                     let diag = BodyDiag::MissingEffect {
+                        primary: call_span.clone().into(),
+                        func: callable.func_def,
+                        key: key_path,
+                    };
+                    self.push_diag(diag);
+                    continue;
+                }
+                [one] => *one,
+                _ => {
+                    let diag = BodyDiag::AmbiguousEffect {
                         primary: call_span.clone().into(),
                         func: callable.func_def,
                         key: key_path,

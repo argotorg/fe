@@ -243,6 +243,12 @@ pub enum BodyDiag<'db> {
         key: PathId<'db>,
     },
 
+    AmbiguousEffect {
+        primary: DynLazySpan<'db>,
+        func: FuncDef<'db>,
+        key: PathId<'db>,
+    },
+
     EffectMutabilityMismatch {
         primary: DynLazySpan<'db>,
         func: FuncDef<'db>,
@@ -474,6 +480,7 @@ impl<'db> BodyDiag<'db> {
             Self::EffectMutabilityMismatch { .. } => 37,
             Self::EffectTypeMismatch { .. } => 38,
             Self::EffectTraitUnsatisfied { .. } => 39,
+            Self::AmbiguousEffect { .. } => 40,
             Self::ReturnedTypeMismatch { .. } => 13,
             Self::TypeMustBeKnown(..) => 14,
             Self::AccessedFieldNotFound { .. } => 15,

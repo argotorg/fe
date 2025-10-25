@@ -9,9 +9,11 @@ use hir::{
 use num_bigint::BigUint;
 use rustc_hash::FxHashMap;
 use salsa::Update;
+use smallvec1::SmallVec;
 use thin_vec::ThinVec;
 
 use super::{Callable, TypedBody};
+use crate::name_resolution::{PathRes, resolve_path};
 use crate::{
     HirAnalysisDb,
     ty::{
@@ -32,7 +34,6 @@ use crate::{
         unify::UnificationTable,
     },
 };
-use crate::name_resolution::{PathRes, resolve_path};
 
 pub(super) struct TyCheckEnv<'db> {
     db: &'db dyn HirAnalysisDb,
@@ -162,7 +163,9 @@ impl<'db> TyCheckEnv<'db> {
                 ty: provided_ty,
                 is_mut: effect.is_mut,
             };
-            if let Some(key) = self.effect_key_for_path_in_scope(key_path, func.scope(), assumptions) {
+            if let Some(key) =
+                self.effect_key_for_path_in_scope(key_path, func.scope(), assumptions)
+            {
                 self.effect_env.insert(key, provided);
             }
 
@@ -213,7 +216,9 @@ impl<'db> TyCheckEnv<'db> {
         }
     }
 
-    pub(super) fn assumptions(&self) -> PredicateListId<'db> { self.assumptions }
+    pub(super) fn assumptions(&self) -> PredicateListId<'db> {
+        self.assumptions
+    }
 
     pub(super) fn body(&self) -> Body<'db> {
         self.body
@@ -266,7 +271,11 @@ impl<'db> TyCheckEnv<'db> {
                 PathRes::Ty(resolved) | PathRes::TyAlias(_, resolved) => {
                     let provided_base = binding.ty.base_ty(self.db).as_scope(self.db);
                     let resolved_base = resolved.base_ty(self.db).as_scope(self.db);
-                    let ty = if provided_base == resolved_base { binding.ty } else { resolved };
+                    let ty = if provided_base == resolved_base {
+                        binding.ty
+                    } else {
+                        resolved
+                    };
                     Some(EffectKey::Type(ty))
                 }
                 PathRes::Trait(trait_inst) => Some(EffectKey::Trait(trait_inst)),
@@ -278,30 +287,33 @@ impl<'db> TyCheckEnv<'db> {
         }
     }
 
-    pub(super) fn effect_binding_in_scope(
+    pub(super) fn effect_candidates_in_scope(
         &self,
         key_path: PathId<'db>,
         scope: ScopeId<'db>,
         assumptions: PredicateListId<'db>,
-    ) -> Option<ProvidedEffect<'db>> {
-        let path_res = resolve_path(self.db, key_path, scope, assumptions, false).ok()?;
+    ) -> SmallVec<[ProvidedEffect<'db>; 2]> {
+        let mut out = SmallVec::new();
+        let Some(path_res) = resolve_path(self.db, key_path, scope, assumptions, false).ok() else {
+            return out;
+        };
 
-        // Try exact match first without re-resolving keys.
         match path_res {
             PathRes::Ty(ty) | PathRes::TyAlias(_, ty) => {
                 if let Some(b) = self.effect_env.lookup(EffectKey::Type(ty)) {
-                    return Some(b);
+                    out.push(b);
+                    return out;
                 }
             }
             PathRes::Trait(tr) => {
                 if let Some(b) = self.effect_env.lookup(EffectKey::Trait(tr)) {
-                    return Some(b);
+                    out.push(b);
+                    return out;
                 }
             }
             _ => {}
         }
 
-        // Fallback: base-type/trait-definition match across all frames.
         for frame in self.effect_env.frames.iter().rev() {
             for (effect_key, provided) in &frame.bindings {
                 match (&path_res, effect_key) {
@@ -309,19 +321,20 @@ impl<'db> TyCheckEnv<'db> {
                         if req.base_ty(self.db).as_scope(self.db)
                             == got.base_ty(self.db).as_scope(self.db)
                         {
-                            return Some(*provided);
+                            out.push(*provided);
                         }
                     }
                     (PathRes::Trait(req), EffectKey::Trait(got)) => {
                         if req.def(self.db) == got.def(self.db) {
-                            return Some(*provided);
+                            out.push(*provided);
                         }
                     }
                     _ => {}
                 }
             }
         }
-        None
+
+        out
     }
 
     pub(super) fn enter_scope(&mut self, block: ExprId) {
@@ -709,7 +722,9 @@ impl<'db> EffectEnv<'db> {
     }
 
     pub fn pop_frame(&mut self) {
-        if self.frames.len() > 1 { self.frames.pop(); }
+        if self.frames.len() > 1 {
+            self.frames.pop();
+        }
     }
 
     pub fn insert(&mut self, key: EffectKey<'db>, binding: ProvidedEffect<'db>) {

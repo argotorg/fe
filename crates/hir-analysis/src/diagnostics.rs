@@ -1552,6 +1552,26 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                 }
             }
 
+            Self::AmbiguousEffect { primary, func, key } => {
+                let func_name = func.name(db).data(db).to_string();
+                let key_str = key.pretty_print(db);
+
+                CompleteDiagnostic {
+                    severity: Severity::Error,
+                    message: "multiple effect candidates found".to_string(),
+                    sub_diagnostics: vec![SubDiagnostic {
+                        style: LabelStyle::Primary,
+                        message: format!(
+                            "effect `{}` is ambiguous when calling `{}`",
+                            key_str, func_name
+                        ),
+                        span: primary.resolve(db),
+                    }],
+                    notes: vec![],
+                    error_code,
+                }
+            }
+
             Self::EffectMutabilityMismatch {
                 primary,
                 func,
