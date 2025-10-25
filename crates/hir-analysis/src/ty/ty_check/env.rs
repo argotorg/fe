@@ -129,7 +129,7 @@ impl<'db> TyCheckEnv<'db> {
             };
 
             // Create an effect type param E and try to interpret key as a trait bound on E
-            let ident = effect.name.to_opt().unwrap_or_else(|| {
+            let ident = effect.name.unwrap_or_else(|| {
                 key_path
                     .ident(self.db)
                     .to_opt()
@@ -157,18 +157,16 @@ impl<'db> TyCheckEnv<'db> {
                 origin: EffectOrigin::Param {
                     func,
                     index: idx,
-                    name: effect.name.to_opt(),
+                    name: effect.name,
                 },
                 ty: provided_ty,
                 is_mut: effect.is_mut,
             };
-            if let Some(key) =
-                self.effect_key_for_path_in_scope(key_path, func.scope(), assumptions)
-            {
+            if let Some(key) = self.effect_key_for_path_in_scope(key_path, func.scope(), assumptions) {
                 self.effect_env.insert(key, provided);
             }
 
-            if let Some(ident) = effect.name.to_opt() {
+            if let Some(ident) = effect.name {
                 let binding = LocalBinding::EffectParam {
                     ident,
                     key_path,
@@ -259,42 +257,24 @@ impl<'db> TyCheckEnv<'db> {
         key_path: PathId<'db>,
         binding: ProvidedEffect<'db>,
     ) {
-        // First, try to create a key from the provided type itself, which includes
-        // full type arguments. This handles cases like `with (Storage = st)` where
-        // `st: Storage<u8>` - we want the key to be `Storage<u8>`, not just `Storage`.
-        let key = self.effect_key_from_provided_ty(key_path, binding.ty)
-            .or_else(|| self.effect_key_for_path_in_scope(key_path, self.scope(), self.assumptions()));
-
-        if let Some(key) = key {
-            self.effect_env.insert(key, binding);
-        }
-    }
-
-    /// Try to create an effect key from the provided value's type.
-    /// This ensures that `with (Storage = st)` where `st: Storage<u8>` creates a key for `Storage<u8>`.
-    fn effect_key_from_provided_ty(
-        &self,
-        key_path: PathId<'db>,
-        provided_ty: TyId<'db>,
-    ) -> Option<EffectKey<'db>> {
-        // Resolve the key_path to see what kind of thing it is
-        let path_res = resolve_path(self.db, key_path, self.scope(), self.assumptions(), false).ok()?;
-
-        match path_res {
-            PathRes::Ty(resolved_ty) | PathRes::TyAlias(_, resolved_ty) => {
-                // Check if the provided type's base matches the resolved type's base
-                if provided_ty.base_ty(self.db).as_scope(self.db) == resolved_ty.base_ty(self.db).as_scope(self.db) {
-                    // Use the provided type (which includes generic arguments)
-                    Some(EffectKey::Type(provided_ty))
-                } else {
-                    None
+        // Prefer a key derived from the provided type (preserves generic args)
+        // but fall back to the resolved path if bases don't match.
+        if let Ok(path_res) =
+            resolve_path(self.db, key_path, self.scope(), self.assumptions(), false)
+        {
+            let key = match path_res {
+                PathRes::Ty(resolved) | PathRes::TyAlias(_, resolved) => {
+                    let provided_base = binding.ty.base_ty(self.db).as_scope(self.db);
+                    let resolved_base = resolved.base_ty(self.db).as_scope(self.db);
+                    let ty = if provided_base == resolved_base { binding.ty } else { resolved };
+                    Some(EffectKey::Type(ty))
                 }
+                PathRes::Trait(trait_inst) => Some(EffectKey::Trait(trait_inst)),
+                _ => None,
+            };
+            if let Some(key) = key {
+                self.effect_env.insert(key, binding);
             }
-            PathRes::Trait(_) => {
-                // For traits, fall back to path-based resolution
-                None
-            }
-            _ => None,
         }
     }
 
@@ -304,60 +284,44 @@ impl<'db> TyCheckEnv<'db> {
         scope: ScopeId<'db>,
         assumptions: PredicateListId<'db>,
     ) -> Option<ProvidedEffect<'db>> {
-        // First try exact match
-        if let Some(key) = self.effect_key_for_path_in_scope(key_path, scope, assumptions) {
-            if let Some(binding) = self.effect_env.lookup(key) {
-                return Some(binding);
-            }
-        }
-
-        // If no exact match, try unification-based lookup
-        // This handles cases like: provided `Storage<u8>`, required `Storage<T>`
-        self.find_unifiable_effect(key_path, scope, assumptions)
-    }
-
-    /// Find an effect binding that can unify with the required type.
-    /// Returns None if no candidates found, or Some if exactly one candidate found.
-    /// If multiple candidates exist, returns the first one (we'll handle ambiguity later).
-    fn find_unifiable_effect(
-        &self,
-        key_path: PathId<'db>,
-        scope: ScopeId<'db>,
-        assumptions: PredicateListId<'db>,
-    ) -> Option<ProvidedEffect<'db>> {
-        // Resolve the required type/trait
         let path_res = resolve_path(self.db, key_path, scope, assumptions, false).ok()?;
 
-        let mut candidates = Vec::new();
+        // Try exact match first without re-resolving keys.
+        match path_res {
+            PathRes::Ty(ty) | PathRes::TyAlias(_, ty) => {
+                if let Some(b) = self.effect_env.lookup(EffectKey::Type(ty)) {
+                    return Some(b);
+                }
+            }
+            PathRes::Trait(tr) => {
+                if let Some(b) = self.effect_env.lookup(EffectKey::Trait(tr)) {
+                    return Some(b);
+                }
+            }
+            _ => {}
+        }
 
-        // Search through all available effects in all frames
+        // Fallback: base-type/trait-definition match across all frames.
         for frame in self.effect_env.frames.iter().rev() {
             for (effect_key, provided) in &frame.bindings {
                 match (&path_res, effect_key) {
-                    // Type vs Type: check if base types match
-                    (PathRes::Ty(required_ty) | PathRes::TyAlias(_, required_ty), EffectKey::Type(provided_ty)) => {
-                        // Check if the base types are the same (e.g., both are Storage)
-                        let required_base = required_ty.base_ty(self.db);
-                        let provided_base = provided_ty.base_ty(self.db);
-
-                        if required_base.as_scope(self.db) == provided_base.as_scope(self.db) {
-                            candidates.push(*provided);
+                    (PathRes::Ty(req) | PathRes::TyAlias(_, req), EffectKey::Type(got)) => {
+                        if req.base_ty(self.db).as_scope(self.db)
+                            == got.base_ty(self.db).as_scope(self.db)
+                        {
+                            return Some(*provided);
                         }
                     }
-                    // Trait vs Trait: check if trait definitions match
-                    (PathRes::Trait(required_trait), EffectKey::Trait(provided_trait)) => {
-                        if required_trait.def(self.db) == provided_trait.def(self.db) {
-                            candidates.push(*provided);
+                    (PathRes::Trait(req), EffectKey::Trait(got)) => {
+                        if req.def(self.db) == got.def(self.db) {
+                            return Some(*provided);
                         }
                     }
                     _ => {}
                 }
             }
         }
-
-        // For now, return the first candidate if exactly one, or first if multiple
-        // TODO: Handle ambiguity diagnostics
-        candidates.first().copied()
+        None
     }
 
     pub(super) fn enter_scope(&mut self, block: ExprId) {
@@ -745,10 +709,7 @@ impl<'db> EffectEnv<'db> {
     }
 
     pub fn pop_frame(&mut self) {
-        if self.frames.len() == 1 {
-            return;
-        }
-        self.frames.pop();
+        if self.frames.len() > 1 { self.frames.pop(); }
     }
 
     pub fn insert(&mut self, key: EffectKey<'db>, binding: ProvidedEffect<'db>) {

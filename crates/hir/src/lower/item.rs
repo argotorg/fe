@@ -132,10 +132,8 @@ fn lower_effects<'db>(ctxt: &mut FileLowerCtxt<'db>, ast: &ast::Func) -> EffectP
     if let Some(uses) = ast.uses_clause() {
         if let Some(list) = uses.param_list() {
             for p in list {
-                let name = p
-                    .name()
-                    .map(|n| IdentId::lower_token(ctxt, n.syntax()))
-                    .into();
+                let name = p.name().map(|n| IdentId::lower_token(ctxt, n.syntax()));
+
                 let is_mut = p.mut_token().is_some();
                 let key_path = p.path().map(|path| PathId::lower_ast(ctxt, path)).into();
 
@@ -146,10 +144,7 @@ fn lower_effects<'db>(ctxt: &mut FileLowerCtxt<'db>, ast: &ast::Func) -> EffectP
                 });
             }
         } else if let Some(p) = uses.param() {
-            let name = p
-                .name()
-                .map(|n| IdentId::lower_token(ctxt, n.syntax()))
-                .into();
+            let name = p.name().map(|n| IdentId::lower_token(ctxt, n.syntax()));
             let is_mut = p.mut_token().is_some();
             let key_path = p.path().map(|path| PathId::lower_ast(ctxt, path)).into();
 

@@ -9,7 +9,7 @@ pub struct EffectParamListId<'db> {
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct EffectParam<'db> {
-    pub name: Partial<IdentId<'db>>,    // None for unlabeled effects
-    pub key_path: Partial<PathId<'db>>, // Unresolved path; resolve type/trait in analysis
+    pub name: Option<IdentId<'db>>,
+    pub key_path: Partial<PathId<'db>>,
     pub is_mut: bool,
 }
