@@ -184,17 +184,13 @@ impl super::Parse for ItemModifierScope {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 enum ModifierKind {
+    #[default]
     None,
     Pub,
     Unsafe,
     PubAndUnsafe,
-}
-impl Default for ModifierKind {
-    fn default() -> Self {
-        Self::None
-    }
 }
 impl ModifierKind {
     fn union(&self, kind: SyntaxKind) -> ModifierKind {

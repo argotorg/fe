@@ -172,9 +172,10 @@ pub enum LitKind<'db> {
 /// This type is clearly distinguished from `Option<T>`. The
 /// `Option<T>` type is used to hold syntactically valid optional nodes, while
 /// `Partial<T>` means that a syntactically required element may be missing.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub enum Partial<T> {
     Present(T),
+    #[default]
     Absent,
 }
 unsafe impl<T> Update for Partial<T>
@@ -234,12 +235,6 @@ where
             Self::Present(a) => a == other,
             _ => false,
         }
-    }
-}
-
-impl<T> Default for Partial<T> {
-    fn default() -> Self {
-        Self::Absent
     }
 }
 

@@ -16,17 +16,13 @@ define_scope! {
     Func
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Default)]
 pub(crate) enum FuncDefScope {
+    #[default]
     Normal,
     Impl,
     TraitDef,
     Extern,
-}
-impl Default for FuncDefScope {
-    fn default() -> Self {
-        Self::Normal
-    }
 }
 
 impl super::Parse for FuncScope {
