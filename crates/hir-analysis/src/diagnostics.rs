@@ -1529,6 +1529,171 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                 error_code,
             },
 
+            Self::MissingEffect { primary, func, key } => {
+                let func_name = func.name(db).data(db).to_string();
+                let key_str = key.pretty_print(db);
+
+                CompleteDiagnostic {
+                    severity: Severity::Error,
+                    message: format!("missing effect `{}` required by `{}`", key_str, func_name),
+                    sub_diagnostics: vec![SubDiagnostic {
+                        style: LabelStyle::Primary,
+                        message: format!(
+                            "`{}` requires effect `{}` to be in scope",
+                            func_name, key_str
+                        ),
+                        span: primary.resolve(db),
+                    }],
+                    notes: vec![format!(
+                        "provide it with `with ({} = value)` or require it via `uses {}`",
+                        key_str, key_str
+                    )],
+                    error_code,
+                }
+            }
+
+            Self::AmbiguousEffect { primary, func, key } => {
+                let func_name = func.name(db).data(db).to_string();
+                let key_str = key.pretty_print(db);
+
+                CompleteDiagnostic {
+                    severity: Severity::Error,
+                    message: "multiple effect candidates found".to_string(),
+                    sub_diagnostics: vec![SubDiagnostic {
+                        style: LabelStyle::Primary,
+                        message: format!(
+                            "effect `{}` is ambiguous when calling `{}`",
+                            key_str, func_name
+                        ),
+                        span: primary.resolve(db),
+                    }],
+                    notes: vec![],
+                    error_code,
+                }
+            }
+
+            Self::EffectMutabilityMismatch {
+                primary,
+                func,
+                key,
+                provided_span,
+            } => {
+                let func_name = func.name(db).data(db).to_string();
+                let key_str = key.pretty_print(db);
+
+                let mut sub_diagnostics = vec![SubDiagnostic {
+                    style: LabelStyle::Primary,
+                    message: format!("`{}` requires `mut {}`", func_name, key_str),
+                    span: primary.resolve(db),
+                }];
+
+                if let Some(span) = provided_span.as_ref().map(|s| s.resolve(db)) {
+                    sub_diagnostics.push(SubDiagnostic {
+                        style: LabelStyle::Secondary,
+                        message: format!("effect `{}` is provided here", key_str),
+                        span,
+                    });
+                }
+
+                CompleteDiagnostic {
+                    severity: Severity::Error,
+                    message: format!(
+                        "effect `{}` must be mutable when calling `{}`",
+                        key_str, func_name
+                    ),
+                    sub_diagnostics,
+                    notes: vec![
+                        "use a mutable binding or pass a mutable reference in the `with` block"
+                            .to_string(),
+                    ],
+                    error_code,
+                }
+            }
+
+            Self::EffectTypeMismatch {
+                primary,
+                func,
+                key,
+                expected,
+                given,
+                provided_span,
+            } => {
+                let func_name = func.name(db).data(db).to_string();
+                let key_str = key.pretty_print(db);
+                let expected_ty = expected.pretty_print(db).to_string();
+                let given_ty = given.pretty_print(db).to_string();
+
+                let mut sub_diagnostics = vec![SubDiagnostic {
+                    style: LabelStyle::Primary,
+                    message: format!(
+                        "expected `{}` for effect `{}`, found `{}`",
+                        expected_ty, key_str, given_ty
+                    ),
+                    span: primary.resolve(db),
+                }];
+
+                if let Some(span) = provided_span.as_ref().map(|s| s.resolve(db)) {
+                    sub_diagnostics.push(SubDiagnostic {
+                        style: LabelStyle::Secondary,
+                        message: format!("effect `{}` is provided here", key_str),
+                        span,
+                    });
+                }
+
+                CompleteDiagnostic {
+                    severity: Severity::Error,
+                    message: format!(
+                        "effect `{}` provided to `{}` has type `{}`, but `{}` is required",
+                        key_str, func_name, given_ty, expected_ty
+                    ),
+                    sub_diagnostics,
+                    notes: vec![],
+                    error_code,
+                }
+            }
+
+            Self::EffectTraitUnsatisfied {
+                primary,
+                func,
+                key,
+                trait_req,
+                given,
+                provided_span,
+            } => {
+                let func_name = func.name(db).data(db).to_string();
+                let key_str = key.pretty_print(db);
+                let trait_str = trait_req.pretty_print(db, false);
+                let given_ty = given.pretty_print(db).to_string();
+
+                let mut sub_diagnostics = vec![SubDiagnostic {
+                    style: LabelStyle::Primary,
+                    message: format!(
+                        "`{}` must implement `{}` for effect `{}`",
+                        given_ty, trait_str, key_str
+                    ),
+                    span: primary.resolve(db),
+                }];
+
+                if let Some(span) = provided_span.as_ref().map(|s| s.resolve(db)) {
+                    sub_diagnostics.push(SubDiagnostic {
+                        style: LabelStyle::Secondary,
+                        message: format!("effect `{}` is provided here", key_str),
+                        span,
+                    });
+                }
+
+                CompleteDiagnostic {
+                    severity: Severity::Error,
+                    message: format!(
+                        "effect `{}` supplied to `{}` does not satisfy `{}`",
+                        key_str, func_name, trait_str
+                    ),
+                    sub_diagnostics,
+                    notes: vec![],
+                    error_code,
+                }
+            }
+
             Self::ReturnedTypeMismatch {
                 primary,
                 actual,

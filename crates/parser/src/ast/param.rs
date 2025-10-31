@@ -278,6 +278,96 @@ impl WherePredicate {
     }
 }
 
+// ===== Uses clause AST nodes =====
+
+ast_node! {
+    /// `uses Ctx` or `uses (Ctx, mut Storage, c: Ctx)`
+    pub struct UsesClause,
+    SK::UsesClause,
+}
+impl UsesClause {
+    /// The `uses` keyword token.
+    pub fn uses_kw(&self) -> Option<SyntaxToken> {
+        support::token(self.syntax(), SK::UsesKw)
+    }
+
+    /// The parameter list form: `uses ( .. )`.
+    pub fn param_list(&self) -> Option<UsesParamList> {
+        support::child(self.syntax())
+    }
+
+    /// The single-parameter form: `uses Type` or `uses mut Type`.
+    pub fn param(&self) -> Option<UsesParam> {
+        support::child(self.syntax())
+    }
+}
+
+ast_node! {
+    /// A `uses` parameter list.
+    pub struct UsesParamList,
+    SK::UsesParamList,
+    IntoIterator<Item=UsesParam>,
+}
+
+ast_node! {
+    /// A single `uses` parameter.
+    /// Supports: `Type`, `mut Type`, `name: Type`, `mut name: Type`.
+    pub struct UsesParam,
+    SK::UsesParam,
+}
+impl UsesParam {
+    /// Returns the `mut` keyword if present.
+    pub fn mut_token(&self) -> Option<SyntaxToken> {
+        support::token(self.syntax(), SK::MutKw)
+    }
+
+    /// Returns the name if present (identifier or underscore).
+    pub fn name(&self) -> Option<UsesParamName> {
+        let mut param_names = self.syntax().children_with_tokens().filter_map(|child| {
+            if let rowan::NodeOrToken::Token(token) = child {
+                UsesParamName::from_token(token)
+            } else {
+                None
+            }
+        });
+
+        let first = param_names.next();
+        match param_names.next() {
+            Some(second) => Some(second),
+            None => first,
+        }
+    }
+
+    /// The path key of the uses parameter.
+    pub fn path(&self) -> Option<super::Path> {
+        support::child(self.syntax())
+    }
+}
+
+pub enum UsesParamName {
+    /// `name` in `name: Type`
+    Ident(SyntaxToken),
+    /// `_` in `_ : Type`.
+    Underscore(SyntaxToken),
+}
+impl UsesParamName {
+    pub fn syntax(&self) -> SyntaxToken {
+        match self {
+            UsesParamName::Ident(token) => token,
+            UsesParamName::Underscore(token) => token,
+        }
+        .clone()
+    }
+
+    fn from_token(token: SyntaxToken) -> Option<Self> {
+        match token.kind() {
+            SK::Ident => Some(UsesParamName::Ident(token)),
+            SK::Underscore => Some(UsesParamName::Underscore(token)),
+            _ => None,
+        }
+    }
+}
+
 /// A generic argument kind.
 /// `Type` is either `Type` or `T: Trait`.
 /// `Const` is either `{expr}` or `lit`.
@@ -467,6 +557,7 @@ mod tests {
         lexer::Lexer,
         parser::{
             Parser,
+            func::FuncScope,
             param::{GenericArgListScope, GenericParamListScope, WhereClauseScope},
         },
     };
@@ -656,5 +747,74 @@ mod tests {
         };
         assert_eq!(assoc_arg.name().unwrap().text(), "Item");
         assert!(assoc_arg.ty().is_some());
+    }
+
+    fn parse_func(source: &str) -> crate::ast::Func {
+        let lexer = Lexer::new(source);
+        let mut parser = Parser::new(lexer);
+        parser.parse(FuncScope::default()).unwrap();
+        crate::ast::Func::cast(parser.finish_to_node().0).unwrap()
+    }
+
+    #[test]
+    #[wasm_bindgen_test]
+    fn uses_clause_single_type() {
+        let f = parse_func("fn f() uses Ctx {}");
+        let uc = f.uses_clause().expect("missing uses clause");
+        assert!(uc.param_list().is_none());
+        let p = uc.param().expect("expected single uses param");
+        assert!(p.mut_token().is_none());
+        let path = p.path().expect("missing path key");
+        let seg = path.segments().next().unwrap();
+        assert_eq!(seg.ident().unwrap().text(), "Ctx");
+    }
+
+    #[test]
+    #[wasm_bindgen_test]
+    fn uses_clause_single_mut_type() {
+        let f = parse_func("fn f() uses mut Ctx {}");
+        let uc = f.uses_clause().expect("missing uses clause");
+        let p = uc.param().expect("expected single uses param");
+        assert!(p.mut_token().is_some());
+        let path = p.path().expect("missing path key");
+        let seg = path.segments().next().unwrap();
+        assert_eq!(seg.ident().unwrap().text(), "Ctx");
+    }
+
+    #[test]
+    #[wasm_bindgen_test]
+    fn uses_clause_param_list_variants() {
+        let f = parse_func("fn f() uses (Ctx, mut Storage, c: Ctx, mut f: Foo) {}");
+        let uc = f.uses_clause().expect("missing uses clause");
+        let list = uc.param_list().expect("expected param list");
+        let params: Vec<_> = list.iter().collect();
+        assert_eq!(params.len(), 4);
+
+        // 0: Ctx
+        assert!(params[0].mut_token().is_none());
+        let path0 = params[0].path().expect("missing path");
+        let seg0 = path0.segments().next().unwrap();
+        assert_eq!(seg0.ident().unwrap().text(), "Ctx");
+
+        // 1: mut Storage
+        assert!(params[1].mut_token().is_some());
+        let path1 = params[1].path().expect("missing path");
+        let seg1 = path1.segments().next().unwrap();
+        assert_eq!(seg1.ident().unwrap().text(), "Storage");
+
+        // 2: c: Ctx
+        let n = params[2].name().expect("missing name");
+        assert_eq!(n.syntax().text(), "c");
+        let path2 = params[2].path().expect("missing path");
+        let seg2 = path2.segments().next().unwrap();
+        assert_eq!(seg2.ident().unwrap().text(), "Ctx");
+
+        // 3: mut f: Foo
+        assert!(params[3].mut_token().is_some());
+        let n = params[3].name().expect("missing name");
+        assert_eq!(n.syntax().text(), "f");
+        let path3 = params[3].path().expect("missing path");
+        let seg3 = path3.segments().next().unwrap();
+        assert_eq!(seg3.ident().unwrap().text(), "Foo");
     }
 }

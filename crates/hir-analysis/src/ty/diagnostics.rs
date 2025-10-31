@@ -237,6 +237,43 @@ pub enum BodyDiag<'db> {
 
     UndefinedVariable(DynLazySpan<'db>, IdentId<'db>),
 
+    MissingEffect {
+        primary: DynLazySpan<'db>,
+        func: FuncDef<'db>,
+        key: PathId<'db>,
+    },
+
+    AmbiguousEffect {
+        primary: DynLazySpan<'db>,
+        func: FuncDef<'db>,
+        key: PathId<'db>,
+    },
+
+    EffectMutabilityMismatch {
+        primary: DynLazySpan<'db>,
+        func: FuncDef<'db>,
+        key: PathId<'db>,
+        provided_span: Option<DynLazySpan<'db>>,
+    },
+
+    EffectTypeMismatch {
+        primary: DynLazySpan<'db>,
+        func: FuncDef<'db>,
+        key: PathId<'db>,
+        expected: TyId<'db>,
+        given: TyId<'db>,
+        provided_span: Option<DynLazySpan<'db>>,
+    },
+
+    EffectTraitUnsatisfied {
+        primary: DynLazySpan<'db>,
+        func: FuncDef<'db>,
+        key: PathId<'db>,
+        trait_req: TraitInstId<'db>,
+        given: TyId<'db>,
+        provided_span: Option<DynLazySpan<'db>>,
+    },
+
     ReturnedTypeMismatch {
         primary: DynLazySpan<'db>,
         actual: TyId<'db>,
@@ -439,6 +476,11 @@ impl<'db> BodyDiag<'db> {
             Self::ExplicitLabelExpectedInRecord { .. } => 10,
             Self::MissingRecordFields { .. } => 11,
             Self::UndefinedVariable(..) => 12,
+            Self::MissingEffect { .. } => 36,
+            Self::EffectMutabilityMismatch { .. } => 37,
+            Self::EffectTypeMismatch { .. } => 38,
+            Self::EffectTraitUnsatisfied { .. } => 39,
+            Self::AmbiguousEffect { .. } => 40,
             Self::ReturnedTypeMismatch { .. } => 13,
             Self::TypeMustBeKnown(..) => 14,
             Self::AccessedFieldNotFound { .. } => 15,

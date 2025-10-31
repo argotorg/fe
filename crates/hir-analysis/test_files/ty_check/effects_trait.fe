@@ -1,0 +1,20 @@
+pub trait Logger {
+    fn log(mut self)
+}
+
+pub struct Console {}
+impl Logger for Console {
+    fn log(mut self) {}
+}
+
+pub fn log_once()
+  uses (mut logger: Logger)
+{
+    logger.log()
+}
+
+pub fn provide_logger() {
+    with (Logger = Console {}) {
+        log_once()
+    }
+}

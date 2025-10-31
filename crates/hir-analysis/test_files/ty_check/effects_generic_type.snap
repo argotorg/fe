@@ -1,0 +1,229 @@
+---
+source: crates/hir-analysis/tests/ty_check.rs
+expression: res
+input_file: test_files/ty_check/effects_generic_type.fe
+---
+note: 
+   ┌─ effects_generic_type.fe:9:1
+   │  
+ 9 │ ╭ {
+10 │ │     let _ = ctx
+11 │ │     st.value = amount
+12 │ │ }
+   │ ╰─^ ()
+
+note: 
+   ┌─ effects_generic_type.fe:10:9
+   │
+10 │     let _ = ctx
+   │         ^ Ctx
+
+note: 
+   ┌─ effects_generic_type.fe:10:13
+   │
+10 │     let _ = ctx
+   │             ^^^ Ctx
+
+note: 
+   ┌─ effects_generic_type.fe:11:5
+   │
+11 │     st.value = amount
+   │     ^^ Storage<T>
+
+note: 
+   ┌─ effects_generic_type.fe:11:5
+   │
+11 │     st.value = amount
+   │     ^^^^^^^^ T
+
+note: 
+   ┌─ effects_generic_type.fe:11:5
+   │
+11 │     st.value = amount
+   │     ^^^^^^^^^^^^^^^^^ ()
+
+note: 
+   ┌─ effects_generic_type.fe:11:16
+   │
+11 │     st.value = amount
+   │                ^^^^^^ T
+
+note: 
+   ┌─ effects_generic_type.fe:14:28
+   │  
+14 │   pub fn caller_ok_generic() {
+   │ ╭────────────────────────────^
+15 │ │     let ctx = Ctx {}
+16 │ │     let mut st = Storage<u8> { value: 0 }
+17 │ │     with (Ctx = ctx, Storage = st) {
+18 │ │         put(amount: 5)
+19 │ │     }
+20 │ │ }
+   │ ╰─^ ()
+
+note: 
+   ┌─ effects_generic_type.fe:15:9
+   │
+15 │     let ctx = Ctx {}
+   │         ^^^ Ctx
+
+note: 
+   ┌─ effects_generic_type.fe:15:15
+   │
+15 │     let ctx = Ctx {}
+   │               ^^^^^^ Ctx
+
+note: 
+   ┌─ effects_generic_type.fe:16:9
+   │
+16 │     let mut st = Storage<u8> { value: 0 }
+   │         ^^^^^^ Storage<u8>
+
+note: 
+   ┌─ effects_generic_type.fe:16:18
+   │
+16 │     let mut st = Storage<u8> { value: 0 }
+   │                  ^^^^^^^^^^^^^^^^^^^^^^^^ Storage<u8>
+
+note: 
+   ┌─ effects_generic_type.fe:16:39
+   │
+16 │     let mut st = Storage<u8> { value: 0 }
+   │                                       ^ u8
+
+note: 
+   ┌─ effects_generic_type.fe:17:5
+   │  
+17 │ ╭     with (Ctx = ctx, Storage = st) {
+18 │ │         put(amount: 5)
+19 │ │     }
+   │ ╰─────^ ()
+
+note: 
+   ┌─ effects_generic_type.fe:17:17
+   │
+17 │     with (Ctx = ctx, Storage = st) {
+   │                 ^^^ Ctx
+
+note: 
+   ┌─ effects_generic_type.fe:17:32
+   │
+17 │     with (Ctx = ctx, Storage = st) {
+   │                                ^^ Storage<u8>
+
+note: 
+   ┌─ effects_generic_type.fe:17:36
+   │  
+17 │       with (Ctx = ctx, Storage = st) {
+   │ ╭────────────────────────────────────^
+18 │ │         put(amount: 5)
+19 │ │     }
+   │ ╰─────^ ()
+
+note: 
+   ┌─ effects_generic_type.fe:18:9
+   │
+18 │         put(amount: 5)
+   │         ^^^ fn put<u8>
+
+note: 
+   ┌─ effects_generic_type.fe:18:9
+   │
+18 │         put(amount: 5)
+   │         ^^^^^^^^^^^^^^ ()
+
+note: 
+   ┌─ effects_generic_type.fe:18:21
+   │
+18 │         put(amount: 5)
+   │                     ^ u8
+
+note: 
+   ┌─ effects_generic_type.fe:22:29
+   │  
+22 │   pub fn caller_ok_explicit() {
+   │ ╭─────────────────────────────^
+23 │ │     let ctx = Ctx {}
+24 │ │     let mut st = Storage<u8> { value: 0 }
+25 │ │     with (Ctx = ctx, Storage<u8> = st) {
+26 │ │         put(amount: 5)
+27 │ │     }
+28 │ │ }
+   │ ╰─^ ()
+
+note: 
+   ┌─ effects_generic_type.fe:23:9
+   │
+23 │     let ctx = Ctx {}
+   │         ^^^ Ctx
+
+note: 
+   ┌─ effects_generic_type.fe:23:15
+   │
+23 │     let ctx = Ctx {}
+   │               ^^^^^^ Ctx
+
+note: 
+   ┌─ effects_generic_type.fe:24:9
+   │
+24 │     let mut st = Storage<u8> { value: 0 }
+   │         ^^^^^^ Storage<u8>
+
+note: 
+   ┌─ effects_generic_type.fe:24:18
+   │
+24 │     let mut st = Storage<u8> { value: 0 }
+   │                  ^^^^^^^^^^^^^^^^^^^^^^^^ Storage<u8>
+
+note: 
+   ┌─ effects_generic_type.fe:24:39
+   │
+24 │     let mut st = Storage<u8> { value: 0 }
+   │                                       ^ u8
+
+note: 
+   ┌─ effects_generic_type.fe:25:5
+   │  
+25 │ ╭     with (Ctx = ctx, Storage<u8> = st) {
+26 │ │         put(amount: 5)
+27 │ │     }
+   │ ╰─────^ ()
+
+note: 
+   ┌─ effects_generic_type.fe:25:17
+   │
+25 │     with (Ctx = ctx, Storage<u8> = st) {
+   │                 ^^^ Ctx
+
+note: 
+   ┌─ effects_generic_type.fe:25:36
+   │
+25 │     with (Ctx = ctx, Storage<u8> = st) {
+   │                                    ^^ Storage<u8>
+
+note: 
+   ┌─ effects_generic_type.fe:25:40
+   │  
+25 │       with (Ctx = ctx, Storage<u8> = st) {
+   │ ╭────────────────────────────────────────^
+26 │ │         put(amount: 5)
+27 │ │     }
+   │ ╰─────^ ()
+
+note: 
+   ┌─ effects_generic_type.fe:26:9
+   │
+26 │         put(amount: 5)
+   │         ^^^ fn put<u8>
+
+note: 
+   ┌─ effects_generic_type.fe:26:9
+   │
+26 │         put(amount: 5)
+   │         ^^^^^^^^^^^^^^ ()
+
+note: 
+   ┌─ effects_generic_type.fe:26:21
+   │
+26 │         put(amount: 5)
+   │                     ^ u8

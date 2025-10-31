@@ -3,16 +3,15 @@ source: crates/uitest/tests/parser.rs
 expression: diags
 input_file: crates/uitest/fixtures/parser/fn_missing_body.fe
 ---
-error[1-0001]: expected `{` or `where`
+error[1-0001]: expected `{`, `where` or `uses`
   ┌─ fn_missing_body.fe:1:28
   │
 1 │ fn foo(x: u8, y: u64) -> u8
-  │                            ^ expected `{` or `where`
+  │                            ^ expected `{`, `where` or `uses`
 
 error[1-0001]: unexpected syntax while parsing function definition
   ┌─ fn_missing_body.fe:3:13
   │
 3 │ fn bar<T>() asdf
   │             ^^^^ unexpected
-
 

@@ -1157,6 +1157,13 @@ pub fn walk_expr<'db, V>(
             visit_node_in_body!(visitor, ctxt, left_expr_id, expr);
             visit_node_in_body!(visitor, ctxt, right_expr_id, expr);
         }
+
+        Expr::With(bindings, body_expr) => {
+            for b in bindings {
+                visit_node_in_body!(visitor, ctxt, &b.value, expr);
+            }
+            visit_node_in_body!(visitor, ctxt, body_expr, expr);
+        }
     }
 }
 
