@@ -207,7 +207,10 @@ impl<'db> TyChecker<'db> {
                 continue;
             };
 
-            let is_mut = value_prop.binding().map(|b| b.is_mut()).unwrap_or(false);
+            let is_mut = value_prop
+                .binding()
+                .map(|b| b.is_mut())
+                .unwrap_or(value_prop.is_mut);
 
             let provided = ProvidedEffect {
                 origin: EffectOrigin::With {
