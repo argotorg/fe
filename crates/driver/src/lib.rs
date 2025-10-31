@@ -38,11 +38,6 @@ pub fn ingot_graph_resolver<'a>() -> IngotGraphResolver<'a> {
 pub fn init_ingot(db: &mut DriverDataBase, ingot_url: &Url) -> Vec<IngotInitDiagnostics> {
     tracing::info!(target: "resolver", "Starting workspace ingot resolution for: {}", ingot_url);
 
-    // Log the dependency graph URLs for debugging (before resolution)
-    let urls = db.graph().all_urls(db);
-    let urls_display: Vec<_> = urls.iter().map(|url| url.to_string()).collect();
-    tracing::info!(target: "resolver", "Dependency graph URL set (before resolution): {}", urls_display.join(", "));
-
     let mut diagnostics: Vec<IngotInitDiagnostics> = {
         let mut handler = InputHandler::from_db(db, ingot_url.clone());
         let mut ingot_graph_resolver = ingot_graph_resolver();
@@ -80,11 +75,6 @@ pub fn init_ingot(db: &mut DriverDataBase, ingot_url: &Url) -> Vec<IngotInitDiag
 
         all_diagnostics
     };
-
-    // Log the dependency graph URLs for debugging (after resolution)
-    let urls = db.graph().all_urls(db);
-    let urls_display: Vec<_> = urls.iter().map(|url| url.to_string()).collect();
-    tracing::info!(target: "resolver", "Dependency graph URL set (after resolution): {}", urls_display.join(", "));
 
     // Check for cycles after graph resolution (now that handler is dropped)
     let cyclic_subgraph = db.graph().cyclic_subgraph(db);
@@ -309,12 +299,20 @@ impl<'a> GraphResolutionHandler<Url, DiGraph<Url, (SmolStr, DependencyArguments)
     ) -> Self::Item {
         let dependency_graph = self.db.graph();
 
+        let edge_count = graph.edge_count();
+        if edge_count > 0 {
+            tracing::info!(target: "resolver", "Resolved {} dependencies", edge_count);
+        }
+
         // Add edges from the resolved graph to the database dependency graph
         // Note: edges to existing URLs are already added in handle_resolution
         for edge in graph.edge_references() {
             let from_url = &graph[edge.source()];
             let to_url = &graph[edge.target()];
             let (alias, arguments) = edge.weight();
+
+            tracing::info!(target: "resolver", "  {} -> {} (as {})", from_url, to_url, alias);
+
             dependency_graph.add_dependency(
                 self.db,
                 from_url,
