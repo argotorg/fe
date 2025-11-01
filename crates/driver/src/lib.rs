@@ -36,6 +36,12 @@ pub fn ingot_graph_resolver<'a>() -> IngotGraphResolver<'a> {
 }
 
 pub fn init_ingot(db: &mut DriverDataBase, ingot_url: &Url) -> Vec<IngotInitDiagnostics> {
+    // Check if ingot is already initialized
+    if db.graph().contains_url(db, ingot_url) {
+        tracing::info!(target: "resolver", "Ingot already initialized: {}", ingot_url);
+        return Vec::new();
+    }
+
     tracing::info!(target: "resolver", "Starting workspace ingot resolution for: {}", ingot_url);
 
     let mut diagnostics: Vec<IngotInitDiagnostics> = {
@@ -299,19 +305,12 @@ impl<'a> GraphResolutionHandler<Url, DiGraph<Url, (SmolStr, DependencyArguments)
     ) -> Self::Item {
         let dependency_graph = self.db.graph();
 
-        let edge_count = graph.edge_count();
-        if edge_count > 0 {
-            tracing::info!(target: "resolver", "Resolved {} dependencies", edge_count);
-        }
-
         // Add edges from the resolved graph to the database dependency graph
         // Note: edges to existing URLs are already added in handle_resolution
         for edge in graph.edge_references() {
             let from_url = &graph[edge.source()];
             let to_url = &graph[edge.target()];
             let (alias, arguments) = edge.weight();
-
-            tracing::info!(target: "resolver", "  {} -> {} (as {})", from_url, to_url, alias);
 
             dependency_graph.add_dependency(
                 self.db,
@@ -320,6 +319,12 @@ impl<'a> GraphResolutionHandler<Url, DiGraph<Url, (SmolStr, DependencyArguments)
                 alias.clone(),
                 arguments.clone(),
             );
+        }
+
+        // Log total ingot count after resolution
+        let total_ingots = dependency_graph.all_urls(self.db).len();
+        if total_ingots > 0 {
+            tracing::info!(target: "resolver", "Total ingots in workspace: {}", total_ingots);
         }
     }
 }

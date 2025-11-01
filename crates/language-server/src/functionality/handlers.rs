@@ -55,8 +55,6 @@ async fn discover_and_load_ingots(
     backend: &mut Backend,
     root_path: &std::path::Path,
 ) -> Result<(), ResponseError> {
-    info!(target: "resolver", "workspace content {}", backend.db.workspace().all_files(&backend.db).len());
-
     // Find all fe.toml files in the workspace
     let pattern = format!("{}/**/fe.toml", root_path.to_string_lossy());
     let config_paths = glob::glob(&pattern)
@@ -104,8 +102,6 @@ async fn discover_and_load_ingots(
             );
         }
     }
-
-    info!(target: "resolver", "workspace content 2 {}", backend.db.workspace().all_files(&backend.db).len());
 
     Ok(())
 }

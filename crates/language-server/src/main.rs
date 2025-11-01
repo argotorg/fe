@@ -33,7 +33,6 @@ use async_lsp::client_monitor::ClientProcessMonitorLayer;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use tower::ServiceBuilder;
-use tracing_subscriber::fmt::time;
 
 #[tokio::main]
 async fn main() {

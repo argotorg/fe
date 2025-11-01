@@ -50,7 +50,6 @@ macro_rules! impl_db_default {
             $db_type: $crate::core::HasBuiltinCore,
         {
             fn default() -> Self {
-                $crate::tracing::info!("Initializing database");
                 let mut db = Self {
                     storage: salsa::Storage::default(),
                     index: None,
