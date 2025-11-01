@@ -26,6 +26,11 @@ impl DependencyGraph {
         self.node_map(db).contains_key(url)
     }
 
+    /// Returns all URLs in the dependency graph.
+    pub fn all_urls(&self, db: &dyn InputDb) -> Vec<Url> {
+        self.node_map(db).keys().cloned().collect()
+    }
+
     /// Returns a subgraph containing all cyclic nodes and all nodes that lead to cycles.
     ///
     /// This method identifies strongly connected components (SCCs) in the graph and returns

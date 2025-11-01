@@ -1,0 +1,6 @@
+[ingot]
+name = "ingot_b"
+version = "0.1.0"
+
+[dependencies]
+ingot_a = { path = "../ingot_a" }

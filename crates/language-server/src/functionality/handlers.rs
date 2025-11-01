@@ -255,6 +255,27 @@ pub async fn handle_file_change(
                     .db
                     .workspace()
                     .update(&mut backend.db, url.clone(), contents);
+
+                // If this is a .fe file, check if its ingot is loaded
+                if path.extension().and_then(|s| s.to_str()) == Some("fe") {
+                    // Walk up to find fe.toml
+                    let mut current = path.parent();
+                    while let Some(dir) = current {
+                        let fe_toml = dir.join("fe.toml");
+                        if fe_toml.exists() {
+                            // Found ingot root, check if it's loaded
+                            if let Ok(ingot_url) = Url::from_directory_path(dir) {
+                                let loaded_ingots = backend.db.graph().all_urls(&backend.db);
+                                if !loaded_ingots.contains(&ingot_url) {
+                                    info!("Ingot not loaded, initializing: {:?}", dir);
+                                    load_ingot_files(backend, dir).await?;
+                                }
+                            }
+                            break;
+                        }
+                        current = dir.parent();
+                    }
+                }
             }
         }
         ChangeKind::Create => {
