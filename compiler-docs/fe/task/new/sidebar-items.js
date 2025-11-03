@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"constant":["SRC_TEMPLATE_DIR"],"fn":["create_new_project","create_project"],"struct":["NewProjectArgs"]};

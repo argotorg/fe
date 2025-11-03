@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"struct":["FileContentQuery","FileLineStartsQuery","FileNameQuery","InternFileLookupQuery","InternFileQuery","SourceDbGroupStorage__","SourceDbStorage","TestDb"],"trait":["SourceDb","Upcast","UpcastMut"]};

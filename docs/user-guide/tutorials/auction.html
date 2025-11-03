@@ -1,0 +1,454 @@
+<!DOCTYPE HTML>
+<html lang="en" class="light" dir="ltr">
+    <head>
+        <!-- Book generated using mdBook -->
+        <meta charset="UTF-8">
+        <title>Open auction - The Fe Guide</title>
+
+
+        <!-- Custom HTML head -->
+        
+        <meta name="description" content="">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <meta name="theme-color" content="#ffffff">
+
+        <link rel="icon" href="../../favicon.svg">
+        <link rel="shortcut icon" href="../../favicon.png">
+        <link rel="stylesheet" href="../../css/variables.css">
+        <link rel="stylesheet" href="../../css/general.css">
+        <link rel="stylesheet" href="../../css/chrome.css">
+        <link rel="stylesheet" href="../../css/print.css" media="print">
+
+        <!-- Fonts -->
+        <link rel="stylesheet" href="../../FontAwesome/css/font-awesome.css">
+        <link rel="stylesheet" href="../../fonts/fonts.css">
+
+        <!-- Highlight.js Stylesheets -->
+        <link rel="stylesheet" href="../../highlight.css">
+        <link rel="stylesheet" href="../../tomorrow-night.css">
+        <link rel="stylesheet" href="../../ayu-highlight.css">
+
+        <!-- Custom theme stylesheets -->
+        <link rel="stylesheet" href="../../theme/reference.css">
+
+    </head>
+    <body class="sidebar-visible no-js">
+    <div id="body-container">
+        <!-- Provide site root to javascript -->
+        <script>
+            var path_to_root = "../../";
+            var default_theme = window.matchMedia("(prefers-color-scheme: dark)").matches ? "navy" : "light";
+        </script>
+
+        <!-- Work around some values being stored in localStorage wrapped in quotes -->
+        <script>
+            try {
+                var theme = localStorage.getItem('mdbook-theme');
+                var sidebar = localStorage.getItem('mdbook-sidebar');
+
+                if (theme.startsWith('"') && theme.endsWith('"')) {
+                    localStorage.setItem('mdbook-theme', theme.slice(1, theme.length - 1));
+                }
+
+                if (sidebar.startsWith('"') && sidebar.endsWith('"')) {
+                    localStorage.setItem('mdbook-sidebar', sidebar.slice(1, sidebar.length - 1));
+                }
+            } catch (e) { }
+        </script>
+
+        <!-- Set the theme before any content is loaded, prevents flash -->
+        <script>
+            var theme;
+            try { theme = localStorage.getItem('mdbook-theme'); } catch(e) { }
+            if (theme === null || theme === undefined) { theme = default_theme; }
+            var html = document.querySelector('html');
+            html.classList.remove('light')
+            html.classList.add(theme);
+            var body = document.querySelector('body');
+            body.classList.remove('no-js')
+            body.classList.add('js');
+        </script>
+
+        <input type="checkbox" id="sidebar-toggle-anchor" class="hidden">
+
+        <!-- Hide / unhide sidebar before it is displayed -->
+        <script>
+            var body = document.querySelector('body');
+            var sidebar = null;
+            var sidebar_toggle = document.getElementById("sidebar-toggle-anchor");
+            if (document.body.clientWidth >= 1080) {
+                try { sidebar = localStorage.getItem('mdbook-sidebar'); } catch(e) { }
+                sidebar = sidebar || 'visible';
+            } else {
+                sidebar = 'hidden';
+            }
+            sidebar_toggle.checked = sidebar === 'visible';
+            body.classList.remove('sidebar-visible');
+            body.classList.add("sidebar-" + sidebar);
+        </script>
+
+        <nav id="sidebar" class="sidebar" aria-label="Table of contents">
+            <div class="sidebar-scrollbox">
+                <ol class="chapter"><li class="chapter-item expanded affix "><a href="../../index.html">Introduction</a></li><li class="chapter-item expanded "><a href="../../quickstart/index.html"><strong aria-hidden="true">1.</strong> Quickstart</a><a class="toggle"><div>❱</div></a></li><li><ol class="section"><li class="chapter-item "><a href="../../quickstart/first_contract.html"><strong aria-hidden="true">1.1.</strong> Write your first contract</a></li><li class="chapter-item "><a href="../../quickstart/deploy_contract.html"><strong aria-hidden="true">1.2.</strong> Deploying a contract to a testnet</a></li></ol></li><li class="chapter-item expanded "><a href="../../user-guide/index.html"><strong aria-hidden="true">2.</strong> Using Fe</a><a class="toggle"><div>❱</div></a></li><li><ol class="section"><li class="chapter-item "><a href="../../user-guide/installation.html"><strong aria-hidden="true">2.1.</strong> Installation</a></li><li class="chapter-item "><a href="../../user-guide/projects.html"><strong aria-hidden="true">2.2.</strong> Using projects</a></li><li class="chapter-item expanded "><a href="../../user-guide/tutorials/index.html"><strong aria-hidden="true">2.3.</strong> Tutorials</a><a class="toggle"><div>❱</div></a></li><li><ol class="section"><li class="chapter-item expanded "><a href="../../user-guide/tutorials/auction.html" class="active"><strong aria-hidden="true">2.3.1.</strong> Open auction</a></li></ol></li><li class="chapter-item "><a href="../../user-guide/example_contracts/index.html"><strong aria-hidden="true">2.4.</strong> Example Contracts</a><a class="toggle"><div>❱</div></a></li><li><ol class="section"><li class="chapter-item "><a href="../../user-guide/example_contracts/auction_contract.html"><strong aria-hidden="true">2.4.1.</strong> Open auction</a></li></ol></li><li class="chapter-item "><a href="../../user-guide/external_links.html"><strong aria-hidden="true">2.5.</strong> Useful external links</a></li></ol></li><li class="chapter-item expanded "><a href="../../development/index.html"><strong aria-hidden="true">3.</strong> Development</a><a class="toggle"><div>❱</div></a></li><li><ol class="section"><li class="chapter-item "><a href="../../development/build.html"><strong aria-hidden="true">3.1.</strong> Build & Test</a></li><li class="chapter-item "><a href="../../development/release.html"><strong aria-hidden="true">3.2.</strong> Release</a></li></ol></li><li class="chapter-item expanded "><a href="../../std/index.html"><strong aria-hidden="true">4.</strong> Standard Library</a><a class="toggle"><div>❱</div></a></li><li><ol class="section"><li class="chapter-item "><a href="../../std/precompiles.html"><strong aria-hidden="true">4.1.</strong> Precompiles</a></li></ol></li><li class="chapter-item expanded "><a href="../../spec/index.html"><strong aria-hidden="true">5.</strong> Specification (WIP)</a><a class="toggle"><div>❱</div></a></li><li><ol class="section"><li class="chapter-item "><a href="../../spec/notation.html"><strong aria-hidden="true">5.1.</strong> Notation</a></li><li class="chapter-item "><a href="../../spec/lexical_structure/index.html"><strong aria-hidden="true">5.2.</strong> Lexical Structure</a><a class="toggle"><div>❱</div></a></li><li><ol class="section"><li class="chapter-item "><a href="../../spec/lexical_structure/keywords.html"><strong aria-hidden="true">5.2.1.</strong> Keywords</a></li><li class="chapter-item "><a href="../../spec/lexical_structure/identifiers.html"><strong aria-hidden="true">5.2.2.</strong> Identifiers</a></li><li class="chapter-item "><a href="../../spec/lexical_structure/tokens.html"><strong aria-hidden="true">5.2.3.</strong> Tokens</a></li></ol></li><li class="chapter-item "><a href="../../spec/comments.html"><strong aria-hidden="true">5.3.</strong> Comments</a></li><li class="chapter-item "><a href="../../spec/items/index.html"><strong aria-hidden="true">5.4.</strong> Items</a><a class="toggle"><div>❱</div></a></li><li><ol class="section"><li class="chapter-item "><a href="../../spec/items/visibility_and_privacy.html"><strong aria-hidden="true">5.4.1.</strong> Visibility and Privacy</a></li><li class="chapter-item "><a href="../../spec/items/structs.html"><strong aria-hidden="true">5.4.2.</strong> Structs</a></li><li class="chapter-item "><a href="../../spec/items/traits.html"><strong aria-hidden="true">5.4.3.</strong> Traits</a></li><li class="chapter-item "><a href="../../spec/items/enums.html"><strong aria-hidden="true">5.4.4.</strong> Enums</a></li><li class="chapter-item "><a href="../../spec/items/type_aliases.html"><strong aria-hidden="true">5.4.5.</strong> Type Aliases</a></li><li class="chapter-item "><a href="../../spec/items/contracts.html"><strong aria-hidden="true">5.4.6.</strong> Contracts</a></li><li class="chapter-item "><a href="../../spec/items/functions/index.html"><strong aria-hidden="true">5.4.7.</strong> Functions</a><a class="toggle"><div>❱</div></a></li><li><ol class="section"><li class="chapter-item "><a href="../../spec/items/functions/context.html"><strong aria-hidden="true">5.4.7.1.</strong> Context</a></li><li class="chapter-item "><a href="../../spec/items/functions/self.html"><strong aria-hidden="true">5.4.7.2.</strong> Self</a></li></ol></li></ol></li><li class="chapter-item "><a href="../../spec/statements/index.html"><strong aria-hidden="true">5.5.</strong> Statements</a><a class="toggle"><div>❱</div></a></li><li><ol class="section"><li class="chapter-item "><a href="../../spec/statements/pragma.html"><strong aria-hidden="true">5.5.1.</strong> pragma Statement</a></li><li class="chapter-item "><a href="../../spec/statements/const.html"><strong aria-hidden="true">5.5.2.</strong> const Statement</a></li><li class="chapter-item "><a href="../../spec/statements/let.html"><strong aria-hidden="true">5.5.3.</strong> let Statement</a></li><li class="chapter-item "><a href="../../spec/statements/assign.html"><strong aria-hidden="true">5.5.4.</strong> Assignment Statement</a></li><li class="chapter-item "><a href="../../spec/statements/augassign.html"><strong aria-hidden="true">5.5.5.</strong> Augmenting Assignment Statement</a></li><li class="chapter-item "><a href="../../spec/statements/revert.html"><strong aria-hidden="true">5.5.6.</strong> revert Statement</a></li><li class="chapter-item "><a href="../../spec/statements/return.html"><strong aria-hidden="true">5.5.7.</strong> return Statement</a></li><li class="chapter-item "><a href="../../spec/statements/if.html"><strong aria-hidden="true">5.5.8.</strong> if Statement</a></li><li class="chapter-item "><a href="../../spec/statements/for.html"><strong aria-hidden="true">5.5.9.</strong> for Statement</a></li><li class="chapter-item "><a href="../../spec/statements/while.html"><strong aria-hidden="true">5.5.10.</strong> while Statement</a></li><li class="chapter-item "><a href="../../spec/statements/break.html"><strong aria-hidden="true">5.5.11.</strong> break Statement</a></li><li class="chapter-item "><a href="../../spec/statements/continue.html"><strong aria-hidden="true">5.5.12.</strong> continue Statement</a></li><li class="chapter-item "><a href="../../spec/statements/match.html"><strong aria-hidden="true">5.5.13.</strong> match Statement</a></li><li class="chapter-item "><a href="../../spec/statements/assert.html"><strong aria-hidden="true">5.5.14.</strong> assert Statement</a></li></ol></li><li class="chapter-item "><a href="../../spec/expressions/index.html"><strong aria-hidden="true">5.6.</strong> Expressions</a><a class="toggle"><div>❱</div></a></li><li><ol class="section"><li class="chapter-item "><a href="../../spec/expressions/call.html"><strong aria-hidden="true">5.6.1.</strong> Call expressions</a></li><li class="chapter-item "><a href="../../spec/expressions/tuple.html"><strong aria-hidden="true">5.6.2.</strong> Tuple expressions</a></li><li class="chapter-item "><a href="../../spec/expressions/list.html"><strong aria-hidden="true">5.6.3.</strong> List expressions</a></li><li class="chapter-item "><a href="../../spec/expressions/struct.html"><strong aria-hidden="true">5.6.4.</strong> Struct expressions</a></li><li class="chapter-item "><a href="../../spec/expressions/indexing.html"><strong aria-hidden="true">5.6.5.</strong> Index expressions</a></li><li class="chapter-item "><a href="../../spec/expressions/attribute.html"><strong aria-hidden="true">5.6.6.</strong> Attribute expressions</a></li><li class="chapter-item "><a href="../../spec/expressions/name.html"><strong aria-hidden="true">5.6.7.</strong> Name expressions</a></li><li class="chapter-item "><a href="../../spec/expressions/path.html"><strong aria-hidden="true">5.6.8.</strong> Path expressions</a></li><li class="chapter-item "><a href="../../spec/expressions/literal.html"><strong aria-hidden="true">5.6.9.</strong> Literal expressions</a></li><li class="chapter-item "><a href="../../spec/expressions/arithmetic_operators.html"><strong aria-hidden="true">5.6.10.</strong> Arithmetic Operators</a></li><li class="chapter-item "><a href="../../spec/expressions/comparison_operators.html"><strong aria-hidden="true">5.6.11.</strong> Comparison Operators</a></li><li class="chapter-item "><a href="../../spec/expressions/boolean_operators.html"><strong aria-hidden="true">5.6.12.</strong> Boolean Operators</a></li><li class="chapter-item "><a href="../../spec/expressions/unary_operators.html"><strong aria-hidden="true">5.6.13.</strong> Unary Operators</a></li></ol></li><li class="chapter-item "><a href="../../spec/type_system/index.html"><strong aria-hidden="true">5.7.</strong> Type System</a><a class="toggle"><div>❱</div></a></li><li><ol class="section"><li class="chapter-item "><a href="../../spec/type_system/types/index.html"><strong aria-hidden="true">5.7.1.</strong> Types</a><a class="toggle"><div>❱</div></a></li><li><ol class="section"><li class="chapter-item "><a href="../../spec/type_system/types/boolean.html"><strong aria-hidden="true">5.7.1.1.</strong> Boolean Type</a></li><li class="chapter-item "><a href="../../spec/type_system/types/contract.html"><strong aria-hidden="true">5.7.1.2.</strong> Contract Type</a></li><li class="chapter-item "><a href="../../spec/type_system/types/numeric.html"><strong aria-hidden="true">5.7.1.3.</strong> Numeric Types</a></li><li class="chapter-item "><a href="../../spec/type_system/types/tuple.html"><strong aria-hidden="true">5.7.1.4.</strong> Tuple Types</a></li><li class="chapter-item "><a href="../../spec/type_system/types/array.html"><strong aria-hidden="true">5.7.1.5.</strong> Array Types</a></li><li class="chapter-item "><a href="../../spec/type_system/types/struct.html"><strong aria-hidden="true">5.7.1.6.</strong> Struct Types</a></li><li class="chapter-item "><a href="../../spec/type_system/types/enum.html"><strong aria-hidden="true">5.7.1.7.</strong> Enum Types</a></li><li class="chapter-item "><a href="../../spec/type_system/types/address.html"><strong aria-hidden="true">5.7.1.8.</strong> Address Type</a></li><li class="chapter-item "><a href="../../spec/type_system/types/map.html"><strong aria-hidden="true">5.7.1.9.</strong> Map Type</a></li><li class="chapter-item "><a href="../../spec/type_system/types/string.html"><strong aria-hidden="true">5.7.1.10.</strong> String Type</a></li><li class="chapter-item "><a href="../../spec/type_system/types/unit.html"><strong aria-hidden="true">5.7.1.11.</strong> Unit Type</a></li><li class="chapter-item "><a href="../../spec/type_system/types/function.html"><strong aria-hidden="true">5.7.1.12.</strong> Function Type</a></li></ol></li></ol></li><li class="chapter-item "><a href="../../spec/data_layout/index.html"><strong aria-hidden="true">5.8.</strong> Data Layout</a><a class="toggle"><div>❱</div></a></li><li><ol class="section"><li class="chapter-item "><a href="../../spec/data_layout/stack.html"><strong aria-hidden="true">5.8.1.</strong> Stack</a></li><li class="chapter-item "><a href="../../spec/data_layout/storage/index.html"><strong aria-hidden="true">5.8.2.</strong> Storage</a><a class="toggle"><div>❱</div></a></li><li><ol class="section"><li class="chapter-item "><a href="../../spec/data_layout/storage/constant_size_values_in_storage.html"><strong aria-hidden="true">5.8.2.1.</strong> Constant size values in storage</a></li><li class="chapter-item "><a href="../../spec/data_layout/storage/maps_in_storage.html"><strong aria-hidden="true">5.8.2.2.</strong> Maps in storage</a></li><li class="chapter-item "><a href="../../spec/data_layout/storage/to_mem_function.html"><strong aria-hidden="true">5.8.2.3.</strong> to_mem() function</a></li></ol></li><li class="chapter-item "><a href="../../spec/data_layout/memory/index.html"><strong aria-hidden="true">5.8.3.</strong> Memory</a><a class="toggle"><div>❱</div></a></li><li><ol class="section"><li class="chapter-item "><a href="../../spec/data_layout/memory/sequence_types_in_memory.html"><strong aria-hidden="true">5.8.3.1.</strong> Sequence types in memory</a></li></ol></li></ol></li></ol></li><li class="chapter-item expanded "><a href="../../contributing.html"><strong aria-hidden="true">6.</strong> Contributing</a></li><li class="chapter-item expanded "><a href="../../release_notes.html"><strong aria-hidden="true">7.</strong> Release Notes</a></li><li class="chapter-item expanded "><a href="../../code_of_conduct.html"><strong aria-hidden="true">8.</strong> Code of Conduct</a></li></ol>
+            </div>
+            <div id="sidebar-resize-handle" class="sidebar-resize-handle"></div>
+        </nav>
+
+        <!-- Track and set sidebar scroll position -->
+        <script>
+            var sidebarScrollbox = document.querySelector('#sidebar .sidebar-scrollbox');
+            sidebarScrollbox.addEventListener('click', function(e) {
+                if (e.target.tagName === 'A') {
+                    sessionStorage.setItem('sidebar-scroll', sidebarScrollbox.scrollTop);
+                }
+            }, { passive: true });
+            var sidebarScrollTop = sessionStorage.getItem('sidebar-scroll');
+            sessionStorage.removeItem('sidebar-scroll');
+            if (sidebarScrollTop) {
+                // preserve sidebar scroll position when navigating via links within sidebar
+                sidebarScrollbox.scrollTop = sidebarScrollTop;
+            } else {
+                // scroll sidebar to current active section when navigating via "next/previous chapter" buttons
+                var activeSection = document.querySelector('#sidebar .active');
+                if (activeSection) {
+                    activeSection.scrollIntoView({ block: 'center' });
+                }
+            }
+        </script>
+
+        <div id="page-wrapper" class="page-wrapper">
+
+            <div class="page">
+                                <div id="menu-bar-hover-placeholder"></div>
+                <div id="menu-bar" class="menu-bar sticky">
+                    <div class="left-buttons">
+                        <label id="sidebar-toggle" class="icon-button" for="sidebar-toggle-anchor" title="Toggle Table of Contents" aria-label="Toggle Table of Contents" aria-controls="sidebar">
+                            <i class="fa fa-bars"></i>
+                        </label>
+                        <button id="theme-toggle" class="icon-button" type="button" title="Change theme" aria-label="Change theme" aria-haspopup="true" aria-expanded="false" aria-controls="theme-list">
+                            <i class="fa fa-paint-brush"></i>
+                        </button>
+                        <ul id="theme-list" class="theme-popup" aria-label="Themes" role="menu">
+                            <li role="none"><button role="menuitem" class="theme" id="light">Light</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="rust">Rust</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="coal">Coal</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="navy">Navy</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="ayu">Ayu</button></li>
+                        </ul>
+                        <button id="search-toggle" class="icon-button" type="button" title="Search. (Shortkey: s)" aria-label="Toggle Searchbar" aria-expanded="false" aria-keyshortcuts="S" aria-controls="searchbar">
+                            <i class="fa fa-search"></i>
+                        </button>
+                    </div>
+
+                    <h1 class="menu-title">The Fe Guide</h1>
+
+                    <div class="right-buttons">
+                        <a href="../../print.html" title="Print this book" aria-label="Print this book">
+                            <i id="print-button" class="fa fa-print"></i>
+                        </a>
+
+                    </div>
+                </div>
+
+                <div id="search-wrapper" class="hidden">
+                    <form id="searchbar-outer" class="searchbar-outer">
+                        <input type="search" id="searchbar" name="searchbar" placeholder="Search this book ..." aria-controls="searchresults-outer" aria-describedby="searchresults-header">
+                    </form>
+                    <div id="searchresults-outer" class="searchresults-outer hidden">
+                        <div id="searchresults-header" class="searchresults-header"></div>
+                        <ul id="searchresults">
+                        </ul>
+                    </div>
+                </div>
+
+                <!-- Apply ARIA attributes after the sidebar and the sidebar toggle button are added to the DOM -->
+                <script>
+                    document.getElementById('sidebar-toggle').setAttribute('aria-expanded', sidebar === 'visible');
+                    document.getElementById('sidebar').setAttribute('aria-hidden', sidebar !== 'visible');
+                    Array.from(document.querySelectorAll('#sidebar a')).forEach(function(link) {
+                        link.setAttribute('tabIndex', sidebar === 'visible' ? 0 : -1);
+                    });
+                </script>
+
+                <div id="content" class="content">
+                    <main>
+                        <h1 id="auction-contract"><a class="header" href="#auction-contract">Auction contract</a></h1>
+<p>This tutorial aims to implement a simple auction contract in Fe. Along the way you will learn some foundational Fe concepts.</p>
+<p>An open auction is one where prices are determined in real-time by live bidding. The winner is the participant who has made the highest bid at the time the auction ends.</p>
+<h2 id="the-auction-rules"><a class="header" href="#the-auction-rules">The auction rules</a></h2>
+<p>To run an open auction, you need an item for sale, a seller, a pool of buyers and a deadline after which no more bids will be recognized. In this tutorial we will not have an item per se, the buyers are simply bidding to win! The highest bidder is provably crowned the winner, and the value of their bid is passed to the beneficiary. Bidders can also withdraw their bids at any time.</p>
+<h2 id="get-started"><a class="header" href="#get-started">Get Started</a></h2>
+<p>To follow this guide you should have Fe installed on your computer. If you haven't installed Fe yet, follow the instructions on the <a href="../installation.html">Installation</a> page.</p>
+<p>With Fe installed, you can create a project folder, <code>auction</code> that will act as your project root. In that folder, create an empty file called <code>auction.fe</code>.</p>
+<p>Now you are ready to start coding in Fe!</p>
+<p>You will also need <a href="https://getfoundry.sh">Foundry</a> installed to follow the deployment instructions in this guide - you can use your alternative tooling for this if you prefer.</p>
+<h2 id="writing-the-contract"><a class="header" href="#writing-the-contract">Writing the Contract</a></h2>
+<p>You can see the entire contract <a href="../example_contracts/auction_contract.html">here</a>. You can refer back to this at any time to check implementation details.</p>
+<h3 id="defining-the-contract-and-initializing-variables"><a class="header" href="#defining-the-contract-and-initializing-variables">Defining the <code>Contract</code> and initializing variables</a></h3>
+<p>A contract in Fe is defined using the <code>contract</code> keyword. A contract requires a constructor function to initialize any state variables used by the contract. If no constructor is defined, Fe will add a default with no state variables. The skeleton of the contract can look as follows:</p>
+<pre><pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>contract Auction {
+    pub fn __init__() {}
+}
+<span class="boring">}</span></code></pre></pre>
+<p>To run the auction you will need several state variables, some of which can be initialized at the time the contract is instantiated.
+You will need to track the address of the beneficiary so you know who to pay out to. You will also need to keep track of the highest bidder, and the amount they have bid. You will also need to keep track of how much each specific address has sent into the contract, so you can refund them the right amount if they decide to withdraw. You will also need a flag that tracks whether or not the auction has ended. The following list of variables will suffice:</p>
+<pre><code class="language-sh">auction_end_time: u256
+beneficiary: address
+highest_bidder: address
+highest_bid: u256
+pending_returns: Map&lt;address, u256&gt;
+ended: bool
+</code></pre>
+<p>Notice that variables are named using snake case (lower case, underscore separated, <code>like_this</code>). 
+<a href="../../spec/type_system/types/address.html">Addresses</a> have their own type in Fe - it represents 20 hex-encoded bytes as per the Ethereum specification.</p>
+<p>The variables that expect numbers are given the <code>u256</code> type. This is an unsigned integer of length 256 bits. There are other <a href="../../spec/type_system/types/numeric.html">choices for integers</a> too, with both signed and unsigned integers between 8 and 256 bits in length.</p>
+<p>The <code>ended</code> variable will be used to check whether the auction is live or not. If it has finished <code>ended</code> will be set to <code>true</code>. There are only two possible states for this, so it makes sense to declare it as a <code>bool</code> - i.e. true/false.</p>
+<p>The <code>pending_returns</code> variable is a mapping between N keys and N values, with user addresses as the keys and their bids as values. For this, a <code>Map</code> type is used. In Fe, you define the types for the key and value in the Map definition - in this case, it is <code>Map&lt;address, u256&gt;</code>. Keys can be any <code>numeric</code> type, <code>address</code>, <code>boolean</code> or <code>unit</code>.</p>
+<p>Now you should decide which of these variables will have values that are known at the time the contract is instantiated. It makes sense to set the <code>beneficiary</code> right away, so you can add that to the constructor arguments.</p>
+<p>The other thing to consider here is <em>how</em> the contract will keep track of time. On its own, the contract has no concept of time. However, the contract does have access to the current block timestamp which is measured in seconds since the Unix epoch (Jan 1st 1970). This can be used to measure the time elapsed in a smart contract. In this contract, you can use this concept to set a deadline on the auction. By passing a length of time in seconds to the constructor, you can then add that value to the current block timestamp and create a deadline for bidding to end. Therefore, you should add a <code>bidding_time</code> argument to the constructor. Its type can be <code>u256</code>.</p>
+<p>When you have implemented all this, your contract should look like this:</p>
+<pre><code class="language-fe">contract Auction {
+    // states
+    auction_end_time: u256
+    beneficiary: address
+    highest_bidder: address
+    highest_bid: u256
+    pending_returns: Map&lt;address, u256&gt;
+    ended: bool
+
+    // constructor
+    pub fn __init__(mut self, ctx: Context, bidding_time: u256, beneficiary_addr: address) {
+        self.beneficiary = beneficiary_addr
+        self.auction_end_time = ctx.block_timestamp() + bidding_time
+    }
+}
+</code></pre>
+<p>Notice that the constructor receives values for <code>bidding_time</code> and <code>beneficiary_addr</code> and uses them to initialize the contract's <code>auction_end_time</code> and <code>beneficiary</code> variables.</p>
+<p>The other thing to notice about the constructor is that there are two additional arguments passed to the constructor: <code>mut self</code> and <code>ctx: Context</code>.</p>
+<h4 id="self"><a class="header" href="#self">self</a></h4>
+<p><code>self</code> is used to represent the specific instance of a Contract. It is used to access variables that are owned by that specific instance. This works the same way for Fe contracts as for, e.g. 'self' in the context of classes in Python, or <code>this</code> in Javascript.</p>
+<p>Here, you are not only using <code>self</code> but you are prepending it with <code>mut</code>. <code>mut</code> is a keyword inherited from Rust that indicates that the value can be overwritten - i.e. it is &quot;mutable&quot;. Variables are not mutable by default - this is a safety feature that helps protect developers from unintended changes during runtime. If you do not make <code>self</code> mutable, then you will not be able to update the values it contains.</p>
+<h4 id="context"><a class="header" href="#context">Context</a></h4>
+<p>Context is used to gate access to certain features including emitting logs, creating contracts, reading messages and transferring ETH. It is conventional to name the context object <code>ctx</code>. The <code>Context</code> object needs to be passed as the <em>first</em> parameter to a function unless the function also takes <code>self</code>, in which case the <code>Context</code> object should be passed as the second parameter. <code>Context</code> must be explicitly made mutable if it will invoke functions that changes the blockchain data, whereas an immutable reference to <code>Context</code> can be used where read-only access to the blockchain is needed.</p>
+<p>Read more on <a href="https://github.com/ethereum/fe/issues/558">Context in Fe</a></p>
+<p>In Fe contracts <code>ctx</code> is where you can find transaction data such as <code>msg.sender</code>, <code>msg.value</code>, <code>block.timestamp</code> etc.</p>
+<h3 id="bidding"><a class="header" href="#bidding">Bidding</a></h3>
+<p>Now that you have your contract constructor and state variables, you can implement some logic for receiving bids. To do this, you will create a method called <code>bid</code>. To handle a bid, you will first need to determine whether the auction is still open. If it has closed then the bid should revert. If the auction is open you need to record the address of the bidder and the amount and determine whether their bid was the highest. If their bid is highest, then their address should be assigned to the <code>highest_bidder</code> variable and the amount they sent recorded in the <code>highest_bid</code> variable. </p>
+<p>This logic can be implemented as follows:</p>
+<pre><pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>pub fn bid(mut self, mut ctx: Context) {
+    if ctx.block_timestamp() &gt; self.auction_end_time {
+        revert AuctionAlreadyEnded()
+    }
+    if ctx.msg_value() &lt;= self.highest_bid {
+        revert BidNotHighEnough(highest_bid: self.highest_bid)
+    }
+    if self.highest_bid != 0 {
+        self.pending_returns[self.highest_bidder] += self.highest_bid
+    }
+    self.highest_bidder = ctx.msg_sender()
+    self.highest_bid = ctx.msg_value()
+
+    ctx.emit(HighestBidIncreased(bidder: ctx.msg_sender(), amount: ctx.msg_value()))
+}
+<span class="boring">}</span></code></pre></pre>
+<p>The method first checks that the current block timestamp is not later than the contract's <code>aution_end_time</code> variable. If it <em>is</em> later, then the contract reverts. This is triggered using the <a href="../../spec/statements/revert.html"><code>revert</code></a> keyword. The <code>revert</code> can accept a struct that becomes encoded as <a href="https://github.com/ethereum/EIPs/issues/838">revert data</a>. Here you can just revert without any arguments. Add the following definition somewhere in <code>Auction.fe</code> outside the main contract definition:</p>
+<pre><code class="language-fe">struct AuctionAlreadyEnded {
+}
+</code></pre>
+<p>The next check is whether the incoming bid exceeds the current highest bid. If not, the bid has failed and it may as well revert. We can repeat the same logic as for <code>AuctionAlreadyEnded</code>. We can also report the current highest bid in the revert message to help the user reprice if they want to. Add the following to <code>auction.fe</code>:</p>
+<pre><code class="language-fe">struct BidNotHighEnough {
+    pub highest_bid: u256
+}
+</code></pre>
+<blockquote>
+<p>Notice that the value being checked is <code>msg.value</code> which is included in the <code>ctx</code> object. <code>ctx</code> is where you can access incoming transaction data.</p>
+</blockquote>
+<p>Next, if the incoming transaction <em>is</em> the highest bid, you need to track how much the sender should receive as a payout if their bid ends up being exceeded by another user (i.e. if they get outbid, they get their ETH back). To do this, you add a key-value pair to the <code>pending_returns</code> mapping, with the user address as the key and the transaction amount as the value. Both of these come from <code>ctx</code> in the form of <code>msg.sender</code> and <code>msg.value</code>.</p>
+<p>Finally, if the incoming bid <em>is</em> the highest, you can emit an event. Events are useful because they provide a cheap way to return data from a  contract as they use logs instead of contract storage. Unlike other smart contract languages, there is no <code>emit</code> keyword or <code>Event</code> type. Instead, you trigger an event by calling the <code>emit</code> method on the <code>ctx</code> object. You can pass this method a struct that defines the emitted message. You can add the following struct for this event:</p>
+<pre><code class="language-fe">struct HighestBidIncreased {
+    #indexed
+    pub bidder: address
+    pub amount: u256
+}
+</code></pre>
+<p>You have now implemented all the logic to handle a bid!</p>
+<h3 id="withdrawing"><a class="header" href="#withdrawing">Withdrawing</a></h3>
+<p>A previous high-bidder will want to retrieve their ETH from the contract so they can either walk away or bid again. You therefore need to create a <code>withdraw</code> method that the user can call. The function will lookup the user address in <code>pending_returns</code>. If there is a non-zero value associated with the user's address, the contract should send that amount back to the sender's address. It is important to first update the value in <code>pending_returns</code> and <em>then</em> send the ETH to the user, otherwise you are exposing a <a href="https://www.certik.com/resources/blog/3K7ZUAKpOr1GW75J2i0VHh-what-is-a-reentracy-attack">re-entrancy</a> vulnerability (where a user can repeatedly call the contract and receive the ETH multiple times).</p>
+<p>Add the following to the contract to implement the <code>withdraw</code> method:</p>
+<pre><pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>pub fn withdraw(mut self, mut ctx: Context) -&gt; bool {
+    let amount: u256 = self.pending_returns[ctx.msg_sender()]
+
+    if amount &gt; 0 {
+        self.pending_returns[ctx.msg_sender()] = 0
+        ctx.send_value(to: ctx.msg_sender(), wei: amount)
+    }
+    return true
+}
+<span class="boring">}</span></code></pre></pre>
+<blockquote>
+<p><strong>Note</strong> that in this case <code>mut</code> is used with <code>ctx</code> because <code>send_value</code> is making changes to the blockchain (it is moving ETH from one address to another).</p>
+</blockquote>
+<h3 id="end-the-auction"><a class="header" href="#end-the-auction">End the auction</a></h3>
+<p>Finally, you need to add a way to end the auction. This will check whether the bidding period is over, and if it is, automatically trigger the payment to the beneficiary and emit the address of the winner in an event. </p>
+<p>First, check the auction is not still live - if the auction is live you cannot end it early. If an attempt to end the auction early is made, it should revert using a <code>AuctionNotYetEnded</code> struct, which can look as follows:</p>
+<pre><code class="language-fe">struct AuctionNotYetEnded {
+}
+</code></pre>
+<p>You should also check whether the auction was <em>already</em> ended by a previous valid call to this method. In this case, revert with a <code>AuctionEndAlreadyCalled</code> struct:</p>
+<pre><code class="language-fe">struct AuctionEndAlreadyCalled {}
+</code></pre>
+<p>If the auction is still live, you can end it. First set <code>self.ended</code> to <code>true</code> to update the contract state. Then emit the event using <code>ctx.emit()</code>. Then, send the ETH to the beneficiary. Again, the order is important - you should always send value last to protect against re-entrancy.
+Your method can look as follows:</p>
+<pre><pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>pub fn action_end(mut self, mut ctx: Context) {
+    if ctx.block_timestamp() &lt;= self.auction_end_time {
+        revert AuctionNotYetEnded()
+    }
+    if self.ended {
+        revert AuctionEndAlreadyCalled()
+    }
+    self.ended = true
+    ctx.emit(AuctionEnded(winner: self.highest_bidder, amount: self.highest_bid))
+
+    ctx.send_value(to: self.beneficiary, wei: self.highest_bid)
+}
+<span class="boring">}</span></code></pre></pre>
+<p>Congratulations! You just wrote an open auction contract in Fe!</p>
+<h2 id="view-functions"><a class="header" href="#view-functions">View functions</a></h2>
+<p>To help test the contract without having to decode transaction logs, you can add some simple functions to the contract that simply report the current values for some key state variables (specifically, <code>highest_bidder</code>, <code>highest_bid</code> and <code>ended</code>). This will allow a user to use <code>eth_call</code> to query these values in the contract. <code>eth_call</code> is used for functions that do not update the state of the blockchain and costs no gas because the queries can be performed on local data.</p>
+<p>You can add the following functions to the contract:</p>
+<pre><pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>pub fn check_highest_bidder(self) -&gt; address {
+    return self.highest_bidder;
+}
+
+pub fn check_highest_bid(self) -&gt; u256 {
+    return self.highest_bid;
+}
+
+pub fn check_ended(self) -&gt; bool {
+    return self.ended;
+}
+<span class="boring">}</span></code></pre></pre>
+<h2 id="build-and-deploy-the-contract"><a class="header" href="#build-and-deploy-the-contract">Build and deploy the contract</a></h2>
+<p>Your contract is now ready to use! Compile it using</p>
+<pre><code class="language-sh">fe build auction.fe
+</code></pre>
+<p>You will find the contract ABI and bytecode in the newly created <code>outputs</code> directory.</p>
+<p>Start a local blockchain to deploy your contract to:</p>
+<pre><code class="language-sh">anvil
+</code></pre>
+<p>There are constructor arguments (<code>bidding_time: u256</code>, <code>beneficiary_addr: address</code>) that have to be added to the contract bytecode so that the contract is instantiated with your desired values. To add constructor arguments you can encode them into bytecode and append them to the contract bytecode.</p>
+<p>First, hex encode the value you want to pass to <code>bidding_time</code>. In this case, we will use a value of 10:</p>
+<pre><code class="language-sh">cast --to_hex(10)
+
+&gt;&gt; 0xa // this is 10 in hex
+</code></pre>
+<p>Ethereum addresses are already hex, so there is no further encoding required. The following command will take the constructor function and the hex-encoded arguments and concatenate them into a contiguous hex string and then deploy the contract with the constructor arguments. </p>
+<pre><code class="language-sh">cast send --from &lt;your-address&gt; --private-key &lt;your-private-key&gt; --create $(cat output/Auction/Auction.bin) $(cast abi-encode &quot;__init__(uint256,address)&quot; 0xa 0xa0Ee7A142d267C1f36714E4a8F75612F20a79720)
+</code></pre>
+<p>You will see the contract address reported in your terminal.</p>
+<p>Now you can interact with your contract. Start by sending an initial bid, let's say 100 ETH. For contract address <code>0x700b6A60ce7EaaEA56F065753d8dcB9653dbAD35</code>:</p>
+<pre><code class="language-sh">cast send 0x700b6A60ce7EaaEA56F065753d8dcB9653dbAD35 &quot;bid()&quot; --value &quot;100ether&quot; --private-key &lt;your-private-key&gt; --from 0xa0Ee7A142d267C1f36714E4a8F75612F20a79720
+</code></pre>
+<p>You can check whether this was successful by calling the <code>check_highest_bidder()</code> function:</p>
+<pre><code class="language-sh">cast call 0x700b6A60ce7EaaEA56F065753d8dcB9653dbAD35 &quot;check_highest_bidder()&quot;
+</code></pre>
+<p>You will see a response looking similar to:</p>
+<pre><code class="language-sh">0x000000000000000000000000a0Ee7A142d267C1f36714E4a8F75612F20a79720
+</code></pre>
+<p>The characters after the leading zeros are the address for the highest bidder (notice they match the characters after the 0x in the bidding address).</p>
+<p>You can do the same to check the highest bid:</p>
+<pre><code class="language-sh">cast call 0x700b6A60ce7EaaEA56F065753d8dcB9653dbAD35 &quot;check_highest_bid()&quot;
+</code></pre>
+<p>This returns:</p>
+<pre><code class="language-sh">0x0000000000000000000000000000000000000000000000056bc75e2d63100000
+</code></pre>
+<p>Converting the non-zero characters to binary gives the decimal value of your bid (in wei - divide by 1e18 to get the value in ETH):</p>
+<pre><code class="language-sh">cast --to-dec 56bc75e2d63100000
+
+&gt;&gt; 100000000000000000000 // 100 ETH in wei
+</code></pre>
+<p>Now you can repeat this process, outbidding the initial bid from another address and check the <code>highest_bidder()</code> and <code>highest_bid()</code> to confirm. Do this a few times, then call <code>end_auction()</code> to see the value of the highest bid get transferred to the <code>beneficiary_addr</code>. You can always check the balance of each address using:</p>
+<pre><code class="language-sh">cast balance &lt;address&gt;
+</code></pre>
+<p>And check whether the auction open time has expired using</p>
+<pre><code class="language-sh">cast &lt;contract-address&gt; &quot;check_ended()&quot;
+</code></pre>
+<h2 id="summary"><a class="header" href="#summary">Summary</a></h2>
+<p>Congratulations! You wrote an open auction contract in Fe and deployed it to a local blockchain!</p>
+<p>If you are using a local Anvil blockchain, you can use the ten ephemeral addresses created when the network started to simulate a bidding war!</p>
+<p>By following this tutorial, you learned:</p>
+<ul>
+<li>basic Fe types, such as <code>bool</code>, <code>address</code>, <code>map</code> and <code>u256</code></li>
+<li>basic Fe styles, such as snake case for variable names</li>
+<li>how to create a <code>contract</code> with a constructor</li>
+<li>how to <code>revert</code></li>
+<li>how to handle state variables</li>
+<li>how to avoid reentrancy</li>
+<li>how to use <code>ctx</code> to handle transaction data</li>
+<li>how to emit events using <code>ctx.emit</code></li>
+<li>how to deploy a contract with constructor arguments using Foundry</li>
+<li>how to interact with your contract</li>
+</ul>
+
+                    </main>
+
+                    <nav class="nav-wrapper" aria-label="Page navigation">
+                        <!-- Mobile navigation buttons -->
+                            <a rel="prev" href="../../user-guide/tutorials/index.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                                <i class="fa fa-angle-left"></i>
+                            </a>
+
+                            <a rel="next prefetch" href="../../user-guide/example_contracts/index.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                                <i class="fa fa-angle-right"></i>
+                            </a>
+
+                        <div style="clear: both"></div>
+                    </nav>
+                </div>
+            </div>
+
+            <nav class="nav-wide-wrapper" aria-label="Page navigation">
+                    <a rel="prev" href="../../user-guide/tutorials/index.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                        <i class="fa fa-angle-left"></i>
+                    </a>
+
+                    <a rel="next prefetch" href="../../user-guide/example_contracts/index.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                        <i class="fa fa-angle-right"></i>
+                    </a>
+            </nav>
+
+        </div>
+
+
+
+
+        <script>
+            window.playground_copyable = true;
+        </script>
+
+
+        <script src="../../elasticlunr.min.js"></script>
+        <script src="../../mark.min.js"></script>
+        <script src="../../searcher.js"></script>
+
+        <script src="../../clipboard.min.js"></script>
+        <script src="../../highlight.js"></script>
+        <script src="../../book.js"></script>
+
+        <!-- Custom JS scripts -->
+        <script src="../../theme/custom-highlight.js"></script>
+
+
+    </div>
+    </body>
+</html>

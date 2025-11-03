@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"enum":["BlockScopeType"],"fn":["check_visibility"],"struct":["BlockScope","FunctionScope","ItemScope"]};

@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"enum":["AdjustmentKind","CallType","Constant","NamedThing"],"struct":["Adjustment","Analysis","DiagnosticVoucher","ExpressionAttributes","FunctionBody","Label","TempContext"],"trait":["AnalyzerContext"]};

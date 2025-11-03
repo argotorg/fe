@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"fn":["pluralize_conditionally"],"trait":["Pluralizable"]};

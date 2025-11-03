@@ -1,0 +1,2870 @@
+<!DOCTYPE HTML>
+<html lang="en" class="light" dir="ltr">
+    <head>
+        <!-- Book generated using mdBook -->
+        <meta charset="UTF-8">
+        <title>Release Notes - The Fe Guide</title>
+
+
+        <!-- Custom HTML head -->
+        
+        <meta name="description" content="">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <meta name="theme-color" content="#ffffff">
+
+        <link rel="icon" href="favicon.svg">
+        <link rel="shortcut icon" href="favicon.png">
+        <link rel="stylesheet" href="css/variables.css">
+        <link rel="stylesheet" href="css/general.css">
+        <link rel="stylesheet" href="css/chrome.css">
+        <link rel="stylesheet" href="css/print.css" media="print">
+
+        <!-- Fonts -->
+        <link rel="stylesheet" href="FontAwesome/css/font-awesome.css">
+        <link rel="stylesheet" href="fonts/fonts.css">
+
+        <!-- Highlight.js Stylesheets -->
+        <link rel="stylesheet" href="highlight.css">
+        <link rel="stylesheet" href="tomorrow-night.css">
+        <link rel="stylesheet" href="ayu-highlight.css">
+
+        <!-- Custom theme stylesheets -->
+        <link rel="stylesheet" href="theme/reference.css">
+
+    </head>
+    <body class="sidebar-visible no-js">
+    <div id="body-container">
+        <!-- Provide site root to javascript -->
+        <script>
+            var path_to_root = "";
+            var default_theme = window.matchMedia("(prefers-color-scheme: dark)").matches ? "navy" : "light";
+        </script>
+
+        <!-- Work around some values being stored in localStorage wrapped in quotes -->
+        <script>
+            try {
+                var theme = localStorage.getItem('mdbook-theme');
+                var sidebar = localStorage.getItem('mdbook-sidebar');
+
+                if (theme.startsWith('"') && theme.endsWith('"')) {
+                    localStorage.setItem('mdbook-theme', theme.slice(1, theme.length - 1));
+                }
+
+                if (sidebar.startsWith('"') && sidebar.endsWith('"')) {
+                    localStorage.setItem('mdbook-sidebar', sidebar.slice(1, sidebar.length - 1));
+                }
+            } catch (e) { }
+        </script>
+
+        <!-- Set the theme before any content is loaded, prevents flash -->
+        <script>
+            var theme;
+            try { theme = localStorage.getItem('mdbook-theme'); } catch(e) { }
+            if (theme === null || theme === undefined) { theme = default_theme; }
+            var html = document.querySelector('html');
+            html.classList.remove('light')
+            html.classList.add(theme);
+            var body = document.querySelector('body');
+            body.classList.remove('no-js')
+            body.classList.add('js');
+        </script>
+
+        <input type="checkbox" id="sidebar-toggle-anchor" class="hidden">
+
+        <!-- Hide / unhide sidebar before it is displayed -->
+        <script>
+            var body = document.querySelector('body');
+            var sidebar = null;
+            var sidebar_toggle = document.getElementById("sidebar-toggle-anchor");
+            if (document.body.clientWidth >= 1080) {
+                try { sidebar = localStorage.getItem('mdbook-sidebar'); } catch(e) { }
+                sidebar = sidebar || 'visible';
+            } else {
+                sidebar = 'hidden';
+            }
+            sidebar_toggle.checked = sidebar === 'visible';
+            body.classList.remove('sidebar-visible');
+            body.classList.add("sidebar-" + sidebar);
+        </script>
+
+        <nav id="sidebar" class="sidebar" aria-label="Table of contents">
+            <div class="sidebar-scrollbox">
+                <ol class="chapter"><li class="chapter-item expanded affix "><a href="index.html">Introduction</a></li><li class="chapter-item expanded "><a href="quickstart/index.html"><strong aria-hidden="true">1.</strong> Quickstart</a><a class="toggle"><div>❱</div></a></li><li><ol class="section"><li class="chapter-item "><a href="quickstart/first_contract.html"><strong aria-hidden="true">1.1.</strong> Write your first contract</a></li><li class="chapter-item "><a href="quickstart/deploy_contract.html"><strong aria-hidden="true">1.2.</strong> Deploying a contract to a testnet</a></li></ol></li><li class="chapter-item expanded "><a href="user-guide/index.html"><strong aria-hidden="true">2.</strong> Using Fe</a><a class="toggle"><div>❱</div></a></li><li><ol class="section"><li class="chapter-item "><a href="user-guide/installation.html"><strong aria-hidden="true">2.1.</strong> Installation</a></li><li class="chapter-item "><a href="user-guide/projects.html"><strong aria-hidden="true">2.2.</strong> Using projects</a></li><li class="chapter-item "><a href="user-guide/tutorials/index.html"><strong aria-hidden="true">2.3.</strong> Tutorials</a><a class="toggle"><div>❱</div></a></li><li><ol class="section"><li class="chapter-item "><a href="user-guide/tutorials/auction.html"><strong aria-hidden="true">2.3.1.</strong> Open auction</a></li></ol></li><li class="chapter-item "><a href="user-guide/example_contracts/index.html"><strong aria-hidden="true">2.4.</strong> Example Contracts</a><a class="toggle"><div>❱</div></a></li><li><ol class="section"><li class="chapter-item "><a href="user-guide/example_contracts/auction_contract.html"><strong aria-hidden="true">2.4.1.</strong> Open auction</a></li></ol></li><li class="chapter-item "><a href="user-guide/external_links.html"><strong aria-hidden="true">2.5.</strong> Useful external links</a></li></ol></li><li class="chapter-item expanded "><a href="development/index.html"><strong aria-hidden="true">3.</strong> Development</a><a class="toggle"><div>❱</div></a></li><li><ol class="section"><li class="chapter-item "><a href="development/build.html"><strong aria-hidden="true">3.1.</strong> Build & Test</a></li><li class="chapter-item "><a href="development/release.html"><strong aria-hidden="true">3.2.</strong> Release</a></li></ol></li><li class="chapter-item expanded "><a href="std/index.html"><strong aria-hidden="true">4.</strong> Standard Library</a><a class="toggle"><div>❱</div></a></li><li><ol class="section"><li class="chapter-item "><a href="std/precompiles.html"><strong aria-hidden="true">4.1.</strong> Precompiles</a></li></ol></li><li class="chapter-item expanded "><a href="spec/index.html"><strong aria-hidden="true">5.</strong> Specification (WIP)</a><a class="toggle"><div>❱</div></a></li><li><ol class="section"><li class="chapter-item "><a href="spec/notation.html"><strong aria-hidden="true">5.1.</strong> Notation</a></li><li class="chapter-item "><a href="spec/lexical_structure/index.html"><strong aria-hidden="true">5.2.</strong> Lexical Structure</a><a class="toggle"><div>❱</div></a></li><li><ol class="section"><li class="chapter-item "><a href="spec/lexical_structure/keywords.html"><strong aria-hidden="true">5.2.1.</strong> Keywords</a></li><li class="chapter-item "><a href="spec/lexical_structure/identifiers.html"><strong aria-hidden="true">5.2.2.</strong> Identifiers</a></li><li class="chapter-item "><a href="spec/lexical_structure/tokens.html"><strong aria-hidden="true">5.2.3.</strong> Tokens</a></li></ol></li><li class="chapter-item "><a href="spec/comments.html"><strong aria-hidden="true">5.3.</strong> Comments</a></li><li class="chapter-item "><a href="spec/items/index.html"><strong aria-hidden="true">5.4.</strong> Items</a><a class="toggle"><div>❱</div></a></li><li><ol class="section"><li class="chapter-item "><a href="spec/items/visibility_and_privacy.html"><strong aria-hidden="true">5.4.1.</strong> Visibility and Privacy</a></li><li class="chapter-item "><a href="spec/items/structs.html"><strong aria-hidden="true">5.4.2.</strong> Structs</a></li><li class="chapter-item "><a href="spec/items/traits.html"><strong aria-hidden="true">5.4.3.</strong> Traits</a></li><li class="chapter-item "><a href="spec/items/enums.html"><strong aria-hidden="true">5.4.4.</strong> Enums</a></li><li class="chapter-item "><a href="spec/items/type_aliases.html"><strong aria-hidden="true">5.4.5.</strong> Type Aliases</a></li><li class="chapter-item "><a href="spec/items/contracts.html"><strong aria-hidden="true">5.4.6.</strong> Contracts</a></li><li class="chapter-item "><a href="spec/items/functions/index.html"><strong aria-hidden="true">5.4.7.</strong> Functions</a><a class="toggle"><div>❱</div></a></li><li><ol class="section"><li class="chapter-item "><a href="spec/items/functions/context.html"><strong aria-hidden="true">5.4.7.1.</strong> Context</a></li><li class="chapter-item "><a href="spec/items/functions/self.html"><strong aria-hidden="true">5.4.7.2.</strong> Self</a></li></ol></li></ol></li><li class="chapter-item "><a href="spec/statements/index.html"><strong aria-hidden="true">5.5.</strong> Statements</a><a class="toggle"><div>❱</div></a></li><li><ol class="section"><li class="chapter-item "><a href="spec/statements/pragma.html"><strong aria-hidden="true">5.5.1.</strong> pragma Statement</a></li><li class="chapter-item "><a href="spec/statements/const.html"><strong aria-hidden="true">5.5.2.</strong> const Statement</a></li><li class="chapter-item "><a href="spec/statements/let.html"><strong aria-hidden="true">5.5.3.</strong> let Statement</a></li><li class="chapter-item "><a href="spec/statements/assign.html"><strong aria-hidden="true">5.5.4.</strong> Assignment Statement</a></li><li class="chapter-item "><a href="spec/statements/augassign.html"><strong aria-hidden="true">5.5.5.</strong> Augmenting Assignment Statement</a></li><li class="chapter-item "><a href="spec/statements/revert.html"><strong aria-hidden="true">5.5.6.</strong> revert Statement</a></li><li class="chapter-item "><a href="spec/statements/return.html"><strong aria-hidden="true">5.5.7.</strong> return Statement</a></li><li class="chapter-item "><a href="spec/statements/if.html"><strong aria-hidden="true">5.5.8.</strong> if Statement</a></li><li class="chapter-item "><a href="spec/statements/for.html"><strong aria-hidden="true">5.5.9.</strong> for Statement</a></li><li class="chapter-item "><a href="spec/statements/while.html"><strong aria-hidden="true">5.5.10.</strong> while Statement</a></li><li class="chapter-item "><a href="spec/statements/break.html"><strong aria-hidden="true">5.5.11.</strong> break Statement</a></li><li class="chapter-item "><a href="spec/statements/continue.html"><strong aria-hidden="true">5.5.12.</strong> continue Statement</a></li><li class="chapter-item "><a href="spec/statements/match.html"><strong aria-hidden="true">5.5.13.</strong> match Statement</a></li><li class="chapter-item "><a href="spec/statements/assert.html"><strong aria-hidden="true">5.5.14.</strong> assert Statement</a></li></ol></li><li class="chapter-item "><a href="spec/expressions/index.html"><strong aria-hidden="true">5.6.</strong> Expressions</a><a class="toggle"><div>❱</div></a></li><li><ol class="section"><li class="chapter-item "><a href="spec/expressions/call.html"><strong aria-hidden="true">5.6.1.</strong> Call expressions</a></li><li class="chapter-item "><a href="spec/expressions/tuple.html"><strong aria-hidden="true">5.6.2.</strong> Tuple expressions</a></li><li class="chapter-item "><a href="spec/expressions/list.html"><strong aria-hidden="true">5.6.3.</strong> List expressions</a></li><li class="chapter-item "><a href="spec/expressions/struct.html"><strong aria-hidden="true">5.6.4.</strong> Struct expressions</a></li><li class="chapter-item "><a href="spec/expressions/indexing.html"><strong aria-hidden="true">5.6.5.</strong> Index expressions</a></li><li class="chapter-item "><a href="spec/expressions/attribute.html"><strong aria-hidden="true">5.6.6.</strong> Attribute expressions</a></li><li class="chapter-item "><a href="spec/expressions/name.html"><strong aria-hidden="true">5.6.7.</strong> Name expressions</a></li><li class="chapter-item "><a href="spec/expressions/path.html"><strong aria-hidden="true">5.6.8.</strong> Path expressions</a></li><li class="chapter-item "><a href="spec/expressions/literal.html"><strong aria-hidden="true">5.6.9.</strong> Literal expressions</a></li><li class="chapter-item "><a href="spec/expressions/arithmetic_operators.html"><strong aria-hidden="true">5.6.10.</strong> Arithmetic Operators</a></li><li class="chapter-item "><a href="spec/expressions/comparison_operators.html"><strong aria-hidden="true">5.6.11.</strong> Comparison Operators</a></li><li class="chapter-item "><a href="spec/expressions/boolean_operators.html"><strong aria-hidden="true">5.6.12.</strong> Boolean Operators</a></li><li class="chapter-item "><a href="spec/expressions/unary_operators.html"><strong aria-hidden="true">5.6.13.</strong> Unary Operators</a></li></ol></li><li class="chapter-item "><a href="spec/type_system/index.html"><strong aria-hidden="true">5.7.</strong> Type System</a><a class="toggle"><div>❱</div></a></li><li><ol class="section"><li class="chapter-item "><a href="spec/type_system/types/index.html"><strong aria-hidden="true">5.7.1.</strong> Types</a><a class="toggle"><div>❱</div></a></li><li><ol class="section"><li class="chapter-item "><a href="spec/type_system/types/boolean.html"><strong aria-hidden="true">5.7.1.1.</strong> Boolean Type</a></li><li class="chapter-item "><a href="spec/type_system/types/contract.html"><strong aria-hidden="true">5.7.1.2.</strong> Contract Type</a></li><li class="chapter-item "><a href="spec/type_system/types/numeric.html"><strong aria-hidden="true">5.7.1.3.</strong> Numeric Types</a></li><li class="chapter-item "><a href="spec/type_system/types/tuple.html"><strong aria-hidden="true">5.7.1.4.</strong> Tuple Types</a></li><li class="chapter-item "><a href="spec/type_system/types/array.html"><strong aria-hidden="true">5.7.1.5.</strong> Array Types</a></li><li class="chapter-item "><a href="spec/type_system/types/struct.html"><strong aria-hidden="true">5.7.1.6.</strong> Struct Types</a></li><li class="chapter-item "><a href="spec/type_system/types/enum.html"><strong aria-hidden="true">5.7.1.7.</strong> Enum Types</a></li><li class="chapter-item "><a href="spec/type_system/types/address.html"><strong aria-hidden="true">5.7.1.8.</strong> Address Type</a></li><li class="chapter-item "><a href="spec/type_system/types/map.html"><strong aria-hidden="true">5.7.1.9.</strong> Map Type</a></li><li class="chapter-item "><a href="spec/type_system/types/string.html"><strong aria-hidden="true">5.7.1.10.</strong> String Type</a></li><li class="chapter-item "><a href="spec/type_system/types/unit.html"><strong aria-hidden="true">5.7.1.11.</strong> Unit Type</a></li><li class="chapter-item "><a href="spec/type_system/types/function.html"><strong aria-hidden="true">5.7.1.12.</strong> Function Type</a></li></ol></li></ol></li><li class="chapter-item "><a href="spec/data_layout/index.html"><strong aria-hidden="true">5.8.</strong> Data Layout</a><a class="toggle"><div>❱</div></a></li><li><ol class="section"><li class="chapter-item "><a href="spec/data_layout/stack.html"><strong aria-hidden="true">5.8.1.</strong> Stack</a></li><li class="chapter-item "><a href="spec/data_layout/storage/index.html"><strong aria-hidden="true">5.8.2.</strong> Storage</a><a class="toggle"><div>❱</div></a></li><li><ol class="section"><li class="chapter-item "><a href="spec/data_layout/storage/constant_size_values_in_storage.html"><strong aria-hidden="true">5.8.2.1.</strong> Constant size values in storage</a></li><li class="chapter-item "><a href="spec/data_layout/storage/maps_in_storage.html"><strong aria-hidden="true">5.8.2.2.</strong> Maps in storage</a></li><li class="chapter-item "><a href="spec/data_layout/storage/to_mem_function.html"><strong aria-hidden="true">5.8.2.3.</strong> to_mem() function</a></li></ol></li><li class="chapter-item "><a href="spec/data_layout/memory/index.html"><strong aria-hidden="true">5.8.3.</strong> Memory</a><a class="toggle"><div>❱</div></a></li><li><ol class="section"><li class="chapter-item "><a href="spec/data_layout/memory/sequence_types_in_memory.html"><strong aria-hidden="true">5.8.3.1.</strong> Sequence types in memory</a></li></ol></li></ol></li></ol></li><li class="chapter-item expanded "><a href="contributing.html"><strong aria-hidden="true">6.</strong> Contributing</a></li><li class="chapter-item expanded "><a href="release_notes.html" class="active"><strong aria-hidden="true">7.</strong> Release Notes</a></li><li class="chapter-item expanded "><a href="code_of_conduct.html"><strong aria-hidden="true">8.</strong> Code of Conduct</a></li></ol>
+            </div>
+            <div id="sidebar-resize-handle" class="sidebar-resize-handle"></div>
+        </nav>
+
+        <!-- Track and set sidebar scroll position -->
+        <script>
+            var sidebarScrollbox = document.querySelector('#sidebar .sidebar-scrollbox');
+            sidebarScrollbox.addEventListener('click', function(e) {
+                if (e.target.tagName === 'A') {
+                    sessionStorage.setItem('sidebar-scroll', sidebarScrollbox.scrollTop);
+                }
+            }, { passive: true });
+            var sidebarScrollTop = sessionStorage.getItem('sidebar-scroll');
+            sessionStorage.removeItem('sidebar-scroll');
+            if (sidebarScrollTop) {
+                // preserve sidebar scroll position when navigating via links within sidebar
+                sidebarScrollbox.scrollTop = sidebarScrollTop;
+            } else {
+                // scroll sidebar to current active section when navigating via "next/previous chapter" buttons
+                var activeSection = document.querySelector('#sidebar .active');
+                if (activeSection) {
+                    activeSection.scrollIntoView({ block: 'center' });
+                }
+            }
+        </script>
+
+        <div id="page-wrapper" class="page-wrapper">
+
+            <div class="page">
+                                <div id="menu-bar-hover-placeholder"></div>
+                <div id="menu-bar" class="menu-bar sticky">
+                    <div class="left-buttons">
+                        <label id="sidebar-toggle" class="icon-button" for="sidebar-toggle-anchor" title="Toggle Table of Contents" aria-label="Toggle Table of Contents" aria-controls="sidebar">
+                            <i class="fa fa-bars"></i>
+                        </label>
+                        <button id="theme-toggle" class="icon-button" type="button" title="Change theme" aria-label="Change theme" aria-haspopup="true" aria-expanded="false" aria-controls="theme-list">
+                            <i class="fa fa-paint-brush"></i>
+                        </button>
+                        <ul id="theme-list" class="theme-popup" aria-label="Themes" role="menu">
+                            <li role="none"><button role="menuitem" class="theme" id="light">Light</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="rust">Rust</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="coal">Coal</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="navy">Navy</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="ayu">Ayu</button></li>
+                        </ul>
+                        <button id="search-toggle" class="icon-button" type="button" title="Search. (Shortkey: s)" aria-label="Toggle Searchbar" aria-expanded="false" aria-keyshortcuts="S" aria-controls="searchbar">
+                            <i class="fa fa-search"></i>
+                        </button>
+                    </div>
+
+                    <h1 class="menu-title">The Fe Guide</h1>
+
+                    <div class="right-buttons">
+                        <a href="print.html" title="Print this book" aria-label="Print this book">
+                            <i id="print-button" class="fa fa-print"></i>
+                        </a>
+
+                    </div>
+                </div>
+
+                <div id="search-wrapper" class="hidden">
+                    <form id="searchbar-outer" class="searchbar-outer">
+                        <input type="search" id="searchbar" name="searchbar" placeholder="Search this book ..." aria-controls="searchresults-outer" aria-describedby="searchresults-header">
+                    </form>
+                    <div id="searchresults-outer" class="searchresults-outer hidden">
+                        <div id="searchresults-header" class="searchresults-header"></div>
+                        <ul id="searchresults">
+                        </ul>
+                    </div>
+                </div>
+
+                <!-- Apply ARIA attributes after the sidebar and the sidebar toggle button are added to the DOM -->
+                <script>
+                    document.getElementById('sidebar-toggle').setAttribute('aria-expanded', sidebar === 'visible');
+                    document.getElementById('sidebar').setAttribute('aria-hidden', sidebar !== 'visible');
+                    Array.from(document.querySelectorAll('#sidebar a')).forEach(function(link) {
+                        link.setAttribute('tabIndex', sidebar === 'visible' ? 0 : -1);
+                    });
+                </script>
+
+                <div id="content" class="content">
+                    <main>
+                        <h1 id="release-notes"><a class="header" href="#release-notes">Release Notes</a></h1>
+<p><a href="https://github.com/ethereum/fe/releases">🖥️ Download Binaries</a>
+<a href="https://github.com/ethereum/fe/tree/master/spec">📄 Draft Spec</a>
+<a href="https://github.com/ethereum/fe#getting-started">ℹ️ Getting Started</a></p>
+<p>Fe is moving fast. Read up on all the latest improvements.</p>
+<h2 id="0260-zircon-2023-11-03"><a class="header" href="#0260-zircon-2023-11-03">0.26.0 &quot;Zircon&quot; (2023-11-03)</a></h2>
+<h3 id="features"><a class="header" href="#features">Features</a></h3>
+<ul>
+<li>
+<p>Give option to produce runtime bytecode as compilation artifact</p>
+<p>Previously, the compiler could only produce the bytecode that is used
+for the deployment of the contract. Now it can also produce the runtime
+bytecode which is the bytecode that is saved to storage.</p>
+<p>Being able to obtain the runtime bytecode is useful for contract
+verification.</p>
+<p>To obtain the runtime bytecode use the <code>runtime-bytecode</code> option
+of the <code>--emit</code> flag (multiple options allowed).</p>
+<p>Example Output:</p>
+<ul>
+<li>mycontract.bin (bytecode for deployment)</li>
+<li>mycontract.runtime.bin (runtime bytecode) (<a href="https://github.com/ethereum/fe/issues/947">#947</a>)</li>
+</ul>
+</li>
+<li>
+<p>New <code>verify</code> command to verify onchain contracts against local source code.</p>
+<p>People need to be able to verify that a deployed contract matches the source code
+that the author claims was used to deploy it. Previously, there was no simple
+way to achieve this.</p>
+<p>These are the steps to verify a contract with the <code>verify</code> command:</p>
+<ol>
+<li>Obtain the project's source code locally.</li>
+<li>Ensure it is the same source code that was used to deploy the contract. (e.g. check out a specific tag)</li>
+<li>From the project directory run <code>fe verify &lt;contract-address&gt; &lt;json-rpc-url&gt;</code></li>
+</ol>
+<p>Example:</p>
+<pre><code class="language-bash">$ fe verify 0xf0adbb9ed4135d1509ad039505bada942d18755f https://example-eth-mainnet-rpc.com
+It's a match!✨
+
+Onchain contract:
+Address: 0xf0adbb9ed4135d1509ad039505bada942d18755f
+Bytecode: 0x60008..76b90
+
+Local contract:
+Contract name: SimpleDAO
+Source file: /home/work/ef/simple_dao/fe_contracts/simpledao/src/main.fe
+Bytecode: 0x60008..76b90
+
+Hint: Run with --verbose to see the contract's source code.
+</code></pre>
+<p>(<a href="https://github.com/ethereum/fe/issues/948">#948</a>)</p>
+</li>
+</ul>
+<h3 id="improved-documentation"><a class="header" href="#improved-documentation">Improved Documentation</a></h3>
+<ul>
+<li>Added a new page on EVM precompiles (<a href="https://github.com/ethereum/fe/issues/944">#944</a>)</li>
+</ul>
+<h2 id="0250-yoshiokaite-2023-10-26"><a class="header" href="#0250-yoshiokaite-2023-10-26">0.25.0 &quot;Yoshiokaite&quot; (2023-10-26)</a></h2>
+<h3 id="features-1"><a class="header" href="#features-1">Features</a></h3>
+<ul>
+<li>
+<p>Use the project root as default path for <code>fe test</code></p>
+<p>Just run <code>fe test</code> from any directory of the project. (<a href="https://github.com/ethereum/fe/issues/913">#913</a>)</p>
+</li>
+<li>
+<p>Completed <code>std::buf::MemoryBuffer</code> refactor. (<a href="https://github.com/ethereum/fe/issues/917">#917</a>)</p>
+</li>
+<li>
+<p>Allow filtering tests to run via <code>fe test --filter &lt;some-filter</code></p>
+<p>E.g. Running <code>fe test --filter foo</code> will run all tests that contain <code>foo</code> in their name. (<a href="https://github.com/ethereum/fe/issues/919">#919</a>)</p>
+</li>
+<li>
+<p>Logs for successfully ran tests can be printed with the <code>--logs</code> parameter.</p>
+<p>example: </p>
+<pre><code>// test_log.fe
+
+use std::evm::log0
+use std::buf::MemoryBuffer
+
+struct MyEvent {
+  pub foo: u256
+  pub baz: bool
+  pub bar: u256
+}
+
+#test
+fn test_log(mut ctx: Context) {
+  ctx.emit(MyEvent(foo: 42, baz: false, bar: 26))
+  unsafe { log0(buf: MemoryBuffer::new(len: 42)) }
+}
+
+</code></pre>
+<pre><code>$ fe test --logs test_log.fe
+executing 1 test in test_log:
+  test_log ... passed
+
+test_log produced the following logs:
+  MyEvent emitted by 0x0000…002a with the following parameters [foo: 2a, baz: false, bar: 1a]
+  Log { address: 0x000000000000000000000000000000000000002a, topics: [], data: b&quot;\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\x1a\0\0\0\0\0\0\0\0\0\0&quot; }
+
+
+1 test passed; 0 tests failed; 1 test executed
+</code></pre>
+<p>Note: Logs are not collected for failing tests. (<a href="https://github.com/ethereum/fe/issues/933">#933</a>)</p>
+</li>
+<li>
+<p>Adds 'functions' section to docs with information on <code>self</code> and <code>Context</code>. (<a href="https://github.com/ethereum/fe/issues/937">#937</a>)</p>
+</li>
+</ul>
+<h3 id="bugfixes"><a class="header" href="#bugfixes">Bugfixes</a></h3>
+<ul>
+<li>
+<p>Yul codegen was failing to include string literals used in test assertions. This resulted in a compiler error.</p>
+<p>Example:</p>
+<pre><code>#test
+fn foo() {
+    assert false, &quot;oops&quot;
+}
+</code></pre>
+<p>The example code above was failing to compile, but now it compiles and executes as expected. (<a href="https://github.com/ethereum/fe/issues/926">#926</a>)</p>
+</li>
+</ul>
+<h3 id="improved-documentation-1"><a class="header" href="#improved-documentation-1">Improved Documentation</a></h3>
+<ul>
+<li>Added a new tutorial: Open Auction (<a href="https://github.com/ethereum/fe/issues/930">#930</a>)</li>
+</ul>
+<h2 id="0240-xenotime-2023-08-10"><a class="header" href="#0240-xenotime-2023-08-10">0.24.0 &quot;Xenotime&quot; (2023-08-10)</a></h2>
+<h3 id="features-2"><a class="header" href="#features-2">Features</a></h3>
+<ul>
+<li>
+<p>Added support for project manifests and project dependencies.</p>
+<p>Example:</p>
+<pre><code>my_project
+├── fe.toml
+└── src
+    └── main.fe
+</code></pre>
+<pre><code># fe.toml
+name = &quot;my_project&quot;
+version = &quot;1.0&quot;
+
+[dependencies]
+my_lib = { path = &quot;../path/to/my_lib&quot;, version = &quot;1.0&quot; }
+my_other_lib = &quot;../path/to/my_other_lib&quot;
+</code></pre>
+<p>Note: The current implementation supports circular dependencies. (<a href="https://github.com/ethereum/fe/issues/908">#908</a>)</p>
+</li>
+</ul>
+<h3 id="performance-improvements"><a class="header" href="#performance-improvements">Performance improvements</a></h3>
+<ul>
+<li><code>MemoryBuffer</code> now allocates an extra 31 bytes. This removes the need for runtime checks and bitshifting needed to ensure safe writing to a <code>MemoryBuffer</code>'s region. (<a href="https://github.com/ethereum/fe/issues/898">#898</a>)</li>
+</ul>
+<h3 id="improved-documentation-2"><a class="header" href="#improved-documentation-2">Improved Documentation</a></h3>
+<ul>
+<li>Link to vs-code extension in Quickstart Guide (<a href="https://github.com/ethereum/fe/issues/910">#910</a>)</li>
+</ul>
+<h2 id="0230-wiluite-2023-06-01"><a class="header" href="#0230-wiluite-2023-06-01">0.23.0 &quot;Wiluite&quot; (2023-06-01)</a></h2>
+<h3 id="features-3"><a class="header" href="#features-3">Features</a></h3>
+<ul>
+<li>
+<p>Fixed an issue where generic parameters that were <code>mut</code> could not be satisfied at callsite.</p>
+<p>For instance, the following code would previously cause a compile error but now works as expected:</p>
+<pre><pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>struct Runner {
+  pub fn run&lt;T: Computable&gt;(self, mut _ val: T) -&gt; u256 {
+    return val.compute(val: 1000)
+  }
+}
+
+contract Example {
+  pub fn run_test(self) {
+    let runner: Runner = Runner();
+    let mut mac: Mac = Mac();
+
+    assert runner.run(mac) == 1001
+  }
+}
+<span class="boring">}</span></code></pre></pre>
+<p>(<a href="https://github.com/ethereum/fe/issues/865">#865</a>)</p>
+</li>
+<li>
+<p>The <code>ctx</code> parameter can now be passed into test functions.</p>
+<p>example:</p>
+<pre><code>#test
+fn my_test(ctx: Context) {
+    assert ctx.block_number() == 0
+}
+</code></pre>
+<p>(<a href="https://github.com/ethereum/fe/issues/880">#880</a>)</p>
+</li>
+<li>
+<p>The following has been added to the standard library:</p>
+<p><strong>Memory buffer abstraction</strong></p>
+<p>example:</p>
+<pre><code>use std::buf::{MemoryBuffer, MemoryBufferReader, MemoryBufferWriter}
+use std::traits::Max
+
+#test
+fn test_buf_rw() {
+    let mut buf: MemoryBuffer = MemoryBuffer::new(len: 161) 
+    let mut writer: MemoryBufferWriter = buf.writer()
+    let mut reader: MemoryBufferReader = buf.reader()
+
+    writer.write(value: 42)
+    writer.write(value: 42)
+    writer.write(value: 26)
+    writer.write(value: u8(26))
+    writer.write(value: u256::max())
+    writer.write(value: u128::max())
+    writer.write(value: u64::max())
+    writer.write(value: u32::max())
+    writer.write(value: u16::max())
+    writer.write(value: u8::max())
+    writer.write(value: u8(0))
+
+    assert reader.read_u256() == 42
+    assert reader.read_u256() == 42
+    assert reader.read_u256() == 26
+    assert reader.read_u8() == 26
+    assert reader.read_u256() == u256::max()
+    assert reader.read_u128() == u128::max()
+    assert reader.read_u64() == u64::max()
+    assert reader.read_u32() == u32::max()
+    assert reader.read_u16() == u16::max()
+    assert reader.read_u8() == u8::max()
+    assert reader.read_u8() == 0
+}
+</code></pre>
+<p><strong>Precompiles</strong></p>
+<p>example:</p>
+<pre><code>use std::precompiles
+use std::buf::{MemoryBuffer, MemoryBufferReader, MemoryBufferWriter}
+
+#test
+fn test_ec_recover() {
+    let result: address = precompiles::ec_recover(
+        hash: 0x456e9aea5e197a1f1af7a3e85a3212fa4049a3ba34c2289b4c860fc0b0c64ef3,
+        v: 28,
+        r: 0x9242685bf161793cc25603c231bc2f568eb630ea16aa137d2664ac8038825608,
+        s: 0x4f8ae3bd7535248d0bd448298cc2e2071e56992d0774dc340c368ae950852ada
+    )
+
+    assert result == address(0x7156526fbd7a3c72969b54f64e42c10fbb768c8a)
+}
+</code></pre>
+<p><strong><code>ctx.raw_call()</code></strong></p>
+<p>example:</p>
+<pre><code>use std::buf::{
+    RawCallBuffer,
+    MemoryBufferReader, 
+    MemoryBufferWriter
+}
+use std::evm
+
+contract Foo {
+    pub unsafe fn __call__() {
+        if evm::call_data_load(offset: 0) == 42 {
+            evm::mstore(offset: 0, value: 26)
+            evm::return_mem(offset: 0, len: 32)
+        } else if evm::call_data_load(offset: 0) == 26 {
+            revert
+        }
+    }
+}
+
+#test
+fn test_raw_call(mut ctx: Context) {
+    let foo: Foo = Foo.create(ctx, 0)
+
+    let mut buf: RawCallBuffer = RawCallBuffer::new(
+        input_len: 32, 
+        output_len: 32
+    )
+    let mut writer: MemoryBufferWriter = buf.writer()
+
+    writer.write(value: 42)
+    assert ctx.raw_call(addr: address(foo), value: 0, buf)
+  
+    let mut reader: MemoryBufferReader = buf.reader()
+    assert reader.read_u256() == 26
+
+    assert not ctx.raw_call(addr: address(foo), value: 0, buf)
+}
+</code></pre>
+<p>(<a href="https://github.com/ethereum/fe/issues/885">#885</a>)</p>
+</li>
+</ul>
+<h3 id="bugfixes-1"><a class="header" href="#bugfixes-1">Bugfixes</a></h3>
+<ul>
+<li>
+<p>Fixed an ICE when using aggregate types with aggregate type fields in public functions</p>
+<p>This code would previously cause an ICE:</p>
+<pre><code class="language-fe">struct Tx {
+  pub data: Array&lt;u8, 320&gt;
+}
+
+contract Foo {
+  pub fn bar(mut tx: Tx) {}
+}
+</code></pre>
+<p>(<a href="https://github.com/ethereum/fe/issues/867">#867</a>)</p>
+</li>
+<li>
+<p>Fixed a regression where the compiler would not reject a method call on a struct in storage.</p>
+<p>E.g. the follwing code should be rejected as it is missing a <code>to_mem()</code> call:</p>
+<pre><code>struct Bar {
+    pub x: u256
+
+    pub fn get_x(self) -&gt; u256{
+        return self.x
+    }
+}
+
+contract Foo {
+    bar: Bar
+
+    pub fn __init__(mut self) {
+        self.bar = Bar( x: 2 )
+    }
+    fn yay(self) {
+        self.bar.get_x()
+    }
+}
+</code></pre>
+<p>The compiler will now reject the code and suggest a <code>to_mem()</code> before calling<code>get_x()</code>. (<a href="https://github.com/ethereum/fe/issues/881">#881</a>)</p>
+</li>
+</ul>
+<h2 id="0220-vulcanite-2023-04-05"><a class="header" href="#0220-vulcanite-2023-04-05">0.22.0 &quot;Vulcanite&quot; (2023-04-05)</a></h2>
+<p>This is the first non-alpha release of Fe. Read our <a href="https://blog.fe-lang.org/posts/beyond-alpha-preparing-fe-for-the-future/">announcement</a> for more details.</p>
+<h3 id="features-4"><a class="header" href="#features-4">Features</a></h3>
+<ul>
+<li>
+<p>Support for tests.</p>
+<p>example:</p>
+<pre><code>#test
+fn my_test() {
+    assert 26 + 16 == 42
+}
+</code></pre>
+<p>Tests can be executed using the <code>test</code> subcommand.</p>
+<p>example:</p>
+<p><code>$ fe test foo.fe</code> (<a href="https://github.com/ethereum/fe/issues/807">#807</a>)</p>
+</li>
+<li>
+<p>Fixed broken trait orphan rule</p>
+<p>Fe has an orphan rule for Traits similar to Rust's that requires
+that either the trait or the type that we are implementing the trait for
+are located in the same ingot as the <code>impl</code>. This rule was implemented
+incorrectly so that instead of requiring them to be in the same ingot,
+they were required to be in the same module. This change fixes this
+so that the orphan rule is enforced correctly.
+(<a href="https://github.com/ethereum/fe/issues/863">#863</a>)</p>
+</li>
+<li>
+<p><code>address</code> values can now be specified with a number literal, with no explicit
+cast. So instead of <code>let t: address = address(0xfe)</code>, one can now write
+<code>let t: address = 0xfe</code>. This also means that it's possible to define <code>const</code>
+addresses: <code>const SOME_KNOWN_CONTRACT: address = 0xfefefefe</code>
+(<a href="https://github.com/ethereum/fe/issues/864">#864</a>)</p>
+</li>
+</ul>
+<h3 id="bugfixes-2"><a class="header" href="#bugfixes-2">Bugfixes</a></h3>
+<ul>
+<li>
+<p>Fixed resolving of generic arguments to associated functions.</p>
+<p>For example, this code would previously crash the compiler:</p>
+<pre><pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>...
+  // This function doesn't take self
+  pub fn run_static&lt;T: Computable&gt;(_ val: T) -&gt; u256 {
+    return val.compute(val: 1000)
+  }
+...
+
+// Invoking it would previously crash the compiler
+Runner::run_static(Mac())
+...
+<span class="boring">}</span></code></pre></pre>
+<p>(<a href="https://github.com/ethereum/fe/issues/861">#861</a>)</p>
+</li>
+</ul>
+<h3 id="improved-documentation-3"><a class="header" href="#improved-documentation-3">Improved Documentation</a></h3>
+<ul>
+<li>Changed the Deployment tutorial to use foundry and the Sepolia network (<a href="https://github.com/ethereum/fe/issues/853">#853</a>)</li>
+</ul>
+<h2 id="0210-alpha-2023-02-28"><a class="header" href="#0210-alpha-2023-02-28">0.21.0-alpha (2023-02-28)</a></h2>
+<h3 id="features-5"><a class="header" href="#features-5">Features</a></h3>
+<ul>
+<li>
+<p>Support for <code>Self</code> type</p>
+<p>With this change <code>Self</code> (with capital <code>S</code>) can be used to refer
+to the enclosing type in contracts, structs, impls and traits.</p>
+<p>E.g.</p>
+<pre><code>trait Min {
+  fn min() -&gt; Self;
+}
+
+impl Min for u8 {
+  fn min() -&gt; u8 { // Both `u8` or `Self` are valid here
+    return 0
+  }
+}
+</code></pre>
+<p>Usage: <code>u8::min()</code> (<a href="https://github.com/ethereum/fe/issues/803">#803</a>)</p>
+</li>
+<li>
+<p>Added <code>Min</code> and <code>Max</code> traits to the std library.
+The std library implements the traits for all numeric types.</p>
+<p>Example</p>
+<pre><code>use std::traits::{Min, Max}
+...
+
+assert u8::min() &lt; u8::max()
+``` ([#836](https://github.com/ethereum/fe/issues/836))
+
+</code></pre>
+</li>
+<li>
+<p>Upgraded underlying solc compiler to version <code>0.8.18</code></p>
+</li>
+</ul>
+<h3 id="bugfixes-3"><a class="header" href="#bugfixes-3">Bugfixes</a></h3>
+<ul>
+<li>the release contains minor bugfixes</li>
+</ul>
+<h2 id="0200-alpha-2022-12-05"><a class="header" href="#0200-alpha-2022-12-05">0.20.0-alpha (2022-12-05)</a></h2>
+<h3 id="features-6"><a class="header" href="#features-6">Features</a></h3>
+<ul>
+<li>
+<p>Removed the <code>event</code> type as well as the <code>emit</code> keyword.
+Instead the <code>struct</code> type now automatically implements
+the <code>Emittable</code> trait and can be emitted via <code>ctx.emit(..)</code>.</p>
+<p>Indexed fields can be annotated via the <code>#indexed</code> attribute.</p>
+<p>E.g.</p>
+<pre><code>struct Signed {
+    book_msg: String&lt;100&gt;
+}
+
+contract GuestBook {
+    messages: Map&lt;address, String&lt;100&gt;&gt;
+
+    pub fn sign(mut self, mut ctx: Context, book_msg: String&lt;100&gt;) {
+        self.messages[ctx.msg_sender()] = book_msg
+        ctx.emit(Signed(book_msg))
+    }
+}
+</code></pre>
+<p>(<a href="https://github.com/ethereum/fe/issues/717">#717</a>)</p>
+</li>
+<li>
+<p>Allow to call trait methods on types when trait is in scope</p>
+<p>So far traits were only useful as bounds for generic functions.
+With this change traits can also be used as illustrated with
+the following example:</p>
+<pre><code>trait Double {
+  fn double(self) -&gt; u256;
+}
+
+impl Double for (u256, u256) {
+  fn double(self) -&gt; u256 {
+    return (self.item0 + self.item1) * 2
+  }
+}
+
+contract Example {
+
+  pub fn run_test(self) {
+    assert (0, 1).double() == 2
+  }
+}
+</code></pre>
+<p>If a call turns out to be ambigious the compiler currently asks the
+user to disambiguate via renaming. In the future we will likely
+introduce a syntax to allow to disambiguate at the callsite. (<a href="https://github.com/ethereum/fe/issues/757">#757</a>)</p>
+</li>
+<li>
+<p>Allow contract associated functions to be called via <code>ContractName::function_name()</code> syntax. (<a href="https://github.com/ethereum/fe/issues/767">#767</a>)</p>
+</li>
+<li>
+<p>Add <code>enum</code> types and <code>match</code> statement.</p>
+<p><code>enum</code> can now be defined, e.g.,</p>
+<pre><code class="language-fe">pub enum MyEnum {
+    Unit
+    Tuple(u32, u256, bool)
+  
+    fn unit() -&gt; MyEnum {
+        return MyEnum::Unit
+    }
+}
+</code></pre>
+<p>Also, <code>match</code> statement is introduced, e.g.,</p>
+<pre><code class="language-fe ignore">pub fn eval_enum()  -&gt; u256{
+    match MyEnum {
+        MyEnum::Unit =&gt; { 
+            return 0
+        }
+      
+        MyEnum::Tuple(a, _, false) =&gt; {
+            return u256(a)
+        }
+      
+        MyEnum::Tuple(.., true) =&gt; {
+            return u256(1)
+        }
+    }
+}
+</code></pre>
+<p>For now, available patterns are restricted to </p>
+<ul>
+<li>Wildcard(<code>_</code>), which matches all patterns: <code>_</code></li>
+<li>Named variable, which matches all patterns and binds the value to make the value usable in the arm. e.g., <code>a</code>, <code>b</code> and <code>c</code> in <code>MyEnum::Tuple(a, b, c)</code></li>
+<li>Boolean literal(<code>true</code> and <code>false</code>)</li>
+<li>Enum variant. e.g., <code>MyEnum::Tuple(a, b, c)</code></li>
+<li>Tuple pattern. e.g., <code>(a, b, c)</code></li>
+<li>Struct pattern. e.g., <code>MyStruct {x: x1, y: y1, b: true}</code> </li>
+<li>Rest pattern(<code>..</code>), which matches the rest of the pattern. e.g., <code>MyEnum::Tuple(.., true)</code></li>
+<li>Or pattern(|). e.g., MyEnum::Unit | MyEnum::Tuple(.., true)</li>
+</ul>
+<p>Fe compiler performs the exhaustiveness and usefulness checks for <code>match</code> statement.<br />
+So the compiler will emit an error when all patterns are not covered or an unreachable arm are detected. (<a href="https://github.com/ethereum/fe/issues/770">#770</a>)</p>
+</li>
+<li>
+<p>Changed comments to use <code>//</code> instead of <code>#</code> (<a href="https://github.com/ethereum/fe/issues/776">#776</a>)</p>
+</li>
+<li>
+<p>Added the <code>mut</code> keyword, to mark things as mutable. Any variable or function parameter
+not marked <code>mut</code> is now immutable.</p>
+<pre><code class="language-fe">contract Counter {
+    count: u256
+
+    pub fn increment(mut self) -&gt; u256 {
+        // `self` is mutable, so storage can be modified
+        self.count += 1
+        return self.count
+    }
+}
+
+struct Point {
+    pub x: u32
+    pub y: u32
+
+    pub fn add(mut self, _ other: Point) {
+        self.x += other.x
+        self.y += other.y
+
+        // other.x = 1000 // ERROR: `other` is not mutable
+    }
+}
+
+fn pointless() {
+    let origin: Point = Point(x: 0, y: 0)
+    // origin.x = 10 // ERROR: origin is not mutable
+
+    let x: u32 = 10
+    // x_coord = 100 // ERROR: `x_coord` is not mutable
+    let mut y: u32 = 0
+    y = 10 // OK
+
+    let mut p: Point = origin // copies `origin`
+    p.x = 10 // OK, doesn't modify `origin`
+
+    let mut q: Point = p // copies `p`
+    q.x = 100            // doesn't modify `p`
+
+    p.add(q)
+    assert p.x == 110
+}
+</code></pre>
+<p>Note that, in this release, primitive type function parameters
+can't be <code>mut</code>. This restriction might be lifted in a future release.</p>
+<p>For example:</p>
+<pre><code class="language-fe ignore">fn increment(mut x: u256) { // ERROR: primitive type parameters can't be mut
+    x += 1
+}
+</code></pre>
+<p>(<a href="https://github.com/ethereum/fe/issues/777">#777</a>)</p>
+</li>
+<li>
+<p>The contents of the <code>std::prelude</code> module (currently just the <code>Context</code> struct)
+are now automatically <code>use</code>d by every module, so <code>use std::context::Context</code> is
+no longer required. (<a href="https://github.com/ethereum/fe/issues/779">#779</a>)</p>
+</li>
+<li>
+<p>When the Fe compiler generates a JSON ABI file for a contract, the
+&quot;stateMutability&quot; field for each function now reflects whether the function can
+read or modify chain or contract state, based on the presence or absence of the
+<code>self</code> and <code>ctx</code> parameters, and whether those parameters are <code>mut</code>able.</p>
+<p>If a function doesn't take <code>self</code> or <code>ctx</code>, it's &quot;pure&quot;.
+If a function takes <code>self</code> or <code>ctx</code> immutably, it can read state but not mutate
+state, so it's a &quot;view&quot;
+If a function takes <code>mut self</code> or <code>mut ctx</code>, it can mutate state, and is thus
+marked &quot;payable&quot;.</p>
+<p>Note that we're following the convention set by Solidity for this field, which
+isn't a perfect fit for Fe. The primary issue is that Fe doesn't currently
+distinguish between &quot;payable&quot; and &quot;nonpayable&quot; functions; if you want a function
+to revert when Eth is sent, you need to do it manually
+(eg <code>assert ctx.msg_value() == 0</code>). (<a href="https://github.com/ethereum/fe/issues/783">#783</a>)</p>
+</li>
+<li>
+<p>Trait associated functions</p>
+<p>This change allows trait functions that do not take a <code>self</code> parameter.
+The following demonstrates a possible trait associated function and its usage:</p>
+<pre><code>trait Max {
+  fn max(self) -&gt; u8;
+}
+
+impl Max for u8 {
+  fn max() -&gt; u8 {
+    return u8(255)
+  }
+}
+
+contract Example {
+
+  pub fn run_test(self) {
+    assert u8::max() == 255
+  }
+}
+</code></pre>
+<p>(<a href="https://github.com/ethereum/fe/issues/805">#805</a>)</p>
+</li>
+</ul>
+<h3 id="bugfixes-4"><a class="header" href="#bugfixes-4">Bugfixes</a></h3>
+<ul>
+<li>
+<p>Fix issue where calls to assiciated functions did not enforce visibility rules.</p>
+<p>E.g the following code should be rejected but previously wasn't:</p>
+<pre><code>struct Foo {
+    fn do_private_things() {
+    }
+}
+
+contract Bar {
+    fn test() {
+        Foo::do_private_things()
+    }
+}
+</code></pre>
+<p>With this change, the above code is now rejected because <code>do_private_things</code> is not <code>pub</code>. (<a href="https://github.com/ethereum/fe/issues/767">#767</a>)</p>
+</li>
+<li>
+<p>Padding on <code>bytes</code> and <code>string</code> ABI types is zeroed out. (<a href="https://github.com/ethereum/fe/issues/769">#769</a>)</p>
+</li>
+<li>
+<p>Ensure traits from other modules or even ingots can be implemented (<a href="https://github.com/ethereum/fe/issues/773">#773</a>)</p>
+</li>
+<li>
+<p>Certain cases where the compiler would not reject pure functions
+being called on instances are now properly rejected. (<a href="https://github.com/ethereum/fe/issues/775">#775</a>)</p>
+</li>
+<li>
+<p>Reject calling <code>to_mem()</code> on primitive types in storage (<a href="https://github.com/ethereum/fe/issues/801">#801</a>)</p>
+</li>
+<li>
+<p>Disallow importing private type via <code>use</code></p>
+<p>The following was previously allowed but will now error:</p>
+<p><code>use foo::PrivateStruct</code> (<a href="https://github.com/ethereum/fe/issues/815">#815</a>)</p>
+</li>
+</ul>
+<h2 id="0191-alpha-sunstone-2022-07-06"><a class="header" href="#0191-alpha-sunstone-2022-07-06">0.19.1-alpha &quot;Sunstone&quot; (2022-07-06)</a></h2>
+<h3 id="features-7"><a class="header" href="#features-7">Features</a></h3>
+<ul>
+<li>
+<p>Support returning nested struct.</p>
+<p>Example:</p>
+<pre><code>pub struct InnerStruct {
+    pub inner_s: String&lt;10&gt;
+    pub inner_x: i256
+}
+
+pub struct NestedStruct {
+    pub inner: InnerStruct
+    pub outer_x: i256
+}
+
+contract Foo {
+    pub fn return_nested_struct() -&gt; NestedStruct {
+        ...
+    }
+}
+</code></pre>
+<p>(<a href="https://github.com/ethereum/fe/issues/635">#635</a>)</p>
+</li>
+<li>
+<p>Made some small changes to how the <code>Context</code> object is used.</p>
+<ul>
+<li><code>ctx</code> is not required when casting an address to a contract type. Eg <code>let foo: Foo = Foo(address(0))</code></li>
+<li><code>ctx</code> is required when calling an external contract function that requires ctx</li>
+</ul>
+<p>Example:</p>
+<pre><code class="language-fe ignore">use std::context::Context // see issue #679
+
+contract Foo {
+  pub fn emit_stuff(ctx: Context) {
+    emit Stuff(ctx)  # will be `ctx.emit(Stuff{})` someday
+  }
+}
+contract Bar {
+  pub fn call_foo_emit_stuff(ctx: Context) {
+    Foo(address(0)).emit_stuff(ctx)
+  }
+}
+event Stuff {}
+</code></pre>
+<p>(<a href="https://github.com/ethereum/fe/issues/703">#703</a>)</p>
+</li>
+<li>
+<p>Braces! Fe has abandoned python-style significant whitespace in favor of the
+trusty curly brace.</p>
+<p>In addition, <code>elif</code> is now spelled <code>else if</code>, and the <code>pass</code>
+statement no longer exists.</p>
+<p>Example:</p>
+<pre><code class="language-fe">pub struct SomeError {}
+
+contract Foo {
+  x: u8
+  y: u16
+
+  pub fn f(a: u8) -&gt; u8 {
+    if a &gt; 10 {
+      let x: u8 = 5
+      return a + x
+    } else if a == 0 {
+      revert SomeError()
+    } else {
+      return a * 10
+    }
+  }
+
+  pub fn noop() {}
+}
+</code></pre>
+<p>(<a href="https://github.com/ethereum/fe/issues/707">#707</a>)</p>
+</li>
+<li>
+<p>traits and generic function parameter</p>
+<p>Traits can now be defined, e.g:</p>
+<pre><code>trait Computable {
+  fn compute(self, val: u256) -&gt; u256;
+}
+</code></pre>
+<p>The mechanism to implement a trait is via an <code>impl</code> block e.g:</p>
+<pre><code>struct Linux {
+  pub counter: u256
+  pub fn get_counter(self) -&gt; u256 {
+    return self.counter
+  }
+  pub fn something_static() -&gt; u256 {
+    return 5
+  }
+}
+
+impl Computable for Linux {
+  fn compute(self, val: u256) -&gt; u256 {
+    return val + Linux::something_static() + self.get_counter()
+  }
+}
+</code></pre>
+<p>Traits can only appear as bounds for generic functions e.g.:</p>
+<pre><code>struct Runner {
+
+  pub fn run&lt;T: Computable&gt;(self, _ val: T) -&gt; u256 {
+    return val.compute(val: 1000)
+  }
+}
+</code></pre>
+<p>Only <code>struct</code> functions (not <code>contract</code> functions) can have generic parameters.
+The <code>run</code> method of <code>Runner</code> can be called with any type that implements <code>Computable</code> e.g.</p>
+<pre><code>contract Example {
+
+  pub fn generic_compute(self) {
+    let runner: Runner = Runner();
+    assert runner.run(Mac()) == 1001
+    assert runner.run(Linux(counter: 10)) == 1015
+  }
+}
+</code></pre>
+<p>(<a href="https://github.com/ethereum/fe/issues/710">#710</a>)</p>
+</li>
+<li>
+<p>Generate artifacts for all contracts of an ingot, not just for contracts that are defined in <code>main.fe</code> (<a href="https://github.com/ethereum/fe/issues/726">#726</a>)</p>
+</li>
+<li>
+<p>Allow using complex type as array element type.</p>
+<p>Example:</p>
+<pre><code>contract Foo {
+    pub fn bar() -&gt; i256 {
+        let my_array: Array&lt;Pair, 3&gt; = [Pair::new(1, 0), Pair::new(2, 0), Pair::new(3, 0)]
+
+        let sum: i256 = 0
+        for pair in my_array {
+            sum += pair.x
+        }
+
+        return sum
+    }
+}
+
+struct Pair {
+    pub x: i256
+    pub y: i256
+
+    pub fn new(_ x: i256, _ y: i256) -&gt; Pair {
+        return Pair(x, y)
+    }
+}
+</code></pre>
+<p>(<a href="https://github.com/ethereum/fe/issues/730">#730</a>)</p>
+</li>
+<li>
+<p>The <code>fe</code> CLI now has subcommands:</p>
+<p><code>fe new myproject</code> - creates a new project structure
+<code>fe check .</code>       - analyzes fe source code and prints errors
+<code>fe build .</code>       - builds a fe project (<a href="https://github.com/ethereum/fe/issues/732">#732</a>)</p>
+</li>
+<li>
+<p>Support passing nested struct types to public functions.</p>
+<p>Example:</p>
+<pre><code>pub struct InnerStruct {
+    pub inner_s: String&lt;10&gt;
+    pub inner_x: i256
+}
+
+pub struct NestedStruct {
+    pub inner: InnerStruct
+    pub outer_x: i256
+}
+
+contract Foo {
+    pub fn f(arg: NestedStruct) {
+        ...
+    }
+}
+</code></pre>
+<p>(<a href="https://github.com/ethereum/fe/issues/733">#733</a>)</p>
+</li>
+<li>
+<p>Added support for repeat expressions (<code>[VALUE; LENGTH]</code>).</p>
+<p>e.g.</p>
+<pre><code>let my_array: Array&lt;bool, 42&gt; = [bool; 42]
+</code></pre>
+<p>Also added checks to ensure array and struct types are initialized. These checks are currently performed at the declaration site, but will be loosened in the future. (<a href="https://github.com/ethereum/fe/issues/747">#747</a>)</p>
+</li>
+</ul>
+<h3 id="bugfixes-5"><a class="header" href="#bugfixes-5">Bugfixes</a></h3>
+<ul>
+<li>
+<p>Fix a bug that incorrect instruction is selected when the operands of a comp instruction are a signed type. (<a href="https://github.com/ethereum/fe/issues/734">#734</a>)</p>
+</li>
+<li>
+<p>Fix issue where a negative constant leads to an ICE</p>
+<p>E.g. the following code would previously crash the compiler but shouldn't:</p>
+<pre><code>const INIT_VAL: i8 = -1
+contract Foo {
+  pub fn init_bar() {
+    let x: i8 = INIT_VAL
+  }
+}
+</code></pre>
+<p>(<a href="https://github.com/ethereum/fe/issues/745">#745</a>)</p>
+</li>
+<li>
+<p>Fix a bug that causes ICE when nested if-statement has multiple exit point.</p>
+<p>E.g. the following code would previously crash the compiler but shouldn't:</p>
+<pre><code class="language-fe ignore"> pub fn foo(self) {
+    if true {
+        if self.something {
+            return
+        }
+    }
+    if true {
+        if self.something {
+            return
+        }
+    }
+}
+</code></pre>
+<p>(<a href="https://github.com/ethereum/fe/issues/749">#749</a>)</p>
+</li>
+</ul>
+<h2 id="0180-alpha-ruby-2022-05-27"><a class="header" href="#0180-alpha-ruby-2022-05-27">0.18.0-alpha &quot;Ruby&quot; (2022-05-27)</a></h2>
+<h3 id="features-8"><a class="header" href="#features-8">Features</a></h3>
+<ul>
+<li>Added support for parsing of attribute calls with generic arguments (e.g. <code>foo.bar&lt;Baz&gt;()</code>). (<a href="https://github.com/ethereum/fe/issues/719">#719</a>)</li>
+</ul>
+<h3 id="bugfixes-6"><a class="header" href="#bugfixes-6">Bugfixes</a></h3>
+<ul>
+<li>Fix a regression where the <code>stateMutability</code> field would not be included in the generated ABI (<a href="https://github.com/ethereum/fe/issues/722">#722</a>)</li>
+<li>Fix two regressions introduced in <code>0.17.0</code>
+<ul>
+<li>Properly lower right shift operation to yul's <code>sar</code> if operand is signed type</li>
+<li>Properly lower negate operation to call <code>safe_sub</code> (<a href="https://github.com/ethereum/fe/issues/723">#723</a>)</li>
+</ul>
+</li>
+</ul>
+<h2 id="0170-alpha-quartz-2022-05-26"><a class="header" href="#0170-alpha-quartz-2022-05-26">0.17.0-alpha &quot;Quartz&quot; (2022-05-26)</a></h2>
+<h3 id="features-9"><a class="header" href="#features-9">Features</a></h3>
+<ul>
+<li>
+<p>Support for underscores in numbers to improve readability e.g. <code>100_000</code>.</p>
+<p>Example</p>
+<pre><code>    let num: u256 = 1000_000_000_000
+</code></pre>
+<p>(<a href="https://github.com/ethereum/fe/issues/149">#149</a>)</p>
+</li>
+<li>
+<p>Optimized access of struct fields in storage (<a href="https://github.com/ethereum/fe/issues/249">#249</a>)</p>
+</li>
+<li>
+<p>Unit type <code>()</code> is now ABI encodable (<a href="https://github.com/ethereum/fe/issues/442">#442</a>)</p>
+</li>
+<li>
+<p>Temporary default <code>stateMutability</code> to <code>payable</code> in ABI</p>
+<p>The ABI metadata that the compiler previously generated did not include the <code>stateMutability</code> field. This piece of information is important for tooling such as hardhat because it determines whether a function needs to be called with or without sending a transaction.</p>
+<p>As soon as we have support for <code>mut self</code> and <code>mut ctx</code> we will be able to derive that information from the function signature. In the meantime we now default to <code>payable</code>. (<a href="https://github.com/ethereum/fe/issues/705">#705</a>)</p>
+</li>
+</ul>
+<h3 id="bugfixes-7"><a class="header" href="#bugfixes-7">Bugfixes</a></h3>
+<ul>
+<li>
+<p>Fixed a crash caused by certain memory to memory assignments.</p>
+<p>E.g. the following code would previously lead to a compiler crash:</p>
+<pre><code>my_struct.x = my_struct.y
+</code></pre>
+<p>(<a href="https://github.com/ethereum/fe/issues/590">#590</a>)</p>
+</li>
+<li>
+<p>Reject unary minus operation if the target type is an unsigned integer number.</p>
+<p>Code below should be reject by <code>fe</code> compiler:</p>
+<pre><code class="language-python">contract Foo:
+    pub fn bar(self) -&gt; u32:
+        let unsigned: u32 = 1
+        return -unsigned
+
+    pub fn foo():
+        let a: i32 = 1
+        let b: u32 = -a
+</code></pre>
+<p>(<a href="https://github.com/ethereum/fe/issues/651">#651</a>)</p>
+</li>
+<li>
+<p>Fixed crash when passing a struct that contains an array</p>
+<p>E.g. the following would previously result in a compiler crash:</p>
+<pre><code>struct MyArray:
+    pub x: Array&lt;i32, 2&gt;
+
+
+contract Foo:
+    pub fn bar(my_arr: MyArray):
+        pass
+</code></pre>
+<p>(<a href="https://github.com/ethereum/fe/issues/681">#681</a>)</p>
+</li>
+<li>
+<p>reject infinite size struct definitions.</p>
+<p>Fe <code>structs</code> having infinite size due to recursive definitions were not rejected earlier and would cause ICE in the analyzer since they were not properly handled. Now <code>structs</code> having infinite size are properly identified by detecting cycles in the dependency graph of the struct field definitions and an error is thrown by the analyzer. (<a href="https://github.com/ethereum/fe/issues/682">#682</a>)</p>
+</li>
+<li>
+<p>Return instead of revert when contract is called without data.</p>
+<p>If a contract is called without data so that no function is invoked,
+we would previously <code>revert</code> but that would leave us without a
+way to send ETH to a contract so instead it will cause a <code>return</code> now. (<a href="https://github.com/ethereum/fe/issues/694">#694</a>)</p>
+</li>
+<li>
+<p>Resolve compiler crash when using certain reserved YUL words as struct field names.</p>
+<p>E.g. the following would previously lead to a compiler crash because <code>numer</code> is
+a reserved keyword in YUL.</p>
+<pre><code>struct Foo:
+  pub number: u256
+
+contract Meh:
+
+  pub fn yay() -&gt; Foo:
+    return Foo(number:2)
+</code></pre>
+<p>(<a href="https://github.com/ethereum/fe/issues/709">#709</a>)</p>
+</li>
+</ul>
+<h2 id="0160-alpha-2022-05-05"><a class="header" href="#0160-alpha-2022-05-05">0.16.0-alpha (2022-05-05)</a></h2>
+<h3 id="features-10"><a class="header" href="#features-10">Features</a></h3>
+<ul>
+<li>Change static function call syntax from <code>Bar.foo()</code> to <code>Bar::foo()</code> (<a href="https://github.com/ethereum/fe/issues/241">#241</a>)</li>
+<li>Added support for retrieving the base fee via <code>ctx.base_fee()</code> (<a href="https://github.com/ethereum/fe/issues/503">#503</a>)</li>
+</ul>
+<h3 id="bugfixes-8"><a class="header" href="#bugfixes-8">Bugfixes</a></h3>
+<ul>
+<li>Resolve functions on structs via path (e.g. <code>bi::ba::bums()</code>) (<a href="https://github.com/ethereum/fe/issues/241">#241</a>)</li>
+</ul>
+<h2 id="0150-alpha-2022-04-04"><a class="header" href="#0150-alpha-2022-04-04">0.15.0-alpha (2022-04-04)</a></h2>
+<h3 id="features-11"><a class="header" href="#features-11">Features</a></h3>
+<ul>
+<li>
+<p>Labels are now required on function arguments. Labels can be omitted if the
+argument is a variable with a name that matches the label, or if the function
+definition specifies that an argument should have no label. Functions often take
+several arguments of the same type; compiler-checked labels can help prevent
+accidentally providing arguments in the wrong order.</p>
+<p>Example:</p>
+<pre><code>contract CoolCoin:
+  balance: Map&lt;address, i256&gt;
+  loans: Map&lt;(address, address), i256&gt;
+
+  pub fn demo(self, ann: address, bob: address):
+    let is_loan: bool = false
+    self.give(from: ann, to: bob, 100, is_loan)
+
+  fn transfer(self, from sender: address, to recipient: address, _ val: u256, is_loan: bool):
+    self.cred[sender] -= val
+    self.cred[recipient] += val
+    if is_loan:
+      self.loans[(sender, recipient)] += val
+</code></pre>
+<p>Note that arguments must be provided in the order specified in the function
+definition.</p>
+<p>A parameter's label defaults to the parameter name, but can be changed by
+specifying a different label to the left of the parameter name. Labels should be
+clear and convenient for the caller, while parameter names are only used in the
+function body, and can thus be longer and more descriptive.
+In the example above, we choose to use <code>sender</code> and <code>recipient</code> as identifiers
+in the body of <code>fn transfer</code>, but use labels <code>from:</code> and <code>to:</code>.</p>
+<p>In cases where it's ideal to not have labels, e.g. if a function takes a single
+argument, or if types are sufficient to differentiate between arguments, use <code>_</code>
+to specify that a given parameter has no label. It's also fine to require labels
+for some arguments, but not others.</p>
+<p>Example:</p>
+<pre><code>fn add(_ x: u256, _ y: u256) -&gt; u256:
+  return x + y
+
+contract Foo:
+  fn transfer(self, _ to: address, wei: u256):
+    pass
+
+  pub fn demo(self):
+    transfer(address(0), wei: add(1000, 42))
+</code></pre>
+<p>(<a href="https://github.com/ethereum/fe/issues/397">#397</a>)</p>
+</li>
+</ul>
+<h3 id="bugfixes-9"><a class="header" href="#bugfixes-9">Bugfixes</a></h3>
+<ul>
+<li>The region of memory used to compute the slot of a storage map value was not being allocated. (<a href="https://github.com/ethereum/fe/issues/684">#684</a>)</li>
+</ul>
+<h2 id="0140-alpha-2022-03-02"><a class="header" href="#0140-alpha-2022-03-02">0.14.0-alpha (2022-03-02)</a></h2>
+<h3 id="features-12"><a class="header" href="#features-12">Features</a></h3>
+<ul>
+<li>
+<p>Events can now be defined outside of contracts.</p>
+<p>Example:</p>
+<pre><code>event Transfer:
+    idx sender: address
+    idx receiver: address
+    value: u256
+
+contract Foo:
+    fn transferFoo(to: address, value: u256):
+        emit Transfer(sender: msg.sender, receiver: to, value)
+
+contract Bar:
+    fn transferBar(to: address, value: u256):
+        emit Transfer(sender: msg.sender, receiver: to, value)
+</code></pre>
+<p>(<a href="https://github.com/ethereum/fe/issues/80">#80</a>)</p>
+</li>
+<li>
+<p>The Fe standard library now includes a <code>std::evm</code> module, which provides functions that perform low-level evm operations.
+Many of these are marked <code>unsafe</code>, and thus can only be used inside of an <code>unsafe</code> function or an <code>unsafe</code> block.</p>
+<p>Example:</p>
+<pre><code>use std::evm::{mstore, mload}
+
+fn memory_shenanigans():
+  unsafe:
+    mstore(0x20, 42)
+    let x: u256 = mload(0x20)
+    assert x == 42
+</code></pre>
+<p>The global functions <code>balance</code> and <code>balance_of</code> have been removed; these can now be called as <code>std::evm::balance()</code>, etc.
+The global function <code>send_value</code> has been ported to Fe, and is now available
+as <code>std::send_value</code>.
+(<a href="https://github.com/ethereum/fe/issues/629">#629</a>)</p>
+</li>
+<li>
+<p>Support structs that have non-base type fields in storage.</p>
+<p>Example:</p>
+<pre><code>struct Point:
+    pub x: u256
+    pub y: u256
+
+struct Bar:
+    pub name: String&lt;3&gt;
+    pub numbers: Array&lt;u256, 2&gt;
+    pub point: Point
+    pub something: (u256, bool)
+
+
+contract Foo:
+    my_bar: Bar
+
+    pub fn complex_struct_in_storage(self) -&gt; String&lt;3&gt;:
+        self.my_bar = Bar(
+            name: &quot;foo&quot;,
+            numbers: [1, 2],
+            point: Point(x: 100, y: 200),
+            something: (1, true),
+        )
+
+        # Asserting the values as they were set initially
+        assert self.my_bar.numbers[0] == 1
+        assert self.my_bar.numbers[1] == 2
+        assert self.my_bar.point.x == 100
+        assert self.my_bar.point.y == 200
+        assert self.my_bar.something.item0 == 1
+        assert self.my_bar.something.item1
+
+        # We can change the values of the array
+        self.my_bar.numbers[0] = 10
+        self.my_bar.numbers[1] = 20
+        assert self.my_bar.numbers[0] == 10
+        assert self.my_bar.numbers[1] == 20
+        # We can set the array itself
+        self.my_bar.numbers = [1, 2]
+        assert self.my_bar.numbers[0] == 1
+        assert self.my_bar.numbers[1] == 2
+
+        # We can change the values of the Point
+        self.my_bar.point.x = 1000
+        self.my_bar.point.y = 2000
+        assert self.my_bar.point.x == 1000
+        assert self.my_bar.point.y == 2000
+        # We can set the point itself
+        self.my_bar.point = Point(x=100, y=200)
+        assert self.my_bar.point.x == 100
+        assert self.my_bar.point.y == 200
+
+        # We can change the value of the tuple
+        self.my_bar.something.item0 = 10
+        self.my_bar.something.item1 = false
+        assert self.my_bar.something.item0 == 10
+        assert not self.my_bar.something.item1
+        # We can set the tuple itself
+        self.my_bar.something = (1, true)
+        assert self.my_bar.something.item0 == 1
+        assert self.my_bar.something.item1
+
+        return self.my_bar.name.to_mem()
+</code></pre>
+<p>(<a href="https://github.com/ethereum/fe/issues/636">#636</a>)</p>
+</li>
+<li>
+<p>Features that read and modify state outside of contracts are now implemented on a struct
+named &quot;Context&quot;. <code>Context</code> is included in the standard library and can be imported with
+<code>use std::context::Context</code>. Instances of <code>Context</code> are created by calls to public functions
+that declare it in the signature or by unsafe code.</p>
+<p>Basic example:</p>
+<pre><code>use std::context::Context
+
+contract Foo:
+    my_num: u256
+
+    pub fn baz(ctx: Context) -&gt; u256:
+        return ctx.block_number()
+
+    pub fn bing(self, new_num: u256) -&gt; u256:
+        self.my_num = new_num
+        return self.my_num
+
+
+contract Bar:
+
+    pub fn call_baz(ctx: Context, foo_addr: address) -&gt; u256:
+        # future syntax: `let foo = ctx.load&lt;Foo&gt;(foo_addr)`
+        let foo: Foo = Foo(ctx, foo_addr)
+        return foo.baz()
+
+    pub fn call_bing(ctx: Context) -&gt; u256:
+        # future syntax: `let foo = ctx.create&lt;Foo&gt;(0)`
+        let foo: Foo = Foo.create(ctx, 0)
+        return foo.bing(42)
+</code></pre>
+<p>Example with <code>__call__</code> and unsafe block:</p>
+<pre><code>use std::context::Context
+use std::evm
+
+contract Foo:
+
+    pub fn __call__():
+        unsafe:
+            # creating an instance of `Context` is unsafe
+            let ctx: Context = Context()
+            let value: u256 = u256(bar(ctx))
+
+            # return `value`
+            evm::mstore(0, value)
+            evm::return_mem(0, 32)
+
+    fn bar(ctx: Context) -&gt; address:
+        return ctx.self_address()
+</code></pre>
+<p>(<a href="https://github.com/ethereum/fe/issues/638">#638</a>)</p>
+</li>
+<li>
+<h1 id="features-13"><a class="header" href="#features-13">Features</a></h1>
+<h2 id="support-local-constant"><a class="header" href="#support-local-constant">Support local constant</a></h2>
+<p>Example:</p>
+<pre><code class="language-python">contract Foo:
+    pub fn bar():
+        const LOCAL_CONST: i32 = 1
+</code></pre>
+<h2 id="support-constant-expression"><a class="header" href="#support-constant-expression">Support constant expression</a></h2>
+<p>Example:</p>
+<pre><code class="language-python">const GLOBAL: i32 = 8
+
+contract Foo:
+    pub fn bar():
+        const LOCAL: i32 = GLOBAL * 8
+</code></pre>
+<h2 id="support-constant-generics-expression"><a class="header" href="#support-constant-generics-expression">Support constant generics expression</a></h2>
+<p>Example:</p>
+<pre><code class="language-python">const GLOBAL: u256= 8
+const USE_GLOBAL: bool = false
+type MY_ARRAY = Array&lt;i32, { GLOBAL / 4 }&gt;
+
+contract Foo:
+    pub fn bar():
+        let my_array: Array&lt;i32, { GLOBAL if USE_GLOBAL else 4 }&gt;
+</code></pre>
+<h1 id="bug-fixes"><a class="header" href="#bug-fixes">Bug fixes</a></h1>
+<h2 id="fix-ice-when-constant-type-is-mismatch"><a class="header" href="#fix-ice-when-constant-type-is-mismatch">Fix ICE when constant type is mismatch</a></h2>
+<p>Example:</p>
+<pre><code class="language-python">const GLOBAL: i32 = &quot;FOO&quot;
+
+contract Foo:
+    pub fn bar():
+        let FOO: i32 = GLOBAL
+</code></pre>
+<h2 id="fix-ice-when-assigning-value-to-constant-twice"><a class="header" href="#fix-ice-when-assigning-value-to-constant-twice">Fix ICE when assigning value to constant twice</a></h2>
+<p>Example:</p>
+<pre><code class="language-python">const BAR: i32 = 1
+
+contract FOO:
+    pub fn bar():
+        BAR = 10
+</code></pre>
+<p>(<a href="https://github.com/ethereum/fe/issues/649">#649</a>)</p>
+</li>
+<li>
+<p>Argument label syntax now uses <code>:</code> instead of <code>=</code>. Example:</p>
+<pre><code>struct Foo:
+  x: u256
+  y: u256
+
+let x: MyStruct = MyStruct(x: 10, y: 11)
+# previously:     MyStruct(x = 10, y = 11)
+</code></pre>
+<p>(<a href="https://github.com/ethereum/fe/issues/665">#665</a>)</p>
+</li>
+<li>
+<p>Support module-level <code>pub</code> modifier, now default visibility of items in a module is private.</p>
+<p>Example:</p>
+<pre><code class="language-python"># This constant can be used outside of the module.
+pub const PUBLIC:i32 = 1
+
+# This constant can NOT be used outside of the module.
+const PRIVATE: i32 = 1
+</code></pre>
+<p>(<a href="https://github.com/ethereum/fe/issues/677">#677</a>)</p>
+</li>
+</ul>
+<h3 id="internal-changes---for-fe-contributors"><a class="header" href="#internal-changes---for-fe-contributors">Internal Changes - for Fe Contributors</a></h3>
+<ul>
+<li>
+<ul>
+<li>Source files are now managed by a (salsa) <code>SourceDb</code>. A <code>SourceFileId</code> now corresponds to a salsa-interned <code>File</code> with a path. File content is a salsa input function. This is mostly so that the future (LSP) language server can update file content when the user types or saves, which will trigger a re-analysis of anything that changed.</li>
+<li>An ingot's set of modules and dependencies are also salsa inputs, so that when the user adds/removes a file or dependency, analysis is rerun.</li>
+<li>Standalone modules (eg a module compiled with <code>fe fee.fe</code>) now have a fake ingot parent. Each Ingot has an IngotMode (Lib, Main, StandaloneModule), which is used to disallow <code>ingot::whatever</code> paths in standalone modules, and to determine the correct root module file.</li>
+<li><code>parse_module</code> now always returns an <code>ast::Module</code>, and thus a <code>ModuleId</code> will always exist for a source file, even if it contains fatal parse errors. If the parsing fails, the body will end with a <code>ModuleStmt::ParseError</code> node. The parsing will stop at all but the simplest of syntax errors, but this at least allows partial analysis of source file with bad syntax.</li>
+<li><code>ModuleId::ast(db)</code> is now a query that parses the module's file on demand, rather than the AST being interned into salsa. This makes handling parse diagnostics cleaner, and removes the up-front parsing of every module at ingot creation time. (<a href="https://github.com/ethereum/fe/issues/628">#628</a>)</li>
+</ul>
+</li>
+</ul>
+<h2 id="0130-alpha-2022-01-31-0130-alpha-2022-01-31"><a class="header" href="#0130-alpha-2022-01-31-0130-alpha-2022-01-31">0.13.0-alpha (2022-01-31)## 0.13.0-alpha (2022-01-31)</a></h2>
+<h3 id="features-14"><a class="header" href="#features-14">Features</a></h3>
+<ul>
+<li>
+<p>Support private fields on structs</p>
+<p>Public fields now need to be declared with the <code>pub</code> modifier, otherwise they default to private fields.
+If a struct contains private fields it can not be constructed directly except from within the
+struct itself. The recommended way is to implement a method <code>new(...)</code> as demonstrated in the
+following example.</p>
+<pre><code>struct House:
+    pub price: u256
+    pub size: u256
+    vacant: bool
+
+    pub fn new(price: u256, size: u256) -&gt; House
+      return House(price=price, size=size, vacant=true)
+
+contract Manager:
+
+  house: House
+
+  pub fn create_house(price: u256, size: u256):
+    self.house = House::new(price, size)
+    let can_access_price: u256 = self.house.price
+    # can not access `self.house.vacant` because the field is private
+</code></pre>
+<p>(<a href="https://github.com/ethereum/fe/issues/214">#214</a>)</p>
+</li>
+<li>
+<p>Support non-base type fields in structs</p>
+<p>Support is currently limited in two ways:</p>
+<ul>
+<li>Structs with complex fields can not be returned from public functions</li>
+<li>Structs with complex fields can not be stored in storage (<a href="https://github.com/ethereum/fe/issues/343">#343</a>)</li>
+</ul>
+</li>
+<li>
+<p>Addresses can now be explicitly cast to u256. For example:</p>
+<pre><code>fn f(addr: address) -&gt; u256:
+  return u256(addr)
+</code></pre>
+<p>(<a href="https://github.com/ethereum/fe/issues/621">#621</a>)</p>
+</li>
+<li>
+<p>A special function named <code>__call__</code> can now be defined in contracts.</p>
+<p>The body of this function will execute in place of the standard dispatcher when the contract is called.</p>
+<p>example (with intrinsics):</p>
+<pre><code>contract Foo:
+    pub fn __call__(self):
+        unsafe:
+            if __calldataload(0) == 1:
+                __revert(0, 0)
+            else:
+                __return(0, 0)
+</code></pre>
+<p>(<a href="https://github.com/ethereum/fe/issues/622">#622</a>)</p>
+</li>
+</ul>
+<h3 id="bugfixes-10"><a class="header" href="#bugfixes-10">Bugfixes</a></h3>
+<ul>
+<li>
+<p>Fixed a crash that happend when using a certain unprintable ASCII char (<a href="https://github.com/ethereum/fe/issues/551">#551</a>)</p>
+</li>
+<li>
+<p>The argument to <code>revert</code> wasn't being lowered by the compiler,
+meaning that some <code>revert</code> calls would cause a compiler panic
+in later stages. For example:</p>
+<pre><code>const BAD_MOJO: u256 = 0xdeaddead
+
+struct Error:
+  code: u256
+
+fn fail():
+  revert Error(code = BAD_MOJO)
+</code></pre>
+<p>(<a href="https://github.com/ethereum/fe/issues/619">#619</a>)</p>
+</li>
+<li>
+<p>Fixed a regression where an empty list expression (<code>[]</code>) would lead to a compiler crash. (<a href="https://github.com/ethereum/fe/issues/623">#623</a>)</p>
+</li>
+<li>
+<p>Fixed a bug where int array elements were not sign extended in their ABI encodings. (<a href="https://github.com/ethereum/fe/issues/633">#633</a>)</p>
+</li>
+</ul>
+<h2 id="0120-alpha-2021-12-31-0120-alpha-2021-12-31"><a class="header" href="#0120-alpha-2021-12-31-0120-alpha-2021-12-31">0.12.0-alpha (2021-12-31)## 0.12.0-alpha (2021-12-31)</a></h2>
+<h3 id="features-15"><a class="header" href="#features-15">Features</a></h3>
+<ul>
+<li>
+<p>Added unsafe low-level &quot;intrinsic&quot; functions, that perform raw evm operations.
+For example:</p>
+<pre><code>fn foo():
+  unsafe:
+    __mtore(0, 5000)
+    assert __mload(0) == 5000
+</code></pre>
+<p>The functions available are exactly those defined in yul's &quot;evm dialect&quot;:
+https://docs.soliditylang.org/en/v0.8.11/yul.html#evm-dialect
+but with a double-underscore prefix. Eg <code>selfdestruct</code> -&gt; <code>__selfdestruct</code>.</p>
+<p>These are intended to be used for implementing basic standard library functionality,
+and shouldn't typically be needed in normal contract code.</p>
+<p>Note: some intrinsic functions don't return a value (eg <code>__log0</code>); using these
+functions in a context that assumes a return value of unit type (eg <code>let x: () = __log0(a, b)</code>)
+will currently result in a compiler panic in the yul compilation phase. (<a href="https://github.com/ethereum/fe/issues/603">#603</a>)</p>
+</li>
+<li>
+<p>Added an out of bounds check for accessing array items.
+If an array index is retrieved at an index that is not within
+the bounds of the array it now reverts with <code>Panic(0x32)</code>. (<a href="https://github.com/ethereum/fe/issues/606">#606</a>)</p>
+</li>
+</ul>
+<h3 id="bugfixes-11"><a class="header" href="#bugfixes-11">Bugfixes</a></h3>
+<ul>
+<li>
+<p>Ensure ternary expression short circuit.</p>
+<p>Example:</p>
+<pre><code>contract Foo:
+
+    pub fn bar(input: u256) -&gt; u256:
+        return 1 if input &gt; 5 else revert_me()
+
+    fn revert_me() -&gt; u256:
+        revert
+        return 0
+</code></pre>
+<p>Previous to this change, the code above would <strong>always</strong> revert no matter
+which branch of the ternary expressions it would resolve to. That is because
+both sides were evaluated and then one side was discarded. With this change,
+only the branch that doesn't get picked won't get evaluated at all.</p>
+<p>The same is true for the boolean operations <code>and</code> and <code>or</code>. (<a href="https://github.com/ethereum/fe/issues/488">#488</a>)</p>
+</li>
+</ul>
+<h3 id="internal-changes---for-fe-contributors-1"><a class="header" href="#internal-changes---for-fe-contributors-1">Internal Changes - for Fe Contributors</a></h3>
+<ul>
+<li>
+<p>Added a globally available <em>dummy</em> std lib.</p>
+<p>This library contains a single <code>get_42</code> function, which can be called using <code>std::get_42()</code>. Once
+low-level intrinsics have been added to the language, we can delete <code>get_42</code> and start adding
+useful code. (<a href="https://github.com/ethereum/fe/issues/601">#601</a>)</p>
+</li>
+</ul>
+<h2 id="0110-alpha-karlite-2021-12-02"><a class="header" href="#0110-alpha-karlite-2021-12-02">0.11.0-alpha &quot;Karlite&quot; (2021-12-02)</a></h2>
+<h3 id="features-16"><a class="header" href="#features-16">Features</a></h3>
+<ul>
+<li>
+<p>Added support for multi-file inputs.</p>
+<p><strong>Implementation details:</strong></p>
+<p>Mostly copied Rust's crate system, but use the term <em>ingot</em> instead of crate.</p>
+<p>Below is an example of an ingot's file tree, as supported by the current implementation.</p>
+<pre><code>`-- basic_ingot
+    `-- src
+        |-- bar
+        |   `-- baz.fe
+        |-- bing.fe
+        |-- ding
+        |   |-- dang.fe
+        |   `-- dong.fe
+        `-- main.fe
+</code></pre>
+<p>There are still a few features that will be worked on over the coming months:</p>
+<ul>
+<li>source files accompanying each directory module (e.g. <code>my_mod.fe</code>)</li>
+<li>configuration files and the ability to create library ingots</li>
+<li>test directories</li>
+<li>module-level <code>pub</code> modifier (all items in a module are public)</li>
+<li><code>mod</code> statements (all fe files in the input tree are public modules)</li>
+</ul>
+<p>These things will be implemented in order of importance over the next few months. (<a href="https://github.com/ethereum/fe/issues/562">#562</a>)</p>
+</li>
+<li>
+<p>The syntax for array types has changed to match other generic types.
+For example, <code>u8[4]</code> is now written <code>Array&lt;u8, 4&gt;</code>. (<a href="https://github.com/ethereum/fe/issues/571">#571</a>)</p>
+</li>
+<li>
+<p>Functions can now be defined on struct types. Example:</p>
+<pre><code>struct Point:
+  x: u64
+  y: u64
+
+  # Doesn't take `self`. Callable as `Point.origin()`.
+  # Note that the syntax for this will soon be changed to `Point::origin()`.
+  pub fn origin() -&gt; Point:
+    return Point(x=0, y=0)
+
+  # Takes `self`. Callable on a value of type `Point`.
+  pub fn translate(self, x: u64, y: u64):
+    self.x += x
+    self.y += y
+
+  pub fn add(self, other: Point) -&gt; Point:
+    let x: u64 = self.x + other.x
+    let y: u64 = self.y + other.y
+    return Point(x, y)
+
+  pub fn hash(self) -&gt; u256:
+    return keccak256(self.abi_encode())
+
+pub fn do_pointy_things():
+  let p1: Point = Point.origin()
+  p1.translate(5, 10)
+
+  let p2: Point = Point(x=1, y=2)
+  let p3: Point = p1.add(p2)
+
+  assert p3.x == 6 and p3.y == 12
+</code></pre>
+<p>(<a href="https://github.com/ethereum/fe/issues/577">#577</a>)</p>
+</li>
+</ul>
+<h3 id="bugfixes-12"><a class="header" href="#bugfixes-12">Bugfixes</a></h3>
+<ul>
+<li>
+<p>Fixed a rare compiler crash.</p>
+<p>Example:</p>
+<pre><code>let my_array: i256[1] = [-1 &lt;&lt; 1]
+</code></pre>
+<p>Previous to this fix, the given example would lead to an ICE. (<a href="https://github.com/ethereum/fe/issues/550">#550</a>)</p>
+</li>
+<li>
+<p>Contracts can now <code>create</code> an instance of a contract defined later in a file.
+This issue was caused by a weakness in the way we generated yul. (<a href="https://github.com/ethereum/fe/issues/596">#596</a>)</p>
+</li>
+</ul>
+<h3 id="internal-changes---for-fe-contributors-2"><a class="header" href="#internal-changes---for-fe-contributors-2">Internal Changes - for Fe Contributors</a></h3>
+<ul>
+<li>
+<p>File IDs are now attached to <code>Span</code>s. (<a href="https://github.com/ethereum/fe/issues/587">#587</a>)</p>
+</li>
+<li>
+<p>The fe analyzer now builds a dependency graph of source code &quot;items&quot; (functions, contracts, structs, etc).
+This is used in the yulgen phase to determine which items are needed in the yul (intermediate representation)
+output. Note that the yul output is still cluttered with utility functions that may or may not be needed by
+a given contract. These utility functions are defined in the yulgen phase and aren't tracked in the dependency
+graph, so it's not yet possible to filter out the unused functions. We plan to move the definition of many
+of these utility functions into fe; when this happens they'll become part of the dependency graph and will only
+be included in the yul output when needed.</p>
+<p>The dependency graph will also enable future analyzer warnings about unused code. (<a href="https://github.com/ethereum/fe/issues/596">#596</a>)</p>
+</li>
+</ul>
+<h2 id="0100-alpha-2021-10-31"><a class="header" href="#0100-alpha-2021-10-31">0.10.0-alpha (2021-10-31)</a></h2>
+<h3 id="features-17"><a class="header" href="#features-17">Features</a></h3>
+<ul>
+<li>
+<p>Support for module level constants for base types</p>
+<p>Example:</p>
+<pre><code>const TEN = 10
+
+contract
+
+  pub fn do_moon_math(self) -&gt; u256:
+    return 4711 * TEN
+</code></pre>
+<p>The values of base type constants are always inlined. (<a href="https://github.com/ethereum/fe/issues/192">#192</a>)</p>
+</li>
+<li>
+<p>Encode revert errors for ABI decoding as <code>Error(0x103)</code> not <code>Panic(0x99)</code> (<a href="https://github.com/ethereum/fe/issues/492">#492</a>)</p>
+</li>
+<li>
+<p>Replaced <code>import</code> statements with <code>use</code> statements.</p>
+<p>Example:</p>
+<pre><code>use foo::{bar::*, baz as baz26}
+</code></pre>
+<p>Note: this only adds support for parsing <code>use</code> statements. (<a href="https://github.com/ethereum/fe/issues/547">#547</a>)</p>
+</li>
+<li>
+<p>Functions can no be defined outside of contracts. Example:</p>
+<pre><code>fn add_bonus(x: u256) -&gt; u256:
+    return x + 10
+
+contract PointTracker:
+    points: Map&lt;address, u256&gt;
+
+    pub fn add_points(self, user: address, val: u256):
+        self.points[user] += add_bonus(val)
+</code></pre>
+<p>(<a href="https://github.com/ethereum/fe/issues/566">#566</a>)</p>
+</li>
+<li>
+<p>Implemented a <code>send_value(to: address, value_in_wei: u256)</code> function.</p>
+<p>The function is similar to the <a href="https://github.com/OpenZeppelin/openzeppelin-contracts/blob/5b28259dacf47fc208e03611eb3ba8eeaed63cc0/contracts/utils/Address.sol#L54-L59"><code>sendValue</code> function by OpenZeppelin</a> with the differences being that:</p>
+<ol>
+<li>
+<p>It reverts with <code>Error(0x100)</code> instead of <code>Error(&quot;Address: insufficient balance&quot;)</code> to
+safe more gas.</p>
+</li>
+<li>
+<p>It uses <code>selfbalance()</code> instead of <code>balance(address())</code> to safe more gas</p>
+</li>
+<li>
+<p>It reverts with <code>Error(0x101)</code> instead of <code>Error(&quot;Address: unable to send value, recipient may have reverted&quot;)</code> also to safe more gas. (<a href="https://github.com/ethereum/fe/issues/567">#567</a>)</p>
+</li>
+</ol>
+</li>
+<li>
+<p>Added support for <code>unsafe</code> functions and <code>unsafe</code> blocks within functions.
+Note that there's currently no functionality within Fe that requires the use
+of <code>unsafe</code>, but we plan to add built-in <code>unsafe</code> functions that perform raw
+evm operations which will only callable within an <code>unsafe</code> block or function. (<a href="https://github.com/ethereum/fe/issues/569">#569</a>)</p>
+</li>
+<li>
+<p>Added <code>balance()</code> and <code>balance_of(account: address)</code> methods. (<a href="https://github.com/ethereum/fe/issues/572">#572</a>)</p>
+</li>
+<li>
+<p>Added support for explicit casting between numeric types.</p>
+<p>Example:</p>
+<pre><code>let a: i8 = i8(-1)
+let a1: i16 = i16(a)
+let a2: u16 = u16(a1)
+
+assert a2 == u16(65535)
+
+let b: i8 = i8(-1)
+let b1: u8 = u8(b)
+let b2: u16 = u16(b1)
+
+assert b2 == u16(255)
+</code></pre>
+<p>Notice that Fe allows casting between any two numeric types but does not allow
+to change both the sign and the size of the type in one step as that would leave
+room for ambiguity as the example above demonstrates. (<a href="https://github.com/ethereum/fe/issues/576">#576</a>)</p>
+</li>
+</ul>
+<h3 id="bugfixes-13"><a class="header" href="#bugfixes-13">Bugfixes</a></h3>
+<ul>
+<li>
+<p>Adjust numeric values loaded from memory or storage</p>
+<p>Previous to this fix numeric values that were loaded from either memory or storage
+were not properly loaded on the stack which could result in numeric values not
+treated as intended.</p>
+<p>Example:</p>
+<pre><code>contract Foo:
+
+    pub fn bar() -&gt; i8:
+        let in_memory: i8[1] = [-3]
+        return in_memory[0]
+</code></pre>
+<p>In the example above <code>bar()</code> would not return <code>-3</code> but <code>253</code> instead. (<a href="https://github.com/ethereum/fe/issues/524">#524</a>)</p>
+</li>
+<li>
+<p>Propagate reverts from external contract calls.</p>
+<p>Before this fix the following code to <code>should_revert()</code> or <code>should_revert2()</code>
+would succeed even though it clearly should not.</p>
+<pre><code>contract A:
+  contract_b: B
+  pub fn __init__(contract_b: address):
+    self.contract_b = B(contract_b)
+
+  pub fn should_revert():
+    self.contract_b.fail()
+
+  pub fn should_revert2():
+    self.contract_b.fail_with_custom_error()
+
+struct SomeError:
+  pass
+
+contract B:
+
+  pub fn fail():
+    revert
+
+  pub fn fail_with_custom_error():
+    revert SomeError()
+</code></pre>
+<p>With this fix the revert errors are properly passed upwards the call hierachy. (<a href="https://github.com/ethereum/fe/issues/574">#574</a>)</p>
+</li>
+<li>
+<p>Fixed bug in left shift operation.</p>
+<p>Example:</p>
+<p>Let's consider the value <code>1</code> as an <code>u8</code> which is represented as
+the following 256 bit item on the EVM stack <code>00..|00000001|</code>.
+A left shift of <code>8</code> bits (<code>val &lt;&lt; 8</code>) turns that into <code>00..01|00000000|</code>.</p>
+<p>Previous to this fix this resulted in the compiler taking <code>256</code> as the
+value for the <code>u8</code> when clearly <code>256</code> is not even in the range of <code>u8</code>
+anymore. With this fix the left shift operations was fixed to properly
+&quot;clean up&quot; the result of the shift so that <code>00..01|00000000|</code> turns into
+<code>00..00|00000000|</code>. (<a href="https://github.com/ethereum/fe/issues/575">#575</a>)</p>
+</li>
+<li>
+<p>Ensure negation is checked and reverts with over/underflow if needed.</p>
+<p>Example:</p>
+<p>The minimum value for an <code>i8</code> is <code>-128</code> but the maximum value of an <code>i8</code>
+is <code>127</code> which means that negating <code>-128</code> should lead to an overflow since
+<code>128</code> does not fit into an <code>i8</code>. Before this fix, negation operations where
+not checked for over/underflow resulting in returning the oversized value. (<a href="https://github.com/ethereum/fe/issues/578">#578</a>)</p>
+</li>
+</ul>
+<h3 id="internal-changes---for-fe-contributors-3"><a class="header" href="#internal-changes---for-fe-contributors-3">Internal Changes - for Fe Contributors</a></h3>
+<ul>
+<li>
+<p>In the analysis stage, all name resolution (of variable names, function names,
+type names, etc used in code) now happens via a single <code>resolve_name</code> pathway,
+so we can catch more cases of name collisions and log more helpful error messages. (<a href="https://github.com/ethereum/fe/issues/555">#555</a>)</p>
+</li>
+<li>
+<p>Added a new category of tests: differential contract testing.</p>
+<p>Each of these tests is pased on a pair of contracts where one implementation
+is written in Fe and the other one is written in Solidity. The implementations
+should have the same public APIs and are assumed to always return identical
+results given equal inputs. The inputs are randomly generated using <code>proptest</code>
+and hence are expected to discover unknown bugs. (<a href="https://github.com/ethereum/fe/issues/578">#578</a>)</p>
+</li>
+</ul>
+<h2 id="090-alpha-2021-09-29"><a class="header" href="#090-alpha-2021-09-29">0.9.0-alpha (2021-09-29)</a></h2>
+<h3 id="features-18"><a class="header" href="#features-18">Features</a></h3>
+<ul>
+<li>
+<p>The <code>self</code> variable is no longer implicitly defined in code blocks. It must now be declared
+as the first parameter in a function signature.</p>
+<p>Example:</p>
+<pre><code>contract Foo:
+    my_stored_num: u256
+
+    pub fn bar(self, my_num: u256):
+        self.my_stored_num = my_num
+
+    pub fn baz(self):
+        self.bar(my_pure_func())
+
+    pub fn my_pure_func() -&gt; u256:
+        return 42 + 26
+</code></pre>
+<p>(<a href="https://github.com/ethereum/fe/issues/520">#520</a>)</p>
+</li>
+<li>
+<p>The analyzer now disallows defining a type, variable, or function whose
+name conflicts with a built-in type, function, or object.</p>
+<p>Example:</p>
+<pre><code>error: type name conflicts with built-in type
+┌─ compile_errors/shadow_builtin_type.fe:1:6
+│
+1 │ type u256 = u8
+│      ^^^^ `u256` is a built-in type
+</code></pre>
+<p>(<a href="https://github.com/ethereum/fe/issues/539">#539</a>)</p>
+</li>
+</ul>
+<h3 id="bugfixes-14"><a class="header" href="#bugfixes-14">Bugfixes</a></h3>
+<ul>
+<li>Fixed cases where the analyzer would correctly reject code, but would panic instead of logging an error message. (<a href="https://github.com/ethereum/fe/issues/534">#534</a>)</li>
+<li>Non-fatal parser errors (eg missing parentheses when defining a function that takes no arguments: <code>fn foo:</code>)
+are no longer ignored if the semantic analysis stage succeeds. (<a href="https://github.com/ethereum/fe/issues/535">#535</a>)</li>
+<li>Fixed issue #531 by adding a <code>$</code> to the front of lowered tuple names. (<a href="https://github.com/ethereum/fe/issues/546">#546</a>)</li>
+</ul>
+<h3 id="internal-changes---for-fe-contributors-4"><a class="header" href="#internal-changes---for-fe-contributors-4">Internal Changes - for Fe Contributors</a></h3>
+<ul>
+<li>Implemented pretty printing of Fe AST. (<a href="https://github.com/ethereum/fe/issues/540">#540</a>)</li>
+</ul>
+<h2 id="080-alpha-haxonite-2021-08-31"><a class="header" href="#080-alpha-haxonite-2021-08-31">0.8.0-alpha &quot;Haxonite&quot; (2021-08-31)</a></h2>
+<h3 id="features-19"><a class="header" href="#features-19">Features</a></h3>
+<ul>
+<li>
+<p>Support quotes, tabs and carriage returns in string literals and otherwise
+restrict string literals to the printable subset of the ASCII table. (<a href="https://github.com/ethereum/fe/issues/329">#329</a>)</p>
+</li>
+<li>
+<p>The analyzer now uses a query-based system, which fixes some shortcomings of the previous implementation.</p>
+<ul>
+<li>Types can now refer to other types defined later in the file.
+Example:</li>
+</ul>
+<pre><code>type Posts = Map&lt;PostId, PostBody&gt;
+type PostId = u256
+type PostBody = String&lt;140&gt;
+</code></pre>
+<ul>
+<li>Duplicate definition errors now show the location of the original definition.</li>
+<li>The analysis of each function, type definition, etc happens independently, so an error in one
+doesn't stop the analysis pass. This means fe can report more user errors in a single run of the compiler. (<a href="https://github.com/ethereum/fe/issues/468">#468</a>)</li>
+</ul>
+</li>
+<li>
+<p>Function definitions are now denoted with the keyword fn instead of def. (<a href="https://github.com/ethereum/fe/issues/496">#496</a>)</p>
+</li>
+<li>
+<p>Variable declarations are now preceded by the <code>let</code> keyword. Example: <code>let x: u8 = 1</code>. (<a href="https://github.com/ethereum/fe/issues/509">#509</a>)</p>
+</li>
+<li>
+<p>Implemented support for numeric unary invert operator (<code>~</code>) (<a href="https://github.com/ethereum/fe/issues/526">#526</a>)</p>
+</li>
+</ul>
+<h3 id="bugfixes-15"><a class="header" href="#bugfixes-15">Bugfixes</a></h3>
+<ul>
+<li>
+<p>Calling <code>self.__init__()</code> now results in a nice error instead of a panic in the yul compilation stage. (<a href="https://github.com/ethereum/fe/issues/468">#468</a>)</p>
+</li>
+<li>
+<p>Fixed an issue where certain expressions were not being moved to the correct location. (<a href="https://github.com/ethereum/fe/issues/493">#493</a>)</p>
+</li>
+<li>
+<p>Fixed an issue with a missing return statement not properly detected.</p>
+<p>Previous to this fix, the following code compiles but it should not:</p>
+<pre><code>contract Foo:
+    pub fn bar(val: u256) -&gt; u256:
+        if val &gt; 1:
+            return 5
+</code></pre>
+<p>With this change, the compiler rightfully detects that the code is missing
+a <code>return</code> or <code>revert</code> statement after the <code>if</code> statement since it is not
+guaranteed that the path of execution always follows the arm of the <code>if</code> statement. (<a href="https://github.com/ethereum/fe/issues/497">#497</a>)</p>
+</li>
+<li>
+<p>Fixed a bug in the analyzer which allowed tuple item accessor names with a leading 0,
+resulting in an internal compiler error in a later pass. Example: <code>my_tuple.item001</code>.
+These are now rejected with an error message. (<a href="https://github.com/ethereum/fe/issues/510">#510</a>)</p>
+</li>
+<li>
+<p>Check call argument labels for function calls.</p>
+<p>Previously the compiler would not check any labels that were used
+when making function calls on <code>self</code> or external contracts.</p>
+<p>This can be especially problematic if gives developers the impression
+that they could apply function arguments in any order as long as they
+are named which is <strong>not</strong> the case.</p>
+<pre><code>contract Foo:
+
+    pub fn baz():
+        self.bar(val2=1, doesnt_even_exist=2)
+
+    pub fn bar(val1: u256, val2: u256):
+        pass
+</code></pre>
+<p>Code as the one above is now rightfully rejected by the compiler. (<a href="https://github.com/ethereum/fe/issues/517">#517</a>)</p>
+</li>
+</ul>
+<h3 id="improved-documentation-4"><a class="header" href="#improved-documentation-4">Improved Documentation</a></h3>
+<ul>
+<li>
+<p>Various improvements and bug fixes to both the content and layout of the specification. (<a href="https://github.com/ethereum/fe/issues/489">#489</a>)</p>
+</li>
+<li>
+<p>Document all remaining statements and expressions in the spec.</p>
+<p>Also added a CI check to ensure code examples in the documentation
+are validated against the latest compiler. (<a href="https://github.com/ethereum/fe/issues/514">#514</a>)</p>
+</li>
+</ul>
+<h3 id="internal-changes---for-fe-contributors-5"><a class="header" href="#internal-changes---for-fe-contributors-5">Internal Changes - for Fe Contributors</a></h3>
+<ul>
+<li>Separated Fe type traits between crates. (<a href="https://github.com/ethereum/fe/issues/485">#485</a>)</li>
+</ul>
+<h2 id="070-alpha-galaxite-2021-07-27"><a class="header" href="#070-alpha-galaxite-2021-07-27">0.7.0-alpha &quot;Galaxite&quot; (2021-07-27)</a></h2>
+<h3 id="features-20"><a class="header" href="#features-20">Features</a></h3>
+<ul>
+<li>
+<p>Enable the optimizer by default. The optimizer can still be disabled
+by supplying <code>--optimize=false</code> as an argument. (<a href="https://github.com/ethereum/fe/issues/439">#439</a>)</p>
+</li>
+<li>
+<p>The following checks are now performed while decoding data:</p>
+<ul>
+<li>The size of the encoded data fits within the size range known at compile-time.</li>
+<li>Values are correctly padded.
+<ul>
+<li>unsigned integers, addresses, and bools are checked to have correct left zero padding</li>
+<li>the size of signed integers are checked</li>
+<li>bytes and strings are checked to have correct right padding</li>
+</ul>
+</li>
+<li>Data section offsets are consistent with the size of preceding values in the data section.</li>
+<li>The dynamic size of strings does not exceed their maximum size.</li>
+<li>The dynamic size of byte arrays (<code>u8[n]</code>) is equal to the size of the array. (<a href="https://github.com/ethereum/fe/issues/440">#440</a>)</li>
+</ul>
+</li>
+<li>
+<p>Type aliases can now include tuples. Example:</p>
+<pre><code>type InternetPoints = (address, u256)
+</code></pre>
+<p>(<a href="https://github.com/ethereum/fe/issues/459">#459</a>)</p>
+</li>
+<li>
+<p>Revert with custom errors</p>
+<p>Example:</p>
+<pre><code>struct PlatformError:
+  code: u256
+
+pub fn do_something():
+  revert PlatformError(code=4711)
+</code></pre>
+<p>Error encoding <a href="https://docs.soliditylang.org/en/v0.8.4/abi-spec.html#errors">follows Solidity</a> which is based on <a href="https://github.com/ethereum/EIPs/issues/838">EIP-838</a>. This means that custom errors returned from Fe are fully compatible with Solidity. (<a href="https://github.com/ethereum/fe/issues/464">#464</a>)</p>
+</li>
+<li>
+<ul>
+<li>The builtin value <code>msg.sig</code> now has type <code>u256</code>.</li>
+<li>Removed the <code>bytes[n]</code> type. The type <code>u8[n]</code> can be used in its placed and will be encoded as a dynamically-sized, but checked, bytes component. (<a href="https://github.com/ethereum/fe/issues/472">#472</a>)</li>
+</ul>
+</li>
+<li>
+<p>Encode certain reverts as panics.</p>
+<p>With this change, the following reverts are encoded as <code>Panic(uint256)</code> with
+the following panic codes:</p>
+<ul>
+<li><code>0x01</code>: An assertion that failed and did not specify an error message</li>
+<li><code>0x11</code>: An arithmetic expression resulted in an over- or underflow</li>
+<li><code>0x12</code>: An arithmetic expression divided or modulo by zero</li>
+</ul>
+<p>The panic codes are aligned with <a href="https://docs.soliditylang.org/en/v0.8.4/control-structures.html?highlight=Panic#panic-via-assert-and-error-via-require">the panic codes that Solidity uses</a>. (<a href="https://github.com/ethereum/fe/issues/476">#476</a>)</p>
+</li>
+</ul>
+<h3 id="bugfixes-16"><a class="header" href="#bugfixes-16">Bugfixes</a></h3>
+<ul>
+<li>
+<p>Fixed a crash when trying to access an invalid attribute on a string.</p>
+<p>Example:</p>
+<pre><code>contract Foo:
+
+  pub fn foo():
+    &quot;&quot;.does_not_exist
+</code></pre>
+<p>The above now yields a proper user error. (<a href="https://github.com/ethereum/fe/issues/444">#444</a>)</p>
+</li>
+<li>
+<p>Ensure <code>String&lt;N&gt;</code> type is capitalized in error messages (<a href="https://github.com/ethereum/fe/issues/445">#445</a>)</p>
+</li>
+<li>
+<p>Fixed ICE when using a static string that spans over multiple lines.</p>
+<p>Previous to this fix, the following code would lead to a compiler crash:</p>
+<pre><code>contract Foo:
+    pub fn return_with_newline() -&gt; String&lt;16&gt;:
+        return &quot;foo
+        balu&quot;
+</code></pre>
+<p>The above code now works as intended. (<a href="https://github.com/ethereum/fe/issues/448">#448</a>)</p>
+</li>
+<li>
+<p>Fixed ICE when using a tuple declaration and specifying a non-tuple type.
+Fixed a second ICE when using a tuple declaration where the number of
+target items doesn't match the number of items in the declared type. (<a href="https://github.com/ethereum/fe/issues/469">#469</a>)</p>
+</li>
+</ul>
+<h3 id="internal-changes---for-fe-contributors-6"><a class="header" href="#internal-changes---for-fe-contributors-6">Internal Changes - for Fe Contributors</a></h3>
+<ul>
+<li>
+<ul>
+<li>Cleaned up ABI encoding internals.</li>
+<li>Improved yulc panic formatting. (<a href="https://github.com/ethereum/fe/issues/472">#472</a>)</li>
+</ul>
+</li>
+</ul>
+<h2 id="060-alpha-feldspar-2021-06-10"><a class="header" href="#060-alpha-feldspar-2021-06-10">0.6.0-alpha &quot;Feldspar&quot; (2021-06-10)</a></h2>
+<h3 id="features-21"><a class="header" href="#features-21">Features</a></h3>
+<ul>
+<li>
+<p>Support for <code>pragma</code> statement</p>
+<p>Example: <code>pragma ^0.1.0</code> (<a href="https://github.com/ethereum/fe/issues/361">#361</a>)</p>
+</li>
+<li>
+<p>Add support for tuple destructuring</p>
+<p>Example:</p>
+<pre><code>my_tuple: (u256, bool) = (42, true)
+(x, y): (u256, bool) = my_tuple
+</code></pre>
+<p>(<a href="https://github.com/ethereum/fe/issues/376">#376</a>)</p>
+</li>
+<li>
+<ol>
+<li>Call expression can now accept generic arguments</li>
+<li>Replace <code>stringN</code> to <code>String&lt;N&gt;</code></li>
+</ol>
+<p>Example:</p>
+<pre><code>s: String&lt;10&gt; = String&lt;10&gt;(&quot;HI&quot;)
+</code></pre>
+<p>(<a href="https://github.com/ethereum/fe/issues/379">#379</a>)</p>
+</li>
+<li>
+<ul>
+<li>Many analyzer errors now include helpful messages and underlined code.</li>
+<li>Event and struct constructor arguments must now be labeled and in the order specified in the definition.</li>
+<li>The analyzer now verifies that the left-hand side of an assignment is actually assignable. (<a href="https://github.com/ethereum/fe/issues/398">#398</a>)</li>
+</ul>
+</li>
+<li>
+<p>Types of integer literal are now inferred, rather than defaulting to <code>u256</code>.</p>
+<pre><code>contract C:
+
+  fn f(x: u8) -&gt; u16:
+    y: u8 = 100   # had to use u8(100) before
+    z: i8 = -129  # &quot;literal out of range&quot; error
+
+    return 1000   # had to use `return u16(1000)` before
+
+  fn g():
+    self.f(50)
+</code></pre>
+<p>Similar inference is done for empty array literals. Previously, empty array
+literals caused a compiler crash, because the array element type couldn't
+be determined.</p>
+<pre><code>contract C:
+  fn f(xs: u8[10]):
+    pass
+
+  fn g():
+    self.f([])
+</code></pre>
+<p>(Note that array length mismatch is still a type error, so this code won't
+actually compile.) (<a href="https://github.com/ethereum/fe/issues/429">#429</a>)</p>
+</li>
+<li>
+<p>The Map type name is now capitalized. Example:</p>
+<pre><code>contract GuestBook:
+    guests: Map&lt;address, String&lt;100&gt;&gt;
+</code></pre>
+<p>(<a href="https://github.com/ethereum/fe/issues/431">#431</a>)</p>
+</li>
+<li>
+<p>Convert all remaining errors to use the new advanced error reporting system (<a href="https://github.com/ethereum/fe/issues/432">#432</a>)</p>
+</li>
+<li>
+<p>Analyzer throws an error if <code>__init__</code> is not public. (<a href="https://github.com/ethereum/fe/issues/435">#435</a>)</p>
+</li>
+</ul>
+<h3 id="internal-changes---for-fe-contributors-7"><a class="header" href="#internal-changes---for-fe-contributors-7">Internal Changes - for Fe Contributors</a></h3>
+<ul>
+<li>Refactored front-end &quot;not implemented&quot; errors into analyzer errors and removed questionable variants. Any panic is now considered to be a bug. (<a href="https://github.com/ethereum/fe/issues/437">#437</a>)</li>
+</ul>
+<h2 id="050-alpha-2021-05-27"><a class="header" href="#050-alpha-2021-05-27">0.5.0-alpha (2021-05-27)</a></h2>
+<h3 id="features-22"><a class="header" href="#features-22">Features</a></h3>
+<ul>
+<li>
+<p>Add support for hexadecimal/octal/binary numeric literals.</p>
+<p>Example:</p>
+<pre><code>value_hex: u256 = 0xff
+value_octal: u256 = 0o77
+value_binary: u256 = 0b11
+</code></pre>
+<p>(<a href="https://github.com/ethereum/fe/issues/333">#333</a>)</p>
+</li>
+<li>
+<p>Added support for list expressions.</p>
+<p>Example:</p>
+<pre><code>values: u256[3] = [10, 20, 30]
+
+# or anywhere else where expressions can be used such as in a call
+
+sum: u256 = self.sum([10, 20, 30])
+</code></pre>
+<p>(<a href="https://github.com/ethereum/fe/issues/388">#388</a>)</p>
+</li>
+<li>
+<p>Contracts, events, and structs can now be empty.</p>
+<p>e.g.</p>
+<pre><code>event MyEvent:
+    pass
+
+...
+
+contract MyContract:
+    pass
+
+...
+
+struct MyStruct:
+    pass
+</code></pre>
+<p>(<a href="https://github.com/ethereum/fe/issues/406">#406</a>)</p>
+</li>
+<li>
+<p>External calls can now handle dynamically-sized return types. (<a href="https://github.com/ethereum/fe/issues/415">#415</a>)</p>
+</li>
+</ul>
+<h3 id="bugfixes-17"><a class="header" href="#bugfixes-17">Bugfixes</a></h3>
+<ul>
+<li>The analyzer will return an error if a tuple attribute is not of the form <code>item&lt;index&gt;</code>. (<a href="https://github.com/ethereum/fe/issues/401">#401</a>)</li>
+</ul>
+<h3 id="improved-documentation-5"><a class="header" href="#improved-documentation-5">Improved Documentation</a></h3>
+<ul>
+<li>Created a landing page for Fe at https://fe-lang.org (<a href="https://github.com/ethereum/fe/issues/394">#394</a>)</li>
+<li>Provide a Quickstart chapter in Fe Guide (<a href="https://github.com/ethereum/fe/issues/403">#403</a>)</li>
+</ul>
+<h3 id="internal-changes---for-fe-contributors-8"><a class="header" href="#internal-changes---for-fe-contributors-8">Internal Changes - for Fe Contributors</a></h3>
+<ul>
+<li>
+<p>Using insta to validate Analyzer outputs. (<a href="https://github.com/ethereum/fe/issues/387">#387</a>)</p>
+</li>
+<li>
+<p>Analyzer now disallows using <code>context.add_</code> methods to update attributes. (<a href="https://github.com/ethereum/fe/issues/392">#392</a>)</p>
+</li>
+<li>
+<p><code>()</code> now represents a distinct type internally called the unit type, instead of an empty tuple.</p>
+<p>The lowering pass now does the following: Valueless return statements are given a <code>()</code> value and
+functions without a return value are given explicit <code>()</code> returns. (<a href="https://github.com/ethereum/fe/issues/406">#406</a>)</p>
+</li>
+<li>
+<p>Add CI check to ensure fragment files always end with a new line (<a href="https://github.com/ethereum/fe/issues/4711">#4711</a>)</p>
+</li>
+</ul>
+<h2 id="040-alpha-2021-04-28"><a class="header" href="#040-alpha-2021-04-28">0.4.0-alpha (2021-04-28)</a></h2>
+<h3 id="features-23"><a class="header" href="#features-23">Features</a></h3>
+<ul>
+<li>
+<p>Support for revert messages in assert statements</p>
+<p>E.g</p>
+<pre><code>assert a == b, &quot;my revert statement&quot;
+</code></pre>
+<p>The provided string is abi-encoded as if it were a call
+to a function <code>Error(string)</code>. For example, the revert string <code>&quot;Not enough Ether provided.&quot;</code> returns the following hexadecimal as error return data:</p>
+<pre><code>0x08c379a0                                                         // Function selector for Error(string)
+0x0000000000000000000000000000000000000000000000000000000000000020 // Data offset
+0x000000000000000000000000000000000000000000000000000000000000001a // String length
+0x4e6f7420656e6f7567682045746865722070726f76696465642e000000000000 // String data
+</code></pre>
+<p>(<a href="https://github.com/ethereum/fe/issues/288">#288</a>)</p>
+</li>
+<li>
+<p>Added support for augmented assignments.</p>
+<p>e.g.</p>
+<pre><code>contract Foo:
+    pub fn add(a: u256, b: u256) -&gt; u256:
+        a += b
+        return a
+
+    pub fn sub(a: u256, b: u256) -&gt; u256:
+        a -= b
+        return a
+
+    pub fn mul(a: u256, b: u256) -&gt; u256:
+        a *= b
+        return a
+
+    pub fn div(a: u256, b: u256) -&gt; u256:
+        a /= b
+        return a
+
+    pub fn mod(a: u256, b: u256) -&gt; u256:
+        a %= b
+        return a
+
+    pub fn pow(a: u256, b: u256) -&gt; u256:
+        a **= b
+        return a
+
+    pub fn lshift(a: u8, b: u8) -&gt; u8:
+        a &lt;&lt;= b
+        return a
+
+    pub fn rshift(a: u8, b: u8) -&gt; u8:
+        a &gt;&gt;= b
+        return a
+
+    pub fn bit_or(a: u8, b: u8) -&gt; u8:
+        a |= b
+        return a
+
+    pub fn bit_xor(a: u8, b: u8) -&gt; u8:
+        a ^= b
+        return a
+
+    pub fn bit_and(a: u8, b: u8) -&gt; u8:
+        a &amp;= b
+        return a
+</code></pre>
+<p>(<a href="https://github.com/ethereum/fe/issues/338">#338</a>)</p>
+</li>
+<li>
+<p>A new parser implementation, which provides more helpful error messages
+with fancy underlines and code context. (<a href="https://github.com/ethereum/fe/issues/346">#346</a>)</p>
+</li>
+<li>
+<p>Added support for tuples with base type items.</p>
+<p>e.g.</p>
+<pre><code>contract Foo:
+    my_num: u256
+
+    pub fn bar(my_num: u256, my_bool: bool) -&gt; (u256, bool):
+        my_tuple: (u256, bool) = (my_num, my_bool)
+        self.my_num = my_tuple.item0
+        return my_tuple
+</code></pre>
+<p>(<a href="https://github.com/ethereum/fe/issues/352">#352</a>)</p>
+</li>
+</ul>
+<h3 id="bugfixes-18"><a class="header" href="#bugfixes-18">Bugfixes</a></h3>
+<ul>
+<li>
+<p>Properly reject invalid emit (<a href="https://github.com/ethereum/fe/issues/211">#211</a>)</p>
+</li>
+<li>
+<p>Properly tokenize numeric literals when they start with 0 (<a href="https://github.com/ethereum/fe/issues/331">#331</a>)</p>
+</li>
+<li>
+<p>Reject non-string assert reasons as type error (<a href="https://github.com/ethereum/fe/issues/335">#335</a>)</p>
+</li>
+<li>
+<p>Properly reject code that creates a circular dependency when using <code>create</code> or <code>create2</code>.</p>
+<p>Example, the following code is now rightfully rejected because it tries to create an
+instance of <code>Foo</code> from within the <code>Foo</code> contract itself.</p>
+<pre><code>contract Foo:
+  pub fn bar()-&gt;address:
+    foo:Foo=Foo.create(0)
+
+    return address(foo)
+</code></pre>
+<p>(<a href="https://github.com/ethereum/fe/issues/362">#362</a>)</p>
+</li>
+</ul>
+<h3 id="internal-changes---for-fe-contributors-9"><a class="header" href="#internal-changes---for-fe-contributors-9">Internal Changes - for Fe Contributors</a></h3>
+<ul>
+<li>AST nodes use <code>String</code>s instead of <code>&amp;str</code>s. This way we can perform incremental compilation on the AST. (<a href="https://github.com/ethereum/fe/issues/332">#332</a>)</li>
+<li>Added support for running tests against solidity fixtures.
+Also added tests that cover how solidity encodes revert reason strings. (<a href="https://github.com/ethereum/fe/issues/342">#342</a>)</li>
+<li>Refactoring of binary operation type checking. (<a href="https://github.com/ethereum/fe/issues/347">#347</a>)</li>
+</ul>
+<h2 id="030-alpha-calamine-2021-03-24"><a class="header" href="#030-alpha-calamine-2021-03-24">0.3.0-alpha &quot;Calamine&quot; (2021-03-24)</a></h2>
+<h3 id="features-24"><a class="header" href="#features-24">Features</a></h3>
+<ul>
+<li>
+<p>Add over/underflow checks for multiplications of all integers (<a href="https://github.com/ethereum/fe/issues/271">#271</a>)</p>
+</li>
+<li>
+<p>Add full support for empty Tuples. (<a href="https://github.com/ethereum/fe/issues/276">#276</a>)</p>
+<p>All functions in Fe implicitly return an empty Tuple if they have no other return value.
+However, before this change one was not able to use the empty Tuple syntax <code>()</code> explicitly.</p>
+<p>With this change, all of these are treated equally:</p>
+<pre><code>contract Foo:
+
+  pub fn explicit_return_a1():
+    return
+
+  pub fn explicit_return_a2():
+    return ()
+
+  pub fn explicit_return_b1() -&gt;():
+    return
+
+  pub fn explicit_return_b2() -&gt;():
+    return ()
+
+  pub fn implicit_a1():
+    pass
+
+  pub fn implicit_a2() -&gt;():
+    pass
+</code></pre>
+</li>
+<li>
+<p>The JSON ABI builder now supports structs as both input and output. (<a href="https://github.com/ethereum/fe/issues/296">#296</a>)</p>
+</li>
+<li>
+<p>Make subsequently defined contracts visible.</p>
+<p>Before this change:</p>
+<pre><code># can't see Bar
+contract Foo:
+   ...
+# can see Foo
+contract Bar:
+   ...
+</code></pre>
+<p>With this change the restriction is lifted and the following becomes possible. (<a href="https://github.com/ethereum/fe/issues/298">#298</a>)</p>
+<pre><code>contract Foo:
+    bar: Bar
+    pub fn external_bar() -&gt; u256:
+        return self.bar.bar()
+contract Bar:
+    foo: Foo
+    pub fn external_foo() -&gt; u256:
+        return self.foo.foo()
+</code></pre>
+</li>
+<li>
+<p>Perform checks for divison operations on integers (<a href="https://github.com/ethereum/fe/issues/308">#308</a>)</p>
+</li>
+<li>
+<p>Support for msg.sig to read the function identifier. (<a href="https://github.com/ethereum/fe/issues/311">#311</a>)</p>
+</li>
+<li>
+<p>Perform checks for modulo operations on integers (<a href="https://github.com/ethereum/fe/issues/312">#312</a>)</p>
+</li>
+<li>
+<p>Perform over/underflow checks for exponentiation operations on integers (<a href="https://github.com/ethereum/fe/issues/313">#313</a>)</p>
+</li>
+</ul>
+<h3 id="bugfixes-19"><a class="header" href="#bugfixes-19">Bugfixes</a></h3>
+<ul>
+<li>
+<p>Properly reject <code>emit</code> not followed by an event invocation (<a href="https://github.com/ethereum/fe/issues/212">#212</a>)</p>
+</li>
+<li>
+<p>Properly reject octal number literals (<a href="https://github.com/ethereum/fe/issues/222">#222</a>)</p>
+</li>
+<li>
+<p>Properly reject code that tries to emit a non-existing event. (<a href="https://github.com/ethereum/fe/issues/250">#250</a>)</p>
+<p>Example that now produces a compile time error:</p>
+<pre><code>emit DoesNotExist()
+</code></pre>
+</li>
+<li>
+<p>Contracts that create other contracts can now include <code>__init__</code> functions.</p>
+<p>See https://github.com/ethereum/fe/issues/284 (<a href="https://github.com/ethereum/fe/issues/304">#304</a>)</p>
+</li>
+<li>
+<p>Prevent multiple types with same name in one module. (<a href="https://github.com/ethereum/fe/issues/317">#317</a>)</p>
+<p>Examples that now produce compile time errors:</p>
+<pre><code>type bar = u8
+type bar = u16
+</code></pre>
+<p>or</p>
+<pre><code>struct SomeStruct:
+    some_field: u8
+
+struct SomeStruct:
+    other: u8
+</code></pre>
+<p>or</p>
+<pre><code>contract SomeContract:
+    some_field: u8
+
+contract SomeContract:
+    other: u8
+</code></pre>
+<p>Prevent multiple fields with same name in one struct.</p>
+<p>Example that now produces a compile time error:</p>
+<pre><code>struct SomeStruct:
+    some_field: u8
+    some_field: u8
+</code></pre>
+<p>Prevent variable definition in child scope when name already taken in parent scope.</p>
+<p>Example that now produces a compile time error:</p>
+<pre><code>pub fn bar():
+    my_array: u256[3]
+    sum: u256 = 0
+    for i in my_array:
+        sum: u256 = 0
+</code></pre>
+</li>
+<li>
+<p>The CLI was using the overwrite flag to enable Yul optimization.</p>
+<p>i.e.</p>
+<pre><code># Would both overwrite output files and run the Yul optimizer.
+$ fe my_contract.fe --overwrite
+</code></pre>
+<p>Using the overwrite flag now only overwrites and optimization is enabled with the optimize flag. (<a href="https://github.com/ethereum/fe/issues/320">#320</a>)</p>
+</li>
+<li>
+<p>Ensure analyzer rejects code that uses return values for <code>__init__</code> functions. (<a href="https://github.com/ethereum/fe/issues/323">#323</a>)</p>
+<p>An example that now produces a compile time error:</p>
+<pre><code>contract C:
+    pub fn __init__() -&gt; i32:
+        return 0
+</code></pre>
+</li>
+<li>
+<p>Properly reject calling an undefined function on an external contract (<a href="https://github.com/ethereum/fe/issues/324">#324</a>)</p>
+</li>
+</ul>
+<h3 id="internal-changes---for-fe-contributors-10"><a class="header" href="#internal-changes---for-fe-contributors-10">Internal Changes - for Fe Contributors</a></h3>
+<ul>
+<li>Added the Uniswap demo contracts to our testing fixtures and validated their behaviour. (<a href="https://github.com/ethereum/fe/issues/179">#179</a>)</li>
+<li>IDs added to AST nodes. (<a href="https://github.com/ethereum/fe/issues/315">#315</a>)</li>
+<li>Failures in the Yul generation phase now panic; any failure is a bug. (<a href="https://github.com/ethereum/fe/issues/327">#327</a>)</li>
+</ul>
+<h2 id="020-alpha-borax-2021-02-27"><a class="header" href="#020-alpha-borax-2021-02-27">0.2.0-alpha &quot;Borax&quot; (2021-02-27)</a></h2>
+<h3 id="features-25"><a class="header" href="#features-25">Features</a></h3>
+<ul>
+<li>
+<p>Add support for string literals.</p>
+<p>Example:</p>
+<pre><code>fn get_ticker_symbol() -&gt; string3:
+    return &quot;ETH&quot;
+</code></pre>
+<p>String literals are stored in and loaded from the compiled bytecode. (<a href="https://github.com/ethereum/fe/issues/186">#186</a>)</p>
+</li>
+<li>
+<p>The CLI now compiles every contract in a module, not just the first one. (<a href="https://github.com/ethereum/fe/issues/197">#197</a>)</p>
+<p>Sample compiler output with all targets enabled:</p>
+<pre><code>output
+|-- Bar
+|   |-- Bar.bin
+|   |-- Bar_abi.json
+|   `-- Bar_ir.yul
+|-- Foo
+|   |-- Foo.bin
+|   |-- Foo_abi.json
+|   `-- Foo_ir.yul
+|-- module.ast
+`-- module.tokens
+</code></pre>
+</li>
+<li>
+<p>Add support for string type casts (<a href="https://github.com/ethereum/fe/issues/201">#201</a>)</p>
+<p>Example:</p>
+<pre><code>val: string100 = string100(&quot;foo&quot;)
+</code></pre>
+</li>
+<li>
+<p>Add basic support for structs. (<a href="https://github.com/ethereum/fe/issues/203">#203</a>)</p>
+<p>Example:</p>
+<pre><code>struct House:
+    price: u256
+    size: u256
+    vacant: bool
+
+contract City:
+
+    pub fn get_price() -&gt; u256:
+        building: House = House(300, 500, true)
+
+        assert building.size == 500
+        assert building.price == 300
+        assert building.vacant
+
+        return building.price
+</code></pre>
+</li>
+<li>
+<p>Added support for external contract calls. Contract definitions now
+add a type to the module scope, which may be used to create contract
+values with the contract's public functions as callable attributes. (<a href="https://github.com/ethereum/fe/issues/204">#204</a>)</p>
+<p>Example:</p>
+<pre><code class="language-python">contract Foo:
+    pub fn build_array(a: u256, b: u256) -&gt; u256[3]:
+        my_array: u256[3]
+        my_array[0] = a
+        my_array[1] = a * b
+        my_array[2] = b
+        return my_array
+
+contract FooProxy:
+    pub fn call_build_array(
+        foo_address: address,
+        a: u256,
+        b: u256,
+    ) -&gt; u256[3]:
+        foo: Foo = Foo(foo_address)
+        return foo.build_array(a, b)
+</code></pre>
+</li>
+<li>
+<p>Add support for <code>block</code>, <code>msg</code>, <code>chain</code>, and <code>tx</code> properties: (<a href="https://github.com/ethereum/fe/issues/208">#208</a>)</p>
+<pre><code>block.coinbase: address
+block.difficulty: u256
+block.number: u256
+block.timestamp: u256
+chain.id: u256
+msg.value: u256
+tx.gas_price: u256
+tx.origin: address
+</code></pre>
+<p>(Note that <code>msg.sender: address</code> was added previously.)</p>
+<p>Example:</p>
+<pre><code>fn post_fork() -&gt; bool:
+    return block.number &gt; 2675000
+</code></pre>
+</li>
+<li>
+<p>The CLI now panics if an error is encountered during Yul compilation. (<a href="https://github.com/ethereum/fe/issues/218">#218</a>)</p>
+</li>
+<li>
+<p>Support for contract creations.</p>
+<p>Example of <code>create2</code>, which takes a <code>value</code> and address <code>salt</code> as parameters.</p>
+<pre><code>contract Foo:
+    pub fn get_my_num() -&gt; u256:
+        return 42
+
+contract FooFactory:
+    pub fn create2_foo() -&gt; address:
+        # value and salt
+        foo: Foo = Foo.create2(0, 52)
+        return address(foo)
+</code></pre>
+<p>Example of <code>create</code>, which just takes a <code>value</code> parameter.</p>
+<pre><code>contract Foo:
+    pub fn get_my_num() -&gt; u256:
+        return 42
+
+contract FooFactory:
+    pub fn create_foo() -&gt; address:
+        # value and salt
+        foo: Foo = Foo.create(0)
+        return address(foo)
+</code></pre>
+<p><em>Note: We do not yet support init parameters.</em> (<a href="https://github.com/ethereum/fe/issues/239">#239</a>)</p>
+</li>
+<li>
+<p>Support updating individual struct fields in storage. (<a href="https://github.com/ethereum/fe/issues/246">#246</a>)</p>
+<p>Example:</p>
+<pre><code> pub fn update_house_price(price: u256):
+        self.my_house.price = price
+</code></pre>
+</li>
+<li>
+<p>Implement global <code>keccak256</code> method. The method expects one parameter of <code>bytes[n]</code>
+and returns the hash as an <code>u256</code>. In a future version <code>keccak256</code> will most likely
+be moved behind an import so that it has to be imported (e.g. <code>from std.crypto import keccak256</code>). (<a href="https://github.com/ethereum/fe/issues/255">#255</a>)</p>
+<p>Example:</p>
+<pre><code>pub fn hash_single_byte(val: bytes[1]) -&gt; u256:
+    return keccak256(val)
+</code></pre>
+</li>
+<li>
+<p>Require structs to be initialized using keyword arguments.</p>
+<p>Example:</p>
+<pre><code>struct House:
+    vacant: bool
+    price: u256
+</code></pre>
+<p>Previously, <code>House</code> could be instantiated as <code>House(true, 1000000)</code>.
+With this change it is required to be instantiated like <code>House(vacant=true, price=1000000)</code></p>
+<p>This ensures property assignment is less prone to get mixed up. It also makes struct
+initialization visually stand out more from function calls. (<a href="https://github.com/ethereum/fe/issues/260">#260</a>)</p>
+</li>
+<li>
+<p>Implement support for boolean <code>not</code> operator. (<a href="https://github.com/ethereum/fe/issues/264">#264</a>)</p>
+<p>Example:</p>
+<pre><code>if not covid_test.is_positive(person):
+    allow_boarding(person)
+</code></pre>
+</li>
+<li>
+<p>Do over/underflow checks for additions (SafeMath).</p>
+<p>With this change all additions (e.g <code>x + y</code>) for signed and unsigned
+integers check for over- and underflows and revert if necessary. (<a href="https://github.com/ethereum/fe/issues/265">#265</a>)</p>
+</li>
+<li>
+<p>Added a builtin function <code>abi_encode()</code> that can be used to encode structs. The return type is a
+fixed-size array of bytes that is equal in size to the encoding. The type system does not support
+dynamically-sized arrays yet, which is why we used fixed. (<a href="https://github.com/ethereum/fe/issues/266">#266</a>)</p>
+<p>Example:</p>
+<pre><code>struct House:
+    price: u256
+    size: u256
+    rooms: u8
+    vacant: bool
+
+contract Foo:
+    pub fn hashed_house() -&gt; u256:
+        house: House = House(
+            price=300,
+            size=500,
+            rooms=u8(20),
+            vacant=true
+        )
+        return keccak256(house.abi_encode())
+</code></pre>
+</li>
+<li>
+<p>Perform over/underflow checks for subtractions (SafeMath). (<a href="https://github.com/ethereum/fe/issues/267">#267</a>)</p>
+<p>With this change all subtractions (e.g <code>x - y</code>) for signed and unsigned
+integers check for over- and underflows and revert if necessary.</p>
+</li>
+<li>
+<p>Support for the boolean operations <code>and</code> and <code>or</code>. (<a href="https://github.com/ethereum/fe/issues/270">#270</a>)</p>
+<p>Examples:</p>
+<pre><code>contract Foo:
+    pub fn bar(x: bool, y: bool) -&gt; bool:
+        return x and y
+</code></pre>
+<pre><code>contract Foo:
+    pub fn bar(x: bool, y: bool) -&gt; bool:
+        return x or y
+</code></pre>
+<p>Support for <code>self.address</code>.</p>
+<p>This expression returns the address of the current contract.</p>
+<p>Example:</p>
+<pre><code>contract Foo:
+    pub fn bar() -&gt; address:
+        return self.address
+</code></pre>
+</li>
+</ul>
+<h3 id="bugfixes-20"><a class="header" href="#bugfixes-20">Bugfixes</a></h3>
+<ul>
+<li>
+<p>Perform type checking when calling event constructors</p>
+<p>Previously, the following would not raise an error even though it should:</p>
+<pre><code>contract Foo:
+    event MyEvent:
+        val_1: string100
+        val_2: u8
+
+    pub fn foo():
+        emit MyEvent(&quot;foo&quot;, 1000)
+
+</code></pre>
+<p>Wit this change, the code fails with a type error as expected. (<a href="https://github.com/ethereum/fe/issues/202">#202</a>)</p>
+</li>
+<li>
+<p>Fix bug where compilation of contracts without public functions would result in illegal YUL. (<a href="https://github.com/ethereum/fe/issues/219">#219</a>)</p>
+<p>E.g without this change, the following doesn't compile to proper YUL</p>
+<pre><code>contract Empty:
+  lonely: u256
+</code></pre>
+</li>
+<li>
+<p>Ensure numeric literals can't exceed 256 bit range. Previously, this would result in a
+non user friendly error at the YUL compilation stage. With this change it is caught
+at the analyzer stage and presented to the user as a regular error. (<a href="https://github.com/ethereum/fe/issues/225">#225</a>)</p>
+</li>
+<li>
+<p>Fix crash when return is used without value.</p>
+<p>These two methods should both be treated as returning <code>()</code></p>
+<pre><code>  pub fn explicit_return():
+    return
+
+  pub fn implicit():
+    pass
+</code></pre>
+<p>Without this change, the <code>explicit_return</code> crashes the compiler. (<a href="https://github.com/ethereum/fe/issues/261">#261</a>)</p>
+</li>
+</ul>
+<h3 id="internal-changes---for-fe-contributors-11"><a class="header" href="#internal-changes---for-fe-contributors-11">Internal Changes - for Fe Contributors</a></h3>
+<ul>
+<li>Renamed the fe-semantics library to fe-analyzer. (<a href="https://github.com/ethereum/fe/issues/207">#207</a>)</li>
+<li>Runtime testing utilities. (<a href="https://github.com/ethereum/fe/issues/243">#243</a>)</li>
+<li>Values are stored more efficiently in storage. (<a href="https://github.com/ethereum/fe/issues/251">#251</a>)</li>
+</ul>
+<h2 id="010-alpha-amethyst-2021-01-20"><a class="header" href="#010-alpha-amethyst-2021-01-20">0.1.0-alpha &quot;Amethyst&quot; (2021-01-20)</a></h2>
+<p><strong>WARNING: This is an alpha version to share the development progress with developers and enthusiasts. It is NOT yet intended to be used for anything serious. At this point Fe is missing a lot of features and has a lot of bugs instead.</strong></p>
+<p>This is the first <strong>alpha</strong> release and kicks off our release schedule which will be one release every month in the future. Since we have just started tracking progress on changes, the following list of changes is incomplete, but will appropriately document progress between releases from now on.</p>
+<h3 id="features-26"><a class="header" href="#features-26">Features</a></h3>
+<ul>
+<li>
+<p>Added support for <code>for loop</code>, allows iteration over static arrays. (<a href="https://github.com/ethereum/fe/issues/134">#134</a>)</p>
+</li>
+<li>
+<p>Enforce bounds on numeric literals in type constructors.</p>
+<p>For instance calling <code>u8(1000)</code> or <code>i8(-250)</code> will give an error because
+the literals <code>1000</code> and <code>-250</code> do not fit into <code>u8</code> or <code>i8</code>. (<a href="https://github.com/ethereum/fe/issues/145">#145</a>)</p>
+</li>
+<li>
+<p>Added builtin copying methods <code>clone()</code> and <code>to_mem()</code> to reference types. (<a href="https://github.com/ethereum/fe/issues/155">#155</a>)</p>
+<p>usage:</p>
+<pre><code># copy a segment of storage into memory and assign the new pointer
+my_mem_array = self.my_sto_array.to_mem()
+
+# copy a segment of memory into another segment of memory and assign the new pointer
+my_other_mem_array = my_mem_array.clone()
+</code></pre>
+</li>
+<li>
+<p>Support emitting JSON ABI via <code>--emit abi</code>.
+The default value of <code>--emit</code> is now <code>abi,bytecode</code>. (<a href="https://github.com/ethereum/fe/issues/160">#160</a>)</p>
+</li>
+<li>
+<p>Ensure integer type constructor reject all expressions that aren't a numeric literal.
+For instance, previously the compiler would not reject the following code even though it could not be guaranteed that <code>val</code> would fit into an <code>u16</code>.</p>
+<pre><code>pub fn bar(val: u8) -&gt; u16:
+        return u16(val)
+</code></pre>
+<p>Now such code is rejected and integer type constructor do only work with numeric literals such as <code>1</code> or <code>-3</code>. (<a href="https://github.com/ethereum/fe/issues/163">#163</a>)</p>
+</li>
+<li>
+<p>Support for ABI decoding of all array type. (<a href="https://github.com/ethereum/fe/issues/172">#172</a>)</p>
+</li>
+<li>
+<p>Support for value assignments in declaration.</p>
+<p>Previously, this code would fail:</p>
+<pre><code>another_reference: u256[10] = my_array
+</code></pre>
+<p>As a workaround declaration and assignment could be split apart.</p>
+<pre><code>another_reference: u256[10]
+another_reference = my_array
+</code></pre>
+<p>With this change, the shorter declaration with assignment syntax is supported. (<a href="https://github.com/ethereum/fe/issues/173">#173</a>)</p>
+</li>
+</ul>
+<h3 id="improved-documentation-6"><a class="header" href="#improved-documentation-6">Improved Documentation</a></h3>
+<ul>
+<li>Point to examples in the README (<a href="https://github.com/ethereum/fe/issues/162">#162</a>)</li>
+<li>Overhaul README page to better reflect the current state of the project. (<a href="https://github.com/ethereum/fe/issues/177">#177</a>)</li>
+<li>Added descriptions of the <code>to_mem</code> and <code>clone</code> functions to the spec. (<a href="https://github.com/ethereum/fe/issues/195">#195</a>)</li>
+</ul>
+<h3 id="internal-changes---for-fe-contributors-12"><a class="header" href="#internal-changes---for-fe-contributors-12">Internal Changes - for Fe Contributors</a></h3>
+<ul>
+<li>Updated the Solidity backend to v0.8.0. (<a href="https://github.com/ethereum/fe/issues/169">#169</a>)</li>
+<li>Run CI tests on Mac and support creating Mac binaries for releases. (<a href="https://github.com/ethereum/fe/issues/178">#178</a>)</li>
+</ul>
+
+                    </main>
+
+                    <nav class="nav-wrapper" aria-label="Page navigation">
+                        <!-- Mobile navigation buttons -->
+                            <a rel="prev" href="contributing.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                                <i class="fa fa-angle-left"></i>
+                            </a>
+
+                            <a rel="next prefetch" href="code_of_conduct.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                                <i class="fa fa-angle-right"></i>
+                            </a>
+
+                        <div style="clear: both"></div>
+                    </nav>
+                </div>
+            </div>
+
+            <nav class="nav-wide-wrapper" aria-label="Page navigation">
+                    <a rel="prev" href="contributing.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                        <i class="fa fa-angle-left"></i>
+                    </a>
+
+                    <a rel="next prefetch" href="code_of_conduct.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                        <i class="fa fa-angle-right"></i>
+                    </a>
+            </nav>
+
+        </div>
+
+
+
+
+        <script>
+            window.playground_copyable = true;
+        </script>
+
+
+        <script src="elasticlunr.min.js"></script>
+        <script src="mark.min.js"></script>
+        <script src="searcher.js"></script>
+
+        <script src="clipboard.min.js"></script>
+        <script src="highlight.js"></script>
+        <script src="book.js"></script>
+
+        <!-- Custom JS scripts -->
+        <script src="theme/custom-highlight.js"></script>
+
+
+    </div>
+    </body>
+</html>

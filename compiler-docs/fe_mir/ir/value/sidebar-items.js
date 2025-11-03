@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"enum":["AssignableValue","Value"],"struct":["Local"],"type":["ValueId"]};

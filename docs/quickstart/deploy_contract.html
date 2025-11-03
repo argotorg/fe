@@ -1,0 +1,359 @@
+<!DOCTYPE HTML>
+<html lang="en" class="light" dir="ltr">
+    <head>
+        <!-- Book generated using mdBook -->
+        <meta charset="UTF-8">
+        <title>Deploying a contract to a testnet - The Fe Guide</title>
+
+
+        <!-- Custom HTML head -->
+        
+        <meta name="description" content="">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <meta name="theme-color" content="#ffffff">
+
+        <link rel="icon" href="../favicon.svg">
+        <link rel="shortcut icon" href="../favicon.png">
+        <link rel="stylesheet" href="../css/variables.css">
+        <link rel="stylesheet" href="../css/general.css">
+        <link rel="stylesheet" href="../css/chrome.css">
+        <link rel="stylesheet" href="../css/print.css" media="print">
+
+        <!-- Fonts -->
+        <link rel="stylesheet" href="../FontAwesome/css/font-awesome.css">
+        <link rel="stylesheet" href="../fonts/fonts.css">
+
+        <!-- Highlight.js Stylesheets -->
+        <link rel="stylesheet" href="../highlight.css">
+        <link rel="stylesheet" href="../tomorrow-night.css">
+        <link rel="stylesheet" href="../ayu-highlight.css">
+
+        <!-- Custom theme stylesheets -->
+        <link rel="stylesheet" href="../theme/reference.css">
+
+    </head>
+    <body class="sidebar-visible no-js">
+    <div id="body-container">
+        <!-- Provide site root to javascript -->
+        <script>
+            var path_to_root = "../";
+            var default_theme = window.matchMedia("(prefers-color-scheme: dark)").matches ? "navy" : "light";
+        </script>
+
+        <!-- Work around some values being stored in localStorage wrapped in quotes -->
+        <script>
+            try {
+                var theme = localStorage.getItem('mdbook-theme');
+                var sidebar = localStorage.getItem('mdbook-sidebar');
+
+                if (theme.startsWith('"') && theme.endsWith('"')) {
+                    localStorage.setItem('mdbook-theme', theme.slice(1, theme.length - 1));
+                }
+
+                if (sidebar.startsWith('"') && sidebar.endsWith('"')) {
+                    localStorage.setItem('mdbook-sidebar', sidebar.slice(1, sidebar.length - 1));
+                }
+            } catch (e) { }
+        </script>
+
+        <!-- Set the theme before any content is loaded, prevents flash -->
+        <script>
+            var theme;
+            try { theme = localStorage.getItem('mdbook-theme'); } catch(e) { }
+            if (theme === null || theme === undefined) { theme = default_theme; }
+            var html = document.querySelector('html');
+            html.classList.remove('light')
+            html.classList.add(theme);
+            var body = document.querySelector('body');
+            body.classList.remove('no-js')
+            body.classList.add('js');
+        </script>
+
+        <input type="checkbox" id="sidebar-toggle-anchor" class="hidden">
+
+        <!-- Hide / unhide sidebar before it is displayed -->
+        <script>
+            var body = document.querySelector('body');
+            var sidebar = null;
+            var sidebar_toggle = document.getElementById("sidebar-toggle-anchor");
+            if (document.body.clientWidth >= 1080) {
+                try { sidebar = localStorage.getItem('mdbook-sidebar'); } catch(e) { }
+                sidebar = sidebar || 'visible';
+            } else {
+                sidebar = 'hidden';
+            }
+            sidebar_toggle.checked = sidebar === 'visible';
+            body.classList.remove('sidebar-visible');
+            body.classList.add("sidebar-" + sidebar);
+        </script>
+
+        <nav id="sidebar" class="sidebar" aria-label="Table of contents">
+            <div class="sidebar-scrollbox">
+                <ol class="chapter"><li class="chapter-item expanded affix "><a href="../index.html">Introduction</a></li><li class="chapter-item expanded "><a href="../quickstart/index.html"><strong aria-hidden="true">1.</strong> Quickstart</a><a class="toggle"><div>❱</div></a></li><li><ol class="section"><li class="chapter-item "><a href="../quickstart/first_contract.html"><strong aria-hidden="true">1.1.</strong> Write your first contract</a></li><li class="chapter-item expanded "><a href="../quickstart/deploy_contract.html" class="active"><strong aria-hidden="true">1.2.</strong> Deploying a contract to a testnet</a></li></ol></li><li class="chapter-item expanded "><a href="../user-guide/index.html"><strong aria-hidden="true">2.</strong> Using Fe</a><a class="toggle"><div>❱</div></a></li><li><ol class="section"><li class="chapter-item "><a href="../user-guide/installation.html"><strong aria-hidden="true">2.1.</strong> Installation</a></li><li class="chapter-item "><a href="../user-guide/projects.html"><strong aria-hidden="true">2.2.</strong> Using projects</a></li><li class="chapter-item "><a href="../user-guide/tutorials/index.html"><strong aria-hidden="true">2.3.</strong> Tutorials</a><a class="toggle"><div>❱</div></a></li><li><ol class="section"><li class="chapter-item "><a href="../user-guide/tutorials/auction.html"><strong aria-hidden="true">2.3.1.</strong> Open auction</a></li></ol></li><li class="chapter-item "><a href="../user-guide/example_contracts/index.html"><strong aria-hidden="true">2.4.</strong> Example Contracts</a><a class="toggle"><div>❱</div></a></li><li><ol class="section"><li class="chapter-item "><a href="../user-guide/example_contracts/auction_contract.html"><strong aria-hidden="true">2.4.1.</strong> Open auction</a></li></ol></li><li class="chapter-item "><a href="../user-guide/external_links.html"><strong aria-hidden="true">2.5.</strong> Useful external links</a></li></ol></li><li class="chapter-item expanded "><a href="../development/index.html"><strong aria-hidden="true">3.</strong> Development</a><a class="toggle"><div>❱</div></a></li><li><ol class="section"><li class="chapter-item "><a href="../development/build.html"><strong aria-hidden="true">3.1.</strong> Build & Test</a></li><li class="chapter-item "><a href="../development/release.html"><strong aria-hidden="true">3.2.</strong> Release</a></li></ol></li><li class="chapter-item expanded "><a href="../std/index.html"><strong aria-hidden="true">4.</strong> Standard Library</a><a class="toggle"><div>❱</div></a></li><li><ol class="section"><li class="chapter-item "><a href="../std/precompiles.html"><strong aria-hidden="true">4.1.</strong> Precompiles</a></li></ol></li><li class="chapter-item expanded "><a href="../spec/index.html"><strong aria-hidden="true">5.</strong> Specification (WIP)</a><a class="toggle"><div>❱</div></a></li><li><ol class="section"><li class="chapter-item "><a href="../spec/notation.html"><strong aria-hidden="true">5.1.</strong> Notation</a></li><li class="chapter-item "><a href="../spec/lexical_structure/index.html"><strong aria-hidden="true">5.2.</strong> Lexical Structure</a><a class="toggle"><div>❱</div></a></li><li><ol class="section"><li class="chapter-item "><a href="../spec/lexical_structure/keywords.html"><strong aria-hidden="true">5.2.1.</strong> Keywords</a></li><li class="chapter-item "><a href="../spec/lexical_structure/identifiers.html"><strong aria-hidden="true">5.2.2.</strong> Identifiers</a></li><li class="chapter-item "><a href="../spec/lexical_structure/tokens.html"><strong aria-hidden="true">5.2.3.</strong> Tokens</a></li></ol></li><li class="chapter-item "><a href="../spec/comments.html"><strong aria-hidden="true">5.3.</strong> Comments</a></li><li class="chapter-item "><a href="../spec/items/index.html"><strong aria-hidden="true">5.4.</strong> Items</a><a class="toggle"><div>❱</div></a></li><li><ol class="section"><li class="chapter-item "><a href="../spec/items/visibility_and_privacy.html"><strong aria-hidden="true">5.4.1.</strong> Visibility and Privacy</a></li><li class="chapter-item "><a href="../spec/items/structs.html"><strong aria-hidden="true">5.4.2.</strong> Structs</a></li><li class="chapter-item "><a href="../spec/items/traits.html"><strong aria-hidden="true">5.4.3.</strong> Traits</a></li><li class="chapter-item "><a href="../spec/items/enums.html"><strong aria-hidden="true">5.4.4.</strong> Enums</a></li><li class="chapter-item "><a href="../spec/items/type_aliases.html"><strong aria-hidden="true">5.4.5.</strong> Type Aliases</a></li><li class="chapter-item "><a href="../spec/items/contracts.html"><strong aria-hidden="true">5.4.6.</strong> Contracts</a></li><li class="chapter-item "><a href="../spec/items/functions/index.html"><strong aria-hidden="true">5.4.7.</strong> Functions</a><a class="toggle"><div>❱</div></a></li><li><ol class="section"><li class="chapter-item "><a href="../spec/items/functions/context.html"><strong aria-hidden="true">5.4.7.1.</strong> Context</a></li><li class="chapter-item "><a href="../spec/items/functions/self.html"><strong aria-hidden="true">5.4.7.2.</strong> Self</a></li></ol></li></ol></li><li class="chapter-item "><a href="../spec/statements/index.html"><strong aria-hidden="true">5.5.</strong> Statements</a><a class="toggle"><div>❱</div></a></li><li><ol class="section"><li class="chapter-item "><a href="../spec/statements/pragma.html"><strong aria-hidden="true">5.5.1.</strong> pragma Statement</a></li><li class="chapter-item "><a href="../spec/statements/const.html"><strong aria-hidden="true">5.5.2.</strong> const Statement</a></li><li class="chapter-item "><a href="../spec/statements/let.html"><strong aria-hidden="true">5.5.3.</strong> let Statement</a></li><li class="chapter-item "><a href="../spec/statements/assign.html"><strong aria-hidden="true">5.5.4.</strong> Assignment Statement</a></li><li class="chapter-item "><a href="../spec/statements/augassign.html"><strong aria-hidden="true">5.5.5.</strong> Augmenting Assignment Statement</a></li><li class="chapter-item "><a href="../spec/statements/revert.html"><strong aria-hidden="true">5.5.6.</strong> revert Statement</a></li><li class="chapter-item "><a href="../spec/statements/return.html"><strong aria-hidden="true">5.5.7.</strong> return Statement</a></li><li class="chapter-item "><a href="../spec/statements/if.html"><strong aria-hidden="true">5.5.8.</strong> if Statement</a></li><li class="chapter-item "><a href="../spec/statements/for.html"><strong aria-hidden="true">5.5.9.</strong> for Statement</a></li><li class="chapter-item "><a href="../spec/statements/while.html"><strong aria-hidden="true">5.5.10.</strong> while Statement</a></li><li class="chapter-item "><a href="../spec/statements/break.html"><strong aria-hidden="true">5.5.11.</strong> break Statement</a></li><li class="chapter-item "><a href="../spec/statements/continue.html"><strong aria-hidden="true">5.5.12.</strong> continue Statement</a></li><li class="chapter-item "><a href="../spec/statements/match.html"><strong aria-hidden="true">5.5.13.</strong> match Statement</a></li><li class="chapter-item "><a href="../spec/statements/assert.html"><strong aria-hidden="true">5.5.14.</strong> assert Statement</a></li></ol></li><li class="chapter-item "><a href="../spec/expressions/index.html"><strong aria-hidden="true">5.6.</strong> Expressions</a><a class="toggle"><div>❱</div></a></li><li><ol class="section"><li class="chapter-item "><a href="../spec/expressions/call.html"><strong aria-hidden="true">5.6.1.</strong> Call expressions</a></li><li class="chapter-item "><a href="../spec/expressions/tuple.html"><strong aria-hidden="true">5.6.2.</strong> Tuple expressions</a></li><li class="chapter-item "><a href="../spec/expressions/list.html"><strong aria-hidden="true">5.6.3.</strong> List expressions</a></li><li class="chapter-item "><a href="../spec/expressions/struct.html"><strong aria-hidden="true">5.6.4.</strong> Struct expressions</a></li><li class="chapter-item "><a href="../spec/expressions/indexing.html"><strong aria-hidden="true">5.6.5.</strong> Index expressions</a></li><li class="chapter-item "><a href="../spec/expressions/attribute.html"><strong aria-hidden="true">5.6.6.</strong> Attribute expressions</a></li><li class="chapter-item "><a href="../spec/expressions/name.html"><strong aria-hidden="true">5.6.7.</strong> Name expressions</a></li><li class="chapter-item "><a href="../spec/expressions/path.html"><strong aria-hidden="true">5.6.8.</strong> Path expressions</a></li><li class="chapter-item "><a href="../spec/expressions/literal.html"><strong aria-hidden="true">5.6.9.</strong> Literal expressions</a></li><li class="chapter-item "><a href="../spec/expressions/arithmetic_operators.html"><strong aria-hidden="true">5.6.10.</strong> Arithmetic Operators</a></li><li class="chapter-item "><a href="../spec/expressions/comparison_operators.html"><strong aria-hidden="true">5.6.11.</strong> Comparison Operators</a></li><li class="chapter-item "><a href="../spec/expressions/boolean_operators.html"><strong aria-hidden="true">5.6.12.</strong> Boolean Operators</a></li><li class="chapter-item "><a href="../spec/expressions/unary_operators.html"><strong aria-hidden="true">5.6.13.</strong> Unary Operators</a></li></ol></li><li class="chapter-item "><a href="../spec/type_system/index.html"><strong aria-hidden="true">5.7.</strong> Type System</a><a class="toggle"><div>❱</div></a></li><li><ol class="section"><li class="chapter-item "><a href="../spec/type_system/types/index.html"><strong aria-hidden="true">5.7.1.</strong> Types</a><a class="toggle"><div>❱</div></a></li><li><ol class="section"><li class="chapter-item "><a href="../spec/type_system/types/boolean.html"><strong aria-hidden="true">5.7.1.1.</strong> Boolean Type</a></li><li class="chapter-item "><a href="../spec/type_system/types/contract.html"><strong aria-hidden="true">5.7.1.2.</strong> Contract Type</a></li><li class="chapter-item "><a href="../spec/type_system/types/numeric.html"><strong aria-hidden="true">5.7.1.3.</strong> Numeric Types</a></li><li class="chapter-item "><a href="../spec/type_system/types/tuple.html"><strong aria-hidden="true">5.7.1.4.</strong> Tuple Types</a></li><li class="chapter-item "><a href="../spec/type_system/types/array.html"><strong aria-hidden="true">5.7.1.5.</strong> Array Types</a></li><li class="chapter-item "><a href="../spec/type_system/types/struct.html"><strong aria-hidden="true">5.7.1.6.</strong> Struct Types</a></li><li class="chapter-item "><a href="../spec/type_system/types/enum.html"><strong aria-hidden="true">5.7.1.7.</strong> Enum Types</a></li><li class="chapter-item "><a href="../spec/type_system/types/address.html"><strong aria-hidden="true">5.7.1.8.</strong> Address Type</a></li><li class="chapter-item "><a href="../spec/type_system/types/map.html"><strong aria-hidden="true">5.7.1.9.</strong> Map Type</a></li><li class="chapter-item "><a href="../spec/type_system/types/string.html"><strong aria-hidden="true">5.7.1.10.</strong> String Type</a></li><li class="chapter-item "><a href="../spec/type_system/types/unit.html"><strong aria-hidden="true">5.7.1.11.</strong> Unit Type</a></li><li class="chapter-item "><a href="../spec/type_system/types/function.html"><strong aria-hidden="true">5.7.1.12.</strong> Function Type</a></li></ol></li></ol></li><li class="chapter-item "><a href="../spec/data_layout/index.html"><strong aria-hidden="true">5.8.</strong> Data Layout</a><a class="toggle"><div>❱</div></a></li><li><ol class="section"><li class="chapter-item "><a href="../spec/data_layout/stack.html"><strong aria-hidden="true">5.8.1.</strong> Stack</a></li><li class="chapter-item "><a href="../spec/data_layout/storage/index.html"><strong aria-hidden="true">5.8.2.</strong> Storage</a><a class="toggle"><div>❱</div></a></li><li><ol class="section"><li class="chapter-item "><a href="../spec/data_layout/storage/constant_size_values_in_storage.html"><strong aria-hidden="true">5.8.2.1.</strong> Constant size values in storage</a></li><li class="chapter-item "><a href="../spec/data_layout/storage/maps_in_storage.html"><strong aria-hidden="true">5.8.2.2.</strong> Maps in storage</a></li><li class="chapter-item "><a href="../spec/data_layout/storage/to_mem_function.html"><strong aria-hidden="true">5.8.2.3.</strong> to_mem() function</a></li></ol></li><li class="chapter-item "><a href="../spec/data_layout/memory/index.html"><strong aria-hidden="true">5.8.3.</strong> Memory</a><a class="toggle"><div>❱</div></a></li><li><ol class="section"><li class="chapter-item "><a href="../spec/data_layout/memory/sequence_types_in_memory.html"><strong aria-hidden="true">5.8.3.1.</strong> Sequence types in memory</a></li></ol></li></ol></li></ol></li><li class="chapter-item expanded "><a href="../contributing.html"><strong aria-hidden="true">6.</strong> Contributing</a></li><li class="chapter-item expanded "><a href="../release_notes.html"><strong aria-hidden="true">7.</strong> Release Notes</a></li><li class="chapter-item expanded "><a href="../code_of_conduct.html"><strong aria-hidden="true">8.</strong> Code of Conduct</a></li></ol>
+            </div>
+            <div id="sidebar-resize-handle" class="sidebar-resize-handle"></div>
+        </nav>
+
+        <!-- Track and set sidebar scroll position -->
+        <script>
+            var sidebarScrollbox = document.querySelector('#sidebar .sidebar-scrollbox');
+            sidebarScrollbox.addEventListener('click', function(e) {
+                if (e.target.tagName === 'A') {
+                    sessionStorage.setItem('sidebar-scroll', sidebarScrollbox.scrollTop);
+                }
+            }, { passive: true });
+            var sidebarScrollTop = sessionStorage.getItem('sidebar-scroll');
+            sessionStorage.removeItem('sidebar-scroll');
+            if (sidebarScrollTop) {
+                // preserve sidebar scroll position when navigating via links within sidebar
+                sidebarScrollbox.scrollTop = sidebarScrollTop;
+            } else {
+                // scroll sidebar to current active section when navigating via "next/previous chapter" buttons
+                var activeSection = document.querySelector('#sidebar .active');
+                if (activeSection) {
+                    activeSection.scrollIntoView({ block: 'center' });
+                }
+            }
+        </script>
+
+        <div id="page-wrapper" class="page-wrapper">
+
+            <div class="page">
+                                <div id="menu-bar-hover-placeholder"></div>
+                <div id="menu-bar" class="menu-bar sticky">
+                    <div class="left-buttons">
+                        <label id="sidebar-toggle" class="icon-button" for="sidebar-toggle-anchor" title="Toggle Table of Contents" aria-label="Toggle Table of Contents" aria-controls="sidebar">
+                            <i class="fa fa-bars"></i>
+                        </label>
+                        <button id="theme-toggle" class="icon-button" type="button" title="Change theme" aria-label="Change theme" aria-haspopup="true" aria-expanded="false" aria-controls="theme-list">
+                            <i class="fa fa-paint-brush"></i>
+                        </button>
+                        <ul id="theme-list" class="theme-popup" aria-label="Themes" role="menu">
+                            <li role="none"><button role="menuitem" class="theme" id="light">Light</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="rust">Rust</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="coal">Coal</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="navy">Navy</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="ayu">Ayu</button></li>
+                        </ul>
+                        <button id="search-toggle" class="icon-button" type="button" title="Search. (Shortkey: s)" aria-label="Toggle Searchbar" aria-expanded="false" aria-keyshortcuts="S" aria-controls="searchbar">
+                            <i class="fa fa-search"></i>
+                        </button>
+                    </div>
+
+                    <h1 class="menu-title">The Fe Guide</h1>
+
+                    <div class="right-buttons">
+                        <a href="../print.html" title="Print this book" aria-label="Print this book">
+                            <i id="print-button" class="fa fa-print"></i>
+                        </a>
+
+                    </div>
+                </div>
+
+                <div id="search-wrapper" class="hidden">
+                    <form id="searchbar-outer" class="searchbar-outer">
+                        <input type="search" id="searchbar" name="searchbar" placeholder="Search this book ..." aria-controls="searchresults-outer" aria-describedby="searchresults-header">
+                    </form>
+                    <div id="searchresults-outer" class="searchresults-outer hidden">
+                        <div id="searchresults-header" class="searchresults-header"></div>
+                        <ul id="searchresults">
+                        </ul>
+                    </div>
+                </div>
+
+                <!-- Apply ARIA attributes after the sidebar and the sidebar toggle button are added to the DOM -->
+                <script>
+                    document.getElementById('sidebar-toggle').setAttribute('aria-expanded', sidebar === 'visible');
+                    document.getElementById('sidebar').setAttribute('aria-hidden', sidebar !== 'visible');
+                    Array.from(document.querySelectorAll('#sidebar a')).forEach(function(link) {
+                        link.setAttribute('tabIndex', sidebar === 'visible' ? 0 : -1);
+                    });
+                </script>
+
+                <div id="content" class="content">
+                    <main>
+                        <h2 id="deploy-your-contract"><a class="header" href="#deploy-your-contract">Deploy your contract.</a></h2>
+<h2 id="prerequisites"><a class="header" href="#prerequisites">Prerequisites</a></h2>
+<p>You should have compiled the <code>GuestBook</code> contract and have both <code>Guestbook_abi.json</code> and <code>GuestBook.bin</code> available in your <code>outputs</code> folder.
+If you don't have any of these components, please revisit <a href="./first_contract.html">Write your first contract</a>.</p>
+<h2 id="introduction"><a class="header" href="#introduction">Introduction</a></h2>
+<p>When you develop smart contracts it is common to test them on local blockchains first because they are quick and easy to create and it doesn't matter if you make mistakes - there is nothing of real value secured by the blockchain as it only exists on your computer. Later, you can deploy your contract on a public test network to see how it behaves in a more realistic environment where other developers are also testing their code. Finally, when you are very confident that your contract is ready, you can deploy to Ethereum Mainnet (or one of its live Layer-2 networks). Once the contract is deployed on a &quot;live&quot; network, you are handling assets with real-world value!</p>
+<p>In this guide, you will deploy your contract to a <strong>local blockchain</strong>. This will be an &quot;ephemeral&quot; blockchain, meaning it is completely destroyed every time you shut it down and recreated from scratch every time you start it up - it won't save its state when you shut it down. The benefit of this is quick and easy development, and you don't need to find test ETH to pay gas fees. Later in the guide, you will learn how to deploy to a live public test network too.</p>
+<h2 id="your-developer-environment"><a class="header" href="#your-developer-environment">Your developer environment</a></h2>
+<p>Everything in this tutorial can be done by sending JSON data directly to an Ethereum node. However, this is often awkward and error-prone, so a rich ecosystem of tooling has been developed to allow developers to interact with Ethereum in familiar languages or using abstractions that simplify the process.</p>
+<p>In this guide, you will use <a href="https://book.getfoundry.sh/">Foundry</a> which is a very lightweight set of command-line tools for managing smart contract development. If you already have Foundry installed, head straight to the next section. If you need to install Foundry, head to <a href="https://getfoundry.sh">getfoundry.sh</a> and follow the installation steps.</p>
+<blockquote>
+<p>Note: If you are a seasoned smart contract developer, feel free to follow the tutorial using your own toolchain.</p>
+</blockquote>
+<h2 id="deploying-to-a-local-network"><a class="header" href="#deploying-to-a-local-network">Deploying to a local network</a></h2>
+<p>Foundry has its own local network called <a href="https://book.getfoundry.sh/reference/anvil/">Anvil</a>. You can use it to create a local blockchain on your computer. Open a terminal and run the following very simple command:</p>
+<pre><code class="language-sh">anvil 
+</code></pre>
+<p>You will see some ASCII art and configuration details in the terminal. Anvil creates a set of accounts that you can use on this network. The account addresses and private keys are displayed in the console (<strong>never</strong> use these accounts to interact with any live network). You will also see a line reading <code>listening on 127.0.0.1:8545</code>. This indicates that your local node is listening for HTTP traffic on your local network on port 8545 - this is important because this is how you will send the necessary information to your node so that it can be added to the blockchain, and how you will interact with the contract after it is deployed.</p>
+<blockquote>
+<p>Note: Anvil needs to keep running throughout this tutorial - if you close the terminal your blockchain will cease to exist. Once Anvil has started, open a <strong>new terminal</strong> tab/window to run the rest of the commands in this guide.</p>
+</blockquote>
+<h3 id="making-the-deployment-transaction"><a class="header" href="#making-the-deployment-transaction">Making the deployment transaction</a></h3>
+<p>In the previous guide you wrote the following contract, and compiled it using <code>./fe build guest_book.fe --overwrite</code> to obtain the contract bytecode. This compilation stage converts the human-readable Fe code into a format that can be efficiently executed by Ethereum's embedded computer, known as the Ethereum Virtual Machine (EVM). The bytecode is stored at an address on the blockchain. The contract functions are invoked by sending instructions in a transaction to that address.</p>
+<pre><code class="language-fe">contract GuestBook {
+  messages: Map&lt;address, String&lt;100&gt;&gt;
+
+  pub fn sign(mut self, ctx: Context, book_msg: String&lt;100&gt;) {
+    self.messages[ctx.msg_sender()] = book_msg
+  }
+
+  pub fn get_msg(self, addr: address) -&gt; String&lt;100&gt; {
+    return self.messages[addr].to_mem()
+  }
+}
+</code></pre>
+<p>To make the deployment, we will need to send a transaction to your node via its exposed HTTP port (<code>8545</code>). </p>
+<p>The following command deploys the Guestbook contract to your local network. Grab the private key of one of your accounts from the information displayed in the terminal running Anvil.</p>
+<pre><code class="language-sh">cast send --rpc-url localhost:8545 --private-key &lt;your-private-key&gt; --create $(cat output/GuestBook/GuestBook.bin)
+</code></pre>
+<p>Here's what the response was at the time of writing this tutorial.</p>
+<pre><code class="language-sh">blockHash               0xcee9ff7c0b57822c5f6dd4fbd3a7e9eadb594b84d770f56f393f137785a52702
+blockNumber             1
+contractAddress         0x5FbDB2315678afecb367f032d93F642f64180aa3
+cumulativeGasUsed       196992
+effectiveGasPrice       4000000000
+gasUsed                 196992
+logs                    []
+logsBloom               0x00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+root                    
+status                  1
+transactionHash         0x3fbde2a994bf2dec8c11fb0390e9d7fbc0fa1150f5eab8f33c130b4561052622
+transactionIndex        0
+type                    2
+</code></pre>
+<p>This response tells you that your contract has been deployed to the blockchain. The transaction was included in block number 1, and the address it was deployed to is provided in the <code>contractAddress</code> field - you need this address to interact with the contract.</p>
+<blockquote>
+<p>Note: Don't assume responses to be identical when following the tutorial. Due to the nature of the blockchain environment the content of the responses will always differ slightly.</p>
+</blockquote>
+<h3 id="signing-the-guest-book"><a class="header" href="#signing-the-guest-book">Signing the guest book</a></h3>
+<p>Now that the contract is deployed to the blockchain, you can send a transaction to sign it with a custom message. You will sign it from the same address that was used to deploy the contract, but there is nothing preventing you from using any account for which you have the private key (you could experiment by signing from all ten accounts created by Anvil, for example).</p>
+<p>The following command will send a transaction to call <code>sign(string)</code> on our freshly deployed Guestbook contract sitting at address <code>0x810cbd4365396165874c054d01b1ede4cc249265</code> with the message <em>&quot;We &lt;3 Fe&quot;</em>.</p>
+<pre><code class="language-sh">cast send --rpc-url http://localhost:8545 --private-key &lt;your-private-key&gt; &lt;contract-address&gt; &quot;sign(string)&quot; '&quot;We &lt;3 Fe&quot;'
+</code></pre>
+<p>The response will look approximately as follows:</p>
+<pre><code class="language-sh">blockHash               0xb286898484ae737d22838e27b29899b327804ec45309e47a75b18cfd7d595cc7
+blockNumber             2
+contractAddress         
+cumulativeGasUsed       36278
+effectiveGasPrice       3767596722
+gasUsed                 36278
+logs                    []
+logsBloom               0x00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+root                    
+status                  1
+transactionHash         0x309bcea0a77801c15bb7534beab9e33dcb613c93cbea1f12d7f92e4be5ecab8c
+transactionIndex        0
+type                    2
+</code></pre>
+<h3 id="reading-the-signatures"><a class="header" href="#reading-the-signatures">Reading the signatures</a></h3>
+<p>The <code>get_msg(address)</code> API allows you to read the messages added to the guestbook for a given address. It will give us a response of 100 zero bytes for any address that hasn't yet signed the guestbook.</p>
+<p>Since reading the messages doesn't change any state within the blockchain, you don't have to send an actual transaction. Instead, you can perform a <em>call</em> against the local state of the node that you are querying.</p>
+<p>To do that run:</p>
+<pre><code class="language-sh">$ cast call --rpc-url http://localhost:8545 &lt;contract-address&gt; &quot;get_msg(address)&quot; &lt;your-account-address-that-signed-the-guestbook&gt;
+</code></pre>
+<p>Notice that the command doesn't need to provide a private key simply because we are not sending an actual transaction.</p>
+<p>The response arrives in the form of hex-encoded bytes padded with zeroes: </p>
+<pre><code class="language-sh">0x000000000000000000000000000000000000000000000000000000000000002000000000000000000000000000000000000000000000000000000000000000087765203c33204665000000000000000000000000000000000000000000000000
+</code></pre>
+<p>Foundry provides a built-in method to convert this hex string into human-readable ASCII. You can do this as follows:</p>
+<pre><code class="language-sh">cast to_ascii &quot;0x000000000000000000000000000000000000000000000000000000000000002000000000000000000000000000000000000000000000000000000000000000087765203c33204665000000000000000000000000000000000000000000000000&quot;
+</code></pre>
+<p>or simply pipe the output of the <code>cast call</code> to <code>to_ascii</code> to do the query and conversion in a single command:</p>
+<pre><code class="language-sh">cast call --rpc-url https://rpc.sepolia.org &lt;contract-address&gt; &quot;get_msg(address)&quot; &lt;your-account-address-that-signed-the-guestbook&gt; | cast --to-ascii
+</code></pre>
+<p>Either way, the response will be the message you passed to the <code>sign(string)</code> function.</p>
+<pre><code class="language-sh">&quot;We &lt;3 Fe&quot;
+</code></pre>
+<p>Congratulations! You've deployed real Fe code to a local blockchain! 🤖</p>
+<h2 id="deploying-to-a-public-test-network"><a class="header" href="#deploying-to-a-public-test-network">Deploying to a public test network</a></h2>
+<p>Now you have learned how to deploy your contract to a local blockchain, you can consider deploying it to a public test network too. For more complex projects this can be very beneficial because it allows many users to interact with your contract, simulates real network conditions and allows you to interact with other existing contracts on the network. However, to use a public testnet you need to obtain some of that testnet's gas token. </p>
+<p>In this guide you will use the Sepolia test network, meaning you will need some SepoliaETH. SepoliaETH has no real-world value - it is only required to pay gas fees on the network. If you don't have any SepoliaETH yet, you can <a href="https://ethereum.org/en/developers/docs/networks/#sepolia">request some SepoliaETH</a> from one of the faucets that are listed on the ethereum.org website.</p>
+<blockquote>
+<p><strong>IMPORTANT</strong>: It is good practice to <strong>never</strong> use an Ethereum account for a testnet that is also used for the actual Ethereum mainnet.</p>
+</blockquote>
+<p>Assuming you have some SepoliaETH, you can repeat the steps from the local blockchain example, however, instead of pointing Foundry to the RPC endpoint for your Anvil node, you need to point it to a node connected to the Sepolia network. There are several options for this:</p>
+<ul>
+<li>If you run your own node, connect it to the Sepolia network and let it sync. make sure you expose an http port or enable IPC transport.</li>
+<li>You can use an RPC provider such as <a href="https://www.alchemy.com/">Alchemy</a> or <a href="https://infura.io/">Infura</a> </li>
+<li>You can use an open public node such as <code>https://rpc.sepolia.org</code>.</li>
+</ul>
+<p>Whichever method you choose, you will have an RPC endpoint for a node connected to Sepolia. You can replace the <code>http://localhost:8545</code> in the commands with your new endpoint. For example, to deploy the contract using the open public endpoint:</p>
+<pre><code class="language-sh">cast send --rpc-url https://rpc.sepolia.org --private-key &lt;your-private-key&gt; --create $(cat output/GuestBook/GuestBook.bin)
+</code></pre>
+<p>Now you have deployed the contract to a public network and anyone can interact with it. </p>
+<p>To demonstrate, you can check out previous versions of this contract deployed on Sepolia in the past:</p>
+<div class="table-wrapper"><table><thead><tr><th></th><th>address</th><th>link</th></tr></thead><tbody>
+<tr><td>deploy tx hash</td><td>0x31b41a4177d7eb66f5ea814959b2c147366b6323f17b6f7060ecff424b58df76</td><td><a href="https://sepolia.etherscan.io/tx/0x31b41a4177d7eb66f5ea814959b2c147366b6323f17b6f7060ecff424b58df76">etherscan</a></td></tr>
+<tr><td>contract address</td><td>0x810cbd4365396165874C054d01B1Ede4cc249265</td><td><a href="https://sepolia.etherscan.io/address/0x810cbd4365396165874c054d01b1ede4cc249265">etherscan</a></td></tr>
+</tbody></table>
+</div>
+<p>Note that calling the <code>sign(string)</code> function will cost you some SepoliaETH because the function changes the state of the blockchain (it adds a message to the contract storage). However, <code>get_msg(address)</code> does not cost any gas because it is a simple lookup in the node's local database.</p>
+<p>Congratulations! You've deployed real Fe code to a live network 🤖</p>
+<h2 id="summary"><a class="header" href="#summary">Summary</a></h2>
+<p>Well done!</p>
+<p>You have now written and compiled a Fe contract and deployed it to both a local blockchain and a live public test network! You also learned how to interact with the deployed contract using transactions and calls.</p>
+<p>Here's some ideas for what you could do next:</p>
+<ul>
+<li>Experiment with different developer tooling</li>
+<li>Get more comfortable with Foundry by exploring the <a href="https://book.getfoundry.sh/">documentation</a></li>
+<li>Repeat the steps in this guide but for a more complex contract - be creative!</li>
+<li>Continue to the <a href="../user-guide/index.html">Using Fe</a> pages to explore Fe more deeply.</li>
+</ul>
+
+                    </main>
+
+                    <nav class="nav-wrapper" aria-label="Page navigation">
+                        <!-- Mobile navigation buttons -->
+                            <a rel="prev" href="../quickstart/first_contract.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                                <i class="fa fa-angle-left"></i>
+                            </a>
+
+                            <a rel="next prefetch" href="../user-guide/index.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                                <i class="fa fa-angle-right"></i>
+                            </a>
+
+                        <div style="clear: both"></div>
+                    </nav>
+                </div>
+            </div>
+
+            <nav class="nav-wide-wrapper" aria-label="Page navigation">
+                    <a rel="prev" href="../quickstart/first_contract.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                        <i class="fa fa-angle-left"></i>
+                    </a>
+
+                    <a rel="next prefetch" href="../user-guide/index.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                        <i class="fa fa-angle-right"></i>
+                    </a>
+            </nav>
+
+        </div>
+
+
+
+
+        <script>
+            window.playground_copyable = true;
+        </script>
+
+
+        <script src="../elasticlunr.min.js"></script>
+        <script src="../mark.min.js"></script>
+        <script src="../searcher.js"></script>
+
+        <script src="../clipboard.min.js"></script>
+        <script src="../highlight.js"></script>
+        <script src="../book.js"></script>
+
+        <!-- Custom JS scripts -->
+        <script src="../theme/custom-highlight.js"></script>
+
+
+    </div>
+    </body>
+</html>

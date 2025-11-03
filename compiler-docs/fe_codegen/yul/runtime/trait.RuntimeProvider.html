@@ -1,0 +1,296 @@
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="generator" content="rustdoc"><meta name="description" content="API documentation for the Rust `RuntimeProvider` trait in crate `fe_codegen`."><title>RuntimeProvider in fe_codegen::yul::runtime - Rust</title><script>if(window.location.protocol!=="file:")document.head.insertAdjacentHTML("beforeend","SourceSerif4-Regular-6b053e98.ttf.woff2,FiraSans-Italic-81dc35de.woff2,FiraSans-Regular-0fe48ade.woff2,FiraSans-MediumItalic-ccf7e434.woff2,FiraSans-Medium-e1aa3f0a.woff2,SourceCodePro-Regular-8badfe75.ttf.woff2,SourceCodePro-Semibold-aa29a496.ttf.woff2".split(",").map(f=>`<link rel="preload" as="font" type="font/woff2" crossorigin href="../../../static.files/${f}">`).join(""))</script><link rel="stylesheet" href="../../../static.files/normalize-9960930a.css"><link rel="stylesheet" href="../../../static.files/rustdoc-aa0817cf.css"><meta name="rustdoc-vars" data-root-path="../../../" data-static-root-path="../../../static.files/" data-current-crate="fe_codegen" data-themes="" data-resource-suffix="" data-rustdoc-version="1.90.0 (1159e78c4 2025-09-14)" data-channel="1.90.0" data-search-js="search-fa3e91e5.js" data-settings-js="settings-5514c975.js" ><script src="../../../static.files/storage-68b7e25d.js"></script><script defer src="sidebar-items.js"></script><script defer src="../../../static.files/main-eebb9057.js"></script><noscript><link rel="stylesheet" href="../../../static.files/noscript-32bb7600.css"></noscript><link rel="alternate icon" type="image/png" href="../../../static.files/favicon-32x32-6580c154.png"><link rel="icon" type="image/svg+xml" href="../../../static.files/favicon-044be391.svg"></head><body class="rustdoc trait"><!--[if lte IE 11]><div class="warning">This old browser is unsupported and will most likely display funky things.</div><![endif]--><nav class="mobile-topbar"><button class="sidebar-menu-toggle" title="show sidebar"></button></nav><nav class="sidebar"><div class="sidebar-crate"><h2><a href="../../../fe_codegen/index.html">fe_<wbr>codegen</a><span class="version">0.26.0</span></h2></div><div class="sidebar-elems"><section id="rustdoc-toc"><h2 class="location"><a href="#">Runtime<wbr>Provider</a></h2><h3><a href="#required-methods">Required Methods</a></h3><ul class="block"><li><a href="#tymethod.abi_decode" title="abi_decode">abi_decode</a></li><li><a href="#tymethod.abi_encode" title="abi_encode">abi_encode</a></li><li><a href="#tymethod.abi_encode_seq" title="abi_encode_seq">abi_encode_seq</a></li><li><a href="#tymethod.aggregate_init" title="aggregate_init">aggregate_init</a></li><li><a href="#tymethod.alloc" title="alloc">alloc</a></li><li><a href="#tymethod.avail" title="avail">avail</a></li><li><a href="#tymethod.collect_definitions" title="collect_definitions">collect_definitions</a></li><li><a href="#tymethod.create" title="create">create</a></li><li><a href="#tymethod.create2" title="create2">create2</a></li><li><a href="#tymethod.emit" title="emit">emit</a></li><li><a href="#tymethod.external_call" title="external_call">external_call</a></li><li><a href="#tymethod.map_value_ptr" title="map_value_ptr">map_value_ptr</a></li><li><a href="#tymethod.ptr_copy" title="ptr_copy">ptr_copy</a></li><li><a href="#tymethod.ptr_load" title="ptr_load">ptr_load</a></li><li><a href="#tymethod.ptr_store" title="ptr_store">ptr_store</a></li><li><a href="#tymethod.revert" title="revert">revert</a></li><li><a href="#tymethod.safe_add" title="safe_add">safe_add</a></li><li><a href="#tymethod.safe_div" title="safe_div">safe_div</a></li><li><a href="#tymethod.safe_mod" title="safe_mod">safe_mod</a></li><li><a href="#tymethod.safe_mul" title="safe_mul">safe_mul</a></li><li><a href="#tymethod.safe_pow" title="safe_pow">safe_pow</a></li><li><a href="#tymethod.safe_sub" title="safe_sub">safe_sub</a></li><li><a href="#tymethod.string_construct" title="string_construct">string_construct</a></li><li><a href="#tymethod.string_copy" title="string_copy">string_copy</a></li></ul><h3><a href="#provided-methods">Provided Methods</a></h3><ul class="block"><li><a href="#method.primitive_cast" title="primitive_cast">primitive_cast</a></li></ul><h3><a href="#implementors">Implementors</a></h3></section><div id="rustdoc-modnav"><h2><a href="index.html">In fe_<wbr>codegen::<wbr>yul::<wbr>runtime</a></h2></div></div></nav><div class="sidebar-resizer" title="Drag to resize sidebar"></div><main><div class="width-limiter"><rustdoc-search></rustdoc-search><section id="main-content" class="content"><div class="main-heading"><div class="rustdoc-breadcrumbs"><a href="../../index.html">fe_codegen</a>::<wbr><a href="../index.html">yul</a>::<wbr><a href="index.html">runtime</a></div><h1>Trait <span class="trait">RuntimeProvider</span><button id="copy-path" title="Copy item path to clipboard">Copy item path</button></h1><rustdoc-toolbar></rustdoc-toolbar><span class="sub-heading"><a class="src" href="../../../src/fe_codegen/yul/runtime/mod.rs.html#22-218">Source</a> </span></div><pre class="rust item-decl"><code>pub trait RuntimeProvider {
+<details class="toggle type-contents-toggle"><summary class="hideme"><span>Show 25 methods</span></summary>    // Required methods
+    fn <a href="#tymethod.collect_definitions" class="fn">collect_definitions</a>(&amp;self) -&gt; <a class="struct" href="https://doc.rust-lang.org/1.90.0/alloc/vec/struct.Vec.html" title="struct alloc::vec::Vec">Vec</a>&lt;FunctionDefinition&gt;;
+<span class="item-spacer"></span>    fn <a href="#tymethod.alloc" class="fn">alloc</a>(&amp;mut self, db: &amp;dyn <a class="trait" href="../../db/trait.CodegenDb.html" title="trait fe_codegen::db::CodegenDb">CodegenDb</a>, size: Expression) -&gt; Expression;
+<span class="item-spacer"></span>    fn <a href="#tymethod.avail" class="fn">avail</a>(&amp;mut self, db: &amp;dyn <a class="trait" href="../../db/trait.CodegenDb.html" title="trait fe_codegen::db::CodegenDb">CodegenDb</a>) -&gt; Expression;
+<span class="item-spacer"></span>    fn <a href="#tymethod.create" class="fn">create</a>(
+        &amp;mut self,
+        db: &amp;dyn <a class="trait" href="../../db/trait.CodegenDb.html" title="trait fe_codegen::db::CodegenDb">CodegenDb</a>,
+        contract: ContractId,
+        value: Expression,
+    ) -&gt; Expression;
+<span class="item-spacer"></span>    fn <a href="#tymethod.create2" class="fn">create2</a>(
+        &amp;mut self,
+        db: &amp;dyn <a class="trait" href="../../db/trait.CodegenDb.html" title="trait fe_codegen::db::CodegenDb">CodegenDb</a>,
+        contract: ContractId,
+        value: Expression,
+        salt: Expression,
+    ) -&gt; Expression;
+<span class="item-spacer"></span>    fn <a href="#tymethod.emit" class="fn">emit</a>(
+        &amp;mut self,
+        db: &amp;dyn <a class="trait" href="../../db/trait.CodegenDb.html" title="trait fe_codegen::db::CodegenDb">CodegenDb</a>,
+        event: Expression,
+        event_ty: <a class="struct" href="../../../fe_mir/ir/types/struct.TypeId.html" title="struct fe_mir::ir::types::TypeId">TypeId</a>,
+    ) -&gt; Expression;
+<span class="item-spacer"></span>    fn <a href="#tymethod.revert" class="fn">revert</a>(
+        &amp;mut self,
+        db: &amp;dyn <a class="trait" href="../../db/trait.CodegenDb.html" title="trait fe_codegen::db::CodegenDb">CodegenDb</a>,
+        arg: <a class="enum" href="https://doc.rust-lang.org/1.90.0/core/option/enum.Option.html" title="enum core::option::Option">Option</a>&lt;Expression&gt;,
+        arg_name: &amp;<a class="primitive" href="https://doc.rust-lang.org/1.90.0/std/primitive.str.html">str</a>,
+        arg_ty: <a class="struct" href="../../../fe_mir/ir/types/struct.TypeId.html" title="struct fe_mir::ir::types::TypeId">TypeId</a>,
+    ) -&gt; Expression;
+<span class="item-spacer"></span>    fn <a href="#tymethod.external_call" class="fn">external_call</a>(
+        &amp;mut self,
+        db: &amp;dyn <a class="trait" href="../../db/trait.CodegenDb.html" title="trait fe_codegen::db::CodegenDb">CodegenDb</a>,
+        function: <a class="struct" href="../../../fe_mir/ir/function/struct.FunctionId.html" title="struct fe_mir::ir::function::FunctionId">FunctionId</a>,
+        args: <a class="struct" href="https://doc.rust-lang.org/1.90.0/alloc/vec/struct.Vec.html" title="struct alloc::vec::Vec">Vec</a>&lt;Expression&gt;,
+    ) -&gt; Expression;
+<span class="item-spacer"></span>    fn <a href="#tymethod.map_value_ptr" class="fn">map_value_ptr</a>(
+        &amp;mut self,
+        db: &amp;dyn <a class="trait" href="../../db/trait.CodegenDb.html" title="trait fe_codegen::db::CodegenDb">CodegenDb</a>,
+        map_ptr: Expression,
+        key: Expression,
+        key_ty: <a class="struct" href="../../../fe_mir/ir/types/struct.TypeId.html" title="struct fe_mir::ir::types::TypeId">TypeId</a>,
+    ) -&gt; Expression;
+<span class="item-spacer"></span>    fn <a href="#tymethod.aggregate_init" class="fn">aggregate_init</a>(
+        &amp;mut self,
+        db: &amp;dyn <a class="trait" href="../../db/trait.CodegenDb.html" title="trait fe_codegen::db::CodegenDb">CodegenDb</a>,
+        ptr: Expression,
+        args: <a class="struct" href="https://doc.rust-lang.org/1.90.0/alloc/vec/struct.Vec.html" title="struct alloc::vec::Vec">Vec</a>&lt;Expression&gt;,
+        ptr_ty: <a class="struct" href="../../../fe_mir/ir/types/struct.TypeId.html" title="struct fe_mir::ir::types::TypeId">TypeId</a>,
+        arg_tys: <a class="struct" href="https://doc.rust-lang.org/1.90.0/alloc/vec/struct.Vec.html" title="struct alloc::vec::Vec">Vec</a>&lt;<a class="struct" href="../../../fe_mir/ir/types/struct.TypeId.html" title="struct fe_mir::ir::types::TypeId">TypeId</a>&gt;,
+    ) -&gt; Expression;
+<span class="item-spacer"></span>    fn <a href="#tymethod.string_copy" class="fn">string_copy</a>(
+        &amp;mut self,
+        db: &amp;dyn <a class="trait" href="../../db/trait.CodegenDb.html" title="trait fe_codegen::db::CodegenDb">CodegenDb</a>,
+        dst: Expression,
+        data: &amp;<a class="primitive" href="https://doc.rust-lang.org/1.90.0/std/primitive.str.html">str</a>,
+        is_dst_storage: <a class="primitive" href="https://doc.rust-lang.org/1.90.0/std/primitive.bool.html">bool</a>,
+    ) -&gt; Expression;
+<span class="item-spacer"></span>    fn <a href="#tymethod.string_construct" class="fn">string_construct</a>(
+        &amp;mut self,
+        db: &amp;dyn <a class="trait" href="../../db/trait.CodegenDb.html" title="trait fe_codegen::db::CodegenDb">CodegenDb</a>,
+        data: &amp;<a class="primitive" href="https://doc.rust-lang.org/1.90.0/std/primitive.str.html">str</a>,
+        string_len: <a class="primitive" href="https://doc.rust-lang.org/1.90.0/std/primitive.usize.html">usize</a>,
+    ) -&gt; Expression;
+<span class="item-spacer"></span>    fn <a href="#tymethod.ptr_copy" class="fn">ptr_copy</a>(
+        &amp;mut self,
+        db: &amp;dyn <a class="trait" href="../../db/trait.CodegenDb.html" title="trait fe_codegen::db::CodegenDb">CodegenDb</a>,
+        src: Expression,
+        dst: Expression,
+        size: Expression,
+        is_src_storage: <a class="primitive" href="https://doc.rust-lang.org/1.90.0/std/primitive.bool.html">bool</a>,
+        is_dst_storage: <a class="primitive" href="https://doc.rust-lang.org/1.90.0/std/primitive.bool.html">bool</a>,
+    ) -&gt; Expression;
+<span class="item-spacer"></span>    fn <a href="#tymethod.ptr_store" class="fn">ptr_store</a>(
+        &amp;mut self,
+        db: &amp;dyn <a class="trait" href="../../db/trait.CodegenDb.html" title="trait fe_codegen::db::CodegenDb">CodegenDb</a>,
+        ptr: Expression,
+        imm: Expression,
+        ptr_ty: <a class="struct" href="../../../fe_mir/ir/types/struct.TypeId.html" title="struct fe_mir::ir::types::TypeId">TypeId</a>,
+    ) -&gt; Expression;
+<span class="item-spacer"></span>    fn <a href="#tymethod.ptr_load" class="fn">ptr_load</a>(
+        &amp;mut self,
+        db: &amp;dyn <a class="trait" href="../../db/trait.CodegenDb.html" title="trait fe_codegen::db::CodegenDb">CodegenDb</a>,
+        ptr: Expression,
+        ptr_ty: <a class="struct" href="../../../fe_mir/ir/types/struct.TypeId.html" title="struct fe_mir::ir::types::TypeId">TypeId</a>,
+    ) -&gt; Expression;
+<span class="item-spacer"></span>    fn <a href="#tymethod.abi_encode" class="fn">abi_encode</a>(
+        &amp;mut self,
+        db: &amp;dyn <a class="trait" href="../../db/trait.CodegenDb.html" title="trait fe_codegen::db::CodegenDb">CodegenDb</a>,
+        src: Expression,
+        dst: Expression,
+        src_ty: <a class="struct" href="../../../fe_mir/ir/types/struct.TypeId.html" title="struct fe_mir::ir::types::TypeId">TypeId</a>,
+        is_dst_storage: <a class="primitive" href="https://doc.rust-lang.org/1.90.0/std/primitive.bool.html">bool</a>,
+    ) -&gt; Expression;
+<span class="item-spacer"></span>    fn <a href="#tymethod.abi_encode_seq" class="fn">abi_encode_seq</a>(
+        &amp;mut self,
+        db: &amp;dyn <a class="trait" href="../../db/trait.CodegenDb.html" title="trait fe_codegen::db::CodegenDb">CodegenDb</a>,
+        src: &amp;[Expression],
+        dst: Expression,
+        src_tys: &amp;[<a class="struct" href="../../../fe_mir/ir/types/struct.TypeId.html" title="struct fe_mir::ir::types::TypeId">TypeId</a>],
+        is_dst_storage: <a class="primitive" href="https://doc.rust-lang.org/1.90.0/std/primitive.bool.html">bool</a>,
+    ) -&gt; Expression;
+<span class="item-spacer"></span>    fn <a href="#tymethod.abi_decode" class="fn">abi_decode</a>(
+        &amp;mut self,
+        db: &amp;dyn <a class="trait" href="../../db/trait.CodegenDb.html" title="trait fe_codegen::db::CodegenDb">CodegenDb</a>,
+        src: Expression,
+        size: Expression,
+        types: &amp;[<a class="struct" href="../../../fe_mir/ir/types/struct.TypeId.html" title="struct fe_mir::ir::types::TypeId">TypeId</a>],
+        abi_loc: <a class="enum" href="enum.AbiSrcLocation.html" title="enum fe_codegen::yul::runtime::AbiSrcLocation">AbiSrcLocation</a>,
+    ) -&gt; Expression;
+<span class="item-spacer"></span>    fn <a href="#tymethod.safe_add" class="fn">safe_add</a>(
+        &amp;mut self,
+        db: &amp;dyn <a class="trait" href="../../db/trait.CodegenDb.html" title="trait fe_codegen::db::CodegenDb">CodegenDb</a>,
+        lhs: Expression,
+        rhs: Expression,
+        ty: <a class="struct" href="../../../fe_mir/ir/types/struct.TypeId.html" title="struct fe_mir::ir::types::TypeId">TypeId</a>,
+    ) -&gt; Expression;
+<span class="item-spacer"></span>    fn <a href="#tymethod.safe_sub" class="fn">safe_sub</a>(
+        &amp;mut self,
+        db: &amp;dyn <a class="trait" href="../../db/trait.CodegenDb.html" title="trait fe_codegen::db::CodegenDb">CodegenDb</a>,
+        lhs: Expression,
+        rhs: Expression,
+        ty: <a class="struct" href="../../../fe_mir/ir/types/struct.TypeId.html" title="struct fe_mir::ir::types::TypeId">TypeId</a>,
+    ) -&gt; Expression;
+<span class="item-spacer"></span>    fn <a href="#tymethod.safe_mul" class="fn">safe_mul</a>(
+        &amp;mut self,
+        db: &amp;dyn <a class="trait" href="../../db/trait.CodegenDb.html" title="trait fe_codegen::db::CodegenDb">CodegenDb</a>,
+        lhs: Expression,
+        rhs: Expression,
+        ty: <a class="struct" href="../../../fe_mir/ir/types/struct.TypeId.html" title="struct fe_mir::ir::types::TypeId">TypeId</a>,
+    ) -&gt; Expression;
+<span class="item-spacer"></span>    fn <a href="#tymethod.safe_div" class="fn">safe_div</a>(
+        &amp;mut self,
+        db: &amp;dyn <a class="trait" href="../../db/trait.CodegenDb.html" title="trait fe_codegen::db::CodegenDb">CodegenDb</a>,
+        lhs: Expression,
+        rhs: Expression,
+        ty: <a class="struct" href="../../../fe_mir/ir/types/struct.TypeId.html" title="struct fe_mir::ir::types::TypeId">TypeId</a>,
+    ) -&gt; Expression;
+<span class="item-spacer"></span>    fn <a href="#tymethod.safe_mod" class="fn">safe_mod</a>(
+        &amp;mut self,
+        db: &amp;dyn <a class="trait" href="../../db/trait.CodegenDb.html" title="trait fe_codegen::db::CodegenDb">CodegenDb</a>,
+        lhs: Expression,
+        rhs: Expression,
+        ty: <a class="struct" href="../../../fe_mir/ir/types/struct.TypeId.html" title="struct fe_mir::ir::types::TypeId">TypeId</a>,
+    ) -&gt; Expression;
+<span class="item-spacer"></span>    fn <a href="#tymethod.safe_pow" class="fn">safe_pow</a>(
+        &amp;mut self,
+        db: &amp;dyn <a class="trait" href="../../db/trait.CodegenDb.html" title="trait fe_codegen::db::CodegenDb">CodegenDb</a>,
+        lhs: Expression,
+        rhs: Expression,
+        ty: <a class="struct" href="../../../fe_mir/ir/types/struct.TypeId.html" title="struct fe_mir::ir::types::TypeId">TypeId</a>,
+    ) -&gt; Expression;
+
+    // Provided method
+    fn <a href="#method.primitive_cast" class="fn">primitive_cast</a>(
+        &amp;mut self,
+        db: &amp;dyn <a class="trait" href="../../db/trait.CodegenDb.html" title="trait fe_codegen::db::CodegenDb">CodegenDb</a>,
+        value: Expression,
+        from_ty: <a class="struct" href="../../../fe_mir/ir/types/struct.TypeId.html" title="struct fe_mir::ir::types::TypeId">TypeId</a>,
+    ) -&gt; Expression { ... }
+</details>}</code></pre><h2 id="required-methods" class="section-header">Required Methods<a href="#required-methods" class="anchor">§</a></h2><div class="methods"><section id="tymethod.collect_definitions" class="method"><a class="src rightside" href="../../../src/fe_codegen/yul/runtime/mod.rs.html#23">Source</a><h4 class="code-header">fn <a href="#tymethod.collect_definitions" class="fn">collect_definitions</a>(&amp;self) -&gt; <a class="struct" href="https://doc.rust-lang.org/1.90.0/alloc/vec/struct.Vec.html" title="struct alloc::vec::Vec">Vec</a>&lt;FunctionDefinition&gt;</h4></section><section id="tymethod.alloc" class="method"><a class="src rightside" href="../../../src/fe_codegen/yul/runtime/mod.rs.html#25">Source</a><h4 class="code-header">fn <a href="#tymethod.alloc" class="fn">alloc</a>(&amp;mut self, db: &amp;dyn <a class="trait" href="../../db/trait.CodegenDb.html" title="trait fe_codegen::db::CodegenDb">CodegenDb</a>, size: Expression) -&gt; Expression</h4></section><section id="tymethod.avail" class="method"><a class="src rightside" href="../../../src/fe_codegen/yul/runtime/mod.rs.html#27">Source</a><h4 class="code-header">fn <a href="#tymethod.avail" class="fn">avail</a>(&amp;mut self, db: &amp;dyn <a class="trait" href="../../db/trait.CodegenDb.html" title="trait fe_codegen::db::CodegenDb">CodegenDb</a>) -&gt; Expression</h4></section><section id="tymethod.create" class="method"><a class="src rightside" href="../../../src/fe_codegen/yul/runtime/mod.rs.html#29-34">Source</a><h4 class="code-header">fn <a href="#tymethod.create" class="fn">create</a>(
+    &amp;mut self,
+    db: &amp;dyn <a class="trait" href="../../db/trait.CodegenDb.html" title="trait fe_codegen::db::CodegenDb">CodegenDb</a>,
+    contract: ContractId,
+    value: Expression,
+) -&gt; Expression</h4></section><section id="tymethod.create2" class="method"><a class="src rightside" href="../../../src/fe_codegen/yul/runtime/mod.rs.html#36-42">Source</a><h4 class="code-header">fn <a href="#tymethod.create2" class="fn">create2</a>(
+    &amp;mut self,
+    db: &amp;dyn <a class="trait" href="../../db/trait.CodegenDb.html" title="trait fe_codegen::db::CodegenDb">CodegenDb</a>,
+    contract: ContractId,
+    value: Expression,
+    salt: Expression,
+) -&gt; Expression</h4></section><section id="tymethod.emit" class="method"><a class="src rightside" href="../../../src/fe_codegen/yul/runtime/mod.rs.html#44-49">Source</a><h4 class="code-header">fn <a href="#tymethod.emit" class="fn">emit</a>(
+    &amp;mut self,
+    db: &amp;dyn <a class="trait" href="../../db/trait.CodegenDb.html" title="trait fe_codegen::db::CodegenDb">CodegenDb</a>,
+    event: Expression,
+    event_ty: <a class="struct" href="../../../fe_mir/ir/types/struct.TypeId.html" title="struct fe_mir::ir::types::TypeId">TypeId</a>,
+) -&gt; Expression</h4></section><section id="tymethod.revert" class="method"><a class="src rightside" href="../../../src/fe_codegen/yul/runtime/mod.rs.html#51-57">Source</a><h4 class="code-header">fn <a href="#tymethod.revert" class="fn">revert</a>(
+    &amp;mut self,
+    db: &amp;dyn <a class="trait" href="../../db/trait.CodegenDb.html" title="trait fe_codegen::db::CodegenDb">CodegenDb</a>,
+    arg: <a class="enum" href="https://doc.rust-lang.org/1.90.0/core/option/enum.Option.html" title="enum core::option::Option">Option</a>&lt;Expression&gt;,
+    arg_name: &amp;<a class="primitive" href="https://doc.rust-lang.org/1.90.0/std/primitive.str.html">str</a>,
+    arg_ty: <a class="struct" href="../../../fe_mir/ir/types/struct.TypeId.html" title="struct fe_mir::ir::types::TypeId">TypeId</a>,
+) -&gt; Expression</h4></section><section id="tymethod.external_call" class="method"><a class="src rightside" href="../../../src/fe_codegen/yul/runtime/mod.rs.html#59-64">Source</a><h4 class="code-header">fn <a href="#tymethod.external_call" class="fn">external_call</a>(
+    &amp;mut self,
+    db: &amp;dyn <a class="trait" href="../../db/trait.CodegenDb.html" title="trait fe_codegen::db::CodegenDb">CodegenDb</a>,
+    function: <a class="struct" href="../../../fe_mir/ir/function/struct.FunctionId.html" title="struct fe_mir::ir::function::FunctionId">FunctionId</a>,
+    args: <a class="struct" href="https://doc.rust-lang.org/1.90.0/alloc/vec/struct.Vec.html" title="struct alloc::vec::Vec">Vec</a>&lt;Expression&gt;,
+) -&gt; Expression</h4></section><section id="tymethod.map_value_ptr" class="method"><a class="src rightside" href="../../../src/fe_codegen/yul/runtime/mod.rs.html#66-72">Source</a><h4 class="code-header">fn <a href="#tymethod.map_value_ptr" class="fn">map_value_ptr</a>(
+    &amp;mut self,
+    db: &amp;dyn <a class="trait" href="../../db/trait.CodegenDb.html" title="trait fe_codegen::db::CodegenDb">CodegenDb</a>,
+    map_ptr: Expression,
+    key: Expression,
+    key_ty: <a class="struct" href="../../../fe_mir/ir/types/struct.TypeId.html" title="struct fe_mir::ir::types::TypeId">TypeId</a>,
+) -&gt; Expression</h4></section><section id="tymethod.aggregate_init" class="method"><a class="src rightside" href="../../../src/fe_codegen/yul/runtime/mod.rs.html#74-81">Source</a><h4 class="code-header">fn <a href="#tymethod.aggregate_init" class="fn">aggregate_init</a>(
+    &amp;mut self,
+    db: &amp;dyn <a class="trait" href="../../db/trait.CodegenDb.html" title="trait fe_codegen::db::CodegenDb">CodegenDb</a>,
+    ptr: Expression,
+    args: <a class="struct" href="https://doc.rust-lang.org/1.90.0/alloc/vec/struct.Vec.html" title="struct alloc::vec::Vec">Vec</a>&lt;Expression&gt;,
+    ptr_ty: <a class="struct" href="../../../fe_mir/ir/types/struct.TypeId.html" title="struct fe_mir::ir::types::TypeId">TypeId</a>,
+    arg_tys: <a class="struct" href="https://doc.rust-lang.org/1.90.0/alloc/vec/struct.Vec.html" title="struct alloc::vec::Vec">Vec</a>&lt;<a class="struct" href="../../../fe_mir/ir/types/struct.TypeId.html" title="struct fe_mir::ir::types::TypeId">TypeId</a>&gt;,
+) -&gt; Expression</h4></section><section id="tymethod.string_copy" class="method"><a class="src rightside" href="../../../src/fe_codegen/yul/runtime/mod.rs.html#83-89">Source</a><h4 class="code-header">fn <a href="#tymethod.string_copy" class="fn">string_copy</a>(
+    &amp;mut self,
+    db: &amp;dyn <a class="trait" href="../../db/trait.CodegenDb.html" title="trait fe_codegen::db::CodegenDb">CodegenDb</a>,
+    dst: Expression,
+    data: &amp;<a class="primitive" href="https://doc.rust-lang.org/1.90.0/std/primitive.str.html">str</a>,
+    is_dst_storage: <a class="primitive" href="https://doc.rust-lang.org/1.90.0/std/primitive.bool.html">bool</a>,
+) -&gt; Expression</h4></section><section id="tymethod.string_construct" class="method"><a class="src rightside" href="../../../src/fe_codegen/yul/runtime/mod.rs.html#91-96">Source</a><h4 class="code-header">fn <a href="#tymethod.string_construct" class="fn">string_construct</a>(
+    &amp;mut self,
+    db: &amp;dyn <a class="trait" href="../../db/trait.CodegenDb.html" title="trait fe_codegen::db::CodegenDb">CodegenDb</a>,
+    data: &amp;<a class="primitive" href="https://doc.rust-lang.org/1.90.0/std/primitive.str.html">str</a>,
+    string_len: <a class="primitive" href="https://doc.rust-lang.org/1.90.0/std/primitive.usize.html">usize</a>,
+) -&gt; Expression</h4></section><details class="toggle method-toggle" open><summary><section id="tymethod.ptr_copy" class="method"><a class="src rightside" href="../../../src/fe_codegen/yul/runtime/mod.rs.html#100-108">Source</a><h4 class="code-header">fn <a href="#tymethod.ptr_copy" class="fn">ptr_copy</a>(
+    &amp;mut self,
+    db: &amp;dyn <a class="trait" href="../../db/trait.CodegenDb.html" title="trait fe_codegen::db::CodegenDb">CodegenDb</a>,
+    src: Expression,
+    dst: Expression,
+    size: Expression,
+    is_src_storage: <a class="primitive" href="https://doc.rust-lang.org/1.90.0/std/primitive.bool.html">bool</a>,
+    is_dst_storage: <a class="primitive" href="https://doc.rust-lang.org/1.90.0/std/primitive.bool.html">bool</a>,
+) -&gt; Expression</h4></section></summary><div class="docblock"><p>Copy data from <code>src</code> to <code>dst</code>.
+NOTE: src and dst must be aligned by 32 when a ptr is storage ptr.</p>
+</div></details><section id="tymethod.ptr_store" class="method"><a class="src rightside" href="../../../src/fe_codegen/yul/runtime/mod.rs.html#110-116">Source</a><h4 class="code-header">fn <a href="#tymethod.ptr_store" class="fn">ptr_store</a>(
+    &amp;mut self,
+    db: &amp;dyn <a class="trait" href="../../db/trait.CodegenDb.html" title="trait fe_codegen::db::CodegenDb">CodegenDb</a>,
+    ptr: Expression,
+    imm: Expression,
+    ptr_ty: <a class="struct" href="../../../fe_mir/ir/types/struct.TypeId.html" title="struct fe_mir::ir::types::TypeId">TypeId</a>,
+) -&gt; Expression</h4></section><section id="tymethod.ptr_load" class="method"><a class="src rightside" href="../../../src/fe_codegen/yul/runtime/mod.rs.html#118-123">Source</a><h4 class="code-header">fn <a href="#tymethod.ptr_load" class="fn">ptr_load</a>(
+    &amp;mut self,
+    db: &amp;dyn <a class="trait" href="../../db/trait.CodegenDb.html" title="trait fe_codegen::db::CodegenDb">CodegenDb</a>,
+    ptr: Expression,
+    ptr_ty: <a class="struct" href="../../../fe_mir/ir/types/struct.TypeId.html" title="struct fe_mir::ir::types::TypeId">TypeId</a>,
+) -&gt; Expression</h4></section><section id="tymethod.abi_encode" class="method"><a class="src rightside" href="../../../src/fe_codegen/yul/runtime/mod.rs.html#125-132">Source</a><h4 class="code-header">fn <a href="#tymethod.abi_encode" class="fn">abi_encode</a>(
+    &amp;mut self,
+    db: &amp;dyn <a class="trait" href="../../db/trait.CodegenDb.html" title="trait fe_codegen::db::CodegenDb">CodegenDb</a>,
+    src: Expression,
+    dst: Expression,
+    src_ty: <a class="struct" href="../../../fe_mir/ir/types/struct.TypeId.html" title="struct fe_mir::ir::types::TypeId">TypeId</a>,
+    is_dst_storage: <a class="primitive" href="https://doc.rust-lang.org/1.90.0/std/primitive.bool.html">bool</a>,
+) -&gt; Expression</h4></section><section id="tymethod.abi_encode_seq" class="method"><a class="src rightside" href="../../../src/fe_codegen/yul/runtime/mod.rs.html#134-141">Source</a><h4 class="code-header">fn <a href="#tymethod.abi_encode_seq" class="fn">abi_encode_seq</a>(
+    &amp;mut self,
+    db: &amp;dyn <a class="trait" href="../../db/trait.CodegenDb.html" title="trait fe_codegen::db::CodegenDb">CodegenDb</a>,
+    src: &amp;[Expression],
+    dst: Expression,
+    src_tys: &amp;[<a class="struct" href="../../../fe_mir/ir/types/struct.TypeId.html" title="struct fe_mir::ir::types::TypeId">TypeId</a>],
+    is_dst_storage: <a class="primitive" href="https://doc.rust-lang.org/1.90.0/std/primitive.bool.html">bool</a>,
+) -&gt; Expression</h4></section><section id="tymethod.abi_decode" class="method"><a class="src rightside" href="../../../src/fe_codegen/yul/runtime/mod.rs.html#143-150">Source</a><h4 class="code-header">fn <a href="#tymethod.abi_decode" class="fn">abi_decode</a>(
+    &amp;mut self,
+    db: &amp;dyn <a class="trait" href="../../db/trait.CodegenDb.html" title="trait fe_codegen::db::CodegenDb">CodegenDb</a>,
+    src: Expression,
+    size: Expression,
+    types: &amp;[<a class="struct" href="../../../fe_mir/ir/types/struct.TypeId.html" title="struct fe_mir::ir::types::TypeId">TypeId</a>],
+    abi_loc: <a class="enum" href="enum.AbiSrcLocation.html" title="enum fe_codegen::yul::runtime::AbiSrcLocation">AbiSrcLocation</a>,
+) -&gt; Expression</h4></section><section id="tymethod.safe_add" class="method"><a class="src rightside" href="../../../src/fe_codegen/yul/runtime/mod.rs.html#171-177">Source</a><h4 class="code-header">fn <a href="#tymethod.safe_add" class="fn">safe_add</a>(
+    &amp;mut self,
+    db: &amp;dyn <a class="trait" href="../../db/trait.CodegenDb.html" title="trait fe_codegen::db::CodegenDb">CodegenDb</a>,
+    lhs: Expression,
+    rhs: Expression,
+    ty: <a class="struct" href="../../../fe_mir/ir/types/struct.TypeId.html" title="struct fe_mir::ir::types::TypeId">TypeId</a>,
+) -&gt; Expression</h4></section><section id="tymethod.safe_sub" class="method"><a class="src rightside" href="../../../src/fe_codegen/yul/runtime/mod.rs.html#179-185">Source</a><h4 class="code-header">fn <a href="#tymethod.safe_sub" class="fn">safe_sub</a>(
+    &amp;mut self,
+    db: &amp;dyn <a class="trait" href="../../db/trait.CodegenDb.html" title="trait fe_codegen::db::CodegenDb">CodegenDb</a>,
+    lhs: Expression,
+    rhs: Expression,
+    ty: <a class="struct" href="../../../fe_mir/ir/types/struct.TypeId.html" title="struct fe_mir::ir::types::TypeId">TypeId</a>,
+) -&gt; Expression</h4></section><section id="tymethod.safe_mul" class="method"><a class="src rightside" href="../../../src/fe_codegen/yul/runtime/mod.rs.html#187-193">Source</a><h4 class="code-header">fn <a href="#tymethod.safe_mul" class="fn">safe_mul</a>(
+    &amp;mut self,
+    db: &amp;dyn <a class="trait" href="../../db/trait.CodegenDb.html" title="trait fe_codegen::db::CodegenDb">CodegenDb</a>,
+    lhs: Expression,
+    rhs: Expression,
+    ty: <a class="struct" href="../../../fe_mir/ir/types/struct.TypeId.html" title="struct fe_mir::ir::types::TypeId">TypeId</a>,
+) -&gt; Expression</h4></section><section id="tymethod.safe_div" class="method"><a class="src rightside" href="../../../src/fe_codegen/yul/runtime/mod.rs.html#195-201">Source</a><h4 class="code-header">fn <a href="#tymethod.safe_div" class="fn">safe_div</a>(
+    &amp;mut self,
+    db: &amp;dyn <a class="trait" href="../../db/trait.CodegenDb.html" title="trait fe_codegen::db::CodegenDb">CodegenDb</a>,
+    lhs: Expression,
+    rhs: Expression,
+    ty: <a class="struct" href="../../../fe_mir/ir/types/struct.TypeId.html" title="struct fe_mir::ir::types::TypeId">TypeId</a>,
+) -&gt; Expression</h4></section><section id="tymethod.safe_mod" class="method"><a class="src rightside" href="../../../src/fe_codegen/yul/runtime/mod.rs.html#203-209">Source</a><h4 class="code-header">fn <a href="#tymethod.safe_mod" class="fn">safe_mod</a>(
+    &amp;mut self,
+    db: &amp;dyn <a class="trait" href="../../db/trait.CodegenDb.html" title="trait fe_codegen::db::CodegenDb">CodegenDb</a>,
+    lhs: Expression,
+    rhs: Expression,
+    ty: <a class="struct" href="../../../fe_mir/ir/types/struct.TypeId.html" title="struct fe_mir::ir::types::TypeId">TypeId</a>,
+) -&gt; Expression</h4></section><section id="tymethod.safe_pow" class="method"><a class="src rightside" href="../../../src/fe_codegen/yul/runtime/mod.rs.html#211-217">Source</a><h4 class="code-header">fn <a href="#tymethod.safe_pow" class="fn">safe_pow</a>(
+    &amp;mut self,
+    db: &amp;dyn <a class="trait" href="../../db/trait.CodegenDb.html" title="trait fe_codegen::db::CodegenDb">CodegenDb</a>,
+    lhs: Expression,
+    rhs: Expression,
+    ty: <a class="struct" href="../../../fe_mir/ir/types/struct.TypeId.html" title="struct fe_mir::ir::types::TypeId">TypeId</a>,
+) -&gt; Expression</h4></section></div><h2 id="provided-methods" class="section-header">Provided Methods<a href="#provided-methods" class="anchor">§</a></h2><div class="methods"><section id="method.primitive_cast" class="method"><a class="src rightside" href="../../../src/fe_codegen/yul/runtime/mod.rs.html#152-168">Source</a><h4 class="code-header">fn <a href="#method.primitive_cast" class="fn">primitive_cast</a>(
+    &amp;mut self,
+    db: &amp;dyn <a class="trait" href="../../db/trait.CodegenDb.html" title="trait fe_codegen::db::CodegenDb">CodegenDb</a>,
+    value: Expression,
+    from_ty: <a class="struct" href="../../../fe_mir/ir/types/struct.TypeId.html" title="struct fe_mir::ir::types::TypeId">TypeId</a>,
+) -&gt; Expression</h4></section></div><h2 id="implementors" class="section-header">Implementors<a href="#implementors" class="anchor">§</a></h2><div id="implementors-list"><section id="impl-RuntimeProvider-for-DefaultRuntimeProvider" class="impl"><a class="src rightside" href="../../../src/fe_codegen/yul/runtime/mod.rs.html#252-738">Source</a><a href="#impl-RuntimeProvider-for-DefaultRuntimeProvider" class="anchor">§</a><h3 class="code-header">impl <a class="trait" href="trait.RuntimeProvider.html" title="trait fe_codegen::yul::runtime::RuntimeProvider">RuntimeProvider</a> for <a class="struct" href="struct.DefaultRuntimeProvider.html" title="struct fe_codegen::yul::runtime::DefaultRuntimeProvider">DefaultRuntimeProvider</a></h3></section></div><script src="../../../trait.impl/fe_codegen/yul/runtime/trait.RuntimeProvider.js" async></script></section></div></main></body></html>
