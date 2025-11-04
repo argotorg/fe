@@ -10,17 +10,34 @@ description = "Provides HIR definition and lowering for Fe lang"
 doctest = false
 
 [dependencies]
+bitflags = "2.8"
 camino.workspace = true
 cranelift-entity = "0.115"
 derive_more.workspace = true
 dot2 = "1.0"
+either = "1.13"
+ena = { version = "0.14", features = ["persistent"] }
+indexmap = "2.0"
+itertools = "0.14"
 num-bigint.workspace = true
 num-traits = "0.2.19"
 paste.workspace = true
 rustc-hash.workspace = true
 salsa.workspace = true
+smallvec.workspace = true
+smallvec1.workspace = true
 thin-vec.workspace = true
+tracing.workspace = true
 
 common.workspace = true
 parser.workspace = true
+test-utils.workspace = true
 url.workspace = true
+
+[dev-dependencies]
+ascii_tree = "0.1"
+camino.workspace = true
+codespan-reporting.workspace = true
+dir-test.workspace = true
+driver.workspace = true
+test-utils.workspace = true

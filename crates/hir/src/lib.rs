@@ -1,6 +1,7 @@
 use common::InputDb;
 pub use lower::parse::ParserError;
 
+pub mod analysis;
 pub mod hir_def;
 pub mod lower;
 pub mod span;

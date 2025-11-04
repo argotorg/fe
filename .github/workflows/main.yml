@@ -74,7 +74,7 @@ jobs:
       - name: Cache Dependencies
         uses: Swatinem/rust-cache@v2
       - name: Check core crates for wasm32-unknown-unknown
-        run: cargo check -p fe-common -p fe-parser -p fe-hir -p fe-hir-analysis --target wasm32-unknown-unknown
+        run: cargo check -p fe-common -p fe-parser -p fe-hir --target wasm32-unknown-unknown
       - name: Check filesystem crates for wasm32-wasip1
         run: cargo check -p fe-driver -p fe-resolver -p fe --target wasm32-wasip1
 

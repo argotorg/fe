@@ -19,7 +19,6 @@ smol_str.workspace = true
 
 common.workspace = true
 hir.workspace = true
-hir-analysis.workspace = true
 resolver.workspace = true
 url.workspace = true
 tracing.workspace = true

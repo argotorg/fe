@@ -1,7 +1,7 @@
 use common::InputDb;
 
 use hir::{HirDb, LowerHirDb, SpannedHirDb};
-use hir_analysis::{diagnostics::SpannedHirAnalysisDb, HirAnalysisDb};
+use hir::analysis::{diagnostics::SpannedHirAnalysisDb, HirAnalysisDb};
 
 #[salsa::db]
 pub trait LanguageServerDb:

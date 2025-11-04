@@ -1,15 +1,15 @@
 use async_lsp::ResponseError;
 use common::InputDb;
+use hir::analysis::{
+    name_resolution::{PathResErrorKind, resolve_path},
+    ty::trait_resolution::PredicateListId,
+};
 use hir::{
     SpannedHirDb,
     hir_def::{ItemKind, PathId, TopLevelMod, scope_graph::ScopeId},
     lower::map_file_to_mod,
     span::{DynLazySpan, LazySpan},
     visitor::{Visitor, VisitorCtxt, prelude::LazyPathSpan},
-};
-use hir_analysis::{
-    name_resolution::{PathResErrorKind, resolve_path},
-    ty::trait_resolution::PredicateListId,
 };
 use tracing::error;
 
