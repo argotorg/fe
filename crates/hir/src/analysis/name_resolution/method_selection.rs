@@ -132,7 +132,7 @@ impl<'db> CandidateAssembler<'db> {
         let ingot = self.scope.ingot(self.db);
 
         for &imp in impls_for_ty(self.db, ingot, self.receiver_ty) {
-            if let Some(trait_inst) = imp.skip_binder().trait_inst(self.db) {
+            if let Some(trait_inst) = imp.skip_binder().trait_inst(self.db).ok() {
                 self.insert_trait_method_cand(trait_inst);
             }
         }

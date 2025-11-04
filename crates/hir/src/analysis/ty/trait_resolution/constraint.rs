@@ -163,7 +163,7 @@ pub(crate) fn collect_func_def_constraints<'db>(
 
         Some(ItemKind::ImplTrait(impl_trait)) => {
             // Only include constraints if the impl trait is valid
-            if impl_trait.trait_inst(db).is_none() {
+            if impl_trait.trait_inst(db).ok().is_none() {
                 return func_constraints;
             }
             collect_constraints(db, impl_trait.into())

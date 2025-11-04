@@ -144,9 +144,7 @@ pub fn analyze_trait<'db>(
     let assumptions = collect_constraints(db, trait_.into()).instantiate_identity();
 
     for assoc_type in trait_.types(db) {
-        if let Some(default_ty) = assoc_type.default {
-            // Lower the default type
-            let default_ty = lower_hir_ty(db, default_ty, trait_.scope(), assumptions);
+        if let Some(default_ty) = trait_.assoc_type_default_ty(db, assoc_type) {
 
             // Check each bound on the associated type
             for bound in &assoc_type.bounds {
@@ -1208,10 +1206,7 @@ fn analyze_impl_trait_specific_error<'db>(
     impl_trait: ImplTrait<'db>,
 ) -> Result<Binder<ImplTrait<'db>>, Vec<TyDiagCollection<'db>>> {
     let mut diags = vec![];
-    // We don't need to report error because it should be reported from the parser.
-    let (Some(trait_ref), ty) = (impl_trait.trait_ref(db).to_opt(), impl_trait.ty(db)) else {
-        return Err(diags);
-    };
+    let ty = impl_trait.ty(db);
 
     // 1. Checks if implementor type is well-formed except for the satisfiability.
     if let Some(diag) = ty.emit_diag(db, impl_trait.span().ty().into()) {
@@ -1227,12 +1222,14 @@ fn analyze_impl_trait_specific_error<'db>(
         return Err(diags);
     }
 
-    // Lower the trait ref and capture any errors
-    let assumptions = collect_constraints(db, impl_trait.into()).instantiate_identity();
-    let trait_inst = match lower_trait_ref(db, ty, trait_ref, impl_trait.scope(), assumptions) {
+    // Get the lowered trait instance with error handling
+    let trait_inst = match impl_trait.trait_inst(db) {
         Ok(trait_inst) => trait_inst,
         Err(TraitRefLowerError::PathResError(err)) => {
             let trait_path_span = impl_trait.span().trait_ref().path();
+            let Some(trait_ref) = impl_trait.trait_ref(db).to_opt() else {
+                return Err(diags);
+            };
             if let Some(diag) = err.into_diag(
                 db,
                 trait_ref.path(db).unwrap(),
@@ -1454,7 +1451,7 @@ fn analyze_impl_trait_method<'db>(
             continue;
         };
 
-        let Some(trait_inst) = impl_trait.trait_inst(db) else {
+        let Some(trait_inst) = impl_trait.trait_inst(db).ok() else {
             continue;
         };
         compare_impl_method(db, *impl_m, *trait_m, trait_inst, &mut diags);

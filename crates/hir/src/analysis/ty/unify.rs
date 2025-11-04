@@ -499,8 +499,8 @@ impl<'db> Unifiable<'db> for ImplTrait<'db> {
         other: Self,
     ) -> UnificationResult {
         let db = table.db;
-        let self_trait = self.trait_inst(db);
-        let other_trait = other.trait_inst(db);
+        let self_trait = self.trait_inst(db).ok();
+        let other_trait = other.trait_inst(db).ok();
 
         match (self_trait, other_trait) {
             (Some(a), Some(b)) => table.unify(a, b),

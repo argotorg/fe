@@ -1265,6 +1265,23 @@ impl<'db> Trait<'db> {
         self.self_param(db).kind(db)
     }
 
+    /// Lower an associated type's default type to its semantic representation.
+    /// Returns None if the associated type has no default.
+    pub fn assoc_type_default_ty(
+        self,
+        db: &'db dyn crate::analysis::HirAnalysisDb,
+        assoc_type: &AssocTyDecl<'db>,
+    ) -> Option<crate::analysis::ty::ty_def::TyId<'db>> {
+        use crate::analysis::ty::{
+            ty_lower::lower_hir_ty,
+            trait_resolution::constraint::collect_constraints,
+        };
+
+        let default_ty_hir = assoc_type.default?;
+        let assumptions = collect_constraints(db, self.into()).instantiate_identity();
+        Some(lower_hir_ty(db, default_ty_hir, self.scope(), assumptions))
+    }
+
     pub fn ingot(self, db: &'db dyn crate::analysis::HirAnalysisDb) -> Ingot<'db> {
         self.top_mod(db).ingot(db)
     }
@@ -1383,26 +1400,22 @@ impl<'db> ImplTrait<'db> {
     }
 
     /// Returns the lowered trait instance for this impl.
-    /// This is the core semantic information: which trait is being implemented with what args.
+    /// Returns a Result with detailed error information.
+    /// Most callers can use `.ok()` if they don't need error details.
     #[salsa::tracked]
     pub fn trait_inst(
         self,
         db: &'db dyn crate::analysis::HirAnalysisDb,
-    ) -> Option<crate::analysis::ty::trait_def::TraitInstId<'db>> {
+    ) -> Result<crate::analysis::ty::trait_def::TraitInstId<'db>, crate::analysis::ty::trait_lower::TraitRefLowerError<'db>> {
         use crate::analysis::ty::trait_lower::lower_trait_ref;
         use crate::analysis::ty::trait_resolution::constraint::collect_constraints;
 
         let self_ty = self.ty(db);
-        if self_ty.has_invalid(db) {
-            return None;
-        }
-
         let scope = self.scope();
         let assumptions = collect_constraints(db, self.into()).instantiate_identity();
 
-        self.trait_ref(db)
-            .to_opt()
-            .and_then(|tr| lower_trait_ref(db, self_ty, tr, scope, assumptions).ok())
+        let trait_ref = self.trait_ref(db).to_opt().ok_or(crate::analysis::ty::trait_lower::TraitRefLowerError::Ignored)?;
+        lower_trait_ref(db, self_ty, trait_ref, scope, assumptions)
     }
 
     /// Returns the trait being implemented.
@@ -1410,7 +1423,7 @@ impl<'db> ImplTrait<'db> {
         self,
         db: &'db dyn crate::analysis::HirAnalysisDb,
     ) -> Option<crate::hir_def::Trait<'db>> {
-        self.trait_inst(db).map(|inst| inst.def(db))
+        self.trait_inst(db).ok().map(|inst| inst.def(db))
     }
 
     /// Returns the generic parameters for this impl block.
@@ -1445,7 +1458,7 @@ impl<'db> ImplTrait<'db> {
             .collect();
 
         // Merge trait associated type defaults
-        if let Some(trait_inst) = self.trait_inst(db) {
+        if let Some(trait_inst) = self.trait_inst(db).ok() {
             let trait_def = trait_inst.def(db);
             let trait_scope = trait_def.scope();
 
@@ -1519,7 +1532,7 @@ impl<'db> ImplTrait<'db> {
         fresh_vars: &[crate::analysis::ty::ty_def::TyId<'db>],
     ) -> Option<crate::analysis::ty::trait_def::TraitInstId<'db>> {
         use crate::analysis::ty::binder::Binder;
-        let trait_inst = self.trait_inst(db)?;
+        let trait_inst = self.trait_inst(db).ok()?;
         Some(Binder::bind(trait_inst).instantiate(db, fresh_vars))
     }
 

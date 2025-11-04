@@ -846,7 +846,7 @@ pub fn find_associated_type<'db>(
                 }
             } else if let Some(impl_trait) = param.owner.resolve_to::<ImplTrait>(db)
                 // && let Some(trait_ref) = impl_trait.trait_ref(db).to_opt()
-                && let Some(trait_inst) = impl_trait.trait_inst(db)
+                && let Some(trait_inst) = impl_trait.trait_inst(db).ok()
                 && let Some(assoc_ty) = trait_inst.assoc_ty(db, name)
             {
                 return smallvec![(trait_inst, assoc_ty)];
@@ -896,7 +896,7 @@ pub fn find_associated_type<'db>(
         {
             let ty = Binder::bind(ty).instantiate(db, &fresh_vars);
             let folded = ty.fold_with(db, &mut table);
-            if let Some(trait_inst) = impl_trait.trait_inst(db) {
+            if let Some(trait_inst) = impl_trait.trait_inst(db).ok() {
                 let trait_inst = Binder::bind(trait_inst).instantiate(db, &fresh_vars);
                 candidates.push((trait_inst, folded));
             }
