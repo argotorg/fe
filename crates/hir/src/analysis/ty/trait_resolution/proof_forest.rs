@@ -361,7 +361,9 @@ impl GeneratorNode {
             let mut table = g_node.table.clone();
             let gen_cand = cand.skip_binder();
 
-            let Some(trait_inst) = gen_cand.trait_inst(db) else {
+            // Create fresh vars and instantiate pieces
+            let fresh_vars = gen_cand.create_fresh_vars(db, &mut table);
+            let Some(trait_inst) = gen_cand.trait_inst_instantiated(db, &fresh_vars) else {
                 continue;
             };
 
@@ -393,13 +395,13 @@ impl GeneratorNode {
                 continue;
             }
 
-            // Constraints are already instantiated in inst_data
-            if gen_cand.impl_constraints(db).list(db).is_empty() {
+            // Get instantiated constraints using the same fresh vars
+            let constraints = gen_cand.constraints_instantiated(db, &fresh_vars);
+            if constraints.list(db).is_empty() {
                 self.register_solution_with(pf, &mut table);
             } else {
                 let sub_goals = {
-                    gen_cand
-                        .impl_constraints(db)
+                    constraints
                         .list(db)
                         .iter()
                         .map(|c| {

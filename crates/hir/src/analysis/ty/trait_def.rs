@@ -50,8 +50,9 @@ pub(crate) fn impls_for_trait<'db>(
             let snapshot = table.snapshot();
             let impl_trait = impl_.skip_binder();
 
-            let is_ok = impl_trait
-                .trait_inst(db)
+            // Create fresh vars and instantiate trait_inst
+            let fresh_vars = impl_trait.create_fresh_vars(db, &mut table);
+            let is_ok = impl_trait.trait_inst_instantiated(db, &fresh_vars)
                 .map(|inst| table.unify(inst, trait_).is_ok())
                 .unwrap_or(false);
 
@@ -96,20 +97,21 @@ pub(crate) fn impls_for_ty_with_constraints<'db>(
             let snapshot = table.snapshot();
             let impl_trait = impl_.skip_binder();
 
-            // Use the new instantiated() API for atomic fresh var instantiation
-            // let inst_data = impl_trait.instantiated(db, &mut table);
-            let impl_ty = table.instantiate_to_term(impl_trait.ty(db));
+            // Create fresh vars once and use them for all pieces
+            let fresh_vars = impl_trait.create_fresh_vars(db, &mut table);
+            let impl_ty = table.instantiate_to_term(impl_trait.ty_instantiated(db, &fresh_vars));
             let ty_term = table.instantiate_to_term(ty);
             let unifies = table.unify(impl_ty, ty_term).is_ok();
 
             if unifies {
                 // Filter out impls that don't satisfy assumptions
-                if impl_trait.impl_constraints(db).is_empty(db) {
+                let constraints = impl_trait.constraints_instantiated(db, &fresh_vars);
+                if constraints.is_empty(db) {
                     table.rollback_to(snapshot);
                     return true;
                 }
 
-                for &constraint in impl_trait.impl_constraints(db).list(db) {
+                for &constraint in constraints.list(db) {
                     let constraint = constraint.fold_with(db, &mut table);
                     let constraint = Canonicalized::new(db, constraint);
                     match is_goal_satisfiable(db, ingot, constraint.value, assumptions) {
@@ -164,7 +166,9 @@ pub(crate) fn impls_for_ty<'db>(
 
             let impl_trait = impl_.skip_binder();
 
-            let impl_ty = table.instantiate_to_term(impl_trait.ty(db));
+            // Create fresh vars and instantiate self_ty
+            let fresh_vars = impl_trait.create_fresh_vars(db, &mut table);
+            let impl_ty = table.instantiate_to_term(impl_trait.ty_instantiated(db, &fresh_vars));
             let ty = table.instantiate_to_term(ty);
             let is_ok = table.unify(impl_ty, ty).is_ok();
 
@@ -236,12 +240,14 @@ pub(super) fn does_impl_trait_conflict(
     let a_impl = a.skip_binder();
     let b_impl = b.skip_binder();
 
-    // Use the new instantiated() API for atomic fresh var instantiation
-    let Some(a_trait) = a_impl.trait_inst(db) else {
+    // Create fresh vars for each impl
+    let a_fresh_vars = a_impl.create_fresh_vars(db, &mut table);
+    let Some(a_trait) = a_impl.trait_inst_instantiated(db, &a_fresh_vars) else {
         return false;
     };
 
-    let Some(b_trait) = b_impl.trait_inst(db) else {
+    let b_fresh_vars = b_impl.create_fresh_vars(db, &mut table);
+    let Some(b_trait) = b_impl.trait_inst_instantiated(db, &b_fresh_vars) else {
         return false;
     };
 
@@ -249,7 +255,9 @@ pub(super) fn does_impl_trait_conflict(
         return false;
     }
 
-    if a_impl.impl_constraints(db).is_empty(db) && b_impl.impl_constraints(db).is_empty(db) {
+    let a_constraints = a_impl.constraints_instantiated(db, &a_fresh_vars);
+    let b_constraints = b_impl.constraints_instantiated(db, &b_fresh_vars);
+    if a_constraints.is_empty(db) && b_constraints.is_empty(db) {
         return true;
     }
 
@@ -257,9 +265,9 @@ pub(super) fn does_impl_trait_conflict(
         return false;
     };
 
-    // Constraints are already instantiated in a_inst and b_inst
-    let a_constraints_instantiated: Vec<_> = a_impl.impl_constraints(db).list(db).to_vec();
-    let b_constraints_instantiated: Vec<_> = b_impl.impl_constraints(db).list(db).to_vec();
+    // Constraints are instantiated with fresh vars
+    let a_constraints_instantiated: Vec<_> = a_constraints.list(db).to_vec();
+    let b_constraints_instantiated: Vec<_> = b_constraints.list(db).to_vec();
 
     // Check if all constraints from both implementations would be satisfiable
     // when the types are unified
@@ -429,24 +437,8 @@ impl<'db> TraitInstId<'db> {
 ///
 /// This is `pub(crate)` - an implementation detail, not part of the public HIR API.
 /// External code should use methods on `ImplTrait` instead.
-#[salsa::interned]
-#[derive(Debug)]
-pub(crate) struct TraitImplData<'db> {
-    /// The type that implements the trait (the "self" type)
-    pub self_ty: TyId<'db>,
-
-    /// The trait being implemented, with its arguments
-    pub trait_inst: Option<TraitInstId<'db>>,
-
-    /// Where clause constraints on this impl
-    pub constraints: PredicateListId<'db>,
-
-    /// Generic parameters of this impl (used for instantiation)
-    #[return_ref]
-    pub params: Vec<TyId<'db>>,
-}
-
 // TraitDef has been eliminated - use Trait directly via TraitInstId.def(db)
+// TraitImplData has been eliminated - use ImplTrait methods directly (ty, trait_inst, impl_params, impl_constraints)
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy, Hash, salsa::Update)]
 pub struct TraitMethod<'db>(pub CallableDef<'db>);
