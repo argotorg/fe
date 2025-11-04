@@ -1,7 +1,7 @@
 use crate::{
     hir_def::{
-        Const, Enum, EnumVariant, GenericParamOwner, IdentId, ImplTrait, ItemKind, Partial, PathId,
-        PathKind, Trait, TypeBound, TypeId, TypeKind, VariantKind, scope_graph::ScopeId,
+        Const, Enum, EnumVariant, GenericParamOwner, IdentId, ImplTrait, ItemKind, PathId,
+        PathKind, Trait, TypeBound, TypeKind, VariantKind, scope_graph::ScopeId,
     },
     span::{DynLazySpan, path::LazyPathSpan},
 };

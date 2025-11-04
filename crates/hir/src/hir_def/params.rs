@@ -1,5 +1,12 @@
 use super::{Body, IdentId, Partial, PathId};
-use crate::{HirDb, hir_def::TypeId};
+use crate::{
+    HirDb,
+    analysis::{
+        HirAnalysisDb,
+        ty::{trait_resolution::PredicateListId, ty_def::TyId, ty_lower::lower_hir_ty},
+    },
+    hir_def::{TypeId, scope_graph::ScopeId},
+};
 
 #[salsa::interned]
 #[derive(Debug)]
@@ -173,8 +180,22 @@ impl<'db> FuncParam<'db> {
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct WherePredicate<'db> {
-    pub ty: Partial<TypeId<'db>>,
+    pub type_ref: Partial<TypeId<'db>>,
     pub bounds: Vec<TypeBound<'db>>,
+    pub scope: ScopeId<'db>,
+}
+
+impl<'db> WherePredicate<'db> {
+    pub fn ty(
+        &self,
+        db: &'db dyn HirAnalysisDb,
+        // scope: ScopeId<'db>,
+        assumptions: PredicateListId<'db>,
+    ) -> Option<TyId<'db>> {
+        self.type_ref
+            .to_opt()
+            .map(|hir_ty| lower_hir_ty(db, hir_ty, self.scope, assumptions))
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]

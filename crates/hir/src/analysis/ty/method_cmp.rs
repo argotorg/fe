@@ -12,7 +12,7 @@ use super::{
     },
     ty_def::TyId,
 };
-use crate::analysis::HirAnalysisDb;
+use crate::analysis::{HirAnalysisDb, ty::binder::Binder};
 
 /// Compares the implementation method with the trait method to ensure they
 /// match.
@@ -220,8 +220,7 @@ fn compare_ty<'db>(
     let trait_m_arg_tys = trait_m.arg_tys(db);
 
     let mut substituter = AssocTySubst::new(trait_inst);
-    let assumptions =
-        collect_func_def_constraints(db, impl_m, true).instantiate_identity();
+    let assumptions = collect_func_def_constraints(db, impl_m, true).instantiate_identity();
 
     for (idx, (&trait_m_ty, &impl_m_ty)) in trait_m_arg_tys.iter().zip(impl_m_arg_tys).enumerate() {
         // 1) Instantiate trait method's type params into the impl's generics
@@ -255,17 +254,13 @@ fn compare_ty<'db>(
         }
     }
 
-    let impl_m_ret_ty = impl_m.ret_ty(db).instantiate_identity();
-    let trait_m_ret_ty = trait_m.ret_ty(db).instantiate(db, map_to_impl);
+    let impl_m_ret_ty = Binder::bind(impl_m.ret_ty(db)).instantiate_identity();
+    let trait_m_ret_ty = Binder::bind(trait_m.ret_ty(db)).instantiate(db, map_to_impl);
 
     // Substitute and normalize the return type as well.
     let trait_m_ret_ty_substituted = trait_m_ret_ty.fold_with(db, &mut substituter);
-    let trait_m_ret_ty_normalized = normalize_ty(
-        db,
-        trait_m_ret_ty_substituted,
-        impl_m.scope(),
-        assumptions,
-    );
+    let trait_m_ret_ty_normalized =
+        normalize_ty(db, trait_m_ret_ty_substituted, impl_m.scope(), assumptions);
     let impl_m_ret_ty_normalized = normalize_ty(db, impl_m_ret_ty, impl_m.scope(), assumptions);
 
     if !impl_m_ret_ty.has_invalid(db)
@@ -300,8 +295,7 @@ fn compare_constraints<'db>(
     map_to_impl: &[TyId<'db>],
     sink: &mut Vec<TyDiagCollection<'db>>,
 ) -> bool {
-    let impl_m_constraints =
-        collect_func_def_constraints(db, impl_m, false).instantiate_identity();
+    let impl_m_constraints = collect_func_def_constraints(db, impl_m, false).instantiate_identity();
     let trait_m_constraints =
         collect_func_def_constraints(db, trait_m, false).instantiate(db, map_to_impl);
     let mut unsatisfied_goals = ThinVec::new();

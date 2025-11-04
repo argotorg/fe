@@ -1,5 +1,5 @@
 use crate::{
-    hir_def::{EnumVariant, Func, IdentId, scope_graph::ScopeId},
+    hir_def::{EnumVariant, Func, IdentId, ItemKind, scope_graph::ScopeId},
     span::DynLazySpan,
 };
 use common::ingot::Ingot;
@@ -74,9 +74,16 @@ impl<'db> CallableDef<'db> {
     pub fn name(self, db: &'db dyn HirAnalysisDb) -> IdentId<'db> {
         match self {
             Self::Func(func) => func.name(db).to_opt().unwrap(),
-            Self::VariantCtor(var) => {
-                IdentId::new(db, var.name(db).unwrap().to_string())
-            }
+            Self::VariantCtor(var) => IdentId::new(db, var.name(db).unwrap().to_string()),
+        }
+    }
+
+    pub fn self_ty(self, db: &'db dyn HirAnalysisDb) -> Option<TyId<'db>> {
+        match self.scope().parent(db).unwrap() {
+            ScopeId::Item(ItemKind::Trait(trait_)) => trait_.self_param(db).into(),
+            ScopeId::Item(ItemKind::ImplTrait(impl_trait)) => impl_trait.ty(db).into(),
+            ScopeId::Item(ItemKind::Impl(impl_)) => impl_.ty(db).into(),
+            _ => None,
         }
     }
 
@@ -89,7 +96,7 @@ impl<'db> CallableDef<'db> {
     }
 
     /// Get the return type for this callable.
-    pub fn ret_ty(self, db: &'db dyn HirAnalysisDb) -> Binder<TyId<'db>> {
+    pub fn ret_ty(self, db: &'db dyn HirAnalysisDb) -> TyId<'db> {
         match self {
             Self::Func(func) => func.return_ty(db),
             Self::VariantCtor(var) => var.return_ty(db),

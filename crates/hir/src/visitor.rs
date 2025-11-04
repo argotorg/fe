@@ -1966,7 +1966,7 @@ pub fn walk_where_predicate<'db, V>(
 ) where
     V: Visitor<'db> + ?Sized,
 {
-    if let Some(ty) = predicate.ty.to_opt() {
+    if let Some(ty) = predicate.type_ref.to_opt() {
         ctxt.with_new_ctxt(
             |span| span.ty(),
             |ctxt| {

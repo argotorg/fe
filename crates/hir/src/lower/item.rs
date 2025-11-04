@@ -386,7 +386,7 @@ impl<'db> AssocTyDef<'db> {
     fn lower_ast(ctxt: &mut FileLowerCtxt<'db>, ast: ast::TraitTypeItem) -> Self {
         AssocTyDef {
             name: IdentId::lower_token_partial(ctxt, ast.name()),
-            ty: TypeId::lower_ast_partial(ctxt, ast.ty()),
+            type_ref: TypeId::lower_ast_partial(ctxt, ast.ty()),
         }
     }
 }

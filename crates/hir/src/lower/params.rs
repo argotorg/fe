@@ -189,7 +189,7 @@ impl<'db> WherePredicate<'db> {
                     .collect()
             })
             .unwrap_or_default();
-        Self { ty, bounds }
+        Self { type_ref: ty, bounds }
     }
 }
 

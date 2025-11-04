@@ -15,6 +15,7 @@ use super::{
 };
 use crate::{
     HirDb,
+    analysis::{HirAnalysisDb, ty::trait_resolution::PredicateListId},
     hir_def::{BodyKind, GenericParamOwner},
     span::DynLazySpan,
 };
@@ -99,6 +100,18 @@ pub enum ScopeId<'db> {
     Block(Body<'db>, ExprId),
 }
 impl<'db> ScopeId<'db> {
+    pub(crate) fn constraints(&self, db: &'db dyn HirAnalysisDb) -> PredicateListId {
+        match self {
+            ScopeId::Item(item) => item.constraints(),
+            ScopeId::GenericParam(item, _) => item.constraints(),
+            ScopeId::TraitType(t, _) => t.constraints(db),
+            ScopeId::FuncParam(item, _) => item.constraints(),
+            ScopeId::Field(p, _) => p.constraints(),
+            ScopeId::Variant(v) => v.enum_.constraints(db),
+            ScopeId::Block(body, _) => body.constraints(),
+        }
+    }
+
     /// Returns the top level module containing this scope.
     pub fn top_mod(&self, db: &'db dyn HirDb) -> TopLevelMod<'db> {
         match self {

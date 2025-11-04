@@ -145,7 +145,6 @@ pub fn analyze_trait<'db>(
 
     for assoc_type in trait_.types(db) {
         if let Some(default_ty) = trait_.assoc_type_default_ty(db, assoc_type) {
-
             // Check each bound on the associated type
             for bound in &assoc_type.bounds {
                 let TypeBound::Trait(trait_ref) = bound else {
@@ -301,7 +300,7 @@ impl<'db> DefAnalyzer<'db> {
         db: &'db dyn HirAnalysisDb,
         impl_trait: crate::hir_def::ImplTrait<'db>,
     ) -> Self {
-        let assumptions = impl_trait.impl_constraints(db);
+        let assumptions = impl_trait.constraints(db);
         let self_ty = impl_trait.ty(db);
         Self {
             db,
@@ -318,17 +317,10 @@ impl<'db> DefAnalyzer<'db> {
         func: CallableDef<'db>,
         assumptions: PredicateListId<'db>,
     ) -> Self {
-        let self_ty = match func.scope().parent(db).unwrap() {
-            ScopeId::Item(ItemKind::Trait(trait_)) => trait_.self_param(db).into(),
-            ScopeId::Item(ItemKind::ImplTrait(impl_trait)) => impl_trait.ty(db).into(),
-            ScopeId::Item(ItemKind::Impl(impl_)) => impl_.ty(db).into(),
-            _ => None,
-        };
-
         Self {
             db,
             def: func.into(),
-            self_ty,
+            self_ty: func.self_ty(db),
             diags: vec![],
             assumptions,
             current_ty: None,
@@ -563,11 +555,7 @@ impl<'db> Visitor<'db> for DefAnalyzer<'db> {
         ctxt: &mut VisitorCtxt<'db, LazyWherePredicateSpan<'db>>,
         pred: &crate::hir_def::WherePredicate<'db>,
     ) {
-        let Some(hir_ty) = pred.ty.to_opt() else {
-            return;
-        };
-
-        let ty = lower_hir_ty(self.db, hir_ty, self.scope(), self.assumptions);
+        let ty = pred.ty(self.db);
 
         if ty.is_const_ty(self.db) {
             let diag =
@@ -872,7 +860,7 @@ impl<'db> Visitor<'db> for DefAnalyzer<'db> {
         impl_trait: ImplTrait<'db>,
     ) {
         for assoc_type in impl_trait.types(self.db) {
-            if let Some(ty) = assoc_type.ty.to_opt() {
+            if let Some(ty) = assoc_type.type_ref.to_opt() {
                 let ty_span = assoc_type
                     .name
                     .to_opt()
@@ -1280,7 +1268,7 @@ fn analyze_impl_trait_specific_error<'db>(
     let trait_def = trait_inst.def(db);
     let trait_constraints =
         collect_constraints(db, trait_def.into()).instantiate(db, trait_inst.args(db));
-    let assumptions = current_impl.skip_binder().impl_constraints(db);
+    let assumptions = current_impl.skip_binder().constraints(db);
 
     let is_satisfied = |goal: TraitInstId<'db>, span: DynLazySpan<'db>, diags: &mut Vec<_>| {
         let canonical_goal = Canonicalized::new(db, goal);

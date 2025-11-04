@@ -73,7 +73,7 @@ pub(crate) fn collect_super_traits<'db>(
 
     for pred in hir_trait.where_clause(db).data(db) {
         if pred
-            .ty
+            .type_ref
             .to_opt()
             .map(|ty| ty.is_self_ty(db))
             .unwrap_or_default()
@@ -209,7 +209,7 @@ pub fn collect_constraints<'db>(
     // Where-clause predicates
     if let Some(where_clause) = owner.where_clause(db) {
         for w_pred in where_clause.data(db) {
-            let Some(hir_ty) = w_pred.ty.to_opt() else {
+            let Some(hir_ty) = w_pred.type_ref.to_opt() else {
                 continue;
             };
             for bound in &w_pred.bounds {

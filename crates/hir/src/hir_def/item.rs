@@ -6,6 +6,7 @@
 use std::borrow::Cow;
 
 use common::{file::File, ingot::Ingot};
+use indexmap::IndexMap;
 use parser::ast;
 
 use super::{
@@ -15,6 +16,20 @@ use super::{
 };
 use crate::{
     HirDb,
+    analysis::{
+        HirAnalysisDb,
+        ty::{
+            adt_def::AdtRef,
+            trait_def::TraitMethod,
+            trait_lower::{TraitRefLowerError, lower_trait_ref},
+            trait_resolution::{
+                PredicateListId,
+                constraint::{collect_constraints, collect_func_def_constraints},
+            },
+            ty_def::{InvalidCause, TyId},
+            ty_lower::lower_hir_ty,
+        },
+    },
     hir_def::TraitRefId,
     lower,
     span::{
@@ -712,22 +727,14 @@ impl<'db> Func<'db> {
     }
 
     #[salsa::tracked]
-    pub fn return_ty(
-        self,
-        db: &'db dyn crate::analysis::HirAnalysisDb,
-    ) -> crate::analysis::ty::binder::Binder<crate::analysis::ty::ty_def::TyId<'db>> {
-        use crate::analysis::ty::{
-            binder::Binder, trait_resolution::constraint::collect_func_def_constraints,
-            ty_def::TyId, ty_lower::lower_hir_ty,
-        };
-
+    pub fn return_ty(self, db: &'db dyn crate::analysis::HirAnalysisDb) -> TyId<'db> {
         let assumptions =
             collect_func_def_constraints(db, self.into(), true).instantiate_identity();
         let ty = self
             .ret_ty(db) // Access the field
             .map(|ty| lower_hir_ty(db, ty, self.scope(), assumptions))
             .unwrap_or_else(|| TyId::unit(db));
-        Binder::bind(ty)
+        ty
     }
 
     #[salsa::tracked]
@@ -908,6 +915,10 @@ impl<'db> Enum<'db> {
         ScopeId::from_item(self.into())
     }
 
+    pub(crate) fn constraints(self, db: &'db dyn HirAnalysisDb) -> PredicateListId {
+        collect_constraints(db, self.into()).instantiate_identity()
+    }
+
     /// Returns the argument types for a variant constructor.
     /// This is a salsa-tracked query to cache the Vec and return a reference.
     #[salsa::tracked(return_ref)]
@@ -1031,16 +1042,11 @@ impl<'db> EnumVariant<'db> {
     }
 
     /// Returns the return type for this variant constructor (the enum type with params).
-    pub fn return_ty(
-        self,
-        db: &'db dyn crate::analysis::HirAnalysisDb,
-    ) -> crate::analysis::ty::binder::Binder<crate::analysis::ty::ty_def::TyId<'db>> {
-        use crate::analysis::ty::{adt_def::AdtRef, binder::Binder, ty_def::TyId};
-
+    pub fn return_ty(self, db: &'db dyn HirAnalysisDb) -> TyId<'db> {
         let adt_ref: AdtRef = self.enum_.into();
         let mut ret_ty = TyId::adt(db, adt_ref);
         ret_ty = TyId::foldl(db, ret_ty, adt_ref.param_set(db).params(db));
-        Binder::bind(ret_ty)
+        ret_ty
     }
 
     /// Returns the generic parameter set (inherited from the parent enum).
@@ -1097,6 +1103,9 @@ pub struct Impl<'db> {
     pub(crate) origin: HirOrigin<ast::Impl>,
 }
 impl<'db> Impl<'db> {
+    fn constraints(self, db: &'db dyn HirAnalysisDb) -> PredicateListId {
+        collect_constraints(db, self.into()).instantiate_identity()
+    }
     pub fn span(self) -> LazyImplSpan<'db> {
         LazyImplSpan::new(self)
     }
@@ -1129,14 +1138,7 @@ impl<'db> Impl<'db> {
 impl<'db> Impl<'db> {
     /// Returns the lowered type for this impl block.
     /// Returns an invalid type if the impl's type is malformed.
-    pub fn ty(
-        self,
-        db: &'db dyn crate::analysis::HirAnalysisDb,
-    ) -> crate::analysis::ty::ty_def::TyId<'db> {
-        use crate::analysis::ty::trait_resolution::constraint::collect_constraints;
-        use crate::analysis::ty::ty_def::{InvalidCause, TyId};
-        use crate::analysis::ty::ty_lower::lower_hir_ty;
-
+    pub fn ty(self, db: &'db dyn crate::analysis::HirAnalysisDb) -> TyId<'db> {
         let scope = self.scope();
         let assumptions = collect_constraints(db, self.into()).instantiate_identity();
 
@@ -1170,6 +1172,9 @@ pub struct Trait<'db> {
     pub(crate) origin: HirOrigin<ast::Trait>,
 }
 impl<'db> Trait<'db> {
+    pub(crate) fn constraints(self, db: &'db dyn HirAnalysisDb) -> PredicateListId {
+        collect_constraints(db, self.into()).instantiate_identity()
+    }
     pub fn span(self) -> LazyTraitSpan<'db> {
         LazyTraitSpan::new(self)
     }
@@ -1207,13 +1212,7 @@ impl<'db> Trait<'db> {
 #[salsa::tracked]
 impl<'db> Trait<'db> {
     #[salsa::tracked(return_ref)]
-    pub fn methods(
-        self,
-        db: &'db dyn crate::analysis::HirAnalysisDb,
-    ) -> common::indexmap::IndexMap<IdentId<'db>, crate::analysis::ty::trait_def::TraitMethod<'db>>
-    {
-        use common::indexmap::IndexMap;
-
+    pub fn methods(self, db: &'db dyn HirAnalysisDb) -> IndexMap<IdentId<'db>, TraitMethod<'db>> {
         let mut methods =
             IndexMap::<IdentId<'db>, crate::analysis::ty::trait_def::TraitMethod<'db>>::default();
         for method in self.child_funcs(db) {
@@ -1273,8 +1272,7 @@ impl<'db> Trait<'db> {
         assoc_type: &AssocTyDecl<'db>,
     ) -> Option<crate::analysis::ty::ty_def::TyId<'db>> {
         use crate::analysis::ty::{
-            ty_lower::lower_hir_ty,
-            trait_resolution::constraint::collect_constraints,
+            trait_resolution::constraint::collect_constraints, ty_lower::lower_hir_ty,
         };
 
         let default_ty_hir = assoc_type.default?;
@@ -1386,16 +1384,14 @@ impl<'db> ImplTrait<'db> {
         self,
         db: &'db dyn crate::analysis::HirAnalysisDb,
     ) -> crate::analysis::ty::ty_def::TyId<'db> {
-        use crate::analysis::ty::trait_resolution::constraint::collect_constraints;
         use crate::analysis::ty::ty_def::{InvalidCause, TyId};
         use crate::analysis::ty::ty_lower::lower_hir_ty;
 
         let scope = self.scope();
-        let assumptions = collect_constraints(db, self.into()).instantiate_identity();
 
         self.raw_ty(db)
             .to_opt()
-            .map(|ty| lower_hir_ty(db, ty, scope, assumptions))
+            .map(|ty| lower_hir_ty(db, ty, scope, self.constraints(db)))
             .unwrap_or_else(|| TyId::invalid(db, InvalidCause::Other))
     }
 
@@ -1406,15 +1402,18 @@ impl<'db> ImplTrait<'db> {
     pub fn trait_inst(
         self,
         db: &'db dyn crate::analysis::HirAnalysisDb,
-    ) -> Result<crate::analysis::ty::trait_def::TraitInstId<'db>, crate::analysis::ty::trait_lower::TraitRefLowerError<'db>> {
-        use crate::analysis::ty::trait_lower::lower_trait_ref;
-        use crate::analysis::ty::trait_resolution::constraint::collect_constraints;
-
+    ) -> Result<
+        crate::analysis::ty::trait_def::TraitInstId<'db>,
+        crate::analysis::ty::trait_lower::TraitRefLowerError<'db>,
+    > {
         let self_ty = self.ty(db);
         let scope = self.scope();
-        let assumptions = collect_constraints(db, self.into()).instantiate_identity();
+        let assumptions = self.constraints(db);
 
-        let trait_ref = self.trait_ref(db).to_opt().ok_or(crate::analysis::ty::trait_lower::TraitRefLowerError::Ignored)?;
+        let trait_ref = self
+            .trait_ref(db)
+            .to_opt()
+            .ok_or(TraitRefLowerError::Ignored)?;
         lower_trait_ref(db, self_ty, trait_ref, scope, assumptions)
     }
 
@@ -1451,7 +1450,7 @@ impl<'db> ImplTrait<'db> {
         let mut types: common::indexmap::IndexMap<_, _> = self
             .types(db)
             .iter()
-            .filter_map(|t| match (t.name.to_opt(), t.ty.to_opt()) {
+            .filter_map(|t| match (t.name.to_opt(), t.type_ref.to_opt()) {
                 (Some(name), Some(ty)) => Some((name, lower_hir_ty(db, ty, scope, assumptions))),
                 _ => None,
             })
@@ -1488,11 +1487,7 @@ impl<'db> ImplTrait<'db> {
 
     /// Returns the constraints (where clauses) for this impl.
     #[salsa::tracked]
-    pub(crate) fn impl_constraints(
-        self,
-        db: &'db dyn crate::analysis::HirAnalysisDb,
-    ) -> crate::analysis::ty::trait_resolution::PredicateListId<'db> {
-        use crate::analysis::ty::trait_resolution::constraint::collect_constraints;
+    pub(crate) fn constraints(self, db: &'db dyn HirAnalysisDb) -> PredicateListId<'db> {
         collect_constraints(db, self.into()).instantiate_identity()
     }
 
@@ -1543,14 +1538,14 @@ impl<'db> ImplTrait<'db> {
         fresh_vars: &[crate::analysis::ty::ty_def::TyId<'db>],
     ) -> crate::analysis::ty::trait_resolution::PredicateListId<'db> {
         use crate::analysis::ty::binder::Binder;
-        Binder::bind(self.impl_constraints(db)).instantiate(db, fresh_vars)
+        Binder::bind(self.constraints(db)).instantiate(db, fresh_vars)
     }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, salsa::Update)]
 pub struct AssocTyDef<'db> {
     pub name: Partial<IdentId<'db>>,
-    pub ty: Partial<TypeId<'db>>,
+    pub type_ref: Partial<TypeId<'db>>,
 }
 
 #[salsa::tracked]

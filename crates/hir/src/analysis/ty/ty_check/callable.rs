@@ -1,4 +1,5 @@
 use crate::{
+    analysis::ty::binder::Binder,
     hir_def::{CallArg as HirCallArg, ExprId, GenericArgListId, IdentId},
     span::{
         DynLazySpan,
@@ -93,7 +94,7 @@ impl<'db> Callable<'db> {
     }
 
     pub fn ret_ty(&self, db: &'db dyn HirAnalysisDb) -> TyId<'db> {
-        let ret = self.func_def.ret_ty(db).instantiate(db, &self.generic_args);
+        let ret = Binder::bind(self.func_def.ret_ty(db)).instantiate(db, &self.generic_args);
         if let Some(inst) = self.trait_inst {
             let mut subst = AssocTySubst::new(inst);
             ret.fold_with(db, &mut subst)

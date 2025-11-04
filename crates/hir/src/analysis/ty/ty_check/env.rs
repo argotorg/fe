@@ -1,4 +1,5 @@
 use crate::{
+    analysis::ty::binder::Binder,
     hir_def::{
         Body, BodyKind, Expr, ExprId, Func, IdentId, IntegerId, Partial, Pat, PatId, Stmt, StmtId,
         prim_ty::PrimTy, scope_graph::ScopeId,
@@ -346,7 +347,7 @@ impl<'db> TyCheckEnv<'db> {
             let TyData::TyBase(TyBase::Func(func_def)) = base.data(db) else {
                 unreachable!();
             };
-            let mut ret = func_def.ret_ty(db).instantiate(db, gen_args);
+            let mut ret = Binder::bind(func_def.ret_ty(db)).instantiate(db, gen_args);
             let mut subst = AssocTySubst::new(inst);
             ret = ret.fold_with(self.db, &mut subst);
             normalize_ty(db, ret, scope, assumptions)

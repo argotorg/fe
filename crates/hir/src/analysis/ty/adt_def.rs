@@ -1,7 +1,8 @@
 use crate::{
+    analysis::ty::trait_resolution::PredicateListId,
     hir_def::{
-        Contract, Enum, GenericParamOwner, IdentId, ItemKind, Partial, Struct,
-        TypeId as HirTyId, scope_graph::ScopeId,
+        Contract, Enum, GenericParamOwner, IdentId, ItemKind, Partial, Struct, TypeId as HirTyId,
+        scope_graph::ScopeId,
     },
     span::DynLazySpan,
 };
@@ -80,6 +81,9 @@ pub enum AdtRef<'db> {
 }
 
 impl<'db> AdtRef<'db> {
+    fn constraints(&self, db: &'db dyn HirAnalysisDb) -> PredicateListId {
+        collect_adt_constraints(db, *self).instantiate_identity()
+    }
     pub fn try_from_item(item: ItemKind<'db>) -> Option<Self> {
         match item {
             ItemKind::Enum(x) => Some(x.into()),
