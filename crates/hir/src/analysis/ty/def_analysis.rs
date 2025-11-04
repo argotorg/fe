@@ -310,7 +310,10 @@ impl<'db> DefAnalyzer<'db> {
         }
     }
 
-    fn for_trait_impl(db: &'db dyn HirAnalysisDb, impl_trait: crate::hir_def::ImplTrait<'db>) -> Self {
+    fn for_trait_impl(
+        db: &'db dyn HirAnalysisDb,
+        impl_trait: crate::hir_def::ImplTrait<'db>,
+    ) -> Self {
         let assumptions = impl_trait.impl_constraints(db);
         let self_ty = impl_trait.ty(db);
         Self {
@@ -1063,8 +1066,7 @@ pub(crate) fn check_recursive_adt_impl<'db>(
                     ty_idx: ty_idx as u16,
                 });
 
-                if let Some(cycle) =
-                    check_recursive_adt_impl(db, field_adt_ref, &chain)
+                if let Some(cycle) = check_recursive_adt_impl(db, field_adt_ref, &chain)
                     && cycle.iter().any(|m| m.adt == adt)
                 {
                     return Some(cycle);
@@ -1231,16 +1233,11 @@ fn analyze_impl_trait_specific_error<'db>(
 ) -> Result<Binder<ImplTrait<'db>>, Vec<TyDiagCollection<'db>>> {
     let mut diags = vec![];
     // We don't need to report error because it should be reported from the parser.
-    let (Some(trait_ref), Some(ty)) = (
-        impl_trait.trait_ref(db).to_opt(),
-        impl_trait.raw_ty(db).to_opt(),
-    ) else {
+    let (Some(trait_inst), ty) = (impl_trait.trait_inst(db), impl_trait.ty(db)) else {
         return Err(diags);
     };
 
     // 1. Checks if implementor type is well-formed except for the satisfiability.
-    let assumptions = collect_constraints(db, impl_trait.into()).instantiate_identity();
-    let ty = lower_hir_ty(db, ty, impl_trait.scope(), assumptions);
     if let Some(diag) = ty.emit_diag(db, impl_trait.span().ty().into()) {
         diags.push(diag);
     }
@@ -1253,34 +1250,6 @@ fn analyze_impl_trait_specific_error<'db>(
     if !diags.is_empty() || ty.has_invalid(db) {
         return Err(diags);
     }
-
-    let trait_inst = match lower_trait_ref(db, ty, trait_ref, impl_trait.scope(), assumptions) {
-        Ok(trait_inst) => trait_inst,
-        Err(TraitRefLowerError::PathResError(err)) => {
-            let trait_path_span = impl_trait.span().trait_ref().path();
-            if let Some(diag) = err.into_diag(
-                db,
-                trait_ref.path(db).unwrap(),
-                trait_path_span,
-                ExpectedPathKind::Trait,
-            ) {
-                diags.push(diag.into());
-            }
-            return Err(diags);
-        }
-        Err(TraitRefLowerError::InvalidDomain(res)) => {
-            diags.push(
-                PathResDiag::ExpectedTrait(
-                    impl_trait.span().trait_ref().path().into(),
-                    trait_ref.path(db).unwrap().ident(db).unwrap(),
-                    res.kind_name(),
-                )
-                .into(),
-            );
-            return Err(diags);
-        }
-        Err(TraitRefLowerError::Ignored) => return Err(diags),
-    };
 
     // 3. Check if the ingot containing impl trait is the same as the ingot which
     //    contains either the type or trait.

@@ -4,10 +4,7 @@ use crate::{
     hir_def::{HirIngot, IdentId, ImplTrait, Trait},
     span::DynLazySpan,
 };
-use common::{
-    indexmap::IndexMap,
-    ingot::Ingot,
-};
+use common::{indexmap::IndexMap, ingot::Ingot};
 use rustc_hash::FxHashMap;
 use salsa::Update;
 
@@ -24,10 +21,7 @@ use super::{
     ty_def::TyId,
     unify::UnificationTable,
 };
-use crate::analysis::{
-    HirAnalysisDb,
-    ty::trait_lower::collect_trait_impls,
-};
+use crate::analysis::{HirAnalysisDb, ty::trait_lower::collect_trait_impls};
 
 /// Returns [`TraitEnv`] for the given ingot.
 #[salsa::tracked(return_ref, cycle_fn=ingot_trait_env_cycle_recover, cycle_initial=ingot_trait_env_cycle_initial)]
@@ -56,9 +50,8 @@ pub(crate) fn impls_for_trait<'db>(
             let snapshot = table.snapshot();
             let impl_trait = impl_.skip_binder();
 
-            // Use the new instantiated() API for atomic fresh var instantiation
-            let inst_data = impl_trait.instantiated(db, &mut table);
-            let is_ok = inst_data.trait_inst
+            let is_ok = impl_trait
+                .trait_inst(db)
                 .map(|inst| table.unify(inst, trait_).is_ok())
                 .unwrap_or(false);
 
@@ -104,19 +97,19 @@ pub(crate) fn impls_for_ty_with_constraints<'db>(
             let impl_trait = impl_.skip_binder();
 
             // Use the new instantiated() API for atomic fresh var instantiation
-            let inst_data = impl_trait.instantiated(db, &mut table);
-            let impl_ty = table.instantiate_to_term(inst_data.self_ty);
+            // let inst_data = impl_trait.instantiated(db, &mut table);
+            let impl_ty = table.instantiate_to_term(impl_trait.ty(db));
             let ty_term = table.instantiate_to_term(ty);
             let unifies = table.unify(impl_ty, ty_term).is_ok();
 
             if unifies {
                 // Filter out impls that don't satisfy assumptions
-                if inst_data.constraints.is_empty(db) {
+                if impl_trait.impl_constraints(db).is_empty(db) {
                     table.rollback_to(snapshot);
                     return true;
                 }
 
-                for &constraint in inst_data.constraints.list(db) {
+                for &constraint in impl_trait.impl_constraints(db).list(db) {
                     let constraint = constraint.fold_with(db, &mut table);
                     let constraint = Canonicalized::new(db, constraint);
                     match is_goal_satisfiable(db, ingot, constraint.value, assumptions) {
@@ -171,9 +164,7 @@ pub(crate) fn impls_for_ty<'db>(
 
             let impl_trait = impl_.skip_binder();
 
-            // Use the new instantiated() API for atomic fresh var instantiation
-            let inst = (*impl_trait).instantiated(db, &mut table);
-            let impl_ty = table.instantiate_to_term(inst.self_ty);
+            let impl_ty = table.instantiate_to_term(impl_trait.ty(db));
             let ty = table.instantiate_to_term(ty);
             let is_ok = table.unify(impl_ty, ty).is_ok();
 
@@ -246,13 +237,11 @@ pub(super) fn does_impl_trait_conflict(
     let b_impl = b.skip_binder();
 
     // Use the new instantiated() API for atomic fresh var instantiation
-    let a_inst = (*a_impl).instantiated(db, &mut table);
-    let Some(a_trait) = a_inst.trait_inst else {
+    let Some(a_trait) = a_impl.trait_inst(db) else {
         return false;
     };
 
-    let b_inst = (*b_impl).instantiated(db, &mut table);
-    let Some(b_trait) = b_inst.trait_inst else {
+    let Some(b_trait) = b_impl.trait_inst(db) else {
         return false;
     };
 
@@ -260,7 +249,7 @@ pub(super) fn does_impl_trait_conflict(
         return false;
     }
 
-    if a_inst.constraints.is_empty(db) && b_inst.constraints.is_empty(db) {
+    if a_impl.impl_constraints(db).is_empty(db) && b_impl.impl_constraints(db).is_empty(db) {
         return true;
     }
 
@@ -269,8 +258,8 @@ pub(super) fn does_impl_trait_conflict(
     };
 
     // Constraints are already instantiated in a_inst and b_inst
-    let a_constraints_instantiated: Vec<_> = a_inst.constraints.list(db).to_vec();
-    let b_constraints_instantiated: Vec<_> = b_inst.constraints.list(db).to_vec();
+    let a_constraints_instantiated: Vec<_> = a_impl.impl_constraints(db).list(db).to_vec();
+    let b_constraints_instantiated: Vec<_> = b_impl.impl_constraints(db).list(db).to_vec();
 
     // Check if all constraints from both implementations would be satisfiable
     // when the types are unified
@@ -351,7 +340,13 @@ impl<'db> TraitInstId<'db> {
             let self_ty = self.self_ty(db);
             format! {"{}: {}", self_ty.pretty_print(db), inst}
         } else {
-            let mut s = self.def(db).name(db).to_opt().unwrap_or_else(|| IdentId::new(db, "<unknown>".to_string())).data(db).to_string();
+            let mut s = self
+                .def(db)
+                .name(db)
+                .to_opt()
+                .unwrap_or_else(|| IdentId::new(db, "<unknown>".to_string()))
+                .data(db)
+                .to_string();
 
             let mut args = self.args(db).iter().map(|ty| ty.pretty_print(db));
             // Skip the first type parameter since it's the implementor type.

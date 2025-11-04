@@ -361,9 +361,7 @@ impl GeneratorNode {
             let mut table = g_node.table.clone();
             let gen_cand = cand.skip_binder();
 
-            // Use the new instantiated() API for atomic fresh var instantiation
-            let inst_data = (*gen_cand).instantiated(db, &mut table);
-            let Some(trait_inst) = inst_data.trait_inst else {
+            let Some(trait_inst) = gen_cand.trait_inst(db) else {
                 continue;
             };
 
@@ -396,11 +394,12 @@ impl GeneratorNode {
             }
 
             // Constraints are already instantiated in inst_data
-            if inst_data.constraints.list(db).is_empty() {
+            if gen_cand.impl_constraints(db).list(db).is_empty() {
                 self.register_solution_with(pf, &mut table);
             } else {
                 let sub_goals = {
-                    inst_data.constraints
+                    gen_cand
+                        .impl_constraints(db)
                         .list(db)
                         .iter()
                         .map(|c| {

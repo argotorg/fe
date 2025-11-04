@@ -30,9 +30,7 @@ use crate::analysis::{
         func_def::CallableDef,
         normalize::normalize_ty,
         trait_def::{TraitInstId, impls_for_ty_with_constraints},
-        trait_lower::{
-            TraitArgError, TraitRefLowerError, lower_trait_ref, lower_trait_ref_impl,
-        },
+        trait_lower::{TraitArgError, TraitRefLowerError, lower_trait_ref, lower_trait_ref_impl},
         trait_resolution::PredicateListId,
         ty_def::{InvalidCause, Kind, TyData, TyId},
         ty_lower::{
@@ -842,19 +840,13 @@ pub fn find_associated_type<'db>(
         if param.is_trait_self() {
             if let Some(trait_) = param.owner.resolve_to::<Trait>(db) {
                 if trait_.assoc_ty(db, name).is_some() {
-                    let trait_inst = TraitInstId::new(
-                        db,
-                        trait_,
-                        vec![ty.value],
-                        IndexMap::new(),
-                    );
+                    let trait_inst = TraitInstId::new(db, trait_, vec![ty.value], IndexMap::new());
                     let assoc_ty = TyId::assoc_ty(db, trait_inst, name);
                     return smallvec![(trait_inst, assoc_ty)];
                 }
             } else if let Some(impl_trait) = param.owner.resolve_to::<ImplTrait>(db)
-                && let Some(trait_ref) = impl_trait.trait_ref(db).to_opt()
-                && let Ok(trait_inst) =
-                    lower_trait_ref(db, ty.value, trait_ref, impl_trait.scope(), assumptions)
+                // && let Some(trait_ref) = impl_trait.trait_ref(db).to_opt()
+                && let Some(trait_inst) = impl_trait.trait_inst(db)
                 && let Some(assoc_ty) = trait_inst.assoc_ty(db, name)
             {
                 return smallvec![(trait_inst, assoc_ty)];
@@ -888,8 +880,9 @@ pub fn find_associated_type<'db>(
         let impl_trait = impl_.skip_binder();
 
         // Create fresh vars for the generic params
-        let params = crate::analysis::ty::ty_lower::collect_generic_params(db, (*impl_trait).into())
-            .params(db);
+        let params =
+            crate::analysis::ty::ty_lower::collect_generic_params(db, (*impl_trait).into())
+                .params(db);
         let fresh_vars: Vec<_> = params
             .iter()
             .map(|param| table.new_var_from_param(*param))
@@ -1049,7 +1042,7 @@ pub fn resolve_name_res<'db>(
                 ItemKind::ImplTrait(impl_) => {
                     let ty = impl_.ty(db);
                     PathRes::Ty(TyId::foldl(db, ty, args))
-                },
+                }
 
                 ItemKind::Trait(t) => {
                     if path.is_self_ty(db) {
@@ -1157,7 +1150,8 @@ fn ty_from_adtref<'db>(
     let ty = TyId::adt(db, adt_ref);
     // Fill trailing defaults (if any)
     let completed_args =
-        adt_ref.param_set(db)
+        adt_ref
+            .param_set(db)
             .complete_explicit_args_with_defaults(db, None, args, assumptions);
     let applied = TyId::foldl(db, ty, &completed_args);
     if let TyData::Invalid(InvalidCause::TooManyGenericArgs { expected, given }) = applied.data(db)

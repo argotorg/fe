@@ -15,7 +15,12 @@ use super::{
 };
 use crate::{
     HirDb,
-    analysis::ty::trait_resolution::constraint::collect_constraints,
+    analysis::ty::{
+        trait_lower::lower_trait_ref,
+        trait_resolution::constraint::collect_constraints,
+        ty_def::{InvalidCause, TyId},
+        ty_lower::{collect_generic_params, lower_hir_ty},
+    },
     hir_def::TraitRefId,
     lower,
     span::{
@@ -1286,8 +1291,8 @@ pub struct ImplTrait<'db> {
     #[id]
     id: TrackedItemId<'db>,
 
-    pub trait_ref: Partial<TraitRefId<'db>>,
-    raw_ty: Partial<TypeId<'db>>,
+    pub(crate) trait_ref: Partial<TraitRefId<'db>>,
+    pub(crate) raw_ty: Partial<TypeId<'db>>,
     pub attributes: AttrListId<'db>,
     pub generic_params: GenericParamListId<'db>,
     pub where_clause: WhereClauseId<'db>,
@@ -1347,7 +1352,6 @@ impl<'db> ImplTrait<'db> {
         db: &'db dyn crate::analysis::HirAnalysisDb,
     ) -> Option<crate::analysis::ty::trait_def::TraitInstId<'db>> {
         let assumptions = collect_constraints(db, self.into()).instantiate_identity();
-
         let self_ty = self.ty(db);
         if self_ty.has_invalid(db) {
             None
@@ -1365,12 +1369,25 @@ impl<'db> ImplTrait<'db> {
         self,
         db: &'db dyn crate::analysis::HirAnalysisDb,
     ) -> crate::analysis::ty::ty_def::TyId<'db> {
-        self.raw_ty(db)
+        let ty = self.raw_ty(db);
+        let scope = self.scope();
+        let assumptions = collect_constraints(db, self.into()).instantiate_identity();
+        let analyzed_ty = ty
             .to_opt()
-            .map(|ty| lower_hir_ty(db, ty, self.scope(), assumptions))
-            .unwrap_or_else(|| TyId::invalid(db, InvalidCause::Other))
+            .map(|t| lower_hir_ty(db, t, scope, assumptions))
+            .unwrap_or_else(|| TyId::invalid(db, InvalidCause::Other));
+        analyzed_ty
     }
 
+    // /// The trait being implemented, with its arguments
+    // pub trait_inst: Option<TraitInstId<'db>>,
+
+    // /// Where clause constraints on this impl
+    // pub constraints: PredicateListId<'db>,
+
+    // /// Generic parameters of this impl (used for instantiation)
+    // #[return_ref]
+    // pub params: Vec<TyId<'db>>,
     /// Returns the trait being implemented.
     pub(crate) fn trait_def(
         self,
@@ -1444,60 +1461,8 @@ impl<'db> ImplTrait<'db> {
         self,
         db: &'db dyn crate::analysis::HirAnalysisDb,
     ) -> crate::analysis::ty::trait_resolution::PredicateListId<'db> {
-        // Delegate to cached query
-        self.trait_impl_data(db).constraints(db)
+        collect_constraints(db, self.into()).instantiate_identity()
     }
-
-    /// Instantiates this impl with fresh type variables for unification.
-    /// This creates fresh vars ONCE and substitutes them atomically across
-    /// all fields, ensuring correctness.
-    ///
-    /// This is the KEY METHOD that eliminates manual fresh var management at call sites.
-    ///
-    /// NOT CACHED (takes &mut UnificationTable), but BENEFITS from the
-    /// cached trait_impl_data query internally.
-    ///
-    /// Generic over UnificationStore to work with both InPlace and Persistent tables.
-    pub(crate) fn instantiated<U>(
-        self,
-        db: &'db dyn crate::analysis::HirAnalysisDb,
-        table: &mut crate::analysis::ty::unify::UnificationTableBase<'db, U>,
-    ) -> InstantiatedTraitImpl<'db>
-    where
-        U: crate::analysis::ty::unify::UnificationStore<'db>,
-    {
-        use crate::analysis::ty::binder::Binder;
-
-        // 1. Get cached template (fast if called before)
-        let data_template = self.trait_impl_data(db);
-
-        // 2. Create fresh vars ONCE
-        let fresh_vars: Vec<crate::analysis::ty::ty_def::TyId<'db>> = data_template
-            .params(db)
-            .iter()
-            .map(|p| table.new_var_from_param(*p))
-            .collect();
-
-        // 3. Instantiate atomically with shared vars
-        let binder = Binder::bind(data_template);
-        let instantiated = binder.instantiate(db, &fresh_vars);
-
-        // 4. Return simple struct with results
-        InstantiatedTraitImpl {
-            self_ty: instantiated.self_ty(db),
-            trait_inst: instantiated.trait_inst(db),
-            constraints: instantiated.constraints(db),
-        }
-    }
-}
-
-/// Simple data struct returned by `ImplTrait::instantiated()` method.
-/// Not salsa-tracked, just a convenient return value holding instantiated impl data.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct InstantiatedTraitImpl<'db> {
-    pub self_ty: crate::analysis::ty::ty_def::TyId<'db>,
-    pub trait_inst: Option<crate::analysis::ty::trait_def::TraitInstId<'db>>,
-    pub constraints: crate::analysis::ty::trait_resolution::PredicateListId<'db>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, salsa::Update)]

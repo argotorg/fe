@@ -13,9 +13,8 @@ use rustc_hash::FxHashMap;
 use super::{
     canonical::Canonical,
     fold::{TyFoldable, TyFolder},
-    trait_resolution::{PredicateListId, constraint::collect_constraints},
+    trait_resolution::PredicateListId,
     ty_def::{AssocTy, TyData, TyId, TyParam},
-    ty_lower::lower_hir_ty,
     unify::UnificationTable,
 };
 use crate::analysis::{HirAnalysisDb, name_resolution::find_associated_type};
@@ -56,13 +55,9 @@ impl<'db> TyFolder<'db> for TypeNormalizer<'db> {
         match ty.data(self.db) {
             TyData::TyParam(p @ TyParam { owner, .. }) if p.is_trait_self() => {
                 if let Some(impl_) = owner.resolve_to::<ImplTrait>(self.db)
-                    && let Some(hir_ty) = impl_.raw_ty(self.db).to_opt()
+                    && let ty = impl_.ty(self.db)
                 {
-                    let impl_assumptions =
-                        collect_constraints(self.db, impl_.into()).instantiate_identity();
-                    let lowered = lower_hir_ty(self.db, hir_ty, impl_.scope(), impl_assumptions);
-                    // Continue folding the lowered type so it reaches normal form
-                    return self.fold_ty(db, lowered);
+                    return self.fold_ty(db, ty);
                 }
                 ty
             }
