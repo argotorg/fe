@@ -85,6 +85,12 @@ let analyzed_ty = impl_trait.self_ty(db);
 
 **Apply to all HIR items**: `Func`, `Struct`, `Trait`, etc. - any with `raw_ty` or similar fields
 
+**Important**: After fixing all breakages, you may need to relax the visibility back to `pub(crate)`:
+- If HIR visitors (in `visitor.rs`) need raw syntax access, make the field `pub(crate)`
+- The pattern: visitors traverse syntax trees (need `raw_ty`), analysis uses lowered types (uses `.ty()` method)
+- Two legitimate use cases: syntax traversal vs semantic analysis
+- Start with fully private, see what breaks, then adjust visibility as needed
+
 ---
 
 ### 2. Focus on `def_analysis.rs` for Deletions
@@ -96,6 +102,129 @@ let analyzed_ty = impl_trait.self_ty(db);
 1. **Replacing old API usage** with new methods
 2. **Discovering what external analysis shouldn't exist** anymore
 3. **Finding opportunities** for new methods if the migration is awkward
+
+#### Complete Inventory of Manual Lowering Calls
+
+**`lower_hir_ty` calls (8 total):**
+
+1. **Line 149** - `analyze_trait`: Lowering trait associated type defaults
+   - Context: `assoc_type.default` (from `trait_.types(db)`)
+   - **Action**: Create `AssocTyDecl::default_ty(db) -> Option<TyId>`
+   - **Difficulty**: Easy - standalone trait associated types
+   - **Impact**: Medium - eliminates boilerplate in trait analysis
+
+2. **Line 362** - `DefAnalyzer::verify_term_type_kind`: Internal validation helper
+   - Context: Checking if a type has `*` kind and is not const
+   - **Action**: Keep as-is (internal helper method) OR create HIR type method
+   - **Difficulty**: Low priority - already encapsulated in DefAnalyzer
+   - **Impact**: Low - internal implementation detail
+
+3. **Line 380** - `DefAnalyzer::verify_self_type`: Impl self type validation
+   - Context: Verifying self type matches in impl blocks
+   - **Action**: Keep as-is (internal helper) OR inline into caller
+   - **Difficulty**: Low priority - already encapsulated
+   - **Impact**: Low - internal validation logic
+
+4. **Line 542** - `DefAnalyzer::visit_ty`: Visitor callback for type checking
+   - Context: Visitor pattern - checking every type node for well-formedness
+   - **Action**: Cannot eliminate - this IS the lowering point for visiting
+   - **Difficulty**: N/A - fundamental visitor behavior
+   - **Impact**: None - keep as-is
+
+5. **Line 572** - `DefAnalyzer::visit_where_predicate`: Where clause validation
+   - Context: Visitor pattern - validating where clause predicates
+   - **Action**: Cannot eliminate - visitor needs to lower for validation
+   - **Difficulty**: N/A - fundamental visitor behavior
+   - **Impact**: None - keep as-is
+
+6. **Line 612** - `DefAnalyzer::visit_field_def`: Field vs const param type matching
+   - Context: Checking if field type matches const type parameter
+   - **Action**: Keep as-is - visitor needs both types for comparison
+   - **Difficulty**: Low priority - specialized check
+   - **Impact**: Low - internal validation logic
+
+7. **Line 698** - `DefAnalyzer::visit_generic_param`: Generic default forward ref check
+   - Context: Ensuring generic defaults don't reference later params
+   - **Action**: Possibly create `GenericParam::default_ty(db)` method
+   - **Difficulty**: Medium - generic param handling
+   - **Impact**: Low-Medium - could simplify but complex logic remains
+
+8. **Line 885** - `DefAnalyzer::visit_impl_trait`: ImplTrait assoc type definitions
+   - Context: Lowering `impl_trait.types()` for well-formedness checking
+   - **Action**: Create `AssocTyDef::ty_lowered(db) -> TyId` method
+   - **Difficulty**: Easy-Medium - similar to AssocTyDecl
+   - **Impact**: Medium - cleaner impl trait handling
+
+**`lower_trait_ref` calls (5 total):**
+
+1. **Line 158** - `analyze_trait`: Trait assoc type default bounds checking
+   - Context: Checking if default type satisfies trait bounds
+   - **Action**: Possibly create method on AssocTyDecl
+   - **Difficulty**: Medium - bound checking logic
+   - **Impact**: Medium - part of trait analysis
+
+2. **Line 803** - `DefAnalyzer::visit_where_predicate`: Where clause trait bound lowering
+   - Context: Visitor lowering trait bounds in where clauses
+   - **Action**: Cannot eliminate - visitor needs this
+   - **Difficulty**: N/A - fundamental visitor behavior
+   - **Impact**: None - keep as-is
+
+3. **Line 1107** - `check_trait_ref_wf`: Standalone trait ref well-formedness check
+   - Context: Helper function checking trait reference validity
+   - **Action**: Could be method on some HIR type (need to investigate caller)
+   - **Difficulty**: Medium - needs analysis of usage
+   - **Impact**: Low-Medium - helper function
+
+4. **Line 1232** - `analyze_impl_trait_specific_error`: ImplTrait trait lowering ⭐
+   - Context: **THE FUNCTION SEAN WANTS TO DELETE/SHRINK**
+   - **Action**: Create `ImplTrait::trait_inst(db) -> Result<TraitInstId, TraitRefLowerError>`
+   - **Difficulty**: High priority - big LoC savings opportunity
+   - **Impact**: **HIGH** - Sean specifically called this out
+
+5. **Line 1347** - `analyze_impl_trait_specific_error`: Checking impl assoc type bounds
+   - Context: Inside the function Sean wants to shrink
+   - **Action**: Part of the above - may become method or stay internal
+   - **Difficulty**: Medium - bound checking
+   - **Impact**: Medium - within targeted function
+
+#### Priority Order for Elimination
+
+**🔥 High Priority (Start Here):**
+
+1. **Line 1232** - `analyze_impl_trait_specific_error`: Create `ImplTrait::trait_inst(db)`
+   - Sean explicitly called out this function for deletion/shrinking
+   - High LoC deletion potential
+
+2. **Line 149** - Trait associated type defaults: Create `AssocTyDecl::default_ty(db)`
+   - Clean standalone case
+   - Immediate LoC savings
+
+3. **Line 885** - ImplTrait assoc types: Create `AssocTyDef::ty_lowered(db)`
+   - Similar pattern to above
+   - Clean API improvement
+
+**⚠️ Medium Priority:**
+
+4. **Line 158** - Trait bound checking for assoc type defaults
+   - Part of trait analysis logic
+   - Could be method or keep as helper
+
+5. **Line 698** - Generic param defaults: Create `GenericParam::default_ty(db)`
+   - Some complexity in forward ref checking
+   - Moderate improvement
+
+6. **Line 1107** - `check_trait_ref_wf`: Investigate callers and context
+   - Might be eliminable depending on usage
+
+**✅ Keep As-Is (Low/No Priority):**
+
+7. Lines 362, 380, 612 - Internal DefAnalyzer helpers
+   - Already encapsulated within analyzer
+   - Low value in moving to HIR items
+
+8. Lines 542, 572, 803 - Visitor pattern lowering
+   - Fundamental visitor behavior
+   - Cannot/should not eliminate
 
 **Pattern to look for**:
 ```rust

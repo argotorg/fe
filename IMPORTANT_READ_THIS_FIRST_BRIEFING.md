@@ -818,3 +818,142 @@ Can't add tracked methods to non-tracked structs (e.g., `EnumVariant`). Solution
 Search for wrapper extraction methods: `hir_def()`, `hir_X()`. Replace with pattern matching or direct use. Watch for signature changes: methods losing `db` parameter. Use targeted test failures to find incomplete implementations.
 
 **Bottom Line**: Understand the code first (via targeted tests + tracing through examples), then refactor. Changing code we don't fully understand causes churn. Understanding the code first has the added benefit of being educational both for you (the agent) and myself (the human).  Thanks for doing that!
+
+---
+
+## 11. Critical Testing & Error Handling Patterns
+
+### NEVER Auto-Accept Snapshot Test Changes
+
+**The Mistake**: Running `cargo insta test --accept` without reviewing the diff.
+
+**The Problem**: Snapshot changes that DELETE error messages indicate bugs were introduced:
+```diff
+-error[2-0013]: const generic argument expected for `Trait`
+-  ┌─ trait_const_ty.fe:2:6
+-2 │ impl Trait<i32> for i32 {}
+-  │      ^^^^^ expected const argument of type `u32`
+```
+
+**The Rule**: ALWAYS review snapshot diffs before accepting. Missing diagnostics = regression.
+
+**The Process**:
+1. Run tests and see snapshot failures
+2. Examine the `.snap` vs `.snap.new` diff (or use `cargo insta review`)
+3. Understand WHY the output changed
+4. Only accept if the change is correct
+
+### Error Handling in Salsa Queries vs Analysis Functions
+
+**The Anti-Pattern**: Using `.ok()` on `Result` types in methods that should preserve errors.
+
+**Example of the Bug**:
+```rust
+// WRONG - swallows errors!
+pub fn trait_inst(self, db: &'db dyn HirAnalysisDb) -> Option<TraitInstId<'db>> {
+    lower_trait_ref(db, ...).ok()  // <-- Errors lost here!
+}
+```
+
+**The Correct Pattern**: Separate caching from error reporting.
+
+**Salsa Query (Caching)** - Simple return type, used when errors already reported:
+```rust
+#[salsa::tracked]
+pub fn trait_inst(self, db: &'db dyn HirAnalysisDb) -> Option<TraitInstId<'db>> {
+    // Called after analysis phase, errors already handled
+    self.trait_ref(db).to_opt()
+        .and_then(|tr| lower_trait_ref(db, ...).ok())
+}
+```
+
+**Analysis Function (Error Handling)** - Calls lowering directly to capture errors:
+```rust
+fn analyze_impl_trait(db: &'db dyn HirAnalysisDb, impl_trait: ImplTrait<'db>) -> Vec<Diag<'db>> {
+    let mut diags = vec![];
+
+    // Call lowering directly to get the Result
+    let trait_inst = match lower_trait_ref(db, ty, trait_ref, scope, assumptions) {
+        Ok(trait_inst) => trait_inst,
+        Err(TraitRefLowerError::PathResError(err)) => {
+            // Capture and report the error
+            if let Some(diag) = err.into_diag(db, ...) {
+                diags.push(diag);
+            }
+            return Err(diags);
+        }
+        Err(_) => return Err(diags),
+    };
+
+    // Continue analysis with successful result...
+}
+```
+
+**Key Insight**:
+- Salsa queries cache results (simple types like `Option<T>`)
+- Analysis functions handle `Result<T, E>` and report errors
+- Don't call cached queries when you need to capture errors - call the lowering function directly
+
+### Field Privacy as a Refactoring Discovery Tool
+
+**The Technique**: Make fields private/`pub(crate)` to force compilation errors at every manual usage site.
+
+**Example**:
+```rust
+// Step 1: Make field private
+pub struct Impl<'db> {
+    pub(crate) type_ref: TypeId<'db>,  // Was: pub ty
+}
+
+// Step 2: Compilation errors reveal all manual lowering sites
+error[E0624]: method `type_ref` is private
+  --> path_resolver.rs:1037
+  |
+  | impl_.type_ref(db)
+  |       ^^^^^^^^ private method
+```
+
+**The Nuance**: Some fields need `pub(crate)` for legitimate internal uses:
+- **HIR visitors** need raw syntax (`type_ref: TypeId`)
+- **Analysis code** needs lowered types (`.ty() -> TyId`)
+
+**The Pattern**:
+```rust
+pub struct Impl<'db> {
+    // Raw field for HIR traversal (visitors, syntax analysis)
+    pub(crate) type_ref: TypeId<'db>,
+}
+
+impl<'db> Impl<'db> {
+    // Lowered accessor for type analysis
+    #[salsa::tracked]
+    pub fn ty(self, db: &'db dyn HirAnalysisDb) -> TyId<'db> {
+        collect_constraints(db, self.into())
+            .and_then(|assumptions|
+                lower_hir_ty(db, self.type_ref(db), self.scope(), assumptions))
+    }
+}
+```
+
+### Finding Refactoring Opportunities via Code Search
+
+**Beyond Privacy**: Search for the operations being internalized.
+
+**Examples**:
+- Search for `lower_hir_ty` calls → candidates for internalizing into `.ty()` methods
+- Search for `collect_constraints` + `lower_*` → manual analysis to move into queries
+- Search for wrapper extraction: `.hir_def()`, `.data()` → wrapper elimination candidates
+
+**The Pattern**:
+```bash
+# Find manual type lowering
+grep -r "lower_hir_ty.*impl_\."
+
+# Find manual constraint collection
+grep -r "collect_constraints.*\.into()"
+
+# Find wrapper extractions
+grep -r "\.data(db)\."
+```
+
+Each match is a potential site for internalizing logic into HIR item methods.
