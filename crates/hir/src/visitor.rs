@@ -704,7 +704,7 @@ pub fn walk_impl<'db, V>(
 ) where
     V: Visitor<'db> + ?Sized,
 {
-    if let Some(ty) = impl_.ty(ctxt.db).to_opt() {
+    if let Some(ty) = impl_.type_ref(ctxt.db).to_opt() {
         ctxt.with_new_ctxt(
             |span| span.target_ty(),
             |ctxt| {

@@ -231,18 +231,7 @@ pub fn analyze_impl<'db>(
     db: &'db dyn HirAnalysisDb,
     impl_: HirImpl<'db>,
 ) -> Vec<TyDiagCollection<'db>> {
-    let Some(hir_ty) = impl_.ty(db).to_opt() else {
-        return Vec::new();
-    };
-
-    let assumptions = collect_constraints(db, impl_.into());
-
-    let ty = lower_hir_ty(
-        db,
-        hir_ty,
-        impl_.scope(),
-        assumptions.instantiate_identity(),
-    );
+    let ty = impl_.ty(db);
 
     let analyzer = DefAnalyzer::for_impl(db, impl_, ty);
     analyzer.analyze()
@@ -334,16 +323,7 @@ impl<'db> DefAnalyzer<'db> {
         let self_ty = match func.scope().parent(db).unwrap() {
             ScopeId::Item(ItemKind::Trait(trait_)) => trait_.self_param(db).into(),
             ScopeId::Item(ItemKind::ImplTrait(impl_trait)) => impl_trait.ty(db).into(),
-            ScopeId::Item(ItemKind::Impl(impl_)) => match impl_.ty(db).to_opt() {
-                Some(hir_ty) => lower_hir_ty(
-                    db,
-                    hir_ty,
-                    impl_.scope(),
-                    collect_constraints(db, impl_.into()).instantiate_identity(),
-                )
-                .into(),
-                None => TyId::invalid(db, InvalidCause::ParseError).into(),
-            },
+            ScopeId::Item(ItemKind::Impl(impl_)) => impl_.ty(db).into(),
             _ => None,
         };
 
@@ -869,11 +849,7 @@ impl<'db> Visitor<'db> for DefAnalyzer<'db> {
     }
 
     fn visit_impl(&mut self, ctxt: &mut VisitorCtxt<'db, LazyImplSpan<'db>>, impl_: HirImpl<'db>) {
-        let Some(impl_ty) = impl_.ty(self.db).to_opt() else {
-            return;
-        };
-
-        let impl_ty = lower_hir_ty(self.db, impl_ty, impl_.scope(), self.assumptions);
+        let impl_ty = impl_.ty(self.db);
         if !impl_ty.is_inherent_impl_allowed(self.db, self.scope().ingot(self.db)) {
             let base = impl_ty.base_ty(self.db);
             let diag = ImplDiag::InherentImplIsNotAllowed {
@@ -1233,7 +1209,7 @@ fn analyze_impl_trait_specific_error<'db>(
 ) -> Result<Binder<ImplTrait<'db>>, Vec<TyDiagCollection<'db>>> {
     let mut diags = vec![];
     // We don't need to report error because it should be reported from the parser.
-    let (Some(trait_inst), ty) = (impl_trait.trait_inst(db), impl_trait.ty(db)) else {
+    let (Some(trait_ref), ty) = (impl_trait.trait_ref(db).to_opt(), impl_trait.ty(db)) else {
         return Err(diags);
     };
 
@@ -1250,6 +1226,27 @@ fn analyze_impl_trait_specific_error<'db>(
     if !diags.is_empty() || ty.has_invalid(db) {
         return Err(diags);
     }
+
+    // Lower the trait ref and capture any errors
+    let assumptions = collect_constraints(db, impl_trait.into()).instantiate_identity();
+    let trait_inst = match lower_trait_ref(db, ty, trait_ref, impl_trait.scope(), assumptions) {
+        Ok(trait_inst) => trait_inst,
+        Err(TraitRefLowerError::PathResError(err)) => {
+            let trait_path_span = impl_trait.span().trait_ref().path();
+            if let Some(diag) = err.into_diag(
+                db,
+                trait_ref.path(db).unwrap(),
+                trait_path_span,
+                ExpectedPathKind::Trait,
+            ) {
+                diags.push(diag.into());
+            }
+            return Err(diags);
+        }
+        Err(TraitRefLowerError::InvalidDomain(_)) | Err(TraitRefLowerError::Ignored) => {
+            return Err(diags);
+        }
+    };
 
     // 3. Check if the ingot containing impl trait is the same as the ingot which
     //    contains either the type or trait.

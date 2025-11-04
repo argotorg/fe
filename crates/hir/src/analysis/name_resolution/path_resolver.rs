@@ -1031,14 +1031,10 @@ pub fn resolve_name_res<'db>(
                     }
                 }
 
-                ItemKind::Impl(impl_) => PathRes::Ty(impl_typeid_to_ty(
-                    db,
-                    path,
-                    impl_.ty(db),
-                    scope,
-                    args,
-                    assumptions,
-                )?),
+                ItemKind::Impl(impl_) => {
+                    let ty = impl_.ty(db);
+                    PathRes::Ty(TyId::foldl(db, ty, args))
+                }
                 ItemKind::ImplTrait(impl_) => {
                     let ty = impl_.ty(db);
                     PathRes::Ty(TyId::foldl(db, ty, args))
@@ -1122,22 +1118,6 @@ pub fn resolve_name_res<'db>(
         },
     };
     Ok(res)
-}
-
-fn impl_typeid_to_ty<'db>(
-    db: &'db dyn HirAnalysisDb,
-    path: PathId<'db>,
-    hir_ty: Partial<TypeId<'db>>,
-    scope: ScopeId<'db>,
-    args: &[TyId<'db>],
-    assumptions: PredicateListId<'db>,
-) -> PathResolutionResult<'db, TyId<'db>> {
-    if let Some(hir_ty) = hir_ty.to_opt() {
-        let ty = lower_hir_ty(db, hir_ty, scope, assumptions); // root scope!
-        Ok(TyId::foldl(db, ty, args))
-    } else {
-        Err(PathResError::parse_err(path))
-    }
 }
 
 fn ty_from_adtref<'db>(

@@ -691,7 +691,8 @@ impl<'db> Func<'db> {
             ty_lower::lower_hir_ty,
         };
 
-        let assumptions = collect_func_def_constraints(db, self.into(), true).instantiate_identity();
+        let assumptions =
+            collect_func_def_constraints(db, self.into(), true).instantiate_identity();
 
         match self.params(db) {
             Partial::Present(params) => params
@@ -716,13 +717,12 @@ impl<'db> Func<'db> {
         db: &'db dyn crate::analysis::HirAnalysisDb,
     ) -> crate::analysis::ty::binder::Binder<crate::analysis::ty::ty_def::TyId<'db>> {
         use crate::analysis::ty::{
-            binder::Binder,
-            trait_resolution::constraint::collect_func_def_constraints,
-            ty_def::TyId,
-            ty_lower::lower_hir_ty,
+            binder::Binder, trait_resolution::constraint::collect_func_def_constraints,
+            ty_def::TyId, ty_lower::lower_hir_ty,
         };
 
-        let assumptions = collect_func_def_constraints(db, self.into(), true).instantiate_identity();
+        let assumptions =
+            collect_func_def_constraints(db, self.into(), true).instantiate_identity();
         let ty = self
             .ret_ty(db) // Access the field
             .map(|ty| lower_hir_ty(db, ty, self.scope(), assumptions))
@@ -810,7 +810,12 @@ impl<'db> Struct<'db> {
     ) -> crate::analysis::ty::adt_def::AdtField<'db> {
         use crate::analysis::ty::adt_def::AdtField;
         let scope = self.scope();
-        let fields_data = self.fields(db).data(db).iter().map(|field| field.ty).collect();
+        let fields_data = self
+            .fields(db)
+            .data(db)
+            .iter()
+            .map(|field| field.ty)
+            .collect();
         AdtField::new(fields_data, scope)
     }
 }
@@ -850,7 +855,12 @@ impl<'db> Contract<'db> {
     ) -> crate::analysis::ty::adt_def::AdtField<'db> {
         use crate::analysis::ty::adt_def::AdtField;
         let scope = self.scope();
-        let fields_data = self.fields(db).data(db).iter().map(|field| field.ty).collect();
+        let fields_data = self
+            .fields(db)
+            .data(db)
+            .iter()
+            .map(|field| field.ty)
+            .collect();
         AdtField::new(fields_data, scope)
     }
 
@@ -993,7 +1003,8 @@ impl<'db> EnumVariant<'db> {
     pub fn arg_tys_opt(
         self,
         db: &'db dyn crate::analysis::HirAnalysisDb,
-    ) -> Option<Vec<crate::analysis::ty::binder::Binder<crate::analysis::ty::ty_def::TyId<'db>>>> {
+    ) -> Option<Vec<crate::analysis::ty::binder::Binder<crate::analysis::ty::ty_def::TyId<'db>>>>
+    {
         use crate::analysis::ty::adt_def::AdtRef;
 
         // Only tuple variants are callable
@@ -1002,7 +1013,11 @@ impl<'db> EnumVariant<'db> {
         }
 
         let adt_ref: AdtRef = self.enum_.into();
-        let field_types = adt_ref.fields(db).get(self.idx as usize).unwrap().iter_types(db);
+        let field_types = adt_ref
+            .fields(db)
+            .get(self.idx as usize)
+            .unwrap()
+            .iter_types(db);
         Some(field_types.collect())
     }
 
@@ -1072,7 +1087,7 @@ pub struct Impl<'db> {
     #[id]
     id: TrackedItemId<'db>,
 
-    pub ty: super::Partial<TypeId<'db>>,
+    pub(crate) type_ref: super::Partial<TypeId<'db>>,
     pub attributes: AttrListId<'db>,
     pub generic_params: GenericParamListId<'db>,
     pub where_clause: WhereClauseId<'db>,
@@ -1106,6 +1121,29 @@ impl<'db> Impl<'db> {
 
     pub fn scope(self) -> ScopeId<'db> {
         ScopeId::from_item(self.into())
+    }
+}
+
+// Analysis methods for Impl
+#[salsa::tracked]
+impl<'db> Impl<'db> {
+    /// Returns the lowered type for this impl block.
+    /// Returns an invalid type if the impl's type is malformed.
+    pub fn ty(
+        self,
+        db: &'db dyn crate::analysis::HirAnalysisDb,
+    ) -> crate::analysis::ty::ty_def::TyId<'db> {
+        use crate::analysis::ty::trait_resolution::constraint::collect_constraints;
+        use crate::analysis::ty::ty_def::{InvalidCause, TyId};
+        use crate::analysis::ty::ty_lower::lower_hir_ty;
+
+        let scope = self.scope();
+        let assumptions = collect_constraints(db, self.into()).instantiate_identity();
+
+        self.type_ref(db)
+            .to_opt()
+            .map(|ty| lower_hir_ty(db, ty, scope, assumptions))
+            .unwrap_or_else(|| TyId::invalid(db, InvalidCause::Other))
     }
 }
 
@@ -1172,10 +1210,12 @@ impl<'db> Trait<'db> {
     pub fn methods(
         self,
         db: &'db dyn crate::analysis::HirAnalysisDb,
-    ) -> common::indexmap::IndexMap<IdentId<'db>, crate::analysis::ty::trait_def::TraitMethod<'db>> {
+    ) -> common::indexmap::IndexMap<IdentId<'db>, crate::analysis::ty::trait_def::TraitMethod<'db>>
+    {
         use common::indexmap::IndexMap;
 
-        let mut methods = IndexMap::<IdentId<'db>, crate::analysis::ty::trait_def::TraitMethod<'db>>::default();
+        let mut methods =
+            IndexMap::<IdentId<'db>, crate::analysis::ty::trait_def::TraitMethod<'db>>::default();
         for method in self.child_funcs(db) {
             let Some(name) = method.name(db).to_opt() else {
                 continue;
@@ -1232,12 +1272,20 @@ impl<'db> Trait<'db> {
     pub fn super_trait_insts(
         self,
         db: &'db dyn crate::analysis::HirAnalysisDb,
-    ) -> &'db common::indexmap::IndexSet<crate::analysis::ty::binder::Binder<crate::analysis::ty::trait_def::TraitInstId<'db>>> {
-        use std::sync::OnceLock;
-        use crate::analysis::ty::trait_resolution::constraint::{collect_super_traits, super_trait_cycle};
+    ) -> &'db common::indexmap::IndexSet<
+        crate::analysis::ty::binder::Binder<crate::analysis::ty::trait_def::TraitInstId<'db>>,
+    > {
+        use crate::analysis::ty::trait_resolution::constraint::{
+            collect_super_traits, super_trait_cycle,
+        };
         use common::indexmap::IndexSet;
+        use std::sync::OnceLock;
 
-        static EMPTY: OnceLock<IndexSet<crate::analysis::ty::binder::Binder<crate::analysis::ty::trait_def::TraitInstId>>> = OnceLock::new();
+        static EMPTY: OnceLock<
+            IndexSet<
+                crate::analysis::ty::binder::Binder<crate::analysis::ty::trait_def::TraitInstId>,
+            >,
+        > = OnceLock::new();
 
         if super_trait_cycle(db, self).is_some() {
             EMPTY.get_or_init(IndexSet::new)
@@ -1322,13 +1370,14 @@ impl<'db> ImplTrait<'db> {
         db: &'db dyn crate::analysis::HirAnalysisDb,
     ) -> crate::analysis::ty::ty_def::TyId<'db> {
         use crate::analysis::ty::trait_resolution::constraint::collect_constraints;
-        use crate::analysis::ty::ty_lower::lower_hir_ty;
         use crate::analysis::ty::ty_def::{InvalidCause, TyId};
+        use crate::analysis::ty::ty_lower::lower_hir_ty;
 
         let scope = self.scope();
         let assumptions = collect_constraints(db, self.into()).instantiate_identity();
 
-        self.raw_ty(db).to_opt()
+        self.raw_ty(db)
+            .to_opt()
             .map(|ty| lower_hir_ty(db, ty, scope, assumptions))
             .unwrap_or_else(|| TyId::invalid(db, InvalidCause::Other))
     }
@@ -1351,7 +1400,8 @@ impl<'db> ImplTrait<'db> {
         let scope = self.scope();
         let assumptions = collect_constraints(db, self.into()).instantiate_identity();
 
-        self.trait_ref(db).to_opt()
+        self.trait_ref(db)
+            .to_opt()
             .and_then(|tr| lower_trait_ref(db, self_ty, tr, scope, assumptions).ok())
     }
 
@@ -1385,7 +1435,8 @@ impl<'db> ImplTrait<'db> {
         let scope = self.scope();
         let assumptions = collect_constraints(db, self.into()).instantiate_identity();
 
-        let mut types: common::indexmap::IndexMap<_, _> = self.types(db)
+        let mut types: common::indexmap::IndexMap<_, _> = self
+            .types(db)
             .iter()
             .filter_map(|t| match (t.name.to_opt(), t.ty.to_opt()) {
                 (Some(name), Some(ty)) => Some((name, lower_hir_ty(db, ty, scope, assumptions))),
