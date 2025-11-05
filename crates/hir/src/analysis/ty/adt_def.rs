@@ -81,7 +81,8 @@ pub enum AdtRef<'db> {
 }
 
 impl<'db> AdtRef<'db> {
-    fn constraints(&self, db: &'db dyn HirAnalysisDb) -> PredicateListId {
+    #[allow(dead_code)]
+    fn constraints(&self, db: &'db dyn HirAnalysisDb) -> PredicateListId<'db> {
         collect_adt_constraints(db, *self).instantiate_identity()
     }
     pub fn try_from_item(item: ItemKind<'db>) -> Option<Self> {

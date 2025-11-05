@@ -8,14 +8,16 @@ use diagnostics::{DefConflictError, TraitLowerDiag, TyLowerDiag};
 use rustc_hash::{FxHashMap, FxHashSet};
 use smallvec1::SmallVec;
 // TraitDef and lower_trait have been eliminated
-use trait_resolution::constraint::{collect_constraints, super_trait_cycle};
+use trait_resolution::constraint::super_trait_cycle;
 use ty_def::{InvalidCause, TyData};
 use ty_lower::lower_type_alias;
 
-use self::def_analysis::{analyze_adt, analyze_func};
+use crate::{
+    analysis::ty::def_analysis::validate_generic_params_for_owner,
+    hir_def::GenericParamOwner,
+};
 use crate::analysis::{
     HirAnalysisDb, analysis_pass::ModuleAnalysisPass, diagnostics::DiagnosticVoucher,
-    ty::def_analysis::DefAnalyzer,
 };
 
 pub mod adt_def;
@@ -278,7 +280,6 @@ impl ModuleAnalysisPass for TypeAliasAnalysisPass {
                 continue;
             }
 
-            let assumptions = collect_constraints(db, alias.into()).instantiate_identity();
             let ta = lower_type_alias(db, alias);
             let ty = ta.alias_to.skip_binder();
             if let TyData::Invalid(InvalidCause::AliasCycle(cycle)) = ty.data(db) {
@@ -287,8 +288,13 @@ impl ModuleAnalysisPass for TypeAliasAnalysisPass {
                 }
                 cycle_participants.extend(cycle.iter());
             } else {
-                let analyzer = DefAnalyzer::for_type_alias(db, alias, assumptions);
-                diags.extend(analyzer.analyze().into_iter().map(|d| Box::new(d) as _));
+                // Generic param validations on owner
+                diags.extend(
+                    validate_generic_params_for_owner(db, GenericParamOwner::TypeAlias(alias))
+                        .into_iter()
+                        .map(|d| Box::new(d) as _),
+                );
+                diags.extend(alias.def_analyzer(db).analyze().into_iter().map(|d| Box::new(d) as _));
             }
         }
         diags

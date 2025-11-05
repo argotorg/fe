@@ -100,7 +100,8 @@ pub enum ScopeId<'db> {
     Block(Body<'db>, ExprId),
 }
 impl<'db> ScopeId<'db> {
-    pub(crate) fn constraints(&self, db: &'db dyn HirAnalysisDb) -> PredicateListId {
+    #[allow(dead_code)]
+    pub(crate) fn constraints(&self, db: &'db dyn HirAnalysisDb) -> PredicateListId<'db> {
         use crate::analysis::ty::trait_resolution::constraint::{
             collect_constraints, collect_func_def_constraints,
         };

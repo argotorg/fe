@@ -4,10 +4,9 @@
 
 use crate::{
     hir_def::{
-        EnumVariant, FieldDef, FieldParent, Func, GenericParam, GenericParamListId,
-        GenericParamOwner, IdentId, Impl as HirImpl, Impl, ImplTrait, ItemKind, PathId, Trait,
-        TraitRefId, TypeAlias, TypeBound, TypeId as HirTyId, VariantKind, scope_graph::ScopeId,
-        WhereClauseOwner,
+        EnumVariant, FieldParent, Func, GenericParam, GenericParamListId, GenericParamOwner,
+        IdentId, Impl as HirImpl, Impl, ImplTrait, ItemKind, PathId, Trait, TraitRefId, TypeAlias,
+        TypeBound, TypeId as HirTyId, VariantKind, WhereClauseOwner, scope_graph::ScopeId,
     },
     visitor::prelude::*,
 };
@@ -25,7 +24,7 @@ use super::{
     trait_lower::{TraitRefLowerError, collect_implementor_methods, lower_trait_ref},
     trait_resolution::{
         PredicateListId,
-        constraint::{collect_adt_constraints, collect_constraints, collect_func_def_constraints},
+        constraint::{collect_adt_constraints, collect_func_def_constraints},
     },
     ty_def::{InvalidCause, TyData, TyId, TyParam},
     ty_error::collect_ty_lower_errors,
@@ -49,6 +48,125 @@ use crate::analysis::{
 
 //
 
+fn assumptions_for_owner<'db>(
+    db: &'db dyn HirAnalysisDb,
+    owner: GenericParamOwner<'db>,
+) -> PredicateListId<'db> {
+    // Single source of truth: derive assumptions from the owner's scope
+    // using the centralized ScopeId::constraints helper.
+    owner.scope().constraints(db)
+}
+
+pub(crate) fn validate_generic_params_for_owner<'db>(
+    db: &'db dyn HirAnalysisDb,
+    owner: GenericParamOwner<'db>,
+) -> Vec<TyDiagCollection<'db>> {
+    use crate::span::params::{LazyGenericParamListSpan, LazyGenericParamSpan};
+
+    let mut diags = Vec::new();
+    let params = owner.params(db);
+    let scope = ItemKind::from(owner).scope();
+    let gp_span: LazyGenericParamListSpan<'db> = owner.params_span();
+    let assumptions = assumptions_for_owner(db, owner);
+
+    // Duplicate generic parameter names
+    diags.extend(check_duplicate_names(
+        params.data(db).iter().map(|p| p.name().to_opt()),
+        |idxs| TyLowerDiag::DuplicateGenericParamName(owner, idxs).into(),
+    ));
+
+    // Non-trailing default type parameters
+    let mut default_idxs: SmallVec<[usize; 4]> = SmallVec::new();
+    for (i, p) in params.data(db).iter().enumerate() {
+        let is_defaulted_type = matches!(p, GenericParam::Type(tp) if tp.default_ty.is_some());
+        if is_defaulted_type {
+            default_idxs.push(i);
+        } else if !default_idxs.is_empty() {
+            for &idx in &default_idxs {
+                let span = gp_span.clone().param(idx);
+                diags.push(TyLowerDiag::NonTrailingDefaultGenericParam(span).into());
+            }
+            break;
+        }
+    }
+
+    // Parent conflict + per-param checks
+    for (i, param) in params.data(db).iter().enumerate() {
+        let pspan: LazyGenericParamSpan<'db> = gp_span.clone().param(i);
+
+        if let Some(diag) = check_param_defined_in_parent(db, scope, param, pspan.clone()) {
+            diags.push(diag.into());
+            continue;
+        }
+
+        match param {
+            GenericParam::Type(tp) => {
+                if let Some(default_ty) = tp.default_ty {
+                    let lowered = lower_hir_ty(db, default_ty, scope, assumptions);
+
+                    // Collect referenced generic params belonging to the same owner.
+                    struct Collector<'db> {
+                        db: &'db dyn HirAnalysisDb,
+                        scope: ScopeId<'db>,
+                        out: Vec<usize>,
+                    }
+                    impl<'db> TyVisitor<'db> for Collector<'db> {
+                        fn db(&self) -> &'db dyn HirAnalysisDb {
+                            self.db
+                        }
+                        fn visit_param(&mut self, tp: &TyParam<'db>) {
+                            if !tp.is_trait_self() && tp.owner == self.scope {
+                                self.out.push(tp.original_idx(self.db));
+                            }
+                        }
+                        fn visit_const_param(&mut self, tp: &TyParam<'db>, _ty: TyId<'db>) {
+                            if tp.owner == self.scope {
+                                self.out.push(tp.original_idx(self.db));
+                            }
+                        }
+                    }
+
+                    let mut collector = Collector {
+                        db,
+                        scope,
+                        out: Vec::new(),
+                    };
+                    lowered.visit_with(&mut collector);
+
+                    // Forward reference check: cannot reference a param not yet declared.
+                    for j in collector.out.iter().filter(|j| **j >= i) {
+                        if let Some(name) = owner.param(db, *j).name().to_opt() {
+                            diags.push(
+                                TyLowerDiag::GenericDefaultForwardRef {
+                                    span: pspan.clone(),
+                                    name,
+                                }
+                                .into(),
+                            );
+                        }
+                    }
+                }
+            }
+            GenericParam::Const(_) => {
+                // Validate const param type via the original TyId
+                let param_set = collect_generic_params(db, owner);
+                let original = param_set.param_by_original_idx(db, i);
+                if let Some(ty) = original {
+                    if let Some(const_ty_param) = ty.const_ty_param(db) {
+                        if let Some(diag) =
+                            const_ty_param.emit_diag(db, pspan.into_const_param().ty().into())
+                        {
+                            diags.push(diag);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    diags
+}
+
 /// Shared helpers for ADT field/variant validations
 pub(crate) fn diag_term_or_const_ty<'db>(
     db: &'db dyn HirAnalysisDb,
@@ -62,7 +180,13 @@ pub(crate) fn diag_term_or_const_ty<'db>(
         return Some(TyLowerDiag::ExpectedStarKind(span.into()).into());
     }
     if ty.is_const_ty(db) {
-        return Some(TyLowerDiag::NormalTypeExpected { span: span.into(), given: ty }.into());
+        return Some(
+            TyLowerDiag::NormalTypeExpected {
+                span: span.into(),
+                given: ty,
+            }
+            .into(),
+        );
     }
     None
 }
@@ -76,13 +200,20 @@ pub(crate) fn diag_const_param_mismatch<'db>(
 ) -> Option<TyDiagCollection<'db>> {
     let Some(name) = field_name else { return None };
     let path = PathId::from_ident(db, name);
-    let Ok(PathRes::Ty(ty)) = resolve_path(db, path, scope, PredicateListId::empty_list(db), true) else { return None };
+    let Ok(PathRes::Ty(ty)) = resolve_path(db, path, scope, PredicateListId::empty_list(db), true)
+    else {
+        return None;
+    };
     if let TyData::ConstTy(const_ty) = ty.data(db) {
         let expected = const_ty.ty(db);
         if !expected.has_invalid(db) && !actual_ty.has_invalid(db) && actual_ty != expected {
             return Some(
-                TyLowerDiag::ConstTyMismatch { span: span.into(), expected, given: actual_ty }
-                    .into(),
+                TyLowerDiag::ConstTyMismatch {
+                    span: span.into(),
+                    expected,
+                    given: actual_ty,
+                }
+                .into(),
             );
         }
     }
@@ -108,13 +239,16 @@ pub(crate) fn analyze_where_clause_for_owner<'db>(
     for (i, pred) in where_clause.data(db).iter().enumerate() {
         let pred_span: LazyWherePredicateSpan<'db> = wc_span.clone().predicate(i);
 
-        let Some(hir_ty) = pred.type_ref.to_opt() else { continue; };
+        let Some(hir_ty) = pred.type_ref.to_opt() else {
+            continue;
+        };
         let ty = lower_hir_ty(db, hir_ty, scope, assumptions);
 
         // Surface type-lowering errors for the predicate type itself (e.g.,
         // unresolved names, wrong domain like trait/value where a type is expected).
         if ty.has_invalid(db) {
-            let errs = collect_ty_lower_errors(db, scope, hir_ty, pred_span.clone().ty(), assumptions);
+            let errs =
+                collect_ty_lower_errors(db, scope, hir_ty, pred_span.clone().ty(), assumptions);
             if !errs.is_empty() {
                 diags.extend(errs);
                 continue;
@@ -129,7 +263,9 @@ pub(crate) fn analyze_where_clause_for_owner<'db>(
 
         // Reject fully concrete non-param types (no generics) in where-clauses
         if !ty.has_invalid(db) && !ty.has_param(db) {
-            diags.push(TraitConstraintDiag::ConcreteTypeBound(pred_span.clone().ty().into(), ty).into());
+            diags.push(
+                TraitConstraintDiag::ConcreteTypeBound(pred_span.clone().ty().into(), ty).into(),
+            );
             continue;
         }
 
@@ -196,34 +332,6 @@ pub(crate) fn analyze_where_clause_for_owner<'db>(
     diags
 }
 
-/// This function implements analysis for the ADT definition.
-/// The analysis includes the following:
-/// - Check if the types in the ADT is well-formed.
-/// - Check if the trait instantiation appears in the ADT is well-formed.
-/// - Check if the field types are fully applied(i.e., these types should have
-///   `*` kind).
-/// - Check if the types in the ADT satisfies the constraints which is required
-///   in type application.
-/// - Check if the trait instantiations in the ADT satisfies the constraints.
-/// - Check if the recursive types has indirect type wrapper like pointer.
-#[salsa::tracked(return_ref)]
-pub fn analyze_adt<'db>(
-    db: &'db dyn HirAnalysisDb,
-    adt_ref: AdtRef<'db>,
-) -> Vec<TyDiagCollection<'db>> {
-    match adt_ref {
-        AdtRef::Struct(s) => s.analyze(db).clone(),
-        AdtRef::Enum(e) => e.analyze(db).clone(),
-        AdtRef::Contract(c) => {
-            let mut diags = Vec::new();
-            diags.extend(DefAnalyzer::for_adt(db, adt_ref).analyze());
-            diags.extend(c.validate_fields(db).iter().cloned());
-            diags.extend(check_duplicate_field_names(db, FieldParent::Contract(c)));
-            diags
-        }
-    }
-}
-
 fn check_duplicate_field_names<'db>(
     db: &'db dyn HirAnalysisDb,
     owner: FieldParent<'db>,
@@ -264,6 +372,10 @@ where
 
 #[salsa::tracked]
 impl<'db> Trait<'db> {
+    // Private helper to build an analyzer with correct assumptions for this item.
+    fn def_analyzer(self, db: &'db dyn HirAnalysisDb) -> DefAnalyzer<'db> {
+        DefAnalyzer::for_def(db, DefKind::Trait(self))
+    }
     /// This function implements analysis for the trait definition.
     /// The analysis includes the following:
     /// - Check if the types appear in the trait is well-formed.
@@ -273,7 +385,7 @@ impl<'db> Trait<'db> {
     /// - Check if the trait instantiations in the trait satisfies the constraints.
     #[salsa::tracked(return_ref)]
     pub fn analyze(self, db: &'db dyn HirAnalysisDb) -> Vec<TyDiagCollection<'db>> {
-        let analyzer = DefAnalyzer::for_trait(db, self);
+        let analyzer = self.def_analyzer(db);
         let mut diags = analyzer.analyze();
 
         // Check associated type defaults satisfy their bounds
@@ -325,6 +437,11 @@ impl<'db> Trait<'db> {
 
         // Analyze where-clause predicates owned by this trait
         diags.extend(self.analyze_where_clause(db).iter().cloned());
+        // Generic parameter validation
+        diags.extend(validate_generic_params_for_owner(
+            db,
+            GenericParamOwner::Trait(self),
+        ));
 
         diags
     }
@@ -337,6 +454,7 @@ impl<'db> Trait<'db> {
     }
 }
 
+// TODO: where does this documentation belong?  this functionality got factored out and moved into methods... find home(s) for it!
 /// This function implements analysis for the trait implementation definition.
 /// The analysis include the following:
 /// - Check if the types appear in the trait impl is well-formed.
@@ -348,31 +466,6 @@ impl<'db> Trait<'db> {
 /// - Check if the conflict doesn't occur.
 /// - Check if the trait or type is included in the ingot which contains the
 ///   impl trait.
-#[salsa::tracked(return_ref)]
-pub fn analyze_impl_trait<'db>(
-    db: &'db dyn HirAnalysisDb,
-    impl_trait: ImplTrait<'db>,
-) -> Vec<TyDiagCollection<'db>> {
-    impl_trait.analyze(db).clone()
-}
-
-#[salsa::tracked(return_ref)]
-pub fn analyze_impl<'db>(
-    db: &'db dyn HirAnalysisDb,
-    impl_: HirImpl<'db>,
-) -> Vec<TyDiagCollection<'db>> {
-    // Delegate to the item-level analyzer to keep a single source of truth.
-    impl_.analyze(db).clone()
-}
-
-#[salsa::tracked(return_ref)]
-pub fn analyze_func<'db>(
-    db: &'db dyn HirAnalysisDb,
-    func: Func<'db>,
-) -> Vec<TyDiagCollection<'db>> {
-    // Delegate to the item-level analyzer to keep a single source of truth.
-    func.analyze(db).clone()
-}
 
 pub struct DefAnalyzer<'db> {
     db: &'db dyn HirAnalysisDb,
@@ -383,47 +476,20 @@ pub struct DefAnalyzer<'db> {
 }
 
 impl<'db> DefAnalyzer<'db> {
-    fn for_adt(db: &'db dyn HirAnalysisDb, adt: AdtRef<'db>) -> Self {
-        let assumptions = collect_adt_constraints(db, adt).instantiate_identity();
-        Self { db, def: adt.into(), diags: vec![], assumptions, current_ty: None }
+    // Central constructor: derive assumptions from the def kind.
+    fn for_def(db: &'db dyn HirAnalysisDb, def: DefKind<'db>) -> Self {
+        let assumptions = match def {
+            DefKind::Adt(adt) => collect_adt_constraints(db, adt).instantiate_identity(),
+            _ => def.scope(db).constraints(db),
+        };
+        Self {
+            db,
+            def,
+            diags: vec![],
+            assumptions,
+            current_ty: None,
+        }
     }
-
-    fn for_trait(db: &'db dyn HirAnalysisDb, trait_: Trait<'db>) -> Self {
-        let assumptions = collect_constraints(db, trait_.into()).instantiate_identity();
-        Self { db, def: DefKind::Trait(trait_), diags: vec![], assumptions, current_ty: None }
-    }
-
-    fn for_impl(db: &'db dyn HirAnalysisDb, impl_: HirImpl<'db>) -> Self {
-        let assumptions = collect_constraints(db, impl_.into()).instantiate_identity();
-        let def = DefKind::Impl(impl_);
-        Self { db, def, diags: vec![], assumptions, current_ty: None }
-    }
-
-    fn for_trait_impl(
-        db: &'db dyn HirAnalysisDb,
-        impl_trait: crate::hir_def::ImplTrait<'db>,
-    ) -> Self {
-        let assumptions = impl_trait.constraints(db);
-        Self { db, def: impl_trait.into(), diags: vec![], assumptions, current_ty: None }
-    }
-
-    fn for_func(
-        db: &'db dyn HirAnalysisDb,
-        func: CallableDef<'db>,
-        assumptions: PredicateListId<'db>,
-    ) -> Self {
-        Self { db, def: func.into(), diags: vec![], assumptions, current_ty: None }
-    }
-
-    pub(crate) fn for_type_alias(
-        db: &'db dyn HirAnalysisDb,
-        type_alias: crate::hir_def::TypeAlias<'db>,
-        assumptions: PredicateListId<'db>,
-    ) -> Self {
-        Self { db, def: DefKind::TypeAlias(type_alias), diags: vec![], assumptions, current_ty: None }
-    }
-
-    // Signature/type checks are handled by item methods; legacy helpers removed.
 
     fn scope(&self) -> ScopeId<'db> {
         self.def.scope(self.db)
@@ -550,52 +616,16 @@ impl<'db> Visitor<'db> for DefAnalyzer<'db> {
         // item methods (analyze_where_clause). Skip visitor-based emission to
         // avoid duplicate diagnostics.
         match self.def {
-            DefKind::Trait(_) | DefKind::ImplTrait(_) | DefKind::Func(_) | DefKind::Impl(_) => return,
-            DefKind::Adt(adt) => match adt {
-                AdtRef::Struct(_) | AdtRef::Enum(_) => return,
-                AdtRef::Contract(_) => {}
-            },
+            DefKind::Trait(_)
+            | DefKind::ImplTrait(_)
+            | DefKind::Func(_)
+            | DefKind::Impl(_)
+            | DefKind::Adt(AdtRef::Struct(_))
+            | DefKind::Adt(AdtRef::Enum(_))
+            | DefKind::Adt(AdtRef::Contract(_)) => return,
             _ => {}
         }
-        let Some(hir_ty) = pred.type_ref.to_opt() else {
-            return;
-        };
-
-        let ty = lower_hir_ty(self.db, hir_ty, self.scope(), self.assumptions);
-
-        if ty.is_const_ty(self.db) {
-            let diag =
-                TraitConstraintDiag::ConstTyBound(ctxt.span().unwrap().ty().into(), ty).into();
-            self.diags.push(diag);
-            return;
-        }
-
-        if !ty.has_invalid(self.db) && !ty.has_param(self.db) {
-            let diag =
-                TraitConstraintDiag::ConcreteTypeBound(ctxt.span().unwrap().ty().into(), ty).into();
-            self.diags.push(diag);
-            return;
-        }
-
-        self.current_ty = Some((ty, ctxt.span().unwrap().ty().into()));
         walk_where_predicate(self, ctxt, pred);
-    }
-
-    fn visit_field_def(
-        &mut self,
-        ctxt: &mut VisitorCtxt<'db, LazyFieldDefSpan<'db>>,
-        field: &FieldDef<'db>,
-    ) {
-        walk_field_def(self, ctxt, field);
-    }
-
-    fn visit_variant_def(
-        &mut self,
-        ctxt: &mut VisitorCtxt<'db, LazyVariantDefSpan<'db>>,
-        variant: &crate::hir_def::VariantDef<'db>,
-    ) {
-        // Tuple element kind/const checks moved to Enum::validate_variants
-        walk_variant_def(self, ctxt, variant);
     }
 
     fn visit_generic_param_list(
@@ -603,25 +633,30 @@ impl<'db> Visitor<'db> for DefAnalyzer<'db> {
         ctxt: &mut VisitorCtxt<'db, LazyGenericParamListSpan<'db>>,
         params: GenericParamListId<'db>,
     ) {
+        // For function owners (including nested functions), keep visitor-based
+        // validations (duplicates, non-trailing defaults). For other owners,
+        // item methods own these diagnostics; only walk to visit nested nodes.
         let owner = GenericParamOwner::from_item_opt(self.scope().item()).unwrap();
+        if matches!(owner, GenericParamOwner::Func(_)) {
+            self.diags.extend(check_duplicate_names(
+                params.data(self.db).iter().map(|p| p.name().to_opt()),
+                |idxs| TyLowerDiag::DuplicateGenericParamName(owner, idxs).into(),
+            ));
 
-        self.diags.extend(check_duplicate_names(
-            params.data(self.db).iter().map(|p| p.name().to_opt()),
-            |idxs| TyLowerDiag::DuplicateGenericParamName(owner, idxs).into(),
-        ));
-
-        let mut default_idxs: SmallVec<[usize; 4]> = SmallVec::new();
-        for (i, p) in params.data(self.db).iter().enumerate() {
-            let is_defaulted_type = matches!(p, GenericParam::Type(tp) if tp.default_ty.is_some());
-            if is_defaulted_type {
-                default_idxs.push(i);
-            } else if !default_idxs.is_empty() {
-                for &idx in &default_idxs {
-                    let span = ctxt.span().unwrap().clone().param(idx);
-                    self.diags
-                        .push(TyLowerDiag::NonTrailingDefaultGenericParam(span).into());
+            let mut default_idxs: SmallVec<[usize; 4]> = SmallVec::new();
+            for (i, p) in params.data(self.db).iter().enumerate() {
+                let is_defaulted_type =
+                    matches!(p, GenericParam::Type(tp) if tp.default_ty.is_some());
+                if is_defaulted_type {
+                    default_idxs.push(i);
+                } else if !default_idxs.is_empty() {
+                    for &idx in &default_idxs {
+                        let span = ctxt.span().unwrap().clone().param(idx);
+                        self.diags
+                            .push(TyLowerDiag::NonTrailingDefaultGenericParam(span).into());
+                    }
+                    break;
                 }
-                break;
             }
         }
         walk_generic_param_list(self, ctxt, params);
@@ -636,55 +671,63 @@ impl<'db> Visitor<'db> for DefAnalyzer<'db> {
             unreachable!()
         };
 
-        if let Some(diag) =
-            check_param_defined_in_parent(self.db, self.scope(), param, ctxt.span().unwrap())
-        {
-            self.diags.push(diag.into());
-            return;
-        }
+        // Owner-level param validations (parent conflict, defaults/forward-refs, const param type)
+        // are handled in item methods to avoid duplicates. Keep walking to visit kind bounds.
+        let skip_param_validations = matches!(
+            self.def,
+            DefKind::Adt(_)
+                | DefKind::Trait(_)
+                | DefKind::ImplTrait(_)
+                | DefKind::Impl(_)
+                | DefKind::TypeAlias(_)
+        );
 
         match param {
             GenericParam::Type(tp) => {
-                if let Some(default_ty) = tp.default_ty {
-                    let lowered = lower_hir_ty(self.db, default_ty, self.scope(), self.assumptions);
+                if !skip_param_validations {
+                    if let Some(default_ty) = tp.default_ty {
+                        let lowered =
+                            lower_hir_ty(self.db, default_ty, self.scope(), self.assumptions);
 
-                    // Collect referenced generic params belonging to the same owner.
-                    struct Collector<'db> {
-                        db: &'db dyn HirAnalysisDb,
-                        scope: ScopeId<'db>,
-                        out: Vec<usize>,
-                    }
-                    impl<'db> TyVisitor<'db> for Collector<'db> {
-                        fn db(&self) -> &'db dyn HirAnalysisDb {
-                            self.db
+                        // Collect referenced generic params belonging to the same owner.
+                        struct Collector<'db> {
+                            db: &'db dyn HirAnalysisDb,
+                            scope: ScopeId<'db>,
+                            out: Vec<usize>,
                         }
-                        fn visit_param(&mut self, tp: &TyParam<'db>) {
-                            if !tp.is_trait_self() && tp.owner == self.scope {
-                                self.out.push(tp.original_idx(self.db));
+                        impl<'db> TyVisitor<'db> for Collector<'db> {
+                            fn db(&self) -> &'db dyn HirAnalysisDb {
+                                self.db
+                            }
+                            fn visit_param(&mut self, tp: &TyParam<'db>) {
+                                if !tp.is_trait_self() && tp.owner == self.scope {
+                                    self.out.push(tp.original_idx(self.db));
+                                }
+                            }
+                            fn visit_const_param(&mut self, tp: &TyParam<'db>, _ty: TyId<'db>) {
+                                if tp.owner == self.scope {
+                                    self.out.push(tp.original_idx(self.db));
+                                }
                             }
                         }
-                        fn visit_const_param(&mut self, tp: &TyParam<'db>, _ty: TyId<'db>) {
-                            if tp.owner == self.scope {
-                                self.out.push(tp.original_idx(self.db));
+
+                        let mut collector = Collector {
+                            db: self.db,
+                            scope: self.scope(),
+                            out: Vec::new(),
+                        };
+                        lowered.visit_with(&mut collector);
+
+                        let owner = GenericParamOwner::from_item_opt(self.scope().item()).unwrap();
+
+                        // Forward reference check: cannot reference a param not yet declared.
+                        for j in collector.out.iter().filter(|j| **j >= idx as usize) {
+                            if let Some(name) = owner.param(self.db, *j).name().to_opt() {
+                                let span = ctxt.span().unwrap();
+                                self.diags.push(
+                                    TyLowerDiag::GenericDefaultForwardRef { span, name }.into(),
+                                );
                             }
-                        }
-                    }
-
-                    let mut collector = Collector {
-                        db: self.db,
-                        scope: self.scope(),
-                        out: Vec::new(),
-                    };
-                    lowered.visit_with(&mut collector);
-
-                    let owner = GenericParamOwner::from_item_opt(self.scope().item()).unwrap();
-
-                    // Forward reference check: cannot reference a param not yet declared.
-                    for j in collector.out.iter().filter(|j| **j >= idx as usize) {
-                        if let Some(name) = owner.param(self.db, *j).name().to_opt() {
-                            let span = ctxt.span().unwrap();
-                            self.diags
-                                .push(TyLowerDiag::GenericDefaultForwardRef { span, name }.into());
                         }
                     }
                 }
@@ -695,15 +738,17 @@ impl<'db> Visitor<'db> for DefAnalyzer<'db> {
                 ));
             }
             GenericParam::Const(_) => {
-                let ty = self.def.original_params(self.db)[idx as usize];
-                let Some(const_ty_param) = ty.const_ty_param(self.db) else {
-                    return;
-                };
+                if !skip_param_validations {
+                    let ty = self.def.original_params(self.db)[idx as usize];
+                    let Some(const_ty_param) = ty.const_ty_param(self.db) else {
+                        return;
+                    };
 
-                if let Some(diag) = const_ty_param
-                    .emit_diag(self.db, ctxt.span().unwrap().into_const_param().ty().into())
-                {
-                    self.diags.push(diag)
+                    if let Some(diag) = const_ty_param
+                        .emit_diag(self.db, ctxt.span().unwrap().into_const_param().ty().into())
+                    {
+                        self.diags.push(diag)
+                    }
                 }
             }
         }
@@ -799,16 +844,6 @@ impl<'db> Visitor<'db> for DefAnalyzer<'db> {
         walk_super_trait_list(self, ctxt, super_traits);
     }
 
-    fn visit_impl(&mut self, ctxt: &mut VisitorCtxt<'db, LazyImplSpan<'db>>, impl_: HirImpl<'db>) {
-        // Preconditions moved to Impl::analyze_preconditions; just walk to nested items
-        walk_impl(self, ctxt, impl_);
-    }
-
-    fn visit_impl_trait(&mut self, ctxt: &mut VisitorCtxt<'db, LazyImplTraitSpan<'db>>, impl_trait: ImplTrait<'db>) {
-        // Associated type WF checks moved to ImplTrait::analyze_associated_types
-        walk_impl_trait(self, ctxt, impl_trait);
-    }
-
     fn visit_func(
         &mut self,
         ctxt: &mut VisitorCtxt<'db, LazyFuncSpan<'db>>,
@@ -836,10 +871,8 @@ impl<'db> Visitor<'db> for DefAnalyzer<'db> {
         }
 
         let def = std::mem::replace(&mut self.def, func.into());
-        let constraints = std::mem::replace(
-            &mut self.assumptions,
-            collect_func_def_constraints(self.db, hir_func.into(), true).instantiate_identity(),
-        );
+        let constraints =
+            std::mem::replace(&mut self.assumptions, hir_func.scope().constraints(self.db));
 
         walk_func(self, ctxt, hir_func);
 
@@ -852,16 +885,6 @@ impl<'db> Visitor<'db> for DefAnalyzer<'db> {
         _ctxt: &mut VisitorCtxt<'_, LazyBodySpan>,
         _body: crate::hir_def::Body,
     ) {
-    }
-
-    fn visit_func_param(
-        &mut self,
-        ctxt: &mut VisitorCtxt<'db, LazyFuncParamSpan<'db>>,
-        param: &crate::hir_def::FuncParam<'db>,
-    ) {
-        // Signature checks moved to Func::analyze_signature. Continue walking to
-        // preserve nested type WF diagnostics.
-        walk_func_param(self, ctxt, param);
     }
 }
 
@@ -1025,7 +1048,7 @@ impl<'db> ImplTrait<'db> {
         // 6) WF + super trait constraints satisfiability
         let trait_def = trait_inst.def(db);
         let trait_constraints =
-            collect_constraints(db, trait_def.into()).instantiate(db, trait_inst.args(db));
+            Binder::bind(trait_def.scope().constraints(db)).instantiate(db, trait_inst.args(db));
         let assumptions = current_impl.skip_binder().constraints(db);
         let is_satisfied = |goal: TraitInstId<'db>, span: DynLazySpan<'db>, diags: &mut Vec<_>| {
             let canonical_goal = Canonicalized::new(db, goal);
@@ -1058,7 +1081,9 @@ impl<'db> ImplTrait<'db> {
         // 7) Associated types presence + bounds
         let impl_types = self.assoc_types(db);
         for assoc_type in trait_def.types(db) {
-            let Some(name) = assoc_type.name.to_opt() else { continue; };
+            let Some(name) = assoc_type.name.to_opt() else {
+                continue;
+            };
             let impl_ty = impl_types.get(&name);
             if impl_ty.is_none() && assoc_type.default.is_none() {
                 diags.push(
@@ -1070,7 +1095,9 @@ impl<'db> ImplTrait<'db> {
                     .into(),
                 );
             }
-            let Some(&impl_ty) = impl_ty else { continue; };
+            let Some(&impl_ty) = impl_ty else {
+                continue;
+            };
 
             for bound in &assoc_type.bounds {
                 if let TypeBound::Trait(trait_ref) = bound {
@@ -1103,7 +1130,11 @@ impl<'db> ImplTrait<'db> {
             }
         }
 
-        if diags.is_empty() { Ok(current_impl) } else { Err(diags) }
+        if diags.is_empty() {
+            Ok(current_impl)
+        } else {
+            Err(diags)
+        }
     }
     /// Analyze the `where`-clause of this `impl trait`, producing diagnostics
     /// for invalid predicate types and trait bounds.
@@ -1121,7 +1152,9 @@ impl<'db> ImplTrait<'db> {
         let mut diags = vec![];
 
         // If the trait ref is invalid, skip method comparison
-        let Some(hir_trait) = self.trait_def(db) else { return diags; };
+        let Some(hir_trait) = self.trait_def(db) else {
+            return diags;
+        };
 
         let impl_methods = collect_implementor_methods(db, self);
         let trait_methods = hir_trait.methods(db);
@@ -1145,7 +1178,9 @@ impl<'db> ImplTrait<'db> {
                 continue;
             };
 
-            let Some(trait_inst) = self.trait_inst(db).ok() else { continue; };
+            let Some(trait_inst) = self.trait_inst(db).ok() else {
+                continue;
+            };
             compare_impl_method(db, *impl_m, *trait_m, trait_inst, &mut diags);
             required_methods.remove(name);
         }
@@ -1166,7 +1201,10 @@ impl<'db> ImplTrait<'db> {
     /// Analyze associated types defined in this impl-trait: emit lowering errors
     /// and WF diagnostics for each associated type value.
     #[salsa::tracked(return_ref)]
-    pub fn analyze_associated_types(self, db: &'db dyn HirAnalysisDb) -> Vec<TyDiagCollection<'db>> {
+    pub fn analyze_associated_types(
+        self,
+        db: &'db dyn HirAnalysisDb,
+    ) -> Vec<TyDiagCollection<'db>> {
         let mut diags = vec![];
         let assumptions = self.constraints(db);
         for assoc_type in self.types(db) {
@@ -1181,13 +1219,19 @@ impl<'db> ImplTrait<'db> {
                 let lowered_ty = lower_hir_ty(db, ty, self.scope(), assumptions);
 
                 if lowered_ty.has_invalid(db) {
-                    let errs = collect_ty_lower_errors(db, self.scope(), ty, ty_span.clone(), assumptions);
+                    let errs =
+                        collect_ty_lower_errors(db, self.scope(), ty, ty_span.clone(), assumptions);
                     if !errs.is_empty() {
                         diags.extend(errs);
                     }
                 }
 
-                if let Some(diag) = lowered_ty.emit_wf_diag(db, self.top_mod(db).ingot(db), assumptions, ty_span.into()) {
+                if let Some(diag) = lowered_ty.emit_wf_diag(
+                    db,
+                    self.top_mod(db).ingot(db),
+                    assumptions,
+                    ty_span.into(),
+                ) {
                     diags.push(diag);
                 }
             }
@@ -1212,31 +1256,44 @@ impl<'db> ImplTrait<'db> {
             .cloned()
             .collect::<Vec<_>>();
 
-        let analyzer = DefAnalyzer::for_trait_impl(db, implementor.instantiate_identity());
+        let analyzer =
+            DefAnalyzer::for_def(db, DefKind::ImplTrait(implementor.instantiate_identity()));
         diags.extend(analyzer.analyze());
 
         diags.extend(self.analyze_where_clause(db).iter().cloned());
         diags.extend(self.analyze_associated_types(db).iter().cloned());
+        diags.extend(validate_generic_params_for_owner(
+            db,
+            GenericParamOwner::ImplTrait(self),
+        ));
         diags
     }
 }
 
 #[salsa::tracked]
 impl<'db> Impl<'db> {
+    // Private helper to build an analyzer with correct assumptions for this item.
+    fn def_analyzer(self, db: &'db dyn HirAnalysisDb) -> DefAnalyzer<'db> {
+        DefAnalyzer::for_def(db, DefKind::Impl(self))
+    }
     /// Analyze the impl's where-clause predicates using the impl's scope
     /// and constraints.
     #[salsa::tracked(return_ref)]
     pub fn analyze_where_clause(self, db: &'db dyn HirAnalysisDb) -> Vec<TyDiagCollection<'db>> {
-        let assumptions = collect_constraints(db, self.into()).instantiate_identity();
+        let assumptions = self.scope().constraints(db);
         analyze_where_clause_for_owner(db, WhereClauseOwner::Impl(self), assumptions)
     }
 
     /// Full analysis entry for an inherent impl item.
     #[salsa::tracked(return_ref)]
     pub fn analyze(self, db: &'db dyn HirAnalysisDb) -> Vec<TyDiagCollection<'db>> {
-        let analyzer = DefAnalyzer::for_impl(db, self);
+        let analyzer = self.def_analyzer(db);
         let mut diags = analyzer.analyze();
         diags.extend(self.analyze_preconditions(db).iter().cloned());
+        diags.extend(validate_generic_params_for_owner(
+            db,
+            GenericParamOwner::Impl(self),
+        ));
         diags.extend(self.analyze_where_clause(db).iter().cloned());
         diags
     }
@@ -1244,37 +1301,51 @@ impl<'db> Impl<'db> {
 
 #[salsa::tracked]
 impl<'db> crate::hir_def::Struct<'db> {
+    fn def_analyzer(self, db: &'db dyn HirAnalysisDb) -> DefAnalyzer<'db> {
+        DefAnalyzer::for_def(db, AdtRef::Struct(self).into())
+    }
     /// Full analysis entry for a struct definition.
     #[salsa::tracked(return_ref)]
     pub fn analyze(self, db: &'db dyn HirAnalysisDb) -> Vec<TyDiagCollection<'db>> {
         let mut diags = Vec::new();
         // Visitor-based checks
-        diags.extend(DefAnalyzer::for_adt(db, AdtRef::Struct(self)).analyze());
+        diags.extend(self.def_analyzer(db).analyze());
         // Item-owned checks
         diags.extend(self.validate_fields(db).iter().cloned());
         diags.extend(self.analyze_where_clause(db).iter().cloned());
+        diags.extend(validate_generic_params_for_owner(
+            db,
+            GenericParamOwner::Struct(self),
+        ));
         // Duplicate field names
         diags.extend(check_duplicate_field_names(db, FieldParent::Struct(self)));
         diags
     }
     #[salsa::tracked(return_ref)]
     pub fn analyze_where_clause(self, db: &'db dyn HirAnalysisDb) -> Vec<TyDiagCollection<'db>> {
-        let assumptions = collect_constraints(db, self.into()).instantiate_identity();
+        let assumptions = self.scope().constraints(db);
         analyze_where_clause_for_owner(db, WhereClauseOwner::Struct(self), assumptions)
     }
 }
 
 #[salsa::tracked]
 impl<'db> crate::hir_def::Enum<'db> {
+    fn def_analyzer(self, db: &'db dyn HirAnalysisDb) -> DefAnalyzer<'db> {
+        DefAnalyzer::for_def(db, AdtRef::Enum(self).into())
+    }
     /// Full analysis entry for an enum definition.
     #[salsa::tracked(return_ref)]
     pub fn analyze(self, db: &'db dyn HirAnalysisDb) -> Vec<TyDiagCollection<'db>> {
         let mut diags = Vec::new();
         // Visitor-based checks
-        diags.extend(DefAnalyzer::for_adt(db, AdtRef::Enum(self)).analyze());
+        diags.extend(self.def_analyzer(db).analyze());
         // Item-owned checks
         diags.extend(self.validate_variants(db).iter().cloned());
         diags.extend(self.analyze_where_clause(db).iter().cloned());
+        diags.extend(validate_generic_params_for_owner(
+            db,
+            GenericParamOwner::Enum(self),
+        ));
         // Duplicate variant names
         diags.extend(check_duplicate_variant_names(db, self));
         // Duplicate field names for record variants
@@ -1290,21 +1361,39 @@ impl<'db> crate::hir_def::Enum<'db> {
     }
     #[salsa::tracked(return_ref)]
     pub fn analyze_where_clause(self, db: &'db dyn HirAnalysisDb) -> Vec<TyDiagCollection<'db>> {
-        let assumptions = collect_constraints(db, self.into()).instantiate_identity();
+        let assumptions = self.scope().constraints(db);
         analyze_where_clause_for_owner(db, WhereClauseOwner::Enum(self), assumptions)
     }
 }
 
 #[salsa::tracked]
 impl<'db> crate::hir_def::Contract<'db> {
+    fn def_analyzer(self, db: &'db dyn HirAnalysisDb) -> DefAnalyzer<'db> {
+        DefAnalyzer::for_def(db, AdtRef::Contract(self).into())
+    }
     /// Full analysis entry for a contract definition.
     #[salsa::tracked(return_ref)]
     pub fn analyze(self, db: &'db dyn HirAnalysisDb) -> Vec<TyDiagCollection<'db>> {
         let mut diags = Vec::new();
-        diags.extend(DefAnalyzer::for_adt(db, AdtRef::Contract(self)).analyze());
+        diags.extend(self.def_analyzer(db).analyze());
         diags.extend(self.validate_fields(db).iter().cloned());
+        diags.extend(self.analyze_where_clause(db).iter().cloned());
+        // Contracts have no generic params (yet)
         diags.extend(check_duplicate_field_names(db, FieldParent::Contract(self)));
         diags
+    }
+
+    #[salsa::tracked(return_ref)]
+    pub fn analyze_where_clause(self, _db: &'db dyn HirAnalysisDb) -> Vec<TyDiagCollection<'db>> {
+        Vec::new()
+    }
+}
+
+#[salsa::tracked]
+impl<'db> crate::hir_def::TypeAlias<'db> {
+    // Crate-visible helper to build an analyzer with correct assumptions for this item.
+    pub(crate) fn def_analyzer(self, db: &'db dyn HirAnalysisDb) -> DefAnalyzer<'db> {
+        DefAnalyzer::for_def(db, DefKind::TypeAlias(self))
     }
 }
 
@@ -1395,7 +1484,7 @@ impl<'db> DefKind<'db> {
         }
     }
 
-    fn scope(self, db: &'db dyn HirAnalysisDb) -> ScopeId<'db> {
+    fn scope(self, _db: &'db dyn HirAnalysisDb) -> ScopeId<'db> {
         match self {
             Self::Adt(def) => def.scope(),
             Self::Trait(def) => def.scope(),
@@ -1415,8 +1504,6 @@ impl<'db> DefKind<'db> {
 /// 4. If conflict occurs.
 /// 5. If implementor type satisfies the required kind bound.
 /// 6. If implementor type satisfies the required trait bound.
-// (removed analyze_impl_trait_specific_error)
-
 fn analyze_conflict_impl<'db>(
     db: &'db dyn HirAnalysisDb,
     impl_trait: Binder<ImplTrait<'db>>,
@@ -1453,12 +1540,11 @@ fn analyze_conflict_impl<'db>(
     }
 }
 
-// Note: impl-trait method conformance is implemented by
-// ImplTrait::analyze_methods(db); the prior helper has been removed.
-
-// (removed find_const_ty_param)
 #[salsa::tracked]
 impl<'db> Func<'db> {
+    fn def_analyzer(self, db: &'db dyn HirAnalysisDb) -> DefAnalyzer<'db> {
+        DefAnalyzer::for_def(db, DefKind::Func(CallableDef::Func(self)))
+    }
     /// Full analysis entry for a function item. Consolidates the prior
     /// free-function `analyze_func` pattern into an item method while
     /// still using the DefAnalyzer visitor for raw traversal where needed.
@@ -1468,10 +1554,7 @@ impl<'db> Func<'db> {
             return Vec::new();
         };
 
-        let func_def = CallableDef::Func(self);
-        let assumptions =
-            collect_func_def_constraints(db, self.into(), true).instantiate_identity();
-        let analyzer = DefAnalyzer::for_func(db, func_def, assumptions);
+        let analyzer = self.def_analyzer(db);
         let mut diags = analyzer.analyze();
 
         // Item-owned checks
@@ -1484,7 +1567,7 @@ impl<'db> Func<'db> {
     #[salsa::tracked(return_ref)]
     pub fn analyze_where_clause(self, db: &'db dyn HirAnalysisDb) -> Vec<TyDiagCollection<'db>> {
         // Functions include parent constraints (trait/impl) for signature checks
-        let assumptions = collect_func_def_constraints(db, self.into(), true).instantiate_identity();
+        let assumptions = self.scope().constraints(db);
         analyze_where_clause_for_owner(db, WhereClauseOwner::Func(self), assumptions)
     }
 
@@ -1554,12 +1637,15 @@ impl<'db> Func<'db> {
             // Per-parameter type checks
             let param_list_span: LazyFuncParamListSpan<'db> = self.span().params();
             for (i, param) in list.iter().enumerate() {
-                let Some(hir_ty) = param.ty.to_opt() else { continue; };
+                let Some(hir_ty) = param.ty.to_opt() else {
+                    continue;
+                };
 
                 let pspan = param_list_span.clone().param(i);
                 let name_span_node = pspan.clone().name();
                 let ty_span_node = pspan.clone().ty();
-                let ty_span: DynLazySpan<'db> = if param.is_self_param(db) && param.self_ty_fallback {
+                let ty_span: DynLazySpan<'db> = if param.is_self_param(db) && param.self_ty_fallback
+                {
                     name_span_node.into()
                 } else {
                     ty_span_node.clone().into()
@@ -1571,7 +1657,13 @@ impl<'db> Func<'db> {
                     continue;
                 }
                 if ty.is_const_ty(db) {
-                    diags.push(TyLowerDiag::NormalTypeExpected { span: ty_span.clone(), given: ty }.into());
+                    diags.push(
+                        TyLowerDiag::NormalTypeExpected {
+                            span: ty_span.clone(),
+                            given: ty,
+                        }
+                        .into(),
+                    );
                     continue;
                 }
 
@@ -1610,7 +1702,13 @@ impl<'db> Func<'db> {
             if !ty.has_star_kind(db) {
                 diags.push(TyLowerDiag::ExpectedStarKind(rspan.into()).into());
             } else if ty.is_const_ty(db) {
-                diags.push(TyLowerDiag::NormalTypeExpected { span: rspan.into(), given: ty }.into());
+                diags.push(
+                    TyLowerDiag::NormalTypeExpected {
+                        span: rspan.into(),
+                        given: ty,
+                    }
+                    .into(),
+                );
             }
         }
 

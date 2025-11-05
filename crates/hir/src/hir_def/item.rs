@@ -22,10 +22,7 @@ use crate::{
             adt_def::AdtRef,
             trait_def::TraitMethod,
             trait_lower::{TraitRefLowerError, lower_trait_ref},
-            trait_resolution::{
-                PredicateListId,
-                constraint::{collect_constraints, collect_func_def_constraints},
-            },
+            trait_resolution::PredicateListId,
             ty_def::{InvalidCause, TyId},
             ty_lower::lower_hir_ty,
         },
@@ -75,29 +72,6 @@ pub enum ItemKind<'db> {
 }
 
 impl<'db> ItemKind<'db> {
-    fn constraints(&self, db: &'db dyn HirAnalysisDb) -> PredicateListId<'db> {
-        use crate::analysis::ty::func_def::CallableDef;
-        use crate::analysis::ty::trait_resolution::constraint::{
-            collect_constraints, collect_func_def_constraints,
-        };
-
-        match self {
-            Self::Func(func) => collect_func_def_constraints(db, CallableDef::Func(*func), true)
-                .instantiate_identity(),
-            Self::Struct(struct_) => collect_constraints(db, (*struct_).into()).instantiate_identity(),
-            // Contracts have no generics and no where-clause constraints
-            Self::Contract(_contract) => PredicateListId::empty_list(db),
-            Self::Enum(enum_) => collect_constraints(db, (*enum_).into()).instantiate_identity(),
-            Self::TypeAlias(alias) => collect_constraints(db, (*alias).into()).instantiate_identity(),
-            Self::Impl(impl_) => collect_constraints(db, (*impl_).into()).instantiate_identity(),
-            Self::Trait(trait_) => collect_constraints(db, (*trait_).into()).instantiate_identity(),
-            Self::ImplTrait(impl_trait) => collect_constraints(db, (*impl_trait).into()).instantiate_identity(),
-            // No constraints for these kinds
-            Self::Const(_) | Self::Use(_) | Self::Body(_) | Self::TopMod(_) | Self::Mod(_) => {
-                PredicateListId::empty_list(db)
-            }
-        }
-    }
 
     pub fn span(self) -> LazyItemSpan<'db> {
         LazyItemSpan::new(self)
@@ -723,15 +697,9 @@ impl<'db> Func<'db> {
         self,
         db: &'db dyn crate::analysis::HirAnalysisDb,
     ) -> Vec<crate::analysis::ty::binder::Binder<crate::analysis::ty::ty_def::TyId<'db>>> {
-        use crate::analysis::ty::{
-            binder::Binder,
-            trait_resolution::constraint::collect_func_def_constraints,
-            ty_def::{InvalidCause, TyId},
-            ty_lower::lower_hir_ty,
-        };
+        use crate::analysis::ty::{binder::Binder, ty_def::{InvalidCause, TyId}, ty_lower::lower_hir_ty};
 
-        let assumptions =
-            collect_func_def_constraints(db, self.into(), true).instantiate_identity();
+        let assumptions = self.scope().constraints(db);
 
         match self.params(db) {
             Partial::Present(params) => params
@@ -752,8 +720,7 @@ impl<'db> Func<'db> {
 
     #[salsa::tracked]
     pub fn return_ty(self, db: &'db dyn crate::analysis::HirAnalysisDb) -> TyId<'db> {
-        let assumptions =
-            collect_func_def_constraints(db, self.into(), true).instantiate_identity();
+        let assumptions = self.scope().constraints(db);
         let ty = self
             .ret_ty(db) // Access the field
             .map(|ty| lower_hir_ty(db, ty, self.scope(), assumptions))
@@ -857,15 +824,12 @@ impl<'db> Struct<'db> {
         self,
         db: &'db dyn crate::analysis::HirAnalysisDb,
     ) -> Vec<crate::analysis::ty::diagnostics::TyDiagCollection<'db>> {
-        use crate::analysis::ty::{
-            diagnostics::TyDiagCollection,
-            trait_resolution::constraint::collect_constraints,
-        };
+        use crate::analysis::ty::diagnostics::TyDiagCollection;
         use crate::analysis::ty::def_analysis::{diag_const_param_mismatch, diag_term_or_const_ty};
 
         let mut diags: Vec<TyDiagCollection> = Vec::new();
         let scope = self.scope();
-        let assumptions = collect_constraints(db, self.into()).instantiate_identity();
+        let assumptions = self.scope().constraints(db);
 
         for (i, field) in self.fields(db).data(db).iter().enumerate() {
             let Some(hir_ty) = field.ty.to_opt() else { continue };
@@ -999,8 +963,10 @@ impl<'db> Enum<'db> {
         ScopeId::from_item(self.into())
     }
 
-    pub(crate) fn constraints(self, db: &'db dyn HirAnalysisDb) -> PredicateListId {
-        collect_constraints(db, self.into()).instantiate_identity()
+    #[allow(dead_code)]
+    pub(crate) fn constraints(self, db: &'db dyn HirAnalysisDb) -> PredicateListId<'db> {
+        // Delegate to the centralized scope-based helper to keep one source of truth.
+        self.scope().constraints(db)
     }
 
     /// Returns the argument types for a variant constructor.
@@ -1064,18 +1030,14 @@ impl<'db> Enum<'db> {
         self,
         db: &'db dyn crate::analysis::HirAnalysisDb,
     ) -> Vec<crate::analysis::ty::diagnostics::TyDiagCollection<'db>> {
-        use crate::analysis::ty::{
-            diagnostics::TyDiagCollection,
-            ty_lower::lower_hir_ty,
-            trait_resolution::constraint::collect_constraints,
-        };
+        use crate::analysis::ty::diagnostics::TyDiagCollection;
         use crate::analysis::ty::def_analysis::{diag_const_param_mismatch, diag_term_or_const_ty};
         use crate::hir_def::VariantKind;
         use crate::span::types::LazyTySpan;
 
         let mut diags: Vec<TyDiagCollection> = Vec::new();
         let scope = self.scope();
-        let assumptions = collect_constraints(db, self.into()).instantiate_identity();
+        let assumptions = self.scope().constraints(db);
 
         for (i, variant) in self.variants(db).data(db).iter().enumerate() {
             if let VariantKind::Tuple(tuple_id) = variant.kind {
@@ -1241,8 +1203,10 @@ pub struct Impl<'db> {
 }
 #[salsa::tracked]
 impl<'db> Impl<'db> {
-    fn constraints(self, db: &'db dyn HirAnalysisDb) -> PredicateListId {
-        collect_constraints(db, self.into()).instantiate_identity()
+    #[allow(dead_code)]
+    fn constraints(self, db: &'db dyn HirAnalysisDb) -> PredicateListId<'db> {
+        // Delegate to the centralized scope-based helper to keep one source of truth.
+        self.scope().constraints(db)
     }
     pub fn span(self) -> LazyImplSpan<'db> {
         LazyImplSpan::new(self)
@@ -1279,7 +1243,7 @@ impl<'db> Impl<'db> {
     #[salsa::tracked]
     pub fn ty(self, db: &'db dyn crate::analysis::HirAnalysisDb) -> TyId<'db> {
         let scope = self.scope();
-        let assumptions = collect_constraints(db, self.into()).instantiate_identity();
+        let assumptions = self.scope().constraints(db);
 
         self.type_ref(db)
             .to_opt()
@@ -1349,8 +1313,10 @@ pub struct Trait<'db> {
 }
 #[salsa::tracked]
 impl<'db> Trait<'db> {
-    pub(crate) fn constraints(self, db: &'db dyn HirAnalysisDb) -> PredicateListId {
-        collect_constraints(db, self.into()).instantiate_identity()
+    #[allow(dead_code)]
+    pub(crate) fn constraints(self, db: &'db dyn HirAnalysisDb) -> PredicateListId<'db> {
+        // Delegate to the centralized scope-based helper to keep one source of truth.
+        self.scope().constraints(db)
     }
     pub fn span(self) -> LazyTraitSpan<'db> {
         LazyTraitSpan::new(self)
@@ -1448,12 +1414,10 @@ impl<'db> Trait<'db> {
         db: &'db dyn crate::analysis::HirAnalysisDb,
         assoc_type: &AssocTyDecl<'db>,
     ) -> Option<crate::analysis::ty::ty_def::TyId<'db>> {
-        use crate::analysis::ty::{
-            trait_resolution::constraint::collect_constraints, ty_lower::lower_hir_ty,
-        };
+        use crate::analysis::ty::ty_lower::lower_hir_ty;
 
         let default_ty_hir = assoc_type.default?;
-        let assumptions = collect_constraints(db, self.into()).instantiate_identity();
+        let assumptions = self.scope().constraints(db);
         Some(lower_hir_ty(db, default_ty_hir, self.scope(), assumptions))
     }
 
@@ -1618,12 +1582,10 @@ impl<'db> ImplTrait<'db> {
         self,
         db: &'db dyn crate::analysis::HirAnalysisDb,
     ) -> common::indexmap::IndexMap<IdentId<'db>, crate::analysis::ty::ty_def::TyId<'db>> {
-        use crate::analysis::ty::binder::Binder;
-        use crate::analysis::ty::trait_resolution::constraint::collect_constraints;
-        use crate::analysis::ty::ty_lower::lower_hir_ty;
+        use crate::analysis::ty::{binder::Binder, ty_lower::lower_hir_ty};
 
         let scope = self.scope();
-        let assumptions = collect_constraints(db, self.into()).instantiate_identity();
+        let assumptions = self.scope().constraints(db);
 
         let mut types: common::indexmap::IndexMap<_, _> = self
             .types(db)
@@ -1666,7 +1628,8 @@ impl<'db> ImplTrait<'db> {
     /// Returns the constraints (where clauses) for this impl.
     #[salsa::tracked]
     pub(crate) fn constraints(self, db: &'db dyn HirAnalysisDb) -> PredicateListId<'db> {
-        collect_constraints(db, self.into()).instantiate_identity()
+        // Delegate to the centralized scope-based helper to keep one source of truth.
+        self.scope().constraints(db)
     }
 
     /// Creates fresh type variables for this impl's generic parameters.

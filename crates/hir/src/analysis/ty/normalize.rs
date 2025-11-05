@@ -54,9 +54,8 @@ impl<'db> TyFolder<'db> for TypeNormalizer<'db> {
     fn fold_ty(&mut self, db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> TyId<'db> {
         match ty.data(self.db) {
             TyData::TyParam(p @ TyParam { owner, .. }) if p.is_trait_self() => {
-                if let Some(impl_) = owner.resolve_to::<ImplTrait>(self.db)
-                    && let ty = impl_.ty(self.db)
-                {
+                if let Some(impl_) = owner.resolve_to::<ImplTrait>(self.db) {
+                    let ty = impl_.ty(self.db);
                     return self.fold_ty(db, ty);
                 }
                 ty
