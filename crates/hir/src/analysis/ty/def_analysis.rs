@@ -336,6 +336,8 @@ pub fn analyze_func<'db>(
     let mut diags = analyzer.analyze();
     // Analyze where-clause owned by the function via the item API (to shrink visitor use)
     diags.extend(func.analyze_where_clause(db).iter().cloned());
+    // Analyze signature-specific checks (duplicates, kinds, self-type, conflicts)
+    diags.extend(func.analyze_signature(db).iter().cloned());
     diags
 }
 
@@ -1005,17 +1007,6 @@ impl<'db> Visitor<'db> for DefAnalyzer<'db> {
         };
         let func = CallableDef::Func(hir_func);
 
-        // We need to check the conflict only when the function is defined in the `impl`
-        // block since this check requires the ingot-wide method table(i.e., which is
-        // not performed in name resolution phase).
-        if matches!(
-            ctxt.scope().parent_item(self.db).unwrap(),
-            ItemKind::Impl(_)
-        ) && !self.check_method_conflict(func)
-        {
-            return;
-        }
-
         // Skip the rest of the analysis if any param names conflict with a parent's param
         let span = hir_func.span().generic_params();
         let params = hir_func.generic_params(self.db).data(self.db);
@@ -1038,29 +1029,7 @@ impl<'db> Visitor<'db> for DefAnalyzer<'db> {
             collect_func_def_constraints(self.db, hir_func.into(), true).instantiate_identity(),
         );
 
-        if let Some(args) = hir_func.params(self.db).to_opt() {
-            let dupes =
-                check_duplicate_names(args.data(self.db).iter().map(|p| p.name()), |idxs| {
-                    TyLowerDiag::DuplicateArgName(hir_func, idxs).into()
-                });
-            let found_dupes = !dupes.is_empty();
-            self.diags.extend(dupes);
-
-            // Check for duplicate labels (if no name dupes were found, for simplicity;
-            // `label_eagerly` gives the arg name if no label is present)
-            if !found_dupes {
-                self.diags.extend(check_duplicate_names(
-                    args.data(self.db).iter().map(|p| p.label_eagerly()),
-                    |idxs| TyLowerDiag::DuplicateArgLabel(hir_func, idxs).into(),
-                ));
-            }
-        }
-
         walk_func(self, ctxt, hir_func);
-
-        if let Some(ret_ty) = hir_func.ret_ty(self.db) {
-            self.verify_term_type_kind(ret_ty, hir_func.span().ret_ty().into());
-        }
 
         self.assumptions = constraints;
         self.def = def;
@@ -1078,24 +1047,8 @@ impl<'db> Visitor<'db> for DefAnalyzer<'db> {
         ctxt: &mut VisitorCtxt<'db, LazyFuncParamSpan<'db>>,
         param: &crate::hir_def::FuncParam<'db>,
     ) {
-        let Some(hir_ty) = param.ty.to_opt() else {
-            return;
-        };
-
-        let ty_span: DynLazySpan = if param.is_self_param(ctxt.db()) && param.self_ty_fallback {
-            ctxt.span().unwrap().name().into()
-        } else {
-            ctxt.span().unwrap().ty().into()
-        };
-
-        if param.is_self_param(ctxt.db()) {
-            self.verify_self_type(hir_ty, ty_span.clone());
-        }
-
-        if !self.verify_term_type_kind(hir_ty, ty_span) {
-            return;
-        }
-
+        // Signature checks moved to Func::analyze_signature. Continue walking to
+        // preserve nested type WF diagnostics.
         walk_func_param(self, ctxt, param);
     }
 }
@@ -1744,6 +1697,135 @@ impl<'db> Func<'db> {
                         diags.push(diag);
                     }
                 }
+            }
+        }
+
+        diags
+    }
+
+    /// Analyze signature-level concerns for a function:
+    /// - Method conflict in impl blocks (inherent method overlap)
+    /// - Duplicate argument names and labels
+    /// - Param type kind checks and const-type disallow, with type-lowering errors
+    /// - Self type verification for `self` params
+    /// - Return type kind checks and type-lowering errors
+    #[salsa::tracked(return_ref)]
+    pub fn analyze_signature(self, db: &'db dyn HirAnalysisDb) -> Vec<TyDiagCollection<'db>> {
+        use crate::span::params::LazyFuncParamListSpan;
+
+        let mut diags = Vec::new();
+        let scope = self.scope();
+        let assumptions =
+            collect_func_def_constraints(db, self.into(), true).instantiate_identity();
+
+        let callable = CallableDef::Func(self);
+
+        // Check inherent method conflicts only for functions under `impl` blocks.
+        if matches!(scope.parent_item(db).unwrap(), ItemKind::Impl(_)) {
+            if let Some(self_ty) = callable
+                .receiver_ty(db)
+                .map(|b| b.instantiate_identity())
+                .or_else(|| callable.self_ty(db))
+            {
+                if !self_ty.has_invalid(db) {
+                    for &cand in probe_method(
+                        db,
+                        scope.ingot(db),
+                        Canonical::new(db, self_ty),
+                        callable.name(db),
+                    ) {
+                        if cand != callable {
+                            diags.push(
+                                ImplDiag::ConflictMethodImpl {
+                                    primary: callable,
+                                    conflict_with: cand,
+                                }
+                                .into(),
+                            );
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+
+        // Duplicate argument name/label checks
+        if let Some(params) = self.params(db).to_opt() {
+            let list = params.data(db);
+
+            let dupes = check_duplicate_names(list.iter().map(|p| p.name()), |idxs| {
+                TyLowerDiag::DuplicateArgName(self, idxs).into()
+            });
+            let found_dupes = !dupes.is_empty();
+            diags.extend(dupes);
+
+            if !found_dupes {
+                diags.extend(check_duplicate_names(
+                    list.iter().map(|p| p.label_eagerly()),
+                    |idxs| TyLowerDiag::DuplicateArgLabel(self, idxs).into(),
+                ));
+            }
+
+            // Per-parameter type checks
+            let param_list_span: LazyFuncParamListSpan<'db> = self.span().params();
+            for (i, param) in list.iter().enumerate() {
+                let Some(hir_ty) = param.ty.to_opt() else { continue; };
+
+                let pspan = param_list_span.clone().param(i);
+                let name_span_node = pspan.clone().name();
+                let ty_span_node = pspan.clone().ty();
+                let ty_span: DynLazySpan<'db> = if param.is_self_param(db) && param.self_ty_fallback {
+                    name_span_node.into()
+                } else {
+                    ty_span_node.clone().into()
+                };
+
+                let ty = lower_hir_ty(db, hir_ty, scope, assumptions);
+                if !ty.has_star_kind(db) {
+                    diags.push(TyLowerDiag::ExpectedStarKind(ty_span.clone()).into());
+                    continue;
+                }
+                if ty.is_const_ty(db) {
+                    diags.push(TyLowerDiag::NormalTypeExpected { span: ty_span.clone(), given: ty }.into());
+                    continue;
+                }
+
+                // Self type verification
+                if param.is_self_param(db) {
+                    if let Some(expected_ty) = callable.self_ty(db) {
+                        let param_ty = normalize_ty(db, ty, scope, assumptions);
+                        if !param_ty.has_invalid(db) && !expected_ty.has_invalid(db) {
+                            let (expected_base, expected_args) = expected_ty.decompose_ty_app(db);
+                            let (param_base, param_args) = param_ty.decompose_ty_app(db);
+                            if param_base != expected_base
+                                || expected_args
+                                    .iter()
+                                    .zip(param_args.iter())
+                                    .any(|(e, p)| e != p)
+                            {
+                                diags.push(
+                                    ImplDiag::InvalidSelfType {
+                                        span: ty_span,
+                                        expected: expected_ty,
+                                        given: param_ty,
+                                    }
+                                    .into(),
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Return type checks
+        if let Some(hir_ret) = self.ret_ty(db) {
+            let rspan = self.span().ret_ty();
+            let ty = lower_hir_ty(db, hir_ret, scope, assumptions);
+            if !ty.has_star_kind(db) {
+                diags.push(TyLowerDiag::ExpectedStarKind(rspan.into()).into());
+            } else if ty.is_const_ty(db) {
+                diags.push(TyLowerDiag::NormalTypeExpected { span: rspan.into(), given: ty }.into());
             }
         }
 
