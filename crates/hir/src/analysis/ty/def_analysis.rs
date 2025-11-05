@@ -10,7 +10,6 @@ use crate::{
     },
     visitor::prelude::*,
 };
-use common::indexmap::IndexSet;
 use rustc_hash::{FxHashMap, FxHashSet};
 use smallvec1::SmallVec;
 
@@ -280,7 +279,7 @@ pub fn analyze_impl_trait<'db>(
     db: &'db dyn HirAnalysisDb,
     impl_trait: ImplTrait<'db>,
 ) -> Vec<TyDiagCollection<'db>> {
-    let implementor = match analyze_impl_trait_specific_error(db, impl_trait) {
+    let implementor = match impl_trait.analyze_preconditions(db) {
         Ok(implementor) => implementor,
         Err(diags) => {
             return diags;
@@ -1138,6 +1137,161 @@ impl<'db> TyId<'db> {
 
 #[salsa::tracked]
 impl<'db> ImplTrait<'db> {
+    /// Validate `impl trait` preconditions (lowering, scope/ingot checks, and conflict/kind checks)
+    /// and return the binder-wrapped implementor on success, or diagnostics on failure.
+    pub fn analyze_preconditions(
+        self,
+        db: &'db dyn HirAnalysisDb,
+    ) -> Result<Binder<ImplTrait<'db>>, Vec<TyDiagCollection<'db>>> {
+        let mut diags = vec![];
+        let ty = self.ty(db);
+
+        // 1) Implementor well-formedness (except satisfiability)
+        if let Some(diag) = ty.emit_diag(db, self.span().ty().into()) {
+            diags.push(diag);
+        }
+        if !diags.is_empty() || ty.has_invalid(db) {
+            return Err(diags);
+        }
+
+        // 2) Lower trait ref with errors mapped to diags
+        let trait_inst = match self.trait_inst(db) {
+            Ok(trait_inst) => trait_inst,
+            Err(TraitRefLowerError::PathResError(err)) => {
+                let trait_path_span = self.span().trait_ref().path();
+                let Some(trait_ref) = self.trait_ref(db).to_opt() else {
+                    return Err(diags);
+                };
+                if let Some(diag) = err.into_diag(
+                    db,
+                    trait_ref.path(db).unwrap(),
+                    trait_path_span,
+                    ExpectedPathKind::Trait,
+                ) {
+                    diags.push(diag.into());
+                }
+                return Err(diags);
+            }
+            Err(TraitRefLowerError::InvalidDomain(_)) | Err(TraitRefLowerError::Ignored) => {
+                return Err(diags);
+            }
+        };
+
+        // 3) Ingot ownership checks
+        let impl_trait_ingot = self.top_mod(db).ingot(db);
+        if Some(impl_trait_ingot) != ty.ingot(db)
+            && impl_trait_ingot != trait_inst.def(db).ingot(db)
+        {
+            diags.push(TraitLowerDiag::ExternalTraitForExternalType(self).into());
+            return Err(diags);
+        }
+
+        // 4) Conflict check
+        let current_impl = Binder::bind(self);
+        analyze_conflict_impl(db, current_impl, &mut diags);
+
+        // 5) Implementor kind check
+        let expected_kind = current_impl
+            .skip_binder()
+            .trait_def(db)
+            .unwrap()
+            .expected_implementor_kind(db);
+        if ty.kind(db) != expected_kind {
+            let actual_ty = current_impl.skip_binder().ty(db);
+            diags.push(
+                TraitConstraintDiag::TraitArgKindMismatch {
+                    span: self.span().trait_ref(),
+                    expected: expected_kind.clone(),
+                    actual: actual_ty,
+                }
+                .into(),
+            );
+            return Err(diags);
+        }
+
+        // 6) WF + super trait constraints satisfiability
+        let trait_def = trait_inst.def(db);
+        let trait_constraints =
+            collect_constraints(db, trait_def.into()).instantiate(db, trait_inst.args(db));
+        let assumptions = current_impl.skip_binder().constraints(db);
+        let is_satisfied = |goal: TraitInstId<'db>, span: DynLazySpan<'db>, diags: &mut Vec<_>| {
+            let canonical_goal = Canonicalized::new(db, goal);
+            match is_goal_satisfiable(db, impl_trait_ingot, canonical_goal.value, assumptions) {
+                GoalSatisfiability::Satisfied(_) | GoalSatisfiability::ContainsInvalid => {}
+                GoalSatisfiability::NeedsConfirmation(_) => unreachable!(),
+                GoalSatisfiability::UnSat(subgoal) => {
+                    diags.push(
+                        TraitConstraintDiag::TraitBoundNotSat {
+                            span,
+                            primary_goal: goal,
+                            unsat_subgoal: subgoal.map(|subgoal| subgoal.value),
+                        }
+                        .into(),
+                    );
+                }
+            }
+        };
+
+        let trait_ref_span: DynLazySpan = self.span().trait_ref().into();
+        for &goal in trait_constraints.list(db) {
+            is_satisfied(goal, trait_ref_span.clone(), &mut diags);
+        }
+        let target_ty_span: DynLazySpan = self.span().ty().into();
+        for &super_trait in trait_def.super_trait_insts(db) {
+            let super_trait = super_trait.instantiate(db, trait_inst.args(db));
+            is_satisfied(super_trait, target_ty_span.clone(), &mut diags)
+        }
+
+        // 7) Associated types presence + bounds
+        let impl_types = self.assoc_types(db);
+        for assoc_type in trait_def.types(db) {
+            let Some(name) = assoc_type.name.to_opt() else { continue; };
+            let impl_ty = impl_types.get(&name);
+            if impl_ty.is_none() && assoc_type.default.is_none() {
+                diags.push(
+                    ImplDiag::MissingAssociatedType {
+                        primary: self.span().ty().into(),
+                        type_name: name,
+                        trait_: trait_def,
+                    }
+                    .into(),
+                );
+            }
+            let Some(&impl_ty) = impl_ty else { continue; };
+
+            for bound in &assoc_type.bounds {
+                if let TypeBound::Trait(trait_ref) = bound {
+                    match lower_trait_ref(db, impl_ty, *trait_ref, self.scope(), assumptions) {
+                        Ok(bound_inst) => {
+                            let canonical_bound = Canonical::new(db, bound_inst);
+                            if let GoalSatisfiability::UnSat(subgoal) = is_goal_satisfiable(
+                                db,
+                                self.top_mod(db).ingot(db),
+                                canonical_bound,
+                                assumptions,
+                            ) {
+                                let assoc_ty_span = self
+                                    .associated_type_span(db, name)
+                                    .map(|s| s.ty().into())
+                                    .unwrap_or_else(|| trait_ref_span.clone());
+                                diags.push(
+                                    TraitConstraintDiag::TraitBoundNotSat {
+                                        span: assoc_ty_span,
+                                        primary_goal: bound_inst,
+                                        unsat_subgoal: subgoal.map(|s| s.value),
+                                    }
+                                    .into(),
+                                );
+                            }
+                        }
+                        Err(_) => {}
+                    }
+                }
+            }
+        }
+
+        if diags.is_empty() { Ok(current_impl) } else { Err(diags) }
+    }
     /// Analyze the `where`-clause of this `impl trait`, producing diagnostics
     /// for invalid predicate types and trait bounds.
     #[salsa::tracked(return_ref)]
@@ -1580,60 +1734,8 @@ fn analyze_conflict_impl<'db>(
     }
 }
 
-fn analyze_impl_trait_method<'db>(
-    db: &'db dyn HirAnalysisDb,
-    impl_trait: crate::hir_def::ImplTrait<'db>,
-) -> Vec<TyDiagCollection<'db>> {
-    let mut diags = vec![];
-    let impl_methods = collect_implementor_methods(db, impl_trait);
-    let Some(hir_trait) = impl_trait.trait_def(db) else {
-        return diags;
-    };
-    let trait_methods = hir_trait.methods(db);
-    let mut required_methods: IndexSet<_> = trait_methods
-        .iter()
-        .filter_map(|(name, &trait_method)| {
-            if !trait_method.has_default_impl(db) {
-                Some(*name)
-            } else {
-                None
-            }
-        })
-        .collect();
-
-    for (name, impl_m) in impl_methods {
-        let Some(trait_m) = trait_methods.get(name) else {
-            diags.push(
-                ImplDiag::MethodNotDefinedInTrait {
-                    primary: impl_trait.span().trait_ref().into(),
-                    method_name: *name,
-                    trait_: hir_trait,
-                }
-                .into(),
-            );
-            continue;
-        };
-
-        let Some(trait_inst) = impl_trait.trait_inst(db).ok() else {
-            continue;
-        };
-        compare_impl_method(db, *impl_m, *trait_m, trait_inst, &mut diags);
-
-        required_methods.remove(name);
-    }
-
-    if !required_methods.is_empty() {
-        diags.push(
-            ImplDiag::NotAllTraitItemsImplemented {
-                primary: impl_trait.span().ty().into(),
-                not_implemented: required_methods.into_iter().collect(),
-            }
-            .into(),
-        );
-    }
-
-    diags
-}
+// Note: impl-trait method conformance is implemented by
+// ImplTrait::analyze_methods(db); the prior helper has been removed.
 
 fn find_const_ty_param<'db>(
     db: &'db dyn HirAnalysisDb,
