@@ -12,9 +12,7 @@ use trait_resolution::constraint::{collect_constraints, super_trait_cycle};
 use ty_def::{InvalidCause, TyData};
 use ty_lower::lower_type_alias;
 
-use self::def_analysis::{
-    analyze_adt, analyze_func, analyze_impl, analyze_impl_trait, analyze_trait,
-};
+use self::def_analysis::{analyze_adt, analyze_func, analyze_impl, analyze_impl_trait};
 use crate::analysis::{
     HirAnalysisDb, analysis_pass::ModuleAnalysisPass, diagnostics::DiagnosticVoucher,
     ty::def_analysis::DefAnalyzer,
@@ -182,7 +180,7 @@ impl ModuleAnalysisPass for TraitAnalysisPass {
                 diags.push(Box::new(TraitLowerDiag::CyclicSuperTraits(cycle.clone())) as _);
                 cycle_participants.extend(cycle.iter());
             }
-            diags.extend(analyze_trait(db, *hir_trait).iter().map(|d| d.to_voucher()))
+            diags.extend(hir_trait.analyze(db).iter().map(|d| d.to_voucher()))
         }
         diags
     }

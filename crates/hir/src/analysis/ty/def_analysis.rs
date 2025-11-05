@@ -125,70 +125,69 @@ where
         .collect()
 }
 
-/// This function implements analysis for the trait definition.
-/// The analysis includes the following:
-/// - Check if the types appear in the trait is well-formed.
-/// - Check if the trait instantiation appears in the trait is well-formed.
-/// - Check if the types in the trait satisfy the constraints which is required
-///   in type application.
-/// - Check if the trait instantiations in the trait satisfies the constraints.
-#[salsa::tracked(return_ref)]
-pub fn analyze_trait<'db>(
-    db: &'db dyn HirAnalysisDb,
-    trait_: Trait<'db>,
-) -> Vec<TyDiagCollection<'db>> {
-    let analyzer = DefAnalyzer::for_trait(db, trait_);
-    let mut diags = analyzer.analyze();
+#[salsa::tracked]
+impl<'db> Trait<'db> {
+    /// This function implements analysis for the trait definition.
+    /// The analysis includes the following:
+    /// - Check if the types appear in the trait is well-formed.
+    /// - Check if the trait instantiation appears in the trait is well-formed.
+    /// - Check if the types in the trait satisfy the constraints which is required
+    ///   in type application.
+    /// - Check if the trait instantiations in the trait satisfies the constraints.
+    #[salsa::tracked(return_ref)]
+    pub fn analyze(self, db: &'db dyn HirAnalysisDb) -> Vec<TyDiagCollection<'db>> {
+        let analyzer = DefAnalyzer::for_trait(db, self);
+        let mut diags = analyzer.analyze();
 
-    // Check associated type defaults satisfy their bounds
-    let assumptions = collect_constraints(db, trait_.into()).instantiate_identity();
+        // Check associated type defaults satisfy their bounds
+        let assumptions = self.constraints(db);
+        for assoc_type in self.types(db) {
+            if let Some(default_ty) = self.assoc_type_default_ty(db, assoc_type) {
+                // Check each bound on the associated type
+                for bound in &assoc_type.bounds {
+                    let TypeBound::Trait(trait_ref) = bound else {
+                        continue;
+                    };
+                    // Lower the trait bound
+                    let Ok(trait_inst) =
+                        lower_trait_ref(db, default_ty, *trait_ref, self.scope(), assumptions)
+                    else {
+                        // Trait ref lowering error - will be reported elsewhere
+                        continue;
+                    };
 
-    for assoc_type in trait_.types(db) {
-        if let Some(default_ty) = trait_.assoc_type_default_ty(db, assoc_type) {
-            // Check each bound on the associated type
-            for bound in &assoc_type.bounds {
-                let TypeBound::Trait(trait_ref) = bound else {
-                    continue;
-                };
-                // Lower the trait bound
-                let Ok(trait_inst) =
-                    lower_trait_ref(db, default_ty, *trait_ref, trait_.scope(), assumptions)
-                else {
-                    // Trait ref lowering error - will be reported elsewhere
-                    continue;
-                };
-
-                // Check if the default type satisfies the trait bound
-                let canonical_inst = Canonical::new(db, trait_inst);
-                match is_goal_satisfiable(
-                    db,
-                    trait_.top_mod(db).ingot(db),
-                    canonical_inst,
-                    assumptions,
-                ) {
-                    GoalSatisfiability::Satisfied(_) => continue,
-                    GoalSatisfiability::UnSat(subgoal) => {
-                        // Report error: default type doesn't satisfy the bound
-                        // TODO: Get a better span for the default type
-                        diags.push(
-                            TraitConstraintDiag::TraitBoundNotSat {
-                                span: trait_.span().into(),
-                                primary_goal: trait_inst,
-                                unsat_subgoal: subgoal.map(|s| s.value),
-                            }
-                            .into(),
-                        );
-                    }
-                    _ => {
-                        // Other cases: NeedsConfirmation or ContainsInvalid
-                        // These might warrant errors but we'll treat them as ok for now
+                    // Check if the default type satisfies the trait bound
+                    let canonical_inst = Canonical::new(db, trait_inst);
+                    match is_goal_satisfiable(
+                        db,
+                        self.top_mod(db).ingot(db),
+                        canonical_inst,
+                        assumptions,
+                    ) {
+                        GoalSatisfiability::Satisfied(_) => continue,
+                        GoalSatisfiability::UnSat(subgoal) => {
+                            // Report error: default type doesn't satisfy the bound
+                            // TODO: Get a better span for the default type
+                            diags.push(
+                                TraitConstraintDiag::TraitBoundNotSat {
+                                    span: self.span().into(),
+                                    primary_goal: trait_inst,
+                                    unsat_subgoal: subgoal.map(|s| s.value),
+                                }
+                                .into(),
+                            );
+                        }
+                        _ => {
+                            // Other cases: NeedsConfirmation or ContainsInvalid
+                            // These might warrant errors but we'll treat them as ok for now
+                        }
                     }
                 }
             }
         }
-    }
 
-    diags
+        diags
+    }
 }
 
 /// This function implements analysis for the trait implementation definition.
@@ -555,7 +554,11 @@ impl<'db> Visitor<'db> for DefAnalyzer<'db> {
         ctxt: &mut VisitorCtxt<'db, LazyWherePredicateSpan<'db>>,
         pred: &crate::hir_def::WherePredicate<'db>,
     ) {
-        let ty = pred.ty(self.db);
+        let Some(hir_ty) = pred.type_ref.to_opt() else {
+            return;
+        };
+
+        let ty = lower_hir_ty(self.db, hir_ty, self.scope(), self.assumptions);
 
         if ty.is_const_ty(self.db) {
             let diag =
