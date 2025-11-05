@@ -849,6 +849,40 @@ impl<'db> Struct<'db> {
             .collect();
         AdtField::new(fields_data, scope)
     }
+
+    /// Validate struct field types for term-kind and const-ty usage, and enforce
+    /// const-type parameter field type equality when applicable.
+    #[salsa::tracked(return_ref)]
+    pub fn validate_fields(
+        self,
+        db: &'db dyn crate::analysis::HirAnalysisDb,
+    ) -> Vec<crate::analysis::ty::diagnostics::TyDiagCollection<'db>> {
+        use crate::analysis::ty::{
+            diagnostics::TyDiagCollection,
+            trait_resolution::constraint::collect_constraints,
+        };
+        use crate::analysis::ty::def_analysis::{diag_const_param_mismatch, diag_term_or_const_ty};
+
+        let mut diags: Vec<TyDiagCollection> = Vec::new();
+        let scope = self.scope();
+        let assumptions = collect_constraints(db, self.into()).instantiate_identity();
+
+        for (i, field) in self.fields(db).data(db).iter().enumerate() {
+            let Some(hir_ty) = field.ty.to_opt() else { continue };
+            let span = self.span().fields().field(i).ty();
+            if let Some(diag) = diag_term_or_const_ty(db, scope, assumptions, hir_ty, span.clone()) {
+                diags.push(diag);
+                continue;
+            }
+            // Lower once for mismatch comparison
+            let ty = crate::analysis::ty::ty_lower::lower_hir_ty(db, hir_ty, scope, assumptions);
+            if let Some(diag) = diag_const_param_mismatch(db, scope, field.name.to_opt(), ty, span) {
+                diags.push(diag);
+            }
+        }
+
+        diags
+    }
 }
 
 #[salsa::tracked]
@@ -904,6 +938,32 @@ impl<'db> Contract<'db> {
     ) -> crate::analysis::ty::ty_lower::GenericParamTypeSet<'db> {
         use crate::analysis::ty::ty_lower::GenericParamTypeSet;
         GenericParamTypeSet::empty(db, self.scope())
+    }
+
+    /// Validate contract field types for term-kind and const-ty usage.
+    #[salsa::tracked(return_ref)]
+    pub fn validate_fields(
+        self,
+        db: &'db dyn crate::analysis::HirAnalysisDb,
+    ) -> Vec<crate::analysis::ty::diagnostics::TyDiagCollection<'db>> {
+        use crate::analysis::ty::diagnostics::TyDiagCollection;
+        use crate::analysis::ty::def_analysis::diag_term_or_const_ty;
+
+        let mut diags: Vec<TyDiagCollection> = Vec::new();
+        let scope = self.scope();
+        // Contracts have no generics/where-clause constraints
+        let assumptions = crate::analysis::ty::trait_resolution::PredicateListId::empty_list(db);
+
+        for (i, field) in self.fields(db).data(db).iter().enumerate() {
+            let Some(hir_ty) = field.ty.to_opt() else { continue };
+            let span = self.span().fields().field(i).ty();
+            if let Some(diag) = diag_term_or_const_ty(db, scope, assumptions, hir_ty, span) {
+                diags.push(diag);
+                continue;
+            }
+        }
+
+        diags
     }
 }
 
@@ -995,6 +1055,59 @@ impl<'db> Enum<'db> {
                 AdtField::new(tys, scope)
             })
             .collect()
+    }
+
+    /// Validate tuple variant element types for term-kind and const-ty usage.
+    /// Emits TyLowerDiag::ExpectedStarKind for non-* kinds and NormalTypeExpected for const-tys.
+    #[salsa::tracked(return_ref)]
+    pub fn validate_variants(
+        self,
+        db: &'db dyn crate::analysis::HirAnalysisDb,
+    ) -> Vec<crate::analysis::ty::diagnostics::TyDiagCollection<'db>> {
+        use crate::analysis::ty::{
+            diagnostics::TyDiagCollection,
+            ty_lower::lower_hir_ty,
+            trait_resolution::constraint::collect_constraints,
+        };
+        use crate::analysis::ty::def_analysis::{diag_const_param_mismatch, diag_term_or_const_ty};
+        use crate::hir_def::VariantKind;
+        use crate::span::types::LazyTySpan;
+
+        let mut diags: Vec<TyDiagCollection> = Vec::new();
+        let scope = self.scope();
+        let assumptions = collect_constraints(db, self.into()).instantiate_identity();
+
+        for (i, variant) in self.variants(db).data(db).iter().enumerate() {
+            if let VariantKind::Tuple(tuple_id) = variant.kind {
+                let variant_span = self.variant_span(i);
+                let tuple_span = variant_span.tuple_type();
+                for (j, elem_ty) in tuple_id.data(db).iter().enumerate() {
+                    let Some(hir_ty) = elem_ty.to_opt() else { continue; };
+                    let span: LazyTySpan<'db> = tuple_span.clone().elem_ty(j);
+                    if let Some(diag) = diag_term_or_const_ty(db, scope, assumptions, hir_ty, span) {
+                        diags.push(diag);
+                        continue;
+                    }
+                }
+            } else if let VariantKind::Record(fields) = variant.kind {
+                let variant_span = self.variant_span(i);
+                for (j, field) in fields.data(db).iter().enumerate() {
+                    let Some(hir_ty) = field.ty.to_opt() else { continue };
+                    let span: LazyTySpan<'db> = variant_span.clone().fields().field(j).ty();
+                    if let Some(diag) = diag_term_or_const_ty(db, scope, assumptions, hir_ty, span.clone()) {
+                        diags.push(diag);
+                        continue;
+                    }
+                    // Lower once for mismatch comparison
+                    let ty = crate::analysis::ty::ty_lower::lower_hir_ty(db, hir_ty, scope, assumptions);
+                    if let Some(diag) = diag_const_param_mismatch(db, scope, field.name.to_opt(), ty, span) {
+                        diags.push(diag);
+                    }
+                }
+            }
+        }
+
+        diags
     }
 }
 
