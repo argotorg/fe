@@ -186,6 +186,80 @@ impl<'db> Trait<'db> {
             }
         }
 
+        // Analyze where-clause predicates owned by this trait
+        diags.extend(self.analyze_where_clause(db).iter().cloned());
+
+        diags
+    }
+
+    /// Analyze the trait's where-clause predicates using the trait's own scope
+    /// and constraints. This mirrors the checks that used to live in the visitor.
+    #[salsa::tracked(return_ref)]
+    pub fn analyze_where_clause(self, db: &'db dyn HirAnalysisDb) -> Vec<TyDiagCollection<'db>> {
+        use crate::span::params::{LazyTraitRefSpan, LazyWhereClauseSpan, LazyWherePredicateSpan};
+
+        let mut diags = Vec::new();
+        let assumptions = self.constraints(db);
+        let scope = self.scope();
+
+        let where_clause = self.where_clause(db);
+        let wc_span: LazyWhereClauseSpan<'db> = self.span().where_clause();
+
+        for (i, pred) in where_clause.data(db).iter().enumerate() {
+            let pred_span: LazyWherePredicateSpan<'db> = wc_span.clone().predicate(i);
+
+            let Some(hir_ty) = pred.type_ref.to_opt() else { continue; };
+            let ty = lower_hir_ty(db, hir_ty, scope, assumptions);
+
+            // Reject const types in where-clause bounds
+            if ty.is_const_ty(db) {
+                diags.push(
+                    TraitConstraintDiag::ConstTyBound(pred_span.clone().ty().into(), ty).into(),
+                );
+                continue;
+            }
+
+            // Reject fully concrete non-param types (no generics) in where-clauses
+            if !ty.has_invalid(db) && !ty.has_param(db) {
+                diags.push(
+                    TraitConstraintDiag::ConcreteTypeBound(pred_span.clone().ty().into(), ty)
+                        .into(),
+                );
+                continue;
+            }
+
+            // Check bounds on the predicate
+            for (j, bound) in pred.bounds.iter().enumerate() {
+                match bound {
+                    TypeBound::Trait(trait_ref) => {
+                        let tr_span: LazyTraitRefSpan<'db> =
+                            pred_span.clone().bounds().bound(j).trait_bound();
+                        if let Some(diag) =
+                            analyze_trait_ref(db, ty, *trait_ref, scope, assumptions, tr_span)
+                        {
+                            diags.push(diag);
+                        }
+                    }
+                    TypeBound::Kind(kind_bound) => {
+                        if let crate::hir_def::Partial::Present(k) = kind_bound {
+                            let bound_kind = lower_kind(k);
+                            let former_kind = ty.kind(db);
+                            if !former_kind.does_match(&bound_kind) {
+                                diags.push(
+                                    TyLowerDiag::InconsistentKindBound {
+                                        span: pred_span.clone().bounds().bound(j).kind_bound().into(),
+                                        ty,
+                                        bound: bound_kind,
+                                    }
+                                    .into(),
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
         diags
     }
 }
@@ -213,12 +287,26 @@ pub fn analyze_impl_trait<'db>(
         }
     };
 
-    let mut diags = analyze_impl_trait_method(db, implementor.instantiate_identity());
+    // Method conformance checks (moved behind an item method)
+    let mut diags = implementor
+        .skip_binder()
+        .analyze_methods(db)
+        .iter()
+        .cloned()
+        .collect::<Vec<_>>();
 
     let analyzer = DefAnalyzer::for_trait_impl(db, implementor.instantiate_identity());
     let def_diags = analyzer.analyze();
 
     diags.extend(def_diags);
+
+    // Analyze where-clause constraints owned by this impl-trait
+    diags.extend(
+        impl_trait
+            .analyze_where_clause(db)
+            .iter()
+            .cloned(),
+    );
     diags
 }
 
@@ -245,7 +333,10 @@ pub fn analyze_func<'db>(
 
     let assumptions = collect_func_def_constraints(db, func.into(), true).instantiate_identity();
     let analyzer = DefAnalyzer::for_func(db, func_def, assumptions);
-    analyzer.analyze()
+    let mut diags = analyzer.analyze();
+    // Analyze where-clause owned by the function via the item API (to shrink visitor use)
+    diags.extend(func.analyze_where_clause(db).iter().cloned());
+    diags
 }
 
 pub struct DefAnalyzer<'db> {
@@ -554,6 +645,13 @@ impl<'db> Visitor<'db> for DefAnalyzer<'db> {
         ctxt: &mut VisitorCtxt<'db, LazyWherePredicateSpan<'db>>,
         pred: &crate::hir_def::WherePredicate<'db>,
     ) {
+        // Where-clause analysis for Trait/ImplTrait/Func has been moved to
+        // item methods (analyze_where_clause). Skip visitor-based emission to
+        // avoid duplicate diagnostics.
+        match self.def {
+            DefKind::Trait(_) | DefKind::ImplTrait(_) | DefKind::Func(_) => return,
+            _ => {}
+        }
         let Some(hir_ty) = pred.type_ref.to_opt() else {
             return;
         };
@@ -1085,6 +1183,127 @@ impl<'db> TyId<'db> {
     }
 }
 
+#[salsa::tracked]
+impl<'db> ImplTrait<'db> {
+    /// Analyze the `where`-clause of this `impl trait`, producing diagnostics
+    /// for invalid predicate types and trait bounds.
+    #[salsa::tracked(return_ref)]
+    pub fn analyze_where_clause(self, db: &'db dyn HirAnalysisDb) -> Vec<TyDiagCollection<'db>> {
+        use crate::span::params::{LazyTraitRefSpan, LazyWhereClauseSpan, LazyWherePredicateSpan};
+
+        let mut diags = Vec::new();
+        let scope = self.scope();
+        let assumptions = self.constraints(db);
+
+        let wc = self.where_clause(db);
+        let wc_span: LazyWhereClauseSpan<'db> = self.span().where_clause();
+
+        for (i, pred) in wc.data(db).iter().enumerate() {
+            let pred_span: LazyWherePredicateSpan<'db> = wc_span.clone().predicate(i);
+            let Some(hir_ty) = pred.type_ref.to_opt() else { continue; };
+
+            let ty = lower_hir_ty(db, hir_ty, scope, assumptions);
+
+            if ty.is_const_ty(db) {
+                diags.push(
+                    TraitConstraintDiag::ConstTyBound(pred_span.clone().ty().into(), ty).into(),
+                );
+                continue;
+            }
+
+            if !ty.has_invalid(db) && !ty.has_param(db) {
+                diags.push(
+                    TraitConstraintDiag::ConcreteTypeBound(pred_span.clone().ty().into(), ty)
+                        .into(),
+                );
+                continue;
+            }
+
+        for (j, bound) in pred.bounds.iter().enumerate() {
+            match bound {
+                TypeBound::Trait(tr) => {
+                    let tr_span: LazyTraitRefSpan<'db> =
+                        pred_span.clone().bounds().bound(j).trait_bound();
+                    if let Some(diag) = analyze_trait_ref(
+                        db, ty, *tr, scope, assumptions, tr_span,
+                    ) {
+                        diags.push(diag);
+                    }
+                }
+                TypeBound::Kind(kind_bound) => {
+                    if let crate::hir_def::Partial::Present(k) = kind_bound {
+                        let bound_kind = lower_kind(k);
+                        let former_kind = ty.kind(db);
+                        if !former_kind.does_match(&bound_kind) {
+                            diags.push(
+                                TyLowerDiag::InconsistentKindBound {
+                                    span: pred_span.clone().bounds().bound(j).kind_bound().into(),
+                                    ty,
+                                    bound: bound_kind,
+                                }
+                                .into(),
+                            );
+                        }
+                    }
+                }
+            }
+        }
+        }
+
+        diags
+    }
+
+    /// Compare the methods in this `impl trait` with the trait methods and
+    /// emit diagnostics for any mismatches or missing methods.
+    #[salsa::tracked(return_ref)]
+    pub fn analyze_methods(self, db: &'db dyn HirAnalysisDb) -> Vec<TyDiagCollection<'db>> {
+        use common::indexmap::IndexSet;
+        let mut diags = vec![];
+
+        // If the trait ref is invalid, skip method comparison
+        let Some(hir_trait) = self.trait_def(db) else { return diags; };
+
+        let impl_methods = collect_implementor_methods(db, self);
+        let trait_methods = hir_trait.methods(db);
+
+        // Required = trait methods without default impl
+        let mut required_methods: IndexSet<_> = trait_methods
+            .iter()
+            .filter_map(|(name, trait_m)| (!trait_m.has_default_impl(db)).then_some(*name))
+            .collect();
+
+        for (name, impl_m) in impl_methods.iter() {
+            let Some(trait_m) = trait_methods.get(name) else {
+                diags.push(
+                    ImplDiag::MethodNotDefinedInTrait {
+                        primary: self.span().trait_ref().into(),
+                        method_name: *name,
+                        trait_: hir_trait,
+                    }
+                    .into(),
+                );
+                continue;
+            };
+
+            let Some(trait_inst) = self.trait_inst(db).ok() else { continue; };
+            compare_impl_method(db, *impl_m, *trait_m, trait_inst, &mut diags);
+            required_methods.remove(name);
+        }
+
+        if !required_methods.is_empty() {
+            diags.push(
+                ImplDiag::NotAllTraitItemsImplemented {
+                    primary: self.span().ty().into(),
+                    not_implemented: required_methods.into_iter().collect(),
+                }
+                .into(),
+            );
+        }
+
+        diags
+    }
+}
+
 fn analyze_trait_ref<'db>(
     db: &'db dyn HirAnalysisDb,
     self_ty: TyId<'db>,
@@ -1476,5 +1695,58 @@ fn find_const_ty_param<'db>(
     match ty.data(db) {
         TyData::ConstTy(const_ty) => Some(*const_ty),
         _ => None,
+    }
+}
+#[salsa::tracked]
+impl<'db> Func<'db> {
+    /// Analyze the function's where-clause predicates using the function's
+    /// own scope and constraints.
+    #[salsa::tracked(return_ref)]
+    pub fn analyze_where_clause(self, db: &'db dyn HirAnalysisDb) -> Vec<TyDiagCollection<'db>> {
+        use crate::span::params::{LazyTraitRefSpan, LazyWhereClauseSpan, LazyWherePredicateSpan};
+
+        let mut diags = Vec::new();
+        // Functions include parent constraints (trait/impl) for signature checks
+        let assumptions = collect_func_def_constraints(db, self.into(), true).instantiate_identity();
+        let scope = self.scope();
+
+        let wc = self.where_clause(db);
+        let wc_span: LazyWhereClauseSpan<'db> = self.span().where_clause();
+
+        for (i, pred) in wc.data(db).iter().enumerate() {
+            let pred_span: LazyWherePredicateSpan<'db> = wc_span.clone().predicate(i);
+            let Some(hir_ty) = pred.type_ref.to_opt() else { continue; };
+
+            let ty = lower_hir_ty(db, hir_ty, scope, assumptions);
+
+            if ty.is_const_ty(db) {
+                diags.push(
+                    TraitConstraintDiag::ConstTyBound(pred_span.clone().ty().into(), ty).into(),
+                );
+                continue;
+            }
+
+            if !ty.has_invalid(db) && !ty.has_param(db) {
+                diags.push(
+                    TraitConstraintDiag::ConcreteTypeBound(pred_span.clone().ty().into(), ty)
+                        .into(),
+                );
+                continue;
+            }
+
+            for (j, bound) in pred.bounds.iter().enumerate() {
+                if let TypeBound::Trait(tr) = bound {
+                    let tr_span: LazyTraitRefSpan<'db> =
+                        pred_span.clone().bounds().bound(j).trait_bound();
+                    if let Some(diag) =
+                        analyze_trait_ref(db, ty, *tr, scope, assumptions, tr_span)
+                    {
+                        diags.push(diag);
+                    }
+                }
+            }
+        }
+
+        diags
     }
 }

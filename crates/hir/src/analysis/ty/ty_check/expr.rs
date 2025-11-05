@@ -1028,7 +1028,8 @@ impl<'db> TyChecker<'db> {
                 }
 
                 let method_ident = op.trait_method(self.db);
-                let trait_method = trait_def.methods(self.db).get(&method_ident).unwrap();
+                let binding = trait_def.methods(self.db);
+                let trait_method = binding.get(&method_ident).unwrap();
 
                 let mut viable: Vec<(TyId<'db>, TraitInstId<'db>, TyId<'db>)> = Vec::new();
                 for inst in insts.iter().copied() {

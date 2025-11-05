@@ -76,19 +76,26 @@ pub enum ItemKind<'db> {
 
 impl<'db> ItemKind<'db> {
     fn constraints(&self, db: &'db dyn HirAnalysisDb) -> PredicateListId<'db> {
+        use crate::analysis::ty::func_def::CallableDef;
+        use crate::analysis::ty::trait_resolution::constraint::{
+            collect_constraints, collect_func_def_constraints,
+        };
+
         match self {
-            Self::Func(func) => func.constraints(db),
-            Self::Struct(struct_) => struct_.constraints(),
-            Self::Contract(contract) => contract.constraints(),
-            Self::Enum(enum_) => enum_.constraints(),
-            Self::TypeAlias(alias) => alias.constraints(),
-            Self::Impl(impl_) => impl_.constraints(),
-            Self::Trait(trait_) => trait_.constraints(),
-            Self::ImplTrait(impl_trait) => impl_trait.constraints(),
-            Self::Const(const_) => const_.constraints(),
-            Self::Use(use_) => use_.constraints(),
-            Self::Body(body) => body.constraints(),
-            Self::TopMod(_) | Self::Mod(_) => Vec::new(),
+            Self::Func(func) => collect_func_def_constraints(db, CallableDef::Func(*func), true)
+                .instantiate_identity(),
+            Self::Struct(struct_) => collect_constraints(db, (*struct_).into()).instantiate_identity(),
+            // Contracts have no generics and no where-clause constraints
+            Self::Contract(_contract) => PredicateListId::empty_list(db),
+            Self::Enum(enum_) => collect_constraints(db, (*enum_).into()).instantiate_identity(),
+            Self::TypeAlias(alias) => collect_constraints(db, (*alias).into()).instantiate_identity(),
+            Self::Impl(impl_) => collect_constraints(db, (*impl_).into()).instantiate_identity(),
+            Self::Trait(trait_) => collect_constraints(db, (*trait_).into()).instantiate_identity(),
+            Self::ImplTrait(impl_trait) => collect_constraints(db, (*impl_trait).into()).instantiate_identity(),
+            // No constraints for these kinds
+            Self::Const(_) | Self::Use(_) | Self::Body(_) | Self::TopMod(_) | Self::Mod(_) => {
+                PredicateListId::empty_list(db)
+            }
         }
     }
 
@@ -1119,6 +1126,7 @@ pub struct Impl<'db> {
     #[return_ref]
     pub(crate) origin: HirOrigin<ast::Impl>,
 }
+#[salsa::tracked]
 impl<'db> Impl<'db> {
     fn constraints(self, db: &'db dyn HirAnalysisDb) -> PredicateListId {
         collect_constraints(db, self.into()).instantiate_identity()
@@ -1155,6 +1163,7 @@ impl<'db> Impl<'db> {
 impl<'db> Impl<'db> {
     /// Returns the lowered type for this impl block.
     /// Returns an invalid type if the impl's type is malformed.
+    #[salsa::tracked]
     pub fn ty(self, db: &'db dyn crate::analysis::HirAnalysisDb) -> TyId<'db> {
         let scope = self.scope();
         let assumptions = collect_constraints(db, self.into()).instantiate_identity();
@@ -1188,6 +1197,7 @@ pub struct Trait<'db> {
     #[return_ref]
     pub(crate) origin: HirOrigin<ast::Trait>,
 }
+#[salsa::tracked]
 impl<'db> Trait<'db> {
     pub(crate) fn constraints(self, db: &'db dyn HirAnalysisDb) -> PredicateListId {
         collect_constraints(db, self.into()).instantiate_identity()
@@ -1352,6 +1362,7 @@ pub struct ImplTrait<'db> {
     #[return_ref]
     pub(crate) origin: HirOrigin<ast::ImplTrait>,
 }
+#[salsa::tracked]
 impl<'db> ImplTrait<'db> {
     pub fn span(self) -> LazyImplTraitSpan<'db> {
         LazyImplTraitSpan::new(self)
