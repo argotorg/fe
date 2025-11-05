@@ -5,8 +5,9 @@
 use crate::{
     hir_def::{
         EnumVariant, FieldDef, FieldParent, Func, GenericParam, GenericParamListId,
-        GenericParamOwner, IdentId, Impl as HirImpl, ImplTrait, ItemKind, PathId, Trait,
+        GenericParamOwner, IdentId, Impl as HirImpl, Impl, ImplTrait, ItemKind, PathId, Trait,
         TraitRefId, TypeAlias, TypeBound, TypeId as HirTyId, VariantKind, scope_graph::ScopeId,
+        WhereClauseOwner,
     },
     visitor::prelude::*,
 };
@@ -16,7 +17,6 @@ use smallvec1::SmallVec;
 use super::{
     adt_def::AdtRef,
     canonical::Canonical,
-    const_ty::ConstTyId,
     diagnostics::{ImplDiag, TraitConstraintDiag, TraitLowerDiag, TyDiagCollection, TyLowerDiag},
     func_def::CallableDef,
     method_cmp::compare_impl_method,
@@ -46,6 +46,15 @@ use crate::analysis::{
         visitor::TyVisitable,
     },
 };
+
+// Unified result type for item-level analyses that optionally emit diagnostics.
+// Ok(true) indicates success with no diagnostics; Err(diags) returns all emitted diagnostics.
+pub(crate) type AnalysisResult<'db> = Result<bool, Vec<TyDiagCollection<'db>>>;
+
+#[inline]
+fn into_analysis_result<'db>(diags: Vec<TyDiagCollection<'db>>) -> AnalysisResult<'db> {
+    if diags.is_empty() { Ok(true) } else { Err(diags) }
+}
 
 /// Shared helpers for ADT field/variant validations
 pub(crate) fn diag_term_or_const_ty<'db>(
@@ -87,6 +96,113 @@ pub(crate) fn diag_const_param_mismatch<'db>(
     None
 }
 
+/// Shared where-clause analyzer for any owner that implements `WhereClauseOwner`.
+/// Callers provide the assumptions policy; this helper performs the common
+/// lowering and bound checks and returns diagnostics.
+pub(crate) fn analyze_where_clause_for_owner<'db>(
+    db: &'db dyn HirAnalysisDb,
+    owner: WhereClauseOwner<'db>,
+    assumptions: PredicateListId<'db>,
+) -> Vec<TyDiagCollection<'db>> {
+    use crate::span::params::{LazyTraitRefSpan, LazyWhereClauseSpan, LazyWherePredicateSpan};
+
+    let mut diags = Vec::new();
+    let scope = owner.scope();
+
+    let where_clause = owner.where_clause(db);
+    let wc_span: LazyWhereClauseSpan<'db> = owner.where_clause_span();
+
+    for (i, pred) in where_clause.data(db).iter().enumerate() {
+        let pred_span: LazyWherePredicateSpan<'db> = wc_span.clone().predicate(i);
+
+        let Some(hir_ty) = pred.type_ref.to_opt() else { continue; };
+        let ty = lower_hir_ty(db, hir_ty, scope, assumptions);
+
+        // Surface type-lowering errors for the predicate type itself (e.g.,
+        // unresolved names, wrong domain like trait/value where a type is expected).
+        if ty.has_invalid(db) {
+            let errs = collect_ty_lower_errors(db, scope, hir_ty, pred_span.clone().ty(), assumptions);
+            if !errs.is_empty() {
+                diags.extend(errs);
+                continue;
+            }
+        }
+
+        // Reject const types in where-clause bounds
+        if ty.is_const_ty(db) {
+            diags.push(TraitConstraintDiag::ConstTyBound(pred_span.clone().ty().into(), ty).into());
+            continue;
+        }
+
+        // Reject fully concrete non-param types (no generics) in where-clauses
+        if !ty.has_invalid(db) && !ty.has_param(db) {
+            diags.push(TraitConstraintDiag::ConcreteTypeBound(pred_span.clone().ty().into(), ty).into());
+            continue;
+        }
+
+        // Check bounds on the predicate
+        for (j, bound) in pred.bounds.iter().enumerate() {
+            match bound {
+                TypeBound::Trait(trait_ref) => {
+                    let tr_span: LazyTraitRefSpan<'db> =
+                        pred_span.clone().bounds().bound(j).trait_bound();
+
+                    // Surface type-lowering errors for generic type args inside the trait ref,
+                    // e.g., `MyTWithGenerics<MyT>` where `MyT` is a trait (not a type).
+                    if let Some(gargs) = trait_ref.generic_args(db) {
+                        if let Some(path_id) = trait_ref.path(db).to_opt() {
+                            let seg_idx = path_id.segment_index(db);
+                            let ga_span = tr_span.clone().path().segment(seg_idx).generic_args();
+                            for (k, garg) in gargs.data(db).iter().enumerate() {
+                                if let crate::hir_def::GenericArg::Type(targ) = garg {
+                                    if let Some(arg_ty) = targ.ty.to_opt() {
+                                        let arg_span = ga_span.clone().arg(k).into_type_arg().ty();
+                                        let errs = collect_ty_lower_errors(
+                                            db,
+                                            scope,
+                                            arg_ty,
+                                            arg_span,
+                                            assumptions,
+                                        );
+                                        if !errs.is_empty() {
+                                            diags.extend(errs);
+                                            // Continue checking other args to gather all issues
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    if let Some(diag) =
+                        analyze_trait_ref(db, ty, *trait_ref, scope, assumptions, tr_span)
+                    {
+                        diags.push(diag);
+                    }
+                }
+                TypeBound::Kind(kind_bound) => {
+                    if let crate::hir_def::Partial::Present(k) = kind_bound {
+                        let bound_kind = lower_kind(k);
+                        let former_kind = ty.kind(db);
+                        if !former_kind.does_match(&bound_kind) {
+                            diags.push(
+                                TyLowerDiag::InconsistentKindBound {
+                                    span: pred_span.clone().bounds().bound(j).kind_bound().into(),
+                                    ty,
+                                    bound: bound_kind,
+                                }
+                                .into(),
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    diags
+}
+
 /// This function implements analysis for the ADT definition.
 /// The analysis includes the following:
 /// - Check if the types in the ADT is well-formed.
@@ -125,8 +241,14 @@ pub fn analyze_adt<'db>(
 
     // Item-level validations for ADTs (reduces visitor responsibilities)
     match adt_ref {
-        AdtRef::Enum(e) => diags.extend(e.validate_variants(db).iter().cloned()),
-        AdtRef::Struct(s) => diags.extend(s.validate_fields(db).iter().cloned()),
+        AdtRef::Enum(e) => {
+            diags.extend(e.validate_variants(db).iter().cloned());
+            diags.extend(e.analyze_where_clause(db).iter().cloned());
+        }
+        AdtRef::Struct(s) => {
+            diags.extend(s.validate_fields(db).iter().cloned());
+            diags.extend(s.analyze_where_clause(db).iter().cloned());
+        }
         AdtRef::Contract(c) => diags.extend(c.validate_fields(db).iter().cloned()),
     }
     diags.extend(dupes);
@@ -238,75 +360,11 @@ impl<'db> Trait<'db> {
         diags
     }
 
-    /// Analyze the trait's where-clause predicates using the trait's own scope
-    /// and constraints. This mirrors the checks that used to live in the visitor.
+    /// Analyze the trait's where-clause using the shared helper.
     #[salsa::tracked(return_ref)]
     pub fn analyze_where_clause(self, db: &'db dyn HirAnalysisDb) -> Vec<TyDiagCollection<'db>> {
-        use crate::span::params::{LazyTraitRefSpan, LazyWhereClauseSpan, LazyWherePredicateSpan};
-
-        let mut diags = Vec::new();
         let assumptions = self.constraints(db);
-        let scope = self.scope();
-
-        let where_clause = self.where_clause(db);
-        let wc_span: LazyWhereClauseSpan<'db> = self.span().where_clause();
-
-        for (i, pred) in where_clause.data(db).iter().enumerate() {
-            let pred_span: LazyWherePredicateSpan<'db> = wc_span.clone().predicate(i);
-
-            let Some(hir_ty) = pred.type_ref.to_opt() else { continue; };
-            let ty = lower_hir_ty(db, hir_ty, scope, assumptions);
-
-            // Reject const types in where-clause bounds
-            if ty.is_const_ty(db) {
-                diags.push(
-                    TraitConstraintDiag::ConstTyBound(pred_span.clone().ty().into(), ty).into(),
-                );
-                continue;
-            }
-
-            // Reject fully concrete non-param types (no generics) in where-clauses
-            if !ty.has_invalid(db) && !ty.has_param(db) {
-                diags.push(
-                    TraitConstraintDiag::ConcreteTypeBound(pred_span.clone().ty().into(), ty)
-                        .into(),
-                );
-                continue;
-            }
-
-            // Check bounds on the predicate
-            for (j, bound) in pred.bounds.iter().enumerate() {
-                match bound {
-                    TypeBound::Trait(trait_ref) => {
-                        let tr_span: LazyTraitRefSpan<'db> =
-                            pred_span.clone().bounds().bound(j).trait_bound();
-                        if let Some(diag) =
-                            analyze_trait_ref(db, ty, *trait_ref, scope, assumptions, tr_span)
-                        {
-                            diags.push(diag);
-                        }
-                    }
-                    TypeBound::Kind(kind_bound) => {
-                        if let crate::hir_def::Partial::Present(k) = kind_bound {
-                            let bound_kind = lower_kind(k);
-                            let former_kind = ty.kind(db);
-                            if !former_kind.does_match(&bound_kind) {
-                                diags.push(
-                                    TyLowerDiag::InconsistentKindBound {
-                                        span: pred_span.clone().bounds().bound(j).kind_bound().into(),
-                                        ty,
-                                        bound: bound_kind,
-                                    }
-                                    .into(),
-                                );
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        diags
+        analyze_where_clause_for_owner(db, WhereClauseOwner::Trait(self), assumptions)
     }
 }
 
@@ -347,12 +405,9 @@ pub fn analyze_impl_trait<'db>(
     diags.extend(def_diags);
 
     // Analyze where-clause constraints owned by this impl-trait
-    diags.extend(
-        impl_trait
-            .analyze_where_clause(db)
-            .iter()
-            .cloned(),
-    );
+    diags.extend(impl_trait.analyze_where_clause(db).iter().cloned());
+    // Associated types lowering + WF checks
+    diags.extend(impl_trait.analyze_associated_types(db).iter().cloned());
     diags
 }
 
@@ -361,10 +416,10 @@ pub fn analyze_impl<'db>(
     db: &'db dyn HirAnalysisDb,
     impl_: HirImpl<'db>,
 ) -> Vec<TyDiagCollection<'db>> {
-    let ty = impl_.ty(db);
-
-    let analyzer = DefAnalyzer::for_impl(db, impl_, ty);
-    analyzer.analyze()
+    let analyzer = DefAnalyzer::for_impl(db, impl_);
+    let mut diags = analyzer.analyze();
+    diags.extend(impl_.analyze_preconditions(db).iter().cloned());
+    diags
 }
 
 #[salsa::tracked(return_ref)]
@@ -372,19 +427,8 @@ pub fn analyze_func<'db>(
     db: &'db dyn HirAnalysisDb,
     func: Func<'db>,
 ) -> Vec<TyDiagCollection<'db>> {
-    let Some(_name) = func.name(db).to_opt() else {
-        return Vec::new();
-    };
-    let func_def = CallableDef::Func(func);
-
-    let assumptions = collect_func_def_constraints(db, func.into(), true).instantiate_identity();
-    let analyzer = DefAnalyzer::for_func(db, func_def, assumptions);
-    let mut diags = analyzer.analyze();
-    // Analyze where-clause owned by the function via the item API (to shrink visitor use)
-    diags.extend(func.analyze_where_clause(db).iter().cloned());
-    // Analyze signature-specific checks (duplicates, kinds, self-type, conflicts)
-    diags.extend(func.analyze_signature(db).iter().cloned());
-    diags
+    // Delegate to the item-level analyzer to keep a single source of truth.
+    func.analyze(db).clone()
 }
 
 pub struct DefAnalyzer<'db> {
@@ -406,7 +450,7 @@ impl<'db> DefAnalyzer<'db> {
         Self { db, def: DefKind::Trait(trait_), diags: vec![], assumptions, current_ty: None }
     }
 
-    fn for_impl(db: &'db dyn HirAnalysisDb, impl_: HirImpl<'db>, ty: TyId<'db>) -> Self {
+    fn for_impl(db: &'db dyn HirAnalysisDb, impl_: HirImpl<'db>) -> Self {
         let assumptions = collect_constraints(db, impl_.into()).instantiate_identity();
         let def = DefKind::Impl(impl_);
         Self { db, def, diags: vec![], assumptions, current_ty: None }
@@ -559,11 +603,15 @@ impl<'db> Visitor<'db> for DefAnalyzer<'db> {
         ctxt: &mut VisitorCtxt<'db, LazyWherePredicateSpan<'db>>,
         pred: &crate::hir_def::WherePredicate<'db>,
     ) {
-        // Where-clause analysis for Trait/ImplTrait/Func has been moved to
+        // Where-clause analysis for Trait/ImplTrait/Func/Impl/Struct/Enum has been moved to
         // item methods (analyze_where_clause). Skip visitor-based emission to
         // avoid duplicate diagnostics.
         match self.def {
-            DefKind::Trait(_) | DefKind::ImplTrait(_) | DefKind::Func(_) => return,
+            DefKind::Trait(_) | DefKind::ImplTrait(_) | DefKind::Func(_) | DefKind::Impl(_) => return,
+            DefKind::Adt(adt) => match adt {
+                AdtRef::Struct(_) | AdtRef::Enum(_) => return,
+                AdtRef::Contract(_) => {}
+            },
             _ => {}
         }
         let Some(hir_ty) = pred.type_ref.to_opt() else {
@@ -809,62 +857,12 @@ impl<'db> Visitor<'db> for DefAnalyzer<'db> {
     }
 
     fn visit_impl(&mut self, ctxt: &mut VisitorCtxt<'db, LazyImplSpan<'db>>, impl_: HirImpl<'db>) {
-        let impl_ty = impl_.ty(self.db);
-        if !impl_ty.is_inherent_impl_allowed(self.db, self.scope().ingot(self.db)) {
-            let base = impl_ty.base_ty(self.db);
-            let diag = ImplDiag::InherentImplIsNotAllowed {
-                primary: ctxt.span().unwrap().target_ty().into(),
-                ty: base.pretty_print(self.db).to_string(),
-                is_nominal: !base.is_param(self.db),
-            };
-
-            self.diags.push(diag.into());
-        }
-
-        if let Some(ty) = impl_ty.emit_diag(self.db, ctxt.span().unwrap().target_ty().into()) {
-            self.diags.push(ty);
-        } else {
-            walk_impl(self, ctxt, impl_);
-        }
+        // Preconditions moved to Impl::analyze_preconditions; just walk to nested items
+        walk_impl(self, ctxt, impl_);
     }
 
-    fn visit_impl_trait(
-        &mut self,
-        ctxt: &mut VisitorCtxt<'db, LazyImplTraitSpan<'db>>,
-        impl_trait: ImplTrait<'db>,
-    ) {
-        for assoc_type in impl_trait.types(self.db) {
-            if let Some(ty) = assoc_type.type_ref.to_opt() {
-                let ty_span = assoc_type
-                    .name
-                    .to_opt()
-                    .and_then(|name| impl_trait.associated_type_span(self.db, name))
-                    .map(|s| s.ty())
-                    .unwrap_or_else(|| ctxt.span().unwrap().ty());
-
-                let lowered_ty = lower_hir_ty(self.db, ty, impl_trait.scope(), self.assumptions);
-
-                if lowered_ty.has_invalid(self.db) {
-                    let diags = collect_ty_lower_errors(
-                        self.db,
-                        impl_trait.scope(),
-                        ty,
-                        ty_span.clone(),
-                        self.assumptions,
-                    );
-                    if !diags.is_empty() {
-                        self.diags.extend(diags);
-                    }
-                }
-
-                if let Some(diag) =
-                    lowered_ty.emit_wf_diag(self.db, ctxt.ingot(), self.assumptions, ty_span.into())
-                {
-                    self.diags.push(diag);
-                }
-            }
-        }
-
+    fn visit_impl_trait(&mut self, ctxt: &mut VisitorCtxt<'db, LazyImplTraitSpan<'db>>, impl_trait: ImplTrait<'db>) {
+        // Associated type WF checks moved to ImplTrait::analyze_associated_types
         walk_impl_trait(self, ctxt, impl_trait);
     }
 
@@ -1168,68 +1166,8 @@ impl<'db> ImplTrait<'db> {
     /// for invalid predicate types and trait bounds.
     #[salsa::tracked(return_ref)]
     pub fn analyze_where_clause(self, db: &'db dyn HirAnalysisDb) -> Vec<TyDiagCollection<'db>> {
-        use crate::span::params::{LazyTraitRefSpan, LazyWhereClauseSpan, LazyWherePredicateSpan};
-
-        let mut diags = Vec::new();
-        let scope = self.scope();
         let assumptions = self.constraints(db);
-
-        let wc = self.where_clause(db);
-        let wc_span: LazyWhereClauseSpan<'db> = self.span().where_clause();
-
-        for (i, pred) in wc.data(db).iter().enumerate() {
-            let pred_span: LazyWherePredicateSpan<'db> = wc_span.clone().predicate(i);
-            let Some(hir_ty) = pred.type_ref.to_opt() else { continue; };
-
-            let ty = lower_hir_ty(db, hir_ty, scope, assumptions);
-
-            if ty.is_const_ty(db) {
-                diags.push(
-                    TraitConstraintDiag::ConstTyBound(pred_span.clone().ty().into(), ty).into(),
-                );
-                continue;
-            }
-
-            if !ty.has_invalid(db) && !ty.has_param(db) {
-                diags.push(
-                    TraitConstraintDiag::ConcreteTypeBound(pred_span.clone().ty().into(), ty)
-                        .into(),
-                );
-                continue;
-            }
-
-        for (j, bound) in pred.bounds.iter().enumerate() {
-            match bound {
-                TypeBound::Trait(tr) => {
-                    let tr_span: LazyTraitRefSpan<'db> =
-                        pred_span.clone().bounds().bound(j).trait_bound();
-                    if let Some(diag) = analyze_trait_ref(
-                        db, ty, *tr, scope, assumptions, tr_span,
-                    ) {
-                        diags.push(diag);
-                    }
-                }
-                TypeBound::Kind(kind_bound) => {
-                    if let crate::hir_def::Partial::Present(k) = kind_bound {
-                        let bound_kind = lower_kind(k);
-                        let former_kind = ty.kind(db);
-                        if !former_kind.does_match(&bound_kind) {
-                            diags.push(
-                                TyLowerDiag::InconsistentKindBound {
-                                    span: pred_span.clone().bounds().bound(j).kind_bound().into(),
-                                    ty,
-                                    bound: bound_kind,
-                                }
-                                .into(),
-                            );
-                        }
-                    }
-                }
-            }
-        }
-        }
-
-        diags
+        analyze_where_clause_for_owner(db, WhereClauseOwner::ImplTrait(self), assumptions)
     }
 
     /// Compare the methods in this `impl trait` with the trait methods and
@@ -1280,6 +1218,125 @@ impl<'db> ImplTrait<'db> {
         }
 
         diags
+    }
+
+    /// Analyze associated types defined in this impl-trait: emit lowering errors
+    /// and WF diagnostics for each associated type value.
+    #[salsa::tracked(return_ref)]
+    pub fn analyze_associated_types(self, db: &'db dyn HirAnalysisDb) -> Vec<TyDiagCollection<'db>> {
+        let mut diags = vec![];
+        let assumptions = self.constraints(db);
+        for assoc_type in self.types(db) {
+            if let Some(ty) = assoc_type.type_ref.to_opt() {
+                let ty_span = assoc_type
+                    .name
+                    .to_opt()
+                    .and_then(|name| self.associated_type_span(db, name))
+                    .map(|s| s.ty())
+                    .unwrap_or_else(|| self.span().ty());
+
+                let lowered_ty = lower_hir_ty(db, ty, self.scope(), assumptions);
+
+                if lowered_ty.has_invalid(db) {
+                    let errs = collect_ty_lower_errors(db, self.scope(), ty, ty_span.clone(), assumptions);
+                    if !errs.is_empty() {
+                        diags.extend(errs);
+                    }
+                }
+
+                if let Some(diag) = lowered_ty.emit_wf_diag(db, self.top_mod(db).ingot(db), assumptions, ty_span.into()) {
+                    diags.push(diag);
+                }
+            }
+        }
+        diags
+    }
+}
+
+#[salsa::tracked]
+impl<'db> Impl<'db> {
+    /// Analyze the impl's where-clause predicates using the impl's scope
+    /// and constraints.
+    #[salsa::tracked(return_ref)]
+    pub fn analyze_where_clause(self, db: &'db dyn HirAnalysisDb) -> Vec<TyDiagCollection<'db>> {
+        use crate::span::params::{LazyTraitRefSpan, LazyWhereClauseSpan, LazyWherePredicateSpan};
+
+        let mut diags = Vec::new();
+        let assumptions = collect_constraints(db, self.into()).instantiate_identity();
+        let scope = self.scope();
+
+        let where_clause = self.where_clause(db);
+        let wc_span: LazyWhereClauseSpan<'db> = self.span().where_clause();
+
+        for (i, pred) in where_clause.data(db).iter().enumerate() {
+            let pred_span: LazyWherePredicateSpan<'db> = wc_span.clone().predicate(i);
+
+            let Some(hir_ty) = pred.type_ref.to_opt() else { continue; };
+            let ty = lower_hir_ty(db, hir_ty, scope, assumptions);
+
+            if ty.is_const_ty(db) {
+                diags.push(
+                    TraitConstraintDiag::ConstTyBound(pred_span.clone().ty().into(), ty).into(),
+                );
+                continue;
+            }
+
+            if !ty.has_invalid(db) && !ty.has_param(db) {
+                diags.push(
+                    TraitConstraintDiag::ConcreteTypeBound(pred_span.clone().ty().into(), ty)
+                        .into(),
+                );
+                continue;
+            }
+
+            for (j, bound) in pred.bounds.iter().enumerate() {
+                match bound {
+                    TypeBound::Trait(trait_ref) => {
+                        let tr_span: LazyTraitRefSpan<'db> =
+                            pred_span.clone().bounds().bound(j).trait_bound();
+                        if let Some(diag) = analyze_trait_ref(db, ty, *trait_ref, scope, assumptions, tr_span) {
+                            diags.push(diag);
+                        }
+                    }
+                    TypeBound::Kind(kind_bound) => {
+                        if let crate::hir_def::Partial::Present(k) = kind_bound {
+                            let bound_kind = lower_kind(&k);
+                            let former_kind = ty.kind(db);
+                            if !former_kind.does_match(&bound_kind) {
+                                diags.push(
+                                    TyLowerDiag::InconsistentKindBound {
+                                        span: pred_span.clone().bounds().bound(j).kind_bound().into(),
+                                        ty,
+                                        bound: bound_kind,
+                                    }
+                                    .into(),
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        diags
+    }
+}
+
+#[salsa::tracked]
+impl<'db> crate::hir_def::Struct<'db> {
+    #[salsa::tracked(return_ref)]
+    pub fn analyze_where_clause(self, db: &'db dyn HirAnalysisDb) -> Vec<TyDiagCollection<'db>> {
+        let assumptions = collect_constraints(db, self.into()).instantiate_identity();
+        analyze_where_clause_for_owner(db, WhereClauseOwner::Struct(self), assumptions)
+    }
+}
+
+#[salsa::tracked]
+impl<'db> crate::hir_def::Enum<'db> {
+    #[salsa::tracked(return_ref)]
+    pub fn analyze_where_clause(self, db: &'db dyn HirAnalysisDb) -> Vec<TyDiagCollection<'db>> {
+        let assumptions = collect_constraints(db, self.into()).instantiate_identity();
+        analyze_where_clause_for_owner(db, WhereClauseOwner::Enum(self), assumptions)
     }
 }
 
@@ -1434,55 +1491,33 @@ fn analyze_conflict_impl<'db>(
 // (removed find_const_ty_param)
 #[salsa::tracked]
 impl<'db> Func<'db> {
+    /// Full analysis entry for a function item. Consolidates the prior
+    /// free-function `analyze_func` pattern into an item method while
+    /// still using the DefAnalyzer visitor for raw traversal where needed.
+    #[salsa::tracked(return_ref)]
+    pub fn analyze(self, db: &'db dyn HirAnalysisDb) -> Vec<TyDiagCollection<'db>> {
+        let Some(_name) = self.name(db).to_opt() else {
+            return Vec::new();
+        };
+
+        let func_def = CallableDef::Func(self);
+        let assumptions =
+            collect_func_def_constraints(db, self.into(), true).instantiate_identity();
+        let analyzer = DefAnalyzer::for_func(db, func_def, assumptions);
+        let mut diags = analyzer.analyze();
+
+        // Item-owned checks
+        diags.extend(self.analyze_where_clause(db).iter().cloned());
+        diags.extend(self.analyze_signature(db).iter().cloned());
+        diags
+    }
     /// Analyze the function's where-clause predicates using the function's
     /// own scope and constraints.
     #[salsa::tracked(return_ref)]
     pub fn analyze_where_clause(self, db: &'db dyn HirAnalysisDb) -> Vec<TyDiagCollection<'db>> {
-        use crate::span::params::{LazyTraitRefSpan, LazyWhereClauseSpan, LazyWherePredicateSpan};
-
-        let mut diags = Vec::new();
         // Functions include parent constraints (trait/impl) for signature checks
         let assumptions = collect_func_def_constraints(db, self.into(), true).instantiate_identity();
-        let scope = self.scope();
-
-        let wc = self.where_clause(db);
-        let wc_span: LazyWhereClauseSpan<'db> = self.span().where_clause();
-
-        for (i, pred) in wc.data(db).iter().enumerate() {
-            let pred_span: LazyWherePredicateSpan<'db> = wc_span.clone().predicate(i);
-            let Some(hir_ty) = pred.type_ref.to_opt() else { continue; };
-
-            let ty = lower_hir_ty(db, hir_ty, scope, assumptions);
-
-            if ty.is_const_ty(db) {
-                diags.push(
-                    TraitConstraintDiag::ConstTyBound(pred_span.clone().ty().into(), ty).into(),
-                );
-                continue;
-            }
-
-            if !ty.has_invalid(db) && !ty.has_param(db) {
-                diags.push(
-                    TraitConstraintDiag::ConcreteTypeBound(pred_span.clone().ty().into(), ty)
-                        .into(),
-                );
-                continue;
-            }
-
-            for (j, bound) in pred.bounds.iter().enumerate() {
-                if let TypeBound::Trait(tr) = bound {
-                    let tr_span: LazyTraitRefSpan<'db> =
-                        pred_span.clone().bounds().bound(j).trait_bound();
-                    if let Some(diag) =
-                        analyze_trait_ref(db, ty, *tr, scope, assumptions, tr_span)
-                    {
-                        diags.push(diag);
-                    }
-                }
-            }
-        }
-
-        diags
+        analyze_where_clause_for_owner(db, WhereClauseOwner::Func(self), assumptions)
     }
 
     /// Analyze signature-level concerns for a function:

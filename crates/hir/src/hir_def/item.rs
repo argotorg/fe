@@ -1286,6 +1286,43 @@ impl<'db> Impl<'db> {
             .map(|ty| lower_hir_ty(db, ty, scope, assumptions))
             .unwrap_or_else(|| TyId::invalid(db, InvalidCause::Other))
     }
+
+    /// Analyze preconditions for this impl block (inherent impl rules and
+    /// type-lowering errors for the target type).
+    #[salsa::tracked(return_ref)]
+    pub fn analyze_preconditions(
+        self,
+        db: &'db dyn crate::analysis::HirAnalysisDb,
+    ) -> Vec<crate::analysis::ty::diagnostics::TyDiagCollection<'db>> {
+        use crate::analysis::ty::diagnostics::{ImplDiag, TyDiagCollection};
+
+        let mut diags: Vec<TyDiagCollection> = Vec::new();
+        let impl_ty = self.ty(db);
+        let ingot = self.top_mod(db).ingot(db);
+
+        if !impl_ty.is_inherent_impl_allowed(db, ingot) {
+            let base = impl_ty.base_ty(db);
+            diags.push(
+                ImplDiag::InherentImplIsNotAllowed {
+                    primary: self.span().target_ty().into(),
+                    ty: base.pretty_print(db).to_string(),
+                    is_nominal: !base.is_param(db),
+                }
+                .into(),
+            );
+        }
+
+        // Emit invalid type errors for the target type
+        if let Some(diag) = crate::analysis::ty::ty_error::emit_invalid_ty_error(
+            db,
+            impl_ty,
+            self.span().target_ty().into(),
+        ) {
+            diags.push(diag);
+        }
+
+        diags
+    }
 }
 
 #[salsa::tracked]
