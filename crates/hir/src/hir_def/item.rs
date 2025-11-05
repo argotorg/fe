@@ -251,6 +251,36 @@ pub enum GenericParamOwner<'db> {
     ImplTrait(ImplTrait<'db>),
 }
 
+pub trait HasGenericParams<'db>: Copy {
+    fn as_generic_param_owner(self) -> GenericParamOwner<'db>;
+
+    fn generic_params(self, db: &'db dyn HirDb) -> GenericParamListId<'db> {
+        self.as_generic_param_owner().params(db)
+    }
+
+    fn generic_params_span(self) -> LazyGenericParamListSpan<'db> {
+        self.as_generic_param_owner().params_span()
+    }
+
+    fn generic_param_scope(self) -> ScopeId<'db> {
+        self.as_generic_param_owner().scope()
+    }
+
+    fn generic_param_assumptions(self, db: &'db dyn HirAnalysisDb) -> PredicateListId<'db> {
+        self.generic_param_scope().constraints(db)
+    }
+
+    fn generic_param(self, db: &'db dyn HirDb, idx: usize) -> &'db GenericParam<'db> {
+        self.as_generic_param_owner().param(db, idx)
+    }
+}
+
+impl<'db> HasGenericParams<'db> for GenericParamOwner<'db> {
+    fn as_generic_param_owner(self) -> GenericParamOwner<'db> {
+        self
+    }
+}
+
 impl<'db> GenericParamOwner<'db> {
     pub fn top_mod(self, db: &'db dyn HirDb) -> TopLevelMod<'db> {
         ItemKind::from(self).top_mod(db)
@@ -350,6 +380,110 @@ impl<'db> GenericParamOwner<'db> {
     pub fn where_clause(self, db: &'db dyn HirDb) -> Option<WhereClauseId<'db>> {
         self.where_clause_owner()
             .map(|owner| owner.where_clause(db))
+    }
+}
+
+impl<'db> HasGenericParams<'db> for Trait<'db> {
+    fn as_generic_param_owner(self) -> GenericParamOwner<'db> {
+        GenericParamOwner::Trait(self)
+    }
+}
+
+impl<'db> HasGenericParams<'db> for ImplTrait<'db> {
+    fn as_generic_param_owner(self) -> GenericParamOwner<'db> {
+        GenericParamOwner::ImplTrait(self)
+    }
+}
+
+impl<'db> HasGenericParams<'db> for Impl<'db> {
+    fn as_generic_param_owner(self) -> GenericParamOwner<'db> {
+        GenericParamOwner::Impl(self)
+    }
+}
+
+impl<'db> HasGenericParams<'db> for Struct<'db> {
+    fn as_generic_param_owner(self) -> GenericParamOwner<'db> {
+        GenericParamOwner::Struct(self)
+    }
+}
+
+impl<'db> HasGenericParams<'db> for Enum<'db> {
+    fn as_generic_param_owner(self) -> GenericParamOwner<'db> {
+        GenericParamOwner::Enum(self)
+    }
+}
+
+impl<'db> HasGenericParams<'db> for Func<'db> {
+    fn as_generic_param_owner(self) -> GenericParamOwner<'db> {
+        GenericParamOwner::Func(self)
+    }
+}
+
+pub trait HasWhereClause<'db>: Copy {
+    fn as_where_clause_owner(self) -> WhereClauseOwner<'db>;
+
+    fn where_clause(self, db: &'db dyn HirDb) -> WhereClauseId<'db> {
+        self.as_where_clause_owner().where_clause(db)
+    }
+
+    fn where_clause_span(self) -> LazyWhereClauseSpan<'db> {
+        self.as_where_clause_owner().where_clause_span()
+    }
+
+    fn where_clause_scope(self) -> ScopeId<'db> {
+        self.as_where_clause_owner().scope()
+    }
+
+    fn where_clause_assumptions(self, db: &'db dyn HirAnalysisDb) -> PredicateListId<'db> {
+        self.where_clause_scope().constraints(db)
+    }
+}
+
+impl<'db> HasWhereClause<'db> for WhereClauseOwner<'db> {
+    fn as_where_clause_owner(self) -> WhereClauseOwner<'db> {
+        self
+    }
+}
+
+impl<'db> HasWhereClause<'db> for Trait<'db> {
+    fn as_where_clause_owner(self) -> WhereClauseOwner<'db> {
+        WhereClauseOwner::Trait(self)
+    }
+}
+
+impl<'db> HasWhereClause<'db> for ImplTrait<'db> {
+    fn as_where_clause_owner(self) -> WhereClauseOwner<'db> {
+        WhereClauseOwner::ImplTrait(self)
+    }
+}
+
+impl<'db> HasWhereClause<'db> for Impl<'db> {
+    fn as_where_clause_owner(self) -> WhereClauseOwner<'db> {
+        WhereClauseOwner::Impl(self)
+    }
+}
+
+impl<'db> HasWhereClause<'db> for Struct<'db> {
+    fn as_where_clause_owner(self) -> WhereClauseOwner<'db> {
+        WhereClauseOwner::Struct(self)
+    }
+}
+
+impl<'db> HasWhereClause<'db> for Enum<'db> {
+    fn as_where_clause_owner(self) -> WhereClauseOwner<'db> {
+        WhereClauseOwner::Enum(self)
+    }
+}
+
+impl<'db> HasWhereClause<'db> for Func<'db> {
+    fn as_where_clause_owner(self) -> WhereClauseOwner<'db> {
+        WhereClauseOwner::Func(self)
+    }
+}
+
+impl<'db> HasGenericParams<'db> for TypeAlias<'db> {
+    fn as_generic_param_owner(self) -> GenericParamOwner<'db> {
+        GenericParamOwner::TypeAlias(self)
     }
 }
 

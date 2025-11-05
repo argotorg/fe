@@ -4,9 +4,9 @@
 
 use crate::{
     hir_def::{
-        EnumVariant, FieldParent, Func, GenericParam, GenericParamListId, GenericParamOwner,
-        IdentId, Impl as HirImpl, Impl, ImplTrait, ItemKind, PathId, Trait, TraitRefId, TypeAlias,
-        TypeBound, TypeId as HirTyId, VariantKind, WhereClauseOwner, scope_graph::ScopeId,
+        EnumVariant, FieldParent, Func, GenericParam, GenericParamListId, HasGenericParams,
+        HasWhereClause, IdentId, Impl as HirImpl, Impl, ImplTrait, ItemKind, PathId, Trait,
+        TraitRefId, TypeAlias, TypeBound, TypeId as HirTyId, VariantKind, scope_graph::ScopeId,
     },
     visitor::prelude::*,
 };
@@ -43,33 +43,23 @@ use crate::analysis::{
     },
 };
 
-//
-
-fn assumptions_for_owner<'db>(
-    db: &'db dyn HirAnalysisDb,
-    owner: GenericParamOwner<'db>,
-) -> PredicateListId<'db> {
-    // Single source of truth: derive assumptions from the owner's scope
-    // using the centralized ScopeId::constraints helper.
-    owner.scope().constraints(db)
-}
-
 pub(crate) fn validate_generic_params_for_owner<'db>(
     db: &'db dyn HirAnalysisDb,
-    owner: GenericParamOwner<'db>,
+    owner: impl HasGenericParams<'db>,
 ) -> Vec<TyDiagCollection<'db>> {
     use crate::span::params::{LazyGenericParamListSpan, LazyGenericParamSpan};
 
     let mut diags = Vec::new();
-    let params = owner.params(db);
-    let scope = ItemKind::from(owner).scope();
-    let gp_span: LazyGenericParamListSpan<'db> = owner.params_span();
-    let assumptions = assumptions_for_owner(db, owner);
+    let owner_enum = owner.as_generic_param_owner();
+    let params = owner.generic_params(db);
+    let scope = owner.generic_param_scope();
+    let gp_span: LazyGenericParamListSpan<'db> = owner.generic_params_span();
+    let assumptions = owner.generic_param_assumptions(db);
 
     // Duplicate generic parameter names
     diags.extend(check_duplicate_names(
         params.data(db).iter().map(|p| p.name().to_opt()),
-        |idxs| TyLowerDiag::DuplicateGenericParamName(owner, idxs).into(),
+        |idxs| TyLowerDiag::DuplicateGenericParamName(owner_enum, idxs).into(),
     ));
 
     // Non-trailing default type parameters
@@ -132,7 +122,7 @@ pub(crate) fn validate_generic_params_for_owner<'db>(
 
                     // Forward reference check: cannot reference a param not yet declared.
                     for j in collector.out.iter().filter(|j| **j >= i) {
-                        if let Some(name) = owner.param(db, *j).name().to_opt() {
+                        if let Some(name) = owner_enum.param(db, *j).name().to_opt() {
                             diags.push(
                                 TyLowerDiag::GenericDefaultForwardRef {
                                     span: pspan.clone(),
@@ -146,7 +136,7 @@ pub(crate) fn validate_generic_params_for_owner<'db>(
             }
             GenericParam::Const(_) => {
                 // Validate const param type via the original TyId
-                let param_set = collect_generic_params(db, owner);
+                let param_set = collect_generic_params(db, owner_enum);
                 let original = param_set.param_by_original_idx(db, i);
                 if let Some(ty) = original {
                     if let Some(const_ty_param) = ty.const_ty_param(db) {
@@ -219,21 +209,21 @@ pub(crate) fn diag_const_param_mismatch<'db>(
     None
 }
 
-/// Shared where-clause analyzer for any owner that implements `WhereClauseOwner`.
+/// Shared where-clause analyzer for any owner that implements `HasWhereClause`.
 /// Callers provide the assumptions policy; this helper performs the common
 /// lowering and bound checks and returns diagnostics.
 pub(crate) fn analyze_where_clause_for_owner<'db>(
     db: &'db dyn HirAnalysisDb,
-    owner: WhereClauseOwner<'db>,
-    assumptions: PredicateListId<'db>,
+    owner: impl HasWhereClause<'db>,
 ) -> Vec<TyDiagCollection<'db>> {
     use crate::span::params::{LazyTraitRefSpan, LazyWhereClauseSpan, LazyWherePredicateSpan};
 
     let mut diags = Vec::new();
-    let scope = owner.scope();
+    let scope = owner.where_clause_scope();
 
     let where_clause = owner.where_clause(db);
     let wc_span: LazyWhereClauseSpan<'db> = owner.where_clause_span();
+    let assumptions = owner.where_clause_assumptions(db);
 
     for (i, pred) in where_clause.data(db).iter().enumerate() {
         let pred_span: LazyWherePredicateSpan<'db> = wc_span.clone().predicate(i);
@@ -437,10 +427,7 @@ impl<'db> Trait<'db> {
         // Analyze where-clause predicates owned by this trait
         diags.extend(self.analyze_where_clause(db).iter().cloned());
         // Generic parameter validation
-        diags.extend(validate_generic_params_for_owner(
-            db,
-            GenericParamOwner::Trait(self),
-        ));
+        diags.extend(self.validate_generic_params(db).iter().cloned());
 
         diags
     }
@@ -448,8 +435,12 @@ impl<'db> Trait<'db> {
     /// Analyze the trait's where-clause using the shared helper.
     #[salsa::tracked(return_ref)]
     pub fn analyze_where_clause(self, db: &'db dyn HirAnalysisDb) -> Vec<TyDiagCollection<'db>> {
-        let assumptions = self.constraints(db);
-        analyze_where_clause_for_owner(db, WhereClauseOwner::Trait(self), assumptions)
+        analyze_where_clause_for_owner(db, self)
+    }
+
+    #[salsa::tracked(return_ref)]
+    pub fn validate_generic_params(self, db: &'db dyn HirAnalysisDb) -> Vec<TyDiagCollection<'db>> {
+        validate_generic_params_for_owner(db, self)
     }
 }
 
@@ -1049,8 +1040,7 @@ impl<'db> ImplTrait<'db> {
     /// for invalid predicate types and trait bounds.
     #[salsa::tracked(return_ref)]
     pub fn analyze_where_clause(self, db: &'db dyn HirAnalysisDb) -> Vec<TyDiagCollection<'db>> {
-        let assumptions = self.constraints(db);
-        analyze_where_clause_for_owner(db, WhereClauseOwner::ImplTrait(self), assumptions)
+        analyze_where_clause_for_owner(db, self)
     }
 
     /// Compare the methods in this `impl trait` with the trait methods and
@@ -1171,11 +1161,13 @@ impl<'db> ImplTrait<'db> {
 
         diags.extend(self.analyze_where_clause(db).iter().cloned());
         diags.extend(self.analyze_associated_types(db).iter().cloned());
-        diags.extend(validate_generic_params_for_owner(
-            db,
-            GenericParamOwner::ImplTrait(self),
-        ));
+        diags.extend(self.validate_generic_params(db).iter().cloned());
         diags
+    }
+
+    #[salsa::tracked(return_ref)]
+    pub fn validate_generic_params(self, db: &'db dyn HirAnalysisDb) -> Vec<TyDiagCollection<'db>> {
+        validate_generic_params_for_owner(db, self)
     }
 }
 
@@ -1189,8 +1181,7 @@ impl<'db> Impl<'db> {
     /// and constraints.
     #[salsa::tracked(return_ref)]
     pub fn analyze_where_clause(self, db: &'db dyn HirAnalysisDb) -> Vec<TyDiagCollection<'db>> {
-        let assumptions = self.scope().constraints(db);
-        analyze_where_clause_for_owner(db, WhereClauseOwner::Impl(self), assumptions)
+        analyze_where_clause_for_owner(db, self)
     }
 
     /// Full analysis entry for an inherent impl item.
@@ -1199,12 +1190,14 @@ impl<'db> Impl<'db> {
         let analyzer = self.def_analyzer(db);
         let mut diags = analyzer.analyze();
         diags.extend(self.analyze_preconditions(db).iter().cloned());
-        diags.extend(validate_generic_params_for_owner(
-            db,
-            GenericParamOwner::Impl(self),
-        ));
+        diags.extend(self.validate_generic_params(db).iter().cloned());
         diags.extend(self.analyze_where_clause(db).iter().cloned());
         diags
+    }
+
+    #[salsa::tracked(return_ref)]
+    pub fn validate_generic_params(self, db: &'db dyn HirAnalysisDb) -> Vec<TyDiagCollection<'db>> {
+        validate_generic_params_for_owner(db, self)
     }
 }
 
@@ -1222,18 +1215,19 @@ impl<'db> crate::hir_def::Struct<'db> {
         // Item-owned checks
         diags.extend(self.validate_fields(db).iter().cloned());
         diags.extend(self.analyze_where_clause(db).iter().cloned());
-        diags.extend(validate_generic_params_for_owner(
-            db,
-            GenericParamOwner::Struct(self),
-        ));
+        diags.extend(self.validate_generic_params(db).iter().cloned());
         // Duplicate field names
         diags.extend(check_duplicate_field_names(db, FieldParent::Struct(self)));
         diags
     }
     #[salsa::tracked(return_ref)]
     pub fn analyze_where_clause(self, db: &'db dyn HirAnalysisDb) -> Vec<TyDiagCollection<'db>> {
-        let assumptions = self.scope().constraints(db);
-        analyze_where_clause_for_owner(db, WhereClauseOwner::Struct(self), assumptions)
+        analyze_where_clause_for_owner(db, self)
+    }
+
+    #[salsa::tracked(return_ref)]
+    pub fn validate_generic_params(self, db: &'db dyn HirAnalysisDb) -> Vec<TyDiagCollection<'db>> {
+        validate_generic_params_for_owner(db, self)
     }
 }
 
@@ -1251,10 +1245,7 @@ impl<'db> crate::hir_def::Enum<'db> {
         // Item-owned checks
         diags.extend(self.validate_variants(db).iter().cloned());
         diags.extend(self.analyze_where_clause(db).iter().cloned());
-        diags.extend(validate_generic_params_for_owner(
-            db,
-            GenericParamOwner::Enum(self),
-        ));
+        diags.extend(self.validate_generic_params(db).iter().cloned());
         // Duplicate variant names
         diags.extend(check_duplicate_variant_names(db, self));
         // Duplicate field names for record variants
@@ -1270,8 +1261,12 @@ impl<'db> crate::hir_def::Enum<'db> {
     }
     #[salsa::tracked(return_ref)]
     pub fn analyze_where_clause(self, db: &'db dyn HirAnalysisDb) -> Vec<TyDiagCollection<'db>> {
-        let assumptions = self.scope().constraints(db);
-        analyze_where_clause_for_owner(db, WhereClauseOwner::Enum(self), assumptions)
+        analyze_where_clause_for_owner(db, self)
+    }
+
+    #[salsa::tracked(return_ref)]
+    pub fn validate_generic_params(self, db: &'db dyn HirAnalysisDb) -> Vec<TyDiagCollection<'db>> {
+        validate_generic_params_for_owner(db, self)
     }
 }
 
@@ -1295,6 +1290,14 @@ impl<'db> crate::hir_def::Contract<'db> {
     #[salsa::tracked(return_ref)]
     pub fn analyze_where_clause(self, _db: &'db dyn HirAnalysisDb) -> Vec<TyDiagCollection<'db>> {
         Vec::new()
+    }
+}
+
+#[salsa::tracked]
+impl<'db> TypeAlias<'db> {
+    #[salsa::tracked(return_ref)]
+    pub fn validate_generic_params(self, db: &'db dyn HirAnalysisDb) -> Vec<TyDiagCollection<'db>> {
+        validate_generic_params_for_owner(db, self)
     }
 }
 
@@ -1474,10 +1477,7 @@ impl<'db> Func<'db> {
             .parent_item(db)
             .is_some_and(|item| matches!(item, ItemKind::Func(_)));
         if !is_nested_func {
-            diags.extend(validate_generic_params_for_owner(
-                db,
-                GenericParamOwner::Func(self),
-            ));
+            diags.extend(self.validate_generic_params(db).iter().cloned());
         }
         diags
     }
@@ -1485,9 +1485,7 @@ impl<'db> Func<'db> {
     /// own scope and constraints.
     #[salsa::tracked(return_ref)]
     pub fn analyze_where_clause(self, db: &'db dyn HirAnalysisDb) -> Vec<TyDiagCollection<'db>> {
-        // Functions include parent constraints (trait/impl) for signature checks
-        let assumptions = self.scope().constraints(db);
-        analyze_where_clause_for_owner(db, WhereClauseOwner::Func(self), assumptions)
+        analyze_where_clause_for_owner(db, self)
     }
 
     /// Analyze signature-level concerns for a function:
@@ -1616,5 +1614,10 @@ impl<'db> Func<'db> {
         }
 
         diags
+    }
+
+    #[salsa::tracked(return_ref)]
+    pub fn validate_generic_params(self, db: &'db dyn HirAnalysisDb) -> Vec<TyDiagCollection<'db>> {
+        validate_generic_params_for_owner(db, self)
     }
 }

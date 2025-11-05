@@ -12,10 +12,6 @@ use trait_resolution::constraint::super_trait_cycle;
 use ty_def::{InvalidCause, TyData};
 use ty_lower::lower_type_alias;
 
-use crate::{
-    analysis::ty::def_analysis::validate_generic_params_for_owner,
-    hir_def::GenericParamOwner,
-};
 use crate::analysis::{
     HirAnalysisDb, analysis_pass::ModuleAnalysisPass, diagnostics::DiagnosticVoucher,
 };
@@ -290,8 +286,10 @@ impl ModuleAnalysisPass for TypeAliasAnalysisPass {
             } else {
                 // Generic param validations on owner
                 diags.extend(
-                    validate_generic_params_for_owner(db, GenericParamOwner::TypeAlias(alias))
-                        .into_iter()
+                    alias
+                        .validate_generic_params(db)
+                        .iter()
+                        .cloned()
                         .map(|d| Box::new(d) as _),
                 );
                 diags.extend(alias.def_analyzer(db).analyze().into_iter().map(|d| Box::new(d) as _));
