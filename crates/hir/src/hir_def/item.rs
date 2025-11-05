@@ -75,6 +75,23 @@ pub enum ItemKind<'db> {
 }
 
 impl<'db> ItemKind<'db> {
+    fn constraints(&self, db: &'db dyn HirAnalysisDb) -> PredicateListId<'db> {
+        match self {
+            Self::Func(func) => func.constraints(db),
+            Self::Struct(struct_) => struct_.constraints(),
+            Self::Contract(contract) => contract.constraints(),
+            Self::Enum(enum_) => enum_.constraints(),
+            Self::TypeAlias(alias) => alias.constraints(),
+            Self::Impl(impl_) => impl_.constraints(),
+            Self::Trait(trait_) => trait_.constraints(),
+            Self::ImplTrait(impl_trait) => impl_trait.constraints(),
+            Self::Const(const_) => const_.constraints(),
+            Self::Use(use_) => use_.constraints(),
+            Self::Body(body) => body.constraints(),
+            Self::TopMod(_) | Self::Mod(_) => Vec::new(),
+        }
+    }
+
     pub fn span(self) -> LazyItemSpan<'db> {
         LazyItemSpan::new(self)
     }
@@ -1324,7 +1341,7 @@ pub struct ImplTrait<'db> {
     id: TrackedItemId<'db>,
 
     pub trait_ref: Partial<TraitRefId<'db>>,
-    pub(crate) raw_ty: Partial<TypeId<'db>>,
+    pub(crate) type_ref: Partial<TypeId<'db>>,
     pub attributes: AttrListId<'db>,
     pub generic_params: GenericParamListId<'db>,
     pub where_clause: WhereClauseId<'db>,
@@ -1389,7 +1406,7 @@ impl<'db> ImplTrait<'db> {
 
         let scope = self.scope();
 
-        self.raw_ty(db)
+        self.type_ref(db)
             .to_opt()
             .map(|ty| lower_hir_ty(db, ty, scope, self.constraints(db)))
             .unwrap_or_else(|| TyId::invalid(db, InvalidCause::Other))
