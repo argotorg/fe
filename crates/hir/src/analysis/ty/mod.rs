@@ -12,7 +12,7 @@ use trait_resolution::constraint::{collect_constraints, super_trait_cycle};
 use ty_def::{InvalidCause, TyData};
 use ty_lower::lower_type_alias;
 
-use self::def_analysis::{analyze_adt, analyze_func, analyze_impl, analyze_impl_trait};
+use self::def_analysis::{analyze_adt, analyze_func};
 use crate::analysis::{
     HirAnalysisDb, analysis_pass::ModuleAnalysisPass, diagnostics::DiagnosticVoucher,
     ty::def_analysis::DefAnalyzer,
@@ -52,19 +52,32 @@ impl ModuleAnalysisPass for AdtDefAnalysisPass {
         db: &'db dyn HirAnalysisDb,
         top_mod: TopLevelMod<'db>,
     ) -> Vec<Box<dyn DiagnosticVoucher + 'db>> {
-        let adts = top_mod
-            .all_structs(db)
-            .iter()
-            .copied()
-            .map(AdtRef::from)
-            .chain(top_mod.all_enums(db).iter().copied().map(AdtRef::from))
-            .chain(top_mod.all_contracts(db).iter().copied().map(AdtRef::from));
-
         let mut diags = vec![];
         let mut cycle_participants = FxHashSet::<AdtRef<'db>>::default();
 
-        for adt in adts {
-            diags.extend(analyze_adt(db, adt).iter().map(|d| d.to_voucher()));
+        for &s in top_mod.all_structs(db) {
+            diags.extend(s.analyze(db).iter().map(|d| d.to_voucher()));
+            let adt = AdtRef::from(s);
+            if !cycle_participants.contains(&adt)
+                && let Some(cycle) = check_recursive_adt(db, adt)
+            {
+                diags.push(Box::new(TyLowerDiag::RecursiveType(cycle.clone())) as _);
+                cycle_participants.extend(cycle.iter().map(|m| m.adt));
+            }
+        }
+        for &e in top_mod.all_enums(db) {
+            diags.extend(e.analyze(db).iter().map(|d| d.to_voucher()));
+            let adt = AdtRef::from(e);
+            if !cycle_participants.contains(&adt)
+                && let Some(cycle) = check_recursive_adt(db, adt)
+            {
+                diags.push(Box::new(TyLowerDiag::RecursiveType(cycle.clone())) as _);
+                cycle_participants.extend(cycle.iter().map(|m| m.adt));
+            }
+        }
+        for &c in top_mod.all_contracts(db) {
+            diags.extend(c.analyze(db).iter().map(|d| d.to_voucher()));
+            let adt = AdtRef::from(c);
             if !cycle_participants.contains(&adt)
                 && let Some(cycle) = check_recursive_adt(db, adt)
             {
@@ -197,7 +210,7 @@ impl ModuleAnalysisPass for ImplAnalysisPass {
         top_mod
             .all_impls(db)
             .iter()
-            .flat_map(|impl_| analyze_impl(db, *impl_))
+            .flat_map(|impl_| impl_.analyze(db))
             .map(|diag| diag.to_voucher())
             .collect()
     }
@@ -215,7 +228,7 @@ impl ModuleAnalysisPass for ImplTraitAnalysisPass {
         top_mod
             .all_impl_traits(db)
             .iter()
-            .flat_map(|trait_| analyze_impl_trait(db, *trait_))
+            .flat_map(|trait_| trait_.analyze(db))
             .map(|diag| diag.to_voucher())
             .collect()
     }
@@ -233,7 +246,7 @@ impl ModuleAnalysisPass for FuncAnalysisPass {
         top_mod
             .all_funcs(db)
             .iter()
-            .flat_map(|func| analyze_func(db, *func))
+            .flat_map(|func| func.analyze(db))
             .map(|diag| diag.to_voucher())
             .collect()
     }

@@ -47,14 +47,7 @@ use crate::analysis::{
     },
 };
 
-// Unified result type for item-level analyses that optionally emit diagnostics.
-// Ok(true) indicates success with no diagnostics; Err(diags) returns all emitted diagnostics.
-pub(crate) type AnalysisResult<'db> = Result<bool, Vec<TyDiagCollection<'db>>>;
-
-#[inline]
-fn into_analysis_result<'db>(diags: Vec<TyDiagCollection<'db>>) -> AnalysisResult<'db> {
-    if diags.is_empty() { Ok(true) } else { Err(diags) }
-}
+//
 
 /// Shared helpers for ADT field/variant validations
 pub(crate) fn diag_term_or_const_ty<'db>(
@@ -218,41 +211,17 @@ pub fn analyze_adt<'db>(
     db: &'db dyn HirAnalysisDb,
     adt_ref: AdtRef<'db>,
 ) -> Vec<TyDiagCollection<'db>> {
-    let dupes = match adt_ref {
-        AdtRef::Struct(x) => check_duplicate_field_names(db, FieldParent::Struct(x)),
-        AdtRef::Contract(x) => check_duplicate_field_names(db, FieldParent::Contract(x)),
-        AdtRef::Enum(enum_) => {
-            let mut dupes = check_duplicate_variant_names(db, enum_);
-
-            for (idx, var) in enum_.variants(db).data(db).iter().enumerate() {
-                if matches!(var.kind, VariantKind::Record(..)) {
-                    dupes.extend(check_duplicate_field_names(
-                        db,
-                        FieldParent::Variant(EnumVariant::new(enum_, idx)),
-                    ))
-                }
-            }
-            dupes
-        }
-    };
-
-    let analyzer = DefAnalyzer::for_adt(db, adt_ref);
-    let mut diags = analyzer.analyze();
-
-    // Item-level validations for ADTs (reduces visitor responsibilities)
     match adt_ref {
-        AdtRef::Enum(e) => {
-            diags.extend(e.validate_variants(db).iter().cloned());
-            diags.extend(e.analyze_where_clause(db).iter().cloned());
+        AdtRef::Struct(s) => s.analyze(db).clone(),
+        AdtRef::Enum(e) => e.analyze(db).clone(),
+        AdtRef::Contract(c) => {
+            let mut diags = Vec::new();
+            diags.extend(DefAnalyzer::for_adt(db, adt_ref).analyze());
+            diags.extend(c.validate_fields(db).iter().cloned());
+            diags.extend(check_duplicate_field_names(db, FieldParent::Contract(c)));
+            diags
         }
-        AdtRef::Struct(s) => {
-            diags.extend(s.validate_fields(db).iter().cloned());
-            diags.extend(s.analyze_where_clause(db).iter().cloned());
-        }
-        AdtRef::Contract(c) => diags.extend(c.validate_fields(db).iter().cloned()),
     }
-    diags.extend(dupes);
-    diags
 }
 
 fn check_duplicate_field_names<'db>(
@@ -384,31 +353,7 @@ pub fn analyze_impl_trait<'db>(
     db: &'db dyn HirAnalysisDb,
     impl_trait: ImplTrait<'db>,
 ) -> Vec<TyDiagCollection<'db>> {
-    let implementor = match impl_trait.analyze_preconditions(db) {
-        Ok(implementor) => implementor,
-        Err(diags) => {
-            return diags;
-        }
-    };
-
-    // Method conformance checks (moved behind an item method)
-    let mut diags = implementor
-        .skip_binder()
-        .analyze_methods(db)
-        .iter()
-        .cloned()
-        .collect::<Vec<_>>();
-
-    let analyzer = DefAnalyzer::for_trait_impl(db, implementor.instantiate_identity());
-    let def_diags = analyzer.analyze();
-
-    diags.extend(def_diags);
-
-    // Analyze where-clause constraints owned by this impl-trait
-    diags.extend(impl_trait.analyze_where_clause(db).iter().cloned());
-    // Associated types lowering + WF checks
-    diags.extend(impl_trait.analyze_associated_types(db).iter().cloned());
-    diags
+    impl_trait.analyze(db).clone()
 }
 
 #[salsa::tracked(return_ref)]
@@ -416,10 +361,8 @@ pub fn analyze_impl<'db>(
     db: &'db dyn HirAnalysisDb,
     impl_: HirImpl<'db>,
 ) -> Vec<TyDiagCollection<'db>> {
-    let analyzer = DefAnalyzer::for_impl(db, impl_);
-    let mut diags = analyzer.analyze();
-    diags.extend(impl_.analyze_preconditions(db).iter().cloned());
-    diags
+    // Delegate to the item-level analyzer to keep a single source of truth.
+    impl_.analyze(db).clone()
 }
 
 #[salsa::tracked(return_ref)]
@@ -1251,6 +1194,31 @@ impl<'db> ImplTrait<'db> {
         }
         diags
     }
+
+    /// Full analysis entry for an impl-trait item.
+    #[salsa::tracked(return_ref)]
+    pub fn analyze(self, db: &'db dyn HirAnalysisDb) -> Vec<TyDiagCollection<'db>> {
+        let implementor = match self.analyze_preconditions(db) {
+            Ok(implementor) => implementor,
+            Err(diags) => {
+                return diags;
+            }
+        };
+
+        let mut diags = implementor
+            .skip_binder()
+            .analyze_methods(db)
+            .iter()
+            .cloned()
+            .collect::<Vec<_>>();
+
+        let analyzer = DefAnalyzer::for_trait_impl(db, implementor.instantiate_identity());
+        diags.extend(analyzer.analyze());
+
+        diags.extend(self.analyze_where_clause(db).iter().cloned());
+        diags.extend(self.analyze_associated_types(db).iter().cloned());
+        diags
+    }
 }
 
 #[salsa::tracked]
@@ -1259,71 +1227,36 @@ impl<'db> Impl<'db> {
     /// and constraints.
     #[salsa::tracked(return_ref)]
     pub fn analyze_where_clause(self, db: &'db dyn HirAnalysisDb) -> Vec<TyDiagCollection<'db>> {
-        use crate::span::params::{LazyTraitRefSpan, LazyWhereClauseSpan, LazyWherePredicateSpan};
-
-        let mut diags = Vec::new();
         let assumptions = collect_constraints(db, self.into()).instantiate_identity();
-        let scope = self.scope();
+        analyze_where_clause_for_owner(db, WhereClauseOwner::Impl(self), assumptions)
+    }
 
-        let where_clause = self.where_clause(db);
-        let wc_span: LazyWhereClauseSpan<'db> = self.span().where_clause();
-
-        for (i, pred) in where_clause.data(db).iter().enumerate() {
-            let pred_span: LazyWherePredicateSpan<'db> = wc_span.clone().predicate(i);
-
-            let Some(hir_ty) = pred.type_ref.to_opt() else { continue; };
-            let ty = lower_hir_ty(db, hir_ty, scope, assumptions);
-
-            if ty.is_const_ty(db) {
-                diags.push(
-                    TraitConstraintDiag::ConstTyBound(pred_span.clone().ty().into(), ty).into(),
-                );
-                continue;
-            }
-
-            if !ty.has_invalid(db) && !ty.has_param(db) {
-                diags.push(
-                    TraitConstraintDiag::ConcreteTypeBound(pred_span.clone().ty().into(), ty)
-                        .into(),
-                );
-                continue;
-            }
-
-            for (j, bound) in pred.bounds.iter().enumerate() {
-                match bound {
-                    TypeBound::Trait(trait_ref) => {
-                        let tr_span: LazyTraitRefSpan<'db> =
-                            pred_span.clone().bounds().bound(j).trait_bound();
-                        if let Some(diag) = analyze_trait_ref(db, ty, *trait_ref, scope, assumptions, tr_span) {
-                            diags.push(diag);
-                        }
-                    }
-                    TypeBound::Kind(kind_bound) => {
-                        if let crate::hir_def::Partial::Present(k) = kind_bound {
-                            let bound_kind = lower_kind(&k);
-                            let former_kind = ty.kind(db);
-                            if !former_kind.does_match(&bound_kind) {
-                                diags.push(
-                                    TyLowerDiag::InconsistentKindBound {
-                                        span: pred_span.clone().bounds().bound(j).kind_bound().into(),
-                                        ty,
-                                        bound: bound_kind,
-                                    }
-                                    .into(),
-                                );
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
+    /// Full analysis entry for an inherent impl item.
+    #[salsa::tracked(return_ref)]
+    pub fn analyze(self, db: &'db dyn HirAnalysisDb) -> Vec<TyDiagCollection<'db>> {
+        let analyzer = DefAnalyzer::for_impl(db, self);
+        let mut diags = analyzer.analyze();
+        diags.extend(self.analyze_preconditions(db).iter().cloned());
+        diags.extend(self.analyze_where_clause(db).iter().cloned());
         diags
     }
 }
 
 #[salsa::tracked]
 impl<'db> crate::hir_def::Struct<'db> {
+    /// Full analysis entry for a struct definition.
+    #[salsa::tracked(return_ref)]
+    pub fn analyze(self, db: &'db dyn HirAnalysisDb) -> Vec<TyDiagCollection<'db>> {
+        let mut diags = Vec::new();
+        // Visitor-based checks
+        diags.extend(DefAnalyzer::for_adt(db, AdtRef::Struct(self)).analyze());
+        // Item-owned checks
+        diags.extend(self.validate_fields(db).iter().cloned());
+        diags.extend(self.analyze_where_clause(db).iter().cloned());
+        // Duplicate field names
+        diags.extend(check_duplicate_field_names(db, FieldParent::Struct(self)));
+        diags
+    }
     #[salsa::tracked(return_ref)]
     pub fn analyze_where_clause(self, db: &'db dyn HirAnalysisDb) -> Vec<TyDiagCollection<'db>> {
         let assumptions = collect_constraints(db, self.into()).instantiate_identity();
@@ -1333,10 +1266,45 @@ impl<'db> crate::hir_def::Struct<'db> {
 
 #[salsa::tracked]
 impl<'db> crate::hir_def::Enum<'db> {
+    /// Full analysis entry for an enum definition.
+    #[salsa::tracked(return_ref)]
+    pub fn analyze(self, db: &'db dyn HirAnalysisDb) -> Vec<TyDiagCollection<'db>> {
+        let mut diags = Vec::new();
+        // Visitor-based checks
+        diags.extend(DefAnalyzer::for_adt(db, AdtRef::Enum(self)).analyze());
+        // Item-owned checks
+        diags.extend(self.validate_variants(db).iter().cloned());
+        diags.extend(self.analyze_where_clause(db).iter().cloned());
+        // Duplicate variant names
+        diags.extend(check_duplicate_variant_names(db, self));
+        // Duplicate field names for record variants
+        for (idx, var) in self.variants(db).data(db).iter().enumerate() {
+            if matches!(var.kind, VariantKind::Record(..)) {
+                diags.extend(check_duplicate_field_names(
+                    db,
+                    FieldParent::Variant(EnumVariant::new(self, idx)),
+                ));
+            }
+        }
+        diags
+    }
     #[salsa::tracked(return_ref)]
     pub fn analyze_where_clause(self, db: &'db dyn HirAnalysisDb) -> Vec<TyDiagCollection<'db>> {
         let assumptions = collect_constraints(db, self.into()).instantiate_identity();
         analyze_where_clause_for_owner(db, WhereClauseOwner::Enum(self), assumptions)
+    }
+}
+
+#[salsa::tracked]
+impl<'db> crate::hir_def::Contract<'db> {
+    /// Full analysis entry for a contract definition.
+    #[salsa::tracked(return_ref)]
+    pub fn analyze(self, db: &'db dyn HirAnalysisDb) -> Vec<TyDiagCollection<'db>> {
+        let mut diags = Vec::new();
+        diags.extend(DefAnalyzer::for_adt(db, AdtRef::Contract(self)).analyze());
+        diags.extend(self.validate_fields(db).iter().cloned());
+        diags.extend(check_duplicate_field_names(db, FieldParent::Contract(self)));
+        diags
     }
 }
 
