@@ -122,8 +122,8 @@ pub(crate) fn check_trait_inst_wf<'db>(
     trait_inst: TraitInstId<'db>,
     assumptions: PredicateListId<'db>,
 ) -> WellFormedness<'db> {
-    let constraints = collect_constraints(db, trait_inst.def(db).into())
-        .instantiate(db, trait_inst.args(db));
+    let constraints =
+        collect_constraints(db, trait_inst.def(db).into()).instantiate(db, trait_inst.args(db));
 
     // Normalize constraints after instantiation to resolve associated types
     let normalized_constraints = {

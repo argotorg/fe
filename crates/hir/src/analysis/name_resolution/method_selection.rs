@@ -255,10 +255,7 @@ impl<'db> MethodSelector<'db> {
                     Err(MethodSelectionError::NotFound)
                 } else {
                     // Suggests trait imports.
-                    let traits = traits
-                        .iter()
-                        .map(|(inst, _)| inst.def(self.db))
-                        .collect();
+                    let traits = traits.iter().map(|(inst, _)| inst.def(self.db)).collect();
                     Err(MethodSelectionError::InvisibleTraitMethod(traits))
                 }
             }

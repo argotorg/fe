@@ -1,6 +1,6 @@
 use crate::hir_def::{
-    GenericArg, GenericArgListId, GenericParam, GenericParamOwner, IdentId, ItemKind,
-    KindBound as HirKindBound, Partial, PathId, TypeAlias as HirTypeAlias, TypeBound,
+    GenericArg, GenericArgListId, GenericParam, GenericParamOwner, HasGenericParams, IdentId,
+    ItemKind, KindBound as HirKindBound, Partial, PathId, TypeAlias as HirTypeAlias, TypeBound,
     TypeId as HirTyId, TypeKind as HirTyKind, scope_graph::ScopeId,
 };
 use salsa::Update;
@@ -141,6 +141,16 @@ pub(crate) fn collect_generic_params<'db>(
     owner: GenericParamOwner<'db>,
 ) -> GenericParamTypeSet<'db> {
     GenericParamCollector::new(db, owner).finalize()
+}
+
+pub(crate) fn collect_generic_params_for<'db, O>(
+    db: &'db dyn HirAnalysisDb,
+    owner: O,
+) -> GenericParamTypeSet<'db>
+where
+    O: HasGenericParams<'db> + Copy,
+{
+    collect_generic_params(db, owner.as_generic_param_owner())
 }
 
 /// Lowers the given type alias to [`TyAlias`].

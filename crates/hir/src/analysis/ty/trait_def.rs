@@ -52,7 +52,8 @@ pub(crate) fn impls_for_trait<'db>(
 
             // Create fresh vars and instantiate trait_inst
             let fresh_vars = impl_trait.create_fresh_vars(db, &mut table);
-            let is_ok = impl_trait.trait_inst_instantiated(db, &fresh_vars)
+            let is_ok = impl_trait
+                .trait_inst_instantiated(db, &fresh_vars)
                 .map(|inst| table.unify(inst, trait_).is_ok())
                 .unwrap_or(false);
 

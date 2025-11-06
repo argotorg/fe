@@ -14,7 +14,10 @@ use super::{
     ty_def::{ApplicableTyProp, Kind, TyData, TyId, TyVar, TyVarSort, inference_keys},
 };
 use crate::{
-    analysis::{HirAnalysisDb, ty::const_ty::{ConstTyData, EvaluatedConstTy}},
+    analysis::{
+        HirAnalysisDb,
+        ty::const_ty::{ConstTyData, EvaluatedConstTy},
+    },
     hir_def::ImplTrait,
 };
 

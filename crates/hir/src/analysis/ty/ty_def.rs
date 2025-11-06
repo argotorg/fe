@@ -1025,7 +1025,7 @@ impl<'db> TyParam<'db> {
     }
 
     pub fn original_idx(&self, db: &'db dyn HirAnalysisDb) -> usize {
-        let owner = GenericParamOwner::from_item_opt(self.owner.item()).unwrap();
+        let owner = GenericParamOwner::try_from_item(self.owner.item()).unwrap();
         let param_set = collect_generic_params(db, owner);
         let offset = param_set.offset_to_explicit_params_position(db);
 
@@ -1109,8 +1109,16 @@ impl<'db> TyBase<'db> {
                 .unwrap_or_else(|| "<unknown>".to_string()),
 
             Self::Func(callable) => match callable {
-                CallableDef::Func(func) => format!("fn {}", func.name(db).to_opt().map(|n| n.data(db).to_string()).unwrap_or_else(|| "<unknown>".to_string())),
-                CallableDef::VariantCtor(var) => format!("fn {}", var.name(db).unwrap_or("<unknown>")),
+                CallableDef::Func(func) => format!(
+                    "fn {}",
+                    func.name(db)
+                        .to_opt()
+                        .map(|n| n.data(db).to_string())
+                        .unwrap_or_else(|| "<unknown>".to_string())
+                ),
+                CallableDef::VariantCtor(var) => {
+                    format!("fn {}", var.name(db).unwrap_or("<unknown>"))
+                }
             },
         }
     }

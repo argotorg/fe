@@ -1074,7 +1074,7 @@ pub fn resolve_name_res<'db>(
                 ItemKind::Use(_) | ItemKind::Body(_) => unreachable!(),
             },
             ScopeId::GenericParam(parent, idx) => {
-                let owner = GenericParamOwner::from_item_opt(parent).unwrap();
+                let owner = GenericParamOwner::try_from_item(parent).unwrap();
                 let param_set = collect_generic_params(db, owner);
                 let ty = param_set.param_by_original_idx(db, idx as usize).unwrap();
                 let ty = TyId::foldl(db, ty, args);

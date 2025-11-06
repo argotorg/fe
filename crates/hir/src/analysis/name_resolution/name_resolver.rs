@@ -790,7 +790,7 @@ impl NameDomain {
             | ScopeId::Block(..) => Self::VALUE,
             ScopeId::Item(_) => Self::TYPE,
             ScopeId::GenericParam(parent, idx) => {
-                let parent = GenericParamOwner::from_item_opt(parent).unwrap();
+                let parent = GenericParamOwner::try_from_item(parent).unwrap();
                 match parent.param(db, idx as usize) {
                     GenericParam::Type(_) => NameDomain::TYPE,
                     GenericParam::Const(_) => NameDomain::TYPE | NameDomain::VALUE,

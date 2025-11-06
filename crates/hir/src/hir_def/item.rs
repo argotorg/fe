@@ -10,8 +10,9 @@ use indexmap::IndexMap;
 use parser::ast;
 
 use super::{
-    AttrListId, Body, FuncParamListId, FuncParamName, GenericParam, GenericParamListId, HirIngot,
-    IdentId, Partial, TupleTypeId, TypeBound, TypeId, UseAlias, WhereClauseId,
+    AttrListId, Body, ConstGenericParam, FuncParamListId, FuncParamName, GenericArg, GenericParam,
+    GenericParamListId, HirIngot, IdentId, Partial, TupleTypeId, TypeBound, TypeGenericParam,
+    TypeId, UseAlias, WhereClauseId, WherePredicate,
     scope_graph::{ScopeGraph, ScopeId},
 };
 use crate::{
@@ -20,11 +21,14 @@ use crate::{
         HirAnalysisDb,
         ty::{
             adt_def::AdtRef,
+            def_analysis::DefAnalyzable,
             trait_def::TraitMethod,
             trait_lower::{TraitRefLowerError, lower_trait_ref},
             trait_resolution::PredicateListId,
             ty_def::{InvalidCause, TyId},
+            ty_error::collect_ty_lower_errors,
             ty_lower::lower_hir_ty,
+            visitor::TyVisitable,
         },
     },
     hir_def::TraitRefId,
@@ -36,7 +40,10 @@ use crate::{
             LazyImplTraitSpan, LazyItemSpan, LazyModSpan, LazyStructSpan, LazyTopModSpan,
             LazyTraitSpan, LazyTraitTypeSpan, LazyTypeAliasSpan, LazyUseSpan, LazyVariantDefSpan,
         },
-        params::{LazyGenericParamListSpan, LazyWhereClauseSpan},
+        params::{
+            LazyGenericParamListSpan, LazyGenericParamSpan, LazyTraitRefSpan, LazyWhereClauseSpan,
+            LazyWherePredicateSpan,
+        },
     },
 };
 
@@ -72,7 +79,6 @@ pub enum ItemKind<'db> {
 }
 
 impl<'db> ItemKind<'db> {
-
     pub fn span(self) -> LazyItemSpan<'db> {
         LazyItemSpan::new(self)
     }
@@ -215,6 +221,16 @@ impl<'db> From<GenericParamOwner<'db>> for ItemKind<'db> {
     }
 }
 
+impl<'db> ItemKind<'db> {
+    pub fn generic_params_opt(self) -> Option<GenericParamOwner<'db>> {
+        GenericParamOwner::try_from_item(self)
+    }
+
+    pub fn where_clause_opt(self) -> Option<WhereClauseOwner<'db>> {
+        WhereClauseOwner::try_from_item(self)
+    }
+}
+
 impl<'db> From<WhereClauseOwner<'db>> for ItemKind<'db> {
     fn from(owner: WhereClauseOwner<'db>) -> Self {
         match owner {
@@ -251,7 +267,7 @@ pub enum GenericParamOwner<'db> {
     ImplTrait(ImplTrait<'db>),
 }
 
-pub trait HasGenericParams<'db>: Copy {
+pub trait HasGenericParams<'db>: Copy + Into<ItemKind<'db>> {
     fn as_generic_param_owner(self) -> GenericParamOwner<'db>;
 
     fn generic_params(self, db: &'db dyn HirDb) -> GenericParamListId<'db> {
@@ -273,6 +289,14 @@ pub trait HasGenericParams<'db>: Copy {
     fn generic_param(self, db: &'db dyn HirDb, idx: usize) -> &'db GenericParam<'db> {
         self.as_generic_param_owner().param(db, idx)
     }
+
+    fn generic_param_views(self, db: &'db dyn HirDb) -> Vec<GenericParamView<'db>> {
+        let owner = self.as_generic_param_owner();
+        let params = owner.params(db);
+        (0..params.data(db).len())
+            .map(|idx| GenericParamView::new(owner, idx))
+            .collect()
+    }
 }
 
 impl<'db> HasGenericParams<'db> for GenericParamOwner<'db> {
@@ -282,6 +306,19 @@ impl<'db> HasGenericParams<'db> for GenericParamOwner<'db> {
 }
 
 impl<'db> GenericParamOwner<'db> {
+    pub fn try_from_item(item: ItemKind<'db>) -> Option<Self> {
+        match item {
+            ItemKind::Func(func) => Some(GenericParamOwner::Func(func)),
+            ItemKind::Struct(struct_) => Some(GenericParamOwner::Struct(struct_)),
+            ItemKind::Enum(enum_) => Some(GenericParamOwner::Enum(enum_)),
+            ItemKind::TypeAlias(type_alias) => Some(GenericParamOwner::TypeAlias(type_alias)),
+            ItemKind::Impl(impl_) => Some(GenericParamOwner::Impl(impl_)),
+            ItemKind::Trait(trait_) => Some(GenericParamOwner::Trait(trait_)),
+            ItemKind::ImplTrait(impl_trait) => Some(GenericParamOwner::ImplTrait(impl_trait)),
+            _ => None,
+        }
+    }
+
     pub fn top_mod(self, db: &'db dyn HirDb) -> TopLevelMod<'db> {
         ItemKind::from(self).top_mod(db)
     }
@@ -343,16 +380,7 @@ impl<'db> GenericParamOwner<'db> {
     }
 
     pub fn from_item_opt(item: ItemKind<'db>) -> Option<Self> {
-        match item {
-            ItemKind::Func(func) => Some(GenericParamOwner::Func(func)),
-            ItemKind::Struct(struct_) => Some(GenericParamOwner::Struct(struct_)),
-            ItemKind::Enum(enum_) => Some(GenericParamOwner::Enum(enum_)),
-            ItemKind::TypeAlias(type_alias) => Some(GenericParamOwner::TypeAlias(type_alias)),
-            ItemKind::Impl(impl_) => Some(GenericParamOwner::Impl(impl_)),
-            ItemKind::Trait(trait_) => Some(GenericParamOwner::Trait(trait_)),
-            ItemKind::ImplTrait(impl_trait) => Some(GenericParamOwner::ImplTrait(impl_trait)),
-            _ => None,
-        }
+        Self::try_from_item(item)
     }
 
     pub fn parent(self, db: &'db dyn HirDb) -> Option<Self> {
@@ -373,13 +401,120 @@ impl<'db> GenericParamOwner<'db> {
     }
 
     pub fn where_clause_owner(self) -> Option<WhereClauseOwner<'db>> {
-        let item = ItemKind::from(self);
-        WhereClauseOwner::from_item_opt(item)
+        WhereClauseOwner::try_from_item(ItemKind::from(self))
     }
 
     pub fn where_clause(self, db: &'db dyn HirDb) -> Option<WhereClauseId<'db>> {
         self.where_clause_owner()
             .map(|owner| owner.where_clause(db))
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct GenericParamView<'db> {
+    owner: GenericParamOwner<'db>,
+    index: usize,
+}
+
+impl<'db> GenericParamView<'db> {
+    pub(crate) fn new(owner: GenericParamOwner<'db>, index: usize) -> Self {
+        Self { owner, index }
+    }
+
+    pub fn owner(self) -> GenericParamOwner<'db> {
+        self.owner
+    }
+
+    pub fn index(self) -> usize {
+        self.index
+    }
+
+    pub fn param(self, db: &'db dyn HirDb) -> &'db GenericParam<'db> {
+        self.owner.param(db, self.index)
+    }
+
+    pub fn span(self) -> LazyGenericParamSpan<'db> {
+        self.owner.params_span().param(self.index)
+    }
+
+    pub fn scope(self) -> ScopeId<'db> {
+        self.owner.scope()
+    }
+
+    pub fn assumptions(self, db: &'db dyn HirAnalysisDb) -> PredicateListId<'db> {
+        self.scope().constraints(db)
+    }
+
+    pub fn name(self, db: &'db dyn HirDb) -> Option<IdentId<'db>> {
+        self.param(db).name().to_opt()
+    }
+
+    pub fn as_type_param(self, db: &'db dyn HirDb) -> Option<&'db TypeGenericParam<'db>> {
+        match self.param(db) {
+            GenericParam::Type(param) => Some(param),
+            GenericParam::Const(_) => None,
+        }
+    }
+
+    pub fn as_const_param(self, db: &'db dyn HirDb) -> Option<&'db ConstGenericParam<'db>> {
+        match self.param(db) {
+            GenericParam::Const(param) => Some(param),
+            GenericParam::Type(_) => None,
+        }
+    }
+
+    /// Default type (lowered) for a type generic parameter, if present,
+    /// using the owner's scope and active assumptions.
+    pub fn default_ty(
+        self,
+        db: &'db dyn HirAnalysisDb,
+    ) -> Option<crate::analysis::ty::ty_def::TyId<'db>> {
+        let tp = self.as_type_param(db)?;
+        let hir_ty = tp.default_ty?;
+        let scope = self.scope();
+        let assumptions = self.assumptions(db);
+        Some(lower_hir_ty(db, hir_ty, scope, assumptions))
+    }
+
+    /// Indices (original order) of generic params referenced by this param's
+    /// default type that belong to the same owner. Useful for forward-ref checks.
+    pub fn forward_refs(self, db: &'db dyn HirAnalysisDb) -> Vec<usize> {
+        use crate::analysis::ty::{ty_def::TyParam, visitor::TyVisitor};
+        let Some(lowered) = self.default_ty(db) else {
+            return Vec::new();
+        };
+        let scope = self.scope();
+        struct Collector<'db> {
+            db: &'db dyn HirAnalysisDb,
+            scope: ScopeId<'db>,
+            out: Vec<usize>,
+        }
+        impl<'db> TyVisitor<'db> for Collector<'db> {
+            fn db(&self) -> &'db dyn HirAnalysisDb {
+                self.db
+            }
+            fn visit_param(&mut self, tp: &TyParam<'db>) {
+                if !tp.is_trait_self() && tp.owner == self.scope {
+                    self.out.push(tp.original_idx(self.db));
+                }
+            }
+            fn visit_const_param(
+                &mut self,
+                tp: &TyParam<'db>,
+                _ty: crate::analysis::ty::ty_def::TyId<'db>,
+            ) {
+                if tp.owner == self.scope {
+                    self.out.push(tp.original_idx(self.db));
+                }
+            }
+        }
+        let mut c = Collector {
+            db,
+            scope,
+            out: Vec::new(),
+        };
+        lowered.visit_with(&mut c);
+        c.out
     }
 }
 
@@ -419,7 +554,7 @@ impl<'db> HasGenericParams<'db> for Func<'db> {
     }
 }
 
-pub trait HasWhereClause<'db>: Copy {
+pub trait HasWhereClause<'db>: Copy + Into<ItemKind<'db>> {
     fn as_where_clause_owner(self) -> WhereClauseOwner<'db>;
 
     fn where_clause(self, db: &'db dyn HirDb) -> WhereClauseId<'db> {
@@ -436,6 +571,14 @@ pub trait HasWhereClause<'db>: Copy {
 
     fn where_clause_assumptions(self, db: &'db dyn HirAnalysisDb) -> PredicateListId<'db> {
         self.where_clause_scope().constraints(db)
+    }
+
+    fn where_predicate_views(self, db: &'db dyn HirDb) -> Vec<WherePredicateView<'db>> {
+        let owner = self.as_where_clause_owner();
+        let where_clause = owner.where_clause(db);
+        (0..where_clause.data(db).len())
+            .map(|idx| WherePredicateView::new(owner, idx))
+            .collect()
     }
 }
 
@@ -498,6 +641,18 @@ pub enum WhereClauseOwner<'db> {
 }
 
 impl<'db> WhereClauseOwner<'db> {
+    pub fn try_from_item(item: ItemKind<'db>) -> Option<Self> {
+        match item {
+            ItemKind::Func(func) => Some(Self::Func(func)),
+            ItemKind::Struct(struct_) => Some(Self::Struct(struct_)),
+            ItemKind::Enum(enum_) => Some(Self::Enum(enum_)),
+            ItemKind::Impl(impl_) => Some(Self::Impl(impl_)),
+            ItemKind::Trait(trait_) => Some(Self::Trait(trait_)),
+            ItemKind::ImplTrait(impl_trait) => Some(Self::ImplTrait(impl_trait)),
+            _ => None,
+        }
+    }
+
     pub fn top_mod(self, db: &'db dyn HirDb) -> TopLevelMod<'db> {
         ItemKind::from(self).top_mod(db)
     }
@@ -529,15 +684,127 @@ impl<'db> WhereClauseOwner<'db> {
     }
 
     pub fn from_item_opt(item: ItemKind<'db>) -> Option<Self> {
-        match item {
-            ItemKind::Func(func) => Some(Self::Func(func)),
-            ItemKind::Struct(struct_) => Some(Self::Struct(struct_)),
-            ItemKind::Enum(enum_) => Some(Self::Enum(enum_)),
-            ItemKind::Impl(impl_) => Some(Self::Impl(impl_)),
-            ItemKind::Trait(trait_) => Some(Self::Trait(trait_)),
-            ItemKind::ImplTrait(impl_trait) => Some(Self::ImplTrait(impl_trait)),
-            _ => None,
+        Self::try_from_item(item)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct WherePredicateView<'db> {
+    owner: WhereClauseOwner<'db>,
+    index: usize,
+}
+
+impl<'db> WherePredicateView<'db> {
+    pub(crate) fn new(owner: WhereClauseOwner<'db>, index: usize) -> Self {
+        Self { owner, index }
+    }
+
+    pub fn owner(self) -> WhereClauseOwner<'db> {
+        self.owner
+    }
+
+    pub fn index(self) -> usize {
+        self.index
+    }
+
+    pub fn predicate(self, db: &'db dyn HirDb) -> &'db WherePredicate<'db> {
+        &self.owner.where_clause(db).data(db)[self.index]
+    }
+
+    pub fn span(self) -> LazyWherePredicateSpan<'db> {
+        self.owner.where_clause_span().predicate(self.index)
+    }
+
+    pub fn scope(self) -> ScopeId<'db> {
+        self.owner.scope()
+    }
+
+    pub fn assumptions(self, db: &'db dyn HirAnalysisDb) -> PredicateListId<'db> {
+        self.scope().constraints(db)
+    }
+
+    pub fn type_ref(self, db: &'db dyn HirDb) -> Option<TypeId<'db>> {
+        self.predicate(db).type_ref.to_opt()
+    }
+
+    pub fn bounds(self, db: &'db dyn HirDb) -> &'db [TypeBound<'db>] {
+        &self.predicate(db).bounds
+    }
+
+    /// The predicate type (lowered) using the owner's scope and assumptions.
+    pub fn ty(self, db: &'db dyn HirAnalysisDb) -> Option<crate::analysis::ty::ty_def::TyId<'db>> {
+        let hir_ty = self.type_ref(db)?;
+        let scope = self.scope();
+        let assumptions = self.assumptions(db);
+        Some(lower_hir_ty(db, hir_ty, scope, assumptions))
+    }
+
+    /// Diagnostics for generic type arguments inside a given trait bound.
+    pub fn trait_arg_ty_errors(
+        self,
+        db: &'db dyn HirAnalysisDb,
+        trait_ref: TraitRefId<'db>,
+        tr_span: LazyTraitRefSpan<'db>,
+    ) -> Vec<crate::analysis::ty::diagnostics::TyDiagCollection<'db>> {
+        let mut diags = Vec::new();
+        let scope = self.scope();
+        let assumptions = self.assumptions(db);
+        if let Some(gargs) = trait_ref.generic_args(db) {
+            if let Some(path_id) = trait_ref.path(db).to_opt() {
+                let seg_idx = path_id.segment_index(db);
+                let ga_span = tr_span.clone().path().segment(seg_idx).generic_args();
+                for (k, garg) in gargs.data(db).iter().enumerate() {
+                    if let GenericArg::Type(targ) = garg {
+                        if let Some(arg_ty) = targ.ty.to_opt() {
+                            let arg_span = ga_span.clone().arg(k).into_type_arg().ty();
+                            let errs =
+                                collect_ty_lower_errors(db, scope, arg_ty, arg_span, assumptions);
+                            if !errs.is_empty() {
+                                diags.extend(errs);
+                            }
+                        }
+                    }
+                }
+            }
         }
+        diags
+    }
+
+    /// All trait bounds on this predicate with their precise spans.
+    pub fn trait_bounds(self, db: &'db dyn HirDb) -> Vec<(TraitRefId<'db>, LazyTraitRefSpan<'db>)> {
+        let pred = self.predicate(db);
+        let pspan = self.span();
+        pred.bounds
+            .iter()
+            .enumerate()
+            .filter_map(|(j, b)| match b {
+                TypeBound::Trait(tr) => Some((*tr, pspan.clone().bounds().bound(j).trait_bound())),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// All kind bounds (present ones) and their spans.
+    pub fn kind_bounds(
+        self,
+        db: &'db dyn HirDb,
+    ) -> Vec<(
+        crate::hir_def::Partial<crate::hir_def::KindBound>,
+        DynLazySpan<'db>,
+    )> {
+        let pred = self.predicate(db);
+        let pspan = self.span();
+        pred.bounds
+            .iter()
+            .enumerate()
+            .filter_map(|(j, b)| match b {
+                TypeBound::Kind(k) => Some((
+                    k.clone(),
+                    pspan.clone().bounds().bound(j).kind_bound().into(),
+                )),
+                _ => None,
+            })
+            .collect()
     }
 }
 
@@ -831,7 +1098,11 @@ impl<'db> Func<'db> {
         self,
         db: &'db dyn crate::analysis::HirAnalysisDb,
     ) -> Vec<crate::analysis::ty::binder::Binder<crate::analysis::ty::ty_def::TyId<'db>>> {
-        use crate::analysis::ty::{binder::Binder, ty_def::{InvalidCause, TyId}, ty_lower::lower_hir_ty};
+        use crate::analysis::ty::{
+            binder::Binder,
+            ty_def::{InvalidCause, TyId},
+            ty_lower::lower_hir_ty,
+        };
 
         let assumptions = self.scope().constraints(db);
 
@@ -958,23 +1229,27 @@ impl<'db> Struct<'db> {
         self,
         db: &'db dyn crate::analysis::HirAnalysisDb,
     ) -> Vec<crate::analysis::ty::diagnostics::TyDiagCollection<'db>> {
-        use crate::analysis::ty::diagnostics::TyDiagCollection;
         use crate::analysis::ty::def_analysis::{diag_const_param_mismatch, diag_term_or_const_ty};
+        use crate::analysis::ty::diagnostics::TyDiagCollection;
 
         let mut diags: Vec<TyDiagCollection> = Vec::new();
         let scope = self.scope();
         let assumptions = self.scope().constraints(db);
 
         for (i, field) in self.fields(db).data(db).iter().enumerate() {
-            let Some(hir_ty) = field.ty.to_opt() else { continue };
+            let Some(hir_ty) = field.ty.to_opt() else {
+                continue;
+            };
             let span = self.span().fields().field(i).ty();
-            if let Some(diag) = diag_term_or_const_ty(db, scope, assumptions, hir_ty, span.clone()) {
+            if let Some(diag) = diag_term_or_const_ty(db, scope, assumptions, hir_ty, span.clone())
+            {
                 diags.push(diag);
                 continue;
             }
             // Lower once for mismatch comparison
             let ty = crate::analysis::ty::ty_lower::lower_hir_ty(db, hir_ty, scope, assumptions);
-            if let Some(diag) = diag_const_param_mismatch(db, scope, field.name.to_opt(), ty, span) {
+            if let Some(diag) = diag_const_param_mismatch(db, scope, field.name.to_opt(), ty, span)
+            {
                 diags.push(diag);
             }
         }
@@ -1044,8 +1319,8 @@ impl<'db> Contract<'db> {
         self,
         db: &'db dyn crate::analysis::HirAnalysisDb,
     ) -> Vec<crate::analysis::ty::diagnostics::TyDiagCollection<'db>> {
-        use crate::analysis::ty::diagnostics::TyDiagCollection;
         use crate::analysis::ty::def_analysis::diag_term_or_const_ty;
+        use crate::analysis::ty::diagnostics::TyDiagCollection;
 
         let mut diags: Vec<TyDiagCollection> = Vec::new();
         let scope = self.scope();
@@ -1053,7 +1328,9 @@ impl<'db> Contract<'db> {
         let assumptions = crate::analysis::ty::trait_resolution::PredicateListId::empty_list(db);
 
         for (i, field) in self.fields(db).data(db).iter().enumerate() {
-            let Some(hir_ty) = field.ty.to_opt() else { continue };
+            let Some(hir_ty) = field.ty.to_opt() else {
+                continue;
+            };
             let span = self.span().fields().field(i).ty();
             if let Some(diag) = diag_term_or_const_ty(db, scope, assumptions, hir_ty, span) {
                 diags.push(diag);
@@ -1095,12 +1372,6 @@ impl<'db> Enum<'db> {
 
     pub fn scope(self) -> ScopeId<'db> {
         ScopeId::from_item(self.into())
-    }
-
-    #[allow(dead_code)]
-    pub(crate) fn constraints(self, db: &'db dyn HirAnalysisDb) -> PredicateListId<'db> {
-        // Delegate to the centralized scope-based helper to keep one source of truth.
-        self.scope().constraints(db)
     }
 
     /// Returns the argument types for a variant constructor.
@@ -1164,8 +1435,8 @@ impl<'db> Enum<'db> {
         self,
         db: &'db dyn crate::analysis::HirAnalysisDb,
     ) -> Vec<crate::analysis::ty::diagnostics::TyDiagCollection<'db>> {
-        use crate::analysis::ty::diagnostics::TyDiagCollection;
         use crate::analysis::ty::def_analysis::{diag_const_param_mismatch, diag_term_or_const_ty};
+        use crate::analysis::ty::diagnostics::TyDiagCollection;
         use crate::hir_def::VariantKind;
         use crate::span::types::LazyTySpan;
 
@@ -1178,9 +1449,12 @@ impl<'db> Enum<'db> {
                 let variant_span = self.variant_span(i);
                 let tuple_span = variant_span.tuple_type();
                 for (j, elem_ty) in tuple_id.data(db).iter().enumerate() {
-                    let Some(hir_ty) = elem_ty.to_opt() else { continue; };
+                    let Some(hir_ty) = elem_ty.to_opt() else {
+                        continue;
+                    };
                     let span: LazyTySpan<'db> = tuple_span.clone().elem_ty(j);
-                    if let Some(diag) = diag_term_or_const_ty(db, scope, assumptions, hir_ty, span) {
+                    if let Some(diag) = diag_term_or_const_ty(db, scope, assumptions, hir_ty, span)
+                    {
                         diags.push(diag);
                         continue;
                     }
@@ -1188,15 +1462,22 @@ impl<'db> Enum<'db> {
             } else if let VariantKind::Record(fields) = variant.kind {
                 let variant_span = self.variant_span(i);
                 for (j, field) in fields.data(db).iter().enumerate() {
-                    let Some(hir_ty) = field.ty.to_opt() else { continue };
+                    let Some(hir_ty) = field.ty.to_opt() else {
+                        continue;
+                    };
                     let span: LazyTySpan<'db> = variant_span.clone().fields().field(j).ty();
-                    if let Some(diag) = diag_term_or_const_ty(db, scope, assumptions, hir_ty, span.clone()) {
+                    if let Some(diag) =
+                        diag_term_or_const_ty(db, scope, assumptions, hir_ty, span.clone())
+                    {
                         diags.push(diag);
                         continue;
                     }
                     // Lower once for mismatch comparison
-                    let ty = crate::analysis::ty::ty_lower::lower_hir_ty(db, hir_ty, scope, assumptions);
-                    if let Some(diag) = diag_const_param_mismatch(db, scope, field.name.to_opt(), ty, span) {
+                    let ty =
+                        crate::analysis::ty::ty_lower::lower_hir_ty(db, hir_ty, scope, assumptions);
+                    if let Some(diag) =
+                        diag_const_param_mismatch(db, scope, field.name.to_opt(), ty, span)
+                    {
                         diags.push(diag);
                     }
                 }
@@ -1337,11 +1618,6 @@ pub struct Impl<'db> {
 }
 #[salsa::tracked]
 impl<'db> Impl<'db> {
-    #[allow(dead_code)]
-    fn constraints(self, db: &'db dyn HirAnalysisDb) -> PredicateListId<'db> {
-        // Delegate to the centralized scope-based helper to keep one source of truth.
-        self.scope().constraints(db)
-    }
     pub fn span(self) -> LazyImplSpan<'db> {
         LazyImplSpan::new(self)
     }
@@ -1447,11 +1723,6 @@ pub struct Trait<'db> {
 }
 #[salsa::tracked]
 impl<'db> Trait<'db> {
-    #[allow(dead_code)]
-    pub(crate) fn constraints(self, db: &'db dyn HirAnalysisDb) -> PredicateListId<'db> {
-        // Delegate to the centralized scope-based helper to keep one source of truth.
-        self.scope().constraints(db)
-    }
     pub fn span(self) -> LazyTraitSpan<'db> {
         LazyTraitSpan::new(self)
     }
@@ -1757,13 +2028,6 @@ impl<'db> ImplTrait<'db> {
         name: IdentId<'db>,
     ) -> Option<crate::analysis::ty::ty_def::TyId<'db>> {
         self.assoc_types(db).get(&name).copied()
-    }
-
-    /// Returns the constraints (where clauses) for this impl.
-    #[salsa::tracked]
-    pub(crate) fn constraints(self, db: &'db dyn HirAnalysisDb) -> PredicateListId<'db> {
-        // Delegate to the centralized scope-based helper to keep one source of truth.
-        self.scope().constraints(db)
     }
 
     /// Creates fresh type variables for this impl's generic parameters.

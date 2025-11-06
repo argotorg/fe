@@ -12,6 +12,7 @@ use trait_resolution::constraint::super_trait_cycle;
 use ty_def::{InvalidCause, TyData};
 use ty_lower::lower_type_alias;
 
+use crate::analysis::ty::def_analysis::DefAnalyzable;
 use crate::analysis::{
     HirAnalysisDb, analysis_pass::ModuleAnalysisPass, diagnostics::DiagnosticVoucher,
 };
@@ -54,7 +55,7 @@ impl ModuleAnalysisPass for AdtDefAnalysisPass {
         let mut cycle_participants = FxHashSet::<AdtRef<'db>>::default();
 
         for &s in top_mod.all_structs(db) {
-            diags.extend(s.analyze(db).iter().map(|d| d.to_voucher()));
+            diags.extend(DefAnalyzable::analyze(s, db).iter().map(|d| d.to_voucher()));
             let adt = AdtRef::from(s);
             if !cycle_participants.contains(&adt)
                 && let Some(cycle) = check_recursive_adt(db, adt)
@@ -64,7 +65,7 @@ impl ModuleAnalysisPass for AdtDefAnalysisPass {
             }
         }
         for &e in top_mod.all_enums(db) {
-            diags.extend(e.analyze(db).iter().map(|d| d.to_voucher()));
+            diags.extend(DefAnalyzable::analyze(e, db).iter().map(|d| d.to_voucher()));
             let adt = AdtRef::from(e);
             if !cycle_participants.contains(&adt)
                 && let Some(cycle) = check_recursive_adt(db, adt)
@@ -74,7 +75,7 @@ impl ModuleAnalysisPass for AdtDefAnalysisPass {
             }
         }
         for &c in top_mod.all_contracts(db) {
-            diags.extend(c.analyze(db).iter().map(|d| d.to_voucher()));
+            diags.extend(DefAnalyzable::analyze(c, db).iter().map(|d| d.to_voucher()));
             let adt = AdtRef::from(c);
             if !cycle_participants.contains(&adt)
                 && let Some(cycle) = check_recursive_adt(db, adt)
@@ -191,7 +192,11 @@ impl ModuleAnalysisPass for TraitAnalysisPass {
                 diags.push(Box::new(TraitLowerDiag::CyclicSuperTraits(cycle.clone())) as _);
                 cycle_participants.extend(cycle.iter());
             }
-            diags.extend(hir_trait.analyze(db).iter().map(|d| d.to_voucher()))
+            diags.extend(
+                DefAnalyzable::analyze(*hir_trait, db)
+                    .iter()
+                    .map(|d| d.to_voucher()),
+            )
         }
         diags
     }
@@ -208,7 +213,7 @@ impl ModuleAnalysisPass for ImplAnalysisPass {
         top_mod
             .all_impls(db)
             .iter()
-            .flat_map(|impl_| impl_.analyze(db))
+            .flat_map(|impl_| DefAnalyzable::analyze(*impl_, db))
             .map(|diag| diag.to_voucher())
             .collect()
     }
@@ -226,7 +231,7 @@ impl ModuleAnalysisPass for ImplTraitAnalysisPass {
         top_mod
             .all_impl_traits(db)
             .iter()
-            .flat_map(|trait_| trait_.analyze(db))
+            .flat_map(|trait_| DefAnalyzable::analyze(*trait_, db))
             .map(|diag| diag.to_voucher())
             .collect()
     }
@@ -244,7 +249,7 @@ impl ModuleAnalysisPass for FuncAnalysisPass {
         top_mod
             .all_funcs(db)
             .iter()
-            .flat_map(|func| func.analyze(db))
+            .flat_map(|func| DefAnalyzable::analyze(*func, db))
             .map(|diag| diag.to_voucher())
             .collect()
     }
@@ -292,7 +297,13 @@ impl ModuleAnalysisPass for TypeAliasAnalysisPass {
                         .cloned()
                         .map(|d| Box::new(d) as _),
                 );
-                diags.extend(alias.def_analyzer(db).analyze().into_iter().map(|d| Box::new(d) as _));
+                diags.extend(
+                    alias
+                        .def_analyzer(db)
+                        .analyze()
+                        .into_iter()
+                        .map(|d| Box::new(d) as _),
+                );
             }
         }
         diags

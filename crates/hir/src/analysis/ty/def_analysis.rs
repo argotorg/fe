@@ -4,9 +4,10 @@
 
 use crate::{
     hir_def::{
-        EnumVariant, FieldParent, Func, GenericParam, GenericParamListId, HasGenericParams,
-        HasWhereClause, IdentId, Impl as HirImpl, Impl, ImplTrait, ItemKind, PathId, Trait,
-        TraitRefId, TypeAlias, TypeBound, TypeId as HirTyId, VariantKind, scope_graph::ScopeId,
+        Contract, Enum, EnumVariant, FieldParent, Func, GenericParam, GenericParamListId,
+        HasGenericParams, HasWhereClause, IdentId, Impl as HirImpl, Impl, ImplTrait, ItemKind,
+        PathId, Struct, Trait, TraitRefId, TypeAlias, TypeBound, TypeId as HirTyId, VariantKind,
+        scope_graph::ScopeId,
     },
     visitor::prelude::*,
 };
@@ -22,8 +23,8 @@ use super::{
     method_table::probe_method,
     normalize::normalize_ty,
     trait_lower::{TraitRefLowerError, collect_implementor_methods, lower_trait_ref},
-        trait_resolution::{PredicateListId, constraint::collect_adt_constraints},
-    ty_def::{InvalidCause, TyData, TyId, TyParam},
+    trait_resolution::{PredicateListId, constraint::collect_adt_constraints},
+    ty_def::{InvalidCause, TyData, TyId},
     ty_error::collect_ty_lower_errors,
     ty_lower::{collect_generic_params, lower_kind},
     visitor::{TyVisitor, walk_ty},
@@ -43,6 +44,91 @@ use crate::analysis::{
     },
 };
 
+/// Common helper: derive the active constraint set for any item.
+///
+/// NOTE: This intentionally centralizes the ADT special-case so callers
+/// don't sprinkle `collect_adt_constraints(...).instantiate_identity()`
+/// around the codebase. Prefer using this function (or the
+/// `DefAnalyzable::constraints` default) instead of threading
+/// `scope().constraints(db)` manually.
+fn constraints_for<'db, T>(db: &'db dyn HirAnalysisDb, owner: T) -> PredicateListId<'db>
+where
+    T: Copy + Into<ItemKind<'db>>,
+{
+    let item = owner.into();
+    match item {
+        ItemKind::Struct(s) => collect_adt_constraints(db, AdtRef::from(s)).instantiate_identity(),
+        ItemKind::Enum(e) => collect_adt_constraints(db, AdtRef::from(e)).instantiate_identity(),
+        ItemKind::Contract(c) => {
+            collect_adt_constraints(db, AdtRef::from(c)).instantiate_identity()
+        }
+        _ => item.scope().constraints(db),
+    }
+}
+
+/// Def-analysis capability: items that can perform definition analysis.
+///
+/// Design note: these top-level methods intentionally are NOT tracked.
+/// They delegate to tracked queries under the hood where appropriate.
+/// This keeps the traversal API ergonomic, aligns with transcript guidance,
+/// and avoids unnecessary tracked churn.
+pub trait DefAnalyzable<'db>: Copy + Into<ItemKind<'db>> {
+    fn analyze(self, db: &'db dyn HirAnalysisDb) -> Vec<TyDiagCollection<'db>>;
+
+    fn constraints(self, db: &'db dyn HirAnalysisDb) -> PredicateListId<'db> {
+        constraints_for(db, self)
+    }
+}
+
+// Blanket implementations forwarding to the existing item-level analyze methods.
+impl<'db> DefAnalyzable<'db> for Trait<'db> {
+    fn analyze(self, db: &'db dyn HirAnalysisDb) -> Vec<TyDiagCollection<'db>> {
+        self.analyze(db).clone()
+    }
+}
+
+impl<'db> DefAnalyzable<'db> for ImplTrait<'db> {
+    fn analyze(self, db: &'db dyn HirAnalysisDb) -> Vec<TyDiagCollection<'db>> {
+        self.analyze(db).clone()
+    }
+}
+
+impl<'db> DefAnalyzable<'db> for Impl<'db> {
+    fn analyze(self, db: &'db dyn HirAnalysisDb) -> Vec<TyDiagCollection<'db>> {
+        self.analyze(db).clone()
+    }
+}
+
+impl<'db> DefAnalyzable<'db> for Struct<'db> {
+    fn analyze(self, db: &'db dyn HirAnalysisDb) -> Vec<TyDiagCollection<'db>> {
+        self.analyze(db).clone()
+    }
+}
+
+impl<'db> DefAnalyzable<'db> for Enum<'db> {
+    fn analyze(self, db: &'db dyn HirAnalysisDb) -> Vec<TyDiagCollection<'db>> {
+        self.analyze(db).clone()
+    }
+}
+
+impl<'db> DefAnalyzable<'db> for Contract<'db> {
+    fn analyze(self, db: &'db dyn HirAnalysisDb) -> Vec<TyDiagCollection<'db>> {
+        self.analyze(db).clone()
+    }
+}
+
+impl<'db> DefAnalyzable<'db> for Func<'db> {
+    fn analyze(self, db: &'db dyn HirAnalysisDb) -> Vec<TyDiagCollection<'db>> {
+        self.analyze(db).clone()
+    }
+}
+
+// TODO(traversal-api): Once the trait-based API is fully adopted, consider
+// moving item-specific analyze logic out of tracked impl blocks and into
+// these implementations, leaving only the underlying building-block
+// queries tracked. This will reduce indirection and align with the plan to
+// keep top-level analysis methods untracked.
+
 pub(crate) fn validate_generic_params_for_owner<'db>(
     db: &'db dyn HirAnalysisDb,
     owner: impl HasGenericParams<'db>,
@@ -51,23 +137,24 @@ pub(crate) fn validate_generic_params_for_owner<'db>(
 
     let mut diags = Vec::new();
     let owner_enum = owner.as_generic_param_owner();
-    let params = owner.generic_params(db);
+    let param_views = owner.generic_param_views(db);
     let scope = owner.generic_param_scope();
     let gp_span: LazyGenericParamListSpan<'db> = owner.generic_params_span();
-    let assumptions = owner.generic_param_assumptions(db);
 
     // Duplicate generic parameter names
     diags.extend(check_duplicate_names(
-        params.data(db).iter().map(|p| p.name().to_opt()),
+        param_views.iter().map(|view| view.name(db)),
         |idxs| TyLowerDiag::DuplicateGenericParamName(owner_enum, idxs).into(),
     ));
 
     // Non-trailing default type parameters
     let mut default_idxs: SmallVec<[usize; 4]> = SmallVec::new();
-    for (i, p) in params.data(db).iter().enumerate() {
-        let is_defaulted_type = matches!(p, GenericParam::Type(tp) if tp.default_ty.is_some());
+    for view in &param_views {
+        let is_defaulted_type = view
+            .as_type_param(db)
+            .is_some_and(|tp| tp.default_ty.is_some());
         if is_defaulted_type {
-            default_idxs.push(i);
+            default_idxs.push(view.index());
         } else if !default_idxs.is_empty() {
             for &idx in &default_idxs {
                 let span = gp_span.clone().param(idx);
@@ -78,8 +165,10 @@ pub(crate) fn validate_generic_params_for_owner<'db>(
     }
 
     // Parent conflict + per-param checks
-    for (i, param) in params.data(db).iter().enumerate() {
-        let pspan: LazyGenericParamSpan<'db> = gp_span.clone().param(i);
+    for view in param_views {
+        let idx = view.index();
+        let param = view.param(db);
+        let pspan: LazyGenericParamSpan<'db> = view.span();
 
         if let Some(diag) = check_param_defined_in_parent(db, scope, param, pspan.clone()) {
             diags.push(diag.into());
@@ -87,42 +176,11 @@ pub(crate) fn validate_generic_params_for_owner<'db>(
         }
 
         match param {
-            GenericParam::Type(tp) => {
-                if let Some(default_ty) = tp.default_ty {
-                    let lowered = lower_hir_ty(db, default_ty, scope, assumptions);
-
-                    // Collect referenced generic params belonging to the same owner.
-                    struct Collector<'db> {
-                        db: &'db dyn HirAnalysisDb,
-                        scope: ScopeId<'db>,
-                        out: Vec<usize>,
-                    }
-                    impl<'db> TyVisitor<'db> for Collector<'db> {
-                        fn db(&self) -> &'db dyn HirAnalysisDb {
-                            self.db
-                        }
-                        fn visit_param(&mut self, tp: &TyParam<'db>) {
-                            if !tp.is_trait_self() && tp.owner == self.scope {
-                                self.out.push(tp.original_idx(self.db));
-                            }
-                        }
-                        fn visit_const_param(&mut self, tp: &TyParam<'db>, _ty: TyId<'db>) {
-                            if tp.owner == self.scope {
-                                self.out.push(tp.original_idx(self.db));
-                            }
-                        }
-                    }
-
-                    let mut collector = Collector {
-                        db,
-                        scope,
-                        out: Vec::new(),
-                    };
-                    lowered.visit_with(&mut collector);
-
+            GenericParam::Type(_tp) => {
+                if view.default_ty(db).is_some() {
                     // Forward reference check: cannot reference a param not yet declared.
-                    for j in collector.out.iter().filter(|j| **j >= i) {
-                        if let Some(name) = owner_enum.param(db, *j).name().to_opt() {
+                    for j in view.forward_refs(db).into_iter().filter(|j| *j >= idx) {
+                        if let Some(name) = owner_enum.param(db, j).name().to_opt() {
                             diags.push(
                                 TyLowerDiag::GenericDefaultForwardRef {
                                     span: pspan.clone(),
@@ -137,7 +195,7 @@ pub(crate) fn validate_generic_params_for_owner<'db>(
             GenericParam::Const(_) => {
                 // Validate const param type via the original TyId
                 let param_set = collect_generic_params(db, owner_enum);
-                let original = param_set.param_by_original_idx(db, i);
+                let original = param_set.param_by_original_idx(db, idx);
                 if let Some(ty) = original {
                     if let Some(const_ty_param) = ty.const_ty_param(db) {
                         if let Some(diag) =
@@ -216,22 +274,22 @@ pub(crate) fn analyze_where_clause_for_owner<'db>(
     db: &'db dyn HirAnalysisDb,
     owner: impl HasWhereClause<'db>,
 ) -> Vec<TyDiagCollection<'db>> {
-    use crate::span::params::{LazyTraitRefSpan, LazyWhereClauseSpan, LazyWherePredicateSpan};
+    use crate::span::params::{LazyTraitRefSpan, LazyWherePredicateSpan};
 
     let mut diags = Vec::new();
     let scope = owner.where_clause_scope();
 
-    let where_clause = owner.where_clause(db);
-    let wc_span: LazyWhereClauseSpan<'db> = owner.where_clause_span();
     let assumptions = owner.where_clause_assumptions(db);
+    let predicate_views = owner.where_predicate_views(db);
 
-    for (i, pred) in where_clause.data(db).iter().enumerate() {
-        let pred_span: LazyWherePredicateSpan<'db> = wc_span.clone().predicate(i);
+    for view in predicate_views {
+        let pred = view.predicate(db);
+        let pred_span: LazyWherePredicateSpan<'db> = view.span();
 
-        let Some(hir_ty) = pred.type_ref.to_opt() else {
+        let Some(hir_ty) = view.type_ref(db) else {
             continue;
         };
-        let ty = lower_hir_ty(db, hir_ty, scope, assumptions);
+        let Some(ty) = view.ty(db) else { continue };
 
         // Surface type-lowering errors for the predicate type itself (e.g.,
         // unresolved names, wrong domain like trait/value where a type is expected).
@@ -258,61 +316,28 @@ pub(crate) fn analyze_where_clause_for_owner<'db>(
             continue;
         }
 
-        // Check bounds on the predicate
-        for (j, bound) in pred.bounds.iter().enumerate() {
-            match bound {
-                TypeBound::Trait(trait_ref) => {
-                    let tr_span: LazyTraitRefSpan<'db> =
-                        pred_span.clone().bounds().bound(j).trait_bound();
+        // Trait bounds
+        for (trait_ref, tr_span) in view.trait_bounds(db) {
+            diags.extend(view.trait_arg_ty_errors(db, trait_ref, tr_span.clone()));
+            if let Some(diag) = analyze_trait_ref(db, ty, trait_ref, scope, assumptions, tr_span) {
+                diags.push(diag);
+            }
+        }
 
-                    // Surface type-lowering errors for generic type args inside the trait ref,
-                    // e.g., `MyTWithGenerics<MyT>` where `MyT` is a trait (not a type).
-                    if let Some(gargs) = trait_ref.generic_args(db) {
-                        if let Some(path_id) = trait_ref.path(db).to_opt() {
-                            let seg_idx = path_id.segment_index(db);
-                            let ga_span = tr_span.clone().path().segment(seg_idx).generic_args();
-                            for (k, garg) in gargs.data(db).iter().enumerate() {
-                                if let crate::hir_def::GenericArg::Type(targ) = garg {
-                                    if let Some(arg_ty) = targ.ty.to_opt() {
-                                        let arg_span = ga_span.clone().arg(k).into_type_arg().ty();
-                                        let errs = collect_ty_lower_errors(
-                                            db,
-                                            scope,
-                                            arg_ty,
-                                            arg_span,
-                                            assumptions,
-                                        );
-                                        if !errs.is_empty() {
-                                            diags.extend(errs);
-                                            // Continue checking other args to gather all issues
-                                        }
-                                    }
-                                }
-                            }
+        // Kind bounds
+        for (kind_bound, kb_span) in view.kind_bounds(db) {
+            if let crate::hir_def::Partial::Present(k) = kind_bound {
+                let bound_kind = lower_kind(&k);
+                let former_kind = ty.kind(db);
+                if !former_kind.does_match(&bound_kind) {
+                    diags.push(
+                        TyLowerDiag::InconsistentKindBound {
+                            span: kb_span,
+                            ty,
+                            bound: bound_kind,
                         }
-                    }
-
-                    if let Some(diag) =
-                        analyze_trait_ref(db, ty, *trait_ref, scope, assumptions, tr_span)
-                    {
-                        diags.push(diag);
-                    }
-                }
-                TypeBound::Kind(kind_bound) => {
-                    if let crate::hir_def::Partial::Present(k) = kind_bound {
-                        let bound_kind = lower_kind(k);
-                        let former_kind = ty.kind(db);
-                        if !former_kind.does_match(&bound_kind) {
-                            diags.push(
-                                TyLowerDiag::InconsistentKindBound {
-                                    span: pred_span.clone().bounds().bound(j).kind_bound().into(),
-                                    ty,
-                                    bound: bound_kind,
-                                }
-                                .into(),
-                            );
-                        }
-                    }
+                        .into(),
+                    );
                 }
             }
         }
@@ -1107,31 +1132,37 @@ impl<'db> ImplTrait<'db> {
         let mut diags = vec![];
         let assumptions = self.constraints(db);
         for assoc_type in self.types(db) {
-            if let Some(ty) = assoc_type.type_ref.to_opt() {
-                let ty_span = assoc_type
-                    .name
-                    .to_opt()
-                    .and_then(|name| self.associated_type_span(db, name))
+            if let Some(name) = assoc_type.name.to_opt() {
+                let ty_span = self
+                    .associated_type_span(db, name)
                     .map(|s| s.ty())
                     .unwrap_or_else(|| self.span().ty());
 
-                let lowered_ty = lower_hir_ty(db, ty, self.scope(), assumptions);
-
-                if lowered_ty.has_invalid(db) {
-                    let errs =
-                        collect_ty_lower_errors(db, self.scope(), ty, ty_span.clone(), assumptions);
-                    if !errs.is_empty() {
-                        diags.extend(errs);
+                // Prefer the item-level lowered map to avoid re-lowering here.
+                if let Some(lowered_ty) = self.assoc_ty(db, name) {
+                    if lowered_ty.has_invalid(db) {
+                        if let Some(ty) = assoc_type.type_ref.to_opt() {
+                            let errs = collect_ty_lower_errors(
+                                db,
+                                self.scope(),
+                                ty,
+                                ty_span.clone(),
+                                assumptions,
+                            );
+                            if !errs.is_empty() {
+                                diags.extend(errs);
+                            }
+                        }
                     }
-                }
 
-                if let Some(diag) = lowered_ty.emit_wf_diag(
-                    db,
-                    self.top_mod(db).ingot(db),
-                    assumptions,
-                    ty_span.into(),
-                ) {
-                    diags.push(diag);
+                    if let Some(diag) = lowered_ty.emit_wf_diag(
+                        db,
+                        self.top_mod(db).ingot(db),
+                        assumptions,
+                        ty_span.into(),
+                    ) {
+                        diags.push(diag);
+                    }
                 }
             }
         }

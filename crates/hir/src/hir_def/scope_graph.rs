@@ -102,10 +102,10 @@ pub enum ScopeId<'db> {
 impl<'db> ScopeId<'db> {
     #[allow(dead_code)]
     pub(crate) fn constraints(&self, db: &'db dyn HirAnalysisDb) -> PredicateListId<'db> {
+        use crate::analysis::ty::func_def::CallableDef;
         use crate::analysis::ty::trait_resolution::constraint::{
             collect_constraints, collect_func_def_constraints,
         };
-        use crate::analysis::ty::func_def::CallableDef;
 
         match self {
             // Item scopes: derive constraints from the item that owns the scope
@@ -114,23 +114,32 @@ impl<'db> ScopeId<'db> {
                     collect_func_def_constraints(db, CallableDef::Func(*func), true)
                         .instantiate_identity()
                 }
-                ItemKind::Struct(struct_) => collect_constraints(db, (*struct_).into())
-                    .instantiate_identity(),
+                ItemKind::Struct(struct_) => {
+                    collect_constraints(db, (*struct_).into()).instantiate_identity()
+                }
                 // Contracts have no generics or where-clause constraints
                 ItemKind::Contract(_contract) => PredicateListId::empty_list(db),
-                ItemKind::Enum(enum_) =>
-                    collect_constraints(db, (*enum_).into()).instantiate_identity(),
-                ItemKind::TypeAlias(alias) => collect_constraints(db, (*alias).into())
-                    .instantiate_identity(),
-                ItemKind::Impl(impl_) =>
-                    collect_constraints(db, (*impl_).into()).instantiate_identity(),
-                ItemKind::Trait(trait_) =>
-                    collect_constraints(db, (*trait_).into()).instantiate_identity(),
-                ItemKind::ImplTrait(impl_trait) => collect_constraints(db, (*impl_trait).into())
-                    .instantiate_identity(),
+                ItemKind::Enum(enum_) => {
+                    collect_constraints(db, (*enum_).into()).instantiate_identity()
+                }
+                ItemKind::TypeAlias(alias) => {
+                    collect_constraints(db, (*alias).into()).instantiate_identity()
+                }
+                ItemKind::Impl(impl_) => {
+                    collect_constraints(db, (*impl_).into()).instantiate_identity()
+                }
+                ItemKind::Trait(trait_) => {
+                    collect_constraints(db, (*trait_).into()).instantiate_identity()
+                }
+                ItemKind::ImplTrait(impl_trait) => {
+                    collect_constraints(db, (*impl_trait).into()).instantiate_identity()
+                }
                 // No constraints for these kinds
-                ItemKind::Const(_) | ItemKind::Use(_) | ItemKind::TopMod(_) | ItemKind::Mod(_) | ItemKind::Body(_) =>
-                    PredicateListId::empty_list(db),
+                ItemKind::Const(_)
+                | ItemKind::Use(_)
+                | ItemKind::TopMod(_)
+                | ItemKind::Mod(_)
+                | ItemKind::Body(_) => PredicateListId::empty_list(db),
             },
 
             // Generic parameter and function parameter scopes inherit owner constraints
@@ -139,34 +148,48 @@ impl<'db> ScopeId<'db> {
                     collect_func_def_constraints(db, CallableDef::Func(*func), true)
                         .instantiate_identity()
                 }
-                ItemKind::Struct(struct_) => collect_constraints(db, (*struct_).into())
-                    .instantiate_identity(),
+                ItemKind::Struct(struct_) => {
+                    collect_constraints(db, (*struct_).into()).instantiate_identity()
+                }
                 // Contracts have no generics or where-clause constraints
                 ItemKind::Contract(_contract) => PredicateListId::empty_list(db),
-                ItemKind::Enum(enum_) =>
-                    collect_constraints(db, (*enum_).into()).instantiate_identity(),
-                ItemKind::TypeAlias(alias) => collect_constraints(db, (*alias).into())
-                    .instantiate_identity(),
-                ItemKind::Impl(impl_) =>
-                    collect_constraints(db, (*impl_).into()).instantiate_identity(),
-                ItemKind::Trait(trait_) =>
-                    collect_constraints(db, (*trait_).into()).instantiate_identity(),
-                ItemKind::ImplTrait(impl_trait) => collect_constraints(db, (*impl_trait).into())
-                    .instantiate_identity(),
-                ItemKind::Const(_) | ItemKind::Use(_) | ItemKind::TopMod(_) | ItemKind::Mod(_) | ItemKind::Body(_) =>
-                    PredicateListId::empty_list(db),
+                ItemKind::Enum(enum_) => {
+                    collect_constraints(db, (*enum_).into()).instantiate_identity()
+                }
+                ItemKind::TypeAlias(alias) => {
+                    collect_constraints(db, (*alias).into()).instantiate_identity()
+                }
+                ItemKind::Impl(impl_) => {
+                    collect_constraints(db, (*impl_).into()).instantiate_identity()
+                }
+                ItemKind::Trait(trait_) => {
+                    collect_constraints(db, (*trait_).into()).instantiate_identity()
+                }
+                ItemKind::ImplTrait(impl_trait) => {
+                    collect_constraints(db, (*impl_trait).into()).instantiate_identity()
+                }
+                ItemKind::Const(_)
+                | ItemKind::Use(_)
+                | ItemKind::TopMod(_)
+                | ItemKind::Mod(_)
+                | ItemKind::Body(_) => PredicateListId::empty_list(db),
             },
 
             // Associated types live under the trait's scope
-            ScopeId::TraitType(trait_, _) =>
-                collect_constraints(db, (*trait_).into()).instantiate_identity(),
+            ScopeId::TraitType(trait_, _) => {
+                collect_constraints(db, (*trait_).into()).instantiate_identity()
+            }
 
             // Fields and variants inherit from their parent ADT/enum
             ScopeId::Field(parent, _) => match parent {
-                FieldParent::Struct(s) => collect_constraints(db, (*s).into()).instantiate_identity(),
+                FieldParent::Struct(s) => {
+                    collect_constraints(db, (*s).into()).instantiate_identity()
+                }
                 // Contracts have no generics or where-clause constraints
                 FieldParent::Contract(_c) => PredicateListId::empty_list(db),
-                FieldParent::Variant(v) => collect_constraints(db, v.enum_.into()).instantiate_identity(),
+                FieldParent::Variant(v) => {
+                    collect_constraints(db, v.enum_.into()).instantiate_identity()
+                }
             },
             ScopeId::Variant(v) => collect_constraints(db, v.enum_.into()).instantiate_identity(),
 
@@ -410,7 +433,7 @@ impl<'db> ScopeId<'db> {
             }
 
             ScopeId::GenericParam(parent, idx) => {
-                let parent = GenericParamOwner::from_item_opt(parent).unwrap();
+                let parent = GenericParamOwner::try_from_item(parent).unwrap();
 
                 Some(parent.params_span().param(idx as usize).into())
             }
@@ -743,7 +766,7 @@ impl<'db> FromScope<'db> for &'db GenericParam<'db> {
             return None;
         };
 
-        let parent = GenericParamOwner::from_item_opt(parent).unwrap();
+        let parent = GenericParamOwner::try_from_item(parent).unwrap();
         Some(&parent.params(db).data(db)[idx as usize])
     }
 }

@@ -142,14 +142,12 @@ pub(crate) fn lower_trait_ref_impl<'db>(
         .collect();
 
     // Fill trailing defaults using the trait's param set. Bind Self (idx 0).
-    let non_self_completed = t
-        .param_set(db)
-        .complete_explicit_args_with_defaults(
-            db,
-            Some(t.self_param(db)),
-            &provided_explicit,
-            assumptions,
-        );
+    let non_self_completed = t.param_set(db).complete_explicit_args_with_defaults(
+        db,
+        Some(t.self_param(db)),
+        &provided_explicit,
+        assumptions,
+    );
 
     if non_self_completed.len() != trait_params.len() - 1 {
         return Err(TraitArgError::ArgNumMismatch {

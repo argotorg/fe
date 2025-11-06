@@ -2393,7 +2393,9 @@ impl DiagnosticVoucher for ImplDiag<'_> {
                         style: LabelStyle::Primary,
                         message,
                         span: match impl_m {
-                            CallableDef::Func(f) => f.span().generic_params().param(*param_idx).resolve(db),
+                            CallableDef::Func(f) => {
+                                f.span().generic_params().param(*param_idx).resolve(db)
+                            }
                             CallableDef::VariantCtor(v) => v.span().tuple_type().resolve(db),
                         },
                     }],
