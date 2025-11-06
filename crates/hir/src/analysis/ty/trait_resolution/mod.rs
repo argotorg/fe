@@ -250,7 +250,7 @@ impl<'db> PredicateListId<'db> {
 
             // 2. Collect associated type bounds
             let hir_trait = pred.def(db);
-            for trait_type in hir_trait.types(db) {
+            for trait_type in hir_trait.assoc_type_decls(db) {
                 // Get the associated type name
                 let Some(assoc_ty_name) = trait_type.name.to_opt() else {
                     continue;

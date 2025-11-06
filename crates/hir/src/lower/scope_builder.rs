@@ -439,7 +439,7 @@ impl<'db> ScopeGraphBuilder<'db> {
     }
 
     fn add_trait_type_scope(&mut self, parent_node: NodeId, trait_: Trait<'db>) {
-        for (i, trait_type) in trait_.types(self.db).iter().enumerate() {
+        for (i, trait_type) in trait_.assoc_type_decls(self.db).iter().enumerate() {
             let scope_id = ScopeId::TraitType(trait_, i as u16);
             let scope = Scope::new(scope_id, Visibility::Private);
             let trait_type_node = self.graph.push(scope_id, scope);

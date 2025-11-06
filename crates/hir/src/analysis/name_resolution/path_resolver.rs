@@ -1082,7 +1082,7 @@ pub fn resolve_name_res<'db>(
             }
 
             ScopeId::TraitType(t, idx) => {
-                let trait_type = &t.types(db)[idx as usize];
+                let trait_type = &t.assoc_type_decls(db)[idx as usize];
 
                 let self_ty = t.self_param(db);
 

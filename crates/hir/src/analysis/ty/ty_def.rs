@@ -954,7 +954,7 @@ impl<'db> AssocTy<'db> {
     pub fn scope(&self, db: &'db dyn HirAnalysisDb) -> ScopeId<'db> {
         // Find the index of this associated type in the trait's type list
         let trait_def = self.trait_.def(db);
-        let types = trait_def.types(db);
+        let types = trait_def.assoc_type_decls(db);
         let idx = types
             .iter()
             .position(|t| t.name.to_opt() == Some(self.name))

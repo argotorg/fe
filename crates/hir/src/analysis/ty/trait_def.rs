@@ -431,6 +431,17 @@ impl<'db> TraitInstId<'db> {
             None
         }
     }
+
+    // Alias with clearer naming; kept within analysis scope due to context requirements.
+    pub(super) fn satisfiability_diag(
+        self,
+        db: &'db dyn HirAnalysisDb,
+        ingot: Ingot<'db>,
+        assumptions: PredicateListId<'db>,
+        span: DynLazySpan<'db>,
+    ) -> Option<TyDiagCollection<'db>> {
+        self.emit_sat_diag(db, ingot, assumptions, span)
+    }
 }
 
 /// Internal semantic data for an `impl Trait` block.

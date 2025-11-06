@@ -22,7 +22,7 @@ use crate::{
         ty::{
             adt_def::AdtRef,
             def_analysis::DefAnalyzable,
-            trait_def::TraitMethod,
+            trait_def::{TraitInstId, TraitMethod},
             trait_lower::{TraitRefLowerError, lower_trait_ref},
             trait_resolution::PredicateListId,
             ty_def::{InvalidCause, TyId},
@@ -297,6 +297,58 @@ pub trait HasGenericParams<'db>: Copy + Into<ItemKind<'db>> {
             .map(|idx| GenericParamView::new(owner, idx))
             .collect()
     }
+
+    /// Aggregate diagnostics for this owner's generic parameters.
+    /// Includes list-level checks (duplicates, non-trailing defaults)
+    /// and per-parameter diagnostics via GenericParamView::diags.
+    fn generic_params_diags(
+        self,
+        db: &'db dyn crate::analysis::HirAnalysisDb,
+    ) -> Vec<crate::analysis::ty::diagnostics::TyDiagCollection<'db>> {
+        use crate::analysis::ty::diagnostics::{TyDiagCollection, TyLowerDiag};
+        use rustc_hash::FxHashMap;
+        use smallvec1::SmallVec;
+
+        let mut diags: Vec<TyDiagCollection> = Vec::new();
+        let owner = self.as_generic_param_owner();
+        let views = self.generic_param_views(db);
+        let gp_span = owner.params_span();
+
+        // Duplicate names (list-level)
+        let mut defs = FxHashMap::<IdentId<'db>, SmallVec<[u16; 4]>>::default();
+        for (i, name) in views.iter().map(|v| v.name(db)).enumerate() {
+            if let Some(name) = name {
+                defs.entry(name).or_default().push(i as u16);
+            }
+        }
+        for (_name, idxs) in defs.into_iter().filter(|(_, v)| v.len() > 1) {
+            diags.push(TyLowerDiag::DuplicateGenericParamName(owner, idxs).into());
+        }
+
+        // Non-trailing defaults (list-level)
+        let mut default_idxs: SmallVec<[usize; 4]> = SmallVec::new();
+        for v in &views {
+            let is_defaulted_type = v
+                .as_type_param(db)
+                .is_some_and(|tp| tp.default_ty.is_some());
+            if is_defaulted_type {
+                default_idxs.push(v.index());
+            } else if !default_idxs.is_empty() {
+                for &idx in &default_idxs {
+                    let span = gp_span.clone().param(idx);
+                    diags.push(TyLowerDiag::NonTrailingDefaultGenericParam(span).into());
+                }
+                break;
+            }
+        }
+
+        // Per-parameter diags
+        for v in views {
+            diags.extend(v.diags(db));
+        }
+
+        diags
+    }
 }
 
 impl<'db> HasGenericParams<'db> for GenericParamOwner<'db> {
@@ -518,6 +570,8 @@ impl<'db> GenericParamView<'db> {
     }
 }
 
+// (No GenericParamListView; list-level aggregation is simple enough inline.)
+
 impl<'db> HasGenericParams<'db> for Trait<'db> {
     fn as_generic_param_owner(self) -> GenericParamOwner<'db> {
         GenericParamOwner::Trait(self)
@@ -578,6 +632,17 @@ pub trait HasWhereClause<'db>: Copy + Into<ItemKind<'db>> {
         let where_clause = owner.where_clause(db);
         (0..where_clause.data(db).len())
             .map(|idx| WherePredicateView::new(owner, idx))
+            .collect()
+    }
+
+    /// Aggregate diagnostics from this owner's where-clause via predicate views.
+    fn where_clause_diags(
+        self,
+        db: &'db dyn HirAnalysisDb,
+    ) -> Vec<crate::analysis::ty::diagnostics::TyDiagCollection<'db>> {
+        self.where_predicate_views(db)
+            .into_iter()
+            .flat_map(|v| v.diags(db))
             .collect()
     }
 }
@@ -727,10 +792,6 @@ impl<'db> WherePredicateView<'db> {
         self.predicate(db).type_ref.to_opt()
     }
 
-    pub fn bounds(self, db: &'db dyn HirDb) -> &'db [TypeBound<'db>] {
-        &self.predicate(db).bounds
-    }
-
     /// The predicate type (lowered) using the owner's scope and assumptions.
     pub fn ty(self, db: &'db dyn HirAnalysisDb) -> Option<crate::analysis::ty::ty_def::TyId<'db>> {
         let hir_ty = self.type_ref(db)?;
@@ -738,6 +799,9 @@ impl<'db> WherePredicateView<'db> {
         let assumptions = self.assumptions(db);
         Some(lower_hir_ty(db, hir_ty, scope, assumptions))
     }
+
+    // Kind bounds are rendered in the analyzer to avoid accessing private
+    // lowering from this layer; keep syntactic accessors available.
 
     /// Diagnostics for generic type arguments inside a given trait bound.
     pub fn trait_arg_ty_errors(
@@ -770,8 +834,59 @@ impl<'db> WherePredicateView<'db> {
         diags
     }
 
+    /// Aggregate diagnostics for all generic type arguments across all trait
+    /// bounds in this where-predicate.
+    pub(crate) fn trait_bound_arg_ty_diags(
+        self,
+        db: &'db dyn HirAnalysisDb,
+    ) -> Vec<crate::analysis::ty::diagnostics::TyDiagCollection<'db>> {
+        let mut diags = Vec::new();
+        for (tr, tr_span) in self.trait_bound_refs(db) {
+            diags.extend(self.trait_arg_ty_errors(db, tr, tr_span));
+        }
+        diags
+    }
+
+    /// Render a diagnostic for a failed semantic trait-bound lowering using the
+    /// original trait-ref path looked up by span.
+    pub(crate) fn trait_lower_error_diag(
+        self,
+        db: &'db dyn HirAnalysisDb,
+        tr_span: LazyTraitRefSpan<'db>,
+        err: crate::analysis::ty::trait_lower::TraitRefLowerError<'db>,
+    ) -> Option<crate::analysis::ty::diagnostics::TyDiagCollection<'db>> {
+        use crate::analysis::name_resolution::diagnostics::PathResDiag;
+        use crate::analysis::name_resolution::ExpectedPathKind;
+        use crate::analysis::ty::trait_lower::TraitRefLowerError;
+
+        match err {
+            TraitRefLowerError::PathResError(e) => {
+                let tr = self
+                    .trait_bound_refs(db)
+                    .into_iter()
+                    .find_map(|(tr, sp)| (sp == tr_span).then_some(tr))?;
+                let path = tr.path(db).to_opt()?;
+                e.into_diag(db, path, tr_span.path(), ExpectedPathKind::Trait).map(|d| d.into())
+            }
+            TraitRefLowerError::InvalidDomain(res) => {
+                let tr = self
+                    .trait_bound_refs(db)
+                    .into_iter()
+                    .find_map(|(tr, sp)| (sp == tr_span).then_some(tr))?;
+                let name = tr.path(db).unwrap().ident(db).unwrap();
+                Some(
+                    PathResDiag::ExpectedTrait(tr_span.path().into(), name, res.kind_name())
+                        .into(),
+                )
+            }
+            TraitRefLowerError::Ignored => None,
+        }
+    }
+
     /// All trait bounds on this predicate with their precise spans.
-    pub fn trait_bounds(self, db: &'db dyn HirDb) -> Vec<(TraitRefId<'db>, LazyTraitRefSpan<'db>)> {
+    /// Syntactic trait bound references with precise spans.
+    /// Prefer using semantic `trait_bounds` for analysis.
+    fn trait_bound_refs(self, db: &'db dyn HirDb) -> Vec<(TraitRefId<'db>, LazyTraitRefSpan<'db>)> {
         let pred = self.predicate(db);
         let pspan = self.span();
         pred.bounds
@@ -784,8 +899,8 @@ impl<'db> WherePredicateView<'db> {
             .collect()
     }
 
-    /// All kind bounds (present ones) and their spans.
-    pub fn kind_bounds(
+    /// Syntactic kind bound references (present ones) and their spans.
+    fn kind_bound_refs(
         self,
         db: &'db dyn HirDb,
     ) -> Vec<(
@@ -802,6 +917,49 @@ impl<'db> WherePredicateView<'db> {
                     k.clone(),
                     pspan.clone().bounds().bound(j).kind_bound().into(),
                 )),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// Semantic trait bounds: span + lowered trait instance or lowering error.
+    pub(crate) fn trait_bounds(
+        self,
+        db: &'db dyn HirAnalysisDb,
+    ) -> Vec<(
+        LazyTraitRefSpan<'db>,
+        Result<
+            crate::analysis::ty::trait_def::TraitInstId<'db>,
+            crate::analysis::ty::trait_lower::TraitRefLowerError<'db>,
+        >,
+    )> {
+        use crate::analysis::ty::trait_lower::lower_trait_ref;
+        let Some(self_ty) = self.ty(db) else {
+            return Vec::new();
+        };
+        let scope = self.scope();
+        let assumptions = self.assumptions(db);
+        self.trait_bound_refs(db)
+            .into_iter()
+            .map(
+                |(tr, tr_span)| match lower_trait_ref(db, self_ty, tr, scope, assumptions) {
+                    Ok(inst) => (tr_span, Ok(inst)),
+                    Err(e) => (tr_span, Err(e)),
+                },
+            )
+            .collect()
+    }
+
+    /// Semantic kind bounds: each lowered kind with its span.
+    pub fn kind_bounds(
+        self,
+        _db: &'db dyn HirAnalysisDb,
+    ) -> Vec<(DynLazySpan<'db>, crate::analysis::ty::ty_def::Kind)> {
+        use crate::analysis::ty::ty_lower::lower_kind;
+        self.kind_bound_refs(_db)
+            .into_iter()
+            .filter_map(|(kb, span)| match kb {
+                crate::hir_def::Partial::Present(k) => Some((span, lower_kind(&k))),
                 _ => None,
             })
             .collect()
@@ -1104,7 +1262,7 @@ impl<'db> Func<'db> {
             ty_lower::lower_hir_ty,
         };
 
-        let assumptions = self.scope().constraints(db);
+        let assumptions = self.constraints(db);
 
         match self.params(db) {
             Partial::Present(params) => params
@@ -1125,7 +1283,7 @@ impl<'db> Func<'db> {
 
     #[salsa::tracked]
     pub fn return_ty(self, db: &'db dyn crate::analysis::HirAnalysisDb) -> TyId<'db> {
-        let assumptions = self.scope().constraints(db);
+        let assumptions = self.constraints(db);
         let ty = self
             .ret_ty(db) // Access the field
             .map(|ty| lower_hir_ty(db, ty, self.scope(), assumptions))
@@ -1234,7 +1392,7 @@ impl<'db> Struct<'db> {
 
         let mut diags: Vec<TyDiagCollection> = Vec::new();
         let scope = self.scope();
-        let assumptions = self.scope().constraints(db);
+        let assumptions = self.constraints(db);
 
         for (i, field) in self.fields(db).data(db).iter().enumerate() {
             let Some(hir_ty) = field.ty.to_opt() else {
@@ -1442,7 +1600,7 @@ impl<'db> Enum<'db> {
 
         let mut diags: Vec<TyDiagCollection> = Vec::new();
         let scope = self.scope();
-        let assumptions = self.scope().constraints(db);
+        let assumptions = self.constraints(db);
 
         for (i, variant) in self.variants(db).data(db).iter().enumerate() {
             if let VariantKind::Tuple(tuple_id) = variant.kind {
@@ -1714,7 +1872,7 @@ pub struct Trait<'db> {
     pub super_traits: Vec<TraitRefId<'db>>,
     pub where_clause: WhereClauseId<'db>,
     #[return_ref]
-    pub types: Vec<AssocTyDecl<'db>>,
+    pub assoc_type_decls: Vec<AssocTyDecl<'db>>,
 
     pub top_mod: TopLevelMod<'db>,
 
@@ -1750,9 +1908,18 @@ impl<'db> Trait<'db> {
     }
 
     pub fn assoc_ty(self, db: &'db dyn HirDb, name: IdentId<'db>) -> Option<&'db AssocTyDecl<'db>> {
-        self.types(db)
+        self.assoc_type_decls(db)
             .iter()
             .find(|trait_type| trait_type.name.to_opt() == Some(name))
+    }
+
+    pub fn assoc_types(self, db: &'db dyn HirDb) -> Vec<TraitAssocTypeView<'db>> {
+        (0..self.assoc_type_decls(db).len())
+            .map(|idx| TraitAssocTypeView {
+                owner: self,
+                index: idx,
+            })
+            .collect()
     }
 }
 
@@ -1862,6 +2029,88 @@ pub struct AssocTyDecl<'db> {
     pub bounds: Vec<TypeBound<'db>>,
     pub default: Option<TypeId<'db>>,
 }
+
+/// A semantic, owner-aware view of a single trait associated type declaration.
+/// Does not expose raw syntax; provides spans and semantic results.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TraitAssocTypeView<'db> {
+    owner: Trait<'db>,
+    index: usize,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum BoundError {
+    Lowering,
+}
+
+#[derive(Debug, Clone)]
+pub enum KindError<'db> {
+    Mismatch {
+        ty: crate::analysis::ty::ty_def::TyId<'db>,
+        bound: crate::analysis::ty::ty_def::Kind,
+    },
+}
+
+impl<'db> TraitAssocTypeView<'db> {
+    pub fn owner(self) -> Trait<'db> {
+        self.owner
+    }
+    fn decl(self, db: &'db dyn HirDb) -> &'db AssocTyDecl<'db> {
+        &self.owner.assoc_type_decls(db)[self.index]
+    }
+
+    pub fn name(self, db: &'db dyn HirDb) -> Option<IdentId<'db>> {
+        self.decl(db).name.to_opt()
+    }
+
+    pub fn span(self) -> LazyTraitTypeSpan<'db> {
+        self.owner.span().item_list().assoc_type(self.index)
+    }
+
+    pub fn default_ty(self, db: &'db dyn HirAnalysisDb) -> Option<TyId<'db>> {
+        let decl = self.decl(db);
+        self.owner.assoc_type_default_ty(db, decl)
+    }
+
+    fn scope(self) -> ScopeId<'db> {
+        self.owner.scope()
+    }
+
+    fn assumptions(self, db: &'db dyn HirAnalysisDb) -> PredicateListId<'db> {
+        self.owner.constraints(db)
+    }
+
+    /// Lower each trait bound against the default type (if any).
+    /// Ok = lowered trait instance; Err = lowering failed (surfaced elsewhere).
+    pub fn default_bounds(
+        self,
+        db: &'db dyn HirAnalysisDb,
+    ) -> Vec<(DynLazySpan<'db>, Result<TraitInstId<'db>, BoundError>)> {
+        let Some(self_ty) = self.default_ty(db) else {
+            return Vec::new();
+        };
+        let scope = self.scope();
+        let assumptions = self.assumptions(db);
+        let decl = self.decl(db);
+        let span: DynLazySpan<'db> = self.span().into();
+
+        decl.bounds
+            .iter()
+            .filter_map(|b| match b {
+                TypeBound::Trait(tr) => Some(*tr),
+                _ => None,
+            })
+            .map(
+                |tr| match lower_trait_ref(db, self_ty, tr, scope, assumptions) {
+                    Err(_) => (span.clone(), Err(BoundError::Lowering)),
+                    Ok(inst) => (span.clone(), Ok(inst)),
+                },
+            )
+            .collect()
+    }
+}
+
+// (Removed earlier duplicate view definition; consolidated above.)
 
 #[salsa::tracked]
 #[derive(Debug)]
@@ -2006,7 +2255,7 @@ impl<'db> ImplTrait<'db> {
             let trait_def = trait_inst.def(db);
             let trait_scope = trait_def.scope();
 
-            for t in trait_def.types(db).iter() {
+            for t in trait_def.assoc_type_decls(db).iter() {
                 let (Some(name), Some(default)) = (t.name.to_opt(), t.default) else {
                     continue;
                 };
