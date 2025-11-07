@@ -3,6 +3,7 @@
 pub mod db;
 pub mod diagnostics;
 pub mod files;
+pub mod simple_yul;
 
 use std::collections::HashMap;
 

@@ -23,6 +23,8 @@ pub enum Command {
         core: Option<Utf8PathBuf>,
         #[arg(long)]
         dump_mir: bool,
+        #[arg(long)]
+        emit_yul_min: bool,
     },
     Tree {
         path: Utf8PathBuf,
@@ -41,9 +43,14 @@ fn main() {
 pub fn run(opts: &Options) {
     match &opts.command {
         Command::Build => eprintln!("`fe build` doesn't work at the moment"),
-        Command::Check { path, core: _, dump_mir } => {
+        Command::Check {
+            path,
+            core: _,
+            dump_mir,
+            emit_yul_min,
+        } => {
             //: TODO readd custom core
-            check(path, *dump_mir);
+            check(path, *dump_mir, *emit_yul_min);
         }
         Command::Tree { path } => {
             tree::print_tree(path);
