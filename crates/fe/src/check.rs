@@ -1,16 +1,18 @@
 use camino::Utf8PathBuf;
 use common::InputDb;
 use driver::DriverDataBase;
+use hir::hir_def::{HirIngot, TopLevelMod};
+use mir::lower_module;
 use url::Url;
 
-pub fn check(path: &Utf8PathBuf) {
+pub fn check(path: &Utf8PathBuf, dump_mir: bool) {
     let mut db = DriverDataBase::default();
 
     // Determine if we're dealing with a single file or an ingot directory
     let has_errors = if path.is_file() && path.extension() == Some("fe") {
-        check_single_file(&mut db, path)
+        check_single_file(&mut db, path, dump_mir)
     } else if path.is_dir() {
-        check_ingot(&mut db, path)
+        check_ingot(&mut db, path, dump_mir)
     } else {
         eprintln!("❌ Error: Path must be either a .fe file or a directory containing fe.toml");
         std::process::exit(1);
@@ -21,7 +23,7 @@ pub fn check(path: &Utf8PathBuf) {
     }
 }
 
-fn check_single_file(db: &mut DriverDataBase, file_path: &Utf8PathBuf) -> bool {
+fn check_single_file(db: &mut DriverDataBase, file_path: &Utf8PathBuf, dump_mir: bool) -> bool {
     // Create a file URL for the single .fe file
     let file_url = match Url::from_file_path(file_path.canonicalize_utf8().unwrap()) {
         Ok(url) => url,
@@ -53,6 +55,9 @@ fn check_single_file(db: &mut DriverDataBase, file_path: &Utf8PathBuf) -> bool {
             diags.emit(db);
             return true;
         }
+        if dump_mir {
+            dump_module_mir(db, top_mod);
+        }
     } else {
         eprintln!("❌ Error: Could not process file {file_path}");
         return true;
@@ -61,7 +66,7 @@ fn check_single_file(db: &mut DriverDataBase, file_path: &Utf8PathBuf) -> bool {
     false
 }
 
-fn check_ingot(db: &mut DriverDataBase, dir_path: &Utf8PathBuf) -> bool {
+fn check_ingot(db: &mut DriverDataBase, dir_path: &Utf8PathBuf, dump_mir: bool) -> bool {
     let canonical_path = match dir_path.canonicalize_utf8() {
         Ok(path) => path,
         Err(_) => {
@@ -128,6 +133,9 @@ fn check_ingot(db: &mut DriverDataBase, dir_path: &Utf8PathBuf) -> bool {
     if !diags.is_empty() {
         diags.emit(db);
         has_errors = true;
+    } else if dump_mir {
+        let root_mod = ingot.root_mod(db);
+        dump_module_mir(db, root_mod);
     }
 
     // Collect all dependencies with errors
@@ -182,4 +190,30 @@ fn print_dependency_info(db: &DriverDataBase, dependency_url: &Url) {
 
     eprintln!("🔗 {dependency_url}");
     eprintln!();
+}
+
+fn dump_module_mir(db: &DriverDataBase, top_mod: TopLevelMod<'_>) {
+    match lower_module(db, top_mod) {
+        Ok(mir_module) => {
+            println!("=== MIR for module ===");
+            for func in mir_module.functions {
+                let name = func
+                    .func
+                    .name(db)
+                    .to_opt()
+                    .map(|id| id.data(db).to_string())
+                    .unwrap_or_else(|| "<anonymous>".into());
+                println!("fn {name}:");
+                for (idx, block) in func.body.blocks.iter().enumerate() {
+                    println!("  bb{idx}:");
+                    for inst in &block.insts {
+                        println!("    {inst:?}");
+                    }
+                    println!("    terminator: {:?}", block.terminator);
+                }
+                println!();
+            }
+        }
+        Err(err) => eprintln!("failed to lower MIR: {err}"),
+    }
 }

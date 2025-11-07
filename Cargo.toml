@@ -13,6 +13,7 @@ hir-analysis = { path = "crates/hir-analysis", package = "fe-hir-analysis" }
 parser = { path = "crates/parser", package = "fe-parser" }
 test-utils = { path = "crates/test-utils", package = "fe-test-utils" }
 resolver = { path = "crates/resolver", package = "fe-resolver" }
+mir = { path = "crates/mir", package = "fe-mir" }
 
 url = "2.5.4"
 camino = "1.1.9"

@@ -797,6 +797,8 @@ dependencies = [
  "dir-test",
  "fe-common",
  "fe-driver",
+ "fe-hir",
+ "fe-mir",
  "fe-resolver",
  "fe-test-utils",
  "smol_str",

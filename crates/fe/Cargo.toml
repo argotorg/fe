@@ -12,6 +12,8 @@ resolver.workspace = true
 camino.workspace = true
 url.workspace = true
 smol_str.workspace = true
+hir.workspace = true
+mir.workspace = true
 
 [dev-dependencies]
 dir-test.workspace = true
