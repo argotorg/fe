@@ -1,6 +1,5 @@
 [workspace]
 members = ["crates/*"]
-exclude = ["crates/mir"]
 resolver = "2"
 
 [workspace.package]

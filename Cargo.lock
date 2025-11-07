@@ -413,10 +413,11 @@ checksum = "37b2a672a2cb129a2e41c10b1224bb368f9f37a2b16b612598138befd7b37eb5"
 
 [[package]]
 name = "cc"
-version = "1.2.32"
+version = "1.2.44"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2352e5597e9c544d5e6d9c95190d5d27738ade584fa8db0a16e130e5c2b5296e"
+checksum = "37521ac7aabe3d13122dc382493e20c9416f299d2ccd5b3a5340a2570cdeb0f3"
 dependencies = [
+ "find-msvc-tools",
  "shlex",
 ]
 
@@ -936,6 +937,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "fe-mir"
+version = "0.1.0"
+dependencies = [
+ "fe-common",
+ "fe-hir",
+ "fe-hir-analysis",
+]
+
+[[package]]
 name = "fe-parser"
 version = "0.26.0"
 dependencies = [
@@ -991,6 +1001,12 @@ dependencies = [
  "url",
  "wasm-bindgen-test",
 ]
+
+[[package]]
+name = "find-msvc-tools"
+version = "0.1.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "52051878f80a721bb68ebfbc930e07b65ba72f2da88968ea5c06fd6ca3d3a127"
 
 [[package]]
 name = "fixedbitset"
