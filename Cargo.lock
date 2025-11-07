@@ -800,6 +800,7 @@ dependencies = [
  "fe-driver",
  "fe-hir",
  "fe-mir",
+ "fe-new-codegen",
  "fe-resolver",
  "fe-test-utils",
  "smol_str",
@@ -850,6 +851,7 @@ dependencies = [
  "fe-common",
  "fe-hir",
  "fe-hir-analysis",
+ "fe-mir",
  "fe-resolver",
  "salsa",
  "smol_str",
@@ -947,6 +949,15 @@ dependencies = [
  "fe-hir",
  "fe-hir-analysis",
  "rustc-hash 2.1.1",
+]
+
+[[package]]
+name = "fe-new-codegen"
+version = "0.1.0"
+dependencies = [
+ "fe-driver",
+ "fe-hir",
+ "fe-mir",
 ]
 
 [[package]]

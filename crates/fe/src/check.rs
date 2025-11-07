@@ -1,9 +1,10 @@
 use camino::Utf8PathBuf;
 use common::InputDb;
 use cranelift_entity::EntityRef;
-use driver::{DriverDataBase, simple_yul};
+use driver::DriverDataBase;
 use hir::hir_def::{ExprId, HirIngot, PatId, StmtId, TopLevelMod};
 use mir::{lower_module, MirInst, Terminator, ValueId};
+use new_codegen::emit_module_simple_yul;
 use url::Url;
 
 pub fn check(path: &Utf8PathBuf, dump_mir: bool, emit_yul_min: bool) {
@@ -212,15 +213,20 @@ fn print_dependency_info(db: &DriverDataBase, dependency_url: &Url) {
 }
 
 fn emit_simple_yul(db: &DriverDataBase, top_mod: TopLevelMod<'_>) {
-    for result in simple_yul::emit_module_simple_yul(db, top_mod) {
-        match result {
-            Ok(yul) => {
-                println!("=== Simple Yul ===");
-                println!("{yul}");
-                println!();
+    match emit_module_simple_yul(db, top_mod) {
+        Ok(results) => {
+            for result in results {
+                match result {
+                    Ok(yul) => {
+                        println!("=== Simple Yul ===");
+                        println!("{yul}");
+                        println!();
+                    }
+                    Err(err) => eprintln!("⚠️  simple yul skipped: {err}"),
+                }
             }
-            Err(err) => eprintln!("⚠️  simple yul skipped: {err}"),
         }
+        Err(err) => eprintln!("⚠️  failed to lower MIR for simple yul: {err}"),
     }
 }
 
