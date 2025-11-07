@@ -5,7 +5,7 @@ use hir::hir_def::{
     Body, Expr, ExprId, Func, LitKind, Partial, Pat, PatId, PathId, Stmt, StmtId, TopLevelMod,
     expr::{ArithBinOp, BinOp, LogicalBinOp, UnOp},
 };
-use mir::{lower_module, MirFunction, Terminator, ValueId, ValueOrigin};
+use mir::{lower_module, BasicBlockId, MirFunction, Terminator, ValueId, ValueOrigin};
 use rustc_hash::FxHashMap;
 
 #[derive(Debug)]
@@ -39,6 +39,7 @@ pub fn emit_module_simple_yul(
         .collect())
 }
 
+#[derive(Clone)]
 struct SimpleYulEmitter<'db> {
     db: &'db DriverDataBase,
     mir_func: &'db MirFunction<'db>,
@@ -72,25 +73,7 @@ impl<'db> SimpleYulEmitter<'db> {
         } else {
             self.param_names.join(", ")
         };
-        let entry = self.mir_func.body.entry;
-        let block = self
-            .mir_func
-            .body
-            .blocks
-            .get(entry.index())
-            .ok_or_else(|| SimpleYulError::Unsupported("entry block missing".into()))?;
-
-        let Terminator::Return(Some(ret_val)) = block.terminator else {
-            return Err(SimpleYulError::Unsupported(
-                "only simple return expressions are supported".into(),
-            ));
-        };
-
-        let statements = self.render_statements(&block.insts)?;
-        let expr_str = self.lower_value(ret_val)?;
-
-        let mut lines = statements;
-        lines.push(format!("    ret := {expr_str}"));
+        let lines = self.emit_block(self.mir_func.body.entry)?;
         let body_text = lines.join("\n");
         if params.is_empty() {
             Ok(format!(
@@ -118,14 +101,64 @@ impl<'db> SimpleYulEmitter<'db> {
             }
         }
     }
+    fn emit_block(&mut self, block_id: BasicBlockId) -> Result<Vec<String>, SimpleYulError> {
+        let block = self
+            .mir_func
+            .body
+            .blocks
+            .get(block_id.index())
+            .ok_or_else(|| SimpleYulError::Unsupported("invalid block".into()))?;
+        let mut lines = self.render_statements(&block.insts)?;
+        match block.terminator {
+            Terminator::Return(Some(val)) => {
+                let expr = match self.mir_func.body.value(val).origin {
+                    ValueOrigin::Expr(expr_id) => {
+                        self.lower_expr_with_statements(expr_id, &mut lines)?
+                    }
+                    _ => self.lower_value(val)?,
+                };
+                lines.push(format!("    ret := {expr}"));
+                Ok(lines)
+            }
+            Terminator::Branch {
+                cond,
+                then_bb,
+                else_bb,
+            } => {
+                let cond_expr = self.lower_value(cond)?;
+                let mut then_emitter = self.clone();
+                let then_lines = then_emitter.emit_block(then_bb)?;
+                let mut else_emitter = self.clone();
+                let else_lines = else_emitter.emit_block(else_bb)?;
+
+                lines.push(format!("    if {cond_expr} {{"));
+                for line in then_lines {
+                    lines.push(format!("  {line}"));
+                }
+                lines.push("    }".into());
+
+                lines.push(format!("    if iszero({cond_expr}) {{"));
+                for line in else_lines {
+                    lines.push(format!("  {line}"));
+                }
+                lines.push("    }".into());
+                Ok(lines)
+            }
+            Terminator::Goto { target } => self.emit_block(target),
+            _ => Err(SimpleYulError::Unsupported(
+                "control flow terminator is not supported yet".into(),
+            )),
+        }
+    }
+
     fn render_statements(
         &mut self,
         insts: &[mir::MirInst<'_>],
     ) -> Result<Vec<String>, SimpleYulError> {
         let mut stmts = Vec::new();
         for inst in insts {
-            match inst {
-                mir::MirInst::Let { pat, value, .. } => {
+        match inst {
+            mir::MirInst::Let { pat, value, .. } => {
                 let binding = self.pattern_ident(*pat)?;
                 let yul_name = if let Some(existing) = self.locals.get(&binding) {
                     existing.clone()
@@ -243,23 +276,23 @@ impl<'db> SimpleYulEmitter<'db> {
                 "only arithmetic/logical binary expressions are supported right now".into(),
             )),
         },
-        Expr::Block(stmts) => {
-            let Some(expr) = self.last_expr(stmts) else {
-                return Err(SimpleYulError::Unsupported(
-                    "block without terminal expression".into(),
-                ));
-            };
-            self.lower_expr(expr)
-        }
-        Expr::Path(path) => {
-            let original = self
-                .path_ident(*path)
-                .ok_or_else(|| SimpleYulError::Unsupported("unsupported path expression".into()))?;
-            Ok(self.locals.get(&original).cloned().unwrap_or(original))
-        }
-        _ => Err(SimpleYulError::Unsupported(
-            "only simple expressions are supported".into(),
-        )),
+            Expr::Block(stmts) => {
+                let Some(expr) = self.last_expr(stmts) else {
+                    return Err(SimpleYulError::Unsupported(
+                        "block without terminal expression".into(),
+                    ));
+                };
+                self.lower_expr(expr)
+            }
+            Expr::Path(path) => {
+                let original = self
+                    .path_ident(*path)
+                    .ok_or_else(|| SimpleYulError::Unsupported("unsupported path expression".into()))?;
+                Ok(self.locals.get(&original).cloned().unwrap_or(original))
+            }
+            _ => Err(SimpleYulError::Unsupported(
+                "only simple expressions are supported".into(),
+            )),
         }
     }
 
@@ -323,6 +356,39 @@ impl<'db> SimpleYulEmitter<'db> {
         let name = format!("v{}", self.next_local);
         self.next_local += 1;
         name
+    }
+
+    fn lower_expr_with_statements(
+        &mut self,
+        expr_id: ExprId,
+        lines: &mut Vec<String>,
+    ) -> Result<String, SimpleYulError> {
+        let expr = match expr_id.data(self.db, self.body) {
+            Partial::Present(expr) => expr,
+            Partial::Absent => {
+                return Err(SimpleYulError::Unsupported(
+                    "expression data unavailable".into(),
+                ))
+            }
+        };
+        if let Expr::If(cond, then_expr, else_expr) = expr {
+            let temp = self.alloc_local();
+            lines.push(format!("    let {temp} := 0"));
+            let cond_expr = self.lower_expr(*cond)?;
+            let then_expr_str = self.lower_expr(*then_expr)?;
+            lines.push(format!("    if {cond_expr} {{"));
+            lines.push(format!("      {temp} := {then_expr_str}"));
+            lines.push("    }".into());
+            if let Some(else_expr) = else_expr {
+                let else_expr_str = self.lower_expr(*else_expr)?;
+                lines.push(format!("    if iszero({cond_expr}) {{"));
+                lines.push(format!("      {temp} := {else_expr_str}"));
+                lines.push("    }".into());
+            }
+            Ok(temp)
+        } else {
+            self.lower_expr(expr_id)
+        }
     }
 }
 
