@@ -1,7 +1,10 @@
 use std::fmt;
 
 use driver::DriverDataBase;
-use hir::hir_def::{Body, Expr, ExprId, Func, LitKind, Partial, Stmt, StmtId, TopLevelMod};
+use hir::hir_def::{
+    Body, Expr, ExprId, Func, LitKind, Partial, Stmt, StmtId, TopLevelMod,
+    expr::{ArithBinOp, BinOp},
+};
 use mir::{lower_module, MirFunction, Terminator, ValueId, ValueOrigin};
 
 #[derive(Debug)]
@@ -88,21 +91,31 @@ fn lower_expr(db: &DriverDataBase, body: Body<'_>, expr_id: ExprId) -> Result<St
     };
     match expr {
         Expr::Lit(LitKind::Int(int_id)) => Ok(int_id.data(db).to_string()),
-        Expr::Bin(lhs, rhs, bin_op) => {
-            use hir::hir_def::expr::ArithBinOp::Add;
-            use hir::hir_def::expr::BinOp;
-
-            match bin_op {
-                BinOp::Arith(Add) => {
-                    let left = lower_expr(db, body, *lhs)?;
-                    let right = lower_expr(db, body, *rhs)?;
-                    Ok(format!("add({left}, {right})"))
-                }
-                _ => Err(SimpleYulError::Unsupported(
-                    "only addition is supported".into(),
-                )),
+        Expr::Lit(LitKind::Bool(value)) => Ok(if *value { "1" } else { "0" }.into()),
+        Expr::Lit(LitKind::String(str_id)) => Ok(format!("0x{}", hex::encode(str_id.data(db).as_bytes()))),
+        Expr::Bin(lhs, rhs, bin_op) => match bin_op {
+            BinOp::Arith(op) => {
+                let left = lower_expr(db, body, *lhs)?;
+                let right = lower_expr(db, body, *rhs)?;
+                let func = match op {
+                    ArithBinOp::Add => "add",
+                    ArithBinOp::Sub => "sub",
+                    ArithBinOp::Mul => "mul",
+                    ArithBinOp::Div => "div",
+                    ArithBinOp::Rem => "mod",
+                    ArithBinOp::Pow | ArithBinOp::LShift | ArithBinOp::RShift
+                    | ArithBinOp::BitAnd | ArithBinOp::BitOr | ArithBinOp::BitXor => {
+                        return Err(SimpleYulError::Unsupported(
+                            "bitwise and power operations are not supported yet".into(),
+                        ));
+                    }
+                };
+                Ok(format!("{func}({left}, {right})"))
             }
-        }
+            _ => Err(SimpleYulError::Unsupported(
+                "only arithmetic binary expressions are supported right now".into(),
+            )),
+        },
         Expr::Block(stmts) => {
             let Some(expr) = last_expr(db, body, stmts) else {
                 return Err(SimpleYulError::Unsupported(

@@ -7,3 +7,4 @@ edition.workspace = true
 driver = { path = "../driver", package = "fe-driver" }
 mir = { path = "../mir", package = "fe-mir" }
 hir.workspace = true
+hex = "0.4"

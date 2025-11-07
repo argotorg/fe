@@ -1,3 +1,7 @@
 pub fn add(x: i32, y: i32) -> i32 {
     1 + 1
 }
+
+pub fn sub(x: i32, y: i32) -> i32 {
+    1 - 1
+}
