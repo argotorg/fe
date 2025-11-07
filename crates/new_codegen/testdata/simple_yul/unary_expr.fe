@@ -1,0 +1,3 @@
+pub fn unary_expr() -> u64 {
+    -(1 + 2)
+}

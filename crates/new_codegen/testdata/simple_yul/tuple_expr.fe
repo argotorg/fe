@@ -1,0 +1,3 @@
+pub fn tuple_expr() -> (u64, bool) {
+    (1 + 2, !false)
+}

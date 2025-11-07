@@ -1,0 +1,10 @@
+---
+source: crates/new_codegen/tests/simple_yul.rs
+expression: output
+input_file: testdata/simple_yul/logical_ops.fe
+---
+{
+  function logical_ops() -> ret {
+    ret := and(1, 0)
+  }
+}

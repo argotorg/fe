@@ -1,0 +1,10 @@
+---
+source: crates/new_codegen/tests/simple_yul.rs
+expression: output
+input_file: testdata/simple_yul/tuple_expr.fe
+---
+{
+  function tuple_expr() -> ret {
+    ret := tuple(add(1, 2), iszero(0))
+  }
+}

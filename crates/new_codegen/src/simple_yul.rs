@@ -3,7 +3,7 @@ use std::fmt;
 use driver::DriverDataBase;
 use hir::hir_def::{
     Body, Expr, ExprId, Func, LitKind, Partial, Stmt, StmtId, TopLevelMod,
-    expr::{ArithBinOp, BinOp},
+    expr::{ArithBinOp, BinOp, LogicalBinOp, UnOp},
 };
 use mir::{lower_module, MirFunction, Terminator, ValueId, ValueOrigin};
 
@@ -93,6 +93,24 @@ fn lower_expr(db: &DriverDataBase, body: Body<'_>, expr_id: ExprId) -> Result<St
         Expr::Lit(LitKind::Int(int_id)) => Ok(int_id.data(db).to_string()),
         Expr::Lit(LitKind::Bool(value)) => Ok(if *value { "1" } else { "0" }.into()),
         Expr::Lit(LitKind::String(str_id)) => Ok(format!("0x{}", hex::encode(str_id.data(db).as_bytes()))),
+        Expr::Un(inner, op) => {
+            let value = lower_expr(db, body, *inner)?;
+            match op {
+                UnOp::Minus => Ok(format!("sub(0, {value})")),
+                UnOp::Not => Ok(format!("iszero({value})")),
+                UnOp::Plus => Ok(value),
+                UnOp::BitNot => Err(SimpleYulError::Unsupported(
+                    "bitwise not is not supported yet".into(),
+                )),
+            }
+        }
+        Expr::Tuple(values) => {
+            let parts = values
+                .iter()
+                .map(|expr| lower_expr(db, body, *expr))
+                .collect::<Result<Vec<_>, _>>()?;
+            Ok(format!("tuple({})", parts.join(", ")))
+        }
         Expr::Bin(lhs, rhs, bin_op) => match bin_op {
             BinOp::Arith(op) => {
                 let left = lower_expr(db, body, *lhs)?;
@@ -112,8 +130,17 @@ fn lower_expr(db: &DriverDataBase, body: Body<'_>, expr_id: ExprId) -> Result<St
                 };
                 Ok(format!("{func}({left}, {right})"))
             }
+            BinOp::Logical(op) => {
+                let left = lower_expr(db, body, *lhs)?;
+                let right = lower_expr(db, body, *rhs)?;
+                let func = match op {
+                    LogicalBinOp::And => "and",
+                    LogicalBinOp::Or => "or",
+                };
+                Ok(format!("{func}({left}, {right})"))
+            }
             _ => Err(SimpleYulError::Unsupported(
-                "only arithmetic binary expressions are supported right now".into(),
+                "only arithmetic/logical binary expressions are supported right now".into(),
             )),
         },
         Expr::Block(stmts) => {
