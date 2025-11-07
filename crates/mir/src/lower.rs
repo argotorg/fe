@@ -66,7 +66,7 @@ fn lower_function<'db>(
     let mut builder = MirBuilder::new(db, body, &typed_body);
     let entry = builder.alloc_block();
     builder.lower_root(entry, body.expr(db));
-    let ret_val = builder.ensure_value(body.expr(db));
+    let (_, ret_val) = builder.lower_expr_in(entry, body.expr(db));
     builder.set_terminator(entry, Terminator::Return(Some(ret_val)));
     let mir_body = builder.finish();
 
@@ -160,6 +160,11 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         value
     }
 
+    fn lower_expr_in(&mut self, block: BasicBlockId, expr: ExprId) -> (BasicBlockId, ValueId) {
+        let val = self.ensure_value(expr);
+        (block, val)
+    }
+
     fn alloc_expr_value(&mut self, expr: ExprId) -> ValueId {
         let ty = self.typed_body.expr_ty(self.db, expr);
         self.mir_body.alloc_value(ValueData {
@@ -174,7 +179,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         };
         match stmt {
             Stmt::Let(pat, ty, value) => {
-                let value_id = value.map(|expr| self.ensure_value(expr));
+                let value_id = value.map(|expr| self.lower_expr_in(block, expr).1);
                 self.push_inst(
                     block,
                     MirInst::Let {
@@ -187,7 +192,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                 None
             }
             Stmt::For(pat, iter, body_expr) => {
-                let iter_val = self.ensure_value(*iter);
+                let iter_val = self.lower_expr_in(block, *iter).1;
                 self.push_inst(
                     block,
                     MirInst::ForLoop {
@@ -200,7 +205,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                 None
             }
             Stmt::While(cond, body_expr) => {
-                let cond_val = self.ensure_value(*cond);
+                let cond_val = self.lower_expr_in(block, *cond).1;
                 self.push_inst(
                     block,
                     MirInst::WhileLoop {
@@ -220,7 +225,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                 None
             }
             Stmt::Return(value) => {
-                let value_id = value.map(|expr| self.ensure_value(expr));
+                let value_id = value.map(|expr| self.lower_expr_in(block, expr).1);
                 self.push_inst(
                     block,
                     MirInst::Return {
@@ -247,7 +252,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
 
         match expr_data {
             Expr::Assign(target, value) => {
-                let value_id = self.ensure_value(*value);
+                let value_id = self.lower_expr_in(block, *value).1;
                 self.push_inst(
                     block,
                     MirInst::Assign {
@@ -258,8 +263,8 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                 );
                 None
             }
-            Expr::AugAssign(target, value, op) => {
-                let value_id = self.ensure_value(*value);
+        Expr::AugAssign(target, value, op) => {
+            let value_id = self.lower_expr_in(block, *value).1;
                 self.push_inst(
                     block,
                     MirInst::AugAssign {
