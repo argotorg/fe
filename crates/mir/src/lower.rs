@@ -6,6 +6,7 @@ use hir_analysis::{
     ty::{
         diagnostics::FuncBodyDiag,
         ty_check::{TypedBody, check_func_body},
+        ty_def::TyId,
     },
 };
 
@@ -337,6 +338,55 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         (Some(exit_block), None)
     }
 
+    fn lower_if_stmt(
+        &mut self,
+        block: BasicBlockId,
+        cond: ExprId,
+        then_expr: ExprId,
+        else_expr: Option<ExprId>,
+    ) -> Option<BasicBlockId> {
+        let (cond_block_opt, cond_val) = self.lower_expr_in(block, cond);
+        let cond_block = match cond_block_opt {
+            Some(block) => block,
+            None => return None,
+        };
+
+        let then_block = self.alloc_block();
+        let merge_block = self.alloc_block();
+        let else_block = if else_expr.is_some() {
+            self.alloc_block()
+        } else {
+            merge_block
+        };
+
+        self.set_terminator(
+            cond_block,
+            Terminator::Branch {
+                cond: cond_val,
+                then_bb: then_block,
+                else_bb: else_block,
+            },
+        );
+
+        let then_end = self.lower_expr_in(then_block, then_expr).0;
+        if let Some(end_block) = then_end {
+            self.set_terminator(end_block, Terminator::Goto { target: merge_block });
+        }
+
+        if let Some(else_expr) = else_expr {
+            let else_end = self.lower_expr_in(else_block, else_expr).0;
+            if let Some(end_block) = else_end {
+                self.set_terminator(end_block, Terminator::Goto { target: merge_block });
+            }
+        }
+
+        Some(merge_block)
+    }
+
+    fn is_unit_ty(&self, ty: TyId<'db>) -> bool {
+        ty.is_tuple(self.db) && ty.field_count(self.db) == 0
+    }
+
     fn lower_expr_stmt(
         &mut self,
         block: BasicBlockId,
@@ -362,6 +412,23 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                     );
                 }
                 (next_block, None)
+            }
+            Expr::If(cond, then_expr, else_expr) => {
+                let expr_ty = self.typed_body.expr_ty(self.db, expr);
+                if self.is_unit_ty(expr_ty) {
+                    let next_block = self.lower_if_stmt(block, *cond, *then_expr, *else_expr);
+                    (next_block, None)
+                } else {
+                    let value_id = self.ensure_value(expr);
+                    self.push_inst(
+                        block,
+                        MirInst::Eval {
+                            stmt: stmt_id,
+                            value: value_id,
+                        },
+                    );
+                    (Some(block), Some(value_id))
+                }
             }
             Expr::AugAssign(target, value, op) => {
                 let (next_block, value_id) = self.lower_expr_in(block, *value);
