@@ -1,8 +1,9 @@
 use camino::Utf8PathBuf;
 use common::InputDb;
+use cranelift_entity::EntityRef;
 use driver::DriverDataBase;
-use hir::hir_def::{HirIngot, TopLevelMod};
-use mir::lower_module;
+use hir::hir_def::{ExprId, HirIngot, PatId, StmtId, TopLevelMod};
+use mir::{lower_module, MirInst, Terminator};
 use url::Url;
 
 pub fn check(path: &Utf8PathBuf, dump_mir: bool) {
@@ -207,13 +208,100 @@ fn dump_module_mir(db: &DriverDataBase, top_mod: TopLevelMod<'_>) {
                 for (idx, block) in func.body.blocks.iter().enumerate() {
                     println!("  bb{idx}:");
                     for inst in &block.insts {
-                        println!("    {inst:?}");
+                        println!("    {}", format_inst(db, inst));
                     }
-                    println!("    terminator: {:?}", block.terminator);
+                    println!("    terminator: {}", format_terminator(&block.terminator));
                 }
                 println!();
             }
         }
         Err(err) => eprintln!("failed to lower MIR: {err}"),
     }
+}
+
+fn format_inst(db: &DriverDataBase, inst: &MirInst<'_>) -> String {
+    match inst {
+        MirInst::Let { stmt, pat, ty, value } => {
+            let value_str = value
+                .as_ref()
+                .map(|expr| expr_label(*expr))
+                .unwrap_or_else(|| "_".into());
+            if let Some(ty) = ty.as_ref() {
+                format!(
+                    "{}: let {}: {} = {}",
+                    stmt_label(*stmt),
+                    pat_label(*pat),
+                    (*ty).pretty_print(db),
+                    value_str
+                )
+            } else {
+                format!(
+                    "{}: let {} = {}",
+                    stmt_label(*stmt),
+                    pat_label(*pat),
+                    value_str
+                )
+            }
+        }
+        MirInst::Assign { stmt, target, value } => format!(
+            "{}: assign {} = {}",
+            stmt_label(*stmt),
+            expr_label(*target),
+            expr_label(*value)
+        ),
+        MirInst::AugAssign {
+            stmt,
+            target,
+            value,
+            op,
+        } => format!(
+            "{}: {:?} {} {}",
+            stmt_label(*stmt),
+            op,
+            expr_label(*target),
+            expr_label(*value)
+        ),
+        MirInst::Expr { stmt, expr } => {
+            format!("{}: expr {}", stmt_label(*stmt), expr_label(*expr))
+        }
+        MirInst::ForLoop { stmt, pat, iter, body } => format!(
+            "{}: for {} in {} -> {}",
+            stmt_label(*stmt),
+            pat_label(*pat),
+            expr_label(*iter),
+            expr_label(*body)
+        ),
+        MirInst::WhileLoop { stmt, cond, body } => format!(
+            "{}: while {} -> {}",
+            stmt_label(*stmt),
+            expr_label(*cond),
+            expr_label(*body)
+        ),
+        MirInst::Break { stmt } => format!("{}: break", stmt_label(*stmt)),
+        MirInst::Continue { stmt } => format!("{}: continue", stmt_label(*stmt)),
+        MirInst::Return { stmt, value } => match value {
+            Some(expr) => format!("{}: return {}", stmt_label(*stmt), expr_label(*expr)),
+            None => format!("{}: return", stmt_label(*stmt)),
+        },
+    }
+}
+
+fn format_terminator(term: &Terminator) -> String {
+    match term {
+        Terminator::Return(Some(expr)) => format!("return {}", expr_label(*expr)),
+        Terminator::Return(None) => "return".into(),
+        Terminator::Unreachable => "unreachable".into(),
+    }
+}
+
+fn stmt_label(stmt: StmtId) -> String {
+    format!("s{}", stmt.index())
+}
+
+fn pat_label(pat: PatId) -> String {
+    format!("p{}", pat.index())
+}
+
+fn expr_label(expr: ExprId) -> String {
+    format!("e{}", expr.index())
 }

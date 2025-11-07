@@ -14,6 +14,7 @@ url.workspace = true
 smol_str.workspace = true
 hir.workspace = true
 mir.workspace = true
+cranelift-entity.workspace = true
 
 [dev-dependencies]
 dir-test.workspace = true

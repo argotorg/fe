@@ -794,6 +794,7 @@ version = "0.26.0"
 dependencies = [
  "camino",
  "clap",
+ "cranelift-entity",
  "dir-test",
  "fe-common",
  "fe-driver",
