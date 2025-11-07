@@ -44,6 +44,7 @@ struct SimpleYulEmitter<'db> {
     mir_func: &'db MirFunction<'db>,
     body: Body<'db>,
     locals: FxHashMap<String, String>,
+    param_names: Vec<String>,
     next_local: usize,
 }
 
@@ -52,17 +53,25 @@ impl<'db> SimpleYulEmitter<'db> {
         let body = mir_func.func.body(db).ok_or_else(|| {
             SimpleYulError::MissingBody(function_name(db, mir_func.func))
         })?;
-        Ok(Self {
+        let mut this = Self {
             db,
             mir_func,
             body,
             locals: FxHashMap::default(),
+            param_names: Vec::new(),
             next_local: 0,
-        })
+        };
+        this.init_params();
+        Ok(this)
     }
 
     fn emit(mut self) -> Result<String, SimpleYulError> {
         let func_name = function_name(self.db, self.mir_func.func);
+        let params = if self.param_names.is_empty() {
+            String::new()
+        } else {
+            self.param_names.join(", ")
+        };
         let entry = self.mir_func.body.entry;
         let block = self
             .mir_func
@@ -83,11 +92,32 @@ impl<'db> SimpleYulEmitter<'db> {
         let mut lines = statements;
         lines.push(format!("    ret := {expr_str}"));
         let body_text = lines.join("\n");
-        Ok(format!(
-            "{{\n  function {func_name}() -> ret {{\n{body_text}\n  }}\n}}"
-        ))
+        if params.is_empty() {
+            Ok(format!(
+                "{{\n  function {func_name}() -> ret {{\n{body_text}\n  }}\n}}"
+            ))
+        } else {
+            Ok(format!(
+                "{{\n  function {func_name}({params}) -> ret {{\n{body_text}\n  }}\n}}"
+            ))
+        }
     }
 
+    fn init_params(&mut self) {
+        if let Some(params) = self.mir_func.func.params(self.db).to_opt() {
+            for (idx, param) in params.data(self.db).iter().enumerate() {
+                let original = param
+                    .name
+                    .to_opt()
+                    .and_then(|name| name.ident())
+                    .map(|id| id.data(self.db).to_string())
+                    .unwrap_or_else(|| format!("arg{idx}"));
+                let yul_name = original.clone();
+                self.param_names.push(yul_name.clone());
+                self.locals.entry(original).or_insert(yul_name);
+            }
+        }
+    }
     fn render_statements(
         &mut self,
         insts: &[mir::MirInst<'_>],

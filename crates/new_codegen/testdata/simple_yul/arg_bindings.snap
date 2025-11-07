@@ -1,0 +1,11 @@
+---
+source: crates/new_codegen/tests/simple_yul.rs
+expression: output
+input_file: testdata/simple_yul/arg_bindings.fe
+---
+{
+  function arg_bindings(x, y) -> ret {
+    let v0 := add(x, y)
+    ret := v0
+  }
+}
