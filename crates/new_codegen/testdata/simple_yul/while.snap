@@ -1,0 +1,15 @@
+---
+source: crates/new_codegen/tests/simple_yul.rs
+assertion_line: 38
+expression: output
+input_file: testdata/simple_yul/while.fe
+---
+{
+  function do_while() -> ret {
+    let v0 := 0
+    for { } lt(v0, 10) { } {
+      v0 := add(v0, 1)
+    }
+    ret := v0
+  }
+}

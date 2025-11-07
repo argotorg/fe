@@ -3,7 +3,7 @@ use common::InputDb;
 use cranelift_entity::EntityRef;
 use driver::DriverDataBase;
 use hir::hir_def::{ExprId, HirIngot, PatId, StmtId, TopLevelMod};
-use mir::{lower_module, MirInst, Terminator, ValueId};
+use mir::{MirInst, Terminator, ValueId, lower_module};
 use new_codegen::emit_module_simple_yul;
 use url::Url;
 
@@ -258,7 +258,12 @@ fn dump_module_mir(db: &DriverDataBase, top_mod: TopLevelMod<'_>) {
 
 fn format_inst(db: &DriverDataBase, inst: &MirInst<'_>) -> String {
     match inst {
-        MirInst::Let { stmt, pat, ty, value } => {
+        MirInst::Let {
+            stmt,
+            pat,
+            ty,
+            value,
+        } => {
             let value_str = value
                 .as_ref()
                 .map(|val| value_label(*val))
@@ -280,7 +285,11 @@ fn format_inst(db: &DriverDataBase, inst: &MirInst<'_>) -> String {
                 )
             }
         }
-        MirInst::Assign { stmt, target, value } => format!(
+        MirInst::Assign {
+            stmt,
+            target,
+            value,
+        } => format!(
             "{}: assign {} = {}",
             stmt_label(*stmt),
             expr_label(*target),
@@ -301,25 +310,6 @@ fn format_inst(db: &DriverDataBase, inst: &MirInst<'_>) -> String {
         MirInst::Eval { stmt, value } => {
             format!("{}: eval {}", stmt_label(*stmt), value_label(*value))
         }
-        MirInst::ForLoop { stmt, pat, iter, body } => format!(
-            "{}: for {} in {} -> {}",
-            stmt_label(*stmt),
-            pat_label(*pat),
-            value_label(*iter),
-            expr_label(*body)
-        ),
-        MirInst::WhileLoop { stmt, cond, body } => format!(
-            "{}: while {} -> {}",
-            stmt_label(*stmt),
-            value_label(*cond),
-            expr_label(*body)
-        ),
-        MirInst::Break { stmt } => format!("{}: break", stmt_label(*stmt)),
-        MirInst::Continue { stmt } => format!("{}: continue", stmt_label(*stmt)),
-        MirInst::Return { stmt, value } => match value {
-            Some(val) => format!("{}: return {}", stmt_label(*stmt), value_label(*val)),
-            None => format!("{}: return", stmt_label(*stmt)),
-        },
     }
 }
 
@@ -328,7 +318,11 @@ fn format_terminator(term: &Terminator) -> String {
         Terminator::Return(Some(val)) => format!("return {}", value_label(*val)),
         Terminator::Return(None) => "return".into(),
         Terminator::Goto { target } => format!("goto bb{}", target.index()),
-        Terminator::Branch { cond, then_bb, else_bb } => format!(
+        Terminator::Branch {
+            cond,
+            then_bb,
+            else_bb,
+        } => format!(
             "if {} -> bb{}, bb{}",
             value_label(*cond),
             then_bb.index(),

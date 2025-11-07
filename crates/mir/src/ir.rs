@@ -1,6 +1,5 @@
 use hir::hir_def::{
-    ExprId, Func, PatId, StmtId, TopLevelMod, TypeId as HirTypeId,
-    expr::ArithBinOp,
+    ExprId, Func, PatId, StmtId, TopLevelMod, TypeId as HirTypeId, expr::ArithBinOp,
 };
 use hir_analysis::ty::ty_check::TypedBody;
 use hir_analysis::ty::ty_def::TyId;
@@ -37,6 +36,7 @@ pub struct MirBody<'db> {
     pub blocks: Vec<BasicBlock<'db>>,
     pub values: Vec<ValueData<'db>>,
     pub expr_values: FxHashMap<ExprId, ValueId>,
+    pub loop_headers: FxHashMap<BasicBlockId, LoopInfo>,
 }
 
 impl<'db> MirBody<'db> {
@@ -46,6 +46,7 @@ impl<'db> MirBody<'db> {
             blocks: Vec::new(),
             values: Vec::new(),
             expr_values: FxHashMap::default(),
+            loop_headers: FxHashMap::default(),
         }
     }
 
@@ -140,36 +141,7 @@ pub enum MirInst<'db> {
         op: ArithBinOp,
     },
     /// Plain expression statement (no bindings).
-    Eval {
-        stmt: StmtId,
-        value: ValueId,
-    },
-    /// High-level representation of a `for` loop.
-    ForLoop {
-        stmt: StmtId,
-        pat: PatId,
-        iter: ValueId,
-        body: ExprId,
-    },
-    /// High-level representation of a `while` loop.
-    WhileLoop {
-        stmt: StmtId,
-        cond: ValueId,
-        body: ExprId,
-    },
-    /// `break` statement.
-    Break {
-        stmt: StmtId,
-    },
-    /// `continue` statement.
-    Continue {
-        stmt: StmtId,
-    },
-    /// Explicit `return` statement inside the block.
-    Return {
-        stmt: StmtId,
-        value: Option<ValueId>,
-    },
+    Eval { stmt: StmtId, value: ValueId },
 }
 
 /// Control-flow terminating instruction.
@@ -178,9 +150,7 @@ pub enum Terminator {
     /// Return from the function with an optional value.
     Return(Option<ValueId>),
     /// Unconditional jump to another block.
-    Goto {
-        target: BasicBlockId,
-    },
+    Goto { target: BasicBlockId },
     /// Conditional branch based on a boolean value.
     Branch {
         cond: ValueId,
@@ -201,6 +171,13 @@ pub enum Terminator {
 pub struct SwitchTarget {
     pub value: u64,
     pub block: BasicBlockId,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct LoopInfo {
+    pub body: BasicBlockId,
+    pub exit: BasicBlockId,
+    pub backedge: Option<BasicBlockId>,
 }
 
 #[derive(Debug, Clone)]
