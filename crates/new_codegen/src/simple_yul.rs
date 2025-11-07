@@ -3,7 +3,7 @@ use std::fmt;
 use driver::DriverDataBase;
 use hir::hir_def::{
     Body, Expr, ExprId, Func, LitKind, Partial, Pat, PatId, PathId, Stmt, StmtId, TopLevelMod,
-    expr::{ArithBinOp, BinOp, LogicalBinOp, UnOp},
+    expr::{ArithBinOp, BinOp, CompBinOp, LogicalBinOp, UnOp},
 };
 use mir::{lower_module, BasicBlockId, MirFunction, Terminator, ValueId, ValueOrigin};
 use rustc_hash::FxHashMap;
@@ -262,6 +262,19 @@ impl<'db> SimpleYulEmitter<'db> {
                     }
                 };
                 Ok(format!("{func}({left}, {right})"))
+            }
+            BinOp::Comp(op) => {
+                let left = self.lower_expr(*lhs)?;
+                let right = self.lower_expr(*rhs)?;
+                let expr = match op {
+                    CompBinOp::Eq => format!("eq({left}, {right})"),
+                    CompBinOp::NotEq => format!("iszero(eq({left}, {right}))"),
+                    CompBinOp::Lt => format!("lt({left}, {right})"),
+                    CompBinOp::LtEq => format!("iszero(gt({left}, {right}))"),
+                    CompBinOp::Gt => format!("gt({left}, {right})"),
+                    CompBinOp::GtEq => format!("iszero(lt({left}, {right}))"),
+                };
+                Ok(expr)
             }
             BinOp::Logical(op) => {
                 let left = self.lower_expr(*lhs)?;
