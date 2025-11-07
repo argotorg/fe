@@ -1,0 +1,10 @@
+---
+source: crates/new_codegen/tests/simple_yul.rs
+expression: output
+input_file: testdata/simple_yul/string_literal.fe
+---
+{
+  function string_literal() -> ret {
+    ret := 0x68656c6c6f
+  }
+}

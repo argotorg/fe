@@ -955,10 +955,14 @@ dependencies = [
 name = "fe-new-codegen"
 version = "0.1.0"
 dependencies = [
+ "dir-test",
+ "fe-common",
  "fe-driver",
  "fe-hir",
  "fe-mir",
+ "fe-test-utils",
  "hex",
+ "url",
 ]
 
 [[package]]

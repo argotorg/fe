@@ -8,3 +8,9 @@ driver = { path = "../driver", package = "fe-driver" }
 mir = { path = "../mir", package = "fe-mir" }
 hir.workspace = true
 hex = "0.4"
+
+[dev-dependencies]
+dir-test.workspace = true
+test-utils.workspace = true
+url.workspace = true
+common.workspace = true

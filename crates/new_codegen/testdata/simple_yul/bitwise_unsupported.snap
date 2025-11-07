@@ -1,0 +1,6 @@
+---
+source: crates/new_codegen/tests/simple_yul.rs
+expression: output
+input_file: testdata/simple_yul/bitwise_unsupported.fe
+---
+ERROR: bitwise and power operations are not supported yet
