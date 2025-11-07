@@ -3,7 +3,7 @@ use common::InputDb;
 use cranelift_entity::EntityRef;
 use driver::DriverDataBase;
 use hir::hir_def::{ExprId, HirIngot, PatId, StmtId, TopLevelMod};
-use mir::{lower_module, MirInst, Terminator};
+use mir::{lower_module, MirInst, Terminator, ValueId};
 use url::Url;
 
 pub fn check(path: &Utf8PathBuf, dump_mir: bool) {
@@ -224,14 +224,14 @@ fn format_inst(db: &DriverDataBase, inst: &MirInst<'_>) -> String {
         MirInst::Let { stmt, pat, ty, value } => {
             let value_str = value
                 .as_ref()
-                .map(|expr| expr_label(*expr))
+                .map(|val| value_label(*val))
                 .unwrap_or_else(|| "_".into());
             if let Some(ty) = ty.as_ref() {
                 format!(
                     "{}: let {}: {} = {}",
                     stmt_label(*stmt),
                     pat_label(*pat),
-                    (*ty).pretty_print(db),
+                    ty.pretty_print(db),
                     value_str
                 )
             } else {
@@ -247,7 +247,7 @@ fn format_inst(db: &DriverDataBase, inst: &MirInst<'_>) -> String {
             "{}: assign {} = {}",
             stmt_label(*stmt),
             expr_label(*target),
-            expr_label(*value)
+            value_label(*value)
         ),
         MirInst::AugAssign {
             stmt,
@@ -259,28 +259,28 @@ fn format_inst(db: &DriverDataBase, inst: &MirInst<'_>) -> String {
             stmt_label(*stmt),
             op,
             expr_label(*target),
-            expr_label(*value)
+            value_label(*value)
         ),
-        MirInst::Expr { stmt, expr } => {
-            format!("{}: expr {}", stmt_label(*stmt), expr_label(*expr))
+        MirInst::Eval { stmt, value } => {
+            format!("{}: eval {}", stmt_label(*stmt), value_label(*value))
         }
         MirInst::ForLoop { stmt, pat, iter, body } => format!(
             "{}: for {} in {} -> {}",
             stmt_label(*stmt),
             pat_label(*pat),
-            expr_label(*iter),
+            value_label(*iter),
             expr_label(*body)
         ),
         MirInst::WhileLoop { stmt, cond, body } => format!(
             "{}: while {} -> {}",
             stmt_label(*stmt),
-            expr_label(*cond),
+            value_label(*cond),
             expr_label(*body)
         ),
         MirInst::Break { stmt } => format!("{}: break", stmt_label(*stmt)),
         MirInst::Continue { stmt } => format!("{}: continue", stmt_label(*stmt)),
         MirInst::Return { stmt, value } => match value {
-            Some(expr) => format!("{}: return {}", stmt_label(*stmt), expr_label(*expr)),
+            Some(val) => format!("{}: return {}", stmt_label(*stmt), value_label(*val)),
             None => format!("{}: return", stmt_label(*stmt)),
         },
     }
@@ -288,8 +288,31 @@ fn format_inst(db: &DriverDataBase, inst: &MirInst<'_>) -> String {
 
 fn format_terminator(term: &Terminator) -> String {
     match term {
-        Terminator::Return(Some(expr)) => format!("return {}", expr_label(*expr)),
+        Terminator::Return(Some(val)) => format!("return {}", value_label(*val)),
         Terminator::Return(None) => "return".into(),
+        Terminator::Goto { target } => format!("goto bb{}", target.index()),
+        Terminator::Branch { cond, then_bb, else_bb } => format!(
+            "if {} -> bb{}, bb{}",
+            value_label(*cond),
+            then_bb.index(),
+            else_bb.index()
+        ),
+        Terminator::Switch {
+            discr,
+            targets,
+            default,
+        } => {
+            let parts = targets
+                .iter()
+                .map(|t| format!("{}: bb{}", t.value, t.block.index()))
+                .collect::<Vec<_>>();
+            let arms = parts.join(", ");
+            format!(
+                "switch {} [{arms}] default bb{}",
+                value_label(*discr),
+                default.index()
+            )
+        }
         Terminator::Unreachable => "unreachable".into(),
     }
 }
@@ -304,4 +327,8 @@ fn pat_label(pat: PatId) -> String {
 
 fn expr_label(expr: ExprId) -> String {
     format!("e{}", expr.index())
+}
+
+fn value_label(val: ValueId) -> String {
+    format!("v{}", val.index())
 }

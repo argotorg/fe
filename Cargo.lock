@@ -946,6 +946,7 @@ dependencies = [
  "fe-common",
  "fe-hir",
  "fe-hir-analysis",
+ "rustc-hash 2.1.1",
 ]
 
 [[package]]

@@ -3,6 +3,8 @@ use hir::hir_def::{
     expr::ArithBinOp,
 };
 use hir_analysis::ty::ty_check::TypedBody;
+use hir_analysis::ty::ty_def::TyId;
+use rustc_hash::FxHashMap;
 
 /// MIR for an entire top-level module.
 #[derive(Debug)]
@@ -33,6 +35,8 @@ pub struct MirFunction<'db> {
 pub struct MirBody<'db> {
     pub entry: BasicBlockId,
     pub blocks: Vec<BasicBlock<'db>>,
+    pub values: Vec<ValueData<'db>>,
+    pub expr_values: FxHashMap<ExprId, ValueId>,
 }
 
 impl<'db> MirBody<'db> {
@@ -40,22 +44,53 @@ impl<'db> MirBody<'db> {
         Self {
             entry: BasicBlockId(0),
             blocks: Vec::new(),
+            values: Vec::new(),
+            expr_values: FxHashMap::default(),
         }
     }
 
     pub fn push_block(&mut self, block: BasicBlock<'db>) -> BasicBlockId {
-        let id = BasicBlockId(self.blocks.len());
+        let id = BasicBlockId(self.blocks.len() as u32);
         if self.blocks.is_empty() {
             self.entry = id;
         }
         self.blocks.push(block);
         id
     }
+
+    pub fn block_mut(&mut self, id: BasicBlockId) -> &mut BasicBlock<'db> {
+        &mut self.blocks[id.index()]
+    }
+
+    pub fn alloc_value(&mut self, data: ValueData<'db>) -> ValueId {
+        let id = ValueId(self.values.len() as u32);
+        self.values.push(data);
+        id
+    }
+
+    pub fn value(&self, id: ValueId) -> &ValueData<'db> {
+        &self.values[id.index()]
+    }
 }
 
 /// Identifier for a basic block (dense index into `MirBody::blocks`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct BasicBlockId(pub usize);
+pub struct BasicBlockId(pub u32);
+
+impl BasicBlockId {
+    pub fn index(self) -> usize {
+        self.0 as usize
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct ValueId(pub u32);
+
+impl ValueId {
+    pub fn index(self) -> usize {
+        self.0 as usize
+    }
+}
 
 /// A linear sequence of MIR instructions terminated by a control-flow edge.
 #[derive(Debug)]
@@ -65,15 +100,19 @@ pub struct BasicBlock<'db> {
 }
 
 impl<'db> BasicBlock<'db> {
-    pub fn new(terminator: Terminator) -> Self {
+    pub fn new() -> Self {
         Self {
             insts: Vec::new(),
-            terminator,
+            terminator: Terminator::Unreachable,
         }
     }
 
     pub fn push_inst(&mut self, inst: MirInst<'db>) {
         self.insts.push(inst);
+    }
+
+    pub fn set_terminator(&mut self, term: Terminator) {
+        self.terminator = term;
     }
 }
 
@@ -85,37 +124,37 @@ pub enum MirInst<'db> {
         stmt: StmtId,
         pat: PatId,
         ty: Option<HirTypeId<'db>>,
-        value: Option<ExprId>,
+        value: Option<ValueId>,
     },
     /// Desugared assignment statement.
     Assign {
         stmt: StmtId,
         target: ExprId,
-        value: ExprId,
+        value: ValueId,
     },
     /// Augmented assignment (`+=`, `-=`, ...).
     AugAssign {
         stmt: StmtId,
         target: ExprId,
-        value: ExprId,
+        value: ValueId,
         op: ArithBinOp,
     },
     /// Plain expression statement (no bindings).
-    Expr {
+    Eval {
         stmt: StmtId,
-        expr: ExprId,
+        value: ValueId,
     },
     /// High-level representation of a `for` loop.
     ForLoop {
         stmt: StmtId,
         pat: PatId,
-        iter: ExprId,
+        iter: ValueId,
         body: ExprId,
     },
     /// High-level representation of a `while` loop.
     WhileLoop {
         stmt: StmtId,
-        cond: ExprId,
+        cond: ValueId,
         body: ExprId,
     },
     /// `break` statement.
@@ -129,7 +168,7 @@ pub enum MirInst<'db> {
     /// Explicit `return` statement inside the block.
     Return {
         stmt: StmtId,
-        value: Option<ExprId>,
+        value: Option<ValueId>,
     },
 }
 
@@ -137,7 +176,43 @@ pub enum MirInst<'db> {
 #[derive(Debug)]
 pub enum Terminator {
     /// Return from the function with an optional value.
-    Return(Option<ExprId>),
+    Return(Option<ValueId>),
+    /// Unconditional jump to another block.
+    Goto {
+        target: BasicBlockId,
+    },
+    /// Conditional branch based on a boolean value.
+    Branch {
+        cond: ValueId,
+        then_bb: BasicBlockId,
+        else_bb: BasicBlockId,
+    },
+    /// Switch on an integer discriminant.
+    Switch {
+        discr: ValueId,
+        targets: Vec<SwitchTarget>,
+        default: BasicBlockId,
+    },
     /// Unreachable terminator (used for bodies without an expression).
     Unreachable,
+}
+
+#[derive(Debug)]
+pub struct SwitchTarget {
+    pub value: u64,
+    pub block: BasicBlockId,
+}
+
+#[derive(Debug, Clone)]
+pub struct ValueData<'db> {
+    pub ty: TyId<'db>,
+    pub origin: ValueOrigin<'db>,
+}
+
+#[derive(Debug, Clone)]
+pub enum ValueOrigin<'db> {
+    Expr(ExprId),
+    Synthetic(&'static str),
+    Pat(PatId),
+    Param(Func<'db>, usize),
 }

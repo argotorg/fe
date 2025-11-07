@@ -1,8 +1,6 @@
 use std::{error::Error, fmt};
 
-use hir::hir_def::{
-    Body, BodyKind, Expr, ExprId, Func, Partial, Stmt, StmtId, TopLevelMod,
-};
+use hir::hir_def::{Body, Expr, ExprId, Func, Partial, Stmt, StmtId, TopLevelMod};
 use hir_analysis::{
     HirAnalysisDb,
     ty::{
@@ -11,7 +9,10 @@ use hir_analysis::{
     },
 };
 
-use crate::ir::{BasicBlock, MirBody, MirFunction, MirModule, MirInst, Terminator};
+use crate::ir::{
+    BasicBlock, BasicBlockId, MirBody, MirFunction, MirInst, MirModule, Terminator, ValueData,
+    ValueId, ValueOrigin,
+};
 
 #[derive(Debug)]
 pub enum MirLowerError {
@@ -62,12 +63,12 @@ fn lower_function<'db>(
         return Err(MirLowerError::MissingBody { func_name });
     };
 
-    let mut mir_body = MirBody::new();
-    let mut block = BasicBlock::new(make_return_terminator(body.expr(db), body.body_kind(db)));
-
-    lower_root_expr(db, body, body.expr(db), &mut block);
-
-    mir_body.push_block(block);
+    let mut builder = MirBuilder::new(db, body, &typed_body);
+    let entry = builder.alloc_block();
+    builder.lower_root(entry, body.expr(db));
+    let ret_val = builder.ensure_value(body.expr(db));
+    builder.set_terminator(entry, Terminator::Return(Some(ret_val)));
+    let mir_body = builder.finish();
 
     Ok(MirFunction {
         func,
@@ -76,97 +77,216 @@ fn lower_function<'db>(
     })
 }
 
-fn make_return_terminator(expr: hir::hir_def::ExprId, kind: BodyKind) -> Terminator {
-    match kind {
-        BodyKind::FuncBody => Terminator::Return(Some(expr)),
-        BodyKind::Anonymous => Terminator::Return(Some(expr)),
-    }
-}
-
-fn lower_root_expr<'db>(
+struct MirBuilder<'db, 'a> {
     db: &'db dyn HirAnalysisDb,
     body: Body<'db>,
-    expr: ExprId,
-    block: &mut BasicBlock<'db>,
-) {
-    let exprs = body.exprs(db);
-    let Partial::Present(expr_data) = &exprs[expr] else {
-        return;
-    };
-
-    if let Expr::Block(stmts) = expr_data {
-        lower_block_stmts(db, body, stmts, block);
-    }
+    typed_body: &'a TypedBody<'db>,
+    mir_body: MirBody<'db>,
 }
 
-fn lower_block_stmts<'db>(
-    db: &'db dyn HirAnalysisDb,
-    body: Body<'db>,
-    stmts: &[StmtId],
-    block: &mut BasicBlock<'db>,
-) {
-    for &stmt_id in stmts {
-        let Partial::Present(stmt) = stmt_id.data(db, body) else { continue };
-        match stmt {
-            Stmt::Let(pat, ty, value) => {
-                block.push_inst(MirInst::Let {
-                    stmt: stmt_id,
-                    pat: *pat,
-                    ty: ty.clone(),
-                    value: *value,
-                });
-            }
-            Stmt::For(pat, iter, body_expr) => block.push_inst(MirInst::ForLoop {
-                stmt: stmt_id,
-                pat: *pat,
-                iter: *iter,
-                body: *body_expr,
-            }),
-            Stmt::While(cond, body_expr) => block.push_inst(MirInst::WhileLoop {
-                stmt: stmt_id,
-                cond: *cond,
-                body: *body_expr,
-            }),
-            Stmt::Continue => block.push_inst(MirInst::Continue { stmt: stmt_id }),
-            Stmt::Break => block.push_inst(MirInst::Break { stmt: stmt_id }),
-            Stmt::Return(value) => block.push_inst(MirInst::Return {
-                stmt: stmt_id,
-                value: *value,
-            }),
-            Stmt::Expr(expr) => {
-                lower_expr_stmt(db, body, stmt_id, *expr, block);
-            }
+impl<'db, 'a> MirBuilder<'db, 'a> {
+    fn new(db: &'db dyn HirAnalysisDb, body: Body<'db>, typed_body: &'a TypedBody<'db>) -> Self {
+        Self {
+            db,
+            body,
+            typed_body,
+            mir_body: MirBody::new(),
         }
     }
-}
 
-fn lower_expr_stmt<'db>(
-    db: &'db dyn HirAnalysisDb,
-    body: Body<'db>,
-    stmt_id: StmtId,
-    expr: ExprId,
-    block: &mut BasicBlock<'db>,
-) {
-    let exprs = body.exprs(db);
-    let Partial::Present(expr_data) = &exprs[expr] else {
-        return;
-    };
+    fn finish(self) -> MirBody<'db> {
+        self.mir_body
+    }
 
-    match expr_data {
-        Expr::Assign(target, value) => block.push_inst(MirInst::Assign {
-            stmt: stmt_id,
-            target: *target,
-            value: *value,
-        }),
-        Expr::AugAssign(target, value, op) => block.push_inst(MirInst::AugAssign {
-            stmt: stmt_id,
-            target: *target,
-            value: *value,
-            op: *op,
-        }),
-        _ => block.push_inst(MirInst::Expr {
-            stmt: stmt_id,
-            expr,
-        }),
+    fn alloc_block(&mut self) -> BasicBlockId {
+        self.mir_body.push_block(BasicBlock::new())
+    }
+
+    fn set_terminator(&mut self, block: BasicBlockId, term: Terminator) {
+        self.mir_body.block_mut(block).set_terminator(term);
+    }
+
+    fn push_inst(&mut self, block: BasicBlockId, inst: MirInst<'db>) {
+        self.mir_body.block_mut(block).push_inst(inst);
+    }
+
+    fn lower_root(&mut self, block: BasicBlockId, expr: ExprId) {
+        if let Partial::Present(Expr::Block(stmts)) = expr.data(self.db, self.body) {
+            self.lower_block(block, expr, stmts);
+        }
+    }
+
+    fn lower_block(&mut self, block: BasicBlockId, block_expr: ExprId, stmts: &[StmtId]) {
+        let mut last_value = None;
+        for &stmt_id in stmts {
+            if let Some(val) = self.lower_stmt(block, stmt_id) {
+                last_value = Some(val);
+            }
+        }
+
+        if let Some(val) = last_value {
+            self.mir_body.expr_values.insert(block_expr, val);
+        }
+    }
+
+    fn ensure_value(&mut self, expr: ExprId) -> ValueId {
+        if let Some(&val) = self.mir_body.expr_values.get(&expr) {
+            return val;
+        }
+
+        let value = match expr.data(self.db, self.body) {
+            Partial::Present(Expr::Block(stmts)) => {
+                let last_expr = stmts.iter().rev().find_map(|stmt_id| {
+                    let Partial::Present(stmt) = stmt_id.data(self.db, self.body) else {
+                        return None;
+                    };
+                    if let Stmt::Expr(expr_id) = stmt {
+                        Some(*expr_id)
+                    } else {
+                        None
+                    }
+                });
+                if let Some(inner) = last_expr {
+                    let val = self.ensure_value(inner);
+                    self.mir_body.expr_values.insert(expr, val);
+                    return val;
+                }
+                self.alloc_expr_value(expr)
+            }
+            _ => self.alloc_expr_value(expr),
+        };
+
+        self.mir_body.expr_values.insert(expr, value);
+        value
+    }
+
+    fn alloc_expr_value(&mut self, expr: ExprId) -> ValueId {
+        let ty = self.typed_body.expr_ty(self.db, expr);
+        self.mir_body.alloc_value(ValueData {
+            ty,
+            origin: ValueOrigin::Expr(expr),
+        })
+    }
+
+    fn lower_stmt(&mut self, block: BasicBlockId, stmt_id: StmtId) -> Option<ValueId> {
+        let Partial::Present(stmt) = stmt_id.data(self.db, self.body) else {
+            return None;
+        };
+        match stmt {
+            Stmt::Let(pat, ty, value) => {
+                let value_id = value.map(|expr| self.ensure_value(expr));
+                self.push_inst(
+                    block,
+                    MirInst::Let {
+                        stmt: stmt_id,
+                        pat: *pat,
+                        ty: ty.clone(),
+                        value: value_id,
+                    },
+                );
+                None
+            }
+            Stmt::For(pat, iter, body_expr) => {
+                let iter_val = self.ensure_value(*iter);
+                self.push_inst(
+                    block,
+                    MirInst::ForLoop {
+                        stmt: stmt_id,
+                        pat: *pat,
+                        iter: iter_val,
+                        body: *body_expr,
+                    },
+                );
+                None
+            }
+            Stmt::While(cond, body_expr) => {
+                let cond_val = self.ensure_value(*cond);
+                self.push_inst(
+                    block,
+                    MirInst::WhileLoop {
+                        stmt: stmt_id,
+                        cond: cond_val,
+                        body: *body_expr,
+                    },
+                );
+                None
+            }
+            Stmt::Continue => {
+                self.push_inst(block, MirInst::Continue { stmt: stmt_id });
+                None
+            }
+            Stmt::Break => {
+                self.push_inst(block, MirInst::Break { stmt: stmt_id });
+                None
+            }
+            Stmt::Return(value) => {
+                let value_id = value.map(|expr| self.ensure_value(expr));
+                self.push_inst(
+                    block,
+                    MirInst::Return {
+                        stmt: stmt_id,
+                        value: value_id,
+                    },
+                );
+                None
+            }
+            Stmt::Expr(expr) => self.lower_expr_stmt(block, stmt_id, *expr),
+        }
+    }
+
+    fn lower_expr_stmt(
+        &mut self,
+        block: BasicBlockId,
+        stmt_id: StmtId,
+        expr: ExprId,
+    ) -> Option<ValueId> {
+        let exprs = self.body.exprs(self.db);
+        let Partial::Present(expr_data) = &exprs[expr] else {
+            return None;
+        };
+
+        match expr_data {
+            Expr::Assign(target, value) => {
+                let value_id = self.ensure_value(*value);
+                self.push_inst(
+                    block,
+                    MirInst::Assign {
+                        stmt: stmt_id,
+                        target: *target,
+                        value: value_id,
+                    },
+                );
+                None
+            }
+            Expr::AugAssign(target, value, op) => {
+                let value_id = self.ensure_value(*value);
+                self.push_inst(
+                    block,
+                    MirInst::AugAssign {
+                        stmt: stmt_id,
+                        target: *target,
+                        value: value_id,
+                        op: *op,
+                    },
+                );
+                None
+            }
+            Expr::Block(stmts) => {
+                self.lower_block(block, expr, stmts);
+                let value_id = self.ensure_value(expr);
+                Some(value_id)
+            }
+            _ => {
+                let value_id = self.ensure_value(expr);
+                self.push_inst(
+                    block,
+                    MirInst::Eval {
+                        stmt: stmt_id,
+                        value: value_id,
+                    },
+                );
+                Some(value_id)
+            }
+        }
     }
 }
