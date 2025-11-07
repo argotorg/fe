@@ -1,0 +1,5 @@
+pub fn local_bindings() -> u64 {
+    let x = 1 + 2
+    let y = 3
+    y
+}

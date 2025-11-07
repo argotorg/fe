@@ -2,7 +2,7 @@ use std::fmt;
 
 use driver::DriverDataBase;
 use hir::hir_def::{
-    Body, Expr, ExprId, Func, LitKind, Partial, Stmt, StmtId, TopLevelMod,
+    Body, Expr, ExprId, Func, LitKind, Partial, Pat, PatId, PathId, Stmt, StmtId, TopLevelMod,
     expr::{ArithBinOp, BinOp, LogicalBinOp, UnOp},
 };
 use mir::{lower_module, MirFunction, Terminator, ValueId, ValueOrigin};
@@ -58,11 +58,52 @@ fn emit_function(db: &DriverDataBase, mir_func: &MirFunction<'_>) -> Result<Stri
         ));
     };
 
+    let statements = render_statements(db, mir_func, body, &block.insts)?;
     let expr_str = lower_value(db, mir_func, body, ret_val)?;
 
+    let mut lines = statements;
+    lines.push(format!("    ret := {expr_str}"));
+    let body_text = lines.join("\n");
     Ok(format!(
-        "{{\n  function {func_name}() -> ret {{\n    ret := {expr_str}\n  }}\n}}"
+        "{{\n  function {func_name}() -> ret {{\n{body_text}\n  }}\n}}"
     ))
+}
+
+fn render_statements(
+    db: &DriverDataBase,
+    mir_func: &MirFunction<'_>,
+    body: Body<'_>,
+    insts: &[mir::MirInst<'_>],
+) -> Result<Vec<String>, SimpleYulError> {
+    let mut stmts = Vec::new();
+    for inst in insts {
+        match inst {
+            mir::MirInst::Let { pat, value, .. } => {
+                let name = pattern_ident(db, body, *pat)?;
+                let value = match value {
+                    Some(val) => lower_value(db, mir_func, body, *val)?,
+                    None => "0".into(),
+                };
+                stmts.push(format!("    let {name} := {value}"));
+            }
+            mir::MirInst::Assign { .. } | mir::MirInst::AugAssign { .. } => {
+                return Err(SimpleYulError::Unsupported(
+                    "assignment statements are not supported yet".into(),
+                ))
+            }
+            mir::MirInst::Eval { .. } => {}
+            mir::MirInst::ForLoop { .. }
+            | mir::MirInst::WhileLoop { .. }
+            | mir::MirInst::Break { .. }
+            | mir::MirInst::Continue { .. }
+            | mir::MirInst::Return { .. } => {
+                return Err(SimpleYulError::Unsupported(
+                    "control flow statements are not supported yet".into(),
+                ))
+            }
+        }
+    }
+    Ok(stmts)
 }
 
 fn lower_value(
@@ -151,8 +192,10 @@ fn lower_expr(db: &DriverDataBase, body: Body<'_>, expr_id: ExprId) -> Result<St
             };
             lower_expr(db, body, expr)
         }
+        Expr::Path(path) => path_ident(db, *path)
+            .ok_or_else(|| SimpleYulError::Unsupported("unsupported path expression".into())),
         _ => Err(SimpleYulError::Unsupported(
-            "only integer literals and addition are supported".into(),
+            "only simple expressions are supported".into(),
         )),
     }
 }
@@ -175,4 +218,27 @@ fn function_name(db: &DriverDataBase, func: Func<'_>) -> String {
         .to_opt()
         .map(|id| id.data(db).to_string())
         .unwrap_or_else(|| "<anonymous>".into())
+}
+
+fn pattern_ident(db: &DriverDataBase, body: Body<'_>, pat_id: PatId) -> Result<String, SimpleYulError> {
+    let pat = match pat_id.data(db, body) {
+        Partial::Present(pat) => pat,
+        Partial::Absent => {
+            return Err(SimpleYulError::Unsupported(
+                "unsupported pattern".into(),
+            ))
+        }
+    };
+    match pat {
+        Pat::Path(path, _) => path_ident(db, *path)
+            .ok_or_else(|| SimpleYulError::Unsupported("unsupported pattern path".into())),
+        _ => Err(SimpleYulError::Unsupported(
+            "only identifier patterns are supported".into(),
+        )),
+    }
+}
+
+fn path_ident(db: &DriverDataBase, path: Partial<PathId<'_>>) -> Option<String> {
+    let path = path.to_opt()?;
+    path.as_ident(db).map(|id| id.data(db).to_string())
 }
