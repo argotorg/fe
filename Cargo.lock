@@ -962,6 +962,7 @@ dependencies = [
  "fe-mir",
  "fe-test-utils",
  "hex",
+ "rustc-hash 2.1.1",
  "url",
 ]
 

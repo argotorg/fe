@@ -5,8 +5,8 @@ input_file: testdata/simple_yul/local_bindings.fe
 ---
 {
   function local_bindings() -> ret {
-    let x := add(1, 2)
-    let y := 3
-    ret := y
+    let v0 := add(1, 2)
+    let v1 := 3
+    ret := v1
   }
 }
