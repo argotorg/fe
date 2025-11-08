@@ -1,3 +1,3 @@
-mod simple_yul;
+mod yul;
 
-pub use simple_yul::{SimpleYulError, emit_module_simple_yul};
+pub use yul::{YulError, emit_module_yul};

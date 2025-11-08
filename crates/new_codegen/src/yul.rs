@@ -13,38 +13,38 @@ use mir::{
 use rustc_hash::FxHashMap;
 
 #[derive(Debug)]
-pub enum SimpleYulError {
+pub enum YulError {
     MissingBody(String),
     Unsupported(String),
 }
 
-impl fmt::Display for SimpleYulError {
+impl fmt::Display for YulError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            SimpleYulError::MissingBody(name) => {
+            YulError::MissingBody(name) => {
                 write!(f, "function `{name}` does not have a body")
             }
-            SimpleYulError::Unsupported(msg) => write!(f, "{msg}"),
+            YulError::Unsupported(msg) => write!(f, "{msg}"),
         }
     }
 }
 
-impl std::error::Error for SimpleYulError {}
+impl std::error::Error for YulError {}
 
-pub fn emit_module_simple_yul(
+pub fn emit_module_yul(
     db: &DriverDataBase,
     top_mod: TopLevelMod<'_>,
-) -> Result<Vec<Result<String, SimpleYulError>>, mir::MirLowerError> {
+) -> Result<Vec<Result<String, YulError>>, mir::MirLowerError> {
     let module = lower_module(db, top_mod)?;
     Ok(module
         .functions
         .iter()
-        .map(|func| SimpleYulEmitter::new(db, func).and_then(|emitter| emitter.emit()))
+        .map(|func| YulEmitter::new(db, func).and_then(|emitter| emitter.emit()))
         .collect())
 }
 
 #[derive(Clone)]
-struct SimpleYulEmitter<'db> {
+struct YulEmitter<'db> {
     db: &'db DriverDataBase,
     mir_func: &'db MirFunction<'db>,
     body: Body<'db>,
@@ -61,15 +61,15 @@ struct LoopEmitCtx {
     implicit_continue: Option<BasicBlockId>,
 }
 
-impl<'db> SimpleYulEmitter<'db> {
+impl<'db> YulEmitter<'db> {
     fn new(
         db: &'db DriverDataBase,
         mir_func: &'db MirFunction<'db>,
-    ) -> Result<Self, SimpleYulError> {
+    ) -> Result<Self, YulError> {
         let body = mir_func
             .func
             .body(db)
-            .ok_or_else(|| SimpleYulError::MissingBody(function_name(db, mir_func.func)))?;
+            .ok_or_else(|| YulError::MissingBody(function_name(db, mir_func.func)))?;
         let mut this = Self {
             db,
             mir_func,
@@ -83,7 +83,7 @@ impl<'db> SimpleYulEmitter<'db> {
         Ok(this)
     }
 
-    fn emit(mut self) -> Result<String, SimpleYulError> {
+    fn emit(mut self) -> Result<String, YulError> {
         let func_name = function_name(self.db, self.mir_func.func);
         let params = if self.param_names.is_empty() {
             String::new()
@@ -118,7 +118,7 @@ impl<'db> SimpleYulEmitter<'db> {
             }
         }
     }
-    fn emit_block(&mut self, block_id: BasicBlockId) -> Result<Vec<String>, SimpleYulError> {
+    fn emit_block(&mut self, block_id: BasicBlockId) -> Result<Vec<String>, YulError> {
         self.emit_block_with_ctx(block_id, None)
     }
 
@@ -126,13 +126,13 @@ impl<'db> SimpleYulEmitter<'db> {
         &mut self,
         block_id: BasicBlockId,
         loop_ctx: Option<LoopEmitCtx>,
-    ) -> Result<Vec<String>, SimpleYulError> {
+    ) -> Result<Vec<String>, YulError> {
         let block = self
             .mir_func
             .body
             .blocks
             .get(block_id.index())
-            .ok_or_else(|| SimpleYulError::Unsupported("invalid block".into()))?;
+            .ok_or_else(|| YulError::Unsupported("invalid block".into()))?;
 
         if let Terminator::Switch {
             origin: SwitchOrigin::MatchExpr(expr_id),
@@ -199,7 +199,7 @@ impl<'db> SimpleYulEmitter<'db> {
                         .body
                         .match_info(expr_id)
                         .ok_or_else(|| {
-                            SimpleYulError::Unsupported(
+                            YulError::Unsupported(
                                 "missing match lowering info for switch".into(),
                             )
                         })?;
@@ -225,7 +225,7 @@ impl<'db> SimpleYulEmitter<'db> {
                     }
 
                     let default_expr = default_body.ok_or_else(|| {
-                        SimpleYulError::Unsupported(
+                        YulError::Unsupported(
                             "match lowering missing wildcard arm".into(),
                         )
                     })?;
@@ -306,25 +306,25 @@ impl<'db> SimpleYulEmitter<'db> {
         &mut self,
         header: BasicBlockId,
         info: LoopInfo,
-    ) -> Result<(Vec<String>, BasicBlockId), SimpleYulError> {
+    ) -> Result<(Vec<String>, BasicBlockId), YulError> {
         let block = self
             .mir_func
             .body
             .blocks
             .get(header.index())
-            .ok_or_else(|| SimpleYulError::Unsupported("invalid loop header".into()))?;
+            .ok_or_else(|| YulError::Unsupported("invalid loop header".into()))?;
         let Terminator::Branch {
             cond,
             then_bb,
             else_bb,
         } = block.terminator
         else {
-            return Err(SimpleYulError::Unsupported(
+            return Err(YulError::Unsupported(
                 "loop header missing branch terminator".into(),
             ));
         };
         if then_bb != info.body || else_bb != info.exit {
-            return Err(SimpleYulError::Unsupported(
+            return Err(YulError::Unsupported(
                 "loop metadata inconsistent with terminator".into(),
             ));
         }
@@ -347,7 +347,7 @@ impl<'db> SimpleYulEmitter<'db> {
     fn render_statements(
         &mut self,
         insts: &[mir::MirInst<'_>],
-    ) -> Result<Vec<String>, SimpleYulError> {
+    ) -> Result<Vec<String>, YulError> {
         let mut stmts = Vec::new();
         for inst in insts {
             match inst {
@@ -369,7 +369,7 @@ impl<'db> SimpleYulEmitter<'db> {
                 mir::MirInst::Assign { target, value, .. } => {
                     let binding = self.path_from_expr(*target)?;
                     let yul_name = self.locals.get(&binding).cloned().ok_or_else(|| {
-                        SimpleYulError::Unsupported("assignment to unknown binding".into())
+                        YulError::Unsupported("assignment to unknown binding".into())
                     })?;
                     let value = self.lower_value(*value)?;
                     stmts.push(format!("    {yul_name} := {value}"));
@@ -377,7 +377,7 @@ impl<'db> SimpleYulEmitter<'db> {
                 mir::MirInst::AugAssign { target, value, op, .. } => {
                     let binding = self.path_from_expr(*target)?;
                     let yul_name = self.locals.get(&binding).cloned().ok_or_else(|| {
-                        SimpleYulError::Unsupported("assignment to unknown binding".into())
+                        YulError::Unsupported("assignment to unknown binding".into())
                     })?;
                     let rhs = self.lower_value(*value)?;
                     let func = match op {
@@ -387,7 +387,7 @@ impl<'db> SimpleYulEmitter<'db> {
                         ArithBinOp::Div => "div",
                         ArithBinOp::Rem => "mod",
                         _ => {
-                            return Err(SimpleYulError::Unsupported(
+                            return Err(YulError::Unsupported(
                                 "augmented assignment only supports add/sub/mul/div/mod".into(),
                             ))
                         }
@@ -400,7 +400,7 @@ impl<'db> SimpleYulEmitter<'db> {
         Ok(stmts)
     }
 
-    fn lower_value(&mut self, value_id: ValueId) -> Result<String, SimpleYulError> {
+    fn lower_value(&mut self, value_id: ValueId) -> Result<String, YulError> {
         let value = self.mir_func.body.value(value_id);
         match &value.origin {
             ValueOrigin::Expr(expr_id) => {
@@ -411,13 +411,13 @@ impl<'db> SimpleYulEmitter<'db> {
                 }
             }
             ValueOrigin::Call(call) => self.lower_call_value(call),
-            _ => Err(SimpleYulError::Unsupported(
+            _ => Err(YulError::Unsupported(
                 "only expression-derived values are supported".into(),
             )),
         }
     }
 
-    fn lower_expr(&mut self, expr_id: ExprId) -> Result<String, SimpleYulError> {
+    fn lower_expr(&mut self, expr_id: ExprId) -> Result<String, YulError> {
         if let Some(temp) = self.match_values.get(&expr_id) {
             return Ok(temp.clone());
         }
@@ -430,7 +430,7 @@ impl<'db> SimpleYulEmitter<'db> {
         let expr = match expr_id.data(self.db, self.body) {
             Partial::Present(expr) => expr,
             Partial::Absent => {
-                return Err(SimpleYulError::Unsupported(
+                return Err(YulError::Unsupported(
                     "expression data unavailable".into(),
                 ));
             }
@@ -499,13 +499,13 @@ impl<'db> SimpleYulEmitter<'db> {
                     };
                     Ok(format!("{func}({left}, {right})"))
                 }
-                _ => Err(SimpleYulError::Unsupported(
+                _ => Err(YulError::Unsupported(
                     "only arithmetic/logical binary expressions are supported right now".into(),
                 )),
             },
             Expr::Block(stmts) => {
                 let Some(expr) = self.last_expr(stmts) else {
-                    return Err(SimpleYulError::Unsupported(
+                    return Err(YulError::Unsupported(
                         "block without terminal expression".into(),
                     ));
                 };
@@ -513,11 +513,11 @@ impl<'db> SimpleYulEmitter<'db> {
             }
             Expr::Path(path) => {
                 let original = self.path_ident(*path).ok_or_else(|| {
-                    SimpleYulError::Unsupported("unsupported path expression".into())
+                    YulError::Unsupported("unsupported path expression".into())
                 })?;
                 Ok(self.locals.get(&original).cloned().unwrap_or(original))
             }
-            _ => Err(SimpleYulError::Unsupported(
+            _ => Err(YulError::Unsupported(
                 "only simple expressions are supported".into(),
             )),
         }
@@ -536,37 +536,37 @@ impl<'db> SimpleYulEmitter<'db> {
         })
     }
 
-    fn pattern_ident(&mut self, pat_id: PatId) -> Result<String, SimpleYulError> {
+    fn pattern_ident(&mut self, pat_id: PatId) -> Result<String, YulError> {
         let pat = match pat_id.data(self.db, self.body) {
             Partial::Present(pat) => pat,
             Partial::Absent => {
-                return Err(SimpleYulError::Unsupported("unsupported pattern".into()));
+                return Err(YulError::Unsupported("unsupported pattern".into()));
             }
         };
         match pat {
             Pat::Path(path, _) => self
                 .path_ident(*path)
-                .ok_or_else(|| SimpleYulError::Unsupported("unsupported pattern path".into())),
-            _ => Err(SimpleYulError::Unsupported(
+                .ok_or_else(|| YulError::Unsupported("unsupported pattern path".into())),
+            _ => Err(YulError::Unsupported(
                 "only identifier patterns are supported".into(),
             )),
         }
     }
 
-    fn path_from_expr(&self, expr_id: ExprId) -> Result<String, SimpleYulError> {
+    fn path_from_expr(&self, expr_id: ExprId) -> Result<String, YulError> {
         let expr = match expr_id.data(self.db, self.body) {
             Partial::Present(expr) => expr,
             Partial::Absent => {
-                return Err(SimpleYulError::Unsupported(
+                return Err(YulError::Unsupported(
                     "unsupported assignment target".into(),
                 ));
             }
         };
         if let Expr::Path(path) = expr {
             self.path_ident(*path)
-                .ok_or_else(|| SimpleYulError::Unsupported("unsupported assignment target".into()))
+                .ok_or_else(|| YulError::Unsupported("unsupported assignment target".into()))
         } else {
-            Err(SimpleYulError::Unsupported(
+            Err(YulError::Unsupported(
                 "only identifier assignments are supported".into(),
             ))
         }
@@ -578,9 +578,9 @@ impl<'db> SimpleYulEmitter<'db> {
             .map(|id| id.data(self.db).to_string())
     }
 
-    fn lower_call_value(&mut self, call: &CallOrigin<'_>) -> Result<String, SimpleYulError> {
+    fn lower_call_value(&mut self, call: &CallOrigin<'_>) -> Result<String, YulError> {
         let Some(func) = call.callable.func_def.hir_func_def(self.db) else {
-            return Err(SimpleYulError::Unsupported(
+            return Err(YulError::Unsupported(
                 "callable without hir function definition is not supported yet".into(),
             ));
         };
@@ -606,7 +606,7 @@ impl<'db> SimpleYulEmitter<'db> {
         &mut self,
         expr_id: ExprId,
         lines: &mut Vec<String>,
-    ) -> Result<String, SimpleYulError> {
+    ) -> Result<String, YulError> {
         if let Some(temp) = self.match_values.get(&expr_id) {
             return Ok(temp.clone());
         }
@@ -614,7 +614,7 @@ impl<'db> SimpleYulEmitter<'db> {
         let expr = match expr_id.data(self.db, self.body) {
             Partial::Present(expr) => expr,
             Partial::Absent => {
-                return Err(SimpleYulError::Unsupported(
+                return Err(YulError::Unsupported(
                     "expression data unavailable".into(),
                 ));
             }

@@ -1,5 +1,5 @@
 ---
-source: crates/new_codegen/tests/simple_yul.rs
+source: crates/new_codegen/tests/yul.rs
 expression: output
 input_file: testdata/simple_yul/local_bindings.fe
 ---

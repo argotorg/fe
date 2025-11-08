@@ -4,7 +4,7 @@ use cranelift_entity::EntityRef;
 use driver::DriverDataBase;
 use hir::hir_def::{ExprId, HirIngot, PatId, StmtId, TopLevelMod};
 use mir::{MirInst, Terminator, ValueId, lower_module};
-use new_codegen::emit_module_simple_yul;
+use new_codegen::emit_module_yul;
 use url::Url;
 
 pub fn check(path: &Utf8PathBuf, dump_mir: bool, emit_yul_min: bool) {
@@ -66,7 +66,7 @@ fn check_single_file(
             dump_module_mir(db, top_mod);
         }
         if emit_yul_min {
-            emit_simple_yul(db, top_mod);
+            emit_yul(db, top_mod);
         }
     } else {
         eprintln!("❌ Error: Could not process file {file_path}");
@@ -154,7 +154,7 @@ fn check_ingot(
             dump_module_mir(db, root_mod);
         }
         if emit_yul_min {
-            emit_simple_yul(db, root_mod);
+            emit_yul(db, root_mod);
         }
     }
 
@@ -212,21 +212,21 @@ fn print_dependency_info(db: &DriverDataBase, dependency_url: &Url) {
     eprintln!();
 }
 
-fn emit_simple_yul(db: &DriverDataBase, top_mod: TopLevelMod<'_>) {
-    match emit_module_simple_yul(db, top_mod) {
+fn emit_yul(db: &DriverDataBase, top_mod: TopLevelMod<'_>) {
+    match emit_module_yul(db, top_mod) {
         Ok(results) => {
             for result in results {
                 match result {
                     Ok(yul) => {
-                        println!("=== Simple Yul ===");
+                        println!("=== Yul ===");
                         println!("{yul}");
                         println!();
                     }
-                    Err(err) => eprintln!("⚠️  simple yul skipped: {err}"),
+                    Err(err) => eprintln!("⚠️  yul emission skipped: {err}"),
                 }
             }
         }
-        Err(err) => eprintln!("⚠️  failed to lower MIR for simple yul: {err}"),
+        Err(err) => eprintln!("⚠️  failed to lower MIR for yul emission: {err}"),
     }
 }
 

@@ -1,7 +1,7 @@
 use common::InputDb;
 use dir_test::{Fixture, dir_test};
 use driver::DriverDataBase;
-use fe_new_codegen::emit_module_simple_yul;
+use fe_new_codegen::emit_module_yul;
 use test_utils::snap_test;
 use url::Url;
 
@@ -9,7 +9,7 @@ use url::Url;
     dir: "$CARGO_MANIFEST_DIR/testdata/simple_yul",
     glob: "*.fe"
 )]
-fn simple_yul_snap(fixture: Fixture<&str>) {
+fn yul_snap(fixture: Fixture<&str>) {
     let mut db = DriverDataBase::default();
     let file_url = Url::from_file_path(fixture.path()).expect("fixture path should be absolute");
     db.workspace().touch(
@@ -23,7 +23,7 @@ fn simple_yul_snap(fixture: Fixture<&str>) {
         .expect("file should be loaded");
     let top_mod = db.top_mod(file);
 
-    let output = match emit_module_simple_yul(&db, top_mod) {
+    let output = match emit_module_yul(&db, top_mod) {
         Ok(results) => results
             .into_iter()
             .map(|res| match res {
