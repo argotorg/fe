@@ -1,4 +1,4 @@
-use crate::hir_def::{HirIngot, IdentId, Impl};
+use crate::core::hir_def::{HirIngot, IdentId, Impl};
 use common::ingot::Ingot;
 use rustc_hash::FxHashMap;
 use salsa::Update;

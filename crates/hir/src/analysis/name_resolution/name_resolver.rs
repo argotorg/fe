@@ -1,7 +1,7 @@
 use std::{cmp, fmt, mem};
 
 use crate::{
-    hir_def::{
+    core::hir_def::{
         Enum, EnumVariant, GenericParam, GenericParamOwner, HirIngot, IdentId, ItemKind, Mod,
         TopLevelMod, Trait, Use,
         prim_ty::PrimTy,
@@ -11,7 +11,7 @@ use crate::{
             VariantEdge,
         },
     },
-    span::DynLazySpan,
+    core::span::DynLazySpan,
 };
 use bitflags::bitflags;
 use rustc_hash::{FxHashMap, FxHashSet};

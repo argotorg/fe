@@ -2,7 +2,7 @@ use std::{marker::PhantomData, mem};
 
 use crate::{
     HirDb,
-    hir_def::{
+    core::hir_def::{
         Body, CallArg, Const, Contract, Enum, EnumVariant, Expr, ExprId, Field, FieldDef,
         FieldDefListId, FieldIndex, FieldParent, Func, FuncParam, FuncParamListId, FuncParamName,
         GenericArg, GenericArgListId, GenericParam, GenericParamListId, IdentId, Impl, ImplTrait,
@@ -11,7 +11,7 @@ use crate::{
         TypeKind, Use, UseAlias, UsePathId, UsePathSegment, VariantDef, VariantDefListId,
         VariantKind, WhereClauseId, WherePredicate, attr, scope_graph::ScopeId,
     },
-    span::{
+    core::span::{
         SpanDowncast, item::LazySuperTraitListSpan, lazy_spans::*, params::LazyTraitRefSpan,
         transition::ChainRoot,
     },
@@ -29,7 +29,7 @@ pub mod prelude {
         walk_type_alias, walk_type_bound, walk_type_bound_list, walk_use, walk_use_path,
         walk_variant_def, walk_variant_def_list, walk_where_clause, walk_where_predicate,
     };
-    pub use crate::span::lazy_spans::*;
+    pub use crate::core::span::lazy_spans::*;
 }
 
 /// A visitor for traversing the HIR.

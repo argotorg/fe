@@ -1,7 +1,7 @@
 use parser::ast::{self};
 
 use super::FileLowerCtxt;
-use crate::hir_def::{Body, IdentId, Partial, TypeId, params::*};
+use crate::core::hir_def::{Body, IdentId, Partial, TypeId, params::*};
 
 impl<'db> GenericArgListId<'db> {
     pub(super) fn lower_ast(ctxt: &mut FileLowerCtxt<'db>, ast: ast::GenericArgList) -> Self {

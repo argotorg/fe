@@ -3,7 +3,7 @@
 
 use std::collections::BinaryHeap;
 
-use crate::hir_def::HirIngot;
+use crate::core::hir_def::HirIngot;
 use common::{indexmap::IndexSet, ingot::Ingot};
 use cranelift_entity::{PrimaryMap, entity_impl};
 use rustc_hash::{FxHashMap, FxHashSet};

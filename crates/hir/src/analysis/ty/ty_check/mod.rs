@@ -427,8 +427,8 @@ impl<'db> Visitor<'db> for TyCheckerFinalizer<'db> {
 
     fn visit_item(
         &mut self,
-        _: &mut VisitorCtxt<'db, crate::visitor::prelude::LazyItemSpan<'db>>,
-        _: crate::hir_def::ItemKind<'db>,
+        _: &mut VisitorCtxt<'db, crate::core::visitor::prelude::LazyItemSpan<'db>>,
+        _: crate::core::hir_def::ItemKind<'db>,
     ) {
     }
 }

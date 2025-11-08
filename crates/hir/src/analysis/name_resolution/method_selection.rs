@@ -1,4 +1,4 @@
-use crate::hir_def::{IdentId, Trait, scope_graph::ScopeId};
+use crate::core::hir_def::{IdentId, Trait, scope_graph::ScopeId};
 use common::indexmap::IndexSet;
 use rustc_hash::FxHashSet;
 use thin_vec::ThinVec;

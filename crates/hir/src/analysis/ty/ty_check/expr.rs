@@ -1,6 +1,6 @@
 use std::panic;
 
-use crate::hir_def::{
+use crate::core::hir_def::{
     ArithBinOp, BinOp, Expr, ExprId, FieldIndex, IdentId, Partial, Pat, PatId, PathId, UnOp,
     VariantKind,
 };
@@ -1333,7 +1333,7 @@ impl TraitOps for BinOp {
             }
 
             BinOp::Comp(comp_op) => {
-                use crate::hir_def::CompBinOp::*;
+                use crate::core::hir_def::CompBinOp::*;
 
                 // Comp
                 match comp_op {

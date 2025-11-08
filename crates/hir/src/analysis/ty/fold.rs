@@ -1,6 +1,6 @@
 use std::hash::Hash;
 
-use crate::hir_def::IdentId;
+use crate::core::hir_def::IdentId;
 use common::indexmap::{IndexMap, IndexSet};
 
 use super::{

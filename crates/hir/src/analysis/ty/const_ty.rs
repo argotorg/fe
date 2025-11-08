@@ -1,4 +1,4 @@
-use crate::hir_def::{Body, Const, Expr, IntegerId, LitKind, Partial};
+use crate::core::hir_def::{Body, Const, Expr, IntegerId, LitKind, Partial};
 
 use super::{
     ty_def::{InvalidCause, TyId, TyParam, TyVar},

@@ -1,5 +1,5 @@
 use crate::{
-    hir_def::{
+    core::hir_def::{
         Const, Enum, EnumVariant, GenericParamOwner, IdentId, ImplTrait, ItemKind, PathId,
         PathKind, Trait, TypeBound, TypeKind, VariantKind, scope_graph::ScopeId,
     },

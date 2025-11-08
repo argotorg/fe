@@ -1,4 +1,4 @@
-use crate::hir_def::{
+use crate::core::hir_def::{
     IdentId, ItemKind, TopLevelMod, TypeAlias,
     scope_graph::{ScopeGraph, ScopeId},
 };

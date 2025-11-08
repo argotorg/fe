@@ -7,7 +7,7 @@ use super::simplified_pattern::{
 use crate::analysis::HirAnalysisDb;
 use crate::analysis::ty::AdtRef;
 use crate::analysis::ty::ty_def::TyId;
-use crate::hir_def::{Body as HirBody, LitKind, Pat as HirPat, scope_graph::ScopeId};
+use crate::core::hir_def::{Body as HirBody, LitKind, Pat as HirPat, scope_graph::ScopeId};
 use common::indexmap::IndexSet;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -369,7 +369,7 @@ impl<'db> SigmaSet<'db> {
             if let AdtRef::Enum(enum_def) = adt_def.adt_ref(db) {
                 let variants_list = enum_def.variants(db);
                 for (idx, _) in variants_list.data(db).iter().enumerate() {
-                    let variant = crate::hir_def::EnumVariant::new(enum_def, idx);
+                    let variant = crate::core::hir_def::EnumVariant::new(enum_def, idx);
                     let ctor = ConstructorKind::Variant(variant, ty);
                     ctors.insert(ctor);
                 }

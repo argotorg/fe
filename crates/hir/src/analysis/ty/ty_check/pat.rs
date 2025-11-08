@@ -1,6 +1,6 @@
 use std::ops::Range;
 
-use crate::hir_def::{Partial, Pat, PatId, VariantKind};
+use crate::core::hir_def::{Partial, Pat, PatId, VariantKind};
 use either::Either;
 
 use super::{RecordLike, TyChecker, env::LocalBinding, path::RecordInitChecker};

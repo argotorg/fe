@@ -4,11 +4,11 @@ use salsa::Update;
 
 use crate::{
     HirDb, SpannedHirDb,
-    hir_def::{
+    core::hir_def::{
         Body, Const, Contract, Enum, Func, Impl, ImplTrait, Mod, Struct, TopLevelMod, Trait,
         TypeAlias, Use,
     },
-    lower::top_mod_ast,
+    core::lower::top_mod_ast,
 };
 
 pub mod attr;
@@ -167,7 +167,7 @@ pub fn body_ast<'db>(db: &'db dyn SpannedHirDb, item: Body<'db>) -> &'db HirOrig
 pub fn body_source_map<'db>(
     db: &'db dyn SpannedHirDb,
     item: Body<'db>,
-) -> &'db crate::hir_def::BodySourceMap {
+) -> &'db crate::core::hir_def::BodySourceMap {
     item.source_map(db)
 }
 

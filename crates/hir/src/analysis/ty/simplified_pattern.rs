@@ -6,10 +6,10 @@
 use crate::analysis::HirAnalysisDb;
 use crate::analysis::name_resolution::{PathRes, ResolvedVariant, resolve_path};
 use crate::analysis::ty::ty_def::TyId;
-use crate::hir_def::{
+use crate::core::hir_def::{
     Body as HirBody, LitKind, Partial, Pat as HirPat, PathId, VariantKind, scope_graph::ScopeId,
 };
-use crate::hir_def::{EnumVariant, FieldParent, IdentId, PatId};
+use crate::core::hir_def::{EnumVariant, FieldParent, IdentId, PatId};
 use rustc_hash::FxHashMap;
 use smallvec1::SmallVec;
 
@@ -428,8 +428,8 @@ pub fn display_missing_pattern<'db>(
                     let full_name = format!("{enum_name}::{variant_name}");
 
                     match variant.kind(db) {
-                        crate::hir_def::VariantKind::Unit => full_name,
-                        crate::hir_def::VariantKind::Tuple(_) => {
+                        crate::core::hir_def::VariantKind::Unit => full_name,
+                        crate::core::hir_def::VariantKind::Tuple(_) => {
                             if fields.is_empty() {
                                 format!("{full_name}(..)")
                             } else {
@@ -440,7 +440,7 @@ pub fn display_missing_pattern<'db>(
                                 format!("{}({})", full_name, field_patterns.join(", "))
                             }
                         }
-                        crate::hir_def::VariantKind::Record(_) => {
+                        crate::core::hir_def::VariantKind::Record(_) => {
                             if fields.is_empty() {
                                 format!("{full_name} {{ .. }}")
                             } else {

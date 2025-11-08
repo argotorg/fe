@@ -1,4 +1,4 @@
-use crate::hir_def::{Body, ExprId, ItemKind, Mod, TopLevelMod, Trait, scope_graph::ScopeId};
+use crate::core::hir_def::{Body, ExprId, ItemKind, Mod, TopLevelMod, Trait, scope_graph::ScopeId};
 use common::indexmap::IndexSet;
 
 use crate::analysis::{HirAnalysisDb, name_resolution::resolve_imports};

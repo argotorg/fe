@@ -1,4 +1,4 @@
-use crate::hir_def::{
+use crate::core::hir_def::{
     GenericArg, GenericArgListId, GenericParam, GenericParamOwner, GenericParamView, IdentId,
     ItemKind, KindBound as HirKindBound, Partial, PathId, TypeAlias as HirTypeAlias, TypeBound,
     TypeId as HirTyId, TypeKind as HirTyKind, scope_graph::ScopeId,

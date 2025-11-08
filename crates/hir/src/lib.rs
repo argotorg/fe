@@ -1,11 +1,10 @@
 use common::InputDb;
-pub use lower::parse::ParserError;
+pub use core::lower::parse::ParserError;
 
 pub mod analysis;
-pub mod hir_def;
-pub mod lower;
-pub mod span;
-pub mod visitor;
+pub mod core;
+// Re-export core modules at crate root for compatibility
+pub use core::{hir_def, lower, span, visitor};
 
 pub use common::{file::File, file::Workspace, ingot::Ingot};
 #[salsa::db]
@@ -31,10 +30,10 @@ impl<T> LowerHirDb for T where T: HirDb {}
 /// implementations relying on `SpannedHirDb` are prohibited in all
 /// Analysis phases.
 ///
-/// This marker is mainly used to inject [HirOrigin](crate::span::HirOrigin) to
+/// This marker is mainly used to inject [HirOrigin](crate::core::span::HirOrigin) to
 /// generate [CompleteDiagnostic](common::diagnostics::CompleteDiagnostic) from
 /// [DiagnosticVoucher](crate::diagnostics::DiagnosticVoucher).
-/// See also `[LazySpan]`[`crate::span::LazySpan`] for more details.
+/// See also `[LazySpan]`[`crate::core::span::LazySpan`] for more details.
 #[salsa::db]
 pub trait SpannedHirDb: salsa::Database + HirDb {}
 #[salsa::db]

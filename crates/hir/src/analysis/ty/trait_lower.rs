@@ -1,6 +1,6 @@
 //! This module implements the trait and impl trait lowering process.
 
-use crate::hir_def::{
+use crate::core::hir_def::{
     AssocTypeGenericArg, HirIngot, IdentId, ImplTrait, Partial, PathId, Trait, TraitRefId,
     params::GenericArg, scope_graph::ScopeId,
 };

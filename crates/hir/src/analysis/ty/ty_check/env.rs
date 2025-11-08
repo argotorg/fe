@@ -634,9 +634,9 @@ impl<'db> TyFolder<'db> for Prober<'db, '_> {
 }
 #[derive(Debug, Clone)]
 pub(super) struct PendingMethod<'db> {
-    pub expr: crate::hir_def::ExprId,
+    pub expr: crate::core::hir_def::ExprId,
     pub recv_ty: TyId<'db>,
-    pub method_name: crate::hir_def::IdentId<'db>,
+    pub method_name: crate::core::hir_def::IdentId<'db>,
     pub candidates: Vec<TraitInstId<'db>>,
     pub span: DynLazySpan<'db>,
 }

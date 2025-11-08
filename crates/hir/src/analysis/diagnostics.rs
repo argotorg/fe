@@ -40,7 +40,7 @@ use itertools::Itertools;
 /// lazily to avoid invalidating cache in salsa-db.
 ///
 /// To obtain a span from HIR nodes in a lazy manner, it's recommended to use
-/// `[LazySpan]`(crate::span::LazySpan) and types that implement `LazySpan`.
+/// `[LazySpan]`(crate::core::span::LazySpan) and types that implement `LazySpan`.
 pub trait DiagnosticVoucher: Send + Sync {
     /// Makes a [`CompleteDiagnostic`].
     fn to_complete(&self, db: &dyn SpannedHirAnalysisDb) -> CompleteDiagnostic;

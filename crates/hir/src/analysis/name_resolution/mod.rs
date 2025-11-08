@@ -7,7 +7,7 @@ mod path_resolver;
 pub(crate) mod traits_in_scope;
 mod visibility_checker;
 
-use crate::hir_def::TopLevelMod;
+use crate::core::hir_def::TopLevelMod;
 use common::ingot::Ingot;
 pub use import_resolver::ResolvedImports;
 pub use name_resolver::{

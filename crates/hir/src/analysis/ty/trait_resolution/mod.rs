@@ -264,7 +264,7 @@ impl<'db> PredicateListId<'db> {
 
                 // Process each bound on the associated type
                 for bound in &trait_type.bounds {
-                    if let crate::hir_def::params::TypeBound::Trait(trait_ref) = bound {
+                    if let crate::core::hir_def::params::TypeBound::Trait(trait_ref) = bound {
                         // Lower the trait reference with the associated type as Self
                         // We need to convert the HIR trait ref to a TraitInstId
                         // This requires lowering which needs a scope

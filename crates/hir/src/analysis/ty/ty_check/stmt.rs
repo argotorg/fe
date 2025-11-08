@@ -1,4 +1,4 @@
-use crate::hir_def::{IdentId, Partial, Stmt, StmtId};
+use crate::core::hir_def::{IdentId, Partial, Stmt, StmtId};
 
 use super::TyChecker;
 use crate::analysis::ty::{

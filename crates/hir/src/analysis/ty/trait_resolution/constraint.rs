@@ -1,4 +1,4 @@
-use crate::hir_def::{
+use crate::core::hir_def::{
     GenericParam, GenericParamOwner, GenericParamView, ItemKind, TraitRefId, TypeBound,
     scope_graph::ScopeId, types::TypeId as HirTypeId,
 };

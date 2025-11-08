@@ -6,7 +6,7 @@
 
 use std::collections::hash_map::Entry;
 
-use crate::hir_def::{ImplTrait, scope_graph::ScopeId};
+use crate::core::hir_def::{ImplTrait, scope_graph::ScopeId};
 use common::indexmap::IndexMap;
 use rustc_hash::FxHashMap;
 

@@ -4,7 +4,7 @@
 use super::pattern_analysis::{PatternMatrix, PatternRowVec, SigmaSet};
 use super::simplified_pattern::{ConstructorKind, SimplifiedPattern, SimplifiedPatternKind};
 use crate::analysis::HirAnalysisDb;
-use crate::hir_def::IdentId;
+use crate::core::hir_def::IdentId;
 use indexmap::IndexMap;
 
 /// A decision tree for pattern matching compilation

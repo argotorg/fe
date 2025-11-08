@@ -103,7 +103,7 @@ fn check_duplicate_field_names<'db>(
 
 fn check_duplicate_variant_names<'db>(
     db: &'db dyn HirAnalysisDb,
-    enum_: crate::hir_def::Enum<'db>,
+    enum_: crate::core::hir_def::Enum<'db>,
 ) -> SmallVec<[TyDiagCollection<'db>; 2]> {
     check_duplicate_names(
         enum_.variants(db).data(db).iter().map(|v| v.name.to_opt()),
@@ -345,7 +345,7 @@ impl<'db> DefAnalyzer<'db> {
 
     pub(crate) fn for_type_alias(
         db: &'db dyn HirAnalysisDb,
-        type_alias: crate::hir_def::TypeAlias<'db>,
+        type_alias: crate::core::hir_def::TypeAlias<'db>,
         assumptions: PredicateListId<'db>,
     ) -> Self {
         Self {
@@ -571,7 +571,7 @@ impl<'db> Visitor<'db> for DefAnalyzer<'db> {
     fn visit_where_predicate(
         &mut self,
         ctxt: &mut VisitorCtxt<'db, LazyWherePredicateSpan<'db>>,
-        pred: &crate::hir_def::WherePredicate<'db>,
+        pred: &crate::core::hir_def::WherePredicate<'db>,
     ) {
         let Some(hir_ty) = pred.ty.to_opt() else {
             return;
@@ -640,7 +640,7 @@ impl<'db> Visitor<'db> for DefAnalyzer<'db> {
     fn visit_variant_def(
         &mut self,
         ctxt: &mut VisitorCtxt<'db, LazyVariantDefSpan<'db>>,
-        variant: &crate::hir_def::VariantDef<'db>,
+        variant: &crate::core::hir_def::VariantDef<'db>,
     ) {
         if let VariantKind::Tuple(tuple_id) = variant.kind {
             let span = ctxt.span().unwrap().tuple_type();
@@ -770,7 +770,7 @@ impl<'db> Visitor<'db> for DefAnalyzer<'db> {
     fn visit_kind_bound(
         &mut self,
         ctxt: &mut VisitorCtxt<'db, LazyKindBoundSpan<'db>>,
-        bound: &crate::hir_def::KindBound,
+        bound: &crate::core::hir_def::KindBound,
     ) {
         let Some((ty, _)) = self.current_ty else {
             return;
@@ -845,7 +845,7 @@ impl<'db> Visitor<'db> for DefAnalyzer<'db> {
 
     fn visit_super_trait_list(
         &mut self,
-        ctxt: &mut VisitorCtxt<'db, crate::span::item::LazySuperTraitListSpan<'db>>,
+        ctxt: &mut VisitorCtxt<'db, crate::core::span::item::LazySuperTraitListSpan<'db>>,
         super_traits: &[TraitRefId<'db>],
     ) {
         let DefKind::Trait(def) = self.def else {
@@ -919,7 +919,7 @@ impl<'db> Visitor<'db> for DefAnalyzer<'db> {
     fn visit_func(
         &mut self,
         ctxt: &mut VisitorCtxt<'db, LazyFuncSpan<'db>>,
-        hir_func: crate::hir_def::Func<'db>,
+        hir_func: crate::core::hir_def::Func<'db>,
     ) {
         let Some(func) = lower_func(self.db, hir_func) else {
             return;
@@ -984,14 +984,14 @@ impl<'db> Visitor<'db> for DefAnalyzer<'db> {
     fn visit_body(
         &mut self,
         _ctxt: &mut VisitorCtxt<'_, LazyBodySpan>,
-        _body: crate::hir_def::Body,
+        _body: crate::core::hir_def::Body,
     ) {
     }
 
     fn visit_func_param(
         &mut self,
         ctxt: &mut VisitorCtxt<'db, LazyFuncParamSpan<'db>>,
-        param: &crate::hir_def::FuncParam<'db>,
+        param: &crate::core::hir_def::FuncParam<'db>,
     ) {
         let Some(hir_ty) = param.ty.to_opt() else {
             return;

@@ -239,7 +239,7 @@ impl<'db> GenericParamOwner<'db> {
     }
 
     // could this be private?
-    pub fn params_list(self, db: &'db dyn HirDb) -> GenericParamListId<'db> {
+    pub(crate) fn params_list(self, db: &'db dyn HirDb) -> GenericParamListId<'db> {
         match self {
             GenericParamOwner::Func(func) => func.generic_params(db),
             GenericParamOwner::Struct(struct_) => struct_.generic_params(db),

@@ -1,4 +1,4 @@
-use crate::hir_def::{ItemKind, Use, scope_graph::ScopeId};
+use crate::core::hir_def::{ItemKind, Use, scope_graph::ScopeId};
 
 use crate::analysis::{
     HirAnalysisDb,
