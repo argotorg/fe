@@ -5,12 +5,22 @@ expression: output
 input_file: testdata/simple_yul/method_call.fe
 ---
 {
-  function return_one(self) -> ret {
-    ret := 1
+  function make_value() -> ret {
+    ret := 42
+  }
+}
+{
+  function gen_value(self) -> ret {
+    ret := make_value()
+  }
+}
+{
+  function return_value(self) -> ret {
+    ret := gen_value(self)
   }
 }
 {
   function call_method(foo) -> ret {
-    ret := return_one(foo)
+    ret := return_value(foo)
   }
 }
