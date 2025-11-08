@@ -1,0 +1,14 @@
+---
+source: crates/new_codegen/tests/simple_yul.rs
+assertion_line: 38
+expression: output
+input_file: testdata/simple_yul/aug_assign.fe
+---
+{
+  function aug_assign(x, y) -> ret {
+    let v0 := x
+    v0 := add(v0, y)
+    v0 := mul(v0, 2)
+    ret := div(v0, 2)
+  }
+}

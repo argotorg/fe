@@ -278,10 +278,25 @@ impl<'db> SimpleYulEmitter<'db> {
                     let value = self.lower_value(*value)?;
                     stmts.push(format!("    {yul_name} := {value}"));
                 }
-                mir::MirInst::AugAssign { .. } => {
-                    return Err(SimpleYulError::Unsupported(
-                        "augmented assignment is not supported yet".into(),
-                    ));
+                mir::MirInst::AugAssign { target, value, op, .. } => {
+                    let binding = self.path_from_expr(*target)?;
+                    let yul_name = self.locals.get(&binding).cloned().ok_or_else(|| {
+                        SimpleYulError::Unsupported("assignment to unknown binding".into())
+                    })?;
+                    let rhs = self.lower_value(*value)?;
+                    let func = match op {
+                        ArithBinOp::Add => "add",
+                        ArithBinOp::Sub => "sub",
+                        ArithBinOp::Mul => "mul",
+                        ArithBinOp::Div => "div",
+                        ArithBinOp::Rem => "mod",
+                        _ => {
+                            return Err(SimpleYulError::Unsupported(
+                                "augmented assignment only supports add/sub/mul/div/mod".into(),
+                            ))
+                        }
+                    };
+                    stmts.push(format!("    {yul_name} := {func}({yul_name}, {rhs})"));
                 }
                 mir::MirInst::Eval { .. } => {}
             }
