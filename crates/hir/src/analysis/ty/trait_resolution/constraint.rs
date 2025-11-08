@@ -1,6 +1,6 @@
 use crate::hir_def::{
-    GenericParam, GenericParamOwner, ItemKind, TraitRefId, TypeBound, scope_graph::ScopeId,
-    types::TypeId as HirTypeId,
+    GenericParam, GenericParamOwner, GenericParamView, ItemKind, TraitRefId, TypeBound,
+    scope_graph::ScopeId, types::TypeId as HirTypeId,
 };
 use common::indexmap::IndexSet;
 use either::Either;
@@ -190,8 +190,8 @@ pub fn collect_constraints<'db>(
 
     // Generic parameter bounds
     let param_set = collect_generic_params(db, owner);
-    let param_list = owner.params(db);
-    for (idx, param) in param_list.data(db).iter().enumerate() {
+    let params = owner.params(db);
+    for (idx, GenericParamView { param, .. }) in params.enumerate() {
         let GenericParam::Type(hir_param) = param else {
             continue;
         };

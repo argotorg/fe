@@ -17,15 +17,17 @@
 //!   method(s) here.
 
 use crate::analysis::HirAnalysisDb;
+use crate::analysis::name_resolution::{PathRes, resolve_path};
+use crate::analysis::ty::diagnostics::{TyDiagCollection, TyLowerDiag};
 use crate::hir_def::*;
 // When adding real methods, prefer calling internal lowering/normalization here
 // rather than exposing raw syntax.
+use crate::analysis::ty::trait_resolution::constraint::collect_func_def_constraints;
 use crate::analysis::ty::{
     trait_resolution::{PredicateListId, constraint::collect_constraints},
     ty_def::{InvalidCause, TyId},
     ty_lower::{lower_hir_ty, lower_type_alias},
 };
-use crate::analysis::ty::trait_resolution::constraint::collect_func_def_constraints;
 
 // Top‑level module items ----------------------------------------------------
 
@@ -68,7 +70,8 @@ impl<'db> Func<'db> {
 
     /// Semantic return type. When absent in source, this is `unit`.
     pub fn return_ty(self, db: &'db dyn HirAnalysisDb) -> TyId<'db> {
-        self.explicit_return_ty(db).unwrap_or_else(|| TyId::unit(db))
+        self.explicit_return_ty(db)
+            .unwrap_or_else(|| TyId::unit(db))
     }
 }
 
@@ -184,3 +187,63 @@ impl<'db> ItemKind<'db> {
 // Avoid adding tracked methods here. Keep tracked queries in lowering and call
 // them from small, semantic helpers only. This module should remain the
 // ergonomic public surface for traversal without leaking syntax.
+
+impl<'db> GenericParamOwner<'db> {
+    pub fn param_view(self, db: &'db dyn HirDb, idx: usize) -> GenericParamView<'db> {
+        self.params(db)
+            .nth(idx)
+            .expect("failed to get the generic param")
+    }
+
+    pub fn params(self, db: &'db dyn HirDb) -> impl Iterator<Item = GenericParamView<'db>> + 'db {
+        self.params_list(db)
+            .data(db)
+            .iter()
+            .enumerate()
+            .map(move |(idx, param)| GenericParamView {
+                owner: self,
+                param,
+                idx,
+            })
+    }
+
+    pub fn diags_params_defined_in_parent(
+        self,
+        db: &'db dyn HirAnalysisDb,
+    ) -> impl Iterator<Item = TyDiagCollection<'db>> + 'db {
+        self.params(db).filter_map(|param| {
+            param
+                .diag_param_defined_in_parent(db)
+                .map(TyDiagCollection::from)
+        })
+    }
+}
+
+impl<'db> GenericParamView<'db> {
+    pub fn diag_param_defined_in_parent(
+        self,
+        db: &'db dyn HirAnalysisDb,
+    ) -> Option<TyLowerDiag<'db>> {
+        let name = self.param.name().to_opt()?;
+        let parent_scope = self.owner.scope().parent_item(db)?.scope();
+        let path = PathId::from_ident(db, name);
+        let span = self.owner.params_span().param(self.idx);
+
+        match resolve_path(
+            db,
+            path,
+            parent_scope,
+            PredicateListId::empty_list(db),
+            false,
+        ) {
+            Ok(r @ PathRes::Ty(ty)) if ty.is_param(db) => {
+                Some(TyLowerDiag::GenericParamAlreadyDefinedInParent {
+                    span,
+                    conflict_with: r.name_span(db).unwrap(),
+                    name,
+                })
+            }
+            _ => None,
+        }
+    }
+}

@@ -452,19 +452,14 @@ impl<'db> FieldDef<'db> {
     fn lower_ast(ctxt: &mut FileLowerCtxt<'db>, ast: ast::RecordFieldDef) -> Self {
         let attributes = AttrListId::lower_ast_opt(ctxt, ast.attr_list());
         let name = IdentId::lower_token_partial(ctxt, ast.name());
-        let ty = TypeId::lower_ast_partial(ctxt, ast.ty());
+        let type_ref = TypeId::lower_ast_partial(ctxt, ast.ty());
         let vis = if ast.pub_kw().is_some() {
             Visibility::Public
         } else {
             Visibility::Private
         };
 
-        Self {
-            attributes,
-            name,
-            type_ref: ty,
-            vis,
-        }
+        Self::new(attributes, name, type_ref, vis)
     }
 }
 

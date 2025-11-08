@@ -153,11 +153,6 @@ impl<'db> ItemKind<'db> {
         }
     }
 
-    // pub fn ingot(self, db: &'db dyn HirDb) -> IngotDescription<'db> {
-    //     let top_mod = self.top_mod(db);
-    //     top_mod.ingot(db)
-    // }
-
     pub fn top_mod(self, db: &'db dyn HirDb) -> TopLevelMod<'db> {
         match self {
             ItemKind::TopMod(top_mod) => top_mod,
@@ -243,7 +238,8 @@ impl<'db> GenericParamOwner<'db> {
         ItemKind::from(self).top_mod(db)
     }
 
-    pub fn params(self, db: &'db dyn HirDb) -> GenericParamListId<'db> {
+    // could this be private?
+    pub fn params_list(self, db: &'db dyn HirDb) -> GenericParamListId<'db> {
         match self {
             GenericParamOwner::Func(func) => func.generic_params(db),
             GenericParamOwner::Struct(struct_) => struct_.generic_params(db),
@@ -277,10 +273,6 @@ impl<'db> GenericParamOwner<'db> {
             GenericParamOwner::Trait(_) => "trait",
             GenericParamOwner::ImplTrait(_) => "impl trait",
         }
-    }
-
-    pub fn param(self, db: &'db dyn HirDb, idx: usize) -> &'db GenericParam<'db> {
-        &self.params(db).data(db)[idx]
     }
 
     pub fn params_span(self) -> LazyGenericParamListSpan<'db> {
@@ -1244,13 +1236,23 @@ impl<'db> FieldParent<'db> {
 pub struct FieldDef<'db> {
     pub attributes: AttrListId<'db>,
     pub name: Partial<IdentId<'db>>,
-    pub type_ref: Partial<TypeId<'db>>,
+    pub(super) type_ref: Partial<TypeId<'db>>,
     pub vis: Visibility,
 }
 
 impl<'db> FieldDef<'db> {
-    pub(super) fn type_ref(&self) -> Partial<TypeId<'db>> {
-        self.type_ref
+    pub(crate) fn new(
+        attributes: AttrListId<'db>,
+        name: Partial<IdentId<'db>>,
+        type_ref: Partial<TypeId<'db>>,
+        vis: Visibility,
+    ) -> Self {
+        Self {
+            attributes,
+            name,
+            type_ref,
+            vis,
+        }
     }
 }
 

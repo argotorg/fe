@@ -1,6 +1,6 @@
 use crate::hir_def::{
-    GenericArg, GenericArgListId, GenericParam, GenericParamOwner, IdentId, ItemKind,
-    KindBound as HirKindBound, Partial, PathId, TypeAlias as HirTypeAlias, TypeBound,
+    GenericArg, GenericArgListId, GenericParam, GenericParamOwner, GenericParamView, IdentId,
+    ItemKind, KindBound as HirKindBound, Partial, PathId, TypeAlias as HirTypeAlias, TypeBound,
     TypeId as HirTyId, TypeKind as HirTyKind, scope_graph::ScopeId,
 };
 use salsa::Update;
@@ -424,8 +424,11 @@ impl<'db> GenericParamCollector<'db> {
 
     fn collect_generic_params(&mut self) {
         let hir_db = self.db;
-        let param_list = self.owner.params(hir_db);
-        for (idx, param) in param_list.data(hir_db).iter().enumerate() {
+        let params = self.owner.params(hir_db);
+        for (idx, param) in params
+            .map(|GenericParamView { param, .. }| param)
+            .enumerate()
+        {
             let idx = idx + self.offset_to_original;
 
             match param {

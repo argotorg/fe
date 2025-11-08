@@ -1,5 +1,7 @@
 #![allow(non_snake_case)]
-#![deprecated(note = "Temporary syntactic shim; migrate callers to hir_def::semantic and remove this module.")]
+#![deprecated(
+    note = "Temporary syntactic shim; migrate callers to hir_def::semantic and remove this module."
+)]
 //! Temporary syntactic HIR shim
 //!
 //! Centralizes public wrappers for raw syntactic access that is being phased
@@ -7,9 +9,9 @@
 //! other in-progress areas only. Please do not add new dependencies on this
 //! module; migrate to semantic methods instead.
 
+use crate::HirDb;
 use crate::hir_def::item::{AssocTyDef, Const, FieldDef, Func, Impl, ImplTrait, TypeAlias};
 use crate::hir_def::{Partial, TypeId};
-use crate::HirDb;
 
 impl<'db> Func<'db> {
     pub fn ret_type_ref___tmp(self, db: &'db dyn HirDb) -> Option<TypeId<'db>> {
@@ -43,7 +45,7 @@ impl<'db> Const<'db> {
 
 impl<'db> FieldDef<'db> {
     pub fn field_type_ref___tmp(&self) -> Partial<TypeId<'db>> {
-        self.type_ref()
+        self.type_ref
     }
 }
 

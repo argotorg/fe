@@ -512,6 +512,7 @@ impl<'db> DefAnalyzer<'db> {
 // This check is necessary because the conflict rule
 // for the generic parameter is the exceptional case where shadowing shouldn't
 // occur.
+#[deprecated]
 fn check_param_defined_in_parent<'db>(
     db: &'db dyn HirAnalysisDb,
     scope: ScopeId<'db>,
@@ -737,7 +738,7 @@ impl<'db> Visitor<'db> for DefAnalyzer<'db> {
 
                     // Forward reference check: cannot reference a param not yet declared.
                     for j in collector.out.iter().filter(|j| **j >= idx as usize) {
-                        if let Some(name) = owner.param(self.db, *j).name().to_opt() {
+                        if let Some(name) = owner.param_view(self.db, *j).param.name().to_opt() {
                             let span = ctxt.span().unwrap();
                             self.diags
                                 .push(TyLowerDiag::GenericDefaultForwardRef { span, name }.into());
@@ -936,16 +937,11 @@ impl<'db> Visitor<'db> for DefAnalyzer<'db> {
         }
 
         // Skip the rest of the analysis if any param names conflict with a parent's param
-        let span = hir_func.span().generic_params();
-        let params = hir_func.generic_params(self.db).data(self.db);
+        // let params = .generic_params(self.db);
         let mut is_conflict = false;
-        for (i, param) in params.iter().enumerate() {
-            if let Some(diag) =
-                check_param_defined_in_parent(self.db, self.scope(), param, span.clone().param(i))
-            {
-                self.diags.push(diag.into());
-                is_conflict = true;
-            }
+        for diag in GenericParamOwner::Func(hir_func).diags_params_defined_in_parent(self.db) {
+            self.diags.push(diag);
+            is_conflict = true;
         }
         if is_conflict {
             return;

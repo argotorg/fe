@@ -1073,7 +1073,12 @@ impl DiagnosticVoucher for TyLowerDiag<'_> {
                     )
                 };
 
-                let name = owner.params(db).data(db)[0].name().unwrap().data(db);
+                let name = owner
+                    .params(db)
+                    .next()
+                    .map(|p| p.param.name().unwrap().data(db))
+                    .expect("should be at least one generic param");
+
                 let spans = idxs
                     .iter()
                     .map(|i| owner.params_span().param(*i as usize).resolve(db));

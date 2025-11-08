@@ -5,8 +5,8 @@ use crate::{
     HirDb,
     hir_def::{
         Body, Enum, EnumVariant, ExprId, FieldDefListId, FieldParent, FuncParamListId,
-        FuncParamName, GenericParamListId, HirIngot, ItemKind, TopLevelMod, TrackedItemId,
-        TrackedItemVariant, Trait, Use, VariantDefListId, VariantKind, Visibility,
+        FuncParamName, GenericParamListId, GenericParamOwner, HirIngot, ItemKind, TopLevelMod,
+        TrackedItemId, TrackedItemVariant, Trait, Use, VariantDefListId, VariantKind, Visibility,
         scope_graph::{EdgeKind, Scope, ScopeEdge, ScopeGraph, ScopeId},
     },
 };
@@ -130,7 +130,7 @@ impl<'db> ScopeGraphBuilder<'db> {
                 self.add_generic_param_scope(
                     item_node,
                     inner.into(),
-                    inner.generic_params(self.db),
+                    GenericParamOwner::from(inner).params_list(self.db),
                 );
                 if let Some(params) = inner.params(self.db).to_opt() {
                     self.add_func_param_scope(item_node, inner.into(), params);

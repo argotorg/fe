@@ -1,5 +1,8 @@
 use super::{Body, IdentId, Partial, PathId};
-use crate::{HirDb, hir_def::TypeId};
+use crate::{
+    HirDb,
+    hir_def::{GenericParamOwner, TypeId},
+};
 
 #[salsa::interned]
 #[derive(Debug)]
@@ -92,6 +95,22 @@ impl<'db> GenericParam<'db> {
         match self {
             Self::Type(ty) => ty.name,
             Self::Const(c) => c.name,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, derive_more::From)]
+pub struct GenericParamView<'db> {
+    pub param: &'db GenericParam<'db>,
+    pub owner: GenericParamOwner<'db>,
+    pub idx: usize,
+}
+
+impl<'db> GenericParamView<'db> {
+    pub fn name(&self) -> Partial<IdentId<'db>> {
+        match self.param {
+            GenericParam::Type(ty) => ty.name,
+            GenericParam::Const(c) => c.name,
         }
     }
 }

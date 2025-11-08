@@ -668,7 +668,7 @@ impl<'db> FromScope<'db> for &'db GenericParam<'db> {
         };
 
         let parent = GenericParamOwner::from_item_opt(parent).unwrap();
-        Some(&parent.params(db).data(db)[idx as usize])
+        Some(&parent.param_view(db, idx as usize).param)
     }
 }
 
