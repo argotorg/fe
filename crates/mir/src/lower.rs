@@ -95,6 +95,7 @@ struct LoopScope {
 }
 
 impl<'db, 'a> MirBuilder<'db, 'a> {
+    /// Create a new MIR builder for the given HIR body and its typed info.
     fn new(db: &'db dyn HirAnalysisDb, body: Body<'db>, typed_body: &'a TypedBody<'db>) -> Self {
         Self {
             db,
@@ -105,22 +106,27 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         }
     }
 
+    /// Consume the builder and return the constructed MIR body.
     fn finish(self) -> MirBody<'db> {
         self.mir_body
     }
 
+    /// Allocate a fresh basic block and return its identifier.
     fn alloc_block(&mut self) -> BasicBlockId {
         self.mir_body.push_block(BasicBlock::new())
     }
 
+    /// Set the terminator for a basic block.
     fn set_terminator(&mut self, block: BasicBlockId, term: Terminator) {
         self.mir_body.block_mut(block).set_terminator(term);
     }
 
+    /// Append an instruction to the given block.
     fn push_inst(&mut self, block: BasicBlockId, inst: MirInst<'db>) {
         self.mir_body.block_mut(block).push_inst(inst);
     }
 
+    /// Lower the root expression of a body into MIR, starting at `block`.
     fn lower_root(&mut self, block: BasicBlockId, expr: ExprId) -> Option<BasicBlockId> {
         match expr.data(self.db, self.body) {
             Partial::Present(Expr::Block(stmts)) => self.lower_block(block, expr, stmts),
@@ -132,6 +138,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         }
     }
 
+    /// Lower a block expression by sequentially lowering its statements.
     fn lower_block(
         &mut self,
         block: BasicBlockId,
@@ -156,6 +163,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         current
     }
 
+    /// Ensure that the given expression has a corresponding MIR value.
     fn ensure_value(&mut self, expr: ExprId) -> ValueId {
         if let Some(&val) = self.mir_body.expr_values.get(&expr) {
             return val;
@@ -187,6 +195,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         value
     }
 
+    /// Lower an expression inside a concrete block, returning the exit block and value.
     fn lower_expr_in(
         &mut self,
         block: BasicBlockId,
@@ -205,6 +214,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         }
     }
 
+    /// Allocate the MIR value slot for an expression, handling special cases.
     fn alloc_expr_value(&mut self, expr: ExprId) -> ValueId {
         if let Some(value) = self.try_lower_method_call(expr) {
             return value;
@@ -217,6 +227,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         })
     }
 
+    /// Attempt to lower a method call into a call-origin MIR value.
     fn try_lower_method_call(&mut self, expr: ExprId) -> Option<ValueId> {
         let Partial::Present(Expr::MethodCall(receiver, _, _, call_args)) =
             expr.data(self.db, self.body)
@@ -244,6 +255,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         }))
     }
 
+    /// Lower a statement, returning the successor block and (optional) produced value.
     fn lower_stmt(
         &mut self,
         block: BasicBlockId,
@@ -313,6 +325,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         }
     }
 
+    /// Lower a `while` loop statement and wire up its control-flow edges.
     fn lower_while(
         &mut self,
         block: BasicBlockId,
@@ -369,6 +382,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         (Some(exit_block), None)
     }
 
+    /// Lower an `if` expression used in statement position.
     fn lower_if_stmt(
         &mut self,
         block: BasicBlockId,
@@ -414,10 +428,12 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         Some(merge_block)
     }
 
+    /// Returns whether the given type represents the unit value.
     fn is_unit_ty(&self, ty: TyId<'db>) -> bool {
         ty.is_tuple(self.db) && ty.field_count(self.db) == 0
     }
 
+    /// Lower an expression statement, producing its continuation block/value.
     fn lower_expr_stmt(
         &mut self,
         block: BasicBlockId,
