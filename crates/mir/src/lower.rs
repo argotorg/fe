@@ -6,7 +6,6 @@ use hir::hir_def::{
 use hir_analysis::{
     HirAnalysisDb,
     ty::{
-        diagnostics::FuncBodyDiag,
         ty_check::{TypedBody, check_func_body},
         ty_def::{PrimTy, TyBase, TyData, TyId},
     },
@@ -34,16 +33,6 @@ impl fmt::Display for MirLowerError {
     }
 }
 
-struct IntTypeInfo {
-    bits: u16,
-}
-
-impl IntTypeInfo {
-    const fn new(bits: u16) -> Self {
-        Self { bits }
-    }
-}
-
 fn prim_int_bits(prim: PrimTy) -> Option<u16> {
     use PrimTy::*;
     match prim {
@@ -68,8 +57,8 @@ pub fn lower_module<'db>(
     let mut module = MirModule::new(top_mod);
 
     for &func in top_mod.all_funcs(db) {
-        let (diags, typed_body) = check_func_body(db, func);
-        let lowered = lower_function(db, func, typed_body.clone(), diags.clone())?;
+        let (_diags, typed_body) = check_func_body(db, func);
+        let lowered = lower_function(db, func, typed_body.clone())?;
         module.functions.push(lowered);
     }
 
@@ -80,7 +69,6 @@ fn lower_function<'db>(
     db: &'db dyn HirAnalysisDb,
     func: Func<'db>,
     typed_body: TypedBody<'db>,
-    _diags: Vec<FuncBodyDiag<'db>>,
 ) -> MirLowerResult<MirFunction<'db>> {
     let Some(body) = func.body(db) else {
         let func_name = func
@@ -303,13 +291,13 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                 match lit {
                     LitKind::Int(value) => {
                         let ty = self.typed_body.pat_ty(self.db, pat);
-                        let info = self.int_type_info(ty)?;
-                        if info.bits > 256 {
+                        let bits = self.int_type_bits(ty)?;
+                        if bits > 256 {
                             return None;
                         }
                         let literal = value.data(self.db).clone();
                         let literal_bits = literal.bits() as u64;
-                        if literal_bits > info.bits as u64 {
+                        if literal_bits > bits as u64 {
                             return None;
                         }
                         Some(SwitchValue::Int(literal))
@@ -335,9 +323,9 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         )
     }
 
-    fn int_type_info(&self, ty: TyId<'db>) -> Option<IntTypeInfo> {
+    fn int_type_bits(&self, ty: TyId<'db>) -> Option<u16> {
         match ty.data(self.db) {
-            TyData::TyBase(TyBase::Prim(prim)) => prim_int_bits(*prim).map(IntTypeInfo::new),
+            TyData::TyBase(TyBase::Prim(prim)) => prim_int_bits(*prim),
             _ => None,
         }
     }
@@ -346,22 +334,13 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
     fn lower_block(
         &mut self,
         block: BasicBlockId,
-        block_expr: ExprId,
+        _block_expr: ExprId,
         stmts: &[StmtId],
     ) -> Option<BasicBlockId> {
         let mut current = Some(block);
-        let mut last_value = None;
         for &stmt_id in stmts {
             let Some(curr_block) = current else { break };
-            let (next_block, value) = self.lower_stmt(curr_block, stmt_id);
-            if let Some(val) = value {
-                last_value = Some(val);
-            }
-            current = next_block;
-        }
-
-        if let Some(val) = last_value {
-            self.mir_body.expr_values.insert(block_expr, val);
+            current = self.lower_stmt(curr_block, stmt_id).0;
         }
 
         current
@@ -572,10 +551,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
             break_target: exit_block,
         });
 
-        let body_end = match body_expr.data(self.db, self.body) {
-            Partial::Present(Expr::Block(stmts)) => self.lower_block(body_block, body_expr, stmts),
-            _ => self.lower_expr_in(body_block, body_expr).0,
-        };
+        let body_end = self.lower_expr_in(body_block, body_expr).0;
 
         self.loop_stack.pop();
 
@@ -607,17 +583,23 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
     }
 
     /// Lower an `if` expression used in statement position.
-    fn lower_if_stmt(
+    fn lower_if_expr(
         &mut self,
         block: BasicBlockId,
+        if_expr: ExprId,
         cond: ExprId,
         then_expr: ExprId,
         else_expr: Option<ExprId>,
-    ) -> Option<BasicBlockId> {
+    ) -> (Option<BasicBlockId>, Option<ValueId>) {
+        if !self.is_unit_ty(self.typed_body.expr_ty(self.db, if_expr)) {
+            let value = self.ensure_value(if_expr);
+            return (Some(block), Some(value));
+        }
+
         let (cond_block_opt, cond_val) = self.lower_expr_in(block, cond);
         let cond_block = match cond_block_opt {
             Some(block) => block,
-            None => return None,
+            None => return (None, None),
         };
 
         let then_block = self.alloc_block();
@@ -649,7 +631,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
             }
         }
 
-        Some(merge_block)
+        (Some(merge_block), None)
     }
 
     /// Returns whether the given type represents the unit value.
@@ -685,21 +667,18 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                 (next_block, None)
             }
             Expr::If(cond, then_expr, else_expr) => {
-                let expr_ty = self.typed_body.expr_ty(self.db, expr);
-                if self.is_unit_ty(expr_ty) {
-                    let next_block = self.lower_if_stmt(block, *cond, *then_expr, *else_expr);
-                    (next_block, None)
-                } else {
-                    let value_id = self.ensure_value(expr);
+                let (next_block, value_id) =
+                    self.lower_if_expr(block, expr, *cond, *then_expr, *else_expr);
+                if let (Some(curr_block), Some(value)) = (next_block, value_id) {
                     self.push_inst(
-                        block,
+                        curr_block,
                         MirInst::Eval {
                             stmt: stmt_id,
-                            value: value_id,
+                            value,
                         },
                     );
-                    (Some(block), Some(value_id))
                 }
+                (next_block, value_id)
             }
             Expr::AugAssign(target, value, op) => {
                 let (next_block, value_id) = self.lower_expr_in(block, *value);
