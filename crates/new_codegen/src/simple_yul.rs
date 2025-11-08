@@ -343,9 +343,7 @@ impl<'db> SimpleYulEmitter<'db> {
                     UnOp::Minus => Ok(format!("sub(0, {value})")),
                     UnOp::Not => Ok(format!("iszero({value})")),
                     UnOp::Plus => Ok(value),
-                    UnOp::BitNot => Err(SimpleYulError::Unsupported(
-                        "bitwise not is not supported yet".into(),
-                    )),
+                    UnOp::BitNot => Ok(format!("not({value})")),
                 }
             }
             Expr::Tuple(values) => {
@@ -365,16 +363,12 @@ impl<'db> SimpleYulEmitter<'db> {
                         ArithBinOp::Mul => "mul",
                         ArithBinOp::Div => "div",
                         ArithBinOp::Rem => "mod",
-                        ArithBinOp::Pow
-                        | ArithBinOp::LShift
-                        | ArithBinOp::RShift
-                        | ArithBinOp::BitAnd
-                        | ArithBinOp::BitOr
-                        | ArithBinOp::BitXor => {
-                            return Err(SimpleYulError::Unsupported(
-                                "bitwise and power operations are not supported yet".into(),
-                            ));
-                        }
+                        ArithBinOp::Pow => "exp",
+                        ArithBinOp::LShift => "shl",
+                        ArithBinOp::RShift => "shr",
+                        ArithBinOp::BitAnd => "and",
+                        ArithBinOp::BitOr => "or",
+                        ArithBinOp::BitXor => "xor",
                     };
                     Ok(format!("{func}({left}, {right})"))
                 }
