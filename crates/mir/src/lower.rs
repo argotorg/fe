@@ -216,7 +216,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
 
     /// Allocate the MIR value slot for an expression, handling special cases.
     fn alloc_expr_value(&mut self, expr: ExprId) -> ValueId {
-        if let Some(value) = self.try_lower_method_call(expr) {
+        if let Some(value) = self.try_lower_call(expr) {
             return value;
         }
 
@@ -227,22 +227,32 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         })
     }
 
-    /// Attempt to lower a method call into a call-origin MIR value.
-    fn try_lower_method_call(&mut self, expr: ExprId) -> Option<ValueId> {
-        let Partial::Present(Expr::MethodCall(receiver, _, _, call_args)) =
-            expr.data(self.db, self.body)
-        else {
-            return None;
+    /// Attempt to lower a function or method call into a call-origin MIR value.
+    fn try_lower_call(&mut self, expr: ExprId) -> Option<ValueId> {
+        let (args, callable) = match expr.data(self.db, self.body) {
+            Partial::Present(Expr::Call(_, call_args)) => {
+                let Some(callable) = self.typed_body.callable_expr(expr) else {
+                    return None;
+                };
+                let mut args = Vec::with_capacity(call_args.len());
+                for arg in call_args.iter() {
+                    args.push(self.ensure_value(arg.expr));
+                }
+                (args, callable)
+            }
+            Partial::Present(Expr::MethodCall(receiver, _, _, call_args)) => {
+                let Some(callable) = self.typed_body.callable_expr(expr) else {
+                    return None;
+                };
+                let mut args = Vec::with_capacity(call_args.len() + 1);
+                args.push(self.ensure_value(*receiver));
+                for arg in call_args.iter() {
+                    args.push(self.ensure_value(arg.expr));
+                }
+                (args, callable)
+            }
+            _ => return None,
         };
-        let Some(callable) = self.typed_body.callable_expr(expr) else {
-            return None;
-        };
-
-        let mut args = Vec::with_capacity(call_args.len() + 1);
-        args.push(self.ensure_value(*receiver));
-        for arg in call_args.iter() {
-            args.push(self.ensure_value(arg.expr));
-        }
 
         let ty = self.typed_body.expr_ty(self.db, expr);
         Some(self.mir_body.alloc_value(ValueData {

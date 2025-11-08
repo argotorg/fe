@@ -340,18 +340,6 @@ impl<'db> SimpleYulEmitter<'db> {
                     .collect::<Result<Vec<_>, _>>()?;
                 Ok(format!("tuple({})", parts.join(", ")))
             }
-            Expr::Call(callee, args) => {
-                let callee_name = self.lower_call_target(*callee)?;
-                let arg_values = args
-                    .iter()
-                    .map(|arg| self.lower_expr(arg.expr))
-                    .collect::<Result<Vec<_>, _>>()?;
-                if arg_values.is_empty() {
-                    Ok(format!("{callee_name}()"))
-                } else {
-                    Ok(format!("{callee_name}({})", arg_values.join(", ")))
-                }
-            }
             Expr::Bin(lhs, rhs, bin_op) => match bin_op {
                 BinOp::Arith(op) => {
                     let left = self.lower_expr(*lhs)?;
@@ -474,25 +462,6 @@ impl<'db> SimpleYulEmitter<'db> {
         let path = path.to_opt()?;
         path.as_ident(self.db)
             .map(|id| id.data(self.db).to_string())
-    }
-
-    fn lower_call_target(&self, callee: ExprId) -> Result<String, SimpleYulError> {
-        let expr = match callee.data(self.db, self.body) {
-            Partial::Present(expr) => expr,
-            Partial::Absent => {
-                return Err(SimpleYulError::Unsupported(
-                    "call target data unavailable".into(),
-                ))
-            }
-        };
-        if let Expr::Path(path) = expr {
-            self.path_ident(*path)
-                .ok_or_else(|| SimpleYulError::Unsupported("unsupported call target".into()))
-        } else {
-            Err(SimpleYulError::Unsupported(
-                "only simple function calls are supported".into(),
-            ))
-        }
     }
 
     fn lower_call_value(&mut self, call: &CallOrigin<'_>) -> Result<String, SimpleYulError> {
