@@ -5,7 +5,9 @@ use hir::hir_def::{
     Body, Expr, ExprId, Func, LitKind, Partial, Pat, PatId, PathId, Stmt, StmtId, TopLevelMod,
     expr::{ArithBinOp, BinOp, CompBinOp, LogicalBinOp, UnOp},
 };
-use mir::{BasicBlockId, LoopInfo, MirFunction, Terminator, ValueId, ValueOrigin, lower_module};
+use mir::{
+    BasicBlockId, CallOrigin, LoopInfo, MirFunction, Terminator, ValueId, ValueOrigin, lower_module,
+};
 use rustc_hash::FxHashMap;
 
 #[derive(Debug)]
@@ -289,8 +291,9 @@ impl<'db> SimpleYulEmitter<'db> {
 
     fn lower_value(&mut self, value_id: ValueId) -> Result<String, SimpleYulError> {
         let value = self.mir_func.body.value(value_id);
-        match value.origin {
-            ValueOrigin::Expr(expr_id) => self.lower_expr(expr_id),
+        match &value.origin {
+            ValueOrigin::Expr(expr_id) => self.lower_expr(*expr_id),
+            ValueOrigin::Call(call) => self.lower_call_value(call),
             _ => Err(SimpleYulError::Unsupported(
                 "only expression-derived values are supported".into(),
             )),
@@ -298,6 +301,12 @@ impl<'db> SimpleYulEmitter<'db> {
     }
 
     fn lower_expr(&mut self, expr_id: ExprId) -> Result<String, SimpleYulError> {
+        if let Some(value_id) = self.mir_func.body.expr_values.get(&expr_id) {
+            if let ValueOrigin::Call(call) = &self.mir_func.body.value(*value_id).origin {
+                return self.lower_call_value(call);
+            }
+        }
+
         let expr = match expr_id.data(self.db, self.body) {
             Partial::Present(expr) => expr,
             Partial::Absent => {
@@ -483,6 +492,24 @@ impl<'db> SimpleYulEmitter<'db> {
             Err(SimpleYulError::Unsupported(
                 "only simple function calls are supported".into(),
             ))
+        }
+    }
+
+    fn lower_call_value(&mut self, call: &CallOrigin<'_>) -> Result<String, SimpleYulError> {
+        let Some(func) = call.callable.func_def.hir_func_def(self.db) else {
+            return Err(SimpleYulError::Unsupported(
+                "callable without hir function definition is not supported yet".into(),
+            ));
+        };
+        let callee = function_name(self.db, func);
+        let mut lowered_args = Vec::with_capacity(call.args.len());
+        for &arg in &call.args {
+            lowered_args.push(self.lower_value(arg)?);
+        }
+        if lowered_args.is_empty() {
+            Ok(format!("{callee}()"))
+        } else {
+            Ok(format!("{callee}({})", lowered_args.join(", ")))
         }
     }
 

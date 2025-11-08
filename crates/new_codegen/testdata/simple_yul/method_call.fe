@@ -1,0 +1,11 @@
+struct Foo {}
+
+impl Foo {
+    pub fn return_one(self) -> u64 {
+        return 1
+    }
+}
+
+pub fn call_method(foo: Foo) -> u64 {
+    foo.return_one()
+}

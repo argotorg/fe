@@ -1,7 +1,7 @@
 use hir::hir_def::{
     ExprId, Func, PatId, StmtId, TopLevelMod, TypeId as HirTypeId, expr::ArithBinOp,
 };
-use hir_analysis::ty::ty_check::TypedBody;
+use hir_analysis::ty::ty_check::{Callable, TypedBody};
 use hir_analysis::ty::ty_def::TyId;
 use rustc_hash::FxHashMap;
 
@@ -192,4 +192,12 @@ pub enum ValueOrigin<'db> {
     Synthetic(&'static str),
     Pat(PatId),
     Param(Func<'db>, usize),
+    Call(CallOrigin<'db>),
+}
+
+#[derive(Debug, Clone)]
+pub struct CallOrigin<'db> {
+    pub expr: ExprId,
+    pub callable: Callable<'db>,
+    pub args: Vec<ValueId>,
 }

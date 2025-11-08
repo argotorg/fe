@@ -1,0 +1,16 @@
+---
+source: crates/new_codegen/tests/simple_yul.rs
+assertion_line: 38
+expression: output
+input_file: testdata/simple_yul/method_call.fe
+---
+{
+  function return_one(self) -> ret {
+    ret := 1
+  }
+}
+{
+  function call_method(foo) -> ret {
+    ret := return_one(foo)
+  }
+}

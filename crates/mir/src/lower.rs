@@ -11,8 +11,8 @@ use hir_analysis::{
 };
 
 use crate::ir::{
-    BasicBlock, BasicBlockId, LoopInfo, MirBody, MirFunction, MirInst, MirModule, Terminator,
-    ValueData, ValueId, ValueOrigin,
+    BasicBlock, BasicBlockId, CallOrigin, LoopInfo, MirBody, MirFunction, MirInst, MirModule,
+    Terminator, ValueData, ValueId, ValueOrigin,
 };
 
 #[derive(Debug)]
@@ -206,11 +206,42 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
     }
 
     fn alloc_expr_value(&mut self, expr: ExprId) -> ValueId {
+        if let Some(value) = self.try_lower_method_call(expr) {
+            return value;
+        }
+
         let ty = self.typed_body.expr_ty(self.db, expr);
         self.mir_body.alloc_value(ValueData {
             ty,
             origin: ValueOrigin::Expr(expr),
         })
+    }
+
+    fn try_lower_method_call(&mut self, expr: ExprId) -> Option<ValueId> {
+        let Partial::Present(Expr::MethodCall(receiver, _, _, call_args)) =
+            expr.data(self.db, self.body)
+        else {
+            return None;
+        };
+        let Some(callable) = self.typed_body.callable_expr(expr) else {
+            return None;
+        };
+
+        let mut args = Vec::with_capacity(call_args.len() + 1);
+        args.push(self.ensure_value(*receiver));
+        for arg in call_args.iter() {
+            args.push(self.ensure_value(arg.expr));
+        }
+
+        let ty = self.typed_body.expr_ty(self.db, expr);
+        Some(self.mir_body.alloc_value(ValueData {
+            ty,
+            origin: ValueOrigin::Call(CallOrigin {
+                expr,
+                callable: callable.clone(),
+                args,
+            }),
+        }))
     }
 
     fn lower_stmt(
