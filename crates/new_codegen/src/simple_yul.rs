@@ -6,7 +6,9 @@ use hir::hir_def::{
     expr::{ArithBinOp, BinOp, CompBinOp, LogicalBinOp, UnOp},
 };
 use mir::{
-    BasicBlockId, CallOrigin, LoopInfo, MirFunction, Terminator, ValueId, ValueOrigin, lower_module,
+    ir::{MatchArmPattern, SwitchOrigin, SwitchValue},
+    BasicBlockId, CallOrigin, LoopInfo, MirFunction, Terminator, ValueId, ValueOrigin,
+    lower_module,
 };
 use rustc_hash::FxHashMap;
 
@@ -49,6 +51,7 @@ struct SimpleYulEmitter<'db> {
     locals: FxHashMap<String, String>,
     param_names: Vec<String>,
     next_local: usize,
+    match_values: FxHashMap<ExprId, String>,
 }
 
 #[derive(Clone, Copy)]
@@ -74,6 +77,7 @@ impl<'db> SimpleYulEmitter<'db> {
             locals: FxHashMap::default(),
             param_names: Vec::new(),
             next_local: 0,
+            match_values: FxHashMap::default(),
         };
         this.init_params();
         Ok(this)
@@ -129,6 +133,18 @@ impl<'db> SimpleYulEmitter<'db> {
             .blocks
             .get(block_id.index())
             .ok_or_else(|| SimpleYulError::Unsupported("invalid block".into()))?;
+
+        if let Terminator::Switch {
+            origin: SwitchOrigin::MatchExpr(expr_id),
+            ..
+        } = &block.terminator
+        {
+            if !self.match_values.contains_key(expr_id) {
+                let temp = self.alloc_local();
+                self.match_values.insert(*expr_id, temp);
+            }
+        }
+
         let mut lines = self.render_statements(&block.insts)?;
         match block.terminator {
             Terminator::Return(Some(val)) => {
@@ -165,6 +181,89 @@ impl<'db> SimpleYulEmitter<'db> {
                 lines.push("    }".into());
                 Ok(lines)
             }
+            Terminator::Switch {
+                discr,
+                ref targets,
+                default,
+                origin,
+            } => match origin {
+                SwitchOrigin::MatchExpr(expr_id) => {
+                    let discr_expr = self.lower_value(discr)?;
+                    let temp = self
+                        .match_values
+                        .get(&expr_id)
+                        .cloned()
+                        .unwrap_or_else(|| self.alloc_local());
+                    let match_info = self
+                        .mir_func
+                        .body
+                        .match_info(expr_id)
+                        .ok_or_else(|| {
+                            SimpleYulError::Unsupported(
+                                "missing match lowering info for switch".into(),
+                            )
+                        })?;
+
+                    lines.push(format!("    let {temp} := 0"));
+                    lines.push(format!("    switch {discr_expr}"));
+
+                    let mut default_body = None;
+                    for arm in &match_info.arms {
+                        match &arm.pattern {
+                            MatchArmPattern::Literal(value) => {
+                                let body_expr = self.lower_expr(arm.body)?;
+                                let literal = Self::switch_value_literal(value);
+                                lines.push(format!("      case {literal} {{"));
+                                lines.push(format!("        {temp} := {body_expr}"));
+                                lines.push("      }".into());
+                            }
+                            MatchArmPattern::Wildcard => {
+                                let body_expr = self.lower_expr(arm.body)?;
+                                default_body = Some(body_expr);
+                            }
+                        }
+                    }
+
+                    let default_expr = default_body.ok_or_else(|| {
+                        SimpleYulError::Unsupported(
+                            "match lowering missing wildcard arm".into(),
+                        )
+                    })?;
+                    lines.push("      default {".into());
+                    lines.push(format!("        {temp} := {default_expr}"));
+                    lines.push("      }".into());
+                    Ok(lines)
+                }
+                SwitchOrigin::None => {
+                    let discr_expr = self.lower_value(discr)?;
+                    let mut cases = Vec::with_capacity(targets.len());
+                    for target in targets {
+                        let mut case_emitter = self.clone();
+                        let case_lines =
+                            case_emitter.emit_block_with_ctx(target.block, loop_ctx)?;
+                        let literal = Self::switch_value_literal(&target.value);
+                        cases.push((literal, case_lines));
+                    }
+                    let mut default_emitter = self.clone();
+                    let default_lines = default_emitter.emit_block_with_ctx(default, loop_ctx)?;
+
+                    lines.push(format!("    switch {discr_expr}"));
+                    for (value, body_lines) in cases {
+                        lines.push(format!("      case {value} {{"));
+                        for line in body_lines {
+                            lines.push(format!("  {line}"));
+                        }
+                        lines.push("      }".into());
+                    }
+                    lines.push("      default {".into());
+                    for line in default_lines {
+                        lines.push(format!("  {line}"));
+                    }
+                    lines.push("      }".into());
+                    Ok(lines)
+                }
+            },
+            Terminator::Unreachable => Ok(lines),
             Terminator::Goto { target } => {
                 if let Some(ctx) = loop_ctx {
                     if target == ctx.continue_target {
@@ -196,9 +295,6 @@ impl<'db> SimpleYulEmitter<'db> {
                 lines.push("    ret := 0".into());
                 Ok(lines)
             }
-            _ => Err(SimpleYulError::Unsupported(
-                "control flow terminator is not supported yet".into(),
-            )),
         }
     }
 
@@ -307,7 +403,13 @@ impl<'db> SimpleYulEmitter<'db> {
     fn lower_value(&mut self, value_id: ValueId) -> Result<String, SimpleYulError> {
         let value = self.mir_func.body.value(value_id);
         match &value.origin {
-            ValueOrigin::Expr(expr_id) => self.lower_expr(*expr_id),
+            ValueOrigin::Expr(expr_id) => {
+                if let Some(temp) = self.match_values.get(expr_id) {
+                    Ok(temp.clone())
+                } else {
+                    self.lower_expr(*expr_id)
+                }
+            }
             ValueOrigin::Call(call) => self.lower_call_value(call),
             _ => Err(SimpleYulError::Unsupported(
                 "only expression-derived values are supported".into(),
@@ -316,6 +418,9 @@ impl<'db> SimpleYulEmitter<'db> {
     }
 
     fn lower_expr(&mut self, expr_id: ExprId) -> Result<String, SimpleYulError> {
+        if let Some(temp) = self.match_values.get(&expr_id) {
+            return Ok(temp.clone());
+        }
         if let Some(value_id) = self.mir_func.body.expr_values.get(&expr_id) {
             if let ValueOrigin::Call(call) = &self.mir_func.body.value(*value_id).origin {
                 return self.lower_call_value(call);
@@ -502,6 +607,10 @@ impl<'db> SimpleYulEmitter<'db> {
         expr_id: ExprId,
         lines: &mut Vec<String>,
     ) -> Result<String, SimpleYulError> {
+        if let Some(temp) = self.match_values.get(&expr_id) {
+            return Ok(temp.clone());
+        }
+
         let expr = match expr_id.data(self.db, self.body) {
             Partial::Present(expr) => expr,
             Partial::Absent => {
@@ -527,6 +636,14 @@ impl<'db> SimpleYulEmitter<'db> {
             Ok(temp)
         } else {
             self.lower_expr(expr_id)
+        }
+    }
+
+    fn switch_value_literal(value: &SwitchValue) -> String {
+        match value {
+            SwitchValue::Bool(true) => "1".into(),
+            SwitchValue::Bool(false) => "0".into(),
+            SwitchValue::Int(int) => int.to_string(),
         }
     }
 }

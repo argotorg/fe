@@ -1,0 +1,197 @@
+---
+source: crates/new_codegen/tests/simple_yul.rs
+expression: output
+input_file: testdata/simple_yul/match_literal.fe
+---
+{
+  function match_bool(e) -> ret {
+    let v0 := 0
+    switch e
+      case 1 {
+        v0 := 1
+      }
+      default {
+        v0 := 2
+      }
+  }
+}
+{
+  function match_u8(e) -> ret {
+    let v0 := 0
+    switch e
+      case 0 {
+        v0 := 1
+      }
+      case 255 {
+        v0 := 2
+      }
+      default {
+        v0 := 3
+      }
+  }
+}
+{
+  function match_u16(e) -> ret {
+    let v0 := 0
+    switch e
+      case 4660 {
+        v0 := 1
+      }
+      case 43981 {
+        v0 := 2
+      }
+      default {
+        v0 := 3
+      }
+  }
+}
+{
+  function match_u32(e) -> ret {
+    let v0 := 0
+    switch e
+      case 3735928559 {
+        v0 := 1
+      }
+      case 3405691582 {
+        v0 := 2
+      }
+      default {
+        v0 := 3
+      }
+  }
+}
+{
+  function match_u64(e) -> ret {
+    let v0 := 0
+    switch e
+      case 0 {
+        v0 := 1
+      }
+      case 18446744073709551615 {
+        v0 := 2
+      }
+      default {
+        v0 := 3
+      }
+  }
+}
+{
+  function match_u128(e) -> ret {
+    let v0 := 0
+    switch e
+      case 0 {
+        v0 := 1
+      }
+      case 340282366920938463463374607431768211455 {
+        v0 := 2
+      }
+      default {
+        v0 := 3
+      }
+  }
+}
+{
+  function match_u256(e) -> ret {
+    let v0 := 0
+    switch e
+      case 0 {
+        v0 := 1
+      }
+      case 115792089237316195423570985008687907853269984665640564039457584007913129639935 {
+        v0 := 2
+      }
+      default {
+        v0 := 3
+      }
+  }
+}
+{
+  function match_i8(e) -> ret {
+    let v0 := 0
+    switch e
+      case 0 {
+        v0 := 1
+      }
+      case 99 {
+        v0 := 2
+      }
+      default {
+        v0 := 3
+      }
+  }
+}
+{
+  function match_i16(e) -> ret {
+    let v0 := 0
+    switch e
+      case 0 {
+        v0 := 1
+      }
+      case 32000 {
+        v0 := 2
+      }
+      default {
+        v0 := 3
+      }
+  }
+}
+{
+  function match_i32(e) -> ret {
+    let v0 := 0
+    switch e
+      case 0 {
+        v0 := 1
+      }
+      case 2000000000 {
+        v0 := 2
+      }
+      default {
+        v0 := 3
+      }
+  }
+}
+{
+  function match_i64(e) -> ret {
+    let v0 := 0
+    switch e
+      case 0 {
+        v0 := 1
+      }
+      case 9223372036854775807 {
+        v0 := 2
+      }
+      default {
+        v0 := 3
+      }
+  }
+}
+{
+  function match_i128(e) -> ret {
+    let v0 := 0
+    switch e
+      case 0 {
+        v0 := 1
+      }
+      case 170141183460469231731687303715884105727 {
+        v0 := 2
+      }
+      default {
+        v0 := 3
+      }
+  }
+}
+{
+  function match_i256(e) -> ret {
+    let v0 := 0
+    switch e
+      case 0 {
+        v0 := 1
+      }
+      case 115792089237316195423570985008687907853269984665640564039457584007913129639935 {
+        v0 := 2
+      }
+      default {
+        v0 := 3
+      }
+  }
+}

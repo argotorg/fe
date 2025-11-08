@@ -332,6 +332,7 @@ fn format_terminator(term: &Terminator) -> String {
             discr,
             targets,
             default,
+            ..
         } => {
             let parts = targets
                 .iter()

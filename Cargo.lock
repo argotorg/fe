@@ -948,6 +948,7 @@ dependencies = [
  "fe-common",
  "fe-hir",
  "fe-hir-analysis",
+ "num-bigint",
  "rustc-hash 2.1.1",
 ]
 

@@ -14,3 +14,4 @@ hir.workspace = true
 hir-analysis.workspace = true
 common.workspace = true
 rustc-hash.workspace = true
+num-bigint.workspace = true

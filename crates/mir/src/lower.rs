@@ -1,19 +1,23 @@
 use std::{error::Error, fmt};
 
-use hir::hir_def::{Body, Expr, ExprId, Func, Partial, Stmt, StmtId, TopLevelMod};
+use hir::hir_def::{
+    Body, Expr, ExprId, Func, LitKind, MatchArm, Pat, PatId, Partial, Stmt, StmtId, TopLevelMod,
+};
 use hir_analysis::{
     HirAnalysisDb,
     ty::{
         diagnostics::FuncBodyDiag,
         ty_check::{TypedBody, check_func_body},
-        ty_def::TyId,
+        ty_def::{PrimTy, TyBase, TyData, TyId},
     },
 };
 
 use crate::ir::{
-    BasicBlock, BasicBlockId, CallOrigin, LoopInfo, MirBody, MirFunction, MirInst, MirModule,
-    Terminator, ValueData, ValueId, ValueOrigin,
+    BasicBlock, BasicBlockId, CallOrigin, LoopInfo, MatchArmLowering, MatchArmPattern,
+    MatchLoweringInfo, MirBody, MirFunction, MirInst, MirModule, SwitchOrigin, SwitchTarget,
+    SwitchValue, Terminator, ValueData, ValueId, ValueOrigin,
 };
+use rustc_hash::FxHashSet;
 
 #[derive(Debug)]
 pub enum MirLowerError {
@@ -27,6 +31,29 @@ impl fmt::Display for MirLowerError {
                 write!(f, "function `{func_name}` is missing a body")
             }
         }
+    }
+}
+
+struct IntTypeInfo {
+    bits: u16,
+}
+
+impl IntTypeInfo {
+    const fn new(bits: u16) -> Self {
+        Self { bits }
+    }
+}
+
+fn prim_int_bits(prim: PrimTy) -> Option<u16> {
+    use PrimTy::*;
+    match prim {
+        U8 | I8 => Some(8),
+        U16 | I16 => Some(16),
+        U32 | I32 => Some(32),
+        U64 | I64 => Some(64),
+        U128 | I128 => Some(128),
+        U256 | I256 | Usize | Isize => Some(256),
+        _ => None,
     }
 }
 
@@ -138,6 +165,183 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         }
     }
 
+    /// Lower a literal-only `match` expression into a MIR `Switch`.
+    ///
+    /// The scrutinee is evaluated exactly once, each arm body gets its own block, and a
+    /// merge block is allocated on demand so the `match` still yields a value. We also
+    /// record per-arm metadata so codegen can recover which expression belongs to each
+    /// case without re-walking HIR.
+    fn lower_match_expr(
+        &mut self,
+        block: BasicBlockId,
+        match_expr: ExprId,
+        scrutinee: ExprId,
+        arms: &[MatchArm],
+        patterns: &[MatchArmPattern],
+    ) -> (Option<BasicBlockId>, ValueId) {
+        debug_assert_eq!(arms.len(), patterns.len());
+        let (scrut_block_opt, discr_value) = self.lower_expr_in(block, scrutinee);
+        let Some(scrut_block) = scrut_block_opt else {
+            let value = self.ensure_value(match_expr);
+            return (None, value);
+        };
+
+        let mut merge_block: Option<BasicBlockId> = None;
+        let mut arm_blocks = Vec::with_capacity(arms.len());
+        for arm in arms {
+            let arm_entry = self.alloc_block();
+            let (arm_end, _) = self.lower_expr_in(arm_entry, arm.body);
+            if let Some(end_block) = arm_end {
+                let merge = match merge_block {
+                    Some(block) => block,
+                    None => {
+                        let block = self.alloc_block();
+                        merge_block = Some(block);
+                        block
+                    }
+                };
+                self.set_terminator(end_block, Terminator::Goto { target: merge });
+            }
+            arm_blocks.push(arm_entry);
+        }
+
+        let mut targets = Vec::new();
+        let mut default_block = None;
+        for (idx, pattern) in patterns.iter().enumerate() {
+            let block_id = arm_blocks[idx];
+            match pattern {
+                MatchArmPattern::Literal(value) => targets.push(SwitchTarget {
+                    value: value.clone(),
+                    block: block_id,
+                }),
+                MatchArmPattern::Wildcard => default_block = Some(block_id),
+            }
+        }
+
+        let default_block = default_block.unwrap_or_else(|| {
+            let unreachable_block = self.alloc_block();
+            self.set_terminator(unreachable_block, Terminator::Unreachable);
+            unreachable_block
+        });
+
+        self.set_terminator(
+            scrut_block,
+            Terminator::Switch {
+                discr: discr_value,
+                targets,
+                default: default_block,
+                origin: SwitchOrigin::MatchExpr(match_expr),
+            },
+        );
+
+        let arms_info = arms
+            .iter()
+            .zip(patterns.iter())
+            .map(|(arm, pattern)| MatchArmLowering {
+                pattern: pattern.clone(),
+                body: arm.body,
+            })
+            .collect();
+
+        self.mir_body
+            .match_info
+            .insert(match_expr, MatchLoweringInfo { arms: arms_info });
+
+        let value_id = self.ensure_value(match_expr);
+        (merge_block, value_id)
+    }
+
+    /// Collect the literal/wildcard patterns for the given arms.
+    ///
+    /// Only matches consisting of unique integer/bool literals plus at most one `_`
+    /// wildcard are supported. Everything else falls back to the existing lowering
+    /// paths by returning `None`.
+    fn match_arm_patterns(&self, arms: &[MatchArm]) -> Option<Vec<MatchArmPattern>> {
+        if arms.is_empty() {
+            return None;
+        }
+
+        let mut seen_values: FxHashSet<SwitchValue> = FxHashSet::default();
+        let mut has_wildcard = false;
+        let mut patterns = Vec::with_capacity(arms.len());
+
+        for arm in arms {
+            if self.is_wildcard_pat(arm.pat) {
+                if has_wildcard {
+                    return None;
+                }
+                has_wildcard = true;
+                patterns.push(MatchArmPattern::Wildcard);
+                continue;
+            }
+
+            if let Some(value) = self.literal_pat_value(arm.pat) {
+                if !seen_values.insert(value.clone()) {
+                    return None;
+                }
+                patterns.push(MatchArmPattern::Literal(value));
+                continue;
+            }
+
+            return None;
+        }
+
+        Some(patterns)
+    }
+
+    /// Returns the literal value encoded by a pattern if it is supported.
+    fn literal_pat_value(&self, pat: PatId) -> Option<SwitchValue> {
+        let Partial::Present(pat_data) = pat.data(self.db, self.body) else {
+            return None;
+        };
+
+        match pat_data {
+            Pat::Lit(lit) => {
+                let Partial::Present(lit) = lit else {
+                    return None;
+                };
+                match lit {
+                    LitKind::Int(value) => {
+                        let ty = self.typed_body.pat_ty(self.db, pat);
+                        let info = self.int_type_info(ty)?;
+                        if info.bits > 256 {
+                            return None;
+                        }
+                        let literal = value.data(self.db).clone();
+                        let literal_bits = literal.bits() as u64;
+                        if literal_bits > info.bits as u64 {
+                            return None;
+                        }
+                        Some(SwitchValue::Int(literal))
+                    }
+                    LitKind::Bool(value) => {
+                        if !self.typed_body.pat_ty(self.db, pat).is_bool(self.db) {
+                            return None;
+                        }
+                        Some(SwitchValue::Bool(*value))
+                    }
+                    _ => None,
+                }
+            }
+            _ => None,
+        }
+    }
+
+    /// Returns true if the pattern is a wildcard (`_`).
+    fn is_wildcard_pat(&self, pat: PatId) -> bool {
+        matches!(
+            pat.data(self.db, self.body),
+            Partial::Present(Pat::WildCard)
+        )
+    }
+
+    fn int_type_info(&self, ty: TyId<'db>) -> Option<IntTypeInfo> {
+        match ty.data(self.db) {
+            TyData::TyBase(TyBase::Prim(prim)) => prim_int_bits(*prim).map(IntTypeInfo::new),
+            _ => None,
+        }
+    }
+
     /// Lower a block expression by sequentially lowering its statements.
     fn lower_block(
         &mut self,
@@ -206,6 +410,16 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                 let next_block = self.lower_block(block, expr, stmts);
                 let val = self.ensure_value(expr);
                 (next_block, val)
+            }
+            Partial::Present(Expr::Match(scrutinee, arms)) => {
+                if let Partial::Present(arms) = arms {
+                    // Try to lower `match` into a `Switch` if it only uses supported patterns.
+                    if let Some(patterns) = self.match_arm_patterns(arms) {
+                        return self.lower_match_expr(block, expr, *scrutinee, arms, &patterns);
+                    }
+                }
+                let val = self.ensure_value(expr);
+                (Some(block), val)
             }
             _ => {
                 let val = self.ensure_value(expr);
@@ -506,6 +720,25 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                 let next_block = self.lower_block(block, expr, stmts);
                 let value_id = self.ensure_value(expr);
                 (next_block, Some(value_id))
+            }
+            Expr::Match(scrutinee, arms) => {
+                if let Partial::Present(arms) = arms {
+                    // Expression-position match: re-use the same lowering so we can produce a value.
+                    if let Some(patterns) = self.match_arm_patterns(arms) {
+                        let (next_block, value_id) =
+                            self.lower_match_expr(block, expr, *scrutinee, arms, &patterns);
+                        return (next_block, Some(value_id));
+                    }
+                }
+                let value_id = self.ensure_value(expr);
+                self.push_inst(
+                    block,
+                    MirInst::Eval {
+                        stmt: stmt_id,
+                        value: value_id,
+                    },
+                );
+                (Some(block), Some(value_id))
             }
             _ => {
                 let value_id = self.ensure_value(expr);

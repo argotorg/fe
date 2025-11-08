@@ -1,8 +1,11 @@
+use std::fmt;
+
 use hir::hir_def::{
     ExprId, Func, PatId, StmtId, TopLevelMod, TypeId as HirTypeId, expr::ArithBinOp,
 };
 use hir_analysis::ty::ty_check::{Callable, TypedBody};
 use hir_analysis::ty::ty_def::TyId;
+use num_bigint::BigUint;
 use rustc_hash::FxHashMap;
 
 /// MIR for an entire top-level module.
@@ -37,6 +40,7 @@ pub struct MirBody<'db> {
     pub values: Vec<ValueData<'db>>,
     pub expr_values: FxHashMap<ExprId, ValueId>,
     pub loop_headers: FxHashMap<BasicBlockId, LoopInfo>,
+    pub match_info: FxHashMap<ExprId, MatchLoweringInfo>,
 }
 
 impl<'db> MirBody<'db> {
@@ -47,6 +51,7 @@ impl<'db> MirBody<'db> {
             values: Vec::new(),
             expr_values: FxHashMap::default(),
             loop_headers: FxHashMap::default(),
+            match_info: FxHashMap::default(),
         }
     }
 
@@ -71,6 +76,10 @@ impl<'db> MirBody<'db> {
 
     pub fn value(&self, id: ValueId) -> &ValueData<'db> {
         &self.values[id.index()]
+    }
+
+    pub fn match_info(&self, expr: ExprId) -> Option<&MatchLoweringInfo> {
+        self.match_info.get(&expr)
     }
 }
 
@@ -162,6 +171,7 @@ pub enum Terminator {
         discr: ValueId,
         targets: Vec<SwitchTarget>,
         default: BasicBlockId,
+        origin: SwitchOrigin,
     },
     /// Unreachable terminator (used for bodies without an expression).
     Unreachable,
@@ -169,8 +179,44 @@ pub enum Terminator {
 
 #[derive(Debug)]
 pub struct SwitchTarget {
-    pub value: u64,
+    pub value: SwitchValue,
     pub block: BasicBlockId,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SwitchOrigin {
+    None,
+    MatchExpr(ExprId),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum SwitchValue {
+    Bool(bool),
+    Int(BigUint),
+}
+
+impl SwitchValue {
+    pub fn as_biguint(&self) -> BigUint {
+        match self {
+            Self::Bool(value) => {
+                if *value {
+                    BigUint::from(1u8)
+                } else {
+                    BigUint::from(0u8)
+                }
+            }
+            Self::Int(value) => value.clone(),
+        }
+    }
+}
+
+impl fmt::Display for SwitchValue {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Bool(value) => write!(f, "{value}"),
+            Self::Int(value) => write!(f, "{value}"),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -193,6 +239,23 @@ pub enum ValueOrigin<'db> {
     Pat(PatId),
     Param(Func<'db>, usize),
     Call(CallOrigin<'db>),
+}
+
+#[derive(Debug, Clone)]
+pub struct MatchLoweringInfo {
+    pub arms: Vec<MatchArmLowering>,
+}
+
+#[derive(Debug, Clone)]
+pub struct MatchArmLowering {
+    pub pattern: MatchArmPattern,
+    pub body: ExprId,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum MatchArmPattern {
+    Literal(SwitchValue),
+    Wildcard,
 }
 
 #[derive(Debug, Clone)]
