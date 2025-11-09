@@ -649,7 +649,7 @@ pub fn walk_enum<'db, V>(
     ctxt.with_new_ctxt(
         |span| span.variants(),
         |ctxt| {
-            let id = enum_.variants(ctxt.db);
+            let id = enum_.variants_list(ctxt.db);
             visitor.visit_variant_def_list(ctxt, id);
         },
     );

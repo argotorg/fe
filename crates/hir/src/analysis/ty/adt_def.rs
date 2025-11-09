@@ -1,7 +1,7 @@
 use crate::{
     hir_def::{
         Contract, Enum, FieldDefListId, GenericParamOwner, IdentId, ItemKind, Partial, Struct,
-        TypeId as HirTyId, VariantDefListId, VariantKind, scope_graph::ScopeId,
+        TypeId as HirTyId, VariantKind, scope_graph::ScopeId, semantic::VariantView,
     },
     span::DynLazySpan,
 };
@@ -55,13 +55,11 @@ fn collect_field_types<'db>(
 fn collect_enum_variant_types<'db>(
     db: &'db dyn HirAnalysisDb,
     scope: ScopeId<'db>,
-    variants: VariantDefListId<'db>,
+    variants: impl Iterator<Item = VariantView<'db>>,
 ) -> Vec<AdtField<'db>> {
     variants
-        .data(db)
-        .iter()
         .map(|variant| {
-            let tys = match variant.kind {
+            let tys = match variant.kind(db) {
                 VariantKind::Tuple(tuple_id) => tuple_id.data(db).clone(),
                 VariantKind::Record(fields) => fields
                     .data(db)
@@ -125,7 +123,12 @@ impl<'db> AdtDef<'db> {
         match self.adt_ref(db) {
             AdtRef::Enum(e) => {
                 let span = e.variant_span(field_idx);
-                match e.variants(db).data(db)[field_idx].kind {
+                match e
+                    .variants(db)
+                    .nth(field_idx)
+                    .expect("variant not found")
+                    .kind(db)
+                {
                     VariantKind::Tuple(_) => span.tuple_type().elem_ty(ty_idx).into(),
                     VariantKind::Record(_) => span.fields().field(ty_idx).ty().into(),
                     VariantKind::Unit => unreachable!(),

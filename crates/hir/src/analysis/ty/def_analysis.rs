@@ -74,8 +74,8 @@ pub fn analyze_adt<'db>(
         AdtRef::Enum(enum_) => {
             let mut dupes = check_duplicate_variant_names(db, enum_);
 
-            for (idx, var) in enum_.variants(db).data(db).iter().enumerate() {
-                if matches!(var.kind, VariantKind::Record(..)) {
+            for (idx, var) in enum_.variants(db).enumerate() {
+                if matches!(var.kind(db), VariantKind::Record(..)) {
                     dupes.extend(check_duplicate_field_names(
                         db,
                         FieldParent::Variant(EnumVariant::new(enum_, idx)),
@@ -106,10 +106,9 @@ fn check_duplicate_variant_names<'db>(
     db: &'db dyn HirAnalysisDb,
     enum_: crate::core::hir_def::Enum<'db>,
 ) -> SmallVec<[TyDiagCollection<'db>; 2]> {
-    check_duplicate_names(
-        enum_.variants(db).data(db).iter().map(|v| v.name.to_opt()),
-        |idxs| TyLowerDiag::DuplicateVariantName(enum_, idxs).into(),
-    )
+    check_duplicate_names(enum_.variants(db).map(|v| v.name(db).to_opt()), |idxs| {
+        TyLowerDiag::DuplicateVariantName(enum_, idxs).into()
+    })
 }
 
 pub(crate) fn check_duplicate_names<'db, F>(

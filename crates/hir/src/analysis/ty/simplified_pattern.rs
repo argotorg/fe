@@ -227,8 +227,8 @@ impl<'db> SimplifiedPattern<'db> {
         let path_ident = path_id.ident(db).to_opt()?;
         let path_name = path_ident.data(db);
 
-        for (idx, variant_def) in variants.data(db).iter().enumerate() {
-            if let Partial::Present(variant_name) = variant_def.name
+        for (idx, variant_def) in variants.enumerate() {
+            if let Partial::Present(variant_name) = variant_def.name(db)
                 && variant_name.data(db) == path_name
             {
                 let variant = EnumVariant {
@@ -395,7 +395,7 @@ impl<'db> ConstructorKind<'db> {
 
 pub fn ctor_variant_num<'db>(db: &'db dyn HirAnalysisDb, ctor: &ConstructorKind<'db>) -> usize {
     match ctor {
-        ConstructorKind::Variant(variant, _) => variant.enum_.variants(db).data(db).len(),
+        ConstructorKind::Variant(variant, _) => variant.enum_.len_variants(db),
         ConstructorKind::Type(_) => 1,
         ConstructorKind::Literal(LitKind::Bool(_), _) => 2,
         ConstructorKind::Literal(LitKind::Int(_), _) => usize::MAX, // Infinite possibilities

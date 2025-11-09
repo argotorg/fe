@@ -748,7 +748,7 @@ pub struct Enum<'db> {
     pub vis: Visibility,
     pub generic_params: GenericParamListId<'db>,
     pub where_clause: WhereClauseId<'db>,
-    pub variants: VariantDefListId<'db>,
+    pub(in crate::core) variants_list: VariantDefListId<'db>,
     pub top_mod: TopLevelMod<'db>,
 
     #[return_ref]
@@ -782,7 +782,7 @@ impl<'db> EnumVariant<'db> {
         }
     }
     pub fn def(self, db: &'db dyn HirDb) -> &'db VariantDef<'db> {
-        &self.enum_.variants(db).data(db)[self.idx as usize]
+        &self.enum_.variants_list(db).data(db)[self.idx as usize]
     }
 
     pub fn kind(self, db: &'db dyn HirDb) -> VariantKind<'db> {

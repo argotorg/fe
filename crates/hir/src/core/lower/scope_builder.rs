@@ -199,7 +199,7 @@ impl<'db> ScopeGraphBuilder<'db> {
 
             Enum(inner) => {
                 self.graph.add_lex_edge(item_node, parent_node);
-                self.add_variant_scope(item_node, inner, inner.variants(self.db));
+                self.add_variant_scope(item_node, inner, inner.variants_list(self.db));
                 self.add_generic_param_scope(
                     item_node,
                     inner.into(),

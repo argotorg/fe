@@ -92,6 +92,19 @@ impl<'db> Enum<'db> {
     // - validate_variants(db) -> Vec<TyDiagCollection>
     // - generic_params_diags(db), where_clause_diags(db)
     // - analyze(db) -> Vec<TyDiagCollection>
+
+    pub fn len_variants(&self, db: &'db dyn HirDb) -> usize {
+        self.variants_list(db).data(db).len()
+    }
+
+    /// Iterates variants as contextual views (structural traversal helper).
+    pub fn variants(self, db: &'db dyn HirDb) -> impl Iterator<Item = VariantView<'db>> + 'db {
+        let list = self.variants_list(db);
+        list.data(db)
+            .iter()
+            .enumerate()
+            .map(move |(idx, _)| VariantView { owner: self, idx })
+    }
 }
 
 impl<'db> Contract<'db> {
@@ -240,7 +253,7 @@ impl<'db> GenericParamView<'db> {
     /// Exposes a context-free handle that can be resolved to a concrete
     /// source span via `SpannedHirDb`, without requiring callers to manually
     /// cross-link list spans with indices.
-    pub fn span(self) -> crate::span::params::LazyGenericParamSpan<'db> {
+    pub fn span(&self) -> crate::span::params::LazyGenericParamSpan<'db> {
         self.owner.params_span().param(self.idx)
     }
 
@@ -248,7 +261,7 @@ impl<'db> GenericParamView<'db> {
     ///
     /// Returns the span for the ident of a type or const generic param,
     /// depending on the underlying parameter kind.
-    pub fn name_span(self) -> crate::span::LazySpanAtom<'db> {
+    pub fn name_span(&self) -> crate::span::LazySpanAtom<'db> {
         match self.param {
             GenericParam::Type(_) => self.span().into_type_param().name(),
             GenericParam::Const(_) => self.span().into_const_param().name(),
@@ -280,5 +293,25 @@ impl<'db> GenericParamView<'db> {
             }
             _ => None,
         }
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct VariantView<'db> {
+    pub owner: Enum<'db>,
+    pub idx: usize,
+}
+
+impl<'db> VariantView<'db> {
+    pub fn kind(self, db: &'db dyn HirDb) -> VariantKind<'db> {
+        self.owner.variants_list(db).data(db)[self.idx].kind
+    }
+
+    pub fn name(self, db: &'db dyn HirDb) -> Partial<IdentId<'db>> {
+        self.owner.variants_list(db).data(db)[self.idx].name
+    }
+
+    pub fn span(self) -> crate::span::item::LazyVariantDefSpan<'db> {
+        self.owner.span().variants().variant(self.idx)
     }
 }

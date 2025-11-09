@@ -1043,8 +1043,11 @@ impl DiagnosticVoucher for TyLowerDiag<'_> {
                     "duplicate variant name in enum definition".into()
                 };
 
-                let name = enum_.variants(db).data(db)[idxs[0] as usize]
-                    .name
+                let name = enum_
+                    .variants(db)
+                    .nth(idxs[0] as usize)
+                    .expect("variant not found")
+                    .name(db)
                     .unwrap()
                     .data(db);
                 let spans = idxs
