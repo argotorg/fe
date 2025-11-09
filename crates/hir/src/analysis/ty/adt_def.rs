@@ -268,6 +268,12 @@ impl<'db> AdtRef<'db> {
             .unwrap_or_else(DynLazySpan::invalid)
     }
 
+    /// Returns the semantic ADT definition for this reference.
+    /// Thin wrapper over the tracked `lower_adt` query for ergonomic use at call sites.
+    pub fn as_adt(self, db: &'db dyn HirAnalysisDb) -> AdtDef<'db> {
+        lower_adt(db, self)
+    }
+
     pub(crate) fn generic_owner(self) -> Option<GenericParamOwner<'db>> {
         match self {
             AdtRef::Enum(e) => Some(e.into()),

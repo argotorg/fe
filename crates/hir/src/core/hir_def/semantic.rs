@@ -105,27 +105,57 @@ impl<'db> Enum<'db> {
             .enumerate()
             .map(move |(idx, _)| VariantView { owner: self, idx })
     }
+
+    /// Semantic ADT definition for this enum (cached via tracked query).
+    pub fn as_adt(self, db: &'db dyn HirAnalysisDb) -> crate::analysis::ty::adt_def::AdtDef<'db> {
+        crate::analysis::ty::adt_def::lower_adt(
+            db,
+            crate::analysis::ty::adt_def::AdtRef::from(self),
+        )
+    }
 }
 
 impl<'db> Struct<'db> {
     /// Returns semantic types of all fields, bound to identity parameters.
-    pub fn field_tys(self, db: &'db dyn HirAnalysisDb) -> Vec<crate::analysis::ty::binder::Binder<crate::analysis::ty::ty_def::TyId<'db>>> {
+    pub fn field_tys(
+        self,
+        db: &'db dyn HirAnalysisDb,
+    ) -> Vec<crate::analysis::ty::binder::Binder<crate::analysis::ty::ty_def::TyId<'db>>> {
         use crate::analysis::ty::binder::Binder;
         FieldParent::Struct(self)
             .fields(db)
             .map(|v| Binder::bind(v.ty(db)))
             .collect()
     }
+
+    /// Semantic ADT definition for this struct (cached via tracked query).
+    pub fn as_adt(self, db: &'db dyn HirAnalysisDb) -> crate::analysis::ty::adt_def::AdtDef<'db> {
+        crate::analysis::ty::adt_def::lower_adt(
+            db,
+            crate::analysis::ty::adt_def::AdtRef::from(self),
+        )
+    }
 }
 
 impl<'db> Contract<'db> {
     /// Returns semantic types of all fields, bound to identity parameters.
-    pub fn field_tys(self, db: &'db dyn HirAnalysisDb) -> Vec<crate::analysis::ty::binder::Binder<crate::analysis::ty::ty_def::TyId<'db>>> {
+    pub fn field_tys(
+        self,
+        db: &'db dyn HirAnalysisDb,
+    ) -> Vec<crate::analysis::ty::binder::Binder<crate::analysis::ty::ty_def::TyId<'db>>> {
         use crate::analysis::ty::binder::Binder;
         FieldParent::Contract(self)
             .fields(db)
             .map(|v| Binder::bind(v.ty(db)))
             .collect()
+    }
+
+    /// Semantic ADT definition for this contract (cached via tracked query).
+    pub fn as_adt(self, db: &'db dyn HirAnalysisDb) -> crate::analysis::ty::adt_def::AdtDef<'db> {
+        crate::analysis::ty::adt_def::lower_adt(
+            db,
+            crate::analysis::ty::adt_def::AdtRef::from(self),
+        )
     }
 }
 
@@ -338,7 +368,10 @@ impl<'db> VariantView<'db> {
     }
 
     /// Returns semantic types of this variant's fields (empty for unit variants).
-    pub fn field_tys(self, db: &'db dyn HirAnalysisDb) -> Vec<crate::analysis::ty::binder::Binder<crate::analysis::ty::ty_def::TyId<'db>>> {
+    pub fn field_tys(
+        self,
+        db: &'db dyn HirAnalysisDb,
+    ) -> Vec<crate::analysis::ty::binder::Binder<crate::analysis::ty::ty_def::TyId<'db>>> {
         use crate::analysis::ty::{
             adt_def::{AdtRef, lower_adt},
             binder::Binder,
@@ -356,7 +389,7 @@ impl<'db> VariantView<'db> {
             VariantKind::Tuple(tuple_id) => {
                 let var = EnumVariant::new(self.owner, self.idx);
                 let scope = var.scope();
-                let adt = lower_adt(db, AdtRef::from(self.owner));
+                let adt = self.owner.as_adt(db);
                 let assumptions = collect_adt_constraints(db, adt).instantiate_identity();
                 tuple_id
                     .data(db)
@@ -371,6 +404,18 @@ impl<'db> VariantView<'db> {
                     .collect()
             }
         }
+    }
+
+    /// Semantic field-set for this variant.
+    pub fn as_adt_fields(
+        self,
+        db: &'db dyn HirAnalysisDb,
+    ) -> &'db crate::analysis::ty::adt_def::AdtField<'db> {
+        let def = crate::analysis::ty::adt_def::lower_adt(
+            db,
+            crate::analysis::ty::adt_def::AdtRef::from(self.owner),
+        );
+        &def.fields(db)[self.idx]
     }
 }
 
@@ -398,33 +443,16 @@ impl<'db> FieldView<'db> {
 
     /// Returns the semantic type of this field.
     pub fn ty(self, db: &'db dyn HirAnalysisDb) -> TyId<'db> {
-        use crate::analysis::ty::{
-            adt_def::{AdtRef, lower_adt},
-            trait_resolution::constraint::collect_adt_constraints,
-            ty_def::InvalidCause,
-            ty_lower::lower_hir_ty,
-        };
+        let (adt_field, idx) = self.as_adt_field(db);
+        *adt_field.ty(db, idx).skip_binder()
+    }
 
-        let scope = self.parent.scope();
-        let assumptions = match self.parent {
-            FieldParent::Struct(s) => {
-                let adt = lower_adt(db, AdtRef::from(s));
-                collect_adt_constraints(db, adt).instantiate_identity()
-            }
-            FieldParent::Contract(c) => {
-                let adt = lower_adt(db, AdtRef::from(c));
-                collect_adt_constraints(db, adt).instantiate_identity()
-            }
-            FieldParent::Variant(v) => {
-                let adt = lower_adt(db, AdtRef::from(v.enum_));
-                collect_adt_constraints(db, adt).instantiate_identity()
-            }
-        };
-
-        match self.hir_type_ref(db).to_opt() {
-            Some(hir_ty) => lower_hir_ty(db, hir_ty, scope, assumptions),
-            None => TyId::invalid(db, InvalidCause::ParseError),
-        }
+    /// Returns the semantic ADT field-set and index for this field.
+    pub fn as_adt_field(
+        self,
+        db: &'db dyn HirAnalysisDb,
+    ) -> (&'db crate::analysis::ty::adt_def::AdtField<'db>, usize) {
+        (self.parent.as_adt_fields(db), self.idx)
     }
 }
 
@@ -433,5 +461,31 @@ impl<'db> FieldParent<'db> {
     pub fn fields(self, db: &'db dyn HirDb) -> impl Iterator<Item = FieldView<'db>> + 'db {
         let len = self.fields_list(db).data(db).len();
         (0..len).map(move |idx| FieldView { parent: self, idx })
+    }
+
+    /// Semantic field-set for this parent.
+    pub fn as_adt_fields(
+        self,
+        db: &'db dyn HirAnalysisDb,
+    ) -> &'db crate::analysis::ty::adt_def::AdtField<'db> {
+        match self {
+            FieldParent::Struct(s) => &s.as_adt(db).fields(db)[0],
+            FieldParent::Contract(c) => &c.as_adt(db).fields(db)[0],
+            FieldParent::Variant(v) => v.as_adt_fields(db),
+        }
+    }
+}
+
+impl<'db> EnumVariant<'db> {
+    /// Semantic field-set for this variant.
+    pub fn as_adt_fields(
+        self,
+        db: &'db dyn HirAnalysisDb,
+    ) -> &'db crate::analysis::ty::adt_def::AdtField<'db> {
+        let def = crate::analysis::ty::adt_def::lower_adt(
+            db,
+            crate::analysis::ty::adt_def::AdtRef::from(self.enum_),
+        );
+        &def.fields(db)[self.idx as usize]
     }
 }

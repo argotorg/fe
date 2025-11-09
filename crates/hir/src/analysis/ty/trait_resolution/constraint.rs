@@ -143,7 +143,7 @@ pub(crate) fn collect_func_def_constraints<'db>(
     let hir_func = match func {
         HirFuncDefKind::Func(func) => func,
         HirFuncDefKind::VariantCtor(var) => {
-            let adt = lower_adt(db, var.enum_.into());
+            let adt = var.enum_.as_adt(db);
             if include_parent {
                 return collect_adt_constraints(db, adt);
             } else {

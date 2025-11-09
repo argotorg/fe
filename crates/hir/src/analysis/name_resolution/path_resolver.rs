@@ -1127,7 +1127,7 @@ fn ty_from_adtref<'db>(
     args: &[TyId<'db>],
     assumptions: PredicateListId<'db>,
 ) -> PathResolutionResult<'db, TyId<'db>> {
-    let adt = lower_adt(db, adt_ref);
+    let adt = adt_ref.as_adt(db);
     let ty = TyId::adt(db, adt);
     // Fill trailing defaults (if any)
     let completed_args =
