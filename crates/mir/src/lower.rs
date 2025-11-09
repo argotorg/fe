@@ -1,7 +1,7 @@
 use std::{error::Error, fmt};
 
 use hir::hir_def::{
-    Body, Expr, ExprId, Func, LitKind, MatchArm, Pat, PatId, Partial, Stmt, StmtId, TopLevelMod,
+    Body, Expr, ExprId, Func, LitKind, MatchArm, Partial, Pat, PatId, Stmt, StmtId, TopLevelMod,
 };
 use hir_analysis::{
     HirAnalysisDb,
@@ -621,13 +621,23 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
 
         let then_end = self.lower_expr_in(then_block, then_expr).0;
         if let Some(end_block) = then_end {
-            self.set_terminator(end_block, Terminator::Goto { target: merge_block });
+            self.set_terminator(
+                end_block,
+                Terminator::Goto {
+                    target: merge_block,
+                },
+            );
         }
 
         if let Some(else_expr) = else_expr {
             let else_end = self.lower_expr_in(else_block, else_expr).0;
             if let Some(end_block) = else_end {
-                self.set_terminator(end_block, Terminator::Goto { target: merge_block });
+                self.set_terminator(
+                    end_block,
+                    Terminator::Goto {
+                        target: merge_block,
+                    },
+                );
             }
         }
 

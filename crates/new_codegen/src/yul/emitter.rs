@@ -1,36 +1,22 @@
-use std::fmt;
-
 use driver::DriverDataBase;
 use hir::hir_def::{
     Body, Expr, ExprId, Func, LitKind, Partial, Pat, PatId, PathId, Stmt, StmtId, TopLevelMod,
     expr::{ArithBinOp, BinOp, CompBinOp, LogicalBinOp, UnOp},
 };
 use mir::{
-    ir::{MatchArmPattern, SwitchOrigin, SwitchValue},
     BasicBlockId, CallOrigin, LoopInfo, MirFunction, Terminator, ValueId, ValueOrigin,
+    ir::{MatchArmPattern, SwitchOrigin, SwitchValue},
     lower_module,
 };
 use rustc_hash::FxHashMap;
 
-#[derive(Debug)]
-pub enum YulError {
-    MissingBody(String),
-    Unsupported(String),
-}
+use super::{
+    doc::{YulDoc, render_docs},
+    errors::YulError,
+    state::BlockState,
+};
 
-impl fmt::Display for YulError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            YulError::MissingBody(name) => {
-                write!(f, "function `{name}` does not have a body")
-            }
-            YulError::Unsupported(msg) => write!(f, "{msg}"),
-        }
-    }
-}
-
-impl std::error::Error for YulError {}
-
+/// Emits Yul for every function in the lowered MIR module.
 pub fn emit_module_yul(
     db: &DriverDataBase,
     top_mod: TopLevelMod<'_>,
@@ -43,6 +29,7 @@ pub fn emit_module_yul(
         .collect())
 }
 
+/// Lowers a single MIR function into the Yul document tree.
 struct YulEmitter<'db> {
     db: &'db DriverDataBase,
     mir_func: &'db MirFunction<'db>,
@@ -50,41 +37,8 @@ struct YulEmitter<'db> {
     match_values: FxHashMap<ExprId, String>,
 }
 
-#[derive(Clone)]
-struct BlockState {
-    locals: FxHashMap<String, String>,
-    next_local: usize,
-}
-
-impl BlockState {
-    fn new() -> Self {
-        Self {
-            locals: FxHashMap::default(),
-            next_local: 0,
-        }
-    }
-
-    fn alloc_local(&mut self) -> String {
-        let name = format!("v{}", self.next_local);
-        self.next_local += 1;
-        name
-    }
-
-    fn insert_binding(&mut self, binding: String, name: String) -> String {
-        self.locals.insert(binding, name.clone());
-        name
-    }
-
-    fn binding(&self, binding: &str) -> Option<String> {
-        self.locals.get(binding).cloned()
-    }
-
-    fn resolve_name(&self, binding: &str) -> String {
-        self.binding(binding).unwrap_or_else(|| binding.to_string())
-    }
-}
-
 #[derive(Clone, Copy)]
+/// Captures where `break`/`continue` should target when rendering loops.
 struct LoopEmitCtx {
     continue_target: BasicBlockId,
     break_target: BasicBlockId,
@@ -92,10 +46,7 @@ struct LoopEmitCtx {
 }
 
 impl<'db> YulEmitter<'db> {
-    fn new(
-        db: &'db DriverDataBase,
-        mir_func: &'db MirFunction<'db>,
-    ) -> Result<Self, YulError> {
+    fn new(db: &'db DriverDataBase, mir_func: &'db MirFunction<'db>) -> Result<Self, YulError> {
         let body = mir_func
             .func
             .body(db)
@@ -108,10 +59,13 @@ impl<'db> YulEmitter<'db> {
         })
     }
 
+    /// Produces the final Yul text for the current MIR function.
     fn emit(mut self) -> Result<String, YulError> {
         let func_name = function_name(self.db, self.mir_func.func);
         let (param_names, mut state) = self.init_function_state();
-        let lines = self.emit_block(self.mir_func.body.entry, &mut state)?;
+        let body_docs = self.emit_block(self.mir_func.body.entry, &mut state)?;
+        let mut lines = Vec::new();
+        render_docs(&body_docs, 4, &mut lines);
         let body_text = lines.join("\n");
         Ok(format!(
             "{{\n  {} {{\n{body_text}\n  }}\n}}",
@@ -119,6 +73,7 @@ impl<'db> YulEmitter<'db> {
         ))
     }
 
+    /// Initializes the `BlockState` with parameter bindings and returns their Yul names.
     fn init_function_state(&self) -> (Vec<String>, BlockState) {
         let mut state = BlockState::new();
         let mut params_out = Vec::new();
@@ -138,6 +93,7 @@ impl<'db> YulEmitter<'db> {
         (params_out, state)
     }
 
+    /// Formats the Fe function name and parameters into a Yul signature.
     fn format_function_signature(&self, func_name: &str, params: &[String]) -> String {
         let params_str = params.join(", ");
         if params.is_empty() {
@@ -147,20 +103,22 @@ impl<'db> YulEmitter<'db> {
         }
     }
 
+    /// Emits the Yul docs for a basic block starting without any active loop context.
     fn emit_block(
         &mut self,
         block_id: BasicBlockId,
         state: &mut BlockState,
-    ) -> Result<Vec<String>, YulError> {
+    ) -> Result<Vec<YulDoc>, YulError> {
         self.emit_block_with_ctx(block_id, None, state)
     }
 
+    /// Emits a block while honoring the provided loop context (if any).
     fn emit_block_with_ctx(
         &mut self,
         block_id: BasicBlockId,
         loop_ctx: Option<LoopEmitCtx>,
         state: &mut BlockState,
-    ) -> Result<Vec<String>, YulError> {
+    ) -> Result<Vec<YulDoc>, YulError> {
         let block = self
             .mir_func
             .body
@@ -178,17 +136,17 @@ impl<'db> YulEmitter<'db> {
                 .or_insert_with(|| state.alloc_local());
         }
 
-        let mut lines = self.render_statements(&block.insts, state)?;
+        let mut docs = self.render_statements(&block.insts, state)?;
         match block.terminator {
             Terminator::Return(Some(val)) => {
                 let expr = match self.mir_func.body.value(val).origin {
                     ValueOrigin::Expr(expr_id) => {
-                        self.lower_expr_with_statements(expr_id, &mut lines, state)?
+                        self.lower_expr_with_statements(expr_id, &mut docs, state)?
                     }
                     _ => self.lower_value(val, state)?,
                 };
-                lines.push(format!("    ret := {expr}"));
-                Ok(lines)
+                docs.push(YulDoc::line(format!("ret := {expr}")));
+                Ok(docs)
             }
             Terminator::Branch {
                 cond,
@@ -197,19 +155,12 @@ impl<'db> YulEmitter<'db> {
             } => {
                 let cond_expr = self.lower_value(cond, state)?;
                 let mut then_state = state.clone();
-                let then_lines =
-                    self.emit_block_with_ctx(then_bb, loop_ctx, &mut then_state)?;
                 let mut else_state = state.clone();
-                let else_lines =
-                    self.emit_block_with_ctx(else_bb, loop_ctx, &mut else_state)?;
-                lines.push(format!("    if {cond_expr} {{"));
-                extend_with_indent(&mut lines, then_lines, 2);
-                lines.push("    }".into());
-
-                lines.push(format!("    if iszero({cond_expr}) {{"));
-                extend_with_indent(&mut lines, else_lines, 2);
-                lines.push("    }".into());
-                Ok(lines)
+                let then_docs = self.emit_block_with_ctx(then_bb, loop_ctx, &mut then_state)?;
+                docs.push(YulDoc::block(format!("if {cond_expr} "), then_docs));
+                let else_docs = self.emit_block_with_ctx(else_bb, loop_ctx, &mut else_state)?;
+                docs.push(YulDoc::block(format!("if iszero({cond_expr}) "), else_docs));
+                Ok(docs)
             }
             Terminator::Switch {
                 discr,
@@ -224,28 +175,23 @@ impl<'db> YulEmitter<'db> {
                         .get(&expr_id)
                         .cloned()
                         .expect("match temp must exist");
-                    let match_info = self
-                        .mir_func
-                        .body
-                        .match_info(expr_id)
-                        .ok_or_else(|| {
-                            YulError::Unsupported(
-                                "missing match lowering info for switch".into(),
-                            )
-                        })?;
+                    let match_info = self.mir_func.body.match_info(expr_id).ok_or_else(|| {
+                        YulError::Unsupported("missing match lowering info for switch".into())
+                    })?;
 
-                    lines.push(format!("    let {temp} := 0"));
-                    lines.push(format!("    switch {discr_expr}"));
+                    docs.push(YulDoc::line(format!("let {temp} := 0")));
+                    docs.push(YulDoc::line(format!("switch {discr_expr}")));
 
                     let mut default_body = None;
                     for arm in &match_info.arms {
                         match &arm.pattern {
                             MatchArmPattern::Literal(value) => {
                                 let body_expr = self.lower_expr(arm.body, state)?;
-                                let literal = Self::switch_value_literal(value);
-                                lines.push(format!("      case {literal} {{"));
-                                lines.push(format!("        {temp} := {body_expr}"));
-                                lines.push("      }".into());
+                                let literal = switch_value_literal(value);
+                                docs.push(YulDoc::wide_block(
+                                    format!("  case {literal} "),
+                                    vec![YulDoc::line(format!("{temp} := {body_expr}"))],
+                                ));
                             }
                             MatchArmPattern::Wildcard => {
                                 let body_expr = self.lower_expr(arm.body, state)?;
@@ -255,88 +201,80 @@ impl<'db> YulEmitter<'db> {
                     }
 
                     let default_expr = default_body.ok_or_else(|| {
-                        YulError::Unsupported(
-                            "match lowering missing wildcard arm".into(),
-                        )
+                        YulError::Unsupported("match lowering missing wildcard arm".into())
                     })?;
-                    lines.push("      default {".into());
-                    lines.push(format!("        {temp} := {default_expr}"));
-                    lines.push("      }".into());
-                    Ok(lines)
+                    docs.push(YulDoc::wide_block(
+                        "  default ",
+                        vec![YulDoc::line(format!("{temp} := {default_expr}"))],
+                    ));
+                    Ok(docs)
                 }
                 SwitchOrigin::None => {
                     let discr_expr = self.lower_value(discr, state)?;
-                    let mut cases = Vec::with_capacity(targets.len());
+                    docs.push(YulDoc::line(format!("switch {discr_expr}")));
                     for target in targets {
                         let mut case_state = state.clone();
-                        let case_lines =
+                        let literal = switch_value_literal(&target.value);
+                        let case_docs =
                             self.emit_block_with_ctx(target.block, loop_ctx, &mut case_state)?;
-                        let literal = Self::switch_value_literal(&target.value);
-                        cases.push((literal, case_lines));
+                        docs.push(YulDoc::wide_block(format!("  case {literal} "), case_docs));
                     }
                     let mut default_state = state.clone();
-                    let default_lines =
-                        self.emit_block_with_ctx(default, loop_ctx, &mut default_state)?;
 
-                    lines.push(format!("    switch {discr_expr}"));
-                    for (value, body_lines) in cases {
-                        lines.push(format!("      case {value} {{"));
-                        extend_with_indent(&mut lines, body_lines, 2);
-                        lines.push("      }".into());
-                    }
-                    lines.push("      default {".into());
-                    extend_with_indent(&mut lines, default_lines, 2);
-                    lines.push("      }".into());
-                    Ok(lines)
+                    let default_docs =
+                        self.emit_block_with_ctx(default, loop_ctx, &mut default_state)?;
+                    docs.push(YulDoc::wide_block("  default ", default_docs));
+                    Ok(docs)
                 }
             },
-            Terminator::Unreachable => Ok(lines),
+            Terminator::Unreachable => Ok(docs),
             Terminator::Goto { target } => {
                 if let Some(ctx) = loop_ctx {
                     if target == ctx.continue_target {
                         if ctx.implicit_continue == Some(block_id) {
-                            return Ok(lines);
+                            return Ok(docs);
                         }
-                        lines.push("    continue".into());
-                        return Ok(lines);
+                        docs.push(YulDoc::line("continue"));
+                        return Ok(docs);
                     }
                     if target == ctx.break_target {
-                        lines.push("    break".into());
-                        return Ok(lines);
+                        docs.push(YulDoc::line("break"));
+                        return Ok(docs);
                     }
                 }
 
                 if let Some(loop_info) = self.loop_info(target) {
                     let mut loop_state = state.clone();
-                    let (mut loop_lines, exit_block) =
+                    let (loop_doc, exit_block) =
                         self.emit_loop(target, loop_info, &mut loop_state)?;
-                    lines.append(&mut loop_lines);
-                    let mut after = self.emit_block_with_ctx(exit_block, loop_ctx, state)?;
-                    lines.append(&mut after);
-                    Ok(lines)
-                } else {
-                    let mut next_lines = self.emit_block_with_ctx(target, loop_ctx, state)?;
-                    lines.append(&mut next_lines);
-                    Ok(lines)
+                    docs.push(loop_doc);
+                    let after_docs = self.emit_block_with_ctx(exit_block, loop_ctx, state)?;
+                    docs.extend(after_docs);
+                    return Ok(docs);
                 }
+                let next_docs = self.emit_block_with_ctx(target, loop_ctx, state)?;
+                docs.extend(next_docs);
+                Ok(docs)
             }
             Terminator::Return(None) => {
-                lines.push("    ret := 0".into());
-                Ok(lines)
+                docs.push(YulDoc::line("ret := 0"));
+                Ok(docs)
             }
         }
     }
 
+    /// Looks up metadata about the loop that starts at `header`, if it exists.
     fn loop_info(&self, header: BasicBlockId) -> Option<LoopInfo> {
         self.mir_func.body.loop_headers.get(&header).copied()
     }
 
+    /// Emits a Yul `for` loop for the given header block and returns the exit block.
     fn emit_loop(
         &mut self,
         header: BasicBlockId,
         info: LoopInfo,
         state: &mut BlockState,
-    ) -> Result<(Vec<String>, BasicBlockId), YulError> {
+    ) -> Result<(YulDoc, BasicBlockId), YulError> {
         let block = self
             .mir_func
             .body
@@ -364,20 +302,18 @@ impl<'db> YulEmitter<'db> {
             break_target: info.exit,
             implicit_continue: info.backedge,
         };
-        let body_lines = self.emit_block_with_ctx(info.body, Some(loop_ctx), state)?;
-        let mut lines = Vec::new();
-        lines.push(format!("    for {{ }} {cond_expr} {{ }} {{"));
-        extend_with_indent(&mut lines, body_lines, 2);
-        lines.push("    }".into());
-        Ok((lines, info.exit))
+        let body_docs = self.emit_block_with_ctx(info.body, Some(loop_ctx), state)?;
+        let loop_doc = YulDoc::block(format!("for {{ }} {cond_expr} {{ }} "), body_docs);
+        Ok((loop_doc, info.exit))
     }
 
+    /// Lowers straight-line MIR instructions into Yul docs.
     fn render_statements(
         &mut self,
         insts: &[mir::MirInst<'_>],
         state: &mut BlockState,
-    ) -> Result<Vec<String>, YulError> {
-        let mut stmts = Vec::new();
+    ) -> Result<Vec<YulDoc>, YulError> {
+        let mut docs = Vec::new();
         for inst in insts {
             match inst {
                 mir::MirInst::Let { pat, value, .. } => {
@@ -392,7 +328,7 @@ impl<'db> YulEmitter<'db> {
                         Some(val) => self.lower_value(*val, state)?,
                         None => "0".into(),
                     };
-                    stmts.push(format!("    let {yul_name} := {value}"));
+                    docs.push(YulDoc::line(format!("let {yul_name} := {value}")));
                 }
                 mir::MirInst::Assign { target, value, .. } => {
                     let binding = self.path_from_expr(*target)?;
@@ -400,9 +336,11 @@ impl<'db> YulEmitter<'db> {
                         YulError::Unsupported("assignment to unknown binding".into())
                     })?;
                     let value = self.lower_value(*value, state)?;
-                    stmts.push(format!("    {yul_name} := {value}"));
+                    docs.push(YulDoc::line(format!("{yul_name} := {value}")));
                 }
-                mir::MirInst::AugAssign { target, value, op, .. } => {
+                mir::MirInst::AugAssign {
+                    target, value, op, ..
+                } => {
                     let binding = self.path_from_expr(*target)?;
                     let yul_name = state.binding(&binding).ok_or_else(|| {
                         YulError::Unsupported("assignment to unknown binding".into())
@@ -417,17 +355,20 @@ impl<'db> YulEmitter<'db> {
                         _ => {
                             return Err(YulError::Unsupported(
                                 "augmented assignment only supports add/sub/mul/div/mod".into(),
-                            ))
+                            ));
                         }
                     };
-                    stmts.push(format!("    {yul_name} := {func}({yul_name}, {rhs})"));
+                    docs.push(YulDoc::line(format!(
+                        "{yul_name} := {func}({yul_name}, {rhs})"
+                    )));
                 }
                 mir::MirInst::Eval { .. } => {}
             }
         }
-        Ok(stmts)
+        Ok(docs)
     }
 
+    /// Lowers a MIR `ValueId` into a Yul expression string.
     fn lower_value(&self, value_id: ValueId, state: &BlockState) -> Result<String, YulError> {
         let value = self.mir_func.body.value(value_id);
         match &value.origin {
@@ -445,6 +386,7 @@ impl<'db> YulEmitter<'db> {
         }
     }
 
+    /// Lowers a HIR expression into a Yul expression string.
     fn lower_expr(&self, expr_id: ExprId, state: &BlockState) -> Result<String, YulError> {
         if let Some(temp) = self.match_values.get(&expr_id) {
             return Ok(temp.clone());
@@ -533,9 +475,9 @@ impl<'db> YulEmitter<'db> {
                 self.lower_expr(expr, state)
             }
             Expr::Path(path) => {
-                let original = self.path_ident(*path).ok_or_else(|| {
-                    YulError::Unsupported("unsupported path expression".into())
-                })?;
+                let original = self
+                    .path_ident(*path)
+                    .ok_or_else(|| YulError::Unsupported("unsupported path expression".into()))?;
                 Ok(state.resolve_name(&original))
             }
             _ => Err(YulError::Unsupported(
@@ -544,6 +486,7 @@ impl<'db> YulEmitter<'db> {
         }
     }
 
+    /// Returns the last expression statement in a block, if any.
     fn last_expr(&self, stmts: &[StmtId]) -> Option<ExprId> {
         stmts.iter().rev().find_map(|stmt_id| {
             let Ok(stmt) = self.expect_stmt(*stmt_id) else {
@@ -557,6 +500,7 @@ impl<'db> YulEmitter<'db> {
         })
     }
 
+    /// Extracts the identifier bound by a pattern.
     fn pattern_ident(&self, pat_id: PatId) -> Result<String, YulError> {
         let pat = self.expect_pat(pat_id)?;
         match pat {
@@ -569,6 +513,7 @@ impl<'db> YulEmitter<'db> {
         }
     }
 
+    /// Resolves an expression that should represent a path (e.g. assignment target).
     fn path_from_expr(&self, expr_id: ExprId) -> Result<String, YulError> {
         let expr = self.expect_expr(expr_id)?;
         if let Expr::Path(path) = expr {
@@ -581,39 +526,38 @@ impl<'db> YulEmitter<'db> {
         }
     }
 
+    /// Returns the identifier name represented by a path, if it is a plain ident.
     fn path_ident(&self, path: Partial<PathId<'_>>) -> Option<String> {
         let path = path.to_opt()?;
         path.as_ident(self.db)
             .map(|id| id.data(self.db).to_string())
     }
 
+    /// Fetches the expression from HIR, converting missing data into `YulError`.
     fn expect_expr(&self, expr_id: ExprId) -> Result<&Expr<'db>, YulError> {
         match expr_id.data(self.db, self.body) {
             Partial::Present(expr) => Ok(expr),
-            Partial::Absent => Err(YulError::Unsupported(
-                "expression data unavailable".into(),
-            )),
+            Partial::Absent => Err(YulError::Unsupported("expression data unavailable".into())),
         }
     }
 
+    /// Fetches the pattern from HIR, converting missing data into `YulError`.
     fn expect_pat(&self, pat_id: PatId) -> Result<&Pat<'db>, YulError> {
         match pat_id.data(self.db, self.body) {
             Partial::Present(pat) => Ok(pat),
-            Partial::Absent => Err(YulError::Unsupported(
-                "unsupported pattern".into(),
-            )),
+            Partial::Absent => Err(YulError::Unsupported("unsupported pattern".into())),
         }
     }
 
+    /// Fetches the statement from HIR, converting missing data into `YulError`.
     fn expect_stmt(&self, stmt_id: StmtId) -> Result<&Stmt<'db>, YulError> {
         match stmt_id.data(self.db, self.body) {
             Partial::Present(stmt) => Ok(stmt),
-            Partial::Absent => Err(YulError::Unsupported(
-                "statement data unavailable".into(),
-            )),
+            Partial::Absent => Err(YulError::Unsupported("statement data unavailable".into())),
         }
     }
 
+    /// Lowers a MIR call into a Yul function invocation.
     fn lower_call_value(
         &self,
         call: &CallOrigin<'_>,
@@ -636,10 +580,11 @@ impl<'db> YulEmitter<'db> {
         }
     }
 
+    /// Lowers expressions that may require extra statements (e.g. `if`).
     fn lower_expr_with_statements(
         &mut self,
         expr_id: ExprId,
-        lines: &mut Vec<String>,
+        docs: &mut Vec<YulDoc>,
         state: &mut BlockState,
     ) -> Result<String, YulError> {
         if let Some(temp) = self.match_values.get(&expr_id) {
@@ -649,46 +594,40 @@ impl<'db> YulEmitter<'db> {
         let expr = self.expect_expr(expr_id)?;
         if let Expr::If(cond, then_expr, else_expr) = expr {
             let temp = state.alloc_local();
-            lines.push(format!("    let {temp} := 0"));
+            docs.push(YulDoc::line(format!("let {temp} := 0")));
             let cond_expr = self.lower_expr(*cond, state)?;
             let then_expr_str = self.lower_expr(*then_expr, state)?;
-            lines.push(format!("    if {cond_expr} {{"));
-            lines.push(format!("      {temp} := {then_expr_str}"));
-            lines.push("    }".into());
+            docs.push(YulDoc::block(
+                format!("if {cond_expr} "),
+                vec![YulDoc::line(format!("{temp} := {then_expr_str}"))],
+            ));
             if let Some(else_expr) = else_expr {
                 let else_expr_str = self.lower_expr(*else_expr, state)?;
-                lines.push(format!("    if iszero({cond_expr}) {{"));
-                lines.push(format!("      {temp} := {else_expr_str}"));
-                lines.push("    }".into());
+                docs.push(YulDoc::block(
+                    format!("if iszero({cond_expr}) "),
+                    vec![YulDoc::line(format!("{temp} := {else_expr_str}"))],
+                ));
             }
             Ok(temp)
         } else {
             self.lower_expr(expr_id, state)
         }
     }
+}
 
-    fn switch_value_literal(value: &SwitchValue) -> String {
-        match value {
-            SwitchValue::Bool(true) => "1".into(),
-            SwitchValue::Bool(false) => "0".into(),
-            SwitchValue::Int(int) => int.to_string(),
-        }
+/// Translates MIR switch literal kinds into their Yul literal strings.
+fn switch_value_literal(value: &SwitchValue) -> String {
+    match value {
+        SwitchValue::Bool(true) => "1".into(),
+        SwitchValue::Bool(false) => "0".into(),
+        SwitchValue::Int(int) => int.to_string(),
     }
 }
 
+/// Returns the display name of a function or `<anonymous>` if one does not exist.
 fn function_name(db: &DriverDataBase, func: Func<'_>) -> String {
     func.name(db)
         .to_opt()
         .map(|id| id.data(db).to_string())
         .unwrap_or_else(|| "<anonymous>".into())
-}
-
-fn extend_with_indent(lines: &mut Vec<String>, body: Vec<String>, spaces: usize) {
-    if body.is_empty() {
-        return;
-    }
-    let pad = " ".repeat(spaces);
-    for line in body {
-        lines.push(format!("{pad}{line}"));
-    }
 }
