@@ -18,6 +18,7 @@
 
 use crate::analysis::HirAnalysisDb;
 use crate::analysis::name_resolution::{PathRes, resolve_path};
+use crate::analysis::ty::def_analysis::check_duplicate_names;
 use crate::analysis::ty::diagnostics::{TyDiagCollection, TyLowerDiag};
 use crate::hir_def::*;
 // When adding real methods, prefer calling internal lowering/normalization here
@@ -217,9 +218,43 @@ impl<'db> GenericParamOwner<'db> {
                 .map(TyDiagCollection::from)
         })
     }
+    pub fn diags_check_duplicate_names(
+        self,
+        db: &'db dyn HirAnalysisDb,
+    ) -> impl Iterator<Item = TyDiagCollection<'db>> + 'db {
+        let params_iter = self
+            .params_list(db)
+            .data(db)
+            .iter()
+            .map(|p| p.name().to_opt());
+        check_duplicate_names(params_iter, |idxs| {
+            TyDiagCollection::from(TyLowerDiag::DuplicateGenericParamName(self, idxs))
+        })
+        .into_iter()
+    }
 }
 
 impl<'db> GenericParamView<'db> {
+    /// Lazy span of this generic parameter in its owner's parameter list.
+    ///
+    /// Exposes a context-free handle that can be resolved to a concrete
+    /// source span via `SpannedHirDb`, without requiring callers to manually
+    /// cross-link list spans with indices.
+    pub fn span(self) -> crate::span::params::LazyGenericParamSpan<'db> {
+        self.owner.params_span().param(self.idx)
+    }
+
+    /// Lazy span atom for the parameter's name token.
+    ///
+    /// Returns the span for the ident of a type or const generic param,
+    /// depending on the underlying parameter kind.
+    pub fn name_span(self) -> crate::span::LazySpanAtom<'db> {
+        match self.param {
+            GenericParam::Type(_) => self.span().into_type_param().name(),
+            GenericParam::Const(_) => self.span().into_const_param().name(),
+        }
+    }
+
     pub fn diag_param_defined_in_parent(
         self,
         db: &'db dyn HirAnalysisDb,

@@ -239,7 +239,7 @@ impl<'db> GenericParamOwner<'db> {
     }
 
     // could this be private?
-    pub(crate) fn params_list(self, db: &'db dyn HirDb) -> GenericParamListId<'db> {
+    pub(in crate::core) fn params_list(self, db: &'db dyn HirDb) -> GenericParamListId<'db> {
         match self {
             GenericParamOwner::Func(func) => func.generic_params(db),
             GenericParamOwner::Struct(struct_) => struct_.generic_params(db),
@@ -275,7 +275,7 @@ impl<'db> GenericParamOwner<'db> {
         }
     }
 
-    pub fn params_span(self) -> LazyGenericParamListSpan<'db> {
+    pub(in crate::core) fn params_span(self) -> LazyGenericParamListSpan<'db> {
         match self {
             GenericParamOwner::Func(func) => func.span().generic_params(),
             GenericParamOwner::Struct(struct_) => struct_.span().generic_params(),
@@ -609,10 +609,10 @@ pub struct Func<'db> {
 
     pub name: Partial<IdentId<'db>>,
     pub attributes: AttrListId<'db>,
-    pub generic_params: GenericParamListId<'db>,
+    pub(in crate::core) generic_params: GenericParamListId<'db>,
     pub where_clause: WhereClauseId<'db>,
     pub params: Partial<FuncParamListId<'db>>,
-    pub(super) ret_type_ref: Option<TypeId<'db>>,
+    pub(in crate::core) ret_type_ref: Option<TypeId<'db>>,
     pub modifier: ItemModifier,
     pub body: Option<Body<'db>>,
     pub is_extern: bool,

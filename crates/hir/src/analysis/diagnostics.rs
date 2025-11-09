@@ -1079,9 +1079,7 @@ impl DiagnosticVoucher for TyLowerDiag<'_> {
                     .map(|p| p.param.name().unwrap().data(db))
                     .expect("should be at least one generic param");
 
-                let spans = idxs
-                    .iter()
-                    .map(|i| owner.params_span().param(*i as usize).resolve(db));
+                let spans = owner.params(db).map(|param| param.span().resolve(db));
                 CompleteDiagnostic {
                     severity: Severity::Error,
                     message,

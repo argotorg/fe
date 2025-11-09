@@ -5,8 +5,9 @@
 use crate::{
     hir_def::{
         EnumVariant, FieldDef, FieldParent, Func, GenericParam, GenericParamListId,
-        GenericParamOwner, IdentId, Impl as HirImpl, ImplTrait, ItemKind, PathId, Trait,
-        TraitRefId, TypeAlias, TypeBound, TypeId as HirTyId, VariantKind, scope_graph::ScopeId,
+        GenericParamOwner, GenericParamView, IdentId, Impl as HirImpl, ImplTrait, ItemKind, PathId,
+        Trait, TraitRefId, TypeAlias, TypeBound, TypeId as HirTyId, VariantKind,
+        scope_graph::ScopeId,
     },
     visitor::prelude::*,
 };
@@ -111,7 +112,7 @@ fn check_duplicate_variant_names<'db>(
     )
 }
 
-fn check_duplicate_names<'db, F>(
+pub(crate) fn check_duplicate_names<'db, F>(
     names: impl Iterator<Item = Option<IdentId<'db>>>,
     create_diag: F,
 ) -> SmallVec<[TyDiagCollection<'db>; 2]>
@@ -662,10 +663,11 @@ impl<'db> Visitor<'db> for DefAnalyzer<'db> {
     ) {
         let owner = GenericParamOwner::from_item_opt(self.scope().item()).unwrap();
 
-        self.diags.extend(check_duplicate_names(
-            params.data(self.db).iter().map(|p| p.name().to_opt()),
-            |idxs| TyLowerDiag::DuplicateGenericParamName(owner, idxs).into(),
-        ));
+        self.diags.extend(
+            owner
+                .diags_check_duplicate_names(self.db)
+                .collect::<Vec<_>>(),
+        );
 
         let mut default_idxs: SmallVec<[usize; 4]> = SmallVec::new();
         for (i, p) in params.data(self.db).iter().enumerate() {
