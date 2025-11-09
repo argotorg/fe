@@ -1011,9 +1011,11 @@ impl DiagnosticVoucher for TyLowerDiag<'_> {
             }
 
             Self::DuplicateFieldName(parent, idxs) => {
-                let name = parent.fields(db).data(db)[idxs[0] as usize]
-                    .name
-                    .unwrap()
+                let name = parent
+                    .fields(db)
+                    .nth(idxs[0] as usize)
+                    .and_then(|v| v.name(db))
+                    .expect("field not found")
                     .data(db);
 
                 let spans = idxs
@@ -1082,7 +1084,7 @@ impl DiagnosticVoucher for TyLowerDiag<'_> {
                     .map(|p| p.param.name().unwrap().data(db))
                     .expect("should be at least one generic param");
 
-                let spans = owner.params(db).map(|param| param.span().resolve(db));
+                let spans = offending_generic_param_spans(*owner, &idxs, db);
                 CompleteDiagnostic {
                     severity: Severity::Error,
                     message,
@@ -1204,6 +1206,16 @@ impl DiagnosticVoucher for TyLowerDiag<'_> {
             },
         }
     }
+}
+
+fn offending_generic_param_spans<'db>(
+    owner: crate::core::hir_def::GenericParamOwner<'db>,
+    idxs: &'db [u16],
+    db: &'db dyn SpannedHirAnalysisDb,
+) -> impl Iterator<Item = Option<Span>> + 'db {
+    let params_vec: Vec<_> = owner.params(db).collect();
+    idxs.iter()
+        .map(move |i| params_vec[*i as usize].span().resolve(db))
 }
 
 fn duplicate_name_subdiags<I>(name: &str, spans: I) -> Vec<SubDiagnostic>

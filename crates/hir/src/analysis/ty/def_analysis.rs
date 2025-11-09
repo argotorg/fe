@@ -97,7 +97,7 @@ fn check_duplicate_field_names<'db>(
     owner: FieldParent<'db>,
 ) -> SmallVec<[TyDiagCollection<'db>; 2]> {
     check_duplicate_names(
-        owner.fields(db).data(db).iter().map(|f| f.name.to_opt()),
+        owner.fields(db).map(|v| v.name(db)),
         |idxs| TyLowerDiag::DuplicateFieldName(owner, idxs).into(),
     )
 }

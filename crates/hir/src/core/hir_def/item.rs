@@ -1204,7 +1204,7 @@ impl<'db> FieldParent<'db> {
         }
     }
 
-    pub fn fields(self, db: &'db dyn HirDb) -> FieldDefListId<'db> {
+    pub(in crate::core) fn fields_list(self, db: &'db dyn HirDb) -> FieldDefListId<'db> {
         match self {
             FieldParent::Struct(struct_) => struct_.fields(db),
             FieldParent::Contract(contract) => contract.fields(db),

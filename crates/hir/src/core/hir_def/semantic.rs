@@ -107,6 +107,28 @@ impl<'db> Enum<'db> {
     }
 }
 
+impl<'db> Struct<'db> {
+    /// Returns semantic types of all fields, bound to identity parameters.
+    pub fn field_tys(self, db: &'db dyn HirAnalysisDb) -> Vec<crate::analysis::ty::binder::Binder<crate::analysis::ty::ty_def::TyId<'db>>> {
+        use crate::analysis::ty::binder::Binder;
+        FieldParent::Struct(self)
+            .fields(db)
+            .map(|v| Binder::bind(v.ty(db)))
+            .collect()
+    }
+}
+
+impl<'db> Contract<'db> {
+    /// Returns semantic types of all fields, bound to identity parameters.
+    pub fn field_tys(self, db: &'db dyn HirAnalysisDb) -> Vec<crate::analysis::ty::binder::Binder<crate::analysis::ty::ty_def::TyId<'db>>> {
+        use crate::analysis::ty::binder::Binder;
+        FieldParent::Contract(self)
+            .fields(db)
+            .map(|v| Binder::bind(v.ty(db)))
+            .collect()
+    }
+}
+
 impl<'db> Contract<'db> {
     // Planned semantic surface:
     // - ty_fields(db) -> AdtField
@@ -313,5 +335,103 @@ impl<'db> VariantView<'db> {
 
     pub fn span(self) -> crate::span::item::LazyVariantDefSpan<'db> {
         self.owner.span().variants().variant(self.idx)
+    }
+
+    /// Returns semantic types of this variant's fields (empty for unit variants).
+    pub fn field_tys(self, db: &'db dyn HirAnalysisDb) -> Vec<crate::analysis::ty::binder::Binder<crate::analysis::ty::ty_def::TyId<'db>>> {
+        use crate::analysis::ty::{
+            adt_def::{AdtRef, lower_adt},
+            binder::Binder,
+            trait_resolution::constraint::collect_adt_constraints,
+            ty_def::{InvalidCause, TyId},
+            ty_lower::lower_hir_ty,
+        };
+
+        match self.kind(db) {
+            VariantKind::Unit => Vec::new(),
+            VariantKind::Record(_) => {
+                let parent = FieldParent::Variant(EnumVariant::new(self.owner, self.idx));
+                parent.fields(db).map(|v| Binder::bind(v.ty(db))).collect()
+            }
+            VariantKind::Tuple(tuple_id) => {
+                let var = EnumVariant::new(self.owner, self.idx);
+                let scope = var.scope();
+                let adt = lower_adt(db, AdtRef::from(self.owner));
+                let assumptions = collect_adt_constraints(db, adt).instantiate_identity();
+                tuple_id
+                    .data(db)
+                    .iter()
+                    .map(|p| {
+                        let ty = match p.to_opt() {
+                            Some(hir_ty) => lower_hir_ty(db, hir_ty, scope, assumptions),
+                            None => TyId::invalid(db, InvalidCause::ParseError),
+                        };
+                        Binder::bind(ty)
+                    })
+                    .collect()
+            }
+        }
+    }
+}
+
+// Field views --------------------------------------------------------------
+
+#[derive(Clone, Copy, Debug)]
+pub struct FieldView<'db> {
+    pub parent: FieldParent<'db>,
+    pub idx: usize,
+}
+
+impl<'db> FieldView<'db> {
+    pub fn name(self, db: &'db dyn HirDb) -> Option<IdentId<'db>> {
+        let list = self.parent.fields_list(db);
+        list.data(db)[self.idx].name.to_opt()
+    }
+
+    /// Returns the HIR type reference (syntactic) for this field.
+    /// Prefer using `ty` when the semantic type is needed.
+    /// Kept private to avoid exposing raw HIR outside `core`.
+    fn hir_type_ref(self, db: &'db dyn HirDb) -> Partial<TypeId<'db>> {
+        let list = self.parent.fields_list(db);
+        list.data(db)[self.idx].type_ref
+    }
+
+    /// Returns the semantic type of this field.
+    pub fn ty(self, db: &'db dyn HirAnalysisDb) -> TyId<'db> {
+        use crate::analysis::ty::{
+            adt_def::{AdtRef, lower_adt},
+            trait_resolution::constraint::collect_adt_constraints,
+            ty_def::InvalidCause,
+            ty_lower::lower_hir_ty,
+        };
+
+        let scope = self.parent.scope();
+        let assumptions = match self.parent {
+            FieldParent::Struct(s) => {
+                let adt = lower_adt(db, AdtRef::from(s));
+                collect_adt_constraints(db, adt).instantiate_identity()
+            }
+            FieldParent::Contract(c) => {
+                let adt = lower_adt(db, AdtRef::from(c));
+                collect_adt_constraints(db, adt).instantiate_identity()
+            }
+            FieldParent::Variant(v) => {
+                let adt = lower_adt(db, AdtRef::from(v.enum_));
+                collect_adt_constraints(db, adt).instantiate_identity()
+            }
+        };
+
+        match self.hir_type_ref(db).to_opt() {
+            Some(hir_ty) => lower_hir_ty(db, hir_ty, scope, assumptions),
+            None => TyId::invalid(db, InvalidCause::ParseError),
+        }
+    }
+}
+
+impl<'db> FieldParent<'db> {
+    /// Iterates fields as contextual views. For variants, only record variants have fields.
+    pub fn fields(self, db: &'db dyn HirDb) -> impl Iterator<Item = FieldView<'db>> + 'db {
+        let len = self.fields_list(db).data(db).len();
+        (0..len).map(move |idx| FieldView { parent: self, idx })
     }
 }

@@ -2,7 +2,7 @@ use std::collections::hash_map::Entry;
 
 use crate::{
     hir_def::{
-        FieldDefListId as HirFieldDefListId, FieldParent, IdentId, VariantKind as HirVariantKind,
+        FieldParent, IdentId, VariantKind as HirVariantKind,
         scope_graph::ScopeId,
     },
     span::DynLazySpan,
@@ -221,38 +221,37 @@ impl<'db> RecordLike<'db> {
         }
     }
 
-    pub fn record_field_list(
-        &self,
-        db: &'db dyn HirAnalysisDb,
-    ) -> Option<(HirFieldDefListId<'db>, &'db AdtField<'db>)> {
-        match self {
-            RecordLike::Type(ty) => {
-                let adt_def = ty.adt_def(db)?;
-                match adt_def.adt_ref(db) {
-                    AdtRef::Struct(s) => Some((s.fields(db), &adt_def.fields(db)[0])),
-                    AdtRef::Contract(c) => Some((c.fields(db), &adt_def.fields(db)[0])),
-                    _ => None,
-                }
-            }
-            RecordLike::Variant(variant) => {
-                let adt_def = variant.ty.adt_def(db)?;
-                match variant.kind(db) {
-                    HirVariantKind::Record(fields_id) => {
-                        Some((fields_id, &adt_def.fields(db)[variant.variant.idx as usize]))
-                    }
-                    _ => None,
-                }
-            }
-        }
-    }
-
     pub fn record_field_idx(
         &self,
         db: &'db dyn HirAnalysisDb,
         name: IdentId<'db>,
     ) -> Option<usize> {
-        let (hir_field_list, _) = self.record_field_list(db)?;
-        hir_field_list.field_idx(db, name)
+        match self {
+            RecordLike::Type(ty) => {
+                let adt_def = ty.adt_def(db)?;
+                let parent = match adt_def.adt_ref(db) {
+                    AdtRef::Struct(s) => FieldParent::Struct(s),
+                    AdtRef::Contract(c) => FieldParent::Contract(c),
+                    _ => return None,
+                };
+                parent
+                    .fields(db)
+                    .enumerate()
+                    .find(|(_, v)| v.name(db) == Some(name))
+                    .map(|(i, _)| i)
+            }
+            RecordLike::Variant(variant) => {
+                if !matches!(variant.kind(db), HirVariantKind::Record(_)) {
+                    return None;
+                }
+                let parent = FieldParent::Variant(variant.variant);
+                parent
+                    .fields(db)
+                    .enumerate()
+                    .find(|(_, v)| v.name(db) == Some(name))
+                    .map(|(i, _)| i)
+            }
+        }
     }
 
     pub fn record_field_scope(
@@ -285,27 +284,19 @@ impl<'db> RecordLike<'db> {
                 let Some(adt_ref) = ty.adt_ref(db) else {
                     return Vec::default();
                 };
-                let fields = match adt_ref {
-                    AdtRef::Struct(s) => s.fields(db),
-                    AdtRef::Contract(c) => c.fields(db),
+                let parent = match adt_ref {
+                    AdtRef::Struct(s) => FieldParent::Struct(s),
+                    AdtRef::Contract(c) => FieldParent::Contract(c),
                     _ => return Vec::default(),
                 };
-                fields
-                    .data(db)
-                    .iter()
-                    .filter_map(|field| field.name.to_opt())
-                    .collect()
+                parent.fields(db).filter_map(|v| v.name(db)).collect()
             }
             RecordLike::Variant(variant) => {
-                let fields = match variant.kind(db) {
-                    HirVariantKind::Record(fields) => fields,
-                    _ => return Vec::default(),
-                };
-                fields
-                    .data(db)
-                    .iter()
-                    .filter_map(|field| field.name.to_opt())
-                    .collect()
+                if !matches!(variant.kind(db), HirVariantKind::Record(_)) {
+                    return Vec::default();
+                }
+                let parent = FieldParent::Variant(variant.variant);
+                parent.fields(db).filter_map(|v| v.name(db)).collect()
             }
         }
     }

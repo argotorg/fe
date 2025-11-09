@@ -367,14 +367,7 @@ impl<'db> ConstructorKind<'db> {
             },
             _ => None,
         }?;
-        Some(
-            field_parent
-                .fields(db)
-                .data(db)
-                .iter()
-                .filter_map(|field| field.name.to_opt())
-                .collect(),
-        )
+        Some(field_parent.fields(db).filter_map(|v| v.name(db)).collect())
     }
 
     pub fn arity(&self, db: &'db dyn HirAnalysisDb) -> usize {

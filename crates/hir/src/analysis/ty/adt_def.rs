@@ -1,7 +1,7 @@
 use crate::{
     hir_def::{
-        Contract, Enum, FieldDefListId, GenericParamOwner, IdentId, ItemKind, Partial, Struct,
-        TypeId as HirTyId, VariantKind, scope_graph::ScopeId, semantic::VariantView,
+        Contract, Enum, GenericParamOwner, IdentId, ItemKind, Partial, Struct, TypeId as HirTyId,
+        VariantDefListId, VariantKind, scope_graph::ScopeId, semantic::VariantView,
     },
     span::DynLazySpan,
 };
@@ -42,14 +42,14 @@ pub fn lower_adt<'db>(db: &'db dyn HirAnalysisDb, adt: AdtRef<'db>) -> AdtDef<'d
 fn collect_field_types<'db>(
     db: &'db dyn HirAnalysisDb,
     scope: ScopeId<'db>,
-    fields: FieldDefListId<'db>,
+    fields: crate::core::hir_def::FieldDefListId<'db>,
 ) -> AdtField<'db> {
-    let fields = fields
+    let tys = fields
         .data(db)
         .iter()
-        .map(|field| field.field_type_ref___tmp())
+        .map(|f| f.field_type_ref___tmp())
         .collect();
-    AdtField::new(fields, scope)
+    AdtField::new(tys, scope)
 }
 
 fn collect_enum_variant_types<'db>(
@@ -64,7 +64,7 @@ fn collect_enum_variant_types<'db>(
                 VariantKind::Record(fields) => fields
                     .data(db)
                     .iter()
-                    .map(|field| field.field_type_ref___tmp())
+                    .map(|f| f.field_type_ref___tmp())
                     .collect(),
                 VariantKind::Unit => vec![],
             };
