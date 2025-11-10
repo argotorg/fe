@@ -17,7 +17,7 @@
 //!   method(s) here.
 
 use crate::analysis::HirAnalysisDb;
-use crate::analysis::name_resolution::{PathRes, resolve_path};
+use crate::analysis::name_resolution::{PathRes, resolve_path, PathResError};
 use crate::analysis::ty::def_analysis::check_duplicate_names;
 use crate::analysis::ty::diagnostics::{TyDiagCollection, TyLowerDiag};
 use crate::hir_def::*;
@@ -32,6 +32,10 @@ use crate::analysis::ty::{
     ty_lower::{lower_hir_ty, lower_type_alias},
 };
 use crate::analysis::ty::trait_lower::lower_trait_ref;
+use crate::analysis::ty::{
+    canonical::Canonical,
+    trait_resolution::{is_goal_satisfiable, GoalSatisfiability},
+};
 // (kind-lowering helpers intentionally omitted; see WherePredicateView::kind)
 
 /// Consolidated assumptions for any item kind.
@@ -493,6 +497,37 @@ impl<'db> Trait<'db> {
         (0..len).map(move |idx| TraitAssocTypeView { owner: self, idx })
     }
 
+    /// Diagnostics for associated type defaults (bounds satisfaction), in the trait's context.
+    pub fn diags_assoc_defaults(self, db: &'db dyn HirAnalysisDb) -> Vec<TyDiagCollection<'db>> {
+        let mut diags = Vec::new();
+        let assumptions = constraints_for(db, self.into());
+        for assoc in self.assoc_types(db) {
+            let Some(default_ty) = assoc.default_ty(db) else { continue };
+            for trait_inst in assoc.with_subject(default_ty).bounds(db) {
+                let canonical_inst = Canonical::new(db, trait_inst);
+                match is_goal_satisfiable(
+                    db,
+                    self.top_mod(db).ingot(db),
+                    canonical_inst,
+                    assumptions,
+                ) {
+                    GoalSatisfiability::Satisfied(_) => {}
+                    GoalSatisfiability::UnSat(subgoal) => {
+                        diags.push(
+                            crate::analysis::ty::diagnostics::TraitConstraintDiag::TraitBoundNotSat {
+                                span: self.span().into(),
+                                primary_goal: trait_inst,
+                                unsat_subgoal: subgoal.map(|s| s.value),
+                            }
+                            .into(),
+                        );
+                    }
+                    _ => {}
+                }
+            }
+        }
+        diags
+    }
 }
 
 impl<'db> Impl<'db> {
