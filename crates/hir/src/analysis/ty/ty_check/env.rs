@@ -69,30 +69,25 @@ impl<'db> TyCheckEnv<'db> {
 
         env.enter_scope(body.expr(db));
 
-        let Some(params) = func.params(db).to_opt() else {
+        // If there are no syntactic params, preserve early-exit behavior
+        if func.params(db).to_opt().is_none() {
             return Err(());
-        };
+        }
 
-        for (idx, param) in params.data(db).iter().enumerate() {
-            let Some(name) = param.name() else {
-                continue;
-            };
+        let arg_tys = func.arg_tys(db);
+        for (idx, view) in func.param_views(db).enumerate() {
+            let Some(name) = view.name(db) else { continue; };
 
-            let mut ty = match param.ty {
-                Partial::Present(hir_ty) => {
-                    lower_hir_ty(db, hir_ty, func.scope(), env.assumptions())
-                }
-                Partial::Absent => TyId::invalid(db, InvalidCause::ParseError),
-            };
+            // Use semantic arg types we compute via Func::arg_tys
+            let mut ty = *arg_tys
+                .get(idx)
+                .map(|b| b.skip_binder())
+                .unwrap_or(&TyId::invalid(db, InvalidCause::ParseError));
 
             if !ty.is_star_kind(db) {
                 ty = TyId::invalid(db, InvalidCause::Other);
             }
-            let var = LocalBinding::Param {
-                idx,
-                ty,
-                is_mut: param.is_mut,
-            };
+            let var = LocalBinding::Param { idx, ty, is_mut: view.is_mut(db) };
 
             env.var_env.last_mut().unwrap().register_var(name, var);
         }
@@ -136,8 +131,7 @@ impl<'db> TyCheckEnv<'db> {
         match self.hir_func() {
             Some(func) => {
                 // Include all implied bounds (super traits and associated type bounds)
-                collect_func_def_constraints(self.db, func.into(), true)
-                    .instantiate_identity()
+                crate::core::hir_def::semantic::constraints_for(self.db, func.into())
                     .extend_all_bounds(self.db)
             }
             None => PredicateListId::empty_list(self.db),

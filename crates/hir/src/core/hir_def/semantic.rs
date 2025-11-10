@@ -23,12 +23,29 @@ use crate::analysis::ty::diagnostics::{TyDiagCollection, TyLowerDiag};
 use crate::hir_def::*;
 // When adding real methods, prefer calling internal lowering/normalization here
 // rather than exposing raw syntax.
-use crate::analysis::ty::trait_resolution::constraint::collect_func_def_constraints;
+use crate::analysis::ty::trait_resolution::constraint::{
+    collect_adt_constraints, collect_constraints, collect_func_def_constraints,
+};
 use crate::analysis::ty::{
-    trait_resolution::{PredicateListId, constraint::collect_constraints},
+    trait_resolution::PredicateListId,
     ty_def::{InvalidCause, TyId},
     ty_lower::{lower_hir_ty, lower_type_alias},
 };
+// (kind-lowering helpers intentionally omitted; see WherePredicateView::kind)
+
+/// Consolidated assumptions for any item kind.
+pub fn constraints_for<'db>(db: &'db dyn HirAnalysisDb, item: ItemKind<'db>) -> PredicateListId<'db> {
+    match item {
+        ItemKind::Struct(s) => collect_adt_constraints(db, s.as_adt(db)).instantiate_identity(),
+        ItemKind::Enum(e) => collect_adt_constraints(db, e.as_adt(db)).instantiate_identity(),
+        ItemKind::Contract(c) => collect_adt_constraints(db, c.as_adt(db)).instantiate_identity(),
+        ItemKind::Func(f) => collect_func_def_constraints(db, f.into(), true).instantiate_identity(),
+        ItemKind::Impl(i) => collect_constraints(db, i.into()).instantiate_identity(),
+        ItemKind::Trait(t) => collect_constraints(db, t.into()).instantiate_identity(),
+        ItemKind::ImplTrait(i) => collect_constraints(db, i.into()).instantiate_identity(),
+        _ => PredicateListId::empty_list(db),
+    }
+}
 
 // Top‑level module items ----------------------------------------------------
 
@@ -63,8 +80,7 @@ impl<'db> Func<'db> {
     /// Explicit return type if annotated in source; `None` when the
     /// function has no explicit return type.
     pub fn explicit_return_ty(self, db: &'db dyn HirAnalysisDb) -> Option<TyId<'db>> {
-        let assumptions =
-            collect_func_def_constraints(db, self.into(), true).instantiate_identity();
+        let assumptions = constraints_for(db, self.into());
         let hir = self.ret_type_ref(db)?;
         Some(lower_hir_ty(db, hir, self.scope(), assumptions))
     }
@@ -73,6 +89,36 @@ impl<'db> Func<'db> {
     pub fn return_ty(self, db: &'db dyn HirAnalysisDb) -> TyId<'db> {
         self.explicit_return_ty(db)
             .unwrap_or_else(|| TyId::unit(db))
+    }
+
+    /// Semantic argument types bound to identity parameters.
+    pub fn arg_tys(
+        self,
+        db: &'db dyn HirAnalysisDb,
+    ) -> Vec<crate::analysis::ty::binder::Binder<crate::analysis::ty::ty_def::TyId<'db>>> {
+        use crate::analysis::ty::{binder::Binder, ty_def::{InvalidCause, TyId}};
+        let assumptions = constraints_for(db, self.into());
+        match self.params(db).to_opt() {
+            Some(params) => params
+                .data(db)
+                .iter()
+                .map(|p| match p.ty.to_opt() {
+                    Some(hir_ty) => Binder::bind(lower_hir_ty(db, hir_ty, self.scope(), assumptions)),
+                    None => Binder::bind(TyId::invalid(db, InvalidCause::ParseError)),
+                })
+                .collect(),
+            None => Vec::new(),
+        }
+    }
+
+    /// Semantic receiver type if this is a method (first argument), else None.
+    pub fn receiver_ty(
+        self,
+        db: &'db dyn HirAnalysisDb,
+    ) -> Option<crate::analysis::ty::binder::Binder<crate::analysis::ty::ty_def::TyId<'db>>> {
+        self.is_method(db)
+            .then(|| self.arg_tys(db).into_iter().next())
+            .flatten()
     }
 }
 
@@ -84,6 +130,58 @@ impl<'db> Struct<'db> {
     // - validate_fields(db) -> Vec<TyDiagCollection>
     // - generic_params_diags(db), where_clause_diags(db)
     // - analyze(db) -> Vec<TyDiagCollection>
+}
+
+// Function parameter views --------------------------------------------------
+
+#[derive(Clone, Copy, Debug)]
+pub struct FuncParamView<'db> {
+    pub func: Func<'db>,
+    pub idx: usize,
+}
+
+impl<'db> FuncParamView<'db> {
+    pub fn name(self, db: &'db dyn HirDb) -> Option<IdentId<'db>> {
+        let list = self.func.params(db).to_opt()?;
+        list.data(db).get(self.idx)?.name()
+    }
+
+    pub fn label(self, db: &'db dyn HirDb) -> Option<IdentId<'db>> {
+        let list = self.func.params(db).to_opt()?;
+        match list.data(db).get(self.idx)?.label {
+            Some(FuncParamName::Ident(id)) => Some(id),
+            _ => None,
+        }
+    }
+
+    pub fn label_eagerly(self, db: &'db dyn HirDb) -> Option<IdentId<'db>> {
+        let list = self.func.params(db).to_opt()?;
+        list.data(db).get(self.idx)?.label_eagerly()
+    }
+
+    pub fn is_self_param(self, db: &'db dyn HirDb) -> bool {
+        let list = self.func.params(db).to_opt();
+        match list.and_then(|l| l.data(db).get(self.idx)) {
+            Some(p) => p.is_self_param(db),
+            None => false,
+        }
+    }
+
+    pub fn is_mut(self, db: &'db dyn HirDb) -> bool {
+        let list = self.func.params(db).to_opt();
+        match list.and_then(|l| l.data(db).get(self.idx)) {
+            Some(p) => p.is_mut,
+            None => false,
+        }
+    }
+}
+
+impl<'db> Func<'db> {
+    /// Iterate parameters as contextual views (semantic traversal helper).
+    pub fn param_views(self, db: &'db dyn HirDb) -> impl Iterator<Item = FuncParamView<'db>> + 'db {
+        let len = self.params(db).to_opt().map(|l| l.data(db).len()).unwrap_or(0);
+        (0..len).map(move |idx| FuncParamView { func: self, idx })
+    }
 }
 
 impl<'db> Enum<'db> {
@@ -159,6 +257,98 @@ impl<'db> Contract<'db> {
     }
 }
 
+// Where-clause traversal (scaffold) -----------------------------------------
+
+#[derive(Clone, Copy, Debug)]
+pub struct WhereClauseView<'db> {
+    pub owner: WhereClauseOwner<'db>,
+    pub id: WhereClauseId<'db>,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct WherePredicateView<'db> {
+    pub clause: WhereClauseView<'db>,
+    pub idx: usize,
+}
+
+impl<'db> WhereClauseOwner<'db> {
+    /// Semantic where-clause view for this owner.
+    pub fn clause(self, db: &'db dyn HirDb) -> WhereClauseView<'db> {
+        WhereClauseView { owner: self, id: self.where_clause(db) }
+    }
+}
+
+impl<'db> WhereClauseView<'db> {
+    pub fn predicates(
+        self,
+        db: &'db dyn HirDb,
+    ) -> impl Iterator<Item = WherePredicateView<'db>> + 'db {
+        let len = self.id.data(db).len();
+        (0..len).map(move |idx| WherePredicateView { clause: self, idx })
+    }
+
+    pub fn span(self) -> crate::span::params::LazyWhereClauseSpan<'db> {
+        match self.owner {
+            WhereClauseOwner::Func(f) => f.span().where_clause(),
+            WhereClauseOwner::Struct(s) => s.span().where_clause(),
+            WhereClauseOwner::Enum(e) => e.span().where_clause(),
+            WhereClauseOwner::Impl(i) => i.span().where_clause(),
+            WhereClauseOwner::Trait(t) => t.span().where_clause(),
+            WhereClauseOwner::ImplTrait(i) => i.span().where_clause(),
+        }
+    }
+}
+
+impl<'db> WherePredicateView<'db> {
+    fn hir_pred(self, db: &'db dyn HirDb) -> &'db WherePredicate<'db> {
+        &self.clause.id.data(db)[self.idx]
+    }
+
+    fn owner_item(self) -> ItemKind<'db> {
+        ItemKind::from(self.clause.owner)
+    }
+
+    /// If this predicate's subject is one of the owner's generic parameters,
+    /// returns its original index (0-based within the owner).
+    pub fn param_original_index(self, db: &'db dyn HirDb) -> Option<usize> {
+        use crate::core::hir_def::types::TypeKind as HirTyKind;
+        let hir_ty = self.hir_pred(db).ty.to_opt()?;
+        let path = match hir_ty.data(db) {
+            HirTyKind::Path(p) => p.to_opt()?,
+            _ => return None,
+        };
+        if !path.is_bare_ident(db) {
+            return None;
+        }
+        let ident = path.as_ident(db)?;
+        let Some(owner) = GenericParamOwner::from_item_opt(self.owner_item()) else {
+            return None;
+        };
+        let params = owner.params_list(db).data(db);
+        params.iter().position(|p| match p {
+            GenericParam::Type(t) => t.name.to_opt() == Some(ident),
+            GenericParam::Const(c) => c.name.to_opt() == Some(ident),
+        })
+    }
+
+    /// Lowered kind bound sourced from the where-clause, if present.
+    pub fn kind(self, db: &'db dyn HirAnalysisDb) -> Option<crate::analysis::ty::ty_def::Kind> {
+        use crate::hir_def::Partial;
+        for b in &self.hir_pred(db).bounds {
+            if let TypeBound::Kind(Partial::Present(_k)) = b {
+                // Defer exposing kind lowering until we publicize lower_kind appropriately.
+                // For now, surface None to avoid changing behavior.
+                return None;
+            }
+        }
+        None
+    }
+
+    pub fn span(self) -> crate::span::params::LazyWherePredicateSpan<'db> {
+        self.clause.span().predicate(self.idx)
+    }
+}
+
 impl<'db> Contract<'db> {
     // Planned semantic surface:
     // - ty_fields(db) -> AdtField
@@ -196,7 +386,7 @@ impl<'db> Impl<'db> {
 
     /// Semantic implementor type of this inherent impl.
     pub fn ty(self, db: &'db dyn HirAnalysisDb) -> TyId<'db> {
-        let assumptions = collect_constraints(db, self.into()).instantiate_identity();
+        let assumptions = constraints_for(db, self.into());
         self.type_ref(db)
             .to_opt()
             .map(|hir_ty| lower_hir_ty(db, hir_ty, self.scope(), assumptions))
@@ -214,7 +404,7 @@ impl<'db> ImplTrait<'db> {
 
     /// Semantic self type of this impl-trait block.
     pub fn ty(self, db: &'db dyn HirAnalysisDb) -> TyId<'db> {
-        let assumptions = collect_constraints(db, self.into()).instantiate_identity();
+        let assumptions = constraints_for(db, self.into());
         self.type_ref(db)
             .to_opt()
             .map(|hir_ty| lower_hir_ty(db, hir_ty, self.scope(), assumptions))
@@ -372,13 +562,7 @@ impl<'db> VariantView<'db> {
         self,
         db: &'db dyn HirAnalysisDb,
     ) -> Vec<crate::analysis::ty::binder::Binder<crate::analysis::ty::ty_def::TyId<'db>>> {
-        use crate::analysis::ty::{
-            adt_def::{AdtRef, lower_adt},
-            binder::Binder,
-            trait_resolution::constraint::collect_adt_constraints,
-            ty_def::{InvalidCause, TyId},
-            ty_lower::lower_hir_ty,
-        };
+        use crate::analysis::ty::{binder::Binder, ty_def::{InvalidCause, TyId}, ty_lower::lower_hir_ty};
 
         match self.kind(db) {
             VariantKind::Unit => Vec::new(),
@@ -389,8 +573,7 @@ impl<'db> VariantView<'db> {
             VariantKind::Tuple(tuple_id) => {
                 let var = EnumVariant::new(self.owner, self.idx);
                 let scope = var.scope();
-                let adt = self.owner.as_adt(db);
-                let assumptions = collect_adt_constraints(db, adt).instantiate_identity();
+                let assumptions = constraints_for(db, self.owner.into());
                 tuple_id
                     .data(db)
                     .iter()
