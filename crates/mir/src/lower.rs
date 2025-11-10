@@ -18,8 +18,10 @@ use crate::ir::{
 };
 use rustc_hash::FxHashSet;
 
+/// Errors that can occur while lowering HIR into MIR.
 #[derive(Debug)]
 pub enum MirLowerError {
+    /// The function had no body in HIR even though we attempted to lower it.
     MissingBody { func_name: String },
 }
 
@@ -33,6 +35,7 @@ impl fmt::Display for MirLowerError {
     }
 }
 
+/// Returns the width (in bits) for a primitive integer type, if supported.
 fn prim_int_bits(prim: PrimTy) -> Option<u16> {
     use PrimTy::*;
     match prim {
@@ -48,8 +51,10 @@ fn prim_int_bits(prim: PrimTy) -> Option<u16> {
 
 impl Error for MirLowerError {}
 
+/// Convenient result alias for MIR lowering routines.
 pub type MirLowerResult<T> = Result<T, MirLowerError>;
 
+/// Lowers every function inside `top_mod` into MIR and packs the results into a module.
 pub fn lower_module<'db>(
     db: &'db dyn HirAnalysisDb,
     top_mod: TopLevelMod<'db>,
@@ -65,6 +70,7 @@ pub fn lower_module<'db>(
     Ok(module)
 }
 
+/// Lowers a single HIR function (plus its typed body) into MIR form.
 fn lower_function<'db>(
     db: &'db dyn HirAnalysisDb,
     func: Func<'db>,
@@ -95,6 +101,7 @@ fn lower_function<'db>(
     })
 }
 
+/// Stateful helper that incrementally builds a MIR body while walking HIR.
 struct MirBuilder<'db, 'a> {
     db: &'db dyn HirAnalysisDb,
     body: Body<'db>,
@@ -103,6 +110,8 @@ struct MirBuilder<'db, 'a> {
     loop_stack: Vec<LoopScope>,
 }
 
+/// Keeps track of the active loop's continue/break targets so `break`/`continue`
+/// statements can wire jumps correctly.
 #[derive(Clone, Copy)]
 struct LoopScope {
     continue_target: BasicBlockId,
@@ -323,6 +332,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         )
     }
 
+    /// Returns the bit width for the given type if it is a primitive integer.
     fn int_type_bits(&self, ty: TyId<'db>) -> Option<u16> {
         match ty.data(self.db) {
             TyData::TyBase(TyBase::Prim(prim)) => prim_int_bits(*prim),
