@@ -6,8 +6,7 @@ use crate::{
     hir_def::{
         EnumVariant, FieldDef, FieldParent, Func, GenericParam, GenericParamListId,
         GenericParamOwner, GenericParamView, IdentId, Impl as HirImpl, ImplTrait, ItemKind, PathId,
-        Trait, TraitRefId, TypeAlias, TypeBound, TypeId as HirTyId, VariantKind,
-        scope_graph::ScopeId,
+        Trait, TraitRefId, TypeAlias, TypeId as HirTyId, VariantKind, scope_graph::ScopeId,
     },
     visitor::prelude::*,
 };
@@ -147,23 +146,11 @@ pub fn analyze_trait<'db>(
     // Check associated type defaults satisfy their bounds
     let _trait_def = lower_trait(db, trait_);
     let assumptions = collect_constraints(db, trait_.into()).instantiate_identity();
+    let owner_self = collect_generic_params(db, trait_.into()).trait_self(db).unwrap();
 
     for assoc in trait_.assoc_types(db) {
         if let Some(default_ty) = assoc.default_ty(db) {
-            // Check each bound on the associated type
-            for bound in assoc.bounds(db) {
-                let TypeBound::Trait(trait_ref) = bound else {
-                    continue;
-                };
-                // Lower the trait bound
-                let Ok(trait_inst) =
-                    lower_trait_ref(db, default_ty, *trait_ref, trait_.scope(), assumptions)
-                else {
-                    // Trait ref lowering error - will be reported elsewhere
-                    continue;
-                };
-
-                // Check if the default type satisfies the trait bound
+            for trait_inst in assoc.trait_bounds_for_assoc_with(db, default_ty, owner_self) {
                 let canonical_inst = Canonical::new(db, trait_inst);
                 match is_goal_satisfiable(
                     db,
@@ -173,8 +160,6 @@ pub fn analyze_trait<'db>(
                 ) {
                     GoalSatisfiability::Satisfied(_) => continue,
                     GoalSatisfiability::UnSat(subgoal) => {
-                        // Report error: default type doesn't satisfy the bound
-                        // TODO: Get a better span for the default type
                         diags.push(
                             TraitConstraintDiag::TraitBoundNotSat {
                                 span: trait_.span().into(),
@@ -184,10 +169,7 @@ pub fn analyze_trait<'db>(
                             .into(),
                         );
                     }
-                    _ => {
-                        // Other cases: NeedsConfirmation or ContainsInvalid
-                        // These might warrant errors but we'll treat them as ok for now
-                    }
+                    _ => {}
                 }
             }
         }
@@ -1393,37 +1375,32 @@ fn analyze_impl_trait_specific_error<'db>(
         };
 
         // Check that the implemented associated type satisfies its bounds
-        for bound in assoc_type.bounds(db) {
-            if let TypeBound::Trait(trait_ref) = bound {
-                match lower_trait_ref(db, impl_ty, *trait_ref, impl_trait.scope(), assumptions) {
-                    Ok(bound_inst) => {
-                        let canonical_bound = Canonical::new(db, bound_inst);
-                        if let GoalSatisfiability::UnSat(subgoal) = is_goal_satisfiable(
-                            db,
-                            impl_trait.top_mod(db).ingot(db),
-                            canonical_bound,
-                            assumptions,
-                        ) {
-                            // Find the span for this specific associated type implementation
-                            let assoc_ty_span = impl_trait
-                                .associated_type_span(db, name)
-                                .map(|s| s.ty().into())
-                                .unwrap_or_else(|| impl_trait.span().ty().into());
+        for bound_inst in assoc_type.trait_bounds_for_assoc_with(
+            db,
+            impl_ty,
+            implementor.instantiate_identity().self_ty(db),
+        ) {
+            let canonical_bound = Canonical::new(db, bound_inst);
+            if let GoalSatisfiability::UnSat(subgoal) = is_goal_satisfiable(
+                db,
+                impl_trait.top_mod(db).ingot(db),
+                canonical_bound,
+                assumptions,
+            ) {
+                // Find the span for this specific associated type implementation
+                let assoc_ty_span = impl_trait
+                    .associated_type_span(db, name)
+                    .map(|s| s.ty().into())
+                    .unwrap_or_else(|| impl_trait.span().ty().into());
 
-                            diags.push(
-                                TraitConstraintDiag::TraitBoundNotSat {
-                                    span: assoc_ty_span,
-                                    primary_goal: bound_inst,
-                                    unsat_subgoal: subgoal.map(|s| s.value),
-                                }
-                                .into(),
-                            );
-                        }
+                diags.push(
+                    TraitConstraintDiag::TraitBoundNotSat {
+                        span: assoc_ty_span,
+                        primary_goal: bound_inst,
+                        unsat_subgoal: subgoal.map(|s| s.value),
                     }
-                    Err(_) => {
-                        // Error lowering the trait bound - this will be reported elsewhere
-                    }
-                }
+                    .into(),
+                );
             }
         }
     }

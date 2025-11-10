@@ -106,7 +106,7 @@ pub(crate) fn lower_impl_trait<'db>(
     // the trait's own scope and then instantiated with this impl's concrete args
     // (including Self). This ensures defaults like `type Output = Self` resolve
     // to the implementor's concrete self type rather than remaining as `Self`.
-    let trait_scope = trait_.def(db).trait_(db).scope();
+    // let trait_scope = trait_.def(db).trait_(db).scope();
     for t in trait_.def(db).trait_(db).assoc_types(db) {
         let (Some(name), Some(default)) = (t.name(db), t.default_ty(db)) else {
             continue;
@@ -169,6 +169,77 @@ pub(crate) fn lower_trait_ref<'db>(
             assoc_bindings
                 .iter_mut()
                 .for_each(|(_, ty)| *ty = (*ty).fold_with(db, &mut folder));
+
+            Ok(TraitInstId::new(db, t.def(db), args, assoc_bindings))
+        }
+        Ok(res) => Err(TraitRefLowerError::InvalidDomain(res)),
+        Err(e) => Err(TraitRefLowerError::PathResError(e)),
+    }
+}
+
+/// Lower a trait reference for an associated-type bound context.
+///
+/// In associated-type bounds declared inside a trait (e.g., `type Assoc: Encode<Self>`),
+/// occurrences of `Self` appearing in the bound's generic arguments refer to the
+/// owner trait's `Self`, not the bound trait's implementor type. This helper performs
+/// that disambiguation by:
+/// - setting the bound trait's implementor (`args[0]`) to `subject` (the associated type),
+/// - substituting `Self` inside all other generic arguments with `owner_self`.
+#[salsa::tracked]
+pub(crate) fn lower_trait_ref_with_owner_self<'db>(
+    db: &'db dyn HirAnalysisDb,
+    subject: TyId<'db>,
+    trait_ref: TraitRefId<'db>,
+    scope: ScopeId<'db>,
+    assumptions: PredicateListId<'db>,
+    owner_self: TyId<'db>,
+) -> Result<TraitInstId<'db>, TraitRefLowerError<'db>> {
+    let Partial::Present(path) = trait_ref.path(db) else {
+        return Err(TraitRefLowerError::Ignored);
+    };
+
+    match resolve_path(db, path, scope, assumptions, false) {
+        Ok(PathRes::Trait(t)) => {
+            let mut args = t.args(db).clone();
+
+            // Substitute occurrences of owner `Self` inside generic arguments (not Self)
+            struct OwnerSelfInArgs<'db> {
+                db: &'db dyn HirAnalysisDb,
+                owner_self: TyId<'db>,
+            }
+            impl<'db> TyFolder<'db> for OwnerSelfInArgs<'db> {
+                fn fold_ty(&mut self, db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> TyId<'db> {
+                    match ty.data(self.db) {
+                        TyData::TyParam(p) if p.is_trait_self() => self.owner_self,
+                        _ => ty.super_fold_with(db, self),
+                    }
+                }
+            }
+
+            // Substitute occurrences of bound-trait `Self` inside assoc-type bindings with subject
+            struct SubjectSelfInBindings<'db> {
+                db: &'db dyn HirAnalysisDb,
+                subject: TyId<'db>,
+            }
+            impl<'db> TyFolder<'db> for SubjectSelfInBindings<'db> {
+                fn fold_ty(&mut self, db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> TyId<'db> {
+                    match ty.data(self.db) {
+                        TyData::TyParam(p) if p.is_trait_self() => self.subject,
+                        _ => ty.super_fold_with(db, self),
+                    }
+                }
+            }
+
+            let mut folder_args = OwnerSelfInArgs { db, owner_self };
+            let mut folder_bindings = SubjectSelfInBindings { db, subject };
+            args[0] = subject;
+            args.iter_mut()
+                .skip(1)
+                .for_each(|a| *a = a.fold_with(db, &mut folder_args));
+            let mut assoc_bindings = t.assoc_type_bindings(db).clone();
+            assoc_bindings
+                .iter_mut()
+                .for_each(|(_, ty)| *ty = (*ty).fold_with(db, &mut folder_bindings));
 
             Ok(TraitInstId::new(db, t.def(db), args, assoc_bindings))
         }

@@ -31,6 +31,7 @@ use crate::analysis::ty::{
     ty_def::{InvalidCause, TyId},
     ty_lower::{lower_hir_ty, lower_type_alias},
 };
+use crate::analysis::ty::trait_lower::lower_trait_ref;
 // (kind-lowering helpers intentionally omitted; see WherePredicateView::kind)
 
 /// Consolidated assumptions for any item kind.
@@ -347,6 +348,66 @@ impl<'db> WherePredicateView<'db> {
     pub fn span(self) -> crate::span::params::LazyWherePredicateSpan<'db> {
         self.clause.span().predicate(self.idx)
     }
+
+    /// Iterates trait-ref bounds from this where-predicate.
+    pub fn bound_trait_refs(self, db: &'db dyn HirDb) -> impl Iterator<Item = TraitRefId<'db>> + 'db {
+        self.hir_pred(db)
+            .bounds
+            .iter()
+            .filter_map(|b| match b {
+                TypeBound::Trait(tr) => Some(*tr),
+                _ => None,
+            })
+    }
+
+    /// True if this predicate's subject type is `Self` (within a trait).
+    pub fn is_self_subject(self, db: &'db dyn HirDb) -> bool {
+        self.hir_pred(db)
+            .ty
+            .to_opt()
+            .map(|ty| ty.is_self_ty(db))
+            .unwrap_or_default()
+    }
+
+    /// Lower the subject type of this where-predicate into a semantic `TyId`.
+    /// Returns `None` if the HIR type is missing or invalid.
+    pub fn subject_ty(self, db: &'db dyn HirAnalysisDb) -> Option<TyId<'db>> {
+        let hir_ty = self.hir_pred(db).ty.to_opt()?;
+        let owner_item = ItemKind::from(self.clause.owner);
+        let assumptions = constraints_for(db, owner_item);
+        Some(lower_hir_ty(db, hir_ty, owner_item.scope(), assumptions))
+    }
+
+    /// Lower trait bounds in this predicate against its own lowered subject type.
+    /// Skips kind bounds and failed lowerings.
+    pub fn trait_bounds_lowered(
+        self,
+        db: &'db dyn HirAnalysisDb,
+    ) -> Vec<crate::analysis::ty::trait_def::TraitInstId<'db>> {
+        let owner_item = ItemKind::from(self.clause.owner);
+        let assumptions = constraints_for(db, owner_item);
+        let scope = owner_item.scope();
+        let Some(subject) = self.subject_ty(db) else { return vec![] };
+        self.bound_trait_refs(db)
+            .filter_map(|tr| lower_trait_ref(db, subject, tr, scope, assumptions).ok())
+            .collect()
+    }
+
+    /// Lower trait bounds in this predicate against an explicit subject type.
+    /// Useful for `Self: Bound` in trait contexts.
+    pub fn trait_bounds_lowered_with_subject(
+        self,
+        db: &'db dyn HirAnalysisDb,
+        subject: TyId<'db>,
+    ) -> Vec<crate::analysis::ty::trait_def::TraitInstId<'db>> {
+        let owner_item = ItemKind::from(self.clause.owner);
+        let assumptions = constraints_for(db, owner_item);
+        let scope = owner_item.scope();
+        self.bound_trait_refs(db)
+            .filter_map(|tr| lower_trait_ref(db, subject, tr, scope, assumptions).ok())
+            .collect()
+    }
+
 }
 
 impl<'db> Contract<'db> {
@@ -383,10 +444,6 @@ impl<'db> Trait<'db> {
         (0..len).map(move |idx| TraitAssocTypeView { owner: self, idx })
     }
 
-    /// View for the associated type at `idx`.
-    pub fn assoc_type_view_at(self, _db: &'db dyn HirDb, idx: usize) -> TraitAssocTypeView<'db> {
-        TraitAssocTypeView { owner: self, idx }
-    }
 }
 
 impl<'db> Impl<'db> {
@@ -571,7 +628,7 @@ impl<'db> TraitAssocTypeView<'db> {
     }
 
     /// Raw bounds for this associated type (HIR). Prefer semantic checks where possible.
-    pub fn bounds(self, db: &'db dyn HirDb) -> &'db [TypeBound<'db>] {
+    pub(in crate::core) fn bounds(self, db: &'db dyn HirDb) -> &'db [TypeBound<'db>] {
         &self.decl(db).bounds
     }
 
@@ -582,6 +639,46 @@ impl<'db> TraitAssocTypeView<'db> {
         let trait_ = self.owner;
         let assumptions = constraints_for(db, trait_.into());
         Some(lower_hir_ty(db, hir, trait_.scope(), assumptions))
+    }
+
+    /// Lower trait bounds for this associated type given an explicit subject type.
+    /// In associated-type bounds, `Self` inside the bound's generic args refers to the
+    /// owner trait's `Self`, not the subject. This method accounts for that.
+    pub fn trait_bounds_for_assoc_with(
+        self,
+        db: &'db dyn HirAnalysisDb,
+        subject: TyId<'db>,
+        owner_self: TyId<'db>,
+    ) -> Vec<crate::analysis::ty::trait_def::TraitInstId<'db>> {
+        use crate::analysis::ty::trait_lower::lower_trait_ref_with_owner_self;
+        let owner_item = ItemKind::from(self.owner);
+        let assumptions = constraints_for(db, owner_item);
+        let scope = owner_item.scope();
+        self.bounds(db)
+            .iter()
+            .filter_map(|b| match b { TypeBound::Trait(tr) => Some(*tr), _ => None })
+            .filter_map(|tr| lower_trait_ref_with_owner_self(db, subject, tr, scope, assumptions, owner_self).ok())
+            .collect()
+    }
+
+    /// Lower trait bounds against an explicit subject, using an external
+    /// assumptions environment (e.g., caller's predicate list). Skips kind
+    /// bounds and failed lowerings.
+    pub fn trait_bounds_for_assoc_with_in_env(
+        self,
+        db: &'db dyn HirAnalysisDb,
+        subject: TyId<'db>,
+        owner_self: TyId<'db>,
+        assumptions: crate::analysis::ty::trait_resolution::PredicateListId<'db>,
+    ) -> Vec<crate::analysis::ty::trait_def::TraitInstId<'db>> {
+        use crate::analysis::ty::trait_lower::lower_trait_ref_with_owner_self;
+        let owner_item = ItemKind::from(self.owner);
+        let scope = owner_item.scope();
+        self.bounds(db)
+            .iter()
+            .filter_map(|b| match b { TypeBound::Trait(tr) => Some(*tr), _ => None })
+            .filter_map(|tr| lower_trait_ref_with_owner_self(db, subject, tr, scope, assumptions, owner_self).ok())
+            .collect()
     }
 }
 

@@ -71,20 +71,12 @@ pub(crate) fn collect_super_traits<'db>(
         }
     }
 
-    for pred in WhereClauseOwner::Trait(hir_trait).clause(db).id.data(db) {
-        if pred
-            .ty
-            .to_opt()
-            .map(|ty| ty.is_self_ty(db))
-            .unwrap_or_default()
-        {
-            for bound in &pred.bounds {
-                if let TypeBound::Trait(bound) = bound
-                    && let Ok(inst) = lower_trait_ref(db, self_param, *bound, scope, assumptions)
-                {
-                    super_traits.insert(Binder::bind(inst));
-                }
-            }
+    for pred in WhereClauseOwner::Trait(hir_trait).clause(db).predicates(db) {
+        if !pred.is_self_subject(db) {
+            continue;
+        }
+        for inst in pred.trait_bounds_lowered_with_subject(db, self_param) {
+            super_traits.insert(Binder::bind(inst));
         }
     }
 

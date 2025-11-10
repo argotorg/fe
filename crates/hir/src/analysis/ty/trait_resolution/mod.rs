@@ -2,7 +2,6 @@ use super::{
     canonical::{Canonical, Canonicalized, Solution},
     fold::{AssocTySubst, TyFoldable},
     trait_def::TraitInstId,
-    trait_lower::lower_trait_ref,
     ty_def::{TyFlags, TyId},
 };
 use crate::analysis::{
@@ -262,29 +261,17 @@ impl<'db> PredicateListId<'db> {
                 let assumptions =
                     PredicateListId::new(db, all_predicates.iter().copied().collect::<Vec<_>>());
 
-                // Process each bound on the associated type
-                for bound in trait_type.bounds(db) {
-                    if let crate::core::hir_def::params::TypeBound::Trait(trait_ref) = bound {
-                        // Lower the trait reference with the associated type as Self
-                        // We need to convert the HIR trait ref to a TraitInstId
-                        // This requires lowering which needs a scope
-                        let scope = hir_trait.scope();
+                for trait_inst in trait_type.trait_bounds_for_assoc_with(db, assoc_ty, pred.self_ty(db)) {
+                    // Substitute `Self` and associated types in the bound using
+                    // the original predicate's trait instance (e.g. map
+                    // `<Self as IntoIterator>::Item` to the concrete binding from
+                    // `<T as IntoIterator>` when available).
+                    let mut subst = AssocTySubst::new(pred);
+                    let trait_inst = trait_inst.fold_with(db, &mut subst);
 
-                        if let Ok(trait_inst) =
-                            lower_trait_ref(db, assoc_ty, *trait_ref, scope, assumptions)
-                        {
-                            // Substitute `Self` and associated types in the bound using
-                            // the original predicate's trait instance (e.g. map
-                            // `<Self as IntoIterator>::Item` to the concrete binding from
-                            // `<T as IntoIterator>` when available).
-                            let mut subst = AssocTySubst::new(pred);
-                            let trait_inst = trait_inst.fold_with(db, &mut subst);
-
-                            if all_predicates.insert(trait_inst) {
-                                // New predicate added, add to worklist
-                                worklist.push(trait_inst);
-                            }
-                        }
+                    if all_predicates.insert(trait_inst) {
+                        // New predicate added, add to worklist
+                        worklist.push(trait_inst);
                     }
                 }
             }

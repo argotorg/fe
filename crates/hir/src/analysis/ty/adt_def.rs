@@ -1,7 +1,7 @@
 use crate::{
     hir_def::{
         Contract, Enum, GenericParamOwner, IdentId, ItemKind, Partial, Struct, TypeId as HirTyId,
-        VariantDefListId, VariantKind, scope_graph::ScopeId, semantic::VariantView,
+        VariantKind, scope_graph::ScopeId, semantic::VariantView,
     },
     span::DynLazySpan,
 };
@@ -44,7 +44,7 @@ fn collect_field_types_semantic<'db>(
     scope: ScopeId<'db>,
     parent: crate::hir_def::FieldParent<'db>,
 ) -> AdtField<'db> {
-    use crate::hir_def::semantic::FieldView;
+    // use crate::hir_def::semantic::FieldView;
     let tys = parent
         .fields(db)
         .map(|v| v.type_ref___tmp(db))

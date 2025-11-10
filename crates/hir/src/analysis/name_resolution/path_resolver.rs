@@ -1,7 +1,7 @@
 use crate::{
     core::hir_def::{
-        Const, Enum, EnumVariant, GenericParamOwner, IdentId, ImplTrait, ItemKind, PathId,
-        PathKind, Trait, TypeBound, TypeKind, VariantKind, scope_graph::ScopeId,
+        Const, Enum, EnumVariant, GenericParamOwner, IdentId, ImplTrait, ItemKind, PathId, PathKind,
+        Trait, TypeBound, TypeKind, VariantKind, scope_graph::ScopeId,
     },
     span::{DynLazySpan, path::LazyPathSpan},
 };
@@ -23,7 +23,7 @@ use crate::analysis::{
     HirAnalysisDb,
     name_resolution::{NameResKind, QueryDirective},
     ty::{
-        adt_def::{AdtRef, lower_adt},
+        adt_def::AdtRef,
         binder::Binder,
         canonical::{Canonical, Canonicalized},
         fold::TyFoldable,
@@ -762,24 +762,29 @@ where
                 ));
             }
 
-            // Deduplicate by normalized type
-            let mut dedup: IndexMap<TyId<'db>, TraitInstId<'db>> = IndexMap::new();
-            for (inst, ty_candidate) in assoc_tys.iter().copied() {
-                let norm = normalize_ty(db, ty_candidate, scope, assumptions);
-                dedup.entry(norm).or_insert(inst);
-            }
+    // Deduplicate by normalized type, but preserve and return the original
+    // (unnormalized) candidate to avoid prematurely collapsing projections
+    // like `T::IntoIter::Item` into `T::Item`.
+    let mut dedup: IndexMap<TyId<'db>, (TraitInstId<'db>, TyId<'db>)> = IndexMap::new();
+    for (inst, ty_candidate) in assoc_tys.iter().copied() {
+        let norm = normalize_ty(db, ty_candidate, scope, assumptions);
+        dedup.entry(norm).or_insert((inst, ty_candidate));
+    }
 
             match dedup.len() {
                 0 => unreachable!(),
                 1 => {
-                    let (assoc_ty, _) = dedup.first().unwrap();
-                    let r = PathRes::Ty(*assoc_ty);
+                    let (_, (_, original_ty)) = dedup.first().unwrap();
+                    let r = PathRes::Ty(*original_ty);
                     observer(path, &r);
                     return Ok(r);
                 }
                 _ => {
                     // Build candidate list from deduped set for diagnostics
-                    let candidates = dedup.into_iter().map(|(ty, inst)| (inst, ty)).collect();
+                    let candidates = dedup
+                        .into_iter()
+                        .map(|(_norm, (inst, original_ty))| (inst, original_ty))
+                        .collect();
                     return Err(PathResError::new(
                         PathResErrorKind::AmbiguousAssociatedType {
                             name: ident,
@@ -929,22 +934,47 @@ pub fn find_associated_type<'db>(
         let trait_def = assoc_ty.trait_.def(db);
         let trait_ = trait_def.trait_(db);
 
+        // Evaluate trait bounds declared on the associated type using the owner-trait Self
+        // for generic `Self` occurrences inside the bound (e.g., `Encode<Self>`).
         let assoc_name = assoc_ty.name;
+        let before = candidates.len();
         for view in trait_.assoc_types(db) {
             if view.name(db) != Some(assoc_name) {
                 continue;
             }
-            for bound in view.bounds(db) {
-                let TypeBound::Trait(trait_ref) = bound else {
-                    // TODO: assoc type kind bounds
-                    continue;
-                };
-                let self_ty = ty_with_subst.fold_with(db, &mut table);
-                if let Ok(inst) = lower_trait_ref(db, self_ty, *trait_ref, scope, assumptions)
-                    && let Some(assoc_ty) = inst.assoc_ty(db, name)
-                {
+            let subject = ty_with_subst.fold_with(db, &mut table);
+            let owner_self = assoc_ty.trait_.self_ty(db);
+            for inst in view.trait_bounds_for_assoc_with_in_env(db, subject, owner_self, assumptions) {
+                if inst.def(db).trait_(db).assoc_ty(db, name).is_some() {
+                    let assoc_ty = TyId::assoc_ty(db, inst, name);
                     let folded = assoc_ty.fold_with(db, &mut table);
                     candidates.push((inst, folded));
+                }
+            }
+        }
+
+        // Fallback to raw HIR bounds if the view-based path didn’t add anything.
+        if candidates.len() == before {
+            if let Some(decl) = trait_.assoc_ty(db, assoc_name) {
+                let subject = ty_with_subst.fold_with(db, &mut table);
+                let owner_self = assoc_ty.trait_.self_ty(db);
+                for bound in &decl.bounds {
+                    if let TypeBound::Trait(trait_ref) = bound {
+                        if let Ok(inst) = crate::analysis::ty::trait_lower::lower_trait_ref_with_owner_self(
+                            db,
+                            subject,
+                            *trait_ref,
+                            scope,
+                            assumptions,
+                            owner_self,
+                        ) {
+                            if inst.def(db).trait_(db).assoc_ty(db, name).is_some() {
+                                let assoc_ty = TyId::assoc_ty(db, inst, name);
+                                let folded = assoc_ty.fold_with(db, &mut table);
+                                candidates.push((inst, folded));
+                            }
+                        }
+                    }
                 }
             }
         }
