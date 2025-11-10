@@ -857,10 +857,11 @@ impl DiagnosticVoucher for TyLowerDiag<'_> {
                 sub_diagnostics: vec![
                     SubDiagnostic {
                         style: LabelStyle::Primary,
-                        message: format!(
-                            "expected at least {} arguments here",
-                            alias.generic_params(db).len(db)
-                        ),
+                        message: {
+                            use crate::hir_def::GenericParamOwner;
+                            let n_params = GenericParamOwner::TypeAlias(*alias).params(db).count();
+                            format!("expected at least {} arguments here", n_params)
+                        },
                         span: span.resolve(db),
                     },
                     SubDiagnostic {

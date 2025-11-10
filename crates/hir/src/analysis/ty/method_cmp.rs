@@ -160,41 +160,13 @@ fn compare_arg_label<'db>(
     sink: &mut Vec<TyDiagCollection<'db>>,
 ) -> bool {
     let mut err = false;
-    let hir_impl_m = impl_m.hir_func_def(db).unwrap();
-    let hir_trait_m = trait_m.hir_func_def(db).unwrap();
-
-    let (Some(impl_m_params), Some(trait_m_params)) = (
-        hir_impl_m.params(db).to_opt(),
-        hir_trait_m.params(db).to_opt(),
-    ) else {
-        return true;
-    };
-
-    for (idx, (expected_param, method_param)) in trait_m_params
-        .data(db)
-        .iter()
-        .zip(impl_m_params.data(db))
-        .enumerate()
-    {
-        let Some(expected_label) = expected_param
-            .label
-            .or_else(|| expected_param.name.to_opt())
-        else {
-            continue;
-        };
-
-        let Some(method_label) = method_param.label.or_else(|| method_param.name.to_opt()) else {
-            continue;
-        };
-
+    let len = impl_m.arg_tys(db).len().min(trait_m.arg_tys(db).len());
+    for idx in 0..len {
+        let Some(expected_label) = trait_m.param_label_or_name(db, idx) else { continue };
+        let Some(method_label) = impl_m.param_label_or_name(db, idx) else { continue };
         if expected_label != method_label {
             sink.push(
-                ImplDiag::MethodArgLabelMismatch {
-                    trait_m,
-                    impl_m,
-                    param_idx: idx,
-                }
-                .into(),
+                ImplDiag::MethodArgLabelMismatch { trait_m, impl_m, param_idx: idx }.into(),
             );
             err = true;
         }

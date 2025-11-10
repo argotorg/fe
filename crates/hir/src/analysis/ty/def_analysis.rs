@@ -954,19 +954,23 @@ impl<'db> Visitor<'db> for DefAnalyzer<'db> {
             collect_func_def_constraints(self.db, hir_func.into(), true).instantiate_identity(),
         );
 
-        if let Some(args) = hir_func.params(self.db).to_opt() {
-            let dupes =
-                check_duplicate_names(args.data(self.db).iter().map(|p| p.name()), |idxs| {
-                    TyLowerDiag::DuplicateArgName(hir_func, idxs).into()
-                });
+        {
+            // Duplicate parameter names
+            let dupes = check_duplicate_names(
+                hir_func
+                    .param_views(self.db)
+                    .map(|v| v.name(self.db)),
+                |idxs| TyLowerDiag::DuplicateArgName(hir_func, idxs).into(),
+            );
             let found_dupes = !dupes.is_empty();
             self.diags.extend(dupes);
 
-            // Check for duplicate labels (if no name dupes were found, for simplicity;
-            // `label_eagerly` gives the arg name if no label is present)
+            // Duplicate labels (only if names were unique)
             if !found_dupes {
                 self.diags.extend(check_duplicate_names(
-                    args.data(self.db).iter().map(|p| p.label_eagerly()),
+                    hir_func
+                        .param_views(self.db)
+                        .map(|v| v.label_eagerly(self.db)),
                     |idxs| TyLowerDiag::DuplicateArgLabel(hir_func, idxs).into(),
                 ));
             }

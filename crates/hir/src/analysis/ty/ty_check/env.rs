@@ -69,10 +69,8 @@ impl<'db> TyCheckEnv<'db> {
 
         env.enter_scope(body.expr(db));
 
-        // If there are no syntactic params, preserve early-exit behavior
-        if func.params(db).to_opt().is_none() {
-            return Err(());
-        }
+        // Note: Previously we aborted when the parameter list was syntactically absent.
+        // We proceed using semantic traversal (param_views); parse errors are handled upstream.
 
         let arg_tys = func.arg_tys(db);
         for (idx, view) in func.param_views(db).enumerate() {
@@ -579,16 +577,15 @@ impl<'db> LocalBinding<'db> {
                 path.ident(hir_db).unwrap()
             }
 
-            Self::Param { idx, .. } => {
-                let func = env.func().unwrap();
-                let Partial::Present(func_params) =
-                    func.hir_func_def(env.db).unwrap().params(hir_db)
-                else {
-                    unreachable!();
-                };
-
-                func_params.data(hir_db)[*idx].name().unwrap()
-            }
+            Self::Param { idx, .. } => env
+                .func()
+                .unwrap()
+                .hir_func_def(env.db)
+                .unwrap()
+                .param_views(hir_db)
+                .nth(*idx)
+                .and_then(|v| v.name(hir_db))
+                .unwrap(),
         }
     }
 

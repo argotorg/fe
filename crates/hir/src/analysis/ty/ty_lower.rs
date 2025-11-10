@@ -458,7 +458,7 @@ impl<'db> GenericParamCollector<'db> {
         };
 
         let hir_db = self.db;
-        let where_clause = where_clause_owner.where_clause(hir_db);
+        let where_clause = where_clause_owner.clause(hir_db).id;
         for pred in where_clause.data(hir_db) {
             match self.param_idx_from_ty(pred.ty.to_opt()) {
                 ParamLoc::Idx(idx) => {

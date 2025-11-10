@@ -347,7 +347,7 @@ impl<'db> WhereClauseOwner<'db> {
         ItemKind::from(self).top_mod(db)
     }
 
-    pub fn where_clause(self, db: &'db dyn HirDb) -> WhereClauseId<'db> {
+    pub(in crate::core) fn where_clause(self, db: &'db dyn HirDb) -> WhereClauseId<'db> {
         match self {
             Self::Func(func) => func.where_clause(db),
             Self::Struct(struct_) => struct_.where_clause(db),
@@ -358,7 +358,7 @@ impl<'db> WhereClauseOwner<'db> {
         }
     }
 
-    pub fn where_clause_span(self) -> LazyWhereClauseSpan<'db> {
+    pub(in crate::core) fn where_clause_span(self) -> LazyWhereClauseSpan<'db> {
         match self {
             Self::Func(func) => func.span().where_clause(),
             Self::Struct(struct_) => struct_.span().where_clause(),
@@ -610,8 +610,8 @@ pub struct Func<'db> {
     pub name: Partial<IdentId<'db>>,
     pub attributes: AttrListId<'db>,
     pub(in crate::core) generic_params: GenericParamListId<'db>,
-    pub where_clause: WhereClauseId<'db>,
-    pub params: Partial<FuncParamListId<'db>>,
+    pub(in crate::core) where_clause: WhereClauseId<'db>,
+    pub(in crate::core) params: Partial<FuncParamListId<'db>>,
     pub(in crate::core) ret_type_ref: Option<TypeId<'db>>,
     pub modifier: ItemModifier,
     pub body: Option<Body<'db>>,
@@ -680,8 +680,8 @@ pub struct Struct<'db> {
     pub name: Partial<IdentId<'db>>,
     pub attributes: AttrListId<'db>,
     pub vis: Visibility,
-    pub generic_params: GenericParamListId<'db>,
-    pub where_clause: WhereClauseId<'db>,
+    pub(in crate::core) generic_params: GenericParamListId<'db>,
+    pub(in crate::core) where_clause: WhereClauseId<'db>,
     pub fields: FieldDefListId<'db>,
     pub top_mod: TopLevelMod<'db>,
 
@@ -746,8 +746,8 @@ pub struct Enum<'db> {
     pub name: Partial<IdentId<'db>>,
     pub attributes: AttrListId<'db>,
     pub vis: Visibility,
-    pub generic_params: GenericParamListId<'db>,
-    pub where_clause: WhereClauseId<'db>,
+    pub(in crate::core) generic_params: GenericParamListId<'db>,
+    pub(in crate::core) where_clause: WhereClauseId<'db>,
     pub(in crate::core) variants_list: VariantDefListId<'db>,
     pub top_mod: TopLevelMod<'db>,
 
@@ -811,7 +811,7 @@ pub struct TypeAlias<'db> {
     pub name: Partial<IdentId<'db>>,
     pub attributes: AttrListId<'db>,
     pub vis: Visibility,
-    pub generic_params: GenericParamListId<'db>,
+    pub(in crate::core) generic_params: GenericParamListId<'db>,
     pub(super) type_ref: Partial<TypeId<'db>>,
     pub top_mod: TopLevelMod<'db>,
 
@@ -838,8 +838,8 @@ pub struct Impl<'db> {
 
     pub(super) type_ref: super::Partial<TypeId<'db>>,
     pub attributes: AttrListId<'db>,
-    pub generic_params: GenericParamListId<'db>,
-    pub where_clause: WhereClauseId<'db>,
+    pub(in crate::core) generic_params: GenericParamListId<'db>,
+    pub(in crate::core) where_clause: WhereClauseId<'db>,
     pub top_mod: TopLevelMod<'db>,
 
     #[return_ref]
@@ -887,10 +887,10 @@ pub struct Trait<'db> {
 
     pub attributes: AttrListId<'db>,
     pub vis: Visibility,
-    pub generic_params: GenericParamListId<'db>,
+    pub(in crate::core) generic_params: GenericParamListId<'db>,
     #[return_ref]
     pub super_traits: Vec<TraitRefId<'db>>,
-    pub where_clause: WhereClauseId<'db>,
+    pub(in crate::core) where_clause: WhereClauseId<'db>,
     #[return_ref]
     pub types: Vec<AssocTyDecl<'db>>,
 
@@ -949,8 +949,8 @@ pub struct ImplTrait<'db> {
     pub trait_ref: Partial<TraitRefId<'db>>,
     pub(super) type_ref: Partial<TypeId<'db>>,
     pub attributes: AttrListId<'db>,
-    pub generic_params: GenericParamListId<'db>,
-    pub where_clause: WhereClauseId<'db>,
+    pub(in crate::core) generic_params: GenericParamListId<'db>,
+    pub(in crate::core) where_clause: WhereClauseId<'db>,
     #[return_ref]
     pub types: Vec<AssocTyDef<'db>>,
     pub top_mod: TopLevelMod<'db>,

@@ -1,6 +1,6 @@
 use crate::core::hir_def::{
     GenericParam, GenericParamOwner, GenericParamView, ItemKind, TraitRefId, TypeBound,
-    scope_graph::ScopeId, types::TypeId as HirTypeId,
+    WhereClauseOwner, scope_graph::ScopeId, types::TypeId as HirTypeId,
 };
 use common::indexmap::IndexSet;
 use either::Either;
@@ -71,7 +71,7 @@ pub(crate) fn collect_super_traits<'db>(
         }
     }
 
-    for pred in hir_trait.where_clause(db).data(db) {
+    for pred in WhereClauseOwner::Trait(hir_trait).clause(db).id.data(db) {
         if pred
             .ty
             .to_opt()
