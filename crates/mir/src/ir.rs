@@ -83,6 +83,12 @@ impl<'db> MirBody<'db> {
     }
 }
 
+impl<'db> Default for MirBody<'db> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 /// Identifier for a basic block (dense index into `MirBody::blocks`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct BasicBlockId(pub u32);
@@ -123,6 +129,12 @@ impl<'db> BasicBlock<'db> {
 
     pub fn set_terminator(&mut self, term: Terminator) {
         self.terminator = term;
+    }
+}
+
+impl<'db> Default for BasicBlock<'db> {
+    fn default() -> Self {
+        Self::new()
     }
 }
 

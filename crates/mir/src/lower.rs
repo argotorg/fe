@@ -305,7 +305,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                             return None;
                         }
                         let literal = value.data(self.db).clone();
-                        let literal_bits = literal.bits() as u64;
+                        let literal_bits = literal.bits();
                         if literal_bits > bits as u64 {
                             return None;
                         }
@@ -434,9 +434,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
     fn try_lower_call(&mut self, expr: ExprId) -> Option<ValueId> {
         let (args, callable) = match expr.data(self.db, self.body) {
             Partial::Present(Expr::Call(_, call_args)) => {
-                let Some(callable) = self.typed_body.callable_expr(expr) else {
-                    return None;
-                };
+                let callable = self.typed_body.callable_expr(expr)?;
                 let mut args = Vec::with_capacity(call_args.len());
                 for arg in call_args.iter() {
                     args.push(self.ensure_value(arg.expr));
@@ -444,9 +442,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                 (args, callable)
             }
             Partial::Present(Expr::MethodCall(receiver, _, _, call_args)) => {
-                let Some(callable) = self.typed_body.callable_expr(expr) else {
-                    return None;
-                };
+                let callable = self.typed_body.callable_expr(expr)?;
                 let mut args = Vec::with_capacity(call_args.len() + 1);
                 args.push(self.ensure_value(*receiver));
                 for arg in call_args.iter() {
@@ -491,7 +487,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                         MirInst::Let {
                             stmt: stmt_id,
                             pat: *pat,
-                            ty: ty.clone(),
+                            ty: *ty,
                             value: value_id,
                         },
                     );
