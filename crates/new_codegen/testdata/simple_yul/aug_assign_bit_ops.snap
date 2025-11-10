@@ -1,0 +1,18 @@
+---
+source: crates/new_codegen/tests/yul.rs
+assertion_line: 38
+expression: output
+input_file: testdata/simple_yul/aug_assign_bit_ops.fe
+---
+{
+  function aug_assign_bit_ops(x, y) -> ret {
+    let v0 := x
+    v0 := exp(v0, y)
+    v0 := shl(v0, 3)
+    v0 := shr(v0, 1)
+    v0 := and(v0, 255)
+    v0 := or(v0, 1)
+    v0 := xor(v0, 2)
+    ret := v0
+  }
+}

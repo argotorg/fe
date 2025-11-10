@@ -352,11 +352,12 @@ impl<'db> YulEmitter<'db> {
                         ArithBinOp::Mul => "mul",
                         ArithBinOp::Div => "div",
                         ArithBinOp::Rem => "mod",
-                        _ => {
-                            return Err(YulError::Unsupported(
-                                "augmented assignment only supports add/sub/mul/div/mod".into(),
-                            ));
-                        }
+                        ArithBinOp::Pow => "exp",
+                        ArithBinOp::LShift => "shl",
+                        ArithBinOp::RShift => "shr",
+                        ArithBinOp::BitAnd => "and",
+                        ArithBinOp::BitOr => "or",
+                        ArithBinOp::BitXor => "xor",
                     };
                     docs.push(YulDoc::line(format!(
                         "{yul_name} := {func}({yul_name}, {rhs})"
