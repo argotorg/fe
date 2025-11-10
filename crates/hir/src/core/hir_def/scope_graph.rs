@@ -308,7 +308,7 @@ impl<'db> ScopeId<'db> {
                 param.name().to_opt()
             }
 
-            ScopeId::TraitType(t, idx) => t.types(db)[idx as usize].name.to_opt(),
+            ScopeId::TraitType(t, idx) => t.assoc_ty_by_index(db, idx as usize).name.to_opt(),
 
             ScopeId::Block(..) => None,
         }
@@ -677,7 +677,7 @@ impl<'db> FromScope<'db> for &'db AssocTyDecl<'db> {
         let ScopeId::TraitType(t, idx) = scope else {
             return None;
         };
-        Some(&t.types(db)[idx as usize])
+        Some(t.assoc_ty_by_index(db, idx as usize))
     }
 }
 

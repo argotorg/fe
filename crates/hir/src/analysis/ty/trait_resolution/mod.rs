@@ -250,9 +250,9 @@ impl<'db> PredicateListId<'db> {
 
             // 2. Collect associated type bounds
             let hir_trait = pred.def(db).trait_(db);
-            for trait_type in hir_trait.types(db) {
+            for trait_type in hir_trait.assoc_types(db) {
                 // Get the associated type name
-                let Some(assoc_ty_name) = trait_type.name.to_opt() else {
+                let Some(assoc_ty_name) = trait_type.name(db) else {
                     continue;
                 };
 
@@ -263,7 +263,7 @@ impl<'db> PredicateListId<'db> {
                     PredicateListId::new(db, all_predicates.iter().copied().collect::<Vec<_>>());
 
                 // Process each bound on the associated type
-                for bound in &trait_type.bounds {
+                for bound in trait_type.bounds(db) {
                     if let crate::core::hir_def::params::TypeBound::Trait(trait_ref) = bound {
                         // Lower the trait reference with the associated type as Self
                         // We need to convert the HIR trait ref to a TraitInstId

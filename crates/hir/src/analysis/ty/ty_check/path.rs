@@ -183,13 +183,16 @@ impl<'db> RecordLike<'db> {
         match self {
             RecordLike::Type(ty) => {
                 let adt_def = ty.adt_def(db)?;
-                let (hir_field_list_id, adt_field_list_ref) = match adt_def.adt_ref(db) {
-                    AdtRef::Struct(s) => Some((s.fields(db), &adt_def.fields(db)[0])),
-                    AdtRef::Contract(c) => Some((c.fields(db), &adt_def.fields(db)[0])),
-                    _ => None,
-                }?;
-
-                let field_idx = hir_field_list_id.field_idx(db, name)?;
+                let field_idx = match adt_def.adt_ref(db) {
+                    AdtRef::Struct(s) => crate::hir_def::FieldParent::Struct(s)
+                        .fields(db)
+                        .position(|v| v.name(db) == Some(name))?,
+                    AdtRef::Contract(c) => crate::hir_def::FieldParent::Contract(c)
+                        .fields(db)
+                        .position(|v| v.name(db) == Some(name))?,
+                    _ => return None,
+                };
+                let adt_field_list_ref = &adt_def.fields(db)[0];
                 let args = ty.generic_args(db);
                 let field_ty = adt_field_list_ref.ty(db, field_idx).instantiate(db, args);
 
@@ -201,14 +204,13 @@ impl<'db> RecordLike<'db> {
             }
             RecordLike::Variant(variant) => {
                 let adt_def = variant.ty.adt_def(db)?;
-                let (hir_field_list_id, adt_field_list_ref) = match variant.kind(db) {
-                    HirVariantKind::Record(fields_id) => {
-                        Some((fields_id, &adt_def.fields(db)[variant.variant.idx as usize]))
-                    }
-                    _ => None,
-                }?;
-
-                let field_idx = hir_field_list_id.field_idx(db, name)?;
+                let field_idx = match variant.kind(db) {
+                    HirVariantKind::Record(_) => crate::hir_def::FieldParent::Variant(variant.variant)
+                        .fields(db)
+                        .position(|v| v.name(db) == Some(name))?,
+                    _ => return None,
+                };
+                let adt_field_list_ref = &adt_def.fields(db)[variant.variant.idx as usize];
                 let args = variant.ty.generic_args(db);
                 let field_ty = adt_field_list_ref.ty(db, field_idx).instantiate(db, args);
 
@@ -317,7 +319,7 @@ impl<'db> RecordLike<'db> {
                 }
             }
             RecordLike::Variant(variant) => {
-                let expected_sub_pat = variant.variant.def(db).format_initializer_args(db);
+                let expected_sub_pat = variant.variant.format_initializer_args(db);
                 let path = variant.path.pretty_print(db);
                 Some(format!("{path}{expected_sub_pat}"))
             }

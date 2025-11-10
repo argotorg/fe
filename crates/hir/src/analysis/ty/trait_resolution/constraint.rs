@@ -207,9 +207,9 @@ pub fn collect_constraints<'db>(
         }
     }
 
-    // Where-clause predicates
-    if let Some(where_clause) = owner.where_clause(db) {
-        for w_pred in where_clause.data(db) {
+    // Where-clause predicates (via semantic view)
+    if let Some(w_owner) = owner.where_clause_owner() {
+        for w_pred in w_owner.clause(db).id.data(db) {
             let Some(hir_ty) = w_pred.ty.to_opt() else {
                 continue;
             };

@@ -148,13 +148,10 @@ pub fn analyze_trait<'db>(
     let _trait_def = lower_trait(db, trait_);
     let assumptions = collect_constraints(db, trait_.into()).instantiate_identity();
 
-    for assoc_type in trait_.types(db) {
-        if let Some(default_ty) = assoc_type.default {
-            // Lower the default type
-            let default_ty = lower_hir_ty(db, default_ty, trait_.scope(), assumptions);
-
+    for assoc in trait_.assoc_types(db) {
+        if let Some(default_ty) = assoc.default_ty(db) {
             // Check each bound on the associated type
-            for bound in &assoc_type.bounds {
+            for bound in assoc.bounds(db) {
                 let TypeBound::Trait(trait_ref) = bound else {
                     continue;
                 };
@@ -1375,13 +1372,13 @@ fn analyze_impl_trait_specific_error<'db>(
     //    and that they satisfy their bounds
     let trait_hir = trait_def.trait_(db);
     let impl_types = implementor.instantiate_identity().types(db);
-    for assoc_type in trait_hir.types(db) {
-        let Some(name) = assoc_type.name.to_opt() else {
+    for assoc_type in trait_hir.assoc_types(db) {
+        let Some(name) = assoc_type.name(db) else {
             continue;
         };
 
         let impl_ty = impl_types.get(&name);
-        if impl_ty.is_none() && assoc_type.default.is_none() {
+        if impl_ty.is_none() && assoc_type.default_ty(db).is_none() {
             diags.push(
                 ImplDiag::MissingAssociatedType {
                     primary: impl_trait.span().ty().into(),
@@ -1396,7 +1393,7 @@ fn analyze_impl_trait_specific_error<'db>(
         };
 
         // Check that the implemented associated type satisfies its bounds
-        for bound in &assoc_type.bounds {
+        for bound in assoc_type.bounds(db) {
             if let TypeBound::Trait(trait_ref) = bound {
                 match lower_trait_ref(db, impl_ty, *trait_ref, impl_trait.scope(), assumptions) {
                     Ok(bound_inst) => {

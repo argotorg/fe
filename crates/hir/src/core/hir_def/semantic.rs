@@ -376,6 +376,17 @@ impl<'db> Trait<'db> {
     // - assoc types default bounds (per‑bound views + diags)
     // - generic_params_diags(db), where_clause_diags(db)
     // - analyze(db) -> Vec<TyDiagCollection>
+
+    /// Iterate associated types as contextual views.
+    pub fn assoc_types(self, db: &'db dyn HirDb) -> impl Iterator<Item = TraitAssocTypeView<'db>> + 'db {
+        let len = self.types(db).len();
+        (0..len).map(move |idx| TraitAssocTypeView { owner: self, idx })
+    }
+
+    /// View for the associated type at `idx`.
+    pub fn assoc_type_view_at(self, _db: &'db dyn HirDb, idx: usize) -> TraitAssocTypeView<'db> {
+        TraitAssocTypeView { owner: self, idx }
+    }
 }
 
 impl<'db> Impl<'db> {
@@ -538,6 +549,42 @@ impl<'db> GenericParamView<'db> {
     }
 }
 
+// Associated type views -----------------------------------------------------
+
+#[derive(Clone, Copy, Debug)]
+pub struct TraitAssocTypeView<'db> {
+    pub owner: Trait<'db>,
+    pub idx: usize,
+}
+
+impl<'db> TraitAssocTypeView<'db> {
+    fn decl(self, db: &'db dyn HirDb) -> &'db crate::core::hir_def::AssocTyDecl<'db> {
+        &self.owner.types(db)[self.idx]
+    }
+
+    pub fn name(self, db: &'db dyn HirDb) -> Option<IdentId<'db>> {
+        self.decl(db).name.to_opt()
+    }
+
+    pub fn span(self) -> crate::span::item::LazyTraitTypeSpan<'db> {
+        self.owner.span().item_list().assoc_type(self.idx)
+    }
+
+    /// Raw bounds for this associated type (HIR). Prefer semantic checks where possible.
+    pub fn bounds(self, db: &'db dyn HirDb) -> &'db [TypeBound<'db>] {
+        &self.decl(db).bounds
+    }
+
+    /// Semantic default type for this associated type, lowered in the trait's
+    /// scope using the trait's own constraints. Returns None if no default.
+    pub fn default_ty(self, db: &'db dyn HirAnalysisDb) -> Option<crate::analysis::ty::ty_def::TyId<'db>> {
+        let hir = self.decl(db).default?;
+        let trait_ = self.owner;
+        let assumptions = constraints_for(db, trait_.into());
+        Some(lower_hir_ty(db, hir, trait_.scope(), assumptions))
+    }
+}
+
 #[derive(Clone, Copy, Debug)]
 pub struct VariantView<'db> {
     pub owner: Enum<'db>,
@@ -600,6 +647,16 @@ impl<'db> VariantView<'db> {
         );
         &def.fields(db)[self.idx]
     }
+
+    /// Iterates record fields (empty for non-record variants) as contextual views.
+    pub fn fields(self, db: &'db dyn HirDb) -> impl Iterator<Item = FieldView<'db>> + 'db {
+        let parent = FieldParent::Variant(EnumVariant::new(self.owner, self.idx));
+        let len = match self.kind(db) {
+            VariantKind::Record(_) => parent.fields_list(db).data(db).len(),
+            _ => 0,
+        };
+        (0..len).map(move |idx| FieldView { parent, idx })
+    }
 }
 
 // Field views --------------------------------------------------------------
@@ -618,7 +675,7 @@ impl<'db> FieldView<'db> {
 
     /// Returns the HIR type reference (syntactic) for this field.
     /// Prefer using `ty` when the semantic type is needed.
-    /// Kept private to avoid exposing raw HIR outside `core`.
+    /// Temporary public exposure via `type_ref___tmp` below is for migration.
     fn hir_type_ref(self, db: &'db dyn HirDb) -> Partial<TypeId<'db>> {
         let list = self.parent.fields_list(db);
         list.data(db)[self.idx].type_ref
@@ -636,6 +693,13 @@ impl<'db> FieldView<'db> {
         db: &'db dyn HirAnalysisDb,
     ) -> (&'db crate::analysis::ty::adt_def::AdtField<'db>, usize) {
         (self.parent.as_adt_fields(db), self.idx)
+    }
+
+    /// Temporary access to the underlying HIR type reference for this field.
+    /// Prefer `ty(db)` for semantic type. Exists to support in-progress lowerings
+    /// that still operate on HIR type refs.
+    pub fn type_ref___tmp(self, db: &'db dyn HirDb) -> Partial<TypeId<'db>> {
+        self.hir_type_ref(db)
     }
 }
 

@@ -24,11 +24,11 @@ pub fn lower_adt<'db>(db: &'db dyn HirAnalysisDb, adt: AdtRef<'db>) -> AdtDef<'d
     let (params, variants) = match adt {
         AdtRef::Contract(c) => (
             GenericParamTypeSet::empty(db, scope),
-            vec![collect_field_types(db, scope, c.fields(db))],
+            vec![collect_field_types_semantic(db, scope, crate::hir_def::FieldParent::Contract(c))],
         ),
         AdtRef::Struct(s) => (
             collect_generic_params(db, s.into()),
-            vec![collect_field_types(db, scope, s.fields(db))],
+            vec![collect_field_types_semantic(db, scope, crate::hir_def::FieldParent::Struct(s))],
         ),
         AdtRef::Enum(e) => (
             collect_generic_params(db, e.into()),
@@ -39,15 +39,15 @@ pub fn lower_adt<'db>(db: &'db dyn HirAnalysisDb, adt: AdtRef<'db>) -> AdtDef<'d
     AdtDef::new(db, adt, params, variants)
 }
 
-fn collect_field_types<'db>(
+fn collect_field_types_semantic<'db>(
     db: &'db dyn HirAnalysisDb,
     scope: ScopeId<'db>,
-    fields: crate::core::hir_def::FieldDefListId<'db>,
+    parent: crate::hir_def::FieldParent<'db>,
 ) -> AdtField<'db> {
-    let tys = fields
-        .data(db)
-        .iter()
-        .map(|f| f.field_type_ref___tmp())
+    use crate::hir_def::semantic::FieldView;
+    let tys = parent
+        .fields(db)
+        .map(|v| v.type_ref___tmp(db))
         .collect();
     AdtField::new(tys, scope)
 }
@@ -61,10 +61,9 @@ fn collect_enum_variant_types<'db>(
         .map(|variant| {
             let tys = match variant.kind(db) {
                 VariantKind::Tuple(tuple_id) => tuple_id.data(db).clone(),
-                VariantKind::Record(fields) => fields
-                    .data(db)
-                    .iter()
-                    .map(|f| f.field_type_ref___tmp())
+                VariantKind::Record(_) => variant
+                    .fields(db)
+                    .map(|v| v.type_ref___tmp(db))
                     .collect(),
                 VariantKind::Unit => vec![],
             };

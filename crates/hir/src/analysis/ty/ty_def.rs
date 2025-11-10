@@ -955,10 +955,11 @@ impl<'db> AssocTy<'db> {
     pub fn scope(&self, db: &'db dyn HirAnalysisDb) -> ScopeId<'db> {
         // Find the index of this associated type in the trait's type list
         let trait_def = self.trait_.def(db).trait_(db);
-        let types = trait_def.types(db);
-        let idx = types
-            .iter()
-            .position(|t| t.name.to_opt() == Some(self.name))
+        let idx = trait_def
+            .assoc_types(db)
+            .enumerate()
+            .find(|(_, t)| t.name(db) == Some(self.name))
+            .map(|(i, _)| i)
             .unwrap();
         ScopeId::TraitType(trait_def, idx as u16)
     }

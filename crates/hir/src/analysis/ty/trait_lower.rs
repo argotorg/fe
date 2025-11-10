@@ -107,14 +107,14 @@ pub(crate) fn lower_impl_trait<'db>(
     // (including Self). This ensures defaults like `type Output = Self` resolve
     // to the implementor's concrete self type rather than remaining as `Self`.
     let trait_scope = trait_.def(db).trait_(db).scope();
-    for t in trait_.def(db).trait_(db).types(db).iter() {
-        let (Some(name), Some(default)) = (t.name.to_opt(), t.default) else {
+    for t in trait_.def(db).trait_(db).assoc_types(db) {
+        let (Some(name), Some(default)) = (t.name(db), t.default_ty(db)) else {
             continue;
         };
 
         types.entry(name).or_insert_with(|| {
             // Lower the default in the trait scope so `Self` and trait params are visible
-            let lowered = lower_hir_ty(db, default, trait_scope, assumptions);
+            let lowered = default;
             // Instantiate all trait parameters (including `Self` at idx 0) with
             // this implementor's concrete arguments so `Self` becomes the impl's
             // self type and other generics (if used) are substituted too.

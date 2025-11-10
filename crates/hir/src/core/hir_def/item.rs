@@ -326,7 +326,7 @@ impl<'db> GenericParamOwner<'db> {
         WhereClauseOwner::from_item_opt(item)
     }
 
-    pub fn where_clause(self, db: &'db dyn HirDb) -> Option<WhereClauseId<'db>> {
+    pub(in crate::core) fn where_clause(self, db: &'db dyn HirDb) -> Option<WhereClauseId<'db>> {
         self.where_clause_owner()
             .map(|owner| owner.where_clause(db))
     }
@@ -574,7 +574,7 @@ pub struct Mod<'db> {
     id: TrackedItemId<'db>,
 
     pub name: Partial<IdentId<'db>>,
-    pub attributes: AttrListId<'db>,
+    pub(in crate::core) attributes: AttrListId<'db>,
     pub vis: Visibility,
 
     pub top_mod: TopLevelMod<'db>,
@@ -608,7 +608,7 @@ pub struct Func<'db> {
     id: TrackedItemId<'db>,
 
     pub name: Partial<IdentId<'db>>,
-    pub attributes: AttrListId<'db>,
+    pub(in crate::core) attributes: AttrListId<'db>,
     pub(in crate::core) generic_params: GenericParamListId<'db>,
     pub(in crate::core) where_clause: WhereClauseId<'db>,
     pub(in crate::core) params: Partial<FuncParamListId<'db>>,
@@ -678,11 +678,11 @@ pub struct Struct<'db> {
     id: TrackedItemId<'db>,
 
     pub name: Partial<IdentId<'db>>,
-    pub attributes: AttrListId<'db>,
+    pub(in crate::core) attributes: AttrListId<'db>,
     pub vis: Visibility,
     pub(in crate::core) generic_params: GenericParamListId<'db>,
     pub(in crate::core) where_clause: WhereClauseId<'db>,
-    pub fields: FieldDefListId<'db>,
+    pub(in crate::core) fields: FieldDefListId<'db>,
     pub top_mod: TopLevelMod<'db>,
 
     #[return_ref]
@@ -719,9 +719,9 @@ pub struct Contract<'db> {
     id: TrackedItemId<'db>,
 
     pub name: Partial<IdentId<'db>>,
-    pub attributes: AttrListId<'db>,
+    pub(in crate::core) attributes: AttrListId<'db>,
     pub vis: Visibility,
-    pub fields: FieldDefListId<'db>,
+    pub(in crate::core) fields: FieldDefListId<'db>,
     pub top_mod: TopLevelMod<'db>,
 
     #[return_ref]
@@ -744,7 +744,7 @@ pub struct Enum<'db> {
     id: TrackedItemId<'db>,
 
     pub name: Partial<IdentId<'db>>,
-    pub attributes: AttrListId<'db>,
+    pub(in crate::core) attributes: AttrListId<'db>,
     pub vis: Visibility,
     pub(in crate::core) generic_params: GenericParamListId<'db>,
     pub(in crate::core) where_clause: WhereClauseId<'db>,
@@ -781,7 +781,7 @@ impl<'db> EnumVariant<'db> {
             idx: idx as u16,
         }
     }
-    pub fn def(self, db: &'db dyn HirDb) -> &'db VariantDef<'db> {
+    pub(in crate::core) fn def(self, db: &'db dyn HirDb) -> &'db VariantDef<'db> {
         &self.enum_.variants_list(db).data(db)[self.idx as usize]
     }
 
@@ -793,12 +793,22 @@ impl<'db> EnumVariant<'db> {
         Some(self.def(db).name.to_opt()?.data(db))
     }
 
+    pub fn ident(self, db: &'db dyn HirDb) -> Option<IdentId<'db>> {
+        self.def(db).name.to_opt()
+    }
+
     pub fn scope(self) -> ScopeId<'db> {
         ScopeId::Variant(self)
     }
 
     pub fn span(self) -> LazyVariantDefSpan<'db> {
         self.enum_.variant_span(self.idx as usize)
+    }
+
+    /// Returns the human readable initializer args string for this variant
+    /// (delegates to the underlying VariantDef helper).
+    pub fn format_initializer_args(&self, db: &dyn HirDb) -> String {
+        self.def(db).format_initializer_args(db)
     }
 }
 
@@ -809,7 +819,7 @@ pub struct TypeAlias<'db> {
     id: TrackedItemId<'db>,
 
     pub name: Partial<IdentId<'db>>,
-    pub attributes: AttrListId<'db>,
+    pub(in crate::core) attributes: AttrListId<'db>,
     pub vis: Visibility,
     pub(in crate::core) generic_params: GenericParamListId<'db>,
     pub(super) type_ref: Partial<TypeId<'db>>,
@@ -836,8 +846,8 @@ pub struct Impl<'db> {
     #[id]
     id: TrackedItemId<'db>,
 
-    pub(super) type_ref: super::Partial<TypeId<'db>>,
-    pub attributes: AttrListId<'db>,
+    pub(in crate::core) type_ref: super::Partial<TypeId<'db>>,
+    pub(in crate::core) attributes: AttrListId<'db>,
     pub(in crate::core) generic_params: GenericParamListId<'db>,
     pub(in crate::core) where_clause: WhereClauseId<'db>,
     pub top_mod: TopLevelMod<'db>,
@@ -885,14 +895,14 @@ pub struct Trait<'db> {
 
     pub name: Partial<IdentId<'db>>,
 
-    pub attributes: AttrListId<'db>,
+    pub(in crate::core) attributes: AttrListId<'db>,
     pub vis: Visibility,
     pub(in crate::core) generic_params: GenericParamListId<'db>,
     #[return_ref]
     pub super_traits: Vec<TraitRefId<'db>>,
     pub(in crate::core) where_clause: WhereClauseId<'db>,
     #[return_ref]
-    pub types: Vec<AssocTyDecl<'db>>,
+    pub(in crate::core) types: Vec<AssocTyDecl<'db>>,
 
     pub top_mod: TopLevelMod<'db>,
 
@@ -931,6 +941,19 @@ impl<'db> Trait<'db> {
             .iter()
             .find(|trait_type| trait_type.name.to_opt() == Some(name))
     }
+
+    /// Returns the associated type declaration by index as used in scope graph.
+    pub fn assoc_ty_by_index(self, db: &'db dyn HirDb, idx: usize) -> &'db AssocTyDecl<'db> {
+        &self.types(db)[idx]
+    }
+
+    /// Iterates associated type declarations of this trait (raw HIR). Keep internal.
+    pub(in crate::core) fn assoc_type_decls(
+        self,
+        db: &'db dyn HirDb,
+    ) -> impl Iterator<Item = &'db AssocTyDecl<'db>> + 'db {
+        self.types(db).iter()
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, salsa::Update)]
@@ -947,8 +970,8 @@ pub struct ImplTrait<'db> {
     id: TrackedItemId<'db>,
 
     pub trait_ref: Partial<TraitRefId<'db>>,
-    pub(super) type_ref: Partial<TypeId<'db>>,
-    pub attributes: AttrListId<'db>,
+    pub(in crate::core) type_ref: Partial<TypeId<'db>>,
+    pub(in crate::core) attributes: AttrListId<'db>,
     pub(in crate::core) generic_params: GenericParamListId<'db>,
     pub(in crate::core) where_clause: WhereClauseId<'db>,
     #[return_ref]

@@ -471,7 +471,7 @@ impl<'db> PathRes<'db> {
             PathRes::EnumVariant(v) => Some(format!(
                 "{}::{}",
                 ty_path(v.ty).unwrap_or_else(|| "<missing>".into()),
-                v.variant.def(db).name.to_opt()?.data(db)
+                v.variant.name(db)?
             )),
             PathRes::Const(const_, _) => const_.scope().pretty_path(db),
             r @ (PathRes::Trait(..) | PathRes::Mod(..) | PathRes::FuncParam(..)) => {
@@ -555,7 +555,7 @@ impl<'db> ResolvedVariant<'db> {
         Some(FuncDef::new(
             db,
             HirFuncDefKind::VariantCtor(self.variant),
-            self.variant.def(db).name.unwrap(),
+            self.variant.ident(db).unwrap(),
             *adt.param_set(db),
             arg_tys,
             Binder::bind(ret_ty),
@@ -929,13 +929,17 @@ pub fn find_associated_type<'db>(
         let trait_def = assoc_ty.trait_.def(db);
         let trait_ = trait_def.trait_(db);
 
-        if let Some(assoc_ty_decl) = trait_.assoc_ty(db, assoc_ty.name) {
-            for bound in &assoc_ty_decl.bounds {
+        let assoc_name = assoc_ty.name;
+        for view in trait_.assoc_types(db) {
+            if view.name(db) != Some(assoc_name) {
+                continue;
+            }
+            for bound in view.bounds(db) {
                 let TypeBound::Trait(trait_ref) = bound else {
-                    todo!("assoc ty kind bounds")
+                    // TODO: assoc type kind bounds
+                    continue;
                 };
                 let self_ty = ty_with_subst.fold_with(db, &mut table);
-
                 if let Ok(inst) = lower_trait_ref(db, self_ty, *trait_ref, scope, assumptions)
                     && let Some(assoc_ty) = inst.assoc_ty(db, name)
                 {
@@ -1081,7 +1085,7 @@ pub fn resolve_name_res<'db>(
 
             ScopeId::TraitType(t, idx) => {
                 let trait_def = lower_trait(db, t);
-                let trait_type = &t.types(db)[idx as usize];
+                let trait_type = t.assoc_ty_by_index(db, idx as usize);
 
                 let params = collect_generic_params(db, t.into());
                 let self_ty = params.trait_self(db).unwrap();
