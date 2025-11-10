@@ -937,14 +937,13 @@ pub fn find_associated_type<'db>(
         // Evaluate trait bounds declared on the associated type using the owner-trait Self
         // for generic `Self` occurrences inside the bound (e.g., `Encode<Self>`).
         let assoc_name = assoc_ty.name;
-        let before = candidates.len();
+        let _before = candidates.len();
         for view in trait_.assoc_types(db) {
             if view.name(db) != Some(assoc_name) {
                 continue;
             }
             let subject = ty_with_subst.fold_with(db, &mut table);
-            let owner_self = assoc_ty.trait_.self_ty(db);
-            for inst in view.trait_bounds_for_assoc_with_in_env(db, subject, owner_self, assumptions) {
+            for inst in view.with_subject(subject).bounds_in(db, assumptions) {
                 if inst.def(db).trait_(db).assoc_ty(db, name).is_some() {
                     let assoc_ty = TyId::assoc_ty(db, inst, name);
                     let folded = assoc_ty.fold_with(db, &mut table);
@@ -954,20 +953,12 @@ pub fn find_associated_type<'db>(
         }
 
         // Fallback to raw HIR bounds if the view-based path didn’t add anything.
-        if candidates.len() == before {
+        if candidates.len() == _before {
             if let Some(decl) = trait_.assoc_ty(db, assoc_name) {
                 let subject = ty_with_subst.fold_with(db, &mut table);
-                let owner_self = assoc_ty.trait_.self_ty(db);
                 for bound in &decl.bounds {
                     if let TypeBound::Trait(trait_ref) = bound {
-                        if let Ok(inst) = crate::analysis::ty::trait_lower::lower_trait_ref_with_owner_self(
-                            db,
-                            subject,
-                            *trait_ref,
-                            scope,
-                            assumptions,
-                            owner_self,
-                        ) {
+                        if let Ok(inst) = crate::analysis::ty::trait_lower::lower_trait_ref(db, subject, *trait_ref, scope, assumptions) {
                             if inst.def(db).trait_(db).assoc_ty(db, name).is_some() {
                                 let assoc_ty = TyId::assoc_ty(db, inst, name);
                                 let folded = assoc_ty.fold_with(db, &mut table);

@@ -146,11 +146,11 @@ pub fn analyze_trait<'db>(
     // Check associated type defaults satisfy their bounds
     let _trait_def = lower_trait(db, trait_);
     let assumptions = collect_constraints(db, trait_.into()).instantiate_identity();
-    let owner_self = collect_generic_params(db, trait_.into()).trait_self(db).unwrap();
+    // owner_self not needed here; `with_subject(...).bounds(db)` handles owner context.
 
     for assoc in trait_.assoc_types(db) {
         if let Some(default_ty) = assoc.default_ty(db) {
-            for trait_inst in assoc.trait_bounds_for_assoc_with(db, default_ty, owner_self) {
+            for trait_inst in assoc.with_subject(default_ty).bounds(db) {
                 let canonical_inst = Canonical::new(db, trait_inst);
                 match is_goal_satisfiable(
                     db,
@@ -158,7 +158,7 @@ pub fn analyze_trait<'db>(
                     canonical_inst,
                     assumptions,
                 ) {
-                    GoalSatisfiability::Satisfied(_) => continue,
+                    GoalSatisfiability::Satisfied(_) => {}
                     GoalSatisfiability::UnSat(subgoal) => {
                         diags.push(
                             TraitConstraintDiag::TraitBoundNotSat {
@@ -1375,12 +1375,13 @@ fn analyze_impl_trait_specific_error<'db>(
         };
 
         // Check that the implemented associated type satisfies its bounds
-        for bound_inst in assoc_type.trait_bounds_for_assoc_with(
-            db,
-            impl_ty,
-            implementor.instantiate_identity().self_ty(db),
-        ) {
-            let canonical_bound = Canonical::new(db, bound_inst);
+        for bound in assoc_type.bounds(db) {
+            if let Some(bound_inst) = bound.as_trait_inst_with_subject_and_owner(
+                db,
+                impl_ty,
+                implementor.instantiate_identity().self_ty(db),
+            ) {
+                let canonical_bound = Canonical::new(db, bound_inst);
             if let GoalSatisfiability::UnSat(subgoal) = is_goal_satisfiable(
                 db,
                 impl_trait.top_mod(db).ingot(db),
@@ -1401,6 +1402,7 @@ fn analyze_impl_trait_specific_error<'db>(
                     }
                     .into(),
                 );
+            }
             }
         }
     }

@@ -75,8 +75,10 @@ pub(crate) fn collect_super_traits<'db>(
         if !pred.is_self_subject(db) {
             continue;
         }
-        for inst in pred.trait_bounds_lowered_with_subject(db, self_param) {
-            super_traits.insert(Binder::bind(inst));
+        for bound in pred.bounds(db) {
+            if let Some(inst) = bound.as_trait_inst_with_subject(db, self_param) {
+                super_traits.insert(Binder::bind(inst));
+            }
         }
     }
 

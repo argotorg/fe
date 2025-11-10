@@ -258,21 +258,16 @@ impl<'db> PredicateListId<'db> {
                 // Create the associated type: Self::AssocType
                 let assoc_ty = TyId::assoc_ty(db, pred, assoc_ty_name);
 
-                let assumptions =
+                let _assumptions =
                     PredicateListId::new(db, all_predicates.iter().copied().collect::<Vec<_>>());
 
-                for trait_inst in trait_type.trait_bounds_for_assoc_with(db, assoc_ty, pred.self_ty(db)) {
-                    // Substitute `Self` and associated types in the bound using
-                    // the original predicate's trait instance (e.g. map
-                    // `<Self as IntoIterator>::Item` to the concrete binding from
-                    // `<T as IntoIterator>` when available).
-                    let mut subst = AssocTySubst::new(pred);
-                    let trait_inst = trait_inst.fold_with(db, &mut subst);
-
-                    if all_predicates.insert(trait_inst) {
-                        // New predicate added, add to worklist
-                        worklist.push(trait_inst);
-                    }
+                for mut trait_inst in trait_type.with_subject(assoc_ty).bounds(db) {
+                        // Substitute `Self` and associated types using the original predicate instance
+                        let mut subst = AssocTySubst::new(pred);
+                        trait_inst = trait_inst.fold_with(db, &mut subst);
+                        if all_predicates.insert(trait_inst) {
+                            worklist.push(trait_inst);
+                        }
                 }
             }
         }
