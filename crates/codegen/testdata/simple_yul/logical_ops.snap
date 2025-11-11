@@ -1,5 +1,5 @@
 ---
-source: crates/new_codegen/tests/yul.rs
+source: crates/codegen/tests/yul.rs
 expression: output
 input_file: testdata/simple_yul/logical_ops.fe
 ---

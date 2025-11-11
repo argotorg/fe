@@ -1,7 +1,7 @@
 use common::InputDb;
 use dir_test::{Fixture, dir_test};
 use driver::DriverDataBase;
-use fe_new_codegen::emit_module_yul;
+use fe_codegen::emit_module_yul;
 use test_utils::snap_test;
 use url::Url;
 

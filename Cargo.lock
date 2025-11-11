@@ -796,11 +796,11 @@ dependencies = [
  "clap",
  "cranelift-entity",
  "dir-test",
+ "fe-codegen",
  "fe-common",
  "fe-driver",
  "fe-hir",
  "fe-mir",
- "fe-new-codegen",
  "fe-resolver",
  "fe-test-utils",
  "smol_str",
@@ -820,6 +820,21 @@ dependencies = [
  "tracing",
  "url",
  "walkdir",
+]
+
+[[package]]
+name = "fe-codegen"
+version = "0.1.0"
+dependencies = [
+ "dir-test",
+ "fe-common",
+ "fe-driver",
+ "fe-hir",
+ "fe-mir",
+ "fe-test-utils",
+ "hex",
+ "rustc-hash 2.1.1",
+ "url",
 ]
 
 [[package]]
@@ -950,21 +965,6 @@ dependencies = [
  "fe-hir-analysis",
  "num-bigint",
  "rustc-hash 2.1.1",
-]
-
-[[package]]
-name = "fe-new-codegen"
-version = "0.1.0"
-dependencies = [
- "dir-test",
- "fe-common",
- "fe-driver",
- "fe-hir",
- "fe-mir",
- "fe-test-utils",
- "hex",
- "rustc-hash 2.1.1",
- "url",
 ]
 
 [[package]]

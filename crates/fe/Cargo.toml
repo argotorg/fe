@@ -15,7 +15,7 @@ smol_str.workspace = true
 hir.workspace = true
 mir.workspace = true
 cranelift-entity.workspace = true
-new_codegen = { path = "../new_codegen", package = "fe-new-codegen" }
+codegen = { path = "../codegen", package = "fe-codegen" }
 
 [dev-dependencies]
 dir-test.workspace = true

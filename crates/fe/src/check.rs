@@ -1,10 +1,10 @@
 use camino::Utf8PathBuf;
+use codegen::emit_module_yul;
 use common::InputDb;
 use cranelift_entity::EntityRef;
 use driver::DriverDataBase;
 use hir::hir_def::{ExprId, HirIngot, PatId, StmtId, TopLevelMod};
 use mir::{MirInst, Terminator, ValueId, lower_module};
-use new_codegen::emit_module_yul;
 use url::Url;
 
 pub fn check(path: &Utf8PathBuf, dump_mir: bool, emit_yul_min: bool) {
