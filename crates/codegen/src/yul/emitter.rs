@@ -346,22 +346,20 @@ impl<'db> YulEmitter<'db> {
                         YulError::Unsupported("assignment to unknown binding".into())
                     })?;
                     let rhs = self.lower_value(*value, state)?;
-                    let func = match op {
-                        ArithBinOp::Add => "add",
-                        ArithBinOp::Sub => "sub",
-                        ArithBinOp::Mul => "mul",
-                        ArithBinOp::Div => "div",
-                        ArithBinOp::Rem => "mod",
-                        ArithBinOp::Pow => "exp",
-                        ArithBinOp::LShift => "shl",
-                        ArithBinOp::RShift => "shr",
-                        ArithBinOp::BitAnd => "and",
-                        ArithBinOp::BitOr => "or",
-                        ArithBinOp::BitXor => "xor",
+                    let assignment = match op {
+                        ArithBinOp::Add => format!("add({yul_name}, {rhs})"),
+                        ArithBinOp::Sub => format!("sub({yul_name}, {rhs})"),
+                        ArithBinOp::Mul => format!("mul({yul_name}, {rhs})"),
+                        ArithBinOp::Div => format!("div({yul_name}, {rhs})"),
+                        ArithBinOp::Rem => format!("mod({yul_name}, {rhs})"),
+                        ArithBinOp::Pow => format!("exp({yul_name}, {rhs})"),
+                        ArithBinOp::LShift => format!("shl({rhs}, {yul_name})"),
+                        ArithBinOp::RShift => format!("shr({rhs}, {yul_name})"),
+                        ArithBinOp::BitAnd => format!("and({yul_name}, {rhs})"),
+                        ArithBinOp::BitOr => format!("or({yul_name}, {rhs})"),
+                        ArithBinOp::BitXor => format!("xor({yul_name}, {rhs})"),
                     };
-                    docs.push(YulDoc::line(format!(
-                        "{yul_name} := {func}({yul_name}, {rhs})"
-                    )));
+                    docs.push(YulDoc::line(format!("{yul_name} := {assignment}")));
                 }
                 mir::MirInst::Eval { .. } => {}
             }
@@ -426,20 +424,19 @@ impl<'db> YulEmitter<'db> {
                 BinOp::Arith(op) => {
                     let left = self.lower_expr(*lhs, state)?;
                     let right = self.lower_expr(*rhs, state)?;
-                    let func = match op {
-                        ArithBinOp::Add => "add",
-                        ArithBinOp::Sub => "sub",
-                        ArithBinOp::Mul => "mul",
-                        ArithBinOp::Div => "div",
-                        ArithBinOp::Rem => "mod",
-                        ArithBinOp::Pow => "exp",
-                        ArithBinOp::LShift => "shl",
-                        ArithBinOp::RShift => "shr",
-                        ArithBinOp::BitAnd => "and",
-                        ArithBinOp::BitOr => "or",
-                        ArithBinOp::BitXor => "xor",
-                    };
-                    Ok(format!("{func}({left}, {right})"))
+                    match op {
+                        ArithBinOp::Add => Ok(format!("add({left}, {right})")),
+                        ArithBinOp::Sub => Ok(format!("sub({left}, {right})")),
+                        ArithBinOp::Mul => Ok(format!("mul({left}, {right})")),
+                        ArithBinOp::Div => Ok(format!("div({left}, {right})")),
+                        ArithBinOp::Rem => Ok(format!("mod({left}, {right})")),
+                        ArithBinOp::Pow => Ok(format!("exp({left}, {right})")),
+                        ArithBinOp::LShift => Ok(format!("shl({right}, {left})")),
+                        ArithBinOp::RShift => Ok(format!("shr({right}, {left})")),
+                        ArithBinOp::BitAnd => Ok(format!("and({left}, {right})")),
+                        ArithBinOp::BitOr => Ok(format!("or({left}, {right})")),
+                        ArithBinOp::BitXor => Ok(format!("xor({left}, {right})")),
+                    }
                 }
                 BinOp::Comp(op) => {
                     let left = self.lower_expr(*lhs, state)?;

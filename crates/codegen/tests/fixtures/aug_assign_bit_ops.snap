@@ -8,8 +8,8 @@ input_file: tests/fixtures/aug_assign_bit_ops.fe
   function aug_assign_bit_ops(x, y) -> ret {
     let v0 := x
     v0 := exp(v0, y)
-    v0 := shl(v0, 3)
-    v0 := shr(v0, 1)
+    v0 := shl(3, v0)
+    v0 := shr(1, v0)
     v0 := and(v0, 255)
     v0 := or(v0, 1)
     v0 := xor(v0, 2)
