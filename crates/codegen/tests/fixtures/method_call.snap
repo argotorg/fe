@@ -2,7 +2,7 @@
 source: crates/codegen/tests/yul.rs
 assertion_line: 38
 expression: output
-input_file: testdata/simple_yul/method_call.fe
+input_file: tests/fixtures/method_call.fe
 ---
 {
   function make_value() -> ret {

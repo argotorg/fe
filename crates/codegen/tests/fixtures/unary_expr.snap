@@ -1,7 +1,7 @@
 ---
 source: crates/codegen/tests/yul.rs
 expression: output
-input_file: testdata/simple_yul/unary_expr.fe
+input_file: tests/fixtures/unary_expr.fe
 ---
 {
   function unary_expr() -> ret {

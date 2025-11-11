@@ -2,7 +2,7 @@
 source: crates/codegen/tests/yul.rs
 assertion_line: 38
 expression: output
-input_file: testdata/simple_yul/aug_assign.fe
+input_file: tests/fixtures/aug_assign.fe
 ---
 {
   function aug_assign(x, y) -> ret {

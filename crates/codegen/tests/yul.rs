@@ -6,7 +6,7 @@ use test_utils::snap_test;
 use url::Url;
 
 #[dir_test(
-    dir: "$CARGO_MANIFEST_DIR/testdata/simple_yul",
+    dir: "$CARGO_MANIFEST_DIR/tests/fixtures",
     glob: "*.fe"
 )]
 fn yul_snap(fixture: Fixture<&str>) {

@@ -1,7 +1,7 @@
 ---
 source: crates/codegen/tests/yul.rs
 expression: output
-input_file: testdata/simple_yul/string_literal.fe
+input_file: tests/fixtures/string_literal.fe
 ---
 {
   function string_literal() -> ret {

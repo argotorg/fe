@@ -1,7 +1,7 @@
 ---
 source: crates/codegen/tests/yul.rs
 expression: output
-input_file: testdata/simple_yul/local_bindings.fe
+input_file: tests/fixtures/local_bindings.fe
 ---
 {
   function local_bindings() -> ret {

@@ -1,10 +1,10 @@
 ---
 source: crates/codegen/tests/yul.rs
 expression: output
-input_file: testdata/simple_yul/literal_add.fe
+input_file: tests/fixtures/block_expr.fe
 ---
 {
-  function literal_add() -> ret {
+  function block_expr() -> ret {
     ret := add(1, 2)
   }
 }

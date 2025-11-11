@@ -2,7 +2,7 @@
 source: crates/codegen/tests/yul.rs
 assertion_line: 38
 expression: output
-input_file: testdata/simple_yul/ret.fe
+input_file: tests/fixtures/ret.fe
 ---
 {
   function retfoo(b1, x) -> ret {

@@ -2,7 +2,7 @@
 source: crates/codegen/tests/yul.rs
 assertion_line: 38
 expression: output
-input_file: testdata/simple_yul/bitwise_unsupported.fe
+input_file: tests/fixtures/bitwise_unsupported.fe
 ---
 {
   function bit_and() -> ret {

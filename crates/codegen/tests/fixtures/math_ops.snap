@@ -1,7 +1,7 @@
 ---
 source: crates/codegen/tests/yul.rs
 expression: output
-input_file: testdata/simple_yul/math_ops.fe
+input_file: tests/fixtures/math_ops.fe
 ---
 {
   function math_ops() -> ret {
