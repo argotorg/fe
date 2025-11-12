@@ -17,7 +17,8 @@
 //!   method(s) here.
 
 use crate::analysis::HirAnalysisDb;
-use crate::analysis::name_resolution::{PathRes, resolve_path, PathResError};
+use crate::hir_def::scope_graph::ScopeId;
+use crate::analysis::name_resolution::{PathRes, resolve_path};
 use crate::analysis::ty::def_analysis::check_duplicate_names;
 use crate::analysis::ty::diagnostics::{TyDiagCollection, TyLowerDiag};
 use crate::hir_def::*;
@@ -124,6 +125,22 @@ impl<'db> Func<'db> {
         self.is_method(db)
             .then(|| self.arg_tys(db).into_iter().next())
             .flatten()
+    }
+
+    /// Diagnostics related to parameters (names/labels/etc.).
+    /// Note: function parameter duplicate name/label diagnostics are currently
+    /// emitted by the general diagnostics pass; this method returns an empty
+    /// set to avoid duplicate emissions. It serves as a placeholder for future
+    /// semantic checks that are not covered elsewhere.
+    pub fn diags_parameters(self, _db: &'db dyn HirAnalysisDb) -> Vec<TyDiagCollection<'db>> {
+        Vec::new()
+    }
+
+    /// Diagnostics related to the return type. Placeholder that returns empty
+    /// to preserve behavior. When we add semantic return-related checks that
+    /// are not emitted elsewhere, aggregate them here.
+    pub fn diags_return(self, _db: &'db dyn HirAnalysisDb) -> Vec<TyDiagCollection<'db>> {
+        Vec::new()
     }
 }
 
@@ -395,6 +412,20 @@ impl<'db> WherePredicateView<'db> {
         Some(lower_hir_ty(db, hir_ty, owner_item.scope(), assumptions))
     }
 
+    /// True if the lowered subject type is a const type.
+    pub fn subject_is_const(self, db: &'db dyn HirAnalysisDb) -> bool {
+        self.subject_ty(db)
+            .map(|t| t.is_const_ty(db))
+            .unwrap_or(false)
+    }
+
+    /// True if the lowered subject type is concrete (no generic params) and not invalid.
+    pub fn subject_is_concrete(self, db: &'db dyn HirAnalysisDb) -> bool {
+        self.subject_ty(db)
+            .map(|t| !t.has_invalid(db) && !t.has_param(db))
+            .unwrap_or(false)
+    }
+
     /// Lower trait bounds in this predicate against its own lowered subject type.
     /// Skips kind bounds and failed lowerings.
     pub fn trait_bounds_lowered(
@@ -528,6 +559,127 @@ impl<'db> Trait<'db> {
         }
         diags
     }
+
+    /// Diagnostics for generic parameter issues (duplicates, defined in parent).
+    /// Note: callers should avoid duplicating diagnostics if other analysis already
+    /// emits these; prefer aggregating at a single layer.
+    pub fn diags_generic_params(self, db: &'db dyn HirAnalysisDb) -> Vec<TyDiagCollection<'db>> {
+        let owner = GenericParamOwner::Trait(self);
+        let mut out: Vec<TyDiagCollection> = owner
+            .diags_check_duplicate_names(db)
+            .collect();
+        out.extend(owner.diags_params_defined_in_parent(db));
+        out
+    }
+
+    /// Diagnostics for super-traits (placeholder).
+    /// Intentionally returns no diagnostics to preserve current behavior during migration.
+    pub fn diags_super_traits(self, _db: &'db dyn HirAnalysisDb) -> Vec<TyDiagCollection<'db>> {
+        Vec::new()
+    }
+
+    /// Semantic super-trait bounds of this trait, instantiated over the trait's own parameters.
+    /// Returns an iterator of binders for each declared or implied super-trait.
+    pub fn super_trait_insts(
+        self,
+        db: &'db dyn HirAnalysisDb,
+    ) -> impl Iterator<
+        Item = crate::analysis::ty::binder::Binder<crate::analysis::ty::trait_def::TraitInstId<'db>>,
+    > + 'db {
+        use crate::analysis::ty::trait_def::TraitDef;
+        TraitDef::new(db, self)
+            .super_traits(db)
+            .iter()
+            .copied()
+    }
+
+    /// Iterate declared super-trait references as contextual views.
+    pub fn super_trait_refs(self, db: &'db dyn HirDb) -> impl Iterator<Item = SuperTraitRefView<'db>> + 'db {
+        let len = self.super_traits(db).len();
+        (0..len).map(move |idx| SuperTraitRefView { owner: self, idx })
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct SuperTraitRefView<'db> {
+    pub owner: Trait<'db>,
+    pub idx: usize,
+}
+
+impl<'db> SuperTraitRefView<'db> {
+    pub fn span(self) -> crate::span::params::LazyTraitRefSpan<'db> {
+        self.owner.span().super_traits().super_trait(self.idx)
+    }
+
+    pub(in crate::core) fn trait_ref_id(self, db: &'db dyn HirDb) -> TraitRefId<'db> {
+        self.owner.super_traits(db)[self.idx]
+    }
+
+    pub fn subject_self(self, db: &'db dyn HirAnalysisDb) -> TyId<'db> {
+        crate::analysis::ty::ty_lower::collect_generic_params(db, self.owner.into())
+            .trait_self(db)
+            .unwrap()
+    }
+
+    pub(in crate::core) fn assumptions(self, db: &'db dyn HirAnalysisDb) -> PredicateListId<'db> {
+        constraints_for(db, self.owner.into())
+    }
+
+    /// Lower this super-trait reference to a semantic trait instance using the trait's
+    /// `Self` and constraints.
+    /// Semantic trait instance for this super-trait reference lowered in the owner's
+    /// context. Returns an error value; does not emit diagnostics.
+    pub fn trait_inst(
+        self,
+        db: &'db dyn HirAnalysisDb,
+    ) -> Result<crate::analysis::ty::trait_def::TraitInstId<'db>, SuperTraitLowerError> {
+        use crate::analysis::ty::trait_lower::TraitRefLowerError;
+        let subject = self.subject_self(db);
+        let tr = self.trait_ref_id(db);
+        let scope = self.owner.scope();
+        let assumptions = self.assumptions(db);
+        match crate::analysis::ty::trait_lower::lower_trait_ref(db, subject, tr, scope, assumptions) {
+            Ok(v) => Ok(v),
+            Err(TraitRefLowerError::PathResError(_)) => Err(SuperTraitLowerError::PathResolution),
+            Err(TraitRefLowerError::InvalidDomain(_)) => Err(SuperTraitLowerError::InvalidDomain),
+            Err(TraitRefLowerError::Ignored) => Err(SuperTraitLowerError::Ignored),
+        }
+    }
+
+    /// Expected implementor kind for this super-trait, derived from the trait def's Self kind.
+    pub fn expected_implementor_kind(self, db: &'db dyn HirAnalysisDb) -> &'db crate::analysis::ty::ty_def::Kind {
+        use crate::analysis::ty::trait_def::TraitDef;
+        TraitDef::new(db, self.owner).expected_implementor_kind(db)
+    }
+
+    /// Returns a tuple of (expected_kind, actual_self) when the owner's `Self` kind
+    /// does not match the super-trait's expected implementor kind. Returns None when
+    /// kinds are compatible or `Self` is invalid.
+    pub fn kind_mismatch_for_self(
+        self,
+        db: &'db dyn HirAnalysisDb,
+    ) -> Option<(
+        crate::analysis::ty::ty_def::Kind,
+        crate::analysis::ty::ty_def::TyId<'db>,
+    )> {
+        let expected = self.expected_implementor_kind(db).clone();
+        let actual = self.subject_self(db);
+        if !expected.does_match(actual.kind(db)) {
+            Some((expected, actual))
+        } else {
+            None
+        }
+    }
+
+    // Note: callers that want an Option can map the error to None explicitly.
+}
+
+/// Semantic error for lowering a super-trait reference in its owner's context.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SuperTraitLowerError {
+    PathResolution,
+    InvalidDomain,
+    Ignored,
 }
 
 impl<'db> Impl<'db> {
@@ -639,6 +791,61 @@ impl<'db> ImplTrait<'db> {
         }
         diags
     }
+
+    /// Diagnostics for trait-ref WF and satisfiability for this impl-trait.
+    /// Aggregates checks similar to def_analysis but scoped to this view.
+    pub fn diags_trait_ref_and_wf(self, db: &'db dyn HirAnalysisDb) -> Vec<TyDiagCollection<'db>> {
+        use crate::analysis::ty::trait_lower::lower_impl_trait;
+        use crate::analysis::ty::trait_resolution::{constraint::collect_constraints, is_goal_satisfiable, GoalSatisfiability};
+        use crate::analysis::ty::canonical::Canonicalized;
+        use crate::span::DynLazySpan;
+        let mut diags = Vec::new();
+        let Some(implementor) = lower_impl_trait(db, self) else { return diags; };
+        let implementor = implementor.instantiate_identity();
+        let trait_inst = implementor.trait_(db);
+        let trait_def = implementor.trait_def(db);
+
+        // Trait constraints instantiated with implementor args
+        let trait_constraints = collect_constraints(db, trait_def.trait_(db).into())
+            .instantiate(db, trait_inst.args(db));
+
+        // Recompute assumptions from the impl-trait HIR
+        let assumptions = collect_constraints(db, self.into()).instantiate_identity();
+        let impl_trait_ingot = self.top_mod(db).ingot(db);
+
+        let is_satisfied = |goal, span: DynLazySpan<'db>, out: &mut Vec<_>| {
+            let canonical_goal = Canonicalized::new(db, goal);
+            match is_goal_satisfiable(db, impl_trait_ingot, canonical_goal.value, assumptions) {
+                GoalSatisfiability::Satisfied(_) | GoalSatisfiability::ContainsInvalid => {}
+                GoalSatisfiability::NeedsConfirmation(_) => {}
+                GoalSatisfiability::UnSat(_sub) => {
+                    out.push(
+                        crate::analysis::ty::diagnostics::TraitConstraintDiag::TraitBoundNotSat {
+                            span,
+                            primary_goal: goal,
+                            unsat_subgoal: None,
+                        }
+                        .into(),
+                    );
+                }
+            }
+        };
+
+        // Trait-ref WF
+        let trait_ref_span: DynLazySpan = self.span().trait_ref().into();
+        for &goal in trait_constraints.list(db) {
+            is_satisfied(goal, trait_ref_span.clone(), &mut diags);
+        }
+
+        // Super-traits
+        let target_ty_span: DynLazySpan = self.span().ty().into();
+        for &super_trait in trait_def.super_traits(db) {
+            let super_trait = super_trait.instantiate(db, trait_inst.args(db));
+            is_satisfied(super_trait, target_ty_span.clone(), &mut diags)
+        }
+
+        diags
+    }
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -738,6 +945,94 @@ impl<'db> GenericParamOwner<'db> {
             TyDiagCollection::from(TyLowerDiag::DuplicateGenericParamName(self, idxs))
         })
         .into_iter()
+    }
+
+    /// Diagnostics for non-trailing default generic parameters.
+    /// Emits a diagnostic for each defaulted type parameter that precedes a non-defaulted one.
+    pub fn diags_non_trailing_defaults(
+        self,
+        db: &'db dyn HirAnalysisDb,
+    ) -> Vec<TyDiagCollection<'db>> {
+        let mut out = Vec::new();
+        let list = self.params_list(db);
+        let data = list.data(db);
+        let mut default_idxs = Vec::new();
+        for (i, p) in data.iter().enumerate() {
+            let is_defaulted_type = matches!(p, GenericParam::Type(tp) if tp.default_ty.is_some());
+            if is_defaulted_type {
+                default_idxs.push(i);
+            } else if !default_idxs.is_empty() {
+                for &idx in &default_idxs {
+                    let span = self.params_span().param(idx);
+                    out.push(TyLowerDiag::NonTrailingDefaultGenericParam(span).into());
+                }
+                break;
+            }
+        }
+        out
+    }
+
+    /// Diagnostics for forward references in defaulted generic type parameters.
+    /// Emits a diagnostic when a default type references a parameter not yet declared
+    /// (including itself), e.g., `trait T<A = B, B> {}` or `trait T<A = A> {}`.
+    pub fn diags_default_forward_refs(
+        self,
+        db: &'db dyn HirAnalysisDb,
+    ) -> Vec<TyDiagCollection<'db>> {
+use crate::analysis::ty::{
+    ty_def::{TyId, TyParam},
+    ty_lower::lower_hir_ty,
+    visitor::{TyVisitable, TyVisitor},
+};
+
+        let mut out = Vec::new();
+        let owner_item = ItemKind::from(self);
+        let assumptions = constraints_for(db, owner_item);
+        let scope = self.scope();
+        let list = self.params_list(db);
+        let data = list.data(db);
+
+        for (i, p) in data.iter().enumerate() {
+            let default_ty = match p {
+                GenericParam::Type(tp) => tp.default_ty,
+                GenericParam::Const(_) => None,
+            };
+            let Some(default_ty) = default_ty else { continue };
+
+            let lowered = lower_hir_ty(db, default_ty, scope, assumptions);
+
+            // Collect referenced generic params belonging to the same owner.
+            struct Collector<'db> {
+                db: &'db dyn HirAnalysisDb,
+                scope: ScopeId<'db>,
+                out: Vec<usize>,
+            }
+            impl<'db> TyVisitor<'db> for Collector<'db> {
+                fn db(&self) -> &'db dyn HirAnalysisDb { self.db }
+                fn visit_param(&mut self, tp: &TyParam<'db>) {
+                    if !tp.is_trait_self() && tp.owner == self.scope {
+                        self.out.push(tp.original_idx(self.db));
+                    }
+                }
+                fn visit_const_param(&mut self, tp: &TyParam<'db>, _ty: TyId<'db>) {
+                    if tp.owner == self.scope {
+                        self.out.push(tp.original_idx(self.db));
+                    }
+                }
+            }
+
+            let mut collector = Collector { db, scope, out: Vec::new() };
+            lowered.visit_with(&mut collector);
+
+            for j in collector.out.into_iter().filter(|j| *j >= i) {
+                if let Some(name) = self.param_view(db, j).param.name().to_opt() {
+                    let span = self.params_span().param(i);
+                    out.push(TyLowerDiag::GenericDefaultForwardRef { span, name }.into());
+                }
+            }
+        }
+
+        out
     }
 }
 

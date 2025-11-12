@@ -1,5 +1,5 @@
 use crate::{
-    hir_def::{EnumVariant, Func, FuncParamName, IdentId, Partial, scope_graph::ScopeId},
+    hir_def::{EnumVariant, Func, FuncParamName, IdentId, scope_graph::ScopeId},
     span::DynLazySpan,
 };
 use common::ingot::Ingot;
@@ -8,9 +8,7 @@ use super::{binder::Binder, ty_def::TyId, ty_lower::GenericParamTypeSet};
 use crate::analysis::{
     HirAnalysisDb,
     ty::{
-        trait_resolution::constraint::collect_func_def_constraints,
-        ty_def::InvalidCause,
-        ty_lower::{collect_generic_params, lower_hir_ty},
+        ty_lower::{collect_generic_params},
     },
 };
 

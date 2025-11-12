@@ -14,7 +14,7 @@ use crate::analysis::{
     HirAnalysisDb,
     name_resolution::{PathRes, ResolvedVariant, diagnostics::PathResDiag, is_scope_visible_from},
     ty::{
-        adt_def::{AdtDef, AdtField, AdtRef},
+        adt_def::{AdtDef, AdtRef},
         diagnostics::{BodyDiag, FuncBodyDiag},
         ty_def::{InvalidCause, TyData, TyId},
     },

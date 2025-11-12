@@ -8,7 +8,7 @@ use either::Either;
 use crate::analysis::{
     HirAnalysisDb,
     ty::{
-        adt_def::{AdtDef, lower_adt},
+        adt_def::{AdtDef},
         binder::Binder,
         func_def::HirFuncDefKind,
         trait_def::{TraitDef, TraitInstId},

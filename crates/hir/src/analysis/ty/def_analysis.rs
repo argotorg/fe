@@ -5,7 +5,7 @@
 use crate::{
     hir_def::{
         EnumVariant, FieldDef, FieldParent, Func, GenericParam, GenericParamListId,
-        GenericParamOwner, GenericParamView, IdentId, Impl as HirImpl, ImplTrait, ItemKind, PathId,
+        GenericParamOwner, IdentId, Impl as HirImpl, ImplTrait, ItemKind, PathId,
         Trait, TraitRefId, TypeAlias, TypeId as HirTyId, VariantKind, scope_graph::ScopeId,
     },
     visitor::prelude::*,
@@ -29,7 +29,7 @@ use super::{
         PredicateListId,
         constraint::{collect_adt_constraints, collect_constraints, collect_func_def_constraints},
     },
-    ty_def::{InvalidCause, TyData, TyId, TyParam},
+    ty_def::{InvalidCause, TyData, TyId},
     ty_error::collect_ty_lower_errors,
     ty_lower::{collect_generic_params, lower_kind},
     visitor::{TyVisitor, walk_ty},
@@ -40,12 +40,11 @@ use crate::analysis::{
     ty::{
         adt_def::AdtDef,
         binder::Binder,
-        canonical::Canonicalized,
         func_def::lower_func,
-        trait_def::{TraitInstId, does_impl_trait_conflict},
+        trait_def::{does_impl_trait_conflict},
         trait_lower::lower_impl_trait,
         trait_resolution::{
-            GoalSatisfiability, constraint::super_trait_cycle, is_goal_satisfiable,
+            constraint::super_trait_cycle,
         },
         ty_lower::lower_hir_ty,
         visitor::TyVisitable,
@@ -88,6 +87,18 @@ pub fn analyze_adt<'db>(
     let analyzer = DefAnalyzer::for_adt(db, adt_ref);
     let mut diags = analyzer.analyze();
     diags.extend(dupes);
+    // Non-trailing default generic params via semantic traversal
+    match adt_ref {
+        AdtRef::Struct(s) => {
+            diags.extend(GenericParamOwner::Struct(s).diags_non_trailing_defaults(db));
+            diags.extend(GenericParamOwner::Struct(s).diags_default_forward_refs(db));
+        }
+        AdtRef::Contract(_c) => {/* contracts are not GenericParamOwner */}
+        AdtRef::Enum(e) => {
+            diags.extend(GenericParamOwner::Enum(e).diags_non_trailing_defaults(db));
+            diags.extend(GenericParamOwner::Enum(e).diags_default_forward_refs(db));
+        }
+    }
     diags
 }
 
@@ -143,8 +154,11 @@ pub fn analyze_trait<'db>(
     let analyzer = DefAnalyzer::for_trait(db, trait_);
     let mut diags = analyzer.analyze();
 
-    // Check associated type defaults satisfy their bounds (semantic traversal)
+    // Semantic traversal aggregations
     diags.extend(trait_.diags_assoc_defaults(db));
+    diags.extend(trait_.diags_super_traits(db));
+    diags.extend(GenericParamOwner::Trait(trait_).diags_non_trailing_defaults(db));
+    diags.extend(GenericParamOwner::Trait(trait_).diags_default_forward_refs(db));
 
     diags
 }
@@ -178,6 +192,8 @@ pub fn analyze_impl_trait<'db>(
     let def_diags = analyzer.analyze();
 
     diags.extend(def_diags);
+    diags.extend(GenericParamOwner::ImplTrait(impl_trait).diags_non_trailing_defaults(db));
+    diags.extend(GenericParamOwner::ImplTrait(impl_trait).diags_default_forward_refs(db));
     diags
 }
 
@@ -193,7 +209,10 @@ pub fn analyze_impl<'db>(
     let ty = impl_.ty(db);
 
     let analyzer = DefAnalyzer::for_impl(db, impl_, ty);
-    analyzer.analyze()
+    let mut diags = analyzer.analyze();
+    diags.extend(GenericParamOwner::Impl(impl_).diags_non_trailing_defaults(db));
+    diags.extend(GenericParamOwner::Impl(impl_).diags_default_forward_refs(db));
+    diags
 }
 
 #[salsa::tracked(return_ref)]
@@ -207,7 +226,10 @@ pub fn analyze_func<'db>(
 
     let assumptions = collect_func_def_constraints(db, func.into(), true).instantiate_identity();
     let analyzer = DefAnalyzer::for_func(db, func_def, assumptions);
-    analyzer.analyze()
+    let mut diags = analyzer.analyze();
+    diags.extend(GenericParamOwner::Func(func).diags_non_trailing_defaults(db));
+    diags.extend(GenericParamOwner::Func(func).diags_default_forward_refs(db));
+    diags
 }
 
 pub struct DefAnalyzer<'db> {
@@ -618,20 +640,25 @@ impl<'db> Visitor<'db> for DefAnalyzer<'db> {
                 .collect::<Vec<_>>(),
         );
 
-        let mut default_idxs: SmallVec<[usize; 4]> = SmallVec::new();
-        for (i, p) in params.data(self.db).iter().enumerate() {
-            let is_defaulted_type = matches!(p, GenericParam::Type(tp) if tp.default_ty.is_some());
-            if is_defaulted_type {
-                default_idxs.push(i);
-            } else if !default_idxs.is_empty() {
-                for &idx in &default_idxs {
-                    let span = ctxt.span().unwrap().clone().param(idx);
-                    self.diags
-                        .push(TyLowerDiag::NonTrailingDefaultGenericParam(span).into());
+        // Emit non-trailing default generic param diag from the visitor only for TypeAlias.
+        // Other owners aggregate this via semantic traversal to avoid duplicates.
+        if let GenericParamOwner::TypeAlias(_alias) = owner {
+            let mut default_idxs: SmallVec<[usize; 4]> = SmallVec::new();
+            for (i, p) in params.data(self.db).iter().enumerate() {
+                let is_defaulted_type = matches!(p, GenericParam::Type(tp) if tp.default_ty.is_some());
+                if is_defaulted_type {
+                    default_idxs.push(i);
+                } else if !default_idxs.is_empty() {
+                    for &idx in &default_idxs {
+                        let span = ctxt.span().unwrap().clone().param(idx);
+                        self.diags
+                            .push(TyLowerDiag::NonTrailingDefaultGenericParam(span).into());
+                    }
+                    break;
                 }
-                break;
             }
         }
+
         walk_generic_param_list(self, ctxt, params);
     }
 
@@ -653,49 +680,8 @@ impl<'db> Visitor<'db> for DefAnalyzer<'db> {
 
         match param {
             GenericParam::Type(tp) => {
-                if let Some(default_ty) = tp.default_ty {
-                    let lowered = lower_hir_ty(self.db, default_ty, self.scope(), self.assumptions);
-
-                    // Collect referenced generic params belonging to the same owner.
-                    struct Collector<'db> {
-                        db: &'db dyn HirAnalysisDb,
-                        scope: ScopeId<'db>,
-                        out: Vec<usize>,
-                    }
-                    impl<'db> TyVisitor<'db> for Collector<'db> {
-                        fn db(&self) -> &'db dyn HirAnalysisDb {
-                            self.db
-                        }
-                        fn visit_param(&mut self, tp: &TyParam<'db>) {
-                            if !tp.is_trait_self() && tp.owner == self.scope {
-                                self.out.push(tp.original_idx(self.db));
-                            }
-                        }
-                        fn visit_const_param(&mut self, tp: &TyParam<'db>, _ty: TyId<'db>) {
-                            if tp.owner == self.scope {
-                                self.out.push(tp.original_idx(self.db));
-                            }
-                        }
-                    }
-
-                    let mut collector = Collector {
-                        db: self.db,
-                        scope: self.scope(),
-                        out: Vec::new(),
-                    };
-                    lowered.visit_with(&mut collector);
-
-                    let owner = GenericParamOwner::from_item_opt(self.scope().item()).unwrap();
-
-                    // Forward reference check: cannot reference a param not yet declared.
-                    for j in collector.out.iter().filter(|j| **j >= idx as usize) {
-                        if let Some(name) = owner.param_view(self.db, *j).param.name().to_opt() {
-                            let span = ctxt.span().unwrap();
-                            self.diags
-                                .push(TyLowerDiag::GenericDefaultForwardRef { span, name }.into());
-                        }
-                    }
-                }
+                // Forward reference checks for defaulted type params are emitted via
+                // semantic aggregation (GenericParamOwner::diags_default_forward_refs).
 
                 self.current_ty = Some((
                     self.def.original_params(self.db)[idx as usize],
@@ -804,6 +790,8 @@ impl<'db> Visitor<'db> for DefAnalyzer<'db> {
         };
         let name_span = def.trait_(self.db).span().name().into();
         self.current_ty = Some((self.def.trait_self_param(self.db), name_span));
+        // Retain visitor-driven analysis to preserve existing diagnostics behavior
+        // for super-trait references and WF checks.
         walk_super_trait_list(self, ctxt, super_traits);
     }
 
@@ -1288,38 +1276,8 @@ fn analyze_impl_trait_specific_error<'db>(
         collect_constraints(db, trait_def.trait_(db).into()).instantiate(db, trait_inst.args(db));
     let assumptions = implementor.instantiate_identity().constraints(db);
 
-    let is_satisfied = |goal: TraitInstId<'db>, span: DynLazySpan<'db>, diags: &mut Vec<_>| {
-        let canonical_goal = Canonicalized::new(db, goal);
-        match is_goal_satisfiable(db, impl_trait_ingot, canonical_goal.value, assumptions) {
-            GoalSatisfiability::Satisfied(_) | GoalSatisfiability::ContainsInvalid => {}
-            GoalSatisfiability::NeedsConfirmation(_) => unreachable!(),
-            GoalSatisfiability::UnSat(subgoal) => {
-                diags.push(
-                    TraitConstraintDiag::TraitBoundNotSat {
-                        span,
-                        primary_goal: goal,
-                        unsat_subgoal: subgoal.map(|subgoal| subgoal.value),
-                    }
-                    .into(),
-                );
-            }
-        }
-    };
-
-    // 6. Checks if the trait inst is WF.
-    let trait_ref_span: DynLazySpan = impl_trait.span().trait_ref().into();
-
-    for &goal in trait_constraints.list(db) {
-        is_satisfied(goal, trait_ref_span.clone(), &mut diags);
-    }
-
-    // 7. Checks if the implementor ty satisfies the super trait constraints.
-    let target_ty_span: DynLazySpan = impl_trait.span().ty().into();
-
-    for &super_trait in trait_def.super_traits(db) {
-        let super_trait = super_trait.instantiate(db, trait_inst.args(db));
-        is_satisfied(super_trait, target_ty_span.clone(), &mut diags)
-    }
+    // 6–7. Trait-ref WF and super-trait constraints via semantic traversal
+    diags.extend(impl_trait.diags_trait_ref_and_wf(db));
 
     // 8. Check associated types via semantic traversal
     diags.extend(impl_trait.diags_missing_assoc_types(db));

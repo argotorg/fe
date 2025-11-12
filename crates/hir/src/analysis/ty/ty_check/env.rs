@@ -23,11 +23,10 @@ use crate::analysis::{
         normalize::normalize_ty,
         trait_def::TraitInstId,
         trait_resolution::{
-            GoalSatisfiability, PredicateListId, constraint::collect_func_def_constraints,
+            GoalSatisfiability, PredicateListId,
             is_goal_satisfiable,
         },
         ty_def::{InvalidCause, TyBase, TyData, TyId, TyVarSort},
-        ty_lower::lower_hir_ty,
         unify::UnificationTable,
     },
 };
