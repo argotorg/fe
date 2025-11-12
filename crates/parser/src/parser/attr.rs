@@ -1,10 +1,10 @@
 use std::convert::Infallible;
 use unwrap_infallible::UnwrapInfallible;
 
+use super::path::PathScope;
 use super::{
     Checkpoint, ErrProof, Parser, Recovery, define_scope, parse_list, token_stream::TokenStream,
 };
-
 use crate::{ExpectedKind, SyntaxKind};
 
 pub(super) fn parse_attr_list<S: TokenStream>(
@@ -48,7 +48,7 @@ impl super::Parse for AttrListScope {
     }
 }
 
-define_scope! { AttrScope, Attr }
+define_scope! { AttrScope, Attr, (RBracket) }
 impl super::Parse for AttrScope {
     type Error = Recovery<ErrProof>;
 
@@ -56,17 +56,28 @@ impl super::Parse for AttrScope {
         parser.set_newline_as_trivia(false);
         parser.bump_expected(SyntaxKind::Pound);
 
-        parser.set_scope_recovery_stack(&[SyntaxKind::LParen]);
-        if parser.find(SyntaxKind::Ident, ExpectedKind::Name(SyntaxKind::Attr))? {
-            parser.bump()
+        // Expect the opening bracket for a Rust-style outer attribute: #[ ... ]
+        parser.bump_expected(SyntaxKind::LBracket);
+
+        // Parse the attribute path (e.g., foo, foo::bar). Recover on failure.
+        parser.parse_or_recover(PathScope::default())?;
+
+        // After the path, support either a meta list `(...)` or a name-value `= literal`.
+        match parser.current_kind() {
+            Some(SyntaxKind::LParen) => {
+                parser.parse(AttrArgListScope::default())?;
+            }
+            Some(SyntaxKind::Eq) => {
+                // Bump '=' then accept a literal or ident value (doc-style: #[doc = "..."]).
+                parser.bump();
+                parser.parse(AttrArgValueScope::default())?;
+            }
+            _ => {}
         }
 
-        if parser.current_kind() == Some(SyntaxKind::LParen) {
-            parser.pop_recovery_stack();
-            parser.parse(AttrArgListScope::default())
-        } else {
-            Ok(())
-        }
+        // Expect the closing bracket of the attribute.
+        parser.bump_expected(SyntaxKind::RBracket);
+        Ok(())
     }
 }
 
@@ -90,19 +101,39 @@ impl super::Parse for AttrArgScope {
     type Error = Recovery<ErrProof>;
 
     fn parse<S: TokenStream>(&mut self, parser: &mut Parser<S>) -> Result<(), Self::Error> {
-        let expected_err = ExpectedKind::Syntax(SyntaxKind::AttrArg);
+        // Parse the key as a path
+        parser.set_scope_recovery_stack(&[SyntaxKind::Ident, SyntaxKind::Eq]);
 
-        parser.set_scope_recovery_stack(&[SyntaxKind::Ident, SyntaxKind::Colon]);
-        if parser.find_and_pop(SyntaxKind::Ident, expected_err)? {
+        // TODO: this should be a "SimplePath" that doesn't allow generic args
+        parser.parse_or_recover(PathScope::default())?;
+        // Optional `= value`
+        if parser.current_kind() == Some(SyntaxKind::Eq) {
             parser.bump();
-        }
-        if parser.find_and_pop(SyntaxKind::Colon, expected_err)? {
-            parser.bump();
-        }
-        if parser.find(SyntaxKind::Ident, expected_err)? {
-            parser.bump();
+            parser.parse(AttrArgValueScope::default())?;
         }
         Ok(())
+    }
+}
+
+define_scope! { AttrArgValueScope, AttrArgValue }
+impl super::Parse for AttrArgValueScope {
+    type Error = Recovery<ErrProof>;
+
+    fn parse<S: TokenStream>(&mut self, parser: &mut Parser<S>) -> Result<(), Self::Error> {
+        use crate::parser::lit::{LitScope, is_lit};
+
+        match parser.current_kind() {
+            Some(kind) if is_lit(kind) => {
+                // Parse a literal as a nested `Lit` node under `AttrArgValue`.
+                parser.parse(LitScope::default()).unwrap_infallible();
+                Ok(())
+            }
+            Some(SyntaxKind::Ident) => {
+                parser.bump();
+                Ok(())
+            }
+            _ => parser.error_and_recover("attribute value must be an ident or literal value"),
+        }
     }
 }
 

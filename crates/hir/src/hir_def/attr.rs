@@ -1,4 +1,4 @@
-use super::{IdentId, Partial, StringId};
+use super::{IdentId, Partial, PathId, StringId};
 
 #[salsa::interned]
 #[derive(Debug)]
@@ -15,7 +15,7 @@ pub enum Attr<'db> {
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct NormalAttr<'db> {
-    pub name: Partial<IdentId<'db>>,
+    pub path: Partial<PathId<'db>>,
     pub args: Vec<AttrArg<'db>>,
 }
 
@@ -27,6 +27,12 @@ pub struct DocCommentAttr<'db> {
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct AttrArg<'db> {
-    pub key: Partial<IdentId<'db>>,
-    pub value: Partial<IdentId<'db>>,
+    pub key: Partial<PathId<'db>>,
+    pub value: Partial<AttrArgValue<'db>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum AttrArgValue<'db> {
+    Ident(IdentId<'db>),
+    Lit(super::LitKind<'db>),
 }

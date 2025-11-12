@@ -11,6 +11,10 @@ ast_node! {
     IntoIterator<Item=PathSegment>,
 }
 impl Path {
+    pub fn text(&self) -> rowan::SyntaxText {
+        self.syntax().text()
+    }
+
     /// Returns the segments of the path.
     pub fn segments(&self) -> AstChildren<PathSegment> {
         support::children(self.syntax())

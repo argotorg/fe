@@ -1,6 +1,6 @@
 use rowan::ast::{AstNode, support};
 
-use super::ast_node;
+use super::{Path, ast_node, lit::Lit};
 use crate::{FeLang, SyntaxKind as SK, SyntaxToken};
 
 ast_node! {
@@ -46,15 +46,13 @@ impl Attr {
 
 ast_node! {
     /// A normal attribute.
-    /// `#attr(arg1: Arg, arg2: Arg)`
+    /// `#[attr(arg1 = Arg, arg2)]` or `#[path::to::attr]` or `#[foo = "..."]` or `#[x = 10]`
     pub struct NormalAttr,
     SK::Attr,
 }
 impl NormalAttr {
-    /// Returns the name of the attribute.
-    /// `foo` in `#foo(..)`
-    pub fn name(&self) -> Option<SyntaxToken> {
-        support::token(self.syntax(), SK::Ident)
+    pub fn path(&self) -> Option<Path> {
+        support::child(self.syntax())
     }
 
     pub fn args(&self) -> Option<AttrArgList> {
@@ -64,7 +62,7 @@ impl NormalAttr {
 
 ast_node! {
     /// An attribute argument list.
-    /// `(arg1: Arg, arg2: Arg)` in `#foo(arg1: Arg, arg2: Arg)`
+    /// `(arg1 = Arg, arg2 = Arg)` in `#[foo(arg1 = Arg, arg2 = Arg)]`
     pub struct AttrArgList,
     SK::AttrArgList,
     IntoIterator<Item=AttrArg>,
@@ -72,28 +70,39 @@ ast_node! {
 
 ast_node! {
     /// An Attribute argument.
-    /// `arg1: Arg` in `#foo(arg1: Arg, arg2: Arg)`
+    /// `arg1` or `arg2 = Arg` in `#[foo(arg1, arg2 = Arg)]`
     pub struct AttrArg,
     SK::AttrArg
 }
 impl AttrArg {
-    /// Returns the key of the attribute argument.
-    /// `arg1` in `arg1: Arg`.
-    pub fn key(&self) -> Option<SyntaxToken> {
-        support::token(self.syntax(), SK::Ident)
+    pub fn key(&self) -> Option<Path> {
+        support::child(self.syntax())
     }
 
-    /// Returns the value of the attribute argument.
-    /// `Arg` in `arg1: Arg`.
-    pub fn value(&self) -> Option<SyntaxToken> {
-        self.syntax()
-            .children_with_tokens()
-            .filter_map(|c| match c.into_token() {
-                Some(c) if c.kind() == SK::Ident => Some(c),
-                _ => None,
-            })
-            .nth(1)
+    pub fn value(&self) -> Option<AttrArgValueKind> {
+        let node = support::child::<AttrArgValue>(self.syntax())?;
+        if let Some(lit) = support::child::<Lit>(node.syntax()) {
+            return Some(lit.into());
+        }
+        Some(support::token(node.syntax(), SK::Ident)?.into())
     }
+
+    /// Returns the value node of the attribute argument.
+    pub fn value_node(&self) -> Option<AttrArgValue> {
+        support::child(self.syntax())
+    }
+}
+
+ast_node! {
+    /// Attribute argument value wrapper
+    pub struct AttrArgValue,
+    SK::AttrArgValue
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, derive_more::From, derive_more::TryInto)]
+pub enum AttrArgValueKind {
+    Ident(SyntaxToken),
+    Lit(Lit),
 }
 
 ast_node! {
@@ -145,9 +154,10 @@ mod tests {
     #[wasm_bindgen_test]
     fn attr_list() {
         let source = r#"
-            #foo
+            #[foo]
             /// Doc1
-            #cfg(target: evm, abi: solidity)
+            #[cfg(target = "evm", abi = "solidity")]
+            #[feat(foo::bar = 1, baz = false, name = Foo)]
             /// Doc2
         "#;
         let attr_list = parse_attr_list(source);
@@ -162,25 +172,90 @@ mod tests {
         for (i, attr) in attr_list.normal_attrs().enumerate() {
             match i {
                 0 => {
-                    assert_eq!(attr.name().unwrap().text(), "foo");
+                    assert_eq!(attr.path().unwrap().text(), "foo");
                     assert!(attr.args().is_none());
                 }
 
                 1 => {
-                    assert_eq!(attr.name().unwrap().text(), "cfg");
+                    assert_eq!(attr.path().unwrap().text(), "cfg");
                     for (i, arg) in attr.args().unwrap().iter().enumerate() {
                         match i {
                             0 => {
                                 assert_eq!(arg.key().unwrap().text(), "target");
-                                assert_eq!(arg.value().unwrap().text(), "evm");
+                                let val = arg.value().unwrap();
+                                match val {
+                                    AttrArgValueKind::Ident(tok) => {
+                                        panic!("expected string literal, got ident {}", tok.text())
+                                    }
+                                    AttrArgValueKind::Lit(lit) => match lit.kind() {
+                                        crate::ast::lit::LitKind::String(s) => {
+                                            assert_eq!(s.token().text(), "\"evm\"")
+                                        }
+                                        _ => panic!("expected string literal"),
+                                    },
+                                }
                             }
                             1 => {
                                 assert_eq!(arg.key().unwrap().text(), "abi");
-                                assert_eq!(arg.value().unwrap().text(), "solidity");
+                                let val = arg.value().unwrap();
+                                match val {
+                                    AttrArgValueKind::Ident(tok) => {
+                                        panic!("expected string literal, got ident {}", tok.text())
+                                    }
+                                    AttrArgValueKind::Lit(lit) => match lit.kind() {
+                                        crate::ast::lit::LitKind::String(s) => {
+                                            assert_eq!(s.token().text(), "\"solidity\"")
+                                        }
+                                        _ => panic!("expected string literal"),
+                                    },
+                                }
                             }
                             _ => unreachable!(),
                         }
                     }
+                }
+
+                2 => {
+                    assert_eq!(attr.path().unwrap().text(), "feat");
+                    let mut args = attr.args().unwrap().into_iter();
+
+                    // foo::bar = 1
+                    let arg = args.next().unwrap();
+                    assert_eq!(arg.key().unwrap().text(), "foo::bar");
+                    match arg.value().unwrap() {
+                        AttrArgValueKind::Lit(l) => match l.kind() {
+                            crate::ast::lit::LitKind::Int(i) => {
+                                assert_eq!(i.token().text(), "1")
+                            }
+                            _ => panic!("expected int literal"),
+                        },
+                        _ => panic!("expected literal"),
+                    }
+
+                    // baz = false
+                    let arg = args.next().unwrap();
+                    assert_eq!(arg.key().unwrap().text(), "baz");
+                    match arg.value().unwrap() {
+                        AttrArgValueKind::Lit(l) => match l.kind() {
+                            crate::ast::lit::LitKind::Bool(b) => {
+                                assert_eq!(b.token().text(), "false")
+                            }
+                            _ => panic!("expected bool literal"),
+                        },
+                        _ => panic!("expected literal"),
+                    }
+
+                    // name = Foo (ident)
+                    let arg = args.next().unwrap();
+                    assert_eq!(arg.key().unwrap().text(), "name");
+                    match arg.value().unwrap() {
+                        AttrArgValueKind::Ident(tok) => {
+                            assert_eq!(tok.text(), "Foo")
+                        }
+                        _ => panic!("expected ident"),
+                    }
+
+                    assert!(args.next().is_none());
                 }
 
                 _ => unreachable!(),

@@ -1,80 +1,95 @@
 ---
 source: crates/parser/tests/syntax_node.rs
+assertion_line: 25
 expression: node
-input_file: crates/parser/test_files/syntax_node/structs/attr.fe
+input_file: test_files/syntax_node/structs/attr.fe
 ---
-Root@0..171
-  ItemList@0..171
-    Item@0..171
-      Struct@0..171
-        AttrList@0..56
+Root@0..179
+  ItemList@0..178
+    Item@0..178
+      Struct@0..178
+        AttrList@0..58
           DocCommentAttr@0..15
             DocComment@0..15 "/// DocComment1"
           Newline@15..16 "\n"
-          Attr@16..21
+          Attr@16..23
             Pound@16..17 "#"
-            Ident@17..21 "attr"
-          Newline@21..22 "\n"
-          Comment@22..39 "// normal comment"
-          Newline@39..40 "\n"
-          DocCommentAttr@40..55
-            DocComment@40..55 "/// DocComment2"
-          Newline@55..56 "\n"
-        ItemModifier@56..59
-          PubKw@56..59 "pub"
-        WhiteSpace@59..60 " "
-        StructKw@60..66 "struct"
-        WhiteSpace@66..67 " "
-        Ident@67..77 "StructAttr"
-        WhiteSpace@77..78 " "
-        RecordFieldDefList@78..171
-          LBrace@78..79 "{"
-          Newline@79..80 "\n"
-          WhiteSpace@80..84 "    "
-          RecordFieldDef@84..115
-            AttrList@84..100
-              DocCommentAttr@84..99
-                DocComment@84..99 "/// This is `x`"
-              Newline@99..100 "\n"
-            WhiteSpace@100..104 "    "
-            Ident@104..105 "x"
-            Colon@105..106 ":"
-            WhiteSpace@106..107 " "
-            PathType@107..115
-              Path@107..115
-                PathSegment@107..110
-                  Ident@107..110 "foo"
-                Colon2@110..112 "::"
-                PathSegment@112..115
-                  Ident@112..115 "Bar"
-          Comma@115..116 ","
-          Newline@116..117 "\n"
-          WhiteSpace@117..121 "    "
-          RecordFieldDef@121..169
-            AttrList@121..159
-              DocCommentAttr@121..136
-                DocComment@121..136 "/// This is `y`"
-              Newline@136..137 "\n"
-              WhiteSpace@137..141 "    "
-              Attr@141..158
-                Pound@141..142 "#"
-                Ident@142..145 "cfg"
-                AttrArgList@145..158
-                  LParen@145..146 "("
-                  AttrArg@146..157
-                    Ident@146..152 "target"
-                    Colon@152..153 ":"
-                    WhiteSpace@153..154 " "
-                    Ident@154..157 "evm"
-                  RParen@157..158 ")"
-              Newline@158..159 "\n"
-            WhiteSpace@159..163 "    "
-            Ident@163..164 "y"
-            Colon@164..165 ":"
-            WhiteSpace@165..166 " "
-            PathType@166..169
-              Path@166..169
-                PathSegment@166..169
-                  Ident@166..169 "i32"
-          Newline@169..170 "\n"
-          RBrace@170..171 "}"
+            LBracket@17..18 "["
+            Path@18..22
+              PathSegment@18..22
+                Ident@18..22 "attr"
+            RBracket@22..23 "]"
+          Newline@23..24 "\n"
+          Comment@24..41 "// normal comment"
+          Newline@41..42 "\n"
+          DocCommentAttr@42..57
+            DocComment@42..57 "/// DocComment2"
+          Newline@57..58 "\n"
+        ItemModifier@58..61
+          PubKw@58..61 "pub"
+        WhiteSpace@61..62 " "
+        StructKw@62..68 "struct"
+        WhiteSpace@68..69 " "
+        Ident@69..79 "StructAttr"
+        WhiteSpace@79..80 " "
+        RecordFieldDefList@80..178
+          LBrace@80..81 "{"
+          Newline@81..82 "\n"
+          WhiteSpace@82..86 "    "
+          RecordFieldDef@86..117
+            AttrList@86..102
+              DocCommentAttr@86..101
+                DocComment@86..101 "/// This is `x`"
+              Newline@101..102 "\n"
+            WhiteSpace@102..106 "    "
+            Ident@106..107 "x"
+            Colon@107..108 ":"
+            WhiteSpace@108..109 " "
+            PathType@109..117
+              Path@109..117
+                PathSegment@109..112
+                  Ident@109..112 "foo"
+                Colon2@112..114 "::"
+                PathSegment@114..117
+                  Ident@114..117 "Bar"
+          Comma@117..118 ","
+          Newline@118..119 "\n"
+          WhiteSpace@119..123 "    "
+          RecordFieldDef@123..176
+            AttrList@123..166
+              DocCommentAttr@123..138
+                DocComment@123..138 "/// This is `y`"
+              Newline@138..139 "\n"
+              WhiteSpace@139..143 "    "
+              Attr@143..165
+                Pound@143..144 "#"
+                LBracket@144..145 "["
+                Path@145..148
+                  PathSegment@145..148
+                    Ident@145..148 "cfg"
+                AttrArgList@148..164
+                  LParen@148..149 "("
+                  AttrArg@149..163
+                    Path@149..155
+                      PathSegment@149..155
+                        Ident@149..155 "target"
+                    WhiteSpace@155..156 " "
+                    Eq@156..157 "="
+                    WhiteSpace@157..158 " "
+                    AttrArgValue@158..163
+                      Lit@158..163
+                        String@158..163 "\"evm\""
+                  RParen@163..164 ")"
+                RBracket@164..165 "]"
+              Newline@165..166 "\n"
+            WhiteSpace@166..170 "    "
+            Ident@170..171 "y"
+            Colon@171..172 ":"
+            WhiteSpace@172..173 " "
+            PathType@173..176
+              Path@173..176
+                PathSegment@173..176
+                  Ident@173..176 "i32"
+          Newline@176..177 "\n"
+          RBrace@177..178 "}"
+  Newline@178..179 "\n"

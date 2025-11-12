@@ -618,17 +618,18 @@ impl<S: TokenStream> Parser<S> {
 
     /// Wrap the current token in a `SyntaxKind::Error`, and add a
     /// `ParseError::Unexpected`.
-    fn unexpected_token_error(&mut self, msg: String) {
+    fn unexpected_token_error(&mut self, msg: String) -> ErrProof {
         let checkpoint = self.enter(ErrorScope::default(), None);
 
         let start_pos = self.current_pos;
         self.bump();
 
-        self.add_error(ParseError::Unexpected(
+        let proof = self.add_error(ParseError::Unexpected(
             msg,
             TextRange::new(start_pos, self.current_pos),
         ));
         self.leave(checkpoint);
+        proof
     }
 
     /// Returns `true` if the parser is in the dry run mode.
