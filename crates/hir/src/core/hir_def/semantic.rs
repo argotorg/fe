@@ -39,6 +39,8 @@ use crate::analysis::ty::{
 };
 // (kind-lowering helpers intentionally omitted; see WherePredicateView::kind)
 
+// (Additional view types appear below; keep layering semantic.)
+
 /// Consolidated assumptions for any item kind.
 pub fn constraints_for<'db>(db: &'db dyn HirAnalysisDb, item: ItemKind<'db>) -> PredicateListId<'db> {
     match item {
@@ -846,6 +848,44 @@ impl<'db> ImplTrait<'db> {
 
         diags
     }
+
+    /// Diagnostics for well-formedness and invalid types of implemented associated types.
+    /// Emits parse/lower errors and well-formedness (trait-bound satisfiability) for each
+    /// `type Assoc = ...` inside this impl-trait block.
+    pub fn diags_assoc_types_wf(self, db: &'db dyn HirAnalysisDb) -> Vec<TyDiagCollection<'db>> {
+        use crate::analysis::ty::{
+            trait_resolution::{check_ty_wf, WellFormedness},
+            ty_error::collect_ty_lower_errors,
+            ty_lower::lower_hir_ty,
+        };
+        let mut diags = Vec::new();
+        let ingot = self.top_mod(db).ingot(db);
+        let assumptions = constraints_for(db, self.into());
+        for (idx, def) in self.types(db).iter().enumerate() {
+            let ty_span = self.span().associated_type(idx).ty();
+            if let Some(hir) = def.type_ref.to_opt() {
+                let errs = collect_ty_lower_errors(db, self.scope(), hir, ty_span.clone(), assumptions);
+                if !errs.is_empty() {
+                    diags.extend(errs);
+                    continue;
+                }
+                let ty = lower_hir_ty(db, hir, self.scope(), assumptions);
+                if let WellFormedness::IllFormed { goal, subgoal } =
+                    check_ty_wf(db, ingot, ty, assumptions)
+                {
+                    diags.push(
+                        crate::analysis::ty::diagnostics::TraitConstraintDiag::TraitBoundNotSat {
+                            span: ty_span.into(),
+                            primary_goal: goal,
+                            unsat_subgoal: subgoal,
+                        }
+                        .into(),
+                    );
+                }
+            }
+        }
+        diags
+    }
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -1260,6 +1300,39 @@ impl<'db> VariantView<'db> {
         &def.fields(db)[self.idx]
     }
 
+    /// Diagnostics for tuple-variant element types: star-kind and non-const checks.
+    /// Returns an empty list if this is not a tuple variant.
+    pub fn diags_tuple_elems_wf(
+        self,
+        db: &'db dyn HirAnalysisDb,
+    ) -> Vec<crate::analysis::ty::diagnostics::TyDiagCollection<'db>> {
+        use crate::analysis::ty::{
+            diagnostics::TyLowerDiag,
+            trait_resolution::constraint::collect_adt_constraints,
+            ty_lower::lower_hir_ty,
+        };
+        let mut out = Vec::new();
+        if let VariantKind::Tuple(tuple_id) = self.kind(db) {
+            let assumptions = collect_adt_constraints(db, self.owner.as_adt(db)).instantiate_identity();
+            let scope = self.owner.scope();
+            let base_span = self.span().tuple_type();
+            for (i, elem) in tuple_id.data(db).iter().enumerate() {
+                let Some(hir_ty) = elem.to_opt() else { continue };
+                let ty = lower_hir_ty(db, hir_ty, scope, assumptions);
+                let span = base_span.clone().elem_ty(i).into();
+                if !ty.has_star_kind(db) {
+                    out.push(TyLowerDiag::ExpectedStarKind(span).into());
+                    continue;
+                }
+                if ty.is_const_ty(db) {
+                    out.push(TyLowerDiag::NormalTypeExpected { span, given: ty }.into());
+                    continue;
+                }
+            }
+        }
+        out
+    }
+
     /// Iterates record fields (empty for non-record variants) as contextual views.
     pub fn fields(self, db: &'db dyn HirDb) -> impl Iterator<Item = FieldView<'db>> + 'db {
         let parent = FieldParent::Variant(EnumVariant::new(self.owner, self.idx));
@@ -1312,6 +1385,63 @@ impl<'db> FieldView<'db> {
     /// that still operate on HIR type refs.
     pub fn type_ref___tmp(self, db: &'db dyn HirDb) -> Partial<TypeId<'db>> {
         self.hir_type_ref(db)
+    }
+
+    pub fn ty_span(self) -> crate::span::DynLazySpan<'db> {
+        match self.parent {
+            FieldParent::Struct(s) => s.span().fields().field(self.idx).ty().into(),
+            FieldParent::Contract(c) => c.span().fields().field(self.idx).ty().into(),
+            FieldParent::Variant(v) => v.span().fields().field(self.idx).ty().into(),
+        }
+    }
+
+    /// Diagnostics for this field's type: star-kind/const-ness and const-type parameter mismatch.
+    /// Returns an empty list if no issues are found. Assumptions are derived from owner context.
+    pub fn diags_wf(self, db: &'db dyn HirAnalysisDb) -> Vec<crate::analysis::ty::diagnostics::TyDiagCollection<'db>> {
+        let mut out = Vec::new();
+        let ty = self.ty(db);
+        let span = self.ty_span();
+        if !ty.has_star_kind(db) {
+            out.push(crate::analysis::ty::diagnostics::TyLowerDiag::ExpectedStarKind(span.clone()).into());
+            return out;
+        }
+        if ty.is_const_ty(db) {
+            out.push(
+                crate::analysis::ty::diagnostics::TyLowerDiag::NormalTypeExpected { span: span.clone(), given: ty }
+                    .into(),
+            );
+            return out;
+        }
+
+        // Const type parameter mismatch check: if field name matches a const type parameter in scope.
+        if let Some(name) = self.name(db) {
+            use crate::analysis::name_resolution::resolve_path;
+            use crate::analysis::name_resolution::PathRes;
+            use crate::hir_def::PathId;
+            let scope = crate::hir_def::scope_graph::ScopeId::Field(self.parent, self.idx as u16);
+            let path = PathId::from_ident(db, name);
+            let assumptions = crate::analysis::ty::trait_resolution::PredicateListId::empty_list(db);
+            if let Ok(PathRes::Ty(t)) = resolve_path(db, path, scope, assumptions, true) {
+                use crate::analysis::ty::ty_def::TyData;
+                if let TyData::ConstTy(const_ty) = t.data(db) {
+                    let expected = *const_ty;
+                    let expected_ty = expected.ty(db);
+                    if !expected_ty.has_invalid(db) && !ty.has_invalid(db) && ty != expected_ty {
+                        out.push(
+                            crate::analysis::ty::diagnostics::TyLowerDiag::ConstTyMismatch {
+                                span,
+                                expected: expected_ty,
+                                given: ty,
+                            }
+                            .into(),
+                        );
+                        return out;
+                    }
+                }
+            }
+        }
+
+        out
     }
 }
 

@@ -975,7 +975,7 @@ pub struct ImplTrait<'db> {
     pub(in crate::core) generic_params: GenericParamListId<'db>,
     pub(in crate::core) where_clause: WhereClauseId<'db>,
     #[return_ref]
-    pub types: Vec<AssocTyDef<'db>>,
+    pub(in crate::core) types: Vec<AssocTyDef<'db>>,
     pub top_mod: TopLevelMod<'db>,
 
     #[return_ref]

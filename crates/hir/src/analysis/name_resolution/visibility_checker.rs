@@ -56,7 +56,11 @@ pub(crate) fn is_ty_visible_from(db: &dyn HirAnalysisDb, ty: TyId, from_scope: S
             TyBase::Func(func) => is_scope_visible_from(db, func.scope(db), from_scope),
         },
         TyData::TyParam(param) => is_scope_visible_from(db, param.scope(db), from_scope),
-        TyData::AssocTy(assoc_ty) => is_scope_visible_from(db, assoc_ty.scope(db), from_scope),
+        // Associated type projections (e.g., `T::Assoc`, `<T as Trait>::Assoc`) are
+        // semantic types, not free type items. They should be usable wherever the
+        // projection type itself is well-formed, regardless of the visibility of
+        // the associated type declaration inside the trait. Treat them as visible.
+        TyData::AssocTy(_assoc_ty) => true,
 
         TyData::ConstTy(const_ty) => match const_ty.data(db) {
             ConstTyData::TyVar(_, _) => true,

@@ -64,12 +64,11 @@ pub(crate) fn lower_impl_trait<'db>(
     db: &'db dyn HirAnalysisDb,
     impl_trait: ImplTrait<'db>,
 ) -> Option<Binder<Implementor<'db>>> {
-    let scope = impl_trait.scope();
-
+    // Assumptions derived from the impl-trait item, used for trait-ref lowering below.
     let assumptions = collect_constraints(db, impl_trait.into()).instantiate_identity();
 
-    let hir_ty = impl_trait.type_ref___tmp(db).to_opt()?;
-    let ty = lower_hir_ty(db, hir_ty, scope, assumptions);
+    // Semantic implementor type of this impl-trait block.
+    let ty = impl_trait.ty(db);
     if ty.has_invalid(db) {
         return None;
     }
@@ -93,13 +92,10 @@ pub(crate) fn lower_impl_trait<'db>(
         .params(db)
         .to_vec();
 
+    // Semantic associated type implementations in this impl-trait block.
     let mut types: IndexMap<_, _> = impl_trait
-        .types(db)
-        .iter()
-        .filter_map(|t| match (t.name.to_opt(), t.type_ref___tmp().to_opt()) {
-            (Some(name), Some(ty)) => Some((name, lower_hir_ty(db, ty, scope, assumptions))),
-            _ => None,
-        })
+        .assoc_types(db)
+        .filter_map(|v| v.name(db).and_then(|name| v.ty(db).map(|ty| (name, ty))))
         .collect();
 
     // Merge trait associated type defaults into the implementor, but evaluated in

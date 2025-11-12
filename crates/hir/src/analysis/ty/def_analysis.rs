@@ -31,7 +31,7 @@ use super::{
     },
     ty_def::{InvalidCause, TyData, TyId},
     ty_error::collect_ty_lower_errors,
-    ty_lower::{collect_generic_params, lower_kind},
+    ty_lower::{collect_generic_params, lower_hir_ty, lower_kind},
     visitor::{TyVisitor, walk_ty},
 };
 use crate::analysis::{
@@ -46,7 +46,6 @@ use crate::analysis::{
         trait_resolution::{
             constraint::super_trait_cycle,
         },
-        ty_lower::lower_hir_ty,
         visitor::TyVisitable,
     },
 };
@@ -202,11 +201,11 @@ pub fn analyze_impl<'db>(
     db: &'db dyn HirAnalysisDb,
     impl_: HirImpl<'db>,
 ) -> Vec<TyDiagCollection<'db>> {
-    if impl_.type_ref___tmp(db).to_opt().is_none() {
+    // Prefer semantic implementor type; early‑exit only for parse‑missing cases
+    let ty = impl_.ty(db);
+    if matches!(ty.data(db), TyData::Invalid(InvalidCause::ParseError)) {
         return Vec::new();
     }
-
-    let ty = impl_.ty(db);
 
     let analyzer = DefAnalyzer::for_impl(db, impl_, ty);
     let mut diags = analyzer.analyze();
@@ -254,6 +253,8 @@ impl<'db> DefAnalyzer<'db> {
             current_ty: None,
         }
     }
+
+    
 
     fn for_trait(db: &'db dyn HirAnalysisDb, trait_: Trait<'db>) -> Self {
         let def = lower_trait(db, trait_);
@@ -519,8 +520,8 @@ impl<'db> Visitor<'db> for DefAnalyzer<'db> {
     fn visit_item(&mut self, _ctxt: &mut VisitorCtxt<'db, LazyItemSpan>, _item: ItemKind<'db>) {}
 
     fn visit_ty(&mut self, ctxt: &mut VisitorCtxt<'db, LazyTySpan<'db>>, hir_ty: HirTyId<'db>) {
-        let ty = lower_hir_ty(self.db, hir_ty, self.scope(), self.assumptions);
         let span = ctxt.span().unwrap();
+        let ty = lower_hir_ty(self.db, hir_ty, self.scope(), self.assumptions);
 
         if ty.has_invalid(self.db) {
             let diags = collect_ty_lower_errors(
@@ -545,26 +546,18 @@ impl<'db> Visitor<'db> for DefAnalyzer<'db> {
         ctxt: &mut VisitorCtxt<'db, LazyWherePredicateSpan<'db>>,
         pred: &crate::core::hir_def::WherePredicate<'db>,
     ) {
-        let Some(hir_ty) = pred.ty.to_opt() else {
-            return;
-        };
-
+        let Some(hir_ty) = pred.ty.to_opt() else { return; };
         let ty = lower_hir_ty(self.db, hir_ty, self.scope(), self.assumptions);
-
         if ty.is_const_ty(self.db) {
-            let diag =
-                TraitConstraintDiag::ConstTyBound(ctxt.span().unwrap().ty().into(), ty).into();
+            let diag = TraitConstraintDiag::ConstTyBound(ctxt.span().unwrap().ty().into(), ty).into();
             self.diags.push(diag);
             return;
         }
-
         if !ty.has_invalid(self.db) && !ty.has_param(self.db) {
-            let diag =
-                TraitConstraintDiag::ConcreteTypeBound(ctxt.span().unwrap().ty().into(), ty).into();
+            let diag = TraitConstraintDiag::ConcreteTypeBound(ctxt.span().unwrap().ty().into(), ty).into();
             self.diags.push(diag);
             return;
         }
-
         self.current_ty = Some((ty, ctxt.span().unwrap().ty().into()));
         walk_where_predicate(self, ctxt, pred);
     }
@@ -574,36 +567,19 @@ impl<'db> Visitor<'db> for DefAnalyzer<'db> {
         ctxt: &mut VisitorCtxt<'db, LazyFieldDefSpan<'db>>,
         field: &FieldDef<'db>,
     ) {
-        let Some(ty) = field.field_type_ref___tmp().to_opt() else {
-            return;
-        };
-
-        if !self.verify_term_type_kind(ty, ctxt.span().unwrap().ty().into()) {
-            return;
-        }
-
-        let Some(name) = field.name.to_opt() else {
-            return;
-        };
-
-        // Checks if the field type is the same as the type of const type parameter.
-        if let Some(const_ty) = find_const_ty_param(self.db, name, ctxt.scope()) {
-            let const_ty_ty = const_ty.ty(self.db);
-            let field_ty = lower_hir_ty(self.db, ty, ctxt.scope(), self.assumptions);
-            if !const_ty_ty.has_invalid(self.db)
-                && !field_ty.has_invalid(self.db)
-                && field_ty != const_ty_ty
-            {
-                self.diags.push(
-                    TyLowerDiag::ConstTyMismatch {
-                        span: ctxt.span().unwrap().ty().into(),
-                        expected: const_ty_ty,
-                        given: field_ty,
-                    }
-                    .into(),
-                );
+        // Derive FieldView from the field scope and delegate diagnostics to semantic helper
+        let (parent, idx) = match ctxt.scope() {
+            ScopeId::Field(parent, idx) => (parent, idx as usize),
+            _ => {
+                walk_field_def(self, ctxt, field);
                 return;
             }
+        };
+        let view = crate::hir_def::semantic::FieldView { parent, idx };
+        let diags = view.diags_wf(self.db);
+        if !diags.is_empty() {
+            self.diags.extend(diags);
+            return;
         }
 
         walk_field_def(self, ctxt, field);
@@ -614,14 +590,12 @@ impl<'db> Visitor<'db> for DefAnalyzer<'db> {
         ctxt: &mut VisitorCtxt<'db, LazyVariantDefSpan<'db>>,
         variant: &crate::core::hir_def::VariantDef<'db>,
     ) {
-        if let VariantKind::Tuple(tuple_id) = variant.kind {
-            let span = ctxt.span().unwrap().tuple_type();
-            for (i, elem_ty) in tuple_id.data(self.db).iter().enumerate() {
-                let Some(elem_ty) = elem_ty.to_opt() else {
-                    continue;
-                };
-
-                self.verify_term_type_kind(elem_ty, span.clone().elem_ty(i).into());
+        // Derive VariantView from scope and delegate tuple-element diags to semantics
+        if let ScopeId::Variant(v) = ctxt.scope() {
+            let view = crate::hir_def::semantic::VariantView { owner: v.enum_, idx: v.idx as usize };
+            let diags = view.diags_tuple_elems_wf(self.db);
+            if !diags.is_empty() {
+                self.diags.extend(diags);
             }
         }
         walk_variant_def(self, ctxt, variant);
@@ -790,8 +764,6 @@ impl<'db> Visitor<'db> for DefAnalyzer<'db> {
         };
         let name_span = def.trait_(self.db).span().name().into();
         self.current_ty = Some((self.def.trait_self_param(self.db), name_span));
-        // Retain visitor-driven analysis to preserve existing diagnostics behavior
-        // for super-trait references and WF checks.
         walk_super_trait_list(self, ctxt, super_traits);
     }
 
@@ -820,37 +792,11 @@ impl<'db> Visitor<'db> for DefAnalyzer<'db> {
         ctxt: &mut VisitorCtxt<'db, LazyImplTraitSpan<'db>>,
         impl_trait: ImplTrait<'db>,
     ) {
-        for assoc_type in impl_trait.types(self.db) {
-            if let Some(ty) = assoc_type.type_ref___tmp().to_opt() {
-                let ty_span = assoc_type
-                    .name
-                    .to_opt()
-                    .and_then(|name| impl_trait.associated_type_span(self.db, name))
-                    .map(|s| s.ty())
-                    .unwrap_or_else(|| ctxt.span().unwrap().ty());
-
-                let lowered_ty = lower_hir_ty(self.db, ty, impl_trait.scope(), self.assumptions);
-
-                if lowered_ty.has_invalid(self.db) {
-                    let diags = collect_ty_lower_errors(
-                        self.db,
-                        impl_trait.scope(),
-                        ty,
-                        ty_span.clone(),
-                        self.assumptions,
-                    );
-                    if !diags.is_empty() {
-                        self.diags.extend(diags);
-                    }
-                }
-
-                if let Some(diag) =
-                    lowered_ty.emit_wf_diag(self.db, ctxt.ingot(), self.assumptions, ty_span.into())
-                {
-                    self.diags.push(diag);
-                }
-            }
-        }
+        // Delegate assoc-type WF + invalid diagnostics and other checks to semantic helpers
+        self.diags.extend(impl_trait.diags_assoc_types_wf(self.db));
+        self.diags.extend(impl_trait.diags_missing_assoc_types(self.db));
+        self.diags.extend(impl_trait.diags_assoc_types_bounds(self.db));
+        self.diags.extend(impl_trait.diags_trait_ref_and_wf(self.db));
 
         walk_impl_trait(self, ctxt, impl_trait);
     }
@@ -916,8 +862,16 @@ impl<'db> Visitor<'db> for DefAnalyzer<'db> {
 
         walk_func(self, ctxt, hir_func);
 
-        if let Some(ret_ty) = hir_func.ret_type_ref___tmp(self.db) {
-            self.verify_term_type_kind(ret_ty, hir_func.span().ret_ty().into());
+        // Verify explicit return type, if annotated, using semantic lowering.
+        if hir_func.has_explicit_return_ty(self.db) {
+            let ret = hir_func.return_ty(self.db);
+            let span = hir_func.span().ret_ty().into();
+            if !ret.has_star_kind(self.db) {
+                self.diags.push(TyLowerDiag::ExpectedStarKind(span).into());
+            } else if ret.is_const_ty(self.db) {
+                self.diags
+                    .push(TyLowerDiag::NormalTypeExpected { span, given: ret }.into());
+            }
         }
 
         self.assumptions = constraints;
@@ -1158,7 +1112,8 @@ fn analyze_impl_trait_specific_error<'db>(
     let Some(trait_ref) = impl_trait.trait_ref(db).to_opt() else {
         return Err(diags);
     };
-    if impl_trait.type_ref___tmp(db).to_opt().is_none() {
+    // Early return if the implementor type is syntactically missing
+    if matches!(impl_trait.ty(db).data(db), TyData::Invalid(InvalidCause::ParseError)) {
         return Err(diags);
     }
 
@@ -1272,9 +1227,9 @@ fn analyze_impl_trait_specific_error<'db>(
     }
 
     let trait_def = trait_inst.def(db);
-    let trait_constraints =
+    let _trait_constraints =
         collect_constraints(db, trait_def.trait_(db).into()).instantiate(db, trait_inst.args(db));
-    let assumptions = implementor.instantiate_identity().constraints(db);
+    let _assumptions = implementor.instantiate_identity().constraints(db);
 
     // 6–7. Trait-ref WF and super-trait constraints via semantic traversal
     diags.extend(impl_trait.diags_trait_ref_and_wf(db));

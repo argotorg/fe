@@ -18,6 +18,8 @@ use super::{
     ty_def::{InvalidCause, TyData, TyId},
     ty_lower::lower_hir_ty,
 };
+use crate::visitor::prelude::LazyTraitRefSpan;
+use crate::visitor::walk_trait_ref;
 
 pub fn collect_ty_lower_errors<'db>(
     db: &'db dyn HirAnalysisDb,
@@ -136,6 +138,79 @@ impl<'db> Visitor<'db> for HirTyErrVisitor<'db> {
         }
 
         walk_path(self, ctxt, path);
+    }
+
+    fn visit_trait_ref(
+        &mut self,
+        ctxt: &mut VisitorCtxt<'db, LazyTraitRefSpan<'db>>,
+        trait_ref: crate::core::hir_def::TraitRefId<'db>,
+    ) {
+        let scope = ctxt.scope();
+        let span = ctxt.span().unwrap();
+        let Some(path) = trait_ref.path(self.db).to_opt() else {
+            return;
+        };
+
+        // Visibility check for trait paths mirrors visit_path but expects a Trait.
+        let mut invisible = None;
+        let mut check_visibility = |p: PathId<'db>, reso: &crate::analysis::name_resolution::PathRes<'db>| {
+            if invisible.is_some() {
+                return;
+            }
+            if !reso.is_visible_from(self.db, scope) {
+                invisible = Some((p, reso.name_span(self.db)));
+            }
+        };
+
+        match crate::analysis::name_resolution::resolve_path_with_observer(
+            self.db,
+            path,
+            scope,
+            self.assumptions,
+            false,
+            &mut check_visibility,
+        ) {
+            Ok(res) => {
+                if !matches!(res, crate::analysis::name_resolution::PathRes::Trait(_)) {
+                    // Expected a trait in this context
+                    let ident = path.ident(self.db).unwrap();
+                    let seg_span = span.clone().name();
+                    self.diags.push(
+                        crate::analysis::name_resolution::diagnostics::PathResDiag::ExpectedTrait(
+                            seg_span.into(),
+                            ident,
+                            res.kind_name(),
+                        )
+                        .into(),
+                    );
+                }
+
+                if let Some((p, deriv_span)) = invisible {
+                    let seg_span = span.name();
+                    let ident = path.ident(self.db).unwrap();
+                    let diag = crate::analysis::name_resolution::diagnostics::PathResDiag::Invisible(
+                        seg_span.into(),
+                        ident,
+                        deriv_span,
+                    );
+                    self.diags.push(diag.into());
+                }
+            }
+            Err(err) => {
+                if let Some(diag) = err.into_diag(
+                    self.db,
+                    path,
+                    span.clone().path(),
+                    crate::analysis::name_resolution::ExpectedPathKind::Trait,
+                ) {
+                    self.diags.push(diag.into());
+                }
+            }
+        }
+
+        // Do not recurse into the trait path via visit_path to avoid emitting
+        // type-expected diagnostics for trait-qualified segments. Generic
+        // arguments under the trait path are checked elsewhere during lowering.
     }
 }
 

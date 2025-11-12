@@ -835,13 +835,11 @@ pub fn find_associated_type<'db>(
     name: IdentId<'db>,
     assumptions: PredicateListId<'db>,
 ) -> SmallVec<(TraitInstId<'db>, TyId<'db>), 4> {
-    // Qualified type: `<A as T>::B`. B must be an associated type of trait T.
+    // Qualified type: `<A as T>::B`. Always construct the associated type projection
+    // against the qualified trait instance; bindings (if any) will be handled downstream.
     if let TyData::QualifiedTy(trait_inst) = ty.value.data(db) {
-        return if let Some(assoc_ty) = trait_inst.assoc_ty(db, name) {
-            smallvec![(*trait_inst, assoc_ty)]
-        } else {
-            smallvec![]
-        };
+        let proj = TyId::assoc_ty(db, *trait_inst, name);
+        return smallvec![(*trait_inst, proj)];
     }
 
     let ingot = scope.ingot(db);
