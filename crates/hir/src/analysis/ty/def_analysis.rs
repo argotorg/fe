@@ -89,11 +89,13 @@ pub fn analyze_adt<'db>(
     // Non-trailing default generic params via semantic traversal
     match adt_ref {
         AdtRef::Struct(s) => {
+            diags.extend(GenericParamOwner::Struct(s).diags_params_defined_in_parent(db));
             diags.extend(GenericParamOwner::Struct(s).diags_non_trailing_defaults(db));
             diags.extend(GenericParamOwner::Struct(s).diags_default_forward_refs(db));
         }
         AdtRef::Contract(_c) => {/* contracts are not GenericParamOwner */}
         AdtRef::Enum(e) => {
+            diags.extend(GenericParamOwner::Enum(e).diags_params_defined_in_parent(db));
             diags.extend(GenericParamOwner::Enum(e).diags_non_trailing_defaults(db));
             diags.extend(GenericParamOwner::Enum(e).diags_default_forward_refs(db));
         }
@@ -155,7 +157,10 @@ pub fn analyze_trait<'db>(
 
     // Semantic traversal aggregations
     diags.extend(trait_.diags_assoc_defaults(db));
-    diags.extend(trait_.diags_super_traits(db));
+    // TODO(diags): Wire in trait_.diags_super_traits(db) once implemented and
+    // parity-checked against existing visitor diagnostics.
+    // diags.extend(trait_.diags_super_traits(db));
+    diags.extend(GenericParamOwner::Trait(trait_).diags_params_defined_in_parent(db));
     diags.extend(GenericParamOwner::Trait(trait_).diags_non_trailing_defaults(db));
     diags.extend(GenericParamOwner::Trait(trait_).diags_default_forward_refs(db));
 
@@ -191,6 +196,7 @@ pub fn analyze_impl_trait<'db>(
     let def_diags = analyzer.analyze();
 
     diags.extend(def_diags);
+    diags.extend(GenericParamOwner::ImplTrait(impl_trait).diags_params_defined_in_parent(db));
     diags.extend(GenericParamOwner::ImplTrait(impl_trait).diags_non_trailing_defaults(db));
     diags.extend(GenericParamOwner::ImplTrait(impl_trait).diags_default_forward_refs(db));
     diags
@@ -209,6 +215,7 @@ pub fn analyze_impl<'db>(
 
     let analyzer = DefAnalyzer::for_impl(db, impl_, ty);
     let mut diags = analyzer.analyze();
+    diags.extend(GenericParamOwner::Impl(impl_).diags_params_defined_in_parent(db));
     diags.extend(GenericParamOwner::Impl(impl_).diags_non_trailing_defaults(db));
     diags.extend(GenericParamOwner::Impl(impl_).diags_default_forward_refs(db));
     diags
@@ -485,34 +492,8 @@ impl<'db> DefAnalyzer<'db> {
 // This check is necessary because the conflict rule
 // for the generic parameter is the exceptional case where shadowing shouldn't
 // occur.
-#[deprecated]
-fn check_param_defined_in_parent<'db>(
-    db: &'db dyn HirAnalysisDb,
-    scope: ScopeId<'db>,
-    param: &GenericParam<'db>,
-    span: LazyGenericParamSpan<'db>,
-) -> Option<TyLowerDiag<'db>> {
-    let name = param.name().to_opt()?;
-    let parent_scope = scope.parent_item(db)?.scope();
-    let path = PathId::from_ident(db, name);
-
-    match resolve_path(
-        db,
-        path,
-        parent_scope,
-        PredicateListId::empty_list(db),
-        false,
-    ) {
-        Ok(r @ PathRes::Ty(ty)) if ty.is_param(db) => {
-            Some(TyLowerDiag::GenericParamAlreadyDefinedInParent {
-                span,
-                conflict_with: r.name_span(db).unwrap(),
-                name,
-            })
-        }
-        _ => None,
-    }
-}
+// Note: legacy check_param_defined_in_parent has been replaced by
+// GenericParamOwner::diags_params_defined_in_parent. See analyze_* functions.
 
 impl<'db> Visitor<'db> for DefAnalyzer<'db> {
     // We don't need to traverse the nested item, each item kinds are explicitly
@@ -645,12 +626,14 @@ impl<'db> Visitor<'db> for DefAnalyzer<'db> {
             unreachable!()
         };
 
-        if let Some(diag) =
-            check_param_defined_in_parent(self.db, self.scope(), param, ctxt.span().unwrap())
-        {
-            self.diags.push(diag.into());
-            return;
-        }
+        // TODO(migrate): Replace legacy "defined in parent" emission with
+        // GenericParamOwner::diags_params_defined_in_parent once we ensure this
+        // doesn’t duplicate diagnostics for all owners. For now, keep visitor
+        // path to preserve snapshots.
+        // Note: "defined in parent" diagnostics are now emitted via
+        // GenericParamOwner::<...>::diags_params_defined_in_parent at the
+        // analyze_* entry points. Avoid emitting them here to prevent
+        // duplicates.
 
         match param {
             GenericParam::Type(tp) => {

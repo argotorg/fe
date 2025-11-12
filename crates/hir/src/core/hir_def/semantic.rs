@@ -430,6 +430,9 @@ impl<'db> WherePredicateView<'db> {
 
     /// Lower trait bounds in this predicate against its own lowered subject type.
     /// Skips kind bounds and failed lowerings.
+    // TODO(api): Remove this coarse-grained helper once all callers iterate
+    // per-bound views (WherePredicateBoundView) for precise spans/diagnostics.
+    // Visibility already restricted to crate::core.
     pub(in crate::core) fn trait_bounds_lowered(
         self,
         db: &'db dyn HirAnalysisDb,
@@ -441,6 +444,8 @@ impl<'db> WherePredicateView<'db> {
 
     /// Lower trait bounds in this predicate against an explicit subject type.
     /// Useful for `Self: Bound` in trait contexts.
+    // TODO(api): Same as above — prefer per-bound APIs and drop this method
+    // after migrating internal users.
     pub(in crate::core) fn trait_bounds_lowered_with_subject(
         self,
         db: &'db dyn HirAnalysisDb,
@@ -576,6 +581,9 @@ impl<'db> Trait<'db> {
 
     /// Diagnostics for super-traits (placeholder).
     /// Intentionally returns no diagnostics to preserve current behavior during migration.
+    // TODO(diags): Implement via SuperTraitRefView::trait_inst + kind_mismatch_for_self
+    // and is_goal_satisfiable, then wire into analyze_trait after confirming
+    // snapshot parity.
     pub fn diags_super_traits(self, _db: &'db dyn HirAnalysisDb) -> Vec<TyDiagCollection<'db>> {
         Vec::new()
     }
@@ -1506,6 +1514,8 @@ impl<'db> AssocTypeOnSubjectView<'db> {
     }
 
     /// Semantic trait bounds for this associated type on `subject` with an explicit assumption list.
+    // TODO(api): Evaluate whether this is still needed once assoc-type resolve
+    // traversal provides a consistent assumptions model. If not, remove.
     pub(crate) fn bounds_in(
         self,
         db: &'db dyn HirAnalysisDb,

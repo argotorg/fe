@@ -950,9 +950,15 @@ pub fn find_associated_type<'db>(
             }
         }
 
+        // TODO(traversal): Replace this raw HIR fallback with a semantic
+        // assoc-type resolve traversal (e.g., SubjectAttachedAssocTypeResolveView)
+        // and remove this block. The traversal should:
+        // - derive assumptions from owner/context
+        // - use bound views only
+        // - preserve candidate shaping and ambiguity diagnostics
+        // Until then, keep this fallback to maintain snapshot parity.
         // If no candidates were derived from bound views, fall back to raw HIR
-        // bounds to preserve behavior until a full semantic assoc-type resolve
-        // traversal is in place.
+        // bounds to preserve behavior until the semantic resolver lands.
         if candidates.len() == _before {
             if let Some(decl) = trait_.assoc_ty(db, assoc_name) {
                 let subject = ty_with_subst.fold_with(db, &mut table);

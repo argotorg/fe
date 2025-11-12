@@ -161,6 +161,9 @@ impl<'db> Visitor<'db> for HirTyErrVisitor<'db> {
             }
         };
 
+        // TODO(diags): In the future, refine this to walk only generic args
+        // under the trait ref and surface kind/arg mismatches with precise
+        // spans when available from semantic lowering.
         match crate::analysis::name_resolution::resolve_path_with_observer(
             self.db,
             path,
