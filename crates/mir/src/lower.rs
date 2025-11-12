@@ -65,6 +65,11 @@ pub fn lower_module<'db>(
     let mut templates = Vec::new();
 
     for &func in top_mod.all_funcs(db) {
+        // Trait methods without a body (signatures only) should be ignored by MIR.
+        if func.body(db).is_none() {
+            continue;
+        }
+
         let (_diags, typed_body) = check_func_body(db, func);
         let lowered = lower_function(db, func, typed_body.clone())?;
         templates.push(lowered);
