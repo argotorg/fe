@@ -512,12 +512,12 @@ impl<'db> Trait<'db> {
                     assumptions,
                 ) {
                     GoalSatisfiability::Satisfied(_) => {}
-                    GoalSatisfiability::UnSat(subgoal) => {
+                    GoalSatisfiability::UnSat(_subgoal) => {
                         diags.push(
                             crate::analysis::ty::diagnostics::TraitConstraintDiag::TraitBoundNotSat {
                                 span: self.span().into(),
                                 primary_goal: trait_inst,
-                                unsat_subgoal: subgoal.map(|s| s.value),
+                                unsat_subgoal: None,
                             }
                             .into(),
                         );
@@ -561,6 +561,106 @@ impl<'db> ImplTrait<'db> {
             .to_opt()
             .map(|hir_ty| lower_hir_ty(db, hir_ty, self.scope(), assumptions))
             .unwrap_or_else(|| TyId::invalid(db, InvalidCause::ParseError))
+    }
+
+    /// Iterate associated type definitions in this impl-trait block as views.
+    pub fn assoc_types(self, db: &'db dyn HirDb) -> impl Iterator<Item = ImplAssocTypeView<'db>> + 'db {
+        let len = self.types(db).len();
+        (0..len).map(move |idx| ImplAssocTypeView { owner: self, idx })
+    }
+
+    /// Diagnostics for missing associated types (required by the trait).
+    pub fn diags_missing_assoc_types(self, db: &'db dyn HirAnalysisDb) -> Vec<TyDiagCollection<'db>> {
+        use crate::analysis::ty::trait_lower::lower_impl_trait;
+        use crate::analysis::ty::diagnostics::ImplDiag;
+        let mut diags = Vec::new();
+        let Some(implementor) = lower_impl_trait(db, self) else { return diags; };
+        let implementor = implementor.instantiate_identity();
+        let trait_hir = implementor.trait_def(db).trait_(db);
+        let impl_types = implementor.types(db);
+        for assoc in trait_hir.assoc_types(db) {
+            let Some(name) = assoc.name(db) else { continue; };
+            let has_impl = impl_types.get(&name).is_some();
+            let has_default = assoc.default_ty(db).is_some();
+            if !has_impl && !has_default {
+                diags.push(
+                    ImplDiag::MissingAssociatedType {
+                        primary: self.span().ty().into(),
+                        type_name: name,
+                        trait_: trait_hir,
+                    }
+                    .into(),
+                );
+            }
+        }
+        diags
+    }
+
+    /// Diagnostics for associated type bounds on implemented assoc types.
+    pub fn diags_assoc_types_bounds(self, db: &'db dyn HirAnalysisDb) -> Vec<TyDiagCollection<'db>> {
+        use crate::analysis::ty::trait_lower::lower_impl_trait;
+        let mut diags = Vec::new();
+        let Some(implementor) = lower_impl_trait(db, self) else { return diags; };
+        let implementor = implementor.instantiate_identity();
+        let trait_hir = implementor.trait_def(db).trait_(db);
+        let impl_types = implementor.types(db);
+        // Recompute implementor-specific assumptions from its underlying HIR.
+        let impl_trait_hir = implementor.hir_impl_trait(db);
+        let assumptions = collect_constraints(db, impl_trait_hir.into()).instantiate_identity();
+
+        for assoc in trait_hir.assoc_types(db) {
+            let Some(name) = assoc.name(db) else { continue; };
+            let Some(&impl_ty) = impl_types.get(&name) else { continue; };
+            for b in assoc.bounds(db) {
+                let Some(bound_inst) = b.as_trait_inst_with_subject_and_owner(
+                    db,
+                    impl_ty,
+                    implementor.self_ty(db),
+                ) else { continue; };
+                let canonical_bound = Canonical::new(db, bound_inst);
+                if let GoalSatisfiability::UnSat(subgoal) =
+                    is_goal_satisfiable(db, self.top_mod(db).ingot(db), canonical_bound, assumptions)
+                {
+                    let assoc_ty_span = self
+                        .associated_type_span(db, name)
+                        .map(|s| s.ty().into())
+                        .unwrap_or_else(|| self.span().ty().into());
+
+                    diags.push(
+                        crate::analysis::ty::diagnostics::TraitConstraintDiag::TraitBoundNotSat {
+                            span: assoc_ty_span,
+                            primary_goal: bound_inst,
+                            unsat_subgoal: None,
+                        }
+                        .into(),
+                    );
+                }
+            }
+        }
+        diags
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct ImplAssocTypeView<'db> {
+    pub owner: ImplTrait<'db>,
+    pub idx: usize,
+}
+
+impl<'db> ImplAssocTypeView<'db> {
+    pub fn name(self, db: &'db dyn HirDb) -> Option<IdentId<'db>> {
+        self.owner.types(db)[self.idx].name.to_opt()
+    }
+
+    pub fn span(self) -> crate::span::item::LazyTraitTypeSpan<'db> {
+        self.owner.span().associated_type(self.idx)
+    }
+
+    /// Semantic type of this associated type implementation.
+    pub fn ty(self, db: &'db dyn HirAnalysisDb) -> Option<TyId<'db>> {
+        let hir = self.owner.types(db)[self.idx].type_ref.to_opt()?;
+        let assumptions = constraints_for(db, self.owner.into());
+        Some(lower_hir_ty(db, hir, self.owner.scope(), assumptions))
     }
 }
 

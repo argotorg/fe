@@ -143,37 +143,8 @@ pub fn analyze_trait<'db>(
     let analyzer = DefAnalyzer::for_trait(db, trait_);
     let mut diags = analyzer.analyze();
 
-    // Check associated type defaults satisfy their bounds
-    let _trait_def = lower_trait(db, trait_);
-    let assumptions = collect_constraints(db, trait_.into()).instantiate_identity();
-    // owner_self not needed here; `with_subject(...).bounds(db)` handles owner context.
-
-    for assoc in trait_.assoc_types(db) {
-        if let Some(default_ty) = assoc.default_ty(db) {
-            for trait_inst in assoc.with_subject(default_ty).bounds(db) {
-                let canonical_inst = Canonical::new(db, trait_inst);
-                match is_goal_satisfiable(
-                    db,
-                    trait_.top_mod(db).ingot(db),
-                    canonical_inst,
-                    assumptions,
-                ) {
-                    GoalSatisfiability::Satisfied(_) => {}
-                    GoalSatisfiability::UnSat(subgoal) => {
-                        diags.push(
-                            TraitConstraintDiag::TraitBoundNotSat {
-                                span: trait_.span().into(),
-                                primary_goal: trait_inst,
-                                unsat_subgoal: subgoal.map(|s| s.value),
-                            }
-                            .into(),
-                        );
-                    }
-                    _ => {}
-                }
-            }
-        }
-    }
+    // Check associated type defaults satisfy their bounds (semantic traversal)
+    diags.extend(trait_.diags_assoc_defaults(db));
 
     diags
 }
@@ -1350,62 +1321,9 @@ fn analyze_impl_trait_specific_error<'db>(
         is_satisfied(super_trait, target_ty_span.clone(), &mut diags)
     }
 
-    // 8. Check that all required associated types are implemented,
-    //    and that they satisfy their bounds
-    let trait_hir = trait_def.trait_(db);
-    let impl_types = implementor.instantiate_identity().types(db);
-    for assoc_type in trait_hir.assoc_types(db) {
-        let Some(name) = assoc_type.name(db) else {
-            continue;
-        };
-
-        let impl_ty = impl_types.get(&name);
-        if impl_ty.is_none() && assoc_type.default_ty(db).is_none() {
-            diags.push(
-                ImplDiag::MissingAssociatedType {
-                    primary: impl_trait.span().ty().into(),
-                    type_name: name,
-                    trait_: trait_hir,
-                }
-                .into(),
-            );
-        }
-        let Some(&impl_ty) = impl_ty else {
-            continue;
-        };
-
-        // Check that the implemented associated type satisfies its bounds
-        for bound in assoc_type.bounds(db) {
-            if let Some(bound_inst) = bound.as_trait_inst_with_subject_and_owner(
-                db,
-                impl_ty,
-                implementor.instantiate_identity().self_ty(db),
-            ) {
-                let canonical_bound = Canonical::new(db, bound_inst);
-            if let GoalSatisfiability::UnSat(subgoal) = is_goal_satisfiable(
-                db,
-                impl_trait.top_mod(db).ingot(db),
-                canonical_bound,
-                assumptions,
-            ) {
-                // Find the span for this specific associated type implementation
-                let assoc_ty_span = impl_trait
-                    .associated_type_span(db, name)
-                    .map(|s| s.ty().into())
-                    .unwrap_or_else(|| impl_trait.span().ty().into());
-
-                diags.push(
-                    TraitConstraintDiag::TraitBoundNotSat {
-                        span: assoc_ty_span,
-                        primary_goal: bound_inst,
-                        unsat_subgoal: subgoal.map(|s| s.value),
-                    }
-                    .into(),
-                );
-            }
-            }
-        }
-    }
+    // 8. Check associated types via semantic traversal
+    diags.extend(impl_trait.diags_missing_assoc_types(db));
+    diags.extend(impl_trait.diags_assoc_types_bounds(db));
 
     if diags.is_empty() {
         Ok(implementor)
