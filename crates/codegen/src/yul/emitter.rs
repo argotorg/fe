@@ -463,6 +463,18 @@ impl<'db> YulEmitter<'db> {
                     .collect::<Result<Vec<_>, _>>()?;
                 Ok(format!("tuple({})", parts.join(", ")))
             }
+            Expr::Call(callee, call_args) => {
+                let callee_expr = self.lower_expr(*callee, state)?;
+                let mut lowered_args = Vec::with_capacity(call_args.len());
+                for arg in call_args {
+                    lowered_args.push(self.lower_expr(arg.expr, state)?);
+                }
+                if lowered_args.is_empty() {
+                    Ok(format!("{callee_expr}()"))
+                } else {
+                    Ok(format!("{callee_expr}({})", lowered_args.join(", ")))
+                }
+            }
             Expr::Bin(lhs, rhs, bin_op) => match bin_op {
                 BinOp::Arith(op) => {
                     let left = self.lower_expr(*lhs, state)?;
