@@ -19,7 +19,6 @@ use super::{
     ty_lower::lower_hir_ty,
 };
 use crate::visitor::prelude::LazyTraitRefSpan;
-use crate::visitor::walk_trait_ref;
 
 pub fn collect_ty_lower_errors<'db>(
     db: &'db dyn HirAnalysisDb,
@@ -185,7 +184,7 @@ impl<'db> Visitor<'db> for HirTyErrVisitor<'db> {
                     );
                 }
 
-                if let Some((p, deriv_span)) = invisible {
+                if let Some((_p, deriv_span)) = invisible {
                     let seg_span = span.name();
                     let ident = path.ident(self.db).unwrap();
                     let diag = crate::analysis::name_resolution::diagnostics::PathResDiag::Invisible(

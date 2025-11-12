@@ -941,7 +941,7 @@ pub fn find_associated_type<'db>(
                 continue;
             }
             let subject = ty_with_subst.fold_with(db, &mut table);
-            for inst in view.with_subject(subject).bounds_in(db, assumptions) {
+            for inst in view.with_subject(subject).bounds(db) {
                 if inst.def(db).trait_(db).assoc_ty(db, name).is_some() {
                     let assoc_ty = TyId::assoc_ty(db, inst, name);
                     let folded = assoc_ty.fold_with(db, &mut table);
@@ -950,7 +950,9 @@ pub fn find_associated_type<'db>(
             }
         }
 
-        // Fallback to raw HIR bounds if the view-based path didn’t add anything.
+        // If no candidates were derived from bound views, fall back to raw HIR
+        // bounds to preserve behavior until a full semantic assoc-type resolve
+        // traversal is in place.
         if candidates.len() == _before {
             if let Some(decl) = trait_.assoc_ty(db, assoc_name) {
                 let subject = ty_with_subst.fold_with(db, &mut table);

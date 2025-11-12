@@ -430,7 +430,7 @@ impl<'db> WherePredicateView<'db> {
 
     /// Lower trait bounds in this predicate against its own lowered subject type.
     /// Skips kind bounds and failed lowerings.
-    pub fn trait_bounds_lowered(
+    pub(in crate::core) fn trait_bounds_lowered(
         self,
         db: &'db dyn HirAnalysisDb,
     ) -> Vec<crate::analysis::ty::trait_def::TraitInstId<'db>> {
@@ -441,7 +441,7 @@ impl<'db> WherePredicateView<'db> {
 
     /// Lower trait bounds in this predicate against an explicit subject type.
     /// Useful for `Self: Bound` in trait contexts.
-    pub fn trait_bounds_lowered_with_subject(
+    pub(in crate::core) fn trait_bounds_lowered_with_subject(
         self,
         db: &'db dyn HirAnalysisDb,
         subject: TyId<'db>,
