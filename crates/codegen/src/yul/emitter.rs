@@ -193,6 +193,15 @@ impl<'db> YulEmitter<'db> {
                                     vec![YulDoc::line(format!("{temp} := {body_expr}"))],
                                 ));
                             }
+                            MatchArmPattern::Enum { variant_index, .. } => {
+                                let body_expr = self.lower_expr(arm.body, state)?;
+                                let literal =
+                                    switch_value_literal(&SwitchValue::Enum(*variant_index));
+                                docs.push(YulDoc::wide_block(
+                                    format!("  case {literal} "),
+                                    vec![YulDoc::line(format!("{temp} := {body_expr}"))],
+                                ));
+                            }
                             MatchArmPattern::Wildcard => {
                                 let body_expr = self.lower_expr(arm.body, state)?;
                                 default_body = Some(body_expr);
@@ -678,6 +687,7 @@ fn switch_value_literal(value: &SwitchValue) -> String {
         SwitchValue::Bool(true) => "1".into(),
         SwitchValue::Bool(false) => "0".into(),
         SwitchValue::Int(int) => int.to_string(),
+        SwitchValue::Enum(val) => val.to_string(),
     }
 }
 

@@ -3,7 +3,7 @@ pub mod diagnostics;
 mod import_resolver;
 pub(crate) mod method_selection;
 mod name_resolver;
-mod path_resolver;
+pub mod path_resolver;
 pub(crate) mod traits_in_scope;
 mod visibility_checker;
 

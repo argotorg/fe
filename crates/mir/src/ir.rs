@@ -209,6 +209,7 @@ pub enum SwitchOrigin {
 pub enum SwitchValue {
     Bool(bool),
     Int(BigUint),
+    Enum(u64),
 }
 
 impl SwitchValue {
@@ -222,6 +223,7 @@ impl SwitchValue {
                 }
             }
             Self::Int(value) => value.clone(),
+            Self::Enum(value) => BigUint::from(*value),
         }
     }
 }
@@ -231,6 +233,7 @@ impl fmt::Display for SwitchValue {
         match self {
             Self::Bool(value) => write!(f, "{value}"),
             Self::Int(value) => write!(f, "{value}"),
+            Self::Enum(value) => write!(f, "{value}"),
         }
     }
 }
@@ -272,6 +275,10 @@ pub struct MatchArmLowering {
 pub enum MatchArmPattern {
     Literal(SwitchValue),
     Wildcard,
+    Enum {
+        variant_index: u64,
+        enum_name: String,
+    },
 }
 
 #[derive(Debug, Clone)]

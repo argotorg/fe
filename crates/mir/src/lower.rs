@@ -4,11 +4,13 @@ use hir::hir_def::{
     Body, Expr, ExprId, Func, LitKind, MatchArm, Partial, Pat, PatId, Stmt, StmtId, TopLevelMod,
 };
 use hir_analysis::{
-    HirAnalysisDb,
+    name_resolution::{path_resolver::resolve_path, PathRes},
     ty::{
-        ty_check::{TypedBody, check_func_body},
+        trait_resolution::PredicateListId,
+        ty_check::{check_func_body, TypedBody},
         ty_def::{PrimTy, TyBase, TyData, TyId},
     },
+    HirAnalysisDb,
 };
 
 use crate::{
@@ -227,6 +229,10 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                     value: value.clone(),
                     block: block_id,
                 }),
+                MatchArmPattern::Enum { variant_index, .. } => targets.push(SwitchTarget {
+                    value: SwitchValue::Enum(*variant_index),
+                    block: block_id,
+                }),
                 MatchArmPattern::Wildcard => default_block = Some(block_id),
             }
         }
@@ -296,6 +302,16 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                 continue;
             }
 
+            if let Some(pattern) = self.enum_pat_value(arm.pat) {
+                if let MatchArmPattern::Enum { variant_index, .. } = pattern {
+                    if !seen_values.insert(SwitchValue::Enum(variant_index)) {
+                        return None;
+                    }
+                }
+                patterns.push(pattern);
+                continue;
+            }
+
             return None;
         }
 
@@ -338,6 +354,31 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
             }
             _ => None,
         }
+    }
+
+    fn enum_pat_value(&self, pat: PatId) -> Option<MatchArmPattern> {
+        let Partial::Present(pat_data) = pat.data(self.db, self.body) else {
+            return None;
+        };
+
+        if let Pat::Path(path, ..) = pat_data {
+            if let Ok(PathRes::EnumVariant(variant)) =
+                resolve_path(self.db, path.to_opt().unwrap(), self.typed_body.body().unwrap().scope(), PredicateListId::empty_list(self.db), false)
+            {
+                let enum_name = variant
+                    .enum_(self.db)
+                    .name(self.db)
+                    .to_opt().unwrap()
+                    .data(self.db)
+                    .to_string();
+                return Some(MatchArmPattern::Enum {
+                    variant_index: variant.variant.idx as u64,
+                    enum_name,
+                });
+            }
+        }
+
+        None
     }
 
     /// Returns true if the pattern is a wildcard (`_`).
