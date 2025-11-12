@@ -1,0 +1,79 @@
+// core::marker
+  pub struct Phantom<T> {}
+
+  impl<T> Phantom<T> {
+      pub fn new() -> Self {
+          Phantom {}
+      }
+  }
+
+  // core::mem
+  pub enum AddressSpace {
+      Memory,
+      Storage,
+  }
+
+  pub struct Ptr<T> {
+      addr: u256,
+      space: AddressSpace,
+      _marker: Phantom<T>,
+  }
+
+  impl<T> Ptr<T> {
+      pub fn new(addr: u256, space: AddressSpace) -> Self {
+          Self {
+              addr,
+              space,
+              _marker: Phantom::new(),
+          }
+      }
+  }
+
+  // Every scalar that can be loaded implements this.
+  pub trait LoadableScalar {
+      fn from_word(word: u256) -> Self
+  }
+
+  impl LoadableScalar for u8 {
+      fn from_word(word: u256) -> Self {
+          return 1
+          //(word & 0xff)
+      }
+  }
+
+  // Minimal primitives for memory/storage loads.
+  pub fn mload(addr: u256) -> u256 {
+    // placeholder for mload
+    //builtin_mload(addr)
+    return 0
+  }
+
+  pub fn sload(slot: u256) -> u256 {
+    // placeholder for sload
+    //builtin_sload(slot)
+    return 0
+  }
+
+
+  // Generic field reader (simple byte-aligned layout).
+  pub fn get_field<T, F: LoadableScalar>(ptr: Ptr<T>, offset: u256) -> F
+  {
+      let addr = ptr.addr + offset
+      let word = match ptr.space {
+          AddressSpace::Memory => mload(addr)
+          AddressSpace::Storage => sload(slot:addr)
+      }
+      F::from_word(word)
+  }
+
+  // -------------------- Example user code --------------------
+
+  struct MyStruct {
+      x: u8,
+      y: u8,
+  }
+
+  pub fn read_x(ptr: Ptr<MyStruct>) -> u8 {
+      // `x` starts at byte offset 0
+      get_field(ptr, offset: 0)
+  }
