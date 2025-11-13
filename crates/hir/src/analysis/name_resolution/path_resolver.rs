@@ -96,6 +96,14 @@ pub enum PathResErrorKind<'db> {
         given: Option<TyId<'db>>,
     },
 
+    /// Trait path generic argument expected a type; wrong domain was found.
+    /// Carries the argument index and offending ident/kind for precise diagnostics.
+    TraitGenericArgType {
+        arg_idx: usize,
+        ident: IdentId<'db>,
+        given_kind: &'static str,
+    },
+
     MethodSelection(MethodSelectionError<'db>),
 }
 
@@ -161,6 +169,9 @@ impl<'db> PathResError<'db> {
             }
             PathResErrorKind::ArgTypeMismatch { .. } => {
                 "Generic const argument type mismatch".to_string()
+            }
+            PathResErrorKind::TraitGenericArgType { .. } => {
+                "Trait generic argument expects a type".to_string()
             }
             PathResErrorKind::MethodSelection(err) => match err {
                 MethodSelectionError::AmbiguousInherentMethod(cands) => {
@@ -337,6 +348,18 @@ impl<'db> PathResError<'db> {
                 }
                 MethodSelectionError::NotFound => PathResDiag::NotFound(span, ident),
             },
+
+            // Force a type-expected diagnostic at the specific generic arg span.
+            PathResErrorKind::TraitGenericArgType { arg_idx, ident, given_kind } => {
+                let ty_span = path_span
+                    .clone()
+                    .segment(failed_idx)
+                    .generic_args()
+                    .arg(arg_idx)
+                    .into_type_arg()
+                    .ty();
+                PathResDiag::ExpectedType(ty_span.into(), ident, given_kind)
+            }
         };
         Some(diag)
     }
@@ -1069,6 +1092,43 @@ pub fn resolve_name_res<'db>(
                         let ty = TyId::foldl(db, ty, args);
                         PathRes::Ty(ty)
                     } else {
+                        // Pre-validate type generic arguments to surface domain errors
+                        // (e.g., trait used where a type is expected) with precise spans.
+                        if !path.generic_args(db).is_empty(db) {
+                            let gen_args = path.generic_args(db).data(db);
+                            for (idx, ga) in gen_args.iter().enumerate() {
+                                if let crate::hir_def::GenericArg::Type(ty_arg) = ga {
+                                    if let Some(hir_ty) = ty_arg.ty.to_opt() {
+                                        if let crate::hir_def::TypeKind::Path(p) = hir_ty.data(db) {
+                                            if let Some(arg_path) = p.to_opt() {
+                                                match resolve_path(db, arg_path, scope, assumptions, false) {
+                                                    Ok(res) => {
+                                                        // If resolved to non-type domain, report ExpectedType at arg span
+                                                        if !matches!(res, PathRes::Ty(_) | PathRes::TyAlias(..)) {
+                                                            let ident = arg_path.ident(db).unwrap();
+                                                            let kind = res.kind_name();
+                                                            return Err(PathResError::new(
+                                                                PathResErrorKind::TraitGenericArgType {
+                                                                    arg_idx: idx,
+                                                                    ident,
+                                                                    given_kind: kind,
+                                                                },
+                                                                path,
+                                                            ));
+                                                        }
+                                                    }
+                                                    Err(inner) => {
+                                                        // Bubble up inner error; caller will render
+                                                        return Err(inner);
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
                         match lower_trait_ref_impl(db, path, scope, assumptions, t) {
                             Ok(t) => PathRes::Trait(t),
                             Err(err) => {

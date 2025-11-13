@@ -20,6 +20,26 @@ use crate::analysis::HirAnalysisDb;
 use crate::hir_def::scope_graph::ScopeId;
 use crate::analysis::name_resolution::{PathRes, resolve_path};
 use crate::analysis::ty::def_analysis::check_duplicate_names;
+use crate::hir_def::params::KindBound as HirKindBound;
+
+fn lower_hir_kind_local(k: &HirKindBound) -> crate::analysis::ty::ty_def::Kind {
+    use crate::analysis::ty::ty_def::Kind;
+    use crate::hir_def::Partial;
+    match k {
+        HirKindBound::Mono => Kind::Star,
+        HirKindBound::Abs(lhs, rhs) => {
+            let lhs_k = match lhs {
+                Partial::Present(inner) => lower_hir_kind_local(inner),
+                Partial::Absent => Kind::Any,
+            };
+            let rhs_k = match rhs {
+                Partial::Present(inner) => lower_hir_kind_local(inner),
+                Partial::Absent => Kind::Any,
+            };
+            Kind::Abs(Box::new((lhs_k, rhs_k)))
+        }
+    }
+}
 use crate::analysis::ty::diagnostics::{TyDiagCollection, TyLowerDiag};
 use crate::analysis::ty::def_analysis;
 use crate::hir_def::*;
@@ -404,18 +424,6 @@ impl<'db> WherePredicateView<'db> {
         self.clause.span().predicate(self.idx)
     }
 
-    /// Iterates trait-ref bounds from this where-predicate (syntactic ids).
-    /// Prefer using `bounds(db)` which yields semantic bound views.
-    fn bound_trait_refs(self, db: &'db dyn HirDb) -> impl Iterator<Item = TraitRefId<'db>> + 'db {
-        self.hir_pred(db)
-            .bounds
-            .iter()
-            .filter_map(|b| match b {
-                TypeBound::Trait(tr) => Some(*tr),
-                _ => None,
-            })
-    }
-
     /// Iterate trait bounds as per-bound semantic views.
     pub fn bounds(self, db: &'db dyn HirDb) -> impl Iterator<Item = WherePredicateBoundView<'db>> + 'db {
         let idxs: Vec<usize> = self
@@ -446,6 +454,59 @@ impl<'db> WherePredicateView<'db> {
         Some(lower_hir_ty(db, hir_ty, owner_item.scope(), assumptions))
     }
 
+    /// Lower the subject type and enforce the semantic constraints that prohibit
+    /// const subjects or fully-concrete types. Returns `Ok(Some(..))` when the
+    /// subject exists and passes the checks, `Ok(None)` when the predicate is
+    /// syntactically absent, and `Err(diag)` when a diagnostic should be emitted.
+    pub fn subject_ty_checked(
+        self,
+        db: &'db dyn HirAnalysisDb,
+    ) -> Result<Option<TyId<'db>>, TyDiagCollection<'db>> {
+        use crate::analysis::ty::diagnostics::TraitConstraintDiag;
+        use crate::analysis::name_resolution::{resolve_path, ExpectedPathKind};
+        use crate::analysis::name_resolution::diagnostics::PathResDiag;
+
+        let Some(hir_ty) = self.hir_pred(db).ty.to_opt() else {
+            return Ok(None);
+        };
+
+        let owner_item = ItemKind::from(self.clause.owner);
+        let assumptions = constraints_for(db, owner_item);
+        let subject = lower_hir_ty(db, hir_ty, owner_item.scope(), assumptions);
+        if let Some(cause) = subject.invalid_cause(db) {
+            if let crate::analysis::ty::ty_def::InvalidCause::PathResolutionFailed { path } = cause {
+                // Re-run name resolution on the failed path and surface a precise diagnostic
+                // at the type path span within the where-predicate.
+                let ty_span = self.span().ty().into_path_type().path();
+                match resolve_path(db, path, owner_item.scope(), assumptions, false) {
+                    Ok(res) => {
+                        // Resolved to a non-type domain
+                        if let Some(ident) = path.ident(db).to_opt() {
+                            let diag = PathResDiag::ExpectedType(ty_span.into(), ident, res.kind_name());
+                            return Err(diag.into());
+                        }
+                    }
+                    Err(inner) => {
+                        if let Some(diag) = inner.into_diag(db, path, ty_span, ExpectedPathKind::Type) {
+                            return Err(diag.into());
+                        }
+                    }
+                }
+            }
+        }
+        let span = self.span().ty().into();
+
+        if subject.is_const_ty(db) {
+            return Err(TraitConstraintDiag::ConstTyBound(span, subject).into());
+        }
+
+        if !subject.has_invalid(db) && !subject.has_param(db) {
+            return Err(TraitConstraintDiag::ConcreteTypeBound(span, subject).into());
+        }
+
+        Ok(Some(subject))
+    }
+
     /// True if the lowered subject type is a const type.
     pub fn subject_is_const(self, db: &'db dyn HirAnalysisDb) -> bool {
         self.subject_ty(db)
@@ -460,36 +521,53 @@ impl<'db> WherePredicateView<'db> {
             .unwrap_or(false)
     }
 
-    /// Lower trait bounds in this predicate against its own lowered subject type.
-    /// Skips kind bounds and failed lowerings.
-    // TODO(api): Remove this coarse-grained helper once all callers iterate
-    // per-bound views (WherePredicateBoundView) for precise spans/diagnostics.
-    // Visibility already restricted to crate::core.
-    pub(in crate::core) fn trait_bounds_lowered(
-        self,
-        db: &'db dyn HirAnalysisDb,
-    ) -> Vec<crate::analysis::ty::trait_def::TraitInstId<'db>> {
-        self.bounds(db)
-            .filter_map(|b| b.as_trait_inst(db))
-            .collect()
+    /// Aggregate diagnostics for this where-predicate:
+    /// - Subject-level errors (const/concrete or path-domain remapped)
+    /// - Per-bound trait diagnostics
+    /// - Per-bound kind consistency
+    pub fn diags(self, db: &'db dyn HirAnalysisDb) -> Vec<crate::analysis::ty::diagnostics::TyDiagCollection<'db>> {
+        use crate::analysis::ty::diagnostics::{TyDiagCollection, TyLowerDiag};
+        let mut out: Vec<TyDiagCollection> = Vec::new();
+
+        let subject = match self.subject_ty_checked(db) {
+            Ok(Some(s)) => s,
+            Ok(None) => return out,
+            Err(diag) => {
+                out.push(diag);
+                return out;
+            }
+        };
+
+        for (i, bound) in self.hir_pred(db).bounds.iter().enumerate() {
+            match bound {
+                TypeBound::Trait(_) => {
+                    let bview = WherePredicateBoundView { pred: self, idx: i };
+                    out.extend(bview.diags(db));
+                }
+                TypeBound::Kind(Partial::Present(kb)) => {
+                    let expected = lower_hir_kind_local(kb);
+                    let actual = subject.kind(db);
+                    if !actual.does_match(&expected) {
+                        let span = self.span().bounds().bound(i).kind_bound();
+                        out.push(
+                            TyLowerDiag::InconsistentKindBound {
+                                span: span.into(),
+                                ty: subject,
+                                bound: expected,
+                            }
+                            .into(),
+                        );
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        out
     }
 
-    /// Lower trait bounds in this predicate against an explicit subject type.
-    /// Useful for `Self: Bound` in trait contexts.
-    // TODO(api): Same as above — prefer per-bound APIs and drop this method
-    // after migrating internal users.
-    pub(in crate::core) fn trait_bounds_lowered_with_subject(
-        self,
-        db: &'db dyn HirAnalysisDb,
-        subject: TyId<'db>,
-    ) -> Vec<crate::analysis::ty::trait_def::TraitInstId<'db>> {
-        let owner_item = ItemKind::from(self.clause.owner);
-        let assumptions = constraints_for(db, owner_item);
-        let scope = owner_item.scope();
-        self.bound_trait_refs(db)
-            .filter_map(|tr| lower_trait_ref(db, subject, tr, scope, assumptions).ok())
-            .collect()
-    }
+    // Note: legacy coarse-grained helpers for trait bound lowering have been removed;
+    // prefer per-bound views (WherePredicateBoundView) for precise spans/diagnostics.
 
 }
 
@@ -511,6 +589,10 @@ impl<'db> WherePredicateBoundView<'db> {
         self.pred.span().bounds().bound(self.idx)
     }
 
+    pub fn trait_ref_span(self) -> crate::span::params::LazyTraitRefSpan<'db> {
+        self.span().trait_bound()
+    }
+
     /// Lower this bound into a semantic trait instance using the predicate's subject type.
     pub fn as_trait_inst(self, db: &'db dyn HirAnalysisDb) -> Option<crate::analysis::ty::trait_def::TraitInstId<'db>> {
         let subject = self.pred.subject_ty(db)?;
@@ -530,6 +612,94 @@ impl<'db> WherePredicateBoundView<'db> {
         let assumptions = constraints_for(db, owner_item);
         let scope = owner_item.scope();
         crate::analysis::ty::trait_lower::lower_trait_ref(db, subject, self.trait_ref(db), scope, assumptions).ok()
+    }
+
+    /// Diagnostics for this trait bound, given an explicit subject type.
+    /// Mirrors legacy visitor behavior for path errors, kind mismatch, and satisfiability.
+    pub(in crate::core) fn diags_for_subject(
+        self,
+        db: &'db dyn HirAnalysisDb,
+        subject: crate::analysis::ty::ty_def::TyId<'db>,
+    ) -> Vec<crate::analysis::ty::diagnostics::TyDiagCollection<'db>> {
+        use crate::analysis::name_resolution::diagnostics::PathResDiag;
+        use crate::analysis::name_resolution::ExpectedPathKind;
+        use crate::analysis::ty::diagnostics::TraitConstraintDiag;
+        use crate::analysis::ty::trait_lower::{lower_trait_ref, TraitRefLowerError};
+
+        let mut out = Vec::new();
+        let owner_item = ItemKind::from(self.pred.clause.owner);
+        let scope = owner_item.scope();
+        let assumptions = constraints_for(db, owner_item);
+        let is_trait_self_subject = matches!(owner_item, ItemKind::Trait(_)) && self.pred.is_self_subject(db);
+        let tr = self.trait_ref(db);
+        let span = self.trait_ref_span();
+
+        match lower_trait_ref(db, subject, tr, scope, assumptions) {
+            Ok(inst) => {
+                let expected = inst.def(db).expected_implementor_kind(db);
+                if !expected.does_match(subject.kind(db)) {
+                    out.push(
+                        TraitConstraintDiag::TraitArgKindMismatch {
+                            span: span.clone(),
+                            expected: expected.clone(),
+                            actual: subject,
+                        }
+                        .into(),
+                    );
+                }
+
+                if inst.self_ty(db).contains_assoc_ty_of_param(db) {
+                    return out;
+                }
+
+                // For trait-level `Self: Bound` constraints, treat as preconditions;
+                // do not emit unsatisfied bound diags here.
+                if !is_trait_self_subject {
+                    use crate::analysis::ty::trait_resolution::check_trait_inst_wf;
+                    let wf = check_trait_inst_wf(db, scope.ingot(db), inst, assumptions);
+                    if let crate::analysis::ty::trait_resolution::WellFormedness::IllFormed { goal, .. } = wf {
+                        out.push(
+                            TraitConstraintDiag::TraitBoundNotSat {
+                                span: span.into(),
+                                primary_goal: goal,
+                                unsat_subgoal: None,
+                            }
+                            .into(),
+                        );
+                    }
+                }
+            }
+            Err(TraitRefLowerError::PathResError(err)) => {
+                if let Some(path) = tr.path(db).to_opt() {
+                    if let Some(diag) = err.into_diag(db, path, span.path(), ExpectedPathKind::Trait) {
+                        out.push(diag.into());
+                    }
+                }
+            }
+            Err(TraitRefLowerError::InvalidDomain(res)) => {
+                if let Some(path) = tr.path(db).to_opt() {
+                    if let Some(ident) = path.ident(db).to_opt() {
+                        out.push(PathResDiag::ExpectedTrait(span.path().into(), ident, res.kind_name()).into());
+                    }
+                }
+            }
+            Err(TraitRefLowerError::Ignored) => {}
+        }
+
+        out
+    }
+
+    /// Diagnostics for this trait bound, deriving the subject from the predicate's LHS.
+    /// Returns a single-element vec with the subject error if subject lowering fails.
+    pub fn diags(
+        self,
+        db: &'db dyn HirAnalysisDb,
+    ) -> Vec<crate::analysis::ty::diagnostics::TyDiagCollection<'db>> {
+        match self.pred.subject_ty_checked(db) {
+            Ok(Some(subject)) => self.diags_for_subject(db, subject),
+            Ok(None) => Vec::new(),
+            Err(diag) => vec![diag],
+        }
     }
 }
 

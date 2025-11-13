@@ -5,11 +5,14 @@
 use crate::{
     hir_def::{
         EnumVariant, FieldDef, FieldParent, Func, GenericParam, GenericParamListId,
-        GenericParamOwner, IdentId, Impl as HirImpl, ImplTrait, ItemKind, PathId,
-        Trait, TraitRefId, TypeAlias, TypeId as HirTyId, VariantKind, scope_graph::ScopeId,
+        GenericParamOwner, IdentId, Impl as HirImpl, ImplTrait, ItemKind, PathId, Trait,
+        TraitRefId, TypeAlias, TypeId as HirTyId, VariantKind, WhereClauseOwner,
+        scope_graph::ScopeId,
     },
+    hir_def::semantic::WherePredicateView,
     visitor::prelude::*,
 };
+use std::ptr;
 use common::indexmap::IndexSet;
 use rustc_hash::{FxHashMap, FxHashSet};
 use smallvec1::SmallVec;
@@ -23,7 +26,7 @@ use super::{
     method_cmp::compare_impl_method,
     method_table::probe_method,
     normalize::normalize_ty,
-    trait_def::{Implementor, TraitDef, ingot_trait_env},
+    trait_def::{Implementor, TraitDef, TraitInstId, ingot_trait_env},
     trait_lower::{TraitRefLowerError, lower_trait, lower_trait_ref},
     trait_resolution::{
         PredicateListId,
@@ -157,8 +160,7 @@ pub fn analyze_trait<'db>(
 
     // Semantic traversal aggregations
     diags.extend(trait_.diags_assoc_defaults(db));
-    // TODO(diags): Enable trait_.diags_super_traits(db) once snapshots are updated.
-    // diags.extend(trait_.diags_super_traits(db));
+    diags.extend(trait_.diags_super_traits(db));
     diags.extend(GenericParamOwner::Trait(trait_).diags_params_defined_in_parent(db));
     diags.extend(GenericParamOwner::Trait(trait_).diags_non_trailing_defaults(db));
     diags.extend(GenericParamOwner::Trait(trait_).diags_default_forward_refs(db));
@@ -247,6 +249,20 @@ pub struct DefAnalyzer<'db> {
 }
 
 impl<'db> DefAnalyzer<'db> {
+    #[inline]
+    fn lower_ty(&self, hir_ty: HirTyId<'db>) -> TyId<'db> {
+        lower_hir_ty(self.db, hir_ty, self.scope(), self.assumptions)
+    }
+
+    #[inline]
+    fn lower_current_trait_ref(
+        &self,
+        current_ty: TyId<'db>,
+        trait_ref: TraitRefId<'db>,
+    ) -> Result<TraitInstId<'db>, TraitRefLowerError<'db>> {
+        lower_trait_ref(self.db, current_ty, trait_ref, self.scope(), self.assumptions)
+    }
+
     fn for_adt(db: &'db dyn HirAnalysisDb, adt: AdtRef<'db>) -> Self {
         let def = lower_adt(db, adt);
         let assumptions = collect_adt_constraints(db, def).instantiate_identity();
@@ -344,7 +360,7 @@ impl<'db> DefAnalyzer<'db> {
     /// TODO: This method is a stop-gap implementation until we design a true
     /// const type system.
     fn verify_term_type_kind(&mut self, ty: HirTyId<'db>, span: DynLazySpan<'db>) -> bool {
-        let ty = lower_hir_ty(self.db, ty, self.scope(), self.assumptions);
+        let ty = self.lower_ty(ty);
         if !ty.has_star_kind(self.db) {
             self.diags.push(TyLowerDiag::ExpectedStarKind(span).into());
             false
@@ -362,7 +378,7 @@ impl<'db> DefAnalyzer<'db> {
             return false;
         };
 
-        let param_ty = lower_hir_ty(self.db, self_ty, self.def.scope(self.db), self.assumptions);
+        let param_ty = self.lower_ty(self_ty);
         let param_ty = normalize_ty(self.db, param_ty, self.def.scope(self.db), self.assumptions);
         if !param_ty.has_invalid(self.db) && !expected_ty.has_invalid(self.db) {
             let (expected_base_ty, expected_param_ty_args) = expected_ty.decompose_ty_app(self.db);
@@ -501,7 +517,7 @@ impl<'db> Visitor<'db> for DefAnalyzer<'db> {
 
     fn visit_ty(&mut self, ctxt: &mut VisitorCtxt<'db, LazyTySpan<'db>>, hir_ty: HirTyId<'db>) {
         let span = ctxt.span().unwrap();
-        let ty = lower_hir_ty(self.db, hir_ty, self.scope(), self.assumptions);
+        let ty = self.lower_ty(hir_ty);
 
         if ty.has_invalid(self.db) {
             let diags = collect_ty_lower_errors(
@@ -526,20 +542,26 @@ impl<'db> Visitor<'db> for DefAnalyzer<'db> {
         ctxt: &mut VisitorCtxt<'db, LazyWherePredicateSpan<'db>>,
         pred: &crate::core::hir_def::WherePredicate<'db>,
     ) {
-        let Some(hir_ty) = pred.ty.to_opt() else { return; };
-        let ty = lower_hir_ty(self.db, hir_ty, self.scope(), self.assumptions);
-        if ty.is_const_ty(self.db) {
-            let diag = TraitConstraintDiag::ConstTyBound(ctxt.span().unwrap().ty().into(), ty).into();
-            self.diags.push(diag);
+        let Some(owner) = WhereClauseOwner::from_item_opt(self.scope().item()) else {
+            walk_where_predicate(self, ctxt, pred);
             return;
-        }
-        if !ty.has_invalid(self.db) && !ty.has_param(self.db) {
-            let diag = TraitConstraintDiag::ConcreteTypeBound(ctxt.span().unwrap().ty().into(), ty).into();
-            self.diags.push(diag);
+        };
+        let clause = owner.clause(self.db);
+        let clause_data = clause.id.data(self.db);
+        let Some(idx) = clause_data
+            .iter()
+            .position(|candidate| ptr::eq(candidate, pred))
+        else {
+            walk_where_predicate(self, ctxt, pred);
             return;
+        };
+
+        let view = WherePredicateView { clause, idx };
+        let diags = view.diags(self.db);
+        if !diags.is_empty() {
+            self.diags.extend(diags);
         }
-        self.current_ty = Some((ty, ctxt.span().unwrap().ty().into()));
-        walk_where_predicate(self, ctxt, pred);
+        // Do not walk bounds; semantic diags already emitted them precisely.
     }
 
     fn visit_field_def(
@@ -699,15 +721,13 @@ impl<'db> Visitor<'db> for DefAnalyzer<'db> {
             return;
         }
 
+        // Emit implementor-kind mismatch for generic-parameter bounds and super-traits.
+        // Where-predicate trait bounds are handled via semantic views in
+        // visit_where_predicate (we don't walk their trait refs), so this does
+        // not duplicate.
         if let (Some((ty, _)), Ok(trait_inst)) = (
             &self.current_ty,
-            lower_trait_ref(
-                self.db,
-                current_ty,
-                trait_ref,
-                self.scope(),
-                self.assumptions,
-            ),
+            self.lower_current_trait_ref(current_ty, trait_ref),
         ) {
             let expected_kind = trait_inst.def(self.db).expected_implementor_kind(self.db);
             if !expected_kind.does_match(ty.kind(self.db)) {
