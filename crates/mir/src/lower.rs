@@ -93,7 +93,7 @@ pub fn lower_module<'db>(
 }
 
 /// Lowers a single HIR function (plus its typed body) into MIR form.
-fn lower_function<'db>(
+pub(crate) fn lower_function<'db>(
     db: &'db dyn HirAnalysisDb,
     func: Func<'db>,
     typed_body: TypedBody<'db>,

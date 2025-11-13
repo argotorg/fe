@@ -9,12 +9,16 @@ use hir_analysis::{
     ty::{
         fold::{TyFoldable, TyFolder},
         func_def::{FuncDef, lower_func},
+        ty_check::check_func_body,
         ty_def::{TyData, TyId},
     },
 };
 use rustc_hash::FxHashMap;
 
-use crate::{MirFunction, ValueOrigin};
+use crate::{
+    MirFunction, ValueOrigin,
+    lower::lower_function,
+};
 
 /// Walks generic MIR templates, cloning them per concrete substitution so
 /// downstream passes only ever see monomorphic MIR.
@@ -147,7 +151,7 @@ impl<'db> Monomorphizer<'db> {
             return Some((idx, symbol));
         }
 
-        let template_idx = *self.func_index.get(&func)?;
+        let template_idx = self.ensure_template(func)?;
         let mut instance = self.templates[template_idx].clone();
         instance.generic_args = args.to_vec();
         instance.symbol_name = self.mangled_name(func, &instance.generic_args);
@@ -205,6 +209,23 @@ impl<'db> Monomorphizer<'db> {
 
     fn into_instances(self) -> Vec<MirFunction<'db>> {
         self.instances
+    }
+
+    /// Ensure we have lowered MIR for `func`, lowering on demand for dependency ingots.
+    fn ensure_template(&mut self, func: Func<'db>) -> Option<usize> {
+        if let Some(&idx) = self.func_index.get(&func) {
+            return Some(idx);
+        }
+
+        let (_diags, typed_body) = check_func_body(self.db, func);
+        let lowered = lower_function(self.db, func, typed_body.clone()).ok()?;
+        let idx = self.templates.len();
+        self.templates.push(lowered);
+        self.func_index.insert(func, idx);
+        if let Some(def) = lower_func(self.db, func) {
+            self.func_defs.insert(func, def);
+        }
+        Some(idx)
     }
 }
 
