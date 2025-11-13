@@ -1,0 +1,34 @@
+---
+source: crates/uitest/tests/parser.rs
+expression: diags
+input_file: fixtures/parser/attr_errors.fe
+---
+error[1-0001]: expected path segment
+  ┌─ attr_errors.fe:1:3
+  │
+1 │ #[123]
+  │   ^ expected path segment
+
+error[1-0001]: unexpected syntax while parsing attribute
+  ┌─ attr_errors.fe:1:3
+  │
+1 │ #[123]
+  │   ^^^ unexpected
+
+error[1-0001]: expected path segment
+  ┌─ attr_errors.fe:4:7
+  │
+4 │ #[foo(=42)]
+  │       ^ expected path segment
+
+error[1-0001]: attribute value must be an ident or literal value
+  ┌─ attr_errors.fe:7:15
+  │
+7 │ #[bar(option = @)]
+  │               ^ attribute value must be an ident or literal value
+
+error[1-0001]: unexpected syntax while parsing attribute argument value
+  ┌─ attr_errors.fe:7:16
+  │
+7 │ #[bar(option = @)]
+  │                ^ unexpected

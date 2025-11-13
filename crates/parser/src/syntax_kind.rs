@@ -424,12 +424,14 @@ pub enum SyntaxKind {
     /// `<Foo as SomeTrait>`
     QualifiedType,
 
-    /// `#attr`
+    /// `#[attr]`
     Attr,
     /// `(key1: value1, key2: value2)`
     AttrArgList,
     /// `key: value`
     AttrArg,
+    /// `value` in an attribute argument
+    AttrArgValue,
     /// `/// Comment`
     DocCommentAttr,
     AttrList,
@@ -721,6 +723,7 @@ impl SyntaxKind {
             SyntaxKind::Attr => "attribute",
             SyntaxKind::AttrArgList => "attribute argument list",
             SyntaxKind::AttrArg => "attribute argument",
+            SyntaxKind::AttrArgValue => "attribute argument value",
             SyntaxKind::DocCommentAttr => "doc comment",
             SyntaxKind::AttrList => "attribute list",
             SyntaxKind::Visibility => "visibility modifier",

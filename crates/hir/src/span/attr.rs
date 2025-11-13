@@ -1,6 +1,7 @@
 use parser::ast;
 
-use super::define_lazy_span_node;
+use super::{define_lazy_span_node, path::LazyPathSpan};
+use crate::span::{LazyLitSpan, LazySpanAtom};
 
 define_lazy_span_node!(
     LazyAttrListSpan,
@@ -24,10 +25,8 @@ impl<'db> LazyAttrSpan<'db> {
 define_lazy_span_node!(
     LazyNormalAttrSpan,
     ast::NormalAttr,
-    @token {
-        (name, name),
-    }
     @node {
+        (path, path, LazyPathSpan),
         (args, args, LazyAttrArgListSpan),
     }
 );
@@ -51,8 +50,18 @@ define_lazy_span_node!(
 define_lazy_span_node!(
     LazyAttrArgSpan,
     ast::AttrArg,
-    @token {
-        (key, key),
-        (value, value),
+    @node {
+        (key, key, LazyPathSpan),
+        (value, value_node, LazyAttrArgValueSpan),
     }
 );
+
+define_lazy_span_node!(LazyAttrArgValueSpan, ast::AttrArgValue);
+impl<'db> LazyAttrArgValueSpan<'db> {
+    pub fn lit(self) -> LazyLitSpan<'db> {
+        LazyLitSpan(self.0)
+    }
+    pub fn ident(self) -> LazySpanAtom<'db> {
+        LazySpanAtom(self.0)
+    }
+}

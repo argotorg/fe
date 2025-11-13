@@ -595,7 +595,7 @@ mod tests {
     fn func() {
         let source = r#"
                 /// This is doc comment
-                #evm
+                #[evm]
                 pub unsafe fn foo<T, U: Trait>(_ x: T, from u: U) -> (T, U) where T: Trait2 { return }
             "#;
         let func: Func = parse_item(source);

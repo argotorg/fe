@@ -1,0 +1,8 @@
+#[123]
+fn attr_path_must_be_ident() {}
+
+#[foo(=42)]
+fn attr_arg_missing_key() {}
+
+#[bar(option = @)]
+fn attr_value_invalid() {}
