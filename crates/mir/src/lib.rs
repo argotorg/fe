@@ -1,5 +1,6 @@
 pub mod ir;
 mod lower;
+mod monomorphize;
 
 pub use ir::{
     BasicBlockId, CallOrigin, LoopInfo, MatchArmLowering, MatchArmPattern, MatchLoweringInfo,

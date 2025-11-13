@@ -263,7 +263,7 @@ impl<'db> TyId<'db> {
         Self::new(db, TyData::TyBase(TyBase::Adt(adt)))
     }
 
-    pub(crate) fn func(db: &'db dyn HirAnalysisDb, func: FuncDef<'db>) -> Self {
+    pub fn func(db: &'db dyn HirAnalysisDb, func: FuncDef<'db>) -> Self {
         Self::new(db, TyData::TyBase(TyBase::Func(func)))
     }
 

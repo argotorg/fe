@@ -1,0 +1,13 @@
+fn identity<T>(value: T) -> T {
+    value
+}
+
+fn call_identity_u32() -> u32 {
+    let val = identity(7);
+    val
+}
+
+fn call_identity_bool() -> bool {
+    let val = identity(true);
+    val
+}

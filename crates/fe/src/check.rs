@@ -235,13 +235,7 @@ fn dump_module_mir(db: &DriverDataBase, top_mod: TopLevelMod<'_>) {
         Ok(mir_module) => {
             println!("=== MIR for module ===");
             for func in mir_module.functions {
-                let name = func
-                    .func
-                    .name(db)
-                    .to_opt()
-                    .map(|id| id.data(db).to_string())
-                    .unwrap_or_else(|| "<anonymous>".into());
-                println!("fn {name}:");
+                println!("fn {}:", func.symbol_name);
                 for (idx, block) in func.body.blocks.iter().enumerate() {
                     println!("  bb{idx}:");
                     for inst in &block.insts {

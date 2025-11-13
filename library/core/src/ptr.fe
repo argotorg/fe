@@ -1,0 +1,51 @@
+// core::marker
+//   pub struct Phantom<T> {}
+
+//   impl<T> Phantom<T> {
+//       pub fn new() -> Self {
+//           Phantom {}
+//       }
+//   }
+
+  /// Tracks where a value lives so loaders can choose the right builtin.
+  pub enum AddressSpace {
+      Memory,
+      Storage,
+  }
+
+// Every scalar that can be loaded implements this.
+pub trait LoadableScalar {
+    fn from_word(word: u256) -> Self
+}
+
+impl LoadableScalar for u8 {
+    fn from_word(word: u256) -> Self {
+        return 1
+        //(word & 0xff)
+    }
+}
+
+// Minimal primitives for memory/storage loads.
+pub fn mload(addr: u256) -> u256 {
+// placeholder for mload
+//builtin_mload(addr)
+    return 0
+}
+
+pub fn sload(slot: u256) -> u256 {
+// placeholder for sload
+//builtin_sload(slot)
+    return 0
+}
+
+
+/// Generic field reader for byte-addressable structs.
+pub fn get_field<T, F: LoadableScalar>(addr: u256, space: AddressSpace, offset: u256) -> F {
+    let target = addr + offset
+    let word = match space {
+        AddressSpace::Memory => mload(target)
+        AddressSpace::Storage => sload(slot:target)
+        _ => 0
+    }
+    F::from_word(word)
+}

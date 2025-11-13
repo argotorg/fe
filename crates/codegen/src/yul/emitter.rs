@@ -5,10 +5,13 @@ use hir::hir_def::{
 };
 use mir::{
     BasicBlockId, CallOrigin, LoopInfo, MirFunction, Terminator, ValueId, ValueOrigin,
-    ir::{MatchArmPattern, SwitchOrigin, SwitchTarget, SwitchValue},
+    ir::{
+        IntrinsicOp, IntrinsicValue, MatchArmPattern, SwitchOrigin, SwitchTarget, SwitchValue,
+        SyntheticValue,
+    },
     lower_module,
 };
-use rustc_hash::FxHashMap;
+use rustc_hash::{FxHashMap, FxHashSet};
 
 use super::{
     doc::{YulDoc, render_docs},
@@ -35,6 +38,8 @@ struct YulEmitter<'db> {
     mir_func: &'db MirFunction<'db>,
     body: Body<'db>,
     match_values: FxHashMap<ExprId, String>,
+    /// Intrinsic values already emitted as statements so we do not duplicate side effects.
+    emitted_intrinsics: FxHashSet<ValueId>,
 }
 
 #[derive(Clone, Copy)]
@@ -56,12 +61,13 @@ impl<'db> YulEmitter<'db> {
             mir_func,
             body,
             match_values: FxHashMap::default(),
+            emitted_intrinsics: FxHashSet::default(),
         })
     }
 
     /// Produces the final Yul text for the current MIR function.
     fn emit(mut self) -> Result<String, YulError> {
-        let func_name = function_name(self.db, self.mir_func.func);
+        let func_name = self.mir_func.symbol_name.as_str();
         let (param_names, mut state) = self.init_function_state();
         let body_docs = self.emit_block(self.mir_func.body.entry, &mut state)?;
         let mut lines = Vec::new();
@@ -139,6 +145,9 @@ impl<'db> YulEmitter<'db> {
         let mut docs = self.render_statements(&block.insts, state)?;
         match block.terminator {
             Terminator::Return(Some(val)) => {
+                if self.emit_intrinsic_return(val, &mut docs, state)? {
+                    return Ok(docs);
+                }
                 let expr = match self.mir_func.body.value(val).origin {
                     ValueOrigin::Expr(expr_id) => {
                         self.lower_expr_with_statements(expr_id, &mut docs, state)?
@@ -188,6 +197,15 @@ impl<'db> YulEmitter<'db> {
                             MatchArmPattern::Literal(value) => {
                                 let body_expr = self.lower_expr(arm.body, state)?;
                                 let literal = switch_value_literal(value);
+                                docs.push(YulDoc::wide_block(
+                                    format!("  case {literal} "),
+                                    vec![YulDoc::line(format!("{temp} := {body_expr}"))],
+                                ));
+                            }
+                            MatchArmPattern::Enum { variant_index, .. } => {
+                                let body_expr = self.lower_expr(arm.body, state)?;
+                                let literal =
+                                    switch_value_literal(&SwitchValue::Enum(*variant_index));
                                 docs.push(YulDoc::wide_block(
                                     format!("  case {literal} "),
                                     vec![YulDoc::line(format!("{temp} := {body_expr}"))],
@@ -404,7 +422,11 @@ impl<'db> YulEmitter<'db> {
                     };
                     docs.push(YulDoc::line(format!("{yul_name} := {assignment}")));
                 }
-                mir::MirInst::Eval { .. } => {}
+                mir::MirInst::Eval { value, .. } => {
+                    if let Some(doc) = self.render_eval(*value, state)? {
+                        docs.push(doc);
+                    }
+                }
             }
         }
         Ok(docs)
@@ -422,10 +444,140 @@ impl<'db> YulEmitter<'db> {
                 }
             }
             ValueOrigin::Call(call) => self.lower_call_value(call, state),
+            ValueOrigin::Intrinsic(intr) => self.lower_intrinsic_value(intr, state),
+            ValueOrigin::Synthetic(synth) => self.lower_synthetic_value(synth),
             _ => Err(YulError::Unsupported(
                 "only expression-derived values are supported".into(),
             )),
         }
+    }
+
+    /// Emits statements for expression statements, returning a doc when work was done.
+    fn render_eval(
+        &mut self,
+        value_id: ValueId,
+        state: &mut BlockState,
+    ) -> Result<Option<YulDoc>, YulError> {
+        let value = self.mir_func.body.value(value_id);
+        match &value.origin {
+            ValueOrigin::Intrinsic(intr) => {
+                if self.emitted_intrinsics.contains(&value_id) {
+                    return Ok(None);
+                }
+                let doc = self.lower_intrinsic_stmt(intr, state)?;
+                if doc.is_some() {
+                    self.emitted_intrinsics.insert(value_id);
+                }
+                Ok(doc)
+            }
+            _ => Ok(None),
+        }
+    }
+
+    /// Handles `return intrinsic::<op>(...)` for void intrinsics by emitting the
+    /// side effect plus a `ret := 0`.
+    fn emit_intrinsic_return(
+        &mut self,
+        value_id: ValueId,
+        docs: &mut Vec<YulDoc>,
+        state: &BlockState,
+    ) -> Result<bool, YulError> {
+        let value = self.mir_func.body.value(value_id);
+        if let ValueOrigin::Intrinsic(intr) = &value.origin {
+            if !Self::intrinsic_returns_value(intr.op) {
+                if !self.emitted_intrinsics.contains(&value_id) {
+                    if let Some(doc) = self.lower_intrinsic_stmt(intr, state)? {
+                        docs.push(doc);
+                    }
+                    self.emitted_intrinsics.insert(value_id);
+                }
+                docs.push(YulDoc::line("ret := 0"));
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+
+    /// Converts intrinsic value-producing operations (`mload`/`sload`) into Yul.
+    fn lower_intrinsic_value(
+        &self,
+        intr: &IntrinsicValue,
+        state: &BlockState,
+    ) -> Result<String, YulError> {
+        if !Self::intrinsic_returns_value(intr.op) {
+            return Err(YulError::Unsupported(
+                "intrinsic does not yield a value".into(),
+            ));
+        }
+        let args = self.lower_intrinsic_args(intr, state)?;
+        self.expect_intrinsic_arity(intr.op, &args, 1)?;
+        Ok(format!("{}({})", self.intrinsic_name(intr.op), args[0]))
+    }
+
+    /// Converts intrinsic statement operations (`mstore`, …) into Yul.
+    fn lower_intrinsic_stmt(
+        &self,
+        intr: &IntrinsicValue,
+        state: &BlockState,
+    ) -> Result<Option<YulDoc>, YulError> {
+        if Self::intrinsic_returns_value(intr.op) {
+            return Ok(None);
+        }
+        let args = self.lower_intrinsic_args(intr, state)?;
+        self.expect_intrinsic_arity(intr.op, &args, 2)?;
+        let line = match intr.op {
+            IntrinsicOp::Mstore => format!("mstore({}, {})", args[0], args[1]),
+            IntrinsicOp::Mstore8 => format!("mstore8({}, {})", args[0], args[1]),
+            IntrinsicOp::Sstore => format!("sstore({}, {})", args[0], args[1]),
+            _ => unreachable!(),
+        };
+        Ok(Some(YulDoc::line(line)))
+    }
+
+    /// Lowers all intrinsic arguments into Yul expressions.
+    fn lower_intrinsic_args(
+        &self,
+        intr: &IntrinsicValue,
+        state: &BlockState,
+    ) -> Result<Vec<String>, YulError> {
+        intr.args
+            .iter()
+            .map(|arg| self.lower_value(*arg, state))
+            .collect()
+    }
+
+    /// Emits a user-friendly error when an intrinsic is lowered with the wrong arity.
+    fn expect_intrinsic_arity(
+        &self,
+        op: IntrinsicOp,
+        args: &[String],
+        expected: usize,
+    ) -> Result<(), YulError> {
+        if args.len() == expected {
+            Ok(())
+        } else {
+            Err(YulError::Unsupported(format!(
+                "intrinsic `{}` expects {expected} arguments, got {}",
+                self.intrinsic_name(op),
+                args.len()
+            )))
+        }
+    }
+
+    /// Returns the Yul builtin name for an intrinsic opcode.
+    fn intrinsic_name(&self, op: IntrinsicOp) -> &'static str {
+        match op {
+            IntrinsicOp::Mload => "mload",
+            IntrinsicOp::Mstore => "mstore",
+            IntrinsicOp::Mstore8 => "mstore8",
+            IntrinsicOp::Sload => "sload",
+            IntrinsicOp::Sstore => "sstore",
+        }
+    }
+
+    /// Whether the intrinsic yields a value (loader) versus a pure side-effect (store).
+    fn intrinsic_returns_value(op: IntrinsicOp) -> bool {
+        matches!(op, IntrinsicOp::Mload | IntrinsicOp::Sload)
     }
 
     /// Lowers a HIR expression into a Yul expression string.
@@ -462,6 +614,18 @@ impl<'db> YulEmitter<'db> {
                     .map(|expr| self.lower_expr(*expr, state))
                     .collect::<Result<Vec<_>, _>>()?;
                 Ok(format!("tuple({})", parts.join(", ")))
+            }
+            Expr::Call(callee, call_args) => {
+                let callee_expr = self.lower_expr(*callee, state)?;
+                let mut lowered_args = Vec::with_capacity(call_args.len());
+                for arg in call_args {
+                    lowered_args.push(self.lower_expr(arg.expr, state)?);
+                }
+                if lowered_args.is_empty() {
+                    Ok(format!("{callee_expr}()"))
+                } else {
+                    Ok(format!("{callee_expr}({})", lowered_args.join(", ")))
+                }
             }
             Expr::Bin(lhs, rhs, bin_op) => match bin_op {
                 BinOp::Arith(op) => {
@@ -521,9 +685,16 @@ impl<'db> YulEmitter<'db> {
                     .ok_or_else(|| YulError::Unsupported("unsupported path expression".into()))?;
                 Ok(state.resolve_name(&original))
             }
-            _ => Err(YulError::Unsupported(
-                "only simple expressions are supported".into(),
-            )),
+            Expr::Field(..) => {
+                let ty = self.mir_func.typed_body.expr_ty(self.db, expr_id);
+                Err(YulError::Unsupported(format!(
+                    "field expressions should be rewritten before codegen (expr type {})",
+                    ty.pretty_print(self.db)
+                )))
+            }
+            other => Err(YulError::Unsupported(format!(
+                "only simple expressions are supported: {other:?}"
+            ))),
         }
     }
 
@@ -604,12 +775,16 @@ impl<'db> YulEmitter<'db> {
         call: &CallOrigin<'_>,
         state: &BlockState,
     ) -> Result<String, YulError> {
-        let Some(func) = call.callable.func_def.hir_func_def(self.db) else {
-            return Err(YulError::Unsupported(
-                "callable without hir function definition is not supported yet".into(),
-            ));
+        let callee = if let Some(name) = &call.resolved_name {
+            name.clone()
+        } else {
+            let Some(func) = call.callable.func_def.hir_func_def(self.db) else {
+                return Err(YulError::Unsupported(
+                    "callable without hir function definition is not supported yet".into(),
+                ));
+            };
+            function_name(self.db, func)
         };
-        let callee = function_name(self.db, func);
         let mut lowered_args = Vec::with_capacity(call.args.len());
         for &arg in &call.args {
             lowered_args.push(self.lower_value(arg, state)?);
@@ -618,6 +793,13 @@ impl<'db> YulEmitter<'db> {
             Ok(format!("{callee}()"))
         } else {
             Ok(format!("{callee}({})", lowered_args.join(", ")))
+        }
+    }
+
+    fn lower_synthetic_value(&self, value: &SyntheticValue) -> Result<String, YulError> {
+        match value {
+            SyntheticValue::Int(int) => Ok(int.to_string()),
+            SyntheticValue::Bool(flag) => Ok(if *flag { "1" } else { "0" }.into()),
         }
     }
 
@@ -662,6 +844,7 @@ fn switch_value_literal(value: &SwitchValue) -> String {
         SwitchValue::Bool(true) => "1".into(),
         SwitchValue::Bool(false) => "0".into(),
         SwitchValue::Int(int) => int.to_string(),
+        SwitchValue::Enum(val) => val.to_string(),
     }
 }
 

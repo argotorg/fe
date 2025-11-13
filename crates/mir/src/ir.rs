@@ -9,7 +9,7 @@ use num_bigint::BigUint;
 use rustc_hash::FxHashMap;
 
 /// MIR for an entire top-level module.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct MirModule<'db> {
     pub top_mod: TopLevelMod<'db>,
     pub functions: Vec<MirFunction<'db>>,
@@ -25,15 +25,19 @@ impl<'db> MirModule<'db> {
 }
 
 /// MIR for a single function.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct MirFunction<'db> {
     pub func: Func<'db>,
     pub body: MirBody<'db>,
     pub typed_body: TypedBody<'db>,
+    /// Concrete generic arguments used to instantiate this function instance.
+    pub generic_args: Vec<TyId<'db>>,
+    /// Symbol name used for codegen (includes monomorphization suffix when present).
+    pub symbol_name: String,
 }
 
 /// A function body expressed as basic blocks.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct MirBody<'db> {
     pub entry: BasicBlockId,
     pub blocks: Vec<BasicBlock<'db>>,
@@ -109,7 +113,7 @@ impl ValueId {
 }
 
 /// A linear sequence of MIR instructions terminated by a control-flow edge.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct BasicBlock<'db> {
     pub insts: Vec<MirInst<'db>>,
     pub terminator: Terminator,
@@ -139,7 +143,7 @@ impl<'db> Default for BasicBlock<'db> {
 }
 
 /// General MIR instruction (does not change control flow).
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum MirInst<'db> {
     /// A `let` binding statement.
     Let {
@@ -166,7 +170,7 @@ pub enum MirInst<'db> {
 }
 
 /// Control-flow terminating instruction.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum Terminator {
     /// Return from the function with an optional value.
     Return(Option<ValueId>),
@@ -189,7 +193,7 @@ pub enum Terminator {
     Unreachable,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct SwitchTarget {
     pub value: SwitchValue,
     pub block: BasicBlockId,
@@ -205,6 +209,7 @@ pub enum SwitchOrigin {
 pub enum SwitchValue {
     Bool(bool),
     Int(BigUint),
+    Enum(u64),
 }
 
 impl SwitchValue {
@@ -218,6 +223,7 @@ impl SwitchValue {
                 }
             }
             Self::Int(value) => value.clone(),
+            Self::Enum(value) => BigUint::from(*value),
         }
     }
 }
@@ -227,6 +233,7 @@ impl fmt::Display for SwitchValue {
         match self {
             Self::Bool(value) => write!(f, "{value}"),
             Self::Int(value) => write!(f, "{value}"),
+            Self::Enum(value) => write!(f, "{value}"),
         }
     }
 }
@@ -247,10 +254,21 @@ pub struct ValueData<'db> {
 #[derive(Debug, Clone)]
 pub enum ValueOrigin<'db> {
     Expr(ExprId),
-    Synthetic(&'static str),
+    Synthetic(SyntheticValue),
     Pat(PatId),
     Param(Func<'db>, usize),
     Call(CallOrigin<'db>),
+    /// Call to a compiler intrinsic that should lower to a raw opcode, not a function call.
+    Intrinsic(IntrinsicValue),
+}
+
+/// Captures compile-time literals synthesized by lowering.
+#[derive(Debug, Clone)]
+pub enum SyntheticValue {
+    /// Integer literal emitted directly into Yul.
+    Int(BigUint),
+    /// Boolean literal stored as `0` or `1`.
+    Bool(bool),
 }
 
 #[derive(Debug, Clone)]
@@ -268,6 +286,10 @@ pub struct MatchArmLowering {
 pub enum MatchArmPattern {
     Literal(SwitchValue),
     Wildcard,
+    Enum {
+        variant_index: u64,
+        enum_name: String,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -275,4 +297,29 @@ pub struct CallOrigin<'db> {
     pub expr: ExprId,
     pub callable: Callable<'db>,
     pub args: Vec<ValueId>,
+    /// Final lowered symbol name of the callee after monomorphization.
+    pub resolved_name: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct IntrinsicValue {
+    /// Which intrinsic operation this value represents.
+    pub op: IntrinsicOp,
+    /// Already-lowered argument `ValueId`s (still need converting to Yul expressions later).
+    pub args: Vec<ValueId>,
+}
+
+/// Low-level runtime operations that bypass normal function calls.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum IntrinsicOp {
+    /// `mload(address)`
+    Mload,
+    /// `mstore(address, value)`
+    Mstore,
+    /// `mstore8(address, byte)`
+    Mstore8,
+    /// `sload(slot)`
+    Sload,
+    /// `sstore(slot, value)`
+    Sstore,
 }

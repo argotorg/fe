@@ -1,0 +1,28 @@
+---
+source: crates/codegen/tests/yul.rs
+assertion_line: 38
+expression: output
+input_file: tests/fixtures/generic_identity.fe
+---
+{
+  function call_identity_u32() -> ret {
+    let v0 := identity__u32__20aa0c10687491ad(7)
+    ret := v0
+  }
+}
+{
+  function call_identity_bool() -> ret {
+    let v0 := identity__bool__947c0c03c59c6f07(1)
+    ret := v0
+  }
+}
+{
+  function identity__u32__20aa0c10687491ad(value) -> ret {
+    ret := value
+  }
+}
+{
+  function identity__bool__947c0c03c59c6f07(value) -> ret {
+    ret := value
+  }
+}
