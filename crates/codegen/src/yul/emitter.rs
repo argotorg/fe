@@ -5,7 +5,7 @@ use hir::hir_def::{
 };
 use mir::{
     BasicBlockId, CallOrigin, LoopInfo, MirFunction, Terminator, ValueId, ValueOrigin,
-    ir::{MatchArmPattern, SwitchOrigin, SwitchValue},
+    ir::{MatchArmPattern, SwitchOrigin, SwitchTarget, SwitchValue},
     lower_module,
 };
 use rustc_hash::FxHashMap;
@@ -207,6 +207,10 @@ impl<'db> YulEmitter<'db> {
                         "  default ",
                         vec![YulDoc::line(format!("{temp} := {default_expr}"))],
                     ));
+                    if let Some(merge_block) = self.match_merge_block(targets, default)? {
+                        let next_docs = self.emit_block_with_ctx(merge_block, loop_ctx, state)?;
+                        docs.extend(next_docs);
+                    }
                     Ok(docs)
                 }
                 SwitchOrigin::None => {
@@ -261,6 +265,45 @@ impl<'db> YulEmitter<'db> {
                 Ok(docs)
             }
         }
+    }
+
+    /// Finds the unified merge block that all literal match arms jump to, if any.
+    fn match_merge_block(
+        &self,
+        targets: &[SwitchTarget],
+        default: BasicBlockId,
+    ) -> Result<Option<BasicBlockId>, YulError> {
+        let mut merge = None;
+        for block_id in targets
+            .iter()
+            .map(|target| target.block)
+            .chain(std::iter::once(default))
+        {
+            let block = self
+                .mir_func
+                .body
+                .blocks
+                .get(block_id.index())
+                .ok_or_else(|| YulError::Unsupported("invalid block in match lowering".into()))?;
+            match block.terminator {
+                Terminator::Goto { target } => match merge {
+                    Some(existing) if existing != target => {
+                        return Err(YulError::Unsupported(
+                            "match arms must converge to a single merge block".into(),
+                        ));
+                    }
+                    None => merge = Some(target),
+                    _ => {}
+                },
+                Terminator::Unreachable => {}
+                _ => {
+                    return Err(YulError::Unsupported(
+                        "match arms must jump to a merge block".into(),
+                    ));
+                }
+            }
+        }
+        Ok(merge)
     }
 
     /// Looks up metadata about the loop that starts at `header`, if it exists.
