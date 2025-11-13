@@ -1,0 +1,15 @@
+/// Low-level EVM intrinsics that Fe surface-level code can import as
+/// `core::intrinsic::mload`, etc. Their bodies are provided by the compiler
+/// backend, so we declare them in an `extern` block.
+extern {
+    /// Load a 32-byte word from memory.
+    pub fn mload(_: u256) -> u256
+    /// Store a 32-byte word to memory.
+    pub fn mstore(_: u256, _: u256)
+    /// Store the low byte of the second argument at the memory address.
+    pub fn mstore8(_: u256, _: u8)
+    /// Load a 32-byte word from storage.
+    pub fn sload(_: u256) -> u256
+    /// Store a 32-byte word to storage.
+    pub fn sstore(_: u256, _: u256)
+}

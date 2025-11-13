@@ -258,6 +258,8 @@ pub enum ValueOrigin<'db> {
     Pat(PatId),
     Param(Func<'db>, usize),
     Call(CallOrigin<'db>),
+    /// Call to a compiler intrinsic that should lower to a raw opcode, not a function call.
+    Intrinsic(IntrinsicValue),
 }
 
 /// Captures compile-time literals synthesized by lowering.
@@ -297,4 +299,27 @@ pub struct CallOrigin<'db> {
     pub args: Vec<ValueId>,
     /// Final lowered symbol name of the callee after monomorphization.
     pub resolved_name: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct IntrinsicValue {
+    /// Which intrinsic operation this value represents.
+    pub op: IntrinsicOp,
+    /// Already-lowered argument `ValueId`s (still need converting to Yul expressions later).
+    pub args: Vec<ValueId>,
+}
+
+/// Low-level runtime operations that bypass normal function calls.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum IntrinsicOp {
+    /// `mload(address)`
+    Mload,
+    /// `mstore(address, value)`
+    Mstore,
+    /// `mstore8(address, byte)`
+    Mstore8,
+    /// `sload(slot)`
+    Sload,
+    /// `sstore(slot, value)`
+    Sstore,
 }

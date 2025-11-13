@@ -4,6 +4,7 @@ use hir::hir_def::{
     Body, Expr, ExprId, FieldIndex, Func, IdentId, LitKind, MatchArm, Partial, Pat, PatId, PathId,
     Stmt, StmtId, TopLevelMod,
 };
+use common::ingot::IngotKind;
 use hir_analysis::{
     HirAnalysisDb,
     name_resolution::{PathRes, path_resolver::resolve_path},
@@ -17,9 +18,10 @@ use hir_analysis::{
 
 use crate::{
     ir::{
-        BasicBlock, BasicBlockId, CallOrigin, LoopInfo, MatchArmLowering, MatchArmPattern,
-        MatchLoweringInfo, MirBody, MirFunction, MirInst, MirModule, SwitchOrigin, SwitchTarget,
-        SwitchValue, SyntheticValue, Terminator, ValueData, ValueId, ValueOrigin,
+        BasicBlock, BasicBlockId, CallOrigin, IntrinsicOp, IntrinsicValue, LoopInfo,
+        MatchArmLowering, MatchArmPattern, MatchLoweringInfo, MirBody, MirFunction, MirInst,
+        MirModule, SwitchOrigin, SwitchTarget, SwitchValue, SyntheticValue, Terminator, ValueData,
+        ValueId, ValueOrigin,
     },
     monomorphize::monomorphize_functions,
 };
@@ -532,6 +534,12 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         };
 
         let ty = self.typed_body.expr_ty(self.db, expr);
+        if let Some(kind) = self.intrinsic_kind(callable.func_def) {
+            return Some(self.mir_body.alloc_value(ValueData {
+                ty,
+                origin: ValueOrigin::Intrinsic(IntrinsicValue { op: kind, args }),
+            }));
+        }
         Some(self.mir_body.alloc_value(ValueData {
             ty,
             origin: ValueOrigin::Call(CallOrigin {
@@ -688,6 +696,22 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
             }
         }
         None
+    }
+
+    /// Returns which intrinsic operation the given function represents, if any.
+    fn intrinsic_kind(&self, func_def: FuncDef<'db>) -> Option<IntrinsicOp> {
+        if func_def.ingot(self.db).kind(self.db) != IngotKind::Core {
+            return None;
+        }
+        let name = func_def.name(self.db).data(self.db);
+        match name.as_str() {
+            "mload" => Some(IntrinsicOp::Mload),
+            "mstore" => Some(IntrinsicOp::Mstore),
+            "mstore8" => Some(IntrinsicOp::Mstore8),
+            "sload" => Some(IntrinsicOp::Sload),
+            "sstore" => Some(IntrinsicOp::Sstore),
+            _ => None,
+        }
     }
 
     /// Emits a synthetic `u256` literal value.

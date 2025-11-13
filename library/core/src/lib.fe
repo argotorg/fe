@@ -2,6 +2,7 @@ pub use option::Option
 pub use default::Default
 pub use ops::*
 pub use ptr::*
+pub use intrinsic::{mload, mstore, mstore8, sload, sstore}
 
 extern {
     pub fn panic() -> !
