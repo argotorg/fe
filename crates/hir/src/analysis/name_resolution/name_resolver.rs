@@ -186,13 +186,13 @@ impl<'db> NameResBucket<'db> {
                     match res.derivation.cmp(&old_derivation) {
                         cmp::Ordering::Less => {}
                         cmp::Ordering::Equal => {
-                            if old_res.kind != res.kind {
-                                *existing_res =
-                                    Err(NameResolutionError::Ambiguous(ThinVec::from([
-                                        old_res.clone(),
-                                        res.clone(),
-                                    ])));
-                            }
+                            // When two resolutions come from the same derivation layer
+                            // (e.g., duplicate generic params in the same owner), treat
+                            // them as ambiguous even if their kinds are equal.
+                            *existing_res = Err(NameResolutionError::Ambiguous(ThinVec::from([
+                                old_res.clone(),
+                                res.clone(),
+                            ])));
                         }
                         cmp::Ordering::Greater => {
                             *existing_res = Ok(res.clone());

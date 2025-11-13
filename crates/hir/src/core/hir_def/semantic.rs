@@ -59,15 +59,68 @@ use crate::analysis::ty::canonical::Canonical;
 use crate::analysis::ty::fold::TyFoldable;
 use crate::analysis::ty::ty_def::TyData;
 use crate::analysis::ty::trait_def::impls_for_ty_with_constraints;
+use crate::analysis::ty::adt_def::AdtDef;
+use crate::analysis::ty::visitor::{TyVisitor, walk_ty};
 use smallvec::{SmallVec, smallvec};
 use common::indexmap::IndexMap;
-use crate::analysis::ty::trait_lower::lower_trait_ref;
 use crate::analysis::ty::{
     trait_resolution::{is_goal_satisfiable, GoalSatisfiability},
 };
 // (kind-lowering helpers intentionally omitted; see WherePredicateView::kind)
 
 // (Additional view types appear below; keep layering semantic.)
+
+// Note: generic trait-ref diagnostics are handled via context-rooted views (e.g.,
+// WherePredicateBoundView and SuperTraitRefView). Avoid subject-taking public APIs.
+
+impl<'db> SuperTraitRefView<'db> {
+    /// Diagnostics for this super-trait reference in its owner's context.
+    /// Uses the trait's `Self` as subject and checks WF; kind mismatch is emitted
+    /// elsewhere via Trait::diags_super_traits.
+    pub fn diags(self, db: &'db dyn HirAnalysisDb) -> Option<crate::analysis::ty::diagnostics::TyDiagCollection<'db>> {
+        use crate::analysis::name_resolution::{ExpectedPathKind, diagnostics::PathResDiag};
+        use crate::analysis::ty::trait_lower::TraitRefLowerError;
+        use crate::analysis::ty::trait_resolution::{check_trait_inst_wf, WellFormedness};
+
+        let span = self.span();
+        let subject = self.subject_self(db);
+        let scope = self.owner.scope();
+        let assumptions = self.assumptions(db);
+        let tr = self.trait_ref_id(db);
+
+        let inst = match crate::analysis::ty::trait_lower::lower_trait_ref(db, subject, tr, scope, assumptions) {
+            Ok(i) => i,
+            Err(TraitRefLowerError::PathResError(err)) => {
+                return Some(
+                    err.into_diag(db, tr.path(db).unwrap(), span.path(), ExpectedPathKind::Trait)?.into(),
+                );
+            }
+            Err(TraitRefLowerError::InvalidDomain(res)) => {
+                return Some(
+                    PathResDiag::ExpectedTrait(span.path().into(), tr.path(db).unwrap().ident(db).unwrap(), res.kind_name()).into(),
+                );
+            }
+            Err(TraitRefLowerError::Ignored) => return None,
+        };
+
+        // Do not emit when subject contains assoc types of params
+        if inst.self_ty(db).contains_assoc_ty_of_param(db) {
+            return None;
+        }
+
+        match check_trait_inst_wf(db, scope.ingot(db), inst, assumptions) {
+            WellFormedness::WellFormed => None,
+            WellFormedness::IllFormed { goal, subgoal } => Some(
+                crate::analysis::ty::diagnostics::TraitConstraintDiag::TraitBoundNotSat {
+                    span: span.into(),
+                    primary_goal: goal,
+                    unsat_subgoal: subgoal,
+                }
+                .into(),
+            ),
+        }
+    }
+}
 
 /// Consolidated assumptions for any item kind.
 pub fn constraints_for<'db>(db: &'db dyn HirAnalysisDb, item: ItemKind<'db>) -> PredicateListId<'db> {
@@ -196,6 +249,85 @@ impl<'db> Func<'db> {
         }
         diags
     }
+
+    /// Expected `Self` type for this function when it is an associated method.
+    /// - In trait: the trait's `Self` parameter (identity instantiation)
+    /// - In impl/impl_trait: the implementor type
+    pub fn expected_self_ty(self, db: &'db dyn HirAnalysisDb) -> Option<TyId<'db>> {
+        match self.scope().parent(db)? {
+            ScopeId::Item(ItemKind::Trait(tr)) => {
+                Some(crate::analysis::ty::trait_lower::lower_trait(db, tr).self_param(db))
+            }
+            ScopeId::Item(ItemKind::ImplTrait(it)) => Some(it.ty(db)),
+            ScopeId::Item(ItemKind::Impl(im)) => Some(im.ty(db)),
+            _ => None,
+        }
+    }
+
+    /// Diagnostics for function parameter types:
+    /// - For all params: star kind required and reject const types
+    /// - For self param: enforce exact `Self` type shape
+    /// Note: WF/invalid errors are still surfaced via the general type walker.
+    pub fn diags_param_types(self, db: &'db dyn HirAnalysisDb) -> Vec<TyDiagCollection<'db>> {
+        use crate::analysis::ty::diagnostics::{ImplDiag, TyLowerDiag};
+        use crate::analysis::ty::normalize::normalize_ty;
+        let mut out = Vec::new();
+        let assumptions = constraints_for(db, self.into());
+        let expected_self = self.expected_self_ty(db);
+
+        for view in self.param_views(db) {
+            let Some(hir_ty) = view.ty_hir(db) else { continue };
+            // Surface name-resolution errors for the parameter type first
+            let span_node = if view.is_self_param(db) && view.self_ty_fallback(db) {
+                view.span().fallback_self_ty()
+            } else {
+                view.span().ty()
+            };
+            let ty_span: crate::visitor::prelude::DynLazySpan<'db> = if view.is_self_param(db) && view.self_ty_fallback(db) {
+                view.span().name().into()
+            } else {
+                view.span().ty().into()
+            };
+            let mut errs = crate::analysis::ty::ty_error::collect_ty_lower_errors(
+                db,
+                self.scope(),
+                hir_ty,
+                span_node,
+                assumptions,
+            );
+            if !errs.is_empty() {
+                out.append(&mut errs);
+                continue;
+            }
+            let ty = lower_hir_ty(db, hir_ty, self.scope(), assumptions);
+            if !ty.has_star_kind(db) {
+                out.push(TyLowerDiag::ExpectedStarKind(ty_span.clone()).into());
+                continue;
+            }
+            if ty.is_const_ty(db) {
+                out.push(TyLowerDiag::NormalTypeExpected { span: ty_span.clone(), given: ty }.into());
+                continue;
+            }
+
+            if view.is_self_param(db) {
+                if let Some(expected) = expected_self {
+                    if !ty.has_invalid(db) && !expected.has_invalid(db) {
+                        let (exp_base, exp_args) = expected.decompose_ty_app(db);
+                        let ty_norm = normalize_ty(db, ty, self.scope(), assumptions);
+                        let (ty_base, ty_args) = ty_norm.decompose_ty_app(db);
+                        let same_base = ty_base == exp_base;
+                        let same_args = exp_args.iter().zip(ty_args.iter()).all(|(a, b)| a == b);
+                        if !(same_base && same_args) {
+                            out.push(
+                                ImplDiag::InvalidSelfType { span: ty_span.clone(), expected, given: ty_norm }.into(),
+                            );
+                        }
+                    }
+                }
+            }
+        }
+        out
+    }
 }
 
 // ADT items -----------------------------------------------------------------
@@ -247,6 +379,23 @@ impl<'db> FuncParamView<'db> {
         let list = self.func.params(db).to_opt();
         match list.and_then(|l| l.data(db).get(self.idx)) {
             Some(p) => p.is_mut,
+            None => false,
+        }
+    }
+
+    pub fn span(self) -> crate::span::params::LazyFuncParamSpan<'db> {
+        self.func.span().params().param(self.idx)
+    }
+
+    pub fn ty_hir(self, db: &'db dyn HirDb) -> Option<TypeId<'db>> {
+        let list = self.func.params(db).to_opt()?;
+        list.data(db).get(self.idx)?.ty.to_opt()
+    }
+
+    pub fn self_ty_fallback(self, db: &'db dyn HirDb) -> bool {
+        let list = self.func.params(db).to_opt();
+        match list.and_then(|l| l.data(db).get(self.idx)) {
+            Some(p) => p.self_ty_fallback,
             None => false,
         }
     }
@@ -721,6 +870,58 @@ impl<'db> TypeAlias<'db> {
         let ta = lower_type_alias(db, self);
         *ta.alias_to.skip_binder()
     }
+
+    /// Diagnostics for alias target type and generics:
+    /// - Invalid target type lowering errors
+    /// - Well-formedness of the target type
+    /// - Generic param diagnostics (duplicates, defined in parent, defaults ordering/refs)
+    pub fn diags(self, db: &'db dyn HirAnalysisDb) -> Vec<TyDiagCollection<'db>> {
+        let mut out = Vec::new();
+
+        // Generic param diags (aggregated here to avoid duplication in visitor)
+        let owner = GenericParamOwner::TypeAlias(self);
+        out.extend(owner.diags_check_duplicate_names(db));
+        out.extend(owner.diags_kind_bounds(db));
+        out.extend(owner.diags_non_trailing_defaults(db));
+        out.extend(owner.diags_default_forward_refs(db));
+        out.extend(owner.diags_trait_bounds(db));
+
+        // Target type diagnostics
+        let span = self.span().ty();
+        let assumptions = constraints_for(db, self.into());
+        let Some(hir_ty) = self.type_ref___tmp(db).to_opt() else {
+            return out; // parse-missing
+        };
+        let ty = lower_hir_ty(db, hir_ty, self.scope(), assumptions);
+        if ty.has_invalid(db) {
+            let diags = crate::analysis::ty::ty_error::collect_ty_lower_errors(
+                db,
+                self.scope(),
+                hir_ty,
+                span.clone(),
+                assumptions,
+            );
+            out.extend(diags);
+        }
+        // WF diagnostic via check_ty_wf
+        let wf = crate::analysis::ty::trait_resolution::check_ty_wf(
+            db,
+            self.top_mod(db).ingot(db),
+            ty,
+            assumptions,
+        );
+        if let crate::analysis::ty::trait_resolution::WellFormedness::IllFormed { goal, subgoal } = wf {
+            out.push(
+                crate::analysis::ty::diagnostics::TraitConstraintDiag::TraitBoundNotSat {
+                    span: span.into(),
+                    primary_goal: goal,
+                    unsat_subgoal: subgoal,
+                }
+                .into(),
+            );
+        }
+        out
+    }
 }
 
 // Trait / Impl items --------------------------------------------------------
@@ -825,6 +1026,95 @@ impl<'db> Trait<'db> {
     }
 }
 
+// ADT recursion (semantic) --------------------------------------------------
+
+impl<'db> AdtDef<'db> {
+    /// Detects a recursive ADT cycle that is not guarded by an indirect wrapper
+    /// (e.g., pointer/reference). Returns the cycle members if the ADT is part
+    /// of a cycle; otherwise returns None.
+    pub fn recursive_cycle(
+        self,
+        db: &'db dyn HirAnalysisDb,
+    ) -> Option<Vec<crate::analysis::ty::def_analysis::AdtCycleMember<'db>>> {
+        fn impl_check<'db>(
+            db: &'db dyn HirAnalysisDb,
+            adt: AdtDef<'db>,
+            chain: &[
+                crate::analysis::ty::def_analysis::AdtCycleMember<'db>
+            ],
+        ) -> Option<Vec<crate::analysis::ty::def_analysis::AdtCycleMember<'db>>> {
+            use crate::analysis::ty::adt_def::lower_adt;
+            use crate::analysis::ty::def_analysis::AdtCycleMember;
+
+            if chain.iter().any(|m| m.adt == adt) {
+                return Some(chain.to_vec());
+            } else if adt.fields(db).is_empty() {
+                return None;
+            }
+
+            let mut chain = chain.to_vec();
+            for (field_idx, field) in adt.fields(db).iter().enumerate() {
+                for (ty_idx, ty) in field.iter_types(db).enumerate() {
+                    for field_adt_ref in collect_direct_adts(db, ty.instantiate_identity()) {
+                        chain.push(AdtCycleMember {
+                            adt,
+                            field_idx: field_idx as u16,
+                            ty_idx: ty_idx as u16,
+                        });
+
+                        if let Some(cycle) = impl_check(db, lower_adt(db, field_adt_ref), &chain)
+                            && cycle.iter().any(|m| m.adt == adt)
+                        {
+                            return Some(cycle);
+                        }
+                        chain.pop();
+                    }
+                }
+            }
+            None
+        }
+
+        impl_check(db, self, &[])
+    }
+}
+
+/// Collect all ADTs directly appearing inside the given type without
+/// traversing through indirect wrappers like pointers or references.
+fn collect_direct_adts<'db>(
+    db: &'db dyn HirAnalysisDb,
+    ty: TyId<'db>,
+) -> rustc_hash::FxHashSet<crate::analysis::ty::adt_def::AdtRef<'db>> {
+    use crate::analysis::ty::visitor::TyVisitable;
+    use crate::analysis::ty::adt_def::AdtRef;
+    use rustc_hash::FxHashSet;
+    use crate::analysis::ty::ty_def::TyData;
+    use crate::analysis::ty::ty_def::TyBase;
+    use crate::analysis::ty::ty_def::PrimTy;
+
+    struct AdtCollector<'db> {
+        db: &'db dyn HirAnalysisDb,
+        adts: FxHashSet<AdtRef<'db>>,
+    }
+    impl<'db> TyVisitor<'db> for AdtCollector<'db> {
+        fn db(&self) -> &'db dyn HirAnalysisDb { self.db }
+        fn visit_app(&mut self, abs: TyId<'db>, arg: TyId<'db>) {
+            let is_indirect = match abs.data(self.db) {
+                TyData::TyBase(TyBase::Prim(PrimTy::Ptr)) => true,
+                // Future: handle Ref when introduced.
+                _ => false,
+            };
+            if !is_indirect { walk_ty(self, arg) }
+        }
+        fn visit_adt(&mut self, adt: AdtDef<'db>) {
+            self.adts.insert(adt.adt_ref(self.db));
+        }
+    }
+
+    let mut collector = AdtCollector { db, adts: FxHashSet::default() };
+    ty.visit_with(&mut collector);
+    collector.adts
+}
+
 #[derive(Clone, Copy, Debug)]
 pub struct SuperTraitRefView<'db> {
     pub owner: Trait<'db>,
@@ -871,12 +1161,6 @@ impl<'db> SuperTraitRefView<'db> {
         }
     }
 
-    /// Expected implementor kind for this super-trait, derived from the trait def's Self kind.
-    pub fn expected_implementor_kind(self, db: &'db dyn HirAnalysisDb) -> &'db crate::analysis::ty::ty_def::Kind {
-        use crate::analysis::ty::trait_def::TraitDef;
-        TraitDef::new(db, self.owner).expected_implementor_kind(db)
-    }
-
     /// Returns a tuple of (expected_kind, actual_self) when the owner's `Self` kind
     /// does not match the super-trait's expected implementor kind. Returns None when
     /// kinds are compatible or `Self` is invalid.
@@ -887,13 +1171,18 @@ impl<'db> SuperTraitRefView<'db> {
         crate::analysis::ty::ty_def::Kind,
         crate::analysis::ty::ty_def::TyId<'db>,
     )> {
-        let expected = self.expected_implementor_kind(db).clone();
-        let actual = self.subject_self(db);
-        if !expected.does_match(actual.kind(db)) {
-            Some((expected, actual))
-        } else {
-            None
-        }
+        use crate::analysis::ty::trait_lower::{lower_trait_ref, TraitRefLowerError};
+        let subject = self.subject_self(db);
+        let scope = self.owner.scope();
+        let assumptions = self.assumptions(db);
+        let tr = self.trait_ref_id(db);
+        let expected = match lower_trait_ref(db, subject, tr, scope, assumptions) {
+            Ok(inst) => inst.def(db).expected_implementor_kind(db).clone(),
+            // If we cannot lower, defer to other diagnostics; do not emit mismatch here.
+            Err(TraitRefLowerError::PathResError(_) | TraitRefLowerError::InvalidDomain(_) | TraitRefLowerError::Ignored) => return None,
+        };
+        let actual = subject;
+        (!expected.does_match(actual.kind(db))).then_some((expected, actual))
     }
 
     // Note: callers that want an Option can map the error to None explicitly.
@@ -920,6 +1209,48 @@ impl<'db> Impl<'db> {
             .to_opt()
             .map(|hir_ty| lower_hir_ty(db, hir_ty, self.scope(), assumptions))
             .unwrap_or_else(|| TyId::invalid(db, InvalidCause::ParseError))
+    }
+
+    /// Preconditions and implementor-type diagnostics for this impl:
+    /// - Inherent impl allowed for this type in this ingot
+    /// - Implementor type invalid/WF
+    /// - Generic parameter diagnostics
+    pub fn diags_preconditions(self, db: &'db dyn HirAnalysisDb) -> Vec<TyDiagCollection<'db>> {
+        use crate::analysis::ty::diagnostics::ImplDiag;
+        let mut out = Vec::new();
+
+        // Generic params for impl
+        let owner = GenericParamOwner::Impl(self);
+        out.extend(owner.diags_check_duplicate_names(db));
+        out.extend(owner.diags_kind_bounds(db));
+        out.extend(owner.diags_non_trailing_defaults(db));
+        out.extend(owner.diags_default_forward_refs(db));
+        out.extend(owner.diags_trait_bounds(db));
+
+        let ty = self.ty(db);
+        let ingot = self.top_mod(db).ingot(db);
+        if !ty.is_inherent_impl_allowed(db, ingot) {
+            let base = ty.base_ty(db);
+            out.push(
+                ImplDiag::InherentImplIsNotAllowed {
+                    primary: self.span().target_ty().into(),
+                    ty: base.pretty_print(db).to_string(),
+                    is_nominal: !base.is_param(db),
+                }
+                .into(),
+            );
+            return out;
+        }
+
+        if let Some(diag) = crate::analysis::ty::ty_error::emit_invalid_ty_error(
+            db,
+            ty,
+            self.span().target_ty().into(),
+        ) {
+            out.push(diag);
+        }
+
+        out
     }
 }
 
@@ -1291,6 +1622,134 @@ use crate::analysis::ty::{
                 if let Some(name) = self.param_view(db, j).param.name().to_opt() {
                     let span = self.params_span().param(i);
                     out.push(TyLowerDiag::GenericDefaultForwardRef { span, name }.into());
+                }
+            }
+        }
+
+        out
+    }
+
+    /// Diagnostics for kind bounds declared on generic type parameters.
+    /// For each `T: <kind>` bound on a type parameter `T`, verifies that `T`'s
+    /// inferred/declared kind is compatible with the bound and emits
+    /// `InconsistentKindBound` at the precise bound span when they mismatch.
+    pub fn diags_kind_bounds(
+        self,
+        db: &'db dyn HirAnalysisDb,
+    ) -> Vec<TyDiagCollection<'db>> {
+        use crate::analysis::ty::diagnostics::TyLowerDiag;
+        use crate::hir_def::{GenericParam, TypeBound};
+        use crate::hir_def::Partial;
+
+        let mut out = Vec::new();
+        // Semantic param set gives us TyIds for each original param index.
+        let param_set = crate::analysis::ty::ty_lower::collect_generic_params(db, self);
+        for view in self.params(db) {
+            let GenericParam::Type(tp) = view.param else { continue };
+            // Resolve the semantic TyId for this parameter by its original index.
+            let Some(ty) = param_set.param_by_original_idx(db, view.idx) else { continue };
+            let actual = ty.kind(db);
+
+            for (i, bound) in tp.bounds.iter().enumerate() {
+                if let TypeBound::Kind(Partial::Present(kb)) = bound {
+                    let expected = lower_hir_kind_local(kb);
+                    if !actual.does_match(&expected) {
+                        let span = view
+                            .span()
+                            .into_type_param()
+                            .bounds()
+                            .bound(i)
+                            .kind_bound();
+                        out.push(
+                            TyLowerDiag::InconsistentKindBound {
+                                span: span.into(),
+                                ty,
+                                bound: expected,
+                            }
+                            .into(),
+                        );
+                    }
+                }
+            }
+        }
+
+        out
+    }
+
+    /// Diagnostics for trait bounds declared on generic type parameters.
+    /// Emits path/kind/WF diagnostics per bound with precise spans.
+    pub fn diags_trait_bounds(
+        self,
+        db: &'db dyn HirAnalysisDb,
+    ) -> Vec<TyDiagCollection<'db>> {
+        use crate::analysis::name_resolution::{ExpectedPathKind, diagnostics::PathResDiag};
+        use crate::analysis::ty::diagnostics::TraitConstraintDiag;
+        use crate::analysis::ty::trait_lower::{lower_trait_ref, TraitRefLowerError};
+        use crate::analysis::ty::trait_resolution::{check_trait_inst_wf, WellFormedness};
+        use crate::hir_def::{GenericParam, TypeBound};
+        use crate::hir_def::Partial;
+
+        let mut out = Vec::new();
+        let param_set = crate::analysis::ty::ty_lower::collect_generic_params(db, self);
+        let scope = self.scope();
+        let assumptions = super::semantic::constraints_for(db, self.into());
+
+        for view in self.params(db) {
+            let GenericParam::Type(tp) = view.param else { continue };
+            let Some(subject) = param_set.param_by_original_idx(db, view.idx) else { continue };
+            for (i, bound) in tp.bounds.iter().enumerate() {
+                let TypeBound::Trait(tr) = bound else { continue };
+                let span = view
+                    .span()
+                    .into_type_param()
+                    .bounds()
+                    .bound(i)
+                    .trait_bound();
+                match lower_trait_ref(db, subject, *tr, scope, assumptions) {
+                    Ok(inst) => {
+                        let expected = inst.def(db).expected_implementor_kind(db);
+                        if !expected.does_match(subject.kind(db)) {
+                            out.push(
+                                TraitConstraintDiag::TraitArgKindMismatch {
+                                    span: span.clone(),
+                                    expected: expected.clone(),
+                                    actual: subject,
+                                }
+                                .into(),
+                            );
+                        }
+
+                        if inst.self_ty(db).contains_assoc_ty_of_param(db) {
+                            continue;
+                        }
+
+                        match check_trait_inst_wf(db, scope.ingot(db), inst, assumptions) {
+                            WellFormedness::WellFormed => {}
+                            WellFormedness::IllFormed { goal, .. } => out.push(
+                                TraitConstraintDiag::TraitBoundNotSat {
+                                    span: span.into(),
+                                    primary_goal: goal,
+                                    unsat_subgoal: None,
+                                }
+                                .into(),
+                            ),
+                        }
+                    }
+                    Err(TraitRefLowerError::PathResError(err)) => {
+                        if let Some(path) = tr.path(db).to_opt() {
+                            if let Some(diag) = err.into_diag(db, path, span.path(), ExpectedPathKind::Trait) {
+                                out.push(diag.into());
+                            }
+                        }
+                    }
+                    Err(TraitRefLowerError::InvalidDomain(res)) => {
+                        if let Some(path) = tr.path(db).to_opt() {
+                            if let Some(ident) = path.ident(db).to_opt() {
+                                out.push(PathResDiag::ExpectedTrait(span.path().into(), ident, res.kind_name()).into());
+                            }
+                        }
+                    }
+                    Err(TraitRefLowerError::Ignored) => {}
                 }
             }
         }
@@ -1758,6 +2217,32 @@ impl<'db> FieldView<'db> {
     /// Returns an empty list if no issues are found. Assumptions are derived from owner context.
     pub fn diags_wf(self, db: &'db dyn HirAnalysisDb) -> Vec<crate::analysis::ty::diagnostics::TyDiagCollection<'db>> {
         let mut out = Vec::new();
+        // First, surface name-resolution errors for the field's HIR type path
+        if let Some(hir_ty) = self.type_ref___tmp(db).to_opt() {
+            let (scope, owner_item) = match self.parent {
+                FieldParent::Struct(s) => (s.scope(), ItemKind::Struct(s)),
+                FieldParent::Contract(c) => (c.scope(), ItemKind::Contract(c)),
+                FieldParent::Variant(v) => (v.enum_.scope(), ItemKind::Enum(v.enum_)),
+            };
+            let assumptions = constraints_for(db, owner_item);
+            let ty_span = match self.parent {
+                FieldParent::Struct(s) => s.span().fields().field(self.idx).ty(),
+                FieldParent::Contract(c) => c.span().fields().field(self.idx).ty(),
+                FieldParent::Variant(v) => v.span().fields().field(self.idx).ty(),
+            };
+            let mut errs = crate::analysis::ty::ty_error::collect_ty_lower_errors(
+                db,
+                scope,
+                hir_ty,
+                ty_span,
+                assumptions,
+            );
+            if !errs.is_empty() {
+                out.append(&mut errs);
+                return out;
+            }
+        }
+
         let ty = self.ty(db);
         let span = self.ty_span();
         if !ty.has_star_kind(db) {

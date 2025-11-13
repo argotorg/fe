@@ -843,7 +843,7 @@ where
     {
         res.clone()
     } else {
-        pick_type_domain_from_bucket(parent_res, bucket, path)?
+        pick_type_domain_from_bucket(parent_res, bucket, path, path.parent(db))?
     };
 
     let r = resolve_name_res(db, &res, parent_ty, path, scope, assumptions)?;
@@ -1092,43 +1092,6 @@ pub fn resolve_name_res<'db>(
                         let ty = TyId::foldl(db, ty, args);
                         PathRes::Ty(ty)
                     } else {
-                        // Pre-validate type generic arguments to surface domain errors
-                        // (e.g., trait used where a type is expected) with precise spans.
-                        if !path.generic_args(db).is_empty(db) {
-                            let gen_args = path.generic_args(db).data(db);
-                            for (idx, ga) in gen_args.iter().enumerate() {
-                                if let crate::hir_def::GenericArg::Type(ty_arg) = ga {
-                                    if let Some(hir_ty) = ty_arg.ty.to_opt() {
-                                        if let crate::hir_def::TypeKind::Path(p) = hir_ty.data(db) {
-                                            if let Some(arg_path) = p.to_opt() {
-                                                match resolve_path(db, arg_path, scope, assumptions, false) {
-                                                    Ok(res) => {
-                                                        // If resolved to non-type domain, report ExpectedType at arg span
-                                                        if !matches!(res, PathRes::Ty(_) | PathRes::TyAlias(..)) {
-                                                            let ident = arg_path.ident(db).unwrap();
-                                                            let kind = res.kind_name();
-                                                            return Err(PathResError::new(
-                                                                PathResErrorKind::TraitGenericArgType {
-                                                                    arg_idx: idx,
-                                                                    ident,
-                                                                    given_kind: kind,
-                                                                },
-                                                                path,
-                                                            ));
-                                                        }
-                                                    }
-                                                    Err(inner) => {
-                                                        // Bubble up inner error; caller will render
-                                                        return Err(inner);
-                                                    }
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-
                         match lower_trait_ref_impl(db, path, scope, assumptions, t) {
                             Ok(t) => PathRes::Trait(t),
                             Err(err) => {
@@ -1236,18 +1199,28 @@ fn pick_type_domain_from_bucket<'db>(
     parent: Option<PathRes<'db>>,
     bucket: &NameResBucket<'db>,
     path: PathId<'db>,
+    parent_path: Option<PathId<'db>>,
 ) -> PathResolutionResult<'db, NameRes<'db>> {
     bucket
         .pick(NameDomain::TYPE)
         .clone()
         .map_err(|err| match err {
-            NameResolutionError::NotFound => PathResError::new(
-                PathResErrorKind::NotFound {
-                    parent: parent.clone(),
-                    bucket: bucket.clone(),
-                },
-                path,
-            ),
+            NameResolutionError::NotFound => {
+                // If something was found in a different domain, mark the failure at
+                // the parent segment to surface an InvalidPathSegment diagnostic.
+                let failed_at = if bucket.iter_ok().next().is_some() {
+                    parent_path.unwrap_or(path)
+                } else {
+                    path
+                };
+                PathResError::new(
+                    PathResErrorKind::NotFound {
+                        parent: parent.clone(),
+                        bucket: bucket.clone(),
+                    },
+                    failed_at,
+                )
+            }
             err => PathResError::from_name_res_error(err, path),
         })
 }

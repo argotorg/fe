@@ -14,7 +14,7 @@ use crate::{
 };
 use std::ptr;
 use common::indexmap::IndexSet;
-use rustc_hash::{FxHashMap, FxHashSet};
+use rustc_hash::FxHashMap;
 use smallvec1::SmallVec;
 
 use super::{
@@ -25,8 +25,7 @@ use super::{
     func_def::FuncDef,
     method_cmp::compare_impl_method,
     method_table::probe_method,
-    normalize::normalize_ty,
-    trait_def::{Implementor, TraitDef, TraitInstId, ingot_trait_env},
+    trait_def::{Implementor, TraitDef, ingot_trait_env},
     trait_lower::{TraitRefLowerError, lower_trait, lower_trait_ref},
     trait_resolution::{
         PredicateListId,
@@ -34,8 +33,7 @@ use super::{
     },
     ty_def::{InvalidCause, TyData, TyId},
     ty_error::collect_ty_lower_errors,
-    ty_lower::{collect_generic_params, lower_hir_ty, lower_kind},
-    visitor::{TyVisitor, walk_ty},
+    ty_lower::{collect_generic_params, lower_hir_ty},
 };
 use crate::analysis::{
     HirAnalysisDb,
@@ -93,12 +91,16 @@ pub fn analyze_adt<'db>(
     match adt_ref {
         AdtRef::Struct(s) => {
             diags.extend(GenericParamOwner::Struct(s).diags_params_defined_in_parent(db));
+            diags.extend(GenericParamOwner::Struct(s).diags_kind_bounds(db));
+            diags.extend(GenericParamOwner::Struct(s).diags_trait_bounds(db));
             diags.extend(GenericParamOwner::Struct(s).diags_non_trailing_defaults(db));
             diags.extend(GenericParamOwner::Struct(s).diags_default_forward_refs(db));
         }
         AdtRef::Contract(_c) => {/* contracts are not GenericParamOwner */}
         AdtRef::Enum(e) => {
             diags.extend(GenericParamOwner::Enum(e).diags_params_defined_in_parent(db));
+            diags.extend(GenericParamOwner::Enum(e).diags_kind_bounds(db));
+            diags.extend(GenericParamOwner::Enum(e).diags_trait_bounds(db));
             diags.extend(GenericParamOwner::Enum(e).diags_non_trailing_defaults(db));
             diags.extend(GenericParamOwner::Enum(e).diags_default_forward_refs(db));
         }
@@ -162,6 +164,8 @@ pub fn analyze_trait<'db>(
     diags.extend(trait_.diags_assoc_defaults(db));
     diags.extend(trait_.diags_super_traits(db));
     diags.extend(GenericParamOwner::Trait(trait_).diags_params_defined_in_parent(db));
+    diags.extend(GenericParamOwner::Trait(trait_).diags_kind_bounds(db));
+    diags.extend(GenericParamOwner::Trait(trait_).diags_trait_bounds(db));
     diags.extend(GenericParamOwner::Trait(trait_).diags_non_trailing_defaults(db));
     diags.extend(GenericParamOwner::Trait(trait_).diags_default_forward_refs(db));
 
@@ -198,6 +202,8 @@ pub fn analyze_impl_trait<'db>(
 
     diags.extend(def_diags);
     diags.extend(GenericParamOwner::ImplTrait(impl_trait).diags_params_defined_in_parent(db));
+    diags.extend(GenericParamOwner::ImplTrait(impl_trait).diags_kind_bounds(db));
+    diags.extend(GenericParamOwner::ImplTrait(impl_trait).diags_trait_bounds(db));
     diags.extend(GenericParamOwner::ImplTrait(impl_trait).diags_non_trailing_defaults(db));
     diags.extend(GenericParamOwner::ImplTrait(impl_trait).diags_default_forward_refs(db));
     diags
@@ -217,6 +223,8 @@ pub fn analyze_impl<'db>(
     let analyzer = DefAnalyzer::for_impl(db, impl_, ty);
     let mut diags = analyzer.analyze();
     diags.extend(GenericParamOwner::Impl(impl_).diags_params_defined_in_parent(db));
+    diags.extend(GenericParamOwner::Impl(impl_).diags_kind_bounds(db));
+    diags.extend(GenericParamOwner::Impl(impl_).diags_trait_bounds(db));
     diags.extend(GenericParamOwner::Impl(impl_).diags_non_trailing_defaults(db));
     diags.extend(GenericParamOwner::Impl(impl_).diags_default_forward_refs(db));
     diags
@@ -234,6 +242,8 @@ pub fn analyze_func<'db>(
     let assumptions = collect_func_def_constraints(db, func.into(), true).instantiate_identity();
     let analyzer = DefAnalyzer::for_func(db, func_def, assumptions);
     let mut diags = analyzer.analyze();
+    diags.extend(GenericParamOwner::Func(func).diags_kind_bounds(db));
+    diags.extend(GenericParamOwner::Func(func).diags_trait_bounds(db));
     diags.extend(GenericParamOwner::Func(func).diags_non_trailing_defaults(db));
     diags.extend(GenericParamOwner::Func(func).diags_default_forward_refs(db));
     diags
@@ -245,7 +255,6 @@ pub struct DefAnalyzer<'db> {
     self_ty: Option<TyId<'db>>,
     diags: Vec<TyDiagCollection<'db>>,
     assumptions: PredicateListId<'db>,
-    current_ty: Option<(TyId<'db>, DynLazySpan<'db>)>,
 }
 
 impl<'db> DefAnalyzer<'db> {
@@ -254,14 +263,6 @@ impl<'db> DefAnalyzer<'db> {
         lower_hir_ty(self.db, hir_ty, self.scope(), self.assumptions)
     }
 
-    #[inline]
-    fn lower_current_trait_ref(
-        &self,
-        current_ty: TyId<'db>,
-        trait_ref: TraitRefId<'db>,
-    ) -> Result<TraitInstId<'db>, TraitRefLowerError<'db>> {
-        lower_trait_ref(self.db, current_ty, trait_ref, self.scope(), self.assumptions)
-    }
 
     fn for_adt(db: &'db dyn HirAnalysisDb, adt: AdtRef<'db>) -> Self {
         let def = lower_adt(db, adt);
@@ -272,7 +273,6 @@ impl<'db> DefAnalyzer<'db> {
             self_ty: None,
             diags: vec![],
             assumptions,
-            current_ty: None,
         }
     }
 
@@ -287,7 +287,6 @@ impl<'db> DefAnalyzer<'db> {
             self_ty: def.self_param(db).into(),
             diags: vec![],
             assumptions,
-            current_ty: None,
         }
     }
 
@@ -300,7 +299,6 @@ impl<'db> DefAnalyzer<'db> {
             self_ty: ty.into(),
             diags: vec![],
             assumptions,
-            current_ty: None,
         }
     }
 
@@ -312,7 +310,6 @@ impl<'db> DefAnalyzer<'db> {
             self_ty: implementor.self_ty(db).into(),
             diags: vec![],
             assumptions,
-            current_ty: None,
         }
     }
 
@@ -334,7 +331,6 @@ impl<'db> DefAnalyzer<'db> {
             self_ty,
             diags: vec![],
             assumptions,
-            current_ty: None,
         }
     }
 
@@ -349,71 +345,11 @@ impl<'db> DefAnalyzer<'db> {
             self_ty: None,
             diags: vec![],
             assumptions,
-            current_ty: None,
         }
     }
 
-    /// This method verifies if
-    /// 1. the given `ty` has `*` kind.
-    /// 2. the given `ty` is not const type
-    ///
-    /// TODO: This method is a stop-gap implementation until we design a true
-    /// const type system.
-    fn verify_term_type_kind(&mut self, ty: HirTyId<'db>, span: DynLazySpan<'db>) -> bool {
-        let ty = self.lower_ty(ty);
-        if !ty.has_star_kind(self.db) {
-            self.diags.push(TyLowerDiag::ExpectedStarKind(span).into());
-            false
-        } else if ty.is_const_ty(self.db) {
-            self.diags
-                .push(TyLowerDiag::NormalTypeExpected { span, given: ty }.into());
-            false
-        } else {
-            true
-        }
-    }
-
-    fn verify_self_type(&mut self, self_ty: HirTyId<'db>, span: DynLazySpan<'db>) -> bool {
-        let Some(expected_ty) = self.self_ty else {
-            return false;
-        };
-
-        let param_ty = self.lower_ty(self_ty);
-        let param_ty = normalize_ty(self.db, param_ty, self.def.scope(self.db), self.assumptions);
-        if !param_ty.has_invalid(self.db) && !expected_ty.has_invalid(self.db) {
-            let (expected_base_ty, expected_param_ty_args) = expected_ty.decompose_ty_app(self.db);
-            let (param_base_ty, param_ty_args) = param_ty.decompose_ty_app(self.db);
-
-            if param_base_ty != expected_base_ty {
-                self.diags.push(
-                    ImplDiag::InvalidSelfType {
-                        span: span.clone(),
-                        expected: expected_ty,
-                        given: param_ty,
-                    }
-                    .into(),
-                );
-                return false;
-            }
-
-            for (expected_arg, param_arg) in expected_param_ty_args.iter().zip(param_ty_args.iter())
-            {
-                if expected_arg != param_arg {
-                    self.diags.push(
-                        ImplDiag::InvalidSelfType {
-                            span,
-                            expected: expected_ty,
-                            given: param_ty,
-                        }
-                        .into(),
-                    );
-                    return false;
-                }
-            }
-        }
-
-        true
-    }
+    // Removed: term type kind checks and self-type shape checks are now handled
+    // semantically via Func::diags_param_types.
 
     fn check_method_conflict(&mut self, func: FuncDef<'db>) -> bool {
         let self_ty = func
@@ -515,27 +451,21 @@ impl<'db> Visitor<'db> for DefAnalyzer<'db> {
     // handled(e.g, `visit_trait` or `visit_enum`).
     fn visit_item(&mut self, _ctxt: &mut VisitorCtxt<'db, LazyItemSpan>, _item: ItemKind<'db>) {}
 
-    fn visit_ty(&mut self, ctxt: &mut VisitorCtxt<'db, LazyTySpan<'db>>, hir_ty: HirTyId<'db>) {
-        let span = ctxt.span().unwrap();
-        let ty = self.lower_ty(hir_ty);
-
-        if ty.has_invalid(self.db) {
-            let diags = collect_ty_lower_errors(
-                self.db,
-                ctxt.scope(),
-                hir_ty,
-                span.clone(),
-                self.assumptions,
-            );
-            if !diags.is_empty() {
-                self.diags.extend(diags);
-                return;
-            }
+    fn visit_type_alias(
+        &mut self,
+        ctxt: &mut VisitorCtxt<'db, LazyTypeAliasSpan<'db>>,
+        alias: TypeAlias<'db>,
+    ) {
+        // Delegate all alias diagnostics to semantic helper and avoid walking types redundantly.
+        let diags = alias.diags(self.db);
+        if !diags.is_empty() {
+            self.diags.extend(diags);
+            return;
         }
-        if let Some(diag) = ty.emit_wf_diag(self.db, ctxt.ingot(), self.assumptions, span.into()) {
-            self.diags.push(diag);
-        }
+        walk_type_alias(self, ctxt, alias)
     }
+
+    // Removed: generic visit_ty diagnostics are handled by semantic, context-aware helpers.
 
     fn visit_where_predicate(
         &mut self,
@@ -657,14 +587,9 @@ impl<'db> Visitor<'db> for DefAnalyzer<'db> {
         // duplicates.
 
         match param {
-            GenericParam::Type(tp) => {
-                // Forward reference checks for defaulted type params are emitted via
-                // semantic aggregation (GenericParamOwner::diags_default_forward_refs).
-
-                self.current_ty = Some((
-                    self.def.original_params(self.db)[idx as usize],
-                    ctxt.span().unwrap().into_type_param().name().into(),
-                ));
+            GenericParam::Type(_tp) => {
+                // All trait/kind diagnostics for type params are emitted via semantic
+                // traversal at analyze_* entrypoints; nothing to do here.
             }
             GenericParam::Const(_) => {
                 let ty = self.def.original_params(self.db)[idx as usize];
@@ -682,78 +607,18 @@ impl<'db> Visitor<'db> for DefAnalyzer<'db> {
         walk_generic_param(self, ctxt, param)
     }
 
-    fn visit_kind_bound(
-        &mut self,
-        ctxt: &mut VisitorCtxt<'db, LazyKindBoundSpan<'db>>,
-        bound: &crate::core::hir_def::KindBound,
-    ) {
-        let Some((ty, _)) = self.current_ty else {
-            return;
-        };
-
-        let kind = lower_kind(bound);
-        let former_kind = ty.kind(self.db);
-        if !former_kind.does_match(&kind) {
-            self.diags.push(
-                TyLowerDiag::InconsistentKindBound {
-                    span: ctxt.span().unwrap().into(),
-                    ty,
-                    bound: kind,
-                }
-                .into(),
-            );
-        }
-    }
+    // Kind-bound checks for generic params are emitted via semantic traversal
+    // (GenericParamOwner::diags_kind_bounds). No visitor emission here.
 
     fn visit_trait_ref(
         &mut self,
         ctxt: &mut VisitorCtxt<'db, LazyTraitRefSpan<'db>>,
         trait_ref: TraitRefId<'db>,
     ) {
-        let current_ty = self
-            .current_ty
-            .as_ref()
-            .map(|(ty, _)| *ty)
-            .unwrap_or(TyId::invalid(self.db, InvalidCause::Other));
-
-        if current_ty.is_trait_self(self.db) && self.def.super_trait_cycle(self.db).is_some() {
-            // Skip analysis of traits involved in cycles.
-            return;
-        }
-
-        // Emit implementor-kind mismatch for generic-parameter bounds and super-traits.
-        // Where-predicate trait bounds are handled via semantic views in
-        // visit_where_predicate (we don't walk their trait refs), so this does
-        // not duplicate.
-        if let (Some((ty, _)), Ok(trait_inst)) = (
-            &self.current_ty,
-            self.lower_current_trait_ref(current_ty, trait_ref),
-        ) {
-            let expected_kind = trait_inst.def(self.db).expected_implementor_kind(self.db);
-            if !expected_kind.does_match(ty.kind(self.db)) {
-                self.diags.push(
-                    TraitConstraintDiag::TraitArgKindMismatch {
-                        span: ctxt.span().unwrap(),
-                        expected: expected_kind.clone(),
-                        actual: *ty,
-                    }
-                    .into(),
-                );
-            }
-        }
-
-        if let Some(diag) = analyze_trait_ref(
-            self.db,
-            current_ty,
-            trait_ref,
-            self.scope(),
-            self.assumptions,
-            ctxt.span().unwrap(),
-        ) {
-            self.diags.push(diag);
-        } else {
-            walk_trait_ref(self, ctxt, trait_ref);
-        }
+        // All contexts that care about trait-ref diagnostics (where-predicates,
+        // super-traits, generic param bounds, impl-trait) emit diagnostics via
+        // semantic traversal. Keep the default walk to visit nested paths only.
+        walk_trait_ref(self, ctxt, trait_ref);
     }
 
     fn visit_super_trait_list(
@@ -761,31 +626,27 @@ impl<'db> Visitor<'db> for DefAnalyzer<'db> {
         ctxt: &mut VisitorCtxt<'db, crate::core::span::item::LazySuperTraitListSpan<'db>>,
         super_traits: &[TraitRefId<'db>],
     ) {
-        let DefKind::Trait(def) = self.def else {
+        let DefKind::Trait(_def) = self.def else {
             unreachable!()
         };
-        let name_span = def.trait_(self.db).span().name().into();
-        self.current_ty = Some((self.def.trait_self_param(self.db), name_span));
-        walk_super_trait_list(self, ctxt, super_traits);
+        // Emit super-trait diagnostics via semantic views to avoid duplicate visitor emissions
+        let owner = match self.def { DefKind::Trait(def) => def.trait_(self.db), _ => unreachable!() };
+        for (idx, _) in super_traits.iter().enumerate() {
+            let view = crate::hir_def::semantic::SuperTraitRefView { owner, idx };
+            if let Some(diag) = view.diags(self.db) {
+                self.diags.push(diag);
+            }
+        }
     }
 
     fn visit_impl(&mut self, ctxt: &mut VisitorCtxt<'db, LazyImplSpan<'db>>, impl_: HirImpl<'db>) {
-        let impl_ty = impl_.ty(self.db);
-        if !impl_ty.is_inherent_impl_allowed(self.db, self.scope().ingot(self.db)) {
-            let base = impl_ty.base_ty(self.db);
-            let diag = ImplDiag::InherentImplIsNotAllowed {
-                primary: ctxt.span().unwrap().target_ty().into(),
-                ty: base.pretty_print(self.db).to_string(),
-                is_nominal: !base.is_param(self.db),
-            };
-
-            self.diags.push(diag.into());
-        }
-
-        if let Some(ty) = impl_ty.emit_diag(self.db, ctxt.span().unwrap().target_ty().into()) {
-            self.diags.push(ty);
-        } else {
+        // Delegate implementor preconditions to semantic helper; skip walking when
+        // we already emitted an implementor error to avoid duplicates.
+        let diags = impl_.diags_preconditions(self.db);
+        if diags.is_empty() {
             walk_impl(self, ctxt, impl_);
+        } else {
+            self.diags.extend(diags);
         }
     }
 
@@ -842,6 +703,8 @@ impl<'db> Visitor<'db> for DefAnalyzer<'db> {
 
         // Parameter diagnostics via semantic traversal (duplicate names/labels)
         self.diags.extend(hir_func.diags_parameters(self.db));
+        // Parameter type diagnostics (star kind/const type/self type shape)
+        self.diags.extend(hir_func.diags_param_types(self.db));
 
         walk_func(self, ctxt, hir_func);
 
@@ -864,69 +727,12 @@ impl<'db> Visitor<'db> for DefAnalyzer<'db> {
         ctxt: &mut VisitorCtxt<'db, LazyFuncParamSpan<'db>>,
         param: &crate::core::hir_def::FuncParam<'db>,
     ) {
-        let Some(hir_ty) = param.ty.to_opt() else {
-            return;
-        };
-
-        let ty_span: DynLazySpan = if param.is_self_param(ctxt.db()) && param.self_ty_fallback {
-            ctxt.span().unwrap().name().into()
-        } else {
-            ctxt.span().unwrap().ty().into()
-        };
-
-        if param.is_self_param(ctxt.db()) {
-            self.verify_self_type(hir_ty, ty_span.clone());
-        }
-
-        if !self.verify_term_type_kind(hir_ty, ty_span) {
-            return;
-        }
-
+        // Semantic diags for param types are aggregated at visit_func; we still walk
+        // to allow general type error/WF diagnostics from visit_ty.
         walk_func_param(self, ctxt, param);
     }
 }
 
-#[salsa::tracked(return_ref)]
-pub(crate) fn check_recursive_adt<'db>(
-    db: &'db dyn HirAnalysisDb,
-    adt: AdtDef<'db>,
-) -> Option<Vec<AdtCycleMember<'db>>> {
-    check_recursive_adt_impl(db, adt, &[])
-}
-
-pub(crate) fn check_recursive_adt_impl<'db>(
-    db: &'db dyn HirAnalysisDb,
-    adt: AdtDef<'db>,
-    chain: &[AdtCycleMember<'db>],
-) -> Option<Vec<AdtCycleMember<'db>>> {
-    if chain.iter().any(|m| m.adt == adt) {
-        return Some(chain.to_vec());
-    } else if adt.fields(db).is_empty() {
-        return None;
-    }
-
-    let mut chain = chain.to_vec();
-    for (field_idx, field) in adt.fields(db).iter().enumerate() {
-        for (ty_idx, ty) in field.iter_types(db).enumerate() {
-            for field_adt_ref in ty.instantiate_identity().collect_direct_adts(db) {
-                chain.push(AdtCycleMember {
-                    adt,
-                    field_idx: field_idx as u16,
-                    ty_idx: ty_idx as u16,
-                });
-
-                if let Some(cycle) =
-                    check_recursive_adt_impl(db, lower_adt(db, field_adt_ref), &chain)
-                    && cycle.iter().any(|m| m.adt == adt)
-                {
-                    return Some(cycle);
-                }
-                chain.pop();
-            }
-        }
-    }
-    None
-}
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash, salsa::Update)]
 pub struct AdtCycleMember<'db> {
@@ -935,89 +741,9 @@ pub struct AdtCycleMember<'db> {
     pub ty_idx: u16,
 }
 
-impl<'db> TyId<'db> {
-    /// Collect all adts inside types which are not wrapped by indirect type
-    /// wrapper like pointer or reference.
-    fn collect_direct_adts(self, db: &'db dyn HirAnalysisDb) -> FxHashSet<AdtRef<'db>> {
-        struct AdtCollector<'db> {
-            db: &'db dyn HirAnalysisDb,
-            adts: FxHashSet<AdtRef<'db>>,
-        }
+// Adt recursion detection moved to semantic layer (AdtDef::recursive_cycle)
 
-        impl<'db> TyVisitor<'db> for AdtCollector<'db> {
-            fn db(&self) -> &'db dyn HirAnalysisDb {
-                self.db
-            }
-
-            fn visit_app(&mut self, abs: TyId<'db>, arg: TyId<'db>) {
-                if !abs.is_indirect(self.db) {
-                    walk_ty(self, arg)
-                }
-            }
-
-            fn visit_adt(&mut self, adt: AdtDef<'db>) {
-                self.adts.insert(adt.adt_ref(self.db));
-            }
-        }
-
-        let mut collector = AdtCollector {
-            db,
-            adts: FxHashSet::default(),
-        };
-
-        self.visit_with(&mut collector);
-        collector.adts
-    }
-}
-
-fn analyze_trait_ref<'db>(
-    db: &'db dyn HirAnalysisDb,
-    self_ty: TyId<'db>,
-    trait_ref: TraitRefId<'db>,
-    scope: ScopeId<'db>,
-    assumptions: PredicateListId<'db>,
-    span: LazyTraitRefSpan<'db>,
-) -> Option<TyDiagCollection<'db>> {
-    let trait_inst = match lower_trait_ref(db, self_ty, trait_ref, scope, assumptions) {
-        Ok(trait_ref) => trait_ref,
-
-        Err(TraitRefLowerError::PathResError(err)) => {
-            let trait_path_span = span.path();
-            return Some(
-                err.into_diag(
-                    db,
-                    trait_ref.path(db).unwrap(),
-                    trait_path_span,
-                    ExpectedPathKind::Trait,
-                )?
-                .into(),
-            );
-        }
-
-        Err(TraitRefLowerError::InvalidDomain(res)) => {
-            return Some(
-                PathResDiag::ExpectedTrait(
-                    span.path().into(),
-                    trait_ref.path(db).unwrap().ident(db).unwrap(),
-                    res.kind_name(),
-                )
-                .into(),
-            );
-        }
-
-        Err(TraitRefLowerError::Ignored) => {
-            return None;
-        }
-    };
-
-    // Skip checking trait constraints that involve associated types of generic parameters
-    // These will be checked when the function is actually called with concrete types
-    if trait_inst.self_ty(db).contains_assoc_ty_of_param(db) {
-        return None;
-    }
-
-    trait_inst.emit_sat_diag(db, scope.ingot(db), assumptions, span.into())
-}
+// analyze_trait_ref moved into semantic view (TraitRefOnSubjectView::diags)
 
 #[derive(Clone, Copy, Debug, derive_more::From)]
 enum DefKind<'db> {
@@ -1041,21 +767,7 @@ impl<'db> DefKind<'db> {
         }
     }
 
-    fn trait_self_param(self, db: &'db dyn HirAnalysisDb) -> TyId<'db> {
-        if let Self::Trait(def) = self {
-            def.self_param(db)
-        } else {
-            panic!()
-        }
-    }
-
-    fn super_trait_cycle(self, db: &'db dyn HirAnalysisDb) -> Option<&'db Vec<TraitDef<'db>>> {
-        if let Self::Trait(def) = self {
-            super_trait_cycle(db, def).as_ref()
-        } else {
-            None
-        }
-    }
+    // Removed: trait_self_param and super_trait_cycle, now handled via semantic views.
 
     fn scope(self, db: &'db dyn HirAnalysisDb) -> ScopeId<'db> {
         match self {

@@ -3,7 +3,6 @@ use crate::core::hir_def::{
     scope_graph::{ScopeGraph, ScopeId},
 };
 use adt_def::{AdtDef, AdtRef, lower_adt};
-use def_analysis::check_recursive_adt;
 use diagnostics::{DefConflictError, TraitLowerDiag, TyLowerDiag};
 use rustc_hash::{FxHashMap, FxHashSet};
 use smallvec1::SmallVec;
@@ -70,7 +69,7 @@ impl ModuleAnalysisPass for AdtDefAnalysisPass {
             diags.extend(analyze_adt(db, adt).iter().map(|d| d.to_voucher()));
             let adt = lower_adt(db, adt);
             if !cycle_participants.contains(&adt)
-                && let Some(cycle) = check_recursive_adt(db, adt)
+                && let Some(cycle) = adt.recursive_cycle(db)
             {
                 diags.push(Box::new(TyLowerDiag::RecursiveType(cycle.clone())) as _);
                 cycle_participants.extend(cycle.iter().map(|m| m.adt));
