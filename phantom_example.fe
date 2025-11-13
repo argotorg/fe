@@ -13,22 +13,6 @@
       Storage,
   }
 
-  pub struct Ptr<T> {
-      addr: u256,
-      space: AddressSpace,
-      _marker: Phantom<T>,
-  }
-
-  impl<T> Ptr<T> {
-      pub fn new(addr: u256, space: AddressSpace) -> Self {
-          Self {
-              addr,
-              space,
-              _marker: Phantom::new(),
-          }
-      }
-  }
-
   // Every scalar that can be loaded implements this.
   pub trait LoadableScalar {
       fn from_word(word: u256) -> Self
@@ -56,12 +40,13 @@
 
 
   // Generic field reader (simple byte-aligned layout).
-  pub fn get_field<T, F: LoadableScalar>(ptr: Ptr<T>, offset: u256) -> F
+  pub fn get_field<T, F: LoadableScalar>(addr: u256, space: AddressSpace, offset: u256) -> F
   {
-      let addr = ptr.addr + offset
-      let word = match ptr.space {
-          AddressSpace::Memory => mload(addr)
-          AddressSpace::Storage => sload(slot:addr)
+      let target = addr + offset
+      let word = match space {
+          AddressSpace::Memory => mload(target)
+          AddressSpace::Storage => sload(slot:target)
+          _ => 0
       }
       F::from_word(word)
   }
@@ -73,7 +58,7 @@
       y: u8,
   }
 
-  pub fn read_x(ptr: Ptr<MyStruct>) -> u8 {
+  pub fn read_x(addr: u256) -> u8 {
       // `x` starts at byte offset 0
-      get_field(ptr, offset: 0)
+      get_field(addr, AddressSpace::Memory, offset: 0)
   }

@@ -1,26 +1,30 @@
 use std::{error::Error, fmt};
 
 use hir::hir_def::{
-    Body, Expr, ExprId, Func, LitKind, MatchArm, Partial, Pat, PatId, Stmt, StmtId, TopLevelMod,
+    Body, Expr, ExprId, FieldIndex, Func, IdentId, LitKind, MatchArm, Partial, Pat, PatId, PathId,
+    Stmt, StmtId, TopLevelMod,
 };
 use hir_analysis::{
-    name_resolution::{path_resolver::resolve_path, PathRes},
+    HirAnalysisDb,
+    name_resolution::{PathRes, path_resolver::resolve_path},
     ty::{
+        func_def::{FuncDef, lower_func},
         trait_resolution::PredicateListId,
-        ty_check::{check_func_body, TypedBody},
+        ty_check::{Callable, RecordLike, TypedBody, check_func_body},
         ty_def::{PrimTy, TyBase, TyData, TyId},
     },
-    HirAnalysisDb,
 };
 
 use crate::{
     ir::{
         BasicBlock, BasicBlockId, CallOrigin, LoopInfo, MatchArmLowering, MatchArmPattern,
         MatchLoweringInfo, MirBody, MirFunction, MirInst, MirModule, SwitchOrigin, SwitchTarget,
-        SwitchValue, Terminator, ValueData, ValueId, ValueOrigin,
+        SwitchValue, SyntheticValue, Terminator, ValueData, ValueId, ValueOrigin,
     },
     monomorphize::monomorphize_functions,
 };
+use num_bigint::BigUint;
+use num_traits::ToPrimitive;
 use rustc_hash::FxHashSet;
 
 /// Errors that can occur while lowering HIR into MIR.
@@ -38,6 +42,11 @@ impl fmt::Display for MirLowerError {
             }
         }
     }
+}
+
+struct FieldAccessInfo<'db> {
+    field_ty: TyId<'db>,
+    offset_bytes: u64,
 }
 
 /// Returns the width (in bits) for a primitive integer type, if supported.
@@ -125,6 +134,8 @@ struct MirBuilder<'db, 'a> {
     body: Body<'db>,
     typed_body: &'a TypedBody<'db>,
     mir_body: MirBody<'db>,
+    get_field_func: Option<FuncDef<'db>>,
+    address_space_ty: Option<TyId<'db>>,
     loop_stack: Vec<LoopScope>,
 }
 
@@ -144,6 +155,8 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
             body,
             typed_body,
             mir_body: MirBody::new(),
+            get_field_func: None,
+            address_space_ty: None,
             loop_stack: Vec::new(),
         }
     }
@@ -362,13 +375,18 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         };
 
         if let Pat::Path(path, ..) = pat_data {
-            if let Ok(PathRes::EnumVariant(variant)) =
-                resolve_path(self.db, path.to_opt().unwrap(), self.typed_body.body().unwrap().scope(), PredicateListId::empty_list(self.db), false)
-            {
+            if let Ok(PathRes::EnumVariant(variant)) = resolve_path(
+                self.db,
+                path.to_opt().unwrap(),
+                self.typed_body.body().unwrap().scope(),
+                PredicateListId::empty_list(self.db),
+                false,
+            ) {
                 let enum_name = variant
                     .enum_(self.db)
                     .name(self.db)
-                    .to_opt().unwrap()
+                    .to_opt()
+                    .unwrap()
                     .data(self.db)
                     .to_string();
                 return Some(MatchArmPattern::Enum {
@@ -479,6 +497,9 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         if let Some(value) = self.try_lower_call(expr) {
             return value;
         }
+        if let Some(value) = self.try_lower_field(expr) {
+            return value;
+        }
 
         let ty = self.typed_body.expr_ty(self.db, expr);
         self.mir_body.alloc_value(ValueData {
@@ -520,6 +541,215 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                 resolved_name: None,
             }),
         }))
+    }
+
+    /// Rewrites `Expr::Field` expressions into calls to the standard library
+    /// `get_field` helper so later stages do not need bespoke field logic.
+    fn try_lower_field(&mut self, expr: ExprId) -> Option<ValueId> {
+        let Partial::Present(Expr::Field(lhs, field_index)) = expr.data(self.db, self.body) else {
+            return None;
+        };
+        let field_index = field_index.to_opt()?;
+        let lhs_ty = self.typed_body.expr_ty(self.db, *lhs);
+        let info = self.field_access_info(lhs_ty, field_index)?;
+
+        let addr_value = self.synthetic_u256(BigUint::from(0u8));
+        let space_value = self.synthetic_address_space_memory()?;
+        let offset_value = self.synthetic_u256(BigUint::from(info.offset_bytes));
+        let callable = self.get_field_callable(expr, lhs_ty, info.field_ty)?;
+
+        Some(self.mir_body.alloc_value(ValueData {
+            ty: info.field_ty,
+            origin: ValueOrigin::Call(CallOrigin {
+                expr,
+                callable,
+                args: vec![addr_value, space_value, offset_value],
+                resolved_name: None,
+            }),
+        }))
+    }
+
+    /// Returns the field type and byte offset for a given receiver/field pair.
+    fn field_access_info(
+        &self,
+        owner_ty: TyId<'db>,
+        field_index: FieldIndex<'db>,
+    ) -> Option<FieldAccessInfo<'db>> {
+        let record_like = RecordLike::from_ty(owner_ty);
+        let idx = match field_index {
+            FieldIndex::Ident(label) => record_like.record_field_idx(self.db, label)?,
+            FieldIndex::Index(integer) => integer.data(self.db).to_usize()?,
+        };
+        let (field_ty, offset_bytes) = self.field_layout_by_index(&record_like, idx)?;
+        Some(FieldAccessInfo {
+            field_ty,
+            offset_bytes,
+        })
+    }
+
+    /// Computes `(field_ty, offset_bytes)` for the `idx`th field of a record.
+    fn field_layout_by_index(
+        &self,
+        record_like: &RecordLike<'db>,
+        idx: usize,
+    ) -> Option<(TyId<'db>, u64)> {
+        let (_, adt_fields) = record_like.record_field_list(self.db)?;
+        if idx >= adt_fields.num_types() {
+            return None;
+        }
+        let args = match record_like {
+            RecordLike::Type(ty) => ty.generic_args(self.db),
+            RecordLike::Variant(variant) => variant.ty.generic_args(self.db),
+        };
+
+        let mut offset = 0u64;
+        for i in 0..idx {
+            let ty = adt_fields.ty(self.db, i).instantiate(self.db, args);
+            let size = self.ty_size_bytes(ty)?;
+            offset += size;
+        }
+        let field_ty = adt_fields.ty(self.db, idx).instantiate(self.db, args);
+        Some((field_ty, offset))
+    }
+
+    /// Returns the byte width of primitive integer/bool types we can layout today.
+    fn ty_size_bytes(&self, ty: TyId<'db>) -> Option<u64> {
+        match ty.data(self.db) {
+            TyData::TyBase(TyBase::Prim(prim)) => {
+                if *prim == PrimTy::Bool {
+                    Some(1)
+                } else {
+                    prim_int_bits(*prim).map(|bits| (bits / 8) as u64)
+                }
+            }
+            _ => None,
+        }
+    }
+
+    /// Builds the callable metadata for the `get_field` helper.
+    fn get_field_callable(
+        &mut self,
+        expr: ExprId,
+        owner_ty: TyId<'db>,
+        field_ty: TyId<'db>,
+    ) -> Option<Callable<'db>> {
+        let func_def = self.resolve_get_field_func()?;
+        let params = func_def.params(self.db);
+        if params.len() < 2 {
+            return None;
+        }
+        let ty = TyId::foldl(
+            self.db,
+            TyId::func(self.db, func_def),
+            &[owner_ty, field_ty],
+        );
+        Callable::new(self.db, ty, expr.span(self.body).into(), None).ok()
+    }
+
+    fn resolve_get_field_func(&mut self) -> Option<FuncDef<'db>> {
+        if let Some(func) = self.get_field_func {
+            return Some(func);
+        }
+        if let Some(func) = self.resolve_get_field_via_path() {
+            self.get_field_func = Some(func);
+            return Some(func);
+        }
+        if let Some(func) = self.find_local_get_field() {
+            self.get_field_func = Some(func);
+            return Some(func);
+        }
+        None
+    }
+
+    fn resolve_get_field_via_path(&self) -> Option<FuncDef<'db>> {
+        let mut path = self.resolve_core_path(&["core", "ptr", "get_field"]);
+        if path.is_none() {
+            path = self.resolve_core_path(&["core", "get_field"]);
+        }
+        let PathRes::Func(func_ty) = path? else {
+            return None;
+        };
+        let base = func_ty.base_ty(self.db);
+        if let TyData::TyBase(TyBase::Func(func_def)) = base.data(self.db) {
+            Some(*func_def)
+        } else {
+            None
+        }
+    }
+
+    fn find_local_get_field(&self) -> Option<FuncDef<'db>> {
+        let top_mod = self.body.top_mod(self.db);
+        for &func in top_mod.all_funcs(self.db) {
+            let name = func.name(self.db).to_opt()?;
+            if name.data(self.db) == "get_field" {
+                if let Some(def) = lower_func(self.db, func) {
+                    return Some(def);
+                }
+            }
+        }
+        None
+    }
+
+    /// Emits a synthetic `u256` literal value.
+    fn synthetic_u256(&mut self, value: BigUint) -> ValueId {
+        let ty = TyId::new(self.db, TyData::TyBase(TyBase::Prim(PrimTy::U256)));
+        self.mir_body.alloc_value(ValueData {
+            ty,
+            origin: ValueOrigin::Synthetic(SyntheticValue::Int(value)),
+        })
+    }
+
+    /// Emits a synthetic `AddressSpace::Memory` literal.
+    fn synthetic_address_space_memory(&mut self) -> Option<ValueId> {
+        let Some(ty) = self.address_space_ty() else {
+            return None;
+        };
+        Some(self.mir_body.alloc_value(ValueData {
+            ty,
+            origin: ValueOrigin::Synthetic(SyntheticValue::Int(BigUint::from(0u8))),
+        }))
+    }
+
+    /// Caches the `AddressSpace` type so synthetic values can reference it.
+    fn address_space_ty(&mut self) -> Option<TyId<'db>> {
+        if let Some(ty) = self.address_space_ty {
+            return Some(ty);
+        }
+        let mut path = self.resolve_core_path(&["core", "ptr", "AddressSpace"]);
+        if path.is_none() {
+            path = self.resolve_core_path(&["core", "AddressSpace"]);
+        }
+        let PathRes::Ty(ty) = path? else {
+            return None;
+        };
+        self.address_space_ty = Some(ty);
+        Some(ty)
+    }
+
+    /// Resolves a fully-qualified core path like `["core","ptr","foo"]`.
+    fn resolve_core_path(&self, segments: &[&str]) -> Option<PathRes<'db>> {
+        let mut iter = segments.iter();
+        let first = *iter.next()?;
+        let mut path = PathId::from_ident(self.db, self.make_ident(first));
+        for segment in iter {
+            path = path.push_ident(self.db, self.make_ident(segment));
+        }
+        resolve_path(
+            self.db,
+            path,
+            self.body.scope(),
+            PredicateListId::empty_list(self.db),
+            false,
+        )
+        .ok()
+    }
+
+    fn make_ident(&self, segment: &str) -> IdentId<'db> {
+        if segment == "core" {
+            IdentId::make_core(self.db)
+        } else {
+            IdentId::new(self.db, segment.to_string())
+        }
     }
 
     /// Lower a statement, returning the successor block and (optional) produced value.

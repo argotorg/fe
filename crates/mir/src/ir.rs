@@ -254,10 +254,19 @@ pub struct ValueData<'db> {
 #[derive(Debug, Clone)]
 pub enum ValueOrigin<'db> {
     Expr(ExprId),
-    Synthetic(&'static str),
+    Synthetic(SyntheticValue),
     Pat(PatId),
     Param(Func<'db>, usize),
     Call(CallOrigin<'db>),
+}
+
+/// Captures compile-time literals synthesized by lowering.
+#[derive(Debug, Clone)]
+pub enum SyntheticValue {
+    /// Integer literal emitted directly into Yul.
+    Int(BigUint),
+    /// Boolean literal stored as `0` or `1`.
+    Bool(bool),
 }
 
 #[derive(Debug, Clone)]

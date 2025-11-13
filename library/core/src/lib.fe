@@ -1,6 +1,7 @@
 pub use option::Option
 pub use default::Default
 pub use ops::*
+pub use ptr::*
 
 extern {
     pub fn panic() -> !

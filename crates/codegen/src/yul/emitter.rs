@@ -5,7 +5,7 @@ use hir::hir_def::{
 };
 use mir::{
     BasicBlockId, CallOrigin, LoopInfo, MirFunction, Terminator, ValueId, ValueOrigin,
-    ir::{MatchArmPattern, SwitchOrigin, SwitchTarget, SwitchValue},
+    ir::{MatchArmPattern, SwitchOrigin, SwitchTarget, SwitchValue, SyntheticValue},
     lower_module,
 };
 use rustc_hash::FxHashMap;
@@ -431,6 +431,7 @@ impl<'db> YulEmitter<'db> {
                 }
             }
             ValueOrigin::Call(call) => self.lower_call_value(call, state),
+            ValueOrigin::Synthetic(synth) => self.lower_synthetic_value(synth),
             _ => Err(YulError::Unsupported(
                 "only expression-derived values are supported".into(),
             )),
@@ -542,9 +543,16 @@ impl<'db> YulEmitter<'db> {
                     .ok_or_else(|| YulError::Unsupported("unsupported path expression".into()))?;
                 Ok(state.resolve_name(&original))
             }
-            _ => Err(YulError::Unsupported(
-                "only simple expressions are supported".into(),
-            )),
+            Expr::Field(..) => {
+                let ty = self.mir_func.typed_body.expr_ty(self.db, expr_id);
+                Err(YulError::Unsupported(format!(
+                    "field expressions should be rewritten before codegen (expr type {})",
+                    ty.pretty_print(self.db)
+                )))
+            }
+            other => Err(YulError::Unsupported(format!(
+                "only simple expressions are supported: {other:?}"
+            ))),
         }
     }
 
@@ -643,6 +651,13 @@ impl<'db> YulEmitter<'db> {
             Ok(format!("{callee}()"))
         } else {
             Ok(format!("{callee}({})", lowered_args.join(", ")))
+        }
+    }
+
+    fn lower_synthetic_value(&self, value: &SyntheticValue) -> Result<String, YulError> {
+        match value {
+            SyntheticValue::Int(int) => Ok(int.to_string()),
+            SyntheticValue::Bool(flag) => Ok(if *flag { "1" } else { "0" }.into()),
         }
     }
 

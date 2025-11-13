@@ -1,0 +1,42 @@
+---
+source: crates/codegen/tests/yul.rs
+assertion_line: 38
+expression: output
+input_file: tests/fixtures/momo.fe
+---
+{
+  function from_word(word) -> ret {
+    ret := 1
+  }
+}
+{
+  function mload(addr) -> ret {
+    ret := 0
+  }
+}
+{
+  function sload(slot) -> ret {
+    ret := 0
+  }
+}
+{
+  function read_x(val) -> ret {
+    ret := get_field__MyStruct_u8__fc5e5f8d6bb839cd(0, 0, 0)
+  }
+}
+{
+  function get_field__MyStruct_u8__fc5e5f8d6bb839cd(addr, space, offset) -> ret {
+    let v1 := add(addr, offset)
+    let v0 := 0
+    switch space
+      case 0 {
+        v0 := mload(v1)
+      }
+      case 1 {
+        v0 := sload(v1)
+      }
+      default {
+        v0 := 0
+      }
+  }
+}

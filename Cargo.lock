@@ -960,10 +960,12 @@ dependencies = [
 name = "fe-mir"
 version = "0.1.0"
 dependencies = [
+ "cranelift-entity",
  "fe-common",
  "fe-hir",
  "fe-hir-analysis",
  "num-bigint",
+ "num-traits",
  "rustc-hash 2.1.1",
 ]
 
