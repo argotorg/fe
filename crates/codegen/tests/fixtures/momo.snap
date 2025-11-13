@@ -38,5 +38,7 @@ input_file: tests/fixtures/momo.fe
       default {
         v0 := 0
       }
+    let v2 := v0
+    ret := from_word(v2)
   }
 }

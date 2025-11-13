@@ -20,5 +20,6 @@ input_file: tests/fixtures/match_enum.fe
       default {
         v0 := 4
       }
+    ret := v0
   }
 }
