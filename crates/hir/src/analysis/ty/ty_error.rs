@@ -52,6 +52,13 @@ impl<'db> HirTyErrVisitor<'db> {
 }
 
 impl<'db> Visitor<'db> for HirTyErrVisitor<'db> {
+    fn visit_body(&mut self, _ctxt: &mut VisitorCtxt<'db, crate::core::span::item::LazyBodySpan<'db>>, _body: crate::core::hir_def::Body<'db>) {
+        // Skip traversing bodies when collecting type-lowering errors from type
+        // positions. This avoids emitting name-resolution diagnostics for const
+        // expressions that appear inside types (e.g., array lengths or const
+        // generic arguments), which are handled by dedicated const-ty lowering.
+    }
+
     fn visit_ty(&mut self, ctxt: &mut VisitorCtxt<'db, LazyTySpan<'db>>, hir_ty: TypeId<'db>) {
         let ty = lower_hir_ty(self.db, hir_ty, ctxt.scope(), self.assumptions);
 

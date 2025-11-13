@@ -17,7 +17,6 @@ use self::def_analysis::{
 };
 use crate::analysis::{
     HirAnalysisDb, analysis_pass::ModuleAnalysisPass, diagnostics::DiagnosticVoucher,
-    ty::def_analysis::DefAnalyzer,
 };
 
 pub mod adt_def;
@@ -278,8 +277,8 @@ impl ModuleAnalysisPass for TypeAliasAnalysisPass {
                 }
                 cycle_participants.extend(cycle.iter());
             } else {
-                let analyzer = DefAnalyzer::for_type_alias(db, alias, assumptions);
-                diags.extend(analyzer.analyze().into_iter().map(|d| Box::new(d) as _));
+                // Delegate to semantic alias diagnostics
+                diags.extend(alias.diags(db).into_iter().map(|d| Box::new(d) as _));
             }
         }
         diags

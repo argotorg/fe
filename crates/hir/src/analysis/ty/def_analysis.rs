@@ -1,55 +1,43 @@
-//! This module contains analysis for the definition of the type/trait.
-//! This module is the only module in `ty` module which is allowed to emit
-//! diagnostics.
+//! Definition analysis entrypoints that delegate to the semantic traversal API.
+//! Legacy visitor-based analysis has been retired; keep small helpers here.
 
-use crate::{
-    hir_def::{
-        EnumVariant, FieldDef, FieldParent, Func, GenericParam, GenericParamListId,
-        GenericParamOwner, IdentId, Impl as HirImpl, ImplTrait, ItemKind, PathId, Trait,
-        TraitRefId, TypeAlias, TypeId as HirTyId, VariantKind, WhereClauseOwner,
-        scope_graph::ScopeId,
-    },
-    hir_def::semantic::WherePredicateView,
-    visitor::prelude::*,
+use crate::hir_def::{
+    EnumVariant, FieldDef, FieldParent, Func, GenericParam, GenericParamListId, GenericParamOwner,
+    IdentId, Impl as HirImpl, ImplTrait, ItemKind, PathId, Trait, TraitRefId, TypeAlias,
+    TypeId as HirTyId, VariantKind, WhereClauseOwner, scope_graph::ScopeId,
 };
-use std::ptr;
+use crate::hir_def::semantic::WherePredicateView;
+use crate::visitor::prelude::*;
 use common::indexmap::IndexSet;
 use rustc_hash::FxHashMap;
 use smallvec1::SmallVec;
+use std::ptr;
 
 use super::{
     adt_def::{AdtRef, lower_adt},
-    canonical::Canonical,
-    const_ty::ConstTyId,
     diagnostics::{ImplDiag, TraitConstraintDiag, TraitLowerDiag, TyDiagCollection, TyLowerDiag},
     func_def::FuncDef,
     method_cmp::compare_impl_method,
     method_table::probe_method,
-    trait_def::{Implementor, TraitDef, ingot_trait_env},
-    trait_lower::{TraitRefLowerError, lower_trait, lower_trait_ref},
+    trait_def::{Implementor, TraitDef, ingot_trait_env, does_impl_trait_conflict},
+    trait_lower::{TraitRefLowerError, lower_trait, lower_trait_ref, lower_impl_trait},
     trait_resolution::{
         PredicateListId,
-        constraint::{collect_adt_constraints, collect_constraints, collect_func_def_constraints},
+        constraint::{
+            collect_adt_constraints, collect_constraints, collect_func_def_constraints,
+            super_trait_cycle,
+        },
     },
     ty_def::{InvalidCause, TyData, TyId},
-    ty_error::collect_ty_lower_errors,
     ty_lower::{collect_generic_params, lower_hir_ty},
 };
 use crate::analysis::{
     HirAnalysisDb,
     name_resolution::{ExpectedPathKind, PathRes, diagnostics::PathResDiag, resolve_path},
-    ty::{
-        adt_def::AdtDef,
-        binder::Binder,
-        func_def::lower_func,
-        trait_def::{does_impl_trait_conflict},
-        trait_lower::lower_impl_trait,
-        trait_resolution::{
-            constraint::super_trait_cycle,
-        },
-        visitor::TyVisitable,
-    },
+    ty::{adt_def::AdtDef, binder::Binder, func_def::lower_func, visitor::TyVisitable},
 };
+use crate::analysis::ty::canonical::Canonical;
+use crate::analysis::ty::const_ty::ConstTyId;
 
 /// This function implements analysis for the ADT definition.
 /// The analysis includes the following:
@@ -66,46 +54,11 @@ pub fn analyze_adt<'db>(
     db: &'db dyn HirAnalysisDb,
     adt_ref: AdtRef<'db>,
 ) -> Vec<TyDiagCollection<'db>> {
-    let dupes = match adt_ref {
-        AdtRef::Struct(x) => check_duplicate_field_names(db, FieldParent::Struct(x)),
-        AdtRef::Contract(x) => check_duplicate_field_names(db, FieldParent::Contract(x)),
-        AdtRef::Enum(enum_) => {
-            let mut dupes = check_duplicate_variant_names(db, enum_);
-
-            for (idx, var) in enum_.variants(db).enumerate() {
-                if matches!(var.kind(db), VariantKind::Record(..)) {
-                    dupes.extend(check_duplicate_field_names(
-                        db,
-                        FieldParent::Variant(EnumVariant::new(enum_, idx)),
-                    ))
-                }
-            }
-            dupes
-        }
-    };
-
-    let analyzer = DefAnalyzer::for_adt(db, adt_ref);
-    let mut diags = analyzer.analyze();
-    diags.extend(dupes);
-    // Non-trailing default generic params via semantic traversal
     match adt_ref {
-        AdtRef::Struct(s) => {
-            diags.extend(GenericParamOwner::Struct(s).diags_params_defined_in_parent(db));
-            diags.extend(GenericParamOwner::Struct(s).diags_kind_bounds(db));
-            diags.extend(GenericParamOwner::Struct(s).diags_trait_bounds(db));
-            diags.extend(GenericParamOwner::Struct(s).diags_non_trailing_defaults(db));
-            diags.extend(GenericParamOwner::Struct(s).diags_default_forward_refs(db));
-        }
-        AdtRef::Contract(_c) => {/* contracts are not GenericParamOwner */}
-        AdtRef::Enum(e) => {
-            diags.extend(GenericParamOwner::Enum(e).diags_params_defined_in_parent(db));
-            diags.extend(GenericParamOwner::Enum(e).diags_kind_bounds(db));
-            diags.extend(GenericParamOwner::Enum(e).diags_trait_bounds(db));
-            diags.extend(GenericParamOwner::Enum(e).diags_non_trailing_defaults(db));
-            diags.extend(GenericParamOwner::Enum(e).diags_default_forward_refs(db));
-        }
+        AdtRef::Struct(s) => s.analyze(db),
+        AdtRef::Enum(e) => e.analyze(db),
+        AdtRef::Contract(c) => c.analyze(db),
     }
-    diags
 }
 
 fn check_duplicate_field_names<'db>(
@@ -157,19 +110,7 @@ pub fn analyze_trait<'db>(
     db: &'db dyn HirAnalysisDb,
     trait_: Trait<'db>,
 ) -> Vec<TyDiagCollection<'db>> {
-    let analyzer = DefAnalyzer::for_trait(db, trait_);
-    let mut diags = analyzer.analyze();
-
-    // Semantic traversal aggregations
-    diags.extend(trait_.diags_assoc_defaults(db));
-    diags.extend(trait_.diags_super_traits(db));
-    diags.extend(GenericParamOwner::Trait(trait_).diags_params_defined_in_parent(db));
-    diags.extend(GenericParamOwner::Trait(trait_).diags_kind_bounds(db));
-    diags.extend(GenericParamOwner::Trait(trait_).diags_trait_bounds(db));
-    diags.extend(GenericParamOwner::Trait(trait_).diags_non_trailing_defaults(db));
-    diags.extend(GenericParamOwner::Trait(trait_).diags_default_forward_refs(db));
-
-    diags
+    trait_.analyze(db)
 }
 
 /// This function implements analysis for the trait implementation definition.
@@ -188,24 +129,33 @@ pub fn analyze_impl_trait<'db>(
     db: &'db dyn HirAnalysisDb,
     impl_trait: ImplTrait<'db>,
 ) -> Vec<TyDiagCollection<'db>> {
+    // Early path/domain/WF checks; bail out on errors to avoid noisy follow-ups
     let implementor = match analyze_impl_trait_specific_error(db, impl_trait) {
         Ok(implementor) => implementor,
-        Err(diags) => {
-            return diags;
-        }
+        Err(diags) => return diags,
     };
 
-    let mut diags = analyze_impl_trait_method(db, implementor.instantiate_identity());
+    let mut diags = Vec::new();
 
-    let analyzer = DefAnalyzer::for_trait_impl(db, implementor.instantiate_identity());
-    let def_diags = analyzer.analyze();
+    // Method conformance diagnostics
+    diags.extend(analyze_impl_trait_method(db, implementor.instantiate_identity()));
 
-    diags.extend(def_diags);
-    diags.extend(GenericParamOwner::ImplTrait(impl_trait).diags_params_defined_in_parent(db));
-    diags.extend(GenericParamOwner::ImplTrait(impl_trait).diags_kind_bounds(db));
-    diags.extend(GenericParamOwner::ImplTrait(impl_trait).diags_trait_bounds(db));
-    diags.extend(GenericParamOwner::ImplTrait(impl_trait).diags_non_trailing_defaults(db));
-    diags.extend(GenericParamOwner::ImplTrait(impl_trait).diags_default_forward_refs(db));
+    // Trait-ref WF and super-trait constraints
+    diags.extend(impl_trait.diags_trait_ref_and_wf(db));
+
+    // Associated types diagnostics (WF + presence + bounds)
+    diags.extend(impl_trait.diags_assoc_types_wf(db));
+    diags.extend(impl_trait.diags_missing_assoc_types(db));
+    diags.extend(impl_trait.diags_assoc_types_bounds(db));
+
+    // Generic parameter diagnostics
+    let owner = GenericParamOwner::ImplTrait(impl_trait);
+    diags.extend(owner.diags_params_defined_in_parent(db));
+    diags.extend(owner.diags_kind_bounds(db));
+    diags.extend(owner.diags_non_trailing_defaults(db));
+    diags.extend(owner.diags_default_forward_refs(db));
+    diags.extend(owner.diags_trait_bounds(db));
+
     diags
 }
 
@@ -214,20 +164,7 @@ pub fn analyze_impl<'db>(
     db: &'db dyn HirAnalysisDb,
     impl_: HirImpl<'db>,
 ) -> Vec<TyDiagCollection<'db>> {
-    // Prefer semantic implementor type; early‑exit only for parse‑missing cases
-    let ty = impl_.ty(db);
-    if matches!(ty.data(db), TyData::Invalid(InvalidCause::ParseError)) {
-        return Vec::new();
-    }
-
-    let analyzer = DefAnalyzer::for_impl(db, impl_, ty);
-    let mut diags = analyzer.analyze();
-    diags.extend(GenericParamOwner::Impl(impl_).diags_params_defined_in_parent(db));
-    diags.extend(GenericParamOwner::Impl(impl_).diags_kind_bounds(db));
-    diags.extend(GenericParamOwner::Impl(impl_).diags_trait_bounds(db));
-    diags.extend(GenericParamOwner::Impl(impl_).diags_non_trailing_defaults(db));
-    diags.extend(GenericParamOwner::Impl(impl_).diags_default_forward_refs(db));
-    diags
+    impl_.analyze(db)
 }
 
 #[salsa::tracked(return_ref)]
@@ -235,13 +172,9 @@ pub fn analyze_func<'db>(
     db: &'db dyn HirAnalysisDb,
     func: Func<'db>,
 ) -> Vec<TyDiagCollection<'db>> {
-    let Some(func_def) = lower_func(db, func) else {
-        return Vec::new();
-    };
-
-    let assumptions = collect_func_def_constraints(db, func.into(), true).instantiate_identity();
-    let analyzer = DefAnalyzer::for_func(db, func_def, assumptions);
-    let mut diags = analyzer.analyze();
+    let mut diags = func.analyze(db);
+    diags.extend(GenericParamOwner::Func(func).diags_const_param_types(db));
+    diags.extend(GenericParamOwner::Func(func).diags_params_defined_in_parent(db));
     diags.extend(GenericParamOwner::Func(func).diags_kind_bounds(db));
     diags.extend(GenericParamOwner::Func(func).diags_trait_bounds(db));
     diags.extend(GenericParamOwner::Func(func).diags_non_trailing_defaults(db));
@@ -655,11 +588,11 @@ impl<'db> Visitor<'db> for DefAnalyzer<'db> {
         ctxt: &mut VisitorCtxt<'db, LazyImplTraitSpan<'db>>,
         impl_trait: ImplTrait<'db>,
     ) {
-        // Delegate assoc-type WF + invalid diagnostics and other checks to semantic helpers
+        // Delegate assoc-type WF + invalid diagnostics and other checks to semantic helpers.
+        // Avoid calling diags_trait_ref_and_wf here to prevent salsa cycles.
         self.diags.extend(impl_trait.diags_assoc_types_wf(self.db));
         self.diags.extend(impl_trait.diags_missing_assoc_types(self.db));
         self.diags.extend(impl_trait.diags_assoc_types_bounds(self.db));
-        self.diags.extend(impl_trait.diags_trait_ref_and_wf(self.db));
 
         walk_impl_trait(self, ctxt, impl_trait);
     }
@@ -917,8 +850,7 @@ fn analyze_impl_trait_specific_error<'db>(
         collect_constraints(db, trait_def.trait_(db).into()).instantiate(db, trait_inst.args(db));
     let _assumptions = implementor.instantiate_identity().constraints(db);
 
-    // 6–7. Trait-ref WF and super-trait constraints via semantic traversal
-    diags.extend(impl_trait.diags_trait_ref_and_wf(db));
+    // 6–7. Trait-ref WF and super-trait constraints are handled elsewhere to avoid cycles.
 
     // 8. Check associated types via semantic traversal
     diags.extend(impl_trait.diags_missing_assoc_types(db));

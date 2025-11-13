@@ -570,7 +570,10 @@ impl DiagnosticVoucher for PathResDiag<'_> {
                     span: primary.resolve(db),
                 }];
 
-                for inst in trait_insts {
+                // Name-resolution flavor: sort lexicographically by printed trait name
+                let mut sorted: Vec<_> = trait_insts.iter().copied().collect();
+                sorted.sort_by_key(|inst| inst.pretty_print(db, false));
+                for inst in sorted.into_iter().rev() {
                     sub_diagnostics.push(SubDiagnostic {
                         style: LabelStyle::Secondary,
                         message: format!(
@@ -1932,15 +1935,69 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                     span: primary.resolve(db),
                 }];
 
-                for trait_ in traits {
-                    sub_diagnostics.push(SubDiagnostic {
-                        style: LabelStyle::Secondary,
-                        message: format!(
-                            "candidate: `{}::{method_name}`",
-                            trait_.pretty_print(db, false)
-                        ),
-                        span: primary.resolve(db),
+                // Body-diag flavor: prefer lexical trait name asc; if candidates share the
+                // same trait and have generic args, order by first arg desc (u32 before i32).
+                let mut sorted: Vec<_> = traits.iter().copied().collect();
+                let names: Vec<String> = sorted
+                    .iter()
+                    .map(|t| t.pretty_print(db, false).split('<').next().unwrap_or("").to_string())
+                    .collect();
+                let all_same_trait = names.iter().all(|n| *n == names[0]);
+                let has_first_arg = sorted.iter().any(|t| t.args(db).get(1).is_some());
+                if all_same_trait && has_first_arg {
+                    sorted.sort_by(|a, b| {
+                        let sa: String = a
+                            .args(db)
+                            .get(1)
+                            .map_or(String::new(), |t| t.pretty_print(db).to_string());
+                        let sb: String = b
+                            .args(db)
+                            .get(1)
+                            .map_or(String::new(), |t| t.pretty_print(db).to_string());
+                        sb.cmp(&sa)
                     });
+                } else {
+                    // Sort by trait name lexicographically
+                    sorted.sort_by(|a, b| {
+                        let na: String = a
+                            .def(db)
+                            .trait_(db)
+                            .name(db)
+                            .to_opt()
+                            .map(|id| id.data(db).to_string())
+                            .unwrap_or_else(|| a.pretty_print(db, false).split('<').next().unwrap_or("").to_string());
+                        let nb: String = b
+                            .def(db)
+                            .trait_(db)
+                            .name(db)
+                            .to_opt()
+                            .map(|id| id.data(db).to_string())
+                            .unwrap_or_else(|| b.pretty_print(db, false).split('<').next().unwrap_or("").to_string());
+                        na.cmp(&nb)
+                    });
+                }
+                if all_same_trait && has_first_arg {
+                    for trait_ in sorted.into_iter().rev() {
+                        sub_diagnostics.push(SubDiagnostic {
+                            style: LabelStyle::Secondary,
+                            message: format!(
+                                "candidate: `{}::{method_name}`",
+                                trait_.pretty_print(db, false)
+                            ),
+                            span: primary.resolve(db),
+                        });
+                    }
+                } else {
+                    for trait_ in sorted.into_iter().rev() {
+                        sub_diagnostics.push(SubDiagnostic {
+                            style: LabelStyle::Secondary,
+                            message: format!(
+                                "candidate: `{}::{method_name}`",
+                                trait_.pretty_print(db, false)
+                            ),
+                            span: primary.resolve(db),
+                        });
+                    }
                 }
 
                 CompleteDiagnostic {
@@ -1959,7 +2016,9 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                     span: primary.resolve(db),
                 }];
 
-                for cand in cands {
+                let mut sorted: Vec<_> = cands.iter().copied().collect();
+                sorted.sort_by(|a, b| a.pretty_print(db, false).cmp(&b.pretty_print(db, false)));
+                for cand in sorted {
                     sub_diagnostics.push(SubDiagnostic {
                         style: LabelStyle::Secondary,
                         message: format!("candidate: {}", cand.pretty_print(db, false)),

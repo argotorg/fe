@@ -186,13 +186,17 @@ impl<'db> NameResBucket<'db> {
                     match res.derivation.cmp(&old_derivation) {
                         cmp::Ordering::Less => {}
                         cmp::Ordering::Equal => {
-                            // When two resolutions come from the same derivation layer
-                            // (e.g., duplicate generic params in the same owner), treat
-                            // them as ambiguous even if their kinds are equal.
-                            *existing_res = Err(NameResolutionError::Ambiguous(ThinVec::from([
-                                old_res.clone(),
-                                res.clone(),
-                            ])));
+                            // Only mark as ambiguous if the two resolutions actually
+                            // refer to different underlying scopes/kinds (i.e. true
+                            // duplicates like two generic params with the same name
+                            // under the same owner). If they are identical (same
+                            // scope/kind), keep the existing resolution to avoid
+                            // spurious ambiguity.
+                            if old_res.kind != res.kind {
+                                *existing_res = Err(NameResolutionError::Ambiguous(
+                                    ThinVec::from([old_res.clone(), res.clone()]),
+                                ));
+                            }
                         }
                         cmp::Ordering::Greater => {
                             *existing_res = Ok(res.clone());
