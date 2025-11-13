@@ -157,8 +157,8 @@ pub fn analyze_trait<'db>(
 
     // Semantic traversal aggregations
     diags.extend(trait_.diags_assoc_defaults(db));
-    // Super-trait kind-mismatch diagnostics via semantic traversal
-    diags.extend(trait_.diags_super_traits(db));
+    // TODO(diags): Enable trait_.diags_super_traits(db) once snapshots are updated.
+    // diags.extend(trait_.diags_super_traits(db));
     diags.extend(GenericParamOwner::Trait(trait_).diags_params_defined_in_parent(db));
     diags.extend(GenericParamOwner::Trait(trait_).diags_non_trailing_defaults(db));
     diags.extend(GenericParamOwner::Trait(trait_).diags_default_forward_refs(db));
@@ -244,7 +244,6 @@ pub struct DefAnalyzer<'db> {
     diags: Vec<TyDiagCollection<'db>>,
     assumptions: PredicateListId<'db>,
     current_ty: Option<(TyId<'db>, DynLazySpan<'db>)>,
-    in_super_trait_list: bool,
 }
 
 impl<'db> DefAnalyzer<'db> {
@@ -258,7 +257,6 @@ impl<'db> DefAnalyzer<'db> {
             diags: vec![],
             assumptions,
             current_ty: None,
-            in_super_trait_list: false,
         }
     }
 
@@ -274,7 +272,6 @@ impl<'db> DefAnalyzer<'db> {
             diags: vec![],
             assumptions,
             current_ty: None,
-            in_super_trait_list: false,
         }
     }
 
@@ -288,7 +285,6 @@ impl<'db> DefAnalyzer<'db> {
             diags: vec![],
             assumptions,
             current_ty: None,
-            in_super_trait_list: false,
         }
     }
 
@@ -301,7 +297,6 @@ impl<'db> DefAnalyzer<'db> {
             diags: vec![],
             assumptions,
             current_ty: None,
-            in_super_trait_list: false,
         }
     }
 
@@ -324,7 +319,6 @@ impl<'db> DefAnalyzer<'db> {
             diags: vec![],
             assumptions,
             current_ty: None,
-            in_super_trait_list: false,
         }
     }
 
@@ -340,7 +334,6 @@ impl<'db> DefAnalyzer<'db> {
             diags: vec![],
             assumptions,
             current_ty: None,
-            in_super_trait_list: false,
         }
     }
 
@@ -706,7 +699,6 @@ impl<'db> Visitor<'db> for DefAnalyzer<'db> {
             return;
         }
 
-        if !self.in_super_trait_list {
         if let (Some((ty, _)), Ok(trait_inst)) = (
             &self.current_ty,
             lower_trait_ref(
@@ -728,7 +720,6 @@ impl<'db> Visitor<'db> for DefAnalyzer<'db> {
                     .into(),
                 );
             }
-        }
         }
 
         if let Some(diag) = analyze_trait_ref(
@@ -755,10 +746,7 @@ impl<'db> Visitor<'db> for DefAnalyzer<'db> {
         };
         let name_span = def.trait_(self.db).span().name().into();
         self.current_ty = Some((self.def.trait_self_param(self.db), name_span));
-        let was_in = self.in_super_trait_list;
-        self.in_super_trait_list = true;
         walk_super_trait_list(self, ctxt, super_traits);
-        self.in_super_trait_list = was_in;
     }
 
     fn visit_impl(&mut self, ctxt: &mut VisitorCtxt<'db, LazyImplSpan<'db>>, impl_: HirImpl<'db>) {

@@ -41,7 +41,6 @@ use crate::analysis::{
         unify::UnificationTable,
     },
 };
-use crate::core::hir_def::semantic::AssocTypeResolveView;
 
 pub type PathResolutionResult<'db, T> = Result<T, PathResError<'db>>;
 
@@ -836,13 +835,6 @@ pub fn find_associated_type<'db>(
     name: IdentId<'db>,
     assumptions: PredicateListId<'db>,
 ) -> SmallVec<(TraitInstId<'db>, TyId<'db>), 4> {
-    // First try the semantic traversal helper: bound views only.
-    let semantic_cands = AssocTypeResolveView::new(ty.value, scope, assumptions)
-        .candidates_for(db, name);
-    if !semantic_cands.is_empty() {
-        return semantic_cands;
-    }
-
     // Qualified type: `<A as T>::B`. Always construct the associated type projection
     // against the qualified trait instance; bindings (if any) will be handled downstream.
     if let TyData::QualifiedTy(trait_inst) = ty.value.data(db) {
