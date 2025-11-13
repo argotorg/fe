@@ -21,6 +21,7 @@ use crate::hir_def::scope_graph::ScopeId;
 use crate::analysis::name_resolution::{PathRes, resolve_path};
 use crate::analysis::ty::def_analysis::check_duplicate_names;
 use crate::analysis::ty::diagnostics::{TyDiagCollection, TyLowerDiag};
+use crate::analysis::ty::def_analysis;
 use crate::hir_def::*;
 // When adding real methods, prefer calling internal lowering/normalization here
 // rather than exposing raw syntax.
@@ -32,9 +33,16 @@ use crate::analysis::ty::{
     ty_def::{InvalidCause, TyId},
     ty_lower::{lower_hir_ty, lower_type_alias},
 };
+use crate::analysis::ty::normalize::normalize_ty;
+use crate::analysis::ty::unify::UnificationTable;
+use crate::analysis::ty::canonical::Canonical;
+use crate::analysis::ty::fold::TyFoldable;
+use crate::analysis::ty::ty_def::TyData;
+use crate::analysis::ty::trait_def::impls_for_ty_with_constraints;
+use smallvec::{SmallVec, smallvec};
+use common::indexmap::IndexMap;
 use crate::analysis::ty::trait_lower::lower_trait_ref;
 use crate::analysis::ty::{
-    canonical::Canonical,
     trait_resolution::{is_goal_satisfiable, GoalSatisfiability},
 };
 // (kind-lowering helpers intentionally omitted; see WherePredicateView::kind)
@@ -129,20 +137,44 @@ impl<'db> Func<'db> {
             .flatten()
     }
 
-    /// Diagnostics related to parameters (names/labels/etc.).
-    /// Note: function parameter duplicate name/label diagnostics are currently
-    /// emitted by the general diagnostics pass; this method returns an empty
-    /// set to avoid duplicate emissions. It serves as a placeholder for future
-    /// semantic checks that are not covered elsewhere.
-    pub fn diags_parameters(self, _db: &'db dyn HirAnalysisDb) -> Vec<TyDiagCollection<'db>> {
-        Vec::new()
+    /// Diagnostics related to parameters (duplicate names/labels).
+    pub fn diags_parameters(self, db: &'db dyn HirAnalysisDb) -> Vec<TyDiagCollection<'db>> {
+        use crate::analysis::ty::diagnostics::TyLowerDiag;
+        let mut diags = Vec::new();
+
+        // Duplicate parameter names
+        let dupes = def_analysis::check_duplicate_names(
+            self.param_views(db).map(|v| v.name(db)),
+            |idxs| TyLowerDiag::DuplicateArgName(self, idxs).into(),
+        );
+        let found_dupes = !dupes.is_empty();
+        diags.extend(dupes);
+
+        // Duplicate labels (only if names were unique)
+        if !found_dupes {
+            diags.extend(def_analysis::check_duplicate_names(
+                self.param_views(db).map(|v| v.label_eagerly(db)),
+                |idxs| TyLowerDiag::DuplicateArgLabel(self, idxs).into(),
+            ));
+        }
+
+        diags
     }
 
-    /// Diagnostics related to the return type. Placeholder that returns empty
-    /// to preserve behavior. When we add semantic return-related checks that
-    /// are not emitted elsewhere, aggregate them here.
-    pub fn diags_return(self, _db: &'db dyn HirAnalysisDb) -> Vec<TyDiagCollection<'db>> {
-        Vec::new()
+    /// Diagnostics related to the explicit return type (kind/const checks).
+    pub fn diags_return(self, db: &'db dyn HirAnalysisDb) -> Vec<TyDiagCollection<'db>> {
+        use crate::analysis::ty::diagnostics::TyLowerDiag;
+        let mut diags = Vec::new();
+        if self.has_explicit_return_ty(db) {
+            let ret = self.return_ty(db);
+            let span = self.span().ret_ty().into();
+            if !ret.has_star_kind(db) {
+                diags.push(TyLowerDiag::ExpectedStarKind(span).into());
+            } else if ret.is_const_ty(db) {
+                diags.push(TyLowerDiag::NormalTypeExpected { span, given: ret }.into());
+            }
+        }
+        diags
     }
 }
 
@@ -579,13 +611,26 @@ impl<'db> Trait<'db> {
         out
     }
 
-    /// Diagnostics for super-traits (placeholder).
-    /// Intentionally returns no diagnostics to preserve current behavior during migration.
-    // TODO(diags): Implement via SuperTraitRefView::trait_inst + kind_mismatch_for_self
-    // and is_goal_satisfiable, then wire into analyze_trait after confirming
-    // snapshot parity.
-    pub fn diags_super_traits(self, _db: &'db dyn HirAnalysisDb) -> Vec<TyDiagCollection<'db>> {
-        Vec::new()
+    /// Diagnostics for super-traits (semantic, kind-mismatch only).
+    /// Note: Path resolution and trait-ref well-formedness diagnostics are still
+    /// handled elsewhere; this surfaces the stable kind-mismatch for `Self` in
+    /// super-trait declarations.
+    pub fn diags_super_traits(self, db: &'db dyn HirAnalysisDb) -> Vec<TyDiagCollection<'db>> {
+        use crate::analysis::ty::diagnostics::TraitConstraintDiag;
+        let mut diags = Vec::new();
+        for view in self.super_trait_refs(db) {
+            if let Some((expected, actual)) = view.kind_mismatch_for_self(db) {
+                diags.push(
+                    TraitConstraintDiag::TraitArgKindMismatch {
+                        span: view.span(),
+                        expected,
+                        actual,
+                    }
+                    .into(),
+                );
+            }
+        }
+        diags
     }
 
     /// Semantic super-trait bounds of this trait, instantiated over the trait's own parameters.
@@ -1130,6 +1175,142 @@ impl<'db> GenericParamView<'db> {
             }
             _ => None,
         }
+    }
+}
+
+// Associated type resolution traversal (crate-internal)
+
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct AssocTypeResolveView<'db> {
+    pub subject: TyId<'db>,
+    pub scope: ScopeId<'db>,
+    pub assumptions: PredicateListId<'db>,
+}
+
+impl<'db> AssocTypeResolveView<'db> {
+    pub(crate) fn new(
+        subject: TyId<'db>,
+        scope: ScopeId<'db>,
+        assumptions: PredicateListId<'db>,
+    ) -> Self {
+        Self { subject, scope, assumptions }
+    }
+
+    /// Compute associated-type candidates for `name` using semantic bound views only.
+    /// Returns pairs of (trait instance, projection TyId) without normalization.
+    pub(crate) fn candidates_for(
+        self,
+        db: &'db dyn HirAnalysisDb,
+        name: IdentId<'db>,
+    ) -> SmallVec<(crate::analysis::ty::trait_def::TraitInstId<'db>, TyId<'db>), 4> {
+        use crate::analysis::ty::trait_lower::{lower_trait, lower_trait_ref};
+        use crate::analysis::ty::trait_def::TraitInstId;
+
+        let mut candidates: SmallVec<(
+            crate::analysis::ty::trait_def::TraitInstId<'db>,
+            TyId<'db>,
+        ), 4> = SmallVec::new();
+        let ingot = self.scope.ingot(db);
+        let mut table = UnificationTable::new(db);
+        let canonical = Canonical::new(db, self.subject);
+        let lhs_ty = canonical.extract_identity(&mut table);
+
+        match canonical.value.data(db) {
+            TyData::QualifiedTy(trait_inst) => {
+                let proj = TyId::assoc_ty(db, *trait_inst, name);
+                return smallvec![(*trait_inst, proj)];
+            }
+            TyData::TyParam(param) if param.is_trait_self() => {
+                if let Some(trait_) = param.owner.resolve_to::<Trait>(db) {
+                    if trait_.assoc_ty(db, name).is_some() {
+                        let tr = TraitInstId::new(
+                            db,
+                            lower_trait(db, trait_),
+                            vec![canonical.value],
+                            IndexMap::new(),
+                        );
+                        let assoc_ty = TyId::assoc_ty(db, tr, name);
+                        return smallvec![(tr, assoc_ty)];
+                    }
+                } else if let Some(impl_trait) = param.owner.resolve_to::<ImplTrait>(db)
+                    && let Some(trait_ref) = impl_trait.trait_ref(db).to_opt()
+                    && let Ok(tr_inst) = lower_trait_ref(db, canonical.value, trait_ref, impl_trait.scope(), self.assumptions)
+                    && let Some(assoc_ty) = tr_inst.assoc_ty(db, name)
+                {
+                    return smallvec![(tr_inst, assoc_ty)];
+                }
+            }
+            _ => {}
+        }
+
+        // Bounds in assumptions: only if subject is a type param to avoid spurious ambiguities
+        if let TyData::TyParam(_) = canonical.value.data(db) {
+            for &pred in self.assumptions.list(db) {
+                let snapshot = table.snapshot();
+                let pred_self = table.instantiate_with_fresh_vars(crate::analysis::ty::binder::Binder::bind(pred.self_ty(db)));
+                if table.unify(lhs_ty, pred_self).is_ok() {
+                    if let Some(assoc_ty) = pred.assoc_ty(db, name) {
+                        let folded = assoc_ty.fold_with(db, &mut table);
+                        candidates.push((pred, folded));
+                    }
+                }
+                table.rollback_to(snapshot);
+            }
+        }
+
+        // Impl candidates
+        for impl_ in impls_for_ty_with_constraints(db, ingot, canonical, self.assumptions) {
+            let snapshot = table.snapshot();
+            let impl_ = table.instantiate_with_fresh_vars(impl_);
+            if table.unify(lhs_ty, impl_.self_ty(db)).is_ok() {
+                if let Some(ty) = impl_.assoc_ty(db, name) {
+                    let folded = ty.fold_with(db, &mut table);
+                    candidates.push((impl_.trait_(db), folded));
+                }
+            }
+            table.rollback_to(snapshot);
+        }
+
+        // Subject is a projection: consult bounds on the associated type via semantic views
+        if let TyData::AssocTy(assoc_ty) = canonical.value.data(db) {
+            let ty_with_subst = canonical.extract_identity(&mut table);
+            // Assumptions bounds (e.g., `T::Assoc: Level1`)
+            for &pred in self.assumptions.list(db) {
+                let snapshot = table.snapshot();
+                if table.unify(ty_with_subst, pred.self_ty(db)).is_ok() {
+                    if let Some(assoc_ty) = pred.assoc_ty(db, name) {
+                        let folded = assoc_ty.fold_with(db, &mut table);
+                        candidates.push((pred, folded));
+                    }
+                }
+                table.rollback_to(snapshot);
+            }
+
+            // Trait-declared bounds on the associated type
+            let trait_def = assoc_ty.trait_.def(db);
+            let trait_ = trait_def.trait_(db);
+            let assoc_name = assoc_ty.name;
+            for view in trait_.assoc_types(db) {
+                if view.name(db) != Some(assoc_name) { continue; }
+                let subject = ty_with_subst.fold_with(db, &mut table);
+                for inst in view.with_subject(subject).bounds(db) {
+                    if inst.def(db).trait_(db).assoc_ty(db, name).is_some() {
+                        let proj = TyId::assoc_ty(db, inst, name);
+                        let folded = proj.fold_with(db, &mut table);
+                        candidates.push((inst, folded));
+                    }
+                }
+            }
+        }
+
+        // Dedup normalized results, but keep original projections for precision
+        let mut dedup: IndexMap<TyId<'db>, (crate::analysis::ty::trait_def::TraitInstId<'db>, TyId<'db>)> = IndexMap::new();
+        for (inst, ty_candidate) in candidates.iter().copied() {
+            let norm = normalize_ty(db, ty_candidate, self.scope, self.assumptions);
+            dedup.entry(norm).or_insert((inst, ty_candidate));
+        }
+
+        dedup.into_iter().map(|(_n, v)| v).collect()
     }
 }
 

@@ -41,6 +41,7 @@ use crate::analysis::{
         unify::UnificationTable,
     },
 };
+use crate::core::hir_def::semantic::AssocTypeResolveView;
 
 pub type PathResolutionResult<'db, T> = Result<T, PathResError<'db>>;
 
@@ -835,6 +836,13 @@ pub fn find_associated_type<'db>(
     name: IdentId<'db>,
     assumptions: PredicateListId<'db>,
 ) -> SmallVec<(TraitInstId<'db>, TyId<'db>), 4> {
+    // First try the semantic traversal helper: bound views only.
+    let semantic_cands = AssocTypeResolveView::new(ty.value, scope, assumptions)
+        .candidates_for(db, name);
+    if !semantic_cands.is_empty() {
+        return semantic_cands;
+    }
+
     // Qualified type: `<A as T>::B`. Always construct the associated type projection
     // against the qualified trait instance; bindings (if any) will be handled downstream.
     if let TyData::QualifiedTy(trait_inst) = ty.value.data(db) {
@@ -950,15 +958,8 @@ pub fn find_associated_type<'db>(
             }
         }
 
-        // TODO(traversal): Replace this raw HIR fallback with a semantic
-        // assoc-type resolve traversal (e.g., SubjectAttachedAssocTypeResolveView)
-        // and remove this block. The traversal should:
-        // - derive assumptions from owner/context
-        // - use bound views only
-        // - preserve candidate shaping and ambiguity diagnostics
-        // Until then, keep this fallback to maintain snapshot parity.
-        // If no candidates were derived from bound views, fall back to raw HIR
-        // bounds to preserve behavior until the semantic resolver lands.
+        // If no candidates were derived from bound views, fall back to raw HIR bounds to
+        // preserve behavior until the semantic resolver lands.
         if candidates.len() == _before {
             if let Some(decl) = trait_.assoc_ty(db, assoc_name) {
                 let subject = ty_with_subst.fold_with(db, &mut table);

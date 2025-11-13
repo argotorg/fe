@@ -142,15 +142,20 @@ impl<'db> TyChecker<'db> {
             unreachable!()
         };
 
-        let returned_ty = if let Some(expr) = expr {
-            let returned_ty = self.fresh_ty();
-            self.check_expr(*expr, returned_ty);
-            returned_ty.fold_with(self.db, &mut self.table)
+        let (returned_ty, had_child_err) = if let Some(expr) = expr {
+            let before = self.diags.len();
+            let expected = self.fresh_ty();
+            self.check_expr(*expr, expected);
+            let ty = expected.fold_with(self.db, &mut self.table);
+            (ty, self.diags.len() > before)
         } else {
-            TyId::unit(self.db)
+            (TyId::unit(self.db), false)
         };
 
-        if self.table.unify(returned_ty, self.expected).is_err() {
+        if !had_child_err
+            && !returned_ty.has_invalid(self.db)
+            && self.table.unify(returned_ty, self.expected).is_err()
+        {
             let func = self.env.func();
             let span = stmt.span(self.env.body());
             let diag = BodyDiag::ReturnedTypeMismatch {

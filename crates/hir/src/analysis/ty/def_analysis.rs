@@ -157,9 +157,8 @@ pub fn analyze_trait<'db>(
 
     // Semantic traversal aggregations
     diags.extend(trait_.diags_assoc_defaults(db));
-    // TODO(diags): Wire in trait_.diags_super_traits(db) once implemented and
-    // parity-checked against existing visitor diagnostics.
-    // diags.extend(trait_.diags_super_traits(db));
+    // Super-trait kind-mismatch diagnostics via semantic traversal
+    diags.extend(trait_.diags_super_traits(db));
     diags.extend(GenericParamOwner::Trait(trait_).diags_params_defined_in_parent(db));
     diags.extend(GenericParamOwner::Trait(trait_).diags_non_trailing_defaults(db));
     diags.extend(GenericParamOwner::Trait(trait_).diags_default_forward_refs(db));
@@ -245,6 +244,7 @@ pub struct DefAnalyzer<'db> {
     diags: Vec<TyDiagCollection<'db>>,
     assumptions: PredicateListId<'db>,
     current_ty: Option<(TyId<'db>, DynLazySpan<'db>)>,
+    in_super_trait_list: bool,
 }
 
 impl<'db> DefAnalyzer<'db> {
@@ -258,6 +258,7 @@ impl<'db> DefAnalyzer<'db> {
             diags: vec![],
             assumptions,
             current_ty: None,
+            in_super_trait_list: false,
         }
     }
 
@@ -273,6 +274,7 @@ impl<'db> DefAnalyzer<'db> {
             diags: vec![],
             assumptions,
             current_ty: None,
+            in_super_trait_list: false,
         }
     }
 
@@ -286,6 +288,7 @@ impl<'db> DefAnalyzer<'db> {
             diags: vec![],
             assumptions,
             current_ty: None,
+            in_super_trait_list: false,
         }
     }
 
@@ -298,6 +301,7 @@ impl<'db> DefAnalyzer<'db> {
             diags: vec![],
             assumptions,
             current_ty: None,
+            in_super_trait_list: false,
         }
     }
 
@@ -320,6 +324,7 @@ impl<'db> DefAnalyzer<'db> {
             diags: vec![],
             assumptions,
             current_ty: None,
+            in_super_trait_list: false,
         }
     }
 
@@ -335,6 +340,7 @@ impl<'db> DefAnalyzer<'db> {
             diags: vec![],
             assumptions,
             current_ty: None,
+            in_super_trait_list: false,
         }
     }
 
@@ -700,6 +706,7 @@ impl<'db> Visitor<'db> for DefAnalyzer<'db> {
             return;
         }
 
+        if !self.in_super_trait_list {
         if let (Some((ty, _)), Ok(trait_inst)) = (
             &self.current_ty,
             lower_trait_ref(
@@ -721,6 +728,7 @@ impl<'db> Visitor<'db> for DefAnalyzer<'db> {
                     .into(),
                 );
             }
+        }
         }
 
         if let Some(diag) = analyze_trait_ref(
@@ -747,7 +755,10 @@ impl<'db> Visitor<'db> for DefAnalyzer<'db> {
         };
         let name_span = def.trait_(self.db).span().name().into();
         self.current_ty = Some((self.def.trait_self_param(self.db), name_span));
+        let was_in = self.in_super_trait_list;
+        self.in_super_trait_list = true;
         walk_super_trait_list(self, ctxt, super_traits);
+        self.in_super_trait_list = was_in;
     }
 
     fn visit_impl(&mut self, ctxt: &mut VisitorCtxt<'db, LazyImplSpan<'db>>, impl_: HirImpl<'db>) {
@@ -821,41 +832,13 @@ impl<'db> Visitor<'db> for DefAnalyzer<'db> {
             collect_func_def_constraints(self.db, hir_func.into(), true).instantiate_identity(),
         );
 
-        {
-            // Duplicate parameter names
-            let dupes = check_duplicate_names(
-                hir_func
-                    .param_views(self.db)
-                    .map(|v| v.name(self.db)),
-                |idxs| TyLowerDiag::DuplicateArgName(hir_func, idxs).into(),
-            );
-            let found_dupes = !dupes.is_empty();
-            self.diags.extend(dupes);
-
-            // Duplicate labels (only if names were unique)
-            if !found_dupes {
-                self.diags.extend(check_duplicate_names(
-                    hir_func
-                        .param_views(self.db)
-                        .map(|v| v.label_eagerly(self.db)),
-                    |idxs| TyLowerDiag::DuplicateArgLabel(hir_func, idxs).into(),
-                ));
-            }
-        }
+        // Parameter diagnostics via semantic traversal (duplicate names/labels)
+        self.diags.extend(hir_func.diags_parameters(self.db));
 
         walk_func(self, ctxt, hir_func);
 
-        // Verify explicit return type, if annotated, using semantic lowering.
-        if hir_func.has_explicit_return_ty(self.db) {
-            let ret = hir_func.return_ty(self.db);
-            let span = hir_func.span().ret_ty().into();
-            if !ret.has_star_kind(self.db) {
-                self.diags.push(TyLowerDiag::ExpectedStarKind(span).into());
-            } else if ret.is_const_ty(self.db) {
-                self.diags
-                    .push(TyLowerDiag::NormalTypeExpected { span, given: ret }.into());
-            }
-        }
+        // Return type diagnostics via semantic traversal (kind/const checks)
+        self.diags.extend(hir_func.diags_return(self.db));
 
         self.assumptions = constraints;
         self.def = def;
