@@ -228,7 +228,7 @@ impl<'db> SimplifiedPattern<'db> {
         let path_name = path_ident.data(db);
 
         for (idx, variant_def) in variants.enumerate() {
-            if let Partial::Present(variant_name) = variant_def.name(db)
+            if let Some(variant_name) = variant_def.name(db)
                 && variant_name.data(db) == path_name
             {
                 let variant = EnumVariant {
@@ -407,10 +407,8 @@ pub fn display_missing_pattern<'db>(
             match kind {
                 ConstructorKind::Variant(variant, _) => {
                     // Get the actual variant name
-                    let variant_name = match variant.name(db) {
-                        Some(name) => name.to_string(),
-                        None => "UnknownVariant".to_string(),
-                    };
+                    let variant_name =
+                        variant.name(db).map(|name| name.to_string()).unwrap_or_else(|| "UnknownVariant".to_string());
 
                     // Get enum name for better context
                     let enum_name = match variant.enum_.name(db) {

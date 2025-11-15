@@ -458,17 +458,18 @@ impl<'db> GenericParamCollector<'db> {
         };
 
         let hir_db = self.db;
-        let where_clause = where_clause_owner.clause(hir_db).id;
-        for pred in where_clause.data(hir_db) {
-            match self.param_idx_from_ty(pred.ty.to_opt()) {
+        let where_clause = where_clause_owner.clause(hir_db);
+        for pred in where_clause.predicates(hir_db) {
+            let hir_ty = pred.hir_ty(hir_db);
+            match self.param_idx_from_ty(hir_ty.to_opt()) {
                 ParamLoc::Idx(idx) => {
                     if self.params[idx].kind.is_none() && !self.params[idx].is_const_ty() {
-                        self.params[idx].kind = self.extract_kind(pred.bounds.as_slice());
+                        self.params[idx].kind = self.extract_kind(pred.bounds_raw(hir_db));
                     }
                 }
 
                 ParamLoc::TraitSelf => {
-                    let kind = self.extract_kind(pred.bounds.as_slice());
+                    let kind = self.extract_kind(pred.bounds_raw(hir_db));
                     let trait_self = self.trait_self_ty_mut().unwrap();
 
                     if trait_self.kind.is_none() {

@@ -1057,9 +1057,8 @@ impl DiagnosticVoucher for TyLowerDiag<'_> {
                 let name = enum_
                     .variants(db)
                     .nth(idxs[0] as usize)
+                    .and_then(|v| v.name(db))
                     .expect("variant not found")
-                    .name(db)
-                    .unwrap()
                     .data(db);
                 let spans = idxs
                     .iter()

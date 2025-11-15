@@ -128,8 +128,7 @@ impl<'db> TyCheckEnv<'db> {
         match self.hir_func() {
             Some(func) => {
                 // Include all implied bounds (super traits and associated type bounds)
-                crate::core::hir_def::semantic::constraints_for(self.db, func.into())
-                    .extend_all_bounds(self.db)
+                func.assumptions_with_bounds(self.db)
             }
             None => PredicateListId::empty_list(self.db),
         }

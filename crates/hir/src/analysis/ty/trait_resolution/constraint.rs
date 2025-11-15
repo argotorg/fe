@@ -203,20 +203,20 @@ pub fn collect_constraints<'db>(
 
     // Where-clause predicates (via semantic view)
     if let Some(w_owner) = owner.where_clause_owner() {
-        for w_pred in w_owner.clause(db).id.data(db) {
-            let Some(hir_ty) = w_pred.ty.to_opt() else {
+        for w_pred in w_owner.clause(db).predicates(db) {
+            let Some(hir_ty) = w_pred.hir_ty(db).to_opt() else {
                 continue;
             };
-            for bound in &w_pred.bounds {
+            for bound in w_pred.bounds_raw(db) {
                 // Filter out super trait constraints; handled in `collect_super_traits`
                 if hir_ty.is_self_ty(db) && matches!(owner, GenericParamOwner::Trait(_)) {
                     continue;
                 }
 
-                if let TypeBound::Trait(trait_ref) = bound {
+                if let TypeBound::Trait(trait_ref) = *bound {
                     deferred.push(Deferred {
                         bound_ty: Either::Left(hir_ty),
-                        trait_ref: *trait_ref,
+                        trait_ref,
                         scope: owner_scope,
                     });
                 }
