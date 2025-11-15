@@ -11,6 +11,7 @@ pub struct FilesResolver {
     pub file_patterns: Vec<String>,
     pub required_files: Vec<RequiredFile>,
     pub required_directories: Vec<RequiredDirectory>,
+    pub search_mode: bool,
     diagnostics: Vec<FilesResolutionDiagnostic>,
 }
 
@@ -123,6 +124,7 @@ impl FilesResolver {
             file_patterns: vec![],
             required_files: vec![],
             required_directories: vec![],
+            search_mode: false,
             diagnostics: vec![],
         }
     }
@@ -132,6 +134,7 @@ impl FilesResolver {
             file_patterns: patterns.iter().map(|p| p.to_string()).collect(),
             required_files: vec![],
             required_directories: vec![],
+            search_mode: false,
             diagnostics: vec![],
         }
     }
@@ -154,6 +157,32 @@ impl FilesResolver {
         self.file_patterns.push(pattern.to_string());
         self
     }
+
+    pub fn with_search_mode(mut self) -> Self {
+        self.search_mode = true;
+        self
+    }
+
+    /// Check if a directory satisfies all required files and directories
+    fn check_requirements(&self, dir: &Utf8PathBuf) -> bool {
+        // Check required files
+        for required_file in &self.required_files {
+            let required_path = dir.join(&required_file.path);
+            if !required_path.exists() {
+                return false;
+            }
+        }
+
+        // Check required directories
+        for required_dir in &self.required_directories {
+            let required_dir_path = dir.join(&required_dir.path);
+            if !required_dir_path.exists() || !required_dir_path.is_dir() {
+                return false;
+            }
+        }
+
+        true
+    }
 }
 
 impl Resolver for FilesResolver {
@@ -162,30 +191,71 @@ impl Resolver for FilesResolver {
     type Error = FilesResolutionError;
     type Diagnostic = FilesResolutionDiagnostic;
 
-    fn resolve<H>(&mut self, handler: &mut H, ingot_url: &Url) -> Result<H::Item, Self::Error>
+    fn resolve<H>(&mut self, handler: &mut H, url: &Url) -> Result<H::Item, Self::Error>
     where
         H: crate::ResolutionHandler<Self>,
     {
-        tracing::info!(target: "resolver", "Starting file resolution for URL: {}", ingot_url);
+        tracing::info!(target: "resolver", "Starting file resolution for URL: {}", url);
         let mut files = vec![];
 
-        let ingot_path = Utf8PathBuf::from(ingot_url.path());
-        tracing::info!(target: "resolver", "Resolving files in path: {}", ingot_path);
+        let mut path = Utf8PathBuf::from(url.path());
+        let mut url = url.clone();
+
+        // If search mode is enabled, walk up to find the directory satisfying requirements
+        // Search mode is automatically disabled after first use to ensure only the root
+        // is searched for, not dependencies
+        if self.search_mode {
+            tracing::info!(target: "resolver", "Search mode enabled, looking for root from: {}", path);
+
+            // Disable search mode for subsequent resolutions (dependencies)
+            self.search_mode = false;
+
+            // If the path is a file, start from its parent directory
+            if path.is_file()
+                && let Some(parent) = path.parent()
+            {
+                path = parent.to_path_buf();
+            }
+
+            // Walk up directory tree to find root matching requirements
+            loop {
+                if self.check_requirements(&path) {
+                    // Found the root
+                    url = Url::from_file_path(&path)
+                        .map_err(|_| FilesResolutionError::DirectoryDoesNotExist(url.clone()))?;
+                    tracing::info!(target: "resolver", "Found root at: {}", path);
+                    break;
+                }
+
+                // Move to parent directory
+                match path.parent() {
+                    Some(parent) => {
+                        path = parent.to_path_buf();
+                    }
+                    None => {
+                        // Reached filesystem root without finding matching directory
+                        return Err(FilesResolutionError::DirectoryDoesNotExist(url.clone()));
+                    }
+                }
+            }
+        }
+
+        tracing::info!(target: "resolver", "Resolving files in path: {}", path);
 
         // Check if the directory exists
-        if !ingot_path.exists() || !ingot_path.is_dir() {
+        if !path.exists() || !path.is_dir() {
             return Err(FilesResolutionError::DirectoryDoesNotExist(
-                ingot_url.clone(),
+                url.clone(),
             ));
         }
 
         // Check for required directories first
         for required_dir in &self.required_directories {
-            let required_dir_path = ingot_path.join(&required_dir.path);
+            let required_dir_path = path.join(&required_dir.path);
             if !required_dir_path.exists() || !required_dir_path.is_dir() {
                 self.diagnostics
                     .push(FilesResolutionDiagnostic::RequiredDirectoryMissing(
-                        ingot_url.clone(),
+                        url.clone(),
                         required_dir.path.clone(),
                     ));
             }
@@ -193,11 +263,11 @@ impl Resolver for FilesResolver {
 
         // Check for required files
         for required_file in &self.required_files {
-            let required_path = ingot_path.join(&required_file.path);
+            let required_path = path.join(&required_file.path);
             if !required_path.exists() {
                 self.diagnostics
                     .push(FilesResolutionDiagnostic::RequiredFileMissing(
-                        ingot_url.clone(),
+                        url.clone(),
                         required_file.path.clone(),
                     ));
             } else {
@@ -221,7 +291,7 @@ impl Resolver for FilesResolver {
 
         // Process file patterns
         for pattern in &self.file_patterns {
-            let pattern_path = ingot_path.join(pattern);
+            let pattern_path = path.join(pattern);
             let entries =
                 glob(pattern_path.as_str()).map_err(FilesResolutionError::PatternError)?;
 
@@ -263,7 +333,7 @@ impl Resolver for FilesResolver {
 
         tracing::info!(target: "resolver", "File resolution completed successfully, found {} files", files.len());
         let resource = FilesResource { files };
-        Ok(handler.handle_resolution(ingot_url, resource))
+        Ok(handler.handle_resolution(&url, resource))
     }
 
     fn take_diagnostics(&mut self) -> Vec<Self::Diagnostic> {
