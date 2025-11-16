@@ -18,16 +18,25 @@ fn normalize_output(output: &str) -> String {
 
 // Helper function to run fe check
 fn run_fe_check(path: &str) -> (String, i32) {
-    run_fe_command("check", path)
+    run_fe_command(&["check", path])
+}
+
+// Helper function to run fe build
+fn run_fe_build(path: &str) -> (String, i32) {
+    run_fe_command(&["build", path])
+}
+
+fn run_fe_build_dump_mir(path: &str) -> (String, i32) {
+    run_fe_command(&["build", "--dump-mir", path])
 }
 
 // Helper function to run fe tree
 fn run_fe_tree(path: &str) -> (String, i32) {
-    run_fe_command("tree", path)
+    run_fe_command(&["tree", path])
 }
 
 // Helper function to run fe binary with specified subcommand
-fn run_fe_command(subcommand: &str, path: &str) -> (String, i32) {
+fn run_fe_command(args: &[&str]) -> (String, i32) {
     // Build the fe binary
     let cargo_exe = std::env::var("CARGO").unwrap_or_else(|_| "cargo".to_string());
     let output = Command::new(&cargo_exe)
@@ -51,11 +60,12 @@ fn run_fe_command(subcommand: &str, path: &str) -> (String, i32) {
         .expect("Failed to get parent")
         .join("fe");
 
+    let cmd_display = args.join(" ");
     let output = Command::new(&fe_binary)
-        .args([subcommand, path])
+        .args(args)
         .env("NO_COLOR", "1") // Disable color output for consistent snapshots across environments
         .output()
-        .unwrap_or_else(|_| panic!("Failed to run fe {}", subcommand));
+        .unwrap_or_else(|_| panic!("Failed to run fe {cmd_display}"));
 
     // Combine stdout and stderr for snapshot
     let mut full_output = String::new();
@@ -120,4 +130,26 @@ fn test_tree_output(fixture: Fixture<&str>) {
     let ingot_name = ingot_dir.file_name().unwrap().to_str().unwrap();
     let snapshot_path = ingot_dir.join(format!("{}_tree", ingot_name));
     snap_test!(output, snapshot_path.to_str().unwrap());
+}
+
+#[test]
+fn test_build_outputs_yul() {
+    let simple_file = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/cli_output/build/simple.fe");
+    let (output, _) = run_fe_build(simple_file.to_str().unwrap());
+
+    let snapshot = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/cli_output/build/simple.snap");
+    snap_test!(output, snapshot.to_str().unwrap());
+}
+
+#[test]
+fn test_build_can_dump_mir() {
+    let simple_file = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/cli_output/build/simple.fe");
+    let (output, _) = run_fe_build_dump_mir(simple_file.to_str().unwrap());
+
+    let snapshot = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/cli_output/build/simple_dump_mir.snap");
+    snap_test!(output, snapshot.to_str().unwrap());
 }

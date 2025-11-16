@@ -1,0 +1,14 @@
+---
+source: crates/fe/tests/cli_output.rs
+expression: output
+---
+=== STDOUT ===
+=== Yul ===
+{
+  function main() -> ret {
+    ret := 42
+  }
+}
+
+
+=== EXIT CODE: 0 ===

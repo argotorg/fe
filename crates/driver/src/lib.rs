@@ -3,6 +3,7 @@
 pub mod db;
 pub mod diagnostics;
 pub mod files;
+pub mod project;
 
 use std::collections::HashMap;
 
