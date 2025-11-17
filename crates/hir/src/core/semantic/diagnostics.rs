@@ -10,6 +10,7 @@ use crate::analysis::name_resolution;
 use crate::analysis::ty;
 use crate::analysis::ty::def_analysis::check_duplicate_names;
 use crate::analysis::ty::diagnostics::{TyDiagCollection, TyLowerDiag, TraitConstraintDiag};
+use crate::analysis::ty::ty_def::{InvalidCause, TyId};
 use crate::hir_def::{
     Contract, Enum, EnumVariant, FieldParent, GenericParam, GenericParamOwner, ItemKind, Struct,
     Trait, TypeAlias, TypeBound, VariantKind,
@@ -83,14 +84,14 @@ impl<'db> WherePredicateView<'db> {
     pub fn diags(self, db: &'db dyn HirAnalysisDb) -> Vec<TyDiagCollection<'db>> {
         let mut out = Vec::new();
 
-        let subject = match self.subject_ty_checked(db) {
-            Ok(Some(s)) => s,
-            Ok(None) => return out,
-            Err(diag) => {
-                out.push(diag);
-                return out;
-            }
+        let Some(subject) = self.subject_ty(db) else {
+            return out;
         };
+
+        if let Some(diag) = self.diag_subject_ty(db, subject) {
+            out.push(diag);
+            return out;
+        }
 
         for (i, bound) in self.hir_pred(db).bounds.iter().enumerate() {
             match bound {
@@ -116,8 +117,63 @@ impl<'db> WherePredicateView<'db> {
                 _ => {}
             }
         }
-
         out
+    }
+
+    /// Diagnostic for this predicate's subject type, if any:
+    /// - Path-resolution domain errors are remapped to precise diagnostics.
+    /// - Const subjects are rejected.
+    /// - Fully concrete, non-generic subjects are rejected.
+    fn diag_subject_ty(
+        self,
+        db: &'db dyn HirAnalysisDb,
+        subject: TyId<'db>,
+    ) -> Option<TyDiagCollection<'db>> {
+        use crate::analysis::name_resolution::diagnostics::PathResDiag;
+        use crate::analysis::name_resolution::{ExpectedPathKind, resolve_path};
+
+        let Some(hir_ty) = self.hir_pred(db).ty.to_opt() else {
+            return None;
+        };
+
+        // Path-resolution failures are carried via the subject's InvalidCause.
+        let owner_item = ItemKind::from(self.clause.owner);
+        let assumptions = constraints_for(db, owner_item);
+        if let Some(cause) = subject.invalid_cause(db) {
+            if let InvalidCause::PathResolutionFailed { path } = cause {
+                // Re-run name resolution on the failed path and surface a precise diagnostic
+                // at the type path span within the where-predicate.
+                let ty_span = self.span().ty().into_path_type().path();
+                match resolve_path(db, path, owner_item.scope(), assumptions, false) {
+                    Ok(res) => {
+                        // Resolved to a non-type domain
+                        if let Some(ident) = path.ident(db).to_opt() {
+                            let diag =
+                                PathResDiag::ExpectedType(ty_span.into(), ident, res.kind_name());
+                            return Some(diag.into());
+                        }
+                    }
+                    Err(inner) => {
+                        if let Some(diag) =
+                            inner.into_diag(db, path, ty_span, ExpectedPathKind::Type)
+                        {
+                            return Some(diag.into());
+                        }
+                    }
+                }
+            }
+        }
+        let span = self.span().ty().into();
+
+        if subject.is_const_ty(db) {
+            return Some(TraitConstraintDiag::ConstTyBound(span, subject).into());
+        }
+
+        if !subject.has_invalid(db) && !subject.has_param(db) {
+            return Some(TraitConstraintDiag::ConcreteTypeBound(span, subject).into());
+        }
+
+        None
     }
 }
 
@@ -206,11 +262,11 @@ impl<'db> WherePredicateBoundView<'db> {
     /// Diagnostics for this trait bound, deriving the subject from the predicate's LHS.
     /// Returns a single-element vec with the subject error if subject lowering fails.
     pub fn diags(self, db: &'db dyn HirAnalysisDb) -> Vec<TyDiagCollection<'db>> {
-        match self.pred.subject_ty_checked(db) {
-            Ok(Some(subject)) => self.diags_for_subject(db, subject),
-            Ok(None) => Vec::new(),
-            Err(diag) => vec![diag],
-        }
+        let subject = match self.pred.subject_ty(db) {
+            Some(s) => s,
+            None => return Vec::new(),
+        };
+        self.diags_for_subject(db, subject)
     }
 }
 
@@ -1408,5 +1464,37 @@ impl<'db> GenericParamOwner<'db> {
         }
 
         out
+    }
+}
+
+impl<'db> GenericParamView<'db> {
+    pub fn diag_param_defined_in_parent(
+        self,
+        db: &'db dyn HirAnalysisDb,
+    ) -> Option<TyLowerDiag<'db>> {
+        use crate::analysis::name_resolution::{PathRes, resolve_path};
+        use crate::analysis::ty::trait_resolution::PredicateListId;
+
+        let name = self.param.name().to_opt()?;
+        let parent_scope = self.owner.scope().parent_item(db)?.scope();
+        let path = PathId::from_ident(db, name);
+        let span = self.owner.params_span().param(self.idx);
+
+        match resolve_path(
+            db,
+            path,
+            parent_scope,
+            PredicateListId::empty_list(db),
+            false,
+        ) {
+            Ok(r @ PathRes::Ty(ty)) if ty.is_param(db) => {
+                Some(TyLowerDiag::GenericParamAlreadyDefinedInParent {
+                    span,
+                    conflict_with: r.name_span(db).unwrap(),
+                    name,
+                })
+            }
+            _ => None,
+        }
     }
 }

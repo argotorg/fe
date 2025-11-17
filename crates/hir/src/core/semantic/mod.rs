@@ -7,8 +7,12 @@
 //! resolution layers.
 //!
 //! Design notes
-//! - Prefer returning semantic IDs (TyId, TraitInstId, etc.) or diagnostics
+//! - Prefer returning semantic IDs (`TyId`, `TraitInstId`, etc.) or diagnostic
 //!   collections from here; do not expose raw HIR nodes.
+//! - Avoid env/engine types (`PredicateListId`, solver tables, etc.) in the
+//!   public API. Keep environment plumbing internal to semantic helpers or
+//!   the analysis layer; callers should ask items/views for semantic answers
+//!   instead of pushing assumption lists around.
 //! - Keep methods small and capability‑oriented (e.g., generic params,
 //!   where‑clauses, signature types). Push per‑node, context‑rich logic into
 //!   views when a single method signature becomes unwieldy.
@@ -258,6 +262,19 @@ impl<'db> FuncParamView<'db> {
             Some(p) => p.self_ty_fallback,
             None => false,
         }
+    }
+
+    /// Semantic type of this parameter, bound to identity parameters.
+    pub fn ty_binder(self, db: &'db dyn HirAnalysisDb) -> Binder<TyId<'db>> {
+        // Delegate to the function-level lowering to keep behavior consistent.
+        // Indexing is safe as long as `idx` was derived from the function's own
+        // parameter list.
+        self.func.arg_tys(db)[self.idx].clone()
+    }
+
+    /// Semantic type of this parameter (binder removed).
+    pub fn ty(self, db: &'db dyn HirAnalysisDb) -> TyId<'db> {
+        *self.ty_binder(db).skip_binder()
     }
 }
 
@@ -515,62 +532,6 @@ impl<'db> WherePredicateView<'db> {
         let owner_item = ItemKind::from(self.clause.owner);
         let assumptions = constraints_for(db, owner_item);
         Some(lower_hir_ty(db, hir_ty, owner_item.scope(), assumptions))
-    }
-
-    /// Lower the subject type and enforce the semantic constraints that prohibit
-    /// const subjects or fully-concrete types. Returns `Ok(Some(..))` when the
-    /// subject exists and passes the checks, `Ok(None)` when the predicate is
-    /// syntactically absent, and `Err(diag)` when a diagnostic should be emitted.
-    pub fn subject_ty_checked(
-        self,
-        db: &'db dyn HirAnalysisDb,
-    ) -> Result<Option<TyId<'db>>, TyDiagCollection<'db>> {
-        use crate::analysis::name_resolution::diagnostics::PathResDiag;
-        use crate::analysis::name_resolution::{ExpectedPathKind, resolve_path};
-        use crate::analysis::ty::diagnostics::TraitConstraintDiag;
-
-        let Some(hir_ty) = self.hir_pred(db).ty.to_opt() else {
-            return Ok(None);
-        };
-
-        let owner_item = ItemKind::from(self.clause.owner);
-        let assumptions = constraints_for(db, owner_item);
-        let subject = lower_hir_ty(db, hir_ty, owner_item.scope(), assumptions);
-        if let Some(cause) = subject.invalid_cause(db) {
-            if let InvalidCause::PathResolutionFailed { path } = cause {
-                // Re-run name resolution on the failed path and surface a precise diagnostic
-                // at the type path span within the where-predicate.
-                let ty_span = self.span().ty().into_path_type().path();
-                match resolve_path(db, path, owner_item.scope(), assumptions, false) {
-                    Ok(res) => {
-                        // Resolved to a non-type domain
-                        if let Some(ident) = path.ident(db).to_opt() {
-                            let diag =
-                                PathResDiag::ExpectedType(ty_span.into(), ident, res.kind_name());
-                            return Err(diag.into());
-                        }
-                    }
-                    Err(inner) => {
-                        if let Some(diag) =
-                            inner.into_diag(db, path, ty_span, ExpectedPathKind::Type)
-                        {
-                            return Err(diag.into());
-                        }
-                    }
-                }
-            }
-        }
-        let span = self.span().ty().into();
-
-        if subject.is_const_ty(db) {
-            return Err(TraitConstraintDiag::ConstTyBound(span, subject).into());
-        }
-
-        if !subject.has_invalid(db) && !subject.has_param(db) {
-            return Err(TraitConstraintDiag::ConcreteTypeBound(span, subject).into());
-        }
-
-        Ok(Some(subject))
     }
 
     /// True if the lowered subject type is a const type.
@@ -1125,33 +1086,6 @@ impl<'db> GenericParamView<'db> {
             GenericParam::Const(_) => self.span().into_const_param().name(),
         }
     }
-
-    pub fn diag_param_defined_in_parent(
-        self,
-        db: &'db dyn HirAnalysisDb,
-    ) -> Option<TyLowerDiag<'db>> {
-        let name = self.param.name().to_opt()?;
-        let parent_scope = self.owner.scope().parent_item(db)?.scope();
-        let path = PathId::from_ident(db, name);
-        let span = self.owner.params_span().param(self.idx);
-
-        match resolve_path(
-            db,
-            path,
-            parent_scope,
-            PredicateListId::empty_list(db),
-            false,
-        ) {
-            Ok(r @ PathRes::Ty(ty)) if ty.is_param(db) => {
-                Some(TyLowerDiag::GenericParamAlreadyDefinedInParent {
-                    span,
-                    conflict_with: r.name_span(db).unwrap(),
-                    name,
-                })
-            }
-            _ => None,
-        }
-    }
 }
 
 // Associated type resolution traversal (crate-internal)
@@ -1417,7 +1351,7 @@ impl<'db> AssocTypeBoundView<'db> {
     }
 
     /// Lower this bound against an explicit subject and external assumptions (e.g., resolver env).
-    pub fn as_trait_inst_with_subject_in_env(
+    pub(crate) fn as_trait_inst_with_subject_in_env(
         self,
         db: &'db dyn HirAnalysisDb,
         subject: TyId<'db>,
