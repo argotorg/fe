@@ -114,16 +114,14 @@ pub(in crate::core) fn constraints_for<'db>(
 // Top‑level module items ----------------------------------------------------
 
 impl<'db> TopLevelMod<'db> {
-    // Planned semantic surface:
-    // - Walk child items (semantic iteration helpers)
-    // - Aggregate diagnostics for contained items (pure glue)
-    // - Ingot/visibility helpers already live in `mod.rs`/`item.rs`
+    // Note: callers currently use `scope_graph`-based traversal for modules.
+    // If we find repetition in analysis or diagnostics, consider adding
+    // semantic child-iteration helpers here instead of reaching into HIR.
 }
 
 impl<'db> Mod<'db> {
-    // Planned semantic surface:
-    // - Semantic child iteration (filter by kind)
-    // - Optional module‑scoped diagnostics aggregation
+    // Note: semantic child iteration and module-scoped diagnostics can be
+    // added here if direct `scope_graph` traversal in analysis becomes noisy.
 }
 
 // Function items ------------------------------------------------------------
@@ -138,13 +136,6 @@ impl<'db> Func<'db> {
     pub fn assumptions_with_bounds(self, db: &'db dyn HirAnalysisDb) -> PredicateListId<'db> {
         self.assumptions(db).extend_all_bounds(db)
     }
-
-    // Planned semantic surface:
-    // - arg_tys(db) -> Vec<Binder<TyId>> (delegates to internal lowering)
-    // - receiver_ty(db) -> Option<Binder<TyId>>
-    // - generic_params_diags(db) -> Vec<TyDiagCollection>
-    // - where_clause_diags(db) -> Vec<TyDiagCollection>
-    // - analyze(db) -> Vec<TyDiagCollection> (aggregate only)
 
     /// Returns true if this function declares an explicit return type.
     pub fn has_explicit_return_ty(self, db: &'db dyn HirDb) -> bool {
@@ -291,12 +282,6 @@ impl<'db> Func<'db> {
 }
 
 impl<'db> Enum<'db> {
-    // Planned semantic surface:
-    // - variant arg types (semantic)
-    // - validate_variants(db) -> Vec<TyDiagCollection>
-    // - generic_params_diags(db), where_clause_diags(db)
-    // - analyze(db) -> Vec<TyDiagCollection>
-
     pub fn len_variants(&self, db: &'db dyn HirDb) -> usize {
         self.variants_list(db).data(db).len()
     }
@@ -317,12 +302,6 @@ impl<'db> Enum<'db> {
 }
 
 impl<'db> Struct<'db> {
-    // Planned semantic surface:
-    // - ty_fields(db) -> AdtField (semantic field tys)
-    // - validate_fields(db) -> Vec<TyDiagCollection>
-    // - generic_params_diags(db), where_clause_diags(db)
-    // - analyze(db) -> Vec<TyDiagCollection>
-    //
     /// Returns semantic types of all fields, bound to identity parameters.
     pub fn field_tys(self, db: &'db dyn HirAnalysisDb) -> Vec<Binder<TyId<'db>>> {
         use crate::analysis::ty::ty_def::{InvalidCause, TyId};
@@ -597,18 +576,11 @@ impl<'db> WherePredicateBoundView<'db> {
 }
 
 impl<'db> Contract<'db> {
-    // Planned semantic surface:
-    // - ty_fields(db) -> AdtField
-    // - validate_fields(db) -> Vec<TyDiagCollection>
-    // - analyze(db) -> Vec<TyDiagCollection>
 }
 
 // Type alias ---------------------------------------------------------------
 
 impl<'db> TypeAlias<'db> {
-    // Planned semantic surface:
-    // - generic_params_diags(db) -> Vec<TyDiagCollection>
-
     /// Semantic alias target type (convenience over lower_type_alias).
     pub fn ty(self, db: &'db dyn HirAnalysisDb) -> TyId<'db> {
         let ta = lower_type_alias(db, self);
@@ -619,11 +591,6 @@ impl<'db> TypeAlias<'db> {
 // Trait / Impl items --------------------------------------------------------
 
 impl<'db> Trait<'db> {
-    // Planned semantic surface:
-    // - assoc types default bounds (per‑bound views + diags)
-    // - generic_params_diags(db), where_clause_diags(db)
-    // - analyze(db) -> Vec<TyDiagCollection>
-
     /// Iterate associated types as contextual views.
     pub fn assoc_types(
         self,
@@ -854,11 +821,6 @@ pub enum SuperTraitLowerError {
 }
 
 impl<'db> Impl<'db> {
-    // Planned semantic surface:
-    // - analyze_preconditions(db) -> Vec<TyDiagCollection>
-    // - generic_params_diags(db), where_clause_diags(db)
-    // - analyze(db) -> Vec<TyDiagCollection>
-
     /// Semantic implementor type of this inherent impl.
     pub fn ty(self, db: &'db dyn HirAnalysisDb) -> TyId<'db> {
         let assumptions = constraints_for(db, self.into());
@@ -882,12 +844,9 @@ impl<'db> Impl<'db> {
 }
 
 impl<'db> ImplTrait<'db> {
-    // Planned semantic surface:
-    // - trait_inst(db) -> Result<TraitInstId, TraitRefLowerError>
-    // - associated type values/defaults (semantic map)
-    // - associated types diags (WF + lowering + satisfiability)
-    // - generic_params_diags(db), where_clause_diags(db)
-    // - analyze(db) -> Vec<TyDiagCollection>
+    // Note: higher-level helpers for trait instances and assoc-type maps
+    // can be added here if callers need a more semantic API than the
+    // existing `ty`, `assoc_types`, and diagnostic helpers provide.
 
     /// Semantic self type of this impl-trait block.
     pub fn ty(self, db: &'db dyn HirAnalysisDb) -> TyId<'db> {
