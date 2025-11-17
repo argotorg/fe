@@ -1828,7 +1828,9 @@ dependencies = [
 name = "fe-fmt"
 version = "0.1.0"
 dependencies = [
+ "dir-test",
  "fe-parser",
+ "fe-test-utils",
 ]
 
 [[package]]

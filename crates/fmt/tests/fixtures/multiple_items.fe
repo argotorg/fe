@@ -1,0 +1,10 @@
+pub struct  Point { x:i32,y : i32}
+
+fn   new_point(  x : i32 ,  y:i32)->Point{
+Point{ x:x ,y:y}
+}
+
+pub fn  move_x( mut p : Point , dx:i32)->Point{
+p.x = p.x+dx
+p
+}

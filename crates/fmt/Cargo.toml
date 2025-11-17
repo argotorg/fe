@@ -5,3 +5,7 @@ edition.workspace = true
 
 [dependencies]
 parser.workspace = true
+
+[dev-dependencies]
+dir-test.workspace = true
+test-utils.workspace = true
