@@ -1,18 +1,15 @@
-use crate::{
-    hir_def::{
-        Contract, Enum, GenericParamOwner, IdentId, ItemKind, Partial, Struct, TypeId as HirTyId,
-        VariantKind, scope_graph::ScopeId, semantic::VariantView,
-    },
-    span::DynLazySpan,
+use crate::hir_def::{
+    self, Contract, Enum, FieldDefListId, GenericParamOwner, IdentId, ItemKind, Partial, Struct,
+    TypeId as HirTyId, VariantDefListId, VariantKind, scope_graph::ScopeId,
 };
+use crate::span::DynLazySpan;
 use common::ingot::Ingot;
 use salsa::Update;
 
 use super::{
     binder::Binder,
-    trait_resolution::constraint::collect_adt_constraints,
     ty_def::{InvalidCause, TyId},
-    ty_lower::{GenericParamTypeSet, collect_generic_params, lower_hir_ty},
+    ty_lower::{GenericParamTypeSet, collect_generic_params},
 };
 use crate::analysis::HirAnalysisDb;
 
@@ -22,53 +19,36 @@ pub fn lower_adt<'db>(db: &'db dyn HirAnalysisDb, adt: AdtRef<'db>) -> AdtDef<'d
     let scope = adt.scope();
 
     let (params, variants) = match adt {
-        AdtRef::Contract(c) => (
-            GenericParamTypeSet::empty(db, scope),
-            vec![collect_field_types_semantic(db, scope, crate::hir_def::FieldParent::Contract(c))],
-        ),
-        AdtRef::Struct(s) => (
-            collect_generic_params(db, s.into()),
-            vec![collect_field_types_semantic(db, scope, crate::hir_def::FieldParent::Struct(s))],
-        ),
+        AdtRef::Contract(c) => {
+            let tys = c.field_tys(db);
+            (
+                GenericParamTypeSet::empty(db, scope),
+                vec![AdtField::new(tys)],
+            )
+        }
+        AdtRef::Struct(s) => {
+            let tys = s.field_tys(db);
+            (
+                collect_generic_params(db, s.into()),
+                vec![AdtField::new(tys)],
+            )
+        }
         AdtRef::Enum(e) => (
             collect_generic_params(db, e.into()),
-            collect_enum_variant_types(db, scope, e.variants(db)),
+            collect_enum_variant_types(db, e, scope),
         ),
     };
 
     AdtDef::new(db, adt, params, variants)
 }
 
-fn collect_field_types_semantic<'db>(
-    db: &'db dyn HirAnalysisDb,
-    scope: ScopeId<'db>,
-    parent: crate::hir_def::FieldParent<'db>,
-) -> AdtField<'db> {
-    // use crate::hir_def::semantic::FieldView;
-    let tys = parent
-        .fields(db)
-        .map(|v| v.hir_type_ref(db))
-        .collect();
-    AdtField::new(tys, scope)
-}
-
 fn collect_enum_variant_types<'db>(
     db: &'db dyn HirAnalysisDb,
+    e: Enum<'db>,
     scope: ScopeId<'db>,
-    variants: impl Iterator<Item = VariantView<'db>>,
 ) -> Vec<AdtField<'db>> {
-    variants
-        .map(|variant| {
-            let tys = match variant.kind(db) {
-                VariantKind::Tuple(tuple_id) => tuple_id.data(db).clone(),
-                VariantKind::Record(_) => variant
-                    .fields(db)
-                    .map(|v| v.hir_type_ref(db))
-                    .collect(),
-                VariantKind::Unit => vec![],
-            };
-            AdtField::new(tys, scope)
-        })
+    e.variants(db)
+        .map(|variant| AdtField::new(variant.field_tys(db)))
         .collect()
 }
 
@@ -157,61 +137,31 @@ impl<'db> AdtDef<'db> {
 }
 
 /// This struct represents a field of an ADT. If the ADT is an enum, this
-/// represents a variant.
+/// represents a variant. It stores semantic field types, bound to identity
+/// parameters.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, salsa::Update)]
 pub struct AdtField<'db> {
-    /// Fields of the variant.
-    /// If the adt is an struct or contract,
-    /// the length of the vector is always 1.
-    ///
-    /// To allow recursive types, the type of the field is represented as a HIR
-    /// type and.
-    tys: Vec<Partial<HirTyId<'db>>>,
-
-    scope: ScopeId<'db>,
+    tys: Vec<Binder<TyId<'db>>>,
 }
 impl<'db> AdtField<'db> {
-    pub fn ty(&self, db: &'db dyn HirAnalysisDb, i: usize) -> Binder<TyId<'db>> {
-        // Get ADT definition from scope to determine appropriate assumptions
-        let assumptions = match self.scope {
-            ScopeId::Item(ItemKind::Struct(struct_)) => {
-                let adt_def = lower_adt(db, struct_.into());
-                collect_adt_constraints(db, adt_def).instantiate_identity()
-            }
-            ScopeId::Item(ItemKind::Enum(enum_)) => {
-                let adt_def = lower_adt(db, enum_.into());
-                collect_adt_constraints(db, adt_def).instantiate_identity()
-            }
-            ScopeId::Item(ItemKind::Contract(contract)) => {
-                let adt_def = lower_adt(db, contract.into());
-                collect_adt_constraints(db, adt_def).instantiate_identity()
-            }
-            _ => unreachable!(),
-        };
-
-        let ty = if let Some(ty) = self.tys[i].to_opt() {
-            lower_hir_ty(db, ty, self.scope, assumptions)
-        } else {
-            TyId::invalid(db, InvalidCause::ParseError)
-        };
-
-        Binder::bind(ty)
+    pub fn ty(&self, _db: &'db dyn HirAnalysisDb, i: usize) -> Binder<TyId<'db>> {
+        self.tys[i].clone()
     }
 
-    /// Iterates all fields types of the `field`.
+    /// Iterates all field types of this variant.
     pub fn iter_types<'a>(
         &'a self,
-        db: &'db dyn HirAnalysisDb,
+        _db: &'db dyn HirAnalysisDb,
     ) -> impl Iterator<Item = Binder<TyId<'db>>> + 'a {
-        (0..self.num_types()).map(|i| self.ty(db, i))
+        self.tys.iter().cloned()
     }
 
     pub fn num_types(&self) -> usize {
         self.tys.len()
     }
 
-    pub(super) fn new(tys: Vec<Partial<HirTyId<'db>>>, scope: ScopeId<'db>) -> Self {
-        Self { tys, scope }
+    pub(super) fn new(tys: Vec<Binder<TyId<'db>>>) -> Self {
+        Self { tys }
     }
 }
 

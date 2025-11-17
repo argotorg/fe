@@ -120,6 +120,39 @@ impl<'db> HirIngot<'db> for Ingot<'db> {
     }
 }
 
+/// Crate-local helpers for analysis to obtain raw HIR type references for
+/// ADT fields/variants without exposing the underlying field lists.
+pub(crate) fn struct_field_type_refs<'db>(
+    db: &'db dyn HirDb,
+    s: Struct<'db>,
+) -> Vec<Partial<TypeId<'db>>> {
+    s.fields(db).data(db).iter().map(|f| f.type_ref).collect()
+}
+
+pub(crate) fn contract_field_type_refs<'db>(
+    db: &'db dyn HirDb,
+    c: Contract<'db>,
+) -> Vec<Partial<TypeId<'db>>> {
+    c.fields(db).data(db).iter().map(|f| f.type_ref).collect()
+}
+
+pub(crate) fn enum_variant_field_type_refs<'db>(
+    db: &'db dyn HirDb,
+    e: Enum<'db>,
+) -> Vec<Vec<Partial<TypeId<'db>>>> {
+    e.variants_list(db)
+        .data(db)
+        .iter()
+        .map(|variant| match variant.kind {
+            VariantKind::Tuple(tuple_id) => tuple_id.data(db).clone(),
+            VariantKind::Record(fields) => {
+                fields.data(db).iter().map(|f| f.type_ref).collect()
+            }
+            VariantKind::Unit => vec![],
+        })
+        .collect()
+}
+
 #[salsa::interned]
 #[derive(Debug)]
 pub struct IntegerId<'db> {

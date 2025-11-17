@@ -347,7 +347,7 @@ impl<'db> WhereClauseOwner<'db> {
         ItemKind::from(self).top_mod(db)
     }
 
-    pub(in crate::core) fn where_clause(self, db: &'db dyn HirDb) -> WhereClauseId<'db> {
+    pub(crate) fn where_clause(self, db: &'db dyn HirDb) -> WhereClauseId<'db> {
         match self {
             Self::Func(func) => func.where_clause(db),
             Self::Struct(struct_) => struct_.where_clause(db),

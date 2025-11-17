@@ -16,12 +16,12 @@
 //!   `item.rs` and replace call sites by adding only the minimal semantic
 //!   method(s) here.
 
+use crate::HirDb;
 use crate::analysis::HirAnalysisDb;
 use crate::analysis::name_resolution::{PathRes, resolve_path};
 use crate::analysis::ty::ty_def::Kind;
 use crate::hir_def::params::KindBound as HirKindBound;
 use crate::hir_def::scope_graph::ScopeId;
-use crate::HirDb;
 
 fn lower_hir_kind_local(k: &HirKindBound) -> Kind {
     use crate::hir_def::Partial;
@@ -42,7 +42,7 @@ fn lower_hir_kind_local(k: &HirKindBound) -> Kind {
 }
 use crate::analysis::ty::binder::Binder;
 use crate::analysis::ty::def_analysis;
-use crate::analysis::ty::diagnostics::{TyDiagCollection, TyLowerDiag, TraitConstraintDiag};
+use crate::analysis::ty::diagnostics::{TraitConstraintDiag, TyDiagCollection, TyLowerDiag};
 use crate::hir_def::*;
 // When adding real methods, prefer calling internal lowering/normalization here
 // rather than exposing raw syntax.
@@ -50,8 +50,10 @@ use crate::analysis::ty::adt_def::{AdtDef, AdtField, AdtRef, lower_adt};
 use crate::analysis::ty::canonical::Canonical;
 use crate::analysis::ty::fold::TyFoldable;
 use crate::analysis::ty::normalize::normalize_ty;
-use crate::analysis::ty::trait_def::{impls_for_ty_with_constraints, TraitDef, TraitInstId};
-use crate::analysis::ty::trait_lower::{lower_trait, lower_trait_ref, lower_trait_ref_with_owner_self, TraitRefLowerError};
+use crate::analysis::ty::trait_def::{TraitDef, TraitInstId, impls_for_ty_with_constraints};
+use crate::analysis::ty::trait_lower::{
+    TraitRefLowerError, lower_trait, lower_trait_ref, lower_trait_ref_with_owner_self,
+};
 use crate::analysis::ty::trait_resolution::constraint::{
     collect_adt_constraints, collect_constraints, collect_func_def_constraints,
 };
@@ -62,7 +64,7 @@ use crate::analysis::ty::visitor::{TyVisitor, walk_ty};
 use crate::analysis::ty::{
     trait_resolution::PredicateListId,
     ty_def::{InvalidCause, TyId},
-    ty_lower::{lower_hir_ty, lower_type_alias, lower_type_alias_from_hir, TyAlias},
+    ty_lower::{TyAlias, lower_hir_ty, lower_type_alias, lower_type_alias_from_hir},
 };
 use common::indexmap::IndexMap;
 use smallvec::{SmallVec, smallvec};
@@ -178,10 +180,7 @@ impl<'db> Func<'db> {
     }
 
     /// Semantic receiver type if this is a method (first argument), else None.
-    pub fn receiver_ty(
-        self,
-        db: &'db dyn HirAnalysisDb,
-    ) -> Option<Binder<TyId<'db>>> {
+    pub fn receiver_ty(self, db: &'db dyn HirAnalysisDb) -> Option<Binder<TyId<'db>>> {
         self.is_method(db)
             .then(|| self.arg_tys(db).into_iter().next())
             .flatten()
@@ -198,7 +197,6 @@ impl<'db> Func<'db> {
             _ => None,
         }
     }
-
 }
 
 // ADT items -----------------------------------------------------------------
@@ -308,10 +306,7 @@ impl<'db> Struct<'db> {
     // - analyze(db) -> Vec<TyDiagCollection>
     //
     /// Returns semantic types of all fields, bound to identity parameters.
-    pub fn field_tys(
-        self,
-        db: &'db dyn HirAnalysisDb,
-    ) -> Vec<Binder<TyId<'db>>> {
+    pub fn field_tys(self, db: &'db dyn HirAnalysisDb) -> Vec<Binder<TyId<'db>>> {
         FieldParent::Struct(self)
             .fields(db)
             .map(|v| Binder::bind(v.ty(db)))
@@ -326,10 +321,7 @@ impl<'db> Struct<'db> {
 
 impl<'db> Contract<'db> {
     /// Returns semantic types of all fields, bound to identity parameters.
-    pub fn field_tys(
-        self,
-        db: &'db dyn HirAnalysisDb,
-    ) -> Vec<Binder<TyId<'db>>> {
+    pub fn field_tys(self, db: &'db dyn HirAnalysisDb) -> Vec<Binder<TyId<'db>>> {
         FieldParent::Contract(self)
             .fields(db)
             .map(|v| Binder::bind(v.ty(db)))
@@ -396,15 +388,22 @@ impl<'db> WhereClauseView<'db> {
 }
 
 impl<'db> WherePredicateView<'db> {
+    /// Crate-local accessor for the underlying HIR predicate.
+    /// Keep call sites inside this module; external users should rely on the
+    /// higher-level semantic helpers on this view instead.
     fn hir_pred(self, db: &'db dyn HirDb) -> &'db WherePredicate<'db> {
         &self.clause.id.data(db)[self.idx]
     }
 
-    pub fn hir_ty(self, db: &'db dyn HirDb) -> Partial<TypeId<'db>> {
+    /// Raw HIR subject type; keep private to this module.
+    /// Semantic callers should use `subject_ty` / `subject_ty_checked`.
+    fn hir_ty(self, db: &'db dyn HirDb) -> Partial<TypeId<'db>> {
         self.hir_pred(db).ty
     }
 
-    pub fn bounds_raw(self, db: &'db dyn HirDb) -> &'db [TypeBound<'db>] {
+    /// Raw HIR bounds for this predicate; keep private to this module.
+    /// Public callers should use `bounds()` + `WherePredicateBoundView`.
+    fn bounds_raw(self, db: &'db dyn HirDb) -> &'db [TypeBound<'db>] {
         &self.hir_pred(db).bounds
     }
 
@@ -436,13 +435,14 @@ impl<'db> WherePredicateView<'db> {
     }
 
     /// Lowered kind bound sourced from the where-clause, if present.
+    ///
+    /// This inspects HIR kind-bounds on the predicate and maps them into the
+    /// semantic `Kind` domain using a local lowering helper.
     pub fn kind(self, db: &'db dyn HirAnalysisDb) -> Option<Kind> {
         use crate::hir_def::Partial;
         for b in &self.hir_pred(db).bounds {
-            if let TypeBound::Kind(Partial::Present(_k)) = b {
-                // Defer exposing kind lowering until we publicize lower_kind appropriately.
-                // For now, surface None to avoid changing behavior.
-                return None;
+            if let TypeBound::Kind(Partial::Present(kb)) = b {
+                return Some(lower_hir_kind_local(kb));
             }
         }
         None
@@ -555,7 +555,6 @@ impl<'db> WherePredicateView<'db> {
             .map(|t| !t.has_invalid(db) && !t.has_param(db))
             .unwrap_or(false)
     }
-
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -584,10 +583,7 @@ impl<'db> WherePredicateBoundView<'db> {
     }
 
     /// Lower this bound into a semantic trait instance using the predicate's subject type.
-    pub fn as_trait_inst(
-        self,
-        db: &'db dyn HirAnalysisDb,
-    ) -> Option<TraitInstId<'db>> {
+    pub fn as_trait_inst(self, db: &'db dyn HirAnalysisDb) -> Option<TraitInstId<'db>> {
         let subject = self.pred.subject_ty(db)?;
         let owner_item = ItemKind::from(self.pred.clause.owner);
         let assumptions = constraints_for(db, owner_item);
@@ -626,7 +622,6 @@ impl<'db> TypeAlias<'db> {
         let ta = lower_type_alias(db, self);
         *ta.alias_to.skip_binder()
     }
-
 }
 
 // Trait / Impl items --------------------------------------------------------
@@ -803,7 +798,9 @@ impl<'db> SuperTraitRefView<'db> {
     }
 
     pub fn subject_self(self, db: &'db dyn HirAnalysisDb) -> TyId<'db> {
-        collect_generic_params(db, self.owner.into()).trait_self(db).unwrap()
+        collect_generic_params(db, self.owner.into())
+            .trait_self(db)
+            .unwrap()
     }
 
     pub(in crate::core) fn assumptions(self, db: &'db dyn HirAnalysisDb) -> PredicateListId<'db> {
@@ -835,13 +832,7 @@ impl<'db> SuperTraitRefView<'db> {
     /// Returns a tuple of (expected_kind, actual_self) when the owner's `Self` kind
     /// does not match the super-trait's expected implementor kind. Returns None when
     /// kinds are compatible or `Self` is invalid.
-    pub fn kind_mismatch_for_self(
-        self,
-        db: &'db dyn HirAnalysisDb,
-    ) -> Option<(
-        Kind,
-        TyId<'db>,
-    )> {
+    pub fn kind_mismatch_for_self(self, db: &'db dyn HirAnalysisDb) -> Option<(Kind, TyId<'db>)> {
         use crate::analysis::ty::trait_lower::{TraitRefLowerError, lower_trait_ref};
         let subject = self.subject_self(db);
         let scope = self.owner.scope();
@@ -1358,7 +1349,9 @@ impl<'db> AssocTypeBoundView<'db> {
         subject: TyId<'db>,
     ) -> Option<TraitInstId<'db>> {
         let owner_trait = self.owner.owner;
-        let owner_self = collect_generic_params(db, owner_trait.into()).trait_self(db).unwrap();
+        let owner_self = collect_generic_params(db, owner_trait.into())
+            .trait_self(db)
+            .unwrap();
         let scope = owner_trait.scope();
         let assumptions = constraints_for(db, owner_trait.into());
         lower_trait_ref_with_owner_self(
@@ -1401,7 +1394,9 @@ impl<'db> AssocTypeBoundView<'db> {
         assumptions: PredicateListId<'db>,
     ) -> Option<TraitInstId<'db>> {
         let owner_trait = self.owner.owner;
-        let owner_self = collect_generic_params(db, owner_trait.into()).trait_self(db).unwrap();
+        let owner_self = collect_generic_params(db, owner_trait.into())
+            .trait_self(db)
+            .unwrap();
         let scope = owner_trait.scope();
         lower_trait_ref_with_owner_self(
             db,
@@ -1437,10 +1432,7 @@ impl<'db> VariantView<'db> {
     }
 
     /// Returns semantic types of this variant's fields (empty for unit variants).
-    pub fn field_tys(
-        self,
-        db: &'db dyn HirAnalysisDb,
-    ) -> Vec<Binder<TyId<'db>>> {
+    pub fn field_tys(self, db: &'db dyn HirAnalysisDb) -> Vec<Binder<TyId<'db>>> {
         use crate::analysis::ty::ty_def::{InvalidCause, TyId};
         use crate::analysis::ty::ty_lower::lower_hir_ty;
 
@@ -1470,10 +1462,7 @@ impl<'db> VariantView<'db> {
     }
 
     /// Semantic field-set for this variant.
-    pub fn as_adt_fields(
-        self,
-        db: &'db dyn HirAnalysisDb,
-    ) -> &'db AdtField<'db> {
+    pub fn as_adt_fields(self, db: &'db dyn HirAnalysisDb) -> &'db AdtField<'db> {
         let def = lower_adt(db, AdtRef::from(self.owner));
         &def.fields(db)[self.idx]
     }
@@ -1505,10 +1494,9 @@ impl<'db> FieldView<'db> {
         list.data(db)[self.idx].name.to_opt()
     }
 
-    /// Returns the HIR type reference (syntactic) for this field.
-    /// Prefer using `ty` when the semantic type is needed.
-    /// Temporary public exposure lives in the syntactic shim via `type_ref___tmp`.
-    pub fn hir_type_ref(self, db: &'db dyn HirDb) -> Partial<TypeId<'db>> {
+    /// Crate-local helper returning the HIR type reference (syntactic) for
+    /// this field. Prefer using `ty` when the semantic type is needed.
+    fn hir_type_ref(self, db: &'db dyn HirDb) -> Partial<TypeId<'db>> {
         let list = self.parent.fields_list(db);
         list.data(db)[self.idx].type_ref
     }
@@ -1520,10 +1508,7 @@ impl<'db> FieldView<'db> {
     }
 
     /// Returns the semantic ADT field-set and index for this field.
-    pub fn as_adt_field(
-        self,
-        db: &'db dyn HirAnalysisDb,
-    ) -> (&'db AdtField<'db>, usize) {
+    pub fn as_adt_field(self, db: &'db dyn HirAnalysisDb) -> (&'db AdtField<'db>, usize) {
         (self.parent.as_adt_fields(db), self.idx)
     }
 
@@ -1544,10 +1529,7 @@ impl<'db> FieldParent<'db> {
     }
 
     /// Semantic field-set for this parent.
-    pub fn as_adt_fields(
-        self,
-        db: &'db dyn HirAnalysisDb,
-    ) -> &'db AdtField<'db> {
+    pub fn as_adt_fields(self, db: &'db dyn HirAnalysisDb) -> &'db AdtField<'db> {
         match self {
             FieldParent::Struct(s) => &s.as_adt(db).fields(db)[0],
             FieldParent::Contract(c) => &c.as_adt(db).fields(db)[0],
@@ -1558,10 +1540,7 @@ impl<'db> FieldParent<'db> {
 
 impl<'db> EnumVariant<'db> {
     /// Semantic field-set for this variant.
-    pub fn as_adt_fields(
-        self,
-        db: &'db dyn HirAnalysisDb,
-    ) -> &'db AdtField<'db> {
+    pub fn as_adt_fields(self, db: &'db dyn HirAnalysisDb) -> &'db AdtField<'db> {
         let def = lower_adt(db, AdtRef::from(self.enum_));
         &def.fields(db)[self.idx as usize]
     }
@@ -1574,10 +1553,7 @@ pub struct AssocTypeOnSubjectView<'db> {
 
 impl<'db> TraitAssocTypeView<'db> {
     /// Attach a subject type to this associated type for semantic bound evaluation.
-    pub fn with_subject(
-        self,
-        subject: TyId<'db>,
-    ) -> AssocTypeOnSubjectView<'db> {
+    pub fn with_subject(self, subject: TyId<'db>) -> AssocTypeOnSubjectView<'db> {
         AssocTypeOnSubjectView {
             base: self,
             subject,

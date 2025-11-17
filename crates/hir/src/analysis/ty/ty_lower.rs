@@ -443,7 +443,7 @@ impl<'db> GenericParamCollector<'db> {
                 GenericParam::Type(param) => {
                     let name = param.name;
 
-                    let kind = self.extract_kind(param.bounds.as_slice());
+                    let kind = lower_kind_in_bounds(param.bounds.as_slice());
                     let default_hir_ty = param.default_ty;
                     self.params
                         .push(TyParamPrecursor::ty_param(name, idx, kind, default_hir_ty));
@@ -468,25 +468,29 @@ impl<'db> GenericParamCollector<'db> {
         let hir_db = self.db;
         let where_clause = where_clause_owner.clause(hir_db);
         for pred in where_clause.predicates(hir_db) {
-            let hir_ty = pred.hir_ty(hir_db);
-            match self.param_idx_from_ty(hir_ty.to_opt()) {
-                ParamLoc::Idx(idx) => {
-                    if self.params[idx].kind.is_none() && !self.params[idx].is_const_ty() {
-                        self.params[idx].kind = self.extract_kind(pred.bounds_raw(hir_db));
-                    }
-                }
-
-                ParamLoc::TraitSelf => {
-                    let kind = self.extract_kind(pred.bounds_raw(hir_db));
-                    let trait_self = self.trait_self_ty_mut().unwrap();
-
-                    if trait_self.kind.is_none() {
-                        trait_self.kind = kind;
-                    }
-                }
-
-                ParamLoc::NonParam => {}
+            let Some(kind) = pred.kind(self.db) else {
+                continue;
             };
+
+            // Kind bound on a concrete type parameter in this owner.
+            if let Some(orig_idx) = pred.param_original_index(hir_db) {
+                let idx = orig_idx + self.offset_to_original;
+                if let Some(param) = self.params.get_mut(idx) {
+                    if param.kind.is_none() && !param.is_const_ty() {
+                        param.kind = Some(kind.clone());
+                    }
+                }
+                continue;
+            }
+
+            // Kind bound on `Self` in a trait owner.
+            if pred.is_self_subject(hir_db) && matches!(self.owner, GenericParamOwner::Trait(_)) {
+                if let Some(trait_self) = self.trait_self_ty_mut() {
+                    if trait_self.kind.is_none() {
+                        trait_self.kind = Some(kind);
+                    }
+                }
+            }
         }
     }
 
@@ -502,62 +506,10 @@ impl<'db> GenericParamCollector<'db> {
         )
     }
 
-    fn extract_kind(&self, bounds: &[TypeBound]) -> Option<Kind> {
-        for bound in bounds {
-            if let TypeBound::Kind(Partial::Present(k)) = bound {
-                return Some(lower_kind(k));
-            }
-        }
-
-        None
-    }
-
-    fn param_idx_from_ty(&self, ty: Option<HirTyId>) -> ParamLoc {
-        let Some(ty) = ty else {
-            return ParamLoc::NonParam;
-        };
-
-        let path = match ty.data(self.db) {
-            HirTyKind::Path(Partial::Present(path)) => {
-                if path.is_bare_ident(self.db)
-                    && path.is_self_ty(self.db)
-                    && matches!(self.owner.into(), ItemKind::Trait(_))
-                {
-                    return ParamLoc::TraitSelf;
-                } else if path.is_bare_ident(self.db) {
-                    *path
-                } else {
-                    return ParamLoc::NonParam;
-                }
-            }
-
-            _ => return ParamLoc::NonParam,
-        };
-
-        let bucket = resolve_ident_to_bucket(self.db, path, self.owner.scope());
-        match bucket.pick(NameDomain::TYPE) {
-            Ok(res) => match res.kind {
-                NameResKind::Scope(ScopeId::GenericParam(scope, idx))
-                    if scope == self.owner.scope().item() =>
-                {
-                    ParamLoc::Idx(idx as usize + self.offset_to_original)
-                }
-                _ => ParamLoc::NonParam,
-            },
-            _ => ParamLoc::NonParam,
-        }
-    }
-
     fn trait_self_ty_mut(&mut self) -> Option<&mut TyParamPrecursor<'db>> {
         let cand = self.params.get_mut(0)?;
         cand.is_trait_self().then_some(cand)
     }
-}
-
-enum ParamLoc {
-    TraitSelf,
-    Idx(usize),
-    NonParam,
 }
 
 #[doc(hidden)]
@@ -670,4 +622,15 @@ pub(super) fn lower_kind(kind: &HirKindBound) -> Kind {
             (Partial::Absent, Partial::Absent) => Kind::Abs(Box::new((Kind::Any, Kind::Any))),
         },
     }
+}
+
+/// Helper for extracting a lowered kind from a slice of HIR `TypeBound`s.
+/// Returns the first kind bound if present.
+pub(super) fn lower_kind_in_bounds<'db>(bounds: &[TypeBound<'db>]) -> Option<Kind> {
+    for bound in bounds {
+        if let TypeBound::Kind(Partial::Present(k)) = bound {
+            return Some(lower_kind(k));
+        }
+    }
+    None
 }
