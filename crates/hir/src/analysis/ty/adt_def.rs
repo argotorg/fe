@@ -47,7 +47,7 @@ fn collect_field_types_semantic<'db>(
     // use crate::hir_def::semantic::FieldView;
     let tys = parent
         .fields(db)
-        .map(|v| v.type_ref___tmp(db))
+        .map(|v| v.hir_type_ref(db))
         .collect();
     AdtField::new(tys, scope)
 }
@@ -63,7 +63,7 @@ fn collect_enum_variant_types<'db>(
                 VariantKind::Tuple(tuple_id) => tuple_id.data(db).clone(),
                 VariantKind::Record(_) => variant
                     .fields(db)
-                    .map(|v| v.type_ref___tmp(db))
+                    .map(|v| v.hir_type_ref(db))
                     .collect(),
                 VariantKind::Unit => vec![],
             };

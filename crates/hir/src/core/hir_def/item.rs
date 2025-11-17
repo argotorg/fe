@@ -822,7 +822,7 @@ pub struct TypeAlias<'db> {
     pub(in crate::core) attributes: AttrListId<'db>,
     pub vis: Visibility,
     pub(in crate::core) generic_params: GenericParamListId<'db>,
-    pub(super) type_ref: Partial<TypeId<'db>>,
+    pub(in crate::core) type_ref: Partial<TypeId<'db>>,
     pub top_mod: TopLevelMod<'db>,
 
     #[return_ref]
@@ -1036,7 +1036,7 @@ pub struct Const<'db> {
 
     pub name: Partial<IdentId<'db>>,
     pub attributes: AttrListId<'db>,
-    pub(super) type_ref: Partial<TypeId<'db>>,
+    pub(in crate::core) type_ref: Partial<TypeId<'db>>,
     pub body: Partial<Body<'db>>,
     pub vis: Visibility,
     pub top_mod: TopLevelMod<'db>,
@@ -1259,7 +1259,7 @@ impl<'db> FieldParent<'db> {
 pub struct FieldDef<'db> {
     pub attributes: AttrListId<'db>,
     pub name: Partial<IdentId<'db>>,
-    pub(super) type_ref: Partial<TypeId<'db>>,
+    pub(in crate::core) type_ref: Partial<TypeId<'db>>,
     pub vis: Visibility,
 }
 

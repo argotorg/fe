@@ -4,7 +4,7 @@ pub use core::lower::parse::ParserError;
 pub mod analysis;
 pub mod core;
 // Re-export core modules at crate root for compatibility
-pub use core::{hir_def, lower, span, visitor};
+pub use core::{hir_def, lower, semantic, span, visitor};
 
 pub use common::{file::File, file::Workspace, ingot::Ingot};
 #[salsa::db]

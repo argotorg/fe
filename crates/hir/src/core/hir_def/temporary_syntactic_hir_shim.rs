@@ -11,7 +11,6 @@
 
 use crate::HirDb;
 use crate::hir_def::item::{AssocTyDef, Const, FieldDef, Func, Impl, ImplTrait, TypeAlias};
-use crate::hir_def::semantic::FieldView;
 use crate::hir_def::{Partial, TypeId};
 
 impl<'db> Func<'db> {
@@ -50,14 +49,9 @@ impl<'db> FieldDef<'db> {
     }
 }
 
-impl<'db> FieldView<'db> {
-    pub fn type_ref___tmp(self, db: &'db dyn HirDb) -> Partial<TypeId<'db>> {
-        self.hir_type_ref(db)
-    }
-}
-
 impl<'db> AssocTyDef<'db> {
     pub fn type_ref___tmp(&self) -> Partial<TypeId<'db>> {
         self.type_ref
     }
 }
+
