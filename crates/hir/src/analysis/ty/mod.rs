@@ -268,7 +268,6 @@ impl ModuleAnalysisPass for TypeAliasAnalysisPass {
                 continue;
             }
 
-            let assumptions = collect_constraints(db, alias.into()).instantiate_identity();
             let ta = lower_type_alias(db, alias);
             let ty = ta.alias_to.skip_binder();
             if let TyData::Invalid(InvalidCause::AliasCycle(cycle)) = ty.data(db) {

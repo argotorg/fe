@@ -149,9 +149,17 @@ pub(crate) fn lower_type_alias<'db>(
     db: &'db dyn HirAnalysisDb,
     alias: HirTypeAlias<'db>,
 ) -> TyAlias<'db> {
+    crate::core::semantic::lower_type_alias_body(db, alias)
+}
+
+pub(crate) fn lower_type_alias_from_hir<'db>(
+    db: &'db dyn HirAnalysisDb,
+    alias: HirTypeAlias<'db>,
+    alias_type_ref: Option<HirTyId<'db>>,
+) -> TyAlias<'db> {
     let param_set = collect_generic_params(db, alias.into());
 
-    let Some(hir_ty) = alias.type_ref___tmp(db).to_opt() else {
+    let Some(hir_ty) = alias_type_ref else {
         return TyAlias {
             alias,
             alias_to: Binder::bind(TyId::invalid(db, InvalidCause::ParseError)),

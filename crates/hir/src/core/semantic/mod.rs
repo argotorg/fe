@@ -42,25 +42,27 @@ fn lower_hir_kind_local(k: &HirKindBound) -> Kind {
 }
 use crate::analysis::ty::binder::Binder;
 use crate::analysis::ty::def_analysis;
-use crate::analysis::ty::diagnostics::{TyDiagCollection, TyLowerDiag};
+use crate::analysis::ty::diagnostics::{TyDiagCollection, TyLowerDiag, TraitConstraintDiag};
 use crate::hir_def::*;
 // When adding real methods, prefer calling internal lowering/normalization here
 // rather than exposing raw syntax.
-use crate::analysis::ty::adt_def::AdtDef;
+use crate::analysis::ty::adt_def::{AdtDef, AdtField, AdtRef, lower_adt};
 use crate::analysis::ty::canonical::Canonical;
 use crate::analysis::ty::fold::TyFoldable;
 use crate::analysis::ty::normalize::normalize_ty;
-use crate::analysis::ty::trait_def::{impls_for_ty_with_constraints, TraitInstId};
+use crate::analysis::ty::trait_def::{impls_for_ty_with_constraints, TraitDef, TraitInstId};
+use crate::analysis::ty::trait_lower::{lower_trait, lower_trait_ref, lower_trait_ref_with_owner_self, TraitRefLowerError};
 use crate::analysis::ty::trait_resolution::constraint::{
     collect_adt_constraints, collect_constraints, collect_func_def_constraints,
 };
 use crate::analysis::ty::ty_def::TyData;
+use crate::analysis::ty::ty_lower::collect_generic_params;
 use crate::analysis::ty::unify::UnificationTable;
 use crate::analysis::ty::visitor::{TyVisitor, walk_ty};
 use crate::analysis::ty::{
     trait_resolution::PredicateListId,
     ty_def::{InvalidCause, TyId},
-    ty_lower::{lower_hir_ty, lower_type_alias},
+    ty_lower::{lower_hir_ty, lower_type_alias, lower_type_alias_from_hir, TyAlias},
 };
 use common::indexmap::IndexMap;
 use smallvec::{SmallVec, smallvec};
@@ -72,6 +74,16 @@ pub mod diagnostics;
 
 // Note: generic trait-ref diagnostics are handled via context-rooted views (e.g.,
 // WherePredicateBoundView and SuperTraitRefView). Avoid subject-taking public APIs.
+
+/// Core-exposed entry point for alias lowering. Reads the HIR type_ref (core-visible)
+/// and delegates to the analysis helper to keep visibility tight without shims.
+pub(crate) fn lower_type_alias_body<'db>(
+    db: &'db dyn HirAnalysisDb,
+    alias: TypeAlias<'db>,
+) -> TyAlias<'db> {
+    let hir_ty_opt = alias.type_ref(db).to_opt();
+    lower_type_alias_from_hir(db, alias, hir_ty_opt)
+}
 
 /// Consolidated assumptions for any item kind.
 pub(in crate::core) fn constraints_for<'db>(
@@ -180,9 +192,7 @@ impl<'db> Func<'db> {
     /// - In impl/impl_trait: the implementor type
     pub fn expected_self_ty(self, db: &'db dyn HirAnalysisDb) -> Option<TyId<'db>> {
         match self.scope().parent(db)? {
-            ScopeId::Item(ItemKind::Trait(tr)) => {
-                Some(crate::analysis::ty::trait_lower::lower_trait(db, tr).self_param(db))
-            }
+            ScopeId::Item(ItemKind::Trait(tr)) => Some(lower_trait(db, tr).self_param(db)),
             ScopeId::Item(ItemKind::ImplTrait(it)) => Some(it.ty(db)),
             ScopeId::Item(ItemKind::Impl(im)) => Some(im.ty(db)),
             _ => None,
@@ -286,7 +296,7 @@ impl<'db> Enum<'db> {
 
     /// Semantic ADT definition for this enum (cached via tracked query).
     pub fn as_adt(self, db: &'db dyn HirAnalysisDb) -> AdtDef<'db> {
-        crate::analysis::ty::adt_def::lower_adt(db, crate::analysis::ty::adt_def::AdtRef::from(self))
+        lower_adt(db, AdtRef::from(self))
     }
 }
 
@@ -310,7 +320,7 @@ impl<'db> Struct<'db> {
 
     /// Semantic ADT definition for this struct (cached via tracked query).
     pub fn as_adt(self, db: &'db dyn HirAnalysisDb) -> AdtDef<'db> {
-        crate::analysis::ty::adt_def::lower_adt(db, crate::analysis::ty::adt_def::AdtRef::from(self))
+        lower_adt(db, AdtRef::from(self))
     }
 }
 
@@ -328,7 +338,7 @@ impl<'db> Contract<'db> {
 
     /// Semantic ADT definition for this contract (cached via tracked query).
     pub fn as_adt(self, db: &'db dyn HirAnalysisDb) -> AdtDef<'db> {
-        crate::analysis::ty::adt_def::lower_adt(db, crate::analysis::ty::adt_def::AdtRef::from(self))
+        lower_adt(db, AdtRef::from(self))
     }
 }
 
@@ -496,8 +506,7 @@ impl<'db> WherePredicateView<'db> {
         let assumptions = constraints_for(db, owner_item);
         let subject = lower_hir_ty(db, hir_ty, owner_item.scope(), assumptions);
         if let Some(cause) = subject.invalid_cause(db) {
-            if let crate::analysis::ty::ty_def::InvalidCause::PathResolutionFailed { path } = cause
-            {
+            if let InvalidCause::PathResolutionFailed { path } = cause {
                 // Re-run name resolution on the failed path and surface a precise diagnostic
                 // at the type path span within the where-predicate.
                 let ty_span = self.span().ty().into_path_type().path();
@@ -583,7 +592,7 @@ impl<'db> WherePredicateBoundView<'db> {
         let owner_item = ItemKind::from(self.pred.clause.owner);
         let assumptions = constraints_for(db, owner_item);
         let scope = owner_item.scope();
-        crate::analysis::ty::trait_lower::lower_trait_ref(db, subject, self.trait_ref(db), scope, assumptions).ok()
+        lower_trait_ref(db, subject, self.trait_ref(db), scope, assumptions).ok()
     }
 
     /// Lower this bound against an explicit subject type (useful for `Self` in trait contexts).
@@ -595,7 +604,7 @@ impl<'db> WherePredicateBoundView<'db> {
         let owner_item = ItemKind::from(self.pred.clause.owner);
         let assumptions = constraints_for(db, owner_item);
         let scope = owner_item.scope();
-        crate::analysis::ty::trait_lower::lower_trait_ref(db, subject, self.trait_ref(db), scope, assumptions).ok()
+        lower_trait_ref(db, subject, self.trait_ref(db), scope, assumptions).ok()
     }
 }
 
@@ -642,13 +651,8 @@ impl<'db> Trait<'db> {
     pub fn super_trait_insts(
         self,
         db: &'db dyn HirAnalysisDb,
-    ) -> impl Iterator<
-        Item = Binder<crate::analysis::ty::trait_def::TraitInstId<'db>>,
-    > + 'db {
-        crate::analysis::ty::trait_def::TraitDef::new(db, self)
-            .super_traits(db)
-            .iter()
-            .copied()
+    ) -> impl Iterator<Item = Binder<TraitInstId<'db>>> + 'db {
+        TraitDef::new(db, self).super_traits(db).iter().copied()
     }
 
     /// Iterate declared super-trait references as contextual views.
@@ -747,11 +751,8 @@ impl<'db> AdtDef<'db> {
 fn collect_direct_adts<'db>(
     db: &'db dyn HirAnalysisDb,
     ty: TyId<'db>,
-) -> rustc_hash::FxHashSet<crate::analysis::ty::adt_def::AdtRef<'db>> {
-    use crate::analysis::ty::adt_def::AdtRef;
-    use crate::analysis::ty::ty_def::PrimTy;
-    use crate::analysis::ty::ty_def::TyBase;
-    use crate::analysis::ty::ty_def::TyData;
+) -> rustc_hash::FxHashSet<AdtRef<'db>> {
+    use crate::analysis::ty::ty_def::{PrimTy, TyBase};
     use crate::analysis::ty::visitor::TyVisitable;
     use rustc_hash::FxHashSet;
 
@@ -802,9 +803,7 @@ impl<'db> SuperTraitRefView<'db> {
     }
 
     pub fn subject_self(self, db: &'db dyn HirAnalysisDb) -> TyId<'db> {
-        crate::analysis::ty::ty_lower::collect_generic_params(db, self.owner.into())
-            .trait_self(db)
-            .unwrap()
+        collect_generic_params(db, self.owner.into()).trait_self(db).unwrap()
     }
 
     pub(in crate::core) fn assumptions(self, db: &'db dyn HirAnalysisDb) -> PredicateListId<'db> {
@@ -1356,14 +1355,10 @@ impl<'db> AssocTypeBoundView<'db> {
     pub fn as_trait_inst_with_subject(
         self,
         db: &'db dyn HirAnalysisDb,
-        subject: crate::analysis::ty::ty_def::TyId<'db>,
-    ) -> Option<crate::analysis::ty::trait_def::TraitInstId<'db>> {
-        use crate::analysis::ty::trait_lower::lower_trait_ref_with_owner_self;
+        subject: TyId<'db>,
+    ) -> Option<TraitInstId<'db>> {
         let owner_trait = self.owner.owner;
-        let owner_self =
-            crate::analysis::ty::ty_lower::collect_generic_params(db, owner_trait.into())
-                .trait_self(db)
-                .unwrap();
+        let owner_self = collect_generic_params(db, owner_trait.into()).trait_self(db).unwrap();
         let scope = owner_trait.scope();
         let assumptions = constraints_for(db, owner_trait.into());
         lower_trait_ref_with_owner_self(
@@ -1381,10 +1376,9 @@ impl<'db> AssocTypeBoundView<'db> {
     pub fn as_trait_inst_with_subject_and_owner(
         self,
         db: &'db dyn HirAnalysisDb,
-        subject: crate::analysis::ty::ty_def::TyId<'db>,
-        owner_self: crate::analysis::ty::ty_def::TyId<'db>,
-    ) -> Option<crate::analysis::ty::trait_def::TraitInstId<'db>> {
-        use crate::analysis::ty::trait_lower::lower_trait_ref_with_owner_self;
+        subject: TyId<'db>,
+        owner_self: TyId<'db>,
+    ) -> Option<TraitInstId<'db>> {
         let owner_trait = self.owner.owner;
         let scope = owner_trait.scope();
         let assumptions = constraints_for(db, owner_trait.into());
@@ -1403,15 +1397,11 @@ impl<'db> AssocTypeBoundView<'db> {
     pub fn as_trait_inst_with_subject_in_env(
         self,
         db: &'db dyn HirAnalysisDb,
-        subject: crate::analysis::ty::ty_def::TyId<'db>,
-        assumptions: crate::analysis::ty::trait_resolution::PredicateListId<'db>,
-    ) -> Option<crate::analysis::ty::trait_def::TraitInstId<'db>> {
-        use crate::analysis::ty::trait_lower::lower_trait_ref_with_owner_self;
+        subject: TyId<'db>,
+        assumptions: PredicateListId<'db>,
+    ) -> Option<TraitInstId<'db>> {
         let owner_trait = self.owner.owner;
-        let owner_self =
-            crate::analysis::ty::ty_lower::collect_generic_params(db, owner_trait.into())
-                .trait_self(db)
-                .unwrap();
+        let owner_self = collect_generic_params(db, owner_trait.into()).trait_self(db).unwrap();
         let scope = owner_trait.scope();
         lower_trait_ref_with_owner_self(
             db,
@@ -1483,11 +1473,8 @@ impl<'db> VariantView<'db> {
     pub fn as_adt_fields(
         self,
         db: &'db dyn HirAnalysisDb,
-    ) -> &'db crate::analysis::ty::adt_def::AdtField<'db> {
-        let def = crate::analysis::ty::adt_def::lower_adt(
-            db,
-            crate::analysis::ty::adt_def::AdtRef::from(self.owner),
-        );
+    ) -> &'db AdtField<'db> {
+        let def = lower_adt(db, AdtRef::from(self.owner));
         &def.fields(db)[self.idx]
     }
 
@@ -1536,7 +1523,7 @@ impl<'db> FieldView<'db> {
     pub fn as_adt_field(
         self,
         db: &'db dyn HirAnalysisDb,
-    ) -> (&'db crate::analysis::ty::adt_def::AdtField<'db>, usize) {
+    ) -> (&'db AdtField<'db>, usize) {
         (self.parent.as_adt_fields(db), self.idx)
     }
 
@@ -1560,7 +1547,7 @@ impl<'db> FieldParent<'db> {
     pub fn as_adt_fields(
         self,
         db: &'db dyn HirAnalysisDb,
-    ) -> &'db crate::analysis::ty::adt_def::AdtField<'db> {
+    ) -> &'db AdtField<'db> {
         match self {
             FieldParent::Struct(s) => &s.as_adt(db).fields(db)[0],
             FieldParent::Contract(c) => &c.as_adt(db).fields(db)[0],
@@ -1574,11 +1561,8 @@ impl<'db> EnumVariant<'db> {
     pub fn as_adt_fields(
         self,
         db: &'db dyn HirAnalysisDb,
-    ) -> &'db crate::analysis::ty::adt_def::AdtField<'db> {
-        let def = crate::analysis::ty::adt_def::lower_adt(
-            db,
-            crate::analysis::ty::adt_def::AdtRef::from(self.enum_),
-        );
+    ) -> &'db AdtField<'db> {
+        let def = lower_adt(db, AdtRef::from(self.enum_));
         &def.fields(db)[self.idx as usize]
     }
 }
