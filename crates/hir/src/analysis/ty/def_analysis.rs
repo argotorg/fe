@@ -9,17 +9,14 @@ use smallvec1::SmallVec;
 use crate::analysis::HirAnalysisDb;
 use crate::analysis::name_resolution::{ExpectedPathKind, diagnostics::PathResDiag};
 use crate::analysis::ty::binder::Binder;
-use crate::hir_def::{
-    Func, GenericParamOwner, IdentId, Impl as HirImpl, ImplTrait, Trait, TraitRefId,
-};
+use crate::hir_def::{Func, GenericParamOwner, IdentId, Impl as HirImpl, ImplTrait, Trait};
 
 use super::{
     adt_def::{AdtDef, AdtRef},
-    diagnostics::{ImplDiag, TraitConstraintDiag, TraitLowerDiag, TyDiagCollection, TyLowerDiag},
+    diagnostics::{ImplDiag, TraitConstraintDiag, TraitLowerDiag, TyDiagCollection},
     method_cmp::compare_impl_method,
-    trait_def::{Implementor, TraitDef, does_impl_trait_conflict, ingot_trait_env},
-    trait_lower::{TraitRefLowerError, lower_impl_trait, lower_trait_ref},
-    trait_resolution::{PredicateListId, constraint::collect_constraints},
+    trait_def::{Implementor, does_impl_trait_conflict, ingot_trait_env},
+    trait_lower::{TraitRefLowerError, lower_impl_trait},
     ty_def::{InvalidCause, TyData},
 };
 
@@ -130,7 +127,6 @@ fn analyze_impl_trait_specific_error<'db>(
     }
 
     // 1) Implementor type WF diagnostics at type span.
-    let assumptions = collect_constraints(db, impl_trait.into()).instantiate_identity();
     let ty = impl_trait.ty(db);
     if let Some(diag) = ty.emit_diag(db, impl_trait.span().ty().into()) {
         diags.push(diag);
@@ -139,9 +135,11 @@ fn analyze_impl_trait_specific_error<'db>(
         return Err(diags);
     }
 
-    // Lower the trait ref; map domain/path errors precisely.
-    let trait_inst = match lower_trait_ref(db, ty, trait_ref, impl_trait.scope(), assumptions) {
-        Ok(trait_inst) => trait_inst,
+    // Lower the trait ref via the shared semantic helper; map domain/path
+    // errors precisely while keeping ingot checks consistent with the
+    // lowering used in other parts of the engine.
+    match impl_trait.trait_inst_result(db) {
+        Ok(_) => {}
         Err(TraitRefLowerError::PathResError(err)) => {
             let trait_path_span = impl_trait.span().trait_ref().path();
             if let Some(diag) = err.into_diag(
@@ -165,15 +163,18 @@ fn analyze_impl_trait_specific_error<'db>(
             );
             return Err(diags);
         }
-        Err(TraitRefLowerError::Ignored) => return Err(diags),
+        Err(TraitRefLowerError::Ignored) => {
+            // At this point, parser errors and missing trait refs have
+            // already returned early, so the only remaining `Ignored`
+            // comes from the ingot check used during lowering.
+            diags.push(TraitLowerDiag::ExternalTraitForExternalType(impl_trait).into());
+            return Err(diags);
+        }
     };
 
-    // Ingot checks: impl must reside with type or trait.
+    // Ingot checks are enforced inside `trait_inst_result`; `trait_inst` is
+    // only available when the impl resides with the type or trait.
     let impl_trait_ingot = impl_trait.top_mod(db).ingot(db);
-    if Some(impl_trait_ingot) != ty.ingot(db) && impl_trait_ingot != trait_inst.def(db).ingot(db) {
-        diags.push(TraitLowerDiag::ExternalTraitForExternalType(impl_trait).into());
-        return Err(diags);
-    }
 
     // Conflict check against existing implementors.
     let trait_env = ingot_trait_env(db, impl_trait_ingot);

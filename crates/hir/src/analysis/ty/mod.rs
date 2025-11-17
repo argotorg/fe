@@ -9,7 +9,7 @@ use rustc_hash::{FxHashMap, FxHashSet};
 use smallvec1::SmallVec;
 use trait_def::TraitDef;
 use trait_lower::lower_trait;
-use trait_resolution::constraint::{collect_constraints, super_trait_cycle};
+use trait_resolution::constraint::super_trait_cycle;
 use ty_def::{InvalidCause, TyData};
 use ty_lower::lower_type_alias;
 

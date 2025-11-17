@@ -16,13 +16,12 @@ use super::{
     trait_def::{Implementor, TraitDef, TraitInstId, does_impl_trait_conflict},
     trait_resolution::PredicateListId,
     ty_def::{InvalidCause, TyId},
-    ty_lower::{collect_generic_params, lower_hir_ty},
+    ty_lower::lower_hir_ty,
 };
 use crate::analysis::{
     HirAnalysisDb,
     name_resolution::{PathRes, PathResError, resolve_path},
     ty::{
-        trait_resolution::constraint::collect_constraints,
         ty_def::{Kind, TyData},
         ty_lower::lower_opt_hir_ty,
     },
@@ -63,38 +62,19 @@ pub(crate) fn lower_impl_trait<'db>(
     db: &'db dyn HirAnalysisDb,
     impl_trait: ImplTrait<'db>,
 ) -> Option<Binder<Implementor<'db>>> {
-    // Assumptions derived from the impl-trait item, used for trait-ref lowering below.
-    let assumptions = collect_constraints(db, impl_trait.into()).instantiate_identity();
-
-    // Semantic implementor type of this impl-trait block.
-    let ty = impl_trait.ty(db);
-    if ty.has_invalid(db) {
-        return None;
-    }
-
-    let trait_ = lower_trait_ref(
-        db,
-        ty,
-        impl_trait.trait_ref(db).to_opt()?,
-        impl_trait.scope(),
-        assumptions,
-    )
-    .ok()?;
-
-    let impl_trait_ingot = impl_trait.top_mod(db).ingot(db);
-
-    if Some(impl_trait_ingot) != ty.ingot(db) && impl_trait_ingot != trait_.def(db).ingot(db) {
-        return None;
-    }
+    // Delegate trait-ref lowering and ingot checks to the semantic helper on
+    // `ImplTrait`. If lowering fails or the ingot rule is violated, this
+    // returns `None`.
+    let trait_inst = impl_trait.trait_inst_result(db).ok()?;
 
     // Semantic generic parameters for this impl-trait block.
     let params = impl_trait.impl_params(db);
 
     // Semantic associated-type bindings for this impl-trait block, including
     // merged trait defaults.
-    let types = impl_trait.assoc_type_bindings_for_trait_inst(db, trait_);
+    let types = impl_trait.assoc_type_bindings_for_trait_inst(db, trait_inst);
 
-    let implementor = Implementor::new(db, trait_, params, types, impl_trait);
+    let implementor = Implementor::new(db, trait_inst, params, types, impl_trait);
 
     Some(Binder::bind(implementor))
 }

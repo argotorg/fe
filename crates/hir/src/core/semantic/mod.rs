@@ -22,7 +22,6 @@
 
 use crate::HirDb;
 use crate::analysis::HirAnalysisDb;
-use crate::analysis::name_resolution::{PathRes, resolve_path};
 use crate::analysis::ty::ty_def::Kind;
 use crate::hir_def::params::KindBound as HirKindBound;
 use crate::hir_def::scope_graph::ScopeId;
@@ -46,7 +45,7 @@ fn lower_hir_kind_local(k: &HirKindBound) -> Kind {
 }
 use crate::analysis::ty::binder::Binder;
 use crate::analysis::ty::def_analysis;
-use crate::analysis::ty::diagnostics::{TraitConstraintDiag, TyDiagCollection, TyLowerDiag};
+use crate::analysis::ty::diagnostics::TyDiagCollection;
 use crate::hir_def::*;
 // When adding real methods, prefer calling internal lowering/normalization here
 // rather than exposing raw syntax.
@@ -56,8 +55,7 @@ use crate::analysis::ty::fold::TyFoldable;
 use crate::analysis::ty::normalize::normalize_ty;
 use crate::analysis::ty::trait_def::{TraitDef, TraitInstId, impls_for_ty_with_constraints};
 use crate::analysis::ty::trait_lower::{
-    TraitRefLowerError, lower_impl_trait, lower_trait, lower_trait_ref,
-    lower_trait_ref_with_owner_self,
+    TraitRefLowerError, lower_trait, lower_trait_ref, lower_trait_ref_with_owner_self,
 };
 use crate::analysis::ty::trait_resolution::constraint::{
     collect_adt_constraints, collect_constraints, collect_func_def_constraints,
@@ -853,6 +851,69 @@ impl<'db> ImplTrait<'db> {
             .unwrap_or_else(|| TyId::invalid(db, InvalidCause::ParseError))
     }
 
+    /// Internal helper that lowers the trait reference of this `impl trait`
+    /// block to a semantic trait instance, preserving detailed error
+    /// information.
+    ///
+    /// This is the canonical entry point for trait‑ref lowering from
+    /// `impl trait` items. All callers that care about diagnostics should
+    /// prefer this over re‑invoking `lower_trait_ref` directly.
+    pub(crate) fn trait_inst_result(
+        self,
+        db: &'db dyn HirAnalysisDb,
+    ) -> Result<TraitInstId<'db>, TraitRefLowerError<'db>> {
+        let ty = self.ty(db);
+
+        // Preserve the existing "parse error / invalid type -> early return
+        // with no diags from this helper" behavior.
+        if matches!(ty.data(db), TyData::Invalid(InvalidCause::ParseError)) {
+            return Err(TraitRefLowerError::Ignored);
+        }
+        if ty.has_invalid(db) {
+            return Err(TraitRefLowerError::Ignored);
+        }
+
+        // No trait-ref in source: nothing to report here.
+        let Some(trait_ref) = self.trait_ref(db).to_opt() else {
+            return Err(TraitRefLowerError::Ignored);
+        };
+
+        // Assumptions derived from this impl-trait item, shared with other
+        // semantic helpers.
+        let assumptions = constraints_for(db, self.into());
+
+        let trait_inst = lower_trait_ref(db, ty, trait_ref, self.scope(), assumptions)?;
+
+        // Preserve ingot check used when lowering impl traits: an impl is
+        // only valid if it lives in the same ingot as either its
+        // implementor type or the trait itself.
+        let impl_trait_ingot = self.top_mod(db).ingot(db);
+        if Some(impl_trait_ingot) != ty.ingot(db) && impl_trait_ingot != trait_inst.def(db).ingot(db)
+        {
+            return Err(TraitRefLowerError::Ignored);
+        }
+
+        Ok(trait_inst)
+    }
+
+    /// Raw (uninstantiated) constraints attached to this `impl trait` item.
+    ///
+    /// This is a thin wrapper over the constraint collector used elsewhere
+    /// and keeps the predicate‑set semantics rooted on the item.
+    pub(crate) fn raw_constraints(self, db: &'db dyn HirAnalysisDb) -> PredicateListId<'db> {
+        collect_constraints(db, self.into()).instantiate_identity()
+    }
+
+    /// Constraints for this `impl trait`, instantiated with its generic
+    /// parameters (including `Self` when present).
+    pub(crate) fn constraints_instantiated(
+        self,
+        db: &'db dyn HirAnalysisDb,
+    ) -> PredicateListId<'db> {
+        let params = self.impl_params(db);
+        collect_constraints(db, self.into()).instantiate(db, &params)
+    }
+
     /// Semantic generic parameter types for this `impl trait` block, in
     /// definition order (including `Self` when present).
     ///
@@ -903,12 +964,11 @@ impl<'db> ImplTrait<'db> {
 
     /// Semantic trait instance implemented by this `impl trait` block, if well-formed.
     ///
-    /// This is a thin wrapper over the existing lowering logic in `analysis::ty::trait_lower`:
-    /// it preserves all of the existing behavior while providing a traversal‑friendly
-    /// entry point rooted on the HIR item.
+    /// This delegates to [`ImplTrait::trait_inst_result`], which preserves
+    /// detailed error information for diagnostics while providing a
+    /// traversal‑friendly entry point rooted on the HIR item.
     pub fn trait_inst(self, db: &'db dyn HirAnalysisDb) -> Option<TraitInstId<'db>> {
-        let implementor = lower_impl_trait(db, self)?;
-        Some(implementor.instantiate_identity().trait_(db))
+        self.trait_inst_result(db).ok()
     }
 
     /// Trait definition implemented by this `impl trait` block, if well-formed.
@@ -934,62 +994,62 @@ impl<'db> ImplTrait<'db> {
     /// - Generic parameter diagnostics (duplicates, defined-in-parent, kind/trait bounds,
     ///   non-trailing defaults, default forward references)
     pub fn analyze(self, db: &'db dyn HirAnalysisDb) -> Vec<TyDiagCollection<'db>> {
-        use crate::analysis::name_resolution::{ExpectedPathKind, diagnostics::PathResDiag};
-        use crate::analysis::ty::trait_lower::{TraitRefLowerError, lower_trait_ref};
-
         let mut out = Vec::new();
 
-        // Early trait-ref path/domain checks
-        if let Some(tr) = self.trait_ref(db).to_opt() {
-            if !matches!(
-                self.ty(db).data(db),
-                TyData::Invalid(InvalidCause::ParseError)
-            ) {
-                let assumptions = collect_constraints(db, self.into()).instantiate_identity();
-                let ty = self.ty(db);
-                if let Some(diag) = crate::analysis::ty::ty_error::emit_invalid_ty_error(
+        // Early trait-ref presence check: if there is no trait reference at
+        // all, we do not report diagnostics from this entrypoint.
+        let Some(trait_ref) = self.trait_ref(db).to_opt() else {
+            return out;
+        };
+
+        // Implementor type diagnostics at the type span, keeping the existing
+        // "parse error -> early return" behavior.
+        let ty = self.ty(db);
+        if matches!(ty.data(db), TyData::Invalid(InvalidCause::ParseError)) {
+            return out;
+        }
+        if let Some(diag) =
+            crate::analysis::ty::ty_error::emit_invalid_ty_error(db, ty, self.span().ty().into())
+        {
+            out.push(diag);
+        }
+        if ty.has_invalid(db) {
+            return out;
+        }
+
+        // Early trait-ref path/domain checks via the shared lowering helper.
+        use crate::analysis::name_resolution::{ExpectedPathKind, diagnostics::PathResDiag};
+        match self.trait_inst_result(db) {
+            Ok(_) => {}
+            Err(TraitRefLowerError::PathResError(e)) => {
+                if let Some(diag) = e.into_diag(
                     db,
-                    ty,
-                    self.span().ty().into(),
+                    trait_ref.path(db).unwrap(),
+                    self.span().trait_ref().path(),
+                    ExpectedPathKind::Trait,
                 ) {
-                    out.push(diag);
+                    out.push(diag.into());
                 }
-                if !ty.has_invalid(db) {
-                    if let Err(err) = lower_trait_ref(db, ty, tr, self.scope(), assumptions) {
-                        match err {
-                            TraitRefLowerError::PathResError(e) => {
-                                if let Some(diag) = e.into_diag(
-                                    db,
-                                    tr.path(db).unwrap(),
-                                    self.span().trait_ref().path(),
-                                    ExpectedPathKind::Trait,
-                                ) {
-                                    out.push(diag.into());
-                                }
-                                return out;
-                            }
-                            TraitRefLowerError::InvalidDomain(res) => {
-                                out.push(
-                                    PathResDiag::ExpectedTrait(
-                                        self.span().trait_ref().path().into(),
-                                        tr.path(db).unwrap().ident(db).unwrap(),
-                                        res.kind_name(),
-                                    )
-                                    .into(),
-                                );
-                                return out;
-                            }
-                            TraitRefLowerError::Ignored => {}
-                        }
-                    }
-                } else {
-                    return out;
-                }
-            } else {
                 return out;
             }
-        } else {
-            return out;
+            Err(TraitRefLowerError::InvalidDomain(res)) => {
+                out.push(
+                    PathResDiag::ExpectedTrait(
+                        self.span().trait_ref().path().into(),
+                        trait_ref.path(db).unwrap().ident(db).unwrap(),
+                        res.kind_name(),
+                    )
+                    .into(),
+                );
+                return out;
+            }
+            Err(TraitRefLowerError::Ignored) => {
+                // Either the trait-ref is intentionally ignored (e.g., for
+                // diagnostics reported elsewhere) or the ingot check failed.
+                // In both cases we return without emitting additional diags
+                // from this entrypoint.
+                return out;
+            }
         }
 
         // Trait-ref WF and super-trait constraints
