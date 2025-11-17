@@ -1,0 +1,19 @@
+---
+source: crates/fe/tests/cli_output.rs
+expression: output
+---
+=== STDOUT ===
+=== MIR for module ===
+fn main:
+  bb0:
+    terminator: return v0
+
+=== Yul ===
+{
+  function main() -> ret {
+    ret := 42
+  }
+}
+
+
+=== EXIT CODE: 0 ===
