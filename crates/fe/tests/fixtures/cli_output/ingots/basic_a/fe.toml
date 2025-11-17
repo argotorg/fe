@@ -5,3 +5,4 @@ version = "0.1.0"
 [dependencies]
 basic_b = "../basic_b"
 basic_c = "../basic_c"
+core_remote = { source = "https://github.com/Turupawn/fe-token-demos.git", rev = "ada650ae5253b0d5192d66f05dba1787017919fc", path = "ingots/map" }

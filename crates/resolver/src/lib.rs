@@ -1,4 +1,5 @@
 pub mod files;
+pub mod git;
 pub mod graph;
 
 pub trait Resolver: Sized {

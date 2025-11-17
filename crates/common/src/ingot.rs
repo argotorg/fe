@@ -142,7 +142,7 @@ impl<'db> Ingot<'db> {
             Some(config) => config
                 .dependencies(&base_url)
                 .into_iter()
-                .map(|dependency| (dependency.alias, dependency.url))
+                .map(|dependency| (dependency.alias.clone(), dependency.url().clone()))
                 .collect(),
             None => vec![],
         };

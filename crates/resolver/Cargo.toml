@@ -18,6 +18,11 @@ petgraph.workspace = true
 tracing.workspace = true
 
 indexmap = "2.9"
+git2 = "0.19"
+sha2 = "0.10"
 dir-test.workspace = true
 test-utils.workspace = true
 toml = "0.8"
+
+[dev-dependencies]
+tempfile = "3.13"

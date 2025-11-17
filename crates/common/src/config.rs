@@ -6,7 +6,9 @@ use toml::Value;
 use url::Url;
 
 use crate::{
-    dependencies::{Dependency, DependencyArguments},
+    dependencies::{
+        Dependency, DependencyArguments, DependencyLocation, GitDependency, LocalDependency,
+    },
     ingot::Version,
     urlext::UrlExt,
 };
@@ -67,44 +69,54 @@ impl Config {
                     diagnostics.push(ConfigDiagnostic::InvalidDependencyAlias(alias.into()));
                 }
 
+                let alias = SmolStr::new(alias);
                 match value {
                     Value::String(path) => {
                         dependencies.push(DependencyEntry::new(
-                            alias.into(),
-                            Utf8PathBuf::from(path),
+                            alias.clone(),
+                            DependencyEntryLocation::Local(Utf8PathBuf::from(path)),
                             DependencyArguments::default(),
                         ));
                     }
                     Value::Table(table) => {
-                        let path = table.get("path").and_then(|value| value.as_str());
-                        if let Some(path) = path {
-                            let mut arguments = DependencyArguments::default();
-                            if let Some(name) = table.get("name").and_then(|value| value.as_str()) {
-                                if is_valid_name(name) {
-                                    arguments.name = Some(SmolStr::new(name));
-                                } else {
-                                    diagnostics
-                                        .push(ConfigDiagnostic::InvalidDependencyName(name.into()));
-                                }
+                        let mut arguments = DependencyArguments::default();
+                        if let Some(name) = table.get("name").and_then(|value| value.as_str()) {
+                            if is_valid_name(name) {
+                                arguments.name = Some(SmolStr::new(name));
+                            } else {
+                                diagnostics
+                                    .push(ConfigDiagnostic::InvalidDependencyName(name.into()));
                             }
-                            if let Some(version) =
-                                table.get("version").and_then(|value| value.as_str())
-                            {
-                                if let Ok(version) = version.parse() {
-                                    arguments.version = Some(version);
-                                } else {
-                                    diagnostics
-                                        .push(ConfigDiagnostic::InvalidVersion(version.into()));
-                                }
+                        }
+                        if let Some(version) = table.get("version").and_then(|value| value.as_str())
+                        {
+                            if let Ok(version) = version.parse() {
+                                arguments.version = Some(version);
+                            } else {
+                                diagnostics.push(ConfigDiagnostic::InvalidVersion(version.into()));
                             }
+                        }
+
+                        if table.contains_key("source") {
+                            match parse_git_dependency(&alias, table) {
+                                Ok(git) => dependencies.push(DependencyEntry::new(
+                                    alias.clone(),
+                                    DependencyEntryLocation::Git(git),
+                                    arguments,
+                                )),
+                                Err(diag) => diagnostics.push(diag),
+                            }
+                        } else if let Some(path) =
+                            table.get("path").and_then(|value| value.as_str())
+                        {
                             dependencies.push(DependencyEntry::new(
-                                alias.into(),
-                                Utf8PathBuf::from(path),
+                                alias.clone(),
+                                DependencyEntryLocation::Local(Utf8PathBuf::from(path)),
                                 arguments,
                             ));
                         } else {
                             diagnostics.push(ConfigDiagnostic::MissingDependencyPath {
-                                alias: alias.into(),
+                                alias: alias.clone(),
                                 description: value.to_string(),
                             });
                         }
@@ -128,13 +140,23 @@ impl Config {
     pub fn dependencies(&self, base_url: &Url) -> Vec<Dependency> {
         self.dependency_entries
             .iter()
-            .map(|dependency| {
-                let url = base_url.join_directory(&dependency.path).unwrap();
-                Dependency {
-                    url,
+            .map(|dependency| match &dependency.location {
+                DependencyEntryLocation::Local(path) => {
+                    let url = base_url.join_directory(path).unwrap();
+                    Dependency {
+                        alias: dependency.alias.clone(),
+                        arguments: dependency.arguments.clone(),
+                        location: DependencyLocation::Local(LocalDependency {
+                            path: path.clone(),
+                            url,
+                        }),
+                    }
+                }
+                DependencyEntryLocation::Git(git) => Dependency {
                     alias: dependency.alias.clone(),
                     arguments: dependency.arguments.clone(),
-                }
+                    location: DependencyLocation::Git(git.clone()),
+                },
             })
             .collect()
     }
@@ -163,18 +185,28 @@ pub struct IngotMetadata {
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct DependencyEntry {
     pub alias: SmolStr,
-    pub path: Utf8PathBuf,
+    pub location: DependencyEntryLocation,
     pub arguments: DependencyArguments,
 }
 
 impl DependencyEntry {
-    pub fn new(alias: SmolStr, path: Utf8PathBuf, arguments: DependencyArguments) -> Self {
+    pub fn new(
+        alias: SmolStr,
+        location: DependencyEntryLocation,
+        arguments: DependencyArguments,
+    ) -> Self {
         Self {
             alias,
-            path,
+            location,
             arguments,
         }
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum DependencyEntryLocation {
+    Local(Utf8PathBuf),
+    Git(GitDependency),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -190,6 +222,16 @@ pub enum ConfigDiagnostic {
     MissingDependencyPath {
         alias: SmolStr,
         description: String,
+    },
+    MissingDependencySource {
+        alias: SmolStr,
+    },
+    MissingDependencyRev {
+        alias: SmolStr,
+    },
+    InvalidDependencySource {
+        alias: SmolStr,
+        value: SmolStr,
     },
     UnexpectedTomlData {
         field: SmolStr,
@@ -219,6 +261,16 @@ impl Display for ConfigDiagnostic {
                 f,
                 "The dependency \"{alias}\" is missing a path argument \"{description}\""
             ),
+            Self::MissingDependencySource { alias } => {
+                write!(f, "The dependency \"{alias}\" is missing a source field")
+            }
+            Self::MissingDependencyRev { alias } => {
+                write!(f, "The dependency \"{alias}\" is missing a rev field")
+            }
+            Self::InvalidDependencySource { alias, value } => write!(
+                f,
+                "The dependency \"{alias}\" has an invalid source \"{value}\""
+            ),
             Self::UnexpectedTomlData {
                 field,
                 found,
@@ -243,4 +295,103 @@ fn is_valid_name_char(c: char) -> bool {
 
 fn is_valid_name(s: &str) -> bool {
     s.chars().all(is_valid_name_char)
+}
+
+fn parse_git_dependency(
+    alias: &SmolStr,
+    table: &toml::map::Map<String, Value>,
+) -> Result<GitDependency, ConfigDiagnostic> {
+    let source_value = table
+        .get("source")
+        .and_then(|value| value.as_str())
+        .ok_or_else(|| ConfigDiagnostic::MissingDependencySource {
+            alias: alias.clone(),
+        })?;
+
+    let source =
+        Url::parse(source_value).map_err(|_| ConfigDiagnostic::InvalidDependencySource {
+            alias: alias.clone(),
+            value: source_value.into(),
+        })?;
+
+    let rev_value = table
+        .get("rev")
+        .and_then(|value| value.as_str())
+        .ok_or_else(|| ConfigDiagnostic::MissingDependencyRev {
+            alias: alias.clone(),
+        })?;
+
+    let path = table
+        .get("path")
+        .and_then(|value| value.as_str())
+        .map(Utf8PathBuf::from);
+
+    Ok(GitDependency {
+        source,
+        rev: SmolStr::new(rev_value),
+        path,
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_git_dependency_entry() {
+        let toml = r#"
+[ingot]
+name = "root"
+version = "1.0.0"
+
+[dependencies]
+remote = { source = "https://example.com/fe.git", rev = "abcd1234", path = "contracts" }
+"#;
+        let config = Config::parse(toml).expect("config parses");
+        assert!(
+            config.diagnostics.is_empty(),
+            "unexpected diagnostics: {:?}",
+            config.diagnostics
+        );
+        let base = Url::parse("file:///workspace/root/").unwrap();
+        let dependencies = config.dependencies(&base);
+        assert_eq!(dependencies.len(), 1);
+        match &dependencies[0].location {
+            DependencyLocation::Git(git) => {
+                assert_eq!(git.source.as_str(), "https://example.com/fe.git");
+                assert_eq!(git.rev, "abcd1234");
+                assert_eq!(
+                    git.path.as_ref().map(|path| path.as_str()),
+                    Some("contracts")
+                );
+            }
+            other => panic!("expected git dependency, found {other:?}"),
+        }
+    }
+
+    #[test]
+    fn reports_diagnostics_for_incomplete_git_dependency() {
+        let toml = r#"
+[ingot]
+name = "root"
+version = "1.0.0"
+
+[dependencies]
+missing_rev = { source = "https://example.com/repo.git" }
+invalid_source = { source = "not a url", rev = "1234" }
+"#;
+        let config = Config::parse(toml).expect("config parses");
+        assert!(
+            config
+                .diagnostics
+                .iter()
+                .any(|diag| matches!(diag, ConfigDiagnostic::MissingDependencyRev { .. }))
+        );
+        assert!(
+            config
+                .diagnostics
+                .iter()
+                .any(|diag| matches!(diag, ConfigDiagnostic::InvalidDependencySource { .. }))
+        );
+    }
 }
