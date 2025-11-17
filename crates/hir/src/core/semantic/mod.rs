@@ -46,7 +46,8 @@ use crate::analysis::ty::diagnostics::{TraitConstraintDiag, TyDiagCollection, Ty
 use crate::hir_def::*;
 // When adding real methods, prefer calling internal lowering/normalization here
 // rather than exposing raw syntax.
-use crate::analysis::ty::adt_def::{AdtDef, AdtField, AdtRef, lower_adt};
+use crate::analysis::ty::adt_def::{AdtDef, AdtField, AdtRef};
+use crate::core::adt_lower::lower_adt;
 use crate::analysis::ty::canonical::Canonical;
 use crate::analysis::ty::fold::TyFoldable;
 use crate::analysis::ty::normalize::normalize_ty;
@@ -307,9 +308,24 @@ impl<'db> Struct<'db> {
     //
     /// Returns semantic types of all fields, bound to identity parameters.
     pub fn field_tys(self, db: &'db dyn HirAnalysisDb) -> Vec<Binder<TyId<'db>>> {
-        FieldParent::Struct(self)
-            .fields(db)
-            .map(|v| Binder::bind(v.ty(db)))
+        use crate::analysis::ty::ty_def::{InvalidCause, TyId};
+        use crate::analysis::ty::ty_lower::lower_hir_ty;
+
+        let scope = self.scope();
+        let assumptions =
+            collect_constraints(db, GenericParamOwner::Struct(self)).instantiate_identity();
+        let fields = self.fields(db);
+
+        fields
+            .data(db)
+            .iter()
+            .map(|field| {
+                let ty = match field.type_ref.to_opt() {
+                    Some(hir_ty) => lower_hir_ty(db, hir_ty, scope, assumptions),
+                    None => TyId::invalid(db, InvalidCause::ParseError),
+                };
+                Binder::bind(ty)
+            })
             .collect()
     }
 
@@ -322,9 +338,24 @@ impl<'db> Struct<'db> {
 impl<'db> Contract<'db> {
     /// Returns semantic types of all fields, bound to identity parameters.
     pub fn field_tys(self, db: &'db dyn HirAnalysisDb) -> Vec<Binder<TyId<'db>>> {
-        FieldParent::Contract(self)
-            .fields(db)
-            .map(|v| Binder::bind(v.ty(db)))
+        use crate::analysis::ty::ty_def::{InvalidCause, TyId};
+        use crate::analysis::ty::ty_lower::lower_hir_ty;
+
+        let scope = self.scope();
+        // Contracts currently have no generic params/where-clause; use empty assumptions.
+        let assumptions = PredicateListId::empty_list(db);
+        let fields = self.fields(db);
+
+        fields
+            .data(db)
+            .iter()
+            .map(|field| {
+                let ty = match field.type_ref.to_opt() {
+                    Some(hir_ty) => lower_hir_ty(db, hir_ty, scope, assumptions),
+                    None => TyId::invalid(db, InvalidCause::ParseError),
+                };
+                Binder::bind(ty)
+            })
             .collect()
     }
 
@@ -706,7 +737,6 @@ impl<'db> AdtDef<'db> {
             adt: AdtDef<'db>,
             chain: &[def_analysis::AdtCycleMember<'db>],
         ) -> Option<Vec<def_analysis::AdtCycleMember<'db>>> {
-            use crate::analysis::ty::adt_def::lower_adt;
             use def_analysis::AdtCycleMember;
 
             if chain.iter().any(|m| m.adt == adt) {
@@ -1436,16 +1466,30 @@ impl<'db> VariantView<'db> {
         use crate::analysis::ty::ty_def::{InvalidCause, TyId};
         use crate::analysis::ty::ty_lower::lower_hir_ty;
 
+        let enum_ = self.owner;
+        let var = EnumVariant::new(enum_, self.idx);
+        let scope = var.scope();
+        let assumptions =
+            collect_constraints(db, GenericParamOwner::Enum(enum_)).instantiate_identity();
+
         match self.kind(db) {
             VariantKind::Unit => Vec::new(),
             VariantKind::Record(_) => {
-                let parent = FieldParent::Variant(EnumVariant::new(self.owner, self.idx));
-                parent.fields(db).map(|v| Binder::bind(v.ty(db))).collect()
+                let parent = FieldParent::Variant(var);
+                let fields = parent.fields_list(db);
+                fields
+                    .data(db)
+                    .iter()
+                    .map(|field| {
+                        let ty = match field.type_ref.to_opt() {
+                            Some(hir_ty) => lower_hir_ty(db, hir_ty, scope, assumptions),
+                            None => TyId::invalid(db, InvalidCause::ParseError),
+                        };
+                        Binder::bind(ty)
+                    })
+                    .collect()
             }
             VariantKind::Tuple(tuple_id) => {
-                let var = EnumVariant::new(self.owner, self.idx);
-                let scope = var.scope();
-                let assumptions = constraints_for(db, self.owner.into());
                 tuple_id
                     .data(db)
                     .iter()

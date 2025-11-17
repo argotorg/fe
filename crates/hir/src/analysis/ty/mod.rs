@@ -2,7 +2,8 @@ use crate::core::hir_def::{
     IdentId, ItemKind, TopLevelMod, TypeAlias,
     scope_graph::{ScopeGraph, ScopeId},
 };
-use adt_def::{AdtDef, AdtRef, lower_adt};
+use crate::core::adt_lower::lower_adt;
+use adt_def::{AdtDef, AdtRef};
 use diagnostics::{DefConflictError, TraitLowerDiag, TyLowerDiag};
 use rustc_hash::{FxHashMap, FxHashSet};
 use smallvec1::SmallVec;

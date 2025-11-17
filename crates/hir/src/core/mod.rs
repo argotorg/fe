@@ -9,3 +9,4 @@ pub mod lower;
 pub mod semantic;
 pub mod span;
 pub mod visitor;
+pub mod adt_lower;

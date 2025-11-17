@@ -1,6 +1,6 @@
 use crate::hir_def::{
-    self, Contract, Enum, FieldDefListId, GenericParamOwner, IdentId, ItemKind, Partial, Struct,
-    TypeId as HirTyId, VariantDefListId, VariantKind, scope_graph::ScopeId,
+    self, Contract, Enum, GenericParamOwner, IdentId, ItemKind, Partial, Struct,
+    TypeId as HirTyId, VariantKind, scope_graph::ScopeId,
 };
 use crate::span::DynLazySpan;
 use common::ingot::Ingot;
@@ -8,49 +8,11 @@ use salsa::Update;
 
 use super::{
     binder::Binder,
+    trait_resolution::constraint::collect_constraints,
     ty_def::{InvalidCause, TyId},
-    ty_lower::{GenericParamTypeSet, collect_generic_params},
+    ty_lower::{GenericParamTypeSet, lower_hir_ty},
 };
 use crate::analysis::HirAnalysisDb;
-
-/// Lower HIR ADT definition(`struct/enum/contract`) to [`AdtDef`].
-#[salsa::tracked]
-pub fn lower_adt<'db>(db: &'db dyn HirAnalysisDb, adt: AdtRef<'db>) -> AdtDef<'db> {
-    let scope = adt.scope();
-
-    let (params, variants) = match adt {
-        AdtRef::Contract(c) => {
-            let tys = c.field_tys(db);
-            (
-                GenericParamTypeSet::empty(db, scope),
-                vec![AdtField::new(tys)],
-            )
-        }
-        AdtRef::Struct(s) => {
-            let tys = s.field_tys(db);
-            (
-                collect_generic_params(db, s.into()),
-                vec![AdtField::new(tys)],
-            )
-        }
-        AdtRef::Enum(e) => (
-            collect_generic_params(db, e.into()),
-            collect_enum_variant_types(db, e, scope),
-        ),
-    };
-
-    AdtDef::new(db, adt, params, variants)
-}
-
-fn collect_enum_variant_types<'db>(
-    db: &'db dyn HirAnalysisDb,
-    e: Enum<'db>,
-    scope: ScopeId<'db>,
-) -> Vec<AdtField<'db>> {
-    e.variants(db)
-        .map(|variant| AdtField::new(variant.field_tys(db)))
-        .collect()
-}
 
 /// Represents a ADT type definition.
 #[salsa::tracked]
@@ -137,31 +99,54 @@ impl<'db> AdtDef<'db> {
 }
 
 /// This struct represents a field of an ADT. If the ADT is an enum, this
-/// represents a variant. It stores semantic field types, bound to identity
-/// parameters.
+/// represents a variant.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, salsa::Update)]
 pub struct AdtField<'db> {
-    tys: Vec<Binder<TyId<'db>>>,
+    /// Field types as HIR type refs. To allow recursive types, these are kept
+    /// at the HIR level and lowered on demand.
+    tys: Vec<Partial<HirTyId<'db>>>,
+
+    /// Scope of the containing ADT item.
+    scope: ScopeId<'db>,
 }
 impl<'db> AdtField<'db> {
-    pub fn ty(&self, _db: &'db dyn HirAnalysisDb, i: usize) -> Binder<TyId<'db>> {
-        self.tys[i].clone()
+    pub fn ty(&self, db: &'db dyn HirAnalysisDb, i: usize) -> Binder<TyId<'db>> {
+        use crate::analysis::ty::trait_resolution::PredicateListId;
+
+        let assumptions = match self.scope {
+            ScopeId::Item(ItemKind::Struct(struct_)) => {
+                collect_constraints(db, GenericParamOwner::Struct(struct_)).instantiate_identity()
+            }
+            ScopeId::Item(ItemKind::Enum(enum_)) => {
+                collect_constraints(db, GenericParamOwner::Enum(enum_)).instantiate_identity()
+            }
+            ScopeId::Item(ItemKind::Contract(_)) => PredicateListId::empty_list(db),
+            _ => PredicateListId::empty_list(db),
+        };
+
+        let ty = if let Some(hir_ty) = self.tys[i].to_opt() {
+            lower_hir_ty(db, hir_ty, self.scope, assumptions)
+        } else {
+            TyId::invalid(db, InvalidCause::ParseError)
+        };
+
+        Binder::bind(ty)
     }
 
     /// Iterates all field types of this variant.
     pub fn iter_types<'a>(
         &'a self,
-        _db: &'db dyn HirAnalysisDb,
+        db: &'db dyn HirAnalysisDb,
     ) -> impl Iterator<Item = Binder<TyId<'db>>> + 'a {
-        self.tys.iter().cloned()
+        (0..self.num_types()).map(move |i| self.ty(db, i))
     }
 
     pub fn num_types(&self) -> usize {
         self.tys.len()
     }
 
-    pub(super) fn new(tys: Vec<Binder<TyId<'db>>>) -> Self {
-        Self { tys }
+    pub(crate) fn new(tys: Vec<Partial<HirTyId<'db>>>, scope: ScopeId<'db>) -> Self {
+        Self { tys, scope }
     }
 }
 
@@ -220,7 +205,7 @@ impl<'db> AdtRef<'db> {
     /// Returns the semantic ADT definition for this reference.
     /// Thin wrapper over the tracked `lower_adt` query for ergonomic use at call sites.
     pub fn as_adt(self, db: &'db dyn HirAnalysisDb) -> AdtDef<'db> {
-        lower_adt(db, self)
+        crate::core::adt_lower::lower_adt(db, self)
     }
 
     pub(crate) fn generic_owner(self) -> Option<GenericParamOwner<'db>> {
