@@ -9,8 +9,8 @@ use common::{file::File, ingot::Ingot};
 use parser::ast;
 
 use super::{
-    AttrListId, Body, FuncParamListId, FuncParamName, GenericParamListId, HirIngot,
-    IdentId, Partial, TupleTypeId, TypeBound, TypeId, UseAlias, WhereClauseId,
+    AttrListId, Body, FuncParamListId, FuncParamName, GenericParamListId, HirIngot, IdentId,
+    Partial, TupleTypeId, TypeBound, TypeId, UseAlias, WhereClauseId,
     scope_graph::{ScopeGraph, ScopeId},
 };
 use crate::{

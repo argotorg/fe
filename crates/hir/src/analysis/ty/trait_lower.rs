@@ -88,35 +88,12 @@ pub(crate) fn lower_impl_trait<'db>(
         return None;
     }
 
-    let params = collect_generic_params(db, impl_trait.into())
-        .params(db)
-        .to_vec();
+    // Semantic generic parameters for this impl-trait block.
+    let params = impl_trait.impl_params(db);
 
-    // Semantic associated type implementations in this impl-trait block.
-    let mut types: IndexMap<_, _> = impl_trait
-        .assoc_types(db)
-        .filter_map(|v| v.name(db).and_then(|name| v.ty(db).map(|ty| (name, ty))))
-        .collect();
-
-    // Merge trait associated type defaults into the implementor, but evaluated in
-    // the trait's own scope and then instantiated with this impl's concrete args
-    // (including Self). This ensures defaults like `type Output = Self` resolve
-    // to the implementor's concrete self type rather than remaining as `Self`.
-    // let trait_scope = trait_.def(db).trait_(db).scope();
-    for t in trait_.def(db).trait_(db).assoc_types(db) {
-        let (Some(name), Some(default)) = (t.name(db), t.default_ty(db)) else {
-            continue;
-        };
-
-        types.entry(name).or_insert_with(|| {
-            // Lower the default in the trait scope so `Self` and trait params are visible
-            let lowered = default;
-            // Instantiate all trait parameters (including `Self` at idx 0) with
-            // this implementor's concrete arguments so `Self` becomes the impl's
-            // self type and other generics (if used) are substituted too.
-            Binder::bind(lowered).instantiate(db, trait_.args(db))
-        });
-    }
+    // Semantic associated-type bindings for this impl-trait block, including
+    // merged trait defaults.
+    let types = impl_trait.assoc_type_bindings_for_trait_inst(db, trait_);
 
     let implementor = Implementor::new(db, trait_, params, types, impl_trait);
 

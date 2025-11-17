@@ -57,7 +57,8 @@ use crate::analysis::ty::fold::TyFoldable;
 use crate::analysis::ty::normalize::normalize_ty;
 use crate::analysis::ty::trait_def::{TraitDef, TraitInstId, impls_for_ty_with_constraints};
 use crate::analysis::ty::trait_lower::{
-    TraitRefLowerError, lower_trait, lower_trait_ref, lower_trait_ref_with_owner_self,
+    TraitRefLowerError, lower_impl_trait, lower_trait, lower_trait_ref,
+    lower_trait_ref_with_owner_self,
 };
 use crate::analysis::ty::trait_resolution::constraint::{
     collect_adt_constraints, collect_constraints, collect_func_def_constraints,
@@ -844,10 +845,6 @@ impl<'db> Impl<'db> {
 }
 
 impl<'db> ImplTrait<'db> {
-    // Note: higher-level helpers for trait instances and assoc-type maps
-    // can be added here if callers need a more semantic API than the
-    // existing `ty`, `assoc_types`, and diagnostic helpers provide.
-
     /// Semantic self type of this impl-trait block.
     pub fn ty(self, db: &'db dyn HirAnalysisDb) -> TyId<'db> {
         let assumptions = constraints_for(db, self.into());
@@ -855,6 +852,71 @@ impl<'db> ImplTrait<'db> {
             .to_opt()
             .map(|hir_ty| lower_hir_ty(db, hir_ty, self.scope(), assumptions))
             .unwrap_or_else(|| TyId::invalid(db, InvalidCause::ParseError))
+    }
+
+    /// Semantic generic parameter types for this `impl trait` block, in
+    /// definition order (including `Self` when present).
+    ///
+    /// This is a thin wrapper over the generic-param collector used elsewhere
+    /// and keeps the param‑set semantics rooted on the item.
+    pub(crate) fn impl_params(self, db: &'db dyn HirAnalysisDb) -> Vec<TyId<'db>> {
+        collect_generic_params(db, self.into())
+            .params(db)
+            .to_vec()
+    }
+
+    /// Semantic associated-type bindings for this `impl trait` block, given the
+    /// lowered trait instance.
+    ///
+    /// This mirrors the logic used in `lower_impl_trait`:
+    /// - start from the explicitly provided associated types in the impl block;
+    /// - then merge in defaults from the trait definition, instantiated with the
+    ///   concrete generic arguments of `trait_inst` (including `Self`).
+    ///
+    /// Kept crate‑internal so that engine code (trait env, implementor IR) can
+    /// reuse the same semantics without re‑implementing the merge.
+    pub(crate) fn assoc_type_bindings_for_trait_inst(
+        self,
+        db: &'db dyn HirAnalysisDb,
+        trait_inst: TraitInstId<'db>,
+    ) -> IndexMap<IdentId<'db>, TyId<'db>> {
+        // Semantic associated type implementations in this impl-trait block.
+        let mut types: IndexMap<_, _> = self
+            .assoc_types(db)
+            .filter_map(|v| v.name(db).and_then(|name| v.ty(db).map(|ty| (name, ty))))
+            .collect();
+
+        // Merge trait associated type defaults into the implementor, but evaluated in
+        // the trait's own scope and then instantiated with this impl's concrete args
+        // (including Self). This ensures defaults like `type Output = Self` resolve
+        // to the implementor's concrete self type rather than remaining as `Self`.
+        let trait_def = trait_inst.def(db).trait_(db);
+        for view in trait_def.assoc_types(db) {
+            let (Some(name), Some(default)) = (view.name(db), view.default_ty(db)) else {
+                continue;
+            };
+
+            types.entry(name).or_insert_with(|| {
+                Binder::bind(default).instantiate(db, trait_inst.args(db))
+            });
+        }
+
+        types
+    }
+
+    /// Semantic trait instance implemented by this `impl trait` block, if well-formed.
+    ///
+    /// This is a thin wrapper over the existing lowering logic in `analysis::ty::trait_lower`:
+    /// it preserves all of the existing behavior while providing a traversal‑friendly
+    /// entry point rooted on the HIR item.
+    pub fn trait_inst(self, db: &'db dyn HirAnalysisDb) -> Option<TraitInstId<'db>> {
+        let implementor = lower_impl_trait(db, self)?;
+        Some(implementor.instantiate_identity().trait_(db))
+    }
+
+    /// Trait definition implemented by this `impl trait` block, if well-formed.
+    pub fn trait_def(self, db: &'db dyn HirAnalysisDb) -> Option<TraitDef<'db>> {
+        self.trait_inst(db).map(|inst| inst.def(db))
     }
 
     /// Iterate associated type definitions in this impl-trait block as views.
