@@ -1,10 +1,7 @@
 use std::collections::hash_map::Entry;
 
 use crate::{
-    hir_def::{
-        FieldParent, IdentId, VariantKind as HirVariantKind,
-        scope_graph::ScopeId,
-    },
+    hir_def::{FieldParent, IdentId, VariantKind as HirVariantKind, scope_graph::ScopeId},
     span::DynLazySpan,
 };
 use rustc_hash::FxHashMap;
@@ -205,9 +202,11 @@ impl<'db> RecordLike<'db> {
             RecordLike::Variant(variant) => {
                 let adt_def = variant.ty.adt_def(db)?;
                 let field_idx = match variant.kind(db) {
-                    HirVariantKind::Record(_) => crate::hir_def::FieldParent::Variant(variant.variant)
-                        .fields(db)
-                        .position(|v| v.name(db) == Some(name))?,
+                    HirVariantKind::Record(_) => {
+                        crate::hir_def::FieldParent::Variant(variant.variant)
+                            .fields(db)
+                            .position(|v| v.name(db) == Some(name))?
+                    }
                     _ => return None,
                 };
                 let adt_field_list_ref = &adt_def.fields(db)[variant.variant.idx as usize];

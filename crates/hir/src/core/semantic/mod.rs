@@ -51,7 +51,6 @@ use crate::hir_def::*;
 // When adding real methods, prefer calling internal lowering/normalization here
 // rather than exposing raw syntax.
 use crate::analysis::ty::adt_def::{AdtDef, AdtField, AdtRef};
-use crate::core::adt_lower::lower_adt;
 use crate::analysis::ty::canonical::Canonical;
 use crate::analysis::ty::fold::TyFoldable;
 use crate::analysis::ty::normalize::normalize_ty;
@@ -72,6 +71,7 @@ use crate::analysis::ty::{
     ty_def::{InvalidCause, TyId},
     ty_lower::{TyAlias, lower_hir_ty, lower_type_alias, lower_type_alias_from_hir},
 };
+use crate::core::adt_lower::lower_adt;
 use common::indexmap::IndexMap;
 use smallvec::{SmallVec, smallvec};
 // (kind-lowering helpers intentionally omitted; see WherePredicateView::kind)
@@ -576,8 +576,7 @@ impl<'db> WherePredicateBoundView<'db> {
     }
 }
 
-impl<'db> Contract<'db> {
-}
+impl<'db> Contract<'db> {}
 
 // Type alias ---------------------------------------------------------------
 
@@ -860,9 +859,7 @@ impl<'db> ImplTrait<'db> {
     /// This is a thin wrapper over the generic-param collector used elsewhere
     /// and keeps the param‑set semantics rooted on the item.
     pub(crate) fn impl_params(self, db: &'db dyn HirAnalysisDb) -> Vec<TyId<'db>> {
-        collect_generic_params(db, self.into())
-            .params(db)
-            .to_vec()
+        collect_generic_params(db, self.into()).params(db).to_vec()
     }
 
     /// Semantic associated-type bindings for this `impl trait` block, given the
@@ -896,9 +893,9 @@ impl<'db> ImplTrait<'db> {
                 continue;
             };
 
-            types.entry(name).or_insert_with(|| {
-                Binder::bind(default).instantiate(db, trait_inst.args(db))
-            });
+            types
+                .entry(name)
+                .or_insert_with(|| Binder::bind(default).instantiate(db, trait_inst.args(db)));
         }
 
         types
@@ -1444,19 +1441,17 @@ impl<'db> VariantView<'db> {
                     })
                     .collect()
             }
-            VariantKind::Tuple(tuple_id) => {
-                tuple_id
-                    .data(db)
-                    .iter()
-                    .map(|p| {
-                        let ty = match p.to_opt() {
-                            Some(hir_ty) => lower_hir_ty(db, hir_ty, scope, assumptions),
-                            None => TyId::invalid(db, InvalidCause::ParseError),
-                        };
-                        Binder::bind(ty)
-                    })
-                    .collect()
-            }
+            VariantKind::Tuple(tuple_id) => tuple_id
+                .data(db)
+                .iter()
+                .map(|p| {
+                    let ty = match p.to_opt() {
+                        Some(hir_ty) => lower_hir_ty(db, hir_ty, scope, assumptions),
+                        None => TyId::invalid(db, InvalidCause::ParseError),
+                    };
+                    Binder::bind(ty)
+                })
+                .collect(),
         }
     }
 

@@ -19,13 +19,10 @@ use crate::analysis::{
         const_ty::{ConstTyData, ConstTyId, EvaluatedConstTy},
         diagnostics::{BodyDiag, FuncBodyDiag, TraitConstraintDiag, TyDiagCollection},
         fold::{AssocTySubst, TyFoldable, TyFolder},
-        func_def::{FuncDef, lower_func},
+        func_def::{CallableDef, lower_func},
         normalize::normalize_ty,
         trait_def::TraitInstId,
-        trait_resolution::{
-            GoalSatisfiability, PredicateListId,
-            is_goal_satisfiable,
-        },
+        trait_resolution::{GoalSatisfiability, PredicateListId, is_goal_satisfiable},
         ty_def::{InvalidCause, TyBase, TyData, TyId, TyVarSort},
         unify::UnificationTable,
     },
@@ -73,7 +70,9 @@ impl<'db> TyCheckEnv<'db> {
 
         let arg_tys = func.arg_tys(db);
         for (idx, view) in func.param_views(db).enumerate() {
-            let Some(name) = view.name(db) else { continue; };
+            let Some(name) = view.name(db) else {
+                continue;
+            };
 
             // Use semantic arg types we compute via Func::arg_tys
             let mut ty = *arg_tys
@@ -84,7 +83,11 @@ impl<'db> TyCheckEnv<'db> {
             if !ty.is_star_kind(db) {
                 ty = TyId::invalid(db, InvalidCause::Other);
             }
-            let var = LocalBinding::Param { idx, ty, is_mut: view.is_mut(db) };
+            let var = LocalBinding::Param {
+                idx,
+                ty,
+                is_mut: view.is_mut(db),
+            };
 
             env.var_env.last_mut().unwrap().register_var(name, var);
         }
@@ -109,11 +112,10 @@ impl<'db> TyCheckEnv<'db> {
         binding.binding_name(self)
     }
 
-    /// Returns a function if the `body` being checked has `BodyKind::FuncBody`.
-    /// If the `body` has `BodyKind::Anonymous`, returns None
-    pub(super) fn func(&self) -> Option<FuncDef<'db>> {
+    /// Returns a callable if the `body` being checked has `BodyKind::FuncBody`.
+    /// If the `body` has `BodyKind::Anonymous`, returns None.
+    pub(super) fn func(&self) -> Option<CallableDef<'db>> {
         let func = self.hir_func()?;
-
         lower_func(self.db, func)
     }
 
@@ -575,15 +577,21 @@ impl<'db> LocalBinding<'db> {
                 path.ident(hir_db).unwrap()
             }
 
-            Self::Param { idx, .. } => env
-                .func()
-                .unwrap()
-                .hir_func_def(env.db)
-                .unwrap()
-                .param_views(hir_db)
-                .nth(*idx)
-                .and_then(|v| v.name(hir_db))
-                .unwrap(),
+            Self::Param { idx, .. } => {
+                let func = env.func().unwrap();
+                match func {
+                    CallableDef::Func(hir_func) => hir_func
+                        .param_views(hir_db)
+                        .nth(*idx)
+                        .and_then(|v| v.name(hir_db))
+                        .unwrap(),
+                    CallableDef::VariantCtor(var) => {
+                        // Variant ctor params are the ADT fields; use field index as a synthetic name.
+                        let name = format!("_{}", idx);
+                        IdentId::new(env.db, name)
+                    }
+                }
+            }
         }
     }
 
@@ -591,8 +599,13 @@ impl<'db> LocalBinding<'db> {
         match self {
             LocalBinding::Local { pat, .. } => pat.span(env.body).into(),
             LocalBinding::Param { idx, .. } => {
-                let hir_func = env.func().unwrap().hir_func_def(env.db).unwrap();
-                hir_func.span().params().param(*idx).name().into()
+                let func = env.func().unwrap();
+                match func {
+                    CallableDef::Func(hir_func) => {
+                        hir_func.span().params().param(*idx).name().into()
+                    }
+                    CallableDef::VariantCtor(var) => var.span().tuple_type().elem_ty(*idx).into(),
+                }
             }
         }
     }

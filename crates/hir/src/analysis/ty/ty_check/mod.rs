@@ -67,7 +67,11 @@ impl<'db> TyChecker<'db> {
         // If the return type is explicitly annotated and of invalid kind,
         // reflect that as an invalid expected type.
         let expected_ty = if func.has_explicit_return_ty(db) {
-            if rt.is_star_kind(db) { rt } else { TyId::invalid(db, InvalidCause::Other) }
+            if rt.is_star_kind(db) {
+                rt
+            } else {
+                TyId::invalid(db, InvalidCause::Other)
+            }
         } else {
             rt
         };

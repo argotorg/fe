@@ -4,9 +4,9 @@
 //! re-exports these as `crate::hir_def`, `crate::lower`, `crate::span`, and
 //! `crate::visitor` for backwards compatibility.
 
+pub mod adt_lower;
 pub mod hir_def;
 pub mod lower;
 pub mod semantic;
 pub mod span;
 pub mod visitor;
-pub mod adt_lower;

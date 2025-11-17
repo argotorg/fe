@@ -4,7 +4,7 @@ use super::{
     canonical::Canonical,
     diagnostics::{ImplDiag, TyDiagCollection},
     fold::{AssocTySubst, TyFoldable},
-    func_def::FuncDef,
+    func_def::CallableDef,
     normalize::normalize_ty,
     trait_def::{TraitInstId, TraitMethod},
     trait_resolution::{
@@ -40,7 +40,7 @@ use crate::analysis::HirAnalysisDb;
 ///   collected.
 pub(super) fn compare_impl_method<'db>(
     db: &'db dyn HirAnalysisDb,
-    impl_m: FuncDef<'db>,
+    impl_m: CallableDef<'db>,
     trait_m: TraitMethod<'db>,
     trait_inst: TraitInstId<'db>,
     sink: &mut Vec<TyDiagCollection<'db>>,
@@ -80,8 +80,8 @@ pub(super) fn compare_impl_method<'db>(
 /// Returns `false` if the comparison fails.
 fn compare_generic_param_num<'db>(
     db: &'db dyn HirAnalysisDb,
-    impl_m: FuncDef<'db>,
-    trait_m: FuncDef<'db>,
+    impl_m: CallableDef<'db>,
+    trait_m: CallableDef<'db>,
     sink: &mut Vec<TyDiagCollection<'db>>,
 ) -> bool {
     let impl_params = impl_m.explicit_params(db);
@@ -99,8 +99,8 @@ fn compare_generic_param_num<'db>(
 /// Returns `false` if the comparison fails.
 fn compare_generic_param_kind<'db>(
     db: &'db dyn HirAnalysisDb,
-    impl_m: FuncDef<'db>,
-    trait_m: FuncDef<'db>,
+    impl_m: CallableDef<'db>,
+    trait_m: CallableDef<'db>,
     sink: &mut Vec<TyDiagCollection<'db>>,
 ) -> bool {
     let mut err = false;
@@ -134,8 +134,8 @@ fn compare_generic_param_kind<'db>(
 /// Returns `false` if the comparison fails.
 fn compare_arity<'db>(
     db: &'db dyn HirAnalysisDb,
-    impl_m: FuncDef<'db>,
-    trait_m: FuncDef<'db>,
+    impl_m: CallableDef<'db>,
+    trait_m: CallableDef<'db>,
     sink: &mut Vec<TyDiagCollection<'db>>,
 ) -> bool {
     let impl_m_arity = impl_m.arg_tys(db).len();
@@ -155,18 +155,27 @@ fn compare_arity<'db>(
 /// Returns `false` if the comparison fails.
 fn compare_arg_label<'db>(
     db: &'db dyn HirAnalysisDb,
-    impl_m: FuncDef<'db>,
-    trait_m: FuncDef<'db>,
+    impl_m: CallableDef<'db>,
+    trait_m: CallableDef<'db>,
     sink: &mut Vec<TyDiagCollection<'db>>,
 ) -> bool {
     let mut err = false;
     let len = impl_m.arg_tys(db).len().min(trait_m.arg_tys(db).len());
     for idx in 0..len {
-        let Some(expected_label) = trait_m.param_label_or_name(db, idx) else { continue };
-        let Some(method_label) = impl_m.param_label_or_name(db, idx) else { continue };
+        let Some(expected_label) = trait_m.param_label_or_name(db, idx) else {
+            continue;
+        };
+        let Some(method_label) = impl_m.param_label_or_name(db, idx) else {
+            continue;
+        };
         if expected_label != method_label {
             sink.push(
-                ImplDiag::MethodArgLabelMismatch { trait_m, impl_m, param_idx: idx }.into(),
+                ImplDiag::MethodArgLabelMismatch {
+                    trait_m,
+                    impl_m,
+                    param_idx: idx,
+                }
+                .into(),
             );
             err = true;
         }
@@ -180,8 +189,8 @@ fn compare_arg_label<'db>(
 /// Returns `false` if the comparison fails.
 fn compare_ty<'db>(
     db: &'db dyn HirAnalysisDb,
-    impl_m: FuncDef<'db>,
-    trait_m: FuncDef<'db>,
+    impl_m: CallableDef<'db>,
+    trait_m: CallableDef<'db>,
     map_to_impl: &[TyId<'db>],
     trait_inst: TraitInstId<'db>,
     sink: &mut Vec<TyDiagCollection<'db>>,
@@ -191,10 +200,13 @@ fn compare_ty<'db>(
     let trait_m_arg_tys = trait_m.arg_tys(db);
 
     let mut substituter = AssocTySubst::new(trait_inst);
-    let assumptions =
-        collect_func_def_constraints(db, impl_m.hir_def(db), true).instantiate_identity();
+    let assumptions = collect_func_def_constraints(db, impl_m, true).instantiate_identity();
 
-    for (idx, (&trait_m_ty, &impl_m_ty)) in trait_m_arg_tys.iter().zip(impl_m_arg_tys).enumerate() {
+    for (idx, (trait_m_ty, impl_m_ty)) in trait_m_arg_tys
+        .iter()
+        .zip(impl_m_arg_tys.iter())
+        .enumerate()
+    {
         // 1) Instantiate trait method's type params into the impl's generics
         let trait_m_ty = trait_m_ty.instantiate(db, map_to_impl);
         if trait_m_ty.has_invalid(db) {
@@ -207,8 +219,8 @@ fn compare_ty<'db>(
 
         // 3) Normalize both types to resolve any further nested associated types.
         let trait_m_ty_normalized =
-            normalize_ty(db, trait_m_ty_substituted, impl_m.scope(db), assumptions);
-        let impl_m_ty_normalized = normalize_ty(db, impl_m_ty, impl_m.scope(db), assumptions);
+            normalize_ty(db, trait_m_ty_substituted, impl_m.scope(), assumptions);
+        let impl_m_ty_normalized = normalize_ty(db, impl_m_ty, impl_m.scope(), assumptions);
 
         // 4) Compare for equality
         if !impl_m_ty.has_invalid(db) && trait_m_ty_normalized != impl_m_ty_normalized {
@@ -231,13 +243,9 @@ fn compare_ty<'db>(
 
     // Substitute and normalize the return type as well.
     let trait_m_ret_ty_substituted = trait_m_ret_ty.fold_with(db, &mut substituter);
-    let trait_m_ret_ty_normalized = normalize_ty(
-        db,
-        trait_m_ret_ty_substituted,
-        impl_m.scope(db),
-        assumptions,
-    );
-    let impl_m_ret_ty_normalized = normalize_ty(db, impl_m_ret_ty, impl_m.scope(db), assumptions);
+    let trait_m_ret_ty_normalized =
+        normalize_ty(db, trait_m_ret_ty_substituted, impl_m.scope(), assumptions);
+    let impl_m_ret_ty_normalized = normalize_ty(db, impl_m_ret_ty, impl_m.scope(), assumptions);
 
     if !impl_m_ret_ty.has_invalid(db)
         && !trait_m_ret_ty.has_invalid(db)
@@ -266,15 +274,14 @@ fn compare_ty<'db>(
 /// Returns `false` if the comparison fails.
 fn compare_constraints<'db>(
     db: &'db dyn HirAnalysisDb,
-    impl_m: FuncDef<'db>,
-    trait_m: FuncDef<'db>,
+    impl_m: CallableDef<'db>,
+    trait_m: CallableDef<'db>,
     map_to_impl: &[TyId<'db>],
     sink: &mut Vec<TyDiagCollection<'db>>,
 ) -> bool {
-    let impl_m_constraints =
-        collect_func_def_constraints(db, impl_m.hir_def(db), false).instantiate_identity();
+    let impl_m_constraints = collect_func_def_constraints(db, impl_m, false).instantiate_identity();
     let trait_m_constraints =
-        collect_func_def_constraints(db, trait_m.hir_def(db), false).instantiate(db, map_to_impl);
+        collect_func_def_constraints(db, trait_m, false).instantiate(db, map_to_impl);
     let mut unsatisfied_goals = ThinVec::new();
     for &goal in impl_m_constraints.list(db) {
         let canonical_goal = Canonical::new(db, goal);
@@ -293,7 +300,7 @@ fn compare_constraints<'db>(
     } else {
         sink.push(
             ImplDiag::MethodStricterBound {
-                span: impl_m.name_span(db),
+                span: impl_m.name_span(),
                 stricter_bounds: unsatisfied_goals,
             }
             .into(),

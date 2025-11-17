@@ -12,7 +12,7 @@ use super::{
     binder::Binder,
     const_ty::ConstTyId,
     fold::{TyFoldable, TyFolder},
-    func_def::FuncDef,
+    func_def::{CallableDef, lower_func},
     trait_def::{Implementor, TraitDef, TraitInstId, does_impl_trait_conflict},
     trait_resolution::PredicateListId,
     ty_def::{InvalidCause, TyId},
@@ -22,7 +22,6 @@ use crate::analysis::{
     HirAnalysisDb,
     name_resolution::{PathRes, PathResError, resolve_path},
     ty::{
-        func_def::lower_func,
         trait_resolution::constraint::collect_constraints,
         ty_def::{Kind, TyData},
         ty_lower::lower_opt_hir_ty,
@@ -340,11 +339,12 @@ pub(crate) fn lower_trait_ref_impl<'db>(
 pub(crate) fn collect_implementor_methods<'db>(
     db: &'db dyn HirAnalysisDb,
     implementor: Implementor<'db>,
-) -> IndexMap<IdentId<'db>, FuncDef<'db>> {
+) -> IndexMap<IdentId<'db>, CallableDef<'db>> {
     let mut methods = IndexMap::default();
     for method in implementor.hir_impl_trait(db).methods(db) {
         if let Some(func) = lower_func(db, method) {
-            methods.insert(func.name(db), func);
+            let name = func.name(db).expect("impl methods have names");
+            methods.insert(name, func);
         }
     }
 

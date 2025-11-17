@@ -193,9 +193,11 @@ impl<'db> NameResBucket<'db> {
                             // scope/kind), keep the existing resolution to avoid
                             // spurious ambiguity.
                             if old_res.kind != res.kind {
-                                *existing_res = Err(NameResolutionError::Ambiguous(
-                                    ThinVec::from([old_res.clone(), res.clone()]),
-                                ));
+                                *existing_res =
+                                    Err(NameResolutionError::Ambiguous(ThinVec::from([
+                                        old_res.clone(),
+                                        res.clone(),
+                                    ])));
                             }
                         }
                         cmp::Ordering::Greater => {

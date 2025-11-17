@@ -8,9 +8,9 @@ use either::Either;
 use crate::analysis::{
     HirAnalysisDb,
     ty::{
-        adt_def::{AdtDef},
+        adt_def::AdtDef,
         binder::Binder,
-        func_def::HirFuncDefKind,
+        func_def::CallableDef,
         trait_def::{TraitDef, TraitInstId},
         trait_lower::{lower_impl_trait, lower_trait_ref},
         trait_resolution::PredicateListId,
@@ -31,7 +31,7 @@ pub(crate) fn ty_constraints<'db>(
         TyData::TyBase(TyBase::Adt(adt)) => (adt.params(db), collect_adt_constraints(db, *adt)),
         TyData::TyBase(TyBase::Func(func_def)) => (
             func_def.params(db),
-            collect_func_def_constraints(db, func_def.hir_def(db), true),
+            collect_func_def_constraints(db, *func_def, true),
         ),
         _ => {
             return PredicateListId::empty_list(db);
@@ -131,12 +131,12 @@ pub(crate) fn collect_adt_constraints<'db>(
 #[salsa::tracked]
 pub(crate) fn collect_func_def_constraints<'db>(
     db: &'db dyn HirAnalysisDb,
-    func: HirFuncDefKind<'db>,
+    func: CallableDef<'db>,
     include_parent: bool,
 ) -> Binder<PredicateListId<'db>> {
     let hir_func = match func {
-        HirFuncDefKind::Func(func) => func,
-        HirFuncDefKind::VariantCtor(var) => {
+        CallableDef::Func(func) => func,
+        CallableDef::VariantCtor(var) => {
             let adt = var.enum_.as_adt(db);
             if include_parent {
                 return collect_adt_constraints(db, adt);

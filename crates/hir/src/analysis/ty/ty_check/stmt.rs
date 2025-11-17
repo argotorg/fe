@@ -162,7 +162,7 @@ impl<'db> TyChecker<'db> {
                 primary: span.into(),
                 actual: returned_ty,
                 expected: self.expected,
-                func: func.map(|f| f.hir_func_def(self.db).unwrap()),
+                func,
             };
 
             self.push_diag(diag);

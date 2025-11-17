@@ -1,6 +1,6 @@
 use super::{
     def_analysis::AdtCycleMember,
-    func_def::FuncDef,
+    func_def::CallableDef,
     trait_def::{TraitDef, TraitInstId},
     ty_check::{RecordLike, TraitOps},
     ty_def::{Kind, TyId},
@@ -241,7 +241,7 @@ pub enum BodyDiag<'db> {
         primary: DynLazySpan<'db>,
         actual: TyId<'db>,
         expected: TyId<'db>,
-        func: Option<Func<'db>>,
+        func: Option<CallableDef<'db>>,
     },
 
     TypeMustBeKnown(DynLazySpan<'db>),
@@ -310,7 +310,7 @@ pub enum BodyDiag<'db> {
     AmbiguousInherentMethodCall {
         primary: DynLazySpan<'db>,
         method_name: IdentId<'db>,
-        candidates: ThinVec<FuncDef<'db>>,
+        candidates: ThinVec<CallableDef<'db>>,
     },
 
     AmbiguousTrait {
@@ -536,8 +536,8 @@ impl TraitConstraintDiag<'_> {
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Update)]
 pub enum ImplDiag<'db> {
     ConflictMethodImpl {
-        primary: FuncDef<'db>,
-        conflict_with: FuncDef<'db>,
+        primary: CallableDef<'db>,
+        conflict_with: CallableDef<'db>,
     },
 
     MethodNotDefinedInTrait {
@@ -552,38 +552,38 @@ pub enum ImplDiag<'db> {
     },
 
     MethodTypeParamNumMismatch {
-        trait_m: FuncDef<'db>,
-        impl_m: FuncDef<'db>,
+        trait_m: CallableDef<'db>,
+        impl_m: CallableDef<'db>,
     },
 
     MethodTypeParamKindMismatch {
-        trait_m: FuncDef<'db>,
-        impl_m: FuncDef<'db>,
+        trait_m: CallableDef<'db>,
+        impl_m: CallableDef<'db>,
         param_idx: usize,
     },
 
     MethodArgNumMismatch {
-        trait_m: FuncDef<'db>,
-        impl_m: FuncDef<'db>,
+        trait_m: CallableDef<'db>,
+        impl_m: CallableDef<'db>,
     },
 
     MethodArgLabelMismatch {
-        trait_m: FuncDef<'db>,
-        impl_m: FuncDef<'db>,
+        trait_m: CallableDef<'db>,
+        impl_m: CallableDef<'db>,
         param_idx: usize,
     },
 
     MethodArgTyMismatch {
-        trait_m: FuncDef<'db>,
-        impl_m: FuncDef<'db>,
+        trait_m: CallableDef<'db>,
+        impl_m: CallableDef<'db>,
         trait_m_ty: TyId<'db>,
         impl_m_ty: TyId<'db>,
         param_idx: usize,
     },
 
     MethodRetTyMismatch {
-        trait_m: FuncDef<'db>,
-        impl_m: FuncDef<'db>,
+        trait_m: CallableDef<'db>,
+        impl_m: CallableDef<'db>,
         trait_ty: TyId<'db>,
         impl_ty: TyId<'db>,
     },

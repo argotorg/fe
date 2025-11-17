@@ -339,7 +339,7 @@ impl<'db> TyChecker<'db> {
             return ExprProp::invalid(self.db);
         }
 
-        if !callable.func_def.is_method(self.db) {
+        if !callable.callable_def.is_method(self.db) {
             let diag = BodyDiag::NotAMethod {
                 span: call_span,
                 receiver_ty: receiver_prop.ty,
@@ -1209,7 +1209,7 @@ fn body_diag_from_method_selection_err<'db>(
         }
 
         MethodSelectionError::InvisibleInherentMethod(func) => {
-            PathResDiag::Invisible(method.span, method.data, func.name_span(db).into()).into()
+            PathResDiag::Invisible(method.span, method.data, func.name_span().into()).into()
         }
 
         MethodSelectionError::InvisibleTraitMethod(traits) => BodyDiag::InvisibleAmbiguousTrait {

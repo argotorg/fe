@@ -24,7 +24,7 @@ use super::{
     adt_def::AdtDef,
     const_ty::{ConstTyData, ConstTyId, EvaluatedConstTy},
     diagnostics::{TraitConstraintDiag, TyDiagCollection},
-    func_def::FuncDef,
+    func_def::CallableDef,
     trait_def::TraitInstId,
     trait_resolution::{PredicateListId, WellFormedness},
     ty_lower::collect_generic_params,
@@ -262,7 +262,7 @@ impl<'db> TyId<'db> {
         Self::new(db, TyData::TyBase(TyBase::Adt(adt)))
     }
 
-    pub(crate) fn func(db: &'db dyn HirAnalysisDb, func: FuncDef<'db>) -> Self {
+    pub(crate) fn func(db: &'db dyn HirAnalysisDb, func: CallableDef<'db>) -> Self {
         Self::new(db, TyData::TyBase(TyBase::Func(func)))
     }
 
@@ -346,7 +346,7 @@ impl<'db> TyId<'db> {
             TyData::AssocTy(assoc_ty) => Some(assoc_ty.scope(db)),
             TyData::QualifiedTy(trait_inst) => Some(trait_inst.def(db).trait_(db).scope()),
             TyData::TyBase(TyBase::Adt(adt)) => Some(adt.scope(db)),
-            TyData::TyBase(TyBase::Func(func)) => Some(func.scope(db)),
+            TyData::TyBase(TyBase::Func(func)) => Some(func.scope()),
             TyData::TyBase(TyBase::Prim(..)) => None,
             TyData::ConstTy(const_ty) => match const_ty.data(db) {
                 ConstTyData::TyVar(..) => None,
@@ -369,7 +369,7 @@ impl<'db> TyId<'db> {
             TyData::QualifiedTy(trait_inst) => trait_inst.def(db).trait_(db).scope().name_span(db),
 
             TyData::TyBase(TyBase::Adt(adt)) => Some(adt.name_span(db)),
-            TyData::TyBase(TyBase::Func(func)) => Some(func.name_span(db)),
+            TyData::TyBase(TyBase::Func(func)) => Some(func.name_span()),
             TyData::TyBase(TyBase::Prim(_)) => None,
 
             TyData::ConstTy(ty) => match ty.data(db) {
@@ -1054,7 +1054,7 @@ enum Variant {
 pub enum TyBase<'db> {
     Prim(PrimTy),
     Adt(AdtDef<'db>),
-    Func(FuncDef<'db>),
+    Func(CallableDef<'db>),
 }
 
 impl<'db> TyBase<'db> {
@@ -1110,7 +1110,12 @@ impl<'db> TyBase<'db> {
                 .map(|i| i.data(db).to_string())
                 .unwrap_or_else(|| "<unknown>".to_string()),
 
-            Self::Func(func) => format!("fn {}", func.name(db).data(db)),
+            Self::Func(func) => format!(
+                "fn {}",
+                func.name(db)
+                    .map(|n| n.data(db).to_string())
+                    .unwrap_or_else(|| "<unknown>".to_string())
+            ),
         }
     }
 
@@ -1268,7 +1273,7 @@ impl HasKind for AdtDef<'_> {
     }
 }
 
-impl HasKind for FuncDef<'_> {
+impl HasKind for CallableDef<'_> {
     fn kind(&self, db: &dyn HirAnalysisDb) -> Kind {
         let mut kind = Kind::Star;
         for param in self.params(db).iter().rev() {

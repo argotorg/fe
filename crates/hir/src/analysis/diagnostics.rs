@@ -11,6 +11,7 @@ use crate::analysis::{
             BodyDiag, DefConflictError, FuncBodyDiag, ImplDiag, TraitConstraintDiag,
             TraitLowerDiag, TyDiagCollection, TyLowerDiag,
         },
+        func_def::CallableDef,
         trait_def::TraitDef,
         ty_check::RecordLike,
         ty_def::{TyData, TyVarSort},
@@ -545,7 +546,7 @@ impl DiagnosticVoucher for PathResDiag<'_> {
                     sub_diagnostics.push(SubDiagnostic {
                         style: LabelStyle::Secondary,
                         message: format!("`{method_name}` is defined here"),
-                        span: cand.name_span(db).resolve(db),
+                        span: cand.name_span().resolve(db),
                     });
                 }
 
@@ -1570,17 +1571,22 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                 }];
 
                 if let Some(func) = func {
-                    if func.has_explicit_return_ty(db) {
+                    let has_explicit = match func {
+                        CallableDef::Func(f) => f.has_explicit_return_ty(db),
+                        CallableDef::VariantCtor(_) => false,
+                    };
+                    let name_span = func.name_span();
+                    if has_explicit {
                         sub_diagnostics.push(SubDiagnostic {
                             style: LabelStyle::Secondary,
                             message: format!("this function expects `{expected}` to be returned"),
-                            span: func.span().ret_ty().resolve(db),
+                            span: name_span.resolve(db),
                         });
                     } else {
                         sub_diagnostics.push(SubDiagnostic {
                             style: LabelStyle::Secondary,
                             message: format!("try adding `-> {actual}`"),
-                            span: func.span().name().resolve(db),
+                            span: name_span.resolve(db),
                         });
                     }
                 }
@@ -1909,7 +1915,7 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                     sub_diagnostics.push(SubDiagnostic {
                         style: LabelStyle::Secondary,
                         message: format!("`{method_name}` is defined here"),
-                        span: cand.name_span(db).resolve(db),
+                        span: cand.name_span().resolve(db),
                     });
                 }
 
@@ -1939,7 +1945,13 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                 let mut sorted: Vec<_> = traits.iter().copied().collect();
                 let names: Vec<String> = sorted
                     .iter()
-                    .map(|t| t.pretty_print(db, false).split('<').next().unwrap_or("").to_string())
+                    .map(|t| {
+                        t.pretty_print(db, false)
+                            .split('<')
+                            .next()
+                            .unwrap_or("")
+                            .to_string()
+                    })
                     .collect();
                 let all_same_trait = names.iter().all(|n| *n == names[0]);
                 let has_first_arg = sorted.iter().any(|t| t.args(db).get(1).is_some());
@@ -1964,14 +1976,26 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                             .name(db)
                             .to_opt()
                             .map(|id| id.data(db).to_string())
-                            .unwrap_or_else(|| a.pretty_print(db, false).split('<').next().unwrap_or("").to_string());
+                            .unwrap_or_else(|| {
+                                a.pretty_print(db, false)
+                                    .split('<')
+                                    .next()
+                                    .unwrap_or("")
+                                    .to_string()
+                            });
                         let nb: String = b
                             .def(db)
                             .trait_(db)
                             .name(db)
                             .to_opt()
                             .map(|id| id.data(db).to_string())
-                            .unwrap_or_else(|| b.pretty_print(db, false).split('<').next().unwrap_or("").to_string());
+                            .unwrap_or_else(|| {
+                                b.pretty_print(db, false)
+                                    .split('<')
+                                    .next()
+                                    .unwrap_or("")
+                                    .to_string()
+                            });
                         na.cmp(&nb)
                     });
                 }
@@ -2381,12 +2405,12 @@ impl DiagnosticVoucher for ImplDiag<'_> {
                     SubDiagnostic {
                         style: LabelStyle::Primary,
                         message: "".into(),
-                        span: primary.name_span(db).resolve(db),
+                        span: primary.name_span().resolve(db),
                     },
                     SubDiagnostic {
                         style: LabelStyle::Primary,
                         message: "".into(),
-                        span: conflict_with.name_span(db).resolve(db),
+                        span: conflict_with.name_span().resolve(db),
                     },
                 ],
                 notes: vec![],
@@ -2450,7 +2474,7 @@ impl DiagnosticVoucher for ImplDiag<'_> {
                             trait_params.len(),
                             impl_params.len(),
                         ),
-                        span: impl_m.name_span(db).resolve(db),
+                        span: impl_m.name_span().resolve(db),
                     }],
                     notes: vec![],
                     error_code,
@@ -2474,13 +2498,7 @@ impl DiagnosticVoucher for ImplDiag<'_> {
                     sub_diagnostics: vec![SubDiagnostic {
                         style: LabelStyle::Primary,
                         message,
-                        span: impl_m
-                            .hir_func_def(db)
-                            .unwrap()
-                            .span()
-                            .generic_params()
-                            .param(*param_idx)
-                            .resolve(db),
+                        span: impl_m.param_list_span().resolve(db),
                     }],
                     notes: vec![],
                     error_code,
@@ -2497,7 +2515,7 @@ impl DiagnosticVoucher for ImplDiag<'_> {
                         trait_m.arg_tys(db).len(),
                         impl_m.arg_tys(db).len(),
                     ),
-                    span: impl_m.param_list_span(db).resolve(db),
+                    span: impl_m.param_list_span().resolve(db),
                 }],
                 notes: vec![],
                 error_code,
@@ -2524,12 +2542,12 @@ impl DiagnosticVoucher for ImplDiag<'_> {
                                 .unwrap()
                                 .pretty_print(db),
                         ),
-                        span: impl_m.param_span(db, *param_idx).resolve(db),
+                        span: impl_m.param_span(*param_idx).resolve(db),
                     },
                     SubDiagnostic {
                         style: LabelStyle::Secondary,
                         message: "argument label defined here".to_string(),
-                        span: trait_m.param_span(db, *param_idx).resolve(db),
+                        span: trait_m.param_span(*param_idx).resolve(db),
                     },
                 ],
                 notes: vec![],
@@ -2543,7 +2561,7 @@ impl DiagnosticVoucher for ImplDiag<'_> {
                 impl_m_ty,
                 param_idx,
             } => {
-                let method_name = impl_m.name(db).data(db);
+                let method_name = impl_m.name(db).expect("methods have names").data(db);
 
                 CompleteDiagnostic {
                     severity,
@@ -2556,12 +2574,12 @@ impl DiagnosticVoucher for ImplDiag<'_> {
                                 trait_m_ty.pretty_print(db),
                                 impl_m_ty.pretty_print(db)
                             ),
-                            span: impl_m.param_span(db, *param_idx).resolve(db),
+                            span: impl_m.param_span(*param_idx).resolve(db),
                         },
                         SubDiagnostic {
                             style: LabelStyle::Secondary,
                             message: "trait requires this type".to_string(),
-                            span: trait_m.param_span(db, *param_idx).resolve(db),
+                            span: trait_m.param_span(*param_idx).resolve(db),
                         },
                     ],
                     notes: vec![],
@@ -2575,7 +2593,7 @@ impl DiagnosticVoucher for ImplDiag<'_> {
                 trait_ty,
                 impl_ty,
             } => {
-                let method_name = impl_m.name(db).data(db);
+                let method_name = impl_m.name(db).expect("methods have names").data(db);
 
                 CompleteDiagnostic {
                     severity,
@@ -2588,17 +2606,12 @@ impl DiagnosticVoucher for ImplDiag<'_> {
                                 trait_ty.pretty_print(db),
                                 impl_ty.pretty_print(db),
                             ),
-                            span: impl_m.hir_func_def(db).unwrap().span().ret_ty().resolve(db),
+                            span: impl_m.name_span().resolve(db),
                         },
                         SubDiagnostic {
                             style: LabelStyle::Secondary,
                             message: "trait requires this return type".to_string(),
-                            span: trait_m
-                                .hir_func_def(db)
-                                .unwrap()
-                                .span()
-                                .ret_ty()
-                                .resolve(db),
+                            span: trait_m.name_span().resolve(db),
                         },
                     ],
                     notes: vec![],

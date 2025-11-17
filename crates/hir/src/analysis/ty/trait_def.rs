@@ -16,7 +16,7 @@ use super::{
     canonical::{Canonical, Canonicalized},
     diagnostics::{TraitConstraintDiag, TyDiagCollection},
     fold::TyFoldable as _,
-    func_def::{FuncDef, lower_func},
+    func_def::{CallableDef, lower_func},
     trait_lower::collect_implementor_methods,
     trait_resolution::{
         GoalSatisfiability, PredicateListId, WellFormedness, check_trait_inst_wf,
@@ -276,10 +276,6 @@ impl<'db> Implementor<'db> {
         self.trait_(db).def(db)
     }
 
-    pub(crate) fn original_params(self, db: &'db dyn HirAnalysisDb) -> &'db [TyId<'db>] {
-        self.params(db)
-    }
-
     /// The self type of the impl trait.
     pub(crate) fn self_ty(self, db: &'db dyn HirAnalysisDb) -> TyId<'db> {
         self.trait_(db).self_ty(db)
@@ -294,7 +290,7 @@ impl<'db> Implementor<'db> {
     pub(super) fn methods(
         self,
         db: &'db dyn HirAnalysisDb,
-    ) -> &'db IndexMap<IdentId<'db>, FuncDef<'db>> {
+    ) -> &'db IndexMap<IdentId<'db>, CallableDef<'db>> {
         collect_implementor_methods(db, self)
     }
 
@@ -525,7 +521,9 @@ impl<'db> TraitDef<'db> {
             let Some(func) = lower_func(db, method) else {
                 continue;
             };
-            let name = func.name(db);
+            let Some(name) = func.name(db) else {
+                continue;
+            };
             let trait_method = TraitMethod(func);
             // We can simply ignore the conflict here because it's already
             // handled by the def analysis pass
@@ -553,11 +551,14 @@ impl<'db> TraitDef<'db> {
 }
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy, Hash, salsa::Update)]
-pub struct TraitMethod<'db>(pub FuncDef<'db>);
+pub struct TraitMethod<'db>(pub CallableDef<'db>);
 
 impl TraitMethod<'_> {
     pub fn has_default_impl(self, db: &dyn HirAnalysisDb) -> bool {
-        self.0.hir_func_def(db).unwrap().body(db).is_some()
+        match self.0 {
+            CallableDef::Func(func) => func.body(db).is_some(),
+            CallableDef::VariantCtor(_) => false,
+        }
     }
 }
 

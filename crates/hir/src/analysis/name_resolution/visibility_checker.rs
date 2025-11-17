@@ -53,7 +53,7 @@ pub(crate) fn is_ty_visible_from(db: &dyn HirAnalysisDb, ty: TyId, from_scope: S
         TyData::TyBase(base) => match base {
             TyBase::Prim(_) => true,
             TyBase::Adt(adt) => is_scope_visible_from(db, adt.scope(db), from_scope),
-            TyBase::Func(func) => is_scope_visible_from(db, func.scope(db), from_scope),
+            TyBase::Func(func) => is_scope_visible_from(db, func.scope(), from_scope),
         },
         TyData::TyParam(param) => is_scope_visible_from(db, param.scope(db), from_scope),
         // Associated type projections (e.g., `T::Assoc`, `<T as Trait>::Assoc`) are

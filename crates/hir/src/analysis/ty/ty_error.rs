@@ -52,7 +52,11 @@ impl<'db> HirTyErrVisitor<'db> {
 }
 
 impl<'db> Visitor<'db> for HirTyErrVisitor<'db> {
-    fn visit_body(&mut self, _ctxt: &mut VisitorCtxt<'db, crate::core::span::item::LazyBodySpan<'db>>, _body: crate::core::hir_def::Body<'db>) {
+    fn visit_body(
+        &mut self,
+        _ctxt: &mut VisitorCtxt<'db, crate::core::span::item::LazyBodySpan<'db>>,
+        _body: crate::core::hir_def::Body<'db>,
+    ) {
         // Skip traversing bodies when collecting type-lowering errors from type
         // positions. This avoids emitting name-resolution diagnostics for const
         // expressions that appear inside types (e.g., array lengths or const
@@ -159,14 +163,15 @@ impl<'db> Visitor<'db> for HirTyErrVisitor<'db> {
 
         // Visibility check for trait paths mirrors visit_path but expects a Trait.
         let mut invisible = None;
-        let mut check_visibility = |p: PathId<'db>, reso: &crate::analysis::name_resolution::PathRes<'db>| {
-            if invisible.is_some() {
-                return;
-            }
-            if !reso.is_visible_from(self.db, scope) {
-                invisible = Some((p, reso.name_span(self.db)));
-            }
-        };
+        let mut check_visibility =
+            |p: PathId<'db>, reso: &crate::analysis::name_resolution::PathRes<'db>| {
+                if invisible.is_some() {
+                    return;
+                }
+                if !reso.is_visible_from(self.db, scope) {
+                    invisible = Some((p, reso.name_span(self.db)));
+                }
+            };
 
         // TODO(diags): In the future, refine this to walk only generic args
         // under the trait ref and surface kind/arg mismatches with precise
@@ -197,11 +202,12 @@ impl<'db> Visitor<'db> for HirTyErrVisitor<'db> {
                 if let Some((_p, deriv_span)) = invisible {
                     let seg_span = span.name();
                     let ident = path.ident(self.db).unwrap();
-                    let diag = crate::analysis::name_resolution::diagnostics::PathResDiag::Invisible(
-                        seg_span.into(),
-                        ident,
-                        deriv_span,
-                    );
+                    let diag =
+                        crate::analysis::name_resolution::diagnostics::PathResDiag::Invisible(
+                            seg_span.into(),
+                            ident,
+                            deriv_span,
+                        );
                     self.diags.push(diag.into());
                 }
             }

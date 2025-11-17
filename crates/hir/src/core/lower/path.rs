@@ -1,4 +1,6 @@
-use crate::core::hir_def::{GenericArgListId, IdentId, Partial, PathId, PathKind, TraitRefId, TypeId};
+use crate::core::hir_def::{
+    GenericArgListId, IdentId, Partial, PathId, PathKind, TraitRefId, TypeId,
+};
 use parser::ast::{self, GenericArgsOwner};
 
 use super::FileLowerCtxt;

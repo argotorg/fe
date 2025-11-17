@@ -407,8 +407,10 @@ pub fn display_missing_pattern<'db>(
             match kind {
                 ConstructorKind::Variant(variant, _) => {
                     // Get the actual variant name
-                    let variant_name =
-                        variant.name(db).map(|name| name.to_string()).unwrap_or_else(|| "UnknownVariant".to_string());
+                    let variant_name = variant
+                        .name(db)
+                        .map(|name| name.to_string())
+                        .unwrap_or_else(|| "UnknownVariant".to_string());
 
                     // Get enum name for better context
                     let enum_name = match variant.enum_.name(db) {

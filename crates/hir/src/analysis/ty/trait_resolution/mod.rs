@@ -262,12 +262,12 @@ impl<'db> PredicateListId<'db> {
                     PredicateListId::new(db, all_predicates.iter().copied().collect::<Vec<_>>());
 
                 for mut trait_inst in trait_type.with_subject(assoc_ty).bounds(db) {
-                        // Substitute `Self` and associated types using the original predicate instance
-                        let mut subst = AssocTySubst::new(pred);
-                        trait_inst = trait_inst.fold_with(db, &mut subst);
-                        if all_predicates.insert(trait_inst) {
-                            worklist.push(trait_inst);
-                        }
+                    // Substitute `Self` and associated types using the original predicate instance
+                    let mut subst = AssocTySubst::new(pred);
+                    trait_inst = trait_inst.fold_with(db, &mut subst);
+                    if all_predicates.insert(trait_inst) {
+                        worklist.push(trait_inst);
+                    }
                 }
             }
         }

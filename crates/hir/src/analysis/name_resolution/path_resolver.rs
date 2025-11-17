@@ -1,7 +1,7 @@
 use crate::{
     core::hir_def::{
-        Const, Enum, EnumVariant, GenericParamOwner, IdentId, ImplTrait, ItemKind, PathId, PathKind,
-        Trait, TypeBound, TypeKind, VariantKind, scope_graph::ScopeId,
+        Const, Enum, EnumVariant, GenericParamOwner, IdentId, ImplTrait, ItemKind, PathId,
+        PathKind, Trait, TypeBound, TypeKind, VariantKind, scope_graph::ScopeId,
     },
     span::{DynLazySpan, path::LazyPathSpan},
 };
@@ -27,7 +27,7 @@ use crate::analysis::{
         binder::Binder,
         canonical::{Canonical, Canonicalized},
         fold::TyFoldable,
-        func_def::{FuncDef, HirFuncDefKind, lower_func},
+        func_def::{CallableDef, lower_func},
         normalize::normalize_ty,
         trait_def::{TraitInstId, impls_for_ty_with_constraints},
         trait_lower::{
@@ -330,13 +330,15 @@ impl<'db> PathResError<'db> {
                         candidates,
                     }
                 }
-                MethodSelectionError::AmbiguousTraitMethod(trait_insts) => PathResDiag::AmbiguousTrait {
-                    primary: span,
-                    method_name: ident,
-                    trait_insts,
-                },
+                MethodSelectionError::AmbiguousTraitMethod(trait_insts) => {
+                    PathResDiag::AmbiguousTrait {
+                        primary: span,
+                        method_name: ident,
+                        trait_insts,
+                    }
+                }
                 MethodSelectionError::InvisibleInherentMethod(func) => {
-                    PathResDiag::Invisible(span, ident, func.name_span(db).into())
+                    PathResDiag::Invisible(span, ident, func.name_span().into())
                 }
                 MethodSelectionError::InvisibleTraitMethod(traits) => {
                     PathResDiag::InvisibleAmbiguousTrait {
@@ -348,7 +350,11 @@ impl<'db> PathResError<'db> {
             },
 
             // Force a type-expected diagnostic at the specific generic arg span.
-            PathResErrorKind::TraitGenericArgType { arg_idx, ident, given_kind } => {
+            PathResErrorKind::TraitGenericArgType {
+                arg_idx,
+                ident,
+                given_kind,
+            } => {
                 let ty_span = path_span
                     .clone()
                     .segment(failed_idx)
@@ -462,9 +468,9 @@ impl<'db> PathRes<'db> {
                 // Method visibility depends on the method's defining scope
                 // (function or trait method), not the receiver type.
                 let method_scope = match cand {
-                    MethodCandidate::InherentMethod(func_def) => func_def.scope(db),
+                    MethodCandidate::InherentMethod(func_def) => func_def.scope(),
                     MethodCandidate::TraitMethod(c) | MethodCandidate::NeedsConfirmation(c) => {
-                        c.method.0.scope(db)
+                        c.method.0.scope()
                     }
                 };
                 is_scope_visible_from(db, method_scope, from_scope)
@@ -552,7 +558,7 @@ impl<'db> ResolvedVariant<'db> {
     }
 
     pub fn constructor_func_ty(&self, db: &'db dyn HirAnalysisDb) -> Option<TyId<'db>> {
-        let mut ty = TyId::func(db, self.to_funcdef(db)?);
+        let mut ty = TyId::func(db, self.to_callable(db)?);
 
         for &arg in self.ty.generic_args(db) {
             if ty.applicable_ty(db).is_some() {
@@ -562,25 +568,12 @@ impl<'db> ResolvedVariant<'db> {
         Some(ty)
     }
 
-    pub fn to_funcdef(&self, db: &'db dyn HirAnalysisDb) -> Option<FuncDef<'db>> {
+    pub fn to_callable(&self, db: &'db dyn HirAnalysisDb) -> Option<CallableDef<'db>> {
         if !matches!(self.variant.kind(db), VariantKind::Tuple(_)) {
             return None;
         }
 
-        let arg_tys = self.iter_field_types(db).collect();
-        let adt = self.ty.adt_def(db).unwrap();
-
-        let mut ret_ty = TyId::adt(db, adt);
-        ret_ty = TyId::foldl(db, ret_ty, adt.param_set(db).params(db));
-
-        Some(FuncDef::new(
-            db,
-            HirFuncDefKind::VariantCtor(self.variant),
-            self.variant.ident(db).unwrap(),
-            *adt.param_set(db),
-            arg_tys,
-            Binder::bind(ret_ty),
-        ))
+        Some(CallableDef::VariantCtor(self.variant))
     }
 }
 
@@ -783,14 +776,14 @@ where
                 ));
             }
 
-    // Deduplicate by normalized type, but preserve and return the original
-    // (unnormalized) candidate to avoid prematurely collapsing projections
-    // like `T::IntoIter::Item` into `T::Item`.
-    let mut dedup: IndexMap<TyId<'db>, (TraitInstId<'db>, TyId<'db>)> = IndexMap::new();
-    for (inst, ty_candidate) in assoc_tys.iter().copied() {
-        let norm = normalize_ty(db, ty_candidate, scope, assumptions);
-        dedup.entry(norm).or_insert((inst, ty_candidate));
-    }
+            // Deduplicate by normalized type, but preserve and return the original
+            // (unnormalized) candidate to avoid prematurely collapsing projections
+            // like `T::IntoIter::Item` into `T::Item`.
+            let mut dedup: IndexMap<TyId<'db>, (TraitInstId<'db>, TyId<'db>)> = IndexMap::new();
+            for (inst, ty_candidate) in assoc_tys.iter().copied() {
+                let norm = normalize_ty(db, ty_candidate, scope, assumptions);
+                dedup.entry(norm).or_insert((inst, ty_candidate));
+            }
 
             match dedup.len() {
                 0 => unreachable!(),
@@ -978,7 +971,13 @@ pub fn find_associated_type<'db>(
                 let subject = ty_with_subst.fold_with(db, &mut table);
                 for bound in &decl.bounds {
                     if let TypeBound::Trait(trait_ref) = bound {
-                        if let Ok(inst) = crate::analysis::ty::trait_lower::lower_trait_ref(db, subject, *trait_ref, scope, assumptions) {
+                        if let Ok(inst) = crate::analysis::ty::trait_lower::lower_trait_ref(
+                            db,
+                            subject,
+                            *trait_ref,
+                            scope,
+                            assumptions,
+                        ) {
                             if inst.def(db).trait_(db).assoc_ty(db, name).is_some() {
                                 let assoc_ty = TyId::assoc_ty(db, inst, name);
                                 let folded = assoc_ty.fold_with(db, &mut table);
@@ -1109,7 +1108,10 @@ pub fn resolve_name_res<'db>(
                                                 ) {
                                                     Ok(res) => {
                                                         // If resolved to non-type domain, report ExpectedType at arg span
-                                                        if !matches!(res, PathRes::Ty(_) | PathRes::TyAlias(..)) {
+                                                        if !matches!(
+                                                            res,
+                                                            PathRes::Ty(_) | PathRes::TyAlias(..)
+                                                        ) {
                                                             let ident = arg_path.ident(db).unwrap();
                                                             let kind = res.kind_name();
                                                             return Err(PathResError::new(

@@ -14,7 +14,7 @@ use crate::analysis::{
     ty::{
         diagnostics::{BodyDiag, FuncBodyDiag},
         fold::{AssocTySubst, TyFoldable, TyFolder},
-        func_def::FuncDef,
+        func_def::CallableDef,
         trait_def::TraitInstId,
         trait_resolution::constraint::collect_func_def_constraints,
         ty_def::{TyBase, TyData, TyId},
@@ -25,7 +25,8 @@ use crate::analysis::{
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Update)]
 pub struct Callable<'db> {
-    pub func_def: FuncDef<'db>,
+    pub callable_def: CallableDef<'db>,
+    base_ty: TyId<'db>,
     generic_args: Vec<TyId<'db>>,
     /// The originating trait instance if this callable comes from a trait method
     /// (e.g., operator overloading, method call, indexing). None for inherent functions.
@@ -50,7 +51,8 @@ impl<'db> TyFoldable<'db> for Callable<'db> {
         F: TyFolder<'db>,
     {
         Self {
-            func_def: self.func_def,
+            callable_def: self.callable_def,
+            base_ty: self.base_ty,
             generic_args: self.generic_args.fold_with(db, folder),
             trait_inst: self.trait_inst.map(|i| i.fold_with(db, folder)),
         }
@@ -70,15 +72,18 @@ impl<'db> Callable<'db> {
             return Err(BodyDiag::TypeMustBeKnown(span).into());
         }
 
-        let TyData::TyBase(TyBase::Func(func_def)) = base.data(db) else {
+        let TyData::TyBase(TyBase::Func(callable_def)) = base.data(db) else {
             return Err(BodyDiag::NotCallable(span, ty).into());
         };
 
         let params = ty.generic_args(db);
         assert_eq!(params.len(), args.len());
 
+        let callable_def = *callable_def;
+
         Ok(Self {
-            func_def: *func_def,
+            callable_def,
+            base_ty: base,
             generic_args: args.to_vec(),
             trait_inst,
         })
@@ -93,7 +98,10 @@ impl<'db> Callable<'db> {
     }
 
     pub fn ret_ty(&self, db: &'db dyn HirAnalysisDb) -> TyId<'db> {
-        let ret = self.func_def.ret_ty(db).instantiate(db, &self.generic_args);
+        let ret = self
+            .callable_def
+            .ret_ty(db)
+            .instantiate(db, &self.generic_args);
         if let Some(inst) = self.trait_inst {
             let mut subst = AssocTySubst::new(inst);
             ret.fold_with(db, &mut subst)
@@ -103,8 +111,7 @@ impl<'db> Callable<'db> {
     }
 
     pub fn ty(&self, db: &'db dyn HirAnalysisDb) -> TyId<'db> {
-        let mut ty = TyId::func(db, self.func_def);
-        ty = TyId::foldl(db, ty, &self.generic_args);
+        let ty = TyId::foldl(db, self.base_ty, &self.generic_args);
         if let Some(inst) = self.trait_inst {
             let mut subst = AssocTySubst::new(inst);
             ty.fold_with(db, &mut subst)
@@ -125,13 +132,13 @@ impl<'db> Callable<'db> {
         }
 
         let given_args = lower_generic_arg_list(db, args, tc.env.scope(), tc.env.assumptions());
-        let offset = self.func_def.offset_to_explicit_params_position(db);
+        let offset = self.callable_def.offset_to_explicit_params_position(db);
         let current_args = &mut self.generic_args[offset..];
 
         if current_args.len() != given_args.len() {
             let diag = BodyDiag::CallGenericArgNumMismatch {
                 primary: span.into(),
-                def_span: self.func_def.name_span(db),
+                def_span: self.callable_def.name_span(),
                 given: given_args.len(),
                 expected: current_args.len(),
             };
@@ -156,7 +163,7 @@ impl<'db> Callable<'db> {
     ) {
         let db = tc.db;
 
-        let expected_arity = self.func_def.arg_tys(db).len();
+        let expected_arity = self.callable_def.arg_tys(db).len();
         let given_arity = if receiver.is_some() {
             call_args.len() + 1
         } else {
@@ -165,7 +172,7 @@ impl<'db> Callable<'db> {
         if given_arity != expected_arity {
             let diag = BodyDiag::CallArgNumMismatch {
                 primary: span.into(),
-                def_span: self.func_def.name_span(db),
+                def_span: self.callable_def.name_span(),
                 given: given_arity,
                 expected: expected_arity,
             };
@@ -192,18 +199,15 @@ impl<'db> Callable<'db> {
             args.push(arg);
         }
 
-        for (i, (given, expected)) in args
-            .into_iter()
-            .zip(self.func_def.arg_tys(db).iter())
-            .enumerate()
-        {
-            if let Some(expected_label) = self.func_def.param_label(db, i)
+        let expected_arg_tys = self.callable_def.arg_tys(db);
+        for (i, (given, expected)) in args.into_iter().zip(expected_arg_tys.iter()).enumerate() {
+            if let Some(expected_label) = self.callable_def.param_label(db, i)
                 && !expected_label.is_self(db)
                 && Some(expected_label) != given.label
             {
                 let diag = BodyDiag::CallArgLabelMismatch {
                     primary: given.label_span.unwrap_or(given.expr_span.clone()),
-                    def_span: self.func_def.name_span(db),
+                    def_span: self.callable_def.name_span(),
                     given: given.label,
                     expected: expected_label,
                 };
@@ -264,7 +268,7 @@ impl<'db> Callable<'db> {
         let db = tc.db;
 
         // Get the function's constraints
-        let constraints = collect_func_def_constraints(db, self.func_def.hir_def(db), true);
+        let constraints = collect_func_def_constraints(db, self.callable_def, true);
 
         // Instantiate constraints with the actual type arguments
         let instantiated = constraints.instantiate(db, &self.generic_args);

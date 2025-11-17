@@ -1,131 +1,25 @@
-use crate::{
-    hir_def::{EnumVariant, Func, FuncParamName, IdentId, scope_graph::ScopeId},
-    span::DynLazySpan,
-};
+use crate::hir_def::{EnumVariant, Func, FuncParamName, IdentId, scope_graph::ScopeId};
+use crate::span::DynLazySpan;
 use common::ingot::Ingot;
+use salsa::Update;
 
-use super::{binder::Binder, ty_def::TyId, ty_lower::GenericParamTypeSet};
-use crate::analysis::{
-    HirAnalysisDb,
-    ty::{
-        ty_lower::{collect_generic_params},
-    },
-};
+use super::{adt_def::AdtRef, binder::Binder, ty_def::TyId, ty_lower::collect_generic_params};
+use crate::analysis::HirAnalysisDb;
 
-/// Lower func to [`FuncDef`]. This function returns `None` iff the function
-/// name is `Partial::Absent`.
-#[salsa::tracked]
-pub fn lower_func<'db>(
-    db: &'db dyn HirAnalysisDb,
-    func: Func<'db>,
-    // _assumptions: PredicateListId<'db>,
-) -> Option<FuncDef<'db>> {
-    let name = func.name(db).to_opt()?;
-    let params_set = collect_generic_params(db, func.into());
-    // Use semantic helper for argument types; it derives assumptions internally.
-    let args = func.arg_tys(db);
-
-    // When lowering the return type, we need to use assumptions that include
-    // the function's own generic parameter constraints
-    let ret_ty = func.return_ty(db);
-
-    Some(FuncDef::new(
-        db,
-        func.into(),
-        name,
-        params_set,
-        args,
-        Binder::bind(ret_ty),
-    ))
-}
-
-#[salsa::tracked]
-#[derive(Debug)]
-pub struct FuncDef<'db> {
-    pub hir_def: HirFuncDefKind<'db>,
-
-    pub name: IdentId<'db>,
-
-    pub params_set: GenericParamTypeSet<'db>,
-
-    /// Argument types of the function.
-    #[return_ref]
-    pub arg_tys: Vec<Binder<TyId<'db>>>,
-
-    /// Return types of the function.
-    pub ret_ty: Binder<TyId<'db>>,
-}
-
-impl<'db> FuncDef<'db> {
-    pub fn ingot(self, db: &'db dyn HirAnalysisDb) -> Ingot<'db> {
-        self.hir_def(db).ingot(db)
-    }
-
-    pub fn name_span(self, db: &'db dyn HirAnalysisDb) -> DynLazySpan<'db> {
-        self.hir_def(db).name_span()
-    }
-
-    pub fn param_list_span(self, db: &'db dyn HirAnalysisDb) -> DynLazySpan<'db> {
-        self.hir_def(db).param_list_span()
-    }
-
-    pub fn scope(self, db: &'db dyn HirAnalysisDb) -> ScopeId<'db> {
-        self.hir_def(db).scope()
-    }
-
-    pub fn params(self, db: &'db dyn HirAnalysisDb) -> &'db [TyId<'db>] {
-        self.params_set(db).params(db)
-    }
-
-    pub fn explicit_params(self, db: &'db dyn HirAnalysisDb) -> &'db [TyId<'db>] {
-        self.params_set(db).explicit_params(db)
-    }
-
-    pub fn receiver_ty(self, db: &'db dyn HirAnalysisDb) -> Option<Binder<TyId<'db>>> {
-        self.is_method(db)
-            .then(|| self.arg_tys(db).first().copied().unwrap())
-    }
-
-    pub fn is_method(self, db: &dyn HirAnalysisDb) -> bool {
-        self.hir_def(db).is_method(db)
-    }
-
-    pub fn offset_to_explicit_params_position(self, db: &dyn HirAnalysisDb) -> usize {
-        self.params_set(db).offset_to_explicit_params_position(db)
-    }
-
-    pub fn hir_func_def(self, db: &'db dyn HirAnalysisDb) -> Option<Func<'db>> {
-        if let HirFuncDefKind::Func(func) = self.hir_def(db) {
-            Some(func)
-        } else {
-            None
-        }
-    }
-
-    pub fn param_span(self, db: &'db dyn HirAnalysisDb, idx: usize) -> DynLazySpan<'db> {
-        self.hir_def(db).param_span(idx)
-    }
-
-    pub fn param_label(self, db: &'db dyn HirAnalysisDb, idx: usize) -> Option<IdentId<'db>> {
-        self.hir_func_def(db)?.param_label(db, idx)
-    }
-
-    pub fn param_label_or_name(
-        self,
-        db: &'db dyn HirAnalysisDb,
-        idx: usize,
-    ) -> Option<FuncParamName<'db>> {
-        self.hir_func_def(db)?.param_label_or_name(db, idx)
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, derive_more::From, salsa::Update)]
-pub enum HirFuncDefKind<'db> {
+/// Callable view over either a function or an enum variant constructor.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, derive_more::From, Update)]
+pub enum CallableDef<'db> {
     Func(Func<'db>),
     VariantCtor(EnumVariant<'db>),
 }
 
-impl<'db> HirFuncDefKind<'db> {
+/// Lower a callable from HIR; returns `None` if the function name is absent.
+pub fn lower_func<'db>(db: &'db dyn HirAnalysisDb, func: Func<'db>) -> Option<CallableDef<'db>> {
+    func.name(db).to_opt()?;
+    Some(CallableDef::Func(func))
+}
+
+impl<'db> CallableDef<'db> {
     pub fn name_span(self) -> DynLazySpan<'db> {
         match self {
             Self::Func(func) => func.span().name().into(),
@@ -167,6 +61,93 @@ impl<'db> HirFuncDefKind<'db> {
         match self {
             Self::Func(func) => func.span().params().param(idx).into(),
             Self::VariantCtor(var) => var.span().tuple_type().elem_ty(idx).into(),
+        }
+    }
+
+    pub fn params(self, db: &'db dyn HirAnalysisDb) -> &'db [TyId<'db>] {
+        match self {
+            Self::Func(func) => collect_generic_params(db, func.into()).params(db),
+            Self::VariantCtor(var) => {
+                let adt = var.enum_.as_adt(db);
+                adt.params(db)
+            }
+        }
+    }
+
+    pub fn explicit_params(self, db: &'db dyn HirAnalysisDb) -> &'db [TyId<'db>] {
+        match self {
+            Self::Func(func) => collect_generic_params(db, func.into()).explicit_params(db),
+            Self::VariantCtor(var) => {
+                let adt = var.enum_.as_adt(db);
+                adt.params(db)
+            }
+        }
+    }
+
+    pub fn offset_to_explicit_params_position(self, db: &'db dyn HirAnalysisDb) -> usize {
+        match self {
+            Self::Func(func) => {
+                collect_generic_params(db, func.into()).offset_to_explicit_params_position(db)
+            }
+            Self::VariantCtor(_) => 0, // Variant constructors don't have implicit self parameters
+        }
+    }
+
+    /// Callable name (if present). Variant ctors may be absent when the name is elided.
+    pub fn name(self, db: &'db dyn HirAnalysisDb) -> Option<IdentId<'db>> {
+        match self {
+            Self::Func(func) => func.name(db).to_opt(),
+            Self::VariantCtor(var) => var.ident(db),
+        }
+    }
+
+    pub fn param_label(self, db: &'db dyn HirAnalysisDb, idx: usize) -> Option<IdentId<'db>> {
+        match self {
+            Self::Func(func) => func.param_label(db, idx),
+            Self::VariantCtor(_) => None,
+        }
+    }
+
+    pub fn param_label_or_name(
+        self,
+        db: &'db dyn HirAnalysisDb,
+        idx: usize,
+    ) -> Option<FuncParamName<'db>> {
+        match self {
+            Self::Func(func) => func.param_label_or_name(db, idx),
+            Self::VariantCtor(_) => None,
+        }
+    }
+
+    pub fn arg_tys(self, db: &'db dyn HirAnalysisDb) -> Vec<Binder<TyId<'db>>> {
+        match self {
+            Self::Func(func) => func.arg_tys(db),
+            Self::VariantCtor(var) => {
+                let adt = var.enum_.as_adt(db);
+                let field = &adt.fields(db)[var.idx as usize];
+                field.iter_types(db).collect()
+            }
+        }
+    }
+
+    pub fn ret_ty(self, db: &'db dyn HirAnalysisDb) -> Binder<TyId<'db>> {
+        match self {
+            Self::Func(func) => Binder::bind(func.return_ty(db)),
+            Self::VariantCtor(var) => {
+                let adt = var.enum_.as_adt(db);
+                let mut ty = TyId::adt(db, adt);
+                for &param in adt.params(db) {
+                    ty = TyId::app(db, ty, param);
+                }
+                Binder::bind(ty)
+            }
+        }
+    }
+
+    pub fn receiver_ty(self, db: &'db dyn HirAnalysisDb) -> Option<Binder<TyId<'db>>> {
+        match self {
+            Self::Func(func) if func.is_method(db) => func.arg_tys(db).into_iter().next(),
+            _ => None,
         }
     }
 }

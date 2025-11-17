@@ -7,23 +7,28 @@ use rustc_hash::FxHashMap;
 use smallvec1::SmallVec;
 
 use crate::analysis::HirAnalysisDb;
-use crate::analysis::name_resolution::{diagnostics::PathResDiag, ExpectedPathKind};
+use crate::analysis::name_resolution::{ExpectedPathKind, diagnostics::PathResDiag};
 use crate::analysis::ty::binder::Binder;
-use crate::hir_def::{Func, GenericParamOwner, IdentId, Impl as HirImpl, ImplTrait, Trait, TraitRefId};
+use crate::hir_def::{
+    Func, GenericParamOwner, IdentId, Impl as HirImpl, ImplTrait, Trait, TraitRefId,
+};
 
 use super::{
     adt_def::{AdtDef, AdtRef},
     diagnostics::{ImplDiag, TraitConstraintDiag, TraitLowerDiag, TyDiagCollection, TyLowerDiag},
     method_cmp::compare_impl_method,
-    trait_def::{ingot_trait_env, does_impl_trait_conflict, Implementor, TraitDef},
-    trait_lower::{lower_impl_trait, lower_trait_ref, TraitRefLowerError},
-    trait_resolution::{constraint::collect_constraints, PredicateListId},
+    trait_def::{Implementor, TraitDef, does_impl_trait_conflict, ingot_trait_env},
+    trait_lower::{TraitRefLowerError, lower_impl_trait, lower_trait_ref},
+    trait_resolution::{PredicateListId, constraint::collect_constraints},
     ty_def::{InvalidCause, TyData},
 };
 
 /// Analyze structs/enums/contracts via semantic views.
 #[salsa::tracked(return_ref)]
-pub fn analyze_adt<'db>(db: &'db dyn HirAnalysisDb, adt_ref: AdtRef<'db>) -> Vec<TyDiagCollection<'db>> {
+pub fn analyze_adt<'db>(
+    db: &'db dyn HirAnalysisDb,
+    adt_ref: AdtRef<'db>,
+) -> Vec<TyDiagCollection<'db>> {
     match adt_ref {
         AdtRef::Struct(s) => s.analyze(db),
         AdtRef::Enum(e) => e.analyze(db),
@@ -33,19 +38,28 @@ pub fn analyze_adt<'db>(db: &'db dyn HirAnalysisDb, adt_ref: AdtRef<'db>) -> Vec
 
 /// Analyze trait definition via semantic views.
 #[salsa::tracked(return_ref)]
-pub fn analyze_trait<'db>(db: &'db dyn HirAnalysisDb, trait_: Trait<'db>) -> Vec<TyDiagCollection<'db>> {
+pub fn analyze_trait<'db>(
+    db: &'db dyn HirAnalysisDb,
+    trait_: Trait<'db>,
+) -> Vec<TyDiagCollection<'db>> {
     trait_.analyze(db)
 }
 
 /// Analyze inherent impl via semantic views.
 #[salsa::tracked(return_ref)]
-pub fn analyze_impl<'db>(db: &'db dyn HirAnalysisDb, impl_: HirImpl<'db>) -> Vec<TyDiagCollection<'db>> {
+pub fn analyze_impl<'db>(
+    db: &'db dyn HirAnalysisDb,
+    impl_: HirImpl<'db>,
+) -> Vec<TyDiagCollection<'db>> {
     impl_.analyze(db)
 }
 
 /// Analyze function definition via semantic views + generic-param diags.
 #[salsa::tracked(return_ref)]
-pub fn analyze_func<'db>(db: &'db dyn HirAnalysisDb, func: Func<'db>) -> Vec<TyDiagCollection<'db>> {
+pub fn analyze_func<'db>(
+    db: &'db dyn HirAnalysisDb,
+    func: Func<'db>,
+) -> Vec<TyDiagCollection<'db>> {
     let mut diags = func.analyze(db);
     let owner = GenericParamOwner::Func(func);
     diags.extend(owner.diags_const_param_types(db));
@@ -73,7 +87,10 @@ pub fn analyze_impl_trait<'db>(
     let mut diags = Vec::new();
 
     // Method conformance diagnostics
-    diags.extend(analyze_impl_trait_method(db, implementor.instantiate_identity()));
+    diags.extend(analyze_impl_trait_method(
+        db,
+        implementor.instantiate_identity(),
+    ));
 
     // Trait-ref WF and super-trait constraints
     diags.extend(impl_trait.diags_trait_ref_and_wf(db));
@@ -105,7 +122,10 @@ fn analyze_impl_trait_specific_error<'db>(
         return Err(diags);
     };
     // Early return if the implementor type is syntactically missing.
-    if matches!(impl_trait.ty(db).data(db), TyData::Invalid(InvalidCause::ParseError)) {
+    if matches!(
+        impl_trait.ty(db).data(db),
+        TyData::Invalid(InvalidCause::ParseError)
+    ) {
         return Err(diags);
     }
 
@@ -170,7 +190,9 @@ fn analyze_impl_trait_specific_error<'db>(
     ) {
         let trait_ = implementor.skip_binder().trait_(db);
         let env = ingot_trait_env(db, trait_.ingot(db));
-        let Some(impls) = env.impls.get(&trait_.def(db)) else { return; };
+        let Some(impls) = env.impls.get(&trait_.def(db)) else {
+            return;
+        };
         for cand in impls {
             if does_impl_trait_conflict(db, *cand, implementor) {
                 diags.push(
@@ -206,7 +228,11 @@ fn analyze_impl_trait_specific_error<'db>(
     diags.extend(impl_trait.diags_missing_assoc_types(db));
     diags.extend(impl_trait.diags_assoc_types_bounds(db));
 
-    if diags.is_empty() { Ok(implementor) } else { Err(diags) }
+    if diags.is_empty() {
+        Ok(implementor)
+    } else {
+        Err(diags)
+    }
 }
 
 /// Compare impl methods vs. trait methods and report missing/mismatched ones.

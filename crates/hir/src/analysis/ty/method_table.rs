@@ -6,7 +6,7 @@ use salsa::Update;
 use super::{
     binder::Binder,
     canonical::Canonical,
-    func_def::{FuncDef, lower_func},
+    func_def::{CallableDef, lower_func},
     ty_def::{TyBase, TyId},
     unify::UnificationTable,
 };
@@ -30,7 +30,7 @@ pub(crate) fn probe_method<'db>(
     ingot: Ingot<'db>,
     ty: Canonical<TyId<'db>>,
     name: IdentId<'db>,
-) -> Vec<FuncDef<'db>> {
+) -> Vec<CallableDef<'db>> {
     let table = collect_methods(db, ingot);
     table.probe(db, ty, name)
 }
@@ -46,7 +46,7 @@ impl<'db> MethodTable<'db> {
         db: &'db dyn HirAnalysisDb,
         ty: Canonical<TyId<'db>>,
         name: IdentId<'db>,
-    ) -> Vec<FuncDef<'db>> {
+    ) -> Vec<CallableDef<'db>> {
         let mut table = UnificationTable::new(db);
         let ty = ty.extract_identity(&mut table);
         let Some(base) = Self::extract_ty_base(ty, db) else {
@@ -70,12 +70,14 @@ impl<'db> MethodTable<'db> {
         self
     }
 
-    fn insert(&mut self, db: &'db dyn HirAnalysisDb, ty: TyId<'db>, func: FuncDef<'db>) {
+    fn insert(&mut self, db: &'db dyn HirAnalysisDb, ty: TyId<'db>, func: CallableDef<'db>) {
         let Some(base) = Self::extract_ty_base(ty, db) else {
             return;
         };
 
-        let name = func.name(db);
+        let name = func
+            .name(db)
+            .expect("callables inserted in table have a name");
         let bucket = self.buckets.entry(*base).or_insert_with(MethodBucket::new);
         let methods = bucket.methods.entry(Binder::bind(ty)).or_default();
         methods.insert(name, func);
@@ -92,7 +94,7 @@ impl<'db> MethodTable<'db> {
 
 #[derive(Debug, Clone, PartialEq, Eq, Update)]
 struct MethodBucket<'db> {
-    methods: FxHashMap<Binder<TyId<'db>>, FxHashMap<IdentId<'db>, FuncDef<'db>>>,
+    methods: FxHashMap<Binder<TyId<'db>>, FxHashMap<IdentId<'db>, CallableDef<'db>>>,
 }
 
 impl<'db> MethodBucket<'db> {
@@ -107,7 +109,7 @@ impl<'db> MethodBucket<'db> {
         table: &mut UnificationTable<'db>,
         ty: TyId<'db>,
         name: IdentId<'db>,
-    ) -> Vec<FuncDef<'db>> {
+    ) -> Vec<CallableDef<'db>> {
         let mut methods = vec![];
         for (&cand_ty, funcs) in self.methods.iter() {
             let snapshot = table.snapshot();
@@ -166,15 +168,20 @@ impl<'db> MethodCollector<'db> {
         self.method_table.finalize()
     }
 
-    fn insert(&mut self, ty: TyId<'db>, func: FuncDef<'db>) {
-        let ty = match func.receiver_ty(self.db) {
-            Some(ty) => ty.instantiate_identity(),
-            None => ty,
+    fn insert(&mut self, ty: TyId<'db>, func: CallableDef<'db>) {
+        let ty = if let Some(receiver) = func.receiver_ty(self.db) {
+            receiver.instantiate_identity()
+        } else {
+            ty
         };
 
         if self
             .method_table
-            .probe(self.db, Canonical::new(self.db, ty), func.name(self.db))
+            .probe(
+                self.db,
+                Canonical::new(self.db, ty),
+                func.name(self.db).expect("callable has name"),
+            )
             .is_empty()
         {
             self.method_table.insert(self.db, ty, func)
