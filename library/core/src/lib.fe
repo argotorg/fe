@@ -4,7 +4,7 @@ pub use default::Default
 pub use dispatcher::Dispatcher
 pub use ops::*
 pub use ptr::*
-pub use intrinsic::{calldataload, mload, mstore, mstore8, sload, sstore}
+pub use intrinsic::{calldataload, mload, mstore, mstore8, return_data, sload, sstore}
 pub use mem::alloc
 pub use functional::{Fn, Functor, Applicative, Monad}
 

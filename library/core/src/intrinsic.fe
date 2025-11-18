@@ -8,6 +8,8 @@ extern {
     pub fn calldataload(_: u256) -> u256
     /// Store a 32-byte word to memory.
     pub fn mstore(_: u256, _: u256)
+    /// Return `size` bytes starting at `offset` to the caller.
+    pub fn return_data(_: u256, _: u256)
     /// Store the low byte of the second argument at the memory address.
     pub fn mstore8(_: u256, _: u8)
     /// Load a 32-byte word from storage.

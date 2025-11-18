@@ -1150,6 +1150,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
             "mstore8" => Some(IntrinsicOp::Mstore8),
             "sload" => Some(IntrinsicOp::Sload),
             "sstore" => Some(IntrinsicOp::Sstore),
+            "return_data" => Some(IntrinsicOp::ReturnData),
             _ => None,
         }
     }
