@@ -885,6 +885,7 @@ impl<'db> YulEmitter<'db> {
     fn intrinsic_name(&self, op: IntrinsicOp) -> &'static str {
         match op {
             IntrinsicOp::Mload => "mload",
+            IntrinsicOp::Calldataload => "calldataload",
             IntrinsicOp::Mstore => "mstore",
             IntrinsicOp::Mstore8 => "mstore8",
             IntrinsicOp::Sload => "sload",
