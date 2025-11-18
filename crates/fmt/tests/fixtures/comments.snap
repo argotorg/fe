@@ -3,17 +3,19 @@ source: crates/fmt/tests/format_snapshots.rs
 assertion_line: 16
 expression: output
 input_file: tests/fixtures/comments.fe
---- 
+---
 // Leading file comment
    // misaligned comment that should be indented to column 0
 
-pub  fn  main( )  {
+pub fn main() {
     // comment directly under opening brace
     let x = 1 // trailing comment with  strange   spacing
+
     if x > 1 {
         // inner if comment
         let y = 2
         // spaced out
+
         if y < 10 {
             let z = 3
             // z comment
