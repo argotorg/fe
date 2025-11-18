@@ -1,0 +1,370 @@
+//! Test harness utilities for compiling Fe contracts and exercising their runtimes with `revm`.
+use codegen::emit_module_yul;
+use common::InputDb;
+use driver::DriverDataBase;
+use ethers_core::abi::{AbiParser, ParseError as AbiParseError, Token};
+use hex::FromHex;
+use revm::{
+    bytecode::Bytecode,
+    context::{
+        Context, TxEnv,
+        result::{ExecutionResult, HaltReason, Output},
+    },
+    database::InMemoryDB,
+    handler::{
+        ExecuteCommitEvm, MainBuilder, MainContext, MainnetContext, MainnetEvm,
+    },
+    primitives::{Address, Bytes as EvmBytes},
+    state::AccountInfo,
+};
+pub use revm::primitives::U256;
+use solc_runner::{ContractBytecode, YulcError, compile_single_contract};
+use std::fmt;
+use thiserror::Error;
+use url::Url;
+
+/// Default in-memory file path used when compiling inline Fe sources.
+const MEMORY_SOURCE_URL: &str = "file:///contract.fe";
+
+/// Error type returned by the harness.
+#[derive(Debug, Error)]
+pub enum HarnessError {
+    #[error("fe compiler diagnostics:\n{0}")]
+    CompilerDiagnostics(String),
+    #[error("failed to emit Yul: {0}")]
+    EmitYul(#[from] codegen::EmitModuleError),
+    #[error("solc error: {0}")]
+    Solc(String),
+    #[error("abi encoding failed: {0}")]
+    Abi(#[from] ethers_core::abi::Error),
+    #[error("failed to parse function signature: {0}")]
+    AbiSignature(#[from] AbiParseError),
+    #[error("execution failed: {0}")]
+    Execution(String),
+    #[error("runtime reverted with data {0}")]
+    Revert(RevertData),
+    #[error("runtime halted: {reason:?} (gas_used={gas_used})")]
+    Halted {
+        reason: HaltReason,
+        gas_used: u64,
+    },
+    #[error("unexpected output variant from runtime")]
+    UnexpectedOutput,
+    #[error("invalid hex string: {0}")]
+    Hex(#[from] hex::FromHexError),
+}
+
+impl From<YulcError> for HarnessError {
+    fn from(value: YulcError) -> Self {
+        Self::Solc(value.0)
+    }
+}
+
+/// Captures raw revert data and provides a nicer `Display` implementation.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RevertData(pub Vec<u8>);
+
+impl fmt::Display for RevertData {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "0x{}", hex::encode(&self.0))
+    }
+}
+
+/// Options that control how the Fe source is compiled.
+#[derive(Debug, Clone)]
+pub struct CompileOptions {
+    /// Toggle solc optimizer.
+    pub optimize: bool,
+    /// Verify that solc produced runtime bytecode.
+    pub verify_runtime: bool,
+}
+
+impl Default for CompileOptions {
+    fn default() -> Self {
+        Self {
+            optimize: false,
+            verify_runtime: true,
+        }
+    }
+}
+
+/// Options that control the execution context fed into `revm`.
+#[derive(Debug, Clone, Copy)]
+pub struct ExecutionOptions {
+    pub caller: Address,
+    pub gas_limit: u64,
+    pub gas_price: u128,
+    pub value: U256,
+}
+
+impl Default for ExecutionOptions {
+    fn default() -> Self {
+        Self {
+            caller: Address::ZERO,
+            gas_limit: 1_000_000,
+            gas_price: 0,
+            value: U256::ZERO,
+        }
+    }
+}
+
+/// Output returned from executing contract runtime bytecode.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CallResult {
+    pub return_data: Vec<u8>,
+    pub gas_used: u64,
+}
+
+fn prepare_account(
+    runtime_bytecode_hex: &str,
+) -> Result<(Bytecode, Address, InMemoryDB), HarnessError> {
+    let code = hex_to_bytes(runtime_bytecode_hex)?;
+    let bytecode = Bytecode::new_raw(EvmBytes::from(code));
+    let address = Address::with_last_byte(0xff);
+    Ok((bytecode, address, InMemoryDB::default()))
+}
+
+fn transact(
+    evm: &mut MainnetEvm<MainnetContext<InMemoryDB>>,
+    address: Address,
+    calldata: &[u8],
+    options: ExecutionOptions,
+) -> Result<CallResult, HarnessError> {
+    let tx = TxEnv::builder()
+        .caller(options.caller)
+        .gas_limit(options.gas_limit)
+        .gas_price(options.gas_price)
+        .to(address)
+        .value(options.value)
+        .data(EvmBytes::copy_from_slice(calldata))
+        .build()
+        .map_err(|err| HarnessError::Execution(format!("{err:?}")))?;
+
+    let result = evm
+        .transact_commit(tx)
+        .map_err(|err| HarnessError::Execution(err.to_string()))?;
+    match result {
+        ExecutionResult::Success {
+            output: Output::Call(bytes),
+            gas_used,
+            ..
+        } => Ok(CallResult {
+            return_data: bytes.to_vec(),
+            gas_used,
+        }),
+        ExecutionResult::Success {
+            output: Output::Create(..),
+            ..
+        } => Err(HarnessError::UnexpectedOutput),
+        ExecutionResult::Revert { output, .. } => {
+            Err(HarnessError::Revert(RevertData(output.to_vec())))
+        }
+        ExecutionResult::Halt { reason, gas_used } => Err(HarnessError::Halted { reason, gas_used }),
+    }
+}
+
+/// Stateful runtime instance backed by a persistent in-memory database.
+pub struct RuntimeInstance {
+    evm: MainnetEvm<MainnetContext<InMemoryDB>>,
+    address: Address,
+}
+
+impl RuntimeInstance {
+    /// Instantiates a runtime instance from raw bytecode, inserting it into an `InMemoryDB`.
+    pub fn new(runtime_bytecode_hex: &str) -> Result<Self, HarnessError> {
+        let (bytecode, address, mut db) = prepare_account(runtime_bytecode_hex)?;
+        let code_hash = bytecode.hash_slow();
+        db.insert_account_info(address, AccountInfo::new(U256::ZERO, 0, code_hash, bytecode));
+        let ctx = Context::mainnet().with_db(db);
+        let evm = ctx.build_mainnet();
+        Ok(Self { evm, address })
+    }
+
+    /// Executes the runtime with arbitrary calldata.
+    pub fn call_raw(
+        &mut self,
+        calldata: &[u8],
+        options: ExecutionOptions,
+    ) -> Result<CallResult, HarnessError> {
+        transact(&mut self.evm, self.address, calldata, options)
+    }
+
+    /// Executes a strongly-typed function call using ABI encoding.
+    pub fn call_function(
+        &mut self,
+        signature: &str,
+        args: &[Token],
+        options: ExecutionOptions,
+    ) -> Result<CallResult, HarnessError> {
+        let calldata = encode_function_call(signature, args)?;
+        self.call_raw(&calldata, options)
+    }
+
+    /// Returns the contract address assigned to this runtime instance.
+    pub fn address(&self) -> Address {
+        self.address
+    }
+}
+
+/// Harness that compiles Fe source code and executes the resulting contract runtime.
+pub struct FeContractHarness {
+    contract: ContractBytecode,
+}
+
+impl FeContractHarness {
+    /// Convenience helper that uses default [`CompileOptions`].
+    pub fn compile(contract_name: &str, source: &str) -> Result<Self, HarnessError> {
+        Self::compile_from_source(contract_name, source, CompileOptions::default())
+    }
+
+    /// Compiles the provided Fe source into bytecode for the specified contract.
+    pub fn compile_from_source(
+        contract_name: &str,
+        source: &str,
+        options: CompileOptions,
+    ) -> Result<Self, HarnessError> {
+        let mut db = DriverDataBase::default();
+        let url = Url::parse(MEMORY_SOURCE_URL).expect("static URL is valid");
+        db.workspace()
+            .touch(&mut db, url.clone(), Some(source.to_string()));
+        let file = db
+            .workspace()
+            .get(&db, &url)
+            .expect("file should exist in workspace");
+        let top_mod = db.top_mod(file);
+        let diags = db.run_on_top_mod(top_mod);
+        if !diags.is_empty() {
+            return Err(HarnessError::CompilerDiagnostics(
+                diags.format_diags(&db),
+            ));
+        }
+        let yul = emit_module_yul(&db, top_mod)?;
+        let contract = compile_single_contract(
+            contract_name,
+            &yul,
+            options.optimize,
+            options.verify_runtime,
+        )?;
+        Ok(Self { contract })
+    }
+
+    /// Returns the raw runtime bytecode emitted by `solc`.
+    pub fn runtime_bytecode(&self) -> &str {
+        &self.contract.runtime_bytecode
+    }
+
+    /// Executes the compiled runtime with arbitrary calldata.
+    pub fn call_raw(
+        &self,
+        calldata: &[u8],
+        options: ExecutionOptions,
+    ) -> Result<CallResult, HarnessError> {
+        execute_runtime(&self.contract.runtime_bytecode, calldata, options)
+    }
+
+    /// ABI-encodes the provided arguments and executes the runtime.
+    pub fn call_function(
+        &self,
+        signature: &str,
+        args: &[Token],
+        options: ExecutionOptions,
+    ) -> Result<CallResult, HarnessError> {
+        let calldata = encode_function_call(signature, args)?;
+        self.call_raw(&calldata, options)
+    }
+
+    /// Creates a persistent runtime instance that can serve multiple calls.
+    pub fn deploy_instance(&self) -> Result<RuntimeInstance, HarnessError> {
+        RuntimeInstance::new(&self.contract.runtime_bytecode)
+    }
+}
+
+/// ABI-encodes a function call according to the provided signature.
+pub fn encode_function_call(signature: &str, args: &[Token]) -> Result<Vec<u8>, HarnessError> {
+    let function = AbiParser::default().parse_function(signature)?;
+    let encoded = function.encode_input(args)?;
+    Ok(encoded)
+}
+
+/// Executes the provided runtime bytecode within `revm`.
+pub fn execute_runtime(
+    runtime_bytecode_hex: &str,
+    calldata: &[u8],
+    options: ExecutionOptions,
+) -> Result<CallResult, HarnessError> {
+    let mut instance = RuntimeInstance::new(runtime_bytecode_hex)?;
+    instance.call_raw(calldata, options)
+}
+
+/// Parses a hex string (with or without `0x` prefix) into raw bytes.
+pub fn hex_to_bytes(hex: &str) -> Result<Vec<u8>, HarnessError> {
+    let trimmed = hex.trim().strip_prefix("0x").unwrap_or(hex.trim());
+    Vec::from_hex(trimmed).map_err(HarnessError::Hex)
+}
+
+/// Interprets exactly 32 return bytes as a big-endian `U256`.
+pub fn bytes_to_u256(bytes: &[u8]) -> Result<U256, HarnessError> {
+    if bytes.len() != 32 {
+        return Err(HarnessError::Execution(format!(
+            "expected 32 bytes of return data, found {}",
+            bytes.len()
+        )));
+    }
+    let mut buf = [0u8; 32];
+    buf.copy_from_slice(bytes);
+    Ok(U256::from_be_bytes(buf))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ethers_core::{abi::Token, types::U256 as AbiU256};
+    use std::process::Command;
+
+    fn solc_available() -> bool {
+        let solc_path = std::env::var("FE_SOLC_PATH").unwrap_or_else(|_| "solc".to_string());
+        Command::new(solc_path)
+            .arg("--version")
+            .status()
+            .map(|status| status.success())
+            .unwrap_or(false)
+    }
+
+    #[test]
+    fn runtime_instance_persists_state() {
+        if !solc_available() {
+            eprintln!("skipping runtime_instance_persists_state because solc is missing");
+            return;
+        }
+        let yul = r#"
+object "Counter" {
+    code {
+        datacopy(0, dataoffset("runtime"), datasize("runtime"))
+        return(0, datasize("runtime"))
+    }
+    object "runtime" {
+        code {
+            let current := sload(0)
+            let next := add(current, 1)
+            sstore(0, next)
+            mstore(0x00, next)
+            return(0x00, 0x20)
+        }
+    }
+}
+"#;
+        let contract =
+            compile_single_contract("Counter", yul, false, true).expect("yul compilation succeeds");
+        let mut instance =
+            RuntimeInstance::new(&contract.runtime_bytecode).expect("runtime instantiation");
+        let options = ExecutionOptions::default();
+        let first = instance
+            .call_raw(&[0u8; 0], options)
+            .expect("first call succeeds");
+        assert_eq!(bytes_to_u256(&first.return_data).unwrap(), U256::from(1));
+        let second = instance
+            .call_raw(&[0u8; 0], options)
+            .expect("second call succeeds");
+        assert_eq!(bytes_to_u256(&second.return_data).unwrap(), U256::from(2));
+    }
+}
