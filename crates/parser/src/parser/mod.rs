@@ -790,7 +790,7 @@ macro_rules! define_scope {
                     pub(super) static ref RECOVERY_TOKENS: smallvec::SmallVec<SyntaxKind, 4> = {
                         #[allow(unused)]
                         use crate::SyntaxKind::*;
-                        smallvec::SmallVec::from_slice(&[$($recoveries), *])
+                        smallvec::smallvec![$($recoveries), *]
                     };
                 }
 
