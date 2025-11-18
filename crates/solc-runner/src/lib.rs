@@ -216,17 +216,17 @@ fn extract_object(value: &Value, path: &[&str]) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use revm::{
-        bytecode::Bytecode,
-        context::{
-            Context, TxEnv,
-            result::{ExecutionResult, Output},
-        },
-        database::InMemoryDB,
-        handler::{ExecuteCommitEvm, MainBuilder, MainContext},
-        primitives::{Address, Bytes as EvmBytes, U256},
-        state::AccountInfo,
-    };
+    use contract_harness::{ExecutionOptions, U256, bytes_to_u256, execute_runtime};
+    use std::process::Command;
+
+    fn solc_available() -> bool {
+        let solc_path = std::env::var(super::SOLC_ENV).unwrap_or_else(|_| "solc".to_string());
+        Command::new(solc_path)
+            .arg("--version")
+            .status()
+            .map(|status| status.success())
+            .unwrap_or(false)
+    }
     #[test]
     fn build_standard_json_contains_fields() {
         let json_str = build_standard_json("{ sstore(0, 0) }", false).unwrap();
@@ -238,6 +238,10 @@ mod tests {
 
     #[test]
     fn executes_contract_function() {
+        if !solc_available() {
+            eprintln!("skipping executes_contract_function because solc is missing");
+            return;
+        }
         let yul = r#"
 object "Double" {
     code {
@@ -256,8 +260,13 @@ object "Double" {
         let contract = compile_single_contract("Double", yul, false, true)
             .expect("solc should compile handwritten contract");
         let calldata = encode_call_data(10u64);
-        let output = execute_runtime(&contract.runtime_bytecode, &calldata);
-        assert_eq!(bytes_to_u256(&output), U256::from(20u64));
+        let result =
+            execute_runtime(&contract.runtime_bytecode, &calldata, ExecutionOptions::default())
+                .expect("runtime execution should succeed");
+        assert_eq!(
+            bytes_to_u256(&result.return_data).expect("return data should encode a u256"),
+            U256::from(20u64)
+        );
     }
 
     /// Builds calldata for the `Double` contract by ABI-encoding a single `u64`.
@@ -271,63 +280,5 @@ object "Double" {
         data
     }
 
-    /// Executes the provided runtime bytecode and returns the raw call output bytes.
-    ///
-    /// * `bytecode_hex` - Hex string representation of the runtime bytecode.
-    /// * `calldata` - ABI-encoded calldata fed into the runtime.
-    ///
-    /// Returns the raw output returned by the EVM execution.
-    fn execute_runtime(bytecode_hex: &str, calldata: &[u8]) -> Vec<u8> {
-        let code = hex_to_bytes(bytecode_hex);
-        let bytecode = Bytecode::new_raw(EvmBytes::from(code));
-        let code_hash = bytecode.hash_slow();
-        let mut db = InMemoryDB::default();
-        let address = Address::with_last_byte(0xff);
-        let account = AccountInfo::new(U256::ZERO, 0, code_hash, bytecode);
-        db.insert_account_info(address, account);
-
-        let ctx = Context::mainnet().with_db(db);
-        let mut evm = ctx.build_mainnet();
-
-        let tx = TxEnv::builder()
-            .caller(Address::ZERO)
-            .gas_limit(1_000_000)
-            .gas_price(0)
-            .to(address)
-            .value(U256::ZERO)
-            .data(EvmBytes::copy_from_slice(calldata))
-            .build()
-            .expect("tx builder should succeed");
-
-        let result = evm
-            .transact_commit(tx)
-            .expect("runtime execution should succeed");
-        match result {
-            ExecutionResult::Success {
-                output: Output::Call(bytes),
-                ..
-            } => bytes.to_vec(),
-            other => panic!("runtime execution failed: {other:?}"),
-        }
-    }
-
-    /// Converts a hex-encoded bytecode string (with or without `0x`) into raw bytes.
-    ///
-    /// * `hex` - Hexadecimal string to decode.
-    ///
-    /// Returns a vector containing the decoded bytes.
-    fn hex_to_bytes(hex: &str) -> Vec<u8> {
-        let trimmed = hex.trim().strip_prefix("0x").unwrap_or(hex.trim());
-        hex::decode(trimmed).expect("runtime bytecode should be valid hex")
-    }
-
-    /// Interprets a 32-byte slice as a big-endian `U256`.
-    ///
-    /// * `bytes` - Slice containing the execution result bytes.
-    ///
-    /// Returns the value as `U256`, panicking if the slice is not exactly 32 bytes.
-    fn bytes_to_u256(bytes: &[u8]) -> U256 {
-        let array: [u8; 32] = bytes.try_into().expect("expected 32 bytes of return data");
-        U256::from_be_bytes(array)
-    }
+    // execute_runtime and helpers are provided by the contract-harness crate.
 }
