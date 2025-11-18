@@ -27,6 +27,11 @@ pub enum EmitModuleError {
 }
 
 impl std::fmt::Display for EmitModuleError {
+    /// Formats the underlying MIR or Yul error for user-facing diagnostics.
+    ///
+    /// * `f` - Target formatter supplied by the caller.
+    ///
+    /// Returns the formatting result from the standard library.
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             EmitModuleError::MirLower(err) => write!(f, "{err}"),
@@ -38,6 +43,13 @@ impl std::fmt::Display for EmitModuleError {
 impl std::error::Error for EmitModuleError {}
 
 /// Emits Yul for every function in the lowered MIR module.
+///
+/// * `db` - Driver database used to query compiler facts.
+/// * `top_mod` - Root module to lower.
+///
+/// Returns a single Yul string containing all lowered functions followed by any
+/// auto-generated contract runtimes, or [`EmitModuleError`] if MIR lowering or
+/// Yul emission fails.
 pub fn emit_module_yul(
     db: &DriverDataBase,
     top_mod: TopLevelMod<'_>,
@@ -56,6 +68,13 @@ pub fn emit_module_yul(
     Ok(join_lines(lines))
 }
 
+/// Builds Yul doc trees for every contract found in `top_mod`.
+///
+/// * `db` - Compiler database providing HIR access.
+/// * `top_mod` - Module containing potential contract definitions.
+///
+/// Returns a vector of doc lists, one per contract, ready to append to the
+/// module output.
 fn emit_contract_runtimes(
     db: &DriverDataBase,
     top_mod: TopLevelMod<'_>,
@@ -68,6 +87,12 @@ fn emit_contract_runtimes(
         .collect()
 }
 
+/// Converts a HIR contract into the doc tree describing its constructor/runtime object.
+///
+/// * `db` - Compiler database used to resolve the contract name.
+/// * `contract` - Target contract to wrap.
+///
+/// Returns the constructed doc tree or `None` when the contract lacks a resolvable name.
 fn contract_runtime_object(
     db: &DriverDataBase,
     contract: Contract<'_>,
@@ -79,6 +104,11 @@ fn contract_runtime_object(
     Some(render_contract_runtime_docs(&name))
 }
 
+/// Creates a Yul doc tree describing the dispatcher-based runtime wrapper for `name`.
+///
+/// * `name` - Contract identifier used for the Yul `object`.
+///
+/// Returns the doc list containing constructor and runtime sections.
 fn render_contract_runtime_docs(name: &str) -> Vec<YulDoc> {
     vec![YulDoc::block(
         format!("object \"{name}\" "),
@@ -95,6 +125,7 @@ fn render_contract_runtime_docs(name: &str) -> Vec<YulDoc> {
                 "object \"runtime\" ",
                 vec![YulDoc::block(
                     "code ",
+                    // TODO: This is just temporary until we have a real dispatcher implementation.
                     vec![YulDoc::line("dispatch()"), YulDoc::line("stop()")],
                 )],
             ),
@@ -102,6 +133,11 @@ fn render_contract_runtime_docs(name: &str) -> Vec<YulDoc> {
     )]
 }
 
+/// Joins rendered lines while trimming trailing whitespace-only entries.
+///
+/// * `lines` - Vector of rendered Yul lines.
+///
+/// Returns the normalized Yul output string.
 fn join_lines(mut lines: Vec<String>) -> String {
     while lines.last().is_some_and(|line| line.is_empty()) {
         lines.pop();
@@ -128,6 +164,13 @@ struct LoopEmitCtx {
 }
 
 impl<'db> YulEmitter<'db> {
+    /// Constructs a new emitter for the given MIR function.
+    ///
+    /// * `db` - Driver database providing access to bodies and type info.
+    /// * `mir_func` - MIR function to lower into Yul.
+    ///
+    /// Returns the initialized emitter or [`YulError::MissingBody`] if the
+    /// function lacks a body.
     fn new(db: &'db DriverDataBase, mir_func: &'db MirFunction<'db>) -> Result<Self, YulError> {
         let body = mir_func
             .func
@@ -143,6 +186,9 @@ impl<'db> YulEmitter<'db> {
     }
 
     /// Produces the final Yul docs for the current MIR function.
+    ///
+    /// Returns the document tree containing a single Yul `function` block or a
+    /// [`YulError`] when lowering fails.
     fn emit_doc(mut self) -> Result<Vec<YulDoc>, YulError> {
         let func_name = self.mir_func.symbol_name.as_str();
         let (param_names, mut state) = self.init_function_state();
@@ -155,6 +201,8 @@ impl<'db> YulEmitter<'db> {
     }
 
     /// Initializes the `BlockState` with parameter bindings and returns their Yul names.
+    ///
+    /// Returns a tuple containing the ordered argument names and the populated block state.
     fn init_function_state(&self) -> (Vec<String>, BlockState) {
         let mut state = BlockState::new();
         let mut params_out = Vec::new();
@@ -175,6 +223,11 @@ impl<'db> YulEmitter<'db> {
     }
 
     /// Formats the Fe function name and parameters into a Yul signature.
+    ///
+    /// * `func_name` - Symbol exported to Yul.
+    /// * `params` - Rendered parameter identifiers.
+    ///
+    /// Returns the textual `function ... -> ret` signature.
     fn format_function_signature(&self, func_name: &str, params: &[String]) -> String {
         let params_str = params.join(", ");
         if params.is_empty() {
@@ -185,6 +238,11 @@ impl<'db> YulEmitter<'db> {
     }
 
     /// Emits the Yul docs for a basic block starting without any active loop context.
+    ///
+    /// * `block_id` - Entry block to render.
+    /// * `state` - Current SSA-like binding state.
+    ///
+    /// Returns the rendered statements for the block.
     fn emit_block(
         &mut self,
         block_id: BasicBlockId,
@@ -194,6 +252,12 @@ impl<'db> YulEmitter<'db> {
     }
 
     /// Emits a block while honoring the provided loop context (if any).
+    ///
+    /// * `block_id` - Destination to render.
+    /// * `loop_ctx` - Active loop metadata or `None`.
+    /// * `state` - Mutable block state containing bindings.
+    ///
+    /// Returns the rendered Yul docs for the block.
     fn emit_block_with_ctx(
         &mut self,
         block_id: BasicBlockId,
@@ -205,8 +269,12 @@ impl<'db> YulEmitter<'db> {
 
     /// Emits a block while preventing recursion into `stop_block`.
     ///
-    /// Returns the rendered docs for `block_id`, stopping early when a branch would
-    /// enter `stop_block` (used for match arms that should not re-render the merge).
+    /// * `block_id` - Entry block to render.
+    /// * `loop_ctx` - Active loop metadata or `None`.
+    /// * `state` - Mutable binding state.
+    /// * `stop_block` - Optional merge block that should not be revisited.
+    ///
+    /// Returns the rendered docs, stopping before re-entering `stop_block`.
     fn emit_block_with_stop(
         &mut self,
         block_id: BasicBlockId,
@@ -219,8 +287,12 @@ impl<'db> YulEmitter<'db> {
 
     /// Core implementation shared by the various block emitters.
     ///
-    /// Returns the rendered docs starting at `block_id`, honoring `loop_ctx` and
-    /// skipping emission entirely if `block_id == stop_block`.
+    /// * `block_id` - Entry block.
+    /// * `loop_ctx` - Optional surrounding loop context.
+    /// * `state` - Current binding state.
+    /// * `stop_block` - Merge block to skip (if any).
+    ///
+    /// Returns the rendered statements produced while traversing the block.
     fn emit_block_internal(
         &mut self,
         block_id: BasicBlockId,
@@ -456,6 +528,12 @@ impl<'db> YulEmitter<'db> {
     }
 
     /// Finds the unified merge block that all literal match arms jump to, if any.
+    /// Determines if the match lowering introduced a merge block and returns it.
+    ///
+    /// * `targets` - All non-default switch destinations.
+    /// * `default` - Default block ID written by MIR.
+    ///
+    /// Returns the merge block when both branches converge, otherwise `None`.
     fn match_merge_block(
         &self,
         targets: &[SwitchTarget],
@@ -495,11 +573,22 @@ impl<'db> YulEmitter<'db> {
     }
 
     /// Looks up metadata about the loop that starts at `header`, if it exists.
+    /// Fetches MIR loop metadata for the requested header block.
+    ///
+    /// * `header` - Loop header to query.
+    ///
+    /// Returns the associated [`LoopInfo`] when the MIR builder recorded one.
     fn loop_info(&self, header: BasicBlockId) -> Option<LoopInfo> {
         self.mir_func.body.loop_headers.get(&header).copied()
     }
 
     /// Emits a Yul `for` loop for the given header block and returns the exit block.
+    ///
+    /// * `header` - Loop header block chosen by MIR.
+    /// * `info` - Loop metadata describing body/backedge/exit blocks.
+    /// * `state` - Mutable binding state used while rendering body and exit.
+    ///
+    /// Returns the loop doc plus the block ID that execution continues at after the loop exits.
     fn emit_loop(
         &mut self,
         header: BasicBlockId,
@@ -539,6 +628,11 @@ impl<'db> YulEmitter<'db> {
     }
 
     /// Lowers straight-line MIR instructions into Yul docs.
+    ///
+    /// * `insts` - MIR instructions belonging to the current block.
+    /// * `state` - Mutable binding table shared across the block.
+    ///
+    /// Returns the collected Yul statements for the linear portion.
     fn render_statements(
         &mut self,
         insts: &[mir::MirInst<'_>],
@@ -626,6 +720,12 @@ impl<'db> YulEmitter<'db> {
     }
 
     /// Lowers a MIR `ValueId` into a Yul expression string.
+    /// Translates a MIR value into its Yul expression string.
+    ///
+    /// * `value_id` - Identifier selecting the MIR value.
+    /// * `state` - Current bindings for previously-evaluated expressions.
+    ///
+    /// Returns the Yul expression referencing the value or an error if unsupported.
     fn lower_value(&self, value_id: ValueId, state: &BlockState) -> Result<String, YulError> {
         let value = self.mir_func.body.value(value_id);
         match &value.origin {
@@ -646,6 +746,11 @@ impl<'db> YulEmitter<'db> {
     }
 
     /// Emits statements for expression statements, returning a doc when work was done.
+    ///
+    /// * `value_id` - MIR value representing the expression.
+    /// * `state` - Block state containing active bindings.
+    ///
+    /// Returns a doc describing the evaluation side effects, if any.
     fn render_eval(
         &mut self,
         value_id: ValueId,
@@ -660,6 +765,12 @@ impl<'db> YulEmitter<'db> {
 
     /// Handles `return intrinsic::<op>(...)` for void intrinsics by emitting the
     /// side effect plus a `ret := 0`.
+    ///
+    /// * `value_id` - MIR value representing the intrinsic call.
+    /// * `docs` - Output doc list to append to.
+    /// * `state` - Mutable state used for lowering arguments.
+    ///
+    /// Returns `true` when the intrinsic produced a replacement return statement.
     fn emit_intrinsic_return(
         &mut self,
         value_id: ValueId,
@@ -680,6 +791,11 @@ impl<'db> YulEmitter<'db> {
     }
 
     /// Converts intrinsic value-producing operations (`mload`/`sload`) into Yul.
+    ///
+    /// * `intr` - Intrinsic descriptor referencing the MIR operands.
+    /// * `state` - Binding state used to evaluate operands.
+    ///
+    /// Returns the Yul expression representing the intrinsic result.
     fn lower_intrinsic_value(
         &self,
         intr: &IntrinsicValue,
@@ -696,6 +812,11 @@ impl<'db> YulEmitter<'db> {
     }
 
     /// Converts intrinsic statement operations (`mstore`, …) into Yul.
+    ///
+    /// * `intr` - Intrinsic descriptor.
+    /// * `state` - Binding state containing previously-evaluated expressions.
+    ///
+    /// Returns the emitted doc when the intrinsic performs work.
     fn lower_intrinsic_stmt(
         &self,
         intr: &IntrinsicValue,
@@ -716,6 +837,11 @@ impl<'db> YulEmitter<'db> {
     }
 
     /// Lowers all intrinsic arguments into Yul expressions.
+    ///
+    /// * `intr` - Intrinsic descriptor with MIR value IDs.
+    /// * `state` - Binding state used to lower each argument.
+    ///
+    /// Returns the vector of evaluated argument expressions.
     fn lower_intrinsic_args(
         &self,
         intr: &IntrinsicValue,
@@ -728,6 +854,12 @@ impl<'db> YulEmitter<'db> {
     }
 
     /// Emits a user-friendly error when an intrinsic is lowered with the wrong arity.
+    ///
+    /// * `op` - Intrinsic opcode used for error messaging.
+    /// * `args` - Already-lowered argument expressions.
+    /// * `expected` - Number of args the intrinsic requires.
+    ///
+    /// Returns `Ok(())` when the arity matches or a [`YulError`] describing the mismatch.
     fn expect_intrinsic_arity(
         &self,
         op: IntrinsicOp,
@@ -746,6 +878,10 @@ impl<'db> YulEmitter<'db> {
     }
 
     /// Returns the Yul builtin name for an intrinsic opcode.
+    ///
+    /// * `op` - Intrinsic opcode to map.
+    ///
+    /// Returns the intrinsic's string literal recognized by Yul.
     fn intrinsic_name(&self, op: IntrinsicOp) -> &'static str {
         match op {
             IntrinsicOp::Mload => "mload",
@@ -757,6 +893,11 @@ impl<'db> YulEmitter<'db> {
     }
 
     /// Lowers a HIR expression into a Yul expression string.
+    ///
+    /// * `expr_id` - Expression to render.
+    /// * `state` - Binding state used for nested expressions.
+    ///
+    /// Returns the fully-lowered Yul expression.
     fn lower_expr(&self, expr_id: ExprId, state: &BlockState) -> Result<String, YulError> {
         if let Some(temp) = self.expr_temps.get(&expr_id) {
             return Ok(temp.clone());
@@ -898,6 +1039,10 @@ impl<'db> YulEmitter<'db> {
     }
 
     /// Returns the last expression statement in a block, if any.
+    ///
+    /// * `stmts` - Slice of statement IDs to inspect.
+    ///
+    /// Returns the expression ID for the trailing expression statement when present.
     fn last_expr(&self, stmts: &[StmtId]) -> Option<ExprId> {
         stmts.iter().rev().find_map(|stmt_id| {
             let Ok(stmt) = self.expect_stmt(*stmt_id) else {
@@ -912,6 +1057,10 @@ impl<'db> YulEmitter<'db> {
     }
 
     /// Extracts the identifier bound by a pattern.
+    ///
+    /// * `pat_id` - Pattern pointing to the binding site.
+    ///
+    /// Returns the identifier string or a `YulError` if the pattern is unsupported.
     fn pattern_ident(&self, pat_id: PatId) -> Result<String, YulError> {
         let pat = self.expect_pat(pat_id)?;
         match pat {
@@ -925,6 +1074,10 @@ impl<'db> YulEmitter<'db> {
     }
 
     /// Resolves an expression that should represent a path (e.g. assignment target).
+    ///
+    /// * `expr_id` - Expression expected to be a path/identifier.
+    ///
+    /// Returns the resolved identifier or an error if the expression is not a simple path.
     fn path_from_expr(&self, expr_id: ExprId) -> Result<String, YulError> {
         let expr = self.expect_expr(expr_id)?;
         if let Expr::Path(path) = expr {
@@ -938,6 +1091,10 @@ impl<'db> YulEmitter<'db> {
     }
 
     /// Returns the identifier name represented by a path, if it is a plain ident.
+    ///
+    /// * `path` - Path extracted from the AST/HIR.
+    ///
+    /// Returns the identifier string when the path reduces to a single symbol.
     fn path_ident(&self, path: Partial<PathId<'_>>) -> Option<String> {
         let path = path.to_opt()?;
         path.as_ident(self.db)
@@ -945,6 +1102,10 @@ impl<'db> YulEmitter<'db> {
     }
 
     /// Fetches the expression from HIR, converting missing data into `YulError`.
+    ///
+    /// * `expr_id` - Expression handle inside the current body.
+    ///
+    /// Returns the referenced expression node or an error if the expression is absent.
     fn expect_expr(&self, expr_id: ExprId) -> Result<&Expr<'db>, YulError> {
         match expr_id.data(self.db, self.body) {
             Partial::Present(expr) => Ok(expr),
@@ -953,6 +1114,10 @@ impl<'db> YulEmitter<'db> {
     }
 
     /// Fetches the pattern from HIR, converting missing data into `YulError`.
+    ///
+    /// * `pat_id` - Pattern identifier within the current body.
+    ///
+    /// Returns the pattern node or an error when unavailable.
     fn expect_pat(&self, pat_id: PatId) -> Result<&Pat<'db>, YulError> {
         match pat_id.data(self.db, self.body) {
             Partial::Present(pat) => Ok(pat),
@@ -961,6 +1126,10 @@ impl<'db> YulEmitter<'db> {
     }
 
     /// Fetches the statement from HIR, converting missing data into `YulError`.
+    ///
+    /// * `stmt_id` - Statement identifier within the current body.
+    ///
+    /// Returns the statement node or an error when unavailable.
     fn expect_stmt(&self, stmt_id: StmtId) -> Result<&Stmt<'db>, YulError> {
         match stmt_id.data(self.db, self.body) {
             Partial::Present(stmt) => Ok(stmt),
@@ -969,6 +1138,11 @@ impl<'db> YulEmitter<'db> {
     }
 
     /// Lowers a MIR call into a Yul function invocation.
+    ///
+    /// * `call` - Call origin describing the callee and arguments.
+    /// * `state` - Binding state used to lower argument expressions.
+    ///
+    /// Returns the Yul invocation string for the call.
     fn lower_call_value(
         &self,
         call: &CallOrigin<'_>,
@@ -998,6 +1172,11 @@ impl<'db> YulEmitter<'db> {
         }
     }
 
+    /// Lowers special MIR synthetic values such as constants into Yul expressions.
+    ///
+    /// * `value` - Synthetic value emitted during MIR construction.
+    ///
+    /// Returns the literal Yul expression for the synthetic value.
     fn lower_synthetic_value(&self, value: &SyntheticValue) -> Result<String, YulError> {
         match value {
             SyntheticValue::Int(int) => Ok(int.to_string()),
@@ -1006,6 +1185,12 @@ impl<'db> YulEmitter<'db> {
     }
 
     /// Lowers expressions that may require extra statements (e.g. `if`).
+    ///
+    /// * `expr_id` - Expression to lower.
+    /// * `docs` - Doc list to append emitted statements into.
+    /// * `state` - Binding state for allocating temporaries.
+    ///
+    /// Returns either the inline expression or the name of a temporary containing the result.
     fn lower_expr_with_statements(
         &mut self,
         expr_id: ExprId,
@@ -1043,6 +1228,10 @@ impl<'db> YulEmitter<'db> {
     }
 
     /// Returns `true` when the given expression's type is the unit tuple.
+    ///
+    /// * `expr_id` - Expression identifier whose type should be tested.
+    ///
+    /// Returns `true` if the expression's type is the unit tuple.
     fn expr_is_unit(&self, expr_id: ExprId) -> bool {
         let ty = self.mir_func.typed_body.expr_ty(self.db, expr_id);
         ty.is_tuple(self.db) && ty.field_count(self.db) == 0
@@ -1050,6 +1239,10 @@ impl<'db> YulEmitter<'db> {
 }
 
 /// Translates MIR switch literal kinds into their Yul literal strings.
+///
+/// * `value` - Switch value representation.
+///
+/// Returns the string literal used inside the `switch`.
 fn switch_value_literal(value: &SwitchValue) -> String {
     match value {
         SwitchValue::Bool(true) => "1".into(),
@@ -1060,6 +1253,10 @@ fn switch_value_literal(value: &SwitchValue) -> String {
 }
 
 /// Returns the display name of a function or `<anonymous>` if one does not exist.
+///
+/// * `func` - HIR function to name.
+///
+/// Returns the display string used for diagnostics and Yul names.
 fn function_name(db: &DriverDataBase, func: Func<'_>) -> String {
     func.name(db)
         .to_opt()
@@ -1069,11 +1266,20 @@ fn function_name(db: &DriverDataBase, func: Func<'_>) -> String {
 
 /// Returns `true` when `name` matches one of the temporary casting shims
 /// (`__{src}_as_{dst}`) used while the `as` syntax is unavailable.
+///
+/// * `name` - Candidate function identifier.
+///
+/// Returns `true` if the name obeys the shim convention.
 fn is_cast_shim(name: &str) -> bool {
     cast_shim_parts(name).is_some()
 }
 
 /// Converts usages of cast shims into their lone argument so we don't emit fake calls.
+///
+/// * `name` - Function identifier for the shim.
+/// * `args` - Already-lowered argument expressions.
+///
+/// Returns the collapsed argument when `name` is a shim, otherwise `None`.
 fn try_collapse_cast_shim(name: &str, args: &[String]) -> Result<Option<String>, YulError> {
     if !is_cast_shim(name) {
         return Ok(None);
@@ -1091,6 +1297,10 @@ fn try_collapse_cast_shim(name: &str, args: &[String]) -> Result<Option<String>,
 }
 
 /// Validates that a name follows the `__{src}_as_{dst}` convention and returns the parts.
+///
+/// * `name` - Candidate shim identifier.
+///
+/// Returns the `(src, dst)` tuple when the name matches the convention.
 fn cast_shim_parts(name: &str) -> Option<(&str, &str)> {
     let stripped = name.strip_prefix("__")?;
     let (src, dst) = stripped.split_once("_as_")?;
@@ -1103,6 +1313,11 @@ fn cast_shim_parts(name: &str) -> Option<(&str, &str)> {
     Some((src, dst))
 }
 
+/// Validates that a substring of a shim name matches the allowed identifier schema.
+///
+/// * `part` - Either the source or destination portion of the shim name.
+///
+/// Returns `true` if `part` contains only lowercase letters and digits.
 fn is_cast_ident(part: &str) -> bool {
     part.chars()
         .all(|ch| ch.is_ascii_lowercase() || ch.is_ascii_digit())
