@@ -1,7 +1,10 @@
 use crate::{Indent, Rewrite, RewriteContext, Shape};
 use parser::{
     TextRange,
-    ast::{self, ExprKind, GenericArgsOwner, ItemKind, PatKind, StmtKind, TypeKind, prelude::AstNode},
+    ast::{
+        self, AttrListOwner, ExprKind, GenericArgsOwner, GenericParamsOwner, ItemKind,
+        ItemModifierOwner, PatKind, StmtKind, TypeKind, WhereClauseOwner, prelude::AstNode,
+    },
     syntax_kind::SyntaxKind,
     syntax_node::NodeOrToken,
 };
@@ -18,6 +21,51 @@ trait RewriteExt: Rewrite + AstNode {
 }
 
 impl<T: Rewrite + AstNode> RewriteExt for T {}
+
+fn write_attrs<N: AttrListOwner + AstNode>(
+    node: &N,
+    context: &RewriteContext<'_>,
+    out: &mut String,
+) {
+    if let Some(attrs) = node.attr_list() {
+        let text = context.snippet(attrs.syntax().text_range());
+        out.push_str(text.trim_end());
+        out.push('\n');
+    }
+}
+
+fn write_item_modifier<N: ItemModifierOwner + AstNode>(node: &N, out: &mut String) {
+    if let Some(modifier) = node.modifier() {
+        if modifier.pub_kw().is_some() {
+            out.push_str("pub ");
+        }
+        if modifier.unsafe_kw().is_some() {
+            out.push_str("unsafe ");
+        }
+    }
+}
+
+fn write_generics<N: GenericParamsOwner + AstNode>(
+    node: &N,
+    context: &RewriteContext<'_>,
+    out: &mut String,
+) {
+    if let Some(generics) = node.generic_params() {
+        out.push_str(&context.snippet_trimmed(&generics));
+    }
+}
+
+fn write_where_clause<N: WhereClauseOwner + AstNode>(
+    node: &N,
+    context: &RewriteContext<'_>,
+    out: &mut String,
+) {
+    if let Some(where_clause) = node.where_clause() {
+        let text = context.snippet_trimmed(&where_clause);
+        out.push(' ');
+        out.push_str(&text);
+    }
+}
 
 impl Rewrite for ast::Root {
     fn rewrite(&self, context: &RewriteContext<'_>, shape: Shape) -> Option<String> {
@@ -67,14 +115,14 @@ impl Rewrite for ast::Item {
             ItemKind::Mod(_) => Some(context.snippet_trimmed(self)),
             ItemKind::Func(func) => func.rewrite(context, _shape),
             ItemKind::Struct(struct_) => struct_.rewrite(context, _shape),
-            ItemKind::Contract(_) => Some(context.snippet_trimmed(self)),
-            ItemKind::Enum(_) => Some(context.snippet_trimmed(self)),
+            ItemKind::Contract(contract) => contract.rewrite(context, _shape),
+            ItemKind::Enum(enum_) => enum_.rewrite(context, _shape),
             ItemKind::TypeAlias(_) => Some(context.snippet_trimmed(self)),
-            ItemKind::Impl(_) => Some(context.snippet_trimmed(self)),
-            ItemKind::Trait(_) => Some(context.snippet_trimmed(self)),
-            ItemKind::ImplTrait(_) => Some(context.snippet_trimmed(self)),
-            ItemKind::Const(_) => Some(context.snippet_trimmed(self)),
-            ItemKind::Use(_) => Some(context.snippet_trimmed(self)),
+            ItemKind::Impl(impl_) => impl_.rewrite(context, _shape),
+            ItemKind::Trait(trait_) => trait_.rewrite(context, _shape),
+            ItemKind::ImplTrait(impl_trait) => impl_trait.rewrite(context, _shape),
+            ItemKind::Const(const_) => const_.rewrite(context, _shape),
+            ItemKind::Use(use_) => use_.rewrite(context, _shape),
             ItemKind::Extern(_) => Some(context.snippet_trimmed(self)),
         }
     }
@@ -82,32 +130,496 @@ impl Rewrite for ast::Item {
 
 impl Rewrite for ast::Func {
     fn rewrite(&self, context: &RewriteContext<'_>, shape: Shape) -> Option<String> {
-        let func_range = self.syntax().text_range();
         let body = self.body()?;
+
+        let func_range = self.syntax().text_range();
         let body_range = body.syntax().text_range();
-
-        // Split the function into:
-        //   [prefix: signature and attributes][body block][suffix: trailing trivia]
-        let prefix_range = TextRange::new(func_range.start(), body_range.start());
         let suffix_range = TextRange::new(body_range.end(), func_range.end());
-
-        let prefix = context.snippet(prefix_range);
         let suffix = context.snippet(suffix_range);
+
+        let mut out = String::new();
+
+        write_attrs(self, context, &mut out);
+
+        let outer_indent = shape.indent.indent_width();
+        let indent_width = context.config.indent_width;
+        let where_clause_opt = self.where_clause();
+        let has_where = where_clause_opt.is_some();
+
+        // For functions without a `where` clause, keep the existing compact
+        // single-line signature style.
+        if !has_where {
+            write_item_modifier(self, &mut out);
+
+            out.push_str("fn ");
+
+            if let Some(name) = self.name() {
+                out.push_str(context.snippet(name.text_range()));
+            }
+
+            write_generics(self, context, &mut out);
+
+            let params = if let Some(param_list) = self.params() {
+                param_list.rewrite(context, shape)?
+            } else {
+                "()".to_string()
+            };
+            out.push_str(&params);
+
+            if let Some(ret_ty) = self.ret_ty() {
+                let ty = ret_ty.rewrite_or_original(context, shape);
+                out.push_str(" -> ");
+                out.push_str(&ty);
+            }
+
+            if let Some(uses) = self.uses_clause() {
+                let uses_text = uses.rewrite(context, shape)?;
+                out.push(' ');
+                out.push_str(&uses_text);
+            }
+
+            write_where_clause(self, context, &mut out);
+
+            out.push(' ');
+
+            let formatted_body = body.rewrite(context, shape)?;
+
+            out.push_str(&formatted_body);
+            out.push_str(suffix);
+            return Some(out);
+        }
+
+        // Functions with a `where` clause use a width-aware layout. We first
+        // try a fully single-line signature, and only spill pieces to new
+        // lines when they exceed the configured line width.
+        let max_width = shape.width;
+        let param_indent = outer_indent + indent_width;
+
+        // Build reusable pieces of the header.
+        let mut prefix = String::new();
+        write_item_modifier(self, &mut prefix);
+        prefix.push_str("fn ");
+        if let Some(name) = self.name() {
+            prefix.push_str(context.snippet(name.text_range()));
+        }
+        write_generics(self, context, &mut prefix);
+
+        let params_inline = if let Some(param_list) = self.params() {
+            param_list.rewrite(context, shape)?
+        } else {
+            "()".to_string()
+        };
+
+        let ret_inline = if let Some(ret_ty) = self.ret_ty() {
+            let ty = ret_ty.rewrite_or_original(context, shape);
+            format!(" -> {ty}")
+        } else {
+            String::new()
+        };
+
+        let uses_inline = if let Some(uses) = self.uses_clause() {
+            let uses_text = uses.rewrite(context, shape)?;
+            format!(" {uses_text}")
+        } else {
+            String::new()
+        };
+
+        let where_clause = where_clause_opt.expect("has_where is true");
+        let where_text = context
+            .snippet(where_clause.syntax().text_range())
+            .trim()
+            .to_owned();
+        let where_inline = format!(" {where_text}");
+
+        // Fast path: everything fits on a single line.
+        let single_line_len = outer_indent
+            + prefix.len()
+            + params_inline.len()
+            + ret_inline.len()
+            + uses_inline.len()
+            + where_inline.len();
+
+        if single_line_len <= max_width {
+            push_indent(&mut out, outer_indent);
+            out.push_str(&prefix);
+            out.push_str(&params_inline);
+            out.push_str(&ret_inline);
+            out.push_str(&uses_inline);
+            out.push_str(&where_inline);
+            out.push(' ');
+
+            let formatted_body = body.rewrite(context, shape)?;
+            out.push_str(&formatted_body);
+            out.push_str(suffix);
+            return Some(out);
+        }
+
+        // Multi-line layout: decide whether the parameter list can remain
+        // on the first line, then place `uses` / `where` on the same or
+        // subsequent lines depending on the remaining width.
+        let mut current_line_len = 0usize;
+
+        push_indent(&mut out, outer_indent);
+        current_line_len += outer_indent;
+
+        out.push_str(&prefix);
+        current_line_len += prefix.len();
+
+        let params_inline_len = params_inline.len();
+        let params_and_ret_len = params_inline_len + ret_inline.len();
+        let params_inline_fit = current_line_len + params_and_ret_len <= max_width;
+
+        if params_inline_fit {
+            // Keep parameters on the same line.
+            out.push_str(&params_inline);
+            current_line_len += params_inline_len;
+        } else if let Some(param_list) = self.params() {
+            // Spill parameters onto multiple lines.
+            let params: Vec<String> = param_list
+                .into_iter()
+                .map(|param| param.rewrite_or_original(context, shape))
+                .collect();
+
+            if params.is_empty() {
+                out.push_str("()");
+                current_line_len += 2;
+            } else {
+                out.push('(');
+                out.push('\n');
+
+                for param in params {
+                    push_indent(&mut out, param_indent);
+                    out.push_str(&param);
+                    out.push(',');
+                    out.push('\n');
+                }
+
+                push_indent(&mut out, outer_indent);
+                current_line_len = outer_indent;
+                out.push(')');
+                current_line_len += 1;
+            }
+        } else {
+            out.push_str("()");
+            current_line_len += 2;
+        }
+
+        // Return type.
+        if !ret_inline.is_empty() {
+            let ret_len = ret_inline.len();
+            if current_line_len + ret_len <= max_width {
+                out.push_str(&ret_inline);
+                current_line_len += ret_len;
+            } else {
+                out.push('\n');
+                push_indent(&mut out, outer_indent);
+                current_line_len = outer_indent;
+
+                let trimmed = ret_inline.trim_start();
+                out.push_str(trimmed);
+                current_line_len += trimmed.len();
+            }
+        }
+
+        // `uses` clause.
+        if !uses_inline.is_empty() {
+            let uses_len = uses_inline.len();
+            let uses_no_space = uses_inline.trim_start();
+
+            if current_line_len + uses_len <= max_width {
+                out.push_str(&uses_inline);
+            } else {
+                out.push('\n');
+                push_indent(&mut out, outer_indent + 2);
+                out.push_str(uses_no_space);
+            }
+        }
+
+        // `where` clause – in the multi-line path we never put `where` on the
+        // same line as `uses`; they only share a line in the fully inline
+        // fast-path above.
+        let where_no_space = where_inline.trim_start();
+        let where_no_space_len = where_no_space.len();
+        let where_indent = outer_indent + 2;
+
+        if where_indent + where_no_space_len <= max_width {
+            // Put `where` on its own line.
+            out.push('\n');
+            push_indent(&mut out, where_indent);
+            out.push_str(where_no_space);
+        } else {
+            // Fully vertical `where` layout.
+            out.push('\n');
+            push_indent(&mut out, where_indent);
+            out.push_str("where");
+            out.push('\n');
+
+            for pred in where_clause {
+                push_indent(&mut out, param_indent);
+                let text = context.snippet(pred.syntax().text_range()).trim();
+                out.push_str(text);
+                out.push(',');
+                out.push('\n');
+            }
+        }
+
+        if !out.ends_with('\n') {
+            out.push('\n');
+        }
 
         let formatted_body = body.rewrite(context, shape)?;
 
-        let mut out = String::new();
-        out.push_str(prefix);
         out.push_str(&formatted_body);
         out.push_str(suffix);
         Some(out)
     }
 }
 
+impl Rewrite for ast::FuncParamList {
+    fn rewrite(&self, context: &RewriteContext<'_>, shape: Shape) -> Option<String> {
+        let params: Vec<String> = self
+            .into_iter()
+            .map(|param| param.rewrite_or_original(context, shape))
+            .collect();
+
+        Some(format!("({})", params.join(", ")))
+    }
+}
+
+impl Rewrite for ast::FuncParam {
+    fn rewrite(&self, context: &RewriteContext<'_>, shape: Shape) -> Option<String> {
+        let mut out = String::new();
+
+        if self.mut_token().is_some() {
+            out.push_str("mut ");
+        }
+
+        let label = self.label();
+        let name = self.name();
+
+        if let (Some(label), Some(name_ref)) = (&label, &name)
+            && label.syntax().text_range() != name_ref.syntax().text_range()
+        {
+            out.push_str(context.snippet(label.syntax().text_range()).trim());
+            out.push(' ');
+        }
+
+        if let Some(name) = name {
+            out.push_str(context.snippet(name.syntax().text_range()).trim());
+        }
+
+        if let Some(ty) = self.ty() {
+            if !out.is_empty() {
+                out.push_str(": ");
+            }
+            out.push_str(&ty.rewrite_or_original(context, shape));
+        }
+
+        Some(out)
+    }
+}
+
 impl Rewrite for ast::Struct {
     fn rewrite(&self, context: &RewriteContext<'_>, _shape: Shape) -> Option<String> {
-        // For now, just preserve the original formatting for structs
-        Some(context.snippet_trimmed(self))
+        let mut out = String::new();
+
+        write_attrs(self, context, &mut out);
+        write_item_modifier(self, &mut out);
+
+        out.push_str("struct ");
+        out.push_str(context.snippet(self.name()?.text_range()));
+
+        write_generics(self, context, &mut out);
+        write_where_clause(self, context, &mut out);
+
+        if let Some(fields) = self.fields() {
+            let text = context.snippet(fields.syntax().text_range());
+            out.push(' ');
+            out.push_str(text.trim_start());
+        } else {
+            out.push_str(" {}");
+        }
+
+        Some(out)
+    }
+}
+
+impl Rewrite for ast::Contract {
+    fn rewrite(&self, context: &RewriteContext<'_>, _shape: Shape) -> Option<String> {
+        let mut out = String::new();
+
+        write_attrs(self, context, &mut out);
+        write_item_modifier(self, &mut out);
+
+        out.push_str("contract ");
+        out.push_str(context.snippet(self.name()?.text_range()));
+
+        if let Some(fields) = self.fields() {
+            let text = context.snippet(fields.syntax().text_range());
+            out.push(' ');
+            out.push_str(text.trim_start());
+        } else {
+            out.push_str(" {}");
+        }
+
+        Some(out)
+    }
+}
+
+impl Rewrite for ast::Enum {
+    fn rewrite(&self, context: &RewriteContext<'_>, _shape: Shape) -> Option<String> {
+        let mut out = String::new();
+
+        write_attrs(self, context, &mut out);
+        write_item_modifier(self, &mut out);
+
+        out.push_str("enum ");
+        out.push_str(context.snippet(self.name()?.text_range()));
+
+        write_generics(self, context, &mut out);
+        write_where_clause(self, context, &mut out);
+
+        if let Some(variants) = self.variants() {
+            let text = context.snippet(variants.syntax().text_range());
+            out.push(' ');
+            out.push_str(text.trim_start());
+        } else {
+            out.push_str(" {}");
+        }
+
+        Some(out)
+    }
+}
+
+impl Rewrite for ast::Trait {
+    fn rewrite(&self, context: &RewriteContext<'_>, _shape: Shape) -> Option<String> {
+        let mut out = String::new();
+
+        write_attrs(self, context, &mut out);
+        write_item_modifier(self, &mut out);
+
+        out.push_str("trait ");
+        out.push_str(context.snippet(self.name()?.text_range()));
+
+        write_generics(self, context, &mut out);
+
+        if let Some(super_traits) = self.super_trait_list() {
+            let text = context.snippet(super_traits.syntax().text_range());
+            out.push(' ');
+            out.push_str(text.trim_start());
+        }
+
+        write_where_clause(self, context, &mut out);
+
+        if let Some(items) = self.item_list() {
+            let text = context.snippet(items.syntax().text_range());
+            out.push(' ');
+            out.push_str(text.trim_start());
+        } else {
+            out.push_str(" {}");
+        }
+
+        Some(out)
+    }
+}
+
+impl Rewrite for ast::Impl {
+    fn rewrite(&self, context: &RewriteContext<'_>, shape: Shape) -> Option<String> {
+        let mut out = String::new();
+
+        write_attrs(self, context, &mut out);
+
+        out.push_str("impl");
+
+        write_generics(self, context, &mut out);
+
+        if let Some(ty) = self.ty() {
+            out.push(' ');
+            out.push_str(&ty.rewrite_or_original(context, shape));
+        }
+
+        write_where_clause(self, context, &mut out);
+
+        if let Some(items) = self.item_list() {
+            let text = context.snippet(items.syntax().text_range());
+            out.push(' ');
+            out.push_str(text.trim_start());
+        } else {
+            out.push_str(" {}");
+        }
+
+        Some(out)
+    }
+}
+
+impl Rewrite for ast::ImplTrait {
+    fn rewrite(&self, context: &RewriteContext<'_>, shape: Shape) -> Option<String> {
+        let mut out = String::new();
+
+        write_attrs(self, context, &mut out);
+
+        out.push_str("impl");
+        write_generics(self, context, &mut out);
+
+        if let Some(trait_ref) = self.trait_ref() {
+            out.push(' ');
+            out.push_str(&context.snippet_trimmed(&trait_ref));
+        }
+
+        if let Some(ty) = self.ty() {
+            out.push_str(" for ");
+            out.push_str(&ty.rewrite_or_original(context, shape));
+        }
+
+        write_where_clause(self, context, &mut out);
+
+        if let Some(items) = self.item_list() {
+            let text = context.snippet(items.syntax().text_range());
+            out.push(' ');
+            out.push_str(text.trim_start());
+        } else {
+            out.push_str(" {}");
+        }
+
+        Some(out)
+    }
+}
+
+impl Rewrite for ast::Const {
+    fn rewrite(&self, context: &RewriteContext<'_>, shape: Shape) -> Option<String> {
+        let mut out = String::new();
+
+        write_attrs(self, context, &mut out);
+        write_item_modifier(self, &mut out);
+
+        out.push_str("const ");
+        out.push_str(context.snippet(self.name()?.text_range()));
+
+        if let Some(ty) = self.ty() {
+            out.push_str(": ");
+            out.push_str(&ty.rewrite_or_original(context, shape));
+        }
+
+        if let Some(value) = self.value() {
+            out.push_str(" = ");
+            out.push_str(&value.rewrite_or_original(context, shape));
+        }
+
+        Some(out)
+    }
+}
+
+impl Rewrite for ast::Use {
+    fn rewrite(&self, context: &RewriteContext<'_>, _shape: Shape) -> Option<String> {
+        let mut out = String::new();
+
+        write_attrs(self, context, &mut out);
+        write_item_modifier(self, &mut out);
+
+        out.push_str("use ");
+        out.push_str(&context.snippet_trimmed(&self.use_tree()?));
+
+        Some(out)
     }
 }
 
@@ -135,6 +647,7 @@ impl Rewrite for ast::BlockExpr {
         out.push('\n');
 
         let mut children = self.syntax().children_with_tokens().peekable();
+        let mut last_stmt_end: Option<parser::TextSize> = None;
 
         // Skip the leading `{` and any surrounding trivia.
         while let Some(child) = children.peek() {
@@ -149,6 +662,17 @@ impl Rewrite for ast::BlockExpr {
         while let Some(child) = children.peek().cloned() {
             match child {
                 NodeOrToken::Node(node) => {
+                    let node_range = node.text_range();
+
+                    if let Some(prev_end) = last_stmt_end {
+                        let gap = TextRange::new(prev_end, node_range.start());
+                        let gap_text = context.snippet(gap);
+                        let gap_newlines = gap_text.chars().filter(|c| *c == '\n').count();
+                        if gap_newlines >= 2 {
+                            out.push('\n');
+                        }
+                    }
+
                     if let Some(stmt) = ast::Stmt::cast(node.clone()) {
                         // Consume the node.
                         children.next();
@@ -180,12 +704,16 @@ impl Rewrite for ast::BlockExpr {
                         }
 
                         out.push('\n');
+
+                        last_stmt_end = Some(node_range.end());
                     } else if let Some(item) = ast::Item::cast(node.clone()) {
                         children.next();
                         push_indent(&mut out, inner_indent);
                         let code = item.rewrite_or_original(context, inner_shape);
                         out.push_str(&code);
                         out.push('\n');
+
+                        last_stmt_end = Some(node_range.end());
                     } else {
                         // Fallback for unexpected nodes: re-use the original snippet.
                         children.next();
@@ -208,12 +736,9 @@ impl Rewrite for ast::BlockExpr {
                         out.push('\n');
                     }
                     SyntaxKind::WhiteSpace => {
-                        // Preserve at most a single blank line between statements.
-                        let text = context.snippet(tok.text_range());
-                        let newline_count = text.chars().filter(|c| *c == '\n').count();
-                        if newline_count > 1 {
-                            out.push('\n');
-                        }
+                        // Inter-statement blank lines are handled based on the
+                        // original source ranges between statements, so we can
+                        // ignore whitespace tokens here.
                         children.next();
                     }
                     _ => {
@@ -377,7 +902,10 @@ impl Rewrite for ast::CallExpr {
                 .filter_map(|arg| {
                     let expr = arg.expr()?.rewrite_or_original(context, shape);
                     if let Some(label) = arg.label() {
-                        Some(format!("{}: {expr}", context.snippet(label.text_range()).trim()))
+                        Some(format!(
+                            "{}: {expr}",
+                            context.snippet(label.text_range()).trim()
+                        ))
                     } else {
                         Some(expr)
                     }
@@ -410,7 +938,10 @@ impl Rewrite for ast::MethodCallExpr {
                 .filter_map(|arg| {
                     let expr = arg.expr()?.rewrite_or_original(context, shape);
                     if let Some(label) = arg.label() {
-                        Some(format!("{}: {expr}", context.snippet(label.text_range()).trim()))
+                        Some(format!(
+                            "{}: {expr}",
+                            context.snippet(label.text_range()).trim()
+                        ))
                     } else {
                         Some(expr)
                     }
@@ -511,6 +1042,44 @@ impl Rewrite for ast::IfExpr {
         };
 
         Some(format!("if {cond} {then}{else_}"))
+    }
+}
+
+impl Rewrite for ast::UsesClause {
+    fn rewrite(&self, context: &RewriteContext<'_>, shape: Shape) -> Option<String> {
+        if let Some(params) = self.param_list() {
+            let params: Vec<String> = params
+                .into_iter()
+                .map(|param| param.rewrite_or_original(context, shape))
+                .collect();
+
+            Some(format!("uses ({})", params.join(", ")))
+        } else if let Some(param) = self.param() {
+            let param_text = param.rewrite_or_original(context, shape);
+            Some(format!("uses {param_text}"))
+        } else {
+            None
+        }
+    }
+}
+
+impl Rewrite for ast::UsesParam {
+    fn rewrite(&self, context: &RewriteContext<'_>, _shape: Shape) -> Option<String> {
+        let mut out = String::new();
+
+        if self.mut_token().is_some() {
+            out.push_str("mut ");
+        }
+
+        if let Some(name) = self.name() {
+            out.push_str(context.snippet(name.syntax().text_range()).trim());
+            out.push_str(": ");
+        }
+
+        let path = self.path()?;
+        out.push_str(&context.snippet_trimmed(&path));
+
+        Some(out)
     }
 }
 
