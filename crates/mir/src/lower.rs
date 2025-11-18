@@ -1145,6 +1145,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         let name = func_def.name(self.db).data(self.db);
         match name.as_str() {
             "mload" => Some(IntrinsicOp::Mload),
+            "calldataload" => Some(IntrinsicOp::Calldataload),
             "mstore" => Some(IntrinsicOp::Mstore),
             "mstore8" => Some(IntrinsicOp::Mstore8),
             "sload" => Some(IntrinsicOp::Sload),

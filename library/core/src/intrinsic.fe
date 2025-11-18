@@ -4,6 +4,8 @@
 extern {
     /// Load a 32-byte word from memory.
     pub fn mload(_: u256) -> u256
+    /// Load a 32-byte word from calldata.
+    pub fn calldataload(_: u256) -> u256
     /// Store a 32-byte word to memory.
     pub fn mstore(_: u256, _: u256)
     /// Store the low byte of the second argument at the memory address.

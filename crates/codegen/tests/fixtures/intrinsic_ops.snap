@@ -32,3 +32,8 @@ input_file: tests/fixtures/intrinsic_ops.fe
     ret := 0
   }
 }
+{
+  function load_calldata(offset) -> ret {
+    ret := calldataload(offset)
+  }
+}

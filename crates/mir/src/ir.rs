@@ -347,6 +347,8 @@ pub struct IntrinsicValue {
 pub enum IntrinsicOp {
     /// `mload(address)`
     Mload,
+    /// `calldataload(offset)`
+    Calldataload,
     /// `mstore(address, value)`
     Mstore,
     /// `mstore8(address, byte)`
@@ -360,6 +362,9 @@ pub enum IntrinsicOp {
 impl IntrinsicOp {
     /// Returns `true` if this intrinsic yields a value (load), `false` for pure side effects.
     pub fn returns_value(self) -> bool {
-        matches!(self, IntrinsicOp::Mload | IntrinsicOp::Sload)
+        matches!(
+            self,
+            IntrinsicOp::Mload | IntrinsicOp::Sload | IntrinsicOp::Calldataload
+        )
     }
 }
