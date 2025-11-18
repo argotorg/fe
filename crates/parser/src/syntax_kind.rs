@@ -153,6 +153,9 @@ pub enum SyntaxKind {
     /// `contract`
     #[token("contract")]
     ContractKw,
+    /// `msg`
+    #[token("msg")]
+    MsgKw,
     /// `fn`
     #[token("fn")]
     FnKw,
@@ -383,6 +386,8 @@ pub enum SyntaxKind {
     Const,
     /// `use foo::{Foo as Foo1, bar::Baz}`
     Use,
+    /// `msg Erc20Msg { ... }`
+    Msg,
     /// `foo::{Foo as Foo1, bar::Baz}`
     UseTree,
     /// `{Foo as Foo1, bar::Baz}`
@@ -484,6 +489,12 @@ pub enum SyntaxKind {
     WhereClause,
     /// `Option<T>: Trait1 + Trait2`
     WherePredicate,
+    /// `Transfer { to: Address, amount: u256 } -> bool`
+    MsgVariant,
+    /// `{ to: Address, amount: u256 }`
+    MsgVariantParams,
+    /// `TotalSupply, Balance { addr: Address }`
+    MsgVariantList,
 
     /// Root node of the input source.
     Root,
@@ -537,6 +548,7 @@ impl SyntaxKind {
                     | SyntaxKind::FnKw
                     | SyntaxKind::StructKw
                     | SyntaxKind::ContractKw
+                    | SyntaxKind::MsgKw
                     | SyntaxKind::EnumKw
                     | SyntaxKind::TypeKw
                     | SyntaxKind::ImplKw
@@ -594,6 +606,7 @@ impl SyntaxKind {
             SyntaxKind::UsesKw => "`uses`",
             SyntaxKind::ContinueKw => "`continue`",
             SyntaxKind::ContractKw => "`contract`",
+            SyntaxKind::MsgKw => "`msg`",
             SyntaxKind::FnKw => "`fn`",
             SyntaxKind::ModKw => "`mod`",
             SyntaxKind::ConstKw => "`const`",
@@ -693,6 +706,10 @@ impl SyntaxKind {
             SyntaxKind::Func => "function definition",
             SyntaxKind::Struct => "struct definition",
             SyntaxKind::Contract => "contract definition",
+            SyntaxKind::Msg => "message definition",
+            SyntaxKind::MsgVariant => "message variant",
+            SyntaxKind::MsgVariantParams => "message variant parameters",
+            SyntaxKind::MsgVariantList => "message variants",
             SyntaxKind::Enum => "enum definition",
             SyntaxKind::TypeAlias => "type alias",
             SyntaxKind::Impl => "`impl` block",
