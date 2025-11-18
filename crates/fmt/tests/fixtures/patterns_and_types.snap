@@ -1,0 +1,33 @@
+---
+source: crates/fmt/tests/format_snapshots.rs
+assertion_line: 16
+expression: output
+input_file: tests/fixtures/patterns_and_types.fe
+---
+// Pattern and type formatting tests
+
+fn  pattern_tests( )  {
+    // Simple patterns
+    let x = 1
+    let _ = 2
+    let mut y = 3
+    // Tuple patterns
+    let (a, b, c) = (1, 2, 3)
+    // Nested patterns
+    let ((a, b), (c, d)) = ((1, 2), (3, 4))
+}
+
+fn  type_tests(x:i32,y:*i32,z:(i32,bool))->i32{
+    // Various type annotations
+    let a: i32 = 1
+    let b: (i32, bool) = (1, true)
+    let arr: [i32; 10] = [0; 10]
+    let ptr: *i32 = y
+    x
+}
+
+struct  Point{x:i32,y:i32}
+
+fn  get_point()->Point{
+    Point { x: 0, y: 0 }
+}
