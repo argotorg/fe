@@ -1,6 +1,7 @@
 use driver::DriverDataBase;
 use hir::hir_def::{
-    Body, Expr, ExprId, Func, LitKind, Partial, Pat, PatId, PathId, Stmt, StmtId, TopLevelMod,
+    Body, Contract, Expr, ExprId, Func, LitKind, Partial, Pat, PatId, PathId, Stmt, StmtId,
+    TopLevelMod,
     expr::{ArithBinOp, BinOp, CompBinOp, LogicalBinOp, UnOp},
 };
 use mir::{
@@ -25,11 +26,47 @@ pub fn emit_module_yul(
     top_mod: TopLevelMod<'_>,
 ) -> Result<Vec<Result<String, YulError>>, mir::MirLowerError> {
     let module = lower_module(db, top_mod)?;
-    Ok(module
+    let mut artifacts: Vec<Result<String, YulError>> = module
         .functions
         .iter()
         .map(|func| YulEmitter::new(db, func).and_then(|emitter| emitter.emit()))
-        .collect())
+        .collect();
+    artifacts.extend(
+        emit_contract_runtimes(db, top_mod)
+            .into_iter()
+            .map(Ok),
+    );
+    Ok(artifacts)
+}
+
+fn emit_contract_runtimes(
+    db: &DriverDataBase,
+    top_mod: TopLevelMod<'_>,
+) -> Vec<String> {
+    top_mod
+        .all_contracts(db)
+        .iter()
+        .copied()
+        .filter_map(|contract| contract_runtime_object(db, contract))
+        .collect()
+}
+
+fn contract_runtime_object(
+    db: &DriverDataBase,
+    contract: Contract<'_>,
+) -> Option<String> {
+    let name = contract
+        .name(db)
+        .to_opt()
+        .map(|ident| ident.data(db).to_string())?;
+    Some(render_contract_runtime(&name))
+}
+
+fn render_contract_runtime(name: &str) -> String {
+    format!(
+        "object \"{name}\" {{\n  code {{\n    datacopy(0, dataoffset(\"runtime\"), datasize(\"runtime\"))\n    return(0, datasize(\"runtime\"))\n  }}\n\n  object \"runtime\" {{\n    code {{\n      dispatch()\n      stop()\n    }}\n  }}\n}}\n",
+        name = name,
+    )
 }
 
 /// Lowers a single MIR function into the Yul document tree.
