@@ -20,29 +20,46 @@ use super::{
     state::BlockState,
 };
 
+#[derive(Debug)]
+pub enum EmitModuleError {
+    MirLower(mir::MirLowerError),
+    Yul(YulError),
+}
+
+impl std::fmt::Display for EmitModuleError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            EmitModuleError::MirLower(err) => write!(f, "{err}"),
+            EmitModuleError::Yul(err) => write!(f, "{err}"),
+        }
+    }
+}
+
+impl std::error::Error for EmitModuleError {}
+
 /// Emits Yul for every function in the lowered MIR module.
 pub fn emit_module_yul(
     db: &DriverDataBase,
     top_mod: TopLevelMod<'_>,
-) -> Result<Vec<Result<String, YulError>>, mir::MirLowerError> {
-    let module = lower_module(db, top_mod)?;
-    let mut artifacts: Vec<Result<String, YulError>> = module
-        .functions
-        .iter()
-        .map(|func| YulEmitter::new(db, func).and_then(|emitter| emitter.emit()))
-        .collect();
-    artifacts.extend(
-        emit_contract_runtimes(db, top_mod)
-            .into_iter()
-            .map(Ok),
-    );
-    Ok(artifacts)
+) -> Result<String, EmitModuleError> {
+    let module = lower_module(db, top_mod).map_err(EmitModuleError::MirLower)?;
+    let mut docs = Vec::new();
+    for func in &module.functions {
+        let emitter = YulEmitter::new(db, func).map_err(EmitModuleError::Yul)?;
+        docs.extend(emitter.emit_doc().map_err(EmitModuleError::Yul)?);
+    }
+    for mut contract_doc in emit_contract_runtimes(db, top_mod) {
+        docs.append(&mut contract_doc);
+    }
+    let mut lines = Vec::new();
+    render_docs(&docs, 0, &mut lines);
+    Ok(join_lines(lines))
 }
 
 fn emit_contract_runtimes(
     db: &DriverDataBase,
     top_mod: TopLevelMod<'_>,
-) -> Vec<String> {
+) -> Vec<Vec<YulDoc>> {
     top_mod
         .all_contracts(db)
         .iter()
@@ -54,19 +71,42 @@ fn emit_contract_runtimes(
 fn contract_runtime_object(
     db: &DriverDataBase,
     contract: Contract<'_>,
-) -> Option<String> {
+) -> Option<Vec<YulDoc>> {
     let name = contract
         .name(db)
         .to_opt()
         .map(|ident| ident.data(db).to_string())?;
-    Some(render_contract_runtime(&name))
+    Some(render_contract_runtime_docs(&name))
 }
 
-fn render_contract_runtime(name: &str) -> String {
-    format!(
-        "object \"{name}\" {{\n  code {{\n    datacopy(0, dataoffset(\"runtime\"), datasize(\"runtime\"))\n    return(0, datasize(\"runtime\"))\n  }}\n\n  object \"runtime\" {{\n    code {{\n      dispatch()\n      stop()\n    }}\n  }}\n}}\n",
-        name = name,
-    )
+fn render_contract_runtime_docs(name: &str) -> Vec<YulDoc> {
+    vec![YulDoc::block(
+        format!("object \"{name}\" "),
+        vec![
+            YulDoc::block(
+                "code ",
+                vec![
+                    YulDoc::line("datacopy(0, dataoffset(\"runtime\"), datasize(\"runtime\"))"),
+                    YulDoc::line("return(0, datasize(\"runtime\"))"),
+                ],
+            ),
+            YulDoc::line(String::new()),
+            YulDoc::block(
+                "object \"runtime\" ",
+                vec![YulDoc::block(
+                    "code ",
+                    vec![YulDoc::line("dispatch()"), YulDoc::line("stop()")],
+                )],
+            ),
+        ],
+    )]
+}
+
+fn join_lines(mut lines: Vec<String>) -> String {
+    while lines.last().is_some_and(|line| line.is_empty()) {
+        lines.pop();
+    }
+    lines.join("\n")
 }
 
 /// Lowers a single MIR function into the Yul document tree.
@@ -102,18 +142,16 @@ impl<'db> YulEmitter<'db> {
         })
     }
 
-    /// Produces the final Yul text for the current MIR function.
-    fn emit(mut self) -> Result<String, YulError> {
+    /// Produces the final Yul docs for the current MIR function.
+    fn emit_doc(mut self) -> Result<Vec<YulDoc>, YulError> {
         let func_name = self.mir_func.symbol_name.as_str();
         let (param_names, mut state) = self.init_function_state();
         let body_docs = self.emit_block(self.mir_func.body.entry, &mut state)?;
-        let mut lines = Vec::new();
-        render_docs(&body_docs, 4, &mut lines);
-        let body_text = lines.join("\n");
-        Ok(format!(
-            "{{\n  {} {{\n{body_text}\n  }}\n}}",
-            self.format_function_signature(func_name, &param_names)
-        ))
+        let function_doc = YulDoc::block(
+            format!("{} ", self.format_function_signature(func_name, &param_names)),
+            body_docs,
+        );
+        Ok(vec![YulDoc::block("", vec![function_doc])])
     }
 
     /// Initializes the `BlockState` with parameter bindings and returns their Yul names.
