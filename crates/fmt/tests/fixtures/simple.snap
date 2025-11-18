@@ -5,10 +5,10 @@ expression: output
 input_file: tests/fixtures/simple.fe
 ---
 pub fn main(  value : i32 ,flag:bool)->bool{
-    let  sum=value+ 1
-    if flag{
-        sum >  10
-    } else{
-        sum<=10
+    let sum = value + 1
+    if flag {
+        sum > 10
+    } else {
+        sum <= 10
     }
 }

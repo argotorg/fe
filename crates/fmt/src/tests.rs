@@ -1,4 +1,4 @@
-use crate::{format_str, Config};
+use crate::{Config, format_str};
 
 #[test]
 fn identity_formatting_for_valid_input() {

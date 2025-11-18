@@ -15,4 +15,3 @@ fn format_snap(fixture: Fixture<&str>) {
 
     snap_test!(output, fixture.path());
 }
-
