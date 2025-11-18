@@ -95,6 +95,7 @@ pub struct ExecutionOptions {
     pub gas_limit: u64,
     pub gas_price: u128,
     pub value: U256,
+    pub nonce: Option<u64>,
 }
 
 impl Default for ExecutionOptions {
@@ -104,6 +105,7 @@ impl Default for ExecutionOptions {
             gas_limit: 1_000_000,
             gas_price: 0,
             value: U256::ZERO,
+            nonce: None,
         }
     }
 }
@@ -129,6 +131,7 @@ fn transact(
     address: Address,
     calldata: &[u8],
     options: ExecutionOptions,
+    nonce: u64,
 ) -> Result<CallResult, HarnessError> {
     let tx = TxEnv::builder()
         .caller(options.caller)
@@ -137,6 +140,7 @@ fn transact(
         .to(address)
         .value(options.value)
         .data(EvmBytes::copy_from_slice(calldata))
+        .nonce(nonce)
         .build()
         .map_err(|err| HarnessError::Execution(format!("{err:?}")))?;
 
@@ -167,6 +171,7 @@ fn transact(
 pub struct RuntimeInstance {
     evm: MainnetEvm<MainnetContext<InMemoryDB>>,
     address: Address,
+    next_nonce: u64,
 }
 
 impl RuntimeInstance {
@@ -177,7 +182,11 @@ impl RuntimeInstance {
         db.insert_account_info(address, AccountInfo::new(U256::ZERO, 0, code_hash, bytecode));
         let ctx = Context::mainnet().with_db(db);
         let evm = ctx.build_mainnet();
-        Ok(Self { evm, address })
+        Ok(Self {
+            evm,
+            address,
+            next_nonce: 0,
+        })
     }
 
     /// Executes the runtime with arbitrary calldata.
@@ -186,7 +195,14 @@ impl RuntimeInstance {
         calldata: &[u8],
         options: ExecutionOptions,
     ) -> Result<CallResult, HarnessError> {
-        transact(&mut self.evm, self.address, calldata, options)
+        let nonce = options
+            .nonce
+            .unwrap_or_else(|| {
+                let current = self.next_nonce;
+                self.next_nonce += 1;
+                current
+            });
+        transact(&mut self.evm, self.address, calldata, options, nonce)
     }
 
     /// Executes a strongly-typed function call using ABI encoding.
