@@ -1,6 +1,6 @@
 ---
 source: crates/codegen/tests/yul.rs
-assertion_line: 38
+assertion_line: 31
 expression: output
 input_file: tests/fixtures/intrinsic_ops.fe
 ---
@@ -35,5 +35,10 @@ input_file: tests/fixtures/intrinsic_ops.fe
 {
   function load_calldata(offset) -> ret {
     ret := calldataload(offset)
+  }
+}
+{
+  function finish(ptr, len) -> ret {
+    return(ptr, len)
   }
 }

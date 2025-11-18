@@ -357,6 +357,8 @@ pub enum IntrinsicOp {
     Sload,
     /// `sstore(slot, value)`
     Sstore,
+    /// `return(offset, size)`
+    ReturnData,
 }
 
 impl IntrinsicOp {
