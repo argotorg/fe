@@ -1,0 +1,2 @@
+# Syntax highlighting of fe files as rust
+*.fe linguist-language=Rust
