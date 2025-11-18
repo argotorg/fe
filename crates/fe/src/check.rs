@@ -214,19 +214,11 @@ fn print_dependency_info(db: &DriverDataBase, dependency_url: &Url) {
 
 fn emit_yul(db: &DriverDataBase, top_mod: TopLevelMod<'_>) {
     match emit_module_yul(db, top_mod) {
-        Ok(results) => {
-            for result in results {
-                match result {
-                    Ok(yul) => {
-                        println!("=== Yul ===");
-                        println!("{yul}");
-                        println!();
-                    }
-                    Err(err) => eprintln!("⚠️  yul emission skipped: {err}"),
-                }
-            }
+        Ok(yul) => {
+            println!("=== Yul ===");
+            println!("{yul}");
         }
-        Err(err) => eprintln!("⚠️  failed to lower MIR for yul emission: {err}"),
+        Err(err) => eprintln!("⚠️  failed to emit Yul: {err}"),
     }
 }
 
