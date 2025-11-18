@@ -1,0 +1,27 @@
+---
+source: crates/fmt/tests/format_snapshots.rs
+expression: output
+input_file: tests/fixtures/expressions.fe
+---
+fn  expression_examples(  x : i32 )  {
+    let result = add(x, 5)
+    let negated = -x
+    let not_flag = !true
+    let p = Point { x: 10, y: 20 }
+    let updated = Point { x: p.x + 1, y: p.y }
+    let sum = add(mul(2, 3), sub(10, 4))
+}
+
+fn  add(a:i32,b:i32)->i32{
+    a + b
+}
+
+fn  mul(  a :i32,  b:i32)->i32{
+    a * b
+}
+
+fn  sub(a:i32,b:i32)->i32{
+    a - b
+}
+
+struct  Point{x:i32,y:i32}
