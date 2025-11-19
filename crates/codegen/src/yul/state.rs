@@ -1,10 +1,13 @@
+use std::rc::Rc;
+
 use rustc_hash::FxHashMap;
+use std::cell::Cell;
 
 /// Tracks the mapping between Fe bindings and their Yul local names within a block.
 #[derive(Clone)]
 pub(super) struct BlockState {
     locals: FxHashMap<String, String>,
-    next_local: usize,
+    next_local: Rc<Cell<usize>>,
 }
 
 impl BlockState {
@@ -12,14 +15,15 @@ impl BlockState {
     pub(super) fn new() -> Self {
         Self {
             locals: FxHashMap::default(),
-            next_local: 0,
+            next_local: Rc::new(Cell::new(0)),
         }
     }
 
     /// Allocates a new temporary Yul variable name.
     pub(super) fn alloc_local(&mut self) -> String {
-        let name = format!("v{}", self.next_local);
-        self.next_local += 1;
+        let current = self.next_local.get();
+        let name = format!("v{}", current);
+        self.next_local.set(current + 1);
         name
     }
 
