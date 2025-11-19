@@ -6,8 +6,8 @@ input_file: tests/fixtures/struct_init.fe
 ---
 function make_dummy() -> ret {
   let v0 := alloc(40)
-  store_field__deduped(v0, 0, 0, 42)
-  store_field__deduped(v0, 0, 8, 99)
+  pop(store_field__deduped(v0, 0, 0, 42))
+  pop(store_field__deduped(v0, 0, 8, 99))
   let v1 := v0
   ret := v1
 }
