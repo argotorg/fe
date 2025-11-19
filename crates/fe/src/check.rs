@@ -324,6 +324,11 @@ fn format_terminator(term: &Terminator) -> String {
     match term {
         Terminator::Return(Some(val)) => format!("return {}", value_label(*val)),
         Terminator::Return(None) => "return".into(),
+        Terminator::ReturnData { offset, size } => format!(
+            "return_data {}, {}",
+            value_label(*offset),
+            value_label(*size)
+        ),
         Terminator::Goto { target } => format!("goto bb{}", target.index()),
         Terminator::Branch {
             cond,
