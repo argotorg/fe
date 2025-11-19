@@ -231,6 +231,13 @@ impl<'db, 'a> FunctionHasher<'db, 'a> {
                     self.write_u8(0);
                 }
             }
+            Terminator::ReturnData { offset, size } => {
+                self.write_u8(0x35);
+                let offset_slot = self.placeholder_value(*offset);
+                let size_slot = self.placeholder_value(*size);
+                self.write_u32(offset_slot);
+                self.write_u32(size_slot);
+            }
             Terminator::Goto { target } => {
                 self.write_u8(0x31);
                 self.write_usize(target.index());

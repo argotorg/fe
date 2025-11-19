@@ -12,6 +12,7 @@ env:
   CARGO_TERM_COLOR: always
   CARGO_INCREMENTAL: 0
   RUST_BACKTRACE: full
+  SOLC_VERSION: v0.8.30
 
 jobs:
   lint:
@@ -52,11 +53,33 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: stable
+      - name: Cache solc
+        id: solc-cache
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/solc-${{ env.SOLC_VERSION }}
+          key: solc-${{ runner.os }}-${{ env.SOLC_VERSION }}
+      - name: Download solc
+        if: steps.solc-cache.outputs.cache-hit != 'true'
+        run: |
+          set -euo pipefail
+          if [ "${{ runner.os }}" = "Linux" ]; then
+            url="https://github.com/ethereum/solidity/releases/download/${SOLC_VERSION}/solc-static-linux"
+          elif [ "${{ runner.os }}" = "macOS" ]; then
+            url="https://github.com/ethereum/solidity/releases/download/${SOLC_VERSION}/solc-macos"
+          else
+            echo "Unsupported OS: ${{ runner.os }}"
+            exit 1
+          fi
+          curl -Ls "$url" -o "$RUNNER_TEMP/solc-${SOLC_VERSION}"
+          chmod +x "$RUNNER_TEMP/solc-${SOLC_VERSION}"
       - name: Cache Dependencies
         uses: Swatinem/rust-cache@v2
       - name: Build
         run: cargo test --workspace --all-features --no-run --locked --exclude fe-language-server --exclude fe-bench
       - name: Run tests
+        env:
+          FE_SOLC_PATH: ${{ runner.temp }}/solc-${{ env.SOLC_VERSION }}
         run: cargo test --workspace --all-features --verbose --exclude fe-language-server --exclude fe-bench
 
   wasm-wasi-check:

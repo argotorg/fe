@@ -189,6 +189,8 @@ pub enum MirInst<'db> {
 pub enum Terminator {
     /// Return from the function with an optional value.
     Return(Option<ValueId>),
+    /// Return from the function using raw memory pointer/size (core::return_data).
+    ReturnData { offset: ValueId, size: ValueId },
     /// Unconditional jump to another block.
     Goto { target: BasicBlockId },
     /// Conditional branch based on a boolean value.
@@ -347,6 +349,8 @@ pub struct IntrinsicValue {
 pub enum IntrinsicOp {
     /// `mload(address)`
     Mload,
+    /// `calldataload(offset)`
+    Calldataload,
     /// `mstore(address, value)`
     Mstore,
     /// `mstore8(address, byte)`
@@ -355,11 +359,16 @@ pub enum IntrinsicOp {
     Sload,
     /// `sstore(slot, value)`
     Sstore,
+    /// `return(offset, size)`
+    ReturnData,
 }
 
 impl IntrinsicOp {
     /// Returns `true` if this intrinsic yields a value (load), `false` for pure side effects.
     pub fn returns_value(self) -> bool {
-        matches!(self, IntrinsicOp::Mload | IntrinsicOp::Sload)
+        matches!(
+            self,
+            IntrinsicOp::Mload | IntrinsicOp::Sload | IntrinsicOp::Calldataload
+        )
     }
 }

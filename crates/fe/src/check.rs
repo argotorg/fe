@@ -214,19 +214,11 @@ fn print_dependency_info(db: &DriverDataBase, dependency_url: &Url) {
 
 fn emit_yul(db: &DriverDataBase, top_mod: TopLevelMod<'_>) {
     match emit_module_yul(db, top_mod) {
-        Ok(results) => {
-            for result in results {
-                match result {
-                    Ok(yul) => {
-                        println!("=== Yul ===");
-                        println!("{yul}");
-                        println!();
-                    }
-                    Err(err) => eprintln!("⚠️  yul emission skipped: {err}"),
-                }
-            }
+        Ok(yul) => {
+            println!("=== Yul ===");
+            println!("{yul}");
         }
-        Err(err) => eprintln!("⚠️  failed to lower MIR for yul emission: {err}"),
+        Err(err) => eprintln!("⚠️  failed to emit Yul: {err}"),
     }
 }
 
@@ -332,6 +324,11 @@ fn format_terminator(term: &Terminator) -> String {
     match term {
         Terminator::Return(Some(val)) => format!("return {}", value_label(*val)),
         Terminator::Return(None) => "return".into(),
+        Terminator::ReturnData { offset, size } => format!(
+            "return_data {}, {}",
+            value_label(*offset),
+            value_label(*size)
+        ),
         Terminator::Goto { target } => format!("goto bb{}", target.index()),
         Terminator::Branch {
             cond,

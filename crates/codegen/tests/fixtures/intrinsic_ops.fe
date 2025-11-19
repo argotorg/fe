@@ -1,5 +1,4 @@
-// TODO: Should be core::intrinsic::mload etc.
-use core::{mload, mstore, mstore8, sload, sstore}
+use core::{calldataload, mload, mstore, mstore8, return_data, sload, sstore}
 
 pub fn load_word(ptr: u256) -> u256 {
     mload(ptr)
@@ -19,4 +18,12 @@ pub fn load_slot(slot: u256) -> u256 {
 
 pub fn store_slot(slot: u256, value: u256) {
     sstore(slot, value)
+}
+
+pub fn load_calldata(offset: u256) -> u256 {
+    calldataload(offset)
+}
+
+pub fn finish(ptr: u256, len: u256) {
+    return_data(ptr, len)
 }

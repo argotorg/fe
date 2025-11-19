@@ -24,14 +24,7 @@ fn yul_snap(fixture: Fixture<&str>) {
     let top_mod = db.top_mod(file);
 
     let output = match emit_module_yul(&db, top_mod) {
-        Ok(results) => results
-            .into_iter()
-            .map(|res| match res {
-                Ok(yul) => yul,
-                Err(err) => format!("ERROR: {err}"),
-            })
-            .collect::<Vec<_>>()
-            .join("\n"),
+        Ok(yul) => yul,
         Err(err) => format!("MIR ERROR: {err}"),
     };
 

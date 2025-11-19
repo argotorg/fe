@@ -1,4 +1,5 @@
 /// Simple document tree used to build readable Yul output with indentation.
+#[derive(Clone)]
 pub(super) enum YulDoc {
     /// Single line of text.
     Line(String),
@@ -36,7 +37,11 @@ pub(super) fn render_docs(nodes: &[YulDoc], indent: usize, out: &mut Vec<String>
     for node in nodes {
         match node {
             YulDoc::Line(text) => {
-                out.push(format!("{}{}", " ".repeat(indent), text));
+                if text.is_empty() {
+                    out.push(String::new());
+                } else {
+                    out.push(format!("{}{}", " ".repeat(indent), text));
+                }
             }
             YulDoc::Block { caption, body } => {
                 let indent_str = " ".repeat(indent);

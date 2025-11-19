@@ -1,10 +1,9 @@
 ---
 source: crates/codegen/tests/yul.rs
+assertion_line: 31
 expression: output
 input_file: tests/fixtures/comparison_ops.fe
 ---
-{
-  function comparison_ops() -> ret {
-    ret := tuple(eq(1, 1), iszero(eq(1, 2)), lt(1, 2), iszero(gt(2, 2)), gt(3, 2), iszero(lt(3, 3)))
-  }
+function comparison_ops() -> ret {
+  ret := tuple(eq(1, 1), iszero(eq(1, 2)), lt(1, 2), iszero(gt(2, 2)), gt(3, 2), iszero(lt(3, 3)))
 }

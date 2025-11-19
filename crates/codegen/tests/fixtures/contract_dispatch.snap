@@ -1,0 +1,27 @@
+---
+source: crates/codegen/tests/yul.rs
+assertion_line: 31
+expression: output
+input_file: tests/fixtures/contract_dispatch.fe
+---
+object "MinimalDispatcher" {
+  code {
+    datacopy(0, dataoffset("runtime"), datasize("runtime"))
+    return(0, datasize("runtime"))
+  }
+
+  object "runtime" {
+    code {
+      function emit_code() -> ret {
+        ret := 1
+      }
+      function dispatch() -> ret {
+        let v0 := emit_code()
+        ret := 0
+      }
+
+      pop(dispatch())
+      stop()
+    }
+  }
+}
