@@ -18,6 +18,20 @@ pub(super) struct LoopEmitCtx {
     implicit_continue: Option<BasicBlockId>,
 }
 
+/// Shared mutable context passed through control-flow helpers.
+pub(super) struct BlockEmitCtx<'state, 'docs> {
+    pub(super) loop_ctx: Option<LoopEmitCtx>,
+    pub(super) state: &'state mut BlockState,
+    pub(super) docs: &'docs mut Vec<YulDoc>,
+}
+
+impl<'state, 'docs> BlockEmitCtx<'state, 'docs> {
+    /// Convenience helper for cloning the block state.
+    fn cloned_state(&self) -> BlockState {
+        self.state.clone()
+    }
+}
+
 impl<'db> YulEmitter<'db> {
     /// Emits the Yul docs for a basic block starting without any active loop context.
     ///
@@ -104,7 +118,14 @@ impl<'db> YulEmitter<'db> {
         }
 
         let mut docs = self.render_statements(&block.insts, state)?;
-        self.emit_block_terminator(block_id, &block.terminator, loop_ctx, state, &mut docs)?;
+        {
+            let mut ctx = BlockEmitCtx {
+                loop_ctx,
+                state,
+                docs: &mut docs,
+            };
+            self.emit_block_terminator(block_id, &block.terminator, &mut ctx)?;
+        }
         Ok(docs)
     }
 
@@ -112,44 +133,38 @@ impl<'db> YulEmitter<'db> {
     ///
     /// * `block_id` - Current block emitting statements.
     /// * `terminator` - MIR terminator describing the outgoing control flow.
-    /// * `loop_ctx` - Optional loop context for `break`/`continue` translation.
-    /// * `state` - Mutable binding table reused across successor blocks.
-    /// * `docs` - Accumulated docs for the current block.
+    /// * `ctx` - Shared mutable context spanning the block's docs and bindings.
     fn emit_block_terminator(
         &mut self,
         block_id: BasicBlockId,
         terminator: &Terminator,
-        loop_ctx: Option<LoopEmitCtx>,
-        state: &mut BlockState,
-        docs: &mut Vec<YulDoc>,
+        ctx: &mut BlockEmitCtx<'_, '_>,
     ) -> Result<(), YulError> {
         match terminator {
-            Terminator::Return(Some(val)) => self.emit_return_with_value(*val, docs, state),
+            Terminator::Return(Some(val)) => self.emit_return_with_value(*val, ctx.docs, ctx.state),
             Terminator::Return(None) => {
-                docs.push(YulDoc::line("ret := 0"));
+                ctx.docs.push(YulDoc::line("ret := 0"));
                 Ok(())
             }
             Terminator::ReturnData { offset, size } => {
-                let offset_expr = self.lower_value(*offset, state)?;
-                let size_expr = self.lower_value(*size, state)?;
-                docs.push(YulDoc::line(format!("return({offset_expr}, {size_expr})")));
+                let offset_expr = self.lower_value(*offset, ctx.state)?;
+                let size_expr = self.lower_value(*size, ctx.state)?;
+                ctx.docs
+                    .push(YulDoc::line(format!("return({offset_expr}, {size_expr})")));
                 Ok(())
             }
             Terminator::Branch {
                 cond,
                 then_bb,
                 else_bb,
-            } => self.emit_branch_terminator(*cond, *then_bb, *else_bb, loop_ctx, state, docs),
+            } => self.emit_branch_terminator(*cond, *then_bb, *else_bb, ctx),
             Terminator::Switch {
                 discr,
                 targets,
                 default,
                 origin,
-            } => self
-                .emit_switch_terminator(*discr, targets, *default, origin, loop_ctx, state, docs),
-            Terminator::Goto { target } => {
-                self.emit_goto_terminator(block_id, *target, loop_ctx, state, docs)
-            }
+            } => self.emit_switch_terminator(*discr, targets, *default, origin, ctx),
+            Terminator::Goto { target } => self.emit_goto_terminator(block_id, *target, ctx),
             Terminator::Unreachable => Ok(()),
         }
     }
@@ -187,27 +202,27 @@ impl<'db> YulEmitter<'db> {
     ///
     /// * `cond` - MIR value representing the branch predicate.
     /// * `then_bb` / `else_bb` - Successor blocks for each branch.
-    /// * `loop_ctx` - Optional loop metadata to propagate into successors.
-    /// * `state` - Binding state cloned when traversing successors.
-    /// * `docs` - Output doc list to append to.
+    /// * `ctx` - Shared block context containing loop metadata and bindings.
     fn emit_branch_terminator(
         &mut self,
         cond: ValueId,
         then_bb: BasicBlockId,
         else_bb: BasicBlockId,
-        loop_ctx: Option<LoopEmitCtx>,
-        state: &mut BlockState,
-        docs: &mut Vec<YulDoc>,
+        ctx: &mut BlockEmitCtx<'_, '_>,
     ) -> Result<(), YulError> {
-        let cond_expr = self.lower_value(cond, state)?;
-        let cond_temp = state.alloc_local();
-        docs.push(YulDoc::line(format!("let {cond_temp} := {cond_expr}")));
-        let mut then_state = state.clone();
-        let mut else_state = state.clone();
+        let cond_expr = self.lower_value(cond, ctx.state)?;
+        let cond_temp = ctx.state.alloc_local();
+        ctx.docs
+            .push(YulDoc::line(format!("let {cond_temp} := {cond_expr}")));
+        let loop_ctx = ctx.loop_ctx;
+        let mut then_state = ctx.cloned_state();
+        let mut else_state = ctx.cloned_state();
         let then_docs = self.emit_block_with_ctx(then_bb, loop_ctx, &mut then_state)?;
-        docs.push(YulDoc::block(format!("if {cond_temp} "), then_docs));
+        ctx.docs
+            .push(YulDoc::block(format!("if {cond_temp} "), then_docs));
         let else_docs = self.emit_block_with_ctx(else_bb, loop_ctx, &mut else_state)?;
-        docs.push(YulDoc::block(format!("if iszero({cond_temp}) "), else_docs));
+        ctx.docs
+            .push(YulDoc::block(format!("if iszero({cond_temp}) "), else_docs));
         Ok(())
     }
 
@@ -217,37 +232,36 @@ impl<'db> YulEmitter<'db> {
     /// * `targets` - All concrete switch targets.
     /// * `default` - Default target block.
     /// * `origin` - Whether this switch originated from a match expression.
-    /// * `loop_ctx` - Active loop context for successor emission.
-    /// * `state` - Binding state reused/cloned for each successor arm.
-    /// * `docs` - Doc list to append rendered switch cases into.
+    /// * `ctx` - Shared block context reused across successor emission.
     fn emit_switch_terminator(
         &mut self,
         discr: ValueId,
         targets: &[SwitchTarget],
         default: BasicBlockId,
         origin: &SwitchOrigin,
-        loop_ctx: Option<LoopEmitCtx>,
-        state: &mut BlockState,
-        docs: &mut Vec<YulDoc>,
+        ctx: &mut BlockEmitCtx<'_, '_>,
     ) -> Result<(), YulError> {
         match origin {
             SwitchOrigin::MatchExpr(expr_id) => {
-                self.emit_match_switch(*expr_id, discr, targets, default, loop_ctx, state, docs)
+                self.emit_match_switch(*expr_id, discr, targets, default, ctx)
             }
             SwitchOrigin::None => {
-                let discr_expr = self.lower_value(discr, state)?;
-                docs.push(YulDoc::line(format!("switch {discr_expr}")));
+                let discr_expr = self.lower_value(discr, ctx.state)?;
+                ctx.docs.push(YulDoc::line(format!("switch {discr_expr}")));
+                let loop_ctx = ctx.loop_ctx;
                 for target in targets {
-                    let mut case_state = state.clone();
+                    let mut case_state = ctx.cloned_state();
                     let literal = switch_value_literal(&target.value);
                     let case_docs =
                         self.emit_block_with_ctx(target.block, loop_ctx, &mut case_state)?;
-                    docs.push(YulDoc::wide_block(format!("  case {literal} "), case_docs));
+                    ctx.docs
+                        .push(YulDoc::wide_block(format!("  case {literal} "), case_docs));
                 }
-                let mut default_state = state.clone();
+                let mut default_state = ctx.cloned_state();
                 let default_docs =
                     self.emit_block_with_ctx(default, loop_ctx, &mut default_state)?;
-                docs.push(YulDoc::wide_block("  default ", default_docs));
+                ctx.docs
+                    .push(YulDoc::wide_block("  default ", default_docs));
                 Ok(())
             }
         }
@@ -255,29 +269,22 @@ impl<'db> YulEmitter<'db> {
 
     /// Emits the specialized lowering used for match expressions backed by a switch.
     ///
-    /// * `expr_id` - HIR expression that originated the match.
-    /// * `discr` - MIR discriminant value.
-    /// * `targets` - Switch targets produced by MIR lowering.
-    /// * `default` - Default target block.
-    /// * `loop_ctx` - Loop context to propagate to branch bodies.
-    /// * `state` - Binding state reused by arm bodies.
-    /// * `docs` - Output doc list accumulating the rendered statements.
+    /// * `ctx` - Shared block context containing current state/docs.
     fn emit_match_switch(
         &mut self,
         expr_id: ExprId,
         discr: ValueId,
         targets: &[SwitchTarget],
         default: BasicBlockId,
-        loop_ctx: Option<LoopEmitCtx>,
-        state: &mut BlockState,
-        docs: &mut Vec<YulDoc>,
+        ctx: &mut BlockEmitCtx<'_, '_>,
     ) -> Result<(), YulError> {
-        let discr_expr = self.lower_value(discr, state)?;
+        let discr_expr = self.lower_value(discr, ctx.state)?;
         if self.expr_is_unit(expr_id) {
-            docs.push(YulDoc::line(format!("switch {discr_expr}")));
+            ctx.docs.push(YulDoc::line(format!("switch {discr_expr}")));
             let merge_block = self.match_merge_block(targets, default)?;
+            let loop_ctx = ctx.loop_ctx;
             for target in targets {
-                let mut case_state = state.clone();
+                let mut case_state = ctx.cloned_state();
                 let case_docs = self.emit_block_with_stop(
                     target.block,
                     loop_ctx,
@@ -285,15 +292,17 @@ impl<'db> YulEmitter<'db> {
                     merge_block,
                 )?;
                 let literal = switch_value_literal(&target.value);
-                docs.push(YulDoc::wide_block(format!("  case {literal} "), case_docs));
+                ctx.docs
+                    .push(YulDoc::wide_block(format!("  case {literal} "), case_docs));
             }
-            let mut default_state = state.clone();
+            let mut default_state = ctx.cloned_state();
             let default_docs =
                 self.emit_block_with_stop(default, loop_ctx, &mut default_state, merge_block)?;
-            docs.push(YulDoc::wide_block("  default ", default_docs));
+            ctx.docs
+                .push(YulDoc::wide_block("  default ", default_docs));
             if let Some(merge_block) = merge_block {
-                let next_docs = self.emit_block_with_ctx(merge_block, loop_ctx, state)?;
-                docs.extend(next_docs);
+                let next_docs = self.emit_block_with_ctx(merge_block, loop_ctx, ctx.state)?;
+                ctx.docs.extend(next_docs);
             }
             return Ok(());
         }
@@ -307,38 +316,39 @@ impl<'db> YulEmitter<'db> {
             YulError::Unsupported("missing match lowering info for switch".into())
         })?;
 
-        docs.push(YulDoc::line(format!("let {temp} := 0")));
-        docs.push(YulDoc::line(format!("switch {discr_expr}")));
+        ctx.docs.push(YulDoc::line(format!("let {temp} := 0")));
+        ctx.docs.push(YulDoc::line(format!("switch {discr_expr}")));
 
         let mut default_body = None;
         for arm in &match_info.arms {
             match &arm.pattern {
                 MatchArmPattern::Literal(value) => {
-                    let body_expr = self.lower_expr(arm.body, state)?;
+                    let body_expr = self.lower_expr(arm.body, ctx.state)?;
                     let literal = switch_value_literal(value);
-                    docs.push(YulDoc::wide_block(
+                    ctx.docs.push(YulDoc::wide_block(
                         format!("  case {literal} "),
                         vec![YulDoc::line(format!("{temp} := {body_expr}"))],
                     ));
                 }
                 MatchArmPattern::Enum { variant_index, .. } => {
-                    let body_expr = self.lower_expr(arm.body, state)?;
+                    let body_expr = self.lower_expr(arm.body, ctx.state)?;
                     let literal = switch_value_literal(&SwitchValue::Enum(*variant_index));
-                    docs.push(YulDoc::wide_block(
+                    ctx.docs.push(YulDoc::wide_block(
                         format!("  case {literal} "),
                         vec![YulDoc::line(format!("{temp} := {body_expr}"))],
                     ));
                 }
                 MatchArmPattern::Wildcard => {
-                    let body_expr = self.lower_expr(arm.body, state)?;
+                    let body_expr = self.lower_expr(arm.body, ctx.state)?;
                     default_body = Some(body_expr);
                 }
             }
         }
 
         let merge_block = self.match_merge_block(targets, default)?;
+        let loop_ctx = ctx.loop_ctx;
         if let Some(default_expr) = default_body {
-            docs.push(YulDoc::wide_block(
+            ctx.docs.push(YulDoc::wide_block(
                 "  default ",
                 vec![YulDoc::line(format!("{temp} := {default_expr}"))],
             ));
@@ -354,14 +364,15 @@ impl<'db> YulEmitter<'db> {
                     "match lowering missing wildcard arm".into(),
                 ));
             }
-            let mut default_state = state.clone();
+            let mut default_state = ctx.cloned_state();
             let default_docs =
                 self.emit_block_with_stop(default, loop_ctx, &mut default_state, merge_block)?;
-            docs.push(YulDoc::wide_block("  default ", default_docs));
+            ctx.docs
+                .push(YulDoc::wide_block("  default ", default_docs));
         }
         if let Some(merge_block) = merge_block {
-            let next_docs = self.emit_block_with_ctx(merge_block, loop_ctx, state)?;
-            docs.extend(next_docs);
+            let next_docs = self.emit_block_with_ctx(merge_block, loop_ctx, ctx.state)?;
+            ctx.docs.extend(next_docs);
         }
         Ok(())
     }
@@ -371,41 +382,37 @@ impl<'db> YulEmitter<'db> {
     ///
     /// * `block_id` - Current block index (used for implicit continues).
     /// * `target` - Destination block selected by the `goto`.
-    /// * `loop_ctx` - Loop metadata describing break/continue targets.
-    /// * `state` - Binding table cloned when traversing non-loop targets.
-    /// * `docs` - Doc list collecting emitted statements.
+    /// * `ctx` - Shared context holding the current bindings and docs.
     fn emit_goto_terminator(
         &mut self,
         block_id: BasicBlockId,
         target: BasicBlockId,
-        loop_ctx: Option<LoopEmitCtx>,
-        state: &mut BlockState,
-        docs: &mut Vec<YulDoc>,
+        ctx: &mut BlockEmitCtx<'_, '_>,
     ) -> Result<(), YulError> {
-        if let Some(ctx) = loop_ctx {
-            if target == ctx.continue_target {
-                if ctx.implicit_continue == Some(block_id) {
+        if let Some(loop_ctx) = ctx.loop_ctx {
+            if target == loop_ctx.continue_target {
+                if loop_ctx.implicit_continue == Some(block_id) {
                     return Ok(());
                 }
-                docs.push(YulDoc::line("continue"));
+                ctx.docs.push(YulDoc::line("continue"));
                 return Ok(());
             }
-            if target == ctx.break_target {
-                docs.push(YulDoc::line("break"));
+            if target == loop_ctx.break_target {
+                ctx.docs.push(YulDoc::line("break"));
                 return Ok(());
             }
         }
 
         if let Some(loop_info) = self.loop_info(target) {
-            let mut loop_state = state.clone();
+            let mut loop_state = ctx.cloned_state();
             let (loop_doc, exit_block) = self.emit_loop(target, loop_info, &mut loop_state)?;
-            docs.push(loop_doc);
-            let after_docs = self.emit_block_with_ctx(exit_block, loop_ctx, state)?;
-            docs.extend(after_docs);
+            ctx.docs.push(loop_doc);
+            let after_docs = self.emit_block_with_ctx(exit_block, ctx.loop_ctx, ctx.state)?;
+            ctx.docs.extend(after_docs);
             return Ok(());
         }
-        let next_docs = self.emit_block_with_ctx(target, loop_ctx, state)?;
-        docs.extend(next_docs);
+        let next_docs = self.emit_block_with_ctx(target, ctx.loop_ctx, ctx.state)?;
+        ctx.docs.extend(next_docs);
         Ok(())
     }
 
