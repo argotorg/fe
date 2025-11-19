@@ -19,7 +19,7 @@ use revm::{
 };
 pub use revm::primitives::U256;
 use solc_runner::{ContractBytecode, YulcError, compile_single_contract};
-use std::fmt;
+use std::{fmt, path::Path};
 use thiserror::Error;
 use url::Url;
 
@@ -52,6 +52,8 @@ pub enum HarnessError {
     UnexpectedOutput,
     #[error("invalid hex string: {0}")]
     Hex(#[from] hex::FromHexError),
+    #[error("io error: {0}")]
+    Io(#[from] std::io::Error),
 }
 
 impl From<YulcError> for HarnessError {
@@ -264,6 +266,16 @@ impl FeContractHarness {
         Ok(Self { contract })
     }
 
+    /// Reads a source file from disk and compiles the specified contract.
+    pub fn compile_from_file(
+        contract_name: &str,
+        path: impl AsRef<Path>,
+        options: CompileOptions,
+    ) -> Result<Self, HarnessError> {
+        let source = std::fs::read_to_string(path)?;
+        Self::compile_from_source(contract_name, &source, options)
+    }
+
     /// Returns the raw runtime bytecode emitted by `solc`.
     pub fn runtime_bytecode(&self) -> &str {
         &self.contract.runtime_bytecode
@@ -385,15 +397,18 @@ object "Counter" {
     }
 
     #[test]
-    fn dispatcher_routes_calls_by_selector() {
+    fn full_contract_test() {
         if !solc_available() {
-            eprintln!("skipping dispatcher_routes_calls_by_selector because solc is missing");
+            eprintln!("skipping full_contract_test because solc is missing");
             return;
         }
-        let source = include_str!("../../codegen/tests/fixtures/full_contract.fe");
-        let harness = FeContractHarness::compile_from_source(
+        let source_path = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../codegen/tests/fixtures/full_contract.fe"
+        );
+        let harness = FeContractHarness::compile_from_file(
             "ShapeDispatcher",
-            source,
+            source_path,
             CompileOptions::default(),
         )
         .expect("compilation should succeed");
