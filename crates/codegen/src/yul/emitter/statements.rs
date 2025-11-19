@@ -4,13 +4,10 @@
 //! straight-line MIR instructions (non-terminators) to produce Yul statements.
 
 use hir::hir_def::{ExprId, PatId, expr::ArithBinOp};
-use mir::{self, ValueId, ValueOrigin};
 use mir::ir::{IntrinsicOp, IntrinsicValue};
+use mir::{self, ValueId, ValueOrigin};
 
-use crate::yul::{
-    doc::YulDoc,
-    state::BlockState,
-};
+use crate::yul::{doc::YulDoc, state::BlockState};
 
 use super::{YulEmitter, YulError};
 
@@ -47,7 +44,9 @@ impl<'db> YulEmitter<'db> {
         state: &mut BlockState,
     ) -> Result<(), YulError> {
         match inst {
-            mir::MirInst::Let { pat, value, .. } => self.emit_let_inst(docs, *pat, *value, state)?,
+            mir::MirInst::Let { pat, value, .. } => {
+                self.emit_let_inst(docs, *pat, *value, state)?
+            }
             mir::MirInst::Assign { target, value, .. } => {
                 self.emit_assign_inst(docs, *target, *value, state)?
             }
@@ -175,10 +174,10 @@ impl<'db> YulEmitter<'db> {
         value: ValueId,
         state: &mut BlockState,
     ) -> Result<(), YulError> {
-        if self.value_use_counts[value.index()] == 1 {
-            if let Some(doc) = self.render_eval(value, state)? {
-                docs.push(doc);
-            }
+        if self.value_use_counts[value.index()] == 1
+            && let Some(doc) = self.render_eval(value, state)?
+        {
+            docs.push(doc);
         }
         Ok(())
     }

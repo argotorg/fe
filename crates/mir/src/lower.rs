@@ -864,13 +864,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
             );
             let offset = args[0];
             let size = args[1];
-            self.set_terminator(
-                block,
-                Terminator::ReturnData {
-                    offset,
-                    size,
-                },
-            );
+            self.set_terminator(block, Terminator::ReturnData { offset, size });
             return Some((None, value_id));
         }
         self.push_inst(block, MirInst::IntrinsicStmt { expr, op, args });
