@@ -383,4 +383,93 @@ object "Counter" {
             .expect("second call succeeds");
         assert_eq!(bytes_to_u256(&second.return_data).unwrap(), U256::from(2));
     }
+
+    #[test]
+    fn dispatcher_routes_calls_by_selector() {
+        if !solc_available() {
+            eprintln!("skipping dispatcher_routes_calls_by_selector because solc is missing");
+            return;
+        }
+        let source = r#"
+use core::{Dispatcher, calldataload, mstore, return_data}
+
+struct Point { x: u256, y: u256 }
+struct Square { side: u256 }
+
+impl Point {
+    fn area(self) -> u256 {
+        self.x * self.y
+    }
+}
+
+impl Square {
+    fn area(self) -> u256 {
+        let side = self.side
+        side * side
+    }
+}
+
+contract ShapeDispatcher {}
+
+fn abi_encode(value: u256) {
+    let ptr: u256 = 0
+    mstore(ptr, value)
+    return_data(ptr, 32)
+}
+
+impl Dispatcher for ShapeDispatcher {
+    fn dispatch() {
+        let selector = calldataload(0) >> 224
+        if selector == 0x090251bf {
+            let x = calldataload(4)
+            let y = calldataload(36)
+            let p = Point { x: x, y: y }
+            let value = p.area()
+            abi_encode(value)
+        }
+        if selector == 0x7b292909 {
+            let side = calldataload(4)
+            let s = Square { side: side }
+            let value = s.area()
+            abi_encode(value)
+        }
+
+        return_data(0, 0)
+    }
+}
+"#;
+        let harness = FeContractHarness::compile_from_source(
+            "ShapeDispatcher",
+            source,
+            CompileOptions::default(),
+        )
+        .expect("compilation should succeed");
+        let mut instance = harness.deploy_instance().expect("deployment succeeds");
+        let options = ExecutionOptions::default();
+        let point_call = encode_function_call(
+            "point(uint256,uint256)",
+            &[
+                Token::Uint(AbiU256::from(3u64)),
+                Token::Uint(AbiU256::from(4u64)),
+            ],
+        )
+        .unwrap();
+        let point_result = instance
+            .call_raw(&point_call, options)
+            .expect("point selector should succeed");
+        assert_eq!(
+            bytes_to_u256(&point_result.return_data).unwrap(),
+            U256::from(12u64)
+        );
+
+        let square_call =
+            encode_function_call("square(uint256)", &[Token::Uint(AbiU256::from(5u64))]).unwrap();
+        let square_result = instance
+            .call_raw(&square_call, options)
+            .expect("square selector should succeed");
+        assert_eq!(
+            bytes_to_u256(&square_result.return_data).unwrap(),
+            U256::from(25u64)
+        );
+    }
 }

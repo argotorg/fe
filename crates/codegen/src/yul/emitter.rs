@@ -165,6 +165,8 @@ struct YulEmitter<'db> {
     /// Temporaries allocated for expression values that must be re-used later (e.g. struct ptrs).
     expr_temps: FxHashMap<ExprId, String>,
     match_values: FxHashMap<ExprId, String>,
+    /// Number of MIR references per value so we can avoid evaluating them twice.
+    value_use_counts: Vec<usize>,
 }
 
 #[derive(Clone, Copy)]
@@ -188,13 +190,51 @@ impl<'db> YulEmitter<'db> {
             .func
             .body(db)
             .ok_or_else(|| YulError::MissingBody(function_name(db, mir_func.func)))?;
+        let value_use_counts = Self::collect_value_use_counts(&mir_func.body);
         Ok(Self {
             db,
             mir_func,
             body,
             expr_temps: FxHashMap::default(),
             match_values: FxHashMap::default(),
+            value_use_counts,
         })
+    }
+
+    /// Counts how many MIR instructions/terminators use each `ValueId`.
+    fn collect_value_use_counts(body: &mir::MirBody<'db>) -> Vec<usize> {
+        let mut counts = vec![0; body.values.len()];
+        for block in &body.blocks {
+            for inst in &block.insts {
+                match inst {
+                    mir::MirInst::Let { value, .. } => {
+                        if let Some(value) = value {
+                            counts[value.index()] += 1;
+                        }
+                    }
+                    mir::MirInst::Assign { value, .. }
+                    | mir::MirInst::AugAssign { value, .. }
+                    | mir::MirInst::Eval { value, .. }
+                    | mir::MirInst::EvalExpr { value, .. } => {
+                        counts[value.index()] += 1;
+                    }
+                    mir::MirInst::IntrinsicStmt { args, .. } => {
+                        for arg in args {
+                            counts[arg.index()] += 1;
+                        }
+                    }
+                }
+            }
+            match &block.terminator {
+                Terminator::Return(Some(value)) => counts[value.index()] += 1,
+                Terminator::Branch { cond, .. } => counts[cond.index()] += 1,
+                Terminator::Switch { discr, .. } => counts[discr.index()] += 1,
+                Terminator::Return(None)
+                | Terminator::Goto { .. }
+                | Terminator::Unreachable => {}
+            }
+        }
+        counts
     }
 
     /// Produces the final Yul docs for the current MIR function.
@@ -703,8 +743,10 @@ impl<'db> YulEmitter<'db> {
                     docs.push(YulDoc::line(format!("{yul_name} := {assignment}")));
                 }
                 mir::MirInst::Eval { value, .. } => {
-                    if let Some(doc) = self.render_eval(*value, state)? {
-                        docs.push(doc);
+                    if self.value_use_counts[value.index()] == 1 {
+                        if let Some(doc) = self.render_eval(*value, state)? {
+                            docs.push(doc);
+                        }
                     }
                 }
                 mir::MirInst::EvalExpr {
@@ -718,7 +760,12 @@ impl<'db> YulEmitter<'db> {
                         self.expr_temps.insert(*expr, temp.clone());
                         docs.push(YulDoc::line(format!("let {temp} := {lowered}")));
                     } else {
-                        docs.push(YulDoc::line(lowered));
+                        let value_data = self.mir_func.body.value(*value);
+                        if matches!(value_data.origin, ValueOrigin::Call(..)) {
+                            docs.push(YulDoc::line(format!("pop({lowered})")));
+                        } else {
+                            docs.push(YulDoc::line(lowered));
+                        }
                     }
                 }
                 mir::MirInst::IntrinsicStmt { op, args, .. } => {
@@ -775,6 +822,10 @@ impl<'db> YulEmitter<'db> {
         let value = self.mir_func.body.value(value_id);
         match &value.origin {
             ValueOrigin::Intrinsic(intr) => self.lower_intrinsic_stmt(intr, state),
+            ValueOrigin::Call(call) => {
+                let call_expr = self.lower_call_value(call, state)?;
+                Ok(Some(YulDoc::line(format!("pop({call_expr})"))))
+            }
             _ => Ok(None),
         }
     }
