@@ -764,10 +764,15 @@ impl<'db> YulEmitter<'db> {
         if let Some(temp) = self.match_values.get(&expr_id) {
             return Ok(temp.clone());
         }
-        if let Some(value_id) = self.mir_func.body.expr_values.get(&expr_id)
-            && let ValueOrigin::Call(call) = &self.mir_func.body.value(*value_id).origin
-        {
-            return self.lower_call_value(call, state);
+        if let Some(value_id) = self.mir_func.body.expr_values.get(&expr_id) {
+            let value = self.mir_func.body.value(*value_id);
+            match &value.origin {
+                ValueOrigin::Call(call) => return self.lower_call_value(call, state),
+                ValueOrigin::Synthetic(synth) => {
+                    return self.lower_synthetic_value(synth);
+                }
+                _ => {}
+            }
         }
 
         let expr = self.expect_expr(expr_id)?;
