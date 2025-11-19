@@ -6,10 +6,7 @@ use hir::hir_def::{
 };
 use mir::{
     BasicBlockId, CallOrigin, LoopInfo, MirFunction, Terminator, ValueId, ValueOrigin,
-    ir::{
-        IntrinsicOp, IntrinsicValue, MatchArmPattern, SwitchOrigin, SwitchTarget, SwitchValue,
-        SyntheticValue,
-    },
+    ir::{MatchArmPattern, SwitchOrigin, SwitchTarget, SwitchValue, SyntheticValue},
     lower_module,
 };
 use rustc_hash::FxHashMap;
@@ -19,6 +16,8 @@ use super::{
     errors::YulError,
     state::BlockState,
 };
+
+mod statements;
 
 #[derive(Debug)]
 pub enum EmitModuleError {
@@ -799,105 +798,6 @@ impl<'db> YulEmitter<'db> {
         Ok((loop_doc, info.exit))
     }
 
-    /// Lowers straight-line MIR instructions into Yul docs.
-    ///
-    /// * `insts` - MIR instructions belonging to the current block.
-    /// * `state` - Mutable binding table shared across the block.
-    ///
-    /// Returns the collected Yul statements for the linear portion.
-    fn render_statements(
-        &mut self,
-        insts: &[mir::MirInst<'_>],
-        state: &mut BlockState,
-    ) -> Result<Vec<YulDoc>, YulError> {
-        let mut docs = Vec::new();
-        for inst in insts {
-            match inst {
-                mir::MirInst::Let { pat, value, .. } => {
-                    let binding = self.pattern_ident(*pat)?;
-                    let existing = state.binding(&binding);
-                    let value = match value {
-                        Some(val) => self.lower_value(*val, state)?,
-                        None => "0".into(),
-                    };
-                    if let Some(name) = existing {
-                        docs.push(YulDoc::line(format!("{name} := {value}")));
-                    } else {
-                        let temp = state.alloc_local();
-                        state.insert_binding(binding.clone(), temp.clone());
-                        docs.push(YulDoc::line(format!("let {temp} := {value}")));
-                    }
-                }
-                mir::MirInst::Assign { target, value, .. } => {
-                    let binding = self.path_from_expr(*target)?;
-                    let yul_name = state.binding(&binding).ok_or_else(|| {
-                        YulError::Unsupported("assignment to unknown binding".into())
-                    })?;
-                    let value = self.lower_value(*value, state)?;
-                    docs.push(YulDoc::line(format!("{yul_name} := {value}")));
-                }
-                mir::MirInst::AugAssign {
-                    target, value, op, ..
-                } => {
-                    let binding = self.path_from_expr(*target)?;
-                    let yul_name = state.binding(&binding).ok_or_else(|| {
-                        YulError::Unsupported("assignment to unknown binding".into())
-                    })?;
-                    let rhs = self.lower_value(*value, state)?;
-                    let assignment = match op {
-                        ArithBinOp::Add => format!("add({yul_name}, {rhs})"),
-                        ArithBinOp::Sub => format!("sub({yul_name}, {rhs})"),
-                        ArithBinOp::Mul => format!("mul({yul_name}, {rhs})"),
-                        ArithBinOp::Div => format!("div({yul_name}, {rhs})"),
-                        ArithBinOp::Rem => format!("mod({yul_name}, {rhs})"),
-                        ArithBinOp::Pow => format!("exp({yul_name}, {rhs})"),
-                        ArithBinOp::LShift => format!("shl({rhs}, {yul_name})"),
-                        ArithBinOp::RShift => format!("shr({rhs}, {yul_name})"),
-                        ArithBinOp::BitAnd => format!("and({yul_name}, {rhs})"),
-                        ArithBinOp::BitOr => format!("or({yul_name}, {rhs})"),
-                        ArithBinOp::BitXor => format!("xor({yul_name}, {rhs})"),
-                    };
-                    docs.push(YulDoc::line(format!("{yul_name} := {assignment}")));
-                }
-                mir::MirInst::Eval { value, .. } => {
-                    if self.value_use_counts[value.index()] == 1
-                        && let Some(doc) = self.render_eval(*value, state)? {
-                            docs.push(doc);
-                        }
-                }
-                mir::MirInst::EvalExpr {
-                    expr,
-                    value,
-                    bind_value,
-                } => {
-                    let lowered = self.lower_value(*value, state)?;
-                    if *bind_value {
-                        let temp = state.alloc_local();
-                        self.expr_temps.insert(*expr, temp.clone());
-                        docs.push(YulDoc::line(format!("let {temp} := {lowered}")));
-                    } else {
-                        let value_data = self.mir_func.body.value(*value);
-                        if matches!(value_data.origin, ValueOrigin::Call(..)) {
-                            docs.push(YulDoc::line(format!("pop({lowered})")));
-                        } else {
-                            docs.push(YulDoc::line(lowered));
-                        }
-                    }
-                }
-                mir::MirInst::IntrinsicStmt { op, args, .. } => {
-                    let intr = IntrinsicValue {
-                        op: *op,
-                        args: args.clone(),
-                    };
-                    if let Some(doc) = self.lower_intrinsic_stmt(&intr, state)? {
-                        docs.push(doc);
-                    }
-                }
-            }
-        }
-        Ok(docs)
-    }
-
     /// Lowers a MIR `ValueId` into a Yul expression string.
     /// Translates a MIR value into its Yul expression string.
     ///
@@ -921,163 +821,6 @@ impl<'db> YulEmitter<'db> {
             _ => Err(YulError::Unsupported(
                 "only expression-derived values are supported".into(),
             )),
-        }
-    }
-
-    /// Emits statements for expression statements, returning a doc when work was done.
-    ///
-    /// * `value_id` - MIR value representing the expression.
-    /// * `state` - Block state containing active bindings.
-    ///
-    /// Returns a doc describing the evaluation side effects, if any.
-    fn render_eval(
-        &mut self,
-        value_id: ValueId,
-        state: &mut BlockState,
-    ) -> Result<Option<YulDoc>, YulError> {
-        let value = self.mir_func.body.value(value_id);
-        match &value.origin {
-            ValueOrigin::Intrinsic(intr) => self.lower_intrinsic_stmt(intr, state),
-            ValueOrigin::Call(call) => {
-                let call_expr = self.lower_call_value(call, state)?;
-                Ok(Some(YulDoc::line(format!("pop({call_expr})"))))
-            }
-            _ => Ok(None),
-        }
-    }
-
-    /// Handles `return intrinsic::<op>(...)` for void intrinsics by emitting the
-    /// side effect plus a `ret := 0`.
-    ///
-    /// * `value_id` - MIR value representing the intrinsic call.
-    /// * `docs` - Output doc list to append to.
-    /// * `state` - Mutable state used for lowering arguments.
-    ///
-    /// Returns `true` when the intrinsic produced a replacement return statement.
-    fn emit_intrinsic_return(
-        &mut self,
-        value_id: ValueId,
-        docs: &mut Vec<YulDoc>,
-        state: &BlockState,
-    ) -> Result<bool, YulError> {
-        let value = self.mir_func.body.value(value_id);
-        if let ValueOrigin::Intrinsic(intr) = &value.origin
-            && !intr.op.returns_value()
-        {
-            if let Some(doc) = self.lower_intrinsic_stmt(intr, state)? {
-                docs.push(doc);
-            }
-            if matches!(intr.op, IntrinsicOp::ReturnData) {
-                return Ok(true);
-            }
-            docs.push(YulDoc::line("ret := 0"));
-            return Ok(true);
-        }
-        Ok(false)
-    }
-
-    /// Converts intrinsic value-producing operations (`mload`/`sload`) into Yul.
-    ///
-    /// * `intr` - Intrinsic descriptor referencing the MIR operands.
-    /// * `state` - Binding state used to evaluate operands.
-    ///
-    /// Returns the Yul expression representing the intrinsic result.
-    fn lower_intrinsic_value(
-        &self,
-        intr: &IntrinsicValue,
-        state: &BlockState,
-    ) -> Result<String, YulError> {
-        if !intr.op.returns_value() {
-            return Err(YulError::Unsupported(
-                "intrinsic does not yield a value".into(),
-            ));
-        }
-        let args = self.lower_intrinsic_args(intr, state)?;
-        self.expect_intrinsic_arity(intr.op, &args, 1)?;
-        Ok(format!("{}({})", self.intrinsic_name(intr.op), args[0]))
-    }
-
-    /// Converts intrinsic statement operations (`mstore`, …) into Yul.
-    ///
-    /// * `intr` - Intrinsic descriptor.
-    /// * `state` - Binding state containing previously-evaluated expressions.
-    ///
-    /// Returns the emitted doc when the intrinsic performs work.
-    fn lower_intrinsic_stmt(
-        &self,
-        intr: &IntrinsicValue,
-        state: &BlockState,
-    ) -> Result<Option<YulDoc>, YulError> {
-        if intr.op.returns_value() {
-            return Ok(None);
-        }
-        let args = self.lower_intrinsic_args(intr, state)?;
-        self.expect_intrinsic_arity(intr.op, &args, 2)?;
-        let line = match intr.op {
-            IntrinsicOp::Mstore => format!("mstore({}, {})", args[0], args[1]),
-            IntrinsicOp::Mstore8 => format!("mstore8({}, {})", args[0], args[1]),
-            IntrinsicOp::Sstore => format!("sstore({}, {})", args[0], args[1]),
-            IntrinsicOp::ReturnData => format!("return({}, {})", args[0], args[1]),
-            _ => unreachable!(),
-        };
-        Ok(Some(YulDoc::line(line)))
-    }
-
-    /// Lowers all intrinsic arguments into Yul expressions.
-    ///
-    /// * `intr` - Intrinsic descriptor with MIR value IDs.
-    /// * `state` - Binding state used to lower each argument.
-    ///
-    /// Returns the vector of evaluated argument expressions.
-    fn lower_intrinsic_args(
-        &self,
-        intr: &IntrinsicValue,
-        state: &BlockState,
-    ) -> Result<Vec<String>, YulError> {
-        intr.args
-            .iter()
-            .map(|arg| self.lower_value(*arg, state))
-            .collect()
-    }
-
-    /// Emits a user-friendly error when an intrinsic is lowered with the wrong arity.
-    ///
-    /// * `op` - Intrinsic opcode used for error messaging.
-    /// * `args` - Already-lowered argument expressions.
-    /// * `expected` - Number of args the intrinsic requires.
-    ///
-    /// Returns `Ok(())` when the arity matches or a [`YulError`] describing the mismatch.
-    fn expect_intrinsic_arity(
-        &self,
-        op: IntrinsicOp,
-        args: &[String],
-        expected: usize,
-    ) -> Result<(), YulError> {
-        if args.len() == expected {
-            Ok(())
-        } else {
-            Err(YulError::Unsupported(format!(
-                "intrinsic `{}` expects {expected} arguments, got {}",
-                self.intrinsic_name(op),
-                args.len()
-            )))
-        }
-    }
-
-    /// Returns the Yul builtin name for an intrinsic opcode.
-    ///
-    /// * `op` - Intrinsic opcode to map.
-    ///
-    /// Returns the intrinsic's string literal recognized by Yul.
-    fn intrinsic_name(&self, op: IntrinsicOp) -> &'static str {
-        match op {
-            IntrinsicOp::Mload => "mload",
-            IntrinsicOp::Calldataload => "calldataload",
-            IntrinsicOp::Mstore => "mstore",
-            IntrinsicOp::Mstore8 => "mstore8",
-            IntrinsicOp::Sload => "sload",
-            IntrinsicOp::Sstore => "sstore",
-            IntrinsicOp::ReturnData => "return",
         }
     }
 
