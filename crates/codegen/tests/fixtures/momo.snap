@@ -23,6 +23,11 @@ input_file: tests/fixtures/momo.fe
       default {
       }
     let v2 := v0
-    ret := from_word(v2)
+    ret := from_word__u8__bc9d6eeaea22ffb5(v2)
+  }
+}
+{
+  function from_word__u8__bc9d6eeaea22ffb5(word) -> ret {
+    ret := and(word, 255)
   }
 }

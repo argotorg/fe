@@ -237,19 +237,27 @@ impl<'db> TyChecker<'db> {
         let Expr::Call(callee, args) = expr_data else {
             unreachable!()
         };
-        let callee_ty = self.check_expr_unknown(*callee).ty;
-        if callee_ty.has_invalid(self.db) {
+        let callee_prop = self.check_expr_unknown(*callee);
+        if callee_prop.ty.has_invalid(self.db) {
             return ExprProp::invalid(self.db);
         }
 
-        let mut callable =
-            match Callable::new(self.db, callee_ty, callee.span(self.body()).into(), None) {
+        let mut callable = if let Some(existing) = self.env.callable_expr(*callee) {
+            existing.clone()
+        } else {
+            match Callable::new(
+                self.db,
+                callee_prop.ty,
+                callee.span(self.body()).into(),
+                None,
+            ) {
                 Ok(callable) => callable,
                 Err(diag) => {
                     self.push_diag(diag);
                     return ExprProp::invalid(self.db);
                 }
-            };
+            }
+        };
 
         let call_span = expr.span(self.body()).into_call_expr();
 
@@ -694,7 +702,7 @@ impl<'db> TyChecker<'db> {
                 PathRes::Const(_, ty) => ExprProp::new(ty, true),
                 PathRes::Method(receiver_ty, candidate) => {
                     let canonical_r_ty = Canonicalized::new(self.db, receiver_ty);
-                    let method_ty = match candidate {
+                    let (method_ty, trait_inst) = match candidate {
                         MethodCandidate::InherentMethod(func_def) => {
                             // TODO: move this to path resolver
                             let mut method_ty = TyId::func(self.db, func_def);
@@ -709,7 +717,7 @@ impl<'db> TyChecker<'db> {
                                     break;
                                 }
                             }
-                            method_ty
+                            (method_ty, None)
                         }
                         MethodCandidate::TraitMethod(cand)
                         | MethodCandidate::NeedsConfirmation(cand) => {
@@ -718,11 +726,26 @@ impl<'db> TyChecker<'db> {
                                 self.env
                                     .register_confirmation(inst, path_expr_span.clone().into());
                             }
-                            cand.method
-                                .instantiate_with_inst(&mut self.table, receiver_ty, inst)
+                            let method_ty = cand
+                                .method
+                                .instantiate_with_inst(&mut self.table, receiver_ty, inst);
+                            (method_ty, Some(inst))
                         }
                     };
-                    ExprProp::new(self.table.instantiate_to_term(method_ty), true)
+
+                    let instantiated_method_ty = self.table.instantiate_to_term(method_ty);
+                    if self.env.callable_expr(expr).is_none() {
+                        let callable = Callable::new(
+                            self.db,
+                            instantiated_method_ty,
+                            expr.span(self.body()).into(),
+                            trait_inst,
+                        )
+                        .expect("method path should resolve to callable");
+                        self.env.register_callable(expr, callable);
+                    }
+
+                    ExprProp::new(instantiated_method_ty, true)
                 }
                 PathRes::TraitConst(_recv_ty, inst, name) => {
                     // Look up the associated const's declared type in the trait and
