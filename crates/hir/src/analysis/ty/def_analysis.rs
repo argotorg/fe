@@ -15,8 +15,8 @@ use super::{
     adt_def::{AdtDef, AdtRef},
     diagnostics::{ImplDiag, TraitConstraintDiag, TraitLowerDiag, TyDiagCollection},
     method_cmp::compare_impl_method,
-    trait_def::{Implementor, does_impl_trait_conflict, ingot_trait_env},
-    trait_lower::{TraitRefLowerError, lower_impl_trait},
+    trait_def::{ImplementorView, does_impl_trait_conflict, ingot_trait_env},
+    trait_lower::TraitRefLowerError,
     ty_def::{InvalidCause, TyData},
 };
 
@@ -112,7 +112,7 @@ pub fn analyze_impl_trait<'db>(
 fn analyze_impl_trait_specific_error<'db>(
     db: &'db dyn HirAnalysisDb,
     impl_trait: ImplTrait<'db>,
-) -> Result<Binder<Implementor<'db>>, Vec<TyDiagCollection<'db>>> {
+) -> Result<Binder<ImplementorView<'db>>, Vec<TyDiagCollection<'db>>> {
     let mut diags = vec![];
     // No need to report parser errors here.
     let Some(trait_ref) = impl_trait.trait_ref(db).to_opt() else {
@@ -138,8 +138,8 @@ fn analyze_impl_trait_specific_error<'db>(
     // Lower the trait ref via the shared semantic helper; map domain/path
     // errors precisely while keeping ingot checks consistent with the
     // lowering used in other parts of the engine.
-    match impl_trait.trait_inst_result(db) {
-        Ok(_) => {}
+    let trait_inst = match impl_trait.trait_inst_result(db) {
+        Ok(inst) => inst,
         Err(TraitRefLowerError::PathResError(err)) => {
             let trait_path_span = impl_trait.span().trait_ref().path();
             if let Some(diag) = err.into_diag(
@@ -174,36 +174,31 @@ fn analyze_impl_trait_specific_error<'db>(
 
     // Ingot checks are enforced inside `trait_inst_result`; `trait_inst` is
     // only available when the impl resides with the type or trait.
-    let impl_trait_ingot = impl_trait.top_mod(db).ingot(db);
 
-    // Conflict check against existing implementors.
-    let trait_env = ingot_trait_env(db, impl_trait_ingot);
-    let Some(implementor) = trait_env.map_impl_trait(impl_trait) else {
-        let current_impl = lower_impl_trait(db, impl_trait).unwrap();
-        analyze_conflict_impl(db, current_impl, &mut diags);
-        return Err(diags);
-    };
+    // Build a fresh implementor view from semantic helpers instead of
+    // calling the tracked `lower_impl_trait` query here to avoid cycles
+    // with `ingot_trait_env` / `collect_trait_impls`.
+    let params = impl_trait.impl_params(db);
+    let types = impl_trait.assoc_type_bindings_for_trait_inst(db, trait_inst);
+    let implementor = Binder::bind(ImplementorView::new(db, trait_inst, params, types, impl_trait));
 
-    fn analyze_conflict_impl<'db>(
-        db: &'db dyn HirAnalysisDb,
-        implementor: Binder<Implementor<'db>>,
-        diags: &mut Vec<TyDiagCollection<'db>>,
-    ) {
-        let trait_ = implementor.skip_binder().trait_(db);
-        let env = ingot_trait_env(db, trait_.ingot(db));
-        let Some(impls) = env.impls.get(&trait_.def(db)) else {
-            return;
-        };
-        for cand in impls {
-            if does_impl_trait_conflict(db, *cand, implementor) {
+    let trait_ = implementor.skip_binder().trait_(db);
+    let env = ingot_trait_env(db, trait_.ingot(db));
+    if let Some(impls) = env.impls.get(&trait_.def(db)) {
+        for &cand_view in impls {
+            let cand_impl_trait = cand_view.skip_binder().hir_impl_trait(db);
+            if cand_impl_trait == impl_trait {
+                continue;
+            }
+            if does_impl_trait_conflict(db, cand_view, implementor) {
                 diags.push(
                     TraitLowerDiag::ConflictTraitImpl {
-                        primary: cand.skip_binder().hir_impl_trait(db),
-                        conflict_with: implementor.skip_binder().hir_impl_trait(db),
+                        primary: cand_impl_trait,
+                        conflict_with: impl_trait,
                     }
                     .into(),
                 );
-                return;
+                return Err(diags);
             }
         }
     }
@@ -239,7 +234,7 @@ fn analyze_impl_trait_specific_error<'db>(
 /// Compare impl methods vs. trait methods and report missing/mismatched ones.
 fn analyze_impl_trait_method<'db>(
     db: &'db dyn HirAnalysisDb,
-    implementor: Implementor<'db>,
+    implementor: ImplementorView<'db>,
 ) -> Vec<TyDiagCollection<'db>> {
     let mut diags = vec![];
     let impl_methods = implementor.methods(db);

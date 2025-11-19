@@ -16,7 +16,7 @@ use crate::analysis::{
         canonical::{Canonical, Canonicalized},
         fold::TyFoldable,
         normalize::normalize_ty,
-        trait_def::{Implementor, TraitInstId, impls_for_trait},
+        trait_def::{ImplementorView, TraitInstId, impls_for_trait},
         ty_def::{TyData, TyId},
         unify::PersistentUnificationTable,
         visitor::{TyVisitable, TyVisitor},
@@ -268,7 +268,7 @@ struct GeneratorNodeData<'db> {
     ///  A list of consumer nodes that depend on this generator node.
     dependents: Vec<ConsumerNode>,
     ///  A list of candidate implementors for the trait.
-    cands: &'db [Binder<Implementor<'db>>],
+    cands: &'db [Binder<ImplementorView<'db>>],
     /// The list of assumptions for the goal.
     assumptions: PredicateListId<'db>,
     /// The index of the next candidate to be tried.

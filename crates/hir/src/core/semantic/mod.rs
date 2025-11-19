@@ -50,10 +50,7 @@ use crate::hir_def::*;
 // When adding real methods, prefer calling internal lowering/normalization here
 // rather than exposing raw syntax.
 use crate::analysis::ty::adt_def::{AdtDef, AdtField, AdtRef};
-use crate::analysis::ty::canonical::Canonical;
-use crate::analysis::ty::fold::TyFoldable;
-use crate::analysis::ty::normalize::normalize_ty;
-use crate::analysis::ty::trait_def::{TraitDef, TraitInstId, impls_for_ty_with_constraints};
+use crate::analysis::ty::trait_def::{TraitDef, TraitInstId};
 use crate::analysis::ty::trait_lower::{
     TraitRefLowerError, lower_trait, lower_trait_ref, lower_trait_ref_with_owner_self,
 };
@@ -62,7 +59,6 @@ use crate::analysis::ty::trait_resolution::constraint::{
 };
 use crate::analysis::ty::ty_def::TyData;
 use crate::analysis::ty::ty_lower::collect_generic_params;
-use crate::analysis::ty::unify::UnificationTable;
 use crate::analysis::ty::visitor::{TyVisitor, walk_ty};
 use crate::analysis::ty::{
     trait_resolution::PredicateListId,
@@ -71,7 +67,6 @@ use crate::analysis::ty::{
 };
 use crate::core::adt_lower::lower_adt;
 use common::indexmap::IndexMap;
-use smallvec::{SmallVec, smallvec};
 // (kind-lowering helpers intentionally omitted; see WherePredicateView::kind)
 
 // (Additional view types appear below; keep layering semantic.)
@@ -393,14 +388,6 @@ impl<'db> WhereClauseView<'db> {
         (0..len).map(move |idx| WherePredicateView { clause: self, idx })
     }
 
-    pub(crate) fn raw_id(self) -> WhereClauseId<'db> {
-        self.id
-    }
-
-    pub(crate) fn raw_predicates(self, db: &'db dyn HirDb) -> &'db [WherePredicate<'db>] {
-        self.id.data(db)
-    }
-
     pub fn span(self) -> crate::span::params::LazyWhereClauseSpan<'db> {
         match self.owner {
             WhereClauseOwner::Func(f) => f.span().where_clause(),
@@ -419,18 +406,6 @@ impl<'db> WherePredicateView<'db> {
     /// higher-level semantic helpers on this view instead.
     fn hir_pred(self, db: &'db dyn HirDb) -> &'db WherePredicate<'db> {
         &self.clause.id.data(db)[self.idx]
-    }
-
-    /// Raw HIR subject type; keep private to this module.
-    /// Semantic callers should use `subject_ty` / `subject_ty_checked`.
-    fn hir_ty(self, db: &'db dyn HirDb) -> Partial<TypeId<'db>> {
-        self.hir_pred(db).ty
-    }
-
-    /// Raw HIR bounds for this predicate; keep private to this module.
-    /// Public callers should use `bounds()` + `WherePredicateBoundView`.
-    fn bounds_raw(self, db: &'db dyn HirDb) -> &'db [TypeBound<'db>] {
-        &self.hir_pred(db).bounds
     }
 
     fn owner_item(self) -> ItemKind<'db> {
@@ -896,24 +871,6 @@ impl<'db> ImplTrait<'db> {
         Ok(trait_inst)
     }
 
-    /// Raw (uninstantiated) constraints attached to this `impl trait` item.
-    ///
-    /// This is a thin wrapper over the constraint collector used elsewhere
-    /// and keeps the predicate‑set semantics rooted on the item.
-    pub(crate) fn raw_constraints(self, db: &'db dyn HirAnalysisDb) -> PredicateListId<'db> {
-        collect_constraints(db, self.into()).instantiate_identity()
-    }
-
-    /// Constraints for this `impl trait`, instantiated with its generic
-    /// parameters (including `Self` when present).
-    pub(crate) fn constraints_instantiated(
-        self,
-        db: &'db dyn HirAnalysisDb,
-    ) -> PredicateListId<'db> {
-        let params = self.impl_params(db);
-        collect_constraints(db, self.into()).instantiate(db, &params)
-    }
-
     /// Semantic generic parameter types for this `impl trait` block, in
     /// definition order (including `Self` when present).
     ///
@@ -1166,156 +1123,6 @@ impl<'db> GenericParamView<'db> {
     }
 }
 
-// Associated type resolution traversal (crate-internal)
-
-#[derive(Clone, Copy, Debug)]
-pub(crate) struct AssocTypeResolveView<'db> {
-    subject: TyId<'db>,
-    scope: ScopeId<'db>,
-    assumptions: PredicateListId<'db>,
-}
-
-impl<'db> AssocTypeResolveView<'db> {
-    pub(crate) fn new(
-        subject: TyId<'db>,
-        scope: ScopeId<'db>,
-        assumptions: PredicateListId<'db>,
-    ) -> Self {
-        Self {
-            subject,
-            scope,
-            assumptions,
-        }
-    }
-
-    /// Compute associated-type candidates for `name` using semantic bound views only.
-    /// Returns pairs of (trait instance, projection TyId) without normalization.
-    pub(crate) fn candidates_for(
-        self,
-        db: &'db dyn HirAnalysisDb,
-        name: IdentId<'db>,
-    ) -> SmallVec<(TraitInstId<'db>, TyId<'db>), 4> {
-        use crate::analysis::ty::trait_def::TraitInstId;
-        use crate::analysis::ty::trait_lower::{lower_trait, lower_trait_ref};
-
-        let mut candidates: SmallVec<(TraitInstId<'db>, TyId<'db>), 4> = SmallVec::new();
-        let ingot = self.scope.ingot(db);
-        let mut table = UnificationTable::new(db);
-        let canonical = Canonical::new(db, self.subject);
-        let lhs_ty = canonical.extract_identity(&mut table);
-
-        match canonical.value.data(db) {
-            TyData::QualifiedTy(trait_inst) => {
-                let proj = TyId::assoc_ty(db, *trait_inst, name);
-                return smallvec![(*trait_inst, proj)];
-            }
-            TyData::TyParam(param) if param.is_trait_self() => {
-                if let Some(trait_) = param.owner.resolve_to::<Trait>(db) {
-                    if trait_.assoc_ty(db, name).is_some() {
-                        let tr = TraitInstId::new(
-                            db,
-                            lower_trait(db, trait_),
-                            vec![canonical.value],
-                            IndexMap::new(),
-                        );
-                        let assoc_ty = TyId::assoc_ty(db, tr, name);
-                        return smallvec![(tr, assoc_ty)];
-                    }
-                } else if let Some(impl_trait) = param.owner.resolve_to::<ImplTrait>(db)
-                    && let Some(trait_ref) = impl_trait.trait_ref(db).to_opt()
-                    && let Ok(tr_inst) = lower_trait_ref(
-                        db,
-                        canonical.value,
-                        trait_ref,
-                        impl_trait.scope(),
-                        self.assumptions,
-                    )
-                    && let Some(assoc_ty) = tr_inst.assoc_ty(db, name)
-                {
-                    return smallvec![(tr_inst, assoc_ty)];
-                }
-            }
-            _ => {}
-        }
-
-        // Bounds in assumptions: only if subject is a type param to avoid spurious ambiguities
-        if let TyData::TyParam(_) = canonical.value.data(db) {
-            for &pred in self.assumptions.list(db) {
-                let snapshot = table.snapshot();
-                let pred_self = table.instantiate_with_fresh_vars(
-                    crate::analysis::ty::binder::Binder::bind(pred.self_ty(db)),
-                );
-                if table.unify(lhs_ty, pred_self).is_ok() {
-                    if let Some(assoc_ty) = pred.assoc_ty(db, name) {
-                        let folded = assoc_ty.fold_with(db, &mut table);
-                        candidates.push((pred, folded));
-                    }
-                }
-                table.rollback_to(snapshot);
-            }
-        }
-
-        // Impl candidates
-        for impl_ in impls_for_ty_with_constraints(db, ingot, canonical, self.assumptions) {
-            let snapshot = table.snapshot();
-            let impl_ = table.instantiate_with_fresh_vars(impl_);
-            if table.unify(lhs_ty, impl_.self_ty(db)).is_ok() {
-                if let Some(ty) = impl_.assoc_ty(db, name) {
-                    let folded = ty.fold_with(db, &mut table);
-                    candidates.push((impl_.trait_(db), folded));
-                }
-            }
-            table.rollback_to(snapshot);
-        }
-
-        // Subject is a projection: consult bounds on the associated type via semantic views
-        if let TyData::AssocTy(assoc_ty) = canonical.value.data(db) {
-            let ty_with_subst = canonical.extract_identity(&mut table);
-            // Assumptions bounds (e.g., `T::Assoc: Level1`)
-            for &pred in self.assumptions.list(db) {
-                let snapshot = table.snapshot();
-                if table.unify(ty_with_subst, pred.self_ty(db)).is_ok() {
-                    if let Some(assoc_ty) = pred.assoc_ty(db, name) {
-                        let folded = assoc_ty.fold_with(db, &mut table);
-                        candidates.push((pred, folded));
-                    }
-                }
-                table.rollback_to(snapshot);
-            }
-
-            // Trait-declared bounds on the associated type
-            let trait_def = assoc_ty.trait_.def(db);
-            let trait_ = trait_def.trait_(db);
-            let assoc_name = assoc_ty.name;
-            for view in trait_.assoc_types(db) {
-                if view.name(db) != Some(assoc_name) {
-                    continue;
-                }
-                let subject = ty_with_subst.fold_with(db, &mut table);
-                for inst in view.with_subject(subject).bounds(db) {
-                    if inst.def(db).trait_(db).assoc_ty(db, name).is_some() {
-                        let proj = TyId::assoc_ty(db, inst, name);
-                        let folded = proj.fold_with(db, &mut table);
-                        candidates.push((inst, folded));
-                    }
-                }
-            }
-        }
-
-        // Dedup normalized results, but keep original projections for precision
-        let mut dedup: IndexMap<
-            TyId<'db>,
-            (crate::analysis::ty::trait_def::TraitInstId<'db>, TyId<'db>),
-        > = IndexMap::new();
-        for (inst, ty_candidate) in candidates.iter().copied() {
-            let norm = normalize_ty(db, ty_candidate, self.scope, self.assumptions);
-            dedup.entry(norm).or_insert((inst, ty_candidate));
-        }
-
-        dedup.into_iter().map(|(_n, v)| v).collect()
-    }
-}
-
 // Associated type views -----------------------------------------------------
 
 #[derive(Clone, Copy, Debug)]
@@ -1417,29 +1224,6 @@ impl<'db> AssocTypeBoundView<'db> {
         let owner_trait = self.owner.owner;
         let scope = owner_trait.scope();
         let assumptions = constraints_for(db, owner_trait.into());
-        lower_trait_ref_with_owner_self(
-            db,
-            subject,
-            self.trait_ref(db),
-            scope,
-            assumptions,
-            owner_self,
-        )
-        .ok()
-    }
-
-    /// Lower this bound against an explicit subject and external assumptions (e.g., resolver env).
-    pub(crate) fn as_trait_inst_with_subject_in_env(
-        self,
-        db: &'db dyn HirAnalysisDb,
-        subject: TyId<'db>,
-        assumptions: PredicateListId<'db>,
-    ) -> Option<TraitInstId<'db>> {
-        let owner_trait = self.owner.owner;
-        let owner_self = collect_generic_params(db, owner_trait.into())
-            .trait_self(db)
-            .unwrap();
-        let scope = owner_trait.scope();
         lower_trait_ref_with_owner_self(
             db,
             subject,
@@ -1624,18 +1408,5 @@ impl<'db> AssocTypeOnSubjectView<'db> {
         self.base
             .bounds(db)
             .filter_map(move |b| b.as_trait_inst_with_subject(db, self.subject))
-    }
-
-    /// Semantic trait bounds for this associated type on `subject` with an explicit assumption list.
-    // TODO(api): Evaluate whether this is still needed once assoc-type resolve
-    // traversal provides a consistent assumptions model. If not, remove.
-    pub(crate) fn bounds_in(
-        self,
-        db: &'db dyn HirAnalysisDb,
-        assumptions: PredicateListId<'db>,
-    ) -> impl Iterator<Item = TraitInstId<'db>> + 'db {
-        self.base
-            .bounds(db)
-            .filter_map(move |b| b.as_trait_inst_with_subject_in_env(db, self.subject, assumptions))
     }
 }

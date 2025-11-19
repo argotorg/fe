@@ -19,7 +19,7 @@ use crate::analysis::{
 };
 use crate::{
     ParserError, SpannedHirDb,
-    hir_def::{FieldIndex, PathKind},
+    hir_def::{FieldIndex, GenericParamOwner, PathKind},
     span::LazySpan,
 };
 use common::diagnostics::{
@@ -1575,18 +1575,27 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                         CallableDef::Func(f) => f.has_explicit_return_ty(db),
                         CallableDef::VariantCtor(_) => false,
                     };
+
+                    // For explicit return types, point at the return type span;
+                    // otherwise, point at the function name span (where a return
+                    // type could be added).
                     let name_span = func.name_span();
+                    let span = match (has_explicit, func) {
+                        (true, CallableDef::Func(f)) => f.span().ret_ty().into(),
+                        _ => name_span,
+                    };
+
                     if has_explicit {
                         sub_diagnostics.push(SubDiagnostic {
                             style: LabelStyle::Secondary,
                             message: format!("this function expects `{expected}` to be returned"),
-                            span: name_span.resolve(db),
+                            span: span.resolve(db),
                         });
                     } else {
                         sub_diagnostics.push(SubDiagnostic {
                             style: LabelStyle::Secondary,
                             message: format!("try adding `-> {actual}`"),
-                            span: name_span.resolve(db),
+                            span: span.resolve(db),
                         });
                     }
                 }
@@ -2492,13 +2501,33 @@ impl DiagnosticVoucher for ImplDiag<'_> {
                     impl_m.explicit_params(db)[*param_idx].kind(db),
                 );
 
+                // Prefer to highlight the specific generic type parameter that
+                // mismatches, falling back to the whole parameter list if we
+                // cannot resolve it (e.g., for variant constructors).
+                let span = match impl_m {
+                    CallableDef::Func(func) => {
+                        // Map from "explicit param index" back to the original
+                        // index in the owner's generic parameter list.
+                        let offset = impl_m.offset_to_explicit_params_position(db);
+                        let original_idx = offset + *param_idx;
+                        let owner = GenericParamOwner::Func(*func);
+
+                        owner
+                            .params(db)
+                            .nth(original_idx)
+                            .map(|p| p.name_span().resolve(db))
+                            .unwrap_or_else(|| impl_m.param_list_span().resolve(db))
+                    }
+                    _ => impl_m.param_list_span().resolve(db),
+                };
+
                 CompleteDiagnostic {
                     severity,
                     message: "method type parameter kind mismatch".to_string(),
                     sub_diagnostics: vec![SubDiagnostic {
                         style: LabelStyle::Primary,
                         message,
-                        span: impl_m.param_list_span().resolve(db),
+                        span,
                     }],
                     notes: vec![],
                     error_code,

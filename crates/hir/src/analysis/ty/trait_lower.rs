@@ -13,7 +13,7 @@ use super::{
     const_ty::ConstTyId,
     fold::{TyFoldable, TyFolder},
     func_def::{CallableDef, lower_func},
-    trait_def::{Implementor, TraitDef, TraitInstId, does_impl_trait_conflict},
+    trait_def::{ImplementorView, TraitDef, TraitInstId, does_impl_trait_conflict},
     trait_resolution::PredicateListId,
     ty_def::{InvalidCause, TyId},
     ty_lower::lower_hir_ty,
@@ -27,7 +27,7 @@ use crate::analysis::{
     },
 };
 
-type TraitImplTable<'db> = FxHashMap<TraitDef<'db>, Vec<Binder<Implementor<'db>>>>;
+type TraitImplTable<'db> = FxHashMap<TraitDef<'db>, Vec<Binder<ImplementorView<'db>>>>;
 
 #[salsa::tracked]
 pub(crate) fn lower_trait<'db>(db: &'db dyn HirAnalysisDb, trait_: Trait<'db>) -> TraitDef<'db> {
@@ -57,11 +57,10 @@ pub(crate) fn collect_trait_impls<'db>(
 /// Returns the corresponding implementors for the given [`ImplTrait`].
 /// If the implementor type or the trait reference is ill-formed, returns
 /// `None`.
-#[salsa::tracked]
 pub(crate) fn lower_impl_trait<'db>(
     db: &'db dyn HirAnalysisDb,
     impl_trait: ImplTrait<'db>,
-) -> Option<Binder<Implementor<'db>>> {
+) -> Option<Binder<ImplementorView<'db>>> {
     // Delegate trait-ref lowering and ingot checks to the semantic helper on
     // `ImplTrait`. If lowering fails or the ingot rule is violated, this
     // returns `None`.
@@ -74,7 +73,7 @@ pub(crate) fn lower_impl_trait<'db>(
     // merged trait defaults.
     let types = impl_trait.assoc_type_bindings_for_trait_inst(db, trait_inst);
 
-    let implementor = Implementor::new(db, trait_inst, params, types, impl_trait);
+    let implementor = ImplementorView::new(db, trait_inst, params, types, impl_trait);
 
     Some(Binder::bind(implementor))
 }
@@ -318,7 +317,7 @@ pub(crate) fn lower_trait_ref_impl<'db>(
 #[salsa::tracked(return_ref)]
 pub(crate) fn collect_implementor_methods<'db>(
     db: &'db dyn HirAnalysisDb,
-    implementor: Implementor<'db>,
+    implementor: ImplementorView<'db>,
 ) -> IndexMap<IdentId<'db>, CallableDef<'db>> {
     let mut methods = IndexMap::default();
     for method in implementor.hir_impl_trait(db).methods(db) {
@@ -373,7 +372,7 @@ impl<'db> ImplementorCollector<'db> {
     }
 
     /// Returns `true` if `implementor` conflicts with any existing implementor.
-    fn does_conflict(&mut self, implementor: Binder<Implementor>) -> bool {
+    fn does_conflict(&mut self, implementor: Binder<ImplementorView>) -> bool {
         let def = implementor.instantiate_identity().trait_def(self.db);
         for impl_map in self
             .const_impl_maps
@@ -383,8 +382,8 @@ impl<'db> ImplementorCollector<'db> {
             let Some(impls) = impl_map.get(&def) else {
                 continue;
             };
-            for already_implemented in impls {
-                if does_impl_trait_conflict(self.db, *already_implemented, implementor) {
+            for &already_implemented in impls {
+                if does_impl_trait_conflict(self.db, already_implemented, implementor) {
                     return true;
                 }
             }

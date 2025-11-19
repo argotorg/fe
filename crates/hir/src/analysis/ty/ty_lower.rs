@@ -18,7 +18,7 @@ use crate::analysis::name_resolution::{
 use crate::analysis::{HirAnalysisDb, ty::binder::Binder};
 
 /// Lowers the given HirTy to `TyId`.
-#[salsa::tracked]
+#[salsa::tracked(cycle_fn=lower_hir_ty_cycle_recover, cycle_initial=lower_hir_ty_cycle_initial)]
 pub fn lower_hir_ty<'db>(
     db: &'db dyn HirAnalysisDb,
     ty: HirTyId<'db>,
@@ -106,6 +106,31 @@ fn lower_path<'db>(
             TyId::invalid(db, InvalidCause::PathResolutionFailed { path })
         }
     }
+}
+
+fn lower_hir_ty_cycle_initial<'db>(
+    db: &'db dyn HirAnalysisDb,
+    _ty: HirTyId<'db>,
+    _scope: ScopeId<'db>,
+    _assumptions: PredicateListId<'db>,
+) -> TyId<'db> {
+    // On cycles during type lowering, treat the type as invalid so that
+    // callers can emit a suitable diagnostic without recursing further.
+    TyId::invalid(db, InvalidCause::Other)
+}
+
+fn lower_hir_ty_cycle_recover<'db>(
+    _db: &'db dyn HirAnalysisDb,
+    _value: &TyId<'db>,
+    _count: u32,
+    _ty: HirTyId<'db>,
+    _scope: ScopeId<'db>,
+    _assumptions: PredicateListId<'db>,
+) -> salsa::CycleRecoveryAction<TyId<'db>> {
+    // Keep iterating until we reach a fixpoint; the initial value is
+    // already marked invalid, so subsequent iterations will converge
+    // quickly without panicking.
+    salsa::CycleRecoveryAction::Iterate
 }
 
 fn lower_const_ty_ty<'db>(
