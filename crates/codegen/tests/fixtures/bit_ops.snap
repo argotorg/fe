@@ -1,21 +1,17 @@
 ---
 source: crates/codegen/tests/yul.rs
-assertion_line: 38
+assertion_line: 31
 expression: output
 input_file: tests/fixtures/bit_ops.fe
 ---
-{
-  function bit_ops(x, y) -> ret {
-    let v0 := and(x, y)
-    let v1 := or(x, y)
-    let v2 := xor(x, y)
-    let v3 := shl(8, x)
-    let v4 := shr(2, x)
-    ret := tuple(v0, v1, v2, v3, v4)
-  }
+function bit_ops(x, y) -> ret {
+  let v0 := and(x, y)
+  let v1 := or(x, y)
+  let v2 := xor(x, y)
+  let v3 := shl(8, x)
+  let v4 := shr(2, x)
+  ret := tuple(v0, v1, v2, v3, v4)
 }
-{
-  function pow_op(x, y) -> ret {
-    ret := exp(x, y)
-  }
+function pow_op(x, y) -> ret {
+  ret := exp(x, y)
 }

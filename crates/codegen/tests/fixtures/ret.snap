@@ -1,29 +1,27 @@
 ---
 source: crates/codegen/tests/yul.rs
-assertion_line: 38
+assertion_line: 31
 expression: output
 input_file: tests/fixtures/ret.fe
 ---
-{
-  function retfoo(b1, x) -> ret {
-    let v0 := b1
-    if v0 {
-      ret := 0
+function retfoo(b1, x) -> ret {
+  let v0 := b1
+  if v0 {
+    ret := 0
+  }
+  if iszero(v0) {
+    let v1 := lt(x, 5)
+    if v1 {
+      ret := 1
     }
-    if iszero(v0) {
-      let v1 := lt(x, 5)
-      if v1 {
-        ret := 1
+    if iszero(v1) {
+      let v2 := sub(x, 1)
+      let v3 := eq(v2, 42)
+      if v3 {
+        ret := 2
       }
-      if iszero(v1) {
-        let v2 := sub(x, 1)
-        let v3 := eq(v2, 42)
-        if v3 {
-          ret := 2
-        }
-        if iszero(v3) {
-          ret := add(v2, 1)
-        }
+      if iszero(v3) {
+        ret := add(v2, 1)
       }
     }
   }

@@ -1,10 +1,9 @@
 ---
 source: crates/codegen/tests/yul.rs
+assertion_line: 31
 expression: output
 input_file: tests/fixtures/math_ops.fe
 ---
-{
-  function math_ops() -> ret {
-    ret := mod(div(mul(sub(10, 3), 2), 7), 3)
-  }
+function math_ops() -> ret {
+  ret := mod(div(mul(sub(10, 3), 2), 7), 3)
 }
