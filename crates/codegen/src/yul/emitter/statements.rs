@@ -1,6 +1,6 @@
 //! Helpers for lowering linear MIR statements into Yul docs.
 //!
-//! The functions defined in this module operate within `YulEmitter` and walk
+//! The functions defined in this module operate within `FunctionEmitter` and walk
 //! straight-line MIR instructions (non-terminators) to produce Yul statements.
 
 use hir::hir_def::{ExprId, PatId, expr::ArithBinOp};
@@ -9,9 +9,9 @@ use mir::{self, ValueId, ValueOrigin};
 
 use crate::yul::{doc::YulDoc, state::BlockState};
 
-use super::{YulEmitter, YulError};
+use super::{YulError, function::FunctionEmitter};
 
-impl<'db> YulEmitter<'db> {
+impl<'db> FunctionEmitter<'db> {
     /// Lowers a linear sequence of MIR instructions into Yul docs.
     ///
     /// * `insts` - MIR instructions belonging to the current block.

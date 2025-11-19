@@ -8,7 +8,7 @@ use mir::{
 
 use crate::yul::{doc::YulDoc, errors::YulError, state::BlockState};
 
-use super::YulEmitter;
+use super::function::FunctionEmitter;
 
 /// Captures the `break`/`continue` destinations for loop lowering.
 #[derive(Clone, Copy)]
@@ -32,7 +32,7 @@ impl<'state, 'docs> BlockEmitCtx<'state, 'docs> {
     }
 }
 
-impl<'db> YulEmitter<'db> {
+impl<'db> FunctionEmitter<'db> {
     /// Emits the Yul docs for a basic block starting without any active loop context.
     ///
     /// * `block_id` - Entry block to render.
