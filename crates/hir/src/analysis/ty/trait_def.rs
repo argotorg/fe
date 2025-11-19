@@ -1,6 +1,7 @@
 //! This module contains all trait related types definitions.
 
 use crate::{
+    analysis::ty::method_cmp::compare_impl_method,
     hir_def::{HirIngot, IdentId, ImplTrait, Trait},
     span::DynLazySpan,
 };
@@ -14,7 +15,7 @@ use salsa::Update;
 use super::{
     binder::Binder,
     canonical::{Canonical, Canonicalized},
-    diagnostics::{TraitConstraintDiag, TyDiagCollection},
+    diagnostics::{ImplDiag, TraitConstraintDiag, TyDiagCollection},
     fold::TyFoldable as _,
     trait_lower::collect_implementor_methods,
     trait_resolution::{
@@ -28,9 +29,7 @@ use super::{
 };
 use crate::analysis::{
     HirAnalysisDb,
-    ty::{
-        trait_lower::collect_trait_impls, trait_resolution::constraint::super_trait_cycle,
-    },
+    ty::{trait_lower::collect_trait_impls, trait_resolution::constraint::super_trait_cycle},
 };
 use crate::hir_def::CallableDef;
 
@@ -183,7 +182,7 @@ pub(crate) fn impls_for_ty<'db>(
 #[derive(Debug, PartialEq, Eq, Clone, Update)]
 pub(crate) struct TraitEnv<'db> {
     /// Implementors grouped by trait definition.
-    pub(super) impls: FxHashMap<Trait<'db>, Vec<Binder<ImplementorView<'db>>>>,
+    pub(crate) impls: FxHashMap<Trait<'db>, Vec<Binder<ImplementorView<'db>>>>,
 
     /// This maintains a mapping from the base type to the implementors.
     ty_to_implementors: FxHashMap<Binder<TyId<'db>>, Vec<Binder<ImplementorView<'db>>>>,
@@ -271,16 +270,59 @@ impl<'db> ImplementorView<'db> {
 
     /// Returns the constraints that the implementor requires when the
     /// implementation is selected.
-    pub(super) fn constraints(self, db: &'db dyn HirAnalysisDb) -> PredicateListId<'db> {
+    pub(crate) fn constraints(self, db: &'db dyn HirAnalysisDb) -> PredicateListId<'db> {
         collect_constraints(db, self.hir_impl_trait(db).into()).instantiate(db, self.params(db))
     }
 
     /// Method map for this impl, keyed by name.
-    pub(super) fn methods(
+    pub(crate) fn methods(
         self,
         db: &'db dyn HirAnalysisDb,
     ) -> &'db IndexMap<IdentId<'db>, CallableDef<'db>> {
         collect_implementor_methods(db, self)
+    }
+
+    /// Compare impl methods vs. trait methods and report missing/mismatched ones.
+    pub(crate) fn diags_method_conformance(
+        self,
+        db: &'db dyn HirAnalysisDb,
+    ) -> Vec<TyDiagCollection<'db>> {
+        let mut diags = vec![];
+        let impl_methods = self.methods(db);
+        let hir_trait = self.trait_def(db);
+        let trait_methods = self.trait_def(db).method_defs(db);
+        let mut required_methods: IndexSet<_> = trait_methods
+            .iter()
+            .filter_map(|(name, &trait_method)| (!trait_method.has_body(db)).then_some(*name))
+            .collect();
+
+        for (name, impl_m) in impl_methods {
+            let Some(trait_m) = trait_methods.get(name) else {
+                diags.push(
+                    ImplDiag::MethodNotDefinedInTrait {
+                        primary: self.hir_impl_trait(db).span().trait_ref().into(),
+                        method_name: *name,
+                        trait_: hir_trait,
+                    }
+                    .into(),
+                );
+                continue;
+            };
+            compare_impl_method(db, *impl_m, *trait_m, self.trait_(db), &mut diags);
+            required_methods.remove(name);
+        }
+
+        if !required_methods.is_empty() {
+            diags.push(
+                ImplDiag::NotAllTraitItemsImplemented {
+                    primary: self.hir_impl_trait(db).span().ty().into(),
+                    not_implemented: required_methods.into_iter().collect(),
+                }
+                .into(),
+            );
+        }
+
+        diags
     }
 }
 
@@ -289,7 +331,7 @@ impl<'db> ImplementorView<'db> {
 /// This mirrors the legacy `Implementor`-based semantics:
 /// - instantiate both implementors with fresh vars and unify them;
 /// - then check that the merged constraints are satisfiable.
-pub(super) fn does_impl_trait_conflict<'db>(
+pub(crate) fn does_impl_trait_conflict<'db>(
     db: &'db dyn HirAnalysisDb,
     a: Binder<ImplementorView<'db>>,
     b: Binder<ImplementorView<'db>>,
@@ -443,7 +485,7 @@ impl<'db> TraitInstId<'db> {
         self.args(db)[0]
     }
 
-    pub(super) fn ingot(self, db: &'db dyn HirAnalysisDb) -> Ingot<'db> {
+    pub(crate) fn ingot(self, db: &'db dyn HirAnalysisDb) -> Ingot<'db> {
         self.def(db).ingot(db)
     }
 

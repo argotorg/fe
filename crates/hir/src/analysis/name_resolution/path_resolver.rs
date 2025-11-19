@@ -1,3 +1,4 @@
+use crate::hir_def::CallableDef;
 use crate::{
     core::hir_def::{
         Const, Enum, EnumVariant, GenericParamOwner, IdentId, ImplTrait, ItemKind, PathId,
@@ -5,7 +6,6 @@ use crate::{
     },
     span::{DynLazySpan, path::LazyPathSpan},
 };
-use crate::hir_def::CallableDef;
 use common::indexmap::IndexMap;
 use either::Either;
 use smallvec::{SmallVec, smallvec};
@@ -30,9 +30,7 @@ use crate::analysis::{
         fold::TyFoldable,
         normalize::normalize_ty,
         trait_def::{TraitInstId, impls_for_ty_with_constraints},
-        trait_lower::{
-            TraitArgError, TraitRefLowerError, lower_trait_ref, lower_trait_ref_impl,
-        },
+        trait_lower::{TraitArgError, TraitRefLowerError, lower_trait_ref, lower_trait_ref_impl},
         trait_resolution::PredicateListId,
         ty_def::{InvalidCause, Kind, TyData, TyId},
         ty_lower::{
@@ -867,19 +865,12 @@ pub fn find_associated_type<'db>(
         if param.is_trait_self() {
             if let Some(trait_) = param.owner.resolve_to::<Trait>(db) {
                 if trait_.assoc_ty(db, name).is_some() {
-                    let trait_inst = TraitInstId::new(
-                        db,
-                        trait_,
-                        vec![ty.value],
-                        IndexMap::new(),
-                    );
+                    let trait_inst = TraitInstId::new(db, trait_, vec![ty.value], IndexMap::new());
                     let assoc_ty = TyId::assoc_ty(db, trait_inst, name);
                     return smallvec![(trait_inst, assoc_ty)];
                 }
             } else if let Some(impl_trait) = param.owner.resolve_to::<ImplTrait>(db)
-                && let Some(trait_ref) = impl_trait.trait_ref(db).to_opt()
-                && let Ok(trait_inst) =
-                    lower_trait_ref(db, ty.value, trait_ref, impl_trait.scope(), assumptions)
+                && let Some(trait_inst) = impl_trait.trait_inst(db)
                 && let Some(assoc_ty) = trait_inst.assoc_ty(db, name)
             {
                 return smallvec![(trait_inst, assoc_ty)];

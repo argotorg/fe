@@ -981,7 +981,7 @@ pub struct ImplTrait<'db> {
     #[id]
     id: TrackedItemId<'db>,
 
-    pub trait_ref: Partial<TraitRefId<'db>>,
+    pub(in crate::core) trait_ref: Partial<TraitRefId<'db>>,
     pub(in crate::core) type_ref: Partial<TypeId<'db>>,
     pub(in crate::core) attributes: AttrListId<'db>,
     pub(in crate::core) generic_params: GenericParamListId<'db>,

@@ -50,7 +50,9 @@ use crate::hir_def::*;
 // When adding real methods, prefer calling internal lowering/normalization here
 // rather than exposing raw syntax.
 use crate::analysis::ty::adt_def::{AdtDef, AdtField, AdtRef};
-use crate::analysis::ty::trait_def::TraitInstId;
+use crate::analysis::ty::trait_def::{
+    ImplementorView, TraitInstId, does_impl_trait_conflict, ingot_trait_env,
+};
 use crate::analysis::ty::trait_lower::{
     TraitRefLowerError, lower_trait_ref, lower_trait_ref_with_owner_self,
 };
@@ -996,6 +998,20 @@ impl<'db> Impl<'db> {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ImplTraitLowerError<'db> {
+    ParseError,
+    TraitRef(TraitRefLowerError<'db>),
+    Conflict {
+        primary: ImplTrait<'db>,
+        conflict: ImplTrait<'db>,
+    },
+    KindMismatch {
+        expected: Kind,
+        actual: TyId<'db>,
+    },
+}
+
 impl<'db> ImplTrait<'db> {
     /// Semantic self type of this impl-trait block.
     pub fn ty(self, db: &'db dyn HirAnalysisDb) -> TyId<'db> {
@@ -1004,6 +1020,72 @@ impl<'db> ImplTrait<'db> {
             .to_opt()
             .map(|hir_ty| lower_hir_ty(db, hir_ty, self.scope(), assumptions))
             .unwrap_or_else(|| TyId::invalid(db, InvalidCause::ParseError))
+    }
+
+    /// Lowers this impl-trait to a semantic implementor view, performing
+    /// conflict detection and kind checks.
+    pub fn lowered_implementor(
+        self,
+        db: &'db dyn HirAnalysisDb,
+    ) -> Result<Binder<ImplementorView<'db>>, ImplTraitLowerError<'db>> {
+        // Early return if the implementor type is syntactically missing or invalid.
+        if matches!(
+            self.ty(db).data(db),
+            TyData::Invalid(InvalidCause::ParseError)
+        ) {
+            return Err(ImplTraitLowerError::ParseError);
+        }
+        // Note: we do NOT check ty.has_invalid(db) here universally, because
+        // we want to proceed with lowering (and potentially report unrelated
+        // errors) unless it's a hard parse error. Diagnostics code will check
+        // validity separately.
+
+        // Lower trait inst
+        let trait_inst = match self.trait_inst_result(db) {
+            Ok(inst) => inst,
+            Err(err) => return Err(ImplTraitLowerError::TraitRef(err)),
+        };
+
+        // Build implementor view
+        let params = self.impl_params(db);
+        let types = self.assoc_type_bindings_for_trait_inst(db, trait_inst);
+        let implementor =
+            Binder::bind(ImplementorView::new(db, trait_inst, params, types, self));
+
+        // Conflict check
+        let trait_ = implementor.skip_binder().trait_(db);
+        let env = ingot_trait_env(db, trait_.ingot(db));
+        if let Some(impls) = env.impls.get(&trait_.def(db)) {
+            for &cand_view in impls {
+                let cand_impl_trait = cand_view.skip_binder().hir_impl_trait(db);
+                if cand_impl_trait == self {
+                    continue;
+                }
+                if does_impl_trait_conflict(db, cand_view, implementor) {
+                    return Err(ImplTraitLowerError::Conflict {
+                        primary: cand_impl_trait,
+                        conflict: self,
+                    });
+                }
+            }
+        }
+
+        // Kind check
+        let expected_kind = implementor
+            .instantiate_identity()
+            .trait_def(db)
+            .self_param(db)
+            .kind(db);
+
+        let self_ty = self.ty(db);
+        if self_ty.kind(db) != expected_kind {
+            return Err(ImplTraitLowerError::KindMismatch {
+                expected: expected_kind.clone(),
+                actual: implementor.instantiate_identity().self_ty(db),
+            });
+        }
+
+        Ok(implementor)
     }
 
     /// Internal helper that lowers the trait reference of this `impl trait`

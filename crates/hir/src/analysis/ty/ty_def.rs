@@ -383,7 +383,7 @@ impl<'db> TyId<'db> {
     }
 
     /// Emit diagnostics for the type if the type contains invalid types.
-    pub(super) fn emit_diag(
+    pub(crate) fn emit_diag(
         self,
         db: &'db dyn HirAnalysisDb,
         span: DynLazySpan<'db>,

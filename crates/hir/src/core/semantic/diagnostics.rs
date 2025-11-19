@@ -9,7 +9,9 @@ use crate::analysis::HirAnalysisDb;
 use crate::analysis::name_resolution;
 use crate::analysis::ty;
 use crate::analysis::ty::def_analysis::check_duplicate_names;
-use crate::analysis::ty::diagnostics::{TraitConstraintDiag, TyDiagCollection, TyLowerDiag};
+use crate::analysis::ty::diagnostics::{
+    TraitConstraintDiag, TraitLowerDiag, TyDiagCollection, TyLowerDiag,
+};
 use crate::analysis::ty::ty_def::{InvalidCause, TyId};
 use crate::hir_def::scope_graph::ScopeId;
 use crate::hir_def::{
@@ -20,10 +22,12 @@ use crate::hir_def::{Partial, PathId};
 use crate::span::DynLazySpan;
 
 use super::{
-    FieldView, Func, GenericParamView, Impl, ImplTrait, SuperTraitRefView, TraitAssocTypeView,
-    VariantView, WhereClauseOwner, WhereClauseView, WherePredicateBoundView, WherePredicateView,
-    constraints_for,
+    FieldView, Func, GenericParamView, Impl, ImplTrait, ImplTraitLowerError, SuperTraitRefView,
+    TraitAssocTypeView, VariantView, WhereClauseOwner, WhereClauseView, WherePredicateBoundView,
+    WherePredicateView, constraints_for,
 };
+use crate::analysis::ty::binder::Binder;
+use crate::analysis::ty::trait_def::ImplementorView;
 
 impl<'db> SuperTraitRefView<'db> {
     /// Diagnostics for this super-trait reference in its owner's context.
@@ -707,6 +711,98 @@ impl<'db> Impl<'db> {
 }
 
 impl<'db> ImplTrait<'db> {
+    /// Lower the implementor view and report validity diagnostics (WF, conflicts, kind mismatch).
+    /// Returns the implementor view if successful, or None if critical errors occurred.
+    pub fn diags_implementor_validity(
+        self,
+        db: &'db dyn HirAnalysisDb,
+    ) -> (
+        Option<Binder<ImplementorView<'db>>>,
+        Vec<TyDiagCollection<'db>>,
+    ) {
+        use crate::analysis::name_resolution::{ExpectedPathKind, diagnostics::PathResDiag};
+        use crate::analysis::ty::trait_lower::TraitRefLowerError;
+
+        let mut diags = Vec::new();
+
+        // 1) Implementor type WF diagnostics at type span.
+        let ty = self.ty(db);
+        if let Some(diag) = ty.emit_diag(db, self.span().ty().into()) {
+            diags.push(diag);
+        }
+        if !diags.is_empty() || ty.has_invalid(db) {
+            return (None, diags);
+        }
+
+        match self.lowered_implementor(db) {
+            Ok(implementor) => (Some(implementor), diags),
+            Err(err) => {
+                match err {
+                    ImplTraitLowerError::ParseError => {}
+                    ImplTraitLowerError::TraitRef(lower_err) => match lower_err {
+                        TraitRefLowerError::PathResError(err) => {
+                            if let Some(trait_ref) = self.trait_ref(db).to_opt() {
+                                let path = trait_ref.path(db).unwrap();
+                                if let Some(diag) = err.into_diag(
+                                    db,
+                                    path,
+                                    self.span().trait_ref().path(),
+                                    ExpectedPathKind::Trait,
+                                ) {
+                                    diags.push(diag.into());
+                                }
+                            }
+                        }
+                        TraitRefLowerError::InvalidDomain(res) => {
+                            if let Some(trait_ref) = self.trait_ref(db).to_opt() {
+                                diags.push(
+                                    PathResDiag::ExpectedTrait(
+                                        self.span().trait_ref().path().into(),
+                                        trait_ref.path(db).unwrap().ident(db).unwrap(),
+                                        res.kind_name(),
+                                    )
+                                    .into(),
+                                );
+                            }
+                        }
+                        TraitRefLowerError::Ignored => {
+                            diags.push(TraitLowerDiag::ExternalTraitForExternalType(self).into());
+                        }
+                    },
+                    ImplTraitLowerError::Conflict { primary, conflict } => {
+                        diags.push(
+                            TraitLowerDiag::ConflictTraitImpl {
+                                primary,
+                                conflict_with: conflict,
+                            }
+                            .into(),
+                        );
+                    }
+                    ImplTraitLowerError::KindMismatch { expected, actual } => {
+                        diags.push(
+                            TraitConstraintDiag::TraitArgKindMismatch {
+                                span: self.span().trait_ref(),
+                                expected,
+                                actual,
+                            }
+                            .into(),
+                        );
+                    }
+                }
+                (None, diags)
+            }
+        }
+    }
+
+    /// Compare impl methods vs. trait methods and report missing/mismatched ones.
+    pub fn diags_method_conformance(
+        self,
+        db: &'db dyn HirAnalysisDb,
+        implementor: Binder<ImplementorView<'db>>,
+    ) -> Vec<TyDiagCollection<'db>> {
+        implementor.skip_binder().diags_method_conformance(db)
+    }
+
     /// Diagnostics for missing associated types (required by the trait).
     pub fn diags_missing_assoc_types(
         self,

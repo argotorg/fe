@@ -27,7 +27,7 @@ pub mod decision_tree;
 pub mod def_analysis;
 pub mod diagnostics;
 pub mod fold;
-mod method_cmp;
+pub(crate) mod method_cmp;
 pub mod method_table;
 pub mod normalize;
 pub mod pattern_analysis;
