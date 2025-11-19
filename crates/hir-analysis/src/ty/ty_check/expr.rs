@@ -726,9 +726,11 @@ impl<'db> TyChecker<'db> {
                                 self.env
                                     .register_confirmation(inst, path_expr_span.clone().into());
                             }
-                            let method_ty = cand
-                                .method
-                                .instantiate_with_inst(&mut self.table, receiver_ty, inst);
+                            let method_ty = cand.method.instantiate_with_inst(
+                                &mut self.table,
+                                receiver_ty,
+                                inst,
+                            );
                             (method_ty, Some(inst))
                         }
                     };
