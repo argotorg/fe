@@ -189,6 +189,11 @@ pub enum MirInst<'db> {
 pub enum Terminator {
     /// Return from the function with an optional value.
     Return(Option<ValueId>),
+    /// Return from the function using raw memory pointer/size (core::return_data).
+    ReturnData {
+        offset: ValueId,
+        size: ValueId,
+    },
     /// Unconditional jump to another block.
     Goto { target: BasicBlockId },
     /// Conditional branch based on a boolean value.

@@ -227,6 +227,10 @@ impl<'db> YulEmitter<'db> {
             }
             match &block.terminator {
                 Terminator::Return(Some(value)) => counts[value.index()] += 1,
+                Terminator::ReturnData { offset, size } => {
+                    counts[offset.index()] += 1;
+                    counts[size.index()] += 1;
+                }
                 Terminator::Branch { cond, .. } => counts[cond.index()] += 1,
                 Terminator::Switch { discr, .. } => counts[discr.index()] += 1,
                 Terminator::Return(None) | Terminator::Goto { .. } | Terminator::Unreachable => {}
@@ -382,9 +386,6 @@ impl<'db> YulEmitter<'db> {
                 }
                 let value = self.mir_func.body.value(val);
                 if value.ty.is_tuple(self.db) && value.ty.field_count(self.db) == 0 {
-                    if self.value_is_return_data(value) {
-                        return Ok(docs);
-                    }
                     docs.push(YulDoc::line("ret := 0"));
                     return Ok(docs);
                 }
@@ -395,6 +396,12 @@ impl<'db> YulEmitter<'db> {
                     _ => self.lower_value(val, state)?,
                 };
                 docs.push(YulDoc::line(format!("ret := {expr}")));
+                Ok(docs)
+            }
+            Terminator::ReturnData { offset, size } => {
+                let offset_expr = self.lower_value(offset, state)?;
+                let size_expr = self.lower_value(size, state)?;
+                docs.push(YulDoc::line(format!("return({offset_expr}, {size_expr})")));
                 Ok(docs)
             }
             Terminator::Branch {
@@ -1308,23 +1315,6 @@ impl<'db> YulEmitter<'db> {
     fn expr_is_unit(&self, expr_id: ExprId) -> bool {
         let ty = self.mir_func.typed_body.expr_ty(self.db, expr_id);
         ty.is_tuple(self.db) && ty.field_count(self.db) == 0
-    }
-
-    /// Returns `true` when `value` originates from a `core::return_data` call.
-    fn value_is_return_data(&self, value: &mir::ValueData<'db>) -> bool {
-        match &value.origin {
-            ValueOrigin::Expr(expr_id) => self.expr_is_return_data_call(*expr_id),
-            _ => false,
-        }
-    }
-
-    /// Returns `true` when `expr_id` is a call to the `core::return_data` intrinsic.
-    fn expr_is_return_data_call(&self, expr_id: ExprId) -> bool {
-        let Some(callable) = self.mir_func.typed_body.callable_expr(expr_id) else {
-            return false;
-        };
-        let func_def = callable.func_def;
-        func_def.name(self.db).data(self.db) == "return_data"
     }
 }
 

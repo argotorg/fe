@@ -857,6 +857,22 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
     ) -> Option<(Option<BasicBlockId>, ValueId)> {
         let (op, args) = self.intrinsic_stmt_args(expr)?;
         let value_id = self.ensure_value(expr);
+        if op == IntrinsicOp::ReturnData {
+            debug_assert!(
+                args.len() == 2,
+                "return_data should have exactly two arguments"
+            );
+            let offset = args[0];
+            let size = args[1];
+            self.set_terminator(
+                block,
+                Terminator::ReturnData {
+                    offset,
+                    size,
+                },
+            );
+            return Some((None, value_id));
+        }
         self.push_inst(block, MirInst::IntrinsicStmt { expr, op, args });
         Some((Some(block), value_id))
     }
