@@ -890,8 +890,10 @@ dependencies = [
  "fe-hir-analysis",
  "fe-mir",
  "fe-resolver",
+ "indicatif",
  "salsa",
  "smol_str",
+ "tempfile",
  "tracing",
  "url",
 ]

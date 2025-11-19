@@ -16,7 +16,7 @@ hir.workspace = true
 mir.workspace = true
 cranelift-entity.workspace = true
 codegen = { path = "../codegen", package = "fe-codegen" }
-indicatif = "0.17"
+indicatif.workspace = true
 
 [dev-dependencies]
 dir-test.workspace = true

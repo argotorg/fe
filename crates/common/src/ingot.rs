@@ -8,6 +8,7 @@ use url::Url;
 use crate::{
     InputDb,
     config::Config,
+    dependencies::DependencyLocation,
     file::{File, Workspace},
     stdlib::{BUILTIN_CORE_BASE_URL, BUILTIN_STD_BASE_URL},
     urlext::UrlExt,
@@ -138,11 +139,20 @@ impl<'db> Ingot<'db> {
     #[salsa::tracked]
     pub fn dependencies(self, db: &'db dyn InputDb) -> Vec<(SmolStr, Url)> {
         let base_url = self.base(db);
+        let workspace = db.workspace();
         let mut deps = match self.config(db) {
             Some(config) => config
                 .dependencies(&base_url)
                 .into_iter()
-                .map(|dependency| (dependency.alias.clone(), dependency.url().clone()))
+                .map(|dependency| {
+                    let url = match &dependency.location {
+                        DependencyLocation::Git(git) => workspace
+                            .local_for_remote_git(db, git)
+                            .unwrap_or_else(|| git.source.clone()),
+                        _ => dependency.url().clone(),
+                    };
+                    (dependency.alias.clone(), url)
+                })
                 .collect(),
             None => vec![],
         };

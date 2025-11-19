@@ -2,6 +2,7 @@ use std::{collections::HashMap, fs, time::Duration};
 
 use camino::{Utf8Path, Utf8PathBuf};
 use common::{
+    cache::remote_git_cache_dir,
     config::Config,
     dependencies::{
         DependencyArguments, DependencyLocation, RemoteDependencyRequest,
@@ -247,15 +248,19 @@ fn resolve_remote_tree(requests: &[RemoteDependencyRequest], ingot_url: &Url) ->
 }
 
 fn tree_remote_checkout_root(ingot_url: &Url) -> Utf8PathBuf {
-    let mut path = Utf8PathBuf::from_path_buf(
+    if let Some(root) = remote_git_cache_dir() {
+        return root;
+    }
+
+    let mut ingot_path = Utf8PathBuf::from_path_buf(
         ingot_url
             .to_file_path()
             .expect("ingot URL should map to a local path"),
     )
     .expect("ingot path should be valid UTF-8");
-    path.push(".fe");
-    path.push("git");
-    path
+    ingot_path.push(".fe");
+    ingot_path.push("git");
+    ingot_path
 }
 
 fn tree_git_description_from_request(
