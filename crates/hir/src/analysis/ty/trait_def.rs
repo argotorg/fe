@@ -471,39 +471,28 @@ pub struct TraitDef<'db> {
 
 #[salsa::tracked]
 impl<'db> TraitDef<'db> {
-    #[salsa::tracked(return_ref)]
     pub fn methods(self, db: &'db dyn HirAnalysisDb) -> IndexMap<IdentId<'db>, TraitMethod<'db>> {
-        let mut methods = IndexMap::<IdentId<'db>, TraitMethod<'db>>::default();
-        for method in self.trait_(db).methods(db) {
-            let Some(func) = method.as_callable(db) else {
-                continue;
-            };
-            let Some(name) = func.name(db) else {
-                continue;
-            };
-            let trait_method = TraitMethod(func);
-            // We can simply ignore the conflict here because it's already
-            // handled by the def analysis pass
-            methods.entry(name).or_insert(trait_method);
-        }
-        methods
+        self.trait_(db)
+            .method_defs(db)
+            .iter()
+            .map(|(id, def)| (*id, TraitMethod(*def)))
+            .collect()
     }
 
     pub fn params(self, db: &'db dyn HirAnalysisDb) -> &'db [TyId<'db>] {
-        self.param_set(db).params(db)
+        self.trait_(db).params(db)
     }
 
-    #[salsa::tracked(return_ref)]
     pub fn param_set(self, db: &'db dyn HirAnalysisDb) -> GenericParamTypeSet<'db> {
-        collect_generic_params(db, self.trait_(db).into())
+        self.trait_(db).param_set(db)
     }
 
     pub fn self_param(self, db: &'db dyn HirAnalysisDb) -> TyId<'db> {
-        self.param_set(db).trait_self(db).unwrap()
+        self.trait_(db).self_param(db)
     }
 
     pub fn original_params(self, db: &'db dyn HirAnalysisDb) -> &'db [TyId<'db>] {
-        self.param_set(db).explicit_params(db)
+        self.trait_(db).original_params(db)
     }
 }
 
@@ -512,10 +501,7 @@ pub struct TraitMethod<'db>(pub CallableDef<'db>);
 
 impl TraitMethod<'_> {
     pub fn has_default_impl(self, db: &dyn HirAnalysisDb) -> bool {
-        match self.0 {
-            CallableDef::Func(func) => func.body(db).is_some(),
-            CallableDef::VariantCtor(_) => false,
-        }
+        self.0.has_body(db)
     }
 }
 

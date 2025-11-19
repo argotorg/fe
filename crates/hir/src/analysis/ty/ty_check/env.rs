@@ -335,7 +335,7 @@ impl<'db> TyCheckEnv<'db> {
                                  recv_ty: TyId<'db>,
                                  inst: TraitInstId<'db>,
                                  method_name: IdentId<'db>| {
-            let trait_method = inst.def(db).methods(db).get(&method_name).unwrap();
+            let trait_method = *inst.def(db).methods(db).get(&method_name).unwrap();
             let func_ty = trait_method.instantiate_with_inst(prober.table, recv_ty, inst);
             let (base, gen_args) = func_ty.decompose_ty_app(db);
             let TyData::TyBase(TyBase::Func(func_def)) = base.data(db) else {

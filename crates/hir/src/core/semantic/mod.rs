@@ -58,7 +58,7 @@ use crate::analysis::ty::trait_resolution::constraint::{
     collect_adt_constraints, collect_constraints, collect_func_def_constraints,
 };
 use crate::analysis::ty::ty_def::TyData;
-use crate::analysis::ty::ty_lower::collect_generic_params;
+use crate::analysis::ty::ty_lower::{GenericParamTypeSet, collect_generic_params};
 use crate::analysis::ty::visitor::{TyVisitor, walk_ty};
 use crate::analysis::ty::{
     trait_resolution::PredicateListId,
@@ -200,6 +200,13 @@ impl<'db> CallableDef<'db> {
     pub fn is_method(self, db: &dyn HirDb) -> bool {
         match self {
             Self::Func(func) => func.is_method(db),
+            Self::VariantCtor(..) => false,
+        }
+    }
+
+    pub fn has_body(self, db: &dyn HirDb) -> bool {
+        match self {
+            Self::Func(func) => func.body(db).is_some(),
             Self::VariantCtor(..) => false,
         }
     }
@@ -695,6 +702,39 @@ impl<'db> TypeAlias<'db> {
 // Trait / Impl items --------------------------------------------------------
 
 impl<'db> Trait<'db> {
+    pub fn params(self, db: &'db dyn HirAnalysisDb) -> &'db [TyId<'db>] {
+        collect_generic_params(db, self.into()).params(db)
+    }
+
+    pub fn param_set(self, db: &'db dyn HirAnalysisDb) -> GenericParamTypeSet<'db> {
+        collect_generic_params(db, self.into())
+    }
+
+    pub fn self_param(self, db: &'db dyn HirAnalysisDb) -> TyId<'db> {
+        collect_generic_params(db, self.into())
+            .trait_self(db)
+            .unwrap()
+    }
+
+    pub fn original_params(self, db: &'db dyn HirAnalysisDb) -> &'db [TyId<'db>] {
+        collect_generic_params(db, self.into()).explicit_params(db)
+    }
+
+    pub fn method_defs(
+        self,
+        db: &'db dyn HirAnalysisDb,
+    ) -> IndexMap<IdentId<'db>, CallableDef<'db>> {
+        let mut methods = IndexMap::default();
+        for method in self.methods(db) {
+            if let Some(func) = method.as_callable(db) {
+                if let Some(name) = func.name(db) {
+                    methods.insert(name, func);
+                }
+            }
+        }
+        methods
+    }
+
     /// Iterate associated types as contextual views.
     pub fn assoc_types(
         self,

@@ -224,7 +224,7 @@ pub(crate) fn lower_trait_ref_impl<'db>(
     t: Trait<'db>,
 ) -> Result<TraitInstId<'db>, TraitArgError<'db>> {
     let trait_def = lower_trait(db, t);
-    let trait_params: &[TyId<'db>] = trait_def.params(db);
+    let trait_params: &[TyId<'db>] = t.params(db);
     let args = path.generic_args(db).data(db);
 
     // Lower provided explicit args (excluding Self)
@@ -241,11 +241,11 @@ pub(crate) fn lower_trait_ref_impl<'db>(
         .collect();
 
     // Fill trailing defaults using the trait's param set. Bind Self (idx 0).
-    let non_self_completed = trait_def
+    let non_self_completed = t
         .param_set(db)
         .complete_explicit_args_with_defaults(
             db,
-            Some(trait_def.self_param(db)),
+            Some(t.self_param(db)),
             &provided_explicit,
             assumptions,
         );
@@ -258,7 +258,7 @@ pub(crate) fn lower_trait_ref_impl<'db>(
     }
 
     let mut final_args: Vec<TyId<'db>> = Vec::with_capacity(trait_params.len());
-    final_args.push(trait_def.self_param(db));
+    final_args.push(t.self_param(db));
     final_args.extend(non_self_completed);
 
     for (expected_ty, actual_ty) in trait_params.iter().zip(final_args.iter_mut()).skip(1) {
