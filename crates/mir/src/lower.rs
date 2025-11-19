@@ -132,6 +132,7 @@ pub(crate) fn lower_function<'db>(
     let mut builder = MirBuilder::new(db, body, &typed_body);
     let entry = builder.alloc_block();
     let fallthrough = builder.lower_root(entry, body.expr(db));
+    builder.ensure_const_expr_values();
     builder.ensure_field_expr_values();
     let ret_val = builder.ensure_value(body.expr(db));
     if let Some(block) = fallthrough {
@@ -509,6 +510,22 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
             };
             if matches!(expr, Expr::Field(..)) {
                 self.ensure_value(expr_id);
+            }
+        }
+    }
+
+    /// Force constant path expressions to lower into synthetic literals so later stages can
+    /// emit the literal value instead of the identifier.
+    fn ensure_const_expr_values(&mut self) {
+        let exprs = self.body.exprs(self.db);
+        for expr_id in exprs.keys() {
+            let Partial::Present(expr) = &exprs[expr_id] else {
+                continue;
+            };
+            if matches!(expr, Expr::Path(..))
+                && let Some(value_id) = self.try_const_expr(expr_id)
+            {
+                self.mir_body.expr_values.entry(expr_id).or_insert(value_id);
             }
         }
     }
