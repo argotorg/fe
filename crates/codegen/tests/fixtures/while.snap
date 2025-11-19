@@ -1,15 +1,13 @@
 ---
 source: crates/codegen/tests/yul.rs
-assertion_line: 38
+assertion_line: 31
 expression: output
 input_file: tests/fixtures/while.fe
 ---
-{
-  function do_while() -> ret {
-    let v0 := 0
-    for { } lt(v0, 10) { } {
-      v0 := add(v0, 1)
-    }
-    ret := v0
+function do_while() -> ret {
+  let v0 := 0
+  for { } lt(v0, 10) { } {
+    v0 := add(v0, 1)
   }
+  ret := v0
 }

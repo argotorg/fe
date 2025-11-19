@@ -4,23 +4,15 @@ assertion_line: 31
 expression: output
 input_file: tests/fixtures/method_call.fe
 ---
-{
-  function make_value() -> ret {
-    ret := 42
-  }
+function make_value() -> ret {
+  ret := 42
 }
-{
-  function foo_gen_value(self) -> ret {
-    ret := make_value()
-  }
+function foo_gen_value(self) -> ret {
+  ret := make_value()
 }
-{
-  function foo_return_value(self) -> ret {
-    ret := foo_gen_value(self)
-  }
+function foo_return_value(self) -> ret {
+  ret := foo_gen_value(self)
 }
-{
-  function call_method(foo) -> ret {
-    ret := foo_return_value(foo)
-  }
+function call_method(foo) -> ret {
+  ret := foo_return_value(foo)
 }

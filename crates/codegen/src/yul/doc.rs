@@ -1,4 +1,5 @@
 /// Simple document tree used to build readable Yul output with indentation.
+#[derive(Clone)]
 pub(super) enum YulDoc {
     /// Single line of text.
     Line(String),

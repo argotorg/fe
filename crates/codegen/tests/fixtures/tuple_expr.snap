@@ -1,10 +1,9 @@
 ---
 source: crates/codegen/tests/yul.rs
+assertion_line: 31
 expression: output
 input_file: tests/fixtures/tuple_expr.fe
 ---
-{
-  function tuple_expr() -> ret {
-    ret := tuple(add(1, 2), iszero(0))
-  }
+function tuple_expr() -> ret {
+  ret := tuple(add(1, 2), iszero(0))
 }

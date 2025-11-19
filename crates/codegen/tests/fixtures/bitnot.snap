@@ -1,11 +1,9 @@
 ---
 source: crates/codegen/tests/yul.rs
-assertion_line: 38
+assertion_line: 31
 expression: output
 input_file: tests/fixtures/bitnot.fe
 ---
-{
-  function bit_not(x) -> ret {
-    ret := not(x)
-  }
+function bit_not(x) -> ret {
+  ret := not(x)
 }

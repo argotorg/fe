@@ -1,10 +1,9 @@
 ---
 source: crates/codegen/tests/yul.rs
+assertion_line: 31
 expression: output
 input_file: tests/fixtures/bool_literal.fe
 ---
-{
-  function bool_literal() -> ret {
-    ret := 1
-  }
+function bool_literal() -> ret {
+  ret := 1
 }

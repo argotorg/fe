@@ -1,10 +1,9 @@
 ---
 source: crates/codegen/tests/yul.rs
+assertion_line: 31
 expression: output
 input_file: tests/fixtures/logical_ops.fe
 ---
-{
-  function logical_ops() -> ret {
-    ret := and(1, 0)
-  }
+function logical_ops() -> ret {
+  ret := and(1, 0)
 }
