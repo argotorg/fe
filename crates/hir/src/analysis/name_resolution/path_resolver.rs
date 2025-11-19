@@ -452,7 +452,7 @@ impl<'db> PathRes<'db> {
             PathRes::Ty(ty) | PathRes::Func(ty) => ty.as_scope(db),
             PathRes::Const(const_, _) => Some(const_.scope()),
             PathRes::TyAlias(alias, _) => Some(alias.alias.scope()),
-            PathRes::Trait(trait_) => Some(trait_.scope()),
+            PathRes::Trait(trait_) => Some(trait_.def(db).scope()),
             PathRes::EnumVariant(variant) => Some(variant.enum_(db).scope()),
             PathRes::FuncParam(item, idx) => Some(ScopeId::FuncParam(*item, *idx)),
             PathRes::Mod(scope) => Some(*scope),
@@ -869,7 +869,7 @@ pub fn find_associated_type<'db>(
                 if trait_.assoc_ty(db, name).is_some() {
                     let trait_inst = TraitInstId::new(
                         db,
-                        lower_trait(db, trait_),
+                        trait_,
                         vec![ty.value],
                         IndexMap::new(),
                     );
@@ -1170,7 +1170,7 @@ pub fn resolve_name_res<'db>(
             }
 
             ScopeId::TraitType(t, idx) => {
-                let trait_def = lower_trait(db, t);
+                let trait_def = t;
                 let trait_type = t.assoc_ty_by_index(db, idx as usize);
 
                 let params = collect_generic_params(db, t.into());

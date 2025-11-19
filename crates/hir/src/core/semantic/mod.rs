@@ -182,7 +182,7 @@ impl<'db> Func<'db> {
     /// - In impl/impl_trait: the implementor type
     pub fn expected_self_ty(self, db: &'db dyn HirAnalysisDb) -> Option<TyId<'db>> {
         match self.scope().parent(db)? {
-            ScopeId::Item(ItemKind::Trait(tr)) => Some(lower_trait(db, tr).self_param(db)),
+            ScopeId::Item(ItemKind::Trait(tr)) => Some(tr.self_param(db)),
             ScopeId::Item(ItemKind::ImplTrait(it)) => Some(it.ty(db)),
             ScopeId::Item(ItemKind::Impl(im)) => Some(im.ty(db)),
             _ => None,
@@ -946,7 +946,7 @@ impl<'db> SuperTraitRefView<'db> {
         let assumptions = self.assumptions(db);
         let tr = self.trait_ref_id(db);
         let expected = match lower_trait_ref(db, subject, tr, scope, assumptions) {
-            Ok(inst) => inst.def(db).expected_implementor_kind(db).clone(),
+            Ok(inst) => inst.def(db).self_param(db).kind(db).clone(),
             // If we cannot lower, defer to other diagnostics; do not emit mismatch here.
             Err(
                 TraitRefLowerError::PathResError(_)
@@ -1081,7 +1081,7 @@ impl<'db> ImplTrait<'db> {
         // the trait's own scope and then instantiated with this impl's concrete args
         // (including Self). This ensures defaults like `type Output = Self` resolve
         // to the implementor's concrete self type rather than remaining as `Self`.
-        let trait_def = trait_inst.def(db).trait_(db);
+        let trait_def = trait_inst.def(db);
         for view in trait_def.assoc_types(db) {
             let (Some(name), Some(default)) = (view.name(db), view.default_ty(db)) else {
                 continue;

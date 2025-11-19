@@ -111,12 +111,13 @@ pub(crate) fn lower_trait_ref<'db>(
             args.iter_mut()
                 .skip(1)
                 .for_each(|a| *a = a.fold_with(db, &mut folder));
+
             let mut assoc_bindings = t.assoc_type_bindings(db).clone();
             assoc_bindings
                 .iter_mut()
                 .for_each(|(_, ty)| *ty = (*ty).fold_with(db, &mut folder));
 
-            Ok(TraitInstId::new(db, t, args, assoc_bindings))
+            Ok(TraitInstId::new(db, t.key(db), args, assoc_bindings))
         }
         Ok(res) => Err(TraitRefLowerError::InvalidDomain(res)),
         Err(e) => Err(TraitRefLowerError::PathResError(e)),
@@ -187,7 +188,7 @@ pub(crate) fn lower_trait_ref_with_owner_self<'db>(
                 .iter_mut()
                 .for_each(|(_, ty)| *ty = (*ty).fold_with(db, &mut folder_bindings));
 
-            Ok(TraitInstId::new(db, t, args, assoc_bindings))
+            Ok(TraitInstId::new(db, t.key(db), args, assoc_bindings))
         }
         Ok(res) => Err(TraitRefLowerError::InvalidDomain(res)),
         Err(e) => Err(TraitRefLowerError::PathResError(e)),

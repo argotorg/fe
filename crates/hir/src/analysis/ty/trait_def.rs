@@ -336,7 +336,7 @@ pub(super) fn does_impl_trait_conflict<'db>(
 #[salsa::interned]
 #[derive(Debug)]
 pub struct TraitInstId<'db> {
-    pub def: Trait<'db>,
+    pub key: Trait<'db>,
     /// Regular type and const parameters: [Self, ExplicitTypeParam1, ..., ExplicitConstParamN]
     #[return_ref]
     pub args: Vec<TyId<'db>>,
@@ -347,6 +347,10 @@ pub struct TraitInstId<'db> {
 }
 
 impl<'db> TraitInstId<'db> {
+    pub fn def(self, db: &'db dyn HirAnalysisDb) -> Trait<'db> {
+        self.key(db)
+    }
+
     pub fn with_fresh_vars(
         db: &'db dyn HirAnalysisDb,
         def: Trait<'db>,

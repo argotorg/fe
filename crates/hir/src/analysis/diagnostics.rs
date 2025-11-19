@@ -17,7 +17,7 @@ use crate::analysis::{
 };
 use crate::{
     ParserError, SpannedHirDb,
-    hir_def::{CallableDef, FieldIndex, GenericParamOwner, PathKind},
+    hir_def::{CallableDef, FieldIndex, GenericParamOwner, PathKind, Trait},
     span::LazySpan,
 };
 use common::diagnostics::{
@@ -312,9 +312,11 @@ impl DiagnosticVoucher for PathResDiag<'_> {
                 for (trait_inst, ty) in candidates {
                     let trait_def = trait_inst.def(db);
                     let trait_name = trait_def.name(db).unwrap().data(db);
-                    let span = trait_def.span().name().resolve(db);
+                    let span = |t: &Trait| t.span().name().resolve(db);
+                    let span = span(&trait_def);
 
                     let msg = match ty.data(db) {
+
                         TyData::AssocTy(_) | TyData::Invalid(_) | TyData::Never => {
                             format!("candidate: `{trait_name}`")
                         }
@@ -2226,7 +2228,7 @@ impl DiagnosticVoucher for TraitLowerDiag<'_> {
             },
 
             Self::CyclicSuperTraits(traits) => {
-                let span = |t: &TraitDef| t.trait_(db).span().name().resolve(db);
+                let span = |t: &Trait| t.span().name().resolve(db);
                 CompleteDiagnostic {
                     severity: Severity::Error,
                     message: "cyclic trait bounds are not allowed".to_string(),

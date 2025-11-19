@@ -10,6 +10,7 @@ use crate::analysis::name_resolution;
 use crate::analysis::ty;
 use crate::analysis::ty::def_analysis::check_duplicate_names;
 use crate::analysis::ty::diagnostics::{TraitConstraintDiag, TyDiagCollection, TyLowerDiag};
+use crate::analysis::ty::trait_resolution::constraint::collect_super_traits;
 use crate::analysis::ty::ty_def::{InvalidCause, TyId};
 use crate::hir_def::scope_graph::ScopeId;
 use crate::hir_def::{
@@ -200,7 +201,7 @@ impl<'db> WherePredicateBoundView<'db> {
 
         match trait_lower::lower_trait_ref(db, subject, tr, scope, assumptions) {
             Ok(inst) => {
-                let expected = inst.def(db).expected_implementor_kind(db);
+                let expected = inst.def(db).self_param(db).kind(db);
                 if !expected.does_match(subject.kind(db)) {
                     out.push(
                         TraitConstraintDiag::TraitArgKindMismatch {
@@ -720,7 +721,7 @@ impl<'db> ImplTrait<'db> {
             return diags;
         };
         let implementor = implementor.instantiate_identity();
-        let trait_hir = implementor.trait_def(db).trait_(db);
+        let trait_hir = implementor.trait_def(db);
         let impl_types = implementor.types(db);
 
         for assoc in trait_hir.assoc_types(db) {
@@ -753,7 +754,7 @@ impl<'db> ImplTrait<'db> {
             return diags;
         };
         let implementor = implementor.instantiate_identity();
-        let trait_hir = implementor.trait_def(db).trait_(db);
+        let trait_hir = implementor.trait_def(db);
         let impl_types = implementor.types(db);
         let impl_trait_hir = implementor.hir_impl_trait(db);
         let assumptions =
@@ -813,7 +814,7 @@ impl<'db> ImplTrait<'db> {
         let trait_inst = implementor.trait_(db);
         let trait_def = implementor.trait_def(db);
 
-        let trait_constraints = collect_constraints(db, trait_def.trait_(db).into())
+        let trait_constraints = collect_constraints(db, trait_def.into())
             .instantiate(db, trait_inst.args(db));
 
         let assumptions = collect_constraints(db, self.into()).instantiate_identity();
@@ -848,7 +849,7 @@ impl<'db> ImplTrait<'db> {
         }
 
         let target_ty_span: DynLazySpan<'db> = self.span().ty().into();
-        for &super_trait in trait_def.super_traits(db) {
+        for super_trait in collect_super_traits(db, trait_def) {
             let super_trait = super_trait.instantiate(db, trait_inst.args(db));
             is_satisfied(super_trait, target_ty_span.clone(), &mut diags)
         }
@@ -1429,7 +1430,7 @@ impl<'db> GenericParamOwner<'db> {
                     .trait_bound();
                 match trait_lower::lower_trait_ref(db, subject, *tr, scope, assumptions) {
                     Ok(inst) => {
-                        let expected = inst.def(db).expected_implementor_kind(db);
+                        let expected = inst.def(db).self_param(db).kind(db);
                         if !expected.does_match(subject.kind(db)) {
                             out.push(
                                 TraitConstraintDiag::TraitArgKindMismatch {

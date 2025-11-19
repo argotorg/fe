@@ -302,23 +302,20 @@ impl<'db> TyChecker<'db> {
                 (self.table.instantiate_to_term(func_ty), None)
             }
 
-            MethodCandidate::TraitMethod(cand) => {
+            MethodCandidate::TraitMethod(cand) | MethodCandidate::NeedsConfirmation(cand) => {
                 let inst = canonical_r_ty.extract_solution(&mut self.table, cand.inst);
                 let func_ty =
-                    cand.method
-                        .instantiate_with_inst(&mut self.table, receiver_prop.ty, inst);
+                    super::instantiate_trait_method(
+                        self.db,
+                        cand.method,
+                        &mut self.table,
+                        receiver_prop.ty,
+                        inst,
+                    );
                 (func_ty, Some(inst))
             }
 
-            MethodCandidate::NeedsConfirmation(cand) => {
-                let inst = canonical_r_ty.extract_solution(&mut self.table, cand.inst);
-                self.env
-                    .register_confirmation(inst, call_span.clone().into());
-                let trait_method = cand.method;
-                let func_ty =
-                    trait_method.instantiate_with_inst(&mut self.table, receiver_prop.ty, inst);
-                (func_ty, Some(inst))
-            }
+
         };
 
         let mut callable = match Callable::new(
@@ -446,7 +443,7 @@ impl<'db> TyChecker<'db> {
                 PathRes::Trait(trait_) => {
                     let diag = BodyDiag::NotValue {
                         primary: path_expr_span.clone().into(),
-                        given: Either::Left(trait_.def(self.db).trait_(self.db).into()),
+                        given: Either::Left(trait_.def(self.db).into()),
                     };
                     self.push_diag(diag);
                     ExprProp::invalid(self.db)
@@ -500,8 +497,13 @@ impl<'db> TyChecker<'db> {
                                 self.env
                                     .register_confirmation(inst, path_expr_span.clone().into());
                             }
-                            cand.method
-                                .instantiate_with_inst(&mut self.table, receiver_ty, inst)
+                            super::instantiate_trait_method(
+                                self.db,
+                                cand.method,
+                                &mut self.table,
+                                receiver_ty,
+                                inst,
+                            )
                         }
                     };
                     ExprProp::new(self.table.instantiate_to_term(method_ty), true)
@@ -576,7 +578,7 @@ impl<'db> TyChecker<'db> {
             PathRes::Trait(trait_) => {
                 let diag = BodyDiag::NotValue {
                     primary: span.into(),
-                    given: Either::Left(trait_.def(self.db).trait_(self.db).into()),
+                    given: Either::Left(trait_.def(self.db).into()),
                 };
                 self.push_diag(diag);
                 ExprProp::invalid(self.db)
@@ -715,7 +717,7 @@ impl<'db> TyChecker<'db> {
         .ok()?;
 
         if let PathRes::Trait(trait_) = res {
-            return Some(trait_);
+            return Some(trait_.def(self.db));
         }
         None
     }
@@ -970,9 +972,13 @@ impl<'db> TyChecker<'db> {
                         .register_confirmation(inst, expr.span(self.body()).into());
                 }
 
-                let func_ty = cand
-                    .method
-                    .instantiate_with_inst(&mut self.table, lhs_ty, inst);
+                let func_ty = super::instantiate_trait_method(
+                    self.db,
+                    cand.method,
+                    &mut self.table,
+                    lhs_ty,
+                    inst,
+                );
 
                 if let Some(rhs_expr) = rhs_expr {
                     // Derive expected RHS type from the instantiated function type

@@ -1,6 +1,6 @@
 use crate::core::adt_lower::lower_adt;
 use crate::core::hir_def::{
-    IdentId, ItemKind, TopLevelMod, TypeAlias,
+    IdentId, ItemKind, TopLevelMod, Trait, TypeAlias,
     scope_graph::{ScopeGraph, ScopeId},
 };
 use adt_def::{AdtDef, AdtRef};

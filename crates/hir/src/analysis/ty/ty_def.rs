@@ -344,7 +344,7 @@ impl<'db> TyId<'db> {
         match self.base_ty(db).data(db) {
             TyData::TyParam(param) => Some(param.scope(db)),
             TyData::AssocTy(assoc_ty) => Some(assoc_ty.scope(db)),
-            TyData::QualifiedTy(trait_inst) => Some(trait_inst.def(db).trait_(db).scope()),
+            TyData::QualifiedTy(trait_inst) => Some(trait_inst.def(db).scope()),
             TyData::TyBase(TyBase::Adt(adt)) => Some(adt.scope(db)),
             TyData::TyBase(TyBase::Func(func)) => Some(func.scope()),
             TyData::TyBase(TyBase::Prim(..)) => None,
@@ -366,7 +366,7 @@ impl<'db> TyId<'db> {
             TyData::TyVar(_) => None,
             TyData::TyParam(param) => param.scope(db).name_span(db),
             TyData::AssocTy(assoc_ty) => assoc_ty.scope(db).name_span(db),
-            TyData::QualifiedTy(trait_inst) => trait_inst.def(db).trait_(db).scope().name_span(db),
+            TyData::QualifiedTy(trait_inst) => trait_inst.def(db).scope().name_span(db),
 
             TyData::TyBase(TyBase::Adt(adt)) => Some(adt.name_span(db)),
             TyData::TyBase(TyBase::Func(func)) => Some(func.name_span()),
@@ -954,7 +954,7 @@ pub struct AssocTy<'db> {
 impl<'db> AssocTy<'db> {
     pub fn scope(&self, db: &'db dyn HirAnalysisDb) -> ScopeId<'db> {
         // Find the index of this associated type in the trait's type list
-        let trait_def = self.trait_.def(db).trait_(db);
+        let trait_def = self.trait_.def(db);
         let idx = trait_def
             .assoc_types(db)
             .enumerate()

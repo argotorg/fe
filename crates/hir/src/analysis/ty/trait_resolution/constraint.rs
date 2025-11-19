@@ -1,6 +1,6 @@
 use crate::core::hir_def::{
-    GenericParam, GenericParamOwner, GenericParamView, ItemKind, TraitRefId, TypeBound,
-    WhereClauseOwner, scope_graph::ScopeId, types::TypeId as HirTypeId,
+    GenericParam, GenericParamOwner, GenericParamView, ItemKind, Trait, TraitRefId,
+    TypeBound, WhereClauseOwner, scope_graph::ScopeId, types::TypeId as HirTypeId,
 };
 use crate::hir_def::CallableDef;
 use common::indexmap::IndexSet;
