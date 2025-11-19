@@ -3,7 +3,11 @@ use std::{
     hash::{Hash, Hasher},
 };
 
-use hir::hir_def::Func;
+use hir::hir_def::{
+    Func,
+    item::ItemKind,
+    scope_graph::ScopeId,
+};
 use hir_analysis::{
     HirAnalysisDb,
     ty::{
@@ -196,11 +200,14 @@ impl<'db> Monomorphizer<'db> {
 
     /// Produce a globally unique (yet mostly readable) symbol name per instance.
     fn mangled_name(&self, func: Func<'db>, args: &[TyId<'db>]) -> String {
-        let base = func
+        let mut base = func
             .name(self.db)
             .to_opt()
             .map(|ident| ident.data(self.db).to_string())
             .unwrap_or_else(|| "<anonymous>".into());
+        if let Some(prefix) = self.associated_prefix(func) {
+            base = format!("{prefix}_{base}");
+        }
         if args.is_empty() {
             return base;
         }
@@ -215,6 +222,20 @@ impl<'db> Monomorphizer<'db> {
         let hash = hasher.finish();
         let suffix = parts.join("_");
         format!("{base}__{suffix}__{hash:08x}")
+    }
+
+    /// Returns a sanitized prefix for associated functions/methods based on their owner.
+    fn associated_prefix(&self, func: Func<'db>) -> Option<String> {
+        let parent = func.scope().parent(self.db)?;
+        let ScopeId::Item(item) = parent else {
+            return None;
+        };
+        if let ItemKind::Impl(impl_block) = item {
+            let ty = impl_block.ty(self.db).to_opt()?;
+            Some(sanitize_symbol_component(&ty.pretty_print(self.db)).to_lowercase())
+        } else {
+            None
+        }
     }
 
     fn into_instances(self) -> Vec<MirFunction<'db>> {

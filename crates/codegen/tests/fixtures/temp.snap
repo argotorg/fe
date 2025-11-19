@@ -5,13 +5,13 @@ expression: output
 input_file: tests/fixtures/temp.fe
 ---
 {
-  function area(self) -> ret {
-    ret := mul(get_field__Point_u256__78e69939a7cc685d(self, 0, 0), get_field__Point_u256__78e69939a7cc685d(self, 0, 32))
+  function point_area(self) -> ret {
+    ret := mul(get_field__Square_u256__364f4d6a7ec6c33b(self, 0, 0), get_field__Square_u256__364f4d6a7ec6c33b(self, 0, 32))
   }
 }
 {
-  function area(self) -> ret {
-    let v0 := get_field__Point_u256__78e69939a7cc685d(self, 0, 0)
+  function square_area(self) -> ret {
+    let v0 := get_field__Square_u256__364f4d6a7ec6c33b(self, 0, 0)
     ret := mul(v0, v0)
   }
 }
@@ -33,7 +33,7 @@ input_file: tests/fixtures/temp.fe
       store_field__deduped(v4, 0, 0, v2)
       store_field__deduped(v4, 0, 32, v3)
       let v5 := v4
-      let v6 := area(v5)
+      let v6 := point_area(v5)
       ret := 0
     }
     if iszero(v1) {
@@ -42,7 +42,7 @@ input_file: tests/fixtures/temp.fe
   }
 }
 {
-  function get_field__Point_u256__78e69939a7cc685d(addr, space, offset) -> ret {
+  function get_field__Square_u256__364f4d6a7ec6c33b(addr, space, offset) -> ret {
     let v1 := add(addr, offset)
     let v0 := 0
     switch space
