@@ -56,7 +56,7 @@ use crate::analysis::ty::trait_lower::{
 };
 use crate::analysis::ty::trait_resolution::constraint::{
     collect_adt_constraints, collect_constraints, collect_func_def_constraints,
-    collect_super_traits,
+    collect_super_traits, super_trait_cycle,
 };
 use crate::analysis::ty::ty_def::TyData;
 use crate::analysis::ty::ty_lower::{GenericParamTypeSet, collect_generic_params};
@@ -68,6 +68,7 @@ use crate::analysis::ty::{
 };
 use crate::core::adt_lower::lower_adt;
 use common::indexmap::IndexMap;
+use either::Either;
 // (kind-lowering helpers intentionally omitted; see WherePredicateView::kind)
 
 // (Additional view types appear below; keep layering semantic.)
@@ -755,7 +756,10 @@ impl<'db> Trait<'db> {
         self,
         db: &'db dyn HirAnalysisDb,
     ) -> impl Iterator<Item = Binder<TraitInstId<'db>>> + 'db {
-        collect_super_traits(db, self).iter().copied()
+        if super_trait_cycle(db, self).is_some() {
+            return Either::Left(std::iter::empty());
+        }
+        Either::Right(collect_super_traits(db, self).iter().copied())
     }
 
     /// Iterate declared super-trait references as contextual views.

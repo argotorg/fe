@@ -1,9 +1,6 @@
 use std::panic;
 
-use crate::core::hir_def::{
-    ArithBinOp, BinOp, Expr, ExprId, FieldIndex, IdentId, Partial, Pat, PatId, PathId, UnOp,
-    VariantKind,
-};
+use crate::core::hir_def::{ArithBinOp, BinOp, Expr, ExprId, FieldIndex, IdentId, Partial, Pat, PatId, PathId, UnOp, VariantKind, scope_graph::ScopeId};
 use common::ingot::IngotKind;
 use either::Either;
 
@@ -302,8 +299,22 @@ impl<'db> TyChecker<'db> {
                 (self.table.instantiate_to_term(func_ty), None)
             }
 
-            MethodCandidate::TraitMethod(cand) | MethodCandidate::NeedsConfirmation(cand) => {
+            MethodCandidate::TraitMethod(cand) => {
                 let inst = canonical_r_ty.extract_solution(&mut self.table, cand.inst);
+                let func_ty =
+                    super::instantiate_trait_method(
+                        self.db,
+                        cand.method,
+                        &mut self.table,
+                        receiver_prop.ty,
+                        inst,
+                    );
+                (func_ty, Some(inst))
+            }
+
+            MethodCandidate::NeedsConfirmation(cand) => {
+                let inst = canonical_r_ty.extract_solution(&mut self.table, cand.inst);
+                self.env.register_confirmation(inst, call_span.clone().into());
                 let func_ty =
                     super::instantiate_trait_method(
                         self.db,
@@ -707,19 +718,30 @@ impl<'db> TyChecker<'db> {
     }
 
     fn resolve_core_trait(&self, trait_path: PathId<'db>) -> Option<crate::core::hir_def::Trait<'db>> {
-        let res = resolve_path(
-            self.db,
-            trait_path,
-            self.env.scope(),
-            self.env.assumptions(),
-            false,
-        )
-        .ok()?;
+        let scope = self.env.scope();
+        let assumptions = self.env.assumptions();
+        let mut module_path = trait_path.parent(self.db)?;
 
-        if let PathRes::Trait(trait_) = res {
-            return Some(trait_.def(self.db));
+        // If we are inside the core ingot, replace `core` with `ingot` in the trait path.
+        let ingot = self.env.body().top_mod(self.db).ingot(self.db);
+        if ingot.kind(self.db) == IngotKind::Core && trait_path.is_core_lib_path(self.db) {
+            module_path = module_path.replace_root(
+                IdentId::make_core(self.db),
+                IdentId::make_ingot(self.db),
+                self.db,
+            );
         }
-        None
+        let trait_name = trait_path.ident(self.db).to_opt()?;
+        let Ok(PathRes::Mod(mod_scope)) =
+            resolve_path(self.db, module_path, scope, assumptions, false)
+        else {
+            return None;
+        };
+
+        let bucket =
+            resolve_ident_to_bucket(self.db, PathId::from_ident(self.db, trait_name), mod_scope);
+        let nameres = bucket.pick(NameDomain::TYPE).as_ref().ok()?;
+        nameres.trait_()
     }
 
     fn check_array(

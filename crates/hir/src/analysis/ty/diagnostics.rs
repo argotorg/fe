@@ -1,23 +1,14 @@
-use super::{
-    def_analysis::AdtCycleMember,
-    trait_def::TraitInstId,
-    ty_check::{RecordLike, TraitOps},
-    ty_def::{Kind, TyId},
+use super::{def_analysis::AdtCycleMember, trait_def::TraitInstId, ty_check::{RecordLike, TraitOps}, ty_def::{Kind, TyId}};
+use crate::analysis::{HirAnalysisDb, Spanned};
+use crate::core::hir_def::{
+    CallableDef, Enum, FieldIndex, FieldParent, Func, GenericParamOwner, IdentId, ImplTrait,
+    ItemKind, PathId, Trait, TypeAlias as HirTypeAlias, scope_graph::ScopeId,
 };
-use crate::analysis::{
-    HirAnalysisDb, diagnostics::DiagnosticVoucher, name_resolution::diagnostics::PathResDiag,
-};
-use crate::{
-    hir_def::{
-        CallableDef, Enum, FieldIndex, FieldParent, Func, GenericParamOwner, IdentId, ImplTrait,
-        ItemKind, PathId, Trait, TypeAlias as HirTypeAlias,
-    },
-    span::{
-        DynLazySpan,
-        expr::LazyMethodCallExprSpan,
-        params::{LazyGenericParamSpan, LazyTraitRefSpan},
-    },
-};
+use crate::span::DynLazySpan;
+use common::diagnostics::{CompleteDiagnostic, DiagnosticPass, GlobalErrorCode, LabelStyle, Severity, Span, SpanKind, SubDiagnostic};
+use crate::analysis::diagnostics::DiagnosticVoucher;
+use crate::analysis::name_resolution::diagnostics::PathResDiag;
+use crate::visitor::prelude::*;
 use either::Either;
 use salsa::Update;
 use smallvec1::SmallVec;

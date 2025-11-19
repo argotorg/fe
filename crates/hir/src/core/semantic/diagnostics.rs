@@ -10,7 +10,6 @@ use crate::analysis::name_resolution;
 use crate::analysis::ty;
 use crate::analysis::ty::def_analysis::check_duplicate_names;
 use crate::analysis::ty::diagnostics::{TraitConstraintDiag, TyDiagCollection, TyLowerDiag};
-use crate::analysis::ty::trait_resolution::constraint::collect_super_traits;
 use crate::analysis::ty::ty_def::{InvalidCause, TyId};
 use crate::hir_def::scope_graph::ScopeId;
 use crate::hir_def::{
@@ -849,7 +848,7 @@ impl<'db> ImplTrait<'db> {
         }
 
         let target_ty_span: DynLazySpan<'db> = self.span().ty().into();
-        for super_trait in collect_super_traits(db, trait_def) {
+        for super_trait in trait_def.super_trait_insts(db) {
             let super_trait = super_trait.instantiate(db, trait_inst.args(db));
             is_satisfied(super_trait, target_ty_span.clone(), &mut diags)
         }
