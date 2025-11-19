@@ -3,11 +3,7 @@ use std::{
     hash::{Hash, Hasher},
 };
 
-use hir::hir_def::{
-    Func,
-    item::ItemKind,
-    scope_graph::ScopeId,
-};
+use hir::hir_def::{Func, item::ItemKind, scope_graph::ScopeId};
 use hir_analysis::{
     HirAnalysisDb,
     ty::{

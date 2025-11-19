@@ -4,6 +4,7 @@ use common::InputDb;
 use driver::DriverDataBase;
 use ethers_core::abi::{AbiParser, ParseError as AbiParseError, Token};
 use hex::FromHex;
+pub use revm::primitives::U256;
 use revm::{
     bytecode::Bytecode,
     context::{
@@ -11,13 +12,10 @@ use revm::{
         result::{ExecutionResult, HaltReason, Output},
     },
     database::InMemoryDB,
-    handler::{
-        ExecuteCommitEvm, MainBuilder, MainContext, MainnetContext, MainnetEvm,
-    },
+    handler::{ExecuteCommitEvm, MainBuilder, MainContext, MainnetContext, MainnetEvm},
     primitives::{Address, Bytes as EvmBytes},
     state::AccountInfo,
 };
-pub use revm::primitives::U256;
 use solc_runner::{ContractBytecode, YulcError, compile_single_contract};
 use std::{fmt, path::Path};
 use thiserror::Error;
@@ -44,10 +42,7 @@ pub enum HarnessError {
     #[error("runtime reverted with data {0}")]
     Revert(RevertData),
     #[error("runtime halted: {reason:?} (gas_used={gas_used})")]
-    Halted {
-        reason: HaltReason,
-        gas_used: u64,
-    },
+    Halted { reason: HaltReason, gas_used: u64 },
     #[error("unexpected output variant from runtime")]
     UnexpectedOutput,
     #[error("invalid hex string: {0}")]
@@ -165,7 +160,9 @@ fn transact(
         ExecutionResult::Revert { output, .. } => {
             Err(HarnessError::Revert(RevertData(output.to_vec())))
         }
-        ExecutionResult::Halt { reason, gas_used } => Err(HarnessError::Halted { reason, gas_used }),
+        ExecutionResult::Halt { reason, gas_used } => {
+            Err(HarnessError::Halted { reason, gas_used })
+        }
     }
 }
 
@@ -181,7 +178,10 @@ impl RuntimeInstance {
     pub fn new(runtime_bytecode_hex: &str) -> Result<Self, HarnessError> {
         let (bytecode, address, mut db) = prepare_account(runtime_bytecode_hex)?;
         let code_hash = bytecode.hash_slow();
-        db.insert_account_info(address, AccountInfo::new(U256::ZERO, 0, code_hash, bytecode));
+        db.insert_account_info(
+            address,
+            AccountInfo::new(U256::ZERO, 0, code_hash, bytecode),
+        );
         let ctx = Context::mainnet().with_db(db);
         let evm = ctx.build_mainnet();
         Ok(Self {
@@ -197,13 +197,11 @@ impl RuntimeInstance {
         calldata: &[u8],
         options: ExecutionOptions,
     ) -> Result<CallResult, HarnessError> {
-        let nonce = options
-            .nonce
-            .unwrap_or_else(|| {
-                let current = self.next_nonce;
-                self.next_nonce += 1;
-                current
-            });
+        let nonce = options.nonce.unwrap_or_else(|| {
+            let current = self.next_nonce;
+            self.next_nonce += 1;
+            current
+        });
         transact(&mut self.evm, self.address, calldata, options, nonce)
     }
 
@@ -252,9 +250,7 @@ impl FeContractHarness {
         let top_mod = db.top_mod(file);
         let diags = db.run_on_top_mod(top_mod);
         if !diags.is_empty() {
-            return Err(HarnessError::CompilerDiagnostics(
-                diags.format_diags(&db),
-            ));
+            return Err(HarnessError::CompilerDiagnostics(diags.format_diags(&db)));
         }
         let yul = emit_module_yul(&db, top_mod)?;
         let contract = compile_single_contract(

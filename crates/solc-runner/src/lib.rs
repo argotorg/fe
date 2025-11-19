@@ -260,9 +260,12 @@ object "Double" {
         let contract = compile_single_contract("Double", yul, false, true)
             .expect("solc should compile handwritten contract");
         let calldata = encode_call_data(10u64);
-        let result =
-            execute_runtime(&contract.runtime_bytecode, &calldata, ExecutionOptions::default())
-                .expect("runtime execution should succeed");
+        let result = execute_runtime(
+            &contract.runtime_bytecode,
+            &calldata,
+            ExecutionOptions::default(),
+        )
+        .expect("runtime execution should succeed");
         assert_eq!(
             bytes_to_u256(&result.return_data).expect("return data should encode a u256"),
             U256::from(20u64)

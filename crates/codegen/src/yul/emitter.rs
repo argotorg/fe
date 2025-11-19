@@ -229,9 +229,7 @@ impl<'db> YulEmitter<'db> {
                 Terminator::Return(Some(value)) => counts[value.index()] += 1,
                 Terminator::Branch { cond, .. } => counts[cond.index()] += 1,
                 Terminator::Switch { discr, .. } => counts[discr.index()] += 1,
-                Terminator::Return(None)
-                | Terminator::Goto { .. }
-                | Terminator::Unreachable => {}
+                Terminator::Return(None) | Terminator::Goto { .. } | Terminator::Unreachable => {}
             }
         }
         counts
@@ -246,7 +244,10 @@ impl<'db> YulEmitter<'db> {
         let (param_names, mut state) = self.init_function_state();
         let body_docs = self.emit_block(self.mir_func.body.entry, &mut state)?;
         let function_doc = YulDoc::block(
-            format!("{} ", self.format_function_signature(func_name, &param_names)),
+            format!(
+                "{} ",
+                self.format_function_signature(func_name, &param_names)
+            ),
             body_docs,
         );
         Ok(vec![function_doc])
@@ -743,11 +744,10 @@ impl<'db> YulEmitter<'db> {
                     docs.push(YulDoc::line(format!("{yul_name} := {assignment}")));
                 }
                 mir::MirInst::Eval { value, .. } => {
-                    if self.value_use_counts[value.index()] == 1 {
-                        if let Some(doc) = self.render_eval(*value, state)? {
+                    if self.value_use_counts[value.index()] == 1
+                        && let Some(doc) = self.render_eval(*value, state)? {
                             docs.push(doc);
                         }
-                    }
                 }
                 mir::MirInst::EvalExpr {
                     expr,
