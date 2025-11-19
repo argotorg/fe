@@ -332,6 +332,12 @@ impl<'db> GenericParamOwner<'db> {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, derive_more::From, salsa::Update)]
+pub enum CallableDef<'db> {
+    Func(Func<'db>),
+    VariantCtor(EnumVariant<'db>),
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, derive_more::From)]
 pub enum WhereClauseOwner<'db> {
     Func(Func<'db>),
@@ -666,6 +672,12 @@ impl<'db> Func<'db> {
     pub fn param_label_or_name(self, db: &'db dyn HirDb, idx: usize) -> Option<FuncParamName<'db>> {
         let param = self.params(db).to_opt()?.data(db).get(idx)?;
         param.label.or(param.name.to_opt())
+    }
+
+    /// View as a callable definition (if named).
+    pub fn as_callable(self, db: &'db dyn HirDb) -> Option<CallableDef<'db>> {
+        self.name(db).to_opt()?;
+        Some(CallableDef::Func(self))
     }
 
     // Function semantic helpers live in `hir_def::semantic`.

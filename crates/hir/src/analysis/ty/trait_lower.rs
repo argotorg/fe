@@ -12,7 +12,6 @@ use super::{
     binder::Binder,
     const_ty::ConstTyId,
     fold::{TyFoldable, TyFolder},
-    func_def::{CallableDef, lower_func},
     trait_def::{ImplementorView, TraitDef, TraitInstId, does_impl_trait_conflict},
     trait_resolution::PredicateListId,
     ty_def::{InvalidCause, TyId},
@@ -26,6 +25,7 @@ use crate::analysis::{
         ty_lower::lower_opt_hir_ty,
     },
 };
+use crate::hir_def::CallableDef;
 
 type TraitImplTable<'db> = FxHashMap<TraitDef<'db>, Vec<Binder<ImplementorView<'db>>>>;
 
@@ -321,7 +321,7 @@ pub(crate) fn collect_implementor_methods<'db>(
 ) -> IndexMap<IdentId<'db>, CallableDef<'db>> {
     let mut methods = IndexMap::default();
     for method in implementor.hir_impl_trait(db).methods(db) {
-        if let Some(func) = lower_func(db, method) {
+        if let Some(func) = method.as_callable(db) {
             let name = func.name(db).expect("impl methods have names");
             methods.insert(name, func);
         }

@@ -10,8 +10,9 @@ use super::NameRes;
 use crate::analysis::{
     HirAnalysisDb,
     ty::ty_def::Kind,
-    ty::{func_def::CallableDef, trait_def::TraitInstId, ty_def::TyId},
+    ty::{trait_def::TraitInstId, ty_def::TyId},
 };
+use crate::hir_def::CallableDef;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Update)]
 pub enum PathResDiag<'db> {

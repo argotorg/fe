@@ -29,7 +29,6 @@ pub mod decision_tree;
 pub mod def_analysis;
 pub mod diagnostics;
 pub mod fold;
-pub mod func_def;
 mod method_cmp;
 pub mod method_table;
 pub mod normalize;

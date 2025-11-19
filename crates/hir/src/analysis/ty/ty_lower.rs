@@ -327,7 +327,7 @@ impl<'db> GenericParamTypeSet<'db> {
         }
     }
 
-    pub(super) fn offset_to_explicit_params_position(&self, db: &dyn HirAnalysisDb) -> usize {
+    pub(crate) fn offset_to_explicit_params_position(&self, db: &dyn HirAnalysisDb) -> usize {
         self.offset_to_explicit(db)
     }
 

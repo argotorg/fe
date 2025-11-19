@@ -2,6 +2,7 @@ use crate::core::hir_def::{
     GenericParam, GenericParamOwner, GenericParamView, ItemKind, TraitRefId, TypeBound,
     WhereClauseOwner, scope_graph::ScopeId, types::TypeId as HirTypeId,
 };
+use crate::hir_def::CallableDef;
 use common::indexmap::IndexSet;
 use either::Either;
 
@@ -10,7 +11,6 @@ use crate::analysis::{
     ty::{
         adt_def::AdtDef,
         binder::Binder,
-        func_def::CallableDef,
         trait_def::{TraitDef, TraitInstId},
         trait_lower::{lower_impl_trait, lower_trait_ref},
         trait_resolution::PredicateListId,

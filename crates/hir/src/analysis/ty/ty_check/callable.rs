@@ -14,7 +14,6 @@ use crate::analysis::{
     ty::{
         diagnostics::{BodyDiag, FuncBodyDiag},
         fold::{AssocTySubst, TyFoldable, TyFolder},
-        func_def::CallableDef,
         trait_def::TraitInstId,
         trait_resolution::constraint::collect_func_def_constraints,
         ty_def::{TyBase, TyData, TyId},
@@ -22,6 +21,7 @@ use crate::analysis::{
         visitor::{TyVisitable, TyVisitor},
     },
 };
+use crate::hir_def::CallableDef;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Update)]
 pub struct Callable<'db> {

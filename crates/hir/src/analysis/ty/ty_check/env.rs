@@ -6,6 +6,7 @@ use crate::{
     span::DynLazySpan,
 };
 
+use crate::hir_def::CallableDef;
 use num_bigint::BigUint;
 use rustc_hash::FxHashMap;
 use salsa::Update;
@@ -19,7 +20,6 @@ use crate::analysis::{
         const_ty::{ConstTyData, ConstTyId, EvaluatedConstTy},
         diagnostics::{BodyDiag, FuncBodyDiag, TraitConstraintDiag, TyDiagCollection},
         fold::{AssocTySubst, TyFoldable, TyFolder},
-        func_def::{CallableDef, lower_func},
         normalize::normalize_ty,
         trait_def::TraitInstId,
         trait_resolution::{GoalSatisfiability, PredicateListId, is_goal_satisfiable},
@@ -116,7 +116,7 @@ impl<'db> TyCheckEnv<'db> {
     /// If the `body` has `BodyKind::Anonymous`, returns None.
     pub(super) fn func(&self) -> Option<CallableDef<'db>> {
         let func = self.hir_func()?;
-        lower_func(self.db, func)
+        func.as_callable(self.db)
     }
 
     fn hir_func(&self) -> Option<Func<'db>> {

@@ -1,6 +1,5 @@
 use super::{
     def_analysis::AdtCycleMember,
-    func_def::CallableDef,
     trait_def::{TraitDef, TraitInstId},
     ty_check::{RecordLike, TraitOps},
     ty_def::{Kind, TyId},
@@ -10,8 +9,8 @@ use crate::analysis::{
 };
 use crate::{
     hir_def::{
-        Enum, FieldIndex, FieldParent, Func, GenericParamOwner, IdentId, ImplTrait, ItemKind,
-        PathId, Trait, TypeAlias as HirTypeAlias,
+        CallableDef, Enum, FieldIndex, FieldParent, Func, GenericParamOwner, IdentId, ImplTrait,
+        ItemKind, PathId, Trait, TypeAlias as HirTypeAlias,
     },
     span::{
         DynLazySpan,

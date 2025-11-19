@@ -11,7 +11,6 @@ use crate::analysis::{
             BodyDiag, DefConflictError, FuncBodyDiag, ImplDiag, TraitConstraintDiag,
             TraitLowerDiag, TyDiagCollection, TyLowerDiag,
         },
-        func_def::CallableDef,
         trait_def::TraitDef,
         ty_check::RecordLike,
         ty_def::{TyData, TyVarSort},
@@ -19,7 +18,7 @@ use crate::analysis::{
 };
 use crate::{
     ParserError, SpannedHirDb,
-    hir_def::{FieldIndex, GenericParamOwner, PathKind},
+    hir_def::{CallableDef, FieldIndex, GenericParamOwner, PathKind},
     span::LazySpan,
 };
 use common::diagnostics::{

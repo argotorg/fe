@@ -5,6 +5,7 @@ use crate::{
     },
     span::{DynLazySpan, path::LazyPathSpan},
 };
+use crate::hir_def::CallableDef;
 use common::indexmap::IndexMap;
 use either::Either;
 use smallvec::{SmallVec, smallvec};
@@ -27,7 +28,6 @@ use crate::analysis::{
         binder::Binder,
         canonical::{Canonical, Canonicalized},
         fold::TyFoldable,
-        func_def::{CallableDef, lower_func},
         normalize::normalize_ty,
         trait_def::{TraitInstId, impls_for_ty_with_constraints},
         trait_lower::{
@@ -1015,10 +1015,10 @@ pub fn resolve_name_res<'db>(
                     PathRes::Ty(ty_from_adtref(db, path, adt_ref, args, assumptions)?)
                 }
 
-                ItemKind::TopMod(_) | ItemKind::Mod(_) => PathRes::Mod(scope_id),
+                ItemKind::Mod(_) | ItemKind::TopMod(_) => PathRes::Mod(scope_id),
 
                 ItemKind::Func(func) => {
-                    let func_def = lower_func(db, func).unwrap();
+                    let func_def = func.as_callable(db).unwrap();
                     let ty = TyId::func(db, func_def);
                     PathRes::Func(TyId::foldl(db, ty, args))
                 }

@@ -4,7 +4,6 @@ use super::{
     canonical::Canonical,
     diagnostics::{ImplDiag, TyDiagCollection},
     fold::{AssocTySubst, TyFoldable},
-    func_def::CallableDef,
     normalize::normalize_ty,
     trait_def::{TraitInstId, TraitMethod},
     trait_resolution::{
@@ -13,6 +12,7 @@ use super::{
     ty_def::TyId,
 };
 use crate::analysis::HirAnalysisDb;
+use crate::hir_def::CallableDef;
 
 /// Compares the implementation method with the trait method to ensure they
 /// match.

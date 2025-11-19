@@ -24,7 +24,6 @@ use super::{
     adt_def::AdtDef,
     const_ty::{ConstTyData, ConstTyId, EvaluatedConstTy},
     diagnostics::{TraitConstraintDiag, TyDiagCollection},
-    func_def::CallableDef,
     trait_def::TraitInstId,
     trait_resolution::{PredicateListId, WellFormedness},
     ty_lower::collect_generic_params,
@@ -36,6 +35,7 @@ use crate::analysis::{
     name_resolution::PathRes,
     ty::{adt_def::AdtRef, trait_resolution::check_ty_wf, ty_error::emit_invalid_ty_error},
 };
+use crate::hir_def::CallableDef;
 
 #[salsa::interned]
 #[derive(Debug)]

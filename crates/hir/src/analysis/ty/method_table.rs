@@ -6,11 +6,11 @@ use salsa::Update;
 use super::{
     binder::Binder,
     canonical::Canonical,
-    func_def::{CallableDef, lower_func},
     ty_def::{TyBase, TyId},
     unify::UnificationTable,
 };
 use crate::analysis::{HirAnalysisDb, ty::ty_def::TyData};
+use crate::hir_def::CallableDef;
 
 #[salsa::tracked(return_ref)]
 pub(crate) fn collect_methods<'db>(
@@ -155,7 +155,7 @@ impl<'db> MethodCollector<'db> {
             }
 
             for func in impl_.funcs(self.db) {
-                let Some(func) = lower_func(self.db, func) else {
+                let Some(func) = func.as_callable(self.db) else {
                     continue;
                 };
 

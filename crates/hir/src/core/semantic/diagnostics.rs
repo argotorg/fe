@@ -431,7 +431,6 @@ impl<'db> Func<'db> {
     /// - Explicit return type checks (star kind, constness)
     /// - In `impl` blocks, detect inherent method conflicts with existing methods
     pub fn analyze(self, db: &'db dyn HirAnalysisDb) -> Vec<TyDiagCollection<'db>> {
-        use ty::func_def::lower_func;
         use ty::method_table::probe_method;
         use ty::{binder::Binder, canonical::Canonical};
 
@@ -458,7 +457,7 @@ impl<'db> Func<'db> {
         if let Some(crate::hir_def::scope_graph::ScopeId::Item(ItemKind::Impl(impl_))) =
             self.scope().parent(db)
         {
-            if let Some(func_def) = lower_func(db, self) {
+            if let Some(func_def) = self.as_callable(db) {
                 // Use the implementor type for the receiver
                 let self_ty = impl_.ty(db);
                 if !self_ty.has_invalid(db) {

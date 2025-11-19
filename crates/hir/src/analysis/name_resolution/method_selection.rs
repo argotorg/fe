@@ -9,7 +9,6 @@ use crate::analysis::{
     ty::{
         binder::Binder,
         canonical::{Canonical, Canonicalized, Solution},
-        func_def::CallableDef,
         method_table::probe_method,
         trait_def::{TraitDef, TraitInstId, TraitMethod, impls_for_ty},
         trait_lower::lower_trait,
@@ -18,6 +17,7 @@ use crate::analysis::{
         unify::UnificationTable,
     },
 };
+use crate::hir_def::CallableDef;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, salsa::Update)]
 pub enum MethodCandidate<'db> {

@@ -16,7 +16,6 @@ use super::{
     canonical::{Canonical, Canonicalized},
     diagnostics::{TraitConstraintDiag, TyDiagCollection},
     fold::TyFoldable as _,
-    func_def::{CallableDef, lower_func},
     trait_lower::collect_implementor_methods,
     trait_resolution::{
         GoalSatisfiability, PredicateListId, WellFormedness, check_trait_inst_wf,
@@ -34,6 +33,7 @@ use crate::analysis::{
         ty_lower::collect_generic_params,
     },
 };
+use crate::hir_def::CallableDef;
 
 /// Returns [`TraitEnv`] for the given ingot.
 #[salsa::tracked(return_ref, cycle_fn=ingot_trait_env_cycle_recover, cycle_initial=ingot_trait_env_cycle_initial)]
@@ -475,7 +475,7 @@ impl<'db> TraitDef<'db> {
     pub fn methods(self, db: &'db dyn HirAnalysisDb) -> IndexMap<IdentId<'db>, TraitMethod<'db>> {
         let mut methods = IndexMap::<IdentId<'db>, TraitMethod<'db>>::default();
         for method in self.trait_(db).methods(db) {
-            let Some(func) = lower_func(db, method) else {
+            let Some(func) = method.as_callable(db) else {
                 continue;
             };
             let Some(name) = func.name(db) else {
