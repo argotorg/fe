@@ -658,17 +658,18 @@ impl<'db> YulEmitter<'db> {
             match inst {
                 mir::MirInst::Let { pat, value, .. } => {
                     let binding = self.pattern_ident(*pat)?;
-                    let yul_name = if let Some(existing) = state.binding(&binding) {
-                        existing
-                    } else {
-                        let temp = state.alloc_local();
-                        state.insert_binding(binding.clone(), temp.clone())
-                    };
+                    let existing = state.binding(&binding);
                     let value = match value {
                         Some(val) => self.lower_value(*val, state)?,
                         None => "0".into(),
                     };
-                    docs.push(YulDoc::line(format!("let {yul_name} := {value}")));
+                    if let Some(name) = existing {
+                        docs.push(YulDoc::line(format!("{name} := {value}")));
+                    } else {
+                        let temp = state.alloc_local();
+                        state.insert_binding(binding.clone(), temp.clone());
+                        docs.push(YulDoc::line(format!("let {temp} := {value}")));
+                    }
                 }
                 mir::MirInst::Assign { target, value, .. } => {
                     let binding = self.path_from_expr(*target)?;
