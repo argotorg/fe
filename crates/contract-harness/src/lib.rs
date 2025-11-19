@@ -390,54 +390,7 @@ object "Counter" {
             eprintln!("skipping dispatcher_routes_calls_by_selector because solc is missing");
             return;
         }
-        let source = r#"
-use core::{Dispatcher, calldataload, mstore, return_data}
-
-struct Point { x: u256, y: u256 }
-struct Square { side: u256 }
-
-impl Point {
-    fn area(self) -> u256 {
-        self.x * self.y
-    }
-}
-
-impl Square {
-    fn area(self) -> u256 {
-        let side = self.side
-        side * side
-    }
-}
-
-contract ShapeDispatcher {}
-
-fn abi_encode(value: u256) {
-    let ptr: u256 = 0
-    mstore(ptr, value)
-    return_data(ptr, 32)
-}
-
-impl Dispatcher for ShapeDispatcher {
-    fn dispatch() {
-        let selector = calldataload(0) >> 224
-        if selector == 0x090251bf {
-            let x = calldataload(4)
-            let y = calldataload(36)
-            let p = Point { x: x, y: y }
-            let value = p.area()
-            abi_encode(value)
-        }
-        if selector == 0x7b292909 {
-            let side = calldataload(4)
-            let s = Square { side: side }
-            let value = s.area()
-            abi_encode(value)
-        }
-
-        return_data(0, 0)
-    }
-}
-"#;
+        let source = include_str!("../../codegen/tests/fixtures/full_contract.fe");
         let harness = FeContractHarness::compile_from_source(
             "ShapeDispatcher",
             source,
