@@ -1,0 +1,110 @@
+---
+source: crates/codegen/tests/yul.rs
+assertion_line: 31
+expression: output
+input_file: tests/fixtures/temp.fe
+---
+{
+  function area(self) -> ret {
+    ret := mul(get_field__Point_u256__78e69939a7cc685d(self, 0, 0), get_field__Point_u256__78e69939a7cc685d(self, 0, 32))
+  }
+}
+{
+  function area(self) -> ret {
+    let v0 := get_field__Point_u256__78e69939a7cc685d(self, 0, 0)
+    ret := mul(v0, v0)
+  }
+}
+{
+  function abi_encode(value) -> ret {
+    let v0 := 0
+    mstore(v0, value)
+    return(v0, 32)
+  }
+}
+{
+  function dispatch() -> ret {
+    let v0 := shr(224, calldataload(0))
+    let v1 := eq(v0, 304643326)
+    if v1 {
+      let v2 := calldataload(4)
+      let v3 := calldataload(36)
+      let v4 := alloc(64)
+      store_field__deduped(v4, 0, 0, v2)
+      store_field__deduped(v4, 0, 32, v3)
+      let v5 := v4
+      let v6 := area(v5)
+      ret := 0
+    }
+    if iszero(v1) {
+      ret := 0
+    }
+  }
+}
+{
+  function get_field__Point_u256__78e69939a7cc685d(addr, space, offset) -> ret {
+    let v1 := add(addr, offset)
+    let v0 := 0
+    switch space
+      case 0 {
+        v0 := mload(v1)
+      }
+      case 1 {
+        v0 := sload(v1)
+      }
+      default {
+      }
+    let v2 := v0
+    ret := to_word__deduped(v2)
+  }
+}
+{
+  function alloc(size) -> ret {
+    let v0 := mload(64)
+    let v1 := eq(v0, 0)
+    if v1 {
+      v0 := 128
+      mstore(64, add(v0, size))
+      ret := v0
+    }
+    if iszero(v1) {
+      mstore(64, add(v0, size))
+      ret := v0
+    }
+  }
+}
+{
+  function store_field__deduped(addr, space, offset, value) -> ret {
+    let v0 := add(addr, offset)
+    switch space
+      case 0 {
+        mstore(v0, to_word__deduped(value))
+        ret := 0
+      }
+      case 1 {
+        sstore(v0, to_word__deduped(value))
+        ret := 0
+      }
+      default {
+      }
+    ret := 0
+  }
+}
+{
+  function to_word__deduped(self) -> ret {
+    ret := self
+  }
+}
+object "ShapeDispatcher" {
+  code {
+    datacopy(0, dataoffset("runtime"), datasize("runtime"))
+    return(0, datasize("runtime"))
+  }
+
+  object "runtime" {
+    code {
+      dispatch()
+      stop()
+    }
+  }
+}

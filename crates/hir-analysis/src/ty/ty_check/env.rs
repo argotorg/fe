@@ -197,6 +197,10 @@ impl<'db> TyCheckEnv<'db> {
             panic!("callable is already registered for the given expr")
         }
     }
+
+    pub(super) fn callable_expr(&self, expr: ExprId) -> Option<&Callable<'db>> {
+        self.callables.get(&expr)
+    }
     pub(super) fn binding_name(&self, binding: LocalBinding<'db>) -> IdentId<'db> {
         binding.binding_name(self)
     }
