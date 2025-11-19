@@ -31,7 +31,7 @@ use crate::analysis::{
         normalize::normalize_ty,
         trait_def::{TraitInstId, impls_for_ty_with_constraints},
         trait_lower::{
-            TraitArgError, TraitRefLowerError, lower_trait, lower_trait_ref, lower_trait_ref_impl,
+            TraitArgError, TraitRefLowerError, lower_trait_ref, lower_trait_ref_impl,
         },
         trait_resolution::PredicateListId,
         ty_def::{InvalidCause, Kind, TyData, TyId},
@@ -452,7 +452,7 @@ impl<'db> PathRes<'db> {
             PathRes::Ty(ty) | PathRes::Func(ty) => ty.as_scope(db),
             PathRes::Const(const_, _) => Some(const_.scope()),
             PathRes::TyAlias(alias, _) => Some(alias.alias.scope()),
-            PathRes::Trait(trait_) => Some(trait_.def(db).trait_(db).scope()),
+            PathRes::Trait(trait_) => Some(trait_.scope()),
             PathRes::EnumVariant(variant) => Some(variant.enum_(db).scope()),
             PathRes::FuncParam(item, idx) => Some(ScopeId::FuncParam(*item, *idx)),
             PathRes::Mod(scope) => Some(*scope),
@@ -470,7 +470,7 @@ impl<'db> PathRes<'db> {
                 let method_scope = match cand {
                     MethodCandidate::InherentMethod(func_def) => func_def.scope(),
                     MethodCandidate::TraitMethod(c) | MethodCandidate::NeedsConfirmation(c) => {
-                        c.method.0.scope()
+                        c.method.scope()
                     }
                 };
                 is_scope_visible_from(db, method_scope, from_scope)
@@ -944,7 +944,7 @@ pub fn find_associated_type<'db>(
 
         // Also check bounds defined on the associated type in the trait definition
         let trait_def = assoc_ty.trait_.def(db);
-        let trait_ = trait_def.trait_(db);
+        let trait_ = trait_def;
 
         // Evaluate trait bounds declared on the associated type using the owner-trait Self
         // for generic `Self` occurrences inside the bound (e.g., `Encode<Self>`).
@@ -956,7 +956,7 @@ pub fn find_associated_type<'db>(
             }
             let subject = ty_with_subst.fold_with(db, &mut table);
             for inst in view.with_subject(subject).bounds(db) {
-                if inst.def(db).trait_(db).assoc_ty(db, name).is_some() {
+                if inst.def(db).assoc_ty(db, name).is_some() {
                     let assoc_ty = TyId::assoc_ty(db, inst, name);
                     let folded = assoc_ty.fold_with(db, &mut table);
                     candidates.push((inst, folded));
@@ -978,7 +978,7 @@ pub fn find_associated_type<'db>(
                             scope,
                             assumptions,
                         ) {
-                            if inst.def(db).trait_(db).assoc_ty(db, name).is_some() {
+                            if inst.def(db).assoc_ty(db, name).is_some() {
                                 let assoc_ty = TyId::assoc_ty(db, inst, name);
                                 let folded = assoc_ty.fold_with(db, &mut table);
                                 candidates.push((inst, folded));

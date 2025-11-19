@@ -10,9 +10,11 @@ use crate::analysis::{
         binder::Binder,
         canonical::{Canonical, Canonicalized, Solution},
         method_table::probe_method,
-        trait_def::{TraitDef, TraitInstId, TraitMethod, impls_for_ty},
-        trait_lower::lower_trait,
-        trait_resolution::{GoalSatisfiability, PredicateListId, is_goal_satisfiable},
+        trait_def::{TraitInstId, impls_for_ty},
+        trait_resolution::{
+            GoalSatisfiability, PredicateListId, constraint::collect_super_traits,
+            is_goal_satisfiable,
+        },
         ty_def::TyId,
         unify::UnificationTable,
     },
@@ -33,7 +35,7 @@ impl<'db> MethodCandidate<'db> {
                 func_def.name(db).expect("inherent methods have names")
             }
             MethodCandidate::TraitMethod(cand) | MethodCandidate::NeedsConfirmation(cand) => {
-                cand.method.0.name(db).expect("trait methods have names")
+                cand.method.name(db).expect("trait methods have names")
             }
         }
     }
@@ -42,11 +44,11 @@ impl<'db> MethodCandidate<'db> {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, salsa::Update)]
 pub struct TraitMethodCand<'db> {
     pub inst: Solution<TraitInstId<'db>>,
-    pub method: TraitMethod<'db>,
+    pub method: CallableDef<'db>,
 }
 
 impl<'db> TraitMethodCand<'db> {
-    fn new(inst: Solution<TraitInstId<'db>>, method: TraitMethod<'db>) -> Self {
+    fn new(inst: Solution<TraitInstId<'db>>, method: CallableDef<'db>) -> Self {
         Self { inst, method }
     }
 }
@@ -57,7 +59,7 @@ pub(crate) fn select_method_candidate<'db>(
     method_name: IdentId<'db>,
     scope: ScopeId<'db>,
     assumptions: PredicateListId<'db>,
-    trait_: Option<TraitDef<'db>>,
+    trait_: Option<Trait<'db>>,
 ) -> Result<MethodCandidate<'db>, MethodSelectionError<'db>> {
     if receiver.value.is_ty_var(db) {
         return Err(MethodSelectionError::ReceiverTypeMustBeKnown);
@@ -83,7 +85,7 @@ fn assemble_method_candidates<'db>(
     method_name: IdentId<'db>,
     scope: ScopeId<'db>,
     assumptions: PredicateListId<'db>,
-    trait_: Option<TraitDef<'db>>,
+    trait_: Option<Trait<'db>>,
 ) -> AssembledCandidates<'db> {
     CandidateAssembler {
         db,
@@ -107,7 +109,7 @@ struct CandidateAssembler<'db> {
     scope: ScopeId<'db>,
     /// The assumptions for the type bound in the current scope.
     assumptions: PredicateListId<'db>,
-    trait_: Option<TraitDef<'db>>,
+    trait_: Option<Trait<'db>>,
     candidates: AssembledCandidates<'db>,
 }
 
@@ -148,7 +150,7 @@ impl<'db> CandidateAssembler<'db> {
 
             if table.unify(extracted_receiver_ty, self_ty).is_ok() {
                 self.insert_trait_method_cand(pred);
-                for super_trait in pred.def(self.db).super_traits(self.db) {
+                for super_trait in collect_super_traits(self.db, pred.def(self.db)) {
                     let super_trait = super_trait.instantiate(self.db, pred.args(self.db));
                     self.insert_trait_method_cand(super_trait);
                 }
@@ -158,7 +160,7 @@ impl<'db> CandidateAssembler<'db> {
         }
     }
 
-    fn allow_trait(&self, trait_def: TraitDef<'db>) -> bool {
+    fn allow_trait(&self, trait_def: Trait<'db>) -> bool {
         self.trait_.map(|t| t == trait_def).unwrap_or(true)
     }
 
@@ -167,7 +169,7 @@ impl<'db> CandidateAssembler<'db> {
         if !self.allow_trait(trait_def) {
             return;
         }
-        if let Some(&trait_method) = trait_def.methods(self.db).get(&self.method_name) {
+        if let Some(&trait_method) = trait_def.method_defs(self.db).get(&self.method_name) {
             self.candidates.traits.insert((inst, trait_method));
         }
     }
@@ -258,7 +260,7 @@ impl<'db> MethodSelector<'db> {
                     // Suggests trait imports.
                     let traits = traits
                         .iter()
-                        .map(|(inst, _)| inst.def(self.db).trait_(self.db))
+                        .map(|(inst, _)| inst.def(self.db))
                         .collect();
                     Err(MethodSelectionError::InvisibleTraitMethod(traits))
                 }
@@ -283,7 +285,7 @@ impl<'db> MethodSelector<'db> {
     /// checks if the goal is satisfiable given the current assumptions.
     /// Depending on the result, it either returns a confirmed trait method
     /// candidate or one that needs further confirmation.
-    fn check_inst(&self, inst: TraitInstId<'db>, method: TraitMethod<'db>) -> MethodCandidate<'db> {
+    fn check_inst(&self, inst: TraitInstId<'db>, method: CallableDef<'db>) -> MethodCandidate<'db> {
         let mut table = UnificationTable::new(self.db);
         // Seed the table with receiver's canonical variables so that subsequent
         // canonicalization can safely probe them.
@@ -328,19 +330,19 @@ impl<'db> MethodSelector<'db> {
         is_scope_visible_from(self.db, def.scope(), self.scope)
     }
 
-    fn available_traits(&self) -> IndexSet<TraitDef<'db>> {
+    fn available_traits(&self) -> IndexSet<Trait<'db>> {
         let mut traits = IndexSet::default();
 
-        let mut insert_trait = |trait_def: TraitDef<'db>| {
+        let mut insert_trait = |trait_def: Trait<'db>| {
             traits.insert(trait_def);
 
-            for trait_ in trait_def.super_traits(self.db) {
+            for trait_ in collect_super_traits(self.db, trait_def) {
                 traits.insert(trait_.skip_binder().def(self.db));
             }
         };
 
         for &trait_ in available_traits_in_scope(self.db, self.scope) {
-            let trait_def = lower_trait(self.db, trait_);
+            let trait_def = trait_;
             insert_trait(trait_def);
         }
 
@@ -366,7 +368,7 @@ pub enum MethodSelectionError<'db> {
 #[derive(Default)]
 struct AssembledCandidates<'db> {
     inherent_methods: FxHashSet<CallableDef<'db>>,
-    traits: IndexSet<(TraitInstId<'db>, TraitMethod<'db>)>,
+    traits: IndexSet<(TraitInstId<'db>, CallableDef<'db>)>,
 }
 
 impl<'db> AssembledCandidates<'db> {

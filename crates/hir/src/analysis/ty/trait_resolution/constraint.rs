@@ -11,7 +11,7 @@ use crate::analysis::{
     ty::{
         adt_def::AdtDef,
         binder::Binder,
-        trait_def::{TraitDef, TraitInstId},
+        trait_def::TraitInstId,
         trait_lower::{lower_impl_trait, lower_trait_ref},
         trait_resolution::PredicateListId,
         ty_def::{TyBase, TyData, TyId, TyVarSort},
@@ -55,11 +55,11 @@ pub(crate) fn ty_constraints<'db>(
 #[salsa::tracked(return_ref)]
 pub(crate) fn collect_super_traits<'db>(
     db: &'db dyn HirAnalysisDb,
-    trait_: TraitDef<'db>,
+    trait_: Trait<'db>,
 ) -> IndexSet<Binder<TraitInstId<'db>>> {
-    let hir_trait = trait_.trait_(db);
+    let hir_trait = trait_;
     let self_param = trait_.self_param(db);
-    let scope = trait_.trait_(db).scope();
+    let scope = trait_.scope();
 
     // Use the trait's own constraints as assumptions when lowering super traits
     let assumptions = collect_constraints(db, hir_trait.into()).instantiate_identity();
@@ -88,16 +88,16 @@ pub(crate) fn collect_super_traits<'db>(
 #[salsa::tracked(return_ref)]
 pub fn super_trait_cycle<'db>(
     db: &'db dyn HirAnalysisDb,
-    trait_: TraitDef<'db>,
-) -> Option<Vec<TraitDef<'db>>> {
+    trait_: Trait<'db>,
+) -> Option<Vec<Trait<'db>>> {
     super_trait_cycle_impl(db, trait_, &[])
 }
 
 pub fn super_trait_cycle_impl<'db>(
     db: &'db dyn HirAnalysisDb,
-    trait_: TraitDef<'db>,
-    chain: &[TraitDef<'db>],
-) -> Option<Vec<TraitDef<'db>>> {
+    trait_: Trait<'db>,
+    chain: &[Trait<'db>],
+) -> Option<Vec<Trait<'db>>> {
     if chain.contains(&trait_) {
         return Some(chain.to_vec());
     }

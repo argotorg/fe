@@ -5,7 +5,7 @@ use super::{
     diagnostics::{ImplDiag, TyDiagCollection},
     fold::{AssocTySubst, TyFoldable},
     normalize::normalize_ty,
-    trait_def::{TraitInstId, TraitMethod},
+    trait_def::TraitInstId,
     trait_resolution::{
         GoalSatisfiability, constraint::collect_func_def_constraints, is_goal_satisfiable,
     },
@@ -41,25 +41,25 @@ use crate::hir_def::CallableDef;
 pub(super) fn compare_impl_method<'db>(
     db: &'db dyn HirAnalysisDb,
     impl_m: CallableDef<'db>,
-    trait_m: TraitMethod<'db>,
+    trait_m: CallableDef<'db>,
     trait_inst: TraitInstId<'db>,
     sink: &mut Vec<TyDiagCollection<'db>>,
 ) {
-    if !compare_generic_param_num(db, impl_m, trait_m.0, sink) {
+    if !compare_generic_param_num(db, impl_m, trait_m, sink) {
         return;
     }
 
-    if !compare_generic_param_kind(db, impl_m, trait_m.0, sink) {
+    if !compare_generic_param_kind(db, impl_m, trait_m, sink) {
         return;
     }
 
-    if !compare_arity(db, impl_m, trait_m.0, sink) {
+    if !compare_arity(db, impl_m, trait_m, sink) {
         return;
     }
 
     // Compare the argument labels, argument types, and return type of the impl
     // method with the trait method.
-    let mut err = !compare_arg_label(db, impl_m, trait_m.0, sink);
+    let mut err = !compare_arg_label(db, impl_m, trait_m, sink);
 
     let map_to_impl: Vec<_> = trait_inst
         .args(db)
@@ -67,12 +67,12 @@ pub(super) fn compare_impl_method<'db>(
         .chain(impl_m.explicit_params(db).iter())
         .copied()
         .collect();
-    err |= !compare_ty(db, impl_m, trait_m.0, &map_to_impl, trait_inst, sink);
+    err |= !compare_ty(db, impl_m, trait_m, &map_to_impl, trait_inst, sink);
     if err {
         return;
     }
 
-    compare_constraints(db, impl_m, trait_m.0, &map_to_impl, sink);
+    compare_constraints(db, impl_m, trait_m, &map_to_impl, sink);
 }
 
 /// Checks if the number of generic parameters of the implemented method is the

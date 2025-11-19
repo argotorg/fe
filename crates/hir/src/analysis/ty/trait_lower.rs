@@ -12,7 +12,7 @@ use super::{
     binder::Binder,
     const_ty::ConstTyId,
     fold::{TyFoldable, TyFolder},
-    trait_def::{ImplementorView, TraitDef, TraitInstId, does_impl_trait_conflict},
+    trait_def::{ImplementorView, TraitInstId, does_impl_trait_conflict},
     trait_resolution::PredicateListId,
     ty_def::{InvalidCause, TyId},
     ty_lower::lower_hir_ty,
@@ -27,12 +27,7 @@ use crate::analysis::{
 };
 use crate::hir_def::CallableDef;
 
-type TraitImplTable<'db> = FxHashMap<TraitDef<'db>, Vec<Binder<ImplementorView<'db>>>>;
-
-#[salsa::tracked]
-pub(crate) fn lower_trait<'db>(db: &'db dyn HirAnalysisDb, trait_: Trait<'db>) -> TraitDef<'db> {
-    TraitDef::new(db, trait_)
-}
+type TraitImplTable<'db> = FxHashMap<Trait<'db>, Vec<Binder<ImplementorView<'db>>>>;
 
 /// Collect all trait implementors in the ingot.
 /// The returned table doesn't contain the const(external) ingot
@@ -121,7 +116,7 @@ pub(crate) fn lower_trait_ref<'db>(
                 .iter_mut()
                 .for_each(|(_, ty)| *ty = (*ty).fold_with(db, &mut folder));
 
-            Ok(TraitInstId::new(db, t.def(db), args, assoc_bindings))
+            Ok(TraitInstId::new(db, t, args, assoc_bindings))
         }
         Ok(res) => Err(TraitRefLowerError::InvalidDomain(res)),
         Err(e) => Err(TraitRefLowerError::PathResError(e)),
@@ -192,7 +187,7 @@ pub(crate) fn lower_trait_ref_with_owner_self<'db>(
                 .iter_mut()
                 .for_each(|(_, ty)| *ty = (*ty).fold_with(db, &mut folder_bindings));
 
-            Ok(TraitInstId::new(db, t.def(db), args, assoc_bindings))
+            Ok(TraitInstId::new(db, t, args, assoc_bindings))
         }
         Ok(res) => Err(TraitRefLowerError::InvalidDomain(res)),
         Err(e) => Err(TraitRefLowerError::PathResError(e)),
@@ -223,7 +218,6 @@ pub(crate) fn lower_trait_ref_impl<'db>(
     assumptions: PredicateListId<'db>,
     t: Trait<'db>,
 ) -> Result<TraitInstId<'db>, TraitArgError<'db>> {
-    let trait_def = lower_trait(db, t);
     let trait_params: &[TyId<'db>] = t.params(db);
     let args = path.generic_args(db).data(db);
 
@@ -311,7 +305,7 @@ pub(crate) fn lower_trait_ref_impl<'db>(
         })
         .collect();
 
-    Ok(TraitInstId::new(db, trait_def, final_args, assoc_bindings))
+    Ok(TraitInstId::new(db, t, final_args, assoc_bindings))
 }
 
 #[salsa::tracked(return_ref)]

@@ -30,7 +30,6 @@ use crate::analysis::{
     HirAnalysisDb,
     ty::{
         trait_lower::collect_trait_impls, trait_resolution::constraint::super_trait_cycle,
-        ty_lower::collect_generic_params,
     },
 };
 use crate::hir_def::CallableDef;
@@ -184,7 +183,7 @@ pub(crate) fn impls_for_ty<'db>(
 #[derive(Debug, PartialEq, Eq, Clone, Update)]
 pub(crate) struct TraitEnv<'db> {
     /// Implementors grouped by trait definition.
-    pub(super) impls: FxHashMap<TraitDef<'db>, Vec<Binder<ImplementorView<'db>>>>,
+    pub(super) impls: FxHashMap<Trait<'db>, Vec<Binder<ImplementorView<'db>>>>,
 
     /// This maintains a mapping from the base type to the implementors.
     ty_to_implementors: FxHashMap<Binder<TyId<'db>>, Vec<Binder<ImplementorView<'db>>>>,
@@ -194,7 +193,7 @@ pub(crate) struct TraitEnv<'db> {
 
 impl<'db> TraitEnv<'db> {
     fn collect(db: &'db dyn HirAnalysisDb, ingot: Ingot<'db>) -> Self {
-        let mut impls: FxHashMap<TraitDef<'db>, Vec<Binder<ImplementorView<'db>>>> =
+        let mut impls: FxHashMap<Trait<'db>, Vec<Binder<ImplementorView<'db>>>> =
             FxHashMap::default();
         let mut ty_to_implementors: FxHashMap<Binder<TyId>, Vec<Binder<ImplementorView<'db>>>> =
             FxHashMap::default();
@@ -261,7 +260,7 @@ impl<'db> ImplementorView<'db> {
     }
 
     /// Trait definition implemented by this impl.
-    pub(crate) fn trait_def(self, db: &'db dyn HirAnalysisDb) -> TraitDef<'db> {
+    pub(crate) fn trait_def(self, db: &'db dyn HirAnalysisDb) -> Trait<'db> {
         self.trait_(db).def(db)
     }
 
@@ -337,7 +336,7 @@ pub(super) fn does_impl_trait_conflict<'db>(
 #[salsa::interned]
 #[derive(Debug)]
 pub struct TraitInstId<'db> {
-    pub def: TraitDef<'db>,
+    pub def: Trait<'db>,
     /// Regular type and const parameters: [Self, ExplicitTypeParam1, ..., ExplicitConstParamN]
     #[return_ref]
     pub args: Vec<TyId<'db>>,
@@ -350,7 +349,7 @@ pub struct TraitInstId<'db> {
 impl<'db> TraitInstId<'db> {
     pub fn with_fresh_vars(
         db: &'db dyn HirAnalysisDb,
-        def: TraitDef<'db>,
+        def: Trait<'db>,
         table: &mut UnificationTable<'db>,
     ) -> Self {
         let args = def
@@ -372,7 +371,7 @@ impl<'db> TraitInstId<'db> {
         if let Some(ty) = self.assoc_type_bindings(db).get(&name) {
             return Some(*ty);
         }
-        if self.def(db).trait_(db).assoc_ty(db, name).is_some() {
+        if self.def(db).assoc_ty(db, name).is_some() {
             return Some(TyId::assoc_ty(db, self, name));
         }
         None
@@ -384,7 +383,13 @@ impl<'db> TraitInstId<'db> {
             let self_ty = self.self_ty(db);
             format! {"{}: {}", self_ty.pretty_print(db), inst}
         } else {
-            let mut s = self.def(db).name(db).unwrap_or("<unknown>").to_string();
+            let mut s = self
+                .def(db)
+                .name(db)
+                .to_opt()
+                .map(|n| n.data(db).as_str())
+                .unwrap_or("<unknown>")
+                .to_string();
 
             let mut args = self.args(db).iter().map(|ty| ty.pretty_print(db));
             // Skip the first type parameter since it's the implementor type.
@@ -463,80 +468,9 @@ impl<'db> TraitInstId<'db> {
 }
 
 /// Represents a trait definition.
-#[salsa::tracked]
-#[derive(Debug)]
-pub struct TraitDef<'db> {
-    pub trait_: Trait<'db>,
-}
+// (TraitDef struct and impl removed)
 
-#[salsa::tracked]
-impl<'db> TraitDef<'db> {
-    pub fn methods(self, db: &'db dyn HirAnalysisDb) -> IndexMap<IdentId<'db>, TraitMethod<'db>> {
-        self.trait_(db)
-            .method_defs(db)
-            .iter()
-            .map(|(id, def)| (*id, TraitMethod(*def)))
-            .collect()
-    }
-
-    pub fn params(self, db: &'db dyn HirAnalysisDb) -> &'db [TyId<'db>] {
-        self.trait_(db).params(db)
-    }
-
-    pub fn param_set(self, db: &'db dyn HirAnalysisDb) -> GenericParamTypeSet<'db> {
-        self.trait_(db).param_set(db)
-    }
-
-    pub fn self_param(self, db: &'db dyn HirAnalysisDb) -> TyId<'db> {
-        self.trait_(db).self_param(db)
-    }
-
-    pub fn original_params(self, db: &'db dyn HirAnalysisDb) -> &'db [TyId<'db>] {
-        self.trait_(db).original_params(db)
-    }
-}
-
-#[derive(Debug, PartialEq, Eq, Clone, Copy, Hash, salsa::Update)]
-pub struct TraitMethod<'db>(pub CallableDef<'db>);
-
-impl TraitMethod<'_> {
-    pub fn has_default_impl(self, db: &dyn HirAnalysisDb) -> bool {
-        self.0.has_body(db)
-    }
-}
-
-impl<'db> TraitDef<'db> {
-    /// Returns the type kind that implementor type must have.
-    pub(crate) fn expected_implementor_kind(self, db: &'db dyn HirAnalysisDb) -> &'db Kind {
-        self.self_param(db).kind(db)
-    }
-
-    /// Returns `ingot` in which this trait is defined.
-    pub(crate) fn ingot(self, db: &'db dyn HirAnalysisDb) -> Ingot<'db> {
-        self.trait_(db).top_mod(db).ingot(db)
-    }
-
-    pub fn super_traits(
-        self,
-        db: &'db dyn HirAnalysisDb,
-    ) -> &'db IndexSet<Binder<TraitInstId<'db>>> {
-        use std::sync::OnceLock;
-        static EMPTY: OnceLock<IndexSet<Binder<TraitInstId>>> = OnceLock::new();
-
-        if super_trait_cycle(db, self).is_some() {
-            EMPTY.get_or_init(IndexSet::new)
-        } else {
-            collect_super_traits(db, self)
-        }
-    }
-
-    fn name(self, db: &'db dyn HirAnalysisDb) -> Option<&'db str> {
-        self.trait_(db)
-            .name(db)
-            .to_opt()
-            .map(|name| name.data(db).as_str())
-    }
-}
+// (TraitMethod struct and impl removed)
 
 fn ingot_trait_env_cycle_initial<'db>(
     _db: &'db dyn HirAnalysisDb,

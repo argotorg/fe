@@ -19,7 +19,6 @@ use crate::analysis::ty::{
     ty_check::callable::Callable,
     ty_def::{TyBase, TyData},
 };
-use crate::analysis::ty::{trait_def::TraitDef, trait_lower::lower_trait};
 use crate::analysis::{
     HirAnalysisDb, Spanned,
     name_resolution::{
@@ -705,35 +704,20 @@ impl<'db> TyChecker<'db> {
         ExprProp::new(ty, true)
     }
 
-    /// Resolve a trait path like `core::ops::Index` by using the path's parent
-    /// as the module and the last segment as the trait name. Returns a base
-    /// trait instance whose generic args are the trait's own params
-    /// (placeholders), avoiding the need for explicit non-Self args.
-    fn resolve_core_trait(&self, trait_path: PathId<'db>) -> Option<TraitDef<'db>> {
-        let scope = self.env.scope();
-        let assumptions = self.env.assumptions();
-        let mut module_path = trait_path.parent(self.db)?;
+    fn resolve_core_trait(&self, trait_path: PathId<'db>) -> Option<crate::core::hir_def::Trait<'db>> {
+        let res = resolve_path(
+            self.db,
+            trait_path,
+            self.env.scope(),
+            self.env.assumptions(),
+            false,
+        )
+        .ok()?;
 
-        // If we are inside the core ingot, replace `core` with `ingot` in the trait path.
-        let ingot = self.env.body().top_mod(self.db).ingot(self.db);
-        if ingot.kind(self.db) == IngotKind::Core && trait_path.is_core_lib_path(self.db) {
-            module_path = module_path.replace_root(
-                IdentId::make_core(self.db),
-                IdentId::make_ingot(self.db),
-                self.db,
-            );
+        if let PathRes::Trait(trait_) = res {
+            return Some(trait_);
         }
-        let trait_name = trait_path.ident(self.db).to_opt()?;
-        let Ok(PathRes::Mod(mod_scope)) =
-            resolve_path(self.db, module_path, scope, assumptions, false)
-        else {
-            panic!("failed to resolve `{}`", module_path.pretty_print(self.db));
-        };
-
-        let bucket =
-            resolve_ident_to_bucket(self.db, PathId::from_ident(self.db, trait_name), mod_scope);
-        let nameres = bucket.pick(NameDomain::TYPE).as_ref().ok()?;
-        Some(lower_trait(self.db, nameres.trait_()?))
+        None
     }
 
     fn check_array(
@@ -1016,13 +1000,18 @@ impl<'db> TyChecker<'db> {
                 }
 
                 let method_ident = op.trait_method(self.db);
-                let trait_method = *trait_def.methods(self.db).get(&method_ident).unwrap();
+                let trait_method = *trait_def.method_defs(self.db).get(&method_ident).unwrap();
 
                 let mut viable: Vec<(TyId<'db>, TraitInstId<'db>, TyId<'db>)> = Vec::new();
                 for inst in insts.iter().copied() {
                     let snapshot = self.table.snapshot();
-                    let candidate_func_ty =
-                        trait_method.instantiate_with_inst(&mut self.table, lhs_ty, inst);
+                    let candidate_func_ty = super::instantiate_trait_method(
+                        self.db,
+                        trait_method,
+                        &mut self.table,
+                        lhs_ty,
+                        inst,
+                    );
                     let (base, gen_args) = candidate_func_ty.decompose_ty_app(self.db);
                     let expected_rhs =
                         if let TyData::TyBase(TyBase::Func(func_def)) = base.data(self.db) {

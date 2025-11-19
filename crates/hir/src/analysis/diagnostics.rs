@@ -11,7 +11,6 @@ use crate::analysis::{
             BodyDiag, DefConflictError, FuncBodyDiag, ImplDiag, TraitConstraintDiag,
             TraitLowerDiag, TyDiagCollection, TyLowerDiag,
         },
-        trait_def::TraitDef,
         ty_check::RecordLike,
         ty_def::{TyData, TyVarSort},
     },
@@ -200,7 +199,7 @@ impl DiagnosticVoucher for PathResDiag<'_> {
                         RecordLike::Type(*ty).kind_name(db),
                     ),
                     Either::Right(trait_) => {
-                        let name = trait_.def(db).trait_(db).name(db).unwrap().data(db);
+                        let name = trait_.def(db).name(db).unwrap().data(db);
                         (name, None, "trait".to_string())
                     }
                 };
@@ -311,7 +310,7 @@ impl DiagnosticVoucher for PathResDiag<'_> {
                 }];
 
                 for (trait_inst, ty) in candidates {
-                    let trait_def = trait_inst.def(db).trait_(db);
+                    let trait_def = trait_inst.def(db);
                     let trait_name = trait_def.name(db).unwrap().data(db);
                     let span = trait_def.span().name().resolve(db);
 
@@ -1980,7 +1979,6 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                     sorted.sort_by(|a, b| {
                         let na: String = a
                             .def(db)
-                            .trait_(db)
                             .name(db)
                             .to_opt()
                             .map(|id| id.data(db).to_string())
@@ -1993,7 +1991,6 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                             });
                         let nb: String = b
                             .def(db)
-                            .trait_(db)
                             .name(db)
                             .to_opt()
                             .map(|id| id.data(db).to_string())

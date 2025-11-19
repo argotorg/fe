@@ -24,7 +24,7 @@ use salsa::Update;
 use super::{
     diagnostics::{BodyDiag, FuncBodyDiag, TyDiagCollection, TyLowerDiag},
     fold::TyFoldable,
-    trait_def::{TraitInstId, TraitMethod},
+    trait_def::TraitInstId,
     trait_resolution::PredicateListId,
     ty_def::{InvalidCause, Kind, TyId, TyVarSort},
     ty_lower::lower_hir_ty,
@@ -355,26 +355,24 @@ impl Typeable<'_> {
     }
 }
 
-impl<'db> TraitMethod<'db> {
-    pub fn instantiate_with_inst(
-        self,
-        table: &mut UnificationTable<'db>,
-        receiver_ty: TyId<'db>,
-        inst: TraitInstId<'db>,
-    ) -> TyId<'db> {
-        let db = table.db;
-        let ty = TyId::foldl(db, TyId::func(db, self.0), inst.args(db));
+pub fn instantiate_trait_method<'db>(
+    db: &'db dyn HirAnalysisDb,
+    method: crate::hir_def::CallableDef<'db>,
+    table: &mut UnificationTable<'db>,
+    receiver_ty: TyId<'db>,
+    inst: TraitInstId<'db>,
+) -> TyId<'db> {
+    let ty = TyId::foldl(db, TyId::func(db, method), inst.args(db));
 
-        let inst_self = table.instantiate_to_term(inst.self_ty(db));
-        table.unify(inst_self, receiver_ty).unwrap();
+    let inst_self = table.instantiate_to_term(inst.self_ty(db));
+    table.unify(inst_self, receiver_ty).unwrap();
 
-        let instantiated = table.instantiate_to_term(ty);
+    let instantiated = table.instantiate_to_term(ty);
 
-        // Apply associated type substitutions from the trait instance
-        use crate::analysis::ty::fold::{AssocTySubst, TyFoldable};
-        let mut subst = AssocTySubst::new(inst);
-        instantiated.fold_with(db, &mut subst)
-    }
+    // Apply associated type substitutions from the trait instance
+    use crate::analysis::ty::fold::{AssocTySubst, TyFoldable};
+    let mut subst = AssocTySubst::new(inst);
+    instantiated.fold_with(db, &mut subst)
 }
 
 struct TyCheckerFinalizer<'db> {

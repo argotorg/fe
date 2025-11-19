@@ -1,6 +1,6 @@
 use super::{
     def_analysis::AdtCycleMember,
-    trait_def::{TraitDef, TraitInstId},
+    trait_def::TraitInstId,
     ty_check::{RecordLike, TraitOps},
     ty_def::{Kind, TyId},
 };
@@ -466,14 +466,12 @@ impl<'db> BodyDiag<'db> {
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Update)]
 pub enum TraitLowerDiag<'db> {
-    ExternalTraitForExternalType(ImplTrait<'db>),
-
     ConflictTraitImpl {
         primary: ImplTrait<'db>,
         conflict_with: ImplTrait<'db>,
     },
-
-    CyclicSuperTraits(Vec<TraitDef<'db>>),
+    ExternalTraitForExternalType(ImplTrait<'db>),
+    CyclicSuperTraits(Vec<Trait<'db>>),
 }
 
 impl TraitLowerDiag<'_> {

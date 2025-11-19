@@ -50,12 +50,13 @@ use crate::hir_def::*;
 // When adding real methods, prefer calling internal lowering/normalization here
 // rather than exposing raw syntax.
 use crate::analysis::ty::adt_def::{AdtDef, AdtField, AdtRef};
-use crate::analysis::ty::trait_def::{TraitDef, TraitInstId};
+use crate::analysis::ty::trait_def::TraitInstId;
 use crate::analysis::ty::trait_lower::{
-    TraitRefLowerError, lower_trait, lower_trait_ref, lower_trait_ref_with_owner_self,
+    TraitRefLowerError, lower_trait_ref, lower_trait_ref_with_owner_self,
 };
 use crate::analysis::ty::trait_resolution::constraint::{
     collect_adt_constraints, collect_constraints, collect_func_def_constraints,
+    collect_super_traits,
 };
 use crate::analysis::ty::ty_def::TyData;
 use crate::analysis::ty::ty_lower::{GenericParamTypeSet, collect_generic_params};
@@ -735,6 +736,10 @@ impl<'db> Trait<'db> {
         methods
     }
 
+    pub fn ingot(self, db: &'db dyn HirDb) -> common::ingot::Ingot<'db> {
+        self.top_mod(db).ingot(db)
+    }
+
     /// Iterate associated types as contextual views.
     pub fn assoc_types(
         self,
@@ -750,7 +755,7 @@ impl<'db> Trait<'db> {
         self,
         db: &'db dyn HirAnalysisDb,
     ) -> impl Iterator<Item = Binder<TraitInstId<'db>>> + 'db {
-        TraitDef::new(db, self).super_traits(db).iter().copied()
+        collect_super_traits(db, self).iter().copied()
     }
 
     /// Iterate declared super-trait references as contextual views.
@@ -1100,7 +1105,7 @@ impl<'db> ImplTrait<'db> {
     }
 
     /// Trait definition implemented by this `impl trait` block, if well-formed.
-    pub fn trait_def(self, db: &'db dyn HirAnalysisDb) -> Option<TraitDef<'db>> {
+    pub fn trait_def(self, db: &'db dyn HirAnalysisDb) -> Option<Trait<'db>> {
         self.trait_inst(db).map(|inst| inst.def(db))
     }
 

@@ -207,7 +207,8 @@ fn analyze_impl_trait_specific_error<'db>(
     let expected_kind = implementor
         .instantiate_identity()
         .trait_def(db)
-        .expected_implementor_kind(db);
+        .self_param(db)
+        .kind(db);
     if ty.kind(db) != expected_kind {
         diags.push(
             TraitConstraintDiag::TraitArgKindMismatch {
@@ -238,11 +239,11 @@ fn analyze_impl_trait_method<'db>(
 ) -> Vec<TyDiagCollection<'db>> {
     let mut diags = vec![];
     let impl_methods = implementor.methods(db);
-    let hir_trait = implementor.trait_def(db).trait_(db);
-    let trait_methods = implementor.trait_def(db).methods(db);
+    let hir_trait = implementor.trait_def(db);
+    let trait_methods = implementor.trait_def(db).method_defs(db);
     let mut required_methods: IndexSet<_> = trait_methods
         .iter()
-        .filter_map(|(name, &trait_method)| (!trait_method.has_default_impl(db)).then_some(*name))
+        .filter_map(|(name, &trait_method)| (!trait_method.has_body(db)).then_some(*name))
         .collect();
 
     for (name, impl_m) in impl_methods {
