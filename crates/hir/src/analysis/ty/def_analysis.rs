@@ -6,7 +6,8 @@ use rustc_hash::FxHashMap;
 use smallvec1::SmallVec;
 
 use crate::analysis::HirAnalysisDb;
-use crate::hir_def::{Func, GenericParamOwner, IdentId, Impl as HirImpl, ImplTrait, Trait};
+use crate::core::semantic::Diagnosable;
+use crate::hir_def::{Func, IdentId, Impl as HirImpl, ImplTrait, Trait};
 
 use super::{
     adt_def::{AdtDef, AdtRef},
@@ -32,7 +33,7 @@ pub fn analyze_trait<'db>(
     db: &'db dyn HirAnalysisDb,
     trait_: Trait<'db>,
 ) -> Vec<TyDiagCollection<'db>> {
-    trait_.analyze(db)
+    trait_.diags(db)
 }
 
 /// Analyze inherent impl via semantic views.
@@ -41,7 +42,7 @@ pub fn analyze_impl<'db>(
     db: &'db dyn HirAnalysisDb,
     impl_: HirImpl<'db>,
 ) -> Vec<TyDiagCollection<'db>> {
-    impl_.analyze(db)
+    impl_.diags(db)
 }
 
 /// Analyze function definition via semantic views + generic-param diags.
@@ -50,15 +51,7 @@ pub fn analyze_func<'db>(
     db: &'db dyn HirAnalysisDb,
     func: Func<'db>,
 ) -> Vec<TyDiagCollection<'db>> {
-    let mut diags = func.analyze(db);
-    let owner = GenericParamOwner::Func(func);
-    diags.extend(owner.diags_const_param_types(db));
-    diags.extend(owner.diags_params_defined_in_parent(db));
-    diags.extend(owner.diags_kind_bounds(db));
-    diags.extend(owner.diags_trait_bounds(db));
-    diags.extend(owner.diags_non_trailing_defaults(db));
-    diags.extend(owner.diags_default_forward_refs(db));
-    diags
+    func.diags(db)
 }
 
 /// Analyze trait impl definition. Keeps early error handling and method conformance
@@ -68,35 +61,7 @@ pub fn analyze_impl_trait<'db>(
     db: &'db dyn HirAnalysisDb,
     impl_trait: ImplTrait<'db>,
 ) -> Vec<TyDiagCollection<'db>> {
-    // Early path/domain/WF checks; bail out on errors to avoid noisy follow-ups
-    let (implementor_opt, validity_diags) = impl_trait.diags_implementor_validity(db);
-    
-    let Some(implementor) = implementor_opt else {
-        return validity_diags;
-    };
-
-    let mut diags = validity_diags;
-
-    // Method conformance diagnostics
-    diags.extend(impl_trait.diags_method_conformance(db, implementor));
-
-    // Trait-ref WF and super-trait constraints
-    diags.extend(impl_trait.diags_trait_ref_and_wf(db));
-
-    // Associated types diagnostics (WF + presence + bounds)
-    diags.extend(impl_trait.diags_assoc_types_wf(db));
-    diags.extend(impl_trait.diags_missing_assoc_types(db));
-    diags.extend(impl_trait.diags_assoc_types_bounds(db));
-
-    // Generic parameter diagnostics
-    let owner = GenericParamOwner::ImplTrait(impl_trait);
-    diags.extend(owner.diags_params_defined_in_parent(db));
-    diags.extend(owner.diags_kind_bounds(db));
-    diags.extend(owner.diags_non_trailing_defaults(db));
-    diags.extend(owner.diags_default_forward_refs(db));
-    diags.extend(owner.diags_trait_bounds(db));
-
-    diags
+    impl_trait.diags(db)
 }
 
 /// Shared helper for duplicate name diagnostics used by semantic views.

@@ -80,6 +80,12 @@ pub mod diagnostics;
 // Note: generic trait-ref diagnostics are handled via context-rooted views (e.g.,
 // WherePredicateBoundView and SuperTraitRefView). Avoid subject-taking public APIs.
 
+/// Unified “pull” diagnostics surface for HIR items and views.
+pub trait Diagnosable<'db> {
+    type Diagnostic;
+    fn diags(self, db: &'db dyn HirAnalysisDb) -> Vec<Self::Diagnostic>;
+}
+
 /// Core-exposed entry point for alias lowering. Reads the HIR type_ref (core-visible)
 /// and delegates to the analysis helper to keep visibility tight without shims.
 pub(crate) fn lower_type_alias_body<'db>(
@@ -126,12 +132,12 @@ impl<'db> Mod<'db> {
 
 impl<'db> Func<'db> {
     /// Semantic predicate list (assumptions) for this function.
-    pub fn assumptions(self, db: &'db dyn HirAnalysisDb) -> PredicateListId<'db> {
+    pub(crate) fn assumptions(self, db: &'db dyn HirAnalysisDb) -> PredicateListId<'db> {
         constraints_for(db, self.into())
     }
 
     /// Semantic predicate list extended with inherited trait bounds (super traits, assoc types).
-    pub fn assumptions_with_bounds(self, db: &'db dyn HirAnalysisDb) -> PredicateListId<'db> {
+    pub(crate) fn assumptions_with_bounds(self, db: &'db dyn HirAnalysisDb) -> PredicateListId<'db> {
         self.assumptions(db).extend_all_bounds(db)
     }
 
@@ -190,6 +196,46 @@ impl<'db> Func<'db> {
             ScopeId::Item(ItemKind::Impl(im)) => Some(im.ty(db)),
             _ => None,
         }
+    }
+}
+
+impl<'db> Diagnosable<'db> for Func<'db> {
+    type Diagnostic = TyDiagCollection<'db>;
+
+    fn diags(self, db: &'db dyn HirAnalysisDb) -> Vec<Self::Diagnostic> {
+        let mut diags = self.analyze(db);
+        let owner = GenericParamOwner::Func(self);
+        diags.extend(owner.diags_const_param_types(db));
+        diags.extend(owner.diags_params_defined_in_parent(db));
+        diags.extend(owner.diags_kind_bounds(db));
+        diags.extend(owner.diags_trait_bounds(db));
+        diags.extend(owner.diags_non_trailing_defaults(db));
+        diags.extend(owner.diags_default_forward_refs(db));
+        diags
+    }
+}
+
+impl<'db> Diagnosable<'db> for Trait<'db> {
+    type Diagnostic = TyDiagCollection<'db>;
+
+    fn diags(self, db: &'db dyn HirAnalysisDb) -> Vec<Self::Diagnostic> {
+        self.analyze(db)
+    }
+}
+
+impl<'db> Diagnosable<'db> for Impl<'db> {
+    type Diagnostic = TyDiagCollection<'db>;
+
+    fn diags(self, db: &'db dyn HirAnalysisDb) -> Vec<Self::Diagnostic> {
+        self.analyze(db)
+    }
+}
+
+impl<'db> Diagnosable<'db> for ImplTrait<'db> {
+    type Diagnostic = TyDiagCollection<'db>;
+
+    fn diags(self, db: &'db dyn HirAnalysisDb) -> Vec<Self::Diagnostic> {
+        self.analyze(db)
     }
 }
 
@@ -539,9 +585,6 @@ impl<'db> WhereClauseView<'db> {
 }
 
 impl<'db> WherePredicateView<'db> {
-    /// Crate-local accessor for the underlying HIR predicate.
-    /// Keep call sites inside this module; external users should rely on the
-    /// higher-level semantic helpers on this view instead.
     fn hir_pred(self, db: &'db dyn HirDb) -> &'db WherePredicate<'db> {
         &self.clause.id.data(db)[self.idx]
     }
@@ -574,9 +617,6 @@ impl<'db> WherePredicateView<'db> {
     }
 
     /// Lowered kind bound sourced from the where-clause, if present.
-    ///
-    /// This inspects HIR kind-bounds on the predicate and maps them into the
-    /// semantic `Kind` domain using a local lowering helper.
     pub fn kind(self, db: &'db dyn HirAnalysisDb) -> Option<Kind> {
         use crate::hir_def::Partial;
         for b in &self.hir_pred(db).bounds {
@@ -1209,78 +1249,35 @@ impl<'db> ImplTrait<'db> {
     /// - Generic parameter diagnostics (duplicates, defined-in-parent, kind/trait bounds,
     ///   non-trailing defaults, default forward references)
     pub fn analyze(self, db: &'db dyn HirAnalysisDb) -> Vec<TyDiagCollection<'db>> {
-        let mut out = Vec::new();
-
-        // Early trait-ref presence check: if there is no trait reference at
-        // all, we do not report diagnostics from this entrypoint.
-        let Some(trait_ref) = self.trait_ref(db).to_opt() else {
-            return out;
+        // Early path/domain/WF checks; bail out on errors to avoid noisy follow-ups
+        let (implementor_opt, validity_diags) = self.diags_implementor_validity(db);
+        let Some(implementor) = implementor_opt else {
+            return validity_diags;
         };
 
-        // Implementor type diagnostics at the type span, keeping the existing
-        // "parse error -> early return" behavior.
-        let ty = self.ty(db);
-        if matches!(ty.data(db), TyData::Invalid(InvalidCause::ParseError)) {
-            return out;
-        }
-        if let Some(diag) =
-            crate::analysis::ty::ty_error::emit_invalid_ty_error(db, ty, self.span().ty().into())
-        {
-            out.push(diag);
-        }
-        if ty.has_invalid(db) {
-            return out;
-        }
+        let mut diags = validity_diags;
 
-        // Early trait-ref path/domain checks via the shared lowering helper.
-        use crate::analysis::name_resolution::{ExpectedPathKind, diagnostics::PathResDiag};
-        match self.trait_inst_result(db) {
-            Ok(_) => {}
-            Err(TraitRefLowerError::PathResError(e)) => {
-                if let Some(diag) = e.into_diag(
-                    db,
-                    trait_ref.path(db).unwrap(),
-                    self.span().trait_ref().path(),
-                    ExpectedPathKind::Trait,
-                ) {
-                    out.push(diag.into());
-                }
-                return out;
-            }
-            Err(TraitRefLowerError::InvalidDomain(res)) => {
-                out.push(
-                    PathResDiag::ExpectedTrait(
-                        self.span().trait_ref().path().into(),
-                        trait_ref.path(db).unwrap().ident(db).unwrap(),
-                        res.kind_name(),
-                    )
-                    .into(),
-                );
-                return out;
-            }
-            Err(TraitRefLowerError::Ignored) => {
-                // Either the trait-ref is intentionally ignored (e.g., for
-                // diagnostics reported elsewhere) or the ingot check failed.
-                // In both cases we return without emitting additional diags
-                // from this entrypoint.
-                return out;
-            }
-        }
+        // Method conformance diagnostics
+        diags.extend(self.diags_method_conformance(db, implementor));
 
         // Trait-ref WF and super-trait constraints
-        out.extend(self.diags_trait_ref_and_wf(db));
-        // Associated types (presence + bound satisfaction)
-        out.extend(self.diags_missing_assoc_types(db));
-        out.extend(self.diags_assoc_types_bounds(db));
+        diags.extend(self.diags_trait_ref_and_wf(db));
+
+        // Associated types diagnostics (WF + presence + bounds)
+        diags.extend(self.diags_assoc_types_wf(db));
+        diags.extend(self.diags_missing_assoc_types(db));
+        diags.extend(self.diags_assoc_types_bounds(db));
+
         // Generic parameter diagnostics
         let owner = GenericParamOwner::ImplTrait(self);
-        out.extend(owner.diags_params_defined_in_parent(db));
-        out.extend(owner.diags_check_duplicate_names(db));
-        out.extend(owner.diags_kind_bounds(db));
-        out.extend(owner.diags_non_trailing_defaults(db));
-        out.extend(owner.diags_default_forward_refs(db));
-        out.extend(owner.diags_trait_bounds(db));
-        out
+        diags.extend(owner.diags_params_defined_in_parent(db));
+        diags.extend(owner.diags_check_duplicate_names(db));
+        diags.extend(owner.diags_kind_bounds(db));
+        diags.extend(owner.diags_non_trailing_defaults(db));
+        diags.extend(owner.diags_default_forward_refs(db));
+        diags.extend(owner.diags_trait_bounds(db));
+
+        diags
     }
 }
 
