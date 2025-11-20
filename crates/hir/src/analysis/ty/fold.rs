@@ -4,7 +4,7 @@ use crate::core::hir_def::IdentId;
 use common::indexmap::{IndexMap, IndexSet};
 
 use super::{
-    trait_def::{ImplementorView, TraitInstId},
+    trait_def::{ImplementorId, TraitInstId},
     trait_resolution::PredicateListId,
     ty_check::ExprProp,
     ty_def::{TyData, TyId},
@@ -156,7 +156,7 @@ impl<'db> TyFoldable<'db> for TraitInstId<'db> {
     }
 }
 
-impl<'db> TyFoldable<'db> for ImplementorView<'db> {
+impl<'db> TyFoldable<'db> for ImplementorId<'db> {
     fn super_fold_with<F>(self, db: &'db dyn HirAnalysisDb, folder: &mut F) -> Self
     where
         F: TyFolder<'db>,
@@ -175,7 +175,7 @@ impl<'db> TyFoldable<'db> for ImplementorView<'db> {
             .map(|(ident, ty)| (*ident, ty.fold_with(db, folder)))
             .collect::<IndexMap<_, _>>();
 
-        ImplementorView::new(db, trait_inst, params, types, hir_impl_trait)
+        ImplementorId::new(db, trait_inst, params, types, hir_impl_trait)
     }
 }
 

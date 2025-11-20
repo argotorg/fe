@@ -45,7 +45,7 @@ pub(crate) fn impls_for_trait<'db>(
     db: &'db dyn HirAnalysisDb,
     ingot: Ingot<'db>,
     trait_: Canonical<TraitInstId<'db>>,
-) -> Vec<Binder<ImplementorView<'db>>> {
+) -> Vec<Binder<ImplementorId<'db>>> {
     let mut table = UnificationTable::new(db);
     let trait_ = trait_.extract_identity(&mut table);
 
@@ -73,7 +73,7 @@ pub(crate) fn impls_for_ty_with_constraints<'db>(
     ingot: Ingot<'db>,
     ty: Canonical<TyId<'db>>,
     assumptions: PredicateListId<'db>,
-) -> Vec<Binder<ImplementorView<'db>>> {
+) -> Vec<Binder<ImplementorId<'db>>> {
     let mut table = UnificationTable::new(db);
     let ty = ty.extract_identity(&mut table);
 
@@ -139,7 +139,7 @@ pub(crate) fn impls_for_ty<'db>(
     db: &'db dyn HirAnalysisDb,
     ingot: Ingot<'db>,
     ty: Canonical<TyId<'db>>,
-) -> Vec<Binder<ImplementorView<'db>>> {
+) -> Vec<Binder<ImplementorId<'db>>> {
     let mut table = UnificationTable::new(db);
     let ty = ty.extract_identity(&mut table);
 
@@ -182,19 +182,19 @@ pub(crate) fn impls_for_ty<'db>(
 #[derive(Debug, PartialEq, Eq, Clone, Update)]
 pub(crate) struct TraitEnv<'db> {
     /// Implementors grouped by trait definition.
-    pub(crate) impls: FxHashMap<Trait<'db>, Vec<Binder<ImplementorView<'db>>>>,
+    pub(crate) impls: FxHashMap<Trait<'db>, Vec<Binder<ImplementorId<'db>>>>,
 
     /// This maintains a mapping from the base type to the implementors.
-    ty_to_implementors: FxHashMap<Binder<TyId<'db>>, Vec<Binder<ImplementorView<'db>>>>,
+    ty_to_implementors: FxHashMap<Binder<TyId<'db>>, Vec<Binder<ImplementorId<'db>>>>,
 
     ingot: Ingot<'db>,
 }
 
 impl<'db> TraitEnv<'db> {
     fn collect(db: &'db dyn HirAnalysisDb, ingot: Ingot<'db>) -> Self {
-        let mut impls: FxHashMap<Trait<'db>, Vec<Binder<ImplementorView<'db>>>> =
+        let mut impls: FxHashMap<Trait<'db>, Vec<Binder<ImplementorId<'db>>>> =
             FxHashMap::default();
-        let mut ty_to_implementors: FxHashMap<Binder<TyId>, Vec<Binder<ImplementorView<'db>>>> =
+        let mut ty_to_implementors: FxHashMap<Binder<TyId>, Vec<Binder<ImplementorId<'db>>>> =
             FxHashMap::default();
 
         for impl_map in ingot
@@ -233,7 +233,7 @@ impl<'db> TraitEnv<'db> {
 /// `ImplTrait` item and its lowered trait instance.
 #[salsa::interned]
 #[derive(Debug)]
-pub(crate) struct ImplementorView<'db> {
+pub(crate) struct ImplementorId<'db> {
     /// The trait instance that this impl realizes.
     pub(crate) trait_: TraitInstId<'db>,
 
@@ -248,7 +248,7 @@ pub(crate) struct ImplementorView<'db> {
     pub(crate) hir_impl_trait: ImplTrait<'db>,
 }
 
-impl<'db> ImplementorView<'db> {
+impl<'db> ImplementorId<'db> {
     /// Associated type defined in this impl, if any.
     pub(crate) fn assoc_ty(
         self,
@@ -333,8 +333,8 @@ impl<'db> ImplementorView<'db> {
 /// - then check that the merged constraints are satisfiable.
 pub(crate) fn does_impl_trait_conflict<'db>(
     db: &'db dyn HirAnalysisDb,
-    a: Binder<ImplementorView<'db>>,
-    b: Binder<ImplementorView<'db>>,
+    a: Binder<ImplementorId<'db>>,
+    b: Binder<ImplementorId<'db>>,
 ) -> bool {
     let mut table = UnificationTable::new(db);
     let a = table.instantiate_with_fresh_vars(a);

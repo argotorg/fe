@@ -10,7 +10,7 @@ use num_bigint::BigUint;
 use super::{
     binder::Binder,
     fold::{TyFoldable, TyFolder},
-    trait_def::{ImplementorView, TraitInstId},
+    trait_def::{ImplementorId, TraitInstId},
     ty_def::{ApplicableTyProp, Kind, TyData, TyId, TyVar, TyVarSort, inference_keys},
 };
 use crate::analysis::{
@@ -492,7 +492,7 @@ impl<'db> Unifiable<'db> for TraitInstId<'db> {
     }
 }
 
-impl<'db> Unifiable<'db> for ImplementorView<'db> {
+impl<'db> Unifiable<'db> for ImplementorId<'db> {
     fn unify<U: UnificationStore<'db>>(
         self,
         table: &mut UnificationTableBase<'db, U>,

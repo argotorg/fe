@@ -3,7 +3,7 @@ use common::indexmap::IndexSet;
 use super::{
     adt_def::AdtDef,
     const_ty::{ConstTyData, ConstTyId},
-    trait_def::{ImplementorView, TraitInstId},
+    trait_def::{ImplementorId, TraitInstId},
     trait_resolution::PredicateListId,
     ty_check::ExprProp,
     ty_def::{AssocTy, InvalidCause, PrimTy, TyBase, TyData, TyFlags, TyId, TyParam, TyVar},
@@ -175,7 +175,7 @@ impl<'db> TyVisitable<'db> for TraitInstId<'db> {
     }
 }
 
-impl<'db> TyVisitable<'db> for ImplementorView<'db> {
+impl<'db> TyVisitable<'db> for ImplementorId<'db> {
     fn visit_with<V>(&self, visitor: &mut V)
     where
         V: TyVisitor<'db> + ?Sized,

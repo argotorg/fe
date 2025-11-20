@@ -27,7 +27,7 @@ use super::{
     WherePredicateView, constraints_for,
 };
 use crate::analysis::ty::binder::Binder;
-use crate::analysis::ty::trait_def::ImplementorView;
+use crate::analysis::ty::trait_def::ImplementorId;
 
 impl<'db> SuperTraitRefView<'db> {
     /// Diagnostics for this super-trait reference in its owner's context.
@@ -717,7 +717,7 @@ impl<'db> ImplTrait<'db> {
         self,
         db: &'db dyn HirAnalysisDb,
     ) -> (
-        Option<Binder<ImplementorView<'db>>>,
+        Option<Binder<ImplementorId<'db>>>,
         Vec<TyDiagCollection<'db>>,
     ) {
         use crate::analysis::name_resolution::{ExpectedPathKind, diagnostics::PathResDiag};
@@ -798,7 +798,7 @@ impl<'db> ImplTrait<'db> {
     pub(crate) fn diags_method_conformance(
         self,
         db: &'db dyn HirAnalysisDb,
-        implementor: Binder<ImplementorView<'db>>,
+        implementor: Binder<ImplementorId<'db>>,
     ) -> Vec<TyDiagCollection<'db>> {
         implementor.skip_binder().diags_method_conformance(db)
     }
@@ -909,8 +909,8 @@ impl<'db> ImplTrait<'db> {
         let trait_inst = implementor.trait_(db);
         let trait_def = implementor.trait_def(db);
 
-        let trait_constraints = collect_constraints(db, trait_def.into())
-            .instantiate(db, trait_inst.args(db));
+        let trait_constraints =
+            collect_constraints(db, trait_def.into()).instantiate(db, trait_inst.args(db));
 
         let assumptions = collect_constraints(db, self.into()).instantiate_identity();
         let ingot = self.top_mod(db).ingot(db);

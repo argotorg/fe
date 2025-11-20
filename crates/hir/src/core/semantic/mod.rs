@@ -51,7 +51,7 @@ use crate::hir_def::*;
 // rather than exposing raw syntax.
 use crate::analysis::ty::adt_def::{AdtDef, AdtField, AdtRef};
 use crate::analysis::ty::trait_def::{
-    ImplementorView, TraitInstId, does_impl_trait_conflict, ingot_trait_env,
+    ImplementorId, TraitInstId, does_impl_trait_conflict, ingot_trait_env,
 };
 use crate::analysis::ty::trait_lower::{
     TraitRefLowerError, lower_trait_ref, lower_trait_ref_with_owner_self,
@@ -287,11 +287,7 @@ impl<'db> CallableDef<'db> {
         }
     }
 
-    pub fn param_label_or_name(
-        self,
-        db: &'db dyn HirDb,
-        idx: usize,
-    ) -> Option<FuncParamName<'db>> {
+    pub fn param_label_or_name(self, db: &'db dyn HirDb, idx: usize) -> Option<FuncParamName<'db>> {
         match self {
             Self::Func(func) => func.param_label_or_name(db, idx),
             Self::VariantCtor(_) => None,
@@ -1027,7 +1023,7 @@ impl<'db> ImplTrait<'db> {
     pub(crate) fn lowered_implementor(
         self,
         db: &'db dyn HirAnalysisDb,
-    ) -> Result<Binder<ImplementorView<'db>>, ImplTraitLowerError<'db>> {
+    ) -> Result<Binder<ImplementorId<'db>>, ImplTraitLowerError<'db>> {
         // Early return if the implementor type is syntactically missing or invalid.
         if matches!(
             self.ty(db).data(db),
@@ -1049,8 +1045,7 @@ impl<'db> ImplTrait<'db> {
         // Build implementor view
         let params = self.impl_params(db);
         let types = self.assoc_type_bindings_for_trait_inst(db, trait_inst);
-        let implementor =
-            Binder::bind(ImplementorView::new(db, trait_inst, params, types, self));
+        let implementor = Binder::bind(ImplementorId::new(db, trait_inst, params, types, self));
 
         // Conflict check
         let trait_ = implementor.skip_binder().trait_(db);
@@ -1125,7 +1120,8 @@ impl<'db> ImplTrait<'db> {
         // only valid if it lives in the same ingot as either its
         // implementor type or the trait itself.
         let impl_trait_ingot = self.top_mod(db).ingot(db);
-        if Some(impl_trait_ingot) != ty.ingot(db) && impl_trait_ingot != trait_inst.def(db).ingot(db)
+        if Some(impl_trait_ingot) != ty.ingot(db)
+            && impl_trait_ingot != trait_inst.def(db).ingot(db)
         {
             return Err(TraitRefLowerError::Ignored);
         }

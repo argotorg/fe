@@ -12,7 +12,7 @@ use super::{
     binder::Binder,
     const_ty::ConstTyId,
     fold::{TyFoldable, TyFolder},
-    trait_def::{ImplementorView, TraitInstId, does_impl_trait_conflict},
+    trait_def::{ImplementorId, TraitInstId, does_impl_trait_conflict},
     trait_resolution::PredicateListId,
     ty_def::{InvalidCause, TyId},
     ty_lower::lower_hir_ty,
@@ -27,7 +27,7 @@ use crate::analysis::{
 };
 use crate::hir_def::CallableDef;
 
-type TraitImplTable<'db> = FxHashMap<Trait<'db>, Vec<Binder<ImplementorView<'db>>>>;
+type TraitImplTable<'db> = FxHashMap<Trait<'db>, Vec<Binder<ImplementorId<'db>>>>;
 
 /// Collect all trait implementors in the ingot.
 /// The returned table doesn't contain the const(external) ingot
@@ -55,7 +55,7 @@ pub(crate) fn collect_trait_impls<'db>(
 pub(crate) fn lower_impl_trait<'db>(
     db: &'db dyn HirAnalysisDb,
     impl_trait: ImplTrait<'db>,
-) -> Option<Binder<ImplementorView<'db>>> {
+) -> Option<Binder<ImplementorId<'db>>> {
     // Delegate trait-ref lowering and ingot checks to the semantic helper on
     // `ImplTrait`. If lowering fails or the ingot rule is violated, this
     // returns `None`.
@@ -68,7 +68,7 @@ pub(crate) fn lower_impl_trait<'db>(
     // merged trait defaults.
     let types = impl_trait.assoc_type_bindings_for_trait_inst(db, trait_inst);
 
-    let implementor = ImplementorView::new(db, trait_inst, params, types, impl_trait);
+    let implementor = ImplementorId::new(db, trait_inst, params, types, impl_trait);
 
     Some(Binder::bind(implementor))
 }
@@ -236,14 +236,12 @@ pub(crate) fn lower_trait_ref_impl<'db>(
         .collect();
 
     // Fill trailing defaults using the trait's param set. Bind Self (idx 0).
-    let non_self_completed = t
-        .param_set(db)
-        .complete_explicit_args_with_defaults(
-            db,
-            Some(t.self_param(db)),
-            &provided_explicit,
-            assumptions,
-        );
+    let non_self_completed = t.param_set(db).complete_explicit_args_with_defaults(
+        db,
+        Some(t.self_param(db)),
+        &provided_explicit,
+        assumptions,
+    );
 
     if non_self_completed.len() != trait_params.len() - 1 {
         return Err(TraitArgError::ArgNumMismatch {
@@ -312,7 +310,7 @@ pub(crate) fn lower_trait_ref_impl<'db>(
 #[salsa::tracked(return_ref)]
 pub(crate) fn collect_implementor_methods<'db>(
     db: &'db dyn HirAnalysisDb,
-    implementor: ImplementorView<'db>,
+    implementor: ImplementorId<'db>,
 ) -> IndexMap<IdentId<'db>, CallableDef<'db>> {
     let mut methods = IndexMap::default();
     for method in implementor.hir_impl_trait(db).methods(db) {
@@ -367,7 +365,7 @@ impl<'db> ImplementorCollector<'db> {
     }
 
     /// Returns `true` if `implementor` conflicts with any existing implementor.
-    fn does_conflict(&mut self, implementor: Binder<ImplementorView>) -> bool {
+    fn does_conflict(&mut self, implementor: Binder<ImplementorId>) -> bool {
         let def = implementor.instantiate_identity().trait_def(self.db);
         for impl_map in self
             .const_impl_maps
