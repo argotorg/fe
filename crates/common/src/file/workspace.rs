@@ -3,7 +3,7 @@ use radix_immutable::{StringPrefixView, StringTrie, Trie};
 use salsa::Setter;
 use url::Url;
 
-use crate::{InputDb, dependencies::GitDependency, file::File, indexmap::IndexMap};
+use crate::{InputDb, dependencies::RemoteFiles, file::File, indexmap::IndexMap};
 
 #[derive(Debug)]
 pub enum InputIndexError {
@@ -15,7 +15,7 @@ pub enum InputIndexError {
 pub struct Workspace {
     files: StringTrie<Url, File>,
     paths: IndexMap<File, Url>,
-    remote_git: IndexMap<Url, GitDependency>,
+    remote_git: IndexMap<Url, RemoteFiles>,
 }
 
 #[salsa::tracked]
@@ -108,19 +108,19 @@ impl Workspace {
         self.files(db)
     }
 
-    pub fn register_remote_git(&self, db: &mut dyn InputDb, local_url: Url, git: GitDependency) {
+    pub fn register_remote_git(&self, db: &mut dyn InputDb, local_url: Url, remote: RemoteFiles) {
         let mut map = self.remote_git(db);
-        map.insert(local_url, git);
+        map.insert(local_url, remote);
         self.set_remote_git(db).to(map);
     }
 
-    pub fn remote_git_for_local(&self, db: &dyn InputDb, local_url: &Url) -> Option<GitDependency> {
+    pub fn remote_git_for_local(&self, db: &dyn InputDb, local_url: &Url) -> Option<RemoteFiles> {
         self.remote_git(db).get(local_url).cloned()
     }
 
-    pub fn local_for_remote_git(&self, db: &dyn InputDb, git: &GitDependency) -> Option<Url> {
+    pub fn local_for_remote_git(&self, db: &dyn InputDb, remote: &RemoteFiles) -> Option<Url> {
         self.remote_git(db).iter().find_map(|(url, stored)| {
-            if stored == git {
+            if stored == remote {
                 Some(url.clone())
             } else {
                 None

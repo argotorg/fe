@@ -6,9 +6,7 @@ use toml::Value;
 use url::Url;
 
 use crate::{
-    dependencies::{
-        Dependency, DependencyArguments, DependencyLocation, GitDependency, LocalDependency,
-    },
+    dependencies::{Dependency, DependencyArguments, DependencyLocation, LocalFiles, RemoteFiles},
     ingot::Version,
     urlext::UrlExt,
 };
@@ -74,7 +72,7 @@ impl Config {
                     Value::String(path) => {
                         dependencies.push(DependencyEntry::new(
                             alias.clone(),
-                            DependencyEntryLocation::Local(Utf8PathBuf::from(path)),
+                            DependencyEntryLocation::RelativePath(Utf8PathBuf::from(path)),
                             DependencyArguments::default(),
                         ));
                     }
@@ -99,9 +97,9 @@ impl Config {
 
                         if table.contains_key("source") {
                             match parse_git_dependency(&alias, table) {
-                                Ok(git) => dependencies.push(DependencyEntry::new(
+                                Ok(remote) => dependencies.push(DependencyEntry::new(
                                     alias.clone(),
-                                    DependencyEntryLocation::Git(git),
+                                    DependencyEntryLocation::Remote(remote),
                                     arguments,
                                 )),
                                 Err(diag) => diagnostics.push(diag),
@@ -111,7 +109,7 @@ impl Config {
                         {
                             dependencies.push(DependencyEntry::new(
                                 alias.clone(),
-                                DependencyEntryLocation::Local(Utf8PathBuf::from(path)),
+                                DependencyEntryLocation::RelativePath(Utf8PathBuf::from(path)),
                                 arguments,
                             ));
                         } else {
@@ -141,21 +139,21 @@ impl Config {
         self.dependency_entries
             .iter()
             .map(|dependency| match &dependency.location {
-                DependencyEntryLocation::Local(path) => {
+                DependencyEntryLocation::RelativePath(path) => {
                     let url = base_url.join_directory(path).unwrap();
                     Dependency {
                         alias: dependency.alias.clone(),
                         arguments: dependency.arguments.clone(),
-                        location: DependencyLocation::Local(LocalDependency {
+                        location: DependencyLocation::Local(LocalFiles {
                             path: path.clone(),
                             url,
                         }),
                     }
                 }
-                DependencyEntryLocation::Git(git) => Dependency {
+                DependencyEntryLocation::Remote(remote) => Dependency {
                     alias: dependency.alias.clone(),
                     arguments: dependency.arguments.clone(),
-                    location: DependencyLocation::Git(git.clone()),
+                    location: DependencyLocation::Remote(remote.clone()),
                 },
             })
             .collect()
@@ -205,8 +203,8 @@ impl DependencyEntry {
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum DependencyEntryLocation {
-    Local(Utf8PathBuf),
-    Git(GitDependency),
+    RelativePath(Utf8PathBuf),
+    Remote(RemoteFiles),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -300,7 +298,7 @@ fn is_valid_name(s: &str) -> bool {
 fn parse_git_dependency(
     alias: &SmolStr,
     table: &toml::map::Map<String, Value>,
-) -> Result<GitDependency, ConfigDiagnostic> {
+) -> Result<RemoteFiles, ConfigDiagnostic> {
     let source_value = table
         .get("source")
         .and_then(|value| value.as_str())
@@ -326,7 +324,7 @@ fn parse_git_dependency(
         .and_then(|value| value.as_str())
         .map(Utf8PathBuf::from);
 
-    Ok(GitDependency {
+    Ok(RemoteFiles {
         source,
         rev: SmolStr::new(rev_value),
         path,
@@ -357,11 +355,11 @@ remote = { source = "https://example.com/fe.git", rev = "abcd1234", path = "cont
         let dependencies = config.dependencies(&base);
         assert_eq!(dependencies.len(), 1);
         match &dependencies[0].location {
-            DependencyLocation::Git(git) => {
-                assert_eq!(git.source.as_str(), "https://example.com/fe.git");
-                assert_eq!(git.rev, "abcd1234");
+            DependencyLocation::Remote(remote) => {
+                assert_eq!(remote.source.as_str(), "https://example.com/fe.git");
+                assert_eq!(remote.rev, "abcd1234");
                 assert_eq!(
-                    git.path.as_ref().map(|path| path.as_str()),
+                    remote.path.as_ref().map(|path| path.as_str()),
                     Some("contracts")
                 );
             }

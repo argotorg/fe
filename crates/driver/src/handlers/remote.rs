@@ -3,9 +3,8 @@ use std::collections::HashMap;
 use camino::{Utf8Path, Utf8PathBuf};
 use common::{
     InputDb,
-    dependencies::{DependencyArguments, GitDependency},
+    dependencies::{DependencyArguments, DependencyLocation, RemoteFiles},
 };
-use indicatif::ProgressBar;
 use resolver::{
     ResolutionHandler, Resolver,
     files::{FilesResolver, FilesResource},
@@ -15,7 +14,6 @@ use resolver::{
 use smol_str::SmolStr;
 use url::Url;
 
-use super::{DiagnosticKind, ProcessedDependency, ProcessingError, process_ingot_resource};
 use crate::{IngotInitDiagnostics, ingot_files_resolver};
 
 #[derive(Clone)]
@@ -28,7 +26,6 @@ pub struct RemoteIngotHandler<'a> {
     pub db: &'a mut dyn InputDb,
     ingot_urls: HashMap<GitDependencyDescription, Url>,
     pub diagnostics: Vec<IngotInitDiagnostics>,
-    spinners: HashMap<GitDependencyDescription, ProgressBar>,
     current_context: Option<RemoteFilesContext>,
 }
 
@@ -38,7 +35,6 @@ impl<'a> RemoteIngotHandler<'a> {
             db,
             ingot_urls: HashMap::new(),
             diagnostics: Vec::new(),
-            spinners: HashMap::new(),
             current_context: None,
         }
     }
@@ -51,70 +47,72 @@ impl<'a> RemoteIngotHandler<'a> {
         std::mem::take(&mut self.diagnostics)
     }
 
-    pub fn register_spinner(
-        &mut self,
-        description: GitDependencyDescription,
-        spinner: ProgressBar,
-    ) {
-        self.spinners.insert(description, spinner);
-    }
-
-    pub fn finish_spinner_success(
-        &mut self,
-        description: &GitDependencyDescription,
-        ingot_url: &Url,
-    ) {
-        if let Some(spinner) = self.spinners.remove(description) {
-            spinner.finish_with_message(format!("✅ Resolved {ingot_url}"));
+    fn touch_files(&mut self, resource: FilesResource) -> Option<()> {
+        let mut has_config = false;
+        for file in resource.files {
+            let file_url =
+                Url::from_file_path(file.path.as_std_path()).expect("resolved path to url");
+            if file.path.as_str().ends_with("fe.toml") {
+                has_config = true;
+                self.db
+                    .workspace()
+                    .touch(self.db, file_url, Some(file.content.clone()));
+            } else {
+                self.db
+                    .workspace()
+                    .touch(self.db, file_url, Some(file.content));
+            }
         }
+        has_config.then_some(())
     }
 
-    pub fn fail_spinner(&mut self, description: &GitDependencyDescription, message: &str) {
-        if let Some(spinner) = self.spinners.remove(description) {
-            spinner.abandon_with_message(format!("❌ Failed to resolve {description}: {message}"));
-        }
+    fn register_remote_mapping(&mut self, ingot_url: &Url, description: &GitDependencyDescription) {
+        let remote = RemoteFiles {
+            source: description.source.clone(),
+            rev: SmolStr::new(description.rev.clone()),
+            path: description.path.clone(),
+        };
+        self.db
+            .workspace()
+            .register_remote_git(self.db, ingot_url.clone(), remote);
     }
 
-    fn map_dependency_to_description(
+    fn build_dependency_descriptions(
         &mut self,
         ingot_url: &Url,
         context: &RemoteFilesContext,
-        dependency: ProcessedDependency,
+        dependency: DependencyLocation,
+        alias: SmolStr,
+        arguments: DependencyArguments,
     ) -> Option<(GitDependencyDescription, (SmolStr, DependencyArguments))> {
         match dependency {
-            ProcessedDependency::Local {
-                alias,
-                arguments,
-                url,
-            } => match relative_path_within_checkout(context.checkout_path.as_path(), &url) {
-                Ok(relative_path) => {
-                    let mut next_description = GitDependencyDescription::new(
-                        context.description.source.clone(),
-                        context.description.rev.clone(),
-                    );
-                    if let Some(path) = relative_path {
-                        next_description = next_description.with_path(path);
+            DependencyLocation::Local(local) => {
+                match relative_path_within_checkout(context.checkout_path.as_path(), &local.url) {
+                    Ok(relative_path) => {
+                        let mut next_description = GitDependencyDescription::new(
+                            context.description.source.clone(),
+                            context.description.rev.clone(),
+                        );
+                        if let Some(path) = relative_path {
+                            next_description = next_description.with_path(path);
+                        }
+                        Some((next_description, (alias, arguments)))
                     }
-                    Some((next_description, (alias, arguments)))
+                    Err(error) => {
+                        self.diagnostics
+                            .push(IngotInitDiagnostics::RemotePathResolutionError {
+                                ingot_url: ingot_url.clone(),
+                                dependency: alias.clone(),
+                                error,
+                            });
+                        None
+                    }
                 }
-                Err(error) => {
-                    self.diagnostics
-                        .push(IngotInitDiagnostics::RemotePathResolutionError {
-                            ingot_url: ingot_url.clone(),
-                            dependency: alias.clone(),
-                            error,
-                        });
-                    None
-                }
-            },
-            ProcessedDependency::Git {
-                alias,
-                arguments,
-                git,
-            } => {
+            }
+            DependencyLocation::Remote(remote) => {
                 let mut next_description =
-                    GitDependencyDescription::new(git.source.clone(), git.rev.to_string());
-                if let Some(path) = git.path.clone() {
+                    GitDependencyDescription::new(remote.source.clone(), remote.rev.to_string());
+                if let Some(path) = remote.path.clone() {
                     next_description = next_description.with_path(path);
                 }
                 Some((next_description, (alias, arguments)))
@@ -139,7 +137,6 @@ impl<'a> ResolutionHandler<GitResolver> for RemoteIngotHandler<'a> {
             description: description.clone(),
             checkout_path: resource.checkout_path.clone(),
         });
-
         let files_result = files_resolver.resolve(self, &resource.ingot_url);
         self.current_context = None;
 
@@ -158,7 +155,6 @@ impl<'a> ResolutionHandler<GitResolver> for RemoteIngotHandler<'a> {
         match files_result {
             Ok(dependencies) => dependencies,
             Err(error) => {
-                self.fail_spinner(description, "file resolution failed");
                 self.diagnostics
                     .push(IngotInitDiagnostics::RemoteFileError {
                         ingot_url: resource.ingot_url.clone(),
@@ -177,40 +173,64 @@ impl<'a> ResolutionHandler<FilesResolver> for RemoteIngotHandler<'a> {
         let context = self
             .current_context
             .as_ref()
-            .expect("remote files resolver invoked without context")
+            .expect("missing remote resolution context")
             .clone();
 
-        match process_ingot_resource(
-            self.db,
-            ingot_url,
-            resource,
-            &mut self.diagnostics,
-            DiagnosticKind::Remote,
-        ) {
-            Ok(dependencies) => {
-                self.finish_spinner_success(&context.description, ingot_url);
-                let git_dependency = git_dependency_from_description(&context.description);
-                self.db
-                    .workspace()
-                    .register_remote_git(self.db, ingot_url.clone(), git_dependency);
-                dependencies
-                    .into_iter()
-                    .filter_map(|dependency| {
-                        self.map_dependency_to_description(ingot_url, &context, dependency)
-                    })
-                    .collect()
-            }
-            Err(error) => {
-                let message = match error {
-                    ProcessingError::MissingConfigFile => "missing fe.toml",
-                    ProcessingError::ConfigParseError => "invalid fe.toml",
-                    ProcessingError::MissingWorkspaceIngot
-                    | ProcessingError::MissingParsedConfig => "failed to process ingot",
-                };
-                self.fail_spinner(&context.description, message);
-                Vec::new()
+        if self.touch_files(resource).is_none() {
+            self.diagnostics
+                .push(IngotInitDiagnostics::RemoteFileError {
+                    ingot_url: ingot_url.clone(),
+                    error: "Remote ingot is missing fe.toml".into(),
+                });
+            return Vec::new();
+        }
+
+        let Some(ingot) = self
+            .db
+            .workspace()
+            .containing_ingot(self.db, ingot_url.clone())
+        else {
+            tracing::error!("Unable to locate remote ingot {}", ingot_url);
+            return Vec::new();
+        };
+
+        if let Some(error) = ingot.config_parse_error(self.db) {
+            self.diagnostics
+                .push(IngotInitDiagnostics::RemoteConfigParseError {
+                    ingot_url: ingot_url.clone(),
+                    error,
+                });
+            return Vec::new();
+        }
+
+        let Some(config) = ingot.config(self.db) else {
+            return Vec::new();
+        };
+
+        if !config.diagnostics.is_empty() {
+            self.diagnostics
+                .push(IngotInitDiagnostics::RemoteConfigDiagnostics {
+                    ingot_url: ingot_url.clone(),
+                    diagnostics: config.diagnostics.clone(),
+                });
+        }
+
+        self.register_remote_mapping(ingot_url, &context.description);
+
+        let mut dependencies = Vec::new();
+        for dependency in config.dependencies(ingot_url) {
+            if let Some(description) = self.build_dependency_descriptions(
+                ingot_url,
+                &context,
+                dependency.location,
+                dependency.alias,
+                dependency.arguments,
+            ) {
+                dependencies.push(description);
             }
         }
+
+        dependencies
     }
 }
 
@@ -271,13 +291,5 @@ fn relative_path_within_checkout(
         Ok(None)
     } else {
         Ok(Some(relative.to_owned()))
-    }
-}
-
-fn git_dependency_from_description(description: &GitDependencyDescription) -> GitDependency {
-    GitDependency {
-        source: description.source.clone(),
-        rev: SmolStr::new(description.rev.clone()),
-        path: description.path.clone(),
     }
 }

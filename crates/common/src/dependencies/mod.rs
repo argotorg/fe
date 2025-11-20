@@ -12,23 +12,25 @@ pub struct DependencyArguments {
     pub version: Option<Version>,
 }
 
+/// Metadata describing a git checkout on disk. This can later become an enum if
+/// we support multiple remote transport mechanisms.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub struct GitDependency {
+pub struct RemoteFiles {
     pub source: Url,
     pub rev: SmolStr,
     pub path: Option<Utf8PathBuf>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub struct LocalDependency {
+pub struct LocalFiles {
     pub path: Utf8PathBuf,
     pub url: Url,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum DependencyLocation {
-    Local(LocalDependency),
-    Git(GitDependency),
+    Local(LocalFiles),
+    Remote(RemoteFiles),
 }
 
 #[derive(Clone, Debug)]
@@ -42,17 +44,17 @@ impl Dependency {
     pub fn url(&self) -> &Url {
         match &self.location {
             DependencyLocation::Local(local) => &local.url,
-            DependencyLocation::Git(git) => &git.source,
+            DependencyLocation::Remote(remote) => &remote.source,
         }
     }
 }
 
 #[derive(Clone, Debug)]
-pub struct RemoteDependencyRequest {
+pub struct ExternalDependencyEdge {
     pub parent: Url,
     pub alias: SmolStr,
     pub arguments: DependencyArguments,
-    pub git: GitDependency,
+    pub remote: RemoteFiles,
 }
 
 pub use display_tree::display_tree;

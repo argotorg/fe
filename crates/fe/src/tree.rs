@@ -5,8 +5,7 @@ use common::{
     cache::remote_git_cache_dir,
     config::Config,
     dependencies::{
-        DependencyArguments, DependencyLocation, RemoteDependencyRequest,
-        display_tree::display_tree,
+        DependencyArguments, DependencyLocation, ExternalDependencyEdge, display_tree::display_tree,
     },
 };
 use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
@@ -98,11 +97,11 @@ pub fn tree_resolver() -> IngotGraphResolver {
 #[derive(Default)]
 pub struct TreeHandler {
     pub configs: HashMap<Url, Config>,
-    pub remote_dependencies: Vec<RemoteDependencyRequest>,
+    pub remote_dependencies: Vec<ExternalDependencyEdge>,
 }
 
 impl TreeHandler {
-    fn take_remote_dependencies(&mut self) -> Vec<RemoteDependencyRequest> {
+    fn take_remote_dependencies(&mut self) -> Vec<ExternalDependencyEdge> {
         std::mem::take(&mut self.remote_dependencies)
     }
 }
@@ -138,12 +137,12 @@ impl ResolutionHandler<FilesResolver> for TreeHandler {
                                 tracing::info!(target: "resolver", "Found dependency: {} -> {}", ingot_url, local.url);
                                 edges.push((local.url, (alias, arguments)));
                             }
-                            DependencyLocation::Git(git) => {
-                                self.remote_dependencies.push(RemoteDependencyRequest {
+                            DependencyLocation::Remote(remote) => {
+                                self.remote_dependencies.push(ExternalDependencyEdge {
                                     parent: ingot_url.clone(),
                                     alias,
                                     arguments,
-                                    git,
+                                    remote,
                                 });
                             }
                         }
@@ -175,7 +174,7 @@ impl GraphResolutionHandler<Url, DiGraph<Url, (SmolStr, DependencyArguments)>> f
     }
 }
 
-fn resolve_remote_tree(requests: &[RemoteDependencyRequest], ingot_url: &Url) -> Option<String> {
+fn resolve_remote_tree(requests: &[ExternalDependencyEdge], ingot_url: &Url) -> Option<String> {
     if requests.is_empty() {
         return None;
     }
@@ -263,12 +262,12 @@ fn tree_remote_checkout_root(ingot_url: &Url) -> Utf8PathBuf {
     ingot_path
 }
 
-fn tree_git_description_from_request(
-    request: &RemoteDependencyRequest,
-) -> GitDependencyDescription {
-    let mut description =
-        GitDependencyDescription::new(request.git.source.clone(), request.git.rev.to_string());
-    if let Some(path) = request.git.path.clone() {
+fn tree_git_description_from_request(request: &ExternalDependencyEdge) -> GitDependencyDescription {
+    let mut description = GitDependencyDescription::new(
+        request.remote.source.clone(),
+        request.remote.rev.to_string(),
+    );
+    if let Some(path) = request.remote.path.clone() {
         description = description.with_path(path);
     }
     description
@@ -391,10 +390,12 @@ impl ResolutionHandler<GitResolver> for TreeRemoteHandler {
                         ));
                     }
                 },
-                DependencyLocation::Git(git) => {
-                    let mut next_description =
-                        GitDependencyDescription::new(git.source.clone(), git.rev.to_string());
-                    if let Some(path) = git.path.clone() {
+                DependencyLocation::Remote(remote) => {
+                    let mut next_description = GitDependencyDescription::new(
+                        remote.source.clone(),
+                        remote.rev.to_string(),
+                    );
+                    if let Some(path) = remote.path.clone() {
                         next_description = next_description.with_path(path);
                     }
                     dependencies.push((next_description, (alias, arguments)));

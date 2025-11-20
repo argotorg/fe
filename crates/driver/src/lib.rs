@@ -12,7 +12,7 @@ use camino::Utf8PathBuf;
 use common::{
     InputDb,
     cache::remote_git_cache_dir,
-    dependencies::{DependencyArguments, RemoteDependencyRequest, display_tree::display_tree},
+    dependencies::{DependencyArguments, ExternalDependencyEdge, display_tree::display_tree},
 };
 pub use db::DriverDataBase;
 use handlers::{LocalIngotHandler, RemoteIngotHandler};
@@ -89,7 +89,7 @@ pub fn init_ingot(db: &mut DriverDataBase, ingot_url: &Url) -> Vec<IngotInitDiag
     diagnostics.extend(resolve_remote_dependencies(db, ingot_url, &remote_requests));
 
     // Check for cycles after graph resolution (now that handler is dropped)
-    let cyclic_subgraph = db.graph().cyclic_subgraph(db);
+    let cyclic_subgraph = db.local_graph().cyclic_subgraph(db);
 
     // Add cycle diagnostics - single comprehensive diagnostic if any cycles exist
     if cyclic_subgraph.node_count() > 0 {
@@ -270,7 +270,7 @@ impl std::fmt::Display for IngotInitDiagnostics {
 fn resolve_remote_dependencies(
     db: &mut dyn InputDb,
     ingot_url: &Url,
-    requests: &[RemoteDependencyRequest],
+    requests: &[ExternalDependencyEdge],
 ) -> Vec<IngotInitDiagnostics> {
     if requests.is_empty() {
         return vec![];
@@ -299,10 +299,14 @@ fn resolve_remote_dependencies(
             "Resolving remote dependency {} ({})",
             request.alias, description
         ));
-        handler.register_spinner(description.clone(), spinner.clone());
 
         match graph_resolver.graph_resolve(&mut handler, &description) {
             Ok(graph) => {
+                if let Some(root_url) = handler.ingot_url(&description) {
+                    spinner.finish_with_message(format!("✅ Resolved {root_url}"));
+                } else {
+                    spinner.finish_and_clear();
+                }
                 if is_cyclic_directed(&graph) {
                     if let Some(root_url) = handler.ingot_url(&description) {
                         diagnostics.push(IngotInitDiagnostics::RemoteDependencyCycle {
@@ -312,7 +316,7 @@ fn resolve_remote_dependencies(
                 }
             }
             Err(err) => {
-                handler.fail_spinner(&description, &err.to_string());
+                spinner.abandon_with_message(format!("❌ Failed to resolve {description}: {err}"));
             }
         }
     }
@@ -357,10 +361,12 @@ fn remote_checkout_root(ingot_url: &Url) -> Utf8PathBuf {
     ingot_path
 }
 
-fn git_description_from_request(request: &RemoteDependencyRequest) -> GitDependencyDescription {
-    let mut description =
-        GitDependencyDescription::new(request.git.source.clone(), request.git.rev.to_string());
-    if let Some(path) = request.git.path.clone() {
+fn git_description_from_request(request: &ExternalDependencyEdge) -> GitDependencyDescription {
+    let mut description = GitDependencyDescription::new(
+        request.remote.source.clone(),
+        request.remote.rev.to_string(),
+    );
+    if let Some(path) = request.remote.path.clone() {
         description = description.with_path(path);
     }
     description

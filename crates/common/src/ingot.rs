@@ -146,10 +146,10 @@ impl<'db> Ingot<'db> {
                 .into_iter()
                 .map(|dependency| {
                     let url = match &dependency.location {
-                        DependencyLocation::Git(git) => workspace
-                            .local_for_remote_git(db, git)
-                            .unwrap_or_else(|| git.source.clone()),
-                        _ => dependency.url().clone(),
+                        DependencyLocation::Remote(remote) => workspace
+                            .local_for_remote_git(db, remote)
+                            .unwrap_or_else(|| remote.source.clone()),
+                        DependencyLocation::Local(local) => local.url.clone(),
                     };
                     (dependency.alias.clone(), url)
                 })

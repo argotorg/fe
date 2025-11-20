@@ -15,7 +15,7 @@ use file::Workspace;
 // Each database must implement InputDb explicitly with its own storage mechanism
 pub trait InputDb: salsa::Database {
     fn workspace(&self) -> Workspace;
-    fn graph(&self) -> DependencyGraph;
+    fn local_graph(&self) -> DependencyGraph;
     fn remote_graph(&self) -> DependencyGraph;
 }
 
@@ -32,7 +32,7 @@ macro_rules! impl_input_db {
             fn workspace(&self) -> $crate::file::Workspace {
                 self.index.clone().expect("Workspace not initialized")
             }
-            fn graph(&self) -> $crate::dependencies::DependencyGraph {
+            fn local_graph(&self) -> $crate::dependencies::DependencyGraph {
                 self.graph.clone().expect("Graph not initialized")
             }
             fn remote_graph(&self) -> $crate::dependencies::DependencyGraph {
