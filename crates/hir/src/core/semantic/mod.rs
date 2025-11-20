@@ -57,8 +57,7 @@ use crate::analysis::ty::trait_lower::{
     TraitRefLowerError, lower_trait_ref, lower_trait_ref_with_owner_self,
 };
 use crate::analysis::ty::trait_resolution::constraint::{
-    collect_adt_constraints, collect_constraints, collect_func_def_constraints,
-    collect_super_traits, super_trait_cycle,
+    collect_adt_constraints, collect_constraints, collect_func_def_constraints, super_trait_cycle,
 };
 use crate::analysis::ty::ty_def::TyData;
 use crate::analysis::ty::ty_lower::{GenericParamTypeSet, collect_generic_params};
@@ -71,6 +70,7 @@ use crate::analysis::ty::{
 use crate::core::adt_lower::lower_adt;
 use common::indexmap::IndexMap;
 use either::Either;
+use indexmap::IndexSet;
 // (kind-lowering helpers intentionally omitted; see WherePredicateView::kind)
 
 // (Additional view types appear below; keep layering semantic.)
@@ -137,7 +137,10 @@ impl<'db> Func<'db> {
     }
 
     /// Semantic predicate list extended with inherited trait bounds (super traits, assoc types).
-    pub(crate) fn assumptions_with_bounds(self, db: &'db dyn HirAnalysisDb) -> PredicateListId<'db> {
+    pub(crate) fn assumptions_with_bounds(
+        self,
+        db: &'db dyn HirAnalysisDb,
+    ) -> PredicateListId<'db> {
         self.assumptions(db).extend_all_bounds(db)
     }
 
@@ -687,7 +690,7 @@ pub struct WherePredicateBoundView<'db> {
 }
 
 impl<'db> WherePredicateBoundView<'db> {
-    pub(crate) fn new(pred: WherePredicateView<'db>, idx: usize) -> Self {
+    pub(in crate::core) fn new(pred: WherePredicateView<'db>, idx: usize) -> Self {
         Self { pred, idx }
     }
     fn trait_ref(self, db: &'db dyn HirDb) -> TraitRefId<'db> {
@@ -706,7 +709,10 @@ impl<'db> WherePredicateBoundView<'db> {
     }
 
     /// Lower this bound into a semantic trait instance using the predicate's subject type.
-    pub fn as_trait_inst(self, db: &'db dyn HirAnalysisDb) -> Option<TraitInstId<'db>> {
+    pub(in crate::core) fn as_trait_inst(
+        self,
+        db: &'db dyn HirAnalysisDb,
+    ) -> Option<TraitInstId<'db>> {
         let subject = self.pred.subject_ty(db)?;
         let owner_item = ItemKind::from(self.pred.clause.owner);
         let assumptions = constraints_for(db, owner_item);
@@ -715,7 +721,7 @@ impl<'db> WherePredicateBoundView<'db> {
     }
 
     /// Lower this bound against an explicit subject type (useful for `Self` in trait contexts).
-    pub fn as_trait_inst_with_subject(
+    pub(in crate::core) fn as_trait_inst_with_subject(
         self,
         db: &'db dyn HirAnalysisDb,
         subject: TyId<'db>,
@@ -788,25 +794,45 @@ impl<'db> Trait<'db> {
         (0..len).map(move |idx| TraitAssocTypeView { owner: self, idx })
     }
 
-    /// Semantic super-trait bounds of this trait, instantiated over the trait's own parameters.
-    /// Returns an iterator of binders for each declared or implied super-trait.
-    pub fn super_trait_insts(
-        self,
-        db: &'db dyn HirAnalysisDb,
-    ) -> impl Iterator<Item = Binder<TraitInstId<'db>>> + 'db {
-        if super_trait_cycle(db, self).is_some() {
-            return Either::Left(std::iter::empty());
-        }
-        Either::Right(collect_super_traits(db, self).iter().copied())
-    }
-
     /// Iterate declared super-trait references as contextual views.
     pub fn super_trait_refs(
         self,
         db: &'db dyn HirDb,
     ) -> impl Iterator<Item = SuperTraitRefView<'db>> + 'db {
-        let len = self.super_traits(db).len();
+        let len = self.super_traits_refs(db).len();
         (0..len).map(move |idx| SuperTraitRefView { owner: self, idx })
+    }
+
+    pub(crate) fn super_traits(
+        self,
+        db: &'db dyn HirAnalysisDb,
+    ) -> IndexSet<Binder<TraitInstId<'db>>> {
+        let self_param = self.self_param(db);
+        let scope = self.scope();
+
+        // Use the trait's own constraints as assumptions when lowering super traits
+        let assumptions = collect_constraints(db, self.into()).instantiate_identity();
+
+        let mut super_traits = IndexSet::new();
+        for view in self.super_trait_refs(db) {
+            let super_ref = view.trait_ref(db);
+            if let Ok(inst) = lower_trait_ref(db, self_param, super_ref, scope, assumptions) {
+                super_traits.insert(Binder::bind(inst));
+            }
+        }
+
+        for pred in WhereClauseOwner::Trait(self).clause(db).predicates(db) {
+            if !pred.is_self_subject(db) {
+                continue;
+            }
+            for bound in pred.bounds(db) {
+                if let Some(inst) = bound.as_trait_inst_with_subject(db, self_param) {
+                    super_traits.insert(Binder::bind(inst));
+                }
+            }
+        }
+
+        super_traits
     }
 
     /// Aggregate trait definition diagnostics using semantic views.
@@ -943,7 +969,7 @@ impl<'db> SuperTraitRefView<'db> {
     }
 
     pub(crate) fn trait_ref(self, db: &'db dyn HirDb) -> TraitRefId<'db> {
-        self.owner.super_traits(db)[self.idx]
+        self.owner.super_traits_refs(db)[self.idx]
     }
 
     pub fn subject_self(self, db: &'db dyn HirAnalysisDb) -> TyId<'db> {

@@ -20,7 +20,7 @@ use super::{
     trait_lower::collect_implementor_methods,
     trait_resolution::{
         GoalSatisfiability, PredicateListId, WellFormedness, check_trait_inst_wf,
-        constraint::{collect_constraints, collect_super_traits},
+        constraint::{collect_constraints},
         is_goal_satisfiable,
     },
     ty_def::{Kind, TyId},

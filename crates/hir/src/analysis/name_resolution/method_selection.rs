@@ -11,10 +11,7 @@ use crate::analysis::{
         canonical::{Canonical, Canonicalized, Solution},
         method_table::probe_method,
         trait_def::{TraitInstId, impls_for_ty},
-        trait_resolution::{
-            GoalSatisfiability, PredicateListId, constraint::collect_super_traits,
-            is_goal_satisfiable,
-        },
+        trait_resolution::{GoalSatisfiability, PredicateListId, is_goal_satisfiable},
         ty_def::TyId,
         unify::UnificationTable,
     },
@@ -150,7 +147,7 @@ impl<'db> CandidateAssembler<'db> {
 
             if table.unify(extracted_receiver_ty, self_ty).is_ok() {
                 self.insert_trait_method_cand(pred);
-                for super_trait in collect_super_traits(self.db, pred.def(self.db)) {
+                for super_trait in pred.def(self.db).super_traits(self.db) {
                     let super_trait = super_trait.instantiate(self.db, pred.args(self.db));
                     self.insert_trait_method_cand(super_trait);
                 }
@@ -258,10 +255,7 @@ impl<'db> MethodSelector<'db> {
                     Err(MethodSelectionError::NotFound)
                 } else {
                     // Suggests trait imports.
-                    let traits = traits
-                        .iter()
-                        .map(|(inst, _)| inst.def(self.db))
-                        .collect();
+                    let traits = traits.iter().map(|(inst, _)| inst.def(self.db)).collect();
                     Err(MethodSelectionError::InvisibleTraitMethod(traits))
                 }
             }
@@ -336,7 +330,7 @@ impl<'db> MethodSelector<'db> {
         let mut insert_trait = |trait_def: Trait<'db>| {
             traits.insert(trait_def);
 
-            for trait_ in collect_super_traits(self.db, trait_def) {
+            for trait_ in trait_def.super_traits(self.db) {
                 traits.insert(trait_.skip_binder().def(self.db));
             }
         };

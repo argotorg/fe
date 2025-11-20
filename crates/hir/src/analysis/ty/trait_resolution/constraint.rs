@@ -1,6 +1,6 @@
 use crate::core::hir_def::{
-    GenericParam, GenericParamOwner, GenericParamView, ItemKind, Trait, TraitRefId,
-    TypeBound, WhereClauseOwner, scope_graph::ScopeId, types::TypeId as HirTypeId,
+    GenericParam, GenericParamOwner, GenericParamView, ItemKind, Trait, TraitRefId, TypeBound,
+    WhereClauseOwner, scope_graph::ScopeId, types::TypeId as HirTypeId,
 };
 use crate::hir_def::CallableDef;
 use common::indexmap::IndexSet;
@@ -53,40 +53,6 @@ pub(crate) fn ty_constraints<'db>(
 /// Collect super traits of the given trait.
 /// The returned trait ref is bound by the given trait's generic parameters.
 #[salsa::tracked(return_ref)]
-pub(crate) fn collect_super_traits<'db>(
-    db: &'db dyn HirAnalysisDb,
-    trait_: Trait<'db>,
-) -> IndexSet<Binder<TraitInstId<'db>>> {
-    let hir_trait = trait_;
-    let self_param = trait_.self_param(db);
-    let scope = trait_.scope();
-
-    // Use the trait's own constraints as assumptions when lowering super traits
-    let assumptions = collect_constraints(db, hir_trait.into()).instantiate_identity();
-
-    let mut super_traits = IndexSet::new();
-    for view in trait_.super_trait_refs(db) {
-        let super_ref = view.trait_ref(db);
-        if let Ok(inst) = lower_trait_ref(db, self_param, super_ref, scope, assumptions) {
-            super_traits.insert(Binder::bind(inst));
-        }
-    }
-
-    for pred in WhereClauseOwner::Trait(hir_trait).clause(db).predicates(db) {
-        if !pred.is_self_subject(db) {
-            continue;
-        }
-        for bound in pred.bounds(db) {
-            if let Some(inst) = bound.as_trait_inst_with_subject(db, self_param) {
-                super_traits.insert(Binder::bind(inst));
-            }
-        }
-    }
-
-    super_traits
-}
-
-#[salsa::tracked(return_ref)]
 pub fn super_trait_cycle<'db>(
     db: &'db dyn HirAnalysisDb,
     trait_: Trait<'db>,
@@ -102,7 +68,7 @@ pub fn super_trait_cycle_impl<'db>(
     if chain.contains(&trait_) {
         return Some(chain.to_vec());
     }
-    let bounds = collect_super_traits(db, trait_);
+    let bounds = trait_.super_traits(db);
     if bounds.is_empty() {
         return None;
     }

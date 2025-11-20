@@ -911,7 +911,7 @@ pub struct Trait<'db> {
     pub vis: Visibility,
     pub(in crate::core) generic_params: GenericParamListId<'db>,
     #[return_ref]
-    pub(in crate::core) super_traits: Vec<TraitRefId<'db>>,
+    pub(in crate::core) super_traits_refs: Vec<TraitRefId<'db>>,
     pub(in crate::core) where_clause: WhereClauseId<'db>,
     #[return_ref]
     pub(in crate::core) types: Vec<AssocTyDecl<'db>>,

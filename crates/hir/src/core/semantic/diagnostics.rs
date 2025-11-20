@@ -944,7 +944,7 @@ impl<'db> ImplTrait<'db> {
         }
 
         let target_ty_span: DynLazySpan<'db> = self.span().ty().into();
-        for super_trait in trait_def.super_trait_insts(db) {
+        for super_trait in trait_def.super_traits(db) {
             let super_trait = super_trait.instantiate(db, trait_inst.args(db));
             is_satisfied(super_trait, target_ty_span.clone(), &mut diags)
         }

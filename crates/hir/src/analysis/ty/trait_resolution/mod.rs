@@ -14,7 +14,7 @@ use crate::analysis::{
 };
 use crate::{Ingot, hir_def::HirIngot};
 use common::indexmap::IndexSet;
-use constraint::{collect_constraints, collect_super_traits};
+use constraint::collect_constraints;
 use salsa::Update;
 
 pub(crate) mod constraint;
@@ -107,8 +107,8 @@ pub(crate) fn check_trait_inst_wf<'db>(
     trait_inst: TraitInstId<'db>,
     assumptions: PredicateListId<'db>,
 ) -> WellFormedness<'db> {
-    let constraints = collect_constraints(db, trait_inst.def(db).into())
-        .instantiate(db, trait_inst.args(db));
+    let constraints =
+        collect_constraints(db, trait_inst.def(db).into()).instantiate(db, trait_inst.args(db));
 
     // Normalize constraints after instantiation to resolve associated types
     let normalized_constraints = {
@@ -205,7 +205,7 @@ impl<'db> PredicateListId<'db> {
 
         while let Some(pred) = worklist.pop() {
             // 1. Collect super traits
-            for super_trait in collect_super_traits(db, pred.def(db)) {
+            for super_trait in pred.def(db).super_traits(db) {
                 // Instantiate with current predicate's args
                 let inst = super_trait.instantiate(db, pred.args(db));
 

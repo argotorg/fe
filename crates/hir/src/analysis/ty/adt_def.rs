@@ -1,5 +1,5 @@
 use crate::hir_def::{
-    self, Contract, Enum, GenericParamOwner, IdentId, ItemKind, Partial, Struct, TypeId as HirTyId,
+    Contract, Enum, GenericParamOwner, IdentId, ItemKind, Partial, Struct, TypeId as HirTyId,
     VariantKind, scope_graph::ScopeId,
 };
 use crate::span::DynLazySpan;

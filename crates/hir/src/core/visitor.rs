@@ -776,7 +776,7 @@ pub fn walk_trait<'db, V>(
 
     ctxt.with_new_ctxt(
         |span| span.super_traits(),
-        |ctxt| visitor.visit_super_trait_list(ctxt, trait_.super_traits(ctxt.db)),
+        |ctxt| visitor.visit_super_trait_list(ctxt, trait_.super_traits_refs(ctxt.db)),
     );
 
     ctxt.with_new_ctxt(
