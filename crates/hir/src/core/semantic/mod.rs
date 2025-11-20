@@ -999,7 +999,7 @@ impl<'db> Impl<'db> {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ImplTraitLowerError<'db> {
+pub(crate) enum ImplTraitLowerError<'db> {
     ParseError,
     TraitRef(TraitRefLowerError<'db>),
     Conflict {
@@ -1024,7 +1024,7 @@ impl<'db> ImplTrait<'db> {
 
     /// Lowers this impl-trait to a semantic implementor view, performing
     /// conflict detection and kind checks.
-    pub fn lowered_implementor(
+    pub(crate) fn lowered_implementor(
         self,
         db: &'db dyn HirAnalysisDb,
     ) -> Result<Binder<ImplementorView<'db>>, ImplTraitLowerError<'db>> {

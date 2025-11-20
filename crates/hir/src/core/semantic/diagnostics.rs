@@ -713,7 +713,7 @@ impl<'db> Impl<'db> {
 impl<'db> ImplTrait<'db> {
     /// Lower the implementor view and report validity diagnostics (WF, conflicts, kind mismatch).
     /// Returns the implementor view if successful, or None if critical errors occurred.
-    pub fn diags_implementor_validity(
+    pub(crate) fn diags_implementor_validity(
         self,
         db: &'db dyn HirAnalysisDb,
     ) -> (
@@ -795,7 +795,7 @@ impl<'db> ImplTrait<'db> {
     }
 
     /// Compare impl methods vs. trait methods and report missing/mismatched ones.
-    pub fn diags_method_conformance(
+    pub(crate) fn diags_method_conformance(
         self,
         db: &'db dyn HirAnalysisDb,
         implementor: Binder<ImplementorView<'db>>,
