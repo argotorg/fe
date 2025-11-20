@@ -4,14 +4,17 @@ use super::{
     ty_check::{RecordLike, TraitOps},
     ty_def::{Kind, TyId},
 };
-use crate::{core::hir_def::{
-    CallableDef, Enum, FieldIndex, FieldParent, Func, GenericParamOwner, IdentId, ImplTrait,
-}, hir_def::TypeAlias};
 use crate::span::DynLazySpan;
 use crate::visitor::prelude::*;
 use crate::{analysis::HirAnalysisDb, hir_def::Trait};
 use crate::{analysis::diagnostics::DiagnosticVoucher, hir_def::PathId};
 use crate::{analysis::name_resolution::diagnostics::PathResDiag, hir_def::ItemKind};
+use crate::{
+    core::hir_def::{
+        CallableDef, Enum, FieldIndex, FieldParent, Func, GenericParamOwner, IdentId, ImplTrait,
+    },
+    hir_def::TypeAlias,
+};
 use either::Either;
 use salsa::Update;
 use smallvec1::SmallVec;

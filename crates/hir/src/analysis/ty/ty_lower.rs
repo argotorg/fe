@@ -12,9 +12,7 @@ use super::{
     trait_resolution::{PredicateListId, constraint::collect_constraints},
     ty_def::{InvalidCause, Kind, TyData, TyId, TyParam},
 };
-use crate::analysis::name_resolution::{
-    PathRes, PathResErrorKind,resolve_path,
-};
+use crate::analysis::name_resolution::{PathRes, PathResErrorKind, resolve_path};
 use crate::analysis::{HirAnalysisDb, ty::binder::Binder};
 
 /// Lowers the given HirTy to `TyId`.
@@ -500,21 +498,22 @@ impl<'db> GenericParamCollector<'db> {
             // Kind bound on a concrete type parameter in this owner.
             if let Some(orig_idx) = pred.param_original_index(hir_db) {
                 let idx = orig_idx + self.offset_to_original;
-                if let Some(param) = self.params.get_mut(idx) {
-                    if param.kind.is_none() && !param.is_const_ty() {
-                        param.kind = Some(kind.clone());
-                    }
+                if let Some(param) = self.params.get_mut(idx)
+                    && param.kind.is_none()
+                    && !param.is_const_ty()
+                {
+                    param.kind = Some(kind.clone());
                 }
                 continue;
             }
 
             // Kind bound on `Self` in a trait owner.
-            if pred.is_self_subject(hir_db) && matches!(self.owner, GenericParamOwner::Trait(_)) {
-                if let Some(trait_self) = self.trait_self_ty_mut() {
-                    if trait_self.kind.is_none() {
-                        trait_self.kind = Some(kind);
-                    }
-                }
+            if pred.is_self_subject(hir_db)
+                && matches!(self.owner, GenericParamOwner::Trait(_))
+                && let Some(trait_self) = self.trait_self_ty_mut()
+                && trait_self.kind.is_none()
+            {
+                trait_self.kind = Some(kind);
             }
         }
     }

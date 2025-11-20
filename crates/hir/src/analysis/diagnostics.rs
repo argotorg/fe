@@ -1092,7 +1092,7 @@ impl DiagnosticVoucher for TyLowerDiag<'_> {
                     .map(|p| p.param.name().unwrap().data(db))
                     .expect("should be at least one generic param");
 
-                let spans = offending_generic_param_spans(*owner, &idxs, db);
+                let spans = offending_generic_param_spans(*owner, idxs.as_slice(), db);
                 CompleteDiagnostic {
                     severity: Severity::Error,
                     message,
@@ -2005,28 +2005,15 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                         na.cmp(&nb)
                     });
                 }
-                if all_same_trait && has_first_arg {
-                    for trait_ in sorted.into_iter().rev() {
-                        sub_diagnostics.push(SubDiagnostic {
-                            style: LabelStyle::Secondary,
-                            message: format!(
-                                "candidate: `{}::{method_name}`",
-                                trait_.pretty_print(db, false)
-                            ),
-                            span: primary.resolve(db),
-                        });
-                    }
-                } else {
-                    for trait_ in sorted.into_iter().rev() {
-                        sub_diagnostics.push(SubDiagnostic {
-                            style: LabelStyle::Secondary,
-                            message: format!(
-                                "candidate: `{}::{method_name}`",
-                                trait_.pretty_print(db, false)
-                            ),
-                            span: primary.resolve(db),
-                        });
-                    }
+                for trait_ in sorted.into_iter().rev() {
+                    sub_diagnostics.push(SubDiagnostic {
+                        style: LabelStyle::Secondary,
+                        message: format!(
+                            "candidate: `{}::{method_name}`",
+                            trait_.pretty_print(db, false)
+                        ),
+                        span: primary.resolve(db),
+                    });
                 }
 
                 CompleteDiagnostic {
@@ -2046,7 +2033,7 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                 }];
 
                 let mut sorted: Vec<_> = cands.iter().copied().collect();
-                sorted.sort_by(|a, b| a.pretty_print(db, false).cmp(&b.pretty_print(db, false)));
+                sorted.sort_by_key(|a| a.pretty_print(db, false));
                 for cand in sorted {
                     sub_diagnostics.push(SubDiagnostic {
                         style: LabelStyle::Secondary,

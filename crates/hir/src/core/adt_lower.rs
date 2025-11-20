@@ -5,9 +5,7 @@ use crate::analysis::{
         ty_lower::{GenericParamTypeSet, collect_generic_params},
     },
 };
-use crate::core::hir_def::{
-    FieldDefListId, VariantDefListId, VariantKind, scope_graph::ScopeId,
-};
+use crate::core::hir_def::{FieldDefListId, VariantDefListId, VariantKind, scope_graph::ScopeId};
 
 /// Lower HIR ADT definition (`struct/enum/contract`) to [`AdtDef`].
 #[salsa::tracked]

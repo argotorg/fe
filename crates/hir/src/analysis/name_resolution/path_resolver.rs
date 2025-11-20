@@ -957,25 +957,24 @@ pub fn find_associated_type<'db>(
 
         // If no candidates were derived from bound views, fall back to raw HIR bounds to
         // preserve behavior until the semantic resolver lands.
-        if candidates.len() == _before {
-            if let Some(decl) = trait_.assoc_ty(db, assoc_name) {
-                let subject = ty_with_subst.fold_with(db, &mut table);
-                for bound in &decl.bounds {
-                    if let TypeBound::Trait(trait_ref) = *bound {
-                        if let Ok(inst) = crate::analysis::ty::trait_lower::lower_trait_ref(
-                            db,
-                            subject,
-                            trait_ref,
-                            scope,
-                            assumptions,
-                        ) {
-                            if inst.def(db).assoc_ty(db, name).is_some() {
-                                let assoc_ty = TyId::assoc_ty(db, inst, name);
-                                let folded = assoc_ty.fold_with(db, &mut table);
-                                candidates.push((inst, folded));
-                            }
-                        }
-                    }
+        if candidates.len() == _before
+            && let Some(decl) = trait_.assoc_ty(db, assoc_name)
+        {
+            let subject = ty_with_subst.fold_with(db, &mut table);
+            for bound in &decl.bounds {
+                if let TypeBound::Trait(trait_ref) = *bound
+                    && let Ok(inst) = crate::analysis::ty::trait_lower::lower_trait_ref(
+                        db,
+                        subject,
+                        trait_ref,
+                        scope,
+                        assumptions,
+                    )
+                    && inst.def(db).assoc_ty(db, name).is_some()
+                {
+                    let assoc_ty = TyId::assoc_ty(db, inst, name);
+                    let folded = assoc_ty.fold_with(db, &mut table);
+                    candidates.push((inst, folded));
                 }
             }
         }
@@ -1086,41 +1085,33 @@ pub fn resolve_name_res<'db>(
                         if !path.generic_args(db).is_empty(db) {
                             let gen_args = path.generic_args(db).data(db);
                             for (idx, ga) in gen_args.iter().enumerate() {
-                                if let crate::core::hir_def::GenericArg::Type(ty_arg) = ga {
-                                    if let Some(hir_ty) = ty_arg.ty.to_opt() {
-                                        if let TypeKind::Path(p) = hir_ty.data(db) {
-                                            if let Some(arg_path) = p.to_opt() {
-                                                match resolve_path(
-                                                    db,
-                                                    arg_path,
-                                                    scope,
-                                                    assumptions,
-                                                    false,
-                                                ) {
-                                                    Ok(res) => {
-                                                        // If resolved to non-type domain, report ExpectedType at arg span
-                                                        if !matches!(
-                                                            res,
-                                                            PathRes::Ty(_) | PathRes::TyAlias(..)
-                                                        ) {
-                                                            let ident = arg_path.ident(db).unwrap();
-                                                            let kind = res.kind_name();
-                                                            return Err(PathResError::new(
-                                                                PathResErrorKind::TraitGenericArgType {
-                                                                    arg_idx: idx,
-                                                                    ident,
-                                                                    given_kind: kind,
-                                                                },
-                                                                path,
-                                                            ));
-                                                        }
-                                                    }
-                                                    Err(inner) => {
-                                                        // Bubble up inner error; caller will render
-                                                        return Err(inner);
-                                                    }
-                                                }
-                                            }
+                                if let crate::core::hir_def::GenericArg::Type(ty_arg) = ga
+                                    && let Some(hir_ty) = ty_arg.ty.to_opt()
+                                    && let TypeKind::Path(p) = hir_ty.data(db)
+                                    && let Some(arg_path) = p.to_opt()
+                                {
+                                    match resolve_path(db, arg_path, scope, assumptions, false) {
+                                        Ok(res)
+                                            if !matches!(
+                                                res,
+                                                PathRes::Ty(_) | PathRes::TyAlias(..)
+                                            ) =>
+                                        {
+                                            let ident = arg_path.ident(db).unwrap();
+                                            let kind = res.kind_name();
+                                            return Err(PathResError::new(
+                                                PathResErrorKind::TraitGenericArgType {
+                                                    arg_idx: idx,
+                                                    ident,
+                                                    given_kind: kind,
+                                                },
+                                                path,
+                                            ));
+                                        }
+                                        Ok(_) => {}
+                                        Err(inner) => {
+                                            // Bubble up inner error; caller will render
+                                            return Err(inner);
                                         }
                                     }
                                 }

@@ -142,33 +142,27 @@ impl<'db> WherePredicateView<'db> {
         use crate::analysis::name_resolution::diagnostics::PathResDiag;
         use crate::analysis::name_resolution::{ExpectedPathKind, resolve_path};
 
-        let Some(_hir_ty) = self.hir_pred(db).ty.to_opt() else {
-            return None;
-        };
+        let _hir_ty = self.hir_pred(db).ty.to_opt()?;
 
         // Path-resolution failures are carried via the subject's InvalidCause.
         let owner_item = ItemKind::from(self.clause.owner);
         let assumptions = constraints_for(db, owner_item);
-        if let Some(cause) = subject.invalid_cause(db) {
-            if let InvalidCause::PathResolutionFailed { path } = cause {
-                // Re-run name resolution on the failed path and surface a precise diagnostic
-                // at the type path span within the where-predicate.
-                let ty_span = self.span().ty().into_path_type().path();
-                match resolve_path(db, path, owner_item.scope(), assumptions, false) {
-                    Ok(res) => {
-                        // Resolved to a non-type domain
-                        if let Some(ident) = path.ident(db).to_opt() {
-                            let diag =
-                                PathResDiag::ExpectedType(ty_span.into(), ident, res.kind_name());
-                            return Some(diag.into());
-                        }
+        if let Some(InvalidCause::PathResolutionFailed { path }) = subject.invalid_cause(db) {
+            // Re-run name resolution on the failed path and surface a precise diagnostic
+            // at the type path span within the where-predicate.
+            let ty_span = self.span().ty().into_path_type().path();
+            match resolve_path(db, path, owner_item.scope(), assumptions, false) {
+                Ok(res) => {
+                    // Resolved to a non-type domain
+                    if let Some(ident) = path.ident(db).to_opt() {
+                        let diag =
+                            PathResDiag::ExpectedType(ty_span.into(), ident, res.kind_name());
+                        return Some(diag.into());
                     }
-                    Err(inner) => {
-                        if let Some(diag) =
-                            inner.into_diag(db, path, ty_span, ExpectedPathKind::Type)
-                        {
-                            return Some(diag.into());
-                        }
+                }
+                Err(inner) => {
+                    if let Some(diag) = inner.into_diag(db, path, ty_span, ExpectedPathKind::Type) {
+                        return Some(diag.into());
                     }
                 }
             }
@@ -245,22 +239,21 @@ impl<'db> WherePredicateBoundView<'db> {
                 }
             }
             Err(TraitRefLowerError::PathResError(err)) => {
-                if let Some(path) = tr.path(db).to_opt() {
-                    if let Some(diag) =
+                if let Some(path) = tr.path(db).to_opt()
+                    && let Some(diag) =
                         err.into_diag(db, path, span.path(), ExpectedPathKind::Trait)
-                    {
-                        out.push(diag.into());
-                    }
+                {
+                    out.push(diag.into());
                 }
             }
             Err(TraitRefLowerError::InvalidDomain(res)) => {
-                if let Some(path) = tr.path(db).to_opt() {
-                    if let Some(ident) = path.ident(db).to_opt() {
-                        out.push(
-                            PathResDiag::ExpectedTrait(span.path().into(), ident, res.kind_name())
-                                .into(),
-                        );
-                    }
+                if let Some(path) = tr.path(db).to_opt()
+                    && let Some(ident) = path.ident(db).to_opt()
+                {
+                    out.push(
+                        PathResDiag::ExpectedTrait(span.path().into(), ident, res.kind_name())
+                            .into(),
+                    );
                 }
             }
             Err(TraitRefLowerError::Ignored) => {}
@@ -339,7 +332,7 @@ impl<'db> Func<'db> {
     /// Diagnostics for function parameter types:
     /// - For all params: star kind required and reject const types
     /// - For self param: enforce exact `Self` type shape
-    /// Note: WF/invalid errors are still surfaced via the general type walker.
+    ///   Note: WF/invalid errors are still surfaced via the general type walker.
     pub fn diags_param_types(self, db: &'db dyn HirAnalysisDb) -> Vec<TyDiagCollection<'db>> {
         use ty::diagnostics::ImplDiag;
         use ty::normalize::normalize_ty;
@@ -409,25 +402,25 @@ impl<'db> Func<'db> {
                 }
             }
 
-            if view.is_self_param(db) {
-                if let Some(expected) = expected_self {
-                    if !ty.has_invalid(db) && !expected.has_invalid(db) {
-                        let (exp_base, exp_args) = expected.decompose_ty_app(db);
-                        let ty_norm = normalize_ty(db, ty, self.scope(), assumptions);
-                        let (ty_base, ty_args) = ty_norm.decompose_ty_app(db);
-                        let same_base = ty_base == exp_base;
-                        let same_args = exp_args.iter().zip(ty_args.iter()).all(|(a, b)| a == b);
-                        if !(same_base && same_args) {
-                            out.push(
-                                ImplDiag::InvalidSelfType {
-                                    span: ty_span.clone(),
-                                    expected,
-                                    given: ty_norm,
-                                }
-                                .into(),
-                            );
+            if view.is_self_param(db)
+                && let Some(expected) = expected_self
+                && !ty.has_invalid(db)
+                && !expected.has_invalid(db)
+            {
+                let (exp_base, exp_args) = expected.decompose_ty_app(db);
+                let ty_norm = normalize_ty(db, ty, self.scope(), assumptions);
+                let (ty_base, ty_args) = ty_norm.decompose_ty_app(db);
+                let same_base = ty_base == exp_base;
+                let same_args = exp_args.iter().zip(ty_args.iter()).all(|(a, b)| a == b);
+                if !(same_base && same_args) {
+                    out.push(
+                        ImplDiag::InvalidSelfType {
+                            span: ty_span.clone(),
+                            expected,
+                            given: ty_norm,
                         }
-                    }
+                        .into(),
+                    );
                 }
             }
         }
@@ -466,28 +459,27 @@ impl<'db> Func<'db> {
         // Method conflict check only for inherent impls
         if let Some(crate::hir_def::scope_graph::ScopeId::Item(ItemKind::Impl(impl_))) =
             self.scope().parent(db)
+            && let Some(func_def) = self.as_callable(db)
         {
-            if let Some(func_def) = self.as_callable(db) {
-                // Use the implementor type for the receiver
-                let self_ty = impl_.ty(db);
-                if !self_ty.has_invalid(db) {
-                    let ingot = self.top_mod(db).ingot(db);
-                    for &cand in probe_method(
-                        db,
-                        ingot,
-                        Canonical::new(db, self_ty),
-                        func_def.name(db).expect("impl methods have names"),
-                    ) {
-                        if cand != func_def {
-                            out.push(
-                                ty::diagnostics::ImplDiag::ConflictMethodImpl {
-                                    primary: func_def,
-                                    conflict_with: cand,
-                                }
-                                .into(),
-                            );
-                            break;
-                        }
+            // Use the implementor type for the receiver
+            let self_ty = impl_.ty(db);
+            if !self_ty.has_invalid(db) {
+                let ingot = self.top_mod(db).ingot(db);
+                for &cand in probe_method(
+                    db,
+                    ingot,
+                    Canonical::new(db, self_ty),
+                    func_def.name(db).expect("impl methods have names"),
+                ) {
+                    if cand != func_def {
+                        out.push(
+                            ty::diagnostics::ImplDiag::ConflictMethodImpl {
+                                primary: func_def,
+                                conflict_with: cand,
+                            }
+                            .into(),
+                        );
+                        break;
                     }
                 }
             }
@@ -1189,26 +1181,28 @@ impl<'db> FieldView<'db> {
         }
 
         // Const type parameter mismatch check: if field name matches a const type parameter.
-        if let Some(name) = self.name(db) {
-            let scope = crate::hir_def::scope_graph::ScopeId::Field(self.parent, self.idx as u16);
-            let path = PathId::from_ident(db, name);
-            let assumptions = PredicateListId::empty_list(db);
-            if let Ok(PathRes::Ty(t)) = resolve_path(db, path, scope, assumptions, true) {
-                if let TyData::ConstTy(const_ty) = t.data(db) {
-                    let expected = *const_ty;
-                    let expected_ty = expected.ty(db);
-                    if !expected_ty.has_invalid(db) && !ty.has_invalid(db) && ty != expected_ty {
-                        out.push(
-                            TyLowerDiag::ConstTyMismatch {
-                                span,
-                                expected: expected_ty,
-                                given: ty,
-                            }
-                            .into(),
-                        );
-                        return out;
+        if let Some(name) = self.name(db)
+            && let Ok(PathRes::Ty(t)) = resolve_path(
+                db,
+                PathId::from_ident(db, name),
+                crate::hir_def::scope_graph::ScopeId::Field(self.parent, self.idx as u16),
+                PredicateListId::empty_list(db),
+                true,
+            )
+            && let TyData::ConstTy(const_ty) = t.data(db)
+        {
+            let expected = *const_ty;
+            let expected_ty = expected.ty(db);
+            if !expected_ty.has_invalid(db) && !ty.has_invalid(db) && ty != expected_ty {
+                out.push(
+                    TyLowerDiag::ConstTyMismatch {
+                        span,
+                        expected: expected_ty,
+                        given: ty,
                     }
-                }
+                    .into(),
+                );
+                return out;
             }
         }
 
@@ -1550,26 +1544,25 @@ impl<'db> GenericParamOwner<'db> {
                         }
                     }
                     Err(TraitRefLowerError::PathResError(err)) => {
-                        if let Some(path) = tr.path(db).to_opt() {
-                            if let Some(diag) =
+                        if let Some(path) = tr.path(db).to_opt()
+                            && let Some(diag) =
                                 err.into_diag(db, path, span.path(), ExpectedPathKind::Trait)
-                            {
-                                out.push(diag.into());
-                            }
+                        {
+                            out.push(diag.into());
                         }
                     }
                     Err(TraitRefLowerError::InvalidDomain(res)) => {
-                        if let Some(path) = tr.path(db).to_opt() {
-                            if let Some(ident) = path.ident(db).to_opt() {
-                                out.push(
-                                    PathResDiag::ExpectedTrait(
-                                        span.path().into(),
-                                        ident,
-                                        res.kind_name(),
-                                    )
-                                    .into(),
-                                );
-                            }
+                        if let Some(path) = tr.path(db).to_opt()
+                            && let Some(ident) = path.ident(db).to_opt()
+                        {
+                            out.push(
+                                PathResDiag::ExpectedTrait(
+                                    span.path().into(),
+                                    ident,
+                                    res.kind_name(),
+                                )
+                                .into(),
+                            );
                         }
                     }
                     Err(TraitRefLowerError::Ignored) => {}

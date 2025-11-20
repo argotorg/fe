@@ -387,7 +387,7 @@ impl<'db> FuncParamView<'db> {
         // Delegate to the function-level lowering to keep behavior consistent.
         // Indexing is safe as long as `idx` was derived from the function's own
         // parameter list.
-        self.func.arg_tys(db)[self.idx].clone()
+        self.func.arg_tys(db)[self.idx]
     }
 
     /// Semantic type of this parameter (binder removed).
@@ -555,9 +555,7 @@ impl<'db> WherePredicateView<'db> {
             return None;
         }
         let ident = path.as_ident(db)?;
-        let Some(owner) = GenericParamOwner::from_item_opt(self.owner_item()) else {
-            return None;
-        };
+        let owner = GenericParamOwner::from_item_opt(self.owner_item())?;
         let params = owner.params_list(db).data(db);
         params.iter().position(|p| match p {
             GenericParam::Type(t) => t.name.to_opt() == Some(ident),
@@ -706,10 +704,10 @@ impl<'db> Trait<'db> {
     ) -> IndexMap<IdentId<'db>, CallableDef<'db>> {
         let mut methods = IndexMap::default();
         for method in self.methods(db) {
-            if let Some(func) = method.as_callable(db) {
-                if let Some(name) = func.name(db) {
-                    methods.insert(name, func);
-                }
+            if let Some(func) = method.as_callable(db)
+                && let Some(name) = func.name(db)
+            {
+                methods.insert(name, func);
             }
         }
         methods
@@ -772,9 +770,7 @@ impl<'db> Trait<'db> {
         self,
         db: &'db dyn HirAnalysisDb,
     ) -> IndexSet<Binder<TraitInstId<'db>>> {
-        self.super_trait_bounds(db)
-            .map(Binder::bind)
-            .collect()
+        self.super_trait_bounds(db).map(Binder::bind).collect()
     }
 
     /// Aggregate trait definition diagnostics using semantic views.
@@ -1461,18 +1457,13 @@ struct AssocTypeBounds<'db> {
 }
 
 impl<'db> AssocTypeBounds<'db> {
-    fn bounds(
-        self,
-        db: &'db dyn HirAnalysisDb,
-    ) -> impl Iterator<Item = TraitInstId<'db>> + 'db {
+    fn bounds(self, db: &'db dyn HirAnalysisDb) -> impl Iterator<Item = TraitInstId<'db>> + 'db {
         let owner_trait = self.base.owner;
         let scope = owner_trait.scope();
         let assumptions = constraints_for(db, owner_trait.into());
-        self.base
-            .bounds(db)
-            .filter_map(move |b| {
-                b.to_trait_inst(db, self.subject, self.owner_self, scope, assumptions)
-            })
+        self.base.bounds(db).filter_map(move |b| {
+            b.to_trait_inst(db, self.subject, self.owner_self, scope, assumptions)
+        })
     }
 }
 
@@ -1533,8 +1524,8 @@ impl<'db> ImplementorId<'db> {
         let trait_hir = self.trait_def(db);
         let impl_types = self.types(db);
         trait_hir.assoc_types(db).filter_map(move |assoc| {
-            let Some(name) = assoc.name(db) else { return None };
-            let Some(&impl_ty) = impl_types.get(&name) else { return None };
+            let name = assoc.name(db)?;
+            let &impl_ty = impl_types.get(&name)?;
             Some(ImplementorAssocTypeView {
                 implementor: self,
                 assoc,

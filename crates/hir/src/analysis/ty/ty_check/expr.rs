@@ -2,7 +2,8 @@ use std::panic;
 
 use crate::core::hir_def::{
     ArithBinOp, BinOp, Expr, ExprId, FieldIndex, IdentId, Partial, Pat, PatId, PathId, UnOp,
-    VariantKind};
+    VariantKind,
+};
 
 use common::ingot::IngotKind;
 use either::Either;
