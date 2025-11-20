@@ -551,7 +551,7 @@ impl<'db> Trait<'db> {
             let Some(default_ty) = assoc.default_ty(db) else {
                 continue;
             };
-            for trait_inst in assoc.with_subject(default_ty).bounds(db) {
+            for trait_inst in assoc.bounds_on_subject(db, default_ty) {
                 let canonical_inst = ty::canonical::Canonical::new(db, trait_inst);
                 match ty::trait_resolution::is_goal_satisfiable(
                     db,
@@ -856,24 +856,15 @@ impl<'db> ImplTrait<'db> {
         };
         let implementor = implementor.instantiate_identity();
         let trait_hir = implementor.trait_def(db);
-        let impl_types = implementor.types(db);
         let impl_trait_hir = implementor.hir_impl_trait(db);
         let assumptions =
             ty::trait_resolution::constraint::collect_constraints(db, impl_trait_hir.into())
                 .instantiate_identity();
 
-        for assoc in trait_hir.assoc_types(db) {
+        for assoc in implementor.assoc_type_views(db) {
             let Some(name) = assoc.name(db) else { continue };
-            let Some(&impl_ty) = impl_types.get(&name) else {
-                continue;
-            };
 
-            for b in assoc.bounds(db) {
-                let Some(bound_inst) =
-                    b.as_trait_inst_with_subject_and_owner(db, impl_ty, implementor.self_ty(db))
-                else {
-                    continue;
-                };
+            for bound_inst in assoc.bounds(db) {
                 let canonical_bound = ty::canonical::Canonical::new(db, bound_inst);
                 use ty::trait_resolution::{GoalSatisfiability, is_goal_satisfiable};
                 if let GoalSatisfiability::UnSat(_) = is_goal_satisfiable(

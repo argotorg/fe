@@ -946,7 +946,7 @@ pub fn find_associated_type<'db>(
                 continue;
             }
             let subject = ty_with_subst.fold_with(db, &mut table);
-            for inst in view.with_subject(subject).bounds(db) {
+            for inst in subject.assoc_type_bounds(db, view) {
                 if inst.def(db).assoc_ty(db, name).is_some() {
                     let assoc_ty = TyId::assoc_ty(db, inst, name);
                     let folded = assoc_ty.fold_with(db, &mut table);

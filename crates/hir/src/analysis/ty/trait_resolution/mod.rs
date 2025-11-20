@@ -234,7 +234,7 @@ impl<'db> PredicateListId<'db> {
                 let _assumptions =
                     PredicateListId::new(db, all_predicates.iter().copied().collect::<Vec<_>>());
 
-                for mut trait_inst in trait_type.with_subject(assoc_ty).bounds(db) {
+                for mut trait_inst in assoc_ty.assoc_type_bounds(db, trait_type) {
                     // Substitute `Self` and associated types using the original predicate instance
                     let mut subst = AssocTySubst::new(pred);
                     trait_inst = trait_inst.fold_with(db, &mut subst);

@@ -738,21 +738,20 @@ impl<'db> Trait<'db> {
         (0..len).map(move |idx| SuperTraitRefView { owner: self, idx })
     }
 
-    pub(crate) fn super_traits(
+    /// Semantic super-trait bounds using the trait's own `Self` as subject.
+    pub fn super_trait_bounds(
         self,
         db: &'db dyn HirAnalysisDb,
-    ) -> IndexSet<Binder<TraitInstId<'db>>> {
+    ) -> impl Iterator<Item = TraitInstId<'db>> + 'db {
         let self_param = self.self_param(db);
         let scope = self.scope();
-
-        // Use the trait's own constraints as assumptions when lowering super traits
         let assumptions = collect_constraints(db, self.into()).instantiate_identity();
 
         let mut super_traits = IndexSet::new();
         for view in self.super_trait_refs(db) {
             let super_ref = view.trait_ref(db);
             if let Ok(inst) = lower_trait_ref(db, self_param, super_ref, scope, assumptions) {
-                super_traits.insert(Binder::bind(inst));
+                super_traits.insert(inst);
             }
         }
 
@@ -762,12 +761,21 @@ impl<'db> Trait<'db> {
             }
             for bound in pred.bounds(db) {
                 if let Some(inst) = bound.as_trait_inst(db) {
-                    super_traits.insert(Binder::bind(inst));
+                    super_traits.insert(inst);
                 }
             }
         }
 
-        super_traits
+        super_traits.into_iter()
+    }
+
+    pub(crate) fn super_traits(
+        self,
+        db: &'db dyn HirAnalysisDb,
+    ) -> IndexSet<Binder<TraitInstId<'db>>> {
+        self.super_trait_bounds(db)
+            .map(Binder::bind)
+            .collect()
     }
 
     /// Aggregate trait definition diagnostics using semantic views.
@@ -1492,6 +1500,63 @@ impl<'db> AssocTypeBoundView<'db> {
 }
 
 #[derive(Clone, Copy, Debug)]
+pub struct ImplementorAssocTypeView<'db> {
+    implementor: ImplementorId<'db>,
+    assoc: TraitAssocTypeView<'db>,
+    impl_ty: TyId<'db>,
+}
+
+impl<'db> ImplementorAssocTypeView<'db> {
+    pub fn name(self, db: &'db dyn HirDb) -> Option<IdentId<'db>> {
+        self.assoc.name(db)
+    }
+
+    pub fn bounds(
+        self,
+        db: &'db dyn HirAnalysisDb,
+    ) -> impl Iterator<Item = TraitInstId<'db>> + 'db {
+        self.assoc
+            .bounds_on_subject_with_owner(db, self.impl_ty, self.implementor.self_ty(db))
+    }
+
+    pub fn impl_ty(self) -> TyId<'db> {
+        self.impl_ty
+    }
+}
+
+impl<'db> ImplementorId<'db> {
+    /// Contextual assoc-type views for this implementor, pairing each trait associated
+    /// type with the implemented type (if provided).
+    pub fn assoc_type_views(
+        self,
+        db: &'db dyn HirAnalysisDb,
+    ) -> impl Iterator<Item = ImplementorAssocTypeView<'db>> + 'db {
+        let trait_hir = self.trait_def(db);
+        let impl_types = self.types(db);
+        trait_hir.assoc_types(db).filter_map(move |assoc| {
+            let Some(name) = assoc.name(db) else { return None };
+            let Some(&impl_ty) = impl_types.get(&name) else { return None };
+            Some(ImplementorAssocTypeView {
+                implementor: self,
+                assoc,
+                impl_ty,
+            })
+        })
+    }
+}
+
+impl<'db> TyId<'db> {
+    /// Type-rooted entry to associated-type bounds: attach this type as subject.
+    pub fn assoc_type_bounds(
+        self,
+        db: &'db dyn HirAnalysisDb,
+        assoc: TraitAssocTypeView<'db>,
+    ) -> impl Iterator<Item = TraitInstId<'db>> + 'db {
+        assoc.bounds_on_subject(db, self)
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
 pub struct VariantView<'db> {
     owner: Enum<'db>,
     idx: usize,
@@ -1638,4 +1703,3 @@ impl<'db> EnumVariant<'db> {
         &def.fields(db)[self.idx as usize]
     }
 }
-#[derive(Clone, Copy, Debug)]
