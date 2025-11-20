@@ -7,7 +7,6 @@ use super::{
 use crate::analysis::{
     HirAnalysisDb,
     ty::{
-        normalize::normalize_ty,
         trait_resolution::{constraint::ty_constraints, proof_forest::ProofForest},
         unify::UnificationTable,
         visitor::collect_flags,
@@ -63,20 +62,7 @@ pub(crate) fn check_ty_wf<'db>(
         let normalized_list: Vec<_> = constraints
             .list(db)
             .iter()
-            .map(|&goal| {
-                // Normalize each argument in the goal
-                let normalized_args: Vec<_> = goal
-                    .args(db)
-                    .iter()
-                    .map(|&arg| normalize_ty(db, arg, scope, assumptions))
-                    .collect();
-                TraitInstId::new(
-                    db,
-                    goal.def(db),
-                    normalized_args,
-                    goal.assoc_type_bindings(db).clone(),
-                )
-            })
+            .map(|&goal| goal.normalize(db, scope, assumptions))
             .collect();
         PredicateListId::new(db, normalized_list)
     };
@@ -130,20 +116,7 @@ pub(crate) fn check_trait_inst_wf<'db>(
         let normalized_list: Vec<_> = constraints
             .list(db)
             .iter()
-            .map(|&goal| {
-                // Normalize each argument in the goal
-                let normalized_args: Vec<_> = goal
-                    .args(db)
-                    .iter()
-                    .map(|&arg| normalize_ty(db, arg, scope, assumptions))
-                    .collect();
-                TraitInstId::new(
-                    db,
-                    goal.def(db),
-                    normalized_args,
-                    goal.assoc_type_bindings(db).clone(),
-                )
-            })
+            .map(|&goal| goal.normalize(db, scope, assumptions))
             .collect();
         PredicateListId::new(db, normalized_list)
     };

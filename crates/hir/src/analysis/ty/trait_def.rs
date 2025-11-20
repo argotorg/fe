@@ -423,6 +423,26 @@ impl<'db> TraitInstId<'db> {
         None
     }
 
+    /// Normalize arguments of this trait instance.
+    pub(crate) fn normalize(
+        self,
+        db: &'db dyn HirAnalysisDb,
+        scope: crate::core::hir_def::scope_graph::ScopeId<'db>,
+        assumptions: PredicateListId<'db>,
+    ) -> Self {
+        let normalized_args: Vec<_> = self
+            .args(db)
+            .iter()
+            .map(|&arg| crate::analysis::ty::normalize::normalize_ty(db, arg, scope, assumptions))
+            .collect();
+        Self::new(
+            db,
+            self.def(db),
+            normalized_args,
+            self.assoc_type_bindings(db).clone(),
+        )
+    }
+
     pub fn pretty_print(self, db: &dyn HirAnalysisDb, as_pred: bool) -> String {
         if as_pred {
             let inst = self.pretty_print(db, false);

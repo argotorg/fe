@@ -15,7 +15,6 @@ use crate::analysis::{
         binder::Binder,
         canonical::{Canonical, Canonicalized},
         fold::TyFoldable,
-        normalize::normalize_ty,
         trait_def::{ImplementorId, TraitInstId, impls_for_trait},
         ty_def::{TyData, TyId},
         unify::PersistentUnificationTable,
@@ -366,21 +365,7 @@ impl GeneratorNode {
             let normalized_gen_cand = {
                 let trait_inst = gen_cand.trait_(db);
                 let scope = g_node.goal.value.ingot(db).root_mod(db).scope();
-
-                // Normalize each argument
-                let normalized_args: Vec<_> = trait_inst
-                    .args(db)
-                    .iter()
-                    .map(|&arg| normalize_ty(db, arg, scope, g_node.assumptions))
-                    .collect();
-
-                // Create normalized trait instance
-                TraitInstId::new(
-                    db,
-                    trait_inst.def(db),
-                    normalized_args,
-                    trait_inst.assoc_type_bindings(db).clone(),
-                )
+                trait_inst.normalize(db, scope, g_node.assumptions)
             };
 
             if table
@@ -497,40 +482,17 @@ impl ConsumerNode {
         let normalized_pending = {
             let scope = pending_inst.ingot(db).root_mod(db).scope();
             let assumptions = pf.g_nodes[c_node.root].assumptions;
-
-            // Normalize each argument
-            let normalized_args: Vec<_> = pending_inst
-                .args(db)
-                .iter()
-                .map(|&arg| normalize_ty(db, arg.fold_with(db, &mut table), scope, assumptions))
-                .collect();
-
-            TraitInstId::new(
-                db,
-                pending_inst.def(db),
-                normalized_args,
-                pending_inst.assoc_type_bindings(db).clone(),
-            )
+            pending_inst
+                .fold_with(db, &mut table)
+                .normalize(db, scope, assumptions)
         };
 
         let normalized_solution = {
-            use crate::analysis::ty::trait_def::TraitInstId;
             let scope = solution.ingot(db).root_mod(db).scope();
             let assumptions = pf.g_nodes[c_node.root].assumptions;
-
-            // Normalize each argument
-            let normalized_args: Vec<_> = solution
-                .args(db)
-                .iter()
-                .map(|&arg| normalize_ty(db, arg.fold_with(db, &mut table), scope, assumptions))
-                .collect();
-
-            TraitInstId::new(
-                db,
-                solution.def(db),
-                normalized_args,
-                solution.assoc_type_bindings(db).clone(),
-            )
+            solution
+                .fold_with(db, &mut table)
+                .normalize(db, scope, assumptions)
         };
 
         // Try to unifies pending inst and solution.
