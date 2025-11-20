@@ -57,7 +57,7 @@ use crate::analysis::ty::trait_lower::{
     TraitRefLowerError, lower_trait_ref, lower_trait_ref_with_owner_self,
 };
 use crate::analysis::ty::trait_resolution::constraint::{
-    collect_adt_constraints, collect_constraints, collect_func_def_constraints, super_trait_cycle,
+    collect_adt_constraints, collect_constraints, collect_func_def_constraints,
 };
 use crate::analysis::ty::ty_def::TyData;
 use crate::analysis::ty::ty_lower::{GenericParamTypeSet, collect_generic_params};
@@ -69,7 +69,6 @@ use crate::analysis::ty::{
 };
 use crate::core::adt_lower::lower_adt;
 use common::indexmap::IndexMap;
-use either::Either;
 use indexmap::IndexSet;
 pub mod diagnostics;
 

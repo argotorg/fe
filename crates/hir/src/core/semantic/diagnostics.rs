@@ -855,7 +855,6 @@ impl<'db> ImplTrait<'db> {
             return diags;
         };
         let implementor = implementor.instantiate_identity();
-        let trait_hir = implementor.trait_def(db);
         let impl_trait_hir = implementor.hir_impl_trait(db);
         let assumptions =
             ty::trait_resolution::constraint::collect_constraints(db, impl_trait_hir.into())

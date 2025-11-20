@@ -194,7 +194,7 @@ impl<'db> WherePredicate<'db> {
 }
 
 impl<'db> TypeBound<'db> {
-    pub(crate) fn lower_ast(ctxt: &mut FileLowerCtxt<'db>, ast: ast::TypeBound) -> Self {
+    pub(in crate::core) fn lower_ast(ctxt: &mut FileLowerCtxt<'db>, ast: ast::TypeBound) -> Self {
         if let Some(trait_bound) = ast.trait_bound() {
             Self::Trait(TraitRefId::lower_ast(ctxt, trait_bound))
         } else {

@@ -953,14 +953,6 @@ impl<'db> Trait<'db> {
     pub fn assoc_ty_by_index(self, db: &'db dyn HirDb, idx: usize) -> &'db AssocTyDecl<'db> {
         &self.types(db)[idx]
     }
-
-    /// Iterates associated type declarations of this trait (raw HIR). Keep internal.
-    pub(in crate::core) fn assoc_type_decls(
-        self,
-        db: &'db dyn HirDb,
-    ) -> impl Iterator<Item = &'db AssocTyDecl<'db>> + 'db {
-        self.types(db).iter()
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, salsa::Update)]
