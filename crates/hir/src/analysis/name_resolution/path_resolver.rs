@@ -961,11 +961,11 @@ pub fn find_associated_type<'db>(
             if let Some(decl) = trait_.assoc_ty(db, assoc_name) {
                 let subject = ty_with_subst.fold_with(db, &mut table);
                 for bound in &decl.bounds {
-                    if let TypeBound::Trait(trait_ref) = bound {
+                    if let TypeBound::Trait(trait_ref) = *bound {
                         if let Ok(inst) = crate::analysis::ty::trait_lower::lower_trait_ref(
                             db,
                             subject,
-                            *trait_ref,
+                            trait_ref,
                             scope,
                             assumptions,
                         ) {

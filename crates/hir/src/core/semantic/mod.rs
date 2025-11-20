@@ -902,7 +902,7 @@ impl<'db> SuperTraitRefView<'db> {
         self.owner.span().super_traits().super_trait(self.idx)
     }
 
-    pub(in crate::core) fn trait_ref_id(self, db: &'db dyn HirDb) -> TraitRefId<'db> {
+    pub(crate) fn trait_ref(self, db: &'db dyn HirDb) -> TraitRefId<'db> {
         self.owner.super_traits(db)[self.idx]
     }
 
@@ -926,7 +926,7 @@ impl<'db> SuperTraitRefView<'db> {
     ) -> Result<TraitInstId<'db>, SuperTraitLowerError> {
         use crate::analysis::ty::trait_lower::TraitRefLowerError;
         let subject = self.subject_self(db);
-        let tr = self.trait_ref_id(db);
+        let tr = self.trait_ref(db);
         let scope = self.owner.scope();
         let assumptions = self.assumptions(db);
         match crate::analysis::ty::trait_lower::lower_trait_ref(db, subject, tr, scope, assumptions)
@@ -946,7 +946,7 @@ impl<'db> SuperTraitRefView<'db> {
         let subject = self.subject_self(db);
         let scope = self.owner.scope();
         let assumptions = self.assumptions(db);
-        let tr = self.trait_ref_id(db);
+        let tr = self.trait_ref(db);
         let expected = match lower_trait_ref(db, subject, tr, scope, assumptions) {
             Ok(inst) => inst.def(db).self_param(db).kind(db).clone(),
             // If we cannot lower, defer to other diagnostics; do not emit mismatch here.

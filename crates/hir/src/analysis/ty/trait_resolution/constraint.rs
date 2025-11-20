@@ -65,8 +65,9 @@ pub(crate) fn collect_super_traits<'db>(
     let assumptions = collect_constraints(db, hir_trait.into()).instantiate_identity();
 
     let mut super_traits = IndexSet::new();
-    for &super_ in hir_trait.super_traits(db).iter() {
-        if let Ok(inst) = lower_trait_ref(db, self_param, super_, scope, assumptions) {
+    for view in trait_.super_trait_refs(db) {
+        let super_ref = view.trait_ref(db);
+        if let Ok(inst) = lower_trait_ref(db, self_param, super_ref, scope, assumptions) {
             super_traits.insert(Binder::bind(inst));
         }
     }

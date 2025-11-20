@@ -42,7 +42,7 @@ impl<'db> SuperTraitRefView<'db> {
         let subject = self.subject_self(db);
         let scope = self.owner.scope();
         let assumptions = self.assumptions(db);
-        let tr = self.trait_ref_id(db);
+        let tr = self.trait_ref(db);
 
         let inst = match trait_lower::lower_trait_ref(db, subject, tr, scope, assumptions) {
             Ok(i) => i,

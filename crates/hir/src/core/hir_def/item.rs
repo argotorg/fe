@@ -911,7 +911,7 @@ pub struct Trait<'db> {
     pub vis: Visibility,
     pub(in crate::core) generic_params: GenericParamListId<'db>,
     #[return_ref]
-    pub super_traits: Vec<TraitRefId<'db>>,
+    pub(in crate::core) super_traits: Vec<TraitRefId<'db>>,
     pub(in crate::core) where_clause: WhereClauseId<'db>,
     #[return_ref]
     pub(in crate::core) types: Vec<AssocTyDecl<'db>>,
@@ -1037,7 +1037,7 @@ impl<'db> ImplTrait<'db> {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, salsa::Update)]
 pub struct AssocTyDef<'db> {
     pub name: Partial<IdentId<'db>>,
-    pub type_ref: Partial<TypeId<'db>>,
+    pub(in crate::core) type_ref: Partial<TypeId<'db>>,
 }
 
 #[salsa::tracked]
@@ -1047,7 +1047,7 @@ pub struct Const<'db> {
     id: TrackedItemId<'db>,
 
     pub name: Partial<IdentId<'db>>,
-    pub attributes: AttrListId<'db>,
+    pub(in crate::core) attributes: AttrListId<'db>,
     pub(in crate::core) type_ref: Partial<TypeId<'db>>,
     pub body: Partial<Body<'db>>,
     pub vis: Visibility,

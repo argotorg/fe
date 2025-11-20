@@ -34,7 +34,6 @@ use crate::analysis::{
 use crate::hir_def::CallableDef;
 
 /// Returns [`TraitEnv`] for the given ingot.
-#[salsa::tracked(return_ref, cycle_fn=ingot_trait_env_cycle_recover, cycle_initial=ingot_trait_env_cycle_initial)]
 pub(crate) fn ingot_trait_env<'db>(db: &'db dyn HirAnalysisDb, ingot: Ingot<'db>) -> TraitEnv<'db> {
     TraitEnv::collect(db, ingot)
 }
@@ -533,29 +532,7 @@ impl<'db> TraitInstId<'db> {
     }
 }
 
-/// Represents a trait definition.
+// Represents a trait definition.
 // (TraitDef struct and impl removed)
 
 // (TraitMethod struct and impl removed)
-
-fn ingot_trait_env_cycle_initial<'db>(
-    _db: &'db dyn HirAnalysisDb,
-    ingot: Ingot<'db>,
-) -> TraitEnv<'db> {
-    // Return an empty trait environment when we detect a cycle
-    TraitEnv {
-        impls: FxHashMap::default(),
-        ty_to_implementors: FxHashMap::default(),
-        ingot,
-    }
-}
-
-fn ingot_trait_env_cycle_recover<'db>(
-    _db: &'db dyn HirAnalysisDb,
-    _value: &TraitEnv<'db>,
-    _count: u32,
-    _ingot: Ingot<'db>,
-) -> salsa::CycleRecoveryAction<TraitEnv<'db>> {
-    // Continue iterating to try to resolve the cycle
-    salsa::CycleRecoveryAction::Iterate
-}
