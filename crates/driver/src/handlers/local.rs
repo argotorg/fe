@@ -1,6 +1,8 @@
 use common::{
     InputDb,
-    dependencies::{DependencyArguments, DependencyLocation, ExternalDependencyEdge},
+    dependencies::{
+        DependencyAlias, DependencyArguments, DependencyLocation, ExternalDependencyEdge,
+    },
 };
 use resolver::{
     ResolutionHandler,
@@ -54,7 +56,7 @@ impl<'a> LocalIngotHandler<'a> {
 }
 
 impl<'a> ResolutionHandler<FilesResolver> for LocalIngotHandler<'a> {
-    type Item = Vec<(Url, (SmolStr, DependencyArguments))>;
+    type Item = Vec<(Url, (DependencyAlias, DependencyArguments))>;
 
     fn handle_resolution(&mut self, ingot_url: &Url, resource: FilesResource) -> Self::Item {
         if self.record_files(resource).is_none() {
@@ -91,12 +93,20 @@ impl<'a> ResolutionHandler<FilesResolver> for LocalIngotHandler<'a> {
                 });
         }
 
+        self.db
+            .dependency_graph()
+            .ensure_local_node(self.db, ingot_url);
+
         let mut pending = Vec::new();
         for dependency in config.dependencies(ingot_url) {
             match dependency.location {
                 DependencyLocation::Local(local) => {
-                    if self.db.local_graph().contains_url(self.db, &local.url) {
-                        self.db.local_graph().add_dependency(
+                    if self
+                        .db
+                        .dependency_graph()
+                        .contains_local_url(self.db, &local.url)
+                    {
+                        self.db.dependency_graph().add_local_dependency(
                             self.db,
                             ingot_url,
                             &local.url,
@@ -125,7 +135,7 @@ impl<'a> ResolutionHandler<FilesResolver> for LocalIngotHandler<'a> {
     }
 }
 
-impl<'a> GraphResolutionHandler<Url, DiGraph<Url, (SmolStr, DependencyArguments)>>
+impl<'a> GraphResolutionHandler<Url, DiGraph<Url, (DependencyAlias, DependencyArguments)>>
     for LocalIngotHandler<'a>
 {
     type Item = ();
@@ -135,12 +145,12 @@ impl<'a> GraphResolutionHandler<Url, DiGraph<Url, (SmolStr, DependencyArguments)
         _ingot_url: &Url,
         graph: DiGraph<Url, (SmolStr, DependencyArguments)>,
     ) -> Self::Item {
-        let dependency_graph = self.db.local_graph();
+        let dependency_graph = self.db.dependency_graph();
         for edge in graph.edge_references() {
             let from_url = &graph[edge.source()];
             let to_url = &graph[edge.target()];
             let (alias, arguments) = edge.weight();
-            dependency_graph.add_dependency(
+            dependency_graph.add_local_dependency(
                 self.db,
                 from_url,
                 to_url,

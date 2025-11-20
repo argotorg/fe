@@ -12,7 +12,9 @@ use camino::Utf8PathBuf;
 use common::{
     InputDb,
     cache::remote_git_cache_dir,
-    dependencies::{DependencyArguments, ExternalDependencyEdge, display_tree::display_tree},
+    dependencies::{
+        DependencyAlias, DependencyArguments, ExternalDependencyEdge, display_tree::display_tree,
+    },
 };
 pub use db::DriverDataBase;
 use handlers::{LocalIngotHandler, RemoteIngotHandler};
@@ -24,19 +26,16 @@ use resolver::{
     Resolver,
     files::{FilesResolutionDiagnostic, FilesResolutionError, FilesResolver},
     git::{GitDependencyDescription, GitResolutionDiagnostic, GitResolutionError, GitResolver},
-    graph::{GraphResolver, GraphResolverImpl, petgraph::algo::is_cyclic_directed},
+    graph::{GraphResolver, GraphResolverImpl},
+    ingot::{LocalGraphResolver, project_files_resolver},
 };
 use url::Url;
 
 pub type IngotGraphResolver<'a> =
-    GraphResolverImpl<FilesResolver, LocalIngotHandler<'a>, (SmolStr, DependencyArguments)>;
+    LocalGraphResolver<LocalIngotHandler<'a>, (DependencyAlias, DependencyArguments)>;
 
 fn ingot_files_resolver() -> FilesResolver {
-    FilesResolver::new()
-        .with_required_file("fe.toml")
-        .with_required_directory("src")
-        .with_required_file("src/lib.fe")
-        .with_pattern("src/**/*.fe")
+    project_files_resolver()
 }
 
 pub fn ingot_graph_resolver<'a>() -> IngotGraphResolver<'a> {
@@ -89,7 +88,7 @@ pub fn init_ingot(db: &mut DriverDataBase, ingot_url: &Url) -> Vec<IngotInitDiag
     diagnostics.extend(resolve_remote_dependencies(db, ingot_url, &remote_requests));
 
     // Check for cycles after graph resolution (now that handler is dropped)
-    let cyclic_subgraph = db.local_graph().cyclic_subgraph(db);
+    let cyclic_subgraph = db.dependency_graph().cyclic_subgraph(db);
 
     // Add cycle diagnostics - single comprehensive diagnostic if any cycles exist
     if cyclic_subgraph.node_count() > 0 {
@@ -284,6 +283,7 @@ fn resolve_remote_dependencies(
         (SmolStr, DependencyArguments),
     > = GraphResolverImpl::new(git_resolver);
     let mut handler = RemoteIngotHandler::new(db);
+    let mut resolved_sets = Vec::new();
     let mut diagnostics = Vec::new();
     let multi = MultiProgress::new();
     let spinner_style = ProgressStyle::with_template("{spinner} {msg}")
@@ -301,19 +301,17 @@ fn resolve_remote_dependencies(
         ));
 
         match graph_resolver.graph_resolve(&mut handler, &description) {
-            Ok(graph) => {
+            Ok(_graph) => {
                 if let Some(root_url) = handler.ingot_url(&description) {
                     spinner.finish_with_message(format!("✅ Resolved {root_url}"));
+                    resolved_sets.push((request.parent.clone(), root_url.clone()));
                 } else {
                     spinner.finish_and_clear();
                 }
-                if is_cyclic_directed(&graph) {
-                    if let Some(root_url) = handler.ingot_url(&description) {
-                        diagnostics.push(IngotInitDiagnostics::RemoteDependencyCycle {
-                            root_ingot: root_url.clone(),
-                        });
-                    }
-                }
+                // Remote dependencies are pinned to an immutable git revision, so a true
+                // cycle would require rewriting history. We therefore skip cycle
+                // detection here, but leave this note in case future remote transports
+                // allow references that can form cycles at resolution time.
             }
             Err(err) => {
                 spinner.abandon_with_message(format!("❌ Failed to resolve {description}: {err}"));
@@ -340,6 +338,13 @@ fn resolve_remote_dependencies(
                 tracing::info!(target: "resolver", "Reused existing remote checkout at {}", path);
             }
         }
+    }
+
+    drop(handler);
+
+    for (parent, remote_root) in resolved_sets {
+        db.dependency_graph()
+            .add_remote_set(db, &parent, remote_root);
     }
 
     diagnostics

@@ -15,8 +15,7 @@ use file::Workspace;
 // Each database must implement InputDb explicitly with its own storage mechanism
 pub trait InputDb: salsa::Database {
     fn workspace(&self) -> Workspace;
-    fn local_graph(&self) -> DependencyGraph;
-    fn remote_graph(&self) -> DependencyGraph;
+    fn dependency_graph(&self) -> DependencyGraph;
 }
 
 #[doc(hidden)]
@@ -32,13 +31,8 @@ macro_rules! impl_input_db {
             fn workspace(&self) -> $crate::file::Workspace {
                 self.index.clone().expect("Workspace not initialized")
             }
-            fn local_graph(&self) -> $crate::dependencies::DependencyGraph {
+            fn dependency_graph(&self) -> $crate::dependencies::DependencyGraph {
                 self.graph.clone().expect("Graph not initialized")
-            }
-            fn remote_graph(&self) -> $crate::dependencies::DependencyGraph {
-                self.remote_graph
-                    .clone()
-                    .expect("Remote graph not initialized")
             }
         }
     };
@@ -60,14 +54,11 @@ macro_rules! impl_db_default {
                     storage: salsa::Storage::default(),
                     index: None,
                     graph: None,
-                    remote_graph: None,
                 };
                 let index = $crate::file::Workspace::default(&db);
                 db.index = Some(index);
                 let graph = $crate::dependencies::DependencyGraph::default(&db);
                 db.graph = Some(graph);
-                let remote_graph = $crate::dependencies::DependencyGraph::default(&db);
-                db.remote_graph = Some(remote_graph);
                 $crate::stdlib::HasBuiltinCore::initialize_builtin_core(&mut db);
                 $crate::stdlib::HasBuiltinStd::initialize_builtin_std(&mut db);
                 db
@@ -86,7 +77,6 @@ macro_rules! define_input_db {
             storage: salsa::Storage<Self>,
             index: Option<$crate::file::Workspace>,
             graph: Option<$crate::dependencies::DependencyGraph>,
-            remote_graph: Option<$crate::dependencies::DependencyGraph>,
         }
 
         #[salsa::db]

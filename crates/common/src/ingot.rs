@@ -139,14 +139,14 @@ impl<'db> Ingot<'db> {
     #[salsa::tracked]
     pub fn dependencies(self, db: &'db dyn InputDb) -> Vec<(SmolStr, Url)> {
         let base_url = self.base(db);
-        let workspace = db.workspace();
         let mut deps = match self.config(db) {
             Some(config) => config
                 .dependencies(&base_url)
                 .into_iter()
                 .map(|dependency| {
                     let url = match &dependency.location {
-                        DependencyLocation::Remote(remote) => workspace
+                        DependencyLocation::Remote(remote) => db
+                            .dependency_graph()
                             .local_for_remote_git(db, remote)
                             .unwrap_or_else(|| remote.source.clone()),
                         DependencyLocation::Local(local) => local.url.clone(),

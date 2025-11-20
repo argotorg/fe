@@ -10,7 +10,10 @@ use camino::{Utf8Path, Utf8PathBuf};
 use common::{
     cache::remote_git_cache_dir,
     config::Config,
-    dependencies::{DependencyArguments, DependencyLocation, ExternalDependencyEdge, RemoteFiles},
+    dependencies::{
+        DependencyAlias, DependencyArguments, DependencyLocation, ExternalDependencyEdge,
+        RemoteFiles,
+    },
 };
 use crossterm::{
     event::{self, Event as CrosstermEvent, KeyCode, KeyEvent, KeyModifiers},
@@ -33,6 +36,7 @@ use resolver::{
         DiGraph, GraphResolutionHandler, GraphResolver, GraphResolverImpl, NodeIndex,
         petgraph::{self, visit::EdgeRef},
     },
+    ingot::{LocalGraphResolver, minimal_files_resolver},
 };
 use smol_str::SmolStr;
 use url::Url;
@@ -71,12 +75,12 @@ pub fn print_tree(path: &Utf8PathBuf) {
     let _ = worker.join();
 }
 
-type IngotGraphResolver =
-    resolver::graph::GraphResolverImpl<FilesResolver, TreeHandler, (SmolStr, DependencyArguments)>;
+type TreeEdge = (DependencyAlias, DependencyArguments);
+
+type IngotGraphResolver = LocalGraphResolver<TreeHandler, TreeEdge>;
 
 fn tree_resolver() -> IngotGraphResolver {
-    let files_resolver = FilesResolver::new().with_required_file("fe.toml");
-    resolver::graph::GraphResolverImpl::new(files_resolver)
+    GraphResolverImpl::new(minimal_files_resolver())
 }
 
 fn run_tree_worker(ingot_url: Url, resolver: &mut IngotGraphResolver, tx: Sender<TreeEvent>) {
@@ -184,7 +188,7 @@ impl NodeMetadata {
 #[derive(Clone)]
 struct TreeSnapshot {
     root: Url,
-    graph: DiGraph<Url, (SmolStr, DependencyArguments)>,
+    graph: DiGraph<Url, TreeEdge>,
     metadata: HashMap<Url, NodeMetadata>,
     pending_remote: Vec<PendingRemote>,
 }
@@ -192,12 +196,12 @@ struct TreeSnapshot {
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
 struct RemoteKey {
     parent: Url,
-    alias: SmolStr,
+    alias: DependencyAlias,
     description: String,
 }
 
 impl RemoteKey {
-    fn new(parent: Url, alias: SmolStr, description: String) -> Self {
+    fn new(parent: Url, alias: DependencyAlias, description: String) -> Self {
         Self {
             parent,
             alias,
@@ -209,7 +213,7 @@ impl RemoteKey {
 #[derive(Clone)]
 struct PendingRemote {
     parent: Url,
-    alias: SmolStr,
+    alias: DependencyAlias,
     description: String,
 }
 
@@ -217,7 +221,7 @@ struct PendingRemote {
 struct RemoteGraphData {
     key: RemoteKey,
     root: Url,
-    graph: DiGraph<Url, (SmolStr, DependencyArguments)>,
+    graph: DiGraph<Url, TreeEdge>,
     metadata: HashMap<Url, NodeMetadata>,
 }
 
@@ -250,7 +254,7 @@ struct TreeHandler {
     pending_remote: Vec<PendingRemote>,
     root: Url,
     sender: Sender<TreeEvent>,
-    graph: DiGraph<Url, (SmolStr, DependencyArguments)>,
+    graph: DiGraph<Url, TreeEdge>,
     node_indices: HashMap<Url, NodeIndex>,
 }
 
@@ -304,7 +308,7 @@ impl TreeHandler {
         &mut self,
         parent: &Url,
         child: &Url,
-        alias: SmolStr,
+        alias: DependencyAlias,
         arguments: DependencyArguments,
     ) {
         let parent_idx = self.ensure_node(parent);
@@ -321,7 +325,7 @@ impl TreeHandler {
 }
 
 impl ResolutionHandler<FilesResolver> for TreeHandler {
-    type Item = Vec<(Url, (SmolStr, DependencyArguments))>;
+    type Item = Vec<(Url, TreeEdge)>;
 
     fn handle_resolution(&mut self, ingot_url: &Url, resource: FilesResource) -> Self::Item {
         if let Some(config_file) = resource
@@ -395,13 +399,13 @@ impl ResolutionHandler<FilesResolver> for TreeHandler {
     }
 }
 
-impl GraphResolutionHandler<Url, DiGraph<Url, (SmolStr, DependencyArguments)>> for TreeHandler {
+impl GraphResolutionHandler<Url, DiGraph<Url, TreeEdge>> for TreeHandler {
     type Item = ();
 
     fn handle_graph_resolution(
         &mut self,
         _ingot_url: &Url,
-        _graph: DiGraph<Url, (SmolStr, DependencyArguments)>,
+        _graph: DiGraph<Url, TreeEdge>,
     ) -> Self::Item {
     }
 }
@@ -541,7 +545,7 @@ impl TreeRemoteHandler {
 }
 
 impl ResolutionHandler<GitResolver> for TreeRemoteHandler {
-    type Item = Vec<(GitDependencyDescription, (SmolStr, DependencyArguments))>;
+    type Item = Vec<(GitDependencyDescription, TreeEdge)>;
 
     fn handle_resolution(
         &mut self,
@@ -631,18 +635,15 @@ impl ResolutionHandler<GitResolver> for TreeRemoteHandler {
     }
 }
 
-impl
-    GraphResolutionHandler<
-        GitDependencyDescription,
-        DiGraph<GitDependencyDescription, (SmolStr, DependencyArguments)>,
-    > for TreeRemoteHandler
+impl GraphResolutionHandler<GitDependencyDescription, DiGraph<GitDependencyDescription, TreeEdge>>
+    for TreeRemoteHandler
 {
-    type Item = DiGraph<Url, (SmolStr, DependencyArguments)>;
+    type Item = DiGraph<Url, TreeEdge>;
 
     fn handle_graph_resolution(
         &mut self,
         _description: &GitDependencyDescription,
-        graph: DiGraph<GitDependencyDescription, (SmolStr, DependencyArguments)>,
+        graph: DiGraph<GitDependencyDescription, TreeEdge>,
     ) -> Self::Item {
         let mut converted = DiGraph::new();
         let mut node_map = HashMap::new();
@@ -1233,13 +1234,13 @@ impl TreeApp {
 }
 
 struct GraphCache {
-    graph: DiGraph<Url, (SmolStr, DependencyArguments)>,
+    graph: DiGraph<Url, TreeEdge>,
     index_map: HashMap<Url, NodeIndex>,
     cycle_nodes: HashSet<NodeIndex>,
 }
 
 impl GraphCache {
-    fn from_graph(graph: DiGraph<Url, (SmolStr, DependencyArguments)>) -> Self {
+    fn from_graph(graph: DiGraph<Url, TreeEdge>) -> Self {
         let mut index_map = HashMap::new();
         for idx in graph.node_indices() {
             index_map.insert(graph[idx].clone(), idx);
@@ -1300,7 +1301,7 @@ impl RemoteNodeState {
 
 struct RemoteGraphCache {
     root: Url,
-    graph: DiGraph<Url, (SmolStr, DependencyArguments)>,
+    graph: DiGraph<Url, TreeEdge>,
     index_map: HashMap<Url, NodeIndex>,
     cycle_nodes: HashSet<NodeIndex>,
     metadata: HashMap<Url, NodeMetadata>,
@@ -1309,7 +1310,7 @@ struct RemoteGraphCache {
 impl RemoteGraphCache {
     fn from_graph(
         root: Url,
-        graph: DiGraph<Url, (SmolStr, DependencyArguments)>,
+        graph: DiGraph<Url, TreeEdge>,
         metadata: HashMap<Url, NodeMetadata>,
     ) -> Self {
         let mut index_map = HashMap::new();
@@ -1378,7 +1379,7 @@ impl RemoteGraphCache {
 
 struct LocalChild {
     url: Url,
-    alias: SmolStr,
+    alias: DependencyAlias,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]

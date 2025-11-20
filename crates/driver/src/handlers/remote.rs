@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use camino::{Utf8Path, Utf8PathBuf};
 use common::{
     InputDb,
-    dependencies::{DependencyArguments, DependencyLocation, RemoteFiles},
+    dependencies::{DependencyAlias, DependencyArguments, DependencyLocation, RemoteFiles},
 };
 use resolver::{
     ResolutionHandler, Resolver,
@@ -73,8 +73,8 @@ impl<'a> RemoteIngotHandler<'a> {
             path: description.path.clone(),
         };
         self.db
-            .workspace()
-            .register_remote_git(self.db, ingot_url.clone(), remote);
+            .dependency_graph()
+            .register_remote_checkout(self.db, ingot_url.clone(), remote);
     }
 
     fn build_dependency_descriptions(
@@ -122,7 +122,10 @@ impl<'a> RemoteIngotHandler<'a> {
 }
 
 impl<'a> ResolutionHandler<GitResolver> for RemoteIngotHandler<'a> {
-    type Item = Vec<(GitDependencyDescription, (SmolStr, DependencyArguments))>;
+    type Item = Vec<(
+        GitDependencyDescription,
+        (DependencyAlias, DependencyArguments),
+    )>;
 
     fn handle_resolution(
         &mut self,
@@ -167,7 +170,10 @@ impl<'a> ResolutionHandler<GitResolver> for RemoteIngotHandler<'a> {
 }
 
 impl<'a> ResolutionHandler<FilesResolver> for RemoteIngotHandler<'a> {
-    type Item = Vec<(GitDependencyDescription, (SmolStr, DependencyArguments))>;
+    type Item = Vec<(
+        GitDependencyDescription,
+        (DependencyAlias, DependencyArguments),
+    )>;
 
     fn handle_resolution(&mut self, ingot_url: &Url, resource: FilesResource) -> Self::Item {
         let context = self
@@ -237,17 +243,17 @@ impl<'a> ResolutionHandler<FilesResolver> for RemoteIngotHandler<'a> {
 impl<'a>
     GraphResolutionHandler<
         GitDependencyDescription,
-        DiGraph<GitDependencyDescription, (SmolStr, DependencyArguments)>,
+        DiGraph<GitDependencyDescription, (DependencyAlias, DependencyArguments)>,
     > for RemoteIngotHandler<'a>
 {
-    type Item = DiGraph<Url, (SmolStr, DependencyArguments)>;
+    type Item = DiGraph<Url, (DependencyAlias, DependencyArguments)>;
 
     fn handle_graph_resolution(
         &mut self,
         _description: &GitDependencyDescription,
-        graph: DiGraph<GitDependencyDescription, (SmolStr, DependencyArguments)>,
+        graph: DiGraph<GitDependencyDescription, (DependencyAlias, DependencyArguments)>,
     ) -> Self::Item {
-        let mut converted = DiGraph::new();
+        let mut converted: DiGraph<Url, (DependencyAlias, DependencyArguments)> = DiGraph::new();
         let mut node_map = HashMap::new();
 
         for node_idx in graph.node_indices() {
@@ -265,9 +271,13 @@ impl<'a>
                 let from_url = converted[from_idx].clone();
                 let to_url = converted[to_idx].clone();
                 converted.add_edge(from_idx, to_idx, weight.clone());
-                self.db
-                    .remote_graph()
-                    .add_dependency(self.db, &from_url, &to_url, weight.0, weight.1);
+                self.db.dependency_graph().add_remote_dependency(
+                    self.db,
+                    &from_url,
+                    &to_url,
+                    weight.0.clone(),
+                    weight.1.clone(),
+                );
             }
         }
 

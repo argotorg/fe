@@ -12,6 +12,8 @@ pub struct DependencyArguments {
     pub version: Option<Version>,
 }
 
+pub type DependencyAlias = SmolStr;
+
 /// Metadata describing a git checkout on disk. This can later become an enum if
 /// we support multiple remote transport mechanisms.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
