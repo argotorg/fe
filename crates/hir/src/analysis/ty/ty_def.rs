@@ -527,36 +527,12 @@ impl<'db> TyId<'db> {
         base
     }
 
-    /// Returns `true` if the type is a pointer or a pointer application.
-    pub(super) fn is_ptr(self, db: &dyn HirAnalysisDb) -> bool {
-        match self.data(db) {
-            TyData::TyBase(TyBase::Prim(PrimTy::Ptr)) => true,
-            TyData::TyApp(abs, _) => abs.is_ptr(db),
-            _ => false,
-        }
-    }
-
-    /// Returns `true` if the type is an indirect wrapper type like a pointer or
-    /// reference(when we introduce it).
-    pub(super) fn is_indirect(self, db: &dyn HirAnalysisDb) -> bool {
-        // TODO: FiX here when reference type is introduced.
-        self.is_ptr(db)
-    }
-
     pub fn invalid(db: &'db dyn HirAnalysisDb, cause: InvalidCause<'db>) -> Self {
         Self::new(db, TyData::Invalid(cause))
     }
 
     pub(crate) fn from_hir_prim_ty(db: &'db dyn HirAnalysisDb, hir_prim: HirPrimTy) -> Self {
         Self::new(db, TyData::TyBase(hir_prim.into()))
-    }
-
-    pub(super) fn const_ty_param(self, db: &'db dyn HirAnalysisDb) -> Option<TyId<'db>> {
-        if let TyData::ConstTy(const_ty) = self.data(db) {
-            Some(const_ty.ty(db))
-        } else {
-            None
-        }
     }
 
     pub(crate) fn evaluate_const_ty(

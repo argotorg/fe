@@ -71,20 +71,7 @@ use crate::core::adt_lower::lower_adt;
 use common::indexmap::IndexMap;
 use either::Either;
 use indexmap::IndexSet;
-// (kind-lowering helpers intentionally omitted; see WherePredicateView::kind)
-
-// (Additional view types appear below; keep layering semantic.)
-
 pub mod diagnostics;
-
-// Note: generic trait-ref diagnostics are handled via context-rooted views (e.g.,
-// WherePredicateBoundView and SuperTraitRefView). Avoid subject-taking public APIs.
-
-/// Unified “pull” diagnostics surface for HIR items and views.
-pub trait Diagnosable<'db> {
-    type Diagnostic;
-    fn diags(self, db: &'db dyn HirAnalysisDb) -> Vec<Self::Diagnostic>;
-}
 
 /// Core-exposed entry point for alias lowering. Reads the HIR type_ref (core-visible)
 /// and delegates to the analysis helper to keep visibility tight without shims.
@@ -199,46 +186,6 @@ impl<'db> Func<'db> {
             ScopeId::Item(ItemKind::Impl(im)) => Some(im.ty(db)),
             _ => None,
         }
-    }
-}
-
-impl<'db> Diagnosable<'db> for Func<'db> {
-    type Diagnostic = TyDiagCollection<'db>;
-
-    fn diags(self, db: &'db dyn HirAnalysisDb) -> Vec<Self::Diagnostic> {
-        let mut diags = self.analyze(db);
-        let owner = GenericParamOwner::Func(self);
-        diags.extend(owner.diags_const_param_types(db));
-        diags.extend(owner.diags_params_defined_in_parent(db));
-        diags.extend(owner.diags_kind_bounds(db));
-        diags.extend(owner.diags_trait_bounds(db));
-        diags.extend(owner.diags_non_trailing_defaults(db));
-        diags.extend(owner.diags_default_forward_refs(db));
-        diags
-    }
-}
-
-impl<'db> Diagnosable<'db> for Trait<'db> {
-    type Diagnostic = TyDiagCollection<'db>;
-
-    fn diags(self, db: &'db dyn HirAnalysisDb) -> Vec<Self::Diagnostic> {
-        self.analyze(db)
-    }
-}
-
-impl<'db> Diagnosable<'db> for Impl<'db> {
-    type Diagnostic = TyDiagCollection<'db>;
-
-    fn diags(self, db: &'db dyn HirAnalysisDb) -> Vec<Self::Diagnostic> {
-        self.analyze(db)
-    }
-}
-
-impl<'db> Diagnosable<'db> for ImplTrait<'db> {
-    type Diagnostic = TyDiagCollection<'db>;
-
-    fn diags(self, db: &'db dyn HirAnalysisDb) -> Vec<Self::Diagnostic> {
-        self.analyze(db)
     }
 }
 
@@ -719,18 +666,6 @@ impl<'db> WherePredicateBoundView<'db> {
         let scope = owner_item.scope();
         lower_trait_ref(db, subject, self.trait_ref(db), scope, assumptions).ok()
     }
-
-    /// Lower this bound against an explicit subject type (useful for `Self` in trait contexts).
-    pub(in crate::core) fn as_trait_inst_with_subject(
-        self,
-        db: &'db dyn HirAnalysisDb,
-        subject: TyId<'db>,
-    ) -> Option<TraitInstId<'db>> {
-        let owner_item = ItemKind::from(self.pred.clause.owner);
-        let assumptions = constraints_for(db, owner_item);
-        let scope = owner_item.scope();
-        lower_trait_ref(db, subject, self.trait_ref(db), scope, assumptions).ok()
-    }
 }
 
 impl<'db> Contract<'db> {}
@@ -826,7 +761,7 @@ impl<'db> Trait<'db> {
                 continue;
             }
             for bound in pred.bounds(db) {
-                if let Some(inst) = bound.as_trait_inst_with_subject(db, self_param) {
+                if let Some(inst) = bound.as_trait_inst(db) {
                     super_traits.insert(Binder::bind(inst));
                 }
             }
@@ -1442,7 +1377,46 @@ impl<'db> TraitAssocTypeView<'db> {
         Some(lower_hir_ty(db, hir, trait_.scope(), assumptions))
     }
 
-    // Note: assoc-type bound evaluation is provided via AssocTypeOnSubjectView.
+    /// Semantic trait bounds using the trait's own `Self` as the subject.
+    pub fn bounds_on_self(
+        self,
+        db: &'db dyn HirAnalysisDb,
+    ) -> impl Iterator<Item = TraitInstId<'db>> + 'db {
+        let self_ty = self.owner.self_param(db);
+        self.bounds_on_subject(db, self_ty)
+    }
+
+    /// Semantic trait bounds for an explicit subject, using the owner's `Self`
+    /// in the trait arguments.
+    pub fn bounds_on_subject(
+        self,
+        db: &'db dyn HirAnalysisDb,
+        subject: TyId<'db>,
+    ) -> impl Iterator<Item = TraitInstId<'db>> + 'db {
+        let owner_self = self.owner.self_param(db);
+        AssocTypeBounds {
+            base: self,
+            subject,
+            owner_self,
+        }
+        .bounds(db)
+    }
+
+    /// Semantic trait bounds for an explicit subject with an explicit owner
+    /// `Self` override (e.g., impl-trait analysis).
+    pub fn bounds_on_subject_with_owner(
+        self,
+        db: &'db dyn HirAnalysisDb,
+        subject: TyId<'db>,
+        owner_self: TyId<'db>,
+    ) -> impl Iterator<Item = TraitInstId<'db>> + 'db {
+        AssocTypeBounds {
+            base: self,
+            subject,
+            owner_self,
+        }
+        .bounds(db)
+    }
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -1470,41 +1444,41 @@ impl<'db> AssocTypeBoundView<'db> {
             _ => unreachable!(),
         }
     }
+}
 
-    /// Lower this associated-type bound to a trait instance for a given subject,
-    /// using the owner-trait's `Self` inside generic arguments.
-    pub fn as_trait_inst_with_subject(
+#[derive(Clone, Copy, Debug)]
+struct AssocTypeBounds<'db> {
+    base: TraitAssocTypeView<'db>,
+    subject: TyId<'db>,
+    owner_self: TyId<'db>,
+}
+
+impl<'db> AssocTypeBounds<'db> {
+    fn bounds(
         self,
         db: &'db dyn HirAnalysisDb,
-        subject: TyId<'db>,
-    ) -> Option<TraitInstId<'db>> {
-        let owner_trait = self.owner.owner;
-        let owner_self = collect_generic_params(db, owner_trait.into())
-            .trait_self(db)
-            .unwrap();
+    ) -> impl Iterator<Item = TraitInstId<'db>> + 'db {
+        let owner_trait = self.base.owner;
         let scope = owner_trait.scope();
         let assumptions = constraints_for(db, owner_trait.into());
-        lower_trait_ref_with_owner_self(
-            db,
-            subject,
-            self.trait_ref(db),
-            scope,
-            assumptions,
-            owner_self,
-        )
-        .ok()
+        self.base
+            .bounds(db)
+            .filter_map(move |b| {
+                b.to_trait_inst(db, self.subject, self.owner_self, scope, assumptions)
+            })
     }
+}
 
-    /// Lower this bound with explicit owner `Self` for contexts like impl trait analysis.
-    pub fn as_trait_inst_with_subject_and_owner(
+impl<'db> AssocTypeBoundView<'db> {
+    /// Lower this bound to a trait instance for the given subject and owner `Self`.
+    fn to_trait_inst(
         self,
         db: &'db dyn HirAnalysisDb,
         subject: TyId<'db>,
         owner_self: TyId<'db>,
+        scope: ScopeId<'db>,
+        assumptions: PredicateListId<'db>,
     ) -> Option<TraitInstId<'db>> {
-        let owner_trait = self.owner.owner;
-        let scope = owner_trait.scope();
-        let assumptions = constraints_for(db, owner_trait.into());
         lower_trait_ref_with_owner_self(
             db,
             subject,
@@ -1665,29 +1639,3 @@ impl<'db> EnumVariant<'db> {
     }
 }
 #[derive(Clone, Copy, Debug)]
-pub struct AssocTypeOnSubjectView<'db> {
-    base: TraitAssocTypeView<'db>,
-    subject: TyId<'db>,
-}
-
-impl<'db> TraitAssocTypeView<'db> {
-    /// Attach a subject type to this associated type for semantic bound evaluation.
-    pub fn with_subject(self, subject: TyId<'db>) -> AssocTypeOnSubjectView<'db> {
-        AssocTypeOnSubjectView {
-            base: self,
-            subject,
-        }
-    }
-}
-
-impl<'db> AssocTypeOnSubjectView<'db> {
-    /// Semantic trait bounds for this associated type on `subject` using the owner's context.
-    pub fn bounds(
-        self,
-        db: &'db dyn HirAnalysisDb,
-    ) -> impl Iterator<Item = TraitInstId<'db>> + 'db {
-        self.base
-            .bounds(db)
-            .filter_map(move |b| b.as_trait_inst_with_subject(db, self.subject))
-    }
-}

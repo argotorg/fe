@@ -6,8 +6,8 @@ use rustc_hash::FxHashMap;
 use smallvec1::SmallVec;
 
 use crate::analysis::HirAnalysisDb;
-use crate::core::semantic::Diagnosable;
 use crate::hir_def::{Func, IdentId, Impl as HirImpl, ImplTrait, Trait};
+use crate::semantic::diagnostics::Diagnosable;
 
 use super::{
     adt_def::{AdtDef, AdtRef},

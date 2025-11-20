@@ -1,6 +1,6 @@
 use crate::core::hir_def::{
     GenericArg, GenericArgListId, GenericParam, GenericParamOwner, GenericParamView, IdentId,
-    ItemKind, KindBound as HirKindBound, Partial, PathId, TypeAlias as HirTypeAlias, TypeBound,
+    KindBound as HirKindBound, Partial, PathId, TypeAlias as HirTypeAlias, TypeBound,
     TypeId as HirTyId, TypeKind as HirTyKind, scope_graph::ScopeId,
 };
 use salsa::Update;
@@ -13,7 +13,7 @@ use super::{
     ty_def::{InvalidCause, Kind, TyData, TyId, TyParam},
 };
 use crate::analysis::name_resolution::{
-    NameDomain, NameResKind, PathRes, PathResErrorKind, resolve_ident_to_bucket, resolve_path,
+    PathRes, PathResErrorKind,resolve_path,
 };
 use crate::analysis::{HirAnalysisDb, ty::binder::Binder};
 

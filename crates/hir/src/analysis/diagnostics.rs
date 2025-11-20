@@ -316,7 +316,6 @@ impl DiagnosticVoucher for PathResDiag<'_> {
                     let span = span(&trait_def);
 
                     let msg = match ty.data(db) {
-
                         TyData::AssocTy(_) | TyData::Invalid(_) | TyData::Never => {
                             format!("candidate: `{trait_name}`")
                         }

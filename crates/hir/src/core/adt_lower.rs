@@ -6,7 +6,7 @@ use crate::analysis::{
     },
 };
 use crate::core::hir_def::{
-    Contract, Enum, FieldDefListId, Struct, VariantDefListId, VariantKind, scope_graph::ScopeId,
+    FieldDefListId, VariantDefListId, VariantKind, scope_graph::ScopeId,
 };
 
 /// Lower HIR ADT definition (`struct/enum/contract`) to [`AdtDef`].

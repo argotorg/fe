@@ -23,11 +23,17 @@ use crate::span::DynLazySpan;
 
 use super::{
     FieldView, Func, GenericParamView, Impl, ImplTrait, ImplTraitLowerError, SuperTraitRefView,
-    TraitAssocTypeView, VariantView, WhereClauseOwner, WhereClauseView, WherePredicateBoundView,
-    WherePredicateView, constraints_for,
+    VariantView, WhereClauseOwner, WhereClauseView, WherePredicateBoundView, WherePredicateView,
+    constraints_for,
 };
 use crate::analysis::ty::binder::Binder;
 use crate::analysis::ty::trait_def::ImplementorId;
+
+/// Unified “pull” diagnostics surface for HIR items and views.
+pub trait Diagnosable<'db> {
+    type Diagnostic;
+    fn diags(self, db: &'db dyn HirAnalysisDb) -> Vec<Self::Diagnostic>;
+}
 
 impl<'db> SuperTraitRefView<'db> {
     /// Diagnostics for this super-trait reference in its owner's context.
@@ -136,7 +142,7 @@ impl<'db> WherePredicateView<'db> {
         use crate::analysis::name_resolution::diagnostics::PathResDiag;
         use crate::analysis::name_resolution::{ExpectedPathKind, resolve_path};
 
-        let Some(hir_ty) = self.hir_pred(db).ty.to_opt() else {
+        let Some(_hir_ty) = self.hir_pred(db).ty.to_opt() else {
             return None;
         };
 
@@ -435,8 +441,8 @@ impl<'db> Func<'db> {
     /// - Explicit return type checks (star kind, constness)
     /// - In `impl` blocks, detect inherent method conflicts with existing methods
     pub fn analyze(self, db: &'db dyn HirAnalysisDb) -> Vec<TyDiagCollection<'db>> {
+        use ty::canonical::Canonical;
         use ty::method_table::probe_method;
-        use ty::{binder::Binder, canonical::Canonical};
 
         let mut out = Vec::new();
         out.extend(self.diags_parameters(db));
@@ -1614,5 +1620,45 @@ impl<'db> GenericParamView<'db> {
             }
             _ => None,
         }
+    }
+}
+
+impl<'db> Diagnosable<'db> for Func<'db> {
+    type Diagnostic = TyDiagCollection<'db>;
+
+    fn diags(self, db: &'db dyn HirAnalysisDb) -> Vec<Self::Diagnostic> {
+        let mut diags = self.analyze(db);
+        let owner = GenericParamOwner::Func(self);
+        diags.extend(owner.diags_const_param_types(db));
+        diags.extend(owner.diags_params_defined_in_parent(db));
+        diags.extend(owner.diags_kind_bounds(db));
+        diags.extend(owner.diags_trait_bounds(db));
+        diags.extend(owner.diags_non_trailing_defaults(db));
+        diags.extend(owner.diags_default_forward_refs(db));
+        diags
+    }
+}
+
+impl<'db> Diagnosable<'db> for Trait<'db> {
+    type Diagnostic = TyDiagCollection<'db>;
+
+    fn diags(self, db: &'db dyn HirAnalysisDb) -> Vec<Self::Diagnostic> {
+        self.analyze(db)
+    }
+}
+
+impl<'db> Diagnosable<'db> for Impl<'db> {
+    type Diagnostic = TyDiagCollection<'db>;
+
+    fn diags(self, db: &'db dyn HirAnalysisDb) -> Vec<Self::Diagnostic> {
+        self.analyze(db)
+    }
+}
+
+impl<'db> Diagnosable<'db> for ImplTrait<'db> {
+    type Diagnostic = TyDiagCollection<'db>;
+
+    fn diags(self, db: &'db dyn HirAnalysisDb) -> Vec<Self::Diagnostic> {
+        self.analyze(db)
     }
 }

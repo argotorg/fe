@@ -24,7 +24,7 @@ use crate::{
             LazyImplTraitSpan, LazyItemSpan, LazyModSpan, LazyStructSpan, LazyTopModSpan,
             LazyTraitSpan, LazyTraitTypeSpan, LazyTypeAliasSpan, LazyUseSpan, LazyVariantDefSpan,
         },
-        params::{LazyGenericParamListSpan, LazyWhereClauseSpan},
+        params::LazyGenericParamListSpan,
     },
 };
 
@@ -325,11 +325,6 @@ impl<'db> GenericParamOwner<'db> {
         let item = ItemKind::from(self);
         WhereClauseOwner::from_item_opt(item)
     }
-
-    pub(in crate::core) fn where_clause(self, db: &'db dyn HirDb) -> Option<WhereClauseId<'db>> {
-        self.where_clause_owner()
-            .map(|owner| owner.where_clause(db))
-    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, derive_more::From, salsa::Update)]
@@ -364,16 +359,16 @@ impl<'db> WhereClauseOwner<'db> {
         }
     }
 
-    pub(in crate::core) fn where_clause_span(self) -> LazyWhereClauseSpan<'db> {
-        match self {
-            Self::Func(func) => func.span().where_clause(),
-            Self::Struct(struct_) => struct_.span().where_clause(),
-            Self::Enum(enum_) => enum_.span().where_clause(),
-            Self::Impl(impl_) => impl_.span().where_clause(),
-            Self::Trait(trait_) => trait_.span().where_clause(),
-            Self::ImplTrait(impl_trait) => impl_trait.span().where_clause(),
-        }
-    }
+    // pub(in crate::core) fn where_clause_span(self) -> LazyWhereClauseSpan<'db> {
+    //     match self {
+    //         Self::Func(func) => func.span().where_clause(),
+    //         Self::Struct(struct_) => struct_.span().where_clause(),
+    //         Self::Enum(enum_) => enum_.span().where_clause(),
+    //         Self::Impl(impl_) => impl_.span().where_clause(),
+    //         Self::Trait(trait_) => trait_.span().where_clause(),
+    //         Self::ImplTrait(impl_trait) => impl_trait.span().where_clause(),
+    //     }
+    // }
 
     pub fn scope(self) -> ScopeId<'db> {
         ItemKind::from(self).scope()

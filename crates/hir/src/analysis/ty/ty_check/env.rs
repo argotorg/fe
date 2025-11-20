@@ -586,7 +586,7 @@ impl<'db> LocalBinding<'db> {
                         .nth(*idx)
                         .and_then(|v| v.name(hir_db))
                         .unwrap(),
-                    CallableDef::VariantCtor(var) => {
+                    CallableDef::VariantCtor(_var) => {
                         // Variant ctor params are the ADT fields; use field index as a synthetic name.
                         let name = format!("_{}", idx);
                         IdentId::new(env.db, name)

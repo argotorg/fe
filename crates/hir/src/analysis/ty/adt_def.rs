@@ -43,10 +43,6 @@ impl<'db> AdtDef<'db> {
         self.param_set(db).params(db)
     }
 
-    pub(crate) fn original_params(self, db: &'db dyn HirAnalysisDb) -> &'db [TyId<'db>] {
-        self.param_set(db).explicit_params(db)
-    }
-
     pub(crate) fn is_struct(self, db: &dyn HirAnalysisDb) -> bool {
         matches!(self.adt_ref(db), AdtRef::Struct(_))
     }

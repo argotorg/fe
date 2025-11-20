@@ -1,9 +1,12 @@
 //! This module contains all trait related types definitions.
 
 use crate::{
-    analysis::ty::method_cmp::compare_impl_method,
+    analysis::ty::{
+        method_cmp::compare_impl_method,
+        trait_lower::collect_trait_impls,
+        trait_resolution::{GoalSatisfiability, PredicateListId},
+    },
     hir_def::{HirIngot, IdentId, ImplTrait, Trait},
-    span::DynLazySpan,
 };
 use common::{
     indexmap::{IndexMap, IndexSet},
@@ -15,22 +18,14 @@ use salsa::Update;
 use super::{
     binder::Binder,
     canonical::{Canonical, Canonicalized},
-    diagnostics::{ImplDiag, TraitConstraintDiag, TyDiagCollection},
+    diagnostics::{ImplDiag, TyDiagCollection},
     fold::TyFoldable as _,
     trait_lower::collect_implementor_methods,
-    trait_resolution::{
-        GoalSatisfiability, PredicateListId, WellFormedness, check_trait_inst_wf,
-        constraint::{collect_constraints},
-        is_goal_satisfiable,
-    },
-    ty_def::{Kind, TyId},
-    ty_lower::GenericParamTypeSet,
+    trait_resolution::{constraint::collect_constraints, is_goal_satisfiable},
+    ty_def::TyId,
     unify::UnificationTable,
 };
-use crate::analysis::{
-    HirAnalysisDb,
-    ty::{trait_lower::collect_trait_impls, trait_resolution::constraint::super_trait_cycle},
-};
+use crate::analysis::HirAnalysisDb;
 use crate::hir_def::CallableDef;
 
 /// Returns [`TraitEnv`] for the given ingot.
@@ -529,29 +524,6 @@ impl<'db> TraitInstId<'db> {
 
     pub(crate) fn ingot(self, db: &'db dyn HirAnalysisDb) -> Ingot<'db> {
         self.def(db).ingot(db)
-    }
-
-    pub(super) fn emit_sat_diag(
-        self,
-        db: &'db dyn HirAnalysisDb,
-        ingot: Ingot<'db>,
-        assumptions: PredicateListId<'db>,
-        span: DynLazySpan<'db>,
-    ) -> Option<TyDiagCollection<'db>> {
-        if let WellFormedness::IllFormed { goal, subgoal } =
-            check_trait_inst_wf(db, ingot, self, assumptions)
-        {
-            Some(
-                TraitConstraintDiag::TraitBoundNotSat {
-                    span,
-                    primary_goal: goal,
-                    unsat_subgoal: subgoal,
-                }
-                .into(),
-            )
-        } else {
-            None
-        }
     }
 }
 

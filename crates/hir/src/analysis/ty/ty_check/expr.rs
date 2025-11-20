@@ -1,6 +1,9 @@
 use std::panic;
 
-use crate::core::hir_def::{ArithBinOp, BinOp, Expr, ExprId, FieldIndex, IdentId, Partial, Pat, PatId, PathId, UnOp, VariantKind, scope_graph::ScopeId};
+use crate::core::hir_def::{
+    ArithBinOp, BinOp, Expr, ExprId, FieldIndex, IdentId, Partial, Pat, PatId, PathId, UnOp,
+    VariantKind};
+
 use common::ingot::IngotKind;
 use either::Either;
 
@@ -301,32 +304,29 @@ impl<'db> TyChecker<'db> {
 
             MethodCandidate::TraitMethod(cand) => {
                 let inst = canonical_r_ty.extract_solution(&mut self.table, cand.inst);
-                let func_ty =
-                    super::instantiate_trait_method(
-                        self.db,
-                        cand.method,
-                        &mut self.table,
-                        receiver_prop.ty,
-                        inst,
-                    );
+                let func_ty = super::instantiate_trait_method(
+                    self.db,
+                    cand.method,
+                    &mut self.table,
+                    receiver_prop.ty,
+                    inst,
+                );
                 (func_ty, Some(inst))
             }
 
             MethodCandidate::NeedsConfirmation(cand) => {
                 let inst = canonical_r_ty.extract_solution(&mut self.table, cand.inst);
-                self.env.register_confirmation(inst, call_span.clone().into());
-                let func_ty =
-                    super::instantiate_trait_method(
-                        self.db,
-                        cand.method,
-                        &mut self.table,
-                        receiver_prop.ty,
-                        inst,
-                    );
+                self.env
+                    .register_confirmation(inst, call_span.clone().into());
+                let func_ty = super::instantiate_trait_method(
+                    self.db,
+                    cand.method,
+                    &mut self.table,
+                    receiver_prop.ty,
+                    inst,
+                );
                 (func_ty, Some(inst))
             }
-
-
         };
 
         let mut callable = match Callable::new(
@@ -717,7 +717,10 @@ impl<'db> TyChecker<'db> {
         ExprProp::new(ty, true)
     }
 
-    fn resolve_core_trait(&self, trait_path: PathId<'db>) -> Option<crate::core::hir_def::Trait<'db>> {
+    fn resolve_core_trait(
+        &self,
+        trait_path: PathId<'db>,
+    ) -> Option<crate::core::hir_def::Trait<'db>> {
         let scope = self.env.scope();
         let assumptions = self.env.assumptions();
         let mut module_path = trait_path.parent(self.db)?;

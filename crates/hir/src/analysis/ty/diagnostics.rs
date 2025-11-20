@@ -1,14 +1,17 @@
-use super::{def_analysis::AdtCycleMember, trait_def::TraitInstId, ty_check::{RecordLike, TraitOps}, ty_def::{Kind, TyId}};
-use crate::analysis::{HirAnalysisDb, Spanned};
-use crate::core::hir_def::{
-    CallableDef, Enum, FieldIndex, FieldParent, Func, GenericParamOwner, IdentId, ImplTrait,
-    ItemKind, PathId, Trait, TypeAlias as HirTypeAlias, scope_graph::ScopeId,
+use super::{
+    def_analysis::AdtCycleMember,
+    trait_def::TraitInstId,
+    ty_check::{RecordLike, TraitOps},
+    ty_def::{Kind, TyId},
 };
+use crate::{core::hir_def::{
+    CallableDef, Enum, FieldIndex, FieldParent, Func, GenericParamOwner, IdentId, ImplTrait,
+}, hir_def::TypeAlias};
 use crate::span::DynLazySpan;
-use common::diagnostics::{CompleteDiagnostic, DiagnosticPass, GlobalErrorCode, LabelStyle, Severity, Span, SpanKind, SubDiagnostic};
-use crate::analysis::diagnostics::DiagnosticVoucher;
-use crate::analysis::name_resolution::diagnostics::PathResDiag;
 use crate::visitor::prelude::*;
+use crate::{analysis::HirAnalysisDb, hir_def::Trait};
+use crate::{analysis::diagnostics::DiagnosticVoucher, hir_def::PathId};
+use crate::{analysis::name_resolution::diagnostics::PathResDiag, hir_def::ItemKind};
 use either::Either;
 use salsa::Update;
 use smallvec1::SmallVec;
@@ -70,12 +73,12 @@ pub enum TyLowerDiag<'db> {
 
     UnboundTypeAliasParam {
         span: DynLazySpan<'db>,
-        alias: HirTypeAlias<'db>,
+        alias: TypeAlias<'db>,
         n_given_args: usize,
     },
 
     TypeAliasCycle {
-        cycle: Vec<HirTypeAlias<'db>>,
+        cycle: Vec<TypeAlias<'db>>,
     },
 
     InconsistentKindBound {
