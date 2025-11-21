@@ -31,7 +31,7 @@ num-bigint = "0.4"
 num-traits = "0.2"
 paste = "1.0.15"
 salsa = "0.20"
-smallvec = { version = "2.0.0-alpha.10" }
+smallvec = { version = "2.0.0-alpha.11" }
 smallvec1 = { version = "1", package = "smallvec" }
 thin-vec = "0.2.14"
 smol_str = { version = "0.1", features = ["serde"] }
