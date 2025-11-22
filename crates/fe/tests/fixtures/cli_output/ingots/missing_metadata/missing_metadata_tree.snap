@@ -4,9 +4,6 @@ expression: output
 ---
 === STDOUT ===
 ➖ null vnull
-
-=== STDERR ===
-❌ Config validation error at file://<project>/crates/fe/tests/fixtures/cli_output/ingots/missing_metadata/: Missing ingot metadata
-❌ Failed to resolve ingot dependency 'file://<project>/crates/fe/tests/fixtures/cli_output/ingots/missing_metadata/nonexistent/': Directory does not exist: file://<project>/crates/fe/tests/fixtures/cli_output/ingots/missing_metadata/nonexistent/
+└── ➖ [invalid fe.toml]
 
 === EXIT CODE: 0 ===

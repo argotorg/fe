@@ -1,6 +1,6 @@
 use std::{
     collections::{HashMap, HashSet, VecDeque},
-    io::{self, stdout},
+    io::{self, IsTerminal, stdout},
     sync::mpsc::{self, Receiver, Sender},
     thread,
     time::{Duration, Instant},
@@ -68,8 +68,12 @@ pub fn print_tree(path: &Utf8PathBuf) {
         run_tree_worker(worker_path, &mut resolver, tx);
     });
 
-    if let Err(err) = run_ui(rx) {
-        eprintln!("Failed to render tree UI: {err}");
+    if stdout().is_terminal() {
+        if let Err(err) = run_ui(rx) {
+            eprintln!("Failed to render tree UI: {err}");
+        }
+    } else if let Err(err) = run_headless(rx) {
+        eprintln!("Failed to render tree: {err}");
     }
 
     let _ = worker.join();
@@ -122,14 +126,14 @@ fn run_tree_worker(ingot_url: Url, resolver: &mut IngotGraphResolver, tx: Sender
 }
 
 fn run_ui(rx: Receiver<TreeEvent>) -> io::Result<()> {
-    terminal::enable_raw_mode()?;
     let mut stdout = stdout();
+    terminal::enable_raw_mode()?;
     execute!(stdout, EnterAlternateScreen)?;
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
     terminal.clear()?;
 
-    let mut app = TreeApp::new();
+    let mut app = TreeApp::new(false);
     let tick_rate = Duration::from_millis(100);
     let mut last_tick = Instant::now();
 
@@ -148,7 +152,9 @@ fn run_ui(rx: Receiver<TreeEvent>) -> io::Result<()> {
         let timeout = tick_rate
             .checked_sub(last_tick.elapsed())
             .unwrap_or(Duration::from_secs(0));
-        if event::poll(timeout)? && let CrosstermEvent::Key(key) = event::read()? {
+        if event::poll(timeout)?
+            && let CrosstermEvent::Key(key) = event::read()?
+        {
             app.on_key(key);
         }
 
@@ -161,6 +167,38 @@ fn run_ui(rx: Receiver<TreeEvent>) -> io::Result<()> {
     terminal::disable_raw_mode()?;
     execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
     terminal.show_cursor()?;
+    Ok(())
+}
+
+fn run_headless(rx: Receiver<TreeEvent>) -> io::Result<()> {
+    let mut app = TreeApp::new(true);
+
+    // Process events until the worker signals completion.
+    while let Ok(event) = rx.recv() {
+        app.handle_worker_event(event);
+        app.invalidate_rows();
+        if app.finished {
+            break;
+        }
+    }
+
+    app.ensure_rows();
+    for row in &app.rows {
+        let styled = if matches!(row.style.fg, Some(Color::Red)) {
+            // Color just the label portion to mirror the TUI output.
+            let split_at = row
+                .text
+                .char_indices()
+                .find(|(_, c)| matches!(c, '➖' | '🌐' | '['))
+                .map(|(idx, _)| idx)
+                .unwrap_or(0);
+            let (prefix, label) = row.text.split_at(split_at);
+            format!("{prefix}\u{1b}[31m{label}\u{1b}[0m")
+        } else {
+            row.text.clone()
+        };
+        println!("{styled}");
+    }
     Ok(())
 }
 
@@ -699,10 +737,11 @@ struct TreeApp {
     resolution_error: Option<String>,
     needs_recompute: bool,
     spinner_index: usize,
+    exit_on_finish: bool,
 }
 
 impl TreeApp {
-    fn new() -> Self {
+    fn new(exit_on_finish: bool) -> Self {
         Self {
             should_quit: false,
             list_state: ListState::default(),
@@ -718,6 +757,7 @@ impl TreeApp {
             resolution_error: None,
             needs_recompute: true,
             spinner_index: 0,
+            exit_on_finish,
         }
     }
 
@@ -882,6 +922,9 @@ impl TreeApp {
             }
             TreeEvent::Finished => {
                 self.finished = true;
+                if self.exit_on_finish {
+                    self.should_quit = true;
+                }
             }
         }
     }
@@ -927,7 +970,9 @@ impl TreeApp {
     }
 
     fn toggle_collapse(&mut self) {
-        if let Some(row) = self.rows.get(self.selected) && row.has_children {
+        if let Some(row) = self.rows.get(self.selected)
+            && row.has_children
+        {
             if !self.collapsed.insert(row.id.clone()) {
                 self.collapsed.remove(&row.id);
             }

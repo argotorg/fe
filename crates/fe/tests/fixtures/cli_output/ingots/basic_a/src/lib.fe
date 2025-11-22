@@ -1,5 +1,1 @@
-use core_remote::evm::malloc
-
-pub fn main() {
-    malloc(false)
-  }
+pub fn main() {}
