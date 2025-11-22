@@ -164,7 +164,10 @@ pub(crate) fn module_tree_impl<'db>(db: &'db dyn HirDb, ingot: Ingot<'db>) -> Mo
     }
 
     // Find root
-    let root_file = ingot.root_file(db).expect("module needs a root file");
+    let ingot_base = ingot.base(db);
+    let root_file = ingot
+        .root_file(db)
+        .unwrap_or_else(|err| panic!("module needs a root file for ingot {}: {err:?}", ingot_base));
     let root_mod = map_file_to_mod_impl(db, root_file);
     let root = mod_map[&root_mod];
 

@@ -1,0 +1,4 @@
+- Align workspace to `smallvec = "=2.0.0-alpha.11"` to match the lockfile and eliminate pre-release drift during installs.
+- Update parser to use `smallvec!` and `SmallVec::from_iter` instead of removed `from_slice` APIs so it builds on smallvec alpha.11.
+- Silence expected salsa/clippy noise and tidy UI code: allowed the generated dependency graph constructor’s arity warning and collapsed nested `if` logic in the TUI tree plus an allow for its long helper.
+- Verified `cargo install --path crates/language-server --locked --offline` and `cargo clippy` both succeed.

@@ -4,41 +4,49 @@ pub mod db;
 pub mod diagnostics;
 pub mod files;
 
-use std::collections::HashMap;
+mod handlers;
 
+use std::{collections::HashMap, time::Duration};
+
+use camino::Utf8PathBuf;
 use common::{
     InputDb,
-    dependencies::{DependencyArguments, display_tree::display_tree},
+    cache::remote_git_cache_dir,
+    dependencies::{
+        DependencyAlias, DependencyArguments, ExternalDependencyEdge, display_tree::display_tree,
+    },
 };
 pub use db::DriverDataBase;
+use handlers::{LocalIngotHandler, RemoteIngotHandler};
+use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
 use smol_str::SmolStr;
 
 use hir::hir_def::TopLevelMod;
 use resolver::{
-    ResolutionHandler, Resolver,
-    files::{FilesResolutionDiagnostic, FilesResolutionError, FilesResolver, FilesResource},
-    graph::{
-        DiGraph, GraphResolutionHandler, GraphResolver, GraphResolverImpl, petgraph::visit::EdgeRef,
-    },
+    Resolver,
+    files::{FilesResolutionDiagnostic, FilesResolutionError, FilesResolver},
+    git::{GitDependencyDescription, GitResolutionDiagnostic, GitResolutionError, GitResolver},
+    graph::{GraphResolver, GraphResolverImpl},
+    ingot::{LocalGraphResolver, project_files_resolver},
 };
 use url::Url;
 
 pub type IngotGraphResolver<'a> =
-    GraphResolverImpl<FilesResolver, InputHandler<'a>, (SmolStr, DependencyArguments)>;
+    LocalGraphResolver<LocalIngotHandler<'a>, (DependencyAlias, DependencyArguments)>;
+
+fn ingot_files_resolver() -> FilesResolver {
+    project_files_resolver()
+}
 
 pub fn ingot_graph_resolver<'a>() -> IngotGraphResolver<'a> {
-    let files_resolver = FilesResolver::new()
-        .with_required_file("fe.toml")
-        .with_required_directory("src")
-        .with_required_file("src/lib.fe")
-        .with_pattern("src/**/*.fe");
-    GraphResolverImpl::new(files_resolver)
+    GraphResolverImpl::new(ingot_files_resolver())
 }
 
 pub fn init_ingot(db: &mut DriverDataBase, ingot_url: &Url) -> Vec<IngotInitDiagnostics> {
     tracing::info!(target: "resolver", "Starting workspace ingot resolution for: {}", ingot_url);
+    let remote_requests;
     let mut diagnostics: Vec<IngotInitDiagnostics> = {
-        let mut handler = InputHandler::from_db(db, ingot_url.clone());
+        let mut handler = LocalIngotHandler::new(db, ingot_url.clone());
         let mut ingot_graph_resolver = ingot_graph_resolver();
 
         // Root ingot resolution should never fail since directory existence is validated earlier.
@@ -53,7 +61,7 @@ pub fn init_ingot(db: &mut DriverDataBase, ingot_url: &Url) -> Vec<IngotInitDiag
         let mut all_diagnostics = Vec::new();
 
         // Add handler diagnostics (missing fe.toml)
-        all_diagnostics.extend(handler.diagnostics);
+        all_diagnostics.extend(std::mem::take(&mut handler.diagnostics));
 
         // Add graph resolver diagnostics (unresolvable dependencies)
         all_diagnostics.extend(ingot_graph_resolver.take_diagnostics().into_iter().map(
@@ -72,11 +80,15 @@ pub fn init_ingot(db: &mut DriverDataBase, ingot_url: &Url) -> Vec<IngotInitDiag
                 .map(|diagnostic| IngotInitDiagnostics::FileError { diagnostic }),
         );
 
+        remote_requests = handler.take_remote_dependencies();
+
         all_diagnostics
     };
 
+    diagnostics.extend(resolve_remote_dependencies(db, ingot_url, &remote_requests));
+
     // Check for cycles after graph resolution (now that handler is dropped)
-    let cyclic_subgraph = db.graph().cyclic_subgraph(db);
+    let cyclic_subgraph = db.dependency_graph().cyclic_subgraph(db);
 
     // Add cycle diagnostics - single comprehensive diagnostic if any cycles exist
     if cyclic_subgraph.node_count() > 0 {
@@ -145,6 +157,30 @@ pub enum IngotInitDiagnostics {
         ingot_url: Url,
         diagnostics: Vec<common::config::ConfigDiagnostic>,
     },
+    RemoteFileError {
+        ingot_url: Url,
+        error: String,
+    },
+    RemoteConfigParseError {
+        ingot_url: Url,
+        error: String,
+    },
+    RemoteConfigDiagnostics {
+        ingot_url: Url,
+        diagnostics: Vec<common::config::ConfigDiagnostic>,
+    },
+    UnresolvableRemoteDependency {
+        target: GitDependencyDescription,
+        error: GitResolutionError,
+    },
+    RemoteDependencyCycle {
+        root_ingot: Url,
+    },
+    RemotePathResolutionError {
+        ingot_url: Url,
+        dependency: SmolStr,
+        error: String,
+    },
 }
 
 impl std::fmt::Display for IngotInitDiagnostics {
@@ -183,134 +219,160 @@ impl std::fmt::Display for IngotInitDiagnostics {
                     Ok(())
                 }
             }
-        }
-    }
-}
-
-pub struct InputHandler<'a> {
-    pub db: &'a mut dyn InputDb,
-    pub diagnostics: Vec<IngotInitDiagnostics>,
-    pub main_ingot_url: Url,
-}
-
-impl<'a> InputHandler<'a> {
-    pub fn from_db(db: &'a mut dyn InputDb, main_ingot_url: Url) -> Self {
-        Self {
-            db,
-            diagnostics: vec![],
-            main_ingot_url,
-        }
-    }
-}
-
-impl<'a> ResolutionHandler<FilesResolver> for InputHandler<'a> {
-    type Item = Vec<(Url, (SmolStr, DependencyArguments))>;
-
-    fn handle_resolution(&mut self, ingot_url: &Url, resource: FilesResource) -> Self::Item {
-        let mut config = None;
-
-        for file in resource.files {
-            if file.path.ends_with("fe.toml") {
-                self.db.workspace().touch(
-                    self.db,
-                    Url::from_file_path(file.path).unwrap(),
-                    Some(file.content.clone()),
-                );
-                config = Some(file.content.clone());
-            } else {
-                self.db.workspace().touch(
-                    self.db,
-                    Url::from_file_path(file.path).unwrap(),
-                    Some(file.content),
-                );
+            IngotInitDiagnostics::RemoteFileError { ingot_url, error } => {
+                write!(f, "Remote file error at {ingot_url}: {error}")
             }
-        }
-
-        if config.is_some() {
-            if let Some(ingot) = self
-                .db
-                .workspace()
-                .containing_ingot(self.db, ingot_url.clone())
-            {
-                // Check for config parse errors first
-                if let Some(parse_error) = ingot.config_parse_error(self.db) {
-                    self.diagnostics
-                        .push(IngotInitDiagnostics::ConfigParseError {
-                            ingot_url: ingot_url.clone(),
-                            error: parse_error,
-                        });
-                    vec![]
-                } else if let Some(parsed_config) = ingot.config(self.db) {
-                    // Check for config validation diagnostics (invalid names, versions, etc.)
-                    if !parsed_config.diagnostics.is_empty() {
-                        self.diagnostics
-                            .push(IngotInitDiagnostics::ConfigDiagnostics {
-                                ingot_url: ingot_url.clone(),
-                                diagnostics: parsed_config.diagnostics.clone(),
-                            });
-                    }
-
-                    parsed_config
-                        .dependencies(ingot_url)
-                        .into_iter()
-                        .filter_map(|dependency| {
-                            if self.db.graph().contains_url(self.db, &dependency.url) {
-                                // URL already exists in graph - add edge immediately
-                                self.db.graph().add_dependency(
-                                    self.db,
-                                    ingot_url,
-                                    &dependency.url,
-                                    dependency.alias,
-                                    dependency.arguments,
-                                );
-                                None
-                            } else {
-                                // URL doesn't exist - needs to be resolved
-                                Some((dependency.url, (dependency.alias, dependency.arguments)))
-                            }
-                        })
-                        .collect()
+            IngotInitDiagnostics::RemoteConfigParseError { ingot_url, error } => {
+                write!(f, "Invalid remote fe.toml file in {ingot_url}: {error}")
+            }
+            IngotInitDiagnostics::RemoteConfigDiagnostics {
+                ingot_url,
+                diagnostics,
+            } => {
+                if diagnostics.len() == 1 {
+                    write!(
+                        f,
+                        "Erroneous remote fe.toml file in {ingot_url}: {}",
+                        diagnostics[0]
+                    )
                 } else {
-                    // No config file found at this ingot
-                    vec![]
+                    writeln!(f, "Erroneous remote fe.toml file in {ingot_url}:")?;
+                    for diagnostic in diagnostics {
+                        writeln!(f, "  • {diagnostic}")?;
+                    }
+                    Ok(())
                 }
-            } else {
-                // This shouldn't happen since we found a config file
-                tracing::error!("Unable to locate ingot for config: {}", ingot_url);
-                vec![]
             }
-        } else {
-            // No fe.toml file found - this will be reported by the FilesResolver as a diagnostic
-            vec![]
+            IngotInitDiagnostics::UnresolvableRemoteDependency { target, error } => {
+                write!(f, "Failed to resolve remote dependency '{target}': {error}")
+            }
+            IngotInitDiagnostics::RemoteDependencyCycle { root_ingot } => {
+                write!(
+                    f,
+                    "Remote dependencies rooted at {root_ingot} contain a cycle"
+                )
+            }
+            IngotInitDiagnostics::RemotePathResolutionError {
+                ingot_url,
+                dependency,
+                error,
+            } => {
+                write!(
+                    f,
+                    "Remote dependency '{dependency}' in {ingot_url} points outside the repository: {error}"
+                )
+            }
         }
     }
 }
 
-impl<'a> GraphResolutionHandler<Url, DiGraph<Url, (SmolStr, DependencyArguments)>>
-    for InputHandler<'a>
-{
-    type Item = ();
+fn resolve_remote_dependencies(
+    db: &mut dyn InputDb,
+    ingot_url: &Url,
+    requests: &[ExternalDependencyEdge],
+) -> Vec<IngotInitDiagnostics> {
+    if requests.is_empty() {
+        return vec![];
+    }
 
-    fn handle_graph_resolution(
-        &mut self,
-        _ingot_url: &Url,
-        graph: DiGraph<Url, (SmolStr, DependencyArguments)>,
-    ) -> Self::Item {
-        let dependency_graph = self.db.graph();
+    let checkout_root = remote_checkout_root(ingot_url);
+    let git_resolver = GitResolver::new(checkout_root);
+    let mut graph_resolver: GraphResolverImpl<
+        GitResolver,
+        RemoteIngotHandler<'_>,
+        (SmolStr, DependencyArguments),
+    > = GraphResolverImpl::new(git_resolver);
+    let mut handler = RemoteIngotHandler::new(db);
+    let mut resolved_sets = Vec::new();
+    let mut diagnostics = Vec::new();
+    let multi = MultiProgress::new();
+    let spinner_style = ProgressStyle::with_template("{spinner} {msg}")
+        .unwrap()
+        .tick_strings(&["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]);
 
-        // Add edges from the resolved graph to the database dependency graph
-        // Note: edges to existing URLs are already added in handle_resolution
-        for edge in graph.edge_references() {
-            let from_url = &graph[edge.source()];
-            let to_url = &graph[edge.target()];
-            let (alias, arguments) = edge.weight();
-            dependency_graph.add_dependency(
-                self.db,
-                from_url,
-                to_url,
-                alias.clone(),
-                arguments.clone(),
-            );
+    for request in requests {
+        let description = git_description_from_request(request);
+        let spinner = multi.add(ProgressBar::new_spinner());
+        spinner.set_style(spinner_style.clone());
+        spinner.enable_steady_tick(Duration::from_millis(80));
+        spinner.set_message(format!(
+            "Resolving remote dependency {} ({})",
+            request.alias, description
+        ));
+
+        match graph_resolver.graph_resolve(&mut handler, &description) {
+            Ok(_graph) => {
+                if let Some(root_url) = handler.ingot_url(&description) {
+                    spinner.finish_with_message(format!("✅ Resolved {root_url}"));
+                    resolved_sets.push((request.parent.clone(), root_url.clone()));
+                } else {
+                    spinner.finish_and_clear();
+                }
+                // Remote dependencies are pinned to an immutable git revision, so a true
+                // cycle would require rewriting history. We therefore skip cycle
+                // detection here, but leave this note in case future remote transports
+                // allow references that can form cycles at resolution time.
+            }
+            Err(err) => {
+                spinner.abandon_with_message(format!("❌ Failed to resolve {description}: {err}"));
+            }
         }
     }
+    let _ = multi.clear();
+
+    diagnostics.extend(handler.take_diagnostics());
+    diagnostics.extend(
+        graph_resolver
+            .take_diagnostics()
+            .into_iter()
+            .map(
+                |diagnostic| IngotInitDiagnostics::UnresolvableRemoteDependency {
+                    target: diagnostic.0,
+                    error: diagnostic.1,
+                },
+            ),
+    );
+    for diagnostic in graph_resolver.node_resolver.take_diagnostics() {
+        match diagnostic {
+            GitResolutionDiagnostic::ReusedCheckout(path) => {
+                tracing::info!(target: "resolver", "Reused existing remote checkout at {}", path);
+            }
+        }
+    }
+
+    drop(handler);
+
+    for (parent, remote_root) in resolved_sets {
+        db.dependency_graph()
+            .add_remote_set(db, &parent, remote_root);
+    }
+
+    diagnostics
+}
+
+fn remote_checkout_root(ingot_url: &Url) -> Utf8PathBuf {
+    if let Some(root) = remote_git_cache_dir() {
+        return root;
+    }
+
+    let mut ingot_path = Utf8PathBuf::from_path_buf(
+        ingot_url
+            .to_file_path()
+            .expect("ingot URL should map to a local path"),
+    )
+    .expect("ingot path should be valid UTF-8");
+    ingot_path.push(".fe");
+    ingot_path.push("git");
+    ingot_path
+}
+
+fn git_description_from_request(request: &ExternalDependencyEdge) -> GitDependencyDescription {
+    let mut description = GitDependencyDescription::new(
+        request.remote.source.clone(),
+        request.remote.rev.to_string(),
+    );
+    if let Some(path) = request.remote.path.clone() {
+        description = description.with_path(path);
+    }
+    description
 }

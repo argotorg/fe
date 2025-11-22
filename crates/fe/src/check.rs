@@ -160,7 +160,7 @@ fn check_ingot(
 
     // Collect all dependencies with errors
     let mut dependency_errors = Vec::new();
-    for dependency_url in db.graph().dependency_urls(db, &ingot_url) {
+    for dependency_url in db.dependency_graph().dependency_urls(db, &ingot_url) {
         let Some(ingot) = db.workspace().containing_ingot(db, dependency_url.clone()) else {
             // Skip dependencies that can't be resolved
             continue;

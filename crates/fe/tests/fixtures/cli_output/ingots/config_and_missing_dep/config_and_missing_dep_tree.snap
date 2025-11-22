@@ -4,9 +4,6 @@ expression: output
 ---
 === STDOUT ===
 ➖ null v0.1.0
-
-=== STDERR ===
-❌ Config validation error at file://<project>/crates/fe/tests/fixtures/cli_output/ingots/config_and_missing_dep/: Invalid ingot name "invalid name!"
-❌ Failed to resolve ingot dependency 'file://<project>/crates/fe/tests/fixtures/cli_output/ingots/config_and_missing_dep/nonexistent/': Directory does not exist: file://<project>/crates/fe/tests/fixtures/cli_output/ingots/config_and_missing_dep/nonexistent/
+└── ➖ [invalid fe.toml]
 
 === EXIT CODE: 0 ===

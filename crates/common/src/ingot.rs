@@ -8,6 +8,7 @@ use url::Url;
 use crate::{
     InputDb,
     config::Config,
+    dependencies::DependencyLocation,
     file::{File, Workspace},
     stdlib::{BUILTIN_CORE_BASE_URL, BUILTIN_STD_BASE_URL},
     urlext::UrlExt,
@@ -142,7 +143,16 @@ impl<'db> Ingot<'db> {
             Some(config) => config
                 .dependencies(&base_url)
                 .into_iter()
-                .map(|dependency| (dependency.alias, dependency.url))
+                .map(|dependency| {
+                    let url = match &dependency.location {
+                        DependencyLocation::Remote(remote) => db
+                            .dependency_graph()
+                            .local_for_remote_git(db, remote)
+                            .unwrap_or_else(|| remote.source.clone()),
+                        DependencyLocation::Local(local) => local.url.clone(),
+                    };
+                    (dependency.alias.clone(), url)
+                })
                 .collect(),
             None => vec![],
         };

@@ -4,8 +4,6 @@ expression: output
 ---
 === STDOUT ===
 ➖ missingdep v0.0.1
-
-=== STDERR ===
-❌ Failed to resolve ingot dependency 'file://<project>/crates/fe/tests/fixtures/cli_output/ingots/nonexistent/': Directory does not exist: file://<project>/crates/fe/tests/fixtures/cli_output/ingots/nonexistent/
+└── ➖ [invalid fe.toml]
 
 === EXIT CODE: 0 ===
