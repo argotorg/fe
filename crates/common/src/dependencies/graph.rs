@@ -1,3 +1,5 @@
+#![allow(clippy::too_many_arguments)] // salsa-generated input constructor takes multiple fields
+
 use std::collections::{HashMap, HashSet};
 
 use petgraph::graph::{DiGraph, NodeIndex};
@@ -10,6 +12,7 @@ use crate::InputDb;
 
 type EdgeWeight = (DependencyAlias, DependencyArguments);
 
+#[allow(clippy::too_many_arguments)] // salsa input constructor currently needs all fields
 #[salsa::input]
 #[derive(Debug)]
 pub struct DependencyGraph {

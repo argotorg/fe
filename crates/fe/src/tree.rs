@@ -148,10 +148,8 @@ fn run_ui(rx: Receiver<TreeEvent>) -> io::Result<()> {
         let timeout = tick_rate
             .checked_sub(last_tick.elapsed())
             .unwrap_or(Duration::from_secs(0));
-        if event::poll(timeout)? {
-            if let CrosstermEvent::Key(key) = event::read()? {
-                app.on_key(key);
-            }
+        if event::poll(timeout)? && let CrosstermEvent::Key(key) = event::read()? {
+            app.on_key(key);
         }
 
         if last_tick.elapsed() >= tick_rate {
@@ -929,24 +927,20 @@ impl TreeApp {
     }
 
     fn toggle_collapse(&mut self) {
-        if let Some(row) = self.rows.get(self.selected) {
-            if row.has_children {
-                if !self.collapsed.insert(row.id.clone()) {
-                    self.collapsed.remove(&row.id);
-                }
-                self.invalidate_rows();
+        if let Some(row) = self.rows.get(self.selected) && row.has_children {
+            if !self.collapsed.insert(row.id.clone()) {
+                self.collapsed.remove(&row.id);
             }
+            self.invalidate_rows();
         }
     }
 
     fn adjust_collapse(&mut self, collapse: bool) {
         if let Some(row) = self.rows.get(self.selected) {
-            if collapse {
-                if row.has_children {
-                    self.collapsed.insert(row.id.clone());
-                    self.invalidate_rows();
-                }
-            } else if self.collapsed.remove(&row.id) {
+            if collapse && row.has_children {
+                self.collapsed.insert(row.id.clone());
+                self.invalidate_rows();
+            } else if !collapse && self.collapsed.remove(&row.id) {
                 self.invalidate_rows();
             }
         }
@@ -1117,6 +1111,7 @@ impl TreeApp {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn collect_remote_node(
         &self,
         rows: &mut Vec<TreeRow>,
