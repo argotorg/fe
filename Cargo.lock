@@ -793,9 +793,13 @@ version = "0.26.0"
 dependencies = [
  "camino",
  "clap",
+ "cranelift-entity",
  "dir-test",
+ "fe-codegen",
  "fe-common",
  "fe-driver",
+ "fe-hir",
+ "fe-mir",
  "fe-resolver",
  "fe-test-utils",
  "smol_str",
@@ -815,6 +819,21 @@ dependencies = [
  "tracing",
  "url",
  "walkdir",
+]
+
+[[package]]
+name = "fe-codegen"
+version = "0.1.0"
+dependencies = [
+ "dir-test",
+ "fe-common",
+ "fe-driver",
+ "fe-hir",
+ "fe-mir",
+ "fe-test-utils",
+ "hex",
+ "rustc-hash 2.1.1",
+ "url",
 ]
 
 [[package]]
@@ -845,6 +864,7 @@ dependencies = [
  "codespan-reporting",
  "fe-common",
  "fe-hir",
+ "fe-mir",
  "fe-resolver",
  "salsa",
  "smol_str",
@@ -915,6 +935,18 @@ dependencies = [
  "tracing-subscriber",
  "tracing-tree",
  "url",
+]
+
+[[package]]
+name = "fe-mir"
+version = "0.1.0"
+dependencies = [
+ "cranelift-entity",
+ "fe-common",
+ "fe-hir",
+ "num-bigint",
+ "num-traits",
+ "rustc-hash 2.1.1",
 ]
 
 [[package]]
@@ -1213,6 +1245,12 @@ name = "hermit-abi"
 version = "0.5.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "fc0fef456e4baa96da950455cd02c081ca953b141298e41db3fc7e36b1da849c"
+
+[[package]]
+name = "hex"
+version = "0.4.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7f24254aa9a54b5c858eaee2f5bccdb46aaf0e486a595ed5fd8f86ba55232a70"
 
 [[package]]
 name = "icu_collections"

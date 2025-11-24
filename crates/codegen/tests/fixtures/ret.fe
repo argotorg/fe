@@ -1,0 +1,17 @@
+pub fn retfoo(b1: bool, x: u64) -> u64 {
+    if b1 {
+        return 0
+    }
+
+    if x < 5 {
+        return 1
+    }
+
+    let y = x - 1
+
+    if y == 42 {
+        return 2
+    }
+
+    y + 1
+}

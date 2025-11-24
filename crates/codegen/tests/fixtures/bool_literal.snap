@@ -1,0 +1,10 @@
+---
+source: crates/codegen/tests/yul.rs
+expression: output
+input_file: tests/fixtures/bool_literal.fe
+---
+{
+  function bool_literal() -> ret {
+    ret := 1
+  }
+}

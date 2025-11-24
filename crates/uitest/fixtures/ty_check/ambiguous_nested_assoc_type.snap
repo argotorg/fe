@@ -15,5 +15,4 @@ error[2-0009]: ambiguous associated type `Enc`
 17 │ fn amb<T>(x: T) -> T::Enc::Output
    │                       ^^^ associated type `Enc` is ambiguous
    │
-   = specify the trait explicitly: `<Type as Trait>::Enc`
-
+   = hint: specify the trait explicitly: `<T as WithEnc>::Enc`

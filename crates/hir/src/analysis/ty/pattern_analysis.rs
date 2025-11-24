@@ -190,6 +190,10 @@ impl<'db> PatternMatrix<'db> {
             SimplifiedPatternKind::Or(pats) => pats
                 .iter()
                 .any(|pat| self.is_pattern_useful(db, &PatternRowVec::new(vec![pat.clone()]))),
+
+            // Errored patterns are ignored for usefulness; keep them but
+            // don't cause later patterns to become unreachable.
+            SimplifiedPatternKind::Error => true,
         }
     }
 
@@ -300,6 +304,9 @@ impl<'db> PatternRowVec<'db> {
                 }
                 result
             }
+
+            // Errored patterns don't participate in specialization.
+            SimplifiedPatternKind::Error => vec![],
         }
     }
 
@@ -326,6 +333,9 @@ impl<'db> PatternRowVec<'db> {
                 }
                 result
             }
+
+            // Errored patterns don't participate in specialization.
+            SimplifiedPatternKind::Error => vec![],
         }
     }
 

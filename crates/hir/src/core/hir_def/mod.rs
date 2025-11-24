@@ -1,5 +1,6 @@
 pub mod attr;
 pub mod body;
+pub mod effects;
 pub mod expr;
 pub mod ident;
 pub mod item;
@@ -20,6 +21,7 @@ pub(crate) mod module_tree;
 pub use attr::*;
 pub use body::*;
 use common::ingot::{Ingot, IngotKind};
+pub use effects::*;
 pub use expr::*;
 pub use ident::*;
 pub use item::*;
@@ -171,9 +173,10 @@ pub enum LitKind<'db> {
 /// This type is clearly distinguished from `Option<T>`. The
 /// `Option<T>` type is used to hold syntactically valid optional nodes, while
 /// `Partial<T>` means that a syntactically required element may be missing.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub enum Partial<T> {
     Present(T),
+    #[default]
     Absent,
 }
 unsafe impl<T> Update for Partial<T>
@@ -233,12 +236,6 @@ where
             Self::Present(a) => a == other,
             _ => false,
         }
-    }
-}
-
-impl<T> Default for Partial<T> {
-    fn default() -> Self {
-        Self::Absent
     }
 }
 

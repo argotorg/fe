@@ -1,0 +1,3 @@
+pub fn comparison_ops() -> (bool, bool, bool, bool, bool, bool) {
+    (1 == 1, 1 != 2, 1 < 2, 2 <= 2, 3 > 2, 3 >= 3)
+}

@@ -1,0 +1,20 @@
+struct Foo {}
+
+fn make_value() -> u64 {
+    42
+}
+
+impl Foo {
+
+    pub fn gen_value(&self) -> u64 {
+        make_value()
+    }
+
+    pub fn return_value(self) -> u64 {
+        self.gen_value()
+    }
+}
+
+pub fn call_method(foo: Foo) -> u64 {
+    foo.return_value()
+}

@@ -11,6 +11,7 @@ use crate::analysis::{
             BodyDiag, DefConflictError, FuncBodyDiag, ImplDiag, TraitConstraintDiag,
             TraitLowerDiag, TyDiagCollection, TyLowerDiag,
         },
+        trait_def::TraitInstId,
         ty_check::RecordLike,
         ty_def::{TyData, TyVarSort},
     },
@@ -26,6 +27,21 @@ use common::diagnostics::{
 };
 use either::Either;
 use itertools::Itertools;
+use std::cmp::Ordering;
+
+fn cmp_trait_inst_by_name<'db>(
+    db: &'db dyn SpannedHirAnalysisDb,
+    a: &TraitInstId<'db>,
+    b: &TraitInstId<'db>,
+) -> Ordering {
+    let a_name = a.def(db).name(db).unwrap().data(db);
+    let b_name = b.def(db).name(db).unwrap().data(db);
+    a_name.cmp(b_name).then_with(|| {
+        let a_self = a.self_ty(db).pretty_print(db).to_string();
+        let b_self = b.self_ty(db).pretty_print(db).to_string();
+        a_self.cmp(&b_self)
+    })
+}
 
 /// All diagnostics accumulated in salsa-db should implement
 /// [`DiagnosticVoucher`] which defines the conversion into
@@ -277,16 +293,21 @@ impl DiagnosticVoucher for PathResDiag<'_> {
 
                 let mut cand_spans: Vec<_> = candidates
                     .iter()
-                    .filter_map(|span| span.resolve(db))
+                    .filter_map(|(span, from_prelude)| {
+                        span.resolve(db).map(|resolved| (resolved, *from_prelude))
+                    })
                     .collect();
-                cand_spans.sort_unstable();
-                diags.extend(cand_spans.into_iter().enumerate().map(|(i, span)| {
-                    SubDiagnostic::new(
-                        LabelStyle::Secondary,
-                        format!("candidate {}", i + 1),
-                        Some(span),
-                    )
-                }));
+                cand_spans.sort_unstable_by(|(a, _), (b, _)| a.cmp(b));
+                diags.extend(cand_spans.into_iter().enumerate().map(
+                    |(i, (span, from_prelude))| {
+                        let label = if from_prelude {
+                            format!("candidate {} (from prelude)", i + 1)
+                        } else {
+                            format!("candidate {}", i + 1)
+                        };
+                        SubDiagnostic::new(LabelStyle::Secondary, label, Some(span))
+                    },
+                ));
 
                 CompleteDiagnostic {
                     severity,
@@ -334,14 +355,21 @@ impl DiagnosticVoucher for PathResDiag<'_> {
                     });
                 }
 
+                let (inst, _) = candidates
+                    .iter()
+                    .min_by(|(a, _), (b, _)| cmp_trait_inst_by_name(db, a, b))
+                    .unwrap();
+                let trait_name = inst.def(db).name(db).unwrap().data(db);
+                let self_ty = inst.self_ty(db).pretty_print(db);
+                let hint = format!(
+                    "hint: specify the trait explicitly: `<{self_ty} as {trait_name}>::{name}`"
+                );
+
                 CompleteDiagnostic {
                     severity,
                     message: format!("ambiguous associated type `{name}`"),
                     sub_diagnostics,
-                    notes: vec![format!(
-                        "specify the trait explicitly: `<Type as Trait>::{}`",
-                        name
-                    )],
+                    notes: vec![hint],
                     error_code,
                 }
             }
@@ -617,6 +645,51 @@ impl DiagnosticVoucher for PathResDiag<'_> {
                     message: "trait is not in the scope".to_string(),
                     sub_diagnostics,
                     notes: vec![],
+                    error_code,
+                }
+            }
+
+            Self::AmbiguousAssociatedConst {
+                primary,
+                name,
+                trait_insts,
+            } => {
+                let const_name = name.data(db);
+                let mut sub_diagnostics = vec![SubDiagnostic {
+                    style: LabelStyle::Primary,
+                    message: format!("`{const_name}` is ambiguous"),
+                    span: primary.resolve(db),
+                }];
+
+                // Candidate labels at the trait declarations
+                for inst in trait_insts {
+                    let trait_def = inst.def(db);
+                    let trait_name = trait_def.name(db).unwrap().data(db);
+                    let trait_name_span = trait_def.span().name().resolve(db);
+                    let self_ty = inst.self_ty(db).pretty_print(db);
+                    let msg = format!("candidate: `<{self_ty} as {trait_name}>::{const_name}`");
+                    sub_diagnostics.push(SubDiagnostic {
+                        style: LabelStyle::Secondary,
+                        message: msg,
+                        span: trait_name_span,
+                    });
+                }
+
+                let inst = trait_insts
+                    .iter()
+                    .min_by(|a, b| cmp_trait_inst_by_name(db, a, b))
+                    .unwrap();
+                let trait_name = inst.def(db).name(db).unwrap().data(db);
+                let self_ty = inst.self_ty(db).pretty_print(db);
+                let hint = format!(
+                    "hint: specify the trait explicitly: `<{self_ty} as {trait_name}>::{const_name}`"
+                );
+
+                CompleteDiagnostic {
+                    severity: Severity::Error,
+                    message: "multiple trait candidates found".to_string(),
+                    sub_diagnostics,
+                    notes: vec![hint],
                     error_code,
                 }
             }
@@ -1554,6 +1627,191 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                 notes: vec![],
                 error_code,
             },
+
+            Self::MissingEffect { primary, func, key } => {
+                let func_name = func
+                    .name(db)
+                    .to_opt()
+                    .map(|n| n.data(db).to_string())
+                    .unwrap_or_else(|| "<unknown>".to_string());
+                let key_str = key.pretty_print(db);
+
+                CompleteDiagnostic {
+                    severity: Severity::Error,
+                    message: format!("missing effect `{}` required by `{}`", key_str, func_name),
+                    sub_diagnostics: vec![SubDiagnostic {
+                        style: LabelStyle::Primary,
+                        message: format!(
+                            "`{}` requires effect `{}` to be in scope",
+                            func_name, key_str
+                        ),
+                        span: primary.resolve(db),
+                    }],
+                    notes: vec![format!(
+                        "provide it with `with ({} = value)` or require it via `uses {}`",
+                        key_str, key_str
+                    )],
+                    error_code,
+                }
+            }
+
+            Self::AmbiguousEffect { primary, func, key } => {
+                let func_name = func
+                    .name(db)
+                    .to_opt()
+                    .map(|n| n.data(db).to_string())
+                    .unwrap_or_else(|| "<unknown>".to_string());
+                let key_str = key.pretty_print(db);
+
+                CompleteDiagnostic {
+                    severity: Severity::Error,
+                    message: "multiple effect candidates found".to_string(),
+                    sub_diagnostics: vec![SubDiagnostic {
+                        style: LabelStyle::Primary,
+                        message: format!(
+                            "effect `{}` is ambiguous when calling `{}`",
+                            key_str, func_name
+                        ),
+                        span: primary.resolve(db),
+                    }],
+                    notes: vec![],
+                    error_code,
+                }
+            }
+
+            Self::EffectMutabilityMismatch {
+                primary,
+                func,
+                key,
+                provided_span,
+            } => {
+                let func_name = func
+                    .name(db)
+                    .to_opt()
+                    .map(|n| n.data(db).to_string())
+                    .unwrap_or_else(|| "<unknown>".to_string());
+                let key_str = key.pretty_print(db);
+
+                let mut sub_diagnostics = vec![SubDiagnostic {
+                    style: LabelStyle::Primary,
+                    message: format!("`{}` requires `mut {}`", func_name, key_str),
+                    span: primary.resolve(db),
+                }];
+
+                if let Some(span) = provided_span.as_ref().map(|s| s.resolve(db)) {
+                    sub_diagnostics.push(SubDiagnostic {
+                        style: LabelStyle::Secondary,
+                        message: format!("effect `{}` is provided here", key_str),
+                        span,
+                    });
+                }
+
+                CompleteDiagnostic {
+                    severity: Severity::Error,
+                    message: format!(
+                        "effect `{}` must be mutable when calling `{}`",
+                        key_str, func_name
+                    ),
+                    sub_diagnostics,
+                    notes: vec![
+                        "use a mutable binding or pass a mutable reference in the `with` block"
+                            .to_string(),
+                    ],
+                    error_code,
+                }
+            }
+
+            Self::EffectTypeMismatch {
+                primary,
+                func,
+                key,
+                expected,
+                given,
+                provided_span,
+            } => {
+                let func_name = func
+                    .name(db)
+                    .to_opt()
+                    .map(|n| n.data(db).to_string())
+                    .unwrap_or_else(|| "<unknown>".to_string());
+                let key_str = key.pretty_print(db);
+                let expected_ty = expected.pretty_print(db).to_string();
+                let given_ty = given.pretty_print(db).to_string();
+
+                let mut sub_diagnostics = vec![SubDiagnostic {
+                    style: LabelStyle::Primary,
+                    message: format!(
+                        "expected `{}` for effect `{}`, found `{}`",
+                        expected_ty, key_str, given_ty
+                    ),
+                    span: primary.resolve(db),
+                }];
+
+                if let Some(span) = provided_span.as_ref().map(|s| s.resolve(db)) {
+                    sub_diagnostics.push(SubDiagnostic {
+                        style: LabelStyle::Secondary,
+                        message: format!("effect `{}` is provided here", key_str),
+                        span,
+                    });
+                }
+
+                CompleteDiagnostic {
+                    severity: Severity::Error,
+                    message: format!(
+                        "effect `{}` provided to `{}` has type `{}`, but `{}` is required",
+                        key_str, func_name, given_ty, expected_ty
+                    ),
+                    sub_diagnostics,
+                    notes: vec![],
+                    error_code,
+                }
+            }
+
+            Self::EffectTraitUnsatisfied {
+                primary,
+                func,
+                key,
+                trait_req,
+                given,
+                provided_span,
+            } => {
+                let func_name = func
+                    .name(db)
+                    .to_opt()
+                    .map(|n| n.data(db).to_string())
+                    .unwrap_or_else(|| "<unknown>".to_string());
+                let key_str = key.pretty_print(db);
+                let trait_str = trait_req.pretty_print(db, false);
+                let given_ty = given.pretty_print(db).to_string();
+
+                let mut sub_diagnostics = vec![SubDiagnostic {
+                    style: LabelStyle::Primary,
+                    message: format!(
+                        "`{}` must implement `{}` for effect `{}`",
+                        given_ty, trait_str, key_str
+                    ),
+                    span: primary.resolve(db),
+                }];
+
+                if let Some(span) = provided_span.as_ref().map(|s| s.resolve(db)) {
+                    sub_diagnostics.push(SubDiagnostic {
+                        style: LabelStyle::Secondary,
+                        message: format!("effect `{}` is provided here", key_str),
+                        span,
+                    });
+                }
+
+                CompleteDiagnostic {
+                    severity: Severity::Error,
+                    message: format!(
+                        "effect `{}` supplied to `{}` does not satisfy `{}`",
+                        key_str, func_name, trait_str
+                    ),
+                    sub_diagnostics,
+                    notes: vec![],
+                    error_code,
+                }
+            }
 
             Self::ReturnedTypeMismatch {
                 primary,
@@ -2726,6 +2984,66 @@ impl DiagnosticVoucher for ImplDiag<'_> {
                     message: format!(
                         "missing associated type `{}` from trait `{}`",
                         type_name.data(db),
+                        trait_.name(db).unwrap().data(db)
+                    ),
+                    span: primary.resolve(db),
+                }],
+                notes: vec![],
+                error_code,
+            },
+
+            Self::MissingAssociatedConstValue {
+                primary,
+                const_name,
+                trait_,
+            } => CompleteDiagnostic {
+                severity,
+                message: "missing associated const value in trait implementation".to_string(),
+                sub_diagnostics: vec![SubDiagnostic {
+                    style: LabelStyle::Primary,
+                    message: format!(
+                        "missing value for associated const `{}` from trait `{}`",
+                        const_name.data(db),
+                        trait_.name(db).unwrap().data(db)
+                    ),
+                    span: primary.resolve(db),
+                }],
+                notes: vec![],
+                error_code,
+            },
+
+            Self::ConstNotDefinedInTrait {
+                primary,
+                trait_,
+                const_name,
+            } => CompleteDiagnostic {
+                severity,
+                message: "associated const not defined in trait".to_string(),
+                sub_diagnostics: vec![SubDiagnostic {
+                    style: LabelStyle::Primary,
+                    message: format!(
+                        "associated const `{}` is not defined in trait `{}`",
+                        const_name.data(db),
+                        trait_.name(db).unwrap().data(db)
+                    ),
+                    span: primary.resolve(db),
+                }],
+                notes: vec![],
+                error_code,
+            },
+
+            Self::MissingAssociatedConst {
+                primary,
+                const_name,
+                trait_,
+            } => CompleteDiagnostic {
+                severity,
+                message: "missing associated const in trait implementation".to_string(),
+                sub_diagnostics: vec![SubDiagnostic {
+                    style: LabelStyle::Primary,
+                    message: format!(
+                        "missing associated const `{}` from trait `{}`",
+                        const_name.data(db),
                         trait_.name(db).unwrap().data(db)
                     ),
                     span: primary.resolve(db),

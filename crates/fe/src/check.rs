@@ -1,16 +1,20 @@
 use camino::Utf8PathBuf;
+use codegen::emit_module_yul;
 use common::InputDb;
+use cranelift_entity::EntityRef;
 use driver::DriverDataBase;
+use hir::hir_def::{ExprId, HirIngot, PatId, StmtId, TopLevelMod};
+use mir::{MirInst, Terminator, ValueId, lower_module};
 use url::Url;
 
-pub fn check(path: &Utf8PathBuf) {
+pub fn check(path: &Utf8PathBuf, dump_mir: bool, emit_yul_min: bool) {
     let mut db = DriverDataBase::default();
 
     // Determine if we're dealing with a single file or an ingot directory
     let has_errors = if path.is_file() && path.extension() == Some("fe") {
-        check_single_file(&mut db, path)
+        check_single_file(&mut db, path, dump_mir, emit_yul_min)
     } else if path.is_dir() {
-        check_ingot(&mut db, path)
+        check_ingot(&mut db, path, dump_mir, emit_yul_min)
     } else {
         eprintln!("❌ Error: Path must be either a .fe file or a directory containing fe.toml");
         std::process::exit(1);
@@ -21,7 +25,12 @@ pub fn check(path: &Utf8PathBuf) {
     }
 }
 
-fn check_single_file(db: &mut DriverDataBase, file_path: &Utf8PathBuf) -> bool {
+fn check_single_file(
+    db: &mut DriverDataBase,
+    file_path: &Utf8PathBuf,
+    dump_mir: bool,
+    emit_yul_min: bool,
+) -> bool {
     // Create a file URL for the single .fe file
     let file_url = match Url::from_file_path(file_path.canonicalize_utf8().unwrap()) {
         Ok(url) => url,
@@ -53,6 +62,12 @@ fn check_single_file(db: &mut DriverDataBase, file_path: &Utf8PathBuf) -> bool {
             diags.emit(db);
             return true;
         }
+        if dump_mir {
+            dump_module_mir(db, top_mod);
+        }
+        if emit_yul_min {
+            emit_yul(db, top_mod);
+        }
     } else {
         eprintln!("❌ Error: Could not process file {file_path}");
         return true;
@@ -61,7 +76,12 @@ fn check_single_file(db: &mut DriverDataBase, file_path: &Utf8PathBuf) -> bool {
     false
 }
 
-fn check_ingot(db: &mut DriverDataBase, dir_path: &Utf8PathBuf) -> bool {
+fn check_ingot(
+    db: &mut DriverDataBase,
+    dir_path: &Utf8PathBuf,
+    dump_mir: bool,
+    emit_yul_min: bool,
+) -> bool {
     let canonical_path = match dir_path.canonicalize_utf8() {
         Ok(path) => path,
         Err(_) => {
@@ -128,6 +148,14 @@ fn check_ingot(db: &mut DriverDataBase, dir_path: &Utf8PathBuf) -> bool {
     if !diags.is_empty() {
         diags.emit(db);
         has_errors = true;
+    } else {
+        let root_mod = ingot.root_mod(db);
+        if dump_mir {
+            dump_module_mir(db, root_mod);
+        }
+        if emit_yul_min {
+            emit_yul(db, root_mod);
+        }
     }
 
     // Collect all dependencies with errors
@@ -182,4 +210,172 @@ fn print_dependency_info(db: &DriverDataBase, dependency_url: &Url) {
 
     eprintln!("🔗 {dependency_url}");
     eprintln!();
+}
+
+fn emit_yul(db: &DriverDataBase, top_mod: TopLevelMod<'_>) {
+    match emit_module_yul(db, top_mod) {
+        Ok(results) => {
+            for result in results {
+                match result {
+                    Ok(yul) => {
+                        println!("=== Yul ===");
+                        println!("{yul}");
+                        println!();
+                    }
+                    Err(err) => eprintln!("⚠️  yul emission skipped: {err}"),
+                }
+            }
+        }
+        Err(err) => eprintln!("⚠️  failed to lower MIR for yul emission: {err}"),
+    }
+}
+
+fn dump_module_mir(db: &DriverDataBase, top_mod: TopLevelMod<'_>) {
+    match lower_module(db, top_mod) {
+        Ok(mir_module) => {
+            println!("=== MIR for module ===");
+            for func in mir_module.functions {
+                println!("fn {}:", func.symbol_name);
+                for (idx, block) in func.body.blocks.iter().enumerate() {
+                    println!("  bb{idx}:");
+                    for inst in &block.insts {
+                        println!("    {}", format_inst(db, inst));
+                    }
+                    println!("    terminator: {}", format_terminator(&block.terminator));
+                }
+                println!();
+            }
+        }
+        Err(err) => eprintln!("failed to lower MIR: {err}"),
+    }
+}
+
+fn format_inst(db: &DriverDataBase, inst: &MirInst<'_>) -> String {
+    match inst {
+        MirInst::Let {
+            stmt,
+            pat,
+            ty,
+            value,
+        } => {
+            let value_str = value
+                .as_ref()
+                .map(|val| value_label(*val))
+                .unwrap_or_else(|| "_".into());
+            if let Some(ty) = ty.as_ref() {
+                format!(
+                    "{}: let {}: {} = {}",
+                    stmt_label(*stmt),
+                    pat_label(*pat),
+                    ty.pretty_print(db),
+                    value_str
+                )
+            } else {
+                format!(
+                    "{}: let {} = {}",
+                    stmt_label(*stmt),
+                    pat_label(*pat),
+                    value_str
+                )
+            }
+        }
+        MirInst::Assign {
+            stmt,
+            target,
+            value,
+        } => format!(
+            "{}: assign {} = {}",
+            stmt_label(*stmt),
+            expr_label(*target),
+            value_label(*value)
+        ),
+        MirInst::AugAssign {
+            stmt,
+            target,
+            value,
+            op,
+        } => format!(
+            "{}: {:?} {} {}",
+            stmt_label(*stmt),
+            op,
+            expr_label(*target),
+            value_label(*value)
+        ),
+        MirInst::Eval { stmt, value } => {
+            format!("{}: eval {}", stmt_label(*stmt), value_label(*value))
+        }
+        MirInst::EvalExpr {
+            expr,
+            value,
+            bind_value,
+        } => {
+            let bind_suffix = if *bind_value { " (bind)" } else { "" };
+            format!(
+                "{}: eval_expr{} {}",
+                expr_label(*expr),
+                bind_suffix,
+                value_label(*value)
+            )
+        }
+        MirInst::IntrinsicStmt { expr, op, args } => {
+            let args = args
+                .iter()
+                .map(|arg| value_label(*arg))
+                .collect::<Vec<_>>()
+                .join(", ");
+            format!("{}: intrinsic {:?}({args})", expr_label(*expr), op)
+        }
+    }
+}
+
+fn format_terminator(term: &Terminator) -> String {
+    match term {
+        Terminator::Return(Some(val)) => format!("return {}", value_label(*val)),
+        Terminator::Return(None) => "return".into(),
+        Terminator::Goto { target } => format!("goto bb{}", target.index()),
+        Terminator::Branch {
+            cond,
+            then_bb,
+            else_bb,
+        } => format!(
+            "if {} -> bb{}, bb{}",
+            value_label(*cond),
+            then_bb.index(),
+            else_bb.index()
+        ),
+        Terminator::Switch {
+            discr,
+            targets,
+            default,
+            ..
+        } => {
+            let parts = targets
+                .iter()
+                .map(|t| format!("{}: bb{}", t.value, t.block.index()))
+                .collect::<Vec<_>>();
+            let arms = parts.join(", ");
+            format!(
+                "switch {} [{arms}] default bb{}",
+                value_label(*discr),
+                default.index()
+            )
+        }
+        Terminator::Unreachable => "unreachable".into(),
+    }
+}
+
+fn stmt_label(stmt: StmtId) -> String {
+    format!("s{}", stmt.index())
+}
+
+fn pat_label(pat: PatId) -> String {
+    format!("p{}", pat.index())
+}
+
+fn expr_label(expr: ExprId) -> String {
+    format!("e{}", expr.index())
+}
+
+fn value_label(val: ValueId) -> String {
+    format!("v{}", val.index())
 }

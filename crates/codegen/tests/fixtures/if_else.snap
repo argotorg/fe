@@ -1,0 +1,17 @@
+---
+source: crates/codegen/tests/yul.rs
+expression: output
+input_file: tests/fixtures/if_else.fe
+---
+{
+  function if_else(cond) -> ret {
+    let v0 := 0
+    if cond {
+      v0 := 1
+    }
+    if iszero(cond) {
+      v0 := 2
+    }
+    ret := v0
+  }
+}

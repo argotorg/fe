@@ -138,7 +138,7 @@ impl ResolvedOrigin {
             HirOrigin::Desugared(desugared) => {
                 ResolvedOriginKind::Desugared(root, desugared.clone())
             }
-            HirOrigin::None => ResolvedOriginKind::None,
+            HirOrigin::Synthetic | HirOrigin::None => ResolvedOriginKind::None,
         };
 
         ResolvedOrigin::new(top_mod.file(db), kind)

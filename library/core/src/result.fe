@@ -1,0 +1,135 @@
+use ingot::Default
+use ingot::Fn
+use ingot::Functor
+use ingot::Applicative
+use ingot::Monad
+use ingot::Option
+use ingot::panic
+
+pub enum Result<E, T> {
+    Err(E),
+    Ok(T),
+}
+
+impl<E, T> Result<E, T> {
+    pub fn is_ok(self) -> bool {
+        match self {
+            Self::Ok(_) => true
+            Self::Err(_) => false
+        }
+    }
+
+    pub fn is_err(self) -> bool {
+        !self.is_ok()
+    }
+
+    pub fn ok(self) -> Option<T> {
+        match self {
+            Self::Ok(value) => Option::Some(value)
+            Self::Err(_) => Option::None
+        }
+    }
+
+    pub fn err(self) -> Option<E> {
+        match self {
+            Self::Err(error) => Option::Some(error)
+            Self::Ok(_) => Option::None
+        }
+    }
+
+    pub fn unwrap(self) -> T {
+        match self {
+            Self::Ok(value) => value
+            Self::Err(_) => panic()
+        }
+    }
+
+    pub fn unwrap_err(self) -> E {
+        match self {
+            Self::Err(error) => error
+            Self::Ok(_) => panic()
+        }
+    }
+
+    pub fn unwrap_or(self, default: T) -> T {
+        match self {
+            Self::Ok(value) => value
+            Self::Err(_) => default
+        }
+    }
+
+    pub fn map<U, F: Fn<T, U>>(self, _ func: F) -> Result<E, U> {
+        match self {
+            Self::Ok(value) => Result::Ok(func.call(value))
+            Self::Err(error) => Result::Err(error)
+        }
+    }
+
+    pub fn map_err<FError, F: Fn<E, FError>>(self, _ func: F) -> Result<FError, T> {
+        match self {
+            Self::Ok(value) => Result::Ok(value)
+            Self::Err(error) => Result::Err(func.call(error))
+        }
+    }
+
+    pub fn and_then<U, F: Fn<T, Result<E, U>>>(self, _ func: F) -> Result<E, U> {
+        match self {
+            Self::Ok(value) => func.call(value)
+            Self::Err(error) => Result::Err(error)
+        }
+    }
+
+    pub fn or_else<E2, F: Fn<E, Result<E2, T>>>(self, _ func: F) -> Result<E2, T> {
+        match self {
+            Self::Ok(value) => Result::Ok(value)
+            Self::Err(error) => func.call(error)
+        }
+    }
+}
+
+impl<E, T> Result<E, T> where T: Default {
+    pub fn unwrap_or_default(self) -> T {
+        match self {
+            Self::Ok(value) => value
+            Self::Err(_) => T::default()
+        }
+    }
+}
+
+impl<E, T> Default for Result<E, T> where T: Default {
+    fn default() -> Self {
+        Result::Ok(T::default())
+    }
+}
+
+impl<E> Functor for Result<E> {
+    fn map<T, U, F: Fn<T, U>>(self: Self<T>, _ func: F) -> Self<U> {
+        match self {
+            Result::Ok(value) => Result::Ok(func.call(value))
+            Result::Err(error) => Result::Err(error)
+        }
+    }
+}
+
+impl<E> Applicative for Result<E> {
+    fn pure<T>(_ value: T) -> Self<T> {
+        Result::Ok(value)
+    }
+
+    fn ap<T, U, F: Fn<T, U>>(self: Self<F>, _ value: Self<T>) -> Self<U> {
+        match (self, value) {
+            (Result::Ok(func), Result::Ok(arg)) => Result::Ok(func.call(arg))
+            (Result::Err(error), _) => Result::Err(error)
+            (_, Result::Err(error)) => Result::Err(error)
+        }
+    }
+}
+
+impl<E> Monad for Result<E> {
+    fn bind<T, U, F: Fn<T, Self<U>>>(self: Self<T>, _ func: F) -> Self<U> {
+        match self {
+            Result::Ok(value) => func.call(value)
+            Result::Err(error) => Result::Err(error)
+        }
+    }
+}

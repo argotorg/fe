@@ -9,8 +9,9 @@ use common::{file::File, ingot::Ingot};
 use parser::ast;
 
 use super::{
-    AttrListId, Body, FuncParamListId, FuncParamName, GenericParamListId, HirIngot, IdentId,
-    Partial, TupleTypeId, TypeBound, TypeId, UseAlias, WhereClauseId,
+    AttrListId, Body, EffectParamListId, FuncParamListId, FuncParamName,
+    GenericParamListId, HirIngot, IdentId, Partial, TupleTypeId, TypeBound, TypeId, UseAlias,
+    WhereClauseId,
     scope_graph::{ScopeGraph, ScopeId},
 };
 use crate::{
@@ -612,11 +613,13 @@ pub struct Func<'db> {
     pub(in crate::core) attributes: AttrListId<'db>,
     pub(in crate::core) generic_params: GenericParamListId<'db>,
     pub(in crate::core) where_clause: WhereClauseId<'db>,
-    pub(in crate::core) params: Partial<FuncParamListId<'db>>,
+    // TODO: Add semantic view for FuncParamListId and restrict visibility
+    pub params: Partial<FuncParamListId<'db>>,
+    // TODO: Add semantic view for effects and restrict visibility
+    pub effects: EffectParamListId<'db>,
     pub(in crate::core) ret_type_ref: Option<TypeId<'db>>,
     pub modifier: ItemModifier,
     pub body: Option<Body<'db>>,
-    pub is_extern: bool,
     pub top_mod: TopLevelMod<'db>,
 
     #[return_ref]
@@ -910,6 +913,9 @@ pub struct Trait<'db> {
     pub(in crate::core) where_clause: WhereClauseId<'db>,
     #[return_ref]
     pub(in crate::core) types: Vec<AssocTyDecl<'db>>,
+    // TODO: Add semantic view for AssocConstDecl and restrict visibility
+    #[return_ref]
+    pub consts: Vec<AssocConstDecl<'db>>,
 
     pub top_mod: TopLevelMod<'db>,
 
@@ -953,6 +959,16 @@ impl<'db> Trait<'db> {
     pub fn assoc_ty_by_index(self, db: &'db dyn HirDb, idx: usize) -> &'db AssocTyDecl<'db> {
         &self.types(db)[idx]
     }
+
+    pub fn const_(
+        self,
+        db: &'db dyn HirDb,
+        name: IdentId<'db>,
+    ) -> Option<&'db AssocConstDecl<'db>> {
+        self.consts(db)
+            .iter()
+            .find(|c| c.name == Partial::Present(name))
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, salsa::Update)]
@@ -960,6 +976,13 @@ pub struct AssocTyDecl<'db> {
     pub name: Partial<IdentId<'db>>,
     pub bounds: Vec<TypeBound<'db>>,
     pub default: Option<TypeId<'db>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, salsa::Update)]
+pub struct AssocConstDecl<'db> {
+    pub name: Partial<IdentId<'db>>,
+    pub ty: Partial<TypeId<'db>>,
+    pub default: Option<Partial<Body<'db>>>,
 }
 
 #[salsa::tracked]
@@ -975,6 +998,8 @@ pub struct ImplTrait<'db> {
     pub(in crate::core) where_clause: WhereClauseId<'db>,
     #[return_ref]
     pub(in crate::core) types: Vec<AssocTyDef<'db>>,
+    #[return_ref]
+    pub(in crate::core) consts: Vec<AssocConstDef<'db>>,
     pub top_mod: TopLevelMod<'db>,
 
     #[return_ref]
@@ -1019,12 +1044,25 @@ impl<'db> ImplTrait<'db> {
     // raw type_ref access kept; shim exposes public ___tmp method.
 
     // Semantic `ty` lives in `hir_def::semantic`.
+
+    pub fn const_(self, db: &'db dyn HirDb, name: IdentId<'db>) -> Option<&'db AssocConstDef<'db>> {
+        self.consts(db)
+            .iter()
+            .find(|c| c.name == Partial::Present(name))
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, salsa::Update)]
 pub struct AssocTyDef<'db> {
     pub name: Partial<IdentId<'db>>,
     pub(in crate::core) type_ref: Partial<TypeId<'db>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, salsa::Update)]
+pub struct AssocConstDef<'db> {
+    pub name: Partial<IdentId<'db>>,
+    pub ty: Partial<TypeId<'db>>,
+    pub value: Partial<Body<'db>>,
 }
 
 #[salsa::tracked]
@@ -1078,6 +1116,10 @@ impl<'db> Use<'db> {
 
     pub fn scope(self) -> ScopeId<'db> {
         ScopeId::from_item(self.into())
+    }
+
+    pub fn is_prelude_use(self, db: &'db dyn HirDb) -> bool {
+        matches!(self.origin(db), &HirOrigin::Synthetic)
     }
 
     /// Returns imported name if it is present and not a glob.

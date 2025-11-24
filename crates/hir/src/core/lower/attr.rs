@@ -1,7 +1,7 @@
 use parser::ast;
 
 use super::FileLowerCtxt;
-use crate::core::hir_def::{IdentId, StringId, attr::*};
+use crate::core::hir_def::{IdentId, LitKind, Partial, PathId, StringId, attr::*};
 
 impl<'db> AttrListId<'db> {
     pub(super) fn lower_ast(ctxt: &mut FileLowerCtxt<'db>, ast: ast::AttrList) -> Self {
@@ -29,7 +29,7 @@ impl<'db> Attr<'db> {
 
 impl<'db> NormalAttr<'db> {
     pub(super) fn lower_ast(ctxt: &mut FileLowerCtxt<'db>, ast: ast::NormalAttr) -> Self {
-        let name = IdentId::lower_token_partial(ctxt, ast.name());
+        let path = PathId::lower_ast_partial(ctxt, ast.path());
         let args = ast
             .args()
             .map(|args| {
@@ -39,7 +39,7 @@ impl<'db> NormalAttr<'db> {
             })
             .unwrap_or_default();
 
-        Self { name, args }
+        Self { path, args }
     }
 }
 
@@ -57,8 +57,25 @@ impl<'db> DocCommentAttr<'db> {
 
 impl<'db> AttrArg<'db> {
     pub(super) fn lower_ast(ctxt: &mut FileLowerCtxt<'db>, ast: ast::AttrArg) -> Self {
-        let key = IdentId::lower_token_partial(ctxt, ast.key());
-        let value = IdentId::lower_token_partial(ctxt, ast.value());
+        let key = PathId::lower_ast_partial(ctxt, ast.key());
+        let value = AttrArgValue::lower_ast_partial(ctxt, ast.value());
         Self { key, value }
+    }
+}
+
+impl<'db> AttrArgValue<'db> {
+    pub(super) fn lower_ast_partial(
+        ctxt: &mut FileLowerCtxt<'db>,
+        ast: Option<ast::AttrArgValueKind>,
+    ) -> Partial<Self> {
+        match ast {
+            Some(ast::AttrArgValueKind::Ident(token)) => {
+                Partial::Present(Self::Ident(IdentId::lower_token(ctxt, token)))
+            }
+            Some(ast::AttrArgValueKind::Lit(lit)) => {
+                Partial::Present(Self::Lit(LitKind::lower_ast(ctxt, lit)))
+            }
+            None => Partial::Absent,
+        }
     }
 }

@@ -1,0 +1,793 @@
+---
+source: crates/hir-analysis/tests/ty_check.rs
+expression: res
+input_file: test_files/ty_check/core_hkt_effects.fe
+---
+note: 
+  ┌─ core_hkt_effects.fe:7:40
+  │  
+7 │       fn call(self, _ value: i32) -> i32 {
+  │ ╭────────────────────────────────────────^
+8 │ │         value + 1
+9 │ │     }
+  │ ╰─────^ i32
+
+note: 
+  ┌─ core_hkt_effects.fe:8:9
+  │
+8 │         value + 1
+  │         ^^^^^ i32
+
+note: 
+  ┌─ core_hkt_effects.fe:8:9
+  │
+8 │         value + 1
+  │         ^^^^^^^^^ i32
+
+note: 
+  ┌─ core_hkt_effects.fe:8:17
+  │
+8 │         value + 1
+  │                 ^ i32
+
+note: 
+   ┌─ core_hkt_effects.fe:14:48
+   │  
+14 │       fn call(self, _ value: i32) -> Option<i32> {
+   │ ╭────────────────────────────────────────────────^
+15 │ │         if value > 0 {
+16 │ │             Some(value)
+17 │ │         } else {
+18 │ │             None
+19 │ │         }
+20 │ │     }
+   │ ╰─────^ Option<i32>
+
+note: 
+   ┌─ core_hkt_effects.fe:15:9
+   │  
+15 │ ╭         if value > 0 {
+16 │ │             Some(value)
+17 │ │         } else {
+18 │ │             None
+19 │ │         }
+   │ ╰─────────^ Option<i32>
+
+note: 
+   ┌─ core_hkt_effects.fe:15:12
+   │
+15 │         if value > 0 {
+   │            ^^^^^ i32
+
+note: 
+   ┌─ core_hkt_effects.fe:15:12
+   │
+15 │         if value > 0 {
+   │            ^^^^^^^^^ bool
+
+note: 
+   ┌─ core_hkt_effects.fe:15:20
+   │
+15 │         if value > 0 {
+   │                    ^ i32
+
+note: 
+   ┌─ core_hkt_effects.fe:15:22
+   │  
+15 │           if value > 0 {
+   │ ╭──────────────────────^
+16 │ │             Some(value)
+17 │ │         } else {
+   │ ╰─────────^ Option<i32>
+
+note: 
+   ┌─ core_hkt_effects.fe:16:13
+   │
+16 │             Some(value)
+   │             ^^^^ fn Some<i32>
+
+note: 
+   ┌─ core_hkt_effects.fe:16:13
+   │
+16 │             Some(value)
+   │             ^^^^^^^^^^^ Option<i32>
+
+note: 
+   ┌─ core_hkt_effects.fe:16:18
+   │
+16 │             Some(value)
+   │                  ^^^^^ i32
+
+note: 
+   ┌─ core_hkt_effects.fe:17:16
+   │  
+17 │           } else {
+   │ ╭────────────────^
+18 │ │             None
+19 │ │         }
+   │ ╰─────────^ Option<i32>
+
+note: 
+   ┌─ core_hkt_effects.fe:18:13
+   │
+18 │             None
+   │             ^^^^ Option<i32>
+
+note: 
+   ┌─ core_hkt_effects.fe:25:52
+   │  
+25 │       fn call(self, _ value: i32) -> Result<(), i32> {
+   │ ╭────────────────────────────────────────────────────^
+26 │ │         if value % 2 == 0 {
+27 │ │             Ok(value)
+28 │ │         } else {
+29 │ │             Err(())
+30 │ │         }
+31 │ │     }
+   │ ╰─────^ Result<(), i32>
+
+note: 
+   ┌─ core_hkt_effects.fe:26:9
+   │  
+26 │ ╭         if value % 2 == 0 {
+27 │ │             Ok(value)
+28 │ │         } else {
+29 │ │             Err(())
+30 │ │         }
+   │ ╰─────────^ Result<(), i32>
+
+note: 
+   ┌─ core_hkt_effects.fe:26:12
+   │
+26 │         if value % 2 == 0 {
+   │            ^^^^^ i32
+
+note: 
+   ┌─ core_hkt_effects.fe:26:12
+   │
+26 │         if value % 2 == 0 {
+   │            ^^^^^^^^^ i32
+
+note: 
+   ┌─ core_hkt_effects.fe:26:12
+   │
+26 │         if value % 2 == 0 {
+   │            ^^^^^^^^^^^^^^ bool
+
+note: 
+   ┌─ core_hkt_effects.fe:26:20
+   │
+26 │         if value % 2 == 0 {
+   │                    ^ i32
+
+note: 
+   ┌─ core_hkt_effects.fe:26:25
+   │
+26 │         if value % 2 == 0 {
+   │                         ^ i32
+
+note: 
+   ┌─ core_hkt_effects.fe:26:27
+   │  
+26 │           if value % 2 == 0 {
+   │ ╭───────────────────────────^
+27 │ │             Ok(value)
+28 │ │         } else {
+   │ ╰─────────^ Result<(), i32>
+
+note: 
+   ┌─ core_hkt_effects.fe:27:13
+   │
+27 │             Ok(value)
+   │             ^^ fn Ok<(), i32>
+
+note: 
+   ┌─ core_hkt_effects.fe:27:13
+   │
+27 │             Ok(value)
+   │             ^^^^^^^^^ Result<(), i32>
+
+note: 
+   ┌─ core_hkt_effects.fe:27:16
+   │
+27 │             Ok(value)
+   │                ^^^^^ i32
+
+note: 
+   ┌─ core_hkt_effects.fe:28:16
+   │  
+28 │           } else {
+   │ ╭────────────────^
+29 │ │             Err(())
+30 │ │         }
+   │ ╰─────────^ Result<(), i32>
+
+note: 
+   ┌─ core_hkt_effects.fe:29:13
+   │
+29 │             Err(())
+   │             ^^^ fn Err<(), i32>
+
+note: 
+   ┌─ core_hkt_effects.fe:29:13
+   │
+29 │             Err(())
+   │             ^^^^^^^ Result<(), i32>
+
+note: 
+   ┌─ core_hkt_effects.fe:29:17
+   │
+29 │             Err(())
+   │                 ^^ ()
+
+note: 
+   ┌─ core_hkt_effects.fe:34:58
+   │  
+34 │   fn option_monad_chain(start: Option<i32>) -> Option<i32> {
+   │ ╭──────────────────────────────────────────────────────────^
+35 │ │     let mapped = start.map(AddOne{})
+36 │ │     mapped.and_then(ToPositive{})
+37 │ │ }
+   │ ╰─^ Option<i32>
+
+note: 
+   ┌─ core_hkt_effects.fe:35:9
+   │
+35 │     let mapped = start.map(AddOne{})
+   │         ^^^^^^ Option<i32>
+
+note: 
+   ┌─ core_hkt_effects.fe:35:18
+   │
+35 │     let mapped = start.map(AddOne{})
+   │                  ^^^^^ Option<i32>
+
+note: 
+   ┌─ core_hkt_effects.fe:35:18
+   │
+35 │     let mapped = start.map(AddOne{})
+   │                  ^^^^^^^^^^^^^^^^^^^ Option<i32>
+
+note: 
+   ┌─ core_hkt_effects.fe:35:28
+   │
+35 │     let mapped = start.map(AddOne{})
+   │                            ^^^^^^^^ AddOne
+
+note: 
+   ┌─ core_hkt_effects.fe:36:5
+   │
+36 │     mapped.and_then(ToPositive{})
+   │     ^^^^^^ Option<i32>
+
+note: 
+   ┌─ core_hkt_effects.fe:36:5
+   │
+36 │     mapped.and_then(ToPositive{})
+   │     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ Option<i32>
+
+note: 
+   ┌─ core_hkt_effects.fe:36:21
+   │
+36 │     mapped.and_then(ToPositive{})
+   │                     ^^^^^^^^^^^^ ToPositive
+
+note: 
+   ┌─ core_hkt_effects.fe:39:66
+   │  
+39 │   fn result_monad_chain(start: Result<(), i32>) -> Result<(), i32> {
+   │ ╭──────────────────────────────────────────────────────────────────^
+40 │ │     let functor_mapped = start.map(AddOne{})
+41 │ │ 
+42 │ │     let func: Result<(), AddOne> = Ok(AddOne{})
+   · │
+46 │ │     applied.bind(ToEvenResult{})
+47 │ │ }
+   │ ╰─^ Result<(), i32>
+
+note: 
+   ┌─ core_hkt_effects.fe:40:9
+   │
+40 │     let functor_mapped = start.map(AddOne{})
+   │         ^^^^^^^^^^^^^^ Result<(), i32>
+
+note: 
+   ┌─ core_hkt_effects.fe:40:26
+   │
+40 │     let functor_mapped = start.map(AddOne{})
+   │                          ^^^^^ Result<(), i32>
+
+note: 
+   ┌─ core_hkt_effects.fe:40:26
+   │
+40 │     let functor_mapped = start.map(AddOne{})
+   │                          ^^^^^^^^^^^^^^^^^^^ Result<(), i32>
+
+note: 
+   ┌─ core_hkt_effects.fe:40:36
+   │
+40 │     let functor_mapped = start.map(AddOne{})
+   │                                    ^^^^^^^^ AddOne
+
+note: 
+   ┌─ core_hkt_effects.fe:42:9
+   │
+42 │     let func: Result<(), AddOne> = Ok(AddOne{})
+   │         ^^^^ Result<(), AddOne>
+
+note: 
+   ┌─ core_hkt_effects.fe:42:36
+   │
+42 │     let func: Result<(), AddOne> = Ok(AddOne{})
+   │                                    ^^ fn Ok<(), AddOne>
+
+note: 
+   ┌─ core_hkt_effects.fe:42:36
+   │
+42 │     let func: Result<(), AddOne> = Ok(AddOne{})
+   │                                    ^^^^^^^^^^^^ Result<(), AddOne>
+
+note: 
+   ┌─ core_hkt_effects.fe:42:39
+   │
+42 │     let func: Result<(), AddOne> = Ok(AddOne{})
+   │                                       ^^^^^^^^ AddOne
+
+note: 
+   ┌─ core_hkt_effects.fe:43:9
+   │
+43 │     let value: Result<(), i32> = functor_mapped
+   │         ^^^^^ Result<(), i32>
+
+note: 
+   ┌─ core_hkt_effects.fe:43:34
+   │
+43 │     let value: Result<(), i32> = functor_mapped
+   │                                  ^^^^^^^^^^^^^^ Result<(), i32>
+
+note: 
+   ┌─ core_hkt_effects.fe:44:9
+   │
+44 │     let applied = func.ap(value)
+   │         ^^^^^^^ Result<(), i32>
+
+note: 
+   ┌─ core_hkt_effects.fe:44:19
+   │
+44 │     let applied = func.ap(value)
+   │                   ^^^^ Result<(), AddOne>
+
+note: 
+   ┌─ core_hkt_effects.fe:44:19
+   │
+44 │     let applied = func.ap(value)
+   │                   ^^^^^^^^^^^^^^ Result<(), i32>
+
+note: 
+   ┌─ core_hkt_effects.fe:44:27
+   │
+44 │     let applied = func.ap(value)
+   │                           ^^^^^ Result<(), i32>
+
+note: 
+   ┌─ core_hkt_effects.fe:46:5
+   │
+46 │     applied.bind(ToEvenResult{})
+   │     ^^^^^^^ Result<(), i32>
+
+note: 
+   ┌─ core_hkt_effects.fe:46:5
+   │
+46 │     applied.bind(ToEvenResult{})
+   │     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^ Result<(), i32>
+
+note: 
+   ┌─ core_hkt_effects.fe:46:18
+   │
+46 │     applied.bind(ToEvenResult{})
+   │                  ^^^^^^^^^^^^^^ ToEvenResult
+
+note: 
+   ┌─ core_hkt_effects.fe:55:22
+   │
+55 │     fn log(mut self) {}
+   │                      ^^ ()
+
+note: 
+   ┌─ core_hkt_effects.fe:60:1
+   │  
+60 │ ╭ {
+61 │ │     logger.log()
+62 │ │ 
+63 │ │     let opt = Some(x)
+   · │
+72 │ │     }
+73 │ │ }
+   │ ╰─^ Result<(), Option<i32>>
+
+note: 
+   ┌─ core_hkt_effects.fe:61:5
+   │
+61 │     logger.log()
+   │     ^^^^^^ logger: Logger
+
+note: 
+   ┌─ core_hkt_effects.fe:61:5
+   │
+61 │     logger.log()
+   │     ^^^^^^^^^^^^ ()
+
+note: 
+   ┌─ core_hkt_effects.fe:63:9
+   │
+63 │     let opt = Some(x)
+   │         ^^^ Option<i32>
+
+note: 
+   ┌─ core_hkt_effects.fe:63:15
+   │
+63 │     let opt = Some(x)
+   │               ^^^^ fn Some<i32>
+
+note: 
+   ┌─ core_hkt_effects.fe:63:15
+   │
+63 │     let opt = Some(x)
+   │               ^^^^^^^ Option<i32>
+
+note: 
+   ┌─ core_hkt_effects.fe:63:20
+   │
+63 │     let opt = Some(x)
+   │                    ^ i32
+
+note: 
+   ┌─ core_hkt_effects.fe:64:9
+   │
+64 │     let opt_chain = option_monad_chain(start: opt)
+   │         ^^^^^^^^^ Option<i32>
+
+note: 
+   ┌─ core_hkt_effects.fe:64:21
+   │
+64 │     let opt_chain = option_monad_chain(start: opt)
+   │                     ^^^^^^^^^^^^^^^^^^ fn option_monad_chain
+
+note: 
+   ┌─ core_hkt_effects.fe:64:21
+   │
+64 │     let opt_chain = option_monad_chain(start: opt)
+   │                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ Option<i32>
+
+note: 
+   ┌─ core_hkt_effects.fe:64:47
+   │
+64 │     let opt_chain = option_monad_chain(start: opt)
+   │                                               ^^^ Option<i32>
+
+note: 
+   ┌─ core_hkt_effects.fe:66:9
+   │
+66 │     let base = Ok(x)
+   │         ^^^^ Result<(), i32>
+
+note: 
+   ┌─ core_hkt_effects.fe:66:16
+   │
+66 │     let base = Ok(x)
+   │                ^^ fn Ok<(), i32>
+
+note: 
+   ┌─ core_hkt_effects.fe:66:16
+   │
+66 │     let base = Ok(x)
+   │                ^^^^^ Result<(), i32>
+
+note: 
+   ┌─ core_hkt_effects.fe:66:19
+   │
+66 │     let base = Ok(x)
+   │                   ^ i32
+
+note: 
+   ┌─ core_hkt_effects.fe:67:9
+   │
+67 │     let res_chain = result_monad_chain(start: base)
+   │         ^^^^^^^^^ Result<(), i32>
+
+note: 
+   ┌─ core_hkt_effects.fe:67:21
+   │
+67 │     let res_chain = result_monad_chain(start: base)
+   │                     ^^^^^^^^^^^^^^^^^^ fn result_monad_chain
+
+note: 
+   ┌─ core_hkt_effects.fe:67:21
+   │
+67 │     let res_chain = result_monad_chain(start: base)
+   │                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ Result<(), i32>
+
+note: 
+   ┌─ core_hkt_effects.fe:67:47
+   │
+67 │     let res_chain = result_monad_chain(start: base)
+   │                                               ^^^^ Result<(), i32>
+
+note: 
+   ┌─ core_hkt_effects.fe:69:5
+   │  
+69 │ ╭     match res_chain {
+70 │ │         Ok(_) => Ok(opt_chain)
+71 │ │         Err(e) => Err(e)
+72 │ │     }
+   │ ╰─────^ Result<(), Option<i32>>
+
+note: 
+   ┌─ core_hkt_effects.fe:69:11
+   │
+69 │     match res_chain {
+   │           ^^^^^^^^^ Result<(), i32>
+
+note: 
+   ┌─ core_hkt_effects.fe:70:9
+   │
+70 │         Ok(_) => Ok(opt_chain)
+   │         ^^^^^ Result<(), i32>
+
+note: 
+   ┌─ core_hkt_effects.fe:70:12
+   │
+70 │         Ok(_) => Ok(opt_chain)
+   │            ^ i32
+
+note: 
+   ┌─ core_hkt_effects.fe:70:18
+   │
+70 │         Ok(_) => Ok(opt_chain)
+   │                  ^^ fn Ok<(), Option<i32>>
+
+note: 
+   ┌─ core_hkt_effects.fe:70:18
+   │
+70 │         Ok(_) => Ok(opt_chain)
+   │                  ^^^^^^^^^^^^^ Result<(), Option<i32>>
+
+note: 
+   ┌─ core_hkt_effects.fe:70:21
+   │
+70 │         Ok(_) => Ok(opt_chain)
+   │                     ^^^^^^^^^ Option<i32>
+
+note: 
+   ┌─ core_hkt_effects.fe:71:9
+   │
+71 │         Err(e) => Err(e)
+   │         ^^^^^^ Result<(), i32>
+
+note: 
+   ┌─ core_hkt_effects.fe:71:13
+   │
+71 │         Err(e) => Err(e)
+   │             ^ ()
+
+note: 
+   ┌─ core_hkt_effects.fe:71:19
+   │
+71 │         Err(e) => Err(e)
+   │                   ^^^ fn Err<(), Option<i32>>
+
+note: 
+   ┌─ core_hkt_effects.fe:71:19
+   │
+71 │         Err(e) => Err(e)
+   │                   ^^^^^^ Result<(), Option<i32>>
+
+note: 
+   ┌─ core_hkt_effects.fe:71:23
+   │
+71 │         Err(e) => Err(e)
+   │                       ^ ()
+
+note: 
+   ┌─ core_hkt_effects.fe:75:75
+   │  
+75 │   pub fn with_logger<R, L: Logger, F: Fn<(), R>>(logger: L, _ func: F) -> R {
+   │ ╭───────────────────────────────────────────────────────────────────────────^
+76 │ │     with (Logger = logger) {
+77 │ │         func.call(())
+78 │ │     }
+79 │ │ }
+   │ ╰─^ R
+
+note: 
+   ┌─ core_hkt_effects.fe:76:5
+   │  
+76 │ ╭     with (Logger = logger) {
+77 │ │         func.call(())
+78 │ │     }
+   │ ╰─────^ R
+
+note: 
+   ┌─ core_hkt_effects.fe:76:20
+   │
+76 │     with (Logger = logger) {
+   │                    ^^^^^^ L
+
+note: 
+   ┌─ core_hkt_effects.fe:76:28
+   │  
+76 │       with (Logger = logger) {
+   │ ╭────────────────────────────^
+77 │ │         func.call(())
+78 │ │     }
+   │ ╰─────^ R
+
+note: 
+   ┌─ core_hkt_effects.fe:77:9
+   │
+77 │         func.call(())
+   │         ^^^^ F
+
+note: 
+   ┌─ core_hkt_effects.fe:77:9
+   │
+77 │         func.call(())
+   │         ^^^^^^^^^^^^^ R
+
+note: 
+   ┌─ core_hkt_effects.fe:77:19
+   │
+77 │         func.call(())
+   │                   ^^ ()
+
+note: 
+   ┌─ core_hkt_effects.fe:83:1
+   │  
+83 │ ╭ {
+84 │ │     logger.log()
+85 │ │ }
+   │ ╰─^ ()
+
+note: 
+   ┌─ core_hkt_effects.fe:84:5
+   │
+84 │     logger.log()
+   │     ^^^^^^ logger: Logger
+
+note: 
+   ┌─ core_hkt_effects.fe:84:5
+   │
+84 │     logger.log()
+   │     ^^^^^^^^^^^^ ()
+
+note: 
+   ┌─ core_hkt_effects.fe:89:58
+   │  
+89 │       fn call(self, _ unit: ()) -> Result<(), Option<i32>> {
+   │ ╭──────────────────────────────────────────────────────────^
+90 │ │         with (Logger = ConsoleLogger {}) {
+91 │ │             log_once()
+92 │ │             log_and_chain(x: 10)
+93 │ │         }
+94 │ │     }
+   │ ╰─────^ Result<(), Option<i32>>
+
+note: 
+   ┌─ core_hkt_effects.fe:90:9
+   │  
+90 │ ╭         with (Logger = ConsoleLogger {}) {
+91 │ │             log_once()
+92 │ │             log_and_chain(x: 10)
+93 │ │         }
+   │ ╰─────────^ Result<(), Option<i32>>
+
+note: 
+   ┌─ core_hkt_effects.fe:90:24
+   │
+90 │         with (Logger = ConsoleLogger {}) {
+   │                        ^^^^^^^^^^^^^^^^ ConsoleLogger
+
+note: 
+   ┌─ core_hkt_effects.fe:90:42
+   │  
+90 │           with (Logger = ConsoleLogger {}) {
+   │ ╭──────────────────────────────────────────^
+91 │ │             log_once()
+92 │ │             log_and_chain(x: 10)
+93 │ │         }
+   │ ╰─────────^ Result<(), Option<i32>>
+
+note: 
+   ┌─ core_hkt_effects.fe:91:13
+   │
+91 │             log_once()
+   │             ^^^^^^^^ fn log_once
+
+note: 
+   ┌─ core_hkt_effects.fe:91:13
+   │
+91 │             log_once()
+   │             ^^^^^^^^^^ ()
+
+note: 
+   ┌─ core_hkt_effects.fe:92:13
+   │
+92 │             log_and_chain(x: 10)
+   │             ^^^^^^^^^^^^^ fn log_and_chain
+
+note: 
+   ┌─ core_hkt_effects.fe:92:13
+   │
+92 │             log_and_chain(x: 10)
+   │             ^^^^^^^^^^^^^^^^^^^^ Result<(), Option<i32>>
+
+note: 
+   ┌─ core_hkt_effects.fe:92:30
+   │
+92 │             log_and_chain(x: 10)
+   │                              ^^ i32
+
+note: 
+    ┌─ core_hkt_effects.fe:97:26
+    │  
+ 97 │   pub fn use_with_logger() {
+    │ ╭──────────────────────────^
+ 98 │ │     let logger = ConsoleLogger {}
+ 99 │ │     let result: Result<(), Option<i32>> = with_logger(logger, RunWithLogger{})
+100 │ │     let _ = result
+101 │ │ }
+    │ ╰─^ ()
+
+note: 
+   ┌─ core_hkt_effects.fe:98:9
+   │
+98 │     let logger = ConsoleLogger {}
+   │         ^^^^^^ ConsoleLogger
+
+note: 
+   ┌─ core_hkt_effects.fe:98:18
+   │
+98 │     let logger = ConsoleLogger {}
+   │                  ^^^^^^^^^^^^^^^^ ConsoleLogger
+
+note: 
+   ┌─ core_hkt_effects.fe:99:9
+   │
+99 │     let result: Result<(), Option<i32>> = with_logger(logger, RunWithLogger{})
+   │         ^^^^^^ Result<(), Option<i32>>
+
+note: 
+   ┌─ core_hkt_effects.fe:99:43
+   │
+99 │     let result: Result<(), Option<i32>> = with_logger(logger, RunWithLogger{})
+   │                                           ^^^^^^^^^^^ fn with_logger<Result<(), Option<i32>>, ConsoleLogger, RunWithLogger>
+
+note: 
+   ┌─ core_hkt_effects.fe:99:43
+   │
+99 │     let result: Result<(), Option<i32>> = with_logger(logger, RunWithLogger{})
+   │                                           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ Result<(), Option<i32>>
+
+note: 
+   ┌─ core_hkt_effects.fe:99:55
+   │
+99 │     let result: Result<(), Option<i32>> = with_logger(logger, RunWithLogger{})
+   │                                                       ^^^^^^ ConsoleLogger
+
+note: 
+   ┌─ core_hkt_effects.fe:99:63
+   │
+99 │     let result: Result<(), Option<i32>> = with_logger(logger, RunWithLogger{})
+   │                                                               ^^^^^^^^^^^^^^^ RunWithLogger
+
+note: 
+    ┌─ core_hkt_effects.fe:100:9
+    │
+100 │     let _ = result
+    │         ^ Result<(), Option<i32>>
+
+note: 
+    ┌─ core_hkt_effects.fe:100:13
+    │
+100 │     let _ = result
+    │             ^^^^^^ Result<(), Option<i32>>

@@ -1,0 +1,11 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/assoc_const_not_defined.fe
+---
+error[6-0014]: associated const not defined in trait
+  ┌─ assoc_const_not_defined.fe:6:11
+  │
+6 │     const C: u32 = 1
+  │           ^ associated const `C` is not defined in trait `T`
+

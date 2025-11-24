@@ -1,0 +1,28 @@
+pub struct Storage<T> {
+    value: T,
+}
+
+pub struct Ctx {}
+
+pub fn put<T>(amount: T)
+  uses (ctx: Ctx, mut st: Storage<T>)
+{
+    let _ = ctx
+    st.value = amount
+}
+
+pub fn caller_ok_generic() {
+    let ctx = Ctx {}
+    let mut st = Storage<u8> { value: 0 }
+    with (Ctx = ctx, Storage = st) {
+        put(amount: 5)
+    }
+}
+
+pub fn caller_ok_explicit() {
+    let ctx = Ctx {}
+    let mut st = Storage<u8> { value: 0 }
+    with (Ctx = ctx, Storage<u8> = st) {
+        put(amount: 5)
+    }
+}

@@ -1,0 +1,22 @@
+trait C1 {
+    const X: usize
+}
+
+trait C2 {
+    const X: usize
+}
+
+struct Foo {}
+
+impl C1 for Foo {
+    const X: usize = 1
+}
+
+impl C2 for Foo {
+    const X: usize = 2
+}
+
+fn f() -> usize {
+    Foo::X
+    <Foo as C2>::X
+}

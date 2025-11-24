@@ -85,6 +85,8 @@ pub enum ScopeId<'db> {
 
     /// Trait associated type scope.
     TraitType(Trait<'db>, u16),
+    /// Trait associated const scope.
+    TraitConst(Trait<'db>, u16),
 
     /// A function parameter scope.
     FuncParam(ItemKind<'db>, u16),
@@ -105,6 +107,7 @@ impl<'db> ScopeId<'db> {
             ScopeId::Item(item) => item.top_mod(db),
             ScopeId::GenericParam(item, _) => item.top_mod(db),
             ScopeId::TraitType(t, _) => t.top_mod(db),
+            ScopeId::TraitConst(t, _) => t.top_mod(db),
             ScopeId::FuncParam(item, _) => item.top_mod(db),
             ScopeId::Field(p, _) => p.top_mod(db),
             ScopeId::Variant(v) => v.enum_.top_mod(db),
@@ -133,6 +136,7 @@ impl<'db> ScopeId<'db> {
             ScopeId::GenericParam(item, _) => item,
             ScopeId::FuncParam(item, _) => item,
             ScopeId::TraitType(t, _) => t.into(),
+            ScopeId::TraitConst(t, _) => t.into(),
             ScopeId::Field(FieldParent::Struct(s), _) => s.into(),
             ScopeId::Field(FieldParent::Contract(c), _) => c.into(),
             ScopeId::Field(FieldParent::Variant(v), _) | ScopeId::Variant(v) => v.enum_.into(),
@@ -309,6 +313,7 @@ impl<'db> ScopeId<'db> {
             }
 
             ScopeId::TraitType(t, idx) => t.assoc_ty_by_index(db, idx as usize).name.to_opt(),
+            ScopeId::TraitConst(t, idx) => t.consts(db)[idx as usize].name.to_opt(),
 
             ScopeId::Block(..) => None,
         }
@@ -342,6 +347,9 @@ impl<'db> ScopeId<'db> {
             ScopeId::TraitType(t, idx) => {
                 Some(t.span().item_list().assoc_type(idx as usize).into())
             }
+            ScopeId::TraitConst(t, idx) => {
+                Some(t.span().item_list().assoc_const(idx as usize).into())
+            }
 
             ScopeId::Block(..) => None,
         }
@@ -352,6 +360,7 @@ impl<'db> ScopeId<'db> {
             ScopeId::Item(item) => item.kind_name(),
             ScopeId::GenericParam(_, _) => "type",
             ScopeId::TraitType(..) => "associated type",
+            ScopeId::TraitConst(..) => "associated const",
             ScopeId::FuncParam(_, _) => "value",
             ScopeId::Field(_, _) => "field",
             ScopeId::Variant(..) => "value",
@@ -713,9 +722,13 @@ mod tests {
 
         let file = db.standalone_file(text);
         let scope_graph = db.parse_source(file);
-        assert_eq!(scope_graph.items_dfs(&db).count(), 8);
+        let items: Vec<_> = scope_graph
+            .items_dfs(&db)
+            .filter(|item| !matches!(item, ItemKind::Use(use_) if use_.is_prelude_use(&db)))
+            .collect();
+        assert_eq!(items.len(), 8);
 
-        for (i, item) in scope_graph.items_dfs(&db).enumerate() {
+        for (i, item) in items.into_iter().enumerate() {
             match i {
                 0 => assert!(matches!(item, ItemKind::TopMod(_))),
                 1 => assert!(matches!(item, ItemKind::Mod(_))),
@@ -743,7 +756,10 @@ mod tests {
         let file = db.standalone_file(text);
         let scope_graph = db.parse_source(file);
         let root = scope_graph.top_mod.scope();
-        let enum_ = scope_graph.children(root).next().unwrap();
+        let enum_ = scope_graph
+            .children(root)
+            .find(|scope| !matches!(scope.item(), ItemKind::Use(use_) if use_.is_prelude_use(&db)))
+            .unwrap();
         assert!(matches!(enum_.item(), ItemKind::Enum(_)));
 
         let variant = scope_graph.children(enum_).next().unwrap();

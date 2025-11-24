@@ -89,6 +89,14 @@ pub(crate) fn evaluate_const_ty<'db>(
             }
         }
 
+        // If the path failed to resolve but looks like a path to a value
+        // (e.g., a trait associated const like `Type::CONST`), keep it
+        // unevaluated and assume the expected type if available, avoiding
+        // spurious diagnostics here. Downstream checks will validate usage.
+        if path.parent(db).is_some() {
+            return ConstTyId::from_body(db, body, expected_ty, None);
+        }
+
         return ConstTyId::new(
             db,
             ConstTyData::Evaluated(

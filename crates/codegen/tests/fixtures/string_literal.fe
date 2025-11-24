@@ -1,0 +1,3 @@
+pub fn string_literal() -> String<5> {
+    "hello"
+}

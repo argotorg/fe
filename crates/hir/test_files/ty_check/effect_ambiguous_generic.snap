@@ -1,0 +1,129 @@
+---
+source: crates/hir-analysis/tests/ty_check.rs
+expression: res
+input_file: test_files/ty_check/effect_ambiguous_generic.fe
+---
+note: 
+   ┌─ effect_ambiguous_generic.fe:8:1
+   │  
+ 8 │ ╭ {
+ 9 │ │     ()
+10 │ │ }
+   │ ╰─^ ()
+
+note: 
+  ┌─ effect_ambiguous_generic.fe:9:5
+  │
+9 │     ()
+  │     ^^ ()
+
+note: 
+   ┌─ effect_ambiguous_generic.fe:12:28
+   │  
+12 │   pub fn ambiguous_effects() {
+   │ ╭────────────────────────────^
+13 │ │     let st1 = Storage<u8> { value: 1 }
+14 │ │     let st2 = Storage<u8> { value: 2 }
+15 │ │ 
+   · │
+22 │ │     }
+23 │ │ }
+   │ ╰─^ ()
+
+note: 
+   ┌─ effect_ambiguous_generic.fe:13:9
+   │
+13 │     let st1 = Storage<u8> { value: 1 }
+   │         ^^^ Storage<u8>
+
+note: 
+   ┌─ effect_ambiguous_generic.fe:13:15
+   │
+13 │     let st1 = Storage<u8> { value: 1 }
+   │               ^^^^^^^^^^^^^^^^^^^^^^^^ Storage<u8>
+
+note: 
+   ┌─ effect_ambiguous_generic.fe:13:36
+   │
+13 │     let st1 = Storage<u8> { value: 1 }
+   │                                    ^ u8
+
+note: 
+   ┌─ effect_ambiguous_generic.fe:14:9
+   │
+14 │     let st2 = Storage<u8> { value: 2 }
+   │         ^^^ Storage<u8>
+
+note: 
+   ┌─ effect_ambiguous_generic.fe:14:15
+   │
+14 │     let st2 = Storage<u8> { value: 2 }
+   │               ^^^^^^^^^^^^^^^^^^^^^^^^ Storage<u8>
+
+note: 
+   ┌─ effect_ambiguous_generic.fe:14:36
+   │
+14 │     let st2 = Storage<u8> { value: 2 }
+   │                                    ^ u8
+
+note: 
+   ┌─ effect_ambiguous_generic.fe:18:5
+   │  
+18 │ ╭     with (Storage = st1) {
+19 │ │         with (Storage = st2) {
+20 │ │             process()  // should use st2
+21 │ │         }
+22 │ │     }
+   │ ╰─────^ ()
+
+note: 
+   ┌─ effect_ambiguous_generic.fe:18:21
+   │
+18 │     with (Storage = st1) {
+   │                     ^^^ Storage<u8>
+
+note: 
+   ┌─ effect_ambiguous_generic.fe:18:26
+   │  
+18 │       with (Storage = st1) {
+   │ ╭──────────────────────────^
+19 │ │         with (Storage = st2) {
+20 │ │             process()  // should use st2
+21 │ │         }
+22 │ │     }
+   │ ╰─────^ ()
+
+note: 
+   ┌─ effect_ambiguous_generic.fe:19:9
+   │  
+19 │ ╭         with (Storage = st2) {
+20 │ │             process()  // should use st2
+21 │ │         }
+   │ ╰─────────^ ()
+
+note: 
+   ┌─ effect_ambiguous_generic.fe:19:25
+   │
+19 │         with (Storage = st2) {
+   │                         ^^^ Storage<u8>
+
+note: 
+   ┌─ effect_ambiguous_generic.fe:19:30
+   │  
+19 │           with (Storage = st2) {
+   │ ╭──────────────────────────────^
+20 │ │             process()  // should use st2
+21 │ │         }
+   │ ╰─────────^ ()
+
+note: 
+   ┌─ effect_ambiguous_generic.fe:20:13
+   │
+20 │             process()  // should use st2
+   │             ^^^^^^^ fn process
+
+note: 
+   ┌─ effect_ambiguous_generic.fe:20:13
+   │
+20 │             process()  // should use st2
+   │             ^^^^^^^^^ ()

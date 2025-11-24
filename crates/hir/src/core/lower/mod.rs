@@ -1,4 +1,7 @@
-use common::{file::File, ingot::Ingot};
+use common::{
+    file::File,
+    ingot::{Ingot, IngotKind},
+};
 use num_bigint::BigUint;
 use num_traits::Num;
 use parser::{
@@ -11,8 +14,11 @@ use crate::{
     HirDb, LowerHirDb,
     hir_def::{
         ExprId, IdentId, IntegerId, ItemKind, LitKind, ModuleTree, Partial, StringId, TopLevelMod,
-        TrackedItemId, TrackedItemVariant, module_tree_impl, scope_graph::ScopeGraph,
+        TrackedItemId, TrackedItemVariant, Use, Visibility, module_tree_impl,
+        scope_graph::ScopeGraph,
+        use_tree::{UsePathId, UsePathSegment},
     },
+    span::HirOrigin,
 };
 pub use parse::parse_file_impl;
 
@@ -76,6 +82,8 @@ pub(crate) fn scope_graph_impl<'db>(
     let ast = top_mod_ast(db, top_mod);
     let mut ctxt = FileLowerCtxt::enter_top_mod(db, top_mod);
 
+    ctxt.insert_synthetic_prelude_use();
+
     if let Some(items) = ast.items() {
         lower_module_items(&mut ctxt, items);
     }
@@ -111,6 +119,33 @@ impl<'db> FileLowerCtxt<'db> {
 
     pub(super) fn top_mod(&self) -> TopLevelMod<'db> {
         self.builder.top_mod
+    }
+
+    pub(super) fn insert_synthetic_prelude_use(&mut self) {
+        let db = self.db();
+        let top_mod = self.top_mod();
+        let ingot = top_mod.ingot(db);
+        if ingot.kind(db) == IngotKind::Core {
+            return;
+        }
+
+        let core = IdentId::new(db, "core".to_string());
+        let prelude = IdentId::new(db, "prelude".to_string());
+
+        let segs = vec![
+            Partial::Present(UsePathSegment::Ident(core)),
+            Partial::Present(UsePathSegment::Ident(prelude)),
+            Partial::Present(UsePathSegment::Glob),
+        ];
+        let path = Partial::Present(UsePathId::new(db, segs));
+
+        let id = self.joined_id(TrackedItemVariant::Use(path));
+        self.enter_item_scope(id, false);
+
+        let top_mod = self.top_mod();
+        let origin = HirOrigin::synthetic();
+        let use_ = Use::new(db, id, path, None, Visibility::Private, top_mod, origin);
+        self.leave_item_scope(use_);
     }
 
     pub(super) fn enter_block_scope(&mut self) {

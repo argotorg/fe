@@ -1,0 +1,41 @@
+---
+source: crates/hir-analysis/tests/ty_check.rs
+expression: res
+input_file: test_files/ty_check/trait_assoc_const.fe
+---
+note: 
+   ┌─ trait_assoc_const.fe:13:17
+   │  
+13 │   fn f() -> usize {
+   │ ╭─────────────────^
+14 │ │     FooMsg::SELECTOR
+15 │ │     Some::SELECTOR
+16 │ │ }
+   │ ╰─^ usize
+
+note: 
+   ┌─ trait_assoc_const.fe:14:5
+   │
+14 │     FooMsg::SELECTOR
+   │     ^^^^^^^^^^^^^^^^ u8
+
+note: 
+   ┌─ trait_assoc_const.fe:15:5
+   │
+15 │     Some::SELECTOR
+   │     ^^^^^^^^^^^^^^ usize
+
+note: 
+   ┌─ trait_assoc_const.fe:44:31
+   │  
+44 │   fn use_default_const() -> u32 {
+   │ ╭───────────────────────────────^
+45 │ │     UsesDefault::C
+46 │ │ }
+   │ ╰─^ u32
+
+note: 
+   ┌─ trait_assoc_const.fe:45:5
+   │
+45 │     UsesDefault::C
+   │     ^^^^^^^^^^^^^^ u32

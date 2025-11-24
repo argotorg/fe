@@ -248,6 +248,7 @@ impl<'db> ScopeGraphBuilder<'db> {
                     inner.generic_params(self.db),
                 );
                 self.add_trait_type_scope(item_node, inner);
+                self.add_trait_const_scope(item_node, inner);
                 self.graph
                     .add_edge(item_node, item_node, EdgeKind::self_ty());
                 inner
@@ -451,6 +452,22 @@ impl<'db> ScopeGraphBuilder<'db> {
                 .map(EdgeKind::trait_type)
                 .unwrap_or_else(EdgeKind::anon);
             self.graph.add_edge(parent_node, trait_type_node, kind)
+        }
+    }
+
+    fn add_trait_const_scope(&mut self, parent_node: NodeId, trait_: Trait<'db>) {
+        for (i, assoc_const) in trait_.consts(self.db).iter().enumerate() {
+            let scope_id = ScopeId::TraitConst(trait_, i as u16);
+            let scope = Scope::new(scope_id, Visibility::Private);
+            let const_node = self.graph.push(scope_id, scope);
+
+            self.graph.add_lex_edge(const_node, parent_node);
+            let kind = assoc_const
+                .name
+                .to_opt()
+                .map(EdgeKind::value)
+                .unwrap_or_else(EdgeKind::anon);
+            self.graph.add_edge(parent_node, const_node, kind)
         }
     }
 

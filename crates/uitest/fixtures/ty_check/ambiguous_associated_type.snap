@@ -15,7 +15,7 @@ error[2-0009]: ambiguous associated type `Output`
 22 │ fn ambiguous_assoc_type<T>(t: T) -> T::Output
    │                                        ^^^^^^ associated type `Output` is ambiguous
    │
-   = specify the trait explicitly: `<Type as Trait>::Output`
+   = hint: specify the trait explicitly: `<T as TraitA>::Output`
 
 error[2-0009]: ambiguous associated type `Nested`
    ┌─ ambiguous_associated_type.fe:44:54
@@ -29,7 +29,7 @@ error[2-0009]: ambiguous associated type `Nested`
 44 │ fn test_nested_ambiguous<T: Level1 + Level2>() -> T::Nested {
    │                                                      ^^^^^^ associated type `Nested` is ambiguous
    │
-   = specify the trait explicitly: `<Type as Trait>::Nested`
+   = hint: specify the trait explicitly: `<T as Level1>::Nested`
 
 error[2-0009]: ambiguous associated type `Output`
    ┌─ ambiguous_associated_type.fe:49:15
@@ -43,4 +43,4 @@ error[2-0009]: ambiguous associated type `Output`
 49 │     let a: T::Output = 0
    │               ^^^^^^ associated type `Output` is ambiguous
    │
-   = specify the trait explicitly: `<Type as Trait>::Output`
+   = hint: specify the trait explicitly: `<T as TraitA>::Output`

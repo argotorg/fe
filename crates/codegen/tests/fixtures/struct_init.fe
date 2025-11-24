@@ -1,0 +1,12 @@
+struct Dummy {
+    a: u64,
+    b: u256,
+}
+
+pub fn make_dummy() -> Dummy {
+    let dum = Dummy {
+        a: 42,
+        b: 99,
+    }
+    dum
+}

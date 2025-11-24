@@ -1,0 +1,12 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/effect_missing_method.fe
+---
+error[8-0036]: missing effect `Storage` required by `run`
+   ┌─ effect_missing_method.fe:16:5
+   │
+16 │     worker.run()
+   │     ^^^^^^^^^^^^ `run` requires effect `Storage` to be in scope
+   │
+   = provide it with `with (Storage = value)` or require it via `uses Storage`

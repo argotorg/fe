@@ -1,0 +1,34 @@
+---
+source: crates/codegen/tests/yul.rs
+assertion_line: 38
+expression: output
+input_file: tests/fixtures/intrinsic_ops.fe
+---
+{
+  function load_word(ptr) -> ret {
+    ret := mload(ptr)
+  }
+}
+{
+  function store_word(ptr, value) -> ret {
+    mstore(ptr, value)
+    ret := 0
+  }
+}
+{
+  function store_byte(ptr, value) -> ret {
+    mstore8(ptr, value)
+    ret := 0
+  }
+}
+{
+  function load_slot(slot) -> ret {
+    ret := sload(slot)
+  }
+}
+{
+  function store_slot(slot, value) -> ret {
+    sstore(slot, value)
+    ret := 0
+  }
+}

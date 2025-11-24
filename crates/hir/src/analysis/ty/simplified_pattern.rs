@@ -5,7 +5,7 @@
 
 use crate::analysis::HirAnalysisDb;
 use crate::analysis::name_resolution::{PathRes, ResolvedVariant, resolve_path};
-use crate::analysis::ty::ty_def::TyId;
+use crate::analysis::ty::ty_def::{InvalidCause, TyId};
 use crate::core::hir_def::{
     Body as HirBody, LitKind, Partial, Pat as HirPat, PathId, VariantKind, scope_graph::ScopeId,
 };
@@ -30,6 +30,13 @@ impl<'db> SimplifiedPattern<'db> {
 
     pub fn wildcard(bind: Option<(IdentId<'db>, usize)>, ty: TyId<'db>) -> Self {
         Self::new(SimplifiedPatternKind::WildCard(bind), ty)
+    }
+
+    /// Pattern that could not be simplified due to earlier errors
+    /// (e.g. ambiguous or invalid constructor). These are ignored in
+    /// reachability/exhaustiveness checking.
+    pub fn error(ty: TyId<'db>) -> Self {
+        Self::new(SimplifiedPatternKind::Error, ty)
     }
 
     pub fn constructor(
@@ -113,7 +120,11 @@ impl<'db> SimplifiedPattern<'db> {
                     );
                     SimplifiedPattern::constructor(ctor, simplified, ctor_ty)
                 } else {
-                    SimplifiedPattern::wildcard(None, expected_ty)
+                    // Constructor couldn't be resolved (e.g. ambiguous name).
+                    // Treat this as an errored pattern so that reachability
+                    // analysis does not incorrectly mark later patterns as
+                    // unreachable.
+                    SimplifiedPattern::error(expected_ty)
                 }
             }
 
@@ -261,21 +272,31 @@ fn simplify_tuple_pattern_elements<'db>(
     let mut elem_tys_iter = elem_tys.iter();
     for pat in elements {
         if pat.is_rest(db, body) {
-            for _ in 0..(elem_tys.len() - (elements.len() - 1)) {
-                let ty = elem_tys_iter.next().unwrap();
+            let remaining = elem_tys
+                .len()
+                .saturating_sub(elements.len().saturating_sub(1));
+            for _ in 0..remaining {
+                let ty = elem_tys_iter
+                    .next()
+                    .copied()
+                    .unwrap_or_else(|| TyId::invalid(db, InvalidCause::Other));
                 simplified.push(SimplifiedPattern::new(
                     SimplifiedPatternKind::WildCard(None),
-                    *ty,
+                    ty,
                 ));
             }
         } else {
+            let elem_ty = elem_tys_iter
+                .next()
+                .copied()
+                .unwrap_or_else(|| TyId::invalid(db, InvalidCause::Other));
             simplified.push(SimplifiedPattern::from_hir_pat(
                 db,
                 pat.data(db, body).unwrap_ref(),
                 body,
                 scope,
                 arm_idx,
-                *elem_tys_iter.next().unwrap(),
+                elem_ty,
             ));
         }
     }
@@ -291,12 +312,16 @@ pub enum SimplifiedPatternKind<'db> {
         fields: Vec<SimplifiedPattern<'db>>,
     },
     Or(Vec<SimplifiedPattern<'db>>),
+    /// Represents a pattern we failed to resolve (e.g. ambiguous constructor).
+    /// Used to suppress confusing reachability diagnostics when earlier phases
+    /// already reported an error.
+    Error,
 }
 
 impl<'db> SimplifiedPatternKind<'db> {
     pub(crate) fn collect_ctors(&self) -> Vec<ConstructorKind<'db>> {
         match self {
-            Self::WildCard(_) => vec![],
+            Self::WildCard(_) | Self::Error => vec![],
             Self::Constructor { kind, .. } => vec![*kind],
             Self::Or(pats) => {
                 let mut ctors = vec![];
@@ -493,5 +518,8 @@ pub fn display_missing_pattern<'db>(
                 }
             }
         }
+
+        // Errored patterns are represented generically.
+        SimplifiedPatternKind::Error => "_".to_string(),
     }
 }

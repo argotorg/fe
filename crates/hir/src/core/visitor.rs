@@ -9,7 +9,9 @@ use crate::{
         ItemKind, KindBound, LitKind, MatchArm, Mod, Partial, Pat, PatId, PathId, PathKind, Stmt,
         StmtId, Struct, TopLevelMod, Trait, TraitRefId, TupleTypeId, TypeAlias, TypeBound, TypeId,
         TypeKind, Use, UseAlias, UsePathId, UsePathSegment, VariantDef, VariantDefListId,
-        VariantKind, WhereClauseId, WherePredicate, attr, scope_graph::ScopeId,
+        VariantKind, WhereClauseId, WherePredicate,
+        attr::{self, AttrArgValue},
+        scope_graph::ScopeId,
     },
     core::span::{
         SpanDowncast, item::LazySuperTraitListSpan, lazy_spans::*, params::LazyTraitRefSpan,
@@ -1157,6 +1159,13 @@ pub fn walk_expr<'db, V>(
             visit_node_in_body!(visitor, ctxt, left_expr_id, expr);
             visit_node_in_body!(visitor, ctxt, right_expr_id, expr);
         }
+
+        Expr::With(bindings, body_expr) => {
+            for b in bindings {
+                visit_node_in_body!(visitor, ctxt, &b.value, expr);
+            }
+            visit_node_in_body!(visitor, ctxt, body_expr, expr);
+        }
     }
 }
 
@@ -1294,15 +1303,15 @@ pub fn walk_attribute<'db, V>(
     V: Visitor<'db> + ?Sized,
 {
     match attr {
-        Attr::Normal(normal_attr) => {
+        Attr::Normal(attr) => {
             ctxt.with_new_ctxt(
                 |span| span.into_normal_attr(),
                 |ctxt| {
-                    if let Some(ident) = normal_attr.name.to_opt() {
+                    if let Some(path) = attr.path.to_opt() {
                         ctxt.with_new_ctxt(
-                            |span| span.name(),
+                            |span| span.path(),
                             |ctxt| {
-                                visitor.visit_ident(ctxt, ident);
+                                visitor.visit_path(ctxt, path);
                             },
                         )
                     }
@@ -1310,25 +1319,38 @@ pub fn walk_attribute<'db, V>(
                     ctxt.with_new_ctxt(
                         |span| span.args(),
                         |ctxt| {
-                            for (i, arg) in normal_attr.args.iter().enumerate() {
+                            for (i, arg) in attr.args.iter().enumerate() {
                                 ctxt.with_new_ctxt(
                                     |span| span.arg(i),
                                     |ctxt| {
-                                        if let Some(key) = arg.key.to_opt() {
-                                            ctxt.with_new_ctxt(
-                                                |span| span.key(),
-                                                |ctxt| {
-                                                    visitor.visit_ident(ctxt, key);
-                                                },
-                                            );
-                                        }
-                                        if let Some(value) = arg.value.to_opt() {
-                                            ctxt.with_new_ctxt(
-                                                |span| span.value(),
-                                                |ctxt| {
-                                                    visitor.visit_ident(ctxt, value);
-                                                },
-                                            );
+                                        let Some(key_path) = arg.key.to_opt() else {
+                                            return;
+                                        };
+                                        ctxt.with_new_ctxt(
+                                            |span| span.key(),
+                                            |ctxt| {
+                                                visitor.visit_path(ctxt, key_path);
+                                            },
+                                        );
+
+                                        match arg.value.clone().to_opt() {
+                                            Some(AttrArgValue::Ident(id)) => {
+                                                ctxt.with_new_ctxt(
+                                                    |span| span.value().ident(),
+                                                    |ctxt| {
+                                                        visitor.visit_ident(ctxt, id);
+                                                    },
+                                                );
+                                            }
+                                            Some(AttrArgValue::Lit(l)) => {
+                                                ctxt.with_new_ctxt(
+                                                    |span| span.value().lit(),
+                                                    |ctxt| {
+                                                        visitor.visit_lit(ctxt, l);
+                                                    },
+                                                );
+                                            }
+                                            None => {}
                                         }
                                     },
                                 );
@@ -2282,8 +2304,8 @@ mod tests {
     fn visitor() {
         let mut db = TestDb::default();
         let text = r#"
-            #attr1
-            #attr2
+            #[attr1]
+            #[attr2]
             fn foo<T: 'static, V: Add>() {
                 1
                 "foo"
@@ -2310,8 +2332,8 @@ mod tests {
         );
 
         assert_eq!(visitor.attributes.len(), 2);
-        assert_eq!("#attr1", db.text_at(top_mod, &visitor.attributes[0]));
-        assert_eq!("#attr2", db.text_at(top_mod, &visitor.attributes[1]));
+        assert_eq!("#[attr1]", db.text_at(top_mod, &visitor.attributes[0]));
+        assert_eq!("#[attr2]", db.text_at(top_mod, &visitor.attributes[1]));
 
         assert_eq!(visitor.lit_ints.len(), 2);
         assert_eq!("1", db.text_at(top_mod, &visitor.lit_ints[0]));

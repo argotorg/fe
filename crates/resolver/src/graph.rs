@@ -52,7 +52,7 @@ where
         <H as GraphResolutionHandler<NR::Description, DiGraph<NR::Description, E>>>::Item,
         UnresolvableRootNode,
     > {
-        tracing::trace!(target: "resolver", "Starting graph resolution");
+        tracing::info!(target: "resolver", "Starting graph resolution");
 
         let mut graph = DiGraph::default();
         let mut nodes: IndexMap<NR::Description, NodeIndex> = IndexMap::new();
@@ -63,13 +63,13 @@ where
         unresolved_nodes.entry(root_node.clone()).or_default();
 
         while let Some((unresolved_node_description, back_nodes)) = unresolved_nodes.pop() {
-            tracing::trace!(target: "resolver", "Resolving node");
+            tracing::info!(target: "resolver", "Resolving node");
             match self
                 .node_resolver
                 .resolve(handler, &unresolved_node_description)
             {
                 Ok(forward_nodes) => {
-                    tracing::trace!(target: "resolver", "Successfully resolved node");
+                    tracing::info!(target: "resolver", "Successfully resolved node");
                     let resolved_node_description = unresolved_node_description;
 
                     let resolved_node_index = graph.add_node(resolved_node_description.clone());
@@ -111,7 +111,7 @@ where
             tracing::warn!(target: "resolver", "Graph resolution failed: root node is unresolvable");
             Err(UnresolvableRootNode)
         } else {
-            tracing::trace!(target: "resolver", "Graph resolution completed successfully with {} nodes", graph.node_count());
+            tracing::info!(target: "resolver", "Graph resolution completed successfully with {} nodes", graph.node_count());
             let result = handler.handle_graph_resolution(root_node, graph);
             Ok(result)
         }

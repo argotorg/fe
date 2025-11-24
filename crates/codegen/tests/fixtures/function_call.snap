@@ -1,0 +1,15 @@
+---
+source: crates/codegen/tests/yul.rs
+expression: output
+input_file: tests/fixtures/function_call.fe
+---
+{
+  function add_one(x) -> ret {
+    ret := add(x, 1)
+  }
+}
+{
+  function call_add_one() -> ret {
+    ret := add_one(5)
+  }
+}

@@ -536,6 +536,10 @@ impl<'db> ImportResolver<'db> {
     fn register_error(&mut self, i_use: &IntermediateUse<'db>, err: NameResolutionError<'db>) {
         self.suspicious_imports.remove(&i_use.use_);
 
+        if i_use.use_.is_prelude_use(self.db) {
+            return;
+        }
+
         match err {
             NameResolutionError::NotFound => {
                 self.accumulated_errors.push(ImportDiag::NotFound(

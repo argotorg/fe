@@ -22,3 +22,4 @@ hir.workspace = true
 resolver.workspace = true
 url.workspace = true
 tracing.workspace = true
+mir.workspace = true

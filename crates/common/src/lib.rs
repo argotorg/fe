@@ -1,10 +1,10 @@
 pub mod config;
-pub mod core;
 pub mod dependencies;
 pub mod diagnostics;
 pub mod file;
 pub mod indexmap;
 pub mod ingot;
+pub mod stdlib;
 pub mod urlext;
 
 use dependencies::DependencyGraph;
@@ -46,7 +46,7 @@ macro_rules! impl_db_default {
     ($db_type:ty) => {
         impl Default for $db_type
         where
-            $db_type: $crate::core::HasBuiltinCore,
+            $db_type: $crate::stdlib::HasBuiltinCore + $crate::stdlib::HasBuiltinStd,
         {
             fn default() -> Self {
                 let mut db = Self {
@@ -58,7 +58,8 @@ macro_rules! impl_db_default {
                 db.index = Some(index);
                 let graph = $crate::dependencies::DependencyGraph::default(&db);
                 db.graph = Some(graph);
-                $crate::core::HasBuiltinCore::initialize_builtin_core(&mut db);
+                $crate::stdlib::HasBuiltinCore::initialize_builtin_core(&mut db);
+                $crate::stdlib::HasBuiltinStd::initialize_builtin_std(&mut db);
                 db
             }
         }

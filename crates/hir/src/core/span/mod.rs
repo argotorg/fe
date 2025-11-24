@@ -176,7 +176,9 @@ pub fn body_source_map<'db>(
 /// 1. `Raw` is used for nodes that are created by the parser and not
 /// 2. `Expanded` is used for nodes that are created by the compiler and not
 /// 3. `Desugared` is used for nodes that are created by the compiler and not
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+/// 4. `Synthetic` is used for nodes that are created by the compiler without
+///    any corresponding AST.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Default)]
 pub enum HirOrigin<T>
 where
     T: AstNode,
@@ -191,10 +193,16 @@ where
     Desugared(DesugaredOrigin),
 
     /// The HIR node is created by the compiler and not directly from the AST.
+    /// This is used for nodes that conceptually exist in user code (such as
+    /// implicit imports) but don't have a concrete syntax location.
+    Synthetic,
+
+    /// The HIR node is created by the compiler and not directly from the AST.
     /// This is only used with `Invalid` nodes that don't have a corresponding
     /// AST node.
     /// e.g., the RHS of `a + ` is represented as `Invalid` node but there is no
     /// corresponding origin.
+    #[default]
     None,
 }
 
@@ -209,14 +217,9 @@ where
     pub(crate) fn desugared(origin: impl Into<DesugaredOrigin>) -> Self {
         Self::Desugared(origin.into())
     }
-}
 
-impl<T> Default for HirOrigin<T>
-where
-    T: AstNode,
-{
-    fn default() -> Self {
-        Self::None
+    pub(crate) fn synthetic() -> Self {
+        Self::Synthetic
     }
 }
 

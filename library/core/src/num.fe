@@ -23,6 +23,8 @@ extern {
     fn __ge_u8(_: u8, _: u8) -> bool
 
     fn __bitnot_u8(_: u8) -> u8
+
+    pub fn __u8_as_u256(_: u8) -> u256
 }
 
 // Extern intrinsics for i8
@@ -48,6 +50,8 @@ extern {
 
     fn __neg_i8(_: i8) -> i8
     fn __bitnot_i8(_: i8) -> i8
+
+    pub fn __i8_as_u256(_: i8) -> u256
 }
 
 // Extern intrinsics for i16
@@ -73,6 +77,8 @@ extern {
 
     fn __neg_i16(_: i16) -> i16
     fn __bitnot_i16(_: i16) -> i16
+
+    pub fn __i16_as_u256(_: i16) -> u256
 }
 
 // Extern intrinsics for u16
@@ -97,6 +103,8 @@ extern {
     fn __ge_u16(_: u16, _: u16) -> bool
 
     fn __bitnot_u16(_: u16) -> u16
+
+    pub fn __u16_as_u256(_: u16) -> u256
 }
 
 // Extern intrinsics for i32
@@ -122,6 +130,8 @@ extern {
 
     fn __neg_i32(_: i32) -> i32
     fn __bitnot_i32(_: i32) -> i32
+
+    pub fn __i32_as_u256(_: i32) -> u256
 }
 
 // Extern intrinsics for u32
@@ -146,6 +156,8 @@ extern {
     fn __ge_u32(_: u32, _: u32) -> bool
 
     fn __bitnot_u32(_: u32) -> u32
+
+    pub fn __u32_as_u256(_: u32) -> u256
 }
 
 // Extern intrinsics for i64
@@ -170,7 +182,9 @@ extern {
     fn __ge_i64(_: i64, _: i64) -> bool
 
     fn __neg_i64(_: i64) -> i64
-     fn __bitnot_i64(_: i64) -> i64
+    fn __bitnot_i64(_: i64) -> i64
+
+    pub fn __i64_as_u256(_: i64) -> u256
 }
 
 // Extern intrinsics for i128
@@ -196,6 +210,8 @@ extern {
 
     fn __neg_i128(_: i128) -> i128
     fn __bitnot_i128(_: i128) -> i128
+
+    pub fn __i128_as_u256(_: i128) -> u256
 }
 
 // Extern intrinsics for u64
@@ -220,6 +236,8 @@ extern {
     fn __ge_u64(_: u64, _: u64) -> bool
 
      fn __bitnot_u64(_: u64) -> u64
+
+    pub fn __u64_as_u256(_: u64) -> u256
 }
 
 // Extern intrinsics for u128
@@ -244,6 +262,8 @@ extern {
     fn __ge_u128(_: u128, _: u128) -> bool
 
     fn __bitnot_u128(_: u128) -> u128
+
+    pub fn __u128_as_u256(_: u128) -> u256
 }
 
 // Extern intrinsics for usize
@@ -267,7 +287,9 @@ extern {
     fn __gt_usize(_: usize, _: usize) -> bool
     fn __ge_usize(_: usize, _: usize) -> bool
 
-     fn __bitnot_usize(_: usize) -> usize
+    fn __bitnot_usize(_: usize) -> usize
+
+    pub fn __usize_as_u256(_: usize) -> u256
 }
 
 // Extern intrinsics for i256
@@ -293,6 +315,8 @@ extern {
 
     fn __neg_i256(_: i256) -> i256
     fn __bitnot_i256(_: i256) -> i256
+
+    pub fn __i256_as_u256(_: i256) -> u256
 }
 
 // Extern intrinsics for u256
@@ -317,6 +341,20 @@ extern {
     fn __ge_u256(_: u256, _: u256) -> bool
 
     fn __bitnot_u256(_: u256) -> u256
+
+    pub fn __u256_as_u8(_: u256) -> u8
+    pub fn __u256_as_u16(_: u256) -> u16
+    pub fn __u256_as_u32(_: u256) -> u32
+    pub fn __u256_as_u64(_: u256) -> u64
+    pub fn __u256_as_u128(_: u256) -> u128
+    pub fn __u256_as_u256(_: u256) -> u256
+
+    pub fn __u256_as_i8(_: u256) -> i8
+    pub fn __u256_as_i16(_: u256) -> i16
+    pub fn __u256_as_i32(_: u256) -> i32
+    pub fn __u256_as_i64(_: u256) -> i64
+    pub fn __u256_as_i128(_: u256) -> i128
+    pub fn __u256_as_i256(_: u256) -> i256
 }
 
 // Extern intrinsics for isize
@@ -342,6 +380,8 @@ extern {
 
     fn __neg_isize(_: isize) -> isize
     fn __bitnot_isize(_: isize) -> isize
+
+    pub fn __isize_as_u256(_: isize) -> u256
 }
 
 // Extern intrinsics for bool
@@ -356,6 +396,7 @@ extern {
 
 // u8 impls
 impl BitNot for u8 { fn bit_not(self) -> u8 { __bitnot_u8(self) } }
+impl Not for u8 { fn not(self) -> u8 { __bitnot_u8(self) } }
 impl Add for u8 { fn add(self, _ other: u8) -> u8 { __add_u8(self, other) } }
 impl Sub for u8 { fn sub(self, _ other: u8) -> u8 { __sub_u8(self, other) } }
 impl Mul for u8 { fn mul(self, _ other: u8) -> u8 { __mul_u8(self, other) } }
@@ -393,6 +434,7 @@ impl Default for u8 { fn default() -> Self { 0 } }
 // i8 impls
 impl Neg for i8 { fn neg(self) -> i8 { __neg_i8(self) } }
 impl BitNot for i8 { fn bit_not(self) -> i8 { __bitnot_i8(self) } }
+impl Not for i8 { fn not(self) -> i8 { __bitnot_i8(self) } }
 impl Add for i8 { fn add(self, _ other: i8) -> i8 { __add_i8(self, other) } }
 impl Sub for i8 { fn sub(self, _ other: i8) -> i8 { __sub_i8(self, other) } }
 impl Mul for i8 { fn mul(self, _ other: i8) -> i8 { __mul_i8(self, other) } }
@@ -430,6 +472,7 @@ impl Default for i8 { fn default() -> Self { 0 } }
 // i16 impls
 impl Neg for i16 { fn neg(self) -> i16 { __neg_i16(self) } }
 impl BitNot for i16 { fn bit_not(self) -> i16 { __bitnot_i16(self) } }
+impl Not for i16 { fn not(self) -> i16 { __bitnot_i16(self) } }
 impl Add for i16 { fn add(self, _ other: i16) -> i16 { __add_i16(self, other) } }
 impl Sub for i16 { fn sub(self, _ other: i16) -> i16 { __sub_i16(self, other) } }
 impl Mul for i16 { fn mul(self, _ other: i16) -> i16 { __mul_i16(self, other) } }
@@ -466,6 +509,7 @@ impl Default for i16 { fn default() -> Self { 0 } }
 
 // u16 impls
 impl BitNot for u16 { fn bit_not(self) -> u16 { __bitnot_u16(self) } }
+impl Not for u16 { fn not(self) -> u16 { __bitnot_u16(self) } }
 impl Add for u16 { fn add(self, _ other: u16) -> u16 { __add_u16(self, other) } }
 impl Sub for u16 { fn sub(self, _ other: u16) -> u16 { __sub_u16(self, other) } }
 impl Mul for u16 { fn mul(self, _ other: u16) -> u16 { __mul_u16(self, other) } }
@@ -504,6 +548,7 @@ impl Default for u16 { fn default() -> Self { 0 } }
 // i32 impls
 impl Neg for i32 { fn neg(self) -> i32 { __neg_i32(self) } }
 impl BitNot for i32 { fn bit_not(self) -> i32 { __bitnot_i32(self) } }
+impl Not for i32 { fn not(self) -> i32 { __bitnot_i32(self) } }
 impl Add for i32 { fn add(self, _ other: i32) -> i32 { __add_i32(self, other) } }
 impl Sub for i32 { fn sub(self, _ other: i32) -> i32 { __sub_i32(self, other) } }
 impl Mul for i32 { fn mul(self, _ other: i32) -> i32 { __mul_i32(self, other) } }
@@ -540,6 +585,7 @@ impl Default for i32 { fn default() -> Self { 0 } }
 
 // u32 impls
 impl BitNot for u32 { fn bit_not(self) -> u32 { __bitnot_u32(self) } }
+impl Not for u32 { fn not(self) -> u32 { __bitnot_u32(self) } }
 impl Add for u32 { fn add(self, _ other: u32) -> u32 { __add_u32(self, other) } }
 impl Sub for u32 { fn sub(self, _ other: u32) -> u32 { __sub_u32(self, other) } }
 impl Mul for u32 { fn mul(self, _ other: u32) -> u32 { __mul_u32(self, other) } }
@@ -577,6 +623,7 @@ impl Default for u32 { fn default() -> Self { 0 } }
 // i64 impls
 impl Neg for i64 { fn neg(self) -> i64 { __neg_i64(self) } }
 impl BitNot for i64 { fn bit_not(self) -> i64 { __bitnot_i64(self) } }
+impl Not for i64 { fn not(self) -> i64 { __bitnot_i64(self) } }
 impl Add for i64 { fn add(self, _ other: i64) -> i64 { __add_i64(self, other) } }
 impl Sub for i64 { fn sub(self, _ other: i64) -> i64 { __sub_i64(self, other) } }
 impl Mul for i64 { fn mul(self, _ other: i64) -> i64 { __mul_i64(self, other) } }
@@ -614,6 +661,7 @@ impl Default for i64 { fn default() -> Self { 0 } }
 // i128 impls
 impl Neg for i128 { fn neg(self) -> i128 { __neg_i128(self) } }
 impl BitNot for i128 { fn bit_not(self) -> i128 { __bitnot_i128(self) } }
+impl Not for i128 { fn not(self) -> i128 { __bitnot_i128(self) } }
 impl Add for i128 { fn add(self, _ other: i128) -> i128 { __add_i128(self, other) } }
 impl Sub for i128 { fn sub(self, _ other: i128) -> i128 { __sub_i128(self, other) } }
 impl Mul for i128 { fn mul(self, _ other: i128) -> i128 { __mul_i128(self, other) } }
@@ -650,6 +698,7 @@ impl Default for i128 { fn default() -> Self { 0 } }
 
 // u64 impls
 impl BitNot for u64 { fn bit_not(self) -> u64 { __bitnot_u64(self) } }
+impl Not for u64 { fn not(self) -> u64 { __bitnot_u64(self) } }
 impl Add for u64 { fn add(self, _ other: u64) -> u64 { __add_u64(self, other) } }
 impl Sub for u64 { fn sub(self, _ other: u64) -> u64 { __sub_u64(self, other) } }
 impl Mul for u64 { fn mul(self, _ other: u64) -> u64 { __mul_u64(self, other) } }
@@ -686,6 +735,7 @@ impl Default for u64 { fn default() -> Self { 0 } }
 
 // u128 impls
 impl BitNot for u128 { fn bit_not(self) -> u128 { __bitnot_u128(self) } }
+impl Not for u128 { fn not(self) -> u128 { __bitnot_u128(self) } }
 impl Add for u128 { fn add(self, _ other: u128) -> u128 { __add_u128(self, other) } }
 impl Sub for u128 { fn sub(self, _ other: u128) -> u128 { __sub_u128(self, other) } }
 impl Mul for u128 { fn mul(self, _ other: u128) -> u128 { __mul_u128(self, other) } }
@@ -722,6 +772,7 @@ impl Default for u128 { fn default() -> Self { 0 } }
 
 // usize impls
 impl BitNot for usize { fn bit_not(self) -> usize { __bitnot_usize(self) } }
+impl Not for usize { fn not(self) -> usize { __bitnot_usize(self) } }
 impl Add for usize { fn add(self, _ other: usize) -> usize { __add_usize(self, other) } }
 impl Sub for usize { fn sub(self, _ other: usize) -> usize { __sub_usize(self, other) } }
 impl Mul for usize { fn mul(self, _ other: usize) -> usize { __mul_usize(self, other) } }
@@ -748,6 +799,7 @@ impl Default for usize { fn default() -> Self { 0 } }
 // i256 impls
 impl Neg for i256 { fn neg(self) -> i256 { __neg_i256(self) } }
 impl BitNot for i256 { fn bit_not(self) -> i256 { __bitnot_i256(self) } }
+impl Not for i256 { fn not(self) -> i256 { __bitnot_i256(self) } }
 impl Add for i256 { fn add(self, _ other: i256) -> i256 { __add_i256(self, other) } }
 impl Sub for i256 { fn sub(self, _ other: i256) -> i256 { __sub_i256(self, other) } }
 impl Mul for i256 { fn mul(self, _ other: i256) -> i256 { __mul_i256(self, other) } }
@@ -784,6 +836,7 @@ impl Default for i256 { fn default() -> Self { 0 } }
 
 // u256 impls
 impl BitNot for u256 { fn bit_not(self) -> u256 { __bitnot_u256(self) } }
+impl Not for u256 { fn not(self) -> u256 { __bitnot_u256(self) } }
 impl Add for u256 { fn add(self, _ other: u256) -> u256 { __add_u256(self, other) } }
 impl Sub for u256 { fn sub(self, _ other: u256) -> u256 { __sub_u256(self, other) } }
 impl Mul for u256 { fn mul(self, _ other: u256) -> u256 { __mul_u256(self, other) } }
@@ -821,6 +874,7 @@ impl Default for u256 { fn default() -> Self { 0 } }
 // isize impls
 impl Neg for isize { fn neg(self) -> isize { __neg_isize(self) } }
 impl BitNot for isize { fn bit_not(self) -> isize { __bitnot_isize(self) } }
+impl Not for isize { fn not(self) -> isize { __bitnot_isize(self) } }
 impl Add for isize { fn add(self, _ other: isize) -> isize { __add_isize(self, other) } }
 impl Sub for isize { fn sub(self, _ other: isize) -> isize { __sub_isize(self, other) } }
 impl Mul for isize { fn mul(self, _ other: isize) -> isize { __mul_isize(self, other) } }

@@ -1,5 +1,8 @@
 use camino::{Utf8Path, Utf8PathBuf};
-use common::{InputDb, core::HasBuiltinCore};
+use common::{
+    InputDb,
+    stdlib::{HasBuiltinCore, HasBuiltinStd},
+};
 use criterion::{Criterion, SamplingMode, criterion_group, criterion_main};
 use driver::DriverDataBase;
 use url::Url;
@@ -16,6 +19,15 @@ fn diagnostics(c: &mut Criterion) {
             let db = DriverDataBase::default();
             let core = db.builtin_core();
             db.run_on_ingot(core);
+            db
+        });
+    });
+
+    g.bench_function("analyze stdlib", |b| {
+        b.iter_with_large_drop(|| {
+            let db = DriverDataBase::default();
+            let std_ingot = db.builtin_std();
+            db.run_on_ingot(std_ingot);
             db
         });
     });

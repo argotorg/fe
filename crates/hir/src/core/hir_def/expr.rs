@@ -44,6 +44,9 @@ pub enum Expr<'db> {
     Assign(ExprId, ExprId),
 
     AugAssign(ExprId, ExprId, ArithBinOp),
+
+    /// `with (K = v, ..) { body }`
+    With(Vec<WithBinding<'db>>, ExprId),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, salsa::Update)]
@@ -193,4 +196,10 @@ impl<'db> Field<'db> {
 
         path.as_ident(db)
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, salsa::Update)]
+pub struct WithBinding<'db> {
+    pub key_path: Partial<PathId<'db>>, // Unresolved path key
+    pub value: ExprId,
 }

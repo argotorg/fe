@@ -12,6 +12,10 @@ resolver.workspace = true
 camino.workspace = true
 url.workspace = true
 smol_str.workspace = true
+hir.workspace = true
+mir.workspace = true
+cranelift-entity.workspace = true
+codegen = { path = "../codegen", package = "fe-codegen" }
 
 [dev-dependencies]
 dir-test.workspace = true

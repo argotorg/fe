@@ -835,6 +835,90 @@ impl<'db> ImplTrait<'db> {
         diags
     }
 
+    /// Diagnostics for missing associated consts (required by the trait).
+    pub fn diags_missing_assoc_consts(
+        self,
+        db: &'db dyn HirAnalysisDb,
+    ) -> Vec<TyDiagCollection<'db>> {
+        use ty::diagnostics::ImplDiag;
+        use ty::trait_lower::lower_impl_trait;
+
+        let mut diags = Vec::new();
+        let Some(implementor) = lower_impl_trait(db, self) else {
+            return diags;
+        };
+        let implementor = implementor.instantiate_identity();
+        let trait_hir = implementor.trait_def(db);
+
+        // Check that all required trait consts are implemented
+        for trait_const in trait_hir.consts(db) {
+            let Some(name) = trait_const.name.to_opt() else {
+                continue;
+            };
+            let has_impl = self.const_(db, name).is_some();
+            let has_default = trait_const.default.is_some();
+            if !has_impl && !has_default {
+                diags.push(
+                    ImplDiag::MissingAssociatedConst {
+                        primary: self.span().ty().into(),
+                        const_name: name,
+                        trait_: trait_hir,
+                    }
+                    .into(),
+                );
+            }
+        }
+        diags
+    }
+
+    /// Diagnostics for associated const values and validity.
+    pub fn diags_assoc_const_values(
+        self,
+        db: &'db dyn HirAnalysisDb,
+    ) -> Vec<TyDiagCollection<'db>> {
+        use ty::diagnostics::ImplDiag;
+        use ty::trait_lower::lower_impl_trait;
+
+        let mut diags = Vec::new();
+        let Some(implementor) = lower_impl_trait(db, self) else {
+            return diags;
+        };
+        let implementor = implementor.instantiate_identity();
+        let trait_hir = implementor.trait_def(db);
+
+        // Check impl consts have values and are defined in trait
+        for (idx, impl_const) in self.consts(db).iter().enumerate() {
+            let Some(name) = impl_const.name.to_opt() else {
+                continue;
+            };
+
+            if trait_hir.const_(db, name).is_some() {
+                // Const is defined in trait - check it has a value
+                if impl_const.value.to_opt().is_none() {
+                    diags.push(
+                        ImplDiag::MissingAssociatedConstValue {
+                            primary: self.span().associated_const(idx).ty().into(),
+                            const_name: name,
+                            trait_: trait_hir,
+                        }
+                        .into(),
+                    );
+                }
+            } else {
+                // Const is not defined in trait
+                diags.push(
+                    ImplDiag::ConstNotDefinedInTrait {
+                        primary: self.span().associated_const(idx).name().into(),
+                        trait_: trait_hir,
+                        const_name: name,
+                    }
+                    .into(),
+                );
+            }
+        }
+        diags
+    }
+
     /// Diagnostics for associated type bounds on implemented assoc types.
     pub fn diags_assoc_types_bounds(
         self,

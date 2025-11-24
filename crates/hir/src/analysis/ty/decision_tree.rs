@@ -577,6 +577,10 @@ fn generalize_pattern<'db>(pat: &SimplifiedPattern<'db>) -> SimplifiedPattern<'d
                 SimplifiedPattern::new(SimplifiedPatternKind::Or(gen_pats), pat.ty)
             }
         }
+
+        // Errored patterns are treated as wildcards for the purpose of
+        // generalization; earlier phases have already emitted diagnostics.
+        SimplifiedPatternKind::Error => pat.clone(),
     }
 }
 

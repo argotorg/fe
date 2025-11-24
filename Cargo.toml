@@ -12,6 +12,8 @@ hir = { path = "crates/hir", package = "fe-hir" }
 parser = { path = "crates/parser", package = "fe-parser" }
 test-utils = { path = "crates/test-utils", package = "fe-test-utils" }
 resolver = { path = "crates/resolver", package = "fe-resolver" }
+mir = { path = "crates/mir", package = "fe-mir" }
+cranelift-entity = "0.115"
 
 url = "2.5.4"
 camino = "1.1.9"
@@ -25,6 +27,7 @@ dir-test = "0.4"
 glob = "0.3.2"
 rustc-hash = "2.1.0"
 num-bigint = "0.4"
+num-traits = "0.2"
 paste = "1.0.15"
 salsa = "0.20"
 smallvec = { version = "2.0.0-alpha.10" }

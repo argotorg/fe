@@ -1,0 +1,11 @@
+---
+source: crates/codegen/tests/yul.rs
+assertion_line: 33
+expression: output
+input_file: tests/fixtures/literal_sub.fe
+---
+{
+  function literal_sub() -> ret {
+    ret := sub(1, 2)
+  }
+}

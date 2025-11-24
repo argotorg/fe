@@ -13,8 +13,11 @@ use codespan_reporting::{
     },
 };
 use common::{
-    InputDb, core::HasBuiltinCore, define_input_db, diagnostics::Span, file::File,
+    InputDb, define_input_db,
+    diagnostics::Span,
+    file::File,
     indexmap::IndexMap,
+    stdlib::{HasBuiltinCore, HasBuiltinStd},
 };
 use driver::diagnostics::{CsDbWrapper, ToCsDiag};
 use fe_hir::analysis::{
@@ -51,6 +54,7 @@ impl HirAnalysisTestDb {
         // Use the index from the database and reinitialize it with core files
         let index = self.workspace();
         self.initialize_builtin_core();
+        self.initialize_builtin_std();
         index.touch(
             self,
             <Url as UrlExt>::from_file_path_lossy(&file_name),

@@ -74,6 +74,13 @@ impl<S: TokenStream> Parser<S> {
         self.current_token().map(|tok| tok.syntax_kind())
     }
 
+    pub fn current_kind_same_line(&mut self) -> Option<SyntaxKind> {
+        let nt = self.set_newline_as_trivia(false);
+        let kind = self.current_kind();
+        self.set_newline_as_trivia(nt);
+        kind
+    }
+
     /// Sets the newline kind as trivia if `is_trivia` is `true`. Otherwise, the
     /// newline kind is not regarded as a trivia.
     ///
@@ -611,17 +618,18 @@ impl<S: TokenStream> Parser<S> {
 
     /// Wrap the current token in a `SyntaxKind::Error`, and add a
     /// `ParseError::Unexpected`.
-    fn unexpected_token_error(&mut self, msg: String) {
+    fn unexpected_token_error(&mut self, msg: String) -> ErrProof {
         let checkpoint = self.enter(ErrorScope::default(), None);
 
         let start_pos = self.current_pos;
         self.bump();
 
-        self.add_error(ParseError::Unexpected(
+        let proof = self.add_error(ParseError::Unexpected(
             msg,
             TextRange::new(start_pos, self.current_pos),
         ));
         self.leave(checkpoint);
+        proof
     }
 
     /// Returns `true` if the parser is in the dry run mode.
@@ -824,6 +832,7 @@ macro_rules! define_scope_struct {
         }
         impl Default for $scope_name {
             fn default() -> Self {
+                #[allow(unused_imports)]
                 use crate::SyntaxKind::*;
                 Self {
                     __inner: std::cell::Cell::new($kind).into(),

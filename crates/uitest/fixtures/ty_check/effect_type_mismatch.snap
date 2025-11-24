@@ -1,0 +1,12 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/effect_type_mismatch.fe
+---
+error[8-0038]: effect `Storage` provided to `needs_storage` has type `Other`, but `Storage` is required
+   ┌─ effect_type_mismatch.fe:18:9
+   │
+17 │     with (Storage = other) {
+   │                     ----- effect `Storage` is provided here
+18 │         needs_storage()
+   │         ^^^^^^^^^^^^^^^ expected `Storage` for effect `Storage`, found `Other`

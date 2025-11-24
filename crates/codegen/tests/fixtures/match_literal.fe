@@ -1,0 +1,102 @@
+pub fn match_bool(e: bool) -> u64 {
+    match e {
+        true => 1,
+        _ => 2,
+    }
+}
+
+pub fn match_u8(e: u8) -> u8 {
+    match e {
+        0 => 1,
+        255 => 2,
+        _ => 3,
+    }
+}
+
+pub fn match_u16(e: u16) -> u16 {
+    match e {
+        0x1234 => 1,
+        0xabcd => 2,
+        _ => 3,
+    }
+}
+
+pub fn match_u32(e: u32) -> u32 {
+    match e {
+        0xdeadbeef => 1,
+        0xcafebabe => 2,
+        _ => 3,
+    }
+}
+
+pub fn match_u64(e: u64) -> u64 {
+    match e {
+        0 => 1,
+        0xffffffffffffffff => 2,
+        _ => 3,
+    }
+}
+
+pub fn match_u128(e: u128) -> u128 {
+    match e {
+        0 => 1,
+        0xffffffffffffffffffffffffffffffff => 2,
+        _ => 3,
+    }
+}
+
+pub fn match_u256(e: u256) -> u256 {
+    match e {
+        0 => 1,
+        0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff => 2,
+        _ => 3,
+    }
+}
+
+pub fn match_i8(e: i8) -> i8 {
+    match e {
+        0 => 1,
+        99 => 2,
+        _ => 3,
+    }
+}
+
+pub fn match_i16(e: i16) -> i16 {
+    match e {
+        0 => 1,
+        32000 => 2,
+        _ => 3,
+    }
+}
+
+pub fn match_i32(e: i32) -> i32 {
+    match e {
+        0 => 1,
+        2000000000 => 2,
+        _ => 3,
+    }
+}
+
+pub fn match_i64(e: i64) -> i64 {
+    match e {
+        0 => 1,
+        9223372036854775807 => 2,
+        _ => 3,
+    }
+}
+
+pub fn match_i128(e: i128) -> i128 {
+    match e {
+        0 => 1,
+        170141183460469231731687303715884105727 => 2,
+        _ => 3,
+    }
+}
+
+pub fn match_i256(e: i256) -> i256 {
+    match e {
+        0 => 1,
+        115792089237316195423570985008687907853269984665640564039457584007913129639935 => 2,
+        _ => 3,
+    }
+}

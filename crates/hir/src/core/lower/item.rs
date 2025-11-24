@@ -3,8 +3,8 @@ use parser::ast::{self, prelude::*};
 use super::FileLowerCtxt;
 use crate::{
     hir_def::{
-        AttrListId, Body, FuncParamListId, GenericParamListId, IdentId, TraitRefId, TupleTypeId,
-        TypeBound, TypeId, WhereClauseId, item::*,
+        AttrListId, Body, EffectParamListId, FuncParamListId, GenericParamListId, IdentId, PathId,
+        TraitRefId, TupleTypeId, TypeBound, TypeId, WhereClauseId, item::*,
     },
     span::HirOrigin,
 };
@@ -26,7 +26,7 @@ impl<'db> ItemKind<'db> {
                 Mod::lower_ast(ctxt, mod_);
             }
             ast::ItemKind::Func(fn_) => {
-                Func::lower_ast(ctxt, fn_, false);
+                Func::lower_ast(ctxt, fn_);
             }
             ast::ItemKind::Struct(struct_) => {
                 Struct::lower_ast(ctxt, struct_);
@@ -58,7 +58,7 @@ impl<'db> ItemKind<'db> {
             ast::ItemKind::Extern(extern_) => {
                 if let Some(extern_block) = extern_.extern_block() {
                     for fn_ in extern_block {
-                        Func::lower_ast(ctxt, fn_, true);
+                        Func::lower_ast(ctxt, fn_);
                     }
                 }
             }
@@ -71,6 +71,8 @@ impl<'db> Mod<'db> {
         let name = IdentId::lower_token_partial(ctxt, ast.name());
         let id = ctxt.joined_id(TrackedItemVariant::Mod(name));
         ctxt.enter_item_scope(id, true);
+
+        ctxt.insert_synthetic_prelude_use();
 
         let attributes = AttrListId::lower_ast_opt(ctxt, ast.attr_list());
         let vis = ItemModifier::lower_ast(ast.modifier()).to_visibility();
@@ -85,11 +87,7 @@ impl<'db> Mod<'db> {
 }
 
 impl<'db> Func<'db> {
-    pub(super) fn lower_ast(
-        ctxt: &mut FileLowerCtxt<'db>,
-        ast: ast::Func,
-        is_extern: bool,
-    ) -> Self {
+    pub(super) fn lower_ast(ctxt: &mut FileLowerCtxt<'db>, ast: ast::Func) -> Self {
         let name = IdentId::lower_token_partial(ctxt, ast.name());
         let id = ctxt.joined_id(TrackedItemVariant::Func(name));
         ctxt.enter_item_scope(id, false);
@@ -102,6 +100,7 @@ impl<'db> Func<'db> {
             .map(|params| FuncParamListId::lower_ast(ctxt, params))
             .into();
         let ret_ty = ast.ret_ty().map(|ty| TypeId::lower_ast(ctxt, ty));
+        let effects = lower_effects(ctxt, &ast);
         let modifier = ItemModifier::lower_ast(ast.modifier());
         let body = ast
             .body()
@@ -116,15 +115,50 @@ impl<'db> Func<'db> {
             generic_params,
             where_clause,
             params,
+            effects,
             ret_ty,
             modifier,
             body,
-            is_extern,
             ctxt.top_mod(),
             origin,
         );
         ctxt.leave_item_scope(fn_)
     }
+}
+
+fn lower_effects<'db>(ctxt: &mut FileLowerCtxt<'db>, ast: &ast::Func) -> EffectParamListId<'db> {
+    use crate::hir_def::{EffectParam, EffectParamListId};
+
+    let mut data: Vec<EffectParam<'db>> = Vec::new();
+
+    if let Some(uses) = ast.uses_clause() {
+        if let Some(list) = uses.param_list() {
+            for p in list {
+                let name = p.name().map(|n| IdentId::lower_token(ctxt, n.syntax()));
+
+                let is_mut = p.mut_token().is_some();
+                let key_path = p.path().map(|path| PathId::lower_ast(ctxt, path)).into();
+
+                data.push(EffectParam {
+                    name,
+                    key_path,
+                    is_mut,
+                });
+            }
+        } else if let Some(p) = uses.param() {
+            let name = p.name().map(|n| IdentId::lower_token(ctxt, n.syntax()));
+            let is_mut = p.mut_token().is_some();
+            let key_path = p.path().map(|path| PathId::lower_ast(ctxt, path)).into();
+
+            data.push(EffectParam {
+                name,
+                key_path,
+                is_mut,
+            });
+        }
+    }
+
+    EffectParamListId::new(ctxt.db(), data)
 }
 
 impl<'db> Struct<'db> {
@@ -250,7 +284,7 @@ impl<'db> Impl<'db> {
 
         if let Some(item_list) = ast.item_list() {
             for impl_item in item_list {
-                Func::lower_ast(ctxt, impl_item, false);
+                Func::lower_ast(ctxt, impl_item);
             }
         }
 
@@ -289,14 +323,18 @@ impl<'db> Trait<'db> {
         let origin = HirOrigin::raw(&ast);
 
         let mut types = vec![];
+        let mut consts = vec![];
 
         if let Some(item_list) = ast.item_list() {
             for impl_item in item_list {
                 match impl_item.kind() {
                     ast::TraitItemKind::Func(func) => {
-                        Func::lower_ast(ctxt, func, false);
+                        Func::lower_ast(ctxt, func);
                     }
                     ast::TraitItemKind::Type(t) => types.push(AssocTyDecl::lower_ast(ctxt, t)),
+                    ast::TraitItemKind::Const(c) => {
+                        consts.push(AssocConstDecl::lower_ast(ctxt, c));
+                    }
                 };
             }
         }
@@ -311,6 +349,7 @@ impl<'db> Trait<'db> {
             super_traits,
             where_clause,
             types,
+            consts,
             ctxt.top_mod(),
             origin,
         );
@@ -355,13 +394,17 @@ impl<'db> ImplTrait<'db> {
         let origin = HirOrigin::raw(&ast);
 
         let mut types = vec![];
+        let mut consts = vec![];
         if let Some(item_list) = ast.item_list() {
             for impl_item in item_list {
                 match impl_item.kind() {
                     ast::TraitItemKind::Func(func) => {
-                        Func::lower_ast(ctxt, func, false);
+                        Func::lower_ast(ctxt, func);
                     }
                     ast::TraitItemKind::Type(t) => types.push(AssocTyDef::lower_ast(ctxt, t)),
+                    ast::TraitItemKind::Const(c) => {
+                        consts.push(AssocConstDef::lower_ast(ctxt, c));
+                    }
                 };
             }
         }
@@ -375,6 +418,7 @@ impl<'db> ImplTrait<'db> {
             generic_params,
             where_clause,
             types,
+            consts,
             ctxt.top_mod(),
             origin,
         );
@@ -387,6 +431,29 @@ impl<'db> AssocTyDef<'db> {
         AssocTyDef {
             name: IdentId::lower_token_partial(ctxt, ast.name()),
             type_ref: TypeId::lower_ast_partial(ctxt, ast.ty()),
+        }
+    }
+}
+
+impl<'db> AssocConstDecl<'db> {
+    fn lower_ast(ctxt: &mut FileLowerCtxt<'db>, ast: ast::TraitConstItem) -> Self {
+        let name = IdentId::lower_token_partial(ctxt, ast.name());
+        let ty = TypeId::lower_ast_partial(ctxt, ast.ty());
+        let default = ast
+            .value()
+            .map(|expr| crate::hir_def::Partial::Present(Body::lower_ast(ctxt, expr)));
+        AssocConstDecl { name, ty, default }
+    }
+}
+
+impl<'db> AssocConstDef<'db> {
+    fn lower_ast(ctxt: &mut FileLowerCtxt<'db>, ast: ast::TraitConstItem) -> Self {
+        let value = ast.value().map(|expr| Body::lower_ast(ctxt, expr)).into();
+
+        AssocConstDef {
+            name: IdentId::lower_token_partial(ctxt, ast.name()),
+            ty: TypeId::lower_ast_partial(ctxt, ast.ty()),
+            value,
         }
     }
 }

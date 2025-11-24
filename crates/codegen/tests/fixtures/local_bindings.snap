@@ -1,0 +1,12 @@
+---
+source: crates/codegen/tests/yul.rs
+expression: output
+input_file: tests/fixtures/local_bindings.fe
+---
+{
+  function local_bindings() -> ret {
+    let v0 := add(1, 2)
+    let v1 := 3
+    ret := v1
+  }
+}

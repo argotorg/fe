@@ -1,0 +1,8 @@
+trait T {}
+
+struct S {}
+
+impl T for S {
+    const C: u32 = 1
+}
+

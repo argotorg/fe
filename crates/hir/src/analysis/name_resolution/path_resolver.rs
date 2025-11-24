@@ -69,6 +69,11 @@ pub enum PathResErrorKind<'db> {
         candidates: ThinVec<(TraitInstId<'db>, TyId<'db>)>,
     },
 
+    AmbiguousAssociatedConst {
+        name: IdentId<'db>,
+        trait_insts: ThinVec<TraitInstId<'db>>,
+    },
+
     /// The name is found, but it can't be used in the middle of a use path.
     InvalidPathSegment(PathRes<'db>),
 
@@ -142,6 +147,15 @@ impl<'db> PathResError<'db> {
                 candidates,
             } => {
                 format!("Ambiguous associated type; {} options.", candidates.len())
+            }
+            PathResErrorKind::AmbiguousAssociatedConst {
+                name: _,
+                trait_insts,
+            } => {
+                format!(
+                    "Ambiguous associated const; {} candidates.",
+                    trait_insts.len()
+                )
             }
             PathResErrorKind::InvalidPathSegment(_) => "Invalid path segment".to_string(),
             PathResErrorKind::QualifiedTypeType(res) => match res.as_ref() {
@@ -281,6 +295,14 @@ impl<'db> PathResError<'db> {
                     span,
                     name,
                     candidates,
+                }
+            }
+
+            PathResErrorKind::AmbiguousAssociatedConst { name, trait_insts } => {
+                PathResDiag::AmbiguousAssociatedConst {
+                    primary: span,
+                    name,
+                    trait_insts,
                 }
             }
 
@@ -426,6 +448,7 @@ pub enum PathRes<'db> {
     Const(Const<'db>, TyId<'db>),
     Mod(ScopeId<'db>),
     Method(TyId<'db>, MethodCandidate<'db>),
+    TraitConst(TyId<'db>, TraitInstId<'db>, IdentId<'db>),
 }
 
 impl<'db> PathRes<'db> {
@@ -441,6 +464,7 @@ impl<'db> PathRes<'db> {
             PathRes::EnumVariant(v) => PathRes::EnumVariant(ResolvedVariant { ty: f(v.ty), ..v }),
             // TODO: map over candidate ty?
             PathRes::Method(ty, candidate) => PathRes::Method(f(ty), candidate),
+            PathRes::TraitConst(ty, inst, name) => PathRes::TraitConst(f(ty), inst, name),
             r @ (PathRes::Trait(_) | PathRes::Mod(_) | PathRes::FuncParam(..)) => r,
         }
     }
@@ -449,6 +473,15 @@ impl<'db> PathRes<'db> {
         match self {
             PathRes::Ty(ty) | PathRes::Func(ty) => ty.as_scope(db),
             PathRes::Const(const_, _) => Some(const_.scope()),
+            PathRes::TraitConst(_ty, inst, name) => {
+                let trait_ = inst.def(db);
+                let idx = trait_
+                    .consts(db)
+                    .iter()
+                    .position(|c| c.name.to_opt() == Some(*name))
+                    .unwrap() as u16;
+                Some(ScopeId::TraitConst(trait_, idx))
+            }
             PathRes::TyAlias(alias, _) => Some(alias.alias.scope()),
             PathRes::Trait(trait_) => Some(trait_.def(db).scope()),
             PathRes::EnumVariant(variant) => Some(variant.enum_(db).scope()),
@@ -462,6 +495,11 @@ impl<'db> PathRes<'db> {
         match self {
             PathRes::Ty(ty) | PathRes::Func(ty) => is_ty_visible_from(db, *ty, from_scope),
             PathRes::Const(const_, _) => is_scope_visible_from(db, const_.scope(), from_scope),
+            PathRes::TraitConst(_, inst, _) => {
+                // Visible if the trait is available in scope
+                let available = super::available_traits_in_scope(db, from_scope);
+                available.contains(&inst.def(db))
+            }
             PathRes::Method(_, cand) => {
                 // Method visibility depends on the method's defining scope
                 // (function or trait method), not the receiver type.
@@ -499,6 +537,11 @@ impl<'db> PathRes<'db> {
                 v.variant.name(db)?
             )),
             PathRes::Const(const_, _) => const_.scope().pretty_path(db),
+            PathRes::TraitConst(ty, _inst, name) => Some(format!(
+                "{}::{}",
+                ty_path(*ty).unwrap_or_else(|| "<missing>".into()),
+                name.data(db)
+            )),
             r @ (PathRes::Trait(..) | PathRes::Mod(..) | PathRes::FuncParam(..)) => {
                 r.as_scope(db).unwrap().pretty_path(db)
             }
@@ -520,6 +563,7 @@ impl<'db> PathRes<'db> {
             PathRes::Trait(_) => "trait",
             PathRes::EnumVariant(_) => "enum variant",
             PathRes::Const(..) => "constant",
+            PathRes::TraitConst(..) => "constant",
             PathRes::Mod(_) => "module",
             PathRes::Method(..) => "method",
         }
@@ -708,13 +752,47 @@ where
 
     match parent_res {
         Some(PathRes::Ty(ty) | PathRes::TyAlias(_, ty)) => {
-            // Fast path: `<A as Trait>::Assoc` — return the projection directly.
-            if let TyData::QualifiedTy(trait_inst) = ty.data(db)
-                && let Some(assoc_ty) = trait_inst.assoc_ty(db, ident)
-            {
-                let r = PathRes::Ty(assoc_ty);
-                observer(path, &r);
-                return Ok(r);
+            // Try to resolve as an associated const on the receiver type
+            if is_tail && resolve_tail_as_value {
+                match select_assoc_const_candidate(db, ty, ident, parent_scope, assumptions) {
+                    AssocConstSelection::Found(inst) => {
+                        let r = PathRes::TraitConst(ty, inst, ident);
+                        observer(path, &r);
+                        return Ok(r);
+                    }
+                    AssocConstSelection::Ambiguous(traits) => {
+                        return Err(PathResError::new(
+                            PathResErrorKind::AmbiguousAssociatedConst {
+                                name: ident,
+                                trait_insts: traits,
+                            },
+                            path,
+                        ));
+                    }
+                    AssocConstSelection::NotFound => {}
+                }
+            }
+            // Fast paths for qualified types `<A as Trait>::...`
+            if let TyData::QualifiedTy(trait_inst) = ty.data(db) {
+                // Associated type projection
+                if let Some(assoc_ty) = trait_inst.assoc_ty(db, ident) {
+                    let r = PathRes::Ty(assoc_ty);
+                    observer(path, &r);
+                    return Ok(r);
+                }
+
+                // Associated const on a specific trait instance
+                if resolve_tail_as_value
+                    && trait_inst
+                        .def(db)
+                        .consts(db)
+                        .iter()
+                        .any(|c| c.name.to_opt() == Some(ident))
+                {
+                    let r = PathRes::TraitConst(trait_inst.self_ty(db), *trait_inst, ident);
+                    observer(path, &r);
+                    return Ok(r);
+                }
             }
 
             // Try to resolve as an enum variant
@@ -808,7 +886,7 @@ where
             }
         }
 
-        Some(PathRes::Func(_) | PathRes::EnumVariant(..)) => {
+        Some(PathRes::Func(_) | PathRes::EnumVariant(..) | PathRes::TraitConst(..)) => {
             return Err(PathResError::new(
                 PathResErrorKind::InvalidPathSegment(parent_res.unwrap()),
                 path,
@@ -838,6 +916,49 @@ where
     let r = resolve_name_res(db, &res, parent_ty, path, scope, assumptions)?;
     observer(path, &r);
     Ok(r)
+}
+
+enum AssocConstSelection<'db> {
+    Found(TraitInstId<'db>),
+    Ambiguous(ThinVec<TraitInstId<'db>>),
+    NotFound,
+}
+
+fn select_assoc_const_candidate<'db>(
+    db: &'db dyn HirAnalysisDb,
+    receiver_ty: TyId<'db>,
+    name: IdentId<'db>,
+    scope: ScopeId<'db>,
+    assumptions: PredicateListId<'db>,
+) -> AssocConstSelection<'db> {
+    // Find trait impls for the receiver type that define the associated const
+    let ingot = scope.ingot(db);
+    let candidates = impls_for_ty_with_constraints(
+        db,
+        ingot,
+        Canonicalized::new(db, receiver_ty).value,
+        assumptions,
+    );
+
+    let mut matches: ThinVec<TraitInstId<'db>> = ThinVec::new();
+    for cand in candidates {
+        let inst = cand.skip_binder().trait_(db);
+        let trait_ = inst.def(db);
+        // Check if the trait defines the associated const
+        if trait_
+            .consts(db)
+            .iter()
+            .any(|c| c.name.to_opt() == Some(name))
+        {
+            matches.push(inst);
+        }
+    }
+
+    match matches.len() {
+        0 => AssocConstSelection::NotFound,
+        1 => AssocConstSelection::Found(matches.pop().unwrap()),
+        _ => AssocConstSelection::Ambiguous(matches),
+    }
 }
 
 pub fn find_associated_type<'db>(
@@ -1167,6 +1288,18 @@ pub fn resolve_name_res<'db>(
                 let assoc_ty = TyId::assoc_ty(db, trait_inst, assoc_ty_name);
 
                 PathRes::Ty(assoc_ty)
+            }
+
+            ScopeId::TraitConst(t, idx) => {
+                let params = collect_generic_params(db, t.into());
+                let self_ty = params.trait_self(db).unwrap();
+
+                let mut trait_args = vec![self_ty];
+                trait_args.extend_from_slice(args);
+                let trait_inst = TraitInstId::new(db, t, trait_args, IndexMap::new());
+
+                let const_name = t.consts(db)[idx as usize].name.unwrap();
+                PathRes::TraitConst(self_ty, trait_inst, const_name)
             }
 
             ScopeId::Variant(var) => {

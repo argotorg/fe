@@ -308,6 +308,10 @@ pub struct TypedBody<'db> {
 }
 
 impl<'db> TypedBody<'db> {
+    pub fn body(&self) -> Option<Body<'db>> {
+        self.body
+    }
+
     pub fn expr_ty(&self, db: &'db dyn HirAnalysisDb, expr: ExprId) -> TyId<'db> {
         self.expr_prop(db, expr).ty
     }

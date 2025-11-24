@@ -1,0 +1,52 @@
+---
+source: crates/codegen/tests/yul.rs
+assertion_line: 38
+expression: output
+input_file: tests/fixtures/struct_init.fe
+---
+{
+  function make_dummy() -> ret {
+    let v0 := alloc(40)
+    store_field__deduped(v0, 0, 0, 42)
+    store_field__deduped(v0, 0, 8, 99)
+    let v1 := v0
+    ret := v1
+  }
+}
+{
+  function alloc(size) -> ret {
+    let v0 := mload(64)
+    let v1 := eq(v0, 0)
+    if v1 {
+      v0 := 128
+      mstore(64, add(v0, size))
+      ret := v0
+    }
+    if iszero(v1) {
+      mstore(64, add(v0, size))
+      ret := v0
+    }
+  }
+}
+{
+  function store_field__deduped(addr, space, offset, value) -> ret {
+    let v0 := add(addr, offset)
+    switch space
+      case 0 {
+        mstore(v0, to_word__deduped(value))
+        ret := 0
+      }
+      case 1 {
+        sstore(v0, to_word__deduped(value))
+        ret := 0
+      }
+      default {
+      }
+    ret := 0
+  }
+}
+{
+  function to_word__deduped(self) -> ret {
+    ret := self
+  }
+}

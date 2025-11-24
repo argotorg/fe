@@ -184,17 +184,13 @@ impl super::Parse for ItemModifierScope {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 enum ModifierKind {
+    #[default]
     None,
     Pub,
     Unsafe,
     PubAndUnsafe,
-}
-impl Default for ModifierKind {
-    fn default() -> Self {
-        Self::None
-    }
 }
 impl ModifierKind {
     fn union(&self, kind: SyntaxKind) -> ModifierKind {
@@ -381,7 +377,7 @@ impl super::Parse for SuperTraitListScope {
     }
 }
 
-define_scope! { TraitItemListScope, TraitItemList, (RBrace, Newline, FnKw) }
+define_scope! { TraitItemListScope, TraitItemList, (RBrace, Newline, FnKw, TypeKw, ConstKw) }
 impl super::Parse for TraitItemListScope {
     type Error = Recovery<ErrProof>;
 
@@ -415,6 +411,39 @@ impl super::Parse for TraitTypeItemScope {
             parse_type(parser, None)?;
         }
 
+        Ok(())
+    }
+}
+
+define_scope! { TraitConstItemScope, TraitConstItem }
+impl super::Parse for TraitConstItemScope {
+    type Error = Recovery<ErrProof>;
+
+    fn parse<S: TokenStream>(&mut self, parser: &mut Parser<S>) -> Result<(), Self::Error> {
+        parser.set_newline_as_trivia(false);
+        parser.bump_expected(SyntaxKind::ConstKw);
+
+        parser.set_scope_recovery_stack(&[SyntaxKind::Ident, SyntaxKind::Colon, SyntaxKind::Eq]);
+
+        if parser.find_and_pop(
+            SyntaxKind::Ident,
+            ExpectedKind::Name(SyntaxKind::TraitConstItem),
+        )? {
+            parser.bump();
+        }
+
+        if parser.find_and_pop(
+            SyntaxKind::Colon,
+            ExpectedKind::TypeSpecifier(SyntaxKind::TraitConstItem),
+        )? {
+            parser.bump();
+            parse_type(parser, None)?;
+        }
+
+        parser.set_newline_as_trivia(true);
+        if parser.bump_if(SyntaxKind::Eq) {
+            parse_expr(parser)?;
+        }
         Ok(())
     }
 }
@@ -470,7 +499,7 @@ impl super::Parse for ImplScope {
     }
 }
 
-define_scope! { ImplTraitItemListScope, TraitItemList, (RBrace, FnKw, TypeKw) }
+define_scope! { ImplTraitItemListScope, TraitItemList, (RBrace, FnKw, TypeKw, ConstKw) }
 impl super::Parse for ImplTraitItemListScope {
     type Error = Recovery<ErrProof>;
 
@@ -652,9 +681,16 @@ fn parse_trait_item_block<S: TokenStream>(
                 parser.set_newline_as_trivia(false);
                 parser.expect(&[SyntaxKind::Newline, SyntaxKind::RBrace], None)?;
             }
+            Some(SyntaxKind::ConstKw) => {
+                parser.parse_cp(TraitConstItemScope::default(), checkpoint)?;
+
+                parser.set_newline_as_trivia(false);
+                parser.expect(&[SyntaxKind::Newline, SyntaxKind::RBrace], None)?;
+            }
             _ => {
-                let proof = parser
-                    .error_msg_on_current_token("only `fn` or `type` is allowed in this block");
+                let proof = parser.error_msg_on_current_token(
+                    "only `fn`, `type`, or `const` is allowed in this block",
+                );
                 parser.try_recover().map_err(|r| r.add_err_proof(proof))?;
             }
         }

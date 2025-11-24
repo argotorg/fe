@@ -42,20 +42,28 @@ fn find_path_surrounding_cursor<'db>(
     full_paths: Vec<(PathId<'db>, ScopeId<'db>, LazyPathSpan<'db>)>,
 ) -> Option<(PathId<'db>, bool, ScopeId<'db>)> {
     for (path, scope, lazy_span) in full_paths {
-        let span = lazy_span.resolve(db).unwrap();
-        if span.range.contains(cursor) {
-            for idx in 0..=path.segment_index(db) {
-                let seg_span = lazy_span.clone().segment(idx).resolve(db).unwrap();
-                if seg_span.range.contains(cursor) {
-                    return Some((
-                        path.segment(db, idx).unwrap(),
-                        idx != path.segment_index(db),
-                        scope,
-                    ));
-                }
+        let Some(span) = lazy_span.resolve(db) else {
+            continue;
+        };
+
+        if !span.range.contains(cursor) {
+            continue;
+        }
+
+        let last_idx = path.segment_index(db);
+        for idx in 0..=last_idx {
+            let Some(seg_span) = lazy_span.clone().segment(idx).resolve(db) else {
+                continue;
+            };
+
+            if seg_span.range.contains(cursor)
+                && let Some(seg_path) = path.segment(db, idx)
+            {
+                return Some((seg_path, idx != last_idx, scope));
             }
         }
     }
+
     None
 }
 
@@ -71,7 +79,9 @@ pub fn find_enclosing_item<'db>(
 
     for item in items {
         let lazy_item_span = DynLazySpan::from(item.span());
-        let item_span = lazy_item_span.resolve(db).unwrap();
+        let Some(item_span) = lazy_item_span.resolve(db) else {
+            continue;
+        };
 
         if item_span.range.contains(cursor) {
             let range_size = item_span.range.end() - item_span.range.start();

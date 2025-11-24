@@ -60,7 +60,7 @@ impl<'db> TyFoldable<'db> for Callable<'db> {
 }
 
 impl<'db> Callable<'db> {
-    pub(super) fn new(
+    pub fn new(
         db: &'db dyn HirAnalysisDb,
         ty: TyId<'db>,
         span: DynLazySpan<'db>,

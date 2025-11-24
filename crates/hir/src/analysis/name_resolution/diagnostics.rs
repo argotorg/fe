@@ -32,13 +32,23 @@ pub enum PathResDiag<'db> {
     Invisible(DynLazySpan<'db>, IdentId<'db>, Option<DynLazySpan<'db>>),
 
     /// The resolved name is ambiguous.
-    Ambiguous(DynLazySpan<'db>, IdentId<'db>, Vec<DynLazySpan<'db>>),
+    Ambiguous(
+        DynLazySpan<'db>,
+        IdentId<'db>,
+        Vec<(DynLazySpan<'db>, bool)>,
+    ),
 
     /// The associated type is ambiguous.
     AmbiguousAssociatedType {
         span: DynLazySpan<'db>,
         name: IdentId<'db>,
         candidates: ThinVec<(TraitInstId<'db>, TyId<'db>)>,
+    },
+
+    AmbiguousAssociatedConst {
+        primary: DynLazySpan<'db>,
+        name: IdentId<'db>,
+        trait_insts: ThinVec<TraitInstId<'db>>,
     },
 
     /// The name is found, but it can't be used as a middle segment of a path.
@@ -121,6 +131,7 @@ impl<'db> PathResDiag<'db> {
             Self::TypeMustBeKnown(span) => span.top_mod(db).unwrap(),
             Self::AmbiguousInherentMethod { primary, .. } => primary.top_mod(db).unwrap(),
             Self::AmbiguousTrait { primary, .. } => primary.top_mod(db).unwrap(),
+            Self::AmbiguousAssociatedConst { primary, .. } => primary.top_mod(db).unwrap(),
             Self::InvisibleAmbiguousTrait { primary, .. } => primary.top_mod(db).unwrap(),
         }
     }
@@ -133,7 +144,15 @@ impl<'db> PathResDiag<'db> {
     ) -> Self {
         let cands = cands
             .into_iter()
-            .filter_map(|name| name.kind.name_span(db))
+            .filter_map(|name| {
+                let span = name.kind.name_span(db)?;
+                let from_prelude = name
+                    .derivation
+                    .use_stmt()
+                    .map(|use_| use_.is_prelude_use(db))
+                    .unwrap_or(false);
+                Some((span, from_prelude))
+            })
             .collect();
         Self::Ambiguous(span, ident, cands)
     }
@@ -149,6 +168,7 @@ impl<'db> PathResDiag<'db> {
             Self::ExpectedTrait(..) => 7,
             Self::ExpectedValue(..) => 8,
             Self::AmbiguousAssociatedType { .. } => 9,
+            Self::AmbiguousAssociatedConst { .. } => 18,
             Self::MethodNotFound { .. } => 10,
             Self::ArgNumMismatch { .. } => 11,
             Self::ArgKindMismatch { .. } => 12,

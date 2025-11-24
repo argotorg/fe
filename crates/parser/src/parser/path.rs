@@ -41,7 +41,7 @@ impl super::Parse for PathSegmentScope {
             Some(kind) if is_path_segment(kind) => {
                 parser.bump();
 
-                if parser.current_kind() == Some(SyntaxKind::Lt)
+                if parser.current_kind_same_line() == Some(SyntaxKind::Lt)
                     && !(is_lt_eq(parser) || is_lshift(parser))
                     && parser.dry_run(|parser| {
                         parser

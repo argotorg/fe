@@ -5,11 +5,13 @@ pub use radix_immutable::StringPrefixView;
 use smol_str::SmolStr;
 use url::Url;
 
-use crate::InputDb;
-use crate::config::Config;
-use crate::core::BUILTIN_CORE_BASE_URL;
-use crate::file::{File, Workspace};
-use crate::urlext::UrlExt;
+use crate::{
+    InputDb,
+    config::Config,
+    file::{File, Workspace},
+    stdlib::{BUILTIN_CORE_BASE_URL, BUILTIN_STD_BASE_URL},
+    urlext::UrlExt,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum IngotKind {
@@ -25,6 +27,9 @@ pub enum IngotKind {
 
     /// Core library ingot.
     Core,
+
+    /// Standard library ingot.
+    Std,
 }
 
 pub trait IngotBaseUrl {
@@ -142,11 +147,22 @@ impl<'db> Ingot<'db> {
             None => vec![],
         };
 
-        if self.kind(db) != IngotKind::Core {
+        let kind = self.kind(db);
+
+        // every ingot has access to `core`
+        if kind != IngotKind::Core {
             deps.push((
                 "core".into(),
                 Url::parse(BUILTIN_CORE_BASE_URL).expect("couldn't parse core ingot URL"),
             ))
+        }
+
+        // every ingot except `core` has access to `std` (until we have a no_std option)
+        if !matches!(kind, IngotKind::Core | IngotKind::Std) {
+            deps.push((
+                "std".into(),
+                Url::parse(BUILTIN_STD_BASE_URL).expect("couldn't parse std ingot URL"),
+            ));
         }
         deps
     }
@@ -204,10 +220,10 @@ impl Workspace {
                 .directory()
                 .expect("Config URL should have a directory");
 
-            let kind = if base_url.scheme().contains("core") {
-                IngotKind::Core
-            } else {
-                IngotKind::Local
+            let kind = match base_url.scheme() {
+                "builtin-core" => IngotKind::Core,
+                "builtin-std" => IngotKind::Std,
+                _ => IngotKind::Local,
             };
 
             Some(Ingot::new(db, base_url.clone(), None, kind))

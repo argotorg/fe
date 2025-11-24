@@ -1,0 +1,107 @@
+---
+source: crates/hir-analysis/tests/ty_check.rs
+expression: res
+input_file: test_files/ty_check/effects_type.fe
+---
+note: 
+  ┌─ effects_type.fe:7:1
+  │  
+7 │ ╭ {
+8 │ │     st.value += amount
+9 │ │ }
+  │ ╰─^ ()
+
+note: 
+  ┌─ effects_type.fe:8:5
+  │
+8 │     st.value += amount
+  │     ^^ Storage
+
+note: 
+  ┌─ effects_type.fe:8:5
+  │
+8 │     st.value += amount
+  │     ^^^^^^^^ u64
+
+note: 
+  ┌─ effects_type.fe:8:5
+  │
+8 │     st.value += amount
+  │     ^^^^^^^^^^^^^^^^^^ ()
+
+note: 
+  ┌─ effects_type.fe:8:17
+  │
+8 │     st.value += amount
+  │                 ^^^^^^ u64
+
+note: 
+   ┌─ effects_type.fe:11:18
+   │  
+11 │   pub fn example() {
+   │ ╭──────────────────^
+12 │ │     let mut st = Storage { value: 0 }
+13 │ │     with (Storage = st) {
+14 │ │         mint(5)
+15 │ │     }
+16 │ │ }
+   │ ╰─^ ()
+
+note: 
+   ┌─ effects_type.fe:12:9
+   │
+12 │     let mut st = Storage { value: 0 }
+   │         ^^^^^^ Storage
+
+note: 
+   ┌─ effects_type.fe:12:18
+   │
+12 │     let mut st = Storage { value: 0 }
+   │                  ^^^^^^^^^^^^^^^^^^^^ Storage
+
+note: 
+   ┌─ effects_type.fe:12:35
+   │
+12 │     let mut st = Storage { value: 0 }
+   │                                   ^ u64
+
+note: 
+   ┌─ effects_type.fe:13:5
+   │  
+13 │ ╭     with (Storage = st) {
+14 │ │         mint(5)
+15 │ │     }
+   │ ╰─────^ ()
+
+note: 
+   ┌─ effects_type.fe:13:21
+   │
+13 │     with (Storage = st) {
+   │                     ^^ Storage
+
+note: 
+   ┌─ effects_type.fe:13:25
+   │  
+13 │       with (Storage = st) {
+   │ ╭─────────────────────────^
+14 │ │         mint(5)
+15 │ │     }
+   │ ╰─────^ ()
+
+note: 
+   ┌─ effects_type.fe:14:9
+   │
+14 │         mint(5)
+   │         ^^^^ fn mint
+
+note: 
+   ┌─ effects_type.fe:14:9
+   │
+14 │         mint(5)
+   │         ^^^^^^^ ()
+
+note: 
+   ┌─ effects_type.fe:14:14
+   │
+14 │         mint(5)
+   │              ^ u64

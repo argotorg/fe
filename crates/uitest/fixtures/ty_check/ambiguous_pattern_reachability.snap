@@ -1,0 +1,18 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/ambiguous_pattern_reachability.fe
+---
+error[2-0004]: `Some` is ambiguous
+   ┌─ ambiguous_pattern_reachability.fe:16:13
+   │
+ 4 │     Some(T),
+   │     ---- candidate 2
+   ·
+16 │     let _ = Some(1)
+   │             ^^^^ `Some` is ambiguous
+   │
+   ┌─ src/option.fe:9:5
+   │
+ 9 │     Some(T),
+   │     ---- candidate 1 (from prelude)

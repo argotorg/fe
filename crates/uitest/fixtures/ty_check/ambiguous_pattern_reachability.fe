@@ -1,0 +1,18 @@
+use Option::*
+
+enum Option<T> {
+    Some(T),
+    None
+}
+
+fn ambiguous_match(o: Option<u32>) -> u32 {
+    match o {
+        Some(x) => x
+        None => 0
+    }
+}
+
+fn ambiguous_expr() {
+    let _ = Some(1)
+}
+

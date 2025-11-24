@@ -1,0 +1,101 @@
+use core::option::Option::{self, Some, None}
+use core::result::Result::{self, Ok, Err}
+use core::functional::{Fn, Functor, Applicative, Monad}
+
+struct AddOne {}
+impl Fn<i32, i32> for AddOne {
+    fn call(self, _ value: i32) -> i32 {
+        value + 1
+    }
+}
+
+struct ToPositive {}
+impl Fn<i32, Option<i32>> for ToPositive {
+    fn call(self, _ value: i32) -> Option<i32> {
+        if value > 0 {
+            Some(value)
+        } else {
+            None
+        }
+    }
+}
+
+struct ToEvenResult {}
+impl Fn<i32, Result<(), i32>> for ToEvenResult {
+    fn call(self, _ value: i32) -> Result<(), i32> {
+        if value % 2 == 0 {
+            Ok(value)
+        } else {
+            Err(())
+        }
+    }
+}
+
+fn option_monad_chain(start: Option<i32>) -> Option<i32> {
+    let mapped = start.map(AddOne{})
+    mapped.and_then(ToPositive{})
+}
+
+fn result_monad_chain(start: Result<(), i32>) -> Result<(), i32> {
+    let functor_mapped = start.map(AddOne{})
+
+    let func: Result<(), AddOne> = Ok(AddOne{})
+    let value: Result<(), i32> = functor_mapped
+    let applied = func.ap(value)
+
+    applied.bind(ToEvenResult{})
+}
+
+trait Logger {
+    fn log(mut self)
+}
+
+struct ConsoleLogger {}
+impl Logger for ConsoleLogger {
+    fn log(mut self) {}
+}
+
+pub fn log_and_chain(x: i32) -> Result<(), Option<i32>>
+  uses (mut logger: Logger)
+{
+    logger.log()
+
+    let opt = Some(x)
+    let opt_chain = option_monad_chain(start: opt)
+
+    let base = Ok(x)
+    let res_chain = result_monad_chain(start: base)
+
+    match res_chain {
+        Ok(_) => Ok(opt_chain)
+        Err(e) => Err(e)
+    }
+}
+
+pub fn with_logger<R, L: Logger, F: Fn<(), R>>(logger: L, _ func: F) -> R {
+    with (Logger = logger) {
+        func.call(())
+    }
+}
+
+pub fn log_once()
+  uses (mut logger: Logger)
+{
+    logger.log()
+}
+
+struct RunWithLogger {}
+impl Fn<(), Result<(), Option<i32>>> for RunWithLogger {
+    fn call(self, _ unit: ()) -> Result<(), Option<i32>> {
+        with (Logger = ConsoleLogger {}) {
+            log_once()
+            log_and_chain(x: 10)
+        }
+    }
+}
+
+pub fn use_with_logger() {
+    let logger = ConsoleLogger {}
+    let result: Result<(), Option<i32>> = with_logger(logger, RunWithLogger{})
+    let _ = result
+}

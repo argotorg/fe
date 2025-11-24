@@ -1,0 +1,9 @@
+use core::alloc
+
+pub fn bump(size: u256) -> u256 {
+    alloc(size)
+}
+
+pub fn bump_const() -> u256 {
+    alloc(64)
+}

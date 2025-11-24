@@ -1,0 +1,18 @@
+use ingot::{mload, mstore}
+
+const FREE_MEMORY_PTR: u256 = 0x40
+const INITIAL_FREE_MEMORY: u256 = 0x80
+
+/// Allocates `size` bytes from the linear memory buffer and returns the start pointer.
+///
+/// Uses the standard “free memory pointer” slot at `0x40`, falling back to `0x80`
+/// the first time it runs (matching Solidity’s layout).
+pub fn alloc(size: u256) -> u256 {
+    let mut ptr = mload(FREE_MEMORY_PTR)
+    if ptr == 0 {
+        ptr = INITIAL_FREE_MEMORY
+    }
+
+    mstore(FREE_MEMORY_PTR, ptr + size)
+    ptr
+}

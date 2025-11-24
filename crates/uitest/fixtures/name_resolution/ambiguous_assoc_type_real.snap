@@ -1,5 +1,6 @@
 ---
 source: crates/uitest/tests/name_resolution.rs
+assertion_line: 26
 expression: diags
 input_file: fixtures/name_resolution/ambiguous_assoc_type_real.fe
 ---
@@ -14,4 +15,4 @@ error[2-0009]: ambiguous associated type `Item`
 10 │     let _y: T::Item = 0
    │                ^^^^ associated type `Item` is ambiguous
    │
-   = specify the trait explicitly: `<Type as Trait>::Item`
+   = hint: specify the trait explicitly: `<T as Trait1>::Item`

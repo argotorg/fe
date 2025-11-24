@@ -1,42 +1,56 @@
 use std::panic;
 
-use crate::core::hir_def::{
-    ArithBinOp, BinOp, Expr, ExprId, FieldIndex, IdentId, Partial, Pat, PatId, PathId, UnOp,
-    VariantKind,
-};
-
 use common::ingot::IngotKind;
 use either::Either;
 
+use crate::core::hir_def::{
+    ArithBinOp, BinOp, CallableDef, Expr, ExprId, FieldIndex, IdentId, Partial, Pat, PatId, PathId,
+    UnOp, VariantKind, WithBinding, scope_graph::ScopeId,
+};
+use crate::span::DynLazySpan;
+
 use super::{
     RecordLike, Typeable,
-    env::{ExprProp, LocalBinding, TyCheckEnv},
+    env::{EffectOrigin, ExprProp, LocalBinding, ProvidedEffect, TyCheckEnv},
     path::ResolvedPathInBody,
 };
 use crate::analysis::ty::{
+    binder::Binder,
+    canonical::Canonicalized,
     diagnostics::{BodyDiag, FuncBodyDiag},
     fold::{AssocTySubst, TyFoldable as _},
     trait_def::TraitInstId,
+    trait_resolution::{
+        GoalSatisfiability, PredicateListId,
+        constraint::{collect_constraints, collect_func_def_constraints},
+        is_goal_satisfiable,
+    },
     ty_check::callable::Callable,
     ty_def::{TyBase, TyData},
 };
 use crate::analysis::{
     HirAnalysisDb, Spanned,
     name_resolution::{
-        EarlyNameQueryId, ExpectedPathKind, NameDomain, NameResBucket, PathRes, QueryDirective,
+        EarlyNameQueryId, ExpectedPathKind, NameDomain, NameResBucket, NameResolutionError,
+        PathRes, QueryDirective,
         diagnostics::PathResDiag,
         is_scope_visible_from,
         method_selection::{MethodCandidate, MethodSelectionError, select_method_candidate},
         resolve_ident_to_bucket, resolve_name_res, resolve_path, resolve_query,
     },
     ty::{
-        canonical::Canonicalized,
         const_ty::ConstTyId,
         normalize::normalize_ty,
         ty_check::{TyChecker, path::RecordInitChecker},
         ty_def::{InvalidCause, TyId},
+        ty_lower::lower_hir_ty,
     },
 };
+
+enum EffectRequirement<'db> {
+    Type(TyId<'db>),
+    Trait(TraitInstId<'db>),
+}
 
 impl<'db> TyChecker<'db> {
     pub(super) fn check_expr(&mut self, expr: ExprId, expected: TyId<'db>) -> ExprProp<'db> {
@@ -66,6 +80,7 @@ impl<'db> TyChecker<'db> {
             Expr::Match(..) => self.check_match(expr, expr_data),
             Expr::Assign(..) => self.check_assign(expr, expr_data),
             Expr::AugAssign(..) => self.check_aug_assign(expr, expr_data),
+            Expr::With(bindings, body) => self.check_with(bindings, *body, expected),
         };
         self.env.leave_expr();
 
@@ -182,6 +197,41 @@ impl<'db> TyChecker<'db> {
         self.check_ops_trait(expr, lhs.ty, &op, Some(rhs_expr))
     }
 
+    fn check_with(
+        &mut self,
+        bindings: &[WithBinding<'db>],
+        body_expr: ExprId,
+        expected: TyId<'db>,
+    ) -> ExprProp<'db> {
+        self.env.push_effect_frame();
+
+        for binding in bindings {
+            let value_prop = self.check_expr_unknown(binding.value);
+            let Some(key_path) = binding.key_path.to_opt() else {
+                continue;
+            };
+
+            let is_mut = value_prop
+                .binding()
+                .map(|b| b.is_mut())
+                .unwrap_or(value_prop.is_mut);
+
+            let provided = ProvidedEffect {
+                origin: EffectOrigin::With {
+                    value_expr: binding.value,
+                },
+                ty: value_prop.ty,
+                is_mut,
+            };
+
+            self.env.insert_effect_binding(key_path, provided);
+        }
+
+        let result = self.check_expr(body_expr, expected);
+        self.env.pop_effect_frame();
+        result
+    }
+
     fn check_call(&mut self, expr: ExprId, expr_data: &Expr<'db>) -> ExprProp<'db> {
         let Expr::Call(callee, args) = expr_data else {
             unreachable!()
@@ -222,11 +272,173 @@ impl<'db> TyChecker<'db> {
 
         callable.check_args(self, args, call_span.args(), None);
 
+        self.check_callable_effects(expr, &callable);
+
         let ret_ty = callable.ret_ty(self.db);
         // Normalize the return type to resolve any associated types
         let normalized_ret_ty = self.normalize_ty(ret_ty);
         self.env.register_callable(expr, callable);
         ExprProp::new(normalized_ret_ty, true)
+    }
+
+    fn check_callable_effects(&mut self, expr: ExprId, callable: &Callable<'db>) {
+        let CallableDef::Func(func) = callable.callable_def else {
+            return;
+        };
+
+        let effect_params = func.effects(self.db).data(self.db);
+        if effect_params.is_empty() {
+            return;
+        }
+
+        let call_span = expr.span(self.body());
+        let callee_assumptions = collect_func_def_constraints(self.db, func.into(), true)
+            .instantiate_identity()
+            .extend_all_bounds(self.db);
+
+        for effect in effect_params {
+            let Some(key_path) = effect.key_path.to_opt() else {
+                continue;
+            };
+
+            let cands =
+                self.env
+                    .effect_candidates_in_scope(key_path, func.scope(), callee_assumptions);
+            let provided = match cands.as_slice() {
+                [] => {
+                    let diag = BodyDiag::MissingEffect {
+                        primary: call_span.clone().into(),
+                        func: func,
+                        key: key_path,
+                    };
+                    self.push_diag(diag);
+                    continue;
+                }
+                [one] => *one,
+                _ => {
+                    let diag = BodyDiag::AmbiguousEffect {
+                        primary: call_span.clone().into(),
+                        func: func,
+                        key: key_path,
+                    };
+                    self.push_diag(diag);
+                    continue;
+                }
+            };
+
+            if effect.is_mut && !provided.is_mut {
+                let provided_span = match provided.origin {
+                    EffectOrigin::With { value_expr } => Some(value_expr.span(self.body()).into()),
+                    EffectOrigin::Param { .. } => None,
+                };
+                let diag = BodyDiag::EffectMutabilityMismatch {
+                    primary: call_span.clone().into(),
+                    func: func,
+                    key: key_path,
+                    provided_span,
+                };
+                self.push_diag(diag);
+                continue;
+            }
+
+            let Some(requirement) = self.resolve_effect_requirement(
+                key_path,
+                callable,
+                func.scope(),
+                callee_assumptions,
+                provided.ty,
+            ) else {
+                continue;
+            };
+
+            match requirement {
+                EffectRequirement::Type(expected) => {
+                    if self.table.unify(expected, provided.ty).is_err() {
+                        let provided_span = match provided.origin {
+                            EffectOrigin::With { value_expr } => {
+                                Some(value_expr.span(self.body()).into())
+                            }
+                            EffectOrigin::Param { .. } => None,
+                        };
+                        let diag = BodyDiag::EffectTypeMismatch {
+                            primary: call_span.clone().into(),
+                            func: func,
+                            key: key_path,
+                            expected,
+                            given: provided.ty,
+                            provided_span,
+                        };
+                        self.push_diag(diag);
+                    }
+                }
+                EffectRequirement::Trait(trait_req) => {
+                    let canonical = Canonicalized::new(self.db, trait_req);
+                    let ingot = self.env.body().top_mod(self.db).ingot(self.db);
+                    match is_goal_satisfiable(
+                        self.db,
+                        ingot,
+                        canonical.value,
+                        self.env.assumptions(),
+                    ) {
+                        GoalSatisfiability::UnSat(_) => {
+                            let provided_span = match provided.origin {
+                                EffectOrigin::With { value_expr } => {
+                                    Some(value_expr.span(self.body()).into())
+                                }
+                                EffectOrigin::Param { .. } => None,
+                            };
+                            let diag = BodyDiag::EffectTraitUnsatisfied {
+                                primary: call_span.clone().into(),
+                                func: func,
+                                key: key_path,
+                                trait_req,
+                                given: provided.ty,
+                                provided_span,
+                            };
+                            self.push_diag(diag);
+                        }
+                        GoalSatisfiability::ContainsInvalid => {}
+                        _ => {}
+                    }
+                }
+            }
+        }
+    }
+
+    fn resolve_effect_requirement(
+        &mut self,
+        key_path: PathId<'db>,
+        callable: &Callable<'db>,
+        scope: ScopeId<'db>,
+        assumptions: PredicateListId<'db>,
+        provided_ty: TyId<'db>,
+    ) -> Option<EffectRequirement<'db>> {
+        let path_res = resolve_path(self.db, key_path, scope, assumptions, false).ok()?;
+
+        match path_res {
+            PathRes::Ty(ty) | PathRes::TyAlias(_, ty) => {
+                let mut expected = Binder::bind(ty).instantiate(self.db, callable.generic_args());
+                if let Some(inst) = callable.trait_inst() {
+                    let mut subst = AssocTySubst::new(inst);
+                    expected = expected.fold_with(self.db, &mut subst);
+                }
+                Some(EffectRequirement::Type(expected))
+            }
+            PathRes::Trait(trait_inst) => {
+                let mut instantiation_args = Vec::with_capacity(1 + callable.generic_args().len());
+                instantiation_args.push(provided_ty);
+                instantiation_args.extend_from_slice(callable.generic_args());
+
+                let mut trait_req =
+                    Binder::bind(trait_inst).instantiate(self.db, &instantiation_args);
+                if let Some(inst) = callable.trait_inst() {
+                    let mut subst = AssocTySubst::new(inst);
+                    trait_req = trait_req.fold_with(self.db, &mut subst);
+                }
+                Some(EffectRequirement::Trait(trait_req))
+            }
+            _ => None,
+        }
     }
 
     fn check_method_call(&mut self, expr: ExprId, expr_data: &Expr<'db>) -> ExprProp<'db> {
@@ -365,6 +577,9 @@ impl<'db> TyChecker<'db> {
             Some((*receiver, receiver_prop)),
         );
 
+        // Check required effects for the method call
+        self.check_callable_effects(expr, &callable);
+
         // Check function constraints after instantiation
         callable.check_constraints(self, call_span.method_name().into());
 
@@ -389,7 +604,8 @@ impl<'db> TyChecker<'db> {
         let path_span = path_expr_span.clone().path();
 
         let res = if path.is_bare_ident(self.db) {
-            resolve_ident_expr(self.db, &self.env, *path)
+            let ident_span: DynLazySpan<'db> = path_expr_span.clone().into();
+            resolve_ident_expr(self.db, &self.env, *path, ident_span)
         } else {
             match self.resolve_path(*path, true, path_span.clone()) {
                 Ok(r) => ResolvedPathInBody::Reso(r),
@@ -520,6 +736,36 @@ impl<'db> TyChecker<'db> {
                     };
                     ExprProp::new(self.table.instantiate_to_term(method_ty), true)
                 }
+                PathRes::TraitConst(_recv_ty, inst, name) => {
+                    // Look up the associated const's declared type in the trait and
+                    // instantiate it with the trait instance's args (including Self).
+                    let trait_ = inst.def(self.db);
+                    if let Some(decl) = trait_
+                        .consts(self.db)
+                        .iter()
+                        .find(|c| c.name.to_opt() == Some(name))
+                        && let Some(hir_ty) = decl.ty.to_opt()
+                    {
+                        // Lower in the trait's scope so `Self` and trait params are visible
+                        // Build assumptions from the trait's own constraints instantiated with
+                        // the current trait instance args, so references like `A::Selector`
+                        // can be resolved during lowering.
+                        let trait_assumptions =
+                            collect_constraints(self.db, trait_.into())
+                                .instantiate_identity();
+
+                        let lowered =
+                            lower_hir_ty(self.db, hir_ty, trait_.scope(), trait_assumptions);
+                        // Instantiate with the concrete args of the trait instance
+                        let instantiated =
+                            Binder::bind(lowered).instantiate(self.db, inst.args(self.db));
+                        let ty = self.table.instantiate_to_term(instantiated);
+                        ExprProp::new(ty, true)
+                    } else {
+                        // Fallback to invalid type if the declaration isn't found
+                        ExprProp::invalid(self.db)
+                    }
+                }
                 PathRes::Mod(_) | PathRes::FuncParam(..) => todo!(),
             },
         }
@@ -553,7 +799,7 @@ impl<'db> TyChecker<'db> {
                 }
             }
 
-            PathRes::Func(ty) | PathRes::Const(_, ty) => {
+            PathRes::Func(ty) | PathRes::Const(_, ty) | PathRes::TraitConst(ty, ..) => {
                 let record_like = RecordLike::from_ty(ty);
                 let diag =
                     BodyDiag::record_expected(self.db, span.path().into(), Some(record_like));
@@ -1245,10 +1491,40 @@ fn resolve_ident_expr<'db>(
     db: &'db dyn HirAnalysisDb,
     env: &TyCheckEnv<'db>,
     path: PathId<'db>,
+    ident_span: DynLazySpan<'db>,
 ) -> ResolvedPathInBody<'db> {
     let ident = path.ident(db).unwrap();
 
     let resolve_bucket = |bucket: &NameResBucket<'db>, scope| {
+        // First, surface any ambiguity/conflict in the bucket as a dedicated
+        // name-resolution diagnostic instead of silently degrading to
+        // "undefined variable".
+        for (_, err) in bucket.errors() {
+            match err {
+                NameResolutionError::Ambiguous(cands) => {
+                    let mut cand_spans = Vec::new();
+                    for name in cands.iter() {
+                        if let Some(span) = name.kind.name_span(db) {
+                            let from_prelude = name
+                                .derivation
+                                .use_stmt()
+                                .map(|use_| use_.is_prelude_use(db))
+                                .unwrap_or(false);
+                            cand_spans.push((span, from_prelude));
+                        }
+                    }
+
+                    let diag = PathResDiag::Ambiguous(ident_span.clone(), ident, cand_spans);
+                    return ResolvedPathInBody::Diag(diag.into());
+                }
+                NameResolutionError::Conflict(conf_ident, spans) => {
+                    let diag = PathResDiag::Conflict(*conf_ident, spans.clone());
+                    return ResolvedPathInBody::Diag(diag.into());
+                }
+                _ => {}
+            }
+        }
+
         let Ok(res) = bucket.pick_any(&[NameDomain::VALUE, NameDomain::TYPE]) else {
             return ResolvedPathInBody::Invalid;
         };

@@ -1,7 +1,28 @@
 ---
 source: crates/uitest/tests/name_resolution.rs
-assertion_line: 26
 expression: diags
 input_file: fixtures/name_resolution/import_ambiguous.fe
 ---
+error[2-0004]: `S` is ambiguous
+   ┌─ import_ambiguous.fe:2:9
+   │
+ 2 │ pub use S
+   │         ^ `S` is ambiguous
+   ·
+11 │         pub struct S {}
+   │                    - candidate 1
+   ·
+14 │         pub struct S {}
+   │                    - candidate 2
 
+error[2-0004]: `S` is ambiguous
+   ┌─ import_ambiguous.fe:7:13
+   │
+ 7 │     pub use S
+   │             ^ `S` is ambiguous
+   ·
+11 │         pub struct S {}
+   │                    - candidate 1
+   ·
+14 │         pub struct S {}
+   │                    - candidate 2

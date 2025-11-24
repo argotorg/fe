@@ -6,7 +6,7 @@ use crate::{
         trait_lower::collect_trait_impls,
         trait_resolution::{GoalSatisfiability, PredicateListId},
     },
-    hir_def::{HirIngot, IdentId, ImplTrait, Trait},
+    hir_def::{Func, HirIngot, IdentId, ImplTrait, Trait},
 };
 use common::{
     indexmap::{IndexMap, IndexSet},
@@ -82,6 +82,26 @@ fn ingot_trait_env_cycle_recover<'db>(
 ) -> salsa::CycleRecoveryAction<TraitEnv<'db>> {
     // Continue iterating to try to resolve the cycle
     salsa::CycleRecoveryAction::Iterate
+}
+
+/// Resolves the concrete HIR function that implements `method` for the given trait inst.
+pub fn resolve_trait_method<'db>(
+    db: &'db dyn HirAnalysisDb,
+    inst: TraitInstId<'db>,
+    method: IdentId<'db>,
+) -> Option<Func<'db>> {
+    
+    let ingot = inst.def(db).ingot(db);
+    let canonical = Canonical::new(db, inst);
+    for implementor in impls_for_trait(db, ingot, canonical) {
+        let implementor = implementor.instantiate_identity();
+        if let Some(callable) = implementor.methods(db).get(&method)
+            && let CallableDef::Func(func) = callable
+        {
+            return Some(*func);
+        }
+    }
+    None
 }
 
 /// Returns all implementors for the given `ty` that satisfy the given assumptions.

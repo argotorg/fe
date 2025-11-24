@@ -1,0 +1,45 @@
+// Test nested generic type effects with different type parameters
+pub struct Storage<T> {
+    pub value: T
+}
+
+pub fn read_u8() -> u8
+  uses (st: Storage<u8>)
+{
+    st.value
+}
+
+pub fn read_u16() -> u16
+  uses (st: Storage<u16>)
+{
+    st.value
+}
+
+pub fn write_u8(val: u8)
+  uses (mut st: Storage<u8>)
+{
+    st.value = val
+}
+
+pub fn nested_storage() -> (u8, u16, u8) {
+    let storage_u8 = Storage<u8> { value: 42 }
+    with (Storage<u8> = storage_u8) {
+        let val1 = read_u8()
+
+        let storage_u16 = Storage<u16> { value: 1000 }
+        with (Storage<u16> = storage_u16) {
+            let val2 = read_u8()    // should use storage_u8
+            let val3 = read_u16()   // should use storage_u16
+            (val1, val3, val2)
+        }
+    }
+}
+
+pub fn mutable_storage() {
+    let mut storage = Storage<u8> { value: 10 }
+    with (Storage<u8> = storage) {
+        write_u8(val: 20)
+        let _ = read_u8()
+        ()
+    }
+}

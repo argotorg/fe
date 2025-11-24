@@ -803,6 +803,7 @@ impl NameDomain {
                 }
             }
             ScopeId::TraitType(..) => Self::TYPE,
+            ScopeId::TraitConst(..) => Self::VALUE,
             ScopeId::Field(..) => Self::FIELD,
             ScopeId::Variant(..) => Self::VALUE,
         }

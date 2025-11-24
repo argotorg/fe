@@ -1,0 +1,7 @@
+pub fn if_else(cond: bool) -> u64 {
+    if cond {
+        1
+    } else {
+        2
+    }
+}

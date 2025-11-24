@@ -92,6 +92,11 @@ impl Func {
     pub fn body(&self) -> Option<super::BlockExpr> {
         support::child(self.syntax())
     }
+
+    /// Returns the optional `uses` clause of the function.
+    pub fn uses_clause(&self) -> Option<super::UsesClause> {
+        support::child(self.syntax())
+    }
 }
 
 ast_node! {
@@ -236,8 +241,32 @@ impl TraitTypeItem {
 }
 
 ast_node! {
+    /// `const FOO: Ty` in trait definition
+    /// or `const FOO: Ty = expr` in trait implementation
+    pub struct TraitConstItem,
+    SK::TraitConstItem,
+}
+impl super::AttrListOwner for TraitConstItem {}
+impl TraitConstItem {
+    /// Returns the name of the associated const
+    pub fn name(&self) -> Option<SyntaxToken> {
+        support::token(self.syntax(), SK::Ident)
+    }
+
+    /// Returns the type of the associated const
+    pub fn ty(&self) -> Option<super::Type> {
+        support::child(self.syntax())
+    }
+
+    /// Returns the optional default value of the associated const
+    pub fn value(&self) -> Option<super::Expr> {
+        support::child(self.syntax())
+    }
+}
+
+ast_node! {
     pub struct TraitItem,
-    SK::Func | SK::TraitTypeItem
+    SK::Func | SK::TraitTypeItem | SK::TraitConstItem
 }
 impl TraitItem {
     pub fn kind(&self) -> TraitItemKind {
@@ -245,6 +274,9 @@ impl TraitItem {
             SK::Func => TraitItemKind::Func(AstNode::cast(self.syntax().clone()).unwrap()),
             SK::TraitTypeItem => {
                 TraitItemKind::Type(TraitTypeItem::cast(self.syntax().clone()).unwrap())
+            }
+            SK::TraitConstItem => {
+                TraitItemKind::Const(TraitConstItem::cast(self.syntax().clone()).unwrap())
             }
             _ => unreachable!(),
         }
@@ -254,6 +286,7 @@ impl TraitItem {
 pub enum TraitItemKind {
     Func(Func),
     Type(TraitTypeItem),
+    Const(TraitConstItem),
 }
 
 ast_node! {
@@ -521,6 +554,9 @@ mod tests {
         }
         let item_list = ItemList::cast(node).unwrap();
         let mut items = item_list.into_iter().collect::<Vec<_>>();
+        if items.len() > 1 {
+            error!("expected one item, got: {:?}", &items);
+        }
         assert_eq!(items.len(), 1);
         items.pop().unwrap().kind().unwrap().try_into().unwrap()
     }
@@ -562,7 +598,7 @@ mod tests {
     fn func() {
         let source = r#"
                 /// This is doc comment
-                #evm
+                #[evm]
                 pub unsafe fn foo<T, U: Trait>(_ x: T, from u: U) -> (T, U) where T: Trait2 { return }
             "#;
         let func: Func = parse_item(source);

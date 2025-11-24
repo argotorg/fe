@@ -4,7 +4,8 @@ use std::fmt;
 
 use crate::{
     hir_def::{
-        Body, Enum, GenericParamOwner, IdentId, IntegerId, PathId, TypeAlias as HirTypeAlias,
+        Body, Enum, GenericParamOwner, IdentId, IntegerId, ItemKind, PathId,
+        TypeAlias as HirTypeAlias,
         prim_ty::{IntTy as HirIntTy, PrimTy as HirPrimTy, UintTy as HirUintTy},
         scope_graph::ScopeId,
     },
@@ -183,7 +184,7 @@ impl<'db> TyId<'db> {
 
         let ty_ingot = self.ingot(db);
         match ingot.kind(db) {
-            IngotKind::Core => ty_ingot.is_none() || ty_ingot == Some(ingot),
+            IngotKind::Core | IngotKind::Std => ty_ingot.is_none() || ty_ingot == Some(ingot),
             _ => ty_ingot == Some(ingot),
         }
     }
@@ -262,7 +263,8 @@ impl<'db> TyId<'db> {
         Self::new(db, TyData::TyBase(TyBase::Adt(adt)))
     }
 
-    pub(crate) fn func(db: &'db dyn HirAnalysisDb, func: CallableDef<'db>) -> Self {
+    // TODO: Add semantic view and restrict visibility
+    pub fn func(db: &'db dyn HirAnalysisDb, func: CallableDef<'db>) -> Self {
         Self::new(db, TyData::TyBase(TyBase::Func(func)))
     }
 
@@ -966,6 +968,19 @@ impl<'db> TyParam<'db> {
     }
 
     pub(super) fn pretty_print(&self, db: &dyn HirAnalysisDb) -> String {
+        // For effect parameters, show `name: Trait` if possible
+        if self.is_effect() {
+            let name_str = self.name.data(db).to_string();
+            // Attempt to get owning function and retrieve effect key path at this index
+            if let ItemKind::Func(func) = self.owner.item()
+                && let Some(effect) = func.effects(db).data(db).get(self.idx)
+                && let Some(path) = effect.key_path.to_opt()
+                && let Some(trait_ident) = path.ident(db).to_opt()
+            {
+                return format!("{}: {}", name_str, trait_ident.data(db));
+            }
+            return name_str;
+        }
         self.name.data(db).to_string()
     }
 
@@ -975,6 +990,10 @@ impl<'db> TyParam<'db> {
 
     pub fn is_normal(&self) -> bool {
         matches!(self.variant, Variant::Normal)
+    }
+
+    pub fn is_effect(&self) -> bool {
+        matches!(self.variant, Variant::Effect)
     }
 
     pub(super) fn normal_param(
@@ -1002,20 +1021,38 @@ impl<'db> TyParam<'db> {
         }
     }
 
-    pub fn original_idx(&self, db: &'db dyn HirAnalysisDb) -> usize {
-        let owner = GenericParamOwner::from_item_opt(self.owner.item()).unwrap();
-        let param_set = collect_generic_params(db, owner);
-        let offset = param_set.offset_to_explicit_params_position(db);
+    /// Create an effect parameter TyParam local to a function body.
+    pub fn effect_param(name: IdentId<'db>, idx: usize, scope: ScopeId<'db>) -> Self {
+        Self {
+            name,
+            idx,
+            kind: Kind::Star,
+            variant: Variant::Effect,
+            owner: scope,
+        }
+    }
 
-        // TyParam.idx includes implicit params, subtract offset to get original idx
-        self.idx - offset
+    pub fn original_idx(&self, db: &'db dyn HirAnalysisDb) -> usize {
+        match self.variant {
+            Variant::Normal | Variant::TraitSelf => {
+                let owner = GenericParamOwner::from_item_opt(self.owner.item()).unwrap();
+                let param_set = collect_generic_params(db, owner);
+                let offset = param_set.offset_to_explicit_params_position(db);
+
+                // TyParam.idx includes implicit params, subtract offset to get original idx
+                self.idx - offset
+            }
+            Variant::Effect => self.idx,
+        }
     }
 
     pub fn scope(&self, db: &'db dyn HirAnalysisDb) -> ScopeId<'db> {
-        if self.is_trait_self() {
-            self.owner
-        } else {
-            ScopeId::GenericParam(self.owner.item(), self.original_idx(db) as u16)
+        match self.variant {
+            Variant::TraitSelf => self.owner,
+            Variant::Normal => {
+                ScopeId::GenericParam(self.owner.item(), self.original_idx(db) as u16)
+            }
+            Variant::Effect => ScopeId::FuncParam(self.owner.item(), self.idx as u16),
         }
     }
 }
@@ -1024,6 +1061,8 @@ impl<'db> TyParam<'db> {
 enum Variant {
     Normal,
     TraitSelf,
+    /// Effect parameter local to a function `uses` list
+    Effect,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, derive_more::From, Update)]

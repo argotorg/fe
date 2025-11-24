@@ -1232,6 +1232,10 @@ impl<'db> ImplTrait<'db> {
         diags.extend(self.diags_missing_assoc_types(db));
         diags.extend(self.diags_assoc_types_bounds(db));
 
+        // Associated const diagnostics (presence + values)
+        diags.extend(self.diags_missing_assoc_consts(db));
+        diags.extend(self.diags_assoc_const_values(db));
+
         // Generic parameter diagnostics
         let owner = GenericParamOwner::ImplTrait(self);
         diags.extend(owner.diags_params_defined_in_parent(db));

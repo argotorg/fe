@@ -169,7 +169,8 @@ impl<'db> TyChecker<'db> {
                     PathRes::Ty(ty)
                     | PathRes::TyAlias(_, ty)
                     | PathRes::Func(ty)
-                    | PathRes::Const(_, ty),
+                    | PathRes::Const(_, ty)
+                    | PathRes::TraitConst(ty, ..),
                 ) => {
                     let record_like = RecordLike::from_ty(ty);
                     if record_like.is_record(self.db) {
@@ -237,7 +238,8 @@ impl<'db> TyChecker<'db> {
                 PathRes::Ty(ty)
                 | PathRes::TyAlias(_, ty)
                 | PathRes::Func(ty)
-                | PathRes::Const(_, ty) => {
+                | PathRes::Const(_, ty)
+                | PathRes::TraitConst(ty, ..) => {
                     let diag = BodyDiag::tuple_variant_expected(
                         self.db,
                         pat.span(self.body()).into(),
@@ -283,7 +285,16 @@ impl<'db> TyChecker<'db> {
                     return TyId::invalid(self.db, InvalidCause::Other);
                 }
             },
-            Err(_) => return TyId::invalid(self.db, InvalidCause::Other),
+            Err(_) => {
+                // Even when constructor resolution fails (including ambiguity),
+                // still walk element patterns so that variable bindings inside
+                // the tuple pattern are registered. This mirrors the recovery
+                // strategy used for tuple patterns in `check_tuple_pat`.
+                for &elem_pat in elems {
+                    self.check_pat(elem_pat, TyId::invalid(self.db, InvalidCause::Other));
+                }
+                return TyId::invalid(self.db, InvalidCause::Other);
+            }
         };
 
         let expected_len = expected_elems.len(self.db);
@@ -368,7 +379,8 @@ impl<'db> TyChecker<'db> {
                 PathRes::Ty(ty)
                 | PathRes::TyAlias(_, ty)
                 | PathRes::Func(ty)
-                | PathRes::Const(_, ty) => {
+                | PathRes::Const(_, ty)
+                | PathRes::TraitConst(ty, ..) => {
                     let diag = BodyDiag::record_expected(
                         self.db,
                         pat.span(self.body()).into(),
