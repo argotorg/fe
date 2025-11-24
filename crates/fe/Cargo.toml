@@ -16,9 +16,11 @@ hir.workspace = true
 mir.workspace = true
 cranelift-entity.workspace = true
 codegen = { path = "../codegen", package = "fe-codegen" }
-ratatui.workspace = true
-crossterm.workspace = true
 
 [dev-dependencies]
 dir-test.workspace = true
 test-utils.workspace = true
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+ratatui.workspace = true
+crossterm.workspace = true
