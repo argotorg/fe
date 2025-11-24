@@ -21,8 +21,7 @@ use crate::analysis::ty::{
     fold::{AssocTySubst, TyFoldable as _},
     trait_def::TraitInstId,
     trait_resolution::{
-        GoalSatisfiability, PredicateListId,
-        constraint::{collect_constraints, collect_func_def_constraints},
+        GoalSatisfiability, PredicateListId, constraint::collect_func_def_constraints,
         is_goal_satisfiable,
     },
     ty_check::callable::Callable,
@@ -43,7 +42,6 @@ use crate::analysis::{
         normalize::normalize_ty,
         ty_check::{TyChecker, path::RecordInitChecker},
         ty_def::{InvalidCause, TyId},
-        ty_lower::lower_hir_ty,
     },
 };
 
@@ -286,8 +284,7 @@ impl<'db> TyChecker<'db> {
             return;
         };
 
-        let effect_params = func.effects(self.db).data(self.db);
-        if effect_params.is_empty() {
+        if !func.has_effects(self.db) {
             return;
         }
 
@@ -296,8 +293,8 @@ impl<'db> TyChecker<'db> {
             .instantiate_identity()
             .extend_all_bounds(self.db);
 
-        for effect in effect_params {
-            let Some(key_path) = effect.key_path.to_opt() else {
+        for effect in func.effect_params(self.db) {
+            let Some(key_path) = effect.key_path(self.db) else {
                 continue;
             };
 
@@ -308,7 +305,7 @@ impl<'db> TyChecker<'db> {
                 [] => {
                     let diag = BodyDiag::MissingEffect {
                         primary: call_span.clone().into(),
-                        func: func,
+                        func,
                         key: key_path,
                     };
                     self.push_diag(diag);
@@ -318,7 +315,7 @@ impl<'db> TyChecker<'db> {
                 _ => {
                     let diag = BodyDiag::AmbiguousEffect {
                         primary: call_span.clone().into(),
-                        func: func,
+                        func,
                         key: key_path,
                     };
                     self.push_diag(diag);
@@ -326,14 +323,14 @@ impl<'db> TyChecker<'db> {
                 }
             };
 
-            if effect.is_mut && !provided.is_mut {
+            if effect.is_mut(self.db) && !provided.is_mut {
                 let provided_span = match provided.origin {
                     EffectOrigin::With { value_expr } => Some(value_expr.span(self.body()).into()),
                     EffectOrigin::Param { .. } => None,
                 };
                 let diag = BodyDiag::EffectMutabilityMismatch {
                     primary: call_span.clone().into(),
-                    func: func,
+                    func,
                     key: key_path,
                     provided_span,
                 };
@@ -362,7 +359,7 @@ impl<'db> TyChecker<'db> {
                         };
                         let diag = BodyDiag::EffectTypeMismatch {
                             primary: call_span.clone().into(),
-                            func: func,
+                            func,
                             key: key_path,
                             expected,
                             given: provided.ty,
@@ -389,7 +386,7 @@ impl<'db> TyChecker<'db> {
                             };
                             let diag = BodyDiag::EffectTraitUnsatisfied {
                                 primary: call_span.clone().into(),
-                                func: func,
+                                func,
                                 key: key_path,
                                 trait_req,
                                 given: provided.ty,
@@ -740,25 +737,11 @@ impl<'db> TyChecker<'db> {
                     // Look up the associated const's declared type in the trait and
                     // instantiate it with the trait instance's args (including Self).
                     let trait_ = inst.def(self.db);
-                    if let Some(decl) = trait_
-                        .consts(self.db)
-                        .iter()
-                        .find(|c| c.name.to_opt() == Some(name))
-                        && let Some(hir_ty) = decl.ty.to_opt()
+                    if let Some(const_view) = trait_.const_(self.db, name)
+                        && let Some(ty_binder) = const_view.ty_binder(self.db)
                     {
-                        // Lower in the trait's scope so `Self` and trait params are visible
-                        // Build assumptions from the trait's own constraints instantiated with
-                        // the current trait instance args, so references like `A::Selector`
-                        // can be resolved during lowering.
-                        let trait_assumptions =
-                            collect_constraints(self.db, trait_.into())
-                                .instantiate_identity();
-
-                        let lowered =
-                            lower_hir_ty(self.db, hir_ty, trait_.scope(), trait_assumptions);
                         // Instantiate with the concrete args of the trait instance
-                        let instantiated =
-                            Binder::bind(lowered).instantiate(self.db, inst.args(self.db));
+                        let instantiated = ty_binder.instantiate(self.db, inst.args(self.db));
                         let ty = self.table.instantiate_to_term(instantiated);
                         ExprProp::new(ty, true)
                     } else {

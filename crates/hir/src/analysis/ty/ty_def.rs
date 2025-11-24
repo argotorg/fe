@@ -973,8 +973,8 @@ impl<'db> TyParam<'db> {
             let name_str = self.name.data(db).to_string();
             // Attempt to get owning function and retrieve effect key path at this index
             if let ItemKind::Func(func) = self.owner.item()
-                && let Some(effect) = func.effects(db).data(db).get(self.idx)
-                && let Some(path) = effect.key_path.to_opt()
+                && let Some(view) = func.effect_params(db).nth(self.idx)
+                && let Some(path) = view.key_path(db)
                 && let Some(trait_ident) = path.ident(db).to_opt()
             {
                 return format!("{}: {}", name_str, trait_ident.data(db));

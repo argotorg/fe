@@ -1,10 +1,6 @@
 use std::{error::Error, fmt};
 
 use common::ingot::IngotKind;
-use hir::hir_def::{
-    Body, CallableDef, Const, Expr, ExprId, Field, FieldIndex, Func, IdentId, LitKind, MatchArm,
-    Partial, Pat, PatId, PathId, Stmt, StmtId, TopLevelMod, scope_graph::ScopeId,
-};
 use hir::analysis::{
     HirAnalysisDb,
     name_resolution::{PathRes, path_resolver::resolve_path},
@@ -13,6 +9,10 @@ use hir::analysis::{
         ty_check::{Callable, RecordLike, TypedBody, check_func_body},
         ty_def::{PrimTy, TyBase, TyData, TyId},
     },
+};
+use hir::hir_def::{
+    Body, CallableDef, Const, Expr, ExprId, Field, FieldIndex, Func, IdentId, LitKind, MatchArm,
+    Partial, Pat, PatId, PathId, Stmt, StmtId, TopLevelMod, scope_graph::ScopeId,
 };
 
 use crate::{

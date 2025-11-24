@@ -447,7 +447,10 @@ impl<'db> Func<'db> {
     }
 
     /// Iterate effect parameters as contextual views.
-    pub fn effect_params(self, db: &'db dyn HirDb) -> impl Iterator<Item = EffectParamView<'db>> + 'db {
+    pub fn effect_params(
+        self,
+        db: &'db dyn HirDb,
+    ) -> impl Iterator<Item = EffectParamView<'db>> + 'db {
         let len = self.effects(db).data(db).len();
         (0..len).map(move |idx| EffectParamView { func: self, idx })
     }
@@ -783,6 +786,27 @@ impl<'db> Trait<'db> {
     ) -> impl Iterator<Item = TraitAssocConstView<'db>> + 'db {
         let len = self.consts(db).len();
         (0..len).map(move |idx| TraitAssocConstView { owner: self, idx })
+    }
+
+    /// Get an associated const view by name, if it exists.
+    pub fn const_(
+        self,
+        db: &'db dyn HirDb,
+        name: IdentId<'db>,
+    ) -> Option<TraitAssocConstView<'db>> {
+        self.assoc_consts(db).find(|c| c.name(db) == Some(name))
+    }
+
+    /// Get the index of an associated const by name, if it exists.
+    pub fn const_index(self, db: &'db dyn HirDb, name: IdentId<'db>) -> Option<usize> {
+        self.assoc_consts(db)
+            .enumerate()
+            .find_map(|(idx, c)| (c.name(db) == Some(name)).then_some(idx))
+    }
+
+    /// Get an associated const view by its index.
+    pub fn const_by_index(self, idx: usize) -> TraitAssocConstView<'db> {
+        TraitAssocConstView { owner: self, idx }
     }
 
     /// Iterate declared super-trait references as contextual views.
@@ -1272,6 +1296,11 @@ impl<'db> ImplTrait<'db> {
         (0..len).map(move |idx| ImplAssocConstView { owner: self, idx })
     }
 
+    /// Get an associated const view by name, if it exists in this impl-trait block.
+    pub fn const_(self, db: &'db dyn HirDb, name: IdentId<'db>) -> Option<ImplAssocConstView<'db>> {
+        self.assoc_consts(db).find(|c| c.name(db) == Some(name))
+    }
+
     /// Diagnostics for missing associated types (required by the trait).
     /// Aggregate impl-trait definition diagnostics using semantic views.
     /// Includes:
@@ -1650,6 +1679,12 @@ impl<'db> TraitAssocConstView<'db> {
         let trait_ = self.owner;
         let assumptions = constraints_for(db, trait_.into());
         Some(lower_hir_ty(db, hir, trait_.scope(), assumptions))
+    }
+
+    /// Semantic type of this associated const as a Binder, suitable for
+    /// instantiation with trait args.
+    pub fn ty_binder(self, db: &'db dyn HirAnalysisDb) -> Option<Binder<TyId<'db>>> {
+        self.ty(db).map(Binder::bind)
     }
 }
 

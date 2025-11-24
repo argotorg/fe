@@ -1,10 +1,10 @@
 use std::fmt;
 
+use hir::analysis::ty::ty_check::{Callable, TypedBody};
+use hir::analysis::ty::ty_def::TyId;
 use hir::hir_def::{
     ExprId, Func, PatId, StmtId, TopLevelMod, TypeId as HirTypeId, expr::ArithBinOp,
 };
-use hir::analysis::ty::ty_check::{Callable, TypedBody};
-use hir::analysis::ty::ty_def::TyId;
 use num_bigint::BigUint;
 use rustc_hash::FxHashMap;
 

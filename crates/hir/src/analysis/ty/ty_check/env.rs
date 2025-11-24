@@ -1,7 +1,7 @@
 use crate::{
     hir_def::{
-        Body, BodyKind, EffectParam, Expr, ExprId, Func, IdentId, IntegerId, Partial, Pat, PatId,
-        PathId, Stmt, StmtId, TraitRefId, prim_ty::PrimTy, scope_graph::ScopeId,
+        Body, BodyKind, Expr, ExprId, Func, IdentId, IntegerId, Partial, Pat, PatId, PathId, Stmt,
+        StmtId, TraitRefId, prim_ty::PrimTy, scope_graph::ScopeId,
     },
     span::DynLazySpan,
 };
@@ -120,15 +120,15 @@ impl<'db> TyCheckEnv<'db> {
     }
 
     fn seed_effects(&mut self, func: Func<'db>) {
-        let effect_data: &[EffectParam<'db>] = func.effects(self.db).data(self.db);
         let assumptions = self.assumptions();
-        for (idx, effect) in effect_data.iter().enumerate() {
-            let Some(key_path) = effect.key_path.to_opt() else {
+        for effect in func.effect_params(self.db) {
+            let idx = effect.index();
+            let Some(key_path) = effect.key_path(self.db) else {
                 continue;
             };
 
             // Create an effect type param E and try to interpret key as a trait bound on E
-            let ident = effect.name.unwrap_or_else(|| {
+            let ident = effect.name(self.db).unwrap_or_else(|| {
                 key_path
                     .ident(self.db)
                     .to_opt()
@@ -156,10 +156,10 @@ impl<'db> TyCheckEnv<'db> {
                 origin: EffectOrigin::Param {
                     func,
                     index: idx,
-                    name: effect.name,
+                    name: effect.name(self.db),
                 },
                 ty: provided_ty,
-                is_mut: effect.is_mut,
+                is_mut: effect.is_mut(self.db),
             };
             if let Some(key) =
                 self.effect_key_for_path_in_scope(key_path, func.scope(), assumptions)
@@ -167,12 +167,12 @@ impl<'db> TyCheckEnv<'db> {
                 self.effect_env.insert(key, provided);
             }
 
-            if let Some(ident) = effect.name {
+            if let Some(ident) = effect.name(self.db) {
                 let binding = LocalBinding::EffectParam {
                     ident,
                     key_path,
                     func,
-                    is_mut: effect.is_mut,
+                    is_mut: effect.is_mut(self.db),
                 };
                 self.var_env
                     .last_mut()

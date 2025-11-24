@@ -475,11 +475,7 @@ impl<'db> PathRes<'db> {
             PathRes::Const(const_, _) => Some(const_.scope()),
             PathRes::TraitConst(_ty, inst, name) => {
                 let trait_ = inst.def(db);
-                let idx = trait_
-                    .consts(db)
-                    .iter()
-                    .position(|c| c.name.to_opt() == Some(*name))
-                    .unwrap() as u16;
+                let idx = trait_.const_index(db, *name).unwrap() as u16;
                 Some(ScopeId::TraitConst(trait_, idx))
             }
             PathRes::TyAlias(alias, _) => Some(alias.alias.scope()),
@@ -782,13 +778,7 @@ where
                 }
 
                 // Associated const on a specific trait instance
-                if resolve_tail_as_value
-                    && trait_inst
-                        .def(db)
-                        .consts(db)
-                        .iter()
-                        .any(|c| c.name.to_opt() == Some(ident))
-                {
+                if resolve_tail_as_value && trait_inst.def(db).const_(db, ident).is_some() {
                     let r = PathRes::TraitConst(trait_inst.self_ty(db), *trait_inst, ident);
                     observer(path, &r);
                     return Ok(r);
@@ -945,11 +935,7 @@ fn select_assoc_const_candidate<'db>(
         let inst = cand.skip_binder().trait_(db);
         let trait_ = inst.def(db);
         // Check if the trait defines the associated const
-        if trait_
-            .consts(db)
-            .iter()
-            .any(|c| c.name.to_opt() == Some(name))
-        {
+        if trait_.const_(db, name).is_some() {
             matches.push(inst);
         }
     }
@@ -1298,7 +1284,7 @@ pub fn resolve_name_res<'db>(
                 trait_args.extend_from_slice(args);
                 let trait_inst = TraitInstId::new(db, t, trait_args, IndexMap::new());
 
-                let const_name = t.consts(db)[idx as usize].name.unwrap();
+                let const_name = t.const_by_index(idx as usize).name(db).unwrap();
                 PathRes::TraitConst(self_ty, trait_inst, const_name)
             }
 

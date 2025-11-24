@@ -3,8 +3,8 @@
 use std::collections::hash_map::DefaultHasher;
 use std::hash::Hasher;
 
-use hir::hir_def::{ExprId, PatId};
 use hir::analysis::HirAnalysisDb;
+use hir::hir_def::{ExprId, PatId};
 use num_bigint::BigUint;
 use rustc_hash::FxHashMap;
 

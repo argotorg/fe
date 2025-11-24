@@ -313,7 +313,7 @@ impl<'db> ScopeId<'db> {
             }
 
             ScopeId::TraitType(t, idx) => t.assoc_ty_by_index(db, idx as usize).name.to_opt(),
-            ScopeId::TraitConst(t, idx) => t.consts(db)[idx as usize].name.to_opt(),
+            ScopeId::TraitConst(t, idx) => t.const_by_index(idx as usize).name(db),
 
             ScopeId::Block(..) => None,
         }

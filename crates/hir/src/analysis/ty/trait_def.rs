@@ -90,7 +90,6 @@ pub fn resolve_trait_method<'db>(
     inst: TraitInstId<'db>,
     method: IdentId<'db>,
 ) -> Option<Func<'db>> {
-    
     let ingot = inst.def(db).ingot(db);
     let canonical = Canonical::new(db, inst);
     for implementor in impls_for_trait(db, ingot, canonical) {

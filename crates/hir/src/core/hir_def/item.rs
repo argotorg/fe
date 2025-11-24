@@ -9,9 +9,8 @@ use common::{file::File, ingot::Ingot};
 use parser::ast;
 
 use super::{
-    AttrListId, Body, EffectParamListId, FuncParamListId, FuncParamName,
-    GenericParamListId, HirIngot, IdentId, Partial, TupleTypeId, TypeBound, TypeId, UseAlias,
-    WhereClauseId,
+    AttrListId, Body, EffectParamListId, FuncParamListId, FuncParamName, GenericParamListId,
+    HirIngot, IdentId, Partial, TupleTypeId, TypeBound, TypeId, UseAlias, WhereClauseId,
     scope_graph::{ScopeGraph, ScopeId},
 };
 use crate::{
@@ -615,8 +614,7 @@ pub struct Func<'db> {
     pub(in crate::core) where_clause: WhereClauseId<'db>,
     // TODO: Add semantic view for FuncParamListId and restrict visibility
     pub params: Partial<FuncParamListId<'db>>,
-    // TODO: Migrate analysis consumers to use Func::effect_params() view, then restrict to pub(in crate::core)
-    pub(crate) effects: EffectParamListId<'db>,
+    pub(in crate::core) effects: EffectParamListId<'db>,
     pub(in crate::core) ret_type_ref: Option<TypeId<'db>>,
     pub modifier: ItemModifier,
     pub body: Option<Body<'db>>,
@@ -913,9 +911,8 @@ pub struct Trait<'db> {
     pub(in crate::core) where_clause: WhereClauseId<'db>,
     #[return_ref]
     pub(in crate::core) types: Vec<AssocTyDecl<'db>>,
-    // TODO: Migrate analysis consumers to use Trait::assoc_consts() view, then restrict to pub(in crate::core)
     #[return_ref]
-    pub(crate) consts: Vec<AssocConstDecl<'db>>,
+    pub(in crate::core) consts: Vec<AssocConstDecl<'db>>,
 
     pub top_mod: TopLevelMod<'db>,
 
@@ -958,16 +955,6 @@ impl<'db> Trait<'db> {
     /// Returns the associated type declaration by index as used in scope graph.
     pub fn assoc_ty_by_index(self, db: &'db dyn HirDb, idx: usize) -> &'db AssocTyDecl<'db> {
         &self.types(db)[idx]
-    }
-
-    pub fn const_(
-        self,
-        db: &'db dyn HirDb,
-        name: IdentId<'db>,
-    ) -> Option<&'db AssocConstDecl<'db>> {
-        self.consts(db)
-            .iter()
-            .find(|c| c.name == Partial::Present(name))
     }
 }
 
@@ -1044,12 +1031,6 @@ impl<'db> ImplTrait<'db> {
     // raw type_ref access kept; shim exposes public ___tmp method.
 
     // Semantic `ty` lives in `hir_def::semantic`.
-
-    pub fn const_(self, db: &'db dyn HirDb, name: IdentId<'db>) -> Option<&'db AssocConstDef<'db>> {
-        self.consts(db)
-            .iter()
-            .find(|c| c.name == Partial::Present(name))
-    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, salsa::Update)]

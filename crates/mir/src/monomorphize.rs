@@ -3,7 +3,6 @@ use std::{
     hash::{Hash, Hasher},
 };
 
-use hir::hir_def::{CallableDef, Func};
 use hir::analysis::{
     HirAnalysisDb,
     ty::{
@@ -13,6 +12,7 @@ use hir::analysis::{
         ty_def::{TyData, TyId},
     },
 };
+use hir::hir_def::{CallableDef, Func};
 use rustc_hash::FxHashMap;
 
 use crate::{CallOrigin, MirFunction, ValueOrigin, dedup::deduplicate_mir, lower::lower_function};
