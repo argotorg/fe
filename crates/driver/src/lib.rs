@@ -337,6 +337,10 @@ fn resolve_remote_dependencies(
             GitResolutionDiagnostic::ReusedCheckout(path) => {
                 tracing::info!(target: "resolver", "Reused existing remote checkout at {}", path);
             }
+            #[cfg(target_arch = "wasm32")]
+            GitResolutionDiagnostic::UnsupportedTarget(url) => {
+                tracing::warn!(target: "resolver", "Skipping git resolution for {} on wasm target", url);
+            }
         }
     }
 
