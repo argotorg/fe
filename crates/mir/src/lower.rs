@@ -909,8 +909,8 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         }
 
         let mut offset = 0u64;
-        for i in 0..idx {
-            let size = self.ty_size_bytes(field_types[i])?;
+        for field_ty in field_types.iter().take(idx) {
+            let size = self.ty_size_bytes(*field_ty)?;
             offset += size;
         }
         Some((field_types[idx], offset))

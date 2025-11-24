@@ -122,14 +122,6 @@ impl<'db> Func<'db> {
         constraints_for(db, self.into())
     }
 
-    /// Semantic predicate list extended with inherited trait bounds (super traits, assoc types).
-    pub(crate) fn assumptions_with_bounds(
-        self,
-        db: &'db dyn HirAnalysisDb,
-    ) -> PredicateListId<'db> {
-        self.assumptions(db).extend_all_bounds(db)
-    }
-
     /// Returns true if this function declares an explicit return type.
     pub fn has_explicit_return_ty(self, db: &'db dyn HirDb) -> bool {
         self.ret_type_ref(db).is_some()
