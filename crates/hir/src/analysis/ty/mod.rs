@@ -11,12 +11,10 @@ use trait_resolution::constraint::super_trait_cycle;
 use ty_def::{InvalidCause, TyData};
 use ty_lower::lower_type_alias;
 
-use self::def_analysis::{
-    analyze_adt, analyze_func, analyze_impl, analyze_impl_trait, analyze_trait,
-};
 use crate::analysis::{
     HirAnalysisDb, analysis_pass::ModuleAnalysisPass, diagnostics::DiagnosticVoucher,
 };
+use crate::semantic::diagnostics::Diagnosable;
 
 pub mod adt_def;
 pub mod binder;
@@ -24,7 +22,6 @@ pub mod canonical;
 pub mod const_ty;
 
 pub mod decision_tree;
-pub mod def_analysis;
 pub mod diagnostics;
 pub mod fold;
 pub(crate) mod method_cmp;
@@ -62,9 +59,9 @@ impl ModuleAnalysisPass for AdtDefAnalysisPass {
         let mut diags = vec![];
         let mut cycle_participants = FxHashSet::<AdtDef<'db>>::default();
 
-        for adt in adts {
-            diags.extend(analyze_adt(db, adt).iter().map(|d| d.to_voucher()));
-            let adt = lower_adt(db, adt);
+        for adt_ref in adts {
+            diags.extend(adt_ref.diags(db).into_iter().map(|d| d.to_voucher()));
+            let adt = lower_adt(db, adt_ref);
             if !cycle_participants.contains(&adt)
                 && let Some(cycle) = adt.recursive_cycle(db)
             {
@@ -181,7 +178,7 @@ impl ModuleAnalysisPass for TraitAnalysisPass {
                 diags.push(Box::new(TraitLowerDiag::CyclicSuperTraits(cycle.clone())) as _);
                 cycle_participants.extend(cycle.iter());
             }
-            diags.extend(analyze_trait(db, *hir_trait).iter().map(|d| d.to_voucher()))
+            diags.extend(hir_trait.diags(db).into_iter().map(|d| d.to_voucher()))
         }
         diags
     }
@@ -198,7 +195,7 @@ impl ModuleAnalysisPass for ImplAnalysisPass {
         top_mod
             .all_impls(db)
             .iter()
-            .flat_map(|impl_| analyze_impl(db, *impl_))
+            .flat_map(|impl_| impl_.diags(db))
             .map(|diag| diag.to_voucher())
             .collect()
     }
@@ -216,7 +213,7 @@ impl ModuleAnalysisPass for ImplTraitAnalysisPass {
         top_mod
             .all_impl_traits(db)
             .iter()
-            .flat_map(|trait_| analyze_impl_trait(db, *trait_))
+            .flat_map(|impl_trait| impl_trait.diags(db))
             .map(|diag| diag.to_voucher())
             .collect()
     }
@@ -234,7 +231,7 @@ impl ModuleAnalysisPass for FuncAnalysisPass {
         top_mod
             .all_funcs(db)
             .iter()
-            .flat_map(|func| analyze_func(db, *func))
+            .flat_map(|func| func.diags(db))
             .map(|diag| diag.to_voucher())
             .collect()
     }

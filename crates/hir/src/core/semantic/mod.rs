@@ -44,12 +44,10 @@ fn lower_hir_kind_local(k: &HirKindBound) -> Kind {
     }
 }
 use crate::analysis::ty::binder::Binder;
-use crate::analysis::ty::def_analysis;
-use crate::analysis::ty::diagnostics::TyDiagCollection;
 use crate::hir_def::*;
 // When adding real methods, prefer calling internal lowering/normalization here
 // rather than exposing raw syntax.
-use crate::analysis::ty::adt_def::{AdtDef, AdtField, AdtRef};
+use crate::analysis::ty::adt_def::{AdtCycleMember, AdtDef, AdtField, AdtRef};
 use crate::analysis::ty::trait_def::{
     ImplementorId, TraitInstId, does_impl_trait_conflict, ingot_trait_env,
 };
@@ -847,37 +845,6 @@ impl<'db> Trait<'db> {
     ) -> IndexSet<Binder<TraitInstId<'db>>> {
         self.super_trait_bounds(db).map(Binder::bind).collect()
     }
-
-    /// Aggregate trait definition diagnostics using semantic views.
-    /// Includes:
-    /// - Associated type default bound satisfaction
-    /// - Super-trait constraint satisfaction
-    /// - Generic parameter diagnostics (duplicates, defined-in-parent, kind/trait bounds,
-    ///   non-trailing defaults, default forward references)
-    pub fn analyze(self, db: &'db dyn HirAnalysisDb) -> Vec<TyDiagCollection<'db>> {
-        let mut out = Vec::new();
-        out.extend(self.diags_assoc_defaults(db));
-        out.extend(self.diags_super_traits(db));
-
-        let owner = GenericParamOwner::Trait(self);
-        out.extend(owner.diags_params_defined_in_parent(db));
-        out.extend(owner.diags_check_duplicate_names(db));
-        out.extend(owner.diags_kind_bounds(db));
-        out.extend(owner.diags_non_trailing_defaults(db));
-        out.extend(owner.diags_default_forward_refs(db));
-        out.extend(owner.diags_trait_bounds(db));
-        // where-clause kind/trait bound diagnostics
-        {
-            let clause = WhereClauseView {
-                owner: WhereClauseOwner::Trait(self),
-                id: self.where_clause(db),
-            };
-            for pred in clause.predicates(db) {
-                out.extend(pred.diags(db));
-            }
-        }
-        out
-    }
 }
 
 // ADT recursion (semantic) --------------------------------------------------
@@ -886,17 +853,12 @@ impl<'db> AdtDef<'db> {
     /// Detects a recursive ADT cycle that is not guarded by an indirect wrapper
     /// (e.g., pointer/reference). Returns the cycle members if the ADT is part
     /// of a cycle; otherwise returns None.
-    pub fn recursive_cycle(
-        self,
-        db: &'db dyn HirAnalysisDb,
-    ) -> Option<Vec<def_analysis::AdtCycleMember<'db>>> {
+    pub fn recursive_cycle(self, db: &'db dyn HirAnalysisDb) -> Option<Vec<AdtCycleMember<'db>>> {
         fn impl_check<'db>(
             db: &'db dyn HirAnalysisDb,
             adt: AdtDef<'db>,
-            chain: &[def_analysis::AdtCycleMember<'db>],
-        ) -> Option<Vec<def_analysis::AdtCycleMember<'db>>> {
-            use def_analysis::AdtCycleMember;
-
+            chain: &[AdtCycleMember<'db>],
+        ) -> Option<Vec<AdtCycleMember<'db>>> {
             if chain.iter().any(|m| m.adt == adt) {
                 return Some(chain.to_vec());
             } else if adt.fields(db).is_empty() {
@@ -1058,18 +1020,6 @@ impl<'db> Impl<'db> {
             .to_opt()
             .map(|hir_ty| lower_hir_ty(db, hir_ty, self.scope(), assumptions))
             .unwrap_or_else(|| TyId::invalid(db, InvalidCause::ParseError))
-    }
-
-    /// Aggregate impl definition diagnostics using semantic views.
-    /// Includes:
-    /// - Preconditions and implementor type checks
-    /// - Generic parameter diagnostics (duplicates, defined-in-parent, kind/trait bounds,
-    ///   non-trailing defaults, default forward references)
-    pub fn analyze(self, db: &'db dyn HirAnalysisDb) -> Vec<TyDiagCollection<'db>> {
-        let mut out = self.diags_preconditions(db);
-        let owner = GenericParamOwner::Impl(self);
-        out.extend(owner.diags_params_defined_in_parent(db));
-        out
     }
 }
 
@@ -1291,50 +1241,6 @@ impl<'db> ImplTrait<'db> {
     /// Get an associated const view by name, if it exists in this impl-trait block.
     pub fn const_(self, db: &'db dyn HirDb, name: IdentId<'db>) -> Option<ImplAssocConstView<'db>> {
         self.assoc_consts(db).find(|c| c.name(db) == Some(name))
-    }
-
-    /// Diagnostics for missing associated types (required by the trait).
-    /// Aggregate impl-trait definition diagnostics using semantic views.
-    /// Includes:
-    /// - Early trait-ref/implementor type checks and ingot rules
-    /// - Method conformance and missing-items checks
-    /// - Associated type checks (presence + bound satisfaction)
-    /// - Generic parameter diagnostics (duplicates, defined-in-parent, kind/trait bounds,
-    ///   non-trailing defaults, default forward references)
-    pub fn analyze(self, db: &'db dyn HirAnalysisDb) -> Vec<TyDiagCollection<'db>> {
-        // Early path/domain/WF checks; bail out on errors to avoid noisy follow-ups
-        let (implementor_opt, validity_diags) = self.diags_implementor_validity(db);
-        let Some(implementor) = implementor_opt else {
-            return validity_diags;
-        };
-
-        let mut diags = validity_diags;
-
-        // Method conformance diagnostics
-        diags.extend(self.diags_method_conformance(db, implementor));
-
-        // Trait-ref WF and super-trait constraints
-        diags.extend(self.diags_trait_ref_and_wf(db));
-
-        // Associated types diagnostics (WF + presence + bounds)
-        diags.extend(self.diags_assoc_types_wf(db));
-        diags.extend(self.diags_missing_assoc_types(db));
-        diags.extend(self.diags_assoc_types_bounds(db));
-
-        // Associated const diagnostics (presence + values)
-        diags.extend(self.diags_missing_assoc_consts(db));
-        diags.extend(self.diags_assoc_const_values(db));
-
-        // Generic parameter diagnostics
-        let owner = GenericParamOwner::ImplTrait(self);
-        diags.extend(owner.diags_params_defined_in_parent(db));
-        diags.extend(owner.diags_check_duplicate_names(db));
-        diags.extend(owner.diags_kind_bounds(db));
-        diags.extend(owner.diags_non_trailing_defaults(db));
-        diags.extend(owner.diags_default_forward_refs(db));
-        diags.extend(owner.diags_trait_bounds(db));
-
-        diags
     }
 }
 

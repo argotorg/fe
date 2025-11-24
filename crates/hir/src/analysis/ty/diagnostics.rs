@@ -1,5 +1,5 @@
 use super::{
-    def_analysis::AdtCycleMember,
+    adt_def::AdtCycleMember,
     trait_def::TraitInstId,
     ty_check::{RecordLike, TraitOps},
     ty_def::{Kind, TyId},

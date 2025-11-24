@@ -212,3 +212,11 @@ impl<'db> AdtRef<'db> {
         }
     }
 }
+
+/// Struct for downstream diagnostics that refer to cycle members.
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash, salsa::Update)]
+pub struct AdtCycleMember<'db> {
+    pub adt: AdtDef<'db>,
+    pub field_idx: u16,
+    pub ty_idx: u16,
+}

@@ -5,18 +5,20 @@
 //! logic from `core::semantic` is being migrated here to keep the main
 //! traversal surface free of diagnostic concerns.
 
+use rustc_hash::FxHashMap;
+use smallvec1::SmallVec;
+
 use crate::analysis::HirAnalysisDb;
 use crate::analysis::name_resolution;
 use crate::analysis::ty;
-use crate::analysis::ty::def_analysis::check_duplicate_names;
 use crate::analysis::ty::diagnostics::{
     TraitConstraintDiag, TraitLowerDiag, TyDiagCollection, TyLowerDiag,
 };
 use crate::analysis::ty::ty_def::{InvalidCause, TyId};
 use crate::hir_def::scope_graph::ScopeId;
 use crate::hir_def::{
-    Contract, Enum, EnumVariant, FieldParent, GenericParam, GenericParamOwner, ItemKind, Struct,
-    Trait, TypeAlias, TypeBound, VariantKind,
+    Contract, Enum, EnumVariant, FieldParent, GenericParam, GenericParamOwner, IdentId, ItemKind,
+    Struct, Trait, TypeAlias, TypeBound, VariantKind,
 };
 use crate::hir_def::{Partial, PathId};
 use crate::span::DynLazySpan;
@@ -26,13 +28,33 @@ use super::{
     VariantView, WhereClauseOwner, WhereClauseView, WherePredicateBoundView, WherePredicateView,
     constraints_for,
 };
+use crate::analysis::ty::adt_def::AdtRef;
 use crate::analysis::ty::binder::Binder;
 use crate::analysis::ty::trait_def::ImplementorId;
 
-/// Unified “pull” diagnostics surface for HIR items and views.
+/// Unified "pull" diagnostics surface for HIR items and views.
 pub trait Diagnosable<'db> {
     type Diagnostic;
     fn diags(self, db: &'db dyn HirAnalysisDb) -> Vec<Self::Diagnostic>;
+}
+
+/// Shared helper for duplicate name diagnostics.
+pub(crate) fn check_duplicate_names<'db, F>(
+    names: impl Iterator<Item = Option<IdentId<'db>>>,
+    create_diag: F,
+) -> SmallVec<[TyDiagCollection<'db>; 2]>
+where
+    F: Fn(SmallVec<[u16; 4]>) -> TyDiagCollection<'db>,
+{
+    let mut defs = FxHashMap::<IdentId<'db>, SmallVec<[u16; 4]>>::default();
+    for (i, name) in names.enumerate() {
+        if let Some(name) = name {
+            defs.entry(name).or_default().push(i as u16);
+        }
+    }
+    defs.into_iter()
+        .filter_map(|(_name, idxs)| (idxs.len() > 1).then_some(create_diag(idxs)))
+        .collect()
 }
 
 impl<'db> SuperTraitRefView<'db> {
@@ -279,16 +301,15 @@ impl<'db> Func<'db> {
         let mut diags = Vec::new();
 
         // Duplicate parameter names
-        let dupes = ty::def_analysis::check_duplicate_names(
-            self.param_views(db).map(|v| v.name(db)),
-            |idxs| TyLowerDiag::DuplicateArgName(self, idxs).into(),
-        );
+        let dupes = check_duplicate_names(self.param_views(db).map(|v| v.name(db)), |idxs| {
+            TyLowerDiag::DuplicateArgName(self, idxs).into()
+        });
         let found_dupes = !dupes.is_empty();
         diags.extend(dupes);
 
         // Duplicate labels (only if names were unique)
         if !found_dupes {
-            diags.extend(ty::def_analysis::check_duplicate_names(
+            diags.extend(check_duplicate_names(
                 self.param_views(db).map(|v| v.label_eagerly(db)),
                 |idxs| TyLowerDiag::DuplicateArgLabel(self, idxs).into(),
             ));
@@ -490,17 +511,9 @@ impl<'db> Func<'db> {
 }
 
 impl<'db> TypeAlias<'db> {
-    /// Diagnostics for alias target type and generics.
-    pub fn diags(self, db: &'db dyn HirAnalysisDb) -> Vec<TyDiagCollection<'db>> {
+    /// TypeAlias-specific diagnostics (target type).
+    fn analyze(self, db: &'db dyn HirAnalysisDb) -> Vec<TyDiagCollection<'db>> {
         let mut out = Vec::new();
-
-        // Generic param diags (aggregated here to avoid duplication in visitor)
-        let owner = GenericParamOwner::TypeAlias(self);
-        out.extend(owner.diags_check_duplicate_names(db));
-        out.extend(owner.diags_kind_bounds(db));
-        out.extend(owner.diags_non_trailing_defaults(db));
-        out.extend(owner.diags_default_forward_refs(db));
-        out.extend(owner.diags_trait_bounds(db));
 
         // Target type diagnostics
         let span = self.span().ty();
@@ -530,6 +543,16 @@ impl<'db> TypeAlias<'db> {
                 .into(),
             );
         }
+        out
+    }
+}
+
+impl<'db> Diagnosable<'db> for TypeAlias<'db> {
+    type Diagnostic = TyDiagCollection<'db>;
+
+    fn diags(self, db: &'db dyn HirAnalysisDb) -> Vec<Self::Diagnostic> {
+        let mut out = self.analyze(db);
+        out.extend(GenericParamOwner::TypeAlias(self).diags(db));
         out
     }
 }
@@ -618,23 +641,35 @@ impl<'db> Trait<'db> {
         }
         diags
     }
+
+    /// Trait-specific diagnostics (assoc defaults, super-traits, where-clause).
+    /// Generic parameter diagnostics are handled by `Diagnosable::diags`.
+    fn analyze(self, db: &'db dyn HirAnalysisDb) -> Vec<TyDiagCollection<'db>> {
+        let mut out = Vec::new();
+        out.extend(self.diags_assoc_defaults(db));
+        out.extend(self.diags_super_traits(db));
+
+        // where-clause kind/trait bound diagnostics
+        let clause = WhereClauseView {
+            owner: WhereClauseOwner::Trait(self),
+            id: self.where_clause(db),
+        };
+        for pred in clause.predicates(db) {
+            out.extend(pred.diags(db));
+        }
+        out
+    }
 }
 
 impl<'db> Impl<'db> {
-    /// Preconditions and implementor-type diagnostics for this impl.
+    /// Impl-specific preconditions and implementor-type diagnostics.
+    /// Generic parameter diagnostics are handled by `Diagnosable::diags`.
     pub fn diags_preconditions(self, db: &'db dyn HirAnalysisDb) -> Vec<TyDiagCollection<'db>> {
         use ty::diagnostics::ImplDiag;
         use ty::trait_resolution::constraint::ty_constraints;
         use ty::trait_resolution::{WellFormedness, check_ty_wf};
 
         let mut out = Vec::new();
-
-        let owner = GenericParamOwner::Impl(self);
-        out.extend(owner.diags_check_duplicate_names(db));
-        out.extend(owner.diags_kind_bounds(db));
-        out.extend(owner.diags_non_trailing_defaults(db));
-        out.extend(owner.diags_default_forward_refs(db));
-        out.extend(owner.diags_trait_bounds(db));
 
         if let Some(hir_ty) = self.type_ref(db).to_opt() {
             let assumptions = constraints_for(db, self.into());
@@ -1060,14 +1095,43 @@ impl<'db> ImplTrait<'db> {
         }
         diags
     }
+
+    /// ImplTrait-specific diagnostics (validity, methods, assoc items).
+    /// Generic parameter diagnostics are handled by `Diagnosable::diags`.
+    fn analyze(self, db: &'db dyn HirAnalysisDb) -> Vec<TyDiagCollection<'db>> {
+        // Early path/domain/WF checks; bail out on errors to avoid noisy follow-ups
+        let (implementor_opt, validity_diags) = self.diags_implementor_validity(db);
+        let Some(implementor) = implementor_opt else {
+            return validity_diags;
+        };
+
+        let mut diags = validity_diags;
+
+        // Method conformance diagnostics
+        diags.extend(self.diags_method_conformance(db, implementor));
+
+        // Trait-ref WF and super-trait constraints
+        diags.extend(self.diags_trait_ref_and_wf(db));
+
+        // Associated types diagnostics (WF + presence + bounds)
+        diags.extend(self.diags_assoc_types_wf(db));
+        diags.extend(self.diags_missing_assoc_types(db));
+        diags.extend(self.diags_assoc_types_bounds(db));
+
+        // Associated const diagnostics (presence + values)
+        diags.extend(self.diags_missing_assoc_consts(db));
+        diags.extend(self.diags_assoc_const_values(db));
+
+        diags
+    }
 }
 
 impl<'db> Struct<'db> {
-    /// Aggregate struct definition diagnostics.
-    pub fn analyze(self, db: &'db dyn HirAnalysisDb) -> Vec<TyDiagCollection<'db>> {
+    /// Struct-specific diagnostics (fields, where-clause).
+    fn analyze(self, db: &'db dyn HirAnalysisDb) -> Vec<TyDiagCollection<'db>> {
         let mut out = Vec::new();
 
-        out.extend(ty::def_analysis::check_duplicate_names(
+        out.extend(check_duplicate_names(
             FieldParent::Struct(self).fields(db).map(|v| v.name(db)),
             |idxs| TyLowerDiag::DuplicateFieldName(FieldParent::Struct(self), idxs).into(),
         ));
@@ -1076,24 +1140,23 @@ impl<'db> Struct<'db> {
             out.extend(v.diags_wf(db));
         }
 
-        let owner = GenericParamOwner::Struct(self);
-        out.extend(owner.diags_const_param_types(db));
-        out.extend(owner.diags_params_defined_in_parent(db));
-        out.extend(owner.diags_check_duplicate_names(db));
-        out.extend(owner.diags_kind_bounds(db));
-        out.extend(owner.diags_non_trailing_defaults(db));
-        out.extend(owner.diags_default_forward_refs(db));
-        out.extend(owner.diags_trait_bounds(db));
-
-        {
-            let clause = WhereClauseView {
-                owner: WhereClauseOwner::Struct(self),
-                id: self.where_clause(db),
-            };
-            for pred in clause.predicates(db) {
-                out.extend(pred.diags(db));
-            }
+        let clause = WhereClauseView {
+            owner: WhereClauseOwner::Struct(self),
+            id: self.where_clause(db),
+        };
+        for pred in clause.predicates(db) {
+            out.extend(pred.diags(db));
         }
+        out
+    }
+}
+
+impl<'db> Diagnosable<'db> for Struct<'db> {
+    type Diagnostic = TyDiagCollection<'db>;
+
+    fn diags(self, db: &'db dyn HirAnalysisDb) -> Vec<Self::Diagnostic> {
+        let mut out = self.analyze(db);
+        out.extend(GenericParamOwner::Struct(self).diags(db));
         out
     }
 }
@@ -1295,18 +1358,18 @@ impl<'db> FieldView<'db> {
 }
 
 impl<'db> Enum<'db> {
-    /// Aggregate enum definition diagnostics.
-    pub fn analyze(self, db: &'db dyn HirAnalysisDb) -> Vec<TyDiagCollection<'db>> {
+    /// Enum-specific diagnostics (variants, fields, where-clause).
+    fn analyze(self, db: &'db dyn HirAnalysisDb) -> Vec<TyDiagCollection<'db>> {
         let mut out = Vec::new();
 
-        out.extend(ty::def_analysis::check_duplicate_names(
+        out.extend(check_duplicate_names(
             self.variants(db).map(|v| v.name(db)),
             |idxs| TyLowerDiag::DuplicateVariantName(self, idxs).into(),
         ));
 
         for v in self.variants(db) {
             if matches!(v.kind(db), VariantKind::Record(_)) {
-                out.extend(ty::def_analysis::check_duplicate_names(
+                out.extend(check_duplicate_names(
                     v.fields(db).map(|f| f.name(db)),
                     |idxs| {
                         TyLowerDiag::DuplicateFieldName(
@@ -1324,33 +1387,33 @@ impl<'db> Enum<'db> {
             }
         }
 
-        let owner = GenericParamOwner::Enum(self);
-        out.extend(owner.diags_const_param_types(db));
-        out.extend(owner.diags_params_defined_in_parent(db));
-        out.extend(owner.diags_check_duplicate_names(db));
-        out.extend(owner.diags_kind_bounds(db));
-        out.extend(owner.diags_non_trailing_defaults(db));
-        out.extend(owner.diags_default_forward_refs(db));
-        out.extend(owner.diags_trait_bounds(db));
-
-        {
-            let clause = WhereClauseView {
-                owner: WhereClauseOwner::Enum(self),
-                id: self.where_clause(db),
-            };
-            for pred in clause.predicates(db) {
-                out.extend(pred.diags(db));
-            }
+        let clause = WhereClauseView {
+            owner: WhereClauseOwner::Enum(self),
+            id: self.where_clause(db),
+        };
+        for pred in clause.predicates(db) {
+            out.extend(pred.diags(db));
         }
         out
     }
 }
 
-impl<'db> Contract<'db> {
-    /// Aggregate contract definition diagnostics similar to struct.
-    pub fn analyze(self, db: &'db dyn HirAnalysisDb) -> Vec<TyDiagCollection<'db>> {
+impl<'db> Diagnosable<'db> for Enum<'db> {
+    type Diagnostic = TyDiagCollection<'db>;
+
+    fn diags(self, db: &'db dyn HirAnalysisDb) -> Vec<Self::Diagnostic> {
+        let mut out = self.analyze(db);
+        out.extend(GenericParamOwner::Enum(self).diags(db));
+        out
+    }
+}
+
+impl<'db> Diagnosable<'db> for Contract<'db> {
+    type Diagnostic = TyDiagCollection<'db>;
+
+    fn diags(self, db: &'db dyn HirAnalysisDb) -> Vec<Self::Diagnostic> {
         let mut out = Vec::new();
-        out.extend(ty::def_analysis::check_duplicate_names(
+        out.extend(check_duplicate_names(
             FieldParent::Contract(self).fields(db).map(|v| v.name(db)),
             |idxs| TyLowerDiag::DuplicateFieldName(FieldParent::Contract(self), idxs).into(),
         ));
@@ -1358,6 +1421,18 @@ impl<'db> Contract<'db> {
             out.extend(v.diags_wf(db));
         }
         out
+    }
+}
+
+impl<'db> Diagnosable<'db> for AdtRef<'db> {
+    type Diagnostic = TyDiagCollection<'db>;
+
+    fn diags(self, db: &'db dyn HirAnalysisDb) -> Vec<Self::Diagnostic> {
+        match self {
+            AdtRef::Struct(s) => s.diags(db),
+            AdtRef::Enum(e) => e.diags(db),
+            AdtRef::Contract(c) => c.diags(db),
+        }
     }
 }
 
@@ -1690,18 +1765,28 @@ impl<'db> GenericParamView<'db> {
     }
 }
 
+impl<'db> Diagnosable<'db> for GenericParamOwner<'db> {
+    type Diagnostic = TyDiagCollection<'db>;
+
+    fn diags(self, db: &'db dyn HirAnalysisDb) -> Vec<Self::Diagnostic> {
+        let mut out = Vec::new();
+        out.extend(self.diags_check_duplicate_names(db));
+        out.extend(self.diags_const_param_types(db));
+        out.extend(self.diags_params_defined_in_parent(db));
+        out.extend(self.diags_kind_bounds(db));
+        out.extend(self.diags_trait_bounds(db));
+        out.extend(self.diags_non_trailing_defaults(db));
+        out.extend(self.diags_default_forward_refs(db));
+        out
+    }
+}
+
 impl<'db> Diagnosable<'db> for Func<'db> {
     type Diagnostic = TyDiagCollection<'db>;
 
     fn diags(self, db: &'db dyn HirAnalysisDb) -> Vec<Self::Diagnostic> {
         let mut diags = self.analyze(db);
-        let owner = GenericParamOwner::Func(self);
-        diags.extend(owner.diags_const_param_types(db));
-        diags.extend(owner.diags_params_defined_in_parent(db));
-        diags.extend(owner.diags_kind_bounds(db));
-        diags.extend(owner.diags_trait_bounds(db));
-        diags.extend(owner.diags_non_trailing_defaults(db));
-        diags.extend(owner.diags_default_forward_refs(db));
+        diags.extend(GenericParamOwner::Func(self).diags(db));
         diags
     }
 }
@@ -1710,7 +1795,9 @@ impl<'db> Diagnosable<'db> for Trait<'db> {
     type Diagnostic = TyDiagCollection<'db>;
 
     fn diags(self, db: &'db dyn HirAnalysisDb) -> Vec<Self::Diagnostic> {
-        self.analyze(db)
+        let mut out = self.analyze(db);
+        out.extend(GenericParamOwner::Trait(self).diags(db));
+        out
     }
 }
 
@@ -1718,7 +1805,9 @@ impl<'db> Diagnosable<'db> for Impl<'db> {
     type Diagnostic = TyDiagCollection<'db>;
 
     fn diags(self, db: &'db dyn HirAnalysisDb) -> Vec<Self::Diagnostic> {
-        self.analyze(db)
+        let mut out = self.diags_preconditions(db);
+        out.extend(GenericParamOwner::Impl(self).diags(db));
+        out
     }
 }
 
@@ -1726,6 +1815,8 @@ impl<'db> Diagnosable<'db> for ImplTrait<'db> {
     type Diagnostic = TyDiagCollection<'db>;
 
     fn diags(self, db: &'db dyn HirAnalysisDb) -> Vec<Self::Diagnostic> {
-        self.analyze(db)
+        let mut out = self.analyze(db);
+        out.extend(GenericParamOwner::ImplTrait(self).diags(db));
+        out
     }
 }
