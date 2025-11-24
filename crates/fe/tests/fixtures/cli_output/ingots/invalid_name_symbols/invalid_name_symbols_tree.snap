@@ -5,7 +5,4 @@ expression: output
 === STDOUT ===
 ➖ null v0.1.0
 
-=== STDERR ===
-❌ Config validation error at file://<project>/crates/fe/tests/fixtures/cli_output/ingots/invalid_name_symbols/: Invalid ingot name "invalid@name!"
-
 === EXIT CODE: 0 ===

@@ -20,3 +20,7 @@ codegen = { path = "../codegen", package = "fe-codegen" }
 [dev-dependencies]
 dir-test.workspace = true
 test-utils.workspace = true
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+ratatui.workspace = true
+crossterm.workspace = true

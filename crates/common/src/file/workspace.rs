@@ -3,8 +3,7 @@ use radix_immutable::{StringPrefixView, StringTrie, Trie};
 use salsa::Setter;
 use url::Url;
 
-use crate::InputDb;
-use crate::{file::File, indexmap::IndexMap};
+use crate::{InputDb, file::File, indexmap::IndexMap};
 
 #[derive(Debug)]
 pub enum InputIndexError {

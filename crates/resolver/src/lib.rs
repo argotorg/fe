@@ -1,5 +1,12 @@
 pub mod files;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod git;
+#[cfg(target_arch = "wasm32")]
+pub mod git_stub;
+#[cfg(target_arch = "wasm32")]
+pub use git_stub as git;
 pub mod graph;
+pub mod ingot;
 
 pub trait Resolver: Sized {
     type Description;

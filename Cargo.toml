@@ -26,6 +26,7 @@ derive_more = { version = "1.0", default-features = false, features = [
 ] }
 dir-test = "0.4"
 glob = "0.3.2"
+indicatif = "0.17"
 rustc-hash = "2.1.0"
 num-bigint = "0.4"
 num-traits = "0.2"
@@ -42,6 +43,8 @@ tracing-tree = "0.4.0"
 wasm-bindgen-test = "0.3"
 semver = "1.0.26"
 petgraph = "0.8"
+ratatui = { version = "0.27", default-features = false, features = ["crossterm"] }
+crossterm = "0.28"
 
 [profile.dev]
 # Set to 0 to make the build faster and debugging more difficult.

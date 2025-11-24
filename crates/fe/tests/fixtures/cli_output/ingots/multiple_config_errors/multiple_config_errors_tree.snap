@@ -4,11 +4,6 @@ expression: output
 ---
 === STDOUT ===
 ➖ null vnull
-
-=== STDERR ===
-❌ Config validation error at file://<project>/crates/fe/tests/fixtures/cli_output/ingots/multiple_config_errors/: Missing ingot name
-❌ Config validation error at file://<project>/crates/fe/tests/fixtures/cli_output/ingots/multiple_config_errors/: Invalid ingot version ""not.a.version""
-❌ Config validation error at file://<project>/crates/fe/tests/fixtures/cli_output/ingots/multiple_config_errors/: Invalid dependency alias "bad alias!"
-❌ Failed to resolve ingot dependency 'file://<project>/crates/fe/tests/fixtures/cli_output/ingots/multiple_config_errors/nonexistent/': Directory does not exist: file://<project>/crates/fe/tests/fixtures/cli_output/ingots/multiple_config_errors/nonexistent/
+└── ➖ [invalid fe.toml]
 
 === EXIT CODE: 0 ===

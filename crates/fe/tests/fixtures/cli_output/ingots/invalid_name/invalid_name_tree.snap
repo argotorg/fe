@@ -5,7 +5,4 @@ expression: output
 === STDOUT ===
 ➖ null v0.0.1
 
-=== STDERR ===
-❌ Config validation error at file://<project>/crates/fe/tests/fixtures/cli_output/ingots/invalid_name/: Invalid ingot name "invalid-name-with-dashes"
-
 === EXIT CODE: 0 ===
