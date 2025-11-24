@@ -615,8 +615,8 @@ pub struct Func<'db> {
     pub(in crate::core) where_clause: WhereClauseId<'db>,
     // TODO: Add semantic view for FuncParamListId and restrict visibility
     pub params: Partial<FuncParamListId<'db>>,
-    // TODO: Add semantic view for effects and restrict visibility
-    pub effects: EffectParamListId<'db>,
+    // TODO: Migrate analysis consumers to use Func::effect_params() view, then restrict to pub(in crate::core)
+    pub(crate) effects: EffectParamListId<'db>,
     pub(in crate::core) ret_type_ref: Option<TypeId<'db>>,
     pub modifier: ItemModifier,
     pub body: Option<Body<'db>>,
@@ -913,9 +913,9 @@ pub struct Trait<'db> {
     pub(in crate::core) where_clause: WhereClauseId<'db>,
     #[return_ref]
     pub(in crate::core) types: Vec<AssocTyDecl<'db>>,
-    // TODO: Add semantic view for AssocConstDecl and restrict visibility
+    // TODO: Migrate analysis consumers to use Trait::assoc_consts() view, then restrict to pub(in crate::core)
     #[return_ref]
-    pub consts: Vec<AssocConstDecl<'db>>,
+    pub(crate) consts: Vec<AssocConstDecl<'db>>,
 
     pub top_mod: TopLevelMod<'db>,
 

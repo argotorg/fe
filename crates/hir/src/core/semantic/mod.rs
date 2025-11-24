@@ -396,6 +396,45 @@ impl<'db> FuncParamView<'db> {
     }
 }
 
+// Effect param views --------------------------------------------------------
+
+#[derive(Clone, Copy, Debug)]
+pub struct EffectParamView<'db> {
+    func: Func<'db>,
+    idx: usize,
+}
+
+impl<'db> EffectParamView<'db> {
+    fn effect(self, db: &'db dyn HirDb) -> &'db crate::core::hir_def::EffectParam<'db> {
+        &self.func.effects(db).data(db)[self.idx]
+    }
+
+    /// Optional name for this effect parameter.
+    pub fn name(self, db: &'db dyn HirDb) -> Option<IdentId<'db>> {
+        self.effect(db).name
+    }
+
+    /// The path identifying the effect key (trait or type).
+    pub fn key_path(self, db: &'db dyn HirDb) -> Option<PathId<'db>> {
+        self.effect(db).key_path.to_opt()
+    }
+
+    /// Whether this effect requires mutation.
+    pub fn is_mut(self, db: &'db dyn HirDb) -> bool {
+        self.effect(db).is_mut
+    }
+
+    /// Index of this effect in the function's effect list.
+    pub fn index(self) -> usize {
+        self.idx
+    }
+
+    /// The function owning this effect parameter.
+    pub fn func(self) -> Func<'db> {
+        self.func
+    }
+}
+
 impl<'db> Func<'db> {
     /// Iterate parameters as contextual views (semantic traversal helper).
     pub fn param_views(self, db: &'db dyn HirDb) -> impl Iterator<Item = FuncParamView<'db>> + 'db {
@@ -405,6 +444,17 @@ impl<'db> Func<'db> {
             .map(|l| l.data(db).len())
             .unwrap_or(0);
         (0..len).map(move |idx| FuncParamView { func: self, idx })
+    }
+
+    /// Iterate effect parameters as contextual views.
+    pub fn effect_params(self, db: &'db dyn HirDb) -> impl Iterator<Item = EffectParamView<'db>> + 'db {
+        let len = self.effects(db).data(db).len();
+        (0..len).map(move |idx| EffectParamView { func: self, idx })
+    }
+
+    /// Returns true if this function has any effect parameters.
+    pub fn has_effects(self, db: &'db dyn HirDb) -> bool {
+        !self.effects(db).data(db).is_empty()
     }
 }
 
@@ -724,6 +774,15 @@ impl<'db> Trait<'db> {
     ) -> impl Iterator<Item = TraitAssocTypeView<'db>> + 'db {
         let len = self.types(db).len();
         (0..len).map(move |idx| TraitAssocTypeView { owner: self, idx })
+    }
+
+    /// Iterate associated consts as contextual views.
+    pub fn assoc_consts(
+        self,
+        db: &'db dyn HirDb,
+    ) -> impl Iterator<Item = TraitAssocConstView<'db>> + 'db {
+        let len = self.consts(db).len();
+        (0..len).map(move |idx| TraitAssocConstView { owner: self, idx })
     }
 
     /// Iterate declared super-trait references as contextual views.
@@ -1204,6 +1263,15 @@ impl<'db> ImplTrait<'db> {
         (0..len).map(move |idx| ImplAssocTypeView { owner: self, idx })
     }
 
+    /// Iterate associated const definitions in this impl-trait block as views.
+    pub fn assoc_consts(
+        self,
+        db: &'db dyn HirDb,
+    ) -> impl Iterator<Item = ImplAssocConstView<'db>> + 'db {
+        let len = self.consts(db).len();
+        (0..len).map(move |idx| ImplAssocConstView { owner: self, idx })
+    }
+
     /// Diagnostics for missing associated types (required by the trait).
     /// Aggregate impl-trait definition diagnostics using semantic views.
     /// Includes:
@@ -1547,6 +1615,73 @@ impl<'db> TyId<'db> {
         assoc: TraitAssocTypeView<'db>,
     ) -> impl Iterator<Item = TraitInstId<'db>> + 'db {
         assoc.bounds_on_subject(db, self)
+    }
+}
+
+// Associated const views ----------------------------------------------------
+
+#[derive(Clone, Copy, Debug)]
+pub struct TraitAssocConstView<'db> {
+    owner: Trait<'db>,
+    idx: usize,
+}
+
+impl<'db> TraitAssocConstView<'db> {
+    fn decl(self, db: &'db dyn HirDb) -> &'db crate::core::hir_def::AssocConstDecl<'db> {
+        &self.owner.consts(db)[self.idx]
+    }
+
+    pub fn name(self, db: &'db dyn HirDb) -> Option<IdentId<'db>> {
+        self.decl(db).name.to_opt()
+    }
+
+    pub fn span(self) -> crate::span::item::LazyTraitConstSpan<'db> {
+        self.owner.span().item_list().assoc_const(self.idx)
+    }
+
+    /// Returns true if this associated const has a default value in the trait.
+    pub fn has_default(self, db: &'db dyn HirDb) -> bool {
+        self.decl(db).default.is_some()
+    }
+
+    /// Semantic type of this associated const, lowered in the trait's scope.
+    pub fn ty(self, db: &'db dyn HirAnalysisDb) -> Option<TyId<'db>> {
+        let hir = self.decl(db).ty.to_opt()?;
+        let trait_ = self.owner;
+        let assumptions = constraints_for(db, trait_.into());
+        Some(lower_hir_ty(db, hir, trait_.scope(), assumptions))
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct ImplAssocConstView<'db> {
+    owner: ImplTrait<'db>,
+    idx: usize,
+}
+
+impl<'db> ImplAssocConstView<'db> {
+    fn def(self, db: &'db dyn HirDb) -> &'db crate::core::hir_def::AssocConstDef<'db> {
+        &self.owner.consts(db)[self.idx]
+    }
+
+    pub fn name(self, db: &'db dyn HirDb) -> Option<IdentId<'db>> {
+        self.def(db).name.to_opt()
+    }
+
+    pub fn span(self) -> crate::span::item::LazyTraitConstSpan<'db> {
+        self.owner.span().associated_const(self.idx)
+    }
+
+    /// Returns true if this associated const has a value defined.
+    pub fn has_value(self, db: &'db dyn HirDb) -> bool {
+        self.def(db).value.to_opt().is_some()
+    }
+
+    /// Semantic type of this associated const implementation.
+    pub fn ty(self, db: &'db dyn HirAnalysisDb) -> Option<TyId<'db>> {
+        let hir = self.def(db).ty.to_opt()?;
+        let assumptions = constraints_for(db, self.owner.into());
+        Some(lower_hir_ty(db, hir, self.owner.scope(), assumptions))
     }
 }
 

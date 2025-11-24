@@ -851,12 +851,12 @@ impl<'db> ImplTrait<'db> {
         let trait_hir = implementor.trait_def(db);
 
         // Check that all required trait consts are implemented
-        for trait_const in trait_hir.consts(db) {
-            let Some(name) = trait_const.name.to_opt() else {
+        for trait_const in trait_hir.assoc_consts(db) {
+            let Some(name) = trait_const.name(db) else {
                 continue;
             };
             let has_impl = self.const_(db, name).is_some();
-            let has_default = trait_const.default.is_some();
+            let has_default = trait_const.has_default(db);
             if !has_impl && !has_default {
                 diags.push(
                     ImplDiag::MissingAssociatedConst {
@@ -887,17 +887,17 @@ impl<'db> ImplTrait<'db> {
         let trait_hir = implementor.trait_def(db);
 
         // Check impl consts have values and are defined in trait
-        for (idx, impl_const) in self.consts(db).iter().enumerate() {
-            let Some(name) = impl_const.name.to_opt() else {
+        for impl_const in self.assoc_consts(db) {
+            let Some(name) = impl_const.name(db) else {
                 continue;
             };
 
             if trait_hir.const_(db, name).is_some() {
                 // Const is defined in trait - check it has a value
-                if impl_const.value.to_opt().is_none() {
+                if !impl_const.has_value(db) {
                     diags.push(
                         ImplDiag::MissingAssociatedConstValue {
-                            primary: self.span().associated_const(idx).ty().into(),
+                            primary: impl_const.span().ty().into(),
                             const_name: name,
                             trait_: trait_hir,
                         }
@@ -908,7 +908,7 @@ impl<'db> ImplTrait<'db> {
                 // Const is not defined in trait
                 diags.push(
                     ImplDiag::ConstNotDefinedInTrait {
-                        primary: self.span().associated_const(idx).name().into(),
+                        primary: impl_const.span().name().into(),
                         trait_: trait_hir,
                         const_name: name,
                     }
