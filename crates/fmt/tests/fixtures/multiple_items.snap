@@ -1,10 +1,9 @@
 ---
 source: crates/fmt/tests/format_snapshots.rs
-assertion_line: 16
 expression: output
 input_file: tests/fixtures/multiple_items.fe
 ---
-pub struct Point { x:i32,y : i32}
+pub struct Point { x: i32, y: i32 }
 
 fn new_point(x: i32, y: i32) -> Point {
     Point { x: x, y: y }

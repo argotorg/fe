@@ -407,7 +407,7 @@ impl Rewrite for ast::FuncParam {
 }
 
 impl Rewrite for ast::Struct {
-    fn rewrite(&self, context: &RewriteContext<'_>, _shape: Shape) -> Option<String> {
+    fn rewrite(&self, context: &RewriteContext<'_>, shape: Shape) -> Option<String> {
         let mut out = String::new();
 
         write_attrs(self, context, &mut out);
@@ -420,9 +420,8 @@ impl Rewrite for ast::Struct {
         write_where_clause(self, context, &mut out);
 
         if let Some(fields) = self.fields() {
-            let text = context.snippet(fields.syntax().text_range());
             out.push(' ');
-            out.push_str(text.trim_start());
+            out.push_str(&fields.rewrite_or_original(context, shape));
         } else {
             out.push_str(" {}");
         }
@@ -431,8 +430,41 @@ impl Rewrite for ast::Struct {
     }
 }
 
+impl Rewrite for ast::RecordFieldDefList {
+    fn rewrite(&self, context: &RewriteContext<'_>, shape: Shape) -> Option<String> {
+        let formatting = ListFormatting::new(shape)
+            .tactic(ListTactic::Mixed)
+            .horizontal_padding(true)
+            .with_surround("{", "}");
+        format_list(self, &formatting, context, shape)
+    }
+}
+
+impl Rewrite for ast::RecordFieldDef {
+    fn rewrite(&self, context: &RewriteContext<'_>, shape: Shape) -> Option<String> {
+        let mut out = String::new();
+
+        write_attrs(self, context, &mut out);
+
+        if self.pub_kw().is_some() {
+            out.push_str("pub ");
+        }
+
+        if let Some(name) = self.name() {
+            out.push_str(context.snippet(name.text_range()).trim());
+        }
+
+        if let Some(ty) = self.ty() {
+            out.push_str(": ");
+            out.push_str(&ty.rewrite_or_original(context, shape));
+        }
+
+        Some(out)
+    }
+}
+
 impl Rewrite for ast::Contract {
-    fn rewrite(&self, context: &RewriteContext<'_>, _shape: Shape) -> Option<String> {
+    fn rewrite(&self, context: &RewriteContext<'_>, shape: Shape) -> Option<String> {
         let mut out = String::new();
 
         write_attrs(self, context, &mut out);
@@ -442,9 +474,8 @@ impl Rewrite for ast::Contract {
         out.push_str(context.snippet(self.name()?.text_range()));
 
         if let Some(fields) = self.fields() {
-            let text = context.snippet(fields.syntax().text_range());
             out.push(' ');
-            out.push_str(text.trim_start());
+            out.push_str(&fields.rewrite_or_original(context, shape));
         } else {
             out.push_str(" {}");
         }
@@ -454,7 +485,7 @@ impl Rewrite for ast::Contract {
 }
 
 impl Rewrite for ast::Enum {
-    fn rewrite(&self, context: &RewriteContext<'_>, _shape: Shape) -> Option<String> {
+    fn rewrite(&self, context: &RewriteContext<'_>, shape: Shape) -> Option<String> {
         let mut out = String::new();
 
         write_attrs(self, context, &mut out);
@@ -467,11 +498,45 @@ impl Rewrite for ast::Enum {
         write_where_clause(self, context, &mut out);
 
         if let Some(variants) = self.variants() {
-            let text = context.snippet(variants.syntax().text_range());
             out.push(' ');
-            out.push_str(text.trim_start());
+            out.push_str(&variants.rewrite_or_original(context, shape));
         } else {
             out.push_str(" {}");
+        }
+
+        Some(out)
+    }
+}
+
+impl Rewrite for ast::VariantDefList {
+    fn rewrite(&self, context: &RewriteContext<'_>, shape: Shape) -> Option<String> {
+        let formatting = ListFormatting::new(shape)
+            .tactic(ListTactic::Vertical)
+            .trailing_separator(false)
+            .with_surround("{", "}");
+        format_list(self, &formatting, context, shape)
+    }
+}
+
+impl Rewrite for ast::VariantDef {
+    fn rewrite(&self, context: &RewriteContext<'_>, shape: Shape) -> Option<String> {
+        let mut out = String::new();
+
+        write_attrs(self, context, &mut out);
+
+        if let Some(name) = self.name() {
+            out.push_str(context.snippet(name.text_range()).trim());
+        }
+
+        match self.kind() {
+            ast::VariantKind::Unit => {}
+            ast::VariantKind::Tuple(tuple_type) => {
+                out.push_str(&tuple_type.rewrite_or_original(context, shape));
+            }
+            ast::VariantKind::Record(fields) => {
+                out.push(' ');
+                out.push_str(&fields.rewrite_or_original(context, shape));
+            }
         }
 
         Some(out)
