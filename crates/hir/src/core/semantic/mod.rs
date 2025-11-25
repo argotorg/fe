@@ -384,6 +384,36 @@ impl<'db> FuncParamView<'db> {
     pub fn ty(self, db: &'db dyn HirAnalysisDb) -> TyId<'db> {
         *self.ty_binder(db).skip_binder()
     }
+
+    /// Returns the owning function.
+    pub fn func(self) -> Func<'db> {
+        self.func
+    }
+
+    /// Returns the parameter index.
+    pub fn index(self) -> usize {
+        self.idx
+    }
+
+    /// Returns the lazy span for this parameter's type in `LazyTySpan` form.
+    /// Handles self-parameter fallback span correctly.
+    pub fn lazy_ty_span(self, db: &'db dyn HirDb) -> crate::span::types::LazyTySpan<'db> {
+        if self.is_self_param(db) && self.self_ty_fallback(db) {
+            self.span().fallback_self_ty()
+        } else {
+            self.span().ty()
+        }
+    }
+
+    /// Returns the span for error reporting on this parameter's type.
+    /// Handles self-parameter fallback span correctly.
+    pub fn ty_span(self, db: &'db dyn HirDb) -> crate::span::DynLazySpan<'db> {
+        if self.is_self_param(db) && self.self_ty_fallback(db) {
+            self.span().name().into()
+        } else {
+            self.span().ty().into()
+        }
+    }
 }
 
 // Effect param views --------------------------------------------------------
@@ -1737,6 +1767,33 @@ impl<'db> FieldView<'db> {
             FieldParent::Struct(s) => s.span().fields().field(self.idx).ty().into(),
             FieldParent::Contract(c) => c.span().fields().field(self.idx).ty().into(),
             FieldParent::Variant(v) => v.span().fields().field(self.idx).ty().into(),
+        }
+    }
+
+    /// Returns the lazy span for this field's type in `LazyTySpan` form.
+    pub fn lazy_ty_span(self) -> crate::span::types::LazyTySpan<'db> {
+        match self.parent {
+            FieldParent::Struct(s) => s.span().fields().field(self.idx).ty(),
+            FieldParent::Contract(c) => c.span().fields().field(self.idx).ty(),
+            FieldParent::Variant(v) => v.span().fields().field(self.idx).ty(),
+        }
+    }
+
+    /// Returns the scope for type resolution in this field.
+    pub fn scope(self) -> ScopeId<'db> {
+        match self.parent {
+            FieldParent::Struct(s) => s.scope(),
+            FieldParent::Contract(c) => c.scope(),
+            FieldParent::Variant(v) => v.enum_.scope(),
+        }
+    }
+
+    /// Returns the owning item for constraint collection.
+    pub fn owner_item(self) -> ItemKind<'db> {
+        match self.parent {
+            FieldParent::Struct(s) => ItemKind::Struct(s),
+            FieldParent::Contract(c) => ItemKind::Contract(c),
+            FieldParent::Variant(v) => ItemKind::Enum(v.enum_),
         }
     }
 }

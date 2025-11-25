@@ -24,9 +24,9 @@ use crate::hir_def::{Partial, PathId};
 use crate::span::DynLazySpan;
 
 use super::{
-    FieldView, Func, GenericParamView, Impl, ImplTrait, ImplTraitLowerError, SuperTraitRefView,
-    VariantView, WhereClauseOwner, WhereClauseView, WherePredicateBoundView, WherePredicateView,
-    constraints_for,
+    FieldView, Func, FuncParamView, GenericParamView, Impl, ImplTrait, ImplTraitLowerError,
+    SuperTraitRefView, VariantView, WhereClauseOwner, WhereClauseView, WherePredicateBoundView,
+    WherePredicateView, constraints_for,
 };
 use crate::analysis::ty::adt_def::AdtRef;
 use crate::analysis::ty::binder::Binder;
@@ -355,97 +355,7 @@ impl<'db> Func<'db> {
     /// - For self param: enforce exact `Self` type shape
     ///   Note: WF/invalid errors are still surfaced via the general type walker.
     pub fn diags_param_types(self, db: &'db dyn HirAnalysisDb) -> Vec<TyDiagCollection<'db>> {
-        use ty::diagnostics::ImplDiag;
-        use ty::normalize::normalize_ty;
-        use ty::trait_resolution::{WellFormedness, check_ty_wf};
-
-        let mut out = Vec::new();
-        let assumptions = self.assumptions(db);
-        let expected_self = self.expected_self_ty(db);
-
-        for view in self.param_views(db) {
-            let Some(hir_ty) = view.hir_ty(db) else {
-                continue;
-            };
-
-            // Surface name-resolution errors for the parameter type first
-            let span_node = if view.is_self_param(db) && view.self_ty_fallback(db) {
-                view.span().fallback_self_ty()
-            } else {
-                view.span().ty()
-            };
-            let ty_span: DynLazySpan<'db> = if view.is_self_param(db) && view.self_ty_fallback(db) {
-                view.span().name().into()
-            } else {
-                view.span().ty().into()
-            };
-
-            let mut errs = ty::ty_error::collect_ty_lower_errors(
-                db,
-                self.scope(),
-                hir_ty,
-                span_node,
-                assumptions,
-            );
-            if !errs.is_empty() {
-                out.append(&mut errs);
-                continue;
-            }
-
-            let ty = ty::ty_lower::lower_hir_ty(db, hir_ty, self.scope(), assumptions);
-            if !ty.has_star_kind(db) {
-                out.push(TyLowerDiag::ExpectedStarKind(ty_span.clone()).into());
-                continue;
-            }
-            if ty.is_const_ty(db) {
-                out.push(
-                    TyLowerDiag::NormalTypeExpected {
-                        span: ty_span.clone(),
-                        given: ty,
-                    }
-                    .into(),
-                );
-                continue;
-            }
-
-            // Well-formedness / trait-bound satisfaction for parameter type
-            match check_ty_wf(db, self.top_mod(db).ingot(db), ty, assumptions) {
-                WellFormedness::WellFormed => {}
-                WellFormedness::IllFormed { goal, subgoal } => {
-                    out.push(
-                        TraitConstraintDiag::TraitBoundNotSat {
-                            span: ty_span.clone(),
-                            primary_goal: goal,
-                            unsat_subgoal: subgoal,
-                        }
-                        .into(),
-                    );
-                }
-            }
-
-            if view.is_self_param(db)
-                && let Some(expected) = expected_self
-                && !ty.has_invalid(db)
-                && !expected.has_invalid(db)
-            {
-                let (exp_base, exp_args) = expected.decompose_ty_app(db);
-                let ty_norm = normalize_ty(db, ty, self.scope(), assumptions);
-                let (ty_base, ty_args) = ty_norm.decompose_ty_app(db);
-                let same_base = ty_base == exp_base;
-                let same_args = exp_args.iter().zip(ty_args.iter()).all(|(a, b)| a == b);
-                if !(same_base && same_args) {
-                    out.push(
-                        ImplDiag::InvalidSelfType {
-                            span: ty_span.clone(),
-                            expected,
-                            given: ty_norm,
-                        }
-                        .into(),
-                    );
-                }
-            }
-        }
-        out
+        self.param_views(db).flat_map(|v| v.diags(db)).collect()
     }
 
     /// Aggregate all function-level definition diagnostics using the semantic surface.
@@ -454,7 +364,7 @@ impl<'db> Func<'db> {
     /// - Parameter type checks (star kind, constness, `Self` shape when applicable)
     /// - Explicit return type checks (star kind, constness)
     /// - In `impl` blocks, detect inherent method conflicts with existing methods
-    pub fn analyze(self, db: &'db dyn HirAnalysisDb) -> Vec<TyDiagCollection<'db>> {
+    fn analyze(self, db: &'db dyn HirAnalysisDb) -> Vec<TyDiagCollection<'db>> {
         use ty::canonical::Canonical;
         use ty::method_table::probe_method;
 
@@ -503,6 +413,90 @@ impl<'db> Func<'db> {
                         break;
                     }
                 }
+            }
+        }
+
+        out
+    }
+}
+
+impl<'db> Diagnosable<'db> for FuncParamView<'db> {
+    type Diagnostic = TyDiagCollection<'db>;
+
+    fn diags(self, db: &'db dyn HirAnalysisDb) -> Vec<Self::Diagnostic> {
+        use ty::diagnostics::ImplDiag;
+        use ty::normalize::normalize_ty;
+        use ty::trait_resolution::{WellFormedness, check_ty_wf};
+        use ty::ty_error::collect_hir_ty_diags;
+
+        let mut out = Vec::new();
+        let func = self.func();
+        let assumptions = func.assumptions(db);
+
+        let Some(hir_ty) = self.hir_ty(db) else {
+            return out;
+        };
+
+        // Surface name-resolution errors for the parameter type first
+        let errs =
+            collect_hir_ty_diags(db, func.scope(), hir_ty, self.lazy_ty_span(db), assumptions);
+        if !errs.is_empty() {
+            return errs;
+        }
+
+        let ty = ty::ty_lower::lower_hir_ty(db, hir_ty, func.scope(), assumptions);
+        let ty_span = self.ty_span(db);
+
+        if !ty.has_star_kind(db) {
+            out.push(TyLowerDiag::ExpectedStarKind(ty_span.clone()).into());
+            return out;
+        }
+        if ty.is_const_ty(db) {
+            out.push(
+                TyLowerDiag::NormalTypeExpected {
+                    span: ty_span.clone(),
+                    given: ty,
+                }
+                .into(),
+            );
+            return out;
+        }
+
+        // Well-formedness / trait-bound satisfaction for parameter type
+        match check_ty_wf(db, func.top_mod(db).ingot(db), ty, assumptions) {
+            WellFormedness::WellFormed => {}
+            WellFormedness::IllFormed { goal, subgoal } => {
+                out.push(
+                    TraitConstraintDiag::TraitBoundNotSat {
+                        span: ty_span.clone(),
+                        primary_goal: goal,
+                        unsat_subgoal: subgoal,
+                    }
+                    .into(),
+                );
+            }
+        }
+
+        // Self-parameter type shape check
+        if self.is_self_param(db)
+            && let Some(expected) = func.expected_self_ty(db)
+            && !ty.has_invalid(db)
+            && !expected.has_invalid(db)
+        {
+            let (exp_base, exp_args) = expected.decompose_ty_app(db);
+            let ty_norm = normalize_ty(db, ty, func.scope(), assumptions);
+            let (ty_base, ty_args) = ty_norm.decompose_ty_app(db);
+            let same_base = ty_base == exp_base;
+            let same_args = exp_args.iter().zip(ty_args.iter()).all(|(a, b)| a == b);
+            if !(same_base && same_args) {
+                out.push(
+                    ImplDiag::InvalidSelfType {
+                        span: ty_span,
+                        expected,
+                        given: ty_norm,
+                    }
+                    .into(),
+                );
             }
         }
 
@@ -1137,7 +1131,7 @@ impl<'db> Struct<'db> {
         ));
 
         for v in FieldParent::Struct(self).fields(db) {
-            out.extend(v.diags_wf(db));
+            out.extend(v.diags(db));
         }
 
         let clause = WhereClauseView {
@@ -1255,34 +1249,25 @@ impl<'db> VariantView<'db> {
     }
 }
 
-impl<'db> FieldView<'db> {
+impl<'db> Diagnosable<'db> for FieldView<'db> {
+    type Diagnostic = TyDiagCollection<'db>;
+
     /// Diagnostics for this field's type: star-kind/const-ness and const-type parameter mismatch.
-    /// Returns an empty list if no issues are found. Assumptions are derived from owner context.
-    pub fn diags_wf(self, db: &'db dyn HirAnalysisDb) -> Vec<TyDiagCollection<'db>> {
+    fn diags(self, db: &'db dyn HirAnalysisDb) -> Vec<Self::Diagnostic> {
         use name_resolution::{PathRes, resolve_path};
         use ty::trait_resolution::{PredicateListId, WellFormedness, check_ty_wf};
         use ty::ty_def::TyData;
-        use ty::ty_error::collect_ty_lower_errors;
+        use ty::ty_error::collect_hir_ty_diags;
 
         let mut out = Vec::new();
 
         // First, surface name-resolution errors for the field's HIR type path.
         if let Some(hir_ty) = self.hir_type_ref(db).to_opt() {
-            let (scope, owner_item) = match self.parent {
-                FieldParent::Struct(s) => (s.scope(), ItemKind::Struct(s)),
-                FieldParent::Contract(c) => (c.scope(), ItemKind::Contract(c)),
-                FieldParent::Variant(v) => (v.enum_.scope(), ItemKind::Enum(v.enum_)),
-            };
-            let assumptions = constraints_for(db, owner_item);
-            let ty_span = match self.parent {
-                FieldParent::Struct(s) => s.span().fields().field(self.idx).ty(),
-                FieldParent::Contract(c) => c.span().fields().field(self.idx).ty(),
-                FieldParent::Variant(v) => v.span().fields().field(self.idx).ty(),
-            };
-            let mut errs = collect_ty_lower_errors(db, scope, hir_ty, ty_span, assumptions);
+            let assumptions = constraints_for(db, self.owner_item());
+            let errs =
+                collect_hir_ty_diags(db, self.scope(), hir_ty, self.lazy_ty_span(), assumptions);
             if !errs.is_empty() {
-                out.append(&mut errs);
-                return out;
+                return errs;
             }
         }
 
@@ -1305,11 +1290,7 @@ impl<'db> FieldView<'db> {
 
         // Trait-bound well-formedness for field type.
         {
-            let owner_item = match self.parent {
-                FieldParent::Struct(s) => ItemKind::Struct(s),
-                FieldParent::Contract(c) => ItemKind::Contract(c),
-                FieldParent::Variant(v) => ItemKind::Enum(v.enum_),
-            };
+            let owner_item = self.owner_item();
             let assumptions = constraints_for(db, owner_item);
             match check_ty_wf(db, owner_item.top_mod(db).ingot(db), ty, assumptions) {
                 WellFormedness::WellFormed => {}
@@ -1380,7 +1361,7 @@ impl<'db> Enum<'db> {
                     },
                 ));
                 for f in v.fields(db) {
-                    out.extend(f.diags_wf(db));
+                    out.extend(f.diags(db));
                 }
             } else if matches!(v.kind(db), VariantKind::Tuple(_)) {
                 out.extend(v.diags_tuple_elems_wf(db));
@@ -1418,7 +1399,7 @@ impl<'db> Diagnosable<'db> for Contract<'db> {
             |idxs| TyLowerDiag::DuplicateFieldName(FieldParent::Contract(self), idxs).into(),
         ));
         for v in FieldParent::Contract(self).fields(db) {
-            out.extend(v.diags_wf(db));
+            out.extend(v.diags(db));
         }
         out
     }

@@ -20,6 +20,31 @@ use super::{
 };
 use crate::visitor::prelude::LazyTraitRefSpan;
 
+/// Collect all type-lowering diagnostics for a HIR type.
+///
+/// This encapsulates the two-phase error collection strategy:
+/// 1. First tries to get precise HIR-based errors (path resolution, visibility)
+/// 2. Falls back to semantic `InvalidCause` errors if none found
+pub fn collect_hir_ty_diags<'db>(
+    db: &'db dyn HirAnalysisDb,
+    scope: ScopeId<'db>,
+    hir_ty: TypeId<'db>,
+    span: LazyTySpan<'db>,
+    assumptions: PredicateListId<'db>,
+) -> Vec<TyDiagCollection<'db>> {
+    // Try precise HIR-based errors first
+    let diags = collect_ty_lower_errors(db, scope, hir_ty, span.clone(), assumptions);
+    if !diags.is_empty() {
+        return diags;
+    }
+
+    // Fall back to semantic errors
+    let ty = lower_hir_ty(db, hir_ty, scope, assumptions);
+    emit_invalid_ty_error(db, ty, span.into())
+        .into_iter()
+        .collect()
+}
+
 pub fn collect_ty_lower_errors<'db>(
     db: &'db dyn HirAnalysisDb,
     scope: ScopeId<'db>,
