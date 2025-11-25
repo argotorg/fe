@@ -175,7 +175,7 @@ impl Rewrite for ast::Item {
             ItemKind::Struct(struct_) => struct_.rewrite(context, _shape),
             ItemKind::Contract(contract) => contract.rewrite(context, _shape),
             ItemKind::Enum(enum_) => enum_.rewrite(context, _shape),
-            ItemKind::TypeAlias(_) => Some(context.snippet_trimmed(self)),
+            ItemKind::TypeAlias(type_alias) => type_alias.rewrite(context, _shape),
             ItemKind::Impl(impl_) => impl_.rewrite(context, _shape),
             ItemKind::Trait(trait_) => trait_.rewrite(context, _shape),
             ItemKind::ImplTrait(impl_trait) => impl_trait.rewrite(context, _shape),
@@ -959,6 +959,27 @@ impl Rewrite for ast::UseAlias {
         } else {
             None
         }
+    }
+}
+
+impl Rewrite for ast::TypeAlias {
+    fn rewrite(&self, context: &RewriteContext<'_>, shape: Shape) -> Option<String> {
+        let mut out = String::new();
+
+        write_attrs(self, context, &mut out);
+        write_item_modifier(self, &mut out);
+
+        out.push_str("type ");
+        out.push_str(context.snippet(self.alias()?.text_range()).trim());
+
+        write_generics(self, context, shape, &mut out);
+
+        if let Some(ty) = self.ty() {
+            out.push_str(" = ");
+            out.push_str(&ty.rewrite_or_original(context, shape));
+        }
+
+        Some(out)
     }
 }
 
