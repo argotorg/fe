@@ -1,5 +1,5 @@
 ---
-source: crates/hir-analysis/tests/ty_check.rs
+source: crates/hir/tests/ty_check.rs
 expression: res
 input_file: test_files/ty_check/trait_projection.fe
 ---
@@ -77,7 +77,7 @@ note:
 51 │ ╭ {
 52 │ │     x.into_iter().next()
 53 │ │ }
-   │ ╰─^ T::IntoIter::Item
+   │ ╰─^ T::Item
 
 note: 
    ┌─ trait_projection.fe:52:5
@@ -95,4 +95,4 @@ note:
    ┌─ trait_projection.fe:52:5
    │
 52 │     x.into_iter().next()
-   │     ^^^^^^^^^^^^^^^^^^^^ T::IntoIter::Item
+   │     ^^^^^^^^^^^^^^^^^^^^ T::Item

@@ -248,5 +248,13 @@ fn try_resolve_type_bound<'db>(
         Either::Right(ty) => ty,
     };
 
-    lower_trait_ref(db, ty, deferred.trait_ref, deferred.scope, assumptions).ok()
+    lower_trait_ref(
+        db,
+        ty,
+        deferred.trait_ref,
+        deferred.scope,
+        assumptions,
+        None,
+    )
+    .ok()
 }

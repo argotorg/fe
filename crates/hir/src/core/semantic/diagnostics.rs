@@ -72,7 +72,7 @@ impl<'db> SuperTraitRefView<'db> {
         let assumptions = self.assumptions(db);
         let tr = self.trait_ref(db);
 
-        let inst = match trait_lower::lower_trait_ref(db, subject, tr, scope, assumptions) {
+        let inst = match trait_lower::lower_trait_ref(db, subject, tr, scope, assumptions, None) {
             Ok(i) => i,
             Err(TraitRefLowerError::PathResError(err)) => {
                 let path = tr.path(db).unwrap();
@@ -224,7 +224,7 @@ impl<'db> WherePredicateBoundView<'db> {
         let tr = self.trait_ref(db);
         let span = self.trait_ref_span();
 
-        match trait_lower::lower_trait_ref(db, subject, tr, scope, assumptions) {
+        match trait_lower::lower_trait_ref(db, subject, tr, scope, assumptions, None) {
             Ok(inst) => {
                 let expected = inst.def(db).self_param(db).kind(db);
                 if !expected.does_match(subject.kind(db)) {
@@ -1653,7 +1653,7 @@ impl<'db> GenericParamOwner<'db> {
                     .bounds()
                     .bound(i)
                     .trait_bound();
-                match trait_lower::lower_trait_ref(db, subject, *tr, scope, assumptions) {
+                match trait_lower::lower_trait_ref(db, subject, *tr, scope, assumptions, None) {
                     Ok(inst) => {
                         let expected = inst.def(db).self_param(db).kind(db);
                         if !expected.does_match(subject.kind(db)) {

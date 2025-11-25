@@ -51,9 +51,7 @@ use crate::analysis::ty::adt_def::{AdtCycleMember, AdtDef, AdtField, AdtRef};
 use crate::analysis::ty::trait_def::{
     ImplementorId, TraitInstId, does_impl_trait_conflict, ingot_trait_env,
 };
-use crate::analysis::ty::trait_lower::{
-    TraitRefLowerError, lower_trait_ref, lower_trait_ref_with_owner_self,
-};
+use crate::analysis::ty::trait_lower::{TraitRefLowerError, lower_trait_ref};
 use crate::analysis::ty::trait_resolution::constraint::{
     collect_adt_constraints, collect_constraints, collect_func_def_constraints,
 };
@@ -734,7 +732,7 @@ impl<'db> WherePredicateBoundView<'db> {
         let owner_item = ItemKind::from(self.pred.clause.owner);
         let assumptions = constraints_for(db, owner_item);
         let scope = owner_item.scope();
-        lower_trait_ref(db, subject, self.trait_ref(db), scope, assumptions).ok()
+        lower_trait_ref(db, subject, self.trait_ref(db), scope, assumptions, None).ok()
     }
 }
 
@@ -850,7 +848,7 @@ impl<'db> Trait<'db> {
         let mut super_traits = IndexSet::new();
         for view in self.super_trait_refs(db) {
             let super_ref = view.trait_ref(db);
-            if let Ok(inst) = lower_trait_ref(db, self_param, super_ref, scope, assumptions) {
+            if let Ok(inst) = lower_trait_ref(db, self_param, super_ref, scope, assumptions, None) {
                 super_traits.insert(inst);
             }
         }
@@ -1000,8 +998,14 @@ impl<'db> SuperTraitRefView<'db> {
         let tr = self.trait_ref(db);
         let scope = self.owner.scope();
         let assumptions = self.assumptions(db);
-        match crate::analysis::ty::trait_lower::lower_trait_ref(db, subject, tr, scope, assumptions)
-        {
+        match crate::analysis::ty::trait_lower::lower_trait_ref(
+            db,
+            subject,
+            tr,
+            scope,
+            assumptions,
+            None,
+        ) {
             Ok(v) => Ok(v),
             Err(TraitRefLowerError::PathResError(_)) => Err(SuperTraitLowerError::PathResolution),
             Err(TraitRefLowerError::InvalidDomain(_)) => Err(SuperTraitLowerError::InvalidDomain),
@@ -1018,7 +1022,7 @@ impl<'db> SuperTraitRefView<'db> {
         let scope = self.owner.scope();
         let assumptions = self.assumptions(db);
         let tr = self.trait_ref(db);
-        let expected = match lower_trait_ref(db, subject, tr, scope, assumptions) {
+        let expected = match lower_trait_ref(db, subject, tr, scope, assumptions, None) {
             Ok(inst) => inst.def(db).self_param(db).kind(db).clone(),
             // If we cannot lower, defer to other diagnostics; do not emit mismatch here.
             Err(
@@ -1173,7 +1177,7 @@ impl<'db> ImplTrait<'db> {
         // semantic helpers.
         let assumptions = constraints_for(db, self.into());
 
-        let trait_inst = lower_trait_ref(db, ty, trait_ref, self.scope(), assumptions)?;
+        let trait_inst = lower_trait_ref(db, ty, trait_ref, self.scope(), assumptions, None)?;
 
         // Preserve ingot check used when lowering impl traits: an impl is
         // only valid if it lives in the same ingot as either its
@@ -1506,13 +1510,13 @@ impl<'db> AssocTypeBoundView<'db> {
         scope: ScopeId<'db>,
         assumptions: PredicateListId<'db>,
     ) -> Option<TraitInstId<'db>> {
-        lower_trait_ref_with_owner_self(
+        lower_trait_ref(
             db,
             subject,
             self.trait_ref(db),
             scope,
             assumptions,
-            owner_self,
+            Some(owner_self),
         )
         .ok()
     }

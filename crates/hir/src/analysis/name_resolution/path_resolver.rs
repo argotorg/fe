@@ -712,7 +712,7 @@ where
                 _ => {}
             }
         }
-        let trait_inst = match lower_trait_ref(db, ty, trait_, scope, assumptions) {
+        let trait_inst = match lower_trait_ref(db, ty, trait_, scope, assumptions, None) {
             Ok(inst) => inst,
             Err(err) => {
                 let trait_path = trait_.path(db).to_opt().unwrap_or(path);
@@ -1076,6 +1076,7 @@ pub fn find_associated_type<'db>(
                         trait_ref,
                         scope,
                         assumptions,
+                        None,
                     )
                     && inst.def(db).assoc_ty(db, name).is_some()
                 {

@@ -141,7 +141,7 @@ impl<'db> TyCheckEnv<'db> {
 
             let trait_ref = TraitRefId::new(self.db, Partial::Present(key_path));
             let provided_ty =
-                match lower_trait_ref(self.db, e_ty, trait_ref, func.scope(), assumptions) {
+                match lower_trait_ref(self.db, e_ty, trait_ref, func.scope(), assumptions, None) {
                     Ok(inst) => {
                         self.effect_bounds.push(inst);
                         e_ty
