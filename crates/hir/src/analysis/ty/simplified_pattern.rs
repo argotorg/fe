@@ -10,6 +10,7 @@ use crate::core::hir_def::{
     Body as HirBody, LitKind, Partial, Pat as HirPat, PathId, VariantKind, scope_graph::ScopeId,
 };
 use crate::core::hir_def::{EnumVariant, FieldParent, IdentId, PatId};
+use crate::core::semantic::SymbolInfo;
 use rustc_hash::FxHashMap;
 use smallvec1::SmallVec;
 

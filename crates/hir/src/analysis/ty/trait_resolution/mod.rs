@@ -12,7 +12,7 @@ use crate::analysis::{
         visitor::collect_flags,
     },
 };
-use crate::{Ingot, hir_def::HirIngot};
+use crate::{Ingot, core::semantic::SymbolInfo, hir_def::HirIngot};
 use common::indexmap::IndexSet;
 use constraint::collect_constraints;
 use salsa::Update;

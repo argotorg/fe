@@ -3,6 +3,7 @@
 use std::fmt;
 
 use crate::{
+    core::semantic::SymbolInfo,
     hir_def::{
         Body, Enum, GenericParamOwner, IdentId, IntegerId, ItemKind, PathId,
         TypeAlias as HirTypeAlias,
@@ -800,7 +801,7 @@ impl InvalidCause<'_> {
             } => {
                 format!(
                     "UnboundTypeAliasParam {{ alias: {:?},  given: {n_given_args} }}",
-                    alias.name(db).to_opt().map(|i| i.data(db)),
+                    alias.name(db).map(|i| i.data(db)),
                 )
             }
             InvalidCause::AliasCycle(v) => format!("AliasCycle(len={})", v.len()),

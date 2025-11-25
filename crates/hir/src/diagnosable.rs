@@ -8,6 +8,7 @@
 use rustc_hash::FxHashMap;
 use smallvec1::SmallVec;
 
+use super::SymbolInfo;
 use crate::analysis::HirAnalysisDb;
 use crate::analysis::name_resolution;
 use crate::analysis::ty;
@@ -641,7 +642,7 @@ impl<'db> ImplTrait<'db> {
                 .instantiate_identity();
 
         for assoc in implementor.assoc_type_views(db) {
-            let Some(name) = assoc.name(db) else { continue };
+            let Some(name) = assoc.assoc.name(db) else { continue };
 
             for bound_inst in assoc.bounds(db) {
                 let canonical_bound = ty::canonical::Canonical::new(db, bound_inst);

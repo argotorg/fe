@@ -15,6 +15,7 @@ use super::{
 };
 use crate::{
     HirDb,
+    core::semantic::SymbolInfo,
     hir_def::{BodyKind, GenericParamOwner},
     span::DynLazySpan,
 };
