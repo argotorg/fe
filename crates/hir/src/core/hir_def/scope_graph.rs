@@ -329,7 +329,7 @@ impl<'db> ScopeId<'db> {
 
             ScopeId::FuncParam(parent, idx) => {
                 let func: Func = parent.try_into().unwrap();
-                let param = &func.params(db).to_opt()?.data(db)[idx as usize];
+                let param = &func.params_list(db).to_opt()?.data(db)[idx as usize];
                 let param_span = func.span().params().param(idx as usize);
                 if let Some(FuncParamName::Ident(_)) = param.label {
                     Some(param_span.label().into())
@@ -664,7 +664,7 @@ impl<'db> FromScope<'db> for &'db FuncParam<'db> {
         };
 
         let func: Func = parent.try_into().unwrap();
-        func.params(db)
+        func.params_list(db)
             .to_opt()
             .map(|params| &params.data(db)[idx as usize])
     }

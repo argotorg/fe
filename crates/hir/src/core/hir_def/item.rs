@@ -238,7 +238,6 @@ impl<'db> GenericParamOwner<'db> {
         ItemKind::from(self).top_mod(db)
     }
 
-    // could this be private?
     pub(in crate::core) fn params_list(self, db: &'db dyn HirDb) -> GenericParamListId<'db> {
         match self {
             GenericParamOwner::Func(func) => func.generic_params(db),
@@ -612,8 +611,7 @@ pub struct Func<'db> {
     pub(in crate::core) attributes: AttrListId<'db>,
     pub(in crate::core) generic_params: GenericParamListId<'db>,
     pub(in crate::core) where_clause: WhereClauseId<'db>,
-    // TODO: Add semantic view for FuncParamListId and restrict visibility
-    pub params: Partial<FuncParamListId<'db>>,
+    pub(in crate::core) params_list: Partial<FuncParamListId<'db>>,
     pub(in crate::core) effects: EffectParamListId<'db>,
     pub(in crate::core) ret_type_ref: Option<TypeId<'db>>,
     pub modifier: ItemModifier,
@@ -637,7 +635,7 @@ impl<'db> Func<'db> {
     }
 
     pub fn is_method(self, db: &dyn HirDb) -> bool {
-        let Some(params) = self.params(db).to_opt() else {
+        let Some(params) = self.params_list(db).to_opt() else {
             return false;
         };
 
@@ -662,11 +660,11 @@ impl<'db> Func<'db> {
     }
 
     pub fn param_label(self, db: &'db dyn HirDb, idx: usize) -> Option<IdentId<'db>> {
-        self.params(db).to_opt()?.data(db).get(idx)?.label_eagerly()
+        self.params_list(db).to_opt()?.data(db).get(idx)?.label_eagerly()
     }
 
     pub fn param_label_or_name(self, db: &'db dyn HirDb, idx: usize) -> Option<FuncParamName<'db>> {
-        let param = self.params(db).to_opt()?.data(db).get(idx)?;
+        let param = self.params_list(db).to_opt()?.data(db).get(idx)?;
         param.label.or(param.name.to_opt())
     }
 
@@ -676,7 +674,7 @@ impl<'db> Func<'db> {
         Some(CallableDef::Func(self))
     }
 
-    // Function semantic helpers live in `hir_def::semantic`.
+    // Function semantic helpers live in `crate::semantic`.
 }
 
 #[salsa::tracked]
@@ -892,7 +890,7 @@ impl<'db> Impl<'db> {
 
     // raw type_ref access kept; shim exposes public ___tmp method.
 
-    // Semantic `ty` lives in `hir_def::semantic`.
+    // Semantic `ty` lives in `crate::semantic`.
 }
 
 #[salsa::tracked]
@@ -1030,7 +1028,7 @@ impl<'db> ImplTrait<'db> {
 
     // raw type_ref access kept; shim exposes public ___tmp method.
 
-    // Semantic `ty` lives in `hir_def::semantic`.
+    // Semantic `ty` lives in `crate::semantic`.
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, salsa::Update)]
@@ -1071,7 +1069,7 @@ impl<'db> Const<'db> {
         ScopeId::from_item(self.into())
     }
 
-    // Semantic `ty` lives in `hir_def::semantic`.
+    // Semantic `ty` lives in `crate::semantic`.
 
     // raw type_ref access kept; shim exposes public ___tmp method.
 }

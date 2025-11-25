@@ -503,7 +503,7 @@ pub fn walk_func<'db, V>(
         },
     );
 
-    if let Some(id) = func.params(ctxt.db).to_opt() {
+    if let Some(id) = func.params_list(ctxt.db).to_opt() {
         ctxt.with_new_ctxt(
             |span| span.params(),
             |ctxt| {

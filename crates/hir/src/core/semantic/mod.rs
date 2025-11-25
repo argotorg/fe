@@ -26,7 +26,7 @@ use crate::analysis::ty::ty_def::Kind;
 use crate::hir_def::params::KindBound as HirKindBound;
 use crate::hir_def::scope_graph::ScopeId;
 
-fn lower_hir_kind_local(k: &HirKindBound) -> Kind {
+pub fn lower_hir_kind_local(k: &HirKindBound) -> Kind {
     use crate::hir_def::Partial;
     match k {
         HirKindBound::Mono => Kind::Star,
@@ -59,14 +59,17 @@ use crate::analysis::ty::ty_def::TyData;
 use crate::analysis::ty::ty_lower::{GenericParamTypeSet, collect_generic_params};
 use crate::analysis::ty::visitor::{TyVisitor, walk_ty};
 use crate::analysis::ty::{
-    trait_resolution::PredicateListId,
+    diagnostics::{TraitConstraintDiag, TyDiagCollection},
+    trait_resolution::{PredicateListId, WellFormedness, check_ty_wf},
     ty_def::{InvalidCause, TyId},
+    ty_error::collect_ty_lower_errors,
     ty_lower::{TyAlias, lower_hir_ty, lower_type_alias, lower_type_alias_from_hir},
 };
 use crate::core::adt_lower::lower_adt;
 use common::indexmap::IndexMap;
 use indexmap::IndexSet;
-pub mod diagnostics;
+// Re-export from crate root for backwards compatibility
+pub use crate::diagnosable as diagnostics;
 
 /// Core-exposed entry point for alias lowering. Reads the HIR type_ref (core-visible)
 /// and delegates to the analysis helper to keep visibility tight without shims.
@@ -79,7 +82,7 @@ pub(crate) fn lower_type_alias_body<'db>(
 }
 
 /// Consolidated assumptions for any item kind.
-pub(in crate::core) fn constraints_for<'db>(
+pub fn constraints_for<'db>(
     db: &'db dyn HirAnalysisDb,
     item: ItemKind<'db>,
 ) -> PredicateListId<'db> {
@@ -141,7 +144,7 @@ impl<'db> Func<'db> {
     pub fn arg_tys(self, db: &'db dyn HirAnalysisDb) -> Vec<Binder<TyId<'db>>> {
         use crate::analysis::ty::ty_def::{InvalidCause, TyId};
         let assumptions = self.assumptions(db);
-        match self.params(db).to_opt() {
+        match self.params_list(db).to_opt() {
             Some(params) => params
                 .data(db)
                 .iter()
@@ -173,6 +176,15 @@ impl<'db> Func<'db> {
             ScopeId::Item(ItemKind::Impl(im)) => Some(im.ty(db)),
             _ => None,
         }
+    }
+
+    /// Return type lowering errors for functions with explicit return types.
+    pub fn ret_ty_errors(self, db: &'db dyn HirAnalysisDb) -> Vec<TyDiagCollection<'db>> {
+        let Some(hir_ty) = self.ret_type_ref(db) else {
+            return Vec::new();
+        };
+        let assumptions = self.assumptions(db);
+        collect_ty_lower_errors(db, self.scope(), hir_ty, self.span().ret_ty(), assumptions)
     }
 }
 
@@ -320,12 +332,12 @@ pub struct FuncParamView<'db> {
 
 impl<'db> FuncParamView<'db> {
     pub fn name(self, db: &'db dyn HirDb) -> Option<IdentId<'db>> {
-        let list = self.func.params(db).to_opt()?;
+        let list = self.func.params_list(db).to_opt()?;
         list.data(db).get(self.idx)?.name()
     }
 
     pub fn label(self, db: &'db dyn HirDb) -> Option<IdentId<'db>> {
-        let list = self.func.params(db).to_opt()?;
+        let list = self.func.params_list(db).to_opt()?;
         match list.data(db).get(self.idx)?.label {
             Some(FuncParamName::Ident(id)) => Some(id),
             _ => None,
@@ -333,12 +345,12 @@ impl<'db> FuncParamView<'db> {
     }
 
     pub fn label_eagerly(self, db: &'db dyn HirDb) -> Option<IdentId<'db>> {
-        let list = self.func.params(db).to_opt()?;
+        let list = self.func.params_list(db).to_opt()?;
         list.data(db).get(self.idx)?.label_eagerly()
     }
 
     pub fn is_self_param(self, db: &'db dyn HirDb) -> bool {
-        let list = self.func.params(db).to_opt();
+        let list = self.func.params_list(db).to_opt();
         match list.and_then(|l| l.data(db).get(self.idx)) {
             Some(p) => p.is_self_param(db),
             None => false,
@@ -346,7 +358,7 @@ impl<'db> FuncParamView<'db> {
     }
 
     pub fn is_mut(self, db: &'db dyn HirDb) -> bool {
-        let list = self.func.params(db).to_opt();
+        let list = self.func.params_list(db).to_opt();
         match list.and_then(|l| l.data(db).get(self.idx)) {
             Some(p) => p.is_mut,
             None => false,
@@ -357,13 +369,8 @@ impl<'db> FuncParamView<'db> {
         self.func.span().params().param(self.idx)
     }
 
-    fn hir_ty(self, db: &'db dyn HirDb) -> Option<TypeId<'db>> {
-        let list = self.func.params(db).to_opt()?;
-        list.data(db).get(self.idx)?.ty.to_opt()
-    }
-
     pub fn self_ty_fallback(self, db: &'db dyn HirDb) -> bool {
-        let list = self.func.params(db).to_opt();
+        let list = self.func.params_list(db).to_opt();
         match list.and_then(|l| l.data(db).get(self.idx)) {
             Some(p) => p.self_ty_fallback,
             None => false,
@@ -412,6 +419,94 @@ impl<'db> FuncParamView<'db> {
             self.span().ty().into()
         }
     }
+
+    /// All type-related diagnostics for this parameter.
+    pub fn ty_diags(self, db: &'db dyn HirAnalysisDb) -> Vec<TyDiagCollection<'db>> {
+        use crate::analysis::ty::diagnostics::ImplDiag;
+        use crate::analysis::ty::normalize::normalize_ty;
+        use crate::analysis::ty::ty_error::collect_hir_ty_diags;
+
+        let func = self.func;
+        let assumptions = func.assumptions(db);
+
+        let Some(hir_ty) = self
+            .func
+            .params_list(db)
+            .to_opt()
+            .and_then(|l| l.data(db).get(self.idx))
+            .and_then(|p| p.ty.to_opt())
+        else {
+            return Vec::new();
+        };
+
+        // Surface name-resolution errors for the parameter type first
+        let errs =
+            collect_hir_ty_diags(db, func.scope(), hir_ty, self.lazy_ty_span(db), assumptions);
+        if !errs.is_empty() {
+            return errs;
+        }
+
+        let ty = lower_hir_ty(db, hir_ty, func.scope(), assumptions);
+        let ty_span = self.ty_span(db);
+
+        let mut out = Vec::new();
+
+        if !ty.has_star_kind(db) {
+            out.push(TyDiagCollection::from(
+                crate::analysis::ty::diagnostics::TyLowerDiag::ExpectedStarKind(ty_span.clone()),
+            ));
+            return out;
+        }
+        if ty.is_const_ty(db) {
+            out.push(
+                crate::analysis::ty::diagnostics::TyLowerDiag::NormalTypeExpected {
+                    span: ty_span.clone(),
+                    given: ty,
+                }
+                .into(),
+            );
+            return out;
+        }
+
+        // Well-formedness / trait-bound satisfaction for parameter type
+        if let WellFormedness::IllFormed { goal, subgoal } =
+            check_ty_wf(db, func.top_mod(db).ingot(db), ty, assumptions)
+        {
+            out.push(
+                TraitConstraintDiag::TraitBoundNotSat {
+                    span: ty_span.clone(),
+                    primary_goal: goal,
+                    unsat_subgoal: subgoal,
+                }
+                .into(),
+            );
+        }
+
+        // Self-parameter type shape check
+        if self.is_self_param(db)
+            && let Some(expected) = func.expected_self_ty(db)
+            && !ty.has_invalid(db)
+            && !expected.has_invalid(db)
+        {
+            let (exp_base, exp_args) = expected.decompose_ty_app(db);
+            let ty_norm = normalize_ty(db, ty, func.scope(), assumptions);
+            let (ty_base, ty_args) = ty_norm.decompose_ty_app(db);
+            let same_base = ty_base == exp_base;
+            let same_args = exp_args.iter().zip(ty_args.iter()).all(|(a, b)| a == b);
+            if !(same_base && same_args) {
+                out.push(
+                    ImplDiag::InvalidSelfType {
+                        span: ty_span,
+                        expected,
+                        given: ty_norm,
+                    }
+                    .into(),
+                );
+            }
+        }
+
+        out
+    }
 }
 
 // Effect param views --------------------------------------------------------
@@ -455,9 +550,9 @@ impl<'db> EffectParamView<'db> {
 
 impl<'db> Func<'db> {
     /// Iterate parameters as contextual views (semantic traversal helper).
-    pub fn param_views(self, db: &'db dyn HirDb) -> impl Iterator<Item = FuncParamView<'db>> + 'db {
+    pub fn params(self, db: &'db dyn HirDb) -> impl Iterator<Item = FuncParamView<'db>> + 'db {
         let len = self
-            .params(db)
+            .params_list(db)
             .to_opt()
             .map(|l| l.data(db).len())
             .unwrap_or(0);
@@ -563,14 +658,14 @@ impl<'db> Contract<'db> {
 
 #[derive(Clone, Copy, Debug)]
 pub struct WhereClauseView<'db> {
-    owner: WhereClauseOwner<'db>,
-    id: WhereClauseId<'db>,
+    pub owner: WhereClauseOwner<'db>,
+    pub id: WhereClauseId<'db>,
 }
 
 #[derive(Clone, Copy, Debug)]
 pub struct WherePredicateView<'db> {
-    clause: WhereClauseView<'db>,
-    idx: usize,
+    pub clause: WhereClauseView<'db>,
+    pub idx: usize,
 }
 
 impl<'db> WhereClauseOwner<'db> {
@@ -605,7 +700,7 @@ impl<'db> WhereClauseView<'db> {
 }
 
 impl<'db> WherePredicateView<'db> {
-    fn hir_pred(self, db: &'db dyn HirDb) -> &'db WherePredicate<'db> {
+    pub(in crate::core) fn hir_pred(self, db: &'db dyn HirDb) -> &'db WherePredicate<'db> {
         &self.clause.id.data(db)[self.idx]
     }
 
@@ -696,19 +791,55 @@ impl<'db> WherePredicateView<'db> {
             .map(|t| !t.has_invalid(db) && !t.has_param(db))
             .unwrap_or(false)
     }
+
+    /// Diagnostics for all bounds (trait and kind) of this predicate.
+    pub fn bound_diags(
+        self,
+        db: &'db dyn HirAnalysisDb,
+        subject: TyId<'db>,
+    ) -> Vec<TyDiagCollection<'db>> {
+        let mut out = Vec::new();
+        let hir = &self.clause.id.data(db)[self.idx];
+
+        for (i, bound) in hir.bounds.iter().enumerate() {
+            match bound {
+                TypeBound::Trait(_) => {
+                    let bview = WherePredicateBoundView::new(self, i);
+                    out.extend(bview.diags(db));
+                }
+                TypeBound::Kind(crate::hir_def::Partial::Present(kb)) => {
+                    let expected = lower_hir_kind_local(kb);
+                    let actual = subject.kind(db);
+                    if !actual.does_match(&expected) {
+                        let span = self.span().bounds().bound(i).kind_bound();
+                        out.push(
+                            crate::analysis::ty::diagnostics::TyLowerDiag::InconsistentKindBound {
+                                span: span.into(),
+                                ty: subject,
+                                bound: expected,
+                            }
+                            .into(),
+                        );
+                    }
+                }
+                _ => {}
+            }
+        }
+        out
+    }
 }
 
 #[derive(Clone, Copy, Debug)]
 pub struct WherePredicateBoundView<'db> {
-    pred: WherePredicateView<'db>,
-    idx: usize,
+    pub pred: WherePredicateView<'db>,
+    pub idx: usize,
 }
 
 impl<'db> WherePredicateBoundView<'db> {
-    pub(in crate::core) fn new(pred: WherePredicateView<'db>, idx: usize) -> Self {
+    pub fn new(pred: WherePredicateView<'db>, idx: usize) -> Self {
         Self { pred, idx }
     }
-    fn trait_ref(self, db: &'db dyn HirDb) -> TraitRefId<'db> {
+    pub fn trait_ref(self, db: &'db dyn HirDb) -> TraitRefId<'db> {
         match &self.pred.hir_pred(db).bounds[self.idx] {
             TypeBound::Trait(tr) => *tr,
             _ => unreachable!(),
@@ -745,6 +876,43 @@ impl<'db> TypeAlias<'db> {
     pub fn ty(self, db: &'db dyn HirAnalysisDb) -> TyId<'db> {
         let ta = lower_type_alias(db, self);
         *ta.alias_to.skip_binder()
+    }
+
+    /// Type lowering errors for the alias target type.
+    pub fn ty_errors(self, db: &'db dyn HirAnalysisDb) -> Vec<TyDiagCollection<'db>> {
+        let Some(hir_ty) = self.type_ref(db).to_opt() else {
+            return Vec::new();
+        };
+        let assumptions = constraints_for(db, self.into());
+        let ty = lower_hir_ty(db, hir_ty, self.scope(), assumptions);
+        if ty.has_invalid(db) {
+            collect_ty_lower_errors(db, self.scope(), hir_ty, self.span().ty(), assumptions)
+        } else {
+            Vec::new()
+        }
+    }
+
+    /// Well-formedness errors for the alias target type.
+    pub fn ty_wf_errors(self, db: &'db dyn HirAnalysisDb) -> Vec<TyDiagCollection<'db>> {
+        let Some(hir_ty) = self.type_ref(db).to_opt() else {
+            return Vec::new();
+        };
+        let assumptions = constraints_for(db, self.into());
+        let ty = lower_hir_ty(db, hir_ty, self.scope(), assumptions);
+        if let WellFormedness::IllFormed { goal, subgoal } =
+            check_ty_wf(db, self.top_mod(db).ingot(db), ty, assumptions)
+        {
+            vec![
+                TraitConstraintDiag::TraitBoundNotSat {
+                    span: self.span().ty().into(),
+                    primary_goal: goal,
+                    unsat_subgoal: subgoal,
+                }
+                .into(),
+            ]
+        } else {
+            Vec::new()
+        }
     }
 }
 
@@ -962,8 +1130,8 @@ fn collect_direct_adts<'db>(
 
 #[derive(Clone, Copy, Debug)]
 pub struct SuperTraitRefView<'db> {
-    owner: Trait<'db>,
-    idx: usize,
+    pub owner: Trait<'db>,
+    pub idx: usize,
 }
 
 impl<'db> SuperTraitRefView<'db> {
@@ -981,7 +1149,7 @@ impl<'db> SuperTraitRefView<'db> {
             .unwrap()
     }
 
-    pub(in crate::core) fn assumptions(self, db: &'db dyn HirAnalysisDb) -> PredicateListId<'db> {
+    pub fn assumptions(self, db: &'db dyn HirAnalysisDb) -> PredicateListId<'db> {
         constraints_for(db, self.owner.into())
     }
 
@@ -1054,6 +1222,21 @@ impl<'db> Impl<'db> {
             .to_opt()
             .map(|hir_ty| lower_hir_ty(db, hir_ty, self.scope(), assumptions))
             .unwrap_or_else(|| TyId::invalid(db, InvalidCause::ParseError))
+    }
+
+    /// Type lowering errors for the implementor type.
+    pub fn ty_errors(self, db: &'db dyn HirAnalysisDb) -> Vec<TyDiagCollection<'db>> {
+        let Some(hir_ty) = self.type_ref(db).to_opt() else {
+            return Vec::new();
+        };
+        let assumptions = constraints_for(db, self.into());
+        collect_ty_lower_errors(
+            db,
+            self.scope(),
+            hir_ty,
+            self.span().target_ty(),
+            assumptions,
+        )
     }
 }
 
@@ -1276,6 +1459,88 @@ impl<'db> ImplTrait<'db> {
     pub fn const_(self, db: &'db dyn HirDb, name: IdentId<'db>) -> Option<ImplAssocConstView<'db>> {
         self.assoc_consts(db).find(|c| c.name(db) == Some(name))
     }
+
+    /// Diagnostics for implementor lowering failures.
+    /// Returns `(Some(implementor), [])` on success, or `(None, diags)` on failure.
+    pub(crate) fn implementor_with_errors(
+        self,
+        db: &'db dyn HirAnalysisDb,
+    ) -> (
+        Option<Binder<ImplementorId<'db>>>,
+        Vec<TyDiagCollection<'db>>,
+    ) {
+        use crate::analysis::name_resolution::{ExpectedPathKind, diagnostics::PathResDiag};
+        use crate::analysis::ty::diagnostics::TraitLowerDiag;
+
+        // First check implementor type
+        let ty = self.ty(db);
+        if let Some(diag) = ty.emit_diag(db, self.span().ty().into()) {
+            return (None, vec![diag]);
+        }
+        if ty.has_invalid(db) {
+            return (None, Vec::new());
+        }
+
+        match self.lowered_implementor(db) {
+            Ok(implementor) => (Some(implementor), Vec::new()),
+            Err(err) => {
+                let mut diags = Vec::new();
+                match err {
+                    ImplTraitLowerError::ParseError => {}
+                    ImplTraitLowerError::TraitRef(lower_err) => match lower_err {
+                        TraitRefLowerError::PathResError(err) => {
+                            if let Some(trait_ref) = self.trait_ref(db).to_opt() {
+                                let path = trait_ref.path(db).unwrap();
+                                if let Some(diag) = err.into_diag(
+                                    db,
+                                    path,
+                                    self.span().trait_ref().path(),
+                                    ExpectedPathKind::Trait,
+                                ) {
+                                    diags.push(diag.into());
+                                }
+                            }
+                        }
+                        TraitRefLowerError::InvalidDomain(res) => {
+                            if let Some(trait_ref) = self.trait_ref(db).to_opt() {
+                                diags.push(
+                                    PathResDiag::ExpectedTrait(
+                                        self.span().trait_ref().path().into(),
+                                        trait_ref.path(db).unwrap().ident(db).unwrap(),
+                                        res.kind_name(),
+                                    )
+                                    .into(),
+                                );
+                            }
+                        }
+                        TraitRefLowerError::Ignored => {
+                            diags.push(TraitLowerDiag::ExternalTraitForExternalType(self).into());
+                        }
+                    },
+                    ImplTraitLowerError::Conflict { primary, conflict } => {
+                        diags.push(
+                            TraitLowerDiag::ConflictTraitImpl {
+                                primary,
+                                conflict_with: conflict,
+                            }
+                            .into(),
+                        );
+                    }
+                    ImplTraitLowerError::KindMismatch { expected, actual } => {
+                        diags.push(
+                            TraitConstraintDiag::TraitArgKindMismatch {
+                                span: self.span().trait_ref(),
+                                expected,
+                                actual,
+                            }
+                            .into(),
+                        );
+                    }
+                }
+                (None, diags)
+            }
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -1293,11 +1558,48 @@ impl<'db> ImplAssocTypeView<'db> {
         self.owner.span().associated_type(self.idx)
     }
 
+    /// The owning impl-trait block.
+    pub fn owner(self) -> ImplTrait<'db> {
+        self.owner
+    }
+
     /// Semantic type of this associated type implementation.
     pub fn ty(self, db: &'db dyn HirAnalysisDb) -> Option<TyId<'db>> {
         let hir = self.owner.types(db)[self.idx].type_ref.to_opt()?;
         let assumptions = constraints_for(db, self.owner.into());
         Some(lower_hir_ty(db, hir, self.owner.scope(), assumptions))
+    }
+
+    /// All type-related diagnostics for this associated type.
+    pub fn ty_diags(self, db: &'db dyn HirAnalysisDb) -> Vec<TyDiagCollection<'db>> {
+        let Some(hir) = self.owner.types(db)[self.idx].type_ref.to_opt() else {
+            return Vec::new();
+        };
+
+        let ty_span = self.span().ty();
+        let assumptions = constraints_for(db, self.owner.into());
+
+        let errs =
+            collect_ty_lower_errors(db, self.owner.scope(), hir, ty_span.clone(), assumptions);
+        if !errs.is_empty() {
+            return errs;
+        }
+
+        let ty = lower_hir_ty(db, hir, self.owner.scope(), assumptions);
+        let ingot = self.owner.top_mod(db).ingot(db);
+        if let WellFormedness::IllFormed { goal, subgoal } = check_ty_wf(db, ingot, ty, assumptions)
+        {
+            return vec![
+                TraitConstraintDiag::TraitBoundNotSat {
+                    span: ty_span.into(),
+                    primary_goal: goal,
+                    unsat_subgoal: subgoal,
+                }
+                .into(),
+            ];
+        }
+
+        Vec::new()
     }
 }
 
@@ -1654,8 +1956,8 @@ impl<'db> ImplAssocConstView<'db> {
 
 #[derive(Clone, Copy, Debug)]
 pub struct VariantView<'db> {
-    owner: Enum<'db>,
-    idx: usize,
+    pub owner: Enum<'db>,
+    pub idx: usize,
 }
 
 impl<'db> VariantView<'db> {
@@ -1738,21 +2040,14 @@ impl<'db> VariantView<'db> {
 
 #[derive(Clone, Copy, Debug)]
 pub struct FieldView<'db> {
-    parent: FieldParent<'db>,
-    idx: usize,
+    pub parent: FieldParent<'db>,
+    pub idx: usize,
 }
 
 impl<'db> FieldView<'db> {
     pub fn name(self, db: &'db dyn HirDb) -> Option<IdentId<'db>> {
         let list = self.parent.fields_list(db);
         list.data(db)[self.idx].name.to_opt()
-    }
-
-    /// Crate-local helper returning the HIR type reference (syntactic) for
-    /// this field. Prefer using `ty` when the semantic type is needed.
-    fn hir_type_ref(self, db: &'db dyn HirDb) -> Partial<TypeId<'db>> {
-        let list = self.parent.fields_list(db);
-        list.data(db)[self.idx].type_ref
     }
 
     /// Returns the semantic type of this field.
@@ -1799,6 +2094,92 @@ impl<'db> FieldView<'db> {
             FieldParent::Contract(c) => ItemKind::Contract(c),
             FieldParent::Variant(v) => ItemKind::Enum(v.enum_),
         }
+    }
+
+    /// All type-related diagnostics for this field.
+    pub fn ty_diags(self, db: &'db dyn HirAnalysisDb) -> Vec<TyDiagCollection<'db>> {
+        use crate::analysis::name_resolution::{PathRes, resolve_path};
+        use crate::analysis::ty::ty_def::TyData;
+        use crate::analysis::ty::ty_error::collect_hir_ty_diags;
+
+        let mut out = Vec::new();
+
+        // First, surface name-resolution errors for the field's HIR type path.
+        let hir_ty = self.parent.fields_list(db).data(db)[self.idx].type_ref;
+        if let Some(hir_ty) = hir_ty.to_opt() {
+            let assumptions = constraints_for(db, self.owner_item());
+            let errs =
+                collect_hir_ty_diags(db, self.scope(), hir_ty, self.lazy_ty_span(), assumptions);
+            if !errs.is_empty() {
+                return errs;
+            }
+        }
+
+        let ty = self.ty(db);
+        let span = self.ty_span();
+
+        if !ty.has_star_kind(db) {
+            out.push(
+                crate::analysis::ty::diagnostics::TyLowerDiag::ExpectedStarKind(span.clone())
+                    .into(),
+            );
+            return out;
+        }
+        if ty.is_const_ty(db) {
+            out.push(
+                crate::analysis::ty::diagnostics::TyLowerDiag::NormalTypeExpected {
+                    span: span.clone(),
+                    given: ty,
+                }
+                .into(),
+            );
+            return out;
+        }
+
+        // Trait-bound well-formedness for field type.
+        let owner_item = self.owner_item();
+        let assumptions = constraints_for(db, owner_item);
+        if let WellFormedness::IllFormed { goal, subgoal } =
+            check_ty_wf(db, owner_item.top_mod(db).ingot(db), ty, assumptions)
+        {
+            out.push(
+                TraitConstraintDiag::TraitBoundNotSat {
+                    span: span.clone(),
+                    primary_goal: goal,
+                    unsat_subgoal: subgoal,
+                }
+                .into(),
+            );
+            return out;
+        }
+
+        // Const type parameter mismatch check: if field name matches a const type parameter.
+        if let Some(name) = self.name(db)
+            && let Ok(PathRes::Ty(t)) = resolve_path(
+                db,
+                PathId::from_ident(db, name),
+                crate::hir_def::scope_graph::ScopeId::Field(self.parent, self.idx as u16),
+                PredicateListId::empty_list(db),
+                true,
+            )
+            && let TyData::ConstTy(const_ty) = t.data(db)
+        {
+            let expected = *const_ty;
+            let expected_ty = expected.ty(db);
+            if !expected_ty.has_invalid(db) && !ty.has_invalid(db) && ty != expected_ty {
+                out.push(
+                    crate::analysis::ty::diagnostics::TyLowerDiag::ConstTyMismatch {
+                        span,
+                        expected: expected_ty,
+                        given: ty,
+                    }
+                    .into(),
+                );
+                return out;
+            }
+        }
+
+        out
     }
 }
 

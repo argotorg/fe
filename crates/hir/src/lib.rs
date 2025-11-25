@@ -3,6 +3,7 @@ pub use core::lower::parse::ParserError;
 
 pub mod analysis;
 pub mod core;
+pub mod diagnosable;
 // Re-export core modules at crate root for compatibility
 pub use core::{hir_def, lower, semantic, span, visitor};
 

@@ -132,7 +132,7 @@ impl<'db> ScopeGraphBuilder<'db> {
                     inner.into(),
                     GenericParamOwner::from(inner).params_list(self.db),
                 );
-                if let Some(params) = inner.params(self.db).to_opt() {
+                if let Some(params) = inner.params_list(self.db).to_opt() {
                     self.add_func_param_scope(item_node, inner.into(), params);
                 }
 

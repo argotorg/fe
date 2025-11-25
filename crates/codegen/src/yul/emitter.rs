@@ -84,18 +84,14 @@ impl<'db> YulEmitter<'db> {
     fn init_function_state(&self) -> (Vec<String>, BlockState) {
         let mut state = BlockState::new();
         let mut params_out = Vec::new();
-        if let Some(params) = self.mir_func.func.params(self.db).to_opt() {
-            for (idx, param) in params.data(self.db).iter().enumerate() {
-                let original = param
-                    .name
-                    .to_opt()
-                    .and_then(|name| name.ident())
-                    .map(|id| id.data(self.db).to_string())
-                    .unwrap_or_else(|| format!("arg{idx}"));
-                let yul_name = original.clone();
-                params_out.push(yul_name.clone());
-                state.insert_binding(original, yul_name);
-            }
+        for (idx, param) in self.mir_func.func.params(self.db).enumerate() {
+            let original = param
+                .name(self.db)
+                .map(|id| id.data(self.db).to_string())
+                .unwrap_or_else(|| format!("arg{idx}"));
+            let yul_name = original.clone();
+            params_out.push(yul_name.clone());
+            state.insert_binding(original, yul_name);
         }
         (params_out, state)
     }

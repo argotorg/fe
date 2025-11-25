@@ -1034,7 +1034,7 @@ impl DiagnosticVoucher for TyLowerDiag<'_> {
             },
 
             Self::DuplicateArgName(func, idxs) => {
-                let views: Vec<_> = func.param_views(db).collect();
+                let views: Vec<_> = func.params(db).collect();
                 let name = views[idxs[0] as usize]
                     .name(db)
                     .expect("param name")
@@ -1061,7 +1061,7 @@ impl DiagnosticVoucher for TyLowerDiag<'_> {
             }
 
             Self::DuplicateArgLabel(func, idxs) => {
-                let views: Vec<_> = func.param_views(db).collect();
+                let views: Vec<_> = func.params(db).collect();
                 let name = views[idxs[0] as usize]
                     .label_eagerly(db)
                     .expect("param label")

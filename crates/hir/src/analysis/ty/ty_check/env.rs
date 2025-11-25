@@ -81,11 +81,10 @@ impl<'db> TyCheckEnv<'db> {
 
         env.enter_scope(body.expr(db));
 
-        // Note: Previously we aborted when the parameter list was syntactically absent.
-        // We proceed using semantic traversal (param_views); parse errors are handled upstream.
+        // We proceed using semantic traversal (params); parse errors are handled upstream.
 
         let arg_tys = func.arg_tys(db);
-        for (idx, view) in func.param_views(db).enumerate() {
+        for (idx, view) in func.params(db).enumerate() {
             let Some(name) = view.name(db) else {
                 continue;
             };
@@ -847,7 +846,7 @@ impl<'db> LocalBinding<'db> {
                 let func = env.func().unwrap();
                 match func {
                     CallableDef::Func(hir_func) => hir_func
-                        .param_views(hir_db)
+                        .params(hir_db)
                         .nth(*idx)
                         .and_then(|v| v.name(hir_db))
                         .unwrap(),

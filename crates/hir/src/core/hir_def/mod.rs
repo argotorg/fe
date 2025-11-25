@@ -9,7 +9,6 @@ pub mod pat;
 pub mod path;
 pub mod prim_ty;
 pub mod scope_graph;
-pub mod semantic;
 pub mod stmt;
 pub mod types;
 pub mod use_tree;
