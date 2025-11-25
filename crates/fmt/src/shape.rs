@@ -25,6 +25,13 @@ impl Indent {
     pub fn indent_width(self) -> usize {
         self.block_indent + self.alignment
     }
+
+    /// Writes `width` spaces to the given string.
+    pub fn push_to(width: usize, out: &mut String) {
+        for _ in 0..width {
+            out.push(' ');
+        }
+    }
 }
 
 /// Describes the available horizontal space for rewriting a node.

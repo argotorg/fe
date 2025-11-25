@@ -34,6 +34,8 @@ impl<'a> Default for ListFormatting<'a> {
 
 impl<'a> ListFormatting<'a> {
     pub fn new(_shape: Shape) -> Self {
+        // Note: shape parameter kept for API compatibility but currently unused.
+        // Future enhancement: could use shape.width to choose default tactic.
         Self::default()
     }
 
@@ -140,7 +142,5 @@ where
 }
 
 fn push_indent(out: &mut String, width: usize) {
-    for _ in 0..width {
-        out.push(' ');
-    }
+    Indent::push_to(width, out);
 }
