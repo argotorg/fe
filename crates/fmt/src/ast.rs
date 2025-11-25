@@ -6,7 +6,7 @@ use parser::{
     ast::{
         self, AttrListOwner, ExprKind, GenericArgKind, GenericArgsOwner, GenericParamKind,
         GenericParamsOwner, ItemKind, ItemModifierOwner, PatKind, StmtKind, TraitItemKind,
-        TypeKind, WhereClauseOwner, prelude::AstNode,
+        TypeKind, UsePathSegmentKind, WhereClauseOwner, prelude::AstNode,
     },
     syntax_kind::SyntaxKind,
     syntax_node::NodeOrToken,
@@ -852,16 +852,113 @@ impl Rewrite for ast::Const {
 }
 
 impl Rewrite for ast::Use {
-    fn rewrite(&self, context: &RewriteContext<'_>, _shape: Shape) -> Option<String> {
+    fn rewrite(&self, context: &RewriteContext<'_>, shape: Shape) -> Option<String> {
         let mut out = String::new();
 
         write_attrs(self, context, &mut out);
         write_item_modifier(self, &mut out);
 
+        // Account for "use " (4 chars) or "pub use " (8 chars) prefix
+        let prefix_len = if self.modifier().is_some_and(|m| m.pub_kw().is_some()) {
+            8 // "pub use "
+        } else {
+            4 // "use "
+        };
+        let use_shape = Shape::with_width(
+            shape.width.saturating_sub(prefix_len),
+            shape.indent,
+        );
+
         out.push_str("use ");
-        out.push_str(&context.snippet_trimmed(&self.use_tree()?));
+        out.push_str(&self.use_tree()?.rewrite_or_original(context, use_shape));
 
         Some(out)
+    }
+}
+
+impl Rewrite for ast::UseTree {
+    fn rewrite(&self, context: &RewriteContext<'_>, shape: Shape) -> Option<String> {
+        let mut out = String::new();
+        let mut used_width = 0;
+
+        // Format path if present (e.g., `Foo::Bar` in `Foo::Bar::{x, y}`)
+        if let Some(path) = self.path() {
+            let path_str = path.rewrite_or_original(context, shape);
+            used_width += path_str.len();
+            out.push_str(&path_str);
+        }
+
+        // Format children if present (e.g., `{x, y}` in `Foo::{x, y}`)
+        if let Some(children) = self.children() {
+            // Add `::` separator between path and children list
+            if self.path().is_some() {
+                out.push_str("::");
+                used_width += 2;
+            }
+            // Reduce available width by what we've already used
+            let remaining_width = shape.width.saturating_sub(used_width);
+            let children_shape = Shape::with_width(remaining_width, shape.indent);
+            out.push_str(&children.rewrite_or_original(context, children_shape));
+        }
+
+        // Format alias if present (e.g., `as Bar` in `Foo as Bar`)
+        if let Some(alias) = self.alias() {
+            out.push_str(&alias.rewrite_or_original(context, shape));
+        }
+
+        Some(out)
+    }
+}
+
+impl Rewrite for ast::UseTreeList {
+    fn rewrite(&self, context: &RewriteContext<'_>, shape: Shape) -> Option<String> {
+        let formatting = ListFormatting::new(shape)
+            .tactic(ListTactic::Mixed)
+            .with_surround("{", "}");
+        format_list(self, &formatting, context, shape)
+    }
+}
+
+impl Rewrite for ast::UsePath {
+    fn rewrite(&self, context: &RewriteContext<'_>, shape: Shape) -> Option<String> {
+        let segments: Vec<String> = self
+            .into_iter()
+            .map(|seg| seg.rewrite_or_original(context, shape))
+            .collect();
+        Some(segments.join("::"))
+    }
+}
+
+impl Rewrite for ast::UsePathSegment {
+    fn rewrite(&self, context: &RewriteContext<'_>, _shape: Shape) -> Option<String> {
+        match self.kind()? {
+            UsePathSegmentKind::Ingot(token) => {
+                Some(context.snippet(token.text_range()).trim().to_string())
+            }
+            UsePathSegmentKind::Super(token) => {
+                Some(context.snippet(token.text_range()).trim().to_string())
+            }
+            UsePathSegmentKind::Self_(token) => {
+                Some(context.snippet(token.text_range()).trim().to_string())
+            }
+            UsePathSegmentKind::Ident(token) => {
+                Some(context.snippet(token.text_range()).trim().to_string())
+            }
+            UsePathSegmentKind::Glob(token) => {
+                Some(context.snippet(token.text_range()).trim().to_string())
+            }
+        }
+    }
+}
+
+impl Rewrite for ast::UseAlias {
+    fn rewrite(&self, context: &RewriteContext<'_>, _shape: Shape) -> Option<String> {
+        if let Some(alias) = self.alias() {
+            let alias_text = context.snippet(alias.text_range()).trim();
+            Some(format!(" as {alias_text}"))
+        } else {
+            None
+        }
     }
 }
 
