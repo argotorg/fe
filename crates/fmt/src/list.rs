@@ -1,4 +1,4 @@
-use crate::{Indent, RewriteContext, Shape, rewrite::RewriteExt};
+use crate::{Indent, RewriteContext, Shape, config::TrailingComma, rewrite::RewriteExt};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ListTactic {
@@ -14,7 +14,8 @@ pub enum ListTactic {
 pub struct ListFormatting<'a> {
     pub tactic: ListTactic,
     pub separator: &'a str,
-    pub trailing_separator: bool,
+    /// Override trailing separator behavior. `None` means use config default.
+    pub trailing_separator: Option<bool>,
     pub surround: Option<(&'a str, &'a str)>,
     /// Add space padding inside surrounds for horizontal mode (e.g., `{ a, b }` instead of `{a, b}`).
     pub horizontal_padding: bool,
@@ -25,7 +26,7 @@ impl<'a> Default for ListFormatting<'a> {
         Self {
             tactic: ListTactic::Mixed,
             separator: ",",
-            trailing_separator: true,
+            trailing_separator: None,
             surround: None,
             horizontal_padding: false,
         }
@@ -45,7 +46,7 @@ impl<'a> ListFormatting<'a> {
     }
 
     pub fn trailing_separator(mut self, trailing: bool) -> Self {
-        self.trailing_separator = trailing;
+        self.trailing_separator = Some(trailing);
         self
     }
 
@@ -84,6 +85,14 @@ where
         return Some(format!("{}{}", open, close));
     }
 
+    // Resolve trailing separator behavior from override or config.
+    let trailing_for_horizontal = formatting.trailing_separator.unwrap_or_else(|| {
+        matches!(context.config.trailing_comma, TrailingComma::Always)
+    });
+    let trailing_for_vertical = formatting.trailing_separator.unwrap_or_else(|| {
+        !matches!(context.config.trailing_comma, TrailingComma::Never)
+    });
+
     // 1. Try Horizontal
     if matches!(formatting.tactic, ListTactic::Horizontal | ListTactic::Mixed) {
         let item_strings: Vec<String> = items
@@ -99,9 +108,7 @@ where
         let inline_len = joined.len();
 
         if inline_len <= available_width {
-            let trailing = if formatting.trailing_separator
-                && matches!(formatting.tactic, ListTactic::Horizontal)
-            {
+            let trailing = if trailing_for_horizontal {
                 formatting.separator
             } else {
                 ""
@@ -116,28 +123,28 @@ where
             return Some(result);
         }
     }
-    
+
     // 2. Vertical
     let indent_width = context.config.indent_width;
     let item_indent = shape.indent.block_indent + indent_width;
     let item_shape = Shape::with_width(shape.width, Indent::from_block(item_indent));
-    
+
     let mut out = String::new();
     out.push_str(open);
     out.push('\n');
-    
+
     for (idx, item) in items.iter().enumerate() {
         push_indent(&mut out, item_indent);
         out.push_str(&item.rewrite_or_original(context, item_shape));
-        if formatting.trailing_separator || idx + 1 != items.len() {
+        if trailing_for_vertical || idx + 1 != items.len() {
             out.push_str(formatting.separator);
         }
         out.push('\n');
     }
-    
+
     push_indent(&mut out, shape.indent.block_indent);
     out.push_str(close);
-    
+
     Some(out)
 }
 
