@@ -11,6 +11,7 @@ doctest = false
 
 [dependencies]
 bitflags = "2.8"
+enum_dispatch = "0.3"
 camino.workspace = true
 cranelift-entity = "0.115"
 derive_more.workspace = true

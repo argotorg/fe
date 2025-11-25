@@ -70,6 +70,9 @@ use common::indexmap::IndexMap;
 use indexmap::IndexSet;
 // Re-export from crate root for backwards compatibility
 pub use crate::diagnosable as diagnostics;
+pub mod symbol;
+
+pub use symbol::{RefRole, SymbolInfo, SymbolKind, SymbolRef};
 
 /// Core-exposed entry point for alias lowering. Reads the HIR type_ref (core-visible)
 /// and delegates to the analysis helper to keep visibility tight without shims.
@@ -324,18 +327,21 @@ impl<'db> CallableDef<'db> {
 
 // ADT items -----------------------------------------------------------------
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct FuncParamView<'db> {
-    func: Func<'db>,
-    idx: usize,
+    pub(in crate::core) func: Func<'db>,
+    pub(in crate::core) idx: usize,
 }
 
 impl<'db> FuncParamView<'db> {
+<<<<<<< HEAD
     pub fn name(self, db: &'db dyn HirDb) -> Option<IdentId<'db>> {
         let list = self.func.params_list(db).to_opt()?;
         list.data(db).get(self.idx)?.name()
     }
 
+=======
+>>>>>>> 138c8a9ae (symbol tracking scaffold)
     pub fn label(self, db: &'db dyn HirDb) -> Option<IdentId<'db>> {
         let list = self.func.params_list(db).to_opt()?;
         match list.data(db).get(self.idx)?.label {
@@ -1543,15 +1549,16 @@ impl<'db> ImplTrait<'db> {
     }
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct ImplAssocTypeView<'db> {
-    owner: ImplTrait<'db>,
-    idx: usize,
+    pub(in crate::core) owner: ImplTrait<'db>,
+    pub(in crate::core) idx: usize,
 }
 
 impl<'db> ImplAssocTypeView<'db> {
-    pub fn name(self, db: &'db dyn HirDb) -> Option<IdentId<'db>> {
-        self.owner.types(db)[self.idx].name.to_opt()
+    /// Returns the owning impl-trait block.
+    pub fn owner(self) -> ImplTrait<'db> {
+        self.owner
     }
 
     pub fn span(self) -> crate::span::item::LazyTraitTypeSpan<'db> {
@@ -1679,19 +1686,20 @@ impl<'db> GenericParamView<'db> {
 
 // Associated type views -----------------------------------------------------
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct TraitAssocTypeView<'db> {
-    owner: Trait<'db>,
-    idx: usize,
+    pub(in crate::core) owner: Trait<'db>,
+    pub(in crate::core) idx: usize,
 }
 
 impl<'db> TraitAssocTypeView<'db> {
-    fn decl(self, db: &'db dyn HirDb) -> &'db crate::core::hir_def::AssocTyDecl<'db> {
-        &self.owner.types(db)[self.idx]
+    /// Returns the owning trait.
+    pub fn owner(self) -> Trait<'db> {
+        self.owner
     }
 
-    pub fn name(self, db: &'db dyn HirDb) -> Option<IdentId<'db>> {
-        self.decl(db).name.to_opt()
+    pub(in crate::core) fn decl(self, db: &'db dyn HirDb) -> &'db AssocTyDecl<'db> {
+        &self.owner.types(db)[self.idx]
     }
 
     pub fn span(self) -> crate::span::item::LazyTraitTypeSpan<'db> {
@@ -1883,19 +1891,20 @@ impl<'db> TyId<'db> {
 
 // Associated const views ----------------------------------------------------
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct TraitAssocConstView<'db> {
-    owner: Trait<'db>,
-    idx: usize,
+    pub(in crate::core) owner: Trait<'db>,
+    pub(in crate::core) idx: usize,
 }
 
 impl<'db> TraitAssocConstView<'db> {
-    fn decl(self, db: &'db dyn HirDb) -> &'db crate::core::hir_def::AssocConstDecl<'db> {
-        &self.owner.consts(db)[self.idx]
+    /// Returns the owning trait.
+    pub fn owner(self) -> Trait<'db> {
+        self.owner
     }
 
-    pub fn name(self, db: &'db dyn HirDb) -> Option<IdentId<'db>> {
-        self.decl(db).name.to_opt()
+    pub(in crate::core) fn decl(self, db: &'db dyn HirDb) -> &'db crate::core::hir_def::AssocConstDecl<'db> {
+        &self.owner.consts(db)[self.idx]
     }
 
     pub fn span(self) -> crate::span::item::LazyTraitConstSpan<'db> {
@@ -1922,19 +1931,20 @@ impl<'db> TraitAssocConstView<'db> {
     }
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct ImplAssocConstView<'db> {
-    owner: ImplTrait<'db>,
-    idx: usize,
+    pub(in crate::core) owner: ImplTrait<'db>,
+    pub(in crate::core) idx: usize,
 }
 
 impl<'db> ImplAssocConstView<'db> {
-    fn def(self, db: &'db dyn HirDb) -> &'db crate::core::hir_def::AssocConstDef<'db> {
-        &self.owner.consts(db)[self.idx]
+    /// Returns the owning impl-trait block.
+    pub fn owner(self) -> ImplTrait<'db> {
+        self.owner
     }
 
-    pub fn name(self, db: &'db dyn HirDb) -> Option<IdentId<'db>> {
-        self.def(db).name.to_opt()
+    pub(in crate::core) fn def(self, db: &'db dyn HirDb) -> &'db crate::core::hir_def::AssocConstDef<'db> {
+        &self.owner.consts(db)[self.idx]
     }
 
     pub fn span(self) -> crate::span::item::LazyTraitConstSpan<'db> {
@@ -1954,21 +1964,25 @@ impl<'db> ImplAssocConstView<'db> {
     }
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct VariantView<'db> {
+<<<<<<< HEAD
     pub owner: Enum<'db>,
     pub idx: usize,
+=======
+    pub(in crate::core) owner: Enum<'db>,
+    pub(in crate::core) idx: usize,
+>>>>>>> 138c8a9ae (symbol tracking scaffold)
 }
 
 impl<'db> VariantView<'db> {
-    pub fn kind(self, db: &'db dyn HirDb) -> VariantKind<'db> {
-        self.owner.variants_list(db).data(db)[self.idx].kind
+    /// Returns the owning enum.
+    pub fn enum_(self, _db: &'db dyn HirDb) -> Enum<'db> {
+        self.owner
     }
 
-    pub fn name(self, db: &'db dyn HirDb) -> Option<IdentId<'db>> {
-        self.owner.variants_list(db).data(db)[self.idx]
-            .name
-            .to_opt()
+    pub fn kind(self, db: &'db dyn HirDb) -> VariantKind<'db> {
+        self.owner.variants_list(db).data(db)[self.idx].kind
     }
 
     pub fn span(self) -> crate::span::item::LazyVariantDefSpan<'db> {
@@ -2038,8 +2052,9 @@ impl<'db> VariantView<'db> {
 
 // Field views --------------------------------------------------------------
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct FieldView<'db> {
+<<<<<<< HEAD
     pub parent: FieldParent<'db>,
     pub idx: usize,
 }
@@ -2048,6 +2063,18 @@ impl<'db> FieldView<'db> {
     pub fn name(self, db: &'db dyn HirDb) -> Option<IdentId<'db>> {
         let list = self.parent.fields_list(db);
         list.data(db)[self.idx].name.to_opt()
+=======
+    pub(in crate::core) parent: FieldParent<'db>,
+    pub(in crate::core) idx: usize,
+}
+
+impl<'db> FieldView<'db> {
+    /// Crate-local helper returning the HIR type reference (syntactic) for
+    /// this field. Prefer using `ty` when the semantic type is needed.
+    fn hir_type_ref(self, db: &'db dyn HirDb) -> Partial<TypeId<'db>> {
+        let list = self.parent.fields_list(db);
+        list.data(db)[self.idx].type_ref
+>>>>>>> 138c8a9ae (symbol tracking scaffold)
     }
 
     /// Returns the semantic type of this field.
