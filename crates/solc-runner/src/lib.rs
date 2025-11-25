@@ -18,7 +18,6 @@ pub struct ContractBytecode {
     pub runtime_bytecode: String,
 }
 
-
 /// Compiles an iterator of `(name, yul_source)` pairs using `solc`.
 ///
 /// * `contracts` - Iterator of contract names and associated Yul source strings.
@@ -37,7 +36,6 @@ pub fn compile(
         })
         .collect()
 }
-
 
 /// Compiles a single contract by forwarding the Yul source to `solc`.
 ///
