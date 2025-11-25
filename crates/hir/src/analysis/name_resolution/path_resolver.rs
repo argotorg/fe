@@ -4,6 +4,7 @@ use crate::{
         Const, Enum, EnumVariant, GenericParamOwner, IdentId, ImplTrait, ItemKind, PathId,
         PathKind, Trait, TypeBound, TypeKind, VariantKind, scope_graph::ScopeId,
     },
+    core::semantic::SymbolInfo,
     span::{DynLazySpan, path::LazyPathSpan},
 };
 use common::indexmap::IndexMap;

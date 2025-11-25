@@ -1,6 +1,7 @@
 use std::collections::hash_map::Entry;
 
 use crate::{
+    core::semantic::SymbolInfo,
     hir_def::{FieldParent, IdentId, VariantKind as HirVariantKind, scope_graph::ScopeId},
     span::DynLazySpan,
 };

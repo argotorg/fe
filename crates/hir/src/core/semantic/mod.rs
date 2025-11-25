@@ -23,6 +23,7 @@
 use crate::HirDb;
 use crate::analysis::HirAnalysisDb;
 use crate::analysis::ty::ty_def::Kind;
+use crate::hir_def::Partial;
 use crate::hir_def::params::KindBound as HirKindBound;
 use crate::hir_def::scope_graph::ScopeId;
 
@@ -1840,10 +1841,9 @@ pub struct ImplementorAssocTypeView<'db> {
 }
 
 impl<'db> ImplementorAssocTypeView<'db> {
-    pub fn name(self, db: &'db dyn HirDb) -> Option<IdentId<'db>> {
-        self.assoc.name(db)
-    }
-
+    // pub fn name(self, db: &'db dyn HirDb) -> Partial<IdentId<'db>> {
+    //     self.assoc.name(db)
+    // }
     pub fn bounds(
         self,
         db: &'db dyn HirAnalysisDb,
@@ -1903,7 +1903,10 @@ impl<'db> TraitAssocConstView<'db> {
         self.owner
     }
 
-    pub(in crate::core) fn decl(self, db: &'db dyn HirDb) -> &'db crate::core::hir_def::AssocConstDecl<'db> {
+    pub(in crate::core) fn decl(
+        self,
+        db: &'db dyn HirDb,
+    ) -> &'db crate::core::hir_def::AssocConstDecl<'db> {
         &self.owner.consts(db)[self.idx]
     }
 
@@ -1943,7 +1946,10 @@ impl<'db> ImplAssocConstView<'db> {
         self.owner
     }
 
-    pub(in crate::core) fn def(self, db: &'db dyn HirDb) -> &'db crate::core::hir_def::AssocConstDef<'db> {
+    pub(in crate::core) fn def(
+        self,
+        db: &'db dyn HirDb,
+    ) -> &'db crate::core::hir_def::AssocConstDef<'db> {
         &self.owner.consts(db)[self.idx]
     }
 

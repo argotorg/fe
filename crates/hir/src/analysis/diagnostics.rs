@@ -18,6 +18,7 @@ use crate::analysis::{
 };
 use crate::{
     ParserError, SpannedHirDb,
+    core::semantic::SymbolInfo,
     hir_def::{CallableDef, FieldIndex, GenericParamOwner, PathKind, Trait},
     span::LazySpan,
 };
@@ -1037,7 +1038,7 @@ impl DiagnosticVoucher for TyLowerDiag<'_> {
                 let views: Vec<_> = func.params(db).collect();
                 let name = views[idxs[0] as usize]
                     .name(db)
-                    .expect("param name")
+                    .unwrap()
                     .data(db);
 
                 let pspan = func.span().params();
@@ -1045,7 +1046,7 @@ impl DiagnosticVoucher for TyLowerDiag<'_> {
                     .iter()
                     .map(|i| pspan.clone().param(*i as usize).name().resolve(db));
 
-                let message = if let Some(name) = func.name(db).to_opt() {
+                let message = if let Some(name) = func.name(db) {
                     format!("duplicate argument name in function `{}`", name.data(db))
                 } else {
                     "duplicate argument name in function definition".into()
@@ -1077,7 +1078,7 @@ impl DiagnosticVoucher for TyLowerDiag<'_> {
                     }
                 });
 
-                let message = if let Some(name) = func.name(db).to_opt() {
+                let message = if let Some(name) = func.name(db) {
                     format!("duplicate argument label in function `{}`", name.data(db))
                 } else {
                     "duplicate argument label in function definition".into()
@@ -1121,7 +1122,7 @@ impl DiagnosticVoucher for TyLowerDiag<'_> {
             }
 
             Self::DuplicateVariantName(enum_, idxs) => {
-                let message = if let Some(name) = enum_.name(db).to_opt() {
+                let message = if let Some(name) = enum_.name(db) {
                     format!("duplicate variant name in enum `{}`", name.data(db))
                 } else {
                     "duplicate variant name in enum definition".into()
@@ -1631,7 +1632,6 @@ impl DiagnosticVoucher for BodyDiag<'_> {
             Self::MissingEffect { primary, func, key } => {
                 let func_name = func
                     .name(db)
-                    .to_opt()
                     .map(|n| n.data(db).to_string())
                     .unwrap_or_else(|| "<unknown>".to_string());
                 let key_str = key.pretty_print(db);
@@ -1658,7 +1658,6 @@ impl DiagnosticVoucher for BodyDiag<'_> {
             Self::AmbiguousEffect { primary, func, key } => {
                 let func_name = func
                     .name(db)
-                    .to_opt()
                     .map(|n| n.data(db).to_string())
                     .unwrap_or_else(|| "<unknown>".to_string());
                 let key_str = key.pretty_print(db);
@@ -1687,7 +1686,6 @@ impl DiagnosticVoucher for BodyDiag<'_> {
             } => {
                 let func_name = func
                     .name(db)
-                    .to_opt()
                     .map(|n| n.data(db).to_string())
                     .unwrap_or_else(|| "<unknown>".to_string());
                 let key_str = key.pretty_print(db);
@@ -1731,7 +1729,6 @@ impl DiagnosticVoucher for BodyDiag<'_> {
             } => {
                 let func_name = func
                     .name(db)
-                    .to_opt()
                     .map(|n| n.data(db).to_string())
                     .unwrap_or_else(|| "<unknown>".to_string());
                 let key_str = key.pretty_print(db);
@@ -1777,7 +1774,6 @@ impl DiagnosticVoucher for BodyDiag<'_> {
             } => {
                 let func_name = func
                     .name(db)
-                    .to_opt()
                     .map(|n| n.data(db).to_string())
                     .unwrap_or_else(|| "<unknown>".to_string());
                 let key_str = key.pretty_print(db);
