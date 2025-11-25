@@ -13,5 +13,5 @@ url.workspace = true
 
 driver.workspace = true
 test-utils.workspace = true
-hir-analysis.workspace = true
 common.workspace = true
+hir.workspace = true

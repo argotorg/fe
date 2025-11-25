@@ -1,7 +1,7 @@
 use common::InputDb;
 use dir_test::{Fixture, dir_test};
 use driver::DriverDataBase;
-use hir_analysis::analysis_pass::{AnalysisPassManager, ParsingPass};
+use hir::analysis::analysis_pass::{AnalysisPassManager, ParsingPass};
 use test_utils::snap_test;
 
 #[cfg(target_arch = "wasm32")]

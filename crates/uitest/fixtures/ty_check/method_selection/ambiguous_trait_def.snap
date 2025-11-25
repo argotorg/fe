@@ -1,6 +1,5 @@
 ---
 source: crates/uitest/tests/ty_check.rs
-assertion_line: 27
 expression: diags
 input_file: fixtures/ty_check/method_selection/ambiguous_trait_def.fe
 ---
@@ -11,8 +10,8 @@ error[8-0026]: multiple trait candidates found
    │               ^^^
    │               │
    │               `foo` is ambiguous
-   │               candidate: `Trait2::foo`
    │               candidate: `Trait1::foo`
+   │               candidate: `Trait2::foo`
 
 error[8-0031]: type annotation is needed
    ┌─ ambiguous_trait_def.fe:37:9

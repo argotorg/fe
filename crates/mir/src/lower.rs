@@ -1,19 +1,18 @@
 use std::{error::Error, fmt};
 
 use common::ingot::IngotKind;
-use hir::hir_def::{
-    Body, Const, Expr, ExprId, Field, FieldIndex, Func, IdentId, LitKind, MatchArm, Partial, Pat,
-    PatId, PathId, Stmt, StmtId, TopLevelMod, scope_graph::ScopeId,
-};
-use hir_analysis::{
+use hir::analysis::{
     HirAnalysisDb,
     name_resolution::{PathRes, path_resolver::resolve_path},
     ty::{
-        func_def::{FuncDef, lower_func},
         trait_resolution::PredicateListId,
         ty_check::{Callable, RecordLike, TypedBody, check_func_body},
         ty_def::{PrimTy, TyBase, TyData, TyId},
     },
+};
+use hir::hir_def::{
+    Body, CallableDef, Const, Expr, ExprId, Field, FieldIndex, Func, IdentId, LitKind, MatchArm,
+    Partial, Pat, PatId, PathId, Stmt, StmtId, TopLevelMod, scope_graph::ScopeId,
 };
 
 use crate::{
@@ -160,11 +159,11 @@ struct MirBuilder<'db, 'a> {
     typed_body: &'a TypedBody<'db>,
     mir_body: MirBody<'db>,
     /// Cached `core::ptr::get_field` definition used for field reads.
-    get_field_func: Option<FuncDef<'db>>,
+    get_field_func: Option<CallableDef<'db>>,
     /// Cached `core::ptr::store_field` definition used for record writes.
-    store_field_func: Option<FuncDef<'db>>,
+    store_field_func: Option<CallableDef<'db>>,
     /// Cached `core::mem::alloc` definition used for record allocation.
-    alloc_func: Option<FuncDef<'db>>,
+    alloc_func: Option<CallableDef<'db>>,
     address_space_ty: Option<TyId<'db>>,
     loop_stack: Vec<LoopScope>,
     /// Memoized literal values for resolved `const` items.
@@ -591,7 +590,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         };
 
         let ty = self.typed_body.expr_ty(self.db, expr);
-        if let Some(kind) = self.intrinsic_kind(callable.func_def) {
+        if let Some(kind) = self.intrinsic_kind(callable.callable_def) {
             if !kind.returns_value() {
                 return None;
             }
@@ -846,7 +845,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
 
     fn intrinsic_stmt_args(&mut self, expr: ExprId) -> Option<(IntrinsicOp, Vec<ValueId>)> {
         let callable = self.typed_body.callable_expr(expr)?;
-        let op = self.intrinsic_kind(callable.func_def)?;
+        let op = self.intrinsic_kind(callable.callable_def)?;
         if op.returns_value() {
             return None;
         }
@@ -900,37 +899,34 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         record_like: &RecordLike<'db>,
         idx: usize,
     ) -> Option<(TyId<'db>, u64)> {
-        let (_, adt_fields) = record_like.record_field_list(self.db)?;
-        if idx >= adt_fields.num_types() {
+        let ty = match record_like {
+            RecordLike::Type(ty) => *ty,
+            RecordLike::Variant(variant) => variant.ty,
+        };
+        let field_types = ty.field_types(self.db);
+        if idx >= field_types.len() {
             return None;
         }
-        let args = match record_like {
-            RecordLike::Type(ty) => ty.generic_args(self.db),
-            RecordLike::Variant(variant) => variant.ty.generic_args(self.db),
-        };
 
         let mut offset = 0u64;
-        for i in 0..idx {
-            let ty = adt_fields.ty(self.db, i).instantiate(self.db, args);
-            let size = self.ty_size_bytes(ty)?;
+        for field_ty in field_types.iter().take(idx) {
+            let size = self.ty_size_bytes(*field_ty)?;
             offset += size;
         }
-        let field_ty = adt_fields.ty(self.db, idx).instantiate(self.db, args);
-        Some((field_ty, offset))
+        Some((field_types[idx], offset))
     }
 
     /// Computes the total byte width of a record by summing its fields.
     fn record_size_bytes(&self, record_like: &RecordLike<'db>) -> Option<u64> {
-        let (_, adt_fields) = record_like.record_field_list(self.db)?;
-        let args = match record_like {
-            RecordLike::Type(ty) => ty.generic_args(self.db),
-            RecordLike::Variant(variant) => variant.ty.generic_args(self.db),
+        let ty = match record_like {
+            RecordLike::Type(ty) => *ty,
+            RecordLike::Variant(variant) => variant.ty,
         };
+        let field_types = ty.field_types(self.db);
 
         let mut size = 0u64;
-        for idx in 0..adt_fields.num_types() {
-            let ty = adt_fields.ty(self.db, idx).instantiate(self.db, args);
-            let field_size = self.ty_size_bytes(ty)?;
+        for field_ty in field_types {
+            let field_size = self.ty_size_bytes(field_ty)?;
             size += field_size;
         }
         Some(size)
@@ -988,7 +984,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         Callable::new(self.db, ty, expr.span(self.body).into(), None).ok()
     }
 
-    fn resolve_get_field_func(&mut self) -> Option<FuncDef<'db>> {
+    fn resolve_get_field_func(&mut self) -> Option<CallableDef<'db>> {
         if let Some(func) = self.get_field_func {
             return Some(func);
         }
@@ -1003,7 +999,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         None
     }
 
-    fn resolve_store_field_func(&mut self) -> Option<FuncDef<'db>> {
+    fn resolve_store_field_func(&mut self) -> Option<CallableDef<'db>> {
         if let Some(func) = self.store_field_func {
             return Some(func);
         }
@@ -1018,7 +1014,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         None
     }
 
-    fn resolve_alloc_func(&mut self) -> Option<FuncDef<'db>> {
+    fn resolve_alloc_func(&mut self) -> Option<CallableDef<'db>> {
         if let Some(func) = self.alloc_func {
             return Some(func);
         }
@@ -1033,7 +1029,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         None
     }
 
-    fn resolve_get_field_via_path(&self) -> Option<FuncDef<'db>> {
+    fn resolve_get_field_via_path(&self) -> Option<CallableDef<'db>> {
         let mut path = self.resolve_core_path(&["core", "ptr", "get_field"]);
         if path.is_none() {
             path = self.resolve_core_path(&["core", "get_field"]);
@@ -1049,7 +1045,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         }
     }
 
-    fn resolve_store_field_via_path(&self) -> Option<FuncDef<'db>> {
+    fn resolve_store_field_via_path(&self) -> Option<CallableDef<'db>> {
         let mut path = self.resolve_core_path(&["core", "ptr", "store_field"]);
         if path.is_none() {
             path = self.resolve_core_path(&["core", "store_field"]);
@@ -1065,7 +1061,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         }
     }
 
-    fn resolve_alloc_via_path(&self) -> Option<FuncDef<'db>> {
+    fn resolve_alloc_via_path(&self) -> Option<CallableDef<'db>> {
         let mut path = self.resolve_core_path(&["core", "mem", "alloc"]);
         if path.is_none() {
             path = self.resolve_core_path(&["core", "alloc"]);
@@ -1081,12 +1077,12 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         }
     }
 
-    fn find_local_get_field(&self) -> Option<FuncDef<'db>> {
+    fn find_local_get_field(&self) -> Option<CallableDef<'db>> {
         let top_mod = self.body.top_mod(self.db);
         for &func in top_mod.all_funcs(self.db) {
             let name = func.name(self.db).to_opt()?;
             if name.data(self.db) == "get_field"
-                && let Some(def) = lower_func(self.db, func)
+                && let Some(def) = func.as_callable(self.db)
             {
                 return Some(def);
             }
@@ -1094,12 +1090,12 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         None
     }
 
-    fn find_local_store_field(&self) -> Option<FuncDef<'db>> {
+    fn find_local_store_field(&self) -> Option<CallableDef<'db>> {
         let top_mod = self.body.top_mod(self.db);
         for &func in top_mod.all_funcs(self.db) {
             let name = func.name(self.db).to_opt()?;
             if name.data(self.db) == "store_field"
-                && let Some(def) = lower_func(self.db, func)
+                && let Some(def) = func.as_callable(self.db)
             {
                 return Some(def);
             }
@@ -1107,12 +1103,12 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         None
     }
 
-    fn find_local_alloc(&self) -> Option<FuncDef<'db>> {
+    fn find_local_alloc(&self) -> Option<CallableDef<'db>> {
         let top_mod = self.body.top_mod(self.db);
         for &func in top_mod.all_funcs(self.db) {
             let name = func.name(self.db).to_opt()?;
             if name.data(self.db) == "alloc"
-                && let Some(def) = lower_func(self.db, func)
+                && let Some(def) = func.as_callable(self.db)
             {
                 return Some(def);
             }
@@ -1121,12 +1117,12 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
     }
 
     /// Returns which intrinsic operation the given function represents, if any.
-    fn intrinsic_kind(&self, func_def: FuncDef<'db>) -> Option<IntrinsicOp> {
+    fn intrinsic_kind(&self, func_def: CallableDef<'db>) -> Option<IntrinsicOp> {
         if func_def.ingot(self.db).kind(self.db) != IngotKind::Core {
             return None;
         }
-        let name = func_def.name(self.db).data(self.db);
-        match name.as_str() {
+        let name = func_def.name(self.db)?;
+        match name.data(self.db).as_str() {
             "mload" => Some(IntrinsicOp::Mload),
             "mstore" => Some(IntrinsicOp::Mstore),
             "mstore8" => Some(IntrinsicOp::Mstore8),

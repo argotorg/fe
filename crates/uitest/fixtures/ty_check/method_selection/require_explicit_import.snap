@@ -10,5 +10,5 @@ error[8-0028]: trait is not in the scope
   │       ^^^
   │       │
   │       consider importing one of the following traits into the scope to resolve the ambiguity
-  │       `use require_explicit_import::inner::Bar`
   │       `use require_explicit_import::inner::Foo`
+  │       `use require_explicit_import::inner::Bar`

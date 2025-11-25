@@ -5,12 +5,7 @@ use codespan_reporting::term::{
 };
 use common::file::File;
 use common::{define_input_db, diagnostics::CompleteDiagnostic};
-use hir::{
-    Ingot,
-    hir_def::TopLevelMod,
-    lower::{map_file_to_mod, module_tree},
-};
-use hir_analysis::{
+use hir::analysis::{
     analysis_pass::{AnalysisPassManager, ParsingPass},
     diagnostics::DiagnosticVoucher,
     name_resolution::ImportAnalysisPass,
@@ -18,6 +13,11 @@ use hir_analysis::{
         AdtDefAnalysisPass, BodyAnalysisPass, DefConflictAnalysisPass, FuncAnalysisPass,
         ImplAnalysisPass, ImplTraitAnalysisPass, TraitAnalysisPass, TypeAliasAnalysisPass,
     },
+};
+use hir::{
+    Ingot,
+    hir_def::TopLevelMod,
+    lower::{map_file_to_mod, module_tree},
 };
 
 use crate::diagnostics::ToCsDiag;

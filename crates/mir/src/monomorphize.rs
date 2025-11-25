@@ -3,17 +3,16 @@ use std::{
     hash::{Hash, Hasher},
 };
 
-use hir::hir_def::Func;
-use hir_analysis::{
+use hir::analysis::{
     HirAnalysisDb,
     ty::{
         fold::{TyFoldable, TyFolder},
-        func_def::{FuncDef, lower_func},
         trait_def::resolve_trait_method,
         ty_check::check_func_body,
         ty_def::{TyData, TyId},
     },
 };
+use hir::hir_def::{CallableDef, Func};
 use rustc_hash::FxHashMap;
 
 use crate::{CallOrigin, MirFunction, ValueOrigin, dedup::deduplicate_mir, lower::lower_function};
@@ -44,7 +43,7 @@ struct Monomorphizer<'db> {
     db: &'db dyn HirAnalysisDb,
     templates: Vec<MirFunction<'db>>,
     func_index: FxHashMap<Func<'db>, usize>,
-    func_defs: FxHashMap<Func<'db>, FuncDef<'db>>,
+    func_defs: FxHashMap<Func<'db>, CallableDef<'db>>,
     instances: Vec<MirFunction<'db>>,
     instance_map: FxHashMap<InstanceKey<'db>, usize>,
     worklist: VecDeque<usize>,
@@ -76,7 +75,7 @@ impl<'db> Monomorphizer<'db> {
             .collect();
         let mut func_defs = FxHashMap::default();
         for func in templates.iter().map(|f| f.func) {
-            if let Some(def) = lower_func(db, func) {
+            if let Some(def) = func.as_callable(db) {
                 func_defs.insert(func, def);
             }
         }
@@ -165,13 +164,13 @@ impl<'db> Monomorphizer<'db> {
 
     /// Returns the concrete HIR function targeted by the given call, accounting for trait impls.
     fn resolve_call_target(&self, call: &CallOrigin<'db>) -> Option<Func<'db>> {
-        if let Some(func) = call.callable.func_def.hir_func_def(self.db)
+        if let CallableDef::Func(func) = call.callable.callable_def
             && func.body(self.db).is_some()
         {
             return Some(func);
         }
         let inst = call.callable.trait_inst()?;
-        let method_name = call.callable.func_def.name(self.db);
+        let method_name = call.callable.callable_def.name(self.db)?;
         resolve_trait_method(self.db, inst, method_name)
     }
 
@@ -232,7 +231,7 @@ impl<'db> Monomorphizer<'db> {
         let idx = self.templates.len();
         self.templates.push(lowered);
         self.func_index.insert(func, idx);
-        if let Some(def) = lower_func(self.db, func) {
+        if let Some(def) = func.as_callable(self.db) {
             self.func_defs.insert(func, def);
         }
         Some(idx)

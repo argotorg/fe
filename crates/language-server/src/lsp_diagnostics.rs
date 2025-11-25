@@ -4,13 +4,13 @@ use codespan_reporting::files as cs_files;
 use common::{diagnostics::CompleteDiagnostic, file::File};
 use driver::DriverDataBase;
 use hir::Ingot;
-use hir::lower::map_file_to_mod;
-use hir_analysis::analysis_pass::{AnalysisPassManager, ParsingPass};
-use hir_analysis::name_resolution::ImportAnalysisPass;
-use hir_analysis::ty::{
+use hir::analysis::analysis_pass::{AnalysisPassManager, ParsingPass};
+use hir::analysis::name_resolution::ImportAnalysisPass;
+use hir::analysis::ty::{
     AdtDefAnalysisPass, BodyAnalysisPass, DefConflictAnalysisPass, FuncAnalysisPass,
     ImplAnalysisPass, ImplTraitAnalysisPass, TraitAnalysisPass, TypeAliasAnalysisPass,
 };
+use hir::lower::map_file_to_mod;
 use rustc_hash::FxHashMap;
 
 use crate::util::diag_to_lsp;

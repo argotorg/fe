@@ -8,7 +8,7 @@ use common::{
     file::File,
 };
 use cs::{diagnostic as cs_diag, files as cs_files};
-use hir_analysis::diagnostics::{DiagnosticVoucher, SpannedHirAnalysisDb};
+use hir::analysis::diagnostics::{DiagnosticVoucher, SpannedHirAnalysisDb};
 
 pub trait ToCsDiag {
     fn to_cs(&self, db: &dyn SpannedInputDb) -> cs_diag::Diagnostic<File>;

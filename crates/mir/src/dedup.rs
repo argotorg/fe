@@ -11,7 +11,7 @@
 use std::collections::VecDeque;
 
 use common::ingot::IngotKind;
-use hir_analysis::HirAnalysisDb;
+use hir::analysis::HirAnalysisDb;
 use rustc_hash::FxHashMap;
 
 use crate::{MirFunction, hash::hash_function};

@@ -1,8 +1,10 @@
 use driver::DriverDataBase;
 use hir::hir_def::{
-    Body, Expr, ExprId, Func, LitKind, Partial, Pat, PatId, PathId, Stmt, StmtId, TopLevelMod,
+    Body, CallableDef, Expr, ExprId, Func, LitKind, Partial, Pat, PatId, PathId, Stmt, StmtId,
+    TopLevelMod,
     expr::{ArithBinOp, BinOp, CompBinOp, LogicalBinOp, UnOp},
 };
+use hir::semantic::SymbolInfo;
 use mir::{
     BasicBlockId, CallOrigin, LoopInfo, MirFunction, Terminator, ValueId, ValueOrigin,
     ir::{
@@ -83,18 +85,14 @@ impl<'db> YulEmitter<'db> {
     fn init_function_state(&self) -> (Vec<String>, BlockState) {
         let mut state = BlockState::new();
         let mut params_out = Vec::new();
-        if let Some(params) = self.mir_func.func.params(self.db).to_opt() {
-            for (idx, param) in params.data(self.db).iter().enumerate() {
-                let original = param
-                    .name
-                    .to_opt()
-                    .and_then(|name| name.ident())
-                    .map(|id| id.data(self.db).to_string())
-                    .unwrap_or_else(|| format!("arg{idx}"));
-                let yul_name = original.clone();
-                params_out.push(yul_name.clone());
-                state.insert_binding(original, yul_name);
-            }
+        for (idx, param) in self.mir_func.func.params(self.db).enumerate() {
+            let original = param
+                .name(self.db)
+                .map(|id| id.data(self.db).to_string())
+                .unwrap_or_else(|| format!("arg{idx}"));
+            let yul_name = original.clone();
+            params_out.push(yul_name.clone());
+            state.insert_binding(original, yul_name);
         }
         (params_out, state)
     }
@@ -897,7 +895,7 @@ impl<'db> YulEmitter<'db> {
         let callee = if let Some(name) = &call.resolved_name {
             name.clone()
         } else {
-            let Some(func) = call.callable.func_def.hir_func_def(self.db) else {
+            let CallableDef::Func(func) = call.callable.callable_def else {
                 return Err(YulError::Unsupported(
                     "callable without hir function definition is not supported yet".into(),
                 ));

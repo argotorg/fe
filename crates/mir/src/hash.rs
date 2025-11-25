@@ -3,8 +3,8 @@
 use std::collections::hash_map::DefaultHasher;
 use std::hash::Hasher;
 
+use hir::analysis::HirAnalysisDb;
 use hir::hir_def::{ExprId, PatId};
-use hir_analysis::HirAnalysisDb;
 use num_bigint::BigUint;
 use rustc_hash::FxHashMap;
 
@@ -159,10 +159,10 @@ impl<'db, 'a> FunctionHasher<'db, 'a> {
             .or_else(|| call.resolved_name.clone())
             .unwrap_or_else(|| {
                 call.callable
-                    .func_def
+                    .callable_def
                     .name(self.db)
-                    .data(self.db)
-                    .to_string()
+                    .map(|n| n.data(self.db).to_string())
+                    .unwrap_or_else(|| "<unknown>".to_string())
             });
         self.write_str(&symbol);
     }
