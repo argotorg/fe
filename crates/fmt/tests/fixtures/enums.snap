@@ -9,32 +9,32 @@ input_file: tests/fixtures/enums.fe
 enum Color {
     Red,
     Green,
-    Blue
+    Blue,
 }
 
 // Enum with tuple variants
 enum Option {
     None,
-    Some(i32)
+    Some(i32),
 }
 
 // Enum with record variants
 enum Result {
     Ok { value: i32 },
-    Err { code: i32 }
+    Err { code: i32 },
 }
 
 // Mixed variants
 enum Mixed {
     Unit,
     Tuple(i32, bool),
-    Record { x: i32, y: i32 }
+    Record { x: i32, y: i32 },
 }
 
 // Enum with generics
 enum Container<T> {
     Empty,
-    Value(T)
+    Value(T),
 }
 
 // Single line enum
@@ -42,5 +42,5 @@ enum SingleLine {
     A,
     B,
     C { x: i32, y: u8 },
-    D(i8, i8)
+    D(i8, i8),
 }

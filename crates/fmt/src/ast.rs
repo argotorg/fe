@@ -593,7 +593,6 @@ impl Rewrite for ast::VariantDefList {
     fn rewrite(&self, context: &RewriteContext<'_>, shape: Shape) -> Option<String> {
         let formatting = ListFormatting::new(shape)
             .tactic(ListTactic::Vertical)
-            .trailing_separator(false)
             .with_surround("{", "}");
         format_list(self, &formatting, context, shape)
     }
