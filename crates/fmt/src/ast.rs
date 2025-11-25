@@ -1203,24 +1203,28 @@ impl Rewrite for ast::MethodCallExpr {
     }
 }
 
+impl Rewrite for ast::RecordField {
+    fn rewrite(&self, context: &RewriteContext<'_>, shape: Shape) -> Option<String> {
+        let label = self.label()?;
+        let label_text = context.snippet(label.text_range()).trim();
+        let expr = self.expr()?.rewrite_or_original(context, shape);
+        Some(format!("{label_text}: {expr}"))
+    }
+}
+
 impl Rewrite for ast::RecordInitExpr {
     fn rewrite(&self, context: &RewriteContext<'_>, shape: Shape) -> Option<String> {
         let path = context.snippet_trimmed(&self.path()?);
 
         let fields_str = if let Some(fields) = self.fields() {
-            let fields: Vec<String> = fields
-                .into_iter()
-                .filter_map(|field| {
-                    let label = field.label()?;
-                    let label_text = context.snippet(label.text_range()).trim();
-                    let expr = field.expr()?.rewrite_or_original(context, shape);
-                    Some(format!("{label_text}: {expr}"))
-                })
-                .collect();
-
-            format!(" {{ {} }}", fields.join(", "))
+            let formatting = ListFormatting::new(shape)
+                .tactic(ListTactic::Mixed)
+                .with_surround("{", "}")
+                .horizontal_padding(true);
+            let list = format_list(fields, &formatting, context, shape)?;
+            format!(" {list}")
         } else {
-            "{}".to_string()
+            " {}".to_string()
         };
 
         Some(format!("{path}{fields_str}"))
@@ -1294,12 +1298,11 @@ impl Rewrite for ast::IfExpr {
 impl Rewrite for ast::UsesClause {
     fn rewrite(&self, context: &RewriteContext<'_>, shape: Shape) -> Option<String> {
         if let Some(params) = self.param_list() {
-            let params: Vec<String> = params
-                .into_iter()
-                .map(|param| param.rewrite_or_original(context, shape))
-                .collect();
-
-            Some(format!("uses ({})", params.join(", ")))
+            let formatting = ListFormatting::new(shape)
+                .tactic(ListTactic::Mixed)
+                .with_surround("(", ")");
+            let list = format_list(params, &formatting, context, shape)?;
+            Some(format!("uses {list}"))
         } else if let Some(param) = self.param() {
             let param_text = param.rewrite_or_original(context, shape);
             Some(format!("uses {param_text}"))
@@ -1365,26 +1368,28 @@ impl Rewrite for ast::MatchExpr {
     }
 }
 
+impl Rewrite for ast::WithParam {
+    fn rewrite(&self, context: &RewriteContext<'_>, shape: Shape) -> Option<String> {
+        let path = context.snippet_trimmed(&self.path()?);
+        let value = self.value_expr()?.rewrite_or_original(context, shape);
+        Some(format!("{path} = {value}"))
+    }
+}
+
 impl Rewrite for ast::WithExpr {
     fn rewrite(&self, context: &RewriteContext<'_>, shape: Shape) -> Option<String> {
-        let params = if let Some(params) = self.params() {
-            let params: Vec<String> = params
-                .into_iter()
-                .filter_map(|param| {
-                    let path = context.snippet_trimmed(&param.path()?);
-                    let value = param.value_expr()?.rewrite_or_original(context, shape);
-                    Some(format!("{path} = {value}"))
-                })
-                .collect();
-
-            params.join(", ")
+        let params_str = if let Some(params) = self.params() {
+            let formatting = ListFormatting::new(shape)
+                .tactic(ListTactic::Mixed)
+                .with_surround("(", ")");
+            format_list(params, &formatting, context, shape)?
         } else {
-            String::new()
+            "()".to_string()
         };
 
         let body = self.body()?.rewrite_or_original(context, shape);
 
-        Some(format!("with ({params}) {body}"))
+        Some(format!("with {params_str} {body}"))
     }
 }
 
