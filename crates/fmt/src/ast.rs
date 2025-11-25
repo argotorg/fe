@@ -74,15 +74,7 @@ impl Rewrite for ast::TypeGenericParam {
         }
 
         if let Some(bounds) = self.bounds() {
-            // TypeBoundList includes the `:`, format as `: Bound1 + Bound2`
-            let bounds_text = context.snippet_trimmed(&bounds);
-            if let Some(rest) = bounds_text.strip_prefix(':') {
-                out.push_str(": ");
-                out.push_str(rest.trim_start());
-            } else {
-                out.push(' ');
-                out.push_str(&bounds_text);
-            }
+            out.push_str(&bounds.rewrite_or_original(context, shape));
         }
 
         if let Some(default_ty) = self.default_ty() {
@@ -701,7 +693,7 @@ impl Rewrite for ast::TraitTypeItem {
         out.push_str(context.snippet(self.name()?.text_range()));
 
         if let Some(bounds) = self.bounds() {
-            out.push_str(&context.snippet_trimmed(&bounds));
+            out.push_str(&bounds.rewrite_or_original(context, shape));
         }
 
         if let Some(ty) = self.ty() {
@@ -1460,7 +1452,7 @@ impl Rewrite for ast::MethodCallExpr {
         let name = context.snippet(self.method_name()?.text_range()).trim();
 
         let generics = if let Some(args) = self.generic_args() {
-            context.snippet_trimmed(&args)
+            args.rewrite_or_original(context, shape)
         } else {
             String::new()
         };
