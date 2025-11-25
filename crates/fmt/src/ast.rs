@@ -1311,7 +1311,7 @@ impl Rewrite for ast::RecordField {
 
 impl Rewrite for ast::RecordInitExpr {
     fn rewrite(&self, context: &RewriteContext<'_>, shape: Shape) -> Option<String> {
-        let path = context.snippet_trimmed(&self.path()?);
+        let path = self.path()?.rewrite_or_original(context, shape);
 
         let fields_str = if let Some(fields) = self.fields() {
             let formatting = ListFormatting::new(shape)
@@ -1410,7 +1410,7 @@ impl Rewrite for ast::UsesClause {
 }
 
 impl Rewrite for ast::UsesParam {
-    fn rewrite(&self, context: &RewriteContext<'_>, _shape: Shape) -> Option<String> {
+    fn rewrite(&self, context: &RewriteContext<'_>, shape: Shape) -> Option<String> {
         let mut out = String::new();
 
         if self.mut_token().is_some() {
@@ -1422,8 +1422,7 @@ impl Rewrite for ast::UsesParam {
             out.push_str(": ");
         }
 
-        let path = self.path()?;
-        out.push_str(&context.snippet_trimmed(&path));
+        out.push_str(&self.path()?.rewrite_or_original(context, shape));
 
         Some(out)
     }
@@ -1467,7 +1466,7 @@ impl Rewrite for ast::MatchExpr {
 
 impl Rewrite for ast::WithParam {
     fn rewrite(&self, context: &RewriteContext<'_>, shape: Shape) -> Option<String> {
-        let path = context.snippet_trimmed(&self.path()?);
+        let path = self.path()?.rewrite_or_original(context, shape);
         let value = self.value_expr()?.rewrite_or_original(context, shape);
         Some(format!("{path} = {value}"))
     }
@@ -1704,14 +1703,14 @@ impl Rewrite for ast::TuplePat {
 }
 
 impl Rewrite for ast::PathPat {
-    fn rewrite(&self, context: &RewriteContext<'_>, _shape: Shape) -> Option<String> {
+    fn rewrite(&self, context: &RewriteContext<'_>, shape: Shape) -> Option<String> {
         let mut out = String::new();
 
         if self.mut_token().is_some() {
             out.push_str("mut ");
         }
 
-        out.push_str(&context.snippet_trimmed(&self.path()?));
+        out.push_str(&self.path()?.rewrite_or_original(context, shape));
 
         Some(out)
     }
@@ -1719,7 +1718,7 @@ impl Rewrite for ast::PathPat {
 
 impl Rewrite for ast::PathTuplePat {
     fn rewrite(&self, context: &RewriteContext<'_>, shape: Shape) -> Option<String> {
-        let path = context.snippet_trimmed(&self.path()?);
+        let path = self.path()?.rewrite_or_original(context, shape);
         let formatting = ListFormatting::new(shape)
             .tactic(ListTactic::Mixed)
             .with_surround("(", ")");
@@ -1736,7 +1735,7 @@ impl Rewrite for ast::PathTuplePat {
 
 impl Rewrite for ast::RecordPat {
     fn rewrite(&self, context: &RewriteContext<'_>, shape: Shape) -> Option<String> {
-        let path = context.snippet_trimmed(&self.path()?);
+        let path = self.path()?.rewrite_or_original(context, shape);
 
         let fields_str = if let Some(fields) = self.fields() {
             let formatted_fields: Vec<String> = fields
