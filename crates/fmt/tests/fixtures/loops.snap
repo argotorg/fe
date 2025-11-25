@@ -1,10 +1,9 @@
 ---
 source: crates/fmt/tests/format_snapshots.rs
-assertion_line: 16
 expression: output
 input_file: tests/fixtures/loops.fe
 ---
-fn loop_examples(arr: Array<i32,10>) {
+fn loop_examples(arr: Array<i32, 10>) {
     for i in arr {
         if i == 5 {
             continue

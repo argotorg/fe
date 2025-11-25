@@ -1,10 +1,9 @@
 ---
 source: crates/fmt/tests/format_snapshots.rs
-assertion_line: 16
 expression: output
 input_file: tests/fixtures/advanced_expressions.fe
 ---
-pub unsafe fn advanced_expressions<T, U: Trait>(arr: Array<i32,10>, ctx: Ctx, storage: Storage<T>)
+pub unsafe fn advanced_expressions<T, U: Trait>(arr: Array<i32, 10>, ctx: Ctx, storage: Storage<T>)
   uses (ctx: Ctx, mut st: Storage<T>)
   where T: Trait2, U: Trait3
 {
