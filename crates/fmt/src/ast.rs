@@ -181,7 +181,7 @@ impl Rewrite for ast::Item {
             ItemKind::ImplTrait(impl_trait) => impl_trait.rewrite(context, _shape),
             ItemKind::Const(const_) => const_.rewrite(context, _shape),
             ItemKind::Use(use_) => use_.rewrite(context, _shape),
-            ItemKind::Extern(_) => Some(context.snippet_trimmed(self)),
+            ItemKind::Extern(extern_) => extern_.rewrite(context, _shape),
         }
     }
 }
@@ -1014,6 +1014,54 @@ impl Rewrite for ast::Mod {
                 out.push('}');
             }
         }
+
+        Some(out)
+    }
+}
+
+impl Rewrite for ast::Extern {
+    fn rewrite(&self, context: &RewriteContext<'_>, shape: Shape) -> Option<String> {
+        let mut out = String::new();
+
+        write_attrs(self, context, &mut out);
+
+        out.push_str("extern");
+
+        if let Some(items) = self.extern_block() {
+            out.push(' ');
+            out.push_str(&items.rewrite_or_original(context, shape));
+        } else {
+            out.push_str(" {}");
+        }
+
+        Some(out)
+    }
+}
+
+impl Rewrite for ast::ExternItemList {
+    fn rewrite(&self, context: &RewriteContext<'_>, shape: Shape) -> Option<String> {
+        let outer_indent = shape.indent.indent_width();
+        let indent_width = context.config.indent_width;
+        let inner_indent = outer_indent + indent_width;
+        let inner_shape = Shape::with_width(shape.width, Indent::from_block(inner_indent));
+
+        let items: Vec<_> = self.into_iter().collect();
+
+        if items.is_empty() {
+            return Some("{}".to_string());
+        }
+
+        let mut out = String::new();
+        out.push_str("{\n");
+
+        for func in items {
+            push_indent(&mut out, inner_indent);
+            out.push_str(&func.rewrite_or_original(context, inner_shape));
+            out.push('\n');
+        }
+
+        push_indent(&mut out, outer_indent);
+        out.push('}');
 
         Some(out)
     }
