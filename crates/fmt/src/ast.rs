@@ -282,10 +282,7 @@ impl Rewrite for ast::Func {
         };
 
         let where_clause = where_clause_opt.expect("has_where is true");
-        let where_text = context
-            .snippet(where_clause.syntax().text_range())
-            .trim()
-            .to_owned();
+        let where_text = where_clause.rewrite_or_original(context, shape);
         let where_inline = format!(" {where_text}");
 
         // Fast path: everything fits on a single line.
@@ -415,8 +412,7 @@ impl Rewrite for ast::Func {
 
             for pred in where_clause {
                 push_indent(&mut out, param_indent);
-                let text = context.snippet(pred.syntax().text_range()).trim();
-                out.push_str(text);
+                out.push_str(&pred.rewrite_or_original(context, shape));
                 out.push(',');
                 out.push('\n');
             }
