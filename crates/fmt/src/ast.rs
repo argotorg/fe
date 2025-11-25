@@ -70,7 +70,7 @@ impl Rewrite for ast::TypeGenericParam {
         let mut out = String::new();
 
         if let Some(name) = self.name() {
-            out.push_str(context.snippet(name.text_range()).trim());
+            out.push_str(context.token(&name));
         }
 
         if let Some(bounds) = self.bounds() {
@@ -93,7 +93,7 @@ impl Rewrite for ast::ConstGenericParam {
         out.push_str("const ");
 
         if let Some(name) = self.name() {
-            out.push_str(context.snippet(name.text_range()).trim());
+            out.push_str(context.token(&name));
         }
 
         if let Some(ty) = self.ty() {
@@ -520,7 +520,7 @@ impl Rewrite for ast::RecordFieldDef {
         }
 
         if let Some(name) = self.name() {
-            out.push_str(context.snippet(name.text_range()).trim());
+            out.push_str(context.token(&name));
         }
 
         if let Some(ty) = self.ty() {
@@ -593,7 +593,7 @@ impl Rewrite for ast::VariantDef {
         write_attrs(self, context, &mut out);
 
         if let Some(name) = self.name() {
-            out.push_str(context.snippet(name.text_range()).trim());
+            out.push_str(context.token(&name));
         }
 
         match self.kind() {
@@ -919,19 +919,19 @@ impl Rewrite for ast::UsePathSegment {
     fn rewrite(&self, context: &RewriteContext<'_>, _shape: Shape) -> Option<String> {
         match self.kind()? {
             UsePathSegmentKind::Ingot(token) => {
-                Some(context.snippet(token.text_range()).trim().to_string())
+                Some(context.token(&token).to_string())
             }
             UsePathSegmentKind::Super(token) => {
-                Some(context.snippet(token.text_range()).trim().to_string())
+                Some(context.token(&token).to_string())
             }
             UsePathSegmentKind::Self_(token) => {
-                Some(context.snippet(token.text_range()).trim().to_string())
+                Some(context.token(&token).to_string())
             }
             UsePathSegmentKind::Ident(token) => {
-                Some(context.snippet(token.text_range()).trim().to_string())
+                Some(context.token(&token).to_string())
             }
             UsePathSegmentKind::Glob(token) => {
-                Some(context.snippet(token.text_range()).trim().to_string())
+                Some(context.token(&token).to_string())
             }
         }
     }
@@ -1909,7 +1909,7 @@ impl Rewrite for ast::RecordPat {
                 .into_iter()
                 .filter_map(|field| {
                     let name = field.name()?;
-                    let name_text = context.snippet(name.text_range()).trim();
+                    let name_text = context.token(&name);
 
                     if let Some(pat) = field.pat() {
                         let pat_text = pat.rewrite_or_original(context, shape);

@@ -1,5 +1,5 @@
 use crate::Config;
-use parser::{TextRange, ast::prelude::AstNode, syntax_node::NodeOrToken};
+use parser::{SyntaxToken, TextRange, ast::prelude::AstNode, syntax_node::NodeOrToken};
 
 /// Shared, read-only context passed to [`Rewrite`] implementations.
 #[derive(Debug)]
@@ -16,6 +16,11 @@ impl<'a> RewriteContext<'a> {
         let start: usize = usize::from(range.start());
         let end: usize = usize::from(range.end());
         &self.source[start..end]
+    }
+
+    /// Returns the trimmed text of a syntax token.
+    pub fn token(&self, token: &SyntaxToken) -> &'a str {
+        self.snippet(token.text_range()).trim()
     }
 
     /// Returns the trimmed source text for the given AST node.
