@@ -483,7 +483,9 @@ impl Rewrite for ast::Struct {
         write_item_modifier(self, &mut out);
 
         out.push_str("struct ");
-        out.push_str(context.snippet(self.name()?.text_range()));
+        if let Some(name) = self.name() {
+            out.push_str(context.token(&name));
+        }
 
         write_generics(self, context, shape, &mut out);
         write_where_clause(self, context, shape, &mut out);
@@ -540,7 +542,9 @@ impl Rewrite for ast::Contract {
         write_item_modifier(self, &mut out);
 
         out.push_str("contract ");
-        out.push_str(context.snippet(self.name()?.text_range()));
+        if let Some(name) = self.name() {
+            out.push_str(context.token(&name));
+        }
 
         if let Some(fields) = self.fields() {
             out.push(' ');
@@ -561,7 +565,9 @@ impl Rewrite for ast::Enum {
         write_item_modifier(self, &mut out);
 
         out.push_str("enum ");
-        out.push_str(context.snippet(self.name()?.text_range()));
+        if let Some(name) = self.name() {
+            out.push_str(context.token(&name));
+        }
 
         write_generics(self, context, shape, &mut out);
         write_where_clause(self, context, shape, &mut out);
@@ -619,7 +625,9 @@ impl Rewrite for ast::Trait {
         write_item_modifier(self, &mut out);
 
         out.push_str("trait ");
-        out.push_str(context.snippet(self.name()?.text_range()));
+        if let Some(name) = self.name() {
+            out.push_str(context.token(&name));
+        }
 
         write_generics(self, context, shape, &mut out);
 
@@ -686,7 +694,9 @@ impl Rewrite for ast::TraitTypeItem {
         write_attrs(self, context, &mut out);
 
         out.push_str("type ");
-        out.push_str(context.snippet(self.name()?.text_range()));
+        if let Some(name) = self.name() {
+            out.push_str(context.token(&name));
+        }
 
         if let Some(bounds) = self.bounds() {
             out.push_str(&bounds.rewrite_or_original(context, shape));
@@ -708,7 +718,9 @@ impl Rewrite for ast::TraitConstItem {
         write_attrs(self, context, &mut out);
 
         out.push_str("const ");
-        out.push_str(context.snippet(self.name()?.text_range()));
+        if let Some(name) = self.name() {
+            out.push_str(context.token(&name));
+        }
 
         if let Some(ty) = self.ty() {
             out.push_str(": ");
@@ -821,7 +833,9 @@ impl Rewrite for ast::Const {
         write_item_modifier(self, &mut out);
 
         out.push_str("const ");
-        out.push_str(context.snippet(self.name()?.text_range()));
+        if let Some(name) = self.name() {
+            out.push_str(context.token(&name));
+        }
 
         if let Some(ty) = self.ty() {
             out.push_str(": ");
@@ -956,7 +970,9 @@ impl Rewrite for ast::TypeAlias {
         write_item_modifier(self, &mut out);
 
         out.push_str("type ");
-        out.push_str(context.snippet(self.alias()?.text_range()).trim());
+        if let Some(alias) = self.alias() {
+            out.push_str(context.token(&alias));
+        }
 
         write_generics(self, context, shape, &mut out);
 
@@ -1053,7 +1069,9 @@ impl Rewrite for ast::Mod {
         write_item_modifier(self, &mut out);
 
         out.push_str("mod ");
-        out.push_str(context.snippet(self.name()?.text_range()).trim());
+        if let Some(name) = self.name() {
+            out.push_str(context.token(&name));
+        }
 
         if let Some(items) = self.items() {
             let outer_indent = shape.indent.indent_width();
