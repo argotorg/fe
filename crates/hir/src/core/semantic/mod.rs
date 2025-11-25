@@ -23,7 +23,6 @@
 use crate::HirDb;
 use crate::analysis::HirAnalysisDb;
 use crate::analysis::ty::ty_def::Kind;
-use crate::hir_def::Partial;
 use crate::hir_def::params::KindBound as HirKindBound;
 use crate::hir_def::scope_graph::ScopeId;
 
@@ -335,14 +334,6 @@ pub struct FuncParamView<'db> {
 }
 
 impl<'db> FuncParamView<'db> {
-<<<<<<< HEAD
-    pub fn name(self, db: &'db dyn HirDb) -> Option<IdentId<'db>> {
-        let list = self.func.params_list(db).to_opt()?;
-        list.data(db).get(self.idx)?.name()
-    }
-
-=======
->>>>>>> 138c8a9ae (symbol tracking scaffold)
     pub fn label(self, db: &'db dyn HirDb) -> Option<IdentId<'db>> {
         let list = self.func.params_list(db).to_opt()?;
         match list.data(db).get(self.idx)?.label {
@@ -1566,11 +1557,6 @@ impl<'db> ImplAssocTypeView<'db> {
         self.owner.span().associated_type(self.idx)
     }
 
-    /// The owning impl-trait block.
-    pub fn owner(self) -> ImplTrait<'db> {
-        self.owner
-    }
-
     /// Semantic type of this associated type implementation.
     pub fn ty(self, db: &'db dyn HirAnalysisDb) -> Option<TyId<'db>> {
         let hir = self.owner.types(db)[self.idx].type_ref.to_opt()?;
@@ -1841,9 +1827,11 @@ pub struct ImplementorAssocTypeView<'db> {
 }
 
 impl<'db> ImplementorAssocTypeView<'db> {
-    // pub fn name(self, db: &'db dyn HirDb) -> Partial<IdentId<'db>> {
-    //     self.assoc.name(db)
-    // }
+    /// The trait associated type declaration this view wraps.
+    pub fn assoc(self) -> TraitAssocTypeView<'db> {
+        self.assoc
+    }
+
     pub fn bounds(
         self,
         db: &'db dyn HirAnalysisDb,
@@ -1972,19 +1960,24 @@ impl<'db> ImplAssocConstView<'db> {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct VariantView<'db> {
-<<<<<<< HEAD
-    pub owner: Enum<'db>,
-    pub idx: usize,
-=======
     pub(in crate::core) owner: Enum<'db>,
     pub(in crate::core) idx: usize,
->>>>>>> 138c8a9ae (symbol tracking scaffold)
 }
 
 impl<'db> VariantView<'db> {
     /// Returns the owning enum.
-    pub fn enum_(self, _db: &'db dyn HirDb) -> Enum<'db> {
+    pub fn enum_(self) -> Enum<'db> {
         self.owner
+    }
+
+    /// Returns the index of this variant in its parent enum.
+    pub fn index(self) -> usize {
+        self.idx
+    }
+
+    /// Returns the EnumVariant handle for this view.
+    pub fn as_enum_variant(self) -> EnumVariant<'db> {
+        EnumVariant::new(self.owner, self.idx)
     }
 
     pub fn kind(self, db: &'db dyn HirDb) -> VariantKind<'db> {
@@ -2060,29 +2053,11 @@ impl<'db> VariantView<'db> {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct FieldView<'db> {
-<<<<<<< HEAD
-    pub parent: FieldParent<'db>,
-    pub idx: usize,
-}
-
-impl<'db> FieldView<'db> {
-    pub fn name(self, db: &'db dyn HirDb) -> Option<IdentId<'db>> {
-        let list = self.parent.fields_list(db);
-        list.data(db)[self.idx].name.to_opt()
-=======
     pub(in crate::core) parent: FieldParent<'db>,
     pub(in crate::core) idx: usize,
 }
 
 impl<'db> FieldView<'db> {
-    /// Crate-local helper returning the HIR type reference (syntactic) for
-    /// this field. Prefer using `ty` when the semantic type is needed.
-    fn hir_type_ref(self, db: &'db dyn HirDb) -> Partial<TypeId<'db>> {
-        let list = self.parent.fields_list(db);
-        list.data(db)[self.idx].type_ref
->>>>>>> 138c8a9ae (symbol tracking scaffold)
-    }
-
     /// Returns the semantic type of this field.
     pub fn ty(self, db: &'db dyn HirAnalysisDb) -> TyId<'db> {
         let (adt_field, idx) = self.as_adt_field(db);

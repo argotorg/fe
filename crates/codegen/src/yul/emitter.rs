@@ -4,6 +4,7 @@ use hir::hir_def::{
     TopLevelMod,
     expr::{ArithBinOp, BinOp, CompBinOp, LogicalBinOp, UnOp},
 };
+use hir::semantic::SymbolInfo;
 use mir::{
     BasicBlockId, CallOrigin, LoopInfo, MirFunction, Terminator, ValueId, ValueOrigin,
     ir::{
