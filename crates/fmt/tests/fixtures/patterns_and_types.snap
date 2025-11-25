@@ -10,11 +10,11 @@ fn pattern_tests() {
     let x = 1
     let _ = 2
     let mut y = 3
+
     // Tuple patterns
-
     let (a, b, c) = (1, 2, 3)
-    // Nested patterns
 
+    // Nested patterns
     let ((a, b), (c, d)) = ((1, 2), (3, 4))
 }
 

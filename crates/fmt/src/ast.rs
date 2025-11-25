@@ -972,10 +972,25 @@ impl Rewrite for ast::BlockExpr {
                     }
                     SyntaxKind::Comment => {
                         children.next();
+
+                        // Check for blank lines before the comment, just like we do for statements.
+                        let tok_range = tok.text_range();
+                        if let Some(prev_end) = last_stmt_end {
+                            let gap = TextRange::new(prev_end, tok_range.start());
+                            let gap_text = context.snippet(gap);
+                            let gap_newlines = gap_text.chars().filter(|c| *c == '\n').count();
+                            if gap_newlines >= 2 {
+                                out.push('\n');
+                            }
+                        }
+
                         push_indent(&mut out, inner_indent);
-                        let text = context.snippet(tok.text_range());
+                        let text = context.snippet(tok_range);
                         out.push_str(text.trim_start());
                         out.push('\n');
+
+                        // Update last_stmt_end so subsequent items don't double-count the gap.
+                        last_stmt_end = Some(tok_range.end());
                     }
                     SyntaxKind::WhiteSpace => {
                         // Inter-statement blank lines are handled based on the
