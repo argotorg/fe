@@ -1409,9 +1409,7 @@ impl Rewrite for ast::ParenExpr {
 }
 
 fn push_indent(out: &mut String, width: usize) {
-    for _ in 0..width {
-        out.push(' ');
-    }
+    Indent::push_to(width, out);
 }
 
 impl Rewrite for ast::Type {
