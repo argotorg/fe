@@ -8,7 +8,7 @@
 use rustc_hash::FxHashMap;
 use smallvec1::SmallVec;
 
-use super::SymbolInfo;
+use crate::semantic::SymbolInfo;
 use crate::analysis::HirAnalysisDb;
 use crate::analysis::name_resolution;
 use crate::analysis::ty;
@@ -16,9 +16,9 @@ use crate::analysis::ty::diagnostics::{TraitConstraintDiag, TyDiagCollection, Ty
 use crate::analysis::ty::ty_def::{InvalidCause, TyId};
 use crate::hir_def::scope_graph::ScopeId;
 use crate::hir_def::{
-    Contract, Enum, EnumVariant, FieldParent, Func, GenericParam, GenericParamOwner,
-    GenericParamView, IdentId, Impl, ImplTrait, ItemKind, Partial, PathId, Struct, Trait,
-    TypeAlias, TypeBound, VariantKind, WhereClauseOwner,
+    Contract, Enum, FieldParent, Func, GenericParam, GenericParamOwner, GenericParamView, IdentId,
+    Impl, ImplTrait, ItemKind, Partial, PathId, Struct, Trait, TypeAlias, TypeBound, VariantKind,
+    WhereClauseOwner,
 };
 use crate::span::DynLazySpan;
 
@@ -640,7 +640,7 @@ impl<'db> ImplTrait<'db> {
                 .instantiate_identity();
 
         for assoc in implementor.assoc_type_views(db) {
-            let Some(name) = assoc.assoc.name(db) else { continue };
+            let Some(name) = assoc.assoc().name(db) else { continue };
 
             for bound_inst in assoc.bounds(db) {
                 let canonical_bound = ty::canonical::Canonical::new(db, bound_inst);
@@ -781,8 +781,8 @@ impl<'db> VariantView<'db> {
             return out;
         };
 
-        let enum_ = self.owner;
-        let var = EnumVariant::new(enum_, self.idx);
+        let enum_ = self.enum_();
+        let var = self.as_enum_variant();
         let scope = var.scope();
         let assumptions = constraints_for(db, enum_.into());
 
@@ -886,7 +886,7 @@ impl<'db> Diagnosable<'db> for Enum<'db> {
                     v.fields(db).map(|f| f.name(db)),
                     |idxs| {
                         TyLowerDiag::DuplicateFieldName(
-                            FieldParent::Variant(EnumVariant::new(self, v.idx)),
+                            FieldParent::Variant(v.as_enum_variant()),
                             idxs,
                         )
                         .into()

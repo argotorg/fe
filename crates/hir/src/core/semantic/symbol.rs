@@ -2,8 +2,8 @@
 
 use crate::HirDb;
 use crate::hir_def::{
-    Const, Contract, Enum, FieldParent, Func, GenericParam, IdentId, Impl, ImplTrait, ItemKind,
-    Mod, Struct, TopLevelMod, Trait, TypeAlias, Use,
+    Const, Contract, Enum, FieldParent, Func, GenericParam, GenericParamOwner, IdentId, Impl,
+    ImplTrait, ItemKind, Mod, Struct, TopLevelMod, Trait, TypeAlias, Use,
 };
 use crate::span::DynLazySpan;
 use enum_dispatch::enum_dispatch;
@@ -263,7 +263,7 @@ impl<'db> SymbolInfo<'db> for FuncParamView<'db> {
     }
     fn name(&self, db: &'db dyn HirDb) -> Option<IdentId<'db>> {
         self.func
-            .params(db)
+            .params_list(db)
             .to_opt()
             .and_then(|p| p.data(db).get(self.idx))
             .and_then(|p| p.name())
@@ -378,6 +378,101 @@ impl<'db> From<ItemKind<'db>> for SymbolKind<'db> {
             ItemKind::Const(c) => Self::Const(c),
             ItemKind::Use(u) => Self::Use(u),
             ItemKind::Body(_) => panic!("Body is not a named symbol"),
+        }
+    }
+}
+
+impl<'db> SymbolKind<'db> {
+    /// Returns the child symbols of this symbol for traversal.
+    pub fn children(&self, db: &'db dyn HirDb) -> Vec<SymbolKind<'db>> {
+        match self {
+            // Modules contain items
+            Self::TopMod(m) => m.children_non_nested(db).map(SymbolKind::from).collect(),
+            Self::Mod(m) => m.children_non_nested(db).map(SymbolKind::from).collect(),
+
+            // Func has params + generic params
+            Self::Func(f) => f
+                .params(db)
+                .map(SymbolKind::from)
+                .chain(GenericParamOwner::Func(*f).params(db).map(SymbolKind::from))
+                .collect(),
+
+            // Struct has fields + generic params
+            Self::Struct(s) => FieldParent::Struct(*s)
+                .fields(db)
+                .map(SymbolKind::from)
+                .chain(GenericParamOwner::Struct(*s).params(db).map(SymbolKind::from))
+                .collect(),
+
+            // Contract has fields + child funcs (no generic params)
+            Self::Contract(c) => {
+                let s_graph = c.top_mod(db).scope_graph(db);
+                let funcs = s_graph.child_items(c.scope()).filter_map(|item| match item {
+                    ItemKind::Func(f) => Some(SymbolKind::from(f)),
+                    _ => None,
+                });
+                FieldParent::Contract(*c)
+                    .fields(db)
+                    .map(SymbolKind::from)
+                    .chain(funcs)
+                    .collect()
+            }
+
+            // Enum has variants + generic params
+            Self::Enum(e) => e
+                .variants(db)
+                .map(SymbolKind::from)
+                .chain(GenericParamOwner::Enum(*e).params(db).map(SymbolKind::from))
+                .collect(),
+
+            // TypeAlias has generic params only
+            Self::TypeAlias(t) => GenericParamOwner::TypeAlias(*t)
+                .params(db)
+                .map(SymbolKind::from)
+                .collect(),
+
+            // Impl has funcs + generic params
+            Self::Impl(i) => i
+                .funcs(db)
+                .map(SymbolKind::from)
+                .chain(GenericParamOwner::Impl(*i).params(db).map(SymbolKind::from))
+                .collect(),
+
+            // Trait has methods + assoc types + assoc consts + generic params
+            Self::Trait(t) => t
+                .methods(db)
+                .map(SymbolKind::from)
+                .chain(t.assoc_types(db).map(SymbolKind::from))
+                .chain(t.assoc_consts(db).map(SymbolKind::from))
+                .chain(GenericParamOwner::Trait(*t).params(db).map(SymbolKind::from))
+                .collect(),
+
+            // ImplTrait has methods + assoc types + assoc consts + generic params
+            Self::ImplTrait(i) => i
+                .methods(db)
+                .map(SymbolKind::from)
+                .chain(i.assoc_types(db).map(SymbolKind::from))
+                .chain(i.assoc_consts(db).map(SymbolKind::from))
+                .chain(GenericParamOwner::ImplTrait(*i).params(db).map(SymbolKind::from))
+                .collect(),
+
+            // Const has no children
+            Self::Const(_) => Vec::new(),
+
+            // Use has no children
+            Self::Use(_) => Vec::new(),
+
+            // Variant has fields
+            Self::Variant(v) => v.fields(db).map(SymbolKind::from).collect(),
+
+            // Leaf symbols with no children
+            Self::Field(_)
+            | Self::GenericParam(_)
+            | Self::FuncParam(_)
+            | Self::TraitAssocType(_)
+            | Self::TraitAssocConst(_)
+            | Self::ImplAssocType(_)
+            | Self::ImplAssocConst(_) => Vec::new(),
         }
     }
 }
