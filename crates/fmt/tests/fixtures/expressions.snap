@@ -1,6 +1,5 @@
 ---
 source: crates/fmt/tests/format_snapshots.rs
-assertion_line: 16
 expression: output
 input_file: tests/fixtures/expressions.fe
 ---
@@ -27,4 +26,4 @@ fn sub(a: i32, b: i32) -> i32 {
     a - b
 }
 
-struct Point {x:i32,y:i32}
+struct Point { x: i32, y: i32 }

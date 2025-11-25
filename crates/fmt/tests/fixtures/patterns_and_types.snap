@@ -1,6 +1,5 @@
 ---
 source: crates/fmt/tests/format_snapshots.rs
-assertion_line: 16
 expression: output
 input_file: tests/fixtures/patterns_and_types.fe
 ---
@@ -29,7 +28,7 @@ fn type_tests(x: i32, y: *i32, z: (i32, bool)) -> i32 {
     x
 }
 
-struct Point {x:i32,y:i32}
+struct Point { x: i32, y: i32 }
 
 fn get_point() -> Point {
     Point { x: 0, y: 0 }

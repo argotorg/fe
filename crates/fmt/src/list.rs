@@ -16,6 +16,8 @@ pub struct ListFormatting<'a> {
     pub separator: &'a str,
     pub trailing_separator: bool,
     pub surround: Option<(&'a str, &'a str)>,
+    /// Add space padding inside surrounds for horizontal mode (e.g., `{ a, b }` instead of `{a, b}`).
+    pub horizontal_padding: bool,
 }
 
 impl<'a> Default for ListFormatting<'a> {
@@ -25,6 +27,7 @@ impl<'a> Default for ListFormatting<'a> {
             separator: ",",
             trailing_separator: true,
             surround: None,
+            horizontal_padding: false,
         }
     }
 }
@@ -48,9 +51,14 @@ impl<'a> ListFormatting<'a> {
         self.surround = Some((left, right));
         self
     }
-    
+
     pub fn tactic(mut self, tactic: ListTactic) -> Self {
         self.tactic = tactic;
+        self
+    }
+
+    pub fn horizontal_padding(mut self, padding: bool) -> Self {
+        self.horizontal_padding = padding;
         self
     }
 }
@@ -96,11 +104,12 @@ where
             } else {
                 ""
             };
-            let result = format!("{open}{joined}{trailing}{close}");
-
-            if formatting.tactic == ListTactic::Horizontal {
-                return Some(result);
-            }
+            let (pad_left, pad_right) = if formatting.horizontal_padding {
+                (" ", " ")
+            } else {
+                ("", "")
+            };
+            let result = format!("{open}{pad_left}{joined}{trailing}{pad_right}{close}");
 
             return Some(result);
         }
