@@ -5,7 +5,7 @@ use parser::{
     TextRange,
     ast::{
         self, AttrListOwner, ExprKind, GenericArgKind, GenericArgsOwner, GenericParamsOwner,
-        ItemKind, ItemModifierOwner, PatKind, StmtKind, TypeKind, WhereClauseOwner,
+        ItemKind, ItemModifierOwner, PatKind, StmtKind, TraitItemKind, TypeKind, WhereClauseOwner,
         prelude::AstNode,
     },
     syntax_kind::SyntaxKind,
@@ -120,12 +120,16 @@ impl Rewrite for ast::Item {
 
 impl Rewrite for ast::Func {
     fn rewrite(&self, context: &RewriteContext<'_>, shape: Shape) -> Option<String> {
-        let body = self.body()?;
+        let body_opt = self.body();
 
-        let func_range = self.syntax().text_range();
-        let body_range = body.syntax().text_range();
-        let suffix_range = TextRange::new(body_range.end(), func_range.end());
-        let suffix = context.snippet(suffix_range);
+        let suffix = if let Some(body) = &body_opt {
+            let func_range = self.syntax().text_range();
+            let body_range = body.syntax().text_range();
+            let suffix_range = TextRange::new(body_range.end(), func_range.end());
+            context.snippet(suffix_range).to_string()
+        } else {
+            String::new()
+        };
 
         let mut out = String::new();
 
@@ -170,12 +174,14 @@ impl Rewrite for ast::Func {
 
             write_where_clause(self, context, &mut out);
 
-            out.push(' ');
+            // Handle body or bodyless functions
+            if let Some(body) = &body_opt {
+                out.push(' ');
+                let formatted_body = body.rewrite(context, shape)?;
+                out.push_str(&formatted_body);
+                out.push_str(&suffix);
+            }
 
-            let formatted_body = body.rewrite(context, shape)?;
-
-            out.push_str(&formatted_body);
-            out.push_str(suffix);
             return Some(out);
         }
 
@@ -236,11 +242,13 @@ impl Rewrite for ast::Func {
             out.push_str(&ret_inline);
             out.push_str(&uses_inline);
             out.push_str(&where_inline);
-            out.push(' ');
 
-            let formatted_body = body.rewrite(context, shape)?;
-            out.push_str(&formatted_body);
-            out.push_str(suffix);
+            if let Some(body) = &body_opt {
+                out.push(' ');
+                let formatted_body = body.rewrite(context, shape)?;
+                out.push_str(&formatted_body);
+                out.push_str(&suffix);
+            }
             return Some(out);
         }
 
@@ -353,14 +361,17 @@ impl Rewrite for ast::Func {
             }
         }
 
-        if !out.ends_with('\n') {
-            out.push('\n');
+        if let Some(body) = &body_opt {
+            if !out.ends_with('\n') {
+                out.push('\n');
+            }
+
+            let formatted_body = body.rewrite(context, shape)?;
+
+            out.push_str(&formatted_body);
+            out.push_str(&suffix);
         }
 
-        let formatted_body = body.rewrite(context, shape)?;
-
-        out.push_str(&formatted_body);
-        out.push_str(suffix);
         Some(out)
     }
 }
@@ -545,7 +556,7 @@ impl Rewrite for ast::VariantDef {
 }
 
 impl Rewrite for ast::Trait {
-    fn rewrite(&self, context: &RewriteContext<'_>, _shape: Shape) -> Option<String> {
+    fn rewrite(&self, context: &RewriteContext<'_>, shape: Shape) -> Option<String> {
         let mut out = String::new();
 
         write_attrs(self, context, &mut out);
@@ -565,11 +576,94 @@ impl Rewrite for ast::Trait {
         write_where_clause(self, context, &mut out);
 
         if let Some(items) = self.item_list() {
-            let text = context.snippet(items.syntax().text_range());
             out.push(' ');
-            out.push_str(text.trim_start());
+            out.push_str(&items.rewrite_or_original(context, shape));
         } else {
             out.push_str(" {}");
+        }
+
+        Some(out)
+    }
+}
+
+impl Rewrite for ast::TraitItemList {
+    fn rewrite(&self, context: &RewriteContext<'_>, shape: Shape) -> Option<String> {
+        let outer_indent = shape.indent.indent_width();
+        let indent_width = context.config.indent_width;
+        let inner_indent = outer_indent + indent_width;
+        let inner_shape = Shape::with_width(shape.width, Indent::from_block(inner_indent));
+
+        let items: Vec<_> = self.into_iter().collect();
+
+        if items.is_empty() {
+            return Some("{}".to_string());
+        }
+
+        let mut out = String::new();
+        out.push_str("{\n");
+
+        for item in items {
+            push_indent(&mut out, inner_indent);
+            out.push_str(&item.rewrite_or_original(context, inner_shape));
+            out.push('\n');
+        }
+
+        push_indent(&mut out, outer_indent);
+        out.push('}');
+
+        Some(out)
+    }
+}
+
+impl Rewrite for ast::TraitItem {
+    fn rewrite(&self, context: &RewriteContext<'_>, shape: Shape) -> Option<String> {
+        match self.kind() {
+            TraitItemKind::Func(func) => func.rewrite(context, shape),
+            TraitItemKind::Type(ty) => ty.rewrite(context, shape),
+            TraitItemKind::Const(c) => c.rewrite(context, shape),
+        }
+    }
+}
+
+impl Rewrite for ast::TraitTypeItem {
+    fn rewrite(&self, context: &RewriteContext<'_>, shape: Shape) -> Option<String> {
+        let mut out = String::new();
+
+        write_attrs(self, context, &mut out);
+
+        out.push_str("type ");
+        out.push_str(context.snippet(self.name()?.text_range()));
+
+        if let Some(bounds) = self.bounds() {
+            out.push_str(&context.snippet_trimmed(&bounds));
+        }
+
+        if let Some(ty) = self.ty() {
+            out.push_str(" = ");
+            out.push_str(&ty.rewrite_or_original(context, shape));
+        }
+
+        Some(out)
+    }
+}
+
+impl Rewrite for ast::TraitConstItem {
+    fn rewrite(&self, context: &RewriteContext<'_>, shape: Shape) -> Option<String> {
+        let mut out = String::new();
+
+        write_attrs(self, context, &mut out);
+
+        out.push_str("const ");
+        out.push_str(context.snippet(self.name()?.text_range()));
+
+        if let Some(ty) = self.ty() {
+            out.push_str(": ");
+            out.push_str(&ty.rewrite_or_original(context, shape));
+        }
+
+        if let Some(value) = self.value() {
+            out.push_str(" = ");
+            out.push_str(&value.rewrite_or_original(context, shape));
         }
 
         Some(out)
@@ -594,12 +688,40 @@ impl Rewrite for ast::Impl {
         write_where_clause(self, context, &mut out);
 
         if let Some(items) = self.item_list() {
-            let text = context.snippet(items.syntax().text_range());
             out.push(' ');
-            out.push_str(text.trim_start());
+            out.push_str(&items.rewrite_or_original(context, shape));
         } else {
             out.push_str(" {}");
         }
+
+        Some(out)
+    }
+}
+
+impl Rewrite for ast::ImplItemList {
+    fn rewrite(&self, context: &RewriteContext<'_>, shape: Shape) -> Option<String> {
+        let outer_indent = shape.indent.indent_width();
+        let indent_width = context.config.indent_width;
+        let inner_indent = outer_indent + indent_width;
+        let inner_shape = Shape::with_width(shape.width, Indent::from_block(inner_indent));
+
+        let items: Vec<_> = self.into_iter().collect();
+
+        if items.is_empty() {
+            return Some("{}".to_string());
+        }
+
+        let mut out = String::new();
+        out.push_str("{\n");
+
+        for item in items {
+            push_indent(&mut out, inner_indent);
+            out.push_str(&item.rewrite_or_original(context, inner_shape));
+            out.push('\n');
+        }
+
+        push_indent(&mut out, outer_indent);
+        out.push('}');
 
         Some(out)
     }
@@ -627,9 +749,8 @@ impl Rewrite for ast::ImplTrait {
         write_where_clause(self, context, &mut out);
 
         if let Some(items) = self.item_list() {
-            let text = context.snippet(items.syntax().text_range());
             out.push(' ');
-            out.push_str(text.trim_start());
+            out.push_str(&items.rewrite_or_original(context, shape));
         } else {
             out.push_str(" {}");
         }
