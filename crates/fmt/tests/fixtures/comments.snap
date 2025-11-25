@@ -1,6 +1,5 @@
 ---
 source: crates/fmt/tests/format_snapshots.rs
-assertion_line: 16
 expression: output
 input_file: tests/fixtures/comments.fe
 ---
@@ -15,7 +14,6 @@ pub fn main() {
         // inner if comment
         let y = 2
         // spaced out
-
         if y < 10 {
             let z = 3
             // z comment
