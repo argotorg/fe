@@ -170,7 +170,7 @@ impl Rewrite for ast::ItemList {
 impl Rewrite for ast::Item {
     fn rewrite(&self, context: &RewriteContext<'_>, _shape: Shape) -> Option<String> {
         match self.kind()? {
-            ItemKind::Mod(_) => Some(context.snippet_trimmed(self)),
+            ItemKind::Mod(mod_) => mod_.rewrite(context, _shape),
             ItemKind::Func(func) => func.rewrite(context, _shape),
             ItemKind::Struct(struct_) => struct_.rewrite(context, _shape),
             ItemKind::Contract(contract) => contract.rewrite(context, _shape),
@@ -977,6 +977,42 @@ impl Rewrite for ast::TypeAlias {
         if let Some(ty) = self.ty() {
             out.push_str(" = ");
             out.push_str(&ty.rewrite_or_original(context, shape));
+        }
+
+        Some(out)
+    }
+}
+
+impl Rewrite for ast::Mod {
+    fn rewrite(&self, context: &RewriteContext<'_>, shape: Shape) -> Option<String> {
+        let mut out = String::new();
+
+        write_attrs(self, context, &mut out);
+        write_item_modifier(self, &mut out);
+
+        out.push_str("mod ");
+        out.push_str(context.snippet(self.name()?.text_range()).trim());
+
+        if let Some(items) = self.items() {
+            let outer_indent = shape.indent.indent_width();
+            let indent_width = context.config.indent_width;
+            let inner_indent = outer_indent + indent_width;
+            let inner_shape = Shape::with_width(shape.width, Indent::from_block(inner_indent));
+
+            let item_vec: Vec<_> = items.into_iter().collect();
+
+            if item_vec.is_empty() {
+                out.push_str(" {}");
+            } else {
+                out.push_str(" {\n");
+                for item in item_vec {
+                    push_indent(&mut out, inner_indent);
+                    out.push_str(&item.rewrite_or_original(context, inner_shape));
+                    out.push('\n');
+                }
+                push_indent(&mut out, outer_indent);
+                out.push('}');
+            }
         }
 
         Some(out)
