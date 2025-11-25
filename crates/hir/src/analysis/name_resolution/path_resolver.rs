@@ -1040,34 +1040,15 @@ pub fn find_associated_type<'db>(
             table.rollback_to(snapshot);
         }
 
-        // Also check bounds defined on the associated type in the trait definition
-        let trait_def = assoc_ty.trait_.def(db);
-        let trait_ = trait_def;
-
-        // Evaluate trait bounds declared on the associated type using the owner-trait Self
-        // for generic `Self` occurrences inside the bound (e.g., `Encode<Self>`).
+        // Also check bounds defined on the associated type in the trait definition.
+        // We need to use the calling context's scope/assumptions (not the trait's) so that
+        // path resolution works correctly.
+        let trait_ = assoc_ty.trait_.def(db);
         let assoc_name = assoc_ty.name;
-        let _before = candidates.len();
-        for view in trait_.assoc_types(db) {
-            if view.name(db) != Some(assoc_name) {
-                continue;
-            }
+        if let Some(decl) = trait_.assoc_ty(db, assoc_name) {
             let subject = ty_with_subst.fold_with(db, &mut table);
-            for inst in subject.assoc_type_bounds(db, view) {
-                if inst.def(db).assoc_ty(db, name).is_some() {
-                    let assoc_ty = TyId::assoc_ty(db, inst, name);
-                    let folded = assoc_ty.fold_with(db, &mut table);
-                    candidates.push((inst, folded));
-                }
-            }
-        }
-
-        // If no candidates were derived from bound views, fall back to raw HIR bounds to
-        // preserve behavior until the semantic resolver lands.
-        if candidates.len() == _before
-            && let Some(decl) = trait_.assoc_ty(db, assoc_name)
-        {
-            let subject = ty_with_subst.fold_with(db, &mut table);
+            // owner_self is used to substitute `Self` in bounds like `type Assoc: Encode<Self>`
+            let owner_self = assoc_ty.trait_.self_ty(db);
             for bound in &decl.bounds {
                 if let TypeBound::Trait(trait_ref) = *bound
                     && let Ok(inst) = crate::analysis::ty::trait_lower::lower_trait_ref(
@@ -1076,7 +1057,7 @@ pub fn find_associated_type<'db>(
                         trait_ref,
                         scope,
                         assumptions,
-                        None,
+                        Some(owner_self),
                     )
                     && inst.def(db).assoc_ty(db, name).is_some()
                 {
