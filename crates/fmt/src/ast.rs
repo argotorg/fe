@@ -4,9 +4,9 @@ use crate::{
 use parser::{
     TextRange,
     ast::{
-        self, AttrListOwner, ExprKind, GenericArgKind, GenericArgsOwner, GenericParamsOwner,
-        ItemKind, ItemModifierOwner, PatKind, StmtKind, TraitItemKind, TypeKind, WhereClauseOwner,
-        prelude::AstNode,
+        self, AttrListOwner, ExprKind, GenericArgKind, GenericArgsOwner, GenericParamKind,
+        GenericParamsOwner, ItemKind, ItemModifierOwner, PatKind, StmtKind, TraitItemKind,
+        TypeKind, WhereClauseOwner, prelude::AstNode,
     },
     syntax_kind::SyntaxKind,
     syntax_node::NodeOrToken,
@@ -38,10 +38,78 @@ fn write_item_modifier<N: ItemModifierOwner + AstNode>(node: &N, out: &mut Strin
 fn write_generics<N: GenericParamsOwner + AstNode>(
     node: &N,
     context: &RewriteContext<'_>,
+    shape: Shape,
     out: &mut String,
 ) {
     if let Some(generics) = node.generic_params() {
-        out.push_str(&context.snippet_trimmed(&generics));
+        out.push_str(&generics.rewrite_or_original(context, shape));
+    }
+}
+
+impl Rewrite for ast::GenericParamList {
+    fn rewrite(&self, context: &RewriteContext<'_>, shape: Shape) -> Option<String> {
+        let formatting = ListFormatting::new(shape)
+            .tactic(ListTactic::Mixed)
+            .trailing_separator(false)
+            .with_surround("<", ">");
+        format_list(self, &formatting, context, shape)
+    }
+}
+
+impl Rewrite for ast::GenericParam {
+    fn rewrite(&self, context: &RewriteContext<'_>, shape: Shape) -> Option<String> {
+        match self.kind() {
+            GenericParamKind::Type(ty_param) => ty_param.rewrite(context, shape),
+            GenericParamKind::Const(const_param) => const_param.rewrite(context, shape),
+        }
+    }
+}
+
+impl Rewrite for ast::TypeGenericParam {
+    fn rewrite(&self, context: &RewriteContext<'_>, shape: Shape) -> Option<String> {
+        let mut out = String::new();
+
+        if let Some(name) = self.name() {
+            out.push_str(context.snippet(name.text_range()).trim());
+        }
+
+        if let Some(bounds) = self.bounds() {
+            // TypeBoundList includes the `:`, format as `: Bound1 + Bound2`
+            let bounds_text = context.snippet_trimmed(&bounds);
+            if let Some(rest) = bounds_text.strip_prefix(':') {
+                out.push_str(": ");
+                out.push_str(rest.trim_start());
+            } else {
+                out.push(' ');
+                out.push_str(&bounds_text);
+            }
+        }
+
+        if let Some(default_ty) = self.default_ty() {
+            out.push_str(" = ");
+            out.push_str(&default_ty.rewrite_or_original(context, shape));
+        }
+
+        Some(out)
+    }
+}
+
+impl Rewrite for ast::ConstGenericParam {
+    fn rewrite(&self, context: &RewriteContext<'_>, shape: Shape) -> Option<String> {
+        let mut out = String::new();
+
+        out.push_str("const ");
+
+        if let Some(name) = self.name() {
+            out.push_str(context.snippet(name.text_range()).trim());
+        }
+
+        if let Some(ty) = self.ty() {
+            out.push_str(": ");
+            out.push_str(&ty.rewrite_or_original(context, shape));
+        }
+
+        Some(out)
     }
 }
 
@@ -151,7 +219,7 @@ impl Rewrite for ast::Func {
                 out.push_str(context.snippet(name.text_range()));
             }
 
-            write_generics(self, context, &mut out);
+            write_generics(self, context, shape, &mut out);
 
             let params = if let Some(param_list) = self.params() {
                 param_list.rewrite(context, shape)?
@@ -198,7 +266,7 @@ impl Rewrite for ast::Func {
         if let Some(name) = self.name() {
             prefix.push_str(context.snippet(name.text_range()));
         }
-        write_generics(self, context, &mut prefix);
+        write_generics(self, context, shape, &mut prefix);
 
         let params_inline = if let Some(param_list) = self.params() {
             param_list.rewrite(context, shape)?
@@ -428,7 +496,7 @@ impl Rewrite for ast::Struct {
         out.push_str("struct ");
         out.push_str(context.snippet(self.name()?.text_range()));
 
-        write_generics(self, context, &mut out);
+        write_generics(self, context, shape, &mut out);
         write_where_clause(self, context, &mut out);
 
         if let Some(fields) = self.fields() {
@@ -506,7 +574,7 @@ impl Rewrite for ast::Enum {
         out.push_str("enum ");
         out.push_str(context.snippet(self.name()?.text_range()));
 
-        write_generics(self, context, &mut out);
+        write_generics(self, context, shape, &mut out);
         write_where_clause(self, context, &mut out);
 
         if let Some(variants) = self.variants() {
@@ -565,7 +633,7 @@ impl Rewrite for ast::Trait {
         out.push_str("trait ");
         out.push_str(context.snippet(self.name()?.text_range()));
 
-        write_generics(self, context, &mut out);
+        write_generics(self, context, shape, &mut out);
 
         if let Some(super_traits) = self.super_trait_list() {
             let text = context.snippet(super_traits.syntax().text_range());
@@ -678,7 +746,7 @@ impl Rewrite for ast::Impl {
 
         out.push_str("impl");
 
-        write_generics(self, context, &mut out);
+        write_generics(self, context, shape, &mut out);
 
         if let Some(ty) = self.ty() {
             out.push(' ');
@@ -734,7 +802,7 @@ impl Rewrite for ast::ImplTrait {
         write_attrs(self, context, &mut out);
 
         out.push_str("impl");
-        write_generics(self, context, &mut out);
+        write_generics(self, context, shape, &mut out);
 
         if let Some(trait_ref) = self.trait_ref() {
             out.push(' ');
