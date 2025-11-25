@@ -257,6 +257,7 @@ impl Rewrite for ast::Func {
         // try a fully single-line signature, and only spill pieces to new
         // lines when they exceed the configured line width.
         let max_width = shape.width;
+        let clause_indent = context.config.clause_indent;
         let param_indent = outer_indent + indent_width;
 
         // Build reusable pieces of the header.
@@ -396,7 +397,7 @@ impl Rewrite for ast::Func {
                 out.push_str(&uses_inline);
             } else {
                 out.push('\n');
-                push_indent(&mut out, outer_indent + 2);
+                push_indent(&mut out, outer_indent + clause_indent);
                 out.push_str(uses_no_space);
             }
         }
@@ -406,7 +407,7 @@ impl Rewrite for ast::Func {
         // fast-path above.
         let where_no_space = where_inline.trim_start();
         let where_no_space_len = where_no_space.len();
-        let where_indent = outer_indent + 2;
+        let where_indent = outer_indent + clause_indent;
 
         if where_indent + where_no_space_len <= max_width {
             // Put `where` on its own line.
