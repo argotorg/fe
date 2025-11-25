@@ -16,6 +16,8 @@ impl Square {
     }
 }
 
+contract UselessSecondContract {}
+
 contract ShapeDispatcher {}
 
 fn abi_encode(value: u256) {

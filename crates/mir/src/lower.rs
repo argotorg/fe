@@ -2,8 +2,8 @@ use std::{error::Error, fmt};
 
 use common::ingot::IngotKind;
 use hir::hir_def::{
-    Body, Const, Expr, ExprId, Field, FieldIndex, Func, IdentId, LitKind, MatchArm, Partial, Pat,
-    PatId, PathId, Stmt, StmtId, TopLevelMod, scope_graph::ScopeId,
+    Body, Const, Contract, Expr, ExprId, Field, FieldIndex, Func, IdentId, ImplTrait, LitKind,
+    MatchArm, Partial, Pat, PatId, PathId, Stmt, StmtId, TopLevelMod, scope_graph::ScopeId,
 };
 use hir_analysis::{
     HirAnalysisDb,
@@ -19,9 +19,9 @@ use hir_analysis::{
 use crate::{
     ir::{
         BasicBlock, BasicBlockId, CallOrigin, IntrinsicOp, IntrinsicValue, LoopInfo,
-        MatchArmLowering, MatchArmPattern, MatchLoweringInfo, MirBody, MirFunction, MirInst,
-        MirModule, SwitchOrigin, SwitchTarget, SwitchValue, SyntheticValue, Terminator, ValueData,
-        ValueId, ValueOrigin,
+        MatchArmLowering, MatchArmPattern, MatchLoweringInfo, MirBody, MirContract, MirFunction,
+        MirInst, MirModule, SwitchOrigin, SwitchTarget, SwitchValue, SyntheticValue, Terminator,
+        ValueData, ValueId, ValueOrigin,
     },
     monomorphize::monomorphize_functions,
 };
@@ -111,7 +111,12 @@ pub fn lower_module<'db>(
     }
 
     let functions = monomorphize_functions(db, templates);
-    Ok(MirModule { top_mod, functions })
+    let contracts = compute_contracts(db, top_mod, &functions);
+    Ok(MirModule {
+        top_mod,
+        functions,
+        contracts,
+    })
 }
 
 /// Lowers a single HIR function (plus its typed body) into MIR form.
@@ -1512,4 +1517,175 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
             }
         }
     }
+}
+
+// ============================================================================
+// Contract and reachability analysis
+// ============================================================================
+
+/// Computes contract metadata by finding dispatcher implementations and their reachable functions.
+fn compute_contracts<'db>(
+    db: &'db dyn HirAnalysisDb,
+    top_mod: TopLevelMod<'db>,
+    functions: &[MirFunction<'db>],
+) -> Vec<MirContract> {
+    let call_graph = build_call_graph(functions);
+    let mut contracts = Vec::new();
+
+    for contract in top_mod.all_contracts(db).iter().copied() {
+        let Some(name) = contract_name(db, contract) else {
+            continue;
+        };
+        let Some(dispatch_func) = find_dispatcher_for_contract(db, top_mod, &name) else {
+            continue;
+        };
+        let Some(dispatch_idx) = find_function_index(functions, dispatch_func) else {
+            continue;
+        };
+        let dispatch_symbol = &functions[dispatch_idx].symbol_name;
+        let reachable_symbols = reachable_functions(&call_graph, dispatch_symbol);
+
+        let function_indices: Vec<usize> = functions
+            .iter()
+            .enumerate()
+            .filter(|(_, f)| reachable_symbols.contains(&f.symbol_name))
+            .map(|(idx, _)| idx)
+            .collect();
+
+        if function_indices.is_empty() {
+            continue;
+        }
+
+        contracts.push(MirContract {
+            name,
+            function_indices,
+        });
+    }
+
+    contracts
+}
+
+/// Returns the contract name as a string, or `None` when it cannot be resolved.
+fn contract_name(db: &dyn HirAnalysisDb, contract: Contract<'_>) -> Option<String> {
+    contract
+        .name(db)
+        .to_opt()
+        .map(|ident| ident.data(db).to_string())
+}
+
+/// Finds the `dispatch` method implemented for `contract` via the `Dispatcher` trait.
+fn find_dispatcher_for_contract<'db>(
+    db: &'db dyn HirAnalysisDb,
+    top_mod: TopLevelMod<'db>,
+    contract_name: &str,
+) -> Option<Func<'db>> {
+    top_mod
+        .all_impl_traits(db)
+        .iter()
+        .copied()
+        .find_map(|impl_trait| {
+            if !impl_targets_contract(db, impl_trait, contract_name)
+                || !is_dispatcher_impl(db, impl_trait)
+            {
+                return None;
+            }
+            impl_trait.methods(db).find(|func| {
+                func.name(db)
+                    .to_opt()
+                    .is_some_and(|id| id.data(db) == "dispatch")
+            })
+        })
+}
+
+/// Returns `true` if `impl_trait` targets the given `contract` type.
+fn impl_targets_contract(
+    db: &dyn HirAnalysisDb,
+    impl_trait: ImplTrait<'_>,
+    contract_name: &str,
+) -> bool {
+    let Some(ty) = impl_trait.ty(db).to_opt() else {
+        return false;
+    };
+    let ty_kind = ty.data(db);
+    let hir::hir_def::types::TypeKind::Path(path) = ty_kind else {
+        return false;
+    };
+    let Some(path) = path.to_opt() else {
+        return false;
+    };
+    path.ident(db)
+        .to_opt()
+        .is_some_and(|ident| ident.data(db) == contract_name)
+}
+
+/// Returns `true` when the trait reference of `impl_trait` resolves to the core `Dispatcher` trait.
+fn is_dispatcher_impl(db: &dyn HirAnalysisDb, impl_trait: ImplTrait<'_>) -> bool {
+    use hir_analysis::ty::trait_resolution::PredicateListId;
+
+    let Some(trait_ref) = impl_trait.trait_ref(db).to_opt() else {
+        return false;
+    };
+    let Some(path) = trait_ref.path(db).to_opt() else {
+        return false;
+    };
+    let assumptions = PredicateListId::empty_list(db);
+    let resolved = resolve_path(db, path, impl_trait.scope(), assumptions, false)
+        .or_else(|_| resolve_path(db, path, impl_trait.scope(), assumptions, true));
+    let Ok(PathRes::Trait(inst)) = resolved else {
+        return false;
+    };
+    let trait_def = inst.def(db);
+    let trait_item = trait_def.trait_(db);
+    let trait_name = trait_item
+        .name(db)
+        .to_opt()
+        .map(|ident| ident.data(db).to_string());
+    let name_matches = trait_name.as_deref() == Some("Dispatcher");
+    let ingot_kind = trait_item.top_mod(db).ingot(db).kind(db);
+    name_matches && ingot_kind == IngotKind::Core
+}
+
+/// Builds an adjacency list of calls between lowered functions keyed by their symbol name.
+fn build_call_graph<'db>(functions: &[MirFunction<'db>]) -> FxHashMap<String, Vec<String>> {
+    let mut graph = FxHashMap::default();
+    let known: FxHashSet<_> = functions
+        .iter()
+        .map(|func| func.symbol_name.clone())
+        .collect();
+
+    for func in functions {
+        let mut callees = FxHashSet::default();
+        for value in &func.body.values {
+            if let ValueOrigin::Call(call) = &value.origin
+                && let Some(target) = &call.resolved_name
+                    && known.contains(target) {
+                        callees.insert(target.clone());
+                    }
+        }
+        graph.insert(func.symbol_name.clone(), callees.into_iter().collect());
+    }
+
+    graph
+}
+
+/// Walks the call graph from `root` and returns all reachable symbols (including the root).
+fn reachable_functions(graph: &FxHashMap<String, Vec<String>>, root: &str) -> FxHashSet<String> {
+    let mut visited = FxHashSet::default();
+    let mut stack = vec![root.to_string()];
+    while let Some(symbol) = stack.pop() {
+        if !visited.insert(symbol.clone()) {
+            continue;
+        }
+        if let Some(children) = graph.get(&symbol) {
+            for child in children {
+                stack.push(child.clone());
+            }
+        }
+    }
+    visited
+}
+
+/// Finds the index of the MIR function corresponding to `func` in the functions list.
+fn find_function_index<'db>(functions: &[MirFunction<'db>], func: Func<'db>) -> Option<usize> {
+    functions.iter().position(|mir_func| mir_func.func == func)
 }

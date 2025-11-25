@@ -12,7 +12,10 @@ use rustc_hash::FxHashMap;
 #[derive(Debug, Clone)]
 pub struct MirModule<'db> {
     pub top_mod: TopLevelMod<'db>,
+    /// All lowered functions in the module.
     pub functions: Vec<MirFunction<'db>>,
+    /// Contracts with their reachable functions already computed.
+    pub contracts: Vec<MirContract>,
 }
 
 impl<'db> MirModule<'db> {
@@ -20,8 +23,18 @@ impl<'db> MirModule<'db> {
         Self {
             top_mod,
             functions: Vec::new(),
+            contracts: Vec::new(),
         }
     }
+}
+
+/// A contract with its entry point and reachable functions.
+#[derive(Debug, Clone)]
+pub struct MirContract {
+    /// The contract's name.
+    pub name: String,
+    /// Indices into `MirModule::functions` for all functions reachable from dispatch.
+    pub function_indices: Vec<usize>,
 }
 
 /// MIR for a single function.

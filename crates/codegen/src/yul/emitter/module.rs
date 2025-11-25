@@ -1,7 +1,7 @@
 //! Module-level Yul emission helpers (functions + runtime wrappers).
 
 use driver::DriverDataBase;
-use hir::hir_def::{Contract, TopLevelMod};
+use hir::hir_def::TopLevelMod;
 use mir::lower_module;
 
 use crate::yul::doc::{YulDoc, render_docs};
@@ -21,66 +21,45 @@ pub fn emit_module_yul(
     top_mod: TopLevelMod<'_>,
 ) -> Result<String, EmitModuleError> {
     let module = lower_module(db, top_mod).map_err(EmitModuleError::MirLower)?;
-    let mut function_docs = Vec::new();
+
+    // Emit Yul docs for each function
+    let mut function_docs: Vec<Vec<YulDoc>> = Vec::with_capacity(module.functions.len());
     for func in &module.functions {
         let emitter = FunctionEmitter::new(db, func).map_err(EmitModuleError::Yul)?;
-        function_docs.extend(emitter.emit_doc().map_err(EmitModuleError::Yul)?);
+        let docs = emitter.emit_doc().map_err(EmitModuleError::Yul)?;
+        function_docs.push(docs);
     }
+
     let mut docs = Vec::new();
-    let mut contract_docs = emit_contract_runtimes(db, top_mod, &function_docs);
-    if contract_docs.is_empty() {
-        docs = function_docs;
+
+    if module.contracts.is_empty() {
+        // No contracts: emit all functions as top-level
+        for func_docs in function_docs {
+            docs.extend(func_docs);
+        }
     } else {
-        for mut contract_doc in contract_docs.drain(..) {
-            docs.append(&mut contract_doc);
+        // Emit each contract with its reachable functions
+        for contract in &module.contracts {
+            let mut contract_fn_docs = Vec::new();
+            for &idx in &contract.function_indices {
+                contract_fn_docs.extend(function_docs[idx].clone());
+            }
+            docs.extend(render_contract_runtime_docs(
+                &contract.name,
+                &contract_fn_docs,
+            ));
         }
     }
+
     let mut lines = Vec::new();
     render_docs(&docs, 0, &mut lines);
     Ok(join_lines(lines))
 }
 
-/// Builds Yul doc trees for every contract found in `top_mod`.
-///
-/// * `db` - Compiler database providing HIR access.
-/// * `top_mod` - Module containing potential contract definitions.
-///
-/// Returns a vector of doc lists, one per contract, ready to append to the
-/// module output.
-fn emit_contract_runtimes(
-    db: &DriverDataBase,
-    top_mod: TopLevelMod<'_>,
-    functions: &[YulDoc],
-) -> Vec<Vec<YulDoc>> {
-    top_mod
-        .all_contracts(db)
-        .iter()
-        .copied()
-        .filter_map(|contract| contract_runtime_object(db, contract, functions))
-        .collect()
-}
-
-/// Converts a HIR contract into the doc tree describing its constructor/runtime object.
-///
-/// * `db` - Compiler database used to resolve the contract name.
-/// * `contract` - Target contract to wrap.
-///
-/// Returns the constructed doc tree or `None` when the contract lacks a resolvable name.
-fn contract_runtime_object(
-    db: &DriverDataBase,
-    contract: Contract<'_>,
-    functions: &[YulDoc],
-) -> Option<Vec<YulDoc>> {
-    let name = contract
-        .name(db)
-        .to_opt()
-        .map(|ident| ident.data(db).to_string())?;
-    Some(render_contract_runtime_docs(&name, functions))
-}
-
 /// Creates a Yul doc tree describing the dispatcher-based runtime wrapper for `name`.
 ///
 /// * `name` - Contract identifier used for the Yul `object`.
+/// * `functions` - Yul docs for all functions reachable from this contract's dispatcher.
 ///
 /// Returns the doc list containing constructor and runtime sections.
 fn render_contract_runtime_docs(name: &str, functions: &[YulDoc]) -> Vec<YulDoc> {
