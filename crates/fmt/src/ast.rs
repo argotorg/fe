@@ -116,12 +116,12 @@ impl Rewrite for ast::ConstGenericParam {
 fn write_where_clause<N: WhereClauseOwner + AstNode>(
     node: &N,
     context: &RewriteContext<'_>,
+    shape: Shape,
     out: &mut String,
 ) {
     if let Some(where_clause) = node.where_clause() {
-        let text = context.snippet_trimmed(&where_clause);
         out.push(' ');
-        out.push_str(&text);
+        out.push_str(&where_clause.rewrite_or_original(context, shape));
     }
 }
 
@@ -240,7 +240,7 @@ impl Rewrite for ast::Func {
                 out.push_str(&uses_text);
             }
 
-            write_where_clause(self, context, &mut out);
+            write_where_clause(self, context, shape, &mut out);
 
             // Handle body or bodyless functions
             if let Some(body) = &body_opt {
@@ -498,7 +498,7 @@ impl Rewrite for ast::Struct {
         out.push_str(context.snippet(self.name()?.text_range()));
 
         write_generics(self, context, shape, &mut out);
-        write_where_clause(self, context, &mut out);
+        write_where_clause(self, context, shape, &mut out);
 
         if let Some(fields) = self.fields() {
             out.push(' ');
@@ -576,7 +576,7 @@ impl Rewrite for ast::Enum {
         out.push_str(context.snippet(self.name()?.text_range()));
 
         write_generics(self, context, shape, &mut out);
-        write_where_clause(self, context, &mut out);
+        write_where_clause(self, context, shape, &mut out);
 
         if let Some(variants) = self.variants() {
             out.push(' ');
@@ -636,12 +636,10 @@ impl Rewrite for ast::Trait {
         write_generics(self, context, shape, &mut out);
 
         if let Some(super_traits) = self.super_trait_list() {
-            let text = context.snippet(super_traits.syntax().text_range());
-            out.push(' ');
-            out.push_str(text.trim_start());
+            out.push_str(&super_traits.rewrite_or_original(context, shape));
         }
 
-        write_where_clause(self, context, &mut out);
+        write_where_clause(self, context, shape, &mut out);
 
         if let Some(items) = self.item_list() {
             out.push(' ');
@@ -753,7 +751,7 @@ impl Rewrite for ast::Impl {
             out.push_str(&ty.rewrite_or_original(context, shape));
         }
 
-        write_where_clause(self, context, &mut out);
+        write_where_clause(self, context, shape, &mut out);
 
         if let Some(items) = self.item_list() {
             out.push(' ');
@@ -806,7 +804,7 @@ impl Rewrite for ast::ImplTrait {
 
         if let Some(trait_ref) = self.trait_ref() {
             out.push(' ');
-            out.push_str(&context.snippet_trimmed(&trait_ref));
+            out.push_str(&trait_ref.rewrite_or_original(context, shape));
         }
 
         if let Some(ty) = self.ty() {
@@ -814,7 +812,7 @@ impl Rewrite for ast::ImplTrait {
             out.push_str(&ty.rewrite_or_original(context, shape));
         }
 
-        write_where_clause(self, context, &mut out);
+        write_where_clause(self, context, shape, &mut out);
 
         if let Some(items) = self.item_list() {
             out.push(' ');
@@ -980,6 +978,82 @@ impl Rewrite for ast::TypeAlias {
         }
 
         Some(out)
+    }
+}
+
+impl Rewrite for ast::WhereClause {
+    fn rewrite(&self, context: &RewriteContext<'_>, shape: Shape) -> Option<String> {
+        let predicates: Vec<String> = self
+            .into_iter()
+            .map(|pred| pred.rewrite_or_original(context, shape))
+            .collect();
+
+        if predicates.is_empty() {
+            return Some("where".to_string());
+        }
+
+        Some(format!("where {}", predicates.join(", ")))
+    }
+}
+
+impl Rewrite for ast::WherePredicate {
+    fn rewrite(&self, context: &RewriteContext<'_>, shape: Shape) -> Option<String> {
+        let ty = self.ty()?.rewrite_or_original(context, shape);
+
+        if let Some(bounds) = self.bounds() {
+            let bounds_text = bounds.rewrite_or_original(context, shape);
+            Some(format!("{ty}{bounds_text}"))
+        } else {
+            Some(ty)
+        }
+    }
+}
+
+impl Rewrite for ast::TypeBoundList {
+    fn rewrite(&self, context: &RewriteContext<'_>, shape: Shape) -> Option<String> {
+        let bounds: Vec<String> = self
+            .into_iter()
+            .map(|bound| bound.rewrite_or_original(context, shape))
+            .collect();
+
+        if bounds.is_empty() {
+            return Some(String::new());
+        }
+
+        Some(format!(": {}", bounds.join(" + ")))
+    }
+}
+
+impl Rewrite for ast::TypeBound {
+    fn rewrite(&self, context: &RewriteContext<'_>, shape: Shape) -> Option<String> {
+        if let Some(trait_bound) = self.trait_bound() {
+            trait_bound.rewrite(context, shape)
+        } else if let Some(kind_bound) = self.kind_bound() {
+            Some(context.snippet_trimmed(&kind_bound))
+        } else {
+            None
+        }
+    }
+}
+
+impl Rewrite for ast::TraitRef {
+    fn rewrite(&self, context: &RewriteContext<'_>, shape: Shape) -> Option<String> {
+        self.path()?.rewrite(context, shape)
+    }
+}
+
+impl Rewrite for ast::SuperTraitList {
+    fn rewrite(&self, context: &RewriteContext<'_>, shape: Shape) -> Option<String> {
+        let traits: Vec<String> = self
+            .into_iter()
+            .map(|t| t.rewrite_or_original(context, shape))
+            .collect();
+
+        if traits.is_empty() {
+            return Some(String::new());
+        }
+
+        Some(format!(": {}", traits.join(" + ")))
     }
 }
 
