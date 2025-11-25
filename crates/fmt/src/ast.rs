@@ -4,8 +4,9 @@ use crate::{
 use parser::{
     TextRange,
     ast::{
-        self, AttrListOwner, ExprKind, GenericArgsOwner, GenericParamsOwner, ItemKind,
-        ItemModifierOwner, PatKind, StmtKind, TypeKind, WhereClauseOwner, prelude::AstNode,
+        self, AttrListOwner, ExprKind, GenericArgKind, GenericArgsOwner, GenericParamsOwner,
+        ItemKind, ItemModifierOwner, PatKind, StmtKind, TypeKind, WhereClauseOwner,
+        prelude::AstNode,
     },
     syntax_kind::SyntaxKind,
     syntax_node::NodeOrToken,
@@ -1042,8 +1043,8 @@ impl Rewrite for ast::AugAssignExpr {
 }
 
 impl Rewrite for ast::PathExpr {
-    fn rewrite(&self, context: &RewriteContext<'_>, _shape: Shape) -> Option<String> {
-        Some(context.snippet_trimmed(self))
+    fn rewrite(&self, context: &RewriteContext<'_>, shape: Shape) -> Option<String> {
+        self.path()?.rewrite(context, shape)
     }
 }
 
@@ -1244,8 +1245,86 @@ impl Rewrite for ast::PtrType {
 }
 
 impl Rewrite for ast::PathType {
-    fn rewrite(&self, context: &RewriteContext<'_>, _shape: Shape) -> Option<String> {
-        Some(context.snippet_trimmed(&self.path()?))
+    fn rewrite(&self, context: &RewriteContext<'_>, shape: Shape) -> Option<String> {
+        self.path()?.rewrite(context, shape)
+    }
+}
+
+impl Rewrite for ast::Path {
+    fn rewrite(&self, context: &RewriteContext<'_>, shape: Shape) -> Option<String> {
+        let segments: Vec<String> = self
+            .segments()
+            .map(|seg| seg.rewrite_or_original(context, shape))
+            .collect();
+        Some(segments.join("::"))
+    }
+}
+
+impl Rewrite for ast::PathSegment {
+    fn rewrite(&self, context: &RewriteContext<'_>, shape: Shape) -> Option<String> {
+        let mut out = String::new();
+
+        // Get the segment identifier (or qualified type)
+        if let Some(kind) = self.kind() {
+            match kind {
+                ast::PathSegmentKind::QualifiedType(q) => {
+                    // <T as Trait> - preserve as-is for now
+                    out.push_str(&context.snippet_trimmed(&q));
+                }
+                _ => {
+                    if let Some(ident) = self.ident() {
+                        out.push_str(context.snippet(ident.text_range()).trim());
+                    }
+                }
+            }
+        }
+
+        // Format generic arguments if present
+        if let Some(args) = self.generic_args() {
+            out.push_str(&args.rewrite_or_original(context, shape));
+        }
+
+        Some(out)
+    }
+}
+
+impl Rewrite for ast::GenericArgList {
+    fn rewrite(&self, context: &RewriteContext<'_>, shape: Shape) -> Option<String> {
+        let formatting = ListFormatting::new(shape)
+            .tactic(ListTactic::Mixed)
+            .trailing_separator(false)
+            .with_surround("<", ">");
+        format_list(self, &formatting, context, shape)
+    }
+}
+
+impl Rewrite for ast::GenericArg {
+    fn rewrite(&self, context: &RewriteContext<'_>, shape: Shape) -> Option<String> {
+        match self.kind() {
+            GenericArgKind::Type(ty_arg) => ty_arg.rewrite(context, shape),
+            GenericArgKind::Const(const_arg) => const_arg.rewrite(context, shape),
+            GenericArgKind::AssocType(assoc_arg) => assoc_arg.rewrite(context, shape),
+        }
+    }
+}
+
+impl Rewrite for ast::TypeGenericArg {
+    fn rewrite(&self, context: &RewriteContext<'_>, shape: Shape) -> Option<String> {
+        self.ty()?.rewrite(context, shape)
+    }
+}
+
+impl Rewrite for ast::ConstGenericArg {
+    fn rewrite(&self, context: &RewriteContext<'_>, shape: Shape) -> Option<String> {
+        self.expr()?.rewrite(context, shape)
+    }
+}
+
+impl Rewrite for ast::AssocTypeGenericArg {
+    fn rewrite(&self, context: &RewriteContext<'_>, shape: Shape) -> Option<String> {
+        let name = context.snippet(self.name()?.text_range()).trim();
+        let ty = self.ty()?.rewrite_or_original(context, shape);
+        Some(format!("{name} = {ty}"))
     }
 }
 

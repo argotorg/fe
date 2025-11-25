@@ -1,0 +1,19 @@
+// Generic type argument formatting tests
+
+// Type arguments with spacing
+fn takes_array(arr:Array<i32,10>) {}
+
+// Nested generics
+fn takes_nested(x:Map<String,Vec<i32>>) {}
+
+// Multiple type arguments
+fn takes_multi(x:Result<Option<i32>,Error>) {}
+
+// Generic struct with generic field types
+struct Container<T>{
+    items:Vec<T>,
+    cache:Map<String,T>
+}
+
+// Return types with generics
+fn returns_generic() -> Option<i32> {}
