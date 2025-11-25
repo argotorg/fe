@@ -1,4 +1,6 @@
-use crate::{Indent, Rewrite, RewriteContext, Shape};
+use crate::{
+    Indent, ListFormatting, ListTactic, Rewrite, RewriteContext, RewriteExt, Shape, format_list,
+};
 use parser::{
     TextRange,
     ast::{
@@ -8,19 +10,6 @@ use parser::{
     syntax_kind::SyntaxKind,
     syntax_node::NodeOrToken,
 };
-
-trait RewriteExt: Rewrite + AstNode {
-    fn rewrite_or_original(&self, context: &RewriteContext<'_>, shape: Shape) -> String {
-        self.rewrite(context, shape).unwrap_or_else(|| {
-            context
-                .snippet(self.syntax().text_range())
-                .trim()
-                .to_owned()
-        })
-    }
-}
-
-impl<T: Rewrite + AstNode> RewriteExt for T {}
 
 fn write_attrs<N: AttrListOwner + AstNode>(
     node: &N,
@@ -377,12 +366,10 @@ impl Rewrite for ast::Func {
 
 impl Rewrite for ast::FuncParamList {
     fn rewrite(&self, context: &RewriteContext<'_>, shape: Shape) -> Option<String> {
-        let params: Vec<String> = self
-            .into_iter()
-            .map(|param| param.rewrite_or_original(context, shape))
-            .collect();
-
-        Some(format!("({})", params.join(", ")))
+        let formatting = ListFormatting::new(shape)
+            .tactic(ListTactic::Mixed)
+            .with_surround("(", ")");
+        format_list(self, &formatting, context, shape)
     }
 }
 
@@ -892,27 +879,27 @@ impl Rewrite for ast::UnExpr {
     }
 }
 
+impl Rewrite for ast::CallArg {
+    fn rewrite(&self, context: &RewriteContext<'_>, shape: Shape) -> Option<String> {
+        let expr = self.expr()?.rewrite_or_original(context, shape);
+        if let Some(label) = self.label() {
+            let label_text = context.snippet(label.text_range()).trim();
+            Some(format!("{label_text}: {expr}"))
+        } else {
+            Some(expr)
+        }
+    }
+}
+
 impl Rewrite for ast::CallExpr {
     fn rewrite(&self, context: &RewriteContext<'_>, shape: Shape) -> Option<String> {
         let callee = self.callee()?.rewrite_or_original(context, shape);
+        let formatting = ListFormatting::new(shape)
+            .tactic(ListTactic::Mixed)
+            .with_surround("(", ")");
 
         let args_str = if let Some(args) = self.args() {
-            let args: Vec<String> = args
-                .into_iter()
-                .filter_map(|arg| {
-                    let expr = arg.expr()?.rewrite_or_original(context, shape);
-                    if let Some(label) = arg.label() {
-                        Some(format!(
-                            "{}: {expr}",
-                            context.snippet(label.text_range()).trim()
-                        ))
-                    } else {
-                        Some(expr)
-                    }
-                })
-                .collect();
-
-            format!("({})", args.join(", "))
+            format_list(args.into_iter(), &formatting, context, shape)?
         } else {
             "()".to_string()
         };
@@ -932,23 +919,12 @@ impl Rewrite for ast::MethodCallExpr {
             String::new()
         };
 
-        let args_str = if let Some(args) = self.args() {
-            let args: Vec<String> = args
-                .into_iter()
-                .filter_map(|arg| {
-                    let expr = arg.expr()?.rewrite_or_original(context, shape);
-                    if let Some(label) = arg.label() {
-                        Some(format!(
-                            "{}: {expr}",
-                            context.snippet(label.text_range()).trim()
-                        ))
-                    } else {
-                        Some(expr)
-                    }
-                })
-                .collect();
+        let formatting = ListFormatting::new(shape)
+            .tactic(ListTactic::Mixed)
+            .with_surround("(", ")");
 
-            format!("({})", args.join(", "))
+        let args_str = if let Some(args) = self.args() {
+            format_list(args.into_iter(), &formatting, context, shape)?
         } else {
             "()".to_string()
         };
@@ -1144,25 +1120,19 @@ impl Rewrite for ast::WithExpr {
 
 impl Rewrite for ast::TupleExpr {
     fn rewrite(&self, context: &RewriteContext<'_>, shape: Shape) -> Option<String> {
-        let elems: Vec<String> = self
-            .elems()
-            .flatten()
-            .map(|expr| expr.rewrite_or_original(context, shape))
-            .collect();
-
-        Some(format!("({})", elems.join(", ")))
+        let formatting = ListFormatting::new(shape)
+            .tactic(ListTactic::Mixed)
+            .with_surround("(", ")");
+        format_list(self.elems().flatten(), &formatting, context, shape)
     }
 }
 
 impl Rewrite for ast::ArrayExpr {
     fn rewrite(&self, context: &RewriteContext<'_>, shape: Shape) -> Option<String> {
-        let elems: Vec<String> = self
-            .elems()
-            .flatten()
-            .map(|expr| expr.rewrite_or_original(context, shape))
-            .collect();
-
-        Some(format!("[{}]", elems.join(", ")))
+        let formatting = ListFormatting::new(shape)
+            .tactic(ListTactic::Mixed)
+            .with_surround("[", "]");
+        format_list(self.elems().flatten(), &formatting, context, shape)
     }
 }
 
@@ -1216,12 +1186,10 @@ impl Rewrite for ast::PathType {
 
 impl Rewrite for ast::TupleType {
     fn rewrite(&self, context: &RewriteContext<'_>, shape: Shape) -> Option<String> {
-        let types: Vec<String> = self
-            .elem_tys()
-            .map(|ty| ty.rewrite_or_original(context, shape))
-            .collect();
-
-        Some(format!("({})", types.join(", ")))
+        let formatting = ListFormatting::new(shape)
+            .tactic(ListTactic::Mixed)
+            .with_surround("(", ")");
+        format_list(self.elem_tys(), &formatting, context, shape)
     }
 }
 
@@ -1275,17 +1243,15 @@ impl Rewrite for ast::LitPat {
 
 impl Rewrite for ast::TuplePat {
     fn rewrite(&self, context: &RewriteContext<'_>, shape: Shape) -> Option<String> {
-        let elems = if let Some(elem_list) = self.elems() {
-            let formatted_elems: Vec<String> = elem_list
-                .into_iter()
-                .map(|pat| pat.rewrite_or_original(context, shape))
-                .collect();
-            formatted_elems.join(", ")
-        } else {
-            String::new()
-        };
-
-        Some(format!("({elems})"))
+        let formatting = ListFormatting::new(shape)
+            .tactic(ListTactic::Mixed)
+            .with_surround("(", ")");
+        format_list(
+            self.elems().into_iter().flatten(),
+            &formatting,
+            context,
+            shape,
+        )
     }
 }
 
@@ -1306,18 +1272,17 @@ impl Rewrite for ast::PathPat {
 impl Rewrite for ast::PathTuplePat {
     fn rewrite(&self, context: &RewriteContext<'_>, shape: Shape) -> Option<String> {
         let path = context.snippet_trimmed(&self.path()?);
+        let formatting = ListFormatting::new(shape)
+            .tactic(ListTactic::Mixed)
+            .with_surround("(", ")");
+        let elems_str = format_list(
+            self.elems().into_iter().flatten(),
+            &formatting,
+            context,
+            shape,
+        )?;
 
-        let elems = if let Some(elem_list) = self.elems() {
-            let formatted_elems: Vec<String> = elem_list
-                .into_iter()
-                .map(|pat| pat.rewrite_or_original(context, shape))
-                .collect();
-            format!("({})", formatted_elems.join(", "))
-        } else {
-            "()".to_string()
-        };
-
-        Some(format!("{path}{elems}"))
+        Some(format!("{path}{elems_str}"))
     }
 }
 
