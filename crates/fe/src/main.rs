@@ -33,7 +33,9 @@ pub enum Command {
 }
 
 fn default_project_path() -> Utf8PathBuf {
-    driver::files::find_project_root().unwrap_or(Utf8PathBuf::from("."))
+    // With search mode enabled in init_ingot, we can just use the current directory
+    // The FilesResolver will walk up to find the ingot root
+    Utf8PathBuf::from(".")
 }
 
 fn main() {

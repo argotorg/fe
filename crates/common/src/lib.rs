@@ -9,6 +9,7 @@ pub mod urlext;
 
 use dependencies::DependencyGraph;
 use file::Workspace;
+pub use tracing;
 
 #[salsa::db]
 // Each database must implement InputDb explicitly with its own storage mechanism

@@ -19,7 +19,7 @@ where
     H: GraphResolutionHandler<NR::Description, DiGraph<NR::Description, E>>
         + crate::ResolutionHandler<NR>,
     <H as crate::ResolutionHandler<NR>>::Item: IntoIterator<Item = (NR::Description, E)>,
-    NR::Description: Eq + std::hash::Hash + Clone,
+    NR::Description: Eq + std::hash::Hash + Clone + fmt::Display,
     E: Clone,
 {
     #[allow(clippy::type_complexity)]
@@ -41,7 +41,7 @@ where
     H: GraphResolutionHandler<NR::Description, DiGraph<NR::Description, E>>
         + crate::ResolutionHandler<NR>,
     <H as crate::ResolutionHandler<NR>>::Item: IntoIterator<Item = (NR::Description, E)>,
-    NR::Description: Eq + std::hash::Hash + Clone,
+    NR::Description: Eq + std::hash::Hash + Clone + fmt::Display,
     E: Clone,
 {
     fn graph_resolve(
@@ -52,7 +52,7 @@ where
         <H as GraphResolutionHandler<NR::Description, DiGraph<NR::Description, E>>>::Item,
         UnresolvableRootNode,
     > {
-        tracing::info!(target: "resolver", "Starting graph resolution");
+        tracing::info!(target: "resolver", "Starting graph resolution for root node: {}", root_node);
 
         let mut graph = DiGraph::default();
         let mut nodes: IndexMap<NR::Description, NodeIndex> = IndexMap::new();
@@ -63,13 +63,13 @@ where
         unresolved_nodes.entry(root_node.clone()).or_default();
 
         while let Some((unresolved_node_description, back_nodes)) = unresolved_nodes.pop() {
-            tracing::info!(target: "resolver", "Resolving node");
+            tracing::info!(target: "resolver", "Resolving node: {}", unresolved_node_description);
             match self
                 .node_resolver
                 .resolve(handler, &unresolved_node_description)
             {
                 Ok(forward_nodes) => {
-                    tracing::info!(target: "resolver", "Successfully resolved node");
+                    tracing::info!(target: "resolver", "Successfully resolved node: {}", unresolved_node_description);
                     let resolved_node_description = unresolved_node_description;
 
                     let resolved_node_index = graph.add_node(resolved_node_description.clone());
@@ -96,7 +96,7 @@ where
                     }
                 }
                 Err(error) => {
-                    tracing::warn!(target: "resolver", "Failed to resolve node");
+                    tracing::warn!(target: "resolver", "Failed to resolve node: {}", unresolved_node_description);
                     self.diagnostics
                         .push(UnresolvableNode(unresolved_node_description.clone(), error));
                     unresolvable_nodes

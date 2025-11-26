@@ -73,7 +73,9 @@ pub type IngotGraphResolver =
     resolver::graph::GraphResolverImpl<FilesResolver, TreeHandler, (SmolStr, DependencyArguments)>;
 
 pub fn tree_resolver() -> IngotGraphResolver {
-    let files_resolver = FilesResolver::new().with_required_file("fe.toml");
+    let files_resolver = FilesResolver::new()
+        .with_required_file("fe.toml")
+        .with_search_mode();
     resolver::graph::GraphResolverImpl::new(files_resolver)
 }
 

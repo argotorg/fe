@@ -255,6 +255,21 @@ pub async fn handle_file_change(
                     .db
                     .workspace()
                     .update(&mut backend.db, url.clone(), contents);
+
+                // If this is a .fe file, check if its ingot is loaded
+                if path.extension().and_then(|s| s.to_str()) == Some("fe") {
+                    // Use init_ingot to find and load the ingot root
+                    // It will walk up from the file's directory to find fe.toml
+                    let diagnostics = init_ingot(&mut backend.db, &url);
+
+                    // Log any diagnostics
+                    for diagnostic in diagnostics {
+                        warn!(
+                            "Ingot initialization diagnostic for file {:?}: {}",
+                            path, diagnostic
+                        );
+                    }
+                }
             }
         }
         ChangeKind::Create => {
