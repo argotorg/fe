@@ -80,21 +80,26 @@ where
     let available_width = shape
         .width
         .saturating_sub(shape.indent.indent_width() + open.len() + close.len());
-    
+
     if items.is_empty() {
         return Some(format!("{}{}", open, close));
     }
 
     // Resolve trailing separator behavior from override or config.
-    let trailing_for_horizontal = formatting.trailing_separator.unwrap_or_else(|| {
-        matches!(context.config.trailing_comma, TrailingComma::Always)
-    });
-    let trailing_for_vertical = formatting.trailing_separator.unwrap_or_else(|| {
-        !matches!(context.config.trailing_comma, TrailingComma::Never)
-    });
+    let trailing_for_horizontal = formatting.trailing_separator.unwrap_or(matches!(
+        context.config.trailing_comma,
+        TrailingComma::Always
+    ));
+    let trailing_for_vertical = formatting.trailing_separator.unwrap_or(!matches!(
+        context.config.trailing_comma,
+        TrailingComma::Never
+    ));
 
     // 1. Try Horizontal
-    if matches!(formatting.tactic, ListTactic::Horizontal | ListTactic::Mixed) {
+    if matches!(
+        formatting.tactic,
+        ListTactic::Horizontal | ListTactic::Mixed
+    ) {
         let item_strings: Vec<String> = items
             .iter()
             .map(|item| {
