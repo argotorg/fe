@@ -1,3 +1,5 @@
+use std::fmt::Write as _;
+
 use crate::{
     Indent, ListFormatting, ListTactic, Rewrite, RewriteContext, RewriteExt, Shape, format_list,
 };
@@ -67,41 +69,30 @@ impl Rewrite for ast::GenericParam {
 
 impl Rewrite for ast::TypeGenericParam {
     fn rewrite(&self, context: &RewriteContext<'_>, shape: Shape) -> Option<String> {
-        let mut out = String::new();
+        let name = self
+            .name()
+            .map_or(String::new(), |n| context.token(&n).to_string());
+        let bounds = self
+            .bounds()
+            .map_or(String::new(), |b| b.rewrite_or_original(context, shape));
+        let default = self.default_ty().map_or(String::new(), |ty| {
+            format!(" = {}", ty.rewrite_or_original(context, shape))
+        });
 
-        if let Some(name) = self.name() {
-            out.push_str(context.token(&name));
-        }
-
-        if let Some(bounds) = self.bounds() {
-            out.push_str(&bounds.rewrite_or_original(context, shape));
-        }
-
-        if let Some(default_ty) = self.default_ty() {
-            out.push_str(" = ");
-            out.push_str(&default_ty.rewrite_or_original(context, shape));
-        }
-
-        Some(out)
+        Some(format!("{name}{bounds}{default}"))
     }
 }
 
 impl Rewrite for ast::ConstGenericParam {
     fn rewrite(&self, context: &RewriteContext<'_>, shape: Shape) -> Option<String> {
-        let mut out = String::new();
+        let name = self
+            .name()
+            .map_or(String::new(), |n| context.token(&n).to_string());
+        let ty = self.ty().map_or(String::new(), |ty| {
+            format!(": {}", ty.rewrite_or_original(context, shape))
+        });
 
-        out.push_str("const ");
-
-        if let Some(name) = self.name() {
-            out.push_str(context.token(&name));
-        }
-
-        if let Some(ty) = self.ty() {
-            out.push_str(": ");
-            out.push_str(&ty.rewrite_or_original(context, shape));
-        }
-
-        Some(out)
+        Some(format!("const {name}{ty}"))
     }
 }
 
@@ -648,32 +639,43 @@ impl Rewrite for ast::Trait {
     }
 }
 
+fn rewrite_block_items<T>(
+    items: impl IntoIterator<Item = T>,
+    context: &RewriteContext<'_>,
+    shape: Shape,
+) -> Option<String>
+where
+    T: RewriteExt,
+{
+    let outer_indent = shape.indent.indent_width();
+    let indent_width = context.config.indent_width;
+    let inner_indent = outer_indent + indent_width;
+    let inner_shape = Shape::with_width(shape.width, Indent::from_block(inner_indent));
+
+    let items: Vec<T> = items.into_iter().collect();
+
+    if items.is_empty() {
+        return Some("{}".to_string());
+    }
+
+    let mut out = String::new();
+    out.push_str("{\n");
+
+    for item in items {
+        push_indent(&mut out, inner_indent);
+        out.push_str(&item.rewrite_or_original(context, inner_shape));
+        out.push('\n');
+    }
+
+    push_indent(&mut out, outer_indent);
+    out.push('}');
+
+    Some(out)
+}
+
 impl Rewrite for ast::TraitItemList {
     fn rewrite(&self, context: &RewriteContext<'_>, shape: Shape) -> Option<String> {
-        let outer_indent = shape.indent.indent_width();
-        let indent_width = context.config.indent_width;
-        let inner_indent = outer_indent + indent_width;
-        let inner_shape = Shape::with_width(shape.width, Indent::from_block(inner_indent));
-
-        let items: Vec<_> = self.into_iter().collect();
-
-        if items.is_empty() {
-            return Some("{}".to_string());
-        }
-
-        let mut out = String::new();
-        out.push_str("{\n");
-
-        for item in items {
-            push_indent(&mut out, inner_indent);
-            out.push_str(&item.rewrite_or_original(context, inner_shape));
-            out.push('\n');
-        }
-
-        push_indent(&mut out, outer_indent);
-        out.push('}');
-
-        Some(out)
+        rewrite_block_items(self, context, shape)
     }
 }
 
@@ -766,30 +768,7 @@ impl Rewrite for ast::Impl {
 
 impl Rewrite for ast::ImplItemList {
     fn rewrite(&self, context: &RewriteContext<'_>, shape: Shape) -> Option<String> {
-        let outer_indent = shape.indent.indent_width();
-        let indent_width = context.config.indent_width;
-        let inner_indent = outer_indent + indent_width;
-        let inner_shape = Shape::with_width(shape.width, Indent::from_block(inner_indent));
-
-        let items: Vec<_> = self.into_iter().collect();
-
-        if items.is_empty() {
-            return Some("{}".to_string());
-        }
-
-        let mut out = String::new();
-        out.push_str("{\n");
-
-        for item in items {
-            push_indent(&mut out, inner_indent);
-            out.push_str(&item.rewrite_or_original(context, inner_shape));
-            out.push('\n');
-        }
-
-        push_indent(&mut out, outer_indent);
-        out.push('}');
-
-        Some(out)
+        rewrite_block_items(self, context, shape)
     }
 }
 
@@ -864,10 +843,7 @@ impl Rewrite for ast::Use {
         } else {
             4 // "use "
         };
-        let use_shape = Shape::with_width(
-            shape.width.saturating_sub(prefix_len),
-            shape.indent,
-        );
+        let use_shape = Shape::with_width(shape.width.saturating_sub(prefix_len), shape.indent);
 
         out.push_str("use ");
         out.push_str(&self.use_tree()?.rewrite_or_original(context, use_shape));
@@ -932,21 +908,11 @@ impl Rewrite for ast::UsePath {
 impl Rewrite for ast::UsePathSegment {
     fn rewrite(&self, context: &RewriteContext<'_>, _shape: Shape) -> Option<String> {
         match self.kind()? {
-            UsePathSegmentKind::Ingot(token) => {
-                Some(context.token(&token).to_string())
-            }
-            UsePathSegmentKind::Super(token) => {
-                Some(context.token(&token).to_string())
-            }
-            UsePathSegmentKind::Self_(token) => {
-                Some(context.token(&token).to_string())
-            }
-            UsePathSegmentKind::Ident(token) => {
-                Some(context.token(&token).to_string())
-            }
-            UsePathSegmentKind::Glob(token) => {
-                Some(context.token(&token).to_string())
-            }
+            UsePathSegmentKind::Ingot(token) => Some(context.token(&token).to_string()),
+            UsePathSegmentKind::Super(token) => Some(context.token(&token).to_string()),
+            UsePathSegmentKind::Self_(token) => Some(context.token(&token).to_string()),
+            UsePathSegmentKind::Ident(token) => Some(context.token(&token).to_string()),
+            UsePathSegmentKind::Glob(token) => Some(context.token(&token).to_string()),
         }
     }
 }
@@ -1032,10 +998,9 @@ impl Rewrite for ast::TypeBound {
     fn rewrite(&self, context: &RewriteContext<'_>, shape: Shape) -> Option<String> {
         if let Some(trait_bound) = self.trait_bound() {
             trait_bound.rewrite(context, shape)
-        } else if let Some(kind_bound) = self.kind_bound() {
-            Some(context.snippet_trimmed(&kind_bound))
         } else {
-            None
+            self.kind_bound()
+                .map(|kind_bound| context.snippet_trimmed(&kind_bound))
         }
     }
 }
@@ -1074,25 +1039,9 @@ impl Rewrite for ast::Mod {
         }
 
         if let Some(items) = self.items() {
-            let outer_indent = shape.indent.indent_width();
-            let indent_width = context.config.indent_width;
-            let inner_indent = outer_indent + indent_width;
-            let inner_shape = Shape::with_width(shape.width, Indent::from_block(inner_indent));
-
-            let item_vec: Vec<_> = items.into_iter().collect();
-
-            if item_vec.is_empty() {
-                out.push_str(" {}");
-            } else {
-                out.push_str(" {\n");
-                for item in item_vec {
-                    push_indent(&mut out, inner_indent);
-                    out.push_str(&item.rewrite_or_original(context, inner_shape));
-                    out.push('\n');
-                }
-                push_indent(&mut out, outer_indent);
-                out.push('}');
-            }
+            let block = rewrite_block_items(items.into_iter(), context, shape)?;
+            out.push(' ');
+            out.push_str(&block);
         }
 
         Some(out)
@@ -1120,30 +1069,7 @@ impl Rewrite for ast::Extern {
 
 impl Rewrite for ast::ExternItemList {
     fn rewrite(&self, context: &RewriteContext<'_>, shape: Shape) -> Option<String> {
-        let outer_indent = shape.indent.indent_width();
-        let indent_width = context.config.indent_width;
-        let inner_indent = outer_indent + indent_width;
-        let inner_shape = Shape::with_width(shape.width, Indent::from_block(inner_indent));
-
-        let items: Vec<_> = self.into_iter().collect();
-
-        if items.is_empty() {
-            return Some("{}".to_string());
-        }
-
-        let mut out = String::new();
-        out.push_str("{\n");
-
-        for func in items {
-            push_indent(&mut out, inner_indent);
-            out.push_str(&func.rewrite_or_original(context, inner_shape));
-            out.push('\n');
-        }
-
-        push_indent(&mut out, outer_indent);
-        out.push('}');
-
-        Some(out)
+        rewrite_block_items(self, context, shape)
     }
 }
 
@@ -1313,23 +1239,15 @@ impl Rewrite for ast::Stmt {
 
 impl Rewrite for ast::LetStmt {
     fn rewrite(&self, context: &RewriteContext<'_>, shape: Shape) -> Option<String> {
-        let mut out = String::new();
-        out.push_str("let ");
+        let pat = self.pat()?.rewrite_or_original(context, shape);
+        let ty = self.type_annotation().map_or(String::new(), |ty| {
+            format!(": {}", ty.rewrite_or_original(context, shape))
+        });
+        let init = self.initializer().map_or(String::new(), |init| {
+            format!(" = {}", init.rewrite_or_original(context, shape))
+        });
 
-        out.push_str(&self.pat()?.rewrite_or_original(context, shape));
-
-        if let Some(ty) = self.type_annotation() {
-            out.push_str(": ");
-            out.push_str(&ty.rewrite_or_original(context, shape));
-        }
-
-        if let Some(init) = self.initializer() {
-            out.push_str(" = ");
-            let init_text = init.rewrite_or_original(context, shape);
-            out.push_str(&init_text);
-        }
-
-        Some(out)
+        Some(format!("let {pat}{ty}{init}"))
     }
 }
 
@@ -1354,28 +1272,23 @@ impl Rewrite for ast::WhileStmt {
 
 impl Rewrite for ast::ContinueStmt {
     fn rewrite(&self, _context: &RewriteContext<'_>, _shape: Shape) -> Option<String> {
-        Some("continue".to_string())
+        Some("continue".into())
     }
 }
 
 impl Rewrite for ast::BreakStmt {
     fn rewrite(&self, _context: &RewriteContext<'_>, _shape: Shape) -> Option<String> {
-        Some("break".to_string())
+        Some("break".into())
     }
 }
 
 impl Rewrite for ast::ReturnStmt {
     fn rewrite(&self, context: &RewriteContext<'_>, shape: Shape) -> Option<String> {
-        let mut out = String::new();
-        out.push_str("return");
+        let expr = self.expr().map_or(String::new(), |expr| {
+            format!(" {}", expr.rewrite_or_original(context, shape))
+        });
 
-        if let Some(expr) = self.expr() {
-            out.push(' ');
-            let expr_text = expr.rewrite_or_original(context, shape);
-            out.push_str(&expr_text);
-        }
-
-        Some(out)
+        Some(format!("return{expr}"))
     }
 }
 
@@ -1603,8 +1516,8 @@ impl Rewrite for ast::UsesParam {
         }
 
         if let Some(name) = self.name() {
-            out.push_str(context.snippet(name.syntax().text_range()).trim());
-            out.push_str(": ");
+            let name_text = context.snippet(name.syntax().text_range()).trim();
+            let _ = write!(out, "{name_text}: ");
         }
 
         out.push_str(&self.path()?.rewrite_or_original(context, shape));
@@ -1623,10 +1536,7 @@ impl Rewrite for ast::MatchExpr {
         let arm_shape = Shape::with_width(shape.width, Indent::from_block(arms_indent));
 
         let mut out = String::new();
-        out.push_str("match ");
-        out.push_str(&scrutinee);
-        out.push_str(" {");
-        out.push('\n');
+        let _ = writeln!(out, "match {scrutinee} {{");
 
         if let Some(arms) = self.arms() {
             for arm in arms {
@@ -1634,11 +1544,7 @@ impl Rewrite for ast::MatchExpr {
                 let body = arm.body()?.rewrite_or_original(context, arm_shape);
 
                 push_indent(&mut out, arms_indent);
-                out.push_str(&pat);
-                out.push_str(" => ");
-                out.push_str(&body);
-                out.push(',');
-                out.push('\n');
+                let _ = writeln!(out, "{pat} => {body},");
             }
         }
 
