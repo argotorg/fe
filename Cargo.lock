@@ -1894,10 +1894,12 @@ version = "0.1.0"
 dependencies = [
  "cranelift-entity",
  "fe-common",
+ "fe-driver",
  "fe-hir",
  "num-bigint",
  "num-traits",
  "rustc-hash 2.1.1",
+ "url",
 ]
 
 [[package]]

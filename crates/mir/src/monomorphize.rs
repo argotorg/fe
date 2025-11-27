@@ -55,6 +55,15 @@ struct InstanceKey<'db> {
     args: Vec<TyId<'db>>,
 }
 
+/// How a call target should be handled during monomorphization.
+#[derive(Clone, Copy)]
+enum CallTarget<'db> {
+    /// The callee has a body and should be instantiated like any other template.
+    Template(Func<'db>),
+    /// The callee is a declaration only (e.g. `extern`); no MIR body exists.
+    Decl(Func<'db>),
+}
+
 impl<'db> InstanceKey<'db> {
     /// Pack a function and its (possibly empty) substitution list for hashing.
     fn new(func: Func<'db>, args: &[TyId<'db>]) -> Self {
@@ -118,7 +127,7 @@ impl<'db> Monomorphizer<'db> {
     fn resolve_calls(&mut self, func_idx: usize) {
         let call_sites = {
             let function = &self.instances[func_idx];
-            let mut sites: Vec<(usize, Func<'db>, Vec<TyId<'db>>)> = Vec::new();
+            let mut sites: Vec<(usize, CallTarget<'db>, Vec<TyId<'db>>)> = Vec::new();
             for (value_idx, value) in function.body.values.iter().enumerate() {
                 if let ValueOrigin::Call(call) = &value.origin
                     && let Some(target_func) = self.resolve_call_target(call)
@@ -131,11 +140,18 @@ impl<'db> Monomorphizer<'db> {
         };
 
         for (value_idx, target, args) in call_sites {
-            if let Some((_, symbol)) = self.ensure_instance(target, &args)
+            let resolved_name = match target {
+                CallTarget::Template(func) => {
+                    self.ensure_instance(func, &args).map(|(_, symbol)| symbol)
+                }
+                CallTarget::Decl(func) => Some(self.mangled_name(func, &args)),
+            };
+
+            if let Some(name) = resolved_name
                 && let ValueOrigin::Call(call) =
                     &mut self.instances[func_idx].body.values[value_idx].origin
             {
-                call.resolved_name = Some(symbol);
+                call.resolved_name = Some(name);
             }
         }
     }
@@ -163,15 +179,22 @@ impl<'db> Monomorphizer<'db> {
     }
 
     /// Returns the concrete HIR function targeted by the given call, accounting for trait impls.
-    fn resolve_call_target(&self, call: &CallOrigin<'db>) -> Option<Func<'db>> {
+    fn resolve_call_target(&self, call: &CallOrigin<'db>) -> Option<CallTarget<'db>> {
         if let CallableDef::Func(func) = call.callable.callable_def
             && func.body(self.db).is_some()
         {
-            return Some(func);
+            return Some(CallTarget::Template(func));
         }
-        let inst = call.callable.trait_inst()?;
-        let method_name = call.callable.callable_def.name(self.db)?;
-        resolve_trait_method(self.db, inst, method_name)
+        if let Some(inst) = call.callable.trait_inst()
+            && let Some(method_name) = call.callable.callable_def.name(self.db)
+            && let Some(func) = resolve_trait_method(self.db, inst, method_name)
+        {
+            return Some(CallTarget::Template(func));
+        }
+        if let CallableDef::Func(func) = call.callable.callable_def {
+            return Some(CallTarget::Decl(func));
+        }
+        None
     }
 
     /// Substitute concrete type arguments directly into the MIR body values.
