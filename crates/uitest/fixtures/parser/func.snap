@@ -3,7 +3,7 @@ source: crates/uitest/tests/parser.rs
 expression: diags
 input_file: fixtures/parser/func.fe
 ---
-error[1-0001]: unexpected syntax while parsing function definition
+error[1-0001]: unexpected syntax while parsing function signature
   ┌─ func.fe:1:17
   │
 1 │ fn foo<T: Trait>>(x: i32, _ mut y: u32, z: u32) ->  T, u where T: Trait2
@@ -15,7 +15,7 @@ error[1-0001]: unexpected syntax while parsing function parameter
 1 │ fn foo<T: Trait>>(x: i32, _ mut y: u32, z: u32) ->  T, u where T: Trait2
   │                             ^^^ unexpected
 
-error[1-0001]: unexpected syntax while parsing function definition
+error[1-0001]: unexpected syntax while parsing function signature
   ┌─ func.fe:1:54
   │
 1 │ fn foo<T: Trait>>(x: i32, _ mut y: u32, z: u32) ->  T, u where T: Trait2

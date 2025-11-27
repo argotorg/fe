@@ -88,18 +88,19 @@ impl<'db> Mod<'db> {
 
 impl<'db> Func<'db> {
     pub(super) fn lower_ast(ctxt: &mut FileLowerCtxt<'db>, ast: ast::Func) -> Self {
-        let name = IdentId::lower_token_partial(ctxt, ast.name());
+        let sig = ast.sig();
+        let name = IdentId::lower_token_partial(ctxt, sig.name());
         let id = ctxt.joined_id(TrackedItemVariant::Func(name));
         ctxt.enter_item_scope(id, false);
 
         let attributes = AttrListId::lower_ast_opt(ctxt, ast.attr_list());
-        let generic_params = GenericParamListId::lower_ast_opt(ctxt, ast.generic_params());
-        let where_clause = WhereClauseId::lower_ast_opt(ctxt, ast.where_clause());
-        let params = ast
+        let generic_params = GenericParamListId::lower_ast_opt(ctxt, sig.generic_params());
+        let where_clause = WhereClauseId::lower_ast_opt(ctxt, sig.where_clause());
+        let params = sig
             .params()
             .map(|params| FuncParamListId::lower_ast(ctxt, params))
             .into();
-        let ret_ty = ast.ret_ty().map(|ty| TypeId::lower_ast(ctxt, ty));
+        let ret_ty = sig.ret_ty().map(|ty| TypeId::lower_ast(ctxt, ty));
         let effects = lower_effects(ctxt, &ast);
         let modifier = ItemModifier::lower_ast(ast.modifier());
         let body = ast
@@ -131,7 +132,7 @@ fn lower_effects<'db>(ctxt: &mut FileLowerCtxt<'db>, ast: &ast::Func) -> EffectP
 
     let mut data: Vec<EffectParam<'db>> = Vec::new();
 
-    if let Some(uses) = ast.uses_clause() {
+    if let Some(uses) = ast.sig().uses_clause() {
         if let Some(list) = uses.param_list() {
             for p in list {
                 let name = p.name().map(|n| IdentId::lower_token(ctxt, n.syntax()));

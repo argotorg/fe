@@ -635,7 +635,15 @@ fn parse_fn_item_block<S: TokenStream>(
                 parser.parse_cp(FuncScope::new(fn_def_scope), checkpoint)?;
 
                 parser.set_newline_as_trivia(false);
-                parser.expect(&[SyntaxKind::Newline, SyntaxKind::RBrace], None)?;
+                parser.expect(
+                    &[
+                        SyntaxKind::Newline,
+                        SyntaxKind::RBrace,
+                        SyntaxKind::DocComment,
+                        SyntaxKind::DocCommentAttr,
+                    ],
+                    None,
+                )?;
             }
             _ => {
                 let proof = parser.error_msg_on_current_token("only `fn` is allowed in this block");
@@ -673,7 +681,15 @@ fn parse_trait_item_block<S: TokenStream>(
                 parser.parse_cp(FuncScope::new(fn_def_scope), checkpoint)?;
 
                 parser.set_newline_as_trivia(false);
-                parser.expect(&[SyntaxKind::Newline, SyntaxKind::RBrace], None)?;
+                parser.expect(
+                    &[
+                        SyntaxKind::Newline,
+                        SyntaxKind::RBrace,
+                        SyntaxKind::DocComment,
+                        SyntaxKind::DocCommentAttr,
+                    ],
+                    None,
+                )?;
             }
             Some(SyntaxKind::TypeKw) => {
                 parser.parse_cp(TraitTypeItemScope::default(), checkpoint)?;

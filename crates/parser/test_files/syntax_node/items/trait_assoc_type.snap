@@ -121,43 +121,44 @@ Root@0..453
           Func@157..201
             FnKw@157..159 "fn"
             WhiteSpace@159..160 " "
-            Ident@160..168 "make_ptr"
-            GenericParamList@168..171
-              Lt@168..169 "<"
-              TypeGenericParam@169..170
-                Ident@169..170 "T"
-              Gt@170..171 ">"
-            FuncParamList@171..185
-              LParen@171..172 "("
-              FnParam@172..184
-                Underscore@172..173 "_"
-                WhiteSpace@173..174 " "
-                Ident@174..177 "pos"
-                Colon@177..178 ":"
-                WhiteSpace@178..179 " "
-                PathType@179..184
-                  Path@179..184
-                    PathSegment@179..184
-                      Ident@179..184 "usize"
-              RParen@184..185 ")"
-            WhiteSpace@185..186 " "
-            Arrow@186..188 "->"
-            WhiteSpace@188..189 " "
-            PathType@189..201
-              Path@189..201
-                PathSegment@189..193
-                  SelfTypeKw@189..193 "Self"
-                Colon2@193..195 "::"
-                PathSegment@195..201
-                  Ident@195..198 "Ptr"
-                  GenericArgList@198..201
-                    Lt@198..199 "<"
-                    TypeGenericArg@199..200
-                      PathType@199..200
-                        Path@199..200
-                          PathSegment@199..200
-                            Ident@199..200 "T"
-                    Gt@200..201 ">"
+            FuncSignature@160..201
+              Ident@160..168 "make_ptr"
+              GenericParamList@168..171
+                Lt@168..169 "<"
+                TypeGenericParam@169..170
+                  Ident@169..170 "T"
+                Gt@170..171 ">"
+              FuncParamList@171..185
+                LParen@171..172 "("
+                FnParam@172..184
+                  Underscore@172..173 "_"
+                  WhiteSpace@173..174 " "
+                  Ident@174..177 "pos"
+                  Colon@177..178 ":"
+                  WhiteSpace@178..179 " "
+                  PathType@179..184
+                    Path@179..184
+                      PathSegment@179..184
+                        Ident@179..184 "usize"
+                RParen@184..185 ")"
+              WhiteSpace@185..186 " "
+              Arrow@186..188 "->"
+              WhiteSpace@188..189 " "
+              PathType@189..201
+                Path@189..201
+                  PathSegment@189..193
+                    SelfTypeKw@189..193 "Self"
+                  Colon2@193..195 "::"
+                  PathSegment@195..201
+                    Ident@195..198 "Ptr"
+                    GenericArgList@198..201
+                      Lt@198..199 "<"
+                      TypeGenericArg@199..200
+                        PathType@199..200
+                          Path@199..200
+                            PathSegment@199..200
+                              Ident@199..200 "T"
+                      Gt@200..201 ">"
           Newline@201..202 "\n"
           RBrace@202..203 "}"
     Newline@203..204 "\n"
@@ -259,43 +260,44 @@ Root@0..453
           Func@369..450
             FnKw@369..371 "fn"
             WhiteSpace@371..372 " "
-            Ident@372..380 "make_ptr"
-            GenericParamList@380..383
-              Lt@380..381 "<"
-              TypeGenericParam@381..382
-                Ident@381..382 "T"
-              Gt@382..383 ">"
-            FuncParamList@383..397
-              LParen@383..384 "("
-              FnParam@384..396
-                Underscore@384..385 "_"
-                WhiteSpace@385..386 " "
-                Ident@386..389 "pos"
-                Colon@389..390 ":"
-                WhiteSpace@390..391 " "
-                PathType@391..396
-                  Path@391..396
-                    PathSegment@391..396
-                      Ident@391..396 "usize"
-              RParen@396..397 ")"
-            WhiteSpace@397..398 " "
-            Arrow@398..400 "->"
-            WhiteSpace@400..401 " "
-            PathType@401..413
-              Path@401..413
-                PathSegment@401..405
-                  SelfTypeKw@401..405 "Self"
-                Colon2@405..407 "::"
-                PathSegment@407..413
-                  Ident@407..410 "Ptr"
-                  GenericArgList@410..413
-                    Lt@410..411 "<"
-                    TypeGenericArg@411..412
-                      PathType@411..412
-                        Path@411..412
-                          PathSegment@411..412
-                            Ident@411..412 "T"
-                    Gt@412..413 ">"
+            FuncSignature@372..413
+              Ident@372..380 "make_ptr"
+              GenericParamList@380..383
+                Lt@380..381 "<"
+                TypeGenericParam@381..382
+                  Ident@381..382 "T"
+                Gt@382..383 ">"
+              FuncParamList@383..397
+                LParen@383..384 "("
+                FnParam@384..396
+                  Underscore@384..385 "_"
+                  WhiteSpace@385..386 " "
+                  Ident@386..389 "pos"
+                  Colon@389..390 ":"
+                  WhiteSpace@390..391 " "
+                  PathType@391..396
+                    Path@391..396
+                      PathSegment@391..396
+                        Ident@391..396 "usize"
+                RParen@396..397 ")"
+              WhiteSpace@397..398 " "
+              Arrow@398..400 "->"
+              WhiteSpace@400..401 " "
+              PathType@401..413
+                Path@401..413
+                  PathSegment@401..405
+                    SelfTypeKw@401..405 "Self"
+                  Colon2@405..407 "::"
+                  PathSegment@407..413
+                    Ident@407..410 "Ptr"
+                    GenericArgList@410..413
+                      Lt@410..411 "<"
+                      TypeGenericArg@411..412
+                        PathType@411..412
+                          Path@411..412
+                            PathSegment@411..412
+                              Ident@411..412 "T"
+                      Gt@412..413 ">"
             WhiteSpace@413..414 " "
             BlockExpr@414..450
               LBrace@414..415 "{"

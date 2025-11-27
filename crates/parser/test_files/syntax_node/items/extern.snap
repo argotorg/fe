@@ -1,7 +1,7 @@
 ---
 source: crates/parser/tests/syntax_node.rs
 expression: node
-input_file: crates/parser/test_files/syntax_node/items/extern.fe
+input_file: test_files/syntax_node/items/extern.fe
 ---
 Root@0..146
   ItemList@0..146
@@ -30,37 +30,38 @@ Root@0..146
             WhiteSpace@36..37 " "
             FnKw@37..39 "fn"
             WhiteSpace@39..40 " "
-            Ident@40..45 "write"
-            FuncParamList@45..68
-              LParen@45..46 "("
-              FnParam@46..55
-                Ident@46..49 "loc"
-                Colon@49..50 ":"
-                WhiteSpace@50..51 " "
-                PtrType@51..55
-                  Star@51..52 "*"
-                  PathType@52..55
-                    Path@52..55
-                      PathSegment@52..55
-                        Ident@52..55 "u32"
-              Comma@55..56 ","
-              WhiteSpace@56..57 " "
-              FnParam@57..67
-                Ident@57..62 "value"
-                Colon@62..63 ":"
-                WhiteSpace@63..64 " "
-                PathType@64..67
-                  Path@64..67
-                    PathSegment@64..67
-                      Ident@64..67 "u32"
-              RParen@67..68 ")"
-            WhiteSpace@68..69 " "
-            Arrow@69..71 "->"
-            WhiteSpace@71..72 " "
-            PathType@72..76
-              Path@72..76
-                PathSegment@72..76
-                  Ident@72..76 "bool"
+            FuncSignature@40..76
+              Ident@40..45 "write"
+              FuncParamList@45..68
+                LParen@45..46 "("
+                FnParam@46..55
+                  Ident@46..49 "loc"
+                  Colon@49..50 ":"
+                  WhiteSpace@50..51 " "
+                  PtrType@51..55
+                    Star@51..52 "*"
+                    PathType@52..55
+                      Path@52..55
+                        PathSegment@52..55
+                          Ident@52..55 "u32"
+                Comma@55..56 ","
+                WhiteSpace@56..57 " "
+                FnParam@57..67
+                  Ident@57..62 "value"
+                  Colon@62..63 ":"
+                  WhiteSpace@63..64 " "
+                  PathType@64..67
+                    Path@64..67
+                      PathSegment@64..67
+                        Ident@64..67 "u32"
+                RParen@67..68 ")"
+              WhiteSpace@68..69 " "
+              Arrow@69..71 "->"
+              WhiteSpace@71..72 " "
+              PathType@72..76
+                Path@72..76
+                  PathSegment@72..76
+                    Ident@72..76 "bool"
           Newline@76..77 "\n"
           WhiteSpace@77..81 "    "
           Func@81..131
@@ -71,45 +72,47 @@ Root@0..146
             WhiteSpace@91..92 " "
             FnKw@92..94 "fn"
             WhiteSpace@94..95 " "
-            Ident@95..99 "read"
-            FuncParamList@99..122
-              LParen@99..100 "("
-              FnParam@100..109
-                Ident@100..103 "loc"
-                Colon@103..104 ":"
-                WhiteSpace@104..105 " "
-                PtrType@105..109
-                  Star@105..106 "*"
-                  PathType@106..109
-                    Path@106..109
-                      PathSegment@106..109
-                        Ident@106..109 "u32"
-              Comma@109..110 ","
-              WhiteSpace@110..111 " "
-              FnParam@111..121
-                Ident@111..114 "len"
-                Colon@114..115 ":"
-                WhiteSpace@115..116 " "
-                PathType@116..121
-                  Path@116..121
-                    PathSegment@116..121
-                      Ident@116..121 "usize"
-              RParen@121..122 ")"
-            WhiteSpace@122..123 " "
-            Arrow@123..125 "->"
-            WhiteSpace@125..126 " "
-            PathType@126..131
-              Path@126..131
-                PathSegment@126..131
-                  Ident@126..131 "usize"
+            FuncSignature@95..131
+              Ident@95..99 "read"
+              FuncParamList@99..122
+                LParen@99..100 "("
+                FnParam@100..109
+                  Ident@100..103 "loc"
+                  Colon@103..104 ":"
+                  WhiteSpace@104..105 " "
+                  PtrType@105..109
+                    Star@105..106 "*"
+                    PathType@106..109
+                      Path@106..109
+                        PathSegment@106..109
+                          Ident@106..109 "u32"
+                Comma@109..110 ","
+                WhiteSpace@110..111 " "
+                FnParam@111..121
+                  Ident@111..114 "len"
+                  Colon@114..115 ":"
+                  WhiteSpace@115..116 " "
+                  PathType@116..121
+                    Path@116..121
+                      PathSegment@116..121
+                        Ident@116..121 "usize"
+                RParen@121..122 ")"
+              WhiteSpace@122..123 " "
+              Arrow@123..125 "->"
+              WhiteSpace@125..126 " "
+              PathType@126..131
+                Path@126..131
+                  PathSegment@126..131
+                    Ident@126..131 "usize"
           Newline@131..132 "\n"
           WhiteSpace@132..136 "    "
           Func@136..144
             FnKw@136..138 "fn"
             WhiteSpace@138..139 " "
-            Ident@139..142 "foo"
-            FuncParamList@142..144
-              LParen@142..143 "("
-              RParen@143..144 ")"
+            FuncSignature@139..144
+              Ident@139..142 "foo"
+              FuncParamList@142..144
+                LParen@142..143 "("
+                RParen@143..144 ")"
           Newline@144..145 "\n"
           RBrace@145..146 "}"

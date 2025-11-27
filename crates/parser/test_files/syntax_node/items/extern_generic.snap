@@ -1,0 +1,99 @@
+---
+source: crates/parser/tests/syntax_node.rs
+expression: node
+input_file: test_files/syntax_node/items/extern_generic.fe
+---
+Root@0..99
+  ItemList@0..98
+    Item@0..98
+      Extern@0..98
+        ExternKw@0..6 "extern"
+        WhiteSpace@6..7 " "
+        ExternItemList@7..98
+          LBrace@7..8 "{"
+          Newline@8..9 "\n"
+          WhiteSpace@9..13 "    "
+          Func@13..40
+            ItemModifier@13..16
+              PubKw@13..16 "pub"
+            WhiteSpace@16..17 " "
+            FnKw@17..19 "fn"
+            WhiteSpace@19..20 " "
+            FuncSignature@20..40
+              Ident@20..22 "id"
+              GenericParamList@22..25
+                Lt@22..23 "<"
+                TypeGenericParam@23..24
+                  Ident@23..24 "T"
+                Gt@24..25 ">"
+              FuncParamList@25..35
+                LParen@25..26 "("
+                FnParam@26..34
+                  Ident@26..31 "value"
+                  Colon@31..32 ":"
+                  WhiteSpace@32..33 " "
+                  PathType@33..34
+                    Path@33..34
+                      PathSegment@33..34
+                        Ident@33..34 "T"
+                RParen@34..35 ")"
+              WhiteSpace@35..36 " "
+              Arrow@36..38 "->"
+              WhiteSpace@38..39 " "
+              PathType@39..40
+                Path@39..40
+                  PathSegment@39..40
+                    Ident@39..40 "T"
+          Newline@40..41 "\n"
+          WhiteSpace@41..45 "    "
+          Func@45..96
+            ItemModifier@45..48
+              PubKw@45..48 "pub"
+            WhiteSpace@48..49 " "
+            FnKw@49..51 "fn"
+            WhiteSpace@51..52 " "
+            FuncSignature@52..96
+              Ident@52..63 "constrained"
+              GenericParamList@63..66
+                Lt@63..64 "<"
+                TypeGenericParam@64..65
+                  Ident@64..65 "T"
+                Gt@65..66 ">"
+              FuncParamList@66..76
+                LParen@66..67 "("
+                FnParam@67..75
+                  Ident@67..72 "value"
+                  Colon@72..73 ":"
+                  WhiteSpace@73..74 " "
+                  PathType@74..75
+                    Path@74..75
+                      PathSegment@74..75
+                        Ident@74..75 "T"
+                RParen@75..76 ")"
+              WhiteSpace@76..77 " "
+              Arrow@77..79 "->"
+              WhiteSpace@79..80 " "
+              PathType@80..81
+                Path@80..81
+                  PathSegment@80..81
+                    Ident@80..81 "T"
+              WhiteSpace@81..82 " "
+              WhereClause@82..96
+                WhereKw@82..87 "where"
+                WhiteSpace@87..88 " "
+                WherePredicate@88..96
+                  PathType@88..89
+                    Path@88..89
+                      PathSegment@88..89
+                        Ident@88..89 "T"
+                  TypeBoundList@89..96
+                    Colon@89..90 ":"
+                    WhiteSpace@90..91 " "
+                    TypeBound@91..96
+                      TraitRef@91..96
+                        Path@91..96
+                          PathSegment@91..96
+                            Ident@91..96 "Clone"
+          Newline@96..97 "\n"
+          RBrace@97..98 "}"
+  Newline@98..99 "\n"

@@ -1,6 +1,7 @@
 use parser::ast::{self, prelude::AstNode};
 
 use super::{
+    LazySpanAtom,
     attr::LazyAttrListSpan,
     define_lazy_span_node,
     params::{LazyFuncParamListSpan, LazyGenericParamListSpan, LazyWhereClauseSpan},
@@ -36,6 +37,21 @@ impl<'db> LazyItemSpan<'db> {
 }
 
 define_lazy_span_node!(
+    LazyFuncSignatureSpan,
+    ast::FuncSignature,
+    @token {
+        (name, name),
+    }
+    @node {
+        (generic_params, generic_params, LazyGenericParamListSpan),
+        (where_clause, where_clause, LazyWhereClauseSpan),
+        (params, params, LazyFuncParamListSpan),
+        (ret_ty, ret_ty, LazyTySpan),
+        (uses_clause, uses_clause, LazySpanAtom),
+    }
+);
+
+define_lazy_span_node!(
     LazyModSpan,
     ast::Mod,
     @token
@@ -57,21 +73,39 @@ impl<'db> LazyModSpan<'db> {
 define_lazy_span_node!(
     LazyFuncSpan,
     ast::Func,
-    @token {
-        (name, name),
-    }
     @node {
+        (sig, signature_opt, LazyFuncSignatureSpan),
         (attributes, attr_list, LazyAttrListSpan),
-        (generic_params, generic_params, LazyGenericParamListSpan),
-        (where_clause, where_clause, LazyWhereClauseSpan),
         (modifier, modifier, LazyItemModifierSpan),
-        (params, params, LazyFuncParamListSpan),
-        (ret_ty, ret_ty, LazyTySpan),
     }
 );
 impl<'db> LazyFuncSpan<'db> {
     pub fn new(f: Func<'db>) -> Self {
         Self(crate::span::transition::SpanTransitionChain::new(f))
+    }
+
+    pub fn name(self) -> LazySpanAtom<'db> {
+        self.sig().name()
+    }
+
+    pub fn uses_clause(self) -> LazySpanAtom<'db> {
+        self.sig().uses_clause()
+    }
+
+    pub fn where_clause(self) -> LazyWhereClauseSpan<'db> {
+        self.sig().where_clause()
+    }
+
+    pub fn params(self) -> LazyFuncParamListSpan<'db> {
+        self.sig().params()
+    }
+
+    pub fn ret_ty(self) -> LazyTySpan<'db> {
+        self.sig().ret_ty()
+    }
+
+    pub fn generic_params(self) -> LazyGenericParamListSpan<'db> {
+        self.sig().generic_params()
     }
 }
 

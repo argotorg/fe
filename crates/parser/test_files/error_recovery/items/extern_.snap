@@ -1,15 +1,15 @@
 ---
 source: crates/parser/tests/error_recovery.rs
 expression: node
-input_file: crates/parser/test_files/error_recovery/items/extern_.fe
+input_file: test_files/error_recovery/items/extern_.fe
 ---
 Root@0..93
   ItemList@0..93
-    Item@0..54
-      Extern@0..54
+    Item@0..48
+      Extern@0..48
         ExternKw@0..6 "extern"
         WhiteSpace@6..7 " "
-        ExternItemList@7..54
+        ExternItemList@7..48
           LBrace@7..8 "{"
           Newline@8..9 "\n"
           WhiteSpace@9..13 "    "
@@ -21,7 +21,8 @@ Root@0..93
             WhiteSpace@23..24 " "
             FnKw@24..26 "fn"
             WhiteSpace@26..27 " "
-            Ident@27..30 "Foo"
+            FuncSignature@27..30
+              Ident@27..30 "Foo"
           Newline@30..32 "\n\n"
           WhiteSpace@32..36 "    "
           Func@36..48
@@ -30,12 +31,13 @@ Root@0..93
             WhiteSpace@39..40 " "
             FnKw@40..42 "fn"
             WhiteSpace@42..43 " "
-            Ident@43..46 "bar"
-            FuncParamList@46..48
-              LParen@46..47 "("
-              RParen@47..48 ")"
-          Newline@48..50 "\n\n"
-          WhiteSpace@50..54 "    "
+            FuncSignature@43..48
+              Ident@43..46 "bar"
+              FuncParamList@46..48
+                LParen@46..47 "("
+                RParen@47..48 ")"
+    Newline@48..50 "\n\n"
+    WhiteSpace@50..54 "    "
     Item@54..75
       Struct@54..75
         StructKw@54..60 "struct"
@@ -56,10 +58,11 @@ Root@0..93
         WhiteSpace@82..83 " "
         FnKw@83..85 "fn"
         WhiteSpace@85..86 " "
-        Ident@86..89 "foo"
-        FuncParamList@89..91
-          LParen@89..90 "("
-          RParen@90..91 ")"
+        FuncSignature@86..91
+          Ident@86..89 "foo"
+          FuncParamList@89..91
+            LParen@89..90 "("
+            RParen@90..91 ")"
         Newline@91..92 "\n"
         Error@92..93
           RBrace@92..93 "}"

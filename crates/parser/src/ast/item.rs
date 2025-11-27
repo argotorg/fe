@@ -68,11 +68,14 @@ ast_node! {
     pub struct Func,
     SK::Func,
 }
-impl super::GenericParamsOwner for Func {}
-impl super::WhereClauseOwner for Func {}
-impl super::AttrListOwner for Func {}
-impl super::ItemModifierOwner for Func {}
-impl Func {
+ast_node! {
+    /// `foo<T>(a: T) -> T where T: Clone`
+    pub struct FuncSignature,
+    SK::FuncSignature,
+}
+impl super::GenericParamsOwner for FuncSignature {}
+impl super::WhereClauseOwner for FuncSignature {}
+impl FuncSignature {
     /// Returns the name of the function.
     pub fn name(&self) -> Option<SyntaxToken> {
         support::token(self.syntax(), SK::Ident)
@@ -88,13 +91,34 @@ impl Func {
         support::child(self.syntax())
     }
 
-    /// Returns the function's body.
-    pub fn body(&self) -> Option<super::BlockExpr> {
+    /// Returns the optional `uses` clause of the function.
+    pub fn uses_clause(&self) -> Option<super::UsesClause> {
         support::child(self.syntax())
     }
 
-    /// Returns the optional `uses` clause of the function.
-    pub fn uses_clause(&self) -> Option<super::UsesClause> {
+    /// Returns the where clause of the function.
+    pub fn where_clause(&self) -> Option<super::WhereClause> {
+        support::child(self.syntax())
+    }
+}
+impl super::AttrListOwner for Func {}
+impl super::ItemModifierOwner for Func {}
+impl Func {
+    /// Returns the function's signature if present in the syntax tree.
+    /// This is primarily for consumers (like lazy spans) that need to handle
+    /// malformed code without panicking.
+    pub fn signature_opt(&self) -> Option<FuncSignature> {
+        support::child(self.syntax())
+    }
+
+    /// Returns the function's signature.
+    pub fn sig(&self) -> FuncSignature {
+        self.signature_opt()
+            .expect("a function must always contain a signature node")
+    }
+
+    /// Returns the function's body.
+    pub fn body(&self) -> Option<super::BlockExpr> {
         support::child(self.syntax())
     }
 }
@@ -578,7 +602,7 @@ mod tests {
                 0 => {
                     assert!(matches!(item.kind().unwrap(), ItemKind::Func(_)));
                     let func: Func = item.kind().unwrap().try_into().unwrap();
-                    assert_eq!(func.name().unwrap().text(), "bar");
+                    assert_eq!(func.sig().name().unwrap().text(), "bar");
                 }
                 1 => {
                     assert!(matches!(item.kind().unwrap(), ItemKind::Struct(_)));
@@ -603,12 +627,15 @@ mod tests {
             "#;
         let func: Func = parse_item(source);
 
-        assert_eq!(func.name().unwrap().text(), "foo");
+        assert_eq!(func.sig().name().unwrap().text(), "foo");
         assert_eq!(func.attr_list().unwrap().iter().count(), 2);
-        assert_eq!(func.generic_params().unwrap().iter().count(), 2);
-        assert!(func.where_clause().is_some());
+        assert_eq!(func.sig().generic_params().unwrap().iter().count(), 2);
+        assert!(func.sig().where_clause().is_some());
         assert!(func.body().is_some());
-        assert!(matches!(func.ret_ty().unwrap().kind(), TypeKind::Tuple(_)));
+        assert!(matches!(
+            func.sig().ret_ty().unwrap().kind(),
+            TypeKind::Tuple(_)
+        ));
         let modifier = func.modifier().unwrap();
         assert!(modifier.pub_kw().is_some());
         assert!(modifier.unsafe_kw().is_some());

@@ -16,6 +16,14 @@ define_scope! {
     Func
 }
 
+define_scope! {
+    pub(crate) FuncSignatureScope {
+        allow_self: bool,
+        allow_body: bool
+    },
+    SyntaxKind::FuncSignature
+}
+
 #[derive(Clone, Copy, Debug, Default)]
 pub(crate) enum FuncDefScope {
     #[default]
@@ -40,46 +48,68 @@ impl super::Parse for FuncScope {
     }
 }
 
+impl super::Parse for FuncSignatureScope {
+    type Error = Recovery<ErrProof>;
+
+    fn parse<S: TokenStream>(&mut self, parser: &mut Parser<S>) -> Result<(), Self::Error> {
+        // Tokens that can reasonably appear after each portion of a function
+        // signature and therefore serve as recovery anchors.
+        let mut recovery_tokens = vec![
+            SyntaxKind::Ident,
+            SyntaxKind::Lt,
+            SyntaxKind::LParen,
+            SyntaxKind::Arrow,
+            SyntaxKind::UsesKw,
+            SyntaxKind::WhereKw,
+            SyntaxKind::FnKw,
+            SyntaxKind::PubKw,
+            SyntaxKind::UnsafeKw,
+            SyntaxKind::DocComment,
+            SyntaxKind::DocCommentAttr,
+            SyntaxKind::Newline,
+            SyntaxKind::RBrace,
+        ];
+        if self.allow_body {
+            recovery_tokens.push(SyntaxKind::LBrace);
+        }
+        parser.set_scope_recovery_stack(&recovery_tokens);
+
+        if parser.find_and_pop(SyntaxKind::Ident, ExpectedKind::Name(SyntaxKind::Func))? {
+            parser.bump();
+        }
+
+        parser.expect_and_pop_recovery_stack()?;
+        parse_generic_params_opt(parser, false)?;
+
+        if parser.find_and_pop(
+            SyntaxKind::LParen,
+            ExpectedKind::Syntax(SyntaxKind::FuncParamList),
+        )? {
+            parser.parse(super::param::FuncParamListScope::new(self.allow_self))?;
+        }
+
+        parser.expect_and_pop_recovery_stack()?;
+        if parser.bump_if(SyntaxKind::Arrow) {
+            parse_type(parser, None)?;
+        }
+
+        parser.expect_and_pop_recovery_stack()?;
+        parse_uses_clause_opt(parser)?;
+
+        parser.expect_and_pop_recovery_stack()?;
+        parse_where_clause_opt(parser)?;
+
+        Ok(())
+    }
+}
+
 fn parse_normal_fn_def_impl<S: TokenStream>(
     parser: &mut Parser<S>,
     allow_self: bool,
 ) -> Result<(), Recovery<ErrProof>> {
-    parser.set_scope_recovery_stack(&[
-        SyntaxKind::Ident,
-        SyntaxKind::Lt,
-        SyntaxKind::LParen,
-        SyntaxKind::Arrow,
-        SyntaxKind::UsesKw,
-        SyntaxKind::WhereKw,
-        SyntaxKind::LBrace,
-    ]);
+    parser.parse(FuncSignatureScope::new(allow_self, true))?;
 
-    if parser.find_and_pop(SyntaxKind::Ident, ExpectedKind::Name(SyntaxKind::Func))? {
-        parser.bump();
-    }
-
-    parser.expect_and_pop_recovery_stack()?;
-    parse_generic_params_opt(parser, false)?;
-
-    if parser.find_and_pop(
-        SyntaxKind::LParen,
-        ExpectedKind::Syntax(SyntaxKind::FuncParamList),
-    )? {
-        // function parameter list (signature parameters)
-        parser.parse(super::param::FuncParamListScope::new(allow_self))?;
-    }
-
-    parser.expect_and_pop_recovery_stack()?;
-    if parser.bump_if(SyntaxKind::Arrow) {
-        parse_type(parser, None)?;
-    }
-
-    parser.expect_and_pop_recovery_stack()?;
-    parse_uses_clause_opt(parser)?;
-
-    parser.expect_and_pop_recovery_stack()?;
-    parse_where_clause_opt(parser)?;
-
+    parser.set_scope_recovery_stack(&[SyntaxKind::LBrace]);
     if parser.find_and_pop(SyntaxKind::LBrace, ExpectedKind::Body(SyntaxKind::Func))? {
         parser.parse(BlockExprScope::default())?;
     }
@@ -89,41 +119,7 @@ fn parse_normal_fn_def_impl<S: TokenStream>(
 fn parse_trait_fn_def_impl<S: TokenStream>(
     parser: &mut Parser<S>,
 ) -> Result<(), Recovery<ErrProof>> {
-    parser.set_scope_recovery_stack(&[
-        SyntaxKind::Ident,
-        SyntaxKind::Lt,
-        SyntaxKind::LParen,
-        SyntaxKind::Arrow,
-        SyntaxKind::UsesKw,
-        SyntaxKind::WhereKw,
-        SyntaxKind::LBrace,
-    ]);
-
-    if parser.find_and_pop(SyntaxKind::Ident, ExpectedKind::Name(SyntaxKind::Func))? {
-        parser.bump();
-    }
-
-    parser.expect_and_pop_recovery_stack()?;
-    parse_generic_params_opt(parser, false)?;
-
-    if parser.find_and_pop(
-        SyntaxKind::LParen,
-        ExpectedKind::Syntax(SyntaxKind::FuncParamList),
-    )? {
-        // trait method parameter list
-        parser.parse(super::param::FuncParamListScope::new(true))?;
-    }
-
-    parser.pop_recovery_stack();
-    if parser.bump_if(SyntaxKind::Arrow) {
-        parse_type(parser, None)?;
-    }
-
-    parser.pop_recovery_stack();
-    parse_uses_clause_opt(parser)?;
-
-    parser.pop_recovery_stack();
-    parse_where_clause_opt(parser)?;
+    parser.parse(FuncSignatureScope::new(true, true))?;
 
     if parser.current_kind() == Some(SyntaxKind::LBrace) {
         parser.parse(BlockExprScope::default())?;
@@ -134,23 +130,7 @@ fn parse_trait_fn_def_impl<S: TokenStream>(
 fn parse_extern_fn_def_impl<S: TokenStream>(
     parser: &mut Parser<S>,
 ) -> Result<(), Recovery<ErrProof>> {
-    parser.set_scope_recovery_stack(&[SyntaxKind::Ident, SyntaxKind::LParen, SyntaxKind::Arrow]);
-
-    if parser.find_and_pop(SyntaxKind::Ident, ExpectedKind::Name(SyntaxKind::Func))? {
-        parser.bump();
-    }
-
-    if parser.find_and_pop(
-        SyntaxKind::LParen,
-        ExpectedKind::Syntax(SyntaxKind::FuncParamList),
-    )? {
-        parser.parse(super::param::FuncParamListScope::new(true))?;
-    }
-
-    parser.pop_recovery_stack();
-    if parser.bump_if(SyntaxKind::Arrow) {
-        parse_type(parser, None)?;
-    }
+    parser.parse(FuncSignatureScope::new(true, false))?;
 
     Ok(())
 }

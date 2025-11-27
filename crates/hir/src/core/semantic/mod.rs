@@ -184,7 +184,13 @@ impl<'db> Func<'db> {
             return Vec::new();
         };
         let assumptions = self.assumptions(db);
-        collect_ty_lower_errors(db, self.scope(), hir_ty, self.span().ret_ty(), assumptions)
+        collect_ty_lower_errors(
+            db,
+            self.scope(),
+            hir_ty,
+            self.span().sig().ret_ty(),
+            assumptions,
+        )
     }
 }
 

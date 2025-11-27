@@ -1,7 +1,7 @@
 ---
 source: crates/parser/tests/syntax_node.rs
 expression: node
-input_file: crates/parser/test_files/syntax_node/items/path_generic.fe
+input_file: test_files/syntax_node/items/path_generic.fe
 ---
 Root@0..270
   ItemList@0..269
@@ -60,19 +60,20 @@ Root@0..270
           Func@49..92
             FnKw@49..51 "fn"
             WhiteSpace@51..52 " "
-            Ident@52..58 "method"
-            FuncParamList@58..64
-              LParen@58..59 "("
-              FnParam@59..63
-                SelfKw@59..63 "self"
-              RParen@63..64 ")"
-            WhiteSpace@64..65 " "
-            Arrow@65..67 "->"
-            WhiteSpace@67..68 " "
-            PathType@68..69
-              Path@68..69
-                PathSegment@68..69
-                  Ident@68..69 "T"
+            FuncSignature@52..69
+              Ident@52..58 "method"
+              FuncParamList@58..64
+                LParen@58..59 "("
+                FnParam@59..63
+                  SelfKw@59..63 "self"
+                RParen@63..64 ")"
+              WhiteSpace@64..65 " "
+              Arrow@65..67 "->"
+              WhiteSpace@67..68 " "
+              PathType@68..69
+                Path@68..69
+                  PathSegment@68..69
+                    Ident@68..69 "T"
             WhiteSpace@69..70 " "
             BlockExpr@70..92
               LBrace@70..71 "{"
@@ -96,10 +97,11 @@ Root@0..270
       Func@96..269
         FnKw@96..98 "fn"
         WhiteSpace@98..99 " "
-        Ident@99..102 "foo"
-        FuncParamList@102..104
-          LParen@102..103 "("
-          RParen@103..104 ")"
+        FuncSignature@99..104
+          Ident@99..102 "foo"
+          FuncParamList@102..104
+            LParen@102..103 "("
+            RParen@103..104 ")"
         WhiteSpace@104..105 " "
         BlockExpr@105..269
           LBrace@105..106 "{"

@@ -1,7 +1,7 @@
 ---
 source: crates/parser/tests/syntax_node.rs
 expression: node
-input_file: crates/parser/test_files/syntax_node/items/mod.fe
+input_file: test_files/syntax_node/items/mod.fe
 ---
 Root@0..146
   ItemList@0..146
@@ -22,37 +22,38 @@ Root@0..146
             Func@18..78
               FnKw@18..20 "fn"
               WhiteSpace@20..21 " "
-              Ident@21..28 "foo_foo"
-              FuncParamList@28..53
-                LParen@28..29 "("
-                FnParam@29..37
-                  Ident@29..32 "bar"
-                  Colon@32..33 ":"
-                  WhiteSpace@33..34 " "
-                  PathType@34..37
-                    Path@34..37
-                      PathSegment@34..37
-                        Ident@34..37 "i32"
-                Comma@37..38 ","
-                WhiteSpace@38..39 " "
-                FnParam@39..52
-                  MutKw@39..42 "mut"
-                  WhiteSpace@42..43 " "
-                  Ident@43..46 "baz"
-                  Colon@46..47 ":"
-                  WhiteSpace@47..48 " "
-                  PathType@48..52
-                    Path@48..52
-                      PathSegment@48..52
-                        Ident@48..52 "u256"
-                RParen@52..53 ")"
-              WhiteSpace@53..54 " "
-              Arrow@54..56 "->"
-              WhiteSpace@56..57 " "
-              PathType@57..60
-                Path@57..60
-                  PathSegment@57..60
-                    Ident@57..60 "i32"
+              FuncSignature@21..60
+                Ident@21..28 "foo_foo"
+                FuncParamList@28..53
+                  LParen@28..29 "("
+                  FnParam@29..37
+                    Ident@29..32 "bar"
+                    Colon@32..33 ":"
+                    WhiteSpace@33..34 " "
+                    PathType@34..37
+                      Path@34..37
+                        PathSegment@34..37
+                          Ident@34..37 "i32"
+                  Comma@37..38 ","
+                  WhiteSpace@38..39 " "
+                  FnParam@39..52
+                    MutKw@39..42 "mut"
+                    WhiteSpace@42..43 " "
+                    Ident@43..46 "baz"
+                    Colon@46..47 ":"
+                    WhiteSpace@47..48 " "
+                    PathType@48..52
+                      Path@48..52
+                        PathSegment@48..52
+                          Ident@48..52 "u256"
+                  RParen@52..53 ")"
+                WhiteSpace@53..54 " "
+                Arrow@54..56 "->"
+                WhiteSpace@56..57 " "
+                PathType@57..60
+                  Path@57..60
+                    PathSegment@57..60
+                      Ident@57..60 "i32"
               WhiteSpace@60..61 " "
               BlockExpr@61..78
                 LBrace@61..62 "{"

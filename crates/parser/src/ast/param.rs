@@ -760,7 +760,7 @@ mod tests {
     #[wasm_bindgen_test]
     fn uses_clause_single_type() {
         let f = parse_func("fn f() uses Ctx {}");
-        let uc = f.uses_clause().expect("missing uses clause");
+        let uc = f.sig().uses_clause().expect("missing uses clause");
         assert!(uc.param_list().is_none());
         let p = uc.param().expect("expected single uses param");
         assert!(p.mut_token().is_none());
@@ -773,7 +773,7 @@ mod tests {
     #[wasm_bindgen_test]
     fn uses_clause_single_mut_type() {
         let f = parse_func("fn f() uses mut Ctx {}");
-        let uc = f.uses_clause().expect("missing uses clause");
+        let uc = f.sig().uses_clause().expect("missing uses clause");
         let p = uc.param().expect("expected single uses param");
         assert!(p.mut_token().is_some());
         let path = p.path().expect("missing path key");
@@ -785,7 +785,7 @@ mod tests {
     #[wasm_bindgen_test]
     fn uses_clause_param_list_variants() {
         let f = parse_func("fn f() uses (Ctx, mut Storage, c: Ctx, mut f: Foo) {}");
-        let uc = f.uses_clause().expect("missing uses clause");
+        let uc = f.sig().uses_clause().expect("missing uses clause");
         let list = uc.param_list().expect("expected param list");
         let params: Vec<_> = list.iter().collect();
         assert_eq!(params.len(), 4);
