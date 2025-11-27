@@ -438,4 +438,63 @@ object "Counter" {
             U256::from(25u64)
         );
     }
+
+    #[test]
+    fn enum_variant_construction_test() {
+        if !solc_available() {
+            eprintln!("skipping enum_variant_construction_test because solc is missing");
+            return;
+        }
+        let source_path = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../codegen/tests/fixtures/enum_variant_contract.fe"
+        );
+        let harness = FeContractHarness::compile_from_file(
+            "EnumContract",
+            source_path,
+            CompileOptions::default(),
+        )
+        .expect("compilation should succeed");
+        let mut instance = harness.deploy_instance().expect("deployment succeeds");
+        let options = ExecutionOptions::default();
+
+        // Test make_some(42) - should return 42 (unwrapped value)
+        let make_some_call =
+            encode_function_call("make_some(uint256)", &[Token::Uint(AbiU256::from(42u64))])
+                .unwrap();
+        let make_some_result = instance
+            .call_raw(&make_some_call, options)
+            .expect("make_some selector should succeed");
+        assert_eq!(
+            bytes_to_u256(&make_some_result.return_data).unwrap(),
+            U256::from(42u64),
+            "make_some(42) should return 42"
+        );
+
+        // Test is_some_check(99) - should return 1 (true)
+        let is_some_call = encode_function_call(
+            "is_some_check(uint256)",
+            &[Token::Uint(AbiU256::from(99u64))],
+        )
+        .unwrap();
+        let is_some_result = instance
+            .call_raw(&is_some_call, options)
+            .expect("is_some_check selector should succeed");
+        assert_eq!(
+            bytes_to_u256(&is_some_result.return_data).unwrap(),
+            U256::from(1u64),
+            "is_some_check should return 1 for Some variant"
+        );
+
+        // Test make_none() - should return 0 (is_some returns 0 for None)
+        let make_none_call = encode_function_call("make_none()", &[]).unwrap();
+        let make_none_result = instance
+            .call_raw(&make_none_call, options)
+            .expect("make_none selector should succeed");
+        assert_eq!(
+            bytes_to_u256(&make_none_result.return_data).unwrap(),
+            U256::from(0u64),
+            "make_none() should return 0 (is_some of None)"
+        );
+    }
 }

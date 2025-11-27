@@ -8,6 +8,8 @@ use std::cell::Cell;
 pub(super) struct BlockState {
     locals: FxHashMap<String, String>,
     next_local: Rc<Cell<usize>>,
+    /// Mapping from MIR ValueId index to Yul temp name for values bound in this scope.
+    value_temps: FxHashMap<usize, String>,
 }
 
 impl BlockState {
@@ -16,7 +18,18 @@ impl BlockState {
         Self {
             locals: FxHashMap::default(),
             next_local: Rc::new(Cell::new(0)),
+            value_temps: FxHashMap::default(),
         }
+    }
+
+    /// Caches the Yul temp name for a MIR value.
+    pub(super) fn insert_value_temp(&mut self, value_idx: usize, temp: String) {
+        self.value_temps.insert(value_idx, temp);
+    }
+
+    /// Returns the cached Yul temp name for a MIR value, if it exists.
+    pub(super) fn value_temp(&self, value_idx: usize) -> Option<&String> {
+        self.value_temps.get(&value_idx)
     }
 
     /// Allocates a new temporary Yul variable name.

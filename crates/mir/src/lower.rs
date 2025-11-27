@@ -5,6 +5,7 @@ use hir::analysis::{
     HirAnalysisDb,
     name_resolution::{PathRes, path_resolver::resolve_path},
     ty::{
+        adt_def::AdtRef,
         trait_resolution::PredicateListId,
         ty_check::{Callable, RecordLike, TypedBody, check_func_body},
         ty_def::{PrimTy, TyBase, TyData, TyId},
@@ -13,15 +14,16 @@ use hir::analysis::{
 use hir::hir_def::{
     Attr, AttrArg, AttrArgValue, Body, CallableDef, Const, Expr, ExprId, Field, FieldIndex, Func,
     IdentId, ItemKind, LitKind, MatchArm, Partial, Pat, PatId, PathId, Stmt, StmtId, TopLevelMod,
-    scope_graph::ScopeId,
+    VariantKind, scope_graph::ScopeId,
 };
 
 use crate::{
     ir::{
         BasicBlock, BasicBlockId, CallOrigin, CodeRegionRoot, ContractFunction,
         ContractFunctionKind, IntrinsicOp, IntrinsicValue, LoopInfo, MatchArmLowering,
-        MatchArmPattern, MatchLoweringInfo, MirBody, MirFunction, MirInst, MirModule, SwitchOrigin,
-        SwitchTarget, SwitchValue, SyntheticValue, Terminator, ValueData, ValueId, ValueOrigin,
+        MatchArmPattern, MatchLoweringInfo, MirBody, MirFunction, MirInst, MirModule,
+        PatternBinding, SwitchOrigin, SwitchTarget, SwitchValue, SyntheticValue, Terminator,
+        ValueData, ValueId, ValueOrigin,
     },
     monomorphize::monomorphize_functions,
 };
@@ -64,6 +66,8 @@ fn prim_int_bits(prim: PrimTy) -> Option<u16> {
         _ => None,
     }
 }
+
+const ENUM_DISCRIMINANT_SIZE_BYTES: u64 = 32;
 
 impl Error for MirLowerError {}
 
@@ -167,6 +171,12 @@ struct MirBuilder<'db, 'a> {
     store_field_func: Option<CallableDef<'db>>,
     /// Cached `core::mem::alloc` definition used for record allocation.
     alloc_func: Option<CallableDef<'db>>,
+    /// Cached `core::enum::store_discriminant` definition used for enum construction.
+    store_discriminant_func: Option<CallableDef<'db>>,
+    /// Cached `core::enum::store_variant_field` definition used for enum construction.
+    store_variant_field_func: Option<CallableDef<'db>>,
+    /// Cached `core::enum::get_variant_field` definition used for enum destructuring.
+    get_variant_field_func: Option<CallableDef<'db>>,
     address_space_ty: Option<TyId<'db>>,
     loop_stack: Vec<LoopScope>,
     /// Memoized literal values for resolved `const` items.
@@ -192,6 +202,9 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
             get_field_func: None,
             store_field_func: None,
             alloc_func: None,
+            store_discriminant_func: None,
+            store_variant_field_func: None,
+            get_variant_field_func: None,
             address_space_ty: None,
             loop_stack: Vec::new(),
             const_cache: FxHashMap::default(),
@@ -223,9 +236,11 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         match expr.data(self.db, self.body) {
             Partial::Present(Expr::Block(stmts)) => self.lower_block(block, expr, stmts),
             _ => {
-                let value = self.ensure_value(expr);
+                // Use lower_expr_in to handle all expression types consistently,
+                // including variant constructors which need to emit multiple instructions
+                let (next_block, value) = self.lower_expr_in(block, expr);
                 self.mir_body.expr_values.insert(expr, value);
-                Some(block)
+                next_block
             }
         }
     }
@@ -242,10 +257,11 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         match_expr: ExprId,
         scrutinee: ExprId,
         arms: &[MatchArm],
-        patterns: &[MatchArmPattern],
+        patterns: &mut [MatchArmPattern],
     ) -> (Option<BasicBlockId>, ValueId) {
         debug_assert_eq!(arms.len(), patterns.len());
         let (scrut_block_opt, discr_value) = self.lower_expr_in(block, scrutinee);
+        let scrutinee_value = discr_value;
         let Some(scrut_block) = scrut_block_opt else {
             let value = self.ensure_value(match_expr);
             return (None, value);
@@ -293,6 +309,42 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
             unreachable_block
         });
 
+        self.populate_enum_binding_values(patterns, scrutinee_value, match_expr);
+
+        // For enum scrutinees, switch on the in-memory discriminant instead of the heap pointer.
+        let discr_value = if patterns
+            .iter()
+            .any(|pat| matches!(pat, MatchArmPattern::Enum { .. }))
+        {
+            let scrut_ty = self.typed_body.expr_ty(self.db, scrutinee);
+            if let TyData::TyBase(TyBase::Adt(adt_def)) = scrut_ty.data(self.db)
+                && matches!(adt_def.adt_ref(self.db), AdtRef::Enum(_))
+            {
+                let has_payload = adt_def
+                    .fields(self.db)
+                    .iter()
+                    .any(|variant| variant.num_types() > 0);
+                if has_payload {
+                    let ty = TyId::new(self.db, TyData::TyBase(TyBase::Prim(PrimTy::U256)));
+
+                    self.mir_body.alloc_value(ValueData {
+                        ty,
+                        origin: ValueOrigin::Intrinsic(IntrinsicValue {
+                            op: IntrinsicOp::Mload,
+                            args: vec![scrutinee_value],
+                            code_region: None,
+                        }),
+                    })
+                } else {
+                    discr_value
+                }
+            } else {
+                discr_value
+            }
+        } else {
+            discr_value
+        };
+
         self.set_terminator(
             scrut_block,
             Terminator::Switch {
@@ -312,9 +364,13 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
             })
             .collect();
 
-        self.mir_body
-            .match_info
-            .insert(match_expr, MatchLoweringInfo { arms: arms_info });
+        self.mir_body.match_info.insert(
+            match_expr,
+            MatchLoweringInfo {
+                scrutinee: scrutinee_value,
+                arms: arms_info,
+            },
+        );
 
         let value_id = self.ensure_value(match_expr);
         (merge_block, value_id)
@@ -411,6 +467,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
             return None;
         };
 
+        // Handle unit variant patterns like `MyEnum::A`
         if let Pat::Path(path, ..) = pat_data
             && let Ok(PathRes::EnumVariant(variant)) = resolve_path(
                 self.db,
@@ -430,10 +487,105 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
             return Some(MatchArmPattern::Enum {
                 variant_index: variant.variant.idx as u64,
                 enum_name,
+                bindings: Vec::new(),
+            });
+        }
+
+        // Handle tuple variant patterns like `MyEnum::Some(x)`
+        if let Pat::PathTuple(path, elem_pats) = pat_data
+            && let Some(path) = path.to_opt()
+            && let Ok(PathRes::EnumVariant(variant)) = resolve_path(
+                self.db,
+                path,
+                self.typed_body.body().unwrap().scope(),
+                PredicateListId::empty_list(self.db),
+                false,
+            )
+        {
+            let enum_name = variant
+                .enum_(self.db)
+                .name(self.db)
+                .to_opt()
+                .unwrap()
+                .data(self.db)
+                .to_string();
+
+            // Build bindings for each element pattern that is a variable binding
+            let mut bindings = Vec::new();
+            let mut offset: u64 = 0;
+            for elem_pat in elem_pats {
+                let elem_ty = self.typed_body.pat_ty(self.db, *elem_pat);
+                let elem_size = self.ty_size_bytes(elem_ty).unwrap_or(32);
+
+                // Check if this element pattern is a variable binding (Pat::Path with bare ident)
+                if let Partial::Present(Pat::Path(elem_path, _)) = elem_pat.data(self.db, self.body)
+                    && let Some(elem_path) = elem_path.to_opt()
+                    && elem_path.is_bare_ident(self.db)
+                {
+                    bindings.push(PatternBinding {
+                        pat_id: *elem_pat,
+                        field_offset: offset,
+                        value: None,
+                    });
+                }
+                // TODO: Handle wildcards and nested patterns
+
+                offset += elem_size;
+            }
+
+            return Some(MatchArmPattern::Enum {
+                variant_index: variant.variant.idx as u64,
+                enum_name,
+                bindings,
             });
         }
 
         None
+    }
+
+    /// Synthesizes `get_variant_field` calls for enum pattern bindings so codegen
+    /// can reuse the standard helper when loading payload fields.
+    ///
+    /// * `patterns` - All match arm patterns to inspect and populate.
+    /// * `scrutinee_value` - MIR value pointing to the enum instance being matched.
+    /// * `match_expr` - Expression ID of the `match`, used for source spans.
+    ///
+    /// Populates the `value` field of each binding with a lowered call value when
+    /// resolution succeeds; leaves bindings untouched if helper resolution fails.
+    fn populate_enum_binding_values(
+        &mut self,
+        patterns: &mut [MatchArmPattern],
+        scrutinee_value: ValueId,
+        match_expr: ExprId,
+    ) {
+        for pattern in patterns.iter_mut() {
+            let MatchArmPattern::Enum { bindings, .. } = pattern else {
+                continue;
+            };
+            for binding in bindings.iter_mut() {
+                if binding.value.is_some() {
+                    continue;
+                }
+                let binding_ty = self.typed_body.pat_ty(self.db, binding.pat_id);
+                let Some(callable) = self.get_variant_field_callable(match_expr, binding_ty) else {
+                    continue;
+                };
+                let space_value = self
+                    .synthetic_address_space_memory()
+                    .unwrap_or_else(|| self.synthetic_u256(BigUint::from(0u8)));
+                let offset_value = self.synthetic_u256(BigUint::from(binding.field_offset));
+                let load_value = self.mir_body.alloc_value(ValueData {
+                    ty: binding_ty,
+                    origin: ValueOrigin::Call(CallOrigin {
+                        expr: match_expr,
+                        callable,
+                        args: vec![scrutinee_value, space_value, offset_value],
+                        resolved_name: None,
+                    }),
+                });
+                binding.value = Some(load_value);
+            }
+        }
     }
 
     /// Returns true if the pattern is a wildcard (`_`).
@@ -540,6 +692,14 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         if let Some(result) = self.try_lower_intrinsic_stmt(block, expr) {
             return result;
         }
+        // Check for variant constructor calls before the generic match
+        if let Some(result) = self.try_lower_variant_ctor(block, expr) {
+            return result;
+        }
+        // Check for unit variant paths (e.g., MyOption::None)
+        if let Some(result) = self.try_lower_unit_variant(block, expr) {
+            return result;
+        }
         match expr.data(self.db, self.body) {
             Partial::Present(Expr::Block(stmts)) => {
                 let next_block = self.lower_block(block, expr, stmts);
@@ -552,8 +712,8 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
             Partial::Present(Expr::Match(scrutinee, arms)) => {
                 if let Partial::Present(arms) = arms {
                     // Try to lower `match` into a `Switch` if it only uses supported patterns.
-                    if let Some(patterns) = self.match_arm_patterns(arms) {
-                        return self.lower_match_expr(block, expr, *scrutinee, arms, &patterns);
+                    if let Some(mut patterns) = self.match_arm_patterns(arms) {
+                        return self.lower_match_expr(block, expr, *scrutinee, arms, &mut patterns);
                     }
                 }
                 let val = self.ensure_value(expr);
@@ -822,6 +982,11 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                 resolved_name: None,
             }),
         });
+        // Insert the alloc result into expr_values so subsequent uses can find it.
+        // This also serves as the value for this record init expression.
+        self.mir_body.expr_values.insert(expr, alloc_value);
+        let value_id = alloc_value;
+
         self.push_inst(
             curr_block,
             MirInst::EvalExpr {
@@ -830,8 +995,6 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                 bind_value: true,
             },
         );
-
-        let value_id = self.ensure_value(expr);
         let Some(space_value) = self.synthetic_address_space_memory() else {
             return (Some(curr_block), value_id);
         };
@@ -867,6 +1030,409 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         }
 
         (Some(curr_block), value_id)
+    }
+
+    /// Lowers an enum variant constructor call (e.g., `MyOption::Some(value)`) into
+    /// an `alloc` call followed by `store_discriminant` and `store_variant_field` writes.
+    fn try_lower_variant_ctor(
+        &mut self,
+        block: BasicBlockId,
+        expr: ExprId,
+    ) -> Option<(Option<BasicBlockId>, ValueId)> {
+        // Check if this is a Call expression with a VariantCtor callable
+        let Partial::Present(Expr::Call(_, call_args)) = expr.data(self.db, self.body) else {
+            return None;
+        };
+        let callable = self.typed_body.callable_expr(expr)?;
+        let CallableDef::VariantCtor(variant) = callable.callable_def else {
+            return None;
+        };
+
+        // Get the variant index from the EnumVariant
+        let variant_index = variant.idx as u64;
+
+        // Lower argument expressions first so we have the values ready for stores
+        let mut current = Some(block);
+        let mut lowered_args = Vec::with_capacity(call_args.len());
+        for arg in call_args.iter() {
+            let Some(curr_block) = current else {
+                break;
+            };
+            let (next_block, value) = self.lower_expr_in(curr_block, arg.expr);
+            current = next_block;
+            lowered_args.push(value);
+        }
+
+        let enum_ty = self.typed_body.expr_ty(self.db, expr);
+        let total_size = self.enum_size_bytes(enum_ty).unwrap_or(64);
+
+        let Some(curr_block) = current else {
+            let value_id = self.ensure_value(expr);
+            return Some((None, value_id));
+        };
+
+        // Emit alloc(total_size)
+        let alloc_callable = self.get_alloc_callable(expr)?;
+        let alloc_ret_ty = alloc_callable.ret_ty(self.db);
+        let size_value = self.synthetic_u256(BigUint::from(total_size));
+        let alloc_value = self.mir_body.alloc_value(ValueData {
+            ty: alloc_ret_ty,
+            origin: ValueOrigin::Call(CallOrigin {
+                expr,
+                callable: alloc_callable,
+                args: vec![size_value],
+                resolved_name: None,
+            }),
+        });
+        // The allocated pointer becomes the value for this expression.
+        // We manually insert it into the cache BEFORE push_inst to avoid ensure_value
+        // calling alloc_expr_value which would create a CallOrigin with VariantCtor.
+        self.mir_body.expr_values.insert(expr, alloc_value);
+        let value_id = alloc_value;
+
+        self.push_inst(
+            curr_block,
+            MirInst::EvalExpr {
+                expr,
+                value: alloc_value,
+                bind_value: true,
+            },
+        );
+        // Try AddressSpace::Memory first, fall back to u256(0) for local test helpers
+        let space_value = self
+            .synthetic_address_space_memory()
+            .unwrap_or_else(|| self.synthetic_u256(BigUint::from(0u8)));
+
+        // Emit store_discriminant(addr, space, discriminant)
+        let discriminant_value = self.synthetic_u256(BigUint::from(variant_index));
+        let store_discr_callable = self.get_store_discriminant_callable(expr)?;
+        let store_discr_ret_ty = store_discr_callable.ret_ty(self.db);
+        let store_discr_call = self.mir_body.alloc_value(ValueData {
+            ty: store_discr_ret_ty,
+            origin: ValueOrigin::Call(CallOrigin {
+                expr,
+                callable: store_discr_callable,
+                args: vec![value_id, space_value, discriminant_value],
+                resolved_name: None,
+            }),
+        });
+        self.push_inst(
+            curr_block,
+            MirInst::EvalExpr {
+                expr,
+                value: store_discr_call,
+                bind_value: false,
+            },
+        );
+
+        // Emit store_variant_field for each argument
+        let mut offset: u64 = 0;
+        for (i, arg_value) in lowered_args.iter().enumerate() {
+            let arg_ty = self.typed_body.expr_ty(self.db, call_args[i].expr);
+            let store_callable = self.get_store_variant_field_callable(expr, arg_ty)?;
+            let offset_value = self.synthetic_u256(BigUint::from(offset));
+            let store_ret_ty = store_callable.ret_ty(self.db);
+            let store_call = self.mir_body.alloc_value(ValueData {
+                ty: store_ret_ty,
+                origin: ValueOrigin::Call(CallOrigin {
+                    expr,
+                    callable: store_callable,
+                    args: vec![value_id, space_value, offset_value, *arg_value],
+                    resolved_name: None,
+                }),
+            });
+            self.push_inst(
+                curr_block,
+                MirInst::EvalExpr {
+                    expr,
+                    value: store_call,
+                    bind_value: false,
+                },
+            );
+            offset += self.ty_size_bytes(arg_ty).unwrap_or(32);
+        }
+
+        Some((Some(curr_block), value_id))
+    }
+
+    /// Lowers a unit enum variant path expression (e.g., `MyOption::None`) into
+    /// an `alloc` call followed by `store_discriminant` for the variant tag.
+    fn try_lower_unit_variant(
+        &mut self,
+        block: BasicBlockId,
+        expr: ExprId,
+    ) -> Option<(Option<BasicBlockId>, ValueId)> {
+        // Check if this is a Path expression that resolves to an enum variant
+        let Partial::Present(Expr::Path(path)) = expr.data(self.db, self.body) else {
+            return None;
+        };
+        let path = path.to_opt()?;
+        let scope = self.typed_body.body()?.scope();
+        let Ok(PathRes::EnumVariant(variant)) = resolve_path(
+            self.db,
+            path,
+            scope,
+            PredicateListId::empty_list(self.db),
+            false,
+        ) else {
+            return None;
+        };
+
+        // Only handle unit variants here; tuple variants should go through try_lower_variant_ctor
+        if !matches!(variant.kind(self.db), VariantKind::Unit) {
+            return None;
+        }
+
+        let variant_index = variant.variant.idx as u64;
+        let enum_ty = self.typed_body.expr_ty(self.db, expr);
+
+        // Calculate enum size: 32 bytes for discriminant + size of largest variant
+        let enum_size = self.enum_size_bytes(enum_ty).unwrap_or(64);
+
+        let curr_block = block;
+
+        // Emit alloc(enum_size) and bind result
+        let alloc_callable = self.get_alloc_callable(expr)?;
+        let alloc_ret_ty = alloc_callable.ret_ty(self.db);
+        let size_value = self.synthetic_u256(BigUint::from(enum_size));
+        let alloc_value = self.mir_body.alloc_value(ValueData {
+            ty: alloc_ret_ty,
+            origin: ValueOrigin::Call(CallOrigin {
+                expr,
+                callable: alloc_callable,
+                args: vec![size_value],
+                resolved_name: None,
+            }),
+        });
+        self.mir_body.expr_values.insert(expr, alloc_value);
+        let value_id = alloc_value;
+
+        self.push_inst(
+            curr_block,
+            MirInst::EvalExpr {
+                expr,
+                value: alloc_value,
+                bind_value: true,
+            },
+        );
+
+        // Emit store_discriminant(addr, space, discriminant)
+        let space_value = self.synthetic_address_space_memory()?;
+        let store_discr_callable = self.get_store_discriminant_callable(expr)?;
+        let discr_value = self.synthetic_u256(BigUint::from(variant_index));
+        let store_ret_ty = store_discr_callable.ret_ty(self.db);
+        let store_discr_call = self.mir_body.alloc_value(ValueData {
+            ty: store_ret_ty,
+            origin: ValueOrigin::Call(CallOrigin {
+                expr,
+                callable: store_discr_callable,
+                args: vec![value_id, space_value, discr_value],
+                resolved_name: None,
+            }),
+        });
+        self.push_inst(
+            curr_block,
+            MirInst::EvalExpr {
+                expr,
+                value: store_discr_call,
+                bind_value: false,
+            },
+        );
+
+        Some((Some(curr_block), value_id))
+    }
+
+    /// Builds the callable metadata for `store_discriminant`.
+    fn get_store_discriminant_callable(&mut self, expr: ExprId) -> Option<Callable<'db>> {
+        let func_def = self.resolve_store_discriminant_func()?;
+        let ty = TyId::func(self.db, func_def);
+        Callable::new(self.db, ty, expr.span(self.body).into(), None).ok()
+    }
+
+    /// Builds the callable metadata for `store_variant_field`.
+    fn get_store_variant_field_callable(
+        &mut self,
+        expr: ExprId,
+        field_ty: TyId<'db>,
+    ) -> Option<Callable<'db>> {
+        let func_def = self.resolve_store_variant_field_func()?;
+        // Only apply foldl if the function is generic (from core library)
+        // Local test helpers are not generic
+        let has_generics = !func_def.params(self.db).is_empty()
+            && func_def.ingot(self.db).kind(self.db) == IngotKind::Core;
+        let ty = if has_generics {
+            TyId::foldl(self.db, TyId::func(self.db, func_def), &[field_ty])
+        } else {
+            TyId::func(self.db, func_def)
+        };
+        Callable::new(self.db, ty, expr.span(self.body).into(), None).ok()
+    }
+
+    /// Builds the callable metadata for `get_variant_field`.
+    ///
+    /// * `expr` - Expression whose span anchors diagnostics for the callable.
+    /// * `field_ty` - Concrete type of the variant field being read.
+    ///
+    /// Returns a callable pointing at the resolved helper instantiated for `field_ty`.
+    fn get_variant_field_callable(
+        &mut self,
+        expr: ExprId,
+        field_ty: TyId<'db>,
+    ) -> Option<Callable<'db>> {
+        let func_def = self.resolve_get_variant_field_func()?;
+        let has_generics = !func_def.params(self.db).is_empty()
+            && func_def.ingot(self.db).kind(self.db) == IngotKind::Core;
+        let ty = if has_generics {
+            TyId::foldl(self.db, TyId::func(self.db, func_def), &[field_ty])
+        } else {
+            TyId::func(self.db, func_def)
+        };
+        Callable::new(self.db, ty, expr.span(self.body).into(), None).ok()
+    }
+
+    fn resolve_store_discriminant_func(&mut self) -> Option<CallableDef<'db>> {
+        if let Some(func) = self.store_discriminant_func {
+            return Some(func);
+        }
+        // Try local first (for test fixtures), then fall back to core library
+        if let Some(func) = self.find_local_store_discriminant() {
+            self.store_discriminant_func = Some(func);
+            return Some(func);
+        }
+        if let Some(func) = self.resolve_store_discriminant_via_path() {
+            self.store_discriminant_func = Some(func);
+            return Some(func);
+        }
+        None
+    }
+
+    fn resolve_store_variant_field_func(&mut self) -> Option<CallableDef<'db>> {
+        if let Some(func) = self.store_variant_field_func {
+            return Some(func);
+        }
+        // Try local first (for test fixtures), then fall back to core library
+        if let Some(func) = self.find_local_store_variant_field() {
+            self.store_variant_field_func = Some(func);
+            return Some(func);
+        }
+        if let Some(func) = self.resolve_store_variant_field_via_path() {
+            self.store_variant_field_func = Some(func);
+            return Some(func);
+        }
+        None
+    }
+
+    /// Resolves (and caches) the `get_variant_field` helper definition.
+    ///
+    /// Prefers a locally defined helper (for tests) and falls back to the core library.
+    /// Returns the callable definition when resolution succeeds.
+    fn resolve_get_variant_field_func(&mut self) -> Option<CallableDef<'db>> {
+        if let Some(func) = self.get_variant_field_func {
+            return Some(func);
+        }
+        if let Some(func) = self.find_local_get_variant_field() {
+            self.get_variant_field_func = Some(func);
+            return Some(func);
+        }
+        if let Some(func) = self.resolve_get_variant_field_via_path() {
+            self.get_variant_field_func = Some(func);
+            return Some(func);
+        }
+        None
+    }
+
+    fn resolve_store_discriminant_via_path(&self) -> Option<CallableDef<'db>> {
+        let mut path = self.resolve_core_path(&["core", "enum_repr", "store_discriminant"]);
+        if path.is_none() {
+            path = self.resolve_core_path(&["core", "store_discriminant"]);
+        }
+        let PathRes::Func(func_ty) = path? else {
+            return None;
+        };
+        let base = func_ty.base_ty(self.db);
+        if let TyData::TyBase(TyBase::Func(func_def)) = base.data(self.db) {
+            Some(*func_def)
+        } else {
+            None
+        }
+    }
+
+    fn resolve_store_variant_field_via_path(&self) -> Option<CallableDef<'db>> {
+        let mut path = self.resolve_core_path(&["core", "enum_repr", "store_variant_field"]);
+        if path.is_none() {
+            path = self.resolve_core_path(&["core", "store_variant_field"]);
+        }
+        let PathRes::Func(func_ty) = path? else {
+            return None;
+        };
+        let base = func_ty.base_ty(self.db);
+        if let TyData::TyBase(TyBase::Func(func_def)) = base.data(self.db) {
+            Some(*func_def)
+        } else {
+            None
+        }
+    }
+
+    /// Resolves the core `get_variant_field` helper via a well-known path.
+    ///
+    /// Returns the callable definition if the path resolves to a function.
+    fn resolve_get_variant_field_via_path(&self) -> Option<CallableDef<'db>> {
+        let mut path = self.resolve_core_path(&["core", "enum_repr", "get_variant_field"]);
+        if path.is_none() {
+            path = self.resolve_core_path(&["core", "get_variant_field"]);
+        }
+        let PathRes::Func(func_ty) = path? else {
+            return None;
+        };
+        let base = func_ty.base_ty(self.db);
+        if let TyData::TyBase(TyBase::Func(func_def)) = base.data(self.db) {
+            Some(*func_def)
+        } else {
+            None
+        }
+    }
+
+    fn find_local_store_discriminant(&self) -> Option<CallableDef<'db>> {
+        let top_mod = self.body.top_mod(self.db);
+        for &func in top_mod.all_funcs(self.db) {
+            let name = func.name(self.db).to_opt()?;
+            if name.data(self.db) == "store_discriminant"
+                && let Some(def) = func.as_callable(self.db)
+            {
+                return Some(def);
+            }
+        }
+        None
+    }
+
+    fn find_local_store_variant_field(&self) -> Option<CallableDef<'db>> {
+        let top_mod = self.body.top_mod(self.db);
+        for &func in top_mod.all_funcs(self.db) {
+            let name = func.name(self.db).to_opt()?;
+            if name.data(self.db) == "store_variant_field"
+                && let Some(def) = func.as_callable(self.db)
+            {
+                return Some(def);
+            }
+        }
+        None
+    }
+
+    /// Searches the current module for a locally defined `get_variant_field`.
+    ///
+    /// Used by fixtures/tests that provide their own helpers. Returns the callable
+    /// definition when found.
+    fn find_local_get_variant_field(&self) -> Option<CallableDef<'db>> {
+        let top_mod = self.body.top_mod(self.db);
+        for &func in top_mod.all_funcs(self.db) {
+            let name = func.name(self.db).to_opt()?;
+            if name.data(self.db) == "get_variant_field"
+                && let Some(def) = func.as_callable(self.db)
+            {
+                return Some(def);
+            }
+        }
+        None
     }
 
     /// Attempts to lower a statement-only intrinsic call (`mstore`, `sstore`, …).
@@ -978,6 +1544,29 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
             size += field_size;
         }
         Some(size)
+    }
+
+    /// Computes the total byte width of an enum: discriminant plus largest payload.
+    fn enum_size_bytes(&self, enum_ty: TyId<'db>) -> Option<u64> {
+        let (base_ty, args) = enum_ty.decompose_ty_app(self.db);
+        let TyData::TyBase(TyBase::Adt(adt_def)) = base_ty.data(self.db) else {
+            return None;
+        };
+        if !matches!(adt_def.adt_ref(self.db), AdtRef::Enum(_)) {
+            return None;
+        }
+
+        let mut max_payload = 0u64;
+        for variant in adt_def.fields(self.db) {
+            let mut payload = 0u64;
+            for ty in variant.iter_types(self.db) {
+                let field_ty = ty.instantiate(self.db, args);
+                payload += self.ty_size_bytes(field_ty).unwrap_or(32);
+            }
+            max_payload = max_payload.max(payload);
+        }
+
+        Some(ENUM_DISCRIMINANT_SIZE_BYTES + max_payload)
     }
 
     /// Returns the byte width of primitive integer/bool types we can layout today.
@@ -1535,9 +2124,9 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
             Expr::Match(scrutinee, arms) => {
                 if let Partial::Present(arms) = arms {
                     // Expression-position match: re-use the same lowering so we can produce a value.
-                    if let Some(patterns) = self.match_arm_patterns(arms) {
+                    if let Some(mut patterns) = self.match_arm_patterns(arms) {
                         let (next_block, value_id) =
-                            self.lower_match_expr(block, expr, *scrutinee, arms, &patterns);
+                            self.lower_match_expr(block, expr, *scrutinee, arms, &mut patterns);
                         return (next_block, Some(value_id));
                     }
                 }
@@ -1552,6 +2141,19 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                 (Some(block), Some(value_id))
             }
             _ => {
+                // Try to lower variant constructor calls first (they need to emit multiple instructions)
+                if let Some((next_block, value_id)) = self.try_lower_variant_ctor(block, expr) {
+                    if let Some(curr_block) = next_block {
+                        self.push_inst(
+                            curr_block,
+                            MirInst::Eval {
+                                stmt: stmt_id,
+                                value: value_id,
+                            },
+                        );
+                    }
+                    return (next_block, Some(value_id));
+                }
                 let value_id = self.ensure_value(expr);
                 self.push_inst(
                     block,

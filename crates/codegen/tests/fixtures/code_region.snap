@@ -1,6 +1,5 @@
 ---
 source: crates/codegen/tests/yul.rs
-assertion_line: 31
 expression: output
 input_file: tests/fixtures/code_region.fe
 ---
@@ -23,6 +22,7 @@ object "Foo" {
       let v1 := dataoffset("Child")
       let v2 := allocate(v0)
       codecopy(v2, v1, v0)
+      create2(0, v1, v0, 4660)
       v0 := datasize("Foo_deployed")
       v1 := dataoffset("Foo_deployed")
       v2 := allocate(v0)

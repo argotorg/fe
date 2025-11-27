@@ -1,0 +1,82 @@
+---
+source: crates/codegen/tests/yul.rs
+expression: output
+input_file: tests/fixtures/match_enum_with_data.fe
+---
+function make_some(value) -> ret {
+  let v0 := alloc(40)
+  store_discriminant(v0, 0, 1)
+  store_variant_field__u64__aee7f05a097ffa16(v0, 0, 0, value)
+  ret := v0
+}
+function match_option(opt) -> ret {
+  let v0 := 0
+  switch mload(opt)
+    case 1 {
+      let v1 := get_variant_field__u64__aee7f05a097ffa16(opt, 0, 0)
+      v0 := v1
+    }
+    case 0 {
+      v0 := 0
+    }
+    default {
+    }
+  ret := v0
+}
+function alloc(size) -> ret {
+  let v0 := mload(64)
+  let v1 := eq(v0, 0)
+  if v1 {
+    v0 := 128
+    mstore(64, add(v0, size))
+    ret := v0
+  }
+  if iszero(v1) {
+    mstore(64, add(v0, size))
+    ret := v0
+  }
+}
+function store_discriminant(addr, space, discriminant) {
+  switch space
+    case 0 {
+      mstore(addr, discriminant)
+    }
+    case 1 {
+      sstore(addr, discriminant)
+    }
+    default {
+    }
+}
+function store_variant_field__u64__aee7f05a097ffa16(addr, space, field_offset, value) {
+  let v0 := add(add(addr, 32), field_offset)
+  switch space
+    case 0 {
+      mstore(v0, to_word__deduped(value))
+    }
+    case 1 {
+      sstore(v0, to_word__deduped(value))
+    }
+    default {
+    }
+}
+function get_variant_field__u64__aee7f05a097ffa16(addr, space, field_offset) -> ret {
+  let v1 := add(add(addr, 32), field_offset)
+  let v0 := 0
+  switch space
+    case 0 {
+      v0 := mload(v1)
+    }
+    case 1 {
+      v0 := sload(v1)
+    }
+    default {
+    }
+  let v2 := v0
+  ret := from_word__u64__aee7f05a097ffa16(v2)
+}
+function to_word__deduped(self) -> ret {
+  ret := self
+}
+function from_word__u64__aee7f05a097ffa16(word) -> ret {
+  ret := and(word, 18446744073709551615)
+}

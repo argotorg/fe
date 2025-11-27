@@ -311,6 +311,8 @@ pub enum SyntheticValue {
 
 #[derive(Debug, Clone)]
 pub struct MatchLoweringInfo {
+    /// The scrutinee value (e.g. enum pointer) for this match expression.
+    pub scrutinee: ValueId,
     pub arms: Vec<MatchArmLowering>,
 }
 
@@ -320,6 +322,17 @@ pub struct MatchArmLowering {
     pub body: ExprId,
 }
 
+/// Information about a variable binding extracted from a pattern.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PatternBinding {
+    /// The pattern ID representing the binding (e.g., `x` in `Some(x)`).
+    pub pat_id: PatId,
+    /// Byte offset of this field within the variant's data region (after discriminant).
+    pub field_offset: u64,
+    /// MIR value representing the lowered load for this binding (if synthesized).
+    pub value: Option<ValueId>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum MatchArmPattern {
     Literal(SwitchValue),
@@ -327,6 +340,8 @@ pub enum MatchArmPattern {
     Enum {
         variant_index: u64,
         enum_name: String,
+        /// Bindings extracted from the variant's data (empty for unit variants).
+        bindings: Vec<PatternBinding>,
     },
 }
 

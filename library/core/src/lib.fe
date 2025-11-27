@@ -4,11 +4,14 @@ pub use default::Default
 pub use dispatcher::Dispatcher
 pub use ops::*
 pub use ptr::*
+pub use enum_repr::*
 pub use intrinsic::{
+    calldatacopy,
     calldataload,
     code_region_len,
     code_region_offset,
     codecopy,
+    create2,
     mload,
     mstore,
     mstore8,

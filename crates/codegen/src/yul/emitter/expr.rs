@@ -26,6 +26,10 @@ impl<'db> FunctionEmitter<'db> {
         value_id: ValueId,
         state: &BlockState,
     ) -> Result<String, YulError> {
+        // Check if this value was already bound to a temp in the current scope
+        if let Some(temp) = state.value_temp(value_id.index()) {
+            return Ok(temp.clone());
+        }
         let value = self.mir_func.body.value(value_id);
         match &value.origin {
             ValueOrigin::Expr(expr_id) => {

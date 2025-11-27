@@ -1,0 +1,154 @@
+---
+source: crates/codegen/tests/yul.rs
+expression: output
+input_file: tests/fixtures/enum_variant_contract.fe
+---
+object "EnumContract" {
+  code {
+    init()
+    function init() {
+      let v0 := datasize("EnumContract_deployed")
+      let v1 := dataoffset("EnumContract_deployed")
+      codecopy(0, v1, v0)
+      return(0, v0)
+    }
+  }
+
+  object "EnumContract_deployed" {
+    code {
+      runtime()
+      function abi_encode_u256(value) {
+        let v0 := 0
+        mstore(v0, value)
+        return(v0, 32)
+      }
+      function alloc(size) -> ret {
+        let v0 := mload(64)
+        let v1 := eq(v0, 0)
+        if v1 {
+          v0 := 128
+          mstore(64, add(v0, size))
+          ret := v0
+        }
+        if iszero(v1) {
+          mstore(64, add(v0, size))
+          ret := v0
+        }
+      }
+      function from_word__u256__3271ca15373d4483(word) -> ret {
+        ret := word
+      }
+      function get_variant_field__u256__3271ca15373d4483(addr, space, field_offset) -> ret {
+        let v1 := add(add(addr, 32), field_offset)
+        let v0 := 0
+        switch space
+          case 0 {
+            v0 := mload(v1)
+          }
+          case 1 {
+            v0 := sload(v1)
+          }
+          default {
+          }
+        let v2 := v0
+        ret := from_word__u256__3271ca15373d4483(v2)
+      }
+      function runtime() {
+        let v0 := shr(224, calldataload(0))
+        let v1 := eq(v0, 1817627404)
+        if v1 {
+          let v3 := calldataload(4)
+          let v4 := alloc(64)
+          store_discriminant(v4, 0, 1)
+          store_variant_field__u256__3271ca15373d4483(v4, 0, 0, v3)
+          let v5 := v4
+          let v2 := 0
+          switch mload(v5)
+            case 1 {
+              let v6 := get_variant_field__u256__3271ca15373d4483(v5, 0, 0)
+              v2 := v6
+            }
+            case 0 {
+              v2 := 0
+            }
+            default {
+            }
+          let v7 := v2
+          abi_encode_u256(v7)
+          return(0, 0)
+        }
+        if iszero(v1) {
+          let v8 := eq(v0, 1163776883)
+          if v8 {
+            let v10 := alloc(64)
+            store_discriminant(v10, 0, 0)
+            let v11 := v10
+            let v9 := 0
+            switch mload(v11)
+              case 1 {
+                let v12 := get_variant_field__u256__3271ca15373d4483(v11, 0, 0)
+                v9 := v12
+              }
+              case 0 {
+                v9 := 0
+              }
+              default {
+              }
+            let v13 := v9
+            abi_encode_u256(v13)
+            return(0, 0)
+          }
+          if iszero(v8) {
+            let v14 := eq(v0, 3572425762)
+            if v14 {
+              let v16 := calldataload(4)
+              let v17 := alloc(64)
+              store_discriminant(v17, 0, 1)
+              store_variant_field__u256__3271ca15373d4483(v17, 0, 0, v16)
+              let v18 := v17
+              let v15 := 0
+              switch mload(v18)
+                case 1 {
+                  v15 := 1
+                }
+                case 0 {
+                  v15 := 0
+                }
+                default {
+                }
+              let v19 := v15
+              abi_encode_u256(v19)
+              return(0, 0)
+            }
+            if iszero(v14) {
+              return(0, 0)
+            }
+          }
+        }
+      }
+      function store_discriminant(addr, space, discriminant) {
+        switch space
+          case 0 {
+            mstore(addr, discriminant)
+          }
+          case 1 {
+            sstore(addr, discriminant)
+          }
+          default {
+          }
+      }
+      function store_variant_field__u256__3271ca15373d4483(addr, space, field_offset, value) {
+        let v0 := add(add(addr, 32), field_offset)
+        switch space
+          case 0 {
+            mstore(v0, from_word__u256__3271ca15373d4483(value))
+          }
+          case 1 {
+            sstore(v0, from_word__u256__3271ca15373d4483(value))
+          }
+          default {
+          }
+      }
+    }
+  }
+}

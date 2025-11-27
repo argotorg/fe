@@ -203,6 +203,9 @@ impl<'db> FunctionEmitter<'db> {
         if bind_value {
             let temp = state.alloc_local();
             self.expr_temps.insert(expr, temp.clone());
+            // Also cache by ValueId in the BlockState so that arguments referencing
+            // this value can reuse it (properly scoped to the current branch).
+            state.insert_value_temp(value.index(), temp.clone());
             docs.push(YulDoc::line(format!("let {temp} := {lowered}")));
         } else {
             let value_data = self.mir_func.body.value(value);

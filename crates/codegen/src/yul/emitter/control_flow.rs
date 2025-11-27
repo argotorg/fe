@@ -327,37 +327,52 @@ impl<'db> FunctionEmitter<'db> {
 
         let mut default_body = None;
         for arm in &match_info.arms {
+            let mut arm_state = ctx.cloned_state();
+            let mut arm_docs = Vec::new();
+            if let MatchArmPattern::Enum { bindings, .. } = &arm.pattern
+                && !bindings.is_empty()
+            {
+                for binding in bindings {
+                    let binding_name = self.pattern_ident(binding.pat_id)?;
+                    let value_id = binding.value.ok_or_else(|| {
+                        YulError::Unsupported(
+                            "enum binding missing lowered get_variant_field load".into(),
+                        )
+                    })?;
+                    let load_expr = self.lower_value(value_id, &arm_state)?;
+                    let temp_name = arm_state.alloc_local();
+                    arm_docs.push(YulDoc::line(format!("let {temp_name} := {load_expr}")));
+                    arm_state.insert_binding(binding_name, temp_name);
+                }
+            }
             match &arm.pattern {
                 MatchArmPattern::Literal(value) => {
-                    let body_expr = self.lower_expr(arm.body, ctx.state)?;
+                    let body_expr = self.lower_expr(arm.body, &arm_state)?;
                     let literal = switch_value_literal(value);
-                    ctx.docs.push(YulDoc::wide_block(
-                        format!("  case {literal} "),
-                        vec![YulDoc::line(format!("{temp} := {body_expr}"))],
-                    ));
+                    arm_docs.push(YulDoc::line(format!("{temp} := {body_expr}")));
+                    ctx.docs
+                        .push(YulDoc::wide_block(format!("  case {literal} "), arm_docs));
                 }
                 MatchArmPattern::Enum { variant_index, .. } => {
-                    let body_expr = self.lower_expr(arm.body, ctx.state)?;
+                    let body_expr = self.lower_expr(arm.body, &arm_state)?;
                     let literal = switch_value_literal(&SwitchValue::Enum(*variant_index));
-                    ctx.docs.push(YulDoc::wide_block(
-                        format!("  case {literal} "),
-                        vec![YulDoc::line(format!("{temp} := {body_expr}"))],
-                    ));
+                    arm_docs.push(YulDoc::line(format!("{temp} := {body_expr}")));
+                    ctx.docs
+                        .push(YulDoc::wide_block(format!("  case {literal} "), arm_docs));
                 }
                 MatchArmPattern::Wildcard => {
-                    let body_expr = self.lower_expr(arm.body, ctx.state)?;
-                    default_body = Some(body_expr);
+                    let body_expr = self.lower_expr(arm.body, &arm_state)?;
+                    arm_docs.push(YulDoc::line(format!("{temp} := {body_expr}")));
+                    default_body = Some(arm_docs);
                 }
             }
         }
 
         let merge_block = self.match_merge_block(targets, default)?;
         let loop_ctx = ctx.loop_ctx;
-        if let Some(default_expr) = default_body {
-            ctx.docs.push(YulDoc::wide_block(
-                "  default ",
-                vec![YulDoc::line(format!("{temp} := {default_expr}"))],
-            ));
+        if let Some(default_docs) = default_body {
+            ctx.docs
+                .push(YulDoc::wide_block("  default ", default_docs));
         } else {
             let default_block = self
                 .mir_func
