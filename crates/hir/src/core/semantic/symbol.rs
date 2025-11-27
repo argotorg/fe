@@ -110,11 +110,10 @@ impl<'db> PathRefView<'db> {
                 continue;
             };
 
-            if seg_span.range.contains(cursor) {
-                if let Some(seg_path) = self.path.segment(db, idx) {
+            if seg_span.range.contains(cursor)
+                && let Some(seg_path) = self.path.segment(db, idx) {
                     return Some(PathRefView::new(self.body, self.expr, seg_path));
                 }
-            }
         }
 
         None
@@ -260,9 +259,9 @@ pub fn find_at_cursor<'db>(
     let mut best_def: Option<(ScopeId<'db>, Span)> = None;
 
     for scope in &all_scopes {
-        if let Some(name_span) = scope.name_span(db) {
-            if let Some(resolved) = name_span.resolve(db) {
-                if resolved.range.contains(cursor) {
+        if let Some(name_span) = scope.name_span(db)
+            && let Some(resolved) = name_span.resolve(db)
+                && resolved.range.contains(cursor) {
                     // Prefer more specific (smaller) spans
                     let dominated = best_def.as_ref().is_some_and(|(_, prev_span)| {
                         prev_span.range.contains(resolved.range.start())
@@ -272,31 +271,26 @@ pub fn find_at_cursor<'db>(
                         best_def = Some((*scope, resolved));
                     }
                 }
-            }
-        }
     }
 
     // Check if cursor is on a reference within a function body
     // We need to check all functions since the cursor might be in an expression
     for scope in &all_scopes {
-        if let ScopeId::Item(ItemKind::Func(f)) = scope {
-            if let Some(body) = f.body(db) {
+        if let ScopeId::Item(ItemKind::Func(f)) = scope
+            && let Some(body) = f.body(db) {
                 let refs = collect_body_references(db, body);
                 for r in refs {
-                    if let Some(resolved) = r.span().resolve(db) {
-                        if resolved.range.contains(cursor) {
+                    if let Some(resolved) = r.span().resolve(db)
+                        && resolved.range.contains(cursor) {
                             // For path references, narrow to the specific segment at cursor
-                            if let Reference::Path(path_ref) = &r {
-                                if let Some(narrowed) = path_ref.narrow_to_segment_at_cursor(db, cursor) {
+                            if let Reference::Path(path_ref) = &r
+                                && let Some(narrowed) = path_ref.narrow_to_segment_at_cursor(db, cursor) {
                                     return Some(CursorTarget::Reference(Reference::Path(narrowed)));
                                 }
-                            }
                             return Some(CursorTarget::Reference(r));
                         }
-                    }
                 }
             }
-        }
     }
 
     // Return the definition if found
