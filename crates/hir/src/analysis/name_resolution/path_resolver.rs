@@ -1286,6 +1286,12 @@ pub fn resolve_name_res<'db>(
                     path,
                 })
             }
+            // Impl associated types/consts are not directly resolvable via path in current design
+            // They are resolved through the trait they implement
+            ScopeId::ImplType(..) | ScopeId::ImplConst(..) | ScopeId::EffectParam(..) => {
+                unreachable!("impl assoc items and effect params are not directly path-resolvable")
+            }
+
             ScopeId::FuncParam(item, idx) => PathRes::FuncParam(item, idx),
             ScopeId::Field(..) => unreachable!(),
             ScopeId::Block(..) => unreachable!(),

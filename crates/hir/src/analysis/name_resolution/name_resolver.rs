@@ -793,6 +793,7 @@ impl NameDomain {
         match scope {
             ScopeId::Item(ItemKind::Func(_) | ItemKind::Const(_))
             | ScopeId::FuncParam(..)
+            | ScopeId::EffectParam(..)
             | ScopeId::Block(..) => Self::VALUE,
             ScopeId::Item(_) => Self::TYPE,
             ScopeId::GenericParam(parent, idx) => {
@@ -802,8 +803,8 @@ impl NameDomain {
                     GenericParam::Const(_) => NameDomain::TYPE | NameDomain::VALUE,
                 }
             }
-            ScopeId::TraitType(..) => Self::TYPE,
-            ScopeId::TraitConst(..) => Self::VALUE,
+            ScopeId::TraitType(..) | ScopeId::ImplType(..) => Self::TYPE,
+            ScopeId::TraitConst(..) | ScopeId::ImplConst(..) => Self::VALUE,
             ScopeId::Field(..) => Self::FIELD,
             ScopeId::Variant(..) => Self::VALUE,
         }

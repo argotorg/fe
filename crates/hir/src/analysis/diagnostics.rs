@@ -114,13 +114,13 @@ impl DiagnosticVoucher for DefConflictError<'_> {
                 let mut subs = vec![SubDiagnostic::new(
                     LabelStyle::Primary,
                     format!("`{name}` is defined here"),
-                    first.name_span().unwrap().resolve(db),
+                    first.name_span(db).unwrap().resolve(db),
                 )];
                 subs.extend(items.map(|item| {
                     SubDiagnostic::new(
                         LabelStyle::Secondary,
                         format! {"`{name}` is redefined here"},
-                        item.name_span().unwrap().resolve(db),
+                        item.name_span(db).unwrap().resolve(db),
                     )
                 }));
                 subs

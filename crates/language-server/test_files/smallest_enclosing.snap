@@ -11,7 +11,5 @@ fn main() {
     let y: Bar
 }
 ---
-cursor position: 49, path: 
 cursor position: 52, path: smallest_enclosing::Foo
-cursor position: 64, path: 
 cursor position: 67, path: smallest_enclosing::Bar

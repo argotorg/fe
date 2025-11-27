@@ -72,7 +72,14 @@ use indexmap::IndexSet;
 pub use crate::diagnosable as diagnostics;
 pub mod symbol;
 
-pub use symbol::{RefRole, SymbolInfo, SymbolKind, SymbolRef};
+pub use symbol::{
+    CursorTarget, FieldAccessView, MethodCallView, PathRefView, Reference,
+    collect_body_references, find_at_cursor,
+};
+
+// Note: SymbolInfo trait is defined later in this file and is automatically public.
+// The old SymbolKind enum has been removed - use ScopeId directly instead.
+// Scope traversal is done via visitor-based ScopeIterator in symbol.rs.
 
 /// Core-exposed entry point for alias lowering. Reads the HIR type_ref (core-visible)
 /// and delegates to the analysis helper to keep visibility tight without shims.
@@ -365,6 +372,20 @@ impl<'db> FuncParamView<'db> {
 
     pub fn span(self) -> crate::span::params::LazyFuncParamSpan<'db> {
         self.func.span().params().param(self.idx)
+    }
+
+    /// Returns the name of this parameter, if present.
+    pub fn name(self, db: &'db dyn HirDb) -> Option<IdentId<'db>> {
+        self.func
+            .params_list(db)
+            .to_opt()
+            .and_then(|p| p.data(db).get(self.idx))
+            .and_then(|p| p.name())
+    }
+
+    /// Returns the span of this parameter's name.
+    pub fn name_span(self) -> crate::span::DynLazySpan<'db> {
+        self.span().name().into()
     }
 
     pub fn self_ty_fallback(self, db: &'db dyn HirDb) -> bool {
@@ -2215,3 +2236,262 @@ impl<'db> EnumVariant<'db> {
         &def.fields(db)[self.idx as usize]
     }
 }
+
+// =============================================================================
+// From/TryFrom conversions between Views and ScopeId
+// =============================================================================
+
+impl<'db> From<FieldView<'db>> for ScopeId<'db> {
+    fn from(view: FieldView<'db>) -> Self {
+        ScopeId::Field(view.parent, view.idx as u16)
+    }
+}
+
+impl<'db> TryFrom<ScopeId<'db>> for FieldView<'db> {
+    type Error = ();
+    fn try_from(scope: ScopeId<'db>) -> Result<Self, ()> {
+        match scope {
+            ScopeId::Field(parent, idx) => Ok(Self {
+                parent,
+                idx: idx as usize,
+            }),
+            _ => Err(()),
+        }
+    }
+}
+
+impl<'db> From<FuncParamView<'db>> for ScopeId<'db> {
+    fn from(view: FuncParamView<'db>) -> Self {
+        ScopeId::FuncParam(view.func.into(), view.idx as u16)
+    }
+}
+
+impl<'db> TryFrom<ScopeId<'db>> for FuncParamView<'db> {
+    type Error = ();
+    fn try_from(scope: ScopeId<'db>) -> Result<Self, ()> {
+        match scope {
+            ScopeId::FuncParam(item, idx) => {
+                let func: Func<'db> = item.try_into().map_err(|_| ())?;
+                Ok(Self {
+                    func,
+                    idx: idx as usize,
+                })
+            }
+            _ => Err(()),
+        }
+    }
+}
+
+impl<'db> From<TraitAssocTypeView<'db>> for ScopeId<'db> {
+    fn from(view: TraitAssocTypeView<'db>) -> Self {
+        ScopeId::TraitType(view.owner, view.idx as u16)
+    }
+}
+
+impl<'db> TryFrom<ScopeId<'db>> for TraitAssocTypeView<'db> {
+    type Error = ();
+    fn try_from(scope: ScopeId<'db>) -> Result<Self, ()> {
+        match scope {
+            ScopeId::TraitType(owner, idx) => Ok(Self {
+                owner,
+                idx: idx as usize,
+            }),
+            _ => Err(()),
+        }
+    }
+}
+
+impl<'db> From<TraitAssocConstView<'db>> for ScopeId<'db> {
+    fn from(view: TraitAssocConstView<'db>) -> Self {
+        ScopeId::TraitConst(view.owner, view.idx as u16)
+    }
+}
+
+impl<'db> TryFrom<ScopeId<'db>> for TraitAssocConstView<'db> {
+    type Error = ();
+    fn try_from(scope: ScopeId<'db>) -> Result<Self, ()> {
+        match scope {
+            ScopeId::TraitConst(owner, idx) => Ok(Self {
+                owner,
+                idx: idx as usize,
+            }),
+            _ => Err(()),
+        }
+    }
+}
+
+impl<'db> From<ImplAssocTypeView<'db>> for ScopeId<'db> {
+    fn from(view: ImplAssocTypeView<'db>) -> Self {
+        ScopeId::ImplType(view.owner, view.idx as u16)
+    }
+}
+
+impl<'db> TryFrom<ScopeId<'db>> for ImplAssocTypeView<'db> {
+    type Error = ();
+    fn try_from(scope: ScopeId<'db>) -> Result<Self, ()> {
+        match scope {
+            ScopeId::ImplType(owner, idx) => Ok(Self {
+                owner,
+                idx: idx as usize,
+            }),
+            _ => Err(()),
+        }
+    }
+}
+
+impl<'db> From<ImplAssocConstView<'db>> for ScopeId<'db> {
+    fn from(view: ImplAssocConstView<'db>) -> Self {
+        ScopeId::ImplConst(view.owner, view.idx as u16)
+    }
+}
+
+impl<'db> TryFrom<ScopeId<'db>> for ImplAssocConstView<'db> {
+    type Error = ();
+    fn try_from(scope: ScopeId<'db>) -> Result<Self, ()> {
+        match scope {
+            ScopeId::ImplConst(owner, idx) => Ok(Self {
+                owner,
+                idx: idx as usize,
+            }),
+            _ => Err(()),
+        }
+    }
+}
+
+impl<'db> From<VariantView<'db>> for ScopeId<'db> {
+    fn from(view: VariantView<'db>) -> Self {
+        ScopeId::Variant(EnumVariant::new(view.owner, view.idx))
+    }
+}
+
+impl<'db> TryFrom<ScopeId<'db>> for VariantView<'db> {
+    type Error = ();
+    fn try_from(scope: ScopeId<'db>) -> Result<Self, ()> {
+        match scope {
+            ScopeId::Variant(var) => Ok(Self {
+                owner: var.enum_,
+                idx: var.idx as usize,
+            }),
+            _ => Err(()),
+        }
+    }
+}
+
+impl<'db> From<GenericParamView<'db>> for ScopeId<'db> {
+    fn from(view: GenericParamView<'db>) -> Self {
+        ScopeId::GenericParam(view.owner.into(), view.idx as u16)
+    }
+}
+
+impl<'db> TryFrom<ScopeId<'db>> for GenericParamView<'db> {
+    type Error = ();
+    fn try_from(_scope: ScopeId<'db>) -> Result<Self, ()> {
+        // GenericParamView requires the actual param reference which we can't get from just ScopeId
+        // This conversion needs db access, so we can't implement TryFrom directly
+        // Users should use ScopeId::resolve_to::<&GenericParam>() instead
+        Err(())
+    }
+}
+
+// =============================================================================
+// SymbolInfo trait - unified interface for symbol metadata
+// =============================================================================
+
+/// Trait for types that can provide symbol information.
+///
+/// Types that implement `Into<ScopeId>` can implement this trait to get
+/// a unified interface for accessing name, span, and other metadata.
+/// Default implementations delegate to ScopeId's methods.
+///
+/// Note: This is NOT implemented for types that have conflicting method
+/// signatures (e.g., GenericParamView has its own `name()` that doesn't take db).
+///
+/// Note: `top_mod()` is intentionally excluded from this trait because many types
+/// (ItemKind, etc.) already have their own `top_mod` methods with different signatures,
+/// which would cause method resolution conflicts.
+pub trait SymbolInfo<'db>: Into<ScopeId<'db>> + Clone {
+    /// Returns the name of this symbol, if present.
+    fn name(&self, db: &'db dyn HirDb) -> Option<IdentId<'db>> {
+        let scope: ScopeId<'db> = self.clone().into();
+        scope.name(db)
+    }
+
+    /// Returns the span of this symbol's name, if present.
+    fn name_span(&self, db: &'db dyn HirDb) -> Option<crate::span::DynLazySpan<'db>> {
+        let scope: ScopeId<'db> = self.clone().into();
+        scope.name_span(db)
+    }
+
+    /// Returns a human-readable name for the kind of symbol (e.g., "function", "field").
+    fn display_name(&self) -> &'static str {
+        let scope: ScopeId<'db> = self.clone().into();
+        scope.kind_name()
+    }
+}
+
+// Implement SymbolInfo for view types that convert to ScopeId and don't have conflicts
+impl<'db> SymbolInfo<'db> for FieldView<'db> {}
+impl<'db> SymbolInfo<'db> for FuncParamView<'db> {}
+impl<'db> SymbolInfo<'db> for VariantView<'db> {}
+impl<'db> SymbolInfo<'db> for TraitAssocTypeView<'db> {}
+impl<'db> SymbolInfo<'db> for TraitAssocConstView<'db> {}
+impl<'db> SymbolInfo<'db> for ImplAssocTypeView<'db> {}
+impl<'db> SymbolInfo<'db> for ImplAssocConstView<'db> {}
+
+// ScopeId itself implements SymbolInfo (identity conversion)
+impl<'db> SymbolInfo<'db> for ScopeId<'db> {}
+
+// Implement SymbolInfo for ItemKind (goes through From<ItemKind> for ScopeId)
+impl<'db> SymbolInfo<'db> for ItemKind<'db> {}
+
+// From implementations for individual item types to ScopeId (via ItemKind)
+impl<'db> From<TopLevelMod<'db>> for ScopeId<'db> {
+    fn from(m: TopLevelMod<'db>) -> Self { ScopeId::Item(m.into()) }
+}
+impl<'db> From<Mod<'db>> for ScopeId<'db> {
+    fn from(m: Mod<'db>) -> Self { ScopeId::Item(m.into()) }
+}
+impl<'db> From<Func<'db>> for ScopeId<'db> {
+    fn from(f: Func<'db>) -> Self { ScopeId::Item(f.into()) }
+}
+impl<'db> From<Struct<'db>> for ScopeId<'db> {
+    fn from(s: Struct<'db>) -> Self { ScopeId::Item(s.into()) }
+}
+impl<'db> From<Contract<'db>> for ScopeId<'db> {
+    fn from(c: Contract<'db>) -> Self { ScopeId::Item(c.into()) }
+}
+impl<'db> From<Enum<'db>> for ScopeId<'db> {
+    fn from(e: Enum<'db>) -> Self { ScopeId::Item(e.into()) }
+}
+impl<'db> From<TypeAlias<'db>> for ScopeId<'db> {
+    fn from(t: TypeAlias<'db>) -> Self { ScopeId::Item(t.into()) }
+}
+impl<'db> From<Impl<'db>> for ScopeId<'db> {
+    fn from(i: Impl<'db>) -> Self { ScopeId::Item(i.into()) }
+}
+impl<'db> From<Trait<'db>> for ScopeId<'db> {
+    fn from(t: Trait<'db>) -> Self { ScopeId::Item(t.into()) }
+}
+impl<'db> From<ImplTrait<'db>> for ScopeId<'db> {
+    fn from(i: ImplTrait<'db>) -> Self { ScopeId::Item(i.into()) }
+}
+impl<'db> From<Const<'db>> for ScopeId<'db> {
+    fn from(c: Const<'db>) -> Self { ScopeId::Item(c.into()) }
+}
+impl<'db> From<Use<'db>> for ScopeId<'db> {
+    fn from(u: Use<'db>) -> Self { ScopeId::Item(u.into()) }
+}
+
+// Implement SymbolInfo for individual item types
+impl<'db> SymbolInfo<'db> for TopLevelMod<'db> {}
+impl<'db> SymbolInfo<'db> for Mod<'db> {}
+impl<'db> SymbolInfo<'db> for Func<'db> {}
+impl<'db> SymbolInfo<'db> for Struct<'db> {}
+impl<'db> SymbolInfo<'db> for Contract<'db> {}
+impl<'db> SymbolInfo<'db> for Enum<'db> {}
+impl<'db> SymbolInfo<'db> for TypeAlias<'db> {}
+impl<'db> SymbolInfo<'db> for Impl<'db> {}
+impl<'db> SymbolInfo<'db> for Trait<'db> {}
+impl<'db> SymbolInfo<'db> for ImplTrait<'db> {}
+impl<'db> SymbolInfo<'db> for Const<'db> {}
+impl<'db> SymbolInfo<'db> for Use<'db> {}

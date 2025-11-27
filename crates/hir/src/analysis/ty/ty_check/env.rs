@@ -1,5 +1,4 @@
 use crate::{
-    core::semantic::SymbolInfo,
     hir_def::{
         Body, BodyKind, Expr, ExprId, Func, IdentId, IntegerId, Partial, Pat, PatId, PathId, Stmt,
         StmtId, TraitRefId, prim_ty::PrimTy, scope_graph::ScopeId,

@@ -89,8 +89,16 @@ pub enum ScopeId<'db> {
     /// Trait associated const scope.
     TraitConst(Trait<'db>, u16),
 
+    /// Impl associated type scope.
+    ImplType(ImplTrait<'db>, u16),
+    /// Impl associated const scope.
+    ImplConst(ImplTrait<'db>, u16),
+
     /// A function parameter scope.
     FuncParam(ItemKind<'db>, u16),
+
+    /// An effect parameter scope.
+    EffectParam(Func<'db>, u16),
 
     /// A field scope.
     Field(FieldParent<'db>, u16),
@@ -109,7 +117,10 @@ impl<'db> ScopeId<'db> {
             ScopeId::GenericParam(item, _) => item.top_mod(db),
             ScopeId::TraitType(t, _) => t.top_mod(db),
             ScopeId::TraitConst(t, _) => t.top_mod(db),
+            ScopeId::ImplType(i, _) => i.top_mod(db),
+            ScopeId::ImplConst(i, _) => i.top_mod(db),
             ScopeId::FuncParam(item, _) => item.top_mod(db),
+            ScopeId::EffectParam(f, _) => f.top_mod(db),
             ScopeId::Field(p, _) => p.top_mod(db),
             ScopeId::Variant(v) => v.enum_.top_mod(db),
             ScopeId::Block(body, _) => body.top_mod(db),
@@ -120,6 +131,15 @@ impl<'db> ScopeId<'db> {
     pub fn from_item(item: ItemKind<'db>) -> Self {
         Self::Item(item)
     }
+}
+
+impl<'db> From<ItemKind<'db>> for ScopeId<'db> {
+    fn from(item: ItemKind<'db>) -> Self {
+        Self::Item(item)
+    }
+}
+
+impl<'db> ScopeId<'db> {
 
     /// Convert a scope id to an item if the scope is an item.
     pub fn to_item(self) -> Option<ItemKind<'db>> {
@@ -138,6 +158,9 @@ impl<'db> ScopeId<'db> {
             ScopeId::FuncParam(item, _) => item,
             ScopeId::TraitType(t, _) => t.into(),
             ScopeId::TraitConst(t, _) => t.into(),
+            ScopeId::ImplType(i, _) => i.into(),
+            ScopeId::ImplConst(i, _) => i.into(),
+            ScopeId::EffectParam(f, _) => f.into(),
             ScopeId::Field(FieldParent::Struct(s), _) => s.into(),
             ScopeId::Field(FieldParent::Contract(c), _) => c.into(),
             ScopeId::Field(FieldParent::Variant(v), _) | ScopeId::Variant(v) => v.enum_.into(),
@@ -274,6 +297,7 @@ impl<'db> ScopeId<'db> {
         match self {
             ScopeId::Item(item) => item.is_type(),
             ScopeId::GenericParam(..) => true,
+            ScopeId::TraitType(..) | ScopeId::ImplType(..) => true,
             _ => false,
         }
     }
@@ -308,6 +332,12 @@ impl<'db> ScopeId<'db> {
                 }
             }
 
+            ScopeId::EffectParam(_, _) => {
+                // Effect params don't have names in the same way, return None for now
+                // TODO: Add proper effect param name support when effect system is complete
+                None
+            }
+
             ScopeId::GenericParam(..) => {
                 let param: &GenericParam = self.resolve_to(db).unwrap();
                 param.name().to_opt()
@@ -315,6 +345,9 @@ impl<'db> ScopeId<'db> {
 
             ScopeId::TraitType(t, idx) => t.assoc_ty_by_index(db, idx as usize).name.to_opt(),
             ScopeId::TraitConst(t, idx) => t.const_by_index(idx as usize).name(db),
+
+            ScopeId::ImplType(i, idx) => i.types(db).get(idx as usize).and_then(|t| t.name.to_opt()),
+            ScopeId::ImplConst(i, idx) => i.consts(db).get(idx as usize).and_then(|c| c.name.to_opt()),
 
             ScopeId::Block(..) => None,
         }
@@ -339,6 +372,12 @@ impl<'db> ScopeId<'db> {
                 }
             }
 
+            ScopeId::EffectParam(_, _) => {
+                // Effect params don't have name spans yet
+                // TODO: Add proper effect param span support when effect system is complete
+                None
+            }
+
             ScopeId::GenericParam(parent, idx) => {
                 let parent = GenericParamOwner::from_item_opt(parent).unwrap();
 
@@ -352,6 +391,13 @@ impl<'db> ScopeId<'db> {
                 Some(t.span().item_list().assoc_const(idx as usize).into())
             }
 
+            ScopeId::ImplType(i, idx) => {
+                Some(i.span().item_list().assoc_type(idx as usize).into())
+            }
+            ScopeId::ImplConst(i, idx) => {
+                Some(i.span().item_list().assoc_const(idx as usize).into())
+            }
+
             ScopeId::Block(..) => None,
         }
     }
@@ -360,9 +406,10 @@ impl<'db> ScopeId<'db> {
         match self {
             ScopeId::Item(item) => item.kind_name(),
             ScopeId::GenericParam(_, _) => "type",
-            ScopeId::TraitType(..) => "associated type",
-            ScopeId::TraitConst(..) => "associated const",
+            ScopeId::TraitType(..) | ScopeId::ImplType(..) => "associated type",
+            ScopeId::TraitConst(..) | ScopeId::ImplConst(..) => "associated const",
             ScopeId::FuncParam(_, _) => "value",
+            ScopeId::EffectParam(_, _) => "effect",
             ScopeId::Field(_, _) => "field",
             ScopeId::Variant(..) => "value",
             ScopeId::Block(_, _) => "block",
