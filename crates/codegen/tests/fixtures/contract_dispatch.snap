@@ -6,22 +6,17 @@ input_file: tests/fixtures/contract_dispatch.fe
 ---
 object "MinimalDispatcher" {
   code {
-    datacopy(0, dataoffset("runtime"), datasize("runtime"))
-    return(0, datasize("runtime"))
   }
 
-  object "runtime" {
+  object "MinimalDispatcher_deployed" {
     code {
+      dispatch()
+      function dispatch() {
+        let v0 := emit_code()
+      }
       function emit_code() -> ret {
         ret := 1
       }
-      function dispatch() -> ret {
-        let v0 := emit_code()
-        ret := 0
-      }
-
-      pop(dispatch())
-      stop()
     }
   }
 }

@@ -17,6 +17,8 @@ pub(super) struct FunctionEmitter<'db> {
     pub(super) match_values: FxHashMap<ExprId, String>,
     /// Number of MIR references per value so we can avoid evaluating them twice.
     pub(super) value_use_counts: Vec<usize>,
+    /// Mapping from monomorphized function symbols to code region labels.
+    pub(super) code_regions: &'db FxHashMap<String, String>,
 }
 
 impl<'db> FunctionEmitter<'db> {
@@ -30,6 +32,7 @@ impl<'db> FunctionEmitter<'db> {
     pub(super) fn new(
         db: &'db DriverDataBase,
         mir_func: &'db MirFunction<'db>,
+        code_regions: &'db FxHashMap<String, String>,
     ) -> Result<Self, YulError> {
         let body = mir_func
             .func
@@ -43,6 +46,7 @@ impl<'db> FunctionEmitter<'db> {
             expr_temps: FxHashMap::default(),
             match_values: FxHashMap::default(),
             value_use_counts,
+            code_regions,
         })
     }
 
@@ -122,13 +126,19 @@ impl<'db> FunctionEmitter<'db> {
         (params_out, state)
     }
 
+    /// Returns true if the Fe function has a return type.
+    pub(super) fn returns_value(&self) -> bool {
+        self.mir_func.func.has_explicit_return_ty(self.db)
+    }
+
     /// Formats the Fe function name and parameters into a Yul signature.
     fn format_function_signature(&self, func_name: &str, params: &[String]) -> String {
         let params_str = params.join(", ");
+        let ret_suffix = if self.returns_value() { " -> ret" } else { "" };
         if params.is_empty() {
-            format!("function {func_name}() -> ret")
+            format!("function {func_name}(){ret_suffix}")
         } else {
-            format!("function {func_name}({params_str}) -> ret")
+            format!("function {func_name}({params_str}){ret_suffix}")
         }
     }
 

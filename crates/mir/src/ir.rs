@@ -14,8 +14,6 @@ pub struct MirModule<'db> {
     pub top_mod: TopLevelMod<'db>,
     /// All lowered functions in the module.
     pub functions: Vec<MirFunction<'db>>,
-    /// Contracts with their reachable functions already computed.
-    pub contracts: Vec<MirContract>,
 }
 
 impl<'db> MirModule<'db> {
@@ -23,18 +21,8 @@ impl<'db> MirModule<'db> {
         Self {
             top_mod,
             functions: Vec::new(),
-            contracts: Vec::new(),
         }
     }
-}
-
-/// A contract with its entry point and reachable functions.
-#[derive(Debug, Clone)]
-pub struct MirContract {
-    /// The contract's name.
-    pub name: String,
-    /// Indices into `MirModule::functions` for all functions reachable from dispatch.
-    pub function_indices: Vec<usize>,
 }
 
 /// MIR for a single function.
@@ -45,6 +33,8 @@ pub struct MirFunction<'db> {
     pub typed_body: TypedBody<'db>,
     /// Concrete generic arguments used to instantiate this function instance.
     pub generic_args: Vec<TyId<'db>>,
+    /// Optional contract association declared via attributes.
+    pub contract_function: Option<ContractFunction>,
     /// Symbol name used for codegen (includes monomorphization suffix when present).
     pub symbol_name: String,
 }
@@ -289,7 +279,7 @@ pub enum ValueOrigin<'db> {
     Param(Func<'db>, usize),
     Call(CallOrigin<'db>),
     /// Call to a compiler intrinsic that should lower to a raw opcode, not a function call.
-    Intrinsic(IntrinsicValue),
+    Intrinsic(IntrinsicValue<'db>),
 }
 
 impl<'db> ValueOrigin<'db> {
@@ -350,11 +340,35 @@ pub struct CallOrigin<'db> {
 }
 
 #[derive(Debug, Clone)]
-pub struct IntrinsicValue {
+pub struct IntrinsicValue<'db> {
     /// Which intrinsic operation this value represents.
     pub op: IntrinsicOp,
     /// Already-lowered argument `ValueId`s (still need converting to Yul expressions later).
     pub args: Vec<ValueId>,
+    /// Target metadata for intrinsics that refer to a function's code region.
+    pub code_region: Option<CodeRegionRoot<'db>>,
+}
+
+/// Identifies the root function for a code region along with its concrete instantiation.
+#[derive(Debug, Clone)]
+pub struct CodeRegionRoot<'db> {
+    pub func: Func<'db>,
+    pub generic_args: Vec<TyId<'db>>,
+    pub symbol: Option<String>,
+}
+
+/// Kind of contract-related function declared via attributes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ContractFunctionKind {
+    Init,
+    Runtime,
+}
+
+/// Metadata attached to functions marked as contract init/runtime entrypoints.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ContractFunction {
+    pub contract_name: String,
+    pub kind: ContractFunctionKind,
 }
 
 /// Low-level runtime operations that bypass normal function calls.
@@ -374,6 +388,12 @@ pub enum IntrinsicOp {
     Sstore,
     /// `return(offset, size)`
     ReturnData,
+    /// `codecopy(dest, offset, size)`
+    Codecopy,
+    /// `dataoffset` of the code region rooted at a function.
+    CodeRegionOffset,
+    /// `datasize` of the code region rooted at a function.
+    CodeRegionLen,
 }
 
 impl IntrinsicOp {
@@ -381,7 +401,11 @@ impl IntrinsicOp {
     pub fn returns_value(self) -> bool {
         matches!(
             self,
-            IntrinsicOp::Mload | IntrinsicOp::Sload | IntrinsicOp::Calldataload
+            IntrinsicOp::Mload
+                | IntrinsicOp::Sload
+                | IntrinsicOp::Calldataload
+                | IntrinsicOp::CodeRegionOffset
+                | IntrinsicOp::CodeRegionLen
         )
     }
 }

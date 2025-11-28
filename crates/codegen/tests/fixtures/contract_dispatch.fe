@@ -1,13 +1,10 @@
-use core::Dispatcher
-
 contract MinimalDispatcher {}
 
 fn emit_code() -> u64 {
     1
 }
 
-impl Dispatcher for MinimalDispatcher {
-    fn dispatch() {
-        let _value: u64 = emit_code()
-    }
+#[contract_runtime(MinimalDispatcher)]
+fn dispatch() {
+    let _value: u64 = emit_code()
 }

@@ -143,7 +143,9 @@ impl<'db> FunctionEmitter<'db> {
         match terminator {
             Terminator::Return(Some(val)) => self.emit_return_with_value(*val, ctx.docs, ctx.state),
             Terminator::Return(None) => {
-                ctx.docs.push(YulDoc::line("ret := 0"));
+                if self.returns_value() {
+                    ctx.docs.push(YulDoc::line("ret := 0"));
+                }
                 Ok(())
             }
             Terminator::ReturnData { offset, size } => {
@@ -169,7 +171,8 @@ impl<'db> FunctionEmitter<'db> {
         }
     }
 
-    /// Emits a `ret := ...` assignment for functions returning a concrete value.
+    /// Emits a return terminator. When the function has no return value, this merely
+    /// evaluates the expression for side effects.
     ///
     /// * `value_id` - MIR value selected by the `return` terminator.
     /// * `docs` - Doc list collecting emitted statements.
@@ -182,7 +185,10 @@ impl<'db> FunctionEmitter<'db> {
         docs: &mut Vec<YulDoc>,
         state: &mut BlockState,
     ) -> Result<(), YulError> {
-        if self.emit_intrinsic_return(value_id, docs, state)? {
+        if self.emit_intrinsic_return(value_id, docs, state, self.returns_value())? {
+            return Ok(());
+        }
+        if !self.returns_value() {
             return Ok(());
         }
         let value = self.mir_func.body.value(value_id);

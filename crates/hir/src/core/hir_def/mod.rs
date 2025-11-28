@@ -224,6 +224,13 @@ impl<T> Partial<T> {
     pub fn is_present(&self) -> bool {
         matches!(self, Self::Present(_))
     }
+
+    pub fn borrowed(&self) -> Partial<&T> {
+        match self {
+            Self::Present(value) => Partial::Present(value),
+            Self::Absent => Partial::Absent,
+        }
+    }
 }
 
 impl<T> PartialEq<T> for Partial<T>

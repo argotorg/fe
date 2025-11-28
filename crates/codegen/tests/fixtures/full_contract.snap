@@ -6,44 +6,55 @@ input_file: tests/fixtures/full_contract.fe
 ---
 object "ShapeDispatcher" {
   code {
-    datacopy(0, dataoffset("runtime"), datasize("runtime"))
-    return(0, datasize("runtime"))
+    init()
+    function init() {
+      let v0 := datasize("ShapeDispatcher_deployed")
+      let v1 := dataoffset("ShapeDispatcher_deployed")
+      codecopy(0, v1, v0)
+    }
   }
 
-  object "runtime" {
+  object "ShapeDispatcher_deployed" {
     code {
-      function point_area(self) -> ret {
-        ret := mul(get_field__Point_u256__78e69939a7cc685d(self, 0, 0), get_field__Point_u256__78e69939a7cc685d(self, 0, 32))
-      }
-      function square_area(self) -> ret {
-        let v0 := get_field__Point_u256__78e69939a7cc685d(self, 0, 0)
-        ret := mul(v0, v0)
-      }
-      function abi_encode(value) -> ret {
+      dispatch()
+      function abi_encode(value) {
         let v0 := 0
         mstore(v0, value)
         return(v0, 32)
       }
-      function dispatch() -> ret {
+      function alloc(size) -> ret {
+        let v0 := mload(64)
+        let v1 := eq(v0, 0)
+        if v1 {
+          v0 := 128
+          mstore(64, add(v0, size))
+          ret := v0
+        }
+        if iszero(v1) {
+          mstore(64, add(v0, size))
+          ret := v0
+        }
+      }
+      function dispatch() {
         let v0 := shr(224, calldataload(0))
         let v1 := eq(v0, 151146943)
         if v1 {
           let v2 := calldataload(4)
           let v3 := calldataload(36)
           let v4 := alloc(64)
-          pop(store_field__deduped(v4, 0, 0, v2))
-          pop(store_field__deduped(v4, 0, 32, v3))
+          store_field__deduped(v4, 0, 0, v2)
+          store_field__deduped(v4, 0, 32, v3)
           let v5 := v4
           let v6 := point_area(v5)
-          pop(abi_encode(v6))
+          abi_encode(v6)
           let v7 := eq(v0, 2066295049)
           if v7 {
             let v8 := calldataload(4)
             let v9 := alloc(32)
-            pop(store_field__deduped(v9, 0, 0, v8))
+            store_field__deduped(v9, 0, 0, v8)
             let v10 := v9
             v6 := square_area(v10)
-            pop(abi_encode(v6))
+            abi_encode(v6)
             return(0, 0)
           }
           if iszero(v7) {
@@ -55,10 +66,10 @@ object "ShapeDispatcher" {
           if v11 {
             let v12 := calldataload(4)
             let v13 := alloc(32)
-            pop(store_field__deduped(v13, 0, 0, v12))
+            store_field__deduped(v13, 0, 0, v12)
             let v14 := v13
             let v15 := square_area(v14)
-            pop(abi_encode(v15))
+            abi_encode(v15)
             return(0, 0)
           }
           if iszero(v11) {
@@ -81,40 +92,28 @@ object "ShapeDispatcher" {
         let v2 := v0
         ret := to_word__deduped(v2)
       }
-      function alloc(size) -> ret {
-        let v0 := mload(64)
-        let v1 := eq(v0, 0)
-        if v1 {
-          v0 := 128
-          mstore(64, add(v0, size))
-          ret := v0
-        }
-        if iszero(v1) {
-          mstore(64, add(v0, size))
-          ret := v0
-        }
+      function point_area(self) -> ret {
+        ret := mul(get_field__Point_u256__78e69939a7cc685d(self, 0, 0), get_field__Point_u256__78e69939a7cc685d(self, 0, 32))
       }
-      function store_field__deduped(addr, space, offset, value) -> ret {
+      function square_area(self) -> ret {
+        let v0 := get_field__Point_u256__78e69939a7cc685d(self, 0, 0)
+        ret := mul(v0, v0)
+      }
+      function store_field__deduped(addr, space, offset, value) {
         let v0 := add(addr, offset)
         switch space
           case 0 {
             mstore(v0, to_word__deduped(value))
-            ret := 0
           }
           case 1 {
             sstore(v0, to_word__deduped(value))
-            ret := 0
           }
           default {
           }
-        ret := 0
       }
       function to_word__deduped(self) -> ret {
         ret := self
       }
-
-      pop(dispatch())
-      stop()
     }
   }
 }

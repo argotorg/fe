@@ -11,17 +11,17 @@ use hir::analysis::{
     },
 };
 use hir::hir_def::{
-    Body, CallableDef, Const, Contract, Expr, ExprId, Field, FieldIndex, Func, IdentId, ImplTrait,
-    LitKind, MatchArm, Partial, Pat, PatId, PathId, Stmt, StmtId, TopLevelMod,
+    Attr, AttrArg, AttrArgValue, Body, CallableDef, Const, Expr, ExprId, Field, FieldIndex, Func,
+    IdentId, ItemKind, LitKind, MatchArm, Partial, Pat, PatId, PathId, Stmt, StmtId, TopLevelMod,
     scope_graph::ScopeId,
 };
 
 use crate::{
     ir::{
-        BasicBlock, BasicBlockId, CallOrigin, IntrinsicOp, IntrinsicValue, LoopInfo,
-        MatchArmLowering, MatchArmPattern, MatchLoweringInfo, MirBody, MirContract, MirFunction,
-        MirInst, MirModule, SwitchOrigin, SwitchTarget, SwitchValue, SyntheticValue, Terminator,
-        ValueData, ValueId, ValueOrigin,
+        BasicBlock, BasicBlockId, CallOrigin, CodeRegionRoot, ContractFunction,
+        ContractFunctionKind, IntrinsicOp, IntrinsicValue, LoopInfo, MatchArmLowering,
+        MatchArmPattern, MatchLoweringInfo, MirBody, MirFunction, MirInst, MirModule, SwitchOrigin,
+        SwitchTarget, SwitchValue, SyntheticValue, Terminator, ValueData, ValueId, ValueOrigin,
     },
     monomorphize::monomorphize_functions,
 };
@@ -111,12 +111,7 @@ pub fn lower_module<'db>(
     }
 
     let functions = monomorphize_functions(db, templates);
-    let contracts = compute_contracts(db, top_mod, &functions);
-    Ok(MirModule {
-        top_mod,
-        functions,
-        contracts,
-    })
+    Ok(MirModule { top_mod, functions })
 }
 
 /// Lowers a single HIR function (plus its typed body) into MIR form.
@@ -155,6 +150,7 @@ pub(crate) fn lower_function<'db>(
         body: mir_body,
         typed_body,
         generic_args: Vec::new(),
+        contract_function: extract_contract_function(db, func),
         symbol_name,
     })
 }
@@ -591,23 +587,28 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
 
     /// Attempt to lower a function or method call into a call-origin MIR value.
     fn try_lower_call(&mut self, expr: ExprId) -> Option<ValueId> {
-        let (args, callable) = match expr.data(self.db, self.body) {
+        let (mut args, arg_exprs, callable) = match expr.data(self.db, self.body) {
             Partial::Present(Expr::Call(_, call_args)) => {
                 let callable = self.typed_body.callable_expr(expr)?;
                 let mut args = Vec::with_capacity(call_args.len());
+                let mut arg_exprs = Vec::with_capacity(call_args.len());
                 for arg in call_args.iter() {
+                    arg_exprs.push(arg.expr);
                     args.push(self.ensure_value(arg.expr));
                 }
-                (args, callable)
+                (args, arg_exprs, callable)
             }
             Partial::Present(Expr::MethodCall(receiver, _, _, call_args)) => {
                 let callable = self.typed_body.callable_expr(expr)?;
                 let mut args = Vec::with_capacity(call_args.len() + 1);
+                let mut arg_exprs = Vec::with_capacity(call_args.len() + 1);
                 args.push(self.ensure_value(*receiver));
+                arg_exprs.push(*receiver);
                 for arg in call_args.iter() {
+                    arg_exprs.push(arg.expr);
                     args.push(self.ensure_value(arg.expr));
                 }
-                (args, callable)
+                (args, arg_exprs, callable)
             }
             _ => return None,
         };
@@ -617,9 +618,23 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
             if !kind.returns_value() {
                 return None;
             }
+            let mut code_region = None;
+            if matches!(
+                kind,
+                IntrinsicOp::CodeRegionOffset | IntrinsicOp::CodeRegionLen
+            ) {
+                if let Some(arg_expr) = arg_exprs.first() {
+                    code_region = self.code_region_target(*arg_expr);
+                }
+                args.clear();
+            }
             return Some(self.mir_body.alloc_value(ValueData {
                 ty,
-                origin: ValueOrigin::Intrinsic(IntrinsicValue { op: kind, args }),
+                origin: ValueOrigin::Intrinsic(IntrinsicValue {
+                    op: kind,
+                    args,
+                    code_region,
+                }),
             }));
         }
         Some(self.mir_body.alloc_value(ValueData {
@@ -1163,8 +1178,43 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
             "sload" => Some(IntrinsicOp::Sload),
             "sstore" => Some(IntrinsicOp::Sstore),
             "return_data" => Some(IntrinsicOp::ReturnData),
+            "codecopy" => Some(IntrinsicOp::Codecopy),
+            "code_region_offset" => Some(IntrinsicOp::CodeRegionOffset),
+            "code_region_len" => Some(IntrinsicOp::CodeRegionLen),
             _ => None,
         }
+    }
+
+    /// Attempts to resolve the root function referenced by a `code_region` intrinsic argument.
+    fn code_region_target(&self, expr: ExprId) -> Option<CodeRegionRoot<'db>> {
+        let expr_data = &self.body.exprs(self.db)[expr].borrowed().to_opt()?;
+        let Expr::Path(path) = expr_data else {
+            return None;
+        };
+        let path = path.to_opt()?;
+
+        let func_ty = match resolve_path(
+            self.db,
+            path,
+            self.body.scope(),
+            PredicateListId::empty_list(self.db),
+            true,
+        ) {
+            Ok(PathRes::Func(func_ty)) => func_ty,
+            _ => return None,
+        };
+
+        let (base, args) = func_ty.decompose_ty_app(self.db);
+        let TyData::TyBase(TyBase::Func(CallableDef::Func(func))) = base.data(self.db) else {
+            return None;
+        };
+        // Check if function has a `contract_*` attribute
+        let _ = extract_contract_function(self.db, *func)?;
+        Some(CodeRegionRoot {
+            func: *func,
+            generic_args: args.to_vec(),
+            symbol: None,
+        })
     }
 
     /// Emits a synthetic `u256` literal value.
@@ -1520,150 +1570,44 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
 // Contract and reachability analysis
 // ============================================================================
 
-/// Computes contract metadata by finding dispatcher implementations and their reachable functions.
-fn compute_contracts<'db>(
-    db: &'db dyn HirAnalysisDb,
-    top_mod: TopLevelMod<'db>,
-    functions: &[MirFunction<'db>],
-) -> Vec<MirContract> {
-    let call_graph = build_call_graph(functions);
-    let mut contracts = Vec::new();
-
-    for contract in top_mod.all_contracts(db).iter().copied() {
-        let Some(name) = contract_name(db, contract) else {
+/// Extracts contract init/runtime metadata from function attributes.
+fn extract_contract_function(db: &dyn HirAnalysisDb, func: Func<'_>) -> Option<ContractFunction> {
+    let attrs = ItemKind::Func(func).attrs(db)?;
+    for attr in attrs.data(db) {
+        let Attr::Normal(normal) = attr else {
             continue;
         };
-        let Some(dispatch_func) = find_dispatcher_for_contract(db, top_mod, &name) else {
+        let Some(path) = normal.path.to_opt() else {
             continue;
         };
-        let Some(dispatch_idx) = find_function_index(functions, dispatch_func) else {
+        let Some(name) = path.as_ident(db) else {
             continue;
         };
-        let dispatch_symbol = &functions[dispatch_idx].symbol_name;
-        let reachable_symbols = reachable_functions(&call_graph, dispatch_symbol);
-
-        let function_indices: Vec<usize> = functions
-            .iter()
-            .enumerate()
-            .filter(|(_, f)| reachable_symbols.contains(&f.symbol_name))
-            .map(|(idx, _)| idx)
-            .collect();
-
-        if function_indices.is_empty() {
+        let kind = match name.data(db).as_str() {
+            "contract_init" => ContractFunctionKind::Init,
+            "contract_runtime" => ContractFunctionKind::Runtime,
+            _ => continue,
+        };
+        let Some(contract_name) = contract_name_from_attr_args(db, &normal.args) else {
             continue;
-        }
-
-        contracts.push(MirContract {
-            name,
-            function_indices,
+        };
+        return Some(ContractFunction {
+            contract_name,
+            kind,
         });
     }
-
-    contracts
+    None
 }
 
-/// Returns the contract name as a string, or `None` when it cannot be resolved.
-fn contract_name(db: &dyn HirAnalysisDb, contract: Contract<'_>) -> Option<String> {
-    contract
-        .name(db)
-        .to_opt()
-        .map(|ident| ident.data(db).to_string())
-}
-
-/// Finds the `dispatch` method implemented for `contract` via the `Dispatcher` trait.
-fn find_dispatcher_for_contract<'db>(
-    db: &'db dyn HirAnalysisDb,
-    top_mod: TopLevelMod<'db>,
-    contract_name: &str,
-) -> Option<Func<'db>> {
-    top_mod
-        .all_impl_traits(db)
-        .iter()
-        .copied()
-        .find_map(|impl_trait| {
-            if !impl_targets_contract(db, impl_trait, contract_name)
-                || !is_dispatcher_impl(db, impl_trait)
-            {
-                return None;
-            }
-            impl_trait.methods(db).find(|func| {
-                func.name(db)
-                    .to_opt()
-                    .is_some_and(|id| id.data(db) == "dispatch")
+fn contract_name_from_attr_args(db: &dyn HirAnalysisDb, args: &[AttrArg<'_>]) -> Option<String> {
+    args.first().and_then(|arg| {
+        arg.key
+            .to_opt()
+            .and_then(|path| path.as_ident(db))
+            .map(|id| id.data(db).to_string())
+            .or_else(|| match arg.value.clone().to_opt()? {
+                AttrArgValue::Ident(id) => Some(id.data(db).to_string()),
+                _ => None,
             })
-        })
-}
-
-/// Returns `true` if `impl_trait` targets the given `contract` type.
-fn impl_targets_contract(
-    db: &dyn HirAnalysisDb,
-    impl_trait: ImplTrait<'_>,
-    contract_name: &str,
-) -> bool {
-    let base = impl_trait.ty(db).base_ty(db);
-    let TyData::TyBase(TyBase::Adt(adt)) = base.data(db) else {
-        return false;
-    };
-    adt.adt_ref(db)
-        .name(db)
-        .is_some_and(|ident| ident.data(db) == contract_name)
-}
-
-/// Returns `true` when the trait reference of `impl_trait` resolves to the core `Dispatcher` trait.
-fn is_dispatcher_impl(db: &dyn HirAnalysisDb, impl_trait: ImplTrait<'_>) -> bool {
-    let Some(trait_def) = impl_trait.trait_def(db) else {
-        return false;
-    };
-    let name_matches = trait_def
-        .name(db)
-        .to_opt()
-        .is_some_and(|ident| ident.data(db) == "Dispatcher");
-    let ingot_kind = trait_def.top_mod(db).ingot(db).kind(db);
-    name_matches && ingot_kind == IngotKind::Core
-}
-
-/// Builds an adjacency list of calls between lowered functions keyed by their symbol name.
-fn build_call_graph<'db>(functions: &[MirFunction<'db>]) -> FxHashMap<String, Vec<String>> {
-    let mut graph = FxHashMap::default();
-    let known: FxHashSet<_> = functions
-        .iter()
-        .map(|func| func.symbol_name.clone())
-        .collect();
-
-    for func in functions {
-        let mut callees = FxHashSet::default();
-        for value in &func.body.values {
-            if let ValueOrigin::Call(call) = &value.origin
-                && let Some(target) = &call.resolved_name
-                && known.contains(target)
-            {
-                callees.insert(target.clone());
-            }
-        }
-        graph.insert(func.symbol_name.clone(), callees.into_iter().collect());
-    }
-
-    graph
-}
-
-/// Walks the call graph from `root` and returns all reachable symbols (including the root).
-fn reachable_functions(graph: &FxHashMap<String, Vec<String>>, root: &str) -> FxHashSet<String> {
-    let mut visited = FxHashSet::default();
-    let mut stack = vec![root.to_string()];
-    while let Some(symbol) = stack.pop() {
-        if !visited.insert(symbol.clone()) {
-            continue;
-        }
-        if let Some(children) = graph.get(&symbol) {
-            for child in children {
-                stack.push(child.clone());
-            }
-        }
-    }
-    visited
-}
-
-/// Finds the index of the MIR function corresponding to `func` in the functions list.
-fn find_function_index<'db>(functions: &[MirFunction<'db>], func: Func<'db>) -> Option<usize> {
-    functions.iter().position(|mir_func| mir_func.func == func)
+    })
 }

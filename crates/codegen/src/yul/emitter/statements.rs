@@ -206,7 +206,11 @@ impl<'db> FunctionEmitter<'db> {
             docs.push(YulDoc::line(format!("let {temp} := {lowered}")));
         } else {
             let value_data = self.mir_func.body.value(value);
-            if matches!(value_data.origin, ValueOrigin::Call(..)) {
+            let is_call = matches!(value_data.origin, ValueOrigin::Call(..));
+            let is_zero_sized = (value_data.ty.is_tuple(self.db)
+                && value_data.ty.field_count(self.db) == 0)
+                || value_data.ty.is_never(self.db);
+            if is_call && !is_zero_sized {
                 docs.push(YulDoc::line(format!("pop({lowered})")));
             } else {
                 docs.push(YulDoc::line(lowered));
@@ -233,6 +237,7 @@ impl<'db> FunctionEmitter<'db> {
         let intr = IntrinsicValue {
             op,
             args: args.to_vec(),
+            code_region: None,
         };
         if let Some(doc) = self.lower_intrinsic_stmt(&intr, state)? {
             docs.push(doc);
@@ -256,7 +261,15 @@ impl<'db> FunctionEmitter<'db> {
             ValueOrigin::Intrinsic(intr) => self.lower_intrinsic_stmt(intr, state),
             ValueOrigin::Call(call) => {
                 let call_expr = self.lower_call_value(call, state)?;
-                Ok(Some(YulDoc::line(format!("pop({call_expr})"))))
+                let is_zero_sized = (value.ty.is_tuple(self.db)
+                    && value.ty.field_count(self.db) == 0)
+                    || value.ty.is_never(self.db);
+                let line = if is_zero_sized {
+                    call_expr
+                } else {
+                    format!("pop({call_expr})")
+                };
+                Ok(Some(YulDoc::line(line)))
             }
             _ => Ok(None),
         }
@@ -275,6 +288,7 @@ impl<'db> FunctionEmitter<'db> {
         value_id: ValueId,
         docs: &mut Vec<YulDoc>,
         state: &BlockState,
+        bind_ret: bool,
     ) -> Result<bool, YulError> {
         let value = self.mir_func.body.value(value_id);
         if let ValueOrigin::Intrinsic(intr) = &value.origin
@@ -286,7 +300,9 @@ impl<'db> FunctionEmitter<'db> {
             if matches!(intr.op, IntrinsicOp::ReturnData) {
                 return Ok(true);
             }
-            docs.push(YulDoc::line("ret := 0"));
+            if bind_ret {
+                docs.push(YulDoc::line("ret := 0"));
+            }
             return Ok(true);
         }
         Ok(false)
@@ -300,7 +316,7 @@ impl<'db> FunctionEmitter<'db> {
     /// Returns the Yul expression describing the intrinsic invocation.
     pub(super) fn lower_intrinsic_value(
         &self,
-        intr: &IntrinsicValue,
+        intr: &IntrinsicValue<'db>,
         state: &BlockState,
     ) -> Result<String, YulError> {
         if !intr.op.returns_value() {
@@ -308,9 +324,34 @@ impl<'db> FunctionEmitter<'db> {
                 "intrinsic does not yield a value".into(),
             ));
         }
+        if matches!(
+            intr.op,
+            IntrinsicOp::CodeRegionOffset | IntrinsicOp::CodeRegionLen
+        ) {
+            return self.lower_code_region_query(intr);
+        }
         let args = self.lower_intrinsic_args(intr, state)?;
         self.expect_intrinsic_arity(intr.op, &args, 1)?;
         Ok(format!("{}({})", self.intrinsic_name(intr.op), args[0]))
+    }
+
+    /// Lowers `code_region_offset/len` into `dataoffset/datasize`.
+    fn lower_code_region_query(&self, intr: &IntrinsicValue<'db>) -> Result<String, YulError> {
+        let target = intr.code_region.as_ref().ok_or_else(|| {
+            YulError::Unsupported("code region intrinsic missing target metadata".into())
+        })?;
+        let symbol = target.symbol.as_deref().ok_or_else(|| {
+            YulError::Unsupported("code region intrinsic has no resolved symbol".into())
+        })?;
+        let label = self.code_regions.get(symbol).ok_or_else(|| {
+            YulError::Unsupported(format!("no code region available for `{symbol}`"))
+        })?;
+        let op = match intr.op {
+            IntrinsicOp::CodeRegionOffset => "dataoffset",
+            IntrinsicOp::CodeRegionLen => "datasize",
+            _ => unreachable!(),
+        };
+        Ok(format!("{op}(\"{label}\")"))
     }
 
     /// Converts intrinsic statement operations (`mstore`, …) into Yul.
@@ -321,19 +362,26 @@ impl<'db> FunctionEmitter<'db> {
     /// Returns the emitted doc when the intrinsic performs work.
     pub(super) fn lower_intrinsic_stmt(
         &self,
-        intr: &IntrinsicValue,
+        intr: &IntrinsicValue<'db>,
         state: &BlockState,
     ) -> Result<Option<YulDoc>, YulError> {
         if intr.op.returns_value() {
             return Ok(None);
         }
         let args = self.lower_intrinsic_args(intr, state)?;
-        self.expect_intrinsic_arity(intr.op, &args, 2)?;
+        let expected = match intr.op {
+            IntrinsicOp::Codecopy => 3,
+            IntrinsicOp::Mstore | IntrinsicOp::Mstore8 | IntrinsicOp::Sstore => 2,
+            IntrinsicOp::ReturnData => 2,
+            _ => unreachable!(),
+        };
+        self.expect_intrinsic_arity(intr.op, &args, expected)?;
         let line = match intr.op {
             IntrinsicOp::Mstore => format!("mstore({}, {})", args[0], args[1]),
             IntrinsicOp::Mstore8 => format!("mstore8({}, {})", args[0], args[1]),
             IntrinsicOp::Sstore => format!("sstore({}, {})", args[0], args[1]),
             IntrinsicOp::ReturnData => format!("return({}, {})", args[0], args[1]),
+            IntrinsicOp::Codecopy => format!("codecopy({}, {}, {})", args[0], args[1], args[2]),
             _ => unreachable!(),
         };
         Ok(Some(YulDoc::line(line)))
@@ -347,7 +395,7 @@ impl<'db> FunctionEmitter<'db> {
     /// Returns the lowered argument list in call order.
     fn lower_intrinsic_args(
         &self,
-        intr: &IntrinsicValue,
+        intr: &IntrinsicValue<'db>,
         state: &BlockState,
     ) -> Result<Vec<String>, YulError> {
         intr.args
@@ -394,6 +442,9 @@ impl<'db> FunctionEmitter<'db> {
             IntrinsicOp::Sload => "sload",
             IntrinsicOp::Sstore => "sstore",
             IntrinsicOp::ReturnData => "return",
+            IntrinsicOp::Codecopy => "codecopy",
+            IntrinsicOp::CodeRegionOffset => "code_region_offset",
+            IntrinsicOp::CodeRegionLen => "code_region_len",
         }
     }
 }

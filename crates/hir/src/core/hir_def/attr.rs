@@ -1,3 +1,5 @@
+use crate::HirDb;
+
 use super::{IdentId, Partial, PathId, StringId};
 
 #[salsa::interned]
@@ -29,6 +31,15 @@ pub struct DocCommentAttr<'db> {
 pub struct AttrArg<'db> {
     pub key: Partial<PathId<'db>>,
     pub value: Partial<AttrArgValue<'db>>,
+}
+
+impl<'db> AttrArg<'db> {
+    pub fn key_str(&self, db: &'db dyn HirDb) -> Option<&str> {
+        self.key
+            .to_opt()
+            .and_then(|p| p.as_ident(db))
+            .map(|i| i.data(db).as_str())
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]

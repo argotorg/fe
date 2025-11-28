@@ -1,0 +1,23 @@
+---
+source: crates/codegen/tests/yul.rs
+expression: output
+input_file: tests/fixtures/match_fn_call.fe
+---
+function example() -> ret {
+  let v0 := 0
+  switch read_selector()
+    case 305419896 {
+      v0 := 1
+    }
+    case 591751049 {
+      v0 := 2
+    }
+    default {
+      v0 := 3
+    }
+  ret := v0
+}
+function read_selector() -> ret {
+  let v0 := calldataload(0)
+  ret := shr(224, v0)
+}

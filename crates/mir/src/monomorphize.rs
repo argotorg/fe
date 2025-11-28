@@ -15,7 +15,10 @@ use hir::analysis::{
 use hir::hir_def::{CallableDef, Func, item::ItemKind, scope_graph::ScopeId};
 use rustc_hash::FxHashMap;
 
-use crate::{CallOrigin, MirFunction, ValueOrigin, dedup::deduplicate_mir, lower::lower_function};
+use crate::{
+    CallOrigin, MirFunction, ValueOrigin, dedup::deduplicate_mir, ir::IntrinsicOp,
+    lower::lower_function,
+};
 
 /// Walks generic MIR templates, cloning them per concrete substitution so
 /// downstream passes only ever see monomorphic MIR.
@@ -139,6 +142,29 @@ impl<'db> Monomorphizer<'db> {
             sites
         };
 
+        let code_region_sites = {
+            let function = &self.instances[func_idx];
+            function
+                .body
+                .values
+                .iter()
+                .enumerate()
+                .filter_map(|(value_idx, value)| {
+                    if let ValueOrigin::Intrinsic(intr) = &value.origin
+                        && matches!(
+                            intr.op,
+                            IntrinsicOp::CodeRegionOffset | IntrinsicOp::CodeRegionLen
+                        )
+                        && let Some(target) = &intr.code_region
+                    {
+                        Some((value_idx, target.clone()))
+                    } else {
+                        None
+                    }
+                })
+                .collect::<Vec<_>>()
+        };
+
         for (value_idx, target, args) in call_sites {
             let resolved_name = match target {
                 CallTarget::Template(func) => {
@@ -152,6 +178,16 @@ impl<'db> Monomorphizer<'db> {
                     &mut self.instances[func_idx].body.values[value_idx].origin
             {
                 call.resolved_name = Some(name);
+            }
+        }
+
+        for (value_idx, target) in code_region_sites {
+            if let Some((_, symbol)) = self.ensure_instance(target.func, &target.generic_args)
+                && let ValueOrigin::Intrinsic(intr) =
+                    &mut self.instances[func_idx].body.values[value_idx].origin
+                && let Some(target) = &mut intr.code_region
+            {
+                target.symbol = Some(symbol);
             }
         }
     }
@@ -199,10 +235,6 @@ impl<'db> Monomorphizer<'db> {
 
     /// Substitute concrete type arguments directly into the MIR body values.
     fn apply_substitution(&self, function: &mut MirFunction<'db>) {
-        if function.generic_args.is_empty() {
-            return;
-        }
-
         let mut folder = ParamSubstFolder {
             args: &function.generic_args,
         };
@@ -212,6 +244,16 @@ impl<'db> Monomorphizer<'db> {
             if let ValueOrigin::Call(call) = &mut value.origin {
                 call.callable = call.callable.clone().fold_with(self.db, &mut folder);
                 call.resolved_name = None;
+            }
+            if let ValueOrigin::Intrinsic(intr) = &mut value.origin
+                && let Some(target) = &mut intr.code_region
+            {
+                target.generic_args = target
+                    .generic_args
+                    .iter()
+                    .map(|ty| ty.fold_with(self.db, &mut folder))
+                    .collect();
+                target.symbol = Some(self.mangled_name(target.func, &target.generic_args));
             }
         }
     }

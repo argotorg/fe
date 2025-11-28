@@ -6,14 +6,26 @@ extern {
     pub fn mload(_: u256) -> u256
     /// Load a 32-byte word from calldata.
     pub fn calldataload(_: u256) -> u256
+    pub fn calldatacopy(dest: u256, offset: u256, len: u256) -> u256
+
     /// Store a 32-byte word to memory.
     pub fn mstore(_: u256, _: u256)
     /// Return `size` bytes starting at `offset` to the caller.
-    pub fn return_data(_: u256, _: u256)
+    pub fn return_data(_: u256, _: u256) -> !
     /// Store the low byte of the second argument at the memory address.
     pub fn mstore8(_: u256, _: u8)
     /// Load a 32-byte word from storage.
     pub fn sload(_: u256) -> u256
     /// Store a 32-byte word to storage.
     pub fn sstore(_: u256, _: u256)
+    /// Copy runtime code into memory.
+    pub fn codecopy(dest: u256, offset: u256, len: u256)
+    pub fn create2(value: u256, offset: u256, len: u256, salt: u256)
+    /// Return the code offset/size for the call graph rooted at `func`.
+    ///
+    /// This is resolved at compile time and is intended for low-level contract
+    /// initialization routines that need to `codecopy` the runtime.
+    pub fn code_region_offset<F>(_: F) -> u256
+    /// Return the deployed code size for the call graph rooted at `func`.
+    pub fn code_region_len<F>(_: F) -> u256
 }

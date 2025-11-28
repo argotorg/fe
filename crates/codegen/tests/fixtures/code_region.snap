@@ -1,0 +1,84 @@
+---
+source: crates/codegen/tests/yul.rs
+assertion_line: 31
+expression: output
+input_file: tests/fixtures/code_region.fe
+---
+object "Foo" {
+  code {
+    init()
+    function allocate(bytes) -> ret {
+      let v0 := mload(64)
+      let v1 := eq(v0, 0)
+      if v1 {
+        v0 := 96
+        ret := v0
+      }
+      if iszero(v1) {
+        ret := v0
+      }
+    }
+    function init() {
+      let v0 := datasize("Child")
+      let v1 := dataoffset("Child")
+      let v2 := allocate(v0)
+      codecopy(v2, v1, v0)
+      v0 := datasize("Foo_deployed")
+      v1 := dataoffset("Foo_deployed")
+      v2 := allocate(v0)
+      codecopy(v2, v1, v0)
+      return(v2, v0)
+    }
+  }
+
+  object "Foo_deployed" {
+    code {
+      runtime()
+      function balance() {
+        return(0, 0)
+      }
+      function read_selector() -> ret {
+        let v0 := calldataload(0)
+        ret := shr(224, v0)
+      }
+      function runtime() {
+        switch read_selector()
+          case 305419896 {
+            transfer()
+            return(0, 0)
+          }
+          case 591751049 {
+            balance()
+            return(0, 0)
+          }
+          default {
+            return(0, 0)
+          }
+        return(0, 0)
+      }
+      function transfer() {
+        return(0, 0)
+      }
+    }
+  }
+  object "Child" {
+    code {
+      child_init()
+      function child_init() {
+        let v0 := datasize("Child_deployed")
+        let v1 := dataoffset("Child_deployed")
+        codecopy(0, v1, v0)
+        return(0, v0)
+      }
+    }
+
+    object "Child_deployed" {
+      code {
+        child_runtime()
+        function child_runtime() {
+          return(0, 4)
+        }
+      }
+    }
+  }
+}
