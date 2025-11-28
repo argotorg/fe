@@ -11,7 +11,7 @@ function make_some(value) -> ret {
 }
 function match_option(opt) -> ret {
   let v0 := 0
-  switch mload(opt)
+  switch get_discriminant(opt, 0)
     case 1 {
       let v1 := get_variant_field__u64__aee7f05a097ffa16(opt, 0, 0)
       v0 := v1
@@ -46,6 +46,19 @@ function store_discriminant(addr, space, discriminant) {
     }
     default {
     }
+}
+function get_discriminant(addr, space) -> ret {
+  let v0 := 0
+  switch space
+    case 0 {
+      v0 := mload(addr)
+    }
+    case 1 {
+      v0 := sload(addr)
+    }
+    default {
+    }
+  ret := v0
 }
 function store_variant_field__u64__aee7f05a097ffa16(addr, space, field_offset, value) {
   let v0 := add(add(addr, 32), field_offset)

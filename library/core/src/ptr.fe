@@ -18,6 +18,7 @@ const I128_SIGN_BIT: u256 = 0x80000000000000000000000000000000
 const I256_SIGN_BIT: u256 = 0x8000000000000000000000000000000000000000000000000000000000000000
 
 /// Tracks where a value lives so loaders can choose the right builtin.
+#[lang = "address_space"]
 pub enum AddressSpace {
     Memory,
     Storage,
@@ -212,6 +213,7 @@ impl StorableScalar for isize {
 }
 
 /// Generic field reader for byte-addressable structs.
+#[lang = "get_field"]
 pub fn get_field<T, F: LoadableScalar>(addr: u256, space: AddressSpace, offset: u256) -> F {
     let target = addr + offset
     let word = match space {
@@ -222,6 +224,7 @@ pub fn get_field<T, F: LoadableScalar>(addr: u256, space: AddressSpace, offset: 
 }
 
 /// Writes a scalar field into the given address/space with the provided offset.
+#[lang = "store_field"]
 pub fn store_field<T: StorableScalar>(
     addr: u256,
     space: AddressSpace,

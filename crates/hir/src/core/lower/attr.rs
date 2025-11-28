@@ -39,7 +39,9 @@ impl<'db> NormalAttr<'db> {
             })
             .unwrap_or_default();
 
-        Self { path, args }
+        let value = AttrArgValue::lower_ast_partial(ctxt, ast.value());
+
+        Self { path, args, value }
     }
 }
 

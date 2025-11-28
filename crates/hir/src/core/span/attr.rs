@@ -28,6 +28,7 @@ define_lazy_span_node!(
     @node {
         (path, path, LazyPathSpan),
         (args, args, LazyAttrArgListSpan),
+        (value, value_node, LazyAttrArgValueSpan),
     }
 );
 

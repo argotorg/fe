@@ -16,6 +16,7 @@ use ingot::ptr::{AddressSpace, LoadableScalar, StorableScalar}
 const ENUM_DATA_OFFSET: u256 = 32
 
 /// Reads the discriminant (variant tag) from an enum's base address.
+#[lang = "get_discriminant"]
 pub fn get_discriminant(addr: u256, space: AddressSpace) -> u256 {
     match space {
         AddressSpace::Memory => mload(addr)
@@ -24,6 +25,7 @@ pub fn get_discriminant(addr: u256, space: AddressSpace) -> u256 {
 }
 
 /// Stores the discriminant (variant tag) at an enum's base address.
+#[lang = "store_discriminant"]
 pub fn store_discriminant(addr: u256, space: AddressSpace, discriminant: u256) {
     match space {
         AddressSpace::Memory => mstore(addr, discriminant)
@@ -33,6 +35,7 @@ pub fn store_discriminant(addr: u256, space: AddressSpace, discriminant: u256) {
 
 /// Reads a scalar field from an enum's variant data region.
 /// The field_offset is relative to the start of the variant data (after discriminant).
+#[lang = "get_variant_field"]
 pub fn get_variant_field<F: LoadableScalar>(addr: u256, space: AddressSpace, field_offset: u256) -> F {
     let target = addr + ENUM_DATA_OFFSET + field_offset
     let word = match space {
@@ -44,6 +47,7 @@ pub fn get_variant_field<F: LoadableScalar>(addr: u256, space: AddressSpace, fie
 
 /// Writes a scalar field into an enum's variant data region.
 /// The field_offset is relative to the start of the variant data (after discriminant).
+#[lang = "store_variant_field"]
 pub fn store_variant_field<T: StorableScalar>(addr: u256, space: AddressSpace, field_offset: u256, value: T) {
     let target = addr + ENUM_DATA_OFFSET + field_offset
     match space {

@@ -58,6 +58,20 @@ impl NormalAttr {
     pub fn args(&self) -> Option<AttrArgList> {
         support::child(self.syntax())
     }
+
+    /// Returns the value of a name-value attribute (`#[attr = value]`), if present.
+    pub fn value(&self) -> Option<AttrArgValueKind> {
+        let node = self.value_node()?;
+        if let Some(lit) = support::child::<Lit>(node.syntax()) {
+            return Some(lit.into());
+        }
+        support::token(node.syntax(), SK::Ident).map(AttrArgValueKind::Ident)
+    }
+
+    /// Returns the value node of a name-value attribute (`#[attr = value]`), if present.
+    pub fn value_node(&self) -> Option<AttrArgValue> {
+        support::child(self.syntax())
+    }
 }
 
 ast_node! {
@@ -261,5 +275,32 @@ mod tests {
                 _ => unreachable!(),
             }
         }
+    }
+
+    #[test]
+    #[wasm_bindgen_test]
+    fn name_value_attr_value_is_exposed() {
+        let source = r#"#[lang = "alloc"]"#;
+        let mut attrs = parse_attr_list(source).normal_attrs();
+        let attr = attrs.next().unwrap();
+        assert_eq!(attr.path().unwrap().text(), "lang");
+        assert!(attr.args().is_none());
+
+        let value = attr.value().unwrap();
+        match value {
+            AttrArgValueKind::Ident(tok) => {
+                panic!("expected string literal, got ident {}", tok.text())
+            }
+            AttrArgValueKind::Lit(lit) => match lit.kind() {
+                crate::ast::lit::LitKind::String(s) => {
+                    assert_eq!(s.token().text(), "\"alloc\"");
+                }
+                _ => panic!("expected string literal"),
+            },
+        }
+
+        // The raw value node is available for spans.
+        assert!(attr.value_node().is_some());
+        assert!(attrs.next().is_none());
     }
 }

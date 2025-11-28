@@ -19,6 +19,8 @@ pub enum Attr<'db> {
 pub struct NormalAttr<'db> {
     pub path: Partial<PathId<'db>>,
     pub args: Vec<AttrArg<'db>>,
+    /// A name-value form `#[attr = value]` when present.
+    pub value: Partial<AttrArgValue<'db>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]

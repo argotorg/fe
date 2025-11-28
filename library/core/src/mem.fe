@@ -7,6 +7,7 @@ const INITIAL_FREE_MEMORY: u256 = 0x80
 ///
 /// Uses the standard “free memory pointer” slot at `0x40`, falling back to `0x80`
 /// the first time it runs (matching Solidity’s layout).
+#[lang = "alloc"]
 pub fn alloc(size: u256) -> u256 {
     let mut ptr = mload(FREE_MEMORY_PTR)
     if ptr == 0 {
