@@ -1,3 +1,4 @@
+mod core_lib;
 mod dedup;
 mod hash;
 pub mod ir;

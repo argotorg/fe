@@ -1,5 +1,6 @@
 ---
 source: crates/codegen/tests/yul.rs
+assertion_line: 31
 expression: output
 input_file: tests/fixtures/enum_variant_contract.fe
 ---
@@ -38,6 +39,19 @@ object "EnumContract" {
       function from_word__u256__3271ca15373d4483(word) -> ret {
         ret := word
       }
+      function get_discriminant(addr, space) -> ret {
+        let v0 := 0
+        switch space
+          case 0 {
+            v0 := mload(addr)
+          }
+          case 1 {
+            v0 := sload(addr)
+          }
+          default {
+          }
+        ret := v0
+      }
       function get_variant_field__u256__3271ca15373d4483(addr, space, field_offset) -> ret {
         let v1 := add(add(addr, 32), field_offset)
         let v0 := 0
@@ -63,7 +77,7 @@ object "EnumContract" {
           store_variant_field__u256__3271ca15373d4483(v4, 0, 0, v3)
           let v5 := v4
           let v2 := 0
-          switch mload(v5)
+          switch get_discriminant(v5, 0)
             case 1 {
               let v6 := get_variant_field__u256__3271ca15373d4483(v5, 0, 0)
               v2 := v6
@@ -84,7 +98,7 @@ object "EnumContract" {
             store_discriminant(v10, 0, 0)
             let v11 := v10
             let v9 := 0
-            switch mload(v11)
+            switch get_discriminant(v11, 0)
               case 1 {
                 let v12 := get_variant_field__u256__3271ca15373d4483(v11, 0, 0)
                 v9 := v12
@@ -107,7 +121,7 @@ object "EnumContract" {
               store_variant_field__u256__3271ca15373d4483(v17, 0, 0, v16)
               let v18 := v17
               let v15 := 0
-              switch mload(v18)
+              switch get_discriminant(v18, 0)
                 case 1 {
                   v15 := 1
                 }
