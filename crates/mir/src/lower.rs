@@ -13,11 +13,12 @@ use hir::analysis::{
 };
 use hir::hir_def::{
     Attr, AttrArg, AttrArgValue, Body, CallableDef, Const, Expr, ExprId, Field, FieldIndex, Func,
-    IdentId, ItemKind, LitKind, MatchArm, Partial, Pat, PatId, PathId, Stmt, StmtId, TopLevelMod,
+    ItemKind, LitKind, MatchArm, Partial, Pat, PatId, PathId, Stmt, StmtId, TopLevelMod,
     VariantKind, scope_graph::ScopeId,
 };
 
 use crate::{
+    core_lib::CoreLib,
     ir::{
         BasicBlock, BasicBlockId, CallOrigin, CodeRegionRoot, ContractFunction,
         ContractFunctionKind, IntrinsicOp, IntrinsicValue, LoopInfo, MatchArmLowering,
@@ -165,21 +166,7 @@ struct MirBuilder<'db, 'a> {
     body: Body<'db>,
     typed_body: &'a TypedBody<'db>,
     mir_body: MirBody<'db>,
-    /// Cached `core::ptr::get_field` definition used for field reads.
-    get_field_func: Option<CallableDef<'db>>,
-    /// Cached `core::ptr::store_field` definition used for record writes.
-    store_field_func: Option<CallableDef<'db>>,
-    /// Cached `core::mem::alloc` definition used for record allocation.
-    alloc_func: Option<CallableDef<'db>>,
-    /// Cached `core::enum::store_discriminant` definition used for enum construction.
-    store_discriminant_func: Option<CallableDef<'db>>,
-    /// Cached `core::enum::get_discriminant` definition used for enum destructuring.
-    get_discriminant_func: Option<CallableDef<'db>>,
-    /// Cached `core::enum::store_variant_field` definition used for enum construction.
-    store_variant_field_func: Option<CallableDef<'db>>,
-    /// Cached `core::enum::get_variant_field` definition used for enum destructuring.
-    get_variant_field_func: Option<CallableDef<'db>>,
-    address_space_ty: Option<TyId<'db>>,
+    core: CoreLib<'db>,
     loop_stack: Vec<LoopScope>,
     /// Memoized literal values for resolved `const` items.
     const_cache: FxHashMap<Const<'db>, ValueId>,
@@ -201,14 +188,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
             body,
             typed_body,
             mir_body: MirBody::new(),
-            get_field_func: None,
-            store_field_func: None,
-            alloc_func: None,
-            store_discriminant_func: None,
-            get_discriminant_func: None,
-            store_variant_field_func: None,
-            get_variant_field_func: None,
-            address_space_ty: None,
+            core: CoreLib::new(db, body),
             loop_stack: Vec::new(),
             const_cache: FxHashMap::default(),
         }
@@ -1263,14 +1243,14 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
 
     /// Builds the callable metadata for `store_discriminant`.
     fn get_store_discriminant_callable(&mut self, expr: ExprId) -> Option<Callable<'db>> {
-        let func_def = self.resolve_store_discriminant_func()?;
+        let func_def = self.core.store_discriminant_func()?;
         let ty = TyId::func(self.db, func_def);
         Callable::new(self.db, ty, expr.span(self.body).into(), None).ok()
     }
 
     /// Builds the callable metadata for `get_discriminant`.
     fn get_discriminant_callable(&mut self, expr: ExprId) -> Option<Callable<'db>> {
-        let func_def = self.resolve_get_discriminant_func()?;
+        let func_def = self.core.get_discriminant_func()?;
         let ty = TyId::func(self.db, func_def);
         Callable::new(self.db, ty, expr.span(self.body).into(), None).ok()
     }
@@ -1281,7 +1261,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         expr: ExprId,
         field_ty: TyId<'db>,
     ) -> Option<Callable<'db>> {
-        let func_def = self.resolve_store_variant_field_func()?;
+        let func_def = self.core.store_variant_field_func()?;
         // Only apply foldl if the function is generic (from core library)
         // Local test helpers are not generic
         let has_generics = !func_def.params(self.db).is_empty()
@@ -1305,7 +1285,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         expr: ExprId,
         field_ty: TyId<'db>,
     ) -> Option<Callable<'db>> {
-        let func_def = self.resolve_get_variant_field_func()?;
+        let func_def = self.core.get_variant_field_func()?;
         let has_generics = !func_def.params(self.db).is_empty()
             && func_def.ingot(self.db).kind(self.db) == IngotKind::Core;
         let ty = if has_generics {
@@ -1314,196 +1294,6 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
             TyId::func(self.db, func_def)
         };
         Callable::new(self.db, ty, expr.span(self.body).into(), None).ok()
-    }
-
-    fn resolve_store_discriminant_func(&mut self) -> Option<CallableDef<'db>> {
-        if let Some(func) = self.store_discriminant_func {
-            return Some(func);
-        }
-        // Try local first (for test fixtures), then fall back to core library
-        if let Some(func) = self.find_local_store_discriminant() {
-            self.store_discriminant_func = Some(func);
-            return Some(func);
-        }
-        if let Some(func) = self.resolve_store_discriminant_via_path() {
-            self.store_discriminant_func = Some(func);
-            return Some(func);
-        }
-        None
-    }
-
-    fn resolve_get_discriminant_func(&mut self) -> Option<CallableDef<'db>> {
-        if let Some(func) = self.get_discriminant_func {
-            return Some(func);
-        }
-        // Try local first (for test fixtures), then fall back to core library
-        if let Some(func) = self.find_local_get_discriminant() {
-            self.get_discriminant_func = Some(func);
-            return Some(func);
-        }
-        if let Some(func) = self.resolve_get_discriminant_via_path() {
-            self.get_discriminant_func = Some(func);
-            return Some(func);
-        }
-        None
-    }
-
-    fn resolve_store_variant_field_func(&mut self) -> Option<CallableDef<'db>> {
-        if let Some(func) = self.store_variant_field_func {
-            return Some(func);
-        }
-        // Try local first (for test fixtures), then fall back to core library
-        if let Some(func) = self.find_local_store_variant_field() {
-            self.store_variant_field_func = Some(func);
-            return Some(func);
-        }
-        if let Some(func) = self.resolve_store_variant_field_via_path() {
-            self.store_variant_field_func = Some(func);
-            return Some(func);
-        }
-        None
-    }
-
-    /// Resolves (and caches) the `get_variant_field` helper definition.
-    ///
-    /// Prefers a locally defined helper (for tests) and falls back to the core library.
-    /// Returns the callable definition when resolution succeeds.
-    fn resolve_get_variant_field_func(&mut self) -> Option<CallableDef<'db>> {
-        if let Some(func) = self.get_variant_field_func {
-            return Some(func);
-        }
-        if let Some(func) = self.find_local_get_variant_field() {
-            self.get_variant_field_func = Some(func);
-            return Some(func);
-        }
-        if let Some(func) = self.resolve_get_variant_field_via_path() {
-            self.get_variant_field_func = Some(func);
-            return Some(func);
-        }
-        None
-    }
-
-    fn resolve_store_discriminant_via_path(&self) -> Option<CallableDef<'db>> {
-        let mut path = self.resolve_core_path(&["core", "enum_repr", "store_discriminant"]);
-        if path.is_none() {
-            path = self.resolve_core_path(&["core", "store_discriminant"]);
-        }
-        let PathRes::Func(func_ty) = path? else {
-            return None;
-        };
-        let base = func_ty.base_ty(self.db);
-        if let TyData::TyBase(TyBase::Func(func_def)) = base.data(self.db) {
-            Some(*func_def)
-        } else {
-            None
-        }
-    }
-
-    fn resolve_get_discriminant_via_path(&self) -> Option<CallableDef<'db>> {
-        let mut path = self.resolve_core_path(&["core", "enum_repr", "get_discriminant"]);
-        if path.is_none() {
-            path = self.resolve_core_path(&["core", "get_discriminant"]);
-        }
-        let PathRes::Func(func_ty) = path? else {
-            return None;
-        };
-        let base = func_ty.base_ty(self.db);
-        if let TyData::TyBase(TyBase::Func(func_def)) = base.data(self.db) {
-            Some(*func_def)
-        } else {
-            None
-        }
-    }
-
-    fn resolve_store_variant_field_via_path(&self) -> Option<CallableDef<'db>> {
-        let mut path = self.resolve_core_path(&["core", "enum_repr", "store_variant_field"]);
-        if path.is_none() {
-            path = self.resolve_core_path(&["core", "store_variant_field"]);
-        }
-        let PathRes::Func(func_ty) = path? else {
-            return None;
-        };
-        let base = func_ty.base_ty(self.db);
-        if let TyData::TyBase(TyBase::Func(func_def)) = base.data(self.db) {
-            Some(*func_def)
-        } else {
-            None
-        }
-    }
-
-    /// Resolves the core `get_variant_field` helper via a well-known path.
-    ///
-    /// Returns the callable definition if the path resolves to a function.
-    fn resolve_get_variant_field_via_path(&self) -> Option<CallableDef<'db>> {
-        let mut path = self.resolve_core_path(&["core", "enum_repr", "get_variant_field"]);
-        if path.is_none() {
-            path = self.resolve_core_path(&["core", "get_variant_field"]);
-        }
-        let PathRes::Func(func_ty) = path? else {
-            return None;
-        };
-        let base = func_ty.base_ty(self.db);
-        if let TyData::TyBase(TyBase::Func(func_def)) = base.data(self.db) {
-            Some(*func_def)
-        } else {
-            None
-        }
-    }
-
-    fn find_local_store_discriminant(&self) -> Option<CallableDef<'db>> {
-        let top_mod = self.body.top_mod(self.db);
-        for &func in top_mod.all_funcs(self.db) {
-            let name = func.name(self.db).to_opt()?;
-            if name.data(self.db) == "store_discriminant"
-                && let Some(def) = func.as_callable(self.db)
-            {
-                return Some(def);
-            }
-        }
-        None
-    }
-
-    fn find_local_get_discriminant(&self) -> Option<CallableDef<'db>> {
-        let top_mod = self.body.top_mod(self.db);
-        for &func in top_mod.all_funcs(self.db) {
-            let name = func.name(self.db).to_opt()?;
-            if name.data(self.db) == "get_discriminant"
-                && let Some(def) = func.as_callable(self.db)
-            {
-                return Some(def);
-            }
-        }
-        None
-    }
-
-    fn find_local_store_variant_field(&self) -> Option<CallableDef<'db>> {
-        let top_mod = self.body.top_mod(self.db);
-        for &func in top_mod.all_funcs(self.db) {
-            let name = func.name(self.db).to_opt()?;
-            if name.data(self.db) == "store_variant_field"
-                && let Some(def) = func.as_callable(self.db)
-            {
-                return Some(def);
-            }
-        }
-        None
-    }
-
-    /// Searches the current module for a locally defined `get_variant_field`.
-    ///
-    /// Used by fixtures/tests that provide their own helpers. Returns the callable
-    /// definition when found.
-    fn find_local_get_variant_field(&self) -> Option<CallableDef<'db>> {
-        let top_mod = self.body.top_mod(self.db);
-        for &func in top_mod.all_funcs(self.db) {
-            let name = func.name(self.db).to_opt()?;
-            if name.data(self.db) == "get_variant_field"
-                && let Some(def) = func.as_callable(self.db)
-            {
-                return Some(def);
-            }
-        }
-        None
     }
 
     /// Attempts to lower a statement-only intrinsic call (`mstore`, `sstore`, …).
@@ -1661,7 +1451,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         owner_ty: TyId<'db>,
         field_ty: TyId<'db>,
     ) -> Option<Callable<'db>> {
-        let func_def = self.resolve_get_field_func()?;
+        let func_def = self.core.get_field_func()?;
         let params = func_def.params(self.db);
         if params.len() < 2 {
             return None;
@@ -1680,148 +1470,16 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         expr: ExprId,
         field_ty: TyId<'db>,
     ) -> Option<Callable<'db>> {
-        let func_def = self.resolve_store_field_func()?;
+        let func_def = self.core.store_field_func()?;
         let ty = TyId::foldl(self.db, TyId::func(self.db, func_def), &[field_ty]);
         Callable::new(self.db, ty, expr.span(self.body).into(), None).ok()
     }
 
     /// Builds the callable metadata for `core::mem::alloc`.
     fn get_alloc_callable(&mut self, expr: ExprId) -> Option<Callable<'db>> {
-        let func_def = self.resolve_alloc_func()?;
+        let func_def = self.core.alloc_func()?;
         let ty = TyId::func(self.db, func_def);
         Callable::new(self.db, ty, expr.span(self.body).into(), None).ok()
-    }
-
-    fn resolve_get_field_func(&mut self) -> Option<CallableDef<'db>> {
-        if let Some(func) = self.get_field_func {
-            return Some(func);
-        }
-        if let Some(func) = self.resolve_get_field_via_path() {
-            self.get_field_func = Some(func);
-            return Some(func);
-        }
-        if let Some(func) = self.find_local_get_field() {
-            self.get_field_func = Some(func);
-            return Some(func);
-        }
-        None
-    }
-
-    fn resolve_store_field_func(&mut self) -> Option<CallableDef<'db>> {
-        if let Some(func) = self.store_field_func {
-            return Some(func);
-        }
-        if let Some(func) = self.resolve_store_field_via_path() {
-            self.store_field_func = Some(func);
-            return Some(func);
-        }
-        if let Some(func) = self.find_local_store_field() {
-            self.store_field_func = Some(func);
-            return Some(func);
-        }
-        None
-    }
-
-    fn resolve_alloc_func(&mut self) -> Option<CallableDef<'db>> {
-        if let Some(func) = self.alloc_func {
-            return Some(func);
-        }
-        if let Some(func) = self.resolve_alloc_via_path() {
-            self.alloc_func = Some(func);
-            return Some(func);
-        }
-        if let Some(func) = self.find_local_alloc() {
-            self.alloc_func = Some(func);
-            return Some(func);
-        }
-        None
-    }
-
-    fn resolve_get_field_via_path(&self) -> Option<CallableDef<'db>> {
-        let mut path = self.resolve_core_path(&["core", "ptr", "get_field"]);
-        if path.is_none() {
-            path = self.resolve_core_path(&["core", "get_field"]);
-        }
-        let PathRes::Func(func_ty) = path? else {
-            return None;
-        };
-        let base = func_ty.base_ty(self.db);
-        if let TyData::TyBase(TyBase::Func(func_def)) = base.data(self.db) {
-            Some(*func_def)
-        } else {
-            None
-        }
-    }
-
-    fn resolve_store_field_via_path(&self) -> Option<CallableDef<'db>> {
-        let mut path = self.resolve_core_path(&["core", "ptr", "store_field"]);
-        if path.is_none() {
-            path = self.resolve_core_path(&["core", "store_field"]);
-        }
-        let PathRes::Func(func_ty) = path? else {
-            return None;
-        };
-        let base = func_ty.base_ty(self.db);
-        if let TyData::TyBase(TyBase::Func(func_def)) = base.data(self.db) {
-            Some(*func_def)
-        } else {
-            None
-        }
-    }
-
-    fn resolve_alloc_via_path(&self) -> Option<CallableDef<'db>> {
-        let mut path = self.resolve_core_path(&["core", "mem", "alloc"]);
-        if path.is_none() {
-            path = self.resolve_core_path(&["core", "alloc"]);
-        }
-        let PathRes::Func(func_ty) = path? else {
-            return None;
-        };
-        let base = func_ty.base_ty(self.db);
-        if let TyData::TyBase(TyBase::Func(func_def)) = base.data(self.db) {
-            Some(*func_def)
-        } else {
-            None
-        }
-    }
-
-    fn find_local_get_field(&self) -> Option<CallableDef<'db>> {
-        let top_mod = self.body.top_mod(self.db);
-        for &func in top_mod.all_funcs(self.db) {
-            let name = func.name(self.db).to_opt()?;
-            if name.data(self.db) == "get_field"
-                && let Some(def) = func.as_callable(self.db)
-            {
-                return Some(def);
-            }
-        }
-        None
-    }
-
-    fn find_local_store_field(&self) -> Option<CallableDef<'db>> {
-        let top_mod = self.body.top_mod(self.db);
-        for &func in top_mod.all_funcs(self.db) {
-            let name = func.name(self.db).to_opt()?;
-            if name.data(self.db) == "store_field"
-                && let Some(def) = func.as_callable(self.db)
-            {
-                return Some(def);
-            }
-        }
-        None
-    }
-
-    fn find_local_alloc(&self) -> Option<CallableDef<'db>> {
-        let top_mod = self.body.top_mod(self.db);
-        for &func in top_mod.all_funcs(self.db) {
-            let name = func.name(self.db).to_opt()?;
-            if name.data(self.db) == "alloc"
-                && let Some(def) = func.as_callable(self.db)
-            {
-                return Some(def);
-            }
-        }
-        None
     }
 
     /// Returns which intrinsic operation the given function represents, if any.
@@ -1897,44 +1555,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
 
     /// Caches the `AddressSpace` type so synthetic values can reference it.
     fn address_space_ty(&mut self) -> Option<TyId<'db>> {
-        if let Some(ty) = self.address_space_ty {
-            return Some(ty);
-        }
-        let mut path = self.resolve_core_path(&["core", "ptr", "AddressSpace"]);
-        if path.is_none() {
-            path = self.resolve_core_path(&["core", "AddressSpace"]);
-        }
-        let PathRes::Ty(ty) = path? else {
-            return None;
-        };
-        self.address_space_ty = Some(ty);
-        Some(ty)
-    }
-
-    /// Resolves a fully-qualified core path like `["core","ptr","foo"]`.
-    fn resolve_core_path(&self, segments: &[&str]) -> Option<PathRes<'db>> {
-        let mut iter = segments.iter();
-        let first = *iter.next()?;
-        let mut path = PathId::from_ident(self.db, self.make_ident(first));
-        for segment in iter {
-            path = path.push_ident(self.db, self.make_ident(segment));
-        }
-        resolve_path(
-            self.db,
-            path,
-            self.body.scope(),
-            PredicateListId::empty_list(self.db),
-            true,
-        )
-        .ok()
-    }
-
-    fn make_ident(&self, segment: &str) -> IdentId<'db> {
-        if segment == "core" {
-            IdentId::make_core(self.db)
-        } else {
-            IdentId::new(self.db, segment.to_string())
-        }
+        self.core.address_space_ty()
     }
 
     /// Lower a statement, returning the successor block and (optional) produced value.

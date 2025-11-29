@@ -1,5 +1,6 @@
 ---
 source: crates/codegen/tests/yul.rs
+assertion_line: 31
 expression: output
 input_file: tests/fixtures/enum_variant_contract.fe
 ---
@@ -37,6 +38,19 @@ object "EnumContract" {
       }
       function from_word__u256__3271ca15373d4483(word) -> ret {
         ret := word
+      }
+      function get_discriminant(addr, space) -> ret {
+        let v0 := 0
+        switch space
+          case 0 {
+            v0 := mload(addr)
+          }
+          case 1 {
+            v0 := sload(addr)
+          }
+          default {
+          }
+        ret := v0
       }
       function get_variant_field__u256__3271ca15373d4483(addr, space, field_offset) -> ret {
         let v1 := add(add(addr, 32), field_offset)
@@ -136,19 +150,6 @@ object "EnumContract" {
           }
           default {
           }
-      }
-      function get_discriminant(addr, space) -> ret {
-        let v0 := 0
-        switch space
-          case 0 {
-            v0 := mload(addr)
-          }
-          case 1 {
-            v0 := sload(addr)
-          }
-          default {
-          }
-        ret := v0
       }
       function store_variant_field__u256__3271ca15373d4483(addr, space, field_offset, value) {
         let v0 := add(add(addr, 32), field_offset)

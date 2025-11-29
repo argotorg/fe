@@ -1,5 +1,6 @@
 ---
 source: crates/codegen/tests/yul.rs
+assertion_line: 31
 expression: output
 input_file: tests/fixtures/match_enum_with_data.fe
 ---
@@ -47,19 +48,6 @@ function store_discriminant(addr, space, discriminant) {
     default {
     }
 }
-function get_discriminant(addr, space) -> ret {
-  let v0 := 0
-  switch space
-    case 0 {
-      v0 := mload(addr)
-    }
-    case 1 {
-      v0 := sload(addr)
-    }
-    default {
-    }
-  ret := v0
-}
 function store_variant_field__u64__aee7f05a097ffa16(addr, space, field_offset, value) {
   let v0 := add(add(addr, 32), field_offset)
   switch space
@@ -86,6 +74,19 @@ function get_variant_field__u64__aee7f05a097ffa16(addr, space, field_offset) -> 
     }
   let v2 := v0
   ret := from_word__u64__aee7f05a097ffa16(v2)
+}
+function get_discriminant(addr, space) -> ret {
+  let v0 := 0
+  switch space
+    case 0 {
+      v0 := mload(addr)
+    }
+    case 1 {
+      v0 := sload(addr)
+    }
+    default {
+    }
+  ret := v0
 }
 function to_word__deduped(self) -> ret {
   ret := self
