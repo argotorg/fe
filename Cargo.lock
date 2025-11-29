@@ -1733,6 +1733,7 @@ dependencies = [
  "fe-codegen",
  "fe-common",
  "fe-driver",
+ "fe-fmt",
  "fe-hir",
  "fe-mir",
  "fe-resolver",
@@ -1821,6 +1822,15 @@ dependencies = [
  "smol_str",
  "tracing",
  "url",
+]
+
+[[package]]
+name = "fe-fmt"
+version = "0.1.0"
+dependencies = [
+ "dir-test",
+ "fe-parser",
+ "fe-test-utils",
 ]
 
 [[package]]

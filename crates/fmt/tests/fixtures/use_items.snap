@@ -1,0 +1,23 @@
+---
+source: crates/fmt/tests/format_snapshots.rs
+expression: output
+input_file: tests/fixtures/use_items.fe
+---
+use Foo::Bar
+use Foo::*
+use Foo::Bar as Bar1
+use Foo::{Foo, Bar}
+use Foo::{self, Bar}
+use Foo::{self, Bar as Bar1}
+use Foo::{self as self_, Bar::{Bar as _, Baz}, *}
+use {Foo::Bar as Bar1, Bar::Bar as Bar2}
+pub use super::Something
+use ingot::Foo::{Bar, Baz, Qux}
+use super::super::Deeply::{Nested::{A, B, C}, Other}
+use LongModuleName::{
+    VeryLongTypeName,
+    AnotherLongTypeName,
+    YetAnotherLongTypeName,
+    AndMoreTypes,
+    EvenMoreTypes,
+}
