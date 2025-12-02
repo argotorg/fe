@@ -1,0 +1,244 @@
+---
+source: crates/parser/tests/syntax_node.rs
+expression: node
+input_file: test_files/syntax_node/items/contract_init_recv.fe
+---
+Root@0..362
+  ItemList@0..361
+    Item@0..361
+      Contract@0..361
+        ContractKw@0..8 "contract"
+        WhiteSpace@8..9 " "
+        Ident@9..12 "Foo"
+        WhiteSpace@12..13 " "
+        LBrace@13..14 "{"
+        Newline@14..15 "\n"
+        WhiteSpace@15..19 "    "
+        ContractFields@19..26
+          RecordFieldDef@19..25
+            Ident@19..20 "x"
+            Colon@20..21 ":"
+            WhiteSpace@21..22 " "
+            PathType@22..25
+              Path@22..25
+                PathSegment@22..25
+                  Ident@22..25 "i32"
+          Comma@25..26 ","
+        Newline@26..28 "\n\n"
+        WhiteSpace@28..32 "    "
+        ContractInit@32..80
+          Ident@32..36 "init"
+          FuncParamList@36..52
+            LParen@36..37 "("
+            FnParam@37..51
+              Ident@37..42 "owner"
+              Colon@42..43 ":"
+              WhiteSpace@43..44 " "
+              PathType@44..51
+                Path@44..51
+                  PathSegment@44..51
+                    Ident@44..51 "Address"
+            RParen@51..52 ")"
+          WhiteSpace@52..53 " "
+          UsesClause@53..77
+            UsesKw@53..57 "uses"
+            WhiteSpace@57..58 " "
+            UsesParamList@58..77
+              LParen@58..59 "("
+              UsesParam@59..66
+                MutKw@59..62 "mut"
+                WhiteSpace@62..63 " "
+                Path@63..66
+                  PathSegment@63..66
+                    Ident@63..66 "ctx"
+              Comma@66..67 ","
+              WhiteSpace@67..68 " "
+              UsesParam@68..76
+                MutKw@68..71 "mut"
+                WhiteSpace@71..72 " "
+                Path@72..76
+                  PathSegment@72..76
+                    Ident@72..76 "auth"
+              RParen@76..77 ")"
+          WhiteSpace@77..78 " "
+          BlockExpr@78..80
+            LBrace@78..79 "{"
+            RBrace@79..80 "}"
+        Newline@80..82 "\n\n"
+        WhiteSpace@82..86 "    "
+        ContractRecv@86..264
+          Ident@86..90 "recv"
+          WhiteSpace@90..91 " "
+          Path@91..96
+            PathSegment@91..96
+              Ident@91..96 "Erc20"
+          WhiteSpace@96..97 " "
+          RecvArmList@97..264
+            LBrace@97..98 "{"
+            Newline@98..99 "\n"
+            WhiteSpace@99..107 "        "
+            RecvArm@107..199
+              RecordPat@107..130
+                Path@107..115
+                  PathSegment@107..115
+                    Ident@107..115 "Transfer"
+                WhiteSpace@115..116 " "
+                RecordPatFieldList@116..130
+                  LBrace@116..117 "{"
+                  WhiteSpace@117..118 " "
+                  RecordPatField@118..120
+                    PathPat@118..120
+                      Path@118..120
+                        PathSegment@118..120
+                          Ident@118..120 "to"
+                  Comma@120..121 ","
+                  WhiteSpace@121..122 " "
+                  RecordPatField@122..128
+                    PathPat@122..128
+                      Path@122..128
+                        PathSegment@122..128
+                          Ident@122..128 "amount"
+                  WhiteSpace@128..129 " "
+                  RBrace@129..130 "}"
+              WhiteSpace@130..131 " "
+              Arrow@131..133 "->"
+              WhiteSpace@133..134 " "
+              PathType@134..138
+                Path@134..138
+                  PathSegment@134..138
+                    Ident@134..138 "bool"
+              Newline@138..139 "\n"
+              WhiteSpace@139..149 "          "
+              UsesClause@149..170
+                UsesKw@149..153 "uses"
+                WhiteSpace@153..154 " "
+                UsesParamList@154..170
+                  LParen@154..155 "("
+                  UsesParam@155..158
+                    Path@155..158
+                      PathSegment@155..158
+                        Ident@155..158 "ctx"
+                  Comma@158..159 ","
+                  WhiteSpace@159..160 " "
+                  UsesParam@160..169
+                    MutKw@160..163 "mut"
+                    WhiteSpace@163..164 " "
+                    Path@164..169
+                      PathSegment@164..169
+                        Ident@164..169 "store"
+                  RParen@169..170 ")"
+              WhiteSpace@170..171 " "
+              BlockExpr@171..199
+                LBrace@171..172 "{"
+                Newline@172..173 "\n"
+                WhiteSpace@173..185 "            "
+                ExprStmt@185..189
+                  LitExpr@185..189
+                    Lit@185..189
+                      TrueKw@185..189 "true"
+                Newline@189..190 "\n"
+                WhiteSpace@190..198 "        "
+                RBrace@198..199 "}"
+            Newline@199..200 "\n"
+            WhiteSpace@200..208 "        "
+            RecvArm@208..258
+              RecordPat@208..224
+                Path@208..215
+                  PathSegment@208..215
+                    Ident@208..215 "Balance"
+                WhiteSpace@215..216 " "
+                RecordPatFieldList@216..224
+                  LBrace@216..217 "{"
+                  WhiteSpace@217..218 " "
+                  RecordPatField@218..222
+                    PathPat@218..222
+                      Path@218..222
+                        PathSegment@218..222
+                          Ident@218..222 "addr"
+                  WhiteSpace@222..223 " "
+                  RBrace@223..224 "}"
+              WhiteSpace@224..225 " "
+              Arrow@225..227 "->"
+              WhiteSpace@227..228 " "
+              PathType@228..232
+                Path@228..232
+                  PathSegment@228..232
+                    Ident@228..232 "u256"
+              WhiteSpace@232..233 " "
+              BlockExpr@233..258
+                LBrace@233..234 "{"
+                Newline@234..235 "\n"
+                WhiteSpace@235..247 "            "
+                ExprStmt@247..248
+                  LitExpr@247..248
+                    Lit@247..248
+                      Int@247..248 "0"
+                Newline@248..249 "\n"
+                WhiteSpace@249..257 "        "
+                RBrace@257..258 "}"
+            Newline@258..259 "\n"
+            WhiteSpace@259..263 "    "
+            RBrace@263..264 "}"
+        Newline@264..266 "\n\n"
+        WhiteSpace@266..270 "    "
+        ContractRecv@270..359
+          Ident@270..274 "recv"
+          WhiteSpace@274..275 " "
+          RecvArmList@275..359
+            LBrace@275..276 "{"
+            Newline@276..277 "\n"
+            WhiteSpace@277..285 "        "
+            RecvArm@285..353
+              RecordPat@285..301
+                Path@285..292
+                  PathSegment@285..292
+                    Ident@285..292 "RawCall"
+                WhiteSpace@292..293 " "
+                RecordPatFieldList@293..301
+                  LBrace@293..294 "{"
+                  WhiteSpace@294..295 " "
+                  RecordPatField@295..299
+                    PathPat@295..299
+                      Path@295..299
+                        PathSegment@295..299
+                          Ident@295..299 "data"
+                  WhiteSpace@299..300 " "
+                  RBrace@300..301 "}"
+              WhiteSpace@301..302 " "
+              UsesClause@302..316
+                UsesKw@302..306 "uses"
+                WhiteSpace@306..307 " "
+                UsesParamList@307..316
+                  LParen@307..308 "("
+                  UsesParam@308..315
+                    MutKw@308..311 "mut"
+                    WhiteSpace@311..312 " "
+                    Path@312..315
+                      PathSegment@312..315
+                        Ident@312..315 "ctx"
+                  RParen@315..316 ")"
+              WhiteSpace@316..317 " "
+              BlockExpr@317..353
+                LBrace@317..318 "{"
+                Newline@318..319 "\n"
+                WhiteSpace@319..331 "            "
+                ExprStmt@331..343
+                  MethodCallExpr@331..343
+                    PathExpr@331..334
+                      Path@331..334
+                        PathSegment@331..334
+                          Ident@331..334 "ctx"
+                    Dot@334..335 "."
+                    Ident@335..341 "revert"
+                    CallArgList@341..343
+                      LParen@341..342 "("
+                      RParen@342..343 ")"
+                Newline@343..344 "\n"
+                WhiteSpace@344..352 "        "
+                RBrace@352..353 "}"
+            Newline@353..354 "\n"
+            WhiteSpace@354..358 "    "
+            RBrace@358..359 "}"
+        Newline@359..360 "\n"
+        RBrace@360..361 "}"
+  Newline@361..362 "\n"

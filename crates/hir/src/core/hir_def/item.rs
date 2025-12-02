@@ -10,19 +10,20 @@ use parser::ast;
 
 use super::{
     AttrListId, Body, EffectParamListId, FuncParamListId, FuncParamName, GenericParamListId,
-    HirIngot, IdentId, Partial, TupleTypeId, TypeBound, TypeId, UseAlias, WhereClauseId,
+    HirIngot, IdentId, Partial, PatId, TupleTypeId, TypeBound, TypeId, UseAlias, WhereClauseId,
     scope_graph::{ScopeGraph, ScopeId},
 };
 use crate::{
     HirDb,
-    hir_def::TraitRefId,
+    hir_def::{PathId, TraitRefId},
     lower,
     span::{
         DynLazySpan, HirOrigin,
         item::{
             LazyConstSpan, LazyContractSpan, LazyEnumSpan, LazyFuncSpan, LazyImplSpan,
-            LazyImplTraitSpan, LazyItemSpan, LazyModSpan, LazyStructSpan, LazyTopModSpan,
-            LazyTraitSpan, LazyTraitTypeSpan, LazyTypeAliasSpan, LazyUseSpan, LazyVariantDefSpan,
+            LazyImplTraitSpan, LazyItemSpan, LazyModSpan, LazyMsgSpan, LazyMsgVariantSpan,
+            LazyStructSpan, LazyTopModSpan, LazyTraitSpan, LazyTraitTypeSpan, LazyTypeAliasSpan,
+            LazyUseSpan, LazyVariantDefSpan,
         },
         params::LazyGenericParamListSpan,
     },
@@ -47,6 +48,7 @@ pub enum ItemKind<'db> {
     Func(Func<'db>),
     Struct(Struct<'db>),
     Contract(Contract<'db>),
+    Msg(Msg<'db>),
     Enum(Enum<'db>),
     TypeAlias(TypeAlias<'db>),
     Impl(Impl<'db>),
@@ -76,6 +78,7 @@ impl<'db> ItemKind<'db> {
             Func(func_) => func_.name(db).to_opt(),
             Struct(struct_) => struct_.name(db).to_opt(),
             Contract(contract_) => contract_.name(db).to_opt(),
+            Msg(msg_) => msg_.name(db).to_opt(),
             Enum(enum_) => enum_.name(db).to_opt(),
             TypeAlias(alias) => alias.name(db).to_opt(),
             Trait(trait_) => trait_.name(db).to_opt(),
@@ -91,6 +94,7 @@ impl<'db> ItemKind<'db> {
             Self::Func(func) => func.attributes(db),
             Self::Struct(struct_) => struct_.attributes(db),
             Self::Contract(contract) => contract.attributes(db),
+            Self::Msg(msg) => msg.attributes(db),
             Self::Enum(enum_) => enum_.attributes(db),
             Self::TypeAlias(alias) => alias.attributes(db),
             Self::Impl(impl_) => impl_.attributes(db),
@@ -110,6 +114,7 @@ impl<'db> ItemKind<'db> {
             Func(_) => "fn",
             Struct(_) => "struct",
             Contract(_) => "contract",
+            Msg(_) => "msg",
             Enum(_) => "enum",
             TypeAlias(_) => "type",
             Trait(_) => "trait",
@@ -128,6 +133,7 @@ impl<'db> ItemKind<'db> {
             Func(func_) => Some(func_.span().name().into()),
             Struct(struct_) => Some(struct_.span().name().into()),
             Contract(contract_) => Some(contract_.span().name().into()),
+            Msg(msg_) => Some(msg_.span().name().into()),
             Enum(enum_) => Some(enum_.span().name().into()),
             TypeAlias(alias) => Some(alias.span().alias().into()),
             Trait(trait_) => Some(trait_.span().name().into()),
@@ -144,6 +150,7 @@ impl<'db> ItemKind<'db> {
             Func(func) => func.vis(db),
             Struct(struct_) => struct_.vis(db),
             Contract(contract) => contract.vis(db),
+            Msg(msg) => msg.vis(db),
             Enum(enum_) => enum_.vis(db),
             TypeAlias(type_) => type_.vis(db),
             Trait(trait_) => trait_.vis(db),
@@ -160,6 +167,7 @@ impl<'db> ItemKind<'db> {
             ItemKind::Func(func) => func.top_mod(db),
             ItemKind::Struct(struct_) => struct_.top_mod(db),
             ItemKind::Contract(contract) => contract.top_mod(db),
+            ItemKind::Msg(msg) => msg.top_mod(db),
             ItemKind::Enum(enum_) => enum_.top_mod(db),
             ItemKind::TypeAlias(type_) => type_.top_mod(db),
             ItemKind::Trait(trait_) => trait_.top_mod(db),
@@ -174,7 +182,7 @@ impl<'db> ItemKind<'db> {
     pub fn is_type(self) -> bool {
         matches!(
             self,
-            Self::Struct(_) | Self::Enum(_) | Self::Contract(_) | Self::TypeAlias(_)
+            Self::Struct(_) | Self::Enum(_) | Self::Contract(_) | Self::Msg(_) | Self::TypeAlias(_)
         )
     }
 
@@ -503,6 +511,19 @@ impl<'db> TopLevelMod<'db> {
             .collect()
     }
 
+    /// Returns all msgs in the top level module including ones in nested
+    /// modules.
+    #[salsa::tracked(return_ref)]
+    pub fn all_msgs(self, db: &'db dyn HirDb) -> Vec<Msg<'db>> {
+        self.all_items(db)
+            .iter()
+            .filter_map(|item| match item {
+                ItemKind::Msg(msg) => Some(*msg),
+                _ => None,
+            })
+            .collect()
+    }
+
     /// Returns all type aliases in the top level module including ones in
     /// nested modules.
     #[salsa::tracked(return_ref)]
@@ -732,6 +753,14 @@ pub struct Contract<'db> {
     pub(in crate::core) attributes: AttrListId<'db>,
     pub vis: Visibility,
     pub(in crate::core) fields: FieldDefListId<'db>,
+    /// `uses` clause attached to the contract header
+    pub effects: EffectParamListId<'db>,
+    /// Optional contract initializer block components
+    pub init_params: Option<FuncParamListId<'db>>,
+    pub init_effects: EffectParamListId<'db>,
+    pub init_body: Option<Body<'db>>,
+    /// Receive handlers declared in the contract
+    pub recvs: ContractRecvListId<'db>,
     pub top_mod: TopLevelMod<'db>,
 
     #[return_ref]
@@ -744,6 +773,113 @@ impl<'db> Contract<'db> {
 
     pub fn scope(self) -> ScopeId<'db> {
         ScopeId::from_item(self.into())
+    }
+}
+
+#[salsa::interned]
+#[derive(Debug)]
+pub struct ContractRecvListId<'db> {
+    #[return_ref]
+    pub data: Vec<ContractRecv<'db>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct ContractRecv<'db> {
+    pub msg_path: Option<PathId<'db>>,
+    pub arms: ContractRecvArmListId<'db>,
+}
+
+#[salsa::interned]
+#[derive(Debug)]
+pub struct ContractRecvArmListId<'db> {
+    #[return_ref]
+    pub data: Vec<ContractRecvArm<'db>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct ContractRecvArm<'db> {
+    pub pat: PatId,
+    pub ret_ty: Option<TypeId<'db>>,
+    pub effects: EffectParamListId<'db>,
+    pub body: Body<'db>,
+}
+
+#[salsa::tracked]
+#[derive(Debug)]
+pub struct Msg<'db> {
+    #[id]
+    id: TrackedItemId<'db>,
+
+    pub name: Partial<IdentId<'db>>,
+    pub(in crate::core) attributes: AttrListId<'db>,
+    pub vis: Visibility,
+    pub(in crate::core) variants: MsgVariantListId<'db>,
+    pub top_mod: TopLevelMod<'db>,
+
+    #[return_ref]
+    pub(crate) origin: HirOrigin<ast::Msg>,
+}
+impl<'db> Msg<'db> {
+    pub fn span(self) -> LazyMsgSpan<'db> {
+        LazyMsgSpan::new(self)
+    }
+
+    pub fn variant_span(self, idx: usize) -> LazyMsgVariantSpan<'db> {
+        self.span().variants().variant(idx)
+    }
+
+    pub fn scope(self) -> ScopeId<'db> {
+        ScopeId::from_item(self.into())
+    }
+}
+
+#[salsa::interned]
+#[derive(Debug)]
+pub struct MsgVariantListId<'db> {
+    #[return_ref]
+    pub data: Vec<MsgVariantDef<'db>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct MsgVariantDef<'db> {
+    pub attributes: AttrListId<'db>,
+    pub name: Partial<IdentId<'db>>,
+    pub params: FieldDefListId<'db>,
+    pub ret_ty: Option<TypeId<'db>>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, salsa::Update)]
+pub struct MsgVariant<'db> {
+    pub msg: Msg<'db>,
+    pub idx: u16,
+}
+
+impl<'db> MsgVariant<'db> {
+    pub fn new(msg: Msg<'db>, idx: usize) -> Self {
+        Self {
+            msg,
+            idx: idx as u16,
+        }
+    }
+
+    pub(in crate::core) fn def(self, db: &'db dyn HirDb) -> &'db MsgVariantDef<'db> {
+        &self.msg.variants(db).data(db)[self.idx as usize]
+    }
+
+    pub fn name(self, db: &'db dyn HirDb) -> Option<&'db str> {
+        Some(self.def(db).name.to_opt()?.data(db))
+    }
+
+    pub fn ident(self, db: &'db dyn HirDb) -> Option<IdentId<'db>> {
+        self.def(db).name.to_opt()
+    }
+
+    pub fn scope(self) -> ScopeId<'db> {
+        ScopeId::MsgVariant(self)
+    }
+
+    pub fn span(self) -> LazyMsgVariantSpan<'db> {
+        self.msg.variant_span(self.idx as usize)
     }
 }
 
@@ -1221,6 +1357,7 @@ pub enum FieldParent<'db> {
     Struct(Struct<'db>),
     Contract(Contract<'db>),
     Variant(EnumVariant<'db>),
+    MsgVariant(MsgVariant<'db>),
 }
 
 impl<'db> FieldParent<'db> {
@@ -1232,6 +1369,10 @@ impl<'db> FieldParent<'db> {
                 let e = variant.enum_.name(db).to_opt()?.data(db);
                 Some(format!("{e}::{}", variant.name(db)?).into())
             }
+            FieldParent::MsgVariant(variant) => {
+                let m = variant.msg.name(db).to_opt()?.data(db);
+                Some(format!("{m}::{}", variant.name(db)?).into())
+            }
         }
     }
 
@@ -1240,6 +1381,7 @@ impl<'db> FieldParent<'db> {
             FieldParent::Struct(_) => "struct",
             FieldParent::Contract(_) => "contract",
             FieldParent::Variant(..) => "enum variant",
+            FieldParent::MsgVariant(..) => "msg variant",
         }
     }
 
@@ -1248,6 +1390,7 @@ impl<'db> FieldParent<'db> {
             FieldParent::Struct(struct_) => struct_.scope(),
             FieldParent::Contract(contract) => contract.scope(),
             FieldParent::Variant(variant) => variant.scope(),
+            FieldParent::MsgVariant(variant) => variant.scope(),
         }
     }
 
@@ -1259,6 +1402,7 @@ impl<'db> FieldParent<'db> {
                 VariantKind::Record(fields) => fields,
                 _ => unreachable!(),
             },
+            FieldParent::MsgVariant(variant) => variant.def(db).params,
         }
     }
 
@@ -1267,6 +1411,7 @@ impl<'db> FieldParent<'db> {
             FieldParent::Struct(i) => i.top_mod(db),
             FieldParent::Contract(i) => i.top_mod(db),
             FieldParent::Variant(i) => i.enum_.top_mod(db),
+            FieldParent::MsgVariant(i) => i.msg.top_mod(db),
         }
     }
 
@@ -1275,6 +1420,7 @@ impl<'db> FieldParent<'db> {
             FieldParent::Struct(s) => s.span().fields().field(idx).name().into(),
             FieldParent::Contract(c) => c.span().fields().field(idx).name().into(),
             FieldParent::Variant(v) => v.span().fields().field(idx).name().into(),
+            FieldParent::MsgVariant(v) => v.span().params().param(idx).name().into(),
         }
     }
 }
@@ -1383,12 +1529,14 @@ pub enum TrackedItemVariant<'db> {
     Func(Partial<IdentId<'db>>),
     Struct(Partial<IdentId<'db>>),
     Contract(Partial<IdentId<'db>>),
+    Msg(Partial<IdentId<'db>>),
     Enum(Partial<IdentId<'db>>),
     TypeAlias(Partial<IdentId<'db>>),
     Impl(Partial<TypeId<'db>>),
     Trait(Partial<IdentId<'db>>),
     ImplTrait(Partial<TraitRefId<'db>>, Partial<TypeId<'db>>),
     Const(Partial<IdentId<'db>>),
+    ContractRecvArm { recv_idx: u32, arm_idx: u32 },
     Use(Partial<super::UsePathId<'db>>),
     FuncBody,
     NamelessBody,

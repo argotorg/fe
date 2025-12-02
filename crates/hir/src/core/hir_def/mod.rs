@@ -42,6 +42,7 @@ pub trait HirIngot<'db> {
     fn root_mod(self, db: &'db dyn HirDb) -> TopLevelMod<'db>;
     fn resolved_external_ingots(self, db: &'db dyn HirDb) -> &'db Vec<(IdentId<'db>, Ingot<'db>)>;
     fn all_enums(self, db: &'db dyn HirDb) -> &'db Vec<Enum<'db>>;
+    fn all_msgs(self, db: &'db dyn HirDb) -> &'db Vec<Msg<'db>>;
     fn all_impl_traits(self, db: &'db dyn HirDb) -> &'db Vec<ImplTrait<'db>>;
     fn all_impls(self, db: &'db dyn HirDb) -> &'db Vec<Impl<'db>>;
     fn is_core(&self, db: &'db dyn HirDb) -> bool;
@@ -90,6 +91,17 @@ impl<'db> HirIngot<'db> for Ingot<'db> {
             .flat_map(|top_mod| {
                 let enums = top_mod.all_enums(db);
                 enums.to_vec()
+            })
+            .collect()
+    }
+
+    #[salsa::tracked(return_ref)]
+    fn all_msgs(self, db: &'db dyn HirDb) -> Vec<Msg<'db>> {
+        self.all_modules(db)
+            .iter()
+            .flat_map(|top_mod| {
+                let msgs = top_mod.all_msgs(db);
+                msgs.to_vec()
             })
             .collect()
     }

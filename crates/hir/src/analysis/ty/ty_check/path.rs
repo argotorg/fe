@@ -9,7 +9,10 @@ use rustc_hash::FxHashMap;
 use super::{TyChecker, env::LocalBinding};
 use crate::analysis::{
     HirAnalysisDb,
-    name_resolution::{PathRes, ResolvedVariant, diagnostics::PathResDiag, is_scope_visible_from},
+    name_resolution::{
+        PathRes, ResolvedMsgVariant, ResolvedVariant, diagnostics::PathResDiag,
+        is_scope_visible_from,
+    },
     ty::{
         adt_def::{AdtDef, AdtRef},
         diagnostics::{BodyDiag, FuncBodyDiag},
@@ -157,7 +160,8 @@ impl<'tc, 'db, 'a> RecordInitChecker<'tc, 'db, 'a> {
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum RecordLike<'db> {
     Type(TyId<'db>),
-    Variant(ResolvedVariant<'db>),
+    EnumVariant(ResolvedVariant<'db>),
+    MsgVariant(ResolvedMsgVariant<'db>),
 }
 
 impl<'db> RecordLike<'db> {
@@ -166,9 +170,10 @@ impl<'db> RecordLike<'db> {
             RecordLike::Type(ty) => ty
                 .adt_ref(db)
                 .is_some_and(|adt_ref| matches!(adt_ref, AdtRef::Struct(_) | AdtRef::Contract(_))),
-            RecordLike::Variant(variant) => {
+            RecordLike::EnumVariant(variant) => {
                 matches!(variant.kind(db), HirVariantKind::Record(..))
             }
+            RecordLike::MsgVariant(variant) => !variant.is_unit(db),
         }
     }
 
@@ -199,7 +204,7 @@ impl<'db> RecordLike<'db> {
                     Some(TyId::invalid(db, InvalidCause::Other))
                 }
             }
-            RecordLike::Variant(variant) => {
+            RecordLike::EnumVariant(variant) => {
                 let adt_def = variant.ty.adt_def(db)?;
                 let field_idx = match variant.kind(db) {
                     HirVariantKind::Record(_) => {
@@ -212,6 +217,20 @@ impl<'db> RecordLike<'db> {
                 let adt_field_list_ref = &adt_def.fields(db)[variant.variant.idx as usize];
                 let args = variant.ty.generic_args(db);
                 let field_ty = adt_field_list_ref.ty(db, field_idx).instantiate(db, args);
+
+                if field_ty.is_star_kind(db) {
+                    Some(field_ty)
+                } else {
+                    Some(TyId::invalid(db, InvalidCause::Other))
+                }
+            }
+            RecordLike::MsgVariant(variant) => {
+                let adt_def = variant.ty.adt_def(db)?;
+                let field_idx = crate::hir_def::FieldParent::MsgVariant(variant.variant)
+                    .fields(db)
+                    .position(|v| v.name(db) == Some(name))?;
+                let adt_field_list_ref = &adt_def.fields(db)[variant.variant.idx as usize];
+                let field_ty = adt_field_list_ref.ty(db, field_idx).instantiate_identity();
 
                 if field_ty.is_star_kind(db) {
                     Some(field_ty)
@@ -241,11 +260,19 @@ impl<'db> RecordLike<'db> {
                     .find(|(_, v)| v.name(db) == Some(name))
                     .map(|(i, _)| i)
             }
-            RecordLike::Variant(variant) => {
+            RecordLike::EnumVariant(variant) => {
                 if !matches!(variant.kind(db), HirVariantKind::Record(_)) {
                     return None;
                 }
                 let parent = FieldParent::Variant(variant.variant);
+                parent
+                    .fields(db)
+                    .enumerate()
+                    .find(|(_, v)| v.name(db) == Some(name))
+                    .map(|(i, _)| i)
+            }
+            RecordLike::MsgVariant(variant) => {
+                let parent = FieldParent::MsgVariant(variant.variant);
                 parent
                     .fields(db)
                     .enumerate()
@@ -271,9 +298,14 @@ impl<'db> RecordLike<'db> {
                 };
                 Some(ScopeId::Field(parent, field_idx as u16))
             }
-            RecordLike::Variant(variant) => {
-                let field_idx = RecordLike::Variant(*variant).record_field_idx(db, name)?;
+            RecordLike::EnumVariant(variant) => {
+                let field_idx = RecordLike::EnumVariant(*variant).record_field_idx(db, name)?;
                 let parent = FieldParent::Variant(variant.variant);
+                Some(ScopeId::Field(parent, field_idx as u16))
+            }
+            RecordLike::MsgVariant(variant) => {
+                let field_idx = RecordLike::MsgVariant(*variant).record_field_idx(db, name)?;
+                let parent = FieldParent::MsgVariant(variant.variant);
                 Some(ScopeId::Field(parent, field_idx as u16))
             }
         }
@@ -292,11 +324,15 @@ impl<'db> RecordLike<'db> {
                 };
                 parent.fields(db).filter_map(|v| v.name(db)).collect()
             }
-            RecordLike::Variant(variant) => {
+            RecordLike::EnumVariant(variant) => {
                 if !matches!(variant.kind(db), HirVariantKind::Record(_)) {
                     return Vec::default();
                 }
                 let parent = FieldParent::Variant(variant.variant);
+                parent.fields(db).filter_map(|v| v.name(db)).collect()
+            }
+            RecordLike::MsgVariant(variant) => {
+                let parent = FieldParent::MsgVariant(variant.variant);
                 parent.fields(db).filter_map(|v| v.name(db)).collect()
             }
         }
@@ -317,10 +353,23 @@ impl<'db> RecordLike<'db> {
                     None
                 }
             }
-            RecordLike::Variant(variant) => {
+            RecordLike::EnumVariant(variant) => {
                 let expected_sub_pat = variant.variant.format_initializer_args(db);
                 let path = variant.path.pretty_print(db);
                 Some(format!("{path}{expected_sub_pat}"))
+            }
+            RecordLike::MsgVariant(variant) => {
+                let labels: Vec<_> = FieldParent::MsgVariant(variant.variant)
+                    .fields(db)
+                    .map(|f| {
+                        f.name(db)
+                            .map(|n| n.data(db).to_string())
+                            .unwrap_or_else(|| "_".to_string())
+                    })
+                    .collect();
+                let init_args = labels.join(", ");
+                let path = variant.path.pretty_print(db);
+                Some(format!("{path} {{ {init_args} }}"))
             }
         }
     }
@@ -336,12 +385,13 @@ impl<'db> RecordLike<'db> {
                     ty.pretty_print(db).to_string()
                 }
             }
-            RecordLike::Variant(variant) => match variant.kind(db) {
+            RecordLike::EnumVariant(variant) => match variant.kind(db) {
                 HirVariantKind::Unit => "unit variant",
                 HirVariantKind::Tuple(_) => "tuple variant",
                 HirVariantKind::Record(_) => "record variant",
             }
             .to_string(),
+            RecordLike::MsgVariant(_) => "record variant".to_string(),
         }
     }
 
@@ -350,6 +400,10 @@ impl<'db> RecordLike<'db> {
     }
 
     pub fn from_variant(variant: ResolvedVariant<'db>) -> Self {
-        RecordLike::Variant(variant)
+        RecordLike::EnumVariant(variant)
+    }
+
+    pub fn from_msg_variant(variant: ResolvedMsgVariant<'db>) -> Self {
+        RecordLike::MsgVariant(variant)
     }
 }

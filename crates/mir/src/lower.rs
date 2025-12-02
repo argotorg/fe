@@ -1328,7 +1328,8 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
     ) -> Option<(TyId<'db>, u64)> {
         let ty = match record_like {
             RecordLike::Type(ty) => *ty,
-            RecordLike::Variant(variant) => variant.ty,
+            RecordLike::EnumVariant(variant) => variant.ty,
+            RecordLike::MsgVariant(variant) => variant.ty,
         };
         let field_types = ty.field_types(self.db);
         if idx >= field_types.len() {
@@ -1347,7 +1348,8 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
     fn record_size_bytes(&self, record_like: &RecordLike<'db>) -> Option<u64> {
         let ty = match record_like {
             RecordLike::Type(ty) => *ty,
-            RecordLike::Variant(variant) => variant.ty,
+            RecordLike::EnumVariant(variant) => variant.ty,
+            RecordLike::MsgVariant(variant) => variant.ty,
         };
         let field_types = ty.field_types(self.db);
 

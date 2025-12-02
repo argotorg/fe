@@ -10,14 +10,14 @@ use thin_vec::ThinVec;
 
 use super::{
     DesugaredOrigin, DesugaredUseFocus, HirOrigin, LazySpan, UseDesugared, body_ast, const_ast,
-    contract_ast, enum_ast, expr::ExprRoot, func_ast, impl_ast, impl_trait_ast, mod_ast,
+    contract_ast, enum_ast, expr::ExprRoot, func_ast, impl_ast, impl_trait_ast, mod_ast, msg_ast,
     pat::PatRoot, stmt::StmtRoot, struct_ast, trait_ast, type_alias_ast, use_ast,
 };
 use crate::{
     HirDb, SpannedHirDb,
     hir_def::{
-        Body, Const, Contract, Enum, Func, Impl, ImplTrait, ItemKind, Mod, Struct, TopLevelMod,
-        Trait, TypeAlias, Use,
+        Body, Const, Contract, Enum, Func, Impl, ImplTrait, ItemKind, Mod, Msg, Struct,
+        TopLevelMod, Trait, TypeAlias, Use,
     },
     lower::top_mod_ast,
 };
@@ -73,6 +73,7 @@ impl<'db> SpanTransitionChain<'db> {
             ChainRoot::Struct(s) => s.top_mod(db),
             ChainRoot::Contract(c) => c.top_mod(db),
             ChainRoot::Enum(e) => e.top_mod(db),
+            ChainRoot::Msg(m) => m.top_mod(db),
             ChainRoot::TypeAlias(t) => t.top_mod(db),
             ChainRoot::Impl(i) => i.top_mod(db),
             ChainRoot::Trait(t) => t.top_mod(db),
@@ -100,6 +101,7 @@ pub(crate) enum ChainRoot<'db> {
     Struct(Struct<'db>),
     Contract(Contract<'db>),
     Enum(Enum<'db>),
+    Msg(Msg<'db>),
     TypeAlias(TypeAlias<'db>),
     Impl(Impl<'db>),
     Trait(Trait<'db>),
@@ -198,6 +200,7 @@ impl ChainInitiator for ChainRoot<'_> {
                 ItemKind::Struct(struct_) => struct_.init(db),
                 ItemKind::Contract(contract) => contract.init(db),
                 ItemKind::Enum(enum_) => enum_.init(db),
+                ItemKind::Msg(msg) => msg.init(db),
                 ItemKind::TypeAlias(type_alias) => type_alias.init(db),
                 ItemKind::Impl(impl_) => impl_.init(db),
                 ItemKind::Trait(trait_) => trait_.init(db),
@@ -212,6 +215,7 @@ impl ChainInitiator for ChainRoot<'_> {
             Self::Struct(struct_) => struct_.init(db),
             Self::Contract(contract) => contract.init(db),
             Self::Enum(enum_) => enum_.init(db),
+            Self::Msg(msg) => msg.init(db),
             Self::TypeAlias(type_alias) => type_alias.init(db),
             Self::Impl(impl_) => impl_.init(db),
             Self::Trait(trait_) => trait_.init(db),
@@ -285,6 +289,7 @@ impl_chain_root! {
     (Struct<'db>, struct_ast),
     (Contract<'db>, contract_ast),
     (Enum<'db>, enum_ast),
+    (Msg<'db>, msg_ast),
     (TypeAlias<'db>, type_alias_ast),
     (Impl<'db>, impl_ast),
     (Trait<'db>, trait_ast),

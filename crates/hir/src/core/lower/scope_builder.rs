@@ -5,8 +5,9 @@ use crate::{
     HirDb,
     hir_def::{
         Body, Enum, EnumVariant, ExprId, FieldDefListId, FieldParent, FuncParamListId,
-        FuncParamName, GenericParamListId, GenericParamOwner, HirIngot, ItemKind, TopLevelMod,
-        TrackedItemId, TrackedItemVariant, Trait, Use, VariantDefListId, VariantKind, Visibility,
+        FuncParamName, GenericParamListId, GenericParamOwner, HirIngot, ItemKind, Msg, MsgVariant,
+        MsgVariantListId, TopLevelMod, TrackedItemId, TrackedItemVariant, Trait, Use,
+        VariantDefListId, VariantKind, Visibility,
         scope_graph::{EdgeKind, Scope, ScopeEdge, ScopeGraph, ScopeId},
     },
 };
@@ -214,6 +215,16 @@ impl<'db> ScopeGraphBuilder<'db> {
                     .unwrap_or_else(EdgeKind::anon)
             }
 
+            Msg(inner) => {
+                self.graph.add_lex_edge(item_node, parent_node);
+                self.add_msg_variant_scope(item_node, inner, inner.variants(self.db));
+                inner
+                    .name(self.db)
+                    .to_opt()
+                    .map(EdgeKind::type_)
+                    .unwrap_or_else(EdgeKind::anon)
+            }
+
             TypeAlias(inner) => {
                 self.graph.add_lex_edge(item_node, parent_node);
                 self.add_generic_param_scope(
@@ -389,6 +400,37 @@ impl<'db> ScopeGraphBuilder<'db> {
             if let VariantKind::Record(fields) = variant_def.kind {
                 self.add_field_scope(variant_node, FieldParent::Variant(variant), fields)
             }
+
+            self.graph.add_edge(parent_node, variant_node, kind)
+        }
+    }
+
+    fn add_msg_variant_scope(
+        &mut self,
+        parent_node: NodeId,
+        parent_item: Msg<'db>,
+        variants: MsgVariantListId<'db>,
+    ) {
+        let parent_vis = parent_item.vis(self.db);
+
+        for (i, variant_def) in variants.data(self.db).iter().enumerate() {
+            let variant = MsgVariant::new(parent_item, i);
+            let scope_id = ScopeId::MsgVariant(variant);
+            let scope_data = Scope::new(scope_id, parent_vis);
+
+            let variant_node = self.graph.push(scope_id, scope_data);
+            self.graph.add_lex_edge(variant_node, parent_node);
+            let kind = variant_def
+                .name
+                .to_opt()
+                .map(EdgeKind::variant)
+                .unwrap_or_else(EdgeKind::anon);
+
+            self.add_field_scope(
+                variant_node,
+                FieldParent::MsgVariant(variant),
+                variant_def.params,
+            );
 
             self.graph.add_edge(parent_node, variant_node, kind)
         }

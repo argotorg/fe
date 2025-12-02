@@ -5,7 +5,7 @@ use salsa::Update;
 use crate::{
     HirDb, SpannedHirDb,
     core::hir_def::{
-        Body, Const, Contract, Enum, Func, Impl, ImplTrait, Mod, Struct, TopLevelMod, Trait,
+        Body, Const, Contract, Enum, Func, Impl, ImplTrait, Mod, Msg, Struct, TopLevelMod, Trait,
         TypeAlias, Use,
     },
     core::lower::top_mod_ast,
@@ -38,17 +38,19 @@ pub mod lazy_spans {
             LazyUnExprSpan,
         },
         item::{
-            LazyBodySpan, LazyConstSpan, LazyContractSpan, LazyEnumSpan, LazyFieldDefListSpan,
-            LazyFieldDefSpan, LazyFuncSignatureSpan, LazyFuncSpan, LazyImplSpan, LazyImplTraitSpan,
-            LazyItemModifierSpan, LazyItemSpan, LazyModSpan, LazyStructSpan, LazyTopModSpan,
-            LazyTraitSpan, LazyTypeAliasSpan, LazyUseSpan, LazyVariantDefListSpan,
-            LazyVariantDefSpan,
+            LazyBodySpan, LazyConstSpan, LazyContractRecvSpan, LazyContractSpan, LazyEnumSpan,
+            LazyFieldDefListSpan, LazyFieldDefSpan, LazyFuncSignatureSpan, LazyFuncSpan,
+            LazyImplSpan, LazyImplTraitSpan, LazyItemModifierSpan, LazyItemSpan, LazyModSpan,
+            LazyMsgSpan, LazyMsgVariantListSpan, LazyMsgVariantParamsSpan, LazyMsgVariantSpan,
+            LazyRecvArmListSpan, LazyRecvArmSpan, LazyStructSpan, LazyTopModSpan, LazyTraitSpan,
+            LazyTypeAliasSpan, LazyUseSpan, LazyVariantDefListSpan, LazyVariantDefSpan,
         },
         params::{
             LazyConstGenericParamSpan, LazyFuncParamListSpan, LazyFuncParamSpan,
             LazyGenericArgListSpan, LazyGenericArgSpan, LazyGenericParamListSpan,
             LazyGenericParamSpan, LazyKindBoundSpan, LazyTraitRefSpan, LazyTypeBoundListSpan,
-            LazyTypeBoundSpan, LazyTypeGenericArgSpan, LazyWhereClauseSpan, LazyWherePredicateSpan,
+            LazyTypeBoundSpan, LazyTypeGenericArgSpan, LazyUsesClauseSpan, LazyUsesParamListSpan,
+            LazyUsesParamSpan, LazyWhereClauseSpan, LazyWherePredicateSpan,
         },
         pat::{
             LazyLitPatSpan, LazyPatSpan, LazyPathPatSpan, LazyPathTuplePatSpan,
@@ -124,6 +126,10 @@ pub fn contract_ast<'db>(
     db: &'db dyn SpannedHirDb,
     item: Contract<'db>,
 ) -> &'db HirOrigin<ast::Contract> {
+    item.origin(db)
+}
+
+pub fn msg_ast<'db>(db: &'db dyn SpannedHirDb, item: Msg<'db>) -> &'db HirOrigin<ast::Msg> {
     item.origin(db)
 }
 

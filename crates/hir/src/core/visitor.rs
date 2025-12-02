@@ -2,31 +2,35 @@ use std::{marker::PhantomData, mem};
 
 use crate::{
     HirDb,
-    core::hir_def::{
-        Body, CallArg, Const, Contract, Enum, EnumVariant, Expr, ExprId, Field, FieldDef,
-        FieldDefListId, FieldIndex, FieldParent, Func, FuncParam, FuncParamListId, FuncParamName,
-        GenericArg, GenericArgListId, GenericParam, GenericParamListId, IdentId, Impl, ImplTrait,
-        ItemKind, KindBound, LitKind, MatchArm, Mod, Partial, Pat, PatId, PathId, PathKind, Stmt,
-        StmtId, Struct, TopLevelMod, Trait, TraitRefId, TupleTypeId, TypeAlias, TypeBound, TypeId,
-        TypeKind, Use, UseAlias, UsePathId, UsePathSegment, VariantDef, VariantDefListId,
-        VariantKind, WhereClauseId, WherePredicate,
-        attr::{self, AttrArgValue},
-        scope_graph::ScopeId,
-    },
     core::span::{
         SpanDowncast, item::LazySuperTraitListSpan, lazy_spans::*, params::LazyTraitRefSpan,
         transition::ChainRoot,
+    },
+    hir_def::{
+        Body, CallArg, Const, Contract, ContractRecv, ContractRecvArm, ContractRecvArmListId,
+        EffectParam, EffectParamListId, Enum, EnumVariant, Expr, ExprId, Field, FieldDef,
+        FieldDefListId, FieldIndex, FieldParent, Func, FuncParam, FuncParamListId, FuncParamName,
+        GenericArg, GenericArgListId, GenericParam, GenericParamListId, IdentId, Impl, ImplTrait,
+        ItemKind, KindBound, LitKind, MatchArm, Mod, Msg, MsgVariant, MsgVariantDef,
+        MsgVariantListId, Partial, Pat, PatId, PathId, PathKind, Stmt, StmtId, Struct, TopLevelMod,
+        Trait, TraitRefId, TupleTypeId, TypeAlias, TypeBound, TypeId, TypeKind, Use, UseAlias,
+        UsePathId, UsePathSegment, VariantDef, VariantDefListId, VariantKind, WhereClauseId,
+        WherePredicate,
+        attr::{self, AttrArgValue},
+        scope_graph::ScopeId,
     },
 };
 
 pub mod prelude {
     pub use super::{
         Visitor, VisitorCtxt, walk_arm, walk_attribute, walk_attribute_list, walk_body,
-        walk_call_arg, walk_call_arg_list, walk_const, walk_contract, walk_enum, walk_expr,
-        walk_field, walk_field_def, walk_field_def_list, walk_field_list, walk_func,
-        walk_func_param, walk_func_param_list, walk_generic_arg, walk_generic_arg_list,
-        walk_generic_param, walk_generic_param_list, walk_impl, walk_impl_trait, walk_item,
-        walk_kind_bound, walk_mod, walk_pat, walk_path, walk_stmt, walk_struct,
+        walk_call_arg, walk_call_arg_list, walk_const, walk_contract, walk_contract_recv,
+        walk_contract_recv_arm, walk_contract_recv_arm_list, walk_effect_param,
+        walk_effect_param_list, walk_enum, walk_expr, walk_field, walk_field_def,
+        walk_field_def_list, walk_field_list, walk_func, walk_func_param, walk_func_param_list,
+        walk_generic_arg, walk_generic_arg_list, walk_generic_param, walk_generic_param_list,
+        walk_impl, walk_impl_trait, walk_item, walk_kind_bound, walk_mod, walk_msg,
+        walk_msg_variant, walk_msg_variant_list, walk_pat, walk_path, walk_stmt, walk_struct,
         walk_super_trait_list, walk_top_mod, walk_trait, walk_trait_ref, walk_type,
         walk_type_alias, walk_type_bound, walk_type_bound_list, walk_use, walk_use_path,
         walk_variant_def, walk_variant_def_list, walk_where_clause, walk_where_predicate,
@@ -72,8 +76,68 @@ pub trait Visitor<'db> {
         walk_contract(self, ctxt, contract)
     }
 
+    fn visit_msg(&mut self, ctxt: &mut VisitorCtxt<'db, LazyMsgSpan<'db>>, msg: Msg<'db>) {
+        walk_msg(self, ctxt, msg)
+    }
+
+    fn visit_effect_param_list(
+        &mut self,
+        ctxt: &mut VisitorCtxt<'db, LazyUsesClauseSpan<'db>>,
+        effects: EffectParamListId<'db>,
+    ) {
+        walk_effect_param_list(self, ctxt, effects)
+    }
+
+    fn visit_effect_param(
+        &mut self,
+        ctxt: &mut VisitorCtxt<'db, LazyUsesParamSpan<'db>>,
+        effect: &EffectParam<'db>,
+    ) {
+        walk_effect_param(self, ctxt, effect)
+    }
+
+    fn visit_contract_recv(
+        &mut self,
+        ctxt: &mut VisitorCtxt<'db, LazyContractRecvSpan<'db>>,
+        recv: &ContractRecv<'db>,
+    ) {
+        walk_contract_recv(self, ctxt, recv)
+    }
+
+    fn visit_contract_recv_arm_list(
+        &mut self,
+        ctxt: &mut VisitorCtxt<'db, LazyRecvArmListSpan<'db>>,
+        arms: ContractRecvArmListId<'db>,
+    ) {
+        walk_contract_recv_arm_list(self, ctxt, arms)
+    }
+
+    fn visit_contract_recv_arm(
+        &mut self,
+        ctxt: &mut VisitorCtxt<'db, LazyRecvArmSpan<'db>>,
+        arm: &ContractRecvArm<'db>,
+    ) {
+        walk_contract_recv_arm(self, ctxt, arm)
+    }
+
     fn visit_enum(&mut self, ctxt: &mut VisitorCtxt<'db, LazyEnumSpan<'db>>, enum_: Enum<'db>) {
         walk_enum(self, ctxt, enum_)
+    }
+
+    fn visit_msg_variant_list(
+        &mut self,
+        ctxt: &mut VisitorCtxt<'db, LazyMsgVariantListSpan<'db>>,
+        variants: MsgVariantListId<'db>,
+    ) {
+        walk_msg_variant_list(self, ctxt, variants)
+    }
+
+    fn visit_msg_variant(
+        &mut self,
+        ctxt: &mut VisitorCtxt<'db, LazyMsgVariantSpan<'db>>,
+        variant: &MsgVariantDef<'db>,
+    ) {
+        walk_msg_variant(self, ctxt, variant)
     }
 
     fn visit_type_alias(
@@ -387,6 +451,10 @@ pub fn walk_item<'db, V>(
             let mut new_ctxt = VisitorCtxt::with_contract(ctxt.db, contract);
             visitor.visit_contract(&mut new_ctxt, contract)
         }
+        ItemKind::Msg(msg) => {
+            let mut new_ctxt = VisitorCtxt::with_msg(ctxt.db, msg);
+            visitor.visit_msg(&mut new_ctxt, msg)
+        }
         ItemKind::Enum(enum_) => {
             let mut new_ctxt = VisitorCtxt::with_enum(ctxt.db, enum_);
             visitor.visit_enum(&mut new_ctxt, enum_)
@@ -524,6 +592,15 @@ pub fn walk_func<'db, V>(
     if let Some(body) = func.body(ctxt.db) {
         visitor.visit_body(&mut VisitorCtxt::with_body(ctxt.db, body), body);
     }
+
+    // Effects (uses clause)
+    ctxt.with_new_ctxt(
+        |span| span.sig().effects(),
+        |ctxt| {
+            let effects = func.effects(ctxt.db);
+            visitor.visit_effect_param_list(ctxt, effects);
+        },
+    );
 }
 
 pub fn walk_struct<'db, V>(
@@ -598,12 +675,182 @@ pub fn walk_contract<'db, V>(
             visitor.visit_attribute_list(ctxt, id);
         },
     );
+    // Contract header effects
+    ctxt.with_new_ctxt(
+        |span| span.effects(),
+        |ctxt| {
+            let id = contract.effects(ctxt.db);
+            visitor.visit_effect_param_list(ctxt, id);
+        },
+    );
 
+    // Contract fields live under a dedicated AST node; walk them explicitly.
     ctxt.with_new_ctxt(
         |span| span.fields(),
         |ctxt| {
             let id = contract.fields(ctxt.db);
-            visitor.visit_field_def_list(ctxt, id);
+            let parent = FieldParent::Contract(contract);
+            for (idx, field) in id.data(ctxt.db).iter().enumerate() {
+                ctxt.with_new_scoped_ctxt(
+                    ScopeId::Field(parent, idx as u16),
+                    |span| span.field(idx),
+                    |ctxt| {
+                        visitor.visit_field_def(ctxt, field);
+                    },
+                );
+            }
+        },
+    );
+
+    // Contract init: params, effects, body
+    ctxt.with_new_ctxt(
+        |span| span.init_block(),
+        |ctxt| {
+            if let Some(params) = contract.init_params(ctxt.db) {
+                ctxt.with_new_ctxt(
+                    |span| span.params(),
+                    |ctxt| visitor.visit_func_param_list(ctxt, params),
+                );
+            }
+            ctxt.with_new_ctxt(
+                |span| span.effects(),
+                |ctxt| visitor.visit_effect_param_list(ctxt, contract.init_effects(ctxt.db)),
+            );
+            if let Some(body) = contract.init_body(ctxt.db) {
+                visitor.visit_body(&mut VisitorCtxt::with_body(ctxt.db, body), body);
+            }
+        },
+    );
+
+    // Recv handlers
+    let recvs = contract.recvs(ctxt.db);
+    for (idx, recv) in recvs.data(ctxt.db).iter().enumerate() {
+        ctxt.with_new_ctxt(
+            |span| span.recv(idx),
+            |ctxt| {
+                visitor.visit_contract_recv(ctxt, recv);
+            },
+        );
+    }
+}
+
+pub fn walk_effect_param_list<'db, V>(
+    visitor: &mut V,
+    ctxt: &mut VisitorCtxt<'db, LazyUsesClauseSpan<'db>>,
+    effects: EffectParamListId<'db>,
+) where
+    V: Visitor<'db> + ?Sized,
+{
+    for (idx, eff) in effects.data(ctxt.db).iter().enumerate() {
+        ctxt.with_new_ctxt(
+            |span| span.param_idx(idx),
+            |ctxt| visitor.visit_effect_param(ctxt, eff),
+        );
+    }
+}
+
+pub fn walk_effect_param<'db, V>(
+    visitor: &mut V,
+    ctxt: &mut VisitorCtxt<'db, LazyUsesParamSpan<'db>>,
+    effect: &EffectParam<'db>,
+) where
+    V: Visitor<'db> + ?Sized,
+{
+    if let Some(name) = effect.name {
+        ctxt.with_new_ctxt(|span| span.name(), |ctxt| visitor.visit_ident(ctxt, name));
+    }
+    if let Some(path) = effect.key_path.to_opt() {
+        ctxt.with_new_ctxt(|span| span.path(), |ctxt| visitor.visit_path(ctxt, path));
+    }
+}
+
+pub fn walk_contract_recv<'db, V>(
+    visitor: &mut V,
+    ctxt: &mut VisitorCtxt<'db, LazyContractRecvSpan<'db>>,
+    recv: &ContractRecv<'db>,
+) where
+    V: Visitor<'db> + ?Sized,
+{
+    if let Some(p) = recv.msg_path {
+        ctxt.with_new_ctxt(|span| span.path(), |ctxt| visitor.visit_path(ctxt, p));
+    }
+
+    ctxt.with_new_ctxt(
+        |span| span.arms(),
+        |ctxt| {
+            visitor.visit_contract_recv_arm_list(ctxt, recv.arms);
+        },
+    );
+}
+
+pub fn walk_contract_recv_arm_list<'db, V>(
+    visitor: &mut V,
+    ctxt: &mut VisitorCtxt<'db, LazyRecvArmListSpan<'db>>,
+    arms: ContractRecvArmListId<'db>,
+) where
+    V: Visitor<'db> + ?Sized,
+{
+    for (idx, arm) in arms.data(ctxt.db).iter().enumerate() {
+        ctxt.with_new_ctxt(
+            |span| span.arm(idx),
+            |ctxt| visitor.visit_contract_recv_arm(ctxt, arm),
+        );
+    }
+}
+
+pub fn walk_contract_recv_arm<'db, V>(
+    visitor: &mut V,
+    ctxt: &mut VisitorCtxt<'db, LazyRecvArmSpan<'db>>,
+    arm: &ContractRecvArm<'db>,
+) where
+    V: Visitor<'db> + ?Sized,
+{
+    let mut pat_ctxt = VisitorCtxt::with_pat(ctxt.db, arm.body.scope(), arm.body, arm.pat);
+    if let Partial::Present(pat_data) = arm.pat.data(ctxt.db, arm.body) {
+        visitor.visit_pat(&mut pat_ctxt, arm.pat, pat_data);
+    }
+
+    if let Some(ret_ty) = arm.ret_ty {
+        ctxt.with_new_ctxt(|span| span.ret_ty(), |ctxt| visitor.visit_ty(ctxt, ret_ty));
+    }
+
+    ctxt.with_new_ctxt(
+        |span| span.effects(),
+        |ctxt| visitor.visit_effect_param_list(ctxt, arm.effects),
+    );
+
+    visitor.visit_body(&mut VisitorCtxt::with_body(ctxt.db, arm.body), arm.body);
+}
+
+pub fn walk_msg<'db, V>(
+    visitor: &mut V,
+    ctxt: &mut VisitorCtxt<'db, LazyMsgSpan<'db>>,
+    msg: Msg<'db>,
+) where
+    V: Visitor<'db> + ?Sized,
+{
+    if let Some(id) = msg.name(ctxt.db).to_opt() {
+        ctxt.with_new_ctxt(
+            |span| span.name(),
+            |ctxt| {
+                visitor.visit_ident(ctxt, id);
+            },
+        )
+    }
+
+    ctxt.with_new_ctxt(
+        |span| span.attributes(),
+        |ctxt| {
+            let id = msg.attributes(ctxt.db);
+            visitor.visit_attribute_list(ctxt, id);
+        },
+    );
+
+    ctxt.with_new_ctxt(
+        |span| span.variants(),
+        |ctxt| {
+            let variants = msg.variants(ctxt.db);
+            visitor.visit_msg_variant_list(ctxt, variants);
         },
     );
 }
@@ -1619,6 +1866,7 @@ pub fn walk_field_def_list<'db, V>(
         ScopeId::Item(ItemKind::Struct(s)) => FieldParent::Struct(s),
         ScopeId::Item(ItemKind::Contract(c)) => FieldParent::Contract(c),
         ScopeId::Variant(v) => FieldParent::Variant(v),
+        ScopeId::MsgVariant(v) => FieldParent::MsgVariant(v),
         _ => unreachable!(),
     };
     for (idx, field) in fields.data(ctxt.db).iter().enumerate() {
@@ -1706,6 +1954,64 @@ pub fn walk_variant_def<'db, V>(
             |span| span.fields(),
             |ctxt| visitor.visit_field_def_list(ctxt, fields),
         ),
+    }
+}
+
+pub fn walk_msg_variant_list<'db, V>(
+    visitor: &mut V,
+    ctxt: &mut VisitorCtxt<'db, LazyMsgVariantListSpan<'db>>,
+    variants: MsgVariantListId<'db>,
+) where
+    V: Visitor<'db> + ?Sized,
+{
+    let ItemKind::Msg(msg) = ctxt.scope().item() else {
+        unreachable!()
+    };
+    for (idx, variant) in variants.data(ctxt.db).iter().enumerate() {
+        ctxt.with_new_scoped_ctxt(
+            ScopeId::MsgVariant(MsgVariant::new(msg, idx)),
+            |span| span.variant(idx),
+            |ctxt| visitor.visit_msg_variant(ctxt, variant),
+        );
+    }
+}
+
+pub fn walk_msg_variant<'db, V>(
+    visitor: &mut V,
+    ctxt: &mut VisitorCtxt<'db, LazyMsgVariantSpan<'db>>,
+    variant: &MsgVariantDef<'db>,
+) where
+    V: Visitor<'db> + ?Sized,
+{
+    ctxt.with_new_ctxt(
+        |span| span.attributes(),
+        |ctxt| visitor.visit_attribute_list(ctxt, variant.attributes),
+    );
+
+    if let Some(name) = variant.name.to_opt() {
+        ctxt.with_new_ctxt(|span| span.name(), |ctxt| visitor.visit_ident(ctxt, name));
+    }
+
+    let parent_variant = match ctxt.scope() {
+        ScopeId::MsgVariant(v) => v,
+        _ => unreachable!(),
+    };
+
+    ctxt.with_new_ctxt(
+        |span| span.params(),
+        |ctxt| {
+            for (idx, field) in variant.params.data(ctxt.db).iter().enumerate() {
+                ctxt.with_new_scoped_ctxt(
+                    ScopeId::Field(FieldParent::MsgVariant(parent_variant), idx as u16),
+                    |span| span.param(idx),
+                    |ctxt| visitor.visit_field_def(ctxt, field),
+                );
+            }
+        },
+    );
+
+    if let Some(ret_ty) = variant.ret_ty {
+        ctxt.with_new_ctxt(|span| span.ret_ty(), |ctxt| visitor.visit_ty(ctxt, ret_ty));
     }
 }
 
@@ -2074,6 +2380,7 @@ where
             ChainRoot::Const(const_) => const_.top_mod(self.db),
             ChainRoot::Use(use_) => use_.top_mod(self.db),
             ChainRoot::Body(body) => body.top_mod(self.db),
+            ChainRoot::Msg(msg) => msg.top_mod(self.db),
             ChainRoot::Stmt(_) | ChainRoot::Expr(_) | ChainRoot::Pat(_) => {
                 self.body().top_mod(self.db)
             }
@@ -2241,6 +2548,7 @@ define_item_ctxt_ctor! {
     (LazyFuncSpan<'db>, with_func(func: Func<'db>)),
     (LazyStructSpan<'db>, with_struct(struct_: Struct<'db>)),
     (LazyContractSpan<'db>, with_contract(contract: Contract<'db>)),
+    (LazyMsgSpan<'db>, with_msg(msg: Msg<'db>)),
     (LazyEnumSpan<'db>, with_enum(enum_: Enum<'db>)),
     (LazyTypeAliasSpan<'db>, with_type_alias(type_alias: TypeAlias<'db>)),
     (LazyImplSpan<'db>, with_impl(impl_: Impl<'db>)),

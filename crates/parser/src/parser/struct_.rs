@@ -61,7 +61,7 @@ impl super::Parse for RecordFieldDefListScope {
     }
 }
 
-define_scope! { RecordFieldDefScope, RecordFieldDef }
+define_scope! { pub(crate) RecordFieldDefScope, RecordFieldDef }
 impl super::Parse for RecordFieldDefScope {
     type Error = Recovery<ErrProof>;
 
@@ -87,6 +87,9 @@ impl super::Parse for RecordFieldDefScope {
         }
 
         parser.set_scope_recovery_stack(&[SyntaxKind::Colon]);
+
+        // Optional `mut` marker for fields (e.g. `mut field: Type`)
+        parser.bump_if(SyntaxKind::MutKw);
 
         if parser.find(
             SyntaxKind::Ident,

@@ -1,10 +1,10 @@
 use parser::ast::{self, prelude::*};
 
-use super::FileLowerCtxt;
+use super::{FileLowerCtxt, body::BodyCtxt};
 use crate::{
     hir_def::{
-        AttrListId, Body, EffectParamListId, FuncParamListId, GenericParamListId, IdentId, PathId,
-        TraitRefId, TupleTypeId, TypeBound, TypeId, WhereClauseId, item::*,
+        AttrListId, Body, BodyKind, EffectParamListId, Expr, FuncParamListId, GenericParamListId,
+        IdentId, Pat, PathId, TraitRefId, TupleTypeId, TypeBound, TypeId, WhereClauseId, item::*,
     },
     span::HirOrigin,
 };
@@ -36,6 +36,9 @@ impl<'db> ItemKind<'db> {
             }
             ast::ItemKind::Enum(enum_) => {
                 Enum::lower_ast(ctxt, enum_);
+            }
+            ast::ItemKind::Msg(msg) => {
+                Msg::lower_ast(ctxt, msg);
             }
             ast::ItemKind::TypeAlias(alias) => {
                 TypeAlias::lower_ast(ctxt, alias);
@@ -199,7 +202,37 @@ impl<'db> Contract<'db> {
 
         let attributes = AttrListId::lower_ast_opt(ctxt, ast.attr_list());
         let vis = ItemModifier::lower_ast(ast.modifier()).to_visibility();
-        let fields = FieldDefListId::lower_ast_opt(ctxt, ast.fields());
+        let fields = FieldDefListId::lower_contract_fields_opt(ctxt, ast.fields());
+        // Contract-level uses clause
+        let effects = lower_uses_clause_opt(ctxt, ast.uses_clause());
+
+        // Optional init block
+        let (init_params, init_effects, init_body) = if let Some(init_ast) = ast.init_block() {
+            let params = init_ast
+                .params()
+                .map(|p| FuncParamListId::lower_ast(ctxt, p));
+            let effects = lower_uses_clause_opt(ctxt, init_ast.uses_clause());
+            let body = init_ast
+                .body()
+                .map(|b| Body::lower_ast(ctxt, ast::Expr::cast(b.syntax().clone()).unwrap()));
+            (params, effects, body)
+        } else {
+            (None, EffectParamListId::new(ctxt.db(), vec![]), None)
+        };
+
+        // Recv blocks (message handlers)
+        let recvs = {
+            let mut data = Vec::new();
+            for (recv_idx, r) in ast.recvs().enumerate() {
+                let msg_path = r.path().map(|p| PathId::lower_ast(ctxt, p));
+                let arms = r
+                    .arms()
+                    .map(|arms| ContractRecvArmListId::lower_ast(ctxt, recv_idx, arms))
+                    .unwrap_or_else(|| ContractRecvArmListId::new(ctxt.db(), vec![]));
+                data.push(ContractRecv { msg_path, arms });
+            }
+            ContractRecvListId::new(ctxt.db(), data)
+        };
         let origin = HirOrigin::raw(&ast);
 
         let contract = Self::new(
@@ -209,11 +242,77 @@ impl<'db> Contract<'db> {
             attributes,
             vis,
             fields,
+            effects,
+            init_params,
+            init_effects,
+            init_body,
+            recvs,
             ctxt.top_mod(),
             origin,
         );
         ctxt.leave_item_scope(contract)
     }
+}
+
+impl<'db> Msg<'db> {
+    pub(super) fn lower_ast(ctxt: &mut FileLowerCtxt<'db>, ast: ast::Msg) -> Self {
+        let name = IdentId::lower_token_partial(ctxt, ast.name());
+        let id = ctxt.joined_id(TrackedItemVariant::Msg(name));
+        ctxt.enter_item_scope(id, false);
+
+        let attributes = AttrListId::lower_ast_opt(ctxt, ast.attr_list());
+        let vis = ItemModifier::lower_ast(ast.modifier()).to_visibility();
+        let variants = MsgVariantListId::lower_ast_opt(ctxt, ast.variants());
+        let origin = HirOrigin::raw(&ast);
+
+        let msg = Self::new(
+            ctxt.db(),
+            id,
+            name,
+            attributes,
+            vis,
+            variants,
+            ctxt.top_mod(),
+            origin,
+        );
+
+        ctxt.leave_item_scope(msg)
+    }
+}
+
+fn lower_uses_clause_opt<'db>(
+    ctxt: &mut FileLowerCtxt<'db>,
+    uses: Option<ast::UsesClause>,
+) -> EffectParamListId<'db> {
+    use crate::hir_def::{EffectParam, EffectParamListId};
+
+    let mut data: Vec<EffectParam<'db>> = Vec::new();
+
+    if let Some(uses) = uses {
+        if let Some(list) = uses.param_list() {
+            for p in list {
+                let name = p.name().map(|n| IdentId::lower_token(ctxt, n.syntax()));
+                let is_mut = p.mut_token().is_some();
+                let key_path = p.path().map(|path| PathId::lower_ast(ctxt, path)).into();
+                data.push(EffectParam {
+                    name,
+                    key_path,
+                    is_mut,
+                });
+            }
+        } else if let Some(p) = uses.param() {
+            let name = p.name().map(|n| IdentId::lower_token(ctxt, n.syntax()));
+            let is_mut = p.mut_token().is_some();
+            let key_path = p.path().map(|path| PathId::lower_ast(ctxt, path)).into();
+            data.push(EffectParam {
+                name,
+                key_path,
+                is_mut,
+            });
+        }
+    }
+
+    EffectParamListId::new(ctxt.db(), data)
 }
 
 impl<'db> Enum<'db> {
@@ -514,6 +613,38 @@ impl<'db> FieldDefListId<'db> {
         ast.map(|ast| Self::lower_ast(ctxt, ast))
             .unwrap_or(Self::new(ctxt.db(), Vec::new()))
     }
+
+    fn lower_contract_fields_opt(
+        ctxt: &mut FileLowerCtxt<'db>,
+        ast: Option<ast::ContractFields>,
+    ) -> Self {
+        match ast {
+            Some(cf) => {
+                let fields = cf
+                    .into_iter()
+                    .map(|field| FieldDef::lower_ast(ctxt, field))
+                    .collect::<Vec<_>>();
+                Self::new(ctxt.db(), fields)
+            }
+            None => Self::new(ctxt.db(), Vec::new()),
+        }
+    }
+
+    fn lower_msg_params_opt(
+        ctxt: &mut FileLowerCtxt<'db>,
+        ast: Option<ast::MsgVariantParams>,
+    ) -> Self {
+        match ast {
+            Some(params) => {
+                let fields = params
+                    .into_iter()
+                    .map(|field| FieldDef::lower_ast(ctxt, field))
+                    .collect::<Vec<_>>();
+                Self::new(ctxt.db(), fields)
+            }
+            None => Self::new(ctxt.db(), Vec::new()),
+        }
+    }
 }
 
 impl<'db> FieldDef<'db> {
@@ -560,6 +691,80 @@ impl<'db> VariantDef<'db> {
             attributes,
             name,
             kind,
+        }
+    }
+}
+
+impl<'db> MsgVariantListId<'db> {
+    fn lower_ast_opt(ctxt: &mut FileLowerCtxt<'db>, ast: Option<ast::MsgVariantList>) -> Self {
+        match ast {
+            Some(list) => {
+                let variants = list
+                    .into_iter()
+                    .map(|variant| MsgVariantDef::lower_ast(ctxt, variant))
+                    .collect::<Vec<_>>();
+                Self::new(ctxt.db(), variants)
+            }
+            None => Self::new(ctxt.db(), Vec::new()),
+        }
+    }
+}
+
+impl<'db> MsgVariantDef<'db> {
+    fn lower_ast(ctxt: &mut FileLowerCtxt<'db>, ast: ast::MsgVariant) -> Self {
+        let attributes = AttrListId::lower_ast_opt(ctxt, ast.attr_list());
+        let name = IdentId::lower_token_partial(ctxt, ast.name());
+        let params = FieldDefListId::lower_msg_params_opt(ctxt, ast.params());
+        let ret_ty = ast.ret_ty().map(|ty| TypeId::lower_ast(ctxt, ty));
+
+        Self {
+            attributes,
+            name,
+            params,
+            ret_ty,
+        }
+    }
+}
+
+impl<'db> ContractRecvArmListId<'db> {
+    fn lower_ast(ctxt: &mut FileLowerCtxt<'db>, recv_idx: usize, ast: ast::RecvArmList) -> Self {
+        let arms = ast
+            .into_iter()
+            .enumerate()
+            .map(|(idx, arm)| ContractRecvArm::lower_ast(ctxt, recv_idx, idx, arm))
+            .collect::<Vec<_>>();
+        Self::new(ctxt.db(), arms)
+    }
+}
+
+impl<'db> ContractRecvArm<'db> {
+    fn lower_ast(
+        ctxt: &mut FileLowerCtxt<'db>,
+        recv_idx: usize,
+        arm_idx: usize,
+        ast: ast::RecvArm,
+    ) -> Self {
+        let variant = TrackedItemVariant::ContractRecvArm {
+            recv_idx: recv_idx as u32,
+            arm_idx: arm_idx as u32,
+        };
+        let id = ctxt.joined_id(variant);
+        let mut body_ctxt = BodyCtxt::new(ctxt, id);
+
+        let pat = Pat::lower_ast_opt(&mut body_ctxt, ast.pat());
+        let body_ast = ast
+            .body()
+            .map(|b| ast::Expr::cast(b.syntax().clone()).unwrap());
+        let body_expr = Expr::push_to_body_opt(&mut body_ctxt, body_ast.clone());
+        let body = body_ctxt.build(body_ast.as_ref(), body_expr, BodyKind::FuncBody);
+        let ret_ty = ast.ret_ty().map(|ty| TypeId::lower_ast(ctxt, ty));
+        let effects = lower_uses_clause_opt(ctxt, ast.uses_clause());
+
+        ContractRecvArm {
+            pat,
+            ret_ty,
+            effects,
+            body,
         }
     }
 }

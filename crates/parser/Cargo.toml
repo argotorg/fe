@@ -25,6 +25,7 @@ tracing.workspace = true
 dir-test.workspace = true
 wasm-bindgen-test.workspace = true
 test-utils.workspace = true
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 wasm-bindgen = "0.2"

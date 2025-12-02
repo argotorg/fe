@@ -1915,6 +1915,7 @@ dependencies = [
  "rowan",
  "smallvec 2.0.0-alpha.12",
  "tracing",
+ "tracing-subscriber 0.3.20",
  "unwrap-infallible",
  "wasm-bindgen",
  "wasm-bindgen-test",

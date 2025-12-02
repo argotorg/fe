@@ -1,5 +1,5 @@
 use crate::hir_def::{
-    Contract, Enum, GenericParamOwner, IdentId, ItemKind, Partial, Struct, TypeId as HirTyId,
+    Contract, Enum, GenericParamOwner, IdentId, ItemKind, Msg, Partial, Struct, TypeId as HirTyId,
     VariantKind, scope_graph::ScopeId,
 };
 use crate::span::DynLazySpan;
@@ -75,6 +75,8 @@ impl<'db> AdtDef<'db> {
             AdtRef::Struct(s) => s.span().fields().field(field_idx).ty().into(),
 
             AdtRef::Contract(c) => c.span().fields().field(field_idx).ty().into(),
+
+            AdtRef::Msg(m) => m.variant_span(field_idx).params().param(ty_idx).ty().into(),
         }
     }
 
@@ -83,6 +85,7 @@ impl<'db> AdtDef<'db> {
             AdtRef::Enum(e) => e.top_mod(db).ingot(db),
             AdtRef::Struct(s) => s.top_mod(db).ingot(db),
             AdtRef::Contract(c) => c.top_mod(db).ingot(db),
+            AdtRef::Msg(m) => m.top_mod(db).ingot(db),
         }
     }
 
@@ -151,6 +154,7 @@ pub enum AdtRef<'db> {
     Enum(Enum<'db>),
     Struct(Struct<'db>),
     Contract(Contract<'db>),
+    Msg(Msg<'db>),
 }
 
 impl<'db> AdtRef<'db> {
@@ -159,6 +163,7 @@ impl<'db> AdtRef<'db> {
             ItemKind::Enum(x) => Some(x.into()),
             ItemKind::Struct(x) => Some(x.into()),
             ItemKind::Contract(x) => Some(x.into()),
+            ItemKind::Msg(x) => Some(x.into()),
             _ => None,
         }
     }
@@ -168,6 +173,7 @@ impl<'db> AdtRef<'db> {
             Self::Enum(e) => e.scope(),
             Self::Struct(s) => s.scope(),
             Self::Contract(c) => c.scope(),
+            Self::Msg(m) => m.scope(),
         }
     }
 
@@ -176,6 +182,7 @@ impl<'db> AdtRef<'db> {
             AdtRef::Enum(e) => e.into(),
             AdtRef::Struct(s) => s.into(),
             AdtRef::Contract(c) => c.into(),
+            AdtRef::Msg(m) => m.into(),
         }
     }
 
@@ -184,6 +191,7 @@ impl<'db> AdtRef<'db> {
             AdtRef::Enum(e) => e.name(db),
             AdtRef::Struct(s) => s.name(db),
             AdtRef::Contract(c) => c.name(db),
+            AdtRef::Msg(m) => m.name(db),
         }
         .to_opt()
     }
@@ -209,6 +217,7 @@ impl<'db> AdtRef<'db> {
             AdtRef::Enum(e) => Some(e.into()),
             AdtRef::Struct(s) => Some(s.into()),
             AdtRef::Contract(_) => None,
+            AdtRef::Msg(_) => None,
         }
     }
 }

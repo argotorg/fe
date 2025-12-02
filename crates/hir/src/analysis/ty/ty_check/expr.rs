@@ -54,7 +54,7 @@ impl<'db> TyChecker<'db> {
     pub(super) fn check_expr(&mut self, expr: ExprId, expected: TyId<'db>) -> ExprProp<'db> {
         let Partial::Present(expr_data) = self.env.expr_data(expr) else {
             let typed = ExprProp::invalid(self.db);
-            self.env.type_expr(expr, typed);
+            self.env.type_expr(expr, typed.clone());
             return typed;
         };
 
@@ -82,8 +82,8 @@ impl<'db> TyChecker<'db> {
         };
         self.env.leave_expr();
 
-        let typeable = Typeable::Expr(expr, actual);
         actual.ty = normalize_ty(self.db, actual.ty, self.env.scope(), self.env.assumptions());
+        let typeable = Typeable::Expr(expr, actual.clone());
         actual.ty = self.unify_ty(typeable, actual.ty, expected);
         actual
     }
@@ -476,7 +476,7 @@ impl<'db> TyChecker<'db> {
                         // Defer resolution using return-type constraints
                         let ret_ty = self.fresh_ty();
                         let typed = ExprProp::new(ret_ty, true);
-                        self.env.type_expr(expr, typed);
+                        self.env.type_expr(expr, typed.clone());
                         // Instantiate candidates with fresh inference vars so
                         // later unifications can bind their parameters.
                         let cands: Vec<_> = insts
@@ -633,7 +633,7 @@ impl<'db> TyChecker<'db> {
 
         match res {
             ResolvedPathInBody::Binding(binding) => {
-                let ty = self.env.lookup_binding_ty(binding);
+                let ty = self.env.lookup_binding_ty(&binding);
                 let is_mut = binding.is_mut();
                 ExprProp::new_binding_ref(ty, is_mut, binding)
             }
@@ -702,6 +702,14 @@ impl<'db> TyChecker<'db> {
                     };
 
                     ExprProp::new(self.table.instantiate_to_term(ty), true)
+                }
+                PathRes::MsgVariant(_variant) => {
+                    let diag = BodyDiag::NotValue {
+                        primary: path_expr_span.clone().into(),
+                        given: Either::Left(self.env.body().top_mod(self.db).into()),
+                    };
+                    self.push_diag(diag);
+                    ExprProp::invalid(self.db)
                 }
                 PathRes::Const(_, ty) => ExprProp::new(ty, true),
                 PathRes::Method(receiver_ty, candidate) => {
@@ -820,6 +828,19 @@ impl<'db> TyChecker<'db> {
             PathRes::EnumVariant(variant) => {
                 let ty = variant.ty;
                 let record_like = RecordLike::from_variant(variant);
+                if record_like.is_record(self.db) {
+                    self.check_record_init_fields(&record_like, expr);
+                    ExprProp::new(ty, true)
+                } else {
+                    let diag = BodyDiag::record_expected(self.db, span.path().into(), None);
+                    self.push_diag(diag);
+
+                    ExprProp::invalid(self.db)
+                }
+            }
+            PathRes::MsgVariant(variant) => {
+                let ty = variant.ty;
+                let record_like = RecordLike::from_msg_variant(variant);
                 if record_like.is_record(self.db) {
                     self.check_record_init_fields(&record_like, expr);
                     ExprProp::new(ty, true)
@@ -1326,7 +1347,7 @@ impl<'db> TyChecker<'db> {
                         let (func_ty, inst, expected_rhs) = viable.pop().unwrap();
                         self.env
                             .register_confirmation(inst, expr.span(self.body()).into());
-                        self.unify_ty(Typeable::Expr(rhs_expr, rhs), rhs.ty, expected_rhs);
+                        self.unify_ty(Typeable::Expr(rhs_expr, rhs.clone()), rhs.ty, expected_rhs);
                         (func_ty, inst)
                     }
                     _ => {
@@ -1373,10 +1394,8 @@ impl<'db> TyChecker<'db> {
             let binding = self.find_base_binding(lhs);
             let diag = match binding {
                 Some(binding) => {
-                    let (ident, def_span) = (
-                        self.env.binding_name(binding),
-                        self.env.binding_def_span(binding),
-                    );
+                    let (ident, def_span) =
+                        (binding.binding_name(&self.env), binding.def_span(&self.env));
 
                     BodyDiag::ImmutableAssignment {
                         primary: lhs.span(self.body()).into(),

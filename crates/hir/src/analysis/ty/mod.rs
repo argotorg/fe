@@ -54,7 +54,8 @@ impl ModuleAnalysisPass for AdtDefAnalysisPass {
             .copied()
             .map(AdtRef::from)
             .chain(top_mod.all_enums(db).iter().copied().map(AdtRef::from))
-            .chain(top_mod.all_contracts(db).iter().copied().map(AdtRef::from));
+            .chain(top_mod.all_contracts(db).iter().copied().map(AdtRef::from))
+            .chain(top_mod.all_msgs(db).iter().copied().map(AdtRef::from));
 
         let mut diags = vec![];
         let mut cycle_participants = FxHashSet::<AdtDef<'db>>::default();
@@ -116,6 +117,7 @@ fn walk<'db>(
                 | ItemKind::Struct(_)
                 | ItemKind::Contract(_)
                 | ItemKind::Enum(_)
+                | ItemKind::Msg(_)
                 | ItemKind::TypeAlias(_)
                 | ItemKind::Trait(_) => Domain::Type,
 
@@ -149,12 +151,42 @@ impl ModuleAnalysisPass for BodyAnalysisPass {
         db: &'db dyn HirAnalysisDb,
         top_mod: TopLevelMod<'db>,
     ) -> Vec<Box<dyn DiagnosticVoucher + 'db>> {
-        top_mod
+        let mut diags: Vec<Box<dyn DiagnosticVoucher + 'db>> = top_mod
             .all_funcs(db)
             .iter()
             .flat_map(|func| &ty_check::check_func_body(db, *func).0)
             .map(|diag| diag.to_voucher())
-            .collect()
+            .collect();
+
+        for &contract in top_mod.all_contracts(db) {
+            if contract.init_body(db).is_some() {
+                diags.extend(
+                    ty_check::check_contract_init_body(db, contract)
+                        .0
+                        .iter()
+                        .map(|diag| diag.to_voucher()),
+                );
+            }
+
+            let recvs = contract.recvs(db);
+            for (recv_idx, recv) in recvs.data(db).iter().enumerate() {
+                for (arm_idx, _) in recv.arms.data(db).iter().enumerate() {
+                    diags.extend(
+                        ty_check::check_contract_recv_arm_body(
+                            db,
+                            contract,
+                            recv_idx as u32,
+                            arm_idx as u32,
+                        )
+                        .0
+                        .iter()
+                        .map(|diag| diag.to_voucher()),
+                    );
+                }
+            }
+        }
+
+        diags
     }
 }
 

@@ -15,8 +15,9 @@ pub use name_resolver::{
     NameResolutionError, QueryDirective,
 };
 pub use path_resolver::{
-    PathRes, PathResError, PathResErrorKind, ResolvedVariant, find_associated_type,
-    resolve_ident_to_bucket, resolve_name_res, resolve_path, resolve_path_with_observer,
+    PathRes, PathResError, PathResErrorKind, ResolvedMsgVariant, ResolvedVariant,
+    find_associated_type, resolve_ident_to_bucket, resolve_name_res, resolve_path,
+    resolve_path_with_observer,
 };
 use tracing::debug;
 pub use traits_in_scope::available_traits_in_scope;

@@ -1,13 +1,16 @@
 mod callable;
 mod env;
 mod expr;
+mod owner;
 mod pat;
 mod path;
 mod stmt;
 
 pub use self::path::RecordLike;
 use crate::{
-    hir_def::{Body, Expr, ExprId, Func, LitKind, Partial, Pat, PatId, PathId, TypeId as HirTyId},
+    hir_def::{
+        Body, Contract, Expr, ExprId, Func, LitKind, Partial, Pat, PatId, PathId, TypeId as HirTyId,
+    },
     span::{
         DynLazySpan, expr::LazyExprSpan, pat::LazyPatSpan, path::LazyPathSpan, types::LazyTySpan,
     },
@@ -15,8 +18,9 @@ use crate::{
 };
 pub use callable::Callable;
 pub use env::ExprProp;
-use env::TyCheckEnv;
+use env::{LocalBinding, TyCheckEnv};
 pub(super) use expr::TraitOps;
+use owner::{BodyOwner, RecvArmInfo};
 
 use rustc_hash::{FxHashMap, FxHashSet};
 use salsa::Update;
@@ -44,7 +48,39 @@ pub fn check_func_body<'db>(
     db: &'db dyn HirAnalysisDb,
     func: Func<'db>,
 ) -> (Vec<FuncBodyDiag<'db>>, TypedBody<'db>) {
-    let Ok(mut checker) = TyChecker::new_with_func(db, func) else {
+    check_body_owner(db, BodyOwner::Func(func))
+}
+
+#[salsa::tracked(return_ref)]
+pub fn check_contract_init_body<'db>(
+    db: &'db dyn HirAnalysisDb,
+    contract: Contract<'db>,
+) -> (Vec<FuncBodyDiag<'db>>, TypedBody<'db>) {
+    check_body_owner(db, BodyOwner::ContractInit(contract))
+}
+
+#[salsa::tracked(return_ref)]
+pub fn check_contract_recv_arm_body<'db>(
+    db: &'db dyn HirAnalysisDb,
+    contract: Contract<'db>,
+    recv_idx: u32,
+    arm_idx: u32,
+) -> (Vec<FuncBodyDiag<'db>>, TypedBody<'db>) {
+    check_body_owner(
+        db,
+        BodyOwner::ContractRecvArm {
+            contract,
+            recv_idx,
+            arm_idx,
+        },
+    )
+}
+
+fn check_body_owner<'db>(
+    db: &'db dyn HirAnalysisDb,
+    owner: BodyOwner<'db>,
+) -> (Vec<FuncBodyDiag<'db>>, TypedBody<'db>) {
+    let Ok(mut checker) = TyChecker::new(db, owner) else {
         return (Vec::new(), TypedBody::empty());
     };
 
@@ -61,25 +97,21 @@ pub struct TyChecker<'db> {
 }
 
 impl<'db> TyChecker<'db> {
-    fn new_with_func(db: &'db dyn HirAnalysisDb, func: Func<'db>) -> Result<Self, ()> {
-        let env = TyCheckEnv::new_with_func(db, func)?;
-        let rt = func.return_ty(db);
-        // If the return type is explicitly annotated and of invalid kind,
-        // reflect that as an invalid expected type.
-        let expected_ty = if func.has_explicit_return_ty(db) {
-            if rt.is_star_kind(db) {
-                rt
-            } else {
-                TyId::invalid(db, InvalidCause::Other)
-            }
-        } else {
-            rt
-        };
+    fn new(db: &'db dyn HirAnalysisDb, owner: BodyOwner<'db>) -> Result<Self, ()> {
+        let env = TyCheckEnv::new(db, owner)?;
+        let expected = env.compute_expected_return();
 
-        Ok(Self::new(db, env, expected_ty))
+        Ok(Self::new_internal(db, env, expected))
     }
 
     fn run(&mut self) {
+        if let Some(recv) = self.env.recv_arm_info().cloned() {
+            let pat_ty = self.recv_arm_expected_pat_ty(&recv);
+            self.check_pat(recv.arm.pat, pat_ty);
+            self.seed_pat_bindings(recv.arm.pat);
+            self.env.flush_pending_bindings();
+        }
+
         let root_expr = self.env.body().expr(self.db);
         self.check_expr(root_expr, self.expected);
     }
@@ -88,7 +120,7 @@ impl<'db> TyChecker<'db> {
         TyCheckerFinalizer::new(self).finish()
     }
 
-    fn new(db: &'db dyn HirAnalysisDb, env: TyCheckEnv<'db>, expected: TyId<'db>) -> Self {
+    fn new_internal(db: &'db dyn HirAnalysisDb, env: TyCheckEnv<'db>, expected: TyId<'db>) -> Self {
         let table = UnificationTable::new(db);
         Self {
             db,
@@ -96,6 +128,20 @@ impl<'db> TyChecker<'db> {
             table,
             expected,
             diags: Vec::new(),
+        }
+    }
+
+    fn recv_arm_expected_pat_ty(&mut self, recv: &RecvArmInfo<'db>) -> TyId<'db> {
+        let Some(msg_path) = recv.msg_path else {
+            return self.fresh_ty();
+        };
+
+        let span = recv.contract.span().recv(recv.recv_idx as usize).path();
+
+        match self.resolve_path(msg_path, false, span) {
+            Ok(PathRes::Ty(ty) | PathRes::TyAlias(_, ty)) => ty,
+            Ok(_) => TyId::invalid(self.db, InvalidCause::Other),
+            Err(_) => TyId::invalid(self.db, InvalidCause::Other),
         }
     }
 
@@ -176,12 +222,50 @@ impl<'db> TyChecker<'db> {
         (0..n).map(|_| self.fresh_ty()).collect()
     }
 
+    /// Ensure all binding patterns are registered in the current scope.
+    fn seed_pat_bindings(&mut self, pat: PatId) {
+        let Partial::Present(pat_data) = pat.data(self.db, self.env.body()) else {
+            return;
+        };
+
+        match pat_data {
+            Pat::Path(path, is_mut) => {
+                let Partial::Present(path) = path else {
+                    return;
+                };
+                if let Some(ident) = path.as_ident(self.db) {
+                    let current = self.env.current_block_idx();
+                    if self.env.get_block(current).lookup_var(ident).is_none() {
+                        let binding = LocalBinding::local(pat, *is_mut);
+                        self.env.register_pending_binding(ident, binding);
+                    }
+                }
+            }
+            Pat::Tuple(pats) | Pat::PathTuple(_, pats) => {
+                for &p in pats {
+                    self.seed_pat_bindings(p);
+                }
+            }
+            Pat::Record(_, fields) => {
+                for field in fields {
+                    self.seed_pat_bindings(field.pat);
+                }
+            }
+            Pat::Or(lhs, rhs) => {
+                self.seed_pat_bindings(*lhs);
+                self.seed_pat_bindings(*rhs);
+            }
+            Pat::WildCard | Pat::Rest | Pat::Lit(..) => {}
+        }
+    }
+
     fn unify_ty<T>(&mut self, t: T, actual: TyId<'db>, expected: TyId<'db>) -> TyId<'db>
     where
         T: Into<Typeable<'db>>,
     {
         let t = t.into();
-        let actual = self.equate_ty(actual, expected, t.span(self.env.body()));
+        let span = t.clone().span(self.env.body());
+        let actual = self.equate_ty(actual, expected, span);
 
         match t {
             Typeable::Expr(expr, mut typed_expr) => {
@@ -319,7 +403,7 @@ impl<'db> TypedBody<'db> {
     pub fn expr_prop(&self, db: &'db dyn HirAnalysisDb, expr: ExprId) -> ExprProp<'db> {
         self.expr_ty
             .get(&expr)
-            .copied()
+            .cloned()
             .unwrap_or_else(|| ExprProp::invalid(db))
     }
 
@@ -344,7 +428,7 @@ impl<'db> TypedBody<'db> {
     }
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, derive_more::From)]
+#[derive(Clone, PartialEq, Eq, derive_more::From)]
 enum Typeable<'db> {
     Expr(ExprId, ExprProp<'db>),
     Pat(PatId),

@@ -81,6 +81,12 @@ impl<S: TokenStream> Parser<S> {
         kind
     }
 
+    pub fn is_ident(&mut self, ident: &str) -> bool {
+        self.current_token()
+            .map(|tok| tok.syntax_kind() == SyntaxKind::Ident && tok.text() == ident)
+            .unwrap_or_default()
+    }
+
     /// Sets the newline kind as trivia if `is_trivia` is `true`. Otherwise, the
     /// newline kind is not regarded as a trivia.
     ///

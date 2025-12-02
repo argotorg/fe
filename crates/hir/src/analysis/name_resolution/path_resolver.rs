@@ -1,8 +1,8 @@
 use crate::hir_def::CallableDef;
 use crate::{
     core::hir_def::{
-        Const, Enum, EnumVariant, GenericParamOwner, IdentId, ImplTrait, ItemKind, PathId,
-        PathKind, Trait, TypeBound, TypeKind, VariantKind, scope_graph::ScopeId,
+        Const, Enum, EnumVariant, GenericParamOwner, IdentId, ImplTrait, ItemKind, Msg, MsgVariant,
+        PathId, PathKind, Trait, TypeBound, TypeKind, VariantKind, scope_graph::ScopeId,
     },
     span::{DynLazySpan, path::LazyPathSpan},
 };
@@ -16,13 +16,13 @@ use super::{
     diagnostics::PathResDiag,
     is_scope_visible_from,
     method_selection::{MethodCandidate, MethodSelectionError, select_method_candidate},
-    name_resolver::{NameRes, NameResBucket, NameResolutionError},
+    name_resolver::{NameRes, NameResBucket, NameResKind, NameResolutionError},
     resolve_query,
     visibility_checker::is_ty_visible_from,
 };
 use crate::analysis::{
     HirAnalysisDb,
-    name_resolution::{NameResKind, QueryDirective},
+    name_resolution::QueryDirective,
     ty::{
         adt_def::AdtRef,
         binder::Binder,
@@ -445,6 +445,7 @@ pub enum PathRes<'db> {
     FuncParam(ItemKind<'db>, u16),
     Trait(TraitInstId<'db>),
     EnumVariant(ResolvedVariant<'db>),
+    MsgVariant(ResolvedMsgVariant<'db>),
     Const(Const<'db>, TyId<'db>),
     Mod(ScopeId<'db>),
     Method(TyId<'db>, MethodCandidate<'db>),
@@ -462,6 +463,7 @@ impl<'db> PathRes<'db> {
             PathRes::Func(ty) => PathRes::Func(f(ty)),
             PathRes::Const(const_, ty) => PathRes::Const(const_, f(ty)),
             PathRes::EnumVariant(v) => PathRes::EnumVariant(ResolvedVariant { ty: f(v.ty), ..v }),
+            PathRes::MsgVariant(v) => PathRes::MsgVariant(ResolvedMsgVariant { ty: f(v.ty), ..v }),
             // TODO: map over candidate ty?
             PathRes::Method(ty, candidate) => PathRes::Method(f(ty), candidate),
             PathRes::TraitConst(ty, inst, name) => PathRes::TraitConst(f(ty), inst, name),
@@ -481,6 +483,7 @@ impl<'db> PathRes<'db> {
             PathRes::TyAlias(alias, _) => Some(alias.alias.scope()),
             PathRes::Trait(trait_) => Some(trait_.def(db).scope()),
             PathRes::EnumVariant(variant) => Some(variant.enum_(db).scope()),
+            PathRes::MsgVariant(variant) => Some(variant.msg(db).scope()),
             PathRes::FuncParam(item, idx) => Some(ScopeId::FuncParam(*item, *idx)),
             PathRes::Mod(scope) => Some(*scope),
             PathRes::Method(ty, _) => ty.as_scope(db),
@@ -532,6 +535,11 @@ impl<'db> PathRes<'db> {
                 ty_path(v.ty).unwrap_or_else(|| "<missing>".into()),
                 v.variant.name(db)?
             )),
+            PathRes::MsgVariant(v) => Some(format!(
+                "{}::{}",
+                ty_path(v.ty).unwrap_or_else(|| "<missing>".into()),
+                v.variant.name(db).unwrap_or("<missing>")
+            )),
             PathRes::Const(const_, _) => const_.scope().pretty_path(db),
             PathRes::TraitConst(ty, _inst, name) => Some(format!(
                 "{}::{}",
@@ -558,6 +566,7 @@ impl<'db> PathRes<'db> {
             PathRes::FuncParam(..) => "function parameter",
             PathRes::Trait(_) => "trait",
             PathRes::EnumVariant(_) => "enum variant",
+            PathRes::MsgVariant(_) => "msg variant",
             PathRes::Const(..) => "constant",
             PathRes::TraitConst(..) => "constant",
             PathRes::Mod(_) => "module",
@@ -612,6 +621,39 @@ impl<'db> ResolvedVariant<'db> {
         }
 
         Some(CallableDef::VariantCtor(self.variant))
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, salsa::Update)]
+pub struct ResolvedMsgVariant<'db> {
+    pub ty: TyId<'db>,
+    pub variant: MsgVariant<'db>,
+    pub path: PathId<'db>,
+}
+
+impl<'db> ResolvedMsgVariant<'db> {
+    pub fn msg(&self, _db: &'db dyn HirAnalysisDb) -> Msg<'db> {
+        self.variant.msg
+    }
+
+    pub fn is_unit(&self, db: &'db dyn HirAnalysisDb) -> bool {
+        self.ty
+            .adt_def(db)
+            .map(|adt| adt.fields(db)[self.variant.idx as usize].num_types() == 0)
+            .unwrap_or(false)
+    }
+
+    pub fn iter_field_types(
+        &self,
+        db: &'db dyn HirAnalysisDb,
+    ) -> impl Iterator<Item = Binder<TyId<'db>>> {
+        self.ty
+            .adt_def(db)
+            .unwrap()
+            .fields(db)
+            .get(self.variant.idx as usize)
+            .unwrap()
+            .iter_types(db)
     }
 }
 
@@ -806,6 +848,27 @@ where
                 }
             }
 
+            // Try to resolve as a msg variant
+            if let Some(msg) = ty.adt_def(db).and_then(|adt| match adt.adt_ref(db) {
+                AdtRef::Msg(msg) => Some(msg),
+                _ => None,
+            }) {
+                let query = make_query(db, path, msg.scope());
+                let bucket = resolve_query(db, query);
+
+                if let Ok(res) = bucket.pick(NameDomain::VALUE)
+                    && let NameResKind::Scope(ScopeId::MsgVariant(var)) = res.kind
+                {
+                    let reso = PathRes::MsgVariant(ResolvedMsgVariant {
+                        ty,
+                        variant: var,
+                        path,
+                    });
+                    observer(path, &reso);
+                    return Ok(reso);
+                }
+            }
+
             if is_tail && resolve_tail_as_value {
                 let receiver_ty = Canonicalized::new(db, ty);
                 match select_method_candidate(
@@ -876,7 +939,12 @@ where
             }
         }
 
-        Some(PathRes::Func(_) | PathRes::EnumVariant(..) | PathRes::TraitConst(..)) => {
+        Some(
+            PathRes::Func(_)
+            | PathRes::EnumVariant(..)
+            | PathRes::MsgVariant(..)
+            | PathRes::TraitConst(..),
+        ) => {
             return Err(PathResError::new(
                 PathResErrorKind::InvalidPathSegment(parent_res.unwrap()),
                 path,
@@ -1156,6 +1224,9 @@ pub fn resolve_name_res<'db>(
                     let base = impl_.ty(db);
                     PathRes::Ty(TyId::foldl(db, base, args))
                 }
+                ItemKind::Msg(msg) => {
+                    PathRes::Ty(ty_from_adtref(db, path, msg.into(), args, assumptions)?)
+                }
                 ItemKind::ImplTrait(impl_) => {
                     let base = impl_.ty(db);
                     PathRes::Ty(TyId::foldl(db, base, args))
@@ -1281,6 +1352,20 @@ pub fn resolve_name_res<'db>(
                 // TODO report error if args isn't empty
                 PathRes::EnumVariant(ResolvedVariant {
                     ty: enum_ty,
+                    variant: var,
+                    path,
+                })
+            }
+            ScopeId::MsgVariant(var) => {
+                let msg_ty = if let Some(ty) = parent_ty {
+                    ty
+                } else {
+                    debug_assert!(path.parent(db).is_none());
+                    ty_from_adtref(db, path, var.msg.into(), &[], assumptions)?
+                };
+
+                PathRes::MsgVariant(ResolvedMsgVariant {
+                    ty: msg_ty,
                     variant: var,
                     path,
                 })

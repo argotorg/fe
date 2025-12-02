@@ -89,14 +89,7 @@ impl<'db> PathId<'db> {
     }
 
     pub fn is_bare_ident(self, db: &dyn HirDb) -> bool {
-        self.parent(db).is_none()
-            && match self.kind(db) {
-                PathKind::Ident {
-                    ident,
-                    generic_args,
-                } => ident.is_present() && generic_args.is_empty(db),
-                PathKind::QualifiedType { .. } => false,
-            }
+        self.as_ident(db).is_some()
     }
 
     pub fn is_self_ty(self, db: &dyn HirDb) -> bool {

@@ -1,11 +1,12 @@
 use std::ops::Range;
 
-use crate::core::hir_def::{Partial, Pat, PatId, VariantKind};
+use crate::core::hir_def::{Partial, Pat, PatId, PathId, VariantKind};
 use either::Either;
 
 use super::{RecordLike, TyChecker, env::LocalBinding, path::RecordInitChecker};
 use crate::analysis::{
-    name_resolution::PathRes,
+    name_resolution::{PathRes, ResolvedMsgVariant, resolve_path},
+    ty::adt_def::AdtRef,
     ty::{
         binder::Binder,
         diagnostics::BodyDiag,
@@ -32,7 +33,7 @@ impl<'db> TyChecker<'db> {
             Pat::Tuple(..) => self.check_tuple_pat(pat, pat_data, expected),
             Pat::Path(..) => self.check_path_pat(pat, pat_data),
             Pat::PathTuple(..) => self.check_path_tuple_pat(pat, pat_data),
-            Pat::Record(..) => self.check_record_pat(pat, pat_data),
+            Pat::Record(..) => self.check_record_pat(pat, pat_data, expected),
 
             Pat::Or(lhs, rhs) => {
                 self.check_pat(*lhs, expected);
@@ -146,6 +147,21 @@ impl<'db> TyChecker<'db> {
                         TyId::invalid(self.db, InvalidCause::Other)
                     }
                 }
+                Ok(PathRes::MsgVariant(variant)) => {
+                    if variant.is_unit(self.db) {
+                        self.table.instantiate_to_term(variant.ty)
+                    } else {
+                        let record_like = RecordLike::from_msg_variant(variant);
+                        let diag = BodyDiag::unit_variant_expected(
+                            self.db,
+                            pat.span(self.body()).into(),
+                            record_like,
+                        );
+
+                        self.push_diag(diag);
+                        TyId::invalid(self.db, InvalidCause::Other)
+                    }
+                }
                 _ => {
                     let name = path.ident(self.db).unwrap();
                     let binding = LocalBinding::local(pat, *is_mut);
@@ -198,6 +214,21 @@ impl<'db> TyChecker<'db> {
                         self.table.instantiate_to_term(variant.ty)
                     } else {
                         let record_like = RecordLike::from_variant(variant);
+                        let diag = BodyDiag::unit_variant_expected(
+                            self.db,
+                            pat.span(self.body()).into(),
+                            record_like,
+                        );
+
+                        self.push_diag(diag);
+                        TyId::invalid(self.db, InvalidCause::Other)
+                    }
+                }
+                Ok(PathRes::MsgVariant(variant)) => {
+                    if variant.is_unit(self.db) {
+                        self.table.instantiate_to_term(variant.ty)
+                    } else {
+                        let record_like = RecordLike::from_msg_variant(variant);
                         let diag = BodyDiag::unit_variant_expected(
                             self.db,
                             pat.span(self.body()).into(),
@@ -263,12 +294,21 @@ impl<'db> TyChecker<'db> {
                         let diag = BodyDiag::tuple_variant_expected(
                             self.db,
                             pat.span(self.body()).into(),
-                            Some(RecordLike::Variant(variant)),
+                            Some(RecordLike::from_variant(variant)),
                         );
                         self.push_diag(diag);
                         return TyId::invalid(self.db, InvalidCause::Other);
                     }
                 },
+                PathRes::MsgVariant(variant) => {
+                    let diag = BodyDiag::tuple_variant_expected(
+                        self.db,
+                        pat.span(self.body()).into(),
+                        Some(RecordLike::from_msg_variant(variant)),
+                    );
+                    self.push_diag(diag);
+                    return TyId::invalid(self.db, InvalidCause::Other);
+                }
 
                 PathRes::Mod(scope) => {
                     let diag = BodyDiag::NotValue {
@@ -360,7 +400,12 @@ impl<'db> TyChecker<'db> {
         variant.ty
     }
 
-    fn check_record_pat(&mut self, pat: PatId, pat_data: &Pat<'db>) -> TyId<'db> {
+    fn check_record_pat(
+        &mut self,
+        pat: PatId,
+        pat_data: &Pat<'db>,
+        expected: TyId<'db>,
+    ) -> TyId<'db> {
         let Pat::Record(Partial::Present(path), _) = pat_data else {
             return TyId::invalid(self.db, InvalidCause::ParseError);
         };
@@ -407,6 +452,14 @@ impl<'db> TyChecker<'db> {
                     }
                     ty
                 }
+                PathRes::MsgVariant(variant) => {
+                    let ty = variant.ty;
+                    let record_like = RecordLike::from_msg_variant(variant);
+                    if record_like.is_record(self.db) {
+                        self.check_record_pat_fields(record_like, pat);
+                    }
+                    ty
+                }
 
                 PathRes::Mod(scope) => {
                     let diag = BodyDiag::NotValue {
@@ -424,7 +477,16 @@ impl<'db> TyChecker<'db> {
                     TyId::invalid(self.db, InvalidCause::Other)
                 }
             },
-            Err(_) => TyId::invalid(self.db, InvalidCause::Other),
+            Err(_) => match self.resolve_msg_variant_by_name(expected, *path) {
+                Some(reso) => {
+                    let record_like = RecordLike::from_msg_variant(reso);
+                    if record_like.is_record(self.db) {
+                        self.check_record_pat_fields(record_like, pat);
+                    }
+                    reso.ty
+                }
+                None => TyId::invalid(self.db, InvalidCause::Other),
+            },
         }
     }
 
@@ -468,6 +530,22 @@ impl<'db> TyChecker<'db> {
 
         if let Err(diag) = rec_checker.finalize(pat_span.fields().into(), contains_rest) {
             self.push_diag(diag);
+        }
+    }
+
+    fn resolve_msg_variant_by_name(
+        &self,
+        expected: TyId<'db>,
+        path: PathId<'db>,
+    ) -> Option<ResolvedMsgVariant<'db>> {
+        let adt_def = expected.adt_def(self.db)?;
+        let AdtRef::Msg(msg) = adt_def.adt_ref(self.db) else {
+            return None;
+        };
+
+        match resolve_path(self.db, path, msg.scope(), self.env.assumptions(), true) {
+            Ok(PathRes::MsgVariant(reso)) => Some(reso),
+            _ => None,
         }
     }
 

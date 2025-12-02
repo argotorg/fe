@@ -1,7 +1,7 @@
 ---
 source: crates/parser/tests/syntax_node.rs
 expression: node
-input_file: crates/parser/test_files/syntax_node/items/contract.fe
+input_file: test_files/syntax_node/items/contract.fe
 ---
 Root@0..90
   ItemList@0..90
@@ -11,9 +11,9 @@ Root@0..90
         WhiteSpace@8..9 " "
         Ident@9..14 "Empty"
         WhiteSpace@14..15 " "
-        RecordFieldDefList@15..17
-          LBrace@15..16 "{"
-          RBrace@16..17 "}"
+        LBrace@15..16 "{"
+        ContractFields@16..16
+        RBrace@16..17 "}"
     Newline@17..19 "\n\n"
     Item@19..90
       Contract@19..90
@@ -24,10 +24,10 @@ Root@0..90
         WhiteSpace@31..32 " "
         Ident@32..33 "C"
         WhiteSpace@33..34 " "
-        RecordFieldDefList@34..90
-          LBrace@34..35 "{"
-          Newline@35..36 "\n"
-          WhiteSpace@36..40 "    "
+        LBrace@34..35 "{"
+        Newline@35..36 "\n"
+        WhiteSpace@36..40 "    "
+        ContractFields@40..88
           RecordFieldDef@40..46
             Ident@40..41 "x"
             Colon@41..42 ":"
@@ -62,5 +62,5 @@ Root@0..90
                 PathSegment@78..87
                   Ident@78..87 "Encodable"
           Comma@87..88 ","
-          Newline@88..89 "\n"
-          RBrace@89..90 "}"
+        Newline@88..89 "\n"
+        RBrace@89..90 "}"
