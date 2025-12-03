@@ -169,8 +169,7 @@ impl Rewrite for ast::PathSegment {
         if let Some(kind) = self.kind() {
             match kind {
                 ast::PathSegmentKind::QualifiedType(q) => {
-                    // <T as Trait> - preserve as-is for now
-                    out.push_str(&context.snippet_trimmed(&q));
+                    out.push_str(&q.rewrite_or_original(context, shape));
                 }
                 _ => {
                     if let Some(ident) = self.ident() {
@@ -186,6 +185,14 @@ impl Rewrite for ast::PathSegment {
         }
 
         Some(out)
+    }
+}
+
+impl Rewrite for ast::QualifiedType {
+    fn rewrite(&self, context: &RewriteContext<'_>, shape: Shape) -> Option<String> {
+        let ty = self.ty()?.rewrite_or_original(context, shape);
+        let trait_path = self.trait_qualifier()?.rewrite_or_original(context, shape);
+        Some(format!("<{ty} as {trait_path}>"))
     }
 }
 
