@@ -21,7 +21,9 @@
 //!   method(s) here.
 
 pub mod reference;
-pub use reference::{ReferenceView, PathView, FieldAccessView, MethodCallView, UsePathView};
+pub use reference::{
+    Target, ReferenceView, PathView, FieldAccessView, MethodCallView, UsePathView, HasReferences,
+};
 
 use crate::HirDb;
 use crate::analysis::HirAnalysisDb;

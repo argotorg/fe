@@ -39,7 +39,7 @@ fn body_references(fixture: Fixture<&str>) {
                             // Try to resolve the target
                             let target_desc = match pv.target(&db) {
                                 Some(Target::Scope(scope)) => scope.kind_name().to_string(),
-                                Some(Target::Span(_)) => "local".to_string(),
+                                Some(Target::Local { .. }) => "local".to_string(),
                                 None => "unresolved".to_string(),
                             };
 

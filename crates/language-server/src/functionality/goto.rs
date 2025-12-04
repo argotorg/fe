@@ -54,7 +54,7 @@ pub async fn handle_goto_definition(
     let location = goto_target_at_cursor(&backend.db, top_mod, cursor).and_then(|target| {
         match target {
             Target::Scope(scope) => to_lsp_location_from_scope(&backend.db, scope).ok(),
-            Target::Span(span) => to_lsp_location_from_lazy_span(&backend.db, span).ok(),
+            Target::Local { span, .. } => to_lsp_location_from_lazy_span(&backend.db, span).ok(),
         }
     });
 
@@ -352,9 +352,9 @@ fn main() {
         let target = goto_target_at_cursor(&db, top_mod, cursor);
         assert!(target.is_some(), "Should find a target for local variable reference");
 
-        // The target should be a span (local binding)
+        // The target should be a Local binding
         match target.unwrap() {
-            Target::Span(span) => {
+            Target::Local { span, .. } => {
                 let resolved = span.resolve(&db);
                 assert!(resolved.is_some(), "Span should resolve");
                 let resolved = resolved.unwrap();
@@ -370,7 +370,7 @@ fn main() {
                 );
             }
             Target::Scope(_) => {
-                panic!("Expected a Span target for local variable, got Scope");
+                panic!("Expected a Local target for local variable, got Scope");
             }
         }
     }

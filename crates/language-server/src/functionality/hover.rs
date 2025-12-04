@@ -2,7 +2,10 @@ use anyhow::Error;
 use async_lsp::lsp_types::Hover;
 
 use common::file::File;
-use hir::{core::semantic::reference::Target, lower::map_file_to_mod};
+use hir::{
+    core::semantic::reference::{ReferenceView, Target},
+    lower::map_file_to_mod,
+};
 use tracing::info;
 
 use super::{
@@ -27,27 +30,37 @@ pub fn hover_helper(
 
     let top_mod = map_file_to_mod(db, file);
 
-    // Get the target at cursor - only show hover for scope-based targets
-    let scope = top_mod
+    // Get the reference at cursor and resolve it
+    let info = top_mod
         .reference_at(db, cursor)
-        .and_then(|r| r.target_at(db, cursor))
-        .and_then(|target| match target {
-            Target::Scope(s) => Some(s),
-            Target::Span(_) => None, // Local bindings don't have hover info yet
-        });
+        .and_then(|r| {
+            let target = r.target_at(db, cursor)?;
+            match target {
+                Target::Scope(scope) => {
+                    // Scope-based target: show item info
+                    let item = scope.item();
+                    let pretty_path = get_item_path_markdown(db, item);
+                    let definition_source = get_item_definition_markdown(db, item);
+                    let docs = get_docstring(db, scope);
 
-    let info = scope
-        .map(|scope| {
-            let item = scope.item();
-            let pretty_path = get_item_path_markdown(db, item);
-            let definition_source = get_item_definition_markdown(db, item);
-            let docs = get_docstring(db, scope);
-
-            [pretty_path, definition_source, docs]
-                .iter()
-                .filter_map(|info| info.clone().map(|info| format!("{info}\n")))
-                .collect::<Vec<String>>()
-                .join("\n")
+                    Some(
+                        [pretty_path, definition_source, docs]
+                            .iter()
+                            .filter_map(|info| info.clone().map(|info| format!("{info}\n")))
+                            .collect::<Vec<String>>()
+                            .join("\n"),
+                    )
+                }
+                Target::Local { ty, .. } => {
+                    // Local binding: get name from the reference, type from target
+                    let name = match r {
+                        ReferenceView::Path(pv) => pv.path.ident(db).to_opt()?.data(db).to_string(),
+                        _ => return None,
+                    };
+                    let ty_str = ty.pretty_print(db);
+                    Some(format!("```fe\nlet {name}: {ty_str}\n```"))
+                }
+            }
         })
         .unwrap_or_default();
 
