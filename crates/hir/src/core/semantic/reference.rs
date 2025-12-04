@@ -15,11 +15,13 @@ use crate::{
     analysis::HirAnalysisDb,
     analysis::name_resolution::{resolve_path, PathResErrorKind},
     analysis::ty::{trait_resolution::PredicateListId, ty_check::{check_func_body, RecordLike}},
-    hir_def::{Body, Expr, ExprId, FieldIndex, Func, ItemKind, Partial, PathId, Struct, TopLevelMod, Use, UsePathId},
+    hir_def::{Body, Enum, Expr, ExprId, FieldIndex, Func, Impl, ImplTrait, ItemKind, Partial, PathId, Struct, TopLevelMod, Trait, TypeAlias, Use, UsePathId},
     hir_def::scope_graph::ScopeId,
     span::{
         DynLazySpan, LazySpan,
-        lazy_spans::{LazyPathSpan, LazyBodySpan, LazyExprSpan, LazyFieldExprSpan, LazyMethodCallExprSpan, LazyUsePathSpan},
+        lazy_spans::{
+            LazyPathSpan, LazyBodySpan, LazyExprSpan, LazyFieldExprSpan, LazyMethodCallExprSpan, LazyUsePathSpan,
+        },
     },
     visitor::{Visitor, VisitorCtxt, walk_expr, walk_path, walk_use_path},
 };
@@ -485,6 +487,233 @@ fn struct_references<'db>(db: &'db dyn HirDb, struct_: Struct<'db>) -> Vec<Refer
 }
 
 // ---------------------------------------------------------------------------
+// Enum reference collection
+// ---------------------------------------------------------------------------
+
+/// Collects all symbolic references within an enum definition (variant types,
+/// generic params, where clause).
+struct EnumReferenceCollector<'db> {
+    db: &'db dyn HirDb,
+    enum_: Enum<'db>,
+    refs: Vec<ReferenceView<'db>>,
+}
+
+impl<'db> EnumReferenceCollector<'db> {
+    fn new(db: &'db dyn HirDb, enum_: Enum<'db>) -> Self {
+        Self {
+            db,
+            enum_,
+            refs: Vec::new(),
+        }
+    }
+
+    fn collect(mut self) -> Vec<ReferenceView<'db>> {
+        let mut ctxt = VisitorCtxt::with_enum(self.db, self.enum_);
+        self.visit_enum(&mut ctxt, self.enum_);
+        self.refs
+    }
+}
+
+impl<'db> Visitor<'db> for EnumReferenceCollector<'db> {
+    fn visit_path(&mut self, ctxt: &mut VisitorCtxt<'db, LazyPathSpan<'db>>, path: PathId<'db>) {
+        if let Some(span) = ctxt.span() {
+            let scope = ctxt.scope();
+            self.refs.push(ReferenceView::Path(PathView::new(path, scope, span)));
+        }
+        walk_path(self, ctxt, path);
+    }
+}
+
+// Salsa query for caching enum references (internal)
+#[salsa::tracked(return_ref)]
+fn enum_references<'db>(db: &'db dyn HirDb, enum_: Enum<'db>) -> Vec<ReferenceView<'db>> {
+    EnumReferenceCollector::new(db, enum_).collect()
+}
+
+// ---------------------------------------------------------------------------
+// TypeAlias reference collection
+// ---------------------------------------------------------------------------
+
+/// Collects all symbolic references within a type alias definition.
+struct TypeAliasReferenceCollector<'db> {
+    db: &'db dyn HirDb,
+    type_alias: TypeAlias<'db>,
+    refs: Vec<ReferenceView<'db>>,
+}
+
+impl<'db> TypeAliasReferenceCollector<'db> {
+    fn new(db: &'db dyn HirDb, type_alias: TypeAlias<'db>) -> Self {
+        Self {
+            db,
+            type_alias,
+            refs: Vec::new(),
+        }
+    }
+
+    fn collect(mut self) -> Vec<ReferenceView<'db>> {
+        let mut ctxt = VisitorCtxt::with_type_alias(self.db, self.type_alias);
+        self.visit_type_alias(&mut ctxt, self.type_alias);
+        self.refs
+    }
+}
+
+impl<'db> Visitor<'db> for TypeAliasReferenceCollector<'db> {
+    fn visit_path(&mut self, ctxt: &mut VisitorCtxt<'db, LazyPathSpan<'db>>, path: PathId<'db>) {
+        if let Some(span) = ctxt.span() {
+            let scope = ctxt.scope();
+            self.refs.push(ReferenceView::Path(PathView::new(path, scope, span)));
+        }
+        walk_path(self, ctxt, path);
+    }
+}
+
+// Salsa query for caching type alias references (internal)
+#[salsa::tracked(return_ref)]
+fn type_alias_references<'db>(db: &'db dyn HirDb, type_alias: TypeAlias<'db>) -> Vec<ReferenceView<'db>> {
+    TypeAliasReferenceCollector::new(db, type_alias).collect()
+}
+
+// ---------------------------------------------------------------------------
+// Impl reference collection
+// ---------------------------------------------------------------------------
+
+/// Collects all symbolic references within an impl block (target type,
+/// trait ref, generic params, where clause).
+struct ImplReferenceCollector<'db> {
+    db: &'db dyn HirDb,
+    impl_: Impl<'db>,
+    refs: Vec<ReferenceView<'db>>,
+}
+
+impl<'db> ImplReferenceCollector<'db> {
+    fn new(db: &'db dyn HirDb, impl_: Impl<'db>) -> Self {
+        Self {
+            db,
+            impl_,
+            refs: Vec::new(),
+        }
+    }
+
+    fn collect(mut self) -> Vec<ReferenceView<'db>> {
+        let mut ctxt = VisitorCtxt::with_impl(self.db, self.impl_);
+        self.visit_impl(&mut ctxt, self.impl_);
+        self.refs
+    }
+}
+
+impl<'db> Visitor<'db> for ImplReferenceCollector<'db> {
+    fn visit_path(&mut self, ctxt: &mut VisitorCtxt<'db, LazyPathSpan<'db>>, path: PathId<'db>) {
+        if let Some(span) = ctxt.span() {
+            let scope = ctxt.scope();
+            self.refs.push(ReferenceView::Path(PathView::new(path, scope, span)));
+        }
+        walk_path(self, ctxt, path);
+    }
+
+    // Skip body traversal - body refs are collected separately
+    fn visit_body(&mut self, _ctxt: &mut VisitorCtxt<'db, LazyBodySpan<'db>>, _body: Body<'db>) {}
+}
+
+// Salsa query for caching impl references (internal)
+#[salsa::tracked(return_ref)]
+fn impl_references<'db>(db: &'db dyn HirDb, impl_: Impl<'db>) -> Vec<ReferenceView<'db>> {
+    ImplReferenceCollector::new(db, impl_).collect()
+}
+
+// ---------------------------------------------------------------------------
+// Trait reference collection
+// ---------------------------------------------------------------------------
+
+/// Collects all symbolic references within a trait definition (super traits,
+/// generic params, where clause, associated types).
+struct TraitReferenceCollector<'db> {
+    db: &'db dyn HirDb,
+    trait_: Trait<'db>,
+    refs: Vec<ReferenceView<'db>>,
+}
+
+impl<'db> TraitReferenceCollector<'db> {
+    fn new(db: &'db dyn HirDb, trait_: Trait<'db>) -> Self {
+        Self {
+            db,
+            trait_,
+            refs: Vec::new(),
+        }
+    }
+
+    fn collect(mut self) -> Vec<ReferenceView<'db>> {
+        let mut ctxt = VisitorCtxt::with_trait(self.db, self.trait_);
+        self.visit_trait(&mut ctxt, self.trait_);
+        self.refs
+    }
+}
+
+impl<'db> Visitor<'db> for TraitReferenceCollector<'db> {
+    fn visit_path(&mut self, ctxt: &mut VisitorCtxt<'db, LazyPathSpan<'db>>, path: PathId<'db>) {
+        if let Some(span) = ctxt.span() {
+            let scope = ctxt.scope();
+            self.refs.push(ReferenceView::Path(PathView::new(path, scope, span)));
+        }
+        walk_path(self, ctxt, path);
+    }
+
+    // Skip body traversal - body refs are collected separately
+    fn visit_body(&mut self, _ctxt: &mut VisitorCtxt<'db, LazyBodySpan<'db>>, _body: Body<'db>) {}
+}
+
+// Salsa query for caching trait references (internal)
+#[salsa::tracked(return_ref)]
+fn trait_references<'db>(db: &'db dyn HirDb, trait_: Trait<'db>) -> Vec<ReferenceView<'db>> {
+    TraitReferenceCollector::new(db, trait_).collect()
+}
+
+// ---------------------------------------------------------------------------
+// ImplTrait reference collection
+// ---------------------------------------------------------------------------
+
+/// Collects all symbolic references within an impl trait block.
+struct ImplTraitReferenceCollector<'db> {
+    db: &'db dyn HirDb,
+    impl_trait: ImplTrait<'db>,
+    refs: Vec<ReferenceView<'db>>,
+}
+
+impl<'db> ImplTraitReferenceCollector<'db> {
+    fn new(db: &'db dyn HirDb, impl_trait: ImplTrait<'db>) -> Self {
+        Self {
+            db,
+            impl_trait,
+            refs: Vec::new(),
+        }
+    }
+
+    fn collect(mut self) -> Vec<ReferenceView<'db>> {
+        let mut ctxt = VisitorCtxt::with_impl_trait(self.db, self.impl_trait);
+        self.visit_impl_trait(&mut ctxt, self.impl_trait);
+        self.refs
+    }
+}
+
+impl<'db> Visitor<'db> for ImplTraitReferenceCollector<'db> {
+    fn visit_path(&mut self, ctxt: &mut VisitorCtxt<'db, LazyPathSpan<'db>>, path: PathId<'db>) {
+        if let Some(span) = ctxt.span() {
+            let scope = ctxt.scope();
+            self.refs.push(ReferenceView::Path(PathView::new(path, scope, span)));
+        }
+        walk_path(self, ctxt, path);
+    }
+
+    // Skip body traversal - body refs are collected separately
+    fn visit_body(&mut self, _ctxt: &mut VisitorCtxt<'db, LazyBodySpan<'db>>, _body: Body<'db>) {}
+}
+
+// Salsa query for caching impl trait references (internal)
+#[salsa::tracked(return_ref)]
+fn impl_trait_references<'db>(db: &'db dyn HirDb, impl_trait: ImplTrait<'db>) -> Vec<ReferenceView<'db>> {
+    ImplTraitReferenceCollector::new(db, impl_trait).collect()
+}
+
+// ---------------------------------------------------------------------------
 // Use reference collection
 // ---------------------------------------------------------------------------
 
@@ -592,16 +821,17 @@ impl<'db> HasReferences<'db> for ItemKind<'db> {
             ItemKind::Body(body) => body.references(db),
             ItemKind::Func(func) => func_signature_references(db, *func),
             ItemKind::Struct(struct_) => struct_references(db, *struct_),
+            ItemKind::Enum(enum_) => enum_references(db, *enum_),
+            ItemKind::TypeAlias(alias) => type_alias_references(db, *alias),
+            ItemKind::Impl(impl_) => impl_references(db, *impl_),
+            ItemKind::Trait(trait_) => trait_references(db, *trait_),
+            ItemKind::ImplTrait(impl_trait) => impl_trait_references(db, *impl_trait),
             ItemKind::Use(use_item) => use_references(db, *use_item),
             ItemKind::Const(c) => c.body(db).to_opt().map_or(EMPTY_REFS, |b| b.references(db)),
-            // TODO: Implement references for other signature-level items
+            // Modules don't contain references themselves
             ItemKind::TopMod(_) | ItemKind::Mod(_) => EMPTY_REFS,
+            // Contract references could be added in the future
             ItemKind::Contract(_) => EMPTY_REFS,
-            ItemKind::Enum(_) => EMPTY_REFS,
-            ItemKind::TypeAlias(_) => EMPTY_REFS,
-            ItemKind::Impl(_) => EMPTY_REFS,
-            ItemKind::Trait(_) => EMPTY_REFS,
-            ItemKind::ImplTrait(_) => EMPTY_REFS,
         }
     }
 }
