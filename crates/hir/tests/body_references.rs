@@ -24,8 +24,8 @@ fn body_references(fixture: Fixture<&str>) {
     // Find all functions and collect their body references
     let scope_graph = top_mod.scope_graph(&db);
     for item in scope_graph.items_dfs(&db) {
-        if let ItemKind::Func(func) = item {
-            if let Some(body) = func.body(&db) {
+        if let ItemKind::Func(func) = item
+            && let Some(body) = func.body(&db) {
                 let refs = body.references(&db);
                 for r in refs {
                     match r {
@@ -68,7 +68,6 @@ fn body_references(fixture: Fixture<&str>) {
                     }
                 }
             }
-        }
     }
 
     let res = prop_formatter.finish(&db);

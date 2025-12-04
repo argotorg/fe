@@ -131,18 +131,16 @@ impl<'db> PathView<'db> {
             if seg_span.range.contains(cursor) {
                 // If this is the last segment, try local binding resolution first
                 // (locals shadow module-level items)
-                if idx == last_idx {
-                    if let Some(local) = self.local_target(db) {
+                if idx == last_idx
+                    && let Some(local) = self.local_target(db) {
                         return Some(local);
                     }
-                }
 
                 // Try module-level resolution for this segment
-                if let Some(seg_path) = self.path.segment(db, idx) {
-                    if let Some(scope) = resolve_path_to_scope(db, seg_path, self.scope) {
+                if let Some(seg_path) = self.path.segment(db, idx)
+                    && let Some(scope) = resolve_path_to_scope(db, seg_path, self.scope) {
                         return Some(Target::Scope(scope));
                     }
-                }
                 return None;
             }
         }
@@ -172,6 +170,15 @@ impl<'db> PathView<'db> {
     /// Get the source span of this path reference.
     pub fn span(&self) -> DynLazySpan<'db> {
         self.span.clone().into()
+    }
+
+    /// Get the span of the last segment (the actual referenced item).
+    ///
+    /// For `Foo::Bar`, this returns just "Bar", not the entire path.
+    /// Used for rename operations to replace only the referenced item.
+    pub fn last_segment_span(&self, db: &'db dyn SpannedHirDb) -> DynLazySpan<'db> {
+        let last_idx = self.path.segment_index(db);
+        self.span.clone().segment(last_idx).ident().into()
     }
 }
 
@@ -363,6 +370,19 @@ impl<'db> ReferenceView<'db> {
     pub fn span(&self) -> DynLazySpan<'db> {
         match self {
             Self::Path(v) => v.span(),
+            Self::FieldAccess(v) => v.span(),
+            Self::MethodCall(v) => v.span(),
+            Self::UsePath(v) => v.span(),
+        }
+    }
+
+    /// Get the span to use for rename operations.
+    ///
+    /// For paths, returns only the last segment (the actual referenced item).
+    /// For other references, returns the same as span().
+    pub fn rename_span(&self, db: &'db dyn SpannedHirDb) -> DynLazySpan<'db> {
+        match self {
+            Self::Path(v) => v.last_segment_span(db),
             Self::FieldAccess(v) => v.span(),
             Self::MethodCall(v) => v.span(),
             Self::UsePath(v) => v.span(),

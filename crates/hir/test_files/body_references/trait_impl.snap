@@ -7,22 +7,22 @@ note:
    ┌─ trait_impl.fe:11:9
    │
 11 │         self.age
-   │         ^^^^ self -> mod
+   │         ^^^^ self -> local
 
 note: 
-   ┌─ trait_impl.fe:11:9
+   ┌─ trait_impl.fe:11:14
    │
 11 │         self.age
-   │         ^^^^^^^^ field -> field
+   │              ^^^ field -> field
 
 note: 
    ┌─ trait_impl.fe:16:5
    │
 16 │     p.greet()
-   │     ^ p -> value
+   │     ^ p -> local
 
 note: 
-   ┌─ trait_impl.fe:16:5
+   ┌─ trait_impl.fe:16:7
    │
 16 │     p.greet()
-   │     ^^^^^^^^^ method -> fn
+   │       ^^^^^ method -> fn

@@ -13,61 +13,61 @@ note:
   ┌─ field_method.fe:8:17
   │
 8 │         Point { x, y }
-  │                 ^ x -> value
+  │                 ^ x -> local
 
 note: 
   ┌─ field_method.fe:8:20
   │
 8 │         Point { x, y }
-  │                    ^ y -> value
+  │                    ^ y -> local
 
 note: 
    ┌─ field_method.fe:12:9
    │
 12 │         self.x * self.x + self.y * self.y
-   │         ^^^^ self -> mod
+   │         ^^^^ self -> local
 
 note: 
-   ┌─ field_method.fe:12:9
+   ┌─ field_method.fe:12:14
    │
 12 │         self.x * self.x + self.y * self.y
-   │         ^^^^^^ field -> field
-
-note: 
-   ┌─ field_method.fe:12:18
-   │
-12 │         self.x * self.x + self.y * self.y
-   │                  ^^^^ self -> mod
+   │              ^ field -> field
 
 note: 
    ┌─ field_method.fe:12:18
    │
 12 │         self.x * self.x + self.y * self.y
-   │                  ^^^^^^ field -> field
+   │                  ^^^^ self -> local
+
+note: 
+   ┌─ field_method.fe:12:23
+   │
+12 │         self.x * self.x + self.y * self.y
+   │                       ^ field -> field
 
 note: 
    ┌─ field_method.fe:12:27
    │
 12 │         self.x * self.x + self.y * self.y
-   │                           ^^^^ self -> mod
+   │                           ^^^^ self -> local
 
 note: 
-   ┌─ field_method.fe:12:27
+   ┌─ field_method.fe:12:32
    │
 12 │         self.x * self.x + self.y * self.y
-   │                           ^^^^^^ field -> field
-
-note: 
-   ┌─ field_method.fe:12:36
-   │
-12 │         self.x * self.x + self.y * self.y
-   │                                    ^^^^ self -> mod
+   │                                ^ field -> field
 
 note: 
    ┌─ field_method.fe:12:36
    │
 12 │         self.x * self.x + self.y * self.y
-   │                                    ^^^^^^ field -> field
+   │                                    ^^^^ self -> local
+
+note: 
+   ┌─ field_method.fe:12:41
+   │
+12 │         self.x * self.x + self.y * self.y
+   │                                         ^ field -> field
 
 note: 
    ┌─ field_method.fe:17:9
@@ -94,10 +94,10 @@ note:
    │                 ^ p -> local
 
 note: 
-   ┌─ field_method.fe:18:17
+   ┌─ field_method.fe:18:19
    │
 18 │     let x_val = p.x
-   │                 ^^^ field -> field
+   │                   ^ field -> field
 
 note: 
    ┌─ field_method.fe:19:9
@@ -112,10 +112,10 @@ note:
    │                 ^ p -> local
 
 note: 
-   ┌─ field_method.fe:19:17
+   ┌─ field_method.fe:19:19
    │
 19 │     let y_val = p.y
-   │                 ^^^ field -> field
+   │                   ^ field -> field
 
 note: 
    ┌─ field_method.fe:23:9
@@ -142,7 +142,7 @@ note:
    │               ^ p -> local
 
 note: 
-   ┌─ field_method.fe:24:15
+   ┌─ field_method.fe:24:17
    │
 24 │     let mag = p.magnitude()
-   │               ^^^^^^^^^^^^^ method -> fn
+   │                 ^^^^^^^^^ method -> fn

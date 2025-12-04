@@ -1,0 +1,40 @@
+---
+source: crates/hir/tests/body_references.rs
+expression: res
+input_file: test_files/body_references/locals.fe
+---
+note: 
+  ┌─ locals.fe:2:7
+  │
+2 │   let a = x
+  │       ^ a -> local
+
+note: 
+  ┌─ locals.fe:2:11
+  │
+2 │   let a = x
+  │           ^ x -> local
+
+note: 
+  ┌─ locals.fe:3:7
+  │
+3 │   let x = a + y
+  │       ^ x -> local
+
+note: 
+  ┌─ locals.fe:3:11
+  │
+3 │   let x = a + y
+  │           ^ a -> local
+
+note: 
+  ┌─ locals.fe:3:15
+  │
+3 │   let x = a + y
+  │               ^ y -> local
+
+note: 
+  ┌─ locals.fe:4:3
+  │
+4 │   x
+  │   ^ x -> local
