@@ -348,6 +348,29 @@ impl<'db> TypedBody<'db> {
         Some(binding.def_span_with(body, func))
     }
 
+    /// Find all expressions that reference the same local binding as the given expression.
+    ///
+    /// Returns a list of ExprIds that share the same local binding (variable, parameter,
+    /// or effect parameter). Returns an empty list if the expression doesn't have a binding.
+    ///
+    /// This is used by the language server for find-all-references and rename on local variables.
+    pub fn local_references(&self, expr: ExprId) -> Vec<ExprId> {
+        let Some(binding) = self.expr_ty.get(&expr).and_then(|p| p.binding) else {
+            return vec![];
+        };
+
+        self.expr_ty
+            .iter()
+            .filter_map(|(id, p)| {
+                if p.binding == Some(binding) {
+                    Some(*id)
+                } else {
+                    None
+                }
+            })
+            .collect()
+    }
+
     fn empty() -> Self {
         Self {
             body: None,

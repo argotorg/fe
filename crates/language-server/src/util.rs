@@ -151,9 +151,7 @@ pub fn to_lsp_location_from_lazy_span<'db>(
     db: &'db dyn hir::SpannedHirDb,
     lazy_span: hir::span::DynLazySpan<'db>,
 ) -> Result<async_lsp::lsp_types::Location, Box<dyn std::error::Error>> {
-    let span = lazy_span
-        .resolve(db)
-        .ok_or("Failed to resolve lazy span")?;
+    let span = lazy_span.resolve(db).ok_or("Failed to resolve lazy span")?;
     to_lsp_location_from_span(db, span)
 }
 

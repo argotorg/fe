@@ -76,7 +76,11 @@ impl<'db> Body<'db> {
     ///
     /// Searches through all expressions to find an `Expr::Path` that contains
     /// the given path. Returns `None` if no matching expression is found.
-    pub fn find_expr_for_path(self, db: &'db dyn HirDb, target_path: PathId<'db>) -> Option<ExprId> {
+    pub fn find_expr_for_path(
+        self,
+        db: &'db dyn HirDb,
+        target_path: PathId<'db>,
+    ) -> Option<ExprId> {
         let exprs = self.exprs(db);
         for (expr_id, expr) in exprs.iter() {
             if let Partial::Present(Expr::Path(Partial::Present(path))) = expr

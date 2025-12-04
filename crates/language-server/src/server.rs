@@ -10,7 +10,10 @@ use async_lsp::lsp_types::notification::{
     self, DidChangeTextDocument, DidChangeWatchedFiles, DidOpenTextDocument, DidSaveTextDocument,
     Initialized,
 };
-use async_lsp::lsp_types::request::{DocumentHighlightRequest, GotoDefinition, GotoTypeDefinition, HoverRequest, References, Rename, SemanticTokensFullRequest, Shutdown};
+use async_lsp::lsp_types::request::{
+    DocumentHighlightRequest, GotoDefinition, GotoTypeDefinition, HoverRequest, References, Rename,
+    SemanticTokensFullRequest, Shutdown,
+};
 use async_std::stream::StreamExt;
 use futures_batch::ChunksTimeoutStreamExt;
 // use serde_json::Value;
@@ -18,7 +21,9 @@ use tracing::instrument::WithSubscriber;
 use tracing::{info, warn};
 
 use crate::backend::Backend;
-use crate::functionality::{goto, handlers, highlight, references, rename, semantic_tokens, type_definition};
+use crate::functionality::{
+    goto, handlers, highlight, references, rename, semantic_tokens, type_definition,
+};
 use async_lsp::lsp_types::request::Initialize;
 use async_lsp::router::Router;
 

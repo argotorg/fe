@@ -16,15 +16,19 @@ use parser::TextSize;
 use crate::{
     SpannedHirDb,
     analysis::HirAnalysisDb,
-    analysis::name_resolution::{resolve_path, resolve_query, PathResErrorKind, EarlyNameQueryId, QueryDirective},
-    analysis::ty::{trait_resolution::PredicateListId, ty_check::{check_func_body, RecordLike}, ty_def::TyId},
-    hir_def::{Body, Expr, ExprId, FieldIndex, ItemKind, Partial, PathId, Use, UsePathSegment},
+    analysis::name_resolution::{
+        EarlyNameQueryId, PathResErrorKind, QueryDirective, resolve_path, resolve_query,
+    },
+    analysis::ty::{
+        trait_resolution::PredicateListId,
+        ty_check::{RecordLike, check_func_body},
+        ty_def::TyId,
+    },
     hir_def::scope_graph::ScopeId,
+    hir_def::{Body, Expr, ExprId, FieldIndex, ItemKind, Partial, PathId, Use, UsePathSegment},
     span::{
         DynLazySpan, LazySpan,
-        lazy_spans::{
-            LazyPathSpan, LazyFieldExprSpan, LazyMethodCallExprSpan, LazyUsePathSpan,
-        },
+        lazy_spans::{LazyFieldExprSpan, LazyMethodCallExprSpan, LazyPathSpan, LazyUsePathSpan},
     },
 };
 
@@ -66,10 +70,14 @@ fn resolve_path_to_scope<'db>(
 pub enum Target<'db> {
     /// A module-level item (function, struct, enum, etc.)
     Scope(ScopeId<'db>),
-    /// A local binding - has definition span and inferred type
+    /// A local binding - has definition span, inferred type, and context for finding other references
     Local {
         span: DynLazySpan<'db>,
         ty: TyId<'db>,
+        /// The containing function (needed to find other references to this local)
+        func: crate::hir_def::Func<'db>,
+        /// The expression referencing this local (needed to identify the binding)
+        expr: ExprId,
     },
 }
 
@@ -92,15 +100,17 @@ impl<'db> PathView<'db> {
 
     /// Resolve this path to its target definition.
     ///
-    /// Tries module-level resolution first, then falls back to local binding resolution.
+    /// Tries local binding resolution first (for paths inside function bodies),
+    /// then falls back to module-level resolution. This ensures local variables
+    /// shadow module-level items with the same name.
     pub fn target(&self, db: &'db dyn HirAnalysisDb) -> Option<Target<'db>> {
-        // Try module-level resolution first
-        if let Some(scope) = resolve_path_to_scope(db, self.path, self.scope) {
-            return Some(Target::Scope(scope));
+        // Try local binding resolution first - locals shadow module-level items
+        if let Some(local) = self.local_target(db) {
+            return Some(local);
         }
 
-        // Fall back to local binding resolution
-        self.local_target(db)
+        // Fall back to module-level resolution
+        resolve_path_to_scope(db, self.path, self.scope).map(Target::Scope)
     }
 
     /// Resolve this path at a specific cursor position (segment-aware).
@@ -119,14 +129,18 @@ impl<'db> PathView<'db> {
             };
 
             if seg_span.range.contains(cursor) {
+                // If this is the last segment, try local binding resolution first
+                // (locals shadow module-level items)
+                if idx == last_idx {
+                    if let Some(local) = self.local_target(db) {
+                        return Some(local);
+                    }
+                }
+
+                // Try module-level resolution for this segment
                 if let Some(seg_path) = self.path.segment(db, idx) {
                     if let Some(scope) = resolve_path_to_scope(db, seg_path, self.scope) {
                         return Some(Target::Scope(scope));
-                    }
-
-                    // If this is the last segment, try local binding resolution
-                    if idx == last_idx {
-                        return self.local_target(db);
                     }
                 }
                 return None;
@@ -147,7 +161,12 @@ impl<'db> PathView<'db> {
         let span = typed_body.expr_binding_def_span(func, expr_id)?;
         let ty = typed_body.expr_ty(db, expr_id);
 
-        Some(Target::Local { span, ty })
+        Some(Target::Local {
+            span,
+            ty,
+            func,
+            expr: expr_id,
+        })
     }
 
     /// Get the source span of this path reference.
@@ -171,7 +190,8 @@ impl<'db> FieldAccessView<'db> {
     /// the field definition in the struct.
     pub fn target(&self, db: &'db dyn HirAnalysisDb) -> Option<ScopeId<'db>> {
         // Get the expression data to extract receiver and field name
-        let Partial::Present(Expr::Field(receiver, field_index)) = self.expr.data(db, self.body) else {
+        let Partial::Present(Expr::Field(receiver, field_index)) = self.expr.data(db, self.body)
+        else {
             return None;
         };
         let Partial::Present(FieldIndex::Ident(field_name)) = field_index else {
@@ -228,9 +248,7 @@ impl<'db> MethodCallView<'db> {
             crate::hir_def::CallableDef::Func(method_func) => {
                 Some(ScopeId::from_item(ItemKind::Func(method_func)))
             }
-            crate::hir_def::CallableDef::VariantCtor(variant) => {
-                Some(ScopeId::Variant(variant))
-            }
+            crate::hir_def::CallableDef::VariantCtor(variant) => Some(ScopeId::Variant(variant)),
         }
     }
 

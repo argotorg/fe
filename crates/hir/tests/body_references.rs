@@ -3,8 +3,8 @@ use std::path::Path;
 
 use dir_test::{Fixture, dir_test};
 use fe_hir::{
-    hir_def::ItemKind,
     core::semantic::reference::{HasReferences, ReferenceView, Target},
+    hir_def::ItemKind,
 };
 use test_db::HirAnalysisTestDb;
 use test_utils::snap_test;
@@ -31,7 +31,9 @@ fn body_references(fixture: Fixture<&str>) {
                     match r {
                         ReferenceView::Path(pv) => {
                             // Get the path name for display
-                            let path_name = pv.path.ident(&db)
+                            let path_name = pv
+                                .path
+                                .ident(&db)
                                 .to_opt()
                                 .map(|id| id.data(&db).to_string())
                                 .unwrap_or_else(|| "<complex>".to_string());

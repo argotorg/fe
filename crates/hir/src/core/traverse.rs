@@ -7,8 +7,7 @@
 use crate::{
     HirDb,
     hir_def::{
-        Body, Expr, ExprId, Partial, Pat, PatId, PathId, Stmt, StmtId,
-        scope_graph::ScopeId,
+        Body, Expr, ExprId, Partial, Pat, PatId, PathId, Stmt, StmtId, scope_graph::ScopeId,
     },
 };
 
@@ -49,15 +48,9 @@ impl<'db> HirNode<'db> {
     /// Returns children of this node for traversal.
     pub fn children(&self, db: &'db dyn HirDb) -> Vec<HirNode<'db>> {
         match self {
-            HirNode::Expr { body, id, scope } => {
-                expr_children(db, *body, *id, *scope)
-            }
-            HirNode::Stmt { body, id, scope } => {
-                stmt_children(db, *body, *id, *scope)
-            }
-            HirNode::Pat { body, id, scope } => {
-                pat_children(db, *body, *id, *scope)
-            }
+            HirNode::Expr { body, id, scope } => expr_children(db, *body, *id, *scope),
+            HirNode::Stmt { body, id, scope } => stmt_children(db, *body, *id, *scope),
+            HirNode::Pat { body, id, scope } => pat_children(db, *body, *id, *scope),
             HirNode::Path { .. } => {
                 // Paths are leaves (for now - could expand to path segments)
                 vec![]
@@ -99,25 +92,53 @@ fn expr_children<'db>(
         }
 
         Expr::Bin(lhs, rhs, _) => {
-            children.push(HirNode::Expr { body, id: *lhs, scope: child_scope });
-            children.push(HirNode::Expr { body, id: *rhs, scope: child_scope });
+            children.push(HirNode::Expr {
+                body,
+                id: *lhs,
+                scope: child_scope,
+            });
+            children.push(HirNode::Expr {
+                body,
+                id: *rhs,
+                scope: child_scope,
+            });
         }
 
         Expr::Un(inner, _) => {
-            children.push(HirNode::Expr { body, id: *inner, scope: child_scope });
+            children.push(HirNode::Expr {
+                body,
+                id: *inner,
+                scope: child_scope,
+            });
         }
 
         Expr::Call(callee, args) => {
-            children.push(HirNode::Expr { body, id: *callee, scope: child_scope });
+            children.push(HirNode::Expr {
+                body,
+                id: *callee,
+                scope: child_scope,
+            });
             for arg in args {
-                children.push(HirNode::Expr { body, id: arg.expr, scope: child_scope });
+                children.push(HirNode::Expr {
+                    body,
+                    id: arg.expr,
+                    scope: child_scope,
+                });
             }
         }
 
         Expr::MethodCall(receiver, _, _, args) => {
-            children.push(HirNode::Expr { body, id: *receiver, scope: child_scope });
+            children.push(HirNode::Expr {
+                body,
+                id: *receiver,
+                scope: child_scope,
+            });
             for arg in args {
-                children.push(HirNode::Expr { body, id: arg.expr, scope: child_scope });
+                children.push(HirNode::Expr {
+                    body,
+                    id: arg.expr,
+                    scope: child_scope,
+                });
             }
         }
 
@@ -140,53 +161,109 @@ fn expr_children<'db>(
                 });
             }
             for field in fields {
-                children.push(HirNode::Expr { body, id: field.expr, scope: child_scope });
+                children.push(HirNode::Expr {
+                    body,
+                    id: field.expr,
+                    scope: child_scope,
+                });
             }
         }
 
         Expr::Field(receiver, _) => {
-            children.push(HirNode::Expr { body, id: *receiver, scope: child_scope });
+            children.push(HirNode::Expr {
+                body,
+                id: *receiver,
+                scope: child_scope,
+            });
         }
 
         Expr::Tuple(elems) | Expr::Array(elems) => {
             for elem in elems {
-                children.push(HirNode::Expr { body, id: *elem, scope: child_scope });
+                children.push(HirNode::Expr {
+                    body,
+                    id: *elem,
+                    scope: child_scope,
+                });
             }
         }
 
         Expr::ArrayRep(val, _rep_body) => {
-            children.push(HirNode::Expr { body, id: *val, scope: child_scope });
+            children.push(HirNode::Expr {
+                body,
+                id: *val,
+                scope: child_scope,
+            });
             // rep_body is a separate Body, would need separate traversal
         }
 
         Expr::If(cond, then_branch, else_branch) => {
-            children.push(HirNode::Expr { body, id: *cond, scope: child_scope });
-            children.push(HirNode::Expr { body, id: *then_branch, scope: child_scope });
+            children.push(HirNode::Expr {
+                body,
+                id: *cond,
+                scope: child_scope,
+            });
+            children.push(HirNode::Expr {
+                body,
+                id: *then_branch,
+                scope: child_scope,
+            });
             if let Some(else_expr) = else_branch {
-                children.push(HirNode::Expr { body, id: *else_expr, scope: child_scope });
+                children.push(HirNode::Expr {
+                    body,
+                    id: *else_expr,
+                    scope: child_scope,
+                });
             }
         }
 
         Expr::Match(scrutinee, arms) => {
-            children.push(HirNode::Expr { body, id: *scrutinee, scope: child_scope });
+            children.push(HirNode::Expr {
+                body,
+                id: *scrutinee,
+                scope: child_scope,
+            });
             if let Partial::Present(arms) = arms {
                 for arm in arms {
-                    children.push(HirNode::Pat { body, id: arm.pat, scope: child_scope });
-                    children.push(HirNode::Expr { body, id: arm.body, scope: child_scope });
+                    children.push(HirNode::Pat {
+                        body,
+                        id: arm.pat,
+                        scope: child_scope,
+                    });
+                    children.push(HirNode::Expr {
+                        body,
+                        id: arm.body,
+                        scope: child_scope,
+                    });
                 }
             }
         }
 
         Expr::Assign(lhs, rhs) | Expr::AugAssign(lhs, rhs, _) => {
-            children.push(HirNode::Expr { body, id: *lhs, scope: child_scope });
-            children.push(HirNode::Expr { body, id: *rhs, scope: child_scope });
+            children.push(HirNode::Expr {
+                body,
+                id: *lhs,
+                scope: child_scope,
+            });
+            children.push(HirNode::Expr {
+                body,
+                id: *rhs,
+                scope: child_scope,
+            });
         }
 
         Expr::With(bindings, body_expr) => {
             for binding in bindings {
-                children.push(HirNode::Expr { body, id: binding.value, scope: child_scope });
+                children.push(HirNode::Expr {
+                    body,
+                    id: binding.value,
+                    scope: child_scope,
+                });
             }
-            children.push(HirNode::Expr { body, id: *body_expr, scope: child_scope });
+            children.push(HirNode::Expr {
+                body,
+                id: *body_expr,
+                scope: child_scope,
+            });
         }
     }
 
@@ -207,30 +284,66 @@ fn stmt_children<'db>(
 
     match stmt {
         Stmt::Let(pat, _ty, expr) => {
-            children.push(HirNode::Pat { body, id: *pat, scope });
+            children.push(HirNode::Pat {
+                body,
+                id: *pat,
+                scope,
+            });
             // TODO: handle type paths
             if let Some(expr_id) = expr {
-                children.push(HirNode::Expr { body, id: *expr_id, scope });
+                children.push(HirNode::Expr {
+                    body,
+                    id: *expr_id,
+                    scope,
+                });
             }
         }
 
         Stmt::For(pat, iter_expr, body_expr) => {
-            children.push(HirNode::Pat { body, id: *pat, scope });
-            children.push(HirNode::Expr { body, id: *iter_expr, scope });
-            children.push(HirNode::Expr { body, id: *body_expr, scope });
+            children.push(HirNode::Pat {
+                body,
+                id: *pat,
+                scope,
+            });
+            children.push(HirNode::Expr {
+                body,
+                id: *iter_expr,
+                scope,
+            });
+            children.push(HirNode::Expr {
+                body,
+                id: *body_expr,
+                scope,
+            });
         }
 
         Stmt::While(cond, body_expr) => {
-            children.push(HirNode::Expr { body, id: *cond, scope });
-            children.push(HirNode::Expr { body, id: *body_expr, scope });
+            children.push(HirNode::Expr {
+                body,
+                id: *cond,
+                scope,
+            });
+            children.push(HirNode::Expr {
+                body,
+                id: *body_expr,
+                scope,
+            });
         }
 
         Stmt::Expr(expr_id) => {
-            children.push(HirNode::Expr { body, id: *expr_id, scope });
+            children.push(HirNode::Expr {
+                body,
+                id: *expr_id,
+                scope,
+            });
         }
 
         Stmt::Return(Some(expr_id)) => {
-            children.push(HirNode::Expr { body, id: *expr_id, scope });
+            children.push(HirNode::Expr {
+                body,
+                id: *expr_id,
+                scope,
+            });
         }
 
         Stmt::Return(None) | Stmt::Continue | Stmt::Break => {}
@@ -256,7 +369,11 @@ fn pat_children<'db>(
 
         Pat::Tuple(elems) => {
             for elem in elems {
-                children.push(HirNode::Pat { body, id: *elem, scope });
+                children.push(HirNode::Pat {
+                    body,
+                    id: *elem,
+                    scope,
+                });
             }
         }
 
@@ -279,7 +396,11 @@ fn pat_children<'db>(
                 });
             }
             for elem in elems {
-                children.push(HirNode::Pat { body, id: *elem, scope });
+                children.push(HirNode::Pat {
+                    body,
+                    id: *elem,
+                    scope,
+                });
             }
         }
 
@@ -292,13 +413,25 @@ fn pat_children<'db>(
                 });
             }
             for field in fields {
-                children.push(HirNode::Pat { body, id: field.pat, scope });
+                children.push(HirNode::Pat {
+                    body,
+                    id: field.pat,
+                    scope,
+                });
             }
         }
 
         Pat::Or(lhs, rhs) => {
-            children.push(HirNode::Pat { body, id: *lhs, scope });
-            children.push(HirNode::Pat { body, id: *rhs, scope });
+            children.push(HirNode::Pat {
+                body,
+                id: *lhs,
+                scope,
+            });
+            children.push(HirNode::Pat {
+                body,
+                id: *rhs,
+                scope,
+            });
         }
     }
 
@@ -377,7 +510,11 @@ mod tests {
 
         // Should find: bar, baz, x (and possibly i32 if we handled types)
         // For now we only handle expression paths, so: bar, baz, x
-        assert!(paths.len() >= 2, "Expected at least 2 paths, got {}", paths.len());
+        assert!(
+            paths.len() >= 2,
+            "Expected at least 2 paths, got {}",
+            paths.len()
+        );
 
         // Check that we got path IDs
         for (path, scope, _kind) in &paths {
@@ -405,7 +542,8 @@ mod tests {
 
         // Find the test function (second item after enum)
         let scope_graph = db.parse_source(file);
-        let items: Vec<_> = scope_graph.items_dfs(&db)
+        let items: Vec<_> = scope_graph
+            .items_dfs(&db)
             .filter(|item| matches!(item, ItemKind::Func(_)))
             .collect();
 
@@ -418,6 +556,10 @@ mod tests {
         let paths: Vec<_> = body_paths(&db, body).collect();
 
         // Should find: x (in match), Foo::Bar, Foo::Baz
-        assert!(paths.len() >= 2, "Expected at least 2 paths from match arms, got {}", paths.len());
+        assert!(
+            paths.len() >= 2,
+            "Expected at least 2 paths from match arms, got {}",
+            paths.len()
+        );
     }
 }

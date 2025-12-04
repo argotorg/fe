@@ -1,5 +1,6 @@
 ---
 source: crates/language-server/src/functionality/goto.rs
+assertion_line: 268
 expression: snapshot
 input_file: test_files/goto_enum.fe
 ---
@@ -22,7 +23,6 @@ input_file: test_files/goto_enum.fe
 16: }
 ---
 cursor position (6, 19), path: goto_enum::Status
-cursor position (7, 10), path: goto_enum::check_status::s
 cursor position (8, 8), path: goto_enum::Status
 cursor position (8, 16), path: goto_enum::Status::Active
 cursor position (9, 8), path: goto_enum::Status

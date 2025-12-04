@@ -20,11 +20,7 @@ pub async fn handle_rename(
     backend: &Backend,
     params: async_lsp::lsp_types::RenameParams,
 ) -> Result<Option<WorkspaceEdit>, ResponseError> {
-    let path_str = params
-        .text_document_position
-        .text_document
-        .uri
-        .path();
+    let path_str = params.text_document_position.text_document.uri.path();
 
     let Ok(url) = url::Url::from_file_path(path_str) else {
         return Ok(None);
@@ -35,10 +31,8 @@ pub async fn handle_rename(
     };
 
     let file_text = file.text(&backend.db);
-    let cursor: Cursor = to_offset_from_position(
-        params.text_document_position.position,
-        file_text.as_str(),
-    );
+    let cursor: Cursor =
+        to_offset_from_position(params.text_document_position.position, file_text.as_str());
 
     let top_mod = map_file_to_mod(&backend.db, file);
 
@@ -53,17 +47,18 @@ pub async fn handle_rename(
 
     let new_name = &params.new_name;
 
-    match target {
+    let mut changes: FxHashMap<url::Url, Vec<TextEdit>> = FxHashMap::default();
+
+    match &target {
         Target::Scope(target_scope) => {
             // Skip module renames - they require file operations
-            if is_module_scope(target_scope) {
+            if is_module_scope(*target_scope) {
                 return Err(ResponseError::new(
                     async_lsp::ErrorCode::INVALID_REQUEST,
-                    "Renaming modules is not supported - it would require renaming files".to_string(),
+                    "Renaming modules is not supported - it would require renaming files"
+                        .to_string(),
                 ));
             }
-
-            let mut changes: FxHashMap<url::Url, Vec<TextEdit>> = FxHashMap::default();
 
             // Get the ingot containing this module
             let ingot = top_mod.ingot(&backend.db);
@@ -75,56 +70,65 @@ pub async fn handle_rename(
                     continue;
                 }
                 let mod_ = map_file_to_mod(&backend.db, file);
-                for ref_view in mod_.references_to(&backend.db, target_scope) {
-                    if let Some(span) = ref_view.span().resolve(&backend.db) {
-                        if let Ok(range) = to_lsp_range_from_span(span, &backend.db) {
-                            changes
-                                .entry(file_url.clone())
-                                .or_default()
-                                .push(TextEdit {
-                                    range,
-                                    new_text: new_name.clone(),
-                                });
-                        }
+                for ref_view in mod_.references_to_target(&backend.db, target.clone()) {
+                    if let Some(span) = ref_view.span().resolve(&backend.db)
+                        && let Ok(range) = to_lsp_range_from_span(span, &backend.db)
+                    {
+                        changes.entry(file_url.clone()).or_default().push(TextEdit {
+                            range,
+                            new_text: new_name.clone(),
+                        });
                     }
                 }
             }
 
             // Also rename the definition itself
-            if let Some(name_span) = target_scope.name_span(&backend.db) {
-                if let Some(span) = name_span.resolve(&backend.db) {
-                    if let Some(def_url) = span.file.url(&backend.db) {
-                        if let Ok(range) = to_lsp_range_from_span(span, &backend.db) {
-                            changes
-                                .entry(def_url)
-                                .or_default()
-                                .push(TextEdit {
-                                    range,
-                                    new_text: new_name.clone(),
-                                });
-                        }
-                    }
+            if let Some(name_span) = target_scope.name_span(&backend.db)
+                && let Some(span) = name_span.resolve(&backend.db)
+                && let Some(def_url) = span.file.url(&backend.db)
+                && let Ok(range) = to_lsp_range_from_span(span, &backend.db)
+            {
+                changes.entry(def_url).or_default().push(TextEdit {
+                    range,
+                    new_text: new_name.clone(),
+                });
+            }
+        }
+        Target::Local { span, .. } => {
+            // For local bindings, search within the function body
+            for ref_view in top_mod.references_to_target(&backend.db, target.clone()) {
+                if let Some(resolved) = ref_view.span().resolve(&backend.db)
+                    && let Some(ref_url) = resolved.file.url(&backend.db)
+                    && let Ok(range) = to_lsp_range_from_span(resolved, &backend.db)
+                {
+                    changes.entry(ref_url).or_default().push(TextEdit {
+                        range,
+                        new_text: new_name.clone(),
+                    });
                 }
             }
 
-            if changes.is_empty() {
-                Ok(None)
-            } else {
-                Ok(Some(WorkspaceEdit {
-                    changes: Some(changes.into_iter().collect()),
-                    document_changes: None,
-                    change_annotations: None,
-                }))
+            // Also rename the definition itself (the binding site)
+            if let Some(resolved) = span.resolve(&backend.db)
+                && let Some(def_url) = resolved.file.url(&backend.db)
+                && let Ok(range) = to_lsp_range_from_span(resolved, &backend.db)
+            {
+                changes.entry(def_url).or_default().push(TextEdit {
+                    range,
+                    new_text: new_name.clone(),
+                });
             }
         }
-        Target::Local { .. } => {
-            // TODO: Support renaming local bindings
-            // Would need to find all usages within the function body
-            Err(ResponseError::new(
-                async_lsp::ErrorCode::INVALID_REQUEST,
-                "Renaming local variables is not yet supported".to_string(),
-            ))
-        }
+    }
+
+    if changes.is_empty() {
+        Ok(None)
+    } else {
+        Ok(Some(WorkspaceEdit {
+            changes: Some(changes.into_iter().collect()),
+            document_changes: None,
+            change_annotations: None,
+        }))
     }
 }
 

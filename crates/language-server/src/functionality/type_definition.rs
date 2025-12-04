@@ -1,9 +1,6 @@
 use async_lsp::ResponseError;
 use common::InputDb;
-use hir::{
-    core::semantic::reference::Target,
-    lower::map_file_to_mod,
-};
+use hir::{core::semantic::reference::Target, lower::map_file_to_mod};
 
 use crate::{
     backend::Backend,
@@ -52,9 +49,7 @@ pub async fn handle_goto_type_definition(
         Target::Local { ty, .. } => {
             // Get the span of the type's definition
             ty.name_span(&backend.db)
-                .and_then(|name_span| {
-                    to_lsp_location_from_lazy_span(&backend.db, name_span).ok()
-                })
+                .and_then(|name_span| to_lsp_location_from_lazy_span(&backend.db, name_span).ok())
         }
         Target::Scope(_) => {
             // For scopes, go-to-type-definition doesn't make sense

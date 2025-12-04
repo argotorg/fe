@@ -5,12 +5,14 @@
 
 use crate::{
     HirDb,
-    hir_def::{Body, Enum, Expr, ExprId, Func, Impl, ImplTrait, Struct, Trait, TypeAlias, Use, UsePathId},
+    hir_def::{
+        Body, Enum, Expr, ExprId, Func, Impl, ImplTrait, Struct, Trait, TypeAlias, Use, UsePathId,
+    },
     span::lazy_spans::{LazyBodySpan, LazyExprSpan, LazyPathSpan, LazyUsePathSpan},
     visitor::{Visitor, VisitorCtxt, walk_expr, walk_path, walk_use_path},
 };
 
-use super::{PathView, FieldAccessView, MethodCallView, UsePathView, ReferenceView, PathId};
+use super::{FieldAccessView, MethodCallView, PathId, PathView, ReferenceView, UsePathView};
 
 /// Single unified collector for all reference types.
 pub(super) struct ReferenceCollector<'db> {
@@ -50,7 +52,8 @@ impl<'db> Visitor<'db> for ReferenceCollector<'db> {
     fn visit_path(&mut self, ctxt: &mut VisitorCtxt<'db, LazyPathSpan<'db>>, path: PathId<'db>) {
         if let Some(span) = ctxt.span() {
             let scope = ctxt.scope();
-            self.refs.push(ReferenceView::Path(PathView::new(path, scope, span)));
+            self.refs
+                .push(ReferenceView::Path(PathView::new(path, scope, span)));
         }
         walk_path(self, ctxt, path);
     }
@@ -96,7 +99,11 @@ impl<'db> Visitor<'db> for ReferenceCollector<'db> {
         walk_expr(self, ctxt, expr);
     }
 
-    fn visit_use(&mut self, ctxt: &mut VisitorCtxt<'db, crate::span::item::LazyUseSpan<'db>>, use_: Use<'db>) {
+    fn visit_use(
+        &mut self,
+        ctxt: &mut VisitorCtxt<'db, crate::span::item::LazyUseSpan<'db>>,
+        use_: Use<'db>,
+    ) {
         let old = self.current_use.replace(use_);
         crate::visitor::walk_use(self, ctxt, use_);
         self.current_use = old;
@@ -130,7 +137,10 @@ pub fn body_references<'db>(db: &'db dyn HirDb, body: Body<'db>) -> Vec<Referenc
 }
 
 #[salsa::tracked(return_ref)]
-pub fn func_signature_references<'db>(db: &'db dyn HirDb, func: Func<'db>) -> Vec<ReferenceView<'db>> {
+pub fn func_signature_references<'db>(
+    db: &'db dyn HirDb,
+    func: Func<'db>,
+) -> Vec<ReferenceView<'db>> {
     let mut collector = ReferenceCollector::new(db, true);
     let mut ctxt = VisitorCtxt::with_func(db, func);
     collector.visit_func(&mut ctxt, func);
@@ -154,7 +164,10 @@ pub fn enum_references<'db>(db: &'db dyn HirDb, enum_: Enum<'db>) -> Vec<Referen
 }
 
 #[salsa::tracked(return_ref)]
-pub fn type_alias_references<'db>(db: &'db dyn HirDb, type_alias: TypeAlias<'db>) -> Vec<ReferenceView<'db>> {
+pub fn type_alias_references<'db>(
+    db: &'db dyn HirDb,
+    type_alias: TypeAlias<'db>,
+) -> Vec<ReferenceView<'db>> {
     let mut collector = ReferenceCollector::new(db, false);
     let mut ctxt = VisitorCtxt::with_type_alias(db, type_alias);
     collector.visit_type_alias(&mut ctxt, type_alias);
@@ -178,7 +191,10 @@ pub fn trait_references<'db>(db: &'db dyn HirDb, trait_: Trait<'db>) -> Vec<Refe
 }
 
 #[salsa::tracked(return_ref)]
-pub fn impl_trait_references<'db>(db: &'db dyn HirDb, impl_trait: ImplTrait<'db>) -> Vec<ReferenceView<'db>> {
+pub fn impl_trait_references<'db>(
+    db: &'db dyn HirDb,
+    impl_trait: ImplTrait<'db>,
+) -> Vec<ReferenceView<'db>> {
     let mut collector = ReferenceCollector::new(db, true);
     let mut ctxt = VisitorCtxt::with_impl_trait(db, impl_trait);
     collector.visit_impl_trait(&mut ctxt, impl_trait);

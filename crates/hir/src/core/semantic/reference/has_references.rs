@@ -8,16 +8,18 @@ use parser::TextSize;
 use crate::{
     HirDb, SpannedHirDb,
     analysis::HirAnalysisDb,
-    hir_def::{Body, ItemKind, TopLevelMod},
+    analysis::ty::ty_check::check_func_body,
     hir_def::scope_graph::ScopeId,
+    hir_def::{Body, ItemKind, TopLevelMod},
     span::{DynLazySpan, LazySpan},
 };
 
-use super::{ReferenceView, Target};
 use super::collector::{
-    body_references, func_signature_references, struct_references, enum_references,
-    type_alias_references, impl_references, trait_references, impl_trait_references, use_references,
+    body_references, enum_references, func_signature_references, impl_references,
+    impl_trait_references, struct_references, trait_references, type_alias_references,
+    use_references,
 };
+use super::{ReferenceView, Target};
 
 /// Empty reference slice for types that don't contain references.
 static EMPTY_REFS: &[ReferenceView<'static>] = &[];
@@ -54,10 +56,16 @@ impl<'db> HasReferences<'db> for ScopeId<'db> {
 
 impl<'db> ScopeId<'db> {
     /// Find the reference at a cursor position within this scope.
-    pub fn reference_at(self, db: &'db dyn SpannedHirDb, cursor: TextSize) -> Option<&'db ReferenceView<'db>> {
-        self.references(db)
-            .iter()
-            .find(|r| r.span().resolve(db).is_some_and(|s| s.range.contains(cursor)))
+    pub fn reference_at(
+        self,
+        db: &'db dyn SpannedHirDb,
+        cursor: TextSize,
+    ) -> Option<&'db ReferenceView<'db>> {
+        self.references(db).iter().find(|r| {
+            r.span()
+                .resolve(db)
+                .is_some_and(|s| s.range.contains(cursor))
+        })
     }
 }
 
@@ -88,7 +96,11 @@ impl<'db> TopLevelMod<'db> {
     /// This is the primary entry point for goto-definition - it finds the
     /// smallest enclosing item containing the cursor and returns the reference
     /// at that position.
-    pub fn reference_at(self, db: &'db dyn SpannedHirDb, cursor: TextSize) -> Option<&'db ReferenceView<'db>> {
+    pub fn reference_at(
+        self,
+        db: &'db dyn SpannedHirDb,
+        cursor: TextSize,
+    ) -> Option<&'db ReferenceView<'db>> {
         // Find the smallest item containing the cursor
         let item = self.find_enclosing_item(db, cursor)?;
         let scope = ScopeId::from_item(item);
@@ -96,7 +108,11 @@ impl<'db> TopLevelMod<'db> {
     }
 
     /// Find the smallest item enclosing the cursor position.
-    fn find_enclosing_item(self, db: &'db dyn SpannedHirDb, cursor: TextSize) -> Option<ItemKind<'db>> {
+    fn find_enclosing_item(
+        self,
+        db: &'db dyn SpannedHirDb,
+        cursor: TextSize,
+    ) -> Option<ItemKind<'db>> {
         let items = self.scope_graph(db).items_dfs(db);
 
         let mut smallest_enclosing_item = None;
@@ -129,25 +145,68 @@ impl<'db> TopLevelMod<'db> {
         db: &'db dyn HirAnalysisDb,
         target: ScopeId<'db>,
     ) -> Vec<&'db ReferenceView<'db>> {
-        let items = self.scope_graph(db).items_dfs(db);
-        let mut results = Vec::new();
+        self.references_to_target(db, Target::Scope(target))
+    }
 
-        for item in items {
-            let scope = ScopeId::from_item(item);
-            for reference in scope.references(db) {
-                // Check if this reference resolves to our target
-                if let Some(resolved) = reference.target(db) {
-                    let matches = match resolved {
-                        Target::Scope(s) => s == target,
-                        Target::Local { .. } => false, // Local bindings don't match scope targets
-                    };
-                    if matches {
-                        results.push(reference);
+    /// Find all references to a target (scope or local) within this module.
+    ///
+    /// For scopes, this searches all items in the module.
+    /// For locals, this searches only within the containing function's body,
+    /// since locals are only visible within their function scope.
+    pub fn references_to_target(
+        self,
+        db: &'db dyn HirAnalysisDb,
+        target: Target<'db>,
+    ) -> Vec<&'db ReferenceView<'db>> {
+        match target {
+            Target::Scope(scope) => {
+                let items = self.scope_graph(db).items_dfs(db);
+                let mut results = Vec::new();
+
+                for item in items {
+                    let item_scope = ScopeId::from_item(item);
+                    for reference in item_scope.references(db) {
+                        // Check if this reference resolves to our target scope
+                        if let Some(Target::Scope(s)) = reference.target(db)
+                            && s == scope
+                        {
+                            results.push(reference);
+                        }
                     }
                 }
+
+                results
+            }
+            Target::Local { func, expr, .. } => {
+                // For locals, search only within the containing function's body
+                let (_, typed_body) = check_func_body(db, func);
+                let Some(body) = typed_body.body() else {
+                    return vec![];
+                };
+
+                // Get all expressions that reference the same local binding
+                let expr_ids = typed_body.local_references(expr);
+
+                // Get references from the function's body (not the func scope, which only has signature refs)
+                let body_refs = body.references(db);
+
+                body_refs
+                    .iter()
+                    .filter(|r| {
+                        // Match references that resolve to the same local binding
+                        if let Some(Target::Local {
+                            expr: ref_expr,
+                            func: ref_func,
+                            ..
+                        }) = r.target(db)
+                        {
+                            ref_func == func && expr_ids.contains(&ref_expr)
+                        } else {
+                            false
+                        }
+                    })
+                    .collect()
             }
         }
-
-        results
     }
 }

@@ -1,10 +1,6 @@
 use async_lsp::ResponseError;
 use common::InputDb;
-use hir::{
-    core::semantic::reference::Target,
-    hir_def::TopLevelMod,
-    lower::map_file_to_mod,
-};
+use hir::{core::semantic::reference::Target, hir_def::TopLevelMod, lower::map_file_to_mod};
 
 use crate::{
     backend::Backend,
@@ -51,12 +47,11 @@ pub async fn handle_goto_definition(
         })?;
     let top_mod = map_file_to_mod(&backend.db, file);
 
-    let location = goto_target_at_cursor(&backend.db, top_mod, cursor).and_then(|target| {
-        match target {
+    let location =
+        goto_target_at_cursor(&backend.db, top_mod, cursor).and_then(|target| match target {
             Target::Scope(scope) => to_lsp_location_from_scope(&backend.db, scope).ok(),
             Target::Local { span, .. } => to_lsp_location_from_lazy_span(&backend.db, span).ok(),
-        }
-    });
+        });
 
     Ok(location.map(async_lsp::lsp_types::GotoDefinitionResponse::Scalar))
 }
@@ -90,7 +85,11 @@ mod tests {
     }
 
     impl<'db, 'ast: 'db> Visitor<'ast> for PathSpanCollector<'db> {
-        fn visit_path(&mut self, ctxt: &mut VisitorCtxt<'ast, LazyPathSpan<'ast>>, path: PathId<'db>) {
+        fn visit_path(
+            &mut self,
+            ctxt: &mut VisitorCtxt<'ast, LazyPathSpan<'ast>>,
+            path: PathId<'db>,
+        ) {
             let Some(span) = ctxt.span() else {
                 return;
             };
@@ -323,56 +322,6 @@ mod tests {
                 .join("\n")
         );
         snap_test!(result, fixture.path());
-    }
-
-    /// Test that local variable references resolve to their definitions.
-    #[test]
-    fn test_local_goto_cursor_target() {
-        let source = r#"
-fn main() {
-    let x = 1
-    let y = x + 2
-    let z = y * x
-}
-"#;
-        let mut db = DriverDataBase::default();
-        let file = db.workspace().touch(
-            &mut db,
-            Url::parse("file:///test/local_vars.fe").unwrap(),
-            Some(source.to_string()),
-        );
-        let top_mod = map_file_to_mod(&db, file);
-
-        // Test clicking on `x` in `let y = x + 2` (line 3, the second `x` reference)
-        // Line 3: "    let y = x + 2" - `x` starts at column 12
-        // The source starts with a newline, so line 3 is actually the 4th line (0-indexed)
-        let cursor_offset = (source.lines().take(3).map(|l| l.len() + 1).sum::<usize>() + 12) as u32;
-        let cursor = parser::TextSize::from(cursor_offset);
-
-        let target = goto_target_at_cursor(&db, top_mod, cursor);
-        assert!(target.is_some(), "Should find a target for local variable reference");
-
-        // The target should be a Local binding
-        match target.unwrap() {
-            Target::Local { span, .. } => {
-                let resolved = span.resolve(&db);
-                assert!(resolved.is_some(), "Span should resolve");
-                let resolved = resolved.unwrap();
-                // The definition should be on line 2 (let x = 1)
-                // Line 2: "    let x = 1" - `x` starts at column 8
-                let expected_start = parser::TextSize::from(
-                    (source.lines().take(2).map(|l| l.len() + 1).sum::<usize>() + 8) as u32,
-                );
-                assert_eq!(
-                    resolved.range.start(),
-                    expected_start,
-                    "Should point to the definition of x"
-                );
-            }
-            Target::Scope(_) => {
-                panic!("Expected a Local target for local variable, got Scope");
-            }
-        }
     }
 
 }

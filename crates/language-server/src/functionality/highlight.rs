@@ -2,10 +2,7 @@ use async_lsp::ResponseError;
 use async_lsp::lsp_types::{DocumentHighlight, DocumentHighlightKind};
 use common::InputDb;
 use hir::{
-    core::semantic::reference::Target,
-    hir_def::TopLevelMod,
-    lower::map_file_to_mod,
-    span::LazySpan,
+    core::semantic::reference::Target, hir_def::TopLevelMod, lower::map_file_to_mod, span::LazySpan,
 };
 
 use crate::{
@@ -30,60 +27,59 @@ fn find_highlights_at_cursor<'db>(
         return vec![];
     };
 
-    match target {
-        Target::Scope(target_scope) => {
-            let mut highlights = vec![];
+    let mut highlights = vec![];
 
-            // Search only within this module
-            for ref_view in top_mod.references_to(db, target_scope) {
-                if let Some(span) = ref_view.span().resolve(db) {
-                    if let Ok(range) = to_lsp_range_from_span(span, db) {
-                        highlights.push(DocumentHighlight {
-                            range,
-                            kind: Some(DocumentHighlightKind::READ),
-                        });
-                    }
-                }
-            }
-
-            // Include the definition if it's in this file
-            // Use span comparison to check same file
-            if let Some(name_span) = target_scope.name_span(db) {
-                if let Some(def_span) = name_span.resolve(db) {
-                    // Get the top mod's span to compare files
-                    if let Some(mod_span) = top_mod.span().resolve(db) {
-                        if def_span.file == mod_span.file {
-                            if let Ok(range) = to_lsp_range_from_span(def_span, db) {
-                                highlights.insert(0, DocumentHighlight {
-                                    range,
-                                    kind: Some(DocumentHighlightKind::WRITE),
-                                });
-                            }
-                        }
-                    }
-                }
-            }
-
-            highlights
-        }
-        Target::Local { span, .. } => {
-            // For local bindings, find all references within the function body
-            // For now just highlight the definition
-            let mut highlights = vec![];
-
-            if let Some(resolved) = span.resolve(db) {
-                if let Ok(range) = to_lsp_range_from_span(resolved, db) {
-                    highlights.push(DocumentHighlight {
-                        range,
-                        kind: Some(DocumentHighlightKind::WRITE),
-                    });
-                }
-            }
-
-            // TODO: Also find all usages of the local within the same body
-            highlights
+    // Search within this module using the unified API
+    for ref_view in top_mod.references_to_target(db, target.clone()) {
+        if let Some(span) = ref_view.span().resolve(db)
+            && let Ok(range) = to_lsp_range_from_span(span, db)
+        {
+            highlights.push(DocumentHighlight {
+                range,
+                kind: Some(DocumentHighlightKind::READ),
+            });
         }
     }
+
+    // Include the definition
+    match &target {
+        Target::Scope(target_scope) => {
+            // Check if definition is in this file
+            if let Some(name_span) = target_scope.name_span(db)
+                && let Some(def_span) = name_span.resolve(db)
+            {
+                // Get the top mod's span to compare files
+                if let Some(mod_span) = top_mod.span().resolve(db)
+                    && def_span.file == mod_span.file
+                    && let Ok(range) = to_lsp_range_from_span(def_span, db)
+                {
+                    highlights.insert(
+                        0,
+                        DocumentHighlight {
+                            range,
+                            kind: Some(DocumentHighlightKind::WRITE),
+                        },
+                    );
+                }
+            }
+        }
+        Target::Local { span, .. } => {
+            // Local definition is always in this file
+            if let Some(resolved) = span.resolve(db)
+                && let Ok(range) = to_lsp_range_from_span(resolved, db)
+            {
+                highlights.insert(
+                    0,
+                    DocumentHighlight {
+                        range,
+                        kind: Some(DocumentHighlightKind::WRITE),
+                    },
+                );
+            }
+        }
+    }
+
+    highlights
 }
 
 pub async fn handle_document_highlight(

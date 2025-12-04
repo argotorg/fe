@@ -1,7 +1,8 @@
 use async_lsp::ResponseError;
 use async_lsp::lsp_types::{
-    SemanticToken, SemanticTokenModifier, SemanticTokenType, SemanticTokens, SemanticTokensFullOptions,
-    SemanticTokensLegend, SemanticTokensOptions, SemanticTokensResult, SemanticTokensServerCapabilities,
+    SemanticToken, SemanticTokenModifier, SemanticTokenType, SemanticTokens,
+    SemanticTokensFullOptions, SemanticTokensLegend, SemanticTokensOptions, SemanticTokensResult,
+    SemanticTokensServerCapabilities,
 };
 use common::InputDb;
 use hir::{
@@ -11,10 +12,7 @@ use hir::{
     span::LazySpan,
 };
 
-use crate::{
-    backend::Backend,
-    util::calculate_line_offsets,
-};
+use crate::{backend::Backend, util::calculate_line_offsets};
 
 /// Supported semantic token types
 pub const TOKEN_TYPES: &[SemanticTokenType] = &[
@@ -51,10 +49,10 @@ fn item_kind_to_token_type(item: ItemKind) -> Option<u32> {
     match item {
         ItemKind::TopMod(_) | ItemKind::Mod(_) => Some(0), // namespace
         ItemKind::Struct(_) | ItemKind::Enum(_) | ItemKind::TypeAlias(_) => Some(1), // type
-        ItemKind::Func(_) => Some(2), // function
-        ItemKind::Const(_) => Some(3), // variable (constants are variables)
+        ItemKind::Func(_) => Some(2),                      // function
+        ItemKind::Const(_) => Some(3),                     // variable (constants are variables)
         ItemKind::Trait(_) | ItemKind::Impl(_) | ItemKind::ImplTrait(_) => Some(1), // type
-        ItemKind::Contract(_) => Some(1), // type
+        ItemKind::Contract(_) => Some(1),                  // type
         _ => None,
     }
 }

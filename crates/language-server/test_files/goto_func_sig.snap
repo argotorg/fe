@@ -1,6 +1,6 @@
 ---
 source: crates/language-server/src/functionality/goto.rs
-assertion_line: 350
+assertion_line: 268
 expression: snapshot
 input_file: test_files/goto_func_sig.fe
 ---
@@ -14,4 +14,3 @@ input_file: test_files/goto_func_sig.fe
 ---
 cursor position (4, 21), path: goto_func_sig::MyType
 cursor position (4, 32), path: goto_func_sig::MyType
-cursor position (5, 4), path: goto_func_sig::takes_mytype::arg

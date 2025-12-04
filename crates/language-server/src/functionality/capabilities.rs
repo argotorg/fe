@@ -19,7 +19,9 @@ pub(crate) fn server_capabilities() -> ServerCapabilities {
         // document highlight
         document_highlight_provider: Some(async_lsp::lsp_types::OneOf::Left(true)),
         // go to type definition
-        type_definition_provider: Some(async_lsp::lsp_types::TypeDefinitionProviderCapability::Simple(true)),
+        type_definition_provider: Some(
+            async_lsp::lsp_types::TypeDefinitionProviderCapability::Simple(true),
+        ),
         // rename symbol
         rename_provider: Some(async_lsp::lsp_types::OneOf::Left(true)),
         // semantic tokens
