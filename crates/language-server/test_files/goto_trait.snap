@@ -1,0 +1,30 @@
+---
+source: crates/language-server/src/functionality/goto.rs
+expression: snapshot
+input_file: test_files/goto_trait.fe
+---
+0: trait Display {
+1:     fn show(self) -> i32
+2: }
+3: 
+4: struct Counter {
+5:     value: i32
+6: }
+7: 
+8: impl Display for Counter {
+9:     fn show(self) -> i32 {
+10:         self.value
+11:     }
+12: }
+13: 
+14: fn use_display(c: Counter) -> i32 {
+15:     c.show()
+16: }
+---
+cursor position (1, 12), path: goto_trait::Display
+cursor position (8, 5), path: goto_trait::Display
+cursor position (8, 17), path: goto_trait::Counter
+cursor position (9, 12), path: goto_trait::Counter
+cursor position (10, 8), path: goto_trait::Counter::value
+cursor position (14, 18), path: goto_trait::Counter
+cursor position (15, 4), path: goto_trait::Display::show

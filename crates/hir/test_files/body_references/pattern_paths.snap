@@ -13,16 +13,16 @@ note:
   ┌─ pattern_paths.fe:5:9
   │
 5 │         Color::Red => {}
-  │         ^^^^^^^^^^ Red -> enum
+  │         ^^^^^^^^^^ Red -> value
 
 note: 
   ┌─ pattern_paths.fe:6:9
   │
 6 │         Color::Green => {}
-  │         ^^^^^^^^^^^^ Green -> enum
+  │         ^^^^^^^^^^^^ Green -> value
 
 note: 
   ┌─ pattern_paths.fe:7:9
   │
 7 │         Color::Blue => {}
-  │         ^^^^^^^^^^^ Blue -> enum
+  │         ^^^^^^^^^^^ Blue -> value

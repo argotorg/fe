@@ -4,7 +4,7 @@ use std::path::Path;
 use dir_test::{Fixture, dir_test};
 use fe_hir::{
     hir_def::ItemKind,
-    core::semantic::reference::{HasReferences, ReferenceView, ResolvedPath},
+    core::semantic::reference::{HasReferences, ReferenceView, Target},
 };
 use test_db::HirAnalysisTestDb;
 use test_utils::snap_test;
@@ -38,8 +38,8 @@ fn body_references(fixture: Fixture<&str>) {
 
                             // Try to resolve the target
                             let target_desc = match pv.target(&db) {
-                                Some(ResolvedPath::Scope(scope)) => scope.kind_name().to_string(),
-                                Some(ResolvedPath::Span(_)) => "local".to_string(),
+                                Some(Target::Scope(scope)) => scope.kind_name().to_string(),
+                                Some(Target::Span(_)) => "local".to_string(),
                                 None => "unresolved".to_string(),
                             };
 
@@ -47,14 +47,14 @@ fn body_references(fixture: Fixture<&str>) {
                             prop_formatter.push_prop(top_mod, pv.span(), annotation);
                         }
                         ReferenceView::FieldAccess(fv) => {
-                            let target_desc = match fv.scope_target(&db) {
+                            let target_desc = match fv.target(&db) {
                                 Some(scope) => format!("field -> {}", scope.kind_name()),
                                 None => "field access".to_string(),
                             };
                             prop_formatter.push_prop(top_mod, fv.span(), target_desc);
                         }
                         ReferenceView::MethodCall(mv) => {
-                            let target_desc = match mv.scope_target(&db) {
+                            let target_desc = match mv.target(&db) {
                                 Some(scope) => format!("method -> {}", scope.kind_name()),
                                 None => "method call".to_string(),
                             };

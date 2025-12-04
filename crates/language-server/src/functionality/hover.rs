@@ -2,7 +2,7 @@ use anyhow::Error;
 use async_lsp::lsp_types::Hover;
 
 use common::file::File;
-use hir::{core::semantic::reference::ResolvedPath, lower::map_file_to_mod};
+use hir::{core::semantic::reference::Target, lower::map_file_to_mod};
 use tracing::info;
 
 use super::{
@@ -32,8 +32,8 @@ pub fn hover_helper(
         .reference_at(db, cursor)
         .and_then(|r| r.target_at(db, cursor))
         .and_then(|target| match target {
-            ResolvedPath::Scope(s) => Some(s),
-            ResolvedPath::Span(_) => None, // Local bindings don't have hover info yet
+            Target::Scope(s) => Some(s),
+            Target::Span(_) => None, // Local bindings don't have hover info yet
         });
 
     let info = scope

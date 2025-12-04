@@ -1,7 +1,7 @@
 use async_lsp::ResponseError;
 use common::InputDb;
 use hir::{
-    core::semantic::reference::ResolvedPath,
+    core::semantic::reference::Target,
     hir_def::TopLevelMod,
     lower::map_file_to_mod,
 };
@@ -18,7 +18,7 @@ pub fn goto_target_at_cursor<'db>(
     db: &'db DriverDataBase,
     top_mod: TopLevelMod<'db>,
     cursor: Cursor,
-) -> Option<ResolvedPath<'db>> {
+) -> Option<Target<'db>> {
     top_mod.reference_at(db, cursor)?.target_at(db, cursor)
 }
 
@@ -53,8 +53,8 @@ pub async fn handle_goto_definition(
 
     let location = goto_target_at_cursor(&backend.db, top_mod, cursor).and_then(|target| {
         match target {
-            ResolvedPath::Scope(scope) => to_lsp_location_from_scope(&backend.db, scope).ok(),
-            ResolvedPath::Span(span) => to_lsp_location_from_lazy_span(&backend.db, span).ok(),
+            Target::Scope(scope) => to_lsp_location_from_scope(&backend.db, scope).ok(),
+            Target::Span(span) => to_lsp_location_from_lazy_span(&backend.db, span).ok(),
         }
     });
 
@@ -184,7 +184,7 @@ mod tests {
         for cursor in &cursors {
             // Get target and filter for scopes only (for snapshot compatibility)
             if let Some(target) = goto_target_at_cursor(db, top_mod, *cursor) {
-                if let ResolvedPath::Scope(scope) = target {
+                if let Target::Scope(scope) = target {
                     if let Some(path) = scope.pretty_path(db) {
                         cursor_path_map.insert(*cursor, path);
                     }
@@ -354,7 +354,7 @@ fn main() {
 
         // The target should be a span (local binding)
         match target.unwrap() {
-            ResolvedPath::Span(span) => {
+            Target::Span(span) => {
                 let resolved = span.resolve(&db);
                 assert!(resolved.is_some(), "Span should resolve");
                 let resolved = resolved.unwrap();
@@ -369,7 +369,7 @@ fn main() {
                     "Should point to the definition of x"
                 );
             }
-            ResolvedPath::Scope(_) => {
+            Target::Scope(_) => {
                 panic!("Expected a Span target for local variable, got Scope");
             }
         }

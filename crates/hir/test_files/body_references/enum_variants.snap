@@ -13,22 +13,22 @@ note:
    ┌─ enum_variants.fe:14:9
    │
 14 │         Color::Red => true
-   │         ^^^^^^^^^^ Red -> enum
+   │         ^^^^^^^^^^ Red -> value
 
 note: 
    ┌─ enum_variants.fe:15:9
    │
 15 │         Color::Green => false
-   │         ^^^^^^^^^^^^ Green -> enum
+   │         ^^^^^^^^^^^^ Green -> value
 
 note: 
    ┌─ enum_variants.fe:16:9
    │
 16 │         Color::Blue => true
-   │         ^^^^^^^^^^^ Blue -> enum
+   │         ^^^^^^^^^^^ Blue -> value
 
 note: 
    ┌─ enum_variants.fe:21:5
    │
 21 │     Shape::Circle(10)
-   │     ^^^^^^^^^^^^^ Circle -> enum
+   │     ^^^^^^^^^^^^^ Circle -> value

@@ -13,9 +13,9 @@ use parser::TextSize;
 use crate::{
     HirDb, SpannedHirDb,
     analysis::HirAnalysisDb,
-    analysis::name_resolution::{resolve_path, PathResErrorKind},
+    analysis::name_resolution::{resolve_path, resolve_query, PathResErrorKind, EarlyNameQueryId, QueryDirective},
     analysis::ty::{trait_resolution::PredicateListId, ty_check::{check_func_body, RecordLike}},
-    hir_def::{Body, Enum, Expr, ExprId, FieldIndex, Func, Impl, ImplTrait, ItemKind, Partial, PathId, Struct, TopLevelMod, Trait, TypeAlias, Use, UsePathId},
+    hir_def::{Body, Enum, Expr, ExprId, FieldIndex, Func, Impl, ImplTrait, ItemKind, Partial, PathId, Struct, TopLevelMod, Trait, TypeAlias, Use, UsePathId, UsePathSegment},
     hir_def::scope_graph::ScopeId,
     span::{
         DynLazySpan, LazySpan,
@@ -67,7 +67,7 @@ fn resolve_path_to_scope<'db>(
 /// Paths can resolve to either module-level items (represented as scopes)
 /// or local bindings (represented as definition spans).
 #[derive(Clone, Debug)]
-pub enum ResolvedPath<'db> {
+pub enum Target<'db> {
     /// A module-level item (function, struct, enum, etc.)
     Scope(ScopeId<'db>),
     /// A local binding (variable, parameter, effect parameter)
@@ -94,20 +94,20 @@ impl<'db> PathView<'db> {
     /// Resolve this path to its target definition.
     ///
     /// Tries module-level resolution first, then falls back to local binding resolution.
-    pub fn target(&self, db: &'db dyn HirAnalysisDb) -> Option<ResolvedPath<'db>> {
+    pub fn target(&self, db: &'db dyn HirAnalysisDb) -> Option<Target<'db>> {
         // Try module-level resolution first
         if let Some(scope) = resolve_path_to_scope(db, self.path, self.scope) {
-            return Some(ResolvedPath::Scope(scope));
+            return Some(Target::Scope(scope));
         }
 
         // Fall back to local binding resolution
-        self.local_binding_target(db).map(ResolvedPath::Span)
+        self.local_binding_target(db).map(Target::Span)
     }
 
     /// Resolve this path at a specific cursor position (segment-aware).
     ///
     /// Clicking on `foo` in `foo::Bar` resolves to `foo`, not `Bar`.
-    pub fn target_at<DB>(&self, db: &'db DB, cursor: TextSize) -> Option<ResolvedPath<'db>>
+    pub fn target_at<DB>(&self, db: &'db DB, cursor: TextSize) -> Option<Target<'db>>
     where
         DB: HirAnalysisDb + SpannedHirDb,
     {
@@ -122,12 +122,12 @@ impl<'db> PathView<'db> {
             if seg_span.range.contains(cursor) {
                 if let Some(seg_path) = self.path.segment(db, idx) {
                     if let Some(scope) = resolve_path_to_scope(db, seg_path, self.scope) {
-                        return Some(ResolvedPath::Scope(scope));
+                        return Some(Target::Scope(scope));
                     }
 
                     // If this is the last segment, try local binding resolution
                     if idx == last_idx {
-                        return self.local_binding_target(db).map(ResolvedPath::Span);
+                        return self.local_binding_target(db).map(Target::Span);
                     }
                 }
                 return None;
@@ -166,7 +166,7 @@ impl<'db> FieldAccessView<'db> {
     ///
     /// Uses type inference to determine the receiver type and look up
     /// the field definition in the struct.
-    pub fn scope_target(&self, db: &'db dyn HirAnalysisDb) -> Option<ScopeId<'db>> {
+    pub fn target(&self, db: &'db dyn HirAnalysisDb) -> Option<ScopeId<'db>> {
         // Get the expression data to extract receiver and field name
         let Partial::Present(Expr::Field(receiver, field_index)) = self.expr.data(db, self.body) else {
             return None;
@@ -210,7 +210,7 @@ impl<'db> MethodCallView<'db> {
     /// Resolve this method call to its target scope.
     ///
     /// Uses the typed body's callable information to find the resolved method.
-    pub fn scope_target(&self, db: &'db dyn HirAnalysisDb) -> Option<ScopeId<'db>> {
+    pub fn target(&self, db: &'db dyn HirAnalysisDb) -> Option<ScopeId<'db>> {
         // Get the containing function for type checking
         let func = self.body.containing_func(db)?;
 
@@ -247,9 +247,35 @@ pub struct UsePathView<'db> {
 
 impl<'db> UsePathView<'db> {
     /// Resolve this use path segment to its target scope.
-    pub fn scope_target(&self, _db: &'db dyn HirAnalysisDb) -> Option<ScopeId<'db>> {
-        // TODO: Implement use path resolution
-        None
+    ///
+    /// For a use like `use foo::bar::Baz`, clicking on `bar` (segment 1)
+    /// resolves to the `bar` module/item.
+    pub fn target(&self, db: &'db dyn HirAnalysisDb) -> Option<ScopeId<'db>> {
+        let use_path = self.use_item.path(db).to_opt()?;
+        let segments = use_path.data(db);
+
+        // Start from the use's parent scope
+        let mut current_scope = self.use_item.scope().parent(db)?;
+
+        // Resolve each segment up to and including self.segment
+        for idx in 0..=self.segment {
+            let segment = segments.get(idx)?.to_opt()?;
+            let ident = match segment {
+                UsePathSegment::Ident(id) => id,
+                UsePathSegment::Glob => return None, // Can't resolve glob
+            };
+
+            // Create a query for this name in the current scope
+            let directive = QueryDirective::new();
+            let query = EarlyNameQueryId::new(db, ident, current_scope, directive);
+            let bucket = resolve_query(db, query);
+
+            // Get the first successful resolution
+            let res = bucket.iter_ok().next()?;
+            current_scope = res.scope()?;
+        }
+
+        Some(current_scope)
     }
 
     /// Get the source span of this use path segment.
@@ -278,14 +304,14 @@ pub enum ReferenceView<'db> {
 impl<'db> ReferenceView<'db> {
     /// Resolve this reference to its target definition.
     ///
-    /// Returns the target as a `ResolvedPath` which can be either a module-level
+    /// Returns the target as a `Target` which can be either a module-level
     /// item (scope) or a local binding (span).
-    pub fn target(&self, db: &'db dyn HirAnalysisDb) -> Option<ResolvedPath<'db>> {
+    pub fn target(&self, db: &'db dyn HirAnalysisDb) -> Option<Target<'db>> {
         match self {
             Self::Path(v) => v.target(db),
-            Self::FieldAccess(v) => v.scope_target(db).map(ResolvedPath::Scope),
-            Self::MethodCall(v) => v.scope_target(db).map(ResolvedPath::Scope),
-            Self::UsePath(v) => v.scope_target(db).map(ResolvedPath::Scope),
+            Self::FieldAccess(v) => v.target(db).map(Target::Scope),
+            Self::MethodCall(v) => v.target(db).map(Target::Scope),
+            Self::UsePath(v) => v.target(db).map(Target::Scope),
         }
     }
 
@@ -293,7 +319,7 @@ impl<'db> ReferenceView<'db> {
     ///
     /// For paths, this handles segment-level resolution - clicking on `foo` in
     /// `foo::Bar` resolves to `foo`, not `Bar`.
-    pub fn target_at<DB>(&self, db: &'db DB, cursor: TextSize) -> Option<ResolvedPath<'db>>
+    pub fn target_at<DB>(&self, db: &'db DB, cursor: TextSize) -> Option<Target<'db>>
     where
         DB: HirAnalysisDb + SpannedHirDb,
     {
@@ -315,457 +341,192 @@ impl<'db> ReferenceView<'db> {
 }
 
 // ---------------------------------------------------------------------------
-// Body reference collection
+// Reference collector
 // ---------------------------------------------------------------------------
 
-/// Collects all symbolic references within a body using the Visitor pattern.
-struct BodyReferenceCollector<'db> {
+/// Single unified collector for all reference types.
+struct ReferenceCollector<'db> {
     db: &'db dyn HirDb,
-    body: Body<'db>,
     refs: Vec<ReferenceView<'db>>,
+    /// Current body context (set during body traversal)
+    current_body: Option<Body<'db>>,
+    /// Current use item context (set during use traversal)
+    current_use: Option<Use<'db>>,
+    /// Whether to skip body traversal (for signature-only collection)
+    skip_body: bool,
 }
 
-impl<'db> BodyReferenceCollector<'db> {
-    fn new(db: &'db dyn HirDb, body: Body<'db>) -> Self {
+impl<'db> ReferenceCollector<'db> {
+    fn new(db: &'db dyn HirDb, skip_body: bool) -> Self {
         Self {
             db,
-            body,
             refs: Vec::new(),
+            current_body: None,
+            current_use: None,
+            skip_body,
         }
     }
 
-    fn collect(mut self) -> Vec<ReferenceView<'db>> {
-        let mut ctxt = VisitorCtxt::with_body(self.db, self.body);
-        self.visit_body(&mut ctxt, self.body);
-        self.refs
+    fn for_body(db: &'db dyn HirDb, body: Body<'db>) -> Self {
+        Self {
+            db,
+            refs: Vec::new(),
+            current_body: Some(body),
+            current_use: None,
+            skip_body: false,
+        }
     }
 }
 
-impl<'db> Visitor<'db> for BodyReferenceCollector<'db> {
+impl<'db> Visitor<'db> for ReferenceCollector<'db> {
+    fn visit_path(&mut self, ctxt: &mut VisitorCtxt<'db, LazyPathSpan<'db>>, path: PathId<'db>) {
+        if let Some(span) = ctxt.span() {
+            let scope = ctxt.scope();
+            self.refs.push(ReferenceView::Path(PathView::new(path, scope, span)));
+        }
+        walk_path(self, ctxt, path);
+    }
+
+    fn visit_body(&mut self, ctxt: &mut VisitorCtxt<'db, LazyBodySpan<'db>>, body: Body<'db>) {
+        if self.skip_body {
+            return;
+        }
+        let old = self.current_body.replace(body);
+        crate::visitor::walk_body(self, ctxt, body);
+        self.current_body = old;
+    }
+
     fn visit_expr(
         &mut self,
         ctxt: &mut VisitorCtxt<'db, LazyExprSpan<'db>>,
         expr: ExprId,
         expr_data: &Expr<'db>,
     ) {
-        // Collect field access and method call references
-        match expr_data {
-            Expr::Field(_, _) => {
-                if let Some(span) = ctxt.span() {
-                    let field_span = span.into_field_expr();
-                    self.refs.push(ReferenceView::FieldAccess(FieldAccessView {
-                        body: self.body,
-                        expr,
-                        span: field_span,
-                    }));
+        if let Some(body) = self.current_body {
+            match expr_data {
+                Expr::Field(_, _) => {
+                    if let Some(span) = ctxt.span() {
+                        self.refs.push(ReferenceView::FieldAccess(FieldAccessView {
+                            body,
+                            expr,
+                            span: span.into_field_expr(),
+                        }));
+                    }
                 }
-            }
-            Expr::MethodCall(_, _, _, _) => {
-                if let Some(span) = ctxt.span() {
-                    let method_span = span.into_method_call_expr();
-                    self.refs.push(ReferenceView::MethodCall(MethodCallView {
-                        body: self.body,
-                        expr,
-                        span: method_span,
-                    }));
+                Expr::MethodCall(_, _, _, _) => {
+                    if let Some(span) = ctxt.span() {
+                        self.refs.push(ReferenceView::MethodCall(MethodCallView {
+                            body,
+                            expr,
+                            span: span.into_method_call_expr(),
+                        }));
+                    }
                 }
+                _ => {}
             }
-            _ => {}
         }
-        // Continue walking to visit nested expressions and paths
         walk_expr(self, ctxt, expr);
     }
 
-    fn visit_path(&mut self, ctxt: &mut VisitorCtxt<'db, LazyPathSpan<'db>>, path: PathId<'db>) {
-        // Collect this path reference
-        if let Some(span) = ctxt.span() {
-            let scope = ctxt.scope();
-            self.refs.push(ReferenceView::Path(PathView::new(path, scope, span)));
-        }
-        // Continue walking to collect nested paths (e.g., generic arguments)
-        walk_path(self, ctxt, path);
-    }
-}
-
-// Salsa query for caching body references (internal)
-#[salsa::tracked(return_ref)]
-fn body_references<'db>(db: &'db dyn HirDb, body: Body<'db>) -> Vec<ReferenceView<'db>> {
-    BodyReferenceCollector::new(db, body).collect()
-}
-
-// ---------------------------------------------------------------------------
-// Function signature reference collection
-// ---------------------------------------------------------------------------
-
-/// Collects all symbolic references within a function's signature (params, return type,
-/// generics, where clause) but NOT the body.
-struct FuncSignatureReferenceCollector<'db> {
-    db: &'db dyn HirDb,
-    func: Func<'db>,
-    refs: Vec<ReferenceView<'db>>,
-}
-
-impl<'db> FuncSignatureReferenceCollector<'db> {
-    fn new(db: &'db dyn HirDb, func: Func<'db>) -> Self {
-        Self {
-            db,
-            func,
-            refs: Vec::new(),
-        }
+    fn visit_use(&mut self, ctxt: &mut VisitorCtxt<'db, crate::span::item::LazyUseSpan<'db>>, use_: Use<'db>) {
+        let old = self.current_use.replace(use_);
+        crate::visitor::walk_use(self, ctxt, use_);
+        self.current_use = old;
     }
 
-    fn collect(mut self) -> Vec<ReferenceView<'db>> {
-        let mut ctxt = VisitorCtxt::with_func(self.db, self.func);
-        self.visit_func(&mut ctxt, self.func);
-        self.refs
-    }
-}
-
-impl<'db> Visitor<'db> for FuncSignatureReferenceCollector<'db> {
-    fn visit_path(&mut self, ctxt: &mut VisitorCtxt<'db, LazyPathSpan<'db>>, path: PathId<'db>) {
-        if let Some(span) = ctxt.span() {
-            let scope = ctxt.scope();
-            self.refs.push(ReferenceView::Path(PathView::new(path, scope, span)));
-        }
-        walk_path(self, ctxt, path);
-    }
-
-    // Override to skip body traversal - body refs are collected separately
-    fn visit_body(&mut self, _ctxt: &mut VisitorCtxt<'db, LazyBodySpan<'db>>, _body: Body<'db>) {
-        // Do nothing - we only want signature refs
-    }
-}
-
-// Salsa query for caching func signature references (internal)
-#[salsa::tracked(return_ref)]
-fn func_signature_references<'db>(db: &'db dyn HirDb, func: Func<'db>) -> Vec<ReferenceView<'db>> {
-    FuncSignatureReferenceCollector::new(db, func).collect()
-}
-
-// ---------------------------------------------------------------------------
-// Struct reference collection
-// ---------------------------------------------------------------------------
-
-/// Collects all symbolic references within a struct definition (field types,
-/// generic params, where clause).
-struct StructReferenceCollector<'db> {
-    db: &'db dyn HirDb,
-    struct_: Struct<'db>,
-    refs: Vec<ReferenceView<'db>>,
-}
-
-impl<'db> StructReferenceCollector<'db> {
-    fn new(db: &'db dyn HirDb, struct_: Struct<'db>) -> Self {
-        Self {
-            db,
-            struct_,
-            refs: Vec::new(),
-        }
-    }
-
-    fn collect(mut self) -> Vec<ReferenceView<'db>> {
-        let mut ctxt = VisitorCtxt::with_struct(self.db, self.struct_);
-        self.visit_struct(&mut ctxt, self.struct_);
-        self.refs
-    }
-}
-
-impl<'db> Visitor<'db> for StructReferenceCollector<'db> {
-    fn visit_path(&mut self, ctxt: &mut VisitorCtxt<'db, LazyPathSpan<'db>>, path: PathId<'db>) {
-        if let Some(span) = ctxt.span() {
-            let scope = ctxt.scope();
-            self.refs.push(ReferenceView::Path(PathView::new(path, scope, span)));
-        }
-        walk_path(self, ctxt, path);
-    }
-}
-
-// Salsa query for caching struct references (internal)
-#[salsa::tracked(return_ref)]
-fn struct_references<'db>(db: &'db dyn HirDb, struct_: Struct<'db>) -> Vec<ReferenceView<'db>> {
-    StructReferenceCollector::new(db, struct_).collect()
-}
-
-// ---------------------------------------------------------------------------
-// Enum reference collection
-// ---------------------------------------------------------------------------
-
-/// Collects all symbolic references within an enum definition (variant types,
-/// generic params, where clause).
-struct EnumReferenceCollector<'db> {
-    db: &'db dyn HirDb,
-    enum_: Enum<'db>,
-    refs: Vec<ReferenceView<'db>>,
-}
-
-impl<'db> EnumReferenceCollector<'db> {
-    fn new(db: &'db dyn HirDb, enum_: Enum<'db>) -> Self {
-        Self {
-            db,
-            enum_,
-            refs: Vec::new(),
-        }
-    }
-
-    fn collect(mut self) -> Vec<ReferenceView<'db>> {
-        let mut ctxt = VisitorCtxt::with_enum(self.db, self.enum_);
-        self.visit_enum(&mut ctxt, self.enum_);
-        self.refs
-    }
-}
-
-impl<'db> Visitor<'db> for EnumReferenceCollector<'db> {
-    fn visit_path(&mut self, ctxt: &mut VisitorCtxt<'db, LazyPathSpan<'db>>, path: PathId<'db>) {
-        if let Some(span) = ctxt.span() {
-            let scope = ctxt.scope();
-            self.refs.push(ReferenceView::Path(PathView::new(path, scope, span)));
-        }
-        walk_path(self, ctxt, path);
-    }
-}
-
-// Salsa query for caching enum references (internal)
-#[salsa::tracked(return_ref)]
-fn enum_references<'db>(db: &'db dyn HirDb, enum_: Enum<'db>) -> Vec<ReferenceView<'db>> {
-    EnumReferenceCollector::new(db, enum_).collect()
-}
-
-// ---------------------------------------------------------------------------
-// TypeAlias reference collection
-// ---------------------------------------------------------------------------
-
-/// Collects all symbolic references within a type alias definition.
-struct TypeAliasReferenceCollector<'db> {
-    db: &'db dyn HirDb,
-    type_alias: TypeAlias<'db>,
-    refs: Vec<ReferenceView<'db>>,
-}
-
-impl<'db> TypeAliasReferenceCollector<'db> {
-    fn new(db: &'db dyn HirDb, type_alias: TypeAlias<'db>) -> Self {
-        Self {
-            db,
-            type_alias,
-            refs: Vec::new(),
-        }
-    }
-
-    fn collect(mut self) -> Vec<ReferenceView<'db>> {
-        let mut ctxt = VisitorCtxt::with_type_alias(self.db, self.type_alias);
-        self.visit_type_alias(&mut ctxt, self.type_alias);
-        self.refs
-    }
-}
-
-impl<'db> Visitor<'db> for TypeAliasReferenceCollector<'db> {
-    fn visit_path(&mut self, ctxt: &mut VisitorCtxt<'db, LazyPathSpan<'db>>, path: PathId<'db>) {
-        if let Some(span) = ctxt.span() {
-            let scope = ctxt.scope();
-            self.refs.push(ReferenceView::Path(PathView::new(path, scope, span)));
-        }
-        walk_path(self, ctxt, path);
-    }
-}
-
-// Salsa query for caching type alias references (internal)
-#[salsa::tracked(return_ref)]
-fn type_alias_references<'db>(db: &'db dyn HirDb, type_alias: TypeAlias<'db>) -> Vec<ReferenceView<'db>> {
-    TypeAliasReferenceCollector::new(db, type_alias).collect()
-}
-
-// ---------------------------------------------------------------------------
-// Impl reference collection
-// ---------------------------------------------------------------------------
-
-/// Collects all symbolic references within an impl block (target type,
-/// trait ref, generic params, where clause).
-struct ImplReferenceCollector<'db> {
-    db: &'db dyn HirDb,
-    impl_: Impl<'db>,
-    refs: Vec<ReferenceView<'db>>,
-}
-
-impl<'db> ImplReferenceCollector<'db> {
-    fn new(db: &'db dyn HirDb, impl_: Impl<'db>) -> Self {
-        Self {
-            db,
-            impl_,
-            refs: Vec::new(),
-        }
-    }
-
-    fn collect(mut self) -> Vec<ReferenceView<'db>> {
-        let mut ctxt = VisitorCtxt::with_impl(self.db, self.impl_);
-        self.visit_impl(&mut ctxt, self.impl_);
-        self.refs
-    }
-}
-
-impl<'db> Visitor<'db> for ImplReferenceCollector<'db> {
-    fn visit_path(&mut self, ctxt: &mut VisitorCtxt<'db, LazyPathSpan<'db>>, path: PathId<'db>) {
-        if let Some(span) = ctxt.span() {
-            let scope = ctxt.scope();
-            self.refs.push(ReferenceView::Path(PathView::new(path, scope, span)));
-        }
-        walk_path(self, ctxt, path);
-    }
-
-    // Skip body traversal - body refs are collected separately
-    fn visit_body(&mut self, _ctxt: &mut VisitorCtxt<'db, LazyBodySpan<'db>>, _body: Body<'db>) {}
-}
-
-// Salsa query for caching impl references (internal)
-#[salsa::tracked(return_ref)]
-fn impl_references<'db>(db: &'db dyn HirDb, impl_: Impl<'db>) -> Vec<ReferenceView<'db>> {
-    ImplReferenceCollector::new(db, impl_).collect()
-}
-
-// ---------------------------------------------------------------------------
-// Trait reference collection
-// ---------------------------------------------------------------------------
-
-/// Collects all symbolic references within a trait definition (super traits,
-/// generic params, where clause, associated types).
-struct TraitReferenceCollector<'db> {
-    db: &'db dyn HirDb,
-    trait_: Trait<'db>,
-    refs: Vec<ReferenceView<'db>>,
-}
-
-impl<'db> TraitReferenceCollector<'db> {
-    fn new(db: &'db dyn HirDb, trait_: Trait<'db>) -> Self {
-        Self {
-            db,
-            trait_,
-            refs: Vec::new(),
-        }
-    }
-
-    fn collect(mut self) -> Vec<ReferenceView<'db>> {
-        let mut ctxt = VisitorCtxt::with_trait(self.db, self.trait_);
-        self.visit_trait(&mut ctxt, self.trait_);
-        self.refs
-    }
-}
-
-impl<'db> Visitor<'db> for TraitReferenceCollector<'db> {
-    fn visit_path(&mut self, ctxt: &mut VisitorCtxt<'db, LazyPathSpan<'db>>, path: PathId<'db>) {
-        if let Some(span) = ctxt.span() {
-            let scope = ctxt.scope();
-            self.refs.push(ReferenceView::Path(PathView::new(path, scope, span)));
-        }
-        walk_path(self, ctxt, path);
-    }
-
-    // Skip body traversal - body refs are collected separately
-    fn visit_body(&mut self, _ctxt: &mut VisitorCtxt<'db, LazyBodySpan<'db>>, _body: Body<'db>) {}
-}
-
-// Salsa query for caching trait references (internal)
-#[salsa::tracked(return_ref)]
-fn trait_references<'db>(db: &'db dyn HirDb, trait_: Trait<'db>) -> Vec<ReferenceView<'db>> {
-    TraitReferenceCollector::new(db, trait_).collect()
-}
-
-// ---------------------------------------------------------------------------
-// ImplTrait reference collection
-// ---------------------------------------------------------------------------
-
-/// Collects all symbolic references within an impl trait block.
-struct ImplTraitReferenceCollector<'db> {
-    db: &'db dyn HirDb,
-    impl_trait: ImplTrait<'db>,
-    refs: Vec<ReferenceView<'db>>,
-}
-
-impl<'db> ImplTraitReferenceCollector<'db> {
-    fn new(db: &'db dyn HirDb, impl_trait: ImplTrait<'db>) -> Self {
-        Self {
-            db,
-            impl_trait,
-            refs: Vec::new(),
-        }
-    }
-
-    fn collect(mut self) -> Vec<ReferenceView<'db>> {
-        let mut ctxt = VisitorCtxt::with_impl_trait(self.db, self.impl_trait);
-        self.visit_impl_trait(&mut ctxt, self.impl_trait);
-        self.refs
-    }
-}
-
-impl<'db> Visitor<'db> for ImplTraitReferenceCollector<'db> {
-    fn visit_path(&mut self, ctxt: &mut VisitorCtxt<'db, LazyPathSpan<'db>>, path: PathId<'db>) {
-        if let Some(span) = ctxt.span() {
-            let scope = ctxt.scope();
-            self.refs.push(ReferenceView::Path(PathView::new(path, scope, span)));
-        }
-        walk_path(self, ctxt, path);
-    }
-
-    // Skip body traversal - body refs are collected separately
-    fn visit_body(&mut self, _ctxt: &mut VisitorCtxt<'db, LazyBodySpan<'db>>, _body: Body<'db>) {}
-}
-
-// Salsa query for caching impl trait references (internal)
-#[salsa::tracked(return_ref)]
-fn impl_trait_references<'db>(db: &'db dyn HirDb, impl_trait: ImplTrait<'db>) -> Vec<ReferenceView<'db>> {
-    ImplTraitReferenceCollector::new(db, impl_trait).collect()
-}
-
-// ---------------------------------------------------------------------------
-// Use reference collection
-// ---------------------------------------------------------------------------
-
-/// Collects all symbolic references within a use statement.
-struct UseReferenceCollector<'db> {
-    db: &'db dyn HirDb,
-    use_item: Use<'db>,
-    refs: Vec<ReferenceView<'db>>,
-}
-
-impl<'db> UseReferenceCollector<'db> {
-    fn new(db: &'db dyn HirDb, use_item: Use<'db>) -> Self {
-        Self {
-            db,
-            use_item,
-            refs: Vec::new(),
-        }
-    }
-
-    fn collect(mut self) -> Vec<ReferenceView<'db>> {
-        let mut ctxt = VisitorCtxt::with_use(self.db, self.use_item);
-        self.visit_use(&mut ctxt, self.use_item);
-        self.refs
-    }
-}
-
-impl<'db> Visitor<'db> for UseReferenceCollector<'db> {
     fn visit_use_path(
         &mut self,
         ctxt: &mut VisitorCtxt<'db, LazyUsePathSpan<'db>>,
         use_path: UsePathId<'db>,
     ) {
-        // Collect a UsePathView for each segment
-        if let Some(span) = ctxt.span() {
+        if let (Some(use_item), Some(span)) = (self.current_use, ctxt.span()) {
             let segment_count = use_path.data(self.db).len();
             for idx in 0..segment_count {
                 self.refs.push(ReferenceView::UsePath(UsePathView {
-                    use_item: self.use_item,
+                    use_item,
                     segment: idx,
                     span: span.clone(),
                 }));
             }
         }
-        // Continue walking for any nested paths
         walk_use_path(self, ctxt, use_path);
     }
 }
 
-// Salsa query for caching use references (internal)
+// ---------------------------------------------------------------------------
+// Salsa queries for reference collection
+// ---------------------------------------------------------------------------
+
+#[salsa::tracked(return_ref)]
+fn body_references<'db>(db: &'db dyn HirDb, body: Body<'db>) -> Vec<ReferenceView<'db>> {
+    let mut collector = ReferenceCollector::for_body(db, body);
+    let mut ctxt = VisitorCtxt::with_body(db, body);
+    collector.visit_body(&mut ctxt, body);
+    collector.refs
+}
+
+#[salsa::tracked(return_ref)]
+fn func_signature_references<'db>(db: &'db dyn HirDb, func: Func<'db>) -> Vec<ReferenceView<'db>> {
+    let mut collector = ReferenceCollector::new(db, true);
+    let mut ctxt = VisitorCtxt::with_func(db, func);
+    collector.visit_func(&mut ctxt, func);
+    collector.refs
+}
+
+#[salsa::tracked(return_ref)]
+fn struct_references<'db>(db: &'db dyn HirDb, struct_: Struct<'db>) -> Vec<ReferenceView<'db>> {
+    let mut collector = ReferenceCollector::new(db, false);
+    let mut ctxt = VisitorCtxt::with_struct(db, struct_);
+    collector.visit_struct(&mut ctxt, struct_);
+    collector.refs
+}
+
+#[salsa::tracked(return_ref)]
+fn enum_references<'db>(db: &'db dyn HirDb, enum_: Enum<'db>) -> Vec<ReferenceView<'db>> {
+    let mut collector = ReferenceCollector::new(db, false);
+    let mut ctxt = VisitorCtxt::with_enum(db, enum_);
+    collector.visit_enum(&mut ctxt, enum_);
+    collector.refs
+}
+
+#[salsa::tracked(return_ref)]
+fn type_alias_references<'db>(db: &'db dyn HirDb, type_alias: TypeAlias<'db>) -> Vec<ReferenceView<'db>> {
+    let mut collector = ReferenceCollector::new(db, false);
+    let mut ctxt = VisitorCtxt::with_type_alias(db, type_alias);
+    collector.visit_type_alias(&mut ctxt, type_alias);
+    collector.refs
+}
+
+#[salsa::tracked(return_ref)]
+fn impl_references<'db>(db: &'db dyn HirDb, impl_: Impl<'db>) -> Vec<ReferenceView<'db>> {
+    let mut collector = ReferenceCollector::new(db, true);
+    let mut ctxt = VisitorCtxt::with_impl(db, impl_);
+    collector.visit_impl(&mut ctxt, impl_);
+    collector.refs
+}
+
+#[salsa::tracked(return_ref)]
+fn trait_references<'db>(db: &'db dyn HirDb, trait_: Trait<'db>) -> Vec<ReferenceView<'db>> {
+    let mut collector = ReferenceCollector::new(db, true);
+    let mut ctxt = VisitorCtxt::with_trait(db, trait_);
+    collector.visit_trait(&mut ctxt, trait_);
+    collector.refs
+}
+
+#[salsa::tracked(return_ref)]
+fn impl_trait_references<'db>(db: &'db dyn HirDb, impl_trait: ImplTrait<'db>) -> Vec<ReferenceView<'db>> {
+    let mut collector = ReferenceCollector::new(db, true);
+    let mut ctxt = VisitorCtxt::with_impl_trait(db, impl_trait);
+    collector.visit_impl_trait(&mut ctxt, impl_trait);
+    collector.refs
+}
+
 #[salsa::tracked(return_ref)]
 fn use_references<'db>(db: &'db dyn HirDb, use_item: Use<'db>) -> Vec<ReferenceView<'db>> {
-    UseReferenceCollector::new(db, use_item).collect()
+    let mut collector = ReferenceCollector::new(db, false);
+    let mut ctxt = VisitorCtxt::with_use(db, use_item);
+    collector.visit_use(&mut ctxt, use_item);
+    collector.refs
 }
 
 // ---------------------------------------------------------------------------
@@ -876,6 +637,37 @@ impl<'db> TopLevelMod<'db> {
         }
 
         smallest_enclosing_item
+    }
+
+    /// Find all references to a given scope within this module.
+    ///
+    /// This is the primary entry point for find-all-references - it collects
+    /// all references across the module that resolve to the target scope.
+    pub fn references_to(
+        self,
+        db: &'db dyn HirAnalysisDb,
+        target: ScopeId<'db>,
+    ) -> Vec<&'db ReferenceView<'db>> {
+        let items = self.scope_graph(db).items_dfs(db);
+        let mut results = Vec::new();
+
+        for item in items {
+            let scope = ScopeId::from_item(item);
+            for reference in scope.references(db) {
+                // Check if this reference resolves to our target
+                if let Some(resolved) = reference.target(db) {
+                    let matches = match resolved {
+                        Target::Scope(s) => s == target,
+                        Target::Span(_) => false, // Local bindings don't match scope targets
+                    };
+                    if matches {
+                        results.push(reference);
+                    }
+                }
+            }
+        }
+
+        results
     }
 }
 
