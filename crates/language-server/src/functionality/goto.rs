@@ -184,9 +184,10 @@ mod tests {
             // Get target and filter for scopes only (for snapshot compatibility)
             if let Some(target) = goto_target_at_cursor(db, top_mod, *cursor)
                 && let Target::Scope(scope) = target
-                    && let Some(path) = scope.pretty_path(db) {
-                        cursor_path_map.insert(*cursor, path);
-                    }
+                && let Some(path) = scope.pretty_path(db)
+            {
+                cursor_path_map.insert(*cursor, path);
+            }
         }
 
         let cursor_lines = cursor_path_map
