@@ -144,6 +144,19 @@ fn to_lsp_location_from_span(
     Ok(async_lsp::lsp_types::Location { uri: url, range })
 }
 
+/// Convert a lazy span to an LSP location.
+///
+/// Returns an error if the span cannot be resolved or if the location cannot be created.
+pub fn to_lsp_location_from_lazy_span<'db>(
+    db: &'db dyn hir::SpannedHirDb,
+    lazy_span: hir::span::DynLazySpan<'db>,
+) -> Result<async_lsp::lsp_types::Location, Box<dyn std::error::Error>> {
+    let span = lazy_span
+        .resolve(db)
+        .ok_or("Failed to resolve lazy span")?;
+    to_lsp_location_from_span(db, span)
+}
+
 #[cfg(target_arch = "wasm32")]
 use std::path::Path;
 

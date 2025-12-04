@@ -1,0 +1,17 @@
+---
+source: crates/language-server/src/functionality/goto.rs
+assertion_line: 350
+expression: snapshot
+input_file: test_files/goto_func_sig.fe
+---
+0: struct MyType {
+1:     x: u256
+2: }
+3: 
+4: fn takes_mytype(arg: MyType) -> MyType {
+5:     arg
+6: }
+---
+cursor position (4, 21), path: goto_func_sig::MyType
+cursor position (4, 32), path: goto_func_sig::MyType
+cursor position (5, 4), path: goto_func_sig::takes_mytype::arg

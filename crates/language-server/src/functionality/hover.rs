@@ -2,11 +2,11 @@ use anyhow::Error;
 use async_lsp::lsp_types::Hover;
 
 use common::file::File;
-use hir::lower::map_file_to_mod;
+use hir::{core::semantic::reference::ResolvedPath, lower::map_file_to_mod};
 use tracing::info;
 
 use super::{
-    goto::{Cursor, get_goto_target_scopes_for_cursor},
+    goto::Cursor,
     item_info::{get_docstring, get_item_definition_markdown, get_item_path_markdown},
 };
 use crate::util::to_offset_from_position;
@@ -26,15 +26,22 @@ pub fn hover_helper(
     );
 
     let top_mod = map_file_to_mod(db, file);
-    let goto_info = &get_goto_target_scopes_for_cursor(db, top_mod, cursor).unwrap_or_default();
 
-    let scopes_info = goto_info
-        .iter()
+    // Get the target at cursor - only show hover for scope-based targets
+    let scope = top_mod
+        .reference_at(db, cursor)
+        .and_then(|r| r.target_at(db, cursor))
+        .and_then(|target| match target {
+            ResolvedPath::Scope(s) => Some(s),
+            ResolvedPath::Span(_) => None, // Local bindings don't have hover info yet
+        });
+
+    let info = scope
         .map(|scope| {
             let item = scope.item();
             let pretty_path = get_item_path_markdown(db, item);
             let definition_source = get_item_definition_markdown(db, item);
-            let docs = get_docstring(db, *scope);
+            let docs = get_docstring(db, scope);
 
             [pretty_path, definition_source, docs]
                 .iter()
@@ -42,9 +49,7 @@ pub fn hover_helper(
                 .collect::<Vec<String>>()
                 .join("\n")
         })
-        .collect::<Vec<String>>();
-
-    let info = scopes_info.join("\n---\n");
+        .unwrap_or_default();
 
     let result = async_lsp::lsp_types::Hover {
         contents: async_lsp::lsp_types::HoverContents::Markup(
