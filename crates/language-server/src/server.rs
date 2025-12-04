@@ -10,7 +10,7 @@ use async_lsp::lsp_types::notification::{
     self, DidChangeTextDocument, DidChangeWatchedFiles, DidOpenTextDocument, DidSaveTextDocument,
     Initialized,
 };
-use async_lsp::lsp_types::request::{DocumentHighlightRequest, GotoDefinition, GotoTypeDefinition, HoverRequest, References, Shutdown};
+use async_lsp::lsp_types::request::{DocumentHighlightRequest, GotoDefinition, GotoTypeDefinition, HoverRequest, References, Rename, Shutdown};
 use async_std::stream::StreamExt;
 use futures_batch::ChunksTimeoutStreamExt;
 // use serde_json::Value;
@@ -18,7 +18,7 @@ use tracing::instrument::WithSubscriber;
 use tracing::{info, warn};
 
 use crate::backend::Backend;
-use crate::functionality::{goto, handlers, highlight, references, type_definition};
+use crate::functionality::{goto, handlers, highlight, references, rename, type_definition};
 use async_lsp::lsp_types::request::Initialize;
 use async_lsp::router::Router;
 
@@ -50,6 +50,7 @@ pub(crate) fn setup(
         .handle_request::<References>(references::handle_references)
         .handle_request::<DocumentHighlightRequest>(highlight::handle_document_highlight)
         .handle_request::<GotoTypeDefinition>(type_definition::handle_goto_type_definition)
+        .handle_request::<Rename>(rename::handle_rename)
         .handle_notification::<DidOpenTextDocument>(handlers::handle_did_open_text_document)
         .handle_notification::<DidChangeTextDocument>(handlers::handle_did_change_text_document)
         .handle_notification::<DidChangeWatchedFiles>(handlers::handle_did_change_watched_files)
