@@ -24,6 +24,7 @@ use crate::{
         ty_check::{RecordLike, check_func_body},
         ty_def::TyId,
     },
+    hir_def::HirIngot,
     hir_def::scope_graph::ScopeId,
     hir_def::{Body, Expr, ExprId, FieldIndex, ItemKind, Partial, PathId, Use, UsePathSegment},
     span::{
@@ -301,14 +302,31 @@ impl<'db> UsePathView<'db> {
                 UsePathSegment::Glob => return None, // Can't resolve glob
             };
 
-            // Create a query for this name in the current scope
+            // Try regular name resolution first
             let directive = QueryDirective::new();
             let query = EarlyNameQueryId::new(db, ident, current_scope, directive);
             let bucket = resolve_query(db, query);
 
-            // Get the first successful resolution
-            let res = bucket.iter_ok().next()?;
-            current_scope = res.scope()?;
+            if let Some(res) = bucket.iter_ok().next() {
+                current_scope = res.scope()?;
+                continue;
+            }
+
+            // If name resolution failed and we're in a TopLevelMod scope,
+            // check for child file modules in the module tree
+            if let ScopeId::Item(ItemKind::TopMod(top_mod)) = current_scope {
+                let module_tree = top_mod.ingot(db).module_tree(db);
+                if let Some(child) = module_tree
+                    .children(top_mod)
+                    .find(|child_mod| child_mod.name(db) == ident)
+                {
+                    current_scope = ScopeId::Item(ItemKind::TopMod(child));
+                    continue;
+                }
+            }
+
+            // Resolution failed
+            return None;
         }
 
         Some(current_scope)
