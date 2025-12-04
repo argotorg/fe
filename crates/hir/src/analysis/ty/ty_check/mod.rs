@@ -334,6 +334,20 @@ impl<'db> TypedBody<'db> {
         self.callables.get(&expr)
     }
 
+    /// Get the definition span for an expression that references a local binding.
+    ///
+    /// Returns `Some(span)` if the expression references a local variable, parameter,
+    /// or effect parameter. Returns `None` if the expression doesn't have a binding
+    /// or if no body is available.
+    ///
+    /// This is used by the language server for goto-definition on local variables.
+    pub fn expr_binding_def_span(&self, func: Func<'db>, expr: ExprId) -> Option<DynLazySpan<'db>> {
+        let body = self.body?;
+        let prop = self.expr_ty.get(&expr)?;
+        let binding = prop.binding?;
+        Some(binding.def_span_with(body, func))
+    }
+
     fn empty() -> Self {
         Self {
             body: None,

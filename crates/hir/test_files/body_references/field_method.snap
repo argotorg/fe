@@ -1,0 +1,148 @@
+---
+source: crates/hir/tests/body_references.rs
+expression: res
+input_file: test_files/body_references/field_method.fe
+---
+note: 
+  ┌─ field_method.fe:8:9
+  │
+8 │         Point { x, y }
+  │         ^^^^^ Point -> struct
+
+note: 
+  ┌─ field_method.fe:8:17
+  │
+8 │         Point { x, y }
+  │                 ^ x -> value
+
+note: 
+  ┌─ field_method.fe:8:20
+  │
+8 │         Point { x, y }
+  │                    ^ y -> value
+
+note: 
+   ┌─ field_method.fe:12:9
+   │
+12 │         self.x * self.x + self.y * self.y
+   │         ^^^^ self -> mod
+
+note: 
+   ┌─ field_method.fe:12:9
+   │
+12 │         self.x * self.x + self.y * self.y
+   │         ^^^^^^ field -> field
+
+note: 
+   ┌─ field_method.fe:12:18
+   │
+12 │         self.x * self.x + self.y * self.y
+   │                  ^^^^ self -> mod
+
+note: 
+   ┌─ field_method.fe:12:18
+   │
+12 │         self.x * self.x + self.y * self.y
+   │                  ^^^^^^ field -> field
+
+note: 
+   ┌─ field_method.fe:12:27
+   │
+12 │         self.x * self.x + self.y * self.y
+   │                           ^^^^ self -> mod
+
+note: 
+   ┌─ field_method.fe:12:27
+   │
+12 │         self.x * self.x + self.y * self.y
+   │                           ^^^^^^ field -> field
+
+note: 
+   ┌─ field_method.fe:12:36
+   │
+12 │         self.x * self.x + self.y * self.y
+   │                                    ^^^^ self -> mod
+
+note: 
+   ┌─ field_method.fe:12:36
+   │
+12 │         self.x * self.x + self.y * self.y
+   │                                    ^^^^^^ field -> field
+
+note: 
+   ┌─ field_method.fe:17:9
+   │
+17 │     let p = Point::new(x: 3, y: 4)
+   │         ^ p -> local
+
+note: 
+   ┌─ field_method.fe:17:13
+   │
+17 │     let p = Point::new(x: 3, y: 4)
+   │             ^^^^^^^^^^ new -> unresolved
+
+note: 
+   ┌─ field_method.fe:18:9
+   │
+18 │     let x_val = p.x
+   │         ^^^^^ x_val -> unresolved
+
+note: 
+   ┌─ field_method.fe:18:17
+   │
+18 │     let x_val = p.x
+   │                 ^ p -> local
+
+note: 
+   ┌─ field_method.fe:18:17
+   │
+18 │     let x_val = p.x
+   │                 ^^^ field -> field
+
+note: 
+   ┌─ field_method.fe:19:9
+   │
+19 │     let y_val = p.y
+   │         ^^^^^ y_val -> unresolved
+
+note: 
+   ┌─ field_method.fe:19:17
+   │
+19 │     let y_val = p.y
+   │                 ^ p -> local
+
+note: 
+   ┌─ field_method.fe:19:17
+   │
+19 │     let y_val = p.y
+   │                 ^^^ field -> field
+
+note: 
+   ┌─ field_method.fe:23:9
+   │
+23 │     let p = Point::new(x: 5, y: 12)
+   │         ^ p -> local
+
+note: 
+   ┌─ field_method.fe:23:13
+   │
+23 │     let p = Point::new(x: 5, y: 12)
+   │             ^^^^^^^^^^ new -> unresolved
+
+note: 
+   ┌─ field_method.fe:24:9
+   │
+24 │     let mag = p.magnitude()
+   │         ^^^ mag -> unresolved
+
+note: 
+   ┌─ field_method.fe:24:15
+   │
+24 │     let mag = p.magnitude()
+   │               ^ p -> local
+
+note: 
+   ┌─ field_method.fe:24:15
+   │
+24 │     let mag = p.magnitude()
+   │               ^^^^^^^^^^^^^ method -> fn

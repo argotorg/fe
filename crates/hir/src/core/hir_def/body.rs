@@ -12,8 +12,8 @@ use rustc_hash::FxHashMap;
 use salsa::Update;
 
 use super::{
-    Expr, ExprId, Partial, Pat, PatId, Stmt, StmtId, TopLevelMod, TrackedItemId,
-    scope_graph::ScopeId,
+    Expr, ExprId, Func, ItemKind, Partial, Pat, PatId, PathId, Stmt, StmtId, TopLevelMod,
+    TrackedItemId, scope_graph::ScopeId,
 };
 use crate::{
     HirDb,
@@ -54,6 +54,38 @@ impl<'db> Body<'db> {
 
     pub fn scope(self) -> ScopeId<'db> {
         ScopeId::from_item(self.into())
+    }
+
+    /// Find the function that contains this body.
+    ///
+    /// Returns `Some(func)` if this body belongs to a function, `None` otherwise
+    /// (e.g., for anonymous/closure bodies or const bodies).
+    pub fn containing_func(self, db: &'db dyn HirDb) -> Option<Func<'db>> {
+        let scope_graph = self.top_mod(db).scope_graph(db);
+        for item in scope_graph.items_dfs(db) {
+            if let ItemKind::Func(func) = item
+                && func.body(db) == Some(self)
+            {
+                return Some(func);
+            }
+        }
+        None
+    }
+
+    /// Find the expression ID for a path in this body.
+    ///
+    /// Searches through all expressions to find an `Expr::Path` that contains
+    /// the given path. Returns `None` if no matching expression is found.
+    pub fn find_expr_for_path(self, db: &'db dyn HirDb, target_path: PathId<'db>) -> Option<ExprId> {
+        let exprs = self.exprs(db);
+        for (expr_id, expr) in exprs.iter() {
+            if let Partial::Present(Expr::Path(Partial::Present(path))) = expr
+                && *path == target_path
+            {
+                return Some(expr_id);
+            }
+        }
+        None
     }
 
     #[doc(hidden)]
