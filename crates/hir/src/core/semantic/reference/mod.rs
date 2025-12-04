@@ -132,15 +132,17 @@ impl<'db> PathView<'db> {
                 // If this is the last segment, try local binding resolution first
                 // (locals shadow module-level items)
                 if idx == last_idx
-                    && let Some(local) = self.local_target(db) {
-                        return Some(local);
-                    }
+                    && let Some(local) = self.local_target(db)
+                {
+                    return Some(local);
+                }
 
                 // Try module-level resolution for this segment
                 if let Some(seg_path) = self.path.segment(db, idx)
-                    && let Some(scope) = resolve_path_to_scope(db, seg_path, self.scope) {
-                        return Some(Target::Scope(scope));
-                    }
+                    && let Some(scope) = resolve_path_to_scope(db, seg_path, self.scope)
+                {
+                    return Some(Target::Scope(scope));
+                }
                 return None;
             }
         }

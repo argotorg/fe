@@ -101,21 +101,32 @@ impl<'db> TopLevelMod<'db> {
         db: &'db dyn SpannedHirDb,
         cursor: TextSize,
     ) -> Option<&'db ReferenceView<'db>> {
-        // Find the smallest item containing the cursor
-        let item = self.find_enclosing_item(db, cursor)?;
-        let scope = ScopeId::from_item(item);
-        scope.reference_at(db, cursor)
+        let items = self.find_enclosing_items(db, cursor);
+
+        // When multiple items have the same span (e.g., decomposed use statements),
+        // check each one's references to find which actually contains the cursor
+        for item in items {
+            let scope = ScopeId::from_item(item);
+            if let Some(reference) = scope.reference_at(db, cursor) {
+                return Some(reference);
+            }
+        }
+
+        None
     }
 
-    /// Find the smallest item enclosing the cursor position.
-    fn find_enclosing_item(
+    /// Find all items with the smallest span enclosing the cursor position.
+    ///
+    /// Returns all items that share the smallest enclosing span. This handles
+    /// cases like decomposed use statements where multiple items have identical spans.
+    fn find_enclosing_items(
         self,
         db: &'db dyn SpannedHirDb,
         cursor: TextSize,
-    ) -> Option<ItemKind<'db>> {
+    ) -> Vec<ItemKind<'db>> {
         let items = self.scope_graph(db).items_dfs(db);
 
-        let mut smallest_enclosing_item = None;
+        let mut smallest_items = Vec::new();
         let mut smallest_range_size = None;
 
         for item in items {
@@ -126,14 +137,28 @@ impl<'db> TopLevelMod<'db> {
 
             if item_span.range.contains(cursor) {
                 let range_size = item_span.range.end() - item_span.range.start();
-                if smallest_range_size.is_none() || range_size < smallest_range_size.unwrap() {
-                    smallest_enclosing_item = Some(item);
-                    smallest_range_size = Some(range_size);
+
+                match smallest_range_size {
+                    None => {
+                        smallest_items.push(item);
+                        smallest_range_size = Some(range_size);
+                    }
+                    Some(size) if range_size < size => {
+                        // Found a smaller item
+                        smallest_items.clear();
+                        smallest_items.push(item);
+                        smallest_range_size = Some(range_size);
+                    }
+                    Some(size) if range_size == size => {
+                        // Multiple items with same size (e.g., decomposed uses)
+                        smallest_items.push(item);
+                    }
+                    _ => {}
                 }
             }
         }
 
-        smallest_enclosing_item
+        smallest_items
     }
 
     /// Find all references to a given scope within this module.
