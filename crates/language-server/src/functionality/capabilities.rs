@@ -1,5 +1,7 @@
 use async_lsp::lsp_types::{HoverProviderCapability, ServerCapabilities};
 
+use super::semantic_tokens::semantic_tokens_options;
+
 #[cfg(target_arch = "wasm32")]
 use crate::util::DummyFilePathConversion;
 
@@ -20,6 +22,8 @@ pub(crate) fn server_capabilities() -> ServerCapabilities {
         type_definition_provider: Some(async_lsp::lsp_types::TypeDefinitionProviderCapability::Simple(true)),
         // rename symbol
         rename_provider: Some(async_lsp::lsp_types::OneOf::Left(true)),
+        // semantic tokens
+        semantic_tokens_provider: Some(semantic_tokens_options()),
         // support for workspace add/remove changes
         workspace: Some(async_lsp::lsp_types::WorkspaceServerCapabilities {
             workspace_folders: Some(async_lsp::lsp_types::WorkspaceFoldersServerCapabilities {
