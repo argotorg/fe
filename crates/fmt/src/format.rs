@@ -3,7 +3,8 @@ use std::path::Path;
 
 use parser::{SyntaxNode, ast, ast::prelude::AstNode, parse_source_file};
 
-use crate::{Config, Indent, Rewrite, RewriteContext, Shape};
+use crate::{Config, Indent, RewriteContext, Shape};
+use crate::ast::ToDoc;
 
 /// Errors that can occur while formatting Fe source.
 #[derive(Debug)]
@@ -34,10 +35,23 @@ pub fn format_str(source: &str, config: &Config) -> Result<String, FormatError> 
     let context = RewriteContext { config, source };
     let shape = Shape::with_width(config.max_width, Indent::default());
 
-    Ok(root
-        .rewrite(&context, shape)
-        // If formatting fails for any reason, fall back to the original text.
-        .unwrap_or_else(|| source.to_owned()))
+    let doc = root.to_doc(&context, shape);
+    let mut output = Vec::new();
+    doc.render(config.max_width, &mut output)
+        .expect("rendering to Vec should never fail");
+
+    let formatted = String::from_utf8(output).unwrap_or_else(|_| source.to_owned());
+
+    // Post-process to remove trailing whitespace from blank lines.
+    // The pretty crate adds indentation after hardlines, which creates
+    // trailing whitespace on intentional blank lines inside blocks.
+    let cleaned: String = formatted
+        .lines()
+        .map(|line| line.trim_end())
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    Ok(cleaned)
 }
 
 /// Format the Fe source file at the given `path`.

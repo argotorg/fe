@@ -10,18 +10,23 @@ fn long_params(
     fourth: FourthTypeNameThatIsAlsoQuiteLong,
 ) {}
 
-fn long_return(a: i32)
--> SuperVerboseReturnTypeThatWillNotFitOnOneLineWithoutBreakingOrEvenComingClose<FirstParam, SecondParam, ThirdParam, AnotherParam> {}
+fn long_return(
+    a: i32,
+) -> SuperVerboseReturnTypeThatWillNotFitOnOneLineWithoutBreakingOrEvenComingClose<
+    FirstParam,
+    SecondParam,
+    ThirdParam,
+    AnotherParam,
+> {}
 
-fn uses_and_params(first: Alpha, second: Beta, third: Gamma, fourth: Delta, fifth: Epsilon)
-  uses (
-      first: SomeVeryLongUseTypeName,
-      second: AnotherUseTypeNameThatIsLongerThanComfortable,
-      third: ThirdExtremelyLongUseParamThatPushesThisOverTheEdge,
-  ) {}
+fn uses_and_params(first: Alpha, second: Beta, third: Gamma, fourth: Delta, fifth: Epsilon) uses (
+    first: SomeVeryLongUseTypeName,
+    second: AnotherUseTypeNameThatIsLongerThanComfortable,
+    third: ThirdExtremelyLongUseParamThatPushesThisOverTheEdge,
+) {}
 
 fn where_vertical<T, U>(first: T, second: U, third: U) -> i32
-  where
-    T: TraitOne + AnotherTrait + YetAnotherTrait + AdditionalTraitNameThatIsQuiteLong,
-    U: TraitTwo + TraitThree + AdditionalTraitNameThatIsAlsoLong,
+where
+  T: TraitOne + AnotherTrait + YetAnotherTrait + AdditionalTraitNameThatIsQuiteLong,
+  U: TraitTwo + TraitThree + AdditionalTraitNameThatIsAlsoLong
 {}

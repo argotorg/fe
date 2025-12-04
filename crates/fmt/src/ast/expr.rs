@@ -1,327 +1,560 @@
 //! Formatting for expressions.
 
-use std::fmt::Write as _;
+use pretty::RcDoc;
 
-use crate::{
-    Indent, ListFormatting, ListTactic, Rewrite, RewriteContext, RewriteExt, Shape, format_list,
-};
-use parser::ast::{self, ExprKind, GenericArgsOwner};
+use crate::{RewriteContext, Shape};
+use parser::ast::{self, GenericArgsOwner, prelude::AstNode};
 
-use super::push_indent;
+use super::types::{ToDoc, block_list, block_list_spaced};
 
-impl Rewrite for ast::Expr {
-    fn rewrite(&self, context: &RewriteContext<'_>, shape: Shape) -> Option<String> {
-        match self.kind() {
-            ExprKind::Lit(lit) => lit.rewrite(context, shape),
-            ExprKind::Block(block) => block.rewrite(context, shape),
-            ExprKind::Bin(bin) => bin.rewrite(context, shape),
-            ExprKind::Un(un) => un.rewrite(context, shape),
-            ExprKind::Call(call) => call.rewrite(context, shape),
-            ExprKind::MethodCall(method) => method.rewrite(context, shape),
-            ExprKind::Path(path) => path.rewrite(context, shape),
-            ExprKind::RecordInit(record) => record.rewrite(context, shape),
-            ExprKind::Field(field) => field.rewrite(context, shape),
-            ExprKind::Index(index) => index.rewrite(context, shape),
-            ExprKind::Tuple(tuple) => tuple.rewrite(context, shape),
-            ExprKind::Array(array) => array.rewrite(context, shape),
-            ExprKind::ArrayRep(array_rep) => array_rep.rewrite(context, shape),
-            ExprKind::If(if_expr) => if_expr.rewrite(context, shape),
-            ExprKind::Match(match_expr) => match_expr.rewrite(context, shape),
-            ExprKind::With(with_expr) => with_expr.rewrite(context, shape),
-            ExprKind::Paren(paren) => paren.rewrite(context, shape),
-            ExprKind::Assign(assign) => assign.rewrite(context, shape),
-            ExprKind::AugAssign(aug_assign) => aug_assign.rewrite(context, shape),
-        }
+impl ToDoc for ast::BinExpr {
+    fn to_doc<'a>(&self, context: &RewriteContext<'_>, shape: Shape) -> RcDoc<'a, ()> {
+        let lhs = match self.lhs() {
+            Some(e) => e.to_doc(context, shape),
+            None => return RcDoc::nil(),
+        };
+        let op = match self.op() {
+            Some(o) => context.snippet_node_or_token(&o.syntax()).to_string(),
+            None => return lhs,
+        };
+        let rhs = match self.rhs() {
+            Some(e) => e.to_doc(context, shape),
+            None => return lhs,
+        };
+
+        lhs.append(RcDoc::text(" "))
+            .append(RcDoc::text(op))
+            .append(RcDoc::text(" "))
+            .append(rhs)
     }
 }
 
-impl Rewrite for ast::BinExpr {
-    fn rewrite(&self, context: &RewriteContext<'_>, shape: Shape) -> Option<String> {
-        let lhs = self.lhs()?.rewrite_or_original(context, shape);
-        let op = context.snippet_node_or_token(&self.op()?.syntax());
-        let rhs = self.rhs()?.rewrite_or_original(context, shape);
+impl ToDoc for ast::UnExpr {
+    fn to_doc<'a>(&self, context: &RewriteContext<'_>, shape: Shape) -> RcDoc<'a, ()> {
+        let op = match self.op() {
+            Some(o) => context.snippet(o.syntax().text_range()).trim().to_string(),
+            None => return RcDoc::nil(),
+        };
+        let expr = match self.expr() {
+            Some(e) => e.to_doc(context, shape),
+            None => return RcDoc::text(op),
+        };
 
-        Some(format!("{lhs} {op} {rhs}"))
+        RcDoc::text(op).append(expr)
     }
 }
 
-impl Rewrite for ast::UnExpr {
-    fn rewrite(&self, context: &RewriteContext<'_>, shape: Shape) -> Option<String> {
-        let op_token = self.op()?.syntax();
-        let op = context.snippet(op_token.text_range()).trim();
-        let expr = self.expr()?.rewrite_or_original(context, shape);
+impl ToDoc for ast::CallArg {
+    fn to_doc<'a>(&self, context: &RewriteContext<'_>, shape: Shape) -> RcDoc<'a, ()> {
+        let expr = match self.expr() {
+            Some(e) => e.to_doc(context, shape),
+            None => return RcDoc::nil(),
+        };
 
-        Some(format!("{op}{expr}"))
-    }
-}
-
-impl Rewrite for ast::CallArg {
-    fn rewrite(&self, context: &RewriteContext<'_>, shape: Shape) -> Option<String> {
-        let expr = self.expr()?.rewrite_or_original(context, shape);
         if let Some(label) = self.label() {
-            let label_text = context.snippet(label.text_range()).trim();
-            Some(format!("{label_text}: {expr}"))
+            let label_text = context.snippet(label.text_range()).trim().to_string();
+            RcDoc::text(label_text)
+                .append(RcDoc::text(": "))
+                .append(expr)
         } else {
-            Some(expr)
+            expr
         }
     }
 }
 
-impl Rewrite for ast::CallExpr {
-    fn rewrite(&self, context: &RewriteContext<'_>, shape: Shape) -> Option<String> {
-        let callee = self.callee()?.rewrite_or_original(context, shape);
-        let formatting = ListFormatting::new(shape)
-            .tactic(ListTactic::Mixed)
-            .with_surround("(", ")");
-
-        let args_str = if let Some(args) = self.args() {
-            format_list(args.into_iter(), &formatting, context, shape)?
-        } else {
-            "()".to_string()
+impl ToDoc for ast::CallExpr {
+    fn to_doc<'a>(&self, context: &RewriteContext<'_>, shape: Shape) -> RcDoc<'a, ()> {
+        let callee = match self.callee() {
+            Some(c) => c.to_doc(context, shape),
+            None => return RcDoc::nil(),
         };
 
-        Some(format!("{callee}{args_str}"))
+        let args: Vec<_> = self
+            .args()
+            .map(|args| args.into_iter().map(|a| a.to_doc(context, shape)).collect())
+            .unwrap_or_default();
+
+        let indent = context.config.indent_width as isize;
+        callee.append(block_list("(", ")", args, indent, true))
     }
 }
 
-impl Rewrite for ast::MethodCallExpr {
-    fn rewrite(&self, context: &RewriteContext<'_>, shape: Shape) -> Option<String> {
-        let receiver = self.receiver()?.rewrite_or_original(context, shape);
-        let name = context.snippet(self.method_name()?.text_range()).trim();
-
-        let generics = if let Some(args) = self.generic_args() {
-            args.rewrite_or_original(context, shape)
-        } else {
-            String::new()
+impl ToDoc for ast::MethodCallExpr {
+    fn to_doc<'a>(&self, context: &RewriteContext<'_>, shape: Shape) -> RcDoc<'a, ()> {
+        let receiver = match self.receiver() {
+            Some(r) => r.to_doc(context, shape),
+            None => return RcDoc::nil(),
+        };
+        let name = match self.method_name() {
+            Some(n) => context.snippet(n.text_range()).trim().to_string(),
+            None => return receiver,
         };
 
-        let formatting = ListFormatting::new(shape)
-            .tactic(ListTactic::Mixed)
-            .with_surround("(", ")");
+        let generics = self
+            .generic_args()
+            .map(|args| args.to_doc(context, shape))
+            .unwrap_or_else(RcDoc::nil);
 
-        let args_str = if let Some(args) = self.args() {
-            format_list(args.into_iter(), &formatting, context, shape)?
-        } else {
-            "()".to_string()
+        let args: Vec<_> = self
+            .args()
+            .map(|args| args.into_iter().map(|a| a.to_doc(context, shape)).collect())
+            .unwrap_or_default();
+
+        let indent = context.config.indent_width as isize;
+        receiver
+            .append(RcDoc::text("."))
+            .append(RcDoc::text(name))
+            .append(generics)
+            .append(block_list("(", ")", args, indent, true))
+    }
+}
+
+impl ToDoc for ast::RecordField {
+    fn to_doc<'a>(&self, context: &RewriteContext<'_>, shape: Shape) -> RcDoc<'a, ()> {
+        let label = match self.label() {
+            Some(l) => context.snippet(l.text_range()).trim().to_string(),
+            None => return RcDoc::nil(),
+        };
+        let expr = match self.expr() {
+            Some(e) => e.to_doc(context, shape),
+            None => return RcDoc::text(label),
         };
 
-        Some(format!("{receiver}.{name}{generics}{args_str}"))
+        RcDoc::text(label).append(RcDoc::text(": ")).append(expr)
     }
 }
 
-impl Rewrite for ast::RecordField {
-    fn rewrite(&self, context: &RewriteContext<'_>, shape: Shape) -> Option<String> {
-        let label = self.label()?;
-        let label_text = context.snippet(label.text_range()).trim();
-        let expr = self.expr()?.rewrite_or_original(context, shape);
-        Some(format!("{label_text}: {expr}"))
-    }
-}
-
-impl Rewrite for ast::RecordInitExpr {
-    fn rewrite(&self, context: &RewriteContext<'_>, shape: Shape) -> Option<String> {
-        let path = self.path()?.rewrite_or_original(context, shape);
-
-        let fields_str = if let Some(fields) = self.fields() {
-            let formatting = ListFormatting::new(shape)
-                .tactic(ListTactic::Mixed)
-                .with_surround("{", "}")
-                .horizontal_padding(true);
-            let list = format_list(fields, &formatting, context, shape)?;
-            format!(" {list}")
-        } else {
-            " {}".to_string()
+impl ToDoc for ast::RecordInitExpr {
+    fn to_doc<'a>(&self, context: &RewriteContext<'_>, shape: Shape) -> RcDoc<'a, ()> {
+        let path = match self.path() {
+            Some(p) => p.to_doc(context, shape),
+            None => return RcDoc::nil(),
         };
 
-        Some(format!("{path}{fields_str}"))
+        let fields: Vec<_> = self
+            .fields()
+            .map(|f| {
+                f.into_iter()
+                    .map(|field| field.to_doc(context, shape))
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        let indent = context.config.indent_width as isize;
+        path.append(RcDoc::text(" "))
+            .append(block_list_spaced("{", "}", fields, indent, true))
     }
 }
 
-impl Rewrite for ast::AssignExpr {
-    fn rewrite(&self, context: &RewriteContext<'_>, shape: Shape) -> Option<String> {
-        let lhs = self.lhs_expr()?.rewrite_or_original(context, shape);
-        let rhs = self.rhs_expr()?.rewrite_or_original(context, shape);
-
-        Some(format!("{lhs} = {rhs}"))
-    }
-}
-
-impl Rewrite for ast::AugAssignExpr {
-    fn rewrite(&self, context: &RewriteContext<'_>, shape: Shape) -> Option<String> {
-        let lhs = self.lhs_expr()?.rewrite_or_original(context, shape);
-        let op = context.snippet_node_or_token(&self.op()?.syntax());
-        let rhs = self.rhs_expr()?.rewrite_or_original(context, shape);
-
-        Some(format!("{lhs} {op}= {rhs}"))
-    }
-}
-
-impl Rewrite for ast::PathExpr {
-    fn rewrite(&self, context: &RewriteContext<'_>, shape: Shape) -> Option<String> {
-        self.path()?.rewrite(context, shape)
-    }
-}
-
-impl Rewrite for ast::FieldExpr {
-    fn rewrite(&self, context: &RewriteContext<'_>, shape: Shape) -> Option<String> {
-        let base = self.receiver()?.rewrite_or_original(context, shape);
-        let field = context.snippet(self.name_or_index()?.text_range()).trim();
-
-        Some(format!("{base}.{field}"))
-    }
-}
-
-impl Rewrite for ast::IndexExpr {
-    fn rewrite(&self, context: &RewriteContext<'_>, shape: Shape) -> Option<String> {
-        let expr = self.expr()?.rewrite_or_original(context, shape);
-        let index = self.index()?.rewrite_or_original(context, shape);
-
-        Some(format!("{expr}[{index}]"))
-    }
-}
-
-impl Rewrite for ast::LitExpr {
-    fn rewrite(&self, context: &RewriteContext<'_>, _shape: Shape) -> Option<String> {
-        Some(context.snippet_trimmed(&self.lit()?))
-    }
-}
-
-impl Rewrite for ast::IfExpr {
-    fn rewrite(&self, context: &RewriteContext<'_>, shape: Shape) -> Option<String> {
-        let cond = self.cond()?.rewrite_or_original(context, shape);
-        let then = self.then()?.rewrite_or_original(context, shape);
-
-        let else_ = if let Some(else_expr) = self.else_() {
-            format!(" else {}", else_expr.rewrite_or_original(context, shape))
-        } else {
-            String::new()
+impl ToDoc for ast::AssignExpr {
+    fn to_doc<'a>(&self, context: &RewriteContext<'_>, shape: Shape) -> RcDoc<'a, ()> {
+        let lhs = match self.lhs_expr() {
+            Some(e) => e.to_doc(context, shape),
+            None => return RcDoc::nil(),
+        };
+        let rhs = match self.rhs_expr() {
+            Some(e) => e.to_doc(context, shape),
+            None => return lhs,
         };
 
-        Some(format!("if {cond} {then}{else_}"))
+        lhs.append(RcDoc::text(" = ")).append(rhs)
     }
 }
 
-impl Rewrite for ast::UsesClause {
-    fn rewrite(&self, context: &RewriteContext<'_>, shape: Shape) -> Option<String> {
+impl ToDoc for ast::AugAssignExpr {
+    fn to_doc<'a>(&self, context: &RewriteContext<'_>, shape: Shape) -> RcDoc<'a, ()> {
+        let lhs = match self.lhs_expr() {
+            Some(e) => e.to_doc(context, shape),
+            None => return RcDoc::nil(),
+        };
+        let op = match self.op() {
+            Some(o) => context.snippet_node_or_token(&o.syntax()).to_string(),
+            None => return lhs,
+        };
+        let rhs = match self.rhs_expr() {
+            Some(e) => e.to_doc(context, shape),
+            None => return lhs,
+        };
+
+        lhs.append(RcDoc::text(" "))
+            .append(RcDoc::text(op))
+            .append(RcDoc::text("= "))
+            .append(rhs)
+    }
+}
+
+impl ToDoc for ast::PathExpr {
+    fn to_doc<'a>(&self, context: &RewriteContext<'_>, shape: Shape) -> RcDoc<'a, ()> {
+        match self.path() {
+            Some(p) => p.to_doc(context, shape),
+            None => RcDoc::nil(),
+        }
+    }
+}
+
+impl ToDoc for ast::FieldExpr {
+    fn to_doc<'a>(&self, context: &RewriteContext<'_>, shape: Shape) -> RcDoc<'a, ()> {
+        let base = match self.receiver() {
+            Some(r) => r.to_doc(context, shape),
+            None => return RcDoc::nil(),
+        };
+        let field = match self.name_or_index() {
+            Some(n) => context.snippet(n.text_range()).trim().to_string(),
+            None => return base,
+        };
+
+        base.append(RcDoc::text(".")).append(RcDoc::text(field))
+    }
+}
+
+impl ToDoc for ast::IndexExpr {
+    fn to_doc<'a>(&self, context: &RewriteContext<'_>, shape: Shape) -> RcDoc<'a, ()> {
+        let expr = match self.expr() {
+            Some(e) => e.to_doc(context, shape),
+            None => return RcDoc::nil(),
+        };
+        let index = match self.index() {
+            Some(i) => i.to_doc(context, shape),
+            None => return expr,
+        };
+
+        expr.append(RcDoc::text("["))
+            .append(index)
+            .append(RcDoc::text("]"))
+    }
+}
+
+impl ToDoc for ast::LitExpr {
+    fn to_doc<'a>(&self, context: &RewriteContext<'_>, _shape: Shape) -> RcDoc<'a, ()> {
+        match self.lit() {
+            Some(l) => RcDoc::text(context.snippet_trimmed(&l)),
+            None => RcDoc::nil(),
+        }
+    }
+}
+
+impl ToDoc for ast::IfExpr {
+    fn to_doc<'a>(&self, context: &RewriteContext<'_>, shape: Shape) -> RcDoc<'a, ()> {
+        let cond = match self.cond() {
+            Some(c) => c.to_doc(context, shape),
+            None => return RcDoc::nil(),
+        };
+        let then = match self.then() {
+            Some(t) => t.to_doc(context, shape),
+            None => return RcDoc::text("if ").append(cond),
+        };
+
+        let else_doc = self
+            .else_()
+            .map(|e| RcDoc::text(" else ").append(e.to_doc(context, shape)))
+            .unwrap_or_else(RcDoc::nil);
+
+        RcDoc::text("if ")
+            .append(cond)
+            .append(RcDoc::text(" "))
+            .append(then)
+            .append(else_doc)
+    }
+}
+
+impl ToDoc for ast::UsesClause {
+    fn to_doc<'a>(&self, context: &RewriteContext<'_>, shape: Shape) -> RcDoc<'a, ()> {
         if let Some(params) = self.param_list() {
-            let formatting = ListFormatting::new(shape)
-                .tactic(ListTactic::Mixed)
-                .with_surround("(", ")");
-            let list = format_list(params, &formatting, context, shape)?;
-            Some(format!("uses {list}"))
+            let params_docs: Vec<_> = params
+                .into_iter()
+                .map(|p| p.to_doc(context, shape))
+                .collect();
+
+            let indent = context.config.indent_width as isize;
+            RcDoc::text("uses ").append(block_list("(", ")", params_docs, indent, true))
         } else if let Some(param) = self.param() {
-            let param_text = param.rewrite_or_original(context, shape);
-            Some(format!("uses {param_text}"))
+            RcDoc::text("uses ").append(param.to_doc(context, shape))
         } else {
-            None
+            RcDoc::nil()
         }
     }
 }
 
-impl Rewrite for ast::UsesParam {
-    fn rewrite(&self, context: &RewriteContext<'_>, shape: Shape) -> Option<String> {
-        let mut out = String::new();
+impl ToDoc for ast::UsesParam {
+    fn to_doc<'a>(&self, context: &RewriteContext<'_>, shape: Shape) -> RcDoc<'a, ()> {
+        let mut doc = RcDoc::nil();
 
         if self.mut_token().is_some() {
-            out.push_str("mut ");
+            doc = doc.append(RcDoc::text("mut "));
         }
 
         if let Some(name) = self.name() {
-            let name_text = context.snippet(name.syntax().text_range()).trim();
-            let _ = write!(out, "{name_text}: ");
+            let name_text = context
+                .snippet(name.syntax().text_range())
+                .trim()
+                .to_string();
+            doc = doc.append(RcDoc::text(name_text)).append(RcDoc::text(": "));
         }
 
-        out.push_str(&self.path()?.rewrite_or_original(context, shape));
+        if let Some(path) = self.path() {
+            doc = doc.append(path.to_doc(context, shape));
+        }
 
-        Some(out)
+        doc
     }
 }
 
-impl Rewrite for ast::MatchExpr {
-    fn rewrite(&self, context: &RewriteContext<'_>, shape: Shape) -> Option<String> {
-        let scrutinee = self.scrutinee()?.rewrite_or_original(context, shape);
+impl ToDoc for ast::MatchExpr {
+    fn to_doc<'a>(&self, context: &RewriteContext<'_>, shape: Shape) -> RcDoc<'a, ()> {
+        let scrutinee = match self.scrutinee() {
+            Some(s) => s.to_doc(context, shape),
+            None => return RcDoc::nil(),
+        };
 
-        let outer_indent = shape.indent.indent_width();
-        let indent_width = context.config.indent_width;
-        let arms_indent = outer_indent + indent_width;
-        let arm_shape = Shape::with_width(shape.width, Indent::from_block(arms_indent));
+        let arms: Vec<_> = self
+            .arms()
+            .map(|arms| {
+                arms.into_iter()
+                    .filter_map(|arm| {
+                        let pat = arm.pat()?.to_doc(context, shape);
+                        let body = arm.body()?.to_doc(context, shape);
+                        Some(
+                            pat.append(RcDoc::text(" => "))
+                                .append(body)
+                                .append(RcDoc::text(",")),
+                        )
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
 
-        let mut out = String::new();
-        let _ = writeln!(out, "match {scrutinee} {{");
+        if arms.is_empty() {
+            return RcDoc::text("match ")
+                .append(scrutinee)
+                .append(RcDoc::text(" {}"));
+        }
 
-        if let Some(arms) = self.arms() {
-            for arm in arms {
-                let pat = arm.pat()?.rewrite_or_original(context, arm_shape);
-                let body = arm.body()?.rewrite_or_original(context, arm_shape);
+        let arms_doc = RcDoc::concat(arms.into_iter().map(|arm| RcDoc::hardline().append(arm)));
 
-                push_indent(&mut out, arms_indent);
-                let _ = writeln!(out, "{pat} => {body},");
+        RcDoc::text("match ")
+            .append(scrutinee)
+            .append(RcDoc::text(" {"))
+            .append(arms_doc.nest(context.config.indent_width as isize))
+            .append(RcDoc::hardline())
+            .append(RcDoc::text("}"))
+    }
+}
+
+impl ToDoc for ast::WithParam {
+    fn to_doc<'a>(&self, context: &RewriteContext<'_>, shape: Shape) -> RcDoc<'a, ()> {
+        let path = match self.path() {
+            Some(p) => p.to_doc(context, shape),
+            None => return RcDoc::nil(),
+        };
+        let value = match self.value_expr() {
+            Some(v) => v.to_doc(context, shape),
+            None => return path,
+        };
+
+        path.append(RcDoc::text(" = ")).append(value)
+    }
+}
+
+impl ToDoc for ast::WithExpr {
+    fn to_doc<'a>(&self, context: &RewriteContext<'_>, shape: Shape) -> RcDoc<'a, ()> {
+        let params: Vec<_> = self
+            .params()
+            .map(|p| {
+                p.into_iter()
+                    .map(|param| param.to_doc(context, shape))
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        let indent = context.config.indent_width as isize;
+        let params_doc = block_list("(", ")", params, indent, true);
+
+        let body = match self.body() {
+            Some(b) => b.to_doc(context, shape),
+            None => return RcDoc::text("with ").append(params_doc),
+        };
+
+        RcDoc::text("with ")
+            .append(params_doc)
+            .append(RcDoc::text(" "))
+            .append(body)
+    }
+}
+
+impl ToDoc for ast::TupleExpr {
+    fn to_doc<'a>(&self, context: &RewriteContext<'_>, shape: Shape) -> RcDoc<'a, ()> {
+        let elems: Vec<_> = self
+            .elems()
+            .flatten()
+            .map(|e| e.to_doc(context, shape))
+            .collect();
+
+        let indent = context.config.indent_width as isize;
+        block_list("(", ")", elems, indent, true)
+    }
+}
+
+impl ToDoc for ast::ArrayExpr {
+    fn to_doc<'a>(&self, context: &RewriteContext<'_>, shape: Shape) -> RcDoc<'a, ()> {
+        let elems: Vec<_> = self
+            .elems()
+            .flatten()
+            .map(|e| e.to_doc(context, shape))
+            .collect();
+
+        let indent = context.config.indent_width as isize;
+        block_list("[", "]", elems, indent, true)
+    }
+}
+
+impl ToDoc for ast::ArrayRepExpr {
+    fn to_doc<'a>(&self, context: &RewriteContext<'_>, shape: Shape) -> RcDoc<'a, ()> {
+        let val = match self.val() {
+            Some(v) => v.to_doc(context, shape),
+            None => return RcDoc::nil(),
+        };
+        let len = match self.len() {
+            Some(l) => l.to_doc(context, shape),
+            None => return RcDoc::text("[").append(val).append(RcDoc::text("]")),
+        };
+
+        RcDoc::text("[")
+            .append(val)
+            .append(RcDoc::text("; "))
+            .append(len)
+            .append(RcDoc::text("]"))
+    }
+}
+
+impl ToDoc for ast::ParenExpr {
+    fn to_doc<'a>(&self, context: &RewriteContext<'_>, shape: Shape) -> RcDoc<'a, ()> {
+        let expr = match self.expr() {
+            Some(e) => e.to_doc(context, shape),
+            None => return RcDoc::text("()"),
+        };
+
+        RcDoc::text("(").append(expr).append(RcDoc::text(")"))
+    }
+}
+
+impl ToDoc for ast::BlockExpr {
+    fn to_doc<'a>(&self, context: &RewriteContext<'_>, shape: Shape) -> RcDoc<'a, ()> {
+        use parser::TextRange;
+        use parser::syntax_kind::SyntaxKind;
+        use parser::syntax_node::NodeOrToken;
+
+        let has_stmt = self.stmts().next().is_some();
+        let has_item = self.items().next().is_some();
+        let has_comment = self
+            .syntax()
+            .children_with_tokens()
+            .any(|child| matches!(child, NodeOrToken::Token(t) if t.kind() == SyntaxKind::Comment));
+
+        if !has_stmt && !has_item && !has_comment {
+            return RcDoc::text("{}");
+        }
+
+        // Collect all block elements with their source ranges for blank line detection
+        struct BlockElement<'a> {
+            doc: RcDoc<'a, ()>,
+            range: TextRange,
+        }
+
+        let mut elements: Vec<BlockElement<'a>> = Vec::new();
+
+        // Process children in source order to preserve blank lines
+        let mut children = self.syntax().children_with_tokens().peekable();
+
+        // Skip leading `{` and trivia
+        while let Some(child) = children.peek() {
+            match child {
+                NodeOrToken::Token(t) if t.kind() == SyntaxKind::LBrace || t.kind().is_trivia() => {
+                    children.next();
+                }
+                _ => break,
             }
         }
 
-        push_indent(&mut out, outer_indent);
-        out.push('}');
+        for child in children {
+            match child {
+                NodeOrToken::Node(node) => {
+                    let range = node.text_range();
+                    if let Some(stmt) = ast::Stmt::cast(node.clone()) {
+                        elements.push(BlockElement {
+                            doc: stmt.to_doc(context, shape),
+                            range,
+                        });
+                    } else if let Some(item) = ast::Item::cast(node.clone()) {
+                        elements.push(BlockElement {
+                            doc: item.to_doc(context, shape),
+                            range,
+                        });
+                    }
+                }
+                NodeOrToken::Token(tok) => {
+                    if tok.kind() == SyntaxKind::Comment {
+                        let comment_doc =
+                            RcDoc::text(context.snippet(tok.text_range()).trim().to_string());
 
-        Some(out)
-    }
-}
+                        // If the comment is on the same line as the previous element, treat it
+                        // as a trailing comment on that line instead of forcing a new line.
+                        if let Some(last) = elements.last_mut() {
+                            let gap = TextRange::new(last.range.end(), tok.text_range().start());
+                            let gap_text = context.snippet(gap);
+                            let has_newline = gap_text.chars().any(|c| c == '\n');
 
-impl Rewrite for ast::WithParam {
-    fn rewrite(&self, context: &RewriteContext<'_>, shape: Shape) -> Option<String> {
-        let path = self.path()?.rewrite_or_original(context, shape);
-        let value = self.value_expr()?.rewrite_or_original(context, shape);
-        Some(format!("{path} = {value}"))
-    }
-}
+                            if !has_newline {
+                                last.doc = last
+                                    .doc
+                                    .clone()
+                                    .append(RcDoc::text(" "))
+                                    .append(comment_doc);
+                                last.range =
+                                    TextRange::new(last.range.start(), tok.text_range().end());
+                                continue;
+                            }
+                        }
 
-impl Rewrite for ast::WithExpr {
-    fn rewrite(&self, context: &RewriteContext<'_>, shape: Shape) -> Option<String> {
-        let params_str = if let Some(params) = self.params() {
-            let formatting = ListFormatting::new(shape)
-                .tactic(ListTactic::Mixed)
-                .with_surround("(", ")");
-            format_list(params, &formatting, context, shape)?
-        } else {
-            "()".to_string()
-        };
+                        elements.push(BlockElement {
+                            doc: comment_doc,
+                            range: tok.text_range(),
+                        });
+                    }
+                    // Skip other tokens (whitespace, braces, etc.)
+                }
+            }
+        }
 
-        let body = self.body()?.rewrite_or_original(context, shape);
+        if elements.is_empty() {
+            return RcDoc::text("{}");
+        }
 
-        Some(format!("with {params_str} {body}"))
-    }
-}
+        // Build the inner document, inserting extra blank lines where the source had them
+        let mut inner = RcDoc::nil();
+        let mut prev_end: Option<parser::TextSize> = None;
+        let indent = context.config.indent_width as isize;
 
-impl Rewrite for ast::TupleExpr {
-    fn rewrite(&self, context: &RewriteContext<'_>, shape: Shape) -> Option<String> {
-        let formatting = ListFormatting::new(shape)
-            .tactic(ListTactic::Mixed)
-            .with_surround("(", ")");
-        format_list(self.elems().flatten(), &formatting, context, shape)
-    }
-}
+        for elem in elements {
+            // Check if there was a blank line before this element
+            let needs_blank_line = if let Some(prev) = prev_end {
+                let gap = TextRange::new(prev, elem.range.start());
+                let gap_text = context.snippet(gap);
+                gap_text.chars().filter(|c| *c == '\n').count() >= 2
+            } else {
+                false
+            };
 
-impl Rewrite for ast::ArrayExpr {
-    fn rewrite(&self, context: &RewriteContext<'_>, shape: Shape) -> Option<String> {
-        let formatting = ListFormatting::new(shape)
-            .tactic(ListTactic::Mixed)
-            .with_surround("[", "]");
-        format_list(self.elems().flatten(), &formatting, context, shape)
-    }
-}
+            if needs_blank_line {
+                // Extra hardline for blank line (will have trailing whitespace - cleaned up in post-processing)
+                inner = inner.append(RcDoc::hardline());
+            }
+            inner = inner.append(RcDoc::hardline()).append(elem.doc);
+            prev_end = Some(elem.range.end());
+        }
 
-impl Rewrite for ast::ArrayRepExpr {
-    fn rewrite(&self, context: &RewriteContext<'_>, shape: Shape) -> Option<String> {
-        let val = self.val()?.rewrite_or_original(context, shape);
-        let len = self.len()?.rewrite_or_original(context, shape);
-
-        Some(format!("[{val}; {len}]"))
-    }
-}
-
-impl Rewrite for ast::ParenExpr {
-    fn rewrite(&self, context: &RewriteContext<'_>, shape: Shape) -> Option<String> {
-        let expr = self.expr()?.rewrite_or_original(context, shape);
-
-        Some(format!("({expr})"))
+        RcDoc::text("{")
+            .append(inner.nest(indent))
+            .append(RcDoc::hardline())
+            .append(RcDoc::text("}"))
     }
 }

@@ -4,7 +4,7 @@ expression: output
 input_file: tests/fixtures/comments.fe
 ---
 // Leading file comment
-   // misaligned comment that should be indented to column 0
+// misaligned comment that should be indented to column 0
 
 pub fn main() {
     // comment directly under opening brace

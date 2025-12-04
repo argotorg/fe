@@ -5,6 +5,7 @@ edition.workspace = true
 
 [dependencies]
 parser.workspace = true
+pretty = "0.12"
 
 [dev-dependencies]
 dir-test.workspace = true

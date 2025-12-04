@@ -1,261 +1,439 @@
 //! Formatting for types, paths, generics, and type-related constructs.
 
-use crate::{ListFormatting, ListTactic, Rewrite, RewriteContext, RewriteExt, Shape, format_list};
+use pretty::RcDoc;
+
+use crate::{RewriteContext, Shape};
 use parser::ast::{self, GenericArgKind, GenericArgsOwner, GenericParamKind, TypeKind};
 
-impl Rewrite for ast::GenericParamList {
-    fn rewrite(&self, context: &RewriteContext<'_>, shape: Shape) -> Option<String> {
-        let formatting = ListFormatting::new(shape)
-            .tactic(ListTactic::Mixed)
-            .trailing_separator(false)
-            .with_surround("<", ">");
-        format_list(self, &formatting, context, shape)
+/// Extension trait for converting AST nodes to pretty documents.
+pub trait ToDoc {
+    fn to_doc<'a>(&self, context: &RewriteContext<'_>, shape: Shape) -> RcDoc<'a, ()>;
+}
+
+/// Helper to intersperse documents with a separator.
+pub fn intersperse<'a>(
+    docs: impl IntoIterator<Item = RcDoc<'a, ()>>,
+    sep: RcDoc<'a, ()>,
+) -> RcDoc<'a, ()> {
+    let mut iter = docs.into_iter();
+    match iter.next() {
+        None => RcDoc::nil(),
+        Some(first) => iter.fold(first, |acc, doc| acc.append(sep.clone()).append(doc)),
     }
 }
 
-impl Rewrite for ast::GenericParam {
-    fn rewrite(&self, context: &RewriteContext<'_>, shape: Shape) -> Option<String> {
+/// Creates a Rust-style block format for delimited lists.
+///
+/// When flat (non-spaced): `(item1, item2)` (e.g., for parens/brackets)
+/// When flat (spaced): `{ item1, item2 }` (e.g., for braces)
+/// When broken:
+/// ```text
+/// open
+///     item1,
+///     item2,
+/// close
+/// ```
+///
+/// The `trailing_comma` parameter controls whether a trailing comma is added
+/// when the list is broken across multiple lines.
+pub fn block_list<'a>(
+    open: &'a str,
+    close: &'a str,
+    items: Vec<RcDoc<'a, ()>>,
+    indent: isize,
+    trailing_comma: bool,
+) -> RcDoc<'a, ()> {
+    block_list_inner(open, close, items, indent, trailing_comma, false)
+}
+
+/// Like `block_list`, but adds spaces inside delimiters when rendered flat.
+/// Use this for brace-delimited lists like `{ x, y }`.
+pub fn block_list_spaced<'a>(
+    open: &'a str,
+    close: &'a str,
+    items: Vec<RcDoc<'a, ()>>,
+    indent: isize,
+    trailing_comma: bool,
+) -> RcDoc<'a, ()> {
+    block_list_inner(open, close, items, indent, trailing_comma, true)
+}
+
+fn block_list_inner<'a>(
+    open: &'a str,
+    close: &'a str,
+    items: Vec<RcDoc<'a, ()>>,
+    indent: isize,
+    trailing_comma: bool,
+    spaced: bool,
+) -> RcDoc<'a, ()> {
+    if items.is_empty() {
+        return RcDoc::text(format!("{}{}", open, close));
+    }
+
+    let sep = RcDoc::text(",").append(RcDoc::line());
+    let inner = intersperse(items, sep);
+
+    let trailing = if trailing_comma {
+        RcDoc::text(",").flat_alt(RcDoc::nil())
+    } else {
+        RcDoc::nil()
+    };
+
+    // For spaced variant, use line() which renders as space when flat
+    // For non-spaced variant, use line_() which renders as empty when flat
+    let break_token = if spaced {
+        RcDoc::line()
+    } else {
+        RcDoc::line_()
+    };
+
+    RcDoc::text(open)
+        .append(
+            break_token
+                .clone()
+                .append(inner)
+                .append(trailing)
+                .nest(indent),
+        )
+        .append(break_token)
+        .append(RcDoc::text(close))
+        .group()
+}
+
+impl ToDoc for ast::GenericParamList {
+    fn to_doc<'a>(&self, context: &RewriteContext<'_>, shape: Shape) -> RcDoc<'a, ()> {
+        let params: Vec<_> = self.into_iter().map(|p| p.to_doc(context, shape)).collect();
+
+        let indent = context.config.indent_width as isize;
+        block_list("<", ">", params, indent, true)
+    }
+}
+
+impl ToDoc for ast::GenericParam {
+    fn to_doc<'a>(&self, context: &RewriteContext<'_>, shape: Shape) -> RcDoc<'a, ()> {
         match self.kind() {
-            GenericParamKind::Type(ty_param) => ty_param.rewrite(context, shape),
-            GenericParamKind::Const(const_param) => const_param.rewrite(context, shape),
+            GenericParamKind::Type(ty_param) => ty_param.to_doc(context, shape),
+            GenericParamKind::Const(const_param) => const_param.to_doc(context, shape),
         }
     }
 }
 
-impl Rewrite for ast::TypeGenericParam {
-    fn rewrite(&self, context: &RewriteContext<'_>, shape: Shape) -> Option<String> {
+impl ToDoc for ast::TypeGenericParam {
+    fn to_doc<'a>(&self, context: &RewriteContext<'_>, shape: Shape) -> RcDoc<'a, ()> {
         let name = self
             .name()
-            .map_or(String::new(), |n| context.token(&n).to_string());
+            .map(|n| RcDoc::text(context.token(&n).to_string()))
+            .unwrap_or_else(RcDoc::nil);
+
         let bounds = self
             .bounds()
-            .map_or(String::new(), |b| b.rewrite_or_original(context, shape));
-        let default = self.default_ty().map_or(String::new(), |ty| {
-            format!(" = {}", ty.rewrite_or_original(context, shape))
-        });
+            .map(|b| b.to_doc(context, shape))
+            .unwrap_or_else(RcDoc::nil);
 
-        Some(format!("{name}{bounds}{default}"))
+        let default = self
+            .default_ty()
+            .map(|ty| RcDoc::text(" = ").append(ty.to_doc(context, shape)))
+            .unwrap_or_else(RcDoc::nil);
+
+        name.append(bounds).append(default)
     }
 }
 
-impl Rewrite for ast::ConstGenericParam {
-    fn rewrite(&self, context: &RewriteContext<'_>, shape: Shape) -> Option<String> {
+impl ToDoc for ast::ConstGenericParam {
+    fn to_doc<'a>(&self, context: &RewriteContext<'_>, shape: Shape) -> RcDoc<'a, ()> {
         let name = self
             .name()
-            .map_or(String::new(), |n| context.token(&n).to_string());
-        let ty = self.ty().map_or(String::new(), |ty| {
-            format!(": {}", ty.rewrite_or_original(context, shape))
-        });
+            .map(|n| RcDoc::text(context.token(&n).to_string()))
+            .unwrap_or_else(RcDoc::nil);
 
-        Some(format!("const {name}{ty}"))
+        let ty = self
+            .ty()
+            .map(|ty| RcDoc::text(": ").append(ty.to_doc(context, shape)))
+            .unwrap_or_else(RcDoc::nil);
+
+        RcDoc::text("const ").append(name).append(ty)
     }
 }
 
-impl Rewrite for ast::WhereClause {
-    fn rewrite(&self, context: &RewriteContext<'_>, shape: Shape) -> Option<String> {
-        let predicates: Vec<String> = self
+impl ToDoc for ast::WhereClause {
+    fn to_doc<'a>(&self, context: &RewriteContext<'_>, shape: Shape) -> RcDoc<'a, ()> {
+        let predicates: Vec<_> = self
             .into_iter()
-            .map(|pred| pred.rewrite_or_original(context, shape))
+            .map(|pred| pred.to_doc(context, shape))
             .collect();
 
         if predicates.is_empty() {
-            return Some("where".to_string());
+            return RcDoc::nil();
         }
 
-        Some(format!("where {}", predicates.join(", ")))
+        let sep = RcDoc::text(",").append(RcDoc::line());
+        let inner = intersperse(predicates, sep);
+
+        inner.group()
     }
 }
 
-impl Rewrite for ast::WherePredicate {
-    fn rewrite(&self, context: &RewriteContext<'_>, shape: Shape) -> Option<String> {
-        let ty = self.ty()?.rewrite_or_original(context, shape);
+impl ToDoc for ast::WherePredicate {
+    fn to_doc<'a>(&self, context: &RewriteContext<'_>, shape: Shape) -> RcDoc<'a, ()> {
+        let ty = match self.ty() {
+            Some(t) => t.to_doc(context, shape),
+            None => return RcDoc::nil(),
+        };
 
         if let Some(bounds) = self.bounds() {
-            let bounds_text = bounds.rewrite_or_original(context, shape);
-            Some(format!("{ty}{bounds_text}"))
+            ty.append(bounds.to_doc(context, shape))
         } else {
-            Some(ty)
+            ty
         }
     }
 }
 
-impl Rewrite for ast::TypeBoundList {
-    fn rewrite(&self, context: &RewriteContext<'_>, shape: Shape) -> Option<String> {
-        let bounds: Vec<String> = self
+impl ToDoc for ast::TypeBoundList {
+    fn to_doc<'a>(&self, context: &RewriteContext<'_>, shape: Shape) -> RcDoc<'a, ()> {
+        let bounds: Vec<_> = self
             .into_iter()
-            .map(|bound| bound.rewrite_or_original(context, shape))
+            .map(|bound| bound.to_doc(context, shape))
             .collect();
 
         if bounds.is_empty() {
-            return Some(String::new());
+            return RcDoc::nil();
         }
 
-        Some(format!(": {}", bounds.join(" + ")))
+        let sep = RcDoc::text(" + ");
+        RcDoc::text(": ").append(intersperse(bounds, sep))
     }
 }
 
-impl Rewrite for ast::TypeBound {
-    fn rewrite(&self, context: &RewriteContext<'_>, shape: Shape) -> Option<String> {
+impl ToDoc for ast::TypeBound {
+    fn to_doc<'a>(&self, context: &RewriteContext<'_>, shape: Shape) -> RcDoc<'a, ()> {
         if let Some(trait_bound) = self.trait_bound() {
-            trait_bound.rewrite(context, shape)
+            trait_bound.to_doc(context, shape)
+        } else if let Some(kind_bound) = self.kind_bound() {
+            RcDoc::text(context.snippet_trimmed(&kind_bound))
         } else {
-            self.kind_bound()
-                .map(|kind_bound| context.snippet_trimmed(&kind_bound))
+            RcDoc::nil()
         }
     }
 }
 
-impl Rewrite for ast::TraitRef {
-    fn rewrite(&self, context: &RewriteContext<'_>, shape: Shape) -> Option<String> {
-        self.path()?.rewrite(context, shape)
+impl ToDoc for ast::TraitRef {
+    fn to_doc<'a>(&self, context: &RewriteContext<'_>, shape: Shape) -> RcDoc<'a, ()> {
+        match self.path() {
+            Some(p) => p.to_doc(context, shape),
+            None => RcDoc::nil(),
+        }
     }
 }
 
-impl Rewrite for ast::SuperTraitList {
-    fn rewrite(&self, context: &RewriteContext<'_>, shape: Shape) -> Option<String> {
-        let traits: Vec<String> = self
-            .into_iter()
-            .map(|t| t.rewrite_or_original(context, shape))
-            .collect();
+impl ToDoc for ast::SuperTraitList {
+    fn to_doc<'a>(&self, context: &RewriteContext<'_>, shape: Shape) -> RcDoc<'a, ()> {
+        let traits: Vec<_> = self.into_iter().map(|t| t.to_doc(context, shape)).collect();
 
         if traits.is_empty() {
-            return Some(String::new());
+            return RcDoc::nil();
         }
 
-        Some(format!(": {}", traits.join(" + ")))
+        let sep = RcDoc::text(" + ");
+        RcDoc::text(": ").append(intersperse(traits, sep))
     }
 }
 
-impl Rewrite for ast::Type {
-    fn rewrite(&self, context: &RewriteContext<'_>, shape: Shape) -> Option<String> {
+impl ToDoc for ast::Type {
+    fn to_doc<'a>(&self, context: &RewriteContext<'_>, shape: Shape) -> RcDoc<'a, ()> {
         match self.kind() {
-            TypeKind::Ptr(ptr) => ptr.rewrite(context, shape),
-            TypeKind::Path(path) => path.rewrite(context, shape),
-            TypeKind::Tuple(tuple) => tuple.rewrite(context, shape),
-            TypeKind::Array(array) => array.rewrite(context, shape),
-            TypeKind::Never(never) => never.rewrite(context, shape),
+            TypeKind::Ptr(ptr) => ptr.to_doc(context, shape),
+            TypeKind::Path(path) => path.to_doc(context, shape),
+            TypeKind::Tuple(tuple) => tuple.to_doc(context, shape),
+            TypeKind::Array(array) => array.to_doc(context, shape),
+            TypeKind::Never(never) => never.to_doc(context, shape),
         }
     }
 }
 
-impl Rewrite for ast::PtrType {
-    fn rewrite(&self, context: &RewriteContext<'_>, shape: Shape) -> Option<String> {
-        let inner = self.inner()?.rewrite_or_original(context, shape);
-        Some(format!("*{inner}"))
+impl ToDoc for ast::PtrType {
+    fn to_doc<'a>(&self, context: &RewriteContext<'_>, shape: Shape) -> RcDoc<'a, ()> {
+        match self.inner() {
+            Some(inner) => RcDoc::text("*").append(inner.to_doc(context, shape)),
+            None => RcDoc::text("*"),
+        }
     }
 }
 
-impl Rewrite for ast::PathType {
-    fn rewrite(&self, context: &RewriteContext<'_>, shape: Shape) -> Option<String> {
-        self.path()?.rewrite(context, shape)
+impl ToDoc for ast::PathType {
+    fn to_doc<'a>(&self, context: &RewriteContext<'_>, shape: Shape) -> RcDoc<'a, ()> {
+        match self.path() {
+            Some(p) => p.to_doc(context, shape),
+            None => RcDoc::nil(),
+        }
     }
 }
 
-impl Rewrite for ast::Path {
-    fn rewrite(&self, context: &RewriteContext<'_>, shape: Shape) -> Option<String> {
-        let segments: Vec<String> = self
+impl ToDoc for ast::Path {
+    fn to_doc<'a>(&self, context: &RewriteContext<'_>, shape: Shape) -> RcDoc<'a, ()> {
+        let segments: Vec<_> = self
             .segments()
-            .map(|seg| seg.rewrite_or_original(context, shape))
+            .map(|seg| seg.to_doc(context, shape))
             .collect();
-        Some(segments.join("::"))
+
+        let sep = RcDoc::text("::");
+        intersperse(segments, sep)
     }
 }
 
-impl Rewrite for ast::PathSegment {
-    fn rewrite(&self, context: &RewriteContext<'_>, shape: Shape) -> Option<String> {
-        let mut out = String::new();
+impl ToDoc for ast::PathSegment {
+    fn to_doc<'a>(&self, context: &RewriteContext<'_>, shape: Shape) -> RcDoc<'a, ()> {
+        let mut doc = RcDoc::nil();
 
-        // Get the segment identifier (or qualified type)
         if let Some(kind) = self.kind() {
             match kind {
                 ast::PathSegmentKind::QualifiedType(q) => {
-                    out.push_str(&q.rewrite_or_original(context, shape));
+                    doc = q.to_doc(context, shape);
                 }
                 _ => {
                     if let Some(ident) = self.ident() {
-                        out.push_str(context.snippet(ident.text_range()).trim());
+                        doc = RcDoc::text(context.snippet(ident.text_range()).trim().to_string());
                     }
                 }
             }
         }
 
-        // Format generic arguments if present
         if let Some(args) = self.generic_args() {
-            out.push_str(&args.rewrite_or_original(context, shape));
+            doc = doc.append(args.to_doc(context, shape));
         }
 
-        Some(out)
+        doc
     }
 }
 
-impl Rewrite for ast::QualifiedType {
-    fn rewrite(&self, context: &RewriteContext<'_>, shape: Shape) -> Option<String> {
-        let ty = self.ty()?.rewrite_or_original(context, shape);
-        let trait_path = self.trait_qualifier()?.rewrite_or_original(context, shape);
-        Some(format!("<{ty} as {trait_path}>"))
+impl ToDoc for ast::QualifiedType {
+    fn to_doc<'a>(&self, context: &RewriteContext<'_>, shape: Shape) -> RcDoc<'a, ()> {
+        let ty = match self.ty() {
+            Some(t) => t.to_doc(context, shape),
+            None => return RcDoc::nil(),
+        };
+        let trait_path = match self.trait_qualifier() {
+            Some(p) => p.to_doc(context, shape),
+            None => return RcDoc::nil(),
+        };
+
+        RcDoc::text("<")
+            .append(ty)
+            .append(RcDoc::text(" as "))
+            .append(trait_path)
+            .append(RcDoc::text(">"))
     }
 }
 
-impl Rewrite for ast::GenericArgList {
-    fn rewrite(&self, context: &RewriteContext<'_>, shape: Shape) -> Option<String> {
-        let formatting = ListFormatting::new(shape)
-            .tactic(ListTactic::Mixed)
-            .trailing_separator(false)
-            .with_surround("<", ">");
-        format_list(self, &formatting, context, shape)
+impl ToDoc for ast::GenericArgList {
+    fn to_doc<'a>(&self, context: &RewriteContext<'_>, shape: Shape) -> RcDoc<'a, ()> {
+        let args: Vec<_> = self.into_iter().map(|a| a.to_doc(context, shape)).collect();
+
+        let indent = context.config.indent_width as isize;
+        block_list("<", ">", args, indent, true)
     }
 }
 
-impl Rewrite for ast::GenericArg {
-    fn rewrite(&self, context: &RewriteContext<'_>, shape: Shape) -> Option<String> {
+impl ToDoc for ast::GenericArg {
+    fn to_doc<'a>(&self, context: &RewriteContext<'_>, shape: Shape) -> RcDoc<'a, ()> {
         match self.kind() {
-            GenericArgKind::Type(ty_arg) => ty_arg.rewrite(context, shape),
-            GenericArgKind::Const(const_arg) => const_arg.rewrite(context, shape),
-            GenericArgKind::AssocType(assoc_arg) => assoc_arg.rewrite(context, shape),
+            GenericArgKind::Type(ty_arg) => ty_arg.to_doc(context, shape),
+            GenericArgKind::Const(const_arg) => const_arg.to_doc(context, shape),
+            GenericArgKind::AssocType(assoc_arg) => assoc_arg.to_doc(context, shape),
         }
     }
 }
 
-impl Rewrite for ast::TypeGenericArg {
-    fn rewrite(&self, context: &RewriteContext<'_>, shape: Shape) -> Option<String> {
-        self.ty()?.rewrite(context, shape)
+impl ToDoc for ast::TypeGenericArg {
+    fn to_doc<'a>(&self, context: &RewriteContext<'_>, shape: Shape) -> RcDoc<'a, ()> {
+        match self.ty() {
+            Some(t) => t.to_doc(context, shape),
+            None => RcDoc::nil(),
+        }
     }
 }
 
-impl Rewrite for ast::ConstGenericArg {
-    fn rewrite(&self, context: &RewriteContext<'_>, shape: Shape) -> Option<String> {
-        self.expr()?.rewrite(context, shape)
+impl ToDoc for ast::ConstGenericArg {
+    fn to_doc<'a>(&self, context: &RewriteContext<'_>, shape: Shape) -> RcDoc<'a, ()> {
+        match self.expr() {
+            Some(e) => e.to_doc(context, shape),
+            None => RcDoc::nil(),
+        }
     }
 }
 
-impl Rewrite for ast::AssocTypeGenericArg {
-    fn rewrite(&self, context: &RewriteContext<'_>, shape: Shape) -> Option<String> {
-        let name = context.snippet(self.name()?.text_range()).trim();
-        let ty = self.ty()?.rewrite_or_original(context, shape);
-        Some(format!("{name} = {ty}"))
+impl ToDoc for ast::AssocTypeGenericArg {
+    fn to_doc<'a>(&self, context: &RewriteContext<'_>, shape: Shape) -> RcDoc<'a, ()> {
+        let name = match self.name() {
+            Some(n) => context.snippet(n.text_range()).trim().to_string(),
+            None => return RcDoc::nil(),
+        };
+        let ty = match self.ty() {
+            Some(t) => t.to_doc(context, shape),
+            None => return RcDoc::nil(),
+        };
+
+        RcDoc::text(name).append(RcDoc::text(" = ")).append(ty)
     }
 }
 
-impl Rewrite for ast::TupleType {
-    fn rewrite(&self, context: &RewriteContext<'_>, shape: Shape) -> Option<String> {
-        let formatting = ListFormatting::new(shape)
-            .tactic(ListTactic::Mixed)
-            .with_surround("(", ")");
-        format_list(self.elem_tys(), &formatting, context, shape)
+impl ToDoc for ast::TupleType {
+    fn to_doc<'a>(&self, context: &RewriteContext<'_>, shape: Shape) -> RcDoc<'a, ()> {
+        let elems: Vec<_> = self.elem_tys().map(|e| e.to_doc(context, shape)).collect();
+
+        let indent = context.config.indent_width as isize;
+        block_list("(", ")", elems, indent, true)
     }
 }
 
-impl Rewrite for ast::ArrayType {
-    fn rewrite(&self, context: &RewriteContext<'_>, shape: Shape) -> Option<String> {
-        let elem_ty = self.elem_ty()?.rewrite_or_original(context, shape);
-        let len = self.len()?.rewrite_or_original(context, shape);
+impl ToDoc for ast::ArrayType {
+    fn to_doc<'a>(&self, context: &RewriteContext<'_>, shape: Shape) -> RcDoc<'a, ()> {
+        let elem_ty = match self.elem_ty() {
+            Some(t) => t.to_doc(context, shape),
+            None => return RcDoc::nil(),
+        };
+        let len = match self.len() {
+            Some(l) => l.to_doc(context, shape),
+            None => return RcDoc::nil(),
+        };
 
-        Some(format!("[{elem_ty}; {len}]"))
+        RcDoc::text("[")
+            .append(elem_ty)
+            .append(RcDoc::text("; "))
+            .append(len)
+            .append(RcDoc::text("]"))
     }
 }
 
-impl Rewrite for ast::NeverType {
-    fn rewrite(&self, _context: &RewriteContext<'_>, _shape: Shape) -> Option<String> {
-        Some("!".to_string())
+impl ToDoc for ast::NeverType {
+    fn to_doc<'a>(&self, _context: &RewriteContext<'_>, _shape: Shape) -> RcDoc<'a, ()> {
+        RcDoc::text("!")
+    }
+}
+
+// Forward declaration for expr::ToDoc - dispatches to specific expression types
+impl ToDoc for ast::Expr {
+    fn to_doc<'a>(&self, context: &RewriteContext<'_>, shape: Shape) -> RcDoc<'a, ()> {
+        use parser::ast::ExprKind;
+        match self.kind() {
+            ExprKind::Lit(lit) => lit.to_doc(context, shape),
+            ExprKind::Block(block) => block.to_doc(context, shape),
+            ExprKind::Bin(bin) => bin.to_doc(context, shape),
+            ExprKind::Un(un) => un.to_doc(context, shape),
+            ExprKind::Call(call) => call.to_doc(context, shape),
+            ExprKind::MethodCall(method) => method.to_doc(context, shape),
+            ExprKind::Path(path) => path.to_doc(context, shape),
+            ExprKind::RecordInit(record) => record.to_doc(context, shape),
+            ExprKind::Field(field) => field.to_doc(context, shape),
+            ExprKind::Index(index) => index.to_doc(context, shape),
+            ExprKind::Tuple(tuple) => tuple.to_doc(context, shape),
+            ExprKind::Array(array) => array.to_doc(context, shape),
+            ExprKind::ArrayRep(array_rep) => array_rep.to_doc(context, shape),
+            ExprKind::If(if_expr) => if_expr.to_doc(context, shape),
+            ExprKind::Match(match_expr) => match_expr.to_doc(context, shape),
+            ExprKind::With(with_expr) => with_expr.to_doc(context, shape),
+            ExprKind::Paren(paren) => paren.to_doc(context, shape),
+            ExprKind::Assign(assign) => assign.to_doc(context, shape),
+            ExprKind::AugAssign(aug_assign) => aug_assign.to_doc(context, shape),
+        }
     }
 }

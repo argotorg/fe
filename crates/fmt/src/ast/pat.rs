@@ -1,120 +1,140 @@
 //! Formatting for patterns.
 
-use crate::{ListFormatting, ListTactic, Rewrite, RewriteContext, RewriteExt, Shape, format_list};
+use pretty::RcDoc;
+
+use crate::{RewriteContext, Shape};
 use parser::ast::{self, PatKind};
 
-impl Rewrite for ast::Pat {
-    fn rewrite(&self, context: &RewriteContext<'_>, shape: Shape) -> Option<String> {
+use super::types::{ToDoc, block_list, block_list_spaced};
+
+impl ToDoc for ast::Pat {
+    fn to_doc<'a>(&self, context: &RewriteContext<'_>, shape: Shape) -> RcDoc<'a, ()> {
         match self.kind() {
-            PatKind::WildCard(wildcard) => wildcard.rewrite(context, shape),
-            PatKind::Rest(rest) => rest.rewrite(context, shape),
-            PatKind::Lit(lit) => lit.rewrite(context, shape),
-            PatKind::Tuple(tuple) => tuple.rewrite(context, shape),
-            PatKind::Path(path) => path.rewrite(context, shape),
-            PatKind::PathTuple(path_tuple) => path_tuple.rewrite(context, shape),
-            PatKind::Record(record) => record.rewrite(context, shape),
-            PatKind::Or(or) => or.rewrite(context, shape),
+            PatKind::WildCard(wildcard) => wildcard.to_doc(context, shape),
+            PatKind::Rest(rest) => rest.to_doc(context, shape),
+            PatKind::Lit(lit) => lit.to_doc(context, shape),
+            PatKind::Tuple(tuple) => tuple.to_doc(context, shape),
+            PatKind::Path(path) => path.to_doc(context, shape),
+            PatKind::PathTuple(path_tuple) => path_tuple.to_doc(context, shape),
+            PatKind::Record(record) => record.to_doc(context, shape),
+            PatKind::Or(or) => or.to_doc(context, shape),
         }
     }
 }
 
-impl Rewrite for ast::WildCardPat {
-    fn rewrite(&self, _context: &RewriteContext<'_>, _shape: Shape) -> Option<String> {
-        Some("_".to_string())
+impl ToDoc for ast::WildCardPat {
+    fn to_doc<'a>(&self, _context: &RewriteContext<'_>, _shape: Shape) -> RcDoc<'a, ()> {
+        RcDoc::text("_")
     }
 }
 
-impl Rewrite for ast::RestPat {
-    fn rewrite(&self, _context: &RewriteContext<'_>, _shape: Shape) -> Option<String> {
-        Some("..".to_string())
+impl ToDoc for ast::RestPat {
+    fn to_doc<'a>(&self, _context: &RewriteContext<'_>, _shape: Shape) -> RcDoc<'a, ()> {
+        RcDoc::text("..")
     }
 }
 
-impl Rewrite for ast::LitPat {
-    fn rewrite(&self, context: &RewriteContext<'_>, _shape: Shape) -> Option<String> {
-        Some(context.snippet_trimmed(&self.lit()?))
+impl ToDoc for ast::LitPat {
+    fn to_doc<'a>(&self, context: &RewriteContext<'_>, _shape: Shape) -> RcDoc<'a, ()> {
+        match self.lit() {
+            Some(l) => RcDoc::text(context.snippet_trimmed(&l)),
+            None => RcDoc::nil(),
+        }
     }
 }
 
-impl Rewrite for ast::TuplePat {
-    fn rewrite(&self, context: &RewriteContext<'_>, shape: Shape) -> Option<String> {
-        let formatting = ListFormatting::new(shape)
-            .tactic(ListTactic::Mixed)
-            .with_surround("(", ")");
-        format_list(
-            self.elems().into_iter().flatten(),
-            &formatting,
-            context,
-            shape,
-        )
+impl ToDoc for ast::TuplePat {
+    fn to_doc<'a>(&self, context: &RewriteContext<'_>, shape: Shape) -> RcDoc<'a, ()> {
+        let elems: Vec<_> = self
+            .elems()
+            .into_iter()
+            .flatten()
+            .map(|e| e.to_doc(context, shape))
+            .collect();
+
+        let indent = context.config.indent_width as isize;
+        block_list("(", ")", elems, indent, true)
     }
 }
 
-impl Rewrite for ast::PathPat {
-    fn rewrite(&self, context: &RewriteContext<'_>, shape: Shape) -> Option<String> {
-        let mut out = String::new();
+impl ToDoc for ast::PathPat {
+    fn to_doc<'a>(&self, context: &RewriteContext<'_>, shape: Shape) -> RcDoc<'a, ()> {
+        let mut doc = RcDoc::nil();
 
         if self.mut_token().is_some() {
-            out.push_str("mut ");
+            doc = doc.append(RcDoc::text("mut "));
         }
 
-        out.push_str(&self.path()?.rewrite_or_original(context, shape));
+        if let Some(path) = self.path() {
+            doc = doc.append(path.to_doc(context, shape));
+        }
 
-        Some(out)
+        doc
     }
 }
 
-impl Rewrite for ast::PathTuplePat {
-    fn rewrite(&self, context: &RewriteContext<'_>, shape: Shape) -> Option<String> {
-        let path = self.path()?.rewrite_or_original(context, shape);
-        let formatting = ListFormatting::new(shape)
-            .tactic(ListTactic::Mixed)
-            .with_surround("(", ")");
-        let elems_str = format_list(
-            self.elems().into_iter().flatten(),
-            &formatting,
-            context,
-            shape,
-        )?;
-
-        Some(format!("{path}{elems_str}"))
-    }
-}
-
-impl Rewrite for ast::RecordPat {
-    fn rewrite(&self, context: &RewriteContext<'_>, shape: Shape) -> Option<String> {
-        let path = self.path()?.rewrite_or_original(context, shape);
-
-        let fields_str = if let Some(fields) = self.fields() {
-            let formatted_fields: Vec<String> = fields
-                .into_iter()
-                .filter_map(|field| {
-                    let name = field.name()?;
-                    let name_text = context.token(&name);
-
-                    if let Some(pat) = field.pat() {
-                        let pat_text = pat.rewrite_or_original(context, shape);
-                        Some(format!("{name_text}: {pat_text}"))
-                    } else {
-                        Some(name_text.to_string())
-                    }
-                })
-                .collect();
-
-            format!(" {{ {} }}", formatted_fields.join(", "))
-        } else {
-            "{}".to_string()
+impl ToDoc for ast::PathTuplePat {
+    fn to_doc<'a>(&self, context: &RewriteContext<'_>, shape: Shape) -> RcDoc<'a, ()> {
+        let path = match self.path() {
+            Some(p) => p.to_doc(context, shape),
+            None => return RcDoc::nil(),
         };
 
-        Some(format!("{path}{fields_str}"))
+        let elems: Vec<_> = self
+            .elems()
+            .into_iter()
+            .flatten()
+            .map(|e| e.to_doc(context, shape))
+            .collect();
+
+        let indent = context.config.indent_width as isize;
+        path.append(block_list("(", ")", elems, indent, true))
     }
 }
 
-impl Rewrite for ast::OrPat {
-    fn rewrite(&self, context: &RewriteContext<'_>, shape: Shape) -> Option<String> {
-        let lhs = self.lhs()?.rewrite_or_original(context, shape);
-        let rhs = self.rhs()?.rewrite_or_original(context, shape);
+impl ToDoc for ast::RecordPat {
+    fn to_doc<'a>(&self, context: &RewriteContext<'_>, shape: Shape) -> RcDoc<'a, ()> {
+        let path = match self.path() {
+            Some(p) => p.to_doc(context, shape),
+            None => return RcDoc::nil(),
+        };
 
-        Some(format!("{lhs} | {rhs}"))
+        let fields: Vec<_> = self
+            .fields()
+            .map(|fields| {
+                fields
+                    .into_iter()
+                    .filter_map(|field| {
+                        let name = field.name()?;
+                        let name_text = context.token(&name).to_string();
+
+                        if let Some(pat) = field.pat() {
+                            let pat_doc = pat.to_doc(context, shape);
+                            Some(RcDoc::text(name_text).append(RcDoc::text(": ")).append(pat_doc))
+                        } else {
+                            Some(RcDoc::text(name_text))
+                        }
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        let indent = context.config.indent_width as isize;
+        path.append(RcDoc::text(" ")).append(block_list_spaced("{", "}", fields, indent, true))
+    }
+}
+
+impl ToDoc for ast::OrPat {
+    fn to_doc<'a>(&self, context: &RewriteContext<'_>, shape: Shape) -> RcDoc<'a, ()> {
+        let lhs = match self.lhs() {
+            Some(l) => l.to_doc(context, shape),
+            None => return RcDoc::nil(),
+        };
+        let rhs = match self.rhs() {
+            Some(r) => r.to_doc(context, shape),
+            None => return lhs,
+        };
+
+        lhs.append(RcDoc::text(" | ")).append(rhs)
     }
 }
