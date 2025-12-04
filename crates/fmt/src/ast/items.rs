@@ -1,6 +1,8 @@
 //! Formatting for top-level items (functions, structs, enums, traits, etc.)
 
-use crate::{ListFormatting, ListTactic, Rewrite, RewriteContext, RewriteExt, Shape, format_list};
+use crate::{
+    Indent, ListFormatting, ListTactic, Rewrite, RewriteContext, RewriteExt, Shape, format_list,
+};
 use parser::TextRange;
 use parser::ast::{self, ItemKind, ItemModifierOwner, TraitItemKind, prelude::AstNode};
 
@@ -74,6 +76,123 @@ impl Rewrite for ast::Item {
     }
 }
 
+impl Rewrite for ast::FuncSignature {
+    fn rewrite(&self, context: &RewriteContext<'_>, shape: Shape) -> Option<String> {
+        let outer_indent = shape.indent.indent_width();
+        let indent_width = context.config.indent_width;
+        let clause_offset = context.config.clause_indent;
+
+        let mut prefix = format!("fn {}", context.token(&self.name()?));
+        write_generics(self, context, shape, &mut prefix);
+
+        let params_h = match self.params() {
+            Some(p) => {
+                let fmt = ListFormatting::new(shape)
+                    .tactic(ListTactic::Horizontal)
+                    .with_surround("(", ")");
+                format_list(p, &fmt, context, shape)?
+            }
+            None => "()".to_string(),
+        };
+
+        let ret = self
+            .ret_ty()
+            .map(|ty| format!(" -> {}", ty.rewrite_or_original(context, shape)))
+            .unwrap_or_default();
+
+        let uses = self
+            .uses_clause()
+            .map(|u| format!(" {}", u.rewrite_or_original(context, shape)))
+            .unwrap_or_default();
+
+        let where_text = self
+            .where_clause()
+            .map(|w| format!(" {}", w.rewrite_or_original(context, shape)))
+            .unwrap_or_default();
+
+        // Try single line
+        let parts = [&prefix, &params_h, &ret, &uses, &where_text];
+        let all_single_line = parts.iter().all(|s| !s.contains('\n'));
+        let total_len: usize = outer_indent + parts.iter().map(|s| s.len()).sum::<usize>();
+
+        if all_single_line && total_len <= shape.width {
+            return Some(format!("{prefix}{params_h}{ret}{uses}{where_text}"));
+        }
+
+        // Build with line breaks as needed
+        let mut out = prefix;
+        let mut line_len = last_line_width(&out, outer_indent);
+
+        // Params: try horizontal, fall back to vertical
+        if !params_h.contains('\n') && line_len + params_h.len() <= shape.width {
+            out.push_str(&params_h);
+        } else if let Some(p) = self.params() {
+            let fmt = ListFormatting::new(shape)
+                .tactic(ListTactic::Vertical)
+                .with_surround("(", ")");
+            out.push_str(&format_list(p, &fmt, context, shape)?);
+        } else {
+            out.push_str("()");
+        }
+        line_len = last_line_width(&out, outer_indent);
+
+        // Return type
+        if !ret.is_empty() {
+            if !ret.contains('\n') && line_len + ret.len() <= shape.width {
+                out.push_str(&ret);
+            } else {
+                out.push('\n');
+                push_indent(&mut out, outer_indent);
+                out.push_str(ret.trim_start());
+            }
+            line_len = last_line_width(&out, outer_indent);
+        }
+
+        // Uses clause
+        if let Some(u) = self.uses_clause() {
+            if !uses.contains('\n') && line_len + uses.len() <= shape.width {
+                out.push_str(&uses);
+            } else {
+                out.push('\n');
+                let uses_indent = outer_indent + clause_offset;
+                let uses_shape = Shape::with_width(
+                    shape.width.saturating_sub(uses_indent),
+                    Indent::from_block(uses_indent),
+                );
+                push_indent(&mut out, uses_indent);
+                out.push_str(u.rewrite(context, uses_shape)?.trim_start());
+            }
+            line_len = last_line_width(&out, outer_indent);
+        }
+
+        // Where clause: inline -> compact (own line) -> vertical (each pred on line)
+        if let Some(where_clause) = self.where_clause() {
+            let where_trimmed = where_text.trim_start();
+            let clause_indent = outer_indent + clause_offset;
+
+            if !where_text.contains('\n') && line_len + where_text.len() <= shape.width {
+                out.push_str(&where_text);
+            } else if clause_indent + where_trimmed.len() <= shape.width {
+                out.push('\n');
+                push_indent(&mut out, clause_indent);
+                out.push_str(where_trimmed);
+            } else {
+                out.push('\n');
+                push_indent(&mut out, clause_indent);
+                out.push_str("where\n");
+                for pred in where_clause {
+                    push_indent(&mut out, outer_indent + indent_width);
+                    out.push_str(&pred.rewrite_or_original(context, shape));
+                    out.push_str(",\n");
+                }
+                out.pop();
+            }
+        }
+
+        Some(out)
+    }
+}
+
 impl Rewrite for ast::Func {
     fn rewrite(&self, context: &RewriteContext<'_>, shape: Shape) -> Option<String> {
         let sig = self.sig();
@@ -92,241 +211,43 @@ impl Rewrite for ast::Func {
 
         write_attrs(self, context, &mut out);
 
-        let outer_indent = shape.indent.indent_width();
-        let indent_width = context.config.indent_width;
-        let where_clause_opt = sig.where_clause();
-        let has_where = where_clause_opt.is_some();
+        let mut modifier_prefix = String::new();
+        write_item_modifier(self, &mut modifier_prefix);
 
-        // For functions without a `where` clause, keep the existing compact
-        // single-line signature style.
-        if !has_where {
-            write_item_modifier(self, &mut out);
+        let sig_shape = Shape::with_width(
+            shape.width.saturating_sub(modifier_prefix.len()),
+            shape.indent,
+        );
+        let signature = sig.rewrite(context, sig_shape)?;
 
-            out.push_str("fn ");
-
-            if let Some(name) = sig.name() {
-                out.push_str(context.snippet(name.text_range()));
-            }
-
-            write_generics(&sig, context, shape, &mut out);
-
-            let params = if let Some(param_list) = sig.params() {
-                param_list.rewrite(context, shape)?
-            } else {
-                "()".to_string()
-            };
-            out.push_str(&params);
-
-            if let Some(ret_ty) = sig.ret_ty() {
-                let ty = ret_ty.rewrite_or_original(context, shape);
-                out.push_str(" -> ");
-                out.push_str(&ty);
-            }
-
-            if let Some(uses) = sig.uses_clause() {
-                let uses_text = uses.rewrite(context, shape)?;
-                out.push(' ');
-                out.push_str(&uses_text);
-            }
-
-            write_where_clause(&sig, context, shape, &mut out);
-
-            // Handle body or bodyless functions
-            if let Some(body) = &body_opt {
-                out.push(' ');
-                let formatted_body = body.rewrite(context, shape)?;
-                out.push_str(&formatted_body);
-                out.push_str(&suffix);
-            }
-
-            return Some(out);
-        }
-
-        // Functions with a `where` clause use a width-aware layout. We first
-        // try a fully single-line signature, and only spill pieces to new
-        // lines when they exceed the configured line width.
-        let max_width = shape.width;
-        let clause_indent = context.config.clause_indent;
-        let param_indent = outer_indent + indent_width;
-
-        // Build reusable pieces of the header.
-        let mut prefix = String::new();
-        write_item_modifier(self, &mut prefix);
-        prefix.push_str("fn ");
-        if let Some(name) = sig.name() {
-            prefix.push_str(context.snippet(name.text_range()));
-        }
-        write_generics(&sig, context, shape, &mut prefix);
-
-        let params_inline = if let Some(param_list) = sig.params() {
-            param_list.rewrite(context, shape)?
-        } else {
-            "()".to_string()
-        };
-
-        let ret_inline = if let Some(ret_ty) = sig.ret_ty() {
-            let ty = ret_ty.rewrite_or_original(context, shape);
-            format!(" -> {ty}")
-        } else {
-            String::new()
-        };
-
-        let uses_inline = if let Some(uses) = sig.uses_clause() {
-            let uses_text = uses.rewrite(context, shape)?;
-            format!(" {uses_text}")
-        } else {
-            String::new()
-        };
-
-        let where_clause = where_clause_opt.expect("has_where is true");
-        let where_text = where_clause.rewrite_or_original(context, shape);
-        let where_inline = format!(" {where_text}");
-
-        // Fast path: everything fits on a single line.
-        let single_line_len = outer_indent
-            + prefix.len()
-            + params_inline.len()
-            + ret_inline.len()
-            + uses_inline.len()
-            + where_inline.len();
-
-        if single_line_len <= max_width {
-            push_indent(&mut out, outer_indent);
-            out.push_str(&prefix);
-            out.push_str(&params_inline);
-            out.push_str(&ret_inline);
-            out.push_str(&uses_inline);
-            out.push_str(&where_inline);
-
-            if let Some(body) = &body_opt {
-                out.push(' ');
-                let formatted_body = body.rewrite(context, shape)?;
-                out.push_str(&formatted_body);
-                out.push_str(&suffix);
-            }
-            return Some(out);
-        }
-
-        // Multi-line layout: decide whether the parameter list can remain
-        // on the first line, then place `uses` / `where` on the same or
-        // subsequent lines depending on the remaining width.
-        let mut current_line_len = 0usize;
-
-        push_indent(&mut out, outer_indent);
-        current_line_len += outer_indent;
-
-        out.push_str(&prefix);
-        current_line_len += prefix.len();
-
-        let params_inline_len = params_inline.len();
-        let params_and_ret_len = params_inline_len + ret_inline.len();
-        let params_inline_fit = current_line_len + params_and_ret_len <= max_width;
-
-        if params_inline_fit {
-            // Keep parameters on the same line.
-            out.push_str(&params_inline);
-            current_line_len += params_inline_len;
-        } else if let Some(param_list) = sig.params() {
-            // Spill parameters onto multiple lines.
-            let params: Vec<String> = param_list
-                .into_iter()
-                .map(|param| param.rewrite_or_original(context, shape))
-                .collect();
-
-            if params.is_empty() {
-                out.push_str("()");
-                current_line_len += 2;
-            } else {
-                out.push('(');
-                out.push('\n');
-
-                for param in params {
-                    push_indent(&mut out, param_indent);
-                    out.push_str(&param);
-                    out.push(',');
-                    out.push('\n');
-                }
-
-                push_indent(&mut out, outer_indent);
-                current_line_len = outer_indent;
-                out.push(')');
-                current_line_len += 1;
-            }
-        } else {
-            out.push_str("()");
-            current_line_len += 2;
-        }
-
-        // Return type.
-        if !ret_inline.is_empty() {
-            let ret_len = ret_inline.len();
-            if current_line_len + ret_len <= max_width {
-                out.push_str(&ret_inline);
-                current_line_len += ret_len;
-            } else {
-                out.push('\n');
-                push_indent(&mut out, outer_indent);
-                current_line_len = outer_indent;
-
-                let trimmed = ret_inline.trim_start();
-                out.push_str(trimmed);
-                current_line_len += trimmed.len();
-            }
-        }
-
-        // `uses` clause.
-        if !uses_inline.is_empty() {
-            let uses_len = uses_inline.len();
-            let uses_no_space = uses_inline.trim_start();
-
-            if current_line_len + uses_len <= max_width {
-                out.push_str(&uses_inline);
-            } else {
-                out.push('\n');
-                push_indent(&mut out, outer_indent + clause_indent);
-                out.push_str(uses_no_space);
-            }
-        }
-
-        // `where` clause – in the multi-line path we never put `where` on the
-        // same line as `uses`; they only share a line in the fully inline
-        // fast-path above.
-        let where_no_space = where_inline.trim_start();
-        let where_no_space_len = where_no_space.len();
-        let where_indent = outer_indent + clause_indent;
-
-        if where_indent + where_no_space_len <= max_width {
-            // Put `where` on its own line.
-            out.push('\n');
-            push_indent(&mut out, where_indent);
-            out.push_str(where_no_space);
-        } else {
-            // Fully vertical `where` layout.
-            out.push('\n');
-            push_indent(&mut out, where_indent);
-            out.push_str("where");
-            out.push('\n');
-
-            for pred in where_clause {
-                push_indent(&mut out, param_indent);
-                out.push_str(&pred.rewrite_or_original(context, shape));
-                out.push(',');
-                out.push('\n');
-            }
-        }
+        out.push_str(&modifier_prefix);
+        out.push_str(&signature);
 
         if let Some(body) = &body_opt {
-            if !out.ends_with('\n') {
+            let formatted_body = body.rewrite(context, shape)?;
+            let signature_multiline = signature.contains('\n');
+
+            if sig.where_clause().is_some() && signature_multiline {
                 out.push('\n');
+                push_indent(&mut out, shape.indent.indent_width());
+                out.push_str(&formatted_body);
+            } else {
+                out.push(' ');
+                out.push_str(&formatted_body);
             }
 
-            let formatted_body = body.rewrite(context, shape)?;
-
-            out.push_str(&formatted_body);
             out.push_str(&suffix);
         }
 
         Some(out)
+    }
+}
+
+fn last_line_width(text: &str, first_line_indent: usize) -> usize {
+    if let Some(idx) = text.rfind('\n') {
+        text.len().saturating_sub(idx + 1)
+    } else {
+        first_line_indent + text.len()
     }
 }
 
