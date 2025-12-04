@@ -18,6 +18,18 @@ pub fn goto_target_at_cursor<'db>(
     top_mod.reference_at(db, cursor)?.target_at(db, cursor)
 }
 
+/// Get all goto targets for the cursor position (including ambiguous candidates).
+pub fn goto_targets_at_cursor<'db>(
+    db: &'db DriverDataBase,
+    top_mod: TopLevelMod<'db>,
+    cursor: Cursor,
+) -> Vec<Target<'db>> {
+    top_mod
+        .reference_at(db, cursor)
+        .map(|r| r.target_candidates_at(db, cursor))
+        .unwrap_or_default()
+}
+
 pub async fn handle_goto_definition(
     backend: &mut Backend,
     params: async_lsp::lsp_types::GotoDefinitionParams,
@@ -47,13 +59,26 @@ pub async fn handle_goto_definition(
         })?;
     let top_mod = map_file_to_mod(&backend.db, file);
 
-    let location =
-        goto_target_at_cursor(&backend.db, top_mod, cursor).and_then(|target| match target {
+    // Get all target candidates (may be multiple for ambiguous references)
+    let targets = goto_targets_at_cursor(&backend.db, top_mod, cursor);
+
+    let locations: Vec<_> = targets
+        .into_iter()
+        .filter_map(|target| match target {
             Target::Scope(scope) => to_lsp_location_from_scope(&backend.db, scope).ok(),
             Target::Local { span, .. } => to_lsp_location_from_lazy_span(&backend.db, span).ok(),
-        });
+        })
+        .collect();
 
-    Ok(location.map(async_lsp::lsp_types::GotoDefinitionResponse::Scalar))
+    match locations.len() {
+        0 => Ok(None),
+        1 => Ok(Some(async_lsp::lsp_types::GotoDefinitionResponse::Scalar(
+            locations.into_iter().next().unwrap(),
+        ))),
+        _ => Ok(Some(async_lsp::lsp_types::GotoDefinitionResponse::Array(
+            locations,
+        ))),
+    }
 }
 // }
 #[cfg(test)]
