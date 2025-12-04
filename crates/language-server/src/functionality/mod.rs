@@ -5,3 +5,4 @@ pub(super) mod highlight;
 pub(super) mod hover;
 pub(super) mod item_info;
 pub(super) mod references;
+pub(super) mod type_definition;
