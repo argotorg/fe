@@ -323,5 +323,4 @@ mod tests {
         );
         snap_test!(result, fixture.path());
     }
-
 }

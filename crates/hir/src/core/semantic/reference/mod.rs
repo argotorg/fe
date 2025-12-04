@@ -216,8 +216,11 @@ impl<'db> FieldAccessView<'db> {
     }
 
     /// Get the source span of this field access.
+    ///
+    /// Returns the span of just the field name token, not the entire
+    /// field access expression. For `self.storage`, this returns just "storage".
     pub fn span(&self) -> DynLazySpan<'db> {
-        self.span.clone().into()
+        self.span.clone().accessor().into()
     }
 }
 
@@ -253,8 +256,11 @@ impl<'db> MethodCallView<'db> {
     }
 
     /// Get the source span of this method call.
+    ///
+    /// Returns the span of just the method name token, not the entire
+    /// method call expression. For `self.get(key)`, this returns just "get".
     pub fn span(&self) -> DynLazySpan<'db> {
-        self.span.clone().into()
+        self.span.clone().method_name().into()
     }
 }
 

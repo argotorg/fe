@@ -1,5 +1,6 @@
 ---
 source: crates/language-server/src/functionality/goto.rs
+assertion_line: 268
 expression: snapshot
 input_file: test_files/goto_trait.fe
 ---
@@ -25,6 +26,4 @@ cursor position (1, 12), path: goto_trait::Display
 cursor position (8, 5), path: goto_trait::Display
 cursor position (8, 17), path: goto_trait::Counter
 cursor position (9, 12), path: goto_trait::Counter
-cursor position (10, 8), path: goto_trait::Counter::value
 cursor position (14, 18), path: goto_trait::Counter
-cursor position (15, 4), path: goto_trait::Display::show
