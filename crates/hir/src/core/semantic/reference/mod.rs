@@ -306,8 +306,11 @@ impl<'db> UsePathView<'db> {
     }
 
     /// Get the source span of this use path segment.
+    ///
+    /// Returns the span of just this segment, not the entire use path.
+    /// For `use foo::bar::Baz` with segment=1, this returns just "bar".
     pub fn span(&self) -> DynLazySpan<'db> {
-        self.span.clone().into()
+        self.span.clone().segment(self.segment).into()
     }
 }
 
