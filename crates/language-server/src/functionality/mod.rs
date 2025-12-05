@@ -1,4 +1,5 @@
 mod capabilities;
+pub(super) mod completion;
 pub(super) mod document_symbols;
 pub(super) mod goto;
 pub(super) mod handlers;

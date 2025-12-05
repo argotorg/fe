@@ -32,6 +32,14 @@ pub(crate) fn server_capabilities() -> ServerCapabilities {
         document_symbol_provider: Some(async_lsp::lsp_types::OneOf::Left(true)),
         // workspace symbols
         workspace_symbol_provider: Some(async_lsp::lsp_types::OneOf::Left(true)),
+        // completion
+        completion_provider: Some(async_lsp::lsp_types::CompletionOptions {
+            resolve_provider: Some(false),
+            trigger_characters: Some(vec![".".to_string(), ":".to_string()]),
+            all_commit_characters: None,
+            work_done_progress_options: Default::default(),
+            completion_item: None,
+        }),
         // support for workspace add/remove changes
         workspace: Some(async_lsp::lsp_types::WorkspaceServerCapabilities {
             workspace_folders: Some(async_lsp::lsp_types::WorkspaceFoldersServerCapabilities {
