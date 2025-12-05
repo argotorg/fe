@@ -361,37 +361,59 @@ pub async fn handle_files_need_diagnostics(
     let FilesNeedDiagnostics(need_diagnostics) = message;
     let mut client = backend.client.clone();
 
+    info!(
+        "handle_files_need_diagnostics: processing {} files",
+        need_diagnostics.len()
+    );
+    for NeedsDiagnostics(url) in &need_diagnostics {
+        info!("  - file needing diagnostics: {}", url);
+    }
+
     let ingots_need_diagnostics: FxHashSet<_> = need_diagnostics
         .iter()
         .filter_map(|NeedsDiagnostics(url)| {
-            // url is already a url::Url
-            backend
+            let ingot = backend
                 .db
                 .workspace()
-                .containing_ingot(&backend.db, url.clone())
+                .containing_ingot(&backend.db, url.clone());
+            if ingot.is_none() {
+                warn!("No containing ingot found for file: {}", url);
+            }
+            ingot
         })
         .collect();
 
+    info!(
+        "Found {} ingots needing diagnostics",
+        ingots_need_diagnostics.len()
+    );
+
     for ingot in ingots_need_diagnostics {
+        info!("Processing ingot: {:?}", ingot.base(&backend.db));
         // Get diagnostics per file
         use crate::lsp_diagnostics::LspDiagnostics;
         let diagnostics_map = backend.db.diagnostics_for_ingot(ingot);
 
         info!(
-            "Computed diagnostics: {:?}",
+            "Computed {} files with diagnostics: {:?}",
+            diagnostics_map.len(),
             diagnostics_map.keys().collect::<Vec<_>>()
         );
         for uri in diagnostics_map.keys() {
             let diagnostic = diagnostics_map.get(uri).cloned().unwrap_or_default();
+            info!(
+                "Publishing {} diagnostics for URI: {}",
+                diagnostic.len(),
+                uri
+            );
             let diagnostics_params = async_lsp::lsp_types::PublishDiagnosticsParams {
                 uri: uri.clone(),
                 diagnostics: diagnostic,
                 version: None,
             };
-            info!("Publishing diagnostics for URI: {:?}", uri);
-            let _ = client
-                .publish_diagnostics(diagnostics_params)
-                .map_err(|e| error!("Failed to publish diagnostics for {}: {:?}", uri, e));
+            if let Err(e) = client.publish_diagnostics(diagnostics_params) {
+                error!("Failed to publish diagnostics for {}: {:?}", uri, e);
+            }
         }
     }
     Ok(())
