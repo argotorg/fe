@@ -1,7 +1,7 @@
+use async_lsp::ResponseError;
 use async_lsp::lsp_types::{
     Location, SymbolInformation, SymbolKind, WorkspaceSymbolParams, WorkspaceSymbolResponse,
 };
-use async_lsp::ResponseError;
 use common::InputDb;
 use hir::{hir_def::ItemKind, lower::map_file_to_mod, span::LazySpan};
 use tracing::info;

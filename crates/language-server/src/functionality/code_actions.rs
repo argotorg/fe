@@ -1,8 +1,8 @@
+use async_lsp::ResponseError;
 use async_lsp::lsp_types::{
     CodeAction, CodeActionKind, CodeActionOrCommand, CodeActionParams, CodeActionResponse,
     Position, Range, TextEdit, WorkspaceEdit,
 };
-use async_lsp::ResponseError;
 use common::InputDb;
 use driver::DriverDataBase;
 use hir::{
@@ -46,8 +46,8 @@ pub async fn handle_code_action(
     let mut actions = Vec::new();
 
     // Get cursor range
-    let start = to_offset_from_position(params.range.start, &file_text);
-    let end = to_offset_from_position(params.range.end, &file_text);
+    let start = to_offset_from_position(params.range.start, file_text);
+    let end = to_offset_from_position(params.range.end, file_text);
 
     // Collect code actions for functions without return type annotations
     collect_return_type_actions(
@@ -55,7 +55,7 @@ pub async fn handle_code_action(
         top_mod,
         start,
         end,
-        &file_text,
+        file_text,
         &url,
         &mut actions,
     );
@@ -219,27 +219,18 @@ mod tests {
         let file_text = file.text(&db);
         let top_mod = map_file_to_mod(&db, file);
 
-        println!("File content:\n{}", file_text);
-
         // Test collecting return type actions for functions without annotations
         let mut actions = Vec::new();
         let start = parser::TextSize::from(0);
         let end = parser::TextSize::from(file_text.len() as u32);
 
-        collect_return_type_actions(&db, top_mod, start, end, &file_text, &lib_url, &mut actions);
+        collect_return_type_actions(&db, top_mod, start, end, file_text, &lib_url, &mut actions);
 
-        println!("\nCode actions ({} total):", actions.len());
+        // Verify we get code actions for functions without return types
+        // The hoverable fixture has functions that should trigger this
         for action in &actions {
-            println!("  {}", action.title);
-            if let Some(edit) = &action.edit {
-                if let Some(changes) = &edit.changes {
-                    for (_, edits) in changes {
-                        for e in edits {
-                            println!("    Edit at {:?}: '{}'", e.range, e.new_text);
-                        }
-                    }
-                }
-            }
+            assert!(action.title.starts_with("Add return type:"));
+            assert!(action.edit.is_some());
         }
     }
 }

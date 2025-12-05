@@ -249,7 +249,6 @@ impl<'db> ScopeId<'db> {
         super_dest
     }
 
-    
     /// Returns the lexical parent scope of this scope.
     pub fn lex_parent(self, db: &'db dyn HirDb) -> Option<Self> {
         self.data(db)

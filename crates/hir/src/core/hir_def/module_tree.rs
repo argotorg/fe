@@ -124,7 +124,10 @@ impl ModuleTree<'_> {
     /// Returns the tree node data of the given top level module.
     ///
     /// Returns `Err(ModuleNotInTree)` if the module is not in this tree.
-    pub fn tree_node_data(&self, top_mod: TopLevelMod) -> Result<&ModuleTreeNode<'_>, ModuleNotInTree> {
+    pub fn tree_node_data(
+        &self,
+        top_mod: TopLevelMod,
+    ) -> Result<&ModuleTreeNode<'_>, ModuleNotInTree> {
         self.tree_node(top_mod).map(|id| &self.module_tree.0[id])
     }
 
@@ -301,14 +304,20 @@ mod tests {
         let file2 = IngotBaseUrl::touch(&ingot2_base, &mut db, "src/lib.fe".into(), None);
 
         // The files should be different (different URLs)
-        assert_ne!(file1, file2, "files from different ingots should be distinct");
+        assert_ne!(
+            file1, file2,
+            "files from different ingots should be distinct"
+        );
 
         // Get modules from both ingots
         let mod1 = lower::map_file_to_mod(&db, file1);
         let mod2 = lower::map_file_to_mod(&db, file2);
 
         // The modules should be different (based on different files)
-        assert_ne!(mod1, mod2, "modules from different ingots should be distinct");
+        assert_ne!(
+            mod1, mod2,
+            "modules from different ingots should be distinct"
+        );
 
         // Get ingot2's module tree
         let ingot2 = db
@@ -318,8 +327,14 @@ mod tests {
         let tree2 = ingot2.module_tree(&db);
 
         // tree2 should contain mod2 but NOT mod1
-        assert!(tree2.tree_node(mod2).is_ok(), "tree2 should contain its own module");
-        assert!(tree2.tree_node(mod1).is_err(), "tree2 should NOT contain mod1 from ingot1");
+        assert!(
+            tree2.tree_node(mod2).is_ok(),
+            "tree2 should contain its own module"
+        );
+        assert!(
+            tree2.tree_node(mod1).is_err(),
+            "tree2 should NOT contain mod1 from ingot1"
+        );
 
         // Querying mod1's children/parent from tree2 should return empty/None (error is logged)
         assert_eq!(tree2.children(mod1).count(), 0);
