@@ -61,7 +61,9 @@ fn body_references(fixture: Fixture<&str>) {
                     ReferenceView::MethodCall(mv) => {
                         let resolution = mv.target(&db);
                         let target_desc = match resolution.first() {
-                            Some(Target::Scope(scope)) => format!("method -> {}", scope.kind_name()),
+                            Some(Target::Scope(scope)) => {
+                                format!("method -> {}", scope.kind_name())
+                            }
                             _ => "method call".to_string(),
                         };
                         prop_formatter.push_prop(top_mod, mv.span(), target_desc);

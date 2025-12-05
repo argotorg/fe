@@ -194,10 +194,10 @@ impl<'db> PathView<'db> {
             if seg_span.range.contains(cursor) {
                 // If this is the last segment, try local binding resolution first
                 // (locals shadow module-level items and are never ambiguous)
-                if idx == last_idx {
-                    if let Some(local) = self.local_target(db) {
-                        return TargetResolution::Single(local);
-                    }
+                if idx == last_idx
+                    && let Some(local) = self.local_target(db)
+                {
+                    return TargetResolution::Single(local);
                 }
 
                 // Try module-level resolution for this segment (may be ambiguous)
@@ -392,11 +392,11 @@ impl<'db> UsePathView<'db> {
             let query = EarlyNameQueryId::new(db, ident, current_scope, directive);
             let bucket = resolve_query(db, query);
 
-            if let Some(res) = bucket.iter_ok().next() {
-                if let Some(scope) = res.scope() {
-                    current_scope = scope;
-                    continue;
-                }
+            if let Some(res) = bucket.iter_ok().next()
+                && let Some(scope) = res.scope()
+            {
+                current_scope = scope;
+                continue;
             }
 
             // If name resolution failed and we're in a TopLevelMod scope,
