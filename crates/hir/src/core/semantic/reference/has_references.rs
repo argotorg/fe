@@ -135,12 +135,11 @@ impl<'db> TopLevelMod<'db> {
         let items = self.find_enclosing_items(db, cursor);
 
         for item in items {
-            if let Some(name_span) = item.name_span() {
-                if let Some(resolved) = name_span.resolve(db) {
-                    if resolved.range.contains(cursor) {
-                        return Some(ScopeId::from_item(item));
-                    }
-                }
+            if let Some(name_span) = item.name_span()
+                && let Some(resolved) = name_span.resolve(db)
+                && resolved.range.contains(cursor)
+            {
+                return Some(ScopeId::from_item(item));
             }
         }
 

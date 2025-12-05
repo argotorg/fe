@@ -129,15 +129,18 @@ mod tests {
     use codespan_reporting::{
         diagnostic::{Diagnostic, Label},
         files::SimpleFiles,
-        term::{self, termcolor::{BufferWriter, ColorChoice}},
+        term::{
+            self,
+            termcolor::{BufferWriter, ColorChoice},
+        },
     };
+    use common::indexmap::IndexMap;
     use common::ingot::IngotKind;
     use dir_test::{Fixture, dir_test};
     use driver::DriverDataBase;
-    use hir::visitor::{Visitor, VisitorCtxt, prelude::LazyPathSpan};
     use hir::hir_def::{PathId, scope_graph::ScopeId};
     use hir::span::{DynLazySpan, LazySpan};
-    use common::indexmap::IndexMap;
+    use hir::visitor::{Visitor, VisitorCtxt, prelude::LazyPathSpan};
     use parser::TextSize;
     use rustc_hash::FxHashMap;
     use std::collections::BTreeMap;
@@ -208,10 +211,16 @@ mod tests {
                     .map(|(prop, span)| {
                         let resolved_span = span.resolve(db).unwrap();
                         let file_id = self.top_mod_to_file[top_mod];
-                        let diag = Diagnostic::note()
-                            .with_labels(vec![Label::primary(file_id, resolved_span.range)
-                                .with_message(prop)]);
-                        ((resolved_span.file, (resolved_span.range.start(), resolved_span.range.end())), diag)
+                        let diag = Diagnostic::note().with_labels(vec![
+                            Label::primary(file_id, resolved_span.range).with_message(prop),
+                        ]);
+                        (
+                            (
+                                resolved_span.file,
+                                (resolved_span.range.start(), resolved_span.range.end()),
+                            ),
+                            diag,
+                        )
                     })
                     .collect::<BTreeMap<_, _>>();
 
@@ -246,10 +255,10 @@ mod tests {
         // Also collect cursors from item definition sites
         let scope_graph = top_mod.scope_graph(db);
         for item in scope_graph.items_dfs(db) {
-            if let Some(name_span) = item.name_span() {
-                if let Some(span) = name_span.resolve(db) {
-                    cursors.push(span.range.start());
-                }
+            if let Some(name_span) = item.name_span()
+                && let Some(span) = name_span.resolve(db)
+            {
+                cursors.push(span.range.start());
             }
         }
 
@@ -264,8 +273,7 @@ mod tests {
     )]
     fn test_references_multiple_files(fixture: Fixture<&str>) {
         let cargo_manifest_dir = std::env::var("CARGO_MANIFEST_DIR").unwrap();
-        let ingot_base_dir =
-            std::path::Path::new(&cargo_manifest_dir).join("test_files/hoverable");
+        let ingot_base_dir = std::path::Path::new(&cargo_manifest_dir).join("test_files/hoverable");
 
         let mut db = DriverDataBase::default();
         load_ingot_from_directory(&mut db, &ingot_base_dir);
@@ -273,7 +281,10 @@ mod tests {
         let fe_source_path = fixture.path();
         let file_url = Url::from_file_path(fe_source_path).unwrap();
 
-        let ingot = db.workspace().containing_ingot(&db, file_url.clone()).unwrap();
+        let ingot = db
+            .workspace()
+            .containing_ingot(&db, file_url.clone())
+            .unwrap();
         assert_eq!(ingot.kind(&db), IngotKind::Local);
 
         let mut formatter = ReferenceFormatter::new();
@@ -326,16 +337,23 @@ mod tests {
                         if let Some(scope) = ref_top_mod.definition_at(&db, ref_offset) {
                             let item = scope.item();
                             if let Some(name_span) = item.name_span() {
-                                let annotation = format!("def: defined here @ {}:{} ({} refs)",
-                                    loc.range.start.line + 1, loc.range.start.character,
-                                    total_refs);
+                                let annotation = format!(
+                                    "def: defined here @ {}:{} ({} refs)",
+                                    loc.range.start.line + 1,
+                                    loc.range.start.character,
+                                    total_refs
+                                );
                                 formatter.push_prop(ref_top_mod, name_span, annotation);
                             }
                         }
                     } else {
                         // Regular reference
                         if let Some(reference) = ref_top_mod.reference_at(&db, ref_offset) {
-                            let annotation = format!("ref: {}:{}", loc.range.start.line + 1, loc.range.start.character);
+                            let annotation = format!(
+                                "ref: {}:{}",
+                                loc.range.start.line + 1,
+                                loc.range.start.character
+                            );
                             formatter.push_prop(ref_top_mod, reference.span(), annotation);
                         }
                     }

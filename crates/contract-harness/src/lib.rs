@@ -342,6 +342,7 @@ pub fn bytes_to_u256(bytes: &[u8]) -> Result<U256, HarnessError> {
 }
 
 #[cfg(test)]
+#[allow(clippy::print_stderr)]
 mod tests {
     use super::*;
     use ethers_core::{abi::Token, types::U256 as AbiU256};
