@@ -22,10 +22,14 @@ impl ToDoc for ast::BinExpr {
             None => return lhs,
         };
 
-        lhs.append(RcDoc::text(" "))
+        let indent = context.config.indent_width as isize;
+
+        lhs.append(RcDoc::line())
             .append(RcDoc::text(op))
             .append(RcDoc::text(" "))
             .append(rhs)
+            .nest(indent)
+            .group()
     }
 }
 
