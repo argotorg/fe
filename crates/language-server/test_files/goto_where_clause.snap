@@ -1,0 +1,26 @@
+---
+source: crates/language-server/src/functionality/goto.rs
+expression: snapshot
+input_file: test_files/goto_where_clause.fe
+---
+0: trait MyTrait {
+1:     fn do_something(self)
+2: }
+3: 
+4: struct Container<T> {
+5:     value: T
+6: }
+7: 
+8: impl<T> Container<T>
+9:     where T: MyTrait
+10: {
+11:     fn process(self) {
+12:         self.value.do_something()
+13:     }
+14: }
+---
+cursor position (1, 20), path: goto_where_clause::MyTrait
+cursor position (5, 11), path: goto_where_clause::Container::T
+cursor position (8, 8), path: goto_where_clause::Container
+cursor position (9, 13), path: goto_where_clause::MyTrait
+cursor position (11, 15), path: goto_where_clause::Container

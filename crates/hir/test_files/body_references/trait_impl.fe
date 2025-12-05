@@ -1,0 +1,17 @@
+trait Greet {
+    fn greet(self) -> i32
+}
+
+struct Person {
+    age: i32
+}
+
+impl Greet for Person {
+    fn greet(self) -> i32 {
+        self.age
+    }
+}
+
+fn call_greet(p: Person) -> i32 {
+    p.greet()
+}
