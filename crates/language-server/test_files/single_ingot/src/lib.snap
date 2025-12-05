@@ -1,7 +1,8 @@
 ---
 source: crates/language-server/src/functionality/goto.rs
+assertion_line: 327
 expression: snapshot
-input_file: crates/language-server/test_files/single_ingot/src/lib.fe
+input_file: test_files/single_ingot/src/lib.fe
 ---
 0: use ingot::foo::Why
 1: 

@@ -20,6 +20,11 @@
 //!   `item.rs` and replace call sites by adding only the minimal semantic
 //!   method(s) here.
 
+pub mod reference;
+pub use reference::{
+    FieldAccessView, HasReferences, MethodCallView, PathView, ReferenceView, Target, UsePathView,
+};
+
 use crate::HirDb;
 use crate::analysis::HirAnalysisDb;
 use crate::analysis::ty::ty_def::Kind;
@@ -2211,5 +2216,19 @@ impl<'db> EnumVariant<'db> {
     pub fn as_adt_fields(self, db: &'db dyn HirAnalysisDb) -> &'db AdtField<'db> {
         let def = lower_adt(db, AdtRef::from(self.enum_));
         &def.fields(db)[self.idx as usize]
+    }
+}
+
+// Type traversal helpers ----------------------------------------------------
+
+impl<'db> TyId<'db> {
+    /// Returns the field parent for this type if it's a struct or contract.
+    /// This provides access to fields via `field_parent.fields(db)`.
+    pub fn field_parent(self, db: &'db dyn HirAnalysisDb) -> Option<FieldParent<'db>> {
+        match self.adt_ref(db)? {
+            AdtRef::Struct(s) => Some(FieldParent::Struct(s)),
+            AdtRef::Contract(c) => Some(FieldParent::Contract(c)),
+            AdtRef::Enum(_) => None, // Enums don't have direct field access
+        }
     }
 }

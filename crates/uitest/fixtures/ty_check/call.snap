@@ -22,24 +22,6 @@ error[8-0021]: expected function, found `u32`
    │     ^ call expression requires function; `u32` is not callable
 
 error[8-0024]: argument label mismatch
-  ┌─ call.fe:6:9
-  │
-1 │ pub fn add(x: i32, y: i32) -> i32 {
-  │        --- function defined here
-  ·
-6 │     add(1, 2)
-  │         ^ expected `x` label
-
-error[8-0024]: argument label mismatch
-  ┌─ call.fe:6:12
-  │
-1 │ pub fn add(x: i32, y: i32) -> i32 {
-  │        --- function defined here
-  ·
-6 │     add(1, 2)
-  │            ^ expected `y` label
-
-error[8-0024]: argument label mismatch
   ┌─ call.fe:7:9
   │
 1 │ pub fn add(x: i32, y: i32) -> i32 {

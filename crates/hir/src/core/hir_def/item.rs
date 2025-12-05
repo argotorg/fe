@@ -423,8 +423,8 @@ impl<'db> TopLevelMod<'db> {
         self,
         db: &'db dyn HirDb,
     ) -> impl Iterator<Item = TopLevelMod<'db>> + 'db {
-        // let ingot = self.index(db).containing_ingot(db, location)
         let module_tree = self.ingot(db).module_tree(db);
+        // Error is logged by tree_node() if module not found
         module_tree.children(self)
     }
 
@@ -448,6 +448,7 @@ impl<'db> TopLevelMod<'db> {
 
     pub fn parent(self, db: &'db dyn HirDb) -> Option<TopLevelMod<'db>> {
         let module_tree = self.ingot(db).module_tree(db);
+        // Error is logged by tree_node() if module not found
         module_tree.parent(self)
     }
 

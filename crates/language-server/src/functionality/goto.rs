@@ -1,137 +1,46 @@
 use async_lsp::ResponseError;
 use common::InputDb;
-use hir::analysis::{
-    name_resolution::{PathResErrorKind, resolve_path},
-    ty::trait_resolution::PredicateListId,
-};
 use hir::{
-    SpannedHirDb,
-    hir_def::{ItemKind, PathId, TopLevelMod, scope_graph::ScopeId},
+    core::semantic::reference::{Target, TargetResolution},
+    hir_def::TopLevelMod,
     lower::map_file_to_mod,
-    span::{DynLazySpan, LazySpan},
-    visitor::{Visitor, VisitorCtxt, prelude::LazyPathSpan},
 };
-use tracing::error;
 
 use crate::{
     backend::Backend,
-    util::{to_lsp_location_from_scope, to_offset_from_position},
+    util::{to_lsp_location_from_lazy_span, to_lsp_location_from_scope, to_offset_from_position},
 };
 use driver::DriverDataBase;
 pub type Cursor = parser::TextSize;
 
-#[derive(Default)]
-struct PathSpanCollector<'db> {
-    paths: Vec<(PathId<'db>, ScopeId<'db>, LazyPathSpan<'db>)>,
-}
-
-impl<'db, 'ast: 'db> Visitor<'ast> for PathSpanCollector<'db> {
-    fn visit_path(&mut self, ctxt: &mut VisitorCtxt<'ast, LazyPathSpan<'ast>>, path: PathId<'db>) {
-        let Some(span) = ctxt.span() else {
-            return;
-        };
-
-        let scope = ctxt.scope();
-        self.paths.push((path, scope, span));
-    }
-}
-
-fn find_path_surrounding_cursor<'db>(
-    db: &'db DriverDataBase,
-    cursor: Cursor,
-    full_paths: Vec<(PathId<'db>, ScopeId<'db>, LazyPathSpan<'db>)>,
-) -> Option<(PathId<'db>, bool, ScopeId<'db>)> {
-    for (path, scope, lazy_span) in full_paths {
-        let Some(span) = lazy_span.resolve(db) else {
-            continue;
-        };
-
-        if !span.range.contains(cursor) {
-            continue;
-        }
-
-        let last_idx = path.segment_index(db);
-        for idx in 0..=last_idx {
-            let Some(seg_span) = lazy_span.clone().segment(idx).resolve(db) else {
-                continue;
-            };
-
-            if seg_span.range.contains(cursor)
-                && let Some(seg_path) = path.segment(db, idx)
-            {
-                return Some((seg_path, idx != last_idx, scope));
-            }
-        }
-    }
-
-    None
-}
-
-pub fn find_enclosing_item<'db>(
-    db: &'db dyn SpannedHirDb,
-    top_mod: TopLevelMod<'db>,
-    cursor: Cursor,
-) -> Option<ItemKind<'db>> {
-    let items = top_mod.scope_graph(db).items_dfs(db);
-
-    let mut smallest_enclosing_item = None;
-    let mut smallest_range_size = None;
-
-    for item in items {
-        let lazy_item_span = DynLazySpan::from(item.span());
-        let Some(item_span) = lazy_item_span.resolve(db) else {
-            continue;
-        };
-
-        if item_span.range.contains(cursor) {
-            let range_size = item_span.range.end() - item_span.range.start();
-            if smallest_range_size.is_none() || range_size < smallest_range_size.unwrap() {
-                smallest_enclosing_item = Some(item);
-                smallest_range_size = Some(range_size);
-            }
-        }
-    }
-
-    smallest_enclosing_item
-}
-
-pub fn get_goto_target_scopes_for_cursor<'db>(
+/// Get goto target resolution for the cursor position.
+pub fn goto_target_at_cursor<'db>(
     db: &'db DriverDataBase,
     top_mod: TopLevelMod<'db>,
     cursor: Cursor,
-) -> Option<Vec<ScopeId<'db>>> {
-    let item: ItemKind = find_enclosing_item(db, top_mod, cursor)?;
-
-    let mut visitor_ctxt = VisitorCtxt::with_item(db, item);
-    let mut path_segment_collector = PathSpanCollector::default();
-    path_segment_collector.visit_item(&mut visitor_ctxt, item);
-
-    let (path, _is_intermediate, scope) =
-        find_path_surrounding_cursor(db, cursor, path_segment_collector.paths)?;
-
-    let resolved = resolve_path(db, path, scope, PredicateListId::empty_list(db), false); // xxx fixme
-    let scopes = match resolved {
-        Ok(r) => r.as_scope(db).into_iter().collect::<Vec<_>>(),
-        Err(err) => match err.kind {
-            PathResErrorKind::NotFound { parent: _, bucket } => {
-                bucket.iter_ok().flat_map(|r| r.scope()).collect()
-            }
-            PathResErrorKind::Ambiguous(vec) => vec.into_iter().flat_map(|r| r.scope()).collect(),
-            _ => vec![],
-        },
-    };
-
-    Some(scopes)
+) -> TargetResolution<'db> {
+    top_mod
+        .reference_at(db, cursor)
+        .map(|r| r.target_at(db, cursor))
+        .unwrap_or(TargetResolution::None)
 }
 
 pub async fn handle_goto_definition(
     backend: &mut Backend,
     params: async_lsp::lsp_types::GotoDefinitionParams,
 ) -> Result<Option<async_lsp::lsp_types::GotoDefinitionResponse>, ResponseError> {
+    use tracing::{info, warn};
+
     // Convert the position to an offset in the file
     let params = params.text_document_position_params;
+    info!(
+        "goto_definition request for {:?} at {:?}",
+        params.text_document.uri, params.position
+    );
+
     let file_text = std::fs::read_to_string(params.text_document.uri.path()).ok();
     let cursor: Cursor = to_offset_from_position(params.position, file_text.unwrap().as_str());
+    info!("cursor offset: {:?}", cursor);
 
     // Get the module and the goto info
     let file_path_str = params.text_document.uri.path();
@@ -141,54 +50,136 @@ pub async fn handle_goto_definition(
             format!("Invalid file path: {file_path_str}"),
         )
     })?;
+    info!("looking up file: {}", url);
+
     let file = backend
         .db
         .workspace()
         .get(&backend.db, &url)
         .ok_or_else(|| {
+            warn!("File not found in workspace: {}", url);
+            // List all files in workspace for debugging
+            let all_files: Vec<_> = backend
+                .db
+                .workspace()
+                .all_files(&backend.db)
+                .iter()
+                .map(|(u, _)| u.to_string())
+                .collect();
+            warn!(
+                "Workspace contains {} files: {:?}",
+                all_files.len(),
+                all_files
+            );
             ResponseError::new(
                 async_lsp::ErrorCode::INTERNAL_ERROR,
                 format!("File not found in index: {url} (original path: {file_path_str})"),
             )
         })?;
+    info!("found file in workspace");
     let top_mod = map_file_to_mod(&backend.db, file);
 
-    let scopes =
-        get_goto_target_scopes_for_cursor(&backend.db, top_mod, cursor).unwrap_or_default();
+    // Get target resolution (may be ambiguous)
+    let resolution = goto_target_at_cursor(&backend.db, top_mod, cursor);
+    info!("goto resolution: {:?}", resolution);
 
-    let locations = scopes
+    // Convert targets to LSP locations
+    let locations: Vec<_> = resolution
+        .as_slice()
         .iter()
-        .map(|scope| to_lsp_location_from_scope(&backend.db, *scope))
-        .collect::<Vec<_>>();
+        .filter_map(|target| match target {
+            Target::Scope(scope) => to_lsp_location_from_scope(&backend.db, *scope).ok(),
+            Target::Local { span, .. } => {
+                to_lsp_location_from_lazy_span(&backend.db, span.clone()).ok()
+            }
+        })
+        .collect();
 
-    let result: Result<Option<async_lsp::lsp_types::GotoDefinitionResponse>, ()> =
-        Ok(Some(async_lsp::lsp_types::GotoDefinitionResponse::Array(
-            locations
-                .into_iter()
-                .filter_map(std::result::Result::ok)
-                .collect(),
-        )));
-    let response = match result {
-        Ok(response) => response,
-        Err(e) => {
-            error!("Error handling goto definition: {:?}", e);
-            None
-        }
-    };
-    Ok(response)
+    match locations.len() {
+        0 => Ok(None),
+        1 => Ok(Some(async_lsp::lsp_types::GotoDefinitionResponse::Scalar(
+            locations.into_iter().next().unwrap(),
+        ))),
+        _ => Ok(Some(async_lsp::lsp_types::GotoDefinitionResponse::Array(
+            locations,
+        ))),
+    }
 }
 // }
 #[cfg(test)]
 mod tests {
     use common::ingot::IngotKind;
     use dir_test::{Fixture, dir_test};
+    use hir::{
+        analysis::{
+            name_resolution::{PathResErrorKind, resolve_path},
+            ty::trait_resolution::PredicateListId,
+        },
+        hir_def::{PathId, scope_graph::ScopeId},
+        span::LazySpan,
+        visitor::{Visitor, VisitorCtxt, prelude::LazyPathSpan},
+    };
     use std::collections::BTreeMap;
     use test_utils::snap_test;
+    use tracing::error;
     use url::Url;
 
     use super::*;
     use crate::test_utils::load_ingot_from_directory;
     use driver::DriverDataBase;
+
+    /// Test infrastructure: collects all paths for cursor testing.
+    #[derive(Default)]
+    struct PathSpanCollector<'db> {
+        paths: Vec<(PathId<'db>, ScopeId<'db>, LazyPathSpan<'db>)>,
+    }
+
+    impl<'db, 'ast: 'db> Visitor<'ast> for PathSpanCollector<'db> {
+        fn visit_path(
+            &mut self,
+            ctxt: &mut VisitorCtxt<'ast, LazyPathSpan<'ast>>,
+            path: PathId<'db>,
+        ) {
+            let Some(span) = ctxt.span() else {
+                return;
+            };
+
+            let scope = ctxt.scope();
+            self.paths.push((path, scope, span));
+        }
+    }
+
+    /// Test infrastructure: finds path surrounding cursor.
+    fn find_path_surrounding_cursor<'db>(
+        db: &'db DriverDataBase,
+        cursor: Cursor,
+        full_paths: Vec<(PathId<'db>, ScopeId<'db>, LazyPathSpan<'db>)>,
+    ) -> Option<(PathId<'db>, bool, ScopeId<'db>)> {
+        for (path, scope, lazy_span) in full_paths {
+            let Some(span) = lazy_span.resolve(db) else {
+                continue;
+            };
+
+            if !span.range.contains(cursor) {
+                continue;
+            }
+
+            let last_idx = path.segment_index(db);
+            for idx in 0..=last_idx {
+                let Some(seg_span) = lazy_span.clone().segment(idx).resolve(db) else {
+                    continue;
+                };
+
+                if seg_span.range.contains(cursor)
+                    && let Some(seg_path) = path.segment(db, idx)
+                {
+                    return Some((seg_path, idx != last_idx, scope));
+                }
+            }
+        }
+
+        None
+    }
 
     // given a cursor position and a string, convert to cursor line and column
     fn line_col_from_cursor(cursor: Cursor, s: &str) -> (usize, usize) {
@@ -240,18 +231,13 @@ mod tests {
         let mut cursor_path_map: BTreeMap<Cursor, String> = BTreeMap::default();
 
         for cursor in &cursors {
-            let scopes =
-                get_goto_target_scopes_for_cursor(db, top_mod, *cursor).unwrap_or_default();
-
-            if !scopes.is_empty() {
-                cursor_path_map.insert(
-                    *cursor,
-                    scopes
-                        .iter()
-                        .flat_map(|x| x.pretty_path(db))
-                        .collect::<Vec<_>>()
-                        .join("\n"),
-                );
+            // Get target and filter for scopes only (for snapshot compatibility)
+            let resolution = goto_target_at_cursor(db, top_mod, *cursor);
+            if let Some(target) = resolution.first()
+                && let Target::Scope(scope) = target
+                && let Some(path) = scope.pretty_path(db)
+            {
+                cursor_path_map.insert(*cursor, path);
             }
         }
 

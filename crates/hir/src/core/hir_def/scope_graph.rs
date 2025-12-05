@@ -128,6 +128,18 @@ impl<'db> ScopeId<'db> {
         }
     }
 
+    /// Returns the body if this is a block scope or body item scope.
+    ///
+    /// Block scopes are created for code blocks within function bodies.
+    /// Returns `None` for other scope types.
+    pub fn body(self) -> Option<Body<'db>> {
+        match self {
+            ScopeId::Block(body, _) => Some(body),
+            ScopeId::Item(ItemKind::Body(body)) => Some(body),
+            _ => None,
+        }
+    }
+
     /// Returns the nearest item that contains this scope.
     /// If the scope is item itself, returns the item.
     pub fn item(self) -> ItemKind<'db> {
@@ -266,6 +278,27 @@ impl<'db> ScopeId<'db> {
     /// Returns the direct child scopes of the given `scope`
     pub fn children(self, db: &'db dyn HirDb) -> impl Iterator<Item = ScopeId<'db>> + 'db {
         self.scope_graph(db).children(self)
+    }
+
+    /// Returns all items visible in this scope for the specified domain(s).
+    ///
+    /// This includes items from imports, direct child items, and parent scopes.
+    /// Requires `HirAnalysisDb` for name resolution.
+    ///
+    /// # Example
+    /// ```ignore
+    /// use hir::analysis::name_resolution::NameDomain;
+    ///
+    /// // Get all values and types visible in this scope
+    /// let items = scope.items_in_scope(db, NameDomain::VALUE | NameDomain::TYPE);
+    /// ```
+    pub fn items_in_scope(
+        self,
+        db: &'db dyn crate::analysis::HirAnalysisDb,
+        domain: crate::analysis::name_resolution::NameDomain,
+    ) -> &'db common::indexmap::IndexMap<String, crate::analysis::name_resolution::NameRes<'db>>
+    {
+        crate::analysis::name_resolution::items_in_scope(db, self, domain)
     }
 
     /// Returns `true` if the scope is a type.
