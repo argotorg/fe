@@ -9,5 +9,4 @@ pub mod hir_def;
 pub mod lower;
 pub mod semantic;
 pub mod span;
-pub mod traverse;
 pub mod visitor;

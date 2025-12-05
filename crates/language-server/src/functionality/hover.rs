@@ -39,7 +39,8 @@ pub fn hover_helper(
             // Check if ambiguous
             if resolution.is_ambiguous() {
                 // Show all candidates
-                let mut sections = vec!["**Ambiguous reference - multiple candidates:**\n".to_string()];
+                let mut sections =
+                    vec!["**Ambiguous reference - multiple candidates:**\n".to_string()];
 
                 for (i, target) in resolution.as_slice().iter().enumerate() {
                     match target {
@@ -58,7 +59,9 @@ pub fn hover_helper(
                         }
                         Target::Local { ty, .. } => {
                             let name = match r {
-                                ReferenceView::Path(pv) => pv.path.ident(db).to_opt()?.data(db).to_string(),
+                                ReferenceView::Path(pv) => {
+                                    pv.path.ident(db).to_opt()?.data(db).to_string()
+                                }
                                 _ => continue,
                             };
                             let ty_str = ty.pretty_print(db);
@@ -91,7 +94,9 @@ pub fn hover_helper(
                     Target::Local { ty, .. } => {
                         // Local binding: get name from the reference, type from target
                         let name = match r {
-                            ReferenceView::Path(pv) => pv.path.ident(db).to_opt()?.data(db).to_string(),
+                            ReferenceView::Path(pv) => {
+                                pv.path.ident(db).to_opt()?.data(db).to_string()
+                            }
                             _ => return None,
                         };
                         let ty_str = ty.pretty_print(db);
@@ -113,4 +118,3 @@ pub fn hover_helper(
     };
     Ok(Some(result))
 }
-
