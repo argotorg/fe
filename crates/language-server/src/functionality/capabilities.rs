@@ -26,6 +26,8 @@ pub(crate) fn server_capabilities() -> ServerCapabilities {
         rename_provider: Some(async_lsp::lsp_types::OneOf::Left(true)),
         // semantic tokens
         semantic_tokens_provider: Some(semantic_tokens_options()),
+        // inlay hints
+        inlay_hint_provider: Some(async_lsp::lsp_types::OneOf::Left(true)),
         // support for workspace add/remove changes
         workspace: Some(async_lsp::lsp_types::WorkspaceServerCapabilities {
             workspace_folders: Some(async_lsp::lsp_types::WorkspaceFoldersServerCapabilities {
