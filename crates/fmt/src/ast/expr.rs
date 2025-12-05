@@ -1,11 +1,11 @@
 //! Formatting for expressions.
 
-use pretty::RcDoc;
+use pretty::DocAllocator;
 
-use crate::{RewriteContext, Shape};
+use crate::RewriteContext;
 use parser::ast::{self, ExprKind, GenericArgsOwner, prelude::AstNode};
 
-use super::types::{ToDoc, block_list, block_list_spaced};
+use super::types::{Doc, ToDoc, block_list, block_list_spaced};
 
 /// A segment in a method/field chain.
 enum ChainSegment {
@@ -63,12 +63,9 @@ fn collect_chain(expr: &ast::Expr) -> (ast::Expr, Vec<ChainSegment>) {
 }
 
 /// Builds a document for a single chain segment.
-fn segment_to_doc<'a>(
-    seg: &ChainSegment,
-    context: &RewriteContext<'_>,
-    shape: Shape,
-    indent: isize,
-) -> RcDoc<'a, ()> {
+fn segment_to_doc<'a>(seg: &ChainSegment, ctx: &'a RewriteContext<'a>, indent: isize) -> Doc<'a> {
+    let alloc = &ctx.alloc;
+
     match seg {
         ChainSegment::MethodCall {
             name,
@@ -77,23 +74,19 @@ fn segment_to_doc<'a>(
         } => {
             let generics_doc = generics
                 .as_ref()
-                .map(|g| g.to_doc(context, shape))
-                .unwrap_or_else(RcDoc::nil);
+                .map(|g| g.to_doc(ctx))
+                .unwrap_or_else(|| alloc.nil());
             let args_vec: Vec<_> = args
                 .as_ref()
-                .map(|a| {
-                    a.clone()
-                        .into_iter()
-                        .map(|arg| arg.to_doc(context, shape))
-                        .collect()
-                })
+                .map(|a| a.clone().into_iter().map(|arg| arg.to_doc(ctx)).collect())
                 .unwrap_or_default();
-            RcDoc::text(".")
-                .append(RcDoc::text(name.clone()))
+            alloc
+                .text(".")
+                .append(alloc.text(name.clone()))
                 .append(generics_doc)
-                .append(block_list("(", ")", args_vec, indent, true))
+                .append(block_list(ctx, "(", ")", args_vec, indent, true))
         }
-        ChainSegment::Field { name } => RcDoc::text(".").append(RcDoc::text(name.clone())),
+        ChainSegment::Field { name } => alloc.text(".").append(alloc.text(name.clone())),
     }
 }
 
@@ -102,166 +95,143 @@ pub fn is_chain(expr: &ast::Expr) -> bool {
     matches!(expr.kind(), ExprKind::MethodCall(_) | ExprKind::Field(_))
 }
 
-/// Formats a method/field chain with a known prefix width.
+/// Formats a method/field chain with a known prefix.
 ///
-/// The `prefix_width` is the number of characters that appear before the chain
-/// on the same line (e.g., for `let x = foo.bar`, prefix_width would be 10 for "let x = ").
-///
-/// The first segment can stay inline if `prefix_width + root_width <= indent_width`,
-/// meaning the first dot would align with or be left of subsequent dots.
+/// When the chain needs to break, all segments move to new lines with the dots aligned.
+/// The prefix width determines whether the first segment can stay inline.
 pub fn format_chain_with_prefix<'a>(
+    prefix: Doc<'a>,
     expr: &ast::Expr,
-    prefix_width: usize,
-    context: &RewriteContext<'_>,
-    shape: Shape,
-) -> RcDoc<'a, ()> {
+    ctx: &'a RewriteContext<'a>,
+) -> Doc<'a> {
     let (root, segments) = collect_chain(expr);
 
     if segments.is_empty() {
-        return root.to_doc(context, shape);
+        return prefix.append(root.to_doc(ctx));
     }
 
-    let indent = context.config.indent_width as isize;
-    let root_doc = root.to_doc(context, shape);
-
-    // Compute the rendered width of the root.
-    let root_width = {
-        let mut buf = Vec::new();
-        let _ = root_doc.clone().render(usize::MAX, &mut buf);
-        String::from_utf8(buf)
-            .map(|s| s.lines().last().map(|l| l.len()).unwrap_or(0))
-            .unwrap_or(0)
-    };
-
-    // First segment can stay inline if the dot position (prefix + root) is at or left of
-    // where subsequent dots appear (indent_width).
-    let first_dot_position = prefix_width + root_width;
-    let first_segment_inline = first_dot_position <= indent as usize;
-
-    format_chain_inner(
-        root_doc,
-        &segments,
-        first_segment_inline,
-        context,
-        shape,
-        indent,
-    )
+    let indent = ctx.config.indent_width as isize;
+    format_chain_inner(Some(prefix), &root, &segments, ctx, indent)
 }
 
 /// Formats a method/field chain with proper breaking and aligned dots.
-///
-/// The first segment can stay on the same line as the root if the dot would be
-/// at or to the left of where subsequent dots appear (i.e., root_len <= indent).
-fn format_chain<'a>(expr: &ast::Expr, context: &RewriteContext<'_>, shape: Shape) -> RcDoc<'a, ()> {
+fn format_chain<'a>(expr: &ast::Expr, ctx: &'a RewriteContext<'a>) -> Doc<'a> {
     let (root, segments) = collect_chain(expr);
 
     if segments.is_empty() {
-        return root.to_doc(context, shape);
+        return root.to_doc(ctx);
     }
 
-    let indent = context.config.indent_width as isize;
-    let root_doc = root.to_doc(context, shape);
-
-    // Compute the rendered width of the root to decide if first segment can stay inline.
-    let root_width = {
-        let mut buf = Vec::new();
-        let _ = root_doc.clone().render(usize::MAX, &mut buf);
-        String::from_utf8(buf)
-            .map(|s| s.lines().last().map(|l| l.len()).unwrap_or(0))
-            .unwrap_or(0)
-    };
-
-    // If root is short enough, first segment's dot aligns with or is left of subsequent dots.
-    let first_segment_inline = root_width <= indent as usize;
-
-    format_chain_inner(
-        root_doc,
-        &segments,
-        first_segment_inline,
-        context,
-        shape,
-        indent,
-    )
+    let indent = ctx.config.indent_width as isize;
+    format_chain_inner(None, &root, &segments, ctx, indent)
 }
 
-/// Inner helper for chain formatting.
-fn format_chain_inner<'a>(
-    root_doc: RcDoc<'a, ()>,
-    segments: &[ChainSegment],
-    first_segment_inline: bool,
-    context: &RewriteContext<'_>,
-    shape: Shape,
-    indent: isize,
-) -> RcDoc<'a, ()> {
-    if segments.len() == 1 {
-        // Single segment chain: just put it inline, let the group handle breaking
-        let seg_doc = segment_to_doc(&segments[0], context, shape, indent);
-        return root_doc
-            .append(RcDoc::line_())
-            .append(seg_doc)
-            .nest(indent)
-            .group();
+/// Estimates the width of a root expression for determining inline behavior.
+fn root_width(root: &ast::Expr, ctx: &RewriteContext<'_>) -> usize {
+    // For simple identifiers like `self`, `foo`, use the text length
+    if let ExprKind::Path(path_expr) = root.kind()
+        && let Some(path) = path_expr.path()
+    {
+        let text = ctx.snippet(path.syntax().text_range());
+        return text.trim().len();
     }
+    // For other expressions, assume they're "long"
+    usize::MAX
+}
 
-    // Multi-segment chain
-    let mut segment_docs: Vec<RcDoc<'a, ()>> = segments
-        .iter()
-        .map(|seg| segment_to_doc(seg, context, shape, indent))
-        .collect();
+/// Formats a chain with all dots aligned when broken.
+///
+/// Behavior depends on whether there's a prefix and the root width:
+/// - No prefix + short root (≤4 chars): `root.first_seg` stays inline
+/// - No prefix + long root: all segments on new lines
+/// - With prefix: all segments on new lines (prefix makes first dot too far right)
+///
+/// Examples:
+/// ```text
+/// // Short root, no prefix - first segment inline
+/// self.alpha_field
+///     .beta_field
+///     .gamma_field
+///
+/// // Long root or with prefix - all segments break
+/// some_receiver
+///     .alpha_field
+///     .beta_field
+///
+/// let x = foo
+///     .alpha_field
+///     .beta_field
+/// ```
+fn format_chain_inner<'a>(
+    prefix: Option<Doc<'a>>,
+    root: &ast::Expr,
+    segments: &[ChainSegment],
+    ctx: &'a RewriteContext<'a>,
+    indent: isize,
+) -> Doc<'a> {
+    let alloc = &ctx.alloc;
+
+    // Build the root expression
+    let root_doc = root.to_doc(ctx);
+
+    // Determine if the first segment can stay inline with root
+    // This happens when: no prefix AND root is short (≤4 chars like `self`, `foo`)
+    let root_w = root_width(root, ctx);
+    let first_segment_inline = prefix.is_none() && root_w <= 4 && !segments.is_empty();
 
     if first_segment_inline {
-        // First segment stays with root, rest are on new lines when broken
-        // Flat: `root.seg1.seg2.seg3`
-        // Broken:
-        //   root.seg1
-        //       .seg2
-        //       .seg3
-        let first_seg = segment_docs.remove(0);
-        let mut chain = root_doc.append(first_seg);
+        // Short root: keep root.first_segment on same line, break before remaining segments
+        let first_seg_doc = segment_to_doc(&segments[0], ctx, indent);
+        let mut chain_doc = root_doc.append(first_seg_doc);
 
-        for seg_doc in segment_docs {
-            chain = chain.append(RcDoc::line_()).append(seg_doc);
+        // Remaining segments each get a line break before them
+        for seg in &segments[1..] {
+            let seg_doc = segment_to_doc(seg, ctx, indent);
+            chain_doc = chain_doc.append(alloc.line_()).append(seg_doc);
         }
 
-        chain.nest(indent).group()
+        // Nest and group
+        chain_doc.nest(indent).group()
     } else {
-        // Root is too long, all segments go on new lines when broken
-        // Flat: `root.seg1.seg2.seg3`
-        // Broken:
-        //   root
-        //       .seg1
-        //       .seg2
-        //       .seg3
-        let mut chain = root_doc;
-
-        for seg_doc in segment_docs {
-            chain = chain.append(RcDoc::line_()).append(seg_doc);
+        // Long root or has prefix: all segments on new lines when broken
+        let mut chain_doc = root_doc;
+        for seg in segments {
+            let seg_doc = segment_to_doc(seg, ctx, indent);
+            chain_doc = chain_doc.append(alloc.line_()).append(seg_doc);
         }
 
-        chain.nest(indent).group()
+        // Nest and group, then prepend prefix
+        let chain_doc = chain_doc.nest(indent).group();
+
+        match prefix {
+            Some(p) => p.append(chain_doc),
+            None => chain_doc,
+        }
     }
 }
 
 impl ToDoc for ast::BinExpr {
-    fn to_doc<'a>(&self, context: &RewriteContext<'_>, shape: Shape) -> RcDoc<'a, ()> {
+    fn to_doc<'a>(&self, ctx: &'a RewriteContext<'a>) -> Doc<'a> {
+        let alloc = &ctx.alloc;
+
         let lhs = match self.lhs() {
-            Some(e) => e.to_doc(context, shape),
-            None => return RcDoc::nil(),
+            Some(e) => e.to_doc(ctx),
+            None => return alloc.nil(),
         };
         let op = match self.op() {
-            Some(o) => context.snippet_node_or_token(&o.syntax()).to_string(),
+            Some(o) => ctx.snippet_node_or_token(&o.syntax()).to_string(),
             None => return lhs,
         };
         let rhs = match self.rhs() {
-            Some(e) => e.to_doc(context, shape),
+            Some(e) => e.to_doc(ctx),
             None => return lhs,
         };
 
-        let indent = context.config.indent_width as isize;
+        let indent = ctx.config.indent_width as isize;
 
-        lhs.append(RcDoc::line())
-            .append(RcDoc::text(op))
-            .append(RcDoc::text(" "))
+        lhs.append(alloc.line())
+            .append(alloc.text(op))
+            .append(alloc.text(" "))
             .append(rhs)
             .nest(indent)
             .group()
@@ -269,32 +239,34 @@ impl ToDoc for ast::BinExpr {
 }
 
 impl ToDoc for ast::UnExpr {
-    fn to_doc<'a>(&self, context: &RewriteContext<'_>, shape: Shape) -> RcDoc<'a, ()> {
+    fn to_doc<'a>(&self, ctx: &'a RewriteContext<'a>) -> Doc<'a> {
+        let alloc = &ctx.alloc;
+
         let op = match self.op() {
-            Some(o) => context.snippet(o.syntax().text_range()).trim().to_string(),
-            None => return RcDoc::nil(),
+            Some(o) => ctx.snippet(o.syntax().text_range()).trim().to_string(),
+            None => return alloc.nil(),
         };
         let expr = match self.expr() {
-            Some(e) => e.to_doc(context, shape),
-            None => return RcDoc::text(op),
+            Some(e) => e.to_doc(ctx),
+            None => return alloc.text(op),
         };
 
-        RcDoc::text(op).append(expr)
+        alloc.text(op).append(expr)
     }
 }
 
 impl ToDoc for ast::CallArg {
-    fn to_doc<'a>(&self, context: &RewriteContext<'_>, shape: Shape) -> RcDoc<'a, ()> {
+    fn to_doc<'a>(&self, ctx: &'a RewriteContext<'a>) -> Doc<'a> {
+        let alloc = &ctx.alloc;
+
         let expr = match self.expr() {
-            Some(e) => e.to_doc(context, shape),
-            None => return RcDoc::nil(),
+            Some(e) => e.to_doc(ctx),
+            None => return alloc.nil(),
         };
 
         if let Some(label) = self.label() {
-            let label_text = context.snippet(label.text_range()).trim().to_string();
-            RcDoc::text(label_text)
-                .append(RcDoc::text(": "))
-                .append(expr)
+            let label_text = ctx.snippet(label.text_range()).trim().to_string();
+            alloc.text(label_text).append(alloc.text(": ")).append(expr)
         } else {
             expr
         }
@@ -302,75 +274,75 @@ impl ToDoc for ast::CallArg {
 }
 
 impl ToDoc for ast::CallExpr {
-    fn to_doc<'a>(&self, context: &RewriteContext<'_>, shape: Shape) -> RcDoc<'a, ()> {
+    fn to_doc<'a>(&self, ctx: &'a RewriteContext<'a>) -> Doc<'a> {
+        let alloc = &ctx.alloc;
+
         let callee = match self.callee() {
-            Some(c) => c.to_doc(context, shape),
-            None => return RcDoc::nil(),
+            Some(c) => c.to_doc(ctx),
+            None => return alloc.nil(),
         };
 
         let args: Vec<_> = self
             .args()
-            .map(|args| args.into_iter().map(|a| a.to_doc(context, shape)).collect())
+            .map(|args| args.into_iter().map(|a| a.to_doc(ctx)).collect())
             .unwrap_or_default();
 
-        let indent = context.config.indent_width as isize;
-        callee.append(block_list("(", ")", args, indent, true))
+        let indent = ctx.config.indent_width as isize;
+        callee.append(block_list(ctx, "(", ")", args, indent, true))
     }
 }
 
 impl ToDoc for ast::MethodCallExpr {
-    fn to_doc<'a>(&self, context: &RewriteContext<'_>, shape: Shape) -> RcDoc<'a, ()> {
+    fn to_doc<'a>(&self, ctx: &'a RewriteContext<'a>) -> Doc<'a> {
         // Delegate to chain formatting which handles the entire chain at once
-        format_chain(
-            &ast::Expr::cast(self.syntax().clone()).unwrap(),
-            context,
-            shape,
-        )
+        format_chain(&ast::Expr::cast(self.syntax().clone()).unwrap(), ctx)
     }
 }
 
 impl ToDoc for ast::RecordField {
-    fn to_doc<'a>(&self, context: &RewriteContext<'_>, shape: Shape) -> RcDoc<'a, ()> {
+    fn to_doc<'a>(&self, ctx: &'a RewriteContext<'a>) -> Doc<'a> {
+        let alloc = &ctx.alloc;
+
         let label = match self.label() {
-            Some(l) => context.snippet(l.text_range()).trim().to_string(),
-            None => return RcDoc::nil(),
+            Some(l) => ctx.snippet(l.text_range()).trim().to_string(),
+            None => return alloc.nil(),
         };
         let expr = match self.expr() {
-            Some(e) => e.to_doc(context, shape),
-            None => return RcDoc::text(label),
+            Some(e) => e.to_doc(ctx),
+            None => return alloc.text(label),
         };
 
-        RcDoc::text(label).append(RcDoc::text(": ")).append(expr)
+        alloc.text(label).append(alloc.text(": ")).append(expr)
     }
 }
 
 impl ToDoc for ast::RecordInitExpr {
-    fn to_doc<'a>(&self, context: &RewriteContext<'_>, shape: Shape) -> RcDoc<'a, ()> {
+    fn to_doc<'a>(&self, ctx: &'a RewriteContext<'a>) -> Doc<'a> {
+        let alloc = &ctx.alloc;
+
         let path = match self.path() {
-            Some(p) => p.to_doc(context, shape),
-            None => return RcDoc::nil(),
+            Some(p) => p.to_doc(ctx),
+            None => return alloc.nil(),
         };
 
         let fields: Vec<_> = self
             .fields()
-            .map(|f| {
-                f.into_iter()
-                    .map(|field| field.to_doc(context, shape))
-                    .collect()
-            })
+            .map(|f| f.into_iter().map(|field| field.to_doc(ctx)).collect())
             .unwrap_or_default();
 
-        let indent = context.config.indent_width as isize;
-        path.append(RcDoc::text(" "))
-            .append(block_list_spaced("{", "}", fields, indent, true))
+        let indent = ctx.config.indent_width as isize;
+        path.append(alloc.text(" "))
+            .append(block_list_spaced(ctx, "{", "}", fields, indent, true))
     }
 }
 
 impl ToDoc for ast::AssignExpr {
-    fn to_doc<'a>(&self, context: &RewriteContext<'_>, shape: Shape) -> RcDoc<'a, ()> {
+    fn to_doc<'a>(&self, ctx: &'a RewriteContext<'a>) -> Doc<'a> {
+        let alloc = &ctx.alloc;
+
         let lhs = match self.lhs_expr() {
-            Some(e) => e.to_doc(context, shape),
-            None => return RcDoc::nil(),
+            Some(e) => e.to_doc(ctx),
+            None => return alloc.nil(),
         };
 
         let rhs_expr = match self.rhs_expr() {
@@ -378,150 +350,146 @@ impl ToDoc for ast::AssignExpr {
             None => return lhs,
         };
 
-        // If RHS is a chain, format with prefix awareness
-        let rhs = if is_chain(&rhs_expr) {
-            let prefix_width = {
-                let mut buf = Vec::new();
-                let _ = lhs.clone().render(usize::MAX, &mut buf);
-                String::from_utf8(buf).map(|s| s.len()).unwrap_or(0) + 3 // + " = "
-            };
-            format_chain_with_prefix(&rhs_expr, prefix_width, context, shape)
+        // If RHS is a chain, use BlockDoc for intelligent breaking
+        if is_chain(&rhs_expr) {
+            let prefix = lhs.append(alloc.text(" = "));
+            format_chain_with_prefix(prefix, &rhs_expr, ctx)
         } else {
-            rhs_expr.to_doc(context, shape)
-        };
-
-        lhs.append(RcDoc::text(" = ")).append(rhs)
+            lhs.append(alloc.text(" = ")).append(rhs_expr.to_doc(ctx))
+        }
     }
 }
 
 impl ToDoc for ast::AugAssignExpr {
-    fn to_doc<'a>(&self, context: &RewriteContext<'_>, shape: Shape) -> RcDoc<'a, ()> {
+    fn to_doc<'a>(&self, ctx: &'a RewriteContext<'a>) -> Doc<'a> {
+        let alloc = &ctx.alloc;
+
         let lhs = match self.lhs_expr() {
-            Some(e) => e.to_doc(context, shape),
-            None => return RcDoc::nil(),
+            Some(e) => e.to_doc(ctx),
+            None => return alloc.nil(),
         };
         let op = match self.op() {
-            Some(o) => context.snippet_node_or_token(&o.syntax()).to_string(),
+            Some(o) => ctx.snippet_node_or_token(&o.syntax()).to_string(),
             None => return lhs,
         };
         let rhs = match self.rhs_expr() {
-            Some(e) => e.to_doc(context, shape),
+            Some(e) => e.to_doc(ctx),
             None => return lhs,
         };
 
-        lhs.append(RcDoc::text(" "))
-            .append(RcDoc::text(op))
-            .append(RcDoc::text("= "))
+        lhs.append(alloc.text(" "))
+            .append(alloc.text(op))
+            .append(alloc.text("= "))
             .append(rhs)
     }
 }
 
 impl ToDoc for ast::PathExpr {
-    fn to_doc<'a>(&self, context: &RewriteContext<'_>, shape: Shape) -> RcDoc<'a, ()> {
+    fn to_doc<'a>(&self, ctx: &'a RewriteContext<'a>) -> Doc<'a> {
         match self.path() {
-            Some(p) => p.to_doc(context, shape),
-            None => RcDoc::nil(),
+            Some(p) => p.to_doc(ctx),
+            None => ctx.alloc.nil(),
         }
     }
 }
 
 impl ToDoc for ast::FieldExpr {
-    fn to_doc<'a>(&self, context: &RewriteContext<'_>, shape: Shape) -> RcDoc<'a, ()> {
+    fn to_doc<'a>(&self, ctx: &'a RewriteContext<'a>) -> Doc<'a> {
         // Delegate to chain formatting which handles the entire chain at once
-        format_chain(
-            &ast::Expr::cast(self.syntax().clone()).unwrap(),
-            context,
-            shape,
-        )
+        format_chain(&ast::Expr::cast(self.syntax().clone()).unwrap(), ctx)
     }
 }
 
 impl ToDoc for ast::IndexExpr {
-    fn to_doc<'a>(&self, context: &RewriteContext<'_>, shape: Shape) -> RcDoc<'a, ()> {
+    fn to_doc<'a>(&self, ctx: &'a RewriteContext<'a>) -> Doc<'a> {
+        let alloc = &ctx.alloc;
+
         let expr = match self.expr() {
-            Some(e) => e.to_doc(context, shape),
-            None => return RcDoc::nil(),
+            Some(e) => e.to_doc(ctx),
+            None => return alloc.nil(),
         };
         let index = match self.index() {
-            Some(i) => i.to_doc(context, shape),
+            Some(i) => i.to_doc(ctx),
             None => return expr,
         };
 
-        expr.append(RcDoc::text("["))
+        expr.append(alloc.text("["))
             .append(index)
-            .append(RcDoc::text("]"))
+            .append(alloc.text("]"))
     }
 }
 
 impl ToDoc for ast::LitExpr {
-    fn to_doc<'a>(&self, context: &RewriteContext<'_>, _shape: Shape) -> RcDoc<'a, ()> {
+    fn to_doc<'a>(&self, ctx: &'a RewriteContext<'a>) -> Doc<'a> {
         match self.lit() {
-            Some(l) => RcDoc::text(context.snippet_trimmed(&l)),
-            None => RcDoc::nil(),
+            Some(l) => ctx.alloc.text(ctx.snippet_trimmed(&l)),
+            None => ctx.alloc.nil(),
         }
     }
 }
 
 impl ToDoc for ast::IfExpr {
-    fn to_doc<'a>(&self, context: &RewriteContext<'_>, shape: Shape) -> RcDoc<'a, ()> {
+    fn to_doc<'a>(&self, ctx: &'a RewriteContext<'a>) -> Doc<'a> {
+        let alloc = &ctx.alloc;
+
         let cond = match self.cond() {
-            Some(c) => c.to_doc(context, shape),
-            None => return RcDoc::nil(),
+            Some(c) => c.to_doc(ctx),
+            None => return alloc.nil(),
         };
         let then = match self.then() {
-            Some(t) => t.to_doc(context, shape),
-            None => return RcDoc::text("if ").append(cond),
+            Some(t) => t.to_doc(ctx),
+            None => return alloc.text("if ").append(cond),
         };
 
         let else_doc = self
             .else_()
-            .map(|e| RcDoc::text(" else ").append(e.to_doc(context, shape)))
-            .unwrap_or_else(RcDoc::nil);
+            .map(|e| alloc.text(" else ").append(e.to_doc(ctx)))
+            .unwrap_or_else(|| alloc.nil());
 
-        RcDoc::text("if ")
+        alloc
+            .text("if ")
             .append(cond)
-            .append(RcDoc::text(" "))
+            .append(alloc.text(" "))
             .append(then)
             .append(else_doc)
     }
 }
 
 impl ToDoc for ast::UsesClause {
-    fn to_doc<'a>(&self, context: &RewriteContext<'_>, shape: Shape) -> RcDoc<'a, ()> {
-        if let Some(params) = self.param_list() {
-            let params_docs: Vec<_> = params
-                .into_iter()
-                .map(|p| p.to_doc(context, shape))
-                .collect();
+    fn to_doc<'a>(&self, ctx: &'a RewriteContext<'a>) -> Doc<'a> {
+        let alloc = &ctx.alloc;
 
-            let indent = context.config.indent_width as isize;
-            RcDoc::text("uses ").append(block_list("(", ")", params_docs, indent, true))
+        if let Some(params) = self.param_list() {
+            let params_docs: Vec<_> = params.into_iter().map(|p| p.to_doc(ctx)).collect();
+
+            let indent = ctx.config.indent_width as isize;
+            alloc
+                .text("uses ")
+                .append(block_list(ctx, "(", ")", params_docs, indent, true))
         } else if let Some(param) = self.param() {
-            RcDoc::text("uses ").append(param.to_doc(context, shape))
+            alloc.text("uses ").append(param.to_doc(ctx))
         } else {
-            RcDoc::nil()
+            alloc.nil()
         }
     }
 }
 
 impl ToDoc for ast::UsesParam {
-    fn to_doc<'a>(&self, context: &RewriteContext<'_>, shape: Shape) -> RcDoc<'a, ()> {
-        let mut doc = RcDoc::nil();
+    fn to_doc<'a>(&self, ctx: &'a RewriteContext<'a>) -> Doc<'a> {
+        let alloc = &ctx.alloc;
+        let mut doc = alloc.nil();
 
         if self.mut_token().is_some() {
-            doc = doc.append(RcDoc::text("mut "));
+            doc = doc.append(alloc.text("mut "));
         }
 
         if let Some(name) = self.name() {
-            let name_text = context
-                .snippet(name.syntax().text_range())
-                .trim()
-                .to_string();
-            doc = doc.append(RcDoc::text(name_text)).append(RcDoc::text(": "));
+            let name_text = ctx.snippet(name.syntax().text_range()).trim().to_string();
+            doc = doc.append(alloc.text(name_text)).append(alloc.text(": "));
         }
 
         if let Some(path) = self.path() {
-            doc = doc.append(path.to_doc(context, shape));
+            doc = doc.append(path.to_doc(ctx));
         }
 
         doc
@@ -529,10 +497,12 @@ impl ToDoc for ast::UsesParam {
 }
 
 impl ToDoc for ast::MatchExpr {
-    fn to_doc<'a>(&self, context: &RewriteContext<'_>, shape: Shape) -> RcDoc<'a, ()> {
+    fn to_doc<'a>(&self, ctx: &'a RewriteContext<'a>) -> Doc<'a> {
+        let alloc = &ctx.alloc;
+
         let scrutinee = match self.scrutinee() {
-            Some(s) => s.to_doc(context, shape),
-            None => return RcDoc::nil(),
+            Some(s) => s.to_doc(ctx),
+            None => return alloc.nil(),
         };
 
         let arms: Vec<_> = self
@@ -540,12 +510,12 @@ impl ToDoc for ast::MatchExpr {
             .map(|arms| {
                 arms.into_iter()
                     .filter_map(|arm| {
-                        let pat = arm.pat()?.to_doc(context, shape);
-                        let body = arm.body()?.to_doc(context, shape);
+                        let pat = arm.pat()?.to_doc(ctx);
+                        let body = arm.body()?.to_doc(ctx);
                         Some(
-                            pat.append(RcDoc::text(" => "))
+                            pat.append(alloc.text(" => "))
                                 .append(body)
-                                .append(RcDoc::text(",")),
+                                .append(alloc.text(",")),
                         )
                     })
                     .collect()
@@ -553,124 +523,126 @@ impl ToDoc for ast::MatchExpr {
             .unwrap_or_default();
 
         if arms.is_empty() {
-            return RcDoc::text("match ")
+            return alloc
+                .text("match ")
                 .append(scrutinee)
-                .append(RcDoc::text(" {}"));
+                .append(alloc.text(" {}"));
         }
 
-        let arms_doc = RcDoc::concat(arms.into_iter().map(|arm| RcDoc::hardline().append(arm)));
+        let arms_doc = alloc.concat(arms.into_iter().map(|arm| alloc.hardline().append(arm)));
 
-        RcDoc::text("match ")
+        alloc
+            .text("match ")
             .append(scrutinee)
-            .append(RcDoc::text(" {"))
-            .append(arms_doc.nest(context.config.indent_width as isize))
-            .append(RcDoc::hardline())
-            .append(RcDoc::text("}"))
+            .append(alloc.text(" {"))
+            .append(arms_doc.nest(ctx.config.indent_width as isize))
+            .append(alloc.hardline())
+            .append(alloc.text("}"))
     }
 }
 
 impl ToDoc for ast::WithParam {
-    fn to_doc<'a>(&self, context: &RewriteContext<'_>, shape: Shape) -> RcDoc<'a, ()> {
+    fn to_doc<'a>(&self, ctx: &'a RewriteContext<'a>) -> Doc<'a> {
+        let alloc = &ctx.alloc;
+
         let path = match self.path() {
-            Some(p) => p.to_doc(context, shape),
-            None => return RcDoc::nil(),
+            Some(p) => p.to_doc(ctx),
+            None => return alloc.nil(),
         };
         let value = match self.value_expr() {
-            Some(v) => v.to_doc(context, shape),
+            Some(v) => v.to_doc(ctx),
             None => return path,
         };
 
-        path.append(RcDoc::text(" = ")).append(value)
+        path.append(alloc.text(" = ")).append(value)
     }
 }
 
 impl ToDoc for ast::WithExpr {
-    fn to_doc<'a>(&self, context: &RewriteContext<'_>, shape: Shape) -> RcDoc<'a, ()> {
+    fn to_doc<'a>(&self, ctx: &'a RewriteContext<'a>) -> Doc<'a> {
+        let alloc = &ctx.alloc;
+
         let params: Vec<_> = self
             .params()
-            .map(|p| {
-                p.into_iter()
-                    .map(|param| param.to_doc(context, shape))
-                    .collect()
-            })
+            .map(|p| p.into_iter().map(|param| param.to_doc(ctx)).collect())
             .unwrap_or_default();
 
-        let indent = context.config.indent_width as isize;
-        let params_doc = block_list("(", ")", params, indent, true);
+        let indent = ctx.config.indent_width as isize;
+        let params_doc = block_list(ctx, "(", ")", params, indent, true);
 
         let body = match self.body() {
-            Some(b) => b.to_doc(context, shape),
-            None => return RcDoc::text("with ").append(params_doc),
+            Some(b) => b.to_doc(ctx),
+            None => return alloc.text("with ").append(params_doc),
         };
 
-        RcDoc::text("with ")
+        alloc
+            .text("with ")
             .append(params_doc)
-            .append(RcDoc::text(" "))
+            .append(alloc.text(" "))
             .append(body)
     }
 }
 
 impl ToDoc for ast::TupleExpr {
-    fn to_doc<'a>(&self, context: &RewriteContext<'_>, shape: Shape) -> RcDoc<'a, ()> {
-        let elems: Vec<_> = self
-            .elems()
-            .flatten()
-            .map(|e| e.to_doc(context, shape))
-            .collect();
+    fn to_doc<'a>(&self, ctx: &'a RewriteContext<'a>) -> Doc<'a> {
+        let elems: Vec<_> = self.elems().flatten().map(|e| e.to_doc(ctx)).collect();
 
-        let indent = context.config.indent_width as isize;
-        block_list("(", ")", elems, indent, true)
+        let indent = ctx.config.indent_width as isize;
+        block_list(ctx, "(", ")", elems, indent, true)
     }
 }
 
 impl ToDoc for ast::ArrayExpr {
-    fn to_doc<'a>(&self, context: &RewriteContext<'_>, shape: Shape) -> RcDoc<'a, ()> {
-        let elems: Vec<_> = self
-            .elems()
-            .flatten()
-            .map(|e| e.to_doc(context, shape))
-            .collect();
+    fn to_doc<'a>(&self, ctx: &'a RewriteContext<'a>) -> Doc<'a> {
+        let elems: Vec<_> = self.elems().flatten().map(|e| e.to_doc(ctx)).collect();
 
-        let indent = context.config.indent_width as isize;
-        block_list("[", "]", elems, indent, true)
+        let indent = ctx.config.indent_width as isize;
+        block_list(ctx, "[", "]", elems, indent, true)
     }
 }
 
 impl ToDoc for ast::ArrayRepExpr {
-    fn to_doc<'a>(&self, context: &RewriteContext<'_>, shape: Shape) -> RcDoc<'a, ()> {
+    fn to_doc<'a>(&self, ctx: &'a RewriteContext<'a>) -> Doc<'a> {
+        let alloc = &ctx.alloc;
+
         let val = match self.val() {
-            Some(v) => v.to_doc(context, shape),
-            None => return RcDoc::nil(),
+            Some(v) => v.to_doc(ctx),
+            None => return alloc.nil(),
         };
         let len = match self.len() {
-            Some(l) => l.to_doc(context, shape),
-            None => return RcDoc::text("[").append(val).append(RcDoc::text("]")),
+            Some(l) => l.to_doc(ctx),
+            None => return alloc.text("[").append(val).append(alloc.text("]")),
         };
 
-        RcDoc::text("[")
+        alloc
+            .text("[")
             .append(val)
-            .append(RcDoc::text("; "))
+            .append(alloc.text("; "))
             .append(len)
-            .append(RcDoc::text("]"))
+            .append(alloc.text("]"))
     }
 }
 
 impl ToDoc for ast::ParenExpr {
-    fn to_doc<'a>(&self, context: &RewriteContext<'_>, shape: Shape) -> RcDoc<'a, ()> {
+    fn to_doc<'a>(&self, ctx: &'a RewriteContext<'a>) -> Doc<'a> {
+        let alloc = &ctx.alloc;
+
         let expr = match self.expr() {
-            Some(e) => e.to_doc(context, shape),
-            None => return RcDoc::text("()"),
+            Some(e) => e.to_doc(ctx),
+            None => return alloc.text("()"),
         };
 
-        RcDoc::text("(").append(expr).append(RcDoc::text(")"))
+        alloc.text("(").append(expr).append(alloc.text(")"))
     }
 }
 
 impl ToDoc for ast::BlockExpr {
-    fn to_doc<'a>(&self, context: &RewriteContext<'_>, shape: Shape) -> RcDoc<'a, ()> {
+    fn to_doc<'a>(&self, ctx: &'a RewriteContext<'a>) -> Doc<'a> {
         use parser::TextRange;
         use parser::syntax_kind::SyntaxKind;
         use parser::syntax_node::NodeOrToken;
+
+        let alloc = &ctx.alloc;
 
         let has_stmt = self.stmts().next().is_some();
         let has_item = self.items().next().is_some();
@@ -680,12 +652,12 @@ impl ToDoc for ast::BlockExpr {
             .any(|child| matches!(child, NodeOrToken::Token(t) if t.kind() == SyntaxKind::Comment));
 
         if !has_stmt && !has_item && !has_comment {
-            return RcDoc::text("{}");
+            return alloc.text("{}");
         }
 
         // Collect all block elements with their source ranges for blank line detection
         struct BlockElement<'a> {
-            doc: RcDoc<'a, ()>,
+            doc: Doc<'a>,
             range: TextRange,
         }
 
@@ -710,12 +682,12 @@ impl ToDoc for ast::BlockExpr {
                     let range = node.text_range();
                     if let Some(stmt) = ast::Stmt::cast(node.clone()) {
                         elements.push(BlockElement {
-                            doc: stmt.to_doc(context, shape),
+                            doc: stmt.to_doc(ctx),
                             range,
                         });
                     } else if let Some(item) = ast::Item::cast(node.clone()) {
                         elements.push(BlockElement {
-                            doc: item.to_doc(context, shape),
+                            doc: item.to_doc(ctx),
                             range,
                         });
                     }
@@ -723,21 +695,18 @@ impl ToDoc for ast::BlockExpr {
                 NodeOrToken::Token(tok) => {
                     if tok.kind() == SyntaxKind::Comment {
                         let comment_doc =
-                            RcDoc::text(context.snippet(tok.text_range()).trim().to_string());
+                            alloc.text(ctx.snippet(tok.text_range()).trim().to_string());
 
                         // If the comment is on the same line as the previous element, treat it
                         // as a trailing comment on that line instead of forcing a new line.
                         if let Some(last) = elements.last_mut() {
                             let gap = TextRange::new(last.range.end(), tok.text_range().start());
-                            let gap_text = context.snippet(gap);
+                            let gap_text = ctx.snippet(gap);
                             let has_newline = gap_text.chars().any(|c| c == '\n');
 
                             if !has_newline {
-                                last.doc = last
-                                    .doc
-                                    .clone()
-                                    .append(RcDoc::text(" "))
-                                    .append(comment_doc);
+                                last.doc =
+                                    last.doc.clone().append(alloc.text(" ")).append(comment_doc);
                                 last.range =
                                     TextRange::new(last.range.start(), tok.text_range().end());
                                 continue;
@@ -755,19 +724,19 @@ impl ToDoc for ast::BlockExpr {
         }
 
         if elements.is_empty() {
-            return RcDoc::text("{}");
+            return alloc.text("{}");
         }
 
         // Build the inner document, inserting extra blank lines where the source had them
-        let mut inner = RcDoc::nil();
+        let mut inner = alloc.nil();
         let mut prev_end: Option<parser::TextSize> = None;
-        let indent = context.config.indent_width as isize;
+        let indent = ctx.config.indent_width as isize;
 
         for elem in elements {
             // Check if there was a blank line before this element
             let needs_blank_line = if let Some(prev) = prev_end {
                 let gap = TextRange::new(prev, elem.range.start());
-                let gap_text = context.snippet(gap);
+                let gap_text = ctx.snippet(gap);
                 gap_text.chars().filter(|c| *c == '\n').count() >= 2
             } else {
                 false
@@ -775,15 +744,16 @@ impl ToDoc for ast::BlockExpr {
 
             if needs_blank_line {
                 // Extra hardline for blank line (will have trailing whitespace - cleaned up in post-processing)
-                inner = inner.append(RcDoc::hardline());
+                inner = inner.append(alloc.hardline());
             }
-            inner = inner.append(RcDoc::hardline()).append(elem.doc);
+            inner = inner.append(alloc.hardline()).append(elem.doc);
             prev_end = Some(elem.range.end());
         }
 
-        RcDoc::text("{")
+        alloc
+            .text("{")
             .append(inner.nest(indent))
-            .append(RcDoc::hardline())
-            .append(RcDoc::text("}"))
+            .append(alloc.hardline())
+            .append(alloc.text("}"))
     }
 }

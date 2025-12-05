@@ -1,13 +1,16 @@
+use pretty::RcAllocator;
+
 use crate::Config;
 use parser::{SyntaxToken, TextRange, ast::prelude::AstNode, syntax_node::NodeOrToken};
 
-/// Shared, read-only context passed to [`Rewrite`] implementations.
-#[derive(Debug)]
+/// Shared, read-only context passed to [`ToDoc`] implementations.
 pub struct RewriteContext<'a> {
     /// Global formatting configuration.
     pub config: &'a Config,
     /// Original source text of the file being formatted.
     pub source: &'a str,
+    /// Document allocator for the pretty printer.
+    pub alloc: RcAllocator,
 }
 
 impl<'a> RewriteContext<'a> {

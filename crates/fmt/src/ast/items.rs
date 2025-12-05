@@ -1,39 +1,44 @@
 //! Formatting for top-level items (functions, structs, enums, traits, etc.)
 
-use pretty::RcDoc;
+use pretty::DocAllocator;
 
-use crate::{RewriteContext, Shape};
+use crate::RewriteContext;
 use parser::ast::{self, ItemKind, ItemModifierOwner, TraitItemKind, prelude::AstNode};
 
-use super::types::{ToDoc, block_list, block_list_spaced, intersperse};
+use super::types::{Doc, ToDoc, block_list, block_list_spaced, intersperse};
 
 /// Helper to build attributes document for a node.
 fn attrs_doc<'a, N: ast::AttrListOwner + AstNode>(
     node: &N,
-    context: &RewriteContext<'_>,
-) -> RcDoc<'a, ()> {
+    ctx: &'a RewriteContext<'a>,
+) -> Doc<'a> {
+    let alloc = &ctx.alloc;
     if let Some(attrs) = node.attr_list() {
-        RcDoc::text(
-            context
-                .snippet(attrs.syntax().text_range())
-                .trim_end()
-                .to_string(),
-        )
-        .append(RcDoc::hardline())
+        alloc
+            .text(
+                ctx.snippet(attrs.syntax().text_range())
+                    .trim_end()
+                    .to_string(),
+            )
+            .append(alloc.hardline())
     } else {
-        RcDoc::nil()
+        alloc.nil()
     }
 }
 
 /// Helper to build item modifier document (pub, unsafe).
-fn modifier_doc<'a, N: ItemModifierOwner + AstNode>(node: &N) -> RcDoc<'a, ()> {
-    let mut doc = RcDoc::nil();
+fn modifier_doc<'a, N: ItemModifierOwner + AstNode>(
+    node: &N,
+    ctx: &'a RewriteContext<'a>,
+) -> Doc<'a> {
+    let alloc = &ctx.alloc;
+    let mut doc = alloc.nil();
     if let Some(modifier) = node.modifier() {
         if modifier.pub_kw().is_some() {
-            doc = doc.append(RcDoc::text("pub "));
+            doc = doc.append(alloc.text("pub "));
         }
         if modifier.unsafe_kw().is_some() {
-            doc = doc.append(RcDoc::text("unsafe "));
+            doc = doc.append(alloc.text("unsafe "));
         }
     }
     doc
@@ -42,83 +47,87 @@ fn modifier_doc<'a, N: ItemModifierOwner + AstNode>(node: &N) -> RcDoc<'a, ()> {
 /// Helper to build generics document.
 fn generics_doc<'a, N: ast::GenericParamsOwner + AstNode>(
     node: &N,
-    context: &RewriteContext<'_>,
-    shape: Shape,
-) -> RcDoc<'a, ()> {
+    ctx: &'a RewriteContext<'a>,
+) -> Doc<'a> {
     if let Some(generics) = node.generic_params() {
-        generics.to_doc(context, shape)
+        generics.to_doc(ctx)
     } else {
-        RcDoc::nil()
+        ctx.alloc.nil()
     }
 }
 
 /// Helper to build where clause document.
 fn where_doc<'a, N: ast::WhereClauseOwner + AstNode>(
     node: &N,
-    context: &RewriteContext<'_>,
-    shape: Shape,
-) -> RcDoc<'a, ()> {
+    ctx: &'a RewriteContext<'a>,
+) -> Doc<'a> {
+    let alloc = &ctx.alloc;
+
     if let Some(where_clause) = node.where_clause() {
         let preds: Vec<_> = where_clause
             .into_iter()
-            .map(|pred| pred.to_doc(context, shape))
+            .map(|pred| pred.to_doc(ctx))
             .collect();
 
         if preds.is_empty() {
-            return RcDoc::nil();
+            return alloc.nil();
         }
 
-        let sep = RcDoc::text(",").append(RcDoc::line());
-        let preds_doc = intersperse(preds, sep).group();
+        let sep = alloc.text(",").append(alloc.line());
+        let preds_doc = intersperse(alloc, preds, sep).group();
 
-        let where_block = RcDoc::text("where")
+        let where_block = alloc
+            .text("where")
             .append(
-                RcDoc::line()
+                alloc
+                    .line()
                     .append(preds_doc)
-                    .nest(context.config.clause_indent as isize),
+                    .nest(ctx.config.clause_indent as isize),
             )
             .group();
 
-        if context.config.where_new_line {
-            RcDoc::hardline().append(where_block)
+        if ctx.config.where_new_line {
+            alloc.hardline().append(where_block)
         } else {
-            RcDoc::line().append(where_block).group()
+            alloc.line().append(where_block).group()
         }
     } else {
-        RcDoc::nil()
+        alloc.nil()
     }
 }
 
 /// Format a block of items with proper indentation.
 fn block_items_doc<'a, T: ToDoc>(
     items: impl IntoIterator<Item = T>,
-    context: &RewriteContext<'_>,
-    shape: Shape,
-) -> RcDoc<'a, ()> {
+    ctx: &'a RewriteContext<'a>,
+) -> Doc<'a> {
+    let alloc = &ctx.alloc;
     let items: Vec<_> = items.into_iter().collect();
 
     if items.is_empty() {
-        return RcDoc::text("{}");
+        return alloc.text("{}");
     }
 
-    let inner = RcDoc::concat(
+    let inner = alloc.concat(
         items
             .into_iter()
-            .map(|item| RcDoc::hardline().append(item.to_doc(context, shape))),
+            .map(|item| alloc.hardline().append(item.to_doc(ctx))),
     );
 
-    RcDoc::text("{")
-        .append(inner.nest(context.config.indent_width as isize))
-        .append(RcDoc::hardline())
-        .append(RcDoc::text("}"))
+    alloc
+        .text("{")
+        .append(inner.nest(ctx.config.indent_width as isize))
+        .append(alloc.hardline())
+        .append(alloc.text("}"))
 }
 
 impl ToDoc for ast::Root {
-    fn to_doc<'a>(&self, context: &RewriteContext<'_>, shape: Shape) -> RcDoc<'a, ()> {
+    fn to_doc<'a>(&self, ctx: &'a RewriteContext<'a>) -> Doc<'a> {
         use parser::syntax_kind::SyntaxKind;
         use parser::syntax_node::NodeOrToken;
 
-        let mut result = RcDoc::nil();
+        let alloc = &ctx.alloc;
+        let mut result = alloc.nil();
         let mut pending_newlines = 0usize;
         let mut is_first = true;
 
@@ -128,23 +137,23 @@ impl ToDoc for ast::Root {
                     if !is_first {
                         let newlines_to_add = pending_newlines.max(1);
                         for _ in 0..newlines_to_add {
-                            result = result.append(RcDoc::hardline());
+                            result = result.append(alloc.hardline());
                         }
                     }
                     pending_newlines = 0;
                     is_first = false;
 
                     if let Some(item_list) = ast::ItemList::cast(node.clone()) {
-                        result = result.append(item_list.to_doc(context, shape));
+                        result = result.append(item_list.to_doc(ctx));
                     } else {
-                        result = result
-                            .append(RcDoc::text(context.snippet(node.text_range()).to_string()));
+                        result =
+                            result.append(alloc.text(ctx.snippet(node.text_range()).to_string()));
                     }
                 }
                 NodeOrToken::Token(token) => {
                     match token.kind() {
                         SyntaxKind::Newline => {
-                            let text = context.snippet(token.text_range());
+                            let text = ctx.snippet(token.text_range());
                             pending_newlines = text.chars().filter(|c| *c == '\n').count();
                         }
                         SyntaxKind::WhiteSpace => {
@@ -155,19 +164,19 @@ impl ToDoc for ast::Root {
                             if !is_first {
                                 let newlines_to_add = pending_newlines.max(1);
                                 for _ in 0..newlines_to_add {
-                                    result = result.append(RcDoc::hardline());
+                                    result = result.append(alloc.hardline());
                                 }
                             }
                             pending_newlines = 0;
                             is_first = false;
 
-                            let mut text = context.snippet(token.text_range()).to_string();
+                            let mut text = ctx.snippet(token.text_range()).to_string();
                             if token.kind() == SyntaxKind::Comment
                                 || token.kind() == SyntaxKind::DocComment
                             {
                                 text = text.trim_end().to_string();
                             }
-                            result = result.append(RcDoc::text(text));
+                            result = result.append(alloc.text(text));
                         }
                     }
                 }
@@ -178,11 +187,12 @@ impl ToDoc for ast::Root {
 }
 
 impl ToDoc for ast::ItemList {
-    fn to_doc<'a>(&self, context: &RewriteContext<'_>, shape: Shape) -> RcDoc<'a, ()> {
+    fn to_doc<'a>(&self, ctx: &'a RewriteContext<'a>) -> Doc<'a> {
         use parser::syntax_kind::SyntaxKind;
         use parser::syntax_node::NodeOrToken;
 
-        let mut result = RcDoc::nil();
+        let alloc = &ctx.alloc;
+        let mut result = alloc.nil();
         let mut pending_newlines = 0usize;
         let mut is_first = true;
 
@@ -195,34 +205,33 @@ impl ToDoc for ast::ItemList {
                             // At least one newline between items
                             let newlines_to_add = pending_newlines.max(1);
                             for _ in 0..newlines_to_add {
-                                result = result.append(RcDoc::hardline());
+                                result = result.append(alloc.hardline());
                             }
                         }
                         pending_newlines = 0;
                         is_first = false;
-                        result = result.append(item.to_doc(context, shape));
+                        result = result.append(item.to_doc(ctx));
                     } else {
-                        result = result
-                            .append(RcDoc::text(context.snippet(node.text_range()).to_string()));
+                        result =
+                            result.append(alloc.text(ctx.snippet(node.text_range()).to_string()));
                     }
                 }
                 NodeOrToken::Token(token) => {
                     if token.kind() == SyntaxKind::Newline {
-                        let text = context.snippet(token.text_range());
+                        let text = ctx.snippet(token.text_range());
                         pending_newlines = text.chars().filter(|c| *c == '\n').count();
                     } else if token.kind() == SyntaxKind::Comment {
                         // Add newlines that were accumulated from whitespace
                         if !is_first {
                             let newlines_to_add = pending_newlines.max(1);
                             for _ in 0..newlines_to_add {
-                                result = result.append(RcDoc::hardline());
+                                result = result.append(alloc.hardline());
                             }
                         }
                         pending_newlines = 0;
                         is_first = false;
-                        result = result.append(RcDoc::text(
-                            context.snippet(token.text_range()).trim().to_string(),
-                        ));
+                        result = result
+                            .append(alloc.text(ctx.snippet(token.text_range()).trim().to_string()));
                     } else {
                         // Skip other tokens
                     }
@@ -234,60 +243,59 @@ impl ToDoc for ast::ItemList {
 }
 
 impl ToDoc for ast::Item {
-    fn to_doc<'a>(&self, context: &RewriteContext<'_>, shape: Shape) -> RcDoc<'a, ()> {
+    fn to_doc<'a>(&self, ctx: &'a RewriteContext<'a>) -> Doc<'a> {
         match self.kind() {
-            Some(ItemKind::Mod(mod_)) => mod_.to_doc(context, shape),
-            Some(ItemKind::Func(func)) => func.to_doc(context, shape),
-            Some(ItemKind::Struct(struct_)) => struct_.to_doc(context, shape),
-            Some(ItemKind::Contract(contract)) => contract.to_doc(context, shape),
-            Some(ItemKind::Enum(enum_)) => enum_.to_doc(context, shape),
-            Some(ItemKind::TypeAlias(type_alias)) => type_alias.to_doc(context, shape),
-            Some(ItemKind::Impl(impl_)) => impl_.to_doc(context, shape),
-            Some(ItemKind::Trait(trait_)) => trait_.to_doc(context, shape),
-            Some(ItemKind::ImplTrait(impl_trait)) => impl_trait.to_doc(context, shape),
-            Some(ItemKind::Const(const_)) => const_.to_doc(context, shape),
-            Some(ItemKind::Use(use_)) => use_.to_doc(context, shape),
-            Some(ItemKind::Extern(extern_)) => extern_.to_doc(context, shape),
-            None => RcDoc::nil(),
+            Some(ItemKind::Mod(mod_)) => mod_.to_doc(ctx),
+            Some(ItemKind::Func(func)) => func.to_doc(ctx),
+            Some(ItemKind::Struct(struct_)) => struct_.to_doc(ctx),
+            Some(ItemKind::Contract(contract)) => contract.to_doc(ctx),
+            Some(ItemKind::Enum(enum_)) => enum_.to_doc(ctx),
+            Some(ItemKind::TypeAlias(type_alias)) => type_alias.to_doc(ctx),
+            Some(ItemKind::Impl(impl_)) => impl_.to_doc(ctx),
+            Some(ItemKind::Trait(trait_)) => trait_.to_doc(ctx),
+            Some(ItemKind::ImplTrait(impl_trait)) => impl_trait.to_doc(ctx),
+            Some(ItemKind::Const(const_)) => const_.to_doc(ctx),
+            Some(ItemKind::Use(use_)) => use_.to_doc(ctx),
+            Some(ItemKind::Extern(extern_)) => extern_.to_doc(ctx),
+            None => ctx.alloc.nil(),
         }
     }
 }
 
 impl ToDoc for ast::FuncSignature {
-    fn to_doc<'a>(&self, context: &RewriteContext<'_>, shape: Shape) -> RcDoc<'a, ()> {
+    fn to_doc<'a>(&self, ctx: &'a RewriteContext<'a>) -> Doc<'a> {
+        let alloc = &ctx.alloc;
+
         let name = match self.name() {
-            Some(n) => context.token(&n).to_string(),
-            None => return RcDoc::text("fn"),
+            Some(n) => ctx.token(&n).to_string(),
+            None => return alloc.text("fn"),
         };
 
-        let generics = generics_doc(self, context, shape);
+        let generics = generics_doc(self, ctx);
 
         let params: Vec<_> = self
             .params()
-            .map(|p| {
-                p.into_iter()
-                    .map(|param| param.to_doc(context, shape))
-                    .collect()
-            })
+            .map(|p| p.into_iter().map(|param| param.to_doc(ctx)).collect())
             .unwrap_or_default();
 
-        let indent = context.config.indent_width as isize;
-        let params_doc = block_list("(", ")", params, indent, true);
+        let indent = ctx.config.indent_width as isize;
+        let params_doc = block_list(ctx, "(", ")", params, indent, true);
 
         let ret_doc = self
             .ret_ty()
-            .map(|ty| RcDoc::text(" -> ").append(ty.to_doc(context, shape)))
-            .unwrap_or_else(RcDoc::nil);
+            .map(|ty| alloc.text(" -> ").append(ty.to_doc(ctx)))
+            .unwrap_or_else(|| alloc.nil());
 
         let uses_doc = self
             .uses_clause()
-            .map(|u| RcDoc::text(" ").append(u.to_doc(context, shape)))
-            .unwrap_or_else(RcDoc::nil);
+            .map(|u| alloc.text(" ").append(u.to_doc(ctx)))
+            .unwrap_or_else(|| alloc.nil());
 
-        let where_clause = where_doc(self, context, shape);
+        let where_clause = where_doc(self, ctx);
 
-        RcDoc::text("fn ")
-            .append(RcDoc::text(name))
+        alloc
+            .text("fn ")
+            .append(alloc.text(name))
             .append(generics)
             .append(params_doc)
             .append(ret_doc)
@@ -298,17 +306,22 @@ impl ToDoc for ast::FuncSignature {
 }
 
 impl ToDoc for ast::Func {
-    fn to_doc<'a>(&self, context: &RewriteContext<'_>, shape: Shape) -> RcDoc<'a, ()> {
-        let attrs = attrs_doc(self, context);
-        let modifier = modifier_doc(self);
-        let sig = self.sig().to_doc(context, shape);
+    fn to_doc<'a>(&self, ctx: &'a RewriteContext<'a>) -> Doc<'a> {
+        let alloc = &ctx.alloc;
+
+        let attrs = attrs_doc(self, ctx);
+        let modifier = modifier_doc(self, ctx);
+        let sig = self.sig().to_doc(ctx);
 
         let doc = if let Some(body) = self.body() {
             // Decide whether the body can stay on the same line as the signature.
             // Render the signature at the current max width to see if it breaks.
             let (sig_len, sig_multiline) = {
                 let mut buf = Vec::new();
-                let _ = sig.clone().render(context.config.max_width, &mut buf);
+                let _ = sig
+                    .clone()
+                    .into_doc()
+                    .render(ctx.config.max_width, &mut buf);
                 let s = String::from_utf8(buf).unwrap_or_default();
                 let mut lines = s.lines();
                 let first_len = lines.next().map(|l| l.len()).unwrap_or(0);
@@ -317,16 +330,16 @@ impl ToDoc for ast::Func {
             };
 
             let has_where = self.sig().where_clause().is_some();
-            let body_sep = if context.config.where_new_line
+            let body_sep = if ctx.config.where_new_line
                 || has_where
-                    && (sig_multiline || sig_len + 2 /* space + '{' */ > context.config.max_width)
+                    && (sig_multiline || sig_len + 2 /* space + '{' */ > ctx.config.max_width)
             {
-                RcDoc::hardline()
+                alloc.hardline()
             } else {
-                RcDoc::text(" ")
+                alloc.text(" ")
             };
 
-            sig.append(body_sep).append(body.to_doc(context, shape))
+            sig.append(body_sep).append(body.to_doc(ctx))
         } else {
             sig
         };
@@ -336,20 +349,21 @@ impl ToDoc for ast::Func {
 }
 
 impl ToDoc for ast::FuncParamList {
-    fn to_doc<'a>(&self, context: &RewriteContext<'_>, shape: Shape) -> RcDoc<'a, ()> {
-        let params: Vec<_> = self.into_iter().map(|p| p.to_doc(context, shape)).collect();
+    fn to_doc<'a>(&self, ctx: &'a RewriteContext<'a>) -> Doc<'a> {
+        let params: Vec<_> = self.into_iter().map(|p| p.to_doc(ctx)).collect();
 
-        let indent = context.config.indent_width as isize;
-        block_list("(", ")", params, indent, true)
+        let indent = ctx.config.indent_width as isize;
+        block_list(ctx, "(", ")", params, indent, true)
     }
 }
 
 impl ToDoc for ast::FuncParam {
-    fn to_doc<'a>(&self, context: &RewriteContext<'_>, shape: Shape) -> RcDoc<'a, ()> {
-        let mut doc = RcDoc::nil();
+    fn to_doc<'a>(&self, ctx: &'a RewriteContext<'a>) -> Doc<'a> {
+        let alloc = &ctx.alloc;
+        let mut doc = alloc.nil();
 
         if self.mut_token().is_some() {
-            doc = doc.append(RcDoc::text("mut "));
+            doc = doc.append(alloc.text("mut "));
         }
 
         let label = self.label();
@@ -358,28 +372,18 @@ impl ToDoc for ast::FuncParam {
         if let (Some(label), Some(name_ref)) = (&label, &name)
             && label.syntax().text_range() != name_ref.syntax().text_range()
         {
-            doc = doc.append(RcDoc::text(
-                context
-                    .snippet(label.syntax().text_range())
-                    .trim()
-                    .to_string(),
-            ));
-            doc = doc.append(RcDoc::text(" "));
+            doc =
+                doc.append(alloc.text(ctx.snippet(label.syntax().text_range()).trim().to_string()));
+            doc = doc.append(alloc.text(" "));
         }
 
         if let Some(name) = name {
-            doc = doc.append(RcDoc::text(
-                context
-                    .snippet(name.syntax().text_range())
-                    .trim()
-                    .to_string(),
-            ));
+            doc =
+                doc.append(alloc.text(ctx.snippet(name.syntax().text_range()).trim().to_string()));
         }
 
         if let Some(ty) = self.ty() {
-            doc = doc
-                .append(RcDoc::text(": "))
-                .append(ty.to_doc(context, shape));
+            doc = doc.append(alloc.text(": ")).append(ty.to_doc(ctx));
         }
 
         doc
@@ -387,26 +391,28 @@ impl ToDoc for ast::FuncParam {
 }
 
 impl ToDoc for ast::Struct {
-    fn to_doc<'a>(&self, context: &RewriteContext<'_>, shape: Shape) -> RcDoc<'a, ()> {
-        let attrs = attrs_doc(self, context);
-        let modifier = modifier_doc(self);
+    fn to_doc<'a>(&self, ctx: &'a RewriteContext<'a>) -> Doc<'a> {
+        let alloc = &ctx.alloc;
+
+        let attrs = attrs_doc(self, ctx);
+        let modifier = modifier_doc(self, ctx);
 
         let name = self
             .name()
-            .map(|n| context.token(&n).to_string())
+            .map(|n| ctx.token(&n).to_string())
             .unwrap_or_default();
-        let generics = generics_doc(self, context, shape);
-        let where_clause = where_doc(self, context, shape);
+        let generics = generics_doc(self, ctx);
+        let where_clause = where_doc(self, ctx);
 
         let fields_doc = self
             .fields()
-            .map(|f| RcDoc::text(" ").append(f.to_doc(context, shape)))
-            .unwrap_or_else(|| RcDoc::text(" {}"));
+            .map(|f| alloc.text(" ").append(f.to_doc(ctx)))
+            .unwrap_or_else(|| alloc.text(" {}"));
 
         attrs
             .append(modifier)
-            .append(RcDoc::text("struct "))
-            .append(RcDoc::text(name))
+            .append(alloc.text("struct "))
+            .append(alloc.text(name))
             .append(generics)
             .append(where_clause)
             .append(fields_doc)
@@ -414,32 +420,32 @@ impl ToDoc for ast::Struct {
 }
 
 impl ToDoc for ast::RecordFieldDefList {
-    fn to_doc<'a>(&self, context: &RewriteContext<'_>, shape: Shape) -> RcDoc<'a, ()> {
-        let fields: Vec<_> = self.into_iter().map(|f| f.to_doc(context, shape)).collect();
+    fn to_doc<'a>(&self, ctx: &'a RewriteContext<'a>) -> Doc<'a> {
+        let fields: Vec<_> = self.into_iter().map(|f| f.to_doc(ctx)).collect();
 
-        let indent = context.config.indent_width as isize;
-        block_list_spaced("{", "}", fields, indent, true)
+        let indent = ctx.config.indent_width as isize;
+        block_list_spaced(ctx, "{", "}", fields, indent, true)
     }
 }
 
 impl ToDoc for ast::RecordFieldDef {
-    fn to_doc<'a>(&self, context: &RewriteContext<'_>, shape: Shape) -> RcDoc<'a, ()> {
-        let attrs = attrs_doc(self, context);
+    fn to_doc<'a>(&self, ctx: &'a RewriteContext<'a>) -> Doc<'a> {
+        let alloc = &ctx.alloc;
+
+        let attrs = attrs_doc(self, ctx);
 
         let mut doc = attrs;
 
         if self.pub_kw().is_some() {
-            doc = doc.append(RcDoc::text("pub "));
+            doc = doc.append(alloc.text("pub "));
         }
 
         if let Some(name) = self.name() {
-            doc = doc.append(RcDoc::text(context.token(&name).to_string()));
+            doc = doc.append(alloc.text(ctx.token(&name).to_string()));
         }
 
         if let Some(ty) = self.ty() {
-            doc = doc
-                .append(RcDoc::text(": "))
-                .append(ty.to_doc(context, shape));
+            doc = doc.append(alloc.text(": ")).append(ty.to_doc(ctx));
         }
 
         doc
@@ -447,49 +453,53 @@ impl ToDoc for ast::RecordFieldDef {
 }
 
 impl ToDoc for ast::Contract {
-    fn to_doc<'a>(&self, context: &RewriteContext<'_>, shape: Shape) -> RcDoc<'a, ()> {
-        let attrs = attrs_doc(self, context);
-        let modifier = modifier_doc(self);
+    fn to_doc<'a>(&self, ctx: &'a RewriteContext<'a>) -> Doc<'a> {
+        let alloc = &ctx.alloc;
+
+        let attrs = attrs_doc(self, ctx);
+        let modifier = modifier_doc(self, ctx);
 
         let name = self
             .name()
-            .map(|n| context.token(&n).to_string())
+            .map(|n| ctx.token(&n).to_string())
             .unwrap_or_default();
 
         let fields_doc = self
             .fields()
-            .map(|f| RcDoc::text(" ").append(f.to_doc(context, shape)))
-            .unwrap_or_else(|| RcDoc::text(" {}"));
+            .map(|f| alloc.text(" ").append(f.to_doc(ctx)))
+            .unwrap_or_else(|| alloc.text(" {}"));
 
         attrs
             .append(modifier)
-            .append(RcDoc::text("contract "))
-            .append(RcDoc::text(name))
+            .append(alloc.text("contract "))
+            .append(alloc.text(name))
             .append(fields_doc)
     }
 }
 
 impl ToDoc for ast::Enum {
-    fn to_doc<'a>(&self, context: &RewriteContext<'_>, shape: Shape) -> RcDoc<'a, ()> {
-        let attrs = attrs_doc(self, context);
-        let modifier = modifier_doc(self);
+    fn to_doc<'a>(&self, ctx: &'a RewriteContext<'a>) -> Doc<'a> {
+        let alloc = &ctx.alloc;
+
+        let attrs = attrs_doc(self, ctx);
+        let modifier = modifier_doc(self, ctx);
 
         let name = self
             .name()
-            .map(|n| context.token(&n).to_string())
+            .map(|n| ctx.token(&n).to_string())
             .unwrap_or_default();
-        let generics = generics_doc(self, context, shape);
-        let where_clause = where_doc(self, context, shape);
+        let generics = generics_doc(self, ctx);
+        let where_clause = where_doc(self, ctx);
 
         let variants_doc = self
             .variants()
-            .map(|v| RcDoc::text(" ").append(v.to_doc(context, shape)))
-            .unwrap_or_else(|| RcDoc::text(" {}"));
+            .map(|v| alloc.text(" ").append(v.to_doc(ctx)))
+            .unwrap_or_else(|| alloc.text(" {}"));
 
         attrs
             .append(modifier)
-            .append(RcDoc::text("enum "))
-            .append(RcDoc::text(name))
+            .append(alloc.text("enum "))
+            .append(alloc.text(name))
             .append(generics)
             .append(where_clause)
             .append(variants_doc)
@@ -497,74 +507,79 @@ impl ToDoc for ast::Enum {
 }
 
 impl ToDoc for ast::VariantDefList {
-    fn to_doc<'a>(&self, context: &RewriteContext<'_>, shape: Shape) -> RcDoc<'a, ()> {
-        let variants: Vec<_> = self.into_iter().map(|v| v.to_doc(context, shape)).collect();
+    fn to_doc<'a>(&self, ctx: &'a RewriteContext<'a>) -> Doc<'a> {
+        let alloc = &ctx.alloc;
+
+        let variants: Vec<_> = self.into_iter().map(|v| v.to_doc(ctx)).collect();
 
         if variants.is_empty() {
-            return RcDoc::text("{}");
+            return alloc.text("{}");
         }
 
-        let inner = RcDoc::concat(
+        let inner = alloc.concat(
             variants
                 .into_iter()
-                .map(|v| RcDoc::hardline().append(v).append(RcDoc::text(","))),
+                .map(|v| alloc.hardline().append(v).append(alloc.text(","))),
         );
 
-        RcDoc::text("{")
-            .append(inner.nest(context.config.indent_width as isize))
-            .append(RcDoc::hardline())
-            .append(RcDoc::text("}"))
+        alloc
+            .text("{")
+            .append(inner.nest(ctx.config.indent_width as isize))
+            .append(alloc.hardline())
+            .append(alloc.text("}"))
     }
 }
 
 impl ToDoc for ast::VariantDef {
-    fn to_doc<'a>(&self, context: &RewriteContext<'_>, shape: Shape) -> RcDoc<'a, ()> {
-        let attrs = attrs_doc(self, context);
+    fn to_doc<'a>(&self, ctx: &'a RewriteContext<'a>) -> Doc<'a> {
+        let alloc = &ctx.alloc;
+
+        let attrs = attrs_doc(self, ctx);
 
         let name = self
             .name()
-            .map(|n| context.token(&n).to_string())
+            .map(|n| ctx.token(&n).to_string())
             .unwrap_or_default();
 
         let kind_doc = match self.kind() {
-            ast::VariantKind::Unit => RcDoc::nil(),
-            ast::VariantKind::Tuple(tuple_type) => tuple_type.to_doc(context, shape),
-            ast::VariantKind::Record(fields) => {
-                RcDoc::text(" ").append(fields.to_doc(context, shape))
-            }
+            ast::VariantKind::Unit => alloc.nil(),
+            ast::VariantKind::Tuple(tuple_type) => tuple_type.to_doc(ctx),
+            ast::VariantKind::Record(fields) => alloc.text(" ").append(fields.to_doc(ctx)),
         };
 
-        attrs.append(RcDoc::text(name)).append(kind_doc)
+        attrs.append(alloc.text(name)).append(kind_doc)
     }
 }
 
 impl ToDoc for ast::Trait {
-    fn to_doc<'a>(&self, context: &RewriteContext<'_>, shape: Shape) -> RcDoc<'a, ()> {
-        let attrs = attrs_doc(self, context);
-        let modifier = modifier_doc(self);
+    fn to_doc<'a>(&self, ctx: &'a RewriteContext<'a>) -> Doc<'a> {
+        let alloc = &ctx.alloc;
+
+        let attrs = attrs_doc(self, ctx);
+        let modifier = modifier_doc(self, ctx);
 
         let name = self
             .name()
-            .map(|n| context.token(&n).to_string())
+            .map(|n| ctx.token(&n).to_string())
             .unwrap_or_default();
-        let generics = generics_doc(self, context, shape);
+        let generics = generics_doc(self, ctx);
 
         let super_traits = self
             .super_trait_list()
-            .map(|s| s.to_doc(context, shape))
-            .unwrap_or_else(RcDoc::nil);
+            .map(|s| s.to_doc(ctx))
+            .unwrap_or_else(|| alloc.nil());
 
-        let where_clause = where_doc(self, context, shape);
+        let where_clause = where_doc(self, ctx);
 
         let items_doc = self
             .item_list()
-            .map(|items| RcDoc::text(" ").append(items.to_doc(context, shape)))
-            .unwrap_or_else(|| RcDoc::text(" {}"));
+            .map(|items| alloc.text(" ").append(items.to_doc(ctx)))
+            .unwrap_or_else(|| alloc.text(" {}"));
 
         attrs
             .append(modifier)
-            .append(RcDoc::text("trait "))
-            .append(RcDoc::text(name))
+            .append(alloc.text("trait "))
+            .append(alloc.text(name))
             .append(generics)
             .append(super_traits)
             .append(where_clause)
@@ -573,94 +588,100 @@ impl ToDoc for ast::Trait {
 }
 
 impl ToDoc for ast::TraitItemList {
-    fn to_doc<'a>(&self, context: &RewriteContext<'_>, shape: Shape) -> RcDoc<'a, ()> {
-        block_items_doc(self, context, shape)
+    fn to_doc<'a>(&self, ctx: &'a RewriteContext<'a>) -> Doc<'a> {
+        block_items_doc(self, ctx)
     }
 }
 
 impl ToDoc for ast::TraitItem {
-    fn to_doc<'a>(&self, context: &RewriteContext<'_>, shape: Shape) -> RcDoc<'a, ()> {
+    fn to_doc<'a>(&self, ctx: &'a RewriteContext<'a>) -> Doc<'a> {
         match self.kind() {
-            TraitItemKind::Func(func) => func.to_doc(context, shape),
-            TraitItemKind::Type(ty) => ty.to_doc(context, shape),
-            TraitItemKind::Const(c) => c.to_doc(context, shape),
+            TraitItemKind::Func(func) => func.to_doc(ctx),
+            TraitItemKind::Type(ty) => ty.to_doc(ctx),
+            TraitItemKind::Const(c) => c.to_doc(ctx),
         }
     }
 }
 
 impl ToDoc for ast::TraitTypeItem {
-    fn to_doc<'a>(&self, context: &RewriteContext<'_>, shape: Shape) -> RcDoc<'a, ()> {
-        let attrs = attrs_doc(self, context);
+    fn to_doc<'a>(&self, ctx: &'a RewriteContext<'a>) -> Doc<'a> {
+        let alloc = &ctx.alloc;
+
+        let attrs = attrs_doc(self, ctx);
 
         let name = self
             .name()
-            .map(|n| context.token(&n).to_string())
+            .map(|n| ctx.token(&n).to_string())
             .unwrap_or_default();
 
         let bounds_doc = self
             .bounds()
-            .map(|b| b.to_doc(context, shape))
-            .unwrap_or_else(RcDoc::nil);
+            .map(|b| b.to_doc(ctx))
+            .unwrap_or_else(|| alloc.nil());
 
         let ty_doc = self
             .ty()
-            .map(|ty| RcDoc::text(" = ").append(ty.to_doc(context, shape)))
-            .unwrap_or_else(RcDoc::nil);
+            .map(|ty| alloc.text(" = ").append(ty.to_doc(ctx)))
+            .unwrap_or_else(|| alloc.nil());
 
         attrs
-            .append(RcDoc::text("type "))
-            .append(RcDoc::text(name))
+            .append(alloc.text("type "))
+            .append(alloc.text(name))
             .append(bounds_doc)
             .append(ty_doc)
     }
 }
 
 impl ToDoc for ast::TraitConstItem {
-    fn to_doc<'a>(&self, context: &RewriteContext<'_>, shape: Shape) -> RcDoc<'a, ()> {
-        let attrs = attrs_doc(self, context);
+    fn to_doc<'a>(&self, ctx: &'a RewriteContext<'a>) -> Doc<'a> {
+        let alloc = &ctx.alloc;
+
+        let attrs = attrs_doc(self, ctx);
 
         let name = self
             .name()
-            .map(|n| context.token(&n).to_string())
+            .map(|n| ctx.token(&n).to_string())
             .unwrap_or_default();
 
         let ty_doc = self
             .ty()
-            .map(|ty| RcDoc::text(": ").append(ty.to_doc(context, shape)))
-            .unwrap_or_else(RcDoc::nil);
+            .map(|ty| alloc.text(": ").append(ty.to_doc(ctx)))
+            .unwrap_or_else(|| alloc.nil());
 
         let value_doc = self
             .value()
-            .map(|v| RcDoc::text(" = ").append(v.to_doc(context, shape)))
-            .unwrap_or_else(RcDoc::nil);
+            .map(|v| alloc.text(" = ").append(v.to_doc(ctx)))
+            .unwrap_or_else(|| alloc.nil());
 
         attrs
-            .append(RcDoc::text("const "))
-            .append(RcDoc::text(name))
+            .append(alloc.text("const "))
+            .append(alloc.text(name))
             .append(ty_doc)
             .append(value_doc)
     }
 }
 
 impl ToDoc for ast::Impl {
-    fn to_doc<'a>(&self, context: &RewriteContext<'_>, shape: Shape) -> RcDoc<'a, ()> {
-        let attrs = attrs_doc(self, context);
-        let generics = generics_doc(self, context, shape);
+    fn to_doc<'a>(&self, ctx: &'a RewriteContext<'a>) -> Doc<'a> {
+        let alloc = &ctx.alloc;
+
+        let attrs = attrs_doc(self, ctx);
+        let generics = generics_doc(self, ctx);
 
         let ty_doc = self
             .ty()
-            .map(|ty| RcDoc::text(" ").append(ty.to_doc(context, shape)))
-            .unwrap_or_else(RcDoc::nil);
+            .map(|ty| alloc.text(" ").append(ty.to_doc(ctx)))
+            .unwrap_or_else(|| alloc.nil());
 
-        let where_clause = where_doc(self, context, shape);
+        let where_clause = where_doc(self, ctx);
 
         let items_doc = self
             .item_list()
-            .map(|items| RcDoc::text(" ").append(items.to_doc(context, shape)))
-            .unwrap_or_else(|| RcDoc::text(" {}"));
+            .map(|items| alloc.text(" ").append(items.to_doc(ctx)))
+            .unwrap_or_else(|| alloc.text(" {}"));
 
         attrs
-            .append(RcDoc::text("impl"))
+            .append(alloc.text("impl"))
             .append(generics)
             .append(ty_doc)
             .append(where_clause)
@@ -669,35 +690,37 @@ impl ToDoc for ast::Impl {
 }
 
 impl ToDoc for ast::ImplItemList {
-    fn to_doc<'a>(&self, context: &RewriteContext<'_>, shape: Shape) -> RcDoc<'a, ()> {
-        block_items_doc(self, context, shape)
+    fn to_doc<'a>(&self, ctx: &'a RewriteContext<'a>) -> Doc<'a> {
+        block_items_doc(self, ctx)
     }
 }
 
 impl ToDoc for ast::ImplTrait {
-    fn to_doc<'a>(&self, context: &RewriteContext<'_>, shape: Shape) -> RcDoc<'a, ()> {
-        let attrs = attrs_doc(self, context);
-        let generics = generics_doc(self, context, shape);
+    fn to_doc<'a>(&self, ctx: &'a RewriteContext<'a>) -> Doc<'a> {
+        let alloc = &ctx.alloc;
+
+        let attrs = attrs_doc(self, ctx);
+        let generics = generics_doc(self, ctx);
 
         let trait_doc = self
             .trait_ref()
-            .map(|t| RcDoc::text(" ").append(t.to_doc(context, shape)))
-            .unwrap_or_else(RcDoc::nil);
+            .map(|t| alloc.text(" ").append(t.to_doc(ctx)))
+            .unwrap_or_else(|| alloc.nil());
 
         let ty_doc = self
             .ty()
-            .map(|ty| RcDoc::text(" for ").append(ty.to_doc(context, shape)))
-            .unwrap_or_else(RcDoc::nil);
+            .map(|ty| alloc.text(" for ").append(ty.to_doc(ctx)))
+            .unwrap_or_else(|| alloc.nil());
 
-        let where_clause = where_doc(self, context, shape);
+        let where_clause = where_doc(self, ctx);
 
         let items_doc = self
             .item_list()
-            .map(|items| RcDoc::text(" ").append(items.to_doc(context, shape)))
-            .unwrap_or_else(|| RcDoc::text(" {}"));
+            .map(|items| alloc.text(" ").append(items.to_doc(ctx)))
+            .unwrap_or_else(|| alloc.text(" {}"));
 
         attrs
-            .append(RcDoc::text("impl"))
+            .append(alloc.text("impl"))
             .append(generics)
             .append(trait_doc)
             .append(ty_doc)
@@ -707,68 +730,73 @@ impl ToDoc for ast::ImplTrait {
 }
 
 impl ToDoc for ast::Const {
-    fn to_doc<'a>(&self, context: &RewriteContext<'_>, shape: Shape) -> RcDoc<'a, ()> {
-        let attrs = attrs_doc(self, context);
-        let modifier = modifier_doc(self);
+    fn to_doc<'a>(&self, ctx: &'a RewriteContext<'a>) -> Doc<'a> {
+        let alloc = &ctx.alloc;
+
+        let attrs = attrs_doc(self, ctx);
+        let modifier = modifier_doc(self, ctx);
 
         let name = self
             .name()
-            .map(|n| context.token(&n).to_string())
+            .map(|n| ctx.token(&n).to_string())
             .unwrap_or_default();
 
         let ty_doc = self
             .ty()
-            .map(|ty| RcDoc::text(": ").append(ty.to_doc(context, shape)))
-            .unwrap_or_else(RcDoc::nil);
+            .map(|ty| alloc.text(": ").append(ty.to_doc(ctx)))
+            .unwrap_or_else(|| alloc.nil());
 
         let value_doc = self
             .value()
-            .map(|v| RcDoc::text(" = ").append(v.to_doc(context, shape)))
-            .unwrap_or_else(RcDoc::nil);
+            .map(|v| alloc.text(" = ").append(v.to_doc(ctx)))
+            .unwrap_or_else(|| alloc.nil());
 
         attrs
             .append(modifier)
-            .append(RcDoc::text("const "))
-            .append(RcDoc::text(name))
+            .append(alloc.text("const "))
+            .append(alloc.text(name))
             .append(ty_doc)
             .append(value_doc)
     }
 }
 
 impl ToDoc for ast::Use {
-    fn to_doc<'a>(&self, context: &RewriteContext<'_>, shape: Shape) -> RcDoc<'a, ()> {
-        let attrs = attrs_doc(self, context);
-        let modifier = modifier_doc(self);
+    fn to_doc<'a>(&self, ctx: &'a RewriteContext<'a>) -> Doc<'a> {
+        let alloc = &ctx.alloc;
+
+        let attrs = attrs_doc(self, ctx);
+        let modifier = modifier_doc(self, ctx);
 
         let tree_doc = self
             .use_tree()
-            .map(|t| t.to_doc(context, shape))
-            .unwrap_or_else(RcDoc::nil);
+            .map(|t| t.to_doc(ctx))
+            .unwrap_or_else(|| alloc.nil());
 
         attrs
             .append(modifier)
-            .append(RcDoc::text("use "))
+            .append(alloc.text("use "))
             .append(tree_doc)
     }
 }
 
 impl ToDoc for ast::UseTree {
-    fn to_doc<'a>(&self, context: &RewriteContext<'_>, shape: Shape) -> RcDoc<'a, ()> {
-        let mut doc = RcDoc::nil();
+    fn to_doc<'a>(&self, ctx: &'a RewriteContext<'a>) -> Doc<'a> {
+        let alloc = &ctx.alloc;
+        let mut doc = alloc.nil();
 
         if let Some(path) = self.path() {
-            doc = doc.append(path.to_doc(context, shape));
+            doc = doc.append(path.to_doc(ctx));
         }
 
         if let Some(children) = self.children() {
             if self.path().is_some() {
-                doc = doc.append(RcDoc::text("::"));
+                doc = doc.append(alloc.text("::"));
             }
-            doc = doc.append(children.to_doc(context, shape));
+            doc = doc.append(children.to_doc(ctx));
         }
 
         if let Some(alias) = self.alias() {
-            doc = doc.append(alias.to_doc(context, shape));
+            doc = doc.append(alias.to_doc(ctx));
         }
 
         doc
@@ -776,122 +804,123 @@ impl ToDoc for ast::UseTree {
 }
 
 impl ToDoc for ast::UseTreeList {
-    fn to_doc<'a>(&self, context: &RewriteContext<'_>, shape: Shape) -> RcDoc<'a, ()> {
-        let trees: Vec<_> = self.into_iter().map(|t| t.to_doc(context, shape)).collect();
+    fn to_doc<'a>(&self, ctx: &'a RewriteContext<'a>) -> Doc<'a> {
+        let trees: Vec<_> = self.into_iter().map(|t| t.to_doc(ctx)).collect();
 
-        let indent = context.config.indent_width as isize;
-        block_list("{", "}", trees, indent, true)
+        let indent = ctx.config.indent_width as isize;
+        block_list(ctx, "{", "}", trees, indent, true)
     }
 }
 
 impl ToDoc for ast::UsePath {
-    fn to_doc<'a>(&self, context: &RewriteContext<'_>, shape: Shape) -> RcDoc<'a, ()> {
-        let segments: Vec<_> = self
-            .into_iter()
-            .map(|seg| seg.to_doc(context, shape))
-            .collect();
+    fn to_doc<'a>(&self, ctx: &'a RewriteContext<'a>) -> Doc<'a> {
+        let alloc = &ctx.alloc;
 
-        let sep = RcDoc::text("::");
-        intersperse(segments, sep)
+        let segments: Vec<_> = self.into_iter().map(|seg| seg.to_doc(ctx)).collect();
+
+        let sep = alloc.text("::");
+        intersperse(alloc, segments, sep)
     }
 }
 
 impl ToDoc for ast::UsePathSegment {
-    fn to_doc<'a>(&self, context: &RewriteContext<'_>, _shape: Shape) -> RcDoc<'a, ()> {
+    fn to_doc<'a>(&self, ctx: &'a RewriteContext<'a>) -> Doc<'a> {
+        let alloc = &ctx.alloc;
+
         use parser::ast::UsePathSegmentKind;
         match self.kind() {
-            Some(UsePathSegmentKind::Ingot(token)) => {
-                RcDoc::text(context.token(&token).to_string())
-            }
-            Some(UsePathSegmentKind::Super(token)) => {
-                RcDoc::text(context.token(&token).to_string())
-            }
-            Some(UsePathSegmentKind::Self_(token)) => {
-                RcDoc::text(context.token(&token).to_string())
-            }
-            Some(UsePathSegmentKind::Ident(token)) => {
-                RcDoc::text(context.token(&token).to_string())
-            }
-            Some(UsePathSegmentKind::Glob(token)) => RcDoc::text(context.token(&token).to_string()),
-            None => RcDoc::nil(),
+            Some(UsePathSegmentKind::Ingot(token)) => alloc.text(ctx.token(&token).to_string()),
+            Some(UsePathSegmentKind::Super(token)) => alloc.text(ctx.token(&token).to_string()),
+            Some(UsePathSegmentKind::Self_(token)) => alloc.text(ctx.token(&token).to_string()),
+            Some(UsePathSegmentKind::Ident(token)) => alloc.text(ctx.token(&token).to_string()),
+            Some(UsePathSegmentKind::Glob(token)) => alloc.text(ctx.token(&token).to_string()),
+            None => alloc.nil(),
         }
     }
 }
 
 impl ToDoc for ast::UseAlias {
-    fn to_doc<'a>(&self, context: &RewriteContext<'_>, _shape: Shape) -> RcDoc<'a, ()> {
+    fn to_doc<'a>(&self, ctx: &'a RewriteContext<'a>) -> Doc<'a> {
+        let alloc = &ctx.alloc;
+
         if let Some(alias) = self.alias() {
-            let alias_text = context.snippet(alias.text_range()).trim().to_string();
-            RcDoc::text(" as ").append(RcDoc::text(alias_text))
+            let alias_text = ctx.snippet(alias.text_range()).trim().to_string();
+            alloc.text(" as ").append(alloc.text(alias_text))
         } else {
-            RcDoc::nil()
+            alloc.nil()
         }
     }
 }
 
 impl ToDoc for ast::TypeAlias {
-    fn to_doc<'a>(&self, context: &RewriteContext<'_>, shape: Shape) -> RcDoc<'a, ()> {
-        let attrs = attrs_doc(self, context);
-        let modifier = modifier_doc(self);
+    fn to_doc<'a>(&self, ctx: &'a RewriteContext<'a>) -> Doc<'a> {
+        let alloc = &ctx.alloc;
+
+        let attrs = attrs_doc(self, ctx);
+        let modifier = modifier_doc(self, ctx);
 
         let alias = self
             .alias()
-            .map(|a| context.token(&a).to_string())
+            .map(|a| ctx.token(&a).to_string())
             .unwrap_or_default();
-        let generics = generics_doc(self, context, shape);
+        let generics = generics_doc(self, ctx);
 
         let ty_doc = self
             .ty()
-            .map(|ty| RcDoc::text(" = ").append(ty.to_doc(context, shape)))
-            .unwrap_or_else(RcDoc::nil);
+            .map(|ty| alloc.text(" = ").append(ty.to_doc(ctx)))
+            .unwrap_or_else(|| alloc.nil());
 
         attrs
             .append(modifier)
-            .append(RcDoc::text("type "))
-            .append(RcDoc::text(alias))
+            .append(alloc.text("type "))
+            .append(alloc.text(alias))
             .append(generics)
             .append(ty_doc)
     }
 }
 
 impl ToDoc for ast::Mod {
-    fn to_doc<'a>(&self, context: &RewriteContext<'_>, shape: Shape) -> RcDoc<'a, ()> {
-        let attrs = attrs_doc(self, context);
-        let modifier = modifier_doc(self);
+    fn to_doc<'a>(&self, ctx: &'a RewriteContext<'a>) -> Doc<'a> {
+        let alloc = &ctx.alloc;
+
+        let attrs = attrs_doc(self, ctx);
+        let modifier = modifier_doc(self, ctx);
 
         let name = self
             .name()
-            .map(|n| context.token(&n).to_string())
+            .map(|n| ctx.token(&n).to_string())
             .unwrap_or_default();
 
         let items_doc = self
             .items()
-            .map(|items| RcDoc::text(" ").append(block_items_doc(items, context, shape)))
-            .unwrap_or_else(RcDoc::nil);
+            .map(|items| alloc.text(" ").append(block_items_doc(items, ctx)))
+            .unwrap_or_else(|| alloc.nil());
 
         attrs
             .append(modifier)
-            .append(RcDoc::text("mod "))
-            .append(RcDoc::text(name))
+            .append(alloc.text("mod "))
+            .append(alloc.text(name))
             .append(items_doc)
     }
 }
 
 impl ToDoc for ast::Extern {
-    fn to_doc<'a>(&self, context: &RewriteContext<'_>, shape: Shape) -> RcDoc<'a, ()> {
-        let attrs = attrs_doc(self, context);
+    fn to_doc<'a>(&self, ctx: &'a RewriteContext<'a>) -> Doc<'a> {
+        let alloc = &ctx.alloc;
+
+        let attrs = attrs_doc(self, ctx);
 
         let items_doc = self
             .extern_block()
-            .map(|items| RcDoc::text(" ").append(items.to_doc(context, shape)))
-            .unwrap_or_else(|| RcDoc::text(" {}"));
+            .map(|items| alloc.text(" ").append(items.to_doc(ctx)))
+            .unwrap_or_else(|| alloc.text(" {}"));
 
-        attrs.append(RcDoc::text("extern")).append(items_doc)
+        attrs.append(alloc.text("extern")).append(items_doc)
     }
 }
 
 impl ToDoc for ast::ExternItemList {
-    fn to_doc<'a>(&self, context: &RewriteContext<'_>, shape: Shape) -> RcDoc<'a, ()> {
-        block_items_doc(self, context, shape)
+    fn to_doc<'a>(&self, ctx: &'a RewriteContext<'a>) -> Doc<'a> {
+        block_items_doc(self, ctx)
     }
 }

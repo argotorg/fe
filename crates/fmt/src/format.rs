@@ -2,9 +2,10 @@ use std::fs;
 use std::path::Path;
 
 use parser::{SyntaxNode, ast, ast::prelude::AstNode, parse_source_file};
+use pretty::RcAllocator;
 
 use crate::ast::ToDoc;
-use crate::{Config, Indent, RewriteContext, Shape};
+use crate::{Config, RewriteContext};
 
 /// Errors that can occur while formatting Fe source.
 #[derive(Debug)]
@@ -32,12 +33,16 @@ pub fn format_str(source: &str, config: &Config) -> Result<String, FormatError> 
     let root =
         ast::Root::cast(root_syntax).expect("parser must always produce a root node for source");
 
-    let context = RewriteContext { config, source };
-    let shape = Shape::with_width(config.max_width, Indent::default());
+    let ctx = RewriteContext {
+        config,
+        source,
+        alloc: RcAllocator,
+    };
 
-    let doc = root.to_doc(&context, shape);
+    let doc = root.to_doc(&ctx);
     let mut output = Vec::new();
-    doc.render(config.max_width, &mut output)
+    doc.into_doc()
+        .render(config.max_width, &mut output)
         .expect("rendering to Vec should never fail");
 
     let formatted = String::from_utf8(output).unwrap_or_else(|_| source.to_owned());
