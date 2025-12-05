@@ -372,10 +372,8 @@ impl<'db> UsePathView<'db> {
         };
         let segments = use_path.data(db);
 
-        // Start from the use's parent scope
-        let Some(mut current_scope) = self.use_item.scope().parent(db) else {
-            return TargetResolution::None;
-        };
+        // Start from the use's scope (the module containing the use statement)
+        let mut current_scope = self.use_item.scope();
 
         // Resolve each segment up to and including self.segment
         for idx in 0..=self.segment {
@@ -417,6 +415,35 @@ impl<'db> UsePathView<'db> {
         }
 
         TargetResolution::Single(Target::Scope(current_scope))
+    }
+
+    /// Resolve a use path segment at a specific cursor position.
+    ///
+    /// This enables clicking on individual segments within a use statement.
+    /// For `use foo::bar::Baz`, clicking on "foo" resolves to foo's definition.
+    pub fn target_at<DB>(&self, db: &'db DB, cursor: TextSize) -> TargetResolution<'db>
+    where
+        DB: HirAnalysisDb + SpannedHirDb,
+    {
+        // Find which segment the cursor is in
+        for idx in 0..=self.segment {
+            let Some(seg_span) = self.span.clone().segment(idx).resolve(db) else {
+                continue;
+            };
+
+            if seg_span.range.contains(cursor) {
+                // Create a view for just this segment and resolve it
+                let seg_view = UsePathView {
+                    use_item: self.use_item,
+                    segment: idx,
+                    span: self.span.clone(),
+                };
+                return seg_view.target(db);
+            }
+        }
+
+        // Cursor not in any segment, use default resolution
+        self.target(db)
     }
 
     /// Get the source span of this use path segment.
@@ -468,6 +495,7 @@ impl<'db> ReferenceView<'db> {
     {
         match self {
             Self::Path(v) => v.target_at(db, cursor),
+            Self::UsePath(v) => v.target_at(db, cursor),
             _ => self.target(db),
         }
     }

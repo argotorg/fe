@@ -36,25 +36,21 @@ pub fn hover_helper(
         .and_then(|r| {
             let resolution = r.target_at(db, cursor);
 
-            // Check if ambiguous
+            // If ambiguous, show all candidates using MarkupContent with markdown
             if resolution.is_ambiguous() {
-                // Show all candidates
-                let mut sections =
-                    vec!["**Ambiguous reference - multiple candidates:**\n".to_string()];
+                let mut sections = vec!["**Multiple definitions**\n\n".to_string()];
 
                 for (i, target) in resolution.as_slice().iter().enumerate() {
                     match target {
                         Target::Scope(scope) => {
                             let item = scope.item();
-                            let pretty_path = get_item_path_markdown(db, item);
-                            let definition_source = get_item_definition_markdown(db, item);
+                            let path = get_item_path_markdown(db, item);
+                            let def = get_item_definition_markdown(db, item);
+                            let docs = get_docstring(db, *scope);
 
-                            sections.push(format!("\n### Candidate {}\n", i + 1));
-                            if let Some(path) = pretty_path {
-                                sections.push(format!("{}\n", path));
-                            }
-                            if let Some(def) = definition_source {
-                                sections.push(format!("{}\n", def));
+                            // Show path, definition, and docs just like single-definition hover
+                            for info in [path, def, docs].iter().filter_map(|x| x.as_ref()) {
+                                sections.push(format!("{}\n\n", info));
                             }
                         }
                         Target::Local { ty, .. } => {
@@ -65,19 +61,21 @@ pub fn hover_helper(
                                 _ => continue,
                             };
                             let ty_str = ty.pretty_print(db);
-                            sections.push(format!("\n### Candidate {}\n", i + 1));
-                            sections.push(format!("```fe\nlet {name}: {ty_str}\n```\n"));
+                            sections.push(format!("```fe\nlet {name}: {ty_str}\n```\n\n"));
                         }
+                    }
+
+                    if i < resolution.as_slice().len() - 1 {
+                        sections.push("---\n\n".to_string());
                     }
                 }
 
                 Some(sections.join(""))
             } else {
-                // Single target - show as before
+                // Single unambiguous target
                 let target = resolution.first()?;
                 match target {
                     Target::Scope(scope) => {
-                        // Scope-based target: show item info
                         let item = scope.item();
                         let pretty_path = get_item_path_markdown(db, item);
                         let definition_source = get_item_definition_markdown(db, item);
@@ -92,7 +90,6 @@ pub fn hover_helper(
                         )
                     }
                     Target::Local { ty, .. } => {
-                        // Local binding: get name from the reference, type from target
                         let name = match r {
                             ReferenceView::Path(pv) => {
                                 pv.path.ident(db).to_opt()?.data(db).to_string()
