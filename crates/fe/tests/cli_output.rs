@@ -1,5 +1,5 @@
 use dir_test::{Fixture, dir_test};
-use std::process::Command;
+use std::{io::IsTerminal, process::Command};
 use test_utils::snap_test;
 
 // Helper function to normalize paths in output for portability
@@ -110,6 +110,12 @@ fn test_cli_ingot(fixture: Fixture<&str>) {
     glob: "**/fe.toml",
 )]
 fn test_tree_output(fixture: Fixture<&str>) {
+    // Skip tree snapshots when stdout isn't a TTY (e.g. in headless test runners),
+    // since the tree UI assumes an interactive terminal.
+    if !std::io::stdout().is_terminal() {
+        return;
+    }
+
     let ingot_dir = std::path::Path::new(fixture.path())
         .parent()
         .expect("fe.toml should have parent");

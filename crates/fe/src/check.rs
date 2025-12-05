@@ -98,18 +98,9 @@ fn check_ingot(
             return true;
         }
     };
-    let init_diagnostics = driver::init_ingot(db, &ingot_url);
-
-    // Handle workspace setup diagnostics if any
-    if !init_diagnostics.is_empty() {
-        let mut has_init_issues = false;
-        for diagnostic in &init_diagnostics {
-            eprintln!("❌ {diagnostic}");
-            has_init_issues = true;
-        }
-        if has_init_issues {
-            return true;
-        }
+    let had_init_diagnostics = driver::init_ingot(db, &ingot_url);
+    if had_init_diagnostics {
+        return true;
     }
 
     let Some(ingot) = db.workspace().containing_ingot(db, ingot_url.clone()) else {
@@ -160,7 +151,7 @@ fn check_ingot(
 
     // Collect all dependencies with errors
     let mut dependency_errors = Vec::new();
-    for dependency_url in db.graph().dependency_urls(db, &ingot_url) {
+    for dependency_url in db.dependency_graph().dependency_urls(db, &ingot_url) {
         let Some(ingot) = db.workspace().containing_ingot(db, dependency_url.clone()) else {
             // Skip dependencies that can't be resolved
             continue;

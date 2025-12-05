@@ -72,13 +72,11 @@ async fn discover_and_load_ingots(
             )
         })?;
 
-        let diagnostics = init_ingot(&mut backend.db, &ingot_url);
-
-        // Log any diagnostics
-        for diagnostic in diagnostics {
+        let had_diagnostics = init_ingot(&mut backend.db, &ingot_url);
+        if had_diagnostics {
             warn!(
-                "Ingot initialization diagnostic for {:?}: {}",
-                ingot_dir, diagnostic
+                "Ingot initialization produced diagnostics for {:?}",
+                ingot_dir
             );
         }
     }
@@ -92,14 +90,9 @@ async fn discover_and_load_ingots(
             )
         })?;
 
-        let diagnostics = init_ingot(&mut backend.db, &root_url);
-
-        // Log any diagnostics
-        for diagnostic in diagnostics {
-            warn!(
-                "Ingot initialization diagnostic for workspace root: {}",
-                diagnostic
-            );
+        let had_diagnostics = init_ingot(&mut backend.db, &root_url);
+        if had_diagnostics {
+            warn!("Ingot initialization produced diagnostics for workspace root");
         }
     }
 
@@ -328,13 +321,11 @@ async fn load_ingot_files(
         )
     })?;
 
-    let diagnostics = init_ingot(&mut backend.db, &ingot_url);
-
-    // Log any diagnostics
-    for diagnostic in diagnostics {
+    let had_diagnostics = init_ingot(&mut backend.db, &ingot_url);
+    if had_diagnostics {
         warn!(
-            "Ingot initialization diagnostic for {:?}: {}",
-            ingot_dir, diagnostic
+            "Ingot initialization produced diagnostics for {:?}",
+            ingot_dir
         );
     }
 

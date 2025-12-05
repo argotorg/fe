@@ -10,6 +10,7 @@ tracing.workspace = true
 common.workspace = true
 resolver.workspace = true
 camino.workspace = true
+petgraph.workspace = true
 url.workspace = true
 smol_str.workspace = true
 hir.workspace = true

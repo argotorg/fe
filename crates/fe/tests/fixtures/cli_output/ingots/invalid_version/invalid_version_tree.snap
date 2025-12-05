@@ -3,9 +3,9 @@ source: crates/fe/tests/cli_output.rs
 expression: output
 ---
 === STDOUT ===
-➖ test vnull
+test vnull
 
 === STDERR ===
-❌ Config validation error at file://<project>/crates/fe/tests/fixtures/cli_output/ingots/invalid_version/: Invalid ingot version ""not.a.version""
+❌ Erroneous fe.toml file in file://<project>/crates/fe/tests/fixtures/cli_output/ingots/invalid_version/: Invalid ingot version ""not.a.version""
 
 === EXIT CODE: 0 ===

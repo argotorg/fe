@@ -1,20 +1,19 @@
 ---
 source: crates/resolver/tests/graph.rs
-assertion_line: 94
-expression: "format!(\"{:#?}\\n{:#?}\", graph, resolver.take_diagnostics())"
+expression: "format!(\"{:#?}\\n{:#?}\", graph, handler.diagnostics)"
 input_file: fixtures/graph/dag.toml
 ---
 Graph {
     Ty: "Directed",
     node_count: 5,
     edge_count: 7,
-    edges: (0, 1), (1, 2), (0, 3), (3, 1), (0, 4), (4, 3), (4, 1),
+    edges: (0, 1), (0, 2), (2, 1), (0, 3), (3, 2), (3, 1), (1, 4),
     node weights: {
         0: "a",
         1: "d",
-        2: "e",
-        3: "c",
-        4: "b",
+        2: "c",
+        3: "b",
+        4: "e",
     },
 }
 []

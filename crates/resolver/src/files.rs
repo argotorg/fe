@@ -11,7 +11,6 @@ pub struct FilesResolver {
     pub file_patterns: Vec<String>,
     pub required_files: Vec<RequiredFile>,
     pub required_directories: Vec<RequiredDirectory>,
-    diagnostics: Vec<FilesResolutionDiagnostic>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -123,7 +122,6 @@ impl FilesResolver {
             file_patterns: vec![],
             required_files: vec![],
             required_directories: vec![],
-            diagnostics: vec![],
         }
     }
 
@@ -132,7 +130,6 @@ impl FilesResolver {
             file_patterns: patterns.iter().map(|p| p.to_string()).collect(),
             required_files: vec![],
             required_directories: vec![],
-            diagnostics: vec![],
         }
     }
 
@@ -162,32 +159,32 @@ impl Resolver for FilesResolver {
     type Error = FilesResolutionError;
     type Diagnostic = FilesResolutionDiagnostic;
 
-    fn resolve<H>(&mut self, handler: &mut H, ingot_url: &Url) -> Result<H::Item, Self::Error>
+    fn resolve<H>(&mut self, handler: &mut H, url: &Url) -> Result<H::Item, Self::Error>
     where
         H: crate::ResolutionHandler<Self>,
     {
-        tracing::info!(target: "resolver", "Starting file resolution for URL: {}", ingot_url);
+        tracing::info!(target: "resolver", "Starting file resolution for URL: {}", url);
+        handler.on_resolution_start(url);
         let mut files = vec![];
 
-        let ingot_path = Utf8PathBuf::from(ingot_url.path());
+        let ingot_path = Utf8PathBuf::from(url.path());
         tracing::info!(target: "resolver", "Resolving files in path: {}", ingot_path);
 
         // Check if the directory exists
         if !ingot_path.exists() || !ingot_path.is_dir() {
-            return Err(FilesResolutionError::DirectoryDoesNotExist(
-                ingot_url.clone(),
-            ));
+            return Err(FilesResolutionError::DirectoryDoesNotExist(url.clone()));
         }
 
         // Check for required directories first
         for required_dir in &self.required_directories {
             let required_dir_path = ingot_path.join(&required_dir.path);
             if !required_dir_path.exists() || !required_dir_path.is_dir() {
-                self.diagnostics
-                    .push(FilesResolutionDiagnostic::RequiredDirectoryMissing(
-                        ingot_url.clone(),
+                handler.on_resolution_diagnostic(
+                    FilesResolutionDiagnostic::RequiredDirectoryMissing(
+                        url.clone(),
                         required_dir.path.clone(),
-                    ));
+                    ),
+                );
             }
         }
 
@@ -195,11 +192,10 @@ impl Resolver for FilesResolver {
         for required_file in &self.required_files {
             let required_path = ingot_path.join(&required_file.path);
             if !required_path.exists() {
-                self.diagnostics
-                    .push(FilesResolutionDiagnostic::RequiredFileMissing(
-                        ingot_url.clone(),
-                        required_file.path.clone(),
-                    ));
+                handler.on_resolution_diagnostic(FilesResolutionDiagnostic::RequiredFileMissing(
+                    url.clone(),
+                    required_file.path.clone(),
+                ));
             } else {
                 // If required file exists, load it
                 match fs::read_to_string(&required_path) {
@@ -212,8 +208,10 @@ impl Resolver for FilesResolver {
                     }
                     Err(error) => {
                         tracing::warn!(target: "resolver", "Failed to read required file {}: {}", required_path, error);
-                        self.diagnostics
-                            .push(FilesResolutionDiagnostic::FileIoError(required_path, error));
+                        handler.on_resolution_diagnostic(FilesResolutionDiagnostic::FileIoError(
+                            required_path,
+                            error,
+                        ));
                     }
                 }
             }
@@ -243,15 +241,16 @@ impl Resolver for FilesResolver {
                                         }
                                         Err(error) => {
                                             tracing::warn!(target: "resolver", "Failed to read file {}: {}", path, error);
-                                            self.diagnostics.push(
+                                            handler.on_resolution_diagnostic(
                                                 FilesResolutionDiagnostic::FileIoError(path, error),
                                             );
                                         }
                                     }
                                 }
                                 Err(error) => {
-                                    self.diagnostics
-                                        .push(FilesResolutionDiagnostic::SkippedNonUtf8(error));
+                                    handler.on_resolution_diagnostic(
+                                        FilesResolutionDiagnostic::SkippedNonUtf8(error),
+                                    );
                                 }
                             }
                         }
@@ -263,10 +262,6 @@ impl Resolver for FilesResolver {
 
         tracing::info!(target: "resolver", "File resolution completed successfully, found {} files", files.len());
         let resource = FilesResource { files };
-        Ok(handler.handle_resolution(ingot_url, resource))
-    }
-
-    fn take_diagnostics(&mut self) -> Vec<Self::Diagnostic> {
-        std::mem::take(&mut self.diagnostics)
+        Ok(handler.handle_resolution(url, resource))
     }
 }

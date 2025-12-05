@@ -3,10 +3,10 @@ source: crates/fe/tests/cli_output.rs
 expression: output
 ---
 === STDOUT ===
-➖ basic_a v0.1.0
-├── ➖ basic_b v0.1.0
-│   └── ➖ basic_d v0.1.0
-└── ➖ basic_c v0.1.0
-    └── ➖ basic_d v0.1.0
+basic_a v0.1.0
+├── basic_c v0.1.0
+│   └── basic_d v0.1.0
+└── basic_b v0.1.0
+    └── basic_d v0.1.0
 
 === EXIT CODE: 0 ===

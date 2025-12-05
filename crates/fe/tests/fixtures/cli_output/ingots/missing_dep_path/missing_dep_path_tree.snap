@@ -3,9 +3,9 @@ source: crates/fe/tests/cli_output.rs
 expression: output
 ---
 === STDOUT ===
-➖ test v0.1.0
+test v0.1.0
 
 === STDERR ===
-❌ Config validation error at file://<project>/crates/fe/tests/fixtures/cli_output/ingots/missing_dep_path/: The dependency "foo" is missing a path argument "{ version = "0.1.0" }"
+❌ Erroneous fe.toml file in file://<project>/crates/fe/tests/fixtures/cli_output/ingots/missing_dep_path/: The dependency "foo" is missing a path argument "{ version = "0.1.0" }"
 
 === EXIT CODE: 0 ===

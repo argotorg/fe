@@ -3,9 +3,9 @@ source: crates/fe/tests/cli_output.rs
 expression: output
 ---
 === STDOUT ===
-➖ null v0.0.1
+null v0.0.1
 
 === STDERR ===
-❌ Config validation error at file://<project>/crates/fe/tests/fixtures/cli_output/ingots/invalid_name/: Invalid ingot name "invalid-name-with-dashes"
+❌ Erroneous fe.toml file in file://<project>/crates/fe/tests/fixtures/cli_output/ingots/invalid_name/: Invalid ingot name "invalid-name-with-dashes"
 
 === EXIT CODE: 0 ===

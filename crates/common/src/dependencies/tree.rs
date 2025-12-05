@@ -1,10 +1,80 @@
-use petgraph::graph::{DiGraph, NodeIndex};
 use std::collections::{HashMap, HashSet};
+
+use petgraph::graph::{DiGraph, NodeIndex};
+use petgraph::visit::EdgeRef;
+use smol_str::SmolStr;
 use url::Url;
 
-use super::DependencyArguments;
-use crate::config::Config;
-use smol_str::SmolStr;
+use super::{DependencyAlias, DependencyArguments};
+use crate::{InputDb, config::Config};
+
+type TreeEdge = (DependencyAlias, DependencyArguments);
+
+pub struct DependencyTree {
+    root: Url,
+    graph: DiGraph<Url, TreeEdge>,
+    configs: HashMap<Url, Config>,
+    remote_edges: HashSet<(Url, Url)>,
+}
+
+impl DependencyTree {
+    pub fn build(db: &dyn InputDb, root: &Url) -> Self {
+        let graph = db.dependency_graph().petgraph(db);
+        let configs = collect_configs(db, &graph);
+        let remote_edges = collect_remote_edges(db, &graph);
+
+        Self::from_parts(graph, root.clone(), configs, remote_edges)
+    }
+
+    pub fn from_parts(
+        graph: DiGraph<Url, TreeEdge>,
+        root: Url,
+        configs: HashMap<Url, Config>,
+        remote_edges: HashSet<(Url, Url)>,
+    ) -> Self {
+        Self {
+            root,
+            graph,
+            configs,
+            remote_edges,
+        }
+    }
+
+    pub fn display(&self) -> String {
+        display_tree(&self.graph, &self.root, &self.configs, &self.remote_edges)
+    }
+}
+
+fn collect_configs(db: &dyn InputDb, graph: &DiGraph<Url, TreeEdge>) -> HashMap<Url, Config> {
+    let mut configs = HashMap::new();
+    for node_idx in graph.node_indices() {
+        let url = &graph[node_idx];
+        if let Some(ingot) = db.workspace().containing_ingot(db, url.clone())
+            && let Some(config) = ingot.config(db)
+        {
+            configs.insert(url.clone(), config);
+        }
+    }
+    configs
+}
+
+fn collect_remote_edges(db: &dyn InputDb, graph: &DiGraph<Url, TreeEdge>) -> HashSet<(Url, Url)> {
+    let mut edges = HashSet::new();
+    for edge in graph.edge_references() {
+        let from = &graph[edge.source()];
+        let to = &graph[edge.target()];
+        let to_is_remote = db.dependency_graph().remote_git_for_local(db, to).is_some();
+        if to_is_remote
+            && db
+                .dependency_graph()
+                .remote_git_for_local(db, from)
+                .is_none()
+        {
+            edges.insert((from.clone(), to.clone()));
+        }
+    }
+    edges
+}
 
 #[derive(Clone)]
 enum TreePrefix {
@@ -31,10 +101,11 @@ impl TreePrefix {
     }
 }
 
-pub fn display_tree(
+fn display_tree(
     graph: &DiGraph<Url, (SmolStr, DependencyArguments)>,
     root_url: &Url,
     configs: &HashMap<Url, Config>,
+    remote_edges: &HashSet<(Url, Url)>,
 ) -> String {
     let mut output = String::new();
 
@@ -45,6 +116,7 @@ pub fn display_tree(
             graph,
             configs,
             cycle_nodes: &cycle_nodes,
+            remote_edges,
         };
         let mut seen = HashSet::new();
         print_node_with_alias(
@@ -53,6 +125,7 @@ pub fn display_tree(
             TreePrefix::Root,
             &mut output,
             &mut seen,
+            None,
             None,
         );
     } else {
@@ -66,6 +139,7 @@ struct TreeContext<'a> {
     graph: &'a DiGraph<Url, (SmolStr, DependencyArguments)>,
     configs: &'a HashMap<Url, Config>,
     cycle_nodes: &'a HashSet<NodeIndex>,
+    remote_edges: &'a HashSet<(Url, Url)>,
 }
 
 fn print_node_with_alias(
@@ -75,10 +149,11 @@ fn print_node_with_alias(
     output: &mut String,
     seen: &mut HashSet<NodeIndex>,
     alias: Option<&str>,
+    parent_url: Option<&Url>,
 ) {
     let ingot_path = &context.graph[node];
 
-    // Build the label with alias support
+    // Build the label with alias support (no leading marker; remote marker is appended for local→remote edges)
     let base_label = if let Some(config) = context.configs.get(ingot_path) {
         let ingot_name = config.metadata.name.as_deref().unwrap_or("null");
         let version = config
@@ -91,20 +166,33 @@ fn print_node_with_alias(
         // Show "ingot_name as alias" if alias differs from ingot name
         match alias {
             Some(alias_str) if alias_str != ingot_name => {
-                format!("➖ {ingot_name} as {alias_str} v{version}")
+                format!("{ingot_name} as {alias_str} v{version}")
             }
-            _ => format!("➖ {ingot_name} v{version}"),
+            _ => format!("{ingot_name} v{version}"),
         }
     } else {
-        "➖ [invalid fe.toml]".to_string()
+        "[invalid fe.toml]".to_string()
     };
 
     let is_in_cycle = context.cycle_nodes.contains(&node);
     let will_close_cycle = seen.contains(&node);
 
+    let is_remote_edge = parent_url
+        .map(|parent| {
+            context
+                .remote_edges
+                .contains(&(parent.clone(), ingot_path.clone()))
+        })
+        .unwrap_or(false);
+
     let mut label = base_label;
+
     if will_close_cycle {
         label = format!("{label} 🔄 [cycle]");
+    }
+
+    if is_remote_edge {
+        label = format!("{label} 🌐 [remote]");
     }
 
     if is_in_cycle {
@@ -120,7 +208,6 @@ fn print_node_with_alias(
     seen.insert(node);
 
     // Process children with alias information from edges
-    use petgraph::visit::EdgeRef;
     let children: Vec<_> = context
         .graph
         .edges_directed(node, petgraph::Direction::Outgoing)
@@ -140,6 +227,7 @@ fn print_node_with_alias(
             output,
             seen,
             Some(&edge.weight().0),
+            Some(ingot_path),
         );
     }
 

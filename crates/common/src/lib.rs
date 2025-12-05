@@ -1,3 +1,4 @@
+pub mod cache;
 pub mod config;
 pub mod dependencies;
 pub mod diagnostics;
@@ -14,7 +15,7 @@ use file::Workspace;
 // Each database must implement InputDb explicitly with its own storage mechanism
 pub trait InputDb: salsa::Database {
     fn workspace(&self) -> Workspace;
-    fn graph(&self) -> DependencyGraph;
+    fn dependency_graph(&self) -> DependencyGraph;
 }
 
 #[doc(hidden)]
@@ -30,7 +31,7 @@ macro_rules! impl_input_db {
             fn workspace(&self) -> $crate::file::Workspace {
                 self.index.clone().expect("Workspace not initialized")
             }
-            fn graph(&self) -> $crate::dependencies::DependencyGraph {
+            fn dependency_graph(&self) -> $crate::dependencies::DependencyGraph {
                 self.graph.clone().expect("Graph not initialized")
             }
         }

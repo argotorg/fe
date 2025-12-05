@@ -1,5 +1,6 @@
 #![allow(clippy::print_stderr, clippy::print_stdout)]
 mod check;
+#[cfg(not(target_arch = "wasm32"))]
 mod tree;
 
 use camino::Utf8PathBuf;
@@ -26,6 +27,7 @@ pub enum Command {
         #[arg(long)]
         emit_yul_min: bool,
     },
+    #[cfg(not(target_arch = "wasm32"))]
     Tree {
         path: Utf8PathBuf,
     },
@@ -52,6 +54,7 @@ pub fn run(opts: &Options) {
             //: TODO readd custom core
             check(path, *dump_mir, *emit_yul_min);
         }
+        #[cfg(not(target_arch = "wasm32"))]
         Command::Tree { path } => {
             tree::print_tree(path);
         }
