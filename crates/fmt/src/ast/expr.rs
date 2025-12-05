@@ -3,9 +3,172 @@
 use pretty::DocAllocator;
 
 use crate::RewriteContext;
-use parser::ast::{self, ExprKind, GenericArgsOwner, prelude::AstNode};
+use parser::ast::{self, BinOp, ExprKind, GenericArgsOwner, LogicalBinOp, prelude::AstNode};
 
 use super::types::{Doc, ToDoc, block_list, block_list_spaced};
+
+// ============================================================================
+// Binary expression formatting with precedence-aware indentation
+// ============================================================================
+
+/// Returns the precedence level of a binary operator.
+/// Lower number = lower precedence (binds less tightly).
+/// This is used for formatting, not parsing.
+fn bin_op_precedence(op: &BinOp) -> u8 {
+    use parser::ast::ArithBinOp;
+    match op {
+        BinOp::Logical(LogicalBinOp::Or(_)) => 1,
+        BinOp::Logical(LogicalBinOp::And(_)) => 2,
+        BinOp::Comp(_) => 3,
+        // Bitwise operators
+        BinOp::Arith(ArithBinOp::BitOr(_)) => 4,
+        BinOp::Arith(ArithBinOp::BitXor(_)) => 5,
+        BinOp::Arith(ArithBinOp::BitAnd(_)) => 6,
+        // Shift operators
+        BinOp::Arith(ArithBinOp::LShift(_) | ArithBinOp::RShift(_)) => 7,
+        // Additive operators
+        BinOp::Arith(ArithBinOp::Add(_) | ArithBinOp::Sub(_)) => 8,
+        // Multiplicative operators
+        BinOp::Arith(ArithBinOp::Mul(_) | ArithBinOp::Div(_) | ArithBinOp::Mod(_)) => 9,
+        // Exponentiation (highest arithmetic precedence)
+        BinOp::Arith(ArithBinOp::Pow(_)) => 10,
+    }
+}
+
+/// If expression is a binary expression with the given precedence, return the BinExpr.
+fn as_bin_expr_with_precedence(expr: &ast::Expr, precedence: u8) -> Option<ast::BinExpr> {
+    if let ExprKind::Bin(bin) = expr.kind()
+        && let Some(op) = bin.op()
+            && bin_op_precedence(&op) == precedence {
+                return Some(bin);
+            }
+    None
+}
+
+/// Formats a binary expression with precedence-aware indentation.
+///
+/// For expressions like `a || b && c || d`:
+/// - `||` (lower precedence) breaks at base indentation
+/// - `&&` (higher precedence) breaks with extra indentation
+///
+/// ```text
+/// a
+/// || b && c
+/// || d
+/// ```
+///
+/// And for `a || b && c && d || e`:
+/// ```text
+/// a
+/// || b
+///     && c
+///     && d
+/// || e
+/// ```
+fn format_bin_expr<'a>(bin: &ast::BinExpr, ctx: &'a RewriteContext<'a>) -> Doc<'a> {
+    format_bin_expr_inner(bin, ctx, true)
+}
+
+/// Inner implementation with control over outer nesting.
+/// `apply_outer_nest`: if true, wraps result in `.nest(indent).group()`
+fn format_bin_expr_inner<'a>(
+    bin: &ast::BinExpr,
+    ctx: &'a RewriteContext<'a>,
+    apply_outer_nest: bool,
+) -> Doc<'a> {
+    let alloc = &ctx.alloc;
+    let indent = ctx.config.indent_width as isize;
+
+    let op = match bin.op() {
+        Some(o) => o,
+        None => {
+            return bin
+                .lhs()
+                .map(|e| e.to_doc(ctx))
+                .unwrap_or_else(|| alloc.nil());
+        }
+    };
+
+    let precedence = bin_op_precedence(&op);
+
+    // Collect all operands and operators at this precedence level
+    let mut operands: Vec<ast::Expr> = Vec::new();
+    let mut operators: Vec<String> = Vec::new();
+
+    fn collect<'a>(
+        expr: &ast::BinExpr,
+        precedence: u8,
+        operands: &mut Vec<ast::Expr>,
+        operators: &mut Vec<String>,
+        ctx: &'a RewriteContext<'a>,
+    ) {
+        if let Some(lhs) = expr.lhs() {
+            if let Some(lhs_bin) = as_bin_expr_with_precedence(&lhs, precedence) {
+                collect(&lhs_bin, precedence, operands, operators, ctx);
+            } else {
+                operands.push(lhs);
+            }
+        }
+
+        if let Some(op) = expr.op() {
+            operators.push(ctx.snippet_node_or_token(&op.syntax()));
+        }
+
+        if let Some(rhs) = expr.rhs() {
+            if let Some(rhs_bin) = as_bin_expr_with_precedence(&rhs, precedence) {
+                collect(&rhs_bin, precedence, operands, operators, ctx);
+            } else {
+                operands.push(rhs);
+            }
+        }
+    }
+
+    collect(bin, precedence, &mut operands, &mut operators, ctx);
+
+    if operands.is_empty() {
+        return alloc.nil();
+    }
+
+    let first = &operands[0];
+    let mut result = first.to_doc(ctx);
+
+    for (i, operand) in operands.iter().skip(1).enumerate() {
+        let op_str = &operators[i];
+
+        // Check if operand is a higher-precedence binary expression
+        let higher_prec_bin = if let ExprKind::Bin(inner_bin) = operand.kind() {
+            inner_bin
+                .op()
+                .filter(|inner_op| bin_op_precedence(inner_op) > precedence)
+                .map(|_| inner_bin)
+        } else {
+            None
+        };
+
+        if let Some(inner_bin) = higher_prec_bin {
+            // Format inner chain without its own nesting, we control it here
+            let inner_doc = format_bin_expr_inner(&inner_bin, ctx, false);
+            result = result
+                .append(alloc.line())
+                .append(alloc.text(op_str.clone()))
+                .append(alloc.text(" "))
+                .append(inner_doc.nest(indent));
+        } else {
+            let operand_doc = operand.to_doc(ctx);
+            result = result
+                .append(alloc.line())
+                .append(alloc.text(op_str.clone()))
+                .append(alloc.text(" "))
+                .append(operand_doc);
+        }
+    }
+
+    if apply_outer_nest {
+        result.nest(indent).group()
+    } else {
+        result.group()
+    }
+}
 
 /// A segment in a method/field chain.
 enum ChainSegment {
@@ -212,29 +375,7 @@ fn format_chain_inner<'a>(
 
 impl ToDoc for ast::BinExpr {
     fn to_doc<'a>(&self, ctx: &'a RewriteContext<'a>) -> Doc<'a> {
-        let alloc = &ctx.alloc;
-
-        let lhs = match self.lhs() {
-            Some(e) => e.to_doc(ctx),
-            None => return alloc.nil(),
-        };
-        let op = match self.op() {
-            Some(o) => ctx.snippet_node_or_token(&o.syntax()).to_string(),
-            None => return lhs,
-        };
-        let rhs = match self.rhs() {
-            Some(e) => e.to_doc(ctx),
-            None => return lhs,
-        };
-
-        let indent = ctx.config.indent_width as isize;
-
-        lhs.append(alloc.line())
-            .append(alloc.text(op))
-            .append(alloc.text(" "))
-            .append(rhs)
-            .nest(indent)
-            .group()
+        format_bin_expr(self, ctx)
     }
 }
 

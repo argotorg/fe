@@ -21,3 +21,8 @@ fn mixed_operators() {
     let cmp = very_long_left_side_expression_name == very_long_right_side_expression_name_that_is_even_longer
     let logical = first_condition_check && second_condition_check && third_condition_check || fourth_condition_check
 }
+
+// Precedence-aware indentation: && should indent relative to ||
+fn precedence_indentation() {
+    let x = very_long_condition_alpha || very_long_condition_beta && very_long_condition_gamma && very_long_condition_delta && other_thing || very_long_condition_epsilon && foo
+}
