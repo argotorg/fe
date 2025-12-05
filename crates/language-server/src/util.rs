@@ -57,6 +57,28 @@ pub fn to_lsp_location_from_scope(
     db: &dyn SpannedHirDb,
     scope: ScopeId,
 ) -> Result<async_lsp::lsp_types::Location, Box<dyn std::error::Error>> {
+    use hir::hir_def::ItemKind;
+
+    // For file modules (TopLevelMod), navigate to the start of the file
+    if let ScopeId::Item(ItemKind::TopMod(top_mod)) = scope
+        && let Some(resolved_span) = top_mod.span().resolve(db)
+    {
+        let uri = resolved_span.file.url(db).ok_or("Failed to get file URL")?;
+        return Ok(async_lsp::lsp_types::Location {
+            uri,
+            range: async_lsp::lsp_types::Range {
+                start: async_lsp::lsp_types::Position {
+                    line: 0,
+                    character: 0,
+                },
+                end: async_lsp::lsp_types::Position {
+                    line: 0,
+                    character: 0,
+                },
+            },
+        });
+    }
+
     let lazy_span = scope.name_span(db).ok_or("Failed to get name span")?;
     let span = lazy_span.resolve(db).ok_or("Failed to resolve span")?;
     to_lsp_location_from_span(db, span)
