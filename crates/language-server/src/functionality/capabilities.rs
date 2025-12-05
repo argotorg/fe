@@ -40,6 +40,16 @@ pub(crate) fn server_capabilities() -> ServerCapabilities {
             work_done_progress_options: Default::default(),
             completion_item: None,
         }),
+        // signature help
+        signature_help_provider: Some(async_lsp::lsp_types::SignatureHelpOptions {
+            trigger_characters: Some(vec!["(".to_string(), ",".to_string()]),
+            retrigger_characters: Some(vec![",".to_string()]),
+            work_done_progress_options: Default::default(),
+        }),
+        // code actions (quick fixes)
+        code_action_provider: Some(async_lsp::lsp_types::CodeActionProviderCapability::Simple(
+            true,
+        )),
         // support for workspace add/remove changes
         workspace: Some(async_lsp::lsp_types::WorkspaceServerCapabilities {
             workspace_folders: Some(async_lsp::lsp_types::WorkspaceFoldersServerCapabilities {
