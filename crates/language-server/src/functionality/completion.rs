@@ -788,11 +788,7 @@ fn collect_path_completions<'db>(
         });
     }
 
-    info!(
-        "collected {} items from path '{}'",
-        items.len(),
-        full_path
-    );
+    info!("collected {} items from path '{}'", items.len(), full_path);
 }
 
 /// Collect completions for member access (fields and methods after `.`).
@@ -1810,79 +1806,24 @@ mod tests {
         let file_text = file.text(&db);
         let top_mod = map_file_to_mod(&db, file);
 
-        println!("File content:\n{}", file_text);
-        println!("\nFile length: {} bytes", file_text.len());
-
-        // Test 1: Find the position of "p." in the test() function
+        // Test completion after "p."
         if let Some(pos) = file_text.rfind("p.") {
             let cursor_after_dot = parser::TextSize::from((pos + 2) as u32);
-            println!("\nFound 'p.' at position {}, cursor after dot: {:?}", pos, cursor_after_dot);
-
-            // Try to collect member completions
             let mut items = Vec::new();
             collect_member_completions(&db, top_mod, cursor_after_dot, &mut items);
-
-            println!("\nCollected {} completion items for 'p.':", items.len());
-            for item in &items {
-                println!("  {} ({:?}): {:?}", item.label, item.kind, item.detail);
-            }
             assert!(items.len() >= 2, "Expected at least 2 items (x, y fields)");
         }
 
-        // Test 2: Find the position of "self." in test_self_completion
-        // Find the last "self." which should be the incomplete one
+        // Test completion after "self."
         let self_dot_positions: Vec<_> = file_text.match_indices("self.").collect();
-        println!("\nFound {} occurrences of 'self.'", self_dot_positions.len());
-
-        // The last one should be the incomplete "self." in test_self_completion
         if let Some(&(pos, _)) = self_dot_positions.last() {
             let cursor_after_dot = parser::TextSize::from((pos + 5) as u32);
-            println!("Testing self. completion at position {}, cursor: {:?}", pos, cursor_after_dot);
-
             let mut items = Vec::new();
             collect_member_completions(&db, top_mod, cursor_after_dot, &mut items);
-
-            println!("\nCollected {} completion items for 'self.':", items.len());
-            for item in &items {
-                println!("  {} ({:?}): {:?}", item.label, item.kind, item.detail);
-            }
-            assert!(items.len() >= 2, "Expected at least 2 items (x, y fields) for self.");
-        }
-
-        // Also dump all expressions
-        use hir::analysis::ty::ty_check::check_func_body;
-
-        for item in top_mod.scope_graph(&db).items_dfs(&db) {
-            if let ItemKind::Func(func) = item {
-                if let Some(body) = func.body(&db) {
-                    let (_, typed_body) = check_func_body(&db, func);
-                    println!(
-                        "\nFunction: {:?}",
-                        func.name(&db).to_opt().map(|n| n.data(&db))
-                    );
-
-                    for (expr_id, expr_data) in body.exprs(&db).iter() {
-                        if let Some(span) = expr_id.span(body).resolve(&db) {
-                            let ty = typed_body.expr_ty(&db, expr_id);
-                            println!(
-                                "  Expr {:?} @ {:?} : {}",
-                                expr_data,
-                                span.range,
-                                ty.pretty_print(&db)
-                            );
-
-                            if let Some(field_parent) = ty.field_parent(&db) {
-                                println!("    -> has fields:");
-                                for field in field_parent.fields(&db) {
-                                    if let Some(name) = field.name(&db) {
-                                        println!("       {}: {}", name.data(&db), field.ty(&db).pretty_print(&db));
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
+            assert!(
+                items.len() >= 2,
+                "Expected at least 2 items (x, y fields) for self."
+            );
         }
     }
 
@@ -1893,7 +1834,6 @@ mod tests {
 
         let mut db = DriverDataBase::default();
 
-        // Use the hoverable fixture which has modules
         let fixture_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("test_files")
             .join("hoverable");
@@ -1904,34 +1844,24 @@ mod tests {
         let file = db.workspace().get(&db, &lib_url).expect("file not found");
         let top_mod = map_file_to_mod(&db, file);
 
-        // Get items visible in the top-level scope
         let scope = top_mod.scope();
         let visible = scope.items_in_scope(&db, NameDomain::VALUE | NameDomain::TYPE);
+        assert!(
+            visible.keys().any(|n| n == "stuff"),
+            "stuff module should be visible"
+        );
 
-        println!("\nItems visible in lib.fe scope:");
-        for (name, res) in visible.iter() {
-            println!("  {} -> {:?}", name, res.kind);
-        }
-
-        // Check that 'stuff' module is visible
-        let has_stuff = visible.keys().any(|n| n == "stuff");
-        println!("\nHas 'stuff' module: {}", has_stuff);
-
-        // Collect completion items
         let mut items = Vec::new();
         collect_items_from_scope(&db, scope, &mut items);
 
-        println!("\nCompletion items from scope:");
-        for item in &items {
-            println!("  {} ({:?})", item.label, item.kind);
-        }
-
-        // Check that module completions are present
         let module_completions: Vec<_> = items
             .iter()
             .filter(|i| i.kind == Some(CompletionItemKind::MODULE))
             .collect();
-        println!("\nModule completions: {:?}", module_completions.iter().map(|i| &i.label).collect::<Vec<_>>());
+        assert!(
+            !module_completions.is_empty(),
+            "Should have module completions"
+        );
     }
 
     /// Test path completion (stuff::)
@@ -1949,151 +1879,75 @@ mod tests {
         let file = db.workspace().get(&db, &lib_url).expect("file not found");
         let top_mod = map_file_to_mod(&db, file);
 
-        // Simulate typing "stuff::" and collecting completions
+        // Test stuff::
         let file_text = "stuff::";
         let cursor = parser::TextSize::from(file_text.len() as u32);
-
         let mut items = Vec::new();
         collect_path_completions(&db, top_mod, cursor, file_text, &mut items);
 
-        println!("\nPath completions for 'stuff::':");
-        for item in &items {
-            println!("  {} ({:?})", item.label, item.kind);
-        }
-
-        // Should have 'calculations' module and any other items in stuff module
         assert!(!items.is_empty(), "Expected items from stuff module");
-        let has_calculations = items.iter().any(|i| i.label == "calculations");
-        println!("\nHas 'calculations' submodule: {}", has_calculations);
-        assert!(has_calculations, "Expected 'calculations' submodule in stuff::");
+        assert!(
+            items.iter().any(|i| i.label == "calculations"),
+            "Expected 'calculations' submodule in stuff::"
+        );
 
-        // Test nested path: stuff::calculations::
+        // Test stuff::calculations::
         let file_text = "stuff::calculations::";
         let cursor = parser::TextSize::from(file_text.len() as u32);
-
         let mut items = Vec::new();
         collect_path_completions(&db, top_mod, cursor, file_text, &mut items);
 
-        println!("\nPath completions for 'stuff::calculations::':");
-        for item in &items {
-            println!("  {} ({:?})", item.label, item.kind);
-        }
-
-        // Should have items from the calculations module
-        assert!(!items.is_empty(), "Expected items from stuff::calculations module");
-        let has_return_three = items.iter().any(|i| i.label == "return_three");
-        let has_return_four = items.iter().any(|i| i.label == "return_four");
-        println!("\nHas 'return_three': {}", has_return_three);
-        println!("Has 'return_four': {}", has_return_four);
-        assert!(has_return_three, "Expected 'return_three' in stuff::calculations::");
-        assert!(has_return_four, "Expected 'return_four' in stuff::calculations::");
+        assert!(!items.is_empty(), "Expected items from stuff::calculations");
+        assert!(items.iter().any(|i| i.label == "return_three"));
+        assert!(items.iter().any(|i| i.label == "return_four"));
     }
 
     /// Test member access completion by simulating cursor after a dot
     #[test]
     fn test_member_access_completion() {
+        use hir::hir_def::Expr;
+        use hir::visitor::{Visitor, VisitorCtxt, prelude::*};
+
         let mut db = DriverDataBase::default();
 
-        // Use the hoverable fixture which has struct definitions
         let fixture_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("test_files")
             .join("hoverable");
 
         load_ingot_from_directory(&mut db, &fixture_path);
 
-        // Find the src/lib.fe file
         let lib_url = url::Url::from_file_path(fixture_path.join("src").join("lib.fe")).unwrap();
         let file = db.workspace().get(&db, &lib_url).expect("file not found");
-        let file_text = file.text(&db);
         let top_mod = map_file_to_mod(&db, file);
 
-        println!("File content:\n{}", file_text);
-
-        // Find all Field expressions in the file
-        use hir::hir_def::Expr;
-        use hir::span::LazySpan;
-        use hir::visitor::{Visitor, VisitorCtxt, prelude::*};
-
-        struct FieldExprFinder<'db> {
-            db: &'db DriverDataBase,
-            field_exprs: Vec<(parser::TextRange, String)>,
+        // Find Field expressions using visitor
+        struct FieldExprFinder {
+            count: usize,
         }
 
-        impl<'db> Visitor<'db> for FieldExprFinder<'db> {
+        impl<'db> Visitor<'db> for FieldExprFinder {
             fn visit_expr(
                 &mut self,
                 ctxt: &mut VisitorCtxt<'db, LazyExprSpan<'db>>,
                 expr: hir::hir_def::ExprId,
                 expr_data: &Expr<'db>,
             ) {
-                if let Expr::Field(_receiver, field_idx) = expr_data {
-                    if let Some(span) = ctxt.span() {
-                        if let Some(resolved) = span.resolve(self.db) {
-                            let field_name = match field_idx {
-                                Partial::Present(hir::hir_def::FieldIndex::Ident(id)) => {
-                                    id.data(self.db).to_string()
-                                }
-                                _ => "<unknown>".to_string(),
-                            };
-                            self.field_exprs.push((resolved.range, field_name));
-                        }
-                    }
+                if matches!(expr_data, Expr::Field(..)) {
+                    self.count += 1;
                 }
                 walk_expr(self, ctxt, expr);
             }
         }
 
-        let mut finder = FieldExprFinder {
-            db: &db,
-            field_exprs: vec![],
-        };
+        let mut finder = FieldExprFinder { count: 0 };
         let mut visitor_ctxt = VisitorCtxt::with_top_mod(&db, top_mod);
         finder.visit_top_mod(&mut visitor_ctxt, top_mod);
 
-        println!("\nFound {} Field expressions:", finder.field_exprs.len());
-        for (range, field_name) in &finder.field_exprs {
-            println!("  {:?} -> {}", range, field_name);
-        }
-
-        // Now test completion at a position after a dot
-        // We'll manually construct a position and call collect_member_completions
-        // For this test, let's just verify that field_parent works
-        use hir::analysis::ty::ty_check::check_func_body;
-
-        // Find all funcs and print their typed body info
-        for item in top_mod.scope_graph(&db).items_dfs(&db) {
-            if let ItemKind::Func(func) = item {
-                if let Some(body) = func.body(&db) {
-                    let (_, typed_body) = check_func_body(&db, func);
-                    println!(
-                        "\nFunction: {:?}",
-                        func.name(&db).to_opt().map(|n| n.data(&db))
-                    );
-
-                    for (expr_id, expr_data) in body.exprs(&db).iter() {
-                        if let Some(span) = expr_id.span(body).resolve(&db) {
-                            let ty = typed_body.expr_ty(&db, expr_id);
-                            println!(
-                                "  Expr {:?} @ {:?} : {}",
-                                expr_data,
-                                span.range,
-                                ty.pretty_print(&db)
-                            );
-
-                            // Check if type has fields
-                            if let Some(field_parent) = ty.field_parent(&db) {
-                                println!("    -> has fields:");
-                                for field in field_parent.fields(&db) {
-                                    if let Some(name) = field.name(&db) {
-                                        println!("       {}: {}", name.data(&db), field.ty(&db).pretty_print(&db));
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
+        // The fixture should have field access expressions
+        assert!(
+            finder.count > 0,
+            "Expected Field expressions in the fixture"
+        );
     }
 
     /// Test auto-import completions
@@ -2112,55 +1966,25 @@ mod tests {
         let file_text = file.text(&db);
         let top_mod = map_file_to_mod(&db, file);
 
-        println!("File content:\n{}", file_text);
-
-        // Get the scope at the top of the file
         let scope = top_mod.scope();
-
-        // Collect auto-import completions
         let mut items = Vec::new();
-        collect_auto_import_completions(&db, top_mod, scope, &file_text, &mut items);
+        collect_auto_import_completions(&db, top_mod, scope, file_text, &mut items);
 
-        println!("\nAuto-import completions ({} items):", items.len());
-        for item in &items {
-            println!(
-                "  {} - {:?} - {:?}",
-                item.label,
-                item.detail,
-                item.additional_text_edits
-            );
-        }
-
-        // Should have items from other modules (stuff, stuff::calculations)
-        // that aren't already imported
-        let has_return_three = items.iter().any(|i| i.label == "return_three");
-        let has_return_four = items.iter().any(|i| i.label == "return_four");
-
-        println!("\nHas 'return_three' auto-import: {}", has_return_three);
-        println!("Has 'return_four' auto-import: {}", has_return_four);
-
-        // These should NOT be in auto-imports because they're already imported in the fixture
-        // But we can check that other items from stuff::calculations are available
-        // (items not imported in lib.fe)
-
-        // Check that auto-imports have the correct additional_text_edits
+        // Verify auto-imports have proper text edits
         for item in &items {
             if let Some(edits) = &item.additional_text_edits {
-                assert!(!edits.is_empty(), "Expected at least one text edit for auto-import");
+                assert!(!edits.is_empty());
                 for edit in edits {
-                    println!("  Edit: insert '{}' at {:?}", edit.new_text.trim(), edit.range);
-                    assert!(
-                        edit.new_text.starts_with("use "),
-                        "Expected edit to be a use statement"
-                    );
+                    assert!(edit.new_text.starts_with("use "));
                 }
             }
         }
 
         // Test import insertion position detection
-        let position = find_import_insertion_position(&file_text);
-        println!("\nImport insertion position: line {}", position.line);
-        // Should be after the existing use statements
-        assert!(position.line > 0, "Expected insertion after existing imports");
+        let position = find_import_insertion_position(file_text);
+        assert!(
+            position.line > 0,
+            "Expected insertion after existing imports"
+        );
     }
 }

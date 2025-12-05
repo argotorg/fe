@@ -14,19 +14,19 @@ note:
   ┌─ field_method.fe:8:17
   │
 8 │         Point { x, y }
-  │                 ^ x -> value
+  │                 ^ x -> local
 
 note: 
   ┌─ field_method.fe:8:20
   │
 8 │         Point { x, y }
-  │                    ^ y -> value
+  │                    ^ y -> local
 
 note: 
    ┌─ field_method.fe:12:9
    │
 12 │         self.x * self.x + self.y * self.y
-   │         ^^^^ self -> value
+   │         ^^^^ self -> local
 
 note: 
    ┌─ field_method.fe:12:14
@@ -38,7 +38,7 @@ note:
    ┌─ field_method.fe:12:18
    │
 12 │         self.x * self.x + self.y * self.y
-   │                  ^^^^ self -> value
+   │                  ^^^^ self -> local
 
 note: 
    ┌─ field_method.fe:12:23
@@ -50,7 +50,7 @@ note:
    ┌─ field_method.fe:12:27
    │
 12 │         self.x * self.x + self.y * self.y
-   │                           ^^^^ self -> value
+   │                           ^^^^ self -> local
 
 note: 
    ┌─ field_method.fe:12:32
@@ -62,7 +62,7 @@ note:
    ┌─ field_method.fe:12:36
    │
 12 │         self.x * self.x + self.y * self.y
-   │                                    ^^^^ self -> value
+   │                                    ^^^^ self -> local
 
 note: 
    ┌─ field_method.fe:12:41
