@@ -115,11 +115,43 @@ impl<'db> TopLevelMod<'db> {
         None
     }
 
+    /// Find the item definition at cursor position.
+    ///
+    /// Returns the ScopeId if the cursor is on an item's name token in its definition.
+    /// This is useful for find-all-references and similar operations that need to
+    /// identify when the cursor is on a definition rather than a reference.
+    ///
+    /// # Example
+    /// ```fe
+    /// pub trait Hasher { // cursor on "Hasher" returns Some(ScopeId::Trait)
+    ///     fn hash() -> u256
+    /// }
+    /// ```
+    pub fn definition_at(
+        self,
+        db: &'db dyn SpannedHirDb,
+        cursor: TextSize,
+    ) -> Option<ScopeId<'db>> {
+        let items = self.find_enclosing_items(db, cursor);
+
+        for item in items {
+            if let Some(name_span) = item.name_span() {
+                if let Some(resolved) = name_span.resolve(db) {
+                    if resolved.range.contains(cursor) {
+                        return Some(ScopeId::from_item(item));
+                    }
+                }
+            }
+        }
+
+        None
+    }
+
     /// Find all items with the smallest span enclosing the cursor position.
     ///
     /// Returns all items that share the smallest enclosing span. This handles
     /// cases like decomposed use statements where multiple items have identical spans.
-    fn find_enclosing_items(
+    pub fn find_enclosing_items(
         self,
         db: &'db dyn SpannedHirDb,
         cursor: TextSize,
