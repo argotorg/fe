@@ -1,0 +1,22 @@
+enum Color {
+    Red,
+    Green,
+    Blue
+}
+
+enum Shape {
+    Circle(i32),
+    Rectangle(i32, i32)
+}
+
+fn use_color(c: Color) -> bool {
+    match c {
+        Color::Red => true
+        Color::Green => false
+        Color::Blue => true
+    }
+}
+
+fn create_shape() -> Shape {
+    Shape::Circle(10)
+}

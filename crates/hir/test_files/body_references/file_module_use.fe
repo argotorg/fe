@@ -1,0 +1,5 @@
+mod inline_mod {
+    pub fn func_a() {}
+}
+
+use inline_mod::func_a

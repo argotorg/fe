@@ -214,6 +214,7 @@ fn extract_object(value: &Value, path: &[&str]) -> Option<String> {
 }
 
 #[cfg(test)]
+#[allow(clippy::print_stderr)]
 mod tests {
     use super::*;
     use contract_harness::{ExecutionOptions, U256, bytes_to_u256, execute_runtime};

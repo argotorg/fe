@@ -1,0 +1,25 @@
+---
+source: crates/language-server/src/functionality/goto.rs
+assertion_line: 292
+expression: snapshot
+input_file: test_files/goto_ambiguous.fe
+---
+0: // Test case for ambiguous references
+1: mod foo {
+2:     pub struct Thing {}
+3: }
+4: 
+5: mod bar {
+6:     pub struct Thing {}
+7: }
+8: 
+9: // Import both Things into the same scope
+10: use foo::Thing
+11: use bar::Thing
+12: 
+13: fn test() {
+14:     // This should resolve to both candidates
+15:     let x: Thing
+16: }
+---
+cursor position (15, 11), path: goto_ambiguous::bar::Thing

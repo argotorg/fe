@@ -881,6 +881,18 @@ impl<'db> LocalBinding<'db> {
             LocalBinding::EffectParam { func, .. } => func.span().name().into(),
         }
     }
+
+    /// Get the definition span for this binding, given the body and function directly.
+    ///
+    /// This is used by `TypedBody::expr_binding_def_span` to get the definition
+    /// span without needing a full `TyCheckEnv`.
+    pub(super) fn def_span_with(&self, body: Body<'db>, func: Func<'db>) -> DynLazySpan<'db> {
+        match self {
+            LocalBinding::Local { pat, .. } => pat.span(body).into(),
+            LocalBinding::Param { idx, .. } => func.span().params().param(*idx).name().into(),
+            LocalBinding::EffectParam { func: f, .. } => f.span().name().into(),
+        }
+    }
 }
 
 struct Prober<'db, 'a> {

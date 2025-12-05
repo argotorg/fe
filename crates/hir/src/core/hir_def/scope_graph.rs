@@ -128,6 +128,18 @@ impl<'db> ScopeId<'db> {
         }
     }
 
+    /// Returns the body if this is a block scope or body item scope.
+    ///
+    /// Block scopes are created for code blocks within function bodies.
+    /// Returns `None` for other scope types.
+    pub fn body(self) -> Option<Body<'db>> {
+        match self {
+            ScopeId::Block(body, _) => Some(body),
+            ScopeId::Item(ItemKind::Body(body)) => Some(body),
+            _ => None,
+        }
+    }
+
     /// Returns the nearest item that contains this scope.
     /// If the scope is item itself, returns the item.
     pub fn item(self) -> ItemKind<'db> {

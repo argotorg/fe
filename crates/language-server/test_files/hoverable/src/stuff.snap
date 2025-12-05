@@ -1,0 +1,172 @@
+---
+source: crates/language-server/src/functionality/references.rs
+expression: snapshot
+input_file: test_files/hoverable/src/stuff.fe
+---
+note: 
+  ┌─ lib.fe:1:5
+  │
+1 │ use stuff::calculations::{ return_three, return_four }
+  │     ^^^^^ ref: 1:4
+
+note: 
+  ┌─ lib.fe:1:12
+  │
+1 │ use stuff::calculations::{ return_three, return_four }
+  │            ^^^^^^^^^^^^ ref: 1:11
+
+note: 
+  ┌─ lib.fe:1:28
+  │
+1 │ use stuff::calculations::{ return_three, return_four }
+  │                            ^^^^^^^^^^^^ ref: 1:27
+
+note: 
+  ┌─ lib.fe:1:42
+  │
+1 │ use stuff::calculations::{ return_three, return_four }
+  │                                          ^^^^^^^^^^^ ref: 1:41
+
+note: 
+  ┌─ lib.fe:2:5
+  │
+2 │ use stuff::calculations::ambiguous;
+  │     ^^^^^ ref: 2:4
+
+note: 
+  ┌─ lib.fe:2:12
+  │
+2 │ use stuff::calculations::ambiguous;
+  │            ^^^^^^^^^^^^ ref: 2:11
+
+note: 
+  ┌─ lib.fe:2:26
+  │
+2 │ use stuff::calculations::ambiguous;
+  │                          ^^^^^^^^^ ref: 2:25
+
+note: 
+  ┌─ lib.fe:7:8
+  │
+7 │ pub fn return_seven() {
+  │        ^^^^^^^^^^^^ def: defined here @ 7:7 (2 refs)
+
+note: 
+  ┌─ lib.fe:8:3
+  │
+8 │   return_three() + return_four()
+  │   ^^^^^^^^^^^^ ref: 8:2
+
+note: 
+  ┌─ lib.fe:8:20
+  │
+8 │   return_three() + return_four()
+  │                    ^^^^^^^^^^^ ref: 8:19
+
+note: 
+   ┌─ lib.fe:11:4
+   │
+11 │ fn calculate() {
+   │    ^^^^^^^^^ def: defined here @ 11:3 (1 refs)
+
+note: 
+   ┌─ lib.fe:12:3
+   │
+12 │   return_seven()
+   │   ^^^^^^^^^^^^ ref: 12:2
+
+note: 
+   ┌─ lib.fe:13:10
+   │
+13 │   let x: stuff::calculations::ambiguous
+   │          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ ref: 13:9
+
+note: 
+   ┌─ lib.fe:18:11
+   │
+18 │ pub trait Calculatable {
+   │           ^^^^^^^^^^^^ def: defined here @ 18:10 (4 refs)
+
+note: 
+   ┌─ lib.fe:19:6
+   │
+19 │   fn calculate(self)
+   │      ^^^^^^^^^ def: defined here @ 19:5 (1 refs)
+
+note: 
+   ┌─ lib.fe:19:16
+   │
+19 │   fn calculate(self)
+   │                ^^^^ ref: 19:15
+
+note: 
+   ┌─ lib.fe:23:8
+   │
+23 │ struct Numbers {
+   │        ^^^^^^^ def: defined here @ 23:7 (4 refs)
+
+note: 
+   ┌─ lib.fe:28:6
+   │
+28 │ impl Calculatable for Numbers {
+   │      ^^^^^^^^^^^^ ref: 28:5
+
+note: 
+   ┌─ lib.fe:28:23
+   │
+28 │ impl Calculatable for Numbers {
+   │                       ^^^^^^^ ref: 28:22
+
+note: 
+   ┌─ lib.fe:29:6
+   │
+29 │   fn calculate(self) {
+   │      ^^^^^^^^^ def: defined here @ 29:5 (1 refs)
+
+note: 
+   ┌─ lib.fe:29:16
+   │
+29 │   fn calculate(self) {
+   │                ^^^^ ref: 29:15
+
+note: 
+   ┌─ lib.fe:30:5
+   │
+30 │     self.x + self.y
+   │     ^^^^ ref: 30:4
+
+note: 
+   ┌─ lib.fe:30:14
+   │
+30 │     self.x + self.y
+   │              ^^^^ ref: 30:13
+
+note: 
+  ┌─ stuff.fe:2:9
+  │
+2 │ pub mod calculations {
+  │         ^^^^^^^^^^^^ def: defined here @ 2:8 (4 refs)
+
+note: 
+  ┌─ stuff.fe:4:10
+  │
+4 │   pub fn return_three() -> u32 {
+  │          ^^^^^^^^^^^^ def: defined here @ 4:9 (3 refs)
+
+note: 
+  ┌─ stuff.fe:9:10
+  │
+9 │   pub fn return_four() {
+  │          ^^^^^^^^^^^ def: defined here @ 9:9 (3 refs)
+
+note: 
+   ┌─ stuff.fe:14:11
+   │
+14 │   pub mod ambiguous {
+   │           ^^^^^^^^^ def: defined here @ 14:10 (3 refs)
+
+note: 
+   ┌─ stuff.fe:18:10
+   │
+18 │   pub fn ambiguous() {}
+   │          ^^^^^^^^^ def: defined here @ 18:9 (1 refs)

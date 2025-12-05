@@ -1,0 +1,15 @@
+---
+source: crates/language-server/src/functionality/goto.rs
+assertion_line: 350
+expression: snapshot
+input_file: test_files/goto_struct.fe
+---
+0: struct Inner {
+1:     value: u256
+2: }
+3: 
+4: struct Outer {
+5:     inner: Inner
+6: }
+---
+cursor position (5, 11), path: goto_struct::Inner

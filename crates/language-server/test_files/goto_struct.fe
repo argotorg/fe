@@ -1,0 +1,7 @@
+struct Inner {
+    value: u256
+}
+
+struct Outer {
+    inner: Inner
+}
