@@ -110,7 +110,11 @@ impl ToDoc for ast::RecordPat {
 
                         if let Some(pat) = field.pat() {
                             let pat_doc = pat.to_doc(context, shape);
-                            Some(RcDoc::text(name_text).append(RcDoc::text(": ")).append(pat_doc))
+                            Some(
+                                RcDoc::text(name_text)
+                                    .append(RcDoc::text(": "))
+                                    .append(pat_doc),
+                            )
                         } else {
                             Some(RcDoc::text(name_text))
                         }
@@ -120,7 +124,8 @@ impl ToDoc for ast::RecordPat {
             .unwrap_or_default();
 
         let indent = context.config.indent_width as isize;
-        path.append(RcDoc::text(" ")).append(block_list_spaced("{", "}", fields, indent, true))
+        path.append(RcDoc::text(" "))
+            .append(block_list_spaced("{", "}", fields, indent, true))
     }
 }
 

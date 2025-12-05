@@ -3,8 +3,8 @@ use std::path::Path;
 
 use parser::{SyntaxNode, ast, ast::prelude::AstNode, parse_source_file};
 
-use crate::{Config, Indent, RewriteContext, Shape};
 use crate::ast::ToDoc;
+use crate::{Config, Indent, RewriteContext, Shape};
 
 /// Errors that can occur while formatting Fe source.
 #[derive(Debug)]

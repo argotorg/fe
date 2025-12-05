@@ -3,9 +3,244 @@
 use pretty::RcDoc;
 
 use crate::{RewriteContext, Shape};
-use parser::ast::{self, GenericArgsOwner, prelude::AstNode};
+use parser::ast::{self, ExprKind, GenericArgsOwner, prelude::AstNode};
 
 use super::types::{ToDoc, block_list, block_list_spaced};
+
+/// A segment in a method/field chain.
+enum ChainSegment {
+    /// `.method(args)` or `.method::<T>(args)`
+    MethodCall {
+        name: String,
+        generics: Option<ast::GenericArgList>,
+        args: Option<ast::CallArgList>,
+    },
+    /// `.field`
+    Field { name: String },
+}
+
+/// Collects chain segments from an expression, returning (root, segments).
+/// Segments are in source order (first segment is closest to root).
+fn collect_chain(expr: &ast::Expr) -> (ast::Expr, Vec<ChainSegment>) {
+    let mut segments = Vec::new();
+    let mut current = expr.clone();
+
+    loop {
+        match current.kind() {
+            ExprKind::MethodCall(method) => {
+                let name = method
+                    .method_name()
+                    .map(|n| n.text().to_string())
+                    .unwrap_or_default();
+                segments.push(ChainSegment::MethodCall {
+                    name,
+                    generics: method.generic_args(),
+                    args: method.args(),
+                });
+                match method.receiver() {
+                    Some(r) => current = r,
+                    None => break,
+                }
+            }
+            ExprKind::Field(field) => {
+                let name = field
+                    .name_or_index()
+                    .map(|n| n.text().to_string())
+                    .unwrap_or_default();
+                segments.push(ChainSegment::Field { name });
+                match field.receiver() {
+                    Some(r) => current = r,
+                    None => break,
+                }
+            }
+            _ => break,
+        }
+    }
+
+    // Reverse so segments are in source order (root first)
+    segments.reverse();
+    (current, segments)
+}
+
+/// Builds a document for a single chain segment.
+fn segment_to_doc<'a>(
+    seg: &ChainSegment,
+    context: &RewriteContext<'_>,
+    shape: Shape,
+    indent: isize,
+) -> RcDoc<'a, ()> {
+    match seg {
+        ChainSegment::MethodCall {
+            name,
+            generics,
+            args,
+        } => {
+            let generics_doc = generics
+                .as_ref()
+                .map(|g| g.to_doc(context, shape))
+                .unwrap_or_else(RcDoc::nil);
+            let args_vec: Vec<_> = args
+                .as_ref()
+                .map(|a| {
+                    a.clone()
+                        .into_iter()
+                        .map(|arg| arg.to_doc(context, shape))
+                        .collect()
+                })
+                .unwrap_or_default();
+            RcDoc::text(".")
+                .append(RcDoc::text(name.clone()))
+                .append(generics_doc)
+                .append(block_list("(", ")", args_vec, indent, true))
+        }
+        ChainSegment::Field { name } => RcDoc::text(".").append(RcDoc::text(name.clone())),
+    }
+}
+
+/// Returns true if the expression is a method/field chain (has at least one segment).
+pub fn is_chain(expr: &ast::Expr) -> bool {
+    matches!(expr.kind(), ExprKind::MethodCall(_) | ExprKind::Field(_))
+}
+
+/// Formats a method/field chain with a known prefix width.
+///
+/// The `prefix_width` is the number of characters that appear before the chain
+/// on the same line (e.g., for `let x = foo.bar`, prefix_width would be 10 for "let x = ").
+///
+/// The first segment can stay inline if `prefix_width + root_width <= indent_width`,
+/// meaning the first dot would align with or be left of subsequent dots.
+pub fn format_chain_with_prefix<'a>(
+    expr: &ast::Expr,
+    prefix_width: usize,
+    context: &RewriteContext<'_>,
+    shape: Shape,
+) -> RcDoc<'a, ()> {
+    let (root, segments) = collect_chain(expr);
+
+    if segments.is_empty() {
+        return root.to_doc(context, shape);
+    }
+
+    let indent = context.config.indent_width as isize;
+    let root_doc = root.to_doc(context, shape);
+
+    // Compute the rendered width of the root.
+    let root_width = {
+        let mut buf = Vec::new();
+        let _ = root_doc.clone().render(usize::MAX, &mut buf);
+        String::from_utf8(buf)
+            .map(|s| s.lines().last().map(|l| l.len()).unwrap_or(0))
+            .unwrap_or(0)
+    };
+
+    // First segment can stay inline if the dot position (prefix + root) is at or left of
+    // where subsequent dots appear (indent_width).
+    let first_dot_position = prefix_width + root_width;
+    let first_segment_inline = first_dot_position <= indent as usize;
+
+    format_chain_inner(
+        root_doc,
+        &segments,
+        first_segment_inline,
+        context,
+        shape,
+        indent,
+    )
+}
+
+/// Formats a method/field chain with proper breaking and aligned dots.
+///
+/// The first segment can stay on the same line as the root if the dot would be
+/// at or to the left of where subsequent dots appear (i.e., root_len <= indent).
+fn format_chain<'a>(expr: &ast::Expr, context: &RewriteContext<'_>, shape: Shape) -> RcDoc<'a, ()> {
+    let (root, segments) = collect_chain(expr);
+
+    if segments.is_empty() {
+        return root.to_doc(context, shape);
+    }
+
+    let indent = context.config.indent_width as isize;
+    let root_doc = root.to_doc(context, shape);
+
+    // Compute the rendered width of the root to decide if first segment can stay inline.
+    let root_width = {
+        let mut buf = Vec::new();
+        let _ = root_doc.clone().render(usize::MAX, &mut buf);
+        String::from_utf8(buf)
+            .map(|s| s.lines().last().map(|l| l.len()).unwrap_or(0))
+            .unwrap_or(0)
+    };
+
+    // If root is short enough, first segment's dot aligns with or is left of subsequent dots.
+    let first_segment_inline = root_width <= indent as usize;
+
+    format_chain_inner(
+        root_doc,
+        &segments,
+        first_segment_inline,
+        context,
+        shape,
+        indent,
+    )
+}
+
+/// Inner helper for chain formatting.
+fn format_chain_inner<'a>(
+    root_doc: RcDoc<'a, ()>,
+    segments: &[ChainSegment],
+    first_segment_inline: bool,
+    context: &RewriteContext<'_>,
+    shape: Shape,
+    indent: isize,
+) -> RcDoc<'a, ()> {
+    if segments.len() == 1 {
+        // Single segment chain: just put it inline, let the group handle breaking
+        let seg_doc = segment_to_doc(&segments[0], context, shape, indent);
+        return root_doc
+            .append(RcDoc::line_())
+            .append(seg_doc)
+            .nest(indent)
+            .group();
+    }
+
+    // Multi-segment chain
+    let mut segment_docs: Vec<RcDoc<'a, ()>> = segments
+        .iter()
+        .map(|seg| segment_to_doc(seg, context, shape, indent))
+        .collect();
+
+    if first_segment_inline {
+        // First segment stays with root, rest are on new lines when broken
+        // Flat: `root.seg1.seg2.seg3`
+        // Broken:
+        //   root.seg1
+        //       .seg2
+        //       .seg3
+        let first_seg = segment_docs.remove(0);
+        let mut chain = root_doc.append(first_seg);
+
+        for seg_doc in segment_docs {
+            chain = chain.append(RcDoc::line_()).append(seg_doc);
+        }
+
+        chain.nest(indent).group()
+    } else {
+        // Root is too long, all segments go on new lines when broken
+        // Flat: `root.seg1.seg2.seg3`
+        // Broken:
+        //   root
+        //       .seg1
+        //       .seg2
+        //       .seg3
+        let mut chain = root_doc;
+
+        for seg_doc in segment_docs {
+            chain = chain.append(RcDoc::line_()).append(seg_doc);
+        }
+
+        chain.nest(indent).group()
+    }
+}
 
 impl ToDoc for ast::BinExpr {
     fn to_doc<'a>(&self, context: &RewriteContext<'_>, shape: Shape) -> RcDoc<'a, ()> {
@@ -85,31 +320,12 @@ impl ToDoc for ast::CallExpr {
 
 impl ToDoc for ast::MethodCallExpr {
     fn to_doc<'a>(&self, context: &RewriteContext<'_>, shape: Shape) -> RcDoc<'a, ()> {
-        let receiver = match self.receiver() {
-            Some(r) => r.to_doc(context, shape),
-            None => return RcDoc::nil(),
-        };
-        let name = match self.method_name() {
-            Some(n) => context.snippet(n.text_range()).trim().to_string(),
-            None => return receiver,
-        };
-
-        let generics = self
-            .generic_args()
-            .map(|args| args.to_doc(context, shape))
-            .unwrap_or_else(RcDoc::nil);
-
-        let args: Vec<_> = self
-            .args()
-            .map(|args| args.into_iter().map(|a| a.to_doc(context, shape)).collect())
-            .unwrap_or_default();
-
-        let indent = context.config.indent_width as isize;
-        receiver
-            .append(RcDoc::text("."))
-            .append(RcDoc::text(name))
-            .append(generics)
-            .append(block_list("(", ")", args, indent, true))
+        // Delegate to chain formatting which handles the entire chain at once
+        format_chain(
+            &ast::Expr::cast(self.syntax().clone()).unwrap(),
+            context,
+            shape,
+        )
     }
 }
 
@@ -156,9 +372,22 @@ impl ToDoc for ast::AssignExpr {
             Some(e) => e.to_doc(context, shape),
             None => return RcDoc::nil(),
         };
-        let rhs = match self.rhs_expr() {
-            Some(e) => e.to_doc(context, shape),
+
+        let rhs_expr = match self.rhs_expr() {
+            Some(e) => e,
             None => return lhs,
+        };
+
+        // If RHS is a chain, format with prefix awareness
+        let rhs = if is_chain(&rhs_expr) {
+            let prefix_width = {
+                let mut buf = Vec::new();
+                let _ = lhs.clone().render(usize::MAX, &mut buf);
+                String::from_utf8(buf).map(|s| s.len()).unwrap_or(0) + 3 // + " = "
+            };
+            format_chain_with_prefix(&rhs_expr, prefix_width, context, shape)
+        } else {
+            rhs_expr.to_doc(context, shape)
         };
 
         lhs.append(RcDoc::text(" = ")).append(rhs)
@@ -198,16 +427,12 @@ impl ToDoc for ast::PathExpr {
 
 impl ToDoc for ast::FieldExpr {
     fn to_doc<'a>(&self, context: &RewriteContext<'_>, shape: Shape) -> RcDoc<'a, ()> {
-        let base = match self.receiver() {
-            Some(r) => r.to_doc(context, shape),
-            None => return RcDoc::nil(),
-        };
-        let field = match self.name_or_index() {
-            Some(n) => context.snippet(n.text_range()).trim().to_string(),
-            None => return base,
-        };
-
-        base.append(RcDoc::text(".")).append(RcDoc::text(field))
+        // Delegate to chain formatting which handles the entire chain at once
+        format_chain(
+            &ast::Expr::cast(self.syntax().clone()).unwrap(),
+            context,
+            shape,
+        )
     }
 }
 
