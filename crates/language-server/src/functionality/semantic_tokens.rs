@@ -93,7 +93,7 @@ pub async fn handle_semantic_tokens_full(
             }
 
             // Determine the token type from the resolved target
-            let token_type = match reference.target(&backend.db) {
+            let token_type = match reference.target(&backend.db).first() {
                 Some(Target::Scope(scope)) => item_kind_to_token_type(scope.item()),
                 Some(Target::Local { .. }) => Some(3), // variable
                 None => None,

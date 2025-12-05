@@ -40,7 +40,8 @@ pub async fn handle_goto_type_definition(
         return Ok(None);
     };
 
-    let Some(target) = reference.target_at(&backend.db, cursor) else {
+    let resolution = reference.target_at(&backend.db, cursor);
+    let Some(target) = resolution.first() else {
         return Ok(None);
     };
 

@@ -35,18 +35,6 @@ use crate::{
 
 pub use has_references::HasReferences;
 
-/// Resolve a path to a scope, handling all error cases uniformly.
-///
-/// Returns the first/best resolution. For all candidates including ambiguous
-/// results, use `resolve_path_to_scopes`.
-fn resolve_path_to_scope<'db>(
-    db: &'db dyn HirAnalysisDb,
-    path: PathId<'db>,
-    scope: ScopeId<'db>,
-) -> Option<ScopeId<'db>> {
-    resolve_path_to_scopes(db, path, scope).into_iter().next()
-}
-
 /// Resolve a path to all possible scopes, including ambiguous candidates.
 ///
 /// For ambiguous paths that can resolve to multiple items (e.g., a module
@@ -94,6 +82,60 @@ pub enum Target<'db> {
     },
 }
 
+/// The result of resolving a reference to its target(s).
+///
+/// References typically resolve to a single target, but ambiguous references
+/// (e.g., a path that matches both a module and a function) can have multiple
+/// candidates.
+#[derive(Clone, Debug)]
+pub enum TargetResolution<'db> {
+    /// No target found
+    None,
+    /// Resolved to a single unambiguous target
+    Single(Target<'db>),
+    /// Multiple possible targets (ambiguous reference)
+    Ambiguous(Vec<Target<'db>>),
+}
+
+impl<'db> TargetResolution<'db> {
+    /// Returns true if resolution found at least one target.
+    pub fn is_resolved(&self) -> bool {
+        !matches!(self, Self::None)
+    }
+
+    /// Returns the first/best target, or None if no targets found.
+    pub fn first(&self) -> Option<&Target<'db>> {
+        match self {
+            Self::None => None,
+            Self::Single(target) => Some(target),
+            Self::Ambiguous(targets) => targets.first(),
+        }
+    }
+
+    /// Returns all targets as a slice.
+    pub fn as_slice(&self) -> &[Target<'db>] {
+        match self {
+            Self::None => &[],
+            Self::Single(target) => std::slice::from_ref(target),
+            Self::Ambiguous(targets) => targets,
+        }
+    }
+
+    /// Consumes self and returns all targets as a Vec.
+    pub fn into_vec(self) -> Vec<Target<'db>> {
+        match self {
+            Self::None => vec![],
+            Self::Single(target) => vec![target],
+            Self::Ambiguous(targets) => targets,
+        }
+    }
+
+    /// Returns true if this is an ambiguous resolution.
+    pub fn is_ambiguous(&self) -> bool {
+        matches!(self, Self::Ambiguous(_))
+    }
+}
+
 /// A view of a path reference in the HIR.
 ///
 /// Paths appear in expressions (`Expr::Path`), patterns (`Pat::Path`),
@@ -111,54 +153,33 @@ impl<'db> PathView<'db> {
         Self { path, scope, span }
     }
 
-    /// Resolve this path to its target definition.
+    /// Resolve this path to its target definition(s).
     ///
-    /// Returns the first/best match. For ambiguous paths, this picks the first
-    /// candidate. Use `target_candidates` to get all possibilities.
-    ///
-    /// Tries local binding resolution first (for paths inside function bodies),
-    /// then falls back to module-level resolution. This ensures local variables
-    /// shadow module-level items with the same name.
-    pub fn target(&self, db: &'db dyn HirAnalysisDb) -> Option<Target<'db>> {
-        self.target_candidates(db).into_iter().next()
-    }
-
-    /// Resolve this path to all possible target definitions.
-    ///
-    /// For most paths, this returns a single target. For ambiguous paths that
-    /// can resolve to multiple items (e.g., a module and function with the same
-    /// name), this returns all candidates.
+    /// Returns TargetResolution which can be:
+    /// - None: path doesn't resolve
+    /// - Single: unambiguous resolution
+    /// - Ambiguous: multiple candidates (e.g., module and function with same name)
     ///
     /// Local bindings always take precedence and are never ambiguous.
-    pub fn target_candidates(&self, db: &'db dyn HirAnalysisDb) -> Vec<Target<'db>> {
+    pub fn target(&self, db: &'db dyn HirAnalysisDb) -> TargetResolution<'db> {
         // Try local binding resolution first - locals shadow module-level items
         if let Some(local) = self.local_target(db) {
-            return vec![local];
+            return TargetResolution::Single(local);
         }
 
         // Fall back to module-level resolution (may be ambiguous)
-        resolve_path_to_scopes(db, self.path, self.scope)
-            .into_iter()
-            .map(Target::Scope)
-            .collect()
+        let scopes = resolve_path_to_scopes(db, self.path, self.scope);
+        match scopes.len() {
+            0 => TargetResolution::None,
+            1 => TargetResolution::Single(Target::Scope(scopes.into_iter().next().unwrap())),
+            _ => TargetResolution::Ambiguous(scopes.into_iter().map(Target::Scope).collect()),
+        }
     }
 
     /// Resolve this path at a specific cursor position (segment-aware).
     ///
     /// Clicking on `foo` in `foo::Bar` resolves to `foo`, not `Bar`.
-    /// Returns the first/best match. For ambiguous results, use `target_candidates_at`.
-    pub fn target_at<DB>(&self, db: &'db DB, cursor: TextSize) -> Option<Target<'db>>
-    where
-        DB: HirAnalysisDb + SpannedHirDb,
-    {
-        self.target_candidates_at(db, cursor).into_iter().next()
-    }
-
-    /// Resolve this path at a specific cursor position to all candidates (segment-aware).
-    ///
-    /// For ambiguous paths, returns all possible targets.
-    /// Clicking on `foo` in `foo::Bar` resolves all candidates for `foo`.
-    pub fn target_candidates_at<DB>(&self, db: &'db DB, cursor: TextSize) -> Vec<Target<'db>>
+    pub fn target_at<DB>(&self, db: &'db DB, cursor: TextSize) -> TargetResolution<'db>
     where
         DB: HirAnalysisDb + SpannedHirDb,
     {
@@ -175,23 +196,29 @@ impl<'db> PathView<'db> {
                 // (locals shadow module-level items and are never ambiguous)
                 if idx == last_idx {
                     if let Some(local) = self.local_target(db) {
-                        return vec![local];
+                        return TargetResolution::Single(local);
                     }
                 }
 
                 // Try module-level resolution for this segment (may be ambiguous)
                 if let Some(seg_path) = self.path.segment(db, idx) {
-                    return resolve_path_to_scopes(db, seg_path, self.scope)
-                        .into_iter()
-                        .map(Target::Scope)
-                        .collect();
+                    let scopes = resolve_path_to_scopes(db, seg_path, self.scope);
+                    return match scopes.len() {
+                        0 => TargetResolution::None,
+                        1 => TargetResolution::Single(Target::Scope(
+                            scopes.into_iter().next().unwrap(),
+                        )),
+                        _ => TargetResolution::Ambiguous(
+                            scopes.into_iter().map(Target::Scope).collect(),
+                        ),
+                    };
                 }
-                return vec![];
+                return TargetResolution::None;
             }
         }
 
         // Cursor not in any segment, try full path resolution
-        self.target_candidates(db)
+        self.target(db)
     }
 
     /// Resolve to a local binding target (internal helper).
@@ -240,18 +267,20 @@ impl<'db> FieldAccessView<'db> {
     ///
     /// Uses type inference to determine the receiver type and look up
     /// the field definition in the struct.
-    pub fn target(&self, db: &'db dyn HirAnalysisDb) -> Option<ScopeId<'db>> {
+    pub fn target(&self, db: &'db dyn HirAnalysisDb) -> TargetResolution<'db> {
         // Get the expression data to extract receiver and field name
         let Partial::Present(Expr::Field(receiver, field_index)) = self.expr.data(db, self.body)
         else {
-            return None;
+            return TargetResolution::None;
         };
         let Partial::Present(FieldIndex::Ident(field_name)) = field_index else {
-            return None; // Tuple field access (e.g., tuple.0) doesn't have a scope
+            return TargetResolution::None; // Tuple field access (e.g., tuple.0) doesn't have a scope
         };
 
         // Get the containing function for type checking
-        let func = self.body.containing_func(db)?;
+        let Some(func) = self.body.containing_func(db) else {
+            return TargetResolution::None;
+        };
 
         // Run type checking to get typed body
         let (_, typed_body) = check_func_body(db, func);
@@ -259,12 +288,15 @@ impl<'db> FieldAccessView<'db> {
         // Get the type of the receiver expression
         let receiver_ty = typed_body.expr_ty(db, *receiver);
         if receiver_ty.has_invalid(db) {
-            return None;
+            return TargetResolution::None;
         }
 
         // Resolve the field scope using RecordLike
         let record_like = RecordLike::from_ty(receiver_ty);
-        record_like.record_field_scope(db, *field_name)
+        match record_like.record_field_scope(db, *field_name) {
+            Some(scope) => TargetResolution::Single(Target::Scope(scope)),
+            None => TargetResolution::None,
+        }
     }
 
     /// Get the source span of this field access.
@@ -288,23 +320,28 @@ impl<'db> MethodCallView<'db> {
     /// Resolve this method call to its target scope.
     ///
     /// Uses the typed body's callable information to find the resolved method.
-    pub fn target(&self, db: &'db dyn HirAnalysisDb) -> Option<ScopeId<'db>> {
+    pub fn target(&self, db: &'db dyn HirAnalysisDb) -> TargetResolution<'db> {
         // Get the containing function for type checking
-        let func = self.body.containing_func(db)?;
+        let Some(func) = self.body.containing_func(db) else {
+            return TargetResolution::None;
+        };
 
         // Run type checking to get typed body with callable information
         let (_, typed_body) = check_func_body(db, func);
 
         // Get the callable for this method call expression
-        let callable = typed_body.callable_expr(self.expr)?;
+        let Some(callable) = typed_body.callable_expr(self.expr) else {
+            return TargetResolution::None;
+        };
 
         // Extract the scope from the callable definition
-        match callable.callable_def {
+        let scope = match callable.callable_def {
             crate::hir_def::CallableDef::Func(method_func) => {
-                Some(ScopeId::from_item(ItemKind::Func(method_func)))
+                ScopeId::from_item(ItemKind::Func(method_func))
             }
-            crate::hir_def::CallableDef::VariantCtor(variant) => Some(ScopeId::Variant(variant)),
-        }
+            crate::hir_def::CallableDef::VariantCtor(variant) => ScopeId::Variant(variant),
+        };
+        TargetResolution::Single(Target::Scope(scope))
     }
 
     /// Get the source span of this method call.
@@ -329,19 +366,25 @@ impl<'db> UsePathView<'db> {
     ///
     /// For a use like `use foo::bar::Baz`, clicking on `bar` (segment 1)
     /// resolves to the `bar` module/item.
-    pub fn target(&self, db: &'db dyn HirAnalysisDb) -> Option<ScopeId<'db>> {
-        let use_path = self.use_item.path(db).to_opt()?;
+    pub fn target(&self, db: &'db dyn HirAnalysisDb) -> TargetResolution<'db> {
+        let Some(use_path) = self.use_item.path(db).to_opt() else {
+            return TargetResolution::None;
+        };
         let segments = use_path.data(db);
 
         // Start from the use's parent scope
-        let mut current_scope = self.use_item.scope().parent(db)?;
+        let Some(mut current_scope) = self.use_item.scope().parent(db) else {
+            return TargetResolution::None;
+        };
 
         // Resolve each segment up to and including self.segment
         for idx in 0..=self.segment {
-            let segment = segments.get(idx)?.to_opt()?;
+            let Some(segment) = segments.get(idx).and_then(|s| s.to_opt()) else {
+                return TargetResolution::None;
+            };
             let ident = match segment {
                 UsePathSegment::Ident(id) => id,
-                UsePathSegment::Glob => return None, // Can't resolve glob
+                UsePathSegment::Glob => return TargetResolution::None, // Can't resolve glob
             };
 
             // Try regular name resolution first
@@ -350,8 +393,10 @@ impl<'db> UsePathView<'db> {
             let bucket = resolve_query(db, query);
 
             if let Some(res) = bucket.iter_ok().next() {
-                current_scope = res.scope()?;
-                continue;
+                if let Some(scope) = res.scope() {
+                    current_scope = scope;
+                    continue;
+                }
             }
 
             // If name resolution failed and we're in a TopLevelMod scope,
@@ -368,10 +413,10 @@ impl<'db> UsePathView<'db> {
             }
 
             // Resolution failed
-            return None;
+            return TargetResolution::None;
         }
 
-        Some(current_scope)
+        TargetResolution::Single(Target::Scope(current_scope))
     }
 
     /// Get the source span of this use path segment.
@@ -401,51 +446,29 @@ pub enum ReferenceView<'db> {
 }
 
 impl<'db> ReferenceView<'db> {
-    /// Resolve this reference to its target definition.
+    /// Resolve this reference to its target definition(s).
     ///
-    /// Returns the first/best match. For ambiguous references, use
-    /// `target_candidates` to get all possibilities.
-    pub fn target(&self, db: &'db dyn HirAnalysisDb) -> Option<Target<'db>> {
-        self.target_candidates(db).into_iter().next()
-    }
-
-    /// Resolve this reference to all possible target definitions.
-    ///
-    /// For most references, this returns a single target. For ambiguous
-    /// references (e.g., paths that can resolve to both a module and a
-    /// function), this returns all candidates.
-    pub fn target_candidates(&self, db: &'db dyn HirAnalysisDb) -> Vec<Target<'db>> {
+    /// Returns TargetResolution which can be None, Single, or Ambiguous.
+    pub fn target(&self, db: &'db dyn HirAnalysisDb) -> TargetResolution<'db> {
         match self {
-            Self::Path(v) => v.target_candidates(db),
-            Self::FieldAccess(v) => v.target(db).map(Target::Scope).into_iter().collect(),
-            Self::MethodCall(v) => v.target(db).map(Target::Scope).into_iter().collect(),
-            Self::UsePath(v) => v.target(db).map(Target::Scope).into_iter().collect(),
+            Self::Path(v) => v.target(db),
+            Self::FieldAccess(v) => v.target(db),
+            Self::MethodCall(v) => v.target(db),
+            Self::UsePath(v) => v.target(db),
         }
     }
 
-    /// Resolve this reference at a specific cursor position.
+    /// Resolve this reference at a specific cursor position (segment-aware).
     ///
     /// For paths, this handles segment-level resolution - clicking on `foo` in
     /// `foo::Bar` resolves to `foo`, not `Bar`.
-    /// Returns the first/best match. For ambiguous results, use `target_candidates_at`.
-    pub fn target_at<DB>(&self, db: &'db DB, cursor: TextSize) -> Option<Target<'db>>
-    where
-        DB: HirAnalysisDb + SpannedHirDb,
-    {
-        self.target_candidates_at(db, cursor).into_iter().next()
-    }
-
-    /// Resolve this reference at a specific cursor position to all candidates.
-    ///
-    /// For paths, handles segment-level resolution with ambiguity support.
-    /// For ambiguous paths, returns all possible targets.
-    pub fn target_candidates_at<DB>(&self, db: &'db DB, cursor: TextSize) -> Vec<Target<'db>>
+    pub fn target_at<DB>(&self, db: &'db DB, cursor: TextSize) -> TargetResolution<'db>
     where
         DB: HirAnalysisDb + SpannedHirDb,
     {
         match self {
-            Self::Path(v) => v.target_candidates_at(db, cursor),
-            _ => self.target_candidates(db),
+            Self::Path(v) => v.target_at(db, cursor),
+            _ => self.target(db),
         }
     }
 

@@ -23,7 +23,8 @@ fn find_highlights_at_cursor<'db>(
         return vec![];
     };
 
-    let Some(target) = reference.target_at(db, cursor) else {
+    let resolution = reference.target_at(db, cursor);
+    let Some(target) = resolution.first() else {
         return vec![];
     };
 

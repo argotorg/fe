@@ -34,31 +34,69 @@ pub fn hover_helper(
     let info = top_mod
         .reference_at(db, cursor)
         .and_then(|r| {
-            let target = r.target_at(db, cursor)?;
-            match target {
-                Target::Scope(scope) => {
-                    // Scope-based target: show item info
-                    let item = scope.item();
-                    let pretty_path = get_item_path_markdown(db, item);
-                    let definition_source = get_item_definition_markdown(db, item);
-                    let docs = get_docstring(db, scope);
+            let resolution = r.target_at(db, cursor);
 
-                    Some(
-                        [pretty_path, definition_source, docs]
-                            .iter()
-                            .filter_map(|info| info.clone().map(|info| format!("{info}\n")))
-                            .collect::<Vec<String>>()
-                            .join("\n"),
-                    )
+            // Check if ambiguous
+            if resolution.is_ambiguous() {
+                // Show all candidates
+                let mut sections = vec!["**Ambiguous reference - multiple candidates:**\n".to_string()];
+
+                for (i, target) in resolution.as_slice().iter().enumerate() {
+                    match target {
+                        Target::Scope(scope) => {
+                            let item = scope.item();
+                            let pretty_path = get_item_path_markdown(db, item);
+                            let definition_source = get_item_definition_markdown(db, item);
+
+                            sections.push(format!("\n### Candidate {}\n", i + 1));
+                            if let Some(path) = pretty_path {
+                                sections.push(format!("{}\n", path));
+                            }
+                            if let Some(def) = definition_source {
+                                sections.push(format!("{}\n", def));
+                            }
+                        }
+                        Target::Local { ty, .. } => {
+                            let name = match r {
+                                ReferenceView::Path(pv) => pv.path.ident(db).to_opt()?.data(db).to_string(),
+                                _ => continue,
+                            };
+                            let ty_str = ty.pretty_print(db);
+                            sections.push(format!("\n### Candidate {}\n", i + 1));
+                            sections.push(format!("```fe\nlet {name}: {ty_str}\n```\n"));
+                        }
+                    }
                 }
-                Target::Local { ty, .. } => {
-                    // Local binding: get name from the reference, type from target
-                    let name = match r {
-                        ReferenceView::Path(pv) => pv.path.ident(db).to_opt()?.data(db).to_string(),
-                        _ => return None,
-                    };
-                    let ty_str = ty.pretty_print(db);
-                    Some(format!("```fe\nlet {name}: {ty_str}\n```"))
+
+                Some(sections.join(""))
+            } else {
+                // Single target - show as before
+                let target = resolution.first()?;
+                match target {
+                    Target::Scope(scope) => {
+                        // Scope-based target: show item info
+                        let item = scope.item();
+                        let pretty_path = get_item_path_markdown(db, item);
+                        let definition_source = get_item_definition_markdown(db, item);
+                        let docs = get_docstring(db, *scope);
+
+                        Some(
+                            [pretty_path, definition_source, docs]
+                                .iter()
+                                .filter_map(|info| info.clone().map(|info| format!("{info}\n")))
+                                .collect::<Vec<String>>()
+                                .join("\n"),
+                        )
+                    }
+                    Target::Local { ty, .. } => {
+                        // Local binding: get name from the reference, type from target
+                        let name = match r {
+                            ReferenceView::Path(pv) => pv.path.ident(db).to_opt()?.data(db).to_string(),
+                            _ => return None,
+                        };
+                        let ty_str = ty.pretty_print(db);
+                        Some(format!("```fe\nlet {name}: {ty_str}\n```"))
+                    }
                 }
             }
         })
@@ -75,3 +113,4 @@ pub fn hover_helper(
     };
     Ok(Some(result))
 }
+

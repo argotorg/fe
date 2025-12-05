@@ -41,7 +41,8 @@ pub async fn handle_rename(
         return Ok(None);
     };
 
-    let Some(target) = reference.target_at(&backend.db, cursor) else {
+    let resolution = reference.target_at(&backend.db, cursor);
+    let Some(target) = resolution.first() else {
         return Ok(None);
     };
 
@@ -49,7 +50,7 @@ pub async fn handle_rename(
 
     let mut changes: FxHashMap<url::Url, Vec<TextEdit>> = FxHashMap::default();
 
-    match &target {
+    match target {
         Target::Scope(target_scope) => {
             // Skip module renames - they require file operations
             if is_module_scope(*target_scope) {

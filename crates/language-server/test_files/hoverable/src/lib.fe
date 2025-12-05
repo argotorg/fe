@@ -1,4 +1,5 @@
 use stuff::calculations::{ return_three, return_four }
+use stuff::calculations::ambiguous;
 
 /// ## `return_seven`
 /// ### a function of numbers

@@ -1,6 +1,10 @@
 use async_lsp::ResponseError;
 use common::InputDb;
-use hir::{core::semantic::reference::Target, hir_def::TopLevelMod, lower::map_file_to_mod};
+use hir::{
+    core::semantic::reference::{Target, TargetResolution},
+    hir_def::TopLevelMod,
+    lower::map_file_to_mod,
+};
 
 use crate::{
     backend::Backend,
@@ -9,25 +13,16 @@ use crate::{
 use driver::DriverDataBase;
 pub type Cursor = parser::TextSize;
 
-/// Get goto target for the cursor position.
+/// Get goto target resolution for the cursor position.
 pub fn goto_target_at_cursor<'db>(
     db: &'db DriverDataBase,
     top_mod: TopLevelMod<'db>,
     cursor: Cursor,
-) -> Option<Target<'db>> {
-    top_mod.reference_at(db, cursor)?.target_at(db, cursor)
-}
-
-/// Get all goto targets for the cursor position (including ambiguous candidates).
-pub fn goto_targets_at_cursor<'db>(
-    db: &'db DriverDataBase,
-    top_mod: TopLevelMod<'db>,
-    cursor: Cursor,
-) -> Vec<Target<'db>> {
+) -> TargetResolution<'db> {
     top_mod
         .reference_at(db, cursor)
-        .map(|r| r.target_candidates_at(db, cursor))
-        .unwrap_or_default()
+        .map(|r| r.target_at(db, cursor))
+        .unwrap_or(TargetResolution::None)
 }
 
 pub async fn handle_goto_definition(
@@ -59,14 +54,18 @@ pub async fn handle_goto_definition(
         })?;
     let top_mod = map_file_to_mod(&backend.db, file);
 
-    // Get all target candidates (may be multiple for ambiguous references)
-    let targets = goto_targets_at_cursor(&backend.db, top_mod, cursor);
+    // Get target resolution (may be ambiguous)
+    let resolution = goto_target_at_cursor(&backend.db, top_mod, cursor);
 
-    let locations: Vec<_> = targets
-        .into_iter()
+    // Convert targets to LSP locations
+    let locations: Vec<_> = resolution
+        .as_slice()
+        .iter()
         .filter_map(|target| match target {
-            Target::Scope(scope) => to_lsp_location_from_scope(&backend.db, scope).ok(),
-            Target::Local { span, .. } => to_lsp_location_from_lazy_span(&backend.db, span).ok(),
+            Target::Scope(scope) => to_lsp_location_from_scope(&backend.db, *scope).ok(),
+            Target::Local { span, .. } => {
+                to_lsp_location_from_lazy_span(&backend.db, span.clone()).ok()
+            }
         })
         .collect();
 
@@ -207,7 +206,8 @@ mod tests {
 
         for cursor in &cursors {
             // Get target and filter for scopes only (for snapshot compatibility)
-            if let Some(target) = goto_target_at_cursor(db, top_mod, *cursor)
+            let resolution = goto_target_at_cursor(db, top_mod, *cursor);
+            if let Some(target) = resolution.first()
                 && let Target::Scope(scope) = target
                 && let Some(path) = scope.pretty_path(db)
             {

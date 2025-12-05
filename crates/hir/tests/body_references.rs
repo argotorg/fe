@@ -40,7 +40,8 @@ fn body_references(fixture: Fixture<&str>) {
                             .unwrap_or_else(|| "<complex>".to_string());
 
                         // Try to resolve the target
-                        let target_desc = match pv.target(&db) {
+                        let resolution = pv.target(&db);
+                        let target_desc = match resolution.first() {
                             Some(Target::Scope(scope)) => scope.kind_name().to_string(),
                             Some(Target::Local { .. }) => "local".to_string(),
                             None => "unresolved".to_string(),
@@ -50,16 +51,18 @@ fn body_references(fixture: Fixture<&str>) {
                         prop_formatter.push_prop(top_mod, pv.span(), annotation);
                     }
                     ReferenceView::FieldAccess(fv) => {
-                        let target_desc = match fv.target(&db) {
-                            Some(scope) => format!("field -> {}", scope.kind_name()),
-                            None => "field access".to_string(),
+                        let resolution = fv.target(&db);
+                        let target_desc = match resolution.first() {
+                            Some(Target::Scope(scope)) => format!("field -> {}", scope.kind_name()),
+                            _ => "field access".to_string(),
                         };
                         prop_formatter.push_prop(top_mod, fv.span(), target_desc);
                     }
                     ReferenceView::MethodCall(mv) => {
-                        let target_desc = match mv.target(&db) {
-                            Some(scope) => format!("method -> {}", scope.kind_name()),
-                            None => "method call".to_string(),
+                        let resolution = mv.target(&db);
+                        let target_desc = match resolution.first() {
+                            Some(Target::Scope(scope)) => format!("method -> {}", scope.kind_name()),
+                            _ => "method call".to_string(),
                         };
                         prop_formatter.push_prop(top_mod, mv.span(), target_desc);
                     }

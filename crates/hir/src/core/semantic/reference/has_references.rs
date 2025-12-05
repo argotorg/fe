@@ -192,10 +192,15 @@ impl<'db> TopLevelMod<'db> {
                     let item_scope = ScopeId::from_item(item);
                     for reference in item_scope.references(db) {
                         // Check if this reference resolves to our target scope
-                        if let Some(Target::Scope(s)) = reference.target(db)
-                            && s == scope
-                        {
-                            results.push(reference);
+                        // For ambiguous references, we check if any candidate matches
+                        let resolution = reference.target(db);
+                        for target in resolution.as_slice() {
+                            if let Target::Scope(s) = target
+                                && *s == scope
+                            {
+                                results.push(reference);
+                                break;
+                            }
                         }
                     }
                 }
@@ -219,13 +224,14 @@ impl<'db> TopLevelMod<'db> {
                     .iter()
                     .filter(|r| {
                         // Match references that resolve to the same local binding
+                        // Locals are never ambiguous, so we just check the first target
                         if let Some(Target::Local {
                             expr: ref_expr,
                             func: ref_func,
                             ..
-                        }) = r.target(db)
+                        }) = r.target(db).first()
                         {
-                            ref_func == func && expr_ids.contains(&ref_expr)
+                            *ref_func == func && expr_ids.contains(ref_expr)
                         } else {
                             false
                         }
