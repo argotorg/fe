@@ -90,13 +90,13 @@ note:
 note: 
    ┌─ lib.fe:19:6
    │
-19 │   fn calculate(self)
+19 │   fn calculate(self) -> i32
    │      ^^^^^^^^^ def: defined here @ 19:5 (1 refs)
 
 note: 
    ┌─ lib.fe:19:16
    │
-19 │   fn calculate(self)
+19 │   fn calculate(self) -> i32
    │                ^^^^ ref: 19:15
 
 note: 
@@ -106,40 +106,88 @@ note:
    │        ^^^^^^^ def: defined here @ 23:7 (4 refs)
 
 note: 
-   ┌─ lib.fe:28:6
+   ┌─ lib.fe:28:4
    │
-28 │ impl Calculatable for Numbers {
-   │      ^^^^^^^^^^^^ ref: 28:5
+28 │ fn add(x: i32, y: i32) -> i32 {
+   │    ^^^ def: defined here @ 28:3 (2 refs)
 
 note: 
-   ┌─ lib.fe:28:23
+   ┌─ lib.fe:29:5
    │
-28 │ impl Calculatable for Numbers {
-   │                       ^^^^^^^ ref: 28:22
+29 │     x + y
+   │     ^ ref: 29:4
 
 note: 
-   ┌─ lib.fe:29:6
+   ┌─ lib.fe:29:9
    │
-29 │   fn calculate(self) {
-   │      ^^^^^^^^^ def: defined here @ 29:5 (1 refs)
+29 │     x + y
+   │         ^ ref: 29:8
 
 note: 
-   ┌─ lib.fe:29:16
+   ┌─ lib.fe:32:6
    │
-29 │   fn calculate(self) {
-   │                ^^^^ ref: 29:15
+32 │ impl Calculatable for Numbers {
+   │      ^^^^^^^^^^^^ ref: 32:5
 
 note: 
-   ┌─ lib.fe:30:5
+   ┌─ lib.fe:32:23
    │
-30 │     self.x + self.y
-   │     ^^^^ ref: 30:4
+32 │ impl Calculatable for Numbers {
+   │                       ^^^^^^^ ref: 32:22
 
 note: 
-   ┌─ lib.fe:30:14
+   ┌─ lib.fe:33:6
    │
-30 │     self.x + self.y
-   │              ^^^^ ref: 30:13
+33 │   fn calculate(self) -> i32 {
+   │      ^^^^^^^^^ def: defined here @ 33:5 (1 refs)
+
+note: 
+   ┌─ lib.fe:33:16
+   │
+33 │   fn calculate(self) -> i32 {
+   │                ^^^^ ref: 33:15
+
+note: 
+   ┌─ lib.fe:34:11
+   │
+34 │       let z = self.x
+   │           ^ ref: 34:10
+
+note: 
+   ┌─ lib.fe:34:15
+   │
+34 │       let z = self.x
+   │               ^^^^ ref: 34:14
+
+note: 
+   ┌─ lib.fe:35:11
+   │
+35 │       let w = self.y
+   │           ^ ref: 35:10
+
+note: 
+   ┌─ lib.fe:35:15
+   │
+35 │       let w = self.y
+   │               ^^^^ ref: 35:14
+
+note: 
+   ┌─ lib.fe:36:7
+   │
+36 │       add(z, w)
+   │       ^^^ ref: 36:6
+
+note: 
+   ┌─ lib.fe:36:11
+   │
+36 │       add(z, w)
+   │           ^ ref: 36:10
+
+note: 
+   ┌─ lib.fe:36:14
+   │
+36 │       add(z, w)
+   │              ^ ref: 36:13
 
 note: 
   ┌─ stuff.fe:2:9
