@@ -10,3 +10,4 @@ pub(super) mod references;
 pub(super) mod rename;
 pub(super) mod semantic_tokens;
 pub(super) mod type_definition;
+pub(super) mod workspace_symbols;
