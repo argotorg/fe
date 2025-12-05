@@ -29,10 +29,15 @@ pub async fn handle_goto_definition(
     backend: &mut Backend,
     params: async_lsp::lsp_types::GotoDefinitionParams,
 ) -> Result<Option<async_lsp::lsp_types::GotoDefinitionResponse>, ResponseError> {
+    use tracing::{info, warn};
+
     // Convert the position to an offset in the file
     let params = params.text_document_position_params;
+    info!("goto_definition request for {:?} at {:?}", params.text_document.uri, params.position);
+
     let file_text = std::fs::read_to_string(params.text_document.uri.path()).ok();
     let cursor: Cursor = to_offset_from_position(params.position, file_text.unwrap().as_str());
+    info!("cursor offset: {:?}", cursor);
 
     // Get the module and the goto info
     let file_path_str = params.text_document.uri.path();
@@ -42,20 +47,28 @@ pub async fn handle_goto_definition(
             format!("Invalid file path: {file_path_str}"),
         )
     })?;
+    info!("looking up file: {}", url);
+
     let file = backend
         .db
         .workspace()
         .get(&backend.db, &url)
         .ok_or_else(|| {
+            warn!("File not found in workspace: {}", url);
+            // List all files in workspace for debugging
+            let all_files: Vec<_> = backend.db.workspace().all_files(&backend.db).iter().map(|(u, _)| u.to_string()).collect();
+            warn!("Workspace contains {} files: {:?}", all_files.len(), all_files);
             ResponseError::new(
                 async_lsp::ErrorCode::INTERNAL_ERROR,
                 format!("File not found in index: {url} (original path: {file_path_str})"),
             )
         })?;
+    info!("found file in workspace");
     let top_mod = map_file_to_mod(&backend.db, file);
 
     // Get target resolution (may be ambiguous)
     let resolution = goto_target_at_cursor(&backend.db, top_mod, cursor);
+    info!("goto resolution: {:?}", resolution);
 
     // Convert targets to LSP locations
     let locations: Vec<_> = resolution

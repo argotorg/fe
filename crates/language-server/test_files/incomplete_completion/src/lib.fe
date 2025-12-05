@@ -1,0 +1,23 @@
+struct Point {
+    x: u32,
+    y: u32,
+}
+
+impl Point {
+    pub fn distance(self) -> u32 {
+        self.x + self.y
+    }
+
+    pub fn scale(self, factor: u32) -> Point {
+        Point { x: self.x * factor, y: self.y * factor }
+    }
+
+    pub fn test_self_completion(self) -> u32 {
+        self.distance()
+    }
+}
+
+fn test() {
+    let p = Point { x: 1, y: 2 }
+    p.
+}

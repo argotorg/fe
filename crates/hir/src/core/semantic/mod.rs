@@ -2218,3 +2218,17 @@ impl<'db> EnumVariant<'db> {
         &def.fields(db)[self.idx as usize]
     }
 }
+
+// Type traversal helpers ----------------------------------------------------
+
+impl<'db> TyId<'db> {
+    /// Returns the field parent for this type if it's a struct or contract.
+    /// This provides access to fields via `field_parent.fields(db)`.
+    pub fn field_parent(self, db: &'db dyn HirAnalysisDb) -> Option<FieldParent<'db>> {
+        match self.adt_ref(db)? {
+            AdtRef::Struct(s) => Some(FieldParent::Struct(s)),
+            AdtRef::Contract(c) => Some(FieldParent::Contract(c)),
+            AdtRef::Enum(_) => None, // Enums don't have direct field access
+        }
+    }
+}
