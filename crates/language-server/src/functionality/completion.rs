@@ -1,10 +1,17 @@
-use async_lsp::lsp_types::{CompletionItem, CompletionItemKind, CompletionParams, CompletionResponse};
+use async_lsp::lsp_types::{
+    CompletionItem, CompletionItemKind, CompletionParams, CompletionResponse,
+};
 use async_lsp::ResponseError;
 use common::InputDb;
-use hir::{hir_def::{ItemKind, TopLevelMod}, lower::map_file_to_mod};
+use driver::DriverDataBase;
+use hir::{
+    analysis::name_resolution::{NameDomain, NameResKind},
+    hir_def::{scope_graph::ScopeId, ItemKind, TopLevelMod},
+    lower::map_file_to_mod,
+};
 use tracing::info;
 
-use crate::backend::Backend;
+use crate::{backend::Backend, util::to_offset_from_position};
 
 pub async fn handle_completion(
     backend: &Backend,
@@ -31,84 +38,119 @@ pub async fn handle_completion(
             )
         })?;
 
+    let file_text = file.text(&backend.db);
+    let cursor = to_offset_from_position(params.text_document_position.position, &file_text);
     let top_mod = map_file_to_mod(&backend.db, file);
+
+    // Find the scope at cursor position
+    let scope = find_scope_at_cursor(&backend.db, top_mod, cursor);
+
     let mut items = Vec::new();
 
-    // Collect completions from items in scope
-    collect_scope_completions(&backend.db, top_mod, &mut items);
+    // Collect items visible in scope (both values and types)
+    if let Some(scope) = scope {
+        collect_items_from_scope(&backend.db, scope, &mut items);
+    }
 
     Ok(Some(CompletionResponse::Array(items)))
 }
 
-fn collect_scope_completions(
-    db: &dyn hir::SpannedHirDb,
-    top_mod: TopLevelMod,
+/// Find the most specific scope containing the cursor position.
+fn find_scope_at_cursor<'db>(
+    db: &'db DriverDataBase,
+    top_mod: TopLevelMod<'db>,
+    cursor: parser::TextSize,
+) -> Option<ScopeId<'db>> {
+    use hir::span::LazySpan;
+
+    // Find the smallest enclosing item
+    let items = top_mod.scope_graph(db).items_dfs(db);
+    let mut best_scope = None;
+    let mut best_size = None;
+
+    for item in items {
+        let span = match item.span().resolve(db) {
+            Some(s) => s,
+            None => continue,
+        };
+
+        if span.range.contains(cursor) {
+            let size = span.range.len();
+
+            match best_size {
+                None => {
+                    best_scope = Some(ScopeId::from_item(item));
+                    best_size = Some(size);
+                }
+                Some(current_best) if size < current_best => {
+                    best_scope = Some(ScopeId::from_item(item));
+                    best_size = Some(size);
+                }
+                _ => {}
+            }
+        }
+    }
+
+    best_scope.or(Some(top_mod.scope()))
+}
+
+/// Collect completion items from a scope.
+fn collect_items_from_scope<'db>(
+    db: &'db DriverDataBase,
+    scope: ScopeId<'db>,
     items: &mut Vec<CompletionItem>,
 ) {
-    let scope_items = top_mod.scope_graph(db).items_dfs(db);
+    // Get all visible items (both values and types)
+    let visible_items = scope.items_in_scope(db, NameDomain::VALUE | NameDomain::TYPE);
 
-    for item in scope_items {
-        if let Some(completion) = item_to_completion(db, item) {
+    for (name, name_res) in visible_items {
+        if let Some(completion) = name_res_to_completion(db, name, name_res) {
             items.push(completion);
         }
     }
 }
 
-fn item_to_completion(db: &dyn hir::SpannedHirDb, item: ItemKind) -> Option<CompletionItem> {
-    let (kind, label) = match item {
-        ItemKind::Func(func) => {
-            let name = func.name(db).to_opt()?.data(db).to_string();
-            (CompletionItemKind::FUNCTION, name)
-        }
-        ItemKind::Struct(s) => {
-            let name = s.name(db).to_opt()?.data(db).to_string();
-            (CompletionItemKind::STRUCT, name)
-        }
-        ItemKind::Enum(e) => {
-            let name = e.name(db).to_opt()?.data(db).to_string();
-            (CompletionItemKind::ENUM, name)
-        }
-        ItemKind::Trait(t) => {
-            let name = t.name(db).to_opt()?.data(db).to_string();
-            (CompletionItemKind::INTERFACE, name)
-        }
-        ItemKind::TypeAlias(ta) => {
-            let name = ta.name(db).to_opt()?.data(db).to_string();
-            (CompletionItemKind::TYPE_PARAMETER, name)
-        }
-        ItemKind::Const(c) => {
-            let name = c.name(db).to_opt()?.data(db).to_string();
-            (CompletionItemKind::CONSTANT, name)
-        }
-        ItemKind::Mod(m) => {
-            let name = m.name(db).to_opt()?.data(db).to_string();
-            (CompletionItemKind::MODULE, name)
-        }
-        ItemKind::Contract(c) => {
-            let name = c.name(db).to_opt()?.data(db).to_string();
-            (CompletionItemKind::CLASS, name)
+/// Convert a NameRes to a CompletionItem.
+fn name_res_to_completion<'db>(
+    db: &'db DriverDataBase,
+    name: &str,
+    name_res: &hir::analysis::name_resolution::NameRes<'db>,
+) -> Option<CompletionItem> {
+    let scope = match &name_res.kind {
+        NameResKind::Scope(scope) => *scope,
+        NameResKind::Prim(_) => {
+            // Primitive types
+            return Some(CompletionItem {
+                label: name.to_string(),
+                kind: Some(CompletionItemKind::KEYWORD),
+                ..Default::default()
+            });
         }
         _ => return None,
     };
 
+    // Determine the completion kind based on the scope
+    let kind = match scope.to_item() {
+        Some(ItemKind::Func(_)) => CompletionItemKind::FUNCTION,
+        Some(ItemKind::Struct(_)) => CompletionItemKind::STRUCT,
+        Some(ItemKind::Enum(_)) => CompletionItemKind::ENUM,
+        Some(ItemKind::Trait(_)) => CompletionItemKind::INTERFACE,
+        Some(ItemKind::TypeAlias(_)) => CompletionItemKind::CLASS,
+        Some(ItemKind::Const(_)) => CompletionItemKind::CONSTANT,
+        Some(ItemKind::Mod(_) | ItemKind::TopMod(_)) => CompletionItemKind::MODULE,
+        Some(ItemKind::Contract(_)) => CompletionItemKind::CLASS,
+        _ => match scope {
+            ScopeId::FuncParam(_, _) => CompletionItemKind::VARIABLE,
+            ScopeId::GenericParam(_, _) => CompletionItemKind::TYPE_PARAMETER,
+            ScopeId::Variant(_) => CompletionItemKind::ENUM_MEMBER,
+            ScopeId::Field(_, _) => CompletionItemKind::FIELD,
+            _ => CompletionItemKind::VALUE,
+        },
+    };
+
     Some(CompletionItem {
-        label,
-        label_details: None,
+        label: name.to_string(),
         kind: Some(kind),
-        detail: None,
-        documentation: None,
-        deprecated: None,
-        preselect: None,
-        sort_text: None,
-        filter_text: None,
-        insert_text: None,
-        insert_text_format: None,
-        insert_text_mode: None,
-        text_edit: None,
-        additional_text_edits: None,
-        command: None,
-        commit_characters: None,
-        data: None,
-        tags: None,
+        ..Default::default()
     })
 }
