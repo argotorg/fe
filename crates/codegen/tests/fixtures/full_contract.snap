@@ -1,6 +1,5 @@
 ---
 source: crates/codegen/tests/yul.rs
-assertion_line: 31
 expression: output
 input_file: tests/fixtures/full_contract.fe
 ---
@@ -78,18 +77,18 @@ object "ShapeDispatcher" {
         }
       }
       function get_field__Point_u256__78e69939a7cc685d(addr, space, offset) -> ret {
-        let v1 := add(addr, offset)
-        let v0 := 0
+        let v0 := add(addr, offset)
+        let v1 := 0
         switch space
           case 0 {
-            v0 := mload(v1)
+            v1 := mload(v0)
           }
           case 1 {
-            v0 := sload(v1)
+            v1 := sload(v0)
           }
           default {
           }
-        let v2 := v0
+        let v2 := v1
         ret := to_word__deduped(v2)
       }
       function point_area(self) -> ret {

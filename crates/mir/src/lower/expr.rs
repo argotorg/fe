@@ -97,11 +97,10 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                 (next, val, true)
             }
             Partial::Present(Expr::Match(scrutinee, arms)) => {
-                if let Partial::Present(arms) = arms
-                    && let Some(mut patterns) = self.match_arm_patterns(arms)
-                {
+                if let Partial::Present(arms) = arms {
+                    // Try decision tree lowering first
                     let (next, val) =
-                        self.lower_match_expr(block, expr, *scrutinee, arms, &mut patterns);
+                        self.lower_match_with_decision_tree(block, expr, *scrutinee, arms);
                     return (next, val, false);
                 }
                 let val = self.ensure_value(expr);
