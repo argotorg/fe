@@ -21,7 +21,7 @@ fn calculate() {
 /// Anything that can be calculated ought to implement a
 /// `calculate` function
 pub trait Calculatable {
-  fn calculate(self)
+  fn calculate(self) -> i32
 }
 
 /// A struct for holding numbers like `x` and `y`
@@ -30,9 +30,15 @@ struct Numbers {
   y: i32
 }
 
+fn add(x: i32, y: i32) -> i32 {
+    x + y
+}
+
 impl Calculatable for Numbers {
-  fn calculate(self) {
-    self.x + self.y
+  fn calculate(self) -> i32 {
+      let z = self.x
+      let w = self.y
+      add(z, w)
   }
 }
 
