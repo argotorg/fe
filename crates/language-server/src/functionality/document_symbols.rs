@@ -1,5 +1,5 @@
-use async_lsp::lsp_types::{DocumentSymbol, DocumentSymbolResponse, SymbolKind};
 use async_lsp::ResponseError;
+use async_lsp::lsp_types::{DocumentSymbol, DocumentSymbolResponse, SymbolKind};
 use common::InputDb;
 use hir::{
     hir_def::{ItemKind, TopLevelMod},

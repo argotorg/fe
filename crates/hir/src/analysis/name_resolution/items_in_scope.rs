@@ -61,12 +61,11 @@ fn items_in_scope_impl<'db>(
     if let Some(unnamed) = imports.unnamed_resolved.get(&scope) {
         for bucket in unnamed {
             for name_res in bucket.iter_ok() {
-                if name_res.domain & domain != NameDomain::Invalid {
-                    if let Some(scope) = name_res.scope() {
-                        if let Some(name) = scope.name(db) {
-                            items.insert(name.data(db).to_string(), name_res.clone());
-                        }
-                    }
+                if name_res.domain & domain != NameDomain::Invalid
+                    && let Some(scope) = name_res.scope()
+                    && let Some(name) = scope.name(db)
+                {
+                    items.insert(name.data(db).to_string(), name_res.clone());
                 }
             }
         }
@@ -75,16 +74,16 @@ fn items_in_scope_impl<'db>(
     // Collect direct child items
     for child in scope.child_items(db) {
         let child_domain = NameDomain::from_scope(db, ScopeId::from_item(child));
-        if child_domain & domain != NameDomain::Invalid {
-            if let Some(name) = child.name(db) {
-                // Create a NameRes for this child item
-                let name_res = NameRes {
-                    kind: NameResKind::Scope(ScopeId::from_item(child)),
-                    domain: child_domain,
-                    derivation: NameDerivation::Def,
-                };
-                items.insert(name.data(db).to_string(), name_res);
-            }
+        if child_domain & domain != NameDomain::Invalid
+            && let Some(name) = child.name(db)
+        {
+            // Create a NameRes for this child item
+            let name_res = NameRes {
+                kind: NameResKind::Scope(ScopeId::from_item(child)),
+                domain: child_domain,
+                derivation: NameDerivation::Def,
+            };
+            items.insert(name.data(db).to_string(), name_res);
         }
     }
 
@@ -92,7 +91,9 @@ fn items_in_scope_impl<'db>(
     if let Some(parent) = scope.parent(db) {
         let parent_items = items_in_scope(db, parent, domain);
         for (name, name_res) in parent_items {
-            items.entry(name.clone()).or_insert_with(|| name_res.clone());
+            items
+                .entry(name.clone())
+                .or_insert_with(|| name_res.clone());
         }
     }
 

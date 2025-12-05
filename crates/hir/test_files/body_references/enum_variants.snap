@@ -7,7 +7,7 @@ note:
    ┌─ enum_variants.fe:13:11
    │
 13 │     match c {
-   │           ^ c -> value
+   │           ^ c -> local
 
 note: 
    ┌─ enum_variants.fe:14:9

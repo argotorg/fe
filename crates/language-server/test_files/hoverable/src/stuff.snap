@@ -196,10 +196,22 @@ note:
    │                ^^^^ def: defined here @ 38:15 (3 refs)
 
 note: 
+   ┌─ lib.fe:39:11
+   │
+39 │       let z = self.x
+   │           ^ def: defined here @ 39:10 (1 refs)
+
+note: 
    ┌─ lib.fe:39:15
    │
 39 │       let z = self.x
    │               ^^^^ ref: 39:14
+
+note: 
+   ┌─ lib.fe:40:11
+   │
+40 │       let w = self.y
+   │           ^ def: defined here @ 40:10 (1 refs)
 
 note: 
    ┌─ lib.fe:40:15
@@ -208,112 +220,112 @@ note:
    │               ^^^^ ref: 40:14
 
 note: 
-   ┌─ lib.fe:39:6
+   ┌─ lib.fe:45:6
    │
-39 │ enum Option {
-   │      ^^^^^^ def: defined here @ 39:5 (2 refs)
+45 │ enum Option {
+   │      ^^^^^^ def: defined here @ 45:5 (2 refs)
 
 note: 
-   ┌─ lib.fe:45:4
+   ┌─ lib.fe:51:4
    │
-45 │ fn test_locals(x: i32) -> i32 {
-   │    ^^^^^^^^^^^ def: defined here @ 45:3 (1 refs)
+51 │ fn test_locals(x: i32) -> i32 {
+   │    ^^^^^^^^^^^ def: defined here @ 51:3 (1 refs)
 
 note: 
-   ┌─ lib.fe:45:16
+   ┌─ lib.fe:51:16
    │
-45 │ fn test_locals(x: i32) -> i32 {
-   │                ^ def: defined here @ 45:15 (2 refs)
+51 │ fn test_locals(x: i32) -> i32 {
+   │                ^ def: defined here @ 51:15 (2 refs)
 
 note: 
-   ┌─ lib.fe:46:7
+   ┌─ lib.fe:52:7
    │
-46 │   let a = x
-   │       ^ def: defined here @ 46:6 (2 refs)
+52 │   let a = x
+   │       ^ def: defined here @ 52:6 (2 refs)
 
 note: 
-   ┌─ lib.fe:46:11
+   ┌─ lib.fe:52:11
    │
-46 │   let a = x
-   │           ^ ref: 46:10
+52 │   let a = x
+   │           ^ ref: 52:10
 
 note: 
-   ┌─ lib.fe:47:7
+   ┌─ lib.fe:53:7
    │
-47 │   let x = a + 1
-   │       ^ def: defined here @ 47:6 (2 refs)
+53 │   let x = a + 1
+   │       ^ def: defined here @ 53:6 (2 refs)
 
 note: 
-   ┌─ lib.fe:47:11
+   ┌─ lib.fe:53:11
    │
-47 │   let x = a + 1
-   │           ^ ref: 47:10
+53 │   let x = a + 1
+   │           ^ ref: 53:10
 
 note: 
-   ┌─ lib.fe:49:9
+   ┌─ lib.fe:55:9
    │
-49 │     let x = x + 1
-   │         ^ def: defined here @ 49:8 (2 refs)
+55 │     let x = x + 1
+   │         ^ def: defined here @ 55:8 (2 refs)
 
 note: 
-   ┌─ lib.fe:49:13
+   ┌─ lib.fe:55:13
    │
-49 │     let x = x + 1
-   │             ^ ref: 49:12
+55 │     let x = x + 1
+   │             ^ ref: 55:12
 
 note: 
-   ┌─ lib.fe:50:5
+   ┌─ lib.fe:56:5
    │
-50 │     x
-   │     ^ ref: 50:4
+56 │     x
+   │     ^ ref: 56:4
 
 note: 
-   ┌─ lib.fe:55:4
+   ┌─ lib.fe:61:4
    │
-55 │ fn test_match(opt: Option) -> i32 {
-   │    ^^^^^^^^^^ def: defined here @ 55:3 (1 refs)
+61 │ fn test_match(opt: Option) -> i32 {
+   │    ^^^^^^^^^^ def: defined here @ 61:3 (1 refs)
 
 note: 
-   ┌─ lib.fe:55:15
+   ┌─ lib.fe:61:15
    │
-55 │ fn test_match(opt: Option) -> i32 {
-   │               ^^^ def: defined here @ 55:14 (2 refs)
+61 │ fn test_match(opt: Option) -> i32 {
+   │               ^^^ def: defined here @ 61:14 (2 refs)
 
 note: 
-   ┌─ lib.fe:55:20
+   ┌─ lib.fe:61:20
    │
-55 │ fn test_match(opt: Option) -> i32 {
-   │                    ^^^^^^ ref: 55:19
+61 │ fn test_match(opt: Option) -> i32 {
+   │                    ^^^^^^ ref: 61:19
 
 note: 
-   ┌─ lib.fe:56:9
+   ┌─ lib.fe:62:9
    │
-56 │   match opt {
-   │         ^^^ ref: 56:8
+62 │   match opt {
+   │         ^^^ ref: 62:8
 
 note: 
-   ┌─ lib.fe:57:5
+   ┌─ lib.fe:63:5
    │
-57 │     Option::Some(val) => val
-   │     ^^^^^^^^^^^^ ref: 57:4
+63 │     Option::Some(val) => val
+   │     ^^^^^^^^^^^^ ref: 63:4
 
 note: 
-   ┌─ lib.fe:57:18
+   ┌─ lib.fe:63:18
    │
-57 │     Option::Some(val) => val
-   │                  ^^^ def: defined here @ 57:17 (2 refs)
+63 │     Option::Some(val) => val
+   │                  ^^^ def: defined here @ 63:17 (2 refs)
 
 note: 
-   ┌─ lib.fe:57:26
+   ┌─ lib.fe:63:26
    │
-57 │     Option::Some(val) => val
-   │                          ^^^ ref: 57:25
+63 │     Option::Some(val) => val
+   │                          ^^^ ref: 63:25
 
 note: 
-   ┌─ lib.fe:58:5
+   ┌─ lib.fe:64:5
    │
-58 │     Option::None => 0
-   │     ^^^^^^^^^^^^ ref: 58:4
+64 │     Option::None => 0
+   │     ^^^^^^^^^^^^ ref: 64:4
 
 note: 
   ┌─ stuff.fe:2:9

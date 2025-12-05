@@ -1,5 +1,5 @@
-use async_lsp::lsp_types::{InlayHint, InlayHintKind, InlayHintLabel};
 use async_lsp::ResponseError;
+use async_lsp::lsp_types::{InlayHint, InlayHintKind, InlayHintLabel};
 use common::InputDb;
 use driver::DriverDataBase;
 use hir::{
@@ -56,7 +56,7 @@ fn collect_hints_from_mod(db: &DriverDataBase, top_mod: TopLevelMod, hints: &mut
                 // Get the typed body for this function
                 let (_, typed_body) = check_func_body(db, func);
                 if let Some(body) = typed_body.body() {
-                    collect_hints_from_body(db, body, &typed_body, hints);
+                    collect_hints_from_body(db, body, typed_body, hints);
                 }
             }
             _ => continue,
@@ -103,21 +103,21 @@ impl<'a, 'db> Visitor<'db> for InlayHintCollector<'a, 'db> {
 
                 // Get the span of the pattern
                 let body = ctxt.body();
-                if let Some(span) = pat.span(body).resolve(self.db) {
-                    if let Ok(range) = to_lsp_range_from_span(span, self.db) {
-                        // Position hint after the pattern
-                        let hint = InlayHint {
-                            position: range.end,
-                            label: InlayHintLabel::String(format!(": {}", ty_str)),
-                            kind: Some(InlayHintKind::TYPE),
-                            text_edits: None,
-                            tooltip: None,
-                            padding_left: None,
-                            padding_right: None,
-                            data: None,
-                        };
-                        self.hints.push(hint);
-                    }
+                if let Some(span) = pat.span(body).resolve(self.db)
+                    && let Ok(range) = to_lsp_range_from_span(span, self.db)
+                {
+                    // Position hint after the pattern
+                    let hint = InlayHint {
+                        position: range.end,
+                        label: InlayHintLabel::String(format!(": {}", ty_str)),
+                        kind: Some(InlayHintKind::TYPE),
+                        text_edits: None,
+                        tooltip: None,
+                        padding_left: None,
+                        padding_right: None,
+                        data: None,
+                    };
+                    self.hints.push(hint);
                 }
             }
         }

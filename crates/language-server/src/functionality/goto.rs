@@ -33,7 +33,10 @@ pub async fn handle_goto_definition(
 
     // Convert the position to an offset in the file
     let params = params.text_document_position_params;
-    info!("goto_definition request for {:?} at {:?}", params.text_document.uri, params.position);
+    info!(
+        "goto_definition request for {:?} at {:?}",
+        params.text_document.uri, params.position
+    );
 
     let file_text = std::fs::read_to_string(params.text_document.uri.path()).ok();
     let cursor: Cursor = to_offset_from_position(params.position, file_text.unwrap().as_str());
@@ -56,8 +59,18 @@ pub async fn handle_goto_definition(
         .ok_or_else(|| {
             warn!("File not found in workspace: {}", url);
             // List all files in workspace for debugging
-            let all_files: Vec<_> = backend.db.workspace().all_files(&backend.db).iter().map(|(u, _)| u.to_string()).collect();
-            warn!("Workspace contains {} files: {:?}", all_files.len(), all_files);
+            let all_files: Vec<_> = backend
+                .db
+                .workspace()
+                .all_files(&backend.db)
+                .iter()
+                .map(|(u, _)| u.to_string())
+                .collect();
+            warn!(
+                "Workspace contains {} files: {:?}",
+                all_files.len(),
+                all_files
+            );
             ResponseError::new(
                 async_lsp::ErrorCode::INTERNAL_ERROR,
                 format!("File not found in index: {url} (original path: {file_path_str})"),

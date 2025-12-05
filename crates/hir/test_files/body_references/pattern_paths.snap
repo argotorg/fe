@@ -7,7 +7,7 @@ note:
   ┌─ pattern_paths.fe:4:11
   │
 4 │     match c {
-  │           ^ c -> value
+  │           ^ c -> local
 
 note: 
   ┌─ pattern_paths.fe:5:9

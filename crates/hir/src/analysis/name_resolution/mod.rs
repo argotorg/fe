@@ -11,6 +11,7 @@ mod visibility_checker;
 use crate::core::hir_def::TopLevelMod;
 use common::ingot::Ingot;
 pub use import_resolver::ResolvedImports;
+pub use items_in_scope::items_in_scope;
 pub use name_resolver::{
     EarlyNameQueryId, NameDerivation, NameDomain, NameRes, NameResBucket, NameResKind,
     NameResolutionError, QueryDirective,
@@ -20,7 +21,6 @@ pub use path_resolver::{
     resolve_ident_to_bucket, resolve_name_res, resolve_path, resolve_path_with_observer,
 };
 use tracing::debug;
-pub use items_in_scope::items_in_scope;
 pub use traits_in_scope::available_traits_in_scope;
 pub(crate) use visibility_checker::is_scope_visible_from;
 
