@@ -1,6 +1,7 @@
 pub mod diagnostics;
 
 mod import_resolver;
+pub(crate) mod items_in_scope;
 pub(crate) mod method_selection;
 mod name_resolver;
 pub mod path_resolver;
@@ -19,6 +20,7 @@ pub use path_resolver::{
     resolve_ident_to_bucket, resolve_name_res, resolve_path, resolve_path_with_observer,
 };
 use tracing::debug;
+pub use items_in_scope::items_in_scope;
 pub use traits_in_scope::available_traits_in_scope;
 pub(crate) use visibility_checker::is_scope_visible_from;
 

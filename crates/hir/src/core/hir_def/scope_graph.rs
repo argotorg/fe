@@ -280,6 +280,27 @@ impl<'db> ScopeId<'db> {
         self.scope_graph(db).children(self)
     }
 
+    /// Returns all items visible in this scope for the specified domain(s).
+    ///
+    /// This includes items from imports, direct child items, and parent scopes.
+    /// Requires `HirAnalysisDb` for name resolution.
+    ///
+    /// # Example
+    /// ```ignore
+    /// use hir::analysis::name_resolution::NameDomain;
+    ///
+    /// // Get all values and types visible in this scope
+    /// let items = scope.items_in_scope(db, NameDomain::VALUE | NameDomain::TYPE);
+    /// ```
+    pub fn items_in_scope(
+        self,
+        db: &'db dyn crate::analysis::HirAnalysisDb,
+        domain: crate::analysis::name_resolution::NameDomain,
+    ) -> &'db common::indexmap::IndexMap<String, crate::analysis::name_resolution::NameRes<'db>>
+    {
+        crate::analysis::name_resolution::items_in_scope(db, self, domain)
+    }
+
     /// Returns `true` if the scope is a type.
     pub fn is_type(self) -> bool {
         match self {
