@@ -42,14 +42,27 @@ pub async fn handle_completion(
     let cursor = to_offset_from_position(params.text_document_position.position, &file_text);
     let top_mod = map_file_to_mod(&backend.db, file);
 
-    // Find the scope at cursor position
-    let scope = find_scope_at_cursor(&backend.db, top_mod, cursor);
-
     let mut items = Vec::new();
 
-    // Collect items visible in scope (both values and types)
-    if let Some(scope) = scope {
-        collect_items_from_scope(&backend.db, scope, &mut items);
+    // Check if this is a member access completion (triggered by '.')
+    let is_member_access = params
+        .context
+        .as_ref()
+        .and_then(|ctx| ctx.trigger_character.as_ref())
+        .map(|c| c == ".")
+        .unwrap_or(false);
+
+    if is_member_access {
+        // TODO: Implement member access completion
+        // Need to resolve type of expression before '.' and show its fields/methods
+        // This requires understanding the proper public API for accessing type members
+        info!("Member access completion not yet implemented");
+    } else {
+        // Regular completion: show items visible in scope
+        let scope = find_scope_at_cursor(&backend.db, top_mod, cursor);
+        if let Some(scope) = scope {
+            collect_items_from_scope(&backend.db, scope, &mut items);
+        }
     }
 
     Ok(Some(CompletionResponse::Array(items)))
@@ -151,6 +164,9 @@ fn name_res_to_completion<'db>(
     Some(CompletionItem {
         label: name.to_string(),
         kind: Some(kind),
+        insert_text: Some(name.to_string()),
+        insert_text_format: Some(async_lsp::lsp_types::InsertTextFormat::PLAIN_TEXT),
+        insert_text_mode: Some(async_lsp::lsp_types::InsertTextMode::ADJUST_INDENTATION),
         ..Default::default()
     })
 }
