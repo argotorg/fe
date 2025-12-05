@@ -1,0 +1,161 @@
+use core::{calldataload, code_region_len, code_region_offset, codecopy, mstore, return_data, sload, sstore}
+
+enum User {
+    Alice,
+    Bob,
+}
+
+enum TransferResult {
+    Ok,
+    Insufficient,
+}
+
+struct CoinStore {
+    alice: u256,
+    bob: u256,
+}
+
+struct TotalSupply {
+    total: u256,
+}
+
+fn transfer_result_code(res: TransferResult) -> u256 {
+    match res {
+        TransferResult::Ok => 0
+        TransferResult::Insufficient => 1
+    }
+}
+
+fn abi_encode(value: u256) {
+    let ptr: u256 = 0
+    mstore(ptr, value)
+    return_data(ptr, 32)
+}
+
+fn credit(user: User, amount: u256) -> u256
+    uses (mut store: CoinStore, mut supply: TotalSupply)
+{
+    match user {
+        User::Alice => credit_alice(amount)
+        User::Bob => credit_bob(amount)
+    }
+}
+
+fn transfer(from: User, amount: u256) -> TransferResult
+    uses (mut store: CoinStore)
+{
+    match from {
+        User::Alice => transfer_from_alice(amount)
+        User::Bob => transfer_from_bob(amount)
+    }
+}
+
+fn balance_of(user: User) -> u256
+    uses (store: CoinStore)
+{
+    match user {
+        User::Alice => store.alice
+        User::Bob => store.bob
+    }
+}
+
+fn total_supply() -> u256
+    uses (supply: TotalSupply)
+{
+    supply.total
+}
+
+fn credit_alice(amount: u256) -> u256
+    uses (mut store: CoinStore, mut supply: TotalSupply)
+{
+    store.alice = store.alice + amount
+    supply.total = supply.total + amount
+    store.alice
+}
+
+fn credit_bob(amount: u256) -> u256
+    uses (mut store: CoinStore, mut supply: TotalSupply)
+{
+    store.bob = store.bob + amount
+    supply.total = supply.total + amount
+    store.bob
+}
+
+fn transfer_from_alice(amount: u256) -> TransferResult
+    uses (mut store: CoinStore)
+{
+    if store.alice < amount {
+        return TransferResult::Insufficient
+    }
+    store.alice = store.alice - amount
+    store.bob = store.bob + amount
+    TransferResult::Ok
+}
+
+fn transfer_from_bob(amount: u256) -> TransferResult
+    uses (mut store: CoinStore)
+{
+    if store.bob < amount {
+        return TransferResult::Insufficient
+    }
+    store.bob = store.bob - amount
+    store.alice = store.alice + amount
+    TransferResult::Ok
+}
+
+#[contract_init(Coin)]
+fn init() {
+    let len = code_region_len(runtime)
+    let offset = code_region_offset(runtime)
+    codecopy(dest: 0, offset, len)
+}
+
+#[contract_runtime(Coin)]
+fn runtime()
+    uses (mut store: CoinStore, mut supply: TotalSupply)
+{
+    let selector = calldataload(0) >> 224
+    match selector {
+        0xab7ccc1c => {
+            // credit(uint256,uint256)
+            let who_raw = calldataload(4)
+            let amount = calldataload(36)
+            let new_balance = match who_raw {
+                0 => credit_alice(amount)
+                _ => credit_bob(amount)
+            }
+            abi_encode(value: new_balance)
+            return_data(0, 0)
+        }
+        0x6c65aae5 => {
+            // balance_of(uint256)
+            let who_raw = calldataload(4)
+            let value = match who_raw {
+                0 => store.alice
+                1 => store.bob
+                _ => 0
+            }
+            abi_encode(value: value)
+            return_data(0, 0)
+        }
+        0x0cf79e0a => {
+            // transfer(uint256,uint256)
+            let who_raw = calldataload(4)
+            let amount = calldataload(36)
+            let res = match who_raw {
+                0 => transfer_from_alice(amount)
+                _ => transfer_from_bob(amount)
+            }
+            let code = transfer_result_code(res: res)
+            abi_encode(value: code)
+            return_data(0, 0)
+        }
+        0x3940e9ee => {
+            // total_supply()
+            let supply = total_supply()
+            abi_encode(value: supply)
+            return_data(0, 0)
+        }
+        _ => return_data(0, 0)
+    }
+}

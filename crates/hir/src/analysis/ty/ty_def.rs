@@ -1221,6 +1221,20 @@ impl PrimTy {
     }
 }
 
+/// Returns the width (in bits) for the given primitive integer type, or `None` when unknown.
+pub fn prim_int_bits(prim: PrimTy) -> Option<u16> {
+    use PrimTy::*;
+    match prim {
+        U8 | I8 => Some(8),
+        U16 | I16 => Some(16),
+        U32 | I32 => Some(32),
+        U64 | I64 => Some(64),
+        U128 | I128 => Some(128),
+        U256 | I256 | Usize | Isize => Some(256),
+        _ => None,
+    }
+}
+
 pub(super) trait HasKind {
     fn kind(&self, db: &dyn HirAnalysisDb) -> Kind;
 }

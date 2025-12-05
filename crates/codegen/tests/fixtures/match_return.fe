@@ -1,0 +1,10 @@
+ use core::return_data
+
+enum E { A, B }
+
+fn f(e: E) {
+    match e {
+        E::A => { return_data(0, 0) }
+        E::B => { return_data(0, 0) }
+    }
+}

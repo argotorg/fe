@@ -64,6 +64,10 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
     /// The `ValueId` bound to the expression.
     pub(super) fn ensure_value(&mut self, expr: ExprId) -> ValueId {
         if let Some(&val) = self.mir_body.expr_values.get(&expr) {
+            if !self.value_address_space.contains_key(&val) {
+                let space = self.expr_address_space(expr);
+                self.value_address_space.insert(val, space);
+            }
             return val;
         }
 
@@ -90,6 +94,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         };
 
         self.mir_body.expr_values.insert(expr, value);
+        // Note: record_value_address_space is already called in alloc_expr_value.
         value
     }
 
@@ -102,20 +107,25 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
     /// The allocated `ValueId` (lowered call/field/const where applicable).
     pub(super) fn alloc_expr_value(&mut self, expr: ExprId) -> ValueId {
         if let Some(value) = self.try_lower_call(expr) {
+            self.record_value_address_space(expr, value);
             return value;
         }
         if let Some(value) = self.try_lower_field(expr) {
+            self.record_value_address_space(expr, value);
             return value;
         }
         if let Some(value) = self.try_const_expr(expr) {
+            self.record_value_address_space(expr, value);
             return value;
         }
 
         let ty = self.typed_body.expr_ty(self.db, expr);
-        self.mir_body.alloc_value(ValueData {
+        let value = self.mir_body.alloc_value(ValueData {
             ty,
             origin: ValueOrigin::Expr(expr),
-        })
+        });
+        self.record_value_address_space(expr, value);
+        value
     }
 
     /// Collect all argument expressions and their lowered values for a call or method call.

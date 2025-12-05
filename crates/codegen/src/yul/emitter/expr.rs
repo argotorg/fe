@@ -1,10 +1,13 @@
 //! Expression and value lowering helpers shared across the Yul emitter.
 
 use hir::hir_def::{
-    CallableDef, Expr, ExprId, LitKind, Stmt, StmtId,
+    Attr, CallableDef, Expr, ExprId, Func, ItemKind, LitKind, Stmt, StmtId,
     expr::{ArithBinOp, BinOp, CompBinOp, LogicalBinOp, UnOp},
 };
-use mir::{CallOrigin, ValueId, ValueOrigin, ir::SyntheticValue};
+use mir::{
+    CallOrigin, ValueId, ValueOrigin,
+    ir::{ContractFunctionKind, SyntheticValue},
+};
 
 use crate::yul::{doc::YulDoc, state::BlockState};
 
@@ -243,6 +246,10 @@ impl<'db> FunctionEmitter<'db> {
         for &arg in &call.args {
             lowered_args.push(self.lower_value(arg, state)?);
         }
+        if let CallableDef::Func(func_def) = call.callable.callable_def {
+            let effect_args = self.lower_effect_arguments(func_def, state)?;
+            lowered_args.extend(effect_args);
+        }
         if let Some(arg) = try_collapse_cast_shim(&callee, &lowered_args)? {
             return Ok(arg);
         }
@@ -316,5 +323,61 @@ impl<'db> FunctionEmitter<'db> {
     pub(super) fn expr_is_unit(&self, expr_id: ExprId) -> bool {
         let ty = self.mir_func.typed_body.expr_ty(self.db, expr_id);
         ty.is_tuple(self.db) && ty.field_count(self.db) == 0
+    }
+
+    /// Computes extra arguments for a callee's effect parameters and appends them to the call.
+    ///
+    /// * `func` - The function being called.
+    /// * `state` - Current block bindings used to resolve effect names to Yul locals.
+    ///
+    /// Returns any effect arguments that should be passed (empty for contract init/runtime).
+    fn lower_effect_arguments(
+        &self,
+        func: Func<'db>,
+        state: &BlockState,
+    ) -> Result<Vec<String>, YulError> {
+        if !func.has_effects(self.db) {
+            return Ok(Vec::new());
+        }
+        if self.function_contract_kind(func).is_some() {
+            return Ok(Vec::new());
+        }
+
+        let mut args = Vec::new();
+        for binding in func
+            .effect_params(self.db)
+            .map(|effect| self.effect_binding_name(effect))
+        {
+            if let Some(name) = state.binding(&binding) {
+                args.push(name);
+            } else {
+                return Err(YulError::Unsupported(format!(
+                    "missing effect binding `{binding}` when calling {}",
+                    function_name(self.db, func)
+                )));
+            }
+        }
+        Ok(args)
+    }
+
+    /// Detects whether `func` is a contract init/runtime entrypoint by inspecting attributes.
+    fn function_contract_kind(&self, func: Func<'db>) -> Option<ContractFunctionKind> {
+        let attrs = ItemKind::Func(func).attrs(self.db)?;
+        for attr in attrs.data(self.db) {
+            if let Attr::Normal(normal) = attr {
+                let Some(path) = normal.path.to_opt() else {
+                    continue;
+                };
+                let Some(name) = path.as_ident(self.db) else {
+                    continue;
+                };
+                match name.data(self.db).as_str() {
+                    "contract_init" => return Some(ContractFunctionKind::Init),
+                    "contract_runtime" => return Some(ContractFunctionKind::Runtime),
+                    _ => {}
+                }
+            }
+        }
+        None
     }
 }

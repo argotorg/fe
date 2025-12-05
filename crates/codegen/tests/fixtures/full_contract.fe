@@ -35,13 +35,16 @@ fn dispatch() {
     if selector == 0x090251bf {
         let x = calldataload(4)
         let y = calldataload(36)
-        let p = Point { x: x, y: y }
+        let mut p = Point { x: x, y: y }
+        p.x = p.x + 1
+        p.y = p.y + 2
         let value = p.area()
         abi_encode(value)
     }
     if selector == 0x7b292909 {
         let side = calldataload(4)
-        let s = Square { side: side }
+        let mut s = Square { side: side }
+        s.side = s.side + 3
         let value = s.area()
         abi_encode(value)
     }

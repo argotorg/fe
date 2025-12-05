@@ -1,0 +1,212 @@
+---
+source: crates/codegen/tests/yul.rs
+assertion_line: 31
+expression: output
+input_file: tests/fixtures/storage.fe
+---
+object "Coin" {
+  code {
+    init()
+    function init() {
+      let v0 := datasize("Coin_deployed")
+      let v1 := dataoffset("Coin_deployed")
+      codecopy(0, v1, v0)
+    }
+  }
+
+  object "Coin_deployed" {
+    code {
+      runtime()
+      function abi_encode(value) {
+        let v0 := 0
+        mstore(v0, value)
+        return(v0, 32)
+      }
+      function alloc(size) -> ret {
+        let v0 := mload(64)
+        let v1 := eq(v0, 0)
+        if v1 {
+          v0 := 128
+          mstore(64, add(v0, size))
+          ret := v0
+        }
+        if iszero(v1) {
+          mstore(64, add(v0, size))
+          ret := v0
+        }
+      }
+      function credit_alice(amount, store, supply) -> ret {
+        store_field__deduped(store, 1, 0, add(get_field__CoinStore_u256__31058c4e63450245(store, 1, 0), amount))
+        store_field__deduped(supply, 1, 0, add(get_field__CoinStore_u256__31058c4e63450245(supply, 1, 0), amount))
+        ret := get_field__CoinStore_u256__31058c4e63450245(store, 1, 0)
+      }
+      function credit_bob(amount, store, supply) -> ret {
+        store_field__deduped(store, 1, 32, add(get_field__CoinStore_u256__31058c4e63450245(store, 1, 32), amount))
+        store_field__deduped(supply, 1, 0, add(get_field__CoinStore_u256__31058c4e63450245(supply, 1, 0), amount))
+        ret := get_field__CoinStore_u256__31058c4e63450245(store, 1, 32)
+      }
+      function get_discriminant(addr, space) -> ret {
+        let v0 := 0
+        switch space
+          case 0 {
+            v0 := mload(addr)
+          }
+          case 1 {
+            v0 := sload(addr)
+          }
+          default {
+          }
+        ret := v0
+      }
+      function get_field__CoinStore_u256__31058c4e63450245(addr, space, offset) -> ret {
+        let v1 := add(addr, offset)
+        let v0 := 0
+        switch space
+          case 0 {
+            v0 := mload(v1)
+          }
+          case 1 {
+            v0 := sload(v1)
+          }
+          default {
+          }
+        let v2 := v0
+        ret := to_word__deduped(v2)
+      }
+      function runtime() {
+        let v0 := 0
+        let v1 := add(0, 64)
+        let v2 := shr(224, calldataload(0))
+        switch v2
+          case 2877082652 {
+            let v4 := calldataload(4)
+            let v5 := calldataload(36)
+            let v3 := 0
+            switch v4
+              case 0 {
+                v3 := credit_alice(v5, v0, v1)
+              }
+              default {
+                v3 := credit_bob(v5, v0, v1)
+              }
+            let v6 := v3
+            abi_encode(v6)
+            return(0, 0)
+          }
+          case 1818602213 {
+            let v8 := calldataload(4)
+            let v7 := 0
+            switch v8
+              case 0 {
+                v7 := get_field__CoinStore_u256__31058c4e63450245(v0, 1, 0)
+              }
+              case 1 {
+                v7 := get_field__CoinStore_u256__31058c4e63450245(v0, 1, 32)
+              }
+              default {
+                v7 := 0
+              }
+            let v9 := v7
+            abi_encode(v9)
+            return(0, 0)
+          }
+          case 217554442 {
+            let v11 := calldataload(4)
+            let v12 := calldataload(36)
+            let v10 := 0
+            switch v11
+              case 0 {
+                v10 := transfer_from_alice(v12, v0)
+              }
+              default {
+                v10 := transfer_from_bob(v12, v0)
+              }
+            let v13 := v10
+            let v14 := transfer_result_code(v13)
+            abi_encode(v14)
+            return(0, 0)
+          }
+          case 960555502 {
+            v1 := total_supply(v1)
+            abi_encode(v1)
+            return(0, 0)
+          }
+          default {
+            return(0, 0)
+          }
+      }
+      function store_discriminant(addr, space, discriminant) {
+        switch space
+          case 0 {
+            mstore(addr, discriminant)
+          }
+          case 1 {
+            sstore(addr, discriminant)
+          }
+          default {
+          }
+      }
+      function store_field__deduped(addr, space, offset, value) {
+        let v0 := add(addr, offset)
+        switch space
+          case 0 {
+            mstore(v0, to_word__deduped(value))
+          }
+          case 1 {
+            sstore(v0, to_word__deduped(value))
+          }
+          default {
+          }
+      }
+      function to_word__deduped(self) -> ret {
+        ret := self
+      }
+      function total_supply(supply) -> ret {
+        ret := get_field__CoinStore_u256__31058c4e63450245(supply, 1, 0)
+      }
+      function transfer_from_alice(amount, store) -> ret {
+        let v0 := lt(get_field__CoinStore_u256__31058c4e63450245(store, 1, 0), amount)
+        if v0 {
+          let v1 := alloc(32)
+          store_discriminant(v1, 0, 1)
+          ret := v1
+        }
+        if iszero(v0) {
+          store_field__deduped(store, 1, 0, sub(get_field__CoinStore_u256__31058c4e63450245(store, 1, 0), amount))
+          store_field__deduped(store, 1, 32, add(get_field__CoinStore_u256__31058c4e63450245(store, 1, 32), amount))
+          let v2 := alloc(32)
+          store_discriminant(v2, 0, 0)
+          ret := v2
+        }
+      }
+      function transfer_from_bob(amount, store) -> ret {
+        let v0 := lt(get_field__CoinStore_u256__31058c4e63450245(store, 1, 32), amount)
+        if v0 {
+          let v1 := alloc(32)
+          store_discriminant(v1, 0, 1)
+          ret := v1
+        }
+        if iszero(v0) {
+          store_field__deduped(store, 1, 32, sub(get_field__CoinStore_u256__31058c4e63450245(store, 1, 32), amount))
+          store_field__deduped(store, 1, 0, add(get_field__CoinStore_u256__31058c4e63450245(store, 1, 0), amount))
+          let v2 := alloc(32)
+          store_discriminant(v2, 0, 0)
+          ret := v2
+        }
+      }
+      function transfer_result_code(res) -> ret {
+        let v0 := 0
+        switch get_discriminant(res, 0)
+          case 0 {
+            v0 := 0
+          }
+          case 1 {
+            v0 := 1
+          }
+          default {
+          }
+        ret := v0
+      }
+    }
+  }
+}

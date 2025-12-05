@@ -3,7 +3,10 @@
 use hir::hir_def::ExprId;
 use mir::{
     BasicBlockId, LoopInfo, Terminator, ValueId, ValueOrigin,
-    ir::{MatchArmPattern, SwitchOrigin, SwitchTarget, SwitchValue},
+    ir::{
+        MatchArmLowering, MatchArmPattern, MatchLoweringInfo, SwitchOrigin, SwitchTarget,
+        SwitchValue,
+    },
 };
 
 use crate::yul::{doc::YulDoc, errors::YulError, state::BlockState};
@@ -285,9 +288,12 @@ impl<'db> FunctionEmitter<'db> {
         ctx: &mut BlockEmitCtx<'_, '_>,
     ) -> Result<(), YulError> {
         let discr_expr = self.lower_value(discr, ctx.state)?;
+        let match_info = self.mir_func.body.match_info(expr_id).ok_or_else(|| {
+            YulError::Unsupported("missing match lowering info for switch".into())
+        })?;
+        let merge_block = self.match_merge_block(match_info)?;
         if self.expr_is_unit(expr_id) {
             ctx.docs.push(YulDoc::line(format!("switch {discr_expr}")));
-            let merge_block = self.match_merge_block(targets, default)?;
             let loop_ctx = ctx.loop_ctx;
             for target in targets {
                 let mut case_state = ctx.cloned_state();
@@ -313,22 +319,24 @@ impl<'db> FunctionEmitter<'db> {
             return Ok(());
         }
 
-        let temp = self
-            .match_values
-            .get(&expr_id)
-            .cloned()
-            .expect("match temp must exist");
-        let match_info = self.mir_func.body.match_info(expr_id).ok_or_else(|| {
-            YulError::Unsupported("missing match lowering info for switch".into())
-        })?;
+        let temp = merge_block.map(|_| {
+            self.match_values
+                .entry(expr_id)
+                .or_insert_with(|| ctx.state.alloc_local())
+                .to_owned()
+        });
 
-        ctx.docs.push(YulDoc::line(format!("let {temp} := 0")));
+        if let Some(temp_name) = temp.as_ref() {
+            ctx.docs.push(YulDoc::line(format!("let {temp_name} := 0")));
+        }
         ctx.docs.push(YulDoc::line(format!("switch {discr_expr}")));
 
         let mut default_body = None;
         for arm in &match_info.arms {
             let mut arm_state = ctx.cloned_state();
             let mut arm_docs = Vec::new();
+
+            // Emit enum variant bindings if present.
             if let MatchArmPattern::Enum { bindings, .. } = &arm.pattern
                 && !bindings.is_empty()
             {
@@ -345,30 +353,35 @@ impl<'db> FunctionEmitter<'db> {
                     arm_state.insert_binding(binding_name, temp_name);
                 }
             }
+
+            // Emit arm body - either as a terminating block or as a value assignment.
+            let case_docs = self.emit_match_arm_body(
+                arm,
+                temp.as_ref(),
+                merge_block,
+                ctx.loop_ctx,
+                &mut arm_state,
+                arm_docs,
+            )?;
+
+            // Route to either a numbered case or the default arm.
             match &arm.pattern {
                 MatchArmPattern::Literal(value) => {
-                    let body_expr = self.lower_expr(arm.body, &arm_state)?;
                     let literal = switch_value_literal(value);
-                    arm_docs.push(YulDoc::line(format!("{temp} := {body_expr}")));
                     ctx.docs
-                        .push(YulDoc::wide_block(format!("  case {literal} "), arm_docs));
+                        .push(YulDoc::wide_block(format!("  case {literal} "), case_docs));
                 }
                 MatchArmPattern::Enum { variant_index, .. } => {
-                    let body_expr = self.lower_expr(arm.body, &arm_state)?;
                     let literal = switch_value_literal(&SwitchValue::Enum(*variant_index));
-                    arm_docs.push(YulDoc::line(format!("{temp} := {body_expr}")));
                     ctx.docs
-                        .push(YulDoc::wide_block(format!("  case {literal} "), arm_docs));
+                        .push(YulDoc::wide_block(format!("  case {literal} "), case_docs));
                 }
                 MatchArmPattern::Wildcard => {
-                    let body_expr = self.lower_expr(arm.body, &arm_state)?;
-                    arm_docs.push(YulDoc::line(format!("{temp} := {body_expr}")));
-                    default_body = Some(arm_docs);
+                    default_body = Some(case_docs);
                 }
             }
         }
 
-        let merge_block = self.match_merge_block(targets, default)?;
         let loop_ctx = ctx.loop_ctx;
         if let Some(default_docs) = default_body {
             ctx.docs
@@ -396,6 +409,52 @@ impl<'db> FunctionEmitter<'db> {
             ctx.docs.extend(next_docs);
         }
         Ok(())
+    }
+
+    /// Emits the body of a single match arm, handling both terminating and value-producing arms.
+    ///
+    /// For terminating arms (or when no temp variable exists), emits the arm's block and appends
+    /// an exit instruction (`leave` or `return`). For value-producing arms, lowers the body
+    /// expression and assigns it to the temp variable.
+    ///
+    /// * `arm` - Match arm metadata from MIR lowering.
+    /// * `temp` - Optional temp variable name for storing the match result.
+    /// * `merge_block` - Block where non-terminating arms converge.
+    /// * `loop_ctx` - Active loop context, if any.
+    /// * `arm_state` - Binding state for this arm.
+    /// * `arm_docs` - Pre-populated docs (e.g. enum bindings) to include in output.
+    ///
+    /// Returns the complete docs for the arm's case body.
+    fn emit_match_arm_body(
+        &mut self,
+        arm: &MatchArmLowering,
+        temp: Option<&String>,
+        merge_block: Option<BasicBlockId>,
+        loop_ctx: Option<LoopEmitCtx>,
+        arm_state: &mut BlockState,
+        mut arm_docs: Vec<YulDoc>,
+    ) -> Result<Vec<YulDoc>, YulError> {
+        // Terminating arms or arms without a temp emit the block directly.
+        if arm.terminates || temp.is_none() {
+            let mut case_docs =
+                self.emit_block_with_stop(arm.block, loop_ctx, arm_state, merge_block)?;
+            // Prepend enum bindings to case body.
+            arm_docs.append(&mut case_docs);
+            if arm.terminates {
+                if self.returns_value() {
+                    arm_docs.push(YulDoc::line("leave"));
+                } else {
+                    arm_docs.push(YulDoc::line("return(0, 0)"));
+                }
+            }
+            return Ok(arm_docs);
+        }
+
+        // Value-producing arms assign to the temp variable.
+        let body_expr = self.lower_expr(arm.body, arm_state)?;
+        let temp = temp.expect("temp must exist for non-terminating arms with merge block");
+        arm_docs.push(YulDoc::line(format!("{temp} := {body_expr}")));
+        Ok(arm_docs)
     }
 
     /// Handles `goto` terminators, translating loop jumps into `break`/`continue`
@@ -437,49 +496,23 @@ impl<'db> FunctionEmitter<'db> {
         Ok(())
     }
 
-    /// Finds the unified merge block that all literal match arms jump to, if any.
-    /// Determines if the match lowering introduced a merge block and returns it.
+    /// Retrieves the merge block recorded during match lowering.
     ///
-    /// * `targets` - All non-default switch destinations.
-    /// * `default` - Default block ID written by MIR.
-    ///
-    /// Returns the merge block when both branches converge, otherwise `None`.
+    /// Returns `Some(block)` when any arm continues execution, `None` when all arms
+    /// terminate, and errors if lowering failed to supply consistent metadata.
     fn match_merge_block(
         &self,
-        targets: &[SwitchTarget],
-        default: BasicBlockId,
+        match_info: &MatchLoweringInfo,
     ) -> Result<Option<BasicBlockId>, YulError> {
-        let mut merge = None;
-        for block_id in targets
-            .iter()
-            .map(|target| target.block)
-            .chain(std::iter::once(default))
-        {
-            let block = self
-                .mir_func
-                .body
-                .blocks
-                .get(block_id.index())
-                .ok_or_else(|| YulError::Unsupported("invalid block in match lowering".into()))?;
-            match block.terminator {
-                Terminator::Goto { target } => match merge {
-                    Some(existing) if existing != target => {
-                        return Err(YulError::Unsupported(
-                            "match arms must converge to a single merge block".into(),
-                        ));
-                    }
-                    None => merge = Some(target),
-                    _ => {}
-                },
-                Terminator::Unreachable => {}
-                _ => {
-                    return Err(YulError::Unsupported(
-                        "match arms must jump to a merge block".into(),
-                    ));
-                }
-            }
+        if let Some(merge) = match_info.merge_block {
+            return Ok(Some(merge));
         }
-        Ok(merge)
+        if match_info.arms.iter().all(|arm| arm.terminates) {
+            return Ok(None);
+        }
+        Err(YulError::Unsupported(
+            "match lowering missing merge block".into(),
+        ))
     }
 
     /// Looks up metadata about the loop that starts at `header`, if it exists.

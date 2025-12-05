@@ -789,7 +789,7 @@ impl<'db> ExprProp<'db> {
         }
     }
 
-    pub(super) fn binding(&self) -> Option<LocalBinding<'db>> {
+    pub fn binding(&self) -> Option<LocalBinding<'db>> {
         self.binding
     }
 
@@ -803,7 +803,7 @@ impl<'db> ExprProp<'db> {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Update)]
-pub(crate) enum LocalBinding<'db> {
+pub enum LocalBinding<'db> {
     Local {
         pat: PatId,
         is_mut: bool,

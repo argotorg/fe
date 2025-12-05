@@ -1,6 +1,5 @@
 ---
 source: crates/codegen/tests/yul.rs
-assertion_line: 31
 expression: output
 input_file: tests/fixtures/full_contract.fe
 ---
@@ -45,6 +44,8 @@ object "ShapeDispatcher" {
           store_field__deduped(v4, 0, 0, v2)
           store_field__deduped(v4, 0, 32, v3)
           let v5 := v4
+          store_field__deduped(v5, 0, 0, add(get_field__Point_u256__78e69939a7cc685d(v5, 0, 0), 1))
+          store_field__deduped(v5, 0, 32, add(get_field__Point_u256__78e69939a7cc685d(v5, 0, 32), 2))
           let v6 := point_area(v5)
           abi_encode(v6)
           let v7 := eq(v0, 2066295049)
@@ -53,6 +54,7 @@ object "ShapeDispatcher" {
             let v9 := alloc(32)
             store_field__deduped(v9, 0, 0, v8)
             let v10 := v9
+            store_field__deduped(v10, 0, 0, add(get_field__Point_u256__78e69939a7cc685d(v10, 0, 0), 3))
             v6 := square_area(v10)
             abi_encode(v6)
             return(0, 0)
@@ -68,6 +70,7 @@ object "ShapeDispatcher" {
             let v13 := alloc(32)
             store_field__deduped(v13, 0, 0, v12)
             let v14 := v13
+            store_field__deduped(v14, 0, 0, add(get_field__Point_u256__78e69939a7cc685d(v14, 0, 0), 3))
             let v15 := square_area(v14)
             abi_encode(v15)
             return(0, 0)

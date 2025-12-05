@@ -176,7 +176,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         let info = self.field_access_info(lhs_ty, field_index)?;
 
         let addr_value = self.ensure_value(*lhs);
-        let space_value = self.synthetic_address_space_memory();
+        let space_value = self.address_space_literal(self.value_address_space(addr_value));
         let offset_value = self.synthetic_u256(BigUint::from(info.offset_bytes));
         let callable =
             self.core
@@ -217,6 +217,10 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                 } else {
                     (Some(block), None)
                 };
+                if let Some(val) = value_id {
+                    let space = self.value_address_space(val);
+                    self.set_pat_address_space(*pat, space);
+                }
                 if let Some(curr_block) = next_block {
                     self.push_inst(
                         curr_block,
@@ -442,6 +446,17 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
             Expr::Assign(target, value) => {
                 let (next_block, value_id) = self.lower_expr_in(block, *value);
                 if let Some(curr_block) = next_block {
+                    if let Some(binding) = self.typed_body.expr_prop(self.db, *target).binding()
+                        && let LocalBinding::Local { pat, .. } = binding
+                    {
+                        let space = self.value_address_space(value_id);
+                        self.set_pat_address_space(pat, space);
+                    }
+                    if let Some(block_after_assign) =
+                        self.try_lower_field_assign(curr_block, expr, *target, value_id)
+                    {
+                        return (Some(block_after_assign), None);
+                    }
                     self.push_inst(
                         curr_block,
                         MirInst::Assign {
@@ -470,6 +485,12 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
             Expr::AugAssign(target, value, op) => {
                 let (next_block, value_id) = self.lower_expr_in(block, *value);
                 if let Some(curr_block) = next_block {
+                    if let Some(binding) = self.typed_body.expr_prop(self.db, *target).binding()
+                        && let LocalBinding::Local { pat, .. } = binding
+                    {
+                        let space = self.value_address_space(value_id);
+                        self.set_pat_address_space(pat, space);
+                    }
                     self.push_inst(
                         curr_block,
                         MirInst::AugAssign {

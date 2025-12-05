@@ -313,6 +313,8 @@ pub enum SyntheticValue {
 pub struct MatchLoweringInfo {
     /// The scrutinee value (e.g. enum pointer) for this match expression.
     pub scrutinee: ValueId,
+    /// Merge block selected when any arm continues execution; `None` when all arms terminate.
+    pub merge_block: Option<BasicBlockId>,
     pub arms: Vec<MatchArmLowering>,
 }
 
@@ -320,6 +322,8 @@ pub struct MatchLoweringInfo {
 pub struct MatchArmLowering {
     pub pattern: MatchArmPattern,
     pub body: ExprId,
+    pub block: BasicBlockId,
+    pub terminates: bool,
 }
 
 /// Information about a variable binding extracted from a pattern.

@@ -14,7 +14,7 @@ use hir::analysis::{
     ty::{
         adt_def::AdtRef,
         trait_resolution::PredicateListId,
-        ty_check::{RecordLike, TypedBody, check_func_body},
+        ty_check::{LocalBinding, RecordLike, TypedBody, check_func_body},
         ty_def::{PrimTy, TyBase, TyData, TyId},
     },
 };
@@ -90,26 +90,6 @@ pub(super) struct FieldAccessInfo<'db> {
 }
 
 const ENUM_DISCRIMINANT_SIZE_BYTES: u64 = 32;
-
-/// Returns the width (in bits) for the given primitive integer type, or `None` when unknown.
-///
-/// # Parameters
-/// - `prim`: Primitive type to inspect.
-///
-/// # Returns
-/// The bit width of the primitive type when supported.
-fn prim_int_bits(prim: PrimTy) -> Option<u16> {
-    use PrimTy::*;
-    match prim {
-        U8 | I8 => Some(8),
-        U16 | I16 => Some(16),
-        U32 | I32 => Some(32),
-        U64 | I64 => Some(64),
-        U128 | I128 => Some(128),
-        U256 | I256 | Usize | Isize => Some(256),
-        _ => None,
-    }
-}
 
 /// Lowers every function within the top-level module into MIR.
 ///
@@ -219,6 +199,8 @@ pub(super) struct MirBuilder<'db, 'a> {
     pub(super) core: CoreLib<'db>,
     pub(super) loop_stack: Vec<LoopScope>,
     pub(super) const_cache: FxHashMap<Const<'db>, ValueId>,
+    pub(super) pat_address_space: FxHashMap<PatId, AddressSpaceKind>,
+    pub(super) value_address_space: FxHashMap<ValueId, AddressSpaceKind>,
 }
 
 /// Loop context capturing break/continue targets.
@@ -226,6 +208,13 @@ pub(super) struct MirBuilder<'db, 'a> {
 pub(super) struct LoopScope {
     pub(super) continue_target: BasicBlockId,
     pub(super) break_target: BasicBlockId,
+}
+
+/// Tracks which address space a value or binding resides in.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub(super) enum AddressSpaceKind {
+    Memory,
+    Storage,
 }
 
 impl<'db, 'a> MirBuilder<'db, 'a> {
@@ -253,6 +242,8 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
             core,
             loop_stack: Vec::new(),
             const_cache: FxHashMap::default(),
+            pat_address_space: FxHashMap::default(),
+            value_address_space: FxHashMap::default(),
         })
     }
 
@@ -288,5 +279,90 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
     /// - `inst`: Instruction to append.
     fn push_inst(&mut self, block: BasicBlockId, inst: MirInst<'db>) {
         self.mir_body.block_mut(block).push_inst(inst);
+    }
+
+    /// Determines the address space for a binding.
+    ///
+    /// # Parameters
+    /// - `binding`: Binding metadata.
+    ///
+    /// # Returns
+    /// The resolved address space kind.
+    pub(super) fn address_space_for_binding(
+        &self,
+        binding: &LocalBinding<'db>,
+    ) -> AddressSpaceKind {
+        match binding {
+            LocalBinding::EffectParam { .. } => AddressSpaceKind::Storage,
+            LocalBinding::Local { pat, .. } => self
+                .pat_address_space
+                .get(pat)
+                .copied()
+                .unwrap_or(AddressSpaceKind::Memory),
+            LocalBinding::Param { .. } => AddressSpaceKind::Memory,
+        }
+    }
+
+    /// Computes the address space for an expression, defaulting to memory.
+    ///
+    /// # Parameters
+    /// - `expr`: Expression id to inspect.
+    ///
+    /// # Returns
+    /// The address space kind for the expression.
+    pub(super) fn expr_address_space(&self, expr: ExprId) -> AddressSpaceKind {
+        let prop = self.typed_body.expr_prop(self.db, expr);
+        if let Some(binding) = prop.binding() {
+            self.address_space_for_binding(&binding)
+        } else {
+            AddressSpaceKind::Memory
+        }
+    }
+
+    /// Records the address space for a newly allocated value derived from an expression.
+    ///
+    /// # Parameters
+    /// - `expr`: Source expression.
+    /// - `value`: Newly allocated value id.
+    pub(super) fn record_value_address_space(&mut self, expr: ExprId, value: ValueId) {
+        let space = self.expr_address_space(expr);
+        self.value_address_space.insert(value, space);
+    }
+
+    /// Returns the address space for a value, defaulting to memory.
+    ///
+    /// # Parameters
+    /// - `value`: Value id to query.
+    ///
+    /// # Returns
+    /// The recorded address space kind.
+    pub(super) fn value_address_space(&self, value: ValueId) -> AddressSpaceKind {
+        self.value_address_space
+            .get(&value)
+            .copied()
+            .unwrap_or(AddressSpaceKind::Memory)
+    }
+
+    /// Associates a pattern with an address space.
+    ///
+    /// # Parameters
+    /// - `pat`: Pattern id to annotate.
+    /// - `space`: Address space kind to record.
+    pub(super) fn set_pat_address_space(&mut self, pat: PatId, space: AddressSpaceKind) {
+        self.pat_address_space.insert(pat, space);
+    }
+
+    /// Returns a synthetic literal representing the provided address space.
+    ///
+    /// # Parameters
+    /// - `space`: Address space kind to encode.
+    ///
+    /// # Returns
+    /// Synthetic value id for the address space.
+    pub(super) fn address_space_literal(&mut self, space: AddressSpaceKind) -> ValueId {
+        match space {
+            AddressSpaceKind::Memory => self.synthetic_address_space_memory(),
+            AddressSpaceKind::Storage => self.synthetic_address_space_storage(),
+        }
     }
 }

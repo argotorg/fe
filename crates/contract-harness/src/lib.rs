@@ -425,7 +425,7 @@ object "Counter" {
             .expect("point selector should succeed");
         assert_eq!(
             bytes_to_u256(&point_result.return_data).unwrap(),
-            U256::from(12u64)
+            U256::from(24u64)
         );
 
         let square_call =
@@ -435,8 +435,118 @@ object "Counter" {
             .expect("square selector should succeed");
         assert_eq!(
             bytes_to_u256(&square_result.return_data).unwrap(),
-            U256::from(25u64)
+            U256::from(64u64)
         );
+    }
+
+    #[test]
+    fn storage_contract_test() {
+        if !solc_available() {
+            eprintln!("skipping storage_contract_test because solc is missing");
+            return;
+        }
+        let source_path = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../codegen/tests/fixtures/storage.fe"
+        );
+        let harness =
+            FeContractHarness::compile_from_file("Coin", source_path, CompileOptions::default())
+                .expect("compilation should succeed");
+
+        let mut instance = harness.deploy_instance().expect("deployment succeeds");
+        let options = ExecutionOptions::default();
+
+        // Helper discriminants: 0 = Alice, 1 = Bob
+        let alice = Token::Uint(AbiU256::from(0u64));
+        let bob = Token::Uint(AbiU256::from(1u64));
+
+        // credit Alice with 10
+        let credit_alice = encode_function_call(
+            "credit(uint256,uint256)",
+            &[alice.clone(), Token::Uint(AbiU256::from(10u64))],
+        )
+        .unwrap();
+        let credit_alice_res = instance
+            .call_raw(&credit_alice, options)
+            .expect("credit alice should succeed");
+        assert_eq!(
+            bytes_to_u256(&credit_alice_res.return_data).unwrap(),
+            U256::from(10u64)
+        );
+
+        // credit Bob with 5
+        let credit_bob = encode_function_call(
+            "credit(uint256,uint256)",
+            &[bob.clone(), Token::Uint(AbiU256::from(5u64))],
+        )
+        .unwrap();
+        let credit_bob_res = instance
+            .call_raw(&credit_bob, options)
+            .expect("credit bob should succeed");
+        assert_eq!(
+            bytes_to_u256(&credit_bob_res.return_data).unwrap(),
+            U256::from(5u64)
+        );
+
+        // transfer 3 from Alice -> Bob (should succeed, return code 0)
+        let transfer_alice = encode_function_call(
+            "transfer(uint256,uint256)",
+            &[alice.clone(), Token::Uint(AbiU256::from(3u64))],
+        )
+        .unwrap();
+        let transfer_alice_res = instance
+            .call_raw(&transfer_alice, options)
+            .expect("transfer from alice should succeed");
+        assert_eq!(
+            bytes_to_u256(&transfer_alice_res.return_data).unwrap(),
+            U256::from(0u64),
+            "successful transfer returns code 0"
+        );
+
+        // balances after transfer
+        let bal_alice_call =
+            encode_function_call("balance_of(uint256)", std::slice::from_ref(&alice)).unwrap();
+        let bal_alice = instance
+            .call_raw(&bal_alice_call, options)
+            .expect("balance_of alice should succeed");
+        assert_eq!(
+            bytes_to_u256(&bal_alice.return_data).unwrap(),
+            U256::from(7u64)
+        );
+
+        let bal_bob_call =
+            encode_function_call("balance_of(uint256)", std::slice::from_ref(&bob)).unwrap();
+        let bal_bob = instance
+            .call_raw(&bal_bob_call, options)
+            .expect("balance_of bob should succeed");
+        assert_eq!(
+            bytes_to_u256(&bal_bob.return_data).unwrap(),
+            U256::from(8u64)
+        );
+
+        // transfer too much from Bob -> Alice should fail with code 1
+        let transfer_bob = encode_function_call(
+            "transfer(uint256,uint256)",
+            &[bob, Token::Uint(AbiU256::from(20u64))],
+        )
+        .unwrap();
+        let transfer_bob_res = instance
+            .call_raw(&transfer_bob, options)
+            .expect("transfer from bob should run");
+        assert_eq!(
+            bytes_to_u256(&transfer_bob_res.return_data).unwrap(),
+            U256::from(1u64),
+            "insufficient funds should return code 1"
+        );
+
+        // total_supply should equal alice + bob (10 + 5 = 15)
+        let total_supply_call = encode_function_call("total_supply()", &[]).unwrap();
+        let total_supply_res = instance
+            .call_raw(&total_supply_call, options)
+            .expect("total_supply should succeed");
+        let total_supply = bytes_to_u256(&total_supply_res.return_data)
+            .expect("total_supply should return a u256");
+        assert_eq!(total_supply, U256::from(15u64));
     }
 
     #[test]

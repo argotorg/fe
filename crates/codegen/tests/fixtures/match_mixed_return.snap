@@ -2,24 +2,22 @@
 source: crates/codegen/tests/yul.rs
 assertion_line: 31
 expression: output
-input_file: tests/fixtures/match_enum.fe
+input_file: tests/fixtures/match_mixed_return.fe
 ---
-function match_enum(e) -> ret {
+function f(e) -> ret {
   let v0 := 0
   switch get_discriminant(e, 0)
     case 0 {
-      v0 := 1
+      ret := 0
+      leave
     }
     case 1 {
-      v0 := 2
-    }
-    case 2 {
-      v0 := 3
+      v0 := 1
     }
     default {
-      v0 := 4
     }
-  ret := v0
+  let v1 := v0
+  ret := add(v1, 1)
 }
 function get_discriminant(addr, space) -> ret {
   let v0 := 0

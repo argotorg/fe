@@ -2,6 +2,7 @@
 //! synthetic literals used by records and enums.
 
 use super::*;
+use hir::analysis::ty::ty_def::prim_int_bits;
 
 impl<'db, 'a> MirBuilder<'db, 'a> {
     /// Emits an `alloc` call for the requested size and binds it to the expression.
@@ -32,6 +33,8 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
             }),
         });
         self.mir_body.expr_values.insert(expr, alloc_value);
+        self.value_address_space
+            .insert(alloc_value, AddressSpaceKind::Memory);
         self.push_inst(
             block,
             MirInst::EvalExpr {
@@ -57,7 +60,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         base_value: ValueId,
         variant_index: u64,
     ) {
-        let space_value = self.synthetic_address_space_memory();
+        let space_value = self.address_space_literal(self.value_address_space(base_value));
         let store_discr_callable =
             self.core
                 .make_callable(expr, CoreHelper::StoreDiscriminant, &[]);
@@ -104,7 +107,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         if stores.is_empty() {
             return;
         }
-        let space_value = self.synthetic_address_space_memory();
+        let space_value = self.address_space_literal(self.value_address_space(base_value));
         for (offset_bytes, field_ty, field_value) in stores {
             let callable = self.core.make_callable(expr, helper, &[*field_ty]);
             let offset_value = self.synthetic_u256(BigUint::from(*offset_bytes));
@@ -319,11 +322,65 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                 if *prim == PrimTy::Bool {
                     Some(1)
                 } else {
-                    super::prim_int_bits(*prim).map(|bits| (bits / 8) as u64)
+                    prim_int_bits(*prim).map(|bits| (bits / 8) as u64)
                 }
             }
             _ => None,
         }
+    }
+
+    /// Lowers an assignment to a field target into a `store_field` helper call.
+    ///
+    /// # Parameters
+    /// - `block`: Basic block where the assignment occurs.
+    /// - `expr`: Expression id for context.
+    /// - `target`: Assignment target expression (expected to be `Expr::Field`).
+    /// - `value`: Lowered value to store.
+    ///
+    /// # Returns
+    /// Updated block when handled, or `None` to fall back to a normal assignment.
+    pub(super) fn try_lower_field_assign(
+        &mut self,
+        block: BasicBlockId,
+        expr: ExprId,
+        target: ExprId,
+        value: ValueId,
+    ) -> Option<BasicBlockId> {
+        let Partial::Present(Expr::Field(lhs, field_index)) = target.data(self.db, self.body)
+        else {
+            return None;
+        };
+        let field_index = field_index.to_opt()?;
+        let lhs_ty = self.typed_body.expr_ty(self.db, *lhs);
+        let info = self.field_access_info(lhs_ty, field_index)?;
+
+        let addr_value = self.ensure_value(*lhs);
+        let space_value = self.address_space_literal(self.value_address_space(addr_value));
+        let offset_value = self.synthetic_u256(BigUint::from(info.offset_bytes));
+        let callable = self
+            .core
+            .make_callable(expr, CoreHelper::StoreField, &[info.field_ty]);
+
+        let store_ret_ty = callable.ret_ty(self.db);
+        let store_call = self.mir_body.alloc_value(ValueData {
+            ty: store_ret_ty,
+            origin: ValueOrigin::Call(CallOrigin {
+                expr,
+                callable,
+                args: vec![addr_value, space_value, offset_value, value],
+                resolved_name: None,
+            }),
+        });
+
+        self.push_inst(
+            block,
+            MirInst::EvalExpr {
+                expr,
+                value: store_call,
+                bind_value: false,
+            },
+        );
+        Some(block)
     }
 
     /// Emits a synthetic `u256` literal value.
@@ -350,6 +407,18 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         self.mir_body.alloc_value(ValueData {
             ty,
             origin: ValueOrigin::Synthetic(SyntheticValue::Int(BigUint::from(0u8))),
+        })
+    }
+
+    /// Emits a synthetic `AddressSpace::Storage` literal.
+    ///
+    /// # Returns
+    /// The allocated synthetic storage address space value.
+    pub(super) fn synthetic_address_space_storage(&mut self) -> ValueId {
+        let ty = self.core.helper_ty(CoreHelperTy::AddressSpace);
+        self.mir_body.alloc_value(ValueData {
+            ty,
+            origin: ValueOrigin::Synthetic(SyntheticValue::Int(BigUint::from(1u8))),
         })
     }
 }

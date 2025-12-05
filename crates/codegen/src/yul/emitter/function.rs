@@ -1,5 +1,15 @@
 use driver::DriverDataBase;
-use hir::hir_def::{Body, Expr, ExprId, Partial, Pat, PatId, PathId, Stmt, StmtId};
+use hir::{
+    analysis::{
+        name_resolution::{PathRes, resolve_path},
+        ty::{
+            adt_def::AdtRef,
+            trait_resolution::PredicateListId,
+            ty_def::{PrimTy, TyBase, TyData, TyId, prim_int_bits},
+        },
+    },
+    hir_def::{Body, Expr, ExprId, Partial, Pat, PatId, PathId, Stmt, StmtId},
+};
 use mir::MirFunction;
 use rustc_hash::FxHashMap;
 
@@ -90,14 +100,19 @@ impl<'db> FunctionEmitter<'db> {
         counts
     }
 
-    /// Produces the final Yul docs for the current MIR function.
+    /// Produces the final Yul docs for the current MIR function, including any prologue
+    /// needed to seed effect bindings (e.g. storage base pointer for contract entrypoints).
     ///
     /// Returns the document tree containing a single Yul `function` block or a
     /// [`YulError`] when lowering fails.
     pub(super) fn emit_doc(mut self) -> Result<Vec<YulDoc>, YulError> {
         let func_name = self.mir_func.symbol_name.as_str();
-        let (param_names, mut state) = self.init_function_state();
-        let body_docs = self.emit_block(self.mir_func.body.entry, &mut state)?;
+        let (param_names, mut state, mut prologue) = self.init_function_state()?;
+        let mut body_docs = self.emit_block(self.mir_func.body.entry, &mut state)?;
+        if !prologue.is_empty() {
+            prologue.append(&mut body_docs);
+            body_docs = prologue;
+        }
         let function_doc = YulDoc::block(
             format!(
                 "{} ",
@@ -108,10 +123,13 @@ impl<'db> FunctionEmitter<'db> {
         Ok(vec![function_doc])
     }
 
-    /// Initializes the `BlockState` with parameter bindings and returns their Yul names.
-    ///
-    /// Returns a tuple containing the ordered argument names and the populated block state.
-    pub(super) fn init_function_state(&self) -> (Vec<String>, BlockState) {
+    /// Initializes the `BlockState` with parameter bindings, returning Yul parameter names,
+    /// the populated block state, and any prologue statements needed to seed effect bindings
+    /// (contract entrypoints get a synthesized storage pointer; other functions take effects
+    /// as explicit parameters).
+    pub(super) fn init_function_state(
+        &self,
+    ) -> Result<(Vec<String>, BlockState, Vec<YulDoc>), YulError> {
         let mut state = BlockState::new();
         let mut params_out = Vec::new();
         for (idx, param) in self.mir_func.func.params(self.db).enumerate() {
@@ -123,7 +141,33 @@ impl<'db> FunctionEmitter<'db> {
             params_out.push(yul_name.clone());
             state.insert_binding(original, yul_name);
         }
-        (params_out, state)
+        let mut prologue = Vec::new();
+        let effect_params: Vec<_> = self.mir_func.func.effect_params(self.db).collect();
+        let is_contract_entry = self.mir_func.contract_function.is_some();
+        if is_contract_entry {
+            let mut storage_offset = 0u64;
+            for effect in effect_params {
+                let binding = self.effect_binding_name(effect);
+                let temp = state.alloc_local();
+                state.insert_binding(binding.clone(), temp.clone());
+                let base = self.storage_base_ptr_expr();
+                let ptr_expr = if storage_offset == 0 {
+                    base.to_string()
+                } else {
+                    format!("add({base}, {storage_offset})")
+                };
+                prologue.push(YulDoc::line(format!("let {temp} := {ptr_expr}")));
+                let stride = self.effect_size_bytes(effect, &binding)?;
+                storage_offset = storage_offset.saturating_add(stride);
+            }
+        } else {
+            for effect in effect_params {
+                let binding = self.effect_binding_name(effect);
+                params_out.push(binding.clone());
+                state.insert_binding(binding.clone(), binding);
+            }
+        }
+        Ok((params_out, state, prologue))
     }
 
     /// Returns true if the Fe function has a return type.
@@ -196,6 +240,100 @@ impl<'db> FunctionEmitter<'db> {
         match stmt_id.data(self.db, self.body) {
             Partial::Present(stmt) => Ok(stmt),
             Partial::Absent => Err(YulError::Unsupported("statement data unavailable".into())),
+        }
+    }
+
+    /// Computes the binding name for an effect parameter, following the same fallback
+    /// logic used during type checking (explicit name, otherwise the key ident, otherwise `_effect`).
+    pub(super) fn effect_binding_name(
+        &self,
+        effect: hir::core::semantic::EffectParamView<'db>,
+    ) -> String {
+        if let Some(name) = effect.name(self.db) {
+            name.data(self.db).to_string()
+        } else if let Some(path) = effect.key_path(self.db)
+            && let Some(ident) = path.as_ident(self.db)
+        {
+            ident.data(self.db).to_string()
+        } else {
+            "_effect".to_string()
+        }
+    }
+
+    /// Returns the Yul expression used as the storage base pointer for contract entrypoints.
+    pub(super) fn storage_base_ptr_expr(&self) -> &'static str {
+        "0"
+    }
+
+    /// Computes the byte size of an effect's storage type to space out bindings.
+    ///
+    /// Returns an error if the effect type cannot be resolved or its size cannot be computed.
+    fn effect_size_bytes(
+        &self,
+        effect: hir::core::semantic::EffectParamView<'db>,
+        binding_name: &str,
+    ) -> Result<u64, YulError> {
+        let key_path = effect.key_path(self.db).ok_or_else(|| {
+            YulError::Unsupported(format!(
+                "cannot determine storage size for effect `{binding_name}`: missing type path"
+            ))
+        })?;
+        let scope = effect.func().scope();
+        let path_res = resolve_path(
+            self.db,
+            key_path,
+            scope,
+            PredicateListId::empty_list(self.db),
+            false,
+        )
+        .map_err(|_| {
+            YulError::Unsupported(format!(
+                "cannot determine storage size for effect `{binding_name}`: failed to resolve type"
+            ))
+        })?;
+        let ty = match path_res {
+            PathRes::Ty(ty) | PathRes::TyAlias(_, ty) => ty,
+            _ => {
+                return Err(YulError::Unsupported(format!(
+                    "cannot determine storage size for effect `{binding_name}`: path does not resolve to a type"
+                )));
+            }
+        };
+        self.ty_size_bytes(ty).ok_or_else(|| {
+            YulError::Unsupported(format!(
+                "cannot determine storage size for effect `{binding_name}`: unsupported type"
+            ))
+        })
+    }
+
+    /// Best-effort byte size computation for types used as storage effects.
+    fn ty_size_bytes(&self, ty: TyId<'db>) -> Option<u64> {
+        if ty.is_tuple(self.db) {
+            let mut size = 0u64;
+            for field_ty in ty.field_types(self.db) {
+                size += self.ty_size_bytes(field_ty)?;
+            }
+            return Some(size);
+        }
+        match ty.data(self.db) {
+            TyData::TyBase(TyBase::Prim(prim)) => {
+                if *prim == PrimTy::Bool {
+                    Some(1)
+                } else {
+                    prim_int_bits(*prim).map(|bits| (bits / 8) as u64)
+                }
+            }
+            TyData::TyBase(TyBase::Adt(adt_def)) => match adt_def.adt_ref(self.db) {
+                AdtRef::Struct(_) => {
+                    let mut size = 0u64;
+                    for field_ty in ty.field_types(self.db) {
+                        size += self.ty_size_bytes(field_ty)?;
+                    }
+                    Some(size)
+                }
+                _ => None,
+            },
+            _ => None,
         }
     }
 }

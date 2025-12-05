@@ -36,6 +36,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         for arm in arms {
             let arm_entry = self.alloc_block();
             let (arm_end, _) = self.lower_expr_in(arm_entry, arm.body);
+            let terminates = arm_end.is_none();
             if let Some(end_block) = arm_end {
                 let merge = match merge_block {
                     Some(block) => block,
@@ -47,13 +48,13 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                 };
                 self.set_terminator(end_block, Terminator::Goto { target: merge });
             }
-            arm_blocks.push(arm_entry);
+            arm_blocks.push((arm_entry, terminates));
         }
 
         let mut targets = Vec::new();
         let mut default_block = None;
         for (idx, pattern) in patterns.iter().enumerate() {
-            let block_id = arm_blocks[idx];
+            let (block_id, _) = arm_blocks[idx];
             match pattern {
                 MatchArmPattern::Literal(value) => targets.push(SwitchTarget {
                     value: value.clone(),
@@ -75,37 +76,33 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
 
         self.populate_enum_binding_values(patterns, scrutinee_value, match_expr);
 
-        // For enum scrutinees, switch on the in-memory discriminant instead of the heap pointer.
+        // For enum scrutinees, always switch on the in-memory discriminant instead of the heap
+        // pointer, even for payload-less enums.
         let discr_value = if patterns
             .iter()
             .any(|pat| matches!(pat, MatchArmPattern::Enum { .. }))
         {
             let scrut_ty = self.typed_body.expr_ty(self.db, scrutinee);
-            if let TyData::TyBase(TyBase::Adt(adt_def)) = scrut_ty.data(self.db)
+            let (base_ty, _) = scrut_ty.decompose_ty_app(self.db);
+            let is_address_space = base_ty == self.core.helper_ty(CoreHelperTy::AddressSpace);
+            if let TyData::TyBase(TyBase::Adt(adt_def)) = base_ty.data(self.db)
                 && matches!(adt_def.adt_ref(self.db), AdtRef::Enum(_))
+                && !is_address_space
             {
-                let has_payload = adt_def
-                    .fields(self.db)
-                    .iter()
-                    .any(|variant| variant.num_types() > 0);
-                if has_payload {
-                    let callable =
-                        self.core
-                            .make_callable(match_expr, CoreHelper::GetDiscriminant, &[]);
-                    let space_value = self.synthetic_address_space_memory();
-                    let ty = callable.ret_ty(self.db);
-                    self.mir_body.alloc_value(ValueData {
-                        ty,
-                        origin: ValueOrigin::Call(CallOrigin {
-                            expr: match_expr,
-                            callable,
-                            args: vec![scrutinee_value, space_value],
-                            resolved_name: None,
-                        }),
-                    })
-                } else {
-                    discr_value
-                }
+                let callable =
+                    self.core
+                        .make_callable(match_expr, CoreHelper::GetDiscriminant, &[]);
+                let space_value = self.synthetic_address_space_memory();
+                let ty = callable.ret_ty(self.db);
+                self.mir_body.alloc_value(ValueData {
+                    ty,
+                    origin: ValueOrigin::Call(CallOrigin {
+                        expr: match_expr,
+                        callable,
+                        args: vec![scrutinee_value, space_value],
+                        resolved_name: None,
+                    }),
+                })
             } else {
                 discr_value
             }
@@ -126,16 +123,22 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         let arms_info = arms
             .iter()
             .zip(patterns.iter())
-            .map(|(arm, pattern)| MatchArmLowering {
-                pattern: pattern.clone(),
-                body: arm.body,
-            })
+            .zip(arm_blocks.iter())
+            .map(
+                |((arm, pattern), (block_id, terminates))| MatchArmLowering {
+                    pattern: pattern.clone(),
+                    body: arm.body,
+                    block: *block_id,
+                    terminates: *terminates,
+                },
+            )
             .collect();
 
         self.mir_body.match_info.insert(
             match_expr,
             MatchLoweringInfo {
                 scrutinee: scrutinee_value,
+                merge_block,
                 arms: arms_info,
             },
         );
@@ -365,7 +368,8 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                 let callable =
                     self.core
                         .make_callable(match_expr, CoreHelper::GetVariantField, &[binding_ty]);
-                let space_value = self.synthetic_address_space_memory();
+                let space_value =
+                    self.address_space_literal(self.value_address_space(scrutinee_value));
                 let offset_value = self.synthetic_u256(BigUint::from(binding.field_offset));
                 let load_value = self.mir_body.alloc_value(ValueData {
                     ty: binding_ty,

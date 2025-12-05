@@ -1,0 +1,15 @@
+enum E {
+    A,
+    B,
+}
+
+fn f(e: E) -> u256 {
+    // Mixed arms: one returns, one continues. Code after the match should be skipped for E::A.
+    let x = match e {
+        E::A => { return 0 }
+        E::B => { 1 }
+    }
+
+    // If lowering is wrong, this runs even for E::A; we expect only the B arm to reach here.
+    x + 1
+}
