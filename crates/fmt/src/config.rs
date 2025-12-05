@@ -30,7 +30,7 @@ impl Default for Config {
         Self {
             max_width: 100,
             indent_width: 4,
-            clause_indent: 2,
+            clause_indent: 4,
             where_new_line: false,
             trailing_comma: TrailingComma::default(),
         }

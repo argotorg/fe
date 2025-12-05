@@ -27,6 +27,6 @@ fn uses_and_params(first: Alpha, second: Beta, third: Gamma, fourth: Delta, fift
 
 fn where_vertical<T, U>(first: T, second: U, third: U) -> i32
 where
-  T: TraitOne + AnotherTrait + YetAnotherTrait + AdditionalTraitNameThatIsQuiteLong,
-  U: TraitTwo + TraitThree + AdditionalTraitNameThatIsAlsoLong
+    T: TraitOne + AnotherTrait + YetAnotherTrait + AdditionalTraitNameThatIsQuiteLong,
+    U: TraitTwo + TraitThree + AdditionalTraitNameThatIsAlsoLong
 {}

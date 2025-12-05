@@ -603,10 +603,10 @@ impl ToDoc for ast::UsesClause {
         if let Some(params) = self.param_list() {
             let params_docs: Vec<_> = params.into_iter().map(|p| p.to_doc(ctx)).collect();
 
-            let indent = ctx.config.indent_width as isize;
+            let clause_indent = ctx.config.clause_indent as isize;
             alloc
                 .text("uses ")
-                .append(block_list(ctx, "(", ")", params_docs, indent, true))
+                .append(block_list(ctx, "(", ")", params_docs, clause_indent, true))
         } else if let Some(param) = self.param() {
             alloc.text("uses ").append(param.to_doc(ctx))
         } else {
