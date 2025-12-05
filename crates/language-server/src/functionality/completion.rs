@@ -1,12 +1,16 @@
 use async_lsp::lsp_types::{
-    CompletionItem, CompletionItemKind, CompletionParams, CompletionResponse,
+    CompletionItem, CompletionItemKind, CompletionParams, CompletionResponse, Position, Range,
+    TextEdit,
 };
 use async_lsp::ResponseError;
 use common::InputDb;
 use driver::DriverDataBase;
 use hir::{
     analysis::name_resolution::{NameDomain, NameResKind},
-    hir_def::{scope_graph::ScopeId, Body, Func, ItemKind, Pat, Partial, Stmt, TopLevelMod},
+    hir_def::{
+        scope_graph::ScopeId, Body, Func, HirIngot, ItemKind, Pat, Partial, Stmt, TopLevelMod,
+        Visibility,
+    },
     lower::map_file_to_mod,
     visitor::prelude::*,
 };
@@ -95,6 +99,9 @@ pub async fn handle_completion(
         let scope = find_scope_at_cursor(&backend.db, top_mod, cursor);
         if let Some(scope) = scope {
             collect_items_from_scope(&backend.db, scope, &mut items);
+
+            // Also collect auto-import suggestions for symbols not in scope
+            collect_auto_import_completions(&backend.db, top_mod, scope, &file_text, &mut items);
         }
     }
 
@@ -164,6 +171,150 @@ fn collect_items_from_scope<'db>(
     }
 }
 
+/// Collect auto-import completion suggestions for public symbols not currently in scope.
+fn collect_auto_import_completions<'db>(
+    db: &'db DriverDataBase,
+    current_mod: TopLevelMod<'db>,
+    current_scope: ScopeId<'db>,
+    file_text: &str,
+    items: &mut Vec<CompletionItem>,
+) {
+    let ingot = current_mod.ingot(db);
+    let module_tree = ingot.module_tree(db);
+
+    // Get names already visible in the current scope
+    let visible_items = current_scope.items_in_scope(db, NameDomain::VALUE | NameDomain::TYPE);
+    let visible_names: std::collections::HashSet<_> = visible_items.keys().collect();
+
+    // Find where to insert the import (after existing use statements or at the top)
+    let import_position = find_import_insertion_position(file_text);
+
+    // Iterate over all modules in the ingot
+    for module in module_tree.all_modules() {
+        // Skip the current module (its items are already in scope)
+        if module == current_mod {
+            continue;
+        }
+
+        // Compute the import path for this module
+        let Some(module_path) = compute_module_path(db, module, &module_tree) else {
+            continue;
+        };
+
+        // Get public items from this module
+        for item in module.scope_graph(db).items_dfs(db) {
+            // Only include public items
+            if item.vis(db) != Visibility::Public {
+                continue;
+            }
+
+            let Some(name) = item.name(db) else {
+                continue;
+            };
+            let name_str = name.data(db);
+
+            // Skip if already visible in current scope
+            if visible_names.contains(&name_str.to_string()) {
+                continue;
+            }
+
+            // Skip internal items (modules, impls, etc. that shouldn't be imported directly)
+            let kind = match item {
+                ItemKind::Func(_) => CompletionItemKind::FUNCTION,
+                ItemKind::Struct(_) => CompletionItemKind::STRUCT,
+                ItemKind::Enum(_) => CompletionItemKind::ENUM,
+                ItemKind::Trait(_) => CompletionItemKind::INTERFACE,
+                ItemKind::TypeAlias(_) => CompletionItemKind::CLASS,
+                ItemKind::Const(_) => CompletionItemKind::CONSTANT,
+                ItemKind::Contract(_) => CompletionItemKind::CLASS,
+                // Skip modules, impls, etc. - they're not typically imported directly
+                _ => continue,
+            };
+
+            // Build the full import path
+            let import_path = format!("{}::{}", module_path, name_str);
+
+            // Create the import text edit
+            let import_text = format!("use {}\n", import_path);
+            let import_edit = TextEdit {
+                range: Range {
+                    start: import_position,
+                    end: import_position,
+                },
+                new_text: import_text,
+            };
+
+            items.push(CompletionItem {
+                label: name_str.to_string(),
+                kind: Some(kind),
+                detail: Some(format!("use {}", import_path)),
+                label_details: Some(async_lsp::lsp_types::CompletionItemLabelDetails {
+                    detail: Some(format!(" ({})", module_path)),
+                    description: None,
+                }),
+                additional_text_edits: Some(vec![import_edit]),
+                ..Default::default()
+            });
+        }
+    }
+}
+
+/// Compute the import path for a module (e.g., "stuff::calculations")
+fn compute_module_path<'db>(
+    db: &'db DriverDataBase,
+    module: TopLevelMod<'db>,
+    module_tree: &hir::hir_def::ModuleTree<'db>,
+) -> Option<String> {
+    let mut path_parts = Vec::new();
+
+    // Build path from module up to root
+    let mut current = module;
+    loop {
+        let name = current.name(db).data(db).to_string();
+        // Skip "lib" or root module names - they're implicit
+        if name != "lib" && name != "main" {
+            path_parts.push(name);
+        }
+
+        match module_tree.parent(current) {
+            Some(parent) => current = parent,
+            None => break,
+        }
+    }
+
+    // Reverse to get root-to-leaf order
+    path_parts.reverse();
+
+    if path_parts.is_empty() {
+        None
+    } else {
+        Some(path_parts.join("::"))
+    }
+}
+
+/// Find the position to insert new import statements.
+/// Returns the position after existing `use` statements, or at the start of the file.
+fn find_import_insertion_position(file_text: &str) -> Position {
+    let mut last_use_end_line = 0;
+    let mut in_use = false;
+
+    for (line_num, line) in file_text.lines().enumerate() {
+        let trimmed = line.trim();
+        if trimmed.starts_with("use ") {
+            in_use = true;
+            last_use_end_line = line_num + 1;
+        } else if in_use && !trimmed.is_empty() && !trimmed.starts_with("//") {
+            // Found non-use, non-empty, non-comment line after use statements
+            break;
+        }
+    }
+
+    Position {
+        line: last_use_end_line as u32,
+        character: 0,
+    }
+}
+
 /// Collect completions for path access (items after `::`).
 fn collect_path_completions<'db>(
     db: &'db DriverDataBase,
@@ -174,8 +325,8 @@ fn collect_path_completions<'db>(
 ) {
     use hir::analysis::name_resolution::NameDomain;
 
-    // Find the path segment before ::
-    // We need to go back from the cursor (which is after ::) and find the identifier
+    // Find the full path before ::
+    // We need to go back from the cursor (which is after ::) and find the complete path
     let cursor_pos = usize::from(cursor);
     if cursor_pos < 2 {
         return;
@@ -184,43 +335,91 @@ fn collect_path_completions<'db>(
     // Go back past the ::
     let before_colons = &file_text[..cursor_pos.saturating_sub(2)];
 
-    // Find the end of the identifier before ::
-    let ident_end = before_colons.len();
-    let ident_start = before_colons
-        .rfind(|c: char| !c.is_alphanumeric() && c != '_')
+    // Find the start of the full path (including all :: segments)
+    // Look for whitespace, operators, or other non-path characters
+    let path_start = before_colons
+        .rfind(|c: char| {
+            !c.is_alphanumeric() && c != '_' && c != ':'
+        })
         .map(|i| i + 1)
         .unwrap_or(0);
 
-    let path_segment = &before_colons[ident_start..ident_end];
-    info!("path completion: looking for items in '{}'", path_segment);
+    let full_path = before_colons[path_start..].trim();
+    info!("path completion: looking for items in full path '{}'", full_path);
 
-    if path_segment.is_empty() {
+    if full_path.is_empty() {
         return;
     }
 
-    // Look up this name in the current scope to find the module
-    let scope = top_mod.scope();
-    let visible = scope.items_in_scope(db, NameDomain::VALUE | NameDomain::TYPE);
+    // Split the path into segments
+    let segments: Vec<&str> = full_path.split("::").filter(|s| !s.is_empty()).collect();
+    info!("path segments: {:?}", segments);
 
-    if let Some(name_res) = visible.get(path_segment) {
-        if let hir::analysis::name_resolution::NameResKind::Scope(target_scope) = &name_res.kind {
-            // Get the child items of this scope
-            info!("found scope for '{}': {:?}", path_segment, target_scope);
-
-            // Get items from this module's scope
-            let child_items = target_scope.items_in_scope(db, NameDomain::VALUE | NameDomain::TYPE);
-
-            for (name, child_res) in child_items.iter() {
-                if let Some(completion) = name_res_to_completion(db, name, child_res) {
-                    items.push(completion);
-                }
-            }
-
-            info!("collected {} items from module '{}'", items.len(), path_segment);
-        }
-    } else {
-        info!("path segment '{}' not found in scope", path_segment);
+    if segments.is_empty() {
+        return;
     }
+
+    // Resolve the path step by step
+    let mut current_scope = top_mod.scope();
+
+    for segment in &segments {
+        let visible = current_scope.items_in_scope(db, NameDomain::VALUE | NameDomain::TYPE);
+
+        if let Some(name_res) = visible.get(*segment) {
+            if let hir::analysis::name_resolution::NameResKind::Scope(target_scope) = &name_res.kind
+            {
+                info!("resolved segment '{}' to scope {:?}", segment, target_scope);
+                current_scope = *target_scope;
+            } else {
+                info!("segment '{}' is not a scope, stopping", segment);
+                return;
+            }
+        } else {
+            info!("segment '{}' not found in current scope", segment);
+            return;
+        }
+    }
+
+    // Get direct child items of the final resolved scope
+    // This gives us only items defined directly in this module, not inherited ones
+    let child_items: Vec<_> = current_scope.child_items(db).collect();
+
+    info!(
+        "path completion: resolved to scope {:?}, found {} child items",
+        current_scope,
+        child_items.len()
+    );
+
+    for item in child_items {
+        let Some(name) = item.name(db) else {
+            continue;
+        };
+        let name_str = name.data(db);
+
+        let kind = match item {
+            ItemKind::Func(_) => CompletionItemKind::FUNCTION,
+            ItemKind::Struct(_) => CompletionItemKind::STRUCT,
+            ItemKind::Enum(_) => CompletionItemKind::ENUM,
+            ItemKind::Trait(_) => CompletionItemKind::INTERFACE,
+            ItemKind::TypeAlias(_) => CompletionItemKind::CLASS,
+            ItemKind::Const(_) => CompletionItemKind::CONSTANT,
+            ItemKind::Mod(_) | ItemKind::TopMod(_) => CompletionItemKind::MODULE,
+            ItemKind::Contract(_) => CompletionItemKind::CLASS,
+            _ => CompletionItemKind::VALUE,
+        };
+
+        items.push(CompletionItem {
+            label: name_str.to_string(),
+            kind: Some(kind),
+            ..Default::default()
+        });
+    }
+
+    info!(
+        "collected {} items from path '{}'",
+        items.len(),
+        full_path
+    );
 }
 
 /// Collect completions for member access (fields and methods after `.`).
@@ -785,6 +984,27 @@ mod tests {
         let has_calculations = items.iter().any(|i| i.label == "calculations");
         println!("\nHas 'calculations' submodule: {}", has_calculations);
         assert!(has_calculations, "Expected 'calculations' submodule in stuff::");
+
+        // Test nested path: stuff::calculations::
+        let file_text = "stuff::calculations::";
+        let cursor = parser::TextSize::from(file_text.len() as u32);
+
+        let mut items = Vec::new();
+        collect_path_completions(&db, top_mod, cursor, file_text, &mut items);
+
+        println!("\nPath completions for 'stuff::calculations::':");
+        for item in &items {
+            println!("  {} ({:?})", item.label, item.kind);
+        }
+
+        // Should have items from the calculations module
+        assert!(!items.is_empty(), "Expected items from stuff::calculations module");
+        let has_return_three = items.iter().any(|i| i.label == "return_three");
+        let has_return_four = items.iter().any(|i| i.label == "return_four");
+        println!("\nHas 'return_three': {}", has_return_three);
+        println!("Has 'return_four': {}", has_return_four);
+        assert!(has_return_three, "Expected 'return_three' in stuff::calculations::");
+        assert!(has_return_four, "Expected 'return_four' in stuff::calculations::");
     }
 
     /// Test member access completion by simulating cursor after a dot
@@ -892,5 +1112,73 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// Test auto-import completions
+    #[test]
+    fn test_auto_import_completions() {
+        let mut db = DriverDataBase::default();
+
+        let fixture_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("test_files")
+            .join("hoverable");
+
+        load_ingot_from_directory(&mut db, &fixture_path);
+
+        let lib_url = url::Url::from_file_path(fixture_path.join("src").join("lib.fe")).unwrap();
+        let file = db.workspace().get(&db, &lib_url).expect("file not found");
+        let file_text = file.text(&db);
+        let top_mod = map_file_to_mod(&db, file);
+
+        println!("File content:\n{}", file_text);
+
+        // Get the scope at the top of the file
+        let scope = top_mod.scope();
+
+        // Collect auto-import completions
+        let mut items = Vec::new();
+        collect_auto_import_completions(&db, top_mod, scope, &file_text, &mut items);
+
+        println!("\nAuto-import completions ({} items):", items.len());
+        for item in &items {
+            println!(
+                "  {} - {:?} - {:?}",
+                item.label,
+                item.detail,
+                item.additional_text_edits
+            );
+        }
+
+        // Should have items from other modules (stuff, stuff::calculations)
+        // that aren't already imported
+        let has_return_three = items.iter().any(|i| i.label == "return_three");
+        let has_return_four = items.iter().any(|i| i.label == "return_four");
+
+        println!("\nHas 'return_three' auto-import: {}", has_return_three);
+        println!("Has 'return_four' auto-import: {}", has_return_four);
+
+        // These should NOT be in auto-imports because they're already imported in the fixture
+        // But we can check that other items from stuff::calculations are available
+        // (items not imported in lib.fe)
+
+        // Check that auto-imports have the correct additional_text_edits
+        for item in &items {
+            if let Some(edits) = &item.additional_text_edits {
+                assert!(!edits.is_empty(), "Expected at least one text edit for auto-import");
+                for edit in edits {
+                    println!("  Edit: insert '{}' at {:?}", edit.new_text.trim(), edit.range);
+                    assert!(
+                        edit.new_text.starts_with("use "),
+                        "Expected edit to be a use statement"
+                    );
+                }
+            }
+        }
+
+        // Test import insertion position detection
+        let position = find_import_insertion_position(&file_text);
+        println!("\nImport insertion position: line {}", position.line);
+        // Should be after the existing use statements
+        assert!(position.line > 0, "Expected insertion after existing imports");
     }
 }
