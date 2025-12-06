@@ -7,7 +7,7 @@ note:
    ┌─ trait_impl.fe:11:9
    │
 11 │         self.age
-   │         ^^^^ self -> local
+   │         ^^^^ self -> value
 
 note: 
    ┌─ trait_impl.fe:11:14
@@ -19,7 +19,7 @@ note:
    ┌─ trait_impl.fe:16:5
    │
 16 │     p.greet()
-   │     ^ p -> local
+   │     ^ p -> value
 
 note: 
    ┌─ trait_impl.fe:16:7
