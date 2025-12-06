@@ -44,3 +44,14 @@ enum SingleLine {
     C { x: i32, y: u8 },
     D(i8, i8),
 }
+
+// Struct variant width tests (default 35 chars)
+enum StructVariantWidth {
+    Short { a: i32 },
+    Medium { first: i32, second: i32 },
+    Long {
+        first_field: i32,
+        second_field: i32,
+        third_field: i32,
+    },
+}

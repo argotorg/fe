@@ -34,6 +34,9 @@ pub struct Config {
     /// Maximum line length for single line if expressions (without else).
     /// A value of 0 results in if expressions always being broken into multiple lines.
     pub single_line_if_max_width: usize,
+    /// Maximum width in the body of a struct enum variant before falling back to vertical formatting.
+    /// A value of 0 results in struct variants always being broken into multiple lines.
+    pub struct_variant_width: usize,
 }
 
 impl Default for Config {
@@ -48,6 +51,7 @@ impl Default for Config {
             struct_lit_width: 20,
             single_line_if_else_max_width: 50,
             single_line_if_max_width: 30,
+            struct_variant_width: 35,
         }
     }
 }

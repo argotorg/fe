@@ -544,7 +544,29 @@ impl ToDoc for ast::VariantDef {
         let kind_doc = match self.kind() {
             ast::VariantKind::Unit => alloc.nil(),
             ast::VariantKind::Tuple(tuple_type) => tuple_type.to_doc(ctx),
-            ast::VariantKind::Record(fields) => alloc.text(" ").append(fields.to_doc(ctx)),
+            ast::VariantKind::Record(fields) => {
+                // Format struct variant with max_width_group
+                let field_docs: Vec<_> = fields.into_iter().map(|f| f.to_doc(ctx)).collect();
+
+                if field_docs.is_empty() {
+                    alloc.text(" {}")
+                } else {
+                    let indent = ctx.config.indent_width as isize;
+                    let sep = alloc.text(",").append(alloc.line());
+                    let inner = intersperse(alloc, field_docs, sep);
+                    let trailing = alloc.text(",").flat_alt(alloc.nil());
+
+                    // Use line() for spaced variant: renders as space when flat
+                    let body = alloc
+                        .text("{")
+                        .append(alloc.line().append(inner).append(trailing).nest(indent))
+                        .append(alloc.line())
+                        .append(alloc.text("}"))
+                        .max_width_group(ctx.config.struct_variant_width);
+
+                    alloc.text(" ").append(body)
+                }
+            }
         };
 
         attrs.append(alloc.text(name)).append(kind_doc)
