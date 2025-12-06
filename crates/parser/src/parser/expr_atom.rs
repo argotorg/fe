@@ -241,7 +241,7 @@ impl super::Parse for MatchExprScope {
     }
 }
 
-define_scope! { MatchArmListScope, MatchArmList, (SyntaxKind::Newline, SyntaxKind::RBrace) }
+define_scope! { MatchArmListScope, MatchArmList, (SyntaxKind::Newline, SyntaxKind::RBrace, SyntaxKind::Comma) }
 impl super::Parse for MatchArmListScope {
     type Error = Recovery<ErrProof>;
 
@@ -256,6 +256,9 @@ impl super::Parse for MatchArmListScope {
 
             parser.parse(MatchArmScope::default())?;
             parser.set_newline_as_trivia(false);
+
+            // Allow optional comma after match arm, then newline or closing brace
+            parser.bump_if(SyntaxKind::Comma);
 
             parser.expect(&[SyntaxKind::Newline, SyntaxKind::RBrace], None)?;
             if !parser.bump_if(SyntaxKind::Newline) {
