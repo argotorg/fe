@@ -23,6 +23,11 @@ pub struct Config {
     pub where_new_line: bool,
     /// When to add trailing commas in lists.
     pub trailing_comma: TrailingComma,
+    /// Maximum width of function call arguments before falling back to vertical formatting.
+    pub fn_call_width: usize,
+    /// Maximum width in the body of a struct literal before falling back to vertical formatting.
+    /// A value of 0 results in struct literals always being broken into multiple lines.
+    pub struct_lit_width: usize,
 }
 
 impl Default for Config {
@@ -33,6 +38,8 @@ impl Default for Config {
             clause_indent: 4,
             where_new_line: false,
             trailing_comma: TrailingComma::default(),
+            fn_call_width: 60,
+            struct_lit_width: 20,
         }
     }
 }

@@ -5,7 +5,7 @@ use pretty::DocAllocator;
 use crate::RewriteContext;
 use parser::ast::{self, BinOp, ExprKind, GenericArgsOwner, LogicalBinOp, prelude::AstNode};
 
-use super::types::{Doc, ToDoc, block_list, block_list_spaced};
+use super::types::{Doc, ToDoc, block_list};
 
 // ============================================================================
 // Binary expression formatting with precedence-aware indentation
@@ -39,9 +39,10 @@ fn bin_op_precedence(op: &BinOp) -> u8 {
 fn as_bin_expr_with_precedence(expr: &ast::Expr, precedence: u8) -> Option<ast::BinExpr> {
     if let ExprKind::Bin(bin) = expr.kind()
         && let Some(op) = bin.op()
-            && bin_op_precedence(&op) == precedence {
-                return Some(bin);
-            }
+        && bin_op_precedence(&op) == precedence
+    {
+        return Some(bin);
+    }
     None
 }
 
@@ -247,7 +248,7 @@ fn segment_to_doc<'a>(seg: &ChainSegment, ctx: &'a RewriteContext<'a>, indent: i
                 .text(".")
                 .append(alloc.text(name.clone()))
                 .append(generics_doc)
-                .append(block_list(ctx, "(", ")", args_vec, indent, true))
+                .append(call_args(ctx, args_vec, indent))
         }
         ChainSegment::Field { name } => alloc.text(".").append(alloc.text(name.clone())),
     }
@@ -350,21 +351,19 @@ fn format_chain_inner<'a>(
         // Remaining segments each get a line break before them
         for seg in &segments[1..] {
             let seg_doc = segment_to_doc(seg, ctx, indent);
-            chain_doc = chain_doc.append(alloc.line_()).append(seg_doc);
+            chain_doc = chain_doc.append(alloc.line_().append(seg_doc).nest(indent));
         }
 
-        // Nest and group
-        chain_doc.nest(indent).group()
+        chain_doc.group()
     } else {
         // Long root or has prefix: all segments on new lines when broken
         let mut chain_doc = root_doc;
         for seg in segments {
             let seg_doc = segment_to_doc(seg, ctx, indent);
-            chain_doc = chain_doc.append(alloc.line_()).append(seg_doc);
+            chain_doc = chain_doc.append(alloc.line_().append(seg_doc).nest(indent));
         }
 
-        // Nest and group, then prepend prefix
-        let chain_doc = chain_doc.nest(indent).group();
+        let chain_doc = chain_doc.group();
 
         match prefix {
             Some(p) => p.append(chain_doc),
@@ -429,8 +428,30 @@ impl ToDoc for ast::CallExpr {
             .unwrap_or_default();
 
         let indent = ctx.config.indent_width as isize;
-        callee.append(block_list(ctx, "(", ")", args, indent, true))
+        callee.append(call_args(ctx, args, indent))
     }
+}
+
+/// Formats function call arguments with `fn_call_width` support.
+/// Uses `max_width_group` to break if args exceed `fn_call_width` when rendered flat.
+fn call_args<'a>(ctx: &'a RewriteContext<'a>, args: Vec<Doc<'a>>, indent: isize) -> Doc<'a> {
+    use super::types::intersperse;
+    let alloc = &ctx.alloc;
+
+    if args.is_empty() {
+        return alloc.text("()");
+    }
+
+    let sep = alloc.text(",").append(alloc.line());
+    let inner = intersperse(alloc, args, sep);
+    let trailing = alloc.text(",").flat_alt(alloc.nil());
+
+    alloc
+        .text("(")
+        .append(alloc.line_().append(inner).append(trailing).nest(indent))
+        .append(alloc.line_())
+        .append(alloc.text(")"))
+        .max_width_group(ctx.config.fn_call_width)
 }
 
 impl ToDoc for ast::MethodCallExpr {
@@ -459,6 +480,7 @@ impl ToDoc for ast::RecordField {
 
 impl ToDoc for ast::RecordInitExpr {
     fn to_doc<'a>(&self, ctx: &'a RewriteContext<'a>) -> Doc<'a> {
+        use super::types::intersperse;
         let alloc = &ctx.alloc;
 
         let path = match self.path() {
@@ -471,9 +493,32 @@ impl ToDoc for ast::RecordInitExpr {
             .map(|f| f.into_iter().map(|field| field.to_doc(ctx)).collect())
             .unwrap_or_default();
 
+        if fields.is_empty() {
+            return path.append(alloc.text(" {}"));
+        }
+
         let indent = ctx.config.indent_width as isize;
-        path.append(alloc.text(" "))
-            .append(block_list_spaced(ctx, "{", "}", fields, indent, true))
+        let sep = alloc.text(",").append(alloc.line());
+        let inner = intersperse(alloc, fields, sep);
+        let trailing = alloc.text(",").flat_alt(alloc.nil());
+
+        // Use line() for spaced variant: renders as space when flat, newline when broken
+        let break_token = alloc.line();
+
+        let body = alloc
+            .text("{")
+            .append(
+                break_token
+                    .clone()
+                    .append(inner)
+                    .append(trailing)
+                    .nest(indent),
+            )
+            .append(break_token)
+            .append(alloc.text("}"))
+            .max_width_group(ctx.config.struct_lit_width);
+
+        path.append(alloc.text(" ")).append(body)
     }
 }
 

@@ -5,7 +5,7 @@ edition.workspace = true
 
 [dependencies]
 parser.workspace = true
-pretty = "0.12"
+pretty = { git = "https://github.com/sbillig/pretty.rs", branch = "max-width-group" }
 
 [dev-dependencies]
 dir-test.workspace = true
