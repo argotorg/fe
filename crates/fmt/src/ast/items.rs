@@ -89,23 +89,49 @@ fn where_doc<'a, N: ast::WhereClauseOwner + AstNode>(
     }
 }
 
-/// Format a block of items with proper indentation.
+/// Format a block of items `{ ... }` preserving blank lines between items.
+/// Takes a syntax node and a function to cast child nodes to the item type.
 fn block_items_doc<'a, T: ToDoc>(
-    items: impl IntoIterator<Item = T>,
+    syntax: &parser::SyntaxNode,
+    cast_fn: impl Fn(parser::SyntaxNode) -> Option<T>,
     ctx: &'a RewriteContext<'a>,
 ) -> Doc<'a> {
-    let alloc = &ctx.alloc;
-    let items: Vec<_> = items.into_iter().collect();
+    use parser::syntax_kind::SyntaxKind;
+    use parser::syntax_node::NodeOrToken;
 
-    if items.is_empty() {
-        return alloc.text("{}");
+    let alloc = &ctx.alloc;
+    let mut inner = alloc.nil();
+    let mut pending_newlines = 0usize;
+    let mut is_first = true;
+
+    for child in syntax.children_with_tokens() {
+        match child {
+            NodeOrToken::Node(node) => {
+                if let Some(item) = cast_fn(node) {
+                    // Always add at least one newline before each item.
+                    // If source had 2+ newlines (blank line), add exactly 2 (one blank line).
+                    // Multiple blank lines are collapsed to one.
+                    let newlines_to_add = if pending_newlines >= 2 { 2 } else { 1 };
+                    for _ in 0..newlines_to_add {
+                        inner = inner.append(alloc.hardline());
+                    }
+                    pending_newlines = 0;
+                    is_first = false;
+                    inner = inner.append(item.to_doc(ctx));
+                }
+            }
+            NodeOrToken::Token(token) => {
+                if token.kind() == SyntaxKind::Newline {
+                    let text = ctx.snippet(token.text_range());
+                    pending_newlines = text.chars().filter(|c| *c == '\n').count();
+                }
+            }
+        }
     }
 
-    let inner = alloc.concat(
-        items
-            .into_iter()
-            .map(|item| alloc.hardline().append(item.to_doc(ctx))),
-    );
+    if is_first {
+        return alloc.text("{}");
+    }
 
     alloc
         .text("{")
@@ -128,7 +154,8 @@ impl ToDoc for ast::Root {
             match child {
                 NodeOrToken::Node(node) => {
                     if !is_first {
-                        let newlines_to_add = pending_newlines.max(1);
+                        // Collapse multiple blank lines to one
+                        let newlines_to_add = if pending_newlines >= 2 { 2 } else { 1 };
                         for _ in 0..newlines_to_add {
                             result = result.append(alloc.hardline());
                         }
@@ -155,7 +182,8 @@ impl ToDoc for ast::Root {
                         }
                         _ => {
                             if !is_first {
-                                let newlines_to_add = pending_newlines.max(1);
+                                // Collapse multiple blank lines to one
+                                let newlines_to_add = if pending_newlines >= 2 { 2 } else { 1 };
                                 for _ in 0..newlines_to_add {
                                     result = result.append(alloc.hardline());
                                 }
@@ -195,8 +223,8 @@ impl ToDoc for ast::ItemList {
                     if let Some(item) = ast::Item::cast(node.clone()) {
                         // Add newlines that were accumulated from whitespace
                         if !is_first {
-                            // At least one newline between items
-                            let newlines_to_add = pending_newlines.max(1);
+                            // Collapse multiple blank lines to one
+                            let newlines_to_add = if pending_newlines >= 2 { 2 } else { 1 };
                             for _ in 0..newlines_to_add {
                                 result = result.append(alloc.hardline());
                             }
@@ -216,7 +244,8 @@ impl ToDoc for ast::ItemList {
                     } else if token.kind() == SyntaxKind::Comment {
                         // Add newlines that were accumulated from whitespace
                         if !is_first {
-                            let newlines_to_add = pending_newlines.max(1);
+                            // Collapse multiple blank lines to one
+                            let newlines_to_add = if pending_newlines >= 2 { 2 } else { 1 };
                             for _ in 0..newlines_to_add {
                                 result = result.append(alloc.hardline());
                             }
@@ -604,7 +633,7 @@ impl ToDoc for ast::Trait {
 
 impl ToDoc for ast::TraitItemList {
     fn to_doc<'a>(&self, ctx: &'a RewriteContext<'a>) -> Doc<'a> {
-        block_items_doc(self, ctx)
+        block_items_doc(self.syntax(), ast::TraitItem::cast, ctx)
     }
 }
 
@@ -706,7 +735,7 @@ impl ToDoc for ast::Impl {
 
 impl ToDoc for ast::ImplItemList {
     fn to_doc<'a>(&self, ctx: &'a RewriteContext<'a>) -> Doc<'a> {
-        block_items_doc(self, ctx)
+        block_items_doc(self.syntax(), ast::Func::cast, ctx)
     }
 }
 
@@ -923,7 +952,7 @@ impl ToDoc for ast::Mod {
 
         let items_doc = self
             .items()
-            .map(|items| alloc.text(" ").append(block_items_doc(items, ctx)))
+            .map(|items| alloc.text(" ").append(block_items_doc(items.syntax(), ast::Item::cast, ctx)))
             .unwrap_or_else(|| alloc.nil());
 
         attrs
@@ -951,6 +980,6 @@ impl ToDoc for ast::Extern {
 
 impl ToDoc for ast::ExternItemList {
     fn to_doc<'a>(&self, ctx: &'a RewriteContext<'a>) -> Doc<'a> {
-        block_items_doc(self, ctx)
+        block_items_doc(self.syntax(), ast::Func::cast, ctx)
     }
 }

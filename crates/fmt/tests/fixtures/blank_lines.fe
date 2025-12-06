@@ -1,0 +1,48 @@
+// Test that blank lines between items are preserved
+
+// Blank lines in traits
+pub trait Add<T = Self> {
+    type Output = Self
+
+    fn add(self, _ other: T) -> Self::Output
+}
+
+// No blank lines - should stay compact
+pub trait Compact {
+    type Output
+    fn foo(self)
+    fn bar(self)
+}
+
+// Multiple blank lines get collapsed to one
+pub trait Spaced {
+    type Output
+
+
+
+
+    fn foo(self)
+}
+
+// Blank lines in impl blocks
+impl Foo {
+    fn first(self) {}
+
+    fn second(self) {}
+
+    fn third(self) {}
+}
+
+// Blank lines between top-level items are also preserved
+fn standalone1() {}
+
+
+fn standalone2() {}
+
+struct MyStruct {}
+
+
+enum MyEnum {
+    A,
+    B,
+}
