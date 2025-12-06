@@ -7,7 +7,7 @@ note:
   ┌─ locals.fe:2:7
   │
 2 │   let a = x
-  │       ^ a -> local
+  │       ^ a -> unresolved
 
 note: 
   ┌─ locals.fe:2:11
@@ -19,7 +19,7 @@ note:
   ┌─ locals.fe:3:7
   │
 3 │   let x = a + y
-  │       ^ x -> local
+  │       ^ x -> value
 
 note: 
   ┌─ locals.fe:3:11
