@@ -1,3 +1,4 @@
+pub mod attr;
 pub mod expr;
 pub mod items;
 pub mod pat;

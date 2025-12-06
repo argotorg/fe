@@ -12,17 +12,10 @@ fn attrs_doc<'a, N: ast::AttrListOwner + AstNode>(
     node: &N,
     ctx: &'a RewriteContext<'a>,
 ) -> Doc<'a> {
-    let alloc = &ctx.alloc;
     if let Some(attrs) = node.attr_list() {
-        alloc
-            .text(
-                ctx.snippet(attrs.syntax().text_range())
-                    .trim_end()
-                    .to_string(),
-            )
-            .append(alloc.hardline())
+        attrs.to_doc(ctx)
     } else {
-        alloc.nil()
+        ctx.alloc.nil()
     }
 }
 
