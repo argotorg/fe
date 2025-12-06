@@ -627,17 +627,19 @@ impl ToDoc for ast::IfExpr {
             None => return alloc.text("if ").append(cond),
         };
 
-        let else_doc = self
-            .else_()
-            .map(|e| alloc.text(" else ").append(e.to_doc(ctx)))
-            .unwrap_or_else(|| alloc.nil());
-
-        alloc
+        let if_then = alloc
             .text("if ")
             .append(cond)
             .append(alloc.text(" "))
-            .append(then)
-            .append(else_doc)
+            .append(then);
+
+        match self.else_() {
+            Some(e) => if_then
+                .append(alloc.text(" else "))
+                .append(e.to_doc(ctx))
+                .max_width_group(ctx.config.single_line_if_else_max_width),
+            None => if_then.max_width_group(ctx.config.single_line_if_max_width),
+        }
     }
 }
 
@@ -913,10 +915,24 @@ impl ToDoc for ast::BlockExpr {
             return alloc.text("{}");
         }
 
-        // Build the inner document, inserting extra blank lines where the source had them
+        let indent = ctx.config.indent_width as isize;
+
+        // Check if this is a simple single-element block that can render on one line
+        // (no blank lines between elements, no comments as standalone elements)
+        if elements.len() == 1 && !has_comment {
+            // Simple block: can render as `{ expr }` on one line or break to multiple lines
+            // Don't use .group() here - let the parent (e.g., if-else) control breaking
+            let elem_doc = elements.into_iter().next().unwrap().doc;
+            return alloc
+                .text("{")
+                .append(alloc.line().append(elem_doc).nest(indent))
+                .append(alloc.line())
+                .append(alloc.text("}"));
+        }
+
+        // Complex block: always use hard line breaks
         let mut inner = alloc.nil();
         let mut prev_end: Option<parser::TextSize> = None;
-        let indent = ctx.config.indent_width as isize;
 
         for elem in elements {
             // Check if there was a blank line before this element
