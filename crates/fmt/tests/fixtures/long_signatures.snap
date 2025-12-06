@@ -1,0 +1,32 @@
+---
+source: crates/fmt/tests/format_snapshots.rs
+expression: output
+input_file: tests/fixtures/long_signatures.fe
+---
+fn long_params(
+    first: VeryLongTypeNameThatExceedsWidth,
+    second: AnotherExtremelyLongTypeNameThatWillForceWrapping,
+    third: ThirdReallyLongType,
+    fourth: FourthTypeNameThatIsAlsoQuiteLong,
+) {}
+
+fn long_return(
+    a: i32,
+) -> SuperVerboseReturnTypeThatWillNotFitOnOneLineWithoutBreakingOrEvenComingClose<
+    FirstParam,
+    SecondParam,
+    ThirdParam,
+    AnotherParam,
+> {}
+
+fn uses_and_params(first: Alpha, second: Beta, third: Gamma, fourth: Delta, fifth: Epsilon) uses (
+    first: SomeVeryLongUseTypeName,
+    second: AnotherUseTypeNameThatIsLongerThanComfortable,
+    third: ThirdExtremelyLongUseParamThatPushesThisOverTheEdge,
+) {}
+
+fn where_vertical<T, U>(first: T, second: U, third: U) -> i32
+where
+    T: TraitOne + AnotherTrait + YetAnotherTrait + AdditionalTraitNameThatIsQuiteLong,
+    U: TraitTwo + TraitThree + AdditionalTraitNameThatIsAlsoLong
+{}

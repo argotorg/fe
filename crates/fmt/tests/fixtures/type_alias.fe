@@ -1,0 +1,4 @@
+type   Foo   =   i32
+type Bar<T>  =  Option<T>
+pub type  Baz<T,U> = Result<T,U>
+type Complex<A,B,C>=Map<A,Map<B,C>>

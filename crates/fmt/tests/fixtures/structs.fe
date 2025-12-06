@@ -1,0 +1,19 @@
+// Struct formatting tests
+
+// Simple struct with fields
+struct Point{x:i32,y:i32}
+
+// Struct with pub modifier
+pub struct  PubPoint { x:i32,y : i32}
+
+// Struct with pub fields
+pub struct Mixed{pub x:i32,y:i32}
+
+// Empty struct
+struct Empty {}
+
+// Struct with generics
+struct Container<T>{value:T}
+
+// Struct with where clause
+struct Bounded<T> where T: Clone {inner:T}

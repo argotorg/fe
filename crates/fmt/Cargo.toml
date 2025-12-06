@@ -1,0 +1,12 @@
+[package]
+name = "fe-fmt"
+version = "0.1.0"
+edition.workspace = true
+
+[dependencies]
+parser.workspace = true
+pretty = { git = "https://github.com/sbillig/pretty.rs", branch = "max-width-group" }
+
+[dev-dependencies]
+dir-test.workspace = true
+test-utils.workspace = true

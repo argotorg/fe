@@ -1,0 +1,30 @@
+// Enum formatting tests
+
+// Simple enum with unit variants
+enum Color{Red,Green,Blue}
+
+// Enum with tuple variants
+enum Option{None,Some(i32)}
+
+// Enum with record variants
+enum Result{Ok{value:i32},Err{code:i32}}
+
+// Mixed variants
+enum Mixed{
+    Unit,
+    Tuple(i32,bool),
+    Record{x:i32,y:i32}
+}
+
+// Enum with generics
+enum Container<T>{Empty,Value(T)}
+
+// Single line enum
+enum SingleLine { A, B, C { x: i32, y: u8 }, D(i8, i8) }
+
+// Struct variant width tests (default 35 chars)
+enum StructVariantWidth {
+    Short { a: i32 },
+    Medium { first: i32, second: i32 },
+    Long { first_field: i32, second_field: i32, third_field: i32 },
+}

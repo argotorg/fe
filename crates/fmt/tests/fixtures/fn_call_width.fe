@@ -1,0 +1,18 @@
+// Short calls stay on one line (args < 60 chars)
+fn short_calls() {
+    foo(a, b, c)
+    bar(x, y)
+    baz()
+    some_function(first_arg, second_arg, third_arg, fourth_arg)
+}
+
+// Calls exceeding fn_call_width (60) should break vertically
+fn long_calls() {
+    some_function(first_argument_name, second_argument_name, third_argument_name)
+    another_call(alpha_value, beta_value, gamma_value, delta_value, epsilon_value)
+}
+
+// Method chains with long args should also break
+fn method_chains() {
+    self.process(first_long_argument, second_long_argument, third_long_argument)
+}

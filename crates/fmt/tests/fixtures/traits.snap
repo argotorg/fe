@@ -1,0 +1,46 @@
+---
+source: crates/fmt/tests/format_snapshots.rs
+expression: output
+input_file: tests/fixtures/traits.fe
+---
+// Trait and impl formatting tests
+
+// Simple trait
+trait Foo {
+    fn bar(self) -> i32
+}
+
+// Trait with associated type
+trait WithType {
+    type Output
+    fn get(self) -> Self::Output
+}
+
+// Trait with associated const
+trait WithConst {
+    const VALUE: i32
+    fn value(self) -> i32
+}
+
+// Simple impl
+impl Point {
+    fn new(x: i32, y: i32) -> Self {}
+    fn x(self) -> i32 {
+        self.x
+    }
+}
+
+// Impl trait
+impl Foo for Point {
+    fn bar(self) -> i32 {
+        self.x + self.y
+    }
+}
+
+// Impl trait with associated type
+impl WithType for Point {
+    type Output = i32
+    fn get(self) -> Self::Output {
+        self.x
+    }
+}

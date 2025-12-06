@@ -1,0 +1,13 @@
+fn test_aug_assign() {
+    x  +=  1
+    y -= 2
+    z    *=   3
+    a[10]  /=  4
+    b %= 5
+    c **= 2
+    d <<= 1
+    e >>= 1
+    f.bar.baz.lkjdfaksljsdf.asdasdfsffadsfasdfa.asdfasdfasdf.asdfasdfasdfasfasdfasdfa.sdfasdf.asdf &= 0xFF
+    g |= 0x01
+    h ^= 0x10
+}

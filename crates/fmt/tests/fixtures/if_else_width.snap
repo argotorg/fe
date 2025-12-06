@@ -1,0 +1,40 @@
+---
+source: crates/fmt/tests/format_snapshots.rs
+expression: output
+input_file: tests/fixtures/if_else_width.fe
+---
+// Short if-else stays on one line (< 50 chars)
+fn short_if_else() {
+    let x = if a { 1 } else { 2 }
+    let y = if cond { foo } else { bar }
+}
+
+// Long if-else exceeding 50 chars should break
+fn long_if_else() {
+    let result = if some_condition {
+        first_value
+    } else {
+        second_value
+    }
+    let another = if check_something_long {
+        return_this_value
+    } else {
+        return_other_value
+    }
+}
+
+// Plain if uses single_line_if_max_width (30 chars)
+fn plain_if() {
+    if a { foo() }
+    if condition {
+        do_something()
+    }
+    if some_very_long_condition {
+        do_something_here()
+    }
+}
+
+// Nested if-else
+fn nested() {
+    let x = if a { if b { 1 } else { 2 } } else { 3 }
+}

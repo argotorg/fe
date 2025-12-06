@@ -1,0 +1,18 @@
+fn  loop_examples(  arr : Array<i32,10> )  {
+    for  i  in  arr  {
+        if  i==5{
+            continue
+        }
+        if   i>8{
+break
+        }
+    }
+
+    let mut  x=0
+    while   x  <  100  {
+        x=x+1
+        if  x  %  2==0{
+            continue
+        }
+    }
+}
