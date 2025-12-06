@@ -480,7 +480,7 @@ impl<'db> PathRes<'db> {
             }
             PathRes::TyAlias(alias, _) => Some(alias.alias.scope()),
             PathRes::Trait(trait_) => Some(trait_.def(db).scope()),
-            PathRes::EnumVariant(variant) => Some(variant.enum_(db).scope()),
+            PathRes::EnumVariant(variant) => Some(ScopeId::Variant(variant.variant)),
             PathRes::FuncParam(item, idx) => Some(ScopeId::FuncParam(*item, *idx)),
             PathRes::Mod(scope) => Some(*scope),
             PathRes::Method(ty, _) => ty.as_scope(db),

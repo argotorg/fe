@@ -20,6 +20,11 @@
 //!   `item.rs` and replace call sites by adding only the minimal semantic
 //!   method(s) here.
 
+pub mod reference;
+pub use reference::{
+    FieldAccessView, HasReferences, MethodCallView, PathView, ReferenceView, Target, UsePathView,
+};
+
 use crate::HirDb;
 use crate::analysis::HirAnalysisDb;
 use crate::analysis::ty::ty_def::Kind;

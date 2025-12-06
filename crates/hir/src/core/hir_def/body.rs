@@ -12,7 +12,7 @@ use rustc_hash::FxHashMap;
 use salsa::Update;
 
 use super::{
-    Expr, ExprId, Partial, Pat, PatId, Stmt, StmtId, TopLevelMod, TrackedItemId,
+    Expr, ExprId, Func, ItemKind, Partial, Pat, PatId, Stmt, StmtId, TopLevelMod, TrackedItemId,
     scope_graph::ScopeId,
 };
 use crate::{
@@ -54,6 +54,22 @@ impl<'db> Body<'db> {
 
     pub fn scope(self) -> ScopeId<'db> {
         ScopeId::from_item(self.into())
+    }
+
+    /// Find the function that contains this body.
+    ///
+    /// Returns `Some(func)` if this body belongs to a function, `None` otherwise
+    /// (e.g., for anonymous/closure bodies or const bodies).
+    pub fn containing_func(self, db: &'db dyn HirDb) -> Option<Func<'db>> {
+        let scope_graph = self.top_mod(db).scope_graph(db);
+        for item in scope_graph.items_dfs(db) {
+            if let ItemKind::Func(func) = item
+                && func.body(db) == Some(self)
+            {
+                return Some(func);
+            }
+        }
+        None
     }
 
     #[doc(hidden)]
