@@ -1,6 +1,5 @@
 ---
 source: crates/language-server/src/functionality/references.rs
-assertion_line: 372
 expression: snapshot
 input_file: test_files/hoverable/src/lib.fe
 ---
