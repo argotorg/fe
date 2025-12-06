@@ -1,6 +1,5 @@
 ---
 source: crates/language-server/src/functionality/goto.rs
-assertion_line: 268
 expression: snapshot
 input_file: test_files/goto_func_sig.fe
 ---

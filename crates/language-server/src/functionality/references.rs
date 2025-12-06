@@ -11,81 +11,55 @@ use crate::{
 
 use super::goto::Cursor;
 
-/// Find an item definition at the cursor position.
-///
-/// Returns the target scope if the cursor is on an item's name token.
-fn find_item_definition_at_cursor<'db>(
-    db: &'db impl hir::SpannedHirDb,
-    top_mod: TopLevelMod<'db>,
-    cursor: Cursor,
-) -> Option<Target<'db>> {
-    top_mod.definition_at(db, cursor).map(Target::Scope)
-}
-
 /// Find all references to the symbol at the cursor position.
 fn find_references_at_cursor<'db>(
     db: &'db impl hir::SpannedHirDb,
     top_mod: TopLevelMod<'db>,
     cursor: Cursor,
 ) -> Vec<async_lsp::lsp_types::Location> {
-    // Try to get a reference at cursor first
-    let target = if let Some(reference) = top_mod.reference_at(db, cursor) {
-        // We're on a reference, resolve it to its target
-        let resolution = reference.target_at(db, cursor);
-        resolution.first().cloned()
-    } else {
-        // We're not on a reference, check if we're on an item definition name
-        find_item_definition_at_cursor(db, top_mod, cursor)
-    };
-
-    let Some(target) = target else {
+    // Use the simplified API to get the target at cursor
+    let Some(target) = top_mod.target_at(db, cursor) else {
         return vec![];
     };
 
     let mut locations = vec![];
 
-    // For scopes, search all modules in the ingot
-    // For locals, references_to_target handles searching within the function body
     match &target {
         Target::Scope(target_scope) => {
-            // Get the ingot containing this module
+            // For scopes, search all modules in the ingot
             let ingot = top_mod.ingot(db);
 
-            // Search all .fe files in the ingot
             for (url, file) in ingot.files(db).iter() {
-                // Skip non-.fe files
                 if !url.path().ends_with(".fe") {
                     continue;
                 }
                 let mod_ = map_file_to_mod(db, file);
-                for ref_view in mod_.references_to_target(db, target.clone()) {
-                    if ref_view.span().resolve(db).is_some()
-                        && let Ok(location) = to_lsp_location_from_lazy_span(db, ref_view.span())
+                for span in mod_.find_references(db, &target) {
+                    if span.resolve(db).is_some()
+                        && let Ok(location) = to_lsp_location_from_lazy_span(db, span)
                     {
                         locations.push(location);
                     }
                 }
             }
 
-            // Also include the definition location
+            // Include the definition location first
             if let Ok(def_location) = to_lsp_location_from_scope(db, *target_scope) {
-                // Insert at beginning so definition comes first
                 locations.insert(0, def_location);
             }
         }
         Target::Local { span, .. } => {
-            // For local bindings, search only within the current module (where the local is defined)
-            for ref_view in top_mod.references_to_target(db, target.clone()) {
-                if ref_view.span().resolve(db).is_some()
-                    && let Ok(location) = to_lsp_location_from_lazy_span(db, ref_view.span())
+            // For locals, find_references searches within the function body
+            for ref_span in top_mod.find_references(db, &target) {
+                if ref_span.resolve(db).is_some()
+                    && let Ok(location) = to_lsp_location_from_lazy_span(db, ref_span)
                 {
                     locations.push(location);
                 }
             }
 
-            // Include the definition location (the binding site)
+            // Include the definition location first
             if let Ok(def_location) = to_lsp_location_from_lazy_span(db, span.clone()) {
-                // Insert at beginning so definition comes first
                 locations.insert(0, def_location);
             }
         }
@@ -138,7 +112,7 @@ mod tests {
     use common::ingot::IngotKind;
     use dir_test::{Fixture, dir_test};
     use driver::DriverDataBase;
-    use hir::hir_def::{PathId, scope_graph::ScopeId};
+    use hir::hir_def::{ItemKind, PathId, scope_graph::ScopeId};
     use hir::span::{DynLazySpan, LazySpan};
     use hir::visitor::{Visitor, VisitorCtxt, prelude::LazyPathSpan};
     use parser::TextSize;
@@ -260,6 +234,16 @@ mod tests {
             {
                 cursors.push(span.range.start());
             }
+
+            // Also collect cursors from function parameter names
+            if let ItemKind::Func(func) = item {
+                for (idx, _param) in func.params(db).enumerate() {
+                    let param_span = func.span().params().param(idx);
+                    if let Some(span) = param_span.name().resolve(db) {
+                        cursors.push(span.range.start());
+                    }
+                }
+            }
         }
 
         cursors.sort();
@@ -330,20 +314,27 @@ mod tests {
                     let ref_text = ref_file.text(&db);
                     let ref_offset = lsp_position_to_offset(&loc.range.start, ref_text.as_str());
 
-                    // For the definition (first location), we need to find the item at that location
-                    // For other locations, we can use reference_at
+                    // For the definition (first location), annotate with the target's span
+                    // For other locations, use reference_at
                     if idx == 0 {
-                        // First location is the definition
-                        if let Some(scope) = ref_top_mod.definition_at(&db, ref_offset) {
-                            let item = scope.item();
-                            if let Some(name_span) = item.name_span() {
-                                let annotation = format!(
-                                    "def: defined here @ {}:{} ({} refs)",
-                                    loc.range.start.line + 1,
-                                    loc.range.start.character,
-                                    total_refs
-                                );
-                                formatter.push_prop(ref_top_mod, name_span, annotation);
+                        // First location is the definition - use target_at to handle both
+                        // item definitions and local/param bindings
+                        if let Some(target) = ref_top_mod.target_at(&db, ref_offset) {
+                            let annotation = format!(
+                                "def: defined here @ {}:{} ({} refs)",
+                                loc.range.start.line + 1,
+                                loc.range.start.character,
+                                total_refs
+                            );
+                            match target {
+                                Target::Scope(scope) => {
+                                    if let Some(name_span) = scope.item().name_span() {
+                                        formatter.push_prop(ref_top_mod, name_span, annotation);
+                                    }
+                                }
+                                Target::Local { span, .. } => {
+                                    formatter.push_prop(ref_top_mod, span, annotation);
+                                }
                             }
                         }
                     } else {

@@ -18,12 +18,10 @@ use super::{FieldAccessView, MethodCallView, PathId, PathView, ReferenceView, Us
 pub(super) struct ReferenceCollector<'db> {
     db: &'db dyn HirDb,
     pub refs: Vec<ReferenceView<'db>>,
-    /// Current body context (set during body traversal)
     current_body: Option<Body<'db>>,
-    /// Current use item context (set during use traversal)
     current_use: Option<Use<'db>>,
-    /// Whether to skip body traversal (for signature-only collection)
     skip_body: bool,
+    current_path_expr: Option<ExprId>,
 }
 
 impl<'db> ReferenceCollector<'db> {
@@ -34,6 +32,7 @@ impl<'db> ReferenceCollector<'db> {
             current_body: None,
             current_use: None,
             skip_body,
+            current_path_expr: None,
         }
     }
 
@@ -44,6 +43,7 @@ impl<'db> ReferenceCollector<'db> {
             current_body: Some(body),
             current_use: None,
             skip_body: false,
+            current_path_expr: None,
         }
     }
 }
@@ -51,9 +51,12 @@ impl<'db> ReferenceCollector<'db> {
 impl<'db> Visitor<'db> for ReferenceCollector<'db> {
     fn visit_path(&mut self, ctxt: &mut VisitorCtxt<'db, LazyPathSpan<'db>>, path: PathId<'db>) {
         if let Some(span) = ctxt.span() {
-            let scope = ctxt.scope();
-            self.refs
-                .push(ReferenceView::Path(PathView::new(path, scope, span)));
+            let path_view = if let Some(expr_id) = self.current_path_expr {
+                PathView::with_expr(path, ctxt.scope(), span, expr_id)
+            } else {
+                PathView::new(path, ctxt.scope(), span)
+            };
+            self.refs.push(ReferenceView::Path(path_view));
         }
         walk_path(self, ctxt, path);
     }
@@ -75,6 +78,9 @@ impl<'db> Visitor<'db> for ReferenceCollector<'db> {
     ) {
         if let Some(body) = self.current_body {
             match expr_data {
+                Expr::Path(_) => {
+                    self.current_path_expr = Some(expr);
+                }
                 Expr::Field(_, _) => {
                     if let Some(span) = ctxt.span() {
                         self.refs.push(ReferenceView::FieldAccess(FieldAccessView {
@@ -97,6 +103,9 @@ impl<'db> Visitor<'db> for ReferenceCollector<'db> {
             }
         }
         walk_expr(self, ctxt, expr);
+        if matches!(expr_data, Expr::Path(_)) {
+            self.current_path_expr = None;
+        }
     }
 
     fn visit_use(

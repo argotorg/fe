@@ -12,8 +12,8 @@ use rustc_hash::FxHashMap;
 use salsa::Update;
 
 use super::{
-    Expr, ExprId, Func, ItemKind, Partial, Pat, PatId, PathId, Stmt, StmtId, TopLevelMod,
-    TrackedItemId, scope_graph::ScopeId,
+    Expr, ExprId, Func, ItemKind, Partial, Pat, PatId, Stmt, StmtId, TopLevelMod, TrackedItemId,
+    scope_graph::ScopeId,
 };
 use crate::{
     HirDb,
@@ -67,26 +67,6 @@ impl<'db> Body<'db> {
                 && func.body(db) == Some(self)
             {
                 return Some(func);
-            }
-        }
-        None
-    }
-
-    /// Find the expression ID for a path in this body.
-    ///
-    /// Searches through all expressions to find an `Expr::Path` that contains
-    /// the given path. Returns `None` if no matching expression is found.
-    pub fn find_expr_for_path(
-        self,
-        db: &'db dyn HirDb,
-        target_path: PathId<'db>,
-    ) -> Option<ExprId> {
-        let exprs = self.exprs(db);
-        for (expr_id, expr) in exprs.iter() {
-            if let Partial::Present(Expr::Path(Partial::Present(path))) = expr
-                && *path == target_path
-            {
-                return Some(expr_id);
             }
         }
         None

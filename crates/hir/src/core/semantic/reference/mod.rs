@@ -79,6 +79,8 @@ pub enum Target<'db> {
         func: crate::hir_def::Func<'db>,
         /// The expression referencing this local (needed to identify the binding)
         expr: ExprId,
+        /// For params, the parameter index (used when cursor is on param definition)
+        param_idx: Option<usize>,
     },
 }
 
@@ -98,12 +100,6 @@ pub enum TargetResolution<'db> {
 }
 
 impl<'db> TargetResolution<'db> {
-    /// Returns true if resolution found at least one target.
-    pub fn is_resolved(&self) -> bool {
-        !matches!(self, Self::None)
-    }
-
-    /// Returns the first/best target, or None if no targets found.
     pub fn first(&self) -> Option<&Target<'db>> {
         match self {
             Self::None => None,
@@ -112,7 +108,6 @@ impl<'db> TargetResolution<'db> {
         }
     }
 
-    /// Returns all targets as a slice.
     pub fn as_slice(&self) -> &[Target<'db>] {
         match self {
             Self::None => &[],
@@ -121,53 +116,53 @@ impl<'db> TargetResolution<'db> {
         }
     }
 
-    /// Consumes self and returns all targets as a Vec.
-    pub fn into_vec(self) -> Vec<Target<'db>> {
-        match self {
-            Self::None => vec![],
-            Self::Single(target) => vec![target],
-            Self::Ambiguous(targets) => targets,
-        }
-    }
-
-    /// Returns true if this is an ambiguous resolution.
     pub fn is_ambiguous(&self) -> bool {
         matches!(self, Self::Ambiguous(_))
     }
 }
 
 /// A view of a path reference in the HIR.
-///
-/// Paths appear in expressions (`Expr::Path`), patterns (`Pat::Path`),
-/// types (`TypeKind::Path`), and trait references.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, salsa::Update)]
 pub struct PathView<'db> {
     pub path: PathId<'db>,
     pub scope: ScopeId<'db>,
     pub span: LazyPathSpan<'db>,
+    /// Expression ID for paths in `Expr::Path` (enables correct scoping for locals).
+    pub expr_id: Option<ExprId>,
 }
 
 impl<'db> PathView<'db> {
-    /// Create a new PathView.
     pub fn new(path: PathId<'db>, scope: ScopeId<'db>, span: LazyPathSpan<'db>) -> Self {
-        Self { path, scope, span }
+        Self {
+            path,
+            scope,
+            span,
+            expr_id: None,
+        }
+    }
+
+    pub fn with_expr(
+        path: PathId<'db>,
+        scope: ScopeId<'db>,
+        span: LazyPathSpan<'db>,
+        expr_id: ExprId,
+    ) -> Self {
+        Self {
+            path,
+            scope,
+            span,
+            expr_id: Some(expr_id),
+        }
     }
 
     /// Resolve this path to its target definition(s).
-    ///
-    /// Returns TargetResolution which can be:
-    /// - None: path doesn't resolve
-    /// - Single: unambiguous resolution
-    /// - Ambiguous: multiple candidates (e.g., module and function with same name)
-    ///
-    /// Local bindings always take precedence and are never ambiguous.
-    pub fn target(&self, db: &'db dyn HirAnalysisDb) -> TargetResolution<'db> {
-        // Try local binding resolution first - locals shadow module-level items
+    pub fn target<DB>(&self, db: &'db DB) -> TargetResolution<'db>
+    where
+        DB: HirAnalysisDb + SpannedHirDb,
+    {
         if let Some(local) = self.local_target(db) {
             return TargetResolution::Single(local);
         }
-
-        // Fall back to module-level resolution (may be ambiguous)
         let scopes = resolve_path_to_scopes(db, self.path, self.scope);
         match scopes.len() {
             0 => TargetResolution::None,
@@ -176,31 +171,25 @@ impl<'db> PathView<'db> {
         }
     }
 
-    /// Resolve this path at a specific cursor position (segment-aware).
-    ///
-    /// Clicking on `foo` in `foo::Bar` resolves to `foo`, not `Bar`.
+    /// Resolve at a specific cursor position (segment-aware: `foo` in `foo::Bar` → foo).
     pub fn target_at<DB>(&self, db: &'db DB, cursor: TextSize) -> TargetResolution<'db>
     where
         DB: HirAnalysisDb + SpannedHirDb,
     {
         let last_idx = self.path.segment_index(db);
 
-        // Find which segment the cursor is in
         for idx in 0..=last_idx {
             let Some(seg_span) = self.span.clone().segment(idx).resolve(db) else {
                 continue;
             };
 
             if seg_span.range.contains(cursor) {
-                // If this is the last segment, try local binding resolution first
-                // (locals shadow module-level items and are never ambiguous)
                 if idx == last_idx
                     && let Some(local) = self.local_target(db)
                 {
                     return TargetResolution::Single(local);
                 }
 
-                // Try module-level resolution for this segment (may be ambiguous)
                 if let Some(seg_path) = self.path.segment(db, idx) {
                     let scopes = resolve_path_to_scopes(db, seg_path, self.scope);
                     return match scopes.len() {
@@ -217,25 +206,26 @@ impl<'db> PathView<'db> {
             }
         }
 
-        // Cursor not in any segment, try full path resolution
         self.target(db)
     }
 
-    /// Resolve to a local binding target (internal helper).
     fn local_target(&self, db: &'db dyn HirAnalysisDb) -> Option<Target<'db>> {
         let body = self.scope.body()?;
         let func = body.containing_func(db)?;
-        let expr_id = body.find_expr_for_path(db, self.path)?;
+        let expr_id = self.expr_id?;
+
         let (_, typed_body) = check_func_body(db, func);
 
-        let span = typed_body.expr_binding_def_span(func, expr_id)?;
+        // Check if this expression has a local binding (param or local var)
+        let def_span = typed_body.expr_binding_def_span(func, expr_id)?;
         let ty = typed_body.expr_ty(db, expr_id);
-
+        let param_idx = typed_body.expr_param_idx(expr_id);
         Some(Target::Local {
-            span,
+            span: def_span,
             ty,
             func,
             expr: expr_id,
+            param_idx,
         })
     }
 
@@ -476,7 +466,10 @@ impl<'db> ReferenceView<'db> {
     /// Resolve this reference to its target definition(s).
     ///
     /// Returns TargetResolution which can be None, Single, or Ambiguous.
-    pub fn target(&self, db: &'db dyn HirAnalysisDb) -> TargetResolution<'db> {
+    pub fn target<DB>(&self, db: &'db DB) -> TargetResolution<'db>
+    where
+        DB: HirAnalysisDb + SpannedHirDb,
+    {
         match self {
             Self::Path(v) => v.target(db),
             Self::FieldAccess(v) => v.target(db),

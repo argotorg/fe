@@ -15,7 +15,7 @@ use crate::{
 };
 pub use callable::Callable;
 pub use env::ExprProp;
-use env::TyCheckEnv;
+use env::{LocalBinding, TyCheckEnv};
 pub(super) use expr::TraitOps;
 
 use rustc_hash::{FxHashMap, FxHashSet};
@@ -343,9 +343,20 @@ impl<'db> TypedBody<'db> {
     /// This is used by the language server for goto-definition on local variables.
     pub fn expr_binding_def_span(&self, func: Func<'db>, expr: ExprId) -> Option<DynLazySpan<'db>> {
         let body = self.body?;
-        let prop = self.expr_ty.get(&expr)?;
-        let binding = prop.binding?;
+        let binding = self.expr_binding(expr)?;
         Some(binding.def_span_with(body, func))
+    }
+
+    /// Get the parameter index if this expression refers to a function parameter.
+    pub(crate) fn expr_param_idx(&self, expr: ExprId) -> Option<usize> {
+        match self.expr_binding(expr)? {
+            LocalBinding::Param { idx, .. } => Some(idx),
+            _ => None,
+        }
+    }
+
+    fn expr_binding(&self, expr: ExprId) -> Option<LocalBinding<'db>> {
+        self.expr_ty.get(&expr)?.binding
     }
 
     /// Find all expressions that reference the same local binding as the given expression.
@@ -363,6 +374,25 @@ impl<'db> TypedBody<'db> {
             .iter()
             .filter_map(|(id, p)| {
                 if p.binding == Some(binding) {
+                    Some(*id)
+                } else {
+                    None
+                }
+            })
+            .collect()
+    }
+
+    /// Find all expressions that reference a parameter by index.
+    ///
+    /// Returns a list of ExprIds that reference the parameter at the given index.
+    /// This is used for find-all-references when the cursor is on a param definition.
+    pub fn param_references(&self, param_idx: usize) -> Vec<ExprId> {
+        self.expr_ty
+            .iter()
+            .filter_map(|(id, p)| {
+                if let Some(LocalBinding::Param { idx, .. }) = p.binding
+                    && idx == param_idx
+                {
                     Some(*id)
                 } else {
                     None

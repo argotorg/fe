@@ -31,7 +31,7 @@ fn find_highlights_at_cursor<'db>(
     let mut highlights = vec![];
 
     // Search within this module using the unified API
-    for ref_view in top_mod.references_to_target(db, target.clone()) {
+    for ref_view in top_mod.references_to_target(db, target) {
         if let Some(span) = ref_view.span().resolve(db)
             && let Ok(range) = to_lsp_range_from_span(span, db)
         {

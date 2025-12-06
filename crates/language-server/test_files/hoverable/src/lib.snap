@@ -64,82 +64,112 @@ note:
   │                    ^^^^^^^^^^^ ref: 8:19
 
 note: 
-   ┌─ lib.fe:11:4
+   ┌─ lib.fe:12:8
    │
-11 │ fn calculate() {
-   │    ^^^^^^^^^ def: defined here @ 11:3 (1 refs)
+12 │ pub fn add(x: i32, y: i32) -> i32 {
+   │        ^^^ def: defined here @ 12:7 (1 refs)
 
 note: 
-   ┌─ lib.fe:12:3
+   ┌─ lib.fe:12:12
    │
-12 │   return_seven()
-   │   ^^^^^^^^^^^^ ref: 12:2
+12 │ pub fn add(x: i32, y: i32) -> i32 {
+   │            ^ def: defined here @ 12:11 (2 refs)
 
 note: 
-   ┌─ lib.fe:13:10
+   ┌─ lib.fe:12:20
    │
-13 │   let x: stuff::calculations::ambiguous
-   │          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ ref: 13:9
+12 │ pub fn add(x: i32, y: i32) -> i32 {
+   │                    ^ def: defined here @ 12:19 (2 refs)
 
 note: 
-   ┌─ lib.fe:18:11
+   ┌─ lib.fe:13:3
    │
-18 │ pub trait Calculatable {
-   │           ^^^^^^^^^^^^ def: defined here @ 18:10 (4 refs)
+13 │   x + y
+   │   ^ ref: 13:2
 
 note: 
-   ┌─ lib.fe:19:6
+   ┌─ lib.fe:13:7
    │
-19 │   fn calculate(self)
-   │      ^^^^^^^^^ def: defined here @ 19:5 (1 refs)
+13 │   x + y
+   │       ^ ref: 13:6
 
 note: 
-   ┌─ lib.fe:19:16
+   ┌─ lib.fe:16:4
    │
-19 │   fn calculate(self)
-   │                ^^^^ ref: 19:15
+16 │ fn calculate() {
+   │    ^^^^^^^^^ def: defined here @ 16:3 (1 refs)
 
 note: 
-   ┌─ lib.fe:23:8
+   ┌─ lib.fe:17:3
    │
-23 │ struct Numbers {
-   │        ^^^^^^^ def: defined here @ 23:7 (4 refs)
+17 │   return_seven()
+   │   ^^^^^^^^^^^^ ref: 17:2
 
 note: 
-   ┌─ lib.fe:28:6
+   ┌─ lib.fe:18:10
    │
-28 │ impl Calculatable for Numbers {
-   │      ^^^^^^^^^^^^ ref: 28:5
+18 │   let x: stuff::calculations::ambiguous
+   │          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ ref: 18:9
 
 note: 
-   ┌─ lib.fe:28:23
+   ┌─ lib.fe:23:11
    │
-28 │ impl Calculatable for Numbers {
-   │                       ^^^^^^^ ref: 28:22
+23 │ pub trait Calculatable {
+   │           ^^^^^^^^^^^^ def: defined here @ 23:10 (4 refs)
 
 note: 
-   ┌─ lib.fe:29:6
+   ┌─ lib.fe:24:6
    │
-29 │   fn calculate(self) {
-   │      ^^^^^^^^^ def: defined here @ 29:5 (1 refs)
+24 │   fn calculate(self)
+   │      ^^^^^^^^^ def: defined here @ 24:5 (1 refs)
 
 note: 
-   ┌─ lib.fe:29:16
+   ┌─ lib.fe:24:16
    │
-29 │   fn calculate(self) {
-   │                ^^^^ ref: 29:15
+24 │   fn calculate(self)
+   │                ^^^^ ref: 24:15
 
 note: 
-   ┌─ lib.fe:30:5
+   ┌─ lib.fe:28:8
    │
-30 │     self.x + self.y
-   │     ^^^^ ref: 30:4
+28 │ struct Numbers {
+   │        ^^^^^^^ def: defined here @ 28:7 (4 refs)
 
 note: 
-   ┌─ lib.fe:30:14
+   ┌─ lib.fe:33:6
    │
-30 │     self.x + self.y
-   │              ^^^^ ref: 30:13
+33 │ impl Calculatable for Numbers {
+   │      ^^^^^^^^^^^^ ref: 33:5
+
+note: 
+   ┌─ lib.fe:33:23
+   │
+33 │ impl Calculatable for Numbers {
+   │                       ^^^^^^^ ref: 33:22
+
+note: 
+   ┌─ lib.fe:34:6
+   │
+34 │   fn calculate(self) {
+   │      ^^^^^^^^^ def: defined here @ 34:5 (1 refs)
+
+note: 
+   ┌─ lib.fe:34:16
+   │
+34 │   fn calculate(self) {
+   │                ^^^^ def: defined here @ 34:15 (3 refs)
+
+note: 
+   ┌─ lib.fe:35:5
+   │
+35 │     self.x + self.y
+   │     ^^^^ ref: 35:4
+
+note: 
+   ┌─ lib.fe:35:14
+   │
+35 │     self.x + self.y
+   │              ^^^^ ref: 35:13
 
 note: 
   ┌─ stuff.fe:2:9
