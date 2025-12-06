@@ -144,14 +144,19 @@ fn run_fmt(path: Option<&Utf8PathBuf>, check: bool) {
 }
 
 fn print_diff(path: &Utf8PathBuf, original: &str, formatted: &str) {
-    println!("{}", format!("Diff in {}:", path).bold());
     let diff = TextDiff::from_lines(original, formatted);
-    for change in diff.iter_all_changes() {
-        match change.tag() {
-            ChangeTag::Delete => print!("{}", format!("-{}", change).red()),
-            ChangeTag::Insert => print!("{}", format!("+{}", change).green()),
-            ChangeTag::Equal => print!(" {}", change),
-        };
+
+    println!("{}", format!("Diff {}:", path).bold());
+    for hunk in diff.unified_diff().context_radius(3).iter_hunks() {
+        // Print hunk header
+        println!("{}", format!("{}", hunk.header()).cyan());
+        for change in hunk.iter_changes() {
+            match change.tag() {
+                ChangeTag::Delete => print!("{}", format!("-{}", change).red()),
+                ChangeTag::Insert => print!("{}", format!("+{}", change).green()),
+                ChangeTag::Equal => print!(" {}", change),
+            };
+        }
     }
     println!();
 }
