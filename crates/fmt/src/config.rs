@@ -37,6 +37,9 @@ pub struct Config {
     /// Maximum width in the body of a struct enum variant before falling back to vertical formatting.
     /// A value of 0 results in struct variants always being broken into multiple lines.
     pub struct_variant_width: usize,
+    /// Maximum width of a use tree list before falling back to vertical formatting.
+    /// A value of 0 results in use tree lists always being broken into multiple lines.
+    pub use_tree_width: usize,
 }
 
 impl Default for Config {
@@ -52,6 +55,7 @@ impl Default for Config {
             single_line_if_else_max_width: 50,
             single_line_if_max_width: 30,
             struct_variant_width: 35,
+            use_tree_width: 40,
         }
     }
 }

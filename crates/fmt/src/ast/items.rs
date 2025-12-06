@@ -820,10 +820,25 @@ impl ToDoc for ast::UseTree {
 
 impl ToDoc for ast::UseTreeList {
     fn to_doc<'a>(&self, ctx: &'a RewriteContext<'a>) -> Doc<'a> {
+        let alloc = &ctx.alloc;
         let trees: Vec<_> = self.into_iter().map(|t| t.to_doc(ctx)).collect();
 
+        if trees.is_empty() {
+            return alloc.text("{}");
+        }
+
         let indent = ctx.config.indent_width as isize;
-        block_list(ctx, "{", "}", trees, indent, true)
+        let sep = alloc.text(",").append(alloc.line());
+        let inner = intersperse(alloc, trees, sep);
+        let trailing = alloc.text(",").flat_alt(alloc.nil());
+
+        // Use line_() for no space when flat: {a, b} not { a, b }
+        alloc
+            .text("{")
+            .append(alloc.line_().append(inner).append(trailing).nest(indent))
+            .append(alloc.line_())
+            .append(alloc.text("}"))
+            .max_width_group(ctx.config.use_tree_width)
     }
 }
 

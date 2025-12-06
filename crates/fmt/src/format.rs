@@ -50,11 +50,16 @@ pub fn format_str(source: &str, config: &Config) -> Result<String, FormatError> 
     // Post-process to remove trailing whitespace from blank lines.
     // The pretty crate adds indentation after hardlines, which creates
     // trailing whitespace on intentional blank lines inside blocks.
-    let cleaned: String = formatted
+    let mut cleaned: String = formatted
         .lines()
         .map(|line| line.trim_end())
         .collect::<Vec<_>>()
         .join("\n");
+
+    // Preserve trailing newline if the original source had one
+    if source.ends_with('\n') && !cleaned.ends_with('\n') {
+        cleaned.push('\n');
+    }
 
     Ok(cleaned)
 }
