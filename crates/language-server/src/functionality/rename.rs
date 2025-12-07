@@ -163,23 +163,21 @@ fn rename_trait_method_implementations<'db>(
 
     // Find all impl blocks for this trait and rename matching methods
     for impl_trait in ingot.all_impl_traits(db) {
-        if let Some(implemented_trait) = impl_trait.trait_def(db) {
-            if implemented_trait == trait_ {
-                // Find the method in this impl block
-                for method in impl_trait.methods(db) {
-                    if method.name(db).to_opt() == Some(method_name) {
-                        // Rename the method in the impl block
-                        if let Some(name_span) = method.scope().name_span(db)
-                            && let Some(span) = name_span.resolve(db)
-                            && let Some(impl_url) = span.file.url(db)
-                            && let Ok(range) = to_lsp_range_from_span(span, db)
-                        {
-                            changes.entry(impl_url).or_default().push(TextEdit {
-                                range,
-                                new_text: new_name.to_string(),
-                            });
-                        }
-                    }
+        if let Some(implemented_trait) = impl_trait.trait_def(db)
+            && implemented_trait == trait_
+        {
+            // Find the method in this impl block
+            for method in impl_trait.methods(db) {
+                if method.name(db).to_opt() == Some(method_name)
+                    && let Some(name_span) = method.scope().name_span(db)
+                    && let Some(span) = name_span.resolve(db)
+                    && let Some(impl_url) = span.file.url(db)
+                    && let Ok(range) = to_lsp_range_from_span(span, db)
+                {
+                    changes.entry(impl_url).or_default().push(TextEdit {
+                        range,
+                        new_text: new_name.to_string(),
+                    });
                 }
             }
         }
