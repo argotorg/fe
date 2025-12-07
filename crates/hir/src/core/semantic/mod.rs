@@ -60,7 +60,7 @@ use crate::analysis::ty::trait_lower::{TraitRefLowerError, lower_trait_ref};
 use crate::analysis::ty::trait_resolution::constraint::{
     collect_adt_constraints, collect_constraints, collect_func_def_constraints,
 };
-use crate::analysis::ty::ty_def::TyData;
+use crate::analysis::ty::ty_def::{TyBase, TyData};
 use crate::analysis::ty::ty_lower::{GenericParamTypeSet, collect_generic_params};
 use crate::analysis::ty::visitor::{TyVisitor, walk_ty};
 use crate::analysis::ty::{
@@ -619,6 +619,14 @@ impl<'db> Func<'db> {
     }
 }
 
+/// Helper to check if a type's base matches a given ADT.
+fn matches_adt<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>, adt: AdtDef<'db>) -> bool {
+    match ty.base_ty(db).data(db) {
+        TyData::TyBase(TyBase::Adt(ty_adt)) => *ty_adt == adt,
+        _ => false,
+    }
+}
+
 impl<'db> Enum<'db> {
     pub fn len_variants(&self, db: &'db dyn HirDb) -> usize {
         self.variants_list(db).data(db).len()
@@ -636,6 +644,30 @@ impl<'db> Enum<'db> {
     /// Semantic ADT definition for this enum (cached via tracked query).
     pub fn as_adt(self, db: &'db dyn HirAnalysisDb) -> AdtDef<'db> {
         lower_adt(db, AdtRef::from(self))
+    }
+
+    /// Returns all inherent `impl` blocks for this enum within the same ingot.
+    pub fn all_impls(self, db: &'db dyn HirAnalysisDb) -> Vec<Impl<'db>> {
+        let adt = self.as_adt(db);
+        self.top_mod(db)
+            .ingot(db)
+            .all_impls(db)
+            .iter()
+            .copied()
+            .filter(|impl_| matches_adt(db, impl_.ty(db), adt))
+            .collect()
+    }
+
+    /// Returns all `impl Trait for Enum` blocks for this enum within the same ingot.
+    pub fn all_impl_traits(self, db: &'db dyn HirAnalysisDb) -> Vec<ImplTrait<'db>> {
+        let adt = self.as_adt(db);
+        self.top_mod(db)
+            .ingot(db)
+            .all_impl_traits(db)
+            .iter()
+            .copied()
+            .filter(|impl_trait| matches_adt(db, impl_trait.ty(db), adt))
+            .collect()
     }
 }
 
@@ -667,6 +699,30 @@ impl<'db> Struct<'db> {
     pub fn as_adt(self, db: &'db dyn HirAnalysisDb) -> AdtDef<'db> {
         lower_adt(db, AdtRef::from(self))
     }
+
+    /// Returns all inherent `impl` blocks for this struct within the same ingot.
+    pub fn all_impls(self, db: &'db dyn HirAnalysisDb) -> Vec<Impl<'db>> {
+        let adt = self.as_adt(db);
+        self.top_mod(db)
+            .ingot(db)
+            .all_impls(db)
+            .iter()
+            .copied()
+            .filter(|impl_| matches_adt(db, impl_.ty(db), adt))
+            .collect()
+    }
+
+    /// Returns all `impl Trait for Struct` blocks for this struct within the same ingot.
+    pub fn all_impl_traits(self, db: &'db dyn HirAnalysisDb) -> Vec<ImplTrait<'db>> {
+        let adt = self.as_adt(db);
+        self.top_mod(db)
+            .ingot(db)
+            .all_impl_traits(db)
+            .iter()
+            .copied()
+            .filter(|impl_trait| matches_adt(db, impl_trait.ty(db), adt))
+            .collect()
+    }
 }
 
 impl<'db> Contract<'db> {
@@ -696,6 +752,30 @@ impl<'db> Contract<'db> {
     /// Semantic ADT definition for this contract (cached via tracked query).
     pub fn as_adt(self, db: &'db dyn HirAnalysisDb) -> AdtDef<'db> {
         lower_adt(db, AdtRef::from(self))
+    }
+
+    /// Returns all inherent `impl` blocks for this contract within the same ingot.
+    pub fn all_impls(self, db: &'db dyn HirAnalysisDb) -> Vec<Impl<'db>> {
+        let adt = self.as_adt(db);
+        self.top_mod(db)
+            .ingot(db)
+            .all_impls(db)
+            .iter()
+            .copied()
+            .filter(|impl_| matches_adt(db, impl_.ty(db), adt))
+            .collect()
+    }
+
+    /// Returns all `impl Trait for Contract` blocks for this contract within the same ingot.
+    pub fn all_impl_traits(self, db: &'db dyn HirAnalysisDb) -> Vec<ImplTrait<'db>> {
+        let adt = self.as_adt(db);
+        self.top_mod(db)
+            .ingot(db)
+            .all_impl_traits(db)
+            .iter()
+            .copied()
+            .filter(|impl_trait| matches_adt(db, impl_trait.ty(db), adt))
+            .collect()
     }
 }
 

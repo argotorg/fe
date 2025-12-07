@@ -80,6 +80,28 @@ fn find_implementations<'db>(db: &'db driver::DriverDataBase, item: ItemKind<'db
                 .filter_map(|m| to_lsp_location_from_scope(db, m.scope()).ok())
                 .collect()
         }
+        // For structs/enums/contracts: find all impl blocks (both inherent and trait)
+        ItemKind::Struct(s) => s
+            .all_impls(db)
+            .into_iter()
+            .map(|i| i.scope())
+            .chain(s.all_impl_traits(db).into_iter().map(|i| i.scope()))
+            .filter_map(|scope| to_lsp_location_from_scope(db, scope).ok())
+            .collect(),
+        ItemKind::Enum(e) => e
+            .all_impls(db)
+            .into_iter()
+            .map(|i| i.scope())
+            .chain(e.all_impl_traits(db).into_iter().map(|i| i.scope()))
+            .filter_map(|scope| to_lsp_location_from_scope(db, scope).ok())
+            .collect(),
+        ItemKind::Contract(c) => c
+            .all_impls(db)
+            .into_iter()
+            .map(|i| i.scope())
+            .chain(c.all_impl_traits(db).into_iter().map(|i| i.scope()))
+            .filter_map(|scope| to_lsp_location_from_scope(db, scope).ok())
+            .collect(),
         _ => vec![],
     }
 }
