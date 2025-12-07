@@ -67,7 +67,7 @@ pub async fn handle_rename(
                     continue;
                 }
                 let mod_ = map_file_to_mod(&backend.db, file);
-                for ref_view in mod_.references_to_target(&backend.db, target) {
+                for ref_view in mod_.references_to_target(&backend.db, &target) {
                     if let Some(span) = ref_view.rename_span(&backend.db).resolve(&backend.db)
                         && let Ok(range) = to_lsp_range_from_span(span, &backend.db)
                     {
@@ -93,7 +93,7 @@ pub async fn handle_rename(
         }
         Target::Local { span, .. } => {
             // For local bindings, search within the function body
-            for ref_view in top_mod.references_to_target(&backend.db, target) {
+            for ref_view in top_mod.references_to_target(&backend.db, &target) {
                 if let Some(resolved) = ref_view.rename_span(&backend.db).resolve(&backend.db)
                     && let Some(ref_url) = resolved.file.url(&backend.db)
                     && let Ok(range) = to_lsp_range_from_span(resolved, &backend.db)

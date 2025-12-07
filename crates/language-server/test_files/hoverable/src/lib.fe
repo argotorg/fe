@@ -1,16 +1,11 @@
 use stuff::calculations::{ return_three, return_four }
-use stuff::calculations::ambiguous;
+use stuff::calculations::ambiguous
 
 /// ## `return_seven`
 /// ### a function of numbers
 /// #### returns the 3+4=7
 pub fn return_seven() {
   return_three() + return_four()
-}
-
-/// Add two numbers together
-pub fn add(x: i32, y: i32) -> i32 {
-  x + y
 }
 
 fn calculate() {
