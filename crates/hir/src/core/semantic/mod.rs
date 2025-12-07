@@ -197,6 +197,40 @@ impl<'db> Func<'db> {
             assumptions,
         )
     }
+
+    /// Returns the containing `impl Trait` block if this function is a method
+    /// inside an impl trait block.
+    pub fn containing_impl_trait(self, db: &'db dyn HirDb) -> Option<ImplTrait<'db>> {
+        match self.scope().parent(db)? {
+            ScopeId::Item(ItemKind::ImplTrait(impl_trait)) => Some(impl_trait),
+            _ => None,
+        }
+    }
+
+    /// Returns the containing trait if this function is a method inside a trait definition.
+    pub fn containing_trait(self, db: &'db dyn HirDb) -> Option<Trait<'db>> {
+        match self.scope().parent(db)? {
+            ScopeId::Item(ItemKind::Trait(trait_)) => Some(trait_),
+            _ => None,
+        }
+    }
+
+    /// If this function is a method inside an `impl Trait` block, returns the
+    /// corresponding trait method definition.
+    ///
+    /// Returns `None` if:
+    /// - This function is not inside an impl trait block
+    /// - The impl trait block's trait cannot be resolved
+    /// - No matching method exists in the trait definition
+    pub fn trait_method_def(self, db: &'db dyn HirAnalysisDb) -> Option<Func<'db>> {
+        let impl_trait = self.containing_impl_trait(db)?;
+        let trait_ = impl_trait.trait_def(db)?;
+        let method_name = self.name(db).to_opt()?;
+
+        trait_
+            .methods(db)
+            .find(|m| m.name(db).to_opt() == Some(method_name))
+    }
 }
 
 impl<'db> CallableDef<'db> {
@@ -1051,6 +1085,41 @@ impl<'db> Trait<'db> {
         db: &'db dyn HirAnalysisDb,
     ) -> IndexSet<Binder<TraitInstId<'db>>> {
         self.super_trait_bounds(db).map(Binder::bind).collect()
+    }
+
+    /// Returns all `impl Trait for Type` blocks that implement this trait
+    /// within the same ingot.
+    pub fn all_impl_traits(self, db: &'db dyn HirAnalysisDb) -> Vec<ImplTrait<'db>> {
+        self.ingot(db)
+            .all_impl_traits(db)
+            .iter()
+            .copied()
+            .filter(|impl_trait| impl_trait.trait_def(db) == Some(self))
+            .collect()
+    }
+
+    /// Returns all implementations of a specific method from this trait.
+    ///
+    /// Given a method name, finds all `impl Trait for Type` blocks that implement
+    /// this trait and returns the corresponding method implementations.
+    pub fn method_implementations(
+        self,
+        db: &'db dyn HirAnalysisDb,
+        method_name: IdentId<'db>,
+    ) -> Vec<Func<'db>> {
+        self.all_impl_traits(db)
+            .into_iter()
+            .filter_map(|impl_trait| {
+                impl_trait
+                    .methods(db)
+                    .find(|m| m.name(db).to_opt() == Some(method_name))
+            })
+            .collect()
+    }
+
+    /// Returns the method definition in this trait with the given name.
+    pub fn method(self, db: &'db dyn HirDb, name: IdentId<'db>) -> Option<Func<'db>> {
+        self.methods(db).find(|m| m.name(db).to_opt() == Some(name))
     }
 }
 

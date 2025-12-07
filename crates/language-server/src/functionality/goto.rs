@@ -2,7 +2,7 @@ use async_lsp::ResponseError;
 use common::InputDb;
 use hir::{
     core::semantic::reference::{Target, TargetResolution},
-    hir_def::TopLevelMod,
+    hir_def::{ItemKind, TopLevelMod},
     lower::map_file_to_mod,
 };
 
@@ -84,11 +84,20 @@ pub async fn handle_goto_definition(
     info!("goto resolution: {:?}", resolution);
 
     // Convert targets to LSP locations
+    // Special case: if this is a method in an impl trait block, navigate to the trait method
     let locations: Vec<_> = resolution
         .as_slice()
         .iter()
         .filter_map(|target| match target {
-            Target::Scope(scope) => to_lsp_location_from_scope(&backend.db, *scope).ok(),
+            Target::Scope(scope) => {
+                // If this is a method inside an impl trait block, go to the trait method definition
+                if let ItemKind::Func(func) = scope.item()
+                    && let Some(trait_method) = func.trait_method_def(&backend.db)
+                {
+                    return to_lsp_location_from_scope(&backend.db, trait_method.scope()).ok();
+                }
+                to_lsp_location_from_scope(&backend.db, *scope).ok()
+            }
             Target::Local { span, .. } => {
                 to_lsp_location_from_lazy_span(&backend.db, span.clone()).ok()
             }

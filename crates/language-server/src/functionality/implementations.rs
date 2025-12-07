@@ -1,11 +1,7 @@
 use async_lsp::ResponseError;
 use async_lsp::lsp_types::{GotoDefinitionParams, GotoDefinitionResponse, Location};
 use common::InputDb;
-use hir::{
-    core::semantic::reference::Target,
-    hir_def::{HirIngot, ItemKind, Trait, scope_graph::ScopeId},
-    lower::map_file_to_mod,
-};
+use hir::{core::semantic::reference::Target, hir_def::ItemKind, lower::map_file_to_mod};
 
 use crate::{
     backend::Backend,
@@ -44,7 +40,7 @@ pub async fn handle_goto_implementation(
     };
 
     let locations = match &target {
-        Target::Scope(scope) => find_implementations(&backend.db, *scope),
+        Target::Scope(scope) => find_implementations(&backend.db, scope.item()),
         Target::Local { .. } => {
             // Local variables don't have implementations
             vec![]
@@ -60,78 +56,32 @@ pub async fn handle_goto_implementation(
     }
 }
 
-/// Find implementations for the given scope.
-fn find_implementations<'db>(
-    db: &'db driver::DriverDataBase,
-    scope: ScopeId<'db>,
-) -> Vec<Location> {
-    match scope.item() {
-        ItemKind::Trait(trait_) => find_trait_implementations(db, trait_),
+/// Find implementations for the given item.
+fn find_implementations<'db>(db: &'db driver::DriverDataBase, item: ItemKind<'db>) -> Vec<Location> {
+    match item {
+        ItemKind::Trait(trait_) => trait_
+            .all_impl_traits(db)
+            .into_iter()
+            .filter_map(|it| to_lsp_location_from_scope(db, it.scope()).ok())
+            .collect(),
         ItemKind::Func(func) => {
-            // Check if this function is a trait method
-            if let Some(ScopeId::Item(ItemKind::Trait(trait_))) = scope.parent(db) {
-                find_trait_method_implementations(db, trait_, func.name(db))
-            } else {
-                vec![]
-            }
+            let Some(trait_) = func
+                .containing_trait(db)
+                .or_else(|| func.containing_impl_trait(db)?.trait_def(db))
+            else {
+                return vec![];
+            };
+            let Some(method_name) = func.name(db).to_opt() else {
+                return vec![];
+            };
+            trait_
+                .method_implementations(db, method_name)
+                .into_iter()
+                .filter_map(|m| to_lsp_location_from_scope(db, m.scope()).ok())
+                .collect()
         }
         _ => vec![],
     }
-}
-
-/// Find all `impl Trait for Type` blocks for the given trait.
-fn find_trait_implementations<'db>(
-    db: &'db driver::DriverDataBase,
-    trait_: Trait<'db>,
-) -> Vec<Location> {
-    let ingot = trait_.top_mod(db).ingot(db);
-
-    let mut locations = vec![];
-
-    // Get all impl traits in the ingot and filter for those implementing this trait
-    for impl_trait in ingot.all_impl_traits(db) {
-        if let Some(implemented_trait) = impl_trait.trait_def(db)
-            && implemented_trait == trait_
-            && let Ok(location) = to_lsp_location_from_scope(db, impl_trait.scope())
-        {
-            locations.push(location);
-        }
-    }
-
-    locations
-}
-
-/// Find all implementations of a specific trait method.
-fn find_trait_method_implementations<'db>(
-    db: &'db driver::DriverDataBase,
-    trait_: Trait<'db>,
-    method_name: hir::hir_def::Partial<hir::hir_def::IdentId<'db>>,
-) -> Vec<Location> {
-    let Some(method_name) = method_name.to_opt() else {
-        return vec![];
-    };
-
-    let ingot = trait_.top_mod(db).ingot(db);
-
-    let mut locations = vec![];
-
-    // Get all impl traits in the ingot and filter for those implementing this trait
-    for impl_trait in ingot.all_impl_traits(db) {
-        if let Some(implemented_trait) = impl_trait.trait_def(db)
-            && implemented_trait == trait_
-        {
-            // Find the method in this impl block
-            for method in impl_trait.methods(db) {
-                if method.name(db).to_opt() == Some(method_name)
-                    && let Ok(location) = to_lsp_location_from_scope(db, method.scope())
-                {
-                    locations.push(location);
-                }
-            }
-        }
-    }
-
-    locations
 }
 
 #[cfg(test)]
@@ -177,7 +127,7 @@ impl Display for Counter {
         let target = top_mod.target_at(&db, cursor);
 
         if let Some(Target::Scope(scope)) = target {
-            let locations = find_implementations(&db, scope);
+            let locations = find_implementations(&db, scope.item());
             assert!(!locations.is_empty(), "Should find impl Display for Counter");
         } else {
             panic!("Expected Target::Scope for trait name, got {:?}", target);
