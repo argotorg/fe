@@ -166,16 +166,40 @@ note:
    │         ^ ref: 30:8
 
 note: 
-   ┌─ lib.fe:33:4
+   ┌─ lib.fe:28:16
    │
-33 │ fn add(x: i32, y: i32) -> i32 {
-   │    ^^^ def: defined here @ 33:3 (1 refs)
+28 │ fn add(x: i32, y: i32) -> i32 {
+   │                ^ def: defined here @ 28:15 (2 refs)
 
 note: 
-   ┌─ lib.fe:33:8
+   ┌─ lib.fe:29:5
    │
-33 │ fn add(x: i32, y: i32) -> i32 {
-   │        ^ def: defined here @ 33:7 (2 refs)
+29 │     x + y
+   │     ^ ref: 29:4
+
+note: 
+   ┌─ lib.fe:29:9
+   │
+29 │     x + y
+   │         ^ ref: 29:8
+
+note: 
+   ┌─ lib.fe:32:6
+   │
+32 │ impl Calculatable for Numbers {
+   │      ^^^^^^^^^^^^ ref: 32:5
+
+note: 
+   ┌─ lib.fe:32:23
+   │
+32 │ impl Calculatable for Numbers {
+   │                       ^^^^^^^ ref: 32:22
+
+note: 
+   ┌─ lib.fe:33:6
+   │
+33 │   fn calculate(self) -> i32 {
+   │      ^^^^^^^^^ def: defined here @ 33:5 (1 refs)
 
 note: 
    ┌─ lib.fe:33:16
@@ -184,7 +208,7 @@ note:
    │      ^^^^^^^^^ def: defined here @ 34:5 (1 refs)
 
 note: 
-   ┌─ lib.fe:34:5
+   ┌─ lib.fe:34:11
    │
 34 │   fn calculate(self) -> i32 {
    │                ^^^^ def: defined here @ 34:15 (3 refs)
