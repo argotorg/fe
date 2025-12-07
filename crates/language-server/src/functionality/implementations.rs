@@ -167,3 +167,54 @@ impl Display for Counter {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use driver::DriverDataBase;
+    use hir::lower::map_file_to_mod;
+    use url::Url;
+
+    #[test]
+    fn test_goto_implementation_trait() {
+        let mut db = DriverDataBase::default();
+
+        let code = r#"
+trait Display {
+    fn show(self) -> i32
+}
+
+struct Counter {
+    value: i32
+}
+
+impl Display for Counter {
+    fn show(self) -> i32 {
+        self.value
+    }
+}
+"#;
+
+        let file = db.workspace().touch(
+            &mut db,
+            Url::parse("file:///test.fe").unwrap(),
+            Some(code.to_string()),
+        );
+        let top_mod = map_file_to_mod(&db, file);
+
+        // Position cursor on "Display" in "trait Display"
+        // Line 1 (0-indexed): "trait Display {"
+        // "Display" starts at column 6
+        let cursor = parser::TextSize::from(7); // After "trait D"
+
+        // Get the target at cursor
+        let target = top_mod.target_at(&db, cursor);
+
+        if let Some(Target::Scope(scope)) = target {
+            let locations = find_implementations(&db, scope);
+            assert!(!locations.is_empty(), "Should find impl Display for Counter");
+        } else {
+            panic!("Expected Target::Scope for trait name, got {:?}", target);
+        }
+    }
+}
