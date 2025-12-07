@@ -22,6 +22,10 @@ pub(crate) fn server_capabilities() -> ServerCapabilities {
         type_definition_provider: Some(
             async_lsp::lsp_types::TypeDefinitionProviderCapability::Simple(true),
         ),
+        // go to implementation
+        implementation_provider: Some(
+            async_lsp::lsp_types::ImplementationProviderCapability::Simple(true),
+        ),
         // rename symbol
         rename_provider: Some(async_lsp::lsp_types::OneOf::Left(true)),
         // semantic tokens

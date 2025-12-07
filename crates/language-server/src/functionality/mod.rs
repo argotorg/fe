@@ -6,6 +6,7 @@ pub(super) mod goto;
 pub(super) mod handlers;
 pub(super) mod highlight;
 pub(super) mod hover;
+pub(super) mod implementations;
 pub(super) mod inlay_hints;
 pub(super) mod item_info;
 pub(super) mod references;
