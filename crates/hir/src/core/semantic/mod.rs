@@ -2076,6 +2076,30 @@ impl<'db> Struct<'db> {
             .filter(|impl_trait| matches_adt(db, impl_trait.ty(db), adt))
             .collect()
     }
+
+    /// Returns all inherent `impl` blocks for this contract within the same ingot.
+    pub fn all_impls(self, db: &'db dyn HirAnalysisDb) -> Vec<Impl<'db>> {
+        let adt = self.as_adt(db);
+        self.top_mod(db)
+            .ingot(db)
+            .all_impls(db)
+            .iter()
+            .copied()
+            .filter(|impl_| matches_adt(db, impl_.ty(db), adt))
+            .collect()
+    }
+
+    /// Returns all `impl Trait for Contract` blocks for this contract within the same ingot.
+    pub fn all_impl_traits(self, db: &'db dyn HirAnalysisDb) -> Vec<ImplTrait<'db>> {
+        let adt = self.as_adt(db);
+        self.top_mod(db)
+            .ingot(db)
+            .all_impl_traits(db)
+            .iter()
+            .copied()
+            .filter(|impl_trait| matches_adt(db, impl_trait.ty(db), adt))
+            .collect()
+    }
 }
 
 #[derive(Clone, Copy, Debug)]
