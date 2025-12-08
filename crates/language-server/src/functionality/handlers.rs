@@ -559,11 +559,7 @@ pub async fn handle_files_need_diagnostics(
             backend
                 .db
                 .workspace()
-                .containing_ingot(&backend.db, url.clone());
-            if ingot.is_none() {
-                warn!("No containing ingot found for file: {}", url);
-            }
-            ingot
+                .containing_ingot(&backend.db, url.clone())
         })
         .collect();
 

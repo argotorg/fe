@@ -744,11 +744,9 @@ fn collect_path_completions<'db>(
                 info!("resolved segment '{}' to scope {:?}", segment, target_scope);
                 current_scope = *target_scope;
             } else {
-                info!("segment '{}' is not a scope, stopping", segment);
                 return;
             }
         } else {
-            info!("segment '{}' not found in current scope", segment);
             return;
         }
     }
@@ -756,12 +754,6 @@ fn collect_path_completions<'db>(
     // Get direct child items of the final resolved scope
     // This gives us only items defined directly in this module, not inherited ones
     let child_items: Vec<_> = current_scope.child_items(db).collect();
-
-    info!(
-        "path completion: resolved to scope {:?}, found {} child items",
-        current_scope,
-        child_items.len()
-    );
 
     for item in child_items {
         let Some(name) = item.name(db) else {
@@ -787,8 +779,6 @@ fn collect_path_completions<'db>(
             ..Default::default()
         });
     }
-
-    info!("collected {} items from path '{}'", items.len(), full_path);
 }
 
 /// Collect completions for member access (fields and methods after `.`).

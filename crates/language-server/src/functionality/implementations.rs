@@ -214,7 +214,10 @@ impl Display for Counter {
             let locations = find_implementations(&db, scope.item());
             assert!(!locations.is_empty(), "Should find impl Display for Counter");
         } else {
-            panic!("Expected Target::Scope for trait name, got {:?}", resolution);
+            panic!(
+                "Expected Target::Scope for trait name, got {:?}",
+                resolution
+            );
         }
     }
 }
