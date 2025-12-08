@@ -68,6 +68,10 @@ pub async fn handle_rename(
                 }
                 let mod_ = map_file_to_mod(&backend.db, file);
                 for ref_view in mod_.references_to_target(&backend.db, target) {
+                    // Skip `Self` type paths - they shouldn't be renamed
+                    if ref_view.is_self_ty_path(&backend.db) {
+                        continue;
+                    }
                     if let Some(span) = ref_view.rename_span(&backend.db).resolve(&backend.db)
                         && let Ok(range) = to_lsp_range_from_span(span, &backend.db)
                     {
