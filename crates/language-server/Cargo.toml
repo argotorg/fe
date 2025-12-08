@@ -22,6 +22,7 @@ futures-batch = "0.6.1"
 glob.workspace = true
 rustc-hash.workspace = true
 salsa.workspace = true
+serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0.135"
 tokio = { version = "1.43.0", features = ["full", "io-std", "tracing", "net"] }
 tower = "0.5.2"
@@ -35,6 +36,9 @@ driver.workspace = true
 hir.workspace = true
 parser.workspace = true
 tempfile = "3.20.0"
+doc-engine = { path = "../doc-engine", package = "fe-doc-engine", features = ["ssr"] }
+axum = "0.8"
+tower-http = { version = "0.6", features = ["fs", "cors"] }
 
 [dev-dependencies]
 test-utils.workspace = true
