@@ -149,6 +149,10 @@ pub async fn initialize(
     // Discover and load all ingots in the workspace
     discover_and_load_ingots(backend, &root).await?;
 
+    // Note: Doc server is started lazily on first file change to avoid blocking init
+    // Store workspace root for later use
+    backend.server_info.workspace_root = Some(root.to_string_lossy().to_string());
+
     let capabilities = server_capabilities();
     let initialize_result = InitializeResult {
         capabilities,

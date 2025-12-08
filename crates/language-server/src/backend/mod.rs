@@ -1,3 +1,5 @@
+use std::path::PathBuf;
+
 use async_lsp::ClientSocket;
 use driver::DriverDataBase;
 use rustc_hash::FxHashSet;
@@ -5,6 +7,8 @@ use std::path::PathBuf;
 use url::Url;
 
 use crate::virtual_files::{VirtualFiles, materialize_builtins};
+
+use crate::doc_server::{DocServerHandle, LspServerInfo};
 
 pub struct Backend {
     pub(super) client: ClientSocket,

@@ -598,3 +598,13 @@ pub async fn serve(index: DocIndex, config: DocServerConfig) -> Result<(), std::
 
     axum::serve(listener, app).await
 }
+
+/// Public function for LSP integration - renders a doc page
+pub fn render_page_for_lsp(title: &str, current_path: &str, index: &DocIndex) -> String {
+    render_page(title, current_path, index)
+}
+
+/// Public function for LSP integration - renders an item page
+pub fn render_item_for_lsp(item: &DocItem) -> String {
+    render_item(item)
+}

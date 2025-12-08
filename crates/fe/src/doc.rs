@@ -4,7 +4,32 @@ use doc_engine::server::{serve, DocServerConfig};
 use doc_engine::{DocExtractor, DocIndex};
 use driver::DriverDataBase;
 use hir::hir_def::HirIngot;
+use serde::{Deserialize, Serialize};
 use url::Url;
+
+/// Server info written by LSP for discovery
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct LspServerInfo {
+    pid: u32,
+    workspace_root: Option<String>,
+    docs_url: Option<String>,
+}
+
+impl LspServerInfo {
+    /// Read server info from a workspace
+    fn read_from_workspace(workspace_root: &std::path::Path) -> Option<Self> {
+        let info_path = workspace_root.join(".fe-lsp.json");
+        let json = std::fs::read_to_string(&info_path).ok()?;
+        serde_json::from_str(&json).ok()
+    }
+
+    /// Check if the LSP process is still running
+    fn is_alive(&self) -> bool {
+        // Simple check: see if the process exists
+        std::path::Path::new(&format!("/proc/{}", self.pid)).exists()
+            || cfg!(windows) // On Windows, just assume it's alive if the file exists
+    }
+}
 
 pub fn generate_docs(
     path: &Utf8PathBuf,
@@ -13,6 +38,36 @@ pub fn generate_docs(
     serve_docs: bool,
     port: u16,
 ) {
+    // First, check if there's a running LSP with docs server
+    if serve_docs {
+        let canonical_path = path.canonicalize_utf8().ok();
+        let workspace_root = canonical_path
+            .as_ref()
+            .map(|p| {
+                if p.is_file() {
+                    p.parent().map(|p| p.as_std_path())
+                } else {
+                    Some(p.as_std_path())
+                }
+            })
+            .flatten();
+
+        if let Some(root) = workspace_root {
+            if let Some(info) = LspServerInfo::read_from_workspace(root) {
+                if info.is_alive() {
+                    if let Some(docs_url) = &info.docs_url {
+                        println!("Found running language server with documentation at:");
+                        println!("  {}", docs_url);
+                        println!();
+                        println!("The language server keeps docs in sync with your code.");
+                        println!("Open the URL above in your browser.");
+                        return;
+                    }
+                }
+            }
+        }
+    }
+
     let mut db = DriverDataBase::default();
 
     let index = if path.is_file() && path.extension() == Some("fe") {

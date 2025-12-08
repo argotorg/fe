@@ -34,6 +34,7 @@ pub async fn handle_goto_definition(
     backend: &mut Backend,
     params: async_lsp::lsp_types::GotoDefinitionParams,
 ) -> Result<Option<async_lsp::lsp_types::GotoDefinitionResponse>, ResponseError> {
+    info!("handling goto definition request");
     let params = params.text_document_position_params;
     let internal_url = backend.map_client_uri_to_internal(params.text_document.uri.clone());
     let Some(file) = backend.db.workspace().get(&backend.db, &internal_url) else {
@@ -44,11 +45,15 @@ pub async fn handle_goto_definition(
         return Ok(None);
     };
 
+    info!("got file from workspace");
     let file_text = file.text(&backend.db);
     let cursor: Cursor = to_offset_from_position(params.position, file_text.as_str());
+    info!("cursor position: {:?}", cursor);
 
     let top_mod = map_file_to_mod(&backend.db, file);
+    info!("got top_mod, resolving target...");
     let resolution = goto_target_at_cursor(&backend.db, top_mod, cursor);
+    info!("got resolution: {:?}", resolution.as_slice().len());
 
     // Compute origin_selection_range: the span of the identifier being clicked.
     // For paths like `ops::returndatasize`, this is the specific segment at the cursor.
@@ -170,7 +175,9 @@ pub async fn handle_goto_definition(
         _ => Ok(Some(async_lsp::lsp_types::GotoDefinitionResponse::Array(
             locations,
         ))),
-    }
+    };
+    info!("sending goto definition response");
+    result
 }
 // }
 #[cfg(test)]
