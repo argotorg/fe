@@ -1,4 +1,5 @@
 use crate::backend::Backend;
+use crate::doc_server::DocServerHandle;
 
 use async_lsp::lsp_types::FileChangeType;
 use async_lsp::{
@@ -11,6 +12,7 @@ use async_lsp::{
 };
 
 use common::InputDb;
+use doc_engine::DocExtractor;
 use driver::init_ingot;
 use resolver::workspace::discover_context;
 use resolver::{
@@ -165,10 +167,15 @@ pub async fn initialize(
 }
 
 pub async fn initialized(
-    backend: &Backend,
+    backend: &mut Backend,
     _message: InitializedParams,
 ) -> Result<(), ResponseError> {
     info!("language server initialized! recieved notification!");
+    info!("workspace_root: {:?}", backend.workspace_root);
+
+    // Start doc server immediately
+    update_docs(backend).await;
+    info!("update_docs completed, doc_server running: {}", backend.doc_server.is_some());
 
     // Register file watchers so the client notifies us when .fe or fe.toml
     // files are created, changed, or deleted on disk (e.g. `fe new counter`).
@@ -475,6 +482,9 @@ pub async fn handle_file_change(
         }
     }
 
+    // Update documentation (starts server on first change if needed)
+    update_docs(backend).await;
+
     let _ = backend.client.emit(NeedsDiagnostics(message.uri));
     Ok(())
 }
@@ -681,8 +691,14 @@ pub async fn handle_hover_request(
     Ok(response)
 }
 
-pub async fn handle_shutdown(_backend: &Backend, _message: ()) -> Result<(), ResponseError> {
+pub async fn handle_shutdown(backend: &Backend, _message: ()) -> Result<(), ResponseError> {
     info!("received shutdown request");
+
+    // Clean up server info file
+    if let Some(ref root) = backend.workspace_root {
+        crate::doc_server::LspServerInfo::remove_from_workspace(root);
+    }
+
     Ok(())
 }
 

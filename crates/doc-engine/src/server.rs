@@ -172,6 +172,64 @@ fn render_page(title: &str, current_path: &str, index: &DocIndex) -> String {
                 </a>`
             ).join('');
         }}
+
+        // Live reload via WebSocket (only works when served by LSP)
+        (function() {{
+            let wsConnected = false;
+            let retryCount = 0;
+            const maxRetries = 3;
+
+            function setupLiveReload() {{
+                const wsUrl = 'ws://' + window.location.host + '/ws';
+                const ws = new WebSocket(wsUrl);
+
+                ws.onopen = () => {{
+                    wsConnected = true;
+                    retryCount = 0;
+                    console.log('Live reload connected');
+                }};
+
+                ws.onmessage = async (event) => {{
+                    if (event.data === 'reload') {{
+                        console.log('Docs updated, reloading content...');
+                        try {{
+                            const resp = await fetch(window.location.href);
+                            const html = await resp.text();
+                            const parser = new DOMParser();
+                            const doc = parser.parseFromString(html, 'text/html');
+
+                            const newMain = doc.querySelector('.doc-content');
+                            const main = document.querySelector('.doc-content');
+                            if (newMain && main) main.innerHTML = newMain.innerHTML;
+
+                            const newSidebar = doc.querySelector('.sidebar-nav');
+                            const sidebar = document.querySelector('.sidebar-nav');
+                            if (newSidebar && sidebar) sidebar.innerHTML = newSidebar.innerHTML;
+
+                            console.log('Content updated!');
+                        }} catch (e) {{
+                            console.log('Failed to reload content:', e);
+                        }}
+                    }}
+                }};
+
+                ws.onclose = () => {{
+                    if (wsConnected) {{
+                        // Was connected before, reconnect
+                        console.log('Live reload disconnected, reconnecting...');
+                        setTimeout(setupLiveReload, 2000);
+                    }} else if (retryCount < maxRetries) {{
+                        // Never connected, retry a few times
+                        retryCount++;
+                        setTimeout(setupLiveReload, 1000);
+                    }}
+                    // After max retries without connecting, stop (CLI mode)
+                }};
+
+                ws.onerror = () => ws.close();
+            }}
+            setupLiveReload();
+        }})();
     </script>
 </body>
 </html>"#,
