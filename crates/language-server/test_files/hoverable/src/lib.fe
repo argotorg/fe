@@ -19,7 +19,7 @@ pub trait Calculatable {
     fn calculate(self) -> i32
 }
 
-/// A struct for holding numbers like `x` and `y`
+/// A struct for holding numbers like `x` and `y` WOW! what!
 struct Numbers { x: i32, y: i32 }
 
 fn add(x: i32, y: i32) -> i32 {

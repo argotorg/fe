@@ -52,8 +52,8 @@ pub(crate) fn setup(
         .handle_request_mut::<GotoDefinition>(goto::handle_goto_definition)
         .handle_event_mut::<FileChange>(handlers::handle_file_change)
         .handle_event::<FilesNeedDiagnostics>(handlers::handle_files_need_diagnostics)
-        // non-mutating handlers
-        .handle_notification::<Initialized>(handlers::initialized)
+        // doc server starts on initialization
+        .handle_notification_mut::<Initialized>(handlers::initialized)
         .handle_request::<HoverRequest>(handlers::handle_hover_request)
         .handle_request::<Completion>(completion::handle_completion)
         .handle_request::<SignatureHelpRequest>(signature_help::handle_signature_help)

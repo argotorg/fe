@@ -3,10 +3,11 @@
 //! This module handles:
 //! - Starting an HTTP server for documentation browsing
 //! - Writing server info files for CLI discovery
+//! - WebSocket-based live updates
 //! - Custom LSP methods for doc access
 
 use std::sync::Arc;
-use tokio::sync::RwLock;
+use tokio::sync::{RwLock, broadcast};
 
 use doc_engine::DocIndex;
 use serde::{Deserialize, Serialize};
@@ -57,6 +58,8 @@ pub struct DocServerHandle {
     pub port: u16,
     pub url: String,
     index: Arc<RwLock<DocIndex>>,
+    /// Broadcast channel to notify connected clients of updates
+    update_tx: broadcast::Sender<()>,
 }
 
 impl DocServerHandle {
@@ -70,10 +73,15 @@ impl DocServerHandle {
         let index = Arc::new(RwLock::new(DocIndex::default()));
         let index_for_server = index.clone();
 
+        // Create broadcast channel for live updates
+        let (update_tx, _) = broadcast::channel::<()>(16);
+        let update_tx_for_server = update_tx.clone();
+
         // Start the server in a background task
         tokio::spawn(async move {
             let state = Arc::new(DocServerStateWrapper {
                 index: index_for_server,
+                update_tx: update_tx_for_server,
             });
 
             let app = doc_router_dynamic(state);
@@ -85,26 +93,30 @@ impl DocServerHandle {
             }
         });
 
-        Ok(Self { port, url, index })
+        Ok(Self { port, url, index, update_tx })
     }
 
-    /// Update the documentation index
+    /// Update the documentation index and notify connected clients
     pub async fn update_index(&self, new_index: DocIndex) {
         let mut index = self.index.write().await;
         *index = new_index;
         info!("Updated documentation index with {} items", index.items.len());
+
+        // Notify all connected WebSocket clients
+        let _ = self.update_tx.send(());
     }
 }
 
 /// Wrapper for dynamic doc index updates
 struct DocServerStateWrapper {
     index: Arc<RwLock<DocIndex>>,
+    update_tx: broadcast::Sender<()>,
 }
 
 /// Create a router that reads from a dynamic index
 fn doc_router_dynamic(state: Arc<DocServerStateWrapper>) -> axum::Router {
     use axum::{
-        extract::{Path, Query, State},
+        extract::{Path, Query, State, WebSocketUpgrade, ws::{Message, WebSocket}},
         http::StatusCode,
         response::{Html, IntoResponse, Json},
         routing::get,
@@ -161,11 +173,53 @@ fn doc_router_dynamic(state: Arc<DocServerStateWrapper>) -> axum::Router {
         }
     }
 
+    /// WebSocket handler for live updates
+    async fn ws_handler(
+        ws: WebSocketUpgrade,
+        State(state): State<Arc<DocServerStateWrapper>>,
+    ) -> impl IntoResponse {
+        ws.on_upgrade(move |socket| handle_ws(socket, state))
+    }
+
+    async fn handle_ws(mut socket: WebSocket, state: Arc<DocServerStateWrapper>) {
+        let mut rx = state.update_tx.subscribe();
+
+        // Send updates to the client when docs change
+        loop {
+            tokio::select! {
+                // Wait for update notification
+                result = rx.recv() => {
+                    match result {
+                        Ok(()) => {
+                            // Send "reload" message to client
+                            if socket.send(Message::Text("reload".into())).await.is_err() {
+                                break; // Client disconnected
+                            }
+                        }
+                        Err(broadcast::error::RecvError::Closed) => break,
+                        Err(broadcast::error::RecvError::Lagged(_)) => continue,
+                    }
+                }
+                // Handle incoming messages (e.g., ping/pong)
+                msg = socket.recv() => {
+                    match msg {
+                        Some(Ok(Message::Close(_))) | None => break,
+                        Some(Ok(Message::Ping(data))) => {
+                            let _ = socket.send(Message::Pong(data)).await;
+                        }
+                        _ => {}
+                    }
+                }
+            }
+        }
+    }
+
     axum::Router::new()
         .route("/", get(index_handler))
         .route("/doc/{*path}", get(doc_item_handler))
         .route("/api/search", get(search_handler))
         .route("/api/item/{*path}", get(item_api_handler))
+        .route("/ws", get(ws_handler))
         .with_state(state)
 }
 

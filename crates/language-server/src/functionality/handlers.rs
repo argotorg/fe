@@ -1,4 +1,5 @@
 use crate::backend::Backend;
+use crate::doc_server::DocServerHandle;
 
 use async_lsp::lsp_types::FileChangeType;
 use async_lsp::{
@@ -9,7 +10,9 @@ use async_lsp::{
 };
 
 use common::InputDb;
+use doc_engine::DocExtractor;
 use driver::init_ingot;
+use hir::hir_def::HirIngot;
 use rustc_hash::FxHashSet;
 use url::Url;
 
@@ -140,10 +143,15 @@ pub async fn initialize(
 }
 
 pub async fn initialized(
-    backend: &Backend,
+    backend: &mut Backend,
     _message: InitializedParams,
 ) -> Result<(), ResponseError> {
     info!("language server initialized! recieved notification!");
+    info!("workspace_root: {:?}", backend.workspace_root);
+
+    // Start doc server immediately
+    update_docs(backend).await;
+    info!("update_docs completed, doc_server running: {}", backend.doc_server.is_some());
 
     // Get all files from the workspace
     let all_files: Vec<_> = backend
@@ -318,6 +326,9 @@ pub async fn handle_file_change(
         }
     }
 
+    // Update documentation (starts server on first change if needed)
+    update_docs(backend).await;
+
     let _ = backend.client.emit(NeedsDiagnostics(message.uri));
     Ok(())
 }
@@ -398,6 +409,79 @@ pub async fn handle_files_need_diagnostics(
     Ok(())
 }
 
+/// Start the doc server if not running, and update the documentation index.
+/// This is called after file changes to keep docs in sync.
+async fn update_docs(backend: &mut Backend) {
+    info!("update_docs called, doc_server exists: {}", backend.doc_server.is_some());
+
+    // Start doc server if not already running
+    if backend.doc_server.is_none() {
+        info!("Starting doc server...");
+        // Use the workers runtime since act_locally runs on a separate thread without tokio
+        let handle_result = backend.workers.block_on(DocServerHandle::start());
+        match handle_result {
+            Ok(handle) => {
+                info!("Started documentation server at {}", handle.url);
+
+                // Log to client so user can see the URL
+                let _ = backend.client.clone().log_message(LogMessageParams {
+                    typ: async_lsp::lsp_types::MessageType::INFO,
+                    message: format!("Fe docs available at {}", handle.url),
+                });
+
+                // Update server info
+                backend.server_info.docs_url = Some(handle.url.clone());
+
+                // Write server info file if we have a workspace root
+                if let Some(ref root) = backend.workspace_root {
+                    info!("Writing .fe-lsp.json to {:?}", root);
+                    match backend.server_info.write_to_workspace(root) {
+                        Ok(()) => info!("Successfully wrote .fe-lsp.json"),
+                        Err(e) => warn!("Failed to write server info: {}", e),
+                    }
+                } else {
+                    warn!("No workspace root set, cannot write .fe-lsp.json");
+                }
+
+                backend.doc_server = Some(handle);
+            }
+            Err(e) => {
+                error!("Failed to start doc server: {}", e);
+                return;
+            }
+        }
+    }
+
+    // Extract docs from all ingots
+    let extractor = DocExtractor::new(&backend.db);
+    let mut combined_index = doc_engine::DocIndex::default();
+
+    // Get all unique ingots from workspace files
+    let ingots: FxHashSet<_> = backend
+        .db
+        .workspace()
+        .all_files(&backend.db)
+        .iter()
+        .filter_map(|(url, _)| {
+            backend
+                .db
+                .workspace()
+                .containing_ingot(&backend.db, url.clone())
+        })
+        .collect();
+
+    for ingot in ingots {
+        let root_mod = ingot.root_mod(&backend.db);
+        let index = extractor.extract_module(root_mod);
+        combined_index.items.extend(index.items);
+    }
+
+    // Update the doc server (use workers runtime for tokio async)
+    if let Some(ref doc_server) = backend.doc_server {
+        backend.workers.block_on(doc_server.update_index(combined_index));
+    }
+}
+
 pub async fn handle_hover_request(
     backend: &Backend,
     message: HoverParams,
@@ -428,7 +512,13 @@ pub async fn handle_hover_request(
     Ok(response)
 }
 
-pub async fn handle_shutdown(_backend: &Backend, _message: ()) -> Result<(), ResponseError> {
+pub async fn handle_shutdown(backend: &Backend, _message: ()) -> Result<(), ResponseError> {
     info!("received shutdown request");
+
+    // Clean up server info file
+    if let Some(ref root) = backend.workspace_root {
+        crate::doc_server::LspServerInfo::remove_from_workspace(root);
+    }
+
     Ok(())
 }
