@@ -4,12 +4,14 @@
 //! stream-based handlers for LSP requests and notifications.
 
 use async_lsp::router::Router;
-use async_lsp::{ResponseError, lsp_types::*};
-use futures::Stream;
-use std::fmt::Debug;
+use async_lsp::lsp_types::{notification, request};
+use async_lsp::{ClientSocket, ResponseError};
+use futures::{Stream, StreamExt};
+use std::fmt::{Debug, Display};
 use std::pin::Pin;
 use std::task::{Context, Poll};
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::{broadcast, mpsc, oneshot};
+use tracing::instrument::WithSubscriber;
 
 /// A stream of LSP request messages with their response channels.
 pub struct RequestStream<Params, Result> {
@@ -124,5 +126,57 @@ impl<State> RouterStreams for Router<State> {
             std::ops::ControlFlow::Continue(())
         });
         EventStream { receiver: rx }
+    }
+}
+
+/// Extension trait for piping streams to sinks (handles spawn+while boilerplate)
+pub trait StreamPipeExt: Stream + Sized {
+    /// Pipe stream items back into the LSP event system via `client.emit()`
+    fn pipe_emit(self, client: ClientSocket)
+    where
+        Self: Send + 'static,
+        Self::Item: Send + Debug + Display + 'static;
+
+    /// Pipe stream items to a broadcast channel (for WebSocket notifications)
+    #[allow(dead_code)]
+    fn pipe_to_broadcast<T>(self, tx: broadcast::Sender<T>)
+    where
+        Self: Send + 'static,
+        Self::Item: Into<T> + Send,
+        T: Clone + Send + 'static;
+}
+
+impl<S: Stream + Sized> StreamPipeExt for S {
+    fn pipe_emit(self, client: ClientSocket)
+    where
+        Self: Send + 'static,
+        Self::Item: Send + Debug + Display + 'static,
+    {
+        tokio::spawn(
+            async move {
+                let mut stream = Box::pin(self);
+                while let Some(event) = stream.next().await {
+                    let _ = client.clone().emit(event);
+                }
+            }
+            .with_current_subscriber(),
+        );
+    }
+
+    fn pipe_to_broadcast<T>(self, tx: broadcast::Sender<T>)
+    where
+        Self: Send + 'static,
+        Self::Item: Into<T> + Send,
+        T: Clone + Send + 'static,
+    {
+        tokio::spawn(
+            async move {
+                let mut stream = Box::pin(self);
+                while let Some(item) = stream.next().await {
+                    let _ = tx.send(item.into());
+                }
+            }
+            .with_current_subscriber(),
+        );
     }
 }
