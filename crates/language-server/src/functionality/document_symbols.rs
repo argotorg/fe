@@ -1,3 +1,4 @@
+use crate::{backend::Backend, util::to_lsp_range_from_span};
 use async_lsp::ResponseError;
 use async_lsp::lsp_types::{DocumentSymbol, DocumentSymbolResponse, SymbolKind};
 use common::InputDb;
@@ -6,16 +7,11 @@ use hir::{
     lower::map_file_to_mod,
     span::LazySpan,
 };
-use tracing::info;
-
-use crate::{backend::Backend, util::to_lsp_range_from_span};
 
 pub async fn handle_document_symbols(
     backend: &Backend,
     params: async_lsp::lsp_types::DocumentSymbolParams,
 ) -> Result<Option<DocumentSymbolResponse>, ResponseError> {
-    info!("handling document symbols request");
-
     let file_path_str = params.text_document.uri.path();
     let url = url::Url::from_file_path(file_path_str).map_err(|()| {
         ResponseError::new(

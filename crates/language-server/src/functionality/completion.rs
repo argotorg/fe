@@ -1,3 +1,4 @@
+use crate::{backend::Backend, util::to_offset_from_position};
 use async_lsp::ResponseError;
 use async_lsp::lsp_types::{
     CompletionItem, CompletionItemKind, CompletionParams, CompletionResponse, Position, Range,
@@ -14,7 +15,6 @@ use hir::{
     lower::map_file_to_mod,
     visitor::prelude::*,
 };
-use crate::{backend::Backend, util::to_offset_from_position};
 
 pub async fn handle_completion(
     backend: &Backend,
@@ -352,14 +352,11 @@ fn collect_path_completions<'db>(
         if let Some(name_res) = visible.get(*segment) {
             if let hir::analysis::name_resolution::NameResKind::Scope(target_scope) = &name_res.kind
             {
-                info!("resolved segment '{}' to scope {:?}", segment, target_scope);
                 current_scope = *target_scope;
             } else {
-                info!("segment '{}' is not a scope, stopping", segment);
                 return;
             }
         } else {
-            info!("segment '{}' not found in current scope", segment);
             return;
         }
     }
@@ -367,12 +364,6 @@ fn collect_path_completions<'db>(
     // Get direct child items of the final resolved scope
     // This gives us only items defined directly in this module, not inherited ones
     let child_items: Vec<_> = current_scope.child_items(db).collect();
-
-    info!(
-        "path completion: resolved to scope {:?}, found {} child items",
-        current_scope,
-        child_items.len()
-    );
 
     for item in child_items {
         let Some(name) = item.name(db) else {
@@ -398,8 +389,6 @@ fn collect_path_completions<'db>(
             ..Default::default()
         });
     }
-
-    info!("collected {} items from path '{}'", items.len(), full_path);
 }
 
 /// Collect completions for member access (fields and methods after `.`).
@@ -443,17 +432,9 @@ fn collect_member_completions<'db>(
         if let Partial::Present(Expr::Field(receiver_id, _field)) = expr_data {
             let expr_span = expr_id.span(body);
             if let Some(resolved) = expr_span.resolve(db) {
-                info!(
-                    "  Field expr range {:?}, cursor {:?}",
-                    resolved.range, cursor
-                );
                 // Check if cursor is within this field expression
                 if resolved.range.contains(cursor) || resolved.range.end() == cursor {
                     let mut ty = typed_body.expr_ty(db, *receiver_id);
-                    info!(
-                        "found Field expression, receiver type: {}",
-                        ty.pretty_print(db)
-                    );
 
                     // If the receiver type is invalid (due to incomplete syntax), try to find
                     // the type from the expression itself (e.g., if it's a path to a local binding)
@@ -464,7 +445,6 @@ fn collect_member_completions<'db>(
                         // Try to resolve the path to find a local binding's type
                         if let Some(ident) = path.as_ident(db) {
                             let ident_str = ident.data(db);
-                            info!("  receiver is path {:?}, looking up binding", ident_str);
 
                             // Special case: if the path is "self", get the self parameter's type
                             if ident_str == "self" {
@@ -472,10 +452,6 @@ fn collect_member_completions<'db>(
                                     if param.is_self_param(db) {
                                         let self_ty = param.ty(db);
                                         if !self_ty.has_invalid(db) {
-                                            info!(
-                                                "  found self parameter type: {}",
-                                                self_ty.pretty_print(db)
-                                            );
                                             ty = self_ty;
                                             break;
                                         }
@@ -492,10 +468,6 @@ fn collect_member_completions<'db>(
                                     {
                                         let pat_ty = typed_body.pat_ty(db, pat_id);
                                         if !pat_ty.has_invalid(db) {
-                                            info!(
-                                                "  found binding type: {}",
-                                                pat_ty.pretty_print(db)
-                                            );
                                             ty = pat_ty;
                                             break;
                                         }
@@ -507,8 +479,6 @@ fn collect_member_completions<'db>(
 
                     collect_fields_for_type(db, ty, items);
                     collect_methods_for_type(db, top_mod, ty, items);
-
-                    info!("collected {} items from Field expr", items.len());
                     return;
                 }
             }
@@ -517,7 +487,6 @@ fn collect_member_completions<'db>(
 
     // Strategy 2: Fallback - look for any expression ending at cursor-1 (before the dot)
     let dot_pos = cursor.checked_sub(1.into()).unwrap_or(cursor);
-    info!("fallback: looking for expression ending at {:?}", dot_pos);
 
     for (expr_id, _) in body.exprs(db).iter() {
         let expr_span = expr_id.span(body);
@@ -525,20 +494,11 @@ fn collect_member_completions<'db>(
             && resolved.range.end() == dot_pos
         {
             let ty = typed_body.expr_ty(db, expr_id);
-            info!(
-                "found expression ending at dot, type: {}",
-                ty.pretty_print(db)
-            );
-
             collect_fields_for_type(db, ty, items);
             collect_methods_for_type(db, top_mod, ty, items);
-
-            info!("collected {} items from fallback", items.len());
             return;
         }
     }
-
-    info!("no matching expression found");
 }
 
 /// Collect struct fields as completion items.
@@ -547,23 +507,17 @@ fn collect_fields_for_type<'db>(
     ty: hir::analysis::ty::ty_def::TyId<'db>,
     items: &mut Vec<CompletionItem>,
 ) {
-    info!("collect_fields_for_type: ty={}", ty.pretty_print(db));
-
     // Use the traversal API to get fields for struct/contract types
     let Some(field_parent) = ty.field_parent(db) else {
-        info!("  no field_parent for this type");
         return;
     };
 
-    info!("  found field_parent, iterating fields");
     for field in field_parent.fields(db) {
         let Some(name) = field.name(db) else {
-            info!("    field has no name, skipping");
             continue;
         };
         let field_ty = field.ty(db);
         let detail = format!("{}: {}", name.data(db), field_ty.pretty_print(db));
-        info!("    adding field: {}", name.data(db));
 
         items.push(CompletionItem {
             label: name.data(db).to_string(),

@@ -1,3 +1,4 @@
+use crate::{backend::Backend, util::to_offset_from_position};
 use async_lsp::ResponseError;
 use async_lsp::lsp_types::{
     ParameterInformation, ParameterLabel, SignatureHelp, SignatureHelpParams, SignatureInformation,
@@ -10,16 +11,11 @@ use hir::{
     lower::map_file_to_mod,
     span::LazySpan,
 };
-use tracing::info;
-
-use crate::{backend::Backend, util::to_offset_from_position};
 
 pub async fn handle_signature_help(
     backend: &Backend,
     params: SignatureHelpParams,
 ) -> Result<Option<SignatureHelp>, ResponseError> {
-    info!("handling signature help request");
-
     let file_path_str = params
         .text_document_position_params
         .text_document
@@ -86,9 +82,6 @@ fn find_signature_at_cursor<'db>(
                 if let Some(resolved) = expr_span.resolve(db)
                     && resolved.range.contains(cursor)
                 {
-                    // Found a call expression containing cursor
-                    info!("found Call expression at cursor: {:?}", resolved.range);
-
                     // Try to resolve what function is being called
                     if let Some(called_func) = resolve_callee_func(db, body, *callee) {
                         let active_param =
@@ -103,11 +96,6 @@ fn find_signature_at_cursor<'db>(
                 if let Some(resolved) = expr_span.resolve(db)
                     && resolved.range.contains(cursor)
                 {
-                    info!(
-                        "found MethodCall expression at cursor: {:?}",
-                        resolved.range
-                    );
-
                     // Try to resolve the method being called
                     if let Partial::Present(method_ident) = method_name
                         && let Some(called_func) =
@@ -169,11 +157,6 @@ fn resolve_method_func<'db>(
     let receiver_ty = typed_body.expr_ty(db, receiver);
 
     let method_name_str = method_name.data(db);
-    info!(
-        "looking for method '{}' on type '{}'",
-        method_name_str,
-        receiver_ty.pretty_print(db)
-    );
 
     // Look for impl blocks that match this type
     let ty_name = receiver_ty.pretty_print(db);

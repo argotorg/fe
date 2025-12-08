@@ -16,7 +16,11 @@ pub async fn handle_goto_implementation(
     backend: &Backend,
     params: GotoDefinitionParams,
 ) -> Result<Option<GotoDefinitionResponse>, ResponseError> {
-    let path_str = params.text_document_position_params.text_document.uri.path();
+    let path_str = params
+        .text_document_position_params
+        .text_document
+        .uri
+        .path();
 
     let Ok(url) = url::Url::from_file_path(path_str) else {
         return Ok(None);
@@ -58,7 +62,10 @@ pub async fn handle_goto_implementation(
 }
 
 /// Find implementations for the given item.
-fn find_implementations<'db>(db: &'db driver::DriverDataBase, item: ItemKind<'db>) -> Vec<Location> {
+fn find_implementations<'db>(
+    db: &'db driver::DriverDataBase,
+    item: ItemKind<'db>,
+) -> Vec<Location> {
     match item {
         ItemKind::Trait(trait_) => trait_
             .all_impl_traits(db)
@@ -151,9 +158,15 @@ impl Display for Counter {
 
         if let Some(Target::Scope(scope)) = resolution.first() {
             let locations = find_implementations(&db, scope.item());
-            assert!(!locations.is_empty(), "Should find impl Display for Counter");
+            assert!(
+                !locations.is_empty(),
+                "Should find impl Display for Counter"
+            );
         } else {
-            panic!("Expected Target::Scope for trait name, got {:?}", resolution);
+            panic!(
+                "Expected Target::Scope for trait name, got {:?}",
+                resolution
+            );
         }
     }
 }

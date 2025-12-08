@@ -1,3 +1,4 @@
+use crate::{backend::Backend, util::to_lsp_range_from_span};
 use async_lsp::ResponseError;
 use async_lsp::lsp_types::{InlayHint, InlayHintKind, InlayHintLabel};
 use common::InputDb;
@@ -8,16 +9,11 @@ use hir::{
     lower::map_file_to_mod,
     visitor::prelude::*,
 };
-use tracing::info;
-
-use crate::{backend::Backend, util::to_lsp_range_from_span};
 
 pub async fn handle_inlay_hints(
     backend: &Backend,
     params: async_lsp::lsp_types::InlayHintParams,
 ) -> Result<Option<Vec<InlayHint>>, ResponseError> {
-    info!("handling inlay hints request");
-
     let file_path_str = params.text_document.uri.path();
     let url = url::Url::from_file_path(file_path_str).map_err(|()| {
         ResponseError::new(

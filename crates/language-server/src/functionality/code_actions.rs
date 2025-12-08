@@ -11,7 +11,6 @@ use hir::{
     span::LazySpan,
 };
 use std::collections::HashMap;
-use tracing::info;
 
 use crate::{backend::Backend, util::to_offset_from_position};
 
@@ -19,8 +18,6 @@ pub async fn handle_code_action(
     backend: &Backend,
     params: CodeActionParams,
 ) -> Result<Option<CodeActionResponse>, ResponseError> {
-    info!("handling code action request");
-
     let file_path_str = params.text_document.uri.path();
     let url = url::Url::from_file_path(file_path_str).map_err(|()| {
         ResponseError::new(
@@ -60,7 +57,6 @@ pub async fn handle_code_action(
         &mut actions,
     );
 
-    info!("code action returning {} actions", actions.len());
     if actions.is_empty() {
         Ok(None)
     } else {
@@ -123,12 +119,6 @@ fn collect_return_type_actions<'db>(
             continue;
         };
 
-        let func_name = func
-            .name(db)
-            .to_opt()
-            .map(|n| n.data(db).to_string())
-            .unwrap_or_else(|| "<anonymous>".to_string());
-
         // Create the text edit
         let edit = TextEdit {
             range: Range {
@@ -155,11 +145,6 @@ fn collect_return_type_actions<'db>(
             disabled: None,
             data: None,
         });
-
-        info!(
-            "offering return type annotation for function '{}': -> {}",
-            func_name, ret_ty_str
-        );
     }
 }
 

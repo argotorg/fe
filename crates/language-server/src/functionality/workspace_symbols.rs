@@ -1,19 +1,15 @@
+use crate::{backend::Backend, util::to_lsp_range_from_span};
 use async_lsp::ResponseError;
 use async_lsp::lsp_types::{
     Location, SymbolInformation, SymbolKind, WorkspaceSymbolParams, WorkspaceSymbolResponse,
 };
 use common::InputDb;
 use hir::{hir_def::ItemKind, lower::map_file_to_mod, span::LazySpan};
-use tracing::info;
-
-use crate::{backend::Backend, util::to_lsp_range_from_span};
 
 pub async fn handle_workspace_symbols(
     backend: &Backend,
     params: WorkspaceSymbolParams,
 ) -> Result<Option<WorkspaceSymbolResponse>, ResponseError> {
-    info!("handling workspace symbols request: query={}", params.query);
-
     let mut symbols = Vec::new();
     let query = params.query.to_lowercase();
 
