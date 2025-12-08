@@ -426,6 +426,14 @@ impl<'db> DocExtractor<'db> {
             }
         }
 
+        // Sort for consistent ordering
+        children.sort_by(|a, b| a.name.cmp(&b.name));
+        items.sort_by(|a, b| {
+            // Sort by kind first, then by name
+            a.kind.as_str().cmp(b.kind.as_str())
+                .then_with(|| a.name.cmp(&b.name))
+        });
+
         DocModuleTree {
             name,
             path,
