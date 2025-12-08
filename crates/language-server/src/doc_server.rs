@@ -178,7 +178,7 @@ fn doc_router_dynamic(state: Arc<DocServerStateWrapper>) -> axum::Router {
             let title = format!("{} - Fe Documentation", item.name);
             (StatusCode::OK, Html(render_page_dynamic(&title, &path, &index)))
         } else {
-            (StatusCode::NOT_FOUND, Html(format!("Not found: {}", path)))
+            (StatusCode::NOT_FOUND, Html(render_page_not_found_dynamic(&path, &index)))
         }
     }
 
@@ -265,6 +265,9 @@ fn doc_router_dynamic(state: Arc<DocServerStateWrapper>) -> axum::Router {
 
 // Re-use the rendering from doc_engine::server but with dynamic index
 fn render_page_dynamic(title: &str, current_path: &str, index: &DocIndex) -> String {
-    // Import the CSS and rendering from doc_engine
     doc_engine::server::render_page_for_lsp(title, current_path, index)
+}
+
+fn render_page_not_found_dynamic(path: &str, index: &DocIndex) -> String {
+    doc_engine::server::render_page_not_found_for_lsp(path, index)
 }

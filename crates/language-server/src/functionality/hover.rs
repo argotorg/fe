@@ -15,11 +15,17 @@ use super::{
 use crate::util::to_offset_from_position;
 use driver::DriverDataBase;
 
+/// Result of hover, including optional doc path for auto-follow
+pub struct HoverResult {
+    pub hover: Option<Hover>,
+    pub doc_path: Option<String>,
+}
+
 pub fn hover_helper(
     db: &DriverDataBase,
     file: File,
     params: async_lsp::lsp_types::HoverParams,
-) -> Result<Option<Hover>, Error> {
+) -> Result<HoverResult, Error> {
     info!("handling hover");
     let file_text = file.text(db);
 
@@ -29,6 +35,9 @@ pub fn hover_helper(
     );
 
     let top_mod = map_file_to_mod(db, file);
+
+    // Track doc path for auto-follow
+    let mut doc_path: Option<String> = None;
 
     // Get the reference at cursor and resolve it
     let info = top_mod
@@ -81,6 +90,9 @@ pub fn hover_helper(
                         let definition_source = get_item_definition_markdown(db, item);
                         let docs = get_docstring(db, *scope);
 
+                        // Capture doc path for auto-follow (only for items with docs)
+                        doc_path = scope.item().scope().pretty_path(db);
+
                         Some(
                             [pretty_path, definition_source, docs]
                                 .iter()
@@ -104,7 +116,16 @@ pub fn hover_helper(
         })
         .unwrap_or_default();
 
-    let result = async_lsp::lsp_types::Hover {
+    // If doc_path wasn't captured (e.g., hovering on definition, not reference),
+    // try target_at directly which works for both definitions and references
+    if doc_path.is_none() {
+        let resolution = top_mod.target_at(db, cursor);
+        if let Some(Target::Scope(scope)) = resolution.first() {
+            doc_path = scope.item().scope().pretty_path(db);
+        }
+    }
+
+    let hover = Some(async_lsp::lsp_types::Hover {
         contents: async_lsp::lsp_types::HoverContents::Markup(
             async_lsp::lsp_types::MarkupContent {
                 kind: async_lsp::lsp_types::MarkupKind::Markdown,
@@ -112,6 +133,7 @@ pub fn hover_helper(
             },
         ),
         range: None,
-    };
-    Ok(Some(result))
+    });
+
+    Ok(HoverResult { hover, doc_path })
 }

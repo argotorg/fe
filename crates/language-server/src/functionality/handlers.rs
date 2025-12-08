@@ -562,12 +562,18 @@ pub async fn handle_hover_request(
     };
 
     info!("handling hover request in file: {:?}", file);
-    let response = hover_helper(&backend.db, file, message).unwrap_or_else(|e| {
+    let result = hover_helper(&backend.db, file, message).unwrap_or_else(|e| {
         error!("Error handling hover: {:?}", e);
-        None
+        super::hover::HoverResult { hover: None, doc_path: None }
     });
-    info!("sending hover response: {:?}", response);
-    Ok(response)
+
+    // Emit navigation event for auto-follow mode (browser will ignore if disabled)
+    if let Some(doc_path) = result.doc_path {
+        let _ = backend.client.clone().emit(DocNavigate::to(doc_path));
+    }
+
+    info!("sending hover response: {:?}", result.hover);
+    Ok(result.hover)
 }
 
 pub async fn handle_shutdown(backend: &Backend, _message: ()) -> Result<(), ResponseError> {
