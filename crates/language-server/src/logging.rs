@@ -3,24 +3,26 @@ use async_lsp::{
     lsp_types::{LogMessageParams, MessageType},
 };
 use tracing::{Level, Metadata, subscriber::set_default};
-use tracing_subscriber::{fmt::MakeWriter, layer::SubscriberExt};
-use tracing_tree::HierarchicalLayer;
+use tracing_subscriber::{EnvFilter, fmt::MakeWriter, layer::SubscriberExt};
 
 use std::{backtrace::Backtrace, sync::Arc};
 
 pub fn setup_default_subscriber(client: ClientSocket) -> Option<tracing::subscriber::DefaultGuard> {
     let client_socket_writer = ClientSocketWriterMaker::new(client);
+
+    // Filter out verbose Salsa query logs while keeping our INFO logs
+    let filter = EnvFilter::new("info")
+        .add_directive("salsa=warn".parse().unwrap());
+
+    // Use fmt layer which properly calls make_writer_for() for correct LSP log levels
+    let fmt_layer = tracing_subscriber::fmt::layer()
+        .with_ansi(false)
+        .with_target(true)
+        .with_writer(client_socket_writer);
+
     let subscriber = tracing_subscriber::registry()
-        .with(tracing_subscriber::filter::LevelFilter::INFO)
-        .with(
-            HierarchicalLayer::new(2)
-                .with_thread_ids(true)
-                .with_thread_names(true)
-                .with_indent_lines(true)
-                .with_bracketed_fields(true)
-                .with_ansi(false)
-                .with_writer(client_socket_writer),
-        );
+        .with(filter)
+        .with(fmt_layer);
     Some(set_default(subscriber))
 }
 
