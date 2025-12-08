@@ -210,11 +210,11 @@ impl Display for Counter {
         // Get the target at cursor
         let target = top_mod.target_at(&db, cursor);
 
-        if let Some(Target::Scope(scope)) = target {
+        if let Some(Target::Scope(scope)) = resolution.first() {
             let locations = find_implementations(&db, scope.item());
             assert!(!locations.is_empty(), "Should find impl Display for Counter");
         } else {
-            panic!("Expected Target::Scope for trait name, got {:?}", target);
+            panic!("Expected Target::Scope for trait name, got {:?}", resolution);
         }
     }
 }

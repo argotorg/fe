@@ -49,7 +49,6 @@ pub async fn handle_goto_definition(
 
     let top_mod = map_file_to_mod(&backend.db, file);
     let resolution = goto_target_at_cursor(&backend.db, top_mod, cursor);
-    info!("goto resolution: {:?}", resolution);
 
     // Compute origin_selection_range: the span of the identifier being clicked.
     // For paths like `ops::returndatasize`, this is the specific segment at the cursor.
