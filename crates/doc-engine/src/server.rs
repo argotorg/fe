@@ -85,7 +85,8 @@ async fn doc_item_handler(
         let title = format!("{} - Fe Documentation", item.name);
         (StatusCode::OK, Html(render_page(&title, &path, &state.index)))
     } else {
-        (StatusCode::NOT_FOUND, Html(render_not_found(&path)))
+        // Render 404 using the same page template so WebSocket/auto-follow keeps working
+        (StatusCode::NOT_FOUND, Html(render_page_not_found(&path, &state.index)))
     }
 }
 
@@ -131,6 +132,11 @@ fn render_page(title: &str, current_path: &str, index: &DocIndex) -> String {
         render_index(index)
     };
 
+    render_page_template(title, &sidebar, &content)
+}
+
+/// Shared page template used by both normal pages and 404
+fn render_page_template(title: &str, sidebar: &str, content: &str) -> String {
     format!(
         r#"<!DOCTYPE html>
 <html lang="en">
@@ -145,6 +151,11 @@ fn render_page(title: &str, current_path: &str, index: &DocIndex) -> String {
         <nav class="doc-sidebar">
             <div class="sidebar-header">
                 <h1><a href="/">Fe Docs</a></h1>
+                <label class="auto-follow-toggle" title="Auto-follow cursor position in editor">
+                    <input type="checkbox" id="auto-follow" onchange="toggleAutoFollow(this.checked)">
+                    <span class="toggle-slider"></span>
+                    <span class="toggle-label">Follow cursor</span>
+                </label>
                 <input type="search" id="search" placeholder="Search..." onkeyup="doSearch(this.value)">
                 <div id="search-results"></div>
             </div>
@@ -156,128 +167,14 @@ fn render_page(title: &str, current_path: &str, index: &DocIndex) -> String {
             {content}
         </main>
     </div>
-    <script>
-        async function doSearch(q) {{
-            const results = document.getElementById('search-results');
-            if (!q || q.length < 2) {{
-                results.innerHTML = '';
-                return;
-            }}
-            const resp = await fetch('/api/search?q=' + encodeURIComponent(q));
-            const items = await resp.json();
-            results.innerHTML = items.slice(0, 10).map(item =>
-                `<a href="/doc/${{item.path}}" class="search-result">
-                    <span class="kind">${{item.kind}}</span>
-                    <span class="name">${{item.name}}</span>
-                </a>`
-            ).join('');
-        }}
-
-        // Live reload via WebSocket (only works when served by LSP)
-        (function() {{
-            let wsConnected = false;
-            let retryCount = 0;
-            const maxRetries = 3;
-
-            function setupLiveReload() {{
-                const wsUrl = 'ws://' + window.location.host + '/ws';
-                const ws = new WebSocket(wsUrl);
-
-                ws.onopen = () => {{
-                    wsConnected = true;
-                    retryCount = 0;
-                    console.log('Live reload connected');
-                }};
-
-                ws.onmessage = async (event) => {{
-                    let msg;
-                    try {{
-                        msg = JSON.parse(event.data);
-                    }} catch (e) {{
-                        // Legacy string format
-                        msg = {{ type: event.data === 'reload' ? 'update' : event.data }};
-                    }}
-
-                    console.log('WebSocket message:', msg);
-                    const currentPath = window.location.pathname.replace('/doc/', '');
-
-                    // Handle navigate messages - conditional or direct navigation
-                    if (msg.type === 'navigate' && msg.path) {{
-                        // If if_on_path is set, only navigate if we're on that page (rename redirect)
-                        if (msg.if_on_path) {{
-                            if (currentPath === msg.if_on_path) {{
-                                console.log('Redirect:', msg.if_on_path, '->', msg.path);
-                                window.location.href = '/doc/' + msg.path;
-                                return;
-                            }}
-                            // Not on the matching page, just refresh content
-                        }} else {{
-                            // Direct navigation (e.g., auto-follow cursor mode)
-                            console.log('Navigate to:', msg.path);
-                            window.location.href = '/doc/' + msg.path;
-                            return;
-                        }}
-                    }}
-
-                    // Handle update messages - refresh content in place
-                    if (msg.type === 'update' || msg.type === 'navigate') {{
-                        console.log('Docs updated, reloading content...');
-
-                        // Small delay to ensure server index is updated
-                        await new Promise(r => setTimeout(r, 100));
-                        try {{
-                            const resp = await fetch(window.location.href);
-
-                            // If current path no longer exists (renamed/deleted), go home
-                            if (resp.status === 404) {{
-                                console.log('Item no longer exists, going home');
-                                window.location.href = '/';
-                                return;
-                            }}
-
-                            const html = await resp.text();
-                            const parser = new DOMParser();
-                            const doc = parser.parseFromString(html, 'text/html');
-
-                            const newMain = doc.querySelector('.doc-content');
-                            const main = document.querySelector('.doc-content');
-                            if (newMain && main) main.innerHTML = newMain.innerHTML;
-
-                            const newSidebar = doc.querySelector('.sidebar-nav');
-                            const sidebar = document.querySelector('.sidebar-nav');
-                            if (newSidebar && sidebar) sidebar.innerHTML = newSidebar.innerHTML;
-
-                            console.log('Content updated!');
-                        }} catch (e) {{
-                            console.log('Failed to reload content:', e);
-                        }}
-                    }}
-                }};
-
-                ws.onclose = () => {{
-                    if (wsConnected) {{
-                        // Was connected before, reconnect
-                        console.log('Live reload disconnected, reconnecting...');
-                        setTimeout(setupLiveReload, 2000);
-                    }} else if (retryCount < maxRetries) {{
-                        // Never connected, retry a few times
-                        retryCount++;
-                        setTimeout(setupLiveReload, 1000);
-                    }}
-                    // After max retries without connecting, stop (CLI mode)
-                }};
-
-                ws.onerror = () => ws.close();
-            }}
-            setupLiveReload();
-        }})();
-    </script>
+    {script}
 </body>
 </html>"#,
         title = title,
         css = CSS,
         sidebar = sidebar,
         content = content,
+        script = SCRIPT,
     )
 }
 
@@ -479,6 +376,54 @@ body {
     text-decoration: none;
 }
 
+.auto-follow-toggle {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    margin-bottom: 0.75rem;
+    cursor: pointer;
+    font-size: 0.8rem;
+    color: var(--text-muted);
+}
+
+.auto-follow-toggle input {
+    display: none;
+}
+
+.toggle-slider {
+    position: relative;
+    width: 36px;
+    height: 20px;
+    background: var(--border);
+    border-radius: 10px;
+    transition: background 0.2s;
+}
+
+.toggle-slider::after {
+    content: '';
+    position: absolute;
+    top: 2px;
+    left: 2px;
+    width: 16px;
+    height: 16px;
+    background: var(--text-muted);
+    border-radius: 50%;
+    transition: transform 0.2s, background 0.2s;
+}
+
+.auto-follow-toggle input:checked + .toggle-slider {
+    background: var(--accent);
+}
+
+.auto-follow-toggle input:checked + .toggle-slider::after {
+    transform: translateX(16px);
+    background: white;
+}
+
+.toggle-label {
+    user-select: none;
+}
+
 #search {
     width: 100%;
     padding: 0.5rem;
@@ -660,29 +605,122 @@ h2 {
     color: var(--text-muted);
     font-size: 0.875rem;
 }
+
+.not-found {
+    text-align: center;
+    padding: 4rem 2rem;
+}
+
+.not-found h1 {
+    font-size: 2rem;
+    margin-bottom: 1rem;
+    color: var(--text);
+}
+
+.not-found p {
+    color: var(--text-muted);
+    margin-bottom: 0.5rem;
+}
+
+.not-found code {
+    background: var(--code-bg);
+    padding: 0.25rem 0.5rem;
+    border-radius: 4px;
+    font-family: "JetBrains Mono", "Fira Code", monospace;
+}
+
+.not-found-hint {
+    font-size: 0.875rem;
+    font-style: italic;
+}
 "#;
 
-/// Render a 404 page
-fn render_not_found(path: &str) -> String {
-    format!(
-        r#"<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Not Found - Fe Documentation</title>
-    <link rel="stylesheet" href="/assets/docs.css">
-</head>
-<body>
-    <div class="doc-not-found">
-        <h1>Item Not Found</h1>
-        <p>The documentation item "{path}" could not be found.</p>
-        <a href="/">Return to documentation index</a>
-    </div>
-</body>
-</html>"#,
-        path = path,
-    )
+const SCRIPT: &str = r#"<script>
+    // Auto-follow toggle
+    function toggleAutoFollow(checked) {
+        localStorage.setItem('fe-docs-auto-follow', checked);
+    }
+
+    // Restore auto-follow state on page load
+    document.addEventListener('DOMContentLoaded', function() {
+        const autoFollow = document.getElementById('auto-follow');
+        if (autoFollow) {
+            const saved = localStorage.getItem('fe-docs-auto-follow');
+            autoFollow.checked = saved === 'true';
+        }
+    });
+
+    // Search functionality
+    let searchTimeout;
+    function doSearch(query) {
+        clearTimeout(searchTimeout);
+        const results = document.getElementById('search-results');
+        if (!query) {
+            results.innerHTML = '';
+            return;
+        }
+        searchTimeout = setTimeout(async () => {
+            const resp = await fetch('/api/search?q=' + encodeURIComponent(query));
+            const items = await resp.json();
+            results.innerHTML = items.map(item =>
+                `<a class="search-result" href="/doc/${item.path}">
+                    <span class="kind-badge ${item.kind}">${item.kind}</span>
+                    ${item.name}
+                </a>`
+            ).join('');
+        }, 150);
+    }
+
+    // WebSocket live reload
+    (function() {
+        const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+        const ws = new WebSocket(wsProtocol + '//' + window.location.host + '/ws');
+
+        ws.onmessage = function(event) {
+            try {
+                const msg = JSON.parse(event.data);
+                if (msg.type === 'reload') {
+                    window.location.reload();
+                } else if (msg.type === 'navigate') {
+                    const autoFollow = document.getElementById('auto-follow');
+                    if (autoFollow && autoFollow.checked) {
+                        // Check if_on_path constraint (for redirects during rename)
+                        if (msg.if_on_path) {
+                            const currentPath = window.location.pathname.replace('/doc/', '');
+                            if (currentPath !== msg.if_on_path) {
+                                return; // Don't navigate if we're not on the expected page
+                            }
+                        }
+                        window.location.href = '/doc/' + msg.path;
+                    }
+                }
+            } catch (e) {
+                console.error('WebSocket message error:', e);
+            }
+        };
+
+        ws.onclose = function() {
+            // Attempt to reconnect after 2 seconds
+            setTimeout(function() {
+                window.location.reload();
+            }, 2000);
+        };
+    })();
+</script>"#;
+
+/// Render a 404 page using the same template as normal pages (keeps WebSocket/auto-follow working)
+fn render_page_not_found(path: &str, index: &DocIndex) -> String {
+    let sidebar = render_sidebar(index, "");
+    let content = format!(
+        r#"<div class="not-found">
+            <h1>Item Not Found</h1>
+            <p>The documentation item <code>{}</code> could not be found.</p>
+            <p class="not-found-hint">It may have been renamed or removed.</p>
+        </div>"#,
+        html_escape(path)
+    );
+
+    render_page_template("Not Found - Fe Documentation", &sidebar, &content)
 }
 
 /// Configuration for the documentation server
@@ -730,4 +768,9 @@ pub fn render_page_for_lsp(title: &str, current_path: &str, index: &DocIndex) ->
 /// Public function for LSP integration - renders an item page
 pub fn render_item_for_lsp(item: &DocItem) -> String {
     render_item(item)
+}
+
+/// Public function for LSP integration - renders a 404 page
+pub fn render_page_not_found_for_lsp(path: &str, index: &DocIndex) -> String {
+    render_page_not_found(path, index)
 }

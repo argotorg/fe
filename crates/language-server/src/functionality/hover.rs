@@ -224,7 +224,7 @@ pub fn hover_helper(
     db: &DriverDataBase,
     file: File,
     params: async_lsp::lsp_types::HoverParams,
-) -> Result<Option<Hover>, Error> {
+) -> Result<HoverResult, Error> {
     info!("handling hover");
     let file_text = file.text(db);
 
@@ -234,6 +234,9 @@ pub fn hover_helper(
     );
 
     let top_mod = map_file_to_mod(db, file);
+
+    // Track doc path for auto-follow
+    let mut doc_path: Option<String> = None;
 
     // Get the reference at cursor and resolve it
     let Some(r) = top_mod.reference_at(db, cursor) else {
@@ -288,7 +291,16 @@ pub fn hover_helper(
         info
     };
 
-    let result = async_lsp::lsp_types::Hover {
+    // If doc_path wasn't captured (e.g., hovering on definition, not reference),
+    // try target_at directly which works for both definitions and references
+    if doc_path.is_none() {
+        let resolution = top_mod.target_at(db, cursor);
+        if let Some(Target::Scope(scope)) = resolution.first() {
+            doc_path = scope.item().scope().pretty_path(db);
+        }
+    }
+
+    let hover = Some(async_lsp::lsp_types::Hover {
         contents: async_lsp::lsp_types::HoverContents::Markup(
             async_lsp::lsp_types::MarkupContent {
                 kind: async_lsp::lsp_types::MarkupKind::Markdown,
