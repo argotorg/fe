@@ -28,7 +28,6 @@ tokio = { version = "1.43.0", features = ["full", "io-std", "tracing", "net"] }
 tower = "0.5.2"
 tracing.workspace = true
 tracing-subscriber.workspace = true
-tracing-tree.workspace = true
 url = "2.5.4"
 
 common.workspace = true

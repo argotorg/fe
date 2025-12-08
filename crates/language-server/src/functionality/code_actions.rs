@@ -1,11 +1,12 @@
 use async_lsp::ResponseError;
 use async_lsp::lsp_types::{
     CodeAction, CodeActionKind, CodeActionOrCommand, CodeActionParams, CodeActionResponse,
-    Position, Range, TextEdit, WorkspaceEdit,
+    Command, Position, Range, TextEdit, WorkspaceEdit,
 };
 use common::InputDb;
 use driver::DriverDataBase;
 use hir::{
+    core::semantic::reference::Target,
     hir_def::{ItemKind, TopLevelMod},
     lower::map_file_to_mod,
     span::LazySpan,
@@ -57,15 +58,54 @@ pub async fn handle_code_action(
         &mut actions,
     );
 
-    if actions.is_empty() {
-        Ok(None)
+    // Add "Open Documentation" action - try to get the item at cursor
+    let item_path = get_item_path_at_cursor(&backend.db, top_mod, start);
+
+    let (title, args) = if let Some(path) = item_path {
+        (
+            format!("Open Documentation for `{}`", path),
+            Some(vec![serde_json::json!(path)]),
+        )
     } else {
-        // Convert CodeAction to CodeActionOrCommand
-        let response: Vec<CodeActionOrCommand> = actions
-            .into_iter()
-            .map(CodeActionOrCommand::CodeAction)
-            .collect();
-        Ok(Some(response))
+        ("Open Documentation".to_string(), None)
+    };
+
+    actions.push(CodeAction {
+        title: title.clone(),
+        kind: Some(CodeActionKind::SOURCE),
+        diagnostics: None,
+        edit: None,
+        command: Some(Command {
+            title,
+            command: "fe.openDocs".to_string(),
+            arguments: args,
+        }),
+        is_preferred: None,
+        disabled: None,
+        data: None,
+    });
+
+    // Convert CodeAction to CodeActionOrCommand
+    let response: Vec<CodeActionOrCommand> = actions
+        .into_iter()
+        .map(CodeActionOrCommand::CodeAction)
+        .collect();
+    Ok(Some(response))
+}
+
+/// Get the path of the item at the cursor position (works for both definitions and references).
+fn get_item_path_at_cursor<'db>(
+    db: &'db DriverDataBase,
+    top_mod: TopLevelMod<'db>,
+    cursor: parser::TextSize,
+) -> Option<String> {
+    // Use target_at directly - works for both definitions and references
+    let resolution = top_mod.target_at(db, cursor);
+    let target = resolution.first()?;
+
+    match target {
+        Target::Scope(scope) => scope.item().scope().pretty_path(db),
+        Target::Local { .. } => None, // Local variables don't have docs
     }
 }
 

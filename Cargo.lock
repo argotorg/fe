@@ -2101,7 +2101,6 @@ dependencies = [
  "tower-http",
  "tracing",
  "tracing-subscriber 0.3.20",
- "tracing-tree",
  "url",
 ]
 
