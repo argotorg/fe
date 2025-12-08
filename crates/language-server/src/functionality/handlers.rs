@@ -58,6 +58,38 @@ pub enum ChangeKind {
     Delete,
 }
 
+/// Event to navigate the doc browser to a specific path.
+/// Used for: renames, go-to-definition, newly created items, etc.
+#[derive(Debug, Clone)]
+pub struct DocNavigate {
+    /// Target path to navigate to (e.g., "mymod::MyStruct")
+    pub path: String,
+    /// Optional: if set, only redirect if browser is currently on this path
+    pub if_on_path: Option<String>,
+}
+
+impl DocNavigate {
+    /// Navigate unconditionally to a path
+    pub fn to(path: impl Into<String>) -> Self {
+        Self { path: path.into(), if_on_path: None }
+    }
+
+    /// Navigate only if the browser is currently viewing old_path (for renames)
+    pub fn redirect(old_path: impl Into<String>, new_path: impl Into<String>) -> Self {
+        Self { path: new_path.into(), if_on_path: Some(old_path.into()) }
+    }
+}
+
+impl std::fmt::Display for DocNavigate {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if let Some(ref from) = self.if_on_path {
+            write!(f, "DocNavigate({} -> {})", from, self.path)
+        } else {
+            write!(f, "DocNavigate({})", self.path)
+        }
+    }
+}
+
 // Implementation moved to backend/mod.rs
 
 async fn discover_and_load_ingots(
@@ -664,6 +696,26 @@ fn map_related_info_uris(backend: &Backend, diagnostics: &mut [async_lsp::lsp_ty
             info.location.uri = backend.map_internal_uri_to_client(info.location.uri.clone());
         }
     }
+}
+
+/// Handle doc navigation events - notify the browser to navigate
+pub async fn handle_doc_navigate(
+    backend: &mut Backend,
+    event: DocNavigate,
+) -> Result<(), ResponseError> {
+    info!("Doc navigate: {}", event);
+
+    // Notify the doc server to send navigation message to browser
+    if let Some(ref doc_server) = backend.doc_server {
+        doc_server.notify_navigate(&event.path, event.if_on_path.as_deref());
+    }
+
+    // If this was a rename (conditional redirect), also update the doc index
+    if event.if_on_path.is_some() {
+        update_docs(backend).await;
+    }
+
+    Ok(())
 }
 
 pub async fn handle_hover_request(

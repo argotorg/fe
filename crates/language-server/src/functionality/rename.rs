@@ -15,6 +15,7 @@ use crate::{
 };
 
 use super::goto::Cursor;
+use super::handlers::DocNavigate;
 
 /// Result from the rename computation worker.
 enum RenameOutcome {

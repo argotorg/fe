@@ -35,7 +35,6 @@ tokio = { version = "1.43.0", default-features = false, features = ["rt-multi-th
 tower = "0.5.2"
 tracing.workspace = true
 tracing-subscriber.workspace = true
-tracing-tree.workspace = true
 url = "2.5.4"
 
 codegen.workspace = true

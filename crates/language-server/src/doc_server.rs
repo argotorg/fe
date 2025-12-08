@@ -53,13 +53,26 @@ impl LspServerInfo {
     }
 }
 
+/// Message sent to WebSocket clients
+#[derive(Debug, Clone, Serialize)]
+pub struct DocMessage {
+    #[serde(rename = "type")]
+    pub msg_type: String,
+    /// Target path for navigation
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
+    /// Only navigate if currently on this path (for renames)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub if_on_path: Option<String>,
+}
+
 /// State for the documentation server running alongside LSP
 pub struct DocServerHandle {
     pub port: u16,
     pub url: String,
     index: Arc<RwLock<DocIndex>>,
     /// Broadcast channel to notify connected clients of updates
-    update_tx: broadcast::Sender<()>,
+    update_tx: broadcast::Sender<String>,
 }
 
 impl DocServerHandle {
@@ -73,8 +86,8 @@ impl DocServerHandle {
         let index = Arc::new(RwLock::new(DocIndex::default()));
         let index_for_server = index.clone();
 
-        // Create broadcast channel for live updates
-        let (update_tx, _) = broadcast::channel::<()>(16);
+        // Create broadcast channel for live updates (now sends JSON strings)
+        let (update_tx, _) = broadcast::channel::<String>(16);
         let update_tx_for_server = update_tx.clone();
 
         // Start the server in a background task
@@ -102,15 +115,42 @@ impl DocServerHandle {
         *index = new_index;
         info!("Updated documentation index with {} items", index.items.len());
 
-        // Notify all connected WebSocket clients
-        let _ = self.update_tx.send(());
+        // Send update message to WebSocket clients
+        let msg = DocMessage {
+            msg_type: "update".to_string(),
+            path: None,
+            if_on_path: None,
+        };
+        let _ = self.update_tx.send(serde_json::to_string(&msg).unwrap_or_default());
+    }
+
+    /// Notify browser to navigate to a path
+    /// If `if_on_path` is Some, only navigate if browser is currently on that path (for renames)
+    pub fn notify_navigate(&self, path: &str, if_on_path: Option<&str>) {
+        if let Some(from) = if_on_path {
+            info!("Notifying redirect: {} -> {}", from, path);
+        } else {
+            info!("Notifying navigate to: {}", path);
+        }
+        let msg = DocMessage {
+            msg_type: "navigate".to_string(),
+            path: Some(path.to_string()),
+            if_on_path: if_on_path.map(|s| s.to_string()),
+        };
+        let _ = self.update_tx.send(serde_json::to_string(&msg).unwrap_or_default());
+    }
+
+    /// Get the broadcast sender for WebSocket messages (for stream piping)
+    #[allow(dead_code)]
+    pub fn ws_broadcast_tx(&self) -> broadcast::Sender<String> {
+        self.update_tx.clone()
     }
 }
 
 /// Wrapper for dynamic doc index updates
 struct DocServerStateWrapper {
     index: Arc<RwLock<DocIndex>>,
-    update_tx: broadcast::Sender<()>,
+    update_tx: broadcast::Sender<String>,
 }
 
 /// Create a router that reads from a dynamic index
@@ -190,9 +230,9 @@ fn doc_router_dynamic(state: Arc<DocServerStateWrapper>) -> axum::Router {
                 // Wait for update notification
                 result = rx.recv() => {
                     match result {
-                        Ok(()) => {
-                            // Send "reload" message to client
-                            if socket.send(Message::Text("reload".into())).await.is_err() {
+                        Ok(msg) => {
+                            // Send the JSON message to client
+                            if socket.send(Message::Text(msg.into())).await.is_err() {
                                 break; // Client disconnected
                             }
                         }

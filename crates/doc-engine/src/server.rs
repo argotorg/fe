@@ -190,46 +190,47 @@ fn render_page(title: &str, current_path: &str, index: &DocIndex) -> String {
                 }};
 
                 ws.onmessage = async (event) => {{
-                    if (event.data === 'reload') {{
+                    let msg;
+                    try {{
+                        msg = JSON.parse(event.data);
+                    }} catch (e) {{
+                        // Legacy string format
+                        msg = {{ type: event.data === 'reload' ? 'update' : event.data }};
+                    }}
+
+                    console.log('WebSocket message:', msg);
+                    const currentPath = window.location.pathname.replace('/doc/', '');
+
+                    // Handle navigate messages - conditional or direct navigation
+                    if (msg.type === 'navigate' && msg.path) {{
+                        // If if_on_path is set, only navigate if we're on that page (rename redirect)
+                        if (msg.if_on_path) {{
+                            if (currentPath === msg.if_on_path) {{
+                                console.log('Redirect:', msg.if_on_path, '->', msg.path);
+                                window.location.href = '/doc/' + msg.path;
+                                return;
+                            }}
+                            // Not on the matching page, just refresh content
+                        }} else {{
+                            // Direct navigation (e.g., auto-follow cursor mode)
+                            console.log('Navigate to:', msg.path);
+                            window.location.href = '/doc/' + msg.path;
+                            return;
+                        }}
+                    }}
+
+                    // Handle update messages - refresh content in place
+                    if (msg.type === 'update' || msg.type === 'navigate') {{
                         console.log('Docs updated, reloading content...');
+
                         // Small delay to ensure server index is updated
                         await new Promise(r => setTimeout(r, 100));
                         try {{
                             const resp = await fetch(window.location.href);
-                            console.log('Fetch status:', resp.status);
 
-                            // If current path no longer exists (renamed/deleted), try to find renamed item
+                            // If current path no longer exists (renamed/deleted), go home
                             if (resp.status === 404) {{
-                                console.log('Item no longer exists, looking for renamed item...');
-                                const currentPath = window.location.pathname.replace('/doc/', '');
-                                const parts = currentPath.split('::');
-                                const oldName = parts[parts.length - 1];
-                                const parentPath = parts.slice(0, -1).join('::');
-
-                                // Get the old item's kind from the page before it 404'd
-                                const oldKindEl = document.querySelector('.kind-badge');
-                                const oldKind = oldKindEl ? oldKindEl.textContent.trim() : null;
-                                console.log('Looking for', oldKind, 'in module', parentPath);
-
-                                // Fetch search results to find items in same module with same kind
-                                const searchResp = await fetch('/api/search?q=' + encodeURIComponent(parentPath || oldName));
-                                if (searchResp.ok) {{
-                                    const results = await searchResp.json();
-                                    // Look for item in same parent module with same kind
-                                    const renamed = results.find(r => {{
-                                        const rParts = r.path.split('::');
-                                        const rParent = rParts.slice(0, -1).join('::');
-                                        const sameModule = rParent === parentPath;
-                                        const sameKind = !oldKind || r.kind === oldKind.toLowerCase();
-                                        return sameModule && sameKind && r.path !== currentPath;
-                                    }});
-                                    if (renamed) {{
-                                        console.log('Found renamed item:', renamed.path);
-                                        window.location.href = '/doc/' + renamed.path;
-                                        return;
-                                    }}
-                                }}
-                                console.log('No renamed item found, going home');
+                                console.log('Item no longer exists, going home');
                                 window.location.href = '/';
                                 return;
                             }}
