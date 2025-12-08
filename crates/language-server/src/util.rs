@@ -89,7 +89,9 @@ pub fn to_lsp_location_from_scope(
     }
     if let ScopeId::Item(ItemKind::ImplTrait(impl_trait)) = scope {
         let lazy_span: DynLazySpan = impl_trait.span().into();
-        let span = lazy_span.resolve(db).ok_or("Failed to resolve impl trait span")?;
+        let span = lazy_span
+            .resolve(db)
+            .ok_or("Failed to resolve impl trait span")?;
         return to_lsp_location_from_span(db, span);
     }
 

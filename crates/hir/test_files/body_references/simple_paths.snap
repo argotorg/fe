@@ -7,7 +7,7 @@ note:
   ┌─ simple_paths.fe:4:9
   │
 4 │     let x = MyStruct {}
-  │         ^ x -> unresolved
+  │         ^ x -> local
 
 note: 
   ┌─ simple_paths.fe:4:13

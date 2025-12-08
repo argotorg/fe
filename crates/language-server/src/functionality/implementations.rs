@@ -35,11 +35,12 @@ pub async fn handle_goto_implementation(
     let top_mod = map_file_to_mod(&backend.db, file);
 
     // Get the target at cursor
-    let Some(target) = top_mod.target_at(&backend.db, cursor) else {
+    let resolution = top_mod.target_at(&backend.db, cursor);
+    let Some(target) = resolution.first() else {
         return Ok(None);
     };
 
-    let locations = match &target {
+    let locations = match target {
         Target::Scope(scope) => find_implementations(&backend.db, scope.item()),
         Target::Local { .. } => {
             // Local variables don't have implementations
@@ -146,13 +147,13 @@ impl Display for Counter {
         let cursor = parser::TextSize::from(7); // After "trait D"
 
         // Get the target at cursor
-        let target = top_mod.target_at(&db, cursor);
+        let resolution = top_mod.target_at(&db, cursor);
 
-        if let Some(Target::Scope(scope)) = target {
+        if let Some(Target::Scope(scope)) = resolution.first() {
             let locations = find_implementations(&db, scope.item());
             assert!(!locations.is_empty(), "Should find impl Display for Counter");
         } else {
-            panic!("Expected Target::Scope for trait name, got {:?}", target);
+            panic!("Expected Target::Scope for trait name, got {:?}", resolution);
         }
     }
 }

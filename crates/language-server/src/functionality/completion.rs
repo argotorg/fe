@@ -14,16 +14,12 @@ use hir::{
     lower::map_file_to_mod,
     visitor::prelude::*,
 };
-use tracing::info;
-
 use crate::{backend::Backend, util::to_offset_from_position};
 
 pub async fn handle_completion(
     backend: &Backend,
     params: CompletionParams,
 ) -> Result<Option<CompletionResponse>, ResponseError> {
-    info!("handling completion request");
-
     let file_path_str = params.text_document_position.text_document.uri.path();
     let url = url::Url::from_file_path(file_path_str).map_err(|()| {
         ResponseError::new(
@@ -83,11 +79,6 @@ pub async fn handle_completion(
         .unwrap_or(false)
         || trigger_is_colon;
 
-    info!(
-        "completion at {:?}: is_member_access={}, is_path_completion={}",
-        cursor, is_member_access, is_path_completion
-    );
-
     if is_member_access {
         // Member access completion: show fields and methods for the receiver type
         collect_member_completions(&backend.db, top_mod, cursor, &mut items);
@@ -105,11 +96,6 @@ pub async fn handle_completion(
         }
     }
 
-    info!(
-        "completion returning {} items, is_member_access={}",
-        items.len(),
-        is_member_access
-    );
     if items.is_empty() {
         Ok(None)
     } else {
@@ -347,19 +333,12 @@ fn collect_path_completions<'db>(
         .unwrap_or(0);
 
     let full_path = before_colons[path_start..].trim();
-    info!(
-        "path completion: looking for items in full path '{}'",
-        full_path
-    );
-
     if full_path.is_empty() {
         return;
     }
 
     // Split the path into segments
     let segments: Vec<&str> = full_path.split("::").filter(|s| !s.is_empty()).collect();
-    info!("path segments: {:?}", segments);
-
     if segments.is_empty() {
         return;
     }

@@ -1,6 +1,5 @@
 ---
 source: crates/hir/tests/body_references.rs
-assertion_line: 80
 expression: res
 input_file: test_files/body_references/field_method.fe
 ---
@@ -74,7 +73,7 @@ note:
    ┌─ field_method.fe:17:9
    │
 17 │     let p = Point::new(x: 3, y: 4)
-   │         ^ p -> unresolved
+   │         ^ p -> local
 
 note: 
    ┌─ field_method.fe:17:13
@@ -122,7 +121,7 @@ note:
    ┌─ field_method.fe:23:9
    │
 23 │     let p = Point::new(x: 5, y: 12)
-   │         ^ p -> unresolved
+   │         ^ p -> local
 
 note: 
    ┌─ field_method.fe:23:13
