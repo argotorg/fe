@@ -54,6 +54,11 @@ pub(crate) fn server_capabilities() -> ServerCapabilities {
         code_action_provider: Some(async_lsp::lsp_types::CodeActionProviderCapability::Simple(
             true,
         )),
+        // execute command (for fe.openDocs)
+        execute_command_provider: Some(async_lsp::lsp_types::ExecuteCommandOptions {
+            commands: vec!["fe.openDocs".to_string()],
+            work_done_progress_options: Default::default(),
+        }),
         // support for workspace add/remove changes
         workspace: Some(async_lsp::lsp_types::WorkspaceServerCapabilities {
             workspace_folders: Some(async_lsp::lsp_types::WorkspaceFoldersServerCapabilities {

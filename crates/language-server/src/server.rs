@@ -11,9 +11,10 @@ use async_lsp::lsp_types::notification::{
     Initialized,
 };
 use async_lsp::lsp_types::request::{
-    CodeActionRequest, Completion, DocumentHighlightRequest, DocumentSymbolRequest, GotoDefinition,
-    GotoImplementation, GotoTypeDefinition, HoverRequest, InlayHintRequest, References, Rename,
-    SemanticTokensFullRequest, Shutdown, SignatureHelpRequest, WorkspaceSymbolRequest,
+    CodeActionRequest, Completion, DocumentHighlightRequest, DocumentSymbolRequest,
+    ExecuteCommand, GotoDefinition, GotoImplementation, GotoTypeDefinition, HoverRequest,
+    InlayHintRequest, References, Rename, SemanticTokensFullRequest, Shutdown,
+    SignatureHelpRequest, WorkspaceSymbolRequest,
 };
 use async_std::stream::StreamExt;
 use futures_batch::ChunksTimeoutStreamExt;
@@ -72,7 +73,8 @@ pub(crate) fn setup(
         .handle_notification::<DidChangeWatchedFiles>(handlers::handle_did_change_watched_files)
         .handle_notification::<DidSaveTextDocument>(handlers::handle_did_save_text_document)
         .handle_notification::<notification::Exit>(handlers::handle_exit)
-        .handle_request::<Shutdown>(handlers::handle_shutdown);
+        .handle_request::<Shutdown>(handlers::handle_shutdown)
+        .handle_request_mut::<ExecuteCommand>(handlers::handle_execute_command);
 
     let mut streaming_router = Router::new(());
     setup_streams(client.clone(), &mut streaming_router);

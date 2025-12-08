@@ -192,8 +192,48 @@ fn render_page(title: &str, current_path: &str, index: &DocIndex) -> String {
                 ws.onmessage = async (event) => {{
                     if (event.data === 'reload') {{
                         console.log('Docs updated, reloading content...');
+                        // Small delay to ensure server index is updated
+                        await new Promise(r => setTimeout(r, 100));
                         try {{
                             const resp = await fetch(window.location.href);
+                            console.log('Fetch status:', resp.status);
+
+                            // If current path no longer exists (renamed/deleted), try to find renamed item
+                            if (resp.status === 404) {{
+                                console.log('Item no longer exists, looking for renamed item...');
+                                const currentPath = window.location.pathname.replace('/doc/', '');
+                                const parts = currentPath.split('::');
+                                const oldName = parts[parts.length - 1];
+                                const parentPath = parts.slice(0, -1).join('::');
+
+                                // Get the old item's kind from the page before it 404'd
+                                const oldKindEl = document.querySelector('.kind-badge');
+                                const oldKind = oldKindEl ? oldKindEl.textContent.trim() : null;
+                                console.log('Looking for', oldKind, 'in module', parentPath);
+
+                                // Fetch search results to find items in same module with same kind
+                                const searchResp = await fetch('/api/search?q=' + encodeURIComponent(parentPath || oldName));
+                                if (searchResp.ok) {{
+                                    const results = await searchResp.json();
+                                    // Look for item in same parent module with same kind
+                                    const renamed = results.find(r => {{
+                                        const rParts = r.path.split('::');
+                                        const rParent = rParts.slice(0, -1).join('::');
+                                        const sameModule = rParent === parentPath;
+                                        const sameKind = !oldKind || r.kind === oldKind.toLowerCase();
+                                        return sameModule && sameKind && r.path !== currentPath;
+                                    }});
+                                    if (renamed) {{
+                                        console.log('Found renamed item:', renamed.path);
+                                        window.location.href = '/doc/' + renamed.path;
+                                        return;
+                                    }}
+                                }}
+                                console.log('No renamed item found, going home');
+                                window.location.href = '/';
+                                return;
+                            }}
+
                             const html = await resp.text();
                             const parser = new DOMParser();
                             const doc = parser.parseFromString(html, 'text/html');
@@ -276,19 +316,43 @@ fn render_sidebar(index: &DocIndex, current_path: &str) -> String {
     html
 }
 
+/// Semantic ordering for item kinds (lower = appears first)
+fn kind_order(kind: DocItemKind) -> u8 {
+    match kind {
+        DocItemKind::Module => 0,
+        DocItemKind::Trait => 1,
+        DocItemKind::Contract => 2,
+        DocItemKind::Struct => 3,
+        DocItemKind::Enum => 4,
+        DocItemKind::TypeAlias => 5,
+        DocItemKind::Function => 6,
+        DocItemKind::Const => 7,
+        DocItemKind::Impl => 8,
+        DocItemKind::ImplTrait => 9,
+    }
+}
+
 fn render_index(index: &DocIndex) -> String {
     let mut html = String::from("<h1>Fe Documentation</h1>");
 
     // Group items by kind
-    let mut by_kind: std::collections::HashMap<&str, Vec<&DocItem>> = std::collections::HashMap::new();
+    let mut by_kind: std::collections::HashMap<DocItemKind, Vec<&DocItem>> = std::collections::HashMap::new();
     for item in &index.items {
         if !matches!(item.kind, DocItemKind::Module) {
-            by_kind.entry(item.kind.display_name()).or_default().push(item);
+            by_kind.entry(item.kind).or_default().push(item);
         }
     }
 
-    for (kind, items) in by_kind.iter() {
-        html.push_str(&format!("<h2>{kind}s</h2><ul class=\"item-list\">"));
+    // Sort kind groups by semantic order
+    let mut kinds: Vec<_> = by_kind.keys().cloned().collect();
+    kinds.sort_by_key(|k| kind_order(*k));
+
+    for kind in kinds {
+        let mut items: Vec<_> = by_kind.get(&kind).unwrap().iter().cloned().collect();
+        items.sort_by(|a, b| a.name.cmp(&b.name));
+
+        let kind_name = kind.display_name();
+        html.push_str(&format!("<h2>{kind_name}s</h2><ul class=\"item-list\">"));
         for item in items {
             let summary = item.docs.as_ref()
                 .map(|d| format!(" - {}", &d.summary))

@@ -771,7 +771,22 @@ impl<'db> TyChecker<'db> {
                         ExprProp::invalid(self.db)
                     }
                 }
-                PathRes::Mod(_) | PathRes::FuncParam(..) => todo!(),
+                PathRes::Mod(scope) => {
+                    let diag = BodyDiag::NotValue {
+                        primary: path_expr_span.clone().into(),
+                        given: Either::Left(scope.item()),
+                    };
+                    self.push_diag(diag);
+                    ExprProp::invalid(self.db)
+                }
+                PathRes::FuncParam(item, _) => {
+                    let diag = BodyDiag::NotValue {
+                        primary: path_expr_span.clone().into(),
+                        given: Either::Left(item),
+                    };
+                    self.push_diag(diag);
+                    ExprProp::invalid(self.db)
+                }
             },
         }
     }

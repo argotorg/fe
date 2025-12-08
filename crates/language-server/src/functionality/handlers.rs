@@ -5,7 +5,8 @@ use async_lsp::lsp_types::FileChangeType;
 use async_lsp::{
     ErrorCode, LanguageClient, ResponseError,
     lsp_types::{
-        Hover, HoverParams, InitializeParams, InitializeResult, InitializedParams, LogMessageParams,
+        ExecuteCommandParams, Hover, HoverParams, InitializeParams, InitializeResult,
+        InitializedParams, LogMessageParams,
     },
 };
 
@@ -474,7 +475,12 @@ async fn update_docs(backend: &mut Backend) {
         let root_mod = ingot.root_mod(&backend.db);
         let index = extractor.extract_module(root_mod);
         combined_index.items.extend(index.items);
+        combined_index.modules.extend(index.modules);
     }
+
+    // Sort for consistent ordering
+    combined_index.items.sort_by(|a, b| a.path.cmp(&b.path));
+    combined_index.modules.sort_by(|a, b| a.path.cmp(&b.path));
 
     // Update the doc server (use workers runtime for tokio async)
     if let Some(ref doc_server) = backend.doc_server {
@@ -521,4 +527,46 @@ pub async fn handle_shutdown(backend: &Backend, _message: ()) -> Result<(), Resp
     }
 
     Ok(())
+}
+
+pub async fn handle_execute_command(
+    backend: &mut Backend,
+    params: ExecuteCommandParams,
+) -> Result<Option<serde_json::Value>, ResponseError> {
+    info!("execute command: {:?}", params.command);
+
+    match params.command.as_str() {
+        "fe.openDocs" => {
+            // Start doc server if not running
+            if backend.doc_server.is_none() {
+                info!("Doc server not running, starting it...");
+                update_docs(backend).await;
+            }
+
+            if let Some(ref doc_server) = backend.doc_server {
+                let url = &doc_server.url;
+                info!("Opening docs at {}", url);
+
+                // Use open crate to open in default browser
+                if let Err(e) = open::that(url) {
+                    error!("Failed to open browser: {}", e);
+                    return Err(ResponseError::new(
+                        ErrorCode::INTERNAL_ERROR,
+                        format!("Failed to open browser: {}", e),
+                    ));
+                }
+
+                Ok(Some(serde_json::json!({ "opened": url })))
+            } else {
+                Err(ResponseError::new(
+                    ErrorCode::INTERNAL_ERROR,
+                    "Failed to start documentation server".to_string(),
+                ))
+            }
+        }
+        _ => Err(ResponseError::new(
+            ErrorCode::INVALID_PARAMS,
+            format!("Unknown command: {}", params.command),
+        )),
+    }
 }
