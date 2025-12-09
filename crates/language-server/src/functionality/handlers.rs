@@ -1,12 +1,12 @@
 use crate::backend::Backend;
-use crate::doc_server::DocServerHandle;
+use crate::doc_server::{DocServerHandle, GotoSourceRequest};
 
 use async_lsp::lsp_types::FileChangeType;
 use async_lsp::{
     ErrorCode, LanguageClient, ResponseError,
     lsp_types::{
         ExecuteCommandParams, Hover, HoverParams, InitializeParams, InitializeResult,
-        InitializedParams, LogMessageParams,
+        InitializedParams, LogMessageParams, Position, Range, ShowDocumentParams,
     },
 };
 
@@ -61,6 +61,16 @@ pub struct DocNavigate {
     pub path: String,
     /// Optional: if set, only redirect if browser is currently on this path
     pub if_on_path: Option<String>,
+}
+
+/// Custom LSP notification for cursor position updates.
+/// The extension sends this when the text cursor moves in an Fe file.
+/// Method: "fe/cursorPosition"
+pub enum CursorPositionNotification {}
+
+impl async_lsp::lsp_types::notification::Notification for CursorPositionNotification {
+    type Params = async_lsp::lsp_types::TextDocumentPositionParams;
+    const METHOD: &'static str = "fe/cursorPosition";
 }
 
 impl DocNavigate {
@@ -451,7 +461,8 @@ async fn update_docs(backend: &mut Backend) {
     if backend.doc_server.is_none() {
         info!("Starting doc server...");
         // Use the workers runtime since act_locally runs on a separate thread without tokio
-        let handle_result = backend.workers.block_on(DocServerHandle::start());
+        let client = backend.client.clone();
+        let handle_result = backend.workers.block_on(DocServerHandle::start(client));
         match handle_result {
             Ok(handle) => {
                 info!("Started documentation server at {}", handle.url);
@@ -540,6 +551,51 @@ pub async fn handle_doc_navigate(
     Ok(())
 }
 
+/// Handle goto source requests from the doc viewer.
+/// This tells the editor to navigate to the source location.
+pub async fn handle_goto_source(
+    backend: &Backend,
+    request: GotoSourceRequest,
+) -> Result<(), ResponseError> {
+    info!("Goto source: {}", request);
+
+    // Convert the file path to a URL
+    let file_url = Url::from_file_path(&request.file).map_err(|_| {
+        ResponseError::new(
+            ErrorCode::INVALID_PARAMS,
+            format!("Invalid file path: {}", request.file),
+        )
+    })?;
+
+    // LSP uses 0-based line/column, but source locations are typically 1-based
+    let line = request.line.saturating_sub(1);
+    let column = request.column.saturating_sub(1);
+    let position = Position::new(line, column);
+
+    let params = ShowDocumentParams {
+        uri: file_url,
+        external: None,
+        take_focus: Some(true),
+        selection: Some(Range::new(position, position)),
+    };
+
+    let mut client = backend.client.clone();
+    match client.show_document(params).await {
+        Ok(result) => {
+            if result.success {
+                info!("Successfully opened document in editor");
+            } else {
+                warn!("Editor reported failure opening document");
+            }
+        }
+        Err(e) => {
+            error!("Failed to open document: {:?}", e);
+        }
+    }
+
+    Ok(())
+}
+
 pub async fn handle_hover_request(
     backend: &Backend,
     message: HoverParams,
@@ -574,6 +630,40 @@ pub async fn handle_hover_request(
 
     info!("sending hover response: {:?}", result.hover);
     Ok(result.hover)
+}
+
+/// Handle cursor position notifications from the extension.
+/// This enables text cursor following for the documentation viewer.
+pub async fn handle_cursor_position(
+    backend: &Backend,
+    message: async_lsp::lsp_types::TextDocumentPositionParams,
+) -> Result<(), ResponseError> {
+    use hir::{core::semantic::reference::Target, lower::map_file_to_mod};
+    use crate::util::to_offset_from_position;
+
+    let path_str = message.text_document.uri.path();
+
+    let Ok(url) = url::Url::from_file_path(path_str) else {
+        return Ok(());
+    };
+    let Some(file) = backend.db.workspace().get(&backend.db, &url) else {
+        return Ok(());
+    };
+
+    let file_text = file.text(&backend.db);
+    let cursor = to_offset_from_position(message.position, file_text.as_str());
+    let top_mod = map_file_to_mod(&backend.db, file);
+
+    // Look up the symbol at cursor position
+    let resolution = top_mod.target_at(&backend.db, cursor);
+    if let Some(Target::Scope(scope)) = resolution.first() {
+        if let Some(doc_path) = scope.item().scope().pretty_path(&backend.db) {
+            // Emit navigation event (browser will ignore if auto-follow is disabled)
+            let _ = backend.client.clone().emit(DocNavigate::to(doc_path));
+        }
+    }
+
+    Ok(())
 }
 
 pub async fn handle_shutdown(backend: &Backend, _message: ()) -> Result<(), ResponseError> {

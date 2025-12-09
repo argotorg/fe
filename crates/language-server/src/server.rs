@@ -1,5 +1,6 @@
 use crate::fallback::WithFallbackService;
-use crate::functionality::handlers::{DocNavigate, FileChange, FilesNeedDiagnostics, NeedsDiagnostics};
+use crate::doc_server::GotoSourceRequest;
+use crate::functionality::handlers::{CursorPositionNotification, DocNavigate, FileChange, FilesNeedDiagnostics, NeedsDiagnostics};
 use crate::logging;
 use crate::lsp_actor::LspActor;
 use crate::lsp_actor::service::LspActorService;
@@ -52,6 +53,7 @@ pub(crate) fn setup(
         .handle_event_mut::<FileChange>(handlers::handle_file_change)
         .handle_event::<FilesNeedDiagnostics>(handlers::handle_files_need_diagnostics)
         .handle_event_mut::<DocNavigate>(handlers::handle_doc_navigate)
+        .handle_event::<GotoSourceRequest>(handlers::handle_goto_source)
         // doc server starts on initialization
         .handle_notification_mut::<Initialized>(handlers::initialized)
         .handle_request::<HoverRequest>(handlers::handle_hover_request)
@@ -71,6 +73,7 @@ pub(crate) fn setup(
         .handle_notification::<DidChangeTextDocument>(handlers::handle_did_change_text_document)
         .handle_notification::<DidChangeWatchedFiles>(handlers::handle_did_change_watched_files)
         .handle_notification::<DidSaveTextDocument>(handlers::handle_did_save_text_document)
+        .handle_notification::<CursorPositionNotification>(handlers::handle_cursor_position)
         .handle_notification::<notification::Exit>(handlers::handle_exit)
         .handle_request::<Shutdown>(handlers::handle_shutdown)
         .handle_request_mut::<ExecuteCommand>(handlers::handle_execute_command);

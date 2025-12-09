@@ -44,6 +44,9 @@ pub enum Command {
         /// Port for HTTP server (default: 8080)
         #[arg(long, default_value = "8080")]
         port: u16,
+        /// Use client-side rendering with WASM (experimental)
+        #[arg(long)]
+        csr: bool,
     },
     Tree {
         path: Utf8PathBuf,
@@ -77,8 +80,9 @@ pub fn run(opts: &Options) {
             json,
             serve,
             port,
+            csr,
         } => {
-            doc::generate_docs(path, output.as_ref(), *json, *serve, *port);
+            doc::generate_docs(path, output.as_ref(), *json, *serve, *port, *csr);
         }
         Command::Tree { path } => {
             tree::print_tree(path);

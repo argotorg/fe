@@ -9,7 +9,7 @@ use crate::model::{
     DocChild, DocChildKind, DocContent, DocIndex, DocItem, DocItemKind, DocModuleTree,
     DocVisibility,
 };
-use crate::render::markdown::render_markdown;
+use crate::markdown::render_markdown;
 
 /// Root documentation app component
 #[component]
@@ -85,10 +85,10 @@ pub fn DocSidebar(
 
     view! {
         <nav class="doc-sidebar">
-            <div class="doc-sidebar-header">
-                <h1 class="doc-logo">"Fe Documentation"</h1>
+            <div class="sidebar-header">
+                <h1><a href="/">"Fe Docs"</a></h1>
             </div>
-            <div class="doc-sidebar-content">
+            <div class="sidebar-nav">
                 {flattened
                     .into_iter()
                     .map(|entry| {

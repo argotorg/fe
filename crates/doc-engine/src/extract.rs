@@ -367,13 +367,31 @@ impl<'db> DocExtractor<'db> {
 
     fn get_source_location(&self, item: ItemKind<'db>) -> Option<DocSourceLoc> {
         let span = item.span().resolve(self.db)?;
-        let line: u32 = span.range.start().into();
-        let file_path = span.file.path(self.db).clone()?;
+        let byte_offset: usize = span.range.start().into();
+        let file_text = span.file.text(self.db);
+
+        // Get absolute file path from URL (not the relative path from file.path())
+        let file_url = span.file.url(self.db)?;
+        let file_path = file_url.to_file_path().ok()?;
+
+        // Convert byte offset to 1-based line number
+        let line = file_text[..byte_offset.min(file_text.len())]
+            .chars()
+            .filter(|&c| c == '\n')
+            .count() as u32
+            + 1;
+
+        // Calculate column (bytes from start of line)
+        let line_start = file_text[..byte_offset]
+            .rfind('\n')
+            .map(|pos| pos + 1)
+            .unwrap_or(0);
+        let column = (byte_offset - line_start) as u32;
 
         Some(DocSourceLoc {
-            file: file_path.to_string(),
+            file: file_path.to_string_lossy().to_string(),
             line,
-            column: 0,
+            column,
         })
     }
 

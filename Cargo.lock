@@ -1916,6 +1916,7 @@ dependencies = [
  "fe-codegen",
  "fe-common",
  "fe-doc-engine",
+ "fe-doc-viewer",
  "fe-driver",
  "fe-hir",
  "fe-mir",
@@ -1998,22 +1999,27 @@ dependencies = [
 name = "fe-doc-engine"
 version = "0.1.0"
 dependencies = [
- "axum",
  "camino",
  "fe-common",
+ "fe-doc-viewer",
  "fe-driver",
  "fe-hir",
  "fe-parser",
  "fe-test-utils",
- "futures-util",
- "leptos",
- "pulldown-cmark",
  "rustc-hash 2.1.1",
  "salsa",
+]
+
+[[package]]
+name = "fe-doc-viewer"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "leptos",
+ "pulldown-cmark",
  "serde",
  "serde_json",
  "tokio",
- "tokio-stream",
  "tower",
  "tower-http",
  "tracing",
@@ -2083,6 +2089,7 @@ dependencies = [
  "dir-test",
  "fe-common",
  "fe-doc-engine",
+ "fe-doc-viewer",
  "fe-driver",
  "fe-hir",
  "fe-parser",
@@ -2485,6 +2492,25 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "17e2ac29387b1aa07a1e448f7bb4f35b500787971e965b02842b900afa5c8f6f"
 
 [[package]]
+name = "h2"
+version = "0.4.12"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f3c0b69cfcb4e1b9f1bf2f53f95f766e4661169728ec61cd3fe5a0166f2d1386"
+dependencies = [
+ "atomic-waker",
+ "bytes",
+ "fnv",
+ "futures-core",
+ "futures-sink",
+ "http",
+ "indexmap 2.12.1",
+ "slab",
+ "tokio",
+ "tokio-util",
+ "tracing",
+]
+
+[[package]]
 name = "half"
 version = "2.7.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2641,11 +2667,13 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d35485b3dcbf7e044b8f28c73f04f13e7b509c2466fd10cb2a8a447e38f8a93a"
 dependencies = [
  "futures",
+ "js-sys",
  "once_cell",
  "or_poisoned",
  "pin-project-lite",
  "serde",
  "throw_error",
+ "wasm-bindgen",
 ]
 
 [[package]]
@@ -2658,6 +2686,7 @@ dependencies = [
  "bytes",
  "futures-channel",
  "futures-core",
+ "h2",
  "http",
  "http-body",
  "httparse",
@@ -2893,6 +2922,15 @@ name = "interpolator"
 version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "71dd52191aae121e8611f1e8dc3e324dd0dd1dee1e6dd91d10ee07a3cfb4d9d8"
+
+[[package]]
+name = "inventory"
+version = "0.3.21"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bc61209c082fbeb19919bee74b176221b27223e27b65d781eb91af24eb1fb46e"
+dependencies = [
+ "rustversion",
+]
 
 [[package]]
 name = "is-docker"
@@ -4971,6 +5009,7 @@ dependencies = [
  "futures",
  "gloo-net",
  "http",
+ "inventory",
  "js-sys",
  "once_cell",
  "pin-project-lite",
@@ -5499,17 +5538,6 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.111",
-]
-
-[[package]]
-name = "tokio-stream"
-version = "0.1.17"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "eca58d7bba4a75707817a2c44174253f9236b2d5fbd055602e9d5c07c139a047"
-dependencies = [
- "futures-core",
- "pin-project-lite",
- "tokio",
 ]
 
 [[package]]

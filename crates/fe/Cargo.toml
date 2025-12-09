@@ -16,7 +16,10 @@ hir.workspace = true
 mir.workspace = true
 cranelift-entity.workspace = true
 codegen = { path = "../codegen", package = "fe-codegen" }
-doc-engine = { path = "../doc-engine", package = "fe-doc-engine", features = ["ssr"] }
+# doc-engine for extraction only
+doc-engine = { path = "../doc-engine", package = "fe-doc-engine" }
+# doc-viewer for server and model
+doc-viewer = { path = "../doc-viewer", package = "fe-doc-viewer", features = ["ssr"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 tokio = { version = "1.43", features = ["full"] }

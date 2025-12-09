@@ -1,7 +1,8 @@
 use camino::Utf8PathBuf;
 use common::InputDb;
-use doc_engine::server::{serve, DocServerConfig};
-use doc_engine::{DocExtractor, DocIndex};
+use doc_engine::DocExtractor;
+use doc_viewer::model::DocIndex;
+use doc_viewer::server::{serve, DocServerConfig};
 use driver::DriverDataBase;
 use hir::hir_def::HirIngot;
 use serde::{Deserialize, Serialize};
@@ -37,6 +38,7 @@ pub fn generate_docs(
     json: bool,
     serve_docs: bool,
     port: u16,
+    csr_mode: bool,
 ) {
     // First, check if there's a running LSP with docs server
     if serve_docs {
@@ -89,9 +91,14 @@ pub fn generate_docs(
             port,
             host: "127.0.0.1".to_string(),
             assets_path: None,
+            csr_mode,
         };
 
-        println!("Starting documentation server...");
+        if csr_mode {
+            println!("Starting documentation server (CSR mode)...");
+        } else {
+            println!("Starting documentation server...");
+        }
         println!("Open http://127.0.0.1:{port} in your browser");
         println!("Press Ctrl+C to stop");
 

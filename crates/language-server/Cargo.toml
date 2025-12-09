@@ -35,10 +35,16 @@ driver.workspace = true
 hir.workspace = true
 parser.workspace = true
 tempfile = "3.20.0"
-doc-engine = { path = "../doc-engine", package = "fe-doc-engine", features = ["ssr"] }
-axum = "0.8"
+# doc-engine for extraction only
+doc-engine = { path = "../doc-engine", package = "fe-doc-engine" }
+# doc-viewer for server-side rendering (disable default hydrate feature)
+doc-viewer = { path = "../doc-viewer", package = "fe-doc-viewer", default-features = false, features = ["ssr"] }
+axum = { version = "0.8", features = ["http2"] }
 tower-http = { version = "0.6", features = ["fs", "cors"] }
 open = "5"
+
+[features]
+default = []
 
 [dev-dependencies]
 test-utils.workspace = true
