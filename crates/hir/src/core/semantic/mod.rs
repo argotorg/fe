@@ -1701,6 +1701,20 @@ impl<'db> ImplTrait<'db> {
             }
         }
     }
+
+    /// Returns the pretty-printed trait name from this impl trait block.
+    /// This is useful for documentation generation.
+    /// Returns None if the trait reference is missing or malformed.
+    pub fn trait_name(self, db: &dyn HirDb) -> Option<String> {
+        self.trait_ref(db).to_opt().map(|tr| tr.pretty_print(db))
+    }
+
+    /// Returns the pretty-printed target type name from this impl trait block.
+    /// This is useful for documentation generation.
+    /// Returns None if the type reference is missing or malformed.
+    pub fn target_type_name(self, db: &dyn HirDb) -> Option<String> {
+        self.type_ref(db).to_opt().map(|ty| ty.pretty_print(db))
+    }
 }
 
 #[derive(Clone, Copy, Debug)]

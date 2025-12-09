@@ -41,6 +41,11 @@ pub async fn handle_completion(
 
     let file_text = file.text(&backend.db);
     let cursor = to_offset_from_position(params.text_document_position.position, file_text);
+
+    // Don't provide completions inside comments
+    if is_in_comment(file_text, usize::from(cursor)) {
+        return Ok(None);
+    }
     let top_mod = map_file_to_mod(&backend.db, file);
 
     let mut items = Vec::new();
@@ -101,6 +106,34 @@ pub async fn handle_completion(
     } else {
         Ok(Some(CompletionResponse::Array(items)))
     }
+}
+
+/// Check if the cursor position is inside a comment.
+fn is_in_comment(text: &str, cursor: usize) -> bool {
+    let text_before = &text[..cursor.min(text.len())];
+
+    // Check for line comment: if there's a // on the current line before cursor
+    if let Some(line_start) = text_before.rfind('\n').map(|i| i + 1).or(Some(0)) {
+        let line_before_cursor = &text_before[line_start..];
+        if line_before_cursor.contains("//") {
+            return true;
+        }
+    }
+
+    // Check for block comment: count /* and */ before cursor
+    let mut in_block = false;
+    let mut chars = text_before.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c == '/' && chars.peek() == Some(&'*') {
+            chars.next();
+            in_block = true;
+        } else if c == '*' && chars.peek() == Some(&'/') {
+            chars.next();
+            in_block = false;
+        }
+    }
+
+    in_block
 }
 
 /// Find the most specific scope containing the cursor position.
@@ -960,5 +993,29 @@ mod tests {
             position.line > 0,
             "Expected insertion after existing imports"
         );
+    }
+
+    /// Test that we correctly detect when cursor is inside a comment
+    #[test]
+    fn test_is_in_comment() {
+        // Line comment cases
+        assert!(is_in_comment("// comment here", 5));
+        assert!(is_in_comment("// comment here", 15));
+        assert!(is_in_comment("let x = 1; // comment", 18));
+        assert!(!is_in_comment("let x = 1; // comment\nlet y = 2;", 28)); // cursor at 'y'
+
+        // Block comment cases
+        assert!(is_in_comment("/* block */", 5));
+        assert!(!is_in_comment("/* block */", 11)); // after closing
+        assert!(is_in_comment("/* multi\nline\ncomment */", 10));
+        assert!(!is_in_comment("/* closed */ code", 15)); // in 'code'
+
+        // Code (not in comment)
+        assert!(!is_in_comment("let x = 1;", 5));
+        assert!(!is_in_comment("fn foo() {}", 5));
+
+        // Edge cases
+        assert!(!is_in_comment("", 0));
+        assert!(!is_in_comment("x", 0));
     }
 }

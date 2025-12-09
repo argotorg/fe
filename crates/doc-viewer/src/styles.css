@@ -164,9 +164,59 @@ body {
     color: var(--text);
 }
 
+/* Grouped navigation by kind */
+.nav-groups {
+    margin-left: 0.5rem;
+    margin-top: 0.5rem;
+}
+
+.nav-kind-group {
+    margin-bottom: 0.75rem;
+}
+
+.nav-kind-header {
+    font-size: 0.7rem;
+    font-weight: 600;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    margin-bottom: 0.25rem;
+    padding-left: 0.5rem;
+}
+
+.nav-kind-group .nav-items {
+    margin-left: 0.5rem;
+}
+
 .doc-content {
     padding: 2rem 3rem;
     max-width: 900px;
+}
+
+/* Breadcrumb navigation */
+.breadcrumb {
+    font-family: "JetBrains Mono", "Fira Code", monospace;
+    font-size: 0.875rem;
+    color: var(--text-muted);
+    margin-bottom: 0.75rem;
+}
+
+.breadcrumb-link {
+    color: var(--accent);
+    text-decoration: none;
+}
+
+.breadcrumb-link:hover {
+    text-decoration: underline;
+}
+
+.breadcrumb-sep {
+    color: var(--text-muted);
+    margin: 0 0.125rem;
+}
+
+.breadcrumb-current {
+    color: var(--text);
 }
 
 .item-header {
@@ -252,6 +302,19 @@ h2 {
     margin-bottom: 0.5rem;
 }
 
+/* Children sections (Fields, Variants, Methods) */
+.children-sections {
+    margin-top: 2rem;
+}
+
+.children-section {
+    margin-bottom: 2rem;
+}
+
+.children-section:last-child {
+    margin-bottom: 0;
+}
+
 .item-list {
     list-style: none;
 }
@@ -329,4 +392,49 @@ h2 {
 .not-found-hint {
     font-size: 0.875rem;
     font-style: italic;
+}
+
+/* Trait implementations section */
+.trait-impls {
+    margin-top: 2rem;
+    padding-top: 1.5rem;
+    border-top: 1px solid var(--border);
+}
+
+.trait-impls h2 {
+    font-size: 1.25rem;
+    margin-bottom: 1rem;
+    color: var(--text);
+}
+
+.trait-impl-list {
+    display: flex;
+    flex-direction: column;
+    gap: 1.5rem;
+}
+
+.trait-impl {
+    padding: 1rem;
+    background: var(--bg-secondary);
+    border-radius: 6px;
+    border: 1px solid var(--border);
+}
+
+.trait-impl h3 {
+    margin: 0 0 0.75rem 0;
+    font-size: 1rem;
+}
+
+.trait-impl h3 a {
+    color: var(--accent);
+    text-decoration: none;
+}
+
+.trait-impl h3 a:hover {
+    text-decoration: underline;
+}
+
+.trait-impl .signature {
+    margin: 0;
+    font-size: 0.85rem;
 }

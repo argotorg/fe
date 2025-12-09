@@ -529,7 +529,19 @@ async fn update_docs(backend: &mut Backend) {
         })
         .collect();
 
+    // Collect trait impl links from all ingots
+    let mut all_trait_impl_links = Vec::new();
+
     for ingot in ingots {
+        // Skip ingots without valid config (no fe.toml or missing name)
+        let has_valid_config = ingot
+            .config(&backend.db)
+            .and_then(|c| c.metadata.name)
+            .is_some();
+        if !has_valid_config {
+            continue;
+        }
+
         // Extract items from ALL modules in the ingot (not just root)
         for top_mod in ingot.all_modules(&backend.db) {
             for item in top_mod.children_nested(&backend.db) {
@@ -542,7 +554,13 @@ async fn update_docs(backend: &mut Backend) {
         let root_mod = ingot.root_mod(&backend.db);
         let module_tree = extractor.build_module_tree_for_ingot(ingot, root_mod);
         combined_index.modules.extend(module_tree);
+
+        // Extract trait implementation links
+        all_trait_impl_links.extend(extractor.extract_trait_impl_links(ingot));
     }
+
+    // Link trait implementations to their target types
+    combined_index.link_trait_impls(all_trait_impl_links);
 
     // Sort for consistent ordering
     combined_index.items.sort_by(|a, b| a.path.cmp(&b.path));

@@ -15,7 +15,7 @@ use hir::{
 
 use crate::model::{
     DocChild, DocChildKind, DocContent, DocGenericParam, DocIndex, DocItem, DocItemKind,
-    DocModuleItem, DocModuleTree, DocSourceLoc, DocVisibility,
+    DocModuleItem, DocModuleTree, DocSourceLoc, DocTraitImpl, DocVisibility,
 };
 
 /// Extracts documentation from a Fe HIR database
@@ -53,6 +53,44 @@ impl<'db> DocExtractor<'db> {
         index
     }
 
+    /// Extract trait implementation links from an ingot.
+    /// Returns a list of (target_type_name, DocTraitImpl) that should be
+    /// added to the corresponding type's trait_impls field.
+    pub fn extract_trait_impl_links(
+        &self,
+        ingot: Ingot<'db>,
+    ) -> Vec<(String, DocTraitImpl)> {
+        let mut links = Vec::new();
+
+        for &impl_trait in ingot.all_impl_traits(self.db) {
+            let Some(trait_name) = impl_trait.trait_name(self.db) else {
+                continue;
+            };
+            let Some(target_type) = impl_trait.target_type_name(self.db) else {
+                continue;
+            };
+
+            // Get the impl's path for linking
+            let impl_path = impl_trait
+                .scope()
+                .pretty_path(self.db)
+                .unwrap_or_default();
+
+            let signature = self.get_signature(impl_trait.into());
+
+            links.push((
+                target_type,
+                DocTraitImpl {
+                    trait_name,
+                    impl_url: format!("{}/impl", impl_path),
+                    signature,
+                },
+            ));
+        }
+
+        links
+    }
+
     /// Extract documentation for a single item
     pub fn extract_item(&self, item: ItemKind<'db>) -> Option<DocItem> {
         // Skip items that shouldn't be documented
@@ -84,6 +122,7 @@ impl<'db> DocExtractor<'db> {
             where_bounds,
             children,
             source,
+            trait_impls: Vec::new(), // Populated later by link_trait_impls
         })
     }
 
@@ -441,7 +480,19 @@ impl<'db> DocExtractor<'db> {
         top_mod: TopLevelMod<'db>,
     ) -> DocModuleTree {
         let scope = top_mod.scope();
-        let name = top_mod.name(self.db).data(self.db).to_string();
+        let module_tree = ingot.module_tree(self.db);
+        let is_root = module_tree.parent(top_mod).is_none();
+
+        // For root module, use ingot config name instead of "lib"
+        let name = if is_root {
+            ingot
+                .config(self.db)
+                .and_then(|c| c.metadata.name)
+                .map(|s| s.to_string())
+                .unwrap_or_else(|| top_mod.name(self.db).data(self.db).to_string())
+        } else {
+            top_mod.name(self.db).data(self.db).to_string()
+        };
         let path = scope.pretty_path(self.db).unwrap_or_else(|| name.clone());
 
         let mut children = Vec::new();
