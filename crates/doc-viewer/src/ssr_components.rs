@@ -268,7 +268,12 @@ pub fn DocItemViewSSR(item: DocItem, index: DocIndex, supports_goto_source: bool
                 }}
             </div>
 
-            <pre class="signature"><code>{item.signature.clone()}</code></pre>
+            // Show signature for non-module items (modules don't need signature display)
+            {if !is_module && !item.signature.is_empty() {
+                Some(view! { <pre class="signature"><code>{item.signature.clone()}</code></pre> })
+            } else {
+                None
+            }}
 
             {if has_docs {
                 item.docs.map(|docs| view! { <DocContentSSR content=docs /> })
@@ -314,7 +319,7 @@ fn DocContentSSR(content: DocContent) -> impl IntoView {
     }
 }
 
-/// Children (fields, methods, variants) grouped by kind
+/// Children (fields, methods, variants) grouped by kind with anchors
 #[component]
 fn DocChildrenSSR(children: Vec<DocChild>) -> impl IntoView {
     // Group children by kind
@@ -335,23 +340,39 @@ fn DocChildrenSSR(children: Vec<DocChild>) -> impl IntoView {
     view! {
         <div class="children-sections">
             {children_by_kind.into_iter().map(|(kind, items)| {
+                let section_id = kind.anchor_prefix();
                 view! {
-                    <section class="children-section">
-                        <h2>{kind.plural_name()}</h2>
-                        <dl class="members">
+                    <section class="children-section" id=format!("{}s", section_id)>
+                        <h2>
+                            {kind.plural_name()}
+                            <a href=format!("#{}s", section_id) class="anchor">"\u{00a7}"</a>
+                        </h2>
+                        <div class="member-list">
                             {items.into_iter().map(|child| {
-                                let kind_name = child.kind.display_name().to_lowercase();
-                                let kind_class = format!("kind-badge {}", &kind_name);
+                                let anchor_id = format!("{}.{}", child.kind.anchor_prefix(), child.name);
+                                let has_docs = child.docs.is_some();
+                                let signature = child.signature.clone();
+                                let has_signature = !signature.is_empty();
+
                                 view! {
-                                    <dt>
-                                        <span class=kind_class>{kind_name}</span>
-                                        " "
-                                        <code>{child.name.clone()}</code>
-                                    </dt>
-                                    {child.docs.map(|docs| view! { <dd>{docs}</dd> })}
+                                    <div class="member-item" id=anchor_id.clone()>
+                                        <div class="member-header">
+                                            <a href=format!("#{}", anchor_id) class="anchor">"\u{00a7}"</a>
+                                            <code class="member-signature">
+                                                {if has_signature { signature } else { child.name.clone() }}
+                                            </code>
+                                        </div>
+                                        {if has_docs {
+                                            child.docs.map(|docs| view! {
+                                                <div class="member-docs">{docs}</div>
+                                            })
+                                        } else {
+                                            None
+                                        }}
+                                    </div>
                                 }
                             }).collect_view()}
-                        </dl>
+                        </div>
                     </section>
                 }
             }).collect_view()}
@@ -598,12 +619,21 @@ fn DocModuleMembersSSR(items: Vec<crate::model::DocModuleItem>) -> impl IntoView
 fn DocImplementorsSSR(implementors: Vec<crate::model::DocImplementor>) -> impl IntoView {
     view! {
         <section class="implementors" id="implementors">
-            <h2>"Implementors"</h2>
+            <h2>
+                "Implementors"
+                <a href="#implementors" class="anchor">"\u{00a7}"</a>
+            </h2>
             <div class="implementor-list">
                 {implementors.into_iter().map(|imp| {
+                    let anchor_id = format!("impl-{}", imp.type_name.replace(['<', '>', ' ', ','], "_"));
+                    let type_url = format!("/doc/{}", imp.type_url);
                     view! {
-                        <div class="implementor-item">
-                            <code class="implementor-sig">{imp.signature}</code>
+                        <div class="implementor-item" id=anchor_id.clone()>
+                            <a href=format!("#{}", anchor_id) class="anchor">"\u{00a7}"</a>
+                            <code class="implementor-sig">
+                                "impl … for "
+                                <a href=type_url class="type-link">{imp.type_name}</a>
+                            </code>
                         </div>
                     }
                 }).collect_view()}
