@@ -6,7 +6,7 @@
 use leptos::prelude::*;
 
 use crate::markdown::render_markdown;
-use crate::model::{DocChild, DocContent, DocIndex, DocItem, DocModuleTree};
+use crate::model::{DocChild, DocChildKind, DocContent, DocIndex, DocItem, DocItemKind, DocModuleTree, DocTraitImpl};
 
 /// Full documentation page component for SSR with islands
 #[component]
@@ -101,6 +101,21 @@ fn DocModuleNav(
 ) -> impl IntoView {
     let class = if is_current { "nav-item current" } else { "nav-item" };
 
+    // Group items by kind
+    let items_by_kind = {
+        use std::collections::BTreeMap;
+        let mut groups: BTreeMap<u8, (DocItemKind, Vec<_>)> = BTreeMap::new();
+        for item in &module.items {
+            let order = item.kind.display_order();
+            groups
+                .entry(order)
+                .or_insert_with(|| (item.kind, Vec::new()))
+                .1
+                .push(item);
+        }
+        groups.into_values().collect::<Vec<_>>()
+    };
+
     view! {
         <div class=class>
             <a href=format!("/doc/{}", module.url_path()) class="nav-module">
@@ -108,23 +123,32 @@ fn DocModuleNav(
             </a>
             {if !module.items.is_empty() {
                 Some(view! {
-                    <ul class="nav-items">
-                        {module.items.iter().map(|item| {
-                            let item_current = item.url_path() == current_path;
-                            let item_class = if item_current { "current" } else { "" };
+                    <div class="nav-groups">
+                        {items_by_kind.into_iter().map(|(kind, items)| {
                             view! {
-                                <li class=item_class>
-                                    <a href=format!("/doc/{}", item.url_path())>
-                                        <span class=format!("kind-badge {}", item.kind.as_str())>
-                                            {item.kind.as_str()}
-                                        </span>
-                                        " "
-                                        {item.name.clone()}
-                                    </a>
-                                </li>
+                                <div class="nav-kind-group">
+                                    <h4 class="nav-kind-header">{kind.plural_name()}</h4>
+                                    <ul class="nav-items">
+                                        {items.into_iter().map(|item| {
+                                            let item_current = item.url_path() == current_path;
+                                            let item_class = if item_current { "current" } else { "" };
+                                            view! {
+                                                <li class=item_class>
+                                                    <a href=format!("/doc/{}", item.url_path())>
+                                                        <span class=format!("kind-badge {}", item.kind.as_str())>
+                                                            {item.kind.as_str()}
+                                                        </span>
+                                                        " "
+                                                        {item.name.clone()}
+                                                    </a>
+                                                </li>
+                                            }
+                                        }).collect_view()}
+                                    </ul>
+                                </div>
                             }
                         }).collect_view()}
-                    </ul>
+                    </div>
                 })
             } else {
                 None
@@ -141,8 +165,56 @@ pub fn DocItemViewSSR(item: DocItem, supports_goto_source: bool) -> impl IntoVie
     let has_source = item.source.is_some();
     let item_path = item.url_path();
 
+    // Build breadcrumb segments from path
+    let breadcrumbs: Vec<(String, String)> = {
+        let segments: Vec<&str> = item.path.split("::").collect();
+        let mut result = Vec::new();
+        let mut accumulated_path = String::new();
+
+        for (i, segment) in segments.iter().enumerate() {
+            if i > 0 {
+                accumulated_path.push_str("::");
+            }
+            accumulated_path.push_str(segment);
+
+            // Last segment is current item (no link needed)
+            let is_last = i == segments.len() - 1;
+            let url = if is_last {
+                String::new() // No link for current item
+            } else {
+                // Link to parent as module
+                format!("/doc/{}/mod", accumulated_path)
+            };
+
+            result.push((segment.to_string(), url));
+        }
+        result
+    };
+
     view! {
         <article class="doc-item">
+            // Breadcrumb path navigation
+            <nav class="breadcrumb">
+                {breadcrumbs.into_iter().enumerate().map(|(i, (name, url))| {
+                    let separator = if i > 0 { Some(view! { <span class="breadcrumb-sep">"::"</span> }) } else { None };
+                    if url.is_empty() {
+                        view! {
+                            <>
+                                {separator}
+                                <span class="breadcrumb-current">{name}</span>
+                            </>
+                        }.into_any()
+                    } else {
+                        view! {
+                            <>
+                                {separator}
+                                <a href=url class="breadcrumb-link">{name}</a>
+                            </>
+                        }.into_any()
+                    }
+                }).collect_view()}
+            </nav>
+
             <div class="item-header">
                 <span class=format!("kind-badge {}", item.kind.as_str())>
                     {item.kind.display_name()}
@@ -187,6 +259,12 @@ pub fn DocItemViewSSR(item: DocItem, supports_goto_source: bool) -> impl IntoVie
             } else {
                 None
             }}
+
+            {if !item.trait_impls.is_empty() {
+                Some(view! { <DocTraitImplsSSR impls=item.trait_impls.clone() /> })
+            } else {
+                None
+            }}
         </article>
     }
 }
@@ -201,25 +279,72 @@ fn DocContentSSR(content: DocContent) -> impl IntoView {
     }
 }
 
-/// Children (fields, methods, variants)
+/// Children (fields, methods, variants) grouped by kind
 #[component]
 fn DocChildrenSSR(children: Vec<DocChild>) -> impl IntoView {
+    // Group children by kind
+    let children_by_kind = {
+        use std::collections::BTreeMap;
+        let mut groups: BTreeMap<u8, (DocChildKind, Vec<DocChild>)> = BTreeMap::new();
+        for child in children {
+            let order = child.kind.display_order();
+            groups
+                .entry(order)
+                .or_insert_with(|| (child.kind, Vec::new()))
+                .1
+                .push(child);
+        }
+        groups.into_values().collect::<Vec<_>>()
+    };
+
     view! {
-        <h2>"Members"</h2>
-        <dl class="members">
-            {children.into_iter().map(|child| {
-                let kind_name = child.kind.display_name().to_lowercase();
-                let kind_class = format!("kind-badge {}", &kind_name);
+        <div class="children-sections">
+            {children_by_kind.into_iter().map(|(kind, items)| {
                 view! {
-                    <dt>
-                        <span class=kind_class>{kind_name}</span>
-                        " "
-                        <code>{child.name.clone()}</code>
-                    </dt>
-                    {child.docs.map(|docs| view! { <dd>{docs}</dd> })}
+                    <section class="children-section">
+                        <h2>{kind.plural_name()}</h2>
+                        <dl class="members">
+                            {items.into_iter().map(|child| {
+                                let kind_name = child.kind.display_name().to_lowercase();
+                                let kind_class = format!("kind-badge {}", &kind_name);
+                                view! {
+                                    <dt>
+                                        <span class=kind_class>{kind_name}</span>
+                                        " "
+                                        <code>{child.name.clone()}</code>
+                                    </dt>
+                                    {child.docs.map(|docs| view! { <dd>{docs}</dd> })}
+                                }
+                            }).collect_view()}
+                        </dl>
+                    </section>
                 }
             }).collect_view()}
-        </dl>
+        </div>
+    }
+}
+
+/// Trait implementations section for types
+#[component]
+fn DocTraitImplsSSR(impls: Vec<DocTraitImpl>) -> impl IntoView {
+    view! {
+        <section class="trait-impls">
+            <h2>"Trait Implementations"</h2>
+            <div class="trait-impl-list">
+                {impls.into_iter().map(|impl_| {
+                    view! {
+                        <div class="trait-impl">
+                            <h3>
+                                <a href=format!("/doc/{}", impl_.impl_url)>
+                                    {impl_.trait_name.clone()}
+                                </a>
+                            </h3>
+                            <pre class="signature"><code>{impl_.signature}</code></pre>
+                        </div>
+                    }
+                }).collect_view()}
+            </div>
+        </section>
     }
 }
 

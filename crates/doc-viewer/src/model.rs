@@ -29,6 +29,9 @@ pub struct DocItem {
     pub children: Vec<DocChild>,
     /// Source location for "view source" links
     pub source: Option<DocSourceLoc>,
+    /// Trait implementations for this type (structs, enums, contracts)
+    #[serde(default)]
+    pub trait_impls: Vec<DocTraitImpl>,
 }
 
 impl DocItem {
@@ -98,6 +101,38 @@ impl DocItemKind {
             DocItemKind::Const => "Constant",
             DocItemKind::Impl => "Implementation",
             DocItemKind::ImplTrait => "Trait Implementation",
+        }
+    }
+
+    /// Plural display name for section headers
+    pub fn plural_name(&self) -> &'static str {
+        match self {
+            DocItemKind::Module => "Modules",
+            DocItemKind::Function => "Functions",
+            DocItemKind::Struct => "Structs",
+            DocItemKind::Enum => "Enums",
+            DocItemKind::Trait => "Traits",
+            DocItemKind::Contract => "Contracts",
+            DocItemKind::TypeAlias => "Type Aliases",
+            DocItemKind::Const => "Constants",
+            DocItemKind::Impl => "Implementations",
+            DocItemKind::ImplTrait => "Trait Implementations",
+        }
+    }
+
+    /// Display order for sidebar grouping (lower = first)
+    pub fn display_order(&self) -> u8 {
+        match self {
+            DocItemKind::Module => 0,
+            DocItemKind::Trait => 1,
+            DocItemKind::Contract => 2,
+            DocItemKind::Struct => 3,
+            DocItemKind::Enum => 4,
+            DocItemKind::TypeAlias => 5,
+            DocItemKind::Function => 6,
+            DocItemKind::Const => 7,
+            DocItemKind::Impl => 8,
+            DocItemKind::ImplTrait => 9,
         }
     }
 }
@@ -222,6 +257,28 @@ impl DocChildKind {
             DocChildKind::AssocConst => "Associated Constant",
         }
     }
+
+    /// Plural display name for section headers
+    pub fn plural_name(&self) -> &'static str {
+        match self {
+            DocChildKind::Field => "Fields",
+            DocChildKind::Variant => "Variants",
+            DocChildKind::Method => "Methods",
+            DocChildKind::AssocType => "Associated Types",
+            DocChildKind::AssocConst => "Associated Constants",
+        }
+    }
+
+    /// Display order for grouping (lower = first)
+    pub fn display_order(&self) -> u8 {
+        match self {
+            DocChildKind::Variant => 0,
+            DocChildKind::Field => 1,
+            DocChildKind::AssocType => 2,
+            DocChildKind::AssocConst => 3,
+            DocChildKind::Method => 4,
+        }
+    }
 }
 
 /// Source location for linking to source code
@@ -233,6 +290,17 @@ pub struct DocSourceLoc {
     pub display_file: String,
     pub line: u32,
     pub column: u32,
+}
+
+/// A trait implementation reference (shown on type pages)
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct DocTraitImpl {
+    /// The name of the trait being implemented (e.g., "Clone")
+    pub trait_name: String,
+    /// URL path to the impl item's documentation
+    pub impl_url: String,
+    /// The full signature of the impl (e.g., "impl Clone for MyStruct")
+    pub signature: String,
 }
 
 /// A collection of documented items forming a documentation index
@@ -295,6 +363,24 @@ impl DocIndex {
                     || item.path.to_lowercase().contains(&query_lower)
             })
             .collect()
+    }
+
+    /// Link trait implementations to their target types.
+    /// `links` is a list of (target_type_name, DocTraitImpl) pairs extracted
+    /// from the HIR using semantic helpers.
+    pub fn link_trait_impls(&mut self, links: Vec<(String, DocTraitImpl)>) {
+        for (target_type, trait_impl) in links {
+            // Find items whose name matches the target type (structs, enums, contracts)
+            for item in &mut self.items {
+                let is_type = matches!(
+                    item.kind,
+                    DocItemKind::Struct | DocItemKind::Enum | DocItemKind::Contract
+                );
+                if is_type && item.name == target_type {
+                    item.trait_impls.push(trait_impl.clone());
+                }
+            }
+        }
     }
 }
 

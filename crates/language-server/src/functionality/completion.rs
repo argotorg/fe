@@ -36,6 +36,11 @@ pub async fn handle_completion(
 
     let file_text = file.text(&backend.db);
     let cursor = to_offset_from_position(params.text_document_position.position, file_text);
+
+    // Don't provide completions inside comments
+    if is_in_comment(file_text, usize::from(cursor)) {
+        return Ok(None);
+    }
     let top_mod = map_file_to_mod(&backend.db, file);
 
     let mut items = Vec::new();
@@ -1976,5 +1981,29 @@ mod tests {
             position.line > 0,
             "Expected insertion after existing imports"
         );
+    }
+
+    /// Test that we correctly detect when cursor is inside a comment
+    #[test]
+    fn test_is_in_comment() {
+        // Line comment cases
+        assert!(is_in_comment("// comment here", 5));
+        assert!(is_in_comment("// comment here", 15));
+        assert!(is_in_comment("let x = 1; // comment", 18));
+        assert!(!is_in_comment("let x = 1; // comment\nlet y = 2;", 28)); // cursor at 'y'
+
+        // Block comment cases
+        assert!(is_in_comment("/* block */", 5));
+        assert!(!is_in_comment("/* block */", 11)); // after closing
+        assert!(is_in_comment("/* multi\nline\ncomment */", 10));
+        assert!(!is_in_comment("/* closed */ code", 15)); // in 'code'
+
+        // Code (not in comment)
+        assert!(!is_in_comment("let x = 1;", 5));
+        assert!(!is_in_comment("fn foo() {}", 5));
+
+        // Edge cases
+        assert!(!is_in_comment("", 0));
+        assert!(!is_in_comment("x", 0));
     }
 }
