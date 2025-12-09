@@ -16,12 +16,13 @@ function gotoSource(path) {
         });
 }
 
-// Restore auto-follow state on page load
+// Restore auto-follow state on page load (default: true)
 document.addEventListener('DOMContentLoaded', function() {
     const autoFollow = document.getElementById('auto-follow');
     if (autoFollow) {
         const saved = localStorage.getItem('fe-docs-auto-follow');
-        autoFollow.checked = saved === 'true';
+        // Default to true if not explicitly set to false
+        autoFollow.checked = saved !== 'false';
     }
 });
 

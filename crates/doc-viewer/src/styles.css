@@ -2,10 +2,10 @@
     --bg: #1a1a2e;
     --bg-secondary: #16213e;
     --text: #e4e4e4;
-    --text-muted: #a0a0a0;
-    --accent: #0f9d58;
-    --accent-hover: #0b7a43;
-    --border: #2a2a4a;
+    --text-muted: #9ba3af;
+    --accent: #4ade80;
+    --accent-hover: #22c55e;
+    --border: #2d3748;
     --code-bg: #0d1117;
 }
 
@@ -222,17 +222,37 @@ body {
 .item-header {
     display: flex;
     align-items: center;
-    gap: 1rem;
+    justify-content: space-between;
     margin-bottom: 1rem;
 }
 
+.item-title {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+}
+
 .item-header h1 {
-    font-size: 2rem;
+    font-size: 1.75rem;
+    margin: 0;
+}
+
+.src-link {
+    font-size: 0.875rem;
+    color: var(--text-muted);
+    text-decoration: none;
+    font-family: "JetBrains Mono", "Fira Code", monospace;
+}
+
+.src-link:hover {
+    color: var(--accent);
 }
 
 .kind-badge {
-    font-size: 0.75rem;
-    padding: 0.125rem 0.5rem;
+    font-size: 0.7rem;
+    font-weight: 500;
+    letter-spacing: 0.02em;
+    padding: 0.2rem 0.5rem;
     border-radius: 4px;
     background: var(--border);
     color: var(--text-muted);
@@ -250,16 +270,18 @@ body {
 
 .signature {
     background: var(--code-bg);
-    padding: 1rem;
-    border-radius: 8px;
+    padding: 0.875rem 1rem;
+    border-radius: 6px;
+    border: 1px solid var(--border);
     overflow-x: auto;
     margin-bottom: 1.5rem;
 }
 
 .signature code {
     font-family: "JetBrains Mono", "Fira Code", monospace;
-    font-size: 0.9rem;
+    font-size: 0.875rem;
     white-space: pre;
+    color: var(--text);
 }
 
 .docs {
@@ -330,40 +352,6 @@ h2 {
 
 .item-list a:hover {
     text-decoration: underline;
-}
-
-.source-link {
-    margin-top: 2rem;
-    padding-top: 1rem;
-    border-top: 1px solid var(--border);
-    color: var(--text-muted);
-    font-size: 0.875rem;
-    display: flex;
-    align-items: center;
-    gap: 1rem;
-    flex-wrap: wrap;
-}
-
-.goto-source-btn {
-    display: inline-flex;
-    align-items: center;
-    gap: 0.5rem;
-    padding: 0.4rem 0.8rem;
-    background: var(--accent);
-    color: white;
-    border: none;
-    border-radius: 4px;
-    font-size: 0.8rem;
-    cursor: pointer;
-    transition: background 0.2s;
-}
-
-.goto-source-btn:hover {
-    background: var(--accent-hover);
-}
-
-.goto-source-btn svg {
-    flex-shrink: 0;
 }
 
 .not-found {
@@ -590,53 +578,143 @@ h2:hover .anchor {
     line-height: 1.5;
 }
 
-/* Module members section */
-.module-members {
+/* Module items - rustdoc-style table layout */
+.module-items {
+    margin-top: 1.5rem;
+}
+
+.item-table {
+    margin-bottom: 2rem;
+}
+
+.item-table h2 {
+    font-size: 1.125rem;
+    margin-bottom: 0.75rem;
+    padding-bottom: 0.5rem;
+    border-bottom: 1px solid var(--border);
+}
+
+.item-list {
+    display: flex;
+    flex-direction: column;
+}
+
+.item-row {
+    display: grid;
+    grid-template-columns: minmax(120px, auto) 1fr;
+    gap: 1rem;
+    padding: 0.375rem 0;
+    border-bottom: 1px solid var(--border);
+}
+
+.item-row:last-child {
+    border-bottom: none;
+}
+
+.item-name a {
+    color: var(--accent);
+    text-decoration: none;
+}
+
+.item-name a:hover {
+    text-decoration: underline;
+}
+
+.item-name code {
+    font-family: "JetBrains Mono", "Fira Code", monospace;
+    font-size: 0.875rem;
+}
+
+.item-summary {
+    color: var(--text-muted);
+    font-size: 0.875rem;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+/* Implementors section for traits */
+.implementors {
     margin-top: 2rem;
 }
 
-.module-members h2 {
+.implementors h2 {
+    font-size: 1.25rem;
     margin-bottom: 1rem;
     padding-bottom: 0.5rem;
     border-bottom: 1px solid var(--border);
 }
 
-.member-group {
-    margin-bottom: 1.5rem;
-}
-
-.member-group h3 {
-    font-size: 1rem;
-    color: var(--text-muted);
-    margin-bottom: 0.5rem;
-}
-
-.member-list {
-    list-style: none;
-    display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
-    gap: 0.5rem;
-}
-
-.member-list li a {
+.implementor-list {
     display: flex;
-    align-items: center;
+    flex-direction: column;
     gap: 0.5rem;
-    padding: 0.375rem 0.5rem;
+}
+
+.implementor-item {
+    padding: 0.5rem;
     background: var(--bg-secondary);
     border: 1px solid var(--border);
     border-radius: 4px;
-    text-decoration: none;
-    color: var(--text);
-    transition: border-color 0.2s, background 0.2s;
 }
 
-.member-list li a:hover {
-    border-color: var(--accent);
-    background: var(--code-bg);
-}
-
-.member-list li a code {
+.implementor-sig {
     font-family: "JetBrains Mono", "Fira Code", monospace;
     font-size: 0.875rem;
+    color: var(--text);
+}
+
+/* Recursive sidebar module tree */
+.nav-module-tree {
+    margin-bottom: 0.25rem;
+}
+
+.nav-module-tree > summary {
+    cursor: pointer;
+    list-style: none;
+    display: flex;
+    align-items: center;
+    gap: 0.25rem;
+    padding: 0.25rem 0;
+}
+
+.nav-module-tree > summary::-webkit-details-marker {
+    display: none;
+}
+
+.nav-module-tree > summary::before {
+    content: '▶';
+    font-size: 0.6rem;
+    color: var(--text-muted);
+    transition: transform 0.15s ease;
+    width: 0.75rem;
+    flex-shrink: 0;
+}
+
+.nav-module-tree[open] > summary::before {
+    transform: rotate(90deg);
+}
+
+.nav-module-tree > summary a {
+    color: var(--text);
+    text-decoration: none;
+    font-weight: 600;
+}
+
+.nav-module-tree > summary a:hover {
+    color: var(--accent);
+}
+
+.nav-module-tree > summary.current a {
+    color: var(--accent);
+}
+
+.nav-module-content {
+    margin-left: 0.75rem;
+    padding-left: 0.5rem;
+    border-left: 1px solid var(--border);
+}
+
+.nav-submodules {
+    margin-top: 0.25rem;
 }

@@ -4,6 +4,7 @@
 //! They take plain data and render to HTML.
 
 use leptos::prelude::*;
+use leptos::tachys::view::any_view::AnyView;
 
 use crate::markdown::render_markdown;
 use crate::model::{
@@ -72,7 +73,7 @@ pub fn DocSidebarSSR(
             <div class="sidebar-header">
                 <h1><a href="/">"Fe Docs"</a></h1>
                 <label class="auto-follow-toggle" title="Auto-follow cursor position in editor">
-                    <input type="checkbox" id="auto-follow" onchange="toggleAutoFollow(this.checked)"/>
+                    <input type="checkbox" id="auto-follow" checked onchange="toggleAutoFollow(this.checked)"/>
                     <span class="toggle-slider"></span>
                     <span class="toggle-label">"Follow cursor"</span>
                 </label>
@@ -82,27 +83,24 @@ pub fn DocSidebarSSR(
             <div class="sidebar-nav">
                 {modules.into_iter().map(|module| {
                     let is_current = module.url_path() == current_path;
-                    view! {
-                        <DocModuleNav
-                            module=module
-                            current_path=current_path.clone()
-                            is_current=is_current
-                        />
-                    }
+                    render_module_nav(module, &current_path, is_current)
                 }).collect_view()}
             </div>
         </nav>
     }
 }
 
-/// Module navigation item
-#[component]
-fn DocModuleNav(
+/// Module navigation item (recursive - shows child modules)
+/// Returns AnyView to break type recursion
+fn render_module_nav(
     module: DocModuleTree,
-    current_path: String,
+    current_path: &str,
     is_current: bool,
-) -> impl IntoView {
-    let class = if is_current { "nav-item current" } else { "nav-item" };
+) -> AnyView {
+    let has_children = !module.children.is_empty();
+    let has_items = !module.items.is_empty();
+    let module_url = module.url_path();
+    let is_expanded = current_path.starts_with(&module.path);
 
     // Group items by kind
     let items_by_kind = {
@@ -119,45 +117,68 @@ fn DocModuleNav(
         groups.into_values().collect::<Vec<_>>()
     };
 
+    // Recursively render child modules
+    let children_view = if has_children {
+        let current_path_owned = current_path.to_owned();
+        let children_views: Vec<AnyView> = module.children.into_iter().map(|child| {
+            let child_current = child.url_path() == current_path_owned;
+            render_module_nav(child, &current_path_owned, child_current)
+        }).collect();
+        Some(view! {
+            <div class="nav-submodules">
+                {children_views}
+            </div>
+        }.into_any())
+    } else {
+        None
+    };
+
+    // Render direct items grouped by kind
+    let items_view = if has_items {
+        let current_path_owned = current_path.to_owned();
+        Some(view! {
+            <div class="nav-groups">
+                {items_by_kind.into_iter().map(|(kind, items)| {
+                    view! {
+                        <div class="nav-kind-group">
+                            <h4 class="nav-kind-header">{kind.plural_name()}</h4>
+                            <ul class="nav-items">
+                                {items.into_iter().map(|item| {
+                                    let item_current = item.url_path() == current_path_owned;
+                                    let item_class = if item_current { "current" } else { "" };
+                                    view! {
+                                        <li class=item_class>
+                                            <a href=format!("/doc/{}", item.url_path())>
+                                                <span class=format!("kind-badge {}", item.kind.as_str())>
+                                                    {item.kind.as_str()}
+                                                </span>
+                                                " "
+                                                {item.name.clone()}
+                                            </a>
+                                        </li>
+                                    }
+                                }).collect_view()}
+                            </ul>
+                        </div>
+                    }
+                }).collect_view()}
+            </div>
+        }.into_any())
+    } else {
+        None
+    };
+
     view! {
-        <div class=class>
-            <a href=format!("/doc/{}", module.url_path()) class="nav-module">
-                {module.name.clone()}
-            </a>
-            {if !module.items.is_empty() {
-                Some(view! {
-                    <div class="nav-groups">
-                        {items_by_kind.into_iter().map(|(kind, items)| {
-                            view! {
-                                <div class="nav-kind-group">
-                                    <h4 class="nav-kind-header">{kind.plural_name()}</h4>
-                                    <ul class="nav-items">
-                                        {items.into_iter().map(|item| {
-                                            let item_current = item.url_path() == current_path;
-                                            let item_class = if item_current { "current" } else { "" };
-                                            view! {
-                                                <li class=item_class>
-                                                    <a href=format!("/doc/{}", item.url_path())>
-                                                        <span class=format!("kind-badge {}", item.kind.as_str())>
-                                                            {item.kind.as_str()}
-                                                        </span>
-                                                        " "
-                                                        {item.name.clone()}
-                                                    </a>
-                                                </li>
-                                            }
-                                        }).collect_view()}
-                                    </ul>
-                                </div>
-                            }
-                        }).collect_view()}
-                    </div>
-                })
-            } else {
-                None
-            }}
-        </div>
-    }
+        <details class="nav-module-tree" open=is_expanded>
+            <summary class={if is_current { "nav-module current" } else { "nav-module" }}>
+                <a href=format!("/doc/{}", module_url)>{module.name.clone()}</a>
+            </summary>
+            <div class="nav-module-content">
+                {children_view}
+                {items_view}
+            </div>
+        </details>
+    }.into_any()
 }
 
 /// Documentation item view for SSR
@@ -227,10 +248,24 @@ pub fn DocItemViewSSR(item: DocItem, index: DocIndex, supports_goto_source: bool
             </nav>
 
             <div class="item-header">
-                <span class=format!("kind-badge {}", item.kind.as_str())>
-                    {item.kind.display_name()}
-                </span>
-                <h1>{item.name.clone()}</h1>
+                <div class="item-title">
+                    <span class=format!("kind-badge {}", item.kind.as_str())>
+                        {item.kind.display_name()}
+                    </span>
+                    <h1>{item.name.clone()}</h1>
+                </div>
+                {if has_source && supports_goto_source {
+                    Some(view! {
+                        <a
+                            href="#"
+                            class="src-link"
+                            data-path=item_path.clone()
+                            onclick="gotoSource(this.dataset.path); return false;"
+                        >"[src]"</a>
+                    })
+                } else {
+                    None
+                }}
             </div>
 
             <pre class="signature"><code>{item.signature.clone()}</code></pre>
@@ -254,32 +289,14 @@ pub fn DocItemViewSSR(item: DocItem, index: DocIndex, supports_goto_source: bool
                 None
             }}
 
-            {if has_source {
-                item.source.map(|src| view! {
-                    <div class="source-link">
-                        "Defined in " <code>{src.display_file.clone()}</code>
-                        " at line " {src.line}
-                        {if supports_goto_source {
-                            Some(view! {
-                                <button
-                                    class="goto-source-btn"
-                                    data-path=item_path.clone()
-                                    onclick="gotoSource(this.dataset.path)"
-                                >
-                                    "Go to Source"
-                                </button>
-                            })
-                        } else {
-                            None
-                        }}
-                    </div>
-                })
+            {if !item.trait_impls.is_empty() {
+                Some(view! { <DocTraitImplsSSR impls=item.trait_impls.clone() /> })
             } else {
                 None
             }}
 
-            {if !item.trait_impls.is_empty() {
-                Some(view! { <DocTraitImplsSSR impls=item.trait_impls.clone() /> })
+            {if !item.implementors.is_empty() {
+                Some(view! { <DocImplementorsSSR implementors=item.implementors.clone() /> })
             } else {
                 None
             }}
@@ -525,7 +542,7 @@ fn find_module_items(
     None
 }
 
-/// Module members section showing links to items defined in the module
+/// Module members section showing links to items defined in the module (rustdoc-style)
 #[component]
 fn DocModuleMembersSSR(items: Vec<crate::model::DocModuleItem>) -> impl IntoView {
     if items.is_empty() {
@@ -548,33 +565,49 @@ fn DocModuleMembersSSR(items: Vec<crate::model::DocModuleItem>) -> impl IntoView
     };
 
     view! {
-        <section class="module-members">
-            <h2>"Items"</h2>
+        <div class="module-items">
             {items_by_kind.into_iter().map(|(kind, items)| {
+                let section_id = kind.as_str();
                 view! {
-                    <div class="member-group">
-                        <h3>{kind.plural_name()}</h3>
-                        <ul class="member-list">
+                    <section class="item-table" id=section_id>
+                        <h2>{kind.plural_name()}</h2>
+                        <div class="item-list">
                             {items.into_iter().map(|item| {
                                 let url = format!("/doc/{}", item.url_path());
-                                let badge_class = format!("kind-badge {}", item.kind.as_str());
-                                let kind_str = item.kind.as_str();
                                 view! {
-                                    <li>
-                                        <a href=url>
-                                            <span class=badge_class>
-                                                {kind_str}
-                                            </span>
-                                            " "
-                                            <code>{item.name}</code>
-                                        </a>
-                                    </li>
+                                    <div class="item-row">
+                                        <div class="item-name">
+                                            <a href=url><code>{item.name}</code></a>
+                                        </div>
+                                        <div class="item-summary">
+                                            {item.summary.unwrap_or_default()}
+                                        </div>
+                                    </div>
                                 }
                             }).collect_view()}
-                        </ul>
-                    </div>
+                        </div>
+                    </section>
                 }
             }).collect_view()}
-        </section>
+        </div>
     }.into_any()
+}
+
+/// Implementors section for trait pages (shows which types implement this trait)
+#[component]
+fn DocImplementorsSSR(implementors: Vec<crate::model::DocImplementor>) -> impl IntoView {
+    view! {
+        <section class="implementors" id="implementors">
+            <h2>"Implementors"</h2>
+            <div class="implementor-list">
+                {implementors.into_iter().map(|imp| {
+                    view! {
+                        <div class="implementor-item">
+                            <code class="implementor-sig">{imp.signature}</code>
+                        </div>
+                    }
+                }).collect_view()}
+            </div>
+        </section>
+    }
 }

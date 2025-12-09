@@ -302,6 +302,7 @@ impl<'db> DocExtractor<'db> {
             children,
             source,
             trait_impls: Vec::new(), // Populated later by link_trait_impls
+            implementors: Vec::new(), // Populated later by link_trait_impls (for traits)
         })
     }
 
@@ -342,6 +343,25 @@ impl<'db> DocExtractor<'db> {
                 }
             })
             .reduce(|a, b| a + "\n" + &b)
+    }
+
+    /// Get first sentence of documentation as a summary
+    fn get_summary(&self, scope: ScopeId<'db>) -> Option<String> {
+        let docs = self.get_docstring(scope)?;
+        let trimmed = docs.trim();
+        // Find first sentence ending or paragraph break
+        let end = trimmed
+            .find(". ")
+            .or_else(|| trimmed.find(".\n"))
+            .or_else(|| trimmed.find("\n\n"))
+            .map(|i| i + 1)
+            .unwrap_or(trimmed.len());
+        let summary = trimmed[..end].trim();
+        if summary.is_empty() {
+            None
+        } else {
+            Some(summary.to_string())
+        }
     }
 
     /// Get the item's signature (definition without body)
@@ -704,10 +724,12 @@ impl<'db> DocExtractor<'db> {
                     {
                         let raw_child_path = child.scope().pretty_path(self.db).unwrap_or_default();
                         let child_path = self.qualify_path_with_ingot(&raw_child_path, ingot);
+                        let summary = self.get_summary(child.scope());
                         items.push(DocModuleItem {
                             name: name.data(self.db).to_string(),
                             path: child_path,
                             kind,
+                            summary,
                         });
                     }
                 }
@@ -773,10 +795,12 @@ impl<'db> DocExtractor<'db> {
                     {
                         let raw_child_path = child.scope().pretty_path(self.db).unwrap_or_default();
                         let child_path = self.qualify_path_with_ingot(&raw_child_path, ingot);
+                        let summary = self.get_summary(child.scope());
                         items.push(DocModuleItem {
                             name: name.data(self.db).to_string(),
                             path: child_path,
                             kind,
+                            summary,
                         });
                     }
                 }
@@ -834,10 +858,12 @@ impl<'db> DocExtractor<'db> {
                             .scope()
                             .pretty_path(self.db)
                             .unwrap_or_default();
+                        let summary = self.get_summary(child.scope());
                         items.push(DocModuleItem {
                             name: name.data(self.db).to_string(),
                             path: child_path,
                             kind,
+                            summary,
                         });
                     }
                 }
