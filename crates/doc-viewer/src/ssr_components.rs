@@ -165,7 +165,8 @@ pub fn DocItemViewSSR(item: DocItem) -> impl IntoView {
             {if has_source {
                 item.source.map(|src| view! {
                     <div class="source-link">
-                        "Defined in " <code>{src.file.clone()}</code>
+                        "Defined in " <code>{src.display_file.clone()}</code>
+                        " at line " {src.line}
                         <button
                             class="goto-source-btn"
                             data-path=item_path.clone()

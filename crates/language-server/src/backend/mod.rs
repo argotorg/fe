@@ -16,6 +16,8 @@ pub struct Backend {
     pub(super) workspace_root: Option<PathBuf>,
     /// Server info for CLI discovery
     pub(super) server_info: LspServerInfo,
+    /// Whether client supports window/showDocument (LSP 3.16+)
+    pub(super) supports_show_document: bool,
 }
 
 impl Backend {
@@ -34,6 +36,7 @@ impl Backend {
             doc_server: None,
             workspace_root: None,
             server_info: LspServerInfo::new(),
+            supports_show_document: false,
         }
     }
 

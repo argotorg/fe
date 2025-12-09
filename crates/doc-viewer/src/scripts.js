@@ -16,13 +16,31 @@ function gotoSource(path) {
         });
 }
 
-// Restore auto-follow state on page load
+// Restore auto-follow state and check capabilities on page load
 document.addEventListener('DOMContentLoaded', function() {
     const autoFollow = document.getElementById('auto-follow');
     if (autoFollow) {
         const saved = localStorage.getItem('fe-docs-auto-follow');
         autoFollow.checked = saved === 'true';
     }
+
+    // Check if editor supports goto source, hide buttons if not
+    fetch('/api/capabilities')
+        .then(r => r.json())
+        .then(caps => {
+            if (!caps.supports_goto_source) {
+                // Hide all goto-source buttons
+                document.querySelectorAll('.goto-source-btn').forEach(btn => {
+                    btn.style.display = 'none';
+                });
+            }
+        })
+        .catch(() => {
+            // On error, hide buttons to be safe
+            document.querySelectorAll('.goto-source-btn').forEach(btn => {
+                btn.style.display = 'none';
+            });
+        });
 });
 
 // Search functionality

@@ -92,7 +92,7 @@ pub struct DocServerHandle {
 
 impl DocServerHandle {
     /// Start the doc server on a random available port
-    pub async fn start(client: ClientSocket) -> Result<Self, std::io::Error> {
+    pub async fn start(client: ClientSocket, supports_goto_source: bool) -> Result<Self, std::io::Error> {
         // Bind to port 0 to get a random available port
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
         let port = listener.local_addr()?.port();
@@ -111,6 +111,7 @@ impl DocServerHandle {
                 index: index_for_server,
                 update_tx: update_tx_for_server,
                 client,
+                supports_goto_source,
             });
 
             let app = doc_router_dynamic(state);
@@ -191,6 +192,8 @@ struct DocServerStateWrapper {
     index: Arc<RwLock<DocIndex>>,
     update_tx: broadcast::Sender<String>,
     client: ClientSocket,
+    /// Whether the editor supports window/showDocument for goto source
+    supports_goto_source: bool,
 }
 
 /// Create a router that reads from a dynamic index (SSR mode)
@@ -339,12 +342,22 @@ fn doc_router_dynamic(state: Arc<DocServerStateWrapper>) -> axum::Router {
         }
     }
 
+    /// Return server capabilities (for conditional UI features)
+    async fn capabilities_handler(
+        State(state): State<Arc<DocServerStateWrapper>>,
+    ) -> impl IntoResponse {
+        Json(serde_json::json!({
+            "supports_goto_source": state.supports_goto_source
+        }))
+    }
+
     axum::Router::new()
         .route("/", get(index_handler))
         .route("/doc/{*path}", get(doc_item_handler))
         .route("/api/search", get(search_handler))
         .route("/api/item/{*path}", get(item_api_handler))
         .route("/api/index", get(index_api_handler))
+        .route("/api/capabilities", get(capabilities_handler))
         .route("/api/goto/{*path}", post(goto_source_handler))
         .route("/ws", get(ws_handler))
         .with_state(state)

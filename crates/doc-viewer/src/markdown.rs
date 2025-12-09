@@ -8,7 +8,11 @@ pub fn render_markdown(markdown: &str) -> String {
     options.insert(Options::ENABLE_STRIKETHROUGH);
     options.insert(Options::ENABLE_TABLES);
 
-    let parser = Parser::new_ext(markdown, options);
+    // Convert single newlines to hard breaks (two trailing spaces)
+    // This preserves line breaks in doc comments as users expect
+    let processed = preserve_line_breaks(markdown);
+
+    let parser = Parser::new_ext(&processed, options);
 
     // Process events, handling code blocks specially
     let parser = CodeBlockHighlighter::new(parser);
@@ -105,6 +109,38 @@ where
     }
 }
 
+/// Convert single newlines to markdown hard breaks (two trailing spaces + newline)
+/// This preserves line breaks in doc comments while still allowing paragraph breaks (double newlines)
+fn preserve_line_breaks(text: &str) -> String {
+    let mut result = String::with_capacity(text.len() * 2);
+    let mut in_code_block = false;
+    let mut prev_was_newline = false;
+
+    for line in text.lines() {
+        // Track code block state
+        if line.trim().starts_with("```") {
+            in_code_block = !in_code_block;
+        }
+
+        if !result.is_empty() {
+            if prev_was_newline {
+                // Double newline - keep as paragraph break
+                result.push('\n');
+            } else if !in_code_block && !line.is_empty() {
+                // Single newline outside code block - add hard break
+                result.push_str("  \n");
+            } else {
+                result.push('\n');
+            }
+        }
+
+        prev_was_newline = line.is_empty();
+        result.push_str(line);
+    }
+
+    result
+}
+
 /// Escape HTML special characters
 fn html_escape(s: &str) -> String {
     s.replace('&', "&amp;")
@@ -132,5 +168,21 @@ mod tests {
         let html = render_markdown(md);
         assert!(html.contains("language-fe"));
         assert!(html.contains("fn main()"));
+    }
+
+    #[test]
+    fn test_multiline_preserves_breaks() {
+        let md = "Line 1\nLine 2\nLine 3";
+        let html = render_markdown(md);
+        // Each line should have a <br> tag (from hard break)
+        assert!(html.contains("<br"));
+    }
+
+    #[test]
+    fn test_paragraph_breaks_preserved() {
+        let md = "Paragraph 1\n\nParagraph 2";
+        let html = render_markdown(md);
+        // Should have two <p> tags
+        assert!(html.matches("<p>").count() == 2);
     }
 }

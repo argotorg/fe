@@ -20,11 +20,19 @@ use crate::model::{
 /// Extracts documentation from a Fe HIR database
 pub struct DocExtractor<'db> {
     db: &'db dyn SpannedHirDb,
+    /// Root path for computing relative display paths
+    root_path: Option<std::path::PathBuf>,
 }
 
 impl<'db> DocExtractor<'db> {
     pub fn new(db: &'db dyn SpannedHirDb) -> Self {
-        Self { db }
+        Self { db, root_path: None }
+    }
+
+    /// Set the root path for computing relative display paths
+    pub fn with_root_path(mut self, root: impl Into<std::path::PathBuf>) -> Self {
+        self.root_path = Some(root.into());
+        self
     }
 
     /// Extract documentation for an entire top-level module and its children
@@ -373,6 +381,21 @@ impl<'db> DocExtractor<'db> {
         // Get absolute file path from URL (not the relative path from file.path())
         let file_url = span.file.url(self.db)?;
         let file_path = file_url.to_file_path().ok()?;
+        let file_str = file_path.to_string_lossy().to_string();
+
+        // Compute relative display path
+        let display_file = if let Some(ref root) = self.root_path {
+            file_path
+                .strip_prefix(root)
+                .map(|p| p.to_string_lossy().to_string())
+                .unwrap_or_else(|_| file_str.clone())
+        } else {
+            // Fallback: just use the filename
+            file_path
+                .file_name()
+                .map(|n| n.to_string_lossy().to_string())
+                .unwrap_or_else(|| file_str.clone())
+        };
 
         // Convert byte offset to 1-based line number
         let line = file_text[..byte_offset.min(file_text.len())]
@@ -389,7 +412,8 @@ impl<'db> DocExtractor<'db> {
         let column = (byte_offset - line_start) as u32;
 
         Some(DocSourceLoc {
-            file: file_path.to_string_lossy().to_string(),
+            file: file_str,
+            display_file,
             line,
             column,
         })
