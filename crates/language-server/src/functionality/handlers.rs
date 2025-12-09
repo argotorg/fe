@@ -530,10 +530,18 @@ async fn update_docs(backend: &mut Backend) {
         .collect();
 
     for ingot in ingots {
+        // Extract items from ALL modules in the ingot (not just root)
+        for top_mod in ingot.all_modules(&backend.db) {
+            for item in top_mod.children_nested(&backend.db) {
+                if let Some(doc_item) = extractor.extract_item(item) {
+                    combined_index.items.push(doc_item);
+                }
+            }
+        }
+        // Build module tree from root (it handles file-based children)
         let root_mod = ingot.root_mod(&backend.db);
-        let index = extractor.extract_module(root_mod);
-        combined_index.items.extend(index.items);
-        combined_index.modules.extend(index.modules);
+        let module_tree = extractor.build_module_tree_for_ingot(ingot, root_mod);
+        combined_index.modules.extend(module_tree);
     }
 
     // Sort for consistent ordering
