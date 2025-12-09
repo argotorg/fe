@@ -59,7 +59,7 @@ impl<S: 'static> Service<AnyRequest> for LspActorService<S> {
                 ),
                 _ => ResponseError::new(
                     async_lsp::ErrorCode::INTERNAL_ERROR,
-                    format!("There was an internal error... {:?}", e),
+                    format!("There was an internal error... {e:?}"),
                 ),
             });
             info!("Prepared LSP response for: {method_log:?}");
@@ -82,10 +82,7 @@ impl<S: 'static> LspService for LspActorService<S> {
             }
             Err(e) => ControlFlow::Break(Err(Error::Response(ResponseError::new(
                 async_lsp::ErrorCode::INTERNAL_ERROR,
-                format!(
-                    "Failed to send notification: {:?} for notification `{}`",
-                    e, method
-                ),
+                format!("Failed to send notification: {e:?} for notification `{method}`"),
             )))),
         }
     }
@@ -101,7 +98,7 @@ impl<S: 'static> LspService for LspActorService<S> {
             }
             Err(e) => ControlFlow::Break(Err(Error::Response(ResponseError::new(
                 async_lsp::ErrorCode::INTERNAL_ERROR,
-                format!("Failed to emit event: {:?}", e),
+                format!("Failed to emit event: {e:?}"),
             )))),
         }
     }
@@ -150,8 +147,8 @@ impl LspActorKey {
 impl std::fmt::Display for LspActorKey {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            LspActorKey::ByMethod(method) => write!(f, "Method({})", method),
-            LspActorKey::ByTypeId(type_id) => write!(f, "Custom({:?})", type_id),
+            LspActorKey::ByMethod(method) => write!(f, "Method({method})"),
+            LspActorKey::ByTypeId(type_id) => write!(f, "Custom({type_id:?})"),
         }
     }
 }

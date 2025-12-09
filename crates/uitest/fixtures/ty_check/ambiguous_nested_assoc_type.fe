@@ -1,0 +1,22 @@
+// Ambiguity from conflicting bounds on nested associated types.
+
+trait Encoder {
+    type Output
+}
+
+trait WithEnc {
+    type Enc: Encoder
+}
+
+struct E1 {}
+struct E2 {}
+
+impl Encoder for E1 { type Output = u32 }
+impl Encoder for E2 { type Output = i32 }
+
+fn amb<T>(x: T) -> T::Enc::Output
+where T: WithEnc<Enc = E1> + WithEnc<Enc = E2>
+{
+    0
+}
+

@@ -1,0 +1,26 @@
+---
+source: crates/resolver/tests/graph.rs
+assertion_line: 94
+expression: "format!(\"{:#?}\\n{:#?}\", graph, handler.diagnostics)"
+input_file: fixtures/graph/unresolvable_nodes.toml
+---
+Graph {
+    Ty: "Directed",
+    node_count: 2,
+    edge_count: 1,
+    edges: (0, 1),
+    node weights: {
+        0: "a",
+        1: "b",
+    },
+}
+[
+    UnresolvableNode(
+        "c",
+        EntryDoesNotExist,
+    ),
+    UnresolvableNode(
+        "d",
+        EntryDoesNotExist,
+    ),
+]

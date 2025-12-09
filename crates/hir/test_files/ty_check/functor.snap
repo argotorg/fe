@@ -1,0 +1,176 @@
+---
+source: crates/hir-analysis/tests/ty_check.rs
+expression: res
+input_file: test_files/ty_check/functor.fe
+---
+note: 
+   ┌─ functor.fe:22:37
+   │  
+22 │       fn call(self, _ t: i32) -> bool {
+   │ ╭─────────────────────────────────────^
+23 │ │         return true
+24 │ │     }
+   │ ╰─────^ bool
+
+note: 
+   ┌─ functor.fe:23:16
+   │
+23 │         return true
+   │                ^^^^ bool
+
+note: 
+   ┌─ functor.fe:28:65
+   │  
+28 │       fn map<T, U, F: Fn<T, U>>(self: Self<T>, _ f: F) -> Self<U> {
+   │ ╭─────────────────────────────────────────────────────────────────^
+29 │ │         match self {
+30 │ │             Result::Ok(t) => Result::Ok(f.call(t))
+31 │ │             Result::Err(e) => Result::Err(e)
+32 │ │         }
+33 │ │     }
+   │ ╰─────^ Result<(), U>
+
+note: 
+   ┌─ functor.fe:29:9
+   │  
+29 │ ╭         match self {
+30 │ │             Result::Ok(t) => Result::Ok(f.call(t))
+31 │ │             Result::Err(e) => Result::Err(e)
+32 │ │         }
+   │ ╰─────────^ Result<(), U>
+
+note: 
+   ┌─ functor.fe:29:15
+   │
+29 │         match self {
+   │               ^^^^ Result<(), T>
+
+note: 
+   ┌─ functor.fe:30:13
+   │
+30 │             Result::Ok(t) => Result::Ok(f.call(t))
+   │             ^^^^^^^^^^^^^ Result<(), T>
+
+note: 
+   ┌─ functor.fe:30:24
+   │
+30 │             Result::Ok(t) => Result::Ok(f.call(t))
+   │                        ^ T
+
+note: 
+   ┌─ functor.fe:30:30
+   │
+30 │             Result::Ok(t) => Result::Ok(f.call(t))
+   │                              ^^^^^^^^^^ fn Ok<(), U>
+
+note: 
+   ┌─ functor.fe:30:30
+   │
+30 │             Result::Ok(t) => Result::Ok(f.call(t))
+   │                              ^^^^^^^^^^^^^^^^^^^^^ Result<(), U>
+
+note: 
+   ┌─ functor.fe:30:41
+   │
+30 │             Result::Ok(t) => Result::Ok(f.call(t))
+   │                                         ^ F
+
+note: 
+   ┌─ functor.fe:30:41
+   │
+30 │             Result::Ok(t) => Result::Ok(f.call(t))
+   │                                         ^^^^^^^^^ U
+
+note: 
+   ┌─ functor.fe:30:48
+   │
+30 │             Result::Ok(t) => Result::Ok(f.call(t))
+   │                                                ^ T
+
+note: 
+   ┌─ functor.fe:31:13
+   │
+31 │             Result::Err(e) => Result::Err(e)
+   │             ^^^^^^^^^^^^^^ Result<(), T>
+
+note: 
+   ┌─ functor.fe:31:25
+   │
+31 │             Result::Err(e) => Result::Err(e)
+   │                         ^ ()
+
+note: 
+   ┌─ functor.fe:31:31
+   │
+31 │             Result::Err(e) => Result::Err(e)
+   │                               ^^^^^^^^^^^ fn Err<(), U>
+
+note: 
+   ┌─ functor.fe:31:31
+   │
+31 │             Result::Err(e) => Result::Err(e)
+   │                               ^^^^^^^^^^^^^^ Result<(), U>
+
+note: 
+   ┌─ functor.fe:31:43
+   │
+31 │             Result::Err(e) => Result::Err(e)
+   │                                           ^ ()
+
+note: 
+   ┌─ functor.fe:36:8
+   │  
+36 │   fn f() {
+   │ ╭────────^
+37 │ │     let r1 = Result<(), i32>::Ok(10)
+38 │ │     let r2 = r1.map(MyFn{})
+39 │ │ }
+   │ ╰─^ ()
+
+note: 
+   ┌─ functor.fe:37:9
+   │
+37 │     let r1 = Result<(), i32>::Ok(10)
+   │         ^^ Result<(), i32>
+
+note: 
+   ┌─ functor.fe:37:14
+   │
+37 │     let r1 = Result<(), i32>::Ok(10)
+   │              ^^^^^^^^^^^^^^^^^^^ fn Ok<(), i32>
+
+note: 
+   ┌─ functor.fe:37:14
+   │
+37 │     let r1 = Result<(), i32>::Ok(10)
+   │              ^^^^^^^^^^^^^^^^^^^^^^^ Result<(), i32>
+
+note: 
+   ┌─ functor.fe:37:34
+   │
+37 │     let r1 = Result<(), i32>::Ok(10)
+   │                                  ^^ i32
+
+note: 
+   ┌─ functor.fe:38:9
+   │
+38 │     let r2 = r1.map(MyFn{})
+   │         ^^ Result<(), bool>
+
+note: 
+   ┌─ functor.fe:38:14
+   │
+38 │     let r2 = r1.map(MyFn{})
+   │              ^^ Result<(), i32>
+
+note: 
+   ┌─ functor.fe:38:14
+   │
+38 │     let r2 = r1.map(MyFn{})
+   │              ^^^^^^^^^^^^^^ Result<(), bool>
+
+note: 
+   ┌─ functor.fe:38:21
+   │
+38 │     let r2 = r1.map(MyFn{})
+   │                     ^^^^^^ MyFn

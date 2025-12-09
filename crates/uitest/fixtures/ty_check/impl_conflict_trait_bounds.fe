@@ -1,0 +1,29 @@
+// Test case: impl conflict detection should check trait bounds
+trait Marker {}
+
+trait MyTrait {
+    type Output
+}
+
+struct Container<T> {
+    value: T
+}
+
+impl<T: Marker> MyTrait for Container<T> {
+    type Output = T
+}
+
+struct Marked {}
+impl Marker for Marked {}
+
+// conflicts with impl for Container<T: Marker>
+impl MyTrait for Container<Marked> {
+    type Output = Marked
+}
+
+struct NotMarked {}
+
+// doesn't conflict with impl for Container<T: Marker>
+impl MyTrait for Container<NotMarked> {
+    type Output = NotMarked
+}

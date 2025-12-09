@@ -1,0 +1,17 @@
+enum Status {
+    Active,
+    Inactive,
+    Pending
+}
+
+fn check_status(s: Status) -> bool {
+    match s {
+        Status::Active => true
+        Status::Inactive => false
+        Status::Pending => false
+    }
+}
+
+fn create_status() -> Status {
+    Status::Active
+}

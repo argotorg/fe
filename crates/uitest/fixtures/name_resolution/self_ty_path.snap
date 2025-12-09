@@ -1,0 +1,28 @@
+---
+source: crates/uitest/tests/name_resolution.rs
+expression: diags
+input_file: fixtures/name_resolution/self_ty_path.fe
+---
+error[2-0002]: `ingot` is not found
+   ┌─ self_ty_path.fe:11:15
+   │
+11 │ type W = Foo::ingot::Foo
+   │               ^^^^^ `ingot` is not found
+
+error[2-0002]: `Self` is not found
+   ┌─ self_ty_path.fe:12:15
+   │
+12 │ type X = Foo::Self
+   │               ^^^^ `Self` is not found
+
+error[2-0002]: `get_x` is not found
+   ┌─ self_ty_path.fe:13:15
+   │
+13 │ type Y = Foo::get_x
+   │               ^^^^^ `get_x` is not found
+
+error[2-0002]: `Self` is not found
+   ┌─ self_ty_path.fe:14:15
+   │
+14 │ type Z = Foo::Self::get_x
+   │               ^^^^ `Self` is not found

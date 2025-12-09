@@ -1,0 +1,12 @@
+// Real ambiguity: two trait bounds constrain the same associated type name
+// to different concrete types, so `T::Item` is ambiguous.
+
+trait Trait1 { type Item }
+trait Trait2 { type Item }
+
+fn g<T>(_: T)
+where T: Trait1<Item = u8> + Trait2<Item = u16>
+{
+    let _y: T::Item = 0
+}
+

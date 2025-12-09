@@ -1,0 +1,105 @@
+// Targeted tests for tuple pattern decomposition in decision trees
+// These tests should reveal whether tuples are properly decomposed
+// into individual element tests or incorrectly treated as single constructors
+
+// Simple 2-tuple boolean pattern - should decompose into nested switches
+fn test_simple_boolean_tuple(t: (bool, bool)) -> u8 {
+    match t {
+        (true, true) => 3
+        (true, false) => 2
+        (false, true) => 1
+        (false, false) => 0
+    }
+}
+
+// 3-tuple pattern - should create a 3-level decision tree
+fn test_three_element_tuple(t: (bool, bool, bool)) -> u8 {
+    match t {
+        (true, true, true) => 7
+        (true, true, false) => 6
+        (true, false, true) => 5
+        (true, false, false) => 4
+        (false, true, true) => 3
+        (false, true, false) => 2
+        (false, false, true) => 1
+        (false, false, false) => 0
+    }
+}
+
+// Mixed type tuple - should decompose each element according to its type
+fn test_mixed_type_tuple(t: (bool, u8)) -> u8 {
+    match t {
+        (true, 0) => 10
+        (true, 1) => 11
+        (true, _) => 12
+        (false, 0) => 20
+        (false, _) => 21
+    }
+}
+
+// Nested tuple pattern - should decompose outer then inner tuples
+fn test_nested_tuple(t: ((bool, bool), bool)) -> u8 {
+    match t {
+        ((true, true), true) => 4
+        ((true, true), false) => 3
+        ((true, false), true) => 2
+        ((true, false), false) => 1
+        ((false, _), _) => 0
+    }
+}
+
+// Tuple with wildcard patterns - should still decompose properly
+fn test_tuple_with_wildcards(t: (bool, bool, bool)) -> u8 {
+    match t {
+        (true, _, true) => 3
+        (false, true, _) => 2
+        (false, false, false) => 1
+        _ => 0
+    }
+}
+
+// Large tuple - should decompose into multiple levels
+fn test_large_tuple(t: (bool, bool, bool, bool, bool)) -> u8 {
+    match t {
+        (true, true, true, true, true) => 5
+        (true, true, true, true, false) => 4
+        (true, true, true, false, _) => 3
+        (true, true, false, _, _) => 2
+        (true, false, _, _, _) => 1
+        (false, _, _, _, _) => 0
+    }
+}
+
+enum SimpleEnum {
+    A,
+    B
+}
+
+// Tuple containing enum - should decompose tuple and enum separately
+fn test_tuple_with_enum(t: (SimpleEnum, bool)) -> u8 {
+    match t {
+        (SimpleEnum::A, true) => 3
+        (SimpleEnum::A, false) => 2
+        (SimpleEnum::B, true) => 1
+        (SimpleEnum::B, false) => 0
+    }
+}
+
+
+
+// Tuple pattern with or-patterns - should properly handle alternatives
+fn test_tuple_with_or_patterns(t: (bool, bool, bool)) -> u8 {
+    match t {
+        (true, true | false, true) => 2
+        (false | true, false, false) => 1
+        _ => 0
+    }
+}
+
+// Single element tuple (edge case)
+fn test_single_element_tuple(t: (bool,)) -> u8 {
+    match t {
+        (true,) => 1
+        (false,) => 0
+    }
+}

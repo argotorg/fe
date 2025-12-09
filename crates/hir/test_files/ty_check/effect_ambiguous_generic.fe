@@ -1,0 +1,23 @@
+// Test ambiguous effect resolution with multiple candidates
+pub struct Storage<T> {
+    pub value: T
+}
+
+pub fn process()
+  uses (st: Storage<u8>)
+{
+    ()
+}
+
+pub fn ambiguous_effects() {
+    let st1 = Storage<u8> { value: 1 }
+    let st2 = Storage<u8> { value: 2 }
+
+    // Both st1 and st2 could satisfy Storage<u8>
+    // The innermost binding should win (shadowing)
+    with (Storage = st1) {
+        with (Storage = st2) {
+            process()  // should use st2
+        }
+    }
+}

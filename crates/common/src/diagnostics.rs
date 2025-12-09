@@ -2,7 +2,7 @@ use std::fmt;
 
 use parser::TextRange;
 
-use crate::InputFile;
+use crate::file::File;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct CompleteDiagnostic {
@@ -85,7 +85,7 @@ pub enum LabelStyle {
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Span {
-    pub file: InputFile,
+    pub file: File,
     pub range: TextRange,
     pub kind: SpanKind,
 }
@@ -127,7 +127,7 @@ pub enum SpanKind {
 }
 
 impl Span {
-    pub fn new(file: InputFile, range: TextRange, kind: SpanKind) -> Self {
+    pub fn new(file: File, range: TextRange, kind: SpanKind) -> Self {
         Self { file, range, kind }
     }
 }

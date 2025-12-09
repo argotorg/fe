@@ -3,25 +3,56 @@ source: crates/language-server/src/functionality/goto.rs
 expression: snapshot
 input_file: test_files/goto.fe
 ---
-0: use core
-1: 
-2: struct Foo {}
-3: struct Bar {}
-4: 
-5: fn main() {
-6:     let x: Foo
-7:     let y: Bar
-8:     let z: baz::Baz
-9:     core::todo()
-10: }
-11: 
-12: mod baz {
-13:    pub struct Baz {}
-14: }
----
-cursor position (6, 11), path: goto::Foo
-cursor position (7, 11), path: goto::Bar
-cursor position (8, 11), path: goto::baz
-cursor position (8, 16), path: goto::baz::Baz
-cursor position (9, 4), path: lib
-cursor position (9, 10), path: lib::todo
+note: 
+  ┌─ goto.fe:7:9
+  │
+7 │     let x: Foo
+  │         ^ -> local: Foo
+
+note: 
+  ┌─ goto.fe:7:12
+  │
+7 │     let x: Foo
+  │            ^^^ -> goto::Foo
+
+note: 
+  ┌─ goto.fe:8:9
+  │
+8 │     let y: Bar
+  │         ^ -> local: Bar
+
+note: 
+  ┌─ goto.fe:8:12
+  │
+8 │     let y: Bar
+  │            ^^^ -> goto::Bar
+
+note: 
+  ┌─ goto.fe:9:9
+  │
+9 │     let z: baz::Baz
+  │         ^ -> local: Baz
+
+note: 
+  ┌─ goto.fe:9:12
+  │
+9 │     let z: baz::Baz
+  │            ^^^ -> goto::baz
+
+note: 
+  ┌─ goto.fe:9:17
+  │
+9 │     let z: baz::Baz
+  │                 ^^^ -> goto::baz::Baz
+
+note: 
+   ┌─ goto.fe:10:5
+   │
+10 │     core::todo()
+   │     ^^^^ -> lib
+
+note: 
+   ┌─ goto.fe:10:11
+   │
+10 │     core::todo()
+   │           ^^^^ -> lib::todo

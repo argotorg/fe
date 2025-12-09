@@ -2,8 +2,8 @@ pub(crate) mod registration;
 pub(crate) mod service;
 
 use async_lsp::{
-    lsp_types::{notification::Notification, request::Request},
     AnyEvent, AnyNotification, AnyRequest, ResponseError,
+    lsp_types::{notification::Notification, request::Request},
 };
 use service::LspActorKey;
 use std::collections::HashMap;
@@ -27,9 +27,9 @@ pub trait LspActor<S: 'static> {
     fn handle_request<R: Request>(
         &mut self,
         handler: impl for<'a> AsyncFunc<'a, S, R::Params, R::Result, ResponseError>
-            + Send
-            + Sync
-            + 'static,
+        + Send
+        + Sync
+        + 'static,
     ) -> &mut Self;
     fn handle_notification<N: Notification>(
         &mut self,
@@ -42,16 +42,16 @@ pub trait LspActor<S: 'static> {
     fn handle_request_mut<R: Request>(
         &mut self,
         handler: impl for<'a> AsyncMutatingFunc<'a, S, R::Params, R::Result, ResponseError>
-            + Send
-            + Sync
-            + 'static,
+        + Send
+        + Sync
+        + 'static,
     ) -> &mut Self;
     fn handle_notification_mut<N: Notification>(
         &mut self,
         handler: impl for<'a> AsyncMutatingFunc<'a, S, N::Params, (), ResponseError>
-            + Send
-            + Sync
-            + 'static,
+        + Send
+        + Sync
+        + 'static,
     ) -> &mut Self;
     fn handle_event_mut<E: Send + Sync + 'static>(
         &mut self,
@@ -135,15 +135,16 @@ mod tests {
 
     use super::*;
     use act_locally::builder::ActorBuilder;
-    use async_lsp::{
-        lsp_types::{InitializeParams, InitializeResult},
-        RequestId,
-    };
     use async_lsp::{AnyNotification, AnyRequest, LspService, ResponseError};
+    use async_lsp::{
+        RequestId,
+        lsp_types::{InitializeParams, InitializeResult},
+    };
     use serde_json::json;
     use service::LspActorService;
     use std::ops::ControlFlow;
     use tower::Service;
+    use tracing::info;
 
     #[derive(Debug)]
     enum Initialize {}
@@ -180,7 +181,7 @@ mod tests {
             state: &mut TestState,
             _: InitializeParams,
         ) -> Result<InitializeResult, ResponseError> {
-            println!("Handling initialize request");
+            info!("Handling initialize request");
             state.initialized = true;
             Ok(InitializeResult::default())
         }
@@ -190,7 +191,7 @@ mod tests {
         service.handle_request_mut::<Initialize>(handle_initialize);
 
         async fn handle_initialized(state: &mut TestState, _: ()) -> Result<(), ResponseError> {
-            println!("Handling initialized notification");
+            info!("Handling initialized notification");
             assert!(state.initialized, "State should be initialized");
             Ok(())
         }
@@ -204,7 +205,7 @@ mod tests {
             serde_json::to_value(init_params).unwrap(),
         );
 
-        println!("Sending initialize request");
+        info!("Sending initialize request");
 
         let init_result = service.call(init_request).await.unwrap();
 
@@ -216,9 +217,9 @@ mod tests {
         // Test initialized notification
         let init_notification = AnyNotification::stub(Initialized::METHOD.to_string(), json!(null));
 
-        println!("Sending initialized notification");
+        info!("Sending initialized notification");
         if let ControlFlow::Break(Err(e)) = service.notify(init_notification) {
-            panic!("Failed to send Initialized notification: {:?}", e);
+            panic!("Failed to send Initialized notification: {e:?}");
         }
 
         // Wait a bit to ensure the notification is processed

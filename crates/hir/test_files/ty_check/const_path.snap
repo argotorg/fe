@@ -1,0 +1,92 @@
+---
+source: crates/hir-analysis/tests/ty_check.rs
+expression: res
+input_file: test_files/ty_check/const_path.fe
+---
+note: 
+  ┌─ const_path.fe:6:27
+  │  
+6 │       fn len(self) -> usize {
+  │ ╭───────────────────────────^
+7 │ │         N
+8 │ │     }
+  │ ╰─────^ usize
+
+note: 
+  ┌─ const_path.fe:7:9
+  │
+7 │         N
+  │         ^ usize
+
+note: 
+   ┌─ const_path.fe:17:76
+   │  
+17 │   fn f<const N: usize>(b5: B5, arr: [u8; N], a: A<N>, s: String<N>) -> usize {
+   │ ╭────────────────────────────────────────────────────────────────────────────^
+18 │ │     a.len()
+19 │ │ }
+   │ ╰─^ usize
+
+note: 
+   ┌─ const_path.fe:18:5
+   │
+18 │     a.len()
+   │     ^ A<const N: usize>
+
+note: 
+   ┌─ const_path.fe:18:5
+   │
+18 │     a.len()
+   │     ^^^^^^^ usize
+
+note: 
+   ┌─ const_path.fe:22:29
+   │  
+22 │   fn g(arr: [u8; SIZE]) -> u8 {
+   │ ╭─────────────────────────────^
+23 │ │     let s: String<SIZE> = "0123456789"
+24 │ │     arr[SIZE-1]
+25 │ │ }
+   │ ╰─^ u8
+
+note: 
+   ┌─ const_path.fe:23:9
+   │
+23 │     let s: String<SIZE> = "0123456789"
+   │         ^ String<10>
+
+note: 
+   ┌─ const_path.fe:23:27
+   │
+23 │     let s: String<SIZE> = "0123456789"
+   │                           ^^^^^^^^^^^^ String<10>
+
+note: 
+   ┌─ const_path.fe:24:5
+   │
+24 │     arr[SIZE-1]
+   │     ^^^ [u8; 10]
+
+note: 
+   ┌─ const_path.fe:24:5
+   │
+24 │     arr[SIZE-1]
+   │     ^^^^^^^^^^^ u8
+
+note: 
+   ┌─ const_path.fe:24:9
+   │
+24 │     arr[SIZE-1]
+   │         ^^^^ usize
+
+note: 
+   ┌─ const_path.fe:24:9
+   │
+24 │     arr[SIZE-1]
+   │         ^^^^^^ usize
+
+note: 
+   ┌─ const_path.fe:24:14
+   │
+24 │     arr[SIZE-1]
+   │              ^ usize

@@ -6,31 +6,32 @@ use act_locally::{
     types::ActorError,
 };
 use async_lsp::{
-    lsp_types::{notification::Notification, request::Request},
     AnyEvent, ResponseError,
+    lsp_types::{notification::Notification, request::Request},
 };
+use tracing::error;
 
 use super::{
-    service::{LspActorKey, LspActorService},
     LspActor,
+    service::{LspActorKey, LspActorService},
 };
 
 impl<S: 'static> LspActor<S> for LspActorService<S> {
     fn handle_request<R: Request>(
         &mut self,
         handler: impl for<'b> AsyncFunc<'b, S, R::Params, R::Result, ResponseError>
-            + 'static
-            + Send
-            + Sync,
+        + 'static
+        + Send
+        + Sync,
     ) -> &mut Self {
         let param_handler = Box::new(
             move |params: Box<dyn Message>| -> Result<Box<dyn Message>, ActorError> {
                 let params = params.downcast::<serde_json::Value>().map_err(|_| {
-                    println!("Failed to downcast params to serde_json::Value");
+                    error!("Failed to downcast params to serde_json::Value");
                     ActorError::DowncastError
                 })?;
                 let typed_params: R::Params = serde_json::from_value(*params).map_err(|e| {
-                    println!("Deserialization error: {:?}", e);
+                    error!("Deserialization error: {:?}", e);
                     ActorError::CustomError(Box::new(e))
                 })?;
 
@@ -53,7 +54,7 @@ impl<S: 'static> LspActor<S> for LspActorService<S> {
 
                 let json_value = serde_json::to_value(lsp_result)
                     .map_err(|e| ActorError::CustomError(Box::new(e)))?;
-                // println!("Unwrapped json result: {:?}", &json_value);
+                // error!("Unwrapped json result: {:?}", &json_value);
                 Ok(Box::new(json_value) as Box<dyn Response>)
             },
         );
@@ -68,18 +69,18 @@ impl<S: 'static> LspActor<S> for LspActorService<S> {
     fn handle_request_mut<R: Request>(
         &mut self,
         handler: impl for<'b> AsyncMutatingFunc<'b, S, R::Params, R::Result, ResponseError>
-            + 'static
-            + Send
-            + Sync,
+        + 'static
+        + Send
+        + Sync,
     ) -> &mut Self {
         let param_handler = Box::new(
             move |params: Box<dyn Message>| -> Result<Box<dyn Message>, ActorError> {
                 let params = params.downcast::<serde_json::Value>().map_err(|_| {
-                    println!("Failed to downcast params to serde_json::Value");
+                    error!("Failed to downcast params to serde_json::Value");
                     ActorError::DowncastError
                 })?;
                 let typed_params: R::Params = serde_json::from_value(*params).map_err(|e| {
-                    println!("Deserialization error: {:?}", e);
+                    error!("Deserialization error: {:?}", e);
                     ActorError::CustomError(Box::new(e))
                 })?;
 
@@ -102,7 +103,7 @@ impl<S: 'static> LspActor<S> for LspActorService<S> {
 
                 let json_value = serde_json::to_value(lsp_result)
                     .map_err(|e| ActorError::CustomError(Box::new(e)))?;
-                // println!("Unwrapped json result: {:?}", &json_value);
+                // error!("Unwrapped json result: {:?}", &json_value);
                 Ok(Box::new(json_value) as Box<dyn Response>)
             },
         );
@@ -121,11 +122,11 @@ impl<S: 'static> LspActor<S> for LspActorService<S> {
         let param_handler = Box::new(
             move |params: Box<dyn Message>| -> Result<Box<dyn Message>, ActorError> {
                 let params = params.downcast::<serde_json::Value>().map_err(|_| {
-                    println!("Failed to downcast params to serde_json::Value");
+                    error!("Failed to downcast params to serde_json::Value");
                     ActorError::DowncastError
                 })?;
                 let typed_params: N::Params = serde_json::from_value(*params).map_err(|e| {
-                    println!("Deserialization error: {:?}", e);
+                    error!("Deserialization error: {:?}", e);
                     ActorError::CustomError(Box::new(e))
                 })?;
                 Ok(Box::new(typed_params) as Box<dyn Message>)
@@ -144,18 +145,18 @@ impl<S: 'static> LspActor<S> for LspActorService<S> {
     fn handle_notification_mut<N: Notification>(
         &mut self,
         handler: impl for<'b> AsyncMutatingFunc<'b, S, N::Params, (), ResponseError>
-            + 'static
-            + Send
-            + Sync,
+        + 'static
+        + Send
+        + Sync,
     ) -> &mut Self {
         let param_handler = Box::new(
             move |params: Box<dyn Message>| -> Result<Box<dyn Message>, ActorError> {
                 let params = params.downcast::<serde_json::Value>().map_err(|_| {
-                    println!("Failed to downcast params to serde_json::Value");
+                    error!("Failed to downcast params to serde_json::Value");
                     ActorError::DowncastError
                 })?;
                 let typed_params: N::Params = serde_json::from_value(*params).map_err(|e| {
-                    println!("Deserialization error: {:?}", e);
+                    error!("Deserialization error: {:?}", e);
                     ActorError::CustomError(Box::new(e))
                 })?;
                 Ok(Box::new(typed_params) as Box<dyn Message>)

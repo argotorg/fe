@@ -1,0 +1,9 @@
+struct Map<T, U> {}
+
+type Bar<U, V = U> = Map<U, V>
+
+fn f() {
+    // Missing required generic argument U
+    let _y: Bar
+}
+

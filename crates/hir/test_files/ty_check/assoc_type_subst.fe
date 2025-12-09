@@ -1,0 +1,47 @@
+// Test that demonstrates the fix for nested associated type substitution
+extern {
+    fn todo() -> !
+}
+
+// Simple case - this should work
+trait Simple {
+    type Output
+    fn get(self) -> Self::Output
+}
+
+struct SimpleImpl<T> {
+    value: T
+}
+
+impl<T> Simple for SimpleImpl<T> {
+    type Output = T
+    fn get(self) -> Self::Output {
+        self.value
+    }
+}
+
+// Nested case - this is where the bug manifests
+trait Nested {
+    type Middle: Simple
+    fn get_nested(self) -> Self::Middle::Output
+}
+
+struct NestedImpl<T> {
+    phantom: T
+}
+
+impl<T> Nested for NestedImpl<T> {
+    type Middle = SimpleImpl<T>
+
+    // Bug: Self::Middle::Output should resolve to T
+    // but it's not properly substituting the type parameter
+    fn get_nested(self) -> Self::Middle::Output {
+        todo()
+    }
+}
+
+// Test usage
+fn test_nested() {
+    let n: NestedImpl<u32> = NestedImpl { phantom: 0 }
+    let result: u32 = n.get_nested()
+}

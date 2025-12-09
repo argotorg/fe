@@ -1,0 +1,12 @@
+enum Color {
+    Red,
+    Green,
+    Blue
+}
+
+fn test_wildcard(c: Color) -> u8 {
+    match c {
+        Color::Red => 0
+        _ => 1
+    }
+}

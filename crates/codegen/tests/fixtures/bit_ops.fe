@@ -1,0 +1,12 @@
+pub fn bit_ops(x: u256, y: u256) -> (u256, u256, u256, u256, u256) {
+    let and_v = x & y;
+    let or_v = x | y;
+    let xor_v = x ^ y;
+    let shl_v = x << 8;
+    let shr_v = x >> 2;
+    (and_v, or_v, xor_v, shl_v, shr_v)
+}
+
+pub fn pow_op(x: u256, y: u256) -> u256 {
+    x ** y
+}

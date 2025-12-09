@@ -1,0 +1,12 @@
+---
+source: crates/uitest/tests/name_resolution.rs
+expression: diags
+input_file: fixtures/name_resolution/conflict_field_in_record_variant.fe
+---
+error[3-0017]: duplicate field name in enum variant `E::R`
+  ┌─ conflict_field_in_record_variant.fe:3:9
+  │
+3 │         x: i32,
+  │         ^ `x` is defined here
+4 │         x: i32,
+  │         - `x` is redefined here

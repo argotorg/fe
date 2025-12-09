@@ -1,0 +1,94 @@
+---
+source: crates/hir-analysis/tests/pattern_matching.rs
+expression: diagnostic_output
+input_file: test_files/pattern_matching/non_exhaustive/nested_tuple_non_exhaustive.fe
+---
+Non-exhaustive test file nested_tuple_non_exhaustive.fe has 7 diagnostic(s):
+
+error[8-0034]: non-exhaustive patterns: type `((bool, bool), bool)` is not covered
+   ┌─ nested_tuple_non_exhaustive.fe:10:5
+   │  
+10 │ ╭     match t {
+11 │ │         ((true, _), _) => 1  // Only covers cases where first element is true
+12 │ │         // Missing ((false, _), _) case
+13 │ │     }
+   │ ╰─────^ match expression does not cover all possible values
+   │  
+   = Not covered: `((false, _), _)`
+
+error[8-0034]: non-exhaustive patterns: type `((bool, bool), bool)` is not covered
+   ┌─ nested_tuple_non_exhaustive.fe:18:5
+   │  
+18 │ ╭     match t {
+19 │ │         ((true, true), _) => 3   // Only matches inner tuple (true, true)
+20 │ │         ((true, false), _) => 2  // Only matches inner tuple (true, false)
+21 │ │         ((false, true), _) => 1  // Only matches inner tuple (false, true)
+22 │ │         // Missing ((false, false), _) case
+23 │ │     }
+   │ ╰─────^ match expression does not cover all possible values
+   │  
+   = Not covered: `((false, false), _)`
+
+error[8-0034]: non-exhaustive patterns: type `((bool, bool), bool)` is not covered
+   ┌─ nested_tuple_non_exhaustive.fe:28:5
+   │  
+28 │ ╭     match t {
+29 │ │         ((_, _), true) => 1   // Matches all inner tuples when outer bool is true
+30 │ │         // Missing ((_, _), false) case
+31 │ │     }
+   │ ╰─────^ match expression does not cover all possible values
+   │  
+   = Not covered: `((_, _), false)`
+
+error[8-0034]: non-exhaustive patterns: type `((Color, bool), Color)` is not covered
+   ┌─ nested_tuple_non_exhaustive.fe:36:5
+   │  
+36 │ ╭     match t {
+37 │ │         ((Color::Red, _), _) => 3    // All cases with Red
+38 │ │         ((Color::Green, _), _) => 2  // All cases with Green
+39 │ │         // Missing cases with Color::Blue in first position
+40 │ │     }
+   │ ╰─────^ match expression does not cover all possible values
+   │  
+   = Not covered: `((Color::Blue, _), _)`
+
+error[8-0034]: non-exhaustive patterns: type `(((bool, bool), bool), bool)` is not covered
+   ┌─ nested_tuple_non_exhaustive.fe:45:5
+   │  
+45 │ ╭     match t {
+46 │ │         (((true, _), _), true) => 3   // Innermost first true, outermost true
+47 │ │         (((true, _), _), false) => 2  // Innermost first true, outermost false
+48 │ │         (((false, _), true), _) => 1  // Innermost first false, middle true
+49 │ │         // Missing (((false, _), false), _) case
+50 │ │     }
+   │ ╰─────^ match expression does not cover all possible values
+   │  
+   = Not covered: `(((false, _), false), _)`
+
+error[8-0034]: non-exhaustive patterns: type `((bool, Color), bool)` is not covered
+   ┌─ nested_tuple_non_exhaustive.fe:55:5
+   │  
+55 │ ╭     match t {
+56 │ │         ((true, Color::Red), _) => 4    // true + Red
+57 │ │         ((true, Color::Green), _) => 3  // true + Green
+58 │ │         ((true, Color::Blue), _) => 2   // true + Blue
+59 │ │         ((false, Color::Red), _) => 1   // false + Red
+60 │ │         // Missing cases: ((false, Color::Green), _) and ((false, Color::Blue), _)
+61 │ │     }
+   │ ╰─────^ match expression does not cover all possible values
+   │  
+   = Not covered: `((false, Color::Green | Color::Blue), _)`
+
+error[8-0034]: non-exhaustive patterns: type `((u8, u8), bool)` is not covered
+   ┌─ nested_tuple_non_exhaustive.fe:66:5
+   │  
+66 │ ╭     match t {
+67 │ │         ((0, _), _) => 4     // First element is 0
+68 │ │         ((_, 0), _) => 3     // Second element is 0
+69 │ │         ((1, 1), true) => 2  // Both 1 with true
+70 │ │         ((1, 1), false) => 1 // Both 1 with false
+71 │ │         // Missing many cases where neither element is 0 or both 1
+72 │ │     }
+   │ ╰─────^ match expression does not cover all possible values
+   │  
+   = Not covered: `((_, _), _)`

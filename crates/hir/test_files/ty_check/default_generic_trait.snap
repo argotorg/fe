@@ -1,0 +1,105 @@
+---
+source: crates/hir-analysis/tests/ty_check.rs
+expression: res
+input_file: test_files/ty_check/default_generic_trait.fe
+---
+note: 
+   ┌─ default_generic_trait.fe:16:45
+   │
+16 │     fn add(self: Self, _ rhs: Self) -> Self { self }
+   │                                             ^^^^^^^^ Foo
+
+note: 
+   ┌─ default_generic_trait.fe:16:47
+   │
+16 │     fn add(self: Self, _ rhs: Self) -> Self { self }
+   │                                               ^^^^ Foo
+
+note: 
+   ┌─ default_generic_trait.fe:19:45
+   │
+19 │     fn sub(self: Self, _ rhs: Self) -> Self { self }
+   │                                             ^^^^^^^^ Foo
+
+note: 
+   ┌─ default_generic_trait.fe:19:47
+   │
+19 │     fn sub(self: Self, _ rhs: Self) -> Self { self }
+   │                                               ^^^^ Foo
+
+note: 
+   ┌─ default_generic_trait.fe:22:45
+   │
+22 │     fn add(self: Self, _ rhs: Self) -> Self { self }
+   │                                             ^^^^^^^^ Bar
+
+note: 
+   ┌─ default_generic_trait.fe:22:47
+   │
+22 │     fn add(self: Self, _ rhs: Self) -> Self { self }
+   │                                               ^^^^ Bar
+
+note: 
+   ┌─ default_generic_trait.fe:25:29
+   │  
+25 │   fn f(x: Foo, y: Bar) -> Foo {
+   │ ╭─────────────────────────────^
+26 │ │     y.add(y)
+27 │ │     x.sub(x)
+28 │ │     x.add(x)
+29 │ │ }
+   │ ╰─^ Foo
+
+note: 
+   ┌─ default_generic_trait.fe:26:5
+   │
+26 │     y.add(y)
+   │     ^ Bar
+
+note: 
+   ┌─ default_generic_trait.fe:26:5
+   │
+26 │     y.add(y)
+   │     ^^^^^^^^ Bar
+
+note: 
+   ┌─ default_generic_trait.fe:26:11
+   │
+26 │     y.add(y)
+   │           ^ Bar
+
+note: 
+   ┌─ default_generic_trait.fe:27:5
+   │
+27 │     x.sub(x)
+   │     ^ Foo
+
+note: 
+   ┌─ default_generic_trait.fe:27:5
+   │
+27 │     x.sub(x)
+   │     ^^^^^^^^ Foo
+
+note: 
+   ┌─ default_generic_trait.fe:27:11
+   │
+27 │     x.sub(x)
+   │           ^ Foo
+
+note: 
+   ┌─ default_generic_trait.fe:28:5
+   │
+28 │     x.add(x)
+   │     ^ Foo
+
+note: 
+   ┌─ default_generic_trait.fe:28:5
+   │
+28 │     x.add(x)
+   │     ^^^^^^^^ Foo
+
+note: 
+   ┌─ default_generic_trait.fe:28:11
+   │
+28 │     x.add(x)
+   │           ^ Foo

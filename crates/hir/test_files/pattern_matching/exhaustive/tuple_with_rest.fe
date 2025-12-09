@@ -1,0 +1,11 @@
+enum Coordinate {
+    Point2D(u8, u8),
+    Point3D(u8, u8, u8)
+}
+
+fn test_rest_pattern(coord: Coordinate) -> u8 {
+    match coord {
+        Coordinate::Point2D(x, y) => x + y
+        Coordinate::Point3D(x, ..) => x  // Rest pattern should work
+    }
+}

@@ -1,0 +1,29 @@
+use core::{calldataload, mload, mstore, mstore8, return_data, sload, sstore}
+
+pub fn load_word(ptr: u256) -> u256 {
+    mload(ptr)
+}
+
+pub fn store_word(ptr: u256, value: u256) {
+    mstore(ptr, value)
+}
+
+pub fn store_byte(ptr: u256, value: u8) {
+    mstore8(ptr, value)
+}
+
+pub fn load_slot(slot: u256) -> u256 {
+    sload(slot)
+}
+
+pub fn store_slot(slot: u256, value: u256) {
+    sstore(slot, value)
+}
+
+pub fn load_calldata(offset: u256) -> u256 {
+    calldataload(offset)
+}
+
+pub fn finish(ptr: u256, len: u256) {
+    return_data(ptr, len)
+}

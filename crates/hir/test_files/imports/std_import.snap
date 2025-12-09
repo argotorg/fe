@@ -1,0 +1,10 @@
+---
+source: crates/hir-analysis/tests/import.rs
+expression: res
+input_file: test_files/imports/std_import.fe
+---
+note: 
+  ┌─ std_import.fe:1:1
+  │
+1 │ use std::evm::ops::{sload, sstore}
+  │ ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ lib::evm::ops::sload

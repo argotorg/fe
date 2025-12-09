@@ -1,0 +1,58 @@
+---
+source: crates/fe/tests/cli_output.rs
+expression: output
+input_file: tests/fixtures/cli_output/single_files/parse_error.fe
+---
+=== STDERR ===
+errors in file://<project>/crates/fe/tests/fixtures/cli_output/single_files/parse_error.fe
+
+error[1-0001]: expected expression
+  ┌─ parse_error.fe:3:12
+  │
+3 │     let y = // Missing value
+  │            ^ expected expression
+
+error[1-0001]: `if` expression requires a body
+  ┌─ parse_error.fe:6:6
+  │
+6 │     }
+  │      ^ expected `{`
+
+error[8-0000]: type mismatch
+  ┌─ parse_error.fe:4:8
+  │  
+4 │       if x > {  // Missing comparison value
+  │ ╭────────^
+5 │ │         return true
+6 │ │     }
+  │ ╰─────^ expected `bool`, but `{integer}` is given
+
+error[8-0013]: returned type mismatch
+  ┌─ parse_error.fe:5:9
+  │
+1 │ pub fn broken_syntax() {
+  │        ------------- try adding `-> bool`
+  ·
+5 │         return true
+  │         ^^^^^^^^^^^ expected `()`, but `bool` is returned
+
+error[8-0031]: type annotation is needed
+  ┌─ parse_error.fe:2:9
+  │
+2 │     let x = 5
+  │         ^
+  │         │
+  │         type annotation is needed
+  │         no default type is provided for an integer type. consider giving integer type
+
+error[8-0031]: type annotation is needed
+  ┌─ parse_error.fe:3:9
+  │
+3 │     let y = // Missing value
+  │         ^
+  │         │
+  │         type annotation is needed
+  │         consider giving `: Type` here
+
+
+=== EXIT CODE: 1 ===

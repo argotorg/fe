@@ -1,0 +1,5 @@
+pub fn add_numbers() -> i32 {
+    let x: i32 = 5
+    let y: bool = true
+    return x + y  // Type error: can't add i32 and bool
+}

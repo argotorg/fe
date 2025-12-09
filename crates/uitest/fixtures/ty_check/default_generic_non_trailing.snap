@@ -1,0 +1,29 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/default_generic_non_trailing.fe
+---
+error[3-0021]: generic parameters with a default must be trailing
+  ┌─ default_generic_non_trailing.fe:1:10
+  │
+1 │ struct S<T = i32, U> {}
+  │          ^^^^^^^ must not be followed by a parameter with no default
+
+error[3-0021]: generic parameters with a default must be trailing
+  ┌─ default_generic_non_trailing.fe:3:10
+  │
+3 │ trait Tr<T = Self, U> {}
+  │          ^^^^^^^^ must not be followed by a parameter with no default
+
+error[3-0021]: generic parameters with a default must be trailing
+  ┌─ default_generic_non_trailing.fe:6:12
+  │
+6 │ type Alias<T = i32, U> = Map<T, U>
+  │            ^^^^^^^ must not be followed by a parameter with no default
+
+error[3-0021]: generic parameters with a default must be trailing
+  ┌─ default_generic_non_trailing.fe:8:8
+  │
+8 │ fn foo<T = i32, U>(x: U) {}
+  │        ^^^^^^^ must not be followed by a parameter with no default
+

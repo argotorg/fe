@@ -1,0 +1,33 @@
+// Minimal test case to debug nested associated type resolution
+extern {
+    fn todo() -> !
+}
+
+// Level 1: Associated type with type parameter
+trait HasAssoc {
+    type Assoc
+}
+
+struct Generic<T> {
+    phantom: T
+}
+
+impl<T> HasAssoc for Generic<T> {
+    type Assoc = T
+}
+
+// Test direct access - this should work
+fn test_direct() {
+    // Generic<u32>::Assoc should resolve to u32
+    let x: Generic<u32>::Assoc = 42
+}
+
+// Test through generic parameter - this is where it fails
+fn test_generic<T: HasAssoc>() -> T::Assoc {
+    todo()
+}
+
+fn test_call() {
+    // This should resolve Generic<u32>::Assoc = u32
+    let y: u32 = test_generic<Generic<u32>>()
+}

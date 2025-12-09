@@ -1,13 +1,12 @@
 use std::convert::Infallible;
 
 use super::{
-    define_scope,
+    Checkpoint, ErrProof, Parser, Recovery, define_scope,
     expr::parse_expr,
     param::GenericArgListScope,
     parse_list,
-    path::{is_path_segment, PathScope},
+    path::{PathScope, is_path_segment},
     token_stream::TokenStream,
-    Checkpoint, ErrProof, Parser, Recovery,
 };
 use crate::{ExpectedKind, ParseError, SyntaxKind};
 
@@ -17,7 +16,6 @@ pub fn parse_type<S: TokenStream>(
 ) -> Result<Checkpoint, Recovery<ErrProof>> {
     match parser.current_kind() {
         Some(SyntaxKind::Star) => parser.parse_cp(PtrTypeScope::default(), checkpoint),
-        Some(SyntaxKind::SelfTypeKw) => parser.parse_cp(SelfTypeScope::new(), checkpoint),
         Some(SyntaxKind::LParen) => parser.parse_cp(TupleTypeScope::default(), checkpoint),
         Some(SyntaxKind::LBracket) => parser.parse_cp(ArrayTypeScope::default(), checkpoint),
         Some(SyntaxKind::Not) => parser
@@ -66,19 +64,6 @@ impl super::Parse for PathTypeScope {
     }
 }
 
-define_scope!(pub(super) SelfTypeScope, SelfType);
-impl super::Parse for SelfTypeScope {
-    type Error = Recovery<ErrProof>;
-
-    fn parse<S: TokenStream>(&mut self, parser: &mut Parser<S>) -> Result<(), Self::Error> {
-        parser.set_newline_as_trivia(false);
-        parser.bump_expected(SyntaxKind::SelfTypeKw);
-        if parser.current_kind() == Some(SyntaxKind::Lt) {
-            parser.parse(GenericArgListScope::default())?;
-        }
-        Ok(())
-    }
-}
 define_scope! { pub(crate) TupleTypeScope, TupleType, (RParen, Comma) }
 impl super::Parse for TupleTypeScope {
     type Error = Recovery<ErrProof>;

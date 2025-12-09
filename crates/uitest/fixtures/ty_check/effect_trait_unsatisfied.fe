@@ -1,0 +1,25 @@
+pub trait Logger {
+    fn log(self) -> u8
+}
+
+pub struct Console {}
+
+impl Logger for Console {
+    fn log(self) -> u8 {
+        1
+    }
+}
+
+pub struct Silent {}
+
+pub fn needs_logger() -> u8
+  uses (logger: Logger)
+{
+    logger.log()
+}
+
+pub fn missing_logger_impl() -> u8 {
+    with (Logger = Silent {}) {
+        needs_logger()
+    }
+}

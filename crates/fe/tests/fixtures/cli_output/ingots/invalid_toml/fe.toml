@@ -1,0 +1,3 @@
+[ingot]
+name = "invalidtoml
+version = 0.0.1  # Missing quotes on name and version

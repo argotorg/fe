@@ -1,0 +1,9 @@
+trait T1 {
+    type Foo = FooDefault
+    type Bar: T2
+}
+
+struct FooDefault{}
+
+struct S {}
+impl T1 for S {}

@@ -1,13 +1,13 @@
 ---
 source: crates/uitest/tests/ty_check.rs
 expression: diags
-input_file: crates/uitest/fixtures/ty_check/array.fe
+input_file: fixtures/ty_check/array.fe
 ---
 error[3-0011]: given type doesn't match the expected const type
   ┌─ array.fe:6:17
   │
 6 │     let x = [1; false]
-  │                 ^^^^^ expected `u256` type here, but `bool` is given
+  │                 ^^^^^ expected `usize` type here, but `bool` is given
 
 error[8-0000]: type mismatch
   ┌─ array.fe:2:23
@@ -44,5 +44,3 @@ error[8-0031]: type annotation is needed
   │              │
   │              type annotation is needed
   │              no default type is provided for an integer type. consider giving integer type
-
-

@@ -1,0 +1,47 @@
+enum Option<T> {
+    Some(T),
+    None
+}
+
+enum Result<T, E> {
+    Ok(T),
+    Err(E)
+}
+
+fn test_option_matching(opt: Option<i32>) -> i32 {
+    match opt {
+        Option::Some(x) => x
+        Option::None => 0
+    }
+}
+
+fn test_result_matching(res: Result<bool, i32>) -> bool {
+    match res {
+        Result::Ok(value) => value
+        Result::Err(_) => false
+    }
+}
+
+fn test_nested_generic(nested: Option<Result<i32, bool>>) -> i32 {
+    match nested {
+        Option::Some(inner) => {
+            match inner {
+                Result::Ok(val) => val
+                Result::Err(_) => -1
+            }
+        }
+        Option::None => -2
+    }
+}
+
+fn test_multiple_generic_params(res: Result<Option<i32>, bool>) -> i32 {
+    match res {
+        Result::Ok(opt) => {
+            match opt {
+                Option::Some(x) => x
+                Option::None => 0
+            }
+        }
+        Result::Err(_) => -1
+    }
+}

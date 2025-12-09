@@ -1,0 +1,21 @@
+---
+source: crates/hir-analysis/tests/decision_tree.rs
+expression: res
+input_file: test_files/decision_trees/simple_enum.fe
+---
+note: 
+   ┌─ simple_enum.fe:8:5
+   │  
+ 8 │ ╭     match c {
+ 9 │ │         Color::Red => 0
+10 │ │         Color::Green => 1
+11 │ │         Color::Blue => 2
+12 │ │     }
+   │ ╰─────^ Decision Tree for test_simple_enum:
+ Switch on expr
+ ├─ Red =>
+ │  └─ Execute arm #0
+ ├─ Green =>
+ │  └─ Execute arm #1
+ └─ Blue =>
+    └─ Execute arm #2

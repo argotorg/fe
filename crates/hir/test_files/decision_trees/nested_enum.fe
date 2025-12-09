@@ -1,0 +1,17 @@
+enum MyEnum {
+    Unit,
+    Tuple(u8, u8)
+}
+
+enum Nested {
+    Value(MyEnum),
+    Other
+}
+
+fn test_nested_enum(n: Nested) -> u8 {
+    match n {
+        Nested::Value(MyEnum::Unit) => 0
+        Nested::Value(MyEnum::Tuple(x, y)) => x + y
+        Nested::Other => 100
+    }
+}

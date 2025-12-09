@@ -1,0 +1,306 @@
+---
+source: crates/hir-analysis/tests/ty_check.rs
+expression: res
+input_file: test_files/ty_check/associated_types_cycle.fe
+---
+note: 
+   ┌─ associated_types_cycle.fe:18:36
+   │
+18 │     fn write_byte(mut self, _: u8) {}
+   │                                    ^^ ()
+
+note: 
+   ┌─ associated_types_cycle.fe:22:46
+   │  
+22 │       fn with_encoded_size(_ n: usize) -> Self {
+   │ ╭──────────────────────────────────────────────^
+23 │ │         Self {
+24 │ │             max_bytes: n
+25 │ │         }
+26 │ │     }
+   │ ╰─────^ SolEncoder
+
+note: 
+   ┌─ associated_types_cycle.fe:23:9
+   │  
+23 │ ╭         Self {
+24 │ │             max_bytes: n
+25 │ │         }
+   │ ╰─────────^ SolEncoder
+
+note: 
+   ┌─ associated_types_cycle.fe:24:24
+   │
+24 │             max_bytes: n
+   │                        ^ usize
+
+note: 
+   ┌─ associated_types_cycle.fe:34:47
+   │  
+34 │       fn encode(self, mut _ e: SolAbi::Encoder) {
+   │ ╭───────────────────────────────────────────────^
+35 │ │         e.write_byte(self[0])
+36 │ │         e.write_byte(self[1])
+37 │ │         e.write_byte(self[2])
+38 │ │         e.write_byte(self[3])
+39 │ │     }
+   │ ╰─────^ ()
+
+note: 
+   ┌─ associated_types_cycle.fe:35:9
+   │
+35 │         e.write_byte(self[0])
+   │         ^ SolEncoder
+
+note: 
+   ┌─ associated_types_cycle.fe:35:9
+   │
+35 │         e.write_byte(self[0])
+   │         ^^^^^^^^^^^^^^^^^^^^^ ()
+
+note: 
+   ┌─ associated_types_cycle.fe:35:22
+   │
+35 │         e.write_byte(self[0])
+   │                      ^^^^ [u8; 4]
+
+note: 
+   ┌─ associated_types_cycle.fe:35:22
+   │
+35 │         e.write_byte(self[0])
+   │                      ^^^^^^^ u8
+
+note: 
+   ┌─ associated_types_cycle.fe:35:27
+   │
+35 │         e.write_byte(self[0])
+   │                           ^ usize
+
+note: 
+   ┌─ associated_types_cycle.fe:36:9
+   │
+36 │         e.write_byte(self[1])
+   │         ^ SolEncoder
+
+note: 
+   ┌─ associated_types_cycle.fe:36:9
+   │
+36 │         e.write_byte(self[1])
+   │         ^^^^^^^^^^^^^^^^^^^^^ ()
+
+note: 
+   ┌─ associated_types_cycle.fe:36:22
+   │
+36 │         e.write_byte(self[1])
+   │                      ^^^^ [u8; 4]
+
+note: 
+   ┌─ associated_types_cycle.fe:36:22
+   │
+36 │         e.write_byte(self[1])
+   │                      ^^^^^^^ u8
+
+note: 
+   ┌─ associated_types_cycle.fe:36:27
+   │
+36 │         e.write_byte(self[1])
+   │                           ^ usize
+
+note: 
+   ┌─ associated_types_cycle.fe:37:9
+   │
+37 │         e.write_byte(self[2])
+   │         ^ SolEncoder
+
+note: 
+   ┌─ associated_types_cycle.fe:37:9
+   │
+37 │         e.write_byte(self[2])
+   │         ^^^^^^^^^^^^^^^^^^^^^ ()
+
+note: 
+   ┌─ associated_types_cycle.fe:37:22
+   │
+37 │         e.write_byte(self[2])
+   │                      ^^^^ [u8; 4]
+
+note: 
+   ┌─ associated_types_cycle.fe:37:22
+   │
+37 │         e.write_byte(self[2])
+   │                      ^^^^^^^ u8
+
+note: 
+   ┌─ associated_types_cycle.fe:37:27
+   │
+37 │         e.write_byte(self[2])
+   │                           ^ usize
+
+note: 
+   ┌─ associated_types_cycle.fe:38:9
+   │
+38 │         e.write_byte(self[3])
+   │         ^ SolEncoder
+
+note: 
+   ┌─ associated_types_cycle.fe:38:9
+   │
+38 │         e.write_byte(self[3])
+   │         ^^^^^^^^^^^^^^^^^^^^^ ()
+
+note: 
+   ┌─ associated_types_cycle.fe:38:22
+   │
+38 │         e.write_byte(self[3])
+   │                      ^^^^ [u8; 4]
+
+note: 
+   ┌─ associated_types_cycle.fe:38:22
+   │
+38 │         e.write_byte(self[3])
+   │                      ^^^^^^^ u8
+
+note: 
+   ┌─ associated_types_cycle.fe:38:27
+   │
+38 │         e.write_byte(self[3])
+   │                           ^ usize
+
+note: 
+   ┌─ associated_types_cycle.fe:42:8
+   │  
+42 │   fn f() {
+   │ ╭────────^
+43 │ │     let enc1 = SolAbi::Encoder::with_encoded_size(1024)
+44 │ │     let enc2 = SolEncoder::with_encoded_size(256)
+45 │ │     let enc3: SolEncoder = AbiEncoder::with_encoded_size(128)
+46 │ │     let selector = [0, 1, 2, 3]
+47 │ │     selector.encode(enc1)
+48 │ │ }
+   │ ╰─^ ()
+
+note: 
+   ┌─ associated_types_cycle.fe:43:9
+   │
+43 │     let enc1 = SolAbi::Encoder::with_encoded_size(1024)
+   │         ^^^^ SolEncoder
+
+note: 
+   ┌─ associated_types_cycle.fe:43:16
+   │
+43 │     let enc1 = SolAbi::Encoder::with_encoded_size(1024)
+   │                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ fn with_encoded_size<SolEncoder>
+
+note: 
+   ┌─ associated_types_cycle.fe:43:16
+   │
+43 │     let enc1 = SolAbi::Encoder::with_encoded_size(1024)
+   │                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ SolEncoder
+
+note: 
+   ┌─ associated_types_cycle.fe:43:51
+   │
+43 │     let enc1 = SolAbi::Encoder::with_encoded_size(1024)
+   │                                                   ^^^^ usize
+
+note: 
+   ┌─ associated_types_cycle.fe:44:9
+   │
+44 │     let enc2 = SolEncoder::with_encoded_size(256)
+   │         ^^^^ SolEncoder
+
+note: 
+   ┌─ associated_types_cycle.fe:44:16
+   │
+44 │     let enc2 = SolEncoder::with_encoded_size(256)
+   │                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ fn with_encoded_size<SolEncoder>
+
+note: 
+   ┌─ associated_types_cycle.fe:44:16
+   │
+44 │     let enc2 = SolEncoder::with_encoded_size(256)
+   │                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ SolEncoder
+
+note: 
+   ┌─ associated_types_cycle.fe:44:46
+   │
+44 │     let enc2 = SolEncoder::with_encoded_size(256)
+   │                                              ^^^ usize
+
+note: 
+   ┌─ associated_types_cycle.fe:45:9
+   │
+45 │     let enc3: SolEncoder = AbiEncoder::with_encoded_size(128)
+   │         ^^^^ SolEncoder
+
+note: 
+   ┌─ associated_types_cycle.fe:45:28
+   │
+45 │     let enc3: SolEncoder = AbiEncoder::with_encoded_size(128)
+   │                            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ fn with_encoded_size<SolEncoder>
+
+note: 
+   ┌─ associated_types_cycle.fe:45:28
+   │
+45 │     let enc3: SolEncoder = AbiEncoder::with_encoded_size(128)
+   │                            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ SolEncoder
+
+note: 
+   ┌─ associated_types_cycle.fe:45:58
+   │
+45 │     let enc3: SolEncoder = AbiEncoder::with_encoded_size(128)
+   │                                                          ^^^ usize
+
+note: 
+   ┌─ associated_types_cycle.fe:46:9
+   │
+46 │     let selector = [0, 1, 2, 3]
+   │         ^^^^^^^^ [u8; 4]
+
+note: 
+   ┌─ associated_types_cycle.fe:46:20
+   │
+46 │     let selector = [0, 1, 2, 3]
+   │                    ^^^^^^^^^^^^ [u8; 4]
+
+note: 
+   ┌─ associated_types_cycle.fe:46:21
+   │
+46 │     let selector = [0, 1, 2, 3]
+   │                     ^ u8
+
+note: 
+   ┌─ associated_types_cycle.fe:46:24
+   │
+46 │     let selector = [0, 1, 2, 3]
+   │                        ^ u8
+
+note: 
+   ┌─ associated_types_cycle.fe:46:27
+   │
+46 │     let selector = [0, 1, 2, 3]
+   │                           ^ u8
+
+note: 
+   ┌─ associated_types_cycle.fe:46:30
+   │
+46 │     let selector = [0, 1, 2, 3]
+   │                              ^ u8
+
+note: 
+   ┌─ associated_types_cycle.fe:47:5
+   │
+47 │     selector.encode(enc1)
+   │     ^^^^^^^^ [u8; 4]
+
+note: 
+   ┌─ associated_types_cycle.fe:47:5
+   │
+47 │     selector.encode(enc1)
+   │     ^^^^^^^^^^^^^^^^^^^^^ ()
+
+note: 
+   ┌─ associated_types_cycle.fe:47:21
+   │
+47 │     selector.encode(enc1)
+   │                     ^^^^ SolEncoder

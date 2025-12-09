@@ -1,0 +1,13 @@
+---
+source: crates/uitest/tests/ty.rs
+expression: diags
+input_file: fixtures/ty/def/alias_missing_generic_arg.fe
+---
+error[3-0003]: all type parameters of type alias must be given
+  ┌─ alias_missing_generic_arg.fe:7:13
+  │
+3 │ type Bar<U, V = U> = Map<U, V>
+  │ ------------------------------ type alias defined here
+  ·
+7 │     let _y: Bar
+  │             ^^^ expected at least 2 arguments here

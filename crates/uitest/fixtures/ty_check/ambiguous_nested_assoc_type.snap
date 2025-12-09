@@ -1,0 +1,18 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/ambiguous_nested_assoc_type.fe
+---
+error[2-0009]: ambiguous associated type `Enc`
+   ┌─ ambiguous_nested_assoc_type.fe:17:23
+   │
+ 7 │ trait WithEnc {
+   │       -------
+   │       │
+   │       candidate: <T as WithEnc>::Enc = E1
+   │       candidate: <T as WithEnc>::Enc = E2
+   ·
+17 │ fn amb<T>(x: T) -> T::Enc::Output
+   │                       ^^^ associated type `Enc` is ambiguous
+   │
+   = hint: specify the trait explicitly: `<T as WithEnc>::Enc`

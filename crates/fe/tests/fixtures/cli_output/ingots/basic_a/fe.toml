@@ -1,0 +1,7 @@
+[ingot]
+name = "basic_a"
+version = "0.1.0"
+
+[dependencies]
+basic_b = "../basic_b"
+basic_c = "../basic_c"

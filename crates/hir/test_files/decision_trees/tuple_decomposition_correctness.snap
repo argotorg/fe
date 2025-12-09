@@ -1,0 +1,287 @@
+---
+source: crates/hir-analysis/tests/decision_tree.rs
+expression: res
+input_file: test_files/decision_trees/tuple_decomposition_correctness.fe
+---
+note: 
+   ┌─ tuple_decomposition_correctness.fe:7:5
+   │  
+ 7 │ ╭     match t {
+ 8 │ │         (true, true) => 3
+ 9 │ │         (true, false) => 2
+10 │ │         (false, true) => 1
+11 │ │         (false, false) => 0
+12 │ │     }
+   │ ╰─────^ Decision Tree for test_simple_boolean_tuple:
+ Switch on expr
+ └─ tuple() =>
+    └─ Switch on expr.1
+       ├─ true =>
+       │  └─ Switch on expr.0
+       │     ├─ true =>
+       │     │  └─ Execute arm #0
+       │     └─ false =>
+       │        └─ Execute arm #2
+       └─ false =>
+          └─ Switch on expr.0
+             ├─ true =>
+             │  └─ Execute arm #1
+             └─ false =>
+                └─ Execute arm #3
+
+
+note: 
+   ┌─ tuple_decomposition_correctness.fe:17:5
+   │  
+17 │ ╭     match t {
+18 │ │         (true, true, true) => 7
+19 │ │         (true, true, false) => 6
+20 │ │         (true, false, true) => 5
+   · │
+25 │ │         (false, false, false) => 0
+26 │ │     }
+   │ ╰─────^ Decision Tree for test_three_element_tuple:
+ Switch on expr
+ └─ tuple() =>
+    └─ Switch on expr.2
+       ├─ true =>
+       │  └─ Switch on expr.0
+       │     ├─ true =>
+       │     │  └─ Switch on expr.1
+       │     │     ├─ true =>
+       │     │     │  └─ Execute arm #0
+       │     │     └─ false =>
+       │     │        └─ Execute arm #2
+       │     └─ false =>
+       │        └─ Switch on expr.1
+       │           ├─ true =>
+       │           │  └─ Execute arm #4
+       │           └─ false =>
+       │              └─ Execute arm #6
+       └─ false =>
+          └─ Switch on expr.0
+             ├─ true =>
+             │  └─ Switch on expr.1
+             │     ├─ true =>
+             │     │  └─ Execute arm #1
+             │     └─ false =>
+             │        └─ Execute arm #3
+             └─ false =>
+                └─ Switch on expr.1
+                   ├─ true =>
+                   │  └─ Execute arm #5
+                   └─ false =>
+                      └─ Execute arm #7
+
+
+note: 
+   ┌─ tuple_decomposition_correctness.fe:31:5
+   │  
+31 │ ╭     match t {
+32 │ │         (true, 0) => 10
+33 │ │         (true, 1) => 11
+34 │ │         (true, _) => 12
+35 │ │         (false, 0) => 20
+36 │ │         (false, _) => 21
+37 │ │     }
+   │ ╰─────^ Decision Tree for test_mixed_type_tuple:
+ Switch on expr
+ └─ tuple() =>
+    └─ Switch on expr.0
+       ├─ true =>
+       │  └─ Switch on expr.1
+       │     ├─ 0 =>
+       │     │  └─ Execute arm #0
+       │     ├─ 1 =>
+       │     │  └─ Execute arm #1
+       │     └─ _ =>
+       │        └─ Execute arm #2
+       └─ false =>
+          └─ Switch on expr.1
+             ├─ 0 =>
+             │  └─ Execute arm #3
+             └─ _ =>
+                └─ Execute arm #4
+
+
+note: 
+   ┌─ tuple_decomposition_correctness.fe:42:5
+   │  
+42 │ ╭     match t {
+43 │ │         ((true, true), true) => 4
+44 │ │         ((true, true), false) => 3
+45 │ │         ((true, false), true) => 2
+46 │ │         ((true, false), false) => 1
+47 │ │         ((false, _), _) => 0
+48 │ │     }
+   │ ╰─────^ Decision Tree for test_nested_tuple:
+ Switch on expr
+ └─ tuple() =>
+    └─ Switch on expr.0
+       └─ tuple() =>
+          └─ Switch on expr.0.0
+             ├─ true =>
+             │  └─ Switch on expr.1
+             │     ├─ true =>
+             │     │  └─ Switch on expr.0.1
+             │     │     ├─ true =>
+             │     │     │  └─ Execute arm #0
+             │     │     └─ false =>
+             │     │        └─ Execute arm #2
+             │     └─ false =>
+             │        └─ Switch on expr.0.1
+             │           ├─ true =>
+             │           │  └─ Execute arm #1
+             │           └─ false =>
+             │              └─ Execute arm #3
+             └─ false =>
+                └─ Execute arm #4
+
+
+note: 
+   ┌─ tuple_decomposition_correctness.fe:53:5
+   │  
+53 │ ╭     match t {
+54 │ │         (true, _, true) => 3
+55 │ │         (false, true, _) => 2
+56 │ │         (false, false, false) => 1
+57 │ │         _ => 0
+58 │ │     }
+   │ ╰─────^ Decision Tree for test_tuple_with_wildcards:
+ Switch on expr
+ └─ tuple() =>
+    └─ Switch on expr.0
+       ├─ true =>
+       │  └─ Switch on expr.2
+       │     ├─ true =>
+       │     │  └─ Execute arm #0
+       │     └─ _ =>
+       │        └─ Execute arm #3
+       └─ false =>
+          └─ Switch on expr.1
+             ├─ true =>
+             │  └─ Execute arm #1
+             └─ false =>
+                └─ Switch on expr.2
+                   ├─ false =>
+                   │  └─ Execute arm #2
+                   └─ _ =>
+                      └─ Execute arm #3
+
+
+note: 
+   ┌─ tuple_decomposition_correctness.fe:63:5
+   │  
+63 │ ╭     match t {
+64 │ │         (true, true, true, true, true) => 5
+65 │ │         (true, true, true, true, false) => 4
+66 │ │         (true, true, true, false, _) => 3
+   · │
+69 │ │         (false, _, _, _, _) => 0
+70 │ │     }
+   │ ╰─────^ Decision Tree for test_large_tuple:
+ Switch on expr
+ └─ tuple() =>
+    └─ Switch on expr.0
+       ├─ true =>
+       │  └─ Switch on expr.1
+       │     ├─ true =>
+       │     │  └─ Switch on expr.2
+       │     │     ├─ true =>
+       │     │     │  └─ Switch on expr.3
+       │     │     │     ├─ true =>
+       │     │     │     │  └─ Switch on expr.4
+       │     │     │     │     ├─ true =>
+       │     │     │     │     │  └─ Execute arm #0
+       │     │     │     │     └─ false =>
+       │     │     │     │        └─ Execute arm #1
+       │     │     │     └─ false =>
+       │     │     │        └─ Execute arm #2
+       │     │     └─ false =>
+       │     │        └─ Execute arm #3
+       │     └─ false =>
+       │        └─ Execute arm #4
+       └─ false =>
+          └─ Execute arm #5
+
+
+note: 
+   ┌─ tuple_decomposition_correctness.fe:80:5
+   │  
+80 │ ╭     match t {
+81 │ │         (SimpleEnum::A, true) => 3
+82 │ │         (SimpleEnum::A, false) => 2
+83 │ │         (SimpleEnum::B, true) => 1
+84 │ │         (SimpleEnum::B, false) => 0
+85 │ │     }
+   │ ╰─────^ Decision Tree for test_tuple_with_enum:
+ Switch on expr
+ └─ tuple() =>
+    └─ Switch on expr.1
+       ├─ true =>
+       │  └─ Switch on expr.0
+       │     ├─ A =>
+       │     │  └─ Execute arm #0
+       │     └─ B =>
+       │        └─ Execute arm #2
+       └─ false =>
+          └─ Switch on expr.0
+             ├─ A =>
+             │  └─ Execute arm #1
+             └─ B =>
+                └─ Execute arm #3
+
+
+note: 
+   ┌─ tuple_decomposition_correctness.fe:92:5
+   │  
+92 │ ╭     match t {
+93 │ │         (true, true | false, true) => 2
+94 │ │         (false | true, false, false) => 1
+95 │ │         _ => 0
+96 │ │     }
+   │ ╰─────^ Decision Tree for test_tuple_with_or_patterns:
+ Switch on expr
+ └─ tuple() =>
+    └─ Switch on expr.2
+       ├─ true =>
+       │  └─ Switch on expr.0
+       │     ├─ true =>
+       │     │  └─ Switch on expr.1
+       │     │     ├─ true =>
+       │     │     │  └─ Execute arm #0
+       │     │     └─ false =>
+       │     │        └─ Execute arm #0
+       │     └─ _ =>
+       │        └─ Execute arm #2
+       └─ false =>
+          └─ Switch on expr.0
+             ├─ false =>
+             │  └─ Switch on expr.1
+             │     ├─ false =>
+             │     │  └─ Execute arm #1
+             │     └─ _ =>
+             │        └─ Execute arm #2
+             └─ true =>
+                └─ Switch on expr.1
+                   ├─ false =>
+                   │  └─ Execute arm #1
+                   └─ _ =>
+                      └─ Execute arm #2
+
+
+note: 
+    ┌─ tuple_decomposition_correctness.fe:101:5
+    │  
+101 │ ╭     match t {
+102 │ │         (true,) => 1
+103 │ │         (false,) => 0
+104 │ │     }
+    │ ╰─────^ Decision Tree for test_single_element_tuple:
+ Switch on expr
+ └─ tuple() =>
+    └─ Switch on expr.0
+       ├─ true =>
+       │  └─ Execute arm #0
+       └─ false =>
+          └─ Execute arm #1

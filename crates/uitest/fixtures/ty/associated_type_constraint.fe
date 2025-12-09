@@ -1,0 +1,9 @@
+trait Iterator {
+    type Item
+}
+
+fn test<T: Iterator<Item = i32>>(iter: T) -> i32 {
+    // This should work because Item is constrained to i32
+    let x: T::Item = 42
+    x
+}

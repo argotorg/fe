@@ -1,0 +1,13 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/method_selection/invisible_inherent_method_call.fe
+---
+error[2-0003]: `hidden` is not visible
+   ┌─ invisible_inherent_method_call.fe:11:7
+   │
+ 5 │         fn hidden(self) -> i32 { 0 }
+   │            ------ `hidden` is defined here
+   ·
+11 │     s.hidden()
+   │       ^^^^^^ `hidden` is not visible

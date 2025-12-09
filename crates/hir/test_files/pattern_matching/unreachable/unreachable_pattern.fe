@@ -1,0 +1,24 @@
+// fe/crates/hir-analysis/test_files/pattern_matching/unreachable/unreachable_pattern.fe
+
+enum Color {
+    Red,
+    Green,
+    Blue,
+    Rgb(u8, u8, u8)
+}
+
+// Test for reachability checking - this intentionally has unreachable patterns
+// to verify that the compiler correctly identifies them
+fn test(c: Color) -> u8 {
+    match c {
+        _ => { // This wildcard makes subsequent arms unreachable
+            return 0
+        }
+        Color::Red => {
+            return 1
+        }
+        Color::Rgb(..) => {
+            return 2
+        }
+    }
+}

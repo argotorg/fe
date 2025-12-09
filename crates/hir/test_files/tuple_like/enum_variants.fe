@@ -1,0 +1,66 @@
+enum Color {
+    Red,
+    Green, 
+    Blue
+}
+
+enum Shape {
+    Circle(u8),
+    Rectangle(u8, u8),
+    Triangle(u8, u8, u8)
+}
+
+enum Mixed {
+    Unit,
+    Tuple(u8, bool),
+    Record { x: u8, y: bool }
+}
+
+enum Nested {
+    Simple(Color),
+    Complex(Shape),
+    Paired(Color, Shape)
+}
+
+fn test_unit_variants(c: Color) -> u8 {
+    match c {
+        Color::Red => 1
+        Color::Green => 2
+        Color::Blue => 3
+    }
+}
+
+fn test_tuple_variants(s: Shape) -> u8 {
+    match s {
+        Shape::Circle(r) => r
+        Shape::Rectangle(w, h) => w + h
+        Shape::Triangle(a, b, c) => a + b + c
+    }
+}
+
+fn test_mixed_variants(m: Mixed) -> u8 {
+    match m {
+        Mixed::Unit => 0
+        Mixed::Tuple(x, _) => x
+        Mixed::Record { x, y: _ } => x
+    }
+}
+
+fn test_nested_variants(n: Nested) -> u8 {
+    match n {
+        Nested::Simple(Color::Red) => 1
+        Nested::Simple(_) => 2
+        Nested::Complex(Shape::Circle(r)) => r
+        Nested::Complex(_) => 3
+        Nested::Paired(Color::Blue, Shape::Circle(r)) => r + 10
+        Nested::Paired(_, _) => 4
+    }
+}
+
+fn create_variants() -> (Color, Shape, Mixed, Nested) {
+    let color = Color::Red
+    let shape = Shape::Circle(5)
+    let mixed = Mixed::Tuple(42, true)
+    let nested = Nested::Paired(Color::Blue, Shape::Rectangle(3, 4))
+    return (color, shape, mixed, nested)
+}

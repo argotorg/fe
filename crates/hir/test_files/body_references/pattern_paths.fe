@@ -1,0 +1,9 @@
+enum Color { Red, Green, Blue }
+
+fn check_color(c: Color) {
+    match c {
+        Color::Red => {}
+        Color::Green => {}
+        Color::Blue => {}
+    }
+}

@@ -1,0 +1,117 @@
+---
+source: crates/hir-analysis/tests/ty_check.rs
+expression: res
+input_file: test_files/ty_check/associated_types_wrapper.fe
+---
+note: 
+   ┌─ associated_types_wrapper.fe:12:36
+   │  
+12 │       fn make_foo(self) -> Self::Foo {
+   │ ╭────────────────────────────────────^
+13 │ │         Wrapper { inner: self.inner.make_foo() }
+14 │ │     }
+   │ ╰─────^ Wrapper<T::Foo>
+
+note: 
+   ┌─ associated_types_wrapper.fe:13:9
+   │
+13 │         Wrapper { inner: self.inner.make_foo() }
+   │         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ Wrapper<T::Foo>
+
+note: 
+   ┌─ associated_types_wrapper.fe:13:26
+   │
+13 │         Wrapper { inner: self.inner.make_foo() }
+   │                          ^^^^ Wrapper<T>
+
+note: 
+   ┌─ associated_types_wrapper.fe:13:26
+   │
+13 │         Wrapper { inner: self.inner.make_foo() }
+   │                          ^^^^^^^^^^ T
+
+note: 
+   ┌─ associated_types_wrapper.fe:13:26
+   │
+13 │         Wrapper { inner: self.inner.make_foo() }
+   │                          ^^^^^^^^^^^^^^^^^^^^^ T::Foo
+
+note: 
+   ┌─ associated_types_wrapper.fe:22:36
+   │  
+22 │       fn make_foo(self) -> Self::Foo {
+   │ ╭────────────────────────────────────^
+23 │ │         A {}
+24 │ │     }
+   │ ╰─────^ A
+
+note: 
+   ┌─ associated_types_wrapper.fe:23:9
+   │
+23 │         A {}
+   │         ^^^^ A
+
+note: 
+   ┌─ associated_types_wrapper.fe:27:11
+   │  
+27 │   fn test() {
+   │ ╭───────────^
+28 │ │     let w = Wrapper { inner: S{} }
+29 │ │     let wa = w.make_foo()
+30 │ │     let a: A = wa.inner
+31 │ │ }
+   │ ╰─^ ()
+
+note: 
+   ┌─ associated_types_wrapper.fe:28:9
+   │
+28 │     let w = Wrapper { inner: S{} }
+   │         ^ Wrapper<S>
+
+note: 
+   ┌─ associated_types_wrapper.fe:28:13
+   │
+28 │     let w = Wrapper { inner: S{} }
+   │             ^^^^^^^^^^^^^^^^^^^^^^ Wrapper<S>
+
+note: 
+   ┌─ associated_types_wrapper.fe:28:30
+   │
+28 │     let w = Wrapper { inner: S{} }
+   │                              ^^^ S
+
+note: 
+   ┌─ associated_types_wrapper.fe:29:9
+   │
+29 │     let wa = w.make_foo()
+   │         ^^ Wrapper<A>
+
+note: 
+   ┌─ associated_types_wrapper.fe:29:14
+   │
+29 │     let wa = w.make_foo()
+   │              ^ Wrapper<S>
+
+note: 
+   ┌─ associated_types_wrapper.fe:29:14
+   │
+29 │     let wa = w.make_foo()
+   │              ^^^^^^^^^^^^ Wrapper<A>
+
+note: 
+   ┌─ associated_types_wrapper.fe:30:9
+   │
+30 │     let a: A = wa.inner
+   │         ^ A
+
+note: 
+   ┌─ associated_types_wrapper.fe:30:16
+   │
+30 │     let a: A = wa.inner
+   │                ^^ Wrapper<A>
+
+note: 
+   ┌─ associated_types_wrapper.fe:30:16
+   │
+30 │     let a: A = wa.inner
+   │                ^^^^^^^^ A

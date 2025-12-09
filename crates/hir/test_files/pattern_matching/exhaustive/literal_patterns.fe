@@ -1,0 +1,77 @@
+// Basic literal pattern tests
+
+// Test u8 literal patterns
+fn test_u8_literals(x: u8) -> u8 {
+    match x {
+        0 => {
+            return 10
+        }
+        1 => {
+            return 11
+        }
+        42 => {
+            return 42
+        }
+        _ => {
+            return 0
+        }
+    }
+}
+
+// Test boolean literal patterns
+fn test_bool_literals(b: bool) -> u8 {
+    match b {
+        true => {
+            return 1
+        }
+        false => {
+            return 0
+        }
+    }
+}
+
+// Test tuple with literals
+fn test_tuple_literals(data: (bool, u8)) -> u8 {
+    match data {
+        (true, 0) => {
+            return 10
+        }
+        (true, 1) => {
+            return 11
+        }
+        (false, 0) => {
+            return 20
+        }
+        (false, _) => {
+            return 21
+        }
+        (true, _) => {
+            return 12
+        }
+    }
+}
+
+// Test or-patterns with literals
+fn test_or_pattern_literals(x: u8) -> u8 {
+    match x {
+        0 | 1 | 2 => {
+            return 100
+        }
+        10 | 20 => {
+            return 200
+        }
+        _ => {
+            return 0
+        }
+    }
+}
+
+// Test boolean tuple exhaustive
+fn test_bool_tuple_exhaustive(pair: (bool, bool)) -> u8 {
+    match pair {
+        (true, true) => 4
+        (true, false) => 3
+        (false, true) => 2
+        (false, false) => 1
+    }
+}

@@ -1,0 +1,46 @@
+---
+source: crates/language-server/src/functionality/goto.rs
+expression: snapshot
+input_file: test_files/goto_trait.fe
+---
+note: 
+  ┌─ goto_trait.fe:2:13
+  │
+2 │     fn show(self) -> i32
+  │             ^^^^ -> goto_trait::Display
+
+note: 
+  ┌─ goto_trait.fe:9:6
+  │
+9 │ impl Display for Counter {
+  │      ^^^^^^^ -> goto_trait::Display
+
+note: 
+  ┌─ goto_trait.fe:9:18
+  │
+9 │ impl Display for Counter {
+  │                  ^^^^^^^ -> goto_trait::Counter
+
+note: 
+   ┌─ goto_trait.fe:10:13
+   │
+10 │     fn show(self) -> i32 {
+   │             ^^^^ -> local: Counter
+
+note: 
+   ┌─ goto_trait.fe:11:9
+   │
+11 │         self.value
+   │         ^^^^ -> local: Counter
+
+note: 
+   ┌─ goto_trait.fe:15:19
+   │
+15 │ fn use_display(c: Counter) -> i32 {
+   │                   ^^^^^^^ -> goto_trait::Counter
+
+note: 
+   ┌─ goto_trait.fe:16:5
+   │
+16 │     c.show()
+   │     ^ -> local: Counter

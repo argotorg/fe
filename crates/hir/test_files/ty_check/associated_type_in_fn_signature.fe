@@ -1,0 +1,45 @@
+extern {
+    fn todo() -> !
+}
+
+trait Encoder {
+    type Output
+}
+
+trait Abi {
+    type Encoder: Encoder
+}
+
+trait MyTrait {
+    fn get_output<T: Abi>(self) -> T::Encoder::Output
+}
+
+struct MyStruct{}
+
+struct SomeEncoder{}
+
+impl Encoder for SomeEncoder {
+    type Output = u32
+}
+
+struct SomeAbi {}
+
+impl Abi for SomeAbi {
+    type Encoder = SomeEncoder
+}
+
+impl MyTrait for MyStruct {
+    fn get_output<T: Abi>(self) -> T::Encoder::Output {
+        todo()
+    }
+}
+
+fn use_encoder<T: Encoder>(enc: T) -> T::Output {
+    todo()
+}
+
+fn example(ms: MyStruct) {
+    let s: u32 = use_encoder(enc: SomeEncoder{})
+    let a: SomeAbi::Encoder::Output = ms.get_output<SomeAbi>()
+    let b: SomeAbi::Encoder::Output = ms.get_output<SomeAbi>()
+}

@@ -1,0 +1,5 @@
+pub fn block_expr() -> u64 {
+    {
+        1 + 2
+    }
+}

@@ -1,0 +1,13 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/impl_conflict_trait_bounds.fe
+---
+error[5-0001]: conflicting trait implementations
+   ┌─ impl_conflict_trait_bounds.fe:12:29
+   │
+12 │ impl<T: Marker> MyTrait for Container<T> {
+   │                             ^^^^^^^^^^^^ this trait implementation
+   ·
+20 │ impl MyTrait for Container<Marked> {
+   │                  ----------------- conflicts with this trait implementation

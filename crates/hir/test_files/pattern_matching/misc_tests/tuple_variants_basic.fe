@@ -1,0 +1,29 @@
+enum Color {
+    Rgb(u8, u8, u8),
+    Cmyk(u8, u8, u8, u8),
+    Grayscale(u8)
+}
+
+fn match_full_path(color: Color) -> u8 {
+    match color {
+        Color::Rgb(r, g, b) => r + g + b
+        Color::Cmyk(c, m, y, k) => c + m + y + k
+        Color::Grayscale(value) => value
+    }
+}
+
+fn match_with_wildcards(color: Color) -> u8 {
+    match color {
+        Color::Rgb(_, _, b) => b
+        Color::Cmyk(_, _, _, k) => k
+        Color::Grayscale(_) => 255
+    }
+}
+
+fn match_with_partial_destructuring(color: Color) -> u8 {
+    match color {
+        Color::Rgb(r, ..) => r
+        Color::Cmyk(c, ..) => c
+        Color::Grayscale(value) => value
+    }
+}

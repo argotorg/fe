@@ -1,0 +1,21 @@
+// Test enum with data patterns - simplified to debug issues
+
+enum Item {
+    Value(u8),
+    Pair(u8, u8),
+    Triple(u8, u8, u8),
+    Empty
+}
+
+// Test simple enum with data bindings
+fn test_simple_enum_data(item: Item) -> u8 {
+    match item {
+        Item::Value(x) => x
+        Item::Pair(a, b) => a + b
+        Item::Triple(x, y, z) => x + y + z
+        Item::Empty => 0
+    }
+}
+
+
+

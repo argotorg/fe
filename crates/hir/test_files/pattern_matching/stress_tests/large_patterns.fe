@@ -1,0 +1,372 @@
+// Stress tests for large and complex pattern matching scenarios
+
+// ======================================================================
+// LARGE ENUM STRESS TEST
+// ======================================================================
+
+enum VeryLargeEnum {
+    Variant1,
+    Variant2,
+    Variant3,
+    Variant4,
+    Variant5,
+    Variant6,
+    Variant7,
+    Variant8,
+    Variant9,
+    Variant10,
+    Variant11,
+    Variant12,
+    Variant13,
+    Variant14,
+    Variant15,
+    Variant16,
+    Variant17,
+    Variant18,
+    Variant19,
+    Variant20
+}
+
+// Test exhaustive matching on very large enum
+fn test_very_large_enum_exhaustive(large: VeryLargeEnum) -> u8 {
+    match large {
+        VeryLargeEnum::Variant1 => 1
+        VeryLargeEnum::Variant2 => 2
+        VeryLargeEnum::Variant3 => 3
+        VeryLargeEnum::Variant4 => 4
+        VeryLargeEnum::Variant5 => 5
+        VeryLargeEnum::Variant6 => 6
+        VeryLargeEnum::Variant7 => 7
+        VeryLargeEnum::Variant8 => 8
+        VeryLargeEnum::Variant9 => 9
+        VeryLargeEnum::Variant10 => 10
+        VeryLargeEnum::Variant11 => 11
+        VeryLargeEnum::Variant12 => 12
+        VeryLargeEnum::Variant13 => 13
+        VeryLargeEnum::Variant14 => 14
+        VeryLargeEnum::Variant15 => 15
+        VeryLargeEnum::Variant16 => 16
+        VeryLargeEnum::Variant17 => 17
+        VeryLargeEnum::Variant18 => 18
+        VeryLargeEnum::Variant19 => 19
+        VeryLargeEnum::Variant20 => 20
+    }
+}
+
+// Test large enum with complex or-patterns
+fn test_large_enum_complex_or_patterns(large: VeryLargeEnum) -> u8 {
+    match large {
+        VeryLargeEnum::Variant1 | VeryLargeEnum::Variant2 | VeryLargeEnum::Variant3 | VeryLargeEnum::Variant4 | VeryLargeEnum::Variant5 => 100
+        VeryLargeEnum::Variant6 | VeryLargeEnum::Variant7 | VeryLargeEnum::Variant8 | VeryLargeEnum::Variant9 | VeryLargeEnum::Variant10 => 200
+        VeryLargeEnum::Variant11 | VeryLargeEnum::Variant12 | VeryLargeEnum::Variant13 | VeryLargeEnum::Variant14 | VeryLargeEnum::Variant15 => 300
+        VeryLargeEnum::Variant16 | VeryLargeEnum::Variant17 | VeryLargeEnum::Variant18 | VeryLargeEnum::Variant19 | VeryLargeEnum::Variant20 => 400
+    }
+}
+
+// Test large enum in tuple combinations
+fn test_large_enum_tuple_combinations(data: (VeryLargeEnum, VeryLargeEnum, VeryLargeEnum)) -> u8 {
+    match data {
+        (VeryLargeEnum::Variant1, VeryLargeEnum::Variant1, VeryLargeEnum::Variant1) => 255
+        (VeryLargeEnum::Variant1 | VeryLargeEnum::Variant2, VeryLargeEnum::Variant3 | VeryLargeEnum::Variant4, _) => 200
+        (VeryLargeEnum::Variant5 | VeryLargeEnum::Variant6 | VeryLargeEnum::Variant7, _, VeryLargeEnum::Variant20) => 150
+        _ => 1  // All other combinations
+    }
+}
+
+// ======================================================================
+// DEEP NESTING STRESS TEST
+// ======================================================================
+
+enum NestedA {
+    DataA(NestedB),
+    UnitA
+}
+
+enum NestedB {
+    DataB(NestedC),
+    UnitB
+}
+
+enum NestedC {
+    DataC(NestedD),
+    UnitC
+}
+
+enum NestedD {
+    DataD(NestedE),
+    UnitD
+}
+
+enum NestedE {
+    DataE(NestedF),
+    UnitE
+}
+
+enum NestedF {
+    DataF(u8),
+    UnitF
+}
+
+// Test 6-level deep nested enum patterns
+fn test_deeply_nested_enum_patterns(nested: NestedA) -> u8 {
+    match nested {
+        NestedA::DataA(NestedB::DataB(NestedC::DataC(NestedD::DataD(NestedE::DataE(NestedF::DataF(x)))))) => x
+        NestedA::DataA(NestedB::DataB(NestedC::DataC(NestedD::DataD(NestedE::DataE(NestedF::UnitF))))) => 100
+        NestedA::DataA(NestedB::DataB(NestedC::DataC(NestedD::DataD(NestedE::UnitE)))) => 90
+        NestedA::DataA(NestedB::DataB(NestedC::DataC(NestedD::UnitD))) => 80
+        NestedA::DataA(NestedB::DataB(NestedC::UnitC)) => 70
+        NestedA::DataA(NestedB::UnitB) => 60
+        NestedA::UnitA => 50
+    }
+}
+
+// Test deep nesting with tuple patterns
+fn test_deeply_nested_tuple_patterns(data: ((((((u8, bool), u8), bool), u8), bool), u8)) -> u8 {
+    match data {
+        ((((((0, true), 1), false), 2), true), 3) => 255
+        ((((((x, true), _), _), _), _), _) => x + 200
+        ((((_, _), z), _), _) => z + 100
+        (((_, w), _), _) => w + 50
+        ((_, _), v) => v + 10
+        _ => 1
+    }
+}
+
+// Test mixed deep nesting with enums and tuples
+fn test_mixed_deep_nesting(data: (NestedA, ((VeryLargeEnum, bool), (u8, NestedB)))) -> u8 {
+    match data {
+        (NestedA::DataA(NestedB::DataB(_)), ((VeryLargeEnum::Variant1, true), (0, NestedB::UnitB))) => 500
+        (NestedA::DataA(_), ((VeryLargeEnum::Variant2 | VeryLargeEnum::Variant3, _), (_, NestedB::DataB(_)))) => 400
+        (NestedA::UnitA, ((_, false), (x, _))) => x + 300
+        _ => 1
+    }
+}
+
+// ======================================================================
+// LARGE TUPLE STRESS TEST
+// ======================================================================
+
+// Test tuple with 10 elements of mixed types
+fn test_large_tuple_mixed_types(data: (u8, bool, VeryLargeEnum, u8, bool, u8, VeryLargeEnum, bool, u8, bool)) -> u8 {
+    match data {
+        (0, true, VeryLargeEnum::Variant1, 1, false, 2, VeryLargeEnum::Variant2, true, 3, false) => 255
+        (0, _, VeryLargeEnum::Variant1 | VeryLargeEnum::Variant2, _, _, _, _, _, _, _) => 200
+        (_, true, _, 1, _, 2, _, _, 3, _) => 150
+        (x, false, _, _, true, y, _, false, z, true) => x + y + z + 100
+        _ => 1
+    }
+}
+
+// Test large tuple with rest patterns in different positions
+fn test_large_tuple_with_rest_patterns(data: (u8, u8, u8, u8, u8, u8, u8, u8)) -> u8 {
+    match data {
+        (0, 1, 2, .., 5, 6, 7) => 60
+        (0, .., 7) => 100
+        (1, 2, ..) => 90
+        (.., 6, 7) => 80
+        (1, .., 6) => 70
+        _ => 1
+    }
+}
+
+// Test nested large tuples
+fn test_nested_large_tuples(data: ((u8, u8, u8, u8), (bool, bool, bool, bool), (VeryLargeEnum, VeryLargeEnum))) -> u8 {
+    match data {
+        ((0, 1, 2, 3), (true, false, true, false), (VeryLargeEnum::Variant1, VeryLargeEnum::Variant2)) => 255
+        ((0, _, _, 3), (true, _, _, false), _) => 200
+        ((_, 1, 2, _), (_, true, false, _), (VeryLargeEnum::Variant3 | VeryLargeEnum::Variant4, _)) => 150
+        ((a, b, c, d), _, _) => a + b + c + d + 100
+        _ => 1
+    }
+}
+
+// ======================================================================
+// COMPLEX COMBINATIONS STRESS TEST
+// ======================================================================
+
+// Test very complex pattern with everything combined
+fn test_ultimate_complexity_pattern(data: (NestedA, (VeryLargeEnum, (u8, bool, u8)), ((NestedB, VeryLargeEnum), (bool, (u8, u8, u8, u8))))) -> u8 {
+    match data {
+        (NestedA::DataA(NestedB::DataB(NestedC::DataC(_))), (VeryLargeEnum::Variant1 | VeryLargeEnum::Variant2, (0, true, 1)), ((NestedB::UnitB, VeryLargeEnum::Variant3), (false, (2, 3, 4, 5)))) => 255
+
+        (NestedA::DataA(_), (VeryLargeEnum::Variant5 | VeryLargeEnum::Variant6 | VeryLargeEnum::Variant7, (_, false, _)), ((_, VeryLargeEnum::Variant10 | VeryLargeEnum::Variant11), (true, (x, y, _, _)))) => x + y + 200
+
+        (NestedA::UnitA, (_, (a, _, b)), ((NestedB::DataB(_), _), (_, (_, _, c, d)))) => a + b + c + d + 100
+
+        _ => 1
+    }
+}
+
+// Test maximum or-pattern complexity
+fn test_maximum_or_pattern_complexity(data: (VeryLargeEnum, VeryLargeEnum, VeryLargeEnum)) -> u8 {
+    match data {
+        (VeryLargeEnum::Variant1 | VeryLargeEnum::Variant2 | VeryLargeEnum::Variant3 | VeryLargeEnum::Variant4 | VeryLargeEnum::Variant5, VeryLargeEnum::Variant6 | VeryLargeEnum::Variant7 | VeryLargeEnum::Variant8 | VeryLargeEnum::Variant9 | VeryLargeEnum::Variant10, VeryLargeEnum::Variant11 | VeryLargeEnum::Variant12 | VeryLargeEnum::Variant13 | VeryLargeEnum::Variant14 | VeryLargeEnum::Variant15) => 500
+
+        (VeryLargeEnum::Variant16 | VeryLargeEnum::Variant17, VeryLargeEnum::Variant18 | VeryLargeEnum::Variant19, VeryLargeEnum::Variant20) => 400
+
+        _ => 1
+    }
+}
+
+// ======================================================================
+// PERFORMANCE STRESS TESTS
+// ======================================================================
+
+// Test pattern that should stress the pattern analysis algorithms
+fn test_combinatorial_explosion(data: (bool, bool, bool, bool, bool, bool, bool, bool)) -> u8 {
+    match data {
+        (true, true, true, true, true, true, true, true) => 255
+        (true, true, true, true, true, true, true, false) => 254
+        (true, true, true, true, true, true, false, _) => 253
+        (true, true, true, true, true, false, _, _) => 252
+        (true, true, true, true, false, _, _, _) => 251
+        (true, true, true, false, _, _, _, _) => 250
+        (true, true, false, _, _, _, _, _) => 249
+        (true, false, _, _, _, _, _, _) => 248
+        (false, _, _, _, _, _, _, _) => 247
+    }
+}
+
+// Test that exercises the decision tree builder with many branches
+fn test_many_branches_pattern(x: u8) -> u8 {
+    match x {
+        0 => 100
+        1 => 101
+        2 => 102
+        3 => 103
+        4 => 104
+        5 => 105
+        6 => 106
+        7 => 107
+        8 => 108
+        9 => 109
+        10 => 110
+        11 => 111
+        12 => 112
+        13 => 113
+        14 => 114
+        15 => 115
+        16 => 116
+        17 => 117
+        18 => 118
+        19 => 119
+        20 => 120
+        _ => 0
+    }
+}
+
+// Test that combines many different pattern types in one match
+fn test_mixed_pattern_types_stress(
+    data: (
+        VeryLargeEnum,
+        (u8, bool),
+        NestedA,
+        (bool, bool, bool)
+    )
+) -> u8 {
+    match data {
+        (VeryLargeEnum::Variant1, (0, true), NestedA::UnitA, (true, true, true)) => 50
+        (VeryLargeEnum::Variant2 | VeryLargeEnum::Variant3, (1 | 2, false), NestedA::DataA(_), (true, false, _)) => 40
+        (_, (x, _), NestedA::DataA(NestedB::UnitB), (false, _, true)) => x + 30
+        (VeryLargeEnum::Variant20, _, _, (false, false, false)) => 20
+        _ => 1
+    }
+}
+
+// ======================================================================
+// MIXED RECORDLIKE AND TUPLELIKE PATTERN STRESS TESTS
+// ======================================================================
+
+struct Point {
+    x: u8,
+    y: u8,
+}
+
+struct Rectangle {
+    top_left: Point,
+    bottom_right: Point,
+}
+
+struct ComplexData {
+    id: u8,
+    coords: (u8, u8),
+    metadata: VeryLargeEnum,
+}
+
+enum ShapeVariant {
+    Circle(Point, u8),
+    Rect(Rectangle),
+    Line(Point, Point),
+    Polygon(ComplexData),
+}
+
+// Test struct patterns mixed with tuple patterns
+fn test_struct_tuple_mix(data: (Point, (u8, bool), ComplexData)) -> u8 {
+    match data {
+        (Point { x: 0, y: 0 }, (_, true), ComplexData { id: 1, coords: (a, b), metadata: VeryLargeEnum::Variant1 }) => a + b + 100
+        (Point { x: 1, y: _ }, (val, false), ComplexData { id, coords: (0, _), metadata: _ }) => val + id + 50
+        (Point { x: _, y: 1 }, (0 | 1, _), ComplexData { id: _, coords: _, metadata: VeryLargeEnum::Variant2 | VeryLargeEnum::Variant3 }) => 75
+        (Point { x, y }, _, ComplexData { id: 0, coords: (x_coord, y_coord), metadata: _ }) => x + y + x_coord + y_coord
+        _ => 1
+    }
+}
+
+// Test nested struct patterns with tuples
+fn test_nested_struct_patterns(rect: Rectangle, data: (ShapeVariant, (bool, u8))) -> u8 {
+    match (rect, data) {
+        (Rectangle { top_left: Point { x: 0, y: 0 }, bottom_right: Point { x: 10, y: 10 } }, (ShapeVariant::Circle(Point { x: 5, y: 5 }, radius), (true, _))) => radius + 200
+        (Rectangle { top_left: Point { x, y }, bottom_right: _ }, (ShapeVariant::Rect(Rectangle { top_left: Point { x: inner_x, y: inner_y }, bottom_right: _ }), (false, val))) => x + y + inner_x + inner_y + val
+        (Rectangle { top_left: _, bottom_right: Point { x: bx, y: by } }, (ShapeVariant::Line(Point { x: x1, y: y1 }, Point { x: x2, y: y2 }), (_, count))) => bx + by + x1 + y1 + x2 + y2 + count
+        (Rectangle { top_left: Point { x: tx, y: ty }, bottom_right: Point { x: bx, y: by } }, (ShapeVariant::Polygon(ComplexData { id, coords: (cx, cy), metadata: _ }), _)) => tx + ty + bx + by + id + cx + cy
+        _ => 0
+    }
+}
+
+// Test or-patterns mixing struct and tuple patterns
+fn test_or_patterns_struct_tuple_mix(input: (VeryLargeEnum, Point, (u8, u8))) -> u8 {
+    match input {
+        (VeryLargeEnum::Variant1 | VeryLargeEnum::Variant2, Point { x: 0, y: _ } | Point { x: _, y: 0 }, (a, b)) => a + b + 10
+        (VeryLargeEnum::Variant3 | VeryLargeEnum::Variant4 | VeryLargeEnum::Variant5, Point { x: 1, y: 1 }, (0, _) | (_, 0)) => 20
+        (VeryLargeEnum::Variant6 | VeryLargeEnum::Variant7, Point { x, y }, (1, 1) | (2, 2)) => x + y + 30
+        _ => 1
+    }
+}
+
+// Test complex nesting of records and tuples
+fn test_complex_record_tuple_nesting(
+    data: (
+        ComplexData,
+        (Rectangle, (ShapeVariant, bool)),
+        Point
+    )
+) -> u8 {
+    match data {
+        (ComplexData { id: 0, coords: (0, 0), metadata: VeryLargeEnum::Variant1 }, (Rectangle { top_left: Point { x: 1, y: 1 }, bottom_right: _ }, (ShapeVariant::Circle(_, _), true)), Point { x: target_x, y: target_y }) => target_x + target_y + 100
+        (ComplexData { id, coords: (cx, cy), metadata: VeryLargeEnum::Variant2 | VeryLargeEnum::Variant3 }, (Rectangle { top_left: _, bottom_right: Point { x: br_x, y: br_y } }, (ShapeVariant::Rect(_), false)), Point { x: 0, y: 0 }) => id + cx + cy + br_x + br_y + 50
+        (ComplexData { id: _, coords: _, metadata: _ }, (Rectangle { top_left: Point { x: tl_x, y: tl_y }, bottom_right: Point { x: br_x, y: br_y } }, (ShapeVariant::Polygon(ComplexData { id: inner_id, coords: (inner_cx, inner_cy), metadata: _ }), _)), Point { x, y }) => tl_x + tl_y + br_x + br_y + inner_id + inner_cx + inner_cy + x + y
+
+        _ => 1
+    }
+}
+
+// Test struct patterns with rest syntax and wildcards
+fn test_struct_rest_patterns(shapes: (ShapeVariant, ShapeVariant, ComplexData)) -> u8 {
+    match shapes {
+        (ShapeVariant::Circle(Point { x: 0, .. }, _), ShapeVariant::Rect(Rectangle { top_left: Point { y: 0, .. }, .. }), ComplexData { id: 1, .. }) => 100
+        (ShapeVariant::Line(Point { x, .. }, Point { y, .. }), ShapeVariant::Polygon(ComplexData { coords: (a, b), .. }), ComplexData { metadata: VeryLargeEnum::Variant1, .. }) => x + y + a + b + 50
+        (ShapeVariant::Rect(Rectangle { bottom_right: Point { x: bx, .. }, .. }), _, ComplexData { id, coords: (cx, cy), .. }) => bx + id + cx + cy + 25
+        _ => 1
+    }
+}
+
+// Test exhaustive patterns with mixed record and tuple types
+fn test_exhaustive_mixed_patterns(simple_data: (Point, bool)) -> u8 {
+    match simple_data {
+        (Point { x: 0, y: 0 }, true) => 4
+        (Point { x: 0, y: 0 }, false) => 3
+        (Point { x: 0, y: _ }, true) => 2
+        (Point { x: 0, y: _ }, false) => 1
+        (Point { x: _, y: _ }, true) => 1
+        (Point { x: _, y: _ }, false) => 0
+    }
+}

@@ -5,13 +5,12 @@ use unwrap_infallible::UnwrapInfallible;
 use crate::{ExpectedKind, SyntaxKind};
 
 use super::{
-    define_scope,
+    ErrProof, Parser, Recovery, define_scope,
     expr::{parse_expr, parse_expr_no_struct},
     expr_atom::BlockExprScope,
     pat::parse_pat,
     token_stream::TokenStream,
     type_::parse_type,
-    ErrProof, Parser, Recovery,
 };
 
 pub fn parse_stmt<S: TokenStream>(parser: &mut Parser<S>) -> Result<(), Recovery<ErrProof>> {

@@ -1,0 +1,28 @@
+---
+source: crates/hir/tests/body_references.rs
+expression: res
+input_file: test_files/body_references/pattern_paths.fe
+---
+note: 
+  ┌─ pattern_paths.fe:4:11
+  │
+4 │     match c {
+  │           ^ c -> local
+
+note: 
+  ┌─ pattern_paths.fe:5:9
+  │
+5 │         Color::Red => {}
+  │         ^^^^^^^^^^ Red -> value
+
+note: 
+  ┌─ pattern_paths.fe:6:9
+  │
+6 │         Color::Green => {}
+  │         ^^^^^^^^^^^^ Green -> value
+
+note: 
+  ┌─ pattern_paths.fe:7:9
+  │
+7 │         Color::Blue => {}
+  │         ^^^^^^^^^^^ Blue -> value

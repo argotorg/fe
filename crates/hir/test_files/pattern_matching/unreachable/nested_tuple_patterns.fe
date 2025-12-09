@@ -1,0 +1,15 @@
+// Test with unreachable nested patterns
+fn unreachable_nested_patterns(t: ((bool, bool), bool)) -> u8 {
+    match t {
+        ((_, _), _) => 2           // Matches everything - makes subsequent patterns unreachable
+        ((true, _), _) => 1        // UNREACHABLE - covered by the wildcard above
+        ((false, _), _) => 0       // UNREACHABLE - covered by the wildcard above
+    }
+}
+
+fn simple_unreachable(x: u8) -> u8 {
+    match x {
+        _ => 1     // Matches everything
+        0 => 2     // This should be unreachable
+    }
+}

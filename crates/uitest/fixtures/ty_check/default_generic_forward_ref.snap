@@ -1,0 +1,16 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/default_generic_forward_ref.fe
+---
+error[3-0022]: cannot reference generic parameter before it is declared
+  ┌─ default_generic_forward_ref.fe:1:14
+  │
+1 │ struct Wrap3<A = B, B = i32> {
+  │              ^^^^^ cannot reference `B` before it's declared
+
+error[3-0022]: cannot reference generic parameter before it is declared
+  ┌─ default_generic_forward_ref.fe:6:10
+  │
+6 │ struct S<T = U, U = T> {}
+  │          ^^^^^ cannot reference `U` before it's declared

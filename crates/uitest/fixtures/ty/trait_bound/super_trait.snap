@@ -1,13 +1,13 @@
 ---
 source: crates/uitest/tests/ty.rs
 expression: diags
-input_file: crates/uitest/fixtures/ty/trait_bound/super_trait.fe
+input_file: fixtures/ty/trait_bound/super_trait.fe
 ---
 error[6-0002]: given trait argument kind mismatch
-   ┌─ super_trait.fe:14:11
+   ┌─ super_trait.fe:14:23
    │
 14 │ pub trait WrapperSub: WrapperSuper
-   │           ^^^^^^^^^^ expected `*` kind, but `Self` has `(* -> *)` kind
+   │                       ^^^^^^^^^^^^ expected `*` kind, but `Self` has `(* -> *)` kind
 
 error[6-0003]: trait bound is not satisfied
   ┌─ super_trait.fe:8:19

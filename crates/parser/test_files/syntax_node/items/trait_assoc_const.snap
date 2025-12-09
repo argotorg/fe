@@ -1,0 +1,118 @@
+---
+source: crates/parser/tests/syntax_node.rs
+assertion_line: 15
+expression: node
+input_file: test_files/syntax_node/items/trait_assoc_const.fe
+---
+Root@0..218
+  ItemList@0..172
+    Item@0..67
+      Trait@0..67
+        TraitKw@0..5 "trait"
+        WhiteSpace@5..6 " "
+        Ident@6..16 "MsgVariant"
+        WhiteSpace@16..17 " "
+        TraitItemList@17..67
+          LBrace@17..18 "{"
+          Newline@18..19 "\n"
+          WhiteSpace@19..23 "    "
+          TraitConstItem@23..42
+            ConstKw@23..28 "const"
+            WhiteSpace@28..29 " "
+            Ident@29..37 "SELECTOR"
+            Colon@37..38 ":"
+            WhiteSpace@38..39 " "
+            PathType@39..42
+              Path@39..42
+                PathSegment@39..42
+                  Ident@39..42 "u32"
+          Newline@42..43 "\n"
+          WhiteSpace@43..47 "    "
+          TraitConstItem@47..65
+            ConstKw@47..52 "const"
+            WhiteSpace@52..53 " "
+            Ident@53..56 "TAG"
+            Colon@56..57 ":"
+            WhiteSpace@57..58 " "
+            PathType@58..60
+              Path@58..60
+                PathSegment@58..60
+                  Ident@58..60 "u8"
+            WhiteSpace@60..61 " "
+            Eq@61..62 "="
+            WhiteSpace@62..63 " "
+            LitExpr@63..65
+              Lit@63..65
+                Int@63..65 "10"
+          Newline@65..66 "\n"
+          RBrace@66..67 "}"
+    Newline@67..69 "\n\n"
+    Item@69..83
+      Struct@69..83
+        StructKw@69..75 "struct"
+        WhiteSpace@75..76 " "
+        Ident@76..80 "Some"
+        WhiteSpace@80..81 " "
+        RecordFieldDefList@81..83
+          LBrace@81..82 "{"
+          RBrace@82..83 "}"
+    Newline@83..85 "\n\n"
+    Item@85..172
+      ImplTrait@85..172
+        ImplKw@85..89 "impl"
+        WhiteSpace@89..90 " "
+        TraitRef@90..100
+          Path@90..100
+            PathSegment@90..100
+              Ident@90..100 "MsgVariant"
+        WhiteSpace@100..101 " "
+        ForKw@101..104 "for"
+        WhiteSpace@104..105 " "
+        PathType@105..109
+          Path@105..109
+            PathSegment@105..109
+              Ident@105..109 "Some"
+        WhiteSpace@109..110 " "
+        TraitItemList@110..172
+          LBrace@110..111 "{"
+          Newline@111..112 "\n"
+          WhiteSpace@112..116 "    "
+          TraitConstItem@116..148
+            ConstKw@116..121 "const"
+            WhiteSpace@121..122 " "
+            Ident@122..130 "SELECTOR"
+            Colon@130..131 ":"
+            WhiteSpace@131..132 " "
+            PathType@132..135
+              Path@132..135
+                PathSegment@132..135
+                  Ident@132..135 "u32"
+            WhiteSpace@135..136 " "
+            Eq@136..137 "="
+            WhiteSpace@137..138 " "
+            LitExpr@138..148
+              Lit@138..148
+                Int@138..148 "0xDEADBEEF"
+          Newline@148..149 "\n"
+          WhiteSpace@149..153 "    "
+          TraitConstItem@153..170
+            ConstKw@153..158 "const"
+            WhiteSpace@158..159 " "
+            Ident@159..162 "TAG"
+            Colon@162..163 ":"
+            WhiteSpace@163..164 " "
+            PathType@164..166
+              Path@164..166
+                PathSegment@164..166
+                  Ident@164..166 "u8"
+            WhiteSpace@166..167 " "
+            Eq@167..168 "="
+            WhiteSpace@168..169 " "
+            LitExpr@169..170
+              Lit@169..170
+                Int@169..170 "7"
+          Newline@170..171 "\n"
+          RBrace@171..172 "}"
+  Newline@172..174 "\n\n"
+  Comment@174..217 "// ---- minimal secon ..."
+  Newline@217..218 "\n"

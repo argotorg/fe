@@ -1,0 +1,72 @@
+enum Tag {
+    Tag1,
+    Tag2,
+    Tag3
+}
+
+// Function that uses full path to enum variants (control case)
+fn match_full_path(tag: Tag) -> u8 {
+    match tag {
+        Tag::Tag1 => {
+            return 1
+        }
+        Tag::Tag2 => {
+            return 2
+        }
+        Tag::Tag3 => {
+            return 3
+        }
+    }
+}
+
+// Function that imports variants and uses them directly
+fn match_imported_variants(tag: Tag) -> u8 {
+    use Tag::*
+    
+    match tag {
+        Tag1 => {
+            return 1
+        }
+        Tag2 => {
+            return 2
+        }
+        Tag3 => {
+            return 3
+        }
+    }
+}
+
+// Test for reachability with imported variants
+fn match_with_unreachable_imported(tag: Tag) -> u8 {
+    use Tag::*
+    
+    match tag {
+        Tag1 => {
+            return 1
+        }
+        _ => {
+            return 0
+        }
+        // This should be unreachable, but if variants are treated as wildcards,
+        // the compiler might not detect this
+        Tag2 => {
+            return 2
+        }
+    }
+}
+
+// Test for reachability with fully qualified paths
+fn match_with_unreachable_full_path(tag: Tag) -> u8 {
+    match tag {
+        Tag::Tag1 => {
+            return 1
+        }
+        _ => {
+            return 0
+        }
+        // This should be unreachable
+        Tag::Tag2 => {
+            return 2
+        }
+    }
+}

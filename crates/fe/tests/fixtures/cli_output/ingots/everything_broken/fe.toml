@@ -1,0 +1,6 @@
+[ingot
+# Missing closing bracket, missing name, bad version
+version = "not.a.version"
+
+[dependencies]
+"bad alias!" = "./nonexistent"

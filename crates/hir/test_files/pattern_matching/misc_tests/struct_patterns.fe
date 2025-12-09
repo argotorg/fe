@@ -1,0 +1,26 @@
+struct MyStruct {
+    x: u8,
+    y: u8,
+}
+
+fn test_struct_specific_pattern(val: MyStruct) -> u8 {
+    match val {
+        MyStruct { x: 1, y: _ } => 10
+        _ => 20
+    }
+}
+
+fn test_struct_with_wildcard(val: MyStruct) -> u8 {
+    match val {
+        MyStruct { x: 1, y: 2 } => 10
+        _ => 20
+    }
+}
+
+fn test_struct_multiple_patterns(val: MyStruct) -> u8 {
+    match val {
+        MyStruct { x: 0, y: _ } => 10
+        MyStruct { x: 1, y: _ } => 20
+        _ => 30
+    }
+}

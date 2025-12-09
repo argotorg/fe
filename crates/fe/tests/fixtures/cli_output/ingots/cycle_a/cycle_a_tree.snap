@@ -1,0 +1,32 @@
+---
+source: crates/fe/tests/cli_output.rs
+expression: output
+---
+=== STDOUT ===
+cycle_a v0.1.0
+├── [31mcycle_d v0.1.0[0m
+│   └── [31mcycle_e v0.1.0[0m
+│       └── [31mcycle_d v0.1.0 🔄 [cycle][0m
+└── [31mcycle_b v0.1.0[0m
+    ├── [31mcycle_e v0.1.0[0m
+    │   └── [31mcycle_d v0.1.0[0m
+    │       └── [31mcycle_e v0.1.0 🔄 [cycle][0m
+    └── [31mcycle_c v0.1.0[0m
+        └── [31mcycle_b v0.1.0 🔄 [cycle][0m
+
+=== STDERR ===
+❌ Detected cycle(s) in ingot dependencies:
+
+cycle_a v0.1.0
+├── [31mcycle_d v0.1.0[0m
+│   └── [31mcycle_e v0.1.0[0m
+│       └── [31mcycle_d v0.1.0 🔄 [cycle][0m
+└── [31mcycle_b v0.1.0[0m
+    ├── [31mcycle_e v0.1.0[0m
+    │   └── [31mcycle_d v0.1.0[0m
+    │       └── [31mcycle_e v0.1.0 🔄 [cycle][0m
+    └── [31mcycle_c v0.1.0[0m
+        └── [31mcycle_b v0.1.0 🔄 [cycle][0m
+
+
+=== EXIT CODE: 0 ===

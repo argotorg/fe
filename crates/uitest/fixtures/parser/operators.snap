@@ -1,7 +1,7 @@
 ---
 source: crates/uitest/tests/parser.rs
 expression: diags
-input_file: crates/uitest/fixtures/parser/operators.fe
+input_file: fixtures/parser/operators.fe
 ---
 error[1-0001]: expected expression
   ┌─ operators.fe:3:8
@@ -39,17 +39,11 @@ error[1-0001]: unexpected syntax while parsing binary expression
 6 │     x * = 1
   │         ^^^ unexpected
 
-error[1-0001]: expected expression
-  ┌─ operators.fe:8:8
+error[1-0001]: unexpected syntax while parsing block
+  ┌─ operators.fe:8:11
   │
 8 │     x < < 1
-  │        ^ expected expression
-
-error[1-0001]: unexpected syntax while parsing binary expression
-  ┌─ operators.fe:8:9
-  │
-8 │     x < < 1
-  │         ^^^ unexpected
+  │           ^ unexpected
 
 error[1-0001]: expected expression
    ┌─ operators.fe:10:8
@@ -62,5 +56,3 @@ error[1-0001]: unexpected syntax while parsing binary expression
    │
 10 │     x < = 1
    │         ^^^ unexpected
-
-

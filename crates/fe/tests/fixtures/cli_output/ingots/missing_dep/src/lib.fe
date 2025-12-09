@@ -1,0 +1,5 @@
+use nonexistent::Something
+
+pub fn test() {
+    // This should fail because nonexistent doesn't exist
+}

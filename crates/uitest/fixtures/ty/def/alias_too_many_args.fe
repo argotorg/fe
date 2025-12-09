@@ -1,0 +1,6 @@
+struct Map<K, V> {}
+type IntMap<V> = Map<i32, V>
+
+fn f() {
+    let m: IntMap<i32, i32>
+}

@@ -1,0 +1,28 @@
+// Even simpler test case for associated type resolution
+extern {
+    fn todo() -> !
+}
+
+trait HasOutput {
+    type Output
+}
+
+struct Simple {}
+
+impl HasOutput for Simple {
+    type Output = u32
+}
+
+// Test direct resolution - this should work
+fn test_direct() {
+    let x: Simple::Output = 42
+}
+
+// Test through function return
+fn get_output() -> Simple::Output {
+    42
+}
+
+fn test_function() {
+    let y: u32 = get_output()
+}

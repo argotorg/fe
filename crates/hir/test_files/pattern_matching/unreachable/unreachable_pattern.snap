@@ -1,0 +1,22 @@
+---
+source: crates/hir-analysis/tests/pattern_matching.rs
+expression: diagnostic_output
+input_file: test_files/pattern_matching/unreachable/unreachable_pattern.fe
+---
+Unreachable test file unreachable_pattern.fe has 2 diagnostic(s):
+
+error[8-0035]: unreachable pattern
+   ┌─ unreachable_pattern.fe:17:9
+   │
+17 │         Color::Red => {
+   │         ^^^^^^^^^^ this pattern is unreachable
+   │
+   = previous patterns already cover all possible values
+
+error[8-0035]: unreachable pattern
+   ┌─ unreachable_pattern.fe:20:9
+   │
+20 │         Color::Rgb(..) => {
+   │         ^^^^^^^^^^^^^^ this pattern is unreachable
+   │
+   = previous patterns already cover all possible values

@@ -1,0 +1,23 @@
+trait Encoder {
+    type Output
+}
+
+struct E {}
+
+impl Encoder for E {
+    type Output = i32
+}
+
+trait WithEnc {
+    type Enc: Encoder
+}
+
+struct S {}
+
+impl WithEnc for S {
+    type Enc = E
+}
+
+fn f(x: S) -> S::Enc::Output {
+    0
+}

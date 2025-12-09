@@ -1,0 +1,361 @@
+---
+source: crates/hir-analysis/tests/ty_check.rs
+expression: res
+input_file: test_files/ty_check/effects_generic_type_nested.fe
+---
+note: 
+   ┌─ effects_generic_type_nested.fe:8:1
+   │  
+ 8 │ ╭ {
+ 9 │ │     st.value
+10 │ │ }
+   │ ╰─^ u8
+
+note: 
+  ┌─ effects_generic_type_nested.fe:9:5
+  │
+9 │     st.value
+  │     ^^ Storage<u8>
+
+note: 
+  ┌─ effects_generic_type_nested.fe:9:5
+  │
+9 │     st.value
+  │     ^^^^^^^^ u8
+
+note: 
+   ┌─ effects_generic_type_nested.fe:14:1
+   │  
+14 │ ╭ {
+15 │ │     st.value
+16 │ │ }
+   │ ╰─^ u16
+
+note: 
+   ┌─ effects_generic_type_nested.fe:15:5
+   │
+15 │     st.value
+   │     ^^ Storage<u16>
+
+note: 
+   ┌─ effects_generic_type_nested.fe:15:5
+   │
+15 │     st.value
+   │     ^^^^^^^^ u16
+
+note: 
+   ┌─ effects_generic_type_nested.fe:20:1
+   │  
+20 │ ╭ {
+21 │ │     st.value = val
+22 │ │ }
+   │ ╰─^ ()
+
+note: 
+   ┌─ effects_generic_type_nested.fe:21:5
+   │
+21 │     st.value = val
+   │     ^^ Storage<u8>
+
+note: 
+   ┌─ effects_generic_type_nested.fe:21:5
+   │
+21 │     st.value = val
+   │     ^^^^^^^^ u8
+
+note: 
+   ┌─ effects_generic_type_nested.fe:21:5
+   │
+21 │     st.value = val
+   │     ^^^^^^^^^^^^^^ ()
+
+note: 
+   ┌─ effects_generic_type_nested.fe:21:16
+   │
+21 │     st.value = val
+   │                ^^^ u8
+
+note: 
+   ┌─ effects_generic_type_nested.fe:24:42
+   │  
+24 │   pub fn nested_storage() -> (u8, u16, u8) {
+   │ ╭──────────────────────────────────────────^
+25 │ │     let storage_u8 = Storage<u8> { value: 42 }
+26 │ │     with (Storage<u8> = storage_u8) {
+27 │ │         let val1 = read_u8()
+   · │
+35 │ │     }
+36 │ │ }
+   │ ╰─^ (u8, u16, u8)
+
+note: 
+   ┌─ effects_generic_type_nested.fe:25:9
+   │
+25 │     let storage_u8 = Storage<u8> { value: 42 }
+   │         ^^^^^^^^^^ Storage<u8>
+
+note: 
+   ┌─ effects_generic_type_nested.fe:25:22
+   │
+25 │     let storage_u8 = Storage<u8> { value: 42 }
+   │                      ^^^^^^^^^^^^^^^^^^^^^^^^^ Storage<u8>
+
+note: 
+   ┌─ effects_generic_type_nested.fe:25:43
+   │
+25 │     let storage_u8 = Storage<u8> { value: 42 }
+   │                                           ^^ u8
+
+note: 
+   ┌─ effects_generic_type_nested.fe:26:5
+   │  
+26 │ ╭     with (Storage<u8> = storage_u8) {
+27 │ │         let val1 = read_u8()
+28 │ │ 
+29 │ │         let storage_u16 = Storage<u16> { value: 1000 }
+   · │
+34 │ │         }
+35 │ │     }
+   │ ╰─────^ (u8, u16, u8)
+
+note: 
+   ┌─ effects_generic_type_nested.fe:26:25
+   │
+26 │     with (Storage<u8> = storage_u8) {
+   │                         ^^^^^^^^^^ Storage<u8>
+
+note: 
+   ┌─ effects_generic_type_nested.fe:26:37
+   │  
+26 │       with (Storage<u8> = storage_u8) {
+   │ ╭─────────────────────────────────────^
+27 │ │         let val1 = read_u8()
+28 │ │ 
+29 │ │         let storage_u16 = Storage<u16> { value: 1000 }
+   · │
+34 │ │         }
+35 │ │     }
+   │ ╰─────^ (u8, u16, u8)
+
+note: 
+   ┌─ effects_generic_type_nested.fe:27:13
+   │
+27 │         let val1 = read_u8()
+   │             ^^^^ u8
+
+note: 
+   ┌─ effects_generic_type_nested.fe:27:20
+   │
+27 │         let val1 = read_u8()
+   │                    ^^^^^^^ fn read_u8
+
+note: 
+   ┌─ effects_generic_type_nested.fe:27:20
+   │
+27 │         let val1 = read_u8()
+   │                    ^^^^^^^^^ u8
+
+note: 
+   ┌─ effects_generic_type_nested.fe:29:13
+   │
+29 │         let storage_u16 = Storage<u16> { value: 1000 }
+   │             ^^^^^^^^^^^ Storage<u16>
+
+note: 
+   ┌─ effects_generic_type_nested.fe:29:27
+   │
+29 │         let storage_u16 = Storage<u16> { value: 1000 }
+   │                           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^ Storage<u16>
+
+note: 
+   ┌─ effects_generic_type_nested.fe:29:49
+   │
+29 │         let storage_u16 = Storage<u16> { value: 1000 }
+   │                                                 ^^^^ u16
+
+note: 
+   ┌─ effects_generic_type_nested.fe:30:9
+   │  
+30 │ ╭         with (Storage<u16> = storage_u16) {
+31 │ │             let val2 = read_u8()    // should use storage_u8
+32 │ │             let val3 = read_u16()   // should use storage_u16
+33 │ │             (val1, val3, val2)
+34 │ │         }
+   │ ╰─────────^ (u8, u16, u8)
+
+note: 
+   ┌─ effects_generic_type_nested.fe:30:30
+   │
+30 │         with (Storage<u16> = storage_u16) {
+   │                              ^^^^^^^^^^^ Storage<u16>
+
+note: 
+   ┌─ effects_generic_type_nested.fe:30:43
+   │  
+30 │           with (Storage<u16> = storage_u16) {
+   │ ╭───────────────────────────────────────────^
+31 │ │             let val2 = read_u8()    // should use storage_u8
+32 │ │             let val3 = read_u16()   // should use storage_u16
+33 │ │             (val1, val3, val2)
+34 │ │         }
+   │ ╰─────────^ (u8, u16, u8)
+
+note: 
+   ┌─ effects_generic_type_nested.fe:31:17
+   │
+31 │             let val2 = read_u8()    // should use storage_u8
+   │                 ^^^^ u8
+
+note: 
+   ┌─ effects_generic_type_nested.fe:31:24
+   │
+31 │             let val2 = read_u8()    // should use storage_u8
+   │                        ^^^^^^^ fn read_u8
+
+note: 
+   ┌─ effects_generic_type_nested.fe:31:24
+   │
+31 │             let val2 = read_u8()    // should use storage_u8
+   │                        ^^^^^^^^^ u8
+
+note: 
+   ┌─ effects_generic_type_nested.fe:32:17
+   │
+32 │             let val3 = read_u16()   // should use storage_u16
+   │                 ^^^^ u16
+
+note: 
+   ┌─ effects_generic_type_nested.fe:32:24
+   │
+32 │             let val3 = read_u16()   // should use storage_u16
+   │                        ^^^^^^^^ fn read_u16
+
+note: 
+   ┌─ effects_generic_type_nested.fe:32:24
+   │
+32 │             let val3 = read_u16()   // should use storage_u16
+   │                        ^^^^^^^^^^ u16
+
+note: 
+   ┌─ effects_generic_type_nested.fe:33:13
+   │
+33 │             (val1, val3, val2)
+   │             ^^^^^^^^^^^^^^^^^^ (u8, u16, u8)
+
+note: 
+   ┌─ effects_generic_type_nested.fe:33:14
+   │
+33 │             (val1, val3, val2)
+   │              ^^^^ u8
+
+note: 
+   ┌─ effects_generic_type_nested.fe:33:20
+   │
+33 │             (val1, val3, val2)
+   │                    ^^^^ u16
+
+note: 
+   ┌─ effects_generic_type_nested.fe:33:26
+   │
+33 │             (val1, val3, val2)
+   │                          ^^^^ u8
+
+note: 
+   ┌─ effects_generic_type_nested.fe:38:26
+   │  
+38 │   pub fn mutable_storage() {
+   │ ╭──────────────────────────^
+39 │ │     let mut storage = Storage<u8> { value: 10 }
+40 │ │     with (Storage<u8> = storage) {
+41 │ │         write_u8(val: 20)
+   · │
+44 │ │     }
+45 │ │ }
+   │ ╰─^ ()
+
+note: 
+   ┌─ effects_generic_type_nested.fe:39:9
+   │
+39 │     let mut storage = Storage<u8> { value: 10 }
+   │         ^^^^^^^^^^^ Storage<u8>
+
+note: 
+   ┌─ effects_generic_type_nested.fe:39:23
+   │
+39 │     let mut storage = Storage<u8> { value: 10 }
+   │                       ^^^^^^^^^^^^^^^^^^^^^^^^^ Storage<u8>
+
+note: 
+   ┌─ effects_generic_type_nested.fe:39:44
+   │
+39 │     let mut storage = Storage<u8> { value: 10 }
+   │                                            ^^ u8
+
+note: 
+   ┌─ effects_generic_type_nested.fe:40:5
+   │  
+40 │ ╭     with (Storage<u8> = storage) {
+41 │ │         write_u8(val: 20)
+42 │ │         let _ = read_u8()
+43 │ │         ()
+44 │ │     }
+   │ ╰─────^ ()
+
+note: 
+   ┌─ effects_generic_type_nested.fe:40:25
+   │
+40 │     with (Storage<u8> = storage) {
+   │                         ^^^^^^^ Storage<u8>
+
+note: 
+   ┌─ effects_generic_type_nested.fe:40:34
+   │  
+40 │       with (Storage<u8> = storage) {
+   │ ╭──────────────────────────────────^
+41 │ │         write_u8(val: 20)
+42 │ │         let _ = read_u8()
+43 │ │         ()
+44 │ │     }
+   │ ╰─────^ ()
+
+note: 
+   ┌─ effects_generic_type_nested.fe:41:9
+   │
+41 │         write_u8(val: 20)
+   │         ^^^^^^^^ fn write_u8
+
+note: 
+   ┌─ effects_generic_type_nested.fe:41:9
+   │
+41 │         write_u8(val: 20)
+   │         ^^^^^^^^^^^^^^^^^ ()
+
+note: 
+   ┌─ effects_generic_type_nested.fe:41:23
+   │
+41 │         write_u8(val: 20)
+   │                       ^^ u8
+
+note: 
+   ┌─ effects_generic_type_nested.fe:42:13
+   │
+42 │         let _ = read_u8()
+   │             ^ u8
+
+note: 
+   ┌─ effects_generic_type_nested.fe:42:17
+   │
+42 │         let _ = read_u8()
+   │                 ^^^^^^^ fn read_u8
+
+note: 
+   ┌─ effects_generic_type_nested.fe:42:17
+   │
+42 │         let _ = read_u8()
+   │                 ^^^^^^^^^ u8
+
+note: 
+   ┌─ effects_generic_type_nested.fe:43:9
+   │
+43 │         ()
+   │         ^^ ()

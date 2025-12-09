@@ -1,0 +1,76 @@
+// fe/crates/hir-analysis/test_files/ty_check/pat/match_stmt_clean.fe
+
+enum Color {
+    Red,
+    Green,
+    Blue,
+    Rgb(u8, u8, u8)
+}
+
+fn test_match_unit_variant(c: Color) -> u8 {
+    match c {
+        Color::Red => {
+            return 1
+        }
+        Color::Green => {
+            return 2
+        }
+        Color::Blue => {
+            return 3
+        }
+        Color::Rgb(r, g, b) => { 
+            return 4
+        }
+    }
+}
+
+fn test_match_tuple_variant_destructure(c: Color) -> u8 {
+    match c {
+        Color::Rgb(r, g, b) => {
+            return r + g + b
+        }
+        Color::Red => { return 0 }
+        Color::Green => { return 0 }
+        Color::Blue => { return 0 }
+    }
+}
+
+fn test_match_tuple_variant_wildcard(c: Color) -> u8 {
+    match c {
+        Color::Rgb(_, _, _) => { // Wildcards for tuple elements
+            return 1
+        }
+        _ => { // Wildcard for other variants
+            return 0
+        }
+    }
+}
+
+fn test_match_tuple_variant_rest_pattern(c: Color) -> u8 {
+    match c {
+        Color::Rgb(r, ..) => { // Rest pattern
+            return r
+        }
+        _ => {
+            return 0
+        }
+    }
+}
+
+fn test_match_with_or_pattern(c: Color) -> bool {
+    match c {
+        Color::Red | Color::Blue => {
+            return true
+        }
+        _ => {
+            return false
+        }
+    }
+}
+
+fn test_match_bool_literal(val: bool) -> u8 {
+    match val {
+        true => { return 1 }
+        false => { return 0 }
+    }
+}

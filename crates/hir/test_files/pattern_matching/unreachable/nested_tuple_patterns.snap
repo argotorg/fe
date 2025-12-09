@@ -1,0 +1,30 @@
+---
+source: crates/hir-analysis/tests/pattern_matching.rs
+expression: diagnostic_output
+input_file: test_files/pattern_matching/unreachable/nested_tuple_patterns.fe
+---
+Unreachable test file nested_tuple_patterns.fe has 3 diagnostic(s):
+
+error[8-0035]: unreachable pattern
+  ┌─ nested_tuple_patterns.fe:5:9
+  │
+5 │         ((true, _), _) => 1        // UNREACHABLE - covered by the wildcard above
+  │         ^^^^^^^^^^^^^^ this pattern is unreachable
+  │
+  = previous patterns already cover all possible values
+
+error[8-0035]: unreachable pattern
+  ┌─ nested_tuple_patterns.fe:6:9
+  │
+6 │         ((false, _), _) => 0       // UNREACHABLE - covered by the wildcard above
+  │         ^^^^^^^^^^^^^^^ this pattern is unreachable
+  │
+  = previous patterns already cover all possible values
+
+error[8-0035]: unreachable pattern
+   ┌─ nested_tuple_patterns.fe:13:9
+   │
+13 │         0 => 2     // This should be unreachable
+   │         ^ this pattern is unreachable
+   │
+   = previous patterns already cover all possible values

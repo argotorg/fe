@@ -1,0 +1,58 @@
+extern {
+    fn todo() -> !
+}
+
+trait Tr1 {
+    type Foo
+
+    fn make_foo(self) -> Self::Foo
+}
+
+struct S1<T> {
+    x: T
+}
+
+// Case 2: Wrong trait associated type
+trait Tr2 {
+    type Baz
+}
+
+impl<T: Tr2> Tr1 for S1<T> {
+    type Foo = T::Bar  // Error: T has Tr2 bound but Tr2 doesn't have Bar associated type
+
+    fn make_foo(self) -> Self::Foo {
+        todo()
+    }
+}
+
+struct Vec<T> {
+    inner: *T
+}
+
+// Case 3: Non-existent type in generic args
+struct S2<T> {
+    x: Vec<NonExistent>  // Error: NonExistent doesn't exist
+}
+
+// Case 4: Associated type on concrete type that doesn't implement the trait
+struct Concrete {}
+impl Tr1 for S1<Concrete> {
+    type Foo = Concrete::Bar  // Error: Concrete doesn't have associated type Bar
+
+    fn make_foo(self) -> Self::Foo {
+        todo()
+    }
+}
+
+// Case 5: Nested associated type that doesn't exist
+trait Tr3 {
+    type Inner
+}
+
+impl<T: Tr3> Tr1 for S1<T> {
+    type Foo = T::Inner::Missing  // Error: T::Inner doesn't have associated type Missing
+
+    fn make_foo(self) -> Self::Foo {
+        todo()
+    }
+}

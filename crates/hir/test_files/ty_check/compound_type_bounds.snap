@@ -1,0 +1,37 @@
+---
+source: crates/hir-analysis/tests/ty_check.rs
+expression: res
+input_file: test_files/ty_check/compound_type_bounds.fe
+---
+note: 
+   ┌─ compound_type_bounds.fe:11:1
+   │
+11 │ {}
+   │ ^^ ()
+
+note: 
+   ┌─ compound_type_bounds.fe:13:14
+   │  
+13 │   fn example() {
+   │ ╭──────────────^
+14 │ │     f(S{})
+15 │ │ }
+   │ ╰─^ ()
+
+note: 
+   ┌─ compound_type_bounds.fe:14:5
+   │
+14 │     f(S{})
+   │     ^ fn f<S>
+
+note: 
+   ┌─ compound_type_bounds.fe:14:5
+   │
+14 │     f(S{})
+   │     ^^^^^^ ()
+
+note: 
+   ┌─ compound_type_bounds.fe:14:7
+   │
+14 │     f(S{})
+   │       ^^^ S

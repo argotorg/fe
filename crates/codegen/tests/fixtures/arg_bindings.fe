@@ -1,0 +1,4 @@
+pub fn arg_bindings(x: u64, y: u64) -> u64 {
+    let z = x + y
+    z
+}

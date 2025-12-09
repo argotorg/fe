@@ -1,0 +1,85 @@
+---
+source: crates/parser/tests/syntax_node.rs
+expression: node
+input_file: test_files/syntax_node/items/extern_doc_comments.fe
+---
+Root@0..146
+  ItemList@0..145
+    Item@0..145
+      Extern@0..145
+        ExternKw@0..6 "extern"
+        WhiteSpace@6..7 " "
+        ExternItemList@7..145
+          LBrace@7..8 "{"
+          Newline@8..9 "\n"
+          WhiteSpace@9..13 "    "
+          Func@13..75
+            AttrList@13..42
+              DocCommentAttr@13..41
+                DocComment@13..41 "/// Load a word from  ..."
+              Newline@41..42 "\n"
+            WhiteSpace@42..46 "    "
+            ItemModifier@46..49
+              PubKw@46..49 "pub"
+            WhiteSpace@49..50 " "
+            FnKw@50..52 "fn"
+            WhiteSpace@52..53 " "
+            FuncSignature@53..75
+              Ident@53..58 "mload"
+              FuncParamList@58..67
+                LParen@58..59 "("
+                FnParam@59..66
+                  Underscore@59..60 "_"
+                  Colon@60..61 ":"
+                  WhiteSpace@61..62 " "
+                  PathType@62..66
+                    Path@62..66
+                      PathSegment@62..66
+                        Ident@62..66 "u256"
+                RParen@66..67 ")"
+              WhiteSpace@67..68 " "
+              Arrow@68..70 "->"
+              WhiteSpace@70..71 " "
+              PathType@71..75
+                Path@71..75
+                  PathSegment@71..75
+                    Ident@71..75 "u256"
+          Newline@75..76 "\n"
+          WhiteSpace@76..80 "    "
+          Func@80..143
+            AttrList@80..108
+              DocCommentAttr@80..107
+                DocComment@80..107 "/// Store a word to m ..."
+              Newline@107..108 "\n"
+            WhiteSpace@108..112 "    "
+            ItemModifier@112..115
+              PubKw@112..115 "pub"
+            WhiteSpace@115..116 " "
+            FnKw@116..118 "fn"
+            WhiteSpace@118..119 " "
+            FuncSignature@119..143
+              Ident@119..125 "mstore"
+              FuncParamList@125..143
+                LParen@125..126 "("
+                FnParam@126..133
+                  Underscore@126..127 "_"
+                  Colon@127..128 ":"
+                  WhiteSpace@128..129 " "
+                  PathType@129..133
+                    Path@129..133
+                      PathSegment@129..133
+                        Ident@129..133 "u256"
+                Comma@133..134 ","
+                WhiteSpace@134..135 " "
+                FnParam@135..142
+                  Underscore@135..136 "_"
+                  Colon@136..137 ":"
+                  WhiteSpace@137..138 " "
+                  PathType@138..142
+                    Path@138..142
+                      PathSegment@138..142
+                        Ident@138..142 "u256"
+                RParen@142..143 ")"
+          Newline@143..144 "\n"
+          RBrace@144..145 "}"
+  Newline@145..146 "\n"

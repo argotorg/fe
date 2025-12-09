@@ -7,7 +7,7 @@ impl rowan::Language for FeLang {
     type Kind = SyntaxKind;
 
     fn kind_from_raw(raw: rowan::SyntaxKind) -> Self::Kind {
-        unsafe { std::mem::transmute::<u16, SyntaxKind>(raw.0) }
+        SyntaxKind::try_from(raw.0).expect("invalid SyntaxKind from raw u16")
     }
 
     fn kind_to_raw(kind: Self::Kind) -> rowan::SyntaxKind {

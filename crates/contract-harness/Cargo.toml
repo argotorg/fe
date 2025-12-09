@@ -1,0 +1,18 @@
+[package]
+name = "fe-contract-harness"
+version = "0.1.0"
+edition.workspace = true
+
+[dependencies]
+driver = { path = "../driver", package = "fe-driver" }
+codegen = { path = "../codegen", package = "fe-codegen" }
+solc_runner = { path = "../solc-runner", package = "fe-solc-runner" }
+common = { path = "../common", package = "fe-common" }
+revm = { version = "33.1.0", default-features = false, features = ["std"] }
+hex = "0.4"
+url.workspace = true
+ethers-core = "2"
+thiserror = "1"
+
+[dev-dependencies]
+serde_json = "1"

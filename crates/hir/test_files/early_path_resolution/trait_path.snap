@@ -1,0 +1,70 @@
+---
+source: crates/hir-analysis/tests/early_path_resolution.rs
+expression: res
+input_file: test_files/early_path_resolution/trait_path.fe
+---
+note: 
+  ┌─ trait_path.fe:2:15
+  │
+2 │     fn method(self) -> i32
+  │               ^^^^ trait_path::MyTrait
+
+note: 
+  ┌─ trait_path.fe:2:24
+  │
+2 │     fn method(self) -> i32
+  │                        ^^^ i32
+
+note: 
+  ┌─ trait_path.fe:8:7
+  │
+8 │ where T: MyTrait
+  │       ^ trait_path::MyS::T
+
+note: 
+  ┌─ trait_path.fe:8:10
+  │
+8 │ where T: MyTrait
+  │          ^^^^^^^ trait_path::MyTrait
+
+note: 
+   ┌─ trait_path.fe:10:8
+   │
+10 │     x: T,
+   │        ^ trait_path::MyS::T
+
+note: 
+   ┌─ trait_path.fe:14:7
+   │
+14 │ where T: OtherTrait
+   │       ^ trait_path::MyS2::T
+
+note: 
+   ┌─ trait_path.fe:14:10
+   │
+14 │ where T: OtherTrait
+   │          ^^^^^^^^^^ trait_path::OtherTrait
+
+note: 
+   ┌─ trait_path.fe:16:8
+   │
+16 │     y: T,
+   │        ^ trait_path::MyS2::T
+
+note: 
+   ┌─ trait_path.fe:23:11
+   │
+23 │     where U: MyTrait
+   │           ^ trait_path::inner::InnerS::U
+
+note: 
+   ┌─ trait_path.fe:23:14
+   │
+23 │     where U: MyTrait
+   │              ^^^^^^^ trait_path::MyTrait
+
+note: 
+   ┌─ trait_path.fe:25:12
+   │
+25 │         z: U,
+   │            ^ trait_path::inner::InnerS::U

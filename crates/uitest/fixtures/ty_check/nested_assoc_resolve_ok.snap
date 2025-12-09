@@ -1,0 +1,6 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/nested_assoc_resolve_ok.fe
+---
+

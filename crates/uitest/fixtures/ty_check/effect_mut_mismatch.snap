@@ -1,0 +1,14 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/effect_mut_mismatch.fe
+---
+error[8-0037]: effect `Storage` must be mutable when calling `needs_mut_storage`
+   ┌─ effect_mut_mismatch.fe:14:9
+   │
+13 │     with (Storage = st) {
+   │                     -- effect `Storage` is provided here
+14 │         needs_mut_storage()
+   │         ^^^^^^^^^^^^^^^^^^^ `needs_mut_storage` requires `mut Storage`
+   │
+   = use a mutable binding or pass a mutable reference in the `with` block

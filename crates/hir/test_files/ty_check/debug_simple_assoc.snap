@@ -1,0 +1,67 @@
+---
+source: crates/hir-analysis/tests/ty_check.rs
+expression: res
+input_file: test_files/ty_check/debug_simple_assoc.fe
+---
+note: 
+   ┌─ debug_simple_assoc.fe:17:18
+   │  
+17 │   fn test_direct() {
+   │ ╭──────────────────^
+18 │ │     let x: Simple::Output = 42
+19 │ │ }
+   │ ╰─^ ()
+
+note: 
+   ┌─ debug_simple_assoc.fe:18:9
+   │
+18 │     let x: Simple::Output = 42
+   │         ^ u32
+
+note: 
+   ┌─ debug_simple_assoc.fe:18:29
+   │
+18 │     let x: Simple::Output = 42
+   │                             ^^ u32
+
+note: 
+   ┌─ debug_simple_assoc.fe:22:35
+   │  
+22 │   fn get_output() -> Simple::Output {
+   │ ╭───────────────────────────────────^
+23 │ │     42
+24 │ │ }
+   │ ╰─^ u32
+
+note: 
+   ┌─ debug_simple_assoc.fe:23:5
+   │
+23 │     42
+   │     ^^ u32
+
+note: 
+   ┌─ debug_simple_assoc.fe:26:20
+   │  
+26 │   fn test_function() {
+   │ ╭────────────────────^
+27 │ │     let y: u32 = get_output()
+28 │ │ }
+   │ ╰─^ ()
+
+note: 
+   ┌─ debug_simple_assoc.fe:27:9
+   │
+27 │     let y: u32 = get_output()
+   │         ^ u32
+
+note: 
+   ┌─ debug_simple_assoc.fe:27:18
+   │
+27 │     let y: u32 = get_output()
+   │                  ^^^^^^^^^^ fn get_output
+
+note: 
+   ┌─ debug_simple_assoc.fe:27:18
+   │
+27 │     let y: u32 = get_output()
+   │                  ^^^^^^^^^^^^ u32

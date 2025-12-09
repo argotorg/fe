@@ -12,10 +12,10 @@ pub struct Bar<const N: bool> {
     N: bool
 }
 
-pub fn foo(x: Foo<true>) {}
-pub fn foo2(x: Foo2<i32, false>) {}
+pub fn foo(a: Foo<true>) {}
+pub fn foo2(b: Foo2<i32, false>) {}
 
-pub fn bar(x: Bar<3>) {}
+pub fn bar(c: Bar<3>) {}
 
 pub struct Bar2<const N: u32> {
     N: u64

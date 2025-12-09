@@ -1,0 +1,88 @@
+---
+source: crates/hir-analysis/tests/ty_check.rs
+expression: res
+input_file: test_files/ty_check/ops_num.fe
+---
+note: 
+  ┌─ ops_num.fe:1:15
+  │  
+1 │   fn f() -> i32 {
+  │ ╭───────────────^
+2 │ │     let mut x = -1
+3 │ │     x += 10
+4 │ │     x = x - 1
+5 │ │     x
+6 │ │ }
+  │ ╰─^ i32
+
+note: 
+  ┌─ ops_num.fe:2:9
+  │
+2 │     let mut x = -1
+  │         ^^^^^ i32
+
+note: 
+  ┌─ ops_num.fe:2:17
+  │
+2 │     let mut x = -1
+  │                 ^^ i32
+
+note: 
+  ┌─ ops_num.fe:2:18
+  │
+2 │     let mut x = -1
+  │                  ^ i32
+
+note: 
+  ┌─ ops_num.fe:3:5
+  │
+3 │     x += 10
+  │     ^ i32
+
+note: 
+  ┌─ ops_num.fe:3:5
+  │
+3 │     x += 10
+  │     ^^^^^^^ ()
+
+note: 
+  ┌─ ops_num.fe:3:10
+  │
+3 │     x += 10
+  │          ^^ i32
+
+note: 
+  ┌─ ops_num.fe:4:5
+  │
+4 │     x = x - 1
+  │     ^ i32
+
+note: 
+  ┌─ ops_num.fe:4:5
+  │
+4 │     x = x - 1
+  │     ^^^^^^^^^ ()
+
+note: 
+  ┌─ ops_num.fe:4:9
+  │
+4 │     x = x - 1
+  │         ^ i32
+
+note: 
+  ┌─ ops_num.fe:4:9
+  │
+4 │     x = x - 1
+  │         ^^^^^ i32
+
+note: 
+  ┌─ ops_num.fe:4:13
+  │
+4 │     x = x - 1
+  │             ^ i32
+
+note: 
+  ┌─ ops_num.fe:5:5
+  │
+5 │     x
+  │     ^ i32

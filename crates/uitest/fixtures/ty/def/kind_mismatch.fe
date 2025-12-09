@@ -7,5 +7,5 @@ pub struct Bar {
     foo: Foo<i32, Foo>,
     bar: Foo<Foo, i32>,
     baz: Foo<i32, u32, u256>,
-    boz: Foo<i32, Foo<i32, u32, u256>>, // TODO: wrong span is highlighted
+    boz: Foo<i32, Foo<i32, u32, u256>>,
 }

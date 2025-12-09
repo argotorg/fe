@@ -1,0 +1,7 @@
+extern {
+    pub fn value() -> u256
+    pub fn timestamp() -> u256
+    pub fn block_number() -> u256
+    pub fn sload(_: u256) -> u256
+    pub fn sstore(slot: u256, value: u256)
+}

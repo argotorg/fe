@@ -1,18 +1,19 @@
 [package]
 name = "fe-bench"
 version = "0.1.0"
-edition = "2021"
+edition.workspace = true
 
 [dev-dependencies]
 criterion = "0.5"
 walkdir = "2.4"
 
 [dependencies]
-hir-analysis.workspace = true
 driver.workspace = true
 parser.workspace = true
 common.workspace = true
 camino.workspace = true
+url.workspace = true
+tracing.workspace = true
 
 [[bench]]
 name = "analysis"

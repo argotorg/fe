@@ -1,18 +1,16 @@
 ---
 source: crates/uitest/tests/ty.rs
 expression: diags
-input_file: crates/uitest/fixtures/ty/trait_impl_kind_mismatch.fe
+input_file: fixtures/ty/def/trait_impl_kind_mismatch.fe
 ---
 error[6-0002]: given trait argument kind mismatch
-   ┌─ trait_impl_kind_mismatch.fe:10:14
+   ┌─ trait_impl_kind_mismatch.fe:10:6
    │
 10 │ impl Foo for i32 {}
-   │              ^^^ expected `(* -> *)` kind, but `i32` has `*` kind
+   │      ^^^ expected `(* -> *)` kind, but `i32` has `*` kind
 
 error[6-0002]: given trait argument kind mismatch
-   ┌─ trait_impl_kind_mismatch.fe:12:14
+   ┌─ trait_impl_kind_mismatch.fe:12:6
    │
 12 │ impl Foo for S<i32> {}
-   │              ^^^^^^ expected `(* -> *)` kind, but `S<i32>` has `*` kind
-
-
+   │      ^^^ expected `(* -> *)` kind, but `S<i32>` has `*` kind

@@ -3,7 +3,7 @@ source: crates/uitest/tests/ty_check.rs
 expression: diags
 input_file: fixtures/ty_check/call_field.fe
 ---
-error[8-0029]: no method named `y` found for struct `Foo`
+error[2-0010]: no method named `y` found for struct `Foo`
    ┌─ call_field.fe:15:15
    │
 15 │     let y = s.y()

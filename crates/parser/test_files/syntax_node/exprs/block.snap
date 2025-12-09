@@ -1,7 +1,7 @@
 ---
 source: crates/parser/tests/syntax_node.rs
 expression: node
-input_file: crates/parser/test_files/syntax_node/exprs/block.fe
+input_file: test_files/syntax_node/exprs/block.fe
 ---
 Root@0..75
   BlockExpr@0..75
@@ -36,10 +36,11 @@ Root@0..75
       Func@43..54
         FnKw@43..45 "fn"
         WhiteSpace@45..46 " "
-        Ident@46..49 "foo"
-        FuncParamList@49..51
-          LParen@49..50 "("
-          RParen@50..51 ")"
+        FuncSignature@46..51
+          Ident@46..49 "foo"
+          FuncParamList@49..51
+            LParen@49..50 "("
+            RParen@50..51 ")"
         WhiteSpace@51..52 " "
         BlockExpr@52..54
           LBrace@52..53 "{"

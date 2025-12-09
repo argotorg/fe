@@ -1,0 +1,67 @@
+---
+source: crates/hir-analysis/tests/decision_tree.rs
+expression: res
+input_file: test_files/decision_trees/with_bindings.fe
+---
+note: 
+   ┌─ with_bindings.fe:12:5
+   │  
+12 │ ╭     match c {
+13 │ │         Color::Rgb(r, g, b) => r + g + b
+14 │ │         Color::Simple(value) => value
+15 │ │     }
+   │ ╰─────^ Decision Tree for test_with_bindings:
+ Switch on expr
+ ├─ Rgb =>
+ │  └─ Execute arm #0
+ │       r ← expr.0
+ │       g ← expr.1
+ │       b ← expr.2
+ └─ Simple =>
+    └─ Execute arm #1
+         value ← expr.0
+
+
+note: 
+   ┌─ with_bindings.fe:19:5
+   │  
+19 │ ╭     match p {
+20 │ │         Point::Origin => 0
+21 │ │         Point::Coordinate(x, y) => x + y
+22 │ │     }
+   │ ╰─────^ Decision Tree for test_tuple_bindings:
+ Switch on expr
+ ├─ Origin =>
+ │  └─ Execute arm #0
+ └─ Coordinate =>
+    └─ Execute arm #1
+         x ← expr.0
+         y ← expr.1
+
+
+note: 
+   ┌─ with_bindings.fe:26:5
+   │  
+26 │ ╭     match colors {
+27 │ │         (Color::Rgb(r, _, _), Point::Coordinate(x, _)) => r + x
+28 │ │         (Color::Simple(_), Point::Origin) => 42
+29 │ │         _ => 0
+30 │ │     }
+   │ ╰─────^ Decision Tree for test_nested_bindings:
+ Switch on expr
+ └─ tuple() =>
+    └─ Switch on expr.1
+       ├─ Coordinate =>
+       │  └─ Switch on expr.0
+       │     ├─ Rgb =>
+       │     │  └─ Execute arm #0
+       │     │       r ← expr.0.0
+       │     │       x ← expr.1.0
+       │     └─ _ =>
+       │        └─ Execute arm #2
+       └─ Origin =>
+          └─ Switch on expr.0
+             ├─ Simple =>
+             │  └─ Execute arm #1
+             └─ _ =>
+                └─ Execute arm #2

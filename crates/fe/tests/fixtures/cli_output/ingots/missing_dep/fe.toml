@@ -1,0 +1,6 @@
+[ingot]
+name = "missingdep"
+version = "0.0.1"
+
+[dependencies]
+nonexistent = { path = "../nonexistent", version = "0.0.1" }

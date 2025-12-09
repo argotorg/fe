@@ -1,0 +1,39 @@
+extern {
+    fn todo() -> !
+}
+
+trait Functor
+    where Self: * -> *
+{
+    fn map<T, U, F: Fn<T, U>>(self: Self<T>, _ f: F) -> Self<U>
+}
+
+trait Fn<T, U> {
+    fn call(self, _ t: T) -> U
+}
+
+enum Result<E, T> {
+    Err(E),
+    Ok(T),
+}
+
+struct MyFn {}
+impl Fn<i32, bool> for MyFn {
+    fn call(self, _ t: i32) -> bool {
+        return true
+    }
+}
+
+impl Functor for Result<()> {
+    fn map<T, U, F: Fn<T, U>>(self: Self<T>, _ f: F) -> Self<U> {
+        match self {
+            Result::Ok(t) => Result::Ok(f.call(t))
+            Result::Err(e) => Result::Err(e)
+        }
+    }
+}
+
+fn f() {
+    let r1 = Result<(), i32>::Ok(10)
+    let r2 = r1.map(MyFn{})
+}

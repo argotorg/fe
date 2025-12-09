@@ -1,0 +1,2 @@
+struct Map<K, V> {}
+type Foo<T, T> = Map<T, T>

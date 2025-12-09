@@ -1,6 +1,6 @@
-use rowan::ast::{support, AstNode};
+use rowan::ast::{AstNode, support};
 
-use super::{ast_node, AstChildren};
+use super::{AstChildren, ast_node};
 use crate::{SyntaxKind as SK, SyntaxToken};
 
 ast_node! {
@@ -19,7 +19,6 @@ impl Type {
         match self.syntax().kind() {
             SK::PtrType => TypeKind::Ptr(AstNode::cast(self.syntax().clone()).unwrap()),
             SK::PathType => TypeKind::Path(AstNode::cast(self.syntax().clone()).unwrap()),
-            SK::SelfType => TypeKind::SelfType(AstNode::cast(self.syntax().clone()).unwrap()),
             SK::TupleType => TypeKind::Tuple(AstNode::cast(self.syntax().clone()).unwrap()),
             SK::ArrayType => TypeKind::Array(AstNode::cast(self.syntax().clone()).unwrap()),
             SK::NeverType => TypeKind::Never(AstNode::cast(self.syntax().clone()).unwrap()),
@@ -59,20 +58,6 @@ impl PathType {
     }
 }
 impl super::GenericArgsOwner for PathType {}
-
-ast_node! {
-    /// A self type.
-    /// `Self`
-    pub struct SelfType,
-    SK::SelfType,
-}
-impl SelfType {
-    /// Returns the `Self` keyword.
-    pub fn self_kw(&self) -> Option<SyntaxToken> {
-        support::token(self.syntax(), SK::SelfTypeKw)
-    }
-}
-impl super::GenericArgsOwner for SelfType {}
 
 ast_node! {
     /// A tuple type.
@@ -131,7 +116,6 @@ ast_node! {
 pub enum TypeKind {
     Ptr(PtrType),
     Path(PathType),
-    SelfType(SelfType),
     Tuple(TupleType),
     Array(ArrayType),
     Never(NeverType),
@@ -192,12 +176,6 @@ mod tests {
                 _ => panic!(),
             }
         }
-    }
-
-    #[test]
-    #[wasm_bindgen_test]
-    fn self_type() {
-        let _: SelfType = parse_type("Self");
     }
 
     #[test]

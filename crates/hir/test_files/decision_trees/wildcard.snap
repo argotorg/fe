@@ -1,0 +1,18 @@
+---
+source: crates/hir-analysis/tests/decision_tree.rs
+expression: res
+input_file: test_files/decision_trees/wildcard.fe
+---
+note: 
+   ┌─ wildcard.fe:8:5
+   │  
+ 8 │ ╭     match c {
+ 9 │ │         Color::Red => 0
+10 │ │         _ => 1
+11 │ │     }
+   │ ╰─────^ Decision Tree for test_wildcard:
+ Switch on expr
+ ├─ Red =>
+ │  └─ Execute arm #0
+ └─ _ =>
+    └─ Execute arm #1

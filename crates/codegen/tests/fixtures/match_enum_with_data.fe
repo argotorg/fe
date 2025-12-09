@@ -1,0 +1,16 @@
+
+enum MyOption {
+    None,
+    Some(u64),
+}
+
+pub fn make_some(value: u64) -> MyOption {
+    MyOption::Some(value)
+}
+
+pub fn match_option(opt: MyOption) -> u64 {
+    match opt {
+        MyOption::Some(value) => value,
+        MyOption::None => 0,
+    }
+}

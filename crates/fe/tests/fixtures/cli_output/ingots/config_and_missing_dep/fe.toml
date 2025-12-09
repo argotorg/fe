@@ -1,0 +1,6 @@
+[ingot]
+name = "invalid name!"
+version = "0.1.0"
+
+[dependencies]
+nonexistent = "./nonexistent"

@@ -1,0 +1,14 @@
+enum MyEnum {
+    A,
+    B,
+    C,
+}
+
+pub fn match_enum(e: MyEnum) -> u8 {
+    match e {
+        MyEnum::A => 1,
+        MyEnum::B => 2,
+        MyEnum::C => 3,
+        _ => 4,
+    }
+}

@@ -1,0 +1,36 @@
+trait Abi {
+    type Selector: Encode<Self>
+    type Encoder: AbiEncoder
+}
+
+trait Encode<A: Abi> {
+    fn encode(self, mut _ e: A::Encoder)
+}
+
+trait AbiEncoder {
+    fn with_encoded_size(_: usize) -> Self
+}
+
+struct SolAbi {}
+struct SolEncoder {}
+
+impl Abi for SolAbi {
+    type Selector = [u8; 4]   // Doesn't impl Encode<SolAbi>
+    type Encoder = SolEncoder // Doesn't impl AbiEncoder
+}
+
+struct Complex<S, E> {}
+impl<S, E> Abi for Complex<S, E>
+where
+    // S: Encode<Complex<S, E>>,
+    E: AbiEncoder
+{
+    type Selector = S
+    type Encoder = E
+}
+
+trait Tr1 {
+    type Foo: Tr2 = FooDefault
+}
+trait Tr2 {}
+struct FooDefault {} // Doesn't impl Tr2

@@ -1,0 +1,106 @@
+// Decision tree tests for complex stress patterns
+
+enum Color {
+    Red,
+    Green,
+    Blue
+}
+
+enum VeryLargeEnum {
+    Variant1,
+    Variant2,
+    Variant3,
+    Variant4,
+    Variant5
+}
+
+struct Point {
+    x: u8,
+    y: u8,
+}
+
+struct Rectangle {
+    top_left: Point,
+    bottom_right: Point,
+}
+
+enum ShapeVariant {
+    Circle(Point, u8),
+    Rect(Rectangle),
+    Line(Point, Point),
+}
+
+// Test decision tree for large enum
+fn test_large_enum_decision_tree(large: VeryLargeEnum) -> u8 {
+    match large {
+        VeryLargeEnum::Variant1 => 1
+        VeryLargeEnum::Variant2 => 2
+        VeryLargeEnum::Variant3 => 3
+        VeryLargeEnum::Variant4 => 4
+        VeryLargeEnum::Variant5 => 5
+    }
+}
+
+// Test decision tree for complex tuple patterns
+fn test_complex_tuple_decision_tree(data: ((u8, bool), (Color, u8))) -> u8 {
+    match data {
+        ((0, true), (Color::Red, _)) => 10
+        ((0, false), (Color::Green, x)) => x + 20
+        ((1, _), (Color::Blue, _)) => 30
+        ((_, true), (Color::Red, _)) => 40
+        _ => 0
+    }
+}
+
+// Test decision tree for struct patterns
+fn test_struct_decision_tree(point: Point, color: Color) -> u8 {
+    match (point, color) {
+        (Point { x: 0, y: 0 }, Color::Red) => 100
+        (Point { x: 0, y: _ }, Color::Green) => 200
+        (Point { x: _, y: 0 }, Color::Blue) => 300
+        (Point { x, y }, _) => x + y
+    }
+}
+
+// Test decision tree for nested struct patterns
+fn test_nested_struct_decision_tree(rect: Rectangle) -> u8 {
+    match rect {
+        Rectangle { top_left: Point { x: 0, y: 0 }, bottom_right: _ } => 50
+        Rectangle { top_left: Point { x: 1, y: 1 }, bottom_right: Point { x: 2, y: 2 } } => 100
+        Rectangle { top_left: Point { x, y }, bottom_right: Point { x: bx, y: by } } => x + y + bx + by
+    }
+}
+
+// Test decision tree for enum with data patterns
+fn test_enum_data_decision_tree(shape: ShapeVariant) -> u8 {
+    match shape {
+        ShapeVariant::Circle(Point { x: 0, y: 0 }, radius) => radius
+        ShapeVariant::Circle(Point { x, y }, _) => x + y
+        ShapeVariant::Rect(Rectangle { top_left: Point { x: 0, y: 0 }, bottom_right: _ }) => 200
+        ShapeVariant::Rect(_) => 150
+        ShapeVariant::Line(Point { x: 0, y: 0 }, Point { x: 1, y: 1 }) => 300
+        ShapeVariant::Line(_, _) => 250
+    }
+}
+
+// Test decision tree for or-patterns
+fn test_or_pattern_decision_tree(data: (VeryLargeEnum, bool)) -> u8 {
+    match data {
+        (VeryLargeEnum::Variant1 | VeryLargeEnum::Variant2, true) => 10
+        (VeryLargeEnum::Variant3 | VeryLargeEnum::Variant4, false) => 20
+        (VeryLargeEnum::Variant5, _) => 30
+        _ => 0
+    }
+}
+
+// Test decision tree for mixed patterns
+fn test_mixed_pattern_decision_tree(
+    data: (VeryLargeEnum, Point, (bool, u8))
+) -> u8 {
+    match data {
+        (VeryLargeEnum::Variant1, Point { x: 0, y: 0 }, (true, _)) => 100
+        (VeryLargeEnum::Variant2, Point { x: 1, y: _ }, (false, val)) => val + 50
+        (VeryLargeEnum::Variant3 | VeryLargeEnum::Variant4, Point { x, y }, (_, _)) => x + y + 25
+        _ => 1
+    }
+}

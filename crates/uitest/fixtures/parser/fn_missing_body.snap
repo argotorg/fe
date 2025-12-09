@@ -1,18 +1,23 @@
 ---
 source: crates/uitest/tests/parser.rs
+assertion_line: 26
 expression: diags
-input_file: crates/uitest/fixtures/parser/fn_missing_body.fe
+input_file: fixtures/parser/fn_missing_body.fe
 ---
-error[1-0001]: expected `{` or `where`
+error[1-0001]: function definition requires a body
   ┌─ fn_missing_body.fe:1:28
   │
 1 │ fn foo(x: u8, y: u64) -> u8
-  │                            ^ expected `{` or `where`
+  │                            ^ expected `{`
 
-error[1-0001]: unexpected syntax while parsing function definition
+error[1-0001]: unexpected syntax while parsing function signature
   ┌─ fn_missing_body.fe:3:13
   │
 3 │ fn bar<T>() asdf
   │             ^^^^ unexpected
 
-
+error[1-0001]: function definition requires a body
+  ┌─ fn_missing_body.fe:3:17
+  │
+3 │ fn bar<T>() asdf
+  │                 ^ expected `{`

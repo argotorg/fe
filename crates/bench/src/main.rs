@@ -1,3 +1,5 @@
+use tracing::error;
+
 fn main() {
-    eprintln!("run `cargo bench`");
+    error!("run `cargo bench`");
 }

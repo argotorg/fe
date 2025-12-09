@@ -1,0 +1,29 @@
+---
+source: crates/hir-analysis/tests/tuple_like.rs
+expression: res
+input_file: test_files/tuple_like/simple_tuple.fe
+---
+note: 
+  ┌─ simple_tuple.fe:5:1
+  │  
+5 │ ╭ fn test_pair_tuple() -> (u8, bool) {
+6 │ │     return (42, true)
+7 │ │ }
+  │ ╰─^ Tuple return type in 'test_pair_tuple': pair (arity: 2, 2 field types)
+
+note: 
+   ┌─ simple_tuple.fe:9:1
+   │  
+ 9 │ ╭ fn test_triple_tuple() -> (u8, bool, u256) {
+10 │ │     return (1, false, 100)
+11 │ │ }
+   │ ╰─^ Tuple return type in 'test_triple_tuple': triple (arity: 3, 3 field types)
+
+note: 
+   ┌─ simple_tuple.fe:13:1
+   │  
+13 │ ╭ fn test_nested_tuple() -> ((u8, bool), u256) {
+14 │ │     let inner: (u8, bool) = (5, true)
+15 │ │     return (inner, 200)
+16 │ │ }
+   │ ╰─^ Tuple return type in 'test_nested_tuple': pair (arity: 2, 2 field types)

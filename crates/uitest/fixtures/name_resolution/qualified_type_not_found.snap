@@ -1,0 +1,28 @@
+---
+source: crates/uitest/tests/name_resolution.rs
+expression: diags
+input_file: fixtures/name_resolution/qualified_type_not_found.fe
+---
+error[2-0002]: `Foo` is not found
+   ┌─ qualified_type_not_found.fe:12:16
+   │
+12 │     let x: <a::Foo as Bar>::Baz
+   │                ^^^ `Foo` is not found
+
+error[2-0002]: `Tr` is not found
+   ┌─ qualified_type_not_found.fe:13:21
+   │
+13 │     let y: <a::S as Tr>::Baz
+   │                     ^^ `Tr` is not found
+
+error[2-0006]: expected type item here
+   ┌─ qualified_type_not_found.fe:15:13
+   │
+15 │     let _: <Bar as Bar>::X
+   │             ^^^ expected type here, but found trait `Bar`
+
+error[2-0007]: expected trait item here
+   ┌─ qualified_type_not_found.fe:14:21
+   │
+14 │     let z: <a::S as B>::X
+   │                     ^ expected trait here, but found type `B`

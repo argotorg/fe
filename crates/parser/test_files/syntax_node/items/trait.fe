@@ -31,3 +31,8 @@ impl<S> Parser<S>
 pub trait SubTrait<T>: Parse + Add<T> 
 where T: Add<T>
 {}
+
+pub trait Sub<T = Self> {
+    type Output = Self
+    fn sub(self, rhs: T) -> Self::Output
+}

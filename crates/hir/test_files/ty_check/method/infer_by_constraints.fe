@@ -1,0 +1,34 @@
+use core::todo
+
+struct S<T> {
+    t: T,
+}
+
+impl<T> S<T> {
+    fn new() -> Self {
+        todo()
+    }
+}
+
+trait Foo<T, U> {
+    fn foo(self) -> (T, U)
+}
+
+impl<T> Foo<T, i32> for S<T> {
+    fn foo(self) -> (T, i32) {
+        (self.t, 1)
+    }
+}
+
+impl<T> Foo<u32, u32> for S<T> {
+    fn foo(self) -> (u32, u32) {
+        (1, 1)
+    }
+}
+
+fn bar() -> (u64, i32) {
+    let s = S::new()
+
+    let (x, y) = s.foo()
+    (x, y)
+}

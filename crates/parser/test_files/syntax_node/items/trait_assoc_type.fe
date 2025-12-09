@@ -1,0 +1,29 @@
+trait Abi {
+    type Selector: Encode<Self>
+}
+
+struct SolAbi {}
+impl Abi for SolAbi {
+    type Selector = [u8; 4]
+}
+
+trait State {
+    type Ptr: * -> *
+
+    fn make_ptr<T>(_ pos: usize) -> Self::Ptr<T>
+}
+struct MemPtr<T> {
+    pos: usize
+}
+struct StoragePtr<T> {
+    pos: usize
+}
+
+struct MyStorageThing {}
+impl State for MyStorageThing {
+    type Ptr = StoragePtr
+
+    fn make_ptr<T>(_ pos: usize) -> Self::Ptr<T> {
+        Self::Ptr<T> { pos }
+    }
+}

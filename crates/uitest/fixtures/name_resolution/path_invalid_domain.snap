@@ -1,7 +1,8 @@
 ---
 source: crates/uitest/tests/name_resolution.rs
+assertion_line: 26
 expression: diags
-input_file: crates/uitest/fixtures/name_resolution/path_invalid_domain.fe
+input_file: fixtures/name_resolution/path_invalid_domain.fe
 ---
 error[2-0005]: `foo` can't be used as a middle segment of a path
    ┌─ path_invalid_domain.fe:23:8
@@ -19,12 +20,6 @@ error[2-0006]: expected type item here
    │                          ^^^ expected type here, but found trait `MyT`
 
 error[2-0006]: expected type item here
-   ┌─ path_invalid_domain.fe:16:13
-   │
-16 │     Variant(MyC),
-   │             ^^^ expected type here, but found const `MyC`
-
-error[2-0006]: expected type item here
    ┌─ path_invalid_domain.fe:17:14
    │
 17 │     Variant2(Var)
@@ -35,3 +30,9 @@ error[2-0007]: expected trait item here
    │
 13 │ where T: MyE,
    │          ^^^ expected trait here, but found type `MyE`
+
+error[3-0013]: expected a normal type
+   ┌─ path_invalid_domain.fe:16:13
+   │
+16 │     Variant(MyC),
+   │             ^^^ expected a normal type here, but `const MyC` is given

@@ -1,10 +1,10 @@
-fn foo<T: Trait>>(x: i32, _ mut y: u32, z: u32) ->  T, u where T: Trait2 
+fn foo<T: Trait>>(x: i32, _ mut y: u32, z: u32) ->  T, u where T: Trait2
 {
 
 }
 
 fn foo<<<T: Trait>(x: i32)
-    where T: Trait2 
+    where T: Trait2
 {
 
 }

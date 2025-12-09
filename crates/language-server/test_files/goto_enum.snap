@@ -1,0 +1,70 @@
+---
+source: crates/language-server/src/functionality/goto.rs
+expression: snapshot
+input_file: test_files/goto_enum.fe
+---
+note: 
+  ┌─ goto_enum.fe:7:20
+  │
+7 │ fn check_status(s: Status) -> bool {
+  │                    ^^^^^^ -> goto_enum::Status
+
+note: 
+  ┌─ goto_enum.fe:8:11
+  │
+8 │     match s {
+  │           ^ -> local: Status
+
+note: 
+  ┌─ goto_enum.fe:9:9
+  │
+9 │         Status::Active => true
+  │         ^^^^^^ -> goto_enum::Status
+
+note: 
+  ┌─ goto_enum.fe:9:17
+  │
+9 │         Status::Active => true
+  │                 ^^^^^^ -> goto_enum::Status::Active
+
+note: 
+   ┌─ goto_enum.fe:10:9
+   │
+10 │         Status::Inactive => false
+   │         ^^^^^^ -> goto_enum::Status
+
+note: 
+   ┌─ goto_enum.fe:10:17
+   │
+10 │         Status::Inactive => false
+   │                 ^^^^^^^^ -> goto_enum::Status::Inactive
+
+note: 
+   ┌─ goto_enum.fe:11:9
+   │
+11 │         Status::Pending => false
+   │         ^^^^^^ -> goto_enum::Status
+
+note: 
+   ┌─ goto_enum.fe:11:17
+   │
+11 │         Status::Pending => false
+   │                 ^^^^^^^ -> goto_enum::Status::Pending
+
+note: 
+   ┌─ goto_enum.fe:15:23
+   │
+15 │ fn create_status() -> Status {
+   │                       ^^^^^^ -> goto_enum::Status
+
+note: 
+   ┌─ goto_enum.fe:16:5
+   │
+16 │     Status::Active
+   │     ^^^^^^ -> goto_enum::Status
+
+note: 
+   ┌─ goto_enum.fe:16:13
+   │
+16 │     Status::Active
+   │             ^^^^^^ -> goto_enum::Status::Active

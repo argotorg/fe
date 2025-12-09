@@ -1,0 +1,73 @@
+enum Color {
+    Red,
+    Green,
+    Blue
+}
+
+// Basic non-exhaustive nested tuple pattern
+// Missing the case where the first element is false
+fn missing_first_pattern(t: ((bool, bool), bool)) -> u8 {
+    match t {
+        ((true, _), _) => 1  // Only covers cases where first element is true
+        // Missing ((false, _), _) case
+    }
+}
+
+// Non-exhaustive pattern with missing inner element
+fn missing_inner_pattern(t: ((bool, bool), bool)) -> u8 {
+    match t {
+        ((true, true), _) => 3   // Only matches inner tuple (true, true)
+        ((true, false), _) => 2  // Only matches inner tuple (true, false)
+        ((false, true), _) => 1  // Only matches inner tuple (false, true)
+        // Missing ((false, false), _) case
+    }
+}
+
+// Non-exhaustive pattern with missing outer element
+fn missing_outer_pattern(t: ((bool, bool), bool)) -> u8 {
+    match t {
+        ((_, _), true) => 1   // Matches all inner tuples when outer bool is true
+        // Missing ((_, _), false) case
+    }
+}
+
+// Complex nested tuple with missing cases
+fn complex_nested_missing(t: ((Color, bool), Color)) -> u8 {
+    match t {
+        ((Color::Red, _), _) => 3    // All cases with Red
+        ((Color::Green, _), _) => 2  // All cases with Green
+        // Missing cases with Color::Blue in first position
+    }
+}
+
+// Deep nesting with missing patterns
+fn deep_nesting_missing(t: (((bool, bool), bool), bool)) -> u8 {
+    match t {
+        (((true, _), _), true) => 3   // Innermost first true, outermost true
+        (((true, _), _), false) => 2  // Innermost first true, outermost false
+        (((false, _), true), _) => 1  // Innermost first false, middle true
+        // Missing (((false, _), false), _) case
+    }
+}
+
+// Mixed wildcards with non-exhaustive cases
+fn mixed_wildcards_missing(t: ((bool, Color), bool)) -> u8 {
+    match t {
+        ((true, Color::Red), _) => 4    // true + Red
+        ((true, Color::Green), _) => 3  // true + Green
+        ((true, Color::Blue), _) => 2   // true + Blue
+        ((false, Color::Red), _) => 1   // false + Red
+        // Missing cases: ((false, Color::Green), _) and ((false, Color::Blue), _)
+    }
+}
+
+// Partial coverage with complex conditions
+fn partial_coverage(t: ((u8, u8), bool)) -> u8 {
+    match t {
+        ((0, _), _) => 4     // First element is 0
+        ((_, 0), _) => 3     // Second element is 0
+        ((1, 1), true) => 2  // Both 1 with true
+        ((1, 1), false) => 1 // Both 1 with false
+        // Missing many cases where neither element is 0 or both 1
+    }
+}

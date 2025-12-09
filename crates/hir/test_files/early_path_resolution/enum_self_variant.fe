@@ -1,0 +1,12 @@
+enum Option<T> {
+    None,
+    Some(T),
+}
+
+impl Option<i32> {
+    fn make_some(val: i32) -> Option<i32> {
+        // Ensure `Self::Some` resolves via the enum scope, not lexical scope.
+        Self::Some(val)
+    }
+}
+

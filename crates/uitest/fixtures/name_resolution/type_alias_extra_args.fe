@@ -1,0 +1,6 @@
+mod m {
+    pub type Alias<T> = T
+}
+
+pub fn f(x: m::Alias<i32, u32>) {}
+

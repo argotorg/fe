@@ -1,0 +1,179 @@
+---
+source: crates/parser/tests/syntax_node.rs
+expression: node
+input_file: test_files/syntax_node/items/qualified_path.fe
+---
+Root@0..198
+  ItemList@0..197
+    Item@0..30
+      TypeAlias@0..30
+        TypeKw@0..4 "type"
+        WhiteSpace@4..5 " "
+        Ident@5..6 "A"
+        WhiteSpace@6..7 " "
+        Eq@7..8 "="
+        WhiteSpace@8..9 " "
+        PathType@9..30
+          Path@9..30
+            PathSegment@9..24
+              QualifiedType@9..24
+                Lt@9..10 "<"
+                PathType@10..11
+                  Path@10..11
+                    PathSegment@10..11
+                      Ident@10..11 "T"
+                WhiteSpace@11..12 " "
+                AsKw@12..14 "as"
+                WhiteSpace@14..15 " "
+                TraitRef@15..23
+                  Path@15..23
+                    PathSegment@15..23
+                      Ident@15..23 "Iterator"
+                Gt@23..24 ">"
+            Colon2@24..26 "::"
+            PathSegment@26..30
+              Ident@26..30 "Item"
+    Newline@30..31 "\n"
+    Item@31..67
+      TypeAlias@31..67
+        TypeKw@31..35 "type"
+        WhiteSpace@35..36 " "
+        Ident@36..37 "B"
+        WhiteSpace@37..38 " "
+        Eq@38..39 "="
+        WhiteSpace@39..40 " "
+        PathType@40..67
+          Path@40..67
+            PathSegment@40..59
+              QualifiedType@40..59
+                Lt@40..41 "<"
+                PathType@41..45
+                  Path@41..45
+                    PathSegment@41..45
+                      SelfTypeKw@41..45 "Self"
+                WhiteSpace@45..46 " "
+                AsKw@46..48 "as"
+                WhiteSpace@48..49 " "
+                TraitRef@49..58
+                  Path@49..58
+                    PathSegment@49..58
+                      Ident@49..58 "SomeTrait"
+                Gt@58..59 ">"
+            Colon2@59..61 "::"
+            PathSegment@61..67
+              Ident@61..67 "Output"
+    Newline@67..68 "\n"
+    Item@68..107
+      TypeAlias@68..107
+        TypeKw@68..72 "type"
+        WhiteSpace@72..73 " "
+        Ident@73..74 "C"
+        WhiteSpace@74..75 " "
+        Eq@75..76 "="
+        WhiteSpace@76..77 " "
+        PathType@77..107
+          Path@77..107
+            PathSegment@77..101
+              QualifiedType@77..101
+                Lt@77..78 "<"
+                PathType@78..84
+                  Path@78..84
+                    PathSegment@78..84
+                      Ident@78..81 "Vec"
+                      GenericArgList@81..84
+                        Lt@81..82 "<"
+                        TypeGenericArg@82..83
+                          PathType@82..83
+                            Path@82..83
+                              PathSegment@82..83
+                                Ident@82..83 "T"
+                        Gt@83..84 ">"
+                WhiteSpace@84..85 " "
+                AsKw@85..87 "as"
+                WhiteSpace@87..88 " "
+                TraitRef@88..100
+                  Path@88..100
+                    PathSegment@88..100
+                      Ident@88..100 "IntoIterator"
+                Gt@100..101 ">"
+            Colon2@101..103 "::"
+            PathSegment@103..107
+              Ident@103..107 "Item"
+    Newline@107..108 "\n"
+    Item@108..145
+      TypeAlias@108..145
+        TypeKw@108..112 "type"
+        WhiteSpace@112..113 " "
+        Ident@113..114 "D"
+        WhiteSpace@114..115 " "
+        Eq@115..116 "="
+        WhiteSpace@116..117 " "
+        PathType@117..145
+          Path@117..145
+            PathSegment@117..132
+              QualifiedType@117..132
+                Lt@117..118 "<"
+                PathType@118..119
+                  Path@118..119
+                    PathSegment@118..119
+                      Ident@118..119 "T"
+                WhiteSpace@119..120 " "
+                AsKw@120..122 "as"
+                WhiteSpace@122..123 " "
+                TraitRef@123..131
+                  Path@123..131
+                    PathSegment@123..131
+                      Ident@123..131 "Iterator"
+                Gt@131..132 ">"
+            Colon2@132..134 "::"
+            PathSegment@134..138
+              Ident@134..138 "Item"
+            Colon2@138..140 "::"
+            PathSegment@140..145
+              Ident@140..145 "Value"
+    Newline@145..146 "\n"
+    Item@146..197
+      TypeAlias@146..197
+        TypeKw@146..150 "type"
+        WhiteSpace@150..151 " "
+        Ident@151..152 "E"
+        WhiteSpace@152..153 " "
+        Eq@153..154 "="
+        WhiteSpace@154..155 " "
+        PathType@155..197
+          Path@155..197
+            PathSegment@155..189
+              QualifiedType@155..189
+                Lt@155..156 "<"
+                PathType@156..177
+                  Path@156..177
+                    PathSegment@156..171
+                      QualifiedType@156..171
+                        Lt@156..157 "<"
+                        PathType@157..158
+                          Path@157..158
+                            PathSegment@157..158
+                              Ident@157..158 "T"
+                        WhiteSpace@158..159 " "
+                        AsKw@159..161 "as"
+                        WhiteSpace@161..162 " "
+                        TraitRef@162..170
+                          Path@162..170
+                            PathSegment@162..170
+                              Ident@162..170 "Iterator"
+                        Gt@170..171 ">"
+                    Colon2@171..173 "::"
+                    PathSegment@173..177
+                      Ident@173..177 "Item"
+                WhiteSpace@177..178 " "
+                AsKw@178..180 "as"
+                WhiteSpace@180..181 " "
+                TraitRef@181..188
+                  Path@181..188
+                    PathSegment@181..188
+                      Ident@181..188 "Display"
+                Gt@188..189 ">"
+            Colon2@189..191 "::"
+            PathSegment@191..197
+              Ident@191..197 "Output"
+  Newline@197..198 "\n"

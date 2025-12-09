@@ -1,0 +1,5 @@
+type A = <T as Iterator>::Item
+type B = <Self as SomeTrait>::Output
+type C = <Vec<T> as IntoIterator>::Item
+type D = <T as Iterator>::Item::Value
+type E = <<T as Iterator>::Item as Display>::Output

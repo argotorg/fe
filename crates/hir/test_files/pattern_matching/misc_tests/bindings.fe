@@ -1,0 +1,218 @@
+// Test to investigate pattern binding inconsistencies
+
+enum Option<T> {
+    Some(T),
+    None
+}
+
+enum Result<T, E> {
+    Ok(T),
+    Err(E)
+}
+
+fn test_simple_binding() -> i32 {
+    let opt: Option<i32> = Option::Some(42)
+    match opt {
+        Option::Some(x) => x  // This should work
+        Option::None => 0
+    }
+}
+
+fn test_tuple_binding_both_known() -> i32 {
+    let pair: (Option<i32>, Option<i32>) = (Option::Some(1), Option::Some(2))
+    match pair {
+        (Option::Some(a), Option::Some(b)) => a + b
+        (Option::Some(a), Option::None) => a
+        (Option::None, Option::Some(b)) => b
+        (Option::None, Option::None) => 0
+    }
+}
+
+fn test_tuple_binding_unknown() -> i32 {
+    // Both Option types are unknown - this is where the issue occurs
+    let pair = (Option::None, Option::None)
+    match pair {
+        (Option::Some(a), Option::Some(b)) => a + b
+        (Option::Some(a), Option::None) => a      // Does 'a' bind correctly?
+        (Option::None, Option::Some(b)) => b      // Does 'b' bind correctly?
+        (Option::None, Option::None) => 0
+    }
+}
+
+fn test_single_unknown() -> i32 {
+    let opt = Option::None
+    match opt {
+        Option::Some(x) => x  // Does 'x' bind when type is unknown?
+        Option::None => 42
+    }
+}
+
+fn test_first_position_unknown() -> i32 {
+    let pair = (Option::None, Option::Some(42))
+    match pair {
+        (Option::Some(a), Option::Some(b)) => a + b
+        (Option::Some(a), Option::None) => a      // Does 'a' bind when first type unknown?
+        (Option::None, Option::Some(b)) => b      // Does 'b' bind when first type unknown?
+        (Option::None, Option::None) => 0
+    }
+}
+
+fn test_second_position_unknown() -> i32 {
+    let pair = (Option::Some(42), Option::None)
+    match pair {
+        (Option::Some(a), Option::Some(b)) => a + b
+        (Option::Some(a), Option::None) => a      // Does 'a' bind when second type unknown?
+        (Option::None, Option::Some(b)) => b      // Does 'b' bind when second type unknown?
+        (Option::None, Option::None) => 0
+    }
+}
+
+fn test_nested_unknown() -> i32 {
+    let nested = Option::Some(Option::None)
+    match nested {
+        Option::Some(Option::Some(x)) => x  // Does 'x' bind in nested unknown?
+        Option::Some(Option::None) => 0
+        Option::None => -1
+    }
+}
+
+// Test match where scrutinee type comes from if-else
+fn test_conditional_type() -> i32 {
+    let value = if true {
+        Option::Some(100)
+    } else {
+        Option::None
+    }
+
+    match value {
+        Option::Some(n) => n
+        Option::None => 0
+    }
+}
+
+// Generic function with pattern matching
+fn generic_match<T>(opt: Option<T>) -> bool {
+    match opt {
+        Option::Some(_) => true
+        Option::None => false
+    }
+}
+
+// Test nested generic patterns
+fn test_nested_generics() -> i32 {
+    let nested: Option<Result<i32, bool>> = Option::Some(Result::Ok(42))
+
+    match nested {
+        Option::Some(Result::Ok(val)) => val
+        Option::Some(Result::Err(_)) => -1
+        Option::None => 0
+    }
+}
+
+// Test or patterns with Option
+fn test_or_patterns(opt: Option<i32>) -> i32 {
+    match opt {
+        Option::Some(0) | Option::None => 0
+        Option::Some(x) => x
+    }
+}
+
+// Test match in expression position
+fn test_match_expression() -> i32 {
+    let result = match Option::Some(42) {
+        Option::Some(x) => x * 2
+        Option::None => 0
+    }
+
+    result
+}
+
+// Test multiple matches with same enum
+fn test_multiple_matches() -> i32 {
+    let opt1 = Option::Some(10)
+    let opt2 = Option::Some(20)
+
+    let sum = match opt1 {
+        Option::Some(a) => {
+            match opt2 {
+                Option::Some(b) => a + b
+                Option::None => a
+            }
+        }
+        Option::None => {
+            match opt2 {
+                Option::Some(b) => b
+                Option::None => 0
+            }
+        }
+    }
+
+    sum
+}
+
+// Test pattern matching with literals in Option
+fn test_literal_patterns(opt: Option<i32>) -> i32 {
+    match opt {
+        Option::Some(42) => 1
+        Option::Some(0) => 2
+        Option::Some(x) => x
+        Option::None => -1
+    }
+}
+
+// Test match with different generic instantiations
+fn test_different_instantiations() -> i32 {
+    let int_opt: Option<i32> = Option::Some(42)
+    let bool_opt: Option<bool> = Option::Some(true)
+
+    let result1 = match int_opt {
+        Option::Some(x) => x
+        Option::None => 0
+    }
+
+    let result2 = match bool_opt {
+        Option::Some(true) => 1
+        Option::Some(false) => 0
+        Option::None => -1
+    }
+
+    result1 + result2
+}
+
+// Test unknown error type in Result
+fn test_unknown_error_type() -> i32 {
+    // The Ok value has a literal, but Err type is unknown
+    let result = Result::Ok(100)
+
+    match result {
+        Result::Ok(val) => val
+        Result::Err(_) => 0
+    }
+}
+
+// Generic function return without context
+fn identity<T>(_ value: T) -> T {
+    value
+}
+
+fn test_generic_return() -> i32 {
+    // The return type of identity can't be inferred without context
+    let value = identity(Option::None)
+
+    match value {
+        Option::Some(x) => x
+        Option::None => 0
+    }
+}
+
+// Test nested generics with partial information
+fn test_partial_generic_info() -> i32 {
+    // Inner Option type can't be inferred
+    let outer = Result::Ok(Option::None)
+
+    match outer {
+        Result::Ok(Option::Some(val)) => val
+        Result::Ok(Option::None) => 0
+        Result::Err(_) => -1
+    }
+}

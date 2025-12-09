@@ -1,0 +1,27 @@
+extern {
+    fn todo() -> !
+}
+
+// Two unrelated traits with the same associated type name
+trait Trait1 {
+    type Item
+}
+
+trait Trait2 {
+    type Item
+}
+
+// A type that implements both traits with the same concrete associated type
+struct Both {}
+
+impl Trait1 for Both { type Item = u8 }
+impl Trait2 for Both { type Item = u8 }
+
+// If a type parameter has multiple trait bounds that bind the same associated type
+// to the same concrete type, using that associated type should not be ambiguous.
+fn use_item<T: Trait1<Item = u8> + Trait2<Item = u8>>() {
+    let _x: T::Item = 0
+}
+
+// No explicit monomorphization needed; resolution of T::Item under
+// the given bounds must not be ambiguous.

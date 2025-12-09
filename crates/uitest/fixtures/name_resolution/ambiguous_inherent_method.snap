@@ -1,0 +1,16 @@
+---
+source: crates/uitest/tests/name_resolution.rs
+expression: diags
+input_file: fixtures/name_resolution/ambiguous_inherent_method.fe
+---
+error[2-0015]: ambiguous method
+   ┌─ ambiguous_inherent_method.fe:15:10
+   │
+ 7 │     fn foo(self) -> i32 { self.x }
+   │        --- `foo` is defined here
+   ·
+11 │     fn foo(self) -> u32 { 0 }
+   │        --- `foo` is defined here
+   ·
+15 │     Foo::foo()
+   │          ^^^ `foo` is ambiguous

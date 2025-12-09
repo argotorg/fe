@@ -1,0 +1,30 @@
+extern {
+    fn todo() -> !
+}
+
+fn make<T>() -> T { todo() }
+
+struct S {}
+impl S { fn foo(self) -> i32 { 0 } }
+
+trait Double {
+    fn double(self) -> Self
+}
+impl Double for i32 {
+    fn double(self) -> Self {
+        self * 2
+    }
+}
+impl Double for i64 {
+    fn double(self) -> Self {
+        self * 2
+    }
+}
+
+fn run() {
+    let x = make()
+    x.foo()
+
+    let y = 0
+    y.double()
+}

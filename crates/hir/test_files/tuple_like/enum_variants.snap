@@ -1,0 +1,56 @@
+---
+source: crates/hir-analysis/tests/tuple_like.rs
+expression: res
+input_file: test_files/tuple_like/enum_variants.fe
+---
+note: 
+  ┌─ enum_variants.fe:1:1
+  │  
+1 │ ╭ enum Color {
+2 │ │     Red,
+3 │ │     Green, 
+4 │ │     Blue
+5 │ │ }
+  │ ╰─^ Tuple enum variant 'Color::Blue': unit variant (arity: 0)
+
+note: 
+   ┌─ enum_variants.fe:7:1
+   │  
+ 7 │ ╭ enum Shape {
+ 8 │ │     Circle(u8),
+ 9 │ │     Rectangle(u8, u8),
+10 │ │     Triangle(u8, u8, u8)
+11 │ │ }
+   │ ╰─^ Tuple enum variant 'Shape::Triangle': tuple variant (arity: 3)
+
+note: 
+   ┌─ enum_variants.fe:13:1
+   │  
+13 │ ╭ enum Mixed {
+14 │ │     Unit,
+15 │ │     Tuple(u8, bool),
+16 │ │     Record { x: u8, y: bool }
+17 │ │ }
+   │ ╰─^ Enum variant 'Mixed::Record': record variant (not tuple-like)
+
+note: 
+   ┌─ enum_variants.fe:19:1
+   │  
+19 │ ╭ enum Nested {
+20 │ │     Simple(Color),
+21 │ │     Complex(Shape),
+22 │ │     Paired(Color, Shape)
+23 │ │ }
+   │ ╰─^ Tuple enum variant 'Nested::Paired': tuple variant (arity: 2)
+
+note: 
+   ┌─ enum_variants.fe:60:1
+   │  
+60 │ ╭ fn create_variants() -> (Color, Shape, Mixed, Nested) {
+61 │ │     let color = Color::Red
+62 │ │     let shape = Shape::Circle(5)
+63 │ │     let mixed = Mixed::Tuple(42, true)
+64 │ │     let nested = Nested::Paired(Color::Blue, Shape::Rectangle(3, 4))
+65 │ │     return (color, shape, mixed, nested)
+66 │ │ }
+   │ ╰─^ Tuple return type in 'create_variants': 4-tuple (arity: 4, 4 field types)

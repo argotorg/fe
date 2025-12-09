@@ -1,0 +1,117 @@
+---
+source: crates/hir-analysis/tests/ty_check.rs
+expression: res
+input_file: test_files/ty_check/associated_type_in_fn_signature.fe
+---
+note: 
+   ┌─ associated_type_in_fn_signature.fe:32:55
+   │  
+32 │       fn get_output<T: Abi>(self) -> T::Encoder::Output {
+   │ ╭───────────────────────────────────────────────────────^
+33 │ │         todo()
+34 │ │     }
+   │ ╰─────^ T::Encoder::Output
+
+note: 
+   ┌─ associated_type_in_fn_signature.fe:33:9
+   │
+33 │         todo()
+   │         ^^^^ fn todo
+
+note: 
+   ┌─ associated_type_in_fn_signature.fe:33:9
+   │
+33 │         todo()
+   │         ^^^^^^ T::Encoder::Output
+
+note: 
+   ┌─ associated_type_in_fn_signature.fe:37:49
+   │  
+37 │   fn use_encoder<T: Encoder>(enc: T) -> T::Output {
+   │ ╭─────────────────────────────────────────────────^
+38 │ │     todo()
+39 │ │ }
+   │ ╰─^ T::Output
+
+note: 
+   ┌─ associated_type_in_fn_signature.fe:38:5
+   │
+38 │     todo()
+   │     ^^^^ fn todo
+
+note: 
+   ┌─ associated_type_in_fn_signature.fe:38:5
+   │
+38 │     todo()
+   │     ^^^^^^ T::Output
+
+note: 
+   ┌─ associated_type_in_fn_signature.fe:41:26
+   │  
+41 │   fn example(ms: MyStruct) {
+   │ ╭──────────────────────────^
+42 │ │     let s: u32 = use_encoder(enc: SomeEncoder{})
+43 │ │     let a: SomeAbi::Encoder::Output = ms.get_output<SomeAbi>()
+44 │ │     let b: SomeAbi::Encoder::Output = ms.get_output<SomeAbi>()
+45 │ │ }
+   │ ╰─^ ()
+
+note: 
+   ┌─ associated_type_in_fn_signature.fe:42:9
+   │
+42 │     let s: u32 = use_encoder(enc: SomeEncoder{})
+   │         ^ u32
+
+note: 
+   ┌─ associated_type_in_fn_signature.fe:42:18
+   │
+42 │     let s: u32 = use_encoder(enc: SomeEncoder{})
+   │                  ^^^^^^^^^^^ fn use_encoder<SomeEncoder>
+
+note: 
+   ┌─ associated_type_in_fn_signature.fe:42:18
+   │
+42 │     let s: u32 = use_encoder(enc: SomeEncoder{})
+   │                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ u32
+
+note: 
+   ┌─ associated_type_in_fn_signature.fe:42:35
+   │
+42 │     let s: u32 = use_encoder(enc: SomeEncoder{})
+   │                                   ^^^^^^^^^^^^^ SomeEncoder
+
+note: 
+   ┌─ associated_type_in_fn_signature.fe:43:9
+   │
+43 │     let a: SomeAbi::Encoder::Output = ms.get_output<SomeAbi>()
+   │         ^ u32
+
+note: 
+   ┌─ associated_type_in_fn_signature.fe:43:39
+   │
+43 │     let a: SomeAbi::Encoder::Output = ms.get_output<SomeAbi>()
+   │                                       ^^ MyStruct
+
+note: 
+   ┌─ associated_type_in_fn_signature.fe:43:39
+   │
+43 │     let a: SomeAbi::Encoder::Output = ms.get_output<SomeAbi>()
+   │                                       ^^^^^^^^^^^^^^^^^^^^^^^^ u32
+
+note: 
+   ┌─ associated_type_in_fn_signature.fe:44:9
+   │
+44 │     let b: SomeAbi::Encoder::Output = ms.get_output<SomeAbi>()
+   │         ^ u32
+
+note: 
+   ┌─ associated_type_in_fn_signature.fe:44:39
+   │
+44 │     let b: SomeAbi::Encoder::Output = ms.get_output<SomeAbi>()
+   │                                       ^^ MyStruct
+
+note: 
+   ┌─ associated_type_in_fn_signature.fe:44:39
+   │
+44 │     let b: SomeAbi::Encoder::Output = ms.get_output<SomeAbi>()
+   │                                       ^^^^^^^^^^^^^^^^^^^^^^^^ u32

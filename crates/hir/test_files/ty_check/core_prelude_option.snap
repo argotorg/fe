@@ -1,0 +1,177 @@
+---
+source: crates/hir-analysis/tests/ty_check.rs
+assertion_line: 48
+expression: res
+input_file: test_files/ty_check/core_prelude_option.fe
+---
+note: 
+   ┌─ core_prelude_option.fe:1:38
+   │  
+ 1 │   fn use_prelude_option(x: i32) -> i32 {
+   │ ╭──────────────────────────────────────^
+ 2 │ │     let a = Some(x)
+ 3 │ │     let b: Option<i32> = None
+ 4 │ │ 
+   · │
+12 │ │     }
+13 │ │ }
+   │ ╰─^ i32
+
+note: 
+  ┌─ core_prelude_option.fe:2:9
+  │
+2 │     let a = Some(x)
+  │         ^ Option<i32>
+
+note: 
+  ┌─ core_prelude_option.fe:2:13
+  │
+2 │     let a = Some(x)
+  │             ^^^^ fn Some<i32>
+
+note: 
+  ┌─ core_prelude_option.fe:2:13
+  │
+2 │     let a = Some(x)
+  │             ^^^^^^^ Option<i32>
+
+note: 
+  ┌─ core_prelude_option.fe:2:18
+  │
+2 │     let a = Some(x)
+  │                  ^ i32
+
+note: 
+  ┌─ core_prelude_option.fe:3:9
+  │
+3 │     let b: Option<i32> = None
+  │         ^ Option<i32>
+
+note: 
+  ┌─ core_prelude_option.fe:3:26
+  │
+3 │     let b: Option<i32> = None
+  │                          ^^^^ Option<i32>
+
+note: 
+   ┌─ core_prelude_option.fe:5:5
+   │  
+ 5 │ ╭     if a.is_some() {
+ 6 │ │         a.unwrap_or_default()
+ 7 │ │     } else {
+ 8 │ │         match b {
+   · │
+11 │ │         }
+12 │ │     }
+   │ ╰─────^ i32
+
+note: 
+  ┌─ core_prelude_option.fe:5:8
+  │
+5 │     if a.is_some() {
+  │        ^ Option<i32>
+
+note: 
+  ┌─ core_prelude_option.fe:5:8
+  │
+5 │     if a.is_some() {
+  │        ^^^^^^^^^^^ bool
+
+note: 
+  ┌─ core_prelude_option.fe:5:20
+  │  
+5 │       if a.is_some() {
+  │ ╭────────────────────^
+6 │ │         a.unwrap_or_default()
+7 │ │     } else {
+  │ ╰─────^ i32
+
+note: 
+  ┌─ core_prelude_option.fe:6:9
+  │
+6 │         a.unwrap_or_default()
+  │         ^ Option<i32>
+
+note: 
+  ┌─ core_prelude_option.fe:6:9
+  │
+6 │         a.unwrap_or_default()
+  │         ^^^^^^^^^^^^^^^^^^^^^ i32
+
+note: 
+   ┌─ core_prelude_option.fe:7:12
+   │  
+ 7 │       } else {
+   │ ╭────────────^
+ 8 │ │         match b {
+ 9 │ │             Some(y) => y
+10 │ │             None => 0
+11 │ │         }
+12 │ │     }
+   │ ╰─────^ i32
+
+note: 
+   ┌─ core_prelude_option.fe:8:9
+   │  
+ 8 │ ╭         match b {
+ 9 │ │             Some(y) => y
+10 │ │             None => 0
+11 │ │         }
+   │ ╰─────────^ i32
+
+note: 
+  ┌─ core_prelude_option.fe:8:15
+  │
+8 │         match b {
+  │               ^ Option<i32>
+
+note: 
+  ┌─ core_prelude_option.fe:9:13
+  │
+9 │             Some(y) => y
+  │             ^^^^^^^ Option<i32>
+
+note: 
+  ┌─ core_prelude_option.fe:9:18
+  │
+9 │             Some(y) => y
+  │                  ^ i32
+
+note: 
+  ┌─ core_prelude_option.fe:9:24
+  │
+9 │             Some(y) => y
+  │                        ^ i32
+
+note: 
+   ┌─ core_prelude_option.fe:10:13
+   │
+10 │             None => 0
+   │             ^^^^ Option<i32>
+
+note: 
+   ┌─ core_prelude_option.fe:10:21
+   │
+10 │             None => 0
+   │                     ^ i32
+
+note: 
+   ┌─ core_prelude_option.fe:20:26
+   │  
+20 │       fn default() -> Self {
+   │ ╭──────────────────────────^
+21 │ │         todo()
+22 │ │     }
+   │ ╰─────^ Foo
+
+note: 
+   ┌─ core_prelude_option.fe:21:9
+   │
+21 │         todo()
+   │         ^^^^ fn todo
+
+note: 
+   ┌─ core_prelude_option.fe:21:9
+   │
+21 │         todo()
+   │         ^^^^^^ Foo

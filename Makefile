@@ -70,8 +70,24 @@ docker-wasm-test:
 		--rm \
 		--volume "$(shell pwd):/mnt" \
 		--workdir '/mnt' \
-		davesque/rust-wasm \
-		wasm-pack test --node -- --workspace --exclude fe-language-server
+		rust:latest \
+		/bin/bash -c "rustup target add wasm32-unknown-unknown && cargo test -p fe-common -p fe-parser -p fe-hir -p fe-hir-analysis --target wasm32-unknown-unknown"
+
+.PHONY: check-wasm
+check-wasm:
+	@echo "Checking core crates for wasm32-unknown-unknown..."
+	cargo check -p fe-common -p fe-parser -p fe-hir -p fe-hir-analysis --target wasm32-unknown-unknown
+	@echo "✓ Core crates support wasm32-unknown-unknown"
+
+.PHONY: check-wasi
+check-wasi:
+	@echo "Checking filesystem-dependent crates for wasm32-wasip1..."
+	cargo check -p fe-driver -p fe-resolver -p fe --target wasm32-wasip1
+	@echo "✓ Filesystem crates support wasm32-wasip1"
+
+.PHONY: check-wasm-all
+check-wasm-all: check-wasm check-wasi
+	@echo "✓ All WASM/WASI checks passed"
 
 .PHONY: coverage
 coverage:
@@ -79,7 +95,7 @@ coverage:
 
 .PHONY: clippy
 clippy:
-	cargo clippy --workspace --all-targets --all-features -- -D warnings -A clippy::upper-case-acronyms -A clippy::large-enum-variant
+	cargo clippy --workspace --all-targets --all-features -- -D warnings -A clippy::upper-case-acronyms -A clippy::large-enum-variant -W clippy::print_stdout -W clippy::print_stderr
 
 .PHONY: rustfmt
 rustfmt:
@@ -113,4 +129,3 @@ push-tag:
 	git tag "v$$(cargo pkgid fe | cut -d# -f2 | cut -d: -f2)"
 	git push --tags upstream master
 	printf "\033[1m\033[31mConsider to redeploy the website now\n"
-

@@ -1,0 +1,20 @@
+pub struct Storage {
+    value: u8,
+}
+
+pub struct Other {
+    value: u8,
+}
+
+pub fn needs_storage()
+  uses Storage
+{
+    ()
+}
+
+pub fn wrong_capability() {
+    let other = Other { value: 0 }
+    with (Storage = other) {
+        needs_storage()
+    }
+}

@@ -1,0 +1,93 @@
+---
+source: crates/hir-analysis/tests/ty_check.rs
+expression: res
+input_file: test_files/ty_check/assoc_type_subst.fe
+---
+note: 
+   ┌─ assoc_type_subst.fe:18:34
+   │  
+18 │       fn get(self) -> Self::Output {
+   │ ╭──────────────────────────────────^
+19 │ │         self.value
+20 │ │     }
+   │ ╰─────^ T
+
+note: 
+   ┌─ assoc_type_subst.fe:19:9
+   │
+19 │         self.value
+   │         ^^^^ SimpleImpl<T>
+
+note: 
+   ┌─ assoc_type_subst.fe:19:9
+   │
+19 │         self.value
+   │         ^^^^^^^^^^ T
+
+note: 
+   ┌─ assoc_type_subst.fe:38:49
+   │  
+38 │       fn get_nested(self) -> Self::Middle::Output {
+   │ ╭─────────────────────────────────────────────────^
+39 │ │         todo()
+40 │ │     }
+   │ ╰─────^ T
+
+note: 
+   ┌─ assoc_type_subst.fe:39:9
+   │
+39 │         todo()
+   │         ^^^^ fn todo
+
+note: 
+   ┌─ assoc_type_subst.fe:39:9
+   │
+39 │         todo()
+   │         ^^^^^^ T
+
+note: 
+   ┌─ assoc_type_subst.fe:44:18
+   │  
+44 │   fn test_nested() {
+   │ ╭──────────────────^
+45 │ │     let n: NestedImpl<u32> = NestedImpl { phantom: 0 }
+46 │ │     let result: u32 = n.get_nested()
+47 │ │ }
+   │ ╰─^ ()
+
+note: 
+   ┌─ assoc_type_subst.fe:45:9
+   │
+45 │     let n: NestedImpl<u32> = NestedImpl { phantom: 0 }
+   │         ^ NestedImpl<u32>
+
+note: 
+   ┌─ assoc_type_subst.fe:45:30
+   │
+45 │     let n: NestedImpl<u32> = NestedImpl { phantom: 0 }
+   │                              ^^^^^^^^^^^^^^^^^^^^^^^^^ NestedImpl<u32>
+
+note: 
+   ┌─ assoc_type_subst.fe:45:52
+   │
+45 │     let n: NestedImpl<u32> = NestedImpl { phantom: 0 }
+   │                                                    ^ u32
+
+note: 
+   ┌─ assoc_type_subst.fe:46:9
+   │
+46 │     let result: u32 = n.get_nested()
+   │         ^^^^^^ u32
+
+note: 
+   ┌─ assoc_type_subst.fe:46:23
+   │
+46 │     let result: u32 = n.get_nested()
+   │                       ^ NestedImpl<u32>
+
+note: 
+   ┌─ assoc_type_subst.fe:46:23
+   │
+46 │     let result: u32 = n.get_nested()
+   │                       ^^^^^^^^^^^^^^ u32
+

@@ -1,0 +1,10 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/assoc_ty_missing.fe
+---
+error[6-0012]: missing associated type in trait implementation
+  ┌─ assoc_ty_missing.fe:9:13
+  │
+9 │ impl T1 for S {}
+  │             ^ missing associated type `Bar` from trait `T1`

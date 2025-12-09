@@ -1,0 +1,46 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/ambiguous_associated_type.fe
+---
+error[2-0009]: ambiguous associated type `Output`
+   ┌─ ambiguous_associated_type.fe:22:40
+   │
+ 3 │ trait TraitA {
+   │       ------ candidate: `TraitA`
+   ·
+ 7 │ trait TraitB {
+   │       ------ candidate: `TraitB`
+   ·
+22 │ fn ambiguous_assoc_type<T>(t: T) -> T::Output
+   │                                        ^^^^^^ associated type `Output` is ambiguous
+   │
+   = hint: specify the trait explicitly: `<T as TraitA>::Output`
+
+error[2-0009]: ambiguous associated type `Nested`
+   ┌─ ambiguous_associated_type.fe:44:54
+   │
+36 │ trait Level1 {
+   │       ------ candidate: `Level1`
+   ·
+40 │ trait Level2 {
+   │       ------ candidate: `Level2`
+   ·
+44 │ fn test_nested_ambiguous<T: Level1 + Level2>() -> T::Nested {
+   │                                                      ^^^^^^ associated type `Nested` is ambiguous
+   │
+   = hint: specify the trait explicitly: `<T as Level1>::Nested`
+
+error[2-0009]: ambiguous associated type `Output`
+   ┌─ ambiguous_associated_type.fe:49:15
+   │
+ 3 │ trait TraitA {
+   │       ------ candidate: `TraitA`
+   ·
+ 7 │ trait TraitB {
+   │       ------ candidate: `TraitB`
+   ·
+49 │     let a: T::Output = 0
+   │               ^^^^^^ associated type `Output` is ambiguous
+   │
+   = hint: specify the trait explicitly: `<T as TraitA>::Output`

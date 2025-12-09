@@ -1,0 +1,10 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/assoc_const_missing_value.fe
+---
+error[6-0013]: missing associated const value in trait implementation
+  ┌─ assoc_const_missing_value.fe:8:14
+  │
+8 │     const C: u32
+  │              ^^^ missing value for associated const `C` from trait `T`

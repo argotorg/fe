@@ -1,0 +1,31 @@
+enum Color {
+    Rgb(u8, u8, u8),
+    Simple(u8)
+}
+
+enum Point {
+    Origin,
+    Coordinate(u8, u8)
+}
+
+fn test_with_bindings(c: Color) -> u8 {
+    match c {
+        Color::Rgb(r, g, b) => r + g + b
+        Color::Simple(value) => value
+    }
+}
+
+fn test_tuple_bindings(p: Point) -> u8 {
+    match p {
+        Point::Origin => 0
+        Point::Coordinate(x, y) => x + y
+    }
+}
+
+fn test_nested_bindings(colors: (Color, Point)) -> u8 {
+    match colors {
+        (Color::Rgb(r, _, _), Point::Coordinate(x, _)) => r + x
+        (Color::Simple(_), Point::Origin) => 42
+        _ => 0
+    }
+}

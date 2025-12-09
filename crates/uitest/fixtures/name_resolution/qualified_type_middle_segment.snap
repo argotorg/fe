@@ -1,0 +1,11 @@
+---
+source: crates/uitest/tests/name_resolution.rs
+assertion_line: 26
+expression: diags
+input_file: fixtures/name_resolution/qualified_type_middle_segment.fe
+---
+error[2-0005]: `<T as Trait>` can't be used as a middle segment of a path
+   ┌─ qualified_type_middle_segment.fe:10:19
+   │
+10 │     let _: outer::<T as Trait>::Item
+   │                   ^^^^^^^^^^^^ `<T as Trait>` can't be used as a middle segment of a path

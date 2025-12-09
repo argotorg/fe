@@ -1,0 +1,9 @@
+struct Map<T, U> {}
+
+type Foo<T = i32> = Map<T, ()>
+
+fn main() {
+    let x: Foo
+    let y: Foo<u64>
+}
+

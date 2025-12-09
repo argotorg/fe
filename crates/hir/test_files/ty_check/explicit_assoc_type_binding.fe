@@ -1,0 +1,14 @@
+
+trait Iterator {
+    type Item
+}
+
+trait IntoIterator {
+    type IntoIter: Iterator<Item = Self::Item>
+    type Item
+}
+
+fn f<T>(_: T)
+where T: IntoIterator<Item = i32> {
+    let x: <T::IntoIter as Iterator>::Item = 10
+}

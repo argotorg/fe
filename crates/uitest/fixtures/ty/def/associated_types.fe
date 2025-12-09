@@ -1,0 +1,17 @@
+trait Add<T> {
+    type Output
+
+    fn add(self, _ other: T) -> Self::Output
+}
+
+struct Val {
+    x: u16
+}
+
+impl Add<u16> for Val {
+    type Output = Val
+
+    fn add(self, _ other: u16) -> Val {
+        Val { x: self.x + other }
+    }
+}

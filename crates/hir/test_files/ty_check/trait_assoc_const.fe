@@ -1,0 +1,46 @@
+trait MsgVariant {
+    const SELECTOR: usize
+}
+
+struct Some {}
+
+impl MsgVariant for Some {
+    const SELECTOR: usize = 4
+}
+
+type SelArr = [u8; Some::SELECTOR]
+
+fn f() -> usize {
+    FooMsg::SELECTOR
+    Some::SELECTOR
+}
+
+trait Abi {
+    type Selector
+}
+
+trait Msg2<A: Abi> {
+    const SELECTOR: A::Selector
+}
+
+struct SolAbi {}
+impl Abi for SolAbi {
+    type Selector = u8
+}
+
+struct FooMsg {}
+impl Msg2<SolAbi> for FooMsg {
+    const SELECTOR: u8 = 0x12
+}
+
+// Defaulted associated const: impl may omit the const without error
+trait HasDefaultConst {
+    const C: u32 = 42
+}
+
+struct UsesDefault {}
+impl HasDefaultConst for UsesDefault {}
+
+fn use_default_const() -> u32 {
+    UsesDefault::C
+}

@@ -1,0 +1,20 @@
+---
+source: crates/hir-analysis/tests/pattern_matching.rs
+expression: diagnostic_output
+input_file: test_files/pattern_matching/non_exhaustive/non_exhaustive_match.fe
+---
+Non-exhaustive test file non_exhaustive_match.fe has 1 diagnostic(s):
+
+error[8-0034]: non-exhaustive patterns: type `Color` is not covered
+   ┌─ non_exhaustive_match.fe:13:5
+   │  
+13 │ ╭     match c {
+14 │ │         Color::Red => {
+15 │ │             return 1
+16 │ │         }
+   · │
+20 │ │         // Missing Green and Blue
+21 │ │     }
+   │ ╰─────^ match expression does not cover all possible values
+   │  
+   = Not covered: `Color::Green | Color::Blue`

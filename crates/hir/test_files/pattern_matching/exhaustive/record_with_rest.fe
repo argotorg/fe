@@ -1,0 +1,14 @@
+struct S {
+    x: u8,
+    y: u8,
+    z: u8,
+}
+
+fn test_rest(s: S) -> u8 {
+    match s {
+        S { x: 10, .. } => 10
+        S { y: 20, .. } => 20
+        S { x, .., z: 30 } => 30 + x
+        S { y, .. } => y
+    }
+}

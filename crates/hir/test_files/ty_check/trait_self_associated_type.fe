@@ -1,0 +1,24 @@
+trait Iterator {
+    type Item
+    
+    fn next(mut self) -> Self::Item
+}
+
+struct Range {
+    start: i32,
+    end: i32
+}
+
+impl Iterator for Range {
+    type Item = i32
+    
+    fn next(mut self) -> Self::Item {
+        if self.start < self.end {
+            let val = self.start
+            self.start += 1
+            val
+        } else {
+            0
+        }
+    }
+}

@@ -1,0 +1,22 @@
+// Test method comparison with associated types
+extern {
+    fn todo() -> !
+}
+
+trait HasAssoc {
+    type Output
+
+    fn get_output(self) -> Self::Output
+}
+
+struct MyStruct<T> {
+    phantom: T
+}
+
+impl<T> HasAssoc for MyStruct<T> {
+    type Output = T
+
+    fn get_output(self) -> Self::Output {
+        todo()
+    }
+}

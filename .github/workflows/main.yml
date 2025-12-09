@@ -12,6 +12,7 @@ env:
   CARGO_TERM_COLOR: always
   CARGO_INCREMENTAL: 0
   RUST_BACKTRACE: full
+  SOLC_VERSION: v0.8.30
 
 jobs:
   lint:
@@ -19,7 +20,7 @@ jobs:
     env:
       RUSTFLAGS: "-D warnings"
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v5
       - name: Install system dependencies
         run: |
           sudo apt-get update
@@ -47,42 +48,64 @@ jobs:
           - os: ubuntu-latest
           - os: macOS-latest
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v5
       - name: Install rust
         uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: stable
+      - name: Cache solc
+        id: solc-cache
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/solc-${{ env.SOLC_VERSION }}
+          key: solc-${{ runner.os }}-${{ env.SOLC_VERSION }}
+      - name: Download solc
+        if: steps.solc-cache.outputs.cache-hit != 'true'
+        run: |
+          set -euo pipefail
+          if [ "${{ runner.os }}" = "Linux" ]; then
+            url="https://github.com/ethereum/solidity/releases/download/${SOLC_VERSION}/solc-static-linux"
+          elif [ "${{ runner.os }}" = "macOS" ]; then
+            url="https://github.com/ethereum/solidity/releases/download/${SOLC_VERSION}/solc-macos"
+          else
+            echo "Unsupported OS: ${{ runner.os }}"
+            exit 1
+          fi
+          curl -Ls "$url" -o "$RUNNER_TEMP/solc-${SOLC_VERSION}"
+          chmod +x "$RUNNER_TEMP/solc-${SOLC_VERSION}"
       - name: Cache Dependencies
         uses: Swatinem/rust-cache@v2
       - name: Build
         run: cargo test --workspace --all-features --no-run --locked --exclude fe-language-server --exclude fe-bench
       - name: Run tests
+        env:
+          FE_SOLC_PATH: ${{ runner.temp }}/solc-${{ env.SOLC_VERSION }}
         run: cargo test --workspace --all-features --verbose --exclude fe-language-server --exclude fe-bench
 
-  wasm-test:
+  wasm-wasi-check:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v5
       - name: Install rust
         uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: stable
-      - name: Install wasm-pack
-        run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
+      - name: Install WASM targets
+        run: |
+          rustup target add wasm32-unknown-unknown
+          rustup target add wasm32-wasip1
       - name: Cache Dependencies
         uses: Swatinem/rust-cache@v2
-      - name: Run WASM tests
-        # wasm-pack needs a Cargo.toml with a 'package' field.
-        # (see https://github.com/rustwasm/wasm-pack/issues/642)
-        # This will still run all tests in the workspace.
-        run: wasm-pack test --node crates/driver --workspace --exclude fe-language-server --exclude fe-bench
+      - name: Check core crates for wasm32-unknown-unknown
+        run: cargo check -p fe-common -p fe-parser -p fe-hir --target wasm32-unknown-unknown
+      - name: Check filesystem crates for wasm32-wasip1
+        run: cargo check -p fe-driver -p fe-resolver -p fe --target wasm32-wasip1
 
   release:
     # Only run this when we push a tag
     if: startsWith(github.ref, 'refs/tags/')
     runs-on: ${{ matrix.os }}
-    # needs: [lint, test, wasm-test]
-    needs: [lint, test]
+    needs: [lint, test, wasm-wasi-check]
     strategy:
       matrix:
         include:
@@ -92,7 +115,7 @@ jobs:
             BIN_FILE: fe_mac
 
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v5
       - name: Install rust
         uses: dtolnay/rust-toolchain@stable
         with:

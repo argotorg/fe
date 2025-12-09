@@ -1,0 +1,6 @@
+[ingot]
+name = "basic_b"
+version = "0.1.0"
+
+[dependencies]
+basic_d = "../basic_d"

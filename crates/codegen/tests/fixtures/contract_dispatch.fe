@@ -1,0 +1,10 @@
+contract MinimalDispatcher {}
+
+fn emit_code() -> u64 {
+    1
+}
+
+#[contract_runtime(MinimalDispatcher)]
+fn dispatch() {
+    let _value: u64 = emit_code()
+}

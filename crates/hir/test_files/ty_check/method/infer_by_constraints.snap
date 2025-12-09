@@ -1,0 +1,163 @@
+---
+source: crates/hir-analysis/tests/ty_check.rs
+expression: res
+input_file: test_files/ty_check/method/infer_by_constraints.fe
+---
+note: 
+   ┌─ infer_by_constraints.fe:8:22
+   │  
+ 8 │       fn new() -> Self {
+   │ ╭──────────────────────^
+ 9 │ │         todo()
+10 │ │     }
+   │ ╰─────^ S<T>
+
+note: 
+  ┌─ infer_by_constraints.fe:9:9
+  │
+9 │         todo()
+  │         ^^^^ fn todo
+
+note: 
+  ┌─ infer_by_constraints.fe:9:9
+  │
+9 │         todo()
+  │         ^^^^^^ S<T>
+
+note: 
+   ┌─ infer_by_constraints.fe:18:30
+   │  
+18 │       fn foo(self) -> (T, i32) {
+   │ ╭──────────────────────────────^
+19 │ │         (self.t, 1)
+20 │ │     }
+   │ ╰─────^ (T, i32)
+
+note: 
+   ┌─ infer_by_constraints.fe:19:9
+   │
+19 │         (self.t, 1)
+   │         ^^^^^^^^^^^ (T, i32)
+
+note: 
+   ┌─ infer_by_constraints.fe:19:10
+   │
+19 │         (self.t, 1)
+   │          ^^^^ S<T>
+
+note: 
+   ┌─ infer_by_constraints.fe:19:10
+   │
+19 │         (self.t, 1)
+   │          ^^^^^^ T
+
+note: 
+   ┌─ infer_by_constraints.fe:19:18
+   │
+19 │         (self.t, 1)
+   │                  ^ i32
+
+note: 
+   ┌─ infer_by_constraints.fe:24:32
+   │  
+24 │       fn foo(self) -> (u32, u32) {
+   │ ╭────────────────────────────────^
+25 │ │         (1, 1)
+26 │ │     }
+   │ ╰─────^ (u32, u32)
+
+note: 
+   ┌─ infer_by_constraints.fe:25:9
+   │
+25 │         (1, 1)
+   │         ^^^^^^ (u32, u32)
+
+note: 
+   ┌─ infer_by_constraints.fe:25:10
+   │
+25 │         (1, 1)
+   │          ^ u32
+
+note: 
+   ┌─ infer_by_constraints.fe:25:13
+   │
+25 │         (1, 1)
+   │             ^ u32
+
+note: 
+   ┌─ infer_by_constraints.fe:29:24
+   │  
+29 │   fn bar() -> (u64, i32) {
+   │ ╭────────────────────────^
+30 │ │     let s = S::new()
+31 │ │ 
+32 │ │     let (x, y) = s.foo()
+33 │ │     (x, y)
+34 │ │ }
+   │ ╰─^ (u64, i32)
+
+note: 
+   ┌─ infer_by_constraints.fe:30:9
+   │
+30 │     let s = S::new()
+   │         ^ S<u64>
+
+note: 
+   ┌─ infer_by_constraints.fe:30:13
+   │
+30 │     let s = S::new()
+   │             ^^^^^^ fn new<u64>
+
+note: 
+   ┌─ infer_by_constraints.fe:30:13
+   │
+30 │     let s = S::new()
+   │             ^^^^^^^^ S<u64>
+
+note: 
+   ┌─ infer_by_constraints.fe:32:9
+   │
+32 │     let (x, y) = s.foo()
+   │         ^^^^^^ (u64, i32)
+
+note: 
+   ┌─ infer_by_constraints.fe:32:10
+   │
+32 │     let (x, y) = s.foo()
+   │          ^ u64
+
+note: 
+   ┌─ infer_by_constraints.fe:32:13
+   │
+32 │     let (x, y) = s.foo()
+   │             ^ i32
+
+note: 
+   ┌─ infer_by_constraints.fe:32:18
+   │
+32 │     let (x, y) = s.foo()
+   │                  ^ S<u64>
+
+note: 
+   ┌─ infer_by_constraints.fe:32:18
+   │
+32 │     let (x, y) = s.foo()
+   │                  ^^^^^^^ (u64, i32)
+
+note: 
+   ┌─ infer_by_constraints.fe:33:5
+   │
+33 │     (x, y)
+   │     ^^^^^^ (u64, i32)
+
+note: 
+   ┌─ infer_by_constraints.fe:33:6
+   │
+33 │     (x, y)
+   │      ^ u64
+
+note: 
+   ┌─ infer_by_constraints.fe:33:9
+   │
+33 │     (x, y)
+   │         ^ i32

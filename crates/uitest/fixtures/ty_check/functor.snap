@@ -1,13 +1,6 @@
 ---
 source: crates/uitest/tests/ty_check.rs
 expression: diags
-input_file: crates/uitest/fixtures/ty_check/functor.fe
+input_file: fixtures/ty_check/functor.fe
 ---
-error[8-0031]: type annotation is needed
-   ┌─ functor.fe:38:9
-   │
-38 │     let r2 = r1.map(MyFn{}) // TODO: type of r2 should be inferred
-   │         ^^
-   │         │
-   │         type annotation is needed
-   │         consider giving `: Result<(), _>` here
+

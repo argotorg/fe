@@ -1,6 +1,6 @@
-use rowan::ast::{support, AstNode};
+use rowan::ast::{AstNode, support};
 
-use super::{ast_node, TraitRef, TupleType};
+use super::{TraitRef, TupleType, TypeBoundList, ast_node};
 use crate::{FeLang, SyntaxKind as SK, SyntaxToken};
 
 ast_node! {
@@ -68,11 +68,14 @@ ast_node! {
     pub struct Func,
     SK::Func,
 }
-impl super::GenericParamsOwner for Func {}
-impl super::WhereClauseOwner for Func {}
-impl super::AttrListOwner for Func {}
-impl super::ItemModifierOwner for Func {}
-impl Func {
+ast_node! {
+    /// `foo<T>(a: T) -> T where T: Clone`
+    pub struct FuncSignature,
+    SK::FuncSignature,
+}
+impl super::GenericParamsOwner for FuncSignature {}
+impl super::WhereClauseOwner for FuncSignature {}
+impl FuncSignature {
     /// Returns the name of the function.
     pub fn name(&self) -> Option<SyntaxToken> {
         support::token(self.syntax(), SK::Ident)
@@ -86,6 +89,32 @@ impl Func {
     /// Returns the function's return type.
     pub fn ret_ty(&self) -> Option<super::Type> {
         support::child(self.syntax())
+    }
+
+    /// Returns the optional `uses` clause of the function.
+    pub fn uses_clause(&self) -> Option<super::UsesClause> {
+        support::child(self.syntax())
+    }
+
+    /// Returns the where clause of the function.
+    pub fn where_clause(&self) -> Option<super::WhereClause> {
+        support::child(self.syntax())
+    }
+}
+impl super::AttrListOwner for Func {}
+impl super::ItemModifierOwner for Func {}
+impl Func {
+    /// Returns the function's signature if present in the syntax tree.
+    /// This is primarily for consumers (like lazy spans) that need to handle
+    /// malformed code without panicking.
+    pub fn signature_opt(&self) -> Option<FuncSignature> {
+        support::child(self.syntax())
+    }
+
+    /// Returns the function's signature.
+    pub fn sig(&self) -> FuncSignature {
+        self.signature_opt()
+            .expect("a function must always contain a signature node")
     }
 
     /// Returns the function's body.
@@ -118,6 +147,7 @@ ast_node! {
     pub struct Contract,
     SK::Contract,
 }
+
 impl super::AttrListOwner for Contract {}
 impl super::ItemModifierOwner for Contract {}
 impl Contract {
@@ -192,7 +222,6 @@ impl Trait {
 
     /// Returns the trait's item list.
     /// `{ .. }` in `trait Foo<..> where .. { .. }`
-    /// NOTE: Currently only supports `fn` items.
     pub fn item_list(&self) -> Option<TraitItemList> {
         support::child(self.syntax())
     }
@@ -211,6 +240,77 @@ impl SuperTraitList {
     pub fn colon(&self) -> Option<SyntaxToken> {
         support::token(self.syntax(), SK::Colon)
     }
+}
+
+ast_node! {
+    /// `type Bar` in trait definition
+    /// or `type Bar = i32` in trait implementation
+    pub struct TraitTypeItem,
+    SK::TraitTypeItem,
+}
+impl super::AttrListOwner for TraitTypeItem {}
+impl TraitTypeItem {
+    /// Returns the name of the associated type
+    pub fn name(&self) -> Option<SyntaxToken> {
+        support::token(self.syntax(), SK::Ident)
+    }
+
+    pub fn ty(&self) -> Option<super::Type> {
+        support::child(self.syntax())
+    }
+
+    pub fn bounds(&self) -> Option<TypeBoundList> {
+        support::child(self.syntax())
+    }
+}
+
+ast_node! {
+    /// `const FOO: Ty` in trait definition
+    /// or `const FOO: Ty = expr` in trait implementation
+    pub struct TraitConstItem,
+    SK::TraitConstItem,
+}
+impl super::AttrListOwner for TraitConstItem {}
+impl TraitConstItem {
+    /// Returns the name of the associated const
+    pub fn name(&self) -> Option<SyntaxToken> {
+        support::token(self.syntax(), SK::Ident)
+    }
+
+    /// Returns the type of the associated const
+    pub fn ty(&self) -> Option<super::Type> {
+        support::child(self.syntax())
+    }
+
+    /// Returns the optional default value of the associated const
+    pub fn value(&self) -> Option<super::Expr> {
+        support::child(self.syntax())
+    }
+}
+
+ast_node! {
+    pub struct TraitItem,
+    SK::Func | SK::TraitTypeItem | SK::TraitConstItem
+}
+impl TraitItem {
+    pub fn kind(&self) -> TraitItemKind {
+        match self.syntax().kind() {
+            SK::Func => TraitItemKind::Func(AstNode::cast(self.syntax().clone()).unwrap()),
+            SK::TraitTypeItem => {
+                TraitItemKind::Type(TraitTypeItem::cast(self.syntax().clone()).unwrap())
+            }
+            SK::TraitConstItem => {
+                TraitItemKind::Const(TraitConstItem::cast(self.syntax().clone()).unwrap())
+            }
+            _ => unreachable!(),
+        }
+    }
+}
+
+pub enum TraitItemKind {
+    Func(Func),
+    Type(TraitTypeItem),
+    Const(TraitConstItem),
 }
 
 ast_node! {
@@ -259,8 +359,7 @@ impl ImplTrait {
 
     /// Returns the trait impl item list.
     /// `{ .. }` in `impl<T> Foo for Bar<T> { .. }`
-    /// NOTE: Currently only supports `fn` items.
-    pub fn item_list(&self) -> Option<ImplTraitItemList> {
+    pub fn item_list(&self) -> Option<TraitItemList> {
         support::child(self.syntax())
     }
 }
@@ -399,19 +498,13 @@ pub enum VariantKind {
 ast_node! {
     pub struct TraitItemList,
     SK::TraitItemList,
-    IntoIterator<Item=Func>,
+    IntoIterator<Item=TraitItem>,
 }
 
 ast_node! {
     pub struct ImplItemList,
     SK::ImplItemList,
-    IntoIterator<Item=Func>,
-}
-
-ast_node! {
-    pub struct ImplTraitItemList,
-    SK::ImplTraitItemList,
-    IntoIterator<Item=Func>,
+    IntoIterator<Item=Func>, // TODO: ImplTraitItem
 }
 
 ast_node! {
@@ -461,11 +554,12 @@ pub enum ItemKind {
 #[cfg(test)]
 mod tests {
     use derive_more::TryIntoError;
+    use tracing::error;
     use wasm_bindgen_test::wasm_bindgen_test;
 
     use super::*;
     use crate::{
-        ast::{prelude::*, ExprKind, TypeKind},
+        ast::{ExprKind, TypeKind, prelude::*},
         lexer::Lexer,
         parser::{ItemListScope, Parser},
     };
@@ -480,10 +574,13 @@ mod tests {
         let _ = parser.parse(ItemListScope::default());
         let (node, errs) = parser.finish_to_node();
         for e in errs {
-            eprintln!("{:?}", e);
+            error!("{:?}", e);
         }
         let item_list = ItemList::cast(node).unwrap();
         let mut items = item_list.into_iter().collect::<Vec<_>>();
+        if items.len() > 1 {
+            error!("expected one item, got: {:?}", &items);
+        }
         assert_eq!(items.len(), 1);
         items.pop().unwrap().kind().unwrap().try_into().unwrap()
     }
@@ -505,7 +602,7 @@ mod tests {
                 0 => {
                     assert!(matches!(item.kind().unwrap(), ItemKind::Func(_)));
                     let func: Func = item.kind().unwrap().try_into().unwrap();
-                    assert_eq!(func.name().unwrap().text(), "bar");
+                    assert_eq!(func.sig().name().unwrap().text(), "bar");
                 }
                 1 => {
                     assert!(matches!(item.kind().unwrap(), ItemKind::Struct(_)));
@@ -525,17 +622,20 @@ mod tests {
     fn func() {
         let source = r#"
                 /// This is doc comment
-                #evm
+                #[evm]
                 pub unsafe fn foo<T, U: Trait>(_ x: T, from u: U) -> (T, U) where T: Trait2 { return }
             "#;
         let func: Func = parse_item(source);
 
-        assert_eq!(func.name().unwrap().text(), "foo");
+        assert_eq!(func.sig().name().unwrap().text(), "foo");
         assert_eq!(func.attr_list().unwrap().iter().count(), 2);
-        assert_eq!(func.generic_params().unwrap().iter().count(), 2);
-        assert!(func.where_clause().is_some());
+        assert_eq!(func.sig().generic_params().unwrap().iter().count(), 2);
+        assert!(func.sig().where_clause().is_some());
         assert!(func.body().is_some());
-        assert!(matches!(func.ret_ty().unwrap().kind(), TypeKind::Tuple(_)));
+        assert!(matches!(
+            func.sig().ret_ty().unwrap().kind(),
+            TypeKind::Tuple(_)
+        ));
         let modifier = func.modifier().unwrap();
         assert!(modifier.pub_kw().is_some());
         assert!(modifier.unsafe_kw().is_some());
@@ -672,6 +772,7 @@ mod tests {
     fn trait_() {
         let source = r#"
                 pub trait Foo {
+                    type Bar: Encode
                     pub fn foo<T>(self, t: T) -> T
                     pub fn default(self) -> u32 { return 1 }
                 }
@@ -680,19 +781,49 @@ mod tests {
         assert_eq!(t.name().unwrap().text(), "Foo");
 
         let mut count = 0;
-        for f in t.item_list().unwrap() {
+        for item in t.item_list().unwrap() {
             match count {
                 0 => {
-                    assert!(f.body().is_none());
+                    let TraitItemKind::Type(t) = item.kind() else {
+                        panic!()
+                    };
+                    assert_eq!(t.name().unwrap().text(), "Bar");
+                    assert_eq!(
+                        t.bounds()
+                            .unwrap()
+                            .into_iter()
+                            .next()
+                            .unwrap()
+                            .trait_bound()
+                            .unwrap()
+                            .path()
+                            .unwrap()
+                            .segments()
+                            .next()
+                            .unwrap()
+                            .ident()
+                            .unwrap()
+                            .text(),
+                        "Encode"
+                    );
                 }
                 1 => {
-                    assert!(f.body().is_some());
+                    let TraitItemKind::Func(func) = item.kind() else {
+                        panic!()
+                    };
+                    assert!(func.body().is_none());
+                }
+                2 => {
+                    let TraitItemKind::Func(func) = item.kind() else {
+                        panic!()
+                    };
+                    assert!(func.body().is_some());
                 }
                 _ => unreachable!(),
             }
             count += 1;
         }
-        assert_eq!(count, 2);
+        assert_eq!(count, 3);
     }
 
     #[test]
@@ -700,13 +831,23 @@ mod tests {
     fn impl_trait() {
         let source = r#"
             impl Trait::Foo for (i32)  {
+                type Foo = u32
                 fn foo<T>(self, _t: T) -> u32 { return 1 };
             }"#;
         let i: ImplTrait = parse_item(source);
         assert!(i.generic_params().is_none());
         assert!(i.trait_ref().is_some());
         assert!(matches!(i.ty().unwrap().kind(), TypeKind::Tuple(_)));
-        assert!(i.item_list().unwrap().iter().count() == 1);
+        let mut items = i.item_list().unwrap().iter();
+        assert!(matches!(
+            items.next().unwrap().kind(),
+            TraitItemKind::Type(_)
+        ));
+        assert!(matches!(
+            items.next().unwrap().kind(),
+            TraitItemKind::Func(_)
+        ));
+        assert_eq!(items.next(), None);
     }
 
     #[test]

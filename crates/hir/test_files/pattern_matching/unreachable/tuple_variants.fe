@@ -1,0 +1,52 @@
+enum Color {
+    Rgb(u8, u8, u8),
+    Cmyk(u8, u8, u8, u8),
+    Grayscale(u8)
+}
+
+// Test for reachability with imported tuple variants
+fn match_with_unreachable_imported(color: Color) -> u8 {
+    use Color::*
+    
+    match color {
+        Rgb(r, g, b) => {
+            return r + g + b
+        }
+        _ => {
+            return 0
+        }
+        // This should be unreachable, but if variants are treated as wildcards,
+        // the compiler might not detect this
+        Cmyk(c, m, y, k) => {
+            return c + m + y + k
+        }
+    }
+}
+
+// Test for reachability with fully qualified tuple variant paths
+fn match_with_unreachable_full_path(color: Color) -> u8 {
+    match color {
+        Color::Rgb(r, g, b) => {
+            return r + g + b
+        }
+        _ => {
+            return 0
+        }
+        // This should be unreachable
+        Color::Cmyk(c, m, y, k) => {
+            return c + m + y + k
+        }
+    }
+}
+
+// Test unreachable with partial destructuring
+fn match_with_unreachable_partial(color: Color) -> u8 {
+    use Color::*
+    
+    match color {
+        Rgb(..) => 1
+        _ => 2
+        // This should be unreachable
+        Grayscale(_) => 3
+    }
+}

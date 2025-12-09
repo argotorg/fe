@@ -1,0 +1,16 @@
+trait Trait1 {
+    fn foo(self) -> i32 { 1 }
+}
+
+trait Trait2 {
+    fn foo(self) -> i32 { 2 }
+}
+
+struct Foo {}
+
+impl Trait1 for Foo {}
+impl Trait2 for Foo {}
+
+fn f() {
+    Foo::foo()
+}

@@ -1,0 +1,37 @@
+trait Tr1 {
+    type Foo
+}
+trait Tr2 {}
+
+struct S1 {}
+impl Tr1 for S1 {
+    type Foo = Self
+}
+impl Tr2 for S1 {}
+
+struct S2 {}
+impl Tr1 for S2 {
+    type Foo = Self
+}
+
+struct S3 {}
+struct S4 {}
+impl Tr1 for S3 {
+    type Foo = S4
+}
+
+impl Tr1 for S4 {
+    type Foo = S5
+}
+
+fn f<T>(_: T)
+where
+    T: Tr1,
+    T::Foo: Tr2
+{}
+
+fn example() {
+    f(S1{}) // Ok
+    f(S2{}) // Error: S2::Foo (== S2) doesn't impl Tr2
+    f(S3{}) // Error: S3::Foo (== S4) doesn't impl Tr2
+}

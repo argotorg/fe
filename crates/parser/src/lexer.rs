@@ -1,6 +1,6 @@
 use crate::{
-    parser::token_stream::{LexicalToken, TokenStream},
     SyntaxKind,
+    parser::token_stream::{LexicalToken, TokenStream},
 };
 
 pub struct Lexer<'s> {

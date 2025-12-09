@@ -1,0 +1,25 @@
+---
+source: crates/hir-analysis/tests/ty_check.rs
+expression: res
+input_file: test_files/ty_check/debug_method_compare.fe
+---
+note: 
+   ┌─ debug_method_compare.fe:19:41
+   │  
+19 │       fn get_output(self) -> Self::Output {
+   │ ╭─────────────────────────────────────────^
+20 │ │         todo()
+21 │ │     }
+   │ ╰─────^ T
+
+note: 
+   ┌─ debug_method_compare.fe:20:9
+   │
+20 │         todo()
+   │         ^^^^ fn todo
+
+note: 
+   ┌─ debug_method_compare.fe:20:9
+   │
+20 │         todo()
+   │         ^^^^^^ T

@@ -1,7 +1,7 @@
 ---
 source: crates/uitest/tests/ty_check.rs
 expression: diags
-input_file: crates/uitest/fixtures/ty_check/for_.fe
+input_file: fixtures/ty_check/for_.fe
 ---
 error[8-0000]: type mismatch
    ┌─ for_.fe:16:9
@@ -26,5 +26,3 @@ error[8-0020]: `Iterator` needs to be implemented for Foo
    │              │
    │              `Iterator` needs to be implemented for `Foo`
    │              consider implementing `Iterator` for `Foo`
-
-

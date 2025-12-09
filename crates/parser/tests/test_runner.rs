@@ -1,13 +1,13 @@
 #![allow(unused)]
 
 use fe_parser::{
-    lexer,
+    SyntaxKind, lexer,
     parser::{
-        expr::parse_expr, item::ItemListScope, parse_pat, stmt::parse_stmt, Parser, RootScope,
+        Parser, RootScope, expr::parse_expr, item::ItemListScope, parse_pat, stmt::parse_stmt,
     },
     syntax_node::SyntaxNode,
-    SyntaxKind,
 };
+use tracing::error;
 
 type BoxedParseFn = Box<dyn Fn(&mut Parser<lexer::Lexer>)>;
 pub struct TestRunner {
@@ -90,9 +90,10 @@ impl TestRunner {
         let (cst, errors) = parser.finish_to_node();
 
         for error in &errors {
-            println!("{}@{:?}", error.msg(), error.range());
+            error!("{}@{:?}", error.msg(), error.range());
         }
         if self.should_success {
+            error!("{cst:#?}");
             assert! {errors.is_empty()}
         } else {
             assert! {!errors.is_empty()}

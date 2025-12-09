@@ -1,7 +1,7 @@
 ---
 source: crates/uitest/tests/ty.rs
 expression: diags
-input_file: crates/uitest/fixtures/ty/const_ty/const_ty_mismatch.fe
+input_file: fixtures/ty/const_ty/const_ty_mismatch.fe
 ---
 error[3-0011]: given type doesn't match the expected const type
   ┌─ const_ty_mismatch.fe:2:8
@@ -18,19 +18,19 @@ error[3-0011]: given type doesn't match the expected const type
 error[3-0011]: given type doesn't match the expected const type
    ┌─ const_ty_mismatch.fe:15:15
    │
-15 │ pub fn foo(x: Foo<true>) {}
+15 │ pub fn foo(a: Foo<true>) {}
    │               ^^^^^^^^^ expected `u32` type here, but `bool` is given
 
 error[3-0011]: given type doesn't match the expected const type
    ┌─ const_ty_mismatch.fe:16:16
    │
-16 │ pub fn foo2(x: Foo2<i32, false>) {}
+16 │ pub fn foo2(b: Foo2<i32, false>) {}
    │                ^^^^^^^^^^^^^^^^ expected `u32` type here, but `bool` is given
 
 error[3-0011]: given type doesn't match the expected const type
    ┌─ const_ty_mismatch.fe:18:15
    │
-18 │ pub fn bar(x: Bar<3>) {}
+18 │ pub fn bar(c: Bar<3>) {}
    │               ^^^^^^ expected `bool` type here, but `{integer}` is given
 
 error[3-0011]: given type doesn't match the expected const type
@@ -44,5 +44,3 @@ error[3-0011]: given type doesn't match the expected const type
    │
 25 │     MyField{N: u64, x: i32}
    │                ^^^ expected `u32` type here, but `u64` is given
-
-

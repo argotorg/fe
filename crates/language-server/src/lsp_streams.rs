@@ -4,7 +4,7 @@
 //! stream-based handlers for LSP requests and notifications.
 
 use async_lsp::router::Router;
-use async_lsp::{lsp_types::*, ResponseError};
+use async_lsp::{ResponseError, lsp_types::*};
 use futures::Stream;
 use std::fmt::Debug;
 use std::pin::Pin;

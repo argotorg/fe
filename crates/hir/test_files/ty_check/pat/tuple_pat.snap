@@ -1,0 +1,124 @@
+---
+source: crates/hir-analysis/tests/ty_check.rs
+expression: res
+input_file: test_files/ty_check/pat/tuple_pat.fe
+---
+note: 
+  ┌─ tuple_pat.fe:1:10
+  │  
+1 │   fn foo() {
+  │ ╭──────────^
+2 │ │     let (x, y, z): (i8, u16, u32)
+3 │ │     let (.., x, y): (u8, u16, u32, u64, u128)
+4 │ │     let (x, y, z, ..): (u8, u16, u32, u64, u128)
+5 │ │     let (x, .., y, z): (u8, u16, u32, u64, u128)
+6 │ │ }
+  │ ╰─^ ()
+
+note: 
+  ┌─ tuple_pat.fe:2:9
+  │
+2 │     let (x, y, z): (i8, u16, u32)
+  │         ^^^^^^^^^ (i8, u16, u32)
+
+note: 
+  ┌─ tuple_pat.fe:2:10
+  │
+2 │     let (x, y, z): (i8, u16, u32)
+  │          ^ i8
+
+note: 
+  ┌─ tuple_pat.fe:2:13
+  │
+2 │     let (x, y, z): (i8, u16, u32)
+  │             ^ u16
+
+note: 
+  ┌─ tuple_pat.fe:2:16
+  │
+2 │     let (x, y, z): (i8, u16, u32)
+  │                ^ u32
+
+note: 
+  ┌─ tuple_pat.fe:3:9
+  │
+3 │     let (.., x, y): (u8, u16, u32, u64, u128)
+  │         ^^^^^^^^^^ (u8, u16, u32, u64, u128)
+
+note: 
+  ┌─ tuple_pat.fe:3:10
+  │
+3 │     let (.., x, y): (u8, u16, u32, u64, u128)
+  │          ^^ invalid(Other)
+
+note: 
+  ┌─ tuple_pat.fe:3:14
+  │
+3 │     let (.., x, y): (u8, u16, u32, u64, u128)
+  │              ^ u64
+
+note: 
+  ┌─ tuple_pat.fe:3:17
+  │
+3 │     let (.., x, y): (u8, u16, u32, u64, u128)
+  │                 ^ u128
+
+note: 
+  ┌─ tuple_pat.fe:4:9
+  │
+4 │     let (x, y, z, ..): (u8, u16, u32, u64, u128)
+  │         ^^^^^^^^^^^^^ (u8, u16, u32, u64, u128)
+
+note: 
+  ┌─ tuple_pat.fe:4:10
+  │
+4 │     let (x, y, z, ..): (u8, u16, u32, u64, u128)
+  │          ^ u8
+
+note: 
+  ┌─ tuple_pat.fe:4:13
+  │
+4 │     let (x, y, z, ..): (u8, u16, u32, u64, u128)
+  │             ^ u16
+
+note: 
+  ┌─ tuple_pat.fe:4:16
+  │
+4 │     let (x, y, z, ..): (u8, u16, u32, u64, u128)
+  │                ^ u32
+
+note: 
+  ┌─ tuple_pat.fe:4:19
+  │
+4 │     let (x, y, z, ..): (u8, u16, u32, u64, u128)
+  │                   ^^ invalid(Other)
+
+note: 
+  ┌─ tuple_pat.fe:5:9
+  │
+5 │     let (x, .., y, z): (u8, u16, u32, u64, u128)
+  │         ^^^^^^^^^^^^^ (u8, u16, u32, u64, u128)
+
+note: 
+  ┌─ tuple_pat.fe:5:10
+  │
+5 │     let (x, .., y, z): (u8, u16, u32, u64, u128)
+  │          ^ u8
+
+note: 
+  ┌─ tuple_pat.fe:5:13
+  │
+5 │     let (x, .., y, z): (u8, u16, u32, u64, u128)
+  │             ^^ invalid(Other)
+
+note: 
+  ┌─ tuple_pat.fe:5:17
+  │
+5 │     let (x, .., y, z): (u8, u16, u32, u64, u128)
+  │                 ^ u64
+
+note: 
+  ┌─ tuple_pat.fe:5:20
+  │
+5 │     let (x, .., y, z): (u8, u16, u32, u64, u128)
+  │                    ^ u128

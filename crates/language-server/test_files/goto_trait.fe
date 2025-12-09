@@ -1,0 +1,17 @@
+trait Display {
+    fn show(self) -> i32
+}
+
+struct Counter {
+    value: i32
+}
+
+impl Display for Counter {
+    fn show(self) -> i32 {
+        self.value
+    }
+}
+
+fn use_display(c: Counter) -> i32 {
+    c.show()
+}

@@ -1,0 +1,17 @@
+pub struct Storage {
+    value: u64,
+}
+
+pub struct Worker {}
+
+impl Worker {
+    pub fn run(self)
+      uses (mut storage: Storage)
+    {
+        storage.value += 1
+    }
+}
+
+pub fn exercise(worker: Worker) {
+    worker.run()
+}

@@ -1,0 +1,9 @@
+mod m {
+    pub const C: i32 = 1
+}
+
+pub fn bad() -> i32 {
+    // Generic arguments on a const should error with an arg count mismatch.
+    m::C<i32>
+}
+

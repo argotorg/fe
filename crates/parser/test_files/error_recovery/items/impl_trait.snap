@@ -1,7 +1,7 @@
 ---
 source: crates/parser/tests/error_recovery.rs
 expression: node
-input_file: crates/parser/test_files/error_recovery/items/impl_trait.fe
+input_file: test_files/error_recovery/items/impl_trait.fe
 ---
 Root@0..90
   ItemList@0..90
@@ -63,7 +63,7 @@ Root@0..90
                     PathSegment@32..33
                       Ident@32..33 "X"
         WhiteSpace@33..34 " "
-        ImplTraitItemList@34..36
+        TraitItemList@34..36
           LBrace@34..35 "{"
           RBrace@35..36 "}"
     Newline@36..38 "\n\n"
@@ -71,24 +71,16 @@ Root@0..90
       ImplTrait@38..71
         ImplKw@38..42 "impl"
         WhiteSpace@42..43 " "
-        TraitRef@43..49
+        TraitRef@43..44
           Path@43..44
             PathSegment@43..44
               Ident@43..44 "C"
-          GenericArgList@44..49
-            Lt@44..45 "<"
-            TypeGenericArg@45..46
-              PathType@45..46
-                Path@45..46
-                  PathSegment@45..46
-                    Ident@45..46 "T"
-            Comma@46..47 ","
-            WhiteSpace@47..48 " "
-            TypeGenericArg@48..49
-              PathType@48..49
-                Path@48..49
-                  PathSegment@48..49
-                    Ident@48..49 "u"
+        Error@44..49
+          Lt@44..45 "<"
+          Ident@45..46 "T"
+          Comma@46..47 ","
+          WhiteSpace@47..48 " "
+          Ident@48..49 "u"
         WhiteSpace@49..50 " "
         ForKw@50..53 "for"
         WhiteSpace@53..54 " "
@@ -121,7 +113,7 @@ Root@0..90
                     PathSegment@67..68
                       Ident@67..68 "X"
         WhiteSpace@68..69 " "
-        ImplTraitItemList@69..71
+        TraitItemList@69..71
           LBrace@69..70 "{"
           RBrace@70..71 "}"
     Newline@71..73 "\n\n"
@@ -144,6 +136,6 @@ Root@0..90
             PathSegment@86..87
               Ident@86..87 "F"
         WhiteSpace@87..88 " "
-        ImplTraitItemList@88..90
+        TraitItemList@88..90
           LBrace@88..89 "{"
           RBrace@89..90 "}"

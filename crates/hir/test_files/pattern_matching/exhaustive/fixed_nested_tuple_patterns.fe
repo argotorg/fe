@@ -1,0 +1,50 @@
+enum Color {
+    Red,
+    Green,
+    Blue
+}
+
+// Test for bug with nested tuple patterns where wildcards cause incorrect pattern matching
+// Prior to the fix, the second pattern would be incorrectly marked as unreachable
+// Now both patterns should be correctly identified as reachable
+fn nested_tuple_with_wildcards(t: ((bool, bool), bool)) -> u8 {
+    match t {
+        ((true, _), _) => 1  // Should only match tuples where first element of inner tuple is true
+        ((false, _), _) => 0 // Should match remaining tuples - WAS INCORRECTLY MARKED UNREACHABLE
+    }
+}
+
+// Test with wildcards in different positions
+fn nested_tuple_wildcards_second_pos(t: ((bool, bool), bool)) -> u8 {
+    match t {
+        ((_, true), _) => 1  // Should only match tuples where second element of inner tuple is true
+        ((_, false), _) => 0 // Should match remaining tuples - WAS INCORRECTLY MARKED UNREACHABLE
+    }
+}
+
+// Test with triple-nested tuples
+fn deeply_nested_tuples(t: (((bool, bool), bool), bool)) -> u8 {
+    match t {
+        (((true, _), _), _) => 1  // Should only match tuples where first element of innermost tuple is true
+        (((false, _), _), _) => 0 // Should match remaining tuples - WAS INCORRECTLY MARKED UNREACHABLE
+    }
+}
+
+// Test with enums in nested tuples
+fn nested_tuple_with_enums(t: ((Color, bool), bool)) -> u8 {
+    match t {
+        ((Color::Red, _), _) => 2  // Should only match tuples where first element of inner tuple is Red
+        ((Color::Green, _), _) => 1 // Should match tuples where first element is Green
+        ((Color::Blue, _), _) => 0  // Should match tuples where first element is Blue
+    }
+}
+
+// Test with complex nested patterns
+fn complex_nested_patterns(t: ((Color, (bool, bool)), bool)) -> u8 {
+    match t {
+        ((Color::Red, (true, _)), _) => 3   // Red + true in first position
+        ((Color::Red, (false, _)), _) => 2  // Red + false in first position
+        ((_, (true, _)), _) => 1            // Any color + true in first position
+        ((_, (false, _)), _) => 0           // Any color + false in first position
+    }
+}

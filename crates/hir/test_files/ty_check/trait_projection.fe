@@ -1,0 +1,53 @@
+trait Iterator {
+    type Item
+
+    fn next(self) -> Self::Item
+}
+
+pub trait IntoIterator {
+    type Item
+    type IntoIter: Iterator<Item = Self::Item>
+
+    fn into_iter(self) -> Self::IntoIter
+}
+
+struct MyIter {
+    value: u32
+}
+
+impl Iterator for MyIter {
+    type Item = u32
+
+    fn next(self) -> Self::Item {
+        self.value
+    }
+}
+
+// Basic trait projection
+fn test_basic<T>(x: T) -> <T as Iterator>::Item
+where T: Iterator
+{
+    x.next()
+}
+
+// Self trait projection
+struct Wrapper<T> {
+    inner: T
+}
+
+impl<T> Iterator for Wrapper<T>
+where T: Iterator
+{
+    type Item = <T as Iterator>::Item
+
+    fn next(self) -> Self::Item {
+        self.inner.next()
+    }
+}
+
+fn test_complex<T>(x: T) -> <<T as IntoIterator>::IntoIter as Iterator>::Item
+where
+    T: IntoIterator,
+{
+    x.into_iter().next()
+}

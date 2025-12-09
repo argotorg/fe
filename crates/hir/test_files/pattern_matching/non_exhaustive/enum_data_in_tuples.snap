@@ -1,0 +1,77 @@
+---
+source: crates/hir-analysis/tests/pattern_matching.rs
+expression: diagnostic_output
+input_file: test_files/pattern_matching/non_exhaustive/enum_data_in_tuples.fe
+---
+Non-exhaustive test file enum_data_in_tuples.fe has 6 diagnostic(s):
+
+error[8-0034]: non-exhaustive patterns: type `(Item, Item)` is not covered
+   ┌─ enum_data_in_tuples.fe:13:5
+   │  
+13 │ ╭     match data {
+14 │ │         (Item::Value(x), Item::Value(y)) => x + y
+15 │ │     }
+   │ ╰─────^ match expression does not cover all possible values
+   │  
+   = Not covered: `(Item::Pair(_, _) | Item::Empty, _)`
+
+error[8-0034]: non-exhaustive patterns: type `(Item, Item)` is not covered
+   ┌─ enum_data_in_tuples.fe:22:5
+   │  
+22 │ ╭     match data {
+23 │ │         (Item::Value(x), Item::Value(y)) => x + y
+24 │ │         (Item::Empty, _) => 100
+25 │ │         (_, Item::Empty) => 200
+26 │ │     }
+   │ ╰─────^ match expression does not cover all possible values
+   │  
+   = Not covered: `(Item::Pair(_, _), Item::Value(_) | Item::Pair(_, _))`
+
+error[8-0034]: non-exhaustive patterns: type `(Item, Item)` is not covered
+   ┌─ enum_data_in_tuples.fe:31:5
+   │  
+31 │ ╭     match data {
+32 │ │         (Item::Value(x), Item::Pair(a, b)) => x + a + b
+33 │ │         (Item::Pair(x, y), Item::Value(z)) => x + y + z
+34 │ │         (Item::Empty, _) => 100
+35 │ │         (_, Item::Empty) => 200
+36 │ │     }
+   │ ╰─────^ match expression does not cover all possible values
+   │  
+   = Not covered: `(Item::Value(_), Item::Value(_))`
+
+error[8-0034]: non-exhaustive patterns: type `((Item, u8), Item)` is not covered
+   ┌─ enum_data_in_tuples.fe:41:5
+   │  
+41 │ ╭     match data {
+42 │ │         ((Item::Value(x), val), Item::Empty) => x + val
+43 │ │         ((Item::Empty, _), Item::Value(y)) => y
+44 │ │     }
+   │ ╰─────^ match expression does not cover all possible values
+   │  
+   = Not covered: `((Item::Pair(_, _), _), _)`
+
+error[8-0034]: non-exhaustive patterns: type `(Item, Item, Item)` is not covered
+   ┌─ enum_data_in_tuples.fe:49:5
+   │  
+49 │ ╭     match data {
+50 │ │         (Item::Value(x), Item::Value(y), Item::Value(z)) => x + y + z
+51 │ │         (Item::Empty, _, _) => 100
+52 │ │         (_, Item::Empty, _) => 200
+53 │ │         (_, _, Item::Empty) => 300
+54 │ │     }
+   │ ╰─────^ match expression does not cover all possible values
+   │  
+   = Not covered: `(Item::Pair(_, _), Item::Value(_) | Item::Pair(_, _), Item::Value(_) | Item::Pair(_, _))`
+
+error[8-0034]: non-exhaustive patterns: type `(Item, bool)` is not covered
+   ┌─ enum_data_in_tuples.fe:59:5
+   │  
+59 │ ╭     match data {
+60 │ │         (Item::Value(x), true) => x
+61 │ │         (Item::Pair(a, b), false) => a + b
+62 │ │         (Item::Empty, _) => 0
+63 │ │     }
+   │ ╰─────^ match expression does not cover all possible values
+   │  
+   = Not covered: `(Item::Value(_), false)`

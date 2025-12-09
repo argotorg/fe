@@ -1,0 +1,15 @@
+
+trait A {}
+trait B: A {}
+
+struct S {}
+impl A for S {}
+impl B for S {}
+
+fn f<T>(_: T)
+    where T: A + B
+{}
+
+fn example() {
+    f(S{})
+}

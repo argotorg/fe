@@ -1,0 +1,13 @@
+---
+source: crates/fe/tests/cli_output.rs
+expression: output
+---
+=== STDERR ===
+❌ Invalid fe.toml file in ingot file://<project>/crates/fe/tests/fixtures/cli_output/ingots/unclosed_string/: TOML parse error at line 2, column 17
+  |
+2 | name = "unclosed
+  |                 ^
+invalid basic string
+
+
+=== EXIT CODE: 1 ===

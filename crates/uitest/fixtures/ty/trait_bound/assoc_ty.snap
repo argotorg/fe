@@ -1,0 +1,30 @@
+---
+source: crates/uitest/tests/ty.rs
+expression: diags
+input_file: fixtures/ty/trait_bound/assoc_ty.fe
+---
+error[6-0003]: trait bound is not satisfied
+   ┌─ assoc_ty.fe:18:21
+   │
+18 │     type Selector = [u8; 4]   // Doesn't impl Encode<SolAbi>
+   │                     ^^^^^^^ `[u8; 4]` doesn't implement `Encode<SolAbi>`
+
+error[6-0003]: trait bound is not satisfied
+   ┌─ assoc_ty.fe:19:20
+   │
+19 │     type Encoder = SolEncoder // Doesn't impl AbiEncoder
+   │                    ^^^^^^^^^^ `SolEncoder` doesn't implement `AbiEncoder`
+
+error[6-0003]: trait bound is not satisfied
+   ┌─ assoc_ty.fe:28:21
+   │
+28 │     type Selector = S
+   │                     ^ `S` doesn't implement `Encode<Complex<S, E>>`
+
+error[6-0003]: trait bound is not satisfied
+   ┌─ assoc_ty.fe:32:1
+   │  
+32 │ ╭ trait Tr1 {
+33 │ │     type Foo: Tr2 = FooDefault
+34 │ │ }
+   │ ╰─^ `FooDefault` doesn't implement `Tr2`

@@ -1,0 +1,34 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/method_selection/receiver_type_must_be_known.fe
+---
+error[8-0014]: type must be known here
+   ┌─ receiver_type_must_be_known.fe:26:5
+   │
+26 │     x.foo()
+   │     ^ type must be known here
+
+error[8-0014]: type must be known here
+   ┌─ receiver_type_must_be_known.fe:29:5
+   │
+29 │     y.double()
+   │     ^ type must be known here
+
+error[8-0031]: type annotation is needed
+   ┌─ receiver_type_must_be_known.fe:25:9
+   │
+25 │     let x = make()
+   │         ^
+   │         │
+   │         type annotation is needed
+   │         consider giving `: Type` here
+
+error[8-0031]: type annotation is needed
+   ┌─ receiver_type_must_be_known.fe:28:9
+   │
+28 │     let y = 0
+   │         ^
+   │         │
+   │         type annotation is needed
+   │         no default type is provided for an integer type. consider giving integer type

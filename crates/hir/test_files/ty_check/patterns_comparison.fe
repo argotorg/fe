@@ -1,0 +1,181 @@
+enum Tag {
+    Tag1,
+    Tag2,
+    Tag3
+}
+
+enum Color {
+    Red,
+    Green, 
+    Blue,
+    Rgb(u8, u8, u8)
+}
+
+enum Nested {
+    A(Tag),
+    B(Color),
+    C { val: u8 }
+}
+
+// Part 1: Using full paths
+fn match_full_paths(tag: Tag) -> u8 {
+    match tag {
+        Tag::Tag1 => {
+            return 1
+        }
+        Tag::Tag2 => {
+            return 2
+        }
+        Tag::Tag3 => {
+            return 3
+        }
+    }
+}
+
+// Part 2: Using imported variants
+fn match_imported_variants(tag: Tag) -> u8 {
+    use Tag::*
+    
+    match tag {
+        Tag1 => {
+            return 1
+        }
+        Tag2 => {
+            return 2
+        }
+        Tag3 => {
+            return 3
+        }
+    }
+}
+
+// Part 3: Full paths with tuple variants
+fn match_full_path_tuple(color: Color) -> u8 {
+    match color {
+        Color::Red => {
+            return 1
+        }
+        Color::Green => {
+            return 2
+        }
+        Color::Blue => {
+            return 3
+        }
+        Color::Rgb(r, g, b) => {
+            return r + g + b
+        }
+    }
+}
+
+// Part 4: Imported tuple variants
+fn match_imported_tuple(color: Color) -> u8 {
+    use Color::*
+    
+    match color {
+        Red => {
+            return 1
+        }
+        Green => {
+            return 2
+        }
+        Blue => {
+            return 3
+        }
+        Rgb(r, g, b) => {
+            return r + g + b
+        }
+    }
+}
+
+// Part 5: Mixed styles in the same function
+fn match_mixed_styles(tag: Tag, color: Color) -> u8 {
+    use Color::*
+    
+    let result = match tag {
+        Tag::Tag1 => {
+            10
+        }
+        Tag::Tag2 => {
+            20
+        }
+        Tag::Tag3 => {
+            30
+        }
+    }
+    
+    let color_val = match color {
+        Red => {
+            1
+        }
+        Green => {
+            2
+        }
+        Blue => {
+            3
+        }
+        Rgb(r, g, b) => {
+            r + g + b
+        }
+    }
+    
+    return result + color_val
+}
+
+// Part 6: Nested patterns with both styles
+fn match_nested_patterns(nested: Nested) -> u8 {
+    use Tag::*
+    use Color::*
+    
+    match nested {
+        Nested::A(Tag1) => {
+            return 10
+        }
+        Nested::A(Tag2) => {
+            return 20
+        }
+        Nested::A(Tag3) => {
+            return 30
+        }
+        Nested::B(Red) => {
+            return 1
+        }
+        Nested::B(Green) => {
+            return 2
+        } 
+        Nested::B(Blue) => {
+            return 3
+        }
+        Nested::B(Rgb(r, g, b)) => {
+            return r + g + b
+        }
+        Nested::C { val } => {
+            return val
+        }
+    }
+}
+
+// Part 7: Or-patterns with both styles
+fn match_or_patterns(tag: Tag, color: Color) -> bool {
+    use Tag::*
+    use Color::*
+    
+    let is_tag_special = match tag {
+        Tag1 | Tag2 => {
+            true
+        }
+        Tag3 => {
+            false
+        }
+    }
+    
+    let is_color_primary = match color {
+        Red | Green | Blue => {
+            true
+        }
+        Rgb(_, _, _) => {
+            false
+        }
+    }
+    
+    return is_tag_special && is_color_primary
+}

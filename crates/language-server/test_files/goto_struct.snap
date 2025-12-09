@@ -1,0 +1,10 @@
+---
+source: crates/language-server/src/functionality/goto.rs
+expression: snapshot
+input_file: test_files/goto_struct.fe
+---
+note: 
+  ┌─ goto_struct.fe:6:12
+  │
+6 │     inner: Inner
+  │            ^^^^^ -> goto_struct::Inner

@@ -1,0 +1,31 @@
+trait Tr1 {
+    type Foo
+    fn make_foo(self) -> Self::Foo
+}
+
+struct Wrapper<T> {
+    inner: T
+}
+impl<T: Tr1> Tr1 for Wrapper<T> {
+    type Foo = Wrapper<T::Foo>
+
+    fn make_foo(self) -> Self::Foo {
+        Wrapper { inner: self.inner.make_foo() }
+    }
+}
+
+struct S {}
+struct A {}
+impl Tr1 for S {
+    type Foo = A
+
+    fn make_foo(self) -> Self::Foo {
+        A {}
+    }
+}
+
+fn test() {
+    let w = Wrapper { inner: S{} }
+    let wa = w.make_foo()
+    let a: A = wa.inner
+}

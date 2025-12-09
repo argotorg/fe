@@ -5,14 +5,13 @@ use unwrap_infallible::UnwrapInfallible;
 use crate::{ExpectedKind, ParseError, SyntaxKind};
 
 use super::{
-    define_scope,
+    ErrProof, Parser, Recovery, define_scope,
     expr::parse_expr,
     expr_atom::{BlockExprScope, LitExprScope},
     parse_list,
     path::PathScope,
     token_stream::TokenStream,
     type_::{is_type_start, parse_type},
-    ErrProof, Parser, Recovery,
 };
 
 define_scope! {
@@ -160,12 +159,15 @@ impl super::Parse for TypeGenericParamScope {
         if parser.current_kind() == Some(SyntaxKind::Colon) {
             parser.parse(TypeBoundListScope::new(self.disallow_trait_bound))?;
         }
+        if parser.bump_if(SyntaxKind::Eq) {
+            parse_type(parser, None)?;
+        }
         Ok(())
     }
 }
 
 define_scope! {
-    TypeBoundListScope{disallow_trait_bound: bool},
+    pub TypeBoundListScope{disallow_trait_bound: bool},
     TypeBoundList,
     (Plus)
 }
@@ -203,7 +205,7 @@ impl super::Parse for TypeBoundScope {
             if self.disallow_trait_bound {
                 return parser.error_and_recover("trait bounds are not allowed here");
             }
-            parser.parse(TraitRefScope::default())
+            parser.parse_or_recover(TraitRefScope::default())
         }
     }
 }
@@ -264,19 +266,12 @@ impl super::Parse for KindBoundAbsScope {
 
 define_scope! { pub(super) TraitRefScope, TraitRef }
 impl super::Parse for TraitRefScope {
-    type Error = Recovery<ErrProof>;
+    type Error = ParseError;
 
     fn parse<S: TokenStream>(&mut self, parser: &mut Parser<S>) -> Result<(), Self::Error> {
-        parser.or_recover(|parser| {
-            parser.parse(PathScope::default()).map_err(|_| {
-                ParseError::expected(&[SyntaxKind::TraitRef], None, parser.end_of_prev_token)
-            })
-        })?;
-
-        if parser.current_kind() == Some(SyntaxKind::Lt) {
-            parser.parse(GenericArgListScope::default())?;
-        }
-        Ok(())
+        parser.parse(PathScope::default()).map_err(|_| {
+            ParseError::expected(&[SyntaxKind::TraitRef], None, parser.end_of_prev_token)
+        })
     }
 }
 
@@ -336,21 +331,42 @@ impl super::Parse for GenericArgScope {
 
     fn parse<S: TokenStream>(&mut self, parser: &mut Parser<S>) -> Result<(), Self::Error> {
         parser.set_newline_as_trivia(false);
-        match parser.current_kind() {
-            Some(SyntaxKind::LBrace) => {
-                self.set_kind(SyntaxKind::ConstGenericArg);
-                parser.parse(BlockExprScope::default())?;
-            }
 
-            Some(kind) if kind.is_literal_leaf() => {
-                self.set_kind(SyntaxKind::ConstGenericArg);
-                parser.parse(LitExprScope::default()).unwrap_infallible();
+        // Check if this is an associated type argument (Ident = Type)
+        let is_assoc_type = parser.dry_run(|parser| {
+            parser.current_kind() == Some(SyntaxKind::Ident) && {
+                parser.bump();
+                parser.current_kind() == Some(SyntaxKind::Eq)
             }
+        });
 
-            _ => {
-                parse_type(parser, None)?;
-                if parser.current_kind() == Some(SyntaxKind::Colon) {
-                    parser.error_and_recover("type bounds are not allowed here")?;
+        if is_assoc_type {
+            self.set_kind(SyntaxKind::AssocTypeGenericArg);
+            // Parse the identifier name
+            parser.bump_expected(SyntaxKind::Ident);
+
+            // Parse the equals sign
+            parser.bump_expected(SyntaxKind::Eq);
+
+            // Parse the type
+            parse_type(parser, None)?;
+        } else {
+            match parser.current_kind() {
+                Some(SyntaxKind::LBrace) => {
+                    self.set_kind(SyntaxKind::ConstGenericArg);
+                    parser.parse(BlockExprScope::default())?;
+                }
+
+                Some(kind) if kind.is_literal_leaf() => {
+                    self.set_kind(SyntaxKind::ConstGenericArg);
+                    parser.parse(LitExprScope::default()).unwrap_infallible();
+                }
+
+                _ => {
+                    parse_type(parser, None)?;
+                    if parser.current_kind() == Some(SyntaxKind::Colon) {
+                        parser.error_and_recover("type bounds are not allowed here")?;
+                    }
                 }
             }
         }

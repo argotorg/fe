@@ -1,0 +1,20 @@
+---
+source: crates/uitest/tests/ty_check.rs
+assertion_line: 27
+expression: diags
+input_file: fixtures/ty_check/effect_ambiguous_generic.fe
+---
+error[8-0031]: type annotation is needed
+   ┌─ effect_ambiguous_generic.fe:15:9
+   │
+15 │         needs_storage()
+   │         ^^^^^^^^^^^^^
+   │         │
+   │         type annotation is needed
+   │         consider giving `: fn needs_storage<_>` here
+
+error[8-0040]: multiple effect candidates found
+   ┌─ effect_ambiguous_generic.fe:15:9
+   │
+15 │         needs_storage()
+   │         ^^^^^^^^^^^^^^^ effect `Storage<T>` is ambiguous when calling `needs_storage`

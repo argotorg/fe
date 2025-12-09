@@ -1,0 +1,12 @@
+enum Color {
+    Red,
+    Green,
+    Blue
+}
+
+fn wildcard_match(c: Color) -> u8 {
+    match c {
+        Color::Red => 0
+        _ => 1  // Wildcard catches all other cases
+    }
+}

@@ -1,12 +1,10 @@
 ---
 source: crates/uitest/tests/ty.rs
 expression: diags
-input_file: crates/uitest/fixtures/ty/trait_bound/hkt_bound.fe
+input_file: fixtures/ty/trait_bound/hkt_bound.fe
 ---
 error[6-0002]: given trait argument kind mismatch
-  ┌─ hkt_bound.fe:1:17
+  ┌─ hkt_bound.fe:1:20
   │
 1 │ pub trait Trait<T: HktTrait> {}
-  │                 ^ expected `(* -> *)` kind, but `T` has `*` kind
-
-
+  │                    ^^^^^^^^ expected `(* -> *)` kind, but `T` has `*` kind

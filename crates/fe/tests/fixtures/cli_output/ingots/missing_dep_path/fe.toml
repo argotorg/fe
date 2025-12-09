@@ -1,0 +1,6 @@
+[ingot]
+name = "test"
+version = "0.1.0"
+
+[dependencies]
+foo = { version = "0.1.0" }

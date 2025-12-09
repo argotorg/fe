@@ -7,3 +7,5 @@ trait Foo {
 impl Foo for i32 {
     fn foo(x y: i32, z y: i32) {}
 }
+
+fn bar(a x: i32, a y: i32) {}

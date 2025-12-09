@@ -1,0 +1,75 @@
+---
+source: crates/hir-analysis/tests/ty_check.rs
+expression: res
+input_file: test_files/ty_check/debug_nested_assoc.fe
+---
+note: 
+   ┌─ debug_nested_assoc.fe:20:18
+   │  
+20 │   fn test_direct() {
+   │ ╭──────────────────^
+21 │ │     // Generic<u32>::Assoc should resolve to u32
+22 │ │     let x: Generic<u32>::Assoc = 42
+23 │ │ }
+   │ ╰─^ ()
+
+note: 
+   ┌─ debug_nested_assoc.fe:22:9
+   │
+22 │     let x: Generic<u32>::Assoc = 42
+   │         ^ u32
+
+note: 
+   ┌─ debug_nested_assoc.fe:22:34
+   │
+22 │     let x: Generic<u32>::Assoc = 42
+   │                                  ^^ u32
+
+note: 
+   ┌─ debug_nested_assoc.fe:26:44
+   │  
+26 │   fn test_generic<T: HasAssoc>() -> T::Assoc {
+   │ ╭────────────────────────────────────────────^
+27 │ │     todo()
+28 │ │ }
+   │ ╰─^ T::Assoc
+
+note: 
+   ┌─ debug_nested_assoc.fe:27:5
+   │
+27 │     todo()
+   │     ^^^^ fn todo
+
+note: 
+   ┌─ debug_nested_assoc.fe:27:5
+   │
+27 │     todo()
+   │     ^^^^^^ T::Assoc
+
+note: 
+   ┌─ debug_nested_assoc.fe:30:16
+   │  
+30 │   fn test_call() {
+   │ ╭────────────────^
+31 │ │     // This should resolve Generic<u32>::Assoc = u32
+32 │ │     let y: u32 = test_generic<Generic<u32>>()
+33 │ │ }
+   │ ╰─^ ()
+
+note: 
+   ┌─ debug_nested_assoc.fe:32:9
+   │
+32 │     let y: u32 = test_generic<Generic<u32>>()
+   │         ^ u32
+
+note: 
+   ┌─ debug_nested_assoc.fe:32:18
+   │
+32 │     let y: u32 = test_generic<Generic<u32>>()
+   │                  ^^^^^^^^^^^^^^^^^^^^^^^^^^ fn test_generic<Generic<u32>>
+
+note: 
+   ┌─ debug_nested_assoc.fe:32:18
+   │
+32 │     let y: u32 = test_generic<Generic<u32>>()
+   │                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^ u32

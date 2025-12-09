@@ -1,0 +1,14 @@
+struct Foo {
+    x: u32
+}
+
+impl Foo {
+    fn get_x(self) -> u32 {
+        self.x
+    }
+}
+
+type W = Foo::ingot::Foo
+type X = Foo::Self
+type Y = Foo::get_x
+type Z = Foo::Self::get_x

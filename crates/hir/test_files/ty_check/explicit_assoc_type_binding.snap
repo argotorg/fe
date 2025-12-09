@@ -1,0 +1,27 @@
+---
+source: crates/hir-analysis/tests/ty_check.rs
+assertion_line: 48
+expression: res
+input_file: test_files/ty_check/explicit_assoc_type_binding.fe
+---
+note: 
+   ┌─ explicit_assoc_type_binding.fe:12:35
+   │  
+12 │   where T: IntoIterator<Item = i32> {
+   │ ╭───────────────────────────────────^
+13 │ │     let x: <T::IntoIter as Iterator>::Item = 10
+14 │ │ }
+   │ ╰─^ ()
+
+note: 
+   ┌─ explicit_assoc_type_binding.fe:13:9
+   │
+13 │     let x: <T::IntoIter as Iterator>::Item = 10
+   │         ^ i32
+
+note: 
+   ┌─ explicit_assoc_type_binding.fe:13:46
+   │
+13 │     let x: <T::IntoIter as Iterator>::Item = 10
+   │                                              ^^ i32
+

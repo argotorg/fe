@@ -33,8 +33,10 @@ pub enum ParseError {
 
 impl ParseError {
     pub fn expected(tokens: &[SyntaxKind], kind: Option<ExpectedKind>, pos: TextSize) -> Self {
+        let mut expected_tokens = SmallVec::<SyntaxKind, 2>::new();
+        expected_tokens.extend_from_slice(tokens);
         ParseError::Expected(
-            SmallVec::from_slice(tokens),
+            expected_tokens,
             kind.unwrap_or(ExpectedKind::Unspecified),
             pos,
         )

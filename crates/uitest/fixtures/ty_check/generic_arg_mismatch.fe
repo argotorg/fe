@@ -5,8 +5,12 @@ enum Opt<T> {
 }
 
 type O2 = Opt<i32, bool>
+type W = Wrapper<Opt<i32, i32>> // TODO: err span is too wide
+
+struct Wrapper<T> {
+    inner: T
+}
 
 fn main() {
     let o = Opt<i32, ()>::None
-
 }

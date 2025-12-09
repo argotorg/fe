@@ -1,0 +1,30 @@
+---
+source: crates/hir-analysis/tests/decision_tree.rs
+expression: res
+input_file: test_files/decision_trees/advanced_bindings.fe
+---
+note: 
+   ┌─ advanced_bindings.fe:12:5
+   │  
+12 │ ╭     match item {
+13 │ │         Item::Value(x) => x
+14 │ │         Item::Pair(a, b) => a + b
+15 │ │         Item::Triple(x, y, z) => x + y + z
+16 │ │         Item::Empty => 0
+17 │ │     }
+   │ ╰─────^ Decision Tree for test_simple_enum_data:
+ Switch on expr
+ ├─ Value =>
+ │  └─ Execute arm #0
+ │       x ← expr.0
+ ├─ Pair =>
+ │  └─ Execute arm #1
+ │       a ← expr.0
+ │       b ← expr.1
+ ├─ Triple =>
+ │  └─ Execute arm #2
+ │       x ← expr.0
+ │       y ← expr.1
+ │       z ← expr.2
+ └─ Empty =>
+    └─ Execute arm #3

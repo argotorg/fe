@@ -1,0 +1,47 @@
+enum MyEnum {
+    Unit,
+    Tuple(u8, u8)
+}
+
+// Test for rest patterns in different positions
+fn test_rest_pattern_simple() -> u8 {
+    let tup: (u8, u8, u8) = (1, 2, 3)
+    
+    // Rest pattern at the head position
+    match tup {
+        (.., 3) => {
+            return 3
+        }
+        _ => {
+            return 0
+        }
+    }
+}
+
+fn test_rest_pattern_tail() -> u8 {
+    let tup: (u8, u8, u8) = (1, 2, 3)
+    
+    // Rest pattern at the tail position
+    match tup {
+        (1, ..) => {
+            return 1
+        }
+        _ => {
+            return 0
+        }
+    }
+}
+
+fn test_rest_pattern_middle() -> u8 {
+    let tup: (u8, u8, u8) = (1, 2, 3)
+    
+    // Rest pattern in the middle position
+    match tup {
+        (1, .., 3) => {
+            return 4
+        }
+        _ => {
+            return 0
+        }
+    }
+}

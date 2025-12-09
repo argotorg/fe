@@ -1,0 +1,6 @@
+struct Wrap3<A = B, B = i32> {
+    a: A,
+    b: B,
+}
+
+struct S<T = U, U = T> {}

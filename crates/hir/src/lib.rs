@@ -1,11 +1,13 @@
 use common::InputDb;
-pub use lower::parse::{ParseErrorAccumulator, ParserError};
+pub use core::lower::parse::ParserError;
 
-pub mod hir_def;
-pub mod lower;
-pub mod span;
-pub mod visitor;
+pub mod analysis;
+pub mod core;
+pub mod diagnosable;
+// Re-export core modules at crate root for compatibility
+pub use core::{hir_def, lower, semantic, span, visitor};
 
+pub use common::{file::File, file::Workspace, ingot::Ingot};
 #[salsa::db]
 pub trait HirDb: salsa::Database + InputDb {}
 
@@ -29,10 +31,10 @@ impl<T> LowerHirDb for T where T: HirDb {}
 /// implementations relying on `SpannedHirDb` are prohibited in all
 /// Analysis phases.
 ///
-/// This marker is mainly used to inject [HirOrigin](crate::span::HirOrigin) to
+/// This marker is mainly used to inject [HirOrigin](crate::core::span::HirOrigin) to
 /// generate [CompleteDiagnostic](common::diagnostics::CompleteDiagnostic) from
 /// [DiagnosticVoucher](crate::diagnostics::DiagnosticVoucher).
-/// See also `[LazySpan]`[`crate::span::LazySpan`] for more details.
+/// See also `[LazySpan]`[`crate::core::span::LazySpan`] for more details.
 #[salsa::db]
 pub trait SpannedHirDb: salsa::Database + HirDb {}
 #[salsa::db]
@@ -40,52 +42,42 @@ impl<T> SpannedHirDb for T where T: HirDb {}
 
 #[cfg(test)]
 mod test_db {
-    use common::{
-        indexmap::IndexSet,
-        input::{IngotKind, Version},
-        InputFile, InputIngot,
-    };
+    use common::{InputDb, define_input_db, file::File};
     use derive_more::TryIntoError;
+    use url::Url;
 
     use crate::{
-        hir_def::{scope_graph::ScopeGraph, ItemKind, TopLevelMod},
+        hir_def::{ItemKind, TopLevelMod, scope_graph::ScopeGraph},
         lower::{map_file_to_mod, scope_graph},
         span::LazySpan,
     };
 
-    #[derive(Clone, Default)]
-    #[salsa::db]
-    pub(crate) struct TestDb {
-        storage: salsa::Storage<Self>,
-    }
-    #[salsa::db]
-    impl salsa::Database for TestDb {
-        fn salsa_event(&self, _event: &dyn Fn() -> salsa::Event) {}
-    }
+    // Use the macro to define our test database with Workspace support
+    define_input_db!(TestDb);
 
     impl TestDb {
-        pub fn parse_source(&self, ingot: InputIngot, file: InputFile) -> &ScopeGraph {
-            let top_mod = map_file_to_mod(self, ingot, file);
+        pub fn parse_source(&self, file: File) -> &ScopeGraph<'_> {
+            let top_mod = map_file_to_mod(self, file);
             scope_graph(self, top_mod)
         }
 
         /// Parses the given source text and returns the first inner item in the
         /// file.
-        pub fn expect_item<'db, T>(&'db self, ingot: InputIngot, input: InputFile) -> T
+        pub fn expect_item<'db, T>(&'db self, file: File) -> T
         where
             ItemKind<'db>: TryInto<T, Error = TryIntoError<ItemKind<'db>>>,
         {
-            let tree = self.parse_source(ingot, input);
+            let tree = self.parse_source(file);
             tree.items_dfs(self)
                 .find_map(|it| it.try_into().ok())
                 .unwrap()
         }
 
-        pub fn expect_items<'db, T>(&'db self, ingot: InputIngot, input: InputFile) -> Vec<T>
+        pub fn expect_items<'db, T>(&'db self, file: File) -> Vec<T>
         where
             ItemKind<'db>: TryInto<T, Error = TryIntoError<ItemKind<'db>>>,
         {
-            let tree = self.parse_source(ingot, input);
+            let tree = self.parse_source(file);
             tree.items_dfs(self)
                 .filter_map(|it| it.try_into().ok())
                 .collect()
@@ -98,23 +90,12 @@ mod test_db {
             &text[range.start().into()..range.end().into()]
         }
 
-        pub fn standalone_file(&mut self, text: &str) -> (InputIngot, InputFile) {
-            let path = "hir_test";
-            let kind = IngotKind::StandAlone;
-            let version = Version::new(0, 0, 1);
-            let ingot = InputIngot::new(
+        pub fn standalone_file(&mut self, text: &str) -> File {
+            self.workspace().touch(
                 self,
-                path.into(),
-                kind,
-                version,
-                IndexSet::default(),
-                IndexSet::default(),
-                None,
-            );
-            let file = InputFile::new(self, "test_file.fe".into(), text.to_string());
-            ingot.set_root_file(self, file);
-            ingot.set_files(self, [file].into_iter().collect());
-            (ingot, file)
+                Url::parse("file:///hir_test/test_file.fe").unwrap(),
+                Some(text.into()),
+            )
         }
     }
 }

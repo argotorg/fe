@@ -1,0 +1,4 @@
+<T as Iterator>::next(self)
+<Vec<T> as IntoIterator>::into_iter(vec)
+<Self as Display>::fmt(self, f)
+<<Foo as Bar>::Inner as Display>::print(self)

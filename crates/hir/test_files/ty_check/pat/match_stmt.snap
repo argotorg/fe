@@ -1,0 +1,609 @@
+---
+source: crates/hir-analysis/tests/ty_check.rs
+expression: res
+input_file: test_files/ty_check/pat/match_stmt.fe
+---
+note: 
+   ┌─ match_stmt.fe:10:44
+   │  
+10 │   fn test_match_unit_variant(c: Color) -> u8 {
+   │ ╭────────────────────────────────────────────^
+11 │ │     match c {
+12 │ │         Color::Red => {
+13 │ │             return 1
+   · │
+24 │ │     }
+25 │ │ }
+   │ ╰─^ u8
+
+note: 
+   ┌─ match_stmt.fe:11:5
+   │  
+11 │ ╭     match c {
+12 │ │         Color::Red => {
+13 │ │             return 1
+14 │ │         }
+   · │
+23 │ │         }
+24 │ │     }
+   │ ╰─────^ u8
+
+note: 
+   ┌─ match_stmt.fe:11:11
+   │
+11 │     match c {
+   │           ^ Color
+
+note: 
+   ┌─ match_stmt.fe:12:9
+   │
+12 │         Color::Red => {
+   │         ^^^^^^^^^^ Color
+
+note: 
+   ┌─ match_stmt.fe:12:23
+   │  
+12 │           Color::Red => {
+   │ ╭───────────────────────^
+13 │ │             return 1
+14 │ │         }
+   │ ╰─────────^ !
+
+note: 
+   ┌─ match_stmt.fe:13:20
+   │
+13 │             return 1
+   │                    ^ u8
+
+note: 
+   ┌─ match_stmt.fe:15:9
+   │
+15 │         Color::Green => {
+   │         ^^^^^^^^^^^^ Color
+
+note: 
+   ┌─ match_stmt.fe:15:25
+   │  
+15 │           Color::Green => {
+   │ ╭─────────────────────────^
+16 │ │             return 2
+17 │ │         }
+   │ ╰─────────^ !
+
+note: 
+   ┌─ match_stmt.fe:16:20
+   │
+16 │             return 2
+   │                    ^ u8
+
+note: 
+   ┌─ match_stmt.fe:18:9
+   │
+18 │         Color::Blue => {
+   │         ^^^^^^^^^^^ Color
+
+note: 
+   ┌─ match_stmt.fe:18:24
+   │  
+18 │           Color::Blue => {
+   │ ╭────────────────────────^
+19 │ │             return 3
+20 │ │         }
+   │ ╰─────────^ !
+
+note: 
+   ┌─ match_stmt.fe:19:20
+   │
+19 │             return 3
+   │                    ^ u8
+
+note: 
+   ┌─ match_stmt.fe:21:9
+   │
+21 │         Color::Rgb(r, g, b) => { 
+   │         ^^^^^^^^^^^^^^^^^^^ Color
+
+note: 
+   ┌─ match_stmt.fe:21:20
+   │
+21 │         Color::Rgb(r, g, b) => { 
+   │                    ^ u8
+
+note: 
+   ┌─ match_stmt.fe:21:23
+   │
+21 │         Color::Rgb(r, g, b) => { 
+   │                       ^ u8
+
+note: 
+   ┌─ match_stmt.fe:21:26
+   │
+21 │         Color::Rgb(r, g, b) => { 
+   │                          ^ u8
+
+note: 
+   ┌─ match_stmt.fe:21:32
+   │  
+21 │           Color::Rgb(r, g, b) => { 
+   │ ╭────────────────────────────────^
+22 │ │             return 4
+23 │ │         }
+   │ ╰─────────^ !
+
+note: 
+   ┌─ match_stmt.fe:22:20
+   │
+22 │             return 4
+   │                    ^ u8
+
+note: 
+   ┌─ match_stmt.fe:27:57
+   │  
+27 │   fn test_match_tuple_variant_destructure(c: Color) -> u8 {
+   │ ╭─────────────────────────────────────────────────────────^
+28 │ │     match c {
+29 │ │         Color::Rgb(r, g, b) => {
+30 │ │             return r + g + b
+   · │
+35 │ │     }
+36 │ │ }
+   │ ╰─^ u8
+
+note: 
+   ┌─ match_stmt.fe:28:5
+   │  
+28 │ ╭     match c {
+29 │ │         Color::Rgb(r, g, b) => {
+30 │ │             return r + g + b
+31 │ │         }
+   · │
+34 │ │         Color::Blue => { return 0 }
+35 │ │     }
+   │ ╰─────^ u8
+
+note: 
+   ┌─ match_stmt.fe:28:11
+   │
+28 │     match c {
+   │           ^ Color
+
+note: 
+   ┌─ match_stmt.fe:29:9
+   │
+29 │         Color::Rgb(r, g, b) => {
+   │         ^^^^^^^^^^^^^^^^^^^ Color
+
+note: 
+   ┌─ match_stmt.fe:29:20
+   │
+29 │         Color::Rgb(r, g, b) => {
+   │                    ^ u8
+
+note: 
+   ┌─ match_stmt.fe:29:23
+   │
+29 │         Color::Rgb(r, g, b) => {
+   │                       ^ u8
+
+note: 
+   ┌─ match_stmt.fe:29:26
+   │
+29 │         Color::Rgb(r, g, b) => {
+   │                          ^ u8
+
+note: 
+   ┌─ match_stmt.fe:29:32
+   │  
+29 │           Color::Rgb(r, g, b) => {
+   │ ╭────────────────────────────────^
+30 │ │             return r + g + b
+31 │ │         }
+   │ ╰─────────^ !
+
+note: 
+   ┌─ match_stmt.fe:30:20
+   │
+30 │             return r + g + b
+   │                    ^ u8
+
+note: 
+   ┌─ match_stmt.fe:30:20
+   │
+30 │             return r + g + b
+   │                    ^^^^^ u8
+
+note: 
+   ┌─ match_stmt.fe:30:20
+   │
+30 │             return r + g + b
+   │                    ^^^^^^^^^ u8
+
+note: 
+   ┌─ match_stmt.fe:30:24
+   │
+30 │             return r + g + b
+   │                        ^ u8
+
+note: 
+   ┌─ match_stmt.fe:30:28
+   │
+30 │             return r + g + b
+   │                            ^ u8
+
+note: 
+   ┌─ match_stmt.fe:32:9
+   │
+32 │         Color::Red => { return 0 }
+   │         ^^^^^^^^^^ Color
+
+note: 
+   ┌─ match_stmt.fe:32:23
+   │
+32 │         Color::Red => { return 0 }
+   │                       ^^^^^^^^^^^^ !
+
+note: 
+   ┌─ match_stmt.fe:32:32
+   │
+32 │         Color::Red => { return 0 }
+   │                                ^ u8
+
+note: 
+   ┌─ match_stmt.fe:33:9
+   │
+33 │         Color::Green => { return 0 }
+   │         ^^^^^^^^^^^^ Color
+
+note: 
+   ┌─ match_stmt.fe:33:25
+   │
+33 │         Color::Green => { return 0 }
+   │                         ^^^^^^^^^^^^ !
+
+note: 
+   ┌─ match_stmt.fe:33:34
+   │
+33 │         Color::Green => { return 0 }
+   │                                  ^ u8
+
+note: 
+   ┌─ match_stmt.fe:34:9
+   │
+34 │         Color::Blue => { return 0 }
+   │         ^^^^^^^^^^^ Color
+
+note: 
+   ┌─ match_stmt.fe:34:24
+   │
+34 │         Color::Blue => { return 0 }
+   │                        ^^^^^^^^^^^^ !
+
+note: 
+   ┌─ match_stmt.fe:34:33
+   │
+34 │         Color::Blue => { return 0 }
+   │                                 ^ u8
+
+note: 
+   ┌─ match_stmt.fe:38:54
+   │  
+38 │   fn test_match_tuple_variant_wildcard(c: Color) -> u8 {
+   │ ╭──────────────────────────────────────────────────────^
+39 │ │     match c {
+40 │ │         Color::Rgb(_, _, _) => { // Wildcards for tuple elements
+41 │ │             return 1
+   · │
+46 │ │     }
+47 │ │ }
+   │ ╰─^ u8
+
+note: 
+   ┌─ match_stmt.fe:39:5
+   │  
+39 │ ╭     match c {
+40 │ │         Color::Rgb(_, _, _) => { // Wildcards for tuple elements
+41 │ │             return 1
+42 │ │         }
+   · │
+45 │ │         }
+46 │ │     }
+   │ ╰─────^ u8
+
+note: 
+   ┌─ match_stmt.fe:39:11
+   │
+39 │     match c {
+   │           ^ Color
+
+note: 
+   ┌─ match_stmt.fe:40:9
+   │
+40 │         Color::Rgb(_, _, _) => { // Wildcards for tuple elements
+   │         ^^^^^^^^^^^^^^^^^^^ Color
+
+note: 
+   ┌─ match_stmt.fe:40:20
+   │
+40 │         Color::Rgb(_, _, _) => { // Wildcards for tuple elements
+   │                    ^ u8
+
+note: 
+   ┌─ match_stmt.fe:40:23
+   │
+40 │         Color::Rgb(_, _, _) => { // Wildcards for tuple elements
+   │                       ^ u8
+
+note: 
+   ┌─ match_stmt.fe:40:26
+   │
+40 │         Color::Rgb(_, _, _) => { // Wildcards for tuple elements
+   │                          ^ u8
+
+note: 
+   ┌─ match_stmt.fe:40:32
+   │  
+40 │           Color::Rgb(_, _, _) => { // Wildcards for tuple elements
+   │ ╭────────────────────────────────^
+41 │ │             return 1
+42 │ │         }
+   │ ╰─────────^ !
+
+note: 
+   ┌─ match_stmt.fe:41:20
+   │
+41 │             return 1
+   │                    ^ u8
+
+note: 
+   ┌─ match_stmt.fe:43:9
+   │
+43 │         _ => { // Wildcard for other variants
+   │         ^ Color
+
+note: 
+   ┌─ match_stmt.fe:43:14
+   │  
+43 │           _ => { // Wildcard for other variants
+   │ ╭──────────────^
+44 │ │             return 0
+45 │ │         }
+   │ ╰─────────^ !
+
+note: 
+   ┌─ match_stmt.fe:44:20
+   │
+44 │             return 0
+   │                    ^ u8
+
+note: 
+   ┌─ match_stmt.fe:49:58
+   │  
+49 │   fn test_match_tuple_variant_rest_pattern(c: Color) -> u8 {
+   │ ╭──────────────────────────────────────────────────────────^
+50 │ │     match c {
+51 │ │         Color::Rgb(r, ..) => { // Rest pattern
+52 │ │             return r
+   · │
+57 │ │     }
+58 │ │ }
+   │ ╰─^ u8
+
+note: 
+   ┌─ match_stmt.fe:50:5
+   │  
+50 │ ╭     match c {
+51 │ │         Color::Rgb(r, ..) => { // Rest pattern
+52 │ │             return r
+53 │ │         }
+   · │
+56 │ │         }
+57 │ │     }
+   │ ╰─────^ u8
+
+note: 
+   ┌─ match_stmt.fe:50:11
+   │
+50 │     match c {
+   │           ^ Color
+
+note: 
+   ┌─ match_stmt.fe:51:9
+   │
+51 │         Color::Rgb(r, ..) => { // Rest pattern
+   │         ^^^^^^^^^^^^^^^^^ Color
+
+note: 
+   ┌─ match_stmt.fe:51:20
+   │
+51 │         Color::Rgb(r, ..) => { // Rest pattern
+   │                    ^ u8
+
+note: 
+   ┌─ match_stmt.fe:51:23
+   │
+51 │         Color::Rgb(r, ..) => { // Rest pattern
+   │                       ^^ Color
+
+note: 
+   ┌─ match_stmt.fe:51:30
+   │  
+51 │           Color::Rgb(r, ..) => { // Rest pattern
+   │ ╭──────────────────────────────^
+52 │ │             return r
+53 │ │         }
+   │ ╰─────────^ !
+
+note: 
+   ┌─ match_stmt.fe:52:20
+   │
+52 │             return r
+   │                    ^ u8
+
+note: 
+   ┌─ match_stmt.fe:54:9
+   │
+54 │         _ => {
+   │         ^ Color
+
+note: 
+   ┌─ match_stmt.fe:54:14
+   │  
+54 │           _ => {
+   │ ╭──────────────^
+55 │ │             return 0
+56 │ │         }
+   │ ╰─────────^ !
+
+note: 
+   ┌─ match_stmt.fe:55:20
+   │
+55 │             return 0
+   │                    ^ u8
+
+note: 
+   ┌─ match_stmt.fe:60:49
+   │  
+60 │   fn test_match_with_or_pattern(c: Color) -> bool {
+   │ ╭─────────────────────────────────────────────────^
+61 │ │     match c {
+62 │ │         Color::Red | Color::Blue => {
+63 │ │             return true
+   · │
+68 │ │     }
+69 │ │ }
+   │ ╰─^ bool
+
+note: 
+   ┌─ match_stmt.fe:61:5
+   │  
+61 │ ╭     match c {
+62 │ │         Color::Red | Color::Blue => {
+63 │ │             return true
+64 │ │         }
+   · │
+67 │ │         }
+68 │ │     }
+   │ ╰─────^ bool
+
+note: 
+   ┌─ match_stmt.fe:61:11
+   │
+61 │     match c {
+   │           ^ Color
+
+note: 
+   ┌─ match_stmt.fe:62:9
+   │
+62 │         Color::Red | Color::Blue => {
+   │         ^^^^^^^^^^ Color
+
+note: 
+   ┌─ match_stmt.fe:62:9
+   │
+62 │         Color::Red | Color::Blue => {
+   │         ^^^^^^^^^^^^^^^^^^^^^^^^ Color
+
+note: 
+   ┌─ match_stmt.fe:62:22
+   │
+62 │         Color::Red | Color::Blue => {
+   │                      ^^^^^^^^^^^ Color
+
+note: 
+   ┌─ match_stmt.fe:62:37
+   │  
+62 │           Color::Red | Color::Blue => {
+   │ ╭─────────────────────────────────────^
+63 │ │             return true
+64 │ │         }
+   │ ╰─────────^ !
+
+note: 
+   ┌─ match_stmt.fe:63:20
+   │
+63 │             return true
+   │                    ^^^^ bool
+
+note: 
+   ┌─ match_stmt.fe:65:9
+   │
+65 │         _ => {
+   │         ^ Color
+
+note: 
+   ┌─ match_stmt.fe:65:14
+   │  
+65 │           _ => {
+   │ ╭──────────────^
+66 │ │             return false
+67 │ │         }
+   │ ╰─────────^ !
+
+note: 
+   ┌─ match_stmt.fe:66:20
+   │
+66 │             return false
+   │                    ^^^^^ bool
+
+note: 
+   ┌─ match_stmt.fe:71:45
+   │  
+71 │   fn test_match_bool_literal(val: bool) -> u8 {
+   │ ╭─────────────────────────────────────────────^
+72 │ │     match val {
+73 │ │         true => { return 1 }
+74 │ │         false => { return 0 }
+75 │ │     }
+76 │ │ }
+   │ ╰─^ u8
+
+note: 
+   ┌─ match_stmt.fe:72:5
+   │  
+72 │ ╭     match val {
+73 │ │         true => { return 1 }
+74 │ │         false => { return 0 }
+75 │ │     }
+   │ ╰─────^ u8
+
+note: 
+   ┌─ match_stmt.fe:72:11
+   │
+72 │     match val {
+   │           ^^^ bool
+
+note: 
+   ┌─ match_stmt.fe:73:9
+   │
+73 │         true => { return 1 }
+   │         ^^^^ bool
+
+note: 
+   ┌─ match_stmt.fe:73:17
+   │
+73 │         true => { return 1 }
+   │                 ^^^^^^^^^^^^ !
+
+note: 
+   ┌─ match_stmt.fe:73:26
+   │
+73 │         true => { return 1 }
+   │                          ^ u8
+
+note: 
+   ┌─ match_stmt.fe:74:9
+   │
+74 │         false => { return 0 }
+   │         ^^^^^ bool
+
+note: 
+   ┌─ match_stmt.fe:74:18
+   │
+74 │         false => { return 0 }
+   │                  ^^^^^^^^^^^^ !
+
+note: 
+   ┌─ match_stmt.fe:74:27
+   │
+74 │         false => { return 0 }
+   │                           ^ u8

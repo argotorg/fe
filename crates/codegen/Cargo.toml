@@ -1,0 +1,17 @@
+[package]
+name = "fe-codegen"
+version = "0.1.0"
+edition.workspace = true
+
+[dependencies]
+driver = { path = "../driver", package = "fe-driver" }
+mir = { path = "../mir", package = "fe-mir" }
+hir.workspace = true
+hex = "0.4"
+rustc-hash.workspace = true
+
+[dev-dependencies]
+dir-test.workspace = true
+test-utils.workspace = true
+url.workspace = true
+common.workspace = true

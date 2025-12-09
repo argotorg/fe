@@ -1,0 +1,1284 @@
+---
+source: crates/hir-analysis/tests/ty_check.rs
+expression: res
+input_file: test_files/ty_check/patterns_comparison.fe
+---
+note: 
+   ┌─ patterns_comparison.fe:21:37
+   │  
+21 │   fn match_full_paths(tag: Tag) -> u8 {
+   │ ╭─────────────────────────────────────^
+22 │ │     match tag {
+23 │ │         Tag::Tag1 => {
+24 │ │             return 1
+   · │
+32 │ │     }
+33 │ │ }
+   │ ╰─^ u8
+
+note: 
+   ┌─ patterns_comparison.fe:22:5
+   │  
+22 │ ╭     match tag {
+23 │ │         Tag::Tag1 => {
+24 │ │             return 1
+25 │ │         }
+   · │
+31 │ │         }
+32 │ │     }
+   │ ╰─────^ u8
+
+note: 
+   ┌─ patterns_comparison.fe:22:11
+   │
+22 │     match tag {
+   │           ^^^ Tag
+
+note: 
+   ┌─ patterns_comparison.fe:23:9
+   │
+23 │         Tag::Tag1 => {
+   │         ^^^^^^^^^ Tag
+
+note: 
+   ┌─ patterns_comparison.fe:23:22
+   │  
+23 │           Tag::Tag1 => {
+   │ ╭──────────────────────^
+24 │ │             return 1
+25 │ │         }
+   │ ╰─────────^ !
+
+note: 
+   ┌─ patterns_comparison.fe:24:20
+   │
+24 │             return 1
+   │                    ^ u8
+
+note: 
+   ┌─ patterns_comparison.fe:26:9
+   │
+26 │         Tag::Tag2 => {
+   │         ^^^^^^^^^ Tag
+
+note: 
+   ┌─ patterns_comparison.fe:26:22
+   │  
+26 │           Tag::Tag2 => {
+   │ ╭──────────────────────^
+27 │ │             return 2
+28 │ │         }
+   │ ╰─────────^ !
+
+note: 
+   ┌─ patterns_comparison.fe:27:20
+   │
+27 │             return 2
+   │                    ^ u8
+
+note: 
+   ┌─ patterns_comparison.fe:29:9
+   │
+29 │         Tag::Tag3 => {
+   │         ^^^^^^^^^ Tag
+
+note: 
+   ┌─ patterns_comparison.fe:29:22
+   │  
+29 │           Tag::Tag3 => {
+   │ ╭──────────────────────^
+30 │ │             return 3
+31 │ │         }
+   │ ╰─────────^ !
+
+note: 
+   ┌─ patterns_comparison.fe:30:20
+   │
+30 │             return 3
+   │                    ^ u8
+
+note: 
+   ┌─ patterns_comparison.fe:36:44
+   │  
+36 │   fn match_imported_variants(tag: Tag) -> u8 {
+   │ ╭────────────────────────────────────────────^
+37 │ │     use Tag::*
+38 │ │     
+39 │ │     match tag {
+   · │
+49 │ │     }
+50 │ │ }
+   │ ╰─^ u8
+
+note: 
+   ┌─ patterns_comparison.fe:39:5
+   │  
+39 │ ╭     match tag {
+40 │ │         Tag1 => {
+41 │ │             return 1
+42 │ │         }
+   · │
+48 │ │         }
+49 │ │     }
+   │ ╰─────^ u8
+
+note: 
+   ┌─ patterns_comparison.fe:39:11
+   │
+39 │     match tag {
+   │           ^^^ Tag
+
+note: 
+   ┌─ patterns_comparison.fe:40:9
+   │
+40 │         Tag1 => {
+   │         ^^^^ Tag
+
+note: 
+   ┌─ patterns_comparison.fe:40:17
+   │  
+40 │           Tag1 => {
+   │ ╭─────────────────^
+41 │ │             return 1
+42 │ │         }
+   │ ╰─────────^ !
+
+note: 
+   ┌─ patterns_comparison.fe:41:20
+   │
+41 │             return 1
+   │                    ^ u8
+
+note: 
+   ┌─ patterns_comparison.fe:43:9
+   │
+43 │         Tag2 => {
+   │         ^^^^ Tag
+
+note: 
+   ┌─ patterns_comparison.fe:43:17
+   │  
+43 │           Tag2 => {
+   │ ╭─────────────────^
+44 │ │             return 2
+45 │ │         }
+   │ ╰─────────^ !
+
+note: 
+   ┌─ patterns_comparison.fe:44:20
+   │
+44 │             return 2
+   │                    ^ u8
+
+note: 
+   ┌─ patterns_comparison.fe:46:9
+   │
+46 │         Tag3 => {
+   │         ^^^^ Tag
+
+note: 
+   ┌─ patterns_comparison.fe:46:17
+   │  
+46 │           Tag3 => {
+   │ ╭─────────────────^
+47 │ │             return 3
+48 │ │         }
+   │ ╰─────────^ !
+
+note: 
+   ┌─ patterns_comparison.fe:47:20
+   │
+47 │             return 3
+   │                    ^ u8
+
+note: 
+   ┌─ patterns_comparison.fe:53:46
+   │  
+53 │   fn match_full_path_tuple(color: Color) -> u8 {
+   │ ╭──────────────────────────────────────────────^
+54 │ │     match color {
+55 │ │         Color::Red => {
+56 │ │             return 1
+   · │
+67 │ │     }
+68 │ │ }
+   │ ╰─^ u8
+
+note: 
+   ┌─ patterns_comparison.fe:54:5
+   │  
+54 │ ╭     match color {
+55 │ │         Color::Red => {
+56 │ │             return 1
+57 │ │         }
+   · │
+66 │ │         }
+67 │ │     }
+   │ ╰─────^ u8
+
+note: 
+   ┌─ patterns_comparison.fe:54:11
+   │
+54 │     match color {
+   │           ^^^^^ Color
+
+note: 
+   ┌─ patterns_comparison.fe:55:9
+   │
+55 │         Color::Red => {
+   │         ^^^^^^^^^^ Color
+
+note: 
+   ┌─ patterns_comparison.fe:55:23
+   │  
+55 │           Color::Red => {
+   │ ╭───────────────────────^
+56 │ │             return 1
+57 │ │         }
+   │ ╰─────────^ !
+
+note: 
+   ┌─ patterns_comparison.fe:56:20
+   │
+56 │             return 1
+   │                    ^ u8
+
+note: 
+   ┌─ patterns_comparison.fe:58:9
+   │
+58 │         Color::Green => {
+   │         ^^^^^^^^^^^^ Color
+
+note: 
+   ┌─ patterns_comparison.fe:58:25
+   │  
+58 │           Color::Green => {
+   │ ╭─────────────────────────^
+59 │ │             return 2
+60 │ │         }
+   │ ╰─────────^ !
+
+note: 
+   ┌─ patterns_comparison.fe:59:20
+   │
+59 │             return 2
+   │                    ^ u8
+
+note: 
+   ┌─ patterns_comparison.fe:61:9
+   │
+61 │         Color::Blue => {
+   │         ^^^^^^^^^^^ Color
+
+note: 
+   ┌─ patterns_comparison.fe:61:24
+   │  
+61 │           Color::Blue => {
+   │ ╭────────────────────────^
+62 │ │             return 3
+63 │ │         }
+   │ ╰─────────^ !
+
+note: 
+   ┌─ patterns_comparison.fe:62:20
+   │
+62 │             return 3
+   │                    ^ u8
+
+note: 
+   ┌─ patterns_comparison.fe:64:9
+   │
+64 │         Color::Rgb(r, g, b) => {
+   │         ^^^^^^^^^^^^^^^^^^^ Color
+
+note: 
+   ┌─ patterns_comparison.fe:64:20
+   │
+64 │         Color::Rgb(r, g, b) => {
+   │                    ^ u8
+
+note: 
+   ┌─ patterns_comparison.fe:64:23
+   │
+64 │         Color::Rgb(r, g, b) => {
+   │                       ^ u8
+
+note: 
+   ┌─ patterns_comparison.fe:64:26
+   │
+64 │         Color::Rgb(r, g, b) => {
+   │                          ^ u8
+
+note: 
+   ┌─ patterns_comparison.fe:64:32
+   │  
+64 │           Color::Rgb(r, g, b) => {
+   │ ╭────────────────────────────────^
+65 │ │             return r + g + b
+66 │ │         }
+   │ ╰─────────^ !
+
+note: 
+   ┌─ patterns_comparison.fe:65:20
+   │
+65 │             return r + g + b
+   │                    ^ u8
+
+note: 
+   ┌─ patterns_comparison.fe:65:20
+   │
+65 │             return r + g + b
+   │                    ^^^^^ u8
+
+note: 
+   ┌─ patterns_comparison.fe:65:20
+   │
+65 │             return r + g + b
+   │                    ^^^^^^^^^ u8
+
+note: 
+   ┌─ patterns_comparison.fe:65:24
+   │
+65 │             return r + g + b
+   │                        ^ u8
+
+note: 
+   ┌─ patterns_comparison.fe:65:28
+   │
+65 │             return r + g + b
+   │                            ^ u8
+
+note: 
+   ┌─ patterns_comparison.fe:71:45
+   │  
+71 │   fn match_imported_tuple(color: Color) -> u8 {
+   │ ╭─────────────────────────────────────────────^
+72 │ │     use Color::*
+73 │ │     
+74 │ │     match color {
+   · │
+87 │ │     }
+88 │ │ }
+   │ ╰─^ u8
+
+note: 
+   ┌─ patterns_comparison.fe:74:5
+   │  
+74 │ ╭     match color {
+75 │ │         Red => {
+76 │ │             return 1
+77 │ │         }
+   · │
+86 │ │         }
+87 │ │     }
+   │ ╰─────^ u8
+
+note: 
+   ┌─ patterns_comparison.fe:74:11
+   │
+74 │     match color {
+   │           ^^^^^ Color
+
+note: 
+   ┌─ patterns_comparison.fe:75:9
+   │
+75 │         Red => {
+   │         ^^^ Color
+
+note: 
+   ┌─ patterns_comparison.fe:75:16
+   │  
+75 │           Red => {
+   │ ╭────────────────^
+76 │ │             return 1
+77 │ │         }
+   │ ╰─────────^ !
+
+note: 
+   ┌─ patterns_comparison.fe:76:20
+   │
+76 │             return 1
+   │                    ^ u8
+
+note: 
+   ┌─ patterns_comparison.fe:78:9
+   │
+78 │         Green => {
+   │         ^^^^^ Color
+
+note: 
+   ┌─ patterns_comparison.fe:78:18
+   │  
+78 │           Green => {
+   │ ╭──────────────────^
+79 │ │             return 2
+80 │ │         }
+   │ ╰─────────^ !
+
+note: 
+   ┌─ patterns_comparison.fe:79:20
+   │
+79 │             return 2
+   │                    ^ u8
+
+note: 
+   ┌─ patterns_comparison.fe:81:9
+   │
+81 │         Blue => {
+   │         ^^^^ Color
+
+note: 
+   ┌─ patterns_comparison.fe:81:17
+   │  
+81 │           Blue => {
+   │ ╭─────────────────^
+82 │ │             return 3
+83 │ │         }
+   │ ╰─────────^ !
+
+note: 
+   ┌─ patterns_comparison.fe:82:20
+   │
+82 │             return 3
+   │                    ^ u8
+
+note: 
+   ┌─ patterns_comparison.fe:84:9
+   │
+84 │         Rgb(r, g, b) => {
+   │         ^^^^^^^^^^^^ Color
+
+note: 
+   ┌─ patterns_comparison.fe:84:13
+   │
+84 │         Rgb(r, g, b) => {
+   │             ^ u8
+
+note: 
+   ┌─ patterns_comparison.fe:84:16
+   │
+84 │         Rgb(r, g, b) => {
+   │                ^ u8
+
+note: 
+   ┌─ patterns_comparison.fe:84:19
+   │
+84 │         Rgb(r, g, b) => {
+   │                   ^ u8
+
+note: 
+   ┌─ patterns_comparison.fe:84:25
+   │  
+84 │           Rgb(r, g, b) => {
+   │ ╭─────────────────────────^
+85 │ │             return r + g + b
+86 │ │         }
+   │ ╰─────────^ !
+
+note: 
+   ┌─ patterns_comparison.fe:85:20
+   │
+85 │             return r + g + b
+   │                    ^ u8
+
+note: 
+   ┌─ patterns_comparison.fe:85:20
+   │
+85 │             return r + g + b
+   │                    ^^^^^ u8
+
+note: 
+   ┌─ patterns_comparison.fe:85:20
+   │
+85 │             return r + g + b
+   │                    ^^^^^^^^^ u8
+
+note: 
+   ┌─ patterns_comparison.fe:85:24
+   │
+85 │             return r + g + b
+   │                        ^ u8
+
+note: 
+   ┌─ patterns_comparison.fe:85:28
+   │
+85 │             return r + g + b
+   │                            ^ u8
+
+note: 
+    ┌─ patterns_comparison.fe:91:53
+    │  
+ 91 │   fn match_mixed_styles(tag: Tag, color: Color) -> u8 {
+    │ ╭─────────────────────────────────────────────────────^
+ 92 │ │     use Color::*
+ 93 │ │     
+ 94 │ │     let result = match tag {
+    · │
+121 │ │     return result + color_val
+122 │ │ }
+    │ ╰─^ u8
+
+note: 
+   ┌─ patterns_comparison.fe:94:9
+   │
+94 │     let result = match tag {
+   │         ^^^^^^ u8
+
+note: 
+    ┌─ patterns_comparison.fe:94:18
+    │  
+ 94 │       let result = match tag {
+    │ ╭──────────────────^
+ 95 │ │         Tag::Tag1 => {
+ 96 │ │             10
+ 97 │ │         }
+    · │
+103 │ │         }
+104 │ │     }
+    │ ╰─────^ u8
+
+note: 
+   ┌─ patterns_comparison.fe:94:24
+   │
+94 │     let result = match tag {
+   │                        ^^^ Tag
+
+note: 
+   ┌─ patterns_comparison.fe:95:9
+   │
+95 │         Tag::Tag1 => {
+   │         ^^^^^^^^^ Tag
+
+note: 
+   ┌─ patterns_comparison.fe:95:22
+   │  
+95 │           Tag::Tag1 => {
+   │ ╭──────────────────────^
+96 │ │             10
+97 │ │         }
+   │ ╰─────────^ u8
+
+note: 
+   ┌─ patterns_comparison.fe:96:13
+   │
+96 │             10
+   │             ^^ u8
+
+note: 
+   ┌─ patterns_comparison.fe:98:9
+   │
+98 │         Tag::Tag2 => {
+   │         ^^^^^^^^^ Tag
+
+note: 
+    ┌─ patterns_comparison.fe:98:22
+    │  
+ 98 │           Tag::Tag2 => {
+    │ ╭──────────────────────^
+ 99 │ │             20
+100 │ │         }
+    │ ╰─────────^ u8
+
+note: 
+   ┌─ patterns_comparison.fe:99:13
+   │
+99 │             20
+   │             ^^ u8
+
+note: 
+    ┌─ patterns_comparison.fe:101:9
+    │
+101 │         Tag::Tag3 => {
+    │         ^^^^^^^^^ Tag
+
+note: 
+    ┌─ patterns_comparison.fe:101:22
+    │  
+101 │           Tag::Tag3 => {
+    │ ╭──────────────────────^
+102 │ │             30
+103 │ │         }
+    │ ╰─────────^ u8
+
+note: 
+    ┌─ patterns_comparison.fe:102:13
+    │
+102 │             30
+    │             ^^ u8
+
+note: 
+    ┌─ patterns_comparison.fe:106:9
+    │
+106 │     let color_val = match color {
+    │         ^^^^^^^^^ u8
+
+note: 
+    ┌─ patterns_comparison.fe:106:21
+    │  
+106 │       let color_val = match color {
+    │ ╭─────────────────────^
+107 │ │         Red => {
+108 │ │             1
+109 │ │         }
+    · │
+118 │ │         }
+119 │ │     }
+    │ ╰─────^ u8
+
+note: 
+    ┌─ patterns_comparison.fe:106:27
+    │
+106 │     let color_val = match color {
+    │                           ^^^^^ Color
+
+note: 
+    ┌─ patterns_comparison.fe:107:9
+    │
+107 │         Red => {
+    │         ^^^ Color
+
+note: 
+    ┌─ patterns_comparison.fe:107:16
+    │  
+107 │           Red => {
+    │ ╭────────────────^
+108 │ │             1
+109 │ │         }
+    │ ╰─────────^ u8
+
+note: 
+    ┌─ patterns_comparison.fe:108:13
+    │
+108 │             1
+    │             ^ u8
+
+note: 
+    ┌─ patterns_comparison.fe:110:9
+    │
+110 │         Green => {
+    │         ^^^^^ Color
+
+note: 
+    ┌─ patterns_comparison.fe:110:18
+    │  
+110 │           Green => {
+    │ ╭──────────────────^
+111 │ │             2
+112 │ │         }
+    │ ╰─────────^ u8
+
+note: 
+    ┌─ patterns_comparison.fe:111:13
+    │
+111 │             2
+    │             ^ u8
+
+note: 
+    ┌─ patterns_comparison.fe:113:9
+    │
+113 │         Blue => {
+    │         ^^^^ Color
+
+note: 
+    ┌─ patterns_comparison.fe:113:17
+    │  
+113 │           Blue => {
+    │ ╭─────────────────^
+114 │ │             3
+115 │ │         }
+    │ ╰─────────^ u8
+
+note: 
+    ┌─ patterns_comparison.fe:114:13
+    │
+114 │             3
+    │             ^ u8
+
+note: 
+    ┌─ patterns_comparison.fe:116:9
+    │
+116 │         Rgb(r, g, b) => {
+    │         ^^^^^^^^^^^^ Color
+
+note: 
+    ┌─ patterns_comparison.fe:116:13
+    │
+116 │         Rgb(r, g, b) => {
+    │             ^ u8
+
+note: 
+    ┌─ patterns_comparison.fe:116:16
+    │
+116 │         Rgb(r, g, b) => {
+    │                ^ u8
+
+note: 
+    ┌─ patterns_comparison.fe:116:19
+    │
+116 │         Rgb(r, g, b) => {
+    │                   ^ u8
+
+note: 
+    ┌─ patterns_comparison.fe:116:25
+    │  
+116 │           Rgb(r, g, b) => {
+    │ ╭─────────────────────────^
+117 │ │             r + g + b
+118 │ │         }
+    │ ╰─────────^ u8
+
+note: 
+    ┌─ patterns_comparison.fe:117:13
+    │
+117 │             r + g + b
+    │             ^ u8
+
+note: 
+    ┌─ patterns_comparison.fe:117:13
+    │
+117 │             r + g + b
+    │             ^^^^^ u8
+
+note: 
+    ┌─ patterns_comparison.fe:117:13
+    │
+117 │             r + g + b
+    │             ^^^^^^^^^ u8
+
+note: 
+    ┌─ patterns_comparison.fe:117:17
+    │
+117 │             r + g + b
+    │                 ^ u8
+
+note: 
+    ┌─ patterns_comparison.fe:117:21
+    │
+117 │             r + g + b
+    │                     ^ u8
+
+note: 
+    ┌─ patterns_comparison.fe:121:12
+    │
+121 │     return result + color_val
+    │            ^^^^^^ u8
+
+note: 
+    ┌─ patterns_comparison.fe:121:12
+    │
+121 │     return result + color_val
+    │            ^^^^^^^^^^^^^^^^^^ u8
+
+note: 
+    ┌─ patterns_comparison.fe:121:21
+    │
+121 │     return result + color_val
+    │                     ^^^^^^^^^ u8
+
+note: 
+    ┌─ patterns_comparison.fe:125:48
+    │  
+125 │   fn match_nested_patterns(nested: Nested) -> u8 {
+    │ ╭────────────────────────────────────────────────^
+126 │ │     use Tag::*
+127 │ │     use Color::*
+128 │ │     
+    · │
+154 │ │     }
+155 │ │ }
+    │ ╰─^ u8
+
+note: 
+    ┌─ patterns_comparison.fe:129:5
+    │  
+129 │ ╭     match nested {
+130 │ │         Nested::A(Tag1) => {
+131 │ │             return 10
+132 │ │         }
+    · │
+153 │ │         }
+154 │ │     }
+    │ ╰─────^ u8
+
+note: 
+    ┌─ patterns_comparison.fe:129:11
+    │
+129 │     match nested {
+    │           ^^^^^^ Nested
+
+note: 
+    ┌─ patterns_comparison.fe:130:9
+    │
+130 │         Nested::A(Tag1) => {
+    │         ^^^^^^^^^^^^^^^ Nested
+
+note: 
+    ┌─ patterns_comparison.fe:130:19
+    │
+130 │         Nested::A(Tag1) => {
+    │                   ^^^^ Tag
+
+note: 
+    ┌─ patterns_comparison.fe:130:28
+    │  
+130 │           Nested::A(Tag1) => {
+    │ ╭────────────────────────────^
+131 │ │             return 10
+132 │ │         }
+    │ ╰─────────^ !
+
+note: 
+    ┌─ patterns_comparison.fe:131:20
+    │
+131 │             return 10
+    │                    ^^ u8
+
+note: 
+    ┌─ patterns_comparison.fe:133:9
+    │
+133 │         Nested::A(Tag2) => {
+    │         ^^^^^^^^^^^^^^^ Nested
+
+note: 
+    ┌─ patterns_comparison.fe:133:19
+    │
+133 │         Nested::A(Tag2) => {
+    │                   ^^^^ Tag
+
+note: 
+    ┌─ patterns_comparison.fe:133:28
+    │  
+133 │           Nested::A(Tag2) => {
+    │ ╭────────────────────────────^
+134 │ │             return 20
+135 │ │         }
+    │ ╰─────────^ !
+
+note: 
+    ┌─ patterns_comparison.fe:134:20
+    │
+134 │             return 20
+    │                    ^^ u8
+
+note: 
+    ┌─ patterns_comparison.fe:136:9
+    │
+136 │         Nested::A(Tag3) => {
+    │         ^^^^^^^^^^^^^^^ Nested
+
+note: 
+    ┌─ patterns_comparison.fe:136:19
+    │
+136 │         Nested::A(Tag3) => {
+    │                   ^^^^ Tag
+
+note: 
+    ┌─ patterns_comparison.fe:136:28
+    │  
+136 │           Nested::A(Tag3) => {
+    │ ╭────────────────────────────^
+137 │ │             return 30
+138 │ │         }
+    │ ╰─────────^ !
+
+note: 
+    ┌─ patterns_comparison.fe:137:20
+    │
+137 │             return 30
+    │                    ^^ u8
+
+note: 
+    ┌─ patterns_comparison.fe:139:9
+    │
+139 │         Nested::B(Red) => {
+    │         ^^^^^^^^^^^^^^ Nested
+
+note: 
+    ┌─ patterns_comparison.fe:139:19
+    │
+139 │         Nested::B(Red) => {
+    │                   ^^^ Color
+
+note: 
+    ┌─ patterns_comparison.fe:139:27
+    │  
+139 │           Nested::B(Red) => {
+    │ ╭───────────────────────────^
+140 │ │             return 1
+141 │ │         }
+    │ ╰─────────^ !
+
+note: 
+    ┌─ patterns_comparison.fe:140:20
+    │
+140 │             return 1
+    │                    ^ u8
+
+note: 
+    ┌─ patterns_comparison.fe:142:9
+    │
+142 │         Nested::B(Green) => {
+    │         ^^^^^^^^^^^^^^^^ Nested
+
+note: 
+    ┌─ patterns_comparison.fe:142:19
+    │
+142 │         Nested::B(Green) => {
+    │                   ^^^^^ Color
+
+note: 
+    ┌─ patterns_comparison.fe:142:29
+    │  
+142 │           Nested::B(Green) => {
+    │ ╭─────────────────────────────^
+143 │ │             return 2
+144 │ │         } 
+    │ ╰─────────^ !
+
+note: 
+    ┌─ patterns_comparison.fe:143:20
+    │
+143 │             return 2
+    │                    ^ u8
+
+note: 
+    ┌─ patterns_comparison.fe:145:9
+    │
+145 │         Nested::B(Blue) => {
+    │         ^^^^^^^^^^^^^^^ Nested
+
+note: 
+    ┌─ patterns_comparison.fe:145:19
+    │
+145 │         Nested::B(Blue) => {
+    │                   ^^^^ Color
+
+note: 
+    ┌─ patterns_comparison.fe:145:28
+    │  
+145 │           Nested::B(Blue) => {
+    │ ╭────────────────────────────^
+146 │ │             return 3
+147 │ │         }
+    │ ╰─────────^ !
+
+note: 
+    ┌─ patterns_comparison.fe:146:20
+    │
+146 │             return 3
+    │                    ^ u8
+
+note: 
+    ┌─ patterns_comparison.fe:148:9
+    │
+148 │         Nested::B(Rgb(r, g, b)) => {
+    │         ^^^^^^^^^^^^^^^^^^^^^^^ Nested
+
+note: 
+    ┌─ patterns_comparison.fe:148:19
+    │
+148 │         Nested::B(Rgb(r, g, b)) => {
+    │                   ^^^^^^^^^^^^ Color
+
+note: 
+    ┌─ patterns_comparison.fe:148:23
+    │
+148 │         Nested::B(Rgb(r, g, b)) => {
+    │                       ^ u8
+
+note: 
+    ┌─ patterns_comparison.fe:148:26
+    │
+148 │         Nested::B(Rgb(r, g, b)) => {
+    │                          ^ u8
+
+note: 
+    ┌─ patterns_comparison.fe:148:29
+    │
+148 │         Nested::B(Rgb(r, g, b)) => {
+    │                             ^ u8
+
+note: 
+    ┌─ patterns_comparison.fe:148:36
+    │  
+148 │           Nested::B(Rgb(r, g, b)) => {
+    │ ╭────────────────────────────────────^
+149 │ │             return r + g + b
+150 │ │         }
+    │ ╰─────────^ !
+
+note: 
+    ┌─ patterns_comparison.fe:149:20
+    │
+149 │             return r + g + b
+    │                    ^ u8
+
+note: 
+    ┌─ patterns_comparison.fe:149:20
+    │
+149 │             return r + g + b
+    │                    ^^^^^ u8
+
+note: 
+    ┌─ patterns_comparison.fe:149:20
+    │
+149 │             return r + g + b
+    │                    ^^^^^^^^^ u8
+
+note: 
+    ┌─ patterns_comparison.fe:149:24
+    │
+149 │             return r + g + b
+    │                        ^ u8
+
+note: 
+    ┌─ patterns_comparison.fe:149:28
+    │
+149 │             return r + g + b
+    │                            ^ u8
+
+note: 
+    ┌─ patterns_comparison.fe:151:9
+    │
+151 │         Nested::C { val } => {
+    │         ^^^^^^^^^^^^^^^^^ Nested
+
+note: 
+    ┌─ patterns_comparison.fe:151:21
+    │
+151 │         Nested::C { val } => {
+    │                     ^^^ u8
+
+note: 
+    ┌─ patterns_comparison.fe:151:30
+    │  
+151 │           Nested::C { val } => {
+    │ ╭──────────────────────────────^
+152 │ │             return val
+153 │ │         }
+    │ ╰─────────^ !
+
+note: 
+    ┌─ patterns_comparison.fe:152:20
+    │
+152 │             return val
+    │                    ^^^ u8
+
+note: 
+    ┌─ patterns_comparison.fe:158:54
+    │  
+158 │   fn match_or_patterns(tag: Tag, color: Color) -> bool {
+    │ ╭──────────────────────────────────────────────────────^
+159 │ │     use Tag::*
+160 │ │     use Color::*
+161 │ │     
+    · │
+180 │ │     return is_tag_special && is_color_primary
+181 │ │ }
+    │ ╰─^ bool
+
+note: 
+    ┌─ patterns_comparison.fe:162:9
+    │
+162 │     let is_tag_special = match tag {
+    │         ^^^^^^^^^^^^^^ bool
+
+note: 
+    ┌─ patterns_comparison.fe:162:26
+    │  
+162 │       let is_tag_special = match tag {
+    │ ╭──────────────────────────^
+163 │ │         Tag1 | Tag2 => {
+164 │ │             true
+165 │ │         }
+    · │
+168 │ │         }
+169 │ │     }
+    │ ╰─────^ bool
+
+note: 
+    ┌─ patterns_comparison.fe:162:32
+    │
+162 │     let is_tag_special = match tag {
+    │                                ^^^ Tag
+
+note: 
+    ┌─ patterns_comparison.fe:163:9
+    │
+163 │         Tag1 | Tag2 => {
+    │         ^^^^ Tag
+
+note: 
+    ┌─ patterns_comparison.fe:163:9
+    │
+163 │         Tag1 | Tag2 => {
+    │         ^^^^^^^^^^^ Tag
+
+note: 
+    ┌─ patterns_comparison.fe:163:16
+    │
+163 │         Tag1 | Tag2 => {
+    │                ^^^^ Tag
+
+note: 
+    ┌─ patterns_comparison.fe:163:24
+    │  
+163 │           Tag1 | Tag2 => {
+    │ ╭────────────────────────^
+164 │ │             true
+165 │ │         }
+    │ ╰─────────^ bool
+
+note: 
+    ┌─ patterns_comparison.fe:164:13
+    │
+164 │             true
+    │             ^^^^ bool
+
+note: 
+    ┌─ patterns_comparison.fe:166:9
+    │
+166 │         Tag3 => {
+    │         ^^^^ Tag
+
+note: 
+    ┌─ patterns_comparison.fe:166:17
+    │  
+166 │           Tag3 => {
+    │ ╭─────────────────^
+167 │ │             false
+168 │ │         }
+    │ ╰─────────^ bool
+
+note: 
+    ┌─ patterns_comparison.fe:167:13
+    │
+167 │             false
+    │             ^^^^^ bool
+
+note: 
+    ┌─ patterns_comparison.fe:171:9
+    │
+171 │     let is_color_primary = match color {
+    │         ^^^^^^^^^^^^^^^^ bool
+
+note: 
+    ┌─ patterns_comparison.fe:171:28
+    │  
+171 │       let is_color_primary = match color {
+    │ ╭────────────────────────────^
+172 │ │         Red | Green | Blue => {
+173 │ │             true
+174 │ │         }
+    · │
+177 │ │         }
+178 │ │     }
+    │ ╰─────^ bool
+
+note: 
+    ┌─ patterns_comparison.fe:171:34
+    │
+171 │     let is_color_primary = match color {
+    │                                  ^^^^^ Color
+
+note: 
+    ┌─ patterns_comparison.fe:172:9
+    │
+172 │         Red | Green | Blue => {
+    │         ^^^ Color
+
+note: 
+    ┌─ patterns_comparison.fe:172:9
+    │
+172 │         Red | Green | Blue => {
+    │         ^^^^^^^^^^^^^^^^^^ Color
+
+note: 
+    ┌─ patterns_comparison.fe:172:15
+    │
+172 │         Red | Green | Blue => {
+    │               ^^^^^ Color
+
+note: 
+    ┌─ patterns_comparison.fe:172:15
+    │
+172 │         Red | Green | Blue => {
+    │               ^^^^^^^^^^^^ Color
+
+note: 
+    ┌─ patterns_comparison.fe:172:23
+    │
+172 │         Red | Green | Blue => {
+    │                       ^^^^ Color
+
+note: 
+    ┌─ patterns_comparison.fe:172:31
+    │  
+172 │           Red | Green | Blue => {
+    │ ╭───────────────────────────────^
+173 │ │             true
+174 │ │         }
+    │ ╰─────────^ bool
+
+note: 
+    ┌─ patterns_comparison.fe:173:13
+    │
+173 │             true
+    │             ^^^^ bool
+
+note: 
+    ┌─ patterns_comparison.fe:175:9
+    │
+175 │         Rgb(_, _, _) => {
+    │         ^^^^^^^^^^^^ Color
+
+note: 
+    ┌─ patterns_comparison.fe:175:13
+    │
+175 │         Rgb(_, _, _) => {
+    │             ^ u8
+
+note: 
+    ┌─ patterns_comparison.fe:175:16
+    │
+175 │         Rgb(_, _, _) => {
+    │                ^ u8
+
+note: 
+    ┌─ patterns_comparison.fe:175:19
+    │
+175 │         Rgb(_, _, _) => {
+    │                   ^ u8
+
+note: 
+    ┌─ patterns_comparison.fe:175:25
+    │  
+175 │           Rgb(_, _, _) => {
+    │ ╭─────────────────────────^
+176 │ │             false
+177 │ │         }
+    │ ╰─────────^ bool
+
+note: 
+    ┌─ patterns_comparison.fe:176:13
+    │
+176 │             false
+    │             ^^^^^ bool
+
+note: 
+    ┌─ patterns_comparison.fe:180:12
+    │
+180 │     return is_tag_special && is_color_primary
+    │            ^^^^^^^^^^^^^^ bool
+
+note: 
+    ┌─ patterns_comparison.fe:180:12
+    │
+180 │     return is_tag_special && is_color_primary
+    │            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ bool
+
+note: 
+    ┌─ patterns_comparison.fe:180:30
+    │
+180 │     return is_tag_special && is_color_primary
+    │                              ^^^^^^^^^^^^^^^^ bool

@@ -1,0 +1,15 @@
+trait MyTrait {
+    fn do_something(self)
+}
+
+struct Container<T> {
+    value: T
+}
+
+impl<T> Container<T>
+    where T: MyTrait
+{
+    fn process(self) {
+        self.value.do_something()
+    }
+}

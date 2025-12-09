@@ -9,14 +9,20 @@ error[6-0005]: method argument count mismatch
 10 │     fn foo<T, U>(self, t: (T, U)) {}
    │                 ^^^^^^^^^^^^^^^^^ expected 3 arguments, but 2 given
 
-error[6-0007]: method argument type mismatch
+error[6-0007]: method `foo` has incompatible argument type
   ┌─ impl_method_arg_mismatch.fe:6:30
   │
+2 │     fn foo<T, U>(self, t: T, u: U)
+  │                              ---- trait requires this type
+  ·
 6 │     fn foo<T, U>(self, t: T, u: i32) {}
-  │                              ^^^^^^ expected `U` type, but the given type is `i32`
+  │                              ^^^^^^ expected `U`, found `i32`
 
-error[6-0007]: method argument type mismatch
+error[6-0007]: method `foo` has incompatible argument type
    ┌─ impl_method_arg_mismatch.fe:26:15
    │
+17 │     fn foo<T>(x: Self<i32>)
+   │               ------------ trait requires this type
+   ·
 26 │     fn foo<T>(x: Self<T>) {}
-   │               ^^^^^^^^^^ expected `Option<i32>` type, but the given type is `Option<T>`
+   │               ^^^^^^^^^^ expected `Option<i32>`, found `Option<T>`

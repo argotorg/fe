@@ -1,0 +1,19 @@
+---
+source: crates/uitest/tests/ty_check.rs
+assertion_line: 27
+expression: diags
+input_file: fixtures/ty_check/ambiguous_assoc_const.fe
+---
+error[2-0018]: multiple trait candidates found
+   ┌─ ambiguous_assoc_const.fe:20:10
+   │
+ 1 │ trait C1 {
+   │       -- candidate: `<Foo as C1>::X`
+   ·
+ 5 │ trait C2 {
+   │       -- candidate: `<Foo as C2>::X`
+   ·
+20 │     Foo::X
+   │          ^ `X` is ambiguous
+   │
+   = hint: specify the trait explicitly: `<Foo as C1>::X`

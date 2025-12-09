@@ -1,15 +1,13 @@
 ---
 source: crates/uitest/tests/ty_check.rs
 expression: diags
-input_file: crates/uitest/fixtures/ty_check/method_bound/specialized.fe
+input_file: fixtures/ty_check/method_bound/specialized.fe
 ---
 error[6-0003]: trait bound is not satisfied
-   ┌─ specialized.fe:29:16
+   ┌─ specialized.fe:29:13
    │
 29 │     let _ = s2.f()
-   │                ^
-   │                │
-   │                `S2<bool>` doesn't implement `Trait`
-   │                trait bound `S<bool>: Trait` is not satisfied
-
-
+   │             ^^^^^^
+   │             │
+   │             `S2<bool>` doesn't implement `Trait`
+   │             trait bound `S<bool>: Trait` is not satisfied

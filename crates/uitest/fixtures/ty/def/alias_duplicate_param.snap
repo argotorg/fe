@@ -1,0 +1,30 @@
+---
+source: crates/uitest/tests/ty.rs
+expression: diags
+input_file: fixtures/ty/def/alias_duplicate_param.fe
+---
+error[2-0004]: `T` is ambiguous
+  ┌─ alias_duplicate_param.fe:2:22
+  │
+2 │ type Foo<T, T> = Map<T, T>
+  │          -  -        ^ `T` is ambiguous
+  │          │  │         
+  │          │  candidate 2
+  │          candidate 1
+
+error[2-0004]: `T` is ambiguous
+  ┌─ alias_duplicate_param.fe:2:25
+  │
+2 │ type Foo<T, T> = Map<T, T>
+  │          -  -           ^ `T` is ambiguous
+  │          │  │            
+  │          │  candidate 2
+  │          candidate 1
+
+error[3-0019]: duplicate generic parameter name in type `Foo`
+  ┌─ alias_duplicate_param.fe:2:10
+  │
+2 │ type Foo<T, T> = Map<T, T>
+  │          ^  - `T` is redefined here
+  │          │   
+  │          `T` is defined here

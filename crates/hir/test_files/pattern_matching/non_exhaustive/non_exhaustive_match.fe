@@ -1,0 +1,22 @@
+// fe/crates/hir-analysis/test_files/pattern_matching/non_exhaustive/non_exhaustive_match.fe
+
+enum Color {
+    Red,
+    Green,
+    Blue,
+    Rgb(u8, u8, u8)
+}
+
+// This function intentionally has a non-exhaustive match pattern
+// to test that the compiler correctly detects missing cases
+fn test(c: Color) -> u8 {
+    match c {
+        Color::Red => {
+            return 1
+        }
+        Color::Rgb(..) => { // Using .. to match any Rgb variant
+            return 2
+        }
+        // Missing Green and Blue
+    }
+}

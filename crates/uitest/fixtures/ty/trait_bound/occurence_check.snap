@@ -1,13 +1,13 @@
 ---
 source: crates/uitest/tests/ty.rs
 expression: diags
-input_file: crates/uitest/fixtures/ty/trait_bound/occurence_check.fe
+input_file: fixtures/ty/trait_bound/occurence_check.fe
 ---
 error[6-0003]: trait bound is not satisfied
-   ┌─ occurence_check.fe:22:7
+   ┌─ occurence_check.fe:22:5
    │
 22 │     x.f()
-   │       ^
-   │       │
-   │       `Memory<Memory<Memory<T>>>` doesn't implement `Trait1`
-   │       trait bound `T: Trait2<_>` is not satisfied
+   │     ^^^^^
+   │     │
+   │     `Memory<Memory<Memory<T>>>` doesn't implement `Trait1`
+   │     trait bound `T: Trait2<_>` is not satisfied

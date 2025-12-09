@@ -1,0 +1,14 @@
+---
+source: crates/hir-analysis/tests/pattern_matching.rs
+expression: diagnostic_output
+input_file: test_files/pattern_matching/unreachable/after_wildcard.fe
+---
+Unreachable test file after_wildcard.fe has 1 diagnostic(s):
+
+error[8-0035]: unreachable pattern
+   ┌─ after_wildcard.fe:11:9
+   │
+11 │         Color::Blue => 2  // Unreachable pattern
+   │         ^^^^^^^^^^^ this pattern is unreachable
+   │
+   = previous patterns already cover all possible values

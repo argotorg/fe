@@ -1,0 +1,47 @@
+enum Bool {
+    True,
+    False
+}
+
+// Test for boolean literal pattern matching
+fn test_boolean_literals(b1: bool, b2: bool) -> u256 {
+    // Test pattern matching with all combinations of boolean literals
+    match (b1, b2) {
+        (true, true) => {
+            return 3
+        }
+        (true, false) => {
+            return 2
+        }
+        (false, true) => {
+            return 1
+        }
+        (false, false) => {
+            return 0
+        }
+    }
+}
+
+// Test for boolean literal pattern matching with OR patterns
+fn test_boolean_literals_with_or(b1: bool, b2: bool) -> u256 {
+    match (b1, b2) {
+        (true, true) => {
+            return 2
+        }
+        (true, false) | (false, true) => {
+            // Handles two cases with same logic
+            return 1
+        }
+        (false, false) => {
+            return 0
+        }
+    }
+}
+
+// Test boolean matching with custom enum
+fn test_enum_boolean(b: Bool) -> u8 {
+    match b {
+        Bool::True => 1
+        Bool::False => 0
+    }
+}

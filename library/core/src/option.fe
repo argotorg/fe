@@ -1,4 +1,8 @@
 use ingot::Default
+use ingot::Fn
+use ingot::Functor
+use ingot::Applicative
+use ingot::Monad
 use ingot::panic
 
 pub enum Option<T> {
@@ -18,6 +22,20 @@ impl<T> Option<T> {
         !self.is_some()
     }
 
+    pub fn map<U, F: Fn<T, U>>(self, _ func: F) -> Option<U> {
+        match self {
+            Self::Some(value) => Option::Some(func.call(value))
+            Self::None => Option::None
+        }
+    }
+
+    pub fn and_then<U, F: Fn<T, Option<U>>>(self, _ func: F) -> Option<U> {
+        match self {
+            Self::Some(value) => func.call(value)
+            Self::None => Option::None
+        }
+    }
+
     pub fn unwrap(self) -> T {
         match self {
             Self::Some(t) => t
@@ -29,6 +47,13 @@ impl<T> Option<T> {
         match self {
             Self::Some(x) => x
             Self::None => default
+        }
+    }
+
+    pub fn unwrap_or_else<F: Fn<(), T>>(self, _ default_func: F) -> T {
+        match self {
+            Self::Some(value) => value
+            Self::None => default_func.call(())
         }
     }
 }
@@ -45,5 +70,36 @@ impl<T> Option<T> where T: Default {
 impl<T> Default for Option<T> {
     fn default() -> Self {
         Self::None
+    }
+}
+
+impl Functor for Option {
+    fn map<T, U, F: Fn<T, U>>(self: Self<T>, _ func: F) -> Self<U> {
+        match self {
+            Option::Some(value) => Option::Some(func.call(value))
+            Option::None => Option::None
+        }
+    }
+}
+
+impl Applicative for Option {
+    fn pure<T>(_ value: T) -> Self<T> {
+        Option::Some(value)
+    }
+
+    fn ap<T, U, F: Fn<T, U>>(self: Self<F>, _ value: Self<T>) -> Self<U> {
+        match (self, value) {
+            (Option::Some(func), Option::Some(arg)) => Option::Some(func.call(arg))
+            _ => Option::None
+        }
+    }
+}
+
+impl Monad for Option {
+    fn bind<T, U, F: Fn<T, Self<U>>>(self: Self<T>, _ func: F) -> Self<U> {
+        match self {
+            Option::Some(value) => func.call(value)
+            Option::None => Option::None
+        }
     }
 }

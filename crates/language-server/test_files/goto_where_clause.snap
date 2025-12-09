@@ -1,0 +1,46 @@
+---
+source: crates/language-server/src/functionality/goto.rs
+expression: snapshot
+input_file: test_files/goto_where_clause.fe
+---
+note: 
+  ┌─ goto_where_clause.fe:2:21
+  │
+2 │     fn do_something(self)
+  │                     ^^^^ -> goto_where_clause::MyTrait
+
+note: 
+  ┌─ goto_where_clause.fe:6:12
+  │
+6 │     value: T
+  │            ^ -> goto_where_clause::Container::T
+
+note: 
+  ┌─ goto_where_clause.fe:9:9
+  │
+9 │ impl<T> Container<T>
+  │         ^^^^^^^^^^^^ -> goto_where_clause::Container
+
+note: 
+   ┌─ goto_where_clause.fe:10:11
+   │
+10 │     where T: MyTrait
+   │           ^ -> ?
+
+note: 
+   ┌─ goto_where_clause.fe:10:14
+   │
+10 │     where T: MyTrait
+   │              ^^^^^^^ -> goto_where_clause::MyTrait
+
+note: 
+   ┌─ goto_where_clause.fe:12:16
+   │
+12 │     fn process(self) {
+   │                ^^^^ -> local: Container<T>
+
+note: 
+   ┌─ goto_where_clause.fe:13:9
+   │
+13 │         self.value.do_something()
+   │         ^^^^ -> local: Container<T>

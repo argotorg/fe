@@ -1,7 +1,11 @@
 use camino::{Utf8Path, Utf8PathBuf};
-use common::ingot::{builtin_core, IngotBuilder};
-use criterion::{criterion_group, criterion_main, Criterion, SamplingMode};
+use common::{
+    InputDb,
+    stdlib::{HasBuiltinCore, HasBuiltinStd},
+};
+use criterion::{Criterion, SamplingMode, criterion_group, criterion_main};
 use driver::DriverDataBase;
+use url::Url;
 use walkdir::WalkDir;
 
 use parser::parse_source_file;
@@ -13,8 +17,17 @@ fn diagnostics(c: &mut Criterion) {
     g.bench_function("analyze corelib", |b| {
         b.iter_with_large_drop(|| {
             let db = DriverDataBase::default();
-            let core = builtin_core(&db);
+            let core = db.builtin_core();
             db.run_on_ingot(core);
+            db
+        });
+    });
+
+    g.bench_function("analyze stdlib", |b| {
+        b.iter_with_large_drop(|| {
+            let db = DriverDataBase::default();
+            let std_ingot = db.builtin_std();
+            db.run_on_ingot(std_ingot);
             db
         });
     });
@@ -31,13 +44,19 @@ fn diagnostics(c: &mut Criterion) {
 
     g.bench_function("uitest diagnostics", |b| {
         b.iter_with_large_drop(|| {
-            let db = DriverDataBase::default();
-            let core = builtin_core(&db);
+            let mut db = DriverDataBase::default();
             for (path, content) in &files {
-                let (ingot, file) = IngotBuilder::standalone(&db, path, content)
-                    .with_core_ingot(core)
-                    .build();
-                let top_mod = db.top_mod(ingot, file);
+                let ingot = db
+                    .workspace()
+                    .touch(
+                        &mut db,
+                        Url::from_file_path(path).unwrap(),
+                        Some(content.clone()),
+                    )
+                    .containing_ingot(&db)
+                    .expect("standalone ingot should exist");
+                let file = ingot.root_file(&db).expect("root file should exist");
+                let top_mod = db.top_mod(file);
 
                 db.run_on_top_mod(top_mod);
             }

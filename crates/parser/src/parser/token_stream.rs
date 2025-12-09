@@ -78,10 +78,10 @@ impl<T: TokenStream> BackTrackableTokenStream<T> {
 
     /// Returns the next token in the stream without consuming it.
     pub fn peek(&mut self) -> Option<&T::Token> {
-        if let Some(cursor) = self.bt_cursor {
-            if cursor < self.bt_buffer.len() {
-                return self.bt_buffer.get(cursor);
-            }
+        if let Some(cursor) = self.bt_cursor
+            && cursor < self.bt_buffer.len()
+        {
+            return self.bt_buffer.get(cursor);
         }
 
         self.stream.peek()

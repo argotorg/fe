@@ -1,0 +1,11 @@
+trait Trait {
+    type Item
+}
+
+mod outer {
+    pub struct Holder {}
+}
+
+fn demo<T: Trait>(_: T) {
+    let _: outer::<T as Trait>::Item
+}

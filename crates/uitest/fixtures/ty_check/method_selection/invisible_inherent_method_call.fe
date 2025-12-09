@@ -1,0 +1,13 @@
+mod m {
+    pub struct S {}
+
+    impl S {
+        fn hidden(self) -> i32 { 0 }
+    }
+}
+
+fn run() {
+    let s = m::S {}
+    s.hidden()
+}
+

@@ -1,0 +1,25 @@
+struct Point {
+    x: i32,
+    y: i32
+}
+
+impl Point {
+    fn new(x: i32, y: i32) -> Point {
+        Point { x, y }
+    }
+
+    fn magnitude(self) -> i32 {
+        self.x * self.x + self.y * self.y
+    }
+}
+
+fn test_field_access() {
+    let p = Point::new(x: 3, y: 4)
+    let x_val = p.x
+    let y_val = p.y
+}
+
+fn test_method_call() {
+    let p = Point::new(x: 5, y: 12)
+    let mag = p.magnitude()
+}

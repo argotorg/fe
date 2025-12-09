@@ -1,0 +1,26 @@
+// Test large tuple with a non-exhaustive pattern set
+// Compiler should report missing patterns.
+fn large_tuple_non_exhaustive(t: (u8, u8, u8, u8)) -> u8 {
+    match t {
+        (0, _, _, _) => 1
+        (_, 0, _, _) => 2
+        (_, _, 0, _) => 3
+        // Missing patterns for when all first three elements are non-zero and fourth can be anything
+        // e.g. (1,1,1,_)
+    }
+}
+
+// Test overlapping but non-exhaustive tuple patterns
+// Missing patterns like (0, 0), (2, 2), etc.
+fn match_tuple_values(x: u8, y: u8) -> u8 {
+    let tuple_storage: (u8, u8) = (x, y)
+    
+    match tuple_storage {
+        (1, val) => {
+            return val
+        }
+        (val, 1) => {
+            return val
+        }
+    }
+}

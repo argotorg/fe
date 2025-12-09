@@ -1,8 +1,23 @@
 [package]
 name = "fe"
 version = "0.26.0"
-edition = "2021"
+edition.workspace = true
 
 [dependencies]
 clap.workspace = true
 driver.workspace = true
+tracing.workspace = true
+common.workspace = true
+resolver.workspace = true
+camino.workspace = true
+petgraph.workspace = true
+url.workspace = true
+smol_str.workspace = true
+hir.workspace = true
+mir.workspace = true
+cranelift-entity.workspace = true
+codegen = { path = "../codegen", package = "fe-codegen" }
+
+[dev-dependencies]
+dir-test.workspace = true
+test-utils.workspace = true

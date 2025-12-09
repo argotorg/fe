@@ -1,0 +1,135 @@
+extern {
+    fn todo() -> !
+}
+
+// Base trait hierarchy
+trait Level3 {
+    type Value
+}
+
+trait Level2 {
+    type Nested: Level3
+}
+
+trait Level1 {
+    type Middle: Level2
+}
+
+// Generic implementations that should preserve type parameters
+struct ConcreteLevel3<T> {
+    phantom: T
+}
+
+impl<T> Level3 for ConcreteLevel3<T> {
+    type Value = T
+}
+
+struct ConcreteLevel2<T> {
+    phantom: T
+}
+
+impl<T> Level2 for ConcreteLevel2<T> {
+    type Nested = ConcreteLevel3<T>
+}
+
+struct ConcreteLevel1<T> {
+    phantom: T
+}
+
+impl<T> Level1 for ConcreteLevel1<T> {
+    type Middle = ConcreteLevel2<T>
+}
+
+// Function that uses deeply nested associated types
+fn extract_value<T: Level1>() -> T::Middle::Nested::Value {
+    todo()
+}
+
+// Test with concrete type parameter
+fn test_nested_with_param() {
+    // This should resolve through the chain preserving the u32 parameter:
+    // ConcreteLevel1<u32> -> ConcreteLevel2<u32> -> ConcreteLevel3<u32> -> u32
+    let v1: u32 = extract_value<ConcreteLevel1<u32>>()
+
+    // And with u256:
+    // ConcreteLevel1<u256> -> ConcreteLevel2<u256> -> ConcreteLevel3<u256> -> u256
+    let v2: u256 = extract_value<ConcreteLevel1<u256>>()
+}
+
+// More realistic example: a trait with associated type that has bounds
+trait Serializer {
+    type Output
+}
+
+trait Codec {
+    type Encoder: Serializer
+
+    fn encode(self) -> Self::Encoder::Output
+}
+
+// Generic serializer that preserves the type
+struct TypedSerializer<T> {
+    phantom: T
+}
+
+impl<T> Serializer for TypedSerializer<T> {
+    type Output = T
+}
+
+// Codec implementation that uses TypedSerializer
+struct MyCodec<T> {
+    phantom: T
+}
+
+impl<T> Codec for MyCodec<T> {
+    type Encoder = TypedSerializer<T>
+
+    fn encode(self) -> Self::Encoder::Output {
+   todo()
+    }
+}
+
+// Generic function using the codec
+fn encode_value<C: Codec>(codec: C) -> C::Encoder::Output {
+    codec.encode()
+}
+
+fn test_codec() {
+    let codec32: MyCodec<u32> = MyCodec { phantom: 0 }
+    let codec256: MyCodec<u256> = MyCodec { phantom: 0 }
+
+    // These should resolve correctly with type parameter substitution:
+    // MyCodec<u32> -> TypedSerializer<u32> -> u32
+    let encoded1: u32 = encode_value(codec: codec32)
+
+    // MyCodec<u256> -> TypedSerializer<u256> -> u256
+    let encoded2: u256 = encode_value(codec: codec256)
+}
+
+// Test case where associated type is used in a constraint position
+trait WithAssoc {
+    type Assoc
+}
+
+fn constrained<T: WithAssoc>(t: T) -> T::Assoc
+where
+    T::Assoc: Level1
+{
+    // Here we need T::Assoc to resolve to something that implements Level1
+    // and then we use its nested associated type
+    let _nested: T::Assoc::Middle::Nested::Value = todo()
+    todo()
+}
+
+struct HasLevel1 {}
+
+impl WithAssoc for HasLevel1 {
+    type Assoc = ConcreteLevel1<bool>
+}
+
+fn test_constrained() {
+    let h: HasLevel1 = HasLevel1{}
+    // This should work: HasLevel1::Assoc = ConcreteLevel1<bool>
+    // ConcreteLevel1<bool>::Middle::Nested::Value = bool
+    let result: ConcreteLevel1<bool> = constrained(t: h)
+}

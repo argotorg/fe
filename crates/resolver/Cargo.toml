@@ -2,17 +2,29 @@
 name = "fe-resolver"
 version = "0.26.0"
 authors = ["The Fe Developers <snakecharmers@ethereum.org>"]
-edition = "2021"
+edition.workspace = true
 license = "Apache-2.0"
 repository = "https://github.com/ethereum/fe"
 description = "Resolver lib for Fe."
 
-[dependencies]
-common.workspace = true
+[lib]
+doctest = false
 
+[dependencies]
 camino.workspace = true
+url.workspace = true
 glob.workspace = true
-semver.workspace = true
-smol_str = "0.1"
+petgraph.workspace = true
+tracing.workspace = true
+
+indexmap = "2.9"
+sha2 = "0.10"
+dir-test.workspace = true
+test-utils.workspace = true
 toml = "0.8"
-serde = { version = "1", features = ["derive"] }
+
+[dev-dependencies]
+tempfile = "3.13"
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+git2 = "0.19"

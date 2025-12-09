@@ -1,0 +1,54 @@
+// Test for ambiguous associated type errors
+
+trait TraitA {
+    type Output
+}
+
+trait TraitB {
+    type Output
+}
+
+struct MyStruct {}
+
+impl TraitA for MyStruct {
+    type Output = u32
+}
+
+impl TraitB for MyStruct {
+    type Output = i32
+}
+
+// Function with ambiguous associated type
+fn ambiguous_assoc_type<T>(t: T) -> T::Output
+where
+    T: TraitA + TraitB
+{
+    0
+}
+
+fn test_ambiguous() {
+    let t = MyStruct {}
+    // This should give an ambiguous associated type error
+    let result = ambiguous_assoc_type(t)
+}
+
+// Another example with nested associated types
+trait Level1 {
+    type Nested
+}
+
+trait Level2 {
+    type Nested
+}
+
+fn test_nested_ambiguous<T: Level1 + Level2>() -> T::Nested {
+    0
+}
+
+fn test_explicit_disambiguation<T: TraitA + TraitB>() -> u32 {
+    let a: T::Output = 0
+    // TODO: implement explicit trait projection
+    // let a: <T as TraitA>::Output = 0
+    // let b: <T as TraitB>::Output = 0
+    a
+}

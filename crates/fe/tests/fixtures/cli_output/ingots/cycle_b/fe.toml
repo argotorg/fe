@@ -1,0 +1,7 @@
+[ingot]
+name = "cycle_b"
+version = "0.1.0"
+
+[dependencies]
+cycle_c = "../cycle_c"
+cycle_e = "../cycle_e"

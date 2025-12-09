@@ -1,0 +1,21 @@
+fn test_unit_tuple() -> () {
+    return ()
+}
+
+fn test_pair_tuple() -> (u8, bool) {
+    return (42, true)
+}
+
+fn test_triple_tuple() -> (u8, bool, u256) {
+    return (1, false, 100)
+}
+
+fn test_nested_tuple() -> ((u8, bool), u256) {
+    let inner: (u8, bool) = (5, true)
+    return (inner, 200)
+}
+
+fn test_tuple_destructuring(t: (u8, bool)) -> u8 {
+    let (x, _) = t
+    return x
+}

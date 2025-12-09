@@ -1,0 +1,23 @@
+fn use_prelude_option(x: i32) -> i32 {
+    let a = Some(x)
+    let b: Option<i32> = None
+
+    if a.is_some() {
+        a.unwrap_or_default()
+    } else {
+        match b {
+            Some(y) => y
+            None => 0
+        }
+    }
+}
+
+struct Foo {
+    x: u32,
+}
+
+impl Default for Foo {
+    fn default() -> Self {
+        todo()
+    }
+}

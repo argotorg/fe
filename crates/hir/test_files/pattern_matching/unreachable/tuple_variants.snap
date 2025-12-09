@@ -1,0 +1,30 @@
+---
+source: crates/hir-analysis/tests/pattern_matching.rs
+expression: diagnostic_output
+input_file: test_files/pattern_matching/unreachable/tuple_variants.fe
+---
+Unreachable test file tuple_variants.fe has 3 diagnostic(s):
+
+error[8-0035]: unreachable pattern
+   ┌─ tuple_variants.fe:20:9
+   │
+20 │         Cmyk(c, m, y, k) => {
+   │         ^^^^^^^^^^^^^^^^ this pattern is unreachable
+   │
+   = previous patterns already cover all possible values
+
+error[8-0035]: unreachable pattern
+   ┌─ tuple_variants.fe:36:9
+   │
+36 │         Color::Cmyk(c, m, y, k) => {
+   │         ^^^^^^^^^^^^^^^^^^^^^^^ this pattern is unreachable
+   │
+   = previous patterns already cover all possible values
+
+error[8-0035]: unreachable pattern
+   ┌─ tuple_variants.fe:50:9
+   │
+50 │         Grayscale(_) => 3
+   │         ^^^^^^^^^^^^ this pattern is unreachable
+   │
+   = previous patterns already cover all possible values

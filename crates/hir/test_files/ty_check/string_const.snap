@@ -1,0 +1,20 @@
+---
+source: crates/hir-analysis/tests/ty_check.rs
+assertion_line: 48
+expression: res
+input_file: test_files/ty_check/string_const.fe
+---
+note: 
+  ┌─ string_const.fe:3:8
+  │  
+3 │   fn f() {
+  │ ╭────────^
+4 │ │     let s: String<SIZE>
+5 │ │ }
+  │ ╰─^ ()
+
+note: 
+  ┌─ string_const.fe:4:9
+  │
+4 │     let s: String<SIZE>
+  │         ^ String<4>

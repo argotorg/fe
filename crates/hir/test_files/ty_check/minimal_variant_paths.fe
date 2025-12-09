@@ -1,0 +1,54 @@
+enum MyTag {
+    A,
+    B,
+    C
+}
+
+// Test with fully qualified paths - should work correctly
+fn test_full_paths(t: MyTag) -> u8 {
+    match t {
+        MyTag::A => {
+            return 1
+        }
+        MyTag::B => {
+            return 2
+        }
+        MyTag::C => {
+            return 3
+        }
+    }
+}
+
+// Test with imported variants - currently has issues
+fn test_imported(t: MyTag) -> u8 {
+    use MyTag::*
+    
+    match t {
+        A => {
+            return 1
+        }
+        B => {
+            return 2
+        }
+        C => {
+            return 3
+        }
+    }
+}
+
+// Test with mixed pattern styles
+fn test_mixed(t: MyTag) -> u8 {
+    use MyTag::*
+    
+    match t {
+        MyTag::A => {
+            return 10
+        }
+        B => {
+            return 20
+        }
+        C => {
+            return 30
+        }
+    }
+}

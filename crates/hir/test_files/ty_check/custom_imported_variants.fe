@@ -1,0 +1,117 @@
+enum Tag {
+    Tag1,
+    Tag2,
+    Tag3
+}
+
+enum Color {
+    Red,
+    Green,
+    Blue,
+    Rgb(u8, u8, u8)
+}
+
+// Test 1: Matching with fully qualified paths (should work correctly)
+fn match_full_paths(tag: Tag) -> u8 {
+    match tag {
+        Tag::Tag1 => {
+            return 1
+        }
+        Tag::Tag2 => {
+            return 2
+        }
+        Tag::Tag3 => {
+            return 3
+        }
+    }
+}
+
+// Test 2: Matching with imported variants (showing the potential issue)
+fn match_imported_variants(tag: Tag) -> u8 {
+    use Tag::*
+    
+    match tag {
+        Tag1 => {
+            return 1
+        }
+        Tag2 => {
+            return 2  // If Tag2 is treated as a wildcard, this might be unreachable
+        }
+        Tag3 => {
+            return 3  // If Tag2 is treated as a wildcard, this would definitely be unreachable
+        }
+    }
+}
+
+// Test 3: Unreachable pattern with imported variants
+fn match_with_unreachable_imported(tag: Tag) -> u8 {
+    use Tag::*
+    
+    match tag {
+        Tag1 => {
+            return 1
+        }
+        _ => {
+            return 0
+        }
+        // If imported variants are treated as wildcards, the compiler
+        // should correctly identify these as unreachable
+        Tag2 => {
+            return 2
+        }
+    }
+}
+
+// Test 4: Unreachable pattern with fully qualified paths
+fn match_with_unreachable_full_path(tag: Tag) -> u8 {
+    match tag {
+        Tag::Tag1 => {
+            return 1
+        }
+        _ => {
+            return 0
+        }
+        // This should be identified as unreachable regardless
+        Tag::Tag2 => {
+            return 2
+        }
+    }
+}
+
+// Test 5: Matching with tuple variant using imported name
+fn match_imported_tuple_variant(c: Color) -> u8 {
+    use Color::*
+    
+    match c {
+        Red => {
+            return 1
+        }
+        Green => {
+            return 2
+        }
+        Blue => {
+            return 3
+        }
+        Rgb(r, g, b) => {
+            return r + g + b
+        }
+    }
+}
+
+// Test 6: Matching with tuple variant using full paths
+fn match_full_path_tuple_variant(c: Color) -> u8 {
+    match c {
+        Color::Red => {
+            return 1
+        }
+        Color::Green => {
+            return 2
+        }
+        Color::Blue => {
+            return 3
+        }
+        Color::Rgb(r, g, b) => {
+            return r + g + b
+        }
+    }
+}

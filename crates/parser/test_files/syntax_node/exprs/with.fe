@@ -1,0 +1,3 @@
+with (Storage = st, Ctx = MockCtx::new()) { g() }
+
+with (Storage = st) { g() }

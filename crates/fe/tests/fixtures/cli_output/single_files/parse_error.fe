@@ -1,0 +1,7 @@
+pub fn broken_syntax() {
+    let x = 5
+    let y = // Missing value
+    if x > {  // Missing comparison value
+        return true
+    }
+}

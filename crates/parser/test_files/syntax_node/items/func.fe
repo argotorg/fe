@@ -19,3 +19,8 @@ fn generics1<T: Trait, U>(t: T, u: Option<U>) -> T
 }
 
 fn decl<T, U>(t: MyStruct<T, U>) -> Result<T, Err> {}
+
+fn f<T>(_: T)
+where T: IntoIterator<Item = i32> {
+    let x: <T::IntoIter as Iterator>::Item = 10
+}

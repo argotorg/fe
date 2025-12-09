@@ -1,21 +1,21 @@
 ---
 source: crates/uitest/tests/ty.rs
 expression: diags
-input_file: crates/uitest/fixtures/ty/def/trait_impl_conflict.fe
+input_file: fixtures/ty/def/trait_impl_conflict.fe
 ---
-error[5-0001]: conflict trait implementation
+error[5-0001]: conflicting trait implementations
   ┌─ trait_impl_conflict.fe:4:26
   │
 4 │ impl<T, U> Foo<T, U> for (i32, i32) {}
-  │                          ^^^^^^^^^^ conflict trait implementation
+  │                          ^^^^^^^^^^ this trait implementation
   ·
 8 │ impl<T, U> Foo<T, U> for (T, T) {}
-  │                          ------ conflict with this trait implementation
+  │                          ------ conflicts with this trait implementation
 
-error[5-0001]: conflict trait implementation
+error[5-0001]: conflicting trait implementations
    ┌─ trait_impl_conflict.fe:16:28
    │
 16 │ impl<T, U> Foo<T, i32> for S<T, T> {}
-   │                            ^^^^^^^ conflict trait implementation
+   │                            ^^^^^^^ this trait implementation
 17 │ impl<T, U> Foo<T, i32> for S<i32, i32> {}
-   │                            ----------- conflict with this trait implementation
+   │                            ----------- conflicts with this trait implementation

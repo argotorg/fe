@@ -1,7 +1,7 @@
-use rowan::ast::{support, AstNode};
+use rowan::ast::{AstNode, support};
 
-use super::{ast_node, AstChildren, GenericArgsOwner};
-use crate::{syntax_node::SyntaxToken, SyntaxKind as SK};
+use super::{AstChildren, GenericArgsOwner, ast_node};
+use crate::{SyntaxKind as SK, syntax_node::SyntaxToken};
 
 ast_node! {
     /// A path.
@@ -11,6 +11,10 @@ ast_node! {
     IntoIterator<Item=PathSegment>,
 }
 impl Path {
+    pub fn text(&self) -> rowan::SyntaxText {
+        self.syntax().text()
+    }
+
     /// Returns the segments of the path.
     pub fn segments(&self) -> AstChildren<PathSegment> {
         support::children(self.syntax())
@@ -32,14 +36,33 @@ impl PathSegment {
                 SK::SelfTypeKw => Some(PathSegmentKind::SelfTy(node.into_token().unwrap())),
                 SK::SelfKw => Some(PathSegmentKind::Self_(node.into_token().unwrap())),
                 SK::Ident => Some(PathSegmentKind::Ident(node.into_token().unwrap())),
+                SK::QualifiedType => Some(PathSegmentKind::QualifiedType(
+                    QualifiedType::cast(node.into_node().unwrap()).unwrap(),
+                )),
                 _ => None,
             },
             _ => None,
         }
     }
+
+    /// Returns the qualified type node if this segment is a qualified type
+    /// like `<T as Trait>`.
+    pub fn qualified_type(&self) -> Option<QualifiedType> {
+        match self.kind()? {
+            PathSegmentKind::QualifiedType(q) => Some(q),
+            _ => None,
+        }
+    }
     /// Returns the identifier of the segment.
     pub fn ident(&self) -> Option<SyntaxToken> {
-        support::token(self.syntax(), SK::Ident)
+        match self.kind()? {
+            PathSegmentKind::Ingot(token) => Some(token),
+            PathSegmentKind::Super(token) => Some(token),
+            PathSegmentKind::SelfTy(token) => Some(token),
+            PathSegmentKind::Self_(token) => Some(token),
+            PathSegmentKind::Ident(token) => Some(token),
+            PathSegmentKind::QualifiedType(_) => None,
+        }
     }
 
     /// Returns `true` if the segment  is a `self` keyword.
@@ -65,6 +88,22 @@ pub enum PathSegmentKind {
     Self_(SyntaxToken),
     /// `foo`
     Ident(SyntaxToken),
+    /// `<Foo as Bar>`
+    QualifiedType(QualifiedType),
+}
+
+ast_node! {
+    pub struct QualifiedType,
+    SK::QualifiedType
+}
+impl QualifiedType {
+    pub fn ty(&self) -> Option<super::Type> {
+        support::child(self.syntax())
+    }
+
+    pub fn trait_qualifier(&self) -> Option<super::TraitRef> {
+        support::child(self.syntax())
+    }
 }
 
 #[cfg(test)]
@@ -72,7 +111,7 @@ mod tests {
     use super::*;
     use crate::{
         lexer::Lexer,
-        parser::{path::PathScope, Parser},
+        parser::{Parser, path::PathScope},
     };
 
     use wasm_bindgen_test::wasm_bindgen_test;
@@ -103,7 +142,9 @@ mod tests {
         let path = parse_path(source);
         let mut segments = path.segments();
 
-        assert!(segments.next().unwrap().is_self_ty());
+        let self_ = segments.next().unwrap();
+        assert!(self_.is_self_ty());
+        assert_eq!(self_.ident().unwrap().text(), "Self");
         assert_eq!(segments.next().unwrap().ident().unwrap().text(), "Dep");
         assert!(segments.next().is_none());
     }

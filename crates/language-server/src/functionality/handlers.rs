@@ -2,17 +2,18 @@ use crate::backend::Backend;
 
 use async_lsp::lsp_types::FileChangeType;
 use async_lsp::{
+    ErrorCode, LanguageClient, ResponseError,
     lsp_types::{
         Hover, HoverParams, InitializeParams, InitializeResult, InitializedParams, LogMessageParams,
     },
-    LanguageClient, ResponseError,
 };
+
+use common::InputDb;
+use driver::init_ingot;
 use rustc_hash::FxHashSet;
-use salsa::Setter;
+use url::Url;
 
 use super::{capabilities::server_capabilities, hover::hover_helper};
-
-use crate::backend::workspace::IngotFileContext;
 
 use tracing::{error, info, warn};
 
@@ -48,14 +49,54 @@ pub enum ChangeKind {
     Delete,
 }
 
-impl Backend {
-    fn update_input_file_text(&mut self, path: &str, contents: String) {
-        let (_ingot, file) = self
-            .workspace
-            .touch_input_for_file_path(&mut self.db, path)
-            .unwrap();
-        file.set_text(&mut self.db).to(contents);
+// Implementation moved to backend/mod.rs
+
+async fn discover_and_load_ingots(
+    backend: &mut Backend,
+    root_path: &std::path::Path,
+) -> Result<(), ResponseError> {
+    // Find all fe.toml files in the workspace
+    let pattern = format!("{}/**/fe.toml", root_path.to_string_lossy());
+    let config_paths = glob::glob(&pattern)
+        .map_err(|e| ResponseError::new(ErrorCode::INTERNAL_ERROR, format!("Glob error: {e}")))?
+        .filter_map(Result::ok)
+        .collect::<Vec<_>>();
+
+    // Initialize each ingot using the driver's init_ingot function
+    for config_path in &config_paths {
+        let ingot_dir = config_path.parent().unwrap();
+        let ingot_url = Url::from_directory_path(ingot_dir).map_err(|_| {
+            ResponseError::new(
+                ErrorCode::INTERNAL_ERROR,
+                format!("Invalid ingot path: {ingot_dir:?}"),
+            )
+        })?;
+
+        let had_diagnostics = init_ingot(&mut backend.db, &ingot_url);
+        if had_diagnostics {
+            warn!(
+                "Ingot initialization produced diagnostics for {:?}",
+                ingot_dir
+            );
+        }
     }
+
+    // Also check if the root itself is an ingot (no fe.toml in subdirectories)
+    if config_paths.is_empty() {
+        let root_url = Url::from_directory_path(root_path).map_err(|_| {
+            ResponseError::new(
+                ErrorCode::INTERNAL_ERROR,
+                format!("Invalid workspace root path: {root_path:?}"),
+            )
+        })?;
+
+        let had_diagnostics = init_ingot(&mut backend.db, &root_url);
+        if had_diagnostics {
+            warn!("Ingot initialization produced diagnostics for workspace root");
+        }
+    }
+
+    Ok(())
 }
 
 pub async fn initialize(
@@ -70,9 +111,8 @@ pub async fn initialize(
         .and_then(|folder| folder.uri.to_file_path().ok())
         .unwrap_or_else(|| std::env::current_dir().unwrap());
 
-    let _ = backend.workspace.set_workspace_root(&mut backend.db, &root);
-    // let _ = backend.workspace.load_std_lib(&mut backend.db, &root);
-    // let _ = backend.workspace.sync();
+    // Discover and load all ingots in the workspace
+    discover_and_load_ingots(backend, &root).await?;
 
     let capabilities = server_capabilities();
     let initialize_result = InitializeResult {
@@ -91,12 +131,18 @@ pub async fn initialized(
 ) -> Result<(), ResponseError> {
     info!("language server initialized! recieved notification!");
 
-    backend.workspace.all_files().for_each(|file| {
-        let path = file.path(&backend.db);
-        let _ = backend
-            .client
-            .emit(NeedsDiagnostics(url::Url::from_file_path(path).unwrap()));
-    });
+    // Get all files from the workspace
+    let all_files: Vec<_> = backend
+        .db
+        .workspace()
+        .all_files(&backend.db)
+        .iter()
+        .map(|(url, _file)| url)
+        .collect();
+
+    for url in all_files {
+        let _ = backend.client.emit(NeedsDiagnostics(url));
+    }
 
     let _ = backend.client.clone().log_message(LogMessageParams {
         typ: async_lsp::lsp_types::MessageType::INFO,
@@ -165,42 +211,137 @@ pub async fn handle_file_change(
     backend: &mut Backend,
     message: FileChange,
 ) -> Result<(), ResponseError> {
-    let path = message
-        .uri
-        .to_file_path()
-        .unwrap_or_else(|_| panic!("Failed to convert URI to path: {:?}", message.uri));
+    let path = match message.uri.to_file_path() {
+        Ok(p) => p,
+        Err(_) => {
+            error!("Failed to convert URI to path: {:?}", message.uri);
+            return Err(ResponseError::new(
+                ErrorCode::INVALID_PARAMS,
+                format!("Invalid file URI: {}", message.uri),
+            ));
+        }
+    };
 
-    let path = path.to_str().unwrap();
+    let path_str = match path.to_str() {
+        Some(p) => p,
+        None => {
+            error!("Path contains invalid UTF-8: {:?}", path);
+            return Err(ResponseError::new(
+                ErrorCode::INVALID_PARAMS,
+                "Path contains invalid UTF-8".to_string(),
+            ));
+        }
+    };
+
+    // Check if this is a fe.toml file
+    let is_fe_toml = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .map(|name| name == "fe.toml")
+        .unwrap_or(false);
 
     match message.kind {
         ChangeKind::Open(contents) => {
-            info!("file opened: {:?}", &path);
-            backend.update_input_file_text(path, contents);
+            info!("file opened: {:?}", &path_str);
+            if let Ok(url) = url::Url::from_file_path(&path) {
+                backend
+                    .db
+                    .workspace()
+                    .update(&mut backend.db, url.clone(), contents);
+            }
         }
         ChangeKind::Create => {
-            info!("file created: {:?}", &path);
-            let contents = tokio::fs::read_to_string(&path).await.unwrap();
-            backend.update_input_file_text(path, contents)
+            info!("file created: {:?}", &path_str);
+            let contents = match tokio::fs::read_to_string(&path).await {
+                Ok(c) => c,
+                Err(e) => {
+                    error!("Failed to read file {}: {}", path_str, e);
+                    return Ok(());
+                }
+            };
+            if let Ok(url) = url::Url::from_file_path(&path) {
+                backend
+                    .db
+                    .workspace()
+                    .update(&mut backend.db, url.clone(), contents);
+
+                // If a fe.toml was created, discover and load all files in the new ingot
+                if is_fe_toml && let Some(ingot_dir) = path.parent() {
+                    load_ingot_files(backend, ingot_dir).await?;
+                }
+            }
         }
         ChangeKind::Edit(contents) => {
-            info!("file edited: {:?}", &path);
+            info!("file edited: {:?}", &path_str);
             let contents = if let Some(text) = contents {
                 text
             } else {
-                tokio::fs::read_to_string(&path).await.unwrap()
+                match tokio::fs::read_to_string(&path).await {
+                    Ok(c) => c,
+                    Err(e) => {
+                        error!("Failed to read file {}: {}", path_str, e);
+                        return Ok(());
+                    }
+                }
             };
-            backend.update_input_file_text(path, contents);
+            if let Ok(url) = url::Url::from_file_path(&path) {
+                backend
+                    .db
+                    .workspace()
+                    .update(&mut backend.db, url.clone(), contents);
+
+                // If fe.toml was modified, re-scan the ingot for any new files
+                if is_fe_toml && let Some(ingot_dir) = path.parent() {
+                    load_ingot_files(backend, ingot_dir).await?;
+                }
+            }
         }
         ChangeKind::Delete => {
-            info!("file deleted: {:?}", path);
-            backend
-                .workspace
-                .remove_input_for_file_path(&mut backend.db, path)
-                .unwrap();
+            info!("file deleted: {:?}", path_str);
+            if let Ok(url) = url::Url::from_file_path(path) {
+                backend.db.workspace().remove(&mut backend.db, &url);
+            }
         }
     }
 
     let _ = backend.client.emit(NeedsDiagnostics(message.uri));
+    Ok(())
+}
+
+async fn load_ingot_files(
+    backend: &mut Backend,
+    ingot_dir: &std::path::Path,
+) -> Result<(), ResponseError> {
+    info!("Loading ingot files from: {:?}", ingot_dir);
+
+    let ingot_url = Url::from_directory_path(ingot_dir).map_err(|_| {
+        ResponseError::new(
+            ErrorCode::INTERNAL_ERROR,
+            format!("Invalid ingot path: {ingot_dir:?}"),
+        )
+    })?;
+
+    let had_diagnostics = init_ingot(&mut backend.db, &ingot_url);
+    if had_diagnostics {
+        warn!(
+            "Ingot initialization produced diagnostics for {:?}",
+            ingot_dir
+        );
+    }
+
+    // Emit diagnostics for all files that were loaded
+    let all_files: Vec<_> = backend
+        .db
+        .workspace()
+        .all_files(&backend.db)
+        .iter()
+        .map(|(url, _file)| url)
+        .collect();
+
+    for url in all_files {
+        let _ = backend.client.emit(NeedsDiagnostics(url));
+    }
+
     Ok(())
 }
 
@@ -213,11 +354,18 @@ pub async fn handle_files_need_diagnostics(
 
     let ingots_need_diagnostics: FxHashSet<_> = need_diagnostics
         .iter()
-        .filter_map(|NeedsDiagnostics(file)| backend.workspace.get_ingot_for_file_path(file.path()))
+        .filter_map(|NeedsDiagnostics(url)| {
+            // url is already a url::Url
+            backend
+                .db
+                .workspace()
+                .containing_ingot(&backend.db, url.clone())
+        })
         .collect();
 
     for ingot in ingots_need_diagnostics {
         // Get diagnostics per file
+        use crate::lsp_diagnostics::LspDiagnostics;
         let diagnostics_map = backend.db.diagnostics_for_ingot(ingot);
 
         info!(
@@ -232,7 +380,9 @@ pub async fn handle_files_need_diagnostics(
                 version: None,
             };
             info!("Publishing diagnostics for URI: {:?}", uri);
-            client.publish_diagnostics(diagnostics_params).unwrap();
+            let _ = client
+                .publish_diagnostics(diagnostics_params)
+                .map_err(|e| error!("Failed to publish diagnostics for {}: {:?}", uri, e));
         }
     }
     Ok(())
@@ -242,22 +392,33 @@ pub async fn handle_hover_request(
     backend: &Backend,
     message: HoverParams,
 ) -> Result<Option<Hover>, ResponseError> {
-    let path = message
+    let path_str = message // Renamed to path_str to avoid confusion with Url
         .text_document_position_params
         .text_document
         .uri
         .path();
 
-    let Some((ingot, file)) = backend.workspace.get_input_for_file_path(path) else {
-        warn!("handle_hover_request failed to get file for path: `{path}`");
+    let Ok(url) = url::Url::from_file_path(path_str) else {
+        warn!("handle_hover_request failed to convert path to URL: `{path_str}`");
+        return Ok(None);
+    };
+    let Some(file) = backend.db.workspace().get(&backend.db, &url) else {
+        warn!(
+            "handle_hover_request failed to get file for url: `{url}` (original path: `{path_str}`)"
+        );
         return Ok(None);
     };
 
     info!("handling hover request in file: {:?}", file);
-    let response = hover_helper(&backend.db, ingot, file, message).unwrap_or_else(|e| {
+    let response = hover_helper(&backend.db, file, message).unwrap_or_else(|e| {
         error!("Error handling hover: {:?}", e);
         None
     });
     info!("sending hover response: {:?}", response);
     Ok(response)
+}
+
+pub async fn handle_shutdown(_backend: &Backend, _message: ()) -> Result<(), ResponseError> {
+    info!("received shutdown request");
+    Ok(())
 }

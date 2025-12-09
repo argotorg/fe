@@ -1,0 +1,7 @@
+struct MyType {
+    x: u256
+}
+
+fn takes_mytype(arg: MyType) -> MyType {
+    arg
+}

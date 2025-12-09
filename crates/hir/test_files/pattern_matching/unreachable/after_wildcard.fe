@@ -1,0 +1,13 @@
+enum Color {
+    Red,
+    Green,
+    Blue
+}
+
+fn unreachable_pattern(c: Color) -> u8 {
+    match c {
+        Color::Red => 0
+        _ => 1  // Wildcard catches all other cases
+        Color::Blue => 2  // Unreachable pattern
+    }
+}

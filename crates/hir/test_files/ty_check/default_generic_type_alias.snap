@@ -1,0 +1,28 @@
+---
+source: crates/hir-analysis/tests/ty_check.rs
+assertion_line: 48
+expression: res
+input_file: test_files/ty_check/default_generic_type_alias.fe
+---
+note: 
+  ┌─ default_generic_type_alias.fe:5:11
+  │  
+5 │   fn main() {
+  │ ╭───────────^
+6 │ │     let x: Foo
+7 │ │     let y: Foo<u64>
+8 │ │ }
+  │ ╰─^ ()
+
+note: 
+  ┌─ default_generic_type_alias.fe:6:9
+  │
+6 │     let x: Foo
+  │         ^ Map<i32, ()>
+
+note: 
+  ┌─ default_generic_type_alias.fe:7:9
+  │
+7 │     let y: Foo<u64>
+  │         ^ Map<u64, ()>
+

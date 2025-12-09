@@ -1,30 +1,29 @@
 ---
 source: crates/uitest/tests/ty.rs
+assertion_line: 46
 expression: diags
-input_file: crates/uitest/fixtures/ty/const_ty/trait_const_ty.fe
+input_file: fixtures/ty/const_ty/trait_const_ty.fe
 ---
-error[3-0011]: given type doesn't match the expected const type
-  ┌─ trait_const_ty.fe:3:20
-  │
-3 │ impl<const N: u64> Trait<N> for i64 {}
-  │                    ^^^^^^^^ expected `u32` type here, but `u64` is given
-
-error[3-0011]: given type doesn't match the expected const type
-  ┌─ trait_const_ty.fe:5:14
-  │
-5 │     where T: Trait<N>
-  │              ^^^^^^^^ expected `u32` type here, but `u64` is given
-
-error[3-0012]: expected const type
+error[2-0013]: const generic argument expected for `Trait`
   ┌─ trait_const_ty.fe:2:6
   │
 2 │ impl Trait<i32> for i32 {}
-  │      ^^^^^^^^^^ expected const type of `u32` here
+  │      ^^^^^ expected const argument of type `u32`
 
-error[3-0013]: expected a normal type
+error[2-0013]: const type mismatch for `Trait`
+  ┌─ trait_const_ty.fe:3:20
+  │
+3 │ impl<const N: u64> Trait<N> for i64 {}
+  │                    ^^^^^ expected `u32`, given `u64`
+
+error[2-0013]: const type mismatch for `Trait`
+  ┌─ trait_const_ty.fe:5:14
+  │
+5 │     where T: Trait<N>
+  │              ^^^^^ expected `u32`, given `u64`
+
+error[2-0013]: unexpected const generic argument
   ┌─ trait_const_ty.fe:9:6
   │
 9 │ impl Trait2<1> for i32 {}
-  │      ^^^^^^^^^ expected a normal type here, but `1` is given
-
-
+  │      ^^^^^^ expected type generic argument, given const `1`

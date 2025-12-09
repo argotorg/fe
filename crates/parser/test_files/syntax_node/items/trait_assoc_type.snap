@@ -1,0 +1,338 @@
+---
+source: crates/parser/tests/syntax_node.rs
+expression: node
+input_file: test_files/syntax_node/items/trait_assoc_type.fe
+---
+Root@0..453
+  ItemList@0..452
+    Item@0..45
+      Trait@0..45
+        TraitKw@0..5 "trait"
+        WhiteSpace@5..6 " "
+        Ident@6..9 "Abi"
+        WhiteSpace@9..10 " "
+        TraitItemList@10..45
+          LBrace@10..11 "{"
+          Newline@11..12 "\n"
+          WhiteSpace@12..16 "    "
+          TraitTypeItem@16..43
+            TypeKw@16..20 "type"
+            WhiteSpace@20..21 " "
+            Ident@21..29 "Selector"
+            TypeBoundList@29..43
+              Colon@29..30 ":"
+              WhiteSpace@30..31 " "
+              TypeBound@31..43
+                TraitRef@31..43
+                  Path@31..43
+                    PathSegment@31..43
+                      Ident@31..37 "Encode"
+                      GenericArgList@37..43
+                        Lt@37..38 "<"
+                        TypeGenericArg@38..42
+                          PathType@38..42
+                            Path@38..42
+                              PathSegment@38..42
+                                SelfTypeKw@38..42 "Self"
+                        Gt@42..43 ">"
+          Newline@43..44 "\n"
+          RBrace@44..45 "}"
+    Newline@45..47 "\n\n"
+    Item@47..63
+      Struct@47..63
+        StructKw@47..53 "struct"
+        WhiteSpace@53..54 " "
+        Ident@54..60 "SolAbi"
+        WhiteSpace@60..61 " "
+        RecordFieldDefList@61..63
+          LBrace@61..62 "{"
+          RBrace@62..63 "}"
+    Newline@63..64 "\n"
+    Item@64..115
+      ImplTrait@64..115
+        ImplKw@64..68 "impl"
+        WhiteSpace@68..69 " "
+        TraitRef@69..72
+          Path@69..72
+            PathSegment@69..72
+              Ident@69..72 "Abi"
+        WhiteSpace@72..73 " "
+        ForKw@73..76 "for"
+        WhiteSpace@76..77 " "
+        PathType@77..83
+          Path@77..83
+            PathSegment@77..83
+              Ident@77..83 "SolAbi"
+        WhiteSpace@83..84 " "
+        TraitItemList@84..115
+          LBrace@84..85 "{"
+          Newline@85..86 "\n"
+          WhiteSpace@86..90 "    "
+          TraitTypeItem@90..113
+            TypeKw@90..94 "type"
+            WhiteSpace@94..95 " "
+            Ident@95..103 "Selector"
+            WhiteSpace@103..104 " "
+            Eq@104..105 "="
+            WhiteSpace@105..106 " "
+            ArrayType@106..113
+              LBracket@106..107 "["
+              PathType@107..109
+                Path@107..109
+                  PathSegment@107..109
+                    Ident@107..109 "u8"
+              SemiColon@109..110 ";"
+              WhiteSpace@110..111 " "
+              LitExpr@111..112
+                Lit@111..112
+                  Int@111..112 "4"
+              RBracket@112..113 "]"
+          Newline@113..114 "\n"
+          RBrace@114..115 "}"
+    Newline@115..117 "\n\n"
+    Item@117..203
+      Trait@117..203
+        TraitKw@117..122 "trait"
+        WhiteSpace@122..123 " "
+        Ident@123..128 "State"
+        WhiteSpace@128..129 " "
+        TraitItemList@129..203
+          LBrace@129..130 "{"
+          Newline@130..131 "\n"
+          WhiteSpace@131..135 "    "
+          TraitTypeItem@135..151
+            TypeKw@135..139 "type"
+            WhiteSpace@139..140 " "
+            Ident@140..143 "Ptr"
+            TypeBoundList@143..151
+              Colon@143..144 ":"
+              WhiteSpace@144..145 " "
+              TypeBound@145..151
+                KindBoundAbs@145..151
+                  KindBoundMono@145..146
+                    Star@145..146 "*"
+                  WhiteSpace@146..147 " "
+                  Arrow@147..149 "->"
+                  WhiteSpace@149..150 " "
+                  KindBoundMono@150..151
+                    Star@150..151 "*"
+          Newline@151..153 "\n\n"
+          WhiteSpace@153..157 "    "
+          Func@157..201
+            FnKw@157..159 "fn"
+            WhiteSpace@159..160 " "
+            FuncSignature@160..201
+              Ident@160..168 "make_ptr"
+              GenericParamList@168..171
+                Lt@168..169 "<"
+                TypeGenericParam@169..170
+                  Ident@169..170 "T"
+                Gt@170..171 ">"
+              FuncParamList@171..185
+                LParen@171..172 "("
+                FnParam@172..184
+                  Underscore@172..173 "_"
+                  WhiteSpace@173..174 " "
+                  Ident@174..177 "pos"
+                  Colon@177..178 ":"
+                  WhiteSpace@178..179 " "
+                  PathType@179..184
+                    Path@179..184
+                      PathSegment@179..184
+                        Ident@179..184 "usize"
+                RParen@184..185 ")"
+              WhiteSpace@185..186 " "
+              Arrow@186..188 "->"
+              WhiteSpace@188..189 " "
+              PathType@189..201
+                Path@189..201
+                  PathSegment@189..193
+                    SelfTypeKw@189..193 "Self"
+                  Colon2@193..195 "::"
+                  PathSegment@195..201
+                    Ident@195..198 "Ptr"
+                    GenericArgList@198..201
+                      Lt@198..199 "<"
+                      TypeGenericArg@199..200
+                        PathType@199..200
+                          Path@199..200
+                            PathSegment@199..200
+                              Ident@199..200 "T"
+                      Gt@200..201 ">"
+          Newline@201..202 "\n"
+          RBrace@202..203 "}"
+    Newline@203..204 "\n"
+    Item@204..239
+      Struct@204..239
+        StructKw@204..210 "struct"
+        WhiteSpace@210..211 " "
+        Ident@211..217 "MemPtr"
+        GenericParamList@217..220
+          Lt@217..218 "<"
+          TypeGenericParam@218..219
+            Ident@218..219 "T"
+          Gt@219..220 ">"
+        WhiteSpace@220..221 " "
+        RecordFieldDefList@221..239
+          LBrace@221..222 "{"
+          Newline@222..223 "\n"
+          WhiteSpace@223..227 "    "
+          RecordFieldDef@227..237
+            Ident@227..230 "pos"
+            Colon@230..231 ":"
+            WhiteSpace@231..232 " "
+            PathType@232..237
+              Path@232..237
+                PathSegment@232..237
+                  Ident@232..237 "usize"
+          Newline@237..238 "\n"
+          RBrace@238..239 "}"
+    Newline@239..240 "\n"
+    Item@240..279
+      Struct@240..279
+        StructKw@240..246 "struct"
+        WhiteSpace@246..247 " "
+        Ident@247..257 "StoragePtr"
+        GenericParamList@257..260
+          Lt@257..258 "<"
+          TypeGenericParam@258..259
+            Ident@258..259 "T"
+          Gt@259..260 ">"
+        WhiteSpace@260..261 " "
+        RecordFieldDefList@261..279
+          LBrace@261..262 "{"
+          Newline@262..263 "\n"
+          WhiteSpace@263..267 "    "
+          RecordFieldDef@267..277
+            Ident@267..270 "pos"
+            Colon@270..271 ":"
+            WhiteSpace@271..272 " "
+            PathType@272..277
+              Path@272..277
+                PathSegment@272..277
+                  Ident@272..277 "usize"
+          Newline@277..278 "\n"
+          RBrace@278..279 "}"
+    Newline@279..281 "\n\n"
+    Item@281..305
+      Struct@281..305
+        StructKw@281..287 "struct"
+        WhiteSpace@287..288 " "
+        Ident@288..302 "MyStorageThing"
+        WhiteSpace@302..303 " "
+        RecordFieldDefList@303..305
+          LBrace@303..304 "{"
+          RBrace@304..305 "}"
+    Newline@305..306 "\n"
+    Item@306..452
+      ImplTrait@306..452
+        ImplKw@306..310 "impl"
+        WhiteSpace@310..311 " "
+        TraitRef@311..316
+          Path@311..316
+            PathSegment@311..316
+              Ident@311..316 "State"
+        WhiteSpace@316..317 " "
+        ForKw@317..320 "for"
+        WhiteSpace@320..321 " "
+        PathType@321..335
+          Path@321..335
+            PathSegment@321..335
+              Ident@321..335 "MyStorageThing"
+        WhiteSpace@335..336 " "
+        TraitItemList@336..452
+          LBrace@336..337 "{"
+          Newline@337..338 "\n"
+          WhiteSpace@338..342 "    "
+          TraitTypeItem@342..363
+            TypeKw@342..346 "type"
+            WhiteSpace@346..347 " "
+            Ident@347..350 "Ptr"
+            WhiteSpace@350..351 " "
+            Eq@351..352 "="
+            WhiteSpace@352..353 " "
+            PathType@353..363
+              Path@353..363
+                PathSegment@353..363
+                  Ident@353..363 "StoragePtr"
+          Newline@363..365 "\n\n"
+          WhiteSpace@365..369 "    "
+          Func@369..450
+            FnKw@369..371 "fn"
+            WhiteSpace@371..372 " "
+            FuncSignature@372..413
+              Ident@372..380 "make_ptr"
+              GenericParamList@380..383
+                Lt@380..381 "<"
+                TypeGenericParam@381..382
+                  Ident@381..382 "T"
+                Gt@382..383 ">"
+              FuncParamList@383..397
+                LParen@383..384 "("
+                FnParam@384..396
+                  Underscore@384..385 "_"
+                  WhiteSpace@385..386 " "
+                  Ident@386..389 "pos"
+                  Colon@389..390 ":"
+                  WhiteSpace@390..391 " "
+                  PathType@391..396
+                    Path@391..396
+                      PathSegment@391..396
+                        Ident@391..396 "usize"
+                RParen@396..397 ")"
+              WhiteSpace@397..398 " "
+              Arrow@398..400 "->"
+              WhiteSpace@400..401 " "
+              PathType@401..413
+                Path@401..413
+                  PathSegment@401..405
+                    SelfTypeKw@401..405 "Self"
+                  Colon2@405..407 "::"
+                  PathSegment@407..413
+                    Ident@407..410 "Ptr"
+                    GenericArgList@410..413
+                      Lt@410..411 "<"
+                      TypeGenericArg@411..412
+                        PathType@411..412
+                          Path@411..412
+                            PathSegment@411..412
+                              Ident@411..412 "T"
+                      Gt@412..413 ">"
+            WhiteSpace@413..414 " "
+            BlockExpr@414..450
+              LBrace@414..415 "{"
+              Newline@415..416 "\n"
+              WhiteSpace@416..424 "        "
+              ExprStmt@424..444
+                RecordInitExpr@424..444
+                  Path@424..436
+                    PathSegment@424..428
+                      SelfTypeKw@424..428 "Self"
+                    Colon2@428..430 "::"
+                    PathSegment@430..436
+                      Ident@430..433 "Ptr"
+                      GenericArgList@433..436
+                        Lt@433..434 "<"
+                        TypeGenericArg@434..435
+                          PathType@434..435
+                            Path@434..435
+                              PathSegment@434..435
+                                Ident@434..435 "T"
+                        Gt@435..436 ">"
+                  WhiteSpace@436..437 " "
+                  RecordFieldList@437..444
+                    LBrace@437..438 "{"
+                    WhiteSpace@438..439 " "
+                    RecordField@439..442
+                      PathExpr@439..442
+                        Path@439..442
+                          PathSegment@439..442
+                            Ident@439..442 "pos"
+                    WhiteSpace@442..443 " "
+                    RBrace@443..444 "}"
+              Newline@444..445 "\n"
+              WhiteSpace@445..449 "    "
+              RBrace@449..450 "}"
+          Newline@450..451 "\n"
+          RBrace@451..452 "}"
+  Newline@452..453 "\n"

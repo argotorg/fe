@@ -1,0 +1,20 @@
+extern {
+    fn todo() -> !
+}
+trait MyTrait {
+    type Output
+}
+
+struct MyStruct {}
+
+impl MyTrait for MyStruct {
+    type Output = u32
+}
+
+fn get_output<T: MyTrait>() -> T::Output {
+    todo()
+}
+
+fn example() {
+    let a: u32 = get_output<MyStruct>()
+}

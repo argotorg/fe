@@ -1,0 +1,16 @@
+mod a {
+    pub struct S {}
+}
+
+trait Bar {
+    type Baz
+}
+
+struct B {}
+
+fn demo() {
+    let x: <a::Foo as Bar>::Baz
+    let y: <a::S as Tr>::Baz
+    let z: <a::S as B>::X
+    let _: <Bar as Bar>::X
+}

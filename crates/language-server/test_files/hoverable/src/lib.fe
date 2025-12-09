@@ -1,10 +1,16 @@
 use stuff::calculations::{ return_three, return_four }
+use stuff::calculations::ambiguous;
 
 /// ## `return_seven`
 /// ### a function of numbers
 /// #### returns the 3+4=7
 pub fn return_seven() {
   return_three() + return_four()
+}
+
+/// Add two numbers together
+pub fn add(x: i32, y: i32) -> i32 {
+  x + y
 }
 
 fn calculate() {
@@ -27,5 +33,28 @@ struct Numbers {
 impl Calculatable for Numbers {
   fn calculate(self) {
     self.x + self.y
+  }
+}
+
+enum Option {
+  Some(i32),
+  None
+}
+
+/// Test local variable scoping and shadowing
+fn test_locals(x: i32) -> i32 {
+  let a = x
+  let x = a + 1
+  {
+    let x = x + 1
+    x
+  }
+}
+
+/// Test match arm bindings
+fn test_match(opt: Option) -> i32 {
+  match opt {
+    Option::Some(val) => val
+    Option::None => 0
   }
 }

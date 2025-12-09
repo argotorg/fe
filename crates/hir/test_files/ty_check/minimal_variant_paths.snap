@@ -1,0 +1,286 @@
+---
+source: crates/hir-analysis/tests/ty_check.rs
+expression: res
+input_file: test_files/ty_check/minimal_variant_paths.fe
+---
+note: 
+   ┌─ minimal_variant_paths.fe:8:36
+   │  
+ 8 │   fn test_full_paths(t: MyTag) -> u8 {
+   │ ╭────────────────────────────────────^
+ 9 │ │     match t {
+10 │ │         MyTag::A => {
+11 │ │             return 1
+   · │
+19 │ │     }
+20 │ │ }
+   │ ╰─^ u8
+
+note: 
+   ┌─ minimal_variant_paths.fe:9:5
+   │  
+ 9 │ ╭     match t {
+10 │ │         MyTag::A => {
+11 │ │             return 1
+12 │ │         }
+   · │
+18 │ │         }
+19 │ │     }
+   │ ╰─────^ u8
+
+note: 
+  ┌─ minimal_variant_paths.fe:9:11
+  │
+9 │     match t {
+  │           ^ MyTag
+
+note: 
+   ┌─ minimal_variant_paths.fe:10:9
+   │
+10 │         MyTag::A => {
+   │         ^^^^^^^^ MyTag
+
+note: 
+   ┌─ minimal_variant_paths.fe:10:21
+   │  
+10 │           MyTag::A => {
+   │ ╭─────────────────────^
+11 │ │             return 1
+12 │ │         }
+   │ ╰─────────^ !
+
+note: 
+   ┌─ minimal_variant_paths.fe:11:20
+   │
+11 │             return 1
+   │                    ^ u8
+
+note: 
+   ┌─ minimal_variant_paths.fe:13:9
+   │
+13 │         MyTag::B => {
+   │         ^^^^^^^^ MyTag
+
+note: 
+   ┌─ minimal_variant_paths.fe:13:21
+   │  
+13 │           MyTag::B => {
+   │ ╭─────────────────────^
+14 │ │             return 2
+15 │ │         }
+   │ ╰─────────^ !
+
+note: 
+   ┌─ minimal_variant_paths.fe:14:20
+   │
+14 │             return 2
+   │                    ^ u8
+
+note: 
+   ┌─ minimal_variant_paths.fe:16:9
+   │
+16 │         MyTag::C => {
+   │         ^^^^^^^^ MyTag
+
+note: 
+   ┌─ minimal_variant_paths.fe:16:21
+   │  
+16 │           MyTag::C => {
+   │ ╭─────────────────────^
+17 │ │             return 3
+18 │ │         }
+   │ ╰─────────^ !
+
+note: 
+   ┌─ minimal_variant_paths.fe:17:20
+   │
+17 │             return 3
+   │                    ^ u8
+
+note: 
+   ┌─ minimal_variant_paths.fe:23:34
+   │  
+23 │   fn test_imported(t: MyTag) -> u8 {
+   │ ╭──────────────────────────────────^
+24 │ │     use MyTag::*
+25 │ │     
+26 │ │     match t {
+   · │
+36 │ │     }
+37 │ │ }
+   │ ╰─^ u8
+
+note: 
+   ┌─ minimal_variant_paths.fe:26:5
+   │  
+26 │ ╭     match t {
+27 │ │         A => {
+28 │ │             return 1
+29 │ │         }
+   · │
+35 │ │         }
+36 │ │     }
+   │ ╰─────^ u8
+
+note: 
+   ┌─ minimal_variant_paths.fe:26:11
+   │
+26 │     match t {
+   │           ^ MyTag
+
+note: 
+   ┌─ minimal_variant_paths.fe:27:9
+   │
+27 │         A => {
+   │         ^ MyTag
+
+note: 
+   ┌─ minimal_variant_paths.fe:27:14
+   │  
+27 │           A => {
+   │ ╭──────────────^
+28 │ │             return 1
+29 │ │         }
+   │ ╰─────────^ !
+
+note: 
+   ┌─ minimal_variant_paths.fe:28:20
+   │
+28 │             return 1
+   │                    ^ u8
+
+note: 
+   ┌─ minimal_variant_paths.fe:30:9
+   │
+30 │         B => {
+   │         ^ MyTag
+
+note: 
+   ┌─ minimal_variant_paths.fe:30:14
+   │  
+30 │           B => {
+   │ ╭──────────────^
+31 │ │             return 2
+32 │ │         }
+   │ ╰─────────^ !
+
+note: 
+   ┌─ minimal_variant_paths.fe:31:20
+   │
+31 │             return 2
+   │                    ^ u8
+
+note: 
+   ┌─ minimal_variant_paths.fe:33:9
+   │
+33 │         C => {
+   │         ^ MyTag
+
+note: 
+   ┌─ minimal_variant_paths.fe:33:14
+   │  
+33 │           C => {
+   │ ╭──────────────^
+34 │ │             return 3
+35 │ │         }
+   │ ╰─────────^ !
+
+note: 
+   ┌─ minimal_variant_paths.fe:34:20
+   │
+34 │             return 3
+   │                    ^ u8
+
+note: 
+   ┌─ minimal_variant_paths.fe:40:31
+   │  
+40 │   fn test_mixed(t: MyTag) -> u8 {
+   │ ╭───────────────────────────────^
+41 │ │     use MyTag::*
+42 │ │     
+43 │ │     match t {
+   · │
+53 │ │     }
+54 │ │ }
+   │ ╰─^ u8
+
+note: 
+   ┌─ minimal_variant_paths.fe:43:5
+   │  
+43 │ ╭     match t {
+44 │ │         MyTag::A => {
+45 │ │             return 10
+46 │ │         }
+   · │
+52 │ │         }
+53 │ │     }
+   │ ╰─────^ u8
+
+note: 
+   ┌─ minimal_variant_paths.fe:43:11
+   │
+43 │     match t {
+   │           ^ MyTag
+
+note: 
+   ┌─ minimal_variant_paths.fe:44:9
+   │
+44 │         MyTag::A => {
+   │         ^^^^^^^^ MyTag
+
+note: 
+   ┌─ minimal_variant_paths.fe:44:21
+   │  
+44 │           MyTag::A => {
+   │ ╭─────────────────────^
+45 │ │             return 10
+46 │ │         }
+   │ ╰─────────^ !
+
+note: 
+   ┌─ minimal_variant_paths.fe:45:20
+   │
+45 │             return 10
+   │                    ^^ u8
+
+note: 
+   ┌─ minimal_variant_paths.fe:47:9
+   │
+47 │         B => {
+   │         ^ MyTag
+
+note: 
+   ┌─ minimal_variant_paths.fe:47:14
+   │  
+47 │           B => {
+   │ ╭──────────────^
+48 │ │             return 20
+49 │ │         }
+   │ ╰─────────^ !
+
+note: 
+   ┌─ minimal_variant_paths.fe:48:20
+   │
+48 │             return 20
+   │                    ^^ u8
+
+note: 
+   ┌─ minimal_variant_paths.fe:50:9
+   │
+50 │         C => {
+   │         ^ MyTag
+
+note: 
+   ┌─ minimal_variant_paths.fe:50:14
+   │  
+50 │           C => {
+   │ ╭──────────────^
+51 │ │             return 30
+52 │ │         }
+   │ ╰─────────^ !
+
+note: 
+   ┌─ minimal_variant_paths.fe:51:20
+   │
+51 │             return 30
+   │                    ^^ u8

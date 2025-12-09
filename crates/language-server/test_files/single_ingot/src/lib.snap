@@ -1,39 +1,88 @@
 ---
 source: crates/language-server/src/functionality/goto.rs
 expression: snapshot
-input_file: crates/language-server/test_files/single_ingot/src/lib.fe
+input_file: test_files/single_ingot/src/lib.fe
 ---
-0: use ingot::foo::Why
-1: 
-2: mod who {
-3:   use super::Why
-4:   pub mod what {
-5:     pub fn how() {}
-6:     pub mod how {
-7:       use ingot::Why
-8:       pub struct When {
-9:         x: Why
-10:       }
-11:     }
-12:   }
-13:   pub struct Bar {
-14:     x: Why
-15:   }
-16: }
-17: 
-18: fn bar() -> () {
-19:     let y: Why
-20:     let z = who::what::how
-21:     let z: who::what::how::When
-22: }
----
-cursor position (9, 11), path: lib::foo::Why
-cursor position (14, 7), path: lib::foo::Why
-cursor position (19, 11), path: lib::foo::Why
-cursor position (20, 12), path: lib::who
-cursor position (20, 17), path: lib::who::what
-cursor position (20, 23), path: lib::who::what::how
-cursor position (21, 11), path: lib::who
-cursor position (21, 16), path: lib::who::what
-cursor position (21, 22), path: lib::who::what::how
-cursor position (21, 27), path: lib::who::what::how::When
+note: 
+  ┌─ lib.fe:5:13
+  │
+5 │   pub mod what {
+  │             ^^^ -> lib::who::what
+
+note: 
+   ┌─ lib.fe:10:12
+   │
+10 │         x: Why
+   │            ^^^ -> lib::foo::Why
+
+note: 
+   ┌─ lib.fe:15:8
+   │
+15 │     x: Why
+   │        ^^^ -> lib::foo::Why
+
+note: 
+   ┌─ lib.fe:20:9
+   │
+20 │     let y: Why
+   │         ^ -> local: Why
+
+note: 
+   ┌─ lib.fe:20:12
+   │
+20 │     let y: Why
+   │            ^^^ -> lib::foo::Why
+
+note: 
+   ┌─ lib.fe:21:9
+   │
+21 │     let z = who::what::how
+   │         ^ -> local: fn how
+
+note: 
+   ┌─ lib.fe:21:13
+   │
+21 │     let z = who::what::how
+   │             ^^^ -> lib::who
+
+note: 
+   ┌─ lib.fe:21:18
+   │
+21 │     let z = who::what::how
+   │                  ^^^^ -> lib::who::what
+
+note: 
+   ┌─ lib.fe:21:24
+   │
+21 │     let z = who::what::how
+   │                        ^^^ -> lib::who::what::how
+
+note: 
+   ┌─ lib.fe:22:9
+   │
+22 │     let z: who::what::how::When
+   │         ^ -> local: When
+
+note: 
+   ┌─ lib.fe:22:12
+   │
+22 │     let z: who::what::how::When
+   │            ^^^ -> lib::who
+
+note: 
+   ┌─ lib.fe:22:17
+   │
+22 │     let z: who::what::how::When
+   │                 ^^^^ -> lib::who::what
+
+note: 
+   ┌─ lib.fe:22:23
+   │
+22 │     let z: who::what::how::When
+   │                       ^^^ -> lib::who::what::how
+
+note: 
+   ┌─ lib.fe:22:28
+   │
+22 │     let z: who::what::how::When
+   │                            ^^^^ -> lib::who::what::how::When

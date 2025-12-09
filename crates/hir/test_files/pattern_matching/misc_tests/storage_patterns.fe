@@ -1,0 +1,96 @@
+enum MyEnum {
+    Unit,
+    UnitTuple(),
+    Tuple(u8, u8)
+}
+
+enum MyEnumNested {
+    Tuple(u8, u8),
+    Nested(MyEnum)
+}
+
+// Adapting to use non-contract structure since contracts with storage seem 
+// to be causing issues in the test environment
+struct StoragePattern {
+    value: u8
+}
+
+// Test functions for pattern matching that simulate storage scenarios
+fn match_enum_values(x: u8, y: u8) -> u8 {
+    let my_enum: MyEnum = MyEnum::Tuple(x, y)
+    
+    match my_enum {
+        MyEnum::Unit | MyEnum::UnitTuple() => {
+            return 0
+        }
+        MyEnum::Tuple(x1, y1) => {
+            return x1 + y1
+        }
+    }
+}
+
+fn match_nested_enum(x: u8, y: u8, use_tuple: bool) -> u8 {
+    let nested_enum: MyEnumNested = if use_tuple {
+        MyEnumNested::Tuple(x, y)
+    } else {
+        MyEnumNested::Nested(MyEnum::Tuple(x, y))
+    }
+    
+    match nested_enum {
+        MyEnumNested::Tuple(x1, y1) => {
+            return x1 + y1
+        }
+        // Use a wildcard for the nested case
+        _ => {
+            return 0
+        }
+    }
+}
+
+
+
+fn match_boolean_values(b1: bool, b2: bool) -> u8 {
+    let bool_pair: (bool, bool) = (b1, b2)
+    
+    match bool_pair {
+        (true, true) => {
+            return 3
+        }
+        (true, false) => {
+            return 2
+        }
+        (false, true) => {
+            return 1
+        }
+        (false, false) => {
+            return 0
+        }
+    }
+}
+
+fn modify_values_in_match_arms(val: u8) -> u8 {
+    let mut my_enum: MyEnum = MyEnum::Unit
+    
+    match val {
+        0 => {
+            my_enum = MyEnum::Unit
+            return 0
+        }
+        1 => {
+            my_enum = MyEnum::UnitTuple()
+            return 1
+        }
+        _ => {
+            my_enum = MyEnum::Tuple(val, val)
+            
+            match my_enum {
+                MyEnum::Tuple(x, y) => {
+                    return x + y
+                }
+                _ => {
+                    return 0
+                }
+            }
+        }
+    }
+}

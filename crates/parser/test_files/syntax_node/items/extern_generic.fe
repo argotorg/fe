@@ -1,0 +1,4 @@
+extern {
+    pub fn id<T>(value: T) -> T
+    pub fn constrained<T>(value: T) -> T where T: Clone
+}

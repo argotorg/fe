@@ -1,0 +1,27 @@
+trait MyTrait {
+    fn method(self) -> i32
+}
+
+trait OtherTrait { }
+
+pub struct MyS<T> 
+where T: MyTrait
+{
+    x: T,
+}
+
+pub struct MyS2<T> 
+where T: OtherTrait
+{
+    y: T,
+}
+
+mod inner {
+    use super::MyTrait
+    
+    pub struct InnerS<U> 
+    where U: MyTrait
+    {
+        z: U,
+    }
+}

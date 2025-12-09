@@ -1,0 +1,18 @@
+pub struct Storage<T> {
+    value: T,
+}
+
+pub fn needs_storage<T>()
+  uses Storage<T>
+{
+    ()
+}
+
+pub fn ambig() {
+    let st8 = Storage<u8> { value: 0 }
+    let st16 = Storage<u16> { value: 0 }
+    with (Storage<u8> = st8, Storage<u16> = st16) {
+        needs_storage()
+    }
+}
+

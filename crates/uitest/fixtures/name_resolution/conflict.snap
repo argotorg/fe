@@ -1,9 +1,9 @@
 ---
-source: crates/uitest/src/lib.rs
+source: crates/uitest/tests/name_resolution.rs
 expression: diags
-input_file: crates/uitest/fixtures/name_resolution/conflict.fe
+input_file: fixtures/name_resolution/conflict.fe
 ---
-error[2-0001]: `Foo` conflicts with other definitions
+error[3-0100]: conflicting definitions of `Foo`
   ┌─ conflict.fe:2:8
   │
 2 │ pub fn Foo() {}
@@ -11,7 +11,7 @@ error[2-0001]: `Foo` conflicts with other definitions
 3 │ pub const Foo: i32 = 1
   │           --- `Foo` is redefined here
 
-error[2-0001]: `Foo` conflicts with other definitions
+error[3-0100]: conflicting definitions of `Foo`
    ┌─ conflict.fe:6:10
    │
  6 │ pub enum Foo {}
@@ -24,5 +24,3 @@ error[2-0001]: `Foo` conflicts with other definitions
    │      --- `Foo` is redefined here
 10 │ type Foo = i32
    │      --- `Foo` is redefined here
-
-

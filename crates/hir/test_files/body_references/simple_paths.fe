@@ -1,0 +1,8 @@
+struct MyStruct {}
+
+fn foo() {
+    let x = MyStruct {}
+    bar(s: x)
+}
+
+fn bar(s: MyStruct) {}

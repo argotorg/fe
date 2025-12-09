@@ -1,7 +1,7 @@
 use hir::{
-    hir_def::{scope_graph::ScopeId, Attr, ItemKind},
-    span::LazySpan,
     HirDb, SpannedHirDb,
+    hir_def::{Attr, ItemKind, scope_graph::ScopeId},
+    span::LazySpan,
 };
 
 pub fn get_docstring(db: &dyn HirDb, scope: ScopeId) -> Option<String> {
@@ -22,19 +22,19 @@ pub fn get_docstring(db: &dyn HirDb, scope: ScopeId) -> Option<String> {
 pub fn get_item_path_markdown(db: &dyn HirDb, item: ItemKind) -> Option<String> {
     item.scope()
         .pretty_path(db)
-        .map(|path| format!("```fe\n{}\n```", path))
+        .map(|path| format!("```fe\n{path}\n```"))
 }
 
 pub fn get_item_definition_markdown(db: &dyn SpannedHirDb, item: ItemKind) -> Option<String> {
     // TODO: use pending AST features to get the definition without all this text manipulation
-    let span = item.lazy_span().resolve(db)?;
+    let span = item.span().resolve(db)?;
 
     let mut start: usize = span.range.start().into();
     let mut end: usize = span.range.end().into();
 
     // if the item has a body or children, cut that stuff out
     let body_start = match item {
-        ItemKind::Func(func) => Some(func.body(db)?.lazy_span().resolve(db)?.range.start()),
+        ItemKind::Func(func) => Some(func.body(db)?.span().resolve(db)?.range.start()),
         ItemKind::Mod(module) => Some(module.scope().name_span(db)?.resolve(db)?.range.end()),
         // TODO: handle other item types
         _ => None,

@@ -1,12 +1,11 @@
-use std::convert::{identity, Infallible};
+use std::convert::{Infallible, identity};
 use unwrap_infallible::UnwrapInfallible;
 
 use super::{
-    define_scope,
+    Checkpoint, ErrProof, Parser, Recovery, define_scope,
     expr_atom::{self, is_expr_atom_head},
     param::{CallArgListScope, GenericArgListScope},
     token_stream::TokenStream,
-    Checkpoint, ErrProof, Parser, Recovery,
 };
 use crate::{ExpectedKind, SyntaxKind};
 
@@ -200,7 +199,7 @@ fn infix_binding_power<S: TokenStream>(parser: &mut Parser<S>) -> Option<(u8, u8
             return {
                 parser.set_newline_as_trivia(is_trivia);
                 None
-            }
+            };
         }
     };
 

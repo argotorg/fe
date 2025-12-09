@@ -1,0 +1,28 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/generic_arg_path_resolution_fail.fe
+---
+error[2-0002]: `Bar` is not found
+   ┌─ generic_arg_path_resolution_fail.fe:21:19
+   │
+21 │     type Foo = T::Bar  // Error: T has Tr2 bound but Tr2 doesn't have Bar associated type
+   │                   ^^^ `Bar` is not found
+
+error[2-0002]: `NonExistent` is not found
+   ┌─ generic_arg_path_resolution_fail.fe:34:12
+   │
+34 │     x: Vec<NonExistent>  // Error: NonExistent doesn't exist
+   │            ^^^^^^^^^^^ `NonExistent` is not found
+
+error[2-0002]: `Bar` is not found
+   ┌─ generic_arg_path_resolution_fail.fe:40:26
+   │
+40 │     type Foo = Concrete::Bar  // Error: Concrete doesn't have associated type Bar
+   │                          ^^^ `Bar` is not found
+
+error[2-0002]: `Missing` is not found
+   ┌─ generic_arg_path_resolution_fail.fe:53:26
+   │
+53 │     type Foo = T::Inner::Missing  // Error: T::Inner doesn't have associated type Missing
+   │                          ^^^^^^^ `Missing` is not found

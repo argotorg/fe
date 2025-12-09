@@ -1,7 +1,7 @@
 ---
 source: crates/parser/tests/error_recovery.rs
 expression: node
-input_file: crates/parser/test_files/error_recovery/items/struct_.fe
+input_file: test_files/error_recovery/items/struct_.fe
 ---
 Root@0..160
   ItemList@0..160
@@ -89,17 +89,18 @@ Root@0..160
               Func@101..142
                 FnKw@101..103 "fn"
                 WhiteSpace@103..104 " "
-                Ident@104..107 "foo"
-                FuncParamList@107..109
-                  LParen@107..108 "("
-                  RParen@108..109 ")"
-                WhiteSpace@109..111 "  "
-                Arrow@111..113 "->"
-                WhiteSpace@113..114 " "
-                PathType@114..117
-                  Path@114..117
-                    PathSegment@114..117
-                      Ident@114..117 "i32"
+                FuncSignature@104..117
+                  Ident@104..107 "foo"
+                  FuncParamList@107..109
+                    LParen@107..108 "("
+                    RParen@108..109 ")"
+                  WhiteSpace@109..111 "  "
+                  Arrow@111..113 "->"
+                  WhiteSpace@113..114 " "
+                  PathType@114..117
+                    Path@114..117
+                      PathSegment@114..117
+                        Ident@114..117 "i32"
                 WhiteSpace@117..118 " "
                 BlockExpr@118..142
                   LBrace@118..119 "{"

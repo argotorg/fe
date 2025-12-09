@@ -1,0 +1,17 @@
+// Test case for ambiguous references
+mod foo {
+    pub struct Thing {}
+}
+
+mod bar {
+    pub struct Thing {}
+}
+
+// Import both Things into the same scope
+use foo::Thing
+use bar::Thing
+
+fn test() {
+    // This should resolve to both candidates
+    let x: Thing
+}

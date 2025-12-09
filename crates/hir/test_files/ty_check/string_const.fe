@@ -1,0 +1,5 @@
+const SIZE: usize = 4
+
+fn f() {
+    let s: String<SIZE>
+}

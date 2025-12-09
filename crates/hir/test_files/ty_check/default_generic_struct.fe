@@ -1,0 +1,17 @@
+struct Wrap<T = i32> {
+    v: T
+}
+
+struct Wrap2<T, U = T> {
+    a: T,
+    b: U,
+}
+
+fn main() {
+    let a: Wrap
+    let c: Wrap2<u64> = Wrap2 { a: 10, b: 20 }
+
+    let x = Wrap { v: 1 }
+    let z = Wrap<u64> { v: 2 }
+}
+

@@ -1,0 +1,34 @@
+---
+source: crates/hir-analysis/tests/pattern_matching.rs
+expression: diagnostic_output
+input_file: test_files/pattern_matching/non_exhaustive/large_tuple_non_exhaustive.fe
+---
+Non-exhaustive test file large_tuple_non_exhaustive.fe has 2 diagnostic(s):
+
+error[8-0034]: non-exhaustive patterns: type `(u8, u8, u8, u8)` is not covered
+   ┌─ large_tuple_non_exhaustive.fe:4:5
+   │  
+ 4 │ ╭     match t {
+ 5 │ │         (0, _, _, _) => 1
+ 6 │ │         (_, 0, _, _) => 2
+ 7 │ │         (_, _, 0, _) => 3
+ 8 │ │         // Missing patterns for when all first three elements are non-zero and fourth can be anything
+ 9 │ │         // e.g. (1,1,1,_)
+10 │ │     }
+   │ ╰─────^ match expression does not cover all possible values
+   │  
+   = Not covered: `(_, _, _, _)`
+
+error[8-0034]: non-exhaustive patterns: type `(u8, u8)` is not covered
+   ┌─ large_tuple_non_exhaustive.fe:18:5
+   │  
+18 │ ╭     match tuple_storage {
+19 │ │         (1, val) => {
+20 │ │             return val
+21 │ │         }
+   · │
+24 │ │         }
+25 │ │     }
+   │ ╰─────^ match expression does not cover all possible values
+   │  
+   = Not covered: `(_, _)`

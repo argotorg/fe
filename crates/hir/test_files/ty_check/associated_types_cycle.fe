@@ -1,0 +1,48 @@
+trait Abi {
+    type Selector: Encode<Self>
+    type Encoder: AbiEncoder
+}
+
+trait AbiEncoder {
+    fn with_encoded_size(_: usize) -> Self
+}
+
+struct SolAbi {}
+impl Abi for SolAbi {
+    type Selector = [u8; 4]
+    type Encoder = SolEncoder
+}
+
+struct SolEncoder { max_bytes: usize }
+impl SolEncoder {
+    fn write_byte(mut self, _: u8) {}
+}
+
+impl AbiEncoder for SolEncoder {
+    fn with_encoded_size(_ n: usize) -> Self {
+        Self {
+            max_bytes: n
+        }
+    }
+}
+
+trait Encode<A: Abi> {
+    fn encode(self, mut _ e: A::Encoder)
+}
+
+impl Encode<SolAbi> for [u8; 4] {
+    fn encode(self, mut _ e: SolAbi::Encoder) {
+        e.write_byte(self[0])
+        e.write_byte(self[1])
+        e.write_byte(self[2])
+        e.write_byte(self[3])
+    }
+}
+
+fn f() {
+    let enc1 = SolAbi::Encoder::with_encoded_size(1024)
+    let enc2 = SolEncoder::with_encoded_size(256)
+    let enc3: SolEncoder = AbiEncoder::with_encoded_size(128)
+    let selector = [0, 1, 2, 3]
+    selector.encode(enc1)
+}

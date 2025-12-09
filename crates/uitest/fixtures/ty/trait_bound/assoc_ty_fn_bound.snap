@@ -1,0 +1,22 @@
+---
+source: crates/uitest/tests/ty.rs
+expression: diags
+input_file: fixtures/ty/trait_bound/assoc_ty_fn_bound.fe
+---
+error[2-0002]: `S5` is not found
+   ┌─ assoc_ty_fn_bound.fe:24:16
+   │
+24 │     type Foo = S5
+   │                ^^ `S5` is not found
+
+error[6-0003]: trait bound is not satisfied
+   ┌─ assoc_ty_fn_bound.fe:35:5
+   │
+35 │     f(S2{}) // Error: S2::Foo (== S2) doesn't impl Tr2
+   │     ^ `S2` doesn't implement `Tr2`
+
+error[6-0003]: trait bound is not satisfied
+   ┌─ assoc_ty_fn_bound.fe:36:5
+   │
+36 │     f(S3{}) // Error: S3::Foo (== S4) doesn't impl Tr2
+   │     ^ `S4` doesn't implement `Tr2`

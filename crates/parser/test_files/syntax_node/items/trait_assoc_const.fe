@@ -1,0 +1,13 @@
+trait MsgVariant {
+    const SELECTOR: u32
+    const TAG: u8 = 10
+}
+
+struct Some {}
+
+impl MsgVariant for Some {
+    const SELECTOR: u32 = 0xDEADBEEF
+    const TAG: u8 = 7
+}
+
+// ---- minimal second case removed for now

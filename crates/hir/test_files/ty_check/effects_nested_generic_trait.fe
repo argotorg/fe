@@ -1,0 +1,42 @@
+// Test nested generic effects with different type parameters
+pub trait SomeTrait<T> {
+    fn get(self) -> T
+}
+
+pub struct Foo {}
+pub struct Bar {}
+
+impl SomeTrait<u8> for Foo {
+    fn get(self) -> u8 {
+        42
+    }
+}
+
+impl SomeTrait<u16> for Bar {
+    fn get(self) -> u16 {
+        100
+    }
+}
+
+pub fn f() -> u8
+  uses (cap: SomeTrait<u8>)
+{
+    cap.get()
+}
+
+pub fn g() -> u16
+  uses (cap: SomeTrait<u16>)
+{
+    cap.get()
+}
+
+pub fn x() -> (u8, u16, u8) {
+    with (SomeTrait<u8> = Foo{}) {
+        let result_f1 = f()
+        with (SomeTrait<u16> = Bar{}) {
+            let result_f2 = f()  // should work, using Foo
+            let result_g = g()   // should work, using Bar
+            (result_f1, result_g, result_f2)
+        }
+    }
+}

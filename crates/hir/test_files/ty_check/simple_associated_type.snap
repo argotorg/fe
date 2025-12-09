@@ -1,0 +1,52 @@
+---
+source: crates/hir-analysis/tests/ty_check.rs
+expression: res
+input_file: test_files/ty_check/simple_associated_type.fe
+---
+note: 
+   ┌─ simple_associated_type.fe:14:42
+   │  
+14 │   fn get_output<T: MyTrait>() -> T::Output {
+   │ ╭──────────────────────────────────────────^
+15 │ │     todo()
+16 │ │ }
+   │ ╰─^ T::Output
+
+note: 
+   ┌─ simple_associated_type.fe:15:5
+   │
+15 │     todo()
+   │     ^^^^ fn todo
+
+note: 
+   ┌─ simple_associated_type.fe:15:5
+   │
+15 │     todo()
+   │     ^^^^^^ T::Output
+
+note: 
+   ┌─ simple_associated_type.fe:18:14
+   │  
+18 │   fn example() {
+   │ ╭──────────────^
+19 │ │     let a: u32 = get_output<MyStruct>()
+20 │ │ }
+   │ ╰─^ ()
+
+note: 
+   ┌─ simple_associated_type.fe:19:9
+   │
+19 │     let a: u32 = get_output<MyStruct>()
+   │         ^ u32
+
+note: 
+   ┌─ simple_associated_type.fe:19:18
+   │
+19 │     let a: u32 = get_output<MyStruct>()
+   │                  ^^^^^^^^^^^^^^^^^^^^ fn get_output<MyStruct>
+
+note: 
+   ┌─ simple_associated_type.fe:19:18
+   │
+19 │     let a: u32 = get_output<MyStruct>()
+   │                  ^^^^^^^^^^^^^^^^^^^^^^ u32

@@ -1,20 +1,29 @@
 [package]
 name = "fe-driver"
 version = "0.26.0"
-edition = "2021"
+edition.workspace = true
 license = "Apache-2.0"
 repository = "https://github.com/ethereum/fe"
 description = "Provides Fe driver"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
+[lib]
+doctest = false
+
 [dependencies]
 camino.workspace = true
-clap.workspace = true
 codespan-reporting.workspace = true
 salsa.workspace = true
+smol_str.workspace = true
 
 common.workspace = true
 hir.workspace = true
-hir-analysis.workspace = true
 resolver.workspace = true
+url.workspace = true
+tracing.workspace = true
+mir.workspace = true
+petgraph.workspace = true
+
+[dev-dependencies]
+tempfile = "3.13"

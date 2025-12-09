@@ -1,0 +1,34 @@
+---
+source: crates/codegen/tests/yul.rs
+assertion_line: 31
+expression: output
+input_file: tests/fixtures/match_mixed_return.fe
+---
+function f(e) -> ret {
+  let v0 := 0
+  switch get_discriminant(e, 0)
+    case 0 {
+      ret := 0
+      leave
+    }
+    case 1 {
+      v0 := 1
+    }
+    default {
+    }
+  let v1 := v0
+  ret := add(v1, 1)
+}
+function get_discriminant(addr, space) -> ret {
+  let v0 := 0
+  switch space
+    case 0 {
+      v0 := mload(addr)
+    }
+    case 1 {
+      v0 := sload(addr)
+    }
+    default {
+    }
+  ret := v0
+}

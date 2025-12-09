@@ -1,0 +1,155 @@
+---
+source: crates/hir-analysis/tests/ty_check.rs
+expression: res
+input_file: test_files/ty_check/trait_assoc_ty_bounds.fe
+---
+note: 
+   ┌─ trait_assoc_ty_bounds.fe:18:32
+   │  
+18 │       fn next(self) -> Option<T> {
+   │ ╭────────────────────────────────^
+19 │ │         Option::Some(self.val)
+20 │ │     }
+   │ ╰─────^ Option<T>
+
+note: 
+   ┌─ trait_assoc_ty_bounds.fe:19:9
+   │
+19 │         Option::Some(self.val)
+   │         ^^^^^^^^^^^^ fn Some<T>
+
+note: 
+   ┌─ trait_assoc_ty_bounds.fe:19:9
+   │
+19 │         Option::Some(self.val)
+   │         ^^^^^^^^^^^^^^^^^^^^^^ Option<T>
+
+note: 
+   ┌─ trait_assoc_ty_bounds.fe:19:22
+   │
+19 │         Option::Some(self.val)
+   │                      ^^^^ Repeat<T>
+
+note: 
+   ┌─ trait_assoc_ty_bounds.fe:19:22
+   │
+19 │         Option::Some(self.val)
+   │                      ^^^^^^^^ T
+
+note: 
+   ┌─ trait_assoc_ty_bounds.fe:23:49
+   │  
+23 │   fn sum<T: Iterator<Item = i32>>(iter: T) -> i32 {
+   │ ╭─────────────────────────────────────────────────^
+24 │ │     let mut sum = 0
+25 │ │     while true {
+26 │ │         match iter.next() {
+   · │
+31 │ │     sum
+32 │ │ }
+   │ ╰─^ i32
+
+note: 
+   ┌─ trait_assoc_ty_bounds.fe:24:9
+   │
+24 │     let mut sum = 0
+   │         ^^^^^^^ i32
+
+note: 
+   ┌─ trait_assoc_ty_bounds.fe:24:19
+   │
+24 │     let mut sum = 0
+   │                   ^ i32
+
+note: 
+   ┌─ trait_assoc_ty_bounds.fe:25:11
+   │
+25 │     while true {
+   │           ^^^^ bool
+
+note: 
+   ┌─ trait_assoc_ty_bounds.fe:25:16
+   │  
+25 │       while true {
+   │ ╭────────────────^
+26 │ │         match iter.next() {
+27 │ │             Option::Some(x) => { sum += x }
+28 │ │             Option::None => { break }
+29 │ │         }
+30 │ │     }
+   │ ╰─────^ ()
+
+note: 
+   ┌─ trait_assoc_ty_bounds.fe:26:9
+   │  
+26 │ ╭         match iter.next() {
+27 │ │             Option::Some(x) => { sum += x }
+28 │ │             Option::None => { break }
+29 │ │         }
+   │ ╰─────────^ ()
+
+note: 
+   ┌─ trait_assoc_ty_bounds.fe:26:15
+   │
+26 │         match iter.next() {
+   │               ^^^^ T
+
+note: 
+   ┌─ trait_assoc_ty_bounds.fe:26:15
+   │
+26 │         match iter.next() {
+   │               ^^^^^^^^^^^ Option<i32>
+
+note: 
+   ┌─ trait_assoc_ty_bounds.fe:27:13
+   │
+27 │             Option::Some(x) => { sum += x }
+   │             ^^^^^^^^^^^^^^^ Option<i32>
+
+note: 
+   ┌─ trait_assoc_ty_bounds.fe:27:26
+   │
+27 │             Option::Some(x) => { sum += x }
+   │                          ^ i32
+
+note: 
+   ┌─ trait_assoc_ty_bounds.fe:27:32
+   │
+27 │             Option::Some(x) => { sum += x }
+   │                                ^^^^^^^^^^^^ ()
+
+note: 
+   ┌─ trait_assoc_ty_bounds.fe:27:34
+   │
+27 │             Option::Some(x) => { sum += x }
+   │                                  ^^^ i32
+
+note: 
+   ┌─ trait_assoc_ty_bounds.fe:27:34
+   │
+27 │             Option::Some(x) => { sum += x }
+   │                                  ^^^^^^^^ ()
+
+note: 
+   ┌─ trait_assoc_ty_bounds.fe:27:41
+   │
+27 │             Option::Some(x) => { sum += x }
+   │                                         ^ i32
+
+note: 
+   ┌─ trait_assoc_ty_bounds.fe:28:13
+   │
+28 │             Option::None => { break }
+   │             ^^^^^^^^^^^^ Option<i32>
+
+note: 
+   ┌─ trait_assoc_ty_bounds.fe:28:29
+   │
+28 │             Option::None => { break }
+   │                             ^^^^^^^^^ ()
+
+note: 
+   ┌─ trait_assoc_ty_bounds.fe:31:5
+   │
+31 │     sum
+   │     ^^^ i32

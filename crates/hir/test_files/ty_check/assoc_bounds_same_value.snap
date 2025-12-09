@@ -1,0 +1,27 @@
+---
+source: crates/hir-analysis/tests/ty_check.rs
+assertion_line: 48
+expression: res
+input_file: test_files/ty_check/assoc_bounds_same_value.fe
+---
+note: 
+   ┌─ assoc_bounds_same_value.fe:22:57
+   │  
+22 │   fn use_item<T: Trait1<Item = u8> + Trait2<Item = u8>>() {
+   │ ╭─────────────────────────────────────────────────────────^
+23 │ │     let _x: T::Item = 0
+24 │ │ }
+   │ ╰─^ ()
+
+note: 
+   ┌─ assoc_bounds_same_value.fe:23:9
+   │
+23 │     let _x: T::Item = 0
+   │         ^^ u8
+
+note: 
+   ┌─ assoc_bounds_same_value.fe:23:23
+   │
+23 │     let _x: T::Item = 0
+   │                       ^ u8
+

@@ -1,0 +1,16 @@
+---
+source: crates/language-server/src/functionality/goto.rs
+expression: snapshot
+input_file: test_files/goto_ambiguous.fe
+---
+note: 
+   ┌─ goto_ambiguous.fe:16:9
+   │
+16 │     let x: Thing
+   │         ^ -> local: invalid(Other)
+
+note: 
+   ┌─ goto_ambiguous.fe:16:12
+   │
+16 │     let x: Thing
+   │            ^^^^^ -> goto_ambiguous::bar::Thing

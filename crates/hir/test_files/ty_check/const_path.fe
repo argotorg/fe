@@ -1,0 +1,25 @@
+struct A<const N: usize> {
+  inner: [u8; N],
+  s: String<N>,
+}
+impl<const N: usize> A<N> {
+    fn len(self) -> usize {
+        N
+    }
+}
+
+struct B<const N: usize> {
+  inner: A<N>
+}
+
+type B5 = B<5>
+
+fn f<const N: usize>(b5: B5, arr: [u8; N], a: A<N>, s: String<N>) -> usize {
+    a.len()
+}
+
+const SIZE: usize = 10
+fn g(arr: [u8; SIZE]) -> u8 {
+    let s: String<SIZE> = "0123456789"
+    arr[SIZE-1]
+}

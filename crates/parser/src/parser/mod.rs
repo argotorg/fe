@@ -4,7 +4,7 @@ pub(crate) use item::ItemListScope;
 use smallvec::SmallVec;
 
 use self::token_stream::{BackTrackableTokenStream, LexicalToken, TokenStream};
-use crate::{syntax_node::SyntaxNode, ExpectedKind, GreenNode, ParseError, SyntaxKind, TextRange};
+use crate::{ExpectedKind, GreenNode, ParseError, SyntaxKind, TextRange, syntax_node::SyntaxNode};
 
 pub mod token_stream;
 
@@ -72,6 +72,13 @@ impl<S: TokenStream> Parser<S> {
     /// Returns the current non-trivia token kind of the parser.
     pub fn current_kind(&mut self) -> Option<SyntaxKind> {
         self.current_token().map(|tok| tok.syntax_kind())
+    }
+
+    pub fn current_kind_same_line(&mut self) -> Option<SyntaxKind> {
+        let nt = self.set_newline_as_trivia(false);
+        let kind = self.current_kind();
+        self.set_newline_as_trivia(nt);
+        kind
     }
 
     /// Sets the newline kind as trivia if `is_trivia` is `true`. Otherwise, the
@@ -237,6 +244,13 @@ impl<S: TokenStream> Parser<S> {
         let ok = scope.parse(self).is_ok();
         self.leave(checkpoint);
         ok && !self.dry_run_states.last().unwrap().err
+    }
+
+    pub fn parse_or_recover<T>(&mut self, scope: T) -> Result<(), Recovery<ErrProof>>
+    where
+        T: Parse<Error = ParseError> + 'static,
+    {
+        self.or_recover(|parser| parser.parse(scope))
     }
 
     pub fn or_recover<F>(&mut self, f: F) -> Result<(), Recovery<ErrProof>>
@@ -604,17 +618,18 @@ impl<S: TokenStream> Parser<S> {
 
     /// Wrap the current token in a `SyntaxKind::Error`, and add a
     /// `ParseError::Unexpected`.
-    fn unexpected_token_error(&mut self, msg: String) {
+    fn unexpected_token_error(&mut self, msg: String) -> ErrProof {
         let checkpoint = self.enter(ErrorScope::default(), None);
 
         let start_pos = self.current_pos;
         self.bump();
 
-        self.add_error(ParseError::Unexpected(
+        let proof = self.add_error(ParseError::Unexpected(
             msg,
             TextRange::new(start_pos, self.current_pos),
         ));
         self.leave(checkpoint);
+        proof
     }
 
     /// Returns `true` if the parser is in the dry run mode.
@@ -775,7 +790,7 @@ macro_rules! define_scope {
                     pub(super) static ref RECOVERY_TOKENS: smallvec::SmallVec<SyntaxKind, 4> = {
                         #[allow(unused)]
                         use crate::SyntaxKind::*;
-                        smallvec::SmallVec::from_slice(&[$($recoveries), *])
+                        smallvec::smallvec![$($recoveries), *]
                     };
                 }
 
@@ -817,6 +832,7 @@ macro_rules! define_scope_struct {
         }
         impl Default for $scope_name {
             fn default() -> Self {
+                #[allow(unused_imports)]
                 use crate::SyntaxKind::*;
                 Self {
                     __inner: std::cell::Cell::new($kind).into(),

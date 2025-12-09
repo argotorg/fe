@@ -1,0 +1,22 @@
+---
+source: crates/hir-analysis/tests/pattern_matching.rs
+expression: diagnostic_output
+input_file: test_files/pattern_matching/unreachable/imported_variants.fe
+---
+Unreachable test file imported_variants.fe has 2 diagnostic(s):
+
+error[8-0035]: unreachable pattern
+   ┌─ imported_variants.fe:52:9
+   │
+52 │         Tag2 => {
+   │         ^^^^ this pattern is unreachable
+   │
+   = previous patterns already cover all possible values
+
+error[8-0035]: unreachable pattern
+   ┌─ imported_variants.fe:68:9
+   │
+68 │         Tag::Tag2 => {
+   │         ^^^^^^^^^ this pattern is unreachable
+   │
+   = previous patterns already cover all possible values

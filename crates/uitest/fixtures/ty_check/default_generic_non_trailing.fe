@@ -1,0 +1,9 @@
+struct S<T = i32, U> {}
+
+trait Tr<T = Self, U> {}
+
+struct Map<T, U> {}
+type Alias<T = i32, U> = Map<T, U>
+
+fn foo<T = i32, U>(x: U) {}
+

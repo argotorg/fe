@@ -1,0 +1,32 @@
+trait Iterator {
+    type Item
+
+    fn next(self) -> Option<Item>
+}
+
+enum Option<T> {
+    Some(T),
+    None,
+}
+
+struct Repeat<T> {
+    val: T
+}
+
+impl<T> Iterator for Repeat<T> {
+    type Item = T
+    fn next(self) -> Option<T> {
+        Option::Some(self.val)
+    }
+}
+
+fn sum<T: Iterator<Item = i32>>(iter: T) -> i32 {
+    let mut sum = 0
+    while true {
+        match iter.next() {
+            Option::Some(x) => { sum += x }
+            Option::None => { break }
+        }
+    }
+    sum
+}

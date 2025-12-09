@@ -1,0 +1,25 @@
+---
+source: crates/hir-analysis/tests/decision_tree.rs
+expression: res
+input_file: test_files/decision_trees/nested_enum.fe
+---
+note: 
+   ┌─ nested_enum.fe:12:5
+   │  
+12 │ ╭     match n {
+13 │ │         Nested::Value(MyEnum::Unit) => 0
+14 │ │         Nested::Value(MyEnum::Tuple(x, y)) => x + y
+15 │ │         Nested::Other => 100
+16 │ │     }
+   │ ╰─────^ Decision Tree for test_nested_enum:
+ Switch on expr
+ ├─ Value =>
+ │  └─ Switch on expr.0
+ │     ├─ Unit =>
+ │     │  └─ Execute arm #0
+ │     └─ Tuple =>
+ │        └─ Execute arm #1
+ │             x ← expr.0.0
+ │             y ← expr.0.1
+ └─ Other =>
+    └─ Execute arm #2

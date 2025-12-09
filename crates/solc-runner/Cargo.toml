@@ -1,0 +1,11 @@
+[package]
+name = "fe-solc-runner"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+indexmap = "2.6.0"
+serde_json = "1.0.133"
+
+[dev-dependencies]
+contract-harness = { path = "../contract-harness", package = "fe-contract-harness" }

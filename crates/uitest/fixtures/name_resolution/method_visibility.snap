@@ -1,0 +1,13 @@
+---
+source: crates/uitest/tests/name_resolution.rs
+expression: diags
+input_file: fixtures/name_resolution/method_visibility.fe
+---
+error[2-0003]: `secret` is not visible
+   ┌─ method_visibility.fe:24:7
+   │
+ 8 │         fn secret(self) -> i32 { 1 }
+   │            ------ `secret` is defined here
+   ·
+24 │     s.secret()
+   │       ^^^^^^ `secret` is not visible

@@ -1,5 +1,26 @@
 pub use option::Option
+pub use result::Result
 pub use default::Default
+pub use dispatcher::Dispatcher
+pub use ops::*
+pub use ptr::*
+pub use enum_repr::*
+pub use intrinsic::{
+    calldatacopy,
+    calldataload,
+    code_region_len,
+    code_region_offset,
+    codecopy,
+    create2,
+    mload,
+    mstore,
+    mstore8,
+    return_data,
+    sload,
+    sstore,
+}
+pub use mem::alloc
+pub use functional::{Fn, Functor, Applicative, Monad}
 
 extern {
     pub fn panic() -> !

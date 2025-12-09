@@ -1,9 +1,9 @@
 ---
 source: crates/uitest/tests/name_resolution.rs
 expression: diags
-input_file: crates/uitest/fixtures/name_resolution/conflict_variant.fe
+input_file: fixtures/name_resolution/conflict_variant.fe
 ---
-error[2-0001]: `Var1` conflicts with other definitions
+error[3-0018]: duplicate variant name in enum `MyE`
   ┌─ conflict_variant.fe:2:5
   │
 2 │     Var1,
@@ -11,5 +11,3 @@ error[2-0001]: `Var1` conflicts with other definitions
 3 │     Var2,
 4 │     Var1,
   │     ---- `Var1` is redefined here
-
-

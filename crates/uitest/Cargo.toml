@@ -1,18 +1,17 @@
 [package]
 name = "fe-uitest"
 version = "0.26.0"
-edition = "2021"
+edition.workspace = true
 license = "Apache-2.0"
 repository = "https://github.com/ethereum/fe"
 publish = false
 
 [dependencies]
-camino.workspace = true
 dir-test.workspace = true
 wasm-bindgen-test.workspace = true
+url.workspace = true
 
 driver.workspace = true
 test-utils.workspace = true
-hir.workspace = true
-hir-analysis.workspace = true
 common.workspace = true
+hir.workspace = true

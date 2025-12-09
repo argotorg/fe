@@ -1,0 +1,64 @@
+// Test cases for enum data constructors in tuple patterns
+// This reproduces a bug where certain combinations of tuple patterns
+// with enum data constructors cause issues during pattern analysis
+
+enum Item {
+    Value(u8),
+    Pair(u8, u8), 
+    Empty
+}
+
+// This simpler case should work fine
+fn simple_enum_data_tuple(data: (Item, Item)) -> u8 {
+    match data {
+        (Item::Value(x), Item::Value(y)) => x + y
+    }
+}
+
+// This case appears to cause issues in pattern specialization
+// The combination of specific enum data constructor patterns
+// with wildcard patterns seems to create empty matrices
+fn complex_enum_data_tuple(data: (Item, Item)) -> u8 {
+    match data {
+        (Item::Value(x), Item::Value(y)) => x + y
+        (Item::Empty, _) => 100
+        (_, Item::Empty) => 200
+    }
+}
+
+// Test with multiple data constructors
+fn multiple_data_constructors(data: (Item, Item)) -> u8 {
+    match data {
+        (Item::Value(x), Item::Pair(a, b)) => x + a + b
+        (Item::Pair(x, y), Item::Value(z)) => x + y + z
+        (Item::Empty, _) => 100
+        (_, Item::Empty) => 200
+    }
+}
+
+// Test nested enum data in tuple patterns
+fn nested_enum_data_patterns(data: ((Item, u8), Item)) -> u8 {
+    match data {
+        ((Item::Value(x), val), Item::Empty) => x + val
+        ((Item::Empty, _), Item::Value(y)) => y
+    }
+}
+
+// Test with triple tuples and enum data
+fn triple_tuple_enum_data(data: (Item, Item, Item)) -> u8 {
+    match data {
+        (Item::Value(x), Item::Value(y), Item::Value(z)) => x + y + z
+        (Item::Empty, _, _) => 100
+        (_, Item::Empty, _) => 200
+        (_, _, Item::Empty) => 300
+    }
+}
+
+// Test mixed patterns with data constructors and literals
+fn mixed_patterns_with_data(data: (Item, bool)) -> u8 {
+    match data {
+        (Item::Value(x), true) => x
+        (Item::Pair(a, b), false) => a + b
+        (Item::Empty, _) => 0
+    }
+}

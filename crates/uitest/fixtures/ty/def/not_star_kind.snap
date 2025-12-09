@@ -1,17 +1,8 @@
 ---
 source: crates/uitest/tests/ty.rs
 expression: diags
-input_file: crates/uitest/fixtures/ty/def/not_star_kind.fe
+input_file: fixtures/ty/def/not_star_kind.fe
 ---
-error[2-0001]: `foo` conflicts with other definitions
-   ┌─ not_star_kind.fe:28:4
-   │
-28 │ fn foo(gen: Gen) {}
-   │    ^^^ `foo` is defined here
-29 │ 
-30 │ fn foo(gen: Gen<i32>) -> Gen {}
-   │    --- `foo` is redefined here
-
 error[2-0002]: `T` is not found
    ┌─ not_star_kind.fe:21:10
    │
@@ -78,4 +69,11 @@ error[3-0000]: expected `*` kind in this context
 30 │ fn foo(gen: Gen<i32>) -> Gen {}
    │                          ^^^ expected `*` kind here
 
-
+error[3-0100]: conflicting definitions of `foo`
+   ┌─ not_star_kind.fe:28:4
+   │
+28 │ fn foo(gen: Gen) {}
+   │    ^^^ `foo` is defined here
+29 │ 
+30 │ fn foo(gen: Gen<i32>) -> Gen {}
+   │    --- `foo` is redefined here
