@@ -5,10 +5,11 @@
 //!
 //! # Features
 //!
-//! - Static file serving for assets (CSS, JS)
-//! - Dynamic documentation rendering
+//! - Static file serving for assets (CSS, JS, WASM)
+//! - Dynamic documentation rendering (SSR mode)
+//! - Client-side rendering with WASM (CSR mode)
 //! - Live search API
-//! - WebSocket support for live updates (future)
+//! - WebSocket support for live updates
 
 use axum::{
     Router,
@@ -21,6 +22,25 @@ use std::sync::Arc;
 use tower_http::services::ServeDir;
 
 use crate::model::{DocIndex, DocItem, DocItemKind};
+use crate::ssr_components::{DocPage, DocNotFoundSSR};
+
+// Embedded WASM assets for CSR mode
+#[cfg(feature = "csr-assets")]
+static WASM_JS: &[u8] = include_bytes!("../pkg/fe_doc_viewer.js");
+#[cfg(feature = "csr-assets")]
+static WASM_BG: &[u8] = include_bytes!("../pkg/fe_doc_viewer_bg.wasm");
+
+/// Public access to WASM JS glue code for LSP integration
+#[cfg(feature = "csr-assets")]
+pub fn wasm_js_bytes() -> &'static [u8] {
+    WASM_JS
+}
+
+/// Public access to WASM binary for LSP integration
+#[cfg(feature = "csr-assets")]
+pub fn wasm_bg_bytes() -> &'static [u8] {
+    WASM_BG
+}
 
 /// Application state shared across handlers
 pub struct DocServerState {
@@ -28,6 +48,8 @@ pub struct DocServerState {
     pub index: DocIndex,
     /// Path to static assets
     pub assets_path: Option<String>,
+    /// Whether to use CSR (client-side rendering with WASM)
+    pub csr_mode: bool,
 }
 
 impl DocServerState {
@@ -35,11 +57,17 @@ impl DocServerState {
         Self {
             index,
             assets_path: None,
+            csr_mode: false,
         }
     }
 
     pub fn with_assets(mut self, path: impl Into<String>) -> Self {
         self.assets_path = Some(path.into());
+        self
+    }
+
+    pub fn with_csr(mut self, enabled: bool) -> Self {
+        self.csr_mode = enabled;
         self
     }
 }
@@ -51,7 +79,16 @@ pub fn doc_router(state: Arc<DocServerState>) -> Router {
         .route("/doc/{*path}", get(doc_item_handler))
         .route("/api/search", get(search_handler))
         .route("/api/item/{*path}", get(item_api_handler))
+        .route("/api/index", get(index_api_handler))
         .with_state(state.clone());
+
+    // Serve WASM assets for CSR mode
+    #[cfg(feature = "csr-assets")]
+    {
+        router = router
+            .route("/assets/fe_doc_viewer.js", get(wasm_js_handler))
+            .route("/assets/fe_doc_viewer_bg.wasm", get(wasm_bg_handler));
+    }
 
     // Serve static assets if configured
     if let Some(ref assets_path) = state.assets_path {
@@ -59,6 +96,35 @@ pub fn doc_router(state: Arc<DocServerState>) -> Router {
     }
 
     router
+}
+
+/// Serve the WASM JS glue code
+#[cfg(feature = "csr-assets")]
+async fn wasm_js_handler() -> impl IntoResponse {
+    Response::builder()
+        .status(StatusCode::OK)
+        .header(header::CONTENT_TYPE, "application/javascript")
+        .header(header::CACHE_CONTROL, "public, max-age=31536000")
+        .body(Body::from(WASM_JS))
+        .unwrap()
+}
+
+/// Serve the WASM binary
+#[cfg(feature = "csr-assets")]
+async fn wasm_bg_handler() -> impl IntoResponse {
+    Response::builder()
+        .status(StatusCode::OK)
+        .header(header::CONTENT_TYPE, "application/wasm")
+        .header(header::CACHE_CONTROL, "public, max-age=31536000")
+        .body(Body::from(WASM_BG))
+        .unwrap()
+}
+
+/// Full index API handler (returns complete DocIndex as JSON)
+async fn index_api_handler(
+    State(state): State<Arc<DocServerState>>,
+) -> impl IntoResponse {
+    Json(state.index.clone())
 }
 
 /// Index page handler
@@ -73,7 +139,11 @@ async fn index_handler(State(state): State<Arc<DocServerState>>) -> impl IntoRes
         .map(|m| m.path.clone())
         .unwrap_or_default();
 
-    Html(render_page(title, &root_path, &state.index))
+    if state.csr_mode {
+        Html(render_csr_shell(title, &root_path, &state.index))
+    } else {
+        Html(render_page(title, &root_path, &state.index))
+    }
 }
 
 /// Documentation item handler
@@ -81,7 +151,11 @@ async fn doc_item_handler(
     State(state): State<Arc<DocServerState>>,
     Path(path): Path<String>,
 ) -> (StatusCode, Html<String>) {
-    if let Some(item) = state.index.find_by_path(&path) {
+    if state.csr_mode {
+        // CSR mode: always return the shell, let client handle routing
+        let title = "Fe Documentation";
+        (StatusCode::OK, Html(render_csr_shell(title, &path, &state.index)))
+    } else if let Some(item) = state.index.find_by_path(&path) {
         let title = format!("{} - Fe Documentation", item.name);
         (StatusCode::OK, Html(render_page(&title, &path, &state.index)))
     } else {
@@ -123,16 +197,25 @@ async fn item_api_handler(
     }
 }
 
-/// Render a full HTML page
+/// Render a full HTML page using Leptos SSR
 fn render_page(title: &str, current_path: &str, index: &DocIndex) -> String {
-    let sidebar = render_sidebar(index, current_path);
-    let content = if let Some(item) = index.find_by_path(current_path) {
-        render_item(item)
-    } else {
-        render_index(index)
-    };
+    use leptos::prelude::*;
 
-    render_page_template(title, &sidebar, &content)
+    let title = title.to_string();
+    let current_path = current_path.to_string();
+    let index = index.clone();
+
+    let owner = Owner::new();
+    owner.with(|| {
+        view! {
+            <DocPage
+                title=title
+                index=index
+                current_path=current_path
+            />
+        }
+        .to_html()
+    })
 }
 
 /// Shared page template used by both normal pages and 404
@@ -175,6 +258,59 @@ fn render_page_template(title: &str, sidebar: &str, content: &str) -> String {
         sidebar = sidebar,
         content = content,
         script = SCRIPT,
+    )
+}
+
+/// Render a CSR shell page that loads WASM and embeds initial data
+fn render_csr_shell(title: &str, _initial_path: &str, index: &DocIndex) -> String {
+    // Serialize the index to JSON for embedding
+    let index_json = serde_json::to_string(index).unwrap_or_else(|_| "{}".to_string());
+
+    format!(
+        r#"<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{title}</title>
+    <style>{css}</style>
+</head>
+<body>
+    <!-- Initial data embedded for WASM app -->
+    <script id="__FE_DOC_DATA__" type="application/json">{index_json}</script>
+
+    <!-- WASM loader -->
+    <script type="module">
+        try {{
+            const loading = document.getElementById('loading');
+            loading.textContent = 'Loading WASM module...';
+            const mod = await import('/assets/fe_doc_viewer.js');
+            loading.textContent = 'Initializing WASM...';
+            await mod.default();
+            loading.textContent = 'WASM initialized, mounting app...';
+        }} catch (e) {{
+            console.error('WASM load error:', e);
+            document.getElementById('loading').innerHTML =
+                '<div style="color: #ff6b6b;">Error loading documentation viewer:</div>' +
+                '<pre style="color: #a0a0a0; font-size: 12px; text-align: left; padding: 1rem; background: #1a1a2e; border-radius: 4px; overflow: auto;">' +
+                e.toString() + '\\n\\n' + (e.stack || '') + '</pre>';
+        }}
+    </script>
+
+    <!-- Fallback loading indicator (replaced by WASM app) -->
+    <noscript>
+        <div style="padding: 2rem; text-align: center; color: #a0a0a0;">
+            This documentation viewer requires JavaScript and WebAssembly support.
+        </div>
+    </noscript>
+    <div id="loading" style="padding: 2rem; text-align: center; color: #a0a0a0;">
+        Loading documentation...
+    </div>
+</body>
+</html>"#,
+        title = title,
+        css = CSS,
+        index_json = index_json,
     )
 }
 
@@ -290,7 +426,7 @@ fn render_item(item: &DocItem) -> String {
     // Documentation
     if let Some(docs) = &item.docs {
         html.push_str("<div class=\"docs\">");
-        html.push_str(&crate::render::markdown::render_markdown(&docs.body));
+        html.push_str(&crate::markdown::render_markdown(&docs.body));
         html.push_str("</div>");
     }
 
@@ -311,11 +447,22 @@ fn render_item(item: &DocItem) -> String {
         html.push_str("</dl>");
     }
 
-    // Source location
+    // Source location with "Go to Source" button (for LSP mode)
     if let Some(source) = &item.source {
         html.push_str(&format!(
-            r#"<div class="source-link">Defined in <code>{file}</code></div>"#,
+            r#"<div class="source-link">
+                Defined in <code>{file}</code>
+                <button class="goto-source-btn" onclick="gotoSource('{path}')" title="Open in editor">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path>
+                        <polyline points="15 3 21 3 21 9"></polyline>
+                        <line x1="10" y1="14" x2="21" y2="3"></line>
+                    </svg>
+                    Go to Source
+                </button>
+            </div>"#,
             file = source.file,
+            path = item.path,
         ));
     }
 
@@ -604,6 +751,32 @@ h2 {
     border-top: 1px solid var(--border);
     color: var(--text-muted);
     font-size: 0.875rem;
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+    flex-wrap: wrap;
+}
+
+.goto-source-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.4rem 0.8rem;
+    background: var(--accent);
+    color: white;
+    border: none;
+    border-radius: 4px;
+    font-size: 0.8rem;
+    cursor: pointer;
+    transition: background 0.2s;
+}
+
+.goto-source-btn:hover {
+    background: var(--accent-hover);
+}
+
+.goto-source-btn svg {
+    flex-shrink: 0;
 }
 
 .not-found {
@@ -633,12 +806,289 @@ h2 {
     font-size: 0.875rem;
     font-style: italic;
 }
+
+/* CSR Component Styles */
+.doc-nav-entry {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.25rem 0.5rem;
+    text-decoration: none;
+    color: var(--text-muted);
+    font-size: 0.875rem;
+    border-radius: 4px;
+}
+
+.doc-nav-entry:hover {
+    background: var(--bg);
+    color: var(--text);
+}
+
+.doc-nav-entry.active {
+    background: var(--accent);
+    color: white;
+}
+
+.doc-nav-entry.module {
+    font-weight: 600;
+    color: var(--text);
+}
+
+.doc-nav-name {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.doc-kind-badge {
+    font-size: 0.7rem;
+    padding: 0.1rem 0.4rem;
+    border-radius: 3px;
+    background: var(--border);
+    color: var(--text-muted);
+    text-transform: lowercase;
+    flex-shrink: 0;
+}
+
+.doc-kind-badge.struct { background: #2d4a3e; color: #7ee787; }
+.doc-kind-badge.enum { background: #3d3a2d; color: #e7c77e; }
+.doc-kind-badge.function, .doc-kind-badge.fn { background: #2d3a4a; color: #7eb8e7; }
+.doc-kind-badge.trait { background: #4a2d4a; color: #e77ee7; }
+.doc-kind-badge.module, .doc-kind-badge.mod { background: #2d2d4a; color: #9d7ee7; }
+.doc-kind-badge.contract { background: #4a3d2d; color: #e7b87e; }
+.doc-kind-badge.type { background: #2d4a4a; color: #7ee7e7; }
+.doc-kind-badge.const { background: #3a2d4a; color: #b87ee7; }
+
+.doc-search {
+    position: relative;
+    margin-bottom: 1.5rem;
+}
+
+.doc-search-input {
+    width: 100%;
+    padding: 0.75rem 1rem;
+    background: var(--bg-secondary);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    color: var(--text);
+    font-size: 1rem;
+}
+
+.doc-search-input:focus {
+    outline: none;
+    border-color: var(--accent);
+}
+
+.doc-search-results {
+    position: absolute;
+    top: 100%;
+    left: 0;
+    right: 0;
+    background: var(--bg-secondary);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    margin-top: 0.25rem;
+    max-height: 300px;
+    overflow-y: auto;
+    z-index: 100;
+}
+
+.doc-search-result {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    width: 100%;
+    padding: 0.5rem 0.75rem;
+    background: none;
+    border: none;
+    color: var(--text);
+    text-align: left;
+    cursor: pointer;
+}
+
+.doc-search-result:hover {
+    background: var(--bg);
+}
+
+.doc-search-result-name {
+    font-weight: 500;
+}
+
+.doc-search-result-path {
+    color: var(--text-muted);
+    font-size: 0.8rem;
+    margin-left: auto;
+}
+
+.doc-item {
+    max-width: 800px;
+}
+
+.doc-item-header {
+    margin-bottom: 1.5rem;
+}
+
+.doc-item-title {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+}
+
+.doc-item-title h1 {
+    font-size: 1.75rem;
+    margin: 0;
+}
+
+.doc-item-path {
+    color: var(--text-muted);
+    font-family: monospace;
+    font-size: 0.875rem;
+    margin-top: 0.25rem;
+}
+
+.doc-signature {
+    margin-bottom: 1.5rem;
+}
+
+.doc-code-block {
+    background: var(--code-bg);
+    padding: 1rem;
+    border-radius: 6px;
+    overflow-x: auto;
+    margin: 0;
+}
+
+.doc-code-block code {
+    font-family: "JetBrains Mono", "Fira Code", monospace;
+    font-size: 0.9rem;
+    white-space: pre;
+}
+
+.doc-body {
+    line-height: 1.7;
+}
+
+.doc-body p {
+    margin-bottom: 1rem;
+}
+
+.doc-body code {
+    background: var(--code-bg);
+    padding: 0.125rem 0.375rem;
+    border-radius: 4px;
+    font-family: monospace;
+    font-size: 0.9em;
+}
+
+.doc-children {
+    margin-top: 2rem;
+}
+
+.doc-child-section {
+    margin-bottom: 2rem;
+}
+
+.doc-child-section h2 {
+    font-size: 1.25rem;
+    margin-bottom: 1rem;
+    padding-bottom: 0.5rem;
+    border-bottom: 1px solid var(--border);
+}
+
+.doc-child-list {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+}
+
+.doc-child-item {
+    background: var(--bg-secondary);
+    border-radius: 6px;
+    padding: 0.75rem 1rem;
+}
+
+.doc-child-header {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+.doc-child-signature {
+    font-family: monospace;
+    font-size: 0.9rem;
+}
+
+.doc-expand-btn {
+    background: none;
+    border: none;
+    color: var(--text-muted);
+    cursor: pointer;
+    padding: 0;
+    font-size: 0.8rem;
+}
+
+.doc-child-docs {
+    margin-top: 0.75rem;
+    padding-top: 0.75rem;
+    border-top: 1px solid var(--border);
+    color: var(--text-muted);
+    font-size: 0.9rem;
+}
+
+.doc-visibility-badge {
+    font-size: 0.7rem;
+    padding: 0.1rem 0.4rem;
+    border-radius: 3px;
+    background: #4a2d2d;
+    color: #e77e7e;
+}
+
+.doc-source {
+    margin-top: 2rem;
+    padding-top: 1rem;
+    border-top: 1px solid var(--border);
+    color: var(--text-muted);
+    font-size: 0.875rem;
+}
+
+.doc-source a {
+    color: var(--accent);
+    text-decoration: none;
+}
+
+.doc-source a:hover {
+    text-decoration: underline;
+}
+
+.doc-not-found {
+    text-align: center;
+    padding: 4rem 2rem;
+    color: var(--text-muted);
+}
+
+.doc-not-found h1 {
+    color: var(--text);
+    margin-bottom: 1rem;
+}
 "#;
 
 const SCRIPT: &str = r#"<script>
     // Auto-follow toggle
     function toggleAutoFollow(checked) {
         localStorage.setItem('fe-docs-auto-follow', checked);
+    }
+
+    // Go to source in editor (for LSP mode)
+    function gotoSource(path) {
+        fetch('/api/goto/' + encodeURIComponent(path), { method: 'POST' })
+            .then(response => {
+                if (!response.ok) {
+                    console.warn('Go to source not available (not running through LSP)');
+                }
+            })
+            .catch(err => {
+                console.warn('Go to source failed:', err);
+            });
     }
 
     // Restore auto-follow state on page load
@@ -681,16 +1131,40 @@ const SCRIPT: &str = r#"<script>
                 const msg = JSON.parse(event.data);
                 if (msg.type === 'reload') {
                     window.location.reload();
+                } else if (msg.type === 'update') {
+                    // Re-fetch current page and replace content
+                    fetch(window.location.pathname)
+                        .then(r => r.text())
+                        .then(html => {
+                            const parser = new DOMParser();
+                            const newDoc = parser.parseFromString(html, 'text/html');
+                            // Replace main content
+                            const newContent = newDoc.querySelector('.doc-content');
+                            const oldContent = document.querySelector('.doc-content');
+                            if (newContent && oldContent) {
+                                oldContent.innerHTML = newContent.innerHTML;
+                            }
+                            // Update sidebar (items may have changed)
+                            const newSidebar = newDoc.querySelector('.sidebar-nav');
+                            const oldSidebar = document.querySelector('.sidebar-nav');
+                            if (newSidebar && oldSidebar) {
+                                oldSidebar.innerHTML = newSidebar.innerHTML;
+                            }
+                        });
                 } else if (msg.type === 'navigate') {
+                    const currentPath = window.location.pathname.replace('/doc/', '');
+
+                    // Rename redirects (with if_on_path) always work if we're on the old page
+                    if (msg.if_on_path) {
+                        if (currentPath === msg.if_on_path) {
+                            window.location.href = '/doc/' + msg.path;
+                        }
+                        return; // Don't continue to auto-follow check for redirects
+                    }
+
+                    // Regular navigation only works with auto-follow enabled
                     const autoFollow = document.getElementById('auto-follow');
                     if (autoFollow && autoFollow.checked) {
-                        // Check if_on_path constraint (for redirects during rename)
-                        if (msg.if_on_path) {
-                            const currentPath = window.location.pathname.replace('/doc/', '');
-                            if (currentPath !== msg.if_on_path) {
-                                return; // Don't navigate if we're not on the expected page
-                            }
-                        }
                         window.location.href = '/doc/' + msg.path;
                     }
                 }
@@ -708,19 +1182,23 @@ const SCRIPT: &str = r#"<script>
     })();
 </script>"#;
 
-/// Render a 404 page using the same template as normal pages (keeps WebSocket/auto-follow working)
+/// Render a 404 page using Leptos SSR (keeps WebSocket/auto-follow working)
 fn render_page_not_found(path: &str, index: &DocIndex) -> String {
-    let sidebar = render_sidebar(index, "");
-    let content = format!(
-        r#"<div class="not-found">
-            <h1>Item Not Found</h1>
-            <p>The documentation item <code>{}</code> could not be found.</p>
-            <p class="not-found-hint">It may have been renamed or removed.</p>
-        </div>"#,
-        html_escape(path)
-    );
+    use leptos::prelude::*;
 
-    render_page_template("Not Found - Fe Documentation", &sidebar, &content)
+    let path = path.to_string();
+    let index = index.clone();
+
+    let owner = Owner::new();
+    owner.with(|| {
+        view! {
+            <DocNotFoundSSR
+                path=path
+                index=index
+            />
+        }
+        .to_html()
+    })
 }
 
 /// Configuration for the documentation server
@@ -731,6 +1209,8 @@ pub struct DocServerConfig {
     pub host: String,
     /// Path to static assets
     pub assets_path: Option<String>,
+    /// Enable CSR mode (client-side rendering with WASM)
+    pub csr_mode: bool,
 }
 
 impl Default for DocServerConfig {
@@ -739,13 +1219,14 @@ impl Default for DocServerConfig {
             port: 8080,
             host: "127.0.0.1".to_string(),
             assets_path: None,
+            csr_mode: false,
         }
     }
 }
 
 /// Start the documentation server
 pub async fn serve(index: DocIndex, config: DocServerConfig) -> Result<(), std::io::Error> {
-    let mut state = DocServerState::new(index);
+    let mut state = DocServerState::new(index).with_csr(config.csr_mode);
     if let Some(assets_path) = config.assets_path {
         state = state.with_assets(assets_path);
     }
@@ -755,7 +1236,11 @@ pub async fn serve(index: DocIndex, config: DocServerConfig) -> Result<(), std::
     let addr = format!("{}:{}", config.host, config.port);
     let listener = tokio::net::TcpListener::bind(&addr).await?;
 
-    tracing::info!("Documentation server listening on http://{}", addr);
+    if config.csr_mode {
+        tracing::info!("Documentation server (CSR mode) listening on http://{}", addr);
+    } else {
+        tracing::info!("Documentation server listening on http://{}", addr);
+    }
 
     axum::serve(listener, app).await
 }
@@ -773,4 +1258,9 @@ pub fn render_item_for_lsp(item: &DocItem) -> String {
 /// Public function for LSP integration - renders a 404 page
 pub fn render_page_not_found_for_lsp(path: &str, index: &DocIndex) -> String {
     render_page_not_found(path, index)
+}
+
+/// Public function for LSP integration - renders a CSR shell page
+pub fn render_csr_shell_for_lsp(title: &str, path: &str, index: &DocIndex) -> String {
+    render_csr_shell(title, path, index)
 }

@@ -1,21 +1,22 @@
 //! Fe Documentation Engine
 //!
-//! This crate provides documentation extraction, rendering, and serving for Fe projects.
-//! It supports both static site generation and dynamic, LSP-driven documentation browsing.
+//! This crate provides documentation extraction from Fe's HIR.
+//! It traverses the HIR and produces a `DocIndex` that can be rendered
+//! by the `doc-viewer` crate.
 //!
 //! # Architecture
 //!
-//! - `model`: Data structures representing extracted documentation
 //! - `extract`: Logic for traversing HIR and extracting documentation
-//! - `render`: Leptos components for rendering documentation
-//! - `server`: Axum-based HTTP server for dynamic doc serving (behind `ssr` feature)
+//!
+//! The extracted `DocIndex` is defined in `doc-viewer` and can be:
+//! - Rendered as HTML by the doc-viewer server
+//! - Serialized to JSON for static site generation
+//! - Sent to a WASM client for client-side rendering
 
 pub mod extract;
-pub mod model;
-pub mod render;
 
-#[cfg(feature = "ssr")]
-pub mod server;
+// Re-export model from doc-viewer for convenience
+pub use doc_viewer::model;
+pub use doc_viewer::model::*;
 
 pub use extract::DocExtractor;
-pub use model::*;
