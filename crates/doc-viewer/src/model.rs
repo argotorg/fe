@@ -32,6 +32,20 @@ pub struct DocItem {
     /// Trait implementations for this type (structs, enums, contracts)
     #[serde(default)]
     pub trait_impls: Vec<DocTraitImpl>,
+    /// Types that implement this trait (for trait pages)
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub implementors: Vec<DocImplementor>,
+}
+
+/// A type that implements a trait
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct DocImplementor {
+    /// The implementing type name
+    pub type_name: String,
+    /// Path to the type's documentation
+    pub type_url: String,
+    /// The full impl signature
+    pub signature: String,
 }
 
 impl DocItem {
@@ -379,31 +393,72 @@ impl DocIndex {
             .collect()
     }
 
-    /// Link trait implementations to their target types.
+    /// Link trait implementations to their target types and implementors to traits.
     /// `links` is a list of (target_type_path, DocTraitImpl) pairs extracted
     /// from the HIR using semantic helpers.
     pub fn link_trait_impls(&mut self, links: Vec<(String, DocTraitImpl)>) {
-        for (target_type, trait_impl) in links {
-            // Extract simple name from target (handles "MyStruct", "mod::MyStruct", "MyStruct<T>")
-            let target_simple_name = extract_simple_type_name(&target_type);
+        // First pass: collect implementors for each trait
+        let mut trait_implementors: std::collections::HashMap<String, Vec<DocImplementor>> =
+            std::collections::HashMap::new();
 
-            // Find items whose name or path matches the target type
+        for (target_type, trait_impl) in &links {
+            // Skip inherent impls (empty trait_name)
+            if trait_impl.trait_name.is_empty() {
+                continue;
+            }
+
+            let trait_simple_name = extract_simple_type_name(&trait_impl.trait_name);
+            let type_simple_name = extract_simple_type_name(target_type);
+
+            // Create implementor entry
+            let implementor = DocImplementor {
+                type_name: type_simple_name.clone(),
+                type_url: format!("{}/struct", target_type), // Will be refined below
+                signature: trait_impl.signature.clone(),
+            };
+
+            trait_implementors
+                .entry(trait_simple_name)
+                .or_default()
+                .push(implementor);
+        }
+
+        // Second pass: link trait impls to types and implementors to traits
+        for (target_type, trait_impl) in links {
+            let target_simple_name = extract_simple_type_name(&target_type);
+            let trait_simple_name = extract_simple_type_name(&trait_impl.trait_name);
+
             for item in &mut self.items {
+                // Link trait impls to types (structs, enums, contracts)
                 let is_type = matches!(
                     item.kind,
                     DocItemKind::Struct | DocItemKind::Enum | DocItemKind::Contract
                 );
-                if !is_type {
-                    continue;
+                if is_type {
+                    let matches = item.path == target_type
+                        || item.name == target_simple_name
+                        || item.path.ends_with(&format!("::{}", target_simple_name));
+
+                    if matches {
+                        item.trait_impls.push(trait_impl.clone());
+                    }
                 }
 
-                // Match by: exact path, simple name, or path ends with target
-                let matches = item.path == target_type
-                    || item.name == target_simple_name
-                    || item.path.ends_with(&format!("::{}", target_simple_name));
+                // Link implementors to traits
+                if item.kind == DocItemKind::Trait && !trait_impl.trait_name.is_empty() {
+                    let trait_matches = item.name == trait_simple_name
+                        || item.path.ends_with(&format!("::{}", trait_simple_name));
 
-                if matches {
-                    item.trait_impls.push(trait_impl.clone());
+                    if trait_matches {
+                        if let Some(impls) = trait_implementors.get(&trait_simple_name) {
+                            // Only add if not already present
+                            for imp in impls {
+                                if !item.implementors.iter().any(|i| i.type_name == imp.type_name) {
+                                    item.implementors.push(imp.clone());
+                                }
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -448,6 +503,9 @@ pub struct DocModuleItem {
     pub name: String,
     pub path: String,
     pub kind: DocItemKind,
+    /// Brief summary (first sentence of docs)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub summary: Option<String>,
 }
 
 impl DocModuleItem {
