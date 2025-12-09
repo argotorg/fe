@@ -14,9 +14,73 @@ use hir::{
 };
 
 use crate::model::{
-    DocChild, DocChildKind, DocContent, DocGenericParam, DocIndex, DocItem, DocItemKind,
-    DocModuleItem, DocModuleTree, DocSourceLoc, DocTraitImpl, DocVisibility,
+    DocChild, DocChildKind, DocContent, DocGenericParam, DocImplMethod, DocIndex, DocItem,
+    DocItemKind, DocModuleItem, DocModuleTree, DocSourceLoc, DocTraitImpl, DocVisibility,
 };
+
+/// Convert a ScopeId to its documentation URL path.
+///
+/// This is the single source of truth for mapping HIR scopes to doc URLs.
+/// It qualifies paths with the ingot name (replacing "lib" prefix) and
+/// includes the item kind suffix for disambiguation.
+///
+/// Returns the qualified URL path, e.g.:
+/// - "ingot_name::Struct/struct" for a struct
+/// - "ingot_name::module/mod" for a module
+/// - "ingot_name::module::function/fn" for a function
+pub fn scope_to_doc_path(db: &dyn SpannedHirDb, scope: ScopeId) -> Option<String> {
+    let item = scope.item();
+    let path = item.scope().pretty_path(db)?;
+    let ingot = scope.top_mod(db).ingot(db);
+    let qualified_path = qualify_path_with_ingot_name(db, &path, ingot);
+
+    // Get the kind suffix for disambiguation
+    let kind_suffix = item_kind_to_url_suffix(item)?;
+
+    Some(format!("{}/{}", qualified_path, kind_suffix))
+}
+
+/// Map HIR ItemKind to URL suffix string
+fn item_kind_to_url_suffix(item: ItemKind) -> Option<&'static str> {
+    match item {
+        ItemKind::TopMod(_) | ItemKind::Mod(_) => Some("mod"),
+        ItemKind::Func(_) => Some("fn"),
+        ItemKind::Struct(_) => Some("struct"),
+        ItemKind::Enum(_) => Some("enum"),
+        ItemKind::Trait(_) => Some("trait"),
+        ItemKind::Contract(_) => Some("contract"),
+        ItemKind::TypeAlias(_) => Some("type"),
+        ItemKind::Const(_) => Some("const"),
+        ItemKind::Impl(_) => Some("impl"),
+        ItemKind::ImplTrait(_) => Some("impl"),
+        ItemKind::Use(_) | ItemKind::Body(_) => None,
+    }
+}
+
+/// Qualify a module path with the ingot's configured name.
+///
+/// Replaces "lib" prefix with the ingot's name from fe.toml.
+/// - "lib" -> "ingot_name"
+/// - "lib::Foo" -> "ingot_name::Foo"
+/// - Other paths pass through unchanged
+pub fn qualify_path_with_ingot_name(db: &dyn SpannedHirDb, path: &str, ingot: Ingot) -> String {
+    let ingot_name = ingot
+        .config(db)
+        .and_then(|c| c.metadata.name)
+        .map(|s| s.to_string());
+
+    if let Some(name) = ingot_name {
+        if path == "lib" {
+            name
+        } else if let Some(rest) = path.strip_prefix("lib::") {
+            format!("{}::{}", name, rest)
+        } else {
+            path.to_string()
+        }
+    } else {
+        path.to_string()
+    }
+}
 
 /// Extracts documentation from a Fe HIR database
 pub struct DocExtractor<'db> {
@@ -34,6 +98,27 @@ impl<'db> DocExtractor<'db> {
     pub fn with_root_path(mut self, root: impl Into<std::path::PathBuf>) -> Self {
         self.root_path = Some(root.into());
         self
+    }
+
+    /// Rewrite a path to use the ingot's config name instead of "lib".
+    /// Delegates to the shared `qualify_path_with_ingot_name` function.
+    fn qualify_path_with_ingot(&self, path: &str, ingot: Ingot<'db>) -> String {
+        qualify_path_with_ingot_name(self.db, path, ingot)
+    }
+
+    /// Extract documentation for a single item with ingot-qualified paths
+    pub fn extract_item_for_ingot(
+        &self,
+        item: ItemKind<'db>,
+        ingot: Ingot<'db>,
+    ) -> Option<DocItem> {
+        let mut doc_item = self.extract_item(item)?;
+        doc_item.path = self.qualify_path_with_ingot(&doc_item.path, ingot);
+
+        // The display_file from get_source_location is already relative to workspace root,
+        // which includes the ingot directory. No need to prepend ingot name again.
+
+        Some(doc_item)
     }
 
     /// Extract documentation for an entire top-level module and its children
@@ -56,12 +141,11 @@ impl<'db> DocExtractor<'db> {
     /// Extract trait implementation links from an ingot.
     /// Returns a list of (target_type_name, DocTraitImpl) that should be
     /// added to the corresponding type's trait_impls field.
-    pub fn extract_trait_impl_links(
-        &self,
-        ingot: Ingot<'db>,
-    ) -> Vec<(String, DocTraitImpl)> {
+    /// Includes both `impl Trait for Type` and `impl Type` blocks.
+    pub fn extract_trait_impl_links(&self, ingot: Ingot<'db>) -> Vec<(String, DocTraitImpl)> {
         let mut links = Vec::new();
 
+        // Extract `impl Trait for Type` blocks
         for &impl_trait in ingot.all_impl_traits(self.db) {
             let Some(trait_name) = impl_trait.trait_name(self.db) else {
                 continue;
@@ -70,13 +154,26 @@ impl<'db> DocExtractor<'db> {
                 continue;
             };
 
-            // Get the impl's path for linking
-            let impl_path = impl_trait
+            // Construct impl path from parent module + target type + trait
+            // e.g., "hoverable::Numbers::impl_Calculatable"
+            let parent_path = impl_trait
                 .scope()
-                .pretty_path(self.db)
+                .parent_module(self.db)
+                .and_then(|m| m.pretty_path(self.db))
                 .unwrap_or_default();
+            let parent_path = self.qualify_path_with_ingot(&parent_path, ingot);
+
+            // Create a unique impl identifier: Type::impl_Trait
+            let simple_type = extract_simple_name(&target_type);
+            let simple_trait = extract_simple_name(&trait_name);
+            let impl_path = if parent_path.is_empty() {
+                format!("{}::impl_{}", simple_type, simple_trait)
+            } else {
+                format!("{}::{}::impl_{}", parent_path, simple_type, simple_trait)
+            };
 
             let signature = self.get_signature(impl_trait.into());
+            let methods = self.extract_impl_trait_methods(impl_trait);
 
             links.push((
                 target_type,
@@ -84,11 +181,93 @@ impl<'db> DocExtractor<'db> {
                     trait_name,
                     impl_url: format!("{}/impl", impl_path),
                     signature,
+                    methods,
+                },
+            ));
+        }
+
+        // Extract `impl Type` blocks (inherent impls)
+        // Track index per type for multiple inherent impls
+        let mut inherent_impl_counts: std::collections::HashMap<String, usize> =
+            std::collections::HashMap::new();
+
+        for &impl_ in ingot.all_impls(self.db) {
+            let Some(target_type) = impl_.target_type_name(self.db) else {
+                continue;
+            };
+
+            let parent_path = impl_
+                .scope()
+                .parent_module(self.db)
+                .and_then(|m| m.pretty_path(self.db))
+                .unwrap_or_default();
+            let parent_path = self.qualify_path_with_ingot(&parent_path, ingot);
+
+            // Create a unique impl identifier: Type::impl or Type::impl_1, etc.
+            let simple_type = extract_simple_name(&target_type);
+            let count = inherent_impl_counts.entry(simple_type.clone()).or_insert(0);
+            let impl_suffix = if *count == 0 {
+                "impl".to_string()
+            } else {
+                format!("impl_{}", count)
+            };
+            *count += 1;
+
+            let impl_path = if parent_path.is_empty() {
+                format!("{}::{}", simple_type, impl_suffix)
+            } else {
+                format!("{}::{}::{}", parent_path, simple_type, impl_suffix)
+            };
+
+            let signature = self.get_signature(impl_.into());
+            let methods = self.extract_impl_methods_for_type(impl_);
+
+            links.push((
+                target_type,
+                DocTraitImpl {
+                    trait_name: String::new(), // Empty = inherent impl
+                    impl_url: format!("{}/impl", impl_path),
+                    signature,
+                    methods,
                 },
             ));
         }
 
         links
+    }
+
+    /// Extract methods from an `impl Trait for Type` block as DocImplMethod
+    fn extract_impl_trait_methods(&self, it: ImplTrait<'db>) -> Vec<DocImplMethod> {
+        it.methods(self.db)
+            .filter_map(|func| {
+                let name = func.name(self.db).to_opt()?.data(self.db).to_string();
+                let signature = self.get_signature(func.into());
+                let docs = self.get_docstring(func.scope());
+
+                Some(DocImplMethod {
+                    name,
+                    signature,
+                    docs,
+                })
+            })
+            .collect()
+    }
+
+    /// Extract methods from an `impl Type` block as DocImplMethod
+    fn extract_impl_methods_for_type(&self, i: Impl<'db>) -> Vec<DocImplMethod> {
+        i.funcs(self.db)
+            .filter_map(|func| {
+                let name = func.name(self.db).to_opt()?.data(self.db).to_string();
+                let signature = self.get_signature(func.into());
+                let docs = self.get_docstring(func.scope());
+
+                Some(DocImplMethod {
+                    name,
+                    signature,
+                    docs,
+                })
+            })
+            .collect()
     }
 
     /// Extract documentation for a single item
@@ -213,7 +392,17 @@ impl<'db> DocExtractor<'db> {
             start = end;
         }
 
-        file_text[start..end].trim().to_string()
+        let mut sig = file_text[start..end].trim().to_string();
+
+        // For impl blocks, truncate at opening brace (don't show method bodies)
+        if matches!(item, ItemKind::Impl(_) | ItemKind::ImplTrait(_)) {
+            if let Some(brace_pos) = sig.find('{') {
+                sig.truncate(brace_pos);
+                sig = sig.trim_end().to_string();
+            }
+        }
+
+        sig
     }
 
     /// Extract generic parameters from an item
@@ -493,7 +682,10 @@ impl<'db> DocExtractor<'db> {
         } else {
             top_mod.name(self.db).data(self.db).to_string()
         };
-        let path = scope.pretty_path(self.db).unwrap_or_else(|| name.clone());
+
+        // Qualify path with ingot name
+        let raw_path = scope.pretty_path(self.db).unwrap_or_else(|| name.clone());
+        let path = self.qualify_path_with_ingot(&raw_path, ingot);
 
         let mut children = Vec::new();
         let mut items = Vec::new();
@@ -502,14 +694,16 @@ impl<'db> DocExtractor<'db> {
         for child in top_mod.children_non_nested(self.db) {
             match child {
                 ItemKind::Mod(_) => {
-                    children.push(self.build_module_node(child));
+                    // Use ingot-aware builder for inline modules too
+                    children.push(self.build_module_node_for_ingot_inline(ingot, child));
                 }
                 ItemKind::Use(_) | ItemKind::Body(_) | ItemKind::TopMod(_) => {}
                 _ => {
                     if let (Some(name), Some(kind)) =
                         (child.name(self.db), self.item_kind_to_doc_kind(child))
                     {
-                        let child_path = child.scope().pretty_path(self.db).unwrap_or_default();
+                        let raw_child_path = child.scope().pretty_path(self.db).unwrap_or_default();
+                        let child_path = self.qualify_path_with_ingot(&raw_child_path, ingot);
                         items.push(DocModuleItem {
                             name: name.data(self.db).to_string(),
                             path: child_path,
@@ -524,6 +718,69 @@ impl<'db> DocExtractor<'db> {
         let module_tree = ingot.module_tree(self.db);
         for child_mod in module_tree.children(top_mod) {
             children.push(self.build_module_node_for_ingot(ingot, child_mod));
+        }
+
+        // Sort for consistent ordering
+        children.sort_by(|a, b| a.name.cmp(&b.name));
+        items.sort_by(|a, b| {
+            a.kind
+                .as_str()
+                .cmp(b.kind.as_str())
+                .then_with(|| a.name.cmp(&b.name))
+        });
+
+        DocModuleTree {
+            name,
+            path,
+            children,
+            items,
+        }
+    }
+
+    /// Build a module node for an inline module with ingot-qualified paths
+    fn build_module_node_for_ingot_inline(
+        &self,
+        ingot: Ingot<'db>,
+        item: ItemKind<'db>,
+    ) -> DocModuleTree {
+        let scope = item.scope();
+        let name = item
+            .name(self.db)
+            .map(|n| n.data(self.db).to_string())
+            .unwrap_or_else(|| "root".to_string());
+        let raw_path = scope.pretty_path(self.db).unwrap_or_else(|| name.clone());
+        let path = self.qualify_path_with_ingot(&raw_path, ingot);
+
+        let mut children = Vec::new();
+        let mut items = Vec::new();
+
+        // Get direct children
+        let direct_children: Vec<_> = match item {
+            ItemKind::TopMod(tm) => tm.children_non_nested(self.db).collect(),
+            ItemKind::Mod(m) => m.children_non_nested(self.db).collect(),
+            _ => Vec::new(),
+        };
+
+        for child in direct_children {
+            match child {
+                ItemKind::Mod(_) | ItemKind::TopMod(_) => {
+                    children.push(self.build_module_node_for_ingot_inline(ingot, child));
+                }
+                ItemKind::Use(_) | ItemKind::Body(_) => {}
+                _ => {
+                    if let (Some(name), Some(kind)) =
+                        (child.name(self.db), self.item_kind_to_doc_kind(child))
+                    {
+                        let raw_child_path = child.scope().pretty_path(self.db).unwrap_or_default();
+                        let child_path = self.qualify_path_with_ingot(&raw_child_path, ingot);
+                        items.push(DocModuleItem {
+                            name: name.data(self.db).to_string(),
+                            path: child_path,
+                            kind,
+                        });
+                    }
+                }
+            }
         }
 
         // Sort for consistent ordering
@@ -602,4 +859,19 @@ impl<'db> DocExtractor<'db> {
             items,
         }
     }
+}
+
+/// Extract the simple name from a potentially qualified/generic type.
+/// "mod::MyStruct<T>" -> "MyStruct"
+/// "Option<T>" -> "Option"
+fn extract_simple_name(s: &str) -> String {
+    // Remove generic params first
+    let without_generics = s.split('<').next().unwrap_or(s);
+    // Get last path segment
+    without_generics
+        .rsplit("::")
+        .next()
+        .unwrap_or(without_generics)
+        .trim()
+        .to_string()
 }

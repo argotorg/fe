@@ -296,7 +296,7 @@ pub fn hover_helper(
     if doc_path.is_none() {
         let resolution = top_mod.target_at(db, cursor);
         if let Some(Target::Scope(scope)) = resolution.first() {
-            doc_path = scope.item().scope().pretty_path(db);
+            doc_path = doc_engine::scope_to_doc_path(db, *scope);
         }
     }
 

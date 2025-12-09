@@ -394,47 +394,249 @@ h2 {
     font-style: italic;
 }
 
-/* Trait implementations section */
-.trait-impls {
+/* Implementations sections */
+.implementations {
     margin-top: 2rem;
-    padding-top: 1.5rem;
-    border-top: 1px solid var(--border);
 }
 
+.inherent-impls,
+.trait-impls {
+    padding-top: 1.5rem;
+    border-top: 1px solid var(--border);
+    margin-bottom: 1.5rem;
+}
+
+.inherent-impls h2,
 .trait-impls h2 {
     font-size: 1.25rem;
     margin-bottom: 1rem;
     color: var(--text);
 }
 
-.trait-impl-list {
+.impl-list {
     display: flex;
     flex-direction: column;
-    gap: 1.5rem;
+    gap: 1rem;
 }
 
-.trait-impl {
+.impl-block {
     padding: 1rem;
     background: var(--bg-secondary);
     border-radius: 6px;
     border: 1px solid var(--border);
 }
 
-.trait-impl h3 {
+.impl-block h3 {
     margin: 0 0 0.75rem 0;
     font-size: 1rem;
 }
 
-.trait-impl h3 a {
+.impl-block h3 a {
     color: var(--accent);
     text-decoration: none;
 }
 
-.trait-impl h3 a:hover {
+.impl-block h3 a:hover {
     text-decoration: underline;
 }
 
-.trait-impl .signature {
+.impl-block .signature {
     margin: 0;
     font-size: 0.85rem;
+}
+
+/* Rustdoc-inspired toggle/collapsible sections */
+.toggle {
+    margin-bottom: 0.75rem;
+}
+
+.toggle > summary {
+    cursor: pointer;
+    list-style: none;
+}
+
+.toggle > summary::-webkit-details-marker {
+    display: none;
+}
+
+.toggle > summary::before {
+    content: '▶';
+    display: inline-block;
+    width: 1rem;
+    font-size: 0.7rem;
+    color: var(--text-muted);
+    transition: transform 0.15s ease;
+}
+
+.toggle[open] > summary::before {
+    transform: rotate(90deg);
+}
+
+/* Anchor links (§) */
+.anchor {
+    color: var(--text-muted);
+    text-decoration: none;
+    font-size: 0.8rem;
+    margin-right: 0.5rem;
+    opacity: 0;
+    transition: opacity 0.15s;
+}
+
+.impl-block:hover .anchor,
+.method-item:hover > summary .anchor,
+h2:hover .anchor {
+    opacity: 1;
+}
+
+.anchor:hover {
+    color: var(--accent);
+}
+
+/* Impl block styling */
+.impl-block {
+    background: var(--bg-secondary);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 0;
+    margin-bottom: 1rem;
+}
+
+.impl-block > summary {
+    padding: 0.75rem 1rem;
+    background: var(--bg-secondary);
+    border-radius: 6px 6px 0 0;
+}
+
+.impl-block[open] > summary {
+    border-bottom: 1px solid var(--border);
+}
+
+.impl-header {
+    display: flex;
+    align-items: center;
+    gap: 0.25rem;
+}
+
+.impl-header h3 {
+    margin: 0;
+    font-size: 0.95rem;
+    font-weight: 600;
+}
+
+.impl-header code {
+    font-family: "JetBrains Mono", "Fira Code", monospace;
+    color: var(--accent);
+}
+
+.impl-content {
+    padding: 0.75rem 1rem;
+}
+
+.impl-signature {
+    background: var(--code-bg);
+    padding: 0.5rem 0.75rem;
+    border-radius: 4px;
+    margin: 0 0 0.75rem 0;
+    font-size: 0.85rem;
+    overflow-x: auto;
+}
+
+.impl-signature code {
+    font-family: "JetBrains Mono", "Fira Code", monospace;
+    white-space: pre;
+}
+
+/* Method items within impl blocks */
+.impl-items {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+}
+
+.method-item {
+    border-left: 3px solid var(--border);
+    margin-left: 0.5rem;
+}
+
+.method-item > summary {
+    padding: 0.5rem 0.75rem;
+}
+
+.method-item[open] > summary {
+    border-bottom: 1px dashed var(--border);
+}
+
+.method-header {
+    display: flex;
+    align-items: center;
+    gap: 0.25rem;
+}
+
+.method-header h4 {
+    margin: 0;
+    font-size: 0.875rem;
+    font-weight: 500;
+}
+
+.code-header code {
+    font-family: "JetBrains Mono", "Fira Code", monospace;
+    color: var(--text);
+}
+
+.method-docblock {
+    padding: 0.5rem 0.75rem;
+    color: var(--text-muted);
+    font-size: 0.875rem;
+    line-height: 1.5;
+}
+
+/* Module members section */
+.module-members {
+    margin-top: 2rem;
+}
+
+.module-members h2 {
+    margin-bottom: 1rem;
+    padding-bottom: 0.5rem;
+    border-bottom: 1px solid var(--border);
+}
+
+.member-group {
+    margin-bottom: 1.5rem;
+}
+
+.member-group h3 {
+    font-size: 1rem;
+    color: var(--text-muted);
+    margin-bottom: 0.5rem;
+}
+
+.member-list {
+    list-style: none;
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+    gap: 0.5rem;
+}
+
+.member-list li a {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.375rem 0.5rem;
+    background: var(--bg-secondary);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    text-decoration: none;
+    color: var(--text);
+    transition: border-color 0.2s, background 0.2s;
+}
+
+.member-list li a:hover {
+    border-color: var(--accent);
+    background: var(--code-bg);
+}
+
+.member-list li a code {
+    font-family: "JetBrains Mono", "Fira Code", monospace;
+    font-size: 0.875rem;
 }

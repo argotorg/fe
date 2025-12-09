@@ -91,7 +91,6 @@ pub fn generate_docs(
             port,
             host: "127.0.0.1".to_string(),
             assets_path: None,
-            csr_mode,
         };
 
         if csr_mode {
@@ -167,9 +166,27 @@ fn extract_ingot(db: &mut DriverDataBase, dir_path: &Utf8PathBuf) -> Option<DocI
         diags.emit(db);
     }
 
-    let root_mod = ingot.root_mod(db);
     let extractor = DocExtractor::new(db);
-    Some(extractor.extract_module(root_mod))
+    let mut index = DocIndex::new();
+
+    // Extract items from all modules with ingot-qualified paths (like LSP does)
+    for top_mod in ingot.all_modules(db) {
+        for item in top_mod.children_nested(db) {
+            if let Some(doc_item) = extractor.extract_item_for_ingot(item, ingot) {
+                index.items.push(doc_item);
+            }
+        }
+    }
+
+    // Build module tree with ingot-qualified paths
+    let root_mod = ingot.root_mod(db);
+    index.modules = extractor.build_module_tree_for_ingot(ingot, root_mod);
+
+    // Extract and link trait implementations
+    let trait_impl_links = extractor.extract_trait_impl_links(ingot);
+    index.link_trait_impls(trait_impl_links);
+
+    Some(index)
 }
 
 fn print_doc_summary(index: &DocIndex) {

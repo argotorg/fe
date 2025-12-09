@@ -295,12 +295,26 @@ pub struct DocSourceLoc {
 /// A trait implementation reference (shown on type pages)
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct DocTraitImpl {
-    /// The name of the trait being implemented (e.g., "Clone")
+    /// The name of the trait being implemented (e.g., "Clone"). Empty for inherent impls.
     pub trait_name: String,
     /// URL path to the impl item's documentation
     pub impl_url: String,
     /// The full signature of the impl (e.g., "impl Clone for MyStruct")
     pub signature: String,
+    /// Methods defined in this impl block (displayed inline on type pages)
+    #[serde(default)]
+    pub methods: Vec<DocImplMethod>,
+}
+
+/// A method in an impl block (for inline display on type pages)
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct DocImplMethod {
+    /// Method name
+    pub name: String,
+    /// Method signature (e.g., "pub fn foo(&self) -> u32")
+    pub signature: String,
+    /// Documentation (first paragraph only for summary)
+    pub docs: Option<String>,
 }
 
 /// A collection of documented items forming a documentation index
@@ -366,22 +380,49 @@ impl DocIndex {
     }
 
     /// Link trait implementations to their target types.
-    /// `links` is a list of (target_type_name, DocTraitImpl) pairs extracted
+    /// `links` is a list of (target_type_path, DocTraitImpl) pairs extracted
     /// from the HIR using semantic helpers.
     pub fn link_trait_impls(&mut self, links: Vec<(String, DocTraitImpl)>) {
         for (target_type, trait_impl) in links {
-            // Find items whose name matches the target type (structs, enums, contracts)
+            // Extract simple name from target (handles "MyStruct", "mod::MyStruct", "MyStruct<T>")
+            let target_simple_name = extract_simple_type_name(&target_type);
+
+            // Find items whose name or path matches the target type
             for item in &mut self.items {
                 let is_type = matches!(
                     item.kind,
                     DocItemKind::Struct | DocItemKind::Enum | DocItemKind::Contract
                 );
-                if is_type && item.name == target_type {
+                if !is_type {
+                    continue;
+                }
+
+                // Match by: exact path, simple name, or path ends with target
+                let matches = item.path == target_type
+                    || item.name == target_simple_name
+                    || item.path.ends_with(&format!("::{}", target_simple_name));
+
+                if matches {
                     item.trait_impls.push(trait_impl.clone());
                 }
             }
         }
     }
+}
+
+/// Extract the simple type name from a potentially qualified/generic path.
+/// "mod::MyStruct<T>" -> "MyStruct"
+/// "MyStruct" -> "MyStruct"
+fn extract_simple_type_name(type_str: &str) -> String {
+    // Remove generic params first
+    let without_generics = type_str.split('<').next().unwrap_or(type_str);
+    // Get last path segment
+    without_generics
+        .rsplit("::")
+        .next()
+        .unwrap_or(without_generics)
+        .trim()
+        .to_string()
 }
 
 /// Module tree for navigation sidebar
