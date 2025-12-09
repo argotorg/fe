@@ -1,0 +1,6 @@
+use dep_bad
+
+pub fn uses_dep() -> u256 {
+    return dep_bad::value()
+}
+

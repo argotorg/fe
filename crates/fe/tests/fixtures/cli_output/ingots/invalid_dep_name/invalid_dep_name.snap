@@ -1,5 +1,6 @@
 ---
 source: crates/fe/tests/cli_output.rs
+assertion_line: 119
 expression: output
 ---
 === STDERR ===

@@ -1,0 +1,4 @@
+pub fn bad() -> u256 {
+    return true
+}
+

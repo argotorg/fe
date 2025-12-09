@@ -1,0 +1,4 @@
+pub fn ok() -> u256 {
+    return 1
+}
+

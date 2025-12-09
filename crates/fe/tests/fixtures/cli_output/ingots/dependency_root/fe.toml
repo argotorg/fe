@@ -1,0 +1,6 @@
+[ingot]
+name = "dependency_root"
+version = "0.1.0"
+
+[dependencies]
+dep_bad = { path = "../dep_bad" }

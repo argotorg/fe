@@ -1,0 +1,4 @@
+pub fn value() -> u256 {
+    return true
+}
+

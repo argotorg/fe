@@ -1,4 +1,4 @@
-use camino::Utf8PathBuf;
+use camino::{Utf8Path, Utf8PathBuf};
 use glob::glob;
 use std::io;
 use std::path::PathBuf;
@@ -6,6 +6,8 @@ use std::{fmt, fs};
 use url::Url;
 
 use crate::Resolver;
+
+pub const FE_TOML: &str = "fe.toml";
 
 pub struct FilesResolver {
     pub file_patterns: Vec<String>,
@@ -31,6 +33,7 @@ pub struct File {
 
 #[derive(Debug)]
 pub struct FilesResource {
+    pub ingot_url: Url,
     pub files: Vec<File>,
 }
 
@@ -153,6 +156,27 @@ impl FilesResolver {
     }
 }
 
+/// Walks up from the provided path to find the ingot root (directory containing fe.toml).
+fn find_ingot_root(start: &Utf8Path) -> Option<Utf8PathBuf> {
+    let mut path = if start.is_file() {
+        start.parent()?.to_path_buf()
+    } else {
+        start.to_path_buf()
+    };
+
+    loop {
+        if path.join(FE_TOML).is_file() {
+            return Some(path);
+        }
+
+        if !path.pop() {
+            break;
+        }
+    }
+
+    None
+}
+
 impl Resolver for FilesResolver {
     type Description = Url;
     type Resource = FilesResource;
@@ -164,15 +188,32 @@ impl Resolver for FilesResolver {
         H: crate::ResolutionHandler<Self>,
     {
         tracing::info!(target: "resolver", "Starting file resolution for URL: {}", url);
-        handler.on_resolution_start(url);
+
+        let requested_path = Utf8PathBuf::from(url.path());
+        let (ingot_path, ingot_url) = if requested_path.is_file() {
+            let ingot_path = find_ingot_root(&requested_path)
+                .ok_or_else(|| FilesResolutionError::DirectoryDoesNotExist(url.clone()))?;
+            let ingot_url = Url::from_directory_path(ingot_path.as_std_path())
+                .expect("ingot path should be representable as URL");
+            (ingot_path, ingot_url)
+        } else if requested_path.is_dir() {
+            let ingot_url = Url::from_directory_path(requested_path.as_std_path())
+                .expect("ingot path should be representable as URL");
+            (requested_path, ingot_url)
+        } else {
+            return Err(FilesResolutionError::DirectoryDoesNotExist(url.clone()));
+        };
+
+        handler.on_resolution_start(&ingot_url);
         let mut files = vec![];
 
-        let ingot_path = Utf8PathBuf::from(url.path());
         tracing::info!(target: "resolver", "Resolving files in path: {}", ingot_path);
 
         // Check if the directory exists
         if !ingot_path.exists() || !ingot_path.is_dir() {
-            return Err(FilesResolutionError::DirectoryDoesNotExist(url.clone()));
+            return Err(FilesResolutionError::DirectoryDoesNotExist(
+                ingot_url.clone(),
+            ));
         }
 
         // Check for required directories first
@@ -181,7 +222,7 @@ impl Resolver for FilesResolver {
             if !required_dir_path.exists() || !required_dir_path.is_dir() {
                 handler.on_resolution_diagnostic(
                     FilesResolutionDiagnostic::RequiredDirectoryMissing(
-                        url.clone(),
+                        ingot_url.clone(),
                         required_dir.path.clone(),
                     ),
                 );
@@ -193,7 +234,7 @@ impl Resolver for FilesResolver {
             let required_path = ingot_path.join(&required_file.path);
             if !required_path.exists() {
                 handler.on_resolution_diagnostic(FilesResolutionDiagnostic::RequiredFileMissing(
-                    url.clone(),
+                    ingot_url.clone(),
                     required_file.path.clone(),
                 ));
             } else {
@@ -261,7 +302,62 @@ impl Resolver for FilesResolver {
         }
 
         tracing::info!(target: "resolver", "File resolution completed successfully, found {} files", files.len());
-        let resource = FilesResource { files };
-        Ok(handler.handle_resolution(url, resource))
+        let resource = FilesResource {
+            ingot_url: ingot_url.clone(),
+            files,
+        };
+        Ok(handler.handle_resolution(&ingot_url, resource))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ResolutionHandler;
+    use std::fs;
+    use tempfile::tempdir;
+
+    struct TestHandler;
+
+    impl ResolutionHandler<FilesResolver> for TestHandler {
+        type Item = FilesResource;
+
+        fn on_resolution_start(&mut self, _description: &Url) {}
+
+        fn on_resolution_diagnostic(&mut self, _diagnostic: FilesResolutionDiagnostic) {}
+
+        fn handle_resolution(&mut self, _description: &Url, resource: FilesResource) -> Self::Item {
+            resource
+        }
+    }
+
+    #[test]
+    fn resolves_from_file_path_within_ingot() {
+        let temp = tempdir().unwrap();
+        let root = Utf8PathBuf::from_path_buf(temp.path().to_path_buf()).unwrap();
+        let fe_toml = root.join(FE_TOML);
+        fs::write(fe_toml.as_std_path(), r#"name = "demo""#).unwrap();
+
+        let src_dir = root.join("src");
+        fs::create_dir_all(src_dir.as_std_path()).unwrap();
+        let lib_path = src_dir.join("lib.fe");
+        fs::write(lib_path.as_std_path(), "contract Foo {}\n").unwrap();
+        let nested_dir = src_dir.join("nested");
+        fs::create_dir_all(nested_dir.as_std_path()).unwrap();
+        let nested_file = nested_dir.join("bar.fe");
+        fs::write(nested_file.as_std_path(), "contract Bar {}\n").unwrap();
+
+        let mut resolver = FilesResolver::new()
+            .with_required_directory("src")
+            .with_required_file("src/lib.fe")
+            .with_pattern("src/**/*.fe");
+
+        let mut handler = TestHandler;
+        let url = Url::from_file_path(nested_file.as_std_path()).unwrap();
+        let resource = resolver.resolve(&mut handler, &url).unwrap();
+
+        assert_eq!(resource.files.len(), 2);
+        assert!(resource.files.iter().any(|f| f.path == lib_path));
+        assert!(resource.files.iter().any(|f| f.path == nested_file));
     }
 }

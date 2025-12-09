@@ -1,0 +1,8 @@
+---
+source: crates/fe/tests/cli_output.rs
+expression: output
+---
+=== STDERR ===
+❌ Downstream ingots reported 1 error (rerun with --show-downstream for details)
+
+=== EXIT CODE: 1 ===

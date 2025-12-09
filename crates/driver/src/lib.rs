@@ -4,6 +4,8 @@ pub mod db;
 pub mod diagnostics;
 pub mod files;
 mod ingot_handler;
+pub mod ops;
+pub mod project;
 
 pub use common::dependencies::DependencyTree;
 
@@ -26,6 +28,8 @@ use resolver::{
     },
 };
 use url::Url;
+
+pub use ops::{BuildOptions, build_path, check_path};
 
 struct LoggingProgress;
 
@@ -65,9 +69,10 @@ pub fn init_ingot(db: &mut DriverDataBase, ingot_url: &Url) -> bool {
     if let Err(err) =
         ingot_graph_resolver.graph_resolve(&mut handler, &IngotDescriptor::Local(ingot_url.clone()))
     {
-        panic!(
-            "Unexpected failure resolving root ingot at {ingot_url}: {err:?}. This indicates a bug in the resolver since directory existence is validated before calling init_ingot."
-        );
+        if handler.logging_modes().1 {
+            eprintln!("❌ Failed to resolve ingot at {ingot_url}: {err:?}");
+        }
+        return true;
     }
 
     let (trace_enabled, stdout_enabled) = handler.logging_modes();

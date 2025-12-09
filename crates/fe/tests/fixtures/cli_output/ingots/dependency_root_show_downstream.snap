@@ -1,0 +1,22 @@
+---
+source: crates/fe/tests/cli_output.rs
+assertion_line: 197
+expression: output
+input_file: tests/fixtures/cli_output/ingots/dependency_root_show_downstream.snap
+---
+=== STDERR ===
+❌ Error in downstream ingot
+
+➖ dep_bad (version: 0.1.0)
+🔗 file://<project>/crates/fe/tests/fixtures/cli_output/ingots/dep_bad/
+
+error[8-0013]: returned type mismatch
+  ┌─ src/lib.fe:2:5
+  │
+1 │ pub fn value() -> u256 {
+  │                   ---- this function expects `u256` to be returned
+2 │     return true
+  │     ^^^^^^^^^^^ expected `u256`, but `bool` is returned
+
+
+=== EXIT CODE: 1 ===

@@ -192,6 +192,8 @@ impl IngotResolver {
             .resolve_files(handler, &ingot_url)
             .map_err(IngotResolutionError::Files)?;
 
+        let ingot_url = files.ingot_url.clone();
+
         Ok((
             handler.handle_resolution(
                 &IngotDescriptor::Remote(description.clone()),
@@ -296,10 +298,11 @@ impl IngotResolver {
         let files = self
             .resolve_files(handler, url)
             .map_err(IngotResolutionError::Files)?;
+        let ingot_url = files.ingot_url.clone();
         Ok(handler.handle_resolution(
             &IngotDescriptor::Local(url.clone()),
             IngotResource {
-                ingot_url: url.clone(),
+                ingot_url,
                 files,
                 origin: IngotOrigin::Local,
             },

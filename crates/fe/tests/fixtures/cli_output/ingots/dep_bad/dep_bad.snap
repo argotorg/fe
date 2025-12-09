@@ -1,0 +1,16 @@
+---
+source: crates/fe/tests/cli_output.rs
+assertion_line: 119
+expression: output
+---
+=== STDERR ===
+error[8-0013]: returned type mismatch
+  ┌─ src/lib.fe:2:5
+  │
+1 │ pub fn value() -> u256 {
+  │                   ---- this function expects `u256` to be returned
+2 │     return true
+  │     ^^^^^^^^^^^ expected `u256`, but `bool` is returned
+
+
+=== EXIT CODE: 1 ===

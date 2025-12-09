@@ -1816,6 +1816,7 @@ version = "0.26.0"
 dependencies = [
  "camino",
  "codespan-reporting",
+ "cranelift-entity",
  "fe-common",
  "fe-hir",
  "fe-mir",
