@@ -204,7 +204,10 @@ impl DocChildKind {
 /// Source location for linking to source code
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct DocSourceLoc {
+    /// Absolute file path (used for navigation)
     pub file: String,
+    /// Relative display path (shown in UI)
+    pub display_file: String,
     pub line: u32,
     pub column: u32,
 }

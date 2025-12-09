@@ -5,9 +5,7 @@
 //!
 //! # Features
 //!
-//! - Static file serving for assets (CSS, JS, WASM)
-//! - Dynamic documentation rendering (SSR mode)
-//! - Client-side rendering with WASM (CSR mode)
+//! - Server-side rendering (SSR) with Leptos
 //! - Live search API
 //! - WebSocket support for live updates
 
@@ -24,32 +22,12 @@ use tower_http::services::ServeDir;
 use crate::model::{DocIndex, DocItem, DocItemKind};
 use crate::ssr_components::{DocPage, DocNotFoundSSR};
 
-// Embedded WASM assets for CSR mode
-#[cfg(feature = "csr-assets")]
-static WASM_JS: &[u8] = include_bytes!("../pkg/fe_doc_viewer.js");
-#[cfg(feature = "csr-assets")]
-static WASM_BG: &[u8] = include_bytes!("../pkg/fe_doc_viewer_bg.wasm");
-
-/// Public access to WASM JS glue code for LSP integration
-#[cfg(feature = "csr-assets")]
-pub fn wasm_js_bytes() -> &'static [u8] {
-    WASM_JS
-}
-
-/// Public access to WASM binary for LSP integration
-#[cfg(feature = "csr-assets")]
-pub fn wasm_bg_bytes() -> &'static [u8] {
-    WASM_BG
-}
-
 /// Application state shared across handlers
 pub struct DocServerState {
     /// The documentation index
     pub index: DocIndex,
     /// Path to static assets
     pub assets_path: Option<String>,
-    /// Whether to use CSR (client-side rendering with WASM)
-    pub csr_mode: bool,
 }
 
 impl DocServerState {
@@ -57,17 +35,11 @@ impl DocServerState {
         Self {
             index,
             assets_path: None,
-            csr_mode: false,
         }
     }
 
     pub fn with_assets(mut self, path: impl Into<String>) -> Self {
         self.assets_path = Some(path.into());
-        self
-    }
-
-    pub fn with_csr(mut self, enabled: bool) -> Self {
-        self.csr_mode = enabled;
         self
     }
 }
@@ -82,42 +54,12 @@ pub fn doc_router(state: Arc<DocServerState>) -> Router {
         .route("/api/index", get(index_api_handler))
         .with_state(state.clone());
 
-    // Serve WASM assets for CSR mode
-    #[cfg(feature = "csr-assets")]
-    {
-        router = router
-            .route("/assets/fe_doc_viewer.js", get(wasm_js_handler))
-            .route("/assets/fe_doc_viewer_bg.wasm", get(wasm_bg_handler));
-    }
-
     // Serve static assets if configured
     if let Some(ref assets_path) = state.assets_path {
         router = router.nest_service("/assets", ServeDir::new(assets_path));
     }
 
     router
-}
-
-/// Serve the WASM JS glue code
-#[cfg(feature = "csr-assets")]
-async fn wasm_js_handler() -> impl IntoResponse {
-    Response::builder()
-        .status(StatusCode::OK)
-        .header(header::CONTENT_TYPE, "application/javascript")
-        .header(header::CACHE_CONTROL, "public, max-age=31536000")
-        .body(Body::from(WASM_JS))
-        .unwrap()
-}
-
-/// Serve the WASM binary
-#[cfg(feature = "csr-assets")]
-async fn wasm_bg_handler() -> impl IntoResponse {
-    Response::builder()
-        .status(StatusCode::OK)
-        .header(header::CONTENT_TYPE, "application/wasm")
-        .header(header::CACHE_CONTROL, "public, max-age=31536000")
-        .body(Body::from(WASM_BG))
-        .unwrap()
 }
 
 /// Full index API handler (returns complete DocIndex as JSON)
@@ -139,11 +81,7 @@ async fn index_handler(State(state): State<Arc<DocServerState>>) -> impl IntoRes
         .map(|m| m.path.clone())
         .unwrap_or_default();
 
-    if state.csr_mode {
-        Html(render_csr_shell(title, &root_path, &state.index))
-    } else {
-        Html(render_page(title, &root_path, &state.index))
-    }
+    Html(render_page(title, &root_path, &state.index))
 }
 
 /// Documentation item handler
@@ -151,11 +89,7 @@ async fn doc_item_handler(
     State(state): State<Arc<DocServerState>>,
     Path(path): Path<String>,
 ) -> (StatusCode, Html<String>) {
-    if state.csr_mode {
-        // CSR mode: always return the shell, let client handle routing
-        let title = "Fe Documentation";
-        (StatusCode::OK, Html(render_csr_shell(title, &path, &state.index)))
-    } else if let Some(item) = state.index.find_by_path(&path) {
+    if let Some(item) = state.index.find_by_path(&path) {
         let title = format!("{} - Fe Documentation", item.name);
         (StatusCode::OK, Html(render_page(&title, &path, &state.index)))
     } else {
@@ -1209,8 +1143,6 @@ pub struct DocServerConfig {
     pub host: String,
     /// Path to static assets
     pub assets_path: Option<String>,
-    /// Enable CSR mode (client-side rendering with WASM)
-    pub csr_mode: bool,
 }
 
 impl Default for DocServerConfig {
@@ -1219,14 +1151,13 @@ impl Default for DocServerConfig {
             port: 8080,
             host: "127.0.0.1".to_string(),
             assets_path: None,
-            csr_mode: false,
         }
     }
 }
 
 /// Start the documentation server
 pub async fn serve(index: DocIndex, config: DocServerConfig) -> Result<(), std::io::Error> {
-    let mut state = DocServerState::new(index).with_csr(config.csr_mode);
+    let mut state = DocServerState::new(index);
     if let Some(assets_path) = config.assets_path {
         state = state.with_assets(assets_path);
     }
@@ -1236,11 +1167,7 @@ pub async fn serve(index: DocIndex, config: DocServerConfig) -> Result<(), std::
     let addr = format!("{}:{}", config.host, config.port);
     let listener = tokio::net::TcpListener::bind(&addr).await?;
 
-    if config.csr_mode {
-        tracing::info!("Documentation server (CSR mode) listening on http://{}", addr);
-    } else {
-        tracing::info!("Documentation server listening on http://{}", addr);
-    }
+    tracing::info!("Documentation server listening on http://{}", addr);
 
     axum::serve(listener, app).await
 }

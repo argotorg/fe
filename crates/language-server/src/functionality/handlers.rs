@@ -190,6 +190,16 @@ pub async fn initialize(
 
     backend.workspace_root = Some(root.clone());
 
+    // Check if client supports window/showDocument
+    backend.supports_show_document = message
+        .capabilities
+        .window
+        .as_ref()
+        .and_then(|w| w.show_document.as_ref())
+        .map(|sd| sd.support)
+        .unwrap_or(false);
+    info!("Client supports window/showDocument: {}", backend.supports_show_document);
+
     // Discover and load all ingots in the workspace
     discover_and_load_ingots(backend, &root).await?;
 
@@ -749,24 +759,40 @@ pub async fn handle_goto_source(
     let column = request.column.saturating_sub(1);
     let position = Position::new(line, column);
 
-    let params = ShowDocumentParams {
-        uri: file_url,
-        external: None,
-        take_focus: Some(true),
-        selection: Some(Range::new(position, position)),
-    };
+    if backend.supports_show_document {
+        // Use LSP window/showDocument (LSP 3.16+)
+        let params = ShowDocumentParams {
+            uri: file_url,
+            external: None,
+            take_focus: Some(true),
+            selection: Some(Range::new(position, position)),
+        };
 
-    let mut client = backend.client.clone();
-    match client.show_document(params).await {
-        Ok(result) => {
-            if result.success {
-                info!("Successfully opened document in editor");
-            } else {
-                warn!("Editor reported failure opening document");
+        let mut client = backend.client.clone();
+        match client.show_document(params).await {
+            Ok(result) => {
+                if result.success {
+                    info!("Successfully opened document in editor");
+                } else {
+                    warn!("Editor reported failure opening document");
+                }
+            }
+            Err(e) => {
+                error!("Failed to open document: {:?}", e);
             }
         }
-        Err(e) => {
-            error!("Failed to open document: {:?}", e);
+    } else {
+        // Fallback: try opening the file directly
+        // Many editors support file:///path#L<line> format
+        let url_with_line = format!("{}:{}", request.file, request.line);
+        info!("window/showDocument not supported, trying fallback: {}", url_with_line);
+
+        if let Err(e) = open::that(&url_with_line) {
+            // If that fails, try just opening the file
+            warn!("Failed to open with line number ({}), trying plain file", e);
+            if let Err(e) = open::that(&request.file) {
+                error!("Failed to open file: {}", e);
+            }
         }
     }
 
