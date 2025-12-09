@@ -210,19 +210,21 @@ fn doc_router_dynamic(state: Arc<DocServerStateWrapper>) -> axum::Router {
         State(state): State<Arc<DocServerStateWrapper>>,
     ) -> impl IntoResponse {
         let index = state.index.read().await;
-        let root_path = index.modules.first().map(|m| m.path.clone()).unwrap_or_default();
-        Html(doc_viewer::server::render_page_for_lsp("Fe Documentation", &root_path, &index))
+        let root_path = index.modules.first().map(|m| m.url_path()).unwrap_or_default();
+        Html(doc_viewer::server::render_page_for_lsp("Fe Documentation", &root_path, &index, state.supports_goto_source))
     }
 
     // Render doc item page with SSR
+    // URL format: path::to::item or path::to::item/kind
     async fn doc_item_handler(
         State(state): State<Arc<DocServerStateWrapper>>,
         Path(path): Path<String>,
     ) -> (StatusCode, Html<String>) {
         let index = state.index.read().await;
-        if let Some(item) = index.find_by_path(&path) {
+        if let Some(item) = index.find_by_url(&path) {
             let title = format!("{} - Fe Documentation", item.name);
-            (StatusCode::OK, Html(doc_viewer::server::render_page_for_lsp(&title, &path, &index)))
+            // Use item's url_path for proper linking
+            (StatusCode::OK, Html(doc_viewer::server::render_page_for_lsp(&title, &item.url_path(), &index, state.supports_goto_source)))
         } else {
             (StatusCode::NOT_FOUND, Html(doc_viewer::server::render_page_not_found_for_lsp(&path, &index)))
         }
@@ -252,7 +254,7 @@ fn doc_router_dynamic(state: Arc<DocServerStateWrapper>) -> axum::Router {
         Path(path): Path<String>,
     ) -> impl IntoResponse {
         let index = state.index.read().await;
-        if let Some(item) = index.find_by_path(&path) {
+        if let Some(item) = index.find_by_url(&path) {
             Json(Some(item.clone()))
         } else {
             Json(None)
@@ -274,7 +276,7 @@ fn doc_router_dynamic(state: Arc<DocServerStateWrapper>) -> axum::Router {
     ) -> impl IntoResponse {
         info!("Goto source request for path: {}", path);
         let index = state.index.read().await;
-        if let Some(item) = index.find_by_path(&path) {
+        if let Some(item) = index.find_by_url(&path) {
             info!("Found item: {}, has_source: {}", item.name, item.source.is_some());
             if let Some(ref source) = item.source {
                 info!("Goto source: {} -> {}:{}:{}", path, source.file, source.line, source.column);

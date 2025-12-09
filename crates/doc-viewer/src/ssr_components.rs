@@ -17,8 +17,10 @@ pub fn DocPage(
     index: DocIndex,
     /// Currently selected item path
     current_path: String,
+    /// Whether editor supports goto source
+    supports_goto_source: bool,
 ) -> impl IntoView {
-    let item = index.find_by_path(&current_path).cloned();
+    let item = index.find_by_url(&current_path).cloned();
 
     view! {
         <!DOCTYPE html>
@@ -38,7 +40,7 @@ pub fn DocPage(
                     <main class="doc-content">
                         // SSR content - live updates handled by scripts.js
                         {match item {
-                            Some(item) => view! { <DocItemViewSSR item=item /> }.into_any(),
+                            Some(item) => view! { <DocItemViewSSR item=item supports_goto_source=supports_goto_source /> }.into_any(),
                             None => view! {
                                 <div class="not-found">
                                     <h1>"Select an item"</h1>
@@ -76,7 +78,7 @@ pub fn DocSidebarSSR(
             </div>
             <div class="sidebar-nav">
                 {modules.into_iter().map(|module| {
-                    let is_current = module.path == current_path;
+                    let is_current = module.url_path() == current_path;
                     view! {
                         <DocModuleNav
                             module=module
@@ -101,18 +103,18 @@ fn DocModuleNav(
 
     view! {
         <div class=class>
-            <a href=format!("/doc/{}", module.path) class="nav-module">
+            <a href=format!("/doc/{}", module.url_path()) class="nav-module">
                 {module.name.clone()}
             </a>
             {if !module.items.is_empty() {
                 Some(view! {
                     <ul class="nav-items">
                         {module.items.iter().map(|item| {
-                            let item_current = item.path == current_path;
+                            let item_current = item.url_path() == current_path;
                             let item_class = if item_current { "current" } else { "" };
                             view! {
                                 <li class=item_class>
-                                    <a href=format!("/doc/{}", item.path)>
+                                    <a href=format!("/doc/{}", item.url_path())>
                                         <span class=format!("kind-badge {}", item.kind.as_str())>
                                             {item.kind.as_str()}
                                         </span>
@@ -133,11 +135,11 @@ fn DocModuleNav(
 
 /// Documentation item view for SSR
 #[component]
-pub fn DocItemViewSSR(item: DocItem) -> impl IntoView {
+pub fn DocItemViewSSR(item: DocItem, supports_goto_source: bool) -> impl IntoView {
     let has_docs = item.docs.is_some();
     let has_children = !item.children.is_empty();
     let has_source = item.source.is_some();
-    let item_path = item.path.clone();
+    let item_path = item.url_path();
 
     view! {
         <article class="doc-item">
@@ -167,13 +169,19 @@ pub fn DocItemViewSSR(item: DocItem) -> impl IntoView {
                     <div class="source-link">
                         "Defined in " <code>{src.display_file.clone()}</code>
                         " at line " {src.line}
-                        <button
-                            class="goto-source-btn"
-                            data-path=item_path.clone()
-                            onclick="gotoSource(this.dataset.path)"
-                        >
-                            "Go to Source"
-                        </button>
+                        {if supports_goto_source {
+                            Some(view! {
+                                <button
+                                    class="goto-source-btn"
+                                    data-path=item_path.clone()
+                                    onclick="gotoSource(this.dataset.path)"
+                                >
+                                    "Go to Source"
+                                </button>
+                            })
+                        } else {
+                            None
+                        }}
                     </div>
                 })
             } else {

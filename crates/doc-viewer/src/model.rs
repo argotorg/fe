@@ -31,6 +31,13 @@ pub struct DocItem {
     pub source: Option<DocSourceLoc>,
 }
 
+impl DocItem {
+    /// Get the URL path for this item (includes kind suffix)
+    pub fn url_path(&self) -> String {
+        format!("{}/{}", self.path, self.kind.as_str())
+    }
+}
+
 /// The kind of documented item
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -60,6 +67,22 @@ impl DocItemKind {
             DocItemKind::Const => "const",
             DocItemKind::Impl => "impl",
             DocItemKind::ImplTrait => "impl",
+        }
+    }
+
+    /// Parse kind from URL suffix string
+    pub fn from_str(s: &str) -> Option<Self> {
+        match s {
+            "mod" | "module" => Some(DocItemKind::Module),
+            "fn" | "function" => Some(DocItemKind::Function),
+            "struct" => Some(DocItemKind::Struct),
+            "enum" => Some(DocItemKind::Enum),
+            "trait" => Some(DocItemKind::Trait),
+            "contract" => Some(DocItemKind::Contract),
+            "type" => Some(DocItemKind::TypeAlias),
+            "const" => Some(DocItemKind::Const),
+            "impl" => Some(DocItemKind::Impl),
+            _ => None,
         }
     }
 
@@ -230,8 +253,36 @@ impl DocIndex {
         self.items.push(item);
     }
 
+    /// Find an item by its path (without kind suffix)
     pub fn find_by_path(&self, path: &str) -> Option<&DocItem> {
         self.items.iter().find(|item| item.path == path)
+    }
+
+    /// Find an item by path and kind
+    pub fn find_by_path_and_kind(&self, path: &str, kind: DocItemKind) -> Option<&DocItem> {
+        self.items
+            .iter()
+            .find(|item| item.path == path && item.kind == kind)
+    }
+
+    /// Parse a URL path (potentially with kind suffix) and find the item.
+    /// URL format: "path::to::item" or "path::to::item/kind"
+    /// Returns the item if found, handling both formats.
+    pub fn find_by_url(&self, url_path: &str) -> Option<&DocItem> {
+        // Try to parse kind suffix (e.g., "lib::foo/fn" -> path="lib::foo", kind="fn")
+        if let Some((path, kind_str)) = url_path.rsplit_once('/') {
+            if let Some(kind) = DocItemKind::from_str(kind_str) {
+                // URL has valid kind suffix - find by path and kind
+                return self.find_by_path_and_kind(path, kind);
+            }
+        }
+        // No valid kind suffix - find by path alone (may be ambiguous)
+        self.find_by_path(url_path)
+    }
+
+    /// Find all items with a given path (for disambiguation)
+    pub fn find_all_by_path(&self, path: &str) -> Vec<&DocItem> {
+        self.items.iter().filter(|item| item.path == path).collect()
     }
 
     /// Build a searchable index of items
@@ -257,10 +308,24 @@ pub struct DocModuleTree {
     pub items: Vec<DocModuleItem>,
 }
 
+impl DocModuleTree {
+    /// Get the URL path for this module (includes kind suffix)
+    pub fn url_path(&self) -> String {
+        format!("{}/mod", self.path)
+    }
+}
+
 /// A reference to an item within a module
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DocModuleItem {
     pub name: String,
     pub path: String,
     pub kind: DocItemKind,
+}
+
+impl DocModuleItem {
+    /// Get the URL path for this item (includes kind suffix)
+    pub fn url_path(&self) -> String {
+        format!("{}/{}", self.path, self.kind.as_str())
+    }
 }

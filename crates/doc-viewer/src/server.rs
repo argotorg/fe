@@ -78,10 +78,11 @@ async fn index_handler(State(state): State<Arc<DocServerState>>) -> impl IntoRes
         .index
         .modules
         .first()
-        .map(|m| m.path.clone())
+        .map(|m| m.url_path())
         .unwrap_or_default();
 
-    Html(render_page(title, &root_path, &state.index))
+    // Standalone mode - no goto source support
+    Html(render_page(title, &root_path, &state.index, false))
 }
 
 /// Documentation item handler
@@ -89,9 +90,10 @@ async fn doc_item_handler(
     State(state): State<Arc<DocServerState>>,
     Path(path): Path<String>,
 ) -> (StatusCode, Html<String>) {
-    if let Some(item) = state.index.find_by_path(&path) {
+    if let Some(item) = state.index.find_by_url(&path) {
         let title = format!("{} - Fe Documentation", item.name);
-        (StatusCode::OK, Html(render_page(&title, &path, &state.index)))
+        // Standalone mode - no goto source support
+        (StatusCode::OK, Html(render_page(&title, &item.url_path(), &state.index, false)))
     } else {
         // Render 404 using the same page template so WebSocket/auto-follow keeps working
         (StatusCode::NOT_FOUND, Html(render_page_not_found(&path, &state.index)))
@@ -132,7 +134,7 @@ async fn item_api_handler(
 }
 
 /// Render a full HTML page using Leptos SSR
-fn render_page(title: &str, current_path: &str, index: &DocIndex) -> String {
+fn render_page(title: &str, current_path: &str, index: &DocIndex, supports_goto_source: bool) -> String {
     use leptos::prelude::*;
 
     let title = title.to_string();
@@ -146,53 +148,11 @@ fn render_page(title: &str, current_path: &str, index: &DocIndex) -> String {
                 title=title
                 index=index
                 current_path=current_path
+                supports_goto_source=supports_goto_source
             />
         }
         .to_html()
     })
-}
-
-/// Shared page template used by both normal pages and 404
-fn render_page_template(title: &str, sidebar: &str, content: &str) -> String {
-    format!(
-        r#"<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>{title}</title>
-    <style>{css}</style>
-</head>
-<body>
-    <div class="doc-layout">
-        <nav class="doc-sidebar">
-            <div class="sidebar-header">
-                <h1><a href="/">Fe Docs</a></h1>
-                <label class="auto-follow-toggle" title="Auto-follow cursor position in editor">
-                    <input type="checkbox" id="auto-follow" onchange="toggleAutoFollow(this.checked)">
-                    <span class="toggle-slider"></span>
-                    <span class="toggle-label">Follow cursor</span>
-                </label>
-                <input type="search" id="search" placeholder="Search..." onkeyup="doSearch(this.value)">
-                <div id="search-results"></div>
-            </div>
-            <div class="sidebar-nav">
-                {sidebar}
-            </div>
-        </nav>
-        <main class="doc-content">
-            {content}
-        </main>
-    </div>
-    {script}
-</body>
-</html>"#,
-        title = title,
-        css = CSS,
-        sidebar = sidebar,
-        content = content,
-        script = SCRIPT,
-    )
 }
 
 /// Render a CSR shell page that loads WASM and embeds initial data
@@ -246,96 +206,6 @@ fn render_csr_shell(title: &str, _initial_path: &str, index: &DocIndex) -> Strin
         css = CSS,
         index_json = index_json,
     )
-}
-
-fn render_sidebar(index: &DocIndex, current_path: &str) -> String {
-    let mut html = String::new();
-
-    for module in &index.modules {
-        let is_current = module.path == current_path;
-        let class = if is_current { "nav-item current" } else { "nav-item" };
-        html.push_str(&format!(
-            r#"<div class="{class}"><a href="/doc/{path}" class="nav-module">{name}</a>"#,
-            class = class,
-            path = module.path,
-            name = module.name,
-        ));
-
-        // Show items in this module
-        if !module.items.is_empty() {
-            html.push_str("<ul class=\"nav-items\">");
-            for item in &module.items {
-                let item_current = item.path == current_path;
-                let item_class = if item_current { "current" } else { "" };
-                html.push_str(&format!(
-                    r#"<li class="{class}"><a href="/doc/{path}"><span class="kind-badge {kind}">{kind}</span> {name}</a></li>"#,
-                    class = item_class,
-                    path = item.path,
-                    kind = item.kind.display_name(),
-                    name = item.name,
-                ));
-            }
-            html.push_str("</ul>");
-        }
-
-        html.push_str("</div>");
-    }
-
-    html
-}
-
-/// Semantic ordering for item kinds (lower = appears first)
-fn kind_order(kind: DocItemKind) -> u8 {
-    match kind {
-        DocItemKind::Module => 0,
-        DocItemKind::Trait => 1,
-        DocItemKind::Contract => 2,
-        DocItemKind::Struct => 3,
-        DocItemKind::Enum => 4,
-        DocItemKind::TypeAlias => 5,
-        DocItemKind::Function => 6,
-        DocItemKind::Const => 7,
-        DocItemKind::Impl => 8,
-        DocItemKind::ImplTrait => 9,
-    }
-}
-
-fn render_index(index: &DocIndex) -> String {
-    let mut html = String::from("<h1>Fe Documentation</h1>");
-
-    // Group items by kind
-    let mut by_kind: std::collections::HashMap<DocItemKind, Vec<&DocItem>> = std::collections::HashMap::new();
-    for item in &index.items {
-        if !matches!(item.kind, DocItemKind::Module) {
-            by_kind.entry(item.kind).or_default().push(item);
-        }
-    }
-
-    // Sort kind groups by semantic order
-    let mut kinds: Vec<_> = by_kind.keys().cloned().collect();
-    kinds.sort_by_key(|k| kind_order(*k));
-
-    for kind in kinds {
-        let mut items: Vec<_> = by_kind.get(&kind).unwrap().iter().cloned().collect();
-        items.sort_by(|a, b| a.name.cmp(&b.name));
-
-        let kind_name = kind.display_name();
-        html.push_str(&format!("<h2>{kind_name}s</h2><ul class=\"item-list\">"));
-        for item in items {
-            let summary = item.docs.as_ref()
-                .map(|d| format!(" - {}", &d.summary))
-                .unwrap_or_default();
-            html.push_str(&format!(
-                r#"<li><a href="/doc/{path}">{name}</a>{summary}</li>"#,
-                path = item.path,
-                name = item.name,
-                summary = html_escape(&summary),
-            ));
-        }
-        html.push_str("</ul>");
-    }
-
-    html
 }
 
 fn render_item(item: &DocItem) -> String {
@@ -1006,116 +876,6 @@ h2 {
 }
 "#;
 
-const SCRIPT: &str = r#"<script>
-    // Auto-follow toggle
-    function toggleAutoFollow(checked) {
-        localStorage.setItem('fe-docs-auto-follow', checked);
-    }
-
-    // Go to source in editor (for LSP mode)
-    function gotoSource(path) {
-        fetch('/api/goto/' + encodeURIComponent(path), { method: 'POST' })
-            .then(response => {
-                if (!response.ok) {
-                    console.warn('Go to source not available (not running through LSP)');
-                }
-            })
-            .catch(err => {
-                console.warn('Go to source failed:', err);
-            });
-    }
-
-    // Restore auto-follow state on page load
-    document.addEventListener('DOMContentLoaded', function() {
-        const autoFollow = document.getElementById('auto-follow');
-        if (autoFollow) {
-            const saved = localStorage.getItem('fe-docs-auto-follow');
-            autoFollow.checked = saved === 'true';
-        }
-    });
-
-    // Search functionality
-    let searchTimeout;
-    function doSearch(query) {
-        clearTimeout(searchTimeout);
-        const results = document.getElementById('search-results');
-        if (!query) {
-            results.innerHTML = '';
-            return;
-        }
-        searchTimeout = setTimeout(async () => {
-            const resp = await fetch('/api/search?q=' + encodeURIComponent(query));
-            const items = await resp.json();
-            results.innerHTML = items.map(item =>
-                `<a class="search-result" href="/doc/${item.path}">
-                    <span class="kind-badge ${item.kind}">${item.kind}</span>
-                    ${item.name}
-                </a>`
-            ).join('');
-        }, 150);
-    }
-
-    // WebSocket live reload
-    (function() {
-        const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-        const ws = new WebSocket(wsProtocol + '//' + window.location.host + '/ws');
-
-        ws.onmessage = function(event) {
-            try {
-                const msg = JSON.parse(event.data);
-                if (msg.type === 'reload') {
-                    window.location.reload();
-                } else if (msg.type === 'update') {
-                    // Re-fetch current page and replace content
-                    fetch(window.location.pathname)
-                        .then(r => r.text())
-                        .then(html => {
-                            const parser = new DOMParser();
-                            const newDoc = parser.parseFromString(html, 'text/html');
-                            // Replace main content
-                            const newContent = newDoc.querySelector('.doc-content');
-                            const oldContent = document.querySelector('.doc-content');
-                            if (newContent && oldContent) {
-                                oldContent.innerHTML = newContent.innerHTML;
-                            }
-                            // Update sidebar (items may have changed)
-                            const newSidebar = newDoc.querySelector('.sidebar-nav');
-                            const oldSidebar = document.querySelector('.sidebar-nav');
-                            if (newSidebar && oldSidebar) {
-                                oldSidebar.innerHTML = newSidebar.innerHTML;
-                            }
-                        });
-                } else if (msg.type === 'navigate') {
-                    const currentPath = window.location.pathname.replace('/doc/', '');
-
-                    // Rename redirects (with if_on_path) always work if we're on the old page
-                    if (msg.if_on_path) {
-                        if (currentPath === msg.if_on_path) {
-                            window.location.href = '/doc/' + msg.path;
-                        }
-                        return; // Don't continue to auto-follow check for redirects
-                    }
-
-                    // Regular navigation only works with auto-follow enabled
-                    const autoFollow = document.getElementById('auto-follow');
-                    if (autoFollow && autoFollow.checked) {
-                        window.location.href = '/doc/' + msg.path;
-                    }
-                }
-            } catch (e) {
-                console.error('WebSocket message error:', e);
-            }
-        };
-
-        ws.onclose = function() {
-            // Attempt to reconnect after 2 seconds
-            setTimeout(function() {
-                window.location.reload();
-            }, 2000);
-        };
-    })();
-</script>"#;
-
 /// Render a 404 page using Leptos SSR (keeps WebSocket/auto-follow working)
 fn render_page_not_found(path: &str, index: &DocIndex) -> String {
     use leptos::prelude::*;
@@ -1173,8 +933,8 @@ pub async fn serve(index: DocIndex, config: DocServerConfig) -> Result<(), std::
 }
 
 /// Public function for LSP integration - renders a doc page
-pub fn render_page_for_lsp(title: &str, current_path: &str, index: &DocIndex) -> String {
-    render_page(title, current_path, index)
+pub fn render_page_for_lsp(title: &str, current_path: &str, index: &DocIndex, supports_goto_source: bool) -> String {
+    render_page(title, current_path, index, supports_goto_source)
 }
 
 /// Public function for LSP integration - renders an item page
