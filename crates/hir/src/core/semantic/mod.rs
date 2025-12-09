@@ -1398,6 +1398,13 @@ impl<'db> Impl<'db> {
             assumptions,
         )
     }
+
+    /// Returns the pretty-printed target type name from this impl block.
+    /// This is useful for documentation generation.
+    /// Returns None if the type reference is missing or malformed.
+    pub fn target_type_name(self, db: &dyn HirDb) -> Option<String> {
+        self.type_ref(db).to_opt().map(|ty| ty.pretty_print(db))
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

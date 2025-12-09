@@ -20,3 +20,4 @@ pub use doc_viewer::model;
 pub use doc_viewer::model::*;
 
 pub use extract::DocExtractor;
+pub use extract::{qualify_path_with_ingot_name, scope_to_doc_path};

@@ -545,7 +545,7 @@ async fn update_docs(backend: &mut Backend) {
         // Extract items from ALL modules in the ingot (not just root)
         for top_mod in ingot.all_modules(&backend.db) {
             for item in top_mod.children_nested(&backend.db) {
-                if let Some(doc_item) = extractor.extract_item(item) {
+                if let Some(doc_item) = extractor.extract_item_for_ingot(item, ingot) {
                     combined_index.items.push(doc_item);
                 }
             }
@@ -713,8 +713,15 @@ pub async fn handle_cursor_position(
 
     // Look up the symbol at cursor position
     let resolution = top_mod.target_at(&backend.db, cursor);
+
+    // Skip navigation if ambiguous (don't auto-follow to an arbitrary choice)
+    if resolution.is_ambiguous() {
+        return Ok(());
+    }
+
     if let Some(Target::Scope(scope)) = resolution.first() {
-        if let Some(doc_path) = scope.item().scope().pretty_path(&backend.db) {
+        // Use shared doc-engine function for qualified path
+        if let Some(doc_path) = doc_engine::scope_to_doc_path(&backend.db, *scope) {
             // Emit navigation event (browser will ignore if auto-follow is disabled)
             let _ = backend.client.clone().emit(DocNavigate::to(doc_path));
         }

@@ -90,8 +90,8 @@ pub fn hover_helper(
                         let definition_source = get_item_definition_markdown(db, item);
                         let docs = get_docstring(db, *scope);
 
-                        // Capture doc path for auto-follow (only for items with docs)
-                        doc_path = scope.item().scope().pretty_path(db);
+                        // Capture doc path for auto-follow (uses ingot-qualified path)
+                        doc_path = doc_engine::scope_to_doc_path(db, *scope);
 
                         Some(
                             [pretty_path, definition_source, docs]
@@ -121,7 +121,7 @@ pub fn hover_helper(
     if doc_path.is_none() {
         let resolution = top_mod.target_at(db, cursor);
         if let Some(Target::Scope(scope)) = resolution.first() {
-            doc_path = scope.item().scope().pretty_path(db);
+            doc_path = doc_engine::scope_to_doc_path(db, *scope);
         }
     }
 
