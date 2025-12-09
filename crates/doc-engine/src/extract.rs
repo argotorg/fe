@@ -3,10 +3,11 @@
 //! This module traverses the Fe HIR (High-level Intermediate Representation) and extracts
 //! documentation into the `DocItem` model suitable for rendering.
 
+use common::ingot::Ingot;
 use hir::{
     hir_def::{
-        scope_graph::ScopeId, Attr, Contract, Enum, FieldParent, Impl, ImplTrait, ItemKind, Struct,
-        TopLevelMod, Trait, VariantKind, Visibility,
+        scope_graph::ScopeId, Attr, Contract, Enum, FieldParent, HirIngot, Impl, ImplTrait,
+        ItemKind, Struct, TopLevelMod, Trait, VariantKind, Visibility,
     },
     span::LazySpan,
     SpannedHirDb,
@@ -419,9 +420,76 @@ impl<'db> DocExtractor<'db> {
         })
     }
 
-    /// Build module tree for navigation sidebar
+    /// Build module tree for navigation sidebar (single module, no file-based children)
     fn build_module_tree(&self, top_mod: TopLevelMod<'db>) -> Vec<DocModuleTree> {
         vec![self.build_module_node(top_mod.into())]
+    }
+
+    /// Build module tree for an entire ingot (includes file-based child modules)
+    pub fn build_module_tree_for_ingot(
+        &self,
+        ingot: Ingot<'db>,
+        root_mod: TopLevelMod<'db>,
+    ) -> Vec<DocModuleTree> {
+        vec![self.build_module_node_for_ingot(ingot, root_mod)]
+    }
+
+    /// Build a module node including file-based children from the ingot's module tree
+    fn build_module_node_for_ingot(
+        &self,
+        ingot: Ingot<'db>,
+        top_mod: TopLevelMod<'db>,
+    ) -> DocModuleTree {
+        let scope = top_mod.scope();
+        let name = top_mod.name(self.db).data(self.db).to_string();
+        let path = scope.pretty_path(self.db).unwrap_or_else(|| name.clone());
+
+        let mut children = Vec::new();
+        let mut items = Vec::new();
+
+        // Get inline children (defined in this file)
+        for child in top_mod.children_non_nested(self.db) {
+            match child {
+                ItemKind::Mod(_) => {
+                    children.push(self.build_module_node(child));
+                }
+                ItemKind::Use(_) | ItemKind::Body(_) | ItemKind::TopMod(_) => {}
+                _ => {
+                    if let (Some(name), Some(kind)) =
+                        (child.name(self.db), self.item_kind_to_doc_kind(child))
+                    {
+                        let child_path = child.scope().pretty_path(self.db).unwrap_or_default();
+                        items.push(DocModuleItem {
+                            name: name.data(self.db).to_string(),
+                            path: child_path,
+                            kind,
+                        });
+                    }
+                }
+            }
+        }
+
+        // Get file-based children from ingot's module tree
+        let module_tree = ingot.module_tree(self.db);
+        for child_mod in module_tree.children(top_mod) {
+            children.push(self.build_module_node_for_ingot(ingot, child_mod));
+        }
+
+        // Sort for consistent ordering
+        children.sort_by(|a, b| a.name.cmp(&b.name));
+        items.sort_by(|a, b| {
+            a.kind
+                .as_str()
+                .cmp(b.kind.as_str())
+                .then_with(|| a.name.cmp(&b.name))
+        });
+
+        DocModuleTree {
+            name,
+            path,
+            children,
+            items,
+        }
     }
 
     fn build_module_node(&self, item: ItemKind<'db>) -> DocModuleTree {
