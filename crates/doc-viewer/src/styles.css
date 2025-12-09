@@ -718,3 +718,74 @@ h2:hover .anchor {
 .nav-submodules {
     margin-top: 0.25rem;
 }
+
+/* Member items (fields, variants, methods) with anchors */
+.member-list {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+}
+
+.member-item {
+    padding: 0.5rem 0.75rem;
+    background: var(--bg-secondary);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    border-left: 3px solid var(--border);
+}
+
+.member-item:hover {
+    border-left-color: var(--accent);
+}
+
+.member-item:target {
+    border-left-color: var(--accent);
+    background: color-mix(in srgb, var(--accent) 10%, var(--bg-secondary));
+}
+
+.member-header {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+.member-signature {
+    font-family: "JetBrains Mono", "Fira Code", monospace;
+    font-size: 0.875rem;
+    color: var(--text);
+}
+
+.member-docs {
+    margin-top: 0.5rem;
+    padding-top: 0.5rem;
+    border-top: 1px dashed var(--border);
+    color: var(--text-muted);
+    font-size: 0.875rem;
+    line-height: 1.5;
+}
+
+/* Type links in signatures */
+.type-link {
+    color: var(--accent);
+    text-decoration: none;
+}
+
+.type-link:hover {
+    text-decoration: underline;
+}
+
+/* Implementor items with anchors */
+.implementor-item {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.5rem 0.75rem;
+    background: var(--bg-secondary);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+}
+
+.implementor-item:target {
+    border-color: var(--accent);
+    background: color-mix(in srgb, var(--accent) 10%, var(--bg-secondary));
+}

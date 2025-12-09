@@ -293,6 +293,17 @@ impl DocChildKind {
             DocChildKind::Method => 4,
         }
     }
+
+    /// Anchor prefix for linking (rustdoc-style)
+    pub fn anchor_prefix(&self) -> &'static str {
+        match self {
+            DocChildKind::Field => "field",
+            DocChildKind::Variant => "variant",
+            DocChildKind::Method => "tymethod",
+            DocChildKind::AssocType => "associatedtype",
+            DocChildKind::AssocConst => "associatedconstant",
+        }
+    }
 }
 
 /// Source location for linking to source code
@@ -397,6 +408,22 @@ impl DocIndex {
     /// `links` is a list of (target_type_path, DocTraitImpl) pairs extracted
     /// from the HIR using semantic helpers.
     pub fn link_trait_impls(&mut self, links: Vec<(String, DocTraitImpl)>) {
+        // Build a lookup map of type items by simple name for URL resolution
+        let type_items: std::collections::HashMap<String, (&str, &DocItemKind)> = self
+            .items
+            .iter()
+            .filter(|item| {
+                matches!(
+                    item.kind,
+                    DocItemKind::Struct | DocItemKind::Enum | DocItemKind::Contract
+                )
+            })
+            .map(|item| {
+                let simple_name = extract_simple_type_name(&item.name);
+                (simple_name, (item.path.as_str(), &item.kind))
+            })
+            .collect();
+
         // First pass: collect implementors for each trait
         let mut trait_implementors: std::collections::HashMap<String, Vec<DocImplementor>> =
             std::collections::HashMap::new();
@@ -410,10 +437,19 @@ impl DocIndex {
             let trait_simple_name = extract_simple_type_name(&trait_impl.trait_name);
             let type_simple_name = extract_simple_type_name(target_type);
 
-            // Create implementor entry
+            // Look up the actual type item to get the correct path and kind
+            let (type_path, type_kind_suffix) =
+                if let Some(&(path, kind)) = type_items.get(&type_simple_name) {
+                    (path, kind.as_str())
+                } else {
+                    // Fallback to the target_type path with struct suffix
+                    (target_type.as_str(), "struct")
+                };
+
+            // Create implementor entry with correct URL
             let implementor = DocImplementor {
                 type_name: type_simple_name.clone(),
-                type_url: format!("{}/struct", target_type), // Will be refined below
+                type_url: format!("{}/{}", type_path, type_kind_suffix),
                 signature: trait_impl.signature.clone(),
             };
 
