@@ -5,13 +5,13 @@
 
 use common::ingot::Ingot;
 use hir::{
+    SpannedHirDb,
     hir_def::{
-        scope_graph::ScopeId, Attr, Contract, Enum, FieldParent, HirIngot, Impl, ImplTrait,
-        ItemKind, Struct, TopLevelMod, Trait, VariantKind, Visibility,
+        Attr, Contract, Enum, FieldParent, HirIngot, Impl, ImplTrait, ItemKind, Struct,
+        TopLevelMod, Trait, VariantKind, Visibility, scope_graph::ScopeId,
     },
     semantic::FieldView,
     span::LazySpan,
-    SpannedHirDb,
 };
 
 use crate::model::{
@@ -92,7 +92,10 @@ pub struct DocExtractor<'db> {
 
 impl<'db> DocExtractor<'db> {
     pub fn new(db: &'db dyn SpannedHirDb) -> Self {
-        Self { db, root_path: None }
+        Self {
+            db,
+            root_path: None,
+        }
     }
 
     /// Set the root path for computing relative display paths
@@ -307,7 +310,7 @@ impl<'db> DocExtractor<'db> {
             where_bounds,
             children,
             source,
-            trait_impls: Vec::new(), // Populated later by link_trait_impls
+            trait_impls: Vec::new(),  // Populated later by link_trait_impls
             implementors: Vec::new(), // Populated later by link_trait_impls (for traits)
         })
     }
@@ -402,9 +405,7 @@ impl<'db> DocExtractor<'db> {
         if let Some(name_span) = item.name_span().and_then(|s| s.resolve(self.db)) {
             let mut name_line_start: usize = name_span.range.start().into();
             let file_text = span.file.text(self.db).as_str();
-            while name_line_start > 0
-                && file_text.chars().nth(name_line_start - 1) != Some('\n')
-            {
+            while name_line_start > 0 && file_text.chars().nth(name_line_start - 1) != Some('\n') {
                 name_line_start -= 1;
             }
             start = name_line_start;
@@ -421,11 +422,11 @@ impl<'db> DocExtractor<'db> {
         let mut sig = file_text[start..end].trim().to_string();
 
         // For impl blocks, truncate at opening brace (don't show method bodies)
-        if matches!(item, ItemKind::Impl(_) | ItemKind::ImplTrait(_)) {
-            if let Some(brace_pos) = sig.find('{') {
-                sig.truncate(brace_pos);
-                sig = sig.trim_end().to_string();
-            }
+        if matches!(item, ItemKind::Impl(_) | ItemKind::ImplTrait(_))
+            && let Some(brace_pos) = sig.find('{')
+        {
+            sig.truncate(brace_pos);
+            sig = sig.trim_end().to_string();
         }
 
         sig
@@ -452,14 +453,14 @@ impl<'db> DocExtractor<'db> {
         let mut params = Vec::new();
 
         for child_scope in scope.children(self.db) {
-            if let ScopeId::GenericParam(_, _) = child_scope {
-                if let Some(name) = child_scope.name(self.db) {
-                    params.push(DocGenericParam {
-                        name: name.data(self.db).to_string(),
-                        bounds: Vec::new(),
-                        default: None,
-                    });
-                }
+            if let ScopeId::GenericParam(_, _) = child_scope
+                && let Some(name) = child_scope.name(self.db)
+            {
+                params.push(DocGenericParam {
+                    name: name.data(self.db).to_string(),
+                    bounds: Vec::new(),
+                    default: None,
+                });
             }
         }
 
@@ -552,9 +553,7 @@ impl<'db> DocExtractor<'db> {
                     VariantKind::Tuple(tuple_id) => {
                         // Extract actual type text from the source
                         let type_texts: Vec<String> = (0..tuple_id.len(self.db))
-                            .filter_map(|i| {
-                                self.get_tuple_elem_type_text(&enum_variant, i)
-                            })
+                            .filter_map(|i| self.get_tuple_elem_type_text(&enum_variant, i))
                             .collect();
                         if type_texts.is_empty() {
                             format!("{}(...)", name)
@@ -583,7 +582,11 @@ impl<'db> DocExtractor<'db> {
         enum_variant: &hir::hir_def::EnumVariant<'db>,
         idx: usize,
     ) -> Option<String> {
-        let ty_span = enum_variant.span().tuple_type().elem_ty(idx).resolve(self.db)?;
+        let ty_span = enum_variant
+            .span()
+            .tuple_type()
+            .elem_ty(idx)
+            .resolve(self.db)?;
         let start: usize = ty_span.range.start().into();
         let end: usize = ty_span.range.end().into();
         let file_text = ty_span.file.text(self.db).as_str();
@@ -893,9 +896,7 @@ impl<'db> DocExtractor<'db> {
             .name(self.db)
             .map(|n| n.data(self.db).to_string())
             .unwrap_or_else(|| "root".to_string());
-        let path = scope
-            .pretty_path(self.db)
-            .unwrap_or_else(|| name.clone());
+        let path = scope.pretty_path(self.db).unwrap_or_else(|| name.clone());
 
         let mut children = Vec::new();
         let mut items = Vec::new();
@@ -917,10 +918,7 @@ impl<'db> DocExtractor<'db> {
                     if let (Some(name), Some(kind)) =
                         (child.name(self.db), self.item_kind_to_doc_kind(child))
                     {
-                        let child_path = child
-                            .scope()
-                            .pretty_path(self.db)
-                            .unwrap_or_default();
+                        let child_path = child.scope().pretty_path(self.db).unwrap_or_default();
                         let summary = self.get_summary(child.scope());
                         items.push(DocModuleItem {
                             name: name.data(self.db).to_string(),
@@ -937,7 +935,9 @@ impl<'db> DocExtractor<'db> {
         children.sort_by(|a, b| a.name.cmp(&b.name));
         items.sort_by(|a, b| {
             // Sort by kind first, then by name
-            a.kind.as_str().cmp(b.kind.as_str())
+            a.kind
+                .as_str()
+                .cmp(b.kind.as_str())
                 .then_with(|| a.name.cmp(&b.name))
         });
 

@@ -1,7 +1,7 @@
 use async_lsp::ResponseError;
 use async_lsp::lsp_types::{
-    CodeAction, CodeActionKind, CodeActionOrCommand, CodeActionParams, CodeActionResponse,
-    Command, Position, Range, TextEdit, WorkspaceEdit,
+    CodeAction, CodeActionKind, CodeActionOrCommand, CodeActionParams, CodeActionResponse, Command,
+    Position, Range, TextEdit, WorkspaceEdit,
 };
 use common::InputDb;
 use driver::DriverDataBase;

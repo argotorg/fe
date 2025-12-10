@@ -1,6 +1,8 @@
-use crate::fallback::WithFallbackService;
 use crate::doc_server::GotoSourceRequest;
-use crate::functionality::handlers::{CursorPositionNotification, DocNavigate, FileChange, FilesNeedDiagnostics, NeedsDiagnostics};
+use crate::fallback::WithFallbackService;
+use crate::functionality::handlers::{
+    CursorPositionNotification, DocNavigate, FileChange, FilesNeedDiagnostics, NeedsDiagnostics,
+};
 use crate::logging;
 use crate::lsp_actor::LspActor;
 use crate::lsp_actor::service::LspActorService;

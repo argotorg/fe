@@ -5,11 +5,11 @@
 
 use leptos::prelude::*;
 
+use crate::markdown::render_markdown;
 use crate::model::{
     DocChild, DocChildKind, DocContent, DocIndex, DocItem, DocItemKind, DocModuleTree,
     DocVisibility,
 };
-use crate::markdown::render_markdown;
 
 /// Root documentation app component
 #[component]

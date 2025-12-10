@@ -31,14 +31,12 @@ fn RichSignatureView(
         // Render rich signature with links
         let parts = rich
             .into_iter()
-            .map(|part| {
-                match part.link {
-                    Some(path) => view! {
-                        <a href={format!("/doc/{}", path)} class="type-link">{part.text}</a>
-                    }
-                    .into_any(),
-                    None => view! { <span>{part.text}</span> }.into_any(),
+            .map(|part| match part.link {
+                Some(path) => view! {
+                    <a href={format!("/doc/{}", path)} class="type-link">{part.text}</a>
                 }
+                .into_any(),
+                None => view! { <span>{part.text}</span> }.into_any(),
             })
             .collect::<Vec<_>>();
         view! { <code>{parts}</code> }.into_any()
@@ -94,13 +92,9 @@ pub fn DocPage(
     }
 }
 
-
 /// Sidebar navigation for SSR
 #[component]
-pub fn DocSidebarSSR(
-    modules: Vec<DocModuleTree>,
-    current_path: String,
-) -> impl IntoView {
+pub fn DocSidebarSSR(modules: Vec<DocModuleTree>, current_path: String) -> impl IntoView {
     view! {
         <nav class="doc-sidebar">
             <div class="sidebar-header">
@@ -125,11 +119,7 @@ pub fn DocSidebarSSR(
 
 /// Module navigation item (recursive - shows child modules)
 /// Returns AnyView to break type recursion
-fn render_module_nav(
-    module: DocModuleTree,
-    current_path: &str,
-    is_current: bool,
-) -> AnyView {
+fn render_module_nav(module: DocModuleTree, current_path: &str, is_current: bool) -> AnyView {
     let has_children = !module.children.is_empty();
     let has_items = !module.items.is_empty();
     let module_url = module.url_path();
@@ -153,15 +143,22 @@ fn render_module_nav(
     // Recursively render child modules
     let children_view = if has_children {
         let current_path_owned = current_path.to_owned();
-        let children_views: Vec<AnyView> = module.children.into_iter().map(|child| {
-            let child_current = child.url_path() == current_path_owned;
-            render_module_nav(child, &current_path_owned, child_current)
-        }).collect();
-        Some(view! {
-            <div class="nav-submodules">
-                {children_views}
-            </div>
-        }.into_any())
+        let children_views: Vec<AnyView> = module
+            .children
+            .into_iter()
+            .map(|child| {
+                let child_current = child.url_path() == current_path_owned;
+                render_module_nav(child, &current_path_owned, child_current)
+            })
+            .collect();
+        Some(
+            view! {
+                <div class="nav-submodules">
+                    {children_views}
+                </div>
+            }
+            .into_any(),
+        )
     } else {
         None
     };
@@ -211,7 +208,8 @@ fn render_module_nav(
                 {items_view}
             </div>
         </details>
-    }.into_any()
+    }
+    .into_any()
 }
 
 /// Documentation item view for SSR
@@ -439,9 +437,11 @@ fn DocTraitImplsSSR(impls: Vec<DocTraitImpl>) -> impl IntoView {
                     }).collect_view()}
                 </div>
             </section>
-        }.into_any()
+        }
+        .into_any()
     } else {
-        view! { <></> }.into_any()
+        let _: () = view! { <></> };
+        ().into_any()
     };
 
     let trait_section = if has_trait_impls {
@@ -457,7 +457,8 @@ fn DocTraitImplsSSR(impls: Vec<DocTraitImpl>) -> impl IntoView {
             </section>
         }.into_any()
     } else {
-        view! { <></> }.into_any()
+        let _: () = view! { <></> };
+        ().into_any()
     };
 
     view! {
@@ -487,7 +488,8 @@ fn ImplBlockSSR(impl_: DocTraitImpl, anchor_id: String) -> impl IntoView {
             <pre class="rust impl-signature"><RichSignatureView rich=impl_.rich_signature.clone() fallback=impl_.signature.clone() /></pre>
         }.into_any()
     } else {
-        view! { <></> }.into_any()
+        let _: () = view! { <></> };
+        ().into_any()
     };
 
     let methods_section = if has_methods {
@@ -498,9 +500,11 @@ fn ImplBlockSSR(impl_: DocTraitImpl, anchor_id: String) -> impl IntoView {
                     view! { <MethodItemSSR method=method anchor_id=method_anchor /> }.into_any()
                 }).collect_view()}
             </div>
-        }.into_any()
+        }
+        .into_any()
     } else {
-        view! { <></> }.into_any()
+        let _: () = view! { <></> };
+        ().into_any()
     };
 
     view! {
@@ -552,8 +556,7 @@ fn MethodItemSSR(method: crate::model::DocImplMethod, anchor_id: String) -> impl
 
 /// Index view showing all items grouped by kind
 #[component]
-#[allow(unused_variables)]
-fn DocIndexView(index: DocIndex) -> impl IntoView {
+fn DocIndexView(_index: DocIndex) -> impl IntoView {
     view! {
         <h1>"Fe Documentation"</h1>
         <p>"Select an item from the sidebar to view its documentation."</p>
@@ -627,7 +630,10 @@ fn DocModuleMembersSSR(
     let has_items = !items.is_empty();
 
     if !has_submodules && !has_items {
-        return view! { <></> }.into_any();
+        return {
+            let _: () = view! { <></> };
+            ().into_any()
+        };
     }
 
     // Group items by kind
@@ -696,7 +702,8 @@ fn DocModuleMembersSSR(
                 }
             }).collect_view()}
         </div>
-    }.into_any()
+    }
+    .into_any()
 }
 
 /// Implementors section for trait pages (shows which types implement this trait)

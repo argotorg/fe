@@ -20,7 +20,7 @@ use std::sync::Arc;
 use tower_http::services::ServeDir;
 
 use crate::model::{DocIndex, DocItem};
-use crate::ssr_components::{DocPage, DocNotFoundSSR};
+use crate::ssr_components::{DocNotFoundSSR, DocPage};
 
 /// Application state shared across handlers
 pub struct DocServerState {
@@ -63,9 +63,7 @@ pub fn doc_router(state: Arc<DocServerState>) -> Router {
 }
 
 /// Full index API handler (returns complete DocIndex as JSON)
-async fn index_api_handler(
-    State(state): State<Arc<DocServerState>>,
-) -> impl IntoResponse {
+async fn index_api_handler(State(state): State<Arc<DocServerState>>) -> impl IntoResponse {
     Json(state.index.clone())
 }
 
@@ -93,10 +91,16 @@ async fn doc_item_handler(
     if let Some(item) = state.index.find_by_url(&path) {
         let title = format!("{} - Fe Documentation", item.name);
         // Standalone mode - no goto source support
-        (StatusCode::OK, Html(render_page(&title, &item.url_path(), &state.index, false)))
+        (
+            StatusCode::OK,
+            Html(render_page(&title, &item.url_path(), &state.index, false)),
+        )
     } else {
         // Render 404 using the same page template so WebSocket/auto-follow keeps working
-        (StatusCode::NOT_FOUND, Html(render_page_not_found(&path, &state.index)))
+        (
+            StatusCode::NOT_FOUND,
+            Html(render_page_not_found(&path, &state.index)),
+        )
     }
 }
 
@@ -134,7 +138,12 @@ async fn item_api_handler(
 }
 
 /// Render a full HTML page using Leptos SSR
-fn render_page(title: &str, current_path: &str, index: &DocIndex, supports_goto_source: bool) -> String {
+fn render_page(
+    title: &str,
+    current_path: &str,
+    index: &DocIndex,
+    supports_goto_source: bool,
+) -> String {
     use leptos::prelude::*;
 
     let title = title.to_string();
@@ -933,7 +942,12 @@ pub async fn serve(index: DocIndex, config: DocServerConfig) -> Result<(), std::
 }
 
 /// Public function for LSP integration - renders a doc page
-pub fn render_page_for_lsp(title: &str, current_path: &str, index: &DocIndex, supports_goto_source: bool) -> String {
+pub fn render_page_for_lsp(
+    title: &str,
+    current_path: &str,
+    index: &DocIndex,
+    supports_goto_source: bool,
+) -> String {
     render_page(title, current_path, index, supports_goto_source)
 }
 

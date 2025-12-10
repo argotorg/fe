@@ -81,12 +81,18 @@ impl async_lsp::lsp_types::notification::Notification for CursorPositionNotifica
 impl DocNavigate {
     /// Navigate unconditionally to a path
     pub fn to(path: impl Into<String>) -> Self {
-        Self { path: path.into(), if_on_path: None }
+        Self {
+            path: path.into(),
+            if_on_path: None,
+        }
     }
 
     /// Navigate only if the browser is currently viewing old_path (for renames)
     pub fn redirect(old_path: impl Into<String>, new_path: impl Into<String>) -> Self {
-        Self { path: new_path.into(), if_on_path: Some(old_path.into()) }
+        Self {
+            path: new_path.into(),
+            if_on_path: Some(old_path.into()),
+        }
     }
 }
 
@@ -198,7 +204,10 @@ pub async fn initialize(
         .and_then(|w| w.show_document.as_ref())
         .map(|sd| sd.support)
         .unwrap_or(false);
-    info!("Client supports window/showDocument: {}", backend.supports_show_document);
+    info!(
+        "Client supports window/showDocument: {}",
+        backend.supports_show_document
+    );
 
     // Discover and load all ingots in the workspace
     discover_and_load_ingots(backend, &root).await?;
@@ -227,7 +236,10 @@ pub async fn initialized(
 
     // Start doc server immediately
     update_docs(backend).await;
-    info!("update_docs completed, doc_server running: {}", backend.doc_server.is_some());
+    info!(
+        "update_docs completed, doc_server running: {}",
+        backend.doc_server.is_some()
+    );
 
     // Register file watchers so the client notifies us when .fe or fe.toml
     // files are created, changed, or deleted on disk (e.g. `fe new counter`).
@@ -785,7 +797,10 @@ pub async fn handle_goto_source(
         // Fallback: try opening the file directly
         // Many editors support file:///path#L<line> format
         let url_with_line = format!("{}:{}", request.file, request.line);
-        info!("window/showDocument not supported, trying fallback: {}", url_with_line);
+        info!(
+            "window/showDocument not supported, trying fallback: {}",
+            url_with_line
+        );
 
         if let Err(e) = open::that(&url_with_line) {
             // If that fails, try just opening the file
@@ -818,7 +833,10 @@ pub async fn handle_hover_request(
     info!("handling hover request in file: {:?}", file);
     let result = hover_helper(&backend.db, file, message).unwrap_or_else(|e| {
         error!("Error handling hover: {:?}", e);
-        super::hover::HoverResult { hover: None, doc_path: None }
+        super::hover::HoverResult {
+            hover: None,
+            doc_path: None,
+        }
     });
 
     // Emit navigation event for auto-follow mode (browser will ignore if disabled)
@@ -836,8 +854,8 @@ pub async fn handle_cursor_position(
     backend: &Backend,
     message: async_lsp::lsp_types::TextDocumentPositionParams,
 ) -> Result<(), ResponseError> {
-    use hir::{core::semantic::reference::Target, lower::map_file_to_mod};
     use crate::util::to_offset_from_position;
+    use hir::{core::semantic::reference::Target, lower::map_file_to_mod};
 
     let path_str = message.text_document.uri.path();
 

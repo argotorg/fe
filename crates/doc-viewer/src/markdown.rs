@@ -1,6 +1,6 @@
 //! Markdown to HTML rendering with syntax highlighting
 
-use pulldown_cmark::{html, Event, Options, Parser, Tag, TagEnd};
+use pulldown_cmark::{Event, Options, Parser, Tag, TagEnd, html};
 
 /// Render markdown to HTML with Fe syntax highlighting for code blocks
 pub fn render_markdown(markdown: &str) -> String {
