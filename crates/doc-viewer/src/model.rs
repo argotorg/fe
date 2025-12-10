@@ -91,6 +91,8 @@ pub struct DocImplementor {
     pub type_name: String,
     /// Path to the type's documentation
     pub type_url: String,
+    /// The trait name (for linking to the impl block)
+    pub trait_name: String,
     /// The full impl signature (plain text)
     pub signature: String,
     /// Rich signature with embedded links
@@ -540,6 +542,7 @@ impl DocIndex {
             let implementor = DocImplementor {
                 type_name: type_simple_name.clone(),
                 type_url: format!("{}/{}", type_path, type_kind_suffix),
+                trait_name: trait_simple_name.clone(),
                 signature: trait_impl.signature.clone(),
                 rich_signature,
             };
