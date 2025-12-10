@@ -711,6 +711,8 @@ fn DocImplementorsSSR(implementors: Vec<crate::model::DocImplementor>) -> impl I
             <div class="implementor-list">
                 {implementors.into_iter().map(|imp| {
                     let anchor_id = format!("impl-{}", imp.type_name.replace(['<', '>', ' ', ','], "_"));
+                    // Link to the impl block on the type's page
+                    let impl_link = format!("/doc/{}#impl-{}", imp.type_url, imp.trait_name);
                     view! {
                         <div class="implementor-item" id=anchor_id.clone()>
                             <a href=format!("#{}", anchor_id) class="anchor">"\u{00a7}"</a>
@@ -720,6 +722,7 @@ fn DocImplementorsSSR(implementors: Vec<crate::model::DocImplementor>) -> impl I
                                     fallback=imp.signature.clone()
                                 />
                             </code>
+                            <a href=impl_link class="impl-link" title="Go to implementation">"→"</a>
                         </div>
                     }
                 }).collect_view()}
