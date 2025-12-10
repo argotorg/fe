@@ -141,16 +141,19 @@ pub async fn handle_rename(
         Ok(None)
     } else {
         // Emit navigation event for doc server (only for scoped items, not locals)
-        if let Target::Scope(target_scope) = &target {
-            if let Some(old_path) = target_scope.item().scope().pretty_path(&backend.db) {
-                // Compute new path by replacing the last segment
-                let new_path = if let Some((prefix, _)) = old_path.rsplit_once("::") {
-                    format!("{}::{}", prefix, new_name)
-                } else {
-                    new_name.clone()
-                };
-                let _ = backend.client.clone().emit(DocNavigate::redirect(old_path, new_path));
-            }
+        if let Target::Scope(target_scope) = &target
+            && let Some(old_path) = target_scope.item().scope().pretty_path(&backend.db)
+        {
+            // Compute new path by replacing the last segment
+            let new_path = if let Some((prefix, _)) = old_path.rsplit_once("::") {
+                format!("{}::{}", prefix, new_name)
+            } else {
+                new_name.clone()
+            };
+            let _ = backend
+                .client
+                .clone()
+                .emit(DocNavigate::redirect(old_path, new_path));
         }
 
         Ok(Some(WorkspaceEdit {

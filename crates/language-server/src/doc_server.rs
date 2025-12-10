@@ -12,7 +12,7 @@ use tokio::sync::{RwLock, broadcast};
 use async_lsp::ClientSocket;
 use doc_viewer::DocIndex;
 use serde::{Deserialize, Serialize};
-use tracing::{error, info, debug};
+use tracing::{debug, error, info};
 
 /// Server info written to `.fe-lsp.json` for CLI discovery
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -92,7 +92,10 @@ pub struct DocServerHandle {
 
 impl DocServerHandle {
     /// Start the doc server on a random available port
-    pub async fn start(client: ClientSocket, supports_goto_source: bool) -> Result<Self, std::io::Error> {
+    pub async fn start(
+        client: ClientSocket,
+        supports_goto_source: bool,
+    ) -> Result<Self, std::io::Error> {
         // Bind to port 0 to get a random available port
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
         let port = listener.local_addr()?.port();
@@ -116,14 +119,22 @@ impl DocServerHandle {
 
             let app = doc_router_dynamic(state);
 
-            info!("Documentation server listening on http://127.0.0.1:{}", port);
+            info!(
+                "Documentation server listening on http://127.0.0.1:{}",
+                port
+            );
 
             if let Err(e) = axum::serve(listener, app).await {
                 error!("Doc server error: {}", e);
             }
         });
 
-        Ok(Self { port, url, index, update_tx })
+        Ok(Self {
+            port,
+            url,
+            index,
+            update_tx,
+        })
     }
 
     /// Update the documentation index, detect renames, and notify connected clients
@@ -141,11 +152,16 @@ impl DocServerHandle {
                 path: Some(new_path.clone()),
                 if_on_path: Some(old_path.clone()),
             };
-            let _ = self.update_tx.send(serde_json::to_string(&msg).unwrap_or_default());
+            let _ = self
+                .update_tx
+                .send(serde_json::to_string(&msg).unwrap_or_default());
         }
 
         *index = new_index;
-        info!("Updated documentation index with {} items", index.items.len());
+        info!(
+            "Updated documentation index with {} items",
+            index.items.len()
+        );
 
         // Send update message to WebSocket clients
         let msg = DocMessage {
@@ -156,7 +172,10 @@ impl DocServerHandle {
         let msg_json = serde_json::to_string(&msg).unwrap_or_default();
         match self.update_tx.send(msg_json) {
             Ok(subscriber_count) => {
-                info!("Sent update message to {} WebSocket subscribers", subscriber_count);
+                info!(
+                    "Sent update message to {} WebSocket subscribers",
+                    subscriber_count
+                );
             }
             Err(e) => {
                 debug!("No WebSocket subscribers to notify: {:?}", e);
@@ -177,7 +196,9 @@ impl DocServerHandle {
             path: Some(path.to_string()),
             if_on_path: if_on_path.map(|s| s.to_string()),
         };
-        let _ = self.update_tx.send(serde_json::to_string(&msg).unwrap_or_default());
+        let _ = self
+            .update_tx
+            .send(serde_json::to_string(&msg).unwrap_or_default());
     }
 
     /// Get the broadcast sender for WebSocket messages (for stream piping)
@@ -199,19 +220,29 @@ struct DocServerStateWrapper {
 /// Create a router that reads from a dynamic index (SSR mode)
 fn doc_router_dynamic(state: Arc<DocServerStateWrapper>) -> axum::Router {
     use axum::{
-        extract::{Path, Query, State, WebSocketUpgrade, ws::{Message, WebSocket}},
+        extract::{
+            Path, Query, State, WebSocketUpgrade,
+            ws::{Message, WebSocket},
+        },
         http::StatusCode,
         response::{Html, IntoResponse, Json},
         routing::{get, post},
     };
 
     // SSR mode - server renders the full HTML for each page
-    async fn index_handler(
-        State(state): State<Arc<DocServerStateWrapper>>,
-    ) -> impl IntoResponse {
+    async fn index_handler(State(state): State<Arc<DocServerStateWrapper>>) -> impl IntoResponse {
         let index = state.index.read().await;
-        let root_path = index.modules.first().map(|m| m.url_path()).unwrap_or_default();
-        Html(doc_viewer::server::render_page_for_lsp("Fe Documentation", &root_path, &index, state.supports_goto_source))
+        let root_path = index
+            .modules
+            .first()
+            .map(|m| m.url_path())
+            .unwrap_or_default();
+        Html(doc_viewer::server::render_page_for_lsp(
+            "Fe Documentation",
+            &root_path,
+            &index,
+            state.supports_goto_source,
+        ))
     }
 
     // Render doc item page with SSR
@@ -224,9 +255,22 @@ fn doc_router_dynamic(state: Arc<DocServerStateWrapper>) -> axum::Router {
         if let Some(item) = index.find_by_url(&path) {
             let title = format!("{} - Fe Documentation", item.name);
             // Use item's url_path for proper linking
-            (StatusCode::OK, Html(doc_viewer::server::render_page_for_lsp(&title, &item.url_path(), &index, state.supports_goto_source)))
+            (
+                StatusCode::OK,
+                Html(doc_viewer::server::render_page_for_lsp(
+                    &title,
+                    &item.url_path(),
+                    &index,
+                    state.supports_goto_source,
+                )),
+            )
         } else {
-            (StatusCode::NOT_FOUND, Html(doc_viewer::server::render_page_not_found_for_lsp(&path, &index)))
+            (
+                StatusCode::NOT_FOUND,
+                Html(doc_viewer::server::render_page_not_found_for_lsp(
+                    &path, &index,
+                )),
+            )
         }
     }
 
@@ -277,9 +321,16 @@ fn doc_router_dynamic(state: Arc<DocServerStateWrapper>) -> axum::Router {
         info!("Goto source request for path: {}", path);
         let index = state.index.read().await;
         if let Some(item) = index.find_by_url(&path) {
-            info!("Found item: {}, has_source: {}", item.name, item.source.is_some());
+            info!(
+                "Found item: {}, has_source: {}",
+                item.name,
+                item.source.is_some()
+            );
             if let Some(ref source) = item.source {
-                info!("Goto source: {} -> {}:{}:{}", path, source.file, source.line, source.column);
+                info!(
+                    "Goto source: {} -> {}:{}:{}",
+                    path, source.file, source.line, source.column
+                );
                 let request = GotoSourceRequest {
                     file: source.file.clone(),
                     line: source.line,
@@ -293,13 +344,27 @@ fn doc_router_dynamic(state: Arc<DocServerStateWrapper>) -> axum::Router {
                 }
                 return (StatusCode::OK, Json(serde_json::json!({"success": true})));
             }
-            return (StatusCode::NOT_FOUND, Json(serde_json::json!({"success": false, "error": format!("Item '{}' has no source location", path)})));
+            return (
+                StatusCode::NOT_FOUND,
+                Json(
+                    serde_json::json!({"success": false, "error": format!("Item '{}' has no source location", path)}),
+                ),
+            );
         }
         // Log available paths for debugging
         let available_paths: Vec<_> = index.items.iter().map(|i| i.path.as_str()).collect();
         debug!("Available paths in index: {:?}", available_paths);
-        info!("Item not found in index: '{}' (index has {} items)", path, index.items.len());
-        (StatusCode::NOT_FOUND, Json(serde_json::json!({"success": false, "error": format!("Item not found: {}", path)})))
+        info!(
+            "Item not found in index: '{}' (index has {} items)",
+            path,
+            index.items.len()
+        );
+        (
+            StatusCode::NOT_FOUND,
+            Json(
+                serde_json::json!({"success": false, "error": format!("Item not found: {}", path)}),
+            ),
+        )
     }
 
     /// WebSocket handler for live updates
@@ -365,7 +430,6 @@ fn doc_router_dynamic(state: Arc<DocServerStateWrapper>) -> axum::Router {
         .with_state(state)
 }
 
-
 /// Detect renamed items by comparing structural identity between old and new indexes.
 ///
 /// Identity key: (parent_path, kind, file, line)
@@ -417,11 +481,14 @@ fn detect_renames(old_index: &DocIndex, new_index: &DocIndex) -> Vec<(String, St
     let mut renames: HashMap<String, String> = HashMap::new();
 
     for (identity, old_path) in &old_by_identity {
-        if let Some(new_path) = new_by_identity.get(identity) {
-            if old_path != new_path {
-                debug!("Rename detected via identity {:?}: {} -> {}", identity, old_path, new_path);
-                renames.insert(old_path.to_string(), new_path.to_string());
-            }
+        if let Some(new_path) = new_by_identity.get(identity)
+            && old_path != new_path
+        {
+            debug!(
+                "Rename detected via identity {:?}: {} -> {}",
+                identity, old_path, new_path
+            );
+            renames.insert(old_path.to_string(), new_path.to_string());
         }
     }
 

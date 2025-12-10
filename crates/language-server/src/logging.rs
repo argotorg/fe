@@ -11,8 +11,7 @@ pub fn setup_default_subscriber(client: ClientSocket) -> Option<tracing::subscri
     let client_socket_writer = ClientSocketWriterMaker::new(client);
 
     // Filter out verbose Salsa query logs while keeping our INFO logs
-    let filter = EnvFilter::new("info")
-        .add_directive("salsa=warn".parse().unwrap());
+    let filter = EnvFilter::new("info").add_directive("salsa=warn".parse().unwrap());
 
     // Use fmt layer which properly calls make_writer_for() for correct LSP log levels
     let fmt_layer = tracing_subscriber::fmt::layer()
@@ -20,9 +19,7 @@ pub fn setup_default_subscriber(client: ClientSocket) -> Option<tracing::subscri
         .with_target(true)
         .with_writer(client_socket_writer);
 
-    let subscriber = tracing_subscriber::registry()
-        .with(filter)
-        .with(fmt_layer);
+    let subscriber = tracing_subscriber::registry().with(filter).with(fmt_layer);
     Some(set_default(subscriber))
 }
 

@@ -1,6 +1,8 @@
-use crate::fallback::WithFallbackService;
 use crate::doc_server::GotoSourceRequest;
-use crate::functionality::handlers::{CursorPositionNotification, DocNavigate, FileChange, FilesNeedDiagnostics, NeedsDiagnostics};
+use crate::fallback::WithFallbackService;
+use crate::functionality::handlers::{
+    CursorPositionNotification, DocNavigate, FileChange, FilesNeedDiagnostics, NeedsDiagnostics,
+};
 use crate::logging;
 use crate::lsp_actor::LspActor;
 use crate::lsp_actor::service::LspActorService;
@@ -12,10 +14,10 @@ use async_lsp::lsp_types::notification::{
     Initialized,
 };
 use async_lsp::lsp_types::request::{
-    CodeActionRequest, Completion, DocumentHighlightRequest, DocumentSymbolRequest,
-    ExecuteCommand, GotoDefinition, GotoImplementation, GotoTypeDefinition, HoverRequest,
-    InlayHintRequest, References, Rename, SemanticTokensFullRequest, Shutdown,
-    SignatureHelpRequest, WorkspaceSymbolRequest,
+    CodeActionRequest, Completion, DocumentHighlightRequest, DocumentSymbolRequest, ExecuteCommand,
+    GotoDefinition, GotoImplementation, GotoTypeDefinition, HoverRequest, InlayHintRequest,
+    References, Rename, SemanticTokensFullRequest, Shutdown, SignatureHelpRequest,
+    WorkspaceSymbolRequest,
 };
 use futures::StreamExt;
 use futures_batch::ChunksTimeoutStreamExt;

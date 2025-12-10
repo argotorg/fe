@@ -140,7 +140,7 @@ impl DocItemKind {
     }
 
     /// Parse kind from URL suffix string
-    pub fn from_str(s: &str) -> Option<Self> {
+    pub fn parse(s: &str) -> Option<Self> {
         match s {
             "mod" | "module" => Some(DocItemKind::Module),
             "fn" | "function" => Some(DocItemKind::Function),
@@ -248,7 +248,7 @@ impl DocContent {
         let mut current_section: Option<(String, String)> = None;
 
         for line in text.lines() {
-            if line.starts_with("# ") {
+            if let Some(header) = line.strip_prefix("# ") {
                 // Save previous section if any
                 if let Some((name, content)) = current_section.take() {
                     sections.push(DocSection {
@@ -257,7 +257,7 @@ impl DocContent {
                     });
                 }
                 // Start new section
-                let name = line[2..].trim().to_string();
+                let name = header.trim().to_string();
                 current_section = Some((name, String::new()));
             } else if let Some((_, ref mut content)) = current_section {
                 content.push_str(line);
@@ -438,11 +438,11 @@ impl DocIndex {
     /// Returns the item if found, handling both formats.
     pub fn find_by_url(&self, url_path: &str) -> Option<&DocItem> {
         // Try to parse kind suffix (e.g., "lib::foo/fn" -> path="lib::foo", kind="fn")
-        if let Some((path, kind_str)) = url_path.rsplit_once('/') {
-            if let Some(kind) = DocItemKind::from_str(kind_str) {
-                // URL has valid kind suffix - find by path and kind
-                return self.find_by_path_and_kind(path, kind);
-            }
+        if let Some((path, kind_str)) = url_path.rsplit_once('/')
+            && let Some(kind) = DocItemKind::parse(kind_str)
+        {
+            // URL has valid kind suffix - find by path and kind
+            return self.find_by_path_and_kind(path, kind);
         }
         // No valid kind suffix - find by path alone (may be ambiguous)
         self.find_by_path(url_path)
@@ -527,10 +527,7 @@ impl DocIndex {
             // Build rich signature: "impl Trait for Type"
             let rich_signature = vec![
                 SignaturePart::text("impl "),
-                SignaturePart::link(
-                    &trait_simple_name,
-                    format!("{}/trait", trait_path),
-                ),
+                SignaturePart::link(&trait_simple_name, format!("{}/trait", trait_path)),
                 SignaturePart::text(" for "),
                 SignaturePart::link(
                     &type_simple_name,
@@ -571,7 +568,8 @@ impl DocIndex {
 
                     if matches {
                         // Build rich signature for this trait impl if it's a trait impl (not inherent)
-                        if !trait_impl.trait_name.is_empty() && trait_impl.rich_signature.is_empty() {
+                        if !trait_impl.trait_name.is_empty() && trait_impl.rich_signature.is_empty()
+                        {
                             // Look up the trait URL
                             let trait_url = trait_items
                                 .get(&trait_simple_name)
@@ -597,13 +595,16 @@ impl DocIndex {
                     let trait_matches = item.name == trait_simple_name
                         || item.path.ends_with(&format!("::{}", trait_simple_name));
 
-                    if trait_matches {
-                        if let Some(impls) = trait_implementors.get(&trait_simple_name) {
-                            // Only add if not already present
-                            for imp in impls {
-                                if !item.implementors.iter().any(|i| i.type_name == imp.type_name) {
-                                    item.implementors.push(imp.clone());
-                                }
+                    if trait_matches && let Some(impls) = trait_implementors.get(&trait_simple_name)
+                    {
+                        // Only add if not already present
+                        for imp in impls {
+                            if !item
+                                .implementors
+                                .iter()
+                                .any(|i| i.type_name == imp.type_name)
+                            {
+                                item.implementors.push(imp.clone());
                             }
                         }
                     }
@@ -690,17 +691,17 @@ fn build_rich_signature(
 
             // Check if this identifier is a linkable type
             // Only link identifiers that start with uppercase (type convention)
-            if ident.chars().next().map_or(false, |c| c.is_ascii_uppercase()) {
-                if let Some((path, kind)) = linkable_types.get(&ident) {
-                    // Flush any pending text
-                    if !current_text.is_empty() {
-                        parts.push(SignaturePart::text(&current_text));
-                        current_text.clear();
-                    }
-                    // Add the linked type
-                    parts.push(SignaturePart::link(&ident, format!("{}/{}", path, kind)));
-                    continue;
+            if ident.chars().next().is_some_and(|c| c.is_ascii_uppercase())
+                && let Some((path, kind)) = linkable_types.get(&ident)
+            {
+                // Flush any pending text
+                if !current_text.is_empty() {
+                    parts.push(SignaturePart::text(&current_text));
+                    current_text.clear();
                 }
+                // Add the linked type
+                parts.push(SignaturePart::link(&ident, format!("{}/{}", path, kind)));
+                continue;
             }
 
             // Not linkable, just add to current text

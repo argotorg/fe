@@ -2,7 +2,7 @@ use camino::Utf8PathBuf;
 use common::InputDb;
 use doc_engine::DocExtractor;
 use doc_viewer::model::DocIndex;
-use doc_viewer::server::{serve, DocServerConfig};
+use doc_viewer::server::{DocServerConfig, serve};
 use driver::DriverDataBase;
 use hir::hir_def::HirIngot;
 use serde::{Deserialize, Serialize};
@@ -27,8 +27,7 @@ impl LspServerInfo {
     /// Check if the LSP process is still running
     fn is_alive(&self) -> bool {
         // Simple check: see if the process exists
-        std::path::Path::new(&format!("/proc/{}", self.pid)).exists()
-            || cfg!(windows) // On Windows, just assume it's alive if the file exists
+        std::path::Path::new(&format!("/proc/{}", self.pid)).exists() || cfg!(windows) // On Windows, just assume it's alive if the file exists
     }
 }
 
@@ -43,30 +42,25 @@ pub fn generate_docs(
     // First, check if there's a running LSP with docs server
     if serve_docs {
         let canonical_path = path.canonicalize_utf8().ok();
-        let workspace_root = canonical_path
-            .as_ref()
-            .map(|p| {
-                if p.is_file() {
-                    p.parent().map(|p| p.as_std_path())
-                } else {
-                    Some(p.as_std_path())
-                }
-            })
-            .flatten();
-
-        if let Some(root) = workspace_root {
-            if let Some(info) = LspServerInfo::read_from_workspace(root) {
-                if info.is_alive() {
-                    if let Some(docs_url) = &info.docs_url {
-                        println!("Found running language server with documentation at:");
-                        println!("  {}", docs_url);
-                        println!();
-                        println!("The language server keeps docs in sync with your code.");
-                        println!("Open the URL above in your browser.");
-                        return;
-                    }
-                }
+        let workspace_root = canonical_path.as_ref().and_then(|p| {
+            if p.is_file() {
+                p.parent().map(|p| p.as_std_path())
+            } else {
+                Some(p.as_std_path())
             }
+        });
+
+        if let Some(root) = workspace_root
+            && let Some(info) = LspServerInfo::read_from_workspace(root)
+            && info.is_alive()
+            && let Some(docs_url) = &info.docs_url
+        {
+            println!("Found running language server with documentation at:");
+            println!("  {}", docs_url);
+            println!();
+            println!("The language server keeps docs in sync with your code.");
+            println!("Open the URL above in your browser.");
+            return;
         }
     }
 

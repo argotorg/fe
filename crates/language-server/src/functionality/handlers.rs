@@ -76,12 +76,18 @@ impl async_lsp::lsp_types::notification::Notification for CursorPositionNotifica
 impl DocNavigate {
     /// Navigate unconditionally to a path
     pub fn to(path: impl Into<String>) -> Self {
-        Self { path: path.into(), if_on_path: None }
+        Self {
+            path: path.into(),
+            if_on_path: None,
+        }
     }
 
     /// Navigate only if the browser is currently viewing old_path (for renames)
     pub fn redirect(old_path: impl Into<String>, new_path: impl Into<String>) -> Self {
-        Self { path: new_path.into(), if_on_path: Some(old_path.into()) }
+        Self {
+            path: new_path.into(),
+            if_on_path: Some(old_path.into()),
+        }
     }
 }
 
@@ -175,7 +181,10 @@ pub async fn initialize(
         .and_then(|w| w.show_document.as_ref())
         .map(|sd| sd.support)
         .unwrap_or(false);
-    info!("Client supports window/showDocument: {}", backend.supports_show_document);
+    info!(
+        "Client supports window/showDocument: {}",
+        backend.supports_show_document
+    );
 
     // Discover and load all ingots in the workspace
     discover_and_load_ingots(backend, &root).await?;
@@ -204,7 +213,10 @@ pub async fn initialized(
 
     // Start doc server immediately
     update_docs(backend).await;
-    info!("update_docs completed, doc_server running: {}", backend.doc_server.is_some());
+    info!(
+        "update_docs completed, doc_server running: {}",
+        backend.doc_server.is_some()
+    );
 
     // Get all files from the workspace
     let all_files: Vec<_> = backend
@@ -465,7 +477,10 @@ pub async fn handle_files_need_diagnostics(
 /// Start the doc server if not running, and update the documentation index.
 /// This is called after file changes to keep docs in sync.
 async fn update_docs(backend: &mut Backend) {
-    info!("update_docs called, doc_server exists: {}", backend.doc_server.is_some());
+    info!(
+        "update_docs called, doc_server exists: {}",
+        backend.doc_server.is_some()
+    );
 
     // Start doc server if not already running
     if backend.doc_server.is_none() {
@@ -473,7 +488,9 @@ async fn update_docs(backend: &mut Backend) {
         // Use the workers runtime since act_locally runs on a separate thread without tokio
         let client = backend.client.clone();
         let supports_goto_source = backend.supports_show_document;
-        let handle_result = backend.workers.block_on(DocServerHandle::start(client, supports_goto_source));
+        let handle_result = backend
+            .workers
+            .block_on(DocServerHandle::start(client, supports_goto_source));
         match handle_result {
             Ok(handle) => {
                 info!("Started documentation server at {}", handle.url);
@@ -571,7 +588,9 @@ async fn update_docs(backend: &mut Backend) {
 
     // Update the doc server (use workers runtime for tokio async)
     if let Some(ref doc_server) = backend.doc_server {
-        backend.workers.block_on(doc_server.update_index(combined_index));
+        backend
+            .workers
+            .block_on(doc_server.update_index(combined_index));
     }
 }
 
@@ -642,7 +661,10 @@ pub async fn handle_goto_source(
         // Fallback: try opening the file directly
         // Many editors support file:///path#L<line> format
         let url_with_line = format!("{}:{}", request.file, request.line);
-        info!("window/showDocument not supported, trying fallback: {}", url_with_line);
+        info!(
+            "window/showDocument not supported, trying fallback: {}",
+            url_with_line
+        );
 
         if let Err(e) = open::that(&url_with_line) {
             // If that fails, try just opening the file
@@ -680,7 +702,10 @@ pub async fn handle_hover_request(
     info!("handling hover request in file: {:?}", file);
     let result = hover_helper(&backend.db, file, message).unwrap_or_else(|e| {
         error!("Error handling hover: {:?}", e);
-        super::hover::HoverResult { hover: None, doc_path: None }
+        super::hover::HoverResult {
+            hover: None,
+            doc_path: None,
+        }
     });
 
     // Emit navigation event for auto-follow mode (browser will ignore if disabled)
@@ -698,8 +723,8 @@ pub async fn handle_cursor_position(
     backend: &Backend,
     message: async_lsp::lsp_types::TextDocumentPositionParams,
 ) -> Result<(), ResponseError> {
-    use hir::{core::semantic::reference::Target, lower::map_file_to_mod};
     use crate::util::to_offset_from_position;
+    use hir::{core::semantic::reference::Target, lower::map_file_to_mod};
 
     let path_str = message.text_document.uri.path();
 
@@ -760,10 +785,7 @@ pub async fn handle_execute_command(
 
             if let Some(ref doc_server) = backend.doc_server {
                 // Extract optional item path from arguments
-                let item_path = params
-                    .arguments
-                    .first()
-                    .and_then(|arg| arg.as_str());
+                let item_path = params.arguments.first().and_then(|arg| arg.as_str());
 
                 // Build the full URL
                 let full_url = if let Some(path) = item_path {

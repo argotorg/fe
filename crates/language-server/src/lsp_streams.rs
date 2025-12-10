@@ -3,8 +3,8 @@
 //! This crate provides an extension to the `async-lsp` library, allowing easy creation of
 //! stream-based handlers for LSP requests and notifications.
 
-use async_lsp::router::Router;
 use async_lsp::lsp_types::{notification, request};
+use async_lsp::router::Router;
 use async_lsp::{ClientSocket, ResponseError};
 use futures::{Stream, StreamExt};
 use std::fmt::{Debug, Display};
