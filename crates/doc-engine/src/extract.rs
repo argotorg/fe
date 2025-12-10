@@ -9,6 +9,7 @@ use hir::{
         scope_graph::ScopeId, Attr, Contract, Enum, FieldParent, HirIngot, Impl, ImplTrait,
         ItemKind, Struct, TopLevelMod, Trait, VariantKind, Visibility,
     },
+    semantic::FieldView,
     span::LazySpan,
     SpannedHirDb,
 };
@@ -181,6 +182,7 @@ impl<'db> DocExtractor<'db> {
                     trait_name,
                     impl_url: format!("{}/impl", impl_path),
                     signature,
+                    rich_signature: vec![],
                     methods,
                 },
             ));
@@ -228,6 +230,7 @@ impl<'db> DocExtractor<'db> {
                     trait_name: String::new(), // Empty = inherent impl
                     impl_url: format!("{}/impl", impl_path),
                     signature,
+                    rich_signature: vec![],
                     methods,
                 },
             ));
@@ -247,6 +250,7 @@ impl<'db> DocExtractor<'db> {
                 Some(DocImplMethod {
                     name,
                     signature,
+                    rich_signature: vec![],
                     docs,
                 })
             })
@@ -264,6 +268,7 @@ impl<'db> DocExtractor<'db> {
                 Some(DocImplMethod {
                     name,
                     signature,
+                    rich_signature: vec![],
                     docs,
                 })
             })
@@ -297,6 +302,7 @@ impl<'db> DocExtractor<'db> {
             visibility,
             docs,
             signature,
+            rich_signature: vec![],
             generics,
             where_bounds,
             children,
@@ -425,6 +431,20 @@ impl<'db> DocExtractor<'db> {
         sig
     }
 
+    /// Extract the type text from a field's type span
+    fn get_field_type_text(&self, field_view: FieldView<'db>) -> Option<String> {
+        let ty_span = field_view.ty_span().resolve(self.db)?;
+        let start: usize = ty_span.range.start().into();
+        let end: usize = ty_span.range.end().into();
+        let file_text = ty_span.file.text(self.db).as_str();
+
+        if end > file_text.len() || start > end {
+            return None;
+        }
+
+        Some(file_text[start..end].trim().to_string())
+    }
+
     /// Extract generic parameters from an item
     fn extract_generics(&self, item: ItemKind<'db>) -> Vec<DocGenericParam> {
         // Get generics from scope's children
@@ -474,7 +494,10 @@ impl<'db> DocExtractor<'db> {
                 let name = field_view.name(self.db)?.data(self.db).to_string();
                 let scope = ScopeId::Field(parent, field_view.idx as u16);
                 let docs = self.get_docstring(scope);
-                let signature = format!("{}: /* type */", name); // TODO: render type
+                let type_text = self
+                    .get_field_type_text(field_view)
+                    .unwrap_or_else(|| "?".to_string());
+                let signature = format!("{}: {}", name, type_text);
                 // Get visibility from the scope's data
                 let visibility = scope.data(self.db).vis;
 
@@ -483,6 +506,7 @@ impl<'db> DocExtractor<'db> {
                     name,
                     docs,
                     signature,
+                    rich_signature: vec![],
                     visibility: self.convert_visibility(visibility),
                 })
             })
@@ -497,7 +521,10 @@ impl<'db> DocExtractor<'db> {
                 let name = field_view.name(self.db)?.data(self.db).to_string();
                 let scope = ScopeId::Field(parent, field_view.idx as u16);
                 let docs = self.get_docstring(scope);
-                let signature = format!("{}: /* type */", name);
+                let type_text = self
+                    .get_field_type_text(field_view)
+                    .unwrap_or_else(|| "?".to_string());
+                let signature = format!("{}: {}", name, type_text);
                 let visibility = scope.data(self.db).vis;
 
                 Some(DocChild {
@@ -505,6 +532,7 @@ impl<'db> DocExtractor<'db> {
                     name,
                     docs,
                     signature,
+                    rich_signature: vec![],
                     visibility: self.convert_visibility(visibility),
                 })
             })
@@ -530,6 +558,7 @@ impl<'db> DocExtractor<'db> {
                     name,
                     docs,
                     signature,
+                    rich_signature: vec![],
                     visibility: DocVisibility::Public,
                 })
             })
@@ -551,6 +580,7 @@ impl<'db> DocExtractor<'db> {
                     name: name_str,
                     docs,
                     signature,
+                    rich_signature: vec![],
                     visibility: DocVisibility::Public,
                 });
             }
@@ -568,6 +598,7 @@ impl<'db> DocExtractor<'db> {
                     name: name_str.clone(),
                     docs,
                     signature: format!("type {}", name_str),
+                    rich_signature: vec![],
                     visibility: DocVisibility::Public,
                 });
             }
@@ -591,6 +622,7 @@ impl<'db> DocExtractor<'db> {
                     name: name_str,
                     docs,
                     signature,
+                    rich_signature: vec![],
                     visibility,
                 });
             }
@@ -614,6 +646,7 @@ impl<'db> DocExtractor<'db> {
                     name: name_str,
                     docs,
                     signature,
+                    rich_signature: vec![],
                     visibility,
                 });
             }

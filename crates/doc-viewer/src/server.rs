@@ -19,7 +19,7 @@ use axum::{
 use std::sync::Arc;
 use tower_http::services::ServeDir;
 
-use crate::model::{DocIndex, DocItem, DocItemKind};
+use crate::model::{DocIndex, DocItem};
 use crate::ssr_components::{DocPage, DocNotFoundSSR};
 
 /// Application state shared across handlers

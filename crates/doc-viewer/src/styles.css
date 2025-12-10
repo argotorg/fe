@@ -284,6 +284,17 @@ body {
     color: var(--text);
 }
 
+/* Type links in signatures */
+.type-link {
+    color: var(--accent);
+    text-decoration: none;
+}
+
+.type-link:hover {
+    color: var(--accent-hover);
+    text-decoration: underline;
+}
+
 .docs {
     margin-bottom: 2rem;
 }

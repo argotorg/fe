@@ -6,6 +6,50 @@
 
 use serde::{Deserialize, Serialize};
 
+// ============================================================================
+// Rich Signature Types (for rendering signatures with embedded links)
+// ============================================================================
+
+/// A part of a signature - either plain text or a linkable reference
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SignaturePart {
+    /// The display text
+    pub text: String,
+    /// If Some, render as a link to this doc path (e.g., "hoverable::Numbers/struct")
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub link: Option<String>,
+}
+
+impl SignaturePart {
+    /// Create a plain text part
+    pub fn text(s: impl Into<String>) -> Self {
+        Self {
+            text: s.into(),
+            link: None,
+        }
+    }
+
+    /// Create a linked part
+    pub fn link(text: impl Into<String>, path: impl Into<String>) -> Self {
+        Self {
+            text: text.into(),
+            link: Some(path.into()),
+        }
+    }
+}
+
+/// A rich signature with embedded links
+pub type RichSignature = Vec<SignaturePart>;
+
+/// Helper to create a RichSignature from a plain string (no links)
+pub fn plain_signature(s: impl Into<String>) -> RichSignature {
+    vec![SignaturePart::text(s)]
+}
+
+// ============================================================================
+// Core Documentation Types
+// ============================================================================
+
 /// A documented item in the Fe codebase
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct DocItem {
@@ -19,8 +63,11 @@ pub struct DocItem {
     pub visibility: DocVisibility,
     /// Parsed documentation content
     pub docs: Option<DocContent>,
-    /// The item's signature/definition (rendered as code)
+    /// The item's signature/definition (plain text for backward compat)
     pub signature: String,
+    /// Rich signature with embedded links (for rendering)
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub rich_signature: RichSignature,
     /// Generic parameters, if any
     pub generics: Vec<DocGenericParam>,
     /// Where clause bounds, if any
@@ -44,8 +91,11 @@ pub struct DocImplementor {
     pub type_name: String,
     /// Path to the type's documentation
     pub type_url: String,
-    /// The full impl signature
+    /// The full impl signature (plain text)
     pub signature: String,
+    /// Rich signature with embedded links
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub rich_signature: RichSignature,
 }
 
 impl DocItem {
@@ -247,6 +297,9 @@ pub struct DocChild {
     pub name: String,
     pub docs: Option<String>,
     pub signature: String,
+    /// Rich signature with embedded links
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub rich_signature: RichSignature,
     pub visibility: DocVisibility,
 }
 
@@ -326,6 +379,9 @@ pub struct DocTraitImpl {
     pub impl_url: String,
     /// The full signature of the impl (e.g., "impl Clone for MyStruct")
     pub signature: String,
+    /// Rich signature with embedded links
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub rich_signature: RichSignature,
     /// Methods defined in this impl block (displayed inline on type pages)
     #[serde(default)]
     pub methods: Vec<DocImplMethod>,
@@ -338,6 +394,9 @@ pub struct DocImplMethod {
     pub name: String,
     /// Method signature (e.g., "pub fn foo(&self) -> u32")
     pub signature: String,
+    /// Rich signature with embedded links
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub rich_signature: RichSignature,
     /// Documentation (first paragraph only for summary)
     pub docs: Option<String>,
 }
@@ -424,6 +483,17 @@ impl DocIndex {
             })
             .collect();
 
+        // Build a lookup map of trait items by simple name for URL resolution
+        let trait_items: std::collections::HashMap<String, String> = self
+            .items
+            .iter()
+            .filter(|item| item.kind == DocItemKind::Trait)
+            .map(|item| {
+                let simple_name = extract_simple_type_name(&item.name);
+                (simple_name, item.path.clone())
+            })
+            .collect();
+
         // First pass: collect implementors for each trait
         let mut trait_implementors: std::collections::HashMap<String, Vec<DocImplementor>> =
             std::collections::HashMap::new();
@@ -446,11 +516,32 @@ impl DocIndex {
                     (target_type.as_str(), "struct")
                 };
 
-            // Create implementor entry with correct URL
+            // Look up the actual trait to get the correct path
+            let trait_path = trait_items
+                .get(&trait_simple_name)
+                .cloned()
+                .unwrap_or_else(|| trait_impl.trait_name.clone());
+
+            // Build rich signature: "impl Trait for Type"
+            let rich_signature = vec![
+                SignaturePart::text("impl "),
+                SignaturePart::link(
+                    &trait_simple_name,
+                    format!("{}/trait", trait_path),
+                ),
+                SignaturePart::text(" for "),
+                SignaturePart::link(
+                    &type_simple_name,
+                    format!("{}/{}", type_path, type_kind_suffix),
+                ),
+            ];
+
+            // Create implementor entry with correct URL and rich signature
             let implementor = DocImplementor {
                 type_name: type_simple_name.clone(),
                 type_url: format!("{}/{}", type_path, type_kind_suffix),
                 signature: trait_impl.signature.clone(),
+                rich_signature,
             };
 
             trait_implementors
@@ -460,7 +551,7 @@ impl DocIndex {
         }
 
         // Second pass: link trait impls to types and implementors to traits
-        for (target_type, trait_impl) in links {
+        for (target_type, mut trait_impl) in links {
             let target_simple_name = extract_simple_type_name(&target_type);
             let trait_simple_name = extract_simple_type_name(&trait_impl.trait_name);
 
@@ -476,6 +567,24 @@ impl DocIndex {
                         || item.path.ends_with(&format!("::{}", target_simple_name));
 
                     if matches {
+                        // Build rich signature for this trait impl if it's a trait impl (not inherent)
+                        if !trait_impl.trait_name.is_empty() && trait_impl.rich_signature.is_empty() {
+                            // Look up the trait URL
+                            let trait_url = trait_items
+                                .get(&trait_simple_name)
+                                .map(|p| format!("{}/trait", p))
+                                .unwrap_or_else(|| format!("{}/trait", &trait_impl.trait_name));
+
+                            // Use the target item's path and kind for the type URL
+                            let type_url = format!("{}/{}", item.path, item.kind.as_str());
+
+                            trait_impl.rich_signature = vec![
+                                SignaturePart::text("impl "),
+                                SignaturePart::link(&trait_simple_name, trait_url),
+                                SignaturePart::text(" for "),
+                                SignaturePart::link(&target_simple_name, type_url),
+                            ];
+                        }
                         item.trait_impls.push(trait_impl.clone());
                     }
                 }

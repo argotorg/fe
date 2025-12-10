@@ -9,8 +9,39 @@ use leptos::tachys::view::any_view::AnyView;
 use crate::markdown::render_markdown;
 use crate::model::{
     DocChild, DocChildKind, DocContent, DocIndex, DocItem, DocItemKind, DocModuleTree,
-    DocTraitImpl,
+    DocTraitImpl, RichSignature,
 };
+
+/// Renders a rich signature with embedded links
+/// If the rich signature is empty, falls back to plain text signature
+#[component]
+fn RichSignatureView(
+    /// The rich signature parts with potential links
+    rich: RichSignature,
+    /// Fallback plain text signature if rich is empty
+    #[prop(default = String::new())]
+    fallback: String,
+) -> impl IntoView {
+    if rich.is_empty() {
+        // Fallback to plain text
+        view! { <code class="signature">{fallback}</code> }.into_any()
+    } else {
+        // Render rich signature with links
+        let parts = rich
+            .into_iter()
+            .map(|part| {
+                match part.link {
+                    Some(path) => view! {
+                        <a href={format!("/doc/{}", path)} class="type-link">{part.text}</a>
+                    }
+                    .into_any(),
+                    None => view! { <span>{part.text}</span> }.into_any(),
+                }
+            })
+            .collect::<Vec<_>>();
+        view! { <code class="signature">{parts}</code> }.into_any()
+    }
+}
 
 /// Full documentation page component for SSR with islands
 #[component]
@@ -190,9 +221,9 @@ pub fn DocItemViewSSR(item: DocItem, index: DocIndex, supports_goto_source: bool
     let item_path = item.url_path();
     let is_module = item.kind == DocItemKind::Module;
 
-    // For modules, find the module tree to get member items
-    let module_items = if is_module {
-        find_module_items(&index.modules, &item.path)
+    // For modules, find the module tree to get member items and submodules
+    let module_content = if is_module {
+        find_module_content(&index.modules, &item.path)
     } else {
         None
     };
@@ -270,7 +301,7 @@ pub fn DocItemViewSSR(item: DocItem, index: DocIndex, supports_goto_source: bool
 
             // Show signature for non-module items (modules don't need signature display)
             {if !is_module && !item.signature.is_empty() {
-                Some(view! { <pre class="signature"><code>{item.signature.clone()}</code></pre> })
+                Some(view! { <pre class="signature"><RichSignatureView rich=item.rich_signature.clone() fallback=item.signature.clone() /></pre> })
             } else {
                 None
             }}
@@ -282,8 +313,8 @@ pub fn DocItemViewSSR(item: DocItem, index: DocIndex, supports_goto_source: bool
             }}
 
             // Module members section (for modules only)
-            {if let Some(items) = module_items {
-                Some(view! { <DocModuleMembersSSR items=items /> })
+            {if let Some(content) = module_content {
+                Some(view! { <DocModuleMembersSSR items=content.items submodules=content.submodules /> })
             } else {
                 None
             }}
@@ -352,15 +383,18 @@ fn DocChildrenSSR(children: Vec<DocChild>) -> impl IntoView {
                                 let anchor_id = format!("{}.{}", child.kind.anchor_prefix(), child.name);
                                 let has_docs = child.docs.is_some();
                                 let signature = child.signature.clone();
+                                let rich_signature = child.rich_signature.clone();
                                 let has_signature = !signature.is_empty();
+                                let name_fallback = child.name.clone();
 
                                 view! {
                                     <div class="member-item" id=anchor_id.clone()>
                                         <div class="member-header">
                                             <a href=format!("#{}", anchor_id) class="anchor">"\u{00a7}"</a>
-                                            <code class="member-signature">
-                                                {if has_signature { signature } else { child.name.clone() }}
-                                            </code>
+                                            <RichSignatureView
+                                                rich=rich_signature
+                                                fallback={if has_signature { signature } else { name_fallback }}
+                                            />
                                         </div>
                                         {if has_docs {
                                             child.docs.map(|docs| view! {
@@ -448,7 +482,7 @@ fn ImplBlockSSR(impl_: DocTraitImpl, anchor_id: String) -> impl IntoView {
     // Pre-render optional sections to break type nesting
     let signature_section = if is_trait_impl {
         view! {
-            <pre class="rust impl-signature"><code>{impl_.signature.clone()}</code></pre>
+            <pre class="rust impl-signature"><RichSignatureView rich=impl_.rich_signature.clone() fallback=impl_.signature.clone() /></pre>
         }.into_any()
     } else {
         view! { <></> }.into_any()
@@ -499,7 +533,7 @@ fn MethodItemSSR(method: crate::model::DocImplMethod, anchor_id: String) -> impl
             <summary>
                 <div class="method-header">
                     <a href=format!("#{}", anchor_id) class="anchor">"\u{00a7}"</a>
-                    <h4 class="code-header"><code>{method.signature}</code></h4>
+                    <h4 class="code-header"><RichSignatureView rich=method.rich_signature fallback=method.signature /></h4>
                 </div>
             </summary>
             {docblock}
@@ -546,18 +580,29 @@ pub fn DocNotFoundSSR(path: String, index: DocIndex) -> impl IntoView {
     }
 }
 
-/// Find module items from the module tree by path
-fn find_module_items(
-    modules: &[DocModuleTree],
-    path: &str,
-) -> Option<Vec<crate::model::DocModuleItem>> {
+/// Module content: both items and submodules
+struct ModuleContent {
+    items: Vec<crate::model::DocModuleItem>,
+    submodules: Vec<(String, String)>, // (name, path)
+}
+
+/// Find module items and submodules from the module tree by path
+fn find_module_content(modules: &[DocModuleTree], path: &str) -> Option<ModuleContent> {
     for module in modules {
         if module.path == path {
-            return Some(module.items.clone());
+            let submodules = module
+                .children
+                .iter()
+                .map(|child| (child.name.clone(), child.path.clone()))
+                .collect();
+            return Some(ModuleContent {
+                items: module.items.clone(),
+                submodules,
+            });
         }
         // Recursively search children
-        if let Some(items) = find_module_items(&module.children, path) {
-            return Some(items);
+        if let Some(content) = find_module_content(&module.children, path) {
+            return Some(content);
         }
     }
     None
@@ -565,8 +610,14 @@ fn find_module_items(
 
 /// Module members section showing links to items defined in the module (rustdoc-style)
 #[component]
-fn DocModuleMembersSSR(items: Vec<crate::model::DocModuleItem>) -> impl IntoView {
-    if items.is_empty() {
+fn DocModuleMembersSSR(
+    items: Vec<crate::model::DocModuleItem>,
+    submodules: Vec<(String, String)>,
+) -> impl IntoView {
+    let has_submodules = !submodules.is_empty();
+    let has_items = !items.is_empty();
+
+    if !has_submodules && !has_items {
         return view! { <></> }.into_any();
     }
 
@@ -587,6 +638,31 @@ fn DocModuleMembersSSR(items: Vec<crate::model::DocModuleItem>) -> impl IntoView
 
     view! {
         <div class="module-items">
+            // Submodules section (first, like rustdoc)
+            {if has_submodules {
+                Some(view! {
+                    <section class="item-table" id="modules">
+                        <h2>"Modules"</h2>
+                        <div class="item-list">
+                            {submodules.into_iter().map(|(name, path)| {
+                                let url = format!("/doc/{}/mod", path);
+                                view! {
+                                    <div class="item-row">
+                                        <div class="item-name">
+                                            <a href=url><code>{name}</code></a>
+                                        </div>
+                                        <div class="item-summary"></div>
+                                    </div>
+                                }
+                            }).collect_view()}
+                        </div>
+                    </section>
+                })
+            } else {
+                None
+            }}
+
+            // Other items grouped by kind
             {items_by_kind.into_iter().map(|(kind, items)| {
                 let section_id = kind.as_str();
                 view! {
