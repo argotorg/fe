@@ -186,6 +186,9 @@ fn extract_ingot(db: &mut DriverDataBase, dir_path: &Utf8PathBuf) -> Option<DocI
     let trait_impl_links = extractor.extract_trait_impl_links(ingot);
     index.link_trait_impls(trait_impl_links);
 
+    // Link types in signatures to their documentation pages
+    index.link_signature_types();
+
     Some(index)
 }
 
