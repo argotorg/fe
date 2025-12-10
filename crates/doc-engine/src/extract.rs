@@ -549,7 +549,19 @@ impl<'db> DocExtractor<'db> {
 
                 let signature = match variant_view.kind(self.db) {
                     VariantKind::Unit => name.clone(),
-                    VariantKind::Tuple(_) => format!("{}(...)", name),
+                    VariantKind::Tuple(tuple_id) => {
+                        // Extract actual type text from the source
+                        let type_texts: Vec<String> = (0..tuple_id.len(self.db))
+                            .filter_map(|i| {
+                                self.get_tuple_elem_type_text(&enum_variant, i)
+                            })
+                            .collect();
+                        if type_texts.is_empty() {
+                            format!("{}(...)", name)
+                        } else {
+                            format!("{}({})", name, type_texts.join(", "))
+                        }
+                    }
                     VariantKind::Record(_) => format!("{} {{ ... }}", name),
                 };
 
@@ -563,6 +575,24 @@ impl<'db> DocExtractor<'db> {
                 })
             })
             .collect()
+    }
+
+    /// Extract the type text from a tuple variant element's type span
+    fn get_tuple_elem_type_text(
+        &self,
+        enum_variant: &hir::hir_def::EnumVariant<'db>,
+        idx: usize,
+    ) -> Option<String> {
+        let ty_span = enum_variant.span().tuple_type().elem_ty(idx).resolve(self.db)?;
+        let start: usize = ty_span.range.start().into();
+        let end: usize = ty_span.range.end().into();
+        let file_text = ty_span.file.text(self.db).as_str();
+
+        if end > file_text.len() || start > end {
+            return None;
+        }
+
+        Some(file_text[start..end].trim().to_string())
     }
 
     fn extract_trait_members(&self, t: Trait<'db>) -> Vec<DocChild> {

@@ -14,6 +14,8 @@ use crate::model::{
 
 /// Renders a rich signature with embedded links
 /// If the rich signature is empty, falls back to plain text signature
+/// Note: This renders just the content, not the container. The caller should
+/// wrap in appropriate <pre>/<code> tags with styling.
 #[component]
 fn RichSignatureView(
     /// The rich signature parts with potential links
@@ -23,8 +25,8 @@ fn RichSignatureView(
     fallback: String,
 ) -> impl IntoView {
     if rich.is_empty() {
-        // Fallback to plain text
-        view! { <code class="signature">{fallback}</code> }.into_any()
+        // Fallback to plain text (just the text content)
+        view! { <code>{fallback}</code> }.into_any()
     } else {
         // Render rich signature with links
         let parts = rich
@@ -39,7 +41,7 @@ fn RichSignatureView(
                 }
             })
             .collect::<Vec<_>>();
-        view! { <code class="signature">{parts}</code> }.into_any()
+        view! { <code>{parts}</code> }.into_any()
     }
 }
 
@@ -518,26 +520,33 @@ fn ImplBlockSSR(impl_: DocTraitImpl, anchor_id: String) -> impl IntoView {
 }
 
 /// A single method with collapsible docs (rustdoc-style)
+/// Only shows toggle if there's documentation to expand
 #[component]
 fn MethodItemSSR(method: crate::model::DocImplMethod, anchor_id: String) -> impl IntoView {
-    let has_docs = method.docs.is_some();
-
-    let docblock = if let Some(docs) = method.docs {
-        view! { <div class="method-docblock">{docs}</div> }.into_any()
-    } else {
-        view! { <></> }.into_any()
+    let header = view! {
+        <div class="method-header">
+            <a href=format!("#{}", anchor_id) class="anchor">"\u{00a7}"</a>
+            <h4 class="code-header"><RichSignatureView rich=method.rich_signature.clone() fallback=method.signature.clone() /></h4>
+        </div>
     };
 
-    view! {
-        <details class="method-item toggle" open=has_docs id=anchor_id.clone()>
-            <summary>
-                <div class="method-header">
-                    <a href=format!("#{}", anchor_id) class="anchor">"\u{00a7}"</a>
-                    <h4 class="code-header"><RichSignatureView rich=method.rich_signature fallback=method.signature /></h4>
-                </div>
-            </summary>
-            {docblock}
-        </details>
+    if let Some(docs) = method.docs {
+        // Has docs: use details/summary for collapse
+        view! {
+            <details class="method-item toggle" open=true id=anchor_id.clone()>
+                <summary>{header}</summary>
+                <div class="method-docblock">{docs}</div>
+            </details>
+        }
+        .into_any()
+    } else {
+        // No docs: just render as a div, no toggle
+        view! {
+            <div class="method-item no-toggle" id=anchor_id.clone()>
+                {header}
+            </div>
+        }
+        .into_any()
     }
 }
 
@@ -702,13 +711,14 @@ fn DocImplementorsSSR(implementors: Vec<crate::model::DocImplementor>) -> impl I
             <div class="implementor-list">
                 {implementors.into_iter().map(|imp| {
                     let anchor_id = format!("impl-{}", imp.type_name.replace(['<', '>', ' ', ','], "_"));
-                    let type_url = format!("/doc/{}", imp.type_url);
                     view! {
                         <div class="implementor-item" id=anchor_id.clone()>
                             <a href=format!("#{}", anchor_id) class="anchor">"\u{00a7}"</a>
                             <code class="implementor-sig">
-                                "impl … for "
-                                <a href=type_url class="type-link">{imp.type_name}</a>
+                                <RichSignatureView
+                                    rich=imp.rich_signature.clone()
+                                    fallback=imp.signature.clone()
+                                />
                             </code>
                         </div>
                     }

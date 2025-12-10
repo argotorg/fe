@@ -562,6 +562,9 @@ async fn update_docs(backend: &mut Backend) {
     // Link trait implementations to their target types
     combined_index.link_trait_impls(all_trait_impl_links);
 
+    // Link types in signatures to their documentation pages
+    combined_index.link_signature_types();
+
     // Sort for consistent ordering
     combined_index.items.sort_by(|a, b| a.path.cmp(&b.path));
     combined_index.modules.sort_by(|a, b| a.path.cmp(&b.path));

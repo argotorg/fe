@@ -452,6 +452,8 @@ h2 {
 .toggle > summary {
     cursor: pointer;
     list-style: none;
+    display: flex;
+    align-items: center;
 }
 
 .toggle > summary::-webkit-details-marker {
@@ -460,7 +462,7 @@ h2 {
 
 .toggle > summary::before {
     content: '▶';
-    display: inline-block;
+    flex-shrink: 0;
     width: 1rem;
     font-size: 0.7rem;
     color: var(--text-muted);
@@ -563,6 +565,11 @@ h2:hover .anchor {
 
 .method-item[open] > summary {
     border-bottom: 1px dashed var(--border);
+}
+
+/* Method items without toggle (no docs to collapse) */
+.method-item.no-toggle {
+    padding: 0.5rem 0.75rem;
 }
 
 .method-header {

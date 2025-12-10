@@ -1,4 +1,3 @@
-/// This is a Point in 2 dimensional space
 struct Point {
     x: u32,
     y: u32,
@@ -20,13 +19,5 @@ impl Point {
 
 fn test() {
     let p = Point { x: 1, y: 2 }
-}
-
-trait Foo {
-    fn do(self) -> u32
-}
-impl Foo for Point {
-    fn do(self) -> u32 {
-        self.x + self.y
-    }
+    p.
 }

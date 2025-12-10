@@ -608,6 +608,111 @@ impl DocIndex {
             }
         }
     }
+
+    /// Link types in signatures to their documentation pages.
+    /// This scans all function/method signatures and field types to find
+    /// type references that can be linked.
+    pub fn link_signature_types(&mut self) {
+        // Build a lookup map of linkable types by simple name
+        // Maps simple name -> (path, kind_suffix)
+        let linkable_types: std::collections::HashMap<String, (String, &'static str)> = self
+            .items
+            .iter()
+            .filter(|item| {
+                matches!(
+                    item.kind,
+                    DocItemKind::Struct
+                        | DocItemKind::Enum
+                        | DocItemKind::Contract
+                        | DocItemKind::Trait
+                        | DocItemKind::TypeAlias
+                )
+            })
+            .map(|item| {
+                let simple_name = extract_simple_type_name(&item.name);
+                (simple_name, (item.path.clone(), item.kind.as_str()))
+            })
+            .collect();
+
+        // Process all items with signatures
+        for item in &mut self.items {
+            // Link types in the item's main signature
+            if !item.signature.is_empty() && item.rich_signature.is_empty() {
+                item.rich_signature = build_rich_signature(&item.signature, &linkable_types);
+            }
+
+            // Link types in children (fields, methods, variants)
+            for child in &mut item.children {
+                if !child.signature.is_empty() && child.rich_signature.is_empty() {
+                    child.rich_signature = build_rich_signature(&child.signature, &linkable_types);
+                }
+            }
+
+            // Link types in trait impl method signatures
+            for trait_impl in &mut item.trait_impls {
+                for method in &mut trait_impl.methods {
+                    if !method.signature.is_empty() && method.rich_signature.is_empty() {
+                        method.rich_signature =
+                            build_rich_signature(&method.signature, &linkable_types);
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Build a rich signature from a plain signature string by linking type references.
+/// Scans the signature for identifiers that match known types and creates links.
+fn build_rich_signature(
+    signature: &str,
+    linkable_types: &std::collections::HashMap<String, (String, &'static str)>,
+) -> RichSignature {
+    let mut parts = Vec::new();
+    let mut current_text = String::new();
+    let mut chars = signature.chars().peekable();
+
+    while let Some(c) = chars.next() {
+        // Check if this could be the start of an identifier
+        if c.is_ascii_alphabetic() || c == '_' {
+            // Collect the full identifier
+            let mut ident = String::new();
+            ident.push(c);
+            while let Some(&next) = chars.peek() {
+                if next.is_ascii_alphanumeric() || next == '_' {
+                    ident.push(chars.next().unwrap());
+                } else {
+                    break;
+                }
+            }
+
+            // Check if this identifier is a linkable type
+            // Only link identifiers that start with uppercase (type convention)
+            if ident.chars().next().map_or(false, |c| c.is_ascii_uppercase()) {
+                if let Some((path, kind)) = linkable_types.get(&ident) {
+                    // Flush any pending text
+                    if !current_text.is_empty() {
+                        parts.push(SignaturePart::text(&current_text));
+                        current_text.clear();
+                    }
+                    // Add the linked type
+                    parts.push(SignaturePart::link(&ident, format!("{}/{}", path, kind)));
+                    continue;
+                }
+            }
+
+            // Not linkable, just add to current text
+            current_text.push_str(&ident);
+        } else {
+            current_text.push(c);
+        }
+    }
+
+    // Flush any remaining text
+    if !current_text.is_empty() {
+        parts.push(SignaturePart::text(&current_text));
+    }
+
+    parts
 }
 
 /// Extract the simple type name from a potentially qualified/generic path.
