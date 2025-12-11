@@ -1,7 +1,7 @@
 ---
 source: crates/resolver/tests/graph.rs
 assertion_line: 94
-expression: "format!(\"{:#?}\\n{:#?}\", graph, resolver.take_diagnostics())"
+expression: "format!(\"{:#?}\\n{:#?}\", graph, handler.diagnostics)"
 input_file: fixtures/graph/unresolvable_nodes.toml
 ---
 Graph {

@@ -144,11 +144,9 @@ fn extract_ingot(db: &mut DriverDataBase, dir_path: &Utf8PathBuf) -> Option<DocI
     let canonical_path = dir_path.canonicalize_utf8().ok()?;
     let ingot_url = Url::from_directory_path(canonical_path.as_str()).ok()?;
 
-    let init_diagnostics = driver::init_ingot(db, &ingot_url);
-    if !init_diagnostics.is_empty() {
-        for diagnostic in &init_diagnostics {
-            eprintln!("Warning: {diagnostic}");
-        }
+    let had_diagnostics = driver::init_ingot(db, &ingot_url);
+    if had_diagnostics {
+        eprintln!("Warning: Ingot initialization produced diagnostics");
     }
 
     let ingot = db.workspace().containing_ingot(db, ingot_url)?;

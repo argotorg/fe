@@ -41,6 +41,7 @@ pub trait HirIngot<'db> {
     fn all_modules(self, db: &'db dyn HirDb) -> &'db Vec<TopLevelMod<'db>>;
     fn root_mod(self, db: &'db dyn HirDb) -> TopLevelMod<'db>;
     fn resolved_external_ingots(self, db: &'db dyn HirDb) -> &'db Vec<(IdentId<'db>, Ingot<'db>)>;
+    fn all_items(self, db: &'db dyn HirDb) -> &'db Vec<ItemKind<'db>>;
     fn all_enums(self, db: &'db dyn HirDb) -> &'db Vec<Enum<'db>>;
     fn all_impl_traits(self, db: &'db dyn HirDb) -> &'db Vec<ImplTrait<'db>>;
     fn all_impls(self, db: &'db dyn HirDb) -> &'db Vec<Impl<'db>>;
@@ -80,6 +81,15 @@ impl<'db> HirIngot<'db> for Ingot<'db> {
                     .containing_ingot(db, url.clone())
                     .map(|ingot_description| (IdentId::new(db, name.as_str()), ingot_description))
             })
+            .collect()
+    }
+
+    /// Returns all items in the ingot including ones in nested modules.
+    #[salsa::tracked(return_ref)]
+    fn all_items(self, db: &'db dyn HirDb) -> Vec<ItemKind<'db>> {
+        self.all_modules(db)
+            .iter()
+            .flat_map(|top_mod| top_mod.all_items(db).to_vec())
             .collect()
     }
 

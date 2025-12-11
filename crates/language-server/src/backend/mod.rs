@@ -41,6 +41,7 @@ impl Backend {
     }
 
     /// Get the documentation URL if the server is running
+    #[allow(dead_code)]
     pub fn docs_url(&self) -> Option<&str> {
         self.doc_server.as_ref().map(|s| s.url.as_str())
     }

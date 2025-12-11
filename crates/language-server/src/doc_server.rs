@@ -41,6 +41,7 @@ impl LspServerInfo {
     }
 
     /// Read server info from a workspace
+    #[allow(dead_code)]
     pub fn read_from_workspace(workspace_root: &std::path::Path) -> Option<Self> {
         let info_path = workspace_root.join(".fe-lsp.json");
         let json = std::fs::read_to_string(&info_path).ok()?;
@@ -83,6 +84,7 @@ impl std::fmt::Display for GotoSourceRequest {
 
 /// State for the documentation server running alongside LSP
 pub struct DocServerHandle {
+    #[allow(dead_code)]
     pub port: u16,
     pub url: String,
     index: Arc<RwLock<DocIndex>>,

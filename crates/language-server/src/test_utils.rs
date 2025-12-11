@@ -11,19 +11,8 @@ pub fn load_ingot_from_directory(db: &mut DriverDataBase, ingot_dir: &Path) {
     let ingot_url =
         Url::from_directory_path(ingot_dir).expect("Failed to create URL from directory path");
 
-    let diagnostics = init_ingot(db, &ingot_url);
-
-    // In tests, we might want to panic on serious errors
-    for diagnostic in &diagnostics {
-        match diagnostic {
-            driver::IngotInitDiagnostics::ConfigParseError { .. }
-            | driver::IngotInitDiagnostics::ConfigDiagnostics { .. } => {
-                panic!("Failed to resolve test ingot at {ingot_dir:?}: {diagnostic}");
-            }
-            _ => {
-                // Log other diagnostics but don't panic
-                eprintln!("Test ingot diagnostic for {ingot_dir:?}: {diagnostic}");
-            }
-        }
+    let had_diagnostics = init_ingot(db, &ingot_url);
+    if had_diagnostics {
+        panic!("Failed to resolve test ingot at {ingot_dir:?}: init produced diagnostics");
     }
 }

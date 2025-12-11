@@ -13,11 +13,12 @@ use async_lsp::lsp_types::notification::{
     self, DidChangeTextDocument, DidChangeWatchedFiles, DidOpenTextDocument, DidSaveTextDocument,
     Initialized,
 };
+
 use async_lsp::lsp_types::request::{
     CodeActionRequest, Completion, DocumentHighlightRequest, DocumentSymbolRequest, ExecuteCommand,
-    GotoDefinition, GotoImplementation, GotoTypeDefinition, HoverRequest, InlayHintRequest,
-    References, Rename, SemanticTokensFullRequest, Shutdown, SignatureHelpRequest,
-    WorkspaceSymbolRequest,
+    Formatting, GotoDefinition, GotoImplementation, GotoTypeDefinition, HoverRequest,
+    InlayHintRequest, References, Rename, SemanticTokensFullRequest, Shutdown,
+    SignatureHelpRequest, WorkspaceSymbolRequest,
 };
 use futures::StreamExt;
 use futures_batch::ChunksTimeoutStreamExt;
@@ -68,6 +69,7 @@ pub(crate) fn setup(
         .handle_request::<GotoImplementation>(implementations::handle_goto_implementation)
         .handle_request::<Rename>(rename::handle_rename)
         .handle_request::<SemanticTokensFullRequest>(semantic_tokens::handle_semantic_tokens_full)
+        .handle_request::<Formatting>(handlers::handle_formatting)
         .handle_request::<InlayHintRequest>(inlay_hints::handle_inlay_hints)
         .handle_request::<DocumentSymbolRequest>(document_symbols::handle_document_symbols)
         .handle_request::<WorkspaceSymbolRequest>(workspace_symbols::handle_workspace_symbols)

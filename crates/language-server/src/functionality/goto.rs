@@ -5,7 +5,6 @@ use hir::{
     hir_def::{ItemKind, TopLevelMod},
     lower::map_file_to_mod,
 };
-use tracing::info;
 
 use crate::{
     backend::Backend,
@@ -30,30 +29,22 @@ pub async fn handle_goto_definition(
     backend: &mut Backend,
     params: async_lsp::lsp_types::GotoDefinitionParams,
 ) -> Result<Option<async_lsp::lsp_types::GotoDefinitionResponse>, ResponseError> {
-    info!("handling goto definition request");
     let params = params.text_document_position_params;
     let file_path_str = params.text_document.uri.path();
-    info!("goto definition for file: {}", file_path_str);
 
     let Ok(url) = url::Url::from_file_path(file_path_str) else {
-        info!("failed to parse file path");
         return Ok(None);
     };
 
     let Some(file) = backend.db.workspace().get(&backend.db, &url) else {
-        info!("file not found in workspace");
         return Ok(None);
     };
 
-    info!("got file from workspace");
     let file_text = file.text(&backend.db);
     let cursor: Cursor = to_offset_from_position(params.position, file_text.as_str());
-    info!("cursor position: {:?}", cursor);
 
     let top_mod = map_file_to_mod(&backend.db, file);
-    info!("got top_mod, resolving target...");
     let resolution = goto_target_at_cursor(&backend.db, top_mod, cursor);
-    info!("got resolution: {:?}", resolution.as_slice().len());
 
     // Convert targets to LSP locations
     // Special case: if this is a method in an impl trait block, navigate to the trait method
@@ -76,8 +67,7 @@ pub async fn handle_goto_definition(
         })
         .collect();
 
-    info!("converted {} locations", locations.len());
-    let result = match locations.len() {
+    match locations.len() {
         0 => Ok(None),
         1 => Ok(Some(async_lsp::lsp_types::GotoDefinitionResponse::Scalar(
             locations.into_iter().next().unwrap(),
@@ -85,9 +75,7 @@ pub async fn handle_goto_definition(
         _ => Ok(Some(async_lsp::lsp_types::GotoDefinitionResponse::Array(
             locations,
         ))),
-    };
-    info!("sending goto definition response");
-    result
+    }
 }
 // }
 #[cfg(test)]

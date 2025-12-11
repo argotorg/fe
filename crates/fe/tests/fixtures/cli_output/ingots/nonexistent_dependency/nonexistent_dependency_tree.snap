@@ -3,7 +3,7 @@ source: crates/fe/tests/cli_output.rs
 expression: output
 ---
 === STDOUT ===
-➖ test v0.1.0
+test v0.1.0
 
 === STDERR ===
 ❌ Failed to resolve ingot dependency 'file://<project>/crates/fe/tests/fixtures/cli_output/ingots/nonexistent_dependency/nonexistent/': Directory does not exist: file://<project>/crates/fe/tests/fixtures/cli_output/ingots/nonexistent_dependency/nonexistent/

@@ -3,7 +3,9 @@ use common::indexmap::IndexMap;
 
 use crate::analysis::{
     HirAnalysisDb,
-    name_resolution::{NameDerivation, NameDomain, NameRes, NameResKind, resolve_imports},
+    name_resolution::{
+        NameDerivation, NameDomain, NameRes, NameResBucket, NameResKind, resolve_imports,
+    },
 };
 
 /// Returns all items visible in the given scope for the specified domain(s).
@@ -27,30 +29,56 @@ fn items_in_scope_impl<'db>(
     db: &'db dyn HirAnalysisDb,
     i_scope: ItemScope<'db>,
 ) -> IndexMap<String, NameRes<'db>> {
-    let mut items = IndexMap::default();
+    // Use NameResBucket to properly handle precedence:
+    // Def > NamedImported > GlobImported > Lex > External > Prim
+    let mut buckets: IndexMap<String, NameResBucket<'db>> = IndexMap::default();
     let scope = i_scope.scope_kind(db).to_scope();
     let domain = i_scope.domain(db);
 
     let imports = &resolve_imports(db, scope.ingot(db)).1;
 
-    // Collect named imports
+    // Collect direct child items first (highest precedence: Def)
+    for child in scope.child_items(db) {
+        let child_domain = NameDomain::from_scope(db, ScopeId::from_item(child));
+        if child_domain & domain != NameDomain::Invalid
+            && let Some(name) = child.name(db)
+        {
+            let name_res = NameRes {
+                kind: NameResKind::Scope(ScopeId::from_item(child)),
+                domain: child_domain,
+                derivation: NameDerivation::Def,
+            };
+            buckets
+                .entry(name.data(db).to_string())
+                .or_default()
+                .merge(&name_res.into());
+        }
+    }
+
+    // Collect named imports (second highest precedence: NamedImported)
     if let Some(named) = imports.named_resolved.get(&scope) {
         for (name, bucket) in named {
             for name_res in bucket.iter_ok() {
                 if name_res.domain & domain != NameDomain::Invalid {
-                    items.insert(name.data(db).to_string(), name_res.clone());
+                    buckets
+                        .entry(name.data(db).to_string())
+                        .or_default()
+                        .merge(&name_res.clone().into());
                 }
             }
         }
     }
 
-    // Collect glob imports
+    // Collect glob imports (third precedence: GlobImported)
     if let Some(glob) = imports.glob_resolved.get(&scope) {
         for (_, map) in glob.iter() {
             for (name, resolutions) in map {
                 for name_res in resolutions {
                     if name_res.domain & domain != NameDomain::Invalid {
-                        items.insert(name.data(db).to_string(), name_res.clone());
+                        buckets
+                            .entry(name.data(db).to_string())
+                            .or_default()
+                            .merge(&name_res.clone().into());
                     }
                 }
             }
@@ -65,39 +93,40 @@ fn items_in_scope_impl<'db>(
                     && let Some(scope) = name_res.scope()
                     && let Some(name) = scope.name(db)
                 {
-                    items.insert(name.data(db).to_string(), name_res.clone());
+                    buckets
+                        .entry(name.data(db).to_string())
+                        .or_default()
+                        .merge(&name_res.clone().into());
                 }
             }
         }
     }
 
-    // Collect direct child items
-    for child in scope.child_items(db) {
-        let child_domain = NameDomain::from_scope(db, ScopeId::from_item(child));
-        if child_domain & domain != NameDomain::Invalid
-            && let Some(name) = child.name(db)
-        {
-            // Create a NameRes for this child item
-            let name_res = NameRes {
-                kind: NameResKind::Scope(ScopeId::from_item(child)),
-                domain: child_domain,
-                derivation: NameDerivation::Def,
-            };
-            items.insert(name.data(db).to_string(), name_res);
-        }
-    }
-
-    // Recursively collect from parent scope
+    // Recursively collect from parent scope (lower precedence: Lex)
     if let Some(parent) = scope.parent(db) {
         let parent_items = items_in_scope(db, parent, domain);
         for (name, name_res) in parent_items {
-            items
+            // Parent scope items get Lex derivation which is lower precedence
+            let mut lexed_res = name_res.clone();
+            lexed_res.derivation = NameDerivation::Lex(Box::new(name_res.derivation.clone()));
+            buckets
                 .entry(name.clone())
-                .or_insert_with(|| name_res.clone());
+                .or_default()
+                .merge(&lexed_res.into());
         }
     }
 
-    items
+    // Convert buckets to final result, picking the best resolution per domain
+    buckets
+        .into_iter()
+        .filter_map(|(name, bucket)| {
+            bucket
+                .pick(domain)
+                .as_ref()
+                .ok()
+                .map(|res| (name, res.clone()))
+        })
+        .collect()
 }
 
 #[salsa::interned]

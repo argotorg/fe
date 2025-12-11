@@ -3,6 +3,10 @@ source: crates/fe/tests/cli_output.rs
 expression: output
 ---
 === STDOUT ===
-➖ missingsrc v0.0.1
+missingsrc v0.0.1
+
+=== STDERR ===
+❌ File resolution error: Missing required directory 'src' in ingot at file://<project>/crates/fe/tests/fixtures/cli_output/ingots/missing_src/
+❌ File resolution error: Missing required file 'src/lib.fe' in ingot at file://<project>/crates/fe/tests/fixtures/cli_output/ingots/missing_src/
 
 === EXIT CODE: 0 ===

@@ -10,6 +10,7 @@ tracing.workspace = true
 common.workspace = true
 resolver.workspace = true
 camino.workspace = true
+petgraph.workspace = true
 url.workspace = true
 smol_str.workspace = true
 hir.workspace = true
@@ -23,6 +24,10 @@ doc-viewer = { path = "../doc-viewer", package = "fe-doc-viewer", features = ["s
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 tokio = { version = "1.43", features = ["full"] }
+fmt.workspace = true
+walkdir = "2"
+similar = "2"
+colored = "2"
 
 [dev-dependencies]
 dir-test.workspace = true

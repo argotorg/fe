@@ -1,10 +1,9 @@
-use core::panic;
 use std::{collections::HashMap, hash::Hash, marker::PhantomData};
 
 use dir_test::{Fixture, dir_test};
 use fe_resolver::{
     ResolutionHandler, Resolver,
-    graph::{GraphResolutionHandler, GraphResolver, GraphResolverImpl},
+    graph::{GraphResolutionHandler, GraphResolver, GraphResolverImpl, UnresolvedNode},
 };
 use test_utils::snap_test;
 
@@ -35,20 +34,37 @@ impl<K: Eq + Hash, V: Clone> Resolver for FixtureEntryResolver<K, V> {
             Err(EntryDoesNotExist)
         }
     }
-
-    fn take_diagnostics(&mut self) -> Vec<Self::Diagnostic> {
-        panic!()
-    }
 }
 
 #[derive(Default)]
-pub struct MockNodeHandler;
+pub struct MockNodeHandler {
+    diagnostics: Vec<fe_resolver::graph::UnresolvableNode<String, EntryDoesNotExist>>,
+}
 
 impl ResolutionHandler<FixtureEntryResolver<String, Vec<String>>> for MockNodeHandler {
-    type Item = Vec<(String, ())>;
+    type Item = Vec<UnresolvedNode<usize, String, ()>>;
+
+    fn on_resolution_start(&mut self, _description: &String) {}
+
+    fn on_resolution_diagnostic(&mut self, _diagnostic: ()) {}
+
+    fn on_resolution_error(&mut self, description: &String, error: EntryDoesNotExist) {
+        self.diagnostics.push(fe_resolver::graph::UnresolvableNode(
+            description.clone(),
+            error,
+        ));
+    }
 
     fn handle_resolution(&mut self, _source: &String, targets: Vec<String>) -> Self::Item {
-        targets.into_iter().map(|target| (target, ())).collect()
+        targets
+            .into_iter()
+            .enumerate()
+            .map(|(priority, target)| UnresolvedNode {
+                priority,
+                description: target,
+                edge: (),
+            })
+            .collect()
     }
 }
 
@@ -70,7 +86,7 @@ fn load_toml(path: &str) -> HashMap<String, Vec<String>> {
 }
 
 type FixtureEntryGraphResolver<K, V> =
-    GraphResolverImpl<FixtureEntryResolver<K, V>, MockNodeHandler, ()>;
+    GraphResolverImpl<FixtureEntryResolver<K, V>, MockNodeHandler, (), usize>;
 
 fn fixture_resolver<K, V>(fixture: Fixture<HashMap<K, V>>) -> FixtureEntryGraphResolver<K, V>
 where
@@ -80,8 +96,8 @@ where
     GraphResolverImpl {
         node_resolver: FixtureEntryResolver(fixture),
         _handler: PhantomData,
-        diagnostics: vec![],
         _edge: PhantomData,
+        _priority: PhantomData,
     }
 }
 
@@ -93,12 +109,12 @@ where
 fn graph_resolution(fixture: Fixture<HashMap<String, Vec<String>>>) {
     let fixture_path = fixture.path();
     let mut resolver = fixture_resolver(fixture);
-    let mut handler = MockNodeHandler;
+    let mut handler = MockNodeHandler::default();
     let graph = resolver
         .graph_resolve(&mut handler, &"a".to_string())
         .unwrap();
     snap_test!(
-        format!("{:#?}\n{:#?}", graph, resolver.take_diagnostics()),
+        format!("{:#?}\n{:#?}", graph, handler.diagnostics),
         fixture_path
     );
 }

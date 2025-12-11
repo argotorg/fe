@@ -5,12 +5,12 @@ expression: output
 === STDERR ===
 ❌ Detected cycle(s) in ingot dependencies:
 
-[31m➖ cycle_b v0.1.0[0m
-├── [31m➖ cycle_c v0.1.0[0m
-│   └── [31m➖ cycle_b v0.1.0 🔄 [cycle][0m
-└── [31m➖ cycle_e v0.1.0[0m
-    └── [31m➖ cycle_d v0.1.0[0m
-        └── [31m➖ cycle_e v0.1.0 🔄 [cycle][0m
+[31mcycle_b v0.1.0[0m
+├── [31mcycle_e v0.1.0[0m
+│   └── [31mcycle_d v0.1.0[0m
+│       └── [31mcycle_e v0.1.0 🔄 [cycle][0m
+└── [31mcycle_c v0.1.0[0m
+    └── [31mcycle_b v0.1.0 🔄 [cycle][0m
 
 
 === EXIT CODE: 1 ===

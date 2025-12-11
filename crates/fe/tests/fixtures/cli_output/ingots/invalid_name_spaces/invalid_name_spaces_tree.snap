@@ -3,9 +3,9 @@ source: crates/fe/tests/cli_output.rs
 expression: output
 ---
 === STDOUT ===
-➖ null v0.1.0
+null v0.1.0
 
 === STDERR ===
-❌ Config validation error at file://<project>/crates/fe/tests/fixtures/cli_output/ingots/invalid_name_spaces/: Invalid ingot name "invalid name with spaces"
+❌ Erroneous fe.toml file in file://<project>/crates/fe/tests/fixtures/cli_output/ingots/invalid_name_spaces/: Invalid ingot name "invalid name with spaces"
 
 === EXIT CODE: 0 ===

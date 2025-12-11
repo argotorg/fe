@@ -1,13 +1,13 @@
 use crate::{backend::Backend, util::to_offset_from_position};
 use async_lsp::ResponseError;
 use async_lsp::lsp_types::{
-    CompletionItem, CompletionItemKind, CompletionParams, CompletionResponse, Position, Range,
-    TextEdit,
+    CompletionItem, CompletionItemKind, CompletionParams, CompletionResponse, InsertTextFormat,
+    Position, Range, TextEdit,
 };
 use common::InputDb;
 use driver::DriverDataBase;
 use hir::{
-    analysis::name_resolution::{NameDomain, NameResKind},
+    analysis::name_resolution::{NameDomain, NameResKind, available_traits_in_scope},
     hir_def::{
         Body, Func, HirIngot, ItemKind, Partial, Pat, Stmt, TopLevelMod, Visibility,
         scope_graph::ScopeId,
@@ -41,11 +41,6 @@ pub async fn handle_completion(
 
     let file_text = file.text(&backend.db);
     let cursor = to_offset_from_position(params.text_document_position.position, file_text);
-
-    // Don't provide completions inside comments
-    if is_in_comment(file_text, usize::from(cursor)) {
-        return Ok(None);
-    }
     let top_mod = map_file_to_mod(&backend.db, file);
 
     let mut items = Vec::new();
@@ -94,10 +89,20 @@ pub async fn handle_completion(
         // Regular completion: show items visible in scope
         let scope = find_scope_at_cursor(&backend.db, top_mod, cursor);
         if let Some(scope) = scope {
-            collect_items_from_scope(&backend.db, scope, &mut items);
+            // Detect whether we're in a type or expression context
+            let context = detect_completion_context(file_text, cursor);
+
+            collect_items_from_scope(&backend.db, scope, context, &mut items);
 
             // Also collect auto-import suggestions for symbols not in scope
-            collect_auto_import_completions(&backend.db, top_mod, scope, file_text, &mut items);
+            collect_auto_import_completions(
+                &backend.db,
+                top_mod,
+                scope,
+                context,
+                file_text,
+                &mut items,
+            );
         }
     }
 
@@ -108,32 +113,90 @@ pub async fn handle_completion(
     }
 }
 
-/// Check if the cursor position is inside a comment.
-fn is_in_comment(text: &str, cursor: usize) -> bool {
-    let text_before = &text[..cursor.min(text.len())];
+/// Completion context - determines what kind of items to suggest.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CompletionContext {
+    /// Expression context: suggest values (variables, functions, constants)
+    Expression,
+    /// Type context: suggest types (structs, enums, type aliases, traits)
+    Type,
+    /// Mixed context: suggest both types and values (e.g., top-level, unknown)
+    Mixed,
+}
 
-    // Check for line comment: if there's a // on the current line before cursor
-    if let Some(line_start) = text_before.rfind('\n').map(|i| i + 1).or(Some(0)) {
-        let line_before_cursor = &text_before[line_start..];
-        if line_before_cursor.contains("//") {
-            return true;
+impl CompletionContext {
+    fn to_name_domain(self) -> NameDomain {
+        match self {
+            CompletionContext::Expression => NameDomain::VALUE,
+            CompletionContext::Type => NameDomain::TYPE,
+            CompletionContext::Mixed => NameDomain::VALUE | NameDomain::TYPE,
+        }
+    }
+}
+
+/// Detect the completion context based on surrounding text.
+fn detect_completion_context(file_text: &str, cursor: parser::TextSize) -> CompletionContext {
+    let cursor_pos = usize::from(cursor);
+
+    // Look backwards from cursor to find context clues
+    let before = &file_text[..cursor_pos];
+
+    // Skip whitespace to find the last significant character
+    let trimmed = before.trim_end();
+    if trimmed.is_empty() {
+        return CompletionContext::Mixed;
+    }
+
+    let last_char = trimmed.chars().last().unwrap();
+
+    // After ':' (but check it's not '::') → type context
+    if last_char == ':' && !trimmed.ends_with("::") {
+        return CompletionContext::Type;
+    }
+
+    // After '<' → likely generic argument, type context
+    if last_char == '<' {
+        return CompletionContext::Type;
+    }
+
+    // After ',' inside angle brackets → type context (generic args)
+    if last_char == ',' {
+        // Check if we're inside angle brackets by counting < and >
+        let open_angles = trimmed.chars().filter(|&c| c == '<').count();
+        let close_angles = trimmed.chars().filter(|&c| c == '>').count();
+        if open_angles > close_angles {
+            return CompletionContext::Type;
         }
     }
 
-    // Check for block comment: count /* and */ before cursor
-    let mut in_block = false;
-    let mut chars = text_before.chars().peekable();
-    while let Some(c) = chars.next() {
-        if c == '/' && chars.peek() == Some(&'*') {
-            chars.next();
-            in_block = true;
-        } else if c == '*' && chars.peek() == Some(&'/') {
-            chars.next();
-            in_block = false;
-        }
+    // After '->' → return type annotation, type context
+    if trimmed.ends_with("->") {
+        return CompletionContext::Type;
     }
 
-    in_block
+    // After 'impl' or 'impl ' → type context (impl block target type)
+    let trimmed_lower = trimmed.to_lowercase();
+    if trimmed_lower.ends_with("impl") || trimmed.ends_with("impl ") {
+        return CompletionContext::Type;
+    }
+
+    // After '=' in a let or assignment → expression context
+    if last_char == '=' && !trimmed.ends_with("==") && !trimmed.ends_with("!=") {
+        return CompletionContext::Expression;
+    }
+
+    // After '(' → expression context (function arguments)
+    if last_char == '(' {
+        return CompletionContext::Expression;
+    }
+
+    // After operators → expression context
+    if matches!(last_char, '+' | '-' | '*' | '/' | '%' | '&' | '|' | '^') {
+        return CompletionContext::Expression;
+    }
+
+    // Default to mixed for safety
+    CompletionContext::Mixed
 }
 
 /// Find the most specific scope containing the cursor position.
@@ -179,161 +242,363 @@ fn find_scope_at_cursor<'db>(
 fn collect_items_from_scope<'db>(
     db: &'db DriverDataBase,
     scope: ScopeId<'db>,
+    context: CompletionContext,
     items: &mut Vec<CompletionItem>,
 ) {
-    // First collect local bindings and parameters (shadows module-level items)
-    collect_locals_in_scope(db, scope, items);
+    let domain = context.to_name_domain();
 
-    // Then collect module-level items (both values and types)
-    let visible_items = scope.items_in_scope(db, NameDomain::VALUE | NameDomain::TYPE);
+    // First collect local bindings and parameters (shadows module-level items)
+    // Only collect locals in expression context (types can't be local bindings)
+    if matches!(
+        context,
+        CompletionContext::Expression | CompletionContext::Mixed
+    ) {
+        collect_locals_in_scope(db, scope, items);
+    }
+
+    // Then collect module-level items based on context
+    let visible_items = scope.items_in_scope(db, domain);
 
     for (name, name_res) in visible_items {
-        if let Some(completion) = name_res_to_completion(db, name, name_res) {
+        if let Some(completion) = name_res_to_completion(db, name, name_res, context) {
             items.push(completion);
         }
     }
 }
 
 /// Collect auto-import completion suggestions for public symbols not currently in scope.
+///
+/// This iterates all items in the ingot (including nested inline modules) and suggests
+/// auto-imports for public items that aren't already visible in the current scope.
 fn collect_auto_import_completions<'db>(
     db: &'db DriverDataBase,
     current_mod: TopLevelMod<'db>,
     current_scope: ScopeId<'db>,
+    context: CompletionContext,
     file_text: &str,
     items: &mut Vec<CompletionItem>,
 ) {
     let ingot = current_mod.ingot(db);
-    let module_tree = ingot.module_tree(db);
+    let domain = context.to_name_domain();
 
     // Get names already visible in the current scope
-    let visible_items = current_scope.items_in_scope(db, NameDomain::VALUE | NameDomain::TYPE);
+    let visible_items = current_scope.items_in_scope(db, domain);
     let visible_names: std::collections::HashSet<_> = visible_items.keys().collect();
 
-    // Find where to insert the import (after existing use statements or at the top)
-    let import_position = find_import_insertion_position(file_text);
+    // Find where to insert the import (in the containing module)
+    let import_position = find_module_import_position(db, current_scope, file_text);
 
-    // Iterate over all modules in the ingot
-    for module in module_tree.all_modules() {
-        // Skip the current module (its items are already in scope)
-        if module == current_mod {
+    // Iterate all items in the ingot (includes nested inline modules)
+    for item in ingot.all_items(db).iter().copied() {
+        // Only include public items
+        if item.vis(db) != Visibility::Public {
             continue;
         }
 
-        // Compute the import path for this module
-        let Some(module_path) = compute_module_path(db, module, module_tree) else {
+        // Skip if already visible in current scope
+        let Some(name) = item.name(db) else {
+            continue;
+        };
+        let name_str = name.data(db).to_string();
+        if visible_names.contains(&name_str) {
+            continue;
+        }
+
+        // Compute the import path for this item
+        let Some(import_path) = compute_item_import_path(db, item) else {
             continue;
         };
 
-        // Get public items from this module
-        for item in module.scope_graph(db).items_dfs(db) {
-            // Only include public items
-            if item.vis(db) != Visibility::Public {
-                continue;
-            }
-
-            let Some(name) = item.name(db) else {
-                continue;
-            };
-            let name_str = name.data(db);
-
-            // Skip if already visible in current scope
-            if visible_names.contains(&name_str.to_string()) {
-                continue;
-            }
-
-            // Skip internal items (modules, impls, etc. that shouldn't be imported directly)
-            let kind = match item {
-                ItemKind::Func(_) => CompletionItemKind::FUNCTION,
-                ItemKind::Struct(_) => CompletionItemKind::STRUCT,
-                ItemKind::Enum(_) => CompletionItemKind::ENUM,
-                ItemKind::Trait(_) => CompletionItemKind::INTERFACE,
-                ItemKind::TypeAlias(_) => CompletionItemKind::CLASS,
-                ItemKind::Const(_) => CompletionItemKind::CONSTANT,
-                ItemKind::Contract(_) => CompletionItemKind::CLASS,
-                // Skip modules, impls, etc. - they're not typically imported directly
-                _ => continue,
-            };
-
-            // Build the full import path
-            let import_path = format!("{}::{}", module_path, name_str);
-
-            // Create the import text edit
-            let import_text = format!("use {}\n", import_path);
-            let import_edit = TextEdit {
-                range: Range {
-                    start: import_position,
-                    end: import_position,
-                },
-                new_text: import_text,
-            };
-
-            items.push(CompletionItem {
-                label: name_str.to_string(),
-                kind: Some(kind),
-                detail: Some(format!("use {}", import_path)),
-                label_details: Some(async_lsp::lsp_types::CompletionItemLabelDetails {
-                    detail: Some(format!(" ({})", module_path)),
-                    description: None,
-                }),
-                additional_text_edits: Some(vec![import_edit]),
-                ..Default::default()
-            });
+        // Build auto-import completion with proper snippets
+        if let Some(completion) =
+            build_auto_import_completion(db, item, &import_path, context, import_position)
+        {
+            items.push(completion);
         }
     }
 }
 
-/// Compute the import path for a module (e.g., "stuff::calculations")
-fn compute_module_path<'db>(
+/// Build an auto-import completion item for an item from another module.
+fn build_auto_import_completion<'db>(
     db: &'db DriverDataBase,
-    module: TopLevelMod<'db>,
-    module_tree: &hir::hir_def::ModuleTree<'db>,
-) -> Option<String> {
-    let mut path_parts = Vec::new();
+    item: ItemKind<'db>,
+    module_path: &str,
+    context: CompletionContext,
+    import_position: Position,
+) -> Option<CompletionItem> {
+    let name = item.name(db)?;
+    let name_str = name.data(db).to_string();
 
-    // Build path from module up to root
-    let mut current = module;
-    loop {
-        let name = current.name(db).data(db).to_string();
-        // Skip "lib" or root module names - they're implicit
-        if name != "lib" && name != "main" {
-            path_parts.push(name);
+    // Filter and get completion kind based on item type and context
+    let (kind, snippet, detail) = match item {
+        ItemKind::Func(func) => {
+            if matches!(context, CompletionContext::Type) {
+                return None;
+            }
+            // Build callable snippet
+            let (snippet, detail) = build_func_snippet_and_detail(db, func, &name_str);
+            (CompletionItemKind::FUNCTION, snippet, detail)
         }
+        ItemKind::Const(_) => {
+            if matches!(context, CompletionContext::Type) {
+                return None;
+            }
+            (
+                CompletionItemKind::CONSTANT,
+                name_str.clone(),
+                name_str.clone(),
+            )
+        }
+        ItemKind::Struct(_) => {
+            if matches!(context, CompletionContext::Expression) {
+                return None;
+            }
+            (
+                CompletionItemKind::STRUCT,
+                name_str.clone(),
+                name_str.clone(),
+            )
+        }
+        ItemKind::Enum(_) => {
+            if matches!(context, CompletionContext::Expression) {
+                return None;
+            }
+            (CompletionItemKind::ENUM, name_str.clone(), name_str.clone())
+        }
+        ItemKind::Trait(_) => {
+            if matches!(context, CompletionContext::Expression) {
+                return None;
+            }
+            (
+                CompletionItemKind::INTERFACE,
+                name_str.clone(),
+                name_str.clone(),
+            )
+        }
+        ItemKind::TypeAlias(_) | ItemKind::Contract(_) => {
+            if matches!(context, CompletionContext::Expression) {
+                return None;
+            }
+            (
+                CompletionItemKind::CLASS,
+                name_str.clone(),
+                name_str.clone(),
+            )
+        }
+        // Skip modules, impls, etc.
+        _ => return None,
+    };
 
-        match module_tree.parent(current) {
-            Some(parent) => current = parent,
-            None => break,
+    // module_path is already the full import path (e.g., "utils::func_with_args")
+    // Create the import text edit
+    let import_text = format!("use {}\n", module_path);
+    let import_edit = TextEdit {
+        range: Range {
+            start: import_position,
+            end: import_position,
+        },
+        new_text: import_text,
+    };
+
+    // Extract just the module portion for display (everything before the last ::)
+    let module_only = module_path
+        .rsplit_once("::")
+        .map(|(m, _)| m)
+        .unwrap_or(module_path);
+
+    Some(CompletionItem {
+        label: name_str,
+        kind: Some(kind),
+        detail: Some(format!("use {} [{}]", module_path, detail)),
+        label_details: Some(async_lsp::lsp_types::CompletionItemLabelDetails {
+            detail: Some(format!(" ({})", module_only)),
+            description: None,
+        }),
+        insert_text: Some(snippet),
+        insert_text_format: Some(InsertTextFormat::SNIPPET),
+        additional_text_edits: Some(vec![import_edit]),
+        ..Default::default()
+    })
+}
+
+/// Build snippet and detail for a function (shared logic for auto-import).
+fn build_func_snippet_and_detail<'db>(
+    db: &'db DriverDataBase,
+    func: Func<'db>,
+    name_str: &str,
+) -> (String, String) {
+    let mut param_names = Vec::new();
+    let mut param_details = Vec::new();
+
+    for param in func.params(db) {
+        if param.is_self_param(db) {
+            continue;
+        }
+        let param_name = param
+            .name(db)
+            .map(|n| n.data(db).to_string())
+            .unwrap_or_else(|| format!("arg{}", param_names.len()));
+        let param_ty = param.ty(db);
+        param_details.push(format!("{}: {}", param_name, param_ty.pretty_print(db)));
+        param_names.push(param_name);
+    }
+
+    let ret_ty = func.return_ty(db);
+    let ret_str = {
+        let ret_pretty = ret_ty.pretty_print(db);
+        if ret_pretty == "()" {
+            String::new()
+        } else {
+            format!(" -> {}", ret_pretty)
+        }
+    };
+    let detail = format!("fn {}({}){}", name_str, param_details.join(", "), ret_str);
+
+    let snippet = if param_names.is_empty() {
+        format!("{}()$0", name_str)
+    } else {
+        let tabstops: Vec<String> = param_names
+            .iter()
+            .enumerate()
+            .map(|(i, p)| format!("${{{}:{}}}", i + 1, p))
+            .collect();
+        format!("{}({})$0", name_str, tabstops.join(", "))
+    };
+
+    (snippet, detail)
+}
+
+/// Find the position to insert imports in the containing module.
+fn find_module_import_position<'db>(
+    db: &'db DriverDataBase,
+    scope: ScopeId<'db>,
+    file_text: &str,
+) -> Position {
+    use hir::span::LazySpan;
+
+    // Find the containing module
+    if let Some(parent_mod) = scope.parent_module(db) {
+        match parent_mod.item() {
+            ItemKind::Mod(m) => {
+                // For inline modules, find position after the opening brace
+                if let Some(span) = m.span().resolve(db) {
+                    let mod_start = usize::from(span.range.start());
+                    let mod_text = &file_text[mod_start..];
+
+                    // Find the opening brace
+                    if let Some(brace_offset) = mod_text.find('{') {
+                        let abs_brace_pos = mod_start + brace_offset;
+                        // Find position after the opening brace
+                        return find_import_position_after_brace(file_text, abs_brace_pos);
+                    }
+                }
+            }
+            ItemKind::TopMod(_) => {
+                // For top-level modules, use the file-level position
+                return find_import_insertion_position(file_text);
+            }
+            _ => {}
         }
     }
 
-    // Reverse to get root-to-leaf order
+    // Fallback to file-level position
+    find_import_insertion_position(file_text)
+}
+
+/// Find import position within a module body (after opening brace).
+/// `full_file_text` is the complete file content, `brace_offset` is the byte offset of the `{`.
+fn find_import_position_after_brace(full_file_text: &str, brace_offset: usize) -> Position {
+    // Find the line after the opening brace
+    // The use statement should go on the next line after '{'
+    let mut line = 0u32;
+    let mut last_newline_offset = 0;
+
+    for (i, ch) in full_file_text.char_indices() {
+        if i >= brace_offset {
+            // Found the brace, now find the next newline
+            let rest = &full_file_text[brace_offset..];
+            if rest.find('\n').is_some() {
+                // Position at start of the line after the brace
+                return Position {
+                    line: line + 1,
+                    character: 0,
+                };
+            } else {
+                // No newline after brace, insert right after brace
+                return Position {
+                    line,
+                    character: (brace_offset - last_newline_offset + 1) as u32,
+                };
+            }
+        }
+        if ch == '\n' {
+            line += 1;
+            last_newline_offset = i + 1;
+        }
+    }
+
+    // Fallback
+    Position {
+        line: 0,
+        character: 0,
+    }
+}
+
+/// Compute the import path for any item, including those in nested inline modules.
+///
+/// Returns the path like "utils::helper_func" or "outer::inner::SomeStruct".
+/// For use in auto-import, this returns only the path needed within the current ingot,
+/// excluding the top-level module name (file name) but including the item name.
+fn compute_item_import_path<'db>(db: &'db DriverDataBase, item: ItemKind<'db>) -> Option<String> {
+    let item_name = item.name(db)?.data(db).to_string();
+
+    // Build the path by walking up from the item's scope to find containing modules
+    let scope = ScopeId::from_item(item);
+    let mut path_parts = vec![item_name];
+
+    // Walk up the parent chain looking for Mod items (inline modules)
+    // Start from parent (not the item's own scope) to avoid duplicating the name
+    let mut current = scope.parent(db);
+    while let Some(parent_scope) = current {
+        match parent_scope.item() {
+            ItemKind::Mod(m) => {
+                // This is an inline module - add its name to the path
+                if let Partial::Present(name) = m.name(db) {
+                    path_parts.push(name.data(db).to_string());
+                }
+            }
+            ItemKind::TopMod(_) => {
+                // Reached the top-level file module - stop here
+                // We don't include the file name in the import path for single-file scenarios
+                break;
+            }
+            _ => {
+                // Other items (functions, impls, structs, etc.) - skip them
+                // These don't contribute to the import path
+            }
+        }
+        current = parent_scope.parent(db);
+    }
+
+    // Reverse to get the path in correct order (outer to inner)
     path_parts.reverse();
 
-    if path_parts.is_empty() {
-        None
-    } else {
-        Some(path_parts.join("::"))
+    // If there's only the item name (no module path), it means the item is at
+    // the top level - don't suggest auto-import for top-level items in same file
+    if path_parts.len() <= 1 {
+        return None;
     }
+
+    Some(path_parts.join("::"))
 }
 
-/// Find the position to insert new import statements.
-/// Returns the position after existing `use` statements, or at the start of the file.
-fn find_import_insertion_position(file_text: &str) -> Position {
-    let mut last_use_end_line = 0;
-    let mut in_use = false;
-
-    for (line_num, line) in file_text.lines().enumerate() {
-        let trimmed = line.trim();
-        if trimmed.starts_with("use ") {
-            in_use = true;
-            last_use_end_line = line_num + 1;
-        } else if in_use && !trimmed.is_empty() && !trimmed.starts_with("//") {
-            // Found non-use, non-empty, non-comment line after use statements
-            break;
-        }
-    }
-
+/// Find the position to insert new import statements at the top level.
+/// For top-level modules, we simply insert at the start of the file (line 0).
+/// The user can organize imports as they prefer.
+fn find_import_insertion_position(_file_text: &str) -> Position {
+    // Insert at the very start of the file for top-level modules
     Position {
-        line: last_use_end_line as u32,
+        line: 0,
         character: 0,
     }
 }
@@ -394,6 +659,9 @@ fn collect_path_completions<'db>(
         }
     }
 
+    // Detect context for filtering (look at what's before the path)
+    let context = detect_completion_context(file_text, cursor);
+
     // Get direct child items of the final resolved scope
     // This gives us only items defined directly in this module, not inherited ones
     let child_items: Vec<_> = current_scope.child_items(db).collect();
@@ -404,21 +672,67 @@ fn collect_path_completions<'db>(
         };
         let name_str = name.data(db);
 
-        let kind = match item {
-            ItemKind::Func(_) => CompletionItemKind::FUNCTION,
-            ItemKind::Struct(_) => CompletionItemKind::STRUCT,
-            ItemKind::Enum(_) => CompletionItemKind::ENUM,
-            ItemKind::Trait(_) => CompletionItemKind::INTERFACE,
-            ItemKind::TypeAlias(_) => CompletionItemKind::CLASS,
-            ItemKind::Const(_) => CompletionItemKind::CONSTANT,
-            ItemKind::Mod(_) | ItemKind::TopMod(_) => CompletionItemKind::MODULE,
-            ItemKind::Contract(_) => CompletionItemKind::CLASS,
-            _ => CompletionItemKind::VALUE,
+        // Filter and determine kind based on item type and context
+        let (kind, insert_text) = match item {
+            ItemKind::Func(func) => {
+                if matches!(context, CompletionContext::Type) {
+                    continue;
+                }
+                // Use callable snippet for functions
+                if let Some(completion) =
+                    build_callable_completion(db, func, CompletionItemKind::FUNCTION)
+                {
+                    items.push(completion);
+                }
+                continue;
+            }
+            ItemKind::Const(_) => {
+                if matches!(context, CompletionContext::Type) {
+                    continue;
+                }
+                (CompletionItemKind::CONSTANT, None)
+            }
+            ItemKind::Struct(_) => {
+                if matches!(context, CompletionContext::Expression) {
+                    continue;
+                }
+                (CompletionItemKind::STRUCT, None)
+            }
+            ItemKind::Enum(_) => {
+                if matches!(context, CompletionContext::Expression) {
+                    continue;
+                }
+                (CompletionItemKind::ENUM, None)
+            }
+            ItemKind::Trait(_) => {
+                if matches!(context, CompletionContext::Expression) {
+                    continue;
+                }
+                (CompletionItemKind::INTERFACE, None)
+            }
+            ItemKind::TypeAlias(_) => {
+                if matches!(context, CompletionContext::Expression) {
+                    continue;
+                }
+                (CompletionItemKind::CLASS, None)
+            }
+            ItemKind::Contract(_) => {
+                if matches!(context, CompletionContext::Expression) {
+                    continue;
+                }
+                (CompletionItemKind::CLASS, None)
+            }
+            ItemKind::Mod(_) | ItemKind::TopMod(_) => {
+                // Modules get :: suffix
+                (CompletionItemKind::MODULE, Some(format!("{}::", name_str)))
+            }
+            _ => continue,
         };
 
         items.push(CompletionItem {
             label: name_str.to_string(),
             kind: Some(kind),
+            insert_text,
             ..Default::default()
         });
     }
@@ -511,7 +825,7 @@ fn collect_member_completions<'db>(
                     }
 
                     collect_fields_for_type(db, ty, items);
-                    collect_methods_for_type(db, top_mod, ty, items);
+                    collect_methods_for_type(db, top_mod, ty, func.scope(), items);
                     return;
                 }
             }
@@ -528,7 +842,7 @@ fn collect_member_completions<'db>(
         {
             let ty = typed_body.expr_ty(db, expr_id);
             collect_fields_for_type(db, ty, items);
-            collect_methods_for_type(db, top_mod, ty, items);
+            collect_methods_for_type(db, top_mod, ty, func.scope(), items);
             return;
         }
     }
@@ -561,37 +875,152 @@ fn collect_fields_for_type<'db>(
     }
 }
 
+/// Build a completion item for a callable (function or method) with snippet tabstops.
+fn build_callable_completion<'db>(
+    db: &'db DriverDataBase,
+    func: Func<'db>,
+    kind: CompletionItemKind,
+) -> Option<CompletionItem> {
+    let name = func.name(db).to_opt()?;
+    let name_str = name.data(db).to_string();
+
+    // Build parameter list for detail and snippet
+    let mut param_names = Vec::new();
+    let mut param_details = Vec::new();
+
+    for param in func.params(db) {
+        if param.is_self_param(db) {
+            continue; // Skip self parameter in completion
+        }
+
+        let param_name = param
+            .name(db)
+            .map(|n| n.data(db).to_string())
+            .unwrap_or_else(|| format!("arg{}", param_names.len()));
+
+        let param_ty = param.ty(db);
+        param_details.push(format!("{}: {}", param_name, param_ty.pretty_print(db)));
+        param_names.push(param_name);
+    }
+
+    // Build detail string: fn name(param1: Type1, param2: Type2) -> ReturnType
+    let ret_ty = func.return_ty(db);
+    let ret_str = {
+        let ret_pretty = ret_ty.pretty_print(db);
+        if ret_pretty == "()" {
+            String::new()
+        } else {
+            format!(" -> {}", ret_pretty)
+        }
+    };
+    let detail = format!("fn {}({}){}", name_str, param_details.join(", "), ret_str);
+
+    // Build snippet with tabstops: name(${1:param1}, ${2:param2})
+    let snippet = if param_names.is_empty() {
+        format!("{}()$0", name_str)
+    } else {
+        let tabstops: Vec<String> = param_names
+            .iter()
+            .enumerate()
+            .map(|(i, p)| format!("${{{}:{}}}", i + 1, p))
+            .collect();
+        format!("{}({})$0", name_str, tabstops.join(", "))
+    };
+
+    Some(CompletionItem {
+        label: name_str,
+        kind: Some(kind),
+        detail: Some(detail),
+        insert_text: Some(snippet),
+        insert_text_format: Some(InsertTextFormat::SNIPPET),
+        ..Default::default()
+    })
+}
+
 /// Collect methods from impls as completion items.
 fn collect_methods_for_type<'db>(
     db: &'db DriverDataBase,
     top_mod: TopLevelMod<'db>,
     ty: hir::analysis::ty::ty_def::TyId<'db>,
+    scope: ScopeId<'db>,
     items: &mut Vec<CompletionItem>,
 ) {
     // Get the type name for matching impl blocks
     let ty_name = ty.pretty_print(db);
 
-    // Look for impl blocks in the module
+    // Track method names to avoid duplicates
+    let mut seen_methods = std::collections::HashSet::new();
+
+    // Look for inherent impl blocks in the module
     for item in top_mod.scope_graph(db).items_dfs(db) {
         if let ItemKind::Impl(impl_) = item {
             // Check if this impl is for our type by comparing target type name
-            // This is a simple heuristic; a more precise implementation would
-            // use proper type unification
             let impl_ty_name = impl_.ty(db).pretty_print(db);
             if impl_ty_name == ty_name {
                 for func in impl_.funcs(db) {
                     if func.is_method(db)
                         && let Some(name) = func.name(db).to_opt()
+                        && seen_methods.insert(name)
+                        && let Some(completion) =
+                            build_callable_completion(db, func, CompletionItemKind::METHOD)
                     {
-                        let detail = format!("fn {}(...)", name.data(db));
-                        items.push(CompletionItem {
-                            label: name.data(db).to_string(),
-                            kind: Some(CompletionItemKind::METHOD),
-                            detail: Some(detail),
-                            ..Default::default()
-                        });
+                        items.push(completion);
                     }
                 }
+            }
+        }
+    }
+
+    // Collect trait methods from in-scope traits that are implemented for this type
+    collect_trait_methods_for_type(db, ty, scope, &mut seen_methods, items);
+}
+
+/// Collect methods from trait implementations for the given type.
+fn collect_trait_methods_for_type<'db>(
+    db: &'db DriverDataBase,
+    ty: hir::analysis::ty::ty_def::TyId<'db>,
+    scope: ScopeId<'db>,
+    seen_methods: &mut std::collections::HashSet<hir::hir_def::IdentId<'db>>,
+    items: &mut Vec<CompletionItem>,
+) {
+    // Get traits available in the current scope
+    let available_traits = available_traits_in_scope(db, scope);
+
+    // Get the type name for matching impl trait blocks
+    let ty_name = ty.pretty_print(db);
+
+    // Get the ingot to search for impl trait blocks
+    let ingot = scope.ingot(db);
+
+    // Iterate over all impl trait blocks in the ingot
+    for impl_trait in ingot.all_impl_traits(db) {
+        let Some(trait_def) = impl_trait.trait_def(db) else {
+            continue;
+        };
+
+        // Check if this impl is for our type
+        let impl_ty_name = impl_trait.ty(db).pretty_print(db);
+        if impl_ty_name != ty_name {
+            continue;
+        }
+
+        let trait_in_scope = available_traits.contains(&trait_def);
+
+        // Add methods from this trait
+        for (method_name, callable) in trait_def.method_defs(db) {
+            if seen_methods.insert(method_name)
+                && let hir::hir_def::CallableDef::Func(func) = callable
+                && let Some(mut completion) =
+                    build_callable_completion(db, func, CompletionItemKind::METHOD)
+            {
+                // If trait is not in scope, add hint about needing import
+                if !trait_in_scope && let Some(trait_name) = trait_def.name(db).to_opt() {
+                    let trait_name_str = trait_name.data(db);
+                    if let Some(ref detail) = completion.detail {
+                        completion.detail = Some(format!("{} (use {})", detail, trait_name_str));
+                    }
+                }
+                items.push(completion);
             }
         }
     }
@@ -744,16 +1173,20 @@ impl<'a, 'db> Visitor<'db> for LetBindingCollector<'a, 'db> {
     }
 }
 
-/// Convert a NameRes to a CompletionItem.
+/// Convert a NameRes to a CompletionItem, filtering based on context.
 fn name_res_to_completion<'db>(
-    _db: &'db DriverDataBase,
+    db: &'db DriverDataBase,
     name: &str,
     name_res: &hir::analysis::name_resolution::NameRes<'db>,
+    context: CompletionContext,
 ) -> Option<CompletionItem> {
     let scope = match &name_res.kind {
         NameResKind::Scope(scope) => *scope,
         NameResKind::Prim(_) => {
-            // Primitive types
+            // Primitive types - only in type context
+            if matches!(context, CompletionContext::Expression) {
+                return None;
+            }
             return Some(CompletionItem {
                 label: name.to_string(),
                 kind: Some(CompletionItemKind::KEYWORD),
@@ -762,30 +1195,147 @@ fn name_res_to_completion<'db>(
         }
     };
 
-    // Determine the completion kind based on the scope
-    let kind = match scope.to_item() {
-        Some(ItemKind::Func(_)) => CompletionItemKind::FUNCTION,
-        Some(ItemKind::Struct(_)) => CompletionItemKind::STRUCT,
-        Some(ItemKind::Enum(_)) => CompletionItemKind::ENUM,
-        Some(ItemKind::Trait(_)) => CompletionItemKind::INTERFACE,
-        Some(ItemKind::TypeAlias(_)) => CompletionItemKind::CLASS,
-        Some(ItemKind::Const(_)) => CompletionItemKind::CONSTANT,
-        Some(ItemKind::Mod(_) | ItemKind::TopMod(_)) => CompletionItemKind::MODULE,
-        Some(ItemKind::Contract(_)) => CompletionItemKind::CLASS,
-        _ => match scope {
-            ScopeId::FuncParam(_, _) => CompletionItemKind::VARIABLE,
-            ScopeId::GenericParam(_, _) => CompletionItemKind::TYPE_PARAMETER,
-            ScopeId::Variant(_) => CompletionItemKind::ENUM_MEMBER,
-            ScopeId::Field(_, _) => CompletionItemKind::FIELD,
-            _ => CompletionItemKind::VALUE,
-        },
-    };
+    // Determine what kind of item this is and filter based on context
+    match scope.to_item() {
+        Some(ItemKind::Func(func)) => {
+            // Functions are values - not allowed in type context
+            if matches!(context, CompletionContext::Type) {
+                return None;
+            }
+            build_callable_completion(db, func, CompletionItemKind::FUNCTION)
+        }
 
-    Some(CompletionItem {
-        label: name.to_string(),
-        kind: Some(kind),
-        ..Default::default()
-    })
+        Some(ItemKind::Mod(_) | ItemKind::TopMod(_)) => {
+            // Modules can lead to types or values, so allow in mixed context
+            // but not in pure type context (you can't use a module as a type)
+            if matches!(context, CompletionContext::Type) {
+                return None;
+            }
+            Some(CompletionItem {
+                label: name.to_string(),
+                kind: Some(CompletionItemKind::MODULE),
+                insert_text: Some(format!("{}::", name)),
+                ..Default::default()
+            })
+        }
+
+        Some(ItemKind::Struct(_)) => {
+            // Structs are types - not allowed in expression context
+            if matches!(context, CompletionContext::Expression) {
+                return None;
+            }
+            Some(CompletionItem {
+                label: name.to_string(),
+                kind: Some(CompletionItemKind::STRUCT),
+                ..Default::default()
+            })
+        }
+
+        Some(ItemKind::Enum(_)) => {
+            // Enums are types - not allowed in expression context
+            if matches!(context, CompletionContext::Expression) {
+                return None;
+            }
+            Some(CompletionItem {
+                label: name.to_string(),
+                kind: Some(CompletionItemKind::ENUM),
+                ..Default::default()
+            })
+        }
+
+        Some(ItemKind::Trait(_)) => {
+            // Traits are not usable as standalone types in type annotations
+            // They're used in bounds (T: Trait) or impl blocks, not as `let x: Trait`
+            // For now, exclude from type context
+            if matches!(context, CompletionContext::Type) {
+                return None;
+            }
+            Some(CompletionItem {
+                label: name.to_string(),
+                kind: Some(CompletionItemKind::INTERFACE),
+                ..Default::default()
+            })
+        }
+
+        Some(ItemKind::TypeAlias(_)) => {
+            // Type aliases are types
+            if matches!(context, CompletionContext::Expression) {
+                return None;
+            }
+            Some(CompletionItem {
+                label: name.to_string(),
+                kind: Some(CompletionItemKind::CLASS),
+                ..Default::default()
+            })
+        }
+
+        Some(ItemKind::Const(_)) => {
+            // Constants are values
+            if matches!(context, CompletionContext::Type) {
+                return None;
+            }
+            Some(CompletionItem {
+                label: name.to_string(),
+                kind: Some(CompletionItemKind::CONSTANT),
+                ..Default::default()
+            })
+        }
+
+        Some(ItemKind::Contract(_)) => {
+            // Contracts are types
+            if matches!(context, CompletionContext::Expression) {
+                return None;
+            }
+            Some(CompletionItem {
+                label: name.to_string(),
+                kind: Some(CompletionItemKind::CLASS),
+                ..Default::default()
+            })
+        }
+
+        _ => {
+            // Handle other scope types
+            let kind = match scope {
+                ScopeId::FuncParam(_, _) => {
+                    if matches!(context, CompletionContext::Type) {
+                        return None;
+                    }
+                    CompletionItemKind::VARIABLE
+                }
+                ScopeId::GenericParam(_, _) => {
+                    if matches!(context, CompletionContext::Expression) {
+                        return None;
+                    }
+                    CompletionItemKind::TYPE_PARAMETER
+                }
+                ScopeId::Variant(_) => {
+                    // Enum variants are values (constructors)
+                    if matches!(context, CompletionContext::Type) {
+                        return None;
+                    }
+                    CompletionItemKind::ENUM_MEMBER
+                }
+                ScopeId::Field(_, _) => {
+                    if matches!(context, CompletionContext::Type) {
+                        return None;
+                    }
+                    CompletionItemKind::FIELD
+                }
+                _ => {
+                    if matches!(context, CompletionContext::Type) {
+                        return None;
+                    }
+                    CompletionItemKind::VALUE
+                }
+            };
+
+            Some(CompletionItem {
+                label: name.to_string(),
+                kind: Some(kind),
+                ..Default::default()
+            })
+        }
+    }
 }
 
 #[cfg(test)]
@@ -859,7 +1409,7 @@ mod tests {
         );
 
         let mut items = Vec::new();
-        collect_items_from_scope(&db, scope, &mut items);
+        collect_items_from_scope(&db, scope, CompletionContext::Mixed, &mut items);
 
         let module_completions: Vec<_> = items
             .iter()
@@ -975,7 +1525,14 @@ mod tests {
 
         let scope = top_mod.scope();
         let mut items = Vec::new();
-        collect_auto_import_completions(&db, top_mod, scope, file_text, &mut items);
+        collect_auto_import_completions(
+            &db,
+            top_mod,
+            scope,
+            CompletionContext::Mixed,
+            file_text,
+            &mut items,
+        );
 
         // Verify auto-imports have proper text edits
         for item in &items {
@@ -988,34 +1545,186 @@ mod tests {
         }
 
         // Test import insertion position detection
+        // For top-level modules, we insert at line 0
         let position = find_import_insertion_position(file_text);
-        assert!(
-            position.line > 0,
-            "Expected insertion after existing imports"
-        );
+        assert_eq!(position.line, 0, "Expected insertion at start of file");
     }
 
-    /// Test that we correctly detect when cursor is inside a comment
-    #[test]
-    fn test_is_in_comment() {
-        // Line comment cases
-        assert!(is_in_comment("// comment here", 5));
-        assert!(is_in_comment("// comment here", 15));
-        assert!(is_in_comment("let x = 1; // comment", 18));
-        assert!(!is_in_comment("let x = 1; // comment\nlet y = 2;", 28)); // cursor at 'y'
+    /// Extract cursor markers (<|>) and their positions from source text.
+    /// Returns the cleaned source (markers removed) and a list of positions.
+    fn extract_cursor_markers(source: &str) -> (String, Vec<usize>) {
+        const MARKER: &str = "<|>";
+        let mut positions = Vec::new();
+        let mut cleaned = String::new();
+        let mut offset_adjustment = 0;
+        let mut search_start = 0;
 
-        // Block comment cases
-        assert!(is_in_comment("/* block */", 5));
-        assert!(!is_in_comment("/* block */", 11)); // after closing
-        assert!(is_in_comment("/* multi\nline\ncomment */", 10));
-        assert!(!is_in_comment("/* closed */ code", 15)); // in 'code'
+        while let Some(start) = source[search_start..].find(MARKER) {
+            let abs_start = search_start + start;
+            let adjusted_pos = abs_start - offset_adjustment;
 
-        // Code (not in comment)
-        assert!(!is_in_comment("let x = 1;", 5));
-        assert!(!is_in_comment("fn foo() {}", 5));
+            // Copy text before this marker
+            cleaned.push_str(&source[search_start..abs_start]);
 
-        // Edge cases
-        assert!(!is_in_comment("", 0));
-        assert!(!is_in_comment("x", 0));
+            positions.push(adjusted_pos);
+            offset_adjustment += MARKER.len();
+            search_start = abs_start + MARKER.len();
+        }
+
+        // Copy remaining text
+        cleaned.push_str(&source[search_start..]);
+
+        (cleaned, positions)
+    }
+
+    /// Format a completion item for snapshot output.
+    fn format_completion_item(item: &CompletionItem) -> String {
+        let kind_str = item
+            .kind
+            .map(|k| format!("{:?}", k))
+            .unwrap_or_else(|| "?".to_string());
+
+        let mut result = format!("{} ({})", item.label, kind_str);
+
+        if let Some(ref insert) = item.insert_text
+            && insert != &item.label
+        {
+            result.push_str(&format!(" -> \"{}\"", insert.replace('\n', "\\n")));
+        }
+
+        if let Some(ref detail) = item.detail {
+            result.push_str(&format!(" [{}]", detail));
+        }
+
+        // Show additional text edits (auto-imports)
+        if let Some(ref edits) = item.additional_text_edits {
+            for edit in edits {
+                result.push_str(&format!(
+                    " {{+{}:{}}}",
+                    edit.range.start.line,
+                    edit.new_text.trim()
+                ));
+            }
+        }
+
+        result
+    }
+
+    /// Collect completions at a cursor position and format for snapshot.
+    fn collect_completions_at_cursor(
+        db: &DriverDataBase,
+        top_mod: TopLevelMod,
+        file_text: &str,
+        cursor: parser::TextSize,
+    ) -> Vec<String> {
+        let mut items = Vec::new();
+
+        // Check if this is member access (char before cursor is '.')
+        let is_member_access = cursor
+            .checked_sub(1.into())
+            .and_then(|pos| file_text.get(usize::from(pos)..usize::from(cursor)))
+            .map(|s| s == ".")
+            .unwrap_or(false);
+
+        // Check if this is path completion (chars before cursor are '::')
+        let is_path_completion = cursor
+            .checked_sub(2.into())
+            .and_then(|pos| file_text.get(usize::from(pos)..usize::from(cursor)))
+            .map(|s| s == "::")
+            .unwrap_or(false);
+
+        if is_member_access {
+            collect_member_completions(db, top_mod, cursor, &mut items);
+        } else if is_path_completion {
+            collect_path_completions(db, top_mod, cursor, file_text, &mut items);
+        } else {
+            let scope = find_scope_at_cursor(db, top_mod, cursor);
+            if let Some(scope) = scope {
+                let context = detect_completion_context(file_text, cursor);
+                collect_items_from_scope(db, scope, context, &mut items);
+                // Also collect auto-import suggestions
+                collect_auto_import_completions(db, top_mod, scope, context, file_text, &mut items);
+            }
+        }
+
+        // Sort and format
+        items.sort_by(|a, b| a.label.cmp(&b.label));
+        items.iter().map(format_completion_item).collect()
+    }
+
+    /// Create a codespan-based snapshot showing completions at each cursor position.
+    fn make_completion_snapshot(
+        db: &DriverDataBase,
+        cleaned_source: &str,
+        positions: &[usize],
+        top_mod: TopLevelMod,
+    ) -> String {
+        use codespan_reporting::{
+            diagnostic::{Diagnostic, Label},
+            files::SimpleFiles,
+            term::{
+                self,
+                termcolor::{BufferWriter, ColorChoice},
+            },
+        };
+
+        let mut files = SimpleFiles::new();
+        let file_id = files.add("completion.fe", cleaned_source.to_string());
+
+        let mut output = String::new();
+
+        for (idx, pos) in positions.iter().enumerate() {
+            let cursor = parser::TextSize::from(*pos as u32);
+            let completions = collect_completions_at_cursor(db, top_mod, cleaned_source, cursor);
+
+            let diag = Diagnostic::note().with_labels(vec![
+                Label::primary(file_id, *pos..*pos).with_message(format!("cursor {}", idx + 1)),
+            ]);
+
+            // Render the diagnostic
+            let writer = BufferWriter::stderr(ColorChoice::Never);
+            let mut buffer = writer.buffer();
+            let config = term::Config::default();
+            term::emit(&mut buffer, &config, &files, &diag).unwrap();
+
+            let diag_str = std::str::from_utf8(buffer.as_slice()).unwrap();
+            output.push_str(diag_str);
+
+            // Format completions as a nice list
+            if completions.is_empty() {
+                output.push_str("completions: (none)\n");
+            } else {
+                output.push_str("completions:\n");
+                for completion in &completions {
+                    output.push_str(&format!("  - {}\n", completion));
+                }
+            }
+            output.push('\n');
+        }
+
+        output
+    }
+
+    #[dir_test::dir_test(
+        dir: "$CARGO_MANIFEST_DIR/test_files",
+        glob: "completion.fe"
+    )]
+    fn test_completion_snapshot(fixture: dir_test::Fixture<&str>) {
+        use test_utils::snap_test;
+        use url::Url;
+
+        let original_source = fixture.content();
+        let (cleaned_source, positions) = extract_cursor_markers(original_source);
+
+        let mut db = DriverDataBase::default();
+        let file = db.workspace().touch(
+            &mut db,
+            Url::from_file_path(fixture.path()).unwrap(),
+            Some(cleaned_source.clone()),
+        );
+        let top_mod = map_file_to_mod(&db, file);
+
+        let snapshot = make_completion_snapshot(&db, &cleaned_source, &positions, top_mod);
+        snap_test!(snapshot, fixture.path());
     }
 }
