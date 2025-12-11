@@ -4,8 +4,8 @@ use std::collections::hash_map::DefaultHasher;
 use std::hash::Hasher;
 
 use hir::analysis::HirAnalysisDb;
-use hir::analysis::ty::decision_tree::Projection;
 use hir::hir_def::{ExprId, PatId};
+use hir::projection::Projection;
 use num_bigint::BigUint;
 use rustc_hash::FxHashMap;
 
@@ -168,6 +168,17 @@ impl<'db, 'a> FunctionHasher<'db, 'a> {
                 self.write_u8(0x0A);
                 self.hash_place(place);
             }
+            ValueOrigin::Alloc {
+                size_bytes,
+                address_space,
+            } => {
+                self.write_u8(0x0B);
+                self.write_u64(*size_bytes as u64);
+                self.write_u8(match address_space {
+                    crate::ir::AddressSpaceKind::Memory => 1,
+                    crate::ir::AddressSpaceKind::Storage => 2,
+                });
+            }
         }
     }
 
@@ -200,23 +211,25 @@ impl<'db, 'a> FunctionHasher<'db, 'a> {
                     self.write_usize(variant.idx as usize);
                     self.write_usize(*field_idx);
                 }
-                Projection::Index(idx_source) => {
+                Projection::Discriminant => {
                     self.write_u8(0x02);
+                }
+                Projection::Index(idx_source) => {
+                    self.write_u8(0x03);
                     match idx_source {
                         hir::projection::IndexSource::Constant(idx) => {
                             self.write_u8(0x00);
                             self.write_usize(*idx);
                         }
-                        hir::projection::IndexSource::Dynamic(infallible) => {
-                            // HIR projections use Infallible for Idx, making Dynamic
-                            // impossible to construct. This match arm is exhaustive
-                            // but can never be reached.
-                            match *infallible {}
+                        hir::projection::IndexSource::Dynamic(value) => {
+                            self.write_u8(0x01);
+                            let slot = self.placeholder_value(*value);
+                            self.write_u32(slot);
                         }
                     }
                 }
                 Projection::Deref => {
-                    self.write_u8(0x03);
+                    self.write_u8(0x04);
                 }
             }
         }
@@ -310,6 +323,25 @@ impl<'db, 'a> FunctionHasher<'db, 'a> {
                     let slot = self.placeholder_value(*arg);
                     self.write_u32(slot);
                 }
+            }
+            MirInst::Store { expr, place, value } => {
+                self.write_u8(0x26);
+                let expr_slot = self.placeholder_expr(*expr);
+                self.write_u32(expr_slot);
+                self.hash_place(place);
+                let slot = self.placeholder_value(*value);
+                self.write_u32(slot);
+            }
+            MirInst::SetDiscriminant {
+                expr,
+                place,
+                variant,
+            } => {
+                self.write_u8(0x27);
+                let expr_slot = self.placeholder_expr(*expr);
+                self.write_u32(expr_slot);
+                self.hash_place(place);
+                self.write_usize(variant.idx as usize);
             }
         }
     }

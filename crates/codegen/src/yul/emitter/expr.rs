@@ -1,12 +1,12 @@
 //! Expression and value lowering helpers shared across the Yul emitter.
 
-use hir::analysis::ty::decision_tree::Projection;
 use hir::analysis::ty::simplified_pattern::ConstructorKind;
 use hir::analysis::ty::ty_def::{PrimTy, TyBase, TyData, TyId};
 use hir::hir_def::{
     CallableDef, Expr, ExprId, LitKind, Stmt, StmtId,
     expr::{ArithBinOp, BinOp, CompBinOp, LogicalBinOp, UnOp},
 };
+use hir::projection::{IndexSource, Projection};
 use mir::{
     CallOrigin, ValueId, ValueOrigin,
     ir::{FieldPtrOrigin, Place, SyntheticValue},
@@ -42,20 +42,10 @@ impl<'db> FunctionEmitter<'db> {
         match &value.origin {
             ValueOrigin::Expr(expr_id) => {
                 if let Some(temp) = self.match_values.get(expr_id) {
-                    return Ok(temp.clone());
+                    Ok(temp.clone())
+                } else {
+                    self.lower_expr(*expr_id, state)
                 }
-                // Check if there's a better (non-Expr) value for this expression in expr_values.
-                // This can happen when a tuple was pre-lowered via emit_alloc but the call's
-                // args still reference an old ValueId with ValueOrigin::Expr.
-                if let Some(better_value_id) = self.mir_func.body.expr_values.get(expr_id)
-                    && *better_value_id != value_id
-                {
-                    let better_value = self.mir_func.body.value(*better_value_id);
-                    if !matches!(&better_value.origin, ValueOrigin::Expr(_)) {
-                        return self.lower_value(*better_value_id, state);
-                    }
-                }
-                self.lower_expr(*expr_id, state)
             }
             ValueOrigin::BindingName(name) => Ok(state.resolve_name(name)),
             ValueOrigin::Call(call) => self.lower_call_value(call, state),
@@ -64,6 +54,9 @@ impl<'db> FunctionEmitter<'db> {
             ValueOrigin::FieldPtr(field_ptr) => self.lower_field_ptr(field_ptr, state),
             ValueOrigin::PlaceLoad(place) => self.lower_place_load(place, value_ty, state),
             ValueOrigin::PlaceRef(place) => self.lower_place_ref(place, state),
+            ValueOrigin::Alloc { .. } => Err(YulError::Unsupported(
+                "alloc values must be bound to a temporary".into(),
+            )),
             _ => Err(YulError::Unsupported(
                 "only expression-derived values are supported".into(),
             )),
@@ -107,6 +100,11 @@ impl<'db> FunctionEmitter<'db> {
                 ValueOrigin::PlaceRef(place) => {
                     return self.lower_place_ref(place, state);
                 }
+                ValueOrigin::Alloc { .. } => {
+                    return Err(YulError::Unsupported(
+                        "alloc values must be bound to a temporary".into(),
+                    ));
+                }
                 // For Expr origins, we just continue to process the expression below
                 // to avoid infinite recursion when expr_values[expr_id] points to Expr(expr_id)
                 ValueOrigin::Expr(_) => {}
@@ -132,28 +130,13 @@ impl<'db> FunctionEmitter<'db> {
                 }
             }
             Expr::Tuple(elems) => {
-                // Tuples should be lowered to struct-like alloc+store_field operations in MIR.
-                // If we reach here, something went wrong in MIR lowering.
-                // Check if this is a unit tuple, which doesn't need allocation
-                if elems.is_empty() {
-                    return Ok("0".to_string()); // Unit tuple represented as 0
+                // Some tuple expressions (e.g. in generic templates) may survive MIR lowering.
+                // Emit a tuple expression directly as a fallback.
+                let mut lowered = Vec::with_capacity(elems.len());
+                for elem in elems {
+                    lowered.push(self.lower_expr(*elem, state)?);
                 }
-                // Non-empty tuples must have been lowered - panic with diagnostic info
-                let func_name = self
-                    .mir_func
-                    .func
-                    .name(self.db)
-                    .to_opt()
-                    .map(|n| n.data(self.db).to_string())
-                    .unwrap_or_default();
-                panic!(
-                    "tuple expression with {} elements was not lowered before codegen in function '{}'. \
-                     expr_id: {:?}, expr_values contains: {}",
-                    elems.len(),
-                    func_name,
-                    expr_id,
-                    self.mir_func.body.expr_values.contains_key(&expr_id)
-                );
+                Ok(format!("tuple({})", lowered.join(", ")))
             }
             Expr::Call(callee, call_args) => {
                 let callee_expr = self.lower_expr(*callee, state)?;
@@ -210,8 +193,8 @@ impl<'db> FunctionEmitter<'db> {
                     };
                     Ok(format!("{func}({left}, {right})"))
                 }
-                _ => Err(YulError::Unsupported(
-                    "only arithmetic/logical binary expressions are supported right now".into(),
+                BinOp::Index => Err(YulError::Unsupported(
+                    "index expressions should be lowered to place loads before codegen".into(),
                 )),
             },
             Expr::Block(stmts) => {
@@ -232,12 +215,10 @@ impl<'db> FunctionEmitter<'db> {
                 Ok(state.resolve_name(&original))
             }
             Expr::Field(..) => {
-                // Field expressions should have been lowered to FieldPtr or get_field calls.
-                // We already handled FieldPtr at the top of lower_expr. If we're here,
-                // the field access wasn't properly lowered.
+                // Field expressions should have been lowered to place loads/refs before codegen.
                 let ty = self.mir_func.typed_body.expr_ty(self.db, expr_id);
                 Err(YulError::Unsupported(format!(
-                    "field expressions should be rewritten before codegen (expr type {})",
+                    "field expressions should be lowered to place projections before codegen (expr type {})",
                     ty.pretty_print(self.db)
                 )))
             }
@@ -413,9 +394,6 @@ impl<'db> FunctionEmitter<'db> {
         loaded_ty: TyId<'db>,
         state: &BlockState,
     ) -> Result<String, YulError> {
-        if layout::ty_size_bytes(self.db, loaded_ty) == Some(0) {
-            return Ok("0".into());
-        }
         let addr = self.lower_place_address(place, state)?;
         let raw_load = match place.address_space {
             mir::ir::AddressSpaceKind::Memory => format!("mload({addr})"),
@@ -490,6 +468,36 @@ impl<'db> FunctionEmitter<'db> {
         }
     }
 
+    /// Applies the StorableScalar::to_word conversion for a given type.
+    pub(super) fn apply_to_word_conversion(&self, raw_value: &str, ty: TyId<'db>) -> String {
+        let base_ty = ty.base_ty(self.db);
+        if let TyData::TyBase(TyBase::Prim(prim)) = base_ty.data(self.db) {
+            match prim {
+                PrimTy::Bool => format!("iszero(iszero({raw_value}))"),
+                PrimTy::U8 => format!("and({raw_value}, 0xff)"),
+                PrimTy::U16 => format!("and({raw_value}, 0xffff)"),
+                PrimTy::U32 => format!("and({raw_value}, 0xffffffff)"),
+                PrimTy::U64 => format!("and({raw_value}, 0xffffffffffffffff)"),
+                PrimTy::U128 => {
+                    format!("and({raw_value}, 0xffffffffffffffffffffffffffffffff)")
+                }
+                PrimTy::U256 | PrimTy::Usize => raw_value.to_string(),
+                PrimTy::I8
+                | PrimTy::I16
+                | PrimTy::I32
+                | PrimTy::I64
+                | PrimTy::I128
+                | PrimTy::I256
+                | PrimTy::Isize => raw_value.to_string(),
+                PrimTy::String | PrimTy::Array | PrimTy::Tuple(_) | PrimTy::Ptr => {
+                    raw_value.to_string()
+                }
+            }
+        } else {
+            raw_value.to_string()
+        }
+    }
+
     /// Lowers a PlaceRef (reference to a place with projection path).
     ///
     /// Walks the projection path to compute the byte offset from the base,
@@ -511,16 +519,16 @@ impl<'db> FunctionEmitter<'db> {
         place: &Place<'db>,
         state: &BlockState,
     ) -> Result<String, YulError> {
-        let base = self.lower_value(place.base, state)?;
+        let mut base_expr = self.lower_value(place.base, state)?;
 
         if place.projection.is_empty() {
-            return Ok(base);
+            return Ok(base_expr);
         }
 
         // Get the base value's type to navigate projections
         let base_value = self.mir_func.body.value(place.base);
         let mut current_ty = base_value.ty;
-        let mut total_offset = 0;
+        let mut total_offset: usize = 0;
         let is_storage = matches!(place.address_space, mir::ir::AddressSpaceKind::Storage);
 
         for proj in place.projection.iter() {
@@ -577,11 +585,48 @@ impl<'db> FunctionEmitter<'db> {
                         ))
                     })?;
                 }
-                // Index and Deref projections are not yet implemented
-                Projection::Index(_) => {
-                    return Err(YulError::Unsupported(
-                        "place projection: array index access not yet implemented".to_string(),
-                    ));
+                Projection::Discriminant => {
+                    current_ty = TyId::new(self.db, TyData::TyBase(TyBase::Prim(PrimTy::U256)));
+                }
+                Projection::Index(idx_source) => {
+                    let stride = if is_storage {
+                        layout::array_elem_stride_slots(self.db, current_ty)
+                    } else {
+                        layout::array_elem_stride_bytes(self.db, current_ty)
+                    }
+                    .ok_or_else(|| {
+                        YulError::Unsupported(
+                            "place projection: array index access on non-array type".to_string(),
+                        )
+                    })?;
+
+                    match idx_source {
+                        IndexSource::Constant(idx) => {
+                            total_offset += idx * stride;
+                        }
+                        IndexSource::Dynamic(value_id) => {
+                            if total_offset != 0 {
+                                base_expr = format!("add({base_expr}, {total_offset})");
+                                total_offset = 0;
+                            }
+                            let idx_expr = self.lower_value(*value_id, state)?;
+                            let offset_expr = if stride == 1 {
+                                idx_expr
+                            } else {
+                                format!("mul({idx_expr}, {stride})")
+                            };
+                            base_expr = format!("add({base_expr}, {offset_expr})");
+                        }
+                    }
+
+                    // Update current type to the element type.
+                    let (base_ty, args) = current_ty.decompose_ty_app(self.db);
+                    if !base_ty.is_array(self.db) || args.is_empty() {
+                        return Err(YulError::Unsupported(
+                            "place projection: array index on non-array type".to_string(),
+                        ));
+                    }
+                    current_ty = args[0];
                 }
                 Projection::Deref => {
                     return Err(YulError::Unsupported(
@@ -591,10 +636,9 @@ impl<'db> FunctionEmitter<'db> {
             }
         }
 
-        if total_offset == 0 {
-            Ok(base)
-        } else {
-            Ok(format!("add({base}, {total_offset})"))
+        if total_offset != 0 {
+            base_expr = format!("add({base_expr}, {total_offset})");
         }
+        Ok(base_expr)
     }
 }

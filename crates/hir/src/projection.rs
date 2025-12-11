@@ -45,6 +45,11 @@ pub enum Projection<Ty, Var, Idx> {
         field_idx: usize,
     },
 
+    /// Enum discriminant access.
+    ///
+    /// This is a scalar projection that yields the enum tag value.
+    Discriminant,
+
     /// Array/slice index access.
     Index(IndexSource<Idx>),
 
@@ -141,7 +146,7 @@ impl<Ty, Var, Idx> ProjectionPath<Ty, Var, Idx> {
         self.0.last().and_then(|proj| match proj {
             Projection::Field(idx) => Some(*idx),
             Projection::VariantField { field_idx, .. } => Some(*field_idx),
-            Projection::Index(_) | Projection::Deref => None,
+            Projection::Index(_) | Projection::Deref | Projection::Discriminant => None,
         })
     }
 
@@ -242,6 +247,14 @@ impl<Ty: PartialEq, Var: PartialEq, Idx: PartialEq> ProjectionPath<Ty, Var, Idx>
                                 ..
                             },
                         ) if v1 == v2 && f1 != f2 => {
+                            return Aliasing::No;
+                        }
+
+                        // Discriminant is disjoint from any payload field or index.
+                        (Projection::Discriminant, Projection::Discriminant) => {
+                            return Aliasing::Must;
+                        }
+                        (Projection::Discriminant, _) | (_, Projection::Discriminant) => {
                             return Aliasing::No;
                         }
 

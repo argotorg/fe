@@ -5,9 +5,9 @@ input_file: tests/fixtures/match_nested_enum.fe
 ---
 function match_nested_enum(outer) -> ret {
   let v0 := 0
-  switch get_discriminant__MemPtr__d0292394fccae3e4(outer)
+  switch mload(outer)
     case 0 {
-      switch get_discriminant__MemPtr__d0292394fccae3e4(mload(add(outer, 32)))
+      switch mload(add(outer, 32))
         case 0 {
           v0 := 0
         }
@@ -26,10 +26,4 @@ function match_nested_enum(outer) -> ret {
     default {
     }
   ret := v0
-}
-function get_discriminant__MemPtr__d0292394fccae3e4(addr) -> ret {
-  ret := load__MemPtr__d0292394fccae3e4(addr)
-}
-function load__MemPtr__d0292394fccae3e4(addr) -> ret {
-  ret := mload(addr)
 }

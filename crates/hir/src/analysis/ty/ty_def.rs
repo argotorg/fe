@@ -275,7 +275,7 @@ impl<'db> TyId<'db> {
         Self::new(db, TyData::TyBase(TyBase::Func(func)))
     }
 
-    pub(crate) fn is_func(self, db: &dyn HirAnalysisDb) -> bool {
+    pub fn is_func(self, db: &dyn HirAnalysisDb) -> bool {
         matches!(self.base_ty(db).data(db), TyData::TyBase(TyBase::Func(_)))
     }
 
@@ -287,7 +287,7 @@ impl<'db> TyId<'db> {
         matches!(self.base_ty(db).data(db), TyData::TyVar(_))
     }
 
-    pub(crate) fn is_const_ty(self, db: &dyn HirAnalysisDb) -> bool {
+    pub fn is_const_ty(self, db: &dyn HirAnalysisDb) -> bool {
         matches!(self.base_ty(db).data(db), TyData::ConstTy(_))
     }
 
@@ -315,14 +315,14 @@ impl<'db> TyId<'db> {
         )
     }
 
-    pub(crate) fn is_array(self, db: &dyn HirAnalysisDb) -> bool {
+    pub fn is_array(self, db: &dyn HirAnalysisDb) -> bool {
         matches!(
             self.base_ty(db).data(db),
             TyData::TyBase(TyBase::Prim(PrimTy::Array))
         )
     }
 
-    pub(crate) fn is_string(self, db: &dyn HirAnalysisDb) -> bool {
+    pub fn is_string(self, db: &dyn HirAnalysisDb) -> bool {
         matches!(
             self.base_ty(db).data(db),
             TyData::TyBase(TyBase::Prim(PrimTy::String))
@@ -334,7 +334,7 @@ impl<'db> TyId<'db> {
     }
 
     /// Returns `true` if the base type is a user defined `struct` type.
-    pub(crate) fn is_struct(self, db: &dyn HirAnalysisDb) -> bool {
+    pub fn is_struct(self, db: &dyn HirAnalysisDb) -> bool {
         let base_ty = self.base_ty(db);
         match base_ty.data(db) {
             TyData::TyBase(TyBase::Adt(adt)) => adt.is_struct(db),
@@ -346,7 +346,7 @@ impl<'db> TyId<'db> {
         matches!(self.base_ty(db).data(db), TyData::TyBase(TyBase::Prim(_)))
     }
 
-    pub(crate) fn as_enum(self, db: &'db dyn HirAnalysisDb) -> Option<Enum<'db>> {
+    pub fn as_enum(self, db: &'db dyn HirAnalysisDb) -> Option<Enum<'db>> {
         let base_ty = self.base_ty(db);
         if let Some(adt_ref) = base_ty.adt_ref(db)
             && let AdtRef::Enum(enum_) = adt_ref

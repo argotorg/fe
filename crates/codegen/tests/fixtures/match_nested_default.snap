@@ -5,9 +5,9 @@ input_file: tests/fixtures/match_nested_default.fe
 ---
 function nested_with_defaults(o) -> ret {
   let v0 := 0
-  switch get_discriminant__MemPtr__d0292394fccae3e4(o)
+  switch mload(o)
     case 0 {
-      switch get_discriminant__MemPtr__d0292394fccae3e4(mload(add(o, 32)))
+      switch mload(add(o, 32))
         case 0 {
           v0 := 1
         }
@@ -17,7 +17,7 @@ function nested_with_defaults(o) -> ret {
       ret := v0
     }
     case 1 {
-      switch get_discriminant__MemPtr__d0292394fccae3e4(mload(add(o, 32)))
+      switch mload(add(o, 32))
         case 1 {
           v0 := 2
         }
@@ -33,9 +33,9 @@ function nested_with_defaults(o) -> ret {
 }
 function outer_specific_inner_wildcard(o) -> ret {
   let v0 := 0
-  switch get_discriminant__MemPtr__d0292394fccae3e4(o)
+  switch mload(o)
     case 0 {
-      switch get_discriminant__MemPtr__d0292394fccae3e4(mload(add(o, 32)))
+      switch mload(add(o, 32))
         case 0 {
           v0 := 1
         }
@@ -51,11 +51,11 @@ function outer_specific_inner_wildcard(o) -> ret {
 }
 function deeply_nested_wildcard(d) -> ret {
   let v0 := 0
-  switch get_discriminant__MemPtr__d0292394fccae3e4(d)
+  switch mload(d)
     case 0 {
-      switch get_discriminant__MemPtr__d0292394fccae3e4(mload(add(d, 32)))
+      switch mload(add(d, 32))
         case 0 {
-          switch get_discriminant__MemPtr__d0292394fccae3e4(mload(add(d, 64)))
+          switch mload(add(d, 64))
             case 0 {
               v0 := 1
             }
@@ -76,9 +76,9 @@ function deeply_nested_wildcard(d) -> ret {
 }
 function exhaustive_inner_outer_wildcard(o) -> ret {
   let v0 := 0
-  switch get_discriminant__MemPtr__d0292394fccae3e4(o)
+  switch mload(o)
     case 0 {
-      switch get_discriminant__MemPtr__d0292394fccae3e4(mload(add(o, 32)))
+      switch mload(add(o, 32))
         case 0 {
           v0 := 1
         }
@@ -97,10 +97,4 @@ function exhaustive_inner_outer_wildcard(o) -> ret {
       v0 := 0
     }
   ret := v0
-}
-function get_discriminant__MemPtr__d0292394fccae3e4(addr) -> ret {
-  ret := load__MemPtr__d0292394fccae3e4(addr)
-}
-function load__MemPtr__d0292394fccae3e4(addr) -> ret {
-  ret := mload(addr)
 }

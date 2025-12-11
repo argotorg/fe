@@ -1,11 +1,11 @@
 use std::fmt;
 
-use hir::analysis::ty::decision_tree::ProjectionPath;
 use hir::analysis::ty::ty_check::{Callable, TypedBody};
 use hir::analysis::ty::ty_def::TyId;
 use hir::hir_def::{
-    ExprId, Func, PatId, StmtId, TopLevelMod, TypeId as HirTypeId, expr::ArithBinOp,
+    EnumVariant, ExprId, Func, PatId, StmtId, TopLevelMod, TypeId as HirTypeId, expr::ArithBinOp,
 };
+use hir::projection::{Projection, ProjectionPath};
 use num_bigint::BigUint;
 use rustc_hash::FxHashMap;
 
@@ -51,6 +51,7 @@ pub struct MirBody<'db> {
     pub blocks: Vec<BasicBlock<'db>>,
     pub values: Vec<ValueData<'db>>,
     pub expr_values: FxHashMap<ExprId, ValueId>,
+    pub pat_address_space: FxHashMap<PatId, AddressSpaceKind>,
     pub loop_headers: FxHashMap<BasicBlockId, LoopInfo>,
     pub match_info: FxHashMap<ExprId, MatchLoweringInfo>,
 }
@@ -62,6 +63,7 @@ impl<'db> MirBody<'db> {
             blocks: Vec::new(),
             values: Vec::new(),
             expr_values: FxHashMap::default(),
+            pat_address_space: FxHashMap::default(),
             loop_headers: FxHashMap::default(),
             match_info: FxHashMap::default(),
         }
@@ -120,6 +122,12 @@ impl ValueId {
     }
 }
 
+/// MIR projection using MIR value IDs for dynamic indices.
+pub type MirProjection<'db> = Projection<TyId<'db>, EnumVariant<'db>, ValueId>;
+
+/// MIR projection path using MIR value IDs for dynamic indices.
+pub type MirProjectionPath<'db> = ProjectionPath<TyId<'db>, EnumVariant<'db>, ValueId>;
+
 /// A linear sequence of MIR instructions terminated by a control-flow edge.
 #[derive(Debug, Clone)]
 pub struct BasicBlock<'db> {
@@ -172,6 +180,18 @@ pub enum MirInst<'db> {
         target: ExprId,
         value: ValueId,
         op: ArithBinOp,
+    },
+    /// Store a value into a place (projection write).
+    Store {
+        expr: ExprId,
+        place: Place<'db>,
+        value: ValueId,
+    },
+    /// Store an enum discriminant into a place.
+    SetDiscriminant {
+        expr: ExprId,
+        place: Place<'db>,
+        variant: EnumVariant<'db>,
     },
     /// Plain expression statement (no bindings).
     Eval { stmt: StmtId, value: ValueId },
@@ -295,6 +315,11 @@ pub enum ValueOrigin<'db> {
     PlaceLoad(Place<'db>),
     /// Reference to a place (for aggregates - pointer arithmetic only, no load).
     PlaceRef(Place<'db>),
+    /// Allocate memory for an aggregate value.
+    Alloc {
+        size_bytes: usize,
+        address_space: AddressSpaceKind,
+    },
 }
 
 impl<'db> ValueOrigin<'db> {
@@ -420,7 +445,7 @@ pub struct Place<'db> {
     /// The base value (e.g., a local variable, parameter, or allocation).
     pub base: ValueId,
     /// Sequence of projections to apply to reach the target location.
-    pub projection: ProjectionPath<'db>,
+    pub projection: MirProjectionPath<'db>,
     /// Address space where this place resides (memory vs storage).
     pub address_space: AddressSpaceKind,
 }
@@ -428,7 +453,7 @@ pub struct Place<'db> {
 impl<'db> Place<'db> {
     pub fn new(
         base: ValueId,
-        projection: ProjectionPath<'db>,
+        projection: MirProjectionPath<'db>,
         address_space: AddressSpaceKind,
     ) -> Self {
         Self {

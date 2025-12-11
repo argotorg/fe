@@ -1,7 +1,7 @@
 //! Expression and statement lowering for MIR: handles blocks, control flow, calls, and dispatches
 //! to specialized lowering helpers.
 
-use hir::analysis::ty::decision_tree::{Projection, ProjectionPath};
+use hir::projection::{IndexSource, Projection};
 
 use crate::layout::{self, ty_storage_slots};
 
@@ -10,6 +10,7 @@ use hir::analysis::{
     place::PlaceBase,
     ty::ty_check::{EffectArg, EffectPassMode},
 };
+use hir::hir_def::expr::BinOp;
 
 impl<'db, 'a> MirBuilder<'db, 'a> {
     /// Try to lower a `size_of<T>()` or `encoded_size<T>()` call to a constant.
@@ -204,23 +205,13 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                 let (next, val) = self.try_lower_tuple(block, expr, elems);
                 (next, val, true)
             }
-            Partial::Present(Expr::Field(lhs, field_index)) => {
-                let Some(curr_block) = self.pre_lower_if_needed(Some(block), *lhs) else {
-                    let val = self.ensure_value(expr);
-                    return (None, val, true);
-                };
-
-                let Some(field_index) = field_index.to_opt() else {
-                    let val = self.ensure_value(expr);
-                    return (Some(curr_block), val, true);
-                };
-                let addr_value = self.ensure_value(*lhs);
-                if let Some(result) = self.lower_field_from_base(*lhs, field_index, addr_value) {
-                    self.mir_body.expr_values.insert(expr, result);
-                    return (Some(curr_block), result, true);
-                }
-                let val = self.ensure_value(expr);
-                (Some(curr_block), val, true)
+            Partial::Present(Expr::Array(elems)) => {
+                let (next, val) = self.try_lower_array(block, expr, elems);
+                (next, val, true)
+            }
+            Partial::Present(Expr::ArrayRep(elem, len)) => {
+                let (next, val) = self.try_lower_array_rep(block, expr, *elem, *len);
+                (next, val, true)
             }
             Partial::Present(Expr::Match(scrutinee, arms)) => {
                 if let Partial::Present(arms) = arms {
@@ -233,44 +224,56 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                 (Some(block), val, true)
             }
             Partial::Present(Expr::Call(_, call_args)) => {
-                // Pre-lower argument expressions that need block-aware lowering
+                // Lower argument expressions that need block-aware lowering (like RecordInit)
+                // before creating the call value.
                 let mut current = Some(block);
                 for arg in call_args {
-                    current = self.pre_lower_if_needed(current, arg.expr);
-                    if current.is_none() {
-                        break;
+                    let Some(curr_block) = current else { break };
+                    if self.needs_block_aware_lowering(arg.expr) {
+                        let (next_block, value, push_eval) =
+                            self.lower_expr_core(curr_block, arg.expr);
+                        current = next_block;
+                        if push_eval && let Some(curr_block) = current {
+                            let bind_value =
+                                !self.is_unit_ty(self.typed_body.expr_ty(self.db, arg.expr));
+                            self.push_inst(
+                                curr_block,
+                                MirInst::EvalExpr {
+                                    expr: arg.expr,
+                                    value,
+                                    bind_value,
+                                },
+                            );
+                        }
                     }
                 }
                 let val = self.ensure_value(expr);
                 (current, val, true)
             }
-            Partial::Present(Expr::MethodCall(receiver, _, _, call_args)) => {
-                // Pre-lower receiver and argument expressions that need block-aware lowering
-                let mut current = self.pre_lower_if_needed(Some(block), *receiver);
-                for arg in call_args {
-                    current = self.pre_lower_if_needed(current, arg.expr);
-                    if current.is_none() {
-                        break;
-                    }
-                }
-                let val = self.ensure_value(expr);
-                (current, val, true)
-            }
-            Partial::Present(Expr::Bin(lhs, rhs, _)) => {
-                // Pre-lower operands that need block-aware lowering
+            Partial::Present(Expr::MethodCall(_, _, _, call_args)) => {
+                // Lower argument expressions that need block-aware lowering (like RecordInit)
+                // before creating the call value.
                 let mut current = Some(block);
-                for operand in [*lhs, *rhs] {
-                    current = self.pre_lower_if_needed(current, operand);
-                    if current.is_none() {
-                        break;
+                for arg in call_args {
+                    let Some(curr_block) = current else { break };
+                    if self.needs_block_aware_lowering(arg.expr) {
+                        let (next_block, value, push_eval) =
+                            self.lower_expr_core(curr_block, arg.expr);
+                        current = next_block;
+                        if push_eval && let Some(curr_block) = current {
+                            let bind_value =
+                                !self.is_unit_ty(self.typed_body.expr_ty(self.db, arg.expr));
+                            self.push_inst(
+                                curr_block,
+                                MirInst::EvalExpr {
+                                    expr: arg.expr,
+                                    value,
+                                    bind_value,
+                                },
+                            );
+                        }
                     }
                 }
-                let val = self.ensure_value(expr);
-                (current, val, true)
-            }
-            Partial::Present(Expr::Un(inner, _)) => {
-                // Pre-lower operand if it needs block-aware lowering
-                let current = self.pre_lower_if_needed(Some(block), *inner);
                 let val = self.ensure_value(expr);
                 (current, val, true)
             }
@@ -430,8 +433,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         matches!(&exprs[expr], Partial::Present(Expr::MethodCall(..)))
     }
 
-    /// Rewrites a field access expression into either a `get_field` call (for primitives)
-    /// or a `FieldPtr` offset computation (for nested structs).
+    /// Rewrites a field access expression into a PlaceLoad/PlaceRef.
     ///
     /// # Parameters
     /// - `expr`: Field access expression id.
@@ -443,32 +445,17 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
             return None;
         };
         let field_index = field_index.to_opt()?;
-        if self.needs_block_aware_lowering(*lhs) {
-            return None;
-        }
-        let addr_value = self.ensure_value(*lhs);
-        self.lower_field_from_base(*lhs, field_index, addr_value)
-    }
-
-    fn lower_field_from_base(
-        &mut self,
-        lhs: ExprId,
-        field_index: FieldIndex<'db>,
-        addr_value: ValueId,
-    ) -> Option<ValueId> {
-        let lhs_ty = self.typed_body.expr_ty(self.db, lhs);
+        let lhs_ty = self.typed_body.expr_ty(self.db, *lhs);
         let info = self.field_access_info(lhs_ty, field_index)?;
-        if self.is_zero_sized_ty(info.field_ty) {
-            return Some(self.synthetic_zero_for_ty(info.field_ty));
-        }
 
+        let addr_value = self.ensure_value(*lhs);
         let addr_space = self.value_address_space(addr_value);
-        let is_aggregate = info.field_ty.field_count(self.db) > 0;
+        let is_aggregate = self.is_aggregate_ty(info.field_ty);
 
         // Create Place with single-element projection path
         let place = Place::new(
             addr_value,
-            ProjectionPath::from_projection(Projection::Field(info.field_idx)),
+            MirProjectionPath::from_projection(Projection::Field(info.field_idx)),
             addr_space,
         );
 
@@ -487,6 +474,78 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         // Propagate address space to the result
         self.value_address_space.insert(result, addr_space);
         Some(result)
+    }
+
+    /// Rewrites an array index expression into a PlaceLoad or PlaceRef.
+    pub(super) fn try_lower_index(&mut self, expr: ExprId) -> Option<ValueId> {
+        let Partial::Present(Expr::Bin(lhs, rhs, BinOp::Index)) = expr.data(self.db, self.body)
+        else {
+            return None;
+        };
+        let lhs_ty = self.typed_body.expr_ty(self.db, *lhs);
+        if !lhs_ty.is_array(self.db) {
+            return None;
+        }
+        let elem_ty = lhs_ty.generic_args(self.db).first().copied()?;
+        let addr_value = self.ensure_value(*lhs);
+        let addr_space = self.value_address_space(addr_value);
+        let index_value = self.ensure_value(*rhs);
+
+        let place = Place::new(
+            addr_value,
+            MirProjectionPath::from_projection(Projection::Index(IndexSource::Dynamic(
+                index_value,
+            ))),
+            addr_space,
+        );
+
+        let is_aggregate = self.is_aggregate_ty(elem_ty);
+        let origin = if is_aggregate {
+            ValueOrigin::PlaceRef(place)
+        } else {
+            ValueOrigin::PlaceLoad(place)
+        };
+
+        let result = self.mir_body.alloc_value(ValueData {
+            ty: elem_ty,
+            origin,
+        });
+        self.value_address_space.insert(result, addr_space);
+        Some(result)
+    }
+
+    fn place_for_expr(&mut self, expr: ExprId) -> Option<Place<'db>> {
+        match expr.data(self.db, self.body) {
+            Partial::Present(Expr::Field(lhs, field_index)) => {
+                let field_index = field_index.to_opt()?;
+                let lhs_ty = self.typed_body.expr_ty(self.db, *lhs);
+                let info = self.field_access_info(lhs_ty, field_index)?;
+                let addr_value = self.ensure_value(*lhs);
+                let addr_space = self.value_address_space(addr_value);
+                Some(Place::new(
+                    addr_value,
+                    MirProjectionPath::from_projection(Projection::Field(info.field_idx)),
+                    addr_space,
+                ))
+            }
+            Partial::Present(Expr::Bin(lhs, rhs, BinOp::Index)) => {
+                let lhs_ty = self.typed_body.expr_ty(self.db, *lhs);
+                if !lhs_ty.is_array(self.db) {
+                    return None;
+                }
+                let addr_value = self.ensure_value(*lhs);
+                let addr_space = self.value_address_space(addr_value);
+                let index_value = self.ensure_value(*rhs);
+                Some(Place::new(
+                    addr_value,
+                    MirProjectionPath::from_projection(Projection::Index(IndexSource::Dynamic(
+                        index_value,
+                    ))),
+                    addr_space,
+                ))
+            }
+            _ => None,
+        }
     }
 
     /// Lowers a statement and returns its continuation and produced value (if any).
@@ -741,84 +800,91 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         ty.is_tuple(self.db) && ty.field_count(self.db) == 0
     }
 
+    fn is_aggregate_ty(&self, ty: TyId<'db>) -> bool {
+        if ty.field_count(self.db) > 0 || ty.is_array(self.db) {
+            return true;
+        }
+        ty.adt_ref(self.db)
+            .is_some_and(|adt| matches!(adt, AdtRef::Enum(_)))
+    }
+
     /// Returns whether an expression needs block-aware lowering.
     ///
     /// Some expressions (like RecordInit) need to be lowered with access to a basic block
     /// so they can emit instructions. This method checks if an expression is one of these
     /// types, including recursively checking nested expressions.
     fn needs_block_aware_lowering(&self, expr: ExprId) -> bool {
-        match expr.data(self.db, self.body) {
-            Partial::Present(Expr::RecordInit(..)) => true,
-            // Tuples also need block-aware lowering (alloc + store_field)
-            Partial::Present(Expr::Tuple(elems)) => !elems.is_empty(),
-            // Nested calls might have RecordInit or Tuple arguments
-            Partial::Present(Expr::Call(_, call_args)) => call_args
-                .iter()
-                .any(|arg| self.needs_block_aware_lowering(arg.expr)),
-            Partial::Present(Expr::MethodCall(receiver, _, _, call_args)) => {
+        let Partial::Present(expr_data) = expr.data(self.db, self.body) else {
+            return false;
+        };
+
+        match expr_data {
+            Expr::RecordInit(..) => true,
+            Expr::Lit(..) | Expr::Path(..) => false,
+            Expr::Un(inner, _) => self.needs_block_aware_lowering(*inner),
+            Expr::Bin(lhs, rhs, _) => {
+                self.needs_block_aware_lowering(*lhs) || self.needs_block_aware_lowering(*rhs)
+            }
+            Expr::Call(callee, call_args) => {
+                self.needs_block_aware_lowering(*callee)
+                    || call_args
+                        .iter()
+                        .any(|arg| self.needs_block_aware_lowering(arg.expr))
+            }
+            Expr::MethodCall(receiver, _, _, call_args) => {
                 self.needs_block_aware_lowering(*receiver)
                     || call_args
                         .iter()
                         .any(|arg| self.needs_block_aware_lowering(arg.expr))
             }
-            Partial::Present(Expr::Field(base, _)) => self.needs_block_aware_lowering(*base),
-            // Blocks might contain RecordInit expressions
-            Partial::Present(Expr::Block(stmts)) => {
+            Expr::Field(lhs, _) => self.needs_block_aware_lowering(*lhs),
+            Expr::Tuple(_) | Expr::Array(_) => true,
+            Expr::ArrayRep(elem, _) => self.needs_block_aware_lowering(*elem),
+            Expr::Block(stmts) => {
                 stmts
                     .iter()
                     .any(|stmt_id| match stmt_id.data(self.db, self.body) {
                         Partial::Present(Stmt::Expr(e)) => self.needs_block_aware_lowering(*e),
+                        Partial::Present(Stmt::Let(_, _, Some(e))) => {
+                            self.needs_block_aware_lowering(*e)
+                        }
+                        Partial::Present(Stmt::For(_, iter, body)) => {
+                            self.needs_block_aware_lowering(*iter)
+                                || self.needs_block_aware_lowering(*body)
+                        }
+                        Partial::Present(Stmt::While(cond, body)) => {
+                            self.needs_block_aware_lowering(*cond)
+                                || self.needs_block_aware_lowering(*body)
+                        }
+                        Partial::Present(Stmt::Return(Some(e))) => {
+                            self.needs_block_aware_lowering(*e)
+                        }
                         _ => false,
                     })
             }
-            // If expressions might contain RecordInit in their branches
-            Partial::Present(Expr::If(cond, then_expr, else_expr)) => {
+            Expr::If(cond, then_expr, else_expr) => {
                 self.needs_block_aware_lowering(*cond)
                     || self.needs_block_aware_lowering(*then_expr)
                     || else_expr
                         .map(|e| self.needs_block_aware_lowering(e))
                         .unwrap_or(false)
             }
-            // Binary expressions might contain tuples in their operands
-            Partial::Present(Expr::Bin(lhs, rhs, _)) => {
-                self.needs_block_aware_lowering(*lhs) || self.needs_block_aware_lowering(*rhs)
+            Expr::Match(scrutinee, arms) => {
+                self.needs_block_aware_lowering(*scrutinee)
+                    || matches!(arms, Partial::Present(arms) if arms
+                        .iter()
+                        .any(|arm| self.needs_block_aware_lowering(arm.body)))
             }
-            // Unary expressions might contain tuples in their operand
-            Partial::Present(Expr::Un(inner, _)) => self.needs_block_aware_lowering(*inner),
-            _ => false,
+            Expr::Assign(target, value) | Expr::AugAssign(target, value, _) => {
+                self.needs_block_aware_lowering(*target) || self.needs_block_aware_lowering(*value)
+            }
+            Expr::With(bindings, body_expr) => {
+                bindings
+                    .iter()
+                    .any(|binding| self.needs_block_aware_lowering(binding.value))
+                    || self.needs_block_aware_lowering(*body_expr)
+            }
         }
-    }
-
-    /// Pre-lowers a subexpression if it needs block-aware lowering.
-    ///
-    /// This handles the common pattern of checking whether a subexpression (like a call
-    /// argument or operand) needs block-aware lowering, and if so, lowering it and
-    /// emitting the appropriate `EvalExpr` instruction.
-    ///
-    /// # Returns
-    /// The successor block after lowering, or `None` if lowering terminated the block.
-    fn pre_lower_if_needed(
-        &mut self,
-        block: Option<BasicBlockId>,
-        subexpr: ExprId,
-    ) -> Option<BasicBlockId> {
-        if !self.needs_block_aware_lowering(subexpr) {
-            return block;
-        }
-        let curr_block = block?;
-        let (next_block, value, push_eval) = self.lower_expr_core(curr_block, subexpr);
-        if push_eval && let Some(curr_block) = next_block {
-            let bind_value = !self.is_unit_ty(self.typed_body.expr_ty(self.db, subexpr));
-            self.push_inst(
-                curr_block,
-                MirInst::EvalExpr {
-                    expr: subexpr,
-                    value,
-                    bind_value,
-                },
-            );
-        }
-        next_block
     }
 
     /// Lowers an expression statement, emitting side-effecting instructions as needed.
@@ -854,10 +920,16 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                         let space = self.value_address_space(value_id);
                         self.set_pat_address_space(pat, space);
                     }
-                    if let Some(block_after_assign) =
-                        self.try_lower_field_assign(curr_block, expr, *target, value_id)
-                    {
-                        return (Some(block_after_assign), None);
+                    if let Some(place) = self.place_for_expr(*target) {
+                        self.push_inst(
+                            curr_block,
+                            MirInst::Store {
+                                expr,
+                                place,
+                                value: value_id,
+                            },
+                        );
+                        return (Some(curr_block), None);
                     }
                     self.push_inst(
                         curr_block,

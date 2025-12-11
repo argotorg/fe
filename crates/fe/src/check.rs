@@ -308,6 +308,22 @@ fn format_inst(db: &DriverDataBase, inst: &MirInst<'_>) -> String {
                 .join(", ");
             format!("{}: intrinsic {:?}({args})", expr_label(*expr), op)
         }
+        MirInst::Store { expr, place, value } => format!(
+            "{}: store {:?} = {}",
+            expr_label(*expr),
+            place,
+            value_label(*value)
+        ),
+        MirInst::SetDiscriminant {
+            expr,
+            place,
+            variant,
+        } => format!(
+            "{}: set_discriminant {:?} = {}",
+            expr_label(*expr),
+            place,
+            variant.idx
+        ),
     }
 }
 

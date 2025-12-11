@@ -78,6 +78,29 @@ impl<'db> FunctionEmitter<'db> {
                             counts[arg.index()] += 1;
                         }
                     }
+                    mir::MirInst::Store { place, value, .. } => {
+                        counts[value.index()] += 1;
+                        counts[place.base.index()] += 1;
+                        for proj in place.projection.iter() {
+                            if let hir::projection::Projection::Index(
+                                hir::projection::IndexSource::Dynamic(value_id),
+                            ) = proj
+                            {
+                                counts[value_id.index()] += 1;
+                            }
+                        }
+                    }
+                    mir::MirInst::SetDiscriminant { place, .. } => {
+                        counts[place.base.index()] += 1;
+                        for proj in place.projection.iter() {
+                            if let hir::projection::Projection::Index(
+                                hir::projection::IndexSource::Dynamic(value_id),
+                            ) = proj
+                            {
+                                counts[value_id.index()] += 1;
+                            }
+                        }
+                    }
                 }
             }
             match &block.terminator {

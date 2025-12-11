@@ -15,7 +15,7 @@ use crate::analysis::{
 #[derive(Debug)]
 pub struct ConstTyId<'db> {
     #[return_ref]
-    pub(crate) data: ConstTyData<'db>,
+    pub data: ConstTyData<'db>,
 }
 
 #[salsa::tracked]

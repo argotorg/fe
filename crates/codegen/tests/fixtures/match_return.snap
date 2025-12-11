@@ -1,11 +1,10 @@
 ---
 source: crates/codegen/tests/yul.rs
-assertion_line: 31
 expression: output
 input_file: tests/fixtures/match_return.fe
 ---
 function f(e) {
-  switch get_discriminant__MemPtr__d0292394fccae3e4(e)
+  switch mload(e)
     case 0 {
       return(0, 0)
     }
@@ -14,10 +13,4 @@ function f(e) {
     }
     default {
     }
-}
-function get_discriminant__MemPtr__d0292394fccae3e4(addr) -> ret {
-  ret := load__MemPtr__d0292394fccae3e4(addr)
-}
-function load__MemPtr__d0292394fccae3e4(addr) -> ret {
-  ret := mload(addr)
 }

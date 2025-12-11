@@ -21,40 +21,35 @@ object "ShapeDispatcher" {
         mstore(v0, value)
         return(v0, 32)
       }
-      function alloc(size) -> ret {
-        let v0 := mload(64)
-        let v1 := eq(v0, 0)
-        if v1 {
-          v0 := 128
-          mstore(64, add(v0, size))
-          ret := v0
-        }
-        if iszero(v1) {
-          mstore(64, add(v0, size))
-          ret := v0
-        }
-      }
       function dispatch() {
         let v0 := shr(224, calldataload(0))
         let v1 := eq(v0, 151146943)
         if v1 {
           let v2 := calldataload(4)
           let v3 := calldataload(36)
-          let v4 := alloc(64)
-          store_field__deduped(v4, 0, v2)
-          store_field__deduped(v4, 32, v3)
+          let v4 := mload(0x40)
+          if iszero(v4) {
+            v4 := 0x80
+          }
+          mstore(0x40, add(v4, 64))
+          mstore(v4, v2)
+          mstore(add(v4, 32), v3)
           let v5 := v4
-          store_field__deduped(v5, 0, add(mload(v5), 1))
-          store_field__deduped(v5, 32, add(mload(add(v5, 32)), 2))
+          mstore(v5, add(mload(v5), 1))
+          mstore(add(v5, 32), add(mload(add(v5, 32)), 2))
           let v6 := point_area_mem(v5)
           abi_encode(v6)
           let v7 := eq(v0, 2066295049)
           if v7 {
             let v8 := calldataload(4)
-            let v9 := alloc(32)
-            store_field__deduped(v9, 0, v8)
+            let v9 := mload(0x40)
+            if iszero(v9) {
+              v9 := 0x80
+            }
+            mstore(0x40, add(v9, 32))
+            mstore(v9, v8)
             let v10 := v9
-            store_field__deduped(v10, 0, add(mload(v10), 3))
+            mstore(v10, add(mload(v10), 3))
             v6 := square_area_mem(v10)
             abi_encode(v6)
             return(0, 0)
@@ -67,10 +62,14 @@ object "ShapeDispatcher" {
           let v11 := eq(v0, 2066295049)
           if v11 {
             let v12 := calldataload(4)
-            let v13 := alloc(32)
-            store_field__deduped(v13, 0, v12)
+            let v13 := mload(0x40)
+            if iszero(v13) {
+              v13 := 0x80
+            }
+            mstore(0x40, add(v13, 32))
+            mstore(v13, v12)
             let v14 := v13
-            store_field__deduped(v14, 0, add(mload(v14), 3))
+            mstore(v14, add(mload(v14), 3))
             let v15 := square_area_mem(v14)
             abi_encode(v15)
             return(0, 0)
@@ -86,16 +85,6 @@ object "ShapeDispatcher" {
       function square_area_mem(self) -> ret {
         let v0 := mload(self)
         ret := mul(v0, v0)
-      }
-      function store__MemPtr__d0292394fccae3e4(addr, value) {
-        mstore(addr, value)
-      }
-      function store_field__deduped(ptr, offset, value) {
-        let v0 := add(ptr, offset)
-        store__MemPtr__d0292394fccae3e4(v0, to_word__deduped(value))
-      }
-      function to_word__deduped(self) -> ret {
-        ret := self
       }
     }
   }

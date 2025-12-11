@@ -21,19 +21,6 @@ object "Coin" {
         mstore(v0, value)
         return(v0, 32)
       }
-      function alloc(size) -> ret {
-        let v0 := mload(64)
-        let v1 := eq(v0, 0)
-        if v1 {
-          v0 := 128
-          mstore(64, add(v0, size))
-          ret := v0
-        }
-        if iszero(v1) {
-          mstore(64, add(v0, size))
-          ret := v0
-        }
-      }
       function balance_of_raw(user, store) -> ret {
         let v0 := 0
         switch user
@@ -46,20 +33,14 @@ object "Coin" {
         ret := v0
       }
       function credit_alice(amount, store, supply) -> ret {
-        store_field__deduped(store, 0, add(sload(store), amount))
-        store_field__deduped(supply, 0, add(sload(supply), amount))
+        sstore(store, add(sload(store), amount))
+        sstore(supply, add(sload(supply), amount))
         ret := sload(store)
       }
       function credit_bob(amount, store, supply) -> ret {
-        store_field__deduped(store, 1, add(sload(add(store, 1)), amount))
-        store_field__deduped(supply, 0, add(sload(supply), amount))
+        sstore(add(store, 1), add(sload(add(store, 1)), amount))
+        sstore(supply, add(sload(supply), amount))
         ret := sload(add(store, 1))
-      }
-      function get_discriminant__MemPtr__d0292394fccae3e4(addr) -> ret {
-        ret := load__MemPtr__d0292394fccae3e4(addr)
-      }
-      function load__MemPtr__d0292394fccae3e4(addr) -> ret {
-        ret := mload(addr)
       }
       function runtime() {
         let v0 := 0
@@ -114,58 +95,58 @@ object "Coin" {
             return(0, 0)
           }
       }
-      function store__MemPtr__d0292394fccae3e4(addr, value) {
-        mstore(addr, value)
-      }
-      function store__StorPtr__7f7854645e12e266(addr, value) {
-        sstore(addr, value)
-      }
-      function store_discriminant__MemPtr__d0292394fccae3e4(addr, discriminant) {
-        store__MemPtr__d0292394fccae3e4(addr, discriminant)
-      }
-      function store_field__deduped(ptr, offset, value) {
-        let v0 := add(ptr, offset)
-        store__StorPtr__7f7854645e12e266(v0, to_word__deduped(value))
-      }
-      function to_word__deduped(self) -> ret {
-        ret := self
-      }
       function total_supply(supply) -> ret {
         ret := sload(supply)
       }
       function transfer_from_alice(amount, store) -> ret {
         let v0 := lt(sload(store), amount)
         if v0 {
-          let v1 := alloc(32)
-          store_discriminant__MemPtr__d0292394fccae3e4(v1, 1)
+          let v1 := mload(0x40)
+          if iszero(v1) {
+            v1 := 0x80
+          }
+          mstore(0x40, add(v1, 32))
+          mstore(v1, 1)
           ret := v1
         }
         if iszero(v0) {
-          store_field__deduped(store, 0, sub(sload(store), amount))
-          store_field__deduped(store, 1, add(sload(add(store, 1)), amount))
-          let v2 := alloc(32)
-          store_discriminant__MemPtr__d0292394fccae3e4(v2, 0)
+          sstore(store, sub(sload(store), amount))
+          sstore(add(store, 1), add(sload(add(store, 1)), amount))
+          let v2 := mload(0x40)
+          if iszero(v2) {
+            v2 := 0x80
+          }
+          mstore(0x40, add(v2, 32))
+          mstore(v2, 0)
           ret := v2
         }
       }
       function transfer_from_bob(amount, store) -> ret {
         let v0 := lt(sload(add(store, 1)), amount)
         if v0 {
-          let v1 := alloc(32)
-          store_discriminant__MemPtr__d0292394fccae3e4(v1, 1)
+          let v1 := mload(0x40)
+          if iszero(v1) {
+            v1 := 0x80
+          }
+          mstore(0x40, add(v1, 32))
+          mstore(v1, 1)
           ret := v1
         }
         if iszero(v0) {
-          store_field__deduped(store, 1, sub(sload(add(store, 1)), amount))
-          store_field__deduped(store, 0, add(sload(store), amount))
-          let v2 := alloc(32)
-          store_discriminant__MemPtr__d0292394fccae3e4(v2, 0)
+          sstore(add(store, 1), sub(sload(add(store, 1)), amount))
+          sstore(store, add(sload(store), amount))
+          let v2 := mload(0x40)
+          if iszero(v2) {
+            v2 := 0x80
+          }
+          mstore(0x40, add(v2, 32))
+          mstore(v2, 0)
           ret := v2
         }
       }
       function transfer_result_code(res) -> ret {
         let v0 := 0
-        switch get_discriminant__MemPtr__d0292394fccae3e4(res)
+        switch mload(res)
           case 0 {
             v0 := 0
           }

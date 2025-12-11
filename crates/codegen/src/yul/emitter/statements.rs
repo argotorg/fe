@@ -3,10 +3,14 @@
 //! The functions defined in this module operate within `FunctionEmitter` and walk
 //! straight-line MIR instructions (non-terminators) to produce Yul statements.
 
-use hir::analysis::ty::decision_tree::{Projection, ProjectionPath};
-use hir::hir_def::{Expr, ExprId, Pat, PatId, expr::ArithBinOp};
+use hir::analysis::ty::ty_check::LocalBinding;
+use hir::hir_def::{
+    Expr, ExprId, Partial, Pat, PatId,
+    expr::{ArithBinOp, BinOp},
+};
+use hir::projection::Projection;
 use mir::ir::{IntrinsicOp, IntrinsicValue};
-use mir::{self, ValueId, ValueOrigin};
+use mir::{self, MirProjectionPath, ValueId, ValueOrigin, layout};
 
 use crate::yul::{doc::YulDoc, state::BlockState};
 
@@ -20,9 +24,10 @@ impl<'db> FunctionEmitter<'db> {
         value: ValueId,
         state: &BlockState,
     ) -> Result<bool, YulError> {
-        let Expr::Field(..) = self.expect_expr(target)? else {
-            return Ok(false);
-        };
+        match self.expect_expr(target)? {
+            Expr::Field(..) | Expr::Bin(_, _, BinOp::Index) => {}
+            _ => return Ok(false),
+        }
         let Some(value_id) = self.mir_func.body.expr_values.get(&target).copied() else {
             return Err(YulError::Unsupported(
                 "missing lowered value for field assignment target".into(),
@@ -53,8 +58,9 @@ impl<'db> FunctionEmitter<'db> {
         op: ArithBinOp,
         state: &BlockState,
     ) -> Result<bool, YulError> {
-        let Expr::Field(..) = self.expect_expr(target)? else {
-            return Ok(false);
+        match self.expect_expr(target)? {
+            Expr::Field(..) | Expr::Bin(_, _, BinOp::Index) => {}
+            _ => return Ok(false),
         };
         let Some(value_id) = self.mir_func.body.expr_values.get(&target).copied() else {
             return Err(YulError::Unsupported(
@@ -69,7 +75,7 @@ impl<'db> FunctionEmitter<'db> {
         };
 
         let addr = self.lower_place_ref(place, state)?;
-        let lhs = self.lower_expr(target, state)?;
+        let lhs = self.lower_value(value_id, state)?;
         let rhs = self.lower_value(value, state)?;
 
         let updated = match op {
@@ -102,7 +108,7 @@ impl<'db> FunctionEmitter<'db> {
     /// Returns all emitted Yul statements prior to the block terminator.
     pub(super) fn render_statements(
         &mut self,
-        insts: &[mir::MirInst<'_>],
+        insts: &[mir::MirInst<'db>],
         state: &mut BlockState,
     ) -> Result<Vec<YulDoc>, YulError> {
         let mut docs = Vec::new();
@@ -122,7 +128,7 @@ impl<'db> FunctionEmitter<'db> {
     fn emit_inst(
         &mut self,
         docs: &mut Vec<YulDoc>,
-        inst: &mir::MirInst<'_>,
+        inst: &mir::MirInst<'db>,
         state: &mut BlockState,
     ) -> Result<(), YulError> {
         match inst {
@@ -144,6 +150,14 @@ impl<'db> FunctionEmitter<'db> {
             mir::MirInst::IntrinsicStmt { op, args, .. } => {
                 self.emit_intrinsic_inst(docs, *op, args, state)?
             }
+            mir::MirInst::Store { expr, place, value } => {
+                self.emit_store_inst(docs, *expr, place, *value, state)?
+            }
+            mir::MirInst::SetDiscriminant {
+                expr,
+                place,
+                variant,
+            } => self.emit_set_discriminant_inst(docs, *expr, place, *variant, state)?,
         }
         Ok(())
     }
@@ -221,7 +235,7 @@ impl<'db> FunctionEmitter<'db> {
                     let is_aggregate = field_ty.field_count(self.db) > 0;
                     let place = mir::ir::Place::new(
                         value_id,
-                        ProjectionPath::from_projection(Projection::Field(field_idx)),
+                        MirProjectionPath::from_projection(Projection::Field(field_idx)),
                         mir::ir::AddressSpaceKind::Memory,
                     );
                     let value = if is_aggregate {
@@ -381,6 +395,20 @@ impl<'db> FunctionEmitter<'db> {
         bind_value: bool,
         state: &mut BlockState,
     ) -> Result<(), YulError> {
+        let value_data = self.mir_func.body.value(value);
+        if let ValueOrigin::Alloc { size_bytes, .. } = value_data.origin {
+            if !bind_value {
+                return Err(YulError::Unsupported(
+                    "alloc values must be bound to a temporary".into(),
+                ));
+            }
+            let temp = state.alloc_local();
+            self.expr_temps.insert(expr, temp.clone());
+            state.insert_value_temp(value.index(), temp.clone());
+            self.emit_alloc_value(docs, &temp, size_bytes);
+            return Ok(());
+        }
+
         let lowered = self.lower_value(value, state)?;
         if bind_value {
             let temp = state.alloc_local();
@@ -390,7 +418,6 @@ impl<'db> FunctionEmitter<'db> {
             state.insert_value_temp(value.index(), temp.clone());
             docs.push(YulDoc::line(format!("let {temp} := {lowered}")));
         } else {
-            let value_data = self.mir_func.body.value(value);
             let is_call = matches!(value_data.origin, ValueOrigin::Call(..));
             let is_zero_sized = (value_data.ty.is_tuple(self.db)
                 && value_data.ty.field_count(self.db) == 0)
@@ -402,6 +429,290 @@ impl<'db> FunctionEmitter<'db> {
             }
         }
         Ok(())
+    }
+
+    fn emit_alloc_value(&self, docs: &mut Vec<YulDoc>, temp: &str, size_bytes: usize) {
+        let size = size_bytes.to_string();
+        docs.push(YulDoc::line(format!("let {temp} := mload(0x40)")));
+        docs.push(YulDoc::block(
+            format!("if iszero({temp}) "),
+            vec![YulDoc::line(format!("{temp} := 0x80"))],
+        ));
+        docs.push(YulDoc::line(format!("mstore(0x40, add({temp}, {size}))")));
+    }
+
+    fn emit_store_inst(
+        &mut self,
+        docs: &mut Vec<YulDoc>,
+        _expr: ExprId,
+        place: &mir::ir::Place<'db>,
+        value: ValueId,
+        state: &mut BlockState,
+    ) -> Result<(), YulError> {
+        let value_data = self.mir_func.body.value(value);
+        let value_ty = value_data.ty;
+        if self.is_aggregate_ty(value_ty) {
+            if state.value_temp(value.index()).is_none() {
+                let rhs = self.lower_value(value, state)?;
+                let temp = state.alloc_local();
+                state.insert_value_temp(value.index(), temp.clone());
+                docs.push(YulDoc::line(format!("let {temp} := {rhs}")));
+            }
+            let src_space = self.source_address_space(value, mir::ir::AddressSpaceKind::Memory);
+            let src_place = mir::ir::Place::new(value, MirProjectionPath::new(), src_space);
+            return self.emit_store_from_places(docs, place, &src_place, value_ty, state);
+        }
+
+        let addr = self.lower_place_ref(place, state)?;
+        let rhs = self.lower_value(value, state)?;
+        let stored = self.apply_to_word_conversion(&rhs, value_ty);
+        let line = match place.address_space {
+            mir::ir::AddressSpaceKind::Memory => format!("mstore({addr}, {stored})"),
+            mir::ir::AddressSpaceKind::Storage => format!("sstore({addr}, {stored})"),
+        };
+        docs.push(YulDoc::line(line));
+        Ok(())
+    }
+
+    fn emit_store_from_places(
+        &mut self,
+        docs: &mut Vec<YulDoc>,
+        dst_place: &mir::ir::Place<'db>,
+        src_place: &mir::ir::Place<'db>,
+        value_ty: hir::analysis::ty::ty_def::TyId<'db>,
+        state: &mut BlockState,
+    ) -> Result<(), YulError> {
+        if value_ty.is_array(self.db) {
+            let Some(len) = layout::array_len(self.db, value_ty) else {
+                return Err(YulError::Unsupported(
+                    "array store requires a constant length".into(),
+                ));
+            };
+            let elem_ty = layout::array_elem_ty(self.db, value_ty)
+                .ok_or_else(|| YulError::Unsupported("array store requires element type".into()))?;
+            for idx in 0..len {
+                let dst_elem = self.extend_place(
+                    dst_place,
+                    Projection::Index(hir::projection::IndexSource::Constant(idx)),
+                );
+                let src_elem = self.extend_place(
+                    src_place,
+                    Projection::Index(hir::projection::IndexSource::Constant(idx)),
+                );
+                self.emit_store_from_places(docs, &dst_elem, &src_elem, elem_ty, state)?;
+            }
+            return Ok(());
+        }
+
+        if value_ty.field_count(self.db) > 0 {
+            let field_tys = value_ty.field_types(self.db);
+            for (field_idx, field_ty) in field_tys.into_iter().enumerate() {
+                let dst_field = self.extend_place(dst_place, Projection::Field(field_idx));
+                let src_field = self.extend_place(src_place, Projection::Field(field_idx));
+                self.emit_store_from_places(docs, &dst_field, &src_field, field_ty, state)?;
+            }
+            return Ok(());
+        }
+
+        if value_ty
+            .adt_ref(self.db)
+            .is_some_and(|adt| matches!(adt, hir::analysis::ty::adt_def::AdtRef::Enum(_)))
+        {
+            return self.emit_enum_store(docs, dst_place, src_place, value_ty, state);
+        }
+
+        let addr = self.lower_place_ref(dst_place, state)?;
+        let rhs = self.lower_place_load(src_place, value_ty, state)?;
+        let stored = self.apply_to_word_conversion(&rhs, value_ty);
+        let line = match dst_place.address_space {
+            mir::ir::AddressSpaceKind::Memory => format!("mstore({addr}, {stored})"),
+            mir::ir::AddressSpaceKind::Storage => format!("sstore({addr}, {stored})"),
+        };
+        docs.push(YulDoc::line(line));
+        Ok(())
+    }
+
+    fn emit_enum_store(
+        &mut self,
+        docs: &mut Vec<YulDoc>,
+        dst_place: &mir::ir::Place<'db>,
+        src_place: &mir::ir::Place<'db>,
+        enum_ty: hir::analysis::ty::ty_def::TyId<'db>,
+        state: &mut BlockState,
+    ) -> Result<(), YulError> {
+        let src_addr = self.lower_place_ref(src_place, state)?;
+        let dst_addr = self.lower_place_ref(dst_place, state)?;
+        let discr = match dst_place.address_space {
+            mir::ir::AddressSpaceKind::Memory => format!("mload({src_addr})"),
+            mir::ir::AddressSpaceKind::Storage => format!("sload({src_addr})"),
+        };
+        let discr_temp = state.alloc_local();
+        docs.push(YulDoc::line(format!("let {discr_temp} := {discr}")));
+        let store_discr = match dst_place.address_space {
+            mir::ir::AddressSpaceKind::Memory => format!("mstore({dst_addr}, {discr_temp})"),
+            mir::ir::AddressSpaceKind::Storage => format!("sstore({dst_addr}, {discr_temp})"),
+        };
+        docs.push(YulDoc::line(store_discr));
+
+        let Some(adt_def) = enum_ty.adt_def(self.db) else {
+            return Err(YulError::Unsupported("enum store requires enum adt".into()));
+        };
+        let hir::analysis::ty::adt_def::AdtRef::Enum(enm) = adt_def.adt_ref(self.db) else {
+            return Err(YulError::Unsupported("enum store requires enum adt".into()));
+        };
+
+        docs.push(YulDoc::line(format!("switch {discr_temp}")));
+        let variants = adt_def.fields(self.db);
+        for (idx, _) in variants.iter().enumerate() {
+            let enum_variant = hir::hir_def::EnumVariant::new(enm, idx);
+            let ctor = hir::analysis::ty::simplified_pattern::ConstructorKind::Variant(
+                enum_variant,
+                enum_ty,
+            );
+            let field_tys = ctor.field_types(self.db);
+            let mut case_docs = Vec::new();
+            for (field_idx, field_ty) in field_tys.iter().enumerate() {
+                let proj = Projection::VariantField {
+                    variant: enum_variant,
+                    enum_ty,
+                    field_idx,
+                };
+                let dst_field = self.extend_place(dst_place, proj.clone());
+                let src_field = self.extend_place(src_place, proj);
+                self.emit_store_from_places(
+                    &mut case_docs,
+                    &dst_field,
+                    &src_field,
+                    *field_ty,
+                    state,
+                )?;
+            }
+            let literal = idx as u64;
+            docs.push(YulDoc::wide_block(format!("  case {literal} "), case_docs));
+        }
+        docs.push(YulDoc::wide_block("  default ", Vec::new()));
+        Ok(())
+    }
+
+    fn emit_set_discriminant_inst(
+        &mut self,
+        docs: &mut Vec<YulDoc>,
+        _expr: ExprId,
+        place: &mir::ir::Place<'db>,
+        variant: hir::hir_def::EnumVariant<'db>,
+        state: &mut BlockState,
+    ) -> Result<(), YulError> {
+        let addr = self.lower_place_ref(place, state)?;
+        let value = variant.idx as u64;
+        let line = match place.address_space {
+            mir::ir::AddressSpaceKind::Memory => format!("mstore({addr}, {value})"),
+            mir::ir::AddressSpaceKind::Storage => format!("sstore({addr}, {value})"),
+        };
+        docs.push(YulDoc::line(line));
+        Ok(())
+    }
+
+    fn source_address_space(
+        &self,
+        value: ValueId,
+        fallback: mir::ir::AddressSpaceKind,
+    ) -> mir::ir::AddressSpaceKind {
+        let value_data = self.mir_func.body.value(value);
+        match &value_data.origin {
+            ValueOrigin::PlaceRef(place) | ValueOrigin::PlaceLoad(place) => place.address_space,
+            ValueOrigin::Alloc { address_space, .. } => *address_space,
+            ValueOrigin::Expr(expr_id) => self.expr_address_space(*expr_id),
+            _ => fallback,
+        }
+    }
+
+    fn expr_address_space(&self, expr: ExprId) -> mir::ir::AddressSpaceKind {
+        let Some(body) = self.mir_func.typed_body.body() else {
+            return mir::ir::AddressSpaceKind::Memory;
+        };
+        let exprs = body.exprs(self.db);
+        if let Partial::Present(expr_data) = &exprs[expr] {
+            match expr_data {
+                Expr::Field(base, _) => {
+                    if matches!(
+                        self.expr_address_space(*base),
+                        mir::ir::AddressSpaceKind::Storage
+                    ) {
+                        return mir::ir::AddressSpaceKind::Storage;
+                    }
+                }
+                Expr::Bin(base, _, BinOp::Index) => {
+                    if matches!(
+                        self.expr_address_space(*base),
+                        mir::ir::AddressSpaceKind::Storage
+                    ) {
+                        return mir::ir::AddressSpaceKind::Storage;
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        let prop = self.mir_func.typed_body.expr_prop(self.db, expr);
+        if let Some(binding) = prop.binding {
+            self.address_space_for_binding(&binding)
+        } else {
+            mir::ir::AddressSpaceKind::Memory
+        }
+    }
+
+    fn address_space_for_binding(&self, binding: &LocalBinding<'db>) -> mir::ir::AddressSpaceKind {
+        match binding {
+            LocalBinding::EffectParam { idx, .. } => match self
+                .mir_func
+                .effect_provider_kinds
+                .get(*idx)
+                .copied()
+                .unwrap_or(mir::ir::EffectProviderKind::Storage)
+            {
+                mir::ir::EffectProviderKind::Memory => mir::ir::AddressSpaceKind::Memory,
+                mir::ir::EffectProviderKind::Storage => mir::ir::AddressSpaceKind::Storage,
+                mir::ir::EffectProviderKind::Calldata => mir::ir::AddressSpaceKind::Memory,
+            },
+            LocalBinding::Local { pat, .. } => self
+                .mir_func
+                .body
+                .pat_address_space
+                .get(pat)
+                .copied()
+                .unwrap_or(mir::ir::AddressSpaceKind::Memory),
+            LocalBinding::Param { idx, .. } => {
+                if *idx == 0 {
+                    return self
+                        .mir_func
+                        .receiver_space
+                        .unwrap_or(mir::ir::AddressSpaceKind::Memory);
+                }
+                mir::ir::AddressSpaceKind::Memory
+            }
+        }
+    }
+
+    fn extend_place(
+        &self,
+        place: &mir::ir::Place<'db>,
+        proj: Projection<
+            hir::analysis::ty::ty_def::TyId<'db>,
+            hir::hir_def::EnumVariant<'db>,
+            ValueId,
+        >,
+    ) -> mir::ir::Place<'db> {
+        let mut path = place.projection.clone();
+        path.push(proj);
+        mir::ir::Place::new(place.base, path, place.address_space)
+    }
+
+    fn is_aggregate_ty(&self, ty: hir::analysis::ty::ty_def::TyId<'db>) -> bool {
+        ty.field_count(self.db) > 0
+            || ty.is_array(self.db)
+            || ty
+                .adt_ref(self.db)
+                .is_some_and(|adt| matches!(adt, hir::analysis::ty::adt_def::AdtRef::Enum(_)))
     }
 
     /// Emits Yul for a statement-only intrinsic (e.g. `mstore`).

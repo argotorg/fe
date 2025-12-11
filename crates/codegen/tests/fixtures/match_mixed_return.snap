@@ -1,12 +1,11 @@
 ---
 source: crates/codegen/tests/yul.rs
-assertion_line: 31
 expression: output
 input_file: tests/fixtures/match_mixed_return.fe
 ---
 function f(e) -> ret {
   let v0 := 0
-  switch get_discriminant__MemPtr__d0292394fccae3e4(e)
+  switch mload(e)
     case 0 {
       ret := 0
       leave
@@ -18,10 +17,4 @@ function f(e) -> ret {
     }
   let v1 := v0
   ret := add(v1, 1)
-}
-function get_discriminant__MemPtr__d0292394fccae3e4(addr) -> ret {
-  ret := load__MemPtr__d0292394fccae3e4(addr)
-}
-function load__MemPtr__d0292394fccae3e4(addr) -> ret {
-  ret := mload(addr)
 }

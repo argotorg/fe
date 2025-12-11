@@ -24,17 +24,17 @@ use hir::analysis::{
 use hir::hir_def::{
     Attr, AttrArg, AttrArgValue, Body, CallableDef, Const, Expr, ExprId, Field, FieldIndex, Func,
     ItemKind, LitKind, MatchArm, Partial, Pat, PatId, PathId, Stmt, StmtId, TopLevelMod,
-    VariantKind, scope_graph::ScopeId,
+    VariantKind, expr::BinOp, scope_graph::ScopeId,
 };
 
 use crate::{
-    core_lib::{CoreHelper, CoreHelperTy, CoreLib, CoreLibError},
+    core_lib::{CoreHelperTy, CoreLib, CoreLibError},
     ir::{
         AddressSpaceKind, BasicBlock, BasicBlockId, CallOrigin, CodeRegionRoot, ContractFunction,
-        ContractFunctionKind, DecisionTreeBinding, EffectProviderKind, FieldPtrOrigin, IntrinsicOp,
-        IntrinsicValue, LoopInfo, MatchArmLowering, MatchArmPattern, MatchLoweringInfo, MirBody,
-        MirFunction, MirInst, MirModule, Place, SwitchOrigin, SwitchTarget, SwitchValue,
-        SyntheticValue, Terminator, ValueData, ValueId, ValueOrigin,
+        ContractFunctionKind, DecisionTreeBinding, EffectProviderKind, IntrinsicOp, IntrinsicValue,
+        LoopInfo, MatchArmLowering, MatchArmPattern, MatchLoweringInfo, MirBody, MirFunction,
+        MirInst, MirModule, MirProjection, MirProjectionPath, Place, SwitchOrigin, SwitchTarget,
+        SwitchValue, SyntheticValue, Terminator, ValueData, ValueId, ValueOrigin,
     },
     monomorphize::monomorphize_functions,
 };
@@ -89,7 +89,6 @@ pub type MirLowerResult<T> = Result<T, MirLowerError>;
 /// Field type and byte offset information used when lowering record/variant accesses.
 pub(super) struct FieldAccessInfo<'db> {
     pub(super) field_ty: TyId<'db>,
-    pub(super) offset_bytes: usize,
     pub(super) field_idx: usize,
 }
 
@@ -272,7 +271,9 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
     /// # Returns
     /// The completed `MirBody`.
     fn finish(self) -> MirBody<'db> {
-        self.mir_body
+        let mut body = self.mir_body;
+        body.pat_address_space = self.pat_address_space;
+        body
     }
 
     /// Allocates and returns a fresh basic block.
@@ -281,13 +282,6 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
     /// The identifier for the newly created block.
     fn alloc_block(&mut self) -> BasicBlockId {
         self.mir_body.push_block(BasicBlock::new())
-    }
-
-    fn offset_units_for_space(&self, space: AddressSpaceKind, offset_bytes: usize) -> usize {
-        match space {
-            AddressSpaceKind::Memory => offset_bytes,
-            AddressSpaceKind::Storage => offset_bytes / 32,
-        }
     }
 
     /// Sets the terminator for the specified block.
@@ -355,10 +349,21 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         // Propagate storage space through field projections so nested storage fields
         // continue to be treated as storage pointers.
         let exprs = self.body.exprs(self.db);
-        if let Partial::Present(Expr::Field(base, _)) = &exprs[expr] {
-            let base_space = self.expr_address_space(*base);
-            if matches!(base_space, AddressSpaceKind::Storage) {
-                return AddressSpaceKind::Storage;
+        if let Partial::Present(expr_data) = &exprs[expr] {
+            match expr_data {
+                Expr::Field(base, _) => {
+                    let base_space = self.expr_address_space(*base);
+                    if matches!(base_space, AddressSpaceKind::Storage) {
+                        return AddressSpaceKind::Storage;
+                    }
+                }
+                Expr::Bin(base, _, BinOp::Index) => {
+                    let base_space = self.expr_address_space(*base);
+                    if matches!(base_space, AddressSpaceKind::Storage) {
+                        return AddressSpaceKind::Storage;
+                    }
+                }
+                _ => {}
             }
         }
 

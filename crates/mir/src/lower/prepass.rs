@@ -2,6 +2,7 @@
 
 use super::*;
 use hir::analysis::ty::trait_def::assoc_const_body_for_trait_inst;
+use num_traits::ToPrimitive;
 
 impl<'db, 'a> MirBuilder<'db, 'a> {
     /// Helper to iterate expressions and conditionally force value lowering.
@@ -34,7 +35,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
     /// Nothing; fills `expr_values` for field expressions.
     pub(super) fn ensure_field_expr_values(&mut self) {
         self.ensure_expr_values(
-            |expr| matches!(expr, Expr::Field(..)),
+            |expr| matches!(expr, Expr::Field(..) | Expr::Bin(_, _, BinOp::Index)),
             |this, expr_id| {
                 if let Some(value_id) = this.try_lower_field(expr_id) {
                     this.mir_body.expr_values.entry(expr_id).or_insert(value_id);
@@ -130,6 +131,10 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
             self.record_value_address_space(expr, value);
             return value;
         }
+        if let Some(value) = self.try_lower_index(expr) {
+            self.record_value_address_space(expr, value);
+            return value;
+        }
         if let Some(value) = self.try_const_expr(expr) {
             self.record_value_address_space(expr, value);
             return value;
@@ -198,6 +203,27 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         let path = path.to_opt()?;
         let mut visited = FxHashSet::default();
         self.const_literal_from_path(path, self.body.scope(), &mut visited)
+    }
+
+    pub(super) fn const_usize_from_body(&mut self, body: Body<'db>) -> Option<usize> {
+        let expr_id = body.expr(self.db);
+        let expr = match expr_id.data(self.db, body) {
+            Partial::Present(expr) => expr,
+            Partial::Absent => return None,
+        };
+        match expr {
+            Expr::Lit(LitKind::Int(value)) => value.data(self.db).to_usize(),
+            Expr::Path(path) => {
+                let path = path.to_opt()?;
+                let mut visited = FxHashSet::default();
+                let value_id = self.const_literal_from_path(path, body.scope(), &mut visited)?;
+                match &self.mir_body.value(value_id).origin {
+                    ValueOrigin::Synthetic(SyntheticValue::Int(int)) => int.to_usize(),
+                    _ => None,
+                }
+            }
+            _ => None,
+        }
     }
 
     /// Resolves the given path to a const definition in `scope` and lowers it to a literal.

@@ -4,14 +4,18 @@ expression: output
 input_file: tests/fixtures/match_enum_with_data.fe
 ---
 function make_some(value) -> ret {
-  let v0 := alloc(40)
-  store_discriminant__MemPtr__d0292394fccae3e4(v0, 1)
-  store_variant_field__MemPtr_u64__6be88d17f715c1ad(v0, 0, value)
+  let v0 := mload(0x40)
+  if iszero(v0) {
+    v0 := 0x80
+  }
+  mstore(0x40, add(v0, 40))
+  mstore(v0, 1)
+  mstore(add(v0, 32), and(value, 0xffffffffffffffff))
   ret := v0
 }
 function match_option(opt) -> ret {
   let v0 := 0
-  switch get_discriminant__MemPtr__d0292394fccae3e4(opt)
+  switch mload(opt)
     case 1 {
       let v1 := and(mload(add(opt, 32)), 0xffffffffffffffff)
       v0 := v1
@@ -22,36 +26,4 @@ function match_option(opt) -> ret {
     default {
     }
   ret := v0
-}
-function alloc(size) -> ret {
-  let v0 := mload(64)
-  let v1 := eq(v0, 0)
-  if v1 {
-    v0 := 128
-    mstore(64, add(v0, size))
-    ret := v0
-  }
-  if iszero(v1) {
-    mstore(64, add(v0, size))
-    ret := v0
-  }
-}
-function store_discriminant__MemPtr__d0292394fccae3e4(addr, discriminant) {
-  store__MemPtr__d0292394fccae3e4(addr, discriminant)
-}
-function store_variant_field__MemPtr_u64__6be88d17f715c1ad(addr, field_offset, value) {
-  let v0 := add(add(addr, 32), field_offset)
-  store__MemPtr__d0292394fccae3e4(v0, to_word__deduped(value))
-}
-function get_discriminant__MemPtr__d0292394fccae3e4(addr) -> ret {
-  ret := load__MemPtr__d0292394fccae3e4(addr)
-}
-function store__MemPtr__d0292394fccae3e4(addr, value) {
-  mstore(addr, value)
-}
-function to_word__deduped(self) -> ret {
-  ret := self
-}
-function load__MemPtr__d0292394fccae3e4(addr) -> ret {
-  ret := mload(addr)
 }

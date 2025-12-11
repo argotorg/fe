@@ -1,6 +1,5 @@
 ---
 source: crates/codegen/tests/yul.rs
-assertion_line: 31
 expression: output
 input_file: tests/fixtures/bit_ops.fe
 ---
@@ -10,37 +9,18 @@ function bit_ops(x, y) -> ret {
   let v2 := xor(x, y)
   let v3 := shl(8, x)
   let v4 := shr(2, x)
-  let v5 := alloc(160)
-  store_field__deduped(v5, 0, v0)
-  store_field__deduped(v5, 32, v1)
-  store_field__deduped(v5, 64, v2)
-  store_field__deduped(v5, 96, v3)
-  store_field__deduped(v5, 128, v4)
+  let v5 := mload(0x40)
+  if iszero(v5) {
+    v5 := 0x80
+  }
+  mstore(0x40, add(v5, 160))
+  mstore(v5, v0)
+  mstore(add(v5, 32), v1)
+  mstore(add(v5, 64), v2)
+  mstore(add(v5, 96), v3)
+  mstore(add(v5, 128), v4)
   ret := v5
 }
 function pow_op(x, y) -> ret {
   ret := exp(x, y)
-}
-function alloc(size) -> ret {
-  let v0 := mload(64)
-  let v1 := eq(v0, 0)
-  if v1 {
-    v0 := 128
-    mstore(64, add(v0, size))
-    ret := v0
-  }
-  if iszero(v1) {
-    mstore(64, add(v0, size))
-    ret := v0
-  }
-}
-function store_field__deduped(ptr, offset, value) {
-  let v0 := add(ptr, offset)
-  store__MemPtr__d0292394fccae3e4(v0, to_word__deduped(value))
-}
-function to_word__deduped(self) -> ret {
-  ret := self
-}
-function store__MemPtr__d0292394fccae3e4(addr, value) {
-  mstore(addr, value)
 }

@@ -16,12 +16,14 @@ use hir::{
         HirAnalysisDb,
         ty::{
             adt_def::AdtRef,
+            const_ty::{ConstTyData, EvaluatedConstTy},
             simplified_pattern::ConstructorKind,
             ty_def::{PrimTy, TyBase, TyData, TyId, prim_int_bits},
         },
     },
     hir_def::EnumVariant,
 };
+use num_traits::ToPrimitive;
 
 /// Size of an EVM word in bytes (256 bits).
 pub const WORD_SIZE_BYTES: usize = 32;
@@ -68,6 +70,43 @@ pub fn ty_size_bytes(db: &dyn HirAnalysisDb, ty: TyId<'_>) -> Option<usize> {
     }
 
     None
+}
+
+/// Returns the element type for a fixed-size array.
+pub fn array_elem_ty<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> Option<TyId<'db>> {
+    let (base, args) = ty.decompose_ty_app(db);
+    if !base.is_array(db) || args.is_empty() {
+        return None;
+    }
+    Some(args[0])
+}
+
+/// Returns the constant length for a fixed-size array, if available.
+pub fn array_len(db: &dyn HirAnalysisDb, ty: TyId<'_>) -> Option<usize> {
+    let (base, args) = ty.decompose_ty_app(db);
+    if !base.is_array(db) || args.len() < 2 {
+        return None;
+    }
+    let len_ty = args[1];
+    let TyData::ConstTy(const_ty) = len_ty.data(db) else {
+        return None;
+    };
+    match const_ty.data(db) {
+        ConstTyData::Evaluated(EvaluatedConstTy::LitInt(value), _) => value.data(db).to_usize(),
+        _ => None,
+    }
+}
+
+/// Returns the byte stride for an array element, falling back to word alignment.
+pub fn array_elem_stride_bytes(db: &dyn HirAnalysisDb, ty: TyId<'_>) -> Option<usize> {
+    let elem_ty = array_elem_ty(db, ty)?;
+    Some(ty_size_bytes(db, elem_ty).unwrap_or(WORD_SIZE_BYTES))
+}
+
+/// Returns the slot stride for an array element in storage.
+pub fn array_elem_stride_slots(db: &dyn HirAnalysisDb, ty: TyId<'_>) -> Option<usize> {
+    let elem_ty = array_elem_ty(db, ty)?;
+    Some(ty_size_slots(db, elem_ty))
 }
 
 /// Best-effort slot size computation for types in storage.

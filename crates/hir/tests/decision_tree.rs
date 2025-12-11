@@ -94,6 +94,9 @@ fn render_projection_path<'db>(
                     let variant_name = variant.name(db).unwrap_or("?");
                     write!(&mut result, ".{variant_name}[{field_idx}]").unwrap();
                 }
+                Projection::Discriminant => {
+                    write!(&mut result, ".<discriminant>").unwrap();
+                }
                 // Index and Deref not used in pattern matching tests
                 Projection::Index(_) | Projection::Deref => {
                     write!(&mut result, ".<unsupported>").unwrap();

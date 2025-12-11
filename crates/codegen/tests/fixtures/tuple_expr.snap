@@ -1,49 +1,15 @@
 ---
 source: crates/codegen/tests/yul.rs
-assertion_line: 31
 expression: output
 input_file: tests/fixtures/tuple_expr.fe
 ---
 function tuple_expr() -> ret {
-  let v0 := alloc(9)
-  store_field__MemPtr_u64__6be88d17f715c1ad(v0, 0, add(1, 2))
-  store_field__MemPtr_bool__f0f4013260504c52(v0, 8, iszero(0))
-  ret := v0
-}
-function alloc(size) -> ret {
-  let v0 := mload(64)
-  let v1 := eq(v0, 0)
-  if v1 {
-    v0 := 128
-    mstore(64, add(v0, size))
-    ret := v0
+  let v0 := mload(0x40)
+  if iszero(v0) {
+    v0 := 0x80
   }
-  if iszero(v1) {
-    mstore(64, add(v0, size))
-    ret := v0
-  }
-}
-function store_field__MemPtr_u64__6be88d17f715c1ad(ptr, offset, value) {
-  let v0 := add(ptr, offset)
-  store__MemPtr__d0292394fccae3e4(v0, to_word__u64__aee7f05a097ffa16(value))
-}
-function store_field__MemPtr_bool__f0f4013260504c52(ptr, offset, value) {
-  let v0 := add(ptr, offset)
-  store__MemPtr__d0292394fccae3e4(v0, to_word__bool__947c0c03c59c6f07(value))
-}
-function to_word__u64__aee7f05a097ffa16(self) -> ret {
-  ret := self
-}
-function store__MemPtr__d0292394fccae3e4(addr, value) {
-  mstore(addr, value)
-}
-function to_word__bool__947c0c03c59c6f07(self) -> ret {
-  let v0 := 0
-  if self {
-    v0 := 1
-  }
-  if iszero(self) {
-    v0 := 0
-  }
+  mstore(0x40, add(v0, 9))
+  mstore(v0, and(add(1, 2), 0xffffffffffffffff))
+  mstore(add(v0, 8), iszero(iszero(iszero(0))))
   ret := v0
 }

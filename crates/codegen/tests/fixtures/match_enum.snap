@@ -1,12 +1,11 @@
 ---
 source: crates/codegen/tests/yul.rs
-assertion_line: 31
 expression: output
 input_file: tests/fixtures/match_enum.fe
 ---
 function match_enum(e) -> ret {
   let v0 := 0
-  switch get_discriminant__MemPtr__d0292394fccae3e4(e)
+  switch mload(e)
     case 0 {
       v0 := 1
     }
@@ -20,10 +19,4 @@ function match_enum(e) -> ret {
       v0 := 4
     }
   ret := v0
-}
-function get_discriminant__MemPtr__d0292394fccae3e4(addr) -> ret {
-  ret := load__MemPtr__d0292394fccae3e4(addr)
-}
-function load__MemPtr__d0292394fccae3e4(addr) -> ret {
-  ret := mload(addr)
 }

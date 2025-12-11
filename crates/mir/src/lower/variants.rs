@@ -1,9 +1,7 @@
 //! Variant lowering helpers for MIR: handles enum constructor calls and unit variant paths.
 
-use crate::layout;
-
 use super::*;
-use num_bigint::BigUint;
+use hir::projection::Projection;
 
 impl<'db, 'a> MirBuilder<'db, 'a> {
     /// Lowers an enum variant constructor call into allocation and payload/discriminant stores.
@@ -27,8 +25,6 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
             return None;
         };
 
-        let variant_index = variant.idx as u64;
-
         let mut current = Some(block);
         let mut lowered_args = Vec::with_capacity(call_args.len());
         for arg in call_args.iter() {
@@ -48,46 +44,26 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
             return Some((None, value_id));
         };
 
-        let value_id = self.emit_alloc(expr, curr_block, total_size);
-        self.emit_store_discriminant(expr, curr_block, value_id, variant_index);
+        let value_id = self.emit_alloc(expr, curr_block, enum_ty, total_size);
+        self.emit_store_discriminant(expr, curr_block, value_id, variant);
 
-        let mut stores = Vec::with_capacity(lowered_args.len());
-        for (field_idx, arg_value) in lowered_args.iter().enumerate() {
-            let arg_ty = self.typed_body.expr_ty(self.db, call_args[field_idx].expr);
-            let offset = layout::variant_field_offset_bytes_or_word_aligned(
-                self.db, enum_ty, variant, field_idx,
-            );
-            stores.push((offset, arg_ty, *arg_value));
-        }
-        let ptr_ty = match self.value_address_space(value_id) {
-            AddressSpaceKind::Memory => self.core.helper_ty(CoreHelperTy::MemPtr),
-            AddressSpaceKind::Storage => self.core.helper_ty(CoreHelperTy::StorPtr),
-        };
-        for (offset_bytes, field_ty, field_value) in stores {
-            let callable =
-                self.core
-                    .make_callable(expr, CoreHelper::StoreVariantField, &[ptr_ty, field_ty]);
-            let offset_value = self.synthetic_u256(BigUint::from(offset_bytes));
-            let store_ret_ty = callable.ret_ty(self.db);
-            let store_call = self.mir_body.alloc_value(ValueData {
-                ty: store_ret_ty,
-                origin: ValueOrigin::Call(CallOrigin {
-                    expr,
-                    callable,
-                    args: vec![value_id, offset_value, field_value],
-                    effect_args: Vec::new(),
-                    effect_kinds: Vec::new(),
-                    receiver_space: None,
-                    resolved_name: None,
+        let addr_space = self.value_address_space(value_id);
+        for (field_idx, field_value) in lowered_args.iter().enumerate() {
+            let place = Place::new(
+                value_id,
+                MirProjectionPath::from_projection(Projection::VariantField {
+                    variant,
+                    enum_ty,
+                    field_idx,
                 }),
-            });
-
+                addr_space,
+            );
             self.push_inst(
                 curr_block,
-                MirInst::EvalExpr {
+                MirInst::Store {
                     expr,
-                    value: store_call,
-                    bind_value: false,
+                    place,
+                    value: *field_value,
                 },
             );
         }
@@ -119,15 +95,14 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
             return None;
         }
 
-        let variant_index = variant.variant.idx as u64;
         let enum_ty = self.typed_body.expr_ty(self.db, expr);
 
         let enum_size = self.enum_size_bytes(enum_ty).unwrap_or(64);
 
         let curr_block = block;
 
-        let value_id = self.emit_alloc(expr, curr_block, enum_size);
-        self.emit_store_discriminant(expr, curr_block, value_id, variant_index);
+        let value_id = self.emit_alloc(expr, curr_block, enum_ty, enum_size);
+        self.emit_store_discriminant(expr, curr_block, value_id, variant.variant);
 
         Some((Some(curr_block), value_id))
     }

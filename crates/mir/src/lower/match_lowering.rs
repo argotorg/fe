@@ -415,7 +415,6 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
             &switch_node.occurrence,
             ctx.scrutinee_value,
             ctx.scrutinee_ty,
-            ctx.match_expr,
         );
 
         // Recursively lower each case
@@ -477,7 +476,6 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         path: &ProjectionPath<'db>,
         scrutinee_value: ValueId,
         scrutinee_ty: TyId<'db>,
-        match_expr: ExprId,
     ) -> ValueId {
         // Helper to check if a type is an enum
         fn is_enum_type(db: &dyn HirAnalysisDb, ty: TyId<'_>) -> bool {
@@ -495,36 +493,33 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
             if !is_enum_type(self.db, scrutinee_ty) {
                 return scrutinee_value;
             }
-            // Fall through to enum handling below
-            let ptr_ty = match self.value_address_space(scrutinee_value) {
-                AddressSpaceKind::Memory => self.core.helper_ty(CoreHelperTy::MemPtr),
-                AddressSpaceKind::Storage => self.core.helper_ty(CoreHelperTy::StorPtr),
-            };
-            let callable =
-                self.core
-                    .make_callable(match_expr, CoreHelper::GetDiscriminant, &[ptr_ty]);
-            let ty = callable.ret_ty(self.db);
+            let addr_space = self.value_address_space(scrutinee_value);
+            let place = Place::new(
+                scrutinee_value,
+                MirProjectionPath::from_projection(MirProjection::Discriminant),
+                addr_space,
+            );
             return self.mir_body.alloc_value(ValueData {
-                ty,
-                origin: ValueOrigin::Call(CallOrigin {
-                    expr: match_expr,
-                    callable,
-                    args: vec![scrutinee_value],
-                    effect_args: Vec::new(),
-                    effect_kinds: Vec::new(),
-                    receiver_space: None,
-                    resolved_name: None,
-                }),
+                ty: self.u256_ty(),
+                origin: ValueOrigin::PlaceLoad(place),
             });
         }
 
         // Compute the result type of the projection
         let result_ty = self.compute_projection_result_type(scrutinee_ty, path);
         let addr_space = self.value_address_space(scrutinee_value);
-        let is_aggregate = result_ty.field_count(self.db) > 0;
+        let is_aggregate = result_ty.field_count(self.db) > 0
+            || result_ty.is_array(self.db)
+            || result_ty
+                .adt_ref(self.db)
+                .is_some_and(|adt| matches!(adt, AdtRef::Enum(_)));
 
         // Build Place with the full projection path
-        let place = Place::new(scrutinee_value, path.clone(), addr_space);
+        let place = Place::new(
+            scrutinee_value,
+            self.mir_projection_from_decision_path(path),
+            addr_space,
+        );
 
         // Use PlaceRef for aggregates (returns pointer), PlaceLoad for scalars (loads value)
         let origin = if is_aggregate {
@@ -541,25 +536,12 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
 
         // For enums, extract the discriminant for switching
         if is_enum_type(self.db, result_ty) {
-            let ptr_ty = match self.value_address_space(current_value) {
-                AddressSpaceKind::Memory => self.core.helper_ty(CoreHelperTy::MemPtr),
-                AddressSpaceKind::Storage => self.core.helper_ty(CoreHelperTy::StorPtr),
-            };
-            let callable =
-                self.core
-                    .make_callable(match_expr, CoreHelper::GetDiscriminant, &[ptr_ty]);
-            let ty = callable.ret_ty(self.db);
+            let mut discr_path = self.mir_projection_from_decision_path(path);
+            discr_path.push(MirProjection::Discriminant);
+            let place = Place::new(scrutinee_value, discr_path, addr_space);
             return self.mir_body.alloc_value(ValueData {
-                ty,
-                origin: ValueOrigin::Call(CallOrigin {
-                    expr: match_expr,
-                    callable,
-                    args: vec![current_value],
-                    effect_args: Vec::new(),
-                    effect_kinds: Vec::new(),
-                    receiver_space: None,
-                    resolved_name: None,
-                }),
+                ty: self.u256_ty(),
+                origin: ValueOrigin::PlaceLoad(place),
             });
         }
 
@@ -598,13 +580,21 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
 
         // Compute the final type by walking the projection path
         let final_ty = self.compute_projection_result_type(scrutinee_ty, path);
-        let is_aggregate = final_ty.field_count(self.db) > 0;
+        let is_aggregate = final_ty.field_count(self.db) > 0
+            || final_ty.is_array(self.db)
+            || final_ty
+                .adt_ref(self.db)
+                .is_some_and(|adt| matches!(adt, AdtRef::Enum(_)));
 
         // Track address space for the result
         let addr_space = self.value_address_space(scrutinee_value);
 
         // Create the Place
-        let place = Place::new(scrutinee_value, path.clone(), addr_space);
+        let place = Place::new(
+            scrutinee_value,
+            self.mir_projection_from_decision_path(path),
+            addr_space,
+        );
 
         let place_ref_id = self.mir_body.alloc_value(ValueData {
             ty: final_ty,
@@ -665,16 +655,21 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                     }
                 }
 
-                // Index projections use Infallible for the dynamic index type in HIR,
-                // so Dynamic(...) is impossible to construct. Constant index would
-                // require array pattern support which doesn't exist yet.
-                // Return invalid type for error recovery.
-                Projection::Index(idx_source) => match idx_source {
-                    hir::projection::IndexSource::Constant(_) => {
+                Projection::Discriminant => {
+                    current_ty = self.u256_ty();
+                }
+                Projection::Index(idx_source) => {
+                    let (base, args) = current_ty.decompose_ty_app(self.db);
+                    if !base.is_array(self.db) || args.is_empty() {
                         return TyId::invalid(self.db, InvalidCause::Other);
                     }
-                    hir::projection::IndexSource::Dynamic(infallible) => match *infallible {},
-                },
+                    match idx_source {
+                        hir::projection::IndexSource::Constant(_) => {
+                            current_ty = args[0];
+                        }
+                        hir::projection::IndexSource::Dynamic(infallible) => match *infallible {},
+                    }
+                }
                 Projection::Deref => {
                     return TyId::invalid(self.db, InvalidCause::Other);
                 }
@@ -682,6 +677,38 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         }
 
         current_ty
+    }
+
+    fn mir_projection_from_decision_path(
+        &self,
+        path: &ProjectionPath<'db>,
+    ) -> MirProjectionPath<'db> {
+        let mut projection = MirProjectionPath::new();
+        for proj in path.iter() {
+            match proj {
+                Projection::Field(idx) => projection.push(MirProjection::Field(*idx)),
+                Projection::VariantField {
+                    variant,
+                    enum_ty,
+                    field_idx,
+                } => projection.push(MirProjection::VariantField {
+                    variant: *variant,
+                    enum_ty: *enum_ty,
+                    field_idx: *field_idx,
+                }),
+                Projection::Discriminant => projection.push(MirProjection::Discriminant),
+                Projection::Index(idx_source) => match idx_source {
+                    hir::projection::IndexSource::Constant(idx) => {
+                        projection.push(MirProjection::Index(
+                            hir::projection::IndexSource::Constant(*idx),
+                        ));
+                    }
+                    hir::projection::IndexSource::Dynamic(infallible) => match *infallible {},
+                },
+                Projection::Deref => projection.push(MirProjection::Deref),
+            }
+        }
+        projection
     }
 
     /// Collects all bindings from decision tree leaves, grouped by arm index.

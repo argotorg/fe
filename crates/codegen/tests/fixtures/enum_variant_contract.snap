@@ -22,36 +22,21 @@ object "EnumContract" {
         mstore(v0, value)
         return(v0, 32)
       }
-      function alloc(size) -> ret {
-        let v0 := mload(64)
-        let v1 := eq(v0, 0)
-        if v1 {
-          v0 := 128
-          mstore(64, add(v0, size))
-          ret := v0
-        }
-        if iszero(v1) {
-          mstore(64, add(v0, size))
-          ret := v0
-        }
-      }
-      function get_discriminant__MemPtr__d0292394fccae3e4(addr) -> ret {
-        ret := load__MemPtr__d0292394fccae3e4(addr)
-      }
-      function load__MemPtr__d0292394fccae3e4(addr) -> ret {
-        ret := mload(addr)
-      }
       function runtime() {
         let v0 := shr(224, calldataload(0))
         let v1 := eq(v0, 1817627404)
         if v1 {
           let v2 := calldataload(4)
-          let v3 := alloc(64)
-          store_discriminant__MemPtr__d0292394fccae3e4(v3, 1)
-          store_variant_field__MemPtr_u256__97fe9178c4597e85(v3, 0, v2)
+          let v3 := mload(0x40)
+          if iszero(v3) {
+            v3 := 0x80
+          }
+          mstore(0x40, add(v3, 64))
+          mstore(v3, 1)
+          mstore(add(v3, 32), v2)
           let v4 := v3
           let v5 := 0
-          switch get_discriminant__MemPtr__d0292394fccae3e4(v4)
+          switch mload(v4)
             case 1 {
               let v6 := mload(add(v4, 32))
               v5 := v6
@@ -68,11 +53,15 @@ object "EnumContract" {
         if iszero(v1) {
           let v8 := eq(v0, 1163776883)
           if v8 {
-            let v9 := alloc(64)
-            store_discriminant__MemPtr__d0292394fccae3e4(v9, 0)
+            let v9 := mload(0x40)
+            if iszero(v9) {
+              v9 := 0x80
+            }
+            mstore(0x40, add(v9, 64))
+            mstore(v9, 0)
             let v10 := v9
             let v11 := 0
-            switch get_discriminant__MemPtr__d0292394fccae3e4(v10)
+            switch mload(v10)
               case 1 {
                 let v12 := mload(add(v10, 32))
                 v11 := v12
@@ -90,12 +79,16 @@ object "EnumContract" {
             let v14 := eq(v0, 3572425762)
             if v14 {
               let v15 := calldataload(4)
-              let v16 := alloc(64)
-              store_discriminant__MemPtr__d0292394fccae3e4(v16, 1)
-              store_variant_field__MemPtr_u256__97fe9178c4597e85(v16, 0, v15)
+              let v16 := mload(0x40)
+              if iszero(v16) {
+                v16 := 0x80
+              }
+              mstore(0x40, add(v16, 64))
+              mstore(v16, 1)
+              mstore(add(v16, 32), v15)
               let v17 := v16
               let v18 := 0
-              switch get_discriminant__MemPtr__d0292394fccae3e4(v17)
+              switch mload(v17)
                 case 1 {
                   v18 := 1
                 }
@@ -113,19 +106,6 @@ object "EnumContract" {
             }
           }
         }
-      }
-      function store__MemPtr__d0292394fccae3e4(addr, value) {
-        mstore(addr, value)
-      }
-      function store_discriminant__MemPtr__d0292394fccae3e4(addr, discriminant) {
-        store__MemPtr__d0292394fccae3e4(addr, discriminant)
-      }
-      function store_variant_field__MemPtr_u256__97fe9178c4597e85(addr, field_offset, value) {
-        let v0 := add(add(addr, 32), field_offset)
-        store__MemPtr__d0292394fccae3e4(v0, to_word__deduped(value))
-      }
-      function to_word__deduped(self) -> ret {
-        ret := self
       }
     }
   }
