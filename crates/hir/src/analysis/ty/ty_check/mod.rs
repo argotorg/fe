@@ -25,7 +25,8 @@ pub use callable::Callable;
 use env::TyCheckEnv;
 pub use env::{EffectParamSite, ExprProp, LocalBinding, ParamSite};
 pub(super) use expr::TraitOps;
-use owner::BodyOwner;
+pub use owner::BodyOwner;
+pub use owner::EffectParamOwner;
 
 use rustc_hash::{FxHashMap, FxHashSet};
 use salsa::Update;
@@ -53,10 +54,10 @@ pub fn check_func_body<'db>(
     db: &'db dyn HirAnalysisDb,
     func: Func<'db>,
 ) -> (Vec<FuncBodyDiag<'db>>, TypedBody<'db>) {
-    check_body_owner(db, BodyOwner::Func(func))
+    check_body(db, BodyOwner::Func(func))
 }
 
-pub(super) fn check_body_owner<'db>(
+pub(super) fn check_body<'db>(
     db: &'db dyn HirAnalysisDb,
     owner: BodyOwner<'db>,
 ) -> (Vec<FuncBodyDiag<'db>>, TypedBody<'db>) {
@@ -85,15 +86,24 @@ impl<'db> TyChecker<'db> {
     }
 
     fn run(&mut self) {
+        self.check_effect_param_keys_resolve();
+
         if let BodyOwner::ContractRecvArm {
             contract,
-            msg_path,
-            arm,
-            ..
+            recv_idx,
+            arm_idx,
         } = self.env.owner()
         {
             let recv_span = self.env.owner().recv_span().unwrap();
             let arm_span = self.env.owner().recv_arm_span().unwrap();
+            let arm = contract
+                .recv_arm(self.db, recv_idx as usize, arm_idx as usize)
+                .expect("recv arm exists");
+            let msg_path = contract
+                .recvs(self.db)
+                .data(self.db)
+                .get(recv_idx as usize)
+                .and_then(|r| r.msg_path);
             let (pat_ty, ret_ty) =
                 self.resolve_recv_arm_types(contract, msg_path, arm, recv_span.path(), arm_span);
             self.expected = ret_ty;
@@ -104,6 +114,129 @@ impl<'db> TyChecker<'db> {
 
         let root_expr = self.env.body().expr(self.db);
         self.check_expr(root_expr, self.expected);
+    }
+
+    fn check_effect_param_keys_resolve(&mut self) {
+        match self.env.owner() {
+            owner @ BodyOwner::Func(func) => {
+                if let Some(crate::hir_def::ItemKind::Contract(contract)) =
+                    func.scope().parent_item(self.db)
+                {
+                    self.check_contract_scoped_effect_list(owner, contract, func.effects(self.db));
+                } else {
+                    self.check_free_func_effect_list(func, func.effects(self.db));
+                }
+            }
+            owner @ BodyOwner::ContractRecvArm { contract, .. } => {
+                self.check_contract_scoped_effect_list(owner, contract, owner.effects(self.db));
+            }
+        }
+    }
+
+    fn check_free_func_effect_list(
+        &mut self,
+        func: Func<'db>,
+        effects: crate::hir_def::EffectParamListId<'db>,
+    ) {
+        for (idx, effect) in effects.data(self.db).iter().enumerate() {
+            let Some(key_path) = effect.key_path.to_opt() else {
+                continue;
+            };
+
+            if crate::analysis::name_resolution::resolve_path(
+                self.db,
+                key_path,
+                func.scope(),
+                self.env.assumptions(),
+                false,
+            )
+            .is_err()
+            {
+                self.push_diag(BodyDiag::InvalidEffectKey {
+                    owner: EffectParamOwner::Func(func),
+                    key: key_path,
+                    idx,
+                });
+            }
+        }
+    }
+
+    fn check_contract_scoped_effect_list(
+        &mut self,
+        owner: BodyOwner<'db>,
+        contract: Contract<'db>,
+        effects: crate::hir_def::EffectParamListId<'db>,
+    ) {
+        let owner = match owner {
+            BodyOwner::Func(func) => EffectParamOwner::Func(func),
+            BodyOwner::ContractRecvArm {
+                contract,
+                recv_idx,
+                arm_idx,
+            } => EffectParamOwner::ContractRecvArm {
+                contract,
+                recv_idx,
+                arm_idx,
+            },
+        };
+        let contract_effect_names: FxHashSet<_> = contract
+            .effects(self.db)
+            .data(self.db)
+            .iter()
+            .filter_map(|e| e.name)
+            .collect();
+        let contract_field_names: FxHashSet<_> = crate::hir_def::FieldParent::Contract(contract)
+            .fields(self.db)
+            .filter_map(|f| f.name(self.db))
+            .collect();
+
+        for (idx, effect) in effects.data(self.db).iter().enumerate() {
+            let Some(key_path) = effect.key_path.to_opt() else {
+                continue;
+            };
+
+            // Labeled effects are always type/trait keyed: `name: Type`.
+            if effect.name.is_some() {
+                if crate::analysis::name_resolution::resolve_path(
+                    self.db,
+                    key_path,
+                    contract.scope(),
+                    self.env.assumptions(),
+                    false,
+                )
+                .is_err()
+                {
+                    self.push_diag(BodyDiag::InvalidEffectKey {
+                        owner,
+                        key: key_path,
+                        idx,
+                    });
+                }
+                continue;
+            }
+
+            // Unlabeled contract-scoped effects refer to a contract field name or an
+            // existing named contract effect (e.g. `ctx`).
+            let Some(ident) = key_path.ident(self.db).to_opt() else {
+                self.push_diag(BodyDiag::InvalidEffectKey {
+                    owner,
+                    key: key_path,
+                    idx,
+                });
+                continue;
+            };
+
+            if key_path.len(self.db) != 1
+                || (!contract_effect_names.contains(&ident)
+                    && !contract_field_names.contains(&ident))
+            {
+                self.push_diag(BodyDiag::InvalidEffectKey {
+                    owner,
+                    key: key_path,
+                    idx,
+                });
+            }
+        }
     }
 
     fn finish(self) -> (Vec<FuncBodyDiag<'db>>, TypedBody<'db>) {

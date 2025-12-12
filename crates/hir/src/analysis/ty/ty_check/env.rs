@@ -222,7 +222,10 @@ impl<'db> TyCheckEnv<'db> {
                 self.effect_env.insert(key, provided);
             }
 
-            if let Some(ident) = effect.name(self.db) {
+            let binding_ident = effect
+                .name(self.db)
+                .or_else(|| key_path.ident(self.db).to_opt());
+            if let Some(ident) = binding_ident {
                 let binding = LocalBinding::EffectParam {
                     site: EffectParamSite::Func(func),
                     idx,
@@ -353,9 +356,12 @@ impl<'db> TyCheckEnv<'db> {
                 contract,
                 recv_idx,
                 arm_idx,
-                arm,
                 ..
             } => {
+                let Some(arm) = contract.recv_arm(self.db, recv_idx as usize, arm_idx as usize)
+                else {
+                    return Vec::new();
+                };
                 vec![
                     (
                         EffectParamSite::Contract(contract),
@@ -470,7 +476,10 @@ impl<'db> TyCheckEnv<'db> {
                     rt
                 }
             }
-            BodyOwner::ContractRecvArm { arm, .. } => {
+            BodyOwner::ContractRecvArm { .. } => {
+                let Some(arm) = self.owner.recv_arm(self.db) else {
+                    return TyId::invalid(self.db, InvalidCause::Other);
+                };
                 let Some(ret_ty) = arm.ret_ty else {
                     return TyId::unit(self.db);
                 };

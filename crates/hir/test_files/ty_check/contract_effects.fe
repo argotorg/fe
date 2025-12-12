@@ -1,0 +1,80 @@
+contract PiggyBank uses (ctx: Ctx) {
+    owner: Address
+    balance: u256
+
+    init(starting: u256) uses (ctx, mut balance, mut owner) {
+        owner = ctx.caller()
+        balance = starting
+    }
+
+    recv BankAction {
+        Deposit { amount } -> u256 uses (mut balance) {
+            balance += amount
+            balance
+        }
+
+        Withdraw { amount } -> bool
+          uses (ctx, owner, mut balance)
+        {
+            withdraw(amount)
+        }
+
+        Balance -> u256 uses (balance) {
+            balance
+        }
+    }
+}
+
+msg BankAction {
+    #[selector = 0]
+    Deposit { amount: u256 } -> u256,
+
+    #[selector = 1]
+    Withdraw { amount: u256 } -> bool,
+
+    #[selector = 2]
+    Balance -> u256,
+}
+
+trait Ctx {
+    fn caller(self) -> Address
+}
+
+struct Address {
+    inner: u256
+}
+
+impl core::ops::Eq for Address {
+    fn eq(self, _ other: Self) -> bool {
+        self.inner == other.inner
+    }
+}
+
+fn withdraw(amount: u256) -> bool
+  uses (ctx: Ctx, owner: Address, mut balance: u256)
+{
+    if ctx.caller() == owner && amount >= balance {
+        balance -= amount
+        true
+    } else {
+        false
+    }
+}
+
+struct MockCtx {
+    caller: Address
+}
+impl Ctx for MockCtx {
+    fn caller(self) -> Address {
+        self.caller
+    }
+}
+
+fn test_withdraw() {
+    let ctx = MockCtx { caller: Address { inner: 0xbeef } }
+    let owner = Address { inner: 0xfe }
+    let mut balance = 100
+    with (Ctx = ctx, Address = owner, u256 = balance) { // xxx with (ctx, owner, balance)
+        let ok = withdraw(amount: 100)
+    }
+}

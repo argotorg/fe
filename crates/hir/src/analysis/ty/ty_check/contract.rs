@@ -4,7 +4,7 @@
 //! recv blocks, and recv arm bodies.
 use rustc_hash::{FxHashMap, FxHashSet};
 
-use super::{TypedBody, check_body_owner, owner::BodyOwner};
+use super::{TypedBody, owner::BodyOwner};
 
 use crate::{
     analysis::{
@@ -17,6 +17,7 @@ use crate::{
             diagnostics::{BodyDiag, FuncBodyDiag},
             trait_def::impls_for_ty,
             trait_resolution::PredicateListId,
+            ty_check::check_body,
             ty_def::TyId,
         },
     },
@@ -74,9 +75,6 @@ pub struct ResolvedRecvVariant<'db> {
 }
 
 /// Resolves a variant path within a msg module.
-/// First tries to resolve from the msg module's scope (for short names like `Transfer`).
-/// If that fails, tries from the contract scope (for qualified paths like `OtherMsg::Foo`).
-/// Returns a `VariantResolution` indicating success or the specific failure reason.
 pub fn resolve_variant_in_msg<'db>(
     db: &'db dyn HirAnalysisDb,
     msg_mod: Mod<'db>,
@@ -554,17 +552,12 @@ pub fn check_contract_recv_arm_body<'db>(
     recv_idx: u32,
     arm_idx: u32,
 ) -> (Vec<FuncBodyDiag<'db>>, TypedBody<'db>) {
-    let recv = contract.recvs(db).data(db).get(recv_idx as usize).unwrap();
-    let arm = *recv.arms.data(db).get(arm_idx as usize).unwrap();
-
-    check_body_owner(
+    check_body(
         db,
         BodyOwner::ContractRecvArm {
             contract,
             recv_idx,
             arm_idx,
-            msg_path: recv.msg_path,
-            arm,
         },
     )
 }

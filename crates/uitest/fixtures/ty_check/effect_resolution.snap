@@ -1,0 +1,47 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/effect_resolution.fe
+---
+error[8-0051]: unresolved effect
+  ┌─ effect_resolution.fe:1:34
+  │
+1 │ contract Mine uses (ctx: Ctx, x: X, y) {
+  │                                  ^ cannot resolve `X` as a type or trait
+  │
+  = consider defining a type or trait named `X`
+  = or bind the effect value with `uses (name: Type)`
+
+error[8-0051]: unresolved effect
+  ┌─ effect_resolution.fe:1:37
+  │
+1 │ contract Mine uses (ctx: Ctx, x: X, y) {
+  │                                     ^ cannot resolve `y` as a type or trait
+  │
+  = consider defining a type or trait named `y`
+  = or bind the effect value with `uses (name: Type)`
+
+error[8-0051]: unresolved effect
+  ┌─ effect_resolution.fe:4:34
+  │
+4 │     init() uses (ctx, mut owner, foo) {
+  │                                  ^^^ unknown effect `foo`
+  │
+  = add it to the contract `uses (...)` clause or add a matching contract field
+
+error[8-0051]: unresolved effect
+  ┌─ effect_resolution.fe:9:38
+  │
+9 │         Hi -> bool uses (ctx, owner, foo) {
+  │                                      ^^^ unknown effect `foo`
+  │
+  = add it to the contract `uses (...)` clause or add a matching contract field
+
+error[8-0051]: unresolved effect
+   ┌─ effect_resolution.fe:35:9
+   │
+35 │   uses (ctx, owner: Address)
+   │         ^^^ cannot resolve `ctx` as a type or trait
+   │
+   = consider defining a type or trait named `ctx`
+   = or bind the effect value with `uses (name: Type)`

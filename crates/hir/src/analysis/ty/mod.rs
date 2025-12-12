@@ -1,3 +1,4 @@
+use crate::analysis::ty::diagnostics::BodyDiag;
 use crate::core::adt_lower::lower_adt;
 use crate::core::hir_def::{
     IdentId, ItemKind, TopLevelMod, Trait, TypeAlias,
@@ -11,6 +12,7 @@ use trait_resolution::constraint::super_trait_cycle;
 use ty_def::{InvalidCause, TyData};
 use ty_lower::lower_type_alias;
 
+use crate::analysis::name_resolution::{PathRes, resolve_path};
 use crate::analysis::{
     HirAnalysisDb, analysis_pass::ModuleAnalysisPass, diagnostics::DiagnosticVoucher,
 };
@@ -158,6 +160,25 @@ impl ModuleAnalysisPass for BodyAnalysisPass {
             .collect();
 
         for &contract in top_mod.all_contracts(db) {
+            // Validate contract-level effects (`contract Foo uses (ctx: Ctx)`).
+            let assumptions = trait_resolution::PredicateListId::empty_list(db);
+            for (idx, effect) in contract.effects(db).data(db).iter().enumerate() {
+                let Some(key_path) = effect.key_path.to_opt() else {
+                    continue;
+                };
+
+                if !matches!(
+                    resolve_path(db, key_path, contract.scope(), assumptions, false),
+                    Ok(PathRes::Ty(_) | PathRes::TyAlias(_, _) | PathRes::Trait(_))
+                ) {
+                    diags.push(Box::new(BodyDiag::InvalidEffectKey {
+                        owner: ty_check::EffectParamOwner::Contract(contract),
+                        key: key_path,
+                        idx,
+                    }) as _);
+                }
+            }
+
             diags.extend(
                 ty_check::check_contract_recv_blocks(db, contract)
                     .iter()

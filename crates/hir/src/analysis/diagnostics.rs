@@ -12,7 +12,7 @@ use crate::analysis::{
             TraitLowerDiag, TyDiagCollection, TyLowerDiag,
         },
         trait_def::TraitInstId,
-        ty_check::RecordLike,
+        ty_check::{EffectParamOwner, RecordLike},
         ty_def::{TyData, TyVarSort},
     },
 };
@@ -1713,6 +1713,56 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                 notes: vec![],
                 error_code,
             },
+
+            Self::InvalidEffectKey { owner, key, idx } => {
+                let idx = *idx;
+                let key_str = key.pretty_print(db);
+                let span = owner.effect_param_path_span(db, idx).resolve(db);
+                let effect = owner.effects(db).data(db).get(idx);
+                let is_labeled = effect.and_then(|e| e.name).is_some();
+                let is_contract_scoped_uses = match owner {
+                    EffectParamOwner::Contract(_) => false,
+                    EffectParamOwner::ContractRecvArm { .. } => true,
+                    EffectParamOwner::Func(func) => matches!(
+                        func.scope().parent_item(db),
+                        Some(crate::hir_def::ItemKind::Contract(_))
+                    ),
+                };
+
+                let message = "unresolved effect".to_string();
+                let severity = Severity::Error;
+                if is_contract_scoped_uses && !is_labeled {
+                    CompleteDiagnostic {
+                        severity,
+                        message,
+                        sub_diagnostics: vec![SubDiagnostic {
+                            style: LabelStyle::Primary,
+                            message: format!("unknown effect `{}`", key_str),
+                            span,
+                        }],
+                        notes: vec![
+                            "add it to the contract `uses (...)` clause or add a matching contract field"
+                                .to_string(),
+                        ],
+                        error_code,
+                    }
+                } else {
+                    CompleteDiagnostic {
+                        severity,
+                        message,
+                        sub_diagnostics: vec![SubDiagnostic {
+                            style: LabelStyle::Primary,
+                            message: format!("cannot resolve `{}` as a type or trait", key_str),
+                            span,
+                        }],
+                        notes: vec![
+                            format!("consider defining a type or trait named `{}`", key_str),
+                            "or bind the effect value with `uses (name: Type)`".to_string(),
+                        ],
+                        error_code,
+                    }
+                }
+            }
 
             Self::MissingEffect { primary, func, key } => {
                 let func_name = func

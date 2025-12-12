@@ -282,7 +282,7 @@ impl<'db> FunctionEmitter<'db> {
                 "cannot determine storage size for effect `{binding_name}`: missing type path"
             ))
         })?;
-        let scope = effect.func().scope();
+        let scope = effect.owner.scope();
         let path_res = resolve_path(
             self.db,
             key_path,

@@ -304,6 +304,20 @@ impl<'db> TyChecker<'db> {
                 continue;
             };
 
+            // If the callee's effect key doesn't resolve, avoid cascading into
+            // confusing "missing effect" diagnostics at call sites.
+            let Ok(path_res) =
+                resolve_path(self.db, key_path, func.scope(), callee_assumptions, false)
+            else {
+                continue;
+            };
+            if !matches!(
+                path_res,
+                PathRes::Ty(_) | PathRes::TyAlias(_, _) | PathRes::Trait(_)
+            ) {
+                continue;
+            }
+
             let cands =
                 self.env
                     .effect_candidates_in_scope(key_path, func.scope(), callee_assumptions);
