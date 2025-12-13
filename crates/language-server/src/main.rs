@@ -1,5 +1,6 @@
 mod backend;
 mod cli;
+mod doc_server;
 mod fallback;
 mod functionality;
 mod logging;
