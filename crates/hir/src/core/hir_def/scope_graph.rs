@@ -10,7 +10,7 @@ use salsa::Update;
 use super::{
     AssocTyDecl, AttrListId, Body, Const, Contract, Enum, EnumVariant, ExprId, FieldDef,
     FieldParent, Func, FuncParam, FuncParamName, GenericParam, IdentId, Impl, ImplTrait, ItemKind,
-    Mod, TopLevelMod, Trait, TypeAlias, Use, VariantDef, VariantKind, Visibility,
+    Mod, Struct, TopLevelMod, Trait, TypeAlias, Use, VariantDef, VariantKind, Visibility,
     scope_graph_viz::ScopeGraphFormatter,
 };
 use crate::{
@@ -652,6 +652,7 @@ item_from_scope! {
     TopLevelMod<'db>,
     Mod<'db>,
     Func<'db>,
+    Struct<'db>,
     Contract<'db>,
     Enum<'db>,
     TypeAlias<'db>,
@@ -800,5 +801,46 @@ mod tests {
 
         let field = scope_graph.children(variant).next().unwrap();
         assert!(matches!(field, ScopeId::Field(FieldParent::Variant(..), _)));
+    }
+
+    #[test]
+    fn msg_variant_fields() {
+        let mut db = TestDb::default();
+
+        // msg blocks are desugared into modules containing structs and impl MsgVariant
+        let text = r#"
+            msg Foo {
+                Bar { a: u8, b: u8 } -> bool,
+            }
+        "#;
+
+        let file = db.standalone_file(text);
+        let scope_graph = db.parse_source(file);
+        let root = scope_graph.top_mod.scope();
+
+        // The msg block becomes a module with #[msg] attribute
+        let msg_mod = scope_graph
+            .children(root)
+            .find(|scope| matches!(scope.item(), ItemKind::Mod(_)))
+            .unwrap();
+        assert!(matches!(msg_mod.item(), ItemKind::Mod(_)));
+
+        // Skip the Use item (prelude) and find the struct
+        let variant_struct = scope_graph
+            .children(msg_mod)
+            .find(|scope| matches!(scope.item(), ItemKind::Struct(_)))
+            .unwrap();
+        assert!(matches!(variant_struct.item(), ItemKind::Struct(_)));
+
+        // Check that there's also an ImplTrait for MsgVariant
+        let impl_trait = scope_graph
+            .children(msg_mod)
+            .find(|scope| matches!(scope.item(), ItemKind::ImplTrait(_)))
+            .unwrap();
+        assert!(matches!(impl_trait.item(), ItemKind::ImplTrait(_)));
+
+        // Fields are now struct fields, not msg variant fields
+        let field = scope_graph.children(variant_struct).next().unwrap();
+        assert!(matches!(field, ScopeId::Field(FieldParent::Struct(..), _)));
     }
 }

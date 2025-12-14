@@ -91,7 +91,8 @@ define_core_helpers! {
         GetVariantField => "core::enum_repr::get_variant_field",
     }
     types {
-        AddressSpace => "core::ptr::AddressSpace",
+        MemPtr => "core::ptr::MemPtr",
+        StorPtr => "core::ptr::StorPtr",
     }
 }
 
@@ -168,7 +169,7 @@ impl<'db> CoreLib<'db> {
     /// Look up a previously resolved core helper type.
     ///
     /// * `self` - Library containing resolved core helper types.
-    /// * `key` - Which helper type to retrieve (e.g. `AddressSpace`).
+    /// * `key` - Which helper type to retrieve (e.g. `MemPtr`).
     ///
     /// Returns the resolved [`TyId`] for the requested helper type.
     pub fn helper_ty(&self, key: CoreHelperTy) -> TyId<'db> {
@@ -209,7 +210,7 @@ impl<'db> CoreLib<'db> {
     ///
     /// * `db` - Analysis database used for name/type queries.
     /// * `body` - The body whose scope anchors path resolution.
-    /// * `path` - Fully-qualified path string (e.g. `"core::ptr::AddressSpace"`).
+    /// * `path` - Fully-qualified path string (e.g. `"core::ptr::MemPtr"`).
     ///
     /// Returns the `TyId` on success or a [`CoreLibError::MissingType`] if resolution fails.
     fn resolve_core_type(

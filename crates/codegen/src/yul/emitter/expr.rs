@@ -6,7 +6,7 @@ use hir::hir_def::{
 };
 use mir::{
     CallOrigin, ValueId, ValueOrigin,
-    ir::{ContractFunctionKind, SyntheticValue},
+    ir::{ContractFunctionKind, FieldPtrOrigin, SyntheticValue},
 };
 
 use crate::yul::{doc::YulDoc, state::BlockState};
@@ -45,6 +45,7 @@ impl<'db> FunctionEmitter<'db> {
             ValueOrigin::Call(call) => self.lower_call_value(call, state),
             ValueOrigin::Intrinsic(intr) => self.lower_intrinsic_value(intr, state),
             ValueOrigin::Synthetic(synth) => self.lower_synthetic_value(synth),
+            ValueOrigin::FieldPtr(field_ptr) => self.lower_field_ptr(field_ptr, state),
             _ => Err(YulError::Unsupported(
                 "only expression-derived values are supported".into(),
             )),
@@ -75,6 +76,15 @@ impl<'db> FunctionEmitter<'db> {
                 ValueOrigin::Synthetic(synth) => {
                     return self.lower_synthetic_value(synth);
                 }
+                ValueOrigin::FieldPtr(field_ptr) => {
+                    return self.lower_field_ptr(field_ptr, state);
+                }
+                ValueOrigin::Intrinsic(intr) => {
+                    return self.lower_intrinsic_value(intr, state);
+                }
+                // For Expr origins, we just continue to process the expression below
+                // to avoid infinite recursion when expr_values[expr_id] points to Expr(expr_id)
+                ValueOrigin::Expr(_) => {}
                 _ => {}
             }
         }
@@ -176,15 +186,14 @@ impl<'db> FunctionEmitter<'db> {
                 Ok(state.resolve_name(&original))
             }
             Expr::Field(..) => {
-                if let Some(value_id) = self.mir_func.body.expr_values.get(&expr_id) {
-                    self.lower_value(*value_id, state)
-                } else {
-                    let ty = self.mir_func.typed_body.expr_ty(self.db, expr_id);
-                    Err(YulError::Unsupported(format!(
-                        "field expressions should be rewritten before codegen (expr type {})",
-                        ty.pretty_print(self.db)
-                    )))
-                }
+                // Field expressions should have been lowered to FieldPtr or get_field calls.
+                // We already handled FieldPtr at the top of lower_expr. If we're here,
+                // the field access wasn't properly lowered.
+                let ty = self.mir_func.typed_body.expr_ty(self.db, expr_id);
+                Err(YulError::Unsupported(format!(
+                    "field expressions should be rewritten before codegen (expr type {})",
+                    ty.pretty_print(self.db)
+                )))
             }
             Expr::RecordInit(..) => {
                 if let Some(temp) = self.expr_temps.get(&expr_id) {
@@ -379,5 +388,24 @@ impl<'db> FunctionEmitter<'db> {
             }
         }
         None
+    }
+
+    /// Lowers a FieldPtr (pointer arithmetic for nested struct access) into a Yul add expression.
+    ///
+    /// * `field_ptr` - The FieldPtrOrigin containing base pointer and offset.
+    /// * `state` - Current bindings for previously-evaluated expressions.
+    ///
+    /// Returns a Yul expression representing `base + offset`.
+    fn lower_field_ptr(
+        &self,
+        field_ptr: &FieldPtrOrigin,
+        state: &BlockState,
+    ) -> Result<String, YulError> {
+        let base = self.lower_value(field_ptr.base, state)?;
+        if field_ptr.offset_bytes == 0 {
+            Ok(base)
+        } else {
+            Ok(format!("add({}, {})", base, field_ptr.offset_bytes))
+        }
     }
 }

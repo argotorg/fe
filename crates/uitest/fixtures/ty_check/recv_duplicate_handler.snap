@@ -1,0 +1,15 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/recv_duplicate_handler.fe
+---
+error[8-0050]: duplicate message handler
+   ┌─ recv_duplicate_handler.fe:32:9
+   │
+ 5 │     Deposit { amount: u64 } -> u64,
+   │     ------- `Deposit` first handled here
+   ·
+32 │         BankMsg::Deposit { amount } -> u64 uses (mut data) {
+   │         ^^^^^^^^^^^^^^^^^^^^^^^^^^^ `Deposit` is already handled
+   │
+   = each message type can only be handled once in a contract

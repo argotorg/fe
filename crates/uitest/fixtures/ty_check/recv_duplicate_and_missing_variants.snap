@@ -1,0 +1,31 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/recv_duplicate_and_missing_variants.fe
+---
+error[8-0000]: type mismatch
+   ┌─ recv_duplicate_and_missing_variants.fe:23:21
+   │
+23 │         Withdraw -> bool {
+   │                     ^^^^ expected `()`, but `bool` is given
+
+error[8-0000]: type mismatch
+   ┌─ recv_duplicate_and_missing_variants.fe:24:13
+   │
+24 │             false
+   │             ^^^^^ expected `()`, but `bool` is given
+
+error[8-0044]: duplicate msg variant in recv block
+   ┌─ recv_duplicate_and_missing_variants.fe:20:9
+   │
+17 │         Deposit {}
+   │         ---------- first handled here
+   ·
+20 │         Deposit {}
+   │         ^^^^^^^^^^ duplicate handling of `Deposit`
+
+error[8-0045]: recv block missing msg variants
+   ┌─ recv_duplicate_and_missing_variants.fe:15:10
+   │
+15 │     recv BankMsg {
+   │          ^^^^^^^ missing variants: Transfer

@@ -51,7 +51,7 @@ pub fn emit_module_yul(
 
     // Emit Yul docs for each function
     let mut function_docs: Vec<Vec<YulDoc>> = Vec::with_capacity(module.functions.len());
-    for func in &module.functions {
+    for func in module.functions.iter() {
         let emitter =
             FunctionEmitter::new(db, func, &code_regions).map_err(EmitModuleError::Yul)?;
         let docs = emitter.emit_doc().map_err(EmitModuleError::Yul)?;

@@ -11,7 +11,9 @@ fn test_basic<T>(x: T) -> <T as Iterator>::Item where T: Iterator {
 }
 
 // Nested qualified types
-fn test_nested<T>(x: T) -> <<T as IntoIterator>::IntoIter as Iterator>::Item where T: IntoIterator {
+fn test_nested<T>(x: T) -> <<T as IntoIterator>::IntoIter as Iterator>::Item
+where T: IntoIterator
+{
     x.into_iter().next()
 }
 

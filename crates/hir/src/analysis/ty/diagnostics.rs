@@ -380,6 +380,74 @@ pub enum BodyDiag<'db> {
     UnreachablePattern {
         primary: DynLazySpan<'db>,
     },
+
+    /// The root path of a recv block doesn't refer to a msg type
+    RecvExpectedMsgType {
+        primary: DynLazySpan<'db>,
+        given: TyId<'db>,
+    },
+
+    /// A recv arm pattern is not a variant of the expected msg type
+    RecvArmNotMsgVariant {
+        primary: DynLazySpan<'db>,
+        msg_name: IdentId<'db>,
+    },
+
+    /// A recv arm return type annotation is required and must match the msg variant
+    RecvArmRetTypeMissing {
+        primary: DynLazySpan<'db>,
+        expected: TyId<'db>,
+    },
+
+    /// A recv arm pattern is duplicated for the same msg variant
+    RecvArmDuplicateVariant {
+        primary: DynLazySpan<'db>,
+        first_use: DynLazySpan<'db>,
+        variant: IdentId<'db>,
+    },
+
+    /// Some msg variants are not covered in the recv block
+    RecvMissingMsgVariants {
+        primary: DynLazySpan<'db>,
+        variants: Vec<IdentId<'db>>,
+    },
+
+    /// Duplicate recv blocks for the same msg type
+    RecvDuplicateMsgBlock {
+        primary: DynLazySpan<'db>,
+        first_use: DynLazySpan<'db>,
+        msg_name: IdentId<'db>,
+    },
+
+    /// Multiple msg variants across recv blocks have the same selector value
+    RecvDuplicateSelector {
+        primary: DynLazySpan<'db>,
+        first_use: DynLazySpan<'db>,
+        selector: u32,
+        first_variant: IdentId<'db>,
+        second_variant: IdentId<'db>,
+    },
+
+    /// A recv arm pattern resolves to a type that implements MsgVariant,
+    /// but is not a variant of the specified msg module
+    RecvArmNotVariantOfMsg {
+        primary: DynLazySpan<'db>,
+        variant_ty: TyId<'db>,
+        msg_name: IdentId<'db>,
+    },
+
+    /// A recv arm pattern resolves to a type that does not implement MsgVariant
+    RecvArmNotMsgVariantTrait {
+        primary: DynLazySpan<'db>,
+        given_ty: TyId<'db>,
+    },
+
+    /// The same message handler type is handled multiple times across recv blocks
+    RecvDuplicateHandler {
+        primary: DynLazySpan<'db>,
+        first_use: DynLazySpan<'db>,
+        handler_ty: TyId<'db>,
+    },
 }
 
 impl<'db> BodyDiag<'db> {
@@ -448,7 +516,7 @@ impl<'db> BodyDiag<'db> {
     ) -> Self {
         let ty = ty.pretty_print(db).to_string();
         let op = ops.op_symbol(db);
-        let trait_path = ops.trait_path(db);
+        let trait_path = ops.core_trait_path(db);
         Self::OpsTraitNotImplemented {
             span,
             ty,
@@ -499,6 +567,16 @@ impl<'db> BodyDiag<'db> {
             Self::NotAMethod { .. } => 33,
             Self::NonExhaustiveMatch { .. } => 34,
             Self::UnreachablePattern { .. } => 35,
+            Self::RecvExpectedMsgType { .. } => 41,
+            Self::RecvArmNotMsgVariant { .. } => 42,
+            Self::RecvArmRetTypeMissing { .. } => 43,
+            Self::RecvArmDuplicateVariant { .. } => 44,
+            Self::RecvMissingMsgVariants { .. } => 45,
+            Self::RecvDuplicateMsgBlock { .. } => 46,
+            Self::RecvDuplicateSelector { .. } => 47,
+            Self::RecvArmNotVariantOfMsg { .. } => 48,
+            Self::RecvArmNotMsgVariantTrait { .. } => 49,
+            Self::RecvDuplicateHandler { .. } => 50,
         }
     }
 }

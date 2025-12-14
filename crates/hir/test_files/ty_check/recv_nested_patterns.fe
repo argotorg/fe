@@ -1,0 +1,153 @@
+// Test nested destructuring patterns in recv arm patterns
+// This tests tuple destructuring in recv arm field patterns
+
+msg TupleMsg {
+    #[selector = 0x01]
+    SetPair { pair: (u64, bool) } -> u64,
+    #[selector = 0x02]
+    SetTriple { triple: (u64, u64, u64) } -> u64,
+    #[selector = 0x03]
+    SetNested { nested: ((u64, u64), bool) } -> u64,
+    #[selector = 0x04]
+    Multi { a: (u64, u64), b: (bool, bool) } -> bool,
+}
+
+pub contract TupleContract {
+    data: u64,
+
+    recv TupleMsg {
+        // Basic tuple destructuring
+        SetPair { pair: (first, second) } -> u64 uses () {
+            if second {
+                first
+            } else {
+                0
+            }
+        }
+
+        // Triple destructuring
+        SetTriple { triple: (a, b, c) } -> u64 uses () {
+            a + b + c
+        }
+
+        // Nested tuple destructuring
+        SetNested { nested: ((x, y), flag) } -> u64 uses () {
+            if flag {
+                x + y
+            } else {
+                0
+            }
+        }
+
+        // Multiple tuple fields
+        Multi { a: (x, y), b: (p, q) } -> bool uses (mut data) {
+            data = x + y
+            p && q
+        }
+    }
+}
+
+// Test with wildcards in tuple patterns
+pub contract WildcardContract {
+    data: u64,
+
+    recv TupleMsg {
+        // Wildcard in tuple
+        SetPair { pair: (val, _) } -> u64 uses () {
+            val
+        }
+
+        // Multiple wildcards
+        SetTriple { triple: (first, _, last) } -> u64 uses () {
+            first + last
+        }
+
+        // Wildcard in nested tuple
+        SetNested { nested: ((x, _), _) } -> u64 uses () {
+            x
+        }
+
+        // Mix of wildcards
+        Multi { a: (_, y), b: (p, _) } -> bool uses (mut data) {
+            data = y
+            p
+        }
+    }
+}
+
+// Test with renamed bindings
+pub contract RenameContract {
+    data: u64,
+
+    recv TupleMsg {
+        SetPair { pair: (amount, is_valid) } -> u64 uses () {
+            if is_valid { amount } else { 0 }
+        }
+
+        SetTriple { triple: (x, y, z) } -> u64 uses () {
+            x + y + z
+        }
+
+        SetNested { nested: ((left, right), enabled) } -> u64 uses () {
+            if enabled { left + right } else { 0 }
+        }
+
+        Multi { a: (ax, ay), b: (b1, b2) } -> bool uses (mut data) {
+            data = ax + ay
+            b1 || b2
+        }
+    }
+}
+
+// Note: Nested record patterns with custom structs would require those structs
+// to be visible within the msg module scope. The tuple destructuring tests above
+// verify that nested patterns work correctly. Below we test error cases.
+
+// Test that type errors in nested patterns are properly reported
+msg ErrorMsg {
+    #[selector = 0x20]
+    TypeMismatch { pair: (u64, u64) } -> u64,
+}
+
+pub contract ErrorContract {
+    data: u64,
+
+    recv ErrorMsg {
+        // This should type check - using the tuple correctly
+        TypeMismatch { pair: (a, b) } -> u64 uses () {
+            a + b
+        }
+    }
+}
+
+// Test deeply nested tuple patterns (3 levels)
+msg DeepMsg {
+    #[selector = 0x30]
+    Deep { nested: (((u64, u64), u64), bool) } -> u64,
+}
+
+pub contract DeepContract {
+    data: u64,
+
+    recv DeepMsg {
+        // Three levels of tuple nesting
+        Deep { nested: (((a, b), c), flag) } -> u64 uses () {
+            if flag {
+                a + b + c
+            } else {
+                0
+            }
+        }
+    }
+}
+
+// Test with rest pattern and wildcards at various nesting levels
+pub contract DeepWildcardContract {
+    data: u64,
+
+    recv DeepMsg {
+        Deep { nested: (((x, _), _), _) } -> u64 uses () {
+            x
+        }
+    }
+}

@@ -1,0 +1,5 @@
+use core::caller
+
+fn who_called() -> u256 {
+    caller()
+}

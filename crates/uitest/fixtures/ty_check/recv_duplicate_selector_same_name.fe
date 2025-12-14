@@ -1,0 +1,25 @@
+msg MsgA {
+    #[selector = 0x01]
+    Foo { x: u64 } -> u64,
+}
+
+msg MsgB {
+    #[selector = 0x01]
+    Foo { y: u64 } -> bool,
+}
+
+pub contract SameNameConflict {
+    data: u64,
+
+    recv MsgA {
+        Foo { x } -> u64 uses () {
+            x
+        }
+    }
+
+    recv MsgB {
+        Foo { y } -> bool uses () {
+            true
+        }
+    }
+}

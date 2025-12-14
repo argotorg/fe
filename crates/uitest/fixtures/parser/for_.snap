@@ -1,7 +1,7 @@
 ---
 source: crates/uitest/tests/parser.rs
 expression: diags
-input_file: crates/uitest/fixtures/parser/for_.fe
+input_file: fixtures/parser/for_.fe
 ---
 error[1-0001]: expected `in`
   ┌─ for_.fe:2:6
@@ -10,16 +10,16 @@ error[1-0001]: expected `in`
   │      ^ expected `in`
 
 error[1-0001]: expected pattern
-  ┌─ for_.fe:4:4
+  ┌─ for_.fe:4:5
   │
 4 │ for in arr { }
-  │    ^ expected pattern
+  │     ^ expected pattern
 
 error[1-0001]: expected pattern
-  ┌─ for_.fe:6:4
+  ┌─ for_.fe:6:5
   │
 6 │ for @ in arr {}
-  │    ^ expected pattern
+  │     ^ expected pattern
 
 error[1-0001]: unexpected syntax while parsing pattern
   ┌─ for_.fe:6:5
@@ -28,10 +28,10 @@ error[1-0001]: unexpected syntax while parsing pattern
   │     ^ unexpected
 
 error[1-0001]: expected pattern
-  ┌─ for_.fe:8:4
+  ┌─ for_.fe:8:5
   │
 8 │ for @ in arr x y {}
-  │    ^ expected pattern
+  │     ^ expected pattern
 
 error[1-0001]: unexpected syntax while parsing pattern
   ┌─ for_.fe:8:5
@@ -44,5 +44,3 @@ error[1-0001]: unexpected syntax while parsing `for` statement
   │
 8 │ for @ in arr x y {}
   │              ^^^ unexpected
-
-

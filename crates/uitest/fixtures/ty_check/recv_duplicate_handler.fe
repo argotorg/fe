@@ -1,0 +1,37 @@
+// Test that the same message type cannot be handled twice across recv blocks
+
+msg BankMsg {
+    #[selector = 0x01]
+    Deposit { amount: u64 } -> u64,
+    #[selector = 0x02]
+    Withdraw { amount: u64 } -> bool,
+}
+
+pub contract DuplicateHandlerContract {
+    data: u64,
+
+    // First recv block handles BankMsg
+    recv BankMsg {
+        Deposit { amount } -> u64 uses (mut data) {
+            data += amount
+            data
+        }
+        Withdraw { amount } -> bool uses (mut data) {
+            if amount > data {
+                false
+            } else {
+                data -= amount
+                true
+            }
+        }
+    }
+
+    // Second bare recv block tries to handle BankMsg::Deposit again
+    // Error: BankMsg::Deposit is already handled
+    recv {
+        BankMsg::Deposit { amount } -> u64 uses (mut data) {
+            data += amount * 2
+            data
+        }
+    }
+}

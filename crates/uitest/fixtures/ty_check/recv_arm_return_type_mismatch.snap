@@ -1,0 +1,28 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/recv_arm_return_type_mismatch.fe
+---
+error[8-0000]: type mismatch
+   ┌─ recv_arm_return_type_mismatch.fe:15:32
+   │
+15 │         Withdraw { amount } -> u32 {
+   │                                ^^^ expected `bool`, but `u32` is given
+
+error[8-0000]: type mismatch
+   ┌─ recv_arm_return_type_mismatch.fe:16:13
+   │
+16 │             0
+   │             ^ expected `bool`, but `{integer}` is given
+
+error[8-0000]: type mismatch
+   ┌─ recv_arm_return_type_mismatch.fe:21:13
+   │
+21 │             false
+   │             ^^^^^ expected `u64`, but `bool` is given
+
+error[8-0043]: recv arm return type annotation required
+   ┌─ recv_arm_return_type_mismatch.fe:20:9
+   │
+20 │         Deposit { amount } {
+   │         ^^^^^^^^^^^^^^^^^^ return type must be annotated as `u64` to match the msg variant

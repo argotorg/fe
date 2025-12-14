@@ -1,0 +1,167 @@
+// Test restricted recv arm patterns
+// Parser-level restrictions:
+// - Only path patterns (e.g., `Baz`) or record patterns (e.g., `Bar { a, b }`) allowed
+// - Tuple patterns like `Foo(a, b)` are rejected at parse time
+// - Record field patterns allow destructuring but reject literal patterns (constraints)
+
+msg TestMsg {
+    #[selector = 0x01]
+    Simple,
+    #[selector = 0x02]
+    WithFields { a: u64, b: bool },
+}
+
+pub contract TestContract {
+    data: u64,
+
+    // Valid patterns
+    recv TestMsg {
+        // Simple path pattern
+        Simple {}
+
+        // Record pattern with shorthand bindings
+        WithFields { a, b } -> bool {
+            true
+        }
+    }
+}
+
+pub contract TestContract2 {
+    data: u64,
+
+    recv TestMsg {
+        Simple {}
+
+        // Record pattern with labeled binding (rename)
+        WithFields { a: x, b: y } -> bool {
+            true
+        }
+    }
+}
+
+pub contract TestContract3 {
+    data: u64,
+
+    recv TestMsg {
+        Simple {}
+
+        // Record pattern with explicit ignore
+        WithFields { a, b: _ } -> bool {
+            true
+        }
+    }
+}
+
+pub contract TestContract4 {
+    data: u64,
+
+    recv TestMsg {
+        Simple {}
+
+        // Record pattern with rest pattern
+        WithFields { a, .. } -> bool {
+            true
+        }
+    }
+}
+
+// Valid: Nested destructuring patterns ARE allowed
+pub contract TestContract5 {
+    data: u64,
+
+    recv TestMsg {
+        Simple {}
+
+        // Valid: Nested tuple pattern for destructuring
+        WithFields { a: (x, y), b } -> bool {
+            true
+        }
+    }
+}
+
+pub contract TestContract6 {
+    data: u64,
+
+    recv TestMsg {
+        Simple {}
+
+        // Valid: Nested record pattern for destructuring
+        WithFields { a: Foo { x }, b } -> bool {
+            true
+        }
+    }
+}
+
+// Invalid patterns - parser errors
+pub contract BadContract1 {
+    data: u64,
+
+    recv TestMsg {
+        Simple {}
+
+        // Error: Tuple pattern is not allowed (should use record pattern)
+        WithFields(a, b) -> bool {
+            true
+        }
+    }
+}
+
+pub contract BadContract2 {
+    data: u64,
+
+    recv TestMsg {
+        // Error: Literal pattern is not allowed as arm pattern
+        42 {}
+    }
+}
+
+pub contract BadContract3 {
+    data: u64,
+
+    recv TestMsg {
+        // Error: Tuple pattern is not allowed as arm pattern
+        (a, b) {}
+    }
+}
+
+// Invalid: Literal patterns (constraints) are not allowed
+pub contract BadContract4 {
+    data: u64,
+
+    recv TestMsg {
+        Simple {}
+
+        // Error: Literal pattern not allowed in record field
+        WithFields { a: 42, b } -> bool {
+            true
+        }
+    }
+}
+
+// Invalid: Nested literal in tuple destructuring
+pub contract BadContract5 {
+    data: u64,
+
+    recv TestMsg {
+        Simple {}
+
+        // Error: Literal pattern not allowed inside tuple destructuring
+        WithFields { a: (42, y), b } -> bool {
+            true
+        }
+    }
+}
+
+// Invalid: Nested literal in record destructuring
+pub contract BadContract6 {
+    data: u64,
+
+    recv TestMsg {
+        Simple {}
+
+        // Error: Literal pattern not allowed inside nested record
+        WithFields { a: Foo { x: 42 }, b } -> bool {
+            true
+        }
+    }
+}

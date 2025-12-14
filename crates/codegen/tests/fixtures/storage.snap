@@ -36,42 +36,27 @@ object "Coin" {
         }
       }
       function credit_alice(amount, store, supply) -> ret {
-        store_field__deduped(store, 1, 0, add(get_field__CoinStore_u256__31058c4e63450245(store, 1, 0), amount))
-        store_field__deduped(supply, 1, 0, add(get_field__CoinStore_u256__31058c4e63450245(supply, 1, 0), amount))
-        ret := get_field__CoinStore_u256__31058c4e63450245(store, 1, 0)
+        store_field__deduped(store, 0, add(get_field__StorPtr_u256__2bec36171fad53de(store, 0), amount))
+        store_field__deduped(supply, 0, add(get_field__StorPtr_u256__2bec36171fad53de(supply, 0), amount))
+        ret := get_field__StorPtr_u256__2bec36171fad53de(store, 0)
       }
       function credit_bob(amount, store, supply) -> ret {
-        store_field__deduped(store, 1, 32, add(get_field__CoinStore_u256__31058c4e63450245(store, 1, 32), amount))
-        store_field__deduped(supply, 1, 0, add(get_field__CoinStore_u256__31058c4e63450245(supply, 1, 0), amount))
-        ret := get_field__CoinStore_u256__31058c4e63450245(store, 1, 32)
+        store_field__deduped(store, 32, add(get_field__StorPtr_u256__2bec36171fad53de(store, 32), amount))
+        store_field__deduped(supply, 0, add(get_field__StorPtr_u256__2bec36171fad53de(supply, 0), amount))
+        ret := get_field__StorPtr_u256__2bec36171fad53de(store, 32)
       }
-      function get_discriminant(addr, space) -> ret {
-        let v0 := 0
-        switch space
-          case 0 {
-            v0 := mload(addr)
-          }
-          case 1 {
-            v0 := sload(addr)
-          }
-          default {
-          }
-        ret := v0
+      function get_discriminant__MemPtr__d0292394fccae3e4(addr) -> ret {
+        ret := load__MemPtr__d0292394fccae3e4(addr)
       }
-      function get_field__CoinStore_u256__31058c4e63450245(addr, space, offset) -> ret {
-        let v1 := add(addr, offset)
-        let v0 := 0
-        switch space
-          case 0 {
-            v0 := mload(v1)
-          }
-          case 1 {
-            v0 := sload(v1)
-          }
-          default {
-          }
-        let v2 := v0
-        ret := to_word__deduped(v2)
+      function get_field__StorPtr_u256__2bec36171fad53de(ptr, offset) -> ret {
+        let v0 := add(ptr, offset)
+        ret := to_word__deduped(load__StorPtr__7f7854645e12e266(v0))
+      }
+      function load__MemPtr__d0292394fccae3e4(addr) -> ret {
+        ret := mload(addr)
+      }
+      function load__StorPtr__7f7854645e12e266(addr) -> ret {
+        ret := sload(addr)
       }
       function runtime() {
         let v0 := 0
@@ -98,10 +83,10 @@ object "Coin" {
             let v7 := 0
             switch v8
               case 0 {
-                v7 := get_field__CoinStore_u256__31058c4e63450245(v0, 1, 0)
+                v7 := get_field__StorPtr_u256__2bec36171fad53de(v0, 0)
               }
               case 1 {
-                v7 := get_field__CoinStore_u256__31058c4e63450245(v0, 1, 32)
+                v7 := get_field__StorPtr_u256__2bec36171fad53de(v0, 32)
               }
               default {
                 v7 := 0
@@ -135,68 +120,58 @@ object "Coin" {
             return(0, 0)
           }
       }
-      function store_discriminant(addr, space, discriminant) {
-        switch space
-          case 0 {
-            mstore(addr, discriminant)
-          }
-          case 1 {
-            sstore(addr, discriminant)
-          }
-          default {
-          }
+      function store__MemPtr__d0292394fccae3e4(addr, value) {
+        mstore(addr, value)
       }
-      function store_field__deduped(addr, space, offset, value) {
-        let v0 := add(addr, offset)
-        switch space
-          case 0 {
-            mstore(v0, to_word__deduped(value))
-          }
-          case 1 {
-            sstore(v0, to_word__deduped(value))
-          }
-          default {
-          }
+      function store__StorPtr__7f7854645e12e266(addr, value) {
+        sstore(addr, value)
+      }
+      function store_discriminant__MemPtr__d0292394fccae3e4(addr, discriminant) {
+        store__MemPtr__d0292394fccae3e4(addr, discriminant)
+      }
+      function store_field__deduped(ptr, offset, value) {
+        let v0 := add(ptr, offset)
+        store__StorPtr__7f7854645e12e266(v0, to_word__deduped(value))
       }
       function to_word__deduped(self) -> ret {
         ret := self
       }
       function total_supply(supply) -> ret {
-        ret := get_field__CoinStore_u256__31058c4e63450245(supply, 1, 0)
+        ret := get_field__StorPtr_u256__2bec36171fad53de(supply, 0)
       }
       function transfer_from_alice(amount, store) -> ret {
-        let v0 := lt(get_field__CoinStore_u256__31058c4e63450245(store, 1, 0), amount)
+        let v0 := lt(get_field__StorPtr_u256__2bec36171fad53de(store, 0), amount)
         if v0 {
           let v1 := alloc(32)
-          store_discriminant(v1, 0, 1)
+          store_discriminant__MemPtr__d0292394fccae3e4(v1, 1)
           ret := v1
         }
         if iszero(v0) {
-          store_field__deduped(store, 1, 0, sub(get_field__CoinStore_u256__31058c4e63450245(store, 1, 0), amount))
-          store_field__deduped(store, 1, 32, add(get_field__CoinStore_u256__31058c4e63450245(store, 1, 32), amount))
+          store_field__deduped(store, 0, sub(get_field__StorPtr_u256__2bec36171fad53de(store, 0), amount))
+          store_field__deduped(store, 32, add(get_field__StorPtr_u256__2bec36171fad53de(store, 32), amount))
           let v2 := alloc(32)
-          store_discriminant(v2, 0, 0)
+          store_discriminant__MemPtr__d0292394fccae3e4(v2, 0)
           ret := v2
         }
       }
       function transfer_from_bob(amount, store) -> ret {
-        let v0 := lt(get_field__CoinStore_u256__31058c4e63450245(store, 1, 32), amount)
+        let v0 := lt(get_field__StorPtr_u256__2bec36171fad53de(store, 32), amount)
         if v0 {
           let v1 := alloc(32)
-          store_discriminant(v1, 0, 1)
+          store_discriminant__MemPtr__d0292394fccae3e4(v1, 1)
           ret := v1
         }
         if iszero(v0) {
-          store_field__deduped(store, 1, 32, sub(get_field__CoinStore_u256__31058c4e63450245(store, 1, 32), amount))
-          store_field__deduped(store, 1, 0, add(get_field__CoinStore_u256__31058c4e63450245(store, 1, 0), amount))
+          store_field__deduped(store, 32, sub(get_field__StorPtr_u256__2bec36171fad53de(store, 32), amount))
+          store_field__deduped(store, 0, add(get_field__StorPtr_u256__2bec36171fad53de(store, 0), amount))
           let v2 := alloc(32)
-          store_discriminant(v2, 0, 0)
+          store_discriminant__MemPtr__d0292394fccae3e4(v2, 0)
           ret := v2
         }
       }
       function transfer_result_code(res) -> ret {
         let v0 := 0
-        switch get_discriminant(res, 0)
+        switch get_discriminant__MemPtr__d0292394fccae3e4(res)
           case 0 {
             v0 := 0
           }

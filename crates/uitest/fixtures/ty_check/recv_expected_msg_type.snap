@@ -1,0 +1,16 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/recv_expected_msg_type.fe
+---
+error[8-0041]: recv block expects a msg type
+   ┌─ recv_expected_msg_type.fe:16:10
+   │
+16 │     recv NotAMsg {
+   │          ^^^^^^^ expected `msg` type, but `NotAMsg` is given
+
+error[8-0041]: recv block expects a msg type
+   ┌─ recv_expected_msg_type.fe:27:10
+   │
+27 │     recv NotAMsgEither {
+   │          ^^^^^^^^^^^^^ expected `msg` type, but `NotAMsgEither` is given

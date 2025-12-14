@@ -97,6 +97,92 @@ impl DiagnosticVoucher for ParserError {
     }
 }
 
+impl DiagnosticVoucher for crate::SelectorError {
+    fn to_complete(&self, _db: &dyn SpannedHirAnalysisDb) -> CompleteDiagnostic {
+        use crate::SelectorErrorKind;
+
+        let primary_span = Span::new(self.file, self.primary_range, SpanKind::Original);
+
+        let (code, message, label, notes, secondary) = match &self.kind {
+            SelectorErrorKind::Overflow => (
+                1,
+                format!(
+                    "selector value overflows u32 for msg variant `{}`",
+                    self.variant_name
+                ),
+                "selector value exceeds u32::MAX".to_string(),
+                vec!["selector must be a u32 integer".to_string()],
+                None,
+            ),
+            SelectorErrorKind::InvalidType => (
+                2,
+                format!(
+                    "selector must be an integer for msg variant `{}`",
+                    self.variant_name
+                ),
+                "expected integer literal".to_string(),
+                vec!["use an integer literal like `#[selector = 0x01]`".to_string()],
+                None,
+            ),
+            SelectorErrorKind::Missing => (
+                3,
+                format!("missing selector for msg variant `{}`", self.variant_name),
+                "no #[selector] attribute found".to_string(),
+                vec!["add a #[selector = <value>] attribute to the variant".to_string()],
+                None,
+            ),
+            SelectorErrorKind::InvalidForm => (
+                5,
+                format!(
+                    "invalid selector attribute form for msg variant `{}`",
+                    self.variant_name
+                ),
+                "expected `#[selector = <value>]` form".to_string(),
+                vec!["use `#[selector = 0x01]` instead of `#[selector(0x01)]`".to_string()],
+                None,
+            ),
+            SelectorErrorKind::Duplicate {
+                first_variant_name,
+                selector,
+            } => (
+                4,
+                "duplicate selector in msg block".to_string(),
+                format!(
+                    "`{}` has selector {:#010x} which conflicts with `{}`",
+                    self.variant_name, selector, first_variant_name
+                ),
+                vec!["each variant in a msg block must have a unique selector".to_string()],
+                self.secondary_range.map(|range| SubDiagnostic {
+                    style: LabelStyle::Secondary,
+                    message: format!(
+                        "`{first_variant_name}` with selector {selector:#010x} declared here"
+                    ),
+                    span: Some(Span::new(self.file, range, SpanKind::Original)),
+                }),
+            ),
+        };
+
+        let error_code = GlobalErrorCode::new(DiagnosticPass::MsgLower, code);
+
+        let mut sub_diagnostics = vec![SubDiagnostic {
+            style: LabelStyle::Primary,
+            message: label,
+            span: Some(primary_span),
+        }];
+        if let Some(sec) = secondary {
+            sub_diagnostics.push(sec);
+        }
+
+        CompleteDiagnostic {
+            severity: Severity::Error,
+            message,
+            sub_diagnostics,
+            notes,
+            error_code,
+        }
+    }
+}
+
 pub trait LazyDiagnostic<'db> {
     fn to_complete(&self, db: &'db dyn SpannedHirAnalysisDb) -> CompleteDiagnostic;
 }
@@ -2425,6 +2511,227 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                     message: "unreachable pattern".to_string(),
                     sub_diagnostics,
                     notes,
+                    error_code,
+                }
+            }
+            BodyDiag::RecvExpectedMsgType { primary, given } => {
+                let sub_diagnostics = vec![SubDiagnostic {
+                    style: LabelStyle::Primary,
+                    message: format!(
+                        "expected `msg` type, but `{}` is given",
+                        given.pretty_print(db)
+                    ),
+                    span: primary.resolve(db),
+                }];
+                CompleteDiagnostic {
+                    severity,
+                    message: "recv block expects a msg type".to_string(),
+                    sub_diagnostics,
+                    notes: vec![],
+                    error_code,
+                }
+            }
+            BodyDiag::RecvArmNotMsgVariant { primary, msg_name } => {
+                let sub_diagnostics = vec![SubDiagnostic {
+                    style: LabelStyle::Primary,
+                    message: format!("expected variant of `{}`", msg_name.data(db)),
+                    span: primary.resolve(db),
+                }];
+                CompleteDiagnostic {
+                    severity,
+                    message: "recv arm pattern is not a variant of the msg type".to_string(),
+                    sub_diagnostics,
+                    notes: vec![],
+                    error_code,
+                }
+            }
+            BodyDiag::RecvArmRetTypeMissing { primary, expected } => {
+                let sub_diagnostics = vec![SubDiagnostic {
+                    style: LabelStyle::Primary,
+                    message: format!(
+                        "return type must be annotated as `{}` to match the msg variant",
+                        expected.pretty_print(db)
+                    ),
+                    span: primary.resolve(db),
+                }];
+                CompleteDiagnostic {
+                    severity,
+                    message: "recv arm return type annotation required".to_string(),
+                    sub_diagnostics,
+                    notes: vec![],
+                    error_code,
+                }
+            }
+            BodyDiag::RecvArmDuplicateVariant {
+                primary,
+                first_use,
+                variant,
+            } => {
+                let name = variant.data(db);
+                let sub_diagnostics = vec![
+                    SubDiagnostic {
+                        style: LabelStyle::Primary,
+                        message: format!("duplicate handling of `{name}`"),
+                        span: primary.resolve(db),
+                    },
+                    SubDiagnostic {
+                        style: LabelStyle::Secondary,
+                        message: "first handled here".to_string(),
+                        span: first_use.resolve(db),
+                    },
+                ];
+                CompleteDiagnostic {
+                    severity,
+                    message: "duplicate msg variant in recv block".to_string(),
+                    sub_diagnostics,
+                    notes: vec![],
+                    error_code,
+                }
+            }
+            BodyDiag::RecvMissingMsgVariants { primary, variants } => {
+                let missing = variants
+                    .iter()
+                    .map(|ident| ident.data(db).to_string())
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                let sub_diagnostics = vec![SubDiagnostic {
+                    style: LabelStyle::Primary,
+                    message: format!("missing variants: {missing}"),
+                    span: primary.resolve(db),
+                }];
+                CompleteDiagnostic {
+                    severity,
+                    message: "recv block missing msg variants".to_string(),
+                    sub_diagnostics,
+                    notes: vec![],
+                    error_code,
+                }
+            }
+            BodyDiag::RecvDuplicateMsgBlock {
+                primary,
+                first_use,
+                msg_name,
+            } => {
+                let msg = msg_name.data(db);
+                let sub_diagnostics = vec![
+                    SubDiagnostic {
+                        style: LabelStyle::Primary,
+                        message: format!("duplicate recv block for `{msg}`"),
+                        span: primary.resolve(db),
+                    },
+                    SubDiagnostic {
+                        style: LabelStyle::Secondary,
+                        message: "first declared here".to_string(),
+                        span: first_use.resolve(db),
+                    },
+                ];
+                CompleteDiagnostic {
+                    severity,
+                    message: "duplicate recv block".to_string(),
+                    sub_diagnostics,
+                    notes: vec![],
+                    error_code,
+                }
+            }
+            BodyDiag::RecvDuplicateSelector {
+                primary,
+                first_use,
+                selector,
+                first_variant,
+                second_variant,
+            } => {
+                let first = first_variant.data(db);
+                let second = second_variant.data(db);
+                let sub_diagnostics = vec![
+                    SubDiagnostic {
+                        style: LabelStyle::Primary,
+                        message: format!(
+                            "`{second}` has selector 0x{selector:08x} which conflicts with `{first}`"
+                        ),
+                        span: primary.resolve(db),
+                    },
+                    SubDiagnostic {
+                        style: LabelStyle::Secondary,
+                        message: format!("`{first}` with selector 0x{selector:08x} declared here"),
+                        span: first_use.resolve(db),
+                    },
+                ];
+                CompleteDiagnostic {
+                    severity,
+                    message: "duplicate selector across recv blocks".to_string(),
+                    sub_diagnostics,
+                    notes: vec![
+                        "each msg variant in a contract must have a unique selector".to_string(),
+                    ],
+                    error_code,
+                }
+            }
+            BodyDiag::RecvArmNotVariantOfMsg {
+                primary,
+                variant_ty,
+                msg_name,
+            } => {
+                let sub_diagnostics = vec![SubDiagnostic {
+                    style: LabelStyle::Primary,
+                    message: format!(
+                        "`{}` is not a variant of `{}`",
+                        variant_ty.pretty_print(db),
+                        msg_name.data(db)
+                    ),
+                    span: primary.resolve(db),
+                }];
+                CompleteDiagnostic {
+                    severity,
+                    message: "type is not a variant of the specified msg".to_string(),
+                    sub_diagnostics,
+                    notes: vec![
+                        "in a named recv block, only variants defined in that `msg` block are allowed".to_string(),
+                    ],
+                    error_code,
+                }
+            }
+            BodyDiag::RecvArmNotMsgVariantTrait { primary, given_ty } => {
+                let sub_diagnostics = vec![SubDiagnostic {
+                    style: LabelStyle::Primary,
+                    message: format!(
+                        "`{}` does not implement `MsgVariant`",
+                        given_ty.pretty_print(db)
+                    ),
+                    span: primary.resolve(db),
+                }];
+                CompleteDiagnostic {
+                    severity,
+                    message: "type does not implement MsgVariant trait".to_string(),
+                    sub_diagnostics,
+                    notes: vec![],
+                    error_code,
+                }
+            }
+            BodyDiag::RecvDuplicateHandler {
+                primary,
+                first_use,
+                handler_ty,
+            } => {
+                let ty_str = handler_ty.pretty_print(db).to_string();
+                let sub_diagnostics = vec![
+                    SubDiagnostic {
+                        style: LabelStyle::Primary,
+                        message: format!("`{}` is already handled", ty_str),
+                        span: primary.resolve(db),
+                    },
+                    SubDiagnostic {
+                        style: LabelStyle::Secondary,
+                        message: format!("`{}` first handled here", ty_str),
+                        span: first_use.resolve(db),
+                    },
+                ];
+                CompleteDiagnostic {
+                    severity,
+                    message: "duplicate message handler".to_string(),
+                    sub_diagnostics,
+                    notes: vec![
+                        "each message type can only be handled once in a contract".to_string(),
+                    ],
                     error_code,
                 }
             }

@@ -1,0 +1,31 @@
+
+pub contract Bank {
+    total: u64,
+
+    init(start: u64) uses (mut total) {
+        total = start
+    }
+
+    recv BankMsg {
+        Withdraw { amount } -> bool
+          uses (mut total) {
+            if amount > total {
+                false
+            } else {
+                total -= amount
+                true
+            }
+        }
+        Deposit { amount } -> u64 uses (mut total) {
+            total += amount
+            total
+        }
+    }
+}
+
+msg BankMsg {
+    #[selector = 0x01]
+    Withdraw { amount: u64 } -> bool,
+    #[selector = 0x02]
+    Deposit { amount: u64 } -> u64,
+}

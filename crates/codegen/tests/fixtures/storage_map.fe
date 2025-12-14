@@ -1,0 +1,13 @@
+use core::StorageMap
+
+fn get_balance(addr: u256) -> u256
+    uses (balances: StorageMap<u256, u256>)
+{
+    balances.get(key: addr)
+}
+
+fn set_balance(addr: u256, value: u256)
+    uses (mut balances: StorageMap<u256, u256>)
+{
+    balances.set(key: addr, value)
+}

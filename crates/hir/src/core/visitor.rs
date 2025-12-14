@@ -2,8 +2,13 @@ use std::{marker::PhantomData, mem};
 
 use crate::{
     HirDb,
-    core::hir_def::{
-        Body, CallArg, Const, Contract, Enum, EnumVariant, Expr, ExprId, Field, FieldDef,
+    core::span::{
+        SpanDowncast, item::LazySuperTraitListSpan, lazy_spans::*, params::LazyTraitRefSpan,
+        transition::ChainRoot,
+    },
+    hir_def::{
+        Body, CallArg, Const, Contract, ContractRecv, ContractRecvArm, ContractRecvArmListId,
+        EffectParam, EffectParamListId, Enum, EnumVariant, Expr, ExprId, Field, FieldDef,
         FieldDefListId, FieldIndex, FieldParent, Func, FuncParam, FuncParamListId, FuncParamName,
         GenericArg, GenericArgListId, GenericParam, GenericParamListId, IdentId, Impl, ImplTrait,
         ItemKind, KindBound, LitKind, MatchArm, Mod, Partial, Pat, PatId, PathId, PathKind, Stmt,
@@ -13,22 +18,19 @@ use crate::{
         attr::{self, AttrArgValue},
         scope_graph::ScopeId,
     },
-    core::span::{
-        SpanDowncast, item::LazySuperTraitListSpan, lazy_spans::*, params::LazyTraitRefSpan,
-        transition::ChainRoot,
-    },
 };
 
 pub mod prelude {
     pub use super::{
         Visitor, VisitorCtxt, walk_arm, walk_attribute, walk_attribute_list, walk_body,
-        walk_call_arg, walk_call_arg_list, walk_const, walk_contract, walk_enum, walk_expr,
-        walk_field, walk_field_def, walk_field_def_list, walk_field_list, walk_func,
-        walk_func_param, walk_func_param_list, walk_generic_arg, walk_generic_arg_list,
-        walk_generic_param, walk_generic_param_list, walk_impl, walk_impl_trait, walk_item,
-        walk_kind_bound, walk_mod, walk_pat, walk_path, walk_stmt, walk_struct,
-        walk_super_trait_list, walk_top_mod, walk_trait, walk_trait_ref, walk_type,
-        walk_type_alias, walk_type_bound, walk_type_bound_list, walk_use, walk_use_path,
+        walk_call_arg, walk_call_arg_list, walk_const, walk_contract, walk_contract_recv,
+        walk_contract_recv_arm, walk_contract_recv_arm_list, walk_effect_param,
+        walk_effect_param_list, walk_enum, walk_expr, walk_field, walk_field_def,
+        walk_field_def_list, walk_field_list, walk_func, walk_func_param, walk_func_param_list,
+        walk_generic_arg, walk_generic_arg_list, walk_generic_param, walk_generic_param_list,
+        walk_impl, walk_impl_trait, walk_item, walk_kind_bound, walk_mod, walk_pat, walk_path,
+        walk_stmt, walk_struct, walk_super_trait_list, walk_top_mod, walk_trait, walk_trait_ref,
+        walk_type, walk_type_alias, walk_type_bound, walk_type_bound_list, walk_use, walk_use_path,
         walk_variant_def, walk_variant_def_list, walk_where_clause, walk_where_predicate,
     };
     pub use crate::core::span::lazy_spans::*;
@@ -70,6 +72,46 @@ pub trait Visitor<'db> {
         contract: Contract<'db>,
     ) {
         walk_contract(self, ctxt, contract)
+    }
+
+    fn visit_effect_param_list(
+        &mut self,
+        ctxt: &mut VisitorCtxt<'db, LazyUsesClauseSpan<'db>>,
+        effects: EffectParamListId<'db>,
+    ) {
+        walk_effect_param_list(self, ctxt, effects)
+    }
+
+    fn visit_effect_param(
+        &mut self,
+        ctxt: &mut VisitorCtxt<'db, LazyUsesParamSpan<'db>>,
+        effect: &EffectParam<'db>,
+    ) {
+        walk_effect_param(self, ctxt, effect)
+    }
+
+    fn visit_contract_recv(
+        &mut self,
+        ctxt: &mut VisitorCtxt<'db, LazyContractRecvSpan<'db>>,
+        recv: &ContractRecv<'db>,
+    ) {
+        walk_contract_recv(self, ctxt, recv)
+    }
+
+    fn visit_contract_recv_arm_list(
+        &mut self,
+        ctxt: &mut VisitorCtxt<'db, LazyRecvArmListSpan<'db>>,
+        arms: ContractRecvArmListId<'db>,
+    ) {
+        walk_contract_recv_arm_list(self, ctxt, arms)
+    }
+
+    fn visit_contract_recv_arm(
+        &mut self,
+        ctxt: &mut VisitorCtxt<'db, LazyRecvArmSpan<'db>>,
+        arm: &ContractRecvArm<'db>,
+    ) {
+        walk_contract_recv_arm(self, ctxt, arm)
     }
 
     fn visit_enum(&mut self, ctxt: &mut VisitorCtxt<'db, LazyEnumSpan<'db>>, enum_: Enum<'db>) {
@@ -524,6 +566,15 @@ pub fn walk_func<'db, V>(
     if let Some(body) = func.body(ctxt.db) {
         visitor.visit_body(&mut VisitorCtxt::with_body(ctxt.db, body), body);
     }
+
+    // Effects (uses clause)
+    ctxt.with_new_ctxt(
+        |span| span.sig().effects(),
+        |ctxt| {
+            let effects = func.effects(ctxt.db);
+            visitor.visit_effect_param_list(ctxt, effects);
+        },
+    );
 }
 
 pub fn walk_struct<'db, V>(
@@ -598,14 +649,137 @@ pub fn walk_contract<'db, V>(
             visitor.visit_attribute_list(ctxt, id);
         },
     );
+    // Contract header effects
+    ctxt.with_new_ctxt(
+        |span| span.effects(),
+        |ctxt| {
+            let id = contract.effects(ctxt.db);
+            visitor.visit_effect_param_list(ctxt, id);
+        },
+    );
 
+    // Contract fields live under a dedicated AST node; walk them explicitly.
     ctxt.with_new_ctxt(
         |span| span.fields(),
         |ctxt| {
             let id = contract.fields(ctxt.db);
-            visitor.visit_field_def_list(ctxt, id);
+            let parent = FieldParent::Contract(contract);
+            for (idx, field) in id.data(ctxt.db).iter().enumerate() {
+                ctxt.with_new_scoped_ctxt(
+                    ScopeId::Field(parent, idx as u16),
+                    |span| span.field(idx),
+                    |ctxt| {
+                        visitor.visit_field_def(ctxt, field);
+                    },
+                );
+            }
         },
     );
+
+    let s_graph = contract.top_mod(ctxt.db).scope_graph(ctxt.db);
+    let scope = ScopeId::from_item(contract.into());
+    for child in s_graph.child_items(scope) {
+        visitor.visit_item(&mut VisitorCtxt::with_item(ctxt.db, child), child);
+    }
+
+    // Recv handlers
+    let recvs = contract.recvs(ctxt.db);
+    for (idx, recv) in recvs.data(ctxt.db).iter().enumerate() {
+        ctxt.with_new_ctxt(
+            |span| span.recv(idx),
+            |ctxt| {
+                visitor.visit_contract_recv(ctxt, recv);
+            },
+        );
+    }
+}
+
+pub fn walk_effect_param_list<'db, V>(
+    visitor: &mut V,
+    ctxt: &mut VisitorCtxt<'db, LazyUsesClauseSpan<'db>>,
+    effects: EffectParamListId<'db>,
+) where
+    V: Visitor<'db> + ?Sized,
+{
+    for (idx, eff) in effects.data(ctxt.db).iter().enumerate() {
+        ctxt.with_new_ctxt(
+            |span| span.param_idx(idx),
+            |ctxt| visitor.visit_effect_param(ctxt, eff),
+        );
+    }
+}
+
+pub fn walk_effect_param<'db, V>(
+    visitor: &mut V,
+    ctxt: &mut VisitorCtxt<'db, LazyUsesParamSpan<'db>>,
+    effect: &EffectParam<'db>,
+) where
+    V: Visitor<'db> + ?Sized,
+{
+    if let Some(name) = effect.name {
+        ctxt.with_new_ctxt(|span| span.name(), |ctxt| visitor.visit_ident(ctxt, name));
+    }
+    if let Some(path) = effect.key_path.to_opt() {
+        ctxt.with_new_ctxt(|span| span.path(), |ctxt| visitor.visit_path(ctxt, path));
+    }
+}
+
+pub fn walk_contract_recv<'db, V>(
+    visitor: &mut V,
+    ctxt: &mut VisitorCtxt<'db, LazyContractRecvSpan<'db>>,
+    recv: &ContractRecv<'db>,
+) where
+    V: Visitor<'db> + ?Sized,
+{
+    if let Some(p) = recv.msg_path {
+        ctxt.with_new_ctxt(|span| span.path(), |ctxt| visitor.visit_path(ctxt, p));
+    }
+
+    ctxt.with_new_ctxt(
+        |span| span.arms(),
+        |ctxt| {
+            visitor.visit_contract_recv_arm_list(ctxt, recv.arms);
+        },
+    );
+}
+
+pub fn walk_contract_recv_arm_list<'db, V>(
+    visitor: &mut V,
+    ctxt: &mut VisitorCtxt<'db, LazyRecvArmListSpan<'db>>,
+    arms: ContractRecvArmListId<'db>,
+) where
+    V: Visitor<'db> + ?Sized,
+{
+    for (idx, arm) in arms.data(ctxt.db).iter().enumerate() {
+        ctxt.with_new_ctxt(
+            |span| span.arm(idx),
+            |ctxt| visitor.visit_contract_recv_arm(ctxt, arm),
+        );
+    }
+}
+
+pub fn walk_contract_recv_arm<'db, V>(
+    visitor: &mut V,
+    ctxt: &mut VisitorCtxt<'db, LazyRecvArmSpan<'db>>,
+    arm: &ContractRecvArm<'db>,
+) where
+    V: Visitor<'db> + ?Sized,
+{
+    let mut pat_ctxt = VisitorCtxt::with_pat(ctxt.db, arm.body.scope(), arm.body, arm.pat);
+    if let Partial::Present(pat_data) = arm.pat.data(ctxt.db, arm.body) {
+        visitor.visit_pat(&mut pat_ctxt, arm.pat, pat_data);
+    }
+
+    if let Some(ret_ty) = arm.ret_ty {
+        ctxt.with_new_ctxt(|span| span.ret_ty(), |ctxt| visitor.visit_ty(ctxt, ret_ty));
+    }
+
+    ctxt.with_new_ctxt(
+        |span| span.effects(),
+        |ctxt| visitor.visit_effect_param_list(ctxt, arm.effects),
+    );
+
+    visitor.visit_body(&mut VisitorCtxt::with_body(ctxt.db, arm.body), arm.body);
 }
 
 pub fn walk_enum<'db, V>(

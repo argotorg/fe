@@ -1,0 +1,36 @@
+// Test generic struct with multiple MsgVariant impls used in recv block
+
+struct GenericMsg<T> {
+    pub value: T,
+}
+
+impl core::message::MsgVariant for GenericMsg<u8> {
+    const SELECTOR: u32 = 0x01
+    type Return = u8
+}
+
+impl core::message::MsgVariant for GenericMsg<u16> {
+    const SELECTOR: u32 = 0x02
+    type Return = u16
+}
+
+impl core::message::MsgVariant for GenericMsg<u64> {
+    const SELECTOR: u32 = 0x03
+    type Return = u64
+}
+
+pub contract GenericRecvContract {
+    data: u64,
+
+    recv {
+        GenericMsg<u8> { value } -> u8 uses () {
+            value
+        }
+        GenericMsg<u16> { value } -> u16 uses () {
+            value
+        }
+        GenericMsg<u64> { value } -> u64 uses (data) {
+            data + value
+        }
+    }
+}

@@ -1,0 +1,6 @@
+---
+source: crates/uitest/tests/parser.rs
+expression: diags
+input_file: crates/uitest/fixtures/parser/contract_uses_fields.fe
+---
+

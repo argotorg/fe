@@ -1,5 +1,7 @@
 #![allow(unused)]
 
+use std::sync::Once;
+
 use fe_parser::{
     SyntaxKind, lexer,
     parser::{
@@ -8,6 +10,17 @@ use fe_parser::{
     syntax_node::SyntaxNode,
 };
 use tracing::error;
+
+static INIT: Once = Once::new();
+
+fn init_tracing() {
+    INIT.call_once(|| {
+        tracing_subscriber::fmt()
+            .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
+            .with_test_writer()
+            .init();
+    });
+}
 
 type BoxedParseFn = Box<dyn Fn(&mut Parser<lexer::Lexer>)>;
 pub struct TestRunner {
@@ -80,6 +93,7 @@ impl TestRunner {
     }
 
     pub fn run(&self, input: &str) -> SyntaxNode {
+        init_tracing();
         let lexer = lexer::Lexer::new(input);
         let mut parser = Parser::new(lexer);
 

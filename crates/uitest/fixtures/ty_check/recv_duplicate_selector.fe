@@ -1,0 +1,47 @@
+// Test that msg variants across different recv blocks cannot have the same selector
+
+msg BankMsg {
+    #[selector = 0x01]
+    Deposit { amount: u64 } -> u64,
+    #[selector = 0x02]
+    Withdraw { amount: u64 } -> bool,
+}
+
+msg TokenMsg {
+    // This selector conflicts with BankMsg::Deposit when used in the same contract
+    #[selector = 0x01]
+    Transfer { to: u64, amount: u64 } -> bool,
+    #[selector = 0x03]
+    Balance { addr: u64 } -> u64,
+}
+
+pub contract MultiRecv {
+    data: u64,
+
+    // First recv block with BankMsg
+    recv BankMsg {
+        Deposit { amount } -> u64 uses (mut data) {
+            data += amount
+            data
+        }
+        Withdraw { amount } -> bool uses (mut data) {
+            if amount > data {
+                false
+            } else {
+                data -= amount
+                true
+            }
+        }
+    }
+
+    // Second recv block with TokenMsg
+    // Error: TokenMsg::Transfer has selector 0x01 which conflicts with BankMsg::Deposit
+    recv TokenMsg {
+        Transfer { to, amount } -> bool uses () {
+            true
+        }
+        Balance { addr } -> u64 uses () {
+            0
+        }
+    }
+}

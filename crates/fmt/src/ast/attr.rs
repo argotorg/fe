@@ -42,15 +42,25 @@ impl ToDoc for ast::NormalAttr {
             None => return alloc.text("#[]"),
         };
 
-        let args_doc = self
-            .args()
-            .map(|args| args.to_doc(ctx))
-            .unwrap_or_else(|| alloc.nil());
+        // Handle both forms:
+        // - #[attr(arg1, arg2)]  -> args()
+        // - #[attr = value]      -> value()
+        let suffix_doc = if let Some(args) = self.args() {
+            args.to_doc(ctx)
+        } else if let Some(val) = self.value() {
+            let val_doc = match val {
+                AttrArgValueKind::Ident(tok) => alloc.text(tok.text().to_string()),
+                AttrArgValueKind::Lit(lit) => lit.to_doc(ctx),
+            };
+            alloc.text(" = ").append(val_doc)
+        } else {
+            alloc.nil()
+        };
 
         alloc
             .text("#[")
             .append(path)
-            .append(args_doc)
+            .append(suffix_doc)
             .append(alloc.text("]"))
     }
 }

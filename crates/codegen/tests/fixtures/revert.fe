@@ -1,0 +1,6 @@
+use core::{mstore, revert}
+
+fn fail() {
+    mstore(0, 42)
+    revert(0, 32)
+}

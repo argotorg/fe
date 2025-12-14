@@ -1,0 +1,418 @@
+---
+source: crates/hir/tests/ty_check.rs
+expression: res
+input_file: test_files/ty_check/contract_recv_variants.fe
+---
+note: 
+   ┌─ contract_recv_variants.fe:59:61
+   │  
+59 │       init(start_balance: u64) uses (mut balance, mut tokens) {
+   │ ╭─────────────────────────────────────────────────────────────^
+60 │ │         balance = start_balance
+61 │ │         tokens = 0
+62 │ │     }
+   │ ╰─────^ ()
+
+note: 
+   ┌─ contract_recv_variants.fe:60:9
+   │
+60 │         balance = start_balance
+   │         ^^^^^^^ u64
+
+note: 
+   ┌─ contract_recv_variants.fe:60:9
+   │
+60 │         balance = start_balance
+   │         ^^^^^^^^^^^^^^^^^^^^^^^ ()
+
+note: 
+   ┌─ contract_recv_variants.fe:60:19
+   │
+60 │         balance = start_balance
+   │                   ^^^^^^^^^^^^^ u64
+
+note: 
+   ┌─ contract_recv_variants.fe:61:9
+   │
+61 │         tokens = 0
+   │         ^^^^^^ u64
+
+note: 
+   ┌─ contract_recv_variants.fe:61:9
+   │
+61 │         tokens = 0
+   │         ^^^^^^^^^^ ()
+
+note: 
+   ┌─ contract_recv_variants.fe:61:18
+   │
+61 │         tokens = 0
+   │                  ^ u64
+
+note: 
+   ┌─ contract_recv_variants.fe:66:9
+   │
+66 │         Deposit { amount } -> u64 uses (mut balance) {
+   │         ^^^^^^^^^^^^^^^^^^ Deposit
+
+note: 
+   ┌─ contract_recv_variants.fe:66:19
+   │
+66 │         Deposit { amount } -> u64 uses (mut balance) {
+   │                   ^^^^^^ u64
+
+note: 
+   ┌─ contract_recv_variants.fe:66:54
+   │  
+66 │           Deposit { amount } -> u64 uses (mut balance) {
+   │ ╭──────────────────────────────────────────────────────^
+67 │ │             balance += amount
+68 │ │             balance
+69 │ │         }
+   │ ╰─────────^ u64
+
+note: 
+   ┌─ contract_recv_variants.fe:67:13
+   │
+67 │             balance += amount
+   │             ^^^^^^^ u64
+
+note: 
+   ┌─ contract_recv_variants.fe:67:13
+   │
+67 │             balance += amount
+   │             ^^^^^^^^^^^^^^^^^ ()
+
+note: 
+   ┌─ contract_recv_variants.fe:67:24
+   │
+67 │             balance += amount
+   │                        ^^^^^^ u64
+
+note: 
+   ┌─ contract_recv_variants.fe:68:13
+   │
+68 │             balance
+   │             ^^^^^^^ u64
+
+note: 
+   ┌─ contract_recv_variants.fe:70:9
+   │
+70 │         Withdraw { amount } -> bool uses (mut balance) {
+   │         ^^^^^^^^^^^^^^^^^^^ Withdraw
+
+note: 
+   ┌─ contract_recv_variants.fe:70:20
+   │
+70 │         Withdraw { amount } -> bool uses (mut balance) {
+   │                    ^^^^^^ u64
+
+note: 
+   ┌─ contract_recv_variants.fe:70:56
+   │  
+70 │           Withdraw { amount } -> bool uses (mut balance) {
+   │ ╭────────────────────────────────────────────────────────^
+71 │ │             if amount > balance {
+72 │ │                 false
+73 │ │             } else {
+   · │
+76 │ │             }
+77 │ │         }
+   │ ╰─────────^ bool
+
+note: 
+   ┌─ contract_recv_variants.fe:71:13
+   │  
+71 │ ╭             if amount > balance {
+72 │ │                 false
+73 │ │             } else {
+74 │ │                 balance -= amount
+75 │ │                 true
+76 │ │             }
+   │ ╰─────────────^ bool
+
+note: 
+   ┌─ contract_recv_variants.fe:71:16
+   │
+71 │             if amount > balance {
+   │                ^^^^^^ u64
+
+note: 
+   ┌─ contract_recv_variants.fe:71:16
+   │
+71 │             if amount > balance {
+   │                ^^^^^^^^^^^^^^^^ bool
+
+note: 
+   ┌─ contract_recv_variants.fe:71:25
+   │
+71 │             if amount > balance {
+   │                         ^^^^^^^ u64
+
+note: 
+   ┌─ contract_recv_variants.fe:71:33
+   │  
+71 │               if amount > balance {
+   │ ╭─────────────────────────────────^
+72 │ │                 false
+73 │ │             } else {
+   │ ╰─────────────^ bool
+
+note: 
+   ┌─ contract_recv_variants.fe:72:17
+   │
+72 │                 false
+   │                 ^^^^^ bool
+
+note: 
+   ┌─ contract_recv_variants.fe:73:20
+   │  
+73 │               } else {
+   │ ╭────────────────────^
+74 │ │                 balance -= amount
+75 │ │                 true
+76 │ │             }
+   │ ╰─────────────^ bool
+
+note: 
+   ┌─ contract_recv_variants.fe:74:17
+   │
+74 │                 balance -= amount
+   │                 ^^^^^^^ u64
+
+note: 
+   ┌─ contract_recv_variants.fe:74:17
+   │
+74 │                 balance -= amount
+   │                 ^^^^^^^^^^^^^^^^^ ()
+
+note: 
+   ┌─ contract_recv_variants.fe:74:28
+   │
+74 │                 balance -= amount
+   │                            ^^^^^^ u64
+
+note: 
+   ┌─ contract_recv_variants.fe:75:17
+   │
+75 │                 true
+   │                 ^^^^ bool
+
+note: 
+   ┌─ contract_recv_variants.fe:82:9
+   │
+82 │         Transfer { to, amount } -> bool uses (mut tokens) {
+   │         ^^^^^^^^^^^^^^^^^^^^^^^ Transfer
+
+note: 
+   ┌─ contract_recv_variants.fe:82:20
+   │
+82 │         Transfer { to, amount } -> bool uses (mut tokens) {
+   │                    ^^ u64
+
+note: 
+   ┌─ contract_recv_variants.fe:82:24
+   │
+82 │         Transfer { to, amount } -> bool uses (mut tokens) {
+   │                        ^^^^^^ u64
+
+note: 
+   ┌─ contract_recv_variants.fe:82:59
+   │  
+82 │           Transfer { to, amount } -> bool uses (mut tokens) {
+   │ ╭───────────────────────────────────────────────────────────^
+83 │ │             if amount > tokens {
+84 │ │                 false
+85 │ │             } else {
+   · │
+88 │ │             }
+89 │ │         }
+   │ ╰─────────^ bool
+
+note: 
+   ┌─ contract_recv_variants.fe:83:13
+   │  
+83 │ ╭             if amount > tokens {
+84 │ │                 false
+85 │ │             } else {
+86 │ │                 tokens -= amount
+87 │ │                 true
+88 │ │             }
+   │ ╰─────────────^ bool
+
+note: 
+   ┌─ contract_recv_variants.fe:83:16
+   │
+83 │             if amount > tokens {
+   │                ^^^^^^ u64
+
+note: 
+   ┌─ contract_recv_variants.fe:83:16
+   │
+83 │             if amount > tokens {
+   │                ^^^^^^^^^^^^^^^ bool
+
+note: 
+   ┌─ contract_recv_variants.fe:83:25
+   │
+83 │             if amount > tokens {
+   │                         ^^^^^^ u64
+
+note: 
+   ┌─ contract_recv_variants.fe:83:32
+   │  
+83 │               if amount > tokens {
+   │ ╭────────────────────────────────^
+84 │ │                 false
+85 │ │             } else {
+   │ ╰─────────────^ bool
+
+note: 
+   ┌─ contract_recv_variants.fe:84:17
+   │
+84 │                 false
+   │                 ^^^^^ bool
+
+note: 
+   ┌─ contract_recv_variants.fe:85:20
+   │  
+85 │               } else {
+   │ ╭────────────────────^
+86 │ │                 tokens -= amount
+87 │ │                 true
+88 │ │             }
+   │ ╰─────────────^ bool
+
+note: 
+   ┌─ contract_recv_variants.fe:86:17
+   │
+86 │                 tokens -= amount
+   │                 ^^^^^^ u64
+
+note: 
+   ┌─ contract_recv_variants.fe:86:17
+   │
+86 │                 tokens -= amount
+   │                 ^^^^^^^^^^^^^^^^ ()
+
+note: 
+   ┌─ contract_recv_variants.fe:86:27
+   │
+86 │                 tokens -= amount
+   │                           ^^^^^^ u64
+
+note: 
+   ┌─ contract_recv_variants.fe:87:17
+   │
+87 │                 true
+   │                 ^^^^ bool
+
+note: 
+   ┌─ contract_recv_variants.fe:90:9
+   │
+90 │         Balance { addr } -> u64 uses (tokens) {
+   │         ^^^^^^^^^^^^^^^^ Balance
+
+note: 
+   ┌─ contract_recv_variants.fe:90:19
+   │
+90 │         Balance { addr } -> u64 uses (tokens) {
+   │                   ^^^^ u64
+
+note: 
+   ┌─ contract_recv_variants.fe:90:47
+   │  
+90 │           Balance { addr } -> u64 uses (tokens) {
+   │ ╭───────────────────────────────────────────────^
+91 │ │             tokens
+92 │ │         }
+   │ ╰─────────^ u64
+
+note: 
+   ┌─ contract_recv_variants.fe:91:13
+   │
+91 │             tokens
+   │             ^^^^^^ u64
+
+note: 
+   ┌─ contract_recv_variants.fe:97:9
+   │
+97 │         CustomQuery { key } -> u64 uses (balance, tokens) {
+   │         ^^^^^^^^^^^^^^^^^^^ CustomQuery
+
+note: 
+   ┌─ contract_recv_variants.fe:97:23
+   │
+97 │         CustomQuery { key } -> u64 uses (balance, tokens) {
+   │                       ^^^ u64
+
+note: 
+    ┌─ contract_recv_variants.fe:97:59
+    │  
+ 97 │           CustomQuery { key } -> u64 uses (balance, tokens) {
+    │ ╭───────────────────────────────────────────────────────────^
+ 98 │ │             if key == 0 {
+ 99 │ │                 balance
+100 │ │             } else {
+101 │ │                 tokens
+102 │ │             }
+103 │ │         }
+    │ ╰─────────^ u64
+
+note: 
+    ┌─ contract_recv_variants.fe:98:13
+    │  
+ 98 │ ╭             if key == 0 {
+ 99 │ │                 balance
+100 │ │             } else {
+101 │ │                 tokens
+102 │ │             }
+    │ ╰─────────────^ u64
+
+note: 
+   ┌─ contract_recv_variants.fe:98:16
+   │
+98 │             if key == 0 {
+   │                ^^^ u64
+
+note: 
+   ┌─ contract_recv_variants.fe:98:16
+   │
+98 │             if key == 0 {
+   │                ^^^^^^^^ bool
+
+note: 
+   ┌─ contract_recv_variants.fe:98:23
+   │
+98 │             if key == 0 {
+   │                       ^ u64
+
+note: 
+    ┌─ contract_recv_variants.fe:98:25
+    │  
+ 98 │               if key == 0 {
+    │ ╭─────────────────────────^
+ 99 │ │                 balance
+100 │ │             } else {
+    │ ╰─────────────^ u64
+
+note: 
+   ┌─ contract_recv_variants.fe:99:17
+   │
+99 │                 balance
+   │                 ^^^^^^^ u64
+
+note: 
+    ┌─ contract_recv_variants.fe:100:20
+    │  
+100 │               } else {
+    │ ╭────────────────────^
+101 │ │                 tokens
+102 │ │             }
+    │ ╰─────────────^ u64
+
+note: 
+    ┌─ contract_recv_variants.fe:101:17
+    │
+101 │                 tokens
+    │                 ^^^^^^ u64

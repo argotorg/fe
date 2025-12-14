@@ -1,0 +1,26 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/msg_duplicate_selector.fe
+---
+error[9-0004]: duplicate selector in msg block
+  ┌─ msg_duplicate_selector.fe:8:5
+  │
+4 │     #[selector = 0x01]
+  │     ------------------ `Transfer` with selector 0x00000001 declared here
+  ·
+8 │     #[selector = 0x01]
+  │     ^^^^^^^^^^^^^^^^^^ `Approve` has selector 0x00000001 which conflicts with `Transfer`
+  │
+  = each variant in a msg block must have a unique selector
+
+error[9-0004]: duplicate selector in msg block
+   ┌─ msg_duplicate_selector.fe:15:5
+   │
+11 │     #[selector = 0x02]
+   │     ------------------ `Balance` with selector 0x00000002 declared here
+   ·
+15 │     #[selector = 0x02]
+   │     ^^^^^^^^^^^^^^^^^^ `TotalSupply` has selector 0x00000002 which conflicts with `Balance`
+   │
+   = each variant in a msg block must have a unique selector

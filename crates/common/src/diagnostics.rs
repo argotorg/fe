@@ -142,6 +142,7 @@ pub enum Severity {
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum DiagnosticPass {
     Parse,
+    MsgLower,
 
     NameResolution,
 
@@ -159,6 +160,7 @@ impl DiagnosticPass {
     pub fn code(&self) -> u16 {
         match self {
             Self::Parse => 1,
+            Self::MsgLower => 9,
             Self::NameResolution => 2,
             Self::TypeDefinition => 3,
             Self::TraitDefinition => 4,

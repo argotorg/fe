@@ -1,0 +1,55 @@
+// Test that recv arm patterns must be variants of the specified msg type
+
+msg BankMsg {
+    #[selector = 0x01]
+    Withdraw { amount: u64 } -> bool,
+    #[selector = 0x02]
+    Deposit { amount: u64 } -> u64,
+}
+
+msg OtherMsg {
+    #[selector = 0x10]
+    Ping -> bool,
+}
+
+pub contract BadContract {
+    data: u64,
+
+    recv Foo {
+        Bar {}
+    }
+
+    recv BankMsg {
+        // OK: Withdraw is a variant of BankMsg
+        Withdraw { amount } -> bool {
+            true
+        }
+
+        // Error: NotAVariant is not a variant of BankMsg
+        NotAVariant { foo } -> u64 {
+            0
+        }
+    }
+}
+
+pub contract BadContract2 {
+    data: u64,
+
+    recv BankMsg {
+        // Error: Ping is a variant of OtherMsg, not BankMsg
+        Ping -> bool {
+            true
+        }
+    }
+}
+
+pub contract BadContract3 {
+    data: u64,
+
+    recv BankMsg {
+        // Error: random_identifier is not a variant
+        random_identifier -> bool {
+            true
+        }
+    }
+}

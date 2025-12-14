@@ -1,13 +1,21 @@
 mod callable;
+mod contract;
 mod env;
 mod expr;
+mod owner;
 mod pat;
 mod path;
 mod stmt;
 
+pub use self::contract::{
+    check_contract_recv_arm_body, check_contract_recv_block, check_contract_recv_blocks,
+};
 pub use self::path::RecordLike;
 use crate::{
-    hir_def::{Body, Expr, ExprId, Func, LitKind, Partial, Pat, PatId, PathId, TypeId as HirTyId},
+    hir_def::{
+        Body, Contract, ContractRecvArm, Expr, ExprId, Func, LitKind, Partial, Pat, PatId, PathId,
+        TypeId as HirTyId,
+    },
     span::{
         DynLazySpan, expr::LazyExprSpan, pat::LazyPatSpan, path::LazyPathSpan, types::LazyTySpan,
     },
@@ -15,8 +23,9 @@ use crate::{
 };
 pub use callable::Callable;
 use env::TyCheckEnv;
-pub use env::{ExprProp, LocalBinding};
+pub use env::{EffectParamSite, ExprProp, LocalBinding, ParamSite};
 pub(super) use expr::TraitOps;
+use owner::BodyOwner;
 
 use rustc_hash::{FxHashMap, FxHashSet};
 use salsa::Update;
@@ -44,7 +53,14 @@ pub fn check_func_body<'db>(
     db: &'db dyn HirAnalysisDb,
     func: Func<'db>,
 ) -> (Vec<FuncBodyDiag<'db>>, TypedBody<'db>) {
-    let Ok(mut checker) = TyChecker::new_with_func(db, func) else {
+    check_body_owner(db, BodyOwner::Func(func))
+}
+
+pub(super) fn check_body_owner<'db>(
+    db: &'db dyn HirAnalysisDb,
+    owner: BodyOwner<'db>,
+) -> (Vec<FuncBodyDiag<'db>>, TypedBody<'db>) {
+    let Ok(mut checker) = TyChecker::new(db, owner) else {
         return (Vec::new(), TypedBody::empty());
     };
 
@@ -61,25 +77,31 @@ pub struct TyChecker<'db> {
 }
 
 impl<'db> TyChecker<'db> {
-    fn new_with_func(db: &'db dyn HirAnalysisDb, func: Func<'db>) -> Result<Self, ()> {
-        let env = TyCheckEnv::new_with_func(db, func)?;
-        let rt = func.return_ty(db);
-        // If the return type is explicitly annotated and of invalid kind,
-        // reflect that as an invalid expected type.
-        let expected_ty = if func.has_explicit_return_ty(db) {
-            if rt.is_star_kind(db) {
-                rt
-            } else {
-                TyId::invalid(db, InvalidCause::Other)
-            }
-        } else {
-            rt
-        };
+    fn new(db: &'db dyn HirAnalysisDb, owner: BodyOwner<'db>) -> Result<Self, ()> {
+        let env = TyCheckEnv::new(db, owner)?;
+        let expected = env.compute_expected_return();
 
-        Ok(Self::new(db, env, expected_ty))
+        Ok(Self::new_internal(db, env, expected))
     }
 
     fn run(&mut self) {
+        if let BodyOwner::ContractRecvArm {
+            contract,
+            msg_path,
+            arm,
+            ..
+        } = self.env.owner()
+        {
+            let recv_span = self.env.owner().recv_span().unwrap();
+            let arm_span = self.env.owner().recv_arm_span().unwrap();
+            let (pat_ty, ret_ty) =
+                self.resolve_recv_arm_types(contract, msg_path, arm, recv_span.path(), arm_span);
+            self.expected = ret_ty;
+            self.check_pat(arm.pat, pat_ty);
+            self.seed_pat_bindings(arm.pat);
+            self.env.flush_pending_bindings();
+        }
+
         let root_expr = self.env.body().expr(self.db);
         self.check_expr(root_expr, self.expected);
     }
@@ -88,7 +110,7 @@ impl<'db> TyChecker<'db> {
         TyCheckerFinalizer::new(self).finish()
     }
 
-    fn new(db: &'db dyn HirAnalysisDb, env: TyCheckEnv<'db>, expected: TyId<'db>) -> Self {
+    fn new_internal(db: &'db dyn HirAnalysisDb, env: TyCheckEnv<'db>, expected: TyId<'db>) -> Self {
         let table = UnificationTable::new(db);
         Self {
             db,
@@ -97,6 +119,88 @@ impl<'db> TyChecker<'db> {
             expected,
             diags: Vec::new(),
         }
+    }
+
+    /// Resolves the pattern type and return type for a recv arm.
+    /// Returns (pattern_type, return_type).
+    fn resolve_recv_arm_types(
+        &mut self,
+        contract: Contract<'db>,
+        msg_path: Option<PathId<'db>>,
+        arm: ContractRecvArm<'db>,
+        path_span: LazyPathSpan<'db>,
+        arm_span: crate::span::item::LazyRecvArmSpan<'db>,
+    ) -> (TyId<'db>, TyId<'db>) {
+        let invalid_ty = TyId::invalid(self.db, InvalidCause::Other);
+
+        // Get variant path from arm pattern
+        let Some(variant_path) = arm.variant_path(self.db) else {
+            return (invalid_ty, invalid_ty);
+        };
+
+        let assumptions = self.env.assumptions();
+
+        // Resolve based on whether this is a named or bare recv block
+        let resolved = if let Some(msg_mod) = contract::resolve_recv_msg_mod(
+            self.db,
+            contract,
+            msg_path,
+            path_span,
+            &mut self.diags,
+            false,
+        ) {
+            // Named recv block - resolve within the msg module
+            match contract::resolve_variant_in_msg(self.db, msg_mod, variant_path, assumptions) {
+                contract::VariantResolution::Ok(resolved) => resolved,
+                _ => {
+                    // Return invalid types to suppress spurious type mismatch errors
+                    // when the pattern doesn't resolve to a valid msg variant
+                    return (invalid_ty, invalid_ty);
+                }
+            }
+        } else if msg_path.is_none() {
+            // Bare recv block - resolve from contract scope
+            match contract::resolve_variant_bare(self.db, contract, variant_path, assumptions) {
+                contract::VariantResolution::Ok(resolved) => resolved,
+                _ => {
+                    // Return invalid types to suppress spurious type mismatch errors
+                    return (invalid_ty, invalid_ty);
+                }
+            }
+        } else {
+            // msg_path was Some but didn't resolve - diagnostics already emitted
+            return (invalid_ty, invalid_ty);
+        };
+
+        let pat_ty = resolved.ty;
+
+        // Get annotated return type from the arm
+        let arm_ret_span = arm_span.clone().ret_ty();
+        let annotated = arm
+            .ret_ty
+            .map(|hir_ty| self.lower_ty(hir_ty, arm_ret_span.clone(), true));
+        let variant_ret = contract::get_msg_variant_return_type(self.db, pat_ty, self.env.scope());
+
+        let ret_ty = match (variant_ret, annotated) {
+            (Some(var_ty), Some(annot_ty)) => {
+                self.equate_ty(annot_ty, var_ty, arm_ret_span.into());
+                var_ty
+            }
+            (Some(var_ty), None) => {
+                // Only require annotation if return type is not unit
+                if var_ty != TyId::unit(self.db) {
+                    self.push_diag(BodyDiag::RecvArmRetTypeMissing {
+                        primary: arm_span.pat().into(),
+                        expected: var_ty,
+                    });
+                }
+                var_ty
+            }
+            (None, Some(annot_ty)) => annot_ty,
+            (None, None) => TyId::unit(self.db),
+        };
+
+        (pat_ty, ret_ty)
     }
 
     fn push_diag(&mut self, diag: impl Into<FuncBodyDiag<'db>>) {
@@ -176,12 +280,50 @@ impl<'db> TyChecker<'db> {
         (0..n).map(|_| self.fresh_ty()).collect()
     }
 
+    /// Ensure all binding patterns are registered in the current scope.
+    fn seed_pat_bindings(&mut self, pat: PatId) {
+        let Partial::Present(pat_data) = pat.data(self.db, self.env.body()) else {
+            return;
+        };
+
+        match pat_data {
+            Pat::Path(path, is_mut) => {
+                let Partial::Present(path) = path else {
+                    return;
+                };
+                if let Some(ident) = path.as_ident(self.db) {
+                    let current = self.env.current_block_idx();
+                    if self.env.get_block(current).lookup_var(ident).is_none() {
+                        let binding = LocalBinding::local(pat, *is_mut);
+                        self.env.register_pending_binding(ident, binding);
+                    }
+                }
+            }
+            Pat::Tuple(pats) | Pat::PathTuple(_, pats) => {
+                for &p in pats {
+                    self.seed_pat_bindings(p);
+                }
+            }
+            Pat::Record(_, fields) => {
+                for field in fields {
+                    self.seed_pat_bindings(field.pat);
+                }
+            }
+            Pat::Or(lhs, rhs) => {
+                self.seed_pat_bindings(*lhs);
+                self.seed_pat_bindings(*rhs);
+            }
+            Pat::WildCard | Pat::Rest | Pat::Lit(..) => {}
+        }
+    }
+
     fn unify_ty<T>(&mut self, t: T, actual: TyId<'db>, expected: TyId<'db>) -> TyId<'db>
     where
         T: Into<Typeable<'db>>,
     {
         let t = t.into();
-        let actual = self.equate_ty(actual, expected, t.span(self.env.body()));
+        let span = t.clone().span(self.env.body());
+        let actual = self.equate_ty(actual, expected, span);
 
         match t {
             Typeable::Expr(expr, mut typed_expr) => {
@@ -323,7 +465,7 @@ impl<'db> TypedBody<'db> {
     pub fn expr_prop(&self, db: &'db dyn HirAnalysisDb, expr: ExprId) -> ExprProp<'db> {
         self.expr_ty
             .get(&expr)
-            .copied()
+            .cloned()
             .unwrap_or_else(|| ExprProp::invalid(db))
     }
 
@@ -420,7 +562,7 @@ impl<'db> TypedBody<'db> {
     }
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, derive_more::From)]
+#[derive(Clone, PartialEq, Eq, derive_more::From)]
 enum Typeable<'db> {
     Expr(ExprId, ExprProp<'db>),
     Pat(PatId),

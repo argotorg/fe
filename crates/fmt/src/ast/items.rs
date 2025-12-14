@@ -279,6 +279,7 @@ impl ToDoc for ast::Item {
             Some(ItemKind::Const(const_)) => const_.to_doc(ctx),
             Some(ItemKind::Use(use_)) => use_.to_doc(ctx),
             Some(ItemKind::Extern(extern_)) => extern_.to_doc(ctx),
+            Some(ItemKind::Msg(msg)) => msg.to_doc(ctx),
             None => ctx.alloc.nil(),
         }
     }
@@ -286,44 +287,140 @@ impl ToDoc for ast::Item {
 
 impl ToDoc for ast::FuncSignature {
     fn to_doc<'a>(&self, ctx: &'a RewriteContext<'a>) -> Doc<'a> {
-        let alloc = &ctx.alloc;
+        func_sig_to_doc(self, ctx, false)
+    }
+}
 
-        let name = match self.name() {
-            Some(n) => ctx.token(&n).to_string(),
-            None => return alloc.text("fn"),
-        };
+/// Format a function signature.
+/// If `include_body_sep` is true, includes a trailing separator that becomes
+/// a space when flat and a newline when broken - used when the signature has
+/// uses/where clauses so the opening brace moves to a new line with them.
+fn func_sig_to_doc<'a>(
+    sig: &ast::FuncSignature,
+    ctx: &'a RewriteContext<'a>,
+    include_body_sep: bool,
+) -> Doc<'a> {
+    let alloc = &ctx.alloc;
 
-        let generics = generics_doc(self, ctx);
+    let name = match sig.name() {
+        Some(n) => ctx.token(&n).to_string(),
+        None => return alloc.text("fn"),
+    };
 
-        let params: Vec<_> = self
-            .params()
-            .map(|p| p.into_iter().map(|param| param.to_doc(ctx)).collect())
-            .unwrap_or_default();
+    let generics = generics_doc(sig, ctx);
 
-        let indent = ctx.config.indent_width as isize;
-        let params_doc = block_list(ctx, "(", ")", params, indent, true);
+    let params: Vec<_> = sig
+        .params()
+        .map(|p| p.into_iter().map(|param| param.to_doc(ctx)).collect())
+        .unwrap_or_default();
 
-        let ret_doc = self
-            .ret_ty()
-            .map(|ty| alloc.text(" -> ").append(ty.to_doc(ctx)))
-            .unwrap_or_else(|| alloc.nil());
+    let indent = ctx.config.indent_width as isize;
+    let params_doc = block_list(ctx, "(", ")", params, indent, true);
 
-        let uses_doc = self
-            .uses_clause()
-            .map(|u| alloc.text(" ").append(u.to_doc(ctx)))
-            .unwrap_or_else(|| alloc.nil());
+    let ret_doc = sig
+        .ret_ty()
+        .map(|ty| alloc.text(" -> ").append(ty.to_doc(ctx)))
+        .unwrap_or_else(|| alloc.nil());
 
-        let where_clause = where_doc(self, ctx);
+    let has_uses = sig.uses_clause().is_some();
+    let has_where = sig.where_clause().is_some();
 
-        alloc
-            .text("fn ")
-            .append(alloc.text(name))
-            .append(generics)
-            .append(params_doc)
-            .append(ret_doc)
-            .append(uses_doc)
-            .append(where_clause)
-            .group()
+    // Build the core signature (before uses/where) to measure its length
+    let core_sig = alloc
+        .text("fn ")
+        .append(alloc.text(name.clone()))
+        .append(generics.clone())
+        .append(params_doc.clone())
+        .append(ret_doc.clone());
+
+    // Measure the flat length of the core signature
+    let core_flat_len = {
+        let mut buf = Vec::new();
+        let _ = core_sig.clone().into_doc().render(10000, &mut buf);
+        let s = String::from_utf8(buf).unwrap_or_default();
+        s.lines().next().map(|l| l.len()).unwrap_or(0)
+    };
+
+    // Force clauses to new lines if:
+    // - uses_new_line/where_new_line config is set, OR
+    // - the core signature is already long (> 60 chars)
+    let force_uses_break = has_uses && (ctx.config.uses_new_line || core_flat_len > 60);
+    let force_where_break = has_where && (ctx.config.where_new_line || core_flat_len > 60);
+    let force_clause_break = force_uses_break || force_where_break;
+
+    let uses_doc = sig
+        .uses_clause()
+        .map(|u| {
+            if force_uses_break {
+                alloc.hardline().append(u.to_doc(ctx))
+            } else {
+                alloc.line().append(u.to_doc(ctx))
+            }
+        })
+        .unwrap_or_else(|| alloc.nil());
+
+    let where_clause = if force_where_break {
+        where_doc_forced(sig, ctx)
+    } else {
+        where_doc(sig, ctx)
+    };
+
+    // Body separator: space when flat, newline when broken
+    let body_sep = if include_body_sep {
+        if force_clause_break {
+            alloc.hardline()
+        } else {
+            alloc.line()
+        }
+    } else {
+        alloc.nil()
+    };
+
+    alloc
+        .text("fn ")
+        .append(alloc.text(name))
+        .append(generics)
+        .append(params_doc)
+        .append(ret_doc)
+        .append(uses_doc)
+        .append(where_clause)
+        .append(body_sep)
+        .max_width_group(ctx.config.fn_sig_width)
+}
+
+/// Helper to build where clause document that is forced to a new line.
+fn where_doc_forced<'a, N: ast::WhereClauseOwner + AstNode>(
+    node: &N,
+    ctx: &'a RewriteContext<'a>,
+) -> Doc<'a> {
+    let alloc = &ctx.alloc;
+
+    if let Some(where_clause) = node.where_clause() {
+        let preds: Vec<_> = where_clause
+            .into_iter()
+            .map(|pred| pred.to_doc(ctx))
+            .collect();
+
+        if preds.is_empty() {
+            return alloc.nil();
+        }
+
+        let sep = alloc.text(",").append(alloc.line());
+        let preds_doc = intersperse(alloc, preds, sep).group();
+
+        let where_block = alloc
+            .text("where")
+            .append(
+                alloc
+                    .line()
+                    .append(preds_doc)
+                    .nest(ctx.config.clause_indent as isize),
+            )
+            .group();
+
+        alloc.hardline().append(where_block)
+    } else {
+        alloc.nil()
     }
 }
 
@@ -333,37 +430,26 @@ impl ToDoc for ast::Func {
 
         let attrs = attrs_doc(self, ctx);
         let modifier = modifier_doc(self, ctx);
-        let sig = self.sig().to_doc(ctx);
 
         let doc = if let Some(body) = self.body() {
-            // Decide whether the body can stay on the same line as the signature.
-            // Render the signature at the current max width to see if it breaks.
-            let (sig_len, sig_multiline) = {
-                let mut buf = Vec::new();
-                let _ = sig
-                    .clone()
-                    .into_doc()
-                    .render(ctx.config.max_width, &mut buf);
-                let s = String::from_utf8(buf).unwrap_or_default();
-                let mut lines = s.lines();
-                let first_len = lines.next().map(|l| l.len()).unwrap_or(0);
-                let multiline = lines.next().is_some();
-                (first_len, multiline)
-            };
-
             let has_where = self.sig().where_clause().is_some();
-            let body_sep = if ctx.config.where_new_line
-                || has_where
-                    && (sig_multiline || sig_len + 2 /* space + '{' */ > ctx.config.max_width)
-            {
-                alloc.hardline()
-            } else {
-                alloc.text(" ")
-            };
+            let has_uses = self.sig().uses_clause().is_some();
 
-            sig.append(body_sep).append(body.to_doc(ctx))
+            if ctx.config.where_new_line {
+                // Always put brace on new line
+                let sig = self.sig().to_doc(ctx);
+                sig.append(alloc.hardline()).append(body.to_doc(ctx))
+            } else if has_where || has_uses {
+                // Include body separator in the group so it breaks together with the signature
+                let sig_with_body_sep = func_sig_to_doc(&self.sig(), ctx, true);
+                sig_with_body_sep.append(body.to_doc(ctx))
+            } else {
+                // Simple case: space before brace
+                let sig = self.sig().to_doc(ctx);
+                sig.append(alloc.text(" ")).append(body.to_doc(ctx))
+            }
         } else {
-            sig
+            self.sig().to_doc(ctx)
         };
 
         attrs.append(modifier).append(doc)
@@ -450,6 +536,15 @@ impl ToDoc for ast::RecordFieldDefList {
     }
 }
 
+impl ToDoc for ast::ContractFields {
+    fn to_doc<'a>(&self, ctx: &'a RewriteContext<'a>) -> Doc<'a> {
+        let fields: Vec<_> = self.into_iter().map(|f| f.to_doc(ctx)).collect();
+
+        let indent = ctx.config.indent_width as isize;
+        block_list_spaced(ctx, "{", "}", fields, indent, true)
+    }
+}
+
 impl ToDoc for ast::RecordFieldDef {
     fn to_doc<'a>(&self, ctx: &'a RewriteContext<'a>) -> Doc<'a> {
         let alloc = &ctx.alloc;
@@ -486,16 +581,200 @@ impl ToDoc for ast::Contract {
             .map(|n| ctx.token(&n).to_string())
             .unwrap_or_default();
 
-        let fields_doc = self
-            .fields()
-            .map(|f| alloc.text(" ").append(f.to_doc(ctx)))
+        let uses_doc = self
+            .uses_clause()
+            .map(|u| alloc.text(" ").append(u.to_doc(ctx)))
+            .unwrap_or_else(|| alloc.nil());
+
+        // Check if we have a body (init, recv blocks) or just fields
+        let has_body = self.init_block().is_some() || self.recvs().next().is_some();
+
+        if has_body {
+            // Full contract with body: contract Name uses (...) { fields, init, recv }
+            // Each section (fields, init, recv) is separated by a blank line
+            let mut sections: Vec<Doc<'a>> = Vec::new();
+
+            // Add fields as one section
+            if let Some(fields) = self.fields() {
+                let field_docs: Vec<_> = fields
+                    .into_iter()
+                    .map(|f| f.to_doc(ctx).append(alloc.text(",")))
+                    .collect();
+                if !field_docs.is_empty() {
+                    let mut fields_section = alloc.nil();
+                    for (i, field) in field_docs.into_iter().enumerate() {
+                        if i > 0 {
+                            fields_section = fields_section.append(alloc.hardline());
+                        }
+                        fields_section = fields_section.append(field);
+                    }
+                    sections.push(fields_section);
+                }
+            }
+
+            // Add init block as one section
+            if let Some(init) = self.init_block() {
+                sections.push(init.to_doc(ctx));
+            }
+
+            // Add each recv block as its own section
+            for recv in self.recvs() {
+                sections.push(recv.to_doc(ctx));
+            }
+
+            let body_doc = if sections.is_empty() {
+                alloc.text(" {}")
+            } else {
+                let indent = ctx.config.indent_width as isize;
+                let mut inner = alloc.nil();
+                for (i, section) in sections.into_iter().enumerate() {
+                    if i > 0 {
+                        // Add blank line between sections
+                        inner = inner.append(alloc.hardline()).append(alloc.hardline());
+                    } else {
+                        inner = inner.append(alloc.hardline());
+                    }
+                    inner = inner.append(section);
+                }
+                alloc
+                    .text(" {")
+                    .append(inner.nest(indent))
+                    .append(alloc.hardline())
+                    .append(alloc.text("}"))
+            };
+
+            attrs
+                .append(modifier)
+                .append(alloc.text("contract "))
+                .append(alloc.text(name))
+                .append(uses_doc)
+                .append(body_doc)
+        } else {
+            // Simple contract with just fields: contract Name { field1, field2 }
+            let fields_doc = self
+                .fields()
+                .map(|f| alloc.text(" ").append(f.to_doc(ctx)))
+                .unwrap_or_else(|| alloc.text(" {}"));
+
+            attrs
+                .append(modifier)
+                .append(alloc.text("contract "))
+                .append(alloc.text(name))
+                .append(uses_doc)
+                .append(fields_doc)
+        }
+    }
+}
+
+impl ToDoc for ast::ContractInit {
+    fn to_doc<'a>(&self, ctx: &'a RewriteContext<'a>) -> Doc<'a> {
+        let alloc = &ctx.alloc;
+
+        let params: Vec<_> = self
+            .params()
+            .map(|p| p.into_iter().map(|param| param.to_doc(ctx)).collect())
+            .unwrap_or_default();
+
+        let indent = ctx.config.indent_width as isize;
+        let params_doc = block_list(ctx, "(", ")", params, indent, true);
+
+        let uses_doc = self
+            .uses_clause()
+            .map(|u| alloc.line().append(u.to_doc(ctx)))
+            .unwrap_or_else(|| alloc.nil());
+
+        let body_doc = self
+            .body()
+            .map(|b| alloc.line().append(b.to_doc(ctx)))
+            .unwrap_or_else(|| alloc.nil());
+
+        alloc
+            .text("init")
+            .append(params_doc)
+            .append(uses_doc)
+            .append(body_doc)
+            .group()
+    }
+}
+
+impl ToDoc for ast::ContractRecv {
+    fn to_doc<'a>(&self, ctx: &'a RewriteContext<'a>) -> Doc<'a> {
+        let alloc = &ctx.alloc;
+
+        let path_doc = self
+            .path()
+            .map(|p| alloc.text(" ").append(p.to_doc(ctx)))
+            .unwrap_or_else(|| alloc.nil());
+
+        let arms_doc = self
+            .arms()
+            .map(|arms| alloc.text(" ").append(arms.to_doc(ctx)))
             .unwrap_or_else(|| alloc.text(" {}"));
 
-        attrs
-            .append(modifier)
-            .append(alloc.text("contract "))
-            .append(alloc.text(name))
-            .append(fields_doc)
+        alloc.text("recv").append(path_doc).append(arms_doc)
+    }
+}
+
+impl ToDoc for ast::RecvArmList {
+    fn to_doc<'a>(&self, ctx: &'a RewriteContext<'a>) -> Doc<'a> {
+        block_items_doc(self.syntax(), ast::RecvArm::cast, ctx)
+    }
+}
+
+impl ToDoc for ast::RecvArm {
+    fn to_doc<'a>(&self, ctx: &'a RewriteContext<'a>) -> Doc<'a> {
+        let alloc = &ctx.alloc;
+
+        let pat_doc = self
+            .pat()
+            .map(|p| p.to_doc(ctx))
+            .unwrap_or_else(|| alloc.nil());
+
+        let ret_ty_doc = self
+            .ret_ty()
+            .map(|ty| alloc.text(" -> ").append(ty.to_doc(ctx)))
+            .unwrap_or_else(|| alloc.nil());
+
+        let has_uses = self.uses_clause().is_some();
+
+        // Measure the core signature (pattern + return type) to decide if uses should break
+        let core_sig = pat_doc.clone().append(ret_ty_doc.clone());
+        let core_flat_len = {
+            let mut buf = Vec::new();
+            let _ = core_sig.clone().into_doc().render(10000, &mut buf);
+            let s = String::from_utf8(buf).unwrap_or_default();
+            s.lines().next().map(|l| l.len()).unwrap_or(0)
+        };
+
+        // Force uses to a new line if:
+        // - uses_new_line config is set, OR
+        // - the core signature is long (> 40 chars)
+        let force_uses_break = has_uses && (ctx.config.uses_new_line || core_flat_len > 40);
+
+        let uses_doc = self
+            .uses_clause()
+            .map(|u| {
+                if force_uses_break {
+                    alloc.hardline().append(u.to_doc(ctx))
+                } else {
+                    alloc.text(" ").append(u.to_doc(ctx))
+                }
+            })
+            .unwrap_or_else(|| alloc.nil());
+
+        let body_doc = self
+            .body()
+            .map(|b| {
+                if force_uses_break {
+                    // If uses broke to new line, put body on new line too
+                    alloc.hardline().append(b.to_doc(ctx))
+                } else {
+                    alloc.text(" ").append(b.to_doc(ctx))
+                }
+            })
+            .unwrap_or_else(|| alloc.nil());
+
+        pat_doc.append(ret_ty_doc).append(uses_doc).append(body_doc)
     }
 }
 
@@ -985,5 +1264,113 @@ impl ToDoc for ast::Extern {
 impl ToDoc for ast::ExternItemList {
     fn to_doc<'a>(&self, ctx: &'a RewriteContext<'a>) -> Doc<'a> {
         block_items_doc(self.syntax(), ast::Func::cast, ctx)
+    }
+}
+
+impl ToDoc for ast::Msg {
+    fn to_doc<'a>(&self, ctx: &'a RewriteContext<'a>) -> Doc<'a> {
+        let alloc = &ctx.alloc;
+
+        let attrs = attrs_doc(self, ctx);
+        let modifier = modifier_doc(self, ctx);
+
+        let name = self
+            .name()
+            .map(|n| ctx.token(&n).to_string())
+            .unwrap_or_default();
+
+        let variants_doc = self
+            .variants()
+            .map(|v| alloc.text(" ").append(v.to_doc(ctx)))
+            .unwrap_or_else(|| alloc.text(" {}"));
+
+        attrs
+            .append(modifier)
+            .append(alloc.text("msg "))
+            .append(alloc.text(name))
+            .append(variants_doc)
+    }
+}
+
+impl ToDoc for ast::MsgVariantList {
+    fn to_doc<'a>(&self, ctx: &'a RewriteContext<'a>) -> Doc<'a> {
+        use parser::syntax_kind::SyntaxKind;
+        use parser::syntax_node::NodeOrToken;
+
+        let alloc = &ctx.alloc;
+        let mut inner = alloc.nil();
+        let mut pending_newlines = 0usize;
+        let mut is_first = true;
+
+        for child in self.syntax().children_with_tokens() {
+            match child {
+                NodeOrToken::Node(node) => {
+                    if let Some(variant) = ast::MsgVariant::cast(node) {
+                        // Always add at least one newline before each variant.
+                        // If source had 2+ newlines (blank line), add exactly 2 (one blank line).
+                        let newlines_to_add = if pending_newlines >= 2 { 2 } else { 1 };
+                        for _ in 0..newlines_to_add {
+                            inner = inner.append(alloc.hardline());
+                        }
+                        pending_newlines = 0;
+                        is_first = false;
+                        inner = inner.append(variant.to_doc(ctx)).append(alloc.text(","));
+                    }
+                }
+                NodeOrToken::Token(token) => {
+                    if token.kind() == SyntaxKind::Newline {
+                        let text = ctx.snippet(token.text_range());
+                        pending_newlines = text.chars().filter(|c| *c == '\n').count();
+                    }
+                }
+            }
+        }
+
+        if is_first {
+            return alloc.text("{}");
+        }
+
+        alloc
+            .text("{")
+            .append(inner.nest(ctx.config.indent_width as isize))
+            .append(alloc.hardline())
+            .append(alloc.text("}"))
+    }
+}
+
+impl ToDoc for ast::MsgVariant {
+    fn to_doc<'a>(&self, ctx: &'a RewriteContext<'a>) -> Doc<'a> {
+        let alloc = &ctx.alloc;
+
+        let attrs = attrs_doc(self, ctx);
+
+        let name = self
+            .name()
+            .map(|n| ctx.token(&n).to_string())
+            .unwrap_or_default();
+
+        let params_doc = self
+            .params()
+            .map(|p| alloc.text(" ").append(p.to_doc(ctx)))
+            .unwrap_or_else(|| alloc.nil());
+
+        let ret_ty_doc = self
+            .ret_ty()
+            .map(|ty| alloc.text(" -> ").append(ty.to_doc(ctx)))
+            .unwrap_or_else(|| alloc.nil());
+
+        attrs
+            .append(alloc.text(name))
+            .append(params_doc)
+            .append(ret_ty_doc)
+    }
+}
+
+impl ToDoc for ast::MsgVariantParams {
+    fn to_doc<'a>(&self, ctx: &'a RewriteContext<'a>) -> Doc<'a> {
+        let fields: Vec<_> = self.into_iter().map(|f| f.to_doc(ctx)).collect();
+
+        let indent = ctx.config.indent_width as isize;
+        block_list_spaced(ctx, "{", "}", fields, indent, true)
     }
 }

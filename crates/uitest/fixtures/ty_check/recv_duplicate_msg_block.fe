@@ -1,0 +1,18 @@
+// Multiple recv blocks for the same msg type are not allowed
+
+msg BankMsg {
+    #[selector = 0x01]
+    Deposit,
+}
+
+pub contract BadContract {
+    data: u64,
+
+    recv BankMsg {
+        Deposit {}
+    }
+
+    recv BankMsg {
+        Deposit {}
+    }
+}

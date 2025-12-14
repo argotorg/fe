@@ -39,33 +39,15 @@ object "EnumContract" {
       function from_word__u256__3271ca15373d4483(word) -> ret {
         ret := word
       }
-      function get_discriminant(addr, space) -> ret {
-        let v0 := 0
-        switch space
-          case 0 {
-            v0 := mload(addr)
-          }
-          case 1 {
-            v0 := sload(addr)
-          }
-          default {
-          }
-        ret := v0
+      function get_discriminant__MemPtr__d0292394fccae3e4(addr) -> ret {
+        ret := load__MemPtr__d0292394fccae3e4(addr)
       }
-      function get_variant_field__u256__3271ca15373d4483(addr, space, field_offset) -> ret {
-        let v1 := add(add(addr, 32), field_offset)
-        let v0 := 0
-        switch space
-          case 0 {
-            v0 := mload(v1)
-          }
-          case 1 {
-            v0 := sload(v1)
-          }
-          default {
-          }
-        let v2 := v0
-        ret := from_word__u256__3271ca15373d4483(v2)
+      function get_variant_field__MemPtr_u256__97fe9178c4597e85(addr, field_offset) -> ret {
+        let v0 := add(add(addr, 32), field_offset)
+        ret := from_word__u256__3271ca15373d4483(load__MemPtr__d0292394fccae3e4(v0))
+      }
+      function load__MemPtr__d0292394fccae3e4(addr) -> ret {
+        ret := mload(addr)
       }
       function runtime() {
         let v0 := shr(224, calldataload(0))
@@ -73,13 +55,13 @@ object "EnumContract" {
         if v1 {
           let v3 := calldataload(4)
           let v4 := alloc(64)
-          store_discriminant(v4, 0, 1)
-          store_variant_field__u256__3271ca15373d4483(v4, 0, 0, v3)
+          store_discriminant__MemPtr__d0292394fccae3e4(v4, 1)
+          store_variant_field__MemPtr_u256__97fe9178c4597e85(v4, 0, v3)
           let v5 := v4
           let v2 := 0
-          switch get_discriminant(v5, 0)
+          switch get_discriminant__MemPtr__d0292394fccae3e4(v5)
             case 1 {
-              let v6 := get_variant_field__u256__3271ca15373d4483(v5, 0, 0)
+              let v6 := get_variant_field__MemPtr_u256__97fe9178c4597e85(v5, 0)
               v2 := v6
             }
             case 0 {
@@ -95,12 +77,12 @@ object "EnumContract" {
           let v8 := eq(v0, 1163776883)
           if v8 {
             let v10 := alloc(64)
-            store_discriminant(v10, 0, 0)
+            store_discriminant__MemPtr__d0292394fccae3e4(v10, 0)
             let v11 := v10
             let v9 := 0
-            switch get_discriminant(v11, 0)
+            switch get_discriminant__MemPtr__d0292394fccae3e4(v11)
               case 1 {
-                let v12 := get_variant_field__u256__3271ca15373d4483(v11, 0, 0)
+                let v12 := get_variant_field__MemPtr_u256__97fe9178c4597e85(v11, 0)
                 v9 := v12
               }
               case 0 {
@@ -117,11 +99,11 @@ object "EnumContract" {
             if v14 {
               let v16 := calldataload(4)
               let v17 := alloc(64)
-              store_discriminant(v17, 0, 1)
-              store_variant_field__u256__3271ca15373d4483(v17, 0, 0, v16)
+              store_discriminant__MemPtr__d0292394fccae3e4(v17, 1)
+              store_variant_field__MemPtr_u256__97fe9178c4597e85(v17, 0, v16)
               let v18 := v17
               let v15 := 0
-              switch get_discriminant(v18, 0)
+              switch get_discriminant__MemPtr__d0292394fccae3e4(v18)
                 case 1 {
                   v15 := 1
                 }
@@ -140,28 +122,15 @@ object "EnumContract" {
           }
         }
       }
-      function store_discriminant(addr, space, discriminant) {
-        switch space
-          case 0 {
-            mstore(addr, discriminant)
-          }
-          case 1 {
-            sstore(addr, discriminant)
-          }
-          default {
-          }
+      function store__MemPtr__d0292394fccae3e4(addr, value) {
+        mstore(addr, value)
       }
-      function store_variant_field__u256__3271ca15373d4483(addr, space, field_offset, value) {
+      function store_discriminant__MemPtr__d0292394fccae3e4(addr, discriminant) {
+        store__MemPtr__d0292394fccae3e4(addr, discriminant)
+      }
+      function store_variant_field__MemPtr_u256__97fe9178c4597e85(addr, field_offset, value) {
         let v0 := add(add(addr, 32), field_offset)
-        switch space
-          case 0 {
-            mstore(v0, from_word__u256__3271ca15373d4483(value))
-          }
-          case 1 {
-            sstore(v0, from_word__u256__3271ca15373d4483(value))
-          }
-          default {
-          }
+        store__MemPtr__d0292394fccae3e4(v0, from_word__u256__3271ca15373d4483(value))
       }
     }
   }

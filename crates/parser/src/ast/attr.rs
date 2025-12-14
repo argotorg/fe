@@ -58,6 +58,16 @@ impl NormalAttr {
     pub fn args(&self) -> Option<AttrArgList> {
         support::child(self.syntax())
     }
+
+    /// Returns the direct value for the `#[attr = value]` form.
+    /// This is distinct from args() which returns the argument list `(arg1, arg2)`.
+    pub fn value(&self) -> Option<AttrArgValueKind> {
+        let node = support::child::<AttrArgValue>(self.syntax())?;
+        if let Some(lit) = support::child::<Lit>(node.syntax()) {
+            return Some(lit.into());
+        }
+        Some(support::token(node.syntax(), SK::Ident)?.into())
+    }
 }
 
 ast_node! {

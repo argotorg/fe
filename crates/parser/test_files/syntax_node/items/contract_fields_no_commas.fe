@@ -1,0 +1,5 @@
+contract A {
+    x: i32
+    y: u256
+}
+

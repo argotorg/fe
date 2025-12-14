@@ -168,13 +168,23 @@ impl<'db> FunctionEmitter<'db> {
     ///
     /// Refrains from re-emitting expressions consumed elsewhere and returns
     /// `Ok(())` after optionally pushing a doc.
+    ///
+    /// However, unit-returning calls are always emitted here because the return
+    /// terminator won't emit them (it skips unit values).
     fn emit_eval_inst(
         &mut self,
         docs: &mut Vec<YulDoc>,
         value: ValueId,
         state: &mut BlockState,
     ) -> Result<(), YulError> {
-        if self.value_use_counts[value.index()] == 1
+        let value_data = self.mir_func.body.value(value);
+        let is_unit_call = matches!(&value_data.origin, ValueOrigin::Call(..))
+            && value_data.ty.is_tuple(self.db)
+            && value_data.ty.field_count(self.db) == 0;
+
+        // Unit-returning calls must always be emitted here since the return
+        // terminator won't render them.
+        if (self.value_use_counts[value.index()] == 1 || is_unit_call)
             && let Some(doc) = self.render_eval(value, state)?
         {
             docs.push(doc);
@@ -327,6 +337,14 @@ impl<'db> FunctionEmitter<'db> {
                 "intrinsic does not yield a value".into(),
             ));
         }
+        if matches!(intr.op, IntrinsicOp::AddrOf) {
+            let args = self.lower_intrinsic_args(intr, state)?;
+            self.expect_intrinsic_arity(intr.op, &args, 1)?;
+            return Ok(args
+                .into_iter()
+                .next()
+                .expect("addr_of arity already checked"));
+        }
         if matches!(
             intr.op,
             IntrinsicOp::CodeRegionOffset | IntrinsicOp::CodeRegionLen
@@ -334,8 +352,17 @@ impl<'db> FunctionEmitter<'db> {
             return self.lower_code_region_query(intr);
         }
         let args = self.lower_intrinsic_args(intr, state)?;
-        self.expect_intrinsic_arity(intr.op, &args, 1)?;
-        Ok(format!("{}({})", self.intrinsic_name(intr.op), args[0]))
+        let expected = match intr.op {
+            IntrinsicOp::Keccak => 2,
+            IntrinsicOp::Caller => 0,
+            _ => 1,
+        };
+        self.expect_intrinsic_arity(intr.op, &args, expected)?;
+        Ok(format!(
+            "{}({})",
+            self.intrinsic_name(intr.op),
+            args.join(", ")
+        ))
     }
 
     /// Lowers `code_region_offset/len` into `dataoffset/datasize`.
@@ -375,7 +402,8 @@ impl<'db> FunctionEmitter<'db> {
         let expected = match intr.op {
             IntrinsicOp::Codecopy => 3,
             IntrinsicOp::Mstore | IntrinsicOp::Mstore8 | IntrinsicOp::Sstore => 2,
-            IntrinsicOp::ReturnData => 2,
+            IntrinsicOp::ReturnData | IntrinsicOp::Revert => 2,
+            IntrinsicOp::Caller => 0,
             _ => unreachable!(),
         };
         self.expect_intrinsic_arity(intr.op, &args, expected)?;
@@ -384,7 +412,9 @@ impl<'db> FunctionEmitter<'db> {
             IntrinsicOp::Mstore8 => format!("mstore8({}, {})", args[0], args[1]),
             IntrinsicOp::Sstore => format!("sstore({}, {})", args[0], args[1]),
             IntrinsicOp::ReturnData => format!("return({}, {})", args[0], args[1]),
+            IntrinsicOp::Revert => format!("revert({}, {})", args[0], args[1]),
             IntrinsicOp::Codecopy => format!("codecopy({}, {}, {})", args[0], args[1], args[2]),
+            IntrinsicOp::Caller => String::from("caller()"),
             _ => unreachable!(),
         };
         Ok(Some(YulDoc::line(line)))
@@ -440,14 +470,18 @@ impl<'db> FunctionEmitter<'db> {
         match op {
             IntrinsicOp::Mload => "mload",
             IntrinsicOp::Calldataload => "calldataload",
+            IntrinsicOp::AddrOf => "addr_of",
             IntrinsicOp::Mstore => "mstore",
             IntrinsicOp::Mstore8 => "mstore8",
             IntrinsicOp::Sload => "sload",
             IntrinsicOp::Sstore => "sstore",
             IntrinsicOp::ReturnData => "return",
+            IntrinsicOp::Revert => "revert",
             IntrinsicOp::Codecopy => "codecopy",
             IntrinsicOp::CodeRegionOffset => "code_region_offset",
             IntrinsicOp::CodeRegionLen => "code_region_len",
+            IntrinsicOp::Keccak => "keccak256",
+            IntrinsicOp::Caller => "caller",
         }
     }
 }

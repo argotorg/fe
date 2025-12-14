@@ -1,0 +1,1162 @@
+---
+source: crates/hir/tests/ty_check.rs
+expression: res
+input_file: test_files/ty_check/recv_nested_patterns.fe
+---
+note: 
+   ┌─ recv_nested_patterns.fe:20:9
+   │
+20 │         SetPair { pair: (first, second) } -> u64 uses () {
+   │         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ SetPair
+
+note: 
+   ┌─ recv_nested_patterns.fe:20:25
+   │
+20 │         SetPair { pair: (first, second) } -> u64 uses () {
+   │                         ^^^^^^^^^^^^^^^ (u64, bool)
+
+note: 
+   ┌─ recv_nested_patterns.fe:20:26
+   │
+20 │         SetPair { pair: (first, second) } -> u64 uses () {
+   │                          ^^^^^ u64
+
+note: 
+   ┌─ recv_nested_patterns.fe:20:33
+   │
+20 │         SetPair { pair: (first, second) } -> u64 uses () {
+   │                                 ^^^^^^ bool
+
+note: 
+   ┌─ recv_nested_patterns.fe:20:58
+   │  
+20 │           SetPair { pair: (first, second) } -> u64 uses () {
+   │ ╭──────────────────────────────────────────────────────────^
+21 │ │             if second {
+22 │ │                 first
+23 │ │             } else {
+24 │ │                 0
+25 │ │             }
+26 │ │         }
+   │ ╰─────────^ u64
+
+note: 
+   ┌─ recv_nested_patterns.fe:21:13
+   │  
+21 │ ╭             if second {
+22 │ │                 first
+23 │ │             } else {
+24 │ │                 0
+25 │ │             }
+   │ ╰─────────────^ u64
+
+note: 
+   ┌─ recv_nested_patterns.fe:21:16
+   │
+21 │             if second {
+   │                ^^^^^^ bool
+
+note: 
+   ┌─ recv_nested_patterns.fe:21:23
+   │  
+21 │               if second {
+   │ ╭───────────────────────^
+22 │ │                 first
+23 │ │             } else {
+   │ ╰─────────────^ u64
+
+note: 
+   ┌─ recv_nested_patterns.fe:22:17
+   │
+22 │                 first
+   │                 ^^^^^ u64
+
+note: 
+   ┌─ recv_nested_patterns.fe:23:20
+   │  
+23 │               } else {
+   │ ╭────────────────────^
+24 │ │                 0
+25 │ │             }
+   │ ╰─────────────^ u64
+
+note: 
+   ┌─ recv_nested_patterns.fe:24:17
+   │
+24 │                 0
+   │                 ^ u64
+
+note: 
+   ┌─ recv_nested_patterns.fe:29:9
+   │
+29 │         SetTriple { triple: (a, b, c) } -> u64 uses () {
+   │         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ SetTriple
+
+note: 
+   ┌─ recv_nested_patterns.fe:29:29
+   │
+29 │         SetTriple { triple: (a, b, c) } -> u64 uses () {
+   │                             ^^^^^^^^^ (u64, u64, u64)
+
+note: 
+   ┌─ recv_nested_patterns.fe:29:30
+   │
+29 │         SetTriple { triple: (a, b, c) } -> u64 uses () {
+   │                              ^ u64
+
+note: 
+   ┌─ recv_nested_patterns.fe:29:33
+   │
+29 │         SetTriple { triple: (a, b, c) } -> u64 uses () {
+   │                                 ^ u64
+
+note: 
+   ┌─ recv_nested_patterns.fe:29:36
+   │
+29 │         SetTriple { triple: (a, b, c) } -> u64 uses () {
+   │                                    ^ u64
+
+note: 
+   ┌─ recv_nested_patterns.fe:29:56
+   │  
+29 │           SetTriple { triple: (a, b, c) } -> u64 uses () {
+   │ ╭────────────────────────────────────────────────────────^
+30 │ │             a + b + c
+31 │ │         }
+   │ ╰─────────^ u64
+
+note: 
+   ┌─ recv_nested_patterns.fe:30:13
+   │
+30 │             a + b + c
+   │             ^ u64
+
+note: 
+   ┌─ recv_nested_patterns.fe:30:13
+   │
+30 │             a + b + c
+   │             ^^^^^ u64
+
+note: 
+   ┌─ recv_nested_patterns.fe:30:13
+   │
+30 │             a + b + c
+   │             ^^^^^^^^^ u64
+
+note: 
+   ┌─ recv_nested_patterns.fe:30:17
+   │
+30 │             a + b + c
+   │                 ^ u64
+
+note: 
+   ┌─ recv_nested_patterns.fe:30:21
+   │
+30 │             a + b + c
+   │                     ^ u64
+
+note: 
+   ┌─ recv_nested_patterns.fe:34:9
+   │
+34 │         SetNested { nested: ((x, y), flag) } -> u64 uses () {
+   │         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ SetNested
+
+note: 
+   ┌─ recv_nested_patterns.fe:34:29
+   │
+34 │         SetNested { nested: ((x, y), flag) } -> u64 uses () {
+   │                             ^^^^^^^^^^^^^^ ((u64, u64), bool)
+
+note: 
+   ┌─ recv_nested_patterns.fe:34:30
+   │
+34 │         SetNested { nested: ((x, y), flag) } -> u64 uses () {
+   │                              ^^^^^^ (u64, u64)
+
+note: 
+   ┌─ recv_nested_patterns.fe:34:31
+   │
+34 │         SetNested { nested: ((x, y), flag) } -> u64 uses () {
+   │                               ^ u64
+
+note: 
+   ┌─ recv_nested_patterns.fe:34:34
+   │
+34 │         SetNested { nested: ((x, y), flag) } -> u64 uses () {
+   │                                  ^ u64
+
+note: 
+   ┌─ recv_nested_patterns.fe:34:38
+   │
+34 │         SetNested { nested: ((x, y), flag) } -> u64 uses () {
+   │                                      ^^^^ bool
+
+note: 
+   ┌─ recv_nested_patterns.fe:34:61
+   │  
+34 │           SetNested { nested: ((x, y), flag) } -> u64 uses () {
+   │ ╭─────────────────────────────────────────────────────────────^
+35 │ │             if flag {
+36 │ │                 x + y
+37 │ │             } else {
+38 │ │                 0
+39 │ │             }
+40 │ │         }
+   │ ╰─────────^ u64
+
+note: 
+   ┌─ recv_nested_patterns.fe:35:13
+   │  
+35 │ ╭             if flag {
+36 │ │                 x + y
+37 │ │             } else {
+38 │ │                 0
+39 │ │             }
+   │ ╰─────────────^ u64
+
+note: 
+   ┌─ recv_nested_patterns.fe:35:16
+   │
+35 │             if flag {
+   │                ^^^^ bool
+
+note: 
+   ┌─ recv_nested_patterns.fe:35:21
+   │  
+35 │               if flag {
+   │ ╭─────────────────────^
+36 │ │                 x + y
+37 │ │             } else {
+   │ ╰─────────────^ u64
+
+note: 
+   ┌─ recv_nested_patterns.fe:36:17
+   │
+36 │                 x + y
+   │                 ^ u64
+
+note: 
+   ┌─ recv_nested_patterns.fe:36:17
+   │
+36 │                 x + y
+   │                 ^^^^^ u64
+
+note: 
+   ┌─ recv_nested_patterns.fe:36:21
+   │
+36 │                 x + y
+   │                     ^ u64
+
+note: 
+   ┌─ recv_nested_patterns.fe:37:20
+   │  
+37 │               } else {
+   │ ╭────────────────────^
+38 │ │                 0
+39 │ │             }
+   │ ╰─────────────^ u64
+
+note: 
+   ┌─ recv_nested_patterns.fe:38:17
+   │
+38 │                 0
+   │                 ^ u64
+
+note: 
+   ┌─ recv_nested_patterns.fe:43:9
+   │
+43 │         Multi { a: (x, y), b: (p, q) } -> bool uses (mut data) {
+   │         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ Multi
+
+note: 
+   ┌─ recv_nested_patterns.fe:43:20
+   │
+43 │         Multi { a: (x, y), b: (p, q) } -> bool uses (mut data) {
+   │                    ^^^^^^ (u64, u64)
+
+note: 
+   ┌─ recv_nested_patterns.fe:43:21
+   │
+43 │         Multi { a: (x, y), b: (p, q) } -> bool uses (mut data) {
+   │                     ^ u64
+
+note: 
+   ┌─ recv_nested_patterns.fe:43:24
+   │
+43 │         Multi { a: (x, y), b: (p, q) } -> bool uses (mut data) {
+   │                        ^ u64
+
+note: 
+   ┌─ recv_nested_patterns.fe:43:31
+   │
+43 │         Multi { a: (x, y), b: (p, q) } -> bool uses (mut data) {
+   │                               ^^^^^^ (bool, bool)
+
+note: 
+   ┌─ recv_nested_patterns.fe:43:32
+   │
+43 │         Multi { a: (x, y), b: (p, q) } -> bool uses (mut data) {
+   │                                ^ bool
+
+note: 
+   ┌─ recv_nested_patterns.fe:43:35
+   │
+43 │         Multi { a: (x, y), b: (p, q) } -> bool uses (mut data) {
+   │                                   ^ bool
+
+note: 
+   ┌─ recv_nested_patterns.fe:43:64
+   │  
+43 │           Multi { a: (x, y), b: (p, q) } -> bool uses (mut data) {
+   │ ╭────────────────────────────────────────────────────────────────^
+44 │ │             data = x + y
+45 │ │             p && q
+46 │ │         }
+   │ ╰─────────^ bool
+
+note: 
+   ┌─ recv_nested_patterns.fe:44:13
+   │
+44 │             data = x + y
+   │             ^^^^ u64
+
+note: 
+   ┌─ recv_nested_patterns.fe:44:13
+   │
+44 │             data = x + y
+   │             ^^^^^^^^^^^^ ()
+
+note: 
+   ┌─ recv_nested_patterns.fe:44:20
+   │
+44 │             data = x + y
+   │                    ^ u64
+
+note: 
+   ┌─ recv_nested_patterns.fe:44:20
+   │
+44 │             data = x + y
+   │                    ^^^^^ u64
+
+note: 
+   ┌─ recv_nested_patterns.fe:44:24
+   │
+44 │             data = x + y
+   │                        ^ u64
+
+note: 
+   ┌─ recv_nested_patterns.fe:45:13
+   │
+45 │             p && q
+   │             ^ bool
+
+note: 
+   ┌─ recv_nested_patterns.fe:45:13
+   │
+45 │             p && q
+   │             ^^^^^^ bool
+
+note: 
+   ┌─ recv_nested_patterns.fe:45:18
+   │
+45 │             p && q
+   │                  ^ bool
+
+note: 
+   ┌─ recv_nested_patterns.fe:56:9
+   │
+56 │         SetPair { pair: (val, _) } -> u64 uses () {
+   │         ^^^^^^^^^^^^^^^^^^^^^^^^^^ SetPair
+
+note: 
+   ┌─ recv_nested_patterns.fe:56:25
+   │
+56 │         SetPair { pair: (val, _) } -> u64 uses () {
+   │                         ^^^^^^^^ (u64, bool)
+
+note: 
+   ┌─ recv_nested_patterns.fe:56:26
+   │
+56 │         SetPair { pair: (val, _) } -> u64 uses () {
+   │                          ^^^ u64
+
+note: 
+   ┌─ recv_nested_patterns.fe:56:31
+   │
+56 │         SetPair { pair: (val, _) } -> u64 uses () {
+   │                               ^ bool
+
+note: 
+   ┌─ recv_nested_patterns.fe:56:51
+   │  
+56 │           SetPair { pair: (val, _) } -> u64 uses () {
+   │ ╭───────────────────────────────────────────────────^
+57 │ │             val
+58 │ │         }
+   │ ╰─────────^ u64
+
+note: 
+   ┌─ recv_nested_patterns.fe:57:13
+   │
+57 │             val
+   │             ^^^ u64
+
+note: 
+   ┌─ recv_nested_patterns.fe:61:9
+   │
+61 │         SetTriple { triple: (first, _, last) } -> u64 uses () {
+   │         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ SetTriple
+
+note: 
+   ┌─ recv_nested_patterns.fe:61:29
+   │
+61 │         SetTriple { triple: (first, _, last) } -> u64 uses () {
+   │                             ^^^^^^^^^^^^^^^^ (u64, u64, u64)
+
+note: 
+   ┌─ recv_nested_patterns.fe:61:30
+   │
+61 │         SetTriple { triple: (first, _, last) } -> u64 uses () {
+   │                              ^^^^^ u64
+
+note: 
+   ┌─ recv_nested_patterns.fe:61:37
+   │
+61 │         SetTriple { triple: (first, _, last) } -> u64 uses () {
+   │                                     ^ u64
+
+note: 
+   ┌─ recv_nested_patterns.fe:61:40
+   │
+61 │         SetTriple { triple: (first, _, last) } -> u64 uses () {
+   │                                        ^^^^ u64
+
+note: 
+   ┌─ recv_nested_patterns.fe:61:63
+   │  
+61 │           SetTriple { triple: (first, _, last) } -> u64 uses () {
+   │ ╭───────────────────────────────────────────────────────────────^
+62 │ │             first + last
+63 │ │         }
+   │ ╰─────────^ u64
+
+note: 
+   ┌─ recv_nested_patterns.fe:62:13
+   │
+62 │             first + last
+   │             ^^^^^ u64
+
+note: 
+   ┌─ recv_nested_patterns.fe:62:13
+   │
+62 │             first + last
+   │             ^^^^^^^^^^^^ u64
+
+note: 
+   ┌─ recv_nested_patterns.fe:62:21
+   │
+62 │             first + last
+   │                     ^^^^ u64
+
+note: 
+   ┌─ recv_nested_patterns.fe:66:9
+   │
+66 │         SetNested { nested: ((x, _), _) } -> u64 uses () {
+   │         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ SetNested
+
+note: 
+   ┌─ recv_nested_patterns.fe:66:29
+   │
+66 │         SetNested { nested: ((x, _), _) } -> u64 uses () {
+   │                             ^^^^^^^^^^^ ((u64, u64), bool)
+
+note: 
+   ┌─ recv_nested_patterns.fe:66:30
+   │
+66 │         SetNested { nested: ((x, _), _) } -> u64 uses () {
+   │                              ^^^^^^ (u64, u64)
+
+note: 
+   ┌─ recv_nested_patterns.fe:66:31
+   │
+66 │         SetNested { nested: ((x, _), _) } -> u64 uses () {
+   │                               ^ u64
+
+note: 
+   ┌─ recv_nested_patterns.fe:66:34
+   │
+66 │         SetNested { nested: ((x, _), _) } -> u64 uses () {
+   │                                  ^ u64
+
+note: 
+   ┌─ recv_nested_patterns.fe:66:38
+   │
+66 │         SetNested { nested: ((x, _), _) } -> u64 uses () {
+   │                                      ^ bool
+
+note: 
+   ┌─ recv_nested_patterns.fe:66:58
+   │  
+66 │           SetNested { nested: ((x, _), _) } -> u64 uses () {
+   │ ╭──────────────────────────────────────────────────────────^
+67 │ │             x
+68 │ │         }
+   │ ╰─────────^ u64
+
+note: 
+   ┌─ recv_nested_patterns.fe:67:13
+   │
+67 │             x
+   │             ^ u64
+
+note: 
+   ┌─ recv_nested_patterns.fe:71:9
+   │
+71 │         Multi { a: (_, y), b: (p, _) } -> bool uses (mut data) {
+   │         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ Multi
+
+note: 
+   ┌─ recv_nested_patterns.fe:71:20
+   │
+71 │         Multi { a: (_, y), b: (p, _) } -> bool uses (mut data) {
+   │                    ^^^^^^ (u64, u64)
+
+note: 
+   ┌─ recv_nested_patterns.fe:71:21
+   │
+71 │         Multi { a: (_, y), b: (p, _) } -> bool uses (mut data) {
+   │                     ^ u64
+
+note: 
+   ┌─ recv_nested_patterns.fe:71:24
+   │
+71 │         Multi { a: (_, y), b: (p, _) } -> bool uses (mut data) {
+   │                        ^ u64
+
+note: 
+   ┌─ recv_nested_patterns.fe:71:31
+   │
+71 │         Multi { a: (_, y), b: (p, _) } -> bool uses (mut data) {
+   │                               ^^^^^^ (bool, bool)
+
+note: 
+   ┌─ recv_nested_patterns.fe:71:32
+   │
+71 │         Multi { a: (_, y), b: (p, _) } -> bool uses (mut data) {
+   │                                ^ bool
+
+note: 
+   ┌─ recv_nested_patterns.fe:71:35
+   │
+71 │         Multi { a: (_, y), b: (p, _) } -> bool uses (mut data) {
+   │                                   ^ bool
+
+note: 
+   ┌─ recv_nested_patterns.fe:71:64
+   │  
+71 │           Multi { a: (_, y), b: (p, _) } -> bool uses (mut data) {
+   │ ╭────────────────────────────────────────────────────────────────^
+72 │ │             data = y
+73 │ │             p
+74 │ │         }
+   │ ╰─────────^ bool
+
+note: 
+   ┌─ recv_nested_patterns.fe:72:13
+   │
+72 │             data = y
+   │             ^^^^ u64
+
+note: 
+   ┌─ recv_nested_patterns.fe:72:13
+   │
+72 │             data = y
+   │             ^^^^^^^^ ()
+
+note: 
+   ┌─ recv_nested_patterns.fe:72:20
+   │
+72 │             data = y
+   │                    ^ u64
+
+note: 
+   ┌─ recv_nested_patterns.fe:73:13
+   │
+73 │             p
+   │             ^ bool
+
+note: 
+   ┌─ recv_nested_patterns.fe:83:9
+   │
+83 │         SetPair { pair: (amount, is_valid) } -> u64 uses () {
+   │         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ SetPair
+
+note: 
+   ┌─ recv_nested_patterns.fe:83:25
+   │
+83 │         SetPair { pair: (amount, is_valid) } -> u64 uses () {
+   │                         ^^^^^^^^^^^^^^^^^^ (u64, bool)
+
+note: 
+   ┌─ recv_nested_patterns.fe:83:26
+   │
+83 │         SetPair { pair: (amount, is_valid) } -> u64 uses () {
+   │                          ^^^^^^ u64
+
+note: 
+   ┌─ recv_nested_patterns.fe:83:34
+   │
+83 │         SetPair { pair: (amount, is_valid) } -> u64 uses () {
+   │                                  ^^^^^^^^ bool
+
+note: 
+   ┌─ recv_nested_patterns.fe:83:61
+   │  
+83 │           SetPair { pair: (amount, is_valid) } -> u64 uses () {
+   │ ╭─────────────────────────────────────────────────────────────^
+84 │ │             if is_valid { amount } else { 0 }
+85 │ │         }
+   │ ╰─────────^ u64
+
+note: 
+   ┌─ recv_nested_patterns.fe:84:13
+   │
+84 │             if is_valid { amount } else { 0 }
+   │             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ u64
+
+note: 
+   ┌─ recv_nested_patterns.fe:84:16
+   │
+84 │             if is_valid { amount } else { 0 }
+   │                ^^^^^^^^ bool
+
+note: 
+   ┌─ recv_nested_patterns.fe:84:25
+   │
+84 │             if is_valid { amount } else { 0 }
+   │                         ^^^^^^^^^^ u64
+
+note: 
+   ┌─ recv_nested_patterns.fe:84:27
+   │
+84 │             if is_valid { amount } else { 0 }
+   │                           ^^^^^^ u64
+
+note: 
+   ┌─ recv_nested_patterns.fe:84:41
+   │
+84 │             if is_valid { amount } else { 0 }
+   │                                         ^^^^^ u64
+
+note: 
+   ┌─ recv_nested_patterns.fe:84:43
+   │
+84 │             if is_valid { amount } else { 0 }
+   │                                           ^ u64
+
+note: 
+   ┌─ recv_nested_patterns.fe:87:9
+   │
+87 │         SetTriple { triple: (x, y, z) } -> u64 uses () {
+   │         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ SetTriple
+
+note: 
+   ┌─ recv_nested_patterns.fe:87:29
+   │
+87 │         SetTriple { triple: (x, y, z) } -> u64 uses () {
+   │                             ^^^^^^^^^ (u64, u64, u64)
+
+note: 
+   ┌─ recv_nested_patterns.fe:87:30
+   │
+87 │         SetTriple { triple: (x, y, z) } -> u64 uses () {
+   │                              ^ u64
+
+note: 
+   ┌─ recv_nested_patterns.fe:87:33
+   │
+87 │         SetTriple { triple: (x, y, z) } -> u64 uses () {
+   │                                 ^ u64
+
+note: 
+   ┌─ recv_nested_patterns.fe:87:36
+   │
+87 │         SetTriple { triple: (x, y, z) } -> u64 uses () {
+   │                                    ^ u64
+
+note: 
+   ┌─ recv_nested_patterns.fe:87:56
+   │  
+87 │           SetTriple { triple: (x, y, z) } -> u64 uses () {
+   │ ╭────────────────────────────────────────────────────────^
+88 │ │             x + y + z
+89 │ │         }
+   │ ╰─────────^ u64
+
+note: 
+   ┌─ recv_nested_patterns.fe:88:13
+   │
+88 │             x + y + z
+   │             ^ u64
+
+note: 
+   ┌─ recv_nested_patterns.fe:88:13
+   │
+88 │             x + y + z
+   │             ^^^^^ u64
+
+note: 
+   ┌─ recv_nested_patterns.fe:88:13
+   │
+88 │             x + y + z
+   │             ^^^^^^^^^ u64
+
+note: 
+   ┌─ recv_nested_patterns.fe:88:17
+   │
+88 │             x + y + z
+   │                 ^ u64
+
+note: 
+   ┌─ recv_nested_patterns.fe:88:21
+   │
+88 │             x + y + z
+   │                     ^ u64
+
+note: 
+   ┌─ recv_nested_patterns.fe:91:9
+   │
+91 │         SetNested { nested: ((left, right), enabled) } -> u64 uses () {
+   │         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ SetNested
+
+note: 
+   ┌─ recv_nested_patterns.fe:91:29
+   │
+91 │         SetNested { nested: ((left, right), enabled) } -> u64 uses () {
+   │                             ^^^^^^^^^^^^^^^^^^^^^^^^ ((u64, u64), bool)
+
+note: 
+   ┌─ recv_nested_patterns.fe:91:30
+   │
+91 │         SetNested { nested: ((left, right), enabled) } -> u64 uses () {
+   │                              ^^^^^^^^^^^^^ (u64, u64)
+
+note: 
+   ┌─ recv_nested_patterns.fe:91:31
+   │
+91 │         SetNested { nested: ((left, right), enabled) } -> u64 uses () {
+   │                               ^^^^ u64
+
+note: 
+   ┌─ recv_nested_patterns.fe:91:37
+   │
+91 │         SetNested { nested: ((left, right), enabled) } -> u64 uses () {
+   │                                     ^^^^^ u64
+
+note: 
+   ┌─ recv_nested_patterns.fe:91:45
+   │
+91 │         SetNested { nested: ((left, right), enabled) } -> u64 uses () {
+   │                                             ^^^^^^^ bool
+
+note: 
+   ┌─ recv_nested_patterns.fe:91:71
+   │  
+91 │           SetNested { nested: ((left, right), enabled) } -> u64 uses () {
+   │ ╭───────────────────────────────────────────────────────────────────────^
+92 │ │             if enabled { left + right } else { 0 }
+93 │ │         }
+   │ ╰─────────^ u64
+
+note: 
+   ┌─ recv_nested_patterns.fe:92:13
+   │
+92 │             if enabled { left + right } else { 0 }
+   │             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ u64
+
+note: 
+   ┌─ recv_nested_patterns.fe:92:16
+   │
+92 │             if enabled { left + right } else { 0 }
+   │                ^^^^^^^ bool
+
+note: 
+   ┌─ recv_nested_patterns.fe:92:24
+   │
+92 │             if enabled { left + right } else { 0 }
+   │                        ^^^^^^^^^^^^^^^^ u64
+
+note: 
+   ┌─ recv_nested_patterns.fe:92:26
+   │
+92 │             if enabled { left + right } else { 0 }
+   │                          ^^^^ u64
+
+note: 
+   ┌─ recv_nested_patterns.fe:92:26
+   │
+92 │             if enabled { left + right } else { 0 }
+   │                          ^^^^^^^^^^^^ u64
+
+note: 
+   ┌─ recv_nested_patterns.fe:92:33
+   │
+92 │             if enabled { left + right } else { 0 }
+   │                                 ^^^^^ u64
+
+note: 
+   ┌─ recv_nested_patterns.fe:92:46
+   │
+92 │             if enabled { left + right } else { 0 }
+   │                                              ^^^^^ u64
+
+note: 
+   ┌─ recv_nested_patterns.fe:92:48
+   │
+92 │             if enabled { left + right } else { 0 }
+   │                                                ^ u64
+
+note: 
+   ┌─ recv_nested_patterns.fe:95:9
+   │
+95 │         Multi { a: (ax, ay), b: (b1, b2) } -> bool uses (mut data) {
+   │         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ Multi
+
+note: 
+   ┌─ recv_nested_patterns.fe:95:20
+   │
+95 │         Multi { a: (ax, ay), b: (b1, b2) } -> bool uses (mut data) {
+   │                    ^^^^^^^^ (u64, u64)
+
+note: 
+   ┌─ recv_nested_patterns.fe:95:21
+   │
+95 │         Multi { a: (ax, ay), b: (b1, b2) } -> bool uses (mut data) {
+   │                     ^^ u64
+
+note: 
+   ┌─ recv_nested_patterns.fe:95:25
+   │
+95 │         Multi { a: (ax, ay), b: (b1, b2) } -> bool uses (mut data) {
+   │                         ^^ u64
+
+note: 
+   ┌─ recv_nested_patterns.fe:95:33
+   │
+95 │         Multi { a: (ax, ay), b: (b1, b2) } -> bool uses (mut data) {
+   │                                 ^^^^^^^^ (bool, bool)
+
+note: 
+   ┌─ recv_nested_patterns.fe:95:34
+   │
+95 │         Multi { a: (ax, ay), b: (b1, b2) } -> bool uses (mut data) {
+   │                                  ^^ bool
+
+note: 
+   ┌─ recv_nested_patterns.fe:95:38
+   │
+95 │         Multi { a: (ax, ay), b: (b1, b2) } -> bool uses (mut data) {
+   │                                      ^^ bool
+
+note: 
+   ┌─ recv_nested_patterns.fe:95:68
+   │  
+95 │           Multi { a: (ax, ay), b: (b1, b2) } -> bool uses (mut data) {
+   │ ╭────────────────────────────────────────────────────────────────────^
+96 │ │             data = ax + ay
+97 │ │             b1 || b2
+98 │ │         }
+   │ ╰─────────^ bool
+
+note: 
+   ┌─ recv_nested_patterns.fe:96:13
+   │
+96 │             data = ax + ay
+   │             ^^^^ u64
+
+note: 
+   ┌─ recv_nested_patterns.fe:96:13
+   │
+96 │             data = ax + ay
+   │             ^^^^^^^^^^^^^^ ()
+
+note: 
+   ┌─ recv_nested_patterns.fe:96:20
+   │
+96 │             data = ax + ay
+   │                    ^^ u64
+
+note: 
+   ┌─ recv_nested_patterns.fe:96:20
+   │
+96 │             data = ax + ay
+   │                    ^^^^^^^ u64
+
+note: 
+   ┌─ recv_nested_patterns.fe:96:25
+   │
+96 │             data = ax + ay
+   │                         ^^ u64
+
+note: 
+   ┌─ recv_nested_patterns.fe:97:13
+   │
+97 │             b1 || b2
+   │             ^^ bool
+
+note: 
+   ┌─ recv_nested_patterns.fe:97:13
+   │
+97 │             b1 || b2
+   │             ^^^^^^^^ bool
+
+note: 
+   ┌─ recv_nested_patterns.fe:97:19
+   │
+97 │             b1 || b2
+   │                   ^^ bool
+
+note: 
+    ┌─ recv_nested_patterns.fe:117:9
+    │
+117 │         TypeMismatch { pair: (a, b) } -> u64 uses () {
+    │         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ TypeMismatch
+
+note: 
+    ┌─ recv_nested_patterns.fe:117:30
+    │
+117 │         TypeMismatch { pair: (a, b) } -> u64 uses () {
+    │                              ^^^^^^ (u64, u64)
+
+note: 
+    ┌─ recv_nested_patterns.fe:117:31
+    │
+117 │         TypeMismatch { pair: (a, b) } -> u64 uses () {
+    │                               ^ u64
+
+note: 
+    ┌─ recv_nested_patterns.fe:117:34
+    │
+117 │         TypeMismatch { pair: (a, b) } -> u64 uses () {
+    │                                  ^ u64
+
+note: 
+    ┌─ recv_nested_patterns.fe:117:54
+    │  
+117 │           TypeMismatch { pair: (a, b) } -> u64 uses () {
+    │ ╭──────────────────────────────────────────────────────^
+118 │ │             a + b
+119 │ │         }
+    │ ╰─────────^ u64
+
+note: 
+    ┌─ recv_nested_patterns.fe:118:13
+    │
+118 │             a + b
+    │             ^ u64
+
+note: 
+    ┌─ recv_nested_patterns.fe:118:13
+    │
+118 │             a + b
+    │             ^^^^^ u64
+
+note: 
+    ┌─ recv_nested_patterns.fe:118:17
+    │
+118 │             a + b
+    │                 ^ u64
+
+note: 
+    ┌─ recv_nested_patterns.fe:134:9
+    │
+134 │         Deep { nested: (((a, b), c), flag) } -> u64 uses () {
+    │         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ Deep
+
+note: 
+    ┌─ recv_nested_patterns.fe:134:24
+    │
+134 │         Deep { nested: (((a, b), c), flag) } -> u64 uses () {
+    │                        ^^^^^^^^^^^^^^^^^^^ (((u64, u64), u64), bool)
+
+note: 
+    ┌─ recv_nested_patterns.fe:134:25
+    │
+134 │         Deep { nested: (((a, b), c), flag) } -> u64 uses () {
+    │                         ^^^^^^^^^^^ ((u64, u64), u64)
+
+note: 
+    ┌─ recv_nested_patterns.fe:134:26
+    │
+134 │         Deep { nested: (((a, b), c), flag) } -> u64 uses () {
+    │                          ^^^^^^ (u64, u64)
+
+note: 
+    ┌─ recv_nested_patterns.fe:134:27
+    │
+134 │         Deep { nested: (((a, b), c), flag) } -> u64 uses () {
+    │                           ^ u64
+
+note: 
+    ┌─ recv_nested_patterns.fe:134:30
+    │
+134 │         Deep { nested: (((a, b), c), flag) } -> u64 uses () {
+    │                              ^ u64
+
+note: 
+    ┌─ recv_nested_patterns.fe:134:34
+    │
+134 │         Deep { nested: (((a, b), c), flag) } -> u64 uses () {
+    │                                  ^ u64
+
+note: 
+    ┌─ recv_nested_patterns.fe:134:38
+    │
+134 │         Deep { nested: (((a, b), c), flag) } -> u64 uses () {
+    │                                      ^^^^ bool
+
+note: 
+    ┌─ recv_nested_patterns.fe:134:61
+    │  
+134 │           Deep { nested: (((a, b), c), flag) } -> u64 uses () {
+    │ ╭─────────────────────────────────────────────────────────────^
+135 │ │             if flag {
+136 │ │                 a + b + c
+137 │ │             } else {
+138 │ │                 0
+139 │ │             }
+140 │ │         }
+    │ ╰─────────^ u64
+
+note: 
+    ┌─ recv_nested_patterns.fe:135:13
+    │  
+135 │ ╭             if flag {
+136 │ │                 a + b + c
+137 │ │             } else {
+138 │ │                 0
+139 │ │             }
+    │ ╰─────────────^ u64
+
+note: 
+    ┌─ recv_nested_patterns.fe:135:16
+    │
+135 │             if flag {
+    │                ^^^^ bool
+
+note: 
+    ┌─ recv_nested_patterns.fe:135:21
+    │  
+135 │               if flag {
+    │ ╭─────────────────────^
+136 │ │                 a + b + c
+137 │ │             } else {
+    │ ╰─────────────^ u64
+
+note: 
+    ┌─ recv_nested_patterns.fe:136:17
+    │
+136 │                 a + b + c
+    │                 ^ u64
+
+note: 
+    ┌─ recv_nested_patterns.fe:136:17
+    │
+136 │                 a + b + c
+    │                 ^^^^^ u64
+
+note: 
+    ┌─ recv_nested_patterns.fe:136:17
+    │
+136 │                 a + b + c
+    │                 ^^^^^^^^^ u64
+
+note: 
+    ┌─ recv_nested_patterns.fe:136:21
+    │
+136 │                 a + b + c
+    │                     ^ u64
+
+note: 
+    ┌─ recv_nested_patterns.fe:136:25
+    │
+136 │                 a + b + c
+    │                         ^ u64
+
+note: 
+    ┌─ recv_nested_patterns.fe:137:20
+    │  
+137 │               } else {
+    │ ╭────────────────────^
+138 │ │                 0
+139 │ │             }
+    │ ╰─────────────^ u64
+
+note: 
+    ┌─ recv_nested_patterns.fe:138:17
+    │
+138 │                 0
+    │                 ^ u64
+
+note: 
+    ┌─ recv_nested_patterns.fe:149:9
+    │
+149 │         Deep { nested: (((x, _), _), _) } -> u64 uses () {
+    │         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ Deep
+
+note: 
+    ┌─ recv_nested_patterns.fe:149:24
+    │
+149 │         Deep { nested: (((x, _), _), _) } -> u64 uses () {
+    │                        ^^^^^^^^^^^^^^^^ (((u64, u64), u64), bool)
+
+note: 
+    ┌─ recv_nested_patterns.fe:149:25
+    │
+149 │         Deep { nested: (((x, _), _), _) } -> u64 uses () {
+    │                         ^^^^^^^^^^^ ((u64, u64), u64)
+
+note: 
+    ┌─ recv_nested_patterns.fe:149:26
+    │
+149 │         Deep { nested: (((x, _), _), _) } -> u64 uses () {
+    │                          ^^^^^^ (u64, u64)
+
+note: 
+    ┌─ recv_nested_patterns.fe:149:27
+    │
+149 │         Deep { nested: (((x, _), _), _) } -> u64 uses () {
+    │                           ^ u64
+
+note: 
+    ┌─ recv_nested_patterns.fe:149:30
+    │
+149 │         Deep { nested: (((x, _), _), _) } -> u64 uses () {
+    │                              ^ u64
+
+note: 
+    ┌─ recv_nested_patterns.fe:149:34
+    │
+149 │         Deep { nested: (((x, _), _), _) } -> u64 uses () {
+    │                                  ^ u64
+
+note: 
+    ┌─ recv_nested_patterns.fe:149:38
+    │
+149 │         Deep { nested: (((x, _), _), _) } -> u64 uses () {
+    │                                      ^ bool
+
+note: 
+    ┌─ recv_nested_patterns.fe:149:58
+    │  
+149 │           Deep { nested: (((x, _), _), _) } -> u64 uses () {
+    │ ╭──────────────────────────────────────────────────────────^
+150 │ │             x
+151 │ │         }
+    │ ╰─────────^ u64
+
+note: 
+    ┌─ recv_nested_patterns.fe:150:13
+    │
+150 │             x
+    │             ^ u64

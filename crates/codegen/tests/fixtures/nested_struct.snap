@@ -1,0 +1,106 @@
+---
+source: crates/codegen/tests/yul.rs
+assertion_line: 31
+expression: output
+input_file: tests/fixtures/nested_struct.fe
+---
+object "NestedStruct" {
+  code {
+    init()
+    function init() {
+      let v0 := datasize("NestedStruct_deployed")
+      let v1 := dataoffset("NestedStruct_deployed")
+      codecopy(0, v1, v0)
+      return(0, v0)
+    }
+  }
+
+  object "NestedStruct_deployed" {
+    code {
+      runtime()
+      function abi_encode(value) {
+        mstore(0, value)
+        return(0, 32)
+      }
+      function alloc(size) -> ret {
+        let v0 := mload(64)
+        let v1 := eq(v0, 0)
+        if v1 {
+          v0 := 128
+          mstore(64, add(v0, size))
+          ret := v0
+        }
+        if iszero(v1) {
+          mstore(64, add(v0, size))
+          ret := v0
+        }
+      }
+      function get_field__MemPtr_u256__97fe9178c4597e85(ptr, offset) -> ret {
+        let v0 := add(ptr, offset)
+        ret := to_word__deduped(load__MemPtr__d0292394fccae3e4(v0))
+      }
+      function get_field__StorPtr_u256__2bec36171fad53de(ptr, offset) -> ret {
+        let v0 := add(ptr, offset)
+        ret := to_word__deduped(load__StorPtr__7f7854645e12e266(v0))
+      }
+      function load__MemPtr__d0292394fccae3e4(addr) -> ret {
+        ret := mload(addr)
+      }
+      function load__StorPtr__7f7854645e12e266(addr) -> ret {
+        ret := sload(addr)
+      }
+      function mem_read(value) -> ret {
+        let v0 := alloc(32)
+        store_field__MemPtr_u256__97fe9178c4597e85(v0, 0, 0)
+        let v1 := alloc(32)
+        store_field__MemPtr_u256__97fe9178c4597e85(v1, 0, get_field__MemPtr_u256__97fe9178c4597e85(v0, 0))
+        let v2 := v1
+        store_field__MemPtr_u256__97fe9178c4597e85(v2, 0, value)
+        ret := get_field__MemPtr_u256__97fe9178c4597e85(v2, 0)
+      }
+      function read_inner(outer) -> ret {
+        ret := get_field__StorPtr_u256__2bec36171fad53de(outer, 0)
+      }
+      function runtime() {
+        let v0 := 0
+        let v1 := shr(224, calldataload(0))
+        switch v1
+          case 3091856072 {
+            let v2 := calldataload(4)
+            write_inner(v2, v0)
+            abi_encode(v2)
+          }
+          case 3513050253 {
+            abi_encode(read_inner(v0))
+          }
+          case 2154770637 {
+            let v3 := calldataload(4)
+            abi_encode(mem_read(v3))
+          }
+          default {
+            return(0, 0)
+          }
+      }
+      function store__MemPtr__d0292394fccae3e4(addr, value) {
+        mstore(addr, value)
+      }
+      function store__StorPtr__7f7854645e12e266(addr, value) {
+        sstore(addr, value)
+      }
+      function store_field__MemPtr_u256__97fe9178c4597e85(ptr, offset, value) {
+        let v0 := add(ptr, offset)
+        store__MemPtr__d0292394fccae3e4(v0, to_word__deduped(value))
+      }
+      function store_field__StorPtr_u256__2bec36171fad53de(ptr, offset, value) {
+        let v0 := add(ptr, offset)
+        store__StorPtr__7f7854645e12e266(v0, to_word__deduped(value))
+      }
+      function to_word__deduped(self) -> ret {
+        ret := self
+      }
+      function write_inner(value, outer) {
+        store_field__StorPtr_u256__2bec36171fad53de(outer, 0, value)
+      }
+    }
+  }
+}

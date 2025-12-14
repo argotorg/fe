@@ -1,0 +1,641 @@
+//! Contract-specific type checking functions.
+//!
+//! This module contains functions for checking contract init bodies,
+//! recv blocks, and recv arm bodies.
+use rustc_hash::{FxHashMap, FxHashSet};
+
+use super::{TypedBody, check_body_owner, owner::BodyOwner};
+
+use crate::{
+    analysis::{
+        HirAnalysisDb,
+        name_resolution::{ExpectedPathKind, PathRes, diagnostics::PathResDiag, resolve_path},
+        ty::{
+            adt_def::AdtRef,
+            canonical::Canonical,
+            corelib::resolve_core_trait,
+            diagnostics::{BodyDiag, FuncBodyDiag},
+            trait_def::impls_for_ty,
+            trait_resolution::PredicateListId,
+            ty_def::TyId,
+        },
+    },
+    hir_def::{Contract, IdentId, ItemKind, Mod, PathId, Struct, scope_graph::ScopeId},
+    span::{DynLazySpan, path::LazyPathSpan},
+};
+
+/// Result of resolving a variant path in a recv arm.
+#[derive(Debug, Clone, Copy)]
+pub enum VariantResolution<'db> {
+    /// Successfully resolved to a valid msg variant.
+    Ok(ResolvedRecvVariant<'db>),
+    /// Path doesn't resolve at all.
+    NotFound,
+    /// Path resolves to a type that doesn't implement MsgVariant.
+    NotMsgVariant(TyId<'db>),
+    /// Path resolves to a type that implements MsgVariant but is not a variant
+    /// of the specified msg module.
+    NotVariantOfMsg(TyId<'db>),
+}
+
+/// Returns true if a struct implements the core MsgVariant trait.
+fn implements_msg_variant<'db>(db: &'db dyn HirAnalysisDb, struct_: Struct<'db>) -> bool {
+    let msg_variant_trait = resolve_core_trait(db, struct_.scope(), &["message", "MsgVariant"]);
+
+    let adt_def = AdtRef::from(struct_).as_adt(db);
+    let ty = TyId::adt(db, adt_def);
+    let canonical_ty = Canonical::new(db, ty);
+    let ingot = struct_.top_mod(db).ingot(db);
+
+    impls_for_ty(db, ingot, canonical_ty)
+        .iter()
+        .any(|impl_| impl_.skip_binder().trait_def(db).eq(&msg_variant_trait))
+}
+
+/// Returns all variant structs in a msg module (structs that implement MsgVariant).
+fn msg_variants<'db>(
+    db: &'db dyn HirAnalysisDb,
+    msg_mod: Mod<'db>,
+) -> impl Iterator<Item = Struct<'db>> + 'db {
+    msg_mod
+        .children_non_nested(db)
+        .filter_map(|item| match item {
+            ItemKind::Struct(s) => Some(s),
+            _ => None,
+        })
+        .filter(move |s| implements_msg_variant(db, *s))
+}
+
+/// Resolved msg variant in a recv arm.
+#[derive(Debug, Clone, Copy)]
+pub struct ResolvedRecvVariant<'db> {
+    pub variant_struct: Struct<'db>,
+    pub ty: TyId<'db>,
+}
+
+/// Resolves a variant path within a msg module.
+/// First tries to resolve from the msg module's scope (for short names like `Transfer`).
+/// If that fails, tries from the contract scope (for qualified paths like `OtherMsg::Foo`).
+/// Returns a `VariantResolution` indicating success or the specific failure reason.
+pub fn resolve_variant_in_msg<'db>(
+    db: &'db dyn HirAnalysisDb,
+    msg_mod: Mod<'db>,
+    variant_path: PathId<'db>,
+    assumptions: PredicateListId<'db>,
+) -> VariantResolution<'db> {
+    let Ok(PathRes::Ty(ty)) = resolve_path(db, variant_path, msg_mod.scope(), assumptions, false)
+    else {
+        return VariantResolution::NotFound;
+    };
+
+    if let Some(adt_def) = ty.adt_def(db)
+        && let AdtRef::Struct(struct_) = adt_def.adt_ref(db)
+        && implements_msg_variant(db, struct_)
+    {
+        if let Some(parent) = struct_.scope().parent(db)
+            && parent == ScopeId::Item(ItemKind::Mod(msg_mod))
+        {
+            return VariantResolution::Ok(ResolvedRecvVariant {
+                variant_struct: struct_,
+                ty,
+            });
+        }
+        return VariantResolution::NotVariantOfMsg(ty);
+    }
+    // Resolved to a type but it doesn't implement MsgVariant
+    VariantResolution::NotMsgVariant(ty)
+}
+
+/// Resolves a variant path in a bare recv block (no msg module specified).
+/// Paths are resolved from the contract's scope.
+pub fn resolve_variant_bare<'db>(
+    db: &'db dyn HirAnalysisDb,
+    contract: Contract<'db>,
+    variant_path: PathId<'db>,
+    assumptions: PredicateListId<'db>,
+) -> VariantResolution<'db> {
+    match resolve_path(db, variant_path, contract.scope(), assumptions, false) {
+        Ok(PathRes::Ty(ty)) => {
+            if let Some(adt_def) = ty.adt_def(db)
+                && let AdtRef::Struct(s) = adt_def.adt_ref(db)
+                && implements_msg_variant(db, s)
+            {
+                return VariantResolution::Ok(ResolvedRecvVariant {
+                    variant_struct: s,
+                    ty,
+                });
+            }
+            // Resolved to a type but it doesn't implement MsgVariant
+            VariantResolution::NotMsgVariant(ty)
+        }
+        _ => VariantResolution::NotFound,
+    }
+}
+
+#[salsa::tracked(return_ref)]
+pub fn check_contract_recv_block<'db>(
+    db: &'db dyn HirAnalysisDb,
+    contract: Contract<'db>,
+    recv_idx: u32,
+) -> Vec<FuncBodyDiag<'db>> {
+    let mut diags = Vec::new();
+
+    let Some(recv) = contract.recvs(db).data(db).get(recv_idx as usize) else {
+        return diags;
+    };
+
+    let recv_span = contract.span().recv(recv_idx as usize);
+    let path_span = recv_span.clone().path();
+
+    // Check if this is a named recv block (recv MsgType { ... }) or bare (recv { ... })
+    if let Some(msg_mod) = resolve_recv_msg_mod(
+        db,
+        contract,
+        recv.msg_path,
+        path_span.clone(),
+        &mut diags,
+        true,
+    ) {
+        // Named recv block - validate against the specific msg module
+        check_named_recv_block(db, contract, recv_idx, msg_mod, &mut diags);
+    } else if recv.msg_path.is_none() {
+        // Bare recv block - no msg module specified
+        check_bare_recv_block(db, contract, recv_idx, &mut diags);
+    }
+    // If msg_path was Some but didn't resolve, diagnostics were already emitted
+
+    diags
+}
+
+/// Check a named recv block (recv MsgType { ... }).
+/// All variants must be children of the specified msg module.
+fn check_named_recv_block<'db>(
+    db: &'db dyn HirAnalysisDb,
+    contract: Contract<'db>,
+    recv_idx: u32,
+    msg_mod: Mod<'db>,
+    diags: &mut Vec<FuncBodyDiag<'db>>,
+) {
+    let recv = &contract.recvs(db).data(db)[recv_idx as usize];
+    let recv_span = contract.span().recv(recv_idx as usize);
+    let assumptions = PredicateListId::empty_list(db);
+
+    // Use TyId for duplicate detection to correctly handle generic types
+    let mut seen = FxHashMap::<TyId<'db>, DynLazySpan<'db>>::default();
+    // Use Struct for exhaustiveness checking (tracks which base structs are covered)
+    let mut covered = FxHashSet::<Struct<'db>>::default();
+
+    // Get msg name for diagnostics
+    let Some(msg_name) = msg_mod.name(db).to_opt() else {
+        return;
+    };
+
+    for (arm_idx, arm) in recv.arms.data(db).iter().enumerate() {
+        let pat_span: DynLazySpan<'db> = recv_span.clone().arms().arm(arm_idx).pat().into();
+
+        let Some(path) = arm.variant_path(db) else {
+            continue;
+        };
+
+        match resolve_variant_in_msg(db, msg_mod, path, assumptions) {
+            VariantResolution::Ok(resolved) => {
+                let Some(ident) = resolved.variant_struct.name(db).to_opt() else {
+                    continue;
+                };
+
+                if let Some(first_span) = seen.get(&resolved.ty) {
+                    diags.push(
+                        BodyDiag::RecvArmDuplicateVariant {
+                            primary: pat_span.clone(),
+                            first_use: first_span.clone(),
+                            variant: ident,
+                        }
+                        .into(),
+                    );
+                } else {
+                    seen.insert(resolved.ty, pat_span.clone());
+                }
+
+                covered.insert(resolved.variant_struct);
+            }
+            VariantResolution::NotVariantOfMsg(ty) => {
+                // Type implements MsgVariant but is not a child of this msg module
+                diags.push(
+                    BodyDiag::RecvArmNotVariantOfMsg {
+                        primary: pat_span,
+                        variant_ty: ty,
+                        msg_name,
+                    }
+                    .into(),
+                );
+            }
+            VariantResolution::NotMsgVariant(ty) => {
+                // Type doesn't implement MsgVariant
+                diags.push(
+                    BodyDiag::RecvArmNotMsgVariantTrait {
+                        primary: pat_span,
+                        given_ty: ty,
+                    }
+                    .into(),
+                );
+            }
+            VariantResolution::NotFound => {
+                // Path doesn't resolve at all - use the generic error
+                diags.push(
+                    BodyDiag::RecvArmNotMsgVariant {
+                        primary: pat_span,
+                        msg_name,
+                    }
+                    .into(),
+                );
+            }
+        }
+    }
+
+    // Check for missing variants (exhaustiveness)
+    let missing: Vec<_> = msg_variants(db, msg_mod)
+        .filter_map(|variant| {
+            if !covered.contains(&variant) {
+                variant.name(db).to_opt()
+            } else {
+                None
+            }
+        })
+        .collect();
+
+    if !missing.is_empty() {
+        diags.push(
+            BodyDiag::RecvMissingMsgVariants {
+                primary: recv_span.clone().path().into(),
+                variants: missing,
+            }
+            .into(),
+        );
+    }
+}
+
+/// Check a bare recv block (recv { ... }).
+/// Variants can be any type that implements MsgVariant.
+fn check_bare_recv_block<'db>(
+    db: &'db dyn HirAnalysisDb,
+    contract: Contract<'db>,
+    recv_idx: u32,
+    diags: &mut Vec<FuncBodyDiag<'db>>,
+) {
+    let recv = &contract.recvs(db).data(db)[recv_idx as usize];
+    let recv_span = contract.span().recv(recv_idx as usize);
+    let assumptions = PredicateListId::empty_list(db);
+
+    // Use TyId as key to correctly handle generic types like GenericMsg<u8> vs GenericMsg<u16>
+    let mut seen = FxHashMap::<TyId<'db>, DynLazySpan<'db>>::default();
+
+    for (arm_idx, arm) in recv.arms.data(db).iter().enumerate() {
+        let pat_span: DynLazySpan<'db> = recv_span.clone().arms().arm(arm_idx).pat().into();
+
+        let Some(path) = arm.variant_path(db) else {
+            continue;
+        };
+
+        match resolve_variant_bare(db, contract, path, assumptions) {
+            VariantResolution::Ok(resolved) => {
+                let Some(ident) = resolved.variant_struct.name(db).to_opt() else {
+                    continue;
+                };
+
+                if let Some(first_span) = seen.get(&resolved.ty) {
+                    diags.push(
+                        BodyDiag::RecvArmDuplicateVariant {
+                            primary: pat_span.clone(),
+                            first_use: first_span.clone(),
+                            variant: ident,
+                        }
+                        .into(),
+                    );
+                } else {
+                    seen.insert(resolved.ty, pat_span.clone());
+                }
+            }
+            VariantResolution::NotMsgVariant(ty) => {
+                // Type doesn't implement MsgVariant
+                diags.push(
+                    BodyDiag::RecvArmNotMsgVariantTrait {
+                        primary: pat_span,
+                        given_ty: ty,
+                    }
+                    .into(),
+                );
+            }
+            VariantResolution::NotVariantOfMsg(_) => {
+                // This shouldn't happen in bare recv blocks
+                unreachable!("NotVariantOfMsg should not occur in bare recv blocks");
+            }
+            VariantResolution::NotFound => {
+                // Path doesn't resolve - this will be caught by name resolution
+                // We don't emit a recv-specific error here
+            }
+        }
+    }
+
+    // No exhaustiveness check for bare recv blocks
+}
+
+#[salsa::tracked(return_ref)]
+pub fn check_contract_recv_blocks<'db>(
+    db: &'db dyn HirAnalysisDb,
+    contract: Contract<'db>,
+) -> Vec<FuncBodyDiag<'db>> {
+    let mut diags = Vec::new();
+    let mut seen_msg_blocks = FxHashMap::<Mod<'db>, (DynLazySpan<'db>, IdentId<'db>)>::default();
+
+    // Track selectors across ALL recv blocks: selector -> (span, variant_name, struct)
+    // We store the struct to correctly identify duplicates - comparing by name alone fails
+    // when different msg blocks have variants with the same name but different selectors.
+    let mut seen_selectors =
+        FxHashMap::<u32, (DynLazySpan<'db>, IdentId<'db>, Struct<'db>)>::default();
+
+    // Track handler types across ALL recv blocks for duplicate detection.
+    // We use TyId to handle type aliases correctly.
+    let mut seen_handlers = FxHashMap::<TyId<'db>, DynLazySpan<'db>>::default();
+
+    let assumptions = PredicateListId::empty_list(db);
+
+    for (idx, recv) in contract.recvs(db).data(db).iter().enumerate() {
+        let recv_span = contract.span().recv(idx);
+        let path_span = recv_span.clone().path();
+
+        // Check if this is a named recv block
+        if let Some(msg_mod) = resolve_recv_msg_mod(
+            db,
+            contract,
+            recv.msg_path,
+            path_span.clone(),
+            &mut diags,
+            false,
+        ) {
+            let Some(msg_name) = msg_mod.name(db).to_opt() else {
+                continue;
+            };
+
+            let path_span: DynLazySpan<'db> = path_span.into();
+            let is_duplicate_msg_block = seen_msg_blocks.contains_key(&msg_mod);
+            if is_duplicate_msg_block {
+                if let Some((first_span, first_name)) = seen_msg_blocks.get(&msg_mod) {
+                    diags.push(
+                        BodyDiag::RecvDuplicateMsgBlock {
+                            primary: path_span.clone(),
+                            first_use: first_span.clone(),
+                            msg_name: *first_name,
+                        }
+                        .into(),
+                    );
+                }
+                // Skip handler/selector conflict checks for duplicate msg blocks
+                continue;
+            } else {
+                seen_msg_blocks.insert(msg_mod, (path_span.clone(), msg_name));
+            }
+
+            // Check for selector and handler conflicts across all msg variants in this recv block
+            for variant in msg_variants(db, msg_mod) {
+                let Some(variant_name) = variant.name(db).to_opt() else {
+                    continue;
+                };
+
+                let variant_span: DynLazySpan<'db> = variant.span().name().into();
+
+                // Check selector conflicts
+                if let Some(selector) = get_variant_selector(db, variant) {
+                    check_selector_conflict(
+                        selector,
+                        variant,
+                        variant_name,
+                        variant_span.clone(),
+                        &mut seen_selectors,
+                        &mut diags,
+                    );
+                }
+
+                // Check handler type conflicts
+                let adt_def = AdtRef::from(variant).as_adt(db);
+                let ty = TyId::adt(db, adt_def);
+                check_handler_conflict(ty, variant_span, &mut seen_handlers, &mut diags);
+            }
+        } else if recv.msg_path.is_none() {
+            // Bare recv block - check each arm individually
+            for (arm_idx, arm) in recv.arms.data(db).iter().enumerate() {
+                let pat_span: DynLazySpan<'db> = recv_span.clone().arms().arm(arm_idx).pat().into();
+
+                let Some(path) = arm.variant_path(db) else {
+                    continue;
+                };
+
+                if let VariantResolution::Ok(resolved) =
+                    resolve_variant_bare(db, contract, path, assumptions)
+                {
+                    let Some(variant_name) = resolved.variant_struct.name(db).to_opt() else {
+                        continue;
+                    };
+
+                    // Check selector conflicts
+                    if let Some(selector) = get_variant_selector(db, resolved.variant_struct) {
+                        check_selector_conflict(
+                            selector,
+                            resolved.variant_struct,
+                            variant_name,
+                            pat_span.clone(),
+                            &mut seen_selectors,
+                            &mut diags,
+                        );
+                    }
+
+                    // Check handler type conflicts
+                    check_handler_conflict(resolved.ty, pat_span, &mut seen_handlers, &mut diags);
+                }
+            }
+        }
+    }
+
+    diags
+}
+
+/// Check for selector conflicts and emit diagnostics if found.
+fn check_selector_conflict<'db>(
+    selector: u32,
+    variant: Struct<'db>,
+    variant_name: IdentId<'db>,
+    variant_span: DynLazySpan<'db>,
+    seen_selectors: &mut FxHashMap<u32, (DynLazySpan<'db>, IdentId<'db>, Struct<'db>)>,
+    diags: &mut Vec<FuncBodyDiag<'db>>,
+) {
+    if let Some((first_span, first_variant, first_struct)) = seen_selectors.get(&selector) {
+        // Don't report if it's the same variant (duplicate msg block already reported)
+        if *first_struct != variant {
+            diags.push(
+                BodyDiag::RecvDuplicateSelector {
+                    primary: variant_span,
+                    first_use: first_span.clone(),
+                    selector,
+                    first_variant: *first_variant,
+                    second_variant: variant_name,
+                }
+                .into(),
+            );
+        }
+    } else {
+        seen_selectors.insert(selector, (variant_span, variant_name, variant));
+    }
+}
+
+/// Check for handler type conflicts and emit diagnostics if found.
+fn check_handler_conflict<'db>(
+    ty: TyId<'db>,
+    variant_span: DynLazySpan<'db>,
+    seen_handlers: &mut FxHashMap<TyId<'db>, DynLazySpan<'db>>,
+    diags: &mut Vec<FuncBodyDiag<'db>>,
+) {
+    if let Some(first_span) = seen_handlers.get(&ty) {
+        diags.push(
+            BodyDiag::RecvDuplicateHandler {
+                primary: variant_span,
+                first_use: first_span.clone(),
+                handler_ty: ty,
+            }
+            .into(),
+        );
+    } else {
+        seen_handlers.insert(ty, variant_span);
+    }
+}
+
+/// Gets the selector value from a msg variant struct by reading the SELECTOR const
+/// from its MsgVariant impl. Used for cross-recv-block duplicate detection.
+fn get_variant_selector<'db>(db: &'db dyn HirAnalysisDb, struct_: Struct<'db>) -> Option<u32> {
+    use crate::hir_def::{Expr, LitKind};
+    use num_traits::ToPrimitive;
+
+    // Find the MsgVariant trait
+    let msg_variant_trait = resolve_core_trait(db, struct_.scope(), &["message", "MsgVariant"]);
+
+    // Get the impl for this struct
+    let adt_def = AdtRef::from(struct_).as_adt(db);
+    let ty = TyId::adt(db, adt_def);
+    let canonical_ty = Canonical::new(db, ty);
+    let ingot = struct_.top_mod(db).ingot(db);
+
+    let impl_ = impls_for_ty(db, ingot, canonical_ty)
+        .iter()
+        .find(|impl_| impl_.skip_binder().trait_def(db).eq(&msg_variant_trait))?
+        .skip_binder();
+
+    // Get the SELECTOR const from the impl
+    let selector_name = IdentId::new(db, "SELECTOR".to_string());
+    let hir_impl = impl_.hir_impl_trait(db);
+
+    let selector_const = hir_impl
+        .hir_consts(db)
+        .iter()
+        .find(|c| c.name.to_opt() == Some(selector_name))?;
+
+    // Extract the literal value from the const body
+    let body = selector_const.value.to_opt()?;
+    let root_expr = body.expr(db);
+    let expr = body.exprs(db).get(root_expr)?.clone().to_opt()?;
+
+    match expr {
+        Expr::Lit(LitKind::Int(int_id)) => int_id.data(db).to_u32(),
+        _ => None,
+    }
+}
+
+#[salsa::tracked(return_ref)]
+pub fn check_contract_recv_arm_body<'db>(
+    db: &'db dyn HirAnalysisDb,
+    contract: Contract<'db>,
+    recv_idx: u32,
+    arm_idx: u32,
+) -> (Vec<FuncBodyDiag<'db>>, TypedBody<'db>) {
+    let recv = contract.recvs(db).data(db).get(recv_idx as usize).unwrap();
+    let arm = *recv.arms.data(db).get(arm_idx as usize).unwrap();
+
+    check_body_owner(
+        db,
+        BodyOwner::ContractRecvArm {
+            contract,
+            recv_idx,
+            arm_idx,
+            msg_path: recv.msg_path,
+            arm,
+        },
+    )
+}
+
+pub(super) fn resolve_recv_msg_mod<'db>(
+    db: &'db dyn HirAnalysisDb,
+    contract: Contract<'db>,
+    msg_path: Option<PathId<'db>>,
+    span: LazyPathSpan<'db>,
+    diags: &mut Vec<FuncBodyDiag<'db>>,
+    emit_diag: bool,
+) -> Option<Mod<'db>> {
+    let msg_path = msg_path?;
+    let assumptions = PredicateListId::empty_list(db);
+
+    match resolve_path(db, msg_path, contract.scope(), assumptions, false) {
+        Ok(PathRes::Ty(ty) | PathRes::TyAlias(_, ty)) => {
+            if emit_diag {
+                diags.push(
+                    BodyDiag::RecvExpectedMsgType {
+                        primary: span.clone().into(),
+                        given: ty,
+                    }
+                    .into(),
+                );
+            }
+            None
+        }
+        Ok(PathRes::Mod(scope)) => {
+            // Accept any module as a recv root (both msg-desugared and manually defined)
+            if let ScopeId::Item(ItemKind::Mod(mod_)) = scope {
+                return Some(mod_);
+            }
+            unreachable!();
+        }
+        Ok(other) => {
+            let ident = msg_path.ident(db).to_opt()?;
+            if emit_diag {
+                diags.push(PathResDiag::ExpectedType(span.into(), ident, other.kind_name()).into());
+            }
+            None
+        }
+        Err(err) => {
+            if emit_diag
+                && let Some(diag) = err.into_diag(db, msg_path, span, ExpectedPathKind::Type)
+            {
+                diags.push(diag.into());
+            }
+            None
+        }
+    }
+}
+
+/// Gets the Return type from a type's MsgVariant trait implementation.
+/// Specifically looks for the MsgVariant trait and returns `None` if no impl is found.
+pub(super) fn get_msg_variant_return_type<'db>(
+    db: &'db dyn HirAnalysisDb,
+    variant_ty: TyId<'db>,
+    scope: ScopeId<'db>,
+) -> Option<TyId<'db>> {
+    let msg_variant_trait = resolve_core_trait(db, scope, &["message", "MsgVariant"]);
+
+    let canonical_ty = Canonical::new(db, variant_ty);
+    let ingot = scope.ingot(db);
+
+    // Find the MsgVariant impl specifically
+    let msg_variant_impl = impls_for_ty(db, ingot, canonical_ty)
+        .iter()
+        .find(|impl_| impl_.skip_binder().trait_def(db).eq(&msg_variant_trait))?;
+
+    // Get the Return associated type from the impl
+    let return_name = IdentId::new(db, "Return".to_string());
+    msg_variant_impl.skip_binder().assoc_ty(db, return_name)
+}

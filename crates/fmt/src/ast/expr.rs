@@ -465,16 +465,22 @@ impl ToDoc for ast::RecordField {
     fn to_doc<'a>(&self, ctx: &'a RewriteContext<'a>) -> Doc<'a> {
         let alloc = &ctx.alloc;
 
-        let label = match self.label() {
-            Some(l) => ctx.snippet(l.text_range()).trim().to_string(),
-            None => return alloc.nil(),
-        };
-        let expr = match self.expr() {
-            Some(e) => e.to_doc(ctx),
-            None => return alloc.text(label),
-        };
-
-        alloc.text(label).append(alloc.text(": ")).append(expr)
+        match (self.label(), self.expr()) {
+            // Named field with explicit value: `label: expr`
+            (Some(label), Some(expr)) => {
+                let label_str = ctx.snippet(label.text_range()).trim().to_string();
+                alloc
+                    .text(label_str)
+                    .append(alloc.text(": "))
+                    .append(expr.to_doc(ctx))
+            }
+            // Shorthand field: `from` (no colon, expr is the identifier)
+            (None, Some(expr)) => expr.to_doc(ctx),
+            // Just a label (shouldn't happen in practice)
+            (Some(label), None) => alloc.text(ctx.snippet(label.text_range()).trim().to_string()),
+            // Empty (shouldn't happen)
+            (None, None) => alloc.nil(),
+        }
     }
 }
 

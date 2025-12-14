@@ -1,0 +1,44 @@
+// Test diagnostics for basic expression/parameter issues inside contract init and recv arm bodies
+
+msg Commands {
+    #[selector = 0x01]
+    GetValue -> u64,
+    #[selector = 0x02]
+    SetValue { value: u64 } -> bool,
+    #[selector = 0x03]
+    Add { a: u64, b: u64 } -> u64,
+}
+
+fn helper(_ x: u64, _ y: u64) -> u64 {
+    x + y
+}
+
+pub contract Counter {
+    value: u64,
+
+    // init body with expression errors
+    init(initial: u64) uses (mut value) {
+        // wrong number of arguments
+        helper(initial)
+        // type mismatch in binary op
+        value = initial + true
+    }
+
+    recv Commands {
+        // recv arm body with wrong argument count
+        GetValue {} -> u64 {
+            helper(1, 2, 3)
+        }
+
+        // recv arm body with type mismatch
+        SetValue { value } -> bool {
+            let _x: u64 = value + false
+            true
+        }
+
+        // recv arm body with wrong return type
+        Add { a, b } -> u64 {
+            false
+        }
+    }
+}

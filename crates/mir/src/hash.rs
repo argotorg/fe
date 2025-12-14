@@ -77,6 +77,15 @@ impl<'db, 'a> FunctionHasher<'db, 'a> {
         }
         self.next_value = func.body.values.len() as u32;
 
+        // Include receiver_space in the hash so functions differing only by
+        // address space (e.g. storage_slot_mem vs storage_slot_stor) are not
+        // erroneously deduplicated.
+        match func.receiver_space {
+            Some(crate::ir::AddressSpaceKind::Memory) => self.write_u8(1),
+            Some(crate::ir::AddressSpaceKind::Storage) => self.write_u8(2),
+            None => self.write_u8(0),
+        }
+
         self.write_usize(func.body.entry.index());
         self.write_usize(func.body.values.len());
         for value in func.body.values.iter() {
@@ -135,6 +144,12 @@ impl<'db, 'a> FunctionHasher<'db, 'a> {
                     let slot = self.placeholder_value(*arg);
                     self.write_u32(slot);
                 }
+            }
+            ValueOrigin::FieldPtr(field_ptr) => {
+                self.write_u8(0x08);
+                let slot = self.placeholder_value(field_ptr.base);
+                self.write_u32(slot);
+                self.write_u64(field_ptr.offset_bytes);
             }
         }
     }
@@ -233,6 +248,13 @@ impl<'db, 'a> FunctionHasher<'db, 'a> {
             }
             Terminator::ReturnData { offset, size } => {
                 self.write_u8(0x35);
+                let offset_slot = self.placeholder_value(*offset);
+                let size_slot = self.placeholder_value(*size);
+                self.write_u32(offset_slot);
+                self.write_u32(size_slot);
+            }
+            Terminator::Revert { offset, size } => {
+                self.write_u8(0x36);
                 let offset_slot = self.placeholder_value(*offset);
                 let size_slot = self.placeholder_value(*size);
                 self.write_u32(offset_slot);

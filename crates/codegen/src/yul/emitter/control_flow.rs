@@ -158,6 +158,13 @@ impl<'db> FunctionEmitter<'db> {
                     .push(YulDoc::line(format!("return({offset_expr}, {size_expr})")));
                 Ok(())
             }
+            Terminator::Revert { offset, size } => {
+                let offset_expr = self.lower_value(*offset, ctx.state)?;
+                let size_expr = self.lower_value(*size, ctx.state)?;
+                ctx.docs
+                    .push(YulDoc::line(format!("revert({offset_expr}, {size_expr})")));
+                Ok(())
+            }
             Terminator::Branch {
                 cond,
                 then_bb,

@@ -124,6 +124,21 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
     pub(super) fn try_lower_call(&mut self, expr: ExprId) -> Option<ValueId> {
         let callable = self.typed_body.callable_expr(expr)?;
         let (mut args, arg_exprs) = self.collect_call_args(expr)?;
+        let mut receiver_space = None;
+        if self.is_method_call(expr) && !args.is_empty() {
+            let needs_space = callable
+                .callable_def
+                .receiver_ty(self.db)
+                .is_some_and(|binder| {
+                    let ty = binder.instantiate_identity();
+                    ty.adt_ref(self.db)
+                        .is_some_and(|adt| matches!(adt, AdtRef::Struct(_)))
+                });
+            if needs_space {
+                let receiver_value = args[0];
+                receiver_space = Some(self.value_address_space(receiver_value));
+            }
+        }
 
         let ty = self.typed_body.expr_ty(self.db, expr);
         if let Some(kind) = self.intrinsic_kind(callable.callable_def) {
@@ -155,12 +170,20 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                 expr,
                 callable: callable.clone(),
                 args,
+                receiver_space,
                 resolved_name: None,
             }),
         }))
     }
 
-    /// Rewrites a field access expression into a `get_field` call.
+    /// Returns true if the expression is a method call (as opposed to a regular function call).
+    fn is_method_call(&self, expr: ExprId) -> bool {
+        let exprs = self.body.exprs(self.db);
+        matches!(&exprs[expr], Partial::Present(Expr::MethodCall(..)))
+    }
+
+    /// Rewrites a field access expression into either a `get_field` call (for primitives)
+    /// or a `FieldPtr` offset computation (for nested structs).
     ///
     /// # Parameters
     /// - `expr`: Field access expression id.
@@ -176,18 +199,47 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         let info = self.field_access_info(lhs_ty, field_index)?;
 
         let addr_value = self.ensure_value(*lhs);
-        let space_value = self.address_space_literal(self.value_address_space(addr_value));
+        let addr_space = self.value_address_space(addr_value);
+        let is_aggregate = info.field_ty.field_count(self.db) > 0;
+
+        // For aggregate (struct) fields, emit pointer arithmetic instead of a load
+        if is_aggregate {
+            // Optimization: if offset is 0, reuse the base pointer directly
+            if info.offset_bytes == 0 {
+                // Ensure address space is propagated even when reusing the base pointer
+                self.value_address_space.insert(addr_value, addr_space);
+                return Some(addr_value);
+            }
+            // Emit FieldPtr for non-zero offsets
+            let result = self.mir_body.alloc_value(ValueData {
+                ty: info.field_ty,
+                origin: ValueOrigin::FieldPtr(FieldPtrOrigin {
+                    base: addr_value,
+                    offset_bytes: info.offset_bytes,
+                }),
+            });
+            // Propagate address space to the result
+            self.value_address_space.insert(result, addr_space);
+            return Some(result);
+        }
+
+        // For primitive fields, emit a get_field call to load the value
+        let ptr_ty = match addr_space {
+            AddressSpaceKind::Memory => self.core.helper_ty(CoreHelperTy::MemPtr),
+            AddressSpaceKind::Storage => self.core.helper_ty(CoreHelperTy::StorPtr),
+        };
         let offset_value = self.synthetic_u256(BigUint::from(info.offset_bytes));
         let callable =
             self.core
-                .make_callable(expr, CoreHelper::GetField, &[lhs_ty, info.field_ty]);
+                .make_callable(expr, CoreHelper::GetField, &[ptr_ty, info.field_ty]);
 
         Some(self.mir_body.alloc_value(ValueData {
             ty: info.field_ty,
             origin: ValueOrigin::Call(CallOrigin {
                 expr,
                 callable,
-                args: vec![addr_value, space_value, offset_value],
+                args: vec![addr_value, offset_value],
+                receiver_space: None,
                 resolved_name: None,
             }),
         }))
@@ -446,7 +498,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
             Expr::Assign(target, value) => {
                 let (next_block, value_id) = self.lower_expr_in(block, *value);
                 if let Some(curr_block) = next_block {
-                    if let Some(binding) = self.typed_body.expr_prop(self.db, *target).binding()
+                    if let Some(binding) = self.typed_body.expr_prop(self.db, *target).binding
                         && let LocalBinding::Local { pat, .. } = binding
                     {
                         let space = self.value_address_space(value_id);
@@ -485,7 +537,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
             Expr::AugAssign(target, value, op) => {
                 let (next_block, value_id) = self.lower_expr_in(block, *value);
                 if let Some(curr_block) = next_block {
-                    if let Some(binding) = self.typed_body.expr_prop(self.db, *target).binding()
+                    if let Some(binding) = self.typed_body.expr_prop(self.db, *target).binding
                         && let LocalBinding::Local { pat, .. } = binding
                     {
                         let space = self.value_address_space(value_id);

@@ -20,6 +20,7 @@ pub mod adt_def;
 pub mod binder;
 pub mod canonical;
 pub mod const_ty;
+pub mod corelib;
 
 pub mod decision_tree;
 pub mod diagnostics;
@@ -149,12 +150,45 @@ impl ModuleAnalysisPass for BodyAnalysisPass {
         db: &'db dyn HirAnalysisDb,
         top_mod: TopLevelMod<'db>,
     ) -> Vec<Box<dyn DiagnosticVoucher + 'db>> {
-        top_mod
+        let mut diags: Vec<Box<dyn DiagnosticVoucher + 'db>> = top_mod
             .all_funcs(db)
             .iter()
             .flat_map(|func| &ty_check::check_func_body(db, *func).0)
             .map(|diag| diag.to_voucher())
-            .collect()
+            .collect();
+
+        for &contract in top_mod.all_contracts(db) {
+            diags.extend(
+                ty_check::check_contract_recv_blocks(db, contract)
+                    .iter()
+                    .map(|diag| diag.to_voucher()),
+            );
+
+            let recvs = contract.recvs(db);
+            for (recv_idx, recv) in recvs.data(db).iter().enumerate() {
+                diags.extend(
+                    ty_check::check_contract_recv_block(db, contract, recv_idx as u32)
+                        .iter()
+                        .map(|diag| diag.to_voucher()),
+                );
+
+                for (arm_idx, _) in recv.arms.data(db).iter().enumerate() {
+                    diags.extend(
+                        ty_check::check_contract_recv_arm_body(
+                            db,
+                            contract,
+                            recv_idx as u32,
+                            arm_idx as u32,
+                        )
+                        .0
+                        .iter()
+                        .map(|diag| diag.to_voucher()),
+                    );
+                }
+            }
+        }
+
+        diags
     }
 }
 

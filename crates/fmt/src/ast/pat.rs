@@ -110,19 +110,22 @@ impl ToDoc for ast::RecordPat {
                 fields
                     .into_iter()
                     .filter_map(|field| {
-                        let name = field.name()?;
-                        let name_text = ctx.token(&name).to_string();
-
-                        if let Some(pat) = field.pat() {
-                            let pat_doc = pat.to_doc(ctx);
-                            Some(
-                                alloc
-                                    .text(name_text)
-                                    .append(alloc.text(": "))
-                                    .append(pat_doc),
-                            )
+                        // Check for explicit name label (e.g., `name: pat`)
+                        if let Some(name) = field.name() {
+                            let name_text = ctx.token(&name).to_string();
+                            if let Some(pat) = field.pat() {
+                                let pat_doc = pat.to_doc(ctx);
+                                Some(
+                                    alloc
+                                        .text(name_text)
+                                        .append(alloc.text(": "))
+                                        .append(pat_doc),
+                                )
+                            } else {
+                                Some(alloc.text(name_text))
+                            }
                         } else {
-                            Some(alloc.text(name_text))
+                            field.pat().map(|pat| pat.to_doc(ctx))
                         }
                     })
                     .collect()

@@ -1,0 +1,2 @@
+contract Coin uses (mut ctx: Ctx) {}
+

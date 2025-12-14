@@ -57,6 +57,89 @@ impl<'db> LazyFuncParamSpan<'db> {
     }
 }
 
+define_lazy_span_node!(
+    LazyUsesClauseSpan,
+    ast::UsesClause,
+    @node {
+        (param_list, param_list, LazyUsesParamListSpan),
+        (param, param, LazyUsesParamSpan),
+    }
+);
+
+define_lazy_span_node!(
+    LazyUsesParamListSpan,
+    ast::UsesParamList,
+    @idx {
+        (param, LazyUsesParamSpan),
+    }
+);
+
+define_lazy_span_node!(
+    LazyUsesParamSpan,
+    ast::UsesParam,
+    @token {
+        (mut_kw, mut_token),
+    }
+    @node {
+        (path, path, LazyPathSpan),
+    }
+);
+
+impl<'db> LazyUsesClauseSpan<'db> {
+    /// Returns the span for the `idx`-th uses param, supporting both
+    /// `uses (..)` and single-parameter `uses ..` forms.
+    pub fn param_idx(mut self, idx: usize) -> LazyUsesParamSpan<'db> {
+        use crate::span::transition::{LazyArg, LazyTransitionFn, ResolvedOrigin};
+        use parser::ast::prelude::*;
+
+        fn f(origin: ResolvedOrigin, arg: LazyArg) -> ResolvedOrigin {
+            let idx = match arg {
+                LazyArg::Idx(i) => i,
+                _ => 0,
+            };
+            origin.map(|node| {
+                ast::UsesClause::cast(node).and_then(|u| {
+                    if let Some(list) = u.param_list() {
+                        list.into_iter().nth(idx).map(|n| n.syntax().clone().into())
+                    } else if idx == 0 {
+                        u.param().map(|n| n.syntax().clone().into())
+                    } else {
+                        None
+                    }
+                })
+            })
+        }
+
+        self.0.push(LazyTransitionFn {
+            f,
+            arg: LazyArg::Idx(idx),
+        });
+        LazyUsesParamSpan(self.0)
+    }
+}
+
+impl<'db> LazyUsesParamSpan<'db> {
+    /// Span atom for the optional name (identifier or underscore) of a uses param.
+    pub fn name(mut self) -> LazySpanAtom<'db> {
+        use crate::span::transition::{LazyArg, LazyTransitionFn, ResolvedOrigin};
+        use parser::ast::prelude::*;
+
+        fn f(origin: ResolvedOrigin, _arg: LazyArg) -> ResolvedOrigin {
+            origin.map(|node| {
+                ast::UsesParam::cast(node)
+                    .and_then(|p| p.name())
+                    .map(|n| n.syntax().into())
+            })
+        }
+
+        self.0.push(LazyTransitionFn {
+            f,
+            arg: LazyArg::None,
+        });
+        LazySpanAtom(self.0)
+    }
+}
+
 define_lazy_span_node!(LazyGenericParamSpan, ast::GenericParam);
 impl<'db> LazyGenericParamSpan<'db> {
     pub fn into_type_param(self) -> LazyTypeGenericParamSpan<'db> {

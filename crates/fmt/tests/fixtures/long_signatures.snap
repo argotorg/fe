@@ -19,11 +19,13 @@ fn long_return(
     AnotherParam,
 > {}
 
-fn uses_and_params(first: Alpha, second: Beta, third: Gamma, fourth: Delta, fifth: Epsilon) uses (
+fn uses_and_params(first: Alpha, second: Beta, third: Gamma, fourth: Delta, fifth: Epsilon)
+uses (
     first: SomeVeryLongUseTypeName,
     second: AnotherUseTypeNameThatIsLongerThanComfortable,
     third: ThirdExtremelyLongUseParamThatPushesThisOverTheEdge,
-) {}
+)
+{}
 
 fn where_vertical<T, U>(first: T, second: U, third: U) -> i32
 where

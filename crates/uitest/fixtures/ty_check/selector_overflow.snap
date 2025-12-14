@@ -1,0 +1,12 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/selector_overflow.fe
+---
+error[9-0001]: selector value overflows u32 for msg variant `Overflow`
+  ┌─ selector_overflow.fe:4:5
+  │
+4 │     #[selector = 0xFFFFFFFFFF]
+  │     ^^^^^^^^^^^^^^^^^^^^^^^^^^ selector value exceeds u32::MAX
+  │
+  = selector must be a u32 integer

@@ -842,9 +842,7 @@ impl<'db> WherePredicateView<'db> {
             HirTyKind::Path(p) => p.to_opt()?,
             _ => return None,
         };
-        if !path.is_bare_ident(db) {
-            return None;
-        }
+
         let ident = path.as_ident(db)?;
         let owner = GenericParamOwner::from_item_opt(self.owner_item())?;
         let params = owner.params_list(db).data(db);

@@ -1,0 +1,9 @@
+// Test: selector attributes must use `#[selector = value]` form, not `#[selector(value)]`
+
+msg TestMsg {
+    #[selector(0x01)]
+    BadForm {} -> (),
+
+    #[selector = 0x02]
+    GoodForm {} -> (),
+}

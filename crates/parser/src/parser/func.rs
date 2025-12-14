@@ -152,7 +152,7 @@ fn parse_uses_clause_opt<S: TokenStream>(parser: &mut Parser<S>) -> Result<(), R
     r
 }
 
-define_scope! { UsesClauseScope, SyntaxKind::UsesClause }
+define_scope! { pub(crate) UsesClauseScope, SyntaxKind::UsesClause }
 impl super::Parse for UsesClauseScope {
     type Error = Recovery<ErrProof>;
 
