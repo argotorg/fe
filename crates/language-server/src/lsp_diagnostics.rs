@@ -1,10 +1,10 @@
-use async_lsp::lsp_types::{Diagnostic, Url};
+use async_lsp::lsp_types::{Diagnostic, DiagnosticSeverity, Position, Range, Url};
 use camino::Utf8Path;
 use codespan_reporting::files as cs_files;
-use common::{diagnostics::CompleteDiagnostic, file::File};
+use common::{diagnostics::CompleteDiagnostic, file::File, ingot::IngotKind};
 use driver::DriverDataBase;
 use hir::Ingot;
-use hir::analysis::analysis_pass::{AnalysisPassManager, ParsingPass};
+use hir::analysis::analysis_pass::{AnalysisPassManager, MsgLowerPass, ParsingPass};
 use hir::analysis::name_resolution::ImportAnalysisPass;
 use hir::analysis::ty::{
     AdtDefAnalysisPass, BodyAnalysisPass, DefConflictAnalysisPass, FuncAnalysisPass,
@@ -31,11 +31,17 @@ impl LspDiagnostics for DriverDataBase {
         let mut result = FxHashMap::<Url, Vec<Diagnostic>>::default();
         let mut pass_manager = initialize_analysis_pass();
         let ingot_files = ingot.files(self);
+        let is_standalone = ingot.kind(self) == IngotKind::StandAlone;
 
         for (url, file) in ingot_files.iter() {
             // initialize an empty diagnostic list for this file
             // (to clear any previous diagnostics)
-            result.entry(url.clone()).or_default();
+            let file_diags = result.entry(url.clone()).or_default();
+
+            // Add warning for standalone files (files outside of a proper ingot)
+            if is_standalone {
+                file_diags.push(standalone_file_warning());
+            }
 
             let top_mod = map_file_to_mod(self, file);
             let diagnostics = pass_manager.run_on_module(self, top_mod);
@@ -123,6 +129,7 @@ impl<'a> cs_files::Files<'a> for LspDb<'a> {
 fn initialize_analysis_pass() -> AnalysisPassManager {
     let mut pass_manager = AnalysisPassManager::new();
     pass_manager.add_module_pass(Box::new(ParsingPass {}));
+    pass_manager.add_module_pass(Box::new(MsgLowerPass {}));
     pass_manager.add_module_pass(Box::new(DefConflictAnalysisPass {}));
     pass_manager.add_module_pass(Box::new(ImportAnalysisPass {}));
     pass_manager.add_module_pass(Box::new(AdtDefAnalysisPass {}));
@@ -133,4 +140,29 @@ fn initialize_analysis_pass() -> AnalysisPassManager {
     pass_manager.add_module_pass(Box::new(FuncAnalysisPass {}));
     pass_manager.add_module_pass(Box::new(BodyAnalysisPass {}));
     pass_manager
+}
+
+/// Creates a warning diagnostic for standalone files (files outside of a proper ingot).
+fn standalone_file_warning() -> Diagnostic {
+    Diagnostic {
+        range: Range {
+            start: Position {
+                line: 0,
+                character: 0,
+            },
+            end: Position {
+                line: 0,
+                character: 0,
+            },
+        },
+        severity: Some(DiagnosticSeverity::WARNING),
+        code: None,
+        source: Some("fe".to_string()),
+        message: "This file is not part of an ingot and should be considered isolated from other .fe files."
+            .to_string(),
+        related_information: None,
+        tags: None,
+        code_description: None,
+        data: None,
+    }
 }

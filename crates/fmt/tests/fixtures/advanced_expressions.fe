@@ -1,0 +1,25 @@
+pub  unsafe fn  advanced_expressions<T, U: Trait>(  arr : Array<i32,10> ,  ctx:Ctx , storage:Storage<T> )
+  uses (ctx: Ctx, mut st: Storage<T>)
+  where T: Trait2, U: Trait3 {
+    let  first=arr[ 0 ]
+    let  nested=(arr[ 1 ]  +  (arr[2]) )
+    let  nums=[1,2,3]
+    let  repeated=[0;10]
+
+    let  v=ctx.make_value( 1 , flag:  true )
+    let  updated=v.update<i32>(  arr[0] )
+
+    let mut  x=0
+    x+=1
+    x<<=  2
+
+    match   first{
+        0=>{ x=1 }
+        1  =>  (x+2)
+        _  =>  x*3
+    }
+
+    with  (Storage =  storage)  {
+        ctx.log(x)
+    }
+}

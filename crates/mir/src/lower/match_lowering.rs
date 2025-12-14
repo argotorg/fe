@@ -84,22 +84,24 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         {
             let scrut_ty = self.typed_body.expr_ty(self.db, scrutinee);
             let (base_ty, _) = scrut_ty.decompose_ty_app(self.db);
-            let is_address_space = base_ty == self.core.helper_ty(CoreHelperTy::AddressSpace);
             if let TyData::TyBase(TyBase::Adt(adt_def)) = base_ty.data(self.db)
                 && matches!(adt_def.adt_ref(self.db), AdtRef::Enum(_))
-                && !is_address_space
             {
+                let ptr_ty = match self.value_address_space(scrutinee_value) {
+                    AddressSpaceKind::Memory => self.core.helper_ty(CoreHelperTy::MemPtr),
+                    AddressSpaceKind::Storage => self.core.helper_ty(CoreHelperTy::StorPtr),
+                };
                 let callable =
                     self.core
-                        .make_callable(match_expr, CoreHelper::GetDiscriminant, &[]);
-                let space_value = self.synthetic_address_space_memory();
+                        .make_callable(match_expr, CoreHelper::GetDiscriminant, &[ptr_ty]);
                 let ty = callable.ret_ty(self.db);
                 self.mir_body.alloc_value(ValueData {
                     ty,
                     origin: ValueOrigin::Call(CallOrigin {
                         expr: match_expr,
                         callable,
-                        args: vec![scrutinee_value, space_value],
+                        args: vec![scrutinee_value],
+                        receiver_space: None,
                         resolved_name: None,
                     }),
                 })
@@ -365,18 +367,23 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                     continue;
                 }
                 let binding_ty = self.typed_body.pat_ty(self.db, binding.pat_id);
-                let callable =
-                    self.core
-                        .make_callable(match_expr, CoreHelper::GetVariantField, &[binding_ty]);
-                let space_value =
-                    self.address_space_literal(self.value_address_space(scrutinee_value));
+                let ptr_ty = match self.value_address_space(scrutinee_value) {
+                    AddressSpaceKind::Memory => self.core.helper_ty(CoreHelperTy::MemPtr),
+                    AddressSpaceKind::Storage => self.core.helper_ty(CoreHelperTy::StorPtr),
+                };
+                let callable = self.core.make_callable(
+                    match_expr,
+                    CoreHelper::GetVariantField,
+                    &[ptr_ty, binding_ty],
+                );
                 let offset_value = self.synthetic_u256(BigUint::from(binding.field_offset));
                 let load_value = self.mir_body.alloc_value(ValueData {
                     ty: binding_ty,
                     origin: ValueOrigin::Call(CallOrigin {
                         expr: match_expr,
                         callable,
-                        args: vec![scrutinee_value, space_value, offset_value],
+                        args: vec![scrutinee_value, offset_value],
+                        receiver_space: None,
                         resolved_name: None,
                     }),
                 });

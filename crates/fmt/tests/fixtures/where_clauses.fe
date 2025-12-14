@@ -1,0 +1,28 @@
+// Function with where clause
+fn bounded<T>(x: T) where T:Clone {}
+
+// Function with multiple where predicates
+fn multi_bounded<T,U>(x: T, y: U) where T:Clone,U:Copy {}
+
+// Function with complex bounds
+fn complex_bounds<T>(x: T) where T:Clone+Copy+Default {}
+
+// Struct with where clause
+struct BoundedStruct<T> where T:Clone { value: T }
+
+// Enum with where clause
+enum BoundedEnum<T> where T:Clone {
+    Some(T),
+    None,
+}
+
+// Trait with where clause
+trait BoundedTrait<T> where T:Clone {
+    fn get() -> T
+}
+
+// Impl with where clause
+impl<T> Container<T> where T:Clone {}
+
+// Impl trait with where clause
+impl<T> Clone for Container<T> where T:Clone {}

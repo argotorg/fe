@@ -1,0 +1,48 @@
+// Test bare recv blocks (without a msg type specifier)
+
+msg BankMsg {
+    #[selector = 0x01]
+    Deposit { amount: u64 } -> u64,
+    #[selector = 0x02]
+    Withdraw { amount: u64 } -> bool,
+}
+
+msg TokenMsg {
+    #[selector = 0x03]
+    Transfer { to: u64, amount: u64 } -> bool,
+    #[selector = 0x04]
+    Balance { addr: u64 } -> u64,
+}
+
+// Custom msg variant struct with manual impl
+struct CustomMsg {
+    pub data: u64,
+}
+
+impl core::message::MsgVariant for CustomMsg {
+    const SELECTOR: u32 = 0x10
+    type Return = bool
+}
+
+pub contract BareRecvContract {
+    data: u64,
+
+    // Bare recv block - can handle any MsgVariant
+    recv {
+        // Can use fully qualified paths
+        BankMsg::Deposit { amount } -> u64 uses (mut data) {
+            data += amount
+            data
+        }
+
+        // Can use fully qualified paths from different msg types
+        TokenMsg::Transfer { to, amount } -> bool uses () {
+            true
+        }
+
+        // Can use custom MsgVariant structs
+        CustomMsg { data: d } -> bool uses () {
+            d > 0
+        }
+    }
+}

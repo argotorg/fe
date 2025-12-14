@@ -8,6 +8,7 @@ edition = "2024"
 [workspace.dependencies]
 common = { path = "crates/common", package = "fe-common" }
 driver = { path = "crates/driver", package = "fe-driver" }
+fmt = { path = "crates/fmt", package = "fe-fmt" }
 hir = { path = "crates/hir", package = "fe-hir" }
 parser = { path = "crates/parser", package = "fe-parser" }
 test-utils = { path = "crates/test-utils", package = "fe-test-utils" }

@@ -448,6 +448,82 @@ impl DesugaredOrigin {
                     }
                 }
             },
+            Self::Msg(super::MsgDesugared {
+                msg,
+                variant_idx,
+                focus,
+            }) => {
+                use super::MsgDesugaredFocus;
+                use parser::ast::{self, prelude::*};
+
+                let msg_node = msg.to_node(&root);
+
+                // If we have a variant index, try to get the specific variant
+                let variant = variant_idx
+                    .and_then(|idx| msg_node.variants().and_then(|v| v.into_iter().nth(idx)));
+
+                match focus {
+                    MsgDesugaredFocus::Block => {
+                        // Point to the variant if available, otherwise the whole msg
+                        if let Some(v) = variant {
+                            v.syntax().text_range()
+                        } else {
+                            msg_node.syntax().text_range()
+                        }
+                    }
+                    MsgDesugaredFocus::VariantName => {
+                        // Point to the variant name token
+                        if let Some(v) = variant
+                            && let Some(name) = v.name()
+                        {
+                            return Span::new(file, name.text_range(), SpanKind::Original);
+                        }
+                        // Fallback to msg name
+                        if let Some(name) = msg_node.name() {
+                            name.text_range()
+                        } else {
+                            msg_node.syntax().text_range()
+                        }
+                    }
+                    MsgDesugaredFocus::Selector => {
+                        // Point to the selector attribute if present
+                        if let Some(v) = &variant
+                            && let Some(attr_list) = v.attr_list()
+                        {
+                            for attr in attr_list {
+                                if let ast::AttrKind::Normal(normal) = attr.kind()
+                                    && let Some(path) = normal.path()
+                                    && path.text() == "selector"
+                                {
+                                    return Span::new(
+                                        file,
+                                        attr.syntax().text_range(),
+                                        SpanKind::Original,
+                                    );
+                                }
+                            }
+                        }
+                        // Fallback to variant name or msg
+                        if let Some(v) = variant {
+                            if let Some(name) = v.name() {
+                                return Span::new(file, name.text_range(), SpanKind::Original);
+                            }
+                            v.syntax().text_range()
+                        } else {
+                            msg_node.syntax().text_range()
+                        }
+                    }
+                }
+            }
+            Self::ContractInit(super::ContractInitDesugared { init, focus }) => {
+                use super::ContractInitDesugaredFocus;
+                use parser::ast::prelude::*;
+
+                let init_node = init.to_node(&root);
+                match focus {
+                    ContractInitDesugaredFocus::Block => init_node.syntax().text_range(),
+                }
+            }
         };
 
         Span::new(file, range, SpanKind::Original)

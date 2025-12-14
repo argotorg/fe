@@ -1,0 +1,34 @@
+---
+source: crates/parser/tests/syntax_node.rs
+expression: node
+input_file: test_files/syntax_node/items/contract_uses_clause.fe
+---
+Root@0..38
+  ItemList@0..36
+    Item@0..36
+      Contract@0..36
+        ContractKw@0..8 "contract"
+        WhiteSpace@8..9 " "
+        Ident@9..13 "Coin"
+        WhiteSpace@13..14 " "
+        UsesClause@14..33
+          UsesKw@14..18 "uses"
+          WhiteSpace@18..19 " "
+          UsesParamList@19..33
+            LParen@19..20 "("
+            UsesParam@20..32
+              MutKw@20..23 "mut"
+              WhiteSpace@23..24 " "
+              Ident@24..27 "ctx"
+              Colon@27..28 ":"
+              WhiteSpace@28..29 " "
+              Path@29..32
+                PathSegment@29..32
+                  Ident@29..32 "Ctx"
+            RParen@32..33 ")"
+        WhiteSpace@33..34 " "
+        LBrace@34..35 "{"
+        ContractFields@35..35
+        RBrace@35..36 "}"
+  Newline@36..38 "\n\n"
+

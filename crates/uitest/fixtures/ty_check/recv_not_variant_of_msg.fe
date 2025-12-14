@@ -1,0 +1,45 @@
+// Test that variants in named recv blocks must belong to the specified msg
+
+msg BankMsg {
+    #[selector = 0x01]
+    Deposit { amount: u64 } -> u64,
+    #[selector = 0x02]
+    Withdraw { amount: u64 } -> bool,
+}
+
+msg TokenMsg {
+    #[selector = 0x03]
+    Transfer { to: u64, amount: u64 } -> bool,
+}
+
+// Custom msg variant that implements MsgVariant but is standalone
+struct CustomMsg {
+    pub data: u64,
+}
+
+impl core::message::MsgVariant for CustomMsg {
+    const SELECTOR: u32 = 0x10
+    type Return = bool
+}
+
+pub contract BadContract {
+    data: u64,
+
+    recv BankMsg {
+        // OK: Deposit is a variant of BankMsg
+        Deposit { amount } -> u64 uses (mut data) {
+            data += amount
+            data
+        }
+
+        // Error: Transfer is a variant of TokenMsg, not BankMsg
+        TokenMsg::Transfer { to, amount } -> bool uses () {
+            true
+        }
+
+        // Error: CustomMsg implements MsgVariant but is not a variant of BankMsg
+        CustomMsg { data: d } -> bool uses () {
+            d > 0
+        }
+    }
+}

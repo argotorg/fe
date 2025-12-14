@@ -3,7 +3,7 @@ use async_lsp::lsp_types::{TextEdit, WorkspaceEdit};
 use common::InputDb;
 use hir::{
     core::semantic::reference::Target,
-    hir_def::{ItemKind, scope_graph::ScopeId},
+    hir_def::{HirIngot, ItemKind, Trait, scope_graph::ScopeId},
     lower::map_file_to_mod,
     span::LazySpan,
 };
@@ -68,6 +68,10 @@ pub async fn handle_rename(
                 }
                 let mod_ = map_file_to_mod(&backend.db, file);
                 for ref_view in mod_.references_to_target(&backend.db, target) {
+                    // Skip `Self` type paths - they shouldn't be renamed
+                    if ref_view.is_self_ty_path(&backend.db) {
+                        continue;
+                    }
                     if let Some(span) = ref_view.rename_span(&backend.db).resolve(&backend.db)
                         && let Ok(range) = to_lsp_range_from_span(span, &backend.db)
                     {
@@ -89,6 +93,20 @@ pub async fn handle_rename(
                     range,
                     new_text: new_name.clone(),
                 });
+            }
+
+            // If this is a trait method, also rename implementations
+            if let ItemKind::Func(func) = target_scope.item()
+                && let Some(ScopeId::Item(ItemKind::Trait(trait_))) =
+                    target_scope.parent(&backend.db)
+            {
+                rename_trait_method_implementations(
+                    &backend.db,
+                    trait_,
+                    func.name(&backend.db),
+                    new_name,
+                    &mut changes,
+                );
             }
         }
         Target::Local { span, .. } => {
@@ -132,4 +150,41 @@ pub async fn handle_rename(
 /// Check if a scope refers to a module (top-level or nested)
 fn is_module_scope(scope: ScopeId) -> bool {
     matches!(scope.item(), ItemKind::TopMod(_) | ItemKind::Mod(_))
+}
+
+/// Rename all implementations of a trait method in impl blocks.
+fn rename_trait_method_implementations<'db>(
+    db: &'db driver::DriverDataBase,
+    trait_: Trait<'db>,
+    method_name: hir::hir_def::Partial<hir::hir_def::IdentId<'db>>,
+    new_name: &str,
+    changes: &mut FxHashMap<url::Url, Vec<TextEdit>>,
+) {
+    let Some(method_name) = method_name.to_opt() else {
+        return;
+    };
+
+    let ingot = trait_.top_mod(db).ingot(db);
+
+    // Find all impl blocks for this trait and rename matching methods
+    for impl_trait in ingot.all_impl_traits(db) {
+        if let Some(implemented_trait) = impl_trait.trait_def(db)
+            && implemented_trait == trait_
+        {
+            // Find the method in this impl block
+            for method in impl_trait.methods(db) {
+                if method.name(db).to_opt() == Some(method_name)
+                    && let Some(name_span) = method.scope().name_span(db)
+                    && let Some(span) = name_span.resolve(db)
+                    && let Some(impl_url) = span.file.url(db)
+                    && let Ok(range) = to_lsp_range_from_span(span, db)
+                {
+                    changes.entry(impl_url).or_default().push(TextEdit {
+                        range,
+                        new_text: new_name.to_string(),
+                    });
+                }
+            }
+        }
+    }
 }

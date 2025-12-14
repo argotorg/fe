@@ -6,6 +6,7 @@ use either::Either;
 use super::{RecordLike, TyChecker, env::LocalBinding, path::RecordInitChecker};
 use crate::analysis::{
     name_resolution::PathRes,
+    ty::adt_def::AdtRef,
     ty::{
         binder::Binder,
         diagnostics::BodyDiag,
@@ -30,9 +31,9 @@ impl<'db> TyChecker<'db> {
             Pat::Rest => expected, // rest pattern type checking?
             Pat::Lit(..) => self.check_lit_pat(pat, pat_data),
             Pat::Tuple(..) => self.check_tuple_pat(pat, pat_data, expected),
-            Pat::Path(..) => self.check_path_pat(pat, pat_data),
+            Pat::Path(..) => self.check_path_pat(pat, pat_data, expected),
             Pat::PathTuple(..) => self.check_path_tuple_pat(pat, pat_data),
-            Pat::Record(..) => self.check_record_pat(pat, pat_data),
+            Pat::Record(..) => self.check_record_pat(pat, pat_data, expected),
 
             Pat::Or(lhs, rhs) => {
                 self.check_pat(*lhs, expected);
@@ -103,7 +104,12 @@ impl<'db> TyChecker<'db> {
         unified
     }
 
-    fn check_path_pat(&mut self, pat: PatId, pat_data: &Pat<'db>) -> TyId<'db> {
+    fn check_path_pat(
+        &mut self,
+        pat: PatId,
+        pat_data: &Pat<'db>,
+        _expected: TyId<'db>,
+    ) -> TyId<'db> {
         let Pat::Path(path, is_mut) = pat_data else {
             unreachable!()
         };
@@ -115,115 +121,89 @@ impl<'db> TyChecker<'db> {
         let span = pat.span(self.body()).into_path_pat();
         let res = self.resolve_path(*path, true, span.clone().path());
 
-        if path.is_bare_ident(self.db) {
-            match res {
-                Ok(PathRes::Ty(ty) | PathRes::TyAlias(_, ty)) => {
-                    let record_like = RecordLike::from_ty(ty);
-                    if record_like.is_record(self.db) {
-                        let diag = BodyDiag::unit_variant_expected(
-                            self.db,
-                            pat.span(self.body()).into(),
-                            record_like,
-                        );
-                        self.push_diag(diag);
-                        TyId::invalid(self.db, InvalidCause::Other)
-                    } else {
-                        ty
-                    }
-                }
-                Ok(PathRes::EnumVariant(variant)) => {
-                    if matches!(variant.kind(self.db), VariantKind::Unit) {
-                        self.table.instantiate_to_term(variant.ty)
-                    } else {
-                        let record_like = RecordLike::from_variant(variant);
-                        let diag = BodyDiag::unit_variant_expected(
-                            self.db,
-                            pat.span(self.body()).into(),
-                            record_like,
-                        );
-
-                        self.push_diag(diag);
-                        TyId::invalid(self.db, InvalidCause::Other)
-                    }
-                }
-                _ => {
-                    let name = path.ident(self.db).unwrap();
-                    let binding = LocalBinding::local(pat, *is_mut);
-                    if let Some(LocalBinding::Local {
-                        pat: conflict_with, ..
-                    }) = self.env.register_pending_binding(name, binding)
-                    {
-                        let diag = BodyDiag::DuplicatedBinding {
-                            primary: span.into(),
-                            conflicat_with: conflict_with.span(self.body()).into(),
-                            name,
-                        };
-                        self.push_diag(diag);
-                    }
-                    self.fresh_ty()
-                }
+        // Bare identifiers that don't resolve to a type/variant are local bindings,
+        // unless the expected type is a msg type, in which case we try to resolve
+        // the identifier as a msg variant first.
+        if let Some(name) = path.as_ident(self.db)
+            && !matches!(
+                res,
+                Ok(PathRes::Ty(..) | PathRes::TyAlias(..) | PathRes::EnumVariant(..))
+            )
+        {
+            let binding = LocalBinding::local(pat, *is_mut);
+            if let Some(LocalBinding::Local {
+                pat: conflict_with, ..
+            }) = self.env.register_pending_binding(name, binding)
+            {
+                let diag = BodyDiag::DuplicatedBinding {
+                    primary: span.into(),
+                    conflicat_with: conflict_with.span(self.body()).into(),
+                    name,
+                };
+                self.push_diag(diag);
             }
-        } else {
-            match res {
-                Ok(
-                    PathRes::Ty(ty)
-                    | PathRes::TyAlias(_, ty)
-                    | PathRes::Func(ty)
-                    | PathRes::Const(_, ty)
-                    | PathRes::TraitConst(ty, ..),
-                ) => {
-                    let record_like = RecordLike::from_ty(ty);
-                    if record_like.is_record(self.db) {
-                        let diag = BodyDiag::unit_variant_expected(
-                            self.db,
-                            pat.span(self.body()).into(),
-                            record_like,
-                        );
-                        self.push_diag(diag);
-                        TyId::invalid(self.db, InvalidCause::Other)
-                    } else {
-                        ty
-                    }
-                }
-                Ok(PathRes::Trait(trait_)) => {
-                    let diag = BodyDiag::NotValue {
-                        primary: span.into(),
-                        given: Either::Left(trait_.def(self.db).into()),
-                    };
-                    self.push_diag(diag);
-                    TyId::invalid(self.db, InvalidCause::Other)
-                }
-                Ok(PathRes::EnumVariant(variant)) => {
-                    if matches!(variant.kind(self.db), VariantKind::Unit) {
-                        self.table.instantiate_to_term(variant.ty)
-                    } else {
-                        let record_like = RecordLike::from_variant(variant);
-                        let diag = BodyDiag::unit_variant_expected(
-                            self.db,
-                            pat.span(self.body()).into(),
-                            record_like,
-                        );
-
-                        self.push_diag(diag);
-                        TyId::invalid(self.db, InvalidCause::Other)
-                    }
-                }
-                Ok(PathRes::Mod(scope_id)) => {
-                    let diag = BodyDiag::NotValue {
-                        primary: span.into(),
-                        given: Either::Left(scope_id.item()),
-                    };
-                    self.push_diag(diag);
-                    TyId::invalid(self.db, InvalidCause::Other)
-                }
-                Ok(PathRes::Method(..) | PathRes::FuncParam(..)) => {
-                    // TODO: diagnostic?
-                    TyId::invalid(self.db, InvalidCause::Other)
-                }
-
-                Err(_) => TyId::invalid(self.db, InvalidCause::Other),
-            }
+            return self.fresh_ty();
         }
+
+        match res {
+            Ok(
+                PathRes::Ty(ty)
+                | PathRes::TyAlias(_, ty)
+                | PathRes::Func(ty)
+                | PathRes::Const(_, ty)
+                | PathRes::TraitConst(ty, ..),
+            ) => {
+                let record_like = RecordLike::from_ty(ty);
+                if record_like.is_record(self.db) {
+                    self.emit_unit_variant_expected(pat, record_like)
+                } else {
+                    ty
+                }
+            }
+
+            Ok(PathRes::Trait(trait_)) => {
+                let diag = BodyDiag::NotValue {
+                    primary: span.into(),
+                    given: Either::Left(trait_.def(self.db).into()),
+                };
+                self.push_diag(diag);
+                TyId::invalid(self.db, InvalidCause::Other)
+            }
+
+            Ok(PathRes::EnumVariant(variant)) => {
+                if matches!(variant.kind(self.db), VariantKind::Unit) {
+                    self.table.instantiate_to_term(variant.ty)
+                } else {
+                    self.emit_unit_variant_expected(pat, RecordLike::from_variant(variant))
+                }
+            }
+
+            Ok(PathRes::Mod(scope_id)) => {
+                let diag = BodyDiag::NotValue {
+                    primary: span.into(),
+                    given: Either::Left(scope_id.item()),
+                };
+                self.push_diag(diag);
+                TyId::invalid(self.db, InvalidCause::Other)
+            }
+
+            Ok(PathRes::Method(..) | PathRes::FuncParam(..)) => {
+                TyId::invalid(self.db, InvalidCause::Other)
+            }
+
+            Err(_) => TyId::invalid(self.db, InvalidCause::Other),
+        }
+    }
+
+    fn emit_unit_variant_expected(
+        &mut self,
+        pat: PatId,
+        record_like: RecordLike<'db>,
+    ) -> TyId<'db> {
+        let diag =
+            BodyDiag::unit_variant_expected(self.db, pat.span(self.body()).into(), record_like);
+        self.push_diag(diag);
+        TyId::invalid(self.db, InvalidCause::Other)
     }
 
     fn check_path_tuple_pat(&mut self, pat: PatId, pat_data: &Pat<'db>) -> TyId<'db> {
@@ -263,13 +243,12 @@ impl<'db> TyChecker<'db> {
                         let diag = BodyDiag::tuple_variant_expected(
                             self.db,
                             pat.span(self.body()).into(),
-                            Some(RecordLike::Variant(variant)),
+                            Some(RecordLike::from_variant(variant)),
                         );
                         self.push_diag(diag);
                         return TyId::invalid(self.db, InvalidCause::Other);
                     }
                 },
-
                 PathRes::Mod(scope) => {
                     let diag = BodyDiag::NotValue {
                         primary: span.into(),
@@ -360,7 +339,12 @@ impl<'db> TyChecker<'db> {
         variant.ty
     }
 
-    fn check_record_pat(&mut self, pat: PatId, pat_data: &Pat<'db>) -> TyId<'db> {
+    fn check_record_pat(
+        &mut self,
+        pat: PatId,
+        pat_data: &Pat<'db>,
+        expected: TyId<'db>,
+    ) -> TyId<'db> {
         let Pat::Record(Partial::Present(path), _) = pat_data else {
             return TyId::invalid(self.db, InvalidCause::ParseError);
         };
@@ -407,7 +391,6 @@ impl<'db> TyChecker<'db> {
                     }
                     ty
                 }
-
                 PathRes::Mod(scope) => {
                     let diag = BodyDiag::NotValue {
                         primary: span.into(),
@@ -424,7 +407,27 @@ impl<'db> TyChecker<'db> {
                     TyId::invalid(self.db, InvalidCause::Other)
                 }
             },
-            Err(_) => TyId::invalid(self.db, InvalidCause::Other),
+            Err(_) => {
+                // Check if expected type is a struct from a desugared msg module
+                // that matches the pattern path
+                if let Some(adt_def) = expected.adt_def(self.db)
+                    && let AdtRef::Struct(struct_) = adt_def.adt_ref(self.db)
+                {
+                    // Check if the path matches the struct name
+                    if let Some(struct_name) = struct_.name(self.db).to_opt()
+                        && path.as_ident(self.db) == Some(struct_name)
+                    {
+                        // The pattern matches the expected struct type
+                        let record_like = RecordLike::from_ty(expected);
+                        if record_like.is_record(self.db) {
+                            self.check_record_pat_fields(record_like, pat);
+                        }
+                        return expected;
+                    }
+                }
+
+                TyId::invalid(self.db, InvalidCause::Other)
+            }
         }
     }
 

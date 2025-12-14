@@ -1,0 +1,180 @@
+---
+source: crates/hir/tests/ty_check.rs
+expression: res
+input_file: test_files/ty_check/contract_happy.fe
+---
+note: 
+  ┌─ contract_happy.fe:5:39
+  │  
+5 │       init(start: u64) uses (mut total) {
+  │ ╭───────────────────────────────────────^
+6 │ │         total = start
+7 │ │     }
+  │ ╰─────^ ()
+
+note: 
+  ┌─ contract_happy.fe:6:9
+  │
+6 │         total = start
+  │         ^^^^^ u64
+
+note: 
+  ┌─ contract_happy.fe:6:9
+  │
+6 │         total = start
+  │         ^^^^^^^^^^^^^ ()
+
+note: 
+  ┌─ contract_happy.fe:6:17
+  │
+6 │         total = start
+  │                 ^^^^^ u64
+
+note: 
+   ┌─ contract_happy.fe:10:9
+   │
+10 │         Withdraw { amount } -> bool
+   │         ^^^^^^^^^^^^^^^^^^^ Withdraw
+
+note: 
+   ┌─ contract_happy.fe:10:20
+   │
+10 │         Withdraw { amount } -> bool
+   │                    ^^^^^^ u64
+
+note: 
+   ┌─ contract_happy.fe:11:28
+   │  
+11 │             uses (mut total) {
+   │ ╭────────────────────────────^
+12 │ │             if amount > total {
+13 │ │                 false
+14 │ │             } else {
+   · │
+17 │ │             }
+18 │ │         }
+   │ ╰─────────^ bool
+
+note: 
+   ┌─ contract_happy.fe:12:13
+   │  
+12 │ ╭             if amount > total {
+13 │ │                 false
+14 │ │             } else {
+15 │ │                 total -= amount
+16 │ │                 true
+17 │ │             }
+   │ ╰─────────────^ bool
+
+note: 
+   ┌─ contract_happy.fe:12:16
+   │
+12 │             if amount > total {
+   │                ^^^^^^ u64
+
+note: 
+   ┌─ contract_happy.fe:12:16
+   │
+12 │             if amount > total {
+   │                ^^^^^^^^^^^^^^ bool
+
+note: 
+   ┌─ contract_happy.fe:12:25
+   │
+12 │             if amount > total {
+   │                         ^^^^^ u64
+
+note: 
+   ┌─ contract_happy.fe:12:31
+   │  
+12 │               if amount > total {
+   │ ╭───────────────────────────────^
+13 │ │                 false
+14 │ │             } else {
+   │ ╰─────────────^ bool
+
+note: 
+   ┌─ contract_happy.fe:13:17
+   │
+13 │                 false
+   │                 ^^^^^ bool
+
+note: 
+   ┌─ contract_happy.fe:14:20
+   │  
+14 │               } else {
+   │ ╭────────────────────^
+15 │ │                 total -= amount
+16 │ │                 true
+17 │ │             }
+   │ ╰─────────────^ bool
+
+note: 
+   ┌─ contract_happy.fe:15:17
+   │
+15 │                 total -= amount
+   │                 ^^^^^ u64
+
+note: 
+   ┌─ contract_happy.fe:15:17
+   │
+15 │                 total -= amount
+   │                 ^^^^^^^^^^^^^^^ ()
+
+note: 
+   ┌─ contract_happy.fe:15:26
+   │
+15 │                 total -= amount
+   │                          ^^^^^^ u64
+
+note: 
+   ┌─ contract_happy.fe:16:17
+   │
+16 │                 true
+   │                 ^^^^ bool
+
+note: 
+   ┌─ contract_happy.fe:19:9
+   │
+19 │         Deposit { amount } -> u64 uses (mut total) {
+   │         ^^^^^^^^^^^^^^^^^^ Deposit
+
+note: 
+   ┌─ contract_happy.fe:19:19
+   │
+19 │         Deposit { amount } -> u64 uses (mut total) {
+   │                   ^^^^^^ u64
+
+note: 
+   ┌─ contract_happy.fe:19:52
+   │  
+19 │           Deposit { amount } -> u64 uses (mut total) {
+   │ ╭────────────────────────────────────────────────────^
+20 │ │             total += amount
+21 │ │             total
+22 │ │         }
+   │ ╰─────────^ u64
+
+note: 
+   ┌─ contract_happy.fe:20:13
+   │
+20 │             total += amount
+   │             ^^^^^ u64
+
+note: 
+   ┌─ contract_happy.fe:20:13
+   │
+20 │             total += amount
+   │             ^^^^^^^^^^^^^^^ ()
+
+note: 
+   ┌─ contract_happy.fe:20:22
+   │
+20 │             total += amount
+   │                      ^^^^^^ u64
+
+note: 
+   ┌─ contract_happy.fe:21:13
+   │
+21 │             total
+   │             ^^^^^ u64

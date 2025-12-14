@@ -104,6 +104,14 @@ impl<'db> Visitor<'db> for ReferenceCollector<'db> {
     ) {
         if let Some(body) = self.current_body {
             match expr_data {
+                Expr::Path(_) => {
+                    // Set context for path expressions before walking
+                    let old_ctx = self.path_context;
+                    self.path_context = PathContext::Expr(expr);
+                    walk_expr(self, ctxt, expr);
+                    self.path_context = old_ctx;
+                    return;
+                }
                 Expr::Field(_, _) => {
                     if let Some(span) = ctxt.span() {
                         self.refs.push(ReferenceView::FieldAccess(FieldAccessView {
@@ -121,14 +129,6 @@ impl<'db> Visitor<'db> for ReferenceCollector<'db> {
                             span: span.into_method_call_expr(),
                         }));
                     }
-                }
-                Expr::Path(_) => {
-                    // Set context for path expressions before walking
-                    let old_ctx = self.path_context;
-                    self.path_context = PathContext::Expr(expr);
-                    walk_expr(self, ctxt, expr);
-                    self.path_context = old_ctx;
-                    return;
                 }
                 _ => {}
             }

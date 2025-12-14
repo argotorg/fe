@@ -1,6 +1,3 @@
-use std::panic;
-
-use common::ingot::IngotKind;
 use either::Either;
 
 use crate::core::hir_def::{
@@ -17,6 +14,7 @@ use super::{
 use crate::analysis::ty::{
     binder::Binder,
     canonical::Canonicalized,
+    corelib::resolve_core_trait,
     diagnostics::{BodyDiag, FuncBodyDiag},
     fold::{AssocTySubst, TyFoldable as _},
     trait_def::TraitInstId,
@@ -35,7 +33,7 @@ use crate::analysis::{
         diagnostics::PathResDiag,
         is_scope_visible_from,
         method_selection::{MethodCandidate, MethodSelectionError, select_method_candidate},
-        resolve_ident_to_bucket, resolve_name_res, resolve_path, resolve_query,
+        resolve_name_res, resolve_path, resolve_query,
     },
     ty::{
         const_ty::ConstTyId,
@@ -54,7 +52,7 @@ impl<'db> TyChecker<'db> {
     pub(super) fn check_expr(&mut self, expr: ExprId, expected: TyId<'db>) -> ExprProp<'db> {
         let Partial::Present(expr_data) = self.env.expr_data(expr) else {
             let typed = ExprProp::invalid(self.db);
-            self.env.type_expr(expr, typed);
+            self.env.type_expr(expr, typed.clone());
             return typed;
         };
 
@@ -82,8 +80,8 @@ impl<'db> TyChecker<'db> {
         };
         self.env.leave_expr();
 
-        let typeable = Typeable::Expr(expr, actual);
         actual.ty = normalize_ty(self.db, actual.ty, self.env.scope(), self.env.assumptions());
+        let typeable = Typeable::Expr(expr, actual.clone());
         actual.ty = self.unify_ty(typeable, actual.ty, expected);
         actual
     }
@@ -210,7 +208,7 @@ impl<'db> TyChecker<'db> {
             };
 
             let is_mut = value_prop
-                .binding()
+                .binding
                 .map(|b| b.is_mut())
                 .unwrap_or(value_prop.is_mut);
 
@@ -476,7 +474,7 @@ impl<'db> TyChecker<'db> {
                         // Defer resolution using return-type constraints
                         let ret_ty = self.fresh_ty();
                         let typed = ExprProp::new(ret_ty, true);
-                        self.env.type_expr(expr, typed);
+                        self.env.type_expr(expr, typed.clone());
                         // Instantiate candidates with fresh inference vars so
                         // later unifications can bind their parameters.
                         let cands: Vec<_> = insts
@@ -633,7 +631,7 @@ impl<'db> TyChecker<'db> {
 
         match res {
             ResolvedPathInBody::Binding(binding) => {
-                let ty = self.env.lookup_binding_ty(binding);
+                let ty = self.env.lookup_binding_ty(&binding);
                 let is_mut = binding.is_mut();
                 ExprProp::new_binding_ref(ty, is_mut, binding)
             }
@@ -969,36 +967,6 @@ impl<'db> TyChecker<'db> {
         ExprProp::new(ty, true)
     }
 
-    fn resolve_core_trait(
-        &self,
-        trait_path: PathId<'db>,
-    ) -> Option<crate::core::hir_def::Trait<'db>> {
-        let scope = self.env.scope();
-        let assumptions = self.env.assumptions();
-        let mut module_path = trait_path.parent(self.db)?;
-
-        // If we are inside the core ingot, replace `core` with `ingot` in the trait path.
-        let ingot = self.env.body().top_mod(self.db).ingot(self.db);
-        if ingot.kind(self.db) == IngotKind::Core && trait_path.is_core_lib_path(self.db) {
-            module_path = module_path.replace_root(
-                IdentId::make_core(self.db),
-                IdentId::make_ingot(self.db),
-                self.db,
-            );
-        }
-        let trait_name = trait_path.ident(self.db).to_opt()?;
-        let Ok(PathRes::Mod(mod_scope)) =
-            resolve_path(self.db, module_path, scope, assumptions, false)
-        else {
-            return None;
-        };
-
-        let bucket =
-            resolve_ident_to_bucket(self.db, PathId::from_ident(self.db, trait_name), mod_scope);
-        let nameres = bucket.pick(NameDomain::TYPE).as_ref().ok()?;
-        nameres.trait_()
-    }
-
     fn check_array(
         &mut self,
         _expr: ExprId,
@@ -1224,9 +1192,7 @@ impl<'db> TyChecker<'db> {
         op: &dyn TraitOps,
         rhs_expr: Option<ExprId>,
     ) -> ExprProp<'db> {
-        let Some(trait_def) = self.resolve_core_trait(op.trait_path(self.db)) else {
-            panic!("failed to resolve core::ops trait");
-        };
+        let trait_def = resolve_core_trait(self.db, self.env.scope(), &op.trait_path_segments());
 
         let c_lhs_ty = Canonicalized::new(self.db, lhs_ty);
 
@@ -1326,7 +1292,7 @@ impl<'db> TyChecker<'db> {
                         let (func_ty, inst, expected_rhs) = viable.pop().unwrap();
                         self.env
                             .register_confirmation(inst, expr.span(self.body()).into());
-                        self.unify_ty(Typeable::Expr(rhs_expr, rhs), rhs.ty, expected_rhs);
+                        self.unify_ty(Typeable::Expr(rhs_expr, rhs.clone()), rhs.ty, expected_rhs);
                         (func_ty, inst)
                     }
                     _ => {
@@ -1373,10 +1339,8 @@ impl<'db> TyChecker<'db> {
             let binding = self.find_base_binding(lhs);
             let diag = match binding {
                 Some(binding) => {
-                    let (ident, def_span) = (
-                        self.env.binding_name(binding),
-                        self.env.binding_def_span(binding),
-                    );
+                    let (ident, def_span) =
+                        (binding.binding_name(&self.env), binding.def_span(&self.env));
 
                     BodyDiag::ImmutableAssignment {
                         primary: lhs.span(self.body()).into(),
@@ -1423,7 +1387,7 @@ impl<'db> TyChecker<'db> {
         match expr_data {
             Expr::Field(lhs, ..) => self.find_base_binding(*lhs),
             Expr::Bin(lhs, _rhs, op) if *op == BinOp::Index => self.find_base_binding(*lhs),
-            Expr::Path(..) => self.env.typed_expr(expr)?.binding(),
+            Expr::Path(..) => self.env.typed_expr(expr)?.binding,
             _ => None,
         }
     }
@@ -1580,42 +1544,43 @@ fn resolve_ident_expr<'db>(
 /// TODO: We need to refine this trait definition to connect core library traits
 /// smoothly.
 pub(crate) trait TraitOps {
-    fn trait_path<'db>(&self, db: &'db dyn HirAnalysisDb) -> PathId<'db> {
-        let path = core_ops_path(db);
-        path.push_ident(db, self.trait_name(db))
+    fn trait_path_segments(&self) -> [&str; 2] {
+        ["ops", self.triple()[0]]
     }
 
-    fn trait_name<'db>(&self, db: &'db dyn HirAnalysisDb) -> IdentId<'db> {
-        self.triple(db)[0]
+    fn core_trait_path<'db>(&self, db: &'db dyn HirAnalysisDb) -> PathId<'db> {
+        let mut path = PathId::from_ident(db, IdentId::new(db, "core".to_string()));
+        for s in self.trait_path_segments() {
+            path = path.push_ident(db, IdentId::new(db, s.to_string()));
+        }
+        path
     }
 
     fn trait_method<'db>(&self, db: &'db dyn HirAnalysisDb) -> IdentId<'db> {
-        self.triple(db)[1]
+        IdentId::new(db, self.triple()[1].to_string())
     }
 
     fn op_symbol<'db>(&self, db: &'db dyn HirAnalysisDb) -> IdentId<'db> {
-        self.triple(db)[2]
+        IdentId::new(db, self.triple()[2].to_string())
     }
 
-    fn triple<'db>(&self, db: &'db dyn HirAnalysisDb) -> [IdentId<'db>; 3];
+    fn triple(&self) -> [&str; 3];
 }
 
 impl TraitOps for UnOp {
-    fn triple<'db>(&self, db: &'db dyn HirAnalysisDb) -> [IdentId<'db>; 3] {
-        let triple = match self {
+    fn triple(&self) -> [&str; 3] {
+        match self {
             UnOp::Plus => ["UnaryPlus", "add", "+"],
             UnOp::Minus => ["Neg", "neg", "-"],
             UnOp::Not => ["Not", "not", "!"],
             UnOp::BitNot => ["BitNot", "bit_not", "~"],
-        };
-
-        triple.map(|s| IdentId::new(db, s.to_string()))
+        }
     }
 }
 
 impl TraitOps for BinOp {
-    fn triple<'db>(&self, db: &'db dyn HirAnalysisDb) -> [IdentId<'db>; 3] {
-        let triple = match self {
+    fn triple(&self) -> [&str; 3] {
+        match self {
             BinOp::Arith(arith_op) => {
                 use ArithBinOp::*;
 
@@ -1653,9 +1618,7 @@ impl TraitOps for BinOp {
             }
 
             BinOp::Index => ["Index", "index", "[]"],
-        };
-
-        triple.map(|s| IdentId::new(db, s.to_string()))
+        }
     }
 }
 
@@ -1663,9 +1626,9 @@ impl TraitOps for BinOp {
 struct AugAssignOp(ArithBinOp);
 
 impl TraitOps for AugAssignOp {
-    fn triple<'db>(&self, db: &'db dyn HirAnalysisDb) -> [IdentId<'db>; 3] {
+    fn triple(&self) -> [&str; 3] {
         use ArithBinOp::*;
-        let triple = match self.0 {
+        match self.0 {
             Add => ["AddAssign", "add_assign", "+="],
             Sub => ["SubAssign", "sub_assign", "-="],
             Mul => ["MulAssign", "mul_assign", "*="],
@@ -1677,14 +1640,6 @@ impl TraitOps for AugAssignOp {
             BitAnd => ["BitAndAssign", "bitand_assign", "&="],
             BitOr => ["BitOrAssign", "bitor_assign", "|="],
             BitXor => ["BitXorAssign", "bitxor_assign", "^="],
-        };
-
-        triple.map(|s| IdentId::new(db, s.to_string()))
+        }
     }
-}
-
-fn core_ops_path(db: &dyn HirAnalysisDb) -> PathId<'_> {
-    let core = IdentId::new(db, "core".to_string());
-    let ops_ = IdentId::new(db, "ops".to_string());
-    PathId::from_ident(db, core).push_ident(db, ops_)
 }

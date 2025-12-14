@@ -1,0 +1,9 @@
+fn test_inlay_hints() {
+    let x: i32 = 42
+    let y = "hello"
+    let z = true
+    let arr: [i32; 3] = [1, 2, 3]
+
+    let a = x + 10
+    let b = if z { x } else { 0 }
+}

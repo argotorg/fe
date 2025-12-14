@@ -34,6 +34,7 @@ impl Item {
             .or_else(|| support::child(self.syntax()).map(ItemKind::Func))
             .or_else(|| support::child(self.syntax()).map(ItemKind::Struct))
             .or_else(|| support::child(self.syntax()).map(ItemKind::Contract))
+            .or_else(|| support::child(self.syntax()).map(ItemKind::Msg))
             .or_else(|| support::child(self.syntax()).map(ItemKind::Enum))
             .or_else(|| support::child(self.syntax()).map(ItemKind::TypeAlias))
             .or_else(|| support::child(self.syntax()).map(ItemKind::Impl))
@@ -156,8 +157,100 @@ impl Contract {
         support::token(self.syntax(), SK::Ident)
     }
 
-    /// Returns the contract's field def list.
-    pub fn fields(&self) -> Option<RecordFieldDefList> {
+    /// Returns the contract's leading fields section.
+    pub fn fields(&self) -> Option<ContractFields> {
+        support::child(self.syntax())
+    }
+
+    /// Returns the optional `uses` clause of the contract.
+    pub fn uses_clause(&self) -> Option<super::UsesClause> {
+        support::child(self.syntax())
+    }
+
+    /// Returns the optional `init` block of the contract.
+    pub fn init_block(&self) -> Option<ContractInit> {
+        support::child(self.syntax())
+    }
+
+    /// Returns all `recv` blocks declared in the contract.
+    pub fn recvs(&self) -> rowan::ast::AstChildren<ContractRecv> {
+        support::children(self.syntax())
+    }
+}
+
+ast_node! {
+    /// A section containing the leading contract fields.
+    pub struct ContractFields,
+    SK::ContractFields,
+    IntoIterator<Item=RecordFieldDef>
+}
+
+ast_node! {
+    /// The contract initialization block: `init(...) uses (...) { ... }`.
+    pub struct ContractInit,
+    SK::ContractInit,
+}
+impl ContractInit {
+    pub fn params(&self) -> Option<super::FuncParamList> {
+        support::child(self.syntax())
+    }
+
+    pub fn uses_clause(&self) -> Option<super::UsesClause> {
+        support::child(self.syntax())
+    }
+
+    pub fn body(&self) -> Option<super::BlockExpr> {
+        support::child(self.syntax())
+    }
+}
+
+ast_node! {
+    /// A `recv` block inside a contract. Supports both typed and untyped forms.
+    pub struct ContractRecv,
+    SK::ContractRecv,
+}
+impl ContractRecv {
+    /// Optional root message type path (`recv Type { ... }`).
+    pub fn path(&self) -> Option<super::Path> {
+        support::child(self.syntax())
+    }
+
+    /// The list of arms in this recv block.
+    pub fn arms(&self) -> Option<RecvArmList> {
+        support::child(self.syntax())
+    }
+}
+
+ast_node! {
+    /// List of recv arms inside a recv block.
+    pub struct RecvArmList,
+    SK::RecvArmList,
+    IntoIterator<Item=RecvArm>
+}
+
+ast_node! {
+    /// A single recv arm: `Pattern -> RetTy uses (...) { body }`
+    pub struct RecvArm,
+    SK::RecvArm,
+}
+impl RecvArm {
+    /// The pattern being matched (e.g., `Transfer { to, amount }`).
+    pub fn pat(&self) -> Option<super::Pat> {
+        support::child(self.syntax())
+    }
+
+    /// Optional return type.
+    pub fn ret_ty(&self) -> Option<super::Type> {
+        support::child(self.syntax())
+    }
+
+    /// Optional uses clause.
+    pub fn uses_clause(&self) -> Option<super::UsesClause> {
+        support::child(self.syntax())
+    }
+
+    /// The body block.
+    pub fn body(&self) -> Option<super::BlockExpr> {
         support::child(self.syntax())
     }
 }
@@ -433,11 +526,17 @@ ast_node! {
     pub struct RecordFieldDef,
     SK::RecordFieldDef,
 }
+
 impl super::AttrListOwner for RecordFieldDef {}
 impl RecordFieldDef {
     /// Returns the pub keyword if exists.
     pub fn pub_kw(&self) -> Option<SyntaxToken> {
         support::token(self.syntax(), SK::PubKw)
+    }
+
+    /// Returns the mut keyword if exists.
+    pub fn mut_kw(&self) -> Option<SyntaxToken> {
+        support::token(self.syntax(), SK::MutKw)
     }
 
     /// Returns the name of the field.
@@ -535,12 +634,69 @@ pub trait ItemModifierOwner: AstNode<Language = FeLang> {
     }
 }
 
+ast_node! {
+    /// `msg Erc20Msg { ... }`
+    pub struct Msg,
+    SK::Msg,
+}
+
+impl super::AttrListOwner for Msg {}
+impl super::ItemModifierOwner for Msg {}
+impl Msg {
+    /// Returns the name of the message interface.
+    pub fn name(&self) -> Option<SyntaxToken> {
+        support::token(self.syntax(), SK::Ident)
+    }
+
+    /// Returns the message variants.
+    pub fn variants(&self) -> Option<MsgVariantList> {
+        support::child(self.syntax())
+    }
+}
+
+ast_node! {
+    /// A list of message variants.
+    pub struct MsgVariantList,
+    SK::MsgVariantList,
+    IntoIterator<Item=MsgVariant>
+}
+
+ast_node! {
+    /// A single message variant.
+    /// `Transfer { to: Address, amount: u256 } -> bool`
+    pub struct MsgVariant,
+    SK::MsgVariant,
+}
+impl super::AttrListOwner for MsgVariant {}
+impl MsgVariant {
+    pub fn name(&self) -> Option<SyntaxToken> {
+        support::token(self.syntax(), SK::Ident)
+    }
+
+    pub fn params(&self) -> Option<MsgVariantParams> {
+        support::child(self.syntax())
+    }
+
+    pub fn ret_ty(&self) -> Option<super::Type> {
+        support::child(self.syntax())
+    }
+}
+
+ast_node! {
+    /// Message variant parameters.
+    /// `{ to: Address, amount: u256 }`
+    pub struct MsgVariantParams,
+    SK::MsgVariantParams,
+    IntoIterator<Item=RecordFieldDef>
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash, derive_more::From, derive_more::TryInto)]
 pub enum ItemKind {
     Mod(Mod),
     Func(Func),
     Struct(Struct),
     Contract(Contract),
+    Msg(Msg),
     Enum(Enum),
     TypeAlias(TypeAlias),
     Impl(Impl),
@@ -944,5 +1100,44 @@ mod tests {
             assert!(f.body().is_none());
         }
         assert_eq!(e.extern_block().unwrap().iter().count(), 2);
+    }
+    #[test]
+    #[wasm_bindgen_test]
+    fn msg_() {
+        let source = r#"
+            msg Erc20Msg {
+                Transfer { to: Address, amount: u256 } -> bool,
+                Balance { addr: Address } -> u256,
+                TotalSupply -> u256,
+            }
+        "#;
+        let m: Msg = parse_item(source);
+        assert_eq!(m.name().unwrap().text(), "Erc20Msg");
+
+        let mut count = 0;
+        for variant in m.variants().unwrap() {
+            match count {
+                0 => {
+                    assert_eq!(variant.name().unwrap().text(), "Transfer");
+                    assert!(variant.params().is_some());
+                    assert!(variant.ret_ty().is_some());
+                    assert_eq!(variant.params().unwrap().into_iter().count(), 2);
+                }
+                1 => {
+                    assert_eq!(variant.name().unwrap().text(), "Balance");
+                    assert!(variant.params().is_some());
+                    assert!(variant.ret_ty().is_some());
+                    assert_eq!(variant.params().unwrap().into_iter().count(), 1);
+                }
+                2 => {
+                    assert_eq!(variant.name().unwrap().text(), "TotalSupply");
+                    assert!(variant.params().is_none());
+                    assert!(variant.ret_ty().is_some());
+                }
+                _ => panic!("unexpected variant"),
+            }
+            count += 1;
+        }
+        assert_eq!(count, 3);
     }
 }

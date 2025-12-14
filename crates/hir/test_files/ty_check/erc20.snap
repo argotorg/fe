@@ -1,0 +1,2500 @@
+---
+source: crates/hir/tests/ty_check.rs
+expression: res
+input_file: test_files/ty_check/erc20.fe
+---
+note: 
+   ┌─ erc20.fe:13:5
+   │  
+13 │ ╭     {
+14 │ │         auth.grant(role: MINTER, to: owner)
+15 │ │         auth.grant(role: BURNER, to: owner)
+16 │ │ 
+   · │
+19 │ │         }
+20 │ │     }
+   │ ╰─────^ ()
+
+note: 
+   ┌─ erc20.fe:14:9
+   │
+14 │         auth.grant(role: MINTER, to: owner)
+   │         ^^^^ AccessControl
+
+note: 
+   ┌─ erc20.fe:14:9
+   │
+14 │         auth.grant(role: MINTER, to: owner)
+   │         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ ()
+
+note: 
+   ┌─ erc20.fe:14:26
+   │
+14 │         auth.grant(role: MINTER, to: owner)
+   │                          ^^^^^^ u256
+
+note: 
+   ┌─ erc20.fe:14:38
+   │
+14 │         auth.grant(role: MINTER, to: owner)
+   │                                      ^^^^^ Address
+
+note: 
+   ┌─ erc20.fe:15:9
+   │
+15 │         auth.grant(role: BURNER, to: owner)
+   │         ^^^^ AccessControl
+
+note: 
+   ┌─ erc20.fe:15:9
+   │
+15 │         auth.grant(role: BURNER, to: owner)
+   │         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ ()
+
+note: 
+   ┌─ erc20.fe:15:26
+   │
+15 │         auth.grant(role: BURNER, to: owner)
+   │                          ^^^^^^ u256
+
+note: 
+   ┌─ erc20.fe:15:38
+   │
+15 │         auth.grant(role: BURNER, to: owner)
+   │                                      ^^^^^ Address
+
+note: 
+   ┌─ erc20.fe:17:9
+   │  
+17 │ ╭         if initial_supply > 0 {
+18 │ │             mint(to: owner, amount: initial_supply)
+19 │ │         }
+   │ ╰─────────^ ()
+
+note: 
+   ┌─ erc20.fe:17:12
+   │
+17 │         if initial_supply > 0 {
+   │            ^^^^^^^^^^^^^^ u256
+
+note: 
+   ┌─ erc20.fe:17:12
+   │
+17 │         if initial_supply > 0 {
+   │            ^^^^^^^^^^^^^^^^^^ bool
+
+note: 
+   ┌─ erc20.fe:17:29
+   │
+17 │         if initial_supply > 0 {
+   │                             ^ u256
+
+note: 
+   ┌─ erc20.fe:17:31
+   │  
+17 │           if initial_supply > 0 {
+   │ ╭───────────────────────────────^
+18 │ │             mint(to: owner, amount: initial_supply)
+19 │ │         }
+   │ ╰─────────^ ()
+
+note: 
+   ┌─ erc20.fe:18:13
+   │
+18 │             mint(to: owner, amount: initial_supply)
+   │             ^^^^ fn mint
+
+note: 
+   ┌─ erc20.fe:18:13
+   │
+18 │             mint(to: owner, amount: initial_supply)
+   │             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ ()
+
+note: 
+   ┌─ erc20.fe:18:22
+   │
+18 │             mint(to: owner, amount: initial_supply)
+   │                      ^^^^^ Address
+
+note: 
+   ┌─ erc20.fe:18:37
+   │
+18 │             mint(to: owner, amount: initial_supply)
+   │                                     ^^^^^^^^^^^^^^ u256
+
+note: 
+   ┌─ erc20.fe:23:9
+   │
+23 │         Transfer { to, amount } -> bool uses (ctx, mut store, mut log) {
+   │         ^^^^^^^^^^^^^^^^^^^^^^^ Transfer
+
+note: 
+   ┌─ erc20.fe:23:20
+   │
+23 │         Transfer { to, amount } -> bool uses (ctx, mut store, mut log) {
+   │                    ^^ Address
+
+note: 
+   ┌─ erc20.fe:23:24
+   │
+23 │         Transfer { to, amount } -> bool uses (ctx, mut store, mut log) {
+   │                        ^^^^^^ u256
+
+note: 
+   ┌─ erc20.fe:23:72
+   │  
+23 │           Transfer { to, amount } -> bool uses (ctx, mut store, mut log) {
+   │ ╭────────────────────────────────────────────────────────────────────────^
+24 │ │             transfer(from: ctx.caller(), to, amount)
+25 │ │             true
+26 │ │         }
+   │ ╰─────────^ bool
+
+note: 
+   ┌─ erc20.fe:24:13
+   │
+24 │             transfer(from: ctx.caller(), to, amount)
+   │             ^^^^^^^^ fn transfer
+
+note: 
+   ┌─ erc20.fe:24:13
+   │
+24 │             transfer(from: ctx.caller(), to, amount)
+   │             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ ()
+
+note: 
+   ┌─ erc20.fe:24:28
+   │
+24 │             transfer(from: ctx.caller(), to, amount)
+   │                            ^^^ Ctx
+
+note: 
+   ┌─ erc20.fe:24:28
+   │
+24 │             transfer(from: ctx.caller(), to, amount)
+   │                            ^^^^^^^^^^^^ Address
+
+note: 
+   ┌─ erc20.fe:24:42
+   │
+24 │             transfer(from: ctx.caller(), to, amount)
+   │                                          ^^ Address
+
+note: 
+   ┌─ erc20.fe:24:46
+   │
+24 │             transfer(from: ctx.caller(), to, amount)
+   │                                              ^^^^^^ u256
+
+note: 
+   ┌─ erc20.fe:25:13
+   │
+25 │             true
+   │             ^^^^ bool
+
+note: 
+   ┌─ erc20.fe:28:9
+   │
+28 │         Approve { spender, amount } -> bool uses (ctx, mut store, mut log) {
+   │         ^^^^^^^^^^^^^^^^^^^^^^^^^^^ Approve
+
+note: 
+   ┌─ erc20.fe:28:19
+   │
+28 │         Approve { spender, amount } -> bool uses (ctx, mut store, mut log) {
+   │                   ^^^^^^^ Address
+
+note: 
+   ┌─ erc20.fe:28:28
+   │
+28 │         Approve { spender, amount } -> bool uses (ctx, mut store, mut log) {
+   │                            ^^^^^^ u256
+
+note: 
+   ┌─ erc20.fe:28:76
+   │  
+28 │           Approve { spender, amount } -> bool uses (ctx, mut store, mut log) {
+   │ ╭────────────────────────────────────────────────────────────────────────────^
+29 │ │             approve(owner: ctx.caller(), spender, amount)
+30 │ │             true
+31 │ │         }
+   │ ╰─────────^ bool
+
+note: 
+   ┌─ erc20.fe:29:13
+   │
+29 │             approve(owner: ctx.caller(), spender, amount)
+   │             ^^^^^^^ fn approve
+
+note: 
+   ┌─ erc20.fe:29:13
+   │
+29 │             approve(owner: ctx.caller(), spender, amount)
+   │             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ ()
+
+note: 
+   ┌─ erc20.fe:29:28
+   │
+29 │             approve(owner: ctx.caller(), spender, amount)
+   │                            ^^^ Ctx
+
+note: 
+   ┌─ erc20.fe:29:28
+   │
+29 │             approve(owner: ctx.caller(), spender, amount)
+   │                            ^^^^^^^^^^^^ Address
+
+note: 
+   ┌─ erc20.fe:29:42
+   │
+29 │             approve(owner: ctx.caller(), spender, amount)
+   │                                          ^^^^^^^ Address
+
+note: 
+   ┌─ erc20.fe:29:51
+   │
+29 │             approve(owner: ctx.caller(), spender, amount)
+   │                                                   ^^^^^^ u256
+
+note: 
+   ┌─ erc20.fe:30:13
+   │
+30 │             true
+   │             ^^^^ bool
+
+note: 
+   ┌─ erc20.fe:33:9
+   │
+33 │         TransferFrom { from, to, amount } -> bool uses (ctx, mut store, mut log) {
+   │         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ TransferFrom
+
+note: 
+   ┌─ erc20.fe:33:24
+   │
+33 │         TransferFrom { from, to, amount } -> bool uses (ctx, mut store, mut log) {
+   │                        ^^^^ Address
+
+note: 
+   ┌─ erc20.fe:33:30
+   │
+33 │         TransferFrom { from, to, amount } -> bool uses (ctx, mut store, mut log) {
+   │                              ^^ Address
+
+note: 
+   ┌─ erc20.fe:33:34
+   │
+33 │         TransferFrom { from, to, amount } -> bool uses (ctx, mut store, mut log) {
+   │                                  ^^^^^^ u256
+
+note: 
+   ┌─ erc20.fe:33:82
+   │  
+33 │           TransferFrom { from, to, amount } -> bool uses (ctx, mut store, mut log) {
+   │ ╭──────────────────────────────────────────────────────────────────────────────────^
+34 │ │             spend_allowance(owner: from, spender: ctx.caller(), amount)
+35 │ │             transfer(from, to, amount)
+36 │ │             true
+37 │ │         }
+   │ ╰─────────^ bool
+
+note: 
+   ┌─ erc20.fe:34:13
+   │
+34 │             spend_allowance(owner: from, spender: ctx.caller(), amount)
+   │             ^^^^^^^^^^^^^^^ fn spend_allowance
+
+note: 
+   ┌─ erc20.fe:34:13
+   │
+34 │             spend_allowance(owner: from, spender: ctx.caller(), amount)
+   │             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ ()
+
+note: 
+   ┌─ erc20.fe:34:36
+   │
+34 │             spend_allowance(owner: from, spender: ctx.caller(), amount)
+   │                                    ^^^^ Address
+
+note: 
+   ┌─ erc20.fe:34:51
+   │
+34 │             spend_allowance(owner: from, spender: ctx.caller(), amount)
+   │                                                   ^^^ Ctx
+
+note: 
+   ┌─ erc20.fe:34:51
+   │
+34 │             spend_allowance(owner: from, spender: ctx.caller(), amount)
+   │                                                   ^^^^^^^^^^^^ Address
+
+note: 
+   ┌─ erc20.fe:34:65
+   │
+34 │             spend_allowance(owner: from, spender: ctx.caller(), amount)
+   │                                                                 ^^^^^^ u256
+
+note: 
+   ┌─ erc20.fe:35:13
+   │
+35 │             transfer(from, to, amount)
+   │             ^^^^^^^^ fn transfer
+
+note: 
+   ┌─ erc20.fe:35:13
+   │
+35 │             transfer(from, to, amount)
+   │             ^^^^^^^^^^^^^^^^^^^^^^^^^^ ()
+
+note: 
+   ┌─ erc20.fe:35:22
+   │
+35 │             transfer(from, to, amount)
+   │                      ^^^^ Address
+
+note: 
+   ┌─ erc20.fe:35:28
+   │
+35 │             transfer(from, to, amount)
+   │                            ^^ Address
+
+note: 
+   ┌─ erc20.fe:35:32
+   │
+35 │             transfer(from, to, amount)
+   │                                ^^^^^^ u256
+
+note: 
+   ┌─ erc20.fe:36:13
+   │
+36 │             true
+   │             ^^^^ bool
+
+note: 
+   ┌─ erc20.fe:39:9
+   │
+39 │         BalanceOf { account } -> u256 uses store {
+   │         ^^^^^^^^^^^^^^^^^^^^^ BalanceOf
+
+note: 
+   ┌─ erc20.fe:39:21
+   │
+39 │         BalanceOf { account } -> u256 uses store {
+   │                     ^^^^^^^ Address
+
+note: 
+   ┌─ erc20.fe:39:50
+   │  
+39 │           BalanceOf { account } -> u256 uses store {
+   │ ╭──────────────────────────────────────────────────^
+40 │ │             store.balances[account]
+41 │ │         }
+   │ ╰─────────^ u256
+
+note: 
+   ┌─ erc20.fe:40:13
+   │
+40 │             store.balances[account]
+   │             ^^^^^ TokenStore
+
+note: 
+   ┌─ erc20.fe:40:13
+   │
+40 │             store.balances[account]
+   │             ^^^^^^^^^^^^^^ Map<Address, u256>
+
+note: 
+   ┌─ erc20.fe:40:13
+   │
+40 │             store.balances[account]
+   │             ^^^^^^^^^^^^^^^^^^^^^^^ u256
+
+note: 
+   ┌─ erc20.fe:40:28
+   │
+40 │             store.balances[account]
+   │                            ^^^^^^^ Address
+
+note: 
+   ┌─ erc20.fe:43:9
+   │
+43 │         Allowance { owner, spender } -> u256 uses (store) {
+   │         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^ Allowance
+
+note: 
+   ┌─ erc20.fe:43:21
+   │
+43 │         Allowance { owner, spender } -> u256 uses (store) {
+   │                     ^^^^^ Address
+
+note: 
+   ┌─ erc20.fe:43:28
+   │
+43 │         Allowance { owner, spender } -> u256 uses (store) {
+   │                            ^^^^^^^ Address
+
+note: 
+   ┌─ erc20.fe:43:59
+   │  
+43 │           Allowance { owner, spender } -> u256 uses (store) {
+   │ ╭───────────────────────────────────────────────────────────^
+44 │ │             store.allowances[(owner, spender)]
+45 │ │         }
+   │ ╰─────────^ u256
+
+note: 
+   ┌─ erc20.fe:44:13
+   │
+44 │             store.allowances[(owner, spender)]
+   │             ^^^^^ TokenStore
+
+note: 
+   ┌─ erc20.fe:44:13
+   │
+44 │             store.allowances[(owner, spender)]
+   │             ^^^^^^^^^^^^^^^^ Map<(Address, Address), u256>
+
+note: 
+   ┌─ erc20.fe:44:13
+   │
+44 │             store.allowances[(owner, spender)]
+   │             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ u256
+
+note: 
+   ┌─ erc20.fe:44:30
+   │
+44 │             store.allowances[(owner, spender)]
+   │                              ^^^^^^^^^^^^^^^^ (Address, Address)
+
+note: 
+   ┌─ erc20.fe:44:31
+   │
+44 │             store.allowances[(owner, spender)]
+   │                               ^^^^^ Address
+
+note: 
+   ┌─ erc20.fe:44:38
+   │
+44 │             store.allowances[(owner, spender)]
+   │                                      ^^^^^^^ Address
+
+note: 
+   ┌─ erc20.fe:47:9
+   │
+47 │         TotalSupply {} -> u256 uses store {
+   │         ^^^^^^^^^^^^^^ TotalSupply
+
+note: 
+   ┌─ erc20.fe:47:43
+   │  
+47 │           TotalSupply {} -> u256 uses store {
+   │ ╭───────────────────────────────────────────^
+48 │ │             store.total_supply
+49 │ │         }
+   │ ╰─────────^ u256
+
+note: 
+   ┌─ erc20.fe:48:13
+   │
+48 │             store.total_supply
+   │             ^^^^^ TokenStore
+
+note: 
+   ┌─ erc20.fe:48:13
+   │
+48 │             store.total_supply
+   │             ^^^^^^^^^^^^^^^^^^ u256
+
+note: 
+   ┌─ erc20.fe:51:9
+   │
+51 │         Name {} -> String<32> { "CoolCoin" }
+   │         ^^^^^^^ Name
+
+note: 
+   ┌─ erc20.fe:51:31
+   │
+51 │         Name {} -> String<32> { "CoolCoin" }
+   │                               ^^^^^^^^^^^^^^ String<32>
+
+note: 
+   ┌─ erc20.fe:51:33
+   │
+51 │         Name {} -> String<32> { "CoolCoin" }
+   │                                 ^^^^^^^^^^ String<32>
+
+note: 
+   ┌─ erc20.fe:52:9
+   │
+52 │         Symbol {} -> String<8> { "COOL" }
+   │         ^^^^^^^^^ Symbol
+
+note: 
+   ┌─ erc20.fe:52:32
+   │
+52 │         Symbol {} -> String<8> { "COOL" }
+   │                                ^^^^^^^^^^ String<8>
+
+note: 
+   ┌─ erc20.fe:52:34
+   │
+52 │         Symbol {} -> String<8> { "COOL" }
+   │                                  ^^^^^^ String<8>
+
+note: 
+   ┌─ erc20.fe:53:9
+   │
+53 │         Decimals {} -> u8 { 18 }
+   │         ^^^^^^^^^^^ Decimals
+
+note: 
+   ┌─ erc20.fe:53:27
+   │
+53 │         Decimals {} -> u8 { 18 }
+   │                           ^^^^^^ u8
+
+note: 
+   ┌─ erc20.fe:53:29
+   │
+53 │         Decimals {} -> u8 { 18 }
+   │                             ^^ u8
+
+note: 
+   ┌─ erc20.fe:58:9
+   │
+58 │         Mint { to, amount } -> bool uses (ctx, mut store, mut log, auth) {
+   │         ^^^^^^^^^^^^^^^^^^^ Mint
+
+note: 
+   ┌─ erc20.fe:58:16
+   │
+58 │         Mint { to, amount } -> bool uses (ctx, mut store, mut log, auth) {
+   │                ^^ Address
+
+note: 
+   ┌─ erc20.fe:58:20
+   │
+58 │         Mint { to, amount } -> bool uses (ctx, mut store, mut log, auth) {
+   │                    ^^^^^^ u256
+
+note: 
+   ┌─ erc20.fe:58:74
+   │  
+58 │           Mint { to, amount } -> bool uses (ctx, mut store, mut log, auth) {
+   │ ╭──────────────────────────────────────────────────────────────────────────^
+59 │ │             auth.require(role: MINTER)
+60 │ │             mint(to, amount)
+61 │ │             true
+62 │ │         }
+   │ ╰─────────^ bool
+
+note: 
+   ┌─ erc20.fe:59:13
+   │
+59 │             auth.require(role: MINTER)
+   │             ^^^^ AccessControl
+
+note: 
+   ┌─ erc20.fe:59:13
+   │
+59 │             auth.require(role: MINTER)
+   │             ^^^^^^^^^^^^^^^^^^^^^^^^^^ ()
+
+note: 
+   ┌─ erc20.fe:59:32
+   │
+59 │             auth.require(role: MINTER)
+   │                                ^^^^^^ u256
+
+note: 
+   ┌─ erc20.fe:60:13
+   │
+60 │             mint(to, amount)
+   │             ^^^^ fn mint
+
+note: 
+   ┌─ erc20.fe:60:13
+   │
+60 │             mint(to, amount)
+   │             ^^^^^^^^^^^^^^^^ ()
+
+note: 
+   ┌─ erc20.fe:60:18
+   │
+60 │             mint(to, amount)
+   │                  ^^ Address
+
+note: 
+   ┌─ erc20.fe:60:22
+   │
+60 │             mint(to, amount)
+   │                      ^^^^^^ u256
+
+note: 
+   ┌─ erc20.fe:61:13
+   │
+61 │             true
+   │             ^^^^ bool
+
+note: 
+   ┌─ erc20.fe:65:9
+   │
+65 │         Burn { amount } -> bool uses (ctx, mut store, mut log) {
+   │         ^^^^^^^^^^^^^^^ Burn
+
+note: 
+   ┌─ erc20.fe:65:16
+   │
+65 │         Burn { amount } -> bool uses (ctx, mut store, mut log) {
+   │                ^^^^^^ u256
+
+note: 
+   ┌─ erc20.fe:65:64
+   │  
+65 │           Burn { amount } -> bool uses (ctx, mut store, mut log) {
+   │ ╭────────────────────────────────────────────────────────────────^
+66 │ │             burn(from: ctx.caller(), amount)
+67 │ │             true
+68 │ │         }
+   │ ╰─────────^ bool
+
+note: 
+   ┌─ erc20.fe:66:13
+   │
+66 │             burn(from: ctx.caller(), amount)
+   │             ^^^^ fn burn
+
+note: 
+   ┌─ erc20.fe:66:13
+   │
+66 │             burn(from: ctx.caller(), amount)
+   │             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ ()
+
+note: 
+   ┌─ erc20.fe:66:24
+   │
+66 │             burn(from: ctx.caller(), amount)
+   │                        ^^^ Ctx
+
+note: 
+   ┌─ erc20.fe:66:24
+   │
+66 │             burn(from: ctx.caller(), amount)
+   │                        ^^^^^^^^^^^^ Address
+
+note: 
+   ┌─ erc20.fe:66:38
+   │
+66 │             burn(from: ctx.caller(), amount)
+   │                                      ^^^^^^ u256
+
+note: 
+   ┌─ erc20.fe:67:13
+   │
+67 │             true
+   │             ^^^^ bool
+
+note: 
+   ┌─ erc20.fe:71:9
+   │
+71 │         BurnFrom { from, amount } -> bool uses (ctx, mut store, mut log) {
+   │         ^^^^^^^^^^^^^^^^^^^^^^^^^ BurnFrom
+
+note: 
+   ┌─ erc20.fe:71:20
+   │
+71 │         BurnFrom { from, amount } -> bool uses (ctx, mut store, mut log) {
+   │                    ^^^^ Address
+
+note: 
+   ┌─ erc20.fe:71:26
+   │
+71 │         BurnFrom { from, amount } -> bool uses (ctx, mut store, mut log) {
+   │                          ^^^^^^ u256
+
+note: 
+   ┌─ erc20.fe:71:74
+   │  
+71 │           BurnFrom { from, amount } -> bool uses (ctx, mut store, mut log) {
+   │ ╭──────────────────────────────────────────────────────────────────────────^
+72 │ │             spend_allowance(owner: from, spender: ctx.caller(), amount)
+73 │ │             burn(from, amount)
+74 │ │             true
+75 │ │         }
+   │ ╰─────────^ bool
+
+note: 
+   ┌─ erc20.fe:72:13
+   │
+72 │             spend_allowance(owner: from, spender: ctx.caller(), amount)
+   │             ^^^^^^^^^^^^^^^ fn spend_allowance
+
+note: 
+   ┌─ erc20.fe:72:13
+   │
+72 │             spend_allowance(owner: from, spender: ctx.caller(), amount)
+   │             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ ()
+
+note: 
+   ┌─ erc20.fe:72:36
+   │
+72 │             spend_allowance(owner: from, spender: ctx.caller(), amount)
+   │                                    ^^^^ Address
+
+note: 
+   ┌─ erc20.fe:72:51
+   │
+72 │             spend_allowance(owner: from, spender: ctx.caller(), amount)
+   │                                                   ^^^ Ctx
+
+note: 
+   ┌─ erc20.fe:72:51
+   │
+72 │             spend_allowance(owner: from, spender: ctx.caller(), amount)
+   │                                                   ^^^^^^^^^^^^ Address
+
+note: 
+   ┌─ erc20.fe:72:65
+   │
+72 │             spend_allowance(owner: from, spender: ctx.caller(), amount)
+   │                                                                 ^^^^^^ u256
+
+note: 
+   ┌─ erc20.fe:73:13
+   │
+73 │             burn(from, amount)
+   │             ^^^^ fn burn
+
+note: 
+   ┌─ erc20.fe:73:13
+   │
+73 │             burn(from, amount)
+   │             ^^^^^^^^^^^^^^^^^^ ()
+
+note: 
+   ┌─ erc20.fe:73:18
+   │
+73 │             burn(from, amount)
+   │                  ^^^^ Address
+
+note: 
+   ┌─ erc20.fe:73:24
+   │
+73 │             burn(from, amount)
+   │                        ^^^^^^ u256
+
+note: 
+   ┌─ erc20.fe:74:13
+   │
+74 │             true
+   │             ^^^^ bool
+
+note: 
+   ┌─ erc20.fe:77:9
+   │
+77 │         IncreaseAllowance { spender, added_value } -> bool
+   │         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ IncreaseAllowance
+
+note: 
+   ┌─ erc20.fe:77:29
+   │
+77 │         IncreaseAllowance { spender, added_value } -> bool
+   │                             ^^^^^^^ Address
+
+note: 
+   ┌─ erc20.fe:77:38
+   │
+77 │         IncreaseAllowance { spender, added_value } -> bool
+   │                                      ^^^^^^^^^^^ u256
+
+note: 
+   ┌─ erc20.fe:79:9
+   │  
+79 │ ╭         {
+80 │ │             let owner = ctx.caller()
+81 │ │             let current = store.allowances[(owner, spender)]
+82 │ │             approve(owner, spender, amount: current + added_value)
+83 │ │             true
+84 │ │         }
+   │ ╰─────────^ bool
+
+note: 
+   ┌─ erc20.fe:80:17
+   │
+80 │             let owner = ctx.caller()
+   │                 ^^^^^ Address
+
+note: 
+   ┌─ erc20.fe:80:25
+   │
+80 │             let owner = ctx.caller()
+   │                         ^^^ Ctx
+
+note: 
+   ┌─ erc20.fe:80:25
+   │
+80 │             let owner = ctx.caller()
+   │                         ^^^^^^^^^^^^ Address
+
+note: 
+   ┌─ erc20.fe:81:17
+   │
+81 │             let current = store.allowances[(owner, spender)]
+   │                 ^^^^^^^ u256
+
+note: 
+   ┌─ erc20.fe:81:27
+   │
+81 │             let current = store.allowances[(owner, spender)]
+   │                           ^^^^^ TokenStore
+
+note: 
+   ┌─ erc20.fe:81:27
+   │
+81 │             let current = store.allowances[(owner, spender)]
+   │                           ^^^^^^^^^^^^^^^^ Map<(Address, Address), u256>
+
+note: 
+   ┌─ erc20.fe:81:27
+   │
+81 │             let current = store.allowances[(owner, spender)]
+   │                           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ u256
+
+note: 
+   ┌─ erc20.fe:81:44
+   │
+81 │             let current = store.allowances[(owner, spender)]
+   │                                            ^^^^^^^^^^^^^^^^ (Address, Address)
+
+note: 
+   ┌─ erc20.fe:81:45
+   │
+81 │             let current = store.allowances[(owner, spender)]
+   │                                             ^^^^^ Address
+
+note: 
+   ┌─ erc20.fe:81:52
+   │
+81 │             let current = store.allowances[(owner, spender)]
+   │                                                    ^^^^^^^ Address
+
+note: 
+   ┌─ erc20.fe:82:13
+   │
+82 │             approve(owner, spender, amount: current + added_value)
+   │             ^^^^^^^ fn approve
+
+note: 
+   ┌─ erc20.fe:82:13
+   │
+82 │             approve(owner, spender, amount: current + added_value)
+   │             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ ()
+
+note: 
+   ┌─ erc20.fe:82:21
+   │
+82 │             approve(owner, spender, amount: current + added_value)
+   │                     ^^^^^ Address
+
+note: 
+   ┌─ erc20.fe:82:28
+   │
+82 │             approve(owner, spender, amount: current + added_value)
+   │                            ^^^^^^^ Address
+
+note: 
+   ┌─ erc20.fe:82:45
+   │
+82 │             approve(owner, spender, amount: current + added_value)
+   │                                             ^^^^^^^ u256
+
+note: 
+   ┌─ erc20.fe:82:45
+   │
+82 │             approve(owner, spender, amount: current + added_value)
+   │                                             ^^^^^^^^^^^^^^^^^^^^^ u256
+
+note: 
+   ┌─ erc20.fe:82:55
+   │
+82 │             approve(owner, spender, amount: current + added_value)
+   │                                                       ^^^^^^^^^^^ u256
+
+note: 
+   ┌─ erc20.fe:83:13
+   │
+83 │             true
+   │             ^^^^ bool
+
+note: 
+   ┌─ erc20.fe:86:9
+   │
+86 │         DecreaseAllowance { spender, subtracted_value } -> bool
+   │         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ DecreaseAllowance
+
+note: 
+   ┌─ erc20.fe:86:29
+   │
+86 │         DecreaseAllowance { spender, subtracted_value } -> bool
+   │                             ^^^^^^^ Address
+
+note: 
+   ┌─ erc20.fe:86:38
+   │
+86 │         DecreaseAllowance { spender, subtracted_value } -> bool
+   │                                      ^^^^^^^^^^^^^^^^ u256
+
+note: 
+   ┌─ erc20.fe:87:40
+   │  
+87 │           uses (ctx, mut store, mut log) {
+   │ ╭────────────────────────────────────────^
+88 │ │             let owner = ctx.caller()
+89 │ │             let current = store.allowances[(owner, spender)]
+90 │ │             assert(current >= subtracted_value, "decreased allowance below zero")
+91 │ │             approve(owner, spender, amount: current - subtracted_value)
+92 │ │             true
+93 │ │         }
+   │ ╰─────────^ bool
+
+note: 
+   ┌─ erc20.fe:88:17
+   │
+88 │             let owner = ctx.caller()
+   │                 ^^^^^ Address
+
+note: 
+   ┌─ erc20.fe:88:25
+   │
+88 │             let owner = ctx.caller()
+   │                         ^^^ Ctx
+
+note: 
+   ┌─ erc20.fe:88:25
+   │
+88 │             let owner = ctx.caller()
+   │                         ^^^^^^^^^^^^ Address
+
+note: 
+   ┌─ erc20.fe:89:17
+   │
+89 │             let current = store.allowances[(owner, spender)]
+   │                 ^^^^^^^ u256
+
+note: 
+   ┌─ erc20.fe:89:27
+   │
+89 │             let current = store.allowances[(owner, spender)]
+   │                           ^^^^^ TokenStore
+
+note: 
+   ┌─ erc20.fe:89:27
+   │
+89 │             let current = store.allowances[(owner, spender)]
+   │                           ^^^^^^^^^^^^^^^^ Map<(Address, Address), u256>
+
+note: 
+   ┌─ erc20.fe:89:27
+   │
+89 │             let current = store.allowances[(owner, spender)]
+   │                           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ u256
+
+note: 
+   ┌─ erc20.fe:89:44
+   │
+89 │             let current = store.allowances[(owner, spender)]
+   │                                            ^^^^^^^^^^^^^^^^ (Address, Address)
+
+note: 
+   ┌─ erc20.fe:89:45
+   │
+89 │             let current = store.allowances[(owner, spender)]
+   │                                             ^^^^^ Address
+
+note: 
+   ┌─ erc20.fe:89:52
+   │
+89 │             let current = store.allowances[(owner, spender)]
+   │                                                    ^^^^^^^ Address
+
+note: 
+   ┌─ erc20.fe:90:13
+   │
+90 │             assert(current >= subtracted_value, "decreased allowance below zero")
+   │             ^^^^^^ fn assert
+
+note: 
+   ┌─ erc20.fe:90:13
+   │
+90 │             assert(current >= subtracted_value, "decreased allowance below zero")
+   │             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ ()
+
+note: 
+   ┌─ erc20.fe:90:20
+   │
+90 │             assert(current >= subtracted_value, "decreased allowance below zero")
+   │                    ^^^^^^^ u256
+
+note: 
+   ┌─ erc20.fe:90:20
+   │
+90 │             assert(current >= subtracted_value, "decreased allowance below zero")
+   │                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^ bool
+
+note: 
+   ┌─ erc20.fe:90:31
+   │
+90 │             assert(current >= subtracted_value, "decreased allowance below zero")
+   │                               ^^^^^^^^^^^^^^^^ u256
+
+note: 
+   ┌─ erc20.fe:90:49
+   │
+90 │             assert(current >= subtracted_value, "decreased allowance below zero")
+   │                                                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ String<64>
+
+note: 
+   ┌─ erc20.fe:91:13
+   │
+91 │             approve(owner, spender, amount: current - subtracted_value)
+   │             ^^^^^^^ fn approve
+
+note: 
+   ┌─ erc20.fe:91:13
+   │
+91 │             approve(owner, spender, amount: current - subtracted_value)
+   │             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ ()
+
+note: 
+   ┌─ erc20.fe:91:21
+   │
+91 │             approve(owner, spender, amount: current - subtracted_value)
+   │                     ^^^^^ Address
+
+note: 
+   ┌─ erc20.fe:91:28
+   │
+91 │             approve(owner, spender, amount: current - subtracted_value)
+   │                            ^^^^^^^ Address
+
+note: 
+   ┌─ erc20.fe:91:45
+   │
+91 │             approve(owner, spender, amount: current - subtracted_value)
+   │                                             ^^^^^^^ u256
+
+note: 
+   ┌─ erc20.fe:91:45
+   │
+91 │             approve(owner, spender, amount: current - subtracted_value)
+   │                                             ^^^^^^^^^^^^^^^^^^^^^^^^^^ u256
+
+note: 
+   ┌─ erc20.fe:91:55
+   │
+91 │             approve(owner, spender, amount: current - subtracted_value)
+   │                                                       ^^^^^^^^^^^^^^^^ u256
+
+note: 
+   ┌─ erc20.fe:92:13
+   │
+92 │             true
+   │             ^^^^ bool
+
+note: 
+    ┌─ erc20.fe:99:1
+    │  
+ 99 │ ╭ {
+100 │ │     assert(from != Address::zero(), "transfer from zero address")
+101 │ │     assert(to != Address::zero(), "transfer to zero address")
+102 │ │ 
+    · │
+109 │ │     log.emit(TransferEvent { from, to, value: amount })
+110 │ │ }
+    │ ╰─^ ()
+
+note: 
+    ┌─ erc20.fe:100:5
+    │
+100 │     assert(from != Address::zero(), "transfer from zero address")
+    │     ^^^^^^ fn assert
+
+note: 
+    ┌─ erc20.fe:100:5
+    │
+100 │     assert(from != Address::zero(), "transfer from zero address")
+    │     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ ()
+
+note: 
+    ┌─ erc20.fe:100:12
+    │
+100 │     assert(from != Address::zero(), "transfer from zero address")
+    │            ^^^^ Address
+
+note: 
+    ┌─ erc20.fe:100:12
+    │
+100 │     assert(from != Address::zero(), "transfer from zero address")
+    │            ^^^^^^^^^^^^^^^^^^^^^^^ bool
+
+note: 
+    ┌─ erc20.fe:100:20
+    │
+100 │     assert(from != Address::zero(), "transfer from zero address")
+    │                    ^^^^^^^^^^^^^ fn zero
+
+note: 
+    ┌─ erc20.fe:100:20
+    │
+100 │     assert(from != Address::zero(), "transfer from zero address")
+    │                    ^^^^^^^^^^^^^^^ Address
+
+note: 
+    ┌─ erc20.fe:100:37
+    │
+100 │     assert(from != Address::zero(), "transfer from zero address")
+    │                                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^ String<64>
+
+note: 
+    ┌─ erc20.fe:101:5
+    │
+101 │     assert(to != Address::zero(), "transfer to zero address")
+    │     ^^^^^^ fn assert
+
+note: 
+    ┌─ erc20.fe:101:5
+    │
+101 │     assert(to != Address::zero(), "transfer to zero address")
+    │     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ ()
+
+note: 
+    ┌─ erc20.fe:101:12
+    │
+101 │     assert(to != Address::zero(), "transfer to zero address")
+    │            ^^ Address
+
+note: 
+    ┌─ erc20.fe:101:12
+    │
+101 │     assert(to != Address::zero(), "transfer to zero address")
+    │            ^^^^^^^^^^^^^^^^^^^^^ bool
+
+note: 
+    ┌─ erc20.fe:101:18
+    │
+101 │     assert(to != Address::zero(), "transfer to zero address")
+    │                  ^^^^^^^^^^^^^ fn zero
+
+note: 
+    ┌─ erc20.fe:101:18
+    │
+101 │     assert(to != Address::zero(), "transfer to zero address")
+    │                  ^^^^^^^^^^^^^^^ Address
+
+note: 
+    ┌─ erc20.fe:101:35
+    │
+101 │     assert(to != Address::zero(), "transfer to zero address")
+    │                                   ^^^^^^^^^^^^^^^^^^^^^^^^^^ String<64>
+
+note: 
+    ┌─ erc20.fe:103:9
+    │
+103 │     let from_balance = store.balances[from]
+    │         ^^^^^^^^^^^^ u256
+
+note: 
+    ┌─ erc20.fe:103:24
+    │
+103 │     let from_balance = store.balances[from]
+    │                        ^^^^^ TokenStore
+
+note: 
+    ┌─ erc20.fe:103:24
+    │
+103 │     let from_balance = store.balances[from]
+    │                        ^^^^^^^^^^^^^^ Map<Address, u256>
+
+note: 
+    ┌─ erc20.fe:103:24
+    │
+103 │     let from_balance = store.balances[from]
+    │                        ^^^^^^^^^^^^^^^^^^^^ u256
+
+note: 
+    ┌─ erc20.fe:103:39
+    │
+103 │     let from_balance = store.balances[from]
+    │                                       ^^^^ Address
+
+note: 
+    ┌─ erc20.fe:104:5
+    │
+104 │     assert(from_balance >= amount, "transfer amount exceeds balance")
+    │     ^^^^^^ fn assert
+
+note: 
+    ┌─ erc20.fe:104:5
+    │
+104 │     assert(from_balance >= amount, "transfer amount exceeds balance")
+    │     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ ()
+
+note: 
+    ┌─ erc20.fe:104:12
+    │
+104 │     assert(from_balance >= amount, "transfer amount exceeds balance")
+    │            ^^^^^^^^^^^^ u256
+
+note: 
+    ┌─ erc20.fe:104:12
+    │
+104 │     assert(from_balance >= amount, "transfer amount exceeds balance")
+    │            ^^^^^^^^^^^^^^^^^^^^^^ bool
+
+note: 
+    ┌─ erc20.fe:104:28
+    │
+104 │     assert(from_balance >= amount, "transfer amount exceeds balance")
+    │                            ^^^^^^ u256
+
+note: 
+    ┌─ erc20.fe:104:36
+    │
+104 │     assert(from_balance >= amount, "transfer amount exceeds balance")
+    │                                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ String<64>
+
+note: 
+    ┌─ erc20.fe:106:5
+    │
+106 │     store.balances[from] = from_balance - amount
+    │     ^^^^^ TokenStore
+
+note: 
+    ┌─ erc20.fe:106:5
+    │
+106 │     store.balances[from] = from_balance - amount
+    │     ^^^^^^^^^^^^^^ Map<Address, u256>
+
+note: 
+    ┌─ erc20.fe:106:5
+    │
+106 │     store.balances[from] = from_balance - amount
+    │     ^^^^^^^^^^^^^^^^^^^^ u256
+
+note: 
+    ┌─ erc20.fe:106:5
+    │
+106 │     store.balances[from] = from_balance - amount
+    │     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ ()
+
+note: 
+    ┌─ erc20.fe:106:20
+    │
+106 │     store.balances[from] = from_balance - amount
+    │                    ^^^^ Address
+
+note: 
+    ┌─ erc20.fe:106:28
+    │
+106 │     store.balances[from] = from_balance - amount
+    │                            ^^^^^^^^^^^^ u256
+
+note: 
+    ┌─ erc20.fe:106:28
+    │
+106 │     store.balances[from] = from_balance - amount
+    │                            ^^^^^^^^^^^^^^^^^^^^^ u256
+
+note: 
+    ┌─ erc20.fe:106:43
+    │
+106 │     store.balances[from] = from_balance - amount
+    │                                           ^^^^^^ u256
+
+note: 
+    ┌─ erc20.fe:107:5
+    │
+107 │     store.balances[to] += amount
+    │     ^^^^^ TokenStore
+
+note: 
+    ┌─ erc20.fe:107:5
+    │
+107 │     store.balances[to] += amount
+    │     ^^^^^^^^^^^^^^ Map<Address, u256>
+
+note: 
+    ┌─ erc20.fe:107:5
+    │
+107 │     store.balances[to] += amount
+    │     ^^^^^^^^^^^^^^^^^^ u256
+
+note: 
+    ┌─ erc20.fe:107:5
+    │
+107 │     store.balances[to] += amount
+    │     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^ ()
+
+note: 
+    ┌─ erc20.fe:107:20
+    │
+107 │     store.balances[to] += amount
+    │                    ^^ Address
+
+note: 
+    ┌─ erc20.fe:107:27
+    │
+107 │     store.balances[to] += amount
+    │                           ^^^^^^ u256
+
+note: 
+    ┌─ erc20.fe:109:5
+    │
+109 │     log.emit(TransferEvent { from, to, value: amount })
+    │     ^^^ Log
+
+note: 
+    ┌─ erc20.fe:109:5
+    │
+109 │     log.emit(TransferEvent { from, to, value: amount })
+    │     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ ()
+
+note: 
+    ┌─ erc20.fe:109:14
+    │
+109 │     log.emit(TransferEvent { from, to, value: amount })
+    │              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ TransferEvent
+
+note: 
+    ┌─ erc20.fe:109:30
+    │
+109 │     log.emit(TransferEvent { from, to, value: amount })
+    │                              ^^^^ Address
+
+note: 
+    ┌─ erc20.fe:109:36
+    │
+109 │     log.emit(TransferEvent { from, to, value: amount })
+    │                                    ^^ Address
+
+note: 
+    ┌─ erc20.fe:109:47
+    │
+109 │     log.emit(TransferEvent { from, to, value: amount })
+    │                                               ^^^^^^ u256
+
+note: 
+    ┌─ erc20.fe:114:1
+    │  
+114 │ ╭ {
+115 │ │     assert(to != Address::zero(), "mint to zero address")
+116 │ │ 
+117 │ │     store.total_supply += amount
+    · │
+120 │ │     log.emit(TransferEvent { from: Address::zero(), to, value: amount })
+121 │ │ }
+    │ ╰─^ ()
+
+note: 
+    ┌─ erc20.fe:115:5
+    │
+115 │     assert(to != Address::zero(), "mint to zero address")
+    │     ^^^^^^ fn assert
+
+note: 
+    ┌─ erc20.fe:115:5
+    │
+115 │     assert(to != Address::zero(), "mint to zero address")
+    │     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ ()
+
+note: 
+    ┌─ erc20.fe:115:12
+    │
+115 │     assert(to != Address::zero(), "mint to zero address")
+    │            ^^ Address
+
+note: 
+    ┌─ erc20.fe:115:12
+    │
+115 │     assert(to != Address::zero(), "mint to zero address")
+    │            ^^^^^^^^^^^^^^^^^^^^^ bool
+
+note: 
+    ┌─ erc20.fe:115:18
+    │
+115 │     assert(to != Address::zero(), "mint to zero address")
+    │                  ^^^^^^^^^^^^^ fn zero
+
+note: 
+    ┌─ erc20.fe:115:18
+    │
+115 │     assert(to != Address::zero(), "mint to zero address")
+    │                  ^^^^^^^^^^^^^^^ Address
+
+note: 
+    ┌─ erc20.fe:115:35
+    │
+115 │     assert(to != Address::zero(), "mint to zero address")
+    │                                   ^^^^^^^^^^^^^^^^^^^^^^ String<64>
+
+note: 
+    ┌─ erc20.fe:117:5
+    │
+117 │     store.total_supply += amount
+    │     ^^^^^ TokenStore
+
+note: 
+    ┌─ erc20.fe:117:5
+    │
+117 │     store.total_supply += amount
+    │     ^^^^^^^^^^^^^^^^^^ u256
+
+note: 
+    ┌─ erc20.fe:117:5
+    │
+117 │     store.total_supply += amount
+    │     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^ ()
+
+note: 
+    ┌─ erc20.fe:117:27
+    │
+117 │     store.total_supply += amount
+    │                           ^^^^^^ u256
+
+note: 
+    ┌─ erc20.fe:118:5
+    │
+118 │     store.balances[to] += amount
+    │     ^^^^^ TokenStore
+
+note: 
+    ┌─ erc20.fe:118:5
+    │
+118 │     store.balances[to] += amount
+    │     ^^^^^^^^^^^^^^ Map<Address, u256>
+
+note: 
+    ┌─ erc20.fe:118:5
+    │
+118 │     store.balances[to] += amount
+    │     ^^^^^^^^^^^^^^^^^^ u256
+
+note: 
+    ┌─ erc20.fe:118:5
+    │
+118 │     store.balances[to] += amount
+    │     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^ ()
+
+note: 
+    ┌─ erc20.fe:118:20
+    │
+118 │     store.balances[to] += amount
+    │                    ^^ Address
+
+note: 
+    ┌─ erc20.fe:118:27
+    │
+118 │     store.balances[to] += amount
+    │                           ^^^^^^ u256
+
+note: 
+    ┌─ erc20.fe:120:5
+    │
+120 │     log.emit(TransferEvent { from: Address::zero(), to, value: amount })
+    │     ^^^ Log
+
+note: 
+    ┌─ erc20.fe:120:5
+    │
+120 │     log.emit(TransferEvent { from: Address::zero(), to, value: amount })
+    │     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ ()
+
+note: 
+    ┌─ erc20.fe:120:14
+    │
+120 │     log.emit(TransferEvent { from: Address::zero(), to, value: amount })
+    │              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ TransferEvent
+
+note: 
+    ┌─ erc20.fe:120:36
+    │
+120 │     log.emit(TransferEvent { from: Address::zero(), to, value: amount })
+    │                                    ^^^^^^^^^^^^^ fn zero
+
+note: 
+    ┌─ erc20.fe:120:36
+    │
+120 │     log.emit(TransferEvent { from: Address::zero(), to, value: amount })
+    │                                    ^^^^^^^^^^^^^^^ Address
+
+note: 
+    ┌─ erc20.fe:120:53
+    │
+120 │     log.emit(TransferEvent { from: Address::zero(), to, value: amount })
+    │                                                     ^^ Address
+
+note: 
+    ┌─ erc20.fe:120:64
+    │
+120 │     log.emit(TransferEvent { from: Address::zero(), to, value: amount })
+    │                                                                ^^^^^^ u256
+
+note: 
+    ┌─ erc20.fe:125:1
+    │  
+125 │ ╭ {
+126 │ │     assert(from != Address::zero(), "burn from zero address")
+127 │ │ 
+128 │ │     let from_balance = store.balances[from]
+    · │
+134 │ │     log.emit(TransferEvent { from, to: Address::zero(), value: amount })
+135 │ │ }
+    │ ╰─^ ()
+
+note: 
+    ┌─ erc20.fe:126:5
+    │
+126 │     assert(from != Address::zero(), "burn from zero address")
+    │     ^^^^^^ fn assert
+
+note: 
+    ┌─ erc20.fe:126:5
+    │
+126 │     assert(from != Address::zero(), "burn from zero address")
+    │     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ ()
+
+note: 
+    ┌─ erc20.fe:126:12
+    │
+126 │     assert(from != Address::zero(), "burn from zero address")
+    │            ^^^^ Address
+
+note: 
+    ┌─ erc20.fe:126:12
+    │
+126 │     assert(from != Address::zero(), "burn from zero address")
+    │            ^^^^^^^^^^^^^^^^^^^^^^^ bool
+
+note: 
+    ┌─ erc20.fe:126:20
+    │
+126 │     assert(from != Address::zero(), "burn from zero address")
+    │                    ^^^^^^^^^^^^^ fn zero
+
+note: 
+    ┌─ erc20.fe:126:20
+    │
+126 │     assert(from != Address::zero(), "burn from zero address")
+    │                    ^^^^^^^^^^^^^^^ Address
+
+note: 
+    ┌─ erc20.fe:126:37
+    │
+126 │     assert(from != Address::zero(), "burn from zero address")
+    │                                     ^^^^^^^^^^^^^^^^^^^^^^^^ String<64>
+
+note: 
+    ┌─ erc20.fe:128:9
+    │
+128 │     let from_balance = store.balances[from]
+    │         ^^^^^^^^^^^^ u256
+
+note: 
+    ┌─ erc20.fe:128:24
+    │
+128 │     let from_balance = store.balances[from]
+    │                        ^^^^^ TokenStore
+
+note: 
+    ┌─ erc20.fe:128:24
+    │
+128 │     let from_balance = store.balances[from]
+    │                        ^^^^^^^^^^^^^^ Map<Address, u256>
+
+note: 
+    ┌─ erc20.fe:128:24
+    │
+128 │     let from_balance = store.balances[from]
+    │                        ^^^^^^^^^^^^^^^^^^^^ u256
+
+note: 
+    ┌─ erc20.fe:128:39
+    │
+128 │     let from_balance = store.balances[from]
+    │                                       ^^^^ Address
+
+note: 
+    ┌─ erc20.fe:129:5
+    │
+129 │     assert(from_balance >= amount, "burn amount exceeds balance")
+    │     ^^^^^^ fn assert
+
+note: 
+    ┌─ erc20.fe:129:5
+    │
+129 │     assert(from_balance >= amount, "burn amount exceeds balance")
+    │     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ ()
+
+note: 
+    ┌─ erc20.fe:129:12
+    │
+129 │     assert(from_balance >= amount, "burn amount exceeds balance")
+    │            ^^^^^^^^^^^^ u256
+
+note: 
+    ┌─ erc20.fe:129:12
+    │
+129 │     assert(from_balance >= amount, "burn amount exceeds balance")
+    │            ^^^^^^^^^^^^^^^^^^^^^^ bool
+
+note: 
+    ┌─ erc20.fe:129:28
+    │
+129 │     assert(from_balance >= amount, "burn amount exceeds balance")
+    │                            ^^^^^^ u256
+
+note: 
+    ┌─ erc20.fe:129:36
+    │
+129 │     assert(from_balance >= amount, "burn amount exceeds balance")
+    │                                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ String<64>
+
+note: 
+    ┌─ erc20.fe:131:5
+    │
+131 │     store.balances[from] = from_balance - amount
+    │     ^^^^^ TokenStore
+
+note: 
+    ┌─ erc20.fe:131:5
+    │
+131 │     store.balances[from] = from_balance - amount
+    │     ^^^^^^^^^^^^^^ Map<Address, u256>
+
+note: 
+    ┌─ erc20.fe:131:5
+    │
+131 │     store.balances[from] = from_balance - amount
+    │     ^^^^^^^^^^^^^^^^^^^^ u256
+
+note: 
+    ┌─ erc20.fe:131:5
+    │
+131 │     store.balances[from] = from_balance - amount
+    │     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ ()
+
+note: 
+    ┌─ erc20.fe:131:20
+    │
+131 │     store.balances[from] = from_balance - amount
+    │                    ^^^^ Address
+
+note: 
+    ┌─ erc20.fe:131:28
+    │
+131 │     store.balances[from] = from_balance - amount
+    │                            ^^^^^^^^^^^^ u256
+
+note: 
+    ┌─ erc20.fe:131:28
+    │
+131 │     store.balances[from] = from_balance - amount
+    │                            ^^^^^^^^^^^^^^^^^^^^^ u256
+
+note: 
+    ┌─ erc20.fe:131:43
+    │
+131 │     store.balances[from] = from_balance - amount
+    │                                           ^^^^^^ u256
+
+note: 
+    ┌─ erc20.fe:132:5
+    │
+132 │     store.total_supply -= amount
+    │     ^^^^^ TokenStore
+
+note: 
+    ┌─ erc20.fe:132:5
+    │
+132 │     store.total_supply -= amount
+    │     ^^^^^^^^^^^^^^^^^^ u256
+
+note: 
+    ┌─ erc20.fe:132:5
+    │
+132 │     store.total_supply -= amount
+    │     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^ ()
+
+note: 
+    ┌─ erc20.fe:132:27
+    │
+132 │     store.total_supply -= amount
+    │                           ^^^^^^ u256
+
+note: 
+    ┌─ erc20.fe:134:5
+    │
+134 │     log.emit(TransferEvent { from, to: Address::zero(), value: amount })
+    │     ^^^ Log
+
+note: 
+    ┌─ erc20.fe:134:5
+    │
+134 │     log.emit(TransferEvent { from, to: Address::zero(), value: amount })
+    │     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ ()
+
+note: 
+    ┌─ erc20.fe:134:14
+    │
+134 │     log.emit(TransferEvent { from, to: Address::zero(), value: amount })
+    │              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ TransferEvent
+
+note: 
+    ┌─ erc20.fe:134:30
+    │
+134 │     log.emit(TransferEvent { from, to: Address::zero(), value: amount })
+    │                              ^^^^ Address
+
+note: 
+    ┌─ erc20.fe:134:40
+    │
+134 │     log.emit(TransferEvent { from, to: Address::zero(), value: amount })
+    │                                        ^^^^^^^^^^^^^ fn zero
+
+note: 
+    ┌─ erc20.fe:134:40
+    │
+134 │     log.emit(TransferEvent { from, to: Address::zero(), value: amount })
+    │                                        ^^^^^^^^^^^^^^^ Address
+
+note: 
+    ┌─ erc20.fe:134:64
+    │
+134 │     log.emit(TransferEvent { from, to: Address::zero(), value: amount })
+    │                                                                ^^^^^^ u256
+
+note: 
+    ┌─ erc20.fe:139:1
+    │  
+139 │ ╭ {
+140 │ │     assert(owner != Address::zero(), "approve from zero address")
+141 │ │     assert(spender != Address::zero(), "approve to zero address")
+142 │ │ 
+    · │
+145 │ │     log.emit(ApprovalEvent { owner, spender, value: amount })
+146 │ │ }
+    │ ╰─^ ()
+
+note: 
+    ┌─ erc20.fe:140:5
+    │
+140 │     assert(owner != Address::zero(), "approve from zero address")
+    │     ^^^^^^ fn assert
+
+note: 
+    ┌─ erc20.fe:140:5
+    │
+140 │     assert(owner != Address::zero(), "approve from zero address")
+    │     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ ()
+
+note: 
+    ┌─ erc20.fe:140:12
+    │
+140 │     assert(owner != Address::zero(), "approve from zero address")
+    │            ^^^^^ Address
+
+note: 
+    ┌─ erc20.fe:140:12
+    │
+140 │     assert(owner != Address::zero(), "approve from zero address")
+    │            ^^^^^^^^^^^^^^^^^^^^^^^^ bool
+
+note: 
+    ┌─ erc20.fe:140:21
+    │
+140 │     assert(owner != Address::zero(), "approve from zero address")
+    │                     ^^^^^^^^^^^^^ fn zero
+
+note: 
+    ┌─ erc20.fe:140:21
+    │
+140 │     assert(owner != Address::zero(), "approve from zero address")
+    │                     ^^^^^^^^^^^^^^^ Address
+
+note: 
+    ┌─ erc20.fe:140:38
+    │
+140 │     assert(owner != Address::zero(), "approve from zero address")
+    │                                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^ String<64>
+
+note: 
+    ┌─ erc20.fe:141:5
+    │
+141 │     assert(spender != Address::zero(), "approve to zero address")
+    │     ^^^^^^ fn assert
+
+note: 
+    ┌─ erc20.fe:141:5
+    │
+141 │     assert(spender != Address::zero(), "approve to zero address")
+    │     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ ()
+
+note: 
+    ┌─ erc20.fe:141:12
+    │
+141 │     assert(spender != Address::zero(), "approve to zero address")
+    │            ^^^^^^^ Address
+
+note: 
+    ┌─ erc20.fe:141:12
+    │
+141 │     assert(spender != Address::zero(), "approve to zero address")
+    │            ^^^^^^^^^^^^^^^^^^^^^^^^^^ bool
+
+note: 
+    ┌─ erc20.fe:141:23
+    │
+141 │     assert(spender != Address::zero(), "approve to zero address")
+    │                       ^^^^^^^^^^^^^ fn zero
+
+note: 
+    ┌─ erc20.fe:141:23
+    │
+141 │     assert(spender != Address::zero(), "approve to zero address")
+    │                       ^^^^^^^^^^^^^^^ Address
+
+note: 
+    ┌─ erc20.fe:141:40
+    │
+141 │     assert(spender != Address::zero(), "approve to zero address")
+    │                                        ^^^^^^^^^^^^^^^^^^^^^^^^^ String<64>
+
+note: 
+    ┌─ erc20.fe:143:5
+    │
+143 │     store.allowances[(owner, spender)] = amount
+    │     ^^^^^ TokenStore
+
+note: 
+    ┌─ erc20.fe:143:5
+    │
+143 │     store.allowances[(owner, spender)] = amount
+    │     ^^^^^^^^^^^^^^^^ Map<(Address, Address), u256>
+
+note: 
+    ┌─ erc20.fe:143:5
+    │
+143 │     store.allowances[(owner, spender)] = amount
+    │     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ u256
+
+note: 
+    ┌─ erc20.fe:143:5
+    │
+143 │     store.allowances[(owner, spender)] = amount
+    │     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ ()
+
+note: 
+    ┌─ erc20.fe:143:22
+    │
+143 │     store.allowances[(owner, spender)] = amount
+    │                      ^^^^^^^^^^^^^^^^ (Address, Address)
+
+note: 
+    ┌─ erc20.fe:143:23
+    │
+143 │     store.allowances[(owner, spender)] = amount
+    │                       ^^^^^ Address
+
+note: 
+    ┌─ erc20.fe:143:30
+    │
+143 │     store.allowances[(owner, spender)] = amount
+    │                              ^^^^^^^ Address
+
+note: 
+    ┌─ erc20.fe:143:42
+    │
+143 │     store.allowances[(owner, spender)] = amount
+    │                                          ^^^^^^ u256
+
+note: 
+    ┌─ erc20.fe:145:5
+    │
+145 │     log.emit(ApprovalEvent { owner, spender, value: amount })
+    │     ^^^ Log
+
+note: 
+    ┌─ erc20.fe:145:5
+    │
+145 │     log.emit(ApprovalEvent { owner, spender, value: amount })
+    │     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ ()
+
+note: 
+    ┌─ erc20.fe:145:14
+    │
+145 │     log.emit(ApprovalEvent { owner, spender, value: amount })
+    │              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ ApprovalEvent
+
+note: 
+    ┌─ erc20.fe:145:30
+    │
+145 │     log.emit(ApprovalEvent { owner, spender, value: amount })
+    │                              ^^^^^ Address
+
+note: 
+    ┌─ erc20.fe:145:37
+    │
+145 │     log.emit(ApprovalEvent { owner, spender, value: amount })
+    │                                     ^^^^^^^ Address
+
+note: 
+    ┌─ erc20.fe:145:53
+    │
+145 │     log.emit(ApprovalEvent { owner, spender, value: amount })
+    │                                                     ^^^^^^ u256
+
+note: 
+    ┌─ erc20.fe:151:1
+    │  
+151 │ ╭ {
+152 │ │     let current = store.allowances[(owner, spender)]
+153 │ │     // if current != u256::MAX { // TODO: define ::MAX constants
+154 │ │         assert(current >= amount, "insufficient allowance")
+155 │ │         store.allowances[(owner, spender)] = current - amount
+156 │ │     // }
+157 │ │ }
+    │ ╰─^ ()
+
+note: 
+    ┌─ erc20.fe:152:9
+    │
+152 │     let current = store.allowances[(owner, spender)]
+    │         ^^^^^^^ u256
+
+note: 
+    ┌─ erc20.fe:152:19
+    │
+152 │     let current = store.allowances[(owner, spender)]
+    │                   ^^^^^ TokenStore
+
+note: 
+    ┌─ erc20.fe:152:19
+    │
+152 │     let current = store.allowances[(owner, spender)]
+    │                   ^^^^^^^^^^^^^^^^ Map<(Address, Address), u256>
+
+note: 
+    ┌─ erc20.fe:152:19
+    │
+152 │     let current = store.allowances[(owner, spender)]
+    │                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ u256
+
+note: 
+    ┌─ erc20.fe:152:36
+    │
+152 │     let current = store.allowances[(owner, spender)]
+    │                                    ^^^^^^^^^^^^^^^^ (Address, Address)
+
+note: 
+    ┌─ erc20.fe:152:37
+    │
+152 │     let current = store.allowances[(owner, spender)]
+    │                                     ^^^^^ Address
+
+note: 
+    ┌─ erc20.fe:152:44
+    │
+152 │     let current = store.allowances[(owner, spender)]
+    │                                            ^^^^^^^ Address
+
+note: 
+    ┌─ erc20.fe:154:9
+    │
+154 │         assert(current >= amount, "insufficient allowance")
+    │         ^^^^^^ fn assert
+
+note: 
+    ┌─ erc20.fe:154:9
+    │
+154 │         assert(current >= amount, "insufficient allowance")
+    │         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ ()
+
+note: 
+    ┌─ erc20.fe:154:16
+    │
+154 │         assert(current >= amount, "insufficient allowance")
+    │                ^^^^^^^ u256
+
+note: 
+    ┌─ erc20.fe:154:16
+    │
+154 │         assert(current >= amount, "insufficient allowance")
+    │                ^^^^^^^^^^^^^^^^^ bool
+
+note: 
+    ┌─ erc20.fe:154:27
+    │
+154 │         assert(current >= amount, "insufficient allowance")
+    │                           ^^^^^^ u256
+
+note: 
+    ┌─ erc20.fe:154:35
+    │
+154 │         assert(current >= amount, "insufficient allowance")
+    │                                   ^^^^^^^^^^^^^^^^^^^^^^^^ String<64>
+
+note: 
+    ┌─ erc20.fe:155:9
+    │
+155 │         store.allowances[(owner, spender)] = current - amount
+    │         ^^^^^ TokenStore
+
+note: 
+    ┌─ erc20.fe:155:9
+    │
+155 │         store.allowances[(owner, spender)] = current - amount
+    │         ^^^^^^^^^^^^^^^^ Map<(Address, Address), u256>
+
+note: 
+    ┌─ erc20.fe:155:9
+    │
+155 │         store.allowances[(owner, spender)] = current - amount
+    │         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ u256
+
+note: 
+    ┌─ erc20.fe:155:9
+    │
+155 │         store.allowances[(owner, spender)] = current - amount
+    │         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ ()
+
+note: 
+    ┌─ erc20.fe:155:26
+    │
+155 │         store.allowances[(owner, spender)] = current - amount
+    │                          ^^^^^^^^^^^^^^^^ (Address, Address)
+
+note: 
+    ┌─ erc20.fe:155:27
+    │
+155 │         store.allowances[(owner, spender)] = current - amount
+    │                           ^^^^^ Address
+
+note: 
+    ┌─ erc20.fe:155:34
+    │
+155 │         store.allowances[(owner, spender)] = current - amount
+    │                                  ^^^^^^^ Address
+
+note: 
+    ┌─ erc20.fe:155:46
+    │
+155 │         store.allowances[(owner, spender)] = current - amount
+    │                                              ^^^^^^^ u256
+
+note: 
+    ┌─ erc20.fe:155:46
+    │
+155 │         store.allowances[(owner, spender)] = current - amount
+    │                                              ^^^^^^^^^^^^^^^^ u256
+
+note: 
+    ┌─ erc20.fe:155:56
+    │
+155 │         store.allowances[(owner, spender)] = current - amount
+    │                                                        ^^^^^^ u256
+
+note: 
+    ┌─ erc20.fe:170:26
+    │  
+170 │       pub fn new() -> Self {
+    │ ╭──────────────────────────^
+171 │ │         AccessControl {
+172 │ │             roles: Map::new(),
+173 │ │         }
+174 │ │     }
+    │ ╰─────^ AccessControl
+
+note: 
+    ┌─ erc20.fe:171:9
+    │  
+171 │ ╭         AccessControl {
+172 │ │             roles: Map::new(),
+173 │ │         }
+    │ ╰─────────^ AccessControl
+
+note: 
+    ┌─ erc20.fe:172:20
+    │
+172 │             roles: Map::new(),
+    │                    ^^^^^^^^ fn new<(u256, Address), bool>
+
+note: 
+    ┌─ erc20.fe:172:20
+    │
+172 │             roles: Map::new(),
+    │                    ^^^^^^^^^^ Map<(u256, Address), bool>
+
+note: 
+    ┌─ erc20.fe:176:65
+    │  
+176 │       pub fn has_role(self, role: u256, account: Address) -> bool {
+    │ ╭─────────────────────────────────────────────────────────────────^
+177 │ │         self.roles[(role, account)]
+178 │ │     }
+    │ ╰─────^ bool
+
+note: 
+    ┌─ erc20.fe:177:9
+    │
+177 │         self.roles[(role, account)]
+    │         ^^^^ AccessControl
+
+note: 
+    ┌─ erc20.fe:177:9
+    │
+177 │         self.roles[(role, account)]
+    │         ^^^^^^^^^^ Map<(u256, Address), bool>
+
+note: 
+    ┌─ erc20.fe:177:9
+    │
+177 │         self.roles[(role, account)]
+    │         ^^^^^^^^^^^^^^^^^^^^^^^^^^^ bool
+
+note: 
+    ┌─ erc20.fe:177:20
+    │
+177 │         self.roles[(role, account)]
+    │                    ^^^^^^^^^^^^^^^ (u256, Address)
+
+note: 
+    ┌─ erc20.fe:177:21
+    │
+177 │         self.roles[(role, account)]
+    │                     ^^^^ u256
+
+note: 
+    ┌─ erc20.fe:177:27
+    │
+177 │         self.roles[(role, account)]
+    │                           ^^^^^^^ Address
+
+note: 
+    ┌─ erc20.fe:180:54
+    │  
+180 │       pub fn require(self, role: u256) uses (ctx: Ctx) {
+    │ ╭──────────────────────────────────────────────────────^
+181 │ │         assert(self.roles[(role, ctx.caller())], "access denied: missing role")
+182 │ │     }
+    │ ╰─────^ ()
+
+note: 
+    ┌─ erc20.fe:181:9
+    │
+181 │         assert(self.roles[(role, ctx.caller())], "access denied: missing role")
+    │         ^^^^^^ fn assert
+
+note: 
+    ┌─ erc20.fe:181:9
+    │
+181 │         assert(self.roles[(role, ctx.caller())], "access denied: missing role")
+    │         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ ()
+
+note: 
+    ┌─ erc20.fe:181:16
+    │
+181 │         assert(self.roles[(role, ctx.caller())], "access denied: missing role")
+    │                ^^^^ AccessControl
+
+note: 
+    ┌─ erc20.fe:181:16
+    │
+181 │         assert(self.roles[(role, ctx.caller())], "access denied: missing role")
+    │                ^^^^^^^^^^ Map<(u256, Address), bool>
+
+note: 
+    ┌─ erc20.fe:181:16
+    │
+181 │         assert(self.roles[(role, ctx.caller())], "access denied: missing role")
+    │                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ bool
+
+note: 
+    ┌─ erc20.fe:181:27
+    │
+181 │         assert(self.roles[(role, ctx.caller())], "access denied: missing role")
+    │                           ^^^^^^^^^^^^^^^^^^^^ (u256, Address)
+
+note: 
+    ┌─ erc20.fe:181:28
+    │
+181 │         assert(self.roles[(role, ctx.caller())], "access denied: missing role")
+    │                            ^^^^ u256
+
+note: 
+    ┌─ erc20.fe:181:34
+    │
+181 │         assert(self.roles[(role, ctx.caller())], "access denied: missing role")
+    │                                  ^^^ Ctx
+
+note: 
+    ┌─ erc20.fe:181:34
+    │
+181 │         assert(self.roles[(role, ctx.caller())], "access denied: missing role")
+    │                                  ^^^^^^^^^^^^ Address
+
+note: 
+    ┌─ erc20.fe:181:50
+    │
+181 │         assert(self.roles[(role, ctx.caller())], "access denied: missing role")
+    │                                                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ String<64>
+
+note: 
+    ┌─ erc20.fe:184:53
+    │  
+184 │       pub fn grant(mut self, role: u256, to: Address) {
+    │ ╭─────────────────────────────────────────────────────^
+185 │ │         self.roles[(role, to)] = true
+186 │ │     }
+    │ ╰─────^ ()
+
+note: 
+    ┌─ erc20.fe:185:9
+    │
+185 │         self.roles[(role, to)] = true
+    │         ^^^^ AccessControl
+
+note: 
+    ┌─ erc20.fe:185:9
+    │
+185 │         self.roles[(role, to)] = true
+    │         ^^^^^^^^^^ Map<(u256, Address), bool>
+
+note: 
+    ┌─ erc20.fe:185:9
+    │
+185 │         self.roles[(role, to)] = true
+    │         ^^^^^^^^^^^^^^^^^^^^^^ bool
+
+note: 
+    ┌─ erc20.fe:185:9
+    │
+185 │         self.roles[(role, to)] = true
+    │         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ ()
+
+note: 
+    ┌─ erc20.fe:185:20
+    │
+185 │         self.roles[(role, to)] = true
+    │                    ^^^^^^^^^^ (u256, Address)
+
+note: 
+    ┌─ erc20.fe:185:21
+    │
+185 │         self.roles[(role, to)] = true
+    │                     ^^^^ u256
+
+note: 
+    ┌─ erc20.fe:185:27
+    │
+185 │         self.roles[(role, to)] = true
+    │                           ^^ Address
+
+note: 
+    ┌─ erc20.fe:185:34
+    │
+185 │         self.roles[(role, to)] = true
+    │                                  ^^^^ bool
+
+note: 
+    ┌─ erc20.fe:188:56
+    │  
+188 │       pub fn revoke(mut self, role: u256, from: Address) {
+    │ ╭────────────────────────────────────────────────────────^
+189 │ │         self.roles[(role, from)] = false
+190 │ │     }
+    │ ╰─────^ ()
+
+note: 
+    ┌─ erc20.fe:189:9
+    │
+189 │         self.roles[(role, from)] = false
+    │         ^^^^ AccessControl
+
+note: 
+    ┌─ erc20.fe:189:9
+    │
+189 │         self.roles[(role, from)] = false
+    │         ^^^^^^^^^^ Map<(u256, Address), bool>
+
+note: 
+    ┌─ erc20.fe:189:9
+    │
+189 │         self.roles[(role, from)] = false
+    │         ^^^^^^^^^^^^^^^^^^^^^^^^ bool
+
+note: 
+    ┌─ erc20.fe:189:9
+    │
+189 │         self.roles[(role, from)] = false
+    │         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ ()
+
+note: 
+    ┌─ erc20.fe:189:20
+    │
+189 │         self.roles[(role, from)] = false
+    │                    ^^^^^^^^^^^^ (u256, Address)
+
+note: 
+    ┌─ erc20.fe:189:21
+    │
+189 │         self.roles[(role, from)] = false
+    │                     ^^^^ u256
+
+note: 
+    ┌─ erc20.fe:189:27
+    │
+189 │         self.roles[(role, from)] = false
+    │                           ^^^^ Address
+
+note: 
+    ┌─ erc20.fe:189:36
+    │
+189 │         self.roles[(role, from)] = false
+    │                                    ^^^^^ bool
+
+note: 
+    ┌─ erc20.fe:265:27
+    │  
+265 │       pub fn zero() -> Self {
+    │ ╭───────────────────────────^
+266 │ │         Address { inner: 0 }
+267 │ │     }
+    │ ╰─────^ Address
+
+note: 
+    ┌─ erc20.fe:266:9
+    │
+266 │         Address { inner: 0 }
+    │         ^^^^^^^^^^^^^^^^^^^^ Address
+
+note: 
+    ┌─ erc20.fe:266:26
+    │
+266 │         Address { inner: 0 }
+    │                          ^ u256
+
+note: 
+    ┌─ erc20.fe:270:43
+    │  
+270 │       fn eq(self, _ other: Address) -> bool {
+    │ ╭───────────────────────────────────────────^
+271 │ │         self.inner == other.inner
+272 │ │     }
+    │ ╰─────^ bool
+
+note: 
+    ┌─ erc20.fe:271:9
+    │
+271 │         self.inner == other.inner
+    │         ^^^^ Address
+
+note: 
+    ┌─ erc20.fe:271:9
+    │
+271 │         self.inner == other.inner
+    │         ^^^^^^^^^^ u256
+
+note: 
+    ┌─ erc20.fe:271:9
+    │
+271 │         self.inner == other.inner
+    │         ^^^^^^^^^^^^^^^^^^^^^^^^^ bool
+
+note: 
+    ┌─ erc20.fe:271:23
+    │
+271 │         self.inner == other.inner
+    │                       ^^^^^ Address
+
+note: 
+    ┌─ erc20.fe:271:23
+    │
+271 │         self.inner == other.inner
+    │                       ^^^^^^^^^^^ u256
+
+note: 
+    ┌─ erc20.fe:277:26
+    │  
+277 │       pub fn new() -> Self {
+    │ ╭──────────────────────────^
+278 │ │         Map {}
+279 │ │     }
+    │ ╰─────^ Map<K, V>
+
+note: 
+    ┌─ erc20.fe:278:9
+    │
+278 │         Map {}
+    │         ^^^^^^ Map<K, V>
+
+note: 
+    ┌─ erc20.fe:283:35
+    │  
+283 │       fn index(self, _ key: K) -> V {
+    │ ╭───────────────────────────────────^
+284 │ │         todo()
+285 │ │     }
+    │ ╰─────^ V
+
+note: 
+    ┌─ erc20.fe:284:9
+    │
+284 │         todo()
+    │         ^^^^ fn todo
+
+note: 
+    ┌─ erc20.fe:284:9
+    │
+284 │         todo()
+    │         ^^^^^^ V
+
+note: 
+    ┌─ erc20.fe:290:36
+    │  
+290 │       pub fn caller(self) -> Address {
+    │ ╭────────────────────────────────────^
+291 │ │         todo()
+292 │ │     }
+    │ ╰─────^ Address
+
+note: 
+    ┌─ erc20.fe:291:9
+    │
+291 │         todo()
+    │         ^^^^ fn todo
+
+note: 
+    ┌─ erc20.fe:291:9
+    │
+291 │         todo()
+    │         ^^^^^^ Address
+
+note: 
+    ┌─ erc20.fe:297:38
+    │  
+297 │       pub fn emit<T>(self, _ event: T) {
+    │ ╭──────────────────────────────────────^
+298 │ │         todo()
+299 │ │     }
+    │ ╰─────^ ()
+
+note: 
+    ┌─ erc20.fe:298:9
+    │
+298 │         todo()
+    │         ^^^^ fn todo
+
+note: 
+    ┌─ erc20.fe:298:9
+    │
+298 │         todo()
+    │         ^^^^^^ ()

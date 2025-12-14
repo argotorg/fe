@@ -1,0 +1,24 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/selector_invalid_form.fe
+---
+error[1-0001]: expected path segment
+  ┌─ selector_invalid_form.fe:4:16
+  │
+4 │     #[selector(0x01)]
+  │                ^ expected path segment
+
+error[1-0001]: unexpected syntax while parsing attribute argument
+  ┌─ selector_invalid_form.fe:4:16
+  │
+4 │     #[selector(0x01)]
+  │                ^^^^ unexpected
+
+error[9-0005]: invalid selector attribute form for msg variant `BadForm`
+  ┌─ selector_invalid_form.fe:4:5
+  │
+4 │     #[selector(0x01)]
+  │     ^^^^^^^^^^^^^^^^^ expected `#[selector = <value>]` form
+  │
+  = use `#[selector = 0x01]` instead of `#[selector(0x01)]`

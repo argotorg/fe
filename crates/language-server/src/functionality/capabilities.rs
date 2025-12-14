@@ -1,4 +1,4 @@
-use async_lsp::lsp_types::{HoverProviderCapability, ServerCapabilities};
+use async_lsp::lsp_types::{HoverProviderCapability, OneOf, ServerCapabilities};
 
 use super::semantic_tokens::semantic_tokens_options;
 
@@ -22,10 +22,40 @@ pub(crate) fn server_capabilities() -> ServerCapabilities {
         type_definition_provider: Some(
             async_lsp::lsp_types::TypeDefinitionProviderCapability::Simple(true),
         ),
+        // go to implementation
+        implementation_provider: Some(
+            async_lsp::lsp_types::ImplementationProviderCapability::Simple(true),
+        ),
         // rename symbol
         rename_provider: Some(async_lsp::lsp_types::OneOf::Left(true)),
         // semantic tokens
         semantic_tokens_provider: Some(semantic_tokens_options()),
+        // formatting
+        document_formatting_provider: Some(OneOf::Left(true)),
+        // inlay hints
+        inlay_hint_provider: Some(async_lsp::lsp_types::OneOf::Left(true)),
+        // document symbols
+        document_symbol_provider: Some(async_lsp::lsp_types::OneOf::Left(true)),
+        // workspace symbols
+        workspace_symbol_provider: Some(async_lsp::lsp_types::OneOf::Left(true)),
+        // completion
+        completion_provider: Some(async_lsp::lsp_types::CompletionOptions {
+            resolve_provider: Some(false),
+            trigger_characters: Some(vec![".".to_string(), ":".to_string()]),
+            all_commit_characters: None,
+            work_done_progress_options: Default::default(),
+            completion_item: None,
+        }),
+        // signature help
+        signature_help_provider: Some(async_lsp::lsp_types::SignatureHelpOptions {
+            trigger_characters: Some(vec!["(".to_string(), ",".to_string()]),
+            retrigger_characters: Some(vec![",".to_string()]),
+            work_done_progress_options: Default::default(),
+        }),
+        // code actions (quick fixes)
+        code_action_provider: Some(async_lsp::lsp_types::CodeActionProviderCapability::Simple(
+            true,
+        )),
         // support for workspace add/remove changes
         workspace: Some(async_lsp::lsp_types::WorkspaceServerCapabilities {
             workspace_folders: Some(async_lsp::lsp_types::WorkspaceFoldersServerCapabilities {

@@ -3,9 +3,15 @@ mod check;
 #[cfg(not(target_arch = "wasm32"))]
 mod tree;
 
+use std::fs;
+
 use camino::Utf8PathBuf;
 use check::check;
 use clap::{Parser, Subcommand};
+use colored::Colorize;
+use fmt as fe_fmt;
+use similar::{ChangeTag, TextDiff};
+use walkdir::WalkDir;
 
 #[derive(Debug, Clone, Parser)]
 #[command(version, about, long_about = None)]
@@ -30,6 +36,14 @@ pub enum Command {
     #[cfg(not(target_arch = "wasm32"))]
     Tree {
         path: Utf8PathBuf,
+    },
+    /// Format Fe source code.
+    Fmt {
+        /// Path to a Fe source file or directory. If omitted, formats all .fe files in the current project.
+        path: Option<Utf8PathBuf>,
+        /// Check if files are formatted, but do not write changes.
+        #[arg(long)]
+        check: bool,
     },
     New,
 }
@@ -58,6 +72,144 @@ pub fn run(opts: &Options) {
         Command::Tree { path } => {
             tree::print_tree(path);
         }
+        Command::Fmt { path, check } => {
+            run_fmt(path.as_ref(), *check);
+        }
         Command::New => eprintln!("`fe new` doesn't work at the moment"),
+    }
+}
+
+fn run_fmt(path: Option<&Utf8PathBuf>, check: bool) {
+    let config = fe_fmt::Config::default();
+
+    // Collect files to format
+    let files: Vec<Utf8PathBuf> = match path {
+        Some(p) if p.is_file() => vec![p.clone()],
+        Some(p) if p.is_dir() => collect_fe_files(p),
+        Some(p) => {
+            eprintln!("Path does not exist: {}", p);
+            std::process::exit(1);
+        }
+        None => {
+            // Find project root and format all .fe files in src/
+            match driver::files::find_project_root() {
+                Some(root) => collect_fe_files(&root.join("src")),
+                None => {
+                    eprintln!(
+                        "No fe.toml found. Run from a Fe project directory or specify a path."
+                    );
+                    std::process::exit(1);
+                }
+            }
+        }
+    };
+
+    if files.is_empty() {
+        eprintln!("No .fe files found");
+        std::process::exit(1);
+    }
+
+    let mut unformatted_files = Vec::new();
+    let mut error_count = 0;
+
+    for file in &files {
+        match format_single_file(file, &config, check) {
+            FormatResult::Unchanged => {}
+            FormatResult::Formatted {
+                original,
+                formatted,
+            } => {
+                if check {
+                    print_diff(file, &original, &formatted);
+                    unformatted_files.push(file.clone());
+                }
+            }
+            FormatResult::ParseError(errs) => {
+                eprintln!("Skipping {} (parse errors):", file);
+                for err in errs {
+                    eprintln!("  {}", err.msg());
+                }
+            }
+            FormatResult::IoError(err) => {
+                eprintln!("Error processing {}: {}", file, err);
+                error_count += 1;
+            }
+        }
+    }
+
+    if check && !unformatted_files.is_empty() {
+        std::process::exit(1);
+    }
+
+    if error_count > 0 {
+        std::process::exit(1);
+    }
+}
+
+fn print_diff(path: &Utf8PathBuf, original: &str, formatted: &str) {
+    let diff = TextDiff::from_lines(original, formatted);
+
+    println!("{}", format!("Diff {}:", path).bold());
+    for hunk in diff.unified_diff().context_radius(3).iter_hunks() {
+        // Print hunk header
+        println!("{}", format!("{}", hunk.header()).cyan());
+        for change in hunk.iter_changes() {
+            match change.tag() {
+                ChangeTag::Delete => print!("{}", format!("-{}", change).red()),
+                ChangeTag::Insert => print!("{}", format!("+{}", change).green()),
+                ChangeTag::Equal => print!(" {}", change),
+            };
+        }
+    }
+    println!();
+}
+
+fn collect_fe_files(dir: &Utf8PathBuf) -> Vec<Utf8PathBuf> {
+    if !dir.exists() {
+        return Vec::new();
+    }
+
+    WalkDir::new(dir)
+        .into_iter()
+        .filter_map(|e| e.ok())
+        .filter(|e| e.file_type().is_file())
+        .filter(|e| e.path().extension().is_some_and(|ext| ext == "fe"))
+        .filter_map(|e| Utf8PathBuf::from_path_buf(e.into_path()).ok())
+        .collect()
+}
+
+enum FormatResult {
+    Unchanged,
+    Formatted { original: String, formatted: String },
+    ParseError(Vec<fe_fmt::ParseError>),
+    IoError(std::io::Error),
+}
+
+fn format_single_file(path: &Utf8PathBuf, config: &fe_fmt::Config, check: bool) -> FormatResult {
+    let original = match fs::read_to_string(path.as_std_path()) {
+        Ok(s) => s,
+        Err(e) => return FormatResult::IoError(e),
+    };
+
+    let formatted = match fe_fmt::format_str(&original, config) {
+        Ok(f) => f,
+        Err(fe_fmt::FormatError::ParseErrors(errs)) => return FormatResult::ParseError(errs),
+        Err(fe_fmt::FormatError::Io(e)) => return FormatResult::IoError(e),
+    };
+
+    if formatted == original {
+        return FormatResult::Unchanged;
+    }
+
+    if !check {
+        if let Err(e) = fs::write(path.as_std_path(), &formatted) {
+            return FormatResult::IoError(e);
+        }
+        println!("Formatted {}", path);
+    }
+
+    FormatResult::Formatted {
+        original,
+        formatted,
     }
 }

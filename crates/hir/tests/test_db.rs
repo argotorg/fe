@@ -21,7 +21,7 @@ use common::{
 };
 use driver::diagnostics::{CsDbWrapper, ToCsDiag};
 use fe_hir::analysis::{
-    analysis_pass::{AnalysisPassManager, ParsingPass},
+    analysis_pass::{AnalysisPassManager, MsgLowerPass, ParsingPass},
     name_resolution::ImportAnalysisPass,
     ty::{
         AdtDefAnalysisPass, BodyAnalysisPass, DefConflictAnalysisPass, FuncAnalysisPass,
@@ -238,6 +238,7 @@ impl Default for HirPropertyFormatter<'_> {
 pub(crate) fn initialize_analysis_pass() -> AnalysisPassManager {
     let mut pass_manager = AnalysisPassManager::new();
     pass_manager.add_module_pass(Box::new(ParsingPass {}));
+    pass_manager.add_module_pass(Box::new(MsgLowerPass {}));
     pass_manager.add_module_pass(Box::new(DefConflictAnalysisPass {}));
     pass_manager.add_module_pass(Box::new(ImportAnalysisPass {}));
     pass_manager.add_module_pass(Box::new(AdtDefAnalysisPass {}));

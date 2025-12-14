@@ -541,4 +541,16 @@ impl<'db> ReferenceView<'db> {
             Self::UsePath(v) => v.span(),
         }
     }
+
+    /// Check if this reference is a `Self` type path.
+    ///
+    /// `Self` paths should not be renamed when renaming the type they refer to,
+    /// because `Self` is a keyword that contextually refers to the enclosing type.
+    /// This includes both explicit `Self` in code and implicit self-parameter types.
+    pub fn is_self_ty_path(&self, db: &'db dyn crate::HirDb) -> bool {
+        match self {
+            Self::Path(v) => v.path.is_self_ty(db),
+            _ => false,
+        }
+    }
 }

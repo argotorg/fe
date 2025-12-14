@@ -320,6 +320,9 @@ fn format_terminator(term: &Terminator) -> String {
             value_label(*offset),
             value_label(*size)
         ),
+        Terminator::Revert { offset, size } => {
+            format!("revert {}, {}", value_label(*offset), value_label(*size))
+        }
         Terminator::Goto { target } => format!("goto bb{}", target.index()),
         Terminator::Branch {
             cond,

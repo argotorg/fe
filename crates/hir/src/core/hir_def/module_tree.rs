@@ -10,6 +10,11 @@ use salsa::Update;
 use super::{IdentId, TopLevelMod};
 use crate::{HirDb, lower::map_file_to_mod_impl};
 
+/// Error when a module is not found in a module tree.
+/// This typically indicates either a cross-ingot query or a bug in incremental computation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ModuleNotInTree;
+
 /// This tree represents the structure of an ingot.
 /// Internal modules are not included in this tree, instead, they are included
 /// in [ScopeGraph](crate::hir_def::scope_graph::ScopeGraph).
@@ -102,13 +107,28 @@ impl ModuleTree<'_> {
     }
 
     /// Returns the tree node id of the given top level module.
-    pub fn tree_node(&self, top_mod: TopLevelMod) -> ModuleTreeNodeId {
-        self.mod_map[&top_mod]
+    ///
+    /// Returns `Err(ModuleNotInTree)` if the module is not in this tree,
+    /// which indicates either a cross-ingot query or a bug in incremental computation.
+    pub fn tree_node(&self, top_mod: TopLevelMod) -> Result<ModuleTreeNodeId, ModuleNotInTree> {
+        self.mod_map.get(&top_mod).copied().ok_or_else(|| {
+            tracing::error!(
+                "TopLevelMod not found in module tree. Tree ingot: {:?}. \
+                 This may indicate a cross-ingot query or incremental computation bug.",
+                self.ingot,
+            );
+            ModuleNotInTree
+        })
     }
 
     /// Returns the tree node data of the given top level module.
-    pub fn tree_node_data(&self, top_mod: TopLevelMod) -> &ModuleTreeNode<'_> {
-        &self.module_tree.0[self.tree_node(top_mod)]
+    ///
+    /// Returns `Err(ModuleNotInTree)` if the module is not in this tree.
+    pub fn tree_node_data(
+        &self,
+        top_mod: TopLevelMod,
+    ) -> Result<&ModuleTreeNode<'_>, ModuleNotInTree> {
+        self.tree_node(top_mod).map(|id| &self.module_tree.0[id])
     }
 
     /// Returns the root of the tree, which corresponds to the ingot root file.
@@ -125,15 +145,20 @@ impl ModuleTree<'_> {
         self.mod_map.keys().copied()
     }
 
+    /// Returns the parent of the given module, or `None` if it's a root or not found.
+    /// Logs an error if the module is not in this tree.
     pub fn parent(&self, top_mod: TopLevelMod) -> Option<TopLevelMod<'_>> {
-        let node = self.tree_node_data(top_mod);
+        let node = self.tree_node_data(top_mod).ok()?;
         node.parent.map(|id| self.module_tree.0[id].top_mod)
     }
 
+    /// Returns the children of the given module.
+    /// Returns an empty iterator if the module is not in this tree (error is logged).
     pub fn children(&self, top_mod: TopLevelMod) -> impl Iterator<Item = TopLevelMod<'_>> + '_ {
         self.tree_node_data(top_mod)
-            .children
-            .iter()
+            .ok()
+            .into_iter()
+            .flat_map(|node| node.children.iter())
             .map(move |&id| {
                 let node = &self.module_tree.0[id];
                 node.top_mod
@@ -163,11 +188,31 @@ pub(crate) fn module_tree_impl<'db>(db: &'db dyn HirDb, ingot: Ingot<'db>) -> Mo
         }
     }
 
-    // Find root
-    let ingot_base = ingot.base(db);
-    let root_file = ingot
-        .root_file(db)
-        .unwrap_or_else(|err| panic!("module needs a root file for ingot {}: {err:?}", ingot_base));
+    // Find root - if there's no root file, use the first source file as fallback
+    let root_file = match ingot.root_file(db) {
+        Ok(file) => file,
+        Err(_) => {
+            // No root file found - use first source file as fallback root
+            // This handles non-conformant ingots (e.g., directories without src/lib.fe)
+            let first_source = files.iter().find_map(|(_, file)| {
+                if matches!(file.kind(db), Some(IngotFileKind::Source)) {
+                    Some(file)
+                } else {
+                    None
+                }
+            });
+            match first_source {
+                Some(file) => file,
+                None => {
+                    // No source files at all - this is a bug, ingots should have source files
+                    panic!(
+                        "Ingot {:?} has no source files. This indicates a bug in ingot construction.",
+                        ingot
+                    );
+                }
+            }
+        }
+    };
     let root_mod = map_file_to_mod_impl(db, root_file);
     let root = mod_map[&root_mod];
 
@@ -257,7 +302,67 @@ mod tests {
     use common::{InputDb, ingot::IngotBaseUrl};
     use url::Url;
 
-    use crate::{lower, test_db::TestDb};
+    use crate::{core::hir_def::HirIngot, lower, test_db::TestDb};
+
+    /// Test that querying a module from one ingot in another ingot's tree
+    /// doesn't panic - it should return None/empty gracefully.
+    ///
+    /// This reproduces a bug where the LSP would panic during diagnostics
+    /// when a TopLevelMod was looked up in a ModuleTree that didn't contain it.
+    #[test]
+    fn module_tree_cross_ingot_no_panic() {
+        let mut db = TestDb::default();
+
+        // Create two separate ingots - use fe.toml URLs so directory() works correctly
+        // (directory() pops the last path segment, so file:///a/b/fe.toml -> file:///a/b/)
+        let ingot1_base = Url::parse("file:///workspace/ingot1/fe.toml").unwrap();
+        let ingot2_base = Url::parse("file:///workspace/ingot2/fe.toml").unwrap();
+
+        // Touch the fe.toml files to create the ingots
+        ingot1_base.touch(&mut db, "fe.toml".into(), None);
+        ingot2_base.touch(&mut db, "fe.toml".into(), None);
+
+        // Create source files in each ingot
+        let file1 = IngotBaseUrl::touch(&ingot1_base, &mut db, "src/lib.fe".into(), None);
+        let file2 = IngotBaseUrl::touch(&ingot2_base, &mut db, "src/lib.fe".into(), None);
+
+        // The files should be different (different URLs)
+        assert_ne!(
+            file1, file2,
+            "files from different ingots should be distinct"
+        );
+
+        // Get modules from both ingots
+        let mod1 = lower::map_file_to_mod(&db, file1);
+        let mod2 = lower::map_file_to_mod(&db, file2);
+
+        // The modules should be different (based on different files)
+        assert_ne!(
+            mod1, mod2,
+            "modules from different ingots should be distinct"
+        );
+
+        // Get ingot2's module tree
+        let ingot2 = db
+            .workspace()
+            .containing_ingot(&db, ingot2_base)
+            .expect("ingot2 should exist");
+        let tree2 = ingot2.module_tree(&db);
+
+        // tree2 should contain mod2 but NOT mod1
+        assert!(
+            tree2.tree_node(mod2).is_ok(),
+            "tree2 should contain its own module"
+        );
+        assert!(
+            tree2.tree_node(mod1).is_err(),
+            "tree2 should NOT contain mod1 from ingot1"
+        );
+
+        // Querying mod1's children/parent from tree2 should return empty/None (error is logged)
+        assert_eq!(tree2.children(mod1).count(), 0);
+        assert!(tree2.parent(mod1).is_none());
+    }
 
     #[test]
     fn module_tree() {
@@ -296,17 +401,17 @@ mod tests {
         assert_eq!(root_node.children.len(), 2);
 
         for &child in &root_node.children {
-            if child == local_tree.tree_node(mod1_mod) {
+            if child == local_tree.tree_node(mod1_mod).unwrap() {
                 let child = local_tree.node_data(child);
                 assert_eq!(child.parent, Some(local_tree.root()));
                 assert_eq!(child.children.len(), 1);
-                assert_eq!(child.children[0], local_tree.tree_node(foo_mod));
-            } else if child == local_tree.tree_node(mod2_mod) {
+                assert_eq!(child.children[0], local_tree.tree_node(foo_mod).unwrap());
+            } else if child == local_tree.tree_node(mod2_mod).unwrap() {
                 let child = local_tree.node_data(child);
                 assert_eq!(child.parent, Some(local_tree.root()));
                 assert_eq!(child.children.len(), 2);
-                assert_eq!(child.children[0], local_tree.tree_node(bar_mod));
-                assert_eq!(child.children[1], local_tree.tree_node(baz_mod));
+                assert_eq!(child.children[0], local_tree.tree_node(bar_mod).unwrap());
+                assert_eq!(child.children[1], local_tree.tree_node(baz_mod).unwrap());
             } else {
                 panic!("unexpected child")
             }

@@ -1,0 +1,15 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/recv_duplicate_selector_same_name.fe
+---
+error[8-0047]: duplicate selector across recv blocks
+  ┌─ recv_duplicate_selector_same_name.fe:8:5
+  │
+3 │     Foo { x: u64 } -> u64,
+  │     --- `Foo` with selector 0x00000001 declared here
+  ·
+8 │     Foo { y: u64 } -> bool,
+  │     ^^^ `Foo` has selector 0x00000001 which conflicts with `Foo`
+  │
+  = each msg variant in a contract must have a unique selector

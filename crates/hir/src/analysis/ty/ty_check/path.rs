@@ -18,11 +18,11 @@ use crate::analysis::{
 };
 
 impl<'db> TyId<'db> {
-    pub(crate) fn adt_ref(&self, db: &'db dyn HirAnalysisDb) -> Option<AdtRef<'db>> {
+    pub fn adt_ref(&self, db: &'db dyn HirAnalysisDb) -> Option<AdtRef<'db>> {
         self.adt_def(db).map(|def| def.adt_ref(db))
     }
 
-    pub(crate) fn adt_def(&self, db: &'db dyn HirAnalysisDb) -> Option<AdtDef<'db>> {
+    pub fn adt_def(&self, db: &'db dyn HirAnalysisDb) -> Option<AdtDef<'db>> {
         let base = self.decompose_ty_app(db).0;
         match base.data(db) {
             TyData::TyBase(base) => base.adt(),
@@ -157,7 +157,7 @@ impl<'tc, 'db, 'a> RecordInitChecker<'tc, 'db, 'a> {
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum RecordLike<'db> {
     Type(TyId<'db>),
-    Variant(ResolvedVariant<'db>),
+    EnumVariant(ResolvedVariant<'db>),
 }
 
 impl<'db> RecordLike<'db> {
@@ -166,7 +166,7 @@ impl<'db> RecordLike<'db> {
             RecordLike::Type(ty) => ty
                 .adt_ref(db)
                 .is_some_and(|adt_ref| matches!(adt_ref, AdtRef::Struct(_) | AdtRef::Contract(_))),
-            RecordLike::Variant(variant) => {
+            RecordLike::EnumVariant(variant) => {
                 matches!(variant.kind(db), HirVariantKind::Record(..))
             }
         }
@@ -199,7 +199,7 @@ impl<'db> RecordLike<'db> {
                     Some(TyId::invalid(db, InvalidCause::Other))
                 }
             }
-            RecordLike::Variant(variant) => {
+            RecordLike::EnumVariant(variant) => {
                 let adt_def = variant.ty.adt_def(db)?;
                 let field_idx = match variant.kind(db) {
                     HirVariantKind::Record(_) => {
@@ -241,7 +241,7 @@ impl<'db> RecordLike<'db> {
                     .find(|(_, v)| v.name(db) == Some(name))
                     .map(|(i, _)| i)
             }
-            RecordLike::Variant(variant) => {
+            RecordLike::EnumVariant(variant) => {
                 if !matches!(variant.kind(db), HirVariantKind::Record(_)) {
                     return None;
                 }
@@ -271,8 +271,8 @@ impl<'db> RecordLike<'db> {
                 };
                 Some(ScopeId::Field(parent, field_idx as u16))
             }
-            RecordLike::Variant(variant) => {
-                let field_idx = RecordLike::Variant(*variant).record_field_idx(db, name)?;
+            RecordLike::EnumVariant(variant) => {
+                let field_idx = RecordLike::EnumVariant(*variant).record_field_idx(db, name)?;
                 let parent = FieldParent::Variant(variant.variant);
                 Some(ScopeId::Field(parent, field_idx as u16))
             }
@@ -292,7 +292,7 @@ impl<'db> RecordLike<'db> {
                 };
                 parent.fields(db).filter_map(|v| v.name(db)).collect()
             }
-            RecordLike::Variant(variant) => {
+            RecordLike::EnumVariant(variant) => {
                 if !matches!(variant.kind(db), HirVariantKind::Record(_)) {
                     return Vec::default();
                 }
@@ -317,7 +317,7 @@ impl<'db> RecordLike<'db> {
                     None
                 }
             }
-            RecordLike::Variant(variant) => {
+            RecordLike::EnumVariant(variant) => {
                 let expected_sub_pat = variant.variant.format_initializer_args(db);
                 let path = variant.path.pretty_print(db);
                 Some(format!("{path}{expected_sub_pat}"))
@@ -336,7 +336,7 @@ impl<'db> RecordLike<'db> {
                     ty.pretty_print(db).to_string()
                 }
             }
-            RecordLike::Variant(variant) => match variant.kind(db) {
+            RecordLike::EnumVariant(variant) => match variant.kind(db) {
                 HirVariantKind::Unit => "unit variant",
                 HirVariantKind::Tuple(_) => "tuple variant",
                 HirVariantKind::Record(_) => "record variant",
@@ -350,6 +350,6 @@ impl<'db> RecordLike<'db> {
     }
 
     pub fn from_variant(variant: ResolvedVariant<'db>) -> Self {
-        RecordLike::Variant(variant)
+        RecordLike::EnumVariant(variant)
     }
 }

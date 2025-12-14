@@ -1,0 +1,194 @@
+---
+source: crates/codegen/tests/yul.rs
+expression: output
+input_file: tests/fixtures/erc20.fe
+---
+object "Erc20Contract" {
+  code {
+    init()
+    function erc20_set_owner_once_stor(self, owner) {
+      let v0 := iszero(eq(get_field__StorPtr_u256__2bec36171fad53de(self, 96), 0))
+      if v0 {
+        revert(0, 0)
+      }
+      if iszero(v0) {
+        store_field__StorPtr_u256__2bec36171fad53de(self, 96, owner)
+      }
+    }
+    function get_field__StorPtr_u256__2bec36171fad53de(ptr, offset) -> ret {
+      let v0 := add(ptr, offset)
+      ret := to_word__deduped(load__StorPtr__7f7854645e12e266(v0))
+    }
+    function init() {
+      let v0 := 0
+      erc20_set_owner_once_stor(v0, caller())
+      let v1 := datasize("Erc20Contract_deployed")
+      let v2 := dataoffset("Erc20Contract_deployed")
+      codecopy(0, v2, v1)
+      return(0, v1)
+    }
+    function load__StorPtr__7f7854645e12e266(addr) -> ret {
+      ret := sload(addr)
+    }
+    function store__StorPtr__7f7854645e12e266(addr, value) {
+      sstore(addr, value)
+    }
+    function store_field__StorPtr_u256__2bec36171fad53de(ptr, offset, value) {
+      let v0 := add(ptr, offset)
+      store__StorPtr__7f7854645e12e266(v0, to_word__deduped(value))
+    }
+    function to_word__deduped(self) -> ret {
+      ret := self
+    }
+  }
+
+  object "Erc20Contract_deployed" {
+    code {
+      runtime()
+      function abi_encode_string(word, len) {
+        mstore(0, 32)
+        mstore(32, len)
+        mstore(64, word)
+        return(0, 96)
+      }
+      function abi_encode_u256(value) {
+        mstore(0, value)
+        return(0, 32)
+      }
+      function allowance_key(owner, spender) -> ret {
+        mstore(0, owner)
+        mstore(32, spender)
+        ret := keccak256(0, 64)
+      }
+      function erc20_allowance_stor(self, owner, spender) -> ret {
+        ret := storagemap_k__v__get_stor__u256_u256__cc308d1bea3fb6e4(add(self, 32), allowance_key(owner, spender))
+      }
+      function erc20_approve_stor(self, owner, spender, value) {
+        storagemap_k__v__set_stor__u256_u256__cc308d1bea3fb6e4(add(self, 32), allowance_key(owner, spender), value)
+      }
+      function erc20_balance_of_stor(self, addr) -> ret {
+        ret := storagemap_k__v__get_stor__u256_u256__cc308d1bea3fb6e4(self, addr)
+      }
+      function erc20_mint_stor(self, to, amount) {
+        let v0 := iszero(eq(caller(), get_field__StorPtr_u256__2bec36171fad53de(self, 96)))
+        if v0 {
+          revert(0, 0)
+        }
+        if iszero(v0) {
+          let v1 := erc20_balance_of_stor(self, to)
+          storagemap_k__v__set_stor__u256_u256__cc308d1bea3fb6e4(self, to, add(v1, amount))
+          store_field__StorPtr_u256__2bec36171fad53de(self, 64, add(get_field__StorPtr_u256__2bec36171fad53de(self, 64), amount))
+        }
+      }
+      function erc20_transfer_from_stor(self, owner, to, amount) {
+        let v0 := caller()
+        let v1 := erc20_allowance_stor(self, owner, v0)
+        let v2 := lt(v1, amount)
+        if v2 {
+          revert(0, 0)
+        }
+        if iszero(v2) {
+          erc20_transfer_stor(self, owner, to, amount)
+          storagemap_k__v__set_stor__u256_u256__cc308d1bea3fb6e4(add(self, 32), allowance_key(owner, v0), sub(v1, amount))
+        }
+      }
+      function erc20_transfer_stor(self, from, to, amount) {
+        let v0 := erc20_balance_of_stor(self, from)
+        let v1 := lt(v0, amount)
+        if v1 {
+          revert(0, 0)
+        }
+        if iszero(v1) {
+          let v2 := erc20_balance_of_stor(self, to)
+          storagemap_k__v__set_stor__u256_u256__cc308d1bea3fb6e4(self, from, sub(v0, amount))
+          storagemap_k__v__set_stor__u256_u256__cc308d1bea3fb6e4(self, to, add(v2, amount))
+        }
+      }
+      function get_field__StorPtr_u256__2bec36171fad53de(ptr, offset) -> ret {
+        let v0 := add(ptr, offset)
+        ret := to_word__deduped(load__StorPtr__7f7854645e12e266(v0))
+      }
+      function load__StorPtr__7f7854645e12e266(addr) -> ret {
+        ret := sload(addr)
+      }
+      function runtime() {
+        let v0 := 0
+        let v1 := shr(224, calldataload(0))
+        switch v1
+          case 1889567281 {
+            let v2 := calldataload(4)
+            abi_encode_u256(erc20_balance_of_stor(v0, v2))
+          }
+          case 3714247998 {
+            let v3 := calldataload(4)
+            let v4 := calldataload(36)
+            abi_encode_u256(erc20_allowance_stor(v0, v3, v4))
+          }
+          case 117300739 {
+            abi_encode_string(31840933704928615426292613906591192052886564858731089189578963311002547912704, 7)
+          }
+          case 2514000705 {
+            abi_encode_string(31784391594991486112232083260356792451358613714049171750120207607087736291328, 3)
+          }
+          case 826074471 {
+            abi_encode_u256(18)
+          }
+          case 2835717307 {
+            let v5 := calldataload(4)
+            let v6 := calldataload(36)
+            erc20_transfer_stor(v0, caller(), v5, v6)
+            abi_encode_u256(1)
+          }
+          case 157198259 {
+            let v7 := calldataload(4)
+            let v8 := calldataload(36)
+            erc20_approve_stor(v0, caller(), v7, v8)
+            abi_encode_u256(1)
+          }
+          case 599290589 {
+            let v9 := calldataload(4)
+            let v10 := calldataload(36)
+            let v11 := calldataload(68)
+            erc20_transfer_from_stor(v0, v9, v10, v11)
+            abi_encode_u256(1)
+          }
+          case 1086394137 {
+            let v12 := calldataload(4)
+            let v13 := calldataload(36)
+            erc20_mint_stor(v0, v12, v13)
+            abi_encode_u256(1)
+          }
+          default {
+            revert(0, 0)
+          }
+      }
+      function storagemap_k__v__get_stor__u256_u256__cc308d1bea3fb6e4(self, key) -> ret {
+        let v0 := storagemap_k__v__storage_slot_stor__u256_u256__cc308d1bea3fb6e4(self, key)
+        ret := to_word__deduped(sload(v0))
+      }
+      function storagemap_k__v__set_stor__u256_u256__cc308d1bea3fb6e4(self, key, value) {
+        let v0 := storagemap_k__v__storage_slot_stor__u256_u256__cc308d1bea3fb6e4(self, key)
+        sstore(v0, to_word__deduped(value))
+      }
+      function storagemap_k__v__storage_slot_stor__u256_u256__cc308d1bea3fb6e4(self, key) -> ret {
+        let v0 := write_key__u256__3271ca15373d4483(0, key)
+        mstore(v0, self)
+        ret := keccak256(0, add(v0, 32))
+      }
+      function store__StorPtr__7f7854645e12e266(addr, value) {
+        sstore(addr, value)
+      }
+      function store_field__StorPtr_u256__2bec36171fad53de(ptr, offset, value) {
+        let v0 := add(ptr, offset)
+        store__StorPtr__7f7854645e12e266(v0, to_word__deduped(value))
+      }
+      function to_word__deduped(self) -> ret {
+        ret := self
+      }
+      function write_key__u256__3271ca15373d4483(ptr, self) -> ret {
+        mstore(ptr, self)
+        ret := 32
+      }
+    }
+  }
+}

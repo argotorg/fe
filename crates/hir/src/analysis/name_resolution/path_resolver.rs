@@ -16,13 +16,13 @@ use super::{
     diagnostics::PathResDiag,
     is_scope_visible_from,
     method_selection::{MethodCandidate, MethodSelectionError, select_method_candidate},
-    name_resolver::{NameRes, NameResBucket, NameResolutionError},
+    name_resolver::{NameRes, NameResBucket, NameResKind, NameResolutionError},
     resolve_query,
     visibility_checker::is_ty_visible_from,
 };
 use crate::analysis::{
     HirAnalysisDb,
-    name_resolution::{NameResKind, QueryDirective},
+    name_resolution::QueryDirective,
     ty::{
         adt_def::AdtRef,
         binder::Binder,

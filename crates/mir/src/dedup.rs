@@ -114,7 +114,19 @@ fn deduplicate_functions<'db>(
 /// Collapses known helper roots (`store_field`, `to_word`) to a single stable name and
 /// returns the rewritten function list.
 fn dedup_runtime_helpers<'db>(functions: Vec<MirFunction<'db>>) -> Vec<MirFunction<'db>> {
-    let mut root_map: FxHashMap<String, String> = FxHashMap::default();
+    let mut root_counts: FxHashMap<String, usize> = FxHashMap::default();
+    for func in &functions {
+        let root = func
+            .symbol_name
+            .split("__")
+            .next()
+            .unwrap_or_default()
+            .to_string();
+        if HELPER_ROOTS.contains(&root.as_str()) {
+            *root_counts.entry(root).or_default() += 1;
+        }
+    }
+
     let mut alias_map: FxHashMap<String, String> = FxHashMap::default();
     let mut kept = Vec::new();
 
@@ -125,20 +137,17 @@ fn dedup_runtime_helpers<'db>(functions: Vec<MirFunction<'db>>) -> Vec<MirFuncti
             .next()
             .unwrap_or_default()
             .to_string();
-        if HELPER_ROOTS.contains(&root.as_str()) {
-            if let Some(existing) = root_map.get(&root) {
-                alias_map.insert(func.symbol_name.clone(), existing.clone());
-                continue;
-            } else {
-                let canonical = format!("{root}__deduped");
-                alias_map.insert(func.symbol_name.clone(), canonical.clone());
-                func.symbol_name = canonical.clone();
-                root_map.insert(root, canonical);
-            }
+        if HELPER_ROOTS.contains(&root.as_str())
+            && root_counts.get(&root).copied().unwrap_or(0) == 1
+        {
+            let canonical = format!("{root}__deduped");
+            alias_map.insert(func.symbol_name.clone(), canonical.clone());
+            func.symbol_name = canonical;
+        } else {
+            alias_map
+                .entry(func.symbol_name.clone())
+                .or_insert(func.symbol_name.clone());
         }
-        alias_map
-            .entry(func.symbol_name.clone())
-            .or_insert(func.symbol_name.clone());
         kept.push(func);
     }
 

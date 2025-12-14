@@ -5,22 +5,14 @@ expression: output
 input_file: tests/fixtures/momo.fe
 ---
 function read_x(val) -> ret {
-  ret := add(get_field__MyStruct_u8__fc5e5f8d6bb839cd(val, 0, 0), get_field__MyStruct_u8__fc5e5f8d6bb839cd(val, 0, 1))
+  ret := add(get_field__MemPtr_u8__78f06769553d0434(val, 0), get_field__MemPtr_u8__78f06769553d0434(val, 1))
 }
-function get_field__MyStruct_u8__fc5e5f8d6bb839cd(addr, space, offset) -> ret {
-  let v1 := add(addr, offset)
-  let v0 := 0
-  switch space
-    case 0 {
-      v0 := mload(v1)
-    }
-    case 1 {
-      v0 := sload(v1)
-    }
-    default {
-    }
-  let v2 := v0
-  ret := from_word__u8__bc9d6eeaea22ffb5(v2)
+function get_field__MemPtr_u8__78f06769553d0434(ptr, offset) -> ret {
+  let v0 := add(ptr, offset)
+  ret := from_word__u8__bc9d6eeaea22ffb5(load__MemPtr__d0292394fccae3e4(v0))
+}
+function load__MemPtr__d0292394fccae3e4(addr) -> ret {
+  ret := mload(addr)
 }
 function from_word__u8__bc9d6eeaea22ffb5(word) -> ret {
   ret := and(word, 255)
