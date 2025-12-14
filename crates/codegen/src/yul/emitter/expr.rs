@@ -112,10 +112,15 @@ impl<'db> FunctionEmitter<'db> {
                 Self::lower_and_format_call(&callee_expr, lowered_args)
             }
             Expr::MethodCall(receiver, _method_name, _generic_args, call_args) => {
-                let callable = self.mir_func.typed_body.callable_expr(expr_id)
-                    .ok_or_else(|| YulError::Unsupported(
-                        "method call expression does not have a registered callable".into(),
-                    ))?;
+                let callable =
+                    self.mir_func
+                        .typed_body
+                        .callable_expr(expr_id)
+                        .ok_or_else(|| {
+                            YulError::Unsupported(
+                                "method call expression does not have a registered callable".into(),
+                            )
+                        })?;
 
                 let callee = match callable.callable_def {
                     CallableDef::Func(func) => function_name(self.db, func),
