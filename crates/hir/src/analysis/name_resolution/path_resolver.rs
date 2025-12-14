@@ -1,4 +1,5 @@
-use crate::hir_def::CallableDef;
+use crate::core::hir_def::GenericArg;
+use crate::hir_def::{CallableDef, Func};
 use crate::{
     core::hir_def::{
         Const, Enum, EnumVariant, GenericParamOwner, IdentId, ImplTrait, ItemKind, PathId,
@@ -6,7 +7,7 @@ use crate::{
     },
     span::{DynLazySpan, path::LazyPathSpan},
 };
-use common::indexmap::IndexMap;
+use common::indexmap::{IndexMap, IndexSet};
 use either::Either;
 use smallvec::{SmallVec, smallvec};
 use thin_vec::ThinVec;
@@ -16,13 +17,13 @@ use super::{
     diagnostics::PathResDiag,
     is_scope_visible_from,
     method_selection::{MethodCandidate, MethodSelectionError, select_method_candidate},
-    name_resolver::{NameRes, NameResBucket, NameResolutionError},
+    name_resolver::{NameRes, NameResBucket, NameResKind, NameResolutionError},
     resolve_query,
     visibility_checker::is_ty_visible_from,
 };
 use crate::analysis::{
     HirAnalysisDb,
-    name_resolution::{NameResKind, QueryDirective},
+    name_resolution::QueryDirective,
     ty::{
         adt_def::AdtRef,
         binder::Binder,
@@ -416,7 +417,8 @@ pub fn resolve_ident_to_bucket<'db>(
     scope: ScopeId<'db>,
 ) -> &'db NameResBucket<'db> {
     assert!(path.parent(db).is_none());
-    let query = make_query(db, path, scope);
+    let directive = QueryDirective::for_scope(db, scope);
+    let query = make_query(db, path, scope, directive);
     resolve_query(db, query)
 }
 
@@ -425,8 +427,9 @@ fn make_query<'db>(
     db: &'db dyn HirAnalysisDb,
     path: PathId<'db>,
     scope: ScopeId<'db>,
+    base_directive: QueryDirective,
 ) -> EarlyNameQueryId<'db> {
-    let mut directive = QueryDirective::new();
+    let mut directive = base_directive;
 
     if path.segment_index(db) != 0 {
         directive = directive.disallow_external();
@@ -444,6 +447,13 @@ pub enum PathRes<'db> {
     Func(TyId<'db>),
     FuncParam(ItemKind<'db>, u16),
     Trait(TraitInstId<'db>),
+    /// A trait-associated function resolved via a trait path, e.g. `T::make`.
+    ///
+    /// Carries the trait reference as written (including generic args and assoc-type bindings),
+    /// with `Self` still bound to the trait's `Self` type parameter. The type checker is
+    /// responsible for instantiating `Self` to an inference variable and later confirming that
+    /// an impl exists.
+    TraitMethod(TraitInstId<'db>, Func<'db>),
     EnumVariant(ResolvedVariant<'db>),
     Const(Const<'db>, TyId<'db>),
     Mod(ScopeId<'db>),
@@ -465,7 +475,10 @@ impl<'db> PathRes<'db> {
             // TODO: map over candidate ty?
             PathRes::Method(ty, candidate) => PathRes::Method(f(ty), candidate),
             PathRes::TraitConst(ty, inst, name) => PathRes::TraitConst(f(ty), inst, name),
-            r @ (PathRes::Trait(_) | PathRes::Mod(_) | PathRes::FuncParam(..)) => r,
+            r @ (PathRes::Trait(_)
+            | PathRes::TraitMethod(..)
+            | PathRes::Mod(_)
+            | PathRes::FuncParam(..)) => r,
         }
     }
 
@@ -480,6 +493,7 @@ impl<'db> PathRes<'db> {
             }
             PathRes::TyAlias(alias, _) => Some(alias.alias.scope()),
             PathRes::Trait(trait_) => Some(trait_.def(db).scope()),
+            PathRes::TraitMethod(_inst, method) => Some(method.scope()),
             PathRes::EnumVariant(variant) => Some(ScopeId::Variant(variant.variant)),
             PathRes::FuncParam(item, idx) => Some(ScopeId::FuncParam(*item, *idx)),
             PathRes::Mod(scope) => Some(*scope),
@@ -492,9 +506,14 @@ impl<'db> PathRes<'db> {
             PathRes::Ty(ty) | PathRes::Func(ty) => is_ty_visible_from(db, *ty, from_scope),
             PathRes::Const(const_, _) => is_scope_visible_from(db, const_.scope(), from_scope),
             PathRes::TraitConst(_, inst, _) => {
-                // Visible if the trait is available in scope
-                let available = super::available_traits_in_scope(db, from_scope);
-                available.contains(&inst.def(db))
+                // Associated consts behave like trait methods: the trait does not
+                // need to be imported as long as it's otherwise visible.
+                is_scope_visible_from(db, inst.def(db).scope(), from_scope)
+            }
+            PathRes::TraitMethod(_inst, method) => {
+                // Trait method visibility depends on the method's defining scope,
+                // not on trait imports (the trait is explicitly referenced).
+                is_scope_visible_from(db, method.scope(), from_scope)
             }
             PathRes::Method(_, cand) => {
                 // Method visibility depends on the method's defining scope
@@ -538,6 +557,7 @@ impl<'db> PathRes<'db> {
                 ty_path(*ty).unwrap_or_else(|| "<missing>".into()),
                 name.data(db)
             )),
+            PathRes::TraitMethod(..) => self.as_scope(db)?.pretty_path(db),
             r @ (PathRes::Trait(..) | PathRes::Mod(..) | PathRes::FuncParam(..)) => {
                 r.as_scope(db).unwrap().pretty_path(db)
             }
@@ -557,6 +577,7 @@ impl<'db> PathRes<'db> {
             PathRes::Func(_) => "function",
             PathRes::FuncParam(..) => "function parameter",
             PathRes::Trait(_) => "trait",
+            PathRes::TraitMethod(..) => "trait method",
             PathRes::EnumVariant(_) => "enum variant",
             PathRes::Const(..) => "constant",
             PathRes::TraitConst(..) => "constant",
@@ -622,12 +643,14 @@ pub fn resolve_path<'db>(
     assumptions: PredicateListId<'db>,
     resolve_tail_as_value: bool,
 ) -> PathResolutionResult<'db, PathRes<'db>> {
+    let directive = QueryDirective::for_scope(db, scope);
     resolve_path_impl(
         db,
         path,
         scope,
         assumptions,
         resolve_tail_as_value,
+        directive,
         true,
         &mut |_, _| {},
     )
@@ -644,23 +667,27 @@ pub fn resolve_path_with_observer<'db, F>(
 where
     F: FnMut(PathId<'db>, &PathRes<'db>),
 {
+    let directive = QueryDirective::for_scope(db, scope);
     resolve_path_impl(
         db,
         path,
         scope,
         assumptions,
         resolve_tail_as_value,
+        directive,
         true,
         observer,
     )
 }
 
+#[allow(clippy::too_many_arguments)]
 fn resolve_path_impl<'db, F>(
     db: &'db dyn HirAnalysisDb,
     path: PathId<'db>,
     scope: ScopeId<'db>,
     assumptions: PredicateListId<'db>,
     resolve_tail_as_value: bool,
+    base_directive: QueryDirective,
     is_tail: bool,
     observer: &mut F,
 ) -> PathResolutionResult<'db, PathRes<'db>>
@@ -676,6 +703,7 @@ where
                 scope,
                 assumptions,
                 resolve_tail_as_value,
+                base_directive,
                 false,
                 observer,
             )
@@ -777,6 +805,16 @@ where
                     return Ok(r);
                 }
 
+                // Associated function on a specific trait instance
+                if is_tail
+                    && resolve_tail_as_value
+                    && let Some(&method) = trait_inst.def(db).method_defs(db).get(&ident)
+                {
+                    let r = PathRes::TraitMethod(*trait_inst, method);
+                    observer(path, &r);
+                    return Ok(r);
+                }
+
                 // Associated const on a specific trait instance
                 if resolve_tail_as_value && trait_inst.def(db).const_(db, ident).is_some() {
                     let r = PathRes::TraitConst(trait_inst.self_ty(db), *trait_inst, ident);
@@ -790,7 +828,8 @@ where
                 // We need to use the concrete enum scope instead of
                 // parent_scope to resolve the variants in all cases,
                 // eg when parent is `Self`
-                let query = make_query(db, path, enum_.scope());
+                let directive = QueryDirective::for_scope(db, enum_.scope());
+                let query = make_query(db, path, enum_.scope(), directive);
                 let bucket = resolve_query(db, query);
 
                 if let Ok(res) = bucket.pick(NameDomain::VALUE)
@@ -845,10 +884,28 @@ where
             // Deduplicate by normalized type, but preserve and return the original
             // (unnormalized) candidate to avoid prematurely collapsing projections
             // like `T::IntoIter::Item` into `T::Item`.
+            let seg_args = lower_generic_arg_list(db, path.generic_args(db), scope, assumptions);
             let mut dedup: IndexMap<TyId<'db>, (TraitInstId<'db>, TyId<'db>)> = IndexMap::new();
             for (inst, ty_candidate) in assoc_tys.iter().copied() {
-                let norm = normalize_ty(db, ty_candidate, scope, assumptions);
-                dedup.entry(norm).or_insert((inst, ty_candidate));
+                let applied = if seg_args.is_empty() {
+                    ty_candidate
+                } else {
+                    TyId::foldl(db, ty_candidate, &seg_args)
+                };
+                if let TyData::Invalid(InvalidCause::TooManyGenericArgs { expected, given }) =
+                    applied.data(db)
+                {
+                    return Err(PathResError::new(
+                        PathResErrorKind::ArgNumMismatch {
+                            expected: *expected,
+                            given: *given,
+                        },
+                        path,
+                    ));
+                }
+
+                let norm = normalize_ty(db, applied, scope, assumptions);
+                dedup.entry(norm).or_insert((inst, applied));
             }
 
             match dedup.len() {
@@ -876,17 +933,32 @@ where
             }
         }
 
-        Some(PathRes::Func(_) | PathRes::EnumVariant(..) | PathRes::TraitConst(..)) => {
+        Some(
+            PathRes::Func(_)
+            | PathRes::EnumVariant(..)
+            | PathRes::TraitConst(..)
+            | PathRes::TraitMethod(..),
+        ) => {
             return Err(PathResError::new(
                 PathResErrorKind::InvalidPathSegment(parent_res.unwrap()),
                 path,
             ));
         }
         Some(PathRes::FuncParam(..) | PathRes::Method(..)) => unreachable!(),
-        Some(PathRes::Const(..) | PathRes::Mod(_) | PathRes::Trait(_)) | None => {}
+        Some(PathRes::Trait(trait_inst)) => {
+            if is_tail
+                && resolve_tail_as_value
+                && let Some(&method) = trait_inst.def(db).method_defs(db).get(&ident)
+            {
+                let r = PathRes::TraitMethod(trait_inst, method);
+                observer(path, &r);
+                return Ok(r);
+            }
+        }
+        Some(PathRes::Const(..) | PathRes::Mod(_)) | None => {}
     };
 
-    let query = make_query(db, path, parent_scope);
+    let query = make_query(db, path, parent_scope, base_directive);
     let bucket = resolve_query(db, query);
 
     let parent_ty = parent_res.as_ref().and_then(|res| match res {
@@ -921,7 +993,61 @@ fn select_assoc_const_candidate<'db>(
     scope: ScopeId<'db>,
     assumptions: PredicateListId<'db>,
 ) -> AssocConstSelection<'db> {
-    // Find trait impls for the receiver type that define the associated const
+    // Qualified type: `<A as T>::C` must resolve against the explicit trait instance.
+    if let TyData::QualifiedTy(trait_inst) = receiver_ty.data(db) {
+        return if trait_inst.def(db).const_(db, name).is_some() {
+            AssocConstSelection::Found(*trait_inst)
+        } else {
+            AssocConstSelection::NotFound
+        };
+    }
+
+    // When the receiver is a type parameter (or otherwise projection-like),
+    // we don't know its concrete type yet, so probing impls would pull in many
+    // unrelated candidates and frequently lead to spurious ambiguity.
+    //
+    // In that case, rely on in-scope bounds (`assumptions`) to provide candidates.
+    let receiver_is_ty_param = matches!(
+        receiver_ty.base_ty(db).data(db),
+        TyData::TyParam(_) | TyData::AssocTy(_) | TyData::QualifiedTy(_)
+    );
+    if receiver_is_ty_param {
+        let mut matches: IndexSet<TraitInstId<'db>> = IndexSet::default();
+
+        let mut table = UnificationTable::new(db);
+        let receiver = Canonical::new(db, receiver_ty);
+        let extracted_receiver_ty = receiver.extract_identity(&mut table);
+
+        for &pred in assumptions.list(db) {
+            let snapshot = table.snapshot();
+            let self_ty = table.instantiate_to_term(pred.self_ty(db));
+
+            if table.unify(extracted_receiver_ty, self_ty).is_ok() {
+                if pred.def(db).const_(db, name).is_some() {
+                    matches.insert(pred);
+                }
+
+                // Include super-trait consts so `T::CONST` works through a `T: SubTrait` bound
+                // even when `assumptions` hasn't been transitively expanded.
+                for super_trait in pred.def(db).super_traits(db) {
+                    let super_inst = super_trait.instantiate(db, pred.args(db));
+                    if super_inst.def(db).const_(db, name).is_some() {
+                        matches.insert(super_inst);
+                    }
+                }
+            }
+
+            table.rollback_to(snapshot);
+        }
+
+        return match matches.len() {
+            0 => AssocConstSelection::NotFound,
+            1 => AssocConstSelection::Found(*matches.iter().next().unwrap()),
+            _ => AssocConstSelection::Ambiguous(matches.into_iter().collect()),
+        };
+    }
+
+    // Find trait impls for the receiver type that define the associated const.
     let ingot = scope.ingot(db);
     let candidates = impls_for_ty_with_constraints(
         db,
@@ -1089,9 +1215,22 @@ pub fn resolve_name_res<'db>(
         }
         NameResKind::Scope(scope_id) => match scope_id {
             ScopeId::Item(item) => match item {
-                ItemKind::Struct(_) | ItemKind::Contract(_) | ItemKind::Enum(_) => {
+                ItemKind::Struct(_) | ItemKind::Enum(_) => {
                     let adt_ref = AdtRef::try_from_item(item).unwrap();
                     PathRes::Ty(ty_from_adtref(db, path, adt_ref, args, assumptions)?)
+                }
+                ItemKind::Contract(contract) => {
+                    // Contracts have no generic parameters
+                    if !args.is_empty() {
+                        return Err(PathResError::new(
+                            PathResErrorKind::ArgNumMismatch {
+                                expected: 0,
+                                given: args.len(),
+                            },
+                            path,
+                        ));
+                    }
+                    PathRes::Ty(TyId::contract(db, contract))
                 }
 
                 ItemKind::Mod(_) | ItemKind::TopMod(_) => PathRes::Mod(scope_id),
@@ -1174,7 +1313,7 @@ pub fn resolve_name_res<'db>(
                         if !path.generic_args(db).is_empty(db) {
                             let gen_args = path.generic_args(db).data(db);
                             for (idx, ga) in gen_args.iter().enumerate() {
-                                if let crate::core::hir_def::GenericArg::Type(ty_arg) = ga
+                                if let GenericArg::Type(ty_arg) = ga
                                     && let Some(hir_ty) = ty_arg.ty.to_opt()
                                     && let TypeKind::Path(p) = hir_ty.data(db)
                                     && let Some(arg_path) = p.to_opt()

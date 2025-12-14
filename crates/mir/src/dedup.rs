@@ -114,7 +114,19 @@ fn deduplicate_functions<'db>(
 /// Collapses known helper roots (`store_field`, `to_word`) to a single stable name and
 /// returns the rewritten function list.
 fn dedup_runtime_helpers<'db>(functions: Vec<MirFunction<'db>>) -> Vec<MirFunction<'db>> {
-    let mut root_map: FxHashMap<String, String> = FxHashMap::default();
+    let mut root_counts: FxHashMap<String, usize> = FxHashMap::default();
+    for func in &functions {
+        let root = func
+            .symbol_name
+            .split("__")
+            .next()
+            .unwrap_or_default()
+            .to_string();
+        if HELPER_ROOTS.contains(&root.as_str()) {
+            *root_counts.entry(root).or_default() += 1;
+        }
+    }
+
     let mut alias_map: FxHashMap<String, String> = FxHashMap::default();
     let mut kept = Vec::new();
 
@@ -125,20 +137,17 @@ fn dedup_runtime_helpers<'db>(functions: Vec<MirFunction<'db>>) -> Vec<MirFuncti
             .next()
             .unwrap_or_default()
             .to_string();
-        if HELPER_ROOTS.contains(&root.as_str()) {
-            if let Some(existing) = root_map.get(&root) {
-                alias_map.insert(func.symbol_name.clone(), existing.clone());
-                continue;
-            } else {
-                let canonical = format!("{root}__deduped");
-                alias_map.insert(func.symbol_name.clone(), canonical.clone());
-                func.symbol_name = canonical.clone();
-                root_map.insert(root, canonical);
-            }
+        if HELPER_ROOTS.contains(&root.as_str())
+            && root_counts.get(&root).copied().unwrap_or(0) == 1
+        {
+            let canonical = format!("{root}__deduped");
+            alias_map.insert(func.symbol_name.clone(), canonical.clone());
+            func.symbol_name = canonical;
+        } else {
+            alias_map
+                .entry(func.symbol_name.clone())
+                .or_insert(func.symbol_name.clone());
         }
-        alias_map
-            .entry(func.symbol_name.clone())
-            .or_insert(func.symbol_name.clone());
         kept.push(func);
     }
 
@@ -150,8 +159,12 @@ fn dedup_runtime_helpers<'db>(functions: Vec<MirFunction<'db>>) -> Vec<MirFuncti
 /// Only dedup compiler-owned helpers (core/external ingots) to avoid altering user ABI,
 /// returning `true` when the function qualifies for deduplication.
 fn is_dedup_candidate<'db>(db: &'db dyn HirAnalysisDb, func: &MirFunction<'db>) -> bool {
+    let hir_func = match func.origin {
+        crate::ir::MirFunctionOrigin::Hir(func) => func,
+        crate::ir::MirFunctionOrigin::Synthetic(_) => return false,
+    };
     matches!(
-        func.func.top_mod(db).ingot(db).kind(db),
+        hir_func.top_mod(db).ingot(db).kind(db),
         IngotKind::Core | IngotKind::External
     )
 }
@@ -217,17 +230,29 @@ fn call_edge_targets<'db>(
     func: &MirFunction<'db>,
     symbol_to_idx: &FxHashMap<String, usize>,
 ) -> Vec<usize> {
-    func.body
-        .values
-        .iter()
-        .filter_map(|value| {
-            value.origin.as_call().and_then(|call| {
-                call.resolved_name
-                    .as_ref()
-                    .and_then(|name| symbol_to_idx.get(name).copied())
-            })
-        })
-        .collect()
+    let mut callees = Vec::new();
+    for block in &func.body.blocks {
+        for inst in &block.insts {
+            if let crate::MirInst::Assign {
+                rvalue: crate::ir::Rvalue::Call(call),
+                ..
+            } = inst
+                && let Some(name) = &call.resolved_name
+                && let Some(&idx) = symbol_to_idx.get(name)
+            {
+                callees.push(idx);
+            }
+        }
+
+        if let crate::Terminator::TerminatingCall(crate::ir::TerminatingCall::Call(call)) =
+            &block.terminator
+            && let Some(name) = &call.resolved_name
+            && let Some(&idx) = symbol_to_idx.get(name)
+        {
+            callees.push(idx);
+        }
+    }
+    callees
 }
 
 /// Applies the canonical call name mapping to every MIR call origin in-place.
@@ -235,15 +260,27 @@ fn rewrite_call_targets<'db>(
     functions: &mut [MirFunction<'db>],
     aliases: &FxHashMap<String, String>,
 ) {
-    functions
-        .iter_mut()
-        .flat_map(|func| func.body.values.iter_mut())
-        .filter_map(|value| value.origin.as_call_mut())
-        .for_each(|call| {
-            if let Some(alias) = canonical_call_name(&call.resolved_name, aliases) {
+    for func in functions {
+        for block in &mut func.body.blocks {
+            for inst in &mut block.insts {
+                if let crate::MirInst::Assign {
+                    rvalue: crate::ir::Rvalue::Call(call),
+                    ..
+                } = inst
+                    && let Some(alias) = canonical_call_name(&call.resolved_name, aliases)
+                {
+                    call.resolved_name = Some(alias);
+                }
+            }
+
+            if let crate::Terminator::TerminatingCall(crate::ir::TerminatingCall::Call(call)) =
+                &mut block.terminator
+                && let Some(alias) = canonical_call_name(&call.resolved_name, aliases)
+            {
                 call.resolved_name = Some(alias);
             }
-        });
+        }
+    }
 }
 
 /// Computes the canonical call name, returning the alias when one exists.

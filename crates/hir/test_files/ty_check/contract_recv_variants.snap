@@ -1,0 +1,719 @@
+---
+source: crates/hir/tests/ty_check.rs
+assertion_line: 40
+expression: res
+input_file: test_files/ty_check/contract_recv_variants.fe
+---
+note: 
+   ┌─ contract_recv_variants.fe:10:5
+   │  
+10 │ ╭     #[selector = 0x01]
+11 │ │     Deposit { amount: u64 } -> u64,
+   │ ╰──────────────────────────────────^ u64
+
+note: 
+   ┌─ contract_recv_variants.fe:12:5
+   │  
+12 │ ╭     #[selector = 0x02]
+13 │ │     Withdraw { amount: u64 } -> bool,
+   │ ╰────────────────────────────────────^ u64
+
+note: 
+   ┌─ contract_recv_variants.fe:26:78
+   │  
+26 │           fn encode<E: core::abi::AbiEncoder<std::abi::Sol>>(self, mut _ e: E) {
+   │ ╭──────────────────────────────────────────────────────────────────────────────^
+27 │ │             let Self { to, amount } = self
+28 │ │             to.encode(e)
+29 │ │             amount.encode(e)
+30 │ │         }
+   │ ╰─────────^ ()
+
+note: 
+   ┌─ contract_recv_variants.fe:27:17
+   │
+27 │             let Self { to, amount } = self
+   │                 ^^^^^^^^^^^^^^^^^^^ Transfer
+
+note: 
+   ┌─ contract_recv_variants.fe:27:24
+   │
+27 │             let Self { to, amount } = self
+   │                        ^^ u64
+
+note: 
+   ┌─ contract_recv_variants.fe:27:28
+   │
+27 │             let Self { to, amount } = self
+   │                            ^^^^^^ u64
+
+note: 
+   ┌─ contract_recv_variants.fe:27:39
+   │
+27 │             let Self { to, amount } = self
+   │                                       ^^^^ Transfer
+
+note: 
+   ┌─ contract_recv_variants.fe:28:13
+   │
+28 │             to.encode(e)
+   │             ^^ u64
+
+note: 
+   ┌─ contract_recv_variants.fe:28:13
+   │
+28 │             to.encode(e)
+   │             ^^^^^^^^^^^^ ()
+
+note: 
+   ┌─ contract_recv_variants.fe:28:23
+   │
+28 │             to.encode(e)
+   │                       ^ E
+
+note: 
+   ┌─ contract_recv_variants.fe:29:13
+   │
+29 │             amount.encode(e)
+   │             ^^^^^^ u64
+
+note: 
+   ┌─ contract_recv_variants.fe:29:13
+   │
+29 │             amount.encode(e)
+   │             ^^^^^^^^^^^^^^^^ ()
+
+note: 
+   ┌─ contract_recv_variants.fe:29:27
+   │
+29 │             amount.encode(e)
+   │                           ^ E
+
+note: 
+   ┌─ contract_recv_variants.fe:34:80
+   │  
+34 │           fn decode<D: core::abi::AbiDecoder<std::abi::Sol>>(mut _ d: D) -> Self {
+   │ ╭────────────────────────────────────────────────────────────────────────────────^
+35 │ │             let to = u64::decode(d)
+36 │ │             let amount = u64::decode(d)
+37 │ │             Self { to, amount }
+38 │ │         }
+   │ ╰─────────^ Transfer
+
+note: 
+   ┌─ contract_recv_variants.fe:35:17
+   │
+35 │             let to = u64::decode(d)
+   │                 ^^ u64
+
+note: 
+   ┌─ contract_recv_variants.fe:35:22
+   │
+35 │             let to = u64::decode(d)
+   │                      ^^^^^^^^^^^ fn decode<u64, Sol, D>
+
+note: 
+   ┌─ contract_recv_variants.fe:35:22
+   │
+35 │             let to = u64::decode(d)
+   │                      ^^^^^^^^^^^^^^ u64
+
+note: 
+   ┌─ contract_recv_variants.fe:35:34
+   │
+35 │             let to = u64::decode(d)
+   │                                  ^ D
+
+note: 
+   ┌─ contract_recv_variants.fe:36:17
+   │
+36 │             let amount = u64::decode(d)
+   │                 ^^^^^^ u64
+
+note: 
+   ┌─ contract_recv_variants.fe:36:26
+   │
+36 │             let amount = u64::decode(d)
+   │                          ^^^^^^^^^^^ fn decode<u64, Sol, D>
+
+note: 
+   ┌─ contract_recv_variants.fe:36:26
+   │
+36 │             let amount = u64::decode(d)
+   │                          ^^^^^^^^^^^^^^ u64
+
+note: 
+   ┌─ contract_recv_variants.fe:36:38
+   │
+36 │             let amount = u64::decode(d)
+   │                                      ^ D
+
+note: 
+   ┌─ contract_recv_variants.fe:37:13
+   │
+37 │             Self { to, amount }
+   │             ^^^^^^^^^^^^^^^^^^^ Transfer
+
+note: 
+   ┌─ contract_recv_variants.fe:37:20
+   │
+37 │             Self { to, amount }
+   │                    ^^ u64
+
+note: 
+   ┌─ contract_recv_variants.fe:37:24
+   │
+37 │             Self { to, amount }
+   │                        ^^^^^^ u64
+
+note: 
+   ┌─ contract_recv_variants.fe:51:78
+   │  
+51 │           fn encode<E: core::abi::AbiEncoder<std::abi::Sol>>(self, mut _ e: E) {
+   │ ╭──────────────────────────────────────────────────────────────────────────────^
+52 │ │             let Self { addr } = self
+53 │ │             addr.encode(e)
+54 │ │         }
+   │ ╰─────────^ ()
+
+note: 
+   ┌─ contract_recv_variants.fe:52:17
+   │
+52 │             let Self { addr } = self
+   │                 ^^^^^^^^^^^^^ Balance
+
+note: 
+   ┌─ contract_recv_variants.fe:52:24
+   │
+52 │             let Self { addr } = self
+   │                        ^^^^ u64
+
+note: 
+   ┌─ contract_recv_variants.fe:52:33
+   │
+52 │             let Self { addr } = self
+   │                                 ^^^^ Balance
+
+note: 
+   ┌─ contract_recv_variants.fe:53:13
+   │
+53 │             addr.encode(e)
+   │             ^^^^ u64
+
+note: 
+   ┌─ contract_recv_variants.fe:53:13
+   │
+53 │             addr.encode(e)
+   │             ^^^^^^^^^^^^^^ ()
+
+note: 
+   ┌─ contract_recv_variants.fe:53:25
+   │
+53 │             addr.encode(e)
+   │                         ^ E
+
+note: 
+   ┌─ contract_recv_variants.fe:58:80
+   │  
+58 │           fn decode<D: core::abi::AbiDecoder<std::abi::Sol>>(mut _ d: D) -> Self {
+   │ ╭────────────────────────────────────────────────────────────────────────────────^
+59 │ │             let addr = u64::decode(d)
+60 │ │             Self { addr }
+61 │ │         }
+   │ ╰─────────^ Balance
+
+note: 
+   ┌─ contract_recv_variants.fe:59:17
+   │
+59 │             let addr = u64::decode(d)
+   │                 ^^^^ u64
+
+note: 
+   ┌─ contract_recv_variants.fe:59:24
+   │
+59 │             let addr = u64::decode(d)
+   │                        ^^^^^^^^^^^ fn decode<u64, Sol, D>
+
+note: 
+   ┌─ contract_recv_variants.fe:59:24
+   │
+59 │             let addr = u64::decode(d)
+   │                        ^^^^^^^^^^^^^^ u64
+
+note: 
+   ┌─ contract_recv_variants.fe:59:36
+   │
+59 │             let addr = u64::decode(d)
+   │                                    ^ D
+
+note: 
+   ┌─ contract_recv_variants.fe:60:13
+   │
+60 │             Self { addr }
+   │             ^^^^^^^^^^^^^ Balance
+
+note: 
+   ┌─ contract_recv_variants.fe:60:20
+   │
+60 │             Self { addr }
+   │                    ^^^^ u64
+
+note: 
+   ┌─ contract_recv_variants.fe:78:74
+   │  
+78 │       fn encode<E: core::abi::AbiEncoder<std::abi::Sol>>(self, mut _ e: E) {
+   │ ╭──────────────────────────────────────────────────────────────────────────^
+79 │ │         let Self { key } = self
+80 │ │         key.encode(e)
+81 │ │     }
+   │ ╰─────^ ()
+
+note: 
+   ┌─ contract_recv_variants.fe:79:13
+   │
+79 │         let Self { key } = self
+   │             ^^^^^^^^^^^^ CustomQuery
+
+note: 
+   ┌─ contract_recv_variants.fe:79:20
+   │
+79 │         let Self { key } = self
+   │                    ^^^ u64
+
+note: 
+   ┌─ contract_recv_variants.fe:79:28
+   │
+79 │         let Self { key } = self
+   │                            ^^^^ CustomQuery
+
+note: 
+   ┌─ contract_recv_variants.fe:80:9
+   │
+80 │         key.encode(e)
+   │         ^^^ u64
+
+note: 
+   ┌─ contract_recv_variants.fe:80:9
+   │
+80 │         key.encode(e)
+   │         ^^^^^^^^^^^^^ ()
+
+note: 
+   ┌─ contract_recv_variants.fe:80:20
+   │
+80 │         key.encode(e)
+   │                    ^ E
+
+note: 
+   ┌─ contract_recv_variants.fe:85:76
+   │  
+85 │       fn decode<D: core::abi::AbiDecoder<std::abi::Sol>>(mut _ d: D) -> Self {
+   │ ╭────────────────────────────────────────────────────────────────────────────^
+86 │ │         let key = u64::decode(d)
+87 │ │         Self { key }
+88 │ │     }
+   │ ╰─────^ CustomQuery
+
+note: 
+   ┌─ contract_recv_variants.fe:86:13
+   │
+86 │         let key = u64::decode(d)
+   │             ^^^ u64
+
+note: 
+   ┌─ contract_recv_variants.fe:86:19
+   │
+86 │         let key = u64::decode(d)
+   │                   ^^^^^^^^^^^ fn decode<u64, Sol, D>
+
+note: 
+   ┌─ contract_recv_variants.fe:86:19
+   │
+86 │         let key = u64::decode(d)
+   │                   ^^^^^^^^^^^^^^ u64
+
+note: 
+   ┌─ contract_recv_variants.fe:86:31
+   │
+86 │         let key = u64::decode(d)
+   │                               ^ D
+
+note: 
+   ┌─ contract_recv_variants.fe:87:9
+   │
+87 │         Self { key }
+   │         ^^^^^^^^^^^^ CustomQuery
+
+note: 
+   ┌─ contract_recv_variants.fe:87:16
+   │
+87 │         Self { key }
+   │                ^^^ u64
+
+note: 
+    ┌─ contract_recv_variants.fe:110:9
+    │
+110 │         Deposit { amount } -> u64 uses (mut balance) {
+    │         ^^^^^^^^^^^^^^^^^^ Deposit
+
+note: 
+    ┌─ contract_recv_variants.fe:110:19
+    │
+110 │         Deposit { amount } -> u64 uses (mut balance) {
+    │                   ^^^^^^ u64
+
+note: 
+    ┌─ contract_recv_variants.fe:110:54
+    │  
+110 │           Deposit { amount } -> u64 uses (mut balance) {
+    │ ╭──────────────────────────────────────────────────────^
+111 │ │             balance += amount
+112 │ │             balance
+113 │ │         }
+    │ ╰─────────^ u64
+
+note: 
+    ┌─ contract_recv_variants.fe:111:13
+    │
+111 │             balance += amount
+    │             ^^^^^^^ u64
+
+note: 
+    ┌─ contract_recv_variants.fe:111:13
+    │
+111 │             balance += amount
+    │             ^^^^^^^^^^^^^^^^^ ()
+
+note: 
+    ┌─ contract_recv_variants.fe:111:24
+    │
+111 │             balance += amount
+    │                        ^^^^^^ u64
+
+note: 
+    ┌─ contract_recv_variants.fe:112:13
+    │
+112 │             balance
+    │             ^^^^^^^ u64
+
+note: 
+    ┌─ contract_recv_variants.fe:114:9
+    │
+114 │         Withdraw { amount } -> bool uses (mut balance) {
+    │         ^^^^^^^^^^^^^^^^^^^ Withdraw
+
+note: 
+    ┌─ contract_recv_variants.fe:114:20
+    │
+114 │         Withdraw { amount } -> bool uses (mut balance) {
+    │                    ^^^^^^ u64
+
+note: 
+    ┌─ contract_recv_variants.fe:114:56
+    │  
+114 │           Withdraw { amount } -> bool uses (mut balance) {
+    │ ╭────────────────────────────────────────────────────────^
+115 │ │             if amount > balance {
+116 │ │                 false
+117 │ │             } else {
+    · │
+120 │ │             }
+121 │ │         }
+    │ ╰─────────^ bool
+
+note: 
+    ┌─ contract_recv_variants.fe:115:13
+    │  
+115 │ ╭             if amount > balance {
+116 │ │                 false
+117 │ │             } else {
+118 │ │                 balance -= amount
+119 │ │                 true
+120 │ │             }
+    │ ╰─────────────^ bool
+
+note: 
+    ┌─ contract_recv_variants.fe:115:16
+    │
+115 │             if amount > balance {
+    │                ^^^^^^ u64
+
+note: 
+    ┌─ contract_recv_variants.fe:115:16
+    │
+115 │             if amount > balance {
+    │                ^^^^^^^^^^^^^^^^ bool
+
+note: 
+    ┌─ contract_recv_variants.fe:115:25
+    │
+115 │             if amount > balance {
+    │                         ^^^^^^^ u64
+
+note: 
+    ┌─ contract_recv_variants.fe:115:33
+    │  
+115 │               if amount > balance {
+    │ ╭─────────────────────────────────^
+116 │ │                 false
+117 │ │             } else {
+    │ ╰─────────────^ bool
+
+note: 
+    ┌─ contract_recv_variants.fe:116:17
+    │
+116 │                 false
+    │                 ^^^^^ bool
+
+note: 
+    ┌─ contract_recv_variants.fe:117:20
+    │  
+117 │               } else {
+    │ ╭────────────────────^
+118 │ │                 balance -= amount
+119 │ │                 true
+120 │ │             }
+    │ ╰─────────────^ bool
+
+note: 
+    ┌─ contract_recv_variants.fe:118:17
+    │
+118 │                 balance -= amount
+    │                 ^^^^^^^ u64
+
+note: 
+    ┌─ contract_recv_variants.fe:118:17
+    │
+118 │                 balance -= amount
+    │                 ^^^^^^^^^^^^^^^^^ ()
+
+note: 
+    ┌─ contract_recv_variants.fe:118:28
+    │
+118 │                 balance -= amount
+    │                            ^^^^^^ u64
+
+note: 
+    ┌─ contract_recv_variants.fe:119:17
+    │
+119 │                 true
+    │                 ^^^^ bool
+
+note: 
+    ┌─ contract_recv_variants.fe:126:9
+    │
+126 │         Transfer { to, amount } -> bool uses (mut tokens) {
+    │         ^^^^^^^^^^^^^^^^^^^^^^^ Transfer
+
+note: 
+    ┌─ contract_recv_variants.fe:126:20
+    │
+126 │         Transfer { to, amount } -> bool uses (mut tokens) {
+    │                    ^^ u64
+
+note: 
+    ┌─ contract_recv_variants.fe:126:24
+    │
+126 │         Transfer { to, amount } -> bool uses (mut tokens) {
+    │                        ^^^^^^ u64
+
+note: 
+    ┌─ contract_recv_variants.fe:126:59
+    │  
+126 │           Transfer { to, amount } -> bool uses (mut tokens) {
+    │ ╭───────────────────────────────────────────────────────────^
+127 │ │             if amount > tokens {
+128 │ │                 false
+129 │ │             } else {
+    · │
+132 │ │             }
+133 │ │         }
+    │ ╰─────────^ bool
+
+note: 
+    ┌─ contract_recv_variants.fe:127:13
+    │  
+127 │ ╭             if amount > tokens {
+128 │ │                 false
+129 │ │             } else {
+130 │ │                 tokens -= amount
+131 │ │                 true
+132 │ │             }
+    │ ╰─────────────^ bool
+
+note: 
+    ┌─ contract_recv_variants.fe:127:16
+    │
+127 │             if amount > tokens {
+    │                ^^^^^^ u64
+
+note: 
+    ┌─ contract_recv_variants.fe:127:16
+    │
+127 │             if amount > tokens {
+    │                ^^^^^^^^^^^^^^^ bool
+
+note: 
+    ┌─ contract_recv_variants.fe:127:25
+    │
+127 │             if amount > tokens {
+    │                         ^^^^^^ u64
+
+note: 
+    ┌─ contract_recv_variants.fe:127:32
+    │  
+127 │               if amount > tokens {
+    │ ╭────────────────────────────────^
+128 │ │                 false
+129 │ │             } else {
+    │ ╰─────────────^ bool
+
+note: 
+    ┌─ contract_recv_variants.fe:128:17
+    │
+128 │                 false
+    │                 ^^^^^ bool
+
+note: 
+    ┌─ contract_recv_variants.fe:129:20
+    │  
+129 │               } else {
+    │ ╭────────────────────^
+130 │ │                 tokens -= amount
+131 │ │                 true
+132 │ │             }
+    │ ╰─────────────^ bool
+
+note: 
+    ┌─ contract_recv_variants.fe:130:17
+    │
+130 │                 tokens -= amount
+    │                 ^^^^^^ u64
+
+note: 
+    ┌─ contract_recv_variants.fe:130:17
+    │
+130 │                 tokens -= amount
+    │                 ^^^^^^^^^^^^^^^^ ()
+
+note: 
+    ┌─ contract_recv_variants.fe:130:27
+    │
+130 │                 tokens -= amount
+    │                           ^^^^^^ u64
+
+note: 
+    ┌─ contract_recv_variants.fe:131:17
+    │
+131 │                 true
+    │                 ^^^^ bool
+
+note: 
+    ┌─ contract_recv_variants.fe:134:9
+    │
+134 │         Balance { addr } -> u64 uses (tokens) {
+    │         ^^^^^^^^^^^^^^^^ Balance
+
+note: 
+    ┌─ contract_recv_variants.fe:134:19
+    │
+134 │         Balance { addr } -> u64 uses (tokens) {
+    │                   ^^^^ u64
+
+note: 
+    ┌─ contract_recv_variants.fe:134:47
+    │  
+134 │           Balance { addr } -> u64 uses (tokens) {
+    │ ╭───────────────────────────────────────────────^
+135 │ │             tokens
+136 │ │         }
+    │ ╰─────────^ u64
+
+note: 
+    ┌─ contract_recv_variants.fe:135:13
+    │
+135 │             tokens
+    │             ^^^^^^ u64
+
+note: 
+    ┌─ contract_recv_variants.fe:141:9
+    │
+141 │         CustomQuery { key } -> u64 uses (balance, tokens) {
+    │         ^^^^^^^^^^^^^^^^^^^ CustomQuery
+
+note: 
+    ┌─ contract_recv_variants.fe:141:23
+    │
+141 │         CustomQuery { key } -> u64 uses (balance, tokens) {
+    │                       ^^^ u64
+
+note: 
+    ┌─ contract_recv_variants.fe:141:59
+    │  
+141 │           CustomQuery { key } -> u64 uses (balance, tokens) {
+    │ ╭───────────────────────────────────────────────────────────^
+142 │ │             if key == 0 {
+143 │ │                 balance
+144 │ │             } else {
+145 │ │                 tokens
+146 │ │             }
+147 │ │         }
+    │ ╰─────────^ u64
+
+note: 
+    ┌─ contract_recv_variants.fe:142:13
+    │  
+142 │ ╭             if key == 0 {
+143 │ │                 balance
+144 │ │             } else {
+145 │ │                 tokens
+146 │ │             }
+    │ ╰─────────────^ u64
+
+note: 
+    ┌─ contract_recv_variants.fe:142:16
+    │
+142 │             if key == 0 {
+    │                ^^^ u64
+
+note: 
+    ┌─ contract_recv_variants.fe:142:16
+    │
+142 │             if key == 0 {
+    │                ^^^^^^^^ bool
+
+note: 
+    ┌─ contract_recv_variants.fe:142:23
+    │
+142 │             if key == 0 {
+    │                       ^ u64
+
+note: 
+    ┌─ contract_recv_variants.fe:142:25
+    │  
+142 │               if key == 0 {
+    │ ╭─────────────────────────^
+143 │ │                 balance
+144 │ │             } else {
+    │ ╰─────────────^ u64
+
+note: 
+    ┌─ contract_recv_variants.fe:143:17
+    │
+143 │                 balance
+    │                 ^^^^^^^ u64
+
+note: 
+    ┌─ contract_recv_variants.fe:144:20
+    │  
+144 │               } else {
+    │ ╭────────────────────^
+145 │ │                 tokens
+146 │ │             }
+    │ ╰─────────────^ u64
+
+note: 
+    ┌─ contract_recv_variants.fe:145:17
+    │
+145 │                 tokens
+    │                 ^^^^^^ u64

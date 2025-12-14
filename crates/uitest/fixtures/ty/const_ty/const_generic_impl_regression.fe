@@ -1,0 +1,48 @@
+// Regression tests for const generic usage in impl blocks.
+// These cases currently work and should continue to work.
+
+pub trait Sized<const N: usize> {
+    fn size(self) -> usize
+}
+
+pub trait Convert<T> {
+    fn convert(self) -> T
+}
+
+pub struct Fixed<const N: usize> {}
+
+pub struct Wrapper<T> {
+    inner: T
+}
+
+// Case 1: Const generic as direct type argument in trait ref
+impl<const N: usize> Sized<N> for Fixed<N> {
+    fn size(self) -> usize {
+        N
+    }
+}
+
+// Case 2: Type param in impl target
+impl<T> Convert<T> for Wrapper<T> {
+    fn convert(self) -> T {
+        self.inner
+    }
+}
+
+// Case 3: Const generic in array inside trait ref (not target)
+impl<const N: usize> Convert<[u8; N]> for u8 {
+    fn convert(self) -> [u8; N] {
+        [self; N]
+    }
+}
+
+// Case 4: Struct field with const generic array (works because scope is entered first)
+pub struct ArrayHolder<const N: usize> {
+    pub data: [u8; N]
+}
+
+impl<const N: usize> ArrayHolder<N> {
+    pub fn first(self) -> u8 {
+        self.data[0]
+    }
+}

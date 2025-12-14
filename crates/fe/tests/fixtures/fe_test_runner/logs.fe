@@ -1,0 +1,6 @@
+use std::evm::ops::log0
+
+#[test]
+fn test_logs() {
+    log0(0, 32)
+}

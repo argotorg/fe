@@ -92,6 +92,10 @@ where
         self.table.snapshot()
     }
 
+    pub fn commit(&mut self, snapshot: Snapshot<U>) {
+        self.table.commit(snapshot);
+    }
+
     pub fn unify<T>(&mut self, lhs: T, rhs: T) -> UnificationResult
     where
         T: Unifiable<'db>,

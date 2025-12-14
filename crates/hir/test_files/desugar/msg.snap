@@ -1,0 +1,75 @@
+---
+source: crates/hir/tests/desugar.rs
+assertion_line: 28
+expression: output
+input_file: test_files/desugar/msg.fe
+---
+use core::prelude::*
+
+mod CounterMsg {
+    use core::prelude::*
+    use super::*
+
+    pub struct Increment {}
+
+    impl core::message::MsgVariant<std::abi::Sol> for Increment {
+        type Return = ()
+        const SELECTOR: u32 = 1
+    }
+
+    impl core::abi::Encode<std::abi::Sol> for Increment {
+    
+        fn encode<E: core::abi::AbiEncoder<std::abi::Sol>>(self, mut _ e: E) {}
+    }
+
+    impl core::abi::Decode<std::abi::Sol> for Increment {
+    
+        fn decode<D: core::abi::AbiDecoder<std::abi::Sol>>(mut _ d: D) -> Self {
+            return Self {  }
+        }
+    }
+
+    pub struct Get {}
+
+    impl core::message::MsgVariant<std::abi::Sol> for Get {
+        type Return = (u64, u64)
+        const SELECTOR: u32 = 2
+    }
+
+    impl core::abi::Encode<std::abi::Sol> for Get {
+    
+        fn encode<E: core::abi::AbiEncoder<std::abi::Sol>>(self, mut _ e: E) {}
+    }
+
+    impl core::abi::Decode<std::abi::Sol> for Get {
+    
+        fn decode<D: core::abi::AbiDecoder<std::abi::Sol>>(mut _ d: D) -> Self {
+            return Self {  }
+        }
+    }
+
+    pub struct Set {
+        pub val: u64,
+    }
+
+    impl core::message::MsgVariant<std::abi::Sol> for Set {
+        type Return = u64
+        const SELECTOR: u32 = 3
+    }
+
+    impl core::abi::Encode<std::abi::Sol> for Set {
+    
+        fn encode<E: core::abi::AbiEncoder<std::abi::Sol>>(self, mut _ e: E) {
+            let Self { val } = self
+            val.encode(e)
+        }
+    }
+
+    impl core::abi::Decode<std::abi::Sol> for Set {
+    
+        fn decode<D: core::abi::AbiDecoder<std::abi::Sol>>(mut _ d: D) -> Self {
+            let val = u64::decode(d)
+            return Self { val: val }
+        }
+    }
+}

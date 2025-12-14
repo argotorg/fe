@@ -1,0 +1,36 @@
+msg EchoMsg {
+    #[selector = 1]
+    Answer -> u256,
+    #[selector = 2]
+    Echo { x: u256 } -> u256,
+    #[selector = 3]
+    GetX -> u256
+}
+
+pub struct Foo {
+    x: u256,
+    y: u256,
+}
+
+pub contract EchoContract {
+    state: Foo
+
+    init(x: u256, y: u256) uses (mut state) {
+        state.x = x
+        state.y = y
+    }
+
+    recv EchoMsg {
+        Answer -> u256 {
+            42
+        }
+
+        Echo { x } -> u256 {
+            x
+        }
+
+        GetX -> u256 uses (state) {
+            state.x
+        }
+    }
+}

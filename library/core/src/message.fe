@@ -1,0 +1,10 @@
+use ingot::abi::{Abi, Decode, Encode}
+
+/// Trait implemented by message variants in a `msg` block.
+///
+/// Each variant in a `msg` definition desugars to a struct that implements
+/// this trait for a specific ABI (default in desugaring: `std::abi::Sol`).
+pub trait MsgVariant<A: Abi>: Encode<A> + Decode<A> {
+    const SELECTOR: A::Selector
+    type Return: Decode<A>
+}

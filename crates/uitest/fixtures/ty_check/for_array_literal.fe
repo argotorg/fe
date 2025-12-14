@@ -1,0 +1,8 @@
+pub fn sum_three() -> u256 {
+    let mut sum: u256 = 0
+    for x in [1, 2, 3] {
+        sum += x
+    }
+    sum
+}
+

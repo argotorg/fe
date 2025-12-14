@@ -1,0 +1,8 @@
+msg CounterMsg {
+    #[selector = 0x01]
+    Increment,
+    #[selector = 0x02]
+    Get -> (u64, u64),
+    #[selector = 0x03]
+    Set { val: u64 } -> u64
+}

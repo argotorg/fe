@@ -1,0 +1,15 @@
+use std::evm::{Evm, RawMem}
+
+#[contract_init(Child)]
+pub fn child_init() uses (mut evm: Evm) {
+    let len = evm.code_region_len(child_runtime)
+    let offset = evm.code_region_offset(child_runtime)
+    evm.codecopy(dest: 0, offset, len)
+    evm.return_data(0, len)
+}
+
+#[contract_runtime(Child)]
+pub fn child_runtime() uses (mut evm: Evm) {
+    evm.mstore(0, 0xbeef)
+    evm.return_data(0, 32)
+}

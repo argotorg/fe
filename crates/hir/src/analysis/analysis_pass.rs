@@ -1,8 +1,8 @@
 use crate::analysis::{HirAnalysisDb, diagnostics::DiagnosticVoucher};
 use crate::{
-    ParserError,
+    ParserError, SelectorError,
     hir_def::{ModuleTree, TopLevelMod},
-    lower::parse_file_impl,
+    lower::{parse_file_impl, scope_graph_impl},
 };
 
 /// All analysis passes that run analysis on the HIR top level module
@@ -66,6 +66,22 @@ impl ModuleAnalysisPass for ParsingPass {
         top_mod: TopLevelMod<'db>,
     ) -> Vec<Box<dyn DiagnosticVoucher>> {
         parse_file_impl::accumulated::<ParserError>(db, top_mod)
+            .into_iter()
+            .map(|d| Box::new(d.clone()) as _)
+            .collect::<Vec<_>>()
+    }
+}
+
+/// Analysis pass that collects selector errors from msg block lowering.
+pub struct MsgLowerPass {}
+
+impl ModuleAnalysisPass for MsgLowerPass {
+    fn run_on_module<'db>(
+        &mut self,
+        db: &'db dyn HirAnalysisDb,
+        top_mod: TopLevelMod<'db>,
+    ) -> Vec<Box<dyn DiagnosticVoucher>> {
+        scope_graph_impl::accumulated::<SelectorError>(db, top_mod)
             .into_iter()
             .map(|d| Box::new(d.clone()) as _)
             .collect::<Vec<_>>()

@@ -21,6 +21,8 @@ pub struct Config {
     pub clause_indent: usize,
     /// Whether `where` clauses should always start on a new line.
     pub where_new_line: bool,
+    /// Whether `uses` clauses should always start on a new line.
+    pub uses_new_line: bool,
     /// When to add trailing commas in lists.
     pub trailing_comma: TrailingComma,
     /// Maximum width of function call arguments before falling back to vertical formatting.
@@ -40,6 +42,8 @@ pub struct Config {
     /// Maximum width of a use tree list before falling back to vertical formatting.
     /// A value of 0 results in use tree lists always being broken into multiple lines.
     pub use_tree_width: usize,
+    /// Maximum width of a function signature before breaking the `uses` clause to a new line.
+    pub fn_sig_width: usize,
 }
 
 impl Default for Config {
@@ -49,6 +53,7 @@ impl Default for Config {
             indent_width: 4,
             clause_indent: 4,
             where_new_line: false,
+            uses_new_line: false,
             trailing_comma: TrailingComma::default(),
             fn_call_width: 60,
             struct_lit_width: 20,
@@ -56,6 +61,7 @@ impl Default for Config {
             single_line_if_max_width: 30,
             struct_variant_width: 35,
             use_tree_width: 40,
+            fn_sig_width: 80,
         }
     }
 }

@@ -1,0 +1,24 @@
+struct S<T> {
+    t: T,
+}
+
+trait Foo<T, U> {
+    fn foo(self) -> (T, U)
+}
+
+impl<T> Foo<T, u64> for S<T> {
+    fn foo(self) -> (T, u64) {
+        (self.t, 1)
+    }
+}
+
+impl<T> Foo<u32, u32> for S<T> {
+    fn foo(self) -> (u32, u32) {
+        (1, 2)
+    }
+}
+
+pub fn call() -> (u64, u64) {
+    let s: S<u64> = S { t: 10 }
+    s.foo()
+}

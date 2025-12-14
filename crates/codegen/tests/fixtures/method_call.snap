@@ -1,18 +1,24 @@
 ---
 source: crates/codegen/tests/yul.rs
-assertion_line: 31
 expression: output
 input_file: tests/fixtures/method_call.fe
 ---
-function make_value() -> ret {
+function $make_value() -> ret {
   ret := 42
+  leave
 }
-function foo_gen_value(self) -> ret {
-  ret := make_value()
+function $foo_gen_value($self) -> ret {
+  let v0 := $make_value()
+  ret := v0
+  leave
 }
-function foo_return_value(self) -> ret {
-  ret := foo_gen_value(self)
+function $foo_return_value($self) -> ret {
+  let v0 := $foo_gen_value(0)
+  ret := v0
+  leave
 }
-function call_method(foo) -> ret {
-  ret := foo_return_value(foo)
+function $call_method($foo) -> ret {
+  let v0 := $foo_return_value(0)
+  ret := v0
+  leave
 }

@@ -5,79 +5,88 @@ input_file: tests/fixtures/code_region.fe
 ---
 object "Foo" {
   code {
-    init()
-    function allocate(bytes) -> ret {
+    function $allocate($bytes, $mem) -> ret {
       let v0 := mload(64)
       let v1 := eq(v0, 0)
       if v1 {
         v0 := 96
-        ret := v0
       }
-      if iszero(v1) {
-        ret := v0
-      }
+      mstore(64, add(v0, $bytes))
+      ret := v0
+      leave
     }
-    function init() {
+    function $evm_create_create2_raw($self, $value, $offset, $len, $salt) -> ret {
+      let v0 := create2($value, $offset, $len, $salt)
+      ret := v0
+      leave
+    }
+    function $init__StorPtr_Evm___207f35a85ac4062e() {
       let v0 := datasize("Child")
       let v1 := dataoffset("Child")
-      let v2 := allocate(v0)
-      codecopy(v2, v1, v0)
-      create2(0, v1, v0, 4660)
-      v0 := datasize("Foo_deployed")
-      v1 := dataoffset("Foo_deployed")
-      v2 := allocate(v0)
-      codecopy(v2, v1, v0)
-      return(v2, v0)
+      let v2 := $allocate(v0, 0)
+      let v3 := v2
+      codecopy(v3, v1, v0)
+      let v4 := $evm_create_create2_raw(0, 0, v1, v0, 4660)
+      pop(v4)
+      let v5 := datasize("Foo_deployed")
+      let v6 := dataoffset("Foo_deployed")
+      let v7 := $allocate(v5, 0)
+      let v8 := v7
+      codecopy(v8, v6, v5)
+      return(v8, v5)
     }
+    $init__StorPtr_Evm___207f35a85ac4062e()
   }
 
   object "Foo_deployed" {
     code {
-      runtime()
-      function balance() {
+      function $balance($ops) {
         return(0, 0)
       }
-      function read_selector() -> ret {
+      function $read_selector($ops) -> ret {
         let v0 := calldataload(0)
         ret := shr(224, v0)
+        leave
       }
-      function runtime() {
-        switch read_selector()
+      function $runtime__StorPtr_Evm___207f35a85ac4062e() {
+        let v0 := $read_selector(0)
+        switch v0
           case 305419896 {
-            transfer()
-            return(0, 0)
+            $transfer(0)
           }
           case 591751049 {
-            balance()
-            return(0, 0)
+            $balance(0)
           }
           default {
-            return(0, 0)
           }
         return(0, 0)
       }
-      function transfer() {
+      function $transfer($ops) {
         return(0, 0)
       }
+      $runtime__StorPtr_Evm___207f35a85ac4062e()
+      return(0, 0)
     }
   }
   object "Child" {
     code {
-      child_init()
-      function child_init() {
+      function $child_init__StorPtr_Evm___207f35a85ac4062e() {
         let v0 := datasize("Child_deployed")
         let v1 := dataoffset("Child_deployed")
         codecopy(0, v1, v0)
         return(0, v0)
       }
+      $child_init__StorPtr_Evm___207f35a85ac4062e()
     }
 
     object "Child_deployed" {
       code {
-        child_runtime()
-        function child_runtime() {
+        function $child_runtime__StorPtr_Evm___207f35a85ac4062e() {
+          calldatacopy(0, 0, 4)
           return(0, 4)
         }
+        $child_runtime__StorPtr_Evm___207f35a85ac4062e()
+        return(0, 0)
       }
     }
   }

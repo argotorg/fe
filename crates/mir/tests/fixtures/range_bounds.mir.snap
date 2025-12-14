@@ -1,0 +1,25 @@
+---
+source: crates/mir/tests/lowering_snapshots.rs
+expression: mir_output
+---
+fn const_bounds() -> Range<Known<0>, Known<4>>:
+  bb0:
+    ret
+
+fn const_start(v0: usize) -> Range<Known<0>, Unknown>:
+  bb0:
+    v1: Range<Known<0>, Unknown> = alloc mem
+    init mem[v1] { .1 = v0 }
+    ret v1
+
+fn const_end(v0: usize) -> Range<Unknown, Known<4>>:
+  bb0:
+    v1: Range<Unknown, Known<4>> = alloc mem
+    init mem[v1] { .0 = v0 }
+    ret v1
+
+fn dynamic_bounds(v0: usize, v1: usize) -> Range<Unknown, Unknown>:
+  bb0:
+    v2: Range<Unknown, Unknown> = alloc mem
+    init mem[v2] { .0 = v0, .1 = v1 }
+    ret v2

@@ -1,0 +1,128 @@
+---
+source: crates/codegen/tests/yul.rs
+expression: output
+input_file: tests/fixtures/name_collisions.fe
+---
+function $flattened_fn() -> ret {
+  ret := 1
+  leave
+}
+function $flattened_fn() -> ret {
+  ret := 2
+  leave
+}
+function $test_module_qualifier_flatten_collision() -> ret {
+  let v0 := $flattened_fn()
+  let v1 := $flattened_fn()
+  ret := add(v0, v1)
+  leave
+}
+function $test_generic_type_collision() -> ret {
+  let v0 := 1
+  let v1 := 2
+  let v2 := $generic_fn__S__33f7c3322e562590(v0)
+  pop(v2)
+  let v3 := $generic_fn__S__33f7c3322e562590(v1)
+  pop(v3)
+  ret := 42
+  leave
+}
+function $widget_process($self) -> ret {
+  ret := mul($self, 2)
+  leave
+}
+function $widget_process($self) -> ret {
+  ret := mul($self, 3)
+  leave
+}
+function $test_impl_method_collision() -> ret {
+  let v0 := 10
+  let v1 := 20
+  let v2 := $widget_process(v0)
+  let v3 := $widget_process(v1)
+  ret := v2
+  leave
+}
+function $multitraitimpl_trait_same_method($self) -> ret {
+  ret := add($self, 1)
+  leave
+}
+function $multitraitimpl_trait_same_method($self) -> ret {
+  ret := add($self, 2)
+  leave
+}
+function $test_trait_method_collision() -> ret {
+  let v0 := 100
+  let v1 := $multitraitimpl_trait_same_method(v0)
+  let v2 := 100
+  let v3 := $multitraitimpl_trait_same_method(v2)
+  ret := add(v1, v3)
+  leave
+}
+function $param_local_collision($v0) -> ret {
+  let v0 := add($v0, 1)
+  let v1 := add(v0, 2)
+  ret := v1
+  leave
+}
+function $test_param_local_collision() -> ret {
+  let v0 := $param_local_collision(10)
+  ret := v0
+  leave
+}
+function $__u32_as_u256($x) -> ret {
+  let v0 := 999
+  ret := v0
+  leave
+}
+function $test_cast_shim_collision() -> ret {
+  let v0 := $__u32_as_u256(42)
+  ret := v0
+  leave
+}
+function $ret_param_collision($ret) -> ret {
+  ret := add($ret, 1)
+  leave
+}
+function $test_ret_param_collision() -> ret {
+  let v0 := $ret_param_collision(10)
+  ret := v0
+  leave
+}
+function $add() -> ret {
+  ret := 123
+  leave
+}
+function $test_yul_reserved_fn_collision() -> ret {
+  let v0 := $add()
+  ret := v0
+  leave
+}
+function $main() -> ret {
+  let v0 := $test_module_qualifier_flatten_collision()
+  pop(v0)
+  let v1 := $test_generic_type_collision()
+  pop(v1)
+  let v2 := $test_impl_method_collision()
+  pop(v2)
+  let v3 := $test_trait_method_collision()
+  pop(v3)
+  let v4 := $test_param_local_collision()
+  pop(v4)
+  let v5 := $test_cast_shim_collision()
+  pop(v5)
+  let v6 := $test_ret_param_collision()
+  pop(v6)
+  let v7 := $test_yul_reserved_fn_collision()
+  pop(v7)
+  ret := 0
+  leave
+}
+function $generic_fn__S__33f7c3322e562590($val) -> ret {
+  ret := $val
+  leave
+}
+function $generic_fn__S__33f7c3322e562590($val) -> ret {
+  ret := $val
+  leave
+}

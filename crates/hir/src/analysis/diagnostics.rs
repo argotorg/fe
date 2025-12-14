@@ -12,7 +12,7 @@ use crate::analysis::{
             TraitLowerDiag, TyDiagCollection, TyLowerDiag,
         },
         trait_def::TraitInstId,
-        ty_check::RecordLike,
+        ty_check::{EffectParamOwner, RecordLike},
         ty_def::{TyData, TyVarSort},
     },
 };
@@ -28,6 +28,8 @@ use common::diagnostics::{
 use either::Either;
 use itertools::Itertools;
 use std::cmp::Ordering;
+
+use common::file::File;
 
 fn cmp_trait_inst_by_name<'db>(
     db: &'db dyn SpannedHirAnalysisDb,
@@ -76,6 +78,143 @@ pub trait SpannedHirAnalysisDb:
 #[salsa::db]
 impl<T> SpannedHirAnalysisDb for T where T: HirAnalysisDb + SpannedHirDb {}
 
+pub fn format_diags<'a, D>(
+    db: &dyn SpannedHirAnalysisDb,
+    diags: impl IntoIterator<Item = &'a D>,
+) -> String
+where
+    D: DiagnosticVoucher + 'a,
+{
+    use codespan_reporting::term::{
+        self,
+        termcolor::{BufferWriter, ColorChoice},
+    };
+
+    let writer = BufferWriter::stderr(ColorChoice::Never);
+    let mut buffer = writer.buffer();
+    let config = term::Config::default();
+
+    let mut completes: Vec<_> = diags.into_iter().map(|diag| diag.to_complete(db)).collect();
+    completes.sort_by(|lhs, rhs| match lhs.error_code.cmp(&rhs.error_code) {
+        std::cmp::Ordering::Equal => lhs.primary_span().cmp(&rhs.primary_span()),
+        ord => ord,
+    });
+
+    for diag in completes {
+        term::emit(
+            &mut buffer,
+            &config,
+            &CsDbWrapper(db),
+            &complete_to_cs(diag),
+        )
+        .expect("diagnostic render should succeed");
+    }
+
+    std::str::from_utf8(buffer.as_slice())
+        .expect("diagnostic output is valid utf8")
+        .to_string()
+}
+
+fn complete_to_cs(
+    complete: CompleteDiagnostic,
+) -> codespan_reporting::diagnostic::Diagnostic<File> {
+    use codespan_reporting::diagnostic as cs_diag;
+
+    let severity = match complete.severity {
+        Severity::Error => cs_diag::Severity::Error,
+        Severity::Warning => cs_diag::Severity::Warning,
+        Severity::Note => cs_diag::Severity::Note,
+    };
+    let code = Some(complete.error_code.to_string());
+
+    let labels = complete
+        .sub_diagnostics
+        .into_iter()
+        .filter_map(|sub| {
+            let span = sub.span?;
+            let style = match sub.style {
+                LabelStyle::Primary => cs_diag::LabelStyle::Primary,
+                LabelStyle::Secondary => cs_diag::LabelStyle::Secondary,
+            };
+            Some(cs_diag::Label::new(style, span.file, span.range).with_message(sub.message))
+        })
+        .collect();
+
+    cs_diag::Diagnostic {
+        severity,
+        code,
+        message: complete.message,
+        labels,
+        notes: complete.notes,
+    }
+}
+
+struct CsDbWrapper<'a>(pub &'a dyn SpannedHirAnalysisDb);
+
+impl<'db> codespan_reporting::files::Files<'db> for CsDbWrapper<'db> {
+    type FileId = File;
+    type Name = &'db camino::Utf8Path;
+    type Source = &'db str;
+
+    fn name(
+        &'db self,
+        file_id: Self::FileId,
+    ) -> Result<Self::Name, codespan_reporting::files::Error> {
+        match file_id.path(self.0) {
+            Some(path) => Ok(path.as_path()),
+            None => Err(codespan_reporting::files::Error::FileMissing),
+        }
+    }
+
+    fn source(
+        &'db self,
+        file_id: Self::FileId,
+    ) -> Result<Self::Source, codespan_reporting::files::Error> {
+        Ok(file_id.text(self.0))
+    }
+
+    fn line_index(
+        &'db self,
+        file_id: Self::FileId,
+        byte_index: usize,
+    ) -> Result<usize, codespan_reporting::files::Error> {
+        let starts: Vec<_> = codespan_reporting::files::line_starts(file_id.text(self.0)).collect();
+        Ok(starts
+            .binary_search(&byte_index)
+            .unwrap_or_else(|next_line| next_line - 1))
+    }
+
+    fn line_range(
+        &'db self,
+        file_id: Self::FileId,
+        line_index: usize,
+    ) -> Result<std::ops::Range<usize>, codespan_reporting::files::Error> {
+        let line_starts: Vec<_> =
+            codespan_reporting::files::line_starts(file_id.text(self.0)).collect();
+
+        let start =
+            *line_starts
+                .get(line_index)
+                .ok_or(codespan_reporting::files::Error::LineTooLarge {
+                    given: line_index,
+                    max: line_starts.len().saturating_sub(1),
+                })?;
+
+        let end = if line_index == line_starts.len().saturating_sub(1) {
+            file_id.text(self.0).len()
+        } else {
+            *line_starts.get(line_index + 1).ok_or(
+                codespan_reporting::files::Error::LineTooLarge {
+                    given: line_index + 1,
+                    max: line_starts.len().saturating_sub(1),
+                },
+            )?
+        };
+
+        Ok(std::ops::Range { start, end })
+    }
+}
+
 // `ParseError` has span information, but this is not a problem because the
 // parsing procedure itself depends on the file content, and thus span
 // information.
@@ -94,6 +233,92 @@ impl DiagnosticVoucher for ParserError {
             vec![],
             error_code,
         )
+    }
+}
+
+impl DiagnosticVoucher for crate::SelectorError {
+    fn to_complete(&self, _db: &dyn SpannedHirAnalysisDb) -> CompleteDiagnostic {
+        use crate::SelectorErrorKind;
+
+        let primary_span = Span::new(self.file, self.primary_range, SpanKind::Original);
+
+        let (code, message, label, notes, secondary) = match &self.kind {
+            SelectorErrorKind::Overflow => (
+                1,
+                format!(
+                    "selector value overflows u32 for msg variant `{}`",
+                    self.variant_name
+                ),
+                "selector value exceeds u32::MAX".to_string(),
+                vec!["selector must be a u32 integer".to_string()],
+                None,
+            ),
+            SelectorErrorKind::InvalidType => (
+                2,
+                format!(
+                    "selector must be an integer for msg variant `{}`",
+                    self.variant_name
+                ),
+                "expected integer literal".to_string(),
+                vec!["use an integer literal like `#[selector = 0x01]`".to_string()],
+                None,
+            ),
+            SelectorErrorKind::Missing => (
+                3,
+                format!("missing selector for msg variant `{}`", self.variant_name),
+                "no #[selector] attribute found".to_string(),
+                vec!["add a #[selector = <value>] attribute to the variant".to_string()],
+                None,
+            ),
+            SelectorErrorKind::InvalidForm => (
+                5,
+                format!(
+                    "invalid selector attribute form for msg variant `{}`",
+                    self.variant_name
+                ),
+                "expected `#[selector = <value>]` form".to_string(),
+                vec!["use `#[selector = 0x01]` instead of `#[selector(0x01)]`".to_string()],
+                None,
+            ),
+            SelectorErrorKind::Duplicate {
+                first_variant_name,
+                selector,
+            } => (
+                4,
+                "duplicate selector in msg block".to_string(),
+                format!(
+                    "`{}` has selector {:#010x} which conflicts with `{}`",
+                    self.variant_name, selector, first_variant_name
+                ),
+                vec!["each variant in a msg block must have a unique selector".to_string()],
+                self.secondary_range.map(|range| SubDiagnostic {
+                    style: LabelStyle::Secondary,
+                    message: format!(
+                        "`{first_variant_name}` with selector {selector:#010x} declared here"
+                    ),
+                    span: Some(Span::new(self.file, range, SpanKind::Original)),
+                }),
+            ),
+        };
+
+        let error_code = GlobalErrorCode::new(DiagnosticPass::MsgLower, code);
+
+        let mut sub_diagnostics = vec![SubDiagnostic {
+            style: LabelStyle::Primary,
+            message: label,
+            span: Some(primary_span),
+        }];
+        if let Some(sec) = secondary {
+            sub_diagnostics.push(sec);
+        }
+
+        CompleteDiagnostic {
+            severity: Severity::Error,
+            message,
+            sub_diagnostics,
+            notes,
+            error_code,
+        }
     }
 }
 
@@ -1628,6 +1853,112 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                 error_code,
             },
 
+            Self::InvalidEffectKey { owner, key, idx } => {
+                let idx = *idx;
+                let key_str = key.pretty_print(db);
+                let span = owner.effect_param_path_span(db, idx).resolve(db);
+                let effect = owner.effects(db).data(db).get(idx);
+                let is_labeled = effect.and_then(|e| e.name).is_some();
+                let is_contract_scoped_uses = match owner {
+                    EffectParamOwner::Contract(_) => false,
+                    EffectParamOwner::ContractInit { .. } => true,
+                    EffectParamOwner::ContractRecvArm { .. } => true,
+                    EffectParamOwner::Func(func) => matches!(
+                        func.scope().parent_item(db),
+                        Some(crate::hir_def::ItemKind::Contract(_))
+                    ),
+                };
+
+                let message = "unresolved effect".to_string();
+                let severity = Severity::Error;
+                if is_contract_scoped_uses && !is_labeled {
+                    CompleteDiagnostic {
+                        severity,
+                        message,
+                        sub_diagnostics: vec![SubDiagnostic {
+                            style: LabelStyle::Primary,
+                            message: format!("unknown effect `{}`", key_str),
+                            span,
+                        }],
+                        notes: vec![
+                            "add it to the contract `uses (...)` clause or add a matching contract field"
+                                .to_string(),
+                        ],
+                        error_code,
+                    }
+                } else {
+                    CompleteDiagnostic {
+                        severity,
+                        message,
+                        sub_diagnostics: vec![SubDiagnostic {
+                            style: LabelStyle::Primary,
+                            message: format!("cannot resolve `{}` as a type or trait", key_str),
+                            span,
+                        }],
+                        notes: vec![
+                            format!("consider defining a type or trait named `{}`", key_str),
+                            "or bind the effect value with `uses (name: Type)`".to_string(),
+                        ],
+                        error_code,
+                    }
+                }
+            }
+
+            Self::ContractRootEffectTraitNotImplemented {
+                owner,
+                idx,
+                root_ty,
+                trait_req,
+            } => {
+                let span = owner.effect_param_path_span(db, *idx).resolve(db);
+                let root = root_ty.pretty_print(db);
+
+                CompleteDiagnostic {
+                    severity,
+                    message: "unsupported contract effect".to_string(),
+                    sub_diagnostics: vec![SubDiagnostic {
+                        style: LabelStyle::Primary,
+                        message: format!(
+                            "contract root effect `{root}` does not implement `{}`",
+                            trait_req.pretty_print(db, false),
+                        ),
+                        span,
+                    }],
+                    notes: vec![format!(
+                        "contract-scoped trait effects must be implemented by the target `RootEffect` (`{root}`)"
+                    )],
+                    error_code,
+                }
+            }
+
+            Self::ContractRootEffectTypeNotZeroSized {
+                owner,
+                key,
+                idx,
+                given,
+            } => {
+                let idx = *idx;
+                let span = owner.effect_param_path_span(db, idx).resolve(db);
+                let key_str = key.pretty_print(db);
+                let given_str = given.pretty_print(db);
+
+                CompleteDiagnostic {
+                    severity,
+                    message: "unsupported contract effect".to_string(),
+                    sub_diagnostics: vec![SubDiagnostic {
+                        style: LabelStyle::Primary,
+                        message: format!(
+                            "contract-scoped type effects must be zero-sized, but `{key_str}` resolves to `{given_str}`"
+                        ),
+                        span,
+                    }],
+                    notes: vec![
+                        "use a trait effect (implemented by the target `RootEffect`) or use a zero-sized type".to_string(),
+                    ],
+                    error_code,
+                }
+            }
+
             Self::MissingEffect { primary, func, key } => {
                 let func_name = func
                     .name(db)
@@ -1767,6 +2098,52 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                 }
             }
 
+            Self::EffectProviderMismatch {
+                primary,
+                func,
+                key,
+                expected,
+                given,
+                provided_span,
+            } => {
+                let func_name = func
+                    .name(db)
+                    .to_opt()
+                    .map(|n| n.data(db).to_string())
+                    .unwrap_or_else(|| "<unknown>".to_string());
+                let key_str = key.pretty_print(db);
+                let expected_ty = expected.pretty_print(db).to_string();
+                let given_ty = given.pretty_print(db).to_string();
+
+                let mut sub_diagnostics = vec![SubDiagnostic {
+                    style: LabelStyle::Primary,
+                    message: format!(
+                        "expected effect provider `{}`, found `{}` for `{}`",
+                        expected_ty, given_ty, key_str
+                    ),
+                    span: primary.resolve(db),
+                }];
+
+                if let Some(span) = provided_span.as_ref().map(|s| s.resolve(db)) {
+                    sub_diagnostics.push(SubDiagnostic {
+                        style: LabelStyle::Secondary,
+                        message: format!("effect `{}` is provided here", key_str),
+                        span,
+                    });
+                }
+
+                CompleteDiagnostic {
+                    severity: Severity::Error,
+                    message: format!(
+                        "effect provider mismatch for `{}` when calling `{}`",
+                        key_str, func_name
+                    ),
+                    sub_diagnostics,
+                    notes: vec![],
+                    error_code,
+                }
+            }
+
             Self::EffectTraitUnsatisfied {
                 primary,
                 func,
@@ -1876,6 +2253,42 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                 notes: vec![],
                 error_code,
             },
+
+            Self::InvalidCast {
+                primary,
+                from,
+                to,
+                hint,
+            } => {
+                let notes = if let Some(hint) = hint {
+                    // Use the specific hint instead of the generic downcast suggestion.
+                    vec![hint.clone()]
+                } else if from.is_bool(db) || to.is_bool(db) {
+                    vec!["casts involving `bool` are not supported".to_string()]
+                } else {
+                    vec![concat!(
+                        "try using `.downcast()` for checked narrowing/sign changes, ",
+                        "or `.downcast_truncate()` / `.downcast_saturate()` / `.downcast_unchecked()`"
+                    )
+                    .to_string()]
+                };
+
+                CompleteDiagnostic {
+                    severity: Severity::Error,
+                    message: "cast is not provably lossless".to_string(),
+                    sub_diagnostics: vec![SubDiagnostic {
+                        style: LabelStyle::Primary,
+                        message: format!(
+                            "cannot cast `{}` to `{}` with `as`",
+                            from.pretty_print(db),
+                            to.pretty_print(db),
+                        ),
+                        span: primary.resolve(db),
+                    }],
+                    notes,
+                    error_code,
+                }
+            }
 
             Self::AccessedFieldNotFound {
                 primary,
@@ -2425,6 +2838,227 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                     message: "unreachable pattern".to_string(),
                     sub_diagnostics,
                     notes,
+                    error_code,
+                }
+            }
+            BodyDiag::RecvExpectedMsgType { primary, given } => {
+                let sub_diagnostics = vec![SubDiagnostic {
+                    style: LabelStyle::Primary,
+                    message: format!(
+                        "expected `msg` type, but `{}` is given",
+                        given.pretty_print(db)
+                    ),
+                    span: primary.resolve(db),
+                }];
+                CompleteDiagnostic {
+                    severity,
+                    message: "recv block expects a msg type".to_string(),
+                    sub_diagnostics,
+                    notes: vec![],
+                    error_code,
+                }
+            }
+            BodyDiag::RecvArmNotMsgVariant { primary, msg_name } => {
+                let sub_diagnostics = vec![SubDiagnostic {
+                    style: LabelStyle::Primary,
+                    message: format!("expected variant of `{}`", msg_name.data(db)),
+                    span: primary.resolve(db),
+                }];
+                CompleteDiagnostic {
+                    severity,
+                    message: "recv arm pattern is not a variant of the msg type".to_string(),
+                    sub_diagnostics,
+                    notes: vec![],
+                    error_code,
+                }
+            }
+            BodyDiag::RecvArmRetTypeMissing { primary, expected } => {
+                let sub_diagnostics = vec![SubDiagnostic {
+                    style: LabelStyle::Primary,
+                    message: format!(
+                        "return type must be annotated as `{}` to match the msg variant",
+                        expected.pretty_print(db)
+                    ),
+                    span: primary.resolve(db),
+                }];
+                CompleteDiagnostic {
+                    severity,
+                    message: "recv arm return type annotation required".to_string(),
+                    sub_diagnostics,
+                    notes: vec![],
+                    error_code,
+                }
+            }
+            BodyDiag::RecvArmDuplicateVariant {
+                primary,
+                first_use,
+                variant,
+            } => {
+                let name = variant.data(db);
+                let sub_diagnostics = vec![
+                    SubDiagnostic {
+                        style: LabelStyle::Primary,
+                        message: format!("duplicate handling of `{name}`"),
+                        span: primary.resolve(db),
+                    },
+                    SubDiagnostic {
+                        style: LabelStyle::Secondary,
+                        message: "first handled here".to_string(),
+                        span: first_use.resolve(db),
+                    },
+                ];
+                CompleteDiagnostic {
+                    severity,
+                    message: "duplicate msg variant in recv block".to_string(),
+                    sub_diagnostics,
+                    notes: vec![],
+                    error_code,
+                }
+            }
+            BodyDiag::RecvMissingMsgVariants { primary, variants } => {
+                let missing = variants
+                    .iter()
+                    .map(|ident| ident.data(db).to_string())
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                let sub_diagnostics = vec![SubDiagnostic {
+                    style: LabelStyle::Primary,
+                    message: format!("missing variants: {missing}"),
+                    span: primary.resolve(db),
+                }];
+                CompleteDiagnostic {
+                    severity,
+                    message: "recv block missing msg variants".to_string(),
+                    sub_diagnostics,
+                    notes: vec![],
+                    error_code,
+                }
+            }
+            BodyDiag::RecvDuplicateMsgBlock {
+                primary,
+                first_use,
+                msg_name,
+            } => {
+                let msg = msg_name.data(db);
+                let sub_diagnostics = vec![
+                    SubDiagnostic {
+                        style: LabelStyle::Primary,
+                        message: format!("duplicate recv block for `{msg}`"),
+                        span: primary.resolve(db),
+                    },
+                    SubDiagnostic {
+                        style: LabelStyle::Secondary,
+                        message: "first declared here".to_string(),
+                        span: first_use.resolve(db),
+                    },
+                ];
+                CompleteDiagnostic {
+                    severity,
+                    message: "duplicate recv block".to_string(),
+                    sub_diagnostics,
+                    notes: vec![],
+                    error_code,
+                }
+            }
+            BodyDiag::RecvDuplicateSelector {
+                primary,
+                first_use,
+                selector,
+                first_variant,
+                second_variant,
+            } => {
+                let first = first_variant.data(db);
+                let second = second_variant.data(db);
+                let sub_diagnostics = vec![
+                    SubDiagnostic {
+                        style: LabelStyle::Primary,
+                        message: format!(
+                            "`{second}` has selector 0x{selector:08x} which conflicts with `{first}`"
+                        ),
+                        span: primary.resolve(db),
+                    },
+                    SubDiagnostic {
+                        style: LabelStyle::Secondary,
+                        message: format!("`{first}` with selector 0x{selector:08x} declared here"),
+                        span: first_use.resolve(db),
+                    },
+                ];
+                CompleteDiagnostic {
+                    severity,
+                    message: "duplicate selector across recv blocks".to_string(),
+                    sub_diagnostics,
+                    notes: vec![
+                        "each msg variant in a contract must have a unique selector".to_string(),
+                    ],
+                    error_code,
+                }
+            }
+            BodyDiag::RecvArmNotVariantOfMsg {
+                primary,
+                variant_ty,
+                msg_name,
+            } => {
+                let sub_diagnostics = vec![SubDiagnostic {
+                    style: LabelStyle::Primary,
+                    message: format!(
+                        "`{}` is not a variant of `{}`",
+                        variant_ty.pretty_print(db),
+                        msg_name.data(db)
+                    ),
+                    span: primary.resolve(db),
+                }];
+                CompleteDiagnostic {
+                    severity,
+                    message: "type is not a variant of the specified msg".to_string(),
+                    sub_diagnostics,
+                    notes: vec![
+                        "in a named recv block, only variants defined in that `msg` block are allowed".to_string(),
+                    ],
+                    error_code,
+                }
+            }
+            BodyDiag::RecvArmNotMsgVariantTrait { primary, given_ty } => {
+                let sub_diagnostics = vec![SubDiagnostic {
+                    style: LabelStyle::Primary,
+                    message: format!(
+                        "`{}` does not implement `MsgVariant`",
+                        given_ty.pretty_print(db)
+                    ),
+                    span: primary.resolve(db),
+                }];
+                CompleteDiagnostic {
+                    severity,
+                    message: "type does not implement MsgVariant trait".to_string(),
+                    sub_diagnostics,
+                    notes: vec![],
+                    error_code,
+                }
+            }
+            BodyDiag::RecvDuplicateHandler {
+                primary,
+                first_use,
+                handler_ty,
+            } => {
+                let ty_str = handler_ty.pretty_print(db).to_string();
+                let sub_diagnostics = vec![
+                    SubDiagnostic {
+                        style: LabelStyle::Primary,
+                        message: format!("`{}` is already handled", ty_str),
+                        span: primary.resolve(db),
+                    },
+                    SubDiagnostic {
+                        style: LabelStyle::Secondary,
+                        message: format!("`{}` first handled here", ty_str),
+                        span: first_use.resolve(db),
+                    },
+                ];
+                CompleteDiagnostic {
+                    severity,
+                    message: "duplicate message handler".to_string(),
+                    sub_diagnostics,
+                    notes: vec![
+                        "each message type can only be handled once in a contract".to_string(),
+                    ],
                     error_code,
                 }
             }

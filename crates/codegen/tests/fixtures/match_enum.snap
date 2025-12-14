@@ -1,12 +1,13 @@
 ---
 source: crates/codegen/tests/yul.rs
-assertion_line: 31
+assertion_line: 42
 expression: output
 input_file: tests/fixtures/match_enum.fe
 ---
-function match_enum(e) -> ret {
+function $match_enum($e) -> ret {
   let v0 := 0
-  switch get_discriminant(e, 0)
+  let v1 := mload($e)
+  switch v1
     case 0 {
       v0 := 1
     }
@@ -20,17 +21,5 @@ function match_enum(e) -> ret {
       v0 := 4
     }
   ret := v0
-}
-function get_discriminant(addr, space) -> ret {
-  let v0 := 0
-  switch space
-    case 0 {
-      v0 := mload(addr)
-    }
-    case 1 {
-      v0 := sload(addr)
-    }
-    default {
-    }
-  ret := v0
+  leave
 }

@@ -10,6 +10,7 @@ ast_node! {
     SK::BlockExpr
     | SK::BinExpr
     | SK::UnExpr
+    | SK::CastExpr
     | SK::CallExpr
     | SK::MethodCallExpr
     | SK::PathExpr
@@ -35,6 +36,7 @@ impl Expr {
             SK::BlockExpr => ExprKind::Block(AstNode::cast(self.syntax().clone()).unwrap()),
             SK::BinExpr => ExprKind::Bin(AstNode::cast(self.syntax().clone()).unwrap()),
             SK::UnExpr => ExprKind::Un(AstNode::cast(self.syntax().clone()).unwrap()),
+            SK::CastExpr => ExprKind::Cast(AstNode::cast(self.syntax().clone()).unwrap()),
             SK::CallExpr => ExprKind::Call(AstNode::cast(self.syntax().clone()).unwrap()),
             SK::MethodCallExpr => {
                 ExprKind::MethodCall(AstNode::cast(self.syntax().clone()).unwrap())
@@ -119,6 +121,28 @@ impl UnExpr {
             rowan::NodeOrToken::Token(token) => UnOp::from_token(token),
             rowan::NodeOrToken::Node(_) => None,
         })
+    }
+}
+
+ast_node! {
+    /// `expr as Type`
+    pub struct CastExpr,
+    SK::CastExpr
+}
+impl CastExpr {
+    /// Returns the cast operand.
+    pub fn expr(&self) -> Option<Expr> {
+        support::child(self.syntax())
+    }
+
+    /// Returns the cast target type.
+    pub fn ty(&self) -> Option<super::Type> {
+        support::child(self.syntax())
+    }
+
+    /// Returns the `as` token.
+    pub fn as_kw(&self) -> Option<SyntaxToken> {
+        support::token(self.syntax(), SK::AsKw)
     }
 }
 
@@ -329,6 +353,9 @@ impl MatchExpr {
 
 ast_node! {
     /// `with (Effect = value, ..) { .. }`
+    ///
+    /// Also supports shorthand `with (value1, value2, ..) { .. }`, where
+    /// effect keys are inferred from the bound values.
     pub struct WithExpr,
     SK::WithExpr
 }
@@ -429,6 +456,7 @@ pub enum ExprKind {
     Block(BlockExpr),
     Bin(BinExpr),
     Un(UnExpr),
+    Cast(CastExpr),
     Call(CallExpr),
     MethodCall(MethodCallExpr),
     Path(PathExpr),
@@ -581,6 +609,8 @@ pub enum ArithBinOp {
     BitOr(SyntaxToken),
     /// `^`
     BitXor(SyntaxToken),
+    /// `..`
+    Range(SyntaxToken),
 }
 impl ArithBinOp {
     pub fn syntax(&self) -> crate::NodeOrToken {
@@ -596,6 +626,7 @@ impl ArithBinOp {
             ArithBinOp::BitAnd(token) => token.clone().into(),
             ArithBinOp::BitOr(token) => token.clone().into(),
             ArithBinOp::BitXor(token) => token.clone().into(),
+            ArithBinOp::Range(token) => token.clone().into(),
         }
     }
 
@@ -629,6 +660,7 @@ impl ArithBinOp {
             SK::Amp => Some(Self::BitAnd(token)),
             SK::Pipe => Some(Self::BitOr(token)),
             SK::Hat => Some(Self::BitXor(token)),
+            SK::Dot2 => Some(Self::Range(token)),
             _ => None,
         }
     }
@@ -1059,5 +1091,34 @@ mod tests {
             aug_assign_expr.op().unwrap(),
             crate::ast::ArithBinOp::LShift(_)
         ));
+    }
+
+    #[test]
+    #[wasm_bindgen_test]
+    fn range_expr() {
+        let range_expr: BinExpr = parse_expr("0..10");
+        assert!(matches!(range_expr.lhs().unwrap().kind(), ExprKind::Lit(_)));
+        assert!(matches!(
+            range_expr.op().unwrap(),
+            BinOp::Arith(ArithBinOp::Range(_))
+        ));
+        assert!(matches!(range_expr.rhs().unwrap().kind(), ExprKind::Lit(_)));
+
+        // Range with expressions
+        let range_expr: BinExpr = parse_expr("start..end");
+        assert!(matches!(
+            range_expr.lhs().unwrap().kind(),
+            ExprKind::Path(_)
+        ));
+        assert!(matches!(
+            range_expr.rhs().unwrap().kind(),
+            ExprKind::Path(_)
+        ));
+
+        // Range with arithmetic (lower precedence than +)
+        let range_expr: BinExpr = parse_expr("0..n + 1");
+        assert!(matches!(range_expr.lhs().unwrap().kind(), ExprKind::Lit(_)));
+        // rhs should be (n + 1) since .. has lower precedence
+        assert!(matches!(range_expr.rhs().unwrap().kind(), ExprKind::Bin(_)));
     }
 }

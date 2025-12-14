@@ -167,7 +167,7 @@ impl<'db> TyFoldable<'db> for ImplementorId<'db> {
             .iter()
             .map(|ty| ty.fold_with(db, folder))
             .collect::<Vec<_>>();
-        let hir_impl_trait = self.hir_impl_trait(db);
+        let origin = self.origin(db);
 
         let types = self
             .types(db)
@@ -175,7 +175,7 @@ impl<'db> TyFoldable<'db> for ImplementorId<'db> {
             .map(|(ident, ty)| (*ident, ty.fold_with(db, folder)))
             .collect::<IndexMap<_, _>>();
 
-        ImplementorId::new(db, trait_inst, params, types, hir_impl_trait)
+        ImplementorId::new(db, trait_inst, params, types, origin)
     }
 }
 
@@ -220,8 +220,18 @@ impl<'db> TyFolder<'db> for AssocTySubst<'db> {
         match ty.data(db) {
             TyData::TyParam(param) => {
                 // If this is a trait self parameter, substitute with the trait instance's self type
-                if param.is_trait_self() {
-                    return self.trait_inst.self_ty(db).fold_with(db, self);
+                if param.is_trait_self()
+                    && param
+                        .owner
+                        .resolve_to::<crate::core::hir_def::Trait>(db)
+                        .is_some_and(|trait_def| trait_def == self.trait_inst.def(db))
+                {
+                    let self_ty = self.trait_inst.self_ty(db);
+                    // Avoid infinite recursion when the instance `Self` is the same param.
+                    if self_ty == ty {
+                        return ty;
+                    }
+                    return self_ty.fold_with(db, self);
                 }
                 ty.super_fold_with(db, self)
             }

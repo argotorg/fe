@@ -8,6 +8,7 @@ use smallvec::smallvec;
 
 use super::{
     const_ty::{ConstTyData, ConstTyId},
+    effects::{EffectKeyKind, effect_key_kind},
     fold::{TyFoldable, TyFolder},
     trait_resolution::{PredicateListId, constraint::collect_constraints},
     ty_def::{InvalidCause, Kind, TyData, TyId, TyParam},
@@ -429,7 +430,7 @@ struct GenericParamCollector<'db> {
 
 impl<'db> GenericParamCollector<'db> {
     fn new(db: &'db dyn HirAnalysisDb, owner: GenericParamOwner<'db>) -> Self {
-        let params = match owner {
+        let mut params = match owner {
             GenericParamOwner::Trait(_) => {
                 vec![TyParamPrecursor::trait_self(db, None)]
             }
@@ -443,6 +444,32 @@ impl<'db> GenericParamCollector<'db> {
 
             _ => vec![],
         };
+
+        // For each type effect parameter `uses (T)` / `uses (mut T)`, insert an implicit generic
+        // parameter that carries the "provider type" (e.g. `MemPtr<T>` / `StorPtr<T>`). This
+        // allows monomorphization to treat type-effect domains as normal generic arguments.
+        if let GenericParamOwner::Func(func) = owner {
+            let mut provider_idx = 0usize;
+            for effect in func.effect_params(db) {
+                let Some(key_path) = effect.key_path(db) else {
+                    continue;
+                };
+                if !matches!(
+                    effect_key_kind(db, key_path, func.scope()),
+                    EffectKeyKind::Type
+                ) {
+                    continue;
+                }
+
+                let name = IdentId::new(db, format!("__effprov{provider_idx}"));
+                provider_idx += 1;
+                let prec_idx = params.len();
+                params.push(TyParamPrecursor::effect_provider_param(
+                    Partial::Present(name),
+                    prec_idx,
+                ));
+            }
+        }
 
         let offset_to_original = params.len();
         Self {
@@ -551,6 +578,7 @@ enum Variant<'db> {
     TraitSelf,
     Normal,
     Const(Option<HirTyId<'db>>),
+    EffectProvider,
 }
 
 impl<'db> TyParamPrecursor<'db> {
@@ -573,6 +601,10 @@ impl<'db> TyParamPrecursor<'db> {
             }
             Variant::Normal => {
                 let param = TyParam::normal_param(name, lowered_idx, kind, scope);
+                TyId::new(db, TyData::TyParam(param))
+            }
+            Variant::EffectProvider => {
+                let param = TyParam::effect_provider_param(name, lowered_idx, scope);
                 TyId::new(db, TyData::TyParam(param))
             }
             Variant::Const(Some(ty)) => {
@@ -606,6 +638,16 @@ impl<'db> TyParamPrecursor<'db> {
             original_idx: idx.into(),
             kind: None,
             variant: Variant::Const(ty),
+            default_hir_ty: None,
+        }
+    }
+
+    fn effect_provider_param(name: Partial<IdentId<'db>>, idx: usize) -> Self {
+        Self {
+            name,
+            original_idx: idx.into(),
+            kind: Some(Kind::Star),
+            variant: Variant::EffectProvider,
             default_hir_ty: None,
         }
     }

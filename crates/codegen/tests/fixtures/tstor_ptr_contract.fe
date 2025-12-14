@@ -1,0 +1,24 @@
+use std::evm::effects::TStorPtr
+
+msg GuardMsg {
+    #[selector = 1]
+    Flip -> bool
+}
+
+pub contract GuardContract {
+    mut call_count: u256,
+    mut block_reentrance: TStorPtr<bool>,
+
+    init() uses (mut block_reentrance) {
+        block_reentrance = false
+    }
+
+    recv GuardMsg {
+        Flip -> bool uses (mut block_reentrance, mut call_count) {
+            call_count += 1
+            let old = block_reentrance
+            block_reentrance = !old
+            old
+        }
+    }
+}

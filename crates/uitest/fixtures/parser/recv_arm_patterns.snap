@@ -1,0 +1,52 @@
+---
+source: crates/uitest/tests/parser.rs
+expression: diags
+input_file: fixtures/parser/recv_arm_patterns.fe
+---
+error[1-0001]: tuple patterns are not allowed in recv arms; use record pattern syntax `{ field, .. }` instead
+    ┌─ recv_arm_patterns.fe:103:19
+    │
+103 │         WithFields(a, b) -> bool {
+    │                   ^ tuple patterns are not allowed in recv arms; use record pattern syntax `{ field, .. }` instead
+
+error[1-0001]: expected pattern
+    ┌─ recv_arm_patterns.fe:114:9
+    │
+114 │         42 {}
+    │         ^ expected pattern
+
+error[1-0001]: unexpected syntax while parsing pattern
+    ┌─ recv_arm_patterns.fe:114:9
+    │
+114 │         42 {}
+    │         ^^ unexpected
+
+error[1-0001]: expected pattern
+    ┌─ recv_arm_patterns.fe:123:9
+    │
+123 │         (a, b) {}
+    │         ^ expected pattern
+
+error[1-0001]: unexpected syntax while parsing pattern
+    ┌─ recv_arm_patterns.fe:123:9
+    │
+123 │         (a, b) {}
+    │         ^^^^^^ unexpected
+
+error[1-0001]: literal patterns are not allowed in recv arm patterns; use a binding pattern instead
+    ┌─ recv_arm_patterns.fe:135:25
+    │
+135 │         WithFields { a: 42, b } -> bool {
+    │                         ^^ literal patterns are not allowed in recv arm patterns; use a binding pattern instead
+
+error[1-0001]: literal patterns are not allowed in recv arm patterns; use a binding pattern instead
+    ┌─ recv_arm_patterns.fe:149:26
+    │
+149 │         WithFields { a: (42, y), b } -> bool {
+    │                          ^^ literal patterns are not allowed in recv arm patterns; use a binding pattern instead
+
+error[1-0001]: literal patterns are not allowed in recv arm patterns; use a binding pattern instead
+    ┌─ recv_arm_patterns.fe:163:34
+    │
+163 │         WithFields { a: Foo { x: 42 }, b } -> bool {
+    │                                  ^^ literal patterns are not allowed in recv arm patterns; use a binding pattern instead

@@ -17,6 +17,19 @@ impl<'db> GenericArgListId<'db> {
         Self::new(db, vec![], false)
     }
 
+    pub fn given(db: &'db dyn HirDb, data: Vec<GenericArg<'db>>) -> Self {
+        Self::new(db, data, true)
+    }
+
+    pub fn given1_type(db: &'db dyn HirDb, ty: TypeId<'db>) -> Self {
+        Self::given(
+            db,
+            vec![GenericArg::Type(TypeGenericArg {
+                ty: Partial::Present(ty),
+            })],
+        )
+    }
+
     pub fn len(self, db: &dyn HirDb) -> usize {
         self.data(db).len()
     }
@@ -26,15 +39,31 @@ impl<'db> GenericArgListId<'db> {
     }
 
     pub fn pretty_print(self, db: &dyn HirDb) -> String {
+        fn space_adjacent_angles(s: &str) -> String {
+            let mut out = String::with_capacity(s.len());
+            let mut prev: Option<char> = None;
+            for ch in s.chars() {
+                if matches!((prev, ch), (Some('<'), '<') | (Some('>'), '>')) {
+                    out.push(' ');
+                }
+                out.push(ch);
+                prev = Some(ch);
+            }
+            out
+        }
+
         if !self.is_given(db) {
             "".into()
         } else {
-            format!(
+            space_adjacent_angles(&format!(
                 "<{}>",
                 self.data(db)
                     .iter()
                     .map(|p| match p {
-                        GenericArg::Const(_) => "<const>".into(),
+                        GenericArg::Const(c) => c
+                            .body
+                            .to_opt()
+                            .map_or_else(|| "<missing>".into(), |b| b.pretty_print(db)),
                         GenericArg::Type(t) => {
                             t.ty.to_opt()
                                 .map_or_else(|| "<missing>".into(), |t| t.pretty_print(db))
@@ -52,7 +81,7 @@ impl<'db> GenericArgListId<'db> {
                     })
                     .collect::<Vec<_>>()
                     .join(", ")
-            )
+            ))
         }
     }
 }
@@ -203,15 +232,15 @@ pub enum FuncParamName<'db> {
 }
 
 impl<'db> FuncParamName<'db> {
-    pub fn ident(&self) -> Option<IdentId<'db>> {
-        match self {
-            FuncParamName::Ident(name) => Some(*name),
-            _ => None,
-        }
+    pub fn ident(db: &'db dyn HirDb, name: &str) -> Self {
+        Self::Ident(IdentId::new(db, name))
     }
 
     pub fn is_self(&self, db: &dyn HirDb) -> bool {
-        self.ident().is_some_and(|id| id.is_self(db))
+        match self {
+            FuncParamName::Ident(id) => id.is_self(db),
+            _ => false,
+        }
     }
 
     pub fn pretty_print(&self, db: &dyn HirDb) -> String {

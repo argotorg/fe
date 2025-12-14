@@ -1,0 +1,23 @@
+trait T {
+    fn make() -> Self
+}
+
+struct Bar { x: u32 }
+
+impl T for Bar {
+    fn make() -> Self {
+        Bar { x: 10 }
+    }
+}
+
+fn example() -> Bar {
+    let b: Bar = T::make()
+    let c: Bar = Bar::make()
+    let d: Bar = if true { b } else { c }
+    d
+}
+
+fn f() -> Bar {
+    let b = T::make()
+    b
+}

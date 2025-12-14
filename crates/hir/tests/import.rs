@@ -1,4 +1,3 @@
-mod test_db;
 use std::path::Path;
 
 use camino::Utf8PathBuf;
@@ -7,9 +6,9 @@ use fe_hir::analysis::{
     analysis_pass::ModuleAnalysisPass,
     name_resolution::{ImportAnalysisPass, NameDerivation, ResolvedImports, resolve_imports},
 };
+use fe_hir::test_db::{HirAnalysisTestDb, HirPropertyFormatter};
 use fe_hir::{hir_def::Use, span::LazySpan};
 use rustc_hash::FxHashMap;
-use test_db::{HirAnalysisTestDb, HirPropertyFormatter};
 use test_utils::snap_test;
 
 #[dir_test(

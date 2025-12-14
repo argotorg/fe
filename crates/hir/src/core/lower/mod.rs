@@ -13,21 +13,25 @@ use self::{item::lower_module_items, scope_builder::ScopeGraphBuilder};
 use crate::{
     HirDb, LowerHirDb,
     hir_def::{
-        ExprId, IdentId, IntegerId, ItemKind, LitKind, ModuleTree, Partial, StringId, TopLevelMod,
-        TrackedItemId, TrackedItemVariant, Use, Visibility, module_tree_impl,
+        AttrListId, ExprId, IdentId, IntegerId, ItemKind, LitKind, ModuleTree, Partial, StringId,
+        TopLevelMod, TrackedItemId, TrackedItemVariant, Use, Visibility, module_tree_impl,
         scope_graph::ScopeGraph,
         use_tree::{UsePathId, UsePathSegment},
     },
     span::HirOrigin,
 };
+pub use item::{SelectorError, SelectorErrorKind};
 pub use parse::parse_file_impl;
 
 pub(crate) mod parse;
 
 mod attr;
 mod body;
+mod contract;
 mod expr;
+mod hir_builder;
 mod item;
+mod msg;
 mod params;
 mod pat;
 mod path;
@@ -144,7 +148,48 @@ impl<'db> FileLowerCtxt<'db> {
 
         let top_mod = self.top_mod();
         let origin = HirOrigin::synthetic();
-        let use_ = Use::new(db, id, path, None, Visibility::Private, top_mod, origin);
+        let attrs = AttrListId::new(db, vec![]);
+        let use_ = Use::new(
+            db,
+            id,
+            attrs,
+            path,
+            None,
+            Visibility::Private,
+            top_mod,
+            origin,
+        );
+        self.leave_item_scope(use_);
+    }
+
+    /// Inserts `use super::*` to re-export parent module items into current scope.
+    pub(super) fn insert_synthetic_super_use(&mut self) {
+        let db = self.db();
+
+        let super_ident = IdentId::new(db, "super".to_string());
+
+        let segs = vec![
+            Partial::Present(UsePathSegment::Ident(super_ident)),
+            Partial::Present(UsePathSegment::Glob),
+        ];
+        let path = Partial::Present(UsePathId::new(db, segs));
+
+        let id = self.joined_id(TrackedItemVariant::Use(path));
+        self.enter_item_scope(id, false);
+
+        let top_mod = self.top_mod();
+        let origin = HirOrigin::synthetic();
+        let attrs = AttrListId::new(db, vec![]);
+        let use_ = Use::new(
+            db,
+            id,
+            attrs,
+            path,
+            None,
+            Visibility::Private,
+            top_mod,
+            origin,
+        );
         self.leave_item_scope(use_);
     }
 
@@ -158,6 +203,14 @@ impl<'db> FileLowerCtxt<'db> {
 
     pub(super) fn joined_id(&self, id: TrackedItemVariant<'db>) -> TrackedItemId<'db> {
         self.builder.joined_id(id)
+    }
+
+    pub(super) fn current_id(&self) -> TrackedItemId<'db> {
+        self.builder.current_id()
+    }
+
+    pub(super) fn set_current_id(&mut self, id: TrackedItemId<'db>) {
+        self.builder.set_current_id(id);
     }
 
     /// Creates a new scope for an item.

@@ -4,11 +4,11 @@ use super::{
     ty_check::{RecordLike, TraitOps},
     ty_def::{Kind, TyId},
 };
-use crate::span::DynLazySpan;
 use crate::visitor::prelude::*;
 use crate::{analysis::HirAnalysisDb, hir_def::Trait};
 use crate::{analysis::diagnostics::DiagnosticVoucher, hir_def::PathId};
 use crate::{analysis::name_resolution::diagnostics::PathResDiag, hir_def::ItemKind};
+use crate::{analysis::ty::ty_check::EffectParamOwner, span::DynLazySpan};
 use crate::{
     core::hir_def::{
         CallableDef, Enum, FieldIndex, FieldParent, Func, GenericParamOwner, IdentId, ImplTrait,
@@ -233,6 +233,26 @@ pub enum BodyDiag<'db> {
 
     UndefinedVariable(DynLazySpan<'db>, IdentId<'db>),
 
+    InvalidEffectKey {
+        owner: EffectParamOwner<'db>,
+        key: PathId<'db>,
+        idx: usize,
+    },
+
+    ContractRootEffectTraitNotImplemented {
+        owner: EffectParamOwner<'db>,
+        idx: usize,
+        root_ty: TyId<'db>,
+        trait_req: TraitInstId<'db>,
+    },
+
+    ContractRootEffectTypeNotZeroSized {
+        owner: EffectParamOwner<'db>,
+        key: PathId<'db>,
+        idx: usize,
+        given: TyId<'db>,
+    },
+
     MissingEffect {
         primary: DynLazySpan<'db>,
         func: Func<'db>,
@@ -261,6 +281,15 @@ pub enum BodyDiag<'db> {
         provided_span: Option<DynLazySpan<'db>>,
     },
 
+    EffectProviderMismatch {
+        primary: DynLazySpan<'db>,
+        func: Func<'db>,
+        key: PathId<'db>,
+        expected: TyId<'db>,
+        given: TyId<'db>,
+        provided_span: Option<DynLazySpan<'db>>,
+    },
+
     EffectTraitUnsatisfied {
         primary: DynLazySpan<'db>,
         func: Func<'db>,
@@ -278,6 +307,13 @@ pub enum BodyDiag<'db> {
     },
 
     TypeMustBeKnown(DynLazySpan<'db>),
+
+    InvalidCast {
+        primary: DynLazySpan<'db>,
+        from: TyId<'db>,
+        to: TyId<'db>,
+        hint: Option<String>,
+    },
 
     AccessedFieldNotFound {
         primary: DynLazySpan<'db>,
@@ -380,6 +416,74 @@ pub enum BodyDiag<'db> {
     UnreachablePattern {
         primary: DynLazySpan<'db>,
     },
+
+    /// The root path of a recv block doesn't refer to a msg type
+    RecvExpectedMsgType {
+        primary: DynLazySpan<'db>,
+        given: TyId<'db>,
+    },
+
+    /// A recv arm pattern is not a variant of the expected msg type
+    RecvArmNotMsgVariant {
+        primary: DynLazySpan<'db>,
+        msg_name: IdentId<'db>,
+    },
+
+    /// A recv arm return type annotation is required and must match the msg variant
+    RecvArmRetTypeMissing {
+        primary: DynLazySpan<'db>,
+        expected: TyId<'db>,
+    },
+
+    /// A recv arm pattern is duplicated for the same msg variant
+    RecvArmDuplicateVariant {
+        primary: DynLazySpan<'db>,
+        first_use: DynLazySpan<'db>,
+        variant: IdentId<'db>,
+    },
+
+    /// Some msg variants are not covered in the recv block
+    RecvMissingMsgVariants {
+        primary: DynLazySpan<'db>,
+        variants: Vec<IdentId<'db>>,
+    },
+
+    /// Duplicate recv blocks for the same msg type
+    RecvDuplicateMsgBlock {
+        primary: DynLazySpan<'db>,
+        first_use: DynLazySpan<'db>,
+        msg_name: IdentId<'db>,
+    },
+
+    /// Multiple msg variants across recv blocks have the same selector value
+    RecvDuplicateSelector {
+        primary: DynLazySpan<'db>,
+        first_use: DynLazySpan<'db>,
+        selector: u32,
+        first_variant: IdentId<'db>,
+        second_variant: IdentId<'db>,
+    },
+
+    /// A recv arm pattern resolves to a type that implements MsgVariant,
+    /// but is not a variant of the specified msg module
+    RecvArmNotVariantOfMsg {
+        primary: DynLazySpan<'db>,
+        variant_ty: TyId<'db>,
+        msg_name: IdentId<'db>,
+    },
+
+    /// A recv arm pattern resolves to a type that does not implement MsgVariant
+    RecvArmNotMsgVariantTrait {
+        primary: DynLazySpan<'db>,
+        given_ty: TyId<'db>,
+    },
+
+    /// The same message handler type is handled multiple times across recv blocks
+    RecvDuplicateHandler {
+        primary: DynLazySpan<'db>,
+        first_use: DynLazySpan<'db>,
+        handler_ty: TyId<'db>,
+    },
 }
 
 impl<'db> BodyDiag<'db> {
@@ -448,7 +552,7 @@ impl<'db> BodyDiag<'db> {
     ) -> Self {
         let ty = ty.pretty_print(db).to_string();
         let op = ops.op_symbol(db);
-        let trait_path = ops.trait_path(db);
+        let trait_path = ops.core_trait_path(db);
         Self::OpsTraitNotImplemented {
             span,
             ty,
@@ -472,13 +576,18 @@ impl<'db> BodyDiag<'db> {
             Self::ExplicitLabelExpectedInRecord { .. } => 10,
             Self::MissingRecordFields { .. } => 11,
             Self::UndefinedVariable(..) => 12,
+            Self::InvalidEffectKey { .. } => 51,
+            Self::ContractRootEffectTraitNotImplemented { .. } => 53,
+            Self::ContractRootEffectTypeNotZeroSized { .. } => 54,
             Self::MissingEffect { .. } => 36,
             Self::EffectMutabilityMismatch { .. } => 37,
             Self::EffectTypeMismatch { .. } => 38,
+            Self::EffectProviderMismatch { .. } => 52,
             Self::EffectTraitUnsatisfied { .. } => 39,
             Self::AmbiguousEffect { .. } => 40,
             Self::ReturnedTypeMismatch { .. } => 13,
             Self::TypeMustBeKnown(..) => 14,
+            Self::InvalidCast { .. } => 55,
             Self::AccessedFieldNotFound { .. } => 15,
             Self::OpsTraitNotImplemented { .. } => 16,
             Self::NonAssignableExpr(..) => 17,
@@ -499,6 +608,16 @@ impl<'db> BodyDiag<'db> {
             Self::NotAMethod { .. } => 33,
             Self::NonExhaustiveMatch { .. } => 34,
             Self::UnreachablePattern { .. } => 35,
+            Self::RecvExpectedMsgType { .. } => 41,
+            Self::RecvArmNotMsgVariant { .. } => 42,
+            Self::RecvArmRetTypeMissing { .. } => 43,
+            Self::RecvArmDuplicateVariant { .. } => 44,
+            Self::RecvMissingMsgVariants { .. } => 45,
+            Self::RecvDuplicateMsgBlock { .. } => 46,
+            Self::RecvDuplicateSelector { .. } => 47,
+            Self::RecvArmNotVariantOfMsg { .. } => 48,
+            Self::RecvArmNotMsgVariantTrait { .. } => 49,
+            Self::RecvDuplicateHandler { .. } => 50,
         }
     }
 }

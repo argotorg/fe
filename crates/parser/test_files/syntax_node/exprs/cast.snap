@@ -1,0 +1,122 @@
+---
+source: crates/parser/tests/syntax_node.rs
+expression: node
+input_file: test_files/syntax_node/exprs/cast.fe
+---
+Root@0..81
+  UnExpr@0..9
+    Minus@0..1 "-"
+    CastExpr@1..9
+      PathExpr@1..2
+        Path@1..2
+          PathSegment@1..2
+            Ident@1..2 "x"
+      WhiteSpace@2..3 " "
+      AsKw@3..5 "as"
+      WhiteSpace@5..6 " "
+      PathType@6..9
+        Path@6..9
+          PathSegment@6..9
+            Ident@6..9 "i64"
+  Newline@9..10 "\n"
+  BinExpr@10..22
+    LitExpr@10..11
+      Lit@10..11
+        Int@10..11 "1"
+    WhiteSpace@11..12 " "
+    Plus@12..13 "+"
+    WhiteSpace@13..14 " "
+    CastExpr@14..22
+      LitExpr@14..15
+        Lit@14..15
+          Int@14..15 "2"
+      WhiteSpace@15..16 " "
+      AsKw@16..18 "as"
+      WhiteSpace@18..19 " "
+      PathType@19..22
+        Path@19..22
+          PathSegment@19..22
+            Ident@19..22 "u64"
+  Newline@22..23 "\n"
+  CastExpr@23..37
+    ParenExpr@23..30
+      LParen@23..24 "("
+      BinExpr@24..29
+        LitExpr@24..25
+          Lit@24..25
+            Int@24..25 "1"
+        WhiteSpace@25..26 " "
+        Plus@26..27 "+"
+        WhiteSpace@27..28 " "
+        LitExpr@28..29
+          Lit@28..29
+            Int@28..29 "2"
+      RParen@29..30 ")"
+    WhiteSpace@30..31 " "
+    AsKw@31..33 "as"
+    WhiteSpace@33..34 " "
+    PathType@34..37
+      Path@34..37
+        PathSegment@34..37
+          Ident@34..37 "u64"
+  Newline@37..38 "\n"
+  CastExpr@38..53
+    FieldExpr@38..47
+      CallExpr@38..43
+        PathExpr@38..41
+          Path@38..41
+            PathSegment@38..41
+              Ident@38..41 "foo"
+        CallArgList@41..43
+          LParen@41..42 "("
+          RParen@42..43 ")"
+      Dot@43..44 "."
+      Ident@44..47 "bar"
+    WhiteSpace@47..48 " "
+    AsKw@48..50 "as"
+    WhiteSpace@50..51 " "
+    PathType@51..53
+      Path@51..53
+        PathSegment@51..53
+          Ident@51..53 "u8"
+  Newline@53..54 "\n"
+  CastExpr@54..68
+    IndexExpr@54..60
+      PathExpr@54..57
+        Path@54..57
+          PathSegment@54..57
+            Ident@54..57 "arr"
+      LBracket@57..58 "["
+      LitExpr@58..59
+        Lit@58..59
+          Int@58..59 "0"
+      RBracket@59..60 "]"
+    WhiteSpace@60..61 " "
+    AsKw@61..63 "as"
+    WhiteSpace@63..64 " "
+    PathType@64..68
+      Path@64..68
+        PathSegment@64..68
+          Ident@64..68 "u256"
+  Newline@68..69 "\n"
+  CastExpr@69..80
+    CastExpr@69..75
+      PathExpr@69..70
+        Path@69..70
+          PathSegment@69..70
+            Ident@69..70 "a"
+      WhiteSpace@70..71 " "
+      AsKw@71..73 "as"
+      WhiteSpace@73..74 " "
+      PathType@74..75
+        Path@74..75
+          PathSegment@74..75
+            Ident@74..75 "b"
+    WhiteSpace@75..76 " "
+    AsKw@76..78 "as"
+    WhiteSpace@78..79 " "
+    PathType@79..80
+      Path@79..80
+        PathSegment@79..80
+          Ident@79..80 "c"
+  Newline@80..81 "\n"

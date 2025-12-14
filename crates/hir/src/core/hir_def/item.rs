@@ -10,12 +10,13 @@ use parser::ast;
 
 use super::{
     AttrListId, Body, EffectParamListId, FuncParamListId, FuncParamName, GenericParamListId,
-    HirIngot, IdentId, Partial, TupleTypeId, TypeBound, TypeId, UseAlias, WhereClauseId,
+    HirIngot, IdentId, Partial, Pat, PatId, TupleTypeId, TypeBound, TypeId, UseAlias,
+    WhereClauseId,
     scope_graph::{ScopeGraph, ScopeId},
 };
 use crate::{
     HirDb,
-    hir_def::TraitRefId,
+    hir_def::{PathId, TraitRefId},
     lower,
     span::{
         DynLazySpan, HirOrigin,
@@ -97,6 +98,7 @@ impl<'db> ItemKind<'db> {
             Self::Trait(trait_) => trait_.attributes(db),
             Self::ImplTrait(impl_trait) => impl_trait.attributes(db),
             Self::Const(const_) => const_.attributes(db),
+            Self::Use(use_) => use_.attributes(db),
             _ => return None,
         }
         .into()
@@ -566,6 +568,19 @@ impl<'db> TopLevelMod<'db> {
             })
             .collect()
     }
+
+    /// Returns all mods in the top level module including ones in nested
+    /// modules.
+    #[salsa::tracked(return_ref)]
+    pub fn all_mods(self, db: &'db dyn HirDb) -> Vec<Mod<'db>> {
+        self.all_items(db)
+            .iter()
+            .filter_map(|item| match item {
+                ItemKind::Mod(mod_) => Some(*mod_),
+                _ => None,
+            })
+            .collect()
+    }
 }
 
 #[salsa::tracked]
@@ -596,8 +611,8 @@ impl<'db> Mod<'db> {
         self,
         db: &'db dyn HirDb,
     ) -> impl Iterator<Item = ItemKind<'db>> + 'db {
-        let s_graph = self.top_mod(db).scope_graph(db);
         let scope = ScopeId::from_item(self.into());
+        let s_graph = scope.scope_graph(db);
         s_graph.child_items(scope)
     }
 }
@@ -613,14 +628,14 @@ pub struct Func<'db> {
     pub(in crate::core) generic_params: GenericParamListId<'db>,
     pub(in crate::core) where_clause: WhereClauseId<'db>,
     pub(in crate::core) params_list: Partial<FuncParamListId<'db>>,
-    pub(in crate::core) effects: EffectParamListId<'db>,
+    pub(crate) effects: EffectParamListId<'db>,
     pub(in crate::core) ret_type_ref: Option<TypeId<'db>>,
     pub modifier: ItemModifier,
     pub body: Option<Body<'db>>,
     pub top_mod: TopLevelMod<'db>,
 
     #[return_ref]
-    pub(crate) origin: HirOrigin<ast::Func>,
+    pub origin: HirOrigin<ast::Func>,
 }
 impl<'db> Func<'db> {
     pub fn span(self) -> LazyFuncSpan<'db> {
@@ -708,6 +723,10 @@ impl<'db> Struct<'db> {
         ScopeId::from_item(self.into())
     }
 
+    pub fn hir_fields(self, db: &'db dyn HirDb) -> FieldDefListId<'db> {
+        self.fields(db)
+    }
+
     /// Returns the human readable string of the expected struct initializer.
     /// ## Example
     /// When `S` is a struct defined as below:
@@ -732,7 +751,13 @@ pub struct Contract<'db> {
     pub name: Partial<IdentId<'db>>,
     pub(in crate::core) attributes: AttrListId<'db>,
     pub vis: Visibility,
-    pub(in crate::core) fields: FieldDefListId<'db>,
+    pub(in crate::core) hir_fields: FieldDefListId<'db>,
+    /// `uses` clause attached to the contract header
+    pub effects: EffectParamListId<'db>,
+    /// Optional init block owned by the contract.
+    pub init: Option<ContractInit<'db>>,
+    /// Receive handlers declared in the contract
+    pub recvs: ContractRecvListId<'db>,
     pub top_mod: TopLevelMod<'db>,
 
     #[return_ref]
@@ -745,6 +770,84 @@ impl<'db> Contract<'db> {
 
     pub fn scope(self) -> ScopeId<'db> {
         ScopeId::from_item(self.into())
+    }
+
+    pub fn recv_arm(
+        self,
+        db: &'db dyn HirDb,
+        recv_idx: usize,
+        arm_idx: usize,
+    ) -> Option<ContractRecvArm<'db>> {
+        self.recvs(db)
+            .data(db)
+            .get(recv_idx)?
+            .arms
+            .data(db)
+            .get(arm_idx)
+            .copied()
+    }
+}
+
+/// Contract-owned init block.
+#[salsa::tracked]
+#[derive(Debug)]
+pub struct ContractInit<'db> {
+    #[id]
+    id: TrackedItemId<'db>,
+
+    pub params: FuncParamListId<'db>,
+    pub effects: EffectParamListId<'db>,
+    pub body: Body<'db>,
+    pub top_mod: TopLevelMod<'db>,
+
+    #[return_ref]
+    pub(crate) origin: HirOrigin<ast::ContractInit>,
+}
+
+#[salsa::interned]
+#[derive(Debug)]
+pub struct ContractRecvListId<'db> {
+    #[return_ref]
+    pub data: Vec<ContractRecv<'db>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct ContractRecv<'db> {
+    pub msg_path: Option<PathId<'db>>,
+    pub arms: ContractRecvArmListId<'db>,
+}
+
+#[salsa::interned]
+#[derive(Debug)]
+pub struct ContractRecvArmListId<'db> {
+    #[return_ref]
+    pub data: Vec<ContractRecvArm<'db>>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct ContractRecvArm<'db> {
+    pub pat: PatId,
+    pub ret_ty: Option<TypeId<'db>>,
+    pub effects: EffectParamListId<'db>,
+    pub body: Body<'db>,
+}
+
+impl<'db> ContractRecvArm<'db> {
+    /// Returns the path from the arm's pattern, if it has one.
+    ///
+    /// This extracts the path from patterns like `Foo::Bar`, `Foo::Bar(..)`,
+    /// or `Foo::Bar { .. }`.
+    pub fn variant_path(&self, db: &'db dyn HirDb) -> Option<PathId<'db>> {
+        let Partial::Present(pat) = self.pat.data(db, self.body) else {
+            return None;
+        };
+
+        match pat {
+            Pat::Path(Partial::Present(path), ..)
+            | Pat::PathTuple(Partial::Present(path), ..)
+            | Pat::Record(Partial::Present(path), ..) => Some(*path),
+            _ => None,
+        }
     }
 }
 
@@ -875,14 +978,14 @@ impl<'db> Impl<'db> {
         self,
         db: &'db dyn HirDb,
     ) -> impl Iterator<Item = ItemKind<'db>> + 'db {
-        let s_graph = self.top_mod(db).scope_graph(db);
         let scope = ScopeId::from_item(self.into());
+        let s_graph = scope.scope_graph(db);
         s_graph.child_items(scope)
     }
 
     pub fn funcs(self, db: &'db dyn HirDb) -> impl Iterator<Item = Func<'db>> + 'db {
-        let s_graph = self.top_mod(db).scope_graph(db);
         let scope = ScopeId::from_item(self.into());
+        let s_graph = scope.scope_graph(db);
         s_graph.child_items(scope).filter_map(|item| match item {
             ItemKind::Func(func) => Some(func),
             _ => None,
@@ -931,8 +1034,8 @@ impl<'db> Trait<'db> {
         self,
         db: &'db dyn HirDb,
     ) -> impl Iterator<Item = ItemKind<'db>> + 'db {
-        let s_graph = self.top_mod(db).scope_graph(db);
         let scope = ScopeId::from_item(self.into());
+        let s_graph = scope.scope_graph(db);
         s_graph.child_items(scope)
     }
 
@@ -941,8 +1044,8 @@ impl<'db> Trait<'db> {
     }
 
     pub fn methods(self, db: &'db dyn HirDb) -> impl Iterator<Item = Func<'db>> + 'db {
-        let s_graph = self.top_mod(db).scope_graph(db);
         let scope = ScopeId::from_item(self.into());
+        let s_graph = scope.scope_graph(db);
         s_graph.child_items(scope).filter_map(|item| match item {
             ItemKind::Func(func) => Some(func),
             _ => None,
@@ -963,6 +1066,7 @@ impl<'db> Trait<'db> {
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, salsa::Update)]
 pub struct AssocTyDecl<'db> {
+    pub attributes: AttrListId<'db>,
     pub name: Partial<IdentId<'db>>,
     pub bounds: Vec<TypeBound<'db>>,
     pub default: Option<TypeId<'db>>,
@@ -970,6 +1074,7 @@ pub struct AssocTyDecl<'db> {
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, salsa::Update)]
 pub struct AssocConstDecl<'db> {
+    pub attributes: AttrListId<'db>,
     pub name: Partial<IdentId<'db>>,
     pub ty: Partial<TypeId<'db>>,
     pub default: Option<Partial<Body<'db>>>,
@@ -982,12 +1087,12 @@ pub struct ImplTrait<'db> {
     id: TrackedItemId<'db>,
 
     pub(in crate::core) trait_ref: Partial<TraitRefId<'db>>,
-    pub(in crate::core) type_ref: Partial<TypeId<'db>>,
+    pub(crate) type_ref: Partial<TypeId<'db>>,
     pub(in crate::core) attributes: AttrListId<'db>,
     pub(in crate::core) generic_params: GenericParamListId<'db>,
     pub(in crate::core) where_clause: WhereClauseId<'db>,
     #[return_ref]
-    pub(in crate::core) types: Vec<AssocTyDef<'db>>,
+    pub(crate) types: Vec<AssocTyDef<'db>>,
     #[return_ref]
     pub(in crate::core) consts: Vec<AssocConstDef<'db>>,
     pub top_mod: TopLevelMod<'db>,
@@ -998,6 +1103,16 @@ pub struct ImplTrait<'db> {
 impl<'db> ImplTrait<'db> {
     pub fn span(self) -> LazyImplTraitSpan<'db> {
         LazyImplTraitSpan::new(self)
+    }
+
+    /// Returns the trait reference for this impl.
+    pub fn hir_trait_ref(self, db: &'db dyn HirDb) -> Partial<TraitRefId<'db>> {
+        self.trait_ref(db)
+    }
+
+    /// Returns the raw associated const definitions from the HIR.
+    pub fn hir_consts(self, db: &'db dyn HirDb) -> &'db [AssocConstDef<'db>] {
+        self.consts(db)
     }
 
     pub fn associated_type_span(
@@ -1015,8 +1130,8 @@ impl<'db> ImplTrait<'db> {
         self,
         db: &'db dyn HirDb,
     ) -> impl Iterator<Item = ItemKind<'db>> + 'db {
-        let s_graph = self.top_mod(db).scope_graph(db);
         let scope = ScopeId::from_item(self.into());
+        let s_graph = scope.scope_graph(db);
         s_graph.child_items(scope)
     }
 
@@ -1038,12 +1153,14 @@ impl<'db> ImplTrait<'db> {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, salsa::Update)]
 pub struct AssocTyDef<'db> {
+    pub attributes: AttrListId<'db>,
     pub name: Partial<IdentId<'db>>,
-    pub(in crate::core) type_ref: Partial<TypeId<'db>>,
+    pub(crate) type_ref: Partial<TypeId<'db>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, salsa::Update)]
 pub struct AssocConstDef<'db> {
+    pub attributes: AttrListId<'db>,
     pub name: Partial<IdentId<'db>>,
     pub ty: Partial<TypeId<'db>>,
     pub value: Partial<Body<'db>>,
@@ -1085,6 +1202,7 @@ pub struct Use<'db> {
     #[id]
     id: TrackedItemId<'db>,
 
+    pub(in crate::core) attributes: AttrListId<'db>,
     pub path: Partial<super::UsePathId<'db>>,
     pub alias: Option<Partial<UseAlias<'db>>>,
     pub vis: Visibility,
@@ -1255,7 +1373,7 @@ impl<'db> FieldParent<'db> {
     pub(in crate::core) fn fields_list(self, db: &'db dyn HirDb) -> FieldDefListId<'db> {
         match self {
             FieldParent::Struct(struct_) => struct_.fields(db),
-            FieldParent::Contract(contract) => contract.fields(db),
+            FieldParent::Contract(contract) => contract.hir_fields(db),
             FieldParent::Variant(variant) => match variant.kind(db) {
                 VariantKind::Record(fields) => fields,
                 _ => unreachable!(),
@@ -1301,6 +1419,10 @@ impl<'db> FieldDef<'db> {
             type_ref,
             vis,
         }
+    }
+
+    pub fn type_ref(&self) -> Partial<TypeId<'db>> {
+        self.type_ref
     }
 }
 
@@ -1390,6 +1512,8 @@ pub enum TrackedItemVariant<'db> {
     Trait(Partial<IdentId<'db>>),
     ImplTrait(Partial<TraitRefId<'db>>, Partial<TypeId<'db>>),
     Const(Partial<IdentId<'db>>),
+    ContractInit,
+    ContractRecvArm { recv_idx: u32, arm_idx: u32 },
     Use(Partial<super::UsePathId<'db>>),
     FuncBody,
     NamelessBody,

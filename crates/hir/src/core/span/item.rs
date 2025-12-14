@@ -4,7 +4,11 @@ use super::{
     LazySpanAtom,
     attr::LazyAttrListSpan,
     define_lazy_span_node,
-    params::{LazyFuncParamListSpan, LazyGenericParamListSpan, LazyWhereClauseSpan},
+    params::{
+        LazyFuncParamListSpan, LazyGenericParamListSpan, LazyUsesClauseSpan, LazyWhereClauseSpan,
+    },
+    pat::LazyPatSpan,
+    path::LazyPathSpan,
     transition::SpanTransitionChain,
     types::{LazyTupleTypeSpan, LazyTySpan},
     use_tree::LazyUseAliasSpan,
@@ -15,7 +19,7 @@ use crate::{
         Trait, TypeAlias, Use,
     },
     span::{
-        DesugaredOrigin, DesugaredUseFocus,
+        DesugaredOrigin, DesugaredUseFocus, MsgDesugaredFocus,
         params::LazyTraitRefSpan,
         transition::{LazyArg, LazyTransitionFn, ResolvedOrigin, ResolvedOriginKind},
         use_tree::LazyUsePathSpan,
@@ -47,7 +51,7 @@ define_lazy_span_node!(
         (where_clause, where_clause, LazyWhereClauseSpan),
         (params, params, LazyFuncParamListSpan),
         (ret_ty, ret_ty, LazyTySpan),
-        (uses_clause, uses_clause, LazySpanAtom),
+        (effects, uses_clause, LazyUsesClauseSpan),
     }
 );
 
@@ -88,16 +92,42 @@ impl<'db> LazyFuncSpan<'db> {
         self.sig().name()
     }
 
-    pub fn uses_clause(self) -> LazySpanAtom<'db> {
-        self.sig().uses_clause()
+    pub fn effects(mut self) -> LazyUsesClauseSpan<'db> {
+        fn f(origin: ResolvedOrigin, _: LazyArg) -> ResolvedOrigin {
+            origin.map(|node| {
+                ast::Func::cast(node)
+                    .map(|f| f.sig())
+                    .and_then(|sig| sig.uses_clause())
+                    .map(|n| n.syntax().clone().into())
+            })
+        }
+
+        self.0.push(LazyTransitionFn {
+            f,
+            arg: LazyArg::None,
+        });
+        LazyUsesClauseSpan(self.0)
     }
 
     pub fn where_clause(self) -> LazyWhereClauseSpan<'db> {
         self.sig().where_clause()
     }
 
-    pub fn params(self) -> LazyFuncParamListSpan<'db> {
-        self.sig().params()
+    pub fn params(mut self) -> LazyFuncParamListSpan<'db> {
+        fn f(origin: ResolvedOrigin, _: LazyArg) -> ResolvedOrigin {
+            origin.map(|node| {
+                ast::Func::cast(node)
+                    .map(|f| f.sig())
+                    .and_then(|sig| sig.params())
+                    .map(|n| n.syntax().clone().into())
+            })
+        }
+
+        self.0.push(LazyTransitionFn {
+            f,
+            arg: LazyArg::None,
+        });
+        LazyFuncParamListSpan(self.0)
     }
 
     pub fn ret_ty(self) -> LazyTySpan<'db> {
@@ -112,9 +142,7 @@ impl<'db> LazyFuncSpan<'db> {
 define_lazy_span_node!(
     LazyStructSpan,
     ast::Struct,
-    @token {
-        (name, name),
-    }
+    // Note: `name` is handled specially below to support msg desugared structs
     @node {
         (attributes, attr_list, LazyAttrListSpan),
         (generic_params, generic_params, LazyGenericParamListSpan),
@@ -125,7 +153,32 @@ define_lazy_span_node!(
 );
 impl<'db> LazyStructSpan<'db> {
     pub fn new(s: Struct<'db>) -> Self {
-        Self(crate::span::transition::SpanTransitionChain::new(s))
+        Self(SpanTransitionChain::new(s))
+    }
+
+    /// Returns the span of the struct name.
+    /// For msg-desugared structs, this points to the variant name in the original msg block.
+    pub fn name(mut self) -> LazySpanAtom<'db> {
+        fn f(origin: ResolvedOrigin, _: LazyArg) -> ResolvedOrigin {
+            origin
+                .map(|node| {
+                    ast::Struct::cast(node)
+                        .and_then(|n| n.name())
+                        .map(Into::into)
+                })
+                .map_desugared(|root, desugared| match desugared {
+                    DesugaredOrigin::Msg(mut msg) => {
+                        msg.focus = MsgDesugaredFocus::VariantName;
+                        ResolvedOriginKind::Desugared(root, DesugaredOrigin::Msg(msg))
+                    }
+                    other => ResolvedOriginKind::Desugared(root, other),
+                })
+        }
+        self.0.push(LazyTransitionFn {
+            f,
+            arg: LazyArg::None,
+        });
+        LazySpanAtom(self.0)
     }
 }
 
@@ -138,7 +191,9 @@ define_lazy_span_node!(
     @node {
         (attributes, attr_list, LazyAttrListSpan),
         (modifier, modifier, LazyItemModifierSpan),
-        (fields, fields, LazyFieldDefListSpan),
+        (effects, uses_clause, LazyUsesClauseSpan),
+        (fields, fields, LazyContractFieldsSpan),
+        (init_block, init_block, LazyContractInitSpan),
     }
 );
 impl<'db> LazyContractSpan<'db> {
@@ -231,14 +286,73 @@ define_lazy_span_node!(
     }
 );
 
-define_lazy_span_node!(
-    LazyTraitItemListSpan,
-    ast::TraitItemList,
-    @idx {
-        (assoc_type, LazyTraitTypeSpan),
-        (assoc_const, LazyTraitConstSpan),
+define_lazy_span_node!(LazyTraitItemListSpan, ast::TraitItemList,);
+
+impl<'db> LazyTraitItemListSpan<'db> {
+    pub fn assoc_type(mut self, idx: usize) -> LazyTraitTypeSpan<'db> {
+        use crate::span::transition::{LazyArg, LazyTransitionFn, ResolvedOrigin};
+        use parser::ast::prelude::*;
+
+        fn f(origin: ResolvedOrigin, arg: LazyArg) -> ResolvedOrigin {
+            let idx = match arg {
+                LazyArg::Idx(idx) => idx,
+                _ => unreachable!(),
+            };
+
+            origin.map(|node| {
+                ast::TraitItemList::cast(node)
+                    .and_then(|list| {
+                        list.into_iter()
+                            .filter_map(|item| match item.kind() {
+                                ast::TraitItemKind::Type(ty) => Some(ty),
+                                _ => None,
+                            })
+                            .nth(idx)
+                    })
+                    .map(|n| n.syntax().clone().into())
+            })
+        }
+
+        let lazy_transition = LazyTransitionFn {
+            f,
+            arg: LazyArg::Idx(idx),
+        };
+        self.0.push(lazy_transition);
+        LazyTraitTypeSpan(self.0)
     }
-);
+
+    pub fn assoc_const(mut self, idx: usize) -> LazyTraitConstSpan<'db> {
+        use crate::span::transition::{LazyArg, LazyTransitionFn, ResolvedOrigin};
+        use parser::ast::prelude::*;
+
+        fn f(origin: ResolvedOrigin, arg: LazyArg) -> ResolvedOrigin {
+            let idx = match arg {
+                LazyArg::Idx(idx) => idx,
+                _ => unreachable!(),
+            };
+
+            origin.map(|node| {
+                ast::TraitItemList::cast(node)
+                    .and_then(|list| {
+                        list.into_iter()
+                            .filter_map(|item| match item.kind() {
+                                ast::TraitItemKind::Const(c) => Some(c),
+                                _ => None,
+                            })
+                            .nth(idx)
+                    })
+                    .map(|n| n.syntax().clone().into())
+            })
+        }
+
+        let lazy_transition = LazyTransitionFn {
+            f,
+            arg: LazyArg::Idx(idx),
+        };
+        self.0.push(lazy_transition);
+        LazyTraitConstSpan(self.0)
+    }
+}
 
 define_lazy_span_node!(
     LazyTraitTypeSpan,
@@ -307,7 +421,13 @@ impl<'db> LazyConstSpan<'db> {
     }
 }
 
-define_lazy_span_node!(LazyUseSpan, ast::Use);
+define_lazy_span_node!(
+    LazyUseSpan,
+    ast::Use,
+    @node {
+        (attributes, attr_list, LazyAttrListSpan),
+    }
+);
 impl<'db> LazyUseSpan<'db> {
     pub fn new(u: Use<'db>) -> Self {
         Self(crate::span::transition::SpanTransitionChain::new(u))
@@ -327,6 +447,7 @@ impl<'db> LazyUseSpan<'db> {
                         use_.focus = DesugaredUseFocus::Path;
                         ResolvedOriginKind::Desugared(root, DesugaredOrigin::Use(use_))
                     }
+                    _ => ResolvedOriginKind::None,
                 })
         }
 
@@ -353,6 +474,7 @@ impl<'db> LazyUseSpan<'db> {
                         use_.focus = DesugaredUseFocus::Alias;
                         ResolvedOriginKind::Desugared(root, DesugaredOrigin::Use(use_))
                     }
+                    _ => ResolvedOriginKind::None,
                 })
         }
 
@@ -372,6 +494,78 @@ impl<'db> LazyBodySpan<'db> {
         Self(crate::span::transition::SpanTransitionChain::new(b))
     }
 }
+
+define_lazy_span_node!(
+    LazyContractFieldsSpan,
+    ast::ContractFields,
+    @idx {
+        (field, LazyFieldDefSpan),
+    }
+);
+
+define_lazy_span_node!(
+    LazyContractInitSpan,
+    ast::ContractInit,
+    @node {
+        (params, params, LazyFuncParamListSpan),
+        (effects, uses_clause, LazyUsesClauseSpan),
+        (body, body, LazyBodySpan),
+    }
+);
+
+impl<'db> LazyContractSpan<'db> {
+    /// Nth recv span
+    pub fn recv(mut self, idx: usize) -> LazyContractRecvSpan<'db> {
+        use crate::span::transition::{LazyArg, LazyTransitionFn, ResolvedOrigin};
+        use parser::ast::prelude::*;
+
+        fn f(origin: ResolvedOrigin, arg: LazyArg) -> ResolvedOrigin {
+            let idx = match arg {
+                crate::span::transition::LazyArg::Idx(i) => i,
+                _ => 0,
+            };
+            origin.map(|node| {
+                ast::Contract::cast(node)
+                    .and_then(|c| c.recvs().nth(idx))
+                    .map(|n| n.syntax().clone().into())
+            })
+        }
+
+        self.0.push(LazyTransitionFn {
+            f,
+            arg: LazyArg::Idx(idx),
+        });
+        LazyContractRecvSpan(self.0)
+    }
+}
+
+define_lazy_span_node!(
+    LazyContractRecvSpan,
+    ast::ContractRecv,
+    @node {
+        (path, path, LazyPathSpan),
+        (arms, arms, LazyRecvArmListSpan),
+    }
+);
+
+define_lazy_span_node!(
+    LazyRecvArmListSpan,
+    ast::RecvArmList,
+    @idx {
+        (arm, LazyRecvArmSpan),
+    }
+);
+
+define_lazy_span_node!(
+    LazyRecvArmSpan,
+    ast::RecvArm,
+    @node {
+        (pat, pat, LazyPatSpan),
+        (ret_ty, ret_ty, LazyTySpan),
+        (effects, uses_clause, LazyUsesClauseSpan),
+        (body, body, LazyBodySpan),
+    }
+);
 
 define_lazy_span_node!(
     LazyFieldDefListSpan,

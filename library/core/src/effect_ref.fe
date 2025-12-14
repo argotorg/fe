@@ -1,0 +1,90 @@
+/// Effect reference traits.
+///
+/// These traits provide a type-level interface for "effect providers" that act as
+/// references (pointers) to some underlying `Target` type.
+///
+/// Backends may define their own concrete provider types, but `core` also
+/// provides a small set of general-purpose provider types (`MemPtr<T>`,
+/// `StorPtr<T>`) that backends can map onto their runtime model.
+
+/// Effect provider address-space marker.
+pub struct Memory {}
+
+/// Effect provider address-space marker: indicates the provider points into immutable calldata.
+///
+/// Backends may interpret this as an input byte buffer (e.g. EVM calldata via CALLDATALOAD).
+pub struct Calldata {}
+
+/// Effect provider address-space marker: indicates the provider points into the target's persistent
+/// storage/state.
+///
+/// Backends decide what "storage" means for their runtime model.
+pub struct Storage {}
+
+/// Effect provider address-space marker: indicates the provider points into transient storage.
+///
+/// Backends may interpret this as a temporary key/value store scoped to a call frame (e.g. EVM
+/// transient storage via TLOAD/TSTORE).
+pub struct TransientStorage {}
+
+/// Target-specific domain markers (e.g. calldata, transient storage) belong in the target's
+/// standard library, not in `core`.
+
+/// Memory pointer to a value of type `T`.
+///
+/// This is a general-purpose effect provider type. Backends decide how the raw
+/// handle maps to runtime memory.
+pub struct MemPtr<T> {
+    addr: u256
+}
+
+/// Pointer/handle to a contract field of type `T`.
+///
+/// This is a general-purpose effect provider type. Backends decide how the raw
+/// handle maps to persistent contract state (e.g. EVM storage slots).
+pub struct StorPtr<T> {
+    handle: u256
+}
+
+/// Read-only effect reference: values implementing this trait can provide access to `Target`.
+pub trait EffectRef {
+    type Target
+    type AddressSpace
+
+    /// Construct the effect provider from the raw pointer/handle used by the backend.
+    fn from_raw(raw: u256) -> Self
+
+    /// Return the raw pointer/handle used by the backend (e.g. memory address or storage slot).
+    fn raw(self) -> u256
+}
+
+/// Mutable effect reference: values implementing this trait can provide mutable access to `Target`.
+pub trait EffectRefMut: EffectRef {}
+
+impl<T> EffectRef for MemPtr<T> {
+    type Target = T
+    type AddressSpace = Memory
+
+    fn from_raw(raw: u256) -> Self {
+        Self { addr: raw }
+    }
+
+    fn raw(self) -> u256 {
+        self.addr
+    }
+}
+impl<T> EffectRefMut for MemPtr<T> {}
+
+impl<T> EffectRef for StorPtr<T> {
+    type Target = T
+    type AddressSpace = Storage
+
+    fn from_raw(raw: u256) -> Self {
+        Self { handle: raw }
+    }
+
+    fn raw(self) -> u256 {
+        self.handle
+    }
+}
+impl<T> EffectRefMut for StorPtr<T> {}

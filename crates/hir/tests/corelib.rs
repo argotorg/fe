@@ -1,5 +1,3 @@
-mod test_db;
-
 use common::stdlib::{HasBuiltinCore, HasBuiltinStd};
 use driver::{DriverDataBase, db::DiagnosticsCollection};
 

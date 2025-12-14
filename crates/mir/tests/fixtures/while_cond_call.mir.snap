@@ -1,0 +1,20 @@
+---
+source: crates/mir/tests/lowering_snapshots.rs
+expression: mir_output
+---
+fn lt_ten(v0: u64) -> bool:
+  bb0:
+    ret (v0 < 10)
+
+fn while_cond_call() -> u64:
+  bb0:
+    v0: u64 = 0
+    jmp bb1
+  bb1:
+    v1: bool = lt_ten(v0)
+    br v1 bb2 bb3
+  bb2:
+    v0 = (v0 + 1)
+    jmp bb1
+  bb3:
+    ret v0

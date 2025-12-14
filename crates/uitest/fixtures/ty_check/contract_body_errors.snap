@@ -1,0 +1,40 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/contract_body_errors.fe
+---
+error[8-0000]: type mismatch
+   ┌─ contract_body_errors.fe:24:27
+   │
+24 │         value = initial + true
+   │                           ^^^^ expected `u64`, but `bool` is given
+
+error[8-0000]: type mismatch
+   ┌─ contract_body_errors.fe:35:35
+   │
+35 │             let _x: u64 = value + false
+   │                                   ^^^^^ expected `u64`, but `bool` is given
+
+error[8-0000]: type mismatch
+   ┌─ contract_body_errors.fe:41:13
+   │
+41 │             false
+   │             ^^^^^ expected `u64`, but `bool` is given
+
+error[8-0023]: argument number mismatch
+   ┌─ contract_body_errors.fe:22:15
+   │
+12 │ fn helper(_ x: u64, _ y: u64) -> u64 {
+   │    ------ function defined here
+   ·
+22 │         helper(initial)
+   │               ^^^^^^^^^ expected 2 arguments, but 1 given
+
+error[8-0023]: argument number mismatch
+   ┌─ contract_body_errors.fe:30:19
+   │
+12 │ fn helper(_ x: u64, _ y: u64) -> u64 {
+   │    ------ function defined here
+   ·
+30 │             helper(1, 2, 3)
+   │                   ^^^^^^^^^ expected 2 arguments, but 3 given

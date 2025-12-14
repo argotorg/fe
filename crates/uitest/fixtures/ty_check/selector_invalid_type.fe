@@ -1,0 +1,12 @@
+// Test: non-integer selector values should emit an error pointing at the attribute
+
+msg TestMsg {
+    #[selector = "not_a_number"]
+    BadString {} -> (),
+
+    #[selector = true]
+    BadBool {} -> (),
+
+    #[selector = 0x01]
+    GoodOne {} -> (),
+}

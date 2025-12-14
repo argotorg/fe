@@ -17,6 +17,8 @@ use super::types::{Doc, ToDoc, block_list};
 fn bin_op_precedence(op: &BinOp) -> u8 {
     use parser::ast::ArithBinOp;
     match op {
+        // Range has lowest precedence
+        BinOp::Arith(ArithBinOp::Range(_)) => 0,
         BinOp::Logical(LogicalBinOp::Or(_)) => 1,
         BinOp::Logical(LogicalBinOp::And(_)) => 2,
         BinOp::Comp(_) => 3,
@@ -395,6 +397,23 @@ impl ToDoc for ast::UnExpr {
     }
 }
 
+impl ToDoc for ast::CastExpr {
+    fn to_doc<'a>(&self, ctx: &'a RewriteContext<'a>) -> Doc<'a> {
+        let alloc = &ctx.alloc;
+
+        let expr = match self.expr() {
+            Some(e) => e.to_doc(ctx),
+            None => return alloc.nil(),
+        };
+        let ty = match self.ty() {
+            Some(t) => t.to_doc(ctx),
+            None => return expr,
+        };
+
+        expr.append(alloc.text(" as ")).append(ty)
+    }
+}
+
 impl ToDoc for ast::CallArg {
     fn to_doc<'a>(&self, ctx: &'a RewriteContext<'a>) -> Doc<'a> {
         let alloc = &ctx.alloc;
@@ -465,16 +484,22 @@ impl ToDoc for ast::RecordField {
     fn to_doc<'a>(&self, ctx: &'a RewriteContext<'a>) -> Doc<'a> {
         let alloc = &ctx.alloc;
 
-        let label = match self.label() {
-            Some(l) => ctx.snippet(l.text_range()).trim().to_string(),
-            None => return alloc.nil(),
-        };
-        let expr = match self.expr() {
-            Some(e) => e.to_doc(ctx),
-            None => return alloc.text(label),
-        };
-
-        alloc.text(label).append(alloc.text(": ")).append(expr)
+        match (self.label(), self.expr()) {
+            // Named field with explicit value: `label: expr`
+            (Some(label), Some(expr)) => {
+                let label_str = ctx.snippet(label.text_range()).trim().to_string();
+                alloc
+                    .text(label_str)
+                    .append(alloc.text(": "))
+                    .append(expr.to_doc(ctx))
+            }
+            // Shorthand field: `from` (no colon, expr is the identifier)
+            (None, Some(expr)) => expr.to_doc(ctx),
+            // Just a label (shouldn't happen in practice)
+            (Some(label), None) => alloc.text(ctx.snippet(label.text_range()).trim().to_string()),
+            // Empty (shouldn't happen)
+            (None, None) => alloc.nil(),
+        }
     }
 }
 

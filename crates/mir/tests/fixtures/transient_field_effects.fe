@@ -1,0 +1,24 @@
+use std::evm::TStorPtr
+
+msg Msg {
+    #[selector = 0]
+    Enter -> (),
+}
+
+fn bump_lock() uses (mut lock: u256) {
+    lock += 1
+}
+
+pub contract Guard {
+    lock: TStorPtr<u256>
+
+    init() uses (mut lock) {
+        lock = 0
+    }
+
+    recv Msg {
+        Enter -> () uses (mut lock) {
+            bump_lock()
+        }
+    }
+}

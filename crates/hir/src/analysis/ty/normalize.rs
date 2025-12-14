@@ -12,7 +12,9 @@ use rustc_hash::FxHashMap;
 
 use super::{
     canonical::Canonical,
+    canonical::Canonicalized,
     fold::{TyFoldable, TyFolder},
+    trait_def::impls_for_ty_with_constraints,
     trait_resolution::PredicateListId,
     ty_def::{AssocTy, TyData, TyId, TyParam},
     unify::UnificationTable,
@@ -32,22 +34,31 @@ pub fn normalize_ty<'db>(
     scope: ScopeId<'db>,
     assumptions: PredicateListId<'db>,
 ) -> TyId<'db> {
-    let mut normalizer = TypeNormalizer {
-        db,
-        scope,
-        assumptions,
-        cache: FxHashMap::default(),
-    };
-
+    let mut normalizer = TypeNormalizer::new(db, scope, assumptions);
     ty.fold_with(db, &mut normalizer)
 }
 
-struct TypeNormalizer<'db> {
+pub struct TypeNormalizer<'db> {
     db: &'db dyn HirAnalysisDb,
     scope: ScopeId<'db>,
     assumptions: PredicateListId<'db>,
     // Projection cache: None = in progress (cycle guard), Some(ty) = normalized result
     cache: FxHashMap<AssocTy<'db>, Option<TyId<'db>>>,
+}
+
+impl<'db> TypeNormalizer<'db> {
+    pub fn new(
+        db: &'db dyn HirAnalysisDb,
+        scope: ScopeId<'db>,
+        assumptions: PredicateListId<'db>,
+    ) -> Self {
+        Self {
+            db,
+            scope,
+            assumptions,
+            cache: FxHashMap::default(),
+        }
+    }
 }
 
 impl<'db> TyFolder<'db> for TypeNormalizer<'db> {
@@ -118,6 +129,15 @@ impl<'db> TypeNormalizer<'db> {
         //    but restrict results to the same trait as `assoc` and deduplicate by
         //    the resulting type. If all viable candidates agree on a single type,
         //    normalize to that type.
+        //
+        // First attempt an impl-based lookup across relevant ingots (Self's + trait's),
+        // mirroring trait-method resolution. This allows normalization to succeed even
+        // when the calling scope is in a different ingot (e.g., core code instantiated
+        // with std types).
+        if let Some(resolved) = self.try_resolve_assoc_ty_from_impls(assoc) {
+            return Some(resolved);
+        }
+
         //    Search by the trait's self type: `SelfTy::assoc.name`.
         // Normalize the trait's self type before candidate search.
         let self_ty = self.fold_ty(self.db, assoc.trait_.self_ty(self.db));
@@ -148,6 +168,77 @@ impl<'db> TypeNormalizer<'db> {
                 // Only replace if we're actually making progress
                 if *unique != ty { Some(*unique) } else { None }
             }
+            _ => None,
+        }
+    }
+
+    fn try_resolve_assoc_ty_from_impls(&mut self, assoc: &AssocTy<'db>) -> Option<TyId<'db>> {
+        let trait_def = assoc.trait_.def(self.db);
+        let trait_ingot = trait_def.ingot(self.db);
+
+        let self_ty = self.fold_ty(self.db, assoc.trait_.self_ty(self.db));
+        let self_ingot = self_ty.ingot(self.db);
+
+        let canonical_self_ty = Canonical::new(self.db, self_ty);
+
+        let mut dedup: IndexMap<TyId<'db>, ()> = IndexMap::new();
+
+        let mut search_ingots = Vec::with_capacity(2);
+        if let Some(ingot) = self_ingot {
+            search_ingots.push(ingot);
+        }
+        if self_ingot != Some(trait_ingot) {
+            search_ingots.push(trait_ingot);
+        }
+
+        // Canonicalize the target trait instance so we can unify against it in a
+        // fresh table without mixing inference keys from other tables.
+        let canonical_target = Canonicalized::new(self.db, assoc.trait_);
+        let canonical_inst = canonical_target.value;
+
+        let mut table = UnificationTable::new(self.db);
+        let target_inst = canonical_inst.extract_identity(&mut table);
+
+        for ingot in search_ingots {
+            for implementor in
+                impls_for_ty_with_constraints(self.db, ingot, canonical_self_ty, self.assumptions)
+            {
+                let snapshot = table.snapshot();
+                let implementor = table.instantiate_with_fresh_vars(implementor);
+
+                // Filter by trait before unifying (cheap early out).
+                if implementor.trait_def(self.db) != trait_def {
+                    table.rollback_to(snapshot);
+                    continue;
+                }
+
+                if table
+                    .unify(implementor.trait_(self.db), target_inst)
+                    .is_err()
+                {
+                    table.rollback_to(snapshot);
+                    continue;
+                }
+
+                let Some(assoc_ty) = implementor.assoc_ty(self.db, assoc.name) else {
+                    table.rollback_to(snapshot);
+                    continue;
+                };
+
+                // Apply substitutions, then decanonicalize back to the original
+                // inference vars before further normalization.
+                let folded = assoc_ty.fold_with(self.db, &mut table);
+                let folded = canonical_target.decanonicalize(self.db, folded);
+                let norm = self.fold_ty(self.db, folded);
+                dedup.entry(norm).or_insert(());
+
+                table.rollback_to(snapshot);
+            }
+        }
+
+        match dedup.len() {
+            0 => None,
+            1 => Some(*dedup.first().unwrap().0),
             _ => None,
         }
     }

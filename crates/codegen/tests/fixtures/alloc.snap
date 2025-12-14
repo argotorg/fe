@@ -1,25 +1,26 @@
 ---
 source: crates/codegen/tests/yul.rs
-assertion_line: 31
+assertion_line: 42
 expression: output
 input_file: tests/fixtures/alloc.fe
 ---
-function bump(size) -> ret {
-  ret := alloc(size)
+function $bump($size) -> ret {
+  let v0 := $alloc($size)
+  ret := v0
+  leave
 }
-function bump_const() -> ret {
-  ret := alloc(64)
+function $bump_const() -> ret {
+  let v0 := $alloc(64)
+  ret := v0
+  leave
 }
-function alloc(size) -> ret {
+function $alloc($size) -> ret {
   let v0 := mload(64)
   let v1 := eq(v0, 0)
   if v1 {
     v0 := 128
-    mstore(64, add(v0, size))
-    ret := v0
   }
-  if iszero(v1) {
-    mstore(64, add(v0, size))
-    ret := v0
-  }
+  mstore(64, add(v0, $size))
+  ret := v0
+  leave
 }

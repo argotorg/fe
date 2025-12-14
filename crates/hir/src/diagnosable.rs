@@ -626,13 +626,45 @@ impl<'db> ImplTrait<'db> {
         self,
         db: &'db dyn HirAnalysisDb,
     ) -> Vec<TyDiagCollection<'db>> {
+        use ty::fold::TyFoldable as _;
         use ty::trait_lower::lower_impl_trait;
+
+        struct TraitScopeSubstFolder<'db, 'a> {
+            trait_scope: ScopeId<'db>,
+            trait_args: &'a [TyId<'db>],
+        }
+
+        impl<'db> ty::fold::TyFolder<'db> for TraitScopeSubstFolder<'db, '_> {
+            fn fold_ty(&mut self, db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> TyId<'db> {
+                match ty.data(db) {
+                    ty::ty_def::TyData::TyParam(param)
+                        if !param.is_effect() && param.owner == self.trait_scope =>
+                    {
+                        self.trait_args.get(param.idx).copied().unwrap_or(ty)
+                    }
+
+                    ty::ty_def::TyData::ConstTy(const_ty) => match const_ty.data(db) {
+                        ty::const_ty::ConstTyData::TyParam(param, _)
+                            if !param.is_effect() && param.owner == self.trait_scope =>
+                        {
+                            self.trait_args.get(param.idx).copied().unwrap_or(ty)
+                        }
+
+                        _ => ty.super_fold_with(db, self),
+                    },
+
+                    _ => ty.super_fold_with(db, self),
+                }
+            }
+        }
 
         let mut diags = Vec::new();
         let Some(implementor) = lower_impl_trait(db, self) else {
             return diags;
         };
         let implementor = implementor.instantiate_identity();
+        let trait_args = implementor.trait_(db).args(db);
+        let trait_scope = implementor.trait_def(db).scope();
         let impl_trait_hir = implementor.hir_impl_trait(db);
         let assumptions =
             ty::trait_resolution::constraint::collect_constraints(db, impl_trait_hir.into())
@@ -642,6 +674,11 @@ impl<'db> ImplTrait<'db> {
             let Some(name) = assoc.name(db) else { continue };
 
             for bound_inst in assoc.bounds(db) {
+                let mut folder = TraitScopeSubstFolder {
+                    trait_scope,
+                    trait_args,
+                };
+                let bound_inst = bound_inst.fold_with(db, &mut folder);
                 let canonical_bound = ty::canonical::Canonical::new(db, bound_inst);
                 use ty::trait_resolution::{GoalSatisfiability, is_goal_satisfiable};
                 if let GoalSatisfiability::UnSat(_) = is_goal_satisfiable(
@@ -931,7 +968,6 @@ impl<'db> Diagnosable<'db> for AdtRef<'db> {
         match self {
             AdtRef::Struct(s) => s.diags(db),
             AdtRef::Enum(e) => e.diags(db),
-            AdtRef::Contract(c) => c.diags(db),
         }
     }
 }

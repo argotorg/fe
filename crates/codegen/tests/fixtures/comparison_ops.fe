@@ -1,3 +1,7 @@
 pub fn comparison_ops() -> (bool, bool, bool, bool, bool, bool) {
-    (1 == 1, 1 != 2, 1 < 2, 2 <= 2, 3 > 2, 3 >= 3)
+    // TODO: 1u256 syntax
+    let one: u256 = 1
+    let two: u256 = 2
+    let three: u256 = 3
+    (one == one, one != two, one < two, two <= two, three > two, three >= three)
 }

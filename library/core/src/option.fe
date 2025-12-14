@@ -14,7 +14,7 @@ impl<T> Option<T> {
     pub fn is_some(self) -> bool {
         match self {
             Self::Some(_) => true
-            None => false
+            Self::None => false
         }
     }
 
@@ -39,7 +39,7 @@ impl<T> Option<T> {
     pub fn unwrap(self) -> T {
         match self {
             Self::Some(t) => t
-            None => panic()
+            Self::None => panic()
         }
     }
 

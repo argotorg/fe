@@ -9,6 +9,24 @@ pub struct AttrListId<'db> {
     pub data: Vec<Attr<'db>>,
 }
 
+impl<'db> AttrListId<'db> {
+    /// Returns true if this attribute list contains an attribute with the given name.
+    ///
+    /// Only checks simple identifier attributes (e.g., `#[msg]`), not path attributes.
+    pub fn has_attr(self, db: &'db dyn HirDb, name: &str) -> bool {
+        self.data(db).iter().any(|attr| {
+            if let Attr::Normal(normal_attr) = attr
+                && let Some(path) = normal_attr.path.to_opt()
+                && let Some(ident) = path.as_ident(db)
+            {
+                ident.data(db) == name
+            } else {
+                false
+            }
+        })
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash, derive_more::From)]
 pub enum Attr<'db> {
     Normal(NormalAttr<'db>),
@@ -30,7 +48,8 @@ pub struct DocCommentAttr<'db> {
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct AttrArg<'db> {
     pub key: Partial<PathId<'db>>,
-    pub value: Partial<AttrArgValue<'db>>,
+    /// The value after `=` in `#[attr(key = value)]`. None for `#[attr(key)]` form.
+    pub value: Option<AttrArgValue<'db>>,
 }
 
 impl<'db> AttrArg<'db> {

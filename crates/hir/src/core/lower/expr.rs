@@ -3,7 +3,8 @@ use parser::ast::{self, prelude::*};
 use super::body::BodyCtxt;
 use crate::{
     hir_def::{
-        Body, GenericArgListId, IdentId, IntegerId, ItemKind, LitKind, Pat, PathId, Stmt, expr::*,
+        Body, GenericArgListId, IdentId, IntegerId, ItemKind, LitKind, Pat, PathId, Stmt, TypeId,
+        expr::*,
     },
     span::HirOrigin,
 };
@@ -51,6 +52,12 @@ impl<'db> Expr<'db> {
                 let op = un.op().expect("parser guarantees op presence");
                 let op = UnOp::lower_ast(op);
                 Self::Un(expr, op)
+            }
+
+            ast::ExprKind::Cast(cast) => {
+                let expr = Self::push_to_body_opt(ctxt, cast.expr());
+                let ty = TypeId::lower_ast_partial(ctxt.f_ctxt, cast.ty());
+                Self::Cast(expr, ty)
             }
 
             ast::ExprKind::Call(call) => {
@@ -172,13 +179,18 @@ impl<'db> Expr<'db> {
             }
 
             ast::ExprKind::With(with_) => {
-                // Lower `with (K = v, ..) { body }` into HIR::Expr::With(bindings, body)
+                // Lower `with (K = v, ..) { body }` and `with (v, ..) { body }`
+                // into HIR::Expr::With(bindings, body)
                 let mut bindings = Vec::new();
                 if let Some(params) = with_.params() {
                     for p in params {
                         let value = Self::push_to_body_opt(ctxt, p.value_expr());
-                        // Lower key path directly so multi-segment paths are preserved.
-                        let key_path = PathId::lower_ast_partial(ctxt.f_ctxt, p.path());
+                        let key_path = if p.eq().is_some() {
+                            // Lower key path directly so multi-segment paths are preserved.
+                            Some(PathId::lower_ast_partial(ctxt.f_ctxt, p.path()))
+                        } else {
+                            None
+                        };
                         bindings.push(super::super::hir_def::expr::WithBinding { key_path, value });
                     }
                 }
@@ -245,6 +257,7 @@ impl ArithBinOp {
             ast::ArithBinOp::BitAnd(_) => Self::BitAnd,
             ast::ArithBinOp::BitOr(_) => Self::BitOr,
             ast::ArithBinOp::BitXor(_) => Self::BitXor,
+            ast::ArithBinOp::Range(_) => Self::Range,
         }
     }
 }

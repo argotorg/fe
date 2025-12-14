@@ -1,5 +1,5 @@
 ---
-source: crates/hir-analysis/tests/decision_tree.rs
+source: crates/hir/tests/decision_tree.rs
 expression: res
 input_file: test_files/decision_trees/nested_enum.fe
 ---
@@ -14,12 +14,12 @@ note:
    │ ╰─────^ Decision Tree for test_nested_enum:
  Switch on expr
  ├─ Value =>
- │  └─ Switch on expr.0
+ │  └─ Switch on expr.Value[0]
  │     ├─ Unit =>
  │     │  └─ Execute arm #0
  │     └─ Tuple =>
  │        └─ Execute arm #1
- │             x ← expr.0.0
- │             y ← expr.0.1
+ │             x ← expr.Value[0].Tuple[0]
+ │             y ← expr.Value[0].Tuple[1]
  └─ Other =>
     └─ Execute arm #2

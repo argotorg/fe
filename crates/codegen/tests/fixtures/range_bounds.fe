@@ -1,0 +1,31 @@
+pub fn sum_const() -> usize {
+    let mut sum: usize = 0
+    for i in 0..4 {
+        sum = sum + i
+    }
+    sum
+}
+
+pub fn sum_dynamic_end(end: usize) -> usize {
+    let mut sum: usize = 0
+    for i in 0..end {
+        sum = sum + i
+    }
+    sum
+}
+
+pub fn sum_dynamic_start(start: usize) -> usize {
+    let mut sum: usize = 0
+    for i in start..4 {
+        sum = sum + i
+    }
+    sum
+}
+
+pub fn sum_dynamic(start: usize, end: usize) -> usize {
+    let mut sum: usize = 0
+    for i in start..end {
+        sum = sum + i
+    }
+    sum
+}

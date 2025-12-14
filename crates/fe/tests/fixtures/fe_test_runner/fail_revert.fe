@@ -1,0 +1,6 @@
+use std::evm::ops::revert
+
+#[test]
+fn test_revert() {
+    revert(0, 0)
+}

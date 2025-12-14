@@ -5,16 +5,19 @@
 
 use crate::analysis::HirAnalysisDb;
 use crate::analysis::name_resolution::{PathRes, ResolvedVariant, resolve_path};
+use crate::analysis::ty::const_eval::{ConstValue, try_eval_const_ref};
+use crate::analysis::ty::trait_resolution::PredicateListId;
+use crate::analysis::ty::ty_check::ConstRef;
 use crate::analysis::ty::ty_def::{InvalidCause, TyId};
 use crate::core::hir_def::{
-    Body as HirBody, LitKind, Partial, Pat as HirPat, PathId, VariantKind, scope_graph::ScopeId,
+    Body as HirBody, IntegerId, LitKind, Partial, Pat as HirPat, PathId, VariantKind,
+    scope_graph::ScopeId,
 };
 use crate::core::hir_def::{EnumVariant, FieldParent, IdentId, PatId};
 use rustc_hash::FxHashMap;
 use smallvec1::SmallVec;
 
 use super::adt_def::AdtRef;
-use super::trait_resolution::PredicateListId;
 
 /// A simplified representation of a pattern for analysis
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -82,9 +85,22 @@ impl<'db> SimplifiedPattern<'db> {
                     Self::resolve_constructor(path_partial, db, scope, Some(expected_ty))
                 {
                     SimplifiedPattern::constructor(ctor, vec![], ctor_ty)
+                } else if let Some(lit) =
+                    Self::resolve_literal_pat_from_path(path_partial, db, scope, expected_ty)
+                {
+                    let ctor = ConstructorKind::Literal(lit, expected_ty);
+                    SimplifiedPattern::constructor(ctor, vec![], expected_ty)
                 } else if let Partial::Present(path_id) = path_partial {
-                    let binding_name = path_id.ident(db).to_opt().map(|ident| (ident, arm_idx));
-                    SimplifiedPattern::wildcard(binding_name, expected_ty)
+                    // Only a single-segment path can be a binding. If we have a qualified
+                    // path (e.g. `Type::CONST`) and it didn't resolve to a constructor or const,
+                    // treat it as an errored pattern so we don't incorrectly consider it a
+                    // wildcard that makes later patterns unreachable.
+                    if path_id.parent(db).is_some() {
+                        SimplifiedPattern::error(expected_ty)
+                    } else {
+                        let binding_name = path_id.ident(db).to_opt().map(|ident| (ident, arm_idx));
+                        SimplifiedPattern::wildcard(binding_name, expected_ty)
+                    }
                 } else {
                     SimplifiedPattern::wildcard(None, expected_ty)
                 }
@@ -256,6 +272,38 @@ impl<'db> SimplifiedPattern<'db> {
         }
 
         None
+    }
+
+    fn resolve_literal_pat_from_path(
+        path_partial: &Partial<PathId<'db>>,
+        db: &'db dyn HirAnalysisDb,
+        scope: ScopeId<'db>,
+        expected_ty: TyId<'db>,
+    ) -> Option<LitKind<'db>> {
+        let Partial::Present(path_id) = path_partial else {
+            return None;
+        };
+
+        let assumptions = PredicateListId::empty_list(db);
+        let resolved = resolve_path(db, *path_id, scope, assumptions, true).ok()?;
+
+        match resolved {
+            PathRes::Const(const_def, _) => {
+                let cref = ConstRef::Const(const_def);
+                match try_eval_const_ref(db, cref, expected_ty)? {
+                    ConstValue::Int(int) => Some(LitKind::Int(IntegerId::new(db, int))),
+                    ConstValue::Bool(flag) => Some(LitKind::Bool(flag)),
+                }
+            }
+            PathRes::TraitConst(_recv_ty, inst, name) => {
+                let cref = ConstRef::TraitConst { inst, name };
+                match try_eval_const_ref(db, cref, expected_ty)? {
+                    ConstValue::Int(int) => Some(LitKind::Int(IntegerId::new(db, int))),
+                    ConstValue::Bool(flag) => Some(LitKind::Bool(flag)),
+                }
+            }
+            _ => None,
+        }
     }
 }
 

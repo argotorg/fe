@@ -1,6 +1,8 @@
 use cranelift_entity::entity_impl;
 
-use super::{Body, GenericArgListId, IdentId, IntegerId, LitKind, Partial, PatId, PathId, StmtId};
+use super::{
+    Body, GenericArgListId, IdentId, IntegerId, LitKind, Partial, PatId, PathId, StmtId, TypeId,
+};
 use crate::{HirDb, span::expr::LazyExprSpan};
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, salsa::Update)]
@@ -10,6 +12,8 @@ pub enum Expr<'db> {
     /// The first `ExprId` is the lhs, the second is the rhs.
     Bin(ExprId, ExprId, BinOp),
     Un(ExprId, UnOp),
+    /// `expr as Type`
+    Cast(ExprId, Partial<TypeId<'db>>),
     /// (callee, call args)
     Call(ExprId, Vec<CallArg<'db>>),
     /// (receiver, method_name, generic args, call args)
@@ -112,6 +116,8 @@ pub enum ArithBinOp {
     BitOr,
     /// `^`
     BitXor,
+    /// `..`
+    Range,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -200,6 +206,8 @@ impl<'db> Field<'db> {
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, salsa::Update)]
 pub struct WithBinding<'db> {
-    pub key_path: Partial<PathId<'db>>, // Unresolved path key
+    /// Effect key path (e.g. `Ctx` / `Storage<u8>`). When absent, the binding is
+    /// shorthand and the key is inferred from the bound value and effect usage.
+    pub key_path: Option<Partial<PathId<'db>>>,
     pub value: ExprId,
 }

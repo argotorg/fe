@@ -115,12 +115,46 @@ impl<'db> TyId<'db> {
         matches!(self.data(db), TyData::Never)
     }
 
-    /// Returns `IngotDescription` that declares the type.
+    /// Returns an ingot associated with this type.
     pub fn ingot(self, db: &'db dyn HirAnalysisDb) -> Option<Ingot<'db>> {
+        fn ingot_from_non_projection<'db>(
+            db: &'db dyn HirAnalysisDb,
+            mut ty: TyId<'db>,
+        ) -> Option<Ingot<'db>> {
+            loop {
+                match ty.data(db) {
+                    TyData::TyBase(TyBase::Adt(adt)) => return adt.ingot(db).into(),
+                    TyData::TyBase(TyBase::Contract(contract)) => {
+                        return contract.top_mod(db).ingot(db).into();
+                    }
+                    TyData::TyBase(TyBase::Func(def)) => return def.ingot(db).into(),
+                    TyData::TyApp(lhs, _) => {
+                        ty = *lhs;
+                    }
+                    _ => return None,
+                }
+            }
+        }
+
         match self.data(db) {
             TyData::TyBase(TyBase::Adt(adt)) => adt.ingot(db).into(),
+            TyData::TyBase(TyBase::Contract(contract)) => contract.top_mod(db).ingot(db).into(),
             TyData::TyBase(TyBase::Func(def)) => def.ingot(db).into(),
             TyData::TyApp(lhs, _) => lhs.ingot(db),
+            // Projection types don't have a single defining ingot, but we still want an ingot
+            // that can be used to search for relevant trait impls. Using an ingot that is
+            // referenced by the underlying trait arguments generally yields the best results.
+            TyData::AssocTy(assoc_ty) => assoc_ty
+                .trait_
+                .args(db)
+                .iter()
+                .copied()
+                .find_map(|arg| ingot_from_non_projection(db, arg)),
+            TyData::QualifiedTy(trait_inst) => trait_inst
+                .args(db)
+                .iter()
+                .copied()
+                .find_map(|arg| ingot_from_non_projection(db, arg)),
             _ => None,
         }
     }
@@ -170,7 +204,7 @@ impl<'db> TyId<'db> {
                 )
             }
             TyData::TyApp(_, _) => pretty_print_ty_app(db, self),
-            TyData::TyBase(ty_con) => ty_con.pretty_print(db),
+            TyData::TyBase(base) => base.pretty_print(db),
             TyData::ConstTy(const_ty) => const_ty.pretty_print(db),
             TyData::Never => "!".to_string(),
             TyData::Invalid(cause) => format!("invalid({})", cause.pretty_print(db)),
@@ -214,8 +248,12 @@ impl<'db> TyId<'db> {
         ty
     }
 
-    pub(super) fn bool(db: &'db dyn HirAnalysisDb) -> Self {
+    pub fn bool(db: &'db dyn HirAnalysisDb) -> Self {
         Self::new(db, TyData::TyBase(TyBase::Prim(PrimTy::Bool)))
+    }
+
+    pub fn u256(db: &'db dyn HirAnalysisDb) -> Self {
+        Self::new(db, TyData::TyBase(TyBase::Prim(PrimTy::U256)))
     }
 
     pub(super) fn array(db: &'db dyn HirAnalysisDb, elem: TyId<'db>) -> Self {
@@ -234,11 +272,11 @@ impl<'db> TyId<'db> {
         TyId::app(db, array, len)
     }
 
-    pub(crate) fn unit(db: &'db dyn HirAnalysisDb) -> Self {
+    pub fn unit(db: &'db dyn HirAnalysisDb) -> Self {
         Self::tuple(db, 0)
     }
 
-    pub(super) fn never(db: &'db dyn HirAnalysisDb) -> Self {
+    pub fn never(db: &'db dyn HirAnalysisDb) -> Self {
         Self::new(db, TyData::Never)
     }
 
@@ -263,12 +301,19 @@ impl<'db> TyId<'db> {
         Self::new(db, TyData::TyBase(TyBase::Adt(adt)))
     }
 
+    pub(crate) fn contract(
+        db: &'db dyn HirAnalysisDb,
+        contract: crate::hir_def::Contract<'db>,
+    ) -> Self {
+        Self::new(db, TyData::TyBase(TyBase::Contract(contract)))
+    }
+
     // TODO: Add semantic view and restrict visibility
     pub fn func(db: &'db dyn HirAnalysisDb, func: CallableDef<'db>) -> Self {
         Self::new(db, TyData::TyBase(TyBase::Func(func)))
     }
 
-    pub(crate) fn is_func(self, db: &dyn HirAnalysisDb) -> bool {
+    pub fn is_func(self, db: &dyn HirAnalysisDb) -> bool {
         matches!(self.base_ty(db).data(db), TyData::TyBase(TyBase::Func(_)))
     }
 
@@ -280,8 +325,16 @@ impl<'db> TyId<'db> {
         matches!(self.base_ty(db).data(db), TyData::TyVar(_))
     }
 
-    pub(crate) fn is_const_ty(self, db: &dyn HirAnalysisDb) -> bool {
+    pub fn is_const_ty(self, db: &dyn HirAnalysisDb) -> bool {
         matches!(self.base_ty(db).data(db), TyData::ConstTy(_))
+    }
+
+    /// Returns the contract if this type is a contract type.
+    pub fn as_contract(self, db: &'db dyn HirAnalysisDb) -> Option<crate::hir_def::Contract<'db>> {
+        match self.base_ty(db).data(db) {
+            TyData::TyBase(base) => base.contract(),
+            _ => None,
+        }
     }
 
     pub fn is_tuple(self, db: &dyn HirAnalysisDb) -> bool {
@@ -300,14 +353,60 @@ impl<'db> TyId<'db> {
         )
     }
 
-    pub(crate) fn is_array(self, db: &dyn HirAnalysisDb) -> bool {
+    pub fn is_array(self, db: &dyn HirAnalysisDb) -> bool {
         matches!(
             self.base_ty(db).data(db),
             TyData::TyBase(TyBase::Prim(PrimTy::Array))
         )
     }
 
-    pub(crate) fn is_string(self, db: &dyn HirAnalysisDb) -> bool {
+    /// Returns `true` if this type is known to have no runtime representation.
+    ///
+    /// This is a structural check (not based on byte-size calculation):
+    /// - `()` and empty structs are zero-sized
+    /// - tuples/structs/arrays are zero-sized iff all elements/fields are zero-sized
+    pub fn is_zero_sized(self, db: &'db dyn HirAnalysisDb) -> bool {
+        fn inner<'db>(
+            db: &'db dyn HirAnalysisDb,
+            ty: TyId<'db>,
+            visiting: &mut FxHashSet<TyId<'db>>,
+        ) -> bool {
+            if !visiting.insert(ty) {
+                return false;
+            }
+
+            let result = if ty.is_never(db)
+                || matches!(ty.base_ty(db).data(db), TyData::TyBase(TyBase::Func(_)))
+            {
+                true
+            } else if ty.is_tuple(db) {
+                ty.field_types(db)
+                    .into_iter()
+                    .all(|field_ty| inner(db, field_ty, visiting))
+            } else if ty.is_array(db) {
+                let (_, args) = ty.decompose_ty_app(db);
+                match args.first().copied() {
+                    Some(elem_ty) => inner(db, elem_ty, visiting),
+                    None => false,
+                }
+            } else if let Some(adt_def) = ty.adt_def(db)
+                && matches!(adt_def.adt_ref(db), AdtRef::Struct(_))
+            {
+                ty.field_types(db)
+                    .into_iter()
+                    .all(|field_ty| inner(db, field_ty, visiting))
+            } else {
+                false
+            };
+
+            visiting.remove(&ty);
+            result
+        }
+
+        inner(db, self, &mut FxHashSet::default())
+    }
+
+    pub fn is_string(self, db: &dyn HirAnalysisDb) -> bool {
         matches!(
             self.base_ty(db).data(db),
             TyData::TyBase(TyBase::Prim(PrimTy::String))
@@ -319,7 +418,7 @@ impl<'db> TyId<'db> {
     }
 
     /// Returns `true` if the base type is a user defined `struct` type.
-    pub(crate) fn is_struct(self, db: &dyn HirAnalysisDb) -> bool {
+    pub fn is_struct(self, db: &dyn HirAnalysisDb) -> bool {
         let base_ty = self.base_ty(db);
         match base_ty.data(db) {
             TyData::TyBase(TyBase::Adt(adt)) => adt.is_struct(db),
@@ -331,7 +430,7 @@ impl<'db> TyId<'db> {
         matches!(self.base_ty(db).data(db), TyData::TyBase(TyBase::Prim(_)))
     }
 
-    pub(crate) fn as_enum(self, db: &'db dyn HirAnalysisDb) -> Option<Enum<'db>> {
+    pub fn as_enum(self, db: &'db dyn HirAnalysisDb) -> Option<Enum<'db>> {
         let base_ty = self.base_ty(db);
         if let Some(adt_ref) = base_ty.adt_ref(db)
             && let AdtRef::Enum(enum_) = adt_ref
@@ -348,6 +447,7 @@ impl<'db> TyId<'db> {
             TyData::AssocTy(assoc_ty) => Some(assoc_ty.scope(db)),
             TyData::QualifiedTy(trait_inst) => Some(trait_inst.def(db).scope()),
             TyData::TyBase(TyBase::Adt(adt)) => Some(adt.scope(db)),
+            TyData::TyBase(TyBase::Contract(c)) => Some(c.scope()),
             TyData::TyBase(TyBase::Func(func)) => Some(func.scope()),
             TyData::TyBase(TyBase::Prim(..)) => None,
             TyData::ConstTy(const_ty) => match const_ty.data(db) {
@@ -371,6 +471,7 @@ impl<'db> TyId<'db> {
             TyData::QualifiedTy(trait_inst) => trait_inst.def(db).scope().name_span(db),
 
             TyData::TyBase(TyBase::Adt(adt)) => Some(adt.name_span(db)),
+            TyData::TyBase(TyBase::Contract(c)) => c.scope().name_span(db),
             TyData::TyBase(TyBase::Func(func)) => Some(func.name_span()),
             TyData::TyBase(TyBase::Prim(_)) => None,
 
@@ -441,7 +542,7 @@ impl<'db> TyId<'db> {
     }
 
     /// Perform type level application.
-    pub(crate) fn app(db: &'db dyn HirAnalysisDb, lhs: Self, rhs: Self) -> TyId<'db> {
+    pub fn app(db: &'db dyn HirAnalysisDb, lhs: Self, rhs: Self) -> TyId<'db> {
         let Some(applicable_ty) = lhs.applicable_ty(db) else {
             return Self::invalid(
                 db,
@@ -996,6 +1097,10 @@ impl<'db> TyParam<'db> {
         matches!(self.variant, Variant::Effect)
     }
 
+    pub fn is_effect_provider(&self) -> bool {
+        matches!(self.variant, Variant::EffectProvider)
+    }
+
     pub(super) fn normal_param(
         name: IdentId<'db>,
         idx: usize,
@@ -1032,6 +1137,17 @@ impl<'db> TyParam<'db> {
         }
     }
 
+    /// Create a synthetic generic parameter that carries the "provider type" for a type effect.
+    pub fn effect_provider_param(name: IdentId<'db>, idx: usize, scope: ScopeId<'db>) -> Self {
+        Self {
+            name,
+            idx,
+            kind: Kind::Star,
+            variant: Variant::EffectProvider,
+            owner: scope,
+        }
+    }
+
     pub fn original_idx(&self, db: &'db dyn HirAnalysisDb) -> usize {
         match self.variant {
             Variant::Normal | Variant::TraitSelf => {
@@ -1043,6 +1159,7 @@ impl<'db> TyParam<'db> {
                 self.idx - offset
             }
             Variant::Effect => self.idx,
+            Variant::EffectProvider => self.idx,
         }
     }
 
@@ -1053,6 +1170,7 @@ impl<'db> TyParam<'db> {
                 ScopeId::GenericParam(self.owner.item(), self.original_idx(db) as u16)
             }
             Variant::Effect => ScopeId::FuncParam(self.owner.item(), self.idx as u16),
+            Variant::EffectProvider => self.owner,
         }
     }
 }
@@ -1063,12 +1181,18 @@ enum Variant {
     TraitSelf,
     /// Effect parameter local to a function `uses` list
     Effect,
+    /// Synthetic generic parameter used to encode type-effect provider domains.
+    ///
+    /// These are inserted by type lowering for functions that have type effects so that
+    /// monomorphization can treat effect domains as ordinary generic arguments.
+    EffectProvider,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, derive_more::From, Update)]
 pub enum TyBase<'db> {
     Prim(PrimTy),
     Adt(AdtDef<'db>),
+    Contract(crate::hir_def::Contract<'db>),
     Func(CallableDef<'db>),
 }
 
@@ -1125,6 +1249,12 @@ impl<'db> TyBase<'db> {
                 .map(|i| i.data(db).to_string())
                 .unwrap_or_else(|| "<unknown>".to_string()),
 
+            Self::Contract(contract) => contract
+                .name(db)
+                .to_opt()
+                .map(|i| i.data(db).to_string())
+                .unwrap_or_else(|| "<unknown>".to_string()),
+
             Self::Func(func) => format!(
                 "fn {}",
                 func.name(db)
@@ -1137,6 +1267,13 @@ impl<'db> TyBase<'db> {
     pub(super) fn adt(self) -> Option<AdtDef<'db>> {
         match self {
             Self::Adt(adt) => Some(adt),
+            _ => None,
+        }
+    }
+
+    pub fn contract(self) -> Option<crate::hir_def::Contract<'db>> {
+        match self {
+            Self::Contract(c) => Some(c),
             _ => None,
         }
     }
@@ -1222,7 +1359,7 @@ impl PrimTy {
 }
 
 /// Returns the width (in bits) for the given primitive integer type, or `None` when unknown.
-pub fn prim_int_bits(prim: PrimTy) -> Option<u16> {
+pub fn prim_int_bits(prim: PrimTy) -> Option<usize> {
     use PrimTy::*;
     match prim {
         U8 | I8 => Some(8),
@@ -1244,9 +1381,14 @@ impl HasKind for TyData<'_> {
         match self {
             TyData::TyVar(ty_var) => ty_var.kind(db),
             TyData::TyParam(ty_param) => ty_param.kind.clone(),
-            TyData::AssocTy(_) => Kind::Star,
+            TyData::AssocTy(assoc) => assoc
+                .trait_
+                .def(db)
+                .assoc_ty(db, assoc.name)
+                .and_then(|decl| super::ty_lower::lower_kind_in_bounds(&decl.bounds))
+                .unwrap_or(Kind::Star),
             TyData::QualifiedTy(_) => Kind::Star,
-            TyData::TyBase(ty_const) => ty_const.kind(db),
+            TyData::TyBase(base) => base.kind(db),
             TyData::TyApp(abs, _) => match abs.kind(db) {
                 // `TyId::app` method handles the kind mismatch, so we don't need to verify it again
                 // here.
@@ -1274,6 +1416,7 @@ impl HasKind for TyBase<'_> {
         match self {
             TyBase::Prim(prim) => prim.kind(db),
             TyBase::Adt(adt) => adt.kind(db),
+            TyBase::Contract(_) => Kind::Star, // Contracts have no generic params
             TyBase::Func(func) => func.kind(db),
         }
     }
@@ -1402,12 +1545,30 @@ fn pretty_print_ty_app<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> String
         }
 
         _ => {
-            let mut args = args.iter();
             let mut s = (base.pretty_print(db)).to_string();
-            if let Some(first) = args.next() {
+
+            let args_to_print: Vec<TyId<'db>> = match base.data(db) {
+                TyData::TyBase(Func(func_def)) => {
+                    let params = func_def.params(db);
+                    args.iter()
+                        .copied()
+                        .enumerate()
+                        .filter_map(|(idx, arg)| {
+                            let is_provider = params.get(idx).is_some_and(|param_ty| {
+                                matches!(param_ty.data(db), TyData::TyParam(p) if p.is_effect_provider())
+                            });
+                            (!is_provider).then_some(arg)
+                        })
+                        .collect()
+                }
+                _ => args.clone(),
+            };
+
+            let mut args_iter = args_to_print.iter();
+            if let Some(first) = args_iter.next() {
                 s.push('<');
                 s.push_str(first.pretty_print(db));
-                for arg in args {
+                for arg in args_iter {
                     s.push_str(", ");
                     s.push_str(arg.pretty_print(db));
                 }

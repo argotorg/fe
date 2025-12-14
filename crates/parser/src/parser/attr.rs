@@ -57,7 +57,7 @@ impl super::Parse for AttrScope {
         parser.bump_expected(SyntaxKind::Pound);
 
         // Expect the opening bracket for a Rust-style outer attribute: #[ ... ]
-        parser.bump_expected(SyntaxKind::LBracket);
+        parser.bump_or_recover(SyntaxKind::LBracket, "expected `[` after `#`")?;
 
         // Parse the attribute path (e.g., foo, foo::bar). Recover on failure.
         parser.parse_or_recover(PathScope::default())?;
@@ -76,7 +76,7 @@ impl super::Parse for AttrScope {
         }
 
         // Expect the closing bracket of the attribute.
-        parser.bump_expected(SyntaxKind::RBracket);
+        parser.bump_or_recover(SyntaxKind::RBracket, "expected `]` to close attribute")?;
         Ok(())
     }
 }

@@ -1,0 +1,8 @@
+const SALT: u256 = 0
+
+struct Map<K, V, const N: u256> {}
+
+fn uses_const_generic_arg(m: Map<u256, bool, SALT>) -> u256 {
+    m
+    SALT
+}

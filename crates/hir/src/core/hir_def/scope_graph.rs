@@ -8,9 +8,9 @@ use rustc_hash::FxHashSet;
 use salsa::Update;
 
 use super::{
-    AssocTyDecl, AttrListId, Body, Const, Contract, Enum, EnumVariant, ExprId, FieldDef,
-    FieldParent, Func, FuncParam, FuncParamName, GenericParam, IdentId, Impl, ImplTrait, ItemKind,
-    Mod, TopLevelMod, Trait, TypeAlias, Use, VariantDef, VariantKind, Visibility,
+    AssocConstDecl, AssocTyDecl, AttrListId, Body, Const, Contract, Enum, EnumVariant, ExprId,
+    FieldDef, FieldParent, Func, FuncParam, FuncParamName, GenericParam, IdentId, Impl, ImplTrait,
+    ItemKind, Mod, Struct, TopLevelMod, Trait, TypeAlias, Use, VariantDef, VariantKind, Visibility,
     scope_graph_viz::ScopeGraphFormatter,
 };
 use crate::{
@@ -61,7 +61,11 @@ impl<'db> ScopeGraph<'db> {
 
     /// Returns the all edges outgoing from the given `scope`.
     pub fn edges(&self, scope: ScopeId<'db>) -> &IndexSet<ScopeEdge<'db>> {
-        &self.scopes[&scope].edges
+        let scope_data = self
+            .scopes
+            .get(&scope)
+            .unwrap_or_else(|| panic!("no scope entry for key: {scope:?}"));
+        &scope_data.edges
     }
 
     /// Write a scope graph as a dot file format to given `w`.
@@ -177,6 +181,8 @@ impl<'db> ScopeId<'db> {
                 let def: &VariantDef = self.resolve_to(db).unwrap();
                 Some(def.attributes)
             }
+            ScopeId::TraitType(t, idx) => t.types(db).get(idx as usize).map(|d| d.attributes),
+            ScopeId::TraitConst(t, idx) => t.consts(db).get(idx as usize).map(|d| d.attributes),
             _ => None,
         }
     }
@@ -229,7 +235,7 @@ impl<'db> ScopeId<'db> {
 
     /// Returns the `Scope` data for this scope.
     pub fn data(self, db: &'db dyn HirDb) -> &'db Scope<'db> {
-        self.top_mod(db).scope_graph(db).scope_data(&self)
+        self.scope_graph(db).scope_data(&self)
     }
 
     /// Returns the parent scope of this scope.
@@ -324,7 +330,7 @@ impl<'db> ScopeId<'db> {
     }
 
     pub fn name(self, db: &'db dyn HirDb) -> Option<IdentId<'db>> {
-        match self.data(db).id {
+        match self {
             ScopeId::Item(item) => item.name(db),
 
             ScopeId::Variant(..) => self.resolve_to::<&VariantDef>(db).unwrap().name.to_opt(),
@@ -353,7 +359,7 @@ impl<'db> ScopeId<'db> {
     }
 
     pub fn name_span(self, db: &'db dyn HirDb) -> Option<DynLazySpan<'db>> {
-        match self.data(db).id {
+        match self {
             ScopeId::Item(item) => item.name_span(),
 
             ScopeId::Variant(v) => Some(v.span().name().into()),
@@ -652,6 +658,7 @@ item_from_scope! {
     TopLevelMod<'db>,
     Mod<'db>,
     Func<'db>,
+    Struct<'db>,
     Contract<'db>,
     Enum<'db>,
     TypeAlias<'db>,
@@ -672,7 +679,7 @@ impl<'db> FromScope<'db> for &'db FieldDef<'db> {
 
         match parent {
             FieldParent::Struct(s) => Some(&s.fields(db).data(db)[idx]),
-            FieldParent::Contract(c) => Some(&c.fields(db).data(db)[idx]),
+            FieldParent::Contract(c) => Some(&c.hir_fields(db).data(db)[idx]),
             FieldParent::Variant(v) => match v.kind(db) {
                 VariantKind::Record(fields) => Some(&fields.data(db)[idx]),
                 _ => unreachable!(),
@@ -720,6 +727,15 @@ impl<'db> FromScope<'db> for &'db AssocTyDecl<'db> {
             return None;
         };
         Some(t.assoc_ty_by_index(db, idx as usize))
+    }
+}
+
+impl<'db> FromScope<'db> for &'db AssocConstDecl<'db> {
+    fn from_scope(scope: ScopeId<'db>, db: &'db dyn HirDb) -> Option<Self> {
+        let ScopeId::TraitConst(t, idx) = scope else {
+            return None;
+        };
+        Some(&t.consts(db)[idx as usize])
     }
 }
 
@@ -800,5 +816,46 @@ mod tests {
 
         let field = scope_graph.children(variant).next().unwrap();
         assert!(matches!(field, ScopeId::Field(FieldParent::Variant(..), _)));
+    }
+
+    #[test]
+    fn msg_variant_fields() {
+        let mut db = TestDb::default();
+
+        // msg blocks are desugared into modules containing structs and impl MsgVariant
+        let text = r#"
+            msg Foo {
+                Bar { a: u8, b: u8 } -> bool,
+            }
+        "#;
+
+        let file = db.standalone_file(text);
+        let scope_graph = db.parse_source(file);
+        let root = scope_graph.top_mod.scope();
+
+        // The msg block becomes a module with #[msg] attribute
+        let msg_mod = scope_graph
+            .children(root)
+            .find(|scope| matches!(scope.item(), ItemKind::Mod(_)))
+            .unwrap();
+        assert!(matches!(msg_mod.item(), ItemKind::Mod(_)));
+
+        // Skip the Use item (prelude) and find the struct
+        let variant_struct = scope_graph
+            .children(msg_mod)
+            .find(|scope| matches!(scope.item(), ItemKind::Struct(_)))
+            .unwrap();
+        assert!(matches!(variant_struct.item(), ItemKind::Struct(_)));
+
+        // Check that there's also an ImplTrait for MsgVariant
+        let impl_trait = scope_graph
+            .children(msg_mod)
+            .find(|scope| matches!(scope.item(), ItemKind::ImplTrait(_)))
+            .unwrap();
+        assert!(matches!(impl_trait.item(), ItemKind::ImplTrait(_)));
+
+        // Fields are now struct fields, not msg variant fields
+        let field = scope_graph.children(variant_struct).next().unwrap();
+        assert!(matches!(field, ScopeId::Field(FieldParent::Struct(..), _)));
     }
 }

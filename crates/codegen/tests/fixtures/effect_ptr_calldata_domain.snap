@@ -1,0 +1,21 @@
+---
+source: crates/codegen/tests/yul.rs
+expression: output
+input_file: tests/fixtures/effect_ptr_calldata_domain.fe
+---
+function $read_x__StorPtr_u256___64779554cfbf0358($x) -> ret {
+  let v0 := sload($x)
+  ret := v0
+  leave
+}
+function $test_calldata_ptr_domain() {
+  let v0 := 0
+  let v1 := v0
+  let v2 := $read_x__CalldataPtr_u256___1e20dc3e834a8f96(v1)
+  leave
+}
+function $read_x__CalldataPtr_u256___1e20dc3e834a8f96($x) -> ret {
+  let v0 := calldataload($x)
+  ret := v0
+  leave
+}

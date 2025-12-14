@@ -11,17 +11,33 @@ use crate::{
 
 impl<'db> Body<'db> {
     pub(super) fn lower_ast(f_ctxt: &mut FileLowerCtxt<'db>, ast: ast::Expr) -> Self {
-        let id = f_ctxt.joined_id(TrackedItemVariant::FuncBody);
-        let mut ctxt = BodyCtxt::new(f_ctxt, id);
-        let body_expr = Expr::lower_ast(&mut ctxt, ast.clone());
-        ctxt.build(&ast, body_expr, BodyKind::FuncBody)
+        Self::lower_ast_with_variant(
+            f_ctxt,
+            Some(ast),
+            TrackedItemVariant::FuncBody,
+            BodyKind::FuncBody,
+        )
     }
 
     pub(super) fn lower_ast_nameless(f_ctxt: &mut FileLowerCtxt<'db>, ast: ast::Expr) -> Self {
-        let id = f_ctxt.joined_id(TrackedItemVariant::NamelessBody);
+        Self::lower_ast_with_variant(
+            f_ctxt,
+            Some(ast),
+            TrackedItemVariant::NamelessBody,
+            BodyKind::Anonymous,
+        )
+    }
+
+    pub(super) fn lower_ast_with_variant(
+        f_ctxt: &mut FileLowerCtxt<'db>,
+        ast: Option<ast::Expr>,
+        variant: TrackedItemVariant<'db>,
+        body_kind: BodyKind,
+    ) -> Self {
+        let id = f_ctxt.joined_id(variant);
         let mut ctxt = BodyCtxt::new(f_ctxt, id);
-        let body_expr = Expr::lower_ast(&mut ctxt, ast.clone());
-        ctxt.build(&ast, body_expr, BodyKind::Anonymous)
+        let body_expr = Expr::push_to_body_opt(&mut ctxt, ast.clone());
+        ctxt.build(ast.as_ref(), body_expr, body_kind)
     }
 }
 
@@ -75,7 +91,7 @@ impl<'ctxt, 'db> BodyCtxt<'ctxt, 'db> {
         pat_id
     }
 
-    fn new(f_ctxt: &'ctxt mut FileLowerCtxt<'db>, id: TrackedItemId<'db>) -> Self {
+    pub(super) fn new(f_ctxt: &'ctxt mut FileLowerCtxt<'db>, id: TrackedItemId<'db>) -> Self {
         f_ctxt.enter_body_scope(id);
         Self {
             f_ctxt,
@@ -87,8 +103,13 @@ impl<'ctxt, 'db> BodyCtxt<'ctxt, 'db> {
         }
     }
 
-    fn build(self, ast: &ast::Expr, body_expr: ExprId, body_kind: BodyKind) -> Body<'db> {
-        let origin = HirOrigin::raw(ast);
+    pub(super) fn build(
+        self,
+        ast: Option<&ast::Expr>,
+        body_expr: ExprId,
+        body_kind: BodyKind,
+    ) -> Body<'db> {
+        let origin = ast.map(HirOrigin::raw).unwrap_or(HirOrigin::None);
         let body = Body::new(
             self.f_ctxt.db(),
             self.id,

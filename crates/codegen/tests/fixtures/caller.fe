@@ -1,0 +1,5 @@
+use std::evm::{Address, Ctx}
+
+fn who_called() -> Address uses (ctx: Ctx) {
+    ctx.caller()
+}

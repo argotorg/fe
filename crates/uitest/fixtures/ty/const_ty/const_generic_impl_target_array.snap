@@ -1,0 +1,5 @@
+---
+source: crates/uitest/tests/ty.rs
+expression: diags
+input_file: fixtures/ty/const_ty/const_generic_impl_target_array.fe
+---

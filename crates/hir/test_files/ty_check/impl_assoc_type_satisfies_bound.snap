@@ -1,0 +1,40 @@
+---
+source: crates/hir/tests/ty_check.rs
+assertion_line: 48
+expression: res
+input_file: test_files/ty_check/impl_assoc_type_satisfies_bound.fe
+---
+note: 
+   ┌─ impl_assoc_type_satisfies_bound.fe:12:35
+   │  
+12 │   fn takes<T: Tr<Item = A>>(_ x: T) {
+   │ ╭───────────────────────────────────^
+13 │ │ }
+   │ ╰─^ ()
+
+note: 
+   ┌─ impl_assoc_type_satisfies_bound.fe:15:11
+   │  
+15 │   fn test() {
+   │ ╭───────────^
+16 │ │     takes(S {})
+17 │ │ }
+   │ ╰─^ ()
+
+note: 
+   ┌─ impl_assoc_type_satisfies_bound.fe:16:5
+   │
+16 │     takes(S {})
+   │     ^^^^^ fn takes<S>
+
+note: 
+   ┌─ impl_assoc_type_satisfies_bound.fe:16:5
+   │
+16 │     takes(S {})
+   │     ^^^^^^^^^^^ ()
+
+note: 
+   ┌─ impl_assoc_type_satisfies_bound.fe:16:11
+   │
+16 │     takes(S {})
+   │           ^^^^ S

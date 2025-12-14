@@ -153,6 +153,9 @@ pub enum SyntaxKind {
     /// `contract`
     #[token("contract")]
     ContractKw,
+    /// `msg`
+    #[token("msg")]
+    MsgKw,
     /// `fn`
     #[token("fn")]
     FnKw,
@@ -250,6 +253,8 @@ pub enum SyntaxKind {
     BinExpr,
     /// `!x`
     UnExpr,
+    /// `expr as Type`
+    CastExpr,
     /// `foo(x, y)`
     CallExpr,
     /// `(arg: 1, y)`
@@ -359,6 +364,16 @@ pub enum SyntaxKind {
     Struct,
     /// `contract Foo { .. }`
     Contract,
+    /// leading fields inside a contract body
+    ContractFields,
+    /// `init(...) { ... }` block inside a contract
+    ContractInit,
+    /// `recv ... { ... }` block inside a contract
+    ContractRecv,
+    /// list of arms inside a recv block
+    RecvArmList,
+    /// `Pattern -> RetTy uses (...) { body }`
+    RecvArm,
     /// `enum Foo { .. }`
     Enum,
     /// `type Foo = i32`
@@ -383,6 +398,8 @@ pub enum SyntaxKind {
     Const,
     /// `use foo::{Foo as Foo1, bar::Baz}`
     Use,
+    /// `msg Erc20Msg { ... }`
+    Msg,
     /// `foo::{Foo as Foo1, bar::Baz}`
     UseTree,
     /// `{Foo as Foo1, bar::Baz}`
@@ -484,6 +501,12 @@ pub enum SyntaxKind {
     WhereClause,
     /// `Option<T>: Trait1 + Trait2`
     WherePredicate,
+    /// `Transfer { to: Address, amount: u256 } -> bool`
+    MsgVariant,
+    /// `{ to: Address, amount: u256 }`
+    MsgVariantParams,
+    /// `TotalSupply, Balance { addr: Address }`
+    MsgVariantList,
 
     /// Root node of the input source.
     Root,
@@ -537,6 +560,7 @@ impl SyntaxKind {
                     | SyntaxKind::FnKw
                     | SyntaxKind::StructKw
                     | SyntaxKind::ContractKw
+                    | SyntaxKind::MsgKw
                     | SyntaxKind::EnumKw
                     | SyntaxKind::TypeKw
                     | SyntaxKind::ImplKw
@@ -594,6 +618,7 @@ impl SyntaxKind {
             SyntaxKind::UsesKw => "`uses`",
             SyntaxKind::ContinueKw => "`continue`",
             SyntaxKind::ContractKw => "`contract`",
+            SyntaxKind::MsgKw => "`msg`",
             SyntaxKind::FnKw => "`fn`",
             SyntaxKind::ModKw => "`mod`",
             SyntaxKind::ConstKw => "`const`",
@@ -646,6 +671,7 @@ impl SyntaxKind {
             SyntaxKind::Lit => "literal",
             SyntaxKind::BinExpr => "binary expression",
             SyntaxKind::UnExpr => "unary expression",
+            SyntaxKind::CastExpr => "cast expression",
             SyntaxKind::CallExpr => "function call expression",
             SyntaxKind::CallArg => "function call argument",
             SyntaxKind::MethodCallExpr => "method call expression",
@@ -693,6 +719,13 @@ impl SyntaxKind {
             SyntaxKind::Func => "function definition",
             SyntaxKind::Struct => "struct definition",
             SyntaxKind::Contract => "contract definition",
+            SyntaxKind::ContractFields => "contract fields",
+            SyntaxKind::ContractInit => "contract init block",
+            SyntaxKind::ContractRecv => "contract recv block",
+            SyntaxKind::Msg => "message definition",
+            SyntaxKind::MsgVariant => "message variant",
+            SyntaxKind::MsgVariantParams => "message variant parameters",
+            SyntaxKind::MsgVariantList => "message variants",
             SyntaxKind::Enum => "enum definition",
             SyntaxKind::TypeAlias => "type alias",
             SyntaxKind::Impl => "`impl` block",
@@ -744,6 +777,8 @@ impl SyntaxKind {
             SyntaxKind::UsesClause => "`uses` clause",
             SyntaxKind::UsesParamList => "`uses` parameter list",
             SyntaxKind::UsesParam => "`uses` parameter",
+            SyntaxKind::RecvArmList => "recv arm list",
+            SyntaxKind::RecvArm => "recv arm",
             SyntaxKind::Root => "module",
             SyntaxKind::Error => todo!(),
         }

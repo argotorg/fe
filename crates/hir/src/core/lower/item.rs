@@ -3,11 +3,42 @@ use parser::ast::{self, prelude::*};
 use super::FileLowerCtxt;
 use crate::{
     hir_def::{
-        AttrListId, Body, EffectParamListId, FuncParamListId, GenericParamListId, IdentId, PathId,
-        TraitRefId, TupleTypeId, TypeBound, TypeId, WhereClauseId, item::*,
+        AttrListId, Body, EffectParamListId, FuncParamListId, GenericParamListId, IdentId, Partial,
+        PathId, TraitRefId, TupleTypeId, TypeBound, TypeId, WhereClauseId, item::*,
     },
+    lower::msg::lower_msg_as_mod,
     span::HirOrigin,
 };
+
+/// Selector-related errors accumulated during msg block lowering.
+#[salsa::accumulator]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct SelectorError {
+    pub kind: SelectorErrorKind,
+    pub file: common::file::File,
+    /// Range of the primary span (selector attribute or variant name)
+    pub primary_range: parser::TextRange,
+    /// Range of the secondary span (for duplicates - the first occurrence)
+    pub secondary_range: Option<parser::TextRange>,
+    pub variant_name: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum SelectorErrorKind {
+    /// Selector value overflows u32.
+    Overflow,
+    /// Selector has invalid type (string or bool).
+    InvalidType,
+    /// No `#[selector]` attribute found.
+    Missing,
+    /// Selector attribute has invalid form (e.g. `#[selector(value)]` instead of `#[selector = value]`).
+    InvalidForm,
+    /// Duplicate selector value.
+    Duplicate {
+        first_variant_name: String,
+        selector: u32,
+    },
+}
 
 pub(crate) fn lower_module_items(ctxt: &mut FileLowerCtxt<'_>, items: ast::ItemList) {
     for item in items {
@@ -36,6 +67,9 @@ impl<'db> ItemKind<'db> {
             }
             ast::ItemKind::Enum(enum_) => {
                 Enum::lower_ast(ctxt, enum_);
+            }
+            ast::ItemKind::Msg(msg) => {
+                lower_msg_as_mod(ctxt, msg);
             }
             ast::ItemKind::TypeAlias(alias) => {
                 TypeAlias::lower_ast(ctxt, alias);
@@ -101,7 +135,7 @@ impl<'db> Func<'db> {
             .map(|params| FuncParamListId::lower_ast(ctxt, params))
             .into();
         let ret_ty = sig.ret_ty().map(|ty| TypeId::lower_ast(ctxt, ty));
-        let effects = lower_effects(ctxt, &ast);
+        let effects = lower_uses_clause_opt(ctxt, ast.sig().uses_clause());
         let modifier = ItemModifier::lower_ast(ast.modifier());
         let body = ast
             .body()
@@ -125,41 +159,6 @@ impl<'db> Func<'db> {
         );
         ctxt.leave_item_scope(fn_)
     }
-}
-
-fn lower_effects<'db>(ctxt: &mut FileLowerCtxt<'db>, ast: &ast::Func) -> EffectParamListId<'db> {
-    use crate::hir_def::{EffectParam, EffectParamListId};
-
-    let mut data: Vec<EffectParam<'db>> = Vec::new();
-
-    if let Some(uses) = ast.sig().uses_clause() {
-        if let Some(list) = uses.param_list() {
-            for p in list {
-                let name = p.name().map(|n| IdentId::lower_token(ctxt, n.syntax()));
-
-                let is_mut = p.mut_token().is_some();
-                let key_path = p.path().map(|path| PathId::lower_ast(ctxt, path)).into();
-
-                data.push(EffectParam {
-                    name,
-                    key_path,
-                    is_mut,
-                });
-            }
-        } else if let Some(p) = uses.param() {
-            let name = p.name().map(|n| IdentId::lower_token(ctxt, n.syntax()));
-            let is_mut = p.mut_token().is_some();
-            let key_path = p.path().map(|path| PathId::lower_ast(ctxt, path)).into();
-
-            data.push(EffectParam {
-                name,
-                key_path,
-                is_mut,
-            });
-        }
-    }
-
-    EffectParamListId::new(ctxt.db(), data)
 }
 
 impl<'db> Struct<'db> {
@@ -191,29 +190,39 @@ impl<'db> Struct<'db> {
     }
 }
 
-impl<'db> Contract<'db> {
-    pub(super) fn lower_ast(ctxt: &mut FileLowerCtxt<'db>, ast: ast::Contract) -> Self {
-        let name = IdentId::lower_token_partial(ctxt, ast.name());
-        let id = ctxt.joined_id(TrackedItemVariant::Contract(name));
-        ctxt.enter_item_scope(id, false);
+pub(super) fn lower_uses_clause_opt<'db>(
+    ctxt: &mut FileLowerCtxt<'db>,
+    uses: Option<ast::UsesClause>,
+) -> EffectParamListId<'db> {
+    use crate::hir_def::{EffectParam, EffectParamListId};
 
-        let attributes = AttrListId::lower_ast_opt(ctxt, ast.attr_list());
-        let vis = ItemModifier::lower_ast(ast.modifier()).to_visibility();
-        let fields = FieldDefListId::lower_ast_opt(ctxt, ast.fields());
-        let origin = HirOrigin::raw(&ast);
+    let mut data: Vec<EffectParam<'db>> = Vec::new();
 
-        let contract = Self::new(
-            ctxt.db(),
-            id,
-            name,
-            attributes,
-            vis,
-            fields,
-            ctxt.top_mod(),
-            origin,
-        );
-        ctxt.leave_item_scope(contract)
+    if let Some(uses) = uses {
+        if let Some(list) = uses.param_list() {
+            for p in list {
+                let name = p.name().map(|n| IdentId::lower_token(ctxt, n.syntax()));
+                let is_mut = p.mut_token().is_some();
+                let key_path = p.path().map(|path| PathId::lower_ast(ctxt, path)).into();
+                data.push(EffectParam {
+                    name,
+                    key_path,
+                    is_mut,
+                });
+            }
+        } else if let Some(p) = uses.param() {
+            let name = p.name().map(|n| IdentId::lower_token(ctxt, n.syntax()));
+            let is_mut = p.mut_token().is_some();
+            let key_path = p.path().map(|path| PathId::lower_ast(ctxt, path)).into();
+            data.push(EffectParam {
+                name,
+                key_path,
+                is_mut,
+            });
+        }
     }
+
+    EffectParamListId::new(ctxt.db(), data)
 }
 
 impl<'db> Enum<'db> {
@@ -274,12 +283,31 @@ impl<'db> TypeAlias<'db> {
 
 impl<'db> Impl<'db> {
     pub(super) fn lower_ast(ctxt: &mut FileLowerCtxt<'db>, ast: ast::Impl) -> Self {
+        // Enter scope FIRST with a preliminary ID so that generic params are
+        // available when lowering the target type. This is needed for const
+        // generics in array types like `impl<const N: usize> Foo for [T; N]`.
+        //
+        // Note: the final impl id depends on the lowered `ty`, so we enter
+        // scope with a temporary id and then swap in the real id once `ty` is
+        // available. This keeps the final impl id stable (i.e. avoids
+        // `... -> Impl(Absent) -> Impl(ty)`), while still ensuring that bodies
+        // created during type lowering are nested under the impl scope.
+        let parent_id = ctxt.current_id();
+        let prelim_id = parent_id.join(ctxt.db(), TrackedItemVariant::Impl(Partial::Absent));
+        ctxt.enter_item_scope(prelim_id, false);
+
+        // Lower generic params first (now they're in scope for type lowering)
+        let generic_params = GenericParamListId::lower_ast_opt(ctxt, ast.generic_params());
+
+        // Now lower the target type (const expressions can resolve generic params)
         let ty = TypeId::lower_ast_partial(ctxt, ast.ty());
-        let id = ctxt.joined_id(TrackedItemVariant::Impl(ty));
-        ctxt.enter_item_scope(id, false);
+
+        // Switch to the final id so nested items (e.g. methods) are keyed under
+        // the real impl identity.
+        let id = parent_id.join(ctxt.db(), TrackedItemVariant::Impl(ty));
+        ctxt.set_current_id(id);
 
         let attributes = AttrListId::lower_ast_opt(ctxt, ast.attr_list());
-        let generic_params = GenericParamListId::lower_ast_opt(ctxt, ast.generic_params());
         let where_clause = WhereClauseId::lower_ast_opt(ctxt, ast.where_clause());
         let origin = HirOrigin::raw(&ast);
 
@@ -361,6 +389,7 @@ impl<'db> Trait<'db> {
 
 impl<'db> AssocTyDecl<'db> {
     pub(super) fn lower_ast(ctxt: &mut FileLowerCtxt<'db>, ast: ast::TraitTypeItem) -> Self {
+        let attributes = AttrListId::lower_ast_opt(ctxt, ast.attr_list());
         let name = IdentId::lower_token_partial(ctxt, ast.name());
         let bounds = ast
             .bounds()
@@ -375,6 +404,7 @@ impl<'db> AssocTyDecl<'db> {
         let default = TypeId::lower_ast_partial(ctxt, ast.ty()).to_opt();
 
         AssocTyDecl {
+            attributes,
             name,
             bounds,
             default,
@@ -384,13 +414,35 @@ impl<'db> AssocTyDecl<'db> {
 
 impl<'db> ImplTrait<'db> {
     pub(super) fn lower_ast(ctxt: &mut FileLowerCtxt<'db>, ast: ast::ImplTrait) -> Self {
+        // Enter scope FIRST with a preliminary ID so that generic params are
+        // available when lowering the trait ref and target type. This is
+        // needed for const generics in array types like:
+        // `impl<T, const N: usize> Seq<T> for [T; N]`.
+        //
+        // Like inherent impls, the final impl-trait id depends on the lowered
+        // `trait_ref` and `ty`. Enter with a temporary id, then swap in the
+        // final id once both are available to avoid
+        // `... -> ImplTrait(Absent, Absent) -> ImplTrait(trait_ref, ty)`.
+        let parent_id = ctxt.current_id();
+        let prelim_id = parent_id.join(
+            ctxt.db(),
+            TrackedItemVariant::ImplTrait(Partial::Absent, Partial::Absent),
+        );
+        ctxt.enter_item_scope(prelim_id, false);
+
+        // Lower generic params first (now they're in scope for type lowering)
+        let generic_params = GenericParamListId::lower_ast_opt(ctxt, ast.generic_params());
+
+        // Now lower trait ref and target type (const expressions can resolve generic params)
         let trait_ref = TraitRefId::lower_ast_partial(ctxt, ast.trait_ref());
         let ty = TypeId::lower_ast_partial(ctxt, ast.ty());
-        let id = ctxt.joined_id(TrackedItemVariant::ImplTrait(trait_ref, ty));
-        ctxt.enter_item_scope(id, false);
+
+        // Switch to the final id so nested items (e.g. methods) are keyed under
+        // the real impl-trait identity.
+        let id = parent_id.join(ctxt.db(), TrackedItemVariant::ImplTrait(trait_ref, ty));
+        ctxt.set_current_id(id);
 
         let attributes = AttrListId::lower_ast_opt(ctxt, ast.attr_list());
-        let generic_params = GenericParamListId::lower_ast_opt(ctxt, ast.generic_params());
         let where_clause = WhereClauseId::lower_ast_opt(ctxt, ast.where_clause());
         let origin = HirOrigin::raw(&ast);
 
@@ -429,7 +481,9 @@ impl<'db> ImplTrait<'db> {
 
 impl<'db> AssocTyDef<'db> {
     fn lower_ast(ctxt: &mut FileLowerCtxt<'db>, ast: ast::TraitTypeItem) -> Self {
+        let attributes = AttrListId::lower_ast_opt(ctxt, ast.attr_list());
         AssocTyDef {
+            attributes,
             name: IdentId::lower_token_partial(ctxt, ast.name()),
             type_ref: TypeId::lower_ast_partial(ctxt, ast.ty()),
         }
@@ -438,20 +492,28 @@ impl<'db> AssocTyDef<'db> {
 
 impl<'db> AssocConstDecl<'db> {
     fn lower_ast(ctxt: &mut FileLowerCtxt<'db>, ast: ast::TraitConstItem) -> Self {
+        let attributes = AttrListId::lower_ast_opt(ctxt, ast.attr_list());
         let name = IdentId::lower_token_partial(ctxt, ast.name());
         let ty = TypeId::lower_ast_partial(ctxt, ast.ty());
         let default = ast
             .value()
             .map(|expr| crate::hir_def::Partial::Present(Body::lower_ast(ctxt, expr)));
-        AssocConstDecl { name, ty, default }
+        AssocConstDecl {
+            attributes,
+            name,
+            ty,
+            default,
+        }
     }
 }
 
 impl<'db> AssocConstDef<'db> {
     fn lower_ast(ctxt: &mut FileLowerCtxt<'db>, ast: ast::TraitConstItem) -> Self {
+        let attributes = AttrListId::lower_ast_opt(ctxt, ast.attr_list());
         let value = ast.value().map(|expr| Body::lower_ast(ctxt, expr)).into();
 
         AssocConstDef {
+            attributes,
             name: IdentId::lower_token_partial(ctxt, ast.name()),
             ty: TypeId::lower_ast_partial(ctxt, ast.ty()),
             value,
@@ -517,7 +579,7 @@ impl<'db> FieldDefListId<'db> {
 }
 
 impl<'db> FieldDef<'db> {
-    fn lower_ast(ctxt: &mut FileLowerCtxt<'db>, ast: ast::RecordFieldDef) -> Self {
+    pub(super) fn lower_ast(ctxt: &mut FileLowerCtxt<'db>, ast: ast::RecordFieldDef) -> Self {
         let attributes = AttrListId::lower_ast_opt(ctxt, ast.attr_list());
         let name = IdentId::lower_token_partial(ctxt, ast.name());
         let type_ref = TypeId::lower_ast_partial(ctxt, ast.ty());

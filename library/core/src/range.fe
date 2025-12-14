@@ -1,0 +1,94 @@
+use ingot::seq::Seq
+
+/// Trait for range bounds - either compile-time known or runtime.
+pub trait Bound {
+    /// The runtime representation of this bound.
+    /// `()` for Known (value is in the type), `usize` for Unknown.
+    type Repr
+}
+
+/// A compile-time known bound value.
+pub struct Known<const N: usize> {}
+
+/// A runtime bound value.
+pub struct Unknown {}
+
+impl<const N: usize> Bound for Known<N> {
+    type Repr = ()
+}
+
+impl Bound for Unknown {
+    type Repr = usize
+}
+
+/// A range from start to end (exclusive).
+///
+/// The bounds can be either compile-time known (`Known<N>`) or runtime (`Unknown`).
+/// This allows for zero-cost ranges when bounds are known at compile time:
+/// - `Range<Known<0>, Known<10>>` - 0 words (fully const)
+/// - `Range<Known<0>, Unknown>` - 1 word (common `0..n` pattern)
+/// - `Range<Unknown, Unknown>` - 2 words (fully dynamic)
+pub struct Range<S: Bound, E: Bound> {
+    pub start: <S as Bound>::Repr,
+    pub end: <E as Bound>::Repr,
+}
+
+/// Fully const range: `Known<S>..Known<E>`
+impl<const S: usize, const E: usize> Seq<usize> for Range<Known<S>, Known<E>> {
+    fn len(self) -> usize {
+        if E < S {
+            0
+        } else {
+            E - S
+        }
+    }
+
+    fn get(self, i: usize) -> usize {
+        S + i
+    }
+}
+
+/// Const start, dynamic end: `Known<S>..n` (common `0..n` pattern)
+impl<const S: usize> Seq<usize> for Range<Known<S>, Unknown> {
+    fn len(self) -> usize {
+        if self.end < S {
+            0
+        } else {
+            self.end - S
+        }
+    }
+
+    fn get(self, i: usize) -> usize {
+        S + i
+    }
+}
+
+/// Dynamic start, const end: `n..Known<E>`
+impl<const E: usize> Seq<usize> for Range<Unknown, Known<E>> {
+    fn len(self) -> usize {
+        if E < self.start {
+            0
+        } else {
+            E - self.start
+        }
+    }
+
+    fn get(self, i: usize) -> usize {
+        self.start + i
+    }
+}
+
+/// Fully dynamic range: `start..end`
+impl Seq<usize> for Range<Unknown, Unknown> {
+    fn len(self) -> usize {
+        if self.end < self.start {
+            0
+        } else {
+            self.end - self.start
+        }
+    }
+
+    fn get(self, i: usize) -> usize {
+        self.start + i
+    }
+}

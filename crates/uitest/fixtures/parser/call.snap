@@ -1,7 +1,7 @@
 ---
 source: crates/uitest/tests/parser.rs
 expression: diags
-input_file: crates/uitest/fixtures/parser/call.fe
+input_file: fixtures/parser/call.fe
 ---
 error[1-0001]: unexpected syntax while parsing function call arguments
   ┌─ call.fe:2:10
@@ -15,8 +15,8 @@ error[1-0001]: unexpected syntax while parsing function call arguments
 2 │ foo(x, y a, z ;)
   │               ^ unexpected
 
-error[1-0001]: unexpected syntax while parsing generic type argument list
-  ┌─ call.fe:4:12
+error[1-0001]: unexpected syntax while parsing block
+  ┌─ call.fe:4:8
   │
 4 │ foo<i32, T E, >(x, y)
-  │            ^ unexpected
+  │        ^^^^^^^^^^^^^^ unexpected

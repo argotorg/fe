@@ -13,11 +13,11 @@ use revm::{
     },
     database::InMemoryDB,
     handler::{ExecuteCommitEvm, MainBuilder, MainContext, MainnetContext, MainnetEvm},
-    primitives::{Address, Bytes as EvmBytes},
+    primitives::{Address, Bytes as EvmBytes, Log, TxKind},
     state::AccountInfo,
 };
 use solc_runner::{ContractBytecode, YulcError, compile_single_contract};
-use std::{fmt, path::Path};
+use std::{collections::HashMap, fmt, path::Path};
 use thiserror::Error;
 use url::Url;
 
@@ -25,7 +25,7 @@ use url::Url;
 const MEMORY_SOURCE_URL: &str = "file:///contract.fe";
 
 /// Error type returned by the harness.
-#[derive(Debug, Error)]
+#[derive(Error)]
 pub enum HarnessError {
     #[error("fe compiler diagnostics:\n{0}")]
     CompilerDiagnostics(String),
@@ -49,6 +49,12 @@ pub enum HarnessError {
     Hex(#[from] hex::FromHexError),
     #[error("io error: {0}")]
     Io(#[from] std::io::Error),
+}
+
+impl fmt::Debug for HarnessError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Display::fmt(self, f)
+    }
 }
 
 impl From<YulcError> for HarnessError {
@@ -116,6 +122,13 @@ pub struct CallResult {
     pub gas_used: u64,
 }
 
+/// Output returned from executing contract runtime bytecode along with logs.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CallResultWithLogs {
+    pub result: CallResult,
+    pub logs: Vec<String>,
+}
+
 fn prepare_account(
     runtime_bytecode_hex: &str,
 ) -> Result<(Bytecode, Address, InMemoryDB), HarnessError> {
@@ -132,6 +145,26 @@ fn transact(
     options: ExecutionOptions,
     nonce: u64,
 ) -> Result<CallResult, HarnessError> {
+    let outcome = transact_with_logs(evm, address, calldata, options, nonce)?;
+    Ok(outcome.result)
+}
+
+/// Executes a call transaction and returns the result plus formatted logs.
+///
+/// * `evm` - Mutable EVM instance to execute against.
+/// * `address` - Target contract address.
+/// * `calldata` - ABI-encoded call data.
+/// * `options` - Execution options (gas, caller, value).
+/// * `nonce` - Transaction nonce to use.
+///
+/// Returns the call result along with any logs emitted by the execution.
+fn transact_with_logs(
+    evm: &mut MainnetEvm<MainnetContext<InMemoryDB>>,
+    address: Address,
+    calldata: &[u8],
+    options: ExecutionOptions,
+    nonce: u64,
+) -> Result<CallResultWithLogs, HarnessError> {
     let tx = TxEnv::builder()
         .caller(options.caller)
         .gas_limit(options.gas_limit)
@@ -139,7 +172,7 @@ fn transact(
         .to(address)
         .value(options.value)
         .data(EvmBytes::copy_from_slice(calldata))
-        .nonce(options.nonce.unwrap_or(nonce))
+        .nonce(nonce)
         .build()
         .map_err(|err| HarnessError::Execution(format!("{err:?}")))?;
 
@@ -150,10 +183,14 @@ fn transact(
         ExecutionResult::Success {
             output: Output::Call(bytes),
             gas_used,
+            logs,
             ..
-        } => Ok(CallResult {
-            return_data: bytes.to_vec(),
-            gas_used,
+        } => Ok(CallResultWithLogs {
+            result: CallResult {
+                return_data: bytes.to_vec(),
+                gas_used,
+            },
+            logs: format_logs(&logs),
         }),
         ExecutionResult::Success {
             output: Output::Create(..),
@@ -168,11 +205,20 @@ fn transact(
     }
 }
 
+/// Formats raw EVM logs into debug strings for display.
+///
+/// * `logs` - Logs emitted by the EVM execution.
+///
+/// Returns a vector of formatted log strings.
+fn format_logs(logs: &[Log]) -> Vec<String> {
+    logs.iter().map(|log| format!("{log:?}")).collect()
+}
+
 /// Stateful runtime instance backed by a persistent in-memory database.
 pub struct RuntimeInstance {
     evm: MainnetEvm<MainnetContext<InMemoryDB>>,
     address: Address,
-    next_nonce: u64,
+    next_nonce_by_caller: HashMap<Address, u64>,
 }
 
 impl RuntimeInstance {
@@ -189,8 +235,92 @@ impl RuntimeInstance {
         Ok(Self {
             evm,
             address,
-            next_nonce: 0,
+            next_nonce_by_caller: HashMap::new(),
         })
+    }
+
+    /// Deploys a contract by executing its init bytecode and using the returned runtime code.
+    /// This properly runs any initialization logic in the constructor.
+    pub fn deploy(init_bytecode_hex: &str) -> Result<Self, HarnessError> {
+        Self::deploy_with_constructor_args(init_bytecode_hex, &[])
+    }
+
+    /// Deploys a contract by executing its init bytecode with ABI-encoded constructor args.
+    pub fn deploy_with_constructor_args(
+        init_bytecode_hex: &str,
+        constructor_args: &[u8],
+    ) -> Result<Self, HarnessError> {
+        let mut init_code = hex_to_bytes(init_bytecode_hex)?;
+        init_code.extend_from_slice(constructor_args);
+        let caller = Address::ZERO;
+
+        let mut db = InMemoryDB::default();
+        // Give the caller some balance for deployment
+        db.insert_account_info(
+            caller,
+            AccountInfo::new(
+                U256::from(1_000_000_000u64),
+                0,
+                Default::default(),
+                Bytecode::default(),
+            ),
+        );
+
+        let ctx = Context::mainnet().with_db(db);
+        let mut evm = ctx.build_mainnet();
+
+        // Create deployment transaction (TxKind::Create means contract creation)
+        let tx = TxEnv::builder()
+            .caller(caller)
+            .gas_limit(10_000_000)
+            .gas_price(0)
+            .kind(TxKind::Create)
+            .data(EvmBytes::from(init_code))
+            .nonce(0)
+            .build()
+            .map_err(|err| HarnessError::Execution(format!("{err:?}")))?;
+
+        let result = evm
+            .transact_commit(tx)
+            .map_err(|err| HarnessError::Execution(err.to_string()))?;
+
+        match result {
+            ExecutionResult::Success {
+                output: Output::Create(_, Some(deployed_address)),
+                ..
+            } => {
+                // The contract was deployed successfully; revm has already inserted the account
+                let mut next_nonce_by_caller = HashMap::new();
+                next_nonce_by_caller.insert(caller, 1);
+                Ok(Self {
+                    evm,
+                    address: deployed_address,
+                    next_nonce_by_caller,
+                })
+            }
+            ExecutionResult::Success { output, .. } => Err(HarnessError::Execution(format!(
+                "deployment returned unexpected output: {output:?}"
+            ))),
+            ExecutionResult::Revert { output, .. } => {
+                Err(HarnessError::Revert(RevertData(output.to_vec())))
+            }
+            ExecutionResult::Halt { reason, gas_used } => {
+                Err(HarnessError::Halted { reason, gas_used })
+            }
+        }
+    }
+
+    fn effective_nonce(&mut self, options: ExecutionOptions) -> u64 {
+        if let Some(nonce) = options.nonce {
+            let entry = self.next_nonce_by_caller.entry(options.caller).or_insert(0);
+            *entry = (*entry).max(nonce + 1);
+            return nonce;
+        }
+
+        let entry = self.next_nonce_by_caller.entry(options.caller).or_insert(0);
+        let current = *entry;
+        *entry += 1;
+        current
     }
 
     /// Executes the runtime with arbitrary calldata.
@@ -199,12 +329,29 @@ impl RuntimeInstance {
         calldata: &[u8],
         options: ExecutionOptions,
     ) -> Result<CallResult, HarnessError> {
-        let nonce = options.nonce.unwrap_or_else(|| {
-            let current = self.next_nonce;
-            self.next_nonce += 1;
-            current
-        });
+        let nonce = self.effective_nonce(options);
         transact(&mut self.evm, self.address, calldata, options, nonce)
+    }
+
+    /// Executes the runtime with arbitrary calldata, returning execution logs.
+    pub fn call_raw_with_logs(
+        &mut self,
+        calldata: &[u8],
+        options: ExecutionOptions,
+    ) -> Result<CallResultWithLogs, HarnessError> {
+        let nonce = self.effective_nonce(options);
+        transact_with_logs(&mut self.evm, self.address, calldata, options, nonce)
+    }
+
+    /// Executes the runtime at an arbitrary address using the same underlying EVM state.
+    pub fn call_raw_at(
+        &mut self,
+        address: Address,
+        calldata: &[u8],
+        options: ExecutionOptions,
+    ) -> Result<CallResult, HarnessError> {
+        let nonce = self.effective_nonce(options);
+        transact(&mut self.evm, address, calldata, options, nonce)
     }
 
     /// Executes a strongly-typed function call using ABI encoding.
@@ -303,6 +450,26 @@ impl FeContractHarness {
     pub fn deploy_instance(&self) -> Result<RuntimeInstance, HarnessError> {
         RuntimeInstance::new(&self.contract.runtime_bytecode)
     }
+
+    /// Deploys a contract by running the init bytecode, initializing storage.
+    /// Use this when your contract has initialization logic (e.g., storage setup).
+    pub fn deploy_with_init(&self) -> Result<RuntimeInstance, HarnessError> {
+        RuntimeInstance::deploy(&self.contract.bytecode)
+    }
+
+    /// Deploys a contract by running the init bytecode with ABI-encoded constructor args.
+    pub fn deploy_with_init_args(
+        &self,
+        constructor_args: &[Token],
+    ) -> Result<RuntimeInstance, HarnessError> {
+        let args = ethers_core::abi::encode(constructor_args);
+        RuntimeInstance::deploy_with_constructor_args(&self.contract.bytecode, &args)
+    }
+
+    /// Returns the raw init bytecode emitted by `solc`.
+    pub fn init_bytecode(&self) -> &str {
+        &self.contract.bytecode
+    }
 }
 
 /// ABI-encodes a function call according to the provided signature.
@@ -355,6 +522,14 @@ mod tests {
             .status()
             .map(|status| status.success())
             .unwrap_or(false)
+    }
+
+    #[test]
+    fn harness_error_debug_is_human_readable() {
+        let err = HarnessError::Solc("DeclarationError: missing".to_string());
+        let dbg = format!("{err:?}");
+        assert!(dbg.starts_with("solc error: DeclarationError:"));
+        assert!(!dbg.contains("Solc(\""));
     }
 
     #[test]
@@ -606,6 +781,486 @@ object "Counter" {
             bytes_to_u256(&make_none_result.return_data).unwrap(),
             U256::from(0u64),
             "make_none() should return 0 (is_some of None)"
+        );
+    }
+
+    #[test]
+    fn storage_map_contract_test() {
+        if !solc_available() {
+            eprintln!("skipping storage_map_contract_test because solc is missing");
+            return;
+        }
+        let source_path = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../codegen/tests/fixtures/storage_map_contract.fe"
+        );
+        let harness = FeContractHarness::compile_from_file(
+            "BalanceMap",
+            source_path,
+            CompileOptions::default(),
+        )
+        .expect("compilation should succeed");
+
+        // Use deploy_with_init to properly run init code that initializes storage
+        let mut instance = harness.deploy_with_init().expect("deployment succeeds");
+        let options = ExecutionOptions::default();
+
+        // Use address-like values for accounts
+        let alice = Token::Uint(AbiU256::from(0x1111u64));
+        let bob = Token::Uint(AbiU256::from(0x2222u64));
+
+        // Initially, balances should be zero
+        let bal_alice_call =
+            encode_function_call("balanceOf(uint256)", std::slice::from_ref(&alice)).unwrap();
+        let bal_alice = instance
+            .call_raw(&bal_alice_call, options)
+            .expect("balanceOf alice should succeed");
+        assert_eq!(
+            bytes_to_u256(&bal_alice.return_data).unwrap(),
+            U256::from(0u64),
+            "initial alice balance should be 0"
+        );
+
+        // Set Alice's balance to 100
+        let set_alice = encode_function_call(
+            "setBalance(uint256,uint256)",
+            &[alice.clone(), Token::Uint(AbiU256::from(100u64))],
+        )
+        .unwrap();
+        instance
+            .call_raw(&set_alice, options)
+            .expect("setBalance alice should succeed");
+
+        // Verify Alice's balance is now 100
+        let bal_alice = instance
+            .call_raw(&bal_alice_call, options)
+            .expect("balanceOf alice should succeed");
+        assert_eq!(
+            bytes_to_u256(&bal_alice.return_data).unwrap(),
+            U256::from(100u64),
+            "alice balance should be 100 after set"
+        );
+
+        // Set Bob's balance to 50
+        let set_bob = encode_function_call(
+            "setBalance(uint256,uint256)",
+            &[bob.clone(), Token::Uint(AbiU256::from(50u64))],
+        )
+        .unwrap();
+        instance
+            .call_raw(&set_bob, options)
+            .expect("setBalance bob should succeed");
+
+        // Transfer 30 from Alice to Bob (should succeed, return 0)
+        let transfer_call = encode_function_call(
+            "transfer(uint256,uint256,uint256)",
+            &[
+                alice.clone(),
+                bob.clone(),
+                Token::Uint(AbiU256::from(30u64)),
+            ],
+        )
+        .unwrap();
+        let transfer_result = instance
+            .call_raw(&transfer_call, options)
+            .expect("transfer should succeed");
+        assert_eq!(
+            bytes_to_u256(&transfer_result.return_data).unwrap(),
+            U256::from(0u64),
+            "transfer should return 0 (success)"
+        );
+
+        // Verify balances after transfer: Alice = 70, Bob = 80
+        let bal_alice = instance
+            .call_raw(&bal_alice_call, options)
+            .expect("balanceOf alice should succeed");
+        assert_eq!(
+            bytes_to_u256(&bal_alice.return_data).unwrap(),
+            U256::from(70u64),
+            "alice balance should be 70 after transfer"
+        );
+
+        let bal_bob_call =
+            encode_function_call("balanceOf(uint256)", std::slice::from_ref(&bob)).unwrap();
+        let bal_bob = instance
+            .call_raw(&bal_bob_call, options)
+            .expect("balanceOf bob should succeed");
+        assert_eq!(
+            bytes_to_u256(&bal_bob.return_data).unwrap(),
+            U256::from(80u64),
+            "bob balance should be 80 after transfer"
+        );
+
+        // Try to transfer more than Alice has (should fail, return 1)
+        let transfer_fail = encode_function_call(
+            "transfer(uint256,uint256,uint256)",
+            &[
+                alice.clone(),
+                bob.clone(),
+                Token::Uint(AbiU256::from(1000u64)),
+            ],
+        )
+        .unwrap();
+        let transfer_fail_result = instance
+            .call_raw(&transfer_fail, options)
+            .expect("transfer should execute");
+        assert_eq!(
+            bytes_to_u256(&transfer_fail_result.return_data).unwrap(),
+            U256::from(1u64),
+            "transfer should return 1 (insufficient funds)"
+        );
+
+        // Verify balances unchanged after failed transfer
+        let bal_alice = instance
+            .call_raw(&bal_alice_call, options)
+            .expect("balanceOf alice should succeed");
+        assert_eq!(
+            bytes_to_u256(&bal_alice.return_data).unwrap(),
+            U256::from(70u64),
+            "alice balance should still be 70 after failed transfer"
+        );
+
+        // ========== Test that allowances map is separate from balances ==========
+        // Set Alice's allowance to 999
+        let set_allowance_alice = encode_function_call(
+            "setAllowance(uint256,uint256)",
+            &[alice.clone(), Token::Uint(AbiU256::from(999u64))],
+        )
+        .unwrap();
+        instance
+            .call_raw(&set_allowance_alice, options)
+            .expect("setAllowance alice should succeed");
+
+        // Verify Alice's allowance is 999
+        let get_allowance_alice =
+            encode_function_call("getAllowance(uint256)", std::slice::from_ref(&alice)).unwrap();
+        let allowance_alice = instance
+            .call_raw(&get_allowance_alice, options)
+            .expect("getAllowance alice should succeed");
+        assert_eq!(
+            bytes_to_u256(&allowance_alice.return_data).unwrap(),
+            U256::from(999u64),
+            "alice allowance should be 999"
+        );
+
+        // CRITICAL: Verify Alice's balance is STILL 70 (not affected by allowance)
+        let bal_alice = instance
+            .call_raw(&bal_alice_call, options)
+            .expect("balanceOf alice should succeed");
+        assert_eq!(
+            bytes_to_u256(&bal_alice.return_data).unwrap(),
+            U256::from(70u64),
+            "alice balance should still be 70 after setting allowance - maps must be independent!"
+        );
+
+        // And verify Bob's allowance is 0 (default, never set)
+        let get_allowance_bob =
+            encode_function_call("getAllowance(uint256)", std::slice::from_ref(&bob)).unwrap();
+        let allowance_bob = instance
+            .call_raw(&get_allowance_bob, options)
+            .expect("getAllowance bob should succeed");
+        assert_eq!(
+            bytes_to_u256(&allowance_bob.return_data).unwrap(),
+            U256::from(0u64),
+            "bob allowance should be 0 (never set)"
+        );
+    }
+
+    #[test]
+    fn erc20_contract_test() {
+        if !solc_available() {
+            eprintln!("skipping erc20_contract_test because solc is missing");
+            return;
+        }
+
+        let source_path = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../codegen/tests/fixtures/erc20.fe"
+        );
+        let harness = FeContractHarness::compile_from_file(
+            "CoolCoin",
+            source_path,
+            CompileOptions::default(),
+        )
+        .expect("compilation should succeed");
+
+        let owner = Address::with_last_byte(0x01);
+        let alice = Address::with_last_byte(0x02);
+        let bob = Address::with_last_byte(0x03);
+
+        let owner_abi = ethers_core::types::Address::from_low_u64_be(1);
+        let alice_abi = ethers_core::types::Address::from_low_u64_be(2);
+        let bob_abi = ethers_core::types::Address::from_low_u64_be(3);
+
+        let initial_supply = AbiU256::from(1_000u64);
+        let mut instance = harness
+            .deploy_with_init_args(&[Token::Uint(initial_supply), Token::Address(owner_abi)])
+            .expect("deployment succeeds");
+
+        let owner_opts = ExecutionOptions {
+            caller: owner,
+            ..ExecutionOptions::default()
+        };
+
+        let name_call = encode_function_call("name()", &[]).unwrap();
+        let name_res = instance
+            .call_raw(&name_call, owner_opts)
+            .expect("name() should succeed");
+        assert_eq!(
+            bytes_to_u256(&name_res.return_data).unwrap(),
+            U256::from(0x436f6f6c436f696eu64),
+            "name() should return CoolCoin"
+        );
+
+        let symbol_call = encode_function_call("symbol()", &[]).unwrap();
+        let symbol_res = instance
+            .call_raw(&symbol_call, owner_opts)
+            .expect("symbol() should succeed");
+        assert_eq!(
+            bytes_to_u256(&symbol_res.return_data).unwrap(),
+            U256::from(0x434f4f4cu64),
+            "symbol() should return COOL"
+        );
+
+        let decimals_call = encode_function_call("decimals()", &[]).unwrap();
+        let decimals_res = instance
+            .call_raw(&decimals_call, owner_opts)
+            .expect("decimals() should succeed");
+        assert_eq!(
+            bytes_to_u256(&decimals_res.return_data).unwrap(),
+            U256::from(18u64),
+            "decimals() should return 18"
+        );
+
+        let total_supply_call = encode_function_call("totalSupply()", &[]).unwrap();
+        let total_supply_res = instance
+            .call_raw(&total_supply_call, owner_opts)
+            .expect("totalSupply() should succeed");
+        assert_eq!(
+            bytes_to_u256(&total_supply_res.return_data).unwrap(),
+            U256::from(1_000u64),
+            "totalSupply() should match constructor mint"
+        );
+
+        let bal_owner_call =
+            encode_function_call("balanceOf(address)", &[Token::Address(owner_abi)]).unwrap();
+        let bal_owner = instance
+            .call_raw(&bal_owner_call, owner_opts)
+            .expect("balanceOf(owner) should succeed");
+        assert_eq!(
+            bytes_to_u256(&bal_owner.return_data).unwrap(),
+            U256::from(1_000u64),
+            "owner should receive initial supply"
+        );
+
+        // transfer 250 from owner -> alice
+        let transfer_call = encode_function_call(
+            "transfer(address,uint256)",
+            &[
+                Token::Address(alice_abi),
+                Token::Uint(AbiU256::from(250u64)),
+            ],
+        )
+        .unwrap();
+        let transfer_res = instance
+            .call_raw(&transfer_call, owner_opts)
+            .expect("transfer should succeed");
+        assert_eq!(
+            bytes_to_u256(&transfer_res.return_data).unwrap(),
+            U256::from(1u64),
+            "transfer should return true"
+        );
+
+        let bal_owner = instance
+            .call_raw(&bal_owner_call, owner_opts)
+            .expect("balanceOf(owner) after transfer should succeed");
+        assert_eq!(
+            bytes_to_u256(&bal_owner.return_data).unwrap(),
+            U256::from(750u64),
+            "owner balance should decrease after transfer"
+        );
+
+        let bal_alice_call =
+            encode_function_call("balanceOf(address)", &[Token::Address(alice_abi)]).unwrap();
+        let bal_alice = instance
+            .call_raw(&bal_alice_call, owner_opts)
+            .expect("balanceOf(alice) after transfer should succeed");
+        assert_eq!(
+            bytes_to_u256(&bal_alice.return_data).unwrap(),
+            U256::from(250u64),
+            "alice balance should increase after transfer"
+        );
+
+        // approve bob to spend 100 from owner
+        let approve_call = encode_function_call(
+            "approve(address,uint256)",
+            &[Token::Address(bob_abi), Token::Uint(AbiU256::from(100u64))],
+        )
+        .unwrap();
+        let approve_res = instance
+            .call_raw(&approve_call, owner_opts)
+            .expect("approve should succeed");
+        assert_eq!(
+            bytes_to_u256(&approve_res.return_data).unwrap(),
+            U256::from(1u64),
+            "approve should return true"
+        );
+
+        let allowance_call = encode_function_call(
+            "allowance(address,address)",
+            &[Token::Address(owner_abi), Token::Address(bob_abi)],
+        )
+        .unwrap();
+        let allowance_res = instance
+            .call_raw(&allowance_call, owner_opts)
+            .expect("allowance should succeed");
+        assert_eq!(
+            bytes_to_u256(&allowance_res.return_data).unwrap(),
+            U256::from(100u64),
+            "allowance should match approve"
+        );
+
+        // transferFrom by bob: owner -> alice, 60
+        let transfer_from_call = encode_function_call(
+            "transferFrom(address,address,uint256)",
+            &[
+                Token::Address(owner_abi),
+                Token::Address(alice_abi),
+                Token::Uint(AbiU256::from(60u64)),
+            ],
+        )
+        .unwrap();
+        let bob_opts = ExecutionOptions {
+            caller: bob,
+            ..ExecutionOptions::default()
+        };
+        let transfer_from_res = instance
+            .call_raw(&transfer_from_call, bob_opts)
+            .expect("transferFrom should succeed");
+        assert_eq!(
+            bytes_to_u256(&transfer_from_res.return_data).unwrap(),
+            U256::from(1u64),
+            "transferFrom should return true"
+        );
+
+        let allowance_res = instance
+            .call_raw(&allowance_call, owner_opts)
+            .expect("allowance after transferFrom should succeed");
+        assert_eq!(
+            bytes_to_u256(&allowance_res.return_data).unwrap(),
+            U256::from(40u64),
+            "allowance should decrease after transferFrom"
+        );
+
+        // mint 10 to alice (owner is MINTER)
+        let mint_call = encode_function_call(
+            "mint(address,uint256)",
+            &[Token::Address(alice_abi), Token::Uint(AbiU256::from(10u64))],
+        )
+        .unwrap();
+        let mint_res = instance
+            .call_raw(&mint_call, owner_opts)
+            .expect("mint should succeed");
+        assert_eq!(
+            bytes_to_u256(&mint_res.return_data).unwrap(),
+            U256::from(1u64),
+            "mint should return true"
+        );
+
+        let total_supply_res = instance
+            .call_raw(&total_supply_call, owner_opts)
+            .expect("totalSupply after mint should succeed");
+        assert_eq!(
+            bytes_to_u256(&total_supply_res.return_data).unwrap(),
+            U256::from(1_010u64),
+            "totalSupply should increase after mint"
+        );
+
+        // burn 5 from alice
+        let burn_call =
+            encode_function_call("burn(uint256)", &[Token::Uint(AbiU256::from(5u64))]).unwrap();
+        let alice_opts = ExecutionOptions {
+            caller: alice,
+            ..ExecutionOptions::default()
+        };
+        let burn_res = instance
+            .call_raw(&burn_call, alice_opts)
+            .expect("burn should succeed");
+        assert_eq!(
+            bytes_to_u256(&burn_res.return_data).unwrap(),
+            U256::from(1u64),
+            "burn should return true"
+        );
+
+        let total_supply_res = instance
+            .call_raw(&total_supply_call, owner_opts)
+            .expect("totalSupply after burn should succeed");
+        assert_eq!(
+            bytes_to_u256(&total_supply_res.return_data).unwrap(),
+            U256::from(1_005u64),
+            "totalSupply should decrease after burn"
+        );
+    }
+
+    #[test]
+    fn runtime_constructs_contract() {
+        if !solc_available() {
+            eprintln!("skipping runtime_constructs_contract because solc is missing");
+            return;
+        }
+        let fixture_dir = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../codegen/tests/fixtures/runtime_constructs"
+        );
+        let ingot_url = Url::from_directory_path(fixture_dir).expect("fixture dir is valid");
+
+        let mut db = DriverDataBase::default();
+        let had_init_diagnostics = driver::init_ingot(&mut db, &ingot_url);
+        assert!(
+            !had_init_diagnostics,
+            "ingot resolution should succeed for `{ingot_url}`"
+        );
+
+        let ingot = db
+            .workspace()
+            .containing_ingot(&db, ingot_url.clone())
+            .expect("ingot should be registered in workspace");
+        let diags = db.run_on_ingot(ingot);
+        if !diags.is_empty() {
+            panic!("compiler diagnostics:\n{}", diags.format_diags(&db));
+        }
+
+        let root_file = ingot.root_file(&db).expect("ingot should have root file");
+        let top_mod = db.top_mod(root_file);
+        let yul = emit_module_yul(&db, top_mod).expect("yul emission should succeed");
+        let contract = compile_single_contract("Parent", &yul, false, true)
+            .expect("solc compilation should succeed");
+
+        let mut instance =
+            RuntimeInstance::deploy(&contract.bytecode).expect("parent deployment should succeed");
+        let parent_res = instance
+            .call_raw(&[], ExecutionOptions::default())
+            .expect("parent runtime should succeed");
+        assert_eq!(
+            parent_res.return_data.len(),
+            32,
+            "parent should return a u256 word containing the deployed child address"
+        );
+
+        let child_address = Address::from_slice(&parent_res.return_data[12..]);
+        assert_ne!(
+            child_address,
+            Address::ZERO,
+            "parent should return a nonzero child address"
+        );
+
+        let child_res = instance
+            .call_raw_at(child_address, &[], ExecutionOptions::default())
+            .expect("child runtime should succeed");
+        assert_eq!(
+            bytes_to_u256(&child_res.return_data).unwrap(),
+            U256::from(0xbeefu64),
+            "child runtime should return expected value"
         );
     }
 }

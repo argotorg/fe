@@ -1,0 +1,23 @@
+---
+source: crates/codegen/tests/layout.rs
+expression: report
+input_file: tests/fixtures/layout/range_bounds.fe
+---
+struct WrapZero:
+  size: 64 bytes
+  fields:
+    [0]: offset=0, size=32
+    [1]: offset=32, size=0
+    [2]: offset=32, size=32
+struct WrapOne:
+  size: 96 bytes
+  fields:
+    [0]: offset=0, size=32
+    [1]: offset=32, size=32
+    [2]: offset=64, size=32
+struct WrapTwo:
+  size: 128 bytes
+  fields:
+    [0]: offset=0, size=32
+    [1]: offset=32, size=64
+    [2]: offset=96, size=32

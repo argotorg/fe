@@ -185,7 +185,7 @@ impl<'db> ScopeGraphBuilder<'db> {
                 self.add_field_scope(
                     item_node,
                     FieldParent::Contract(inner),
-                    inner.fields(self.db),
+                    inner.hir_fields(self.db),
                 );
                 self.graph
                     .add_edge(item_node, item_node, EdgeKind::self_ty());
@@ -304,6 +304,20 @@ impl<'db> ScopeGraphBuilder<'db> {
 
     pub(super) fn joined_id(&self, variant: TrackedItemVariant<'db>) -> TrackedItemId<'db> {
         self.id_stack.last().unwrap().join(self.db, variant)
+    }
+
+    pub(super) fn current_id(&self) -> TrackedItemId<'db> {
+        *self
+            .id_stack
+            .last()
+            .expect("scope graph builder has no current id")
+    }
+
+    pub(super) fn set_current_id(&mut self, id: TrackedItemId<'db>) {
+        *self
+            .id_stack
+            .last_mut()
+            .expect("scope graph builder has no current id") = id;
     }
 
     pub(super) fn enter_block_scope(&mut self) {

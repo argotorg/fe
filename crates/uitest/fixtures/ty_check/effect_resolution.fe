@@ -1,0 +1,38 @@
+contract Mine uses (foo: Foo, x: X, y) {
+    owner: Address
+
+    init() uses (foo, mut owner, foo) {
+        owner = foo.caller()
+    }
+
+    recv Private {
+        Hi -> bool uses (foo, owner, foo) {
+            hi()
+        }
+    }
+}
+
+msg Private {
+    #[selector = 1]
+    Hi -> bool,
+}
+
+trait Foo {
+    fn bar(self) -> Address
+}
+
+struct Address {
+    inner: u256
+}
+
+impl core::ops::Eq for Address {
+    fn eq(self, _ other: Self) -> bool {
+        self.inner == other.inner
+    }
+}
+
+fn hi() -> bool
+  uses (foo, owner: Address)
+{
+    foo.caller() == owner
+}

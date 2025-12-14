@@ -1,0 +1,230 @@
+// This test demonstrates various name collision issues in symbol mangling.
+// Each section shows a different category of collision that can produce
+// invalid Yul (duplicate function definitions).
+
+// =============================================================================
+// 1. Module qualifier flattening collisions
+// =============================================================================
+// When a base name is considered "ambiguous", mangling prefixes it with a module
+// qualifier. That qualifier is computed by joining module segments with `_`.
+// If two distinct module paths produce the same qualifier string, the base is
+// *not* considered ambiguous and we can emit duplicate symbols.
+//
+// Example: `a::b` and `a_b` both qualify to `a_b`, so both functions below end
+// up as `flattened_fn`.
+
+mod a {
+    pub mod b {
+        pub fn flattened_fn() -> u32 {
+            1
+        }
+    }
+}
+
+mod a_b {
+    pub fn flattened_fn() -> u32 {
+        2
+    }
+}
+
+fn test_module_qualifier_flatten_collision() -> u32 {
+    a::b::flattened_fn() + a_b::flattened_fn()
+}
+
+// =============================================================================
+// 2. Type name collisions in generic mangling
+// =============================================================================
+// Generic suffixes use ty.pretty_print() which for ADTs is only the bare
+// identifier, so two distinct types named `S` in different modules collide.
+
+mod types_a {
+    pub struct S {
+        pub x: u32
+    }
+}
+
+mod types_b {
+    pub struct S {
+        pub y: u64
+    }
+}
+
+fn generic_fn<T>(val: T) -> T {
+    val
+}
+
+fn test_generic_type_collision() -> u32 {
+    let a: types_a::S = types_a::S { x: 1 }
+    let b: types_b::S = types_b::S { y: 2 }
+    // Both instantiations mangle as `generic_fn__S__<hash>` even though
+    // they're different types
+    let _ = generic_fn(a)
+    let _ = generic_fn(b)
+    42
+}
+
+// =============================================================================
+// 3. Impl method prefix collisions
+// =============================================================================
+// associated_prefix uses ty.pretty_print() so inherent methods on same-named
+// types in different modules can collide.
+
+mod impl_a {
+    pub struct Widget {
+        pub val: u32
+    }
+
+    impl Widget {
+        pub fn process(self) -> u32 {
+            self.val * 2
+        }
+    }
+}
+
+mod impl_b {
+    pub struct Widget {
+        pub val: u64
+    }
+
+    impl Widget {
+        pub fn process(self) -> u64 {
+            self.val * 3
+        }
+    }
+}
+
+fn test_impl_method_collision() -> u32 {
+    let a = impl_a::Widget { val: 10 }
+    let b = impl_b::Widget { val: 20 }
+    // Both methods mangle as `widget_process` even though they're
+    // on different types
+    let x: u32 = a.process()
+    let y: u64 = b.process()
+    x
+}
+
+// =============================================================================
+// 4. Trait method collisions (same trait name in different modules)
+// =============================================================================
+// Trait method mangling includes the trait's identifier, but not its module
+// path. So two distinct traits named `Trait` in different modules collide.
+
+mod trait_mod_a {
+    pub trait Trait {
+        fn same_method(self) -> u32
+    }
+}
+
+mod trait_mod_b {
+    pub trait Trait {
+        fn same_method(self) -> u32
+    }
+}
+
+struct MultiTraitImpl {
+    pub value: u32
+}
+
+impl trait_mod_a::Trait for MultiTraitImpl {
+    fn same_method(self) -> u32 {
+        self.value + 1
+    }
+}
+
+impl trait_mod_b::Trait for MultiTraitImpl {
+    fn same_method(self) -> u32 {
+        self.value + 2
+    }
+}
+
+fn test_trait_method_collision() -> u32 {
+    let obj = MultiTraitImpl { value: 100 }
+    // Both trait method implementations may collide
+    let a: u32 = trait_mod_a::Trait::same_method(obj)
+    let obj2 = MultiTraitImpl { value: 100 }
+    let b: u32 = trait_mod_b::Trait::same_method(obj2)
+    a + b
+}
+
+// =============================================================================
+// 5. Parameter vs local variable name collisions
+// =============================================================================
+// alloc_local() generates names v0, v1, v2... starting from 0, regardless of
+// parameter names. If a parameter is named v0, local variables will collide.
+
+fn param_local_collision(v0: u32) -> u32 {
+    // The first local variable allocated will also be named v0,
+    // colliding with the parameter
+    let x = v0 + 1
+    let y = x + 2
+    y
+}
+
+fn test_param_local_collision() -> u32 {
+    param_local_collision(10)
+}
+
+// =============================================================================
+// 6. Cast shim pattern collision
+// =============================================================================
+// try_collapse_cast_shim is purely string-pattern based on `__{src}_as_{dst}`.
+// A user-defined function matching this pattern would be "optimized away".
+
+fn __u32_as_u256(x: u32) -> u256 {
+    // This function name matches the cast shim pattern and might be
+    // incorrectly optimized away or have its call replaced with just
+    // returning the argument.
+    // Intentionally doing something different than a simple cast:
+    let result: u256 = 999
+    result
+}
+
+fn test_cast_shim_collision() -> u256 {
+    // This call might be incorrectly collapsed to just return 42
+    // instead of calling our custom function that returns 999
+    __u32_as_u256(42)
+}
+
+// =============================================================================
+// 7. `ret` parameter name collision
+// =============================================================================
+// Codegen uses a fixed return name `ret` in Yul signatures. Parameters are
+// uniqued against each other, but not against this implicit return name, so a
+// parameter named `ret` produces invalid Yul.
+
+fn ret_param_collision(ret: u32) -> u32 {
+    ret + 1
+}
+
+fn test_ret_param_collision() -> u32 {
+    ret_param_collision(10)
+}
+
+// =============================================================================
+// 8. Yul reserved function name collision
+// =============================================================================
+// Function symbols are not escaped against Yul reserved words/opcodes. Defining
+// a function named `add` produces invalid Yul and can also shadow the builtin.
+
+fn add() -> u32 {
+    123
+}
+
+fn test_yul_reserved_fn_collision() -> u32 {
+    add()
+}
+
+// =============================================================================
+// Entry point that exercises all collision scenarios
+// =============================================================================
+pub fn main() -> u32 {
+    let _ = test_module_qualifier_flatten_collision()
+    let _ = test_generic_type_collision()
+    let _ = test_impl_method_collision()
+    let _ = test_trait_method_collision()
+    let _ = test_param_local_collision()
+    let _ = test_cast_shim_collision()
+    let _ = test_ret_param_collision()
+    let _ = test_yul_reserved_fn_collision()
+    0
+}

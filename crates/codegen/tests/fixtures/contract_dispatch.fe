@@ -1,5 +1,3 @@
-contract MinimalDispatcher {}
-
 fn emit_code() -> u64 {
     1
 }

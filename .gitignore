@@ -7,3 +7,10 @@ tarpaulin-report.html
 .vscode
 .DS_Store
 **/*.fe-lsp.json
+
+# OpenSpec and AI assistant files
+openspec/
+AGENTS.md
+CLAUDE.md
+.claude/
+.gemini/

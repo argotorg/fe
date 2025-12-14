@@ -1,0 +1,30 @@
+---
+source: crates/hir/tests/layout.rs
+assertion_line: 144
+expression: report
+input_file: test_files/layout/enum_simple.fe
+---
+enum UnitOnly:
+  size: 32 bytes
+  discriminant: 32 bytes
+  variants:
+    A: (unit)
+    B: (unit)
+    C: (unit)
+enum WithPayload:
+  size: 64 bytes
+  discriminant: 32 bytes
+  variants:
+    None: (unit)
+    Some:
+      [0]: offset=32, size=32
+enum MultiField:
+  size: 35 bytes
+  discriminant: 32 bytes
+  variants:
+    Empty: (unit)
+    One:
+      [0]: offset=32, size=1
+    Two:
+      [0]: offset=32, size=1
+      [1]: offset=33, size=2

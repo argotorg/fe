@@ -1,0 +1,182 @@
+use core::abi::{Abi, AbiDecoder, AbiEncoder, ByteInput, Cursor}
+use core::num::IntDowncast
+use ingot::evm::mem
+use ingot::evm::ops::{mstore, mstore8, revert}
+
+pub struct Sol {}
+
+extern {
+    pub fn encoded_size<T>() -> u256
+}
+
+impl Abi for Sol {
+    type Selector = u32
+    type Decoder = SolDecoder
+    type Encoder = SolEncoder
+    const SELECTOR_SIZE: u256 = 4
+
+    fn selector_from_prefix(_ prefix: u256) -> Self::Selector {
+        (prefix >> 224).downcast_unchecked()
+    }
+
+    fn decoder_new<I: ByteInput>(_ input: I) -> Self::Decoder<I> {
+        SolDecoder::new(input)
+    }
+
+    fn decoder_with_base<I: ByteInput>(_ input: I, base: u256) -> Self::Decoder<I> {
+        SolDecoder::with_base(input, base)
+    }
+
+    fn encoder_new() -> Self::Encoder {
+        SolEncoder::new()
+    }
+}
+
+pub struct SolDecoder<I> {
+    pub cur: Cursor<I>,
+    pub base: u256,
+}
+
+impl<I> SolDecoder<I>
+    where I: ByteInput
+{
+    pub fn new(input: I) -> Self {
+        let cur = Cursor::new(input)
+        let d = SolDecoder { cur, base: 0 }
+        d
+    }
+
+    pub fn with_base(input: I, base: u256) -> Self {
+        let cur = Cursor::new(input).fork(base)
+        let d = SolDecoder { cur, base }
+        d
+    }
+}
+
+impl<I> AbiDecoder<Sol> for SolDecoder<I>
+    where I: ByteInput
+{
+    type Input = I
+
+    fn input(self) -> Self::Input {
+        self.cur.input
+    }
+
+    fn base(self) -> u256 {
+        self.base
+    }
+
+    fn pos(self) -> u256 {
+        self.cur.pos
+    }
+
+    fn set_pos(mut self, new_pos: u256) {
+        self.cur.pos = new_pos
+    }
+
+    fn read_u8(mut self) -> u8 {
+        let len = self.cur.input.len()
+        let new_pos = self.cur.pos + 1
+        if new_pos < self.cur.pos || new_pos > len {
+            revert(0, 0)
+        }
+        let b = self.cur.input.byte_at(self.cur.pos)
+        self.cur.pos = new_pos
+        b
+    }
+
+    fn read_word(mut self) -> u256 {
+        let len = self.cur.input.len()
+        let new_pos = self.cur.pos + 32
+        if new_pos < self.cur.pos || new_pos > len {
+            revert(0, 0)
+        }
+        let w = self.cur.input.word_at(self.cur.pos)
+        self.cur.pos = new_pos
+        w
+    }
+
+    fn peek_word(self, at: u256) -> u256 {
+        let len = self.cur.input.len()
+        let end = at + 32
+        if end < at || end > len {
+            revert(0, 0)
+        }
+        self.cur.input.word_at(at)
+    }
+
+    fn alloc(mut self, size: u256) -> u256 {
+        mem::alloc(size)
+    }
+}
+
+pub struct SolEncoder {
+    pub start: u256,
+    pub pos: u256,
+    pub end: u256,
+}
+
+impl SolEncoder {
+    pub fn new() -> Self {
+        let e = SolEncoder {
+            start: 0,
+            pos: 0,
+            end: 0,
+        }
+        e
+    }
+
+    fn ensure_init(mut self, bytes: u256) {
+        if self.start == 0 {
+            let ptr = mem::alloc(bytes)
+            self.start = ptr
+            self.pos = ptr
+            self.end = ptr + bytes
+        }
+    }
+}
+
+impl AbiEncoder<Sol> for SolEncoder {
+    fn base(self) -> u256 {
+        self.start
+    }
+
+    fn pos(self) -> u256 {
+        self.pos
+    }
+
+    fn set_pos(mut self, new_pos: u256) {
+        self.pos = new_pos
+    }
+
+    fn write_u8(mut self, v: u8) {
+        mstore8(self.pos, v)
+        self.pos = self.pos + 1
+    }
+
+    fn write_word(mut self, v: u256) {
+        let p = self.pos
+        mstore(p, v)
+        self.pos = p + 32
+    }
+
+    fn write_word_at(mut self, at: u256, v: u256) {
+        mstore(at, v)
+    }
+
+    fn reserve_head(mut self, bytes: u256) -> u256 {
+        self.ensure_init(bytes)
+        self.start
+    }
+
+    fn append_tail(mut self, bytes: u256) -> u256 {
+        let ptr = mem::alloc(bytes)
+        self.end = ptr + bytes
+        ptr
+    }
+
+    fn finish(self) -> (u256, u256) {
+        let start = self.start
+        (start, self.end - start)
+    }
+}

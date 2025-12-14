@@ -61,7 +61,7 @@ impl<'db> Body<'db> {
     /// Returns `Some(func)` if this body belongs to a function, `None` otherwise
     /// (e.g., for anonymous/closure bodies or const bodies).
     pub fn containing_func(self, db: &'db dyn HirDb) -> Option<Func<'db>> {
-        let scope_graph = self.top_mod(db).scope_graph(db);
+        let scope_graph = self.scope().scope_graph(db);
         for item in scope_graph.items_dfs(db) {
             if let ItemKind::Func(func) = item
                 && func.body(db) == Some(self)

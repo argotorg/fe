@@ -1,0 +1,17 @@
+use core::{Range, Known, Unknown}
+
+pub fn const_bounds() -> Range<Known<0>, Known<4>> {
+    0..4
+}
+
+pub fn const_start(end: usize) -> Range<Known<0>, Unknown> {
+    0..end
+}
+
+pub fn const_end(start: usize) -> Range<Unknown, Known<4>> {
+    start..4
+}
+
+pub fn dynamic_bounds(start: usize, end: usize) -> Range<Unknown, Unknown> {
+    start..end
+}

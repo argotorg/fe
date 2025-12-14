@@ -1,0 +1,8 @@
+trait Abi {
+    const SELECTOR_SIZE: u32
+}
+
+fn selector_size<A: Abi>() -> u32 {
+    A::SELECTOR_SIZE
+}
+

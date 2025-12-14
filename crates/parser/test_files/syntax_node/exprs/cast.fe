@@ -1,0 +1,6 @@
+-x as i64
+1 + 2 as u64
+(1 + 2) as u64
+foo().bar as u8
+arr[0] as u256
+a as b as c

@@ -1,0 +1,105 @@
+use std::evm::{Address, Call, Create, Ctx, Evm}
+use std::evm::effects::{TStorPtr, assert}
+
+msg AMsg {
+    #[selector = 1]
+    Start { b: Address } -> u256,
+    #[selector = 2]
+    Callback { b: Address },
+}
+
+msg BMsg {
+    #[selector = 3]
+    Enter { a: Address } -> u256,
+    #[selector = 4]
+    Protected -> u256,
+    #[selector = 5]
+    Get -> u256
+}
+
+pub contract A uses (ctx: Ctx, mut call: Call) {
+    recv AMsg {
+        Start { b } -> u256 uses (ctx, mut call) {
+            let self_addr = ctx.address()
+            let gas = 100000
+            let value = 0
+
+            // this calls B::Enter -> A::Callback -> B::Protected
+            let _ = call.call(addr: b, gas, value, message: BMsg::Enter { a: self_addr })
+
+            // within the same transaction, now unlocked: Protected should increment count
+            call.call(addr: b, gas, value, message: BMsg::Protected {})
+        }
+
+        Callback { b } uses (mut call) {
+            // Attempt reentrancy: this should be blocked by B's transient lock.
+            call.call(
+                addr: b,
+                gas: 200000,
+                value: 0,
+                message: BMsg::Protected {},
+            )
+            ()
+        }
+    }
+}
+
+pub contract B {
+    mut locked: TStorPtr<bool>,
+    mut protected_access_count: u256,
+
+    recv BMsg {
+        Enter { a } -> u256
+          uses (mut locked, protected_access_count, ctx: Ctx, mut call: Call)
+        {
+            // Non-reentrant entry sets the transient lock for the duration of this call.
+            assert(!locked)
+            locked = true
+
+            let pre = protected_access_count
+            call.call(
+                addr: a,
+                gas: 200000,
+                value: 0,
+                message: AMsg::Callback { b: ctx.address() },
+            )
+            locked = false
+
+            let post = protected_access_count
+            assert(post == pre)
+            post
+        }
+
+        Protected -> u256
+          uses (locked, mut protected_access_count)
+        {
+            if !locked {
+                protected_access_count += 1
+            }
+            protected_access_count
+        }
+
+        Get -> u256 uses (protected_access_count) {
+            protected_access_count
+        }
+    }
+}
+
+#[test]
+fn test_reentrancy_guard() uses (mut cr: Create, mut ca: Call, mut evm: Evm) {
+    let a = cr.create2<A>(value: 0, args: (), salt: 1)
+    let b = cr.create2<B>(value: 0, args: (), salt: 2)
+    assert(a.inner != 0)
+    assert(b.inner != 0)
+    let gas = 100000
+    let value = 0
+
+    let x = evm.call(addr: b, gas, value, message: BMsg::Get {})
+    assert(x == 0)
+
+    let y = evm.call(addr: a, gas, value, message: AMsg::Start { b: b })
+    assert(y == 1)
+
+    let z = evm.call(addr: b, gas, value, message: BMsg::Protected {})
+    assert(z == 2)
+}

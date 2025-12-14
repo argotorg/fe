@@ -1,0 +1,23 @@
+trait Abi {
+    const SELECTOR_SIZE: u256
+}
+
+trait ByteInput {
+    fn len(self) -> u256
+}
+
+trait Host {
+    type Input: ByteInput
+
+    fn input(self) -> Self::Input
+    fn abort(self) -> !
+
+    fn runtime_selector<A: Abi>(self) -> u256 {
+        let input = self.input()
+        if input.len() < A::SELECTOR_SIZE {
+            self.abort()
+        }
+        A::SELECTOR_SIZE
+    }
+}
+

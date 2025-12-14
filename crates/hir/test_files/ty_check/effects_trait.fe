@@ -14,7 +14,7 @@ pub fn log_once()
 }
 
 pub fn provide_logger() {
-    with (Logger = Console {}) {
+    with (Console {}) {
         log_once()
     }
 }

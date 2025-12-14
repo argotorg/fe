@@ -1,0 +1,6 @@
+---
+source: crates/uitest/tests/ty.rs
+expression: diags
+input_file: fixtures/ty/def/assoc_ty_struct_field.fe
+---
+

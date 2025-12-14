@@ -1,0 +1,19 @@
+use core::{Range, Known, Unknown}
+
+struct WrapZero {
+    left: u256,
+    range: Range<Known<0>, Known<4>>,
+    right: u256,
+}
+
+struct WrapOne {
+    left: u256,
+    range: Range<Known<0>, Unknown>,
+    right: u256,
+}
+
+struct WrapTwo {
+    left: u256,
+    range: Range<Unknown, Unknown>,
+    right: u256,
+}

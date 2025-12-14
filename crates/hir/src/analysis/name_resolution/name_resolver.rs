@@ -1,17 +1,20 @@
 use std::{cmp, fmt, mem};
 
 use crate::{
-    core::hir_def::{
-        Enum, EnumVariant, GenericParam, GenericParamOwner, HirIngot, IdentId, ItemKind, Mod,
-        TopLevelMod, Trait, Use,
-        prim_ty::PrimTy,
-        scope_graph::{
-            AnonEdge, EdgeKind, FieldEdge, GenericParamEdge, IngotEdge, LexEdge, ModEdge, ScopeId,
-            SelfEdge, SelfTyEdge, SuperEdge, TraitEdge, TraitTypeEdge, TypeEdge, ValueEdge,
-            VariantEdge,
+    core::{
+        hir_def::{
+            Enum, EnumVariant, GenericParam, GenericParamOwner, HirIngot, IdentId, ItemKind, Mod,
+            TopLevelMod, Trait, Use,
+            prim_ty::PrimTy,
+            scope_graph::{
+                AnonEdge, EdgeKind, FieldEdge, GenericParamEdge, IngotEdge, LexEdge, ModEdge,
+                ScopeId, SelfEdge, SelfTyEdge, SuperEdge, TraitEdge, TraitTypeEdge, TypeEdge,
+                ValueEdge, VariantEdge,
+            },
         },
+        span::DynLazySpan,
     },
-    core::span::DynLazySpan,
+    hir_def::scope_graph::ScopeEdge,
 };
 use bitflags::bitflags;
 use rustc_hash::{FxHashMap, FxHashSet};
@@ -52,6 +55,12 @@ pub struct QueryDirective {
 }
 
 impl QueryDirective {
+    /// Make a new query directive for resolving names from `scope`.
+    pub fn for_scope<'db>(db: &'db dyn HirAnalysisDb, scope: ScopeId<'db>) -> Self {
+        let _ = (db, scope);
+        Self::new()
+    }
+
     /// Make a new query directive with the default settings.
     /// The default setting is to lookup the name in the lexical scope and all
     /// imports and external ingots.
@@ -507,8 +516,13 @@ impl<'db, 'a> NameResolver<'db, 'a> {
 
         // 1. Look for the name in the current scope.
         let mut found_scopes = FxHashSet::default();
-        for edge in query.scope(self.db).edges(self.db) {
-            match edge.kind.propagate(self.db, query) {
+        let scope = query.scope(self.db);
+        let top_mod = scope.top_mod(self.db);
+        let s_graph = top_mod.scope_graph(self.db);
+
+        {
+            let mut process_edge = |edge: &ScopeEdge<'db>| match edge.kind.propagate(self.db, query)
+            {
                 PropagationResult::Terminated => {
                     if found_scopes.insert(edge.dest) {
                         let res = NameRes::new_from_scope(
@@ -526,6 +540,10 @@ impl<'db, 'a> NameResolver<'db, 'a> {
                 }
 
                 PropagationResult::UnPropagated => {}
+            };
+
+            for edge in s_graph.edges(scope) {
+                process_edge(edge);
             }
         }
 
