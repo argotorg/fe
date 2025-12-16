@@ -2,6 +2,7 @@ use camino::Utf8PathBuf;
 use common::InputDb;
 use doc_engine::DocExtractor;
 use doc_viewer::model::DocIndex;
+#[cfg(feature = "doc-server")]
 use doc_viewer::server::{DocServerConfig, serve};
 use driver::DriverDataBase;
 use hir::hir_def::HirIngot;
@@ -31,6 +32,7 @@ impl LspServerInfo {
     }
 }
 
+#[allow(unused_variables)]
 pub fn generate_docs(
     path: &Utf8PathBuf,
     output: Option<&Utf8PathBuf>,
@@ -79,6 +81,7 @@ pub fn generate_docs(
         std::process::exit(1);
     };
 
+    #[cfg(feature = "doc-server")]
     if serve_docs {
         // Start HTTP server
         let config = DocServerConfig {
@@ -102,7 +105,16 @@ pub fn generate_docs(
                 std::process::exit(1);
             }
         });
-    } else if json {
+        return;
+    }
+
+    #[cfg(not(feature = "doc-server"))]
+    if serve_docs {
+        eprintln!("Error: doc-server feature not enabled. Rebuild with --features doc-server");
+        std::process::exit(1);
+    }
+
+    if json {
         // Output JSON to stdout or file
         let json_output = serde_json::to_string_pretty(&index).unwrap();
         if let Some(output_path) = output {
