@@ -66,7 +66,11 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
             |expr| matches!(expr, Expr::Path(..)),
             |this, expr_id| {
                 if let Some(value_id) = this.try_const_expr(expr_id) {
-                    this.builder.body.expr_values.entry(expr_id).or_insert(value_id);
+                    this.builder
+                        .body
+                        .expr_values
+                        .entry(expr_id)
+                        .or_insert(value_id);
                 }
             },
         );

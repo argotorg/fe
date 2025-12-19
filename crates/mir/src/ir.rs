@@ -191,6 +191,16 @@ pub enum MirInst<'db> {
         place: Place<'db>,
         value: ValueId,
     },
+    /// Initialize an aggregate place (record/tuple/array/enum) from a set of projected writes.
+    ///
+    /// This is a higher-level form used during lowering so that codegen can decide the final
+    /// layout/offsets for the target architecture while still preserving evaluation order
+    /// (values are lowered before this instruction is emitted).
+    InitAggregate {
+        expr: ExprId,
+        place: Place<'db>,
+        inits: Vec<(MirProjectionPath<'db>, ValueId)>,
+    },
     /// Store an enum discriminant into a place.
     SetDiscriminant {
         expr: ExprId,
@@ -321,7 +331,6 @@ pub enum ValueOrigin<'db> {
     PlaceRef(Place<'db>),
     /// Allocate memory for an aggregate value.
     Alloc {
-        size_bytes: usize,
         address_space: AddressSpaceKind,
     },
 }

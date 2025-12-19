@@ -153,6 +153,9 @@ impl<'db> FunctionEmitter<'db> {
             mir::MirInst::Store { expr, place, value } => {
                 self.emit_store_inst(docs, *expr, place, *value, state)?
             }
+            mir::MirInst::InitAggregate { expr, place, inits } => {
+                self.emit_init_aggregate_inst(docs, *expr, place, inits, state)?
+            }
             mir::MirInst::SetDiscriminant {
                 expr,
                 place,
@@ -396,12 +399,15 @@ impl<'db> FunctionEmitter<'db> {
         state: &mut BlockState,
     ) -> Result<(), YulError> {
         let value_data = self.mir_func.body.value(value);
-        if let ValueOrigin::Alloc { size_bytes, .. } = value_data.origin {
+        if let ValueOrigin::Alloc { .. } = value_data.origin {
             if !bind_value {
                 return Err(YulError::Unsupported(
                     "alloc values must be bound to a temporary".into(),
                 ));
             }
+            let size_bytes = layout::ty_size_bytes(self.db, value_data.ty).ok_or_else(|| {
+                YulError::Unsupported("alloc requires a statically sized type".into())
+            })?;
             let temp = state.alloc_local();
             self.expr_temps.insert(expr, temp.clone());
             state.insert_value_temp(value.index(), temp.clone());
@@ -471,6 +477,24 @@ impl<'db> FunctionEmitter<'db> {
             mir::ir::AddressSpaceKind::Storage => format!("sstore({addr}, {stored})"),
         };
         docs.push(YulDoc::line(line));
+        Ok(())
+    }
+
+    fn emit_init_aggregate_inst(
+        &mut self,
+        docs: &mut Vec<YulDoc>,
+        expr: ExprId,
+        place: &mir::ir::Place<'db>,
+        inits: &[(MirProjectionPath<'db>, ValueId)],
+        state: &mut BlockState,
+    ) -> Result<(), YulError> {
+        for (path, value) in inits {
+            let mut target = place.clone();
+            for proj in path.iter() {
+                target = self.extend_place(&target, proj.clone());
+            }
+            self.emit_store_inst(docs, expr, &target, *value, state)?;
+        }
         Ok(())
     }
 
@@ -620,7 +644,7 @@ impl<'db> FunctionEmitter<'db> {
         let value_data = self.mir_func.body.value(value);
         match &value_data.origin {
             ValueOrigin::PlaceRef(place) | ValueOrigin::PlaceLoad(place) => place.address_space,
-            ValueOrigin::Alloc { address_space, .. } => *address_space,
+            ValueOrigin::Alloc { address_space } => *address_space,
             ValueOrigin::Expr(expr_id) => self.expr_address_space(*expr_id),
             _ => fallback,
         }

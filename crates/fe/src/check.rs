@@ -314,6 +314,18 @@ fn format_inst(db: &DriverDataBase, inst: &MirInst<'_>) -> String {
             place,
             value_label(*value)
         ),
+        MirInst::InitAggregate { expr, place, inits } => {
+            let inits = inits
+                .iter()
+                .map(|(path, value)| format!("{:?}={}", path, value_label(*value)))
+                .collect::<Vec<_>>()
+                .join(", ");
+            format!(
+                "{}: init_aggregate {:?} {{{inits}}}",
+                expr_label(*expr),
+                place
+            )
+        }
         MirInst::SetDiscriminant {
             expr,
             place,

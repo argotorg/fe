@@ -1,33 +1,22 @@
-//! Aggregate lowering and layout helpers for MIR: allocations, field/variant stores, sizing, and
-//! synthetic literals used by records and enums.
-
-use crate::layout;
+//! Aggregate lowering helpers for MIR: allocations, initializer emission, and type helpers.
 
 use super::*;
 use hir::analysis::ty::ty_def::prim_int_bits;
-use hir::hir_def::EnumVariant;
 use hir::projection::{IndexSource, Projection};
 use num_bigint::BigUint;
 
 impl<'db, 'a> MirBuilder<'db, 'a> {
-    /// Emits an allocation for the requested size and binds it to the expression.
+    /// Emits an allocation for the given type and binds it to the expression.
     ///
     /// # Parameters
     /// - `expr`: Expression id associated with the allocation.
-    /// - `size_bytes`: Allocation size in bytes.
     ///
     /// # Returns
     /// The `ValueId` of the allocated pointer.
-    pub(super) fn emit_alloc(
-        &mut self,
-        expr: ExprId,
-        alloc_ty: TyId<'db>,
-        size_bytes: usize,
-    ) -> ValueId {
+    pub(super) fn emit_alloc(&mut self, expr: ExprId, alloc_ty: TyId<'db>) -> ValueId {
         let alloc_value = self.builder.body.alloc_value(ValueData {
             ty: alloc_ty,
             origin: ValueOrigin::Alloc {
-                size_bytes,
                 address_space: AddressSpaceKind::Memory,
             },
         });
@@ -42,63 +31,18 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         alloc_value
     }
 
-    /// Emits a discriminant store for an enum allocation.
-    ///
-    /// # Parameters
-    /// - `expr`: Expression id for source context.
-    /// - `base_value`: Pointer to the enum allocation.
-    /// - `variant_index`: Discriminant value to store.
-    pub(super) fn emit_store_discriminant(
+    pub(super) fn emit_init_aggregate(
         &mut self,
         expr: ExprId,
         base_value: ValueId,
-        variant: EnumVariant<'db>,
+        inits: Vec<(MirProjectionPath<'db>, ValueId)>,
     ) {
-        let addr_space = self.value_address_space(base_value);
-        let place = Place::new(
-            base_value,
-            MirProjectionPath::from_projection(Projection::Discriminant),
-            addr_space,
-        );
-        self.push_inst_here(MirInst::SetDiscriminant {
-            expr,
-            place,
-            variant,
-        });
-    }
-
-    /// Emits a batch of field stores as MIR place writes.
-    ///
-    /// # Parameters
-    /// - `expr`: Expression id for context.
-    /// - `base_value`: Pointer to the allocated record/variant.
-    /// - `stores`: List of `(field_idx, field_value)` tuples.
-    /// - `helper`: Core helper used to perform the store.
-    ///
-    /// # Returns
-    /// Nothing; stores are emitted as instructions.
-    pub(super) fn emit_store_fields(
-        &mut self,
-        expr: ExprId,
-        base_value: ValueId,
-        stores: &[(usize, ValueId)],
-    ) {
-        if stores.is_empty() {
+        if inits.is_empty() {
             return;
         }
         let addr_space = self.value_address_space(base_value);
-        for (field_idx, field_value) in stores {
-            let place = Place::new(
-                base_value,
-                MirProjectionPath::from_projection(Projection::Field(*field_idx)),
-                addr_space,
-            );
-            self.push_inst_here(MirInst::Store {
-                expr,
-                place,
-                value: *field_value,
-            });
-        }
+        let place = Place::new(base_value, MirProjectionPath::new(), addr_space);
+        self.push_inst_here(MirInst::InitAggregate { expr, place, inits });
     }
 
     /// Lowers a record literal into an allocation plus `store_field` calls.
@@ -144,22 +88,21 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
             self.builder.body.expr_values.insert(expr, value);
             return value;
         }
-        let record_like = RecordLike::from_ty(record_ty);
-        let Some(size_bytes) = self.record_size_bytes(&record_like) else {
-            return fallback;
-        };
 
-        let value_id = self.emit_alloc(expr, record_ty, size_bytes);
+        let value_id = self.emit_alloc(expr, record_ty);
 
-        let mut stores = Vec::with_capacity(lowered_fields.len());
+        let mut inits = Vec::with_capacity(lowered_fields.len());
         for (label, field_value) in lowered_fields {
             let field_index = FieldIndex::Ident(label);
             let Some(info) = self.field_access_info(record_ty, field_index) else {
                 continue;
             };
-            stores.push((info.field_idx, field_value));
+            inits.push((
+                MirProjectionPath::from_projection(Projection::Field(info.field_idx)),
+                field_value,
+            ));
         }
-        self.emit_store_fields(expr, value_id, &stores);
+        self.emit_init_aggregate(expr, value_id, inits);
 
         value_id
     }
@@ -193,37 +136,28 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
             }
         }
 
-        // Compute tuple size and allocate
-        let Some(size_bytes) = layout::ty_size_bytes(self.db, tuple_ty) else {
-            return fallback;
-        };
-
-        let value_id = self.emit_alloc(expr, tuple_ty, size_bytes);
+        let value_id = self.emit_alloc(expr, tuple_ty);
 
         // Store each element by field index
-        let mut stores = Vec::with_capacity(lowered_elems.len());
+        let mut inits = Vec::with_capacity(lowered_elems.len());
         for (i, elem_value) in lowered_elems.into_iter().enumerate() {
-            stores.push((i, elem_value));
+            inits.push((
+                MirProjectionPath::from_projection(Projection::Field(i)),
+                elem_value,
+            ));
         }
-        self.emit_store_fields(expr, value_id, &stores);
+        self.emit_init_aggregate(expr, value_id, inits);
 
         value_id
     }
 
     /// Lowers an array literal into an allocation plus element stores.
-    pub(super) fn try_lower_array(
-        &mut self,
-        expr: ExprId,
-        elems: &[ExprId],
-    ) -> ValueId {
+    pub(super) fn try_lower_array(&mut self, expr: ExprId, elems: &[ExprId]) -> ValueId {
         let fallback = self.ensure_value(expr);
         let array_ty = self.typed_body.expr_ty(self.db, expr);
-        let elem_ty = match array_ty.generic_args(self.db).first() {
-            Some(ty) => *ty,
-            None => {
-                return fallback;
-            }
-        };
+        if array_ty.generic_args(self.db).is_empty() {
+            return fallback;
+        }
 
         let mut lowered_elems = Vec::with_capacity(elems.len());
         for &elem_expr in elems {
@@ -233,23 +167,17 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
             }
         }
 
-        let elem_size = layout::ty_size_bytes(self.db, elem_ty).unwrap_or(layout::WORD_SIZE_BYTES);
-        let size_bytes = elem_size * lowered_elems.len();
-        let value_id = self.emit_alloc(expr, array_ty, size_bytes);
+        let value_id = self.emit_alloc(expr, array_ty);
 
         let addr_space = self.value_address_space(value_id);
+        let mut inits = Vec::with_capacity(lowered_elems.len());
         for (idx, elem_value) in lowered_elems.into_iter().enumerate() {
-            let place = Place::new(
-                value_id,
-                MirProjectionPath::from_projection(Projection::Index(IndexSource::Constant(idx))),
-                addr_space,
-            );
-            self.push_inst_here(MirInst::Store {
-                expr,
-                place,
-                value: elem_value,
-            });
+            let proj =
+                MirProjectionPath::from_projection(Projection::Index(IndexSource::Constant(idx)));
+            inits.push((proj, elem_value));
         }
+        let place = Place::new(value_id, MirProjectionPath::new(), addr_space);
+        self.push_inst_here(MirInst::InitAggregate { expr, place, inits });
 
         value_id
     }
@@ -263,12 +191,9 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
     ) -> ValueId {
         let fallback = self.ensure_value(expr);
         let array_ty = self.typed_body.expr_ty(self.db, expr);
-        let elem_ty = match array_ty.generic_args(self.db).first() {
-            Some(ty) => *ty,
-            None => {
-                return fallback;
-            }
-        };
+        if array_ty.generic_args(self.db).is_empty() {
+            return fallback;
+        }
 
         let Some(len_body) = len.to_opt() else {
             return fallback;
@@ -282,23 +207,17 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
             return fallback;
         }
 
-        let elem_size = layout::ty_size_bytes(self.db, elem_ty).unwrap_or(layout::WORD_SIZE_BYTES);
-        let size_bytes = elem_size * count;
-        let value_id = self.emit_alloc(expr, array_ty, size_bytes);
+        let value_id = self.emit_alloc(expr, array_ty);
 
         let addr_space = self.value_address_space(value_id);
+        let mut inits = Vec::with_capacity(count);
         for idx in 0..count {
-            let place = Place::new(
-                value_id,
-                MirProjectionPath::from_projection(Projection::Index(IndexSource::Constant(idx))),
-                addr_space,
-            );
-            self.push_inst_here(MirInst::Store {
-                expr,
-                place,
-                value: elem_value,
-            });
+            let proj =
+                MirProjectionPath::from_projection(Projection::Index(IndexSource::Constant(idx)));
+            inits.push((proj, elem_value));
         }
+        let place = Place::new(value_id, MirProjectionPath::new(), addr_space);
+        self.push_inst_here(MirInst::InitAggregate { expr, place, inits });
 
         value_id
     }
@@ -363,50 +282,6 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
             return None;
         }
         Some(field_types[idx])
-    }
-
-    /// Computes the total byte width of a record by summing its fields.
-    ///
-    /// # Parameters
-    /// - `record_like`: Record or variant wrapper.
-    ///
-    /// # Returns
-    /// Total size in bytes if all field sizes are known.
-    pub(super) fn record_size_bytes(&self, record_like: &RecordLike<'db>) -> Option<usize> {
-        let ty = match record_like {
-            RecordLike::Type(ty) => *ty,
-            RecordLike::EnumVariant(variant) => variant.ty,
-        };
-        layout::ty_size_bytes(self.db, ty)
-    }
-
-    /// Computes the total byte width of an enum: discriminant plus largest payload.
-    ///
-    /// # Parameters
-    /// - `enum_ty`: Enum type to size.
-    ///
-    /// # Returns
-    /// Total enum size in bytes when layout is known.
-    pub(super) fn enum_size_bytes(&self, enum_ty: TyId<'db>) -> Option<usize> {
-        let (base_ty, args) = enum_ty.decompose_ty_app(self.db);
-        let TyData::TyBase(TyBase::Adt(adt_def)) = base_ty.data(self.db) else {
-            return None;
-        };
-        if !matches!(adt_def.adt_ref(self.db), AdtRef::Enum(_)) {
-            return None;
-        }
-
-        let mut max_payload = 0;
-        for variant in adt_def.fields(self.db) {
-            let mut payload = 0;
-            for ty in variant.iter_types(self.db) {
-                let field_ty = ty.instantiate(self.db, args);
-                payload += layout::ty_size_bytes(self.db, field_ty).unwrap_or(32);
-            }
-            max_payload = max_payload.max(payload);
-        }
-
-        Some(layout::DISCRIMINANT_SIZE_BYTES + max_payload)
     }
 
     /// Returns the ABI-encoded byte width for statically-sized values.

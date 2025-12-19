@@ -250,10 +250,12 @@ impl<'db> FunctionEmitter<'db> {
         let loop_ctx = ctx.loop_ctx;
         let mut then_state = ctx.cloned_state();
         let mut else_state = ctx.cloned_state();
-        let then_docs = self.emit_block_internal(then_bb, loop_ctx, &mut then_state, ctx.stop_block)?;
+        let then_docs =
+            self.emit_block_internal(then_bb, loop_ctx, &mut then_state, ctx.stop_block)?;
         ctx.docs
             .push(YulDoc::block(format!("if {cond_temp} "), then_docs));
-        let else_docs = self.emit_block_internal(else_bb, loop_ctx, &mut else_state, ctx.stop_block)?;
+        let else_docs =
+            self.emit_block_internal(else_bb, loop_ctx, &mut else_state, ctx.stop_block)?;
         ctx.docs
             .push(YulDoc::block(format!("if iszero({cond_temp}) "), else_docs));
         Ok(())
@@ -295,8 +297,12 @@ impl<'db> FunctionEmitter<'db> {
                         .push(YulDoc::wide_block(format!("  case {literal} "), case_docs));
                 }
                 let mut default_state = ctx.cloned_state();
-                let default_docs =
-                    self.emit_block_internal(default, loop_ctx, &mut default_state, ctx.stop_block)?;
+                let default_docs = self.emit_block_internal(
+                    default,
+                    loop_ctx,
+                    &mut default_state,
+                    ctx.stop_block,
+                )?;
                 ctx.docs
                     .push(YulDoc::wide_block("  default ", default_docs));
                 Ok(())
@@ -496,7 +502,8 @@ impl<'db> FunctionEmitter<'db> {
         // Value-producing arms:
         // 1) Emit the arm block to realize side effects and bind any temporaries
         // 2) Assign the arm result into the match/if temp
-        let mut case_docs = self.emit_block_with_stop(arm.block, loop_ctx, arm_state, merge_block)?;
+        let mut case_docs =
+            self.emit_block_with_stop(arm.block, loop_ctx, arm_state, merge_block)?;
         arm_docs.append(&mut case_docs);
 
         let value_id = arm
@@ -546,7 +553,8 @@ impl<'db> FunctionEmitter<'db> {
             ctx.docs.extend(after_docs);
             return Ok(());
         }
-        let next_docs = self.emit_block_internal(target, ctx.loop_ctx, ctx.state, ctx.stop_block)?;
+        let next_docs =
+            self.emit_block_internal(target, ctx.loop_ctx, ctx.state, ctx.stop_block)?;
         ctx.docs.extend(next_docs);
         Ok(())
     }

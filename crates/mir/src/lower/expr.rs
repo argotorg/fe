@@ -181,15 +181,9 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                 self.builder.body.expr_values.insert(expr, value);
                 value
             }
-            Partial::Present(Expr::RecordInit(_, fields)) => {
-                self.try_lower_record(expr, fields)
-            }
-            Partial::Present(Expr::Tuple(elems)) => {
-                self.try_lower_tuple(expr, elems)
-            }
-            Partial::Present(Expr::Array(elems)) => {
-                self.try_lower_array(expr, elems)
-            }
+            Partial::Present(Expr::RecordInit(_, fields)) => self.try_lower_record(expr, fields),
+            Partial::Present(Expr::Tuple(elems)) => self.try_lower_tuple(expr, elems),
+            Partial::Present(Expr::Array(elems)) => self.try_lower_array(expr, elems),
             Partial::Present(Expr::ArrayRep(elem, len)) => {
                 self.try_lower_array_rep(expr, *elem, *len)
             }
@@ -559,11 +553,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
     /// - `cond_expr`: Condition expression id.
     /// - `body_expr`: Loop body expression id.
     ///
-    pub(super) fn lower_while(
-        &mut self,
-        cond_expr: ExprId,
-        body_expr: ExprId,
-    ) {
+    pub(super) fn lower_while(&mut self, cond_expr: ExprId, body_expr: ExprId) {
         let Some(block) = self.current_block() else {
             return;
         };
@@ -776,11 +766,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
     /// # Parameters
     /// - `stmt_id`: Statement id for context.
     /// - `expr`: Expression id to lower.
-    pub(super) fn lower_expr_stmt(
-        &mut self,
-        stmt_id: StmtId,
-        expr: ExprId,
-    ) {
+    pub(super) fn lower_expr_stmt(&mut self, stmt_id: StmtId, expr: ExprId) {
         let Some(block) = self.current_block() else {
             return;
         };

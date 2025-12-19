@@ -30,12 +30,11 @@ use hir::hir_def::{
 use crate::{
     core_lib::{CoreHelperTy, CoreLib, CoreLibError},
     ir::{
-        AddressSpaceKind, BasicBlockId, BodyBuilder, CallOrigin, CodeRegionRoot,
-        ContractFunction, ContractFunctionKind, DecisionTreeBinding, EffectProviderKind,
-        IntrinsicOp, IntrinsicValue, LoopInfo, MatchArmLowering, MatchArmPattern,
-        MatchLoweringInfo, MirBody, MirFunction, MirInst, MirModule, MirProjection,
-        MirProjectionPath, Place, SwitchOrigin, SwitchTarget, SwitchValue, SyntheticValue,
-        Terminator, ValueData, ValueId, ValueOrigin,
+        AddressSpaceKind, BasicBlockId, BodyBuilder, CallOrigin, CodeRegionRoot, ContractFunction,
+        ContractFunctionKind, DecisionTreeBinding, EffectProviderKind, IntrinsicOp, IntrinsicValue,
+        LoopInfo, MatchArmLowering, MatchArmPattern, MatchLoweringInfo, MirBody, MirFunction,
+        MirInst, MirModule, MirProjection, MirProjectionPath, Place, SwitchOrigin, SwitchTarget,
+        SwitchValue, SyntheticValue, Terminator, ValueData, ValueId, ValueOrigin,
     },
     monomorphize::monomorphize_functions,
 };
@@ -348,7 +347,6 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
             self.push_inst(block, inst);
         }
     }
-
 
     /// Determines the address space for a binding.
     ///

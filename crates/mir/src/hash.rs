@@ -10,7 +10,7 @@ use num_bigint::BigUint;
 use rustc_hash::FxHashMap;
 
 use crate::{
-    CallOrigin, MirFunction, MirInst, SwitchValue, Terminator, ValueId, ValueOrigin,
+    CallOrigin, MirFunction, MirInst, MirProjection, SwitchValue, Terminator, ValueId, ValueOrigin,
     ir::{Place, SyntheticValue},
 };
 
@@ -168,16 +168,51 @@ impl<'db, 'a> FunctionHasher<'db, 'a> {
                 self.write_u8(0x0A);
                 self.hash_place(place);
             }
-            ValueOrigin::Alloc {
-                size_bytes,
-                address_space,
-            } => {
+            ValueOrigin::Alloc { address_space } => {
                 self.write_u8(0x0B);
-                self.write_u64(*size_bytes as u64);
                 self.write_u8(match address_space {
                     crate::ir::AddressSpaceKind::Memory => 1,
                     crate::ir::AddressSpaceKind::Storage => 2,
                 });
+            }
+        }
+    }
+
+    fn hash_projection(&mut self, proj: &MirProjection<'db>) {
+        match proj {
+            Projection::Field(idx) => {
+                self.write_u8(0x00);
+                self.write_usize(*idx);
+            }
+            Projection::VariantField {
+                variant,
+                enum_ty,
+                field_idx,
+            } => {
+                self.write_u8(0x01);
+                self.write_str(enum_ty.pretty_print(self.db));
+                self.write_usize(variant.idx as usize);
+                self.write_usize(*field_idx);
+            }
+            Projection::Discriminant => {
+                self.write_u8(0x02);
+            }
+            Projection::Index(idx_source) => {
+                self.write_u8(0x03);
+                match idx_source {
+                    hir::projection::IndexSource::Constant(idx) => {
+                        self.write_u8(0x00);
+                        self.write_usize(*idx);
+                    }
+                    hir::projection::IndexSource::Dynamic(value) => {
+                        self.write_u8(0x01);
+                        let slot = self.placeholder_value(*value);
+                        self.write_u32(slot);
+                    }
+                }
+            }
+            Projection::Deref => {
+                self.write_u8(0x04);
             }
         }
     }
@@ -192,46 +227,7 @@ impl<'db, 'a> FunctionHasher<'db, 'a> {
         });
         self.write_usize(place.projection.len());
         for proj in place.projection.iter() {
-            match proj {
-                Projection::Field(idx) => {
-                    self.write_u8(0x00);
-                    self.write_usize(*idx);
-                }
-                Projection::VariantField {
-                    variant,
-                    enum_ty,
-                    field_idx,
-                } => {
-                    // Include variant index and enum type identity to distinguish
-                    // operations on different enum types/variants. While structurally
-                    // equivalent code might produce the same Yul, we hash the enum
-                    // type to preserve type system semantics in deduplication.
-                    self.write_u8(0x01);
-                    self.write_str(enum_ty.pretty_print(self.db));
-                    self.write_usize(variant.idx as usize);
-                    self.write_usize(*field_idx);
-                }
-                Projection::Discriminant => {
-                    self.write_u8(0x02);
-                }
-                Projection::Index(idx_source) => {
-                    self.write_u8(0x03);
-                    match idx_source {
-                        hir::projection::IndexSource::Constant(idx) => {
-                            self.write_u8(0x00);
-                            self.write_usize(*idx);
-                        }
-                        hir::projection::IndexSource::Dynamic(value) => {
-                            self.write_u8(0x01);
-                            let slot = self.placeholder_value(*value);
-                            self.write_u32(slot);
-                        }
-                    }
-                }
-                Projection::Deref => {
-                    self.write_u8(0x04);
-                }
-            }
+            self.hash_projection(proj);
         }
     }
 
@@ -331,6 +327,21 @@ impl<'db, 'a> FunctionHasher<'db, 'a> {
                 self.hash_place(place);
                 let slot = self.placeholder_value(*value);
                 self.write_u32(slot);
+            }
+            MirInst::InitAggregate { expr, place, inits } => {
+                self.write_u8(0x28);
+                let expr_slot = self.placeholder_expr(*expr);
+                self.write_u32(expr_slot);
+                self.hash_place(place);
+                self.write_usize(inits.len());
+                for (path, value) in inits {
+                    self.write_usize(path.len());
+                    for proj in path.iter() {
+                        self.hash_projection(proj);
+                    }
+                    let slot = self.placeholder_value(*value);
+                    self.write_u32(slot);
+                }
             }
             MirInst::SetDiscriminant {
                 expr,

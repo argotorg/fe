@@ -90,6 +90,28 @@ impl<'db> FunctionEmitter<'db> {
                             }
                         }
                     }
+                    mir::MirInst::InitAggregate { place, inits, .. } => {
+                        counts[place.base.index()] += 1;
+                        for proj in place.projection.iter() {
+                            if let hir::projection::Projection::Index(
+                                hir::projection::IndexSource::Dynamic(value_id),
+                            ) = proj
+                            {
+                                counts[value_id.index()] += 1;
+                            }
+                        }
+                        for (path, value) in inits {
+                            counts[value.index()] += 1;
+                            for proj in path.iter() {
+                                if let hir::projection::Projection::Index(
+                                    hir::projection::IndexSource::Dynamic(value_id),
+                                ) = proj
+                                {
+                                    counts[value_id.index()] += 1;
+                                }
+                            }
+                        }
+                    }
                     mir::MirInst::SetDiscriminant { place, .. } => {
                         counts[place.base.index()] += 1;
                         for proj in place.projection.iter() {
