@@ -14,7 +14,6 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
     ///
     /// # Parameters
     /// - `expr`: Expression id associated with the allocation.
-    /// - `block`: Block to emit the allocation in.
     /// - `size_bytes`: Allocation size in bytes.
     ///
     /// # Returns
@@ -22,28 +21,24 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
     pub(super) fn emit_alloc(
         &mut self,
         expr: ExprId,
-        block: BasicBlockId,
         alloc_ty: TyId<'db>,
         size_bytes: usize,
     ) -> ValueId {
-        let alloc_value = self.mir_body.alloc_value(ValueData {
+        let alloc_value = self.builder.body.alloc_value(ValueData {
             ty: alloc_ty,
             origin: ValueOrigin::Alloc {
                 size_bytes,
                 address_space: AddressSpaceKind::Memory,
             },
         });
-        self.mir_body.expr_values.insert(expr, alloc_value);
+        self.builder.body.expr_values.insert(expr, alloc_value);
         self.value_address_space
             .insert(alloc_value, AddressSpaceKind::Memory);
-        self.push_inst(
-            block,
-            MirInst::EvalExpr {
-                expr,
-                value: alloc_value,
-                bind_value: true,
-            },
-        );
+        self.push_inst_here(MirInst::EvalExpr {
+            expr,
+            value: alloc_value,
+            bind_value: true,
+        });
         alloc_value
     }
 
@@ -51,13 +46,11 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
     ///
     /// # Parameters
     /// - `expr`: Expression id for source context.
-    /// - `block`: Block to emit the store in.
     /// - `base_value`: Pointer to the enum allocation.
     /// - `variant_index`: Discriminant value to store.
     pub(super) fn emit_store_discriminant(
         &mut self,
         expr: ExprId,
-        block: BasicBlockId,
         base_value: ValueId,
         variant: EnumVariant<'db>,
     ) {
@@ -67,21 +60,17 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
             MirProjectionPath::from_projection(Projection::Discriminant),
             addr_space,
         );
-        self.push_inst(
-            block,
-            MirInst::SetDiscriminant {
-                expr,
-                place,
-                variant,
-            },
-        );
+        self.push_inst_here(MirInst::SetDiscriminant {
+            expr,
+            place,
+            variant,
+        });
     }
 
     /// Emits a batch of field stores as MIR place writes.
     ///
     /// # Parameters
     /// - `expr`: Expression id for context.
-    /// - `block`: Block to emit stores in.
     /// - `base_value`: Pointer to the allocated record/variant.
     /// - `stores`: List of `(field_idx, field_value)` tuples.
     /// - `helper`: Core helper used to perform the store.
@@ -91,7 +80,6 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
     pub(super) fn emit_store_fields(
         &mut self,
         expr: ExprId,
-        block: BasicBlockId,
         base_value: ValueId,
         stores: &[(usize, ValueId)],
     ) {
@@ -105,51 +93,38 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                 MirProjectionPath::from_projection(Projection::Field(*field_idx)),
                 addr_space,
             );
-            self.push_inst(
-                block,
-                MirInst::Store {
-                    expr,
-                    place,
-                    value: *field_value,
-                },
-            );
+            self.push_inst_here(MirInst::Store {
+                expr,
+                place,
+                value: *field_value,
+            });
         }
     }
 
     /// Lowers a record literal into an allocation plus `store_field` calls.
     ///
     /// # Parameters
-    /// - `block`: Block to start lowering in.
     /// - `expr`: Record literal expression id.
     /// - `fields`: Field initializers.
     ///
     /// # Returns
-    /// The successor block and the value representing the allocated record.
-    pub(super) fn try_lower_record(
-        &mut self,
-        block: BasicBlockId,
-        expr: ExprId,
-        fields: &[Field<'db>],
-    ) -> (Option<BasicBlockId>, ValueId) {
-        let mut current = Some(block);
+    /// The value representing the allocated record.
+    pub(super) fn try_lower_record(&mut self, expr: ExprId, fields: &[Field<'db>]) -> ValueId {
+        let fallback = self.ensure_value(expr);
+        if self.current_block().is_none() {
+            return fallback;
+        }
         let mut lowered_fields = Vec::with_capacity(fields.len());
         for field in fields {
-            let Some(curr_block) = current else {
-                break;
-            };
-            let (next_block, value) = self.lower_expr_in(curr_block, field.expr);
-            current = next_block;
+            let value = self.lower_expr(field.expr);
+            if self.current_block().is_none() {
+                return fallback;
+            }
             let Some(label) = field.label_eagerly(self.db, self.body) else {
-                let value_id = self.ensure_value(expr);
-                return (current, value_id);
+                return fallback;
             };
             lowered_fields.push((label, value));
         }
-
-        let Some(curr_block) = current else {
-            let value_id = self.ensure_value(expr);
-            return (None, value_id);
-        };
 
         let record_ty = self.typed_body.expr_ty(self.db, expr);
         let record_base = record_ty.base_ty(self.db);
@@ -166,16 +141,15 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         ];
         if effect_ptr_bases.contains(&record_base) && lowered_fields.len() == 1 {
             let value = lowered_fields[0].1;
-            self.mir_body.expr_values.insert(expr, value);
-            return (Some(curr_block), value);
+            self.builder.body.expr_values.insert(expr, value);
+            return value;
         }
         let record_like = RecordLike::from_ty(record_ty);
         let Some(size_bytes) = self.record_size_bytes(&record_like) else {
-            let value_id = self.ensure_value(expr);
-            return (Some(curr_block), value_id);
+            return fallback;
         };
 
-        let value_id = self.emit_alloc(expr, curr_block, record_ty, size_bytes);
+        let value_id = self.emit_alloc(expr, record_ty, size_bytes);
 
         let mut stores = Vec::with_capacity(lowered_fields.len());
         for (label, field_value) in lowered_fields {
@@ -185,9 +159,9 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
             };
             stores.push((info.field_idx, field_value));
         }
-        self.emit_store_fields(expr, curr_block, value_id, &stores);
+        self.emit_store_fields(expr, value_id, &stores);
 
-        (Some(curr_block), value_id)
+        value_id
     }
 
     /// Lowers a tuple literal into an allocation plus `store_field` calls.
@@ -196,96 +170,72 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
     /// full tuple size, and each element is stored at its computed byte offset.
     ///
     /// # Parameters
-    /// - `block`: Block to start lowering in.
     /// - `expr`: Tuple literal expression id.
     /// - `elems`: Element expressions.
     ///
     /// # Returns
-    /// The successor block and the value representing the allocated tuple.
-    pub(super) fn try_lower_tuple(
-        &mut self,
-        block: BasicBlockId,
-        expr: ExprId,
-        elems: &[ExprId],
-    ) -> (Option<BasicBlockId>, ValueId) {
+    /// The value representing the allocated tuple.
+    pub(super) fn try_lower_tuple(&mut self, expr: ExprId, elems: &[ExprId]) -> ValueId {
+        let fallback = self.ensure_value(expr);
         let tuple_ty = self.typed_body.expr_ty(self.db, expr);
 
         // Handle unit tuple () - zero size, no allocation needed
         if tuple_ty.field_count(self.db) == 0 {
-            let value_id = self.ensure_value(expr);
-            return (Some(block), value_id);
+            return fallback;
         }
 
         // Lower all element expressions
-        let mut current = Some(block);
         let mut lowered_elems = Vec::with_capacity(elems.len());
         for &elem_expr in elems {
-            let Some(curr_block) = current else {
-                break;
-            };
-            let (next_block, value) = self.lower_expr_in(curr_block, elem_expr);
-            current = next_block;
-            lowered_elems.push(value);
+            lowered_elems.push(self.lower_expr(elem_expr));
+            if self.current_block().is_none() {
+                return fallback;
+            }
         }
-
-        let Some(curr_block) = current else {
-            let value_id = self.ensure_value(expr);
-            return (None, value_id);
-        };
 
         // Compute tuple size and allocate
         let Some(size_bytes) = layout::ty_size_bytes(self.db, tuple_ty) else {
-            let value_id = self.ensure_value(expr);
-            return (Some(curr_block), value_id);
+            return fallback;
         };
 
-        let value_id = self.emit_alloc(expr, curr_block, tuple_ty, size_bytes);
+        let value_id = self.emit_alloc(expr, tuple_ty, size_bytes);
 
         // Store each element by field index
         let mut stores = Vec::with_capacity(lowered_elems.len());
         for (i, elem_value) in lowered_elems.into_iter().enumerate() {
             stores.push((i, elem_value));
         }
-        self.emit_store_fields(expr, curr_block, value_id, &stores);
+        self.emit_store_fields(expr, value_id, &stores);
 
-        (Some(curr_block), value_id)
+        value_id
     }
 
     /// Lowers an array literal into an allocation plus element stores.
     pub(super) fn try_lower_array(
         &mut self,
-        block: BasicBlockId,
         expr: ExprId,
         elems: &[ExprId],
-    ) -> (Option<BasicBlockId>, ValueId) {
+    ) -> ValueId {
+        let fallback = self.ensure_value(expr);
         let array_ty = self.typed_body.expr_ty(self.db, expr);
         let elem_ty = match array_ty.generic_args(self.db).first() {
             Some(ty) => *ty,
             None => {
-                let value_id = self.ensure_value(expr);
-                return (Some(block), value_id);
+                return fallback;
             }
         };
 
-        let mut current = Some(block);
         let mut lowered_elems = Vec::with_capacity(elems.len());
         for &elem_expr in elems {
-            let Some(curr_block) = current else {
-                break;
-            };
-            let (next_block, value) = self.lower_expr_in(curr_block, elem_expr);
-            current = next_block;
-            lowered_elems.push(value);
+            lowered_elems.push(self.lower_expr(elem_expr));
+            if self.current_block().is_none() {
+                return fallback;
+            }
         }
-
-        let Some(curr_block) = current else {
-            let value_id = self.ensure_value(expr);
-            return (None, value_id);
-        };
 
         let elem_size = layout::ty_size_bytes(self.db, elem_ty).unwrap_or(layout::WORD_SIZE_BYTES);
         let size_bytes = elem_size * lowered_elems.len();
-        let value_id = self.emit_alloc(expr, curr_block, array_ty, size_bytes);
+        let value_id = self.emit_alloc(expr, array_ty, size_bytes);
 
         let addr_space = self.value_address_space(value_id);
         for (idx, elem_value) in lowered_elems.into_iter().enumerate() {
@@ -294,54 +244,47 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                 MirProjectionPath::from_projection(Projection::Index(IndexSource::Constant(idx))),
                 addr_space,
             );
-            self.push_inst(
-                curr_block,
-                MirInst::Store {
-                    expr,
-                    place,
-                    value: elem_value,
-                },
-            );
+            self.push_inst_here(MirInst::Store {
+                expr,
+                place,
+                value: elem_value,
+            });
         }
 
-        (Some(curr_block), value_id)
+        value_id
     }
 
     /// Lowers an array repetition literal into an allocation plus repeated stores.
     pub(super) fn try_lower_array_rep(
         &mut self,
-        block: BasicBlockId,
         expr: ExprId,
         elem: ExprId,
         len: Partial<Body<'db>>,
-    ) -> (Option<BasicBlockId>, ValueId) {
+    ) -> ValueId {
+        let fallback = self.ensure_value(expr);
         let array_ty = self.typed_body.expr_ty(self.db, expr);
         let elem_ty = match array_ty.generic_args(self.db).first() {
             Some(ty) => *ty,
             None => {
-                let value_id = self.ensure_value(expr);
-                return (Some(block), value_id);
+                return fallback;
             }
         };
 
         let Some(len_body) = len.to_opt() else {
-            let value_id = self.ensure_value(expr);
-            return (Some(block), value_id);
+            return fallback;
         };
         let Some(count) = self.const_usize_from_body(len_body) else {
-            let value_id = self.ensure_value(expr);
-            return (Some(block), value_id);
+            return fallback;
         };
 
-        let (next_block, elem_value) = self.lower_expr_in(block, elem);
-        let Some(curr_block) = next_block else {
-            let value_id = self.ensure_value(expr);
-            return (None, value_id);
-        };
+        let elem_value = self.lower_expr(elem);
+        if self.current_block().is_none() {
+            return fallback;
+        }
 
         let elem_size = layout::ty_size_bytes(self.db, elem_ty).unwrap_or(layout::WORD_SIZE_BYTES);
         let size_bytes = elem_size * count;
-        let value_id = self.emit_alloc(expr, curr_block, array_ty, size_bytes);
+        let value_id = self.emit_alloc(expr, array_ty, size_bytes);
 
         let addr_space = self.value_address_space(value_id);
         for idx in 0..count {
@@ -350,17 +293,14 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                 MirProjectionPath::from_projection(Projection::Index(IndexSource::Constant(idx))),
                 addr_space,
             );
-            self.push_inst(
-                curr_block,
-                MirInst::Store {
-                    expr,
-                    place,
-                    value: elem_value,
-                },
-            );
+            self.push_inst_here(MirInst::Store {
+                expr,
+                place,
+                value: elem_value,
+            });
         }
 
-        (Some(curr_block), value_id)
+        value_id
     }
 
     /// Returns the bit width for a primitive integer type.
@@ -502,7 +442,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
     /// The allocated synthetic value id.
     pub(super) fn synthetic_u256(&mut self, value: BigUint) -> ValueId {
         let ty = TyId::new(self.db, TyData::TyBase(TyBase::Prim(PrimTy::U256)));
-        self.mir_body.alloc_value(ValueData {
+        self.builder.body.alloc_value(ValueData {
             ty,
             origin: ValueOrigin::Synthetic(SyntheticValue::Int(value)),
         })

@@ -1,5 +1,9 @@
 use std::fmt;
 
+mod body_builder;
+
+pub use body_builder::BodyBuilder;
+
 use hir::analysis::ty::ty_check::{Callable, TypedBody};
 use hir::analysis::ty::ty_def::TyId;
 use hir::hir_def::{
@@ -364,6 +368,11 @@ pub struct MatchArmLowering {
     pub body: ExprId,
     pub block: BasicBlockId,
     pub terminates: bool,
+    /// Resulting value for value-producing matches/ifs.
+    ///
+    /// When present, codegen should evaluate the arm's MIR block (for side effects and
+    /// temporaries) and then assign this value into the match/if result temp.
+    pub value: Option<ValueId>,
     /// Bindings from decision tree pattern matching (for tuple/struct patterns).
     /// These map variable names to MIR values extracted from the scrutinee.
     pub decision_tree_bindings: Vec<DecisionTreeBinding>,

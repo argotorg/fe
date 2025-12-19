@@ -165,34 +165,37 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
     /// Lowers a match expression using decision trees for optimized codegen.
     ///
     /// # Parameters
-    /// - `block`: Entry block for the match.
     /// - `match_expr`: Expression id of the match.
     /// - `scrutinee`: Scrutinee expression id.
     /// - `arms`: Match arms to lower.
     ///
     /// # Returns
-    /// Successor merge block (if any) and the value representing the match expression.
+    /// The value representing the match expression.
     pub(super) fn lower_match_with_decision_tree(
         &mut self,
-        block: BasicBlockId,
         match_expr: ExprId,
         scrutinee: ExprId,
         arms: &[MatchArm],
-    ) -> (Option<BasicBlockId>, ValueId) {
-        // Lower the scrutinee to get its value
-        let (scrut_block_opt, scrutinee_value) = self.lower_expr_in(block, scrutinee);
-        let Some(scrut_block) = scrut_block_opt else {
-            let value = self.ensure_value(match_expr);
-            return (None, value);
+    ) -> ValueId {
+        let value = self.ensure_value(match_expr);
+        let Some(block) = self.current_block() else {
+            return value;
+        };
+
+        // Lower the scrutinee to get its value.
+        self.move_to_block(block);
+        let scrutinee_value = self.lower_expr(scrutinee);
+        let Some(scrut_block) = self.current_block() else {
+            return value;
         };
 
         // Build pattern matrix from match arms
         let scrutinee_ty = self.typed_body.expr_ty(self.db, scrutinee);
         let Some(body) = self.typed_body.body() else {
             // No body available - this shouldn't happen for valid code.
-            self.set_terminator(scrut_block, Terminator::Unreachable);
-            let value = self.ensure_value(match_expr);
-            return (None, value);
+            self.move_to_block(scrut_block);
+            self.set_current_terminator(Terminator::Unreachable);
+            return value;
         };
         let scope = body.scope();
 
@@ -223,9 +226,9 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                 arms.len() - patterns.len(),
                 arms.len()
             );
-            self.set_terminator(scrut_block, Terminator::Unreachable);
-            let value = self.ensure_value(match_expr);
-            return (None, value);
+            self.move_to_block(scrut_block);
+            self.set_current_terminator(Terminator::Unreachable);
+            return value;
         }
 
         let matrix =
@@ -237,9 +240,12 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         // Pre-lower each arm body to determine termination status and create blocks
         let mut merge_block: Option<BasicBlockId> = None;
         let mut arm_blocks = Vec::with_capacity(arms.len());
+        let mut arm_values = Vec::with_capacity(arms.len());
         for arm in arms {
             let arm_entry = self.alloc_block();
-            let (arm_end, _) = self.lower_expr_in(arm_entry, arm.body);
+            self.move_to_block(arm_entry);
+            let arm_value = self.lower_expr(arm.body);
+            let arm_end = self.current_block();
             let terminates = arm_end.is_none();
             if let Some(end_block) = arm_end {
                 let merge = match merge_block {
@@ -250,8 +256,10 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                         block
                     }
                 };
-                self.set_terminator(end_block, Terminator::Goto { target: merge });
+                self.move_to_block(end_block);
+                self.goto(merge);
             }
+            arm_values.push(if terminates { None } else { Some(arm_value) });
             arm_blocks.push((arm_entry, terminates));
         }
 
@@ -268,7 +276,8 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         let mut arms_info: Vec<MatchArmLowering> = arms
             .iter()
             .zip(arm_blocks.iter())
-            .map(|(arm, (block_id, terminates))| {
+            .zip(arm_values.iter())
+            .map(|((arm, (block_id, terminates)), value)| {
                 // Determine the pattern type for codegen
                 let pattern = if self.is_wildcard_pat(arm.pat) {
                     MatchArmPattern::Wildcard
@@ -287,6 +296,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                     block: *block_id,
                     terminates: *terminates,
                     decision_tree_bindings: Vec::new(),
+                    value: *value,
                 }
             })
             .collect();
@@ -313,7 +323,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         }
 
         // Store match info for codegen
-        self.mir_body.match_info.insert(
+        self.builder.body.match_info.insert(
             match_expr,
             MatchLoweringInfo {
                 scrutinee: scrutinee_value,
@@ -331,10 +341,13 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         let tree_entry = self.lower_decision_tree(&tree, &arm_blocks, &ctx);
 
         // Set scrut_block to jump to the tree entry
-        self.set_terminator(scrut_block, Terminator::Goto { target: tree_entry });
+        self.move_to_block(scrut_block);
+        self.goto(tree_entry);
 
-        let value_id = self.ensure_value(match_expr);
-        (merge_block, value_id)
+        if let Some(merge) = merge_block {
+            self.move_to_block(merge);
+        }
+        value
     }
 
     /// Recursively lowers a decision tree to MIR basic blocks.
@@ -454,15 +467,8 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         // the same temp variable for collecting results.
         let origin = SwitchOrigin::MatchExpr(ctx.match_expr);
 
-        self.set_terminator(
-            test_block,
-            Terminator::Switch {
-                discr: test_value,
-                targets,
-                default,
-                origin,
-            },
-        );
+        self.move_to_block(test_block);
+        self.switch(test_value, targets, default, origin);
 
         test_block
     }
@@ -499,7 +505,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                 MirProjectionPath::from_projection(MirProjection::Discriminant),
                 addr_space,
             );
-            return self.mir_body.alloc_value(ValueData {
+            return self.builder.body.alloc_value(ValueData {
                 ty: self.u256_ty(),
                 origin: ValueOrigin::PlaceLoad(place),
             });
@@ -528,7 +534,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
             ValueOrigin::PlaceLoad(place)
         };
 
-        let current_value = self.mir_body.alloc_value(ValueData {
+        let current_value = self.builder.body.alloc_value(ValueData {
             ty: result_ty,
             origin,
         });
@@ -539,7 +545,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
             let mut discr_path = self.mir_projection_from_decision_path(path);
             discr_path.push(MirProjection::Discriminant);
             let place = Place::new(scrutinee_value, discr_path, addr_space);
-            return self.mir_body.alloc_value(ValueData {
+            return self.builder.body.alloc_value(ValueData {
                 ty: self.u256_ty(),
                 origin: ValueOrigin::PlaceLoad(place),
             });
@@ -596,7 +602,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
             addr_space,
         );
 
-        let place_ref_id = self.mir_body.alloc_value(ValueData {
+        let place_ref_id = self.builder.body.alloc_value(ValueData {
             ty: final_ty,
             origin: ValueOrigin::PlaceRef(place.clone()),
         });
@@ -607,7 +613,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         let value_id = if is_aggregate {
             place_ref_id
         } else {
-            let loaded_id = self.mir_body.alloc_value(ValueData {
+            let loaded_id = self.builder.body.alloc_value(ValueData {
                 ty: final_ty,
                 origin: ValueOrigin::PlaceLoad(place),
             });

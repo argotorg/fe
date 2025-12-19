@@ -30,11 +30,12 @@ use hir::hir_def::{
 use crate::{
     core_lib::{CoreHelperTy, CoreLib, CoreLibError},
     ir::{
-        AddressSpaceKind, BasicBlock, BasicBlockId, CallOrigin, CodeRegionRoot, ContractFunction,
-        ContractFunctionKind, DecisionTreeBinding, EffectProviderKind, IntrinsicOp, IntrinsicValue,
-        LoopInfo, MatchArmLowering, MatchArmPattern, MatchLoweringInfo, MirBody, MirFunction,
-        MirInst, MirModule, MirProjection, MirProjectionPath, Place, SwitchOrigin, SwitchTarget,
-        SwitchValue, SyntheticValue, Terminator, ValueData, ValueId, ValueOrigin,
+        AddressSpaceKind, BasicBlockId, BodyBuilder, CallOrigin, CodeRegionRoot,
+        ContractFunction, ContractFunctionKind, DecisionTreeBinding, EffectProviderKind,
+        IntrinsicOp, IntrinsicValue, LoopInfo, MatchArmLowering, MatchArmPattern,
+        MatchLoweringInfo, MirBody, MirFunction, MirInst, MirModule, MirProjection,
+        MirProjectionPath, Place, SwitchOrigin, SwitchTarget, SwitchValue, SyntheticValue,
+        Terminator, ValueData, ValueId, ValueOrigin,
     },
     monomorphize::monomorphize_functions,
 };
@@ -176,13 +177,14 @@ pub(crate) fn lower_function<'db>(
         receiver_space,
         effect_provider_kinds,
     )?;
-    let entry = builder.alloc_block();
-    let fallthrough = builder.lower_root(entry, body.expr(db));
+    let entry = builder.builder.entry_block();
+    builder.move_to_block(entry);
+    builder.lower_root(body.expr(db));
     builder.ensure_const_expr_values();
     builder.ensure_field_expr_values();
     builder.ensure_call_expr_values();
     let ret_val = builder.ensure_value(body.expr(db));
-    if let Some(block) = fallthrough {
+    if let Some(block) = builder.current_block() {
         builder.set_terminator(block, Terminator::Return(Some(ret_val)));
     }
     let mir_body = builder.finish();
@@ -210,7 +212,7 @@ pub(super) struct MirBuilder<'db, 'a> {
     pub(super) func: Func<'db>,
     pub(super) body: Body<'db>,
     pub(super) typed_body: &'a TypedBody<'db>,
-    pub(super) mir_body: MirBody<'db>,
+    pub(super) builder: BodyBuilder<'db>,
     pub(super) core: CoreLib<'db>,
     pub(super) loop_stack: Vec<LoopScope>,
     pub(super) const_cache: FxHashMap<Const<'db>, ValueId>,
@@ -253,7 +255,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
             func,
             body,
             typed_body,
-            mir_body: MirBody::new(),
+            builder: BodyBuilder::new(),
             core,
             loop_stack: Vec::new(),
             const_cache: FxHashMap::default(),
@@ -271,7 +273,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
     /// # Returns
     /// The completed `MirBody`.
     fn finish(self) -> MirBody<'db> {
-        let mut body = self.mir_body;
+        let mut body = self.builder.build();
         body.pat_address_space = self.pat_address_space;
         body
     }
@@ -281,7 +283,15 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
     /// # Returns
     /// The identifier for the newly created block.
     fn alloc_block(&mut self) -> BasicBlockId {
-        self.mir_body.push_block(BasicBlock::new())
+        self.builder.make_block()
+    }
+
+    fn current_block(&self) -> Option<BasicBlockId> {
+        self.builder.current_block()
+    }
+
+    fn move_to_block(&mut self, block: BasicBlockId) {
+        self.builder.move_to_block(block);
     }
 
     /// Sets the terminator for the specified block.
@@ -290,7 +300,38 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
     /// - `block`: Target basic block.
     /// - `term`: Terminator to assign.
     fn set_terminator(&mut self, block: BasicBlockId, term: Terminator) {
-        self.mir_body.block_mut(block).set_terminator(term);
+        self.builder.set_block_terminator(block, term);
+    }
+
+    fn set_current_terminator(&mut self, term: Terminator) {
+        self.builder.terminate_current(term);
+    }
+
+    fn goto(&mut self, target: BasicBlockId) {
+        self.set_current_terminator(Terminator::Goto { target });
+    }
+
+    fn branch(&mut self, cond: ValueId, then_bb: BasicBlockId, else_bb: BasicBlockId) {
+        self.set_current_terminator(Terminator::Branch {
+            cond,
+            then_bb,
+            else_bb,
+        });
+    }
+
+    fn switch(
+        &mut self,
+        discr: ValueId,
+        targets: Vec<SwitchTarget>,
+        default: BasicBlockId,
+        origin: SwitchOrigin,
+    ) {
+        self.set_current_terminator(Terminator::Switch {
+            discr,
+            targets,
+            default,
+            origin,
+        });
     }
 
     /// Appends an instruction to the given block.
@@ -299,8 +340,15 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
     /// - `block`: Block receiving the instruction.
     /// - `inst`: Instruction to append.
     fn push_inst(&mut self, block: BasicBlockId, inst: MirInst<'db>) {
-        self.mir_body.block_mut(block).push_inst(inst);
+        self.builder.push_inst_in(block, inst);
     }
+
+    fn push_inst_here(&mut self, inst: MirInst<'db>) {
+        if let Some(block) = self.current_block() {
+            self.push_inst(block, inst);
+        }
+    }
+
 
     /// Determines the address space for a binding.
     ///
@@ -423,7 +471,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
 
     pub(super) fn binding_value(&mut self, binding: LocalBinding<'db>) -> Option<ValueId> {
         let name = self.binding_name(binding)?;
-        let value_id = self.mir_body.alloc_value(ValueData {
+        let value_id = self.builder.body.alloc_value(ValueData {
             ty: self.u256_ty(),
             origin: ValueOrigin::BindingName(name),
         });

@@ -7,16 +7,14 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
     /// Attempts to lower a statement-only intrinsic call (`mstore`, `codecopy`, etc.).
     ///
     /// # Parameters
-    /// - `block`: Current basic block.
     /// - `expr`: Expression id representing the intrinsic call.
     ///
     /// # Returns
-    /// The successor block and produced value, or `None` if not an intrinsic stmt.
-    pub(super) fn try_lower_intrinsic_stmt(
-        &mut self,
-        block: BasicBlockId,
-        expr: ExprId,
-    ) -> Option<(Option<BasicBlockId>, ValueId)> {
+    /// The produced value, or `None` if not an intrinsic stmt.
+    pub(super) fn try_lower_intrinsic_stmt(&mut self, expr: ExprId) -> Option<ValueId> {
+        if self.current_block().is_none() {
+            return Some(self.ensure_value(expr));
+        }
         let (op, args) = self.intrinsic_stmt_args(expr)?;
         let value_id = self.ensure_value(expr);
         if matches!(op, IntrinsicOp::ReturnData | IntrinsicOp::Revert) {
@@ -31,11 +29,11 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                 IntrinsicOp::Revert => Terminator::Revert { offset, size },
                 _ => unreachable!(),
             };
-            self.set_terminator(block, term);
-            return Some((None, value_id));
+            self.set_current_terminator(term);
+            return Some(value_id);
         }
-        self.push_inst(block, MirInst::IntrinsicStmt { expr, op, args });
-        Some((Some(block), value_id))
+        self.push_inst_here(MirInst::IntrinsicStmt { expr, op, args });
+        Some(value_id)
     }
 
     /// Collects the intrinsic opcode and lowered arguments for a statement-only intrinsic.

@@ -66,7 +66,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
             |expr| matches!(expr, Expr::Path(..)),
             |this, expr_id| {
                 if let Some(value_id) = this.try_const_expr(expr_id) {
-                    this.mir_body.expr_values.entry(expr_id).or_insert(value_id);
+                    this.builder.body.expr_values.entry(expr_id).or_insert(value_id);
                 }
             },
         );
@@ -80,7 +80,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
     /// # Returns
     /// The `ValueId` bound to the expression.
     pub(super) fn ensure_value(&mut self, expr: ExprId) -> ValueId {
-        if let Some(&val) = self.mir_body.expr_values.get(&expr) {
+        if let Some(&val) = self.builder.body.expr_values.get(&expr) {
             if !self.value_address_space.contains_key(&val) {
                 let space = self.expr_address_space(expr);
                 self.value_address_space.insert(val, space);
@@ -102,7 +102,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                 });
                 if let Some(inner) = last_expr {
                     let val = self.ensure_value(inner);
-                    self.mir_body.expr_values.insert(expr, val);
+                    self.builder.body.expr_values.insert(expr, val);
                     return val;
                 }
                 self.alloc_expr_value(expr)
@@ -110,7 +110,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
             _ => self.alloc_expr_value(expr),
         };
 
-        self.mir_body.expr_values.insert(expr, value);
+        self.builder.body.expr_values.insert(expr, value);
         // Note: record_value_address_space is already called in alloc_expr_value.
         value
     }
@@ -141,7 +141,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         }
 
         let ty = self.typed_body.expr_ty(self.db, expr);
-        let value = self.mir_body.alloc_value(ValueData {
+        let value = self.builder.body.alloc_value(ValueData {
             ty,
             origin: ValueOrigin::Expr(expr),
         });
@@ -217,7 +217,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                 let path = path.to_opt()?;
                 let mut visited = FxHashSet::default();
                 let value_id = self.const_literal_from_path(path, body.scope(), &mut visited)?;
-                match &self.mir_body.value(value_id).origin {
+                match &self.builder.body.value(value_id).origin {
                     ValueOrigin::Synthetic(SyntheticValue::Int(int)) => int.to_usize(),
                     _ => None,
                 }
@@ -354,7 +354,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         ty: TyId<'db>,
         value: SyntheticValue,
     ) -> ValueId {
-        self.mir_body.alloc_value(ValueData {
+        self.builder.body.alloc_value(ValueData {
             ty,
             origin: ValueOrigin::Synthetic(value),
         })

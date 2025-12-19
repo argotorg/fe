@@ -27,6 +27,7 @@ pub(super) struct BlockEmitCtx<'state, 'docs> {
     pub(super) loop_ctx: Option<LoopEmitCtx>,
     pub(super) state: &'state mut BlockState,
     pub(super) docs: &'docs mut Vec<YulDoc>,
+    pub(super) stop_block: Option<BasicBlockId>,
 }
 
 impl<'state, 'docs> BlockEmitCtx<'state, 'docs> {
@@ -141,6 +142,7 @@ impl<'db> FunctionEmitter<'db> {
                 loop_ctx,
                 state,
                 docs: &mut docs,
+                stop_block,
             };
             self.emit_block_terminator(block_id, &block.terminator, &mut ctx)?;
         }
@@ -248,10 +250,10 @@ impl<'db> FunctionEmitter<'db> {
         let loop_ctx = ctx.loop_ctx;
         let mut then_state = ctx.cloned_state();
         let mut else_state = ctx.cloned_state();
-        let then_docs = self.emit_block_with_ctx(then_bb, loop_ctx, &mut then_state)?;
+        let then_docs = self.emit_block_internal(then_bb, loop_ctx, &mut then_state, ctx.stop_block)?;
         ctx.docs
             .push(YulDoc::block(format!("if {cond_temp} "), then_docs));
-        let else_docs = self.emit_block_with_ctx(else_bb, loop_ctx, &mut else_state)?;
+        let else_docs = self.emit_block_internal(else_bb, loop_ctx, &mut else_state, ctx.stop_block)?;
         ctx.docs
             .push(YulDoc::block(format!("if iszero({cond_temp}) "), else_docs));
         Ok(())
@@ -283,14 +285,18 @@ impl<'db> FunctionEmitter<'db> {
                 for target in targets {
                     let mut case_state = ctx.cloned_state();
                     let literal = switch_value_literal(&target.value);
-                    let case_docs =
-                        self.emit_block_with_ctx(target.block, loop_ctx, &mut case_state)?;
+                    let case_docs = self.emit_block_internal(
+                        target.block,
+                        loop_ctx,
+                        &mut case_state,
+                        ctx.stop_block,
+                    )?;
                     ctx.docs
                         .push(YulDoc::wide_block(format!("  case {literal} "), case_docs));
                 }
                 let mut default_state = ctx.cloned_state();
                 let default_docs =
-                    self.emit_block_with_ctx(default, loop_ctx, &mut default_state)?;
+                    self.emit_block_internal(default, loop_ctx, &mut default_state, ctx.stop_block)?;
                 ctx.docs
                     .push(YulDoc::wide_block("  default ", default_docs));
                 Ok(())
@@ -487,8 +493,16 @@ impl<'db> FunctionEmitter<'db> {
             return Ok(arm_docs);
         }
 
-        // Value-producing arms assign to the temp variable.
-        let body_expr = self.lower_expr(arm.body, arm_state)?;
+        // Value-producing arms:
+        // 1) Emit the arm block to realize side effects and bind any temporaries
+        // 2) Assign the arm result into the match/if temp
+        let mut case_docs = self.emit_block_with_stop(arm.block, loop_ctx, arm_state, merge_block)?;
+        arm_docs.append(&mut case_docs);
+
+        let value_id = arm
+            .value
+            .ok_or_else(|| YulError::Unsupported("match arm is missing a result value".into()))?;
+        let body_expr = self.lower_value(value_id, arm_state)?;
         let temp = temp.expect("temp must exist for non-terminating arms with merge block");
         arm_docs.push(YulDoc::line(format!("{temp} := {body_expr}")));
         Ok(arm_docs)
@@ -506,6 +520,9 @@ impl<'db> FunctionEmitter<'db> {
         target: BasicBlockId,
         ctx: &mut BlockEmitCtx<'_, '_>,
     ) -> Result<(), YulError> {
+        if Some(target) == ctx.stop_block {
+            return Ok(());
+        }
         if let Some(loop_ctx) = ctx.loop_ctx {
             if target == loop_ctx.continue_target {
                 if loop_ctx.implicit_continue == Some(block_id) {
@@ -524,11 +541,12 @@ impl<'db> FunctionEmitter<'db> {
             let mut loop_state = ctx.cloned_state();
             let (loop_doc, exit_block) = self.emit_loop(target, loop_info, &mut loop_state)?;
             ctx.docs.push(loop_doc);
-            let after_docs = self.emit_block_with_ctx(exit_block, ctx.loop_ctx, ctx.state)?;
+            let after_docs =
+                self.emit_block_internal(exit_block, ctx.loop_ctx, ctx.state, ctx.stop_block)?;
             ctx.docs.extend(after_docs);
             return Ok(());
         }
-        let next_docs = self.emit_block_with_ctx(target, ctx.loop_ctx, ctx.state)?;
+        let next_docs = self.emit_block_internal(target, ctx.loop_ctx, ctx.state, ctx.stop_block)?;
         ctx.docs.extend(next_docs);
         Ok(())
     }
