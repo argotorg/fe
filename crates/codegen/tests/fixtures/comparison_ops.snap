@@ -1,20 +1,23 @@
 ---
 source: crates/codegen/tests/yul.rs
+assertion_line: 31
 expression: output
 input_file: tests/fixtures/comparison_ops.fe
 ---
 function comparison_ops() -> ret {
-  let v0 := 0
-  let v1 := mload(0x40)
-  if iszero(v1) {
-    v1 := 0x80
+  let v0 := 1
+  let v1 := 2
+  let v2 := 3
+  let v3 := mload(0x40)
+  if iszero(v3) {
+    v3 := 0x80
   }
-  mstore(0x40, add(v1, 6))
-  mstore(v1, iszero(iszero(eq(add(v0, 1), add(v0, 1)))))
-  mstore(add(v1, 1), iszero(iszero(iszero(eq(add(v0, 1), add(v0, 2))))))
-  mstore(add(v1, 2), iszero(iszero(lt(add(v0, 1), add(v0, 2)))))
-  mstore(add(v1, 3), iszero(iszero(iszero(gt(add(v0, 2), add(v0, 2))))))
-  mstore(add(v1, 4), iszero(iszero(gt(add(v0, 3), add(v0, 2)))))
-  mstore(add(v1, 5), iszero(iszero(iszero(lt(add(v0, 3), add(v0, 3))))))
-  ret := v1
+  mstore(0x40, add(v3, 6))
+  mstore(v3, iszero(iszero(eq(v0, v0))))
+  mstore(add(v3, 1), iszero(iszero(iszero(eq(v0, v1)))))
+  mstore(add(v3, 2), iszero(iszero(lt(v0, v1))))
+  mstore(add(v3, 3), iszero(iszero(iszero(gt(v1, v1)))))
+  mstore(add(v3, 4), iszero(iszero(gt(v2, v1))))
+  mstore(add(v3, 5), iszero(iszero(iszero(lt(v2, v2)))))
+  ret := v3
 }

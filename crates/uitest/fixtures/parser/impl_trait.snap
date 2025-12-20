@@ -3,11 +3,11 @@ source: crates/uitest/tests/parser.rs
 expression: diags
 input_file: fixtures/parser/impl_trait.fe
 ---
-error[1-0001]: unexpected syntax while parsing generic type argument list
-  ┌─ impl_trait.fe:1:12
+error[1-0001]: unexpected syntax while parsing `impl` trait block
+  ┌─ impl_trait.fe:1:7
   │
 1 │ impl X<T, u))> for Y<T where T: X {}
-  │            ^^ unexpected
+  │       ^^^^^^^^ unexpected
 
 error[1-0001]: missing closing `>` for generic type argument list
   ┌─ impl_trait.fe:1:23

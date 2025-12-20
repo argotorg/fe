@@ -486,9 +486,7 @@ fn is_method_call<S: TokenStream>(parser: &mut Parser<S>) -> bool {
         if parser.current_kind() == Some(SyntaxKind::Lt)
             && (is_lt_eq(parser)
                 || is_lshift(parser)
-                || !parser
-                    .parse_ok(GenericArgListScope::default())
-                    .is_ok_and(identity))
+                || !parser.parses_without_error(GenericArgListScope::default()))
         {
             return false;
         }

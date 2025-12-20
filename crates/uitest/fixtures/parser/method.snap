@@ -1,18 +1,16 @@
 ---
 source: crates/uitest/tests/parser.rs
 expression: diags
-input_file: crates/uitest/fixtures/parser/method.fe
+input_file: fixtures/parser/method.fe
 ---
-error[1-0001]: unexpected syntax while parsing generic type argument list
-  ┌─ method.fe:2:23
+error[1-0001]: unexpected syntax while parsing block
+  ┌─ method.fe:2:17
   │
 2 │ foo::bar.baz<i32, u32 T,>(1, 2)
-  │                       ^ unexpected
+  │                 ^^^^^^^^^^^^^^^ unexpected
 
 error[1-0001]: unexpected syntax while parsing function call arguments
   ┌─ method.fe:4:17
   │
 4 │ foo::bar.x(1, 2 E,)
   │                 ^ unexpected
-
-
