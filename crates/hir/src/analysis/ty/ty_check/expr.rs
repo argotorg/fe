@@ -188,8 +188,16 @@ impl<'db> TyChecker<'db> {
             self.check_expr(rhs_expr, index_ty);
             return ExprProp::new(elem_ty, lhs.is_mut);
         } else if lhs.ty.is_integral_var(self.db) {
-            // Avoid 'type must be known' diagnostics when lhs is an unknown integer ty
+            // Avoid 'type must be known' diagnostics when lhs is an unknown integer ty.
+            // For unknown integer types, the result type depends on the operator:
+            // - arithmetic: same integer type
+            // - comparison: bool
             self.check_expr(rhs_expr, lhs.ty);
+
+            if matches!(op, BinOp::Comp(_)) {
+                return ExprProp::new(TyId::bool(self.db), true);
+            }
+
             return lhs;
         }
 
