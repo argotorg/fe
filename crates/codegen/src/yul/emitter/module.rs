@@ -28,6 +28,16 @@ pub fn emit_module_yul(
     let call_graph = build_call_graph(&module.functions);
     let contracts = collect_contracts(&module.functions);
     let symbol_to_contract = contract_symbol_map(&contracts);
+    let returns_value_by_symbol: FxHashMap<String, bool> = module
+        .functions
+        .iter()
+        .map(|func| {
+            (
+                func.symbol_name.clone(),
+                func.func.has_explicit_return_ty(db),
+            )
+        })
+        .collect();
 
     let mut code_regions = FxHashMap::default();
     for (name, entry) in &contracts {
@@ -77,7 +87,8 @@ pub fn emit_module_yul(
                     intr.op,
                     mir::ir::IntrinsicOp::CodeRegionOffset | mir::ir::IntrinsicOp::CodeRegionLen
                 )
-                && let Some(target) = &intr.code_region
+                && intr.args.len() == 1
+                && let mir::ValueOrigin::FuncItem(target) = &func.body.value(intr.args[0]).origin
                 && let Some(symbol) = &target.symbol
                 && let Some(child_name) = symbol_to_contract.get(symbol)
                 && *child_name != contract_fn.contract_name
@@ -106,6 +117,7 @@ pub fn emit_module_yul(
             &contract_edges,
             &call_graph,
             &docs_by_symbol,
+            &returns_value_by_symbol,
             &mut visited_contracts,
         ) {
             docs.push(contract_doc);
@@ -167,6 +179,19 @@ fn collect_code_region_roots(functions: &[MirFunction<'_>]) -> Vec<String> {
     for func in functions {
         if func.contract_function.is_some() {
             roots.insert(func.symbol_name.clone());
+        }
+        for value in &func.body.values {
+            if let mir::ValueOrigin::Intrinsic(intr) = &value.origin
+                && matches!(
+                    intr.op,
+                    mir::ir::IntrinsicOp::CodeRegionOffset | mir::ir::IntrinsicOp::CodeRegionLen
+                )
+                && intr.args.len() == 1
+                && let mir::ValueOrigin::FuncItem(target) = &func.body.value(intr.args[0]).origin
+                && let Some(symbol) = &target.symbol
+            {
+                roots.insert(symbol.clone());
+            }
         }
     }
     roots.into_iter().collect()
@@ -264,6 +289,7 @@ fn emit_contract_docs(
     edges: &FxHashMap<String, FxHashSet<String>>,
     call_graph: &FxHashMap<String, Vec<String>>,
     docs_by_symbol: &FxHashMap<String, Vec<YulDoc>>,
+    returns_value_by_symbol: &FxHashMap<String, bool>,
     visited: &mut FxHashSet<String>,
 ) -> Option<YulDoc> {
     if !visited.insert(name.to_string()) {
@@ -275,15 +301,26 @@ fn emit_contract_docs(
 
     let mut init_docs = Vec::new();
     if let Some(symbol) = &entry.init_symbol {
-        init_docs.push(YulDoc::line(format!("{symbol}()")));
         init_docs.extend(reachable_docs(symbol, call_graph, docs_by_symbol));
+        init_docs.push(YulDoc::line(format!("{symbol}()")));
     }
     components.push(YulDoc::block("code ", init_docs));
 
     if let Some(symbol) = &entry.runtime_symbol {
         let mut runtime_docs = Vec::new();
-        runtime_docs.push(YulDoc::line(format!("{symbol}()")));
         runtime_docs.extend(reachable_docs(symbol, call_graph, docs_by_symbol));
+        let returns_value = returns_value_by_symbol
+            .get(symbol)
+            .copied()
+            .unwrap_or(false);
+        if returns_value {
+            runtime_docs.push(YulDoc::line(format!("let ret := {symbol}()")));
+            runtime_docs.push(YulDoc::line("mstore(0, ret)"));
+            runtime_docs.push(YulDoc::line("return(0, 32)"));
+        } else {
+            runtime_docs.push(YulDoc::line(format!("{symbol}()")));
+            runtime_docs.push(YulDoc::line("return(0, 0)"));
+        }
         components.push(YulDoc::line(String::new()));
         components.push(YulDoc::block(
             format!("object \"{name}_deployed\" "),
@@ -301,6 +338,7 @@ fn emit_contract_docs(
                 edges,
                 call_graph,
                 docs_by_symbol,
+                returns_value_by_symbol,
                 visited,
             ) {
                 components.push(doc);

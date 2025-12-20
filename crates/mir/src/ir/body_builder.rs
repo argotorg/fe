@@ -55,3 +55,9 @@ impl<'db> BodyBuilder<'db> {
         }
     }
 }
+
+impl<'db> Default for BodyBuilder<'db> {
+    fn default() -> Self {
+        Self::new()
+    }
+}

@@ -1,10 +1,7 @@
 use driver::DriverDataBase;
-use hir::{
-    analysis::{
-        name_resolution::{PathRes, resolve_path},
-        ty::trait_resolution::PredicateListId,
-    },
-    hir_def::{Body, Expr, ExprId, Partial, Pat, PatId, PathId, Stmt, StmtId},
+use hir::analysis::{
+    name_resolution::{PathRes, resolve_path},
+    ty::trait_resolution::PredicateListId,
 };
 use mir::{MirFunction, layout};
 use rustc_hash::FxHashMap;
@@ -17,10 +14,6 @@ use super::util::function_name;
 pub(super) struct FunctionEmitter<'db> {
     pub(super) db: &'db DriverDataBase,
     pub(super) mir_func: &'db MirFunction<'db>,
-    body: Body<'db>,
-    /// Temporaries allocated for expression values that must be re-used later (e.g. struct ptrs).
-    pub(super) expr_temps: FxHashMap<ExprId, String>,
-    pub(super) match_values: FxHashMap<ExprId, String>,
     /// Number of MIR references per value so we can avoid evaluating them twice.
     pub(super) value_use_counts: Vec<usize>,
     /// Mapping from monomorphized function symbols to code region labels.
@@ -40,17 +33,13 @@ impl<'db> FunctionEmitter<'db> {
         mir_func: &'db MirFunction<'db>,
         code_regions: &'db FxHashMap<String, String>,
     ) -> Result<Self, YulError> {
-        let body = mir_func
-            .func
-            .body(db)
-            .ok_or_else(|| YulError::MissingBody(function_name(db, mir_func.func)))?;
+        if mir_func.func.body(db).is_none() {
+            return Err(YulError::MissingBody(function_name(db, mir_func.func)));
+        }
         let value_use_counts = Self::collect_value_use_counts(&mir_func.body);
         Ok(Self {
             db,
             mir_func,
-            body,
-            expr_temps: FxHashMap::default(),
-            match_values: FxHashMap::default(),
             value_use_counts,
             code_regions,
         })
@@ -62,15 +51,16 @@ impl<'db> FunctionEmitter<'db> {
         for block in &body.blocks {
             for inst in &block.insts {
                 match inst {
-                    mir::MirInst::Let { value, .. } => {
+                    mir::MirInst::LocalInit { value, .. } => {
                         if let Some(value) = value {
                             counts[value.index()] += 1;
                         }
                     }
-                    mir::MirInst::Assign { value, .. }
-                    | mir::MirInst::AugAssign { value, .. }
+                    mir::MirInst::LocalSet { value, .. }
+                    | mir::MirInst::LocalAugAssign { value, .. }
                     | mir::MirInst::Eval { value, .. }
-                    | mir::MirInst::EvalExpr { value, .. } => {
+                    | mir::MirInst::EvalValue { value }
+                    | mir::MirInst::BindValue { value } => {
                         counts[value.index()] += 1;
                     }
                     mir::MirInst::IntrinsicStmt { args, .. } => {
@@ -177,24 +167,23 @@ impl<'db> FunctionEmitter<'db> {
     ) -> Result<(Vec<String>, BlockState, Vec<YulDoc>), YulError> {
         let mut state = BlockState::new();
         let mut params_out = Vec::new();
-        for (idx, param) in self.mir_func.func.params(self.db).enumerate() {
-            let original = param
-                .name(self.db)
-                .map(|id| id.data(self.db).to_string())
-                .unwrap_or_else(|| format!("arg{idx}"));
-            let yul_name = original.clone();
-            params_out.push(yul_name.clone());
-            state.insert_binding(original, yul_name);
+        for &local in &self.mir_func.body.param_locals {
+            let name = self.mir_func.body.local(local).name.clone();
+            params_out.push(name.clone());
+            state.insert_local(local, name);
         }
         let mut prologue = Vec::new();
-        let effect_params: Vec<_> = self.mir_func.func.effect_params(self.db).collect();
         let is_contract_entry = self.mir_func.contract_function.is_some();
         if is_contract_entry {
-            for effect in effect_params {
-                let binding = self.effect_binding_name(effect);
+            let effect_params: Vec<_> = self.mir_func.func.effect_params(self.db).collect();
+            for (effect, &local) in effect_params
+                .iter()
+                .zip(self.mir_func.body.effect_param_locals.iter())
+            {
+                let binding = self.mir_func.body.local(local).name.clone();
                 let temp = state.alloc_local();
-                state.insert_binding(binding.clone(), temp.clone());
-                let slots = self.effect_storage_slots(effect, &binding)?;
+                state.insert_local(local, temp.clone());
+                let slots = self.effect_storage_slots(*effect, &binding)?;
                 if slots != 0 {
                     return Err(YulError::Unsupported(format!(
                         "contract entrypoint effect `{binding}` must be zero-sized (instantiate storage pointers manually)"
@@ -203,10 +192,10 @@ impl<'db> FunctionEmitter<'db> {
                 prologue.push(YulDoc::line(format!("let {temp} := 0")));
             }
         } else {
-            for effect in effect_params {
-                let binding = self.effect_binding_name(effect);
+            for &local in &self.mir_func.body.effect_param_locals {
+                let binding = self.mir_func.body.local(local).name.clone();
                 params_out.push(binding.clone());
-                state.insert_binding(binding.clone(), binding);
+                state.insert_local(local, binding);
             }
         }
         Ok((params_out, state, prologue))
@@ -214,7 +203,8 @@ impl<'db> FunctionEmitter<'db> {
 
     /// Returns true if the Fe function has a return type.
     pub(super) fn returns_value(&self) -> bool {
-        self.mir_func.func.has_explicit_return_ty(self.db)
+        let ret_ty = self.mir_func.func.return_ty(self.db);
+        (!ret_ty.is_tuple(self.db) || ret_ty.field_count(self.db) != 0) && !ret_ty.is_never(self.db)
     }
 
     /// Formats the Fe function name and parameters into a Yul signature.
@@ -225,80 +215,6 @@ impl<'db> FunctionEmitter<'db> {
             format!("function {func_name}(){ret_suffix}")
         } else {
             format!("function {func_name}({params_str}){ret_suffix}")
-        }
-    }
-
-    /// Extracts the identifier bound by a pattern.
-    pub(super) fn pattern_ident(&self, pat_id: PatId) -> Result<String, YulError> {
-        let pat = self.expect_pat(pat_id)?;
-        match pat {
-            Pat::Path(path, _) => self
-                .path_ident(*path)
-                .ok_or_else(|| YulError::Unsupported("unsupported pattern path".into())),
-            _ => Err(YulError::Unsupported(
-                "only identifier patterns are supported".into(),
-            )),
-        }
-    }
-
-    /// Resolves an expression that should represent a path (e.g. assignment target).
-    pub(super) fn path_from_expr(&self, expr_id: ExprId) -> Result<String, YulError> {
-        let expr = self.expect_expr(expr_id)?;
-        if let Expr::Path(path) = expr {
-            self.path_ident(*path)
-                .ok_or_else(|| YulError::Unsupported("unsupported assignment target".into()))
-        } else {
-            Err(YulError::Unsupported(
-                "only identifier assignments are supported".into(),
-            ))
-        }
-    }
-
-    /// Returns the identifier name represented by a path, if it is a plain ident.
-    pub(super) fn path_ident(&self, path: Partial<PathId<'_>>) -> Option<String> {
-        let path = path.to_opt()?;
-        path.as_ident(self.db)
-            .map(|id| id.data(self.db).to_string())
-    }
-
-    /// Fetches the expression from HIR, converting missing data into `YulError`.
-    pub(super) fn expect_expr(&self, expr_id: ExprId) -> Result<&Expr<'db>, YulError> {
-        match expr_id.data(self.db, self.body) {
-            Partial::Present(expr) => Ok(expr),
-            Partial::Absent => Err(YulError::Unsupported("expression data unavailable".into())),
-        }
-    }
-
-    /// Fetches the pattern from HIR, converting missing data into `YulError`.
-    pub(super) fn expect_pat(&self, pat_id: PatId) -> Result<&Pat<'db>, YulError> {
-        match pat_id.data(self.db, self.body) {
-            Partial::Present(pat) => Ok(pat),
-            Partial::Absent => Err(YulError::Unsupported("unsupported pattern".into())),
-        }
-    }
-
-    /// Fetches the statement from HIR, converting missing data into `YulError`.
-    pub(super) fn expect_stmt(&self, stmt_id: StmtId) -> Result<&Stmt<'db>, YulError> {
-        match stmt_id.data(self.db, self.body) {
-            Partial::Present(stmt) => Ok(stmt),
-            Partial::Absent => Err(YulError::Unsupported("statement data unavailable".into())),
-        }
-    }
-
-    /// Computes the binding name for an effect parameter, following the same fallback
-    /// logic used during type checking (explicit name, otherwise the key ident, otherwise `_effect`).
-    pub(super) fn effect_binding_name(
-        &self,
-        effect: hir::core::semantic::EffectParamView<'db>,
-    ) -> String {
-        if let Some(name) = effect.name(self.db) {
-            name.data(self.db).to_string()
-        } else if let Some(path) = effect.key_path(self.db)
-            && let Some(ident) = path.as_ident(self.db)
-        {
-            ident.data(self.db).to_string()
-        } else {
-            "_effect".to_string()
         }
     }
 

@@ -4,16 +4,17 @@ expression: output
 input_file: tests/fixtures/comparison_ops.fe
 ---
 function comparison_ops() -> ret {
-  let v0 := mload(0x40)
-  if iszero(v0) {
-    v0 := 0x80
+  let v0 := 0
+  let v1 := mload(0x40)
+  if iszero(v1) {
+    v1 := 0x80
   }
-  mstore(0x40, add(v0, 6))
-  mstore(v0, eq(1, 1))
-  mstore(add(v0, 1), iszero(eq(1, 2)))
-  mstore(add(v0, 2), lt(1, 2))
-  mstore(add(v0, 3), iszero(gt(2, 2)))
-  mstore(add(v0, 4), gt(3, 2))
-  mstore(add(v0, 5), iszero(lt(3, 3)))
-  ret := v0
+  mstore(0x40, add(v1, 6))
+  mstore(v1, iszero(iszero(eq(add(v0, 1), add(v0, 1)))))
+  mstore(add(v1, 1), iszero(iszero(iszero(eq(add(v0, 1), add(v0, 2))))))
+  mstore(add(v1, 2), iszero(iszero(lt(add(v0, 1), add(v0, 2)))))
+  mstore(add(v1, 3), iszero(iszero(iszero(gt(add(v0, 2), add(v0, 2))))))
+  mstore(add(v1, 4), iszero(iszero(gt(add(v0, 3), add(v0, 2)))))
+  mstore(add(v1, 5), iszero(iszero(iszero(lt(add(v0, 3), add(v0, 3))))))
+  ret := v1
 }

@@ -3,7 +3,7 @@ use codegen::emit_module_yul;
 use common::InputDb;
 use cranelift_entity::EntityRef;
 use driver::DriverDataBase;
-use hir::hir_def::{ExprId, HirIngot, PatId, StmtId, TopLevelMod};
+use hir::hir_def::{HirIngot, StmtId, TopLevelMod};
 use mir::{MirInst, Terminator, ValueId, lower_module};
 use url::Url;
 
@@ -235,9 +235,9 @@ fn dump_module_mir(db: &DriverDataBase, top_mod: TopLevelMod<'_>) {
 
 fn format_inst(db: &DriverDataBase, inst: &MirInst<'_>) -> String {
     match inst {
-        MirInst::Let {
+        MirInst::LocalInit {
             stmt,
-            pat,
+            local,
             ty,
             value,
         } => {
@@ -247,95 +247,61 @@ fn format_inst(db: &DriverDataBase, inst: &MirInst<'_>) -> String {
                 .unwrap_or_else(|| "_".into());
             if let Some(ty) = ty.as_ref() {
                 format!(
-                    "{}: let {}: {} = {}",
+                    "{}: let l{}: {} = {}",
                     stmt_label(*stmt),
-                    pat_label(*pat),
+                    local.0,
                     ty.pretty_print(db),
                     value_str
                 )
             } else {
-                format!(
-                    "{}: let {} = {}",
-                    stmt_label(*stmt),
-                    pat_label(*pat),
-                    value_str
-                )
+                format!("{}: let l{} = {}", stmt_label(*stmt), local.0, value_str)
             }
         }
-        MirInst::Assign {
-            stmt,
-            target,
-            value,
-        } => format!(
-            "{}: assign {} = {}",
+        MirInst::LocalSet { stmt, local, value } => format!(
+            "{}: assign l{} = {}",
             stmt_label(*stmt),
-            expr_label(*target),
+            local.0,
             value_label(*value)
         ),
-        MirInst::AugAssign {
+        MirInst::LocalAugAssign {
             stmt,
-            target,
+            local,
             value,
             op,
         } => format!(
-            "{}: {:?} {} {}",
+            "{}: {:?} l{} {}",
             stmt_label(*stmt),
             op,
-            expr_label(*target),
+            local.0,
             value_label(*value)
         ),
         MirInst::Eval { stmt, value } => {
             format!("{}: eval {}", stmt_label(*stmt), value_label(*value))
         }
-        MirInst::EvalExpr {
-            expr,
-            value,
-            bind_value,
-        } => {
-            let bind_suffix = if *bind_value { " (bind)" } else { "" };
-            format!(
-                "{}: eval_expr{} {}",
-                expr_label(*expr),
-                bind_suffix,
-                value_label(*value)
-            )
-        }
-        MirInst::IntrinsicStmt { expr, op, args } => {
+        MirInst::EvalValue { value } => format!("eval_value {}", value_label(*value)),
+        MirInst::BindValue { value } => format!("bind_value {}", value_label(*value)),
+        MirInst::IntrinsicStmt { op, args } => {
             let args = args
                 .iter()
                 .map(|arg| value_label(*arg))
                 .collect::<Vec<_>>()
                 .join(", ");
-            format!("{}: intrinsic {:?}({args})", expr_label(*expr), op)
+            format!("intrinsic {:?}({args})", op)
         }
-        MirInst::Store { expr, place, value } => format!(
-            "{}: store {:?} = {}",
-            expr_label(*expr),
-            place,
-            value_label(*value)
-        ),
-        MirInst::InitAggregate { expr, place, inits } => {
+        MirInst::Store { place, value } => {
+            format!("store {:?} = {}", place, value_label(*value))
+        }
+        MirInst::InitAggregate { place, inits } => {
             let inits = inits
                 .iter()
                 .map(|(path, value)| format!("{:?}={}", path, value_label(*value)))
                 .collect::<Vec<_>>()
                 .join(", ");
-            format!(
-                "{}: init_aggregate {:?} {{{inits}}}",
-                expr_label(*expr),
-                place
-            )
+            format!("init_aggregate {:?} {{{inits}}}", place)
         }
-        MirInst::SetDiscriminant {
-            expr,
-            place,
-            variant,
-        } => format!(
-            "{}: set_discriminant {:?} = {}",
-            expr_label(*expr),
-            place,
-            variant.idx
-        ),
+        MirInst::SetDiscriminant { place, variant } => {
+            format!("set_discriminant {:?} = {}", place, variant.idx)
+        }
     }
 }
 
@@ -385,14 +351,6 @@ fn format_terminator(term: &Terminator) -> String {
 
 fn stmt_label(stmt: StmtId) -> String {
     format!("s{}", stmt.index())
-}
-
-fn pat_label(pat: PatId) -> String {
-    format!("p{}", pat.index())
-}
-
-fn expr_label(expr: ExprId) -> String {
-    format!("e{}", expr.index())
 }
 
 fn value_label(val: ValueId) -> String {

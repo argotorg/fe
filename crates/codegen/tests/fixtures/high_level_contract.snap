@@ -5,30 +5,25 @@ input_file: tests/fixtures/high_level_contract.fe
 ---
 object "EchoContract" {
   code {
-    init()
     function init() {
       let v0 := datasize("EchoContract_deployed")
       let v1 := dataoffset("EchoContract_deployed")
       codecopy(0, v1, v0)
       return(0, v0)
     }
+    init()
   }
 
   object "EchoContract_deployed" {
     code {
-      runtime()
       function alloc(size) -> ret {
         let v0 := mload(64)
         let v1 := eq(v0, 0)
         if v1 {
           v0 := 128
-          mstore(64, add(v0, size))
-          ret := v0
         }
-        if iszero(v1) {
-          mstore(64, add(v0, size))
-          ret := v0
-        }
+        mstore(64, add(v0, size))
+        ret := v0
       }
       function cursor_i__fork_mem__CallData__b9ab8dc8a4b2f9e(self, pos) -> ret {
         let v0 := mload(0x40)
@@ -52,8 +47,7 @@ object "EchoContract" {
         let v1 := v0
         ret := v1
       }
-      function decode_____Sol_SolDecoder_CallData___7a33f8e14ea06d71(d) -> ret {
-        ret := 0
+      function decode_____Sol_SolDecoder_CallData___7a33f8e14ea06d71(d) {
       }
       function decode___u256__Sol_SolDecoder_CallData___6bbc79d2596eeb59(d) -> ret {
         let v0 := decode__Sol__u256__SolDecoder_CallData___2b0102c53e22c9ee(d)
@@ -110,29 +104,29 @@ object "EchoContract" {
                 revert(0, 0)
               }
               if iszero(v5) {
-                let v6 := decode_____Sol_SolDecoder_CallData___7a33f8e14ea06d71(v4)
-                let v7 := recv_EchoMsg_Answer_0_0(v6)
-                let v8 := solencoder_new()
-                pop(reserve_head__SolEncoder_Sol__822e2f0488b7f288(v8, 32))
-                encode__u256_Sol_SolEncoder__ce94c1790aa7f5c9(v7, v8)
-                let v9 := finish__SolEncoder_Sol__822e2f0488b7f288(v8)
-                return(mload(v9), mload(add(v9, 32)))
+                decode_____Sol_SolDecoder_CallData___7a33f8e14ea06d71(v4)
+                let v6 := recv_EchoMsg_Answer_0_0(0)
+                let v7 := solencoder_new()
+                pop(reserve_head__SolEncoder_Sol__822e2f0488b7f288(v7, 32))
+                encode__u256_Sol_SolEncoder__ce94c1790aa7f5c9(v6, v7)
+                let v8 := finish__SolEncoder_Sol__822e2f0488b7f288(v7)
+                return(mload(v8), mload(add(v8, 32)))
               }
             }
             case 2 {
-              let v10 := soldecoder_i__with_base__CallData__b9ab8dc8a4b2f9e(v1, 4)
-              let v11 := lt(calldatasize(), add(4, 32))
-              if v11 {
+              let v9 := soldecoder_i__with_base__CallData__b9ab8dc8a4b2f9e(v1, 4)
+              let v10 := lt(calldatasize(), add(4, 32))
+              if v10 {
                 revert(0, 0)
               }
-              if iszero(v11) {
-                let v12 := decode___u256__Sol_SolDecoder_CallData___6bbc79d2596eeb59(v10)
-                let v13 := recv_EchoMsg_Echo_0_1(v12)
-                let v14 := solencoder_new()
-                pop(reserve_head__SolEncoder_Sol__822e2f0488b7f288(v14, 32))
-                encode__u256_Sol_SolEncoder__ce94c1790aa7f5c9(v13, v14)
-                let v15 := finish__SolEncoder_Sol__822e2f0488b7f288(v14)
-                return(mload(v15), mload(add(v15, 32)))
+              if iszero(v10) {
+                let v11 := decode___u256__Sol_SolDecoder_CallData___6bbc79d2596eeb59(v9)
+                let v12 := recv_EchoMsg_Echo_0_1(v11)
+                let v13 := solencoder_new()
+                pop(reserve_head__SolEncoder_Sol__822e2f0488b7f288(v13, 32))
+                encode__u256_Sol_SolEncoder__ce94c1790aa7f5c9(v12, v13)
+                let v14 := finish__SolEncoder_Sol__822e2f0488b7f288(v13)
+                return(mload(v14), mload(add(v14, 32)))
               }
             }
             default {
@@ -165,8 +159,6 @@ object "EchoContract" {
           mstore(add(self, 32), v1)
           mstore(add(self, 64), add(v1, bytes))
         }
-        if iszero(v0) {
-        }
       }
       function solencoder_new() -> ret {
         let v0 := mload(0x40)
@@ -180,6 +172,8 @@ object "EchoContract" {
         let v1 := v0
         ret := v1
       }
+      runtime()
+      return(0, 0)
     }
   }
 }

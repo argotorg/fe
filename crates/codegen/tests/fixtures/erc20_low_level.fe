@@ -94,7 +94,7 @@ impl Erc20 {
 #[contract_init(Erc20Contract)]
 fn init()
 {
-    let mut erc20: Erc20 = core::effect_ref::StorPtr<Erc20>::at_offset(0)
+    let mut erc20 = core::effect_ref::StorPtr<Erc20>::at_offset(0)
     erc20.set_owner_once(owner: caller())
     let len = code_region_len(runtime)
     let offset = code_region_offset(runtime)

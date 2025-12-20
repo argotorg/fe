@@ -1,4 +1,7 @@
-use core::{code_region_len, code_region_offset, return_data, codecopy, mload, create2}
+use core::{
+    calldatacopy, calldataload, code_region_len, code_region_offset, codecopy, create2, mload,
+    mstore, return_data,
+}
 
 #[contract_init(Foo)]
 fn init() {
@@ -7,7 +10,7 @@ fn init() {
         let offset = code_region_offset(child_init)
         let dest = allocate(bytes: len)
         codecopy(dest, offset, len)
-        create2(value: 0, offset, size: len, salt: 0x1234)
+        create2(value: 0, offset, len: len, salt: 0x1234)
     }
 
     let len = code_region_len(runtime)

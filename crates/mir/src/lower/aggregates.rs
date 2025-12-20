@@ -23,17 +23,11 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         self.builder.body.expr_values.insert(expr, alloc_value);
         self.value_address_space
             .insert(alloc_value, AddressSpaceKind::Memory);
-        self.push_inst_here(MirInst::EvalExpr {
-            expr,
-            value: alloc_value,
-            bind_value: true,
-        });
         alloc_value
     }
 
     pub(super) fn emit_init_aggregate(
         &mut self,
-        expr: ExprId,
         base_value: ValueId,
         inits: Vec<(MirProjectionPath<'db>, ValueId)>,
     ) {
@@ -42,7 +36,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         }
         let addr_space = self.value_address_space(base_value);
         let place = Place::new(base_value, MirProjectionPath::new(), addr_space);
-        self.push_inst_here(MirInst::InitAggregate { expr, place, inits });
+        self.push_inst_here(MirInst::InitAggregate { place, inits });
     }
 
     /// Lowers a record literal into an allocation plus `store_field` calls.
@@ -102,7 +96,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                 field_value,
             ));
         }
-        self.emit_init_aggregate(expr, value_id, inits);
+        self.emit_init_aggregate(value_id, inits);
 
         value_id
     }
@@ -146,7 +140,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                 elem_value,
             ));
         }
-        self.emit_init_aggregate(expr, value_id, inits);
+        self.emit_init_aggregate(value_id, inits);
 
         value_id
     }
@@ -177,7 +171,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
             inits.push((proj, elem_value));
         }
         let place = Place::new(value_id, MirProjectionPath::new(), addr_space);
-        self.push_inst_here(MirInst::InitAggregate { expr, place, inits });
+        self.push_inst_here(MirInst::InitAggregate { place, inits });
 
         value_id
     }
@@ -217,7 +211,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
             inits.push((proj, elem_value));
         }
         let place = Place::new(value_id, MirProjectionPath::new(), addr_space);
-        self.push_inst_here(MirInst::InitAggregate { expr, place, inits });
+        self.push_inst_here(MirInst::InitAggregate { place, inits });
 
         value_id
     }

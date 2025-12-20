@@ -125,7 +125,12 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
             return;
         };
         if let Stmt::Expr(expr) = stmt {
-            let _ = self.lower_expr(*expr);
+            let ty = self.typed_body.expr_ty(self.db, *expr);
+            if self.is_unit_ty(ty) {
+                self.lower_expr_stmt(stmt_id, *expr);
+            } else {
+                let _ = self.lower_expr(*expr);
+            }
         } else {
             self.lower_stmt(stmt_id);
         }
@@ -161,19 +166,13 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                         break;
                     }
                     let value = self.lower_expr(binding.value);
-                    if self.current_block().is_some()
-                        && !matches!(
-                            self.builder.body.value(value).origin,
-                            ValueOrigin::Alloc { .. }
-                        )
-                    {
-                        let bind_value =
-                            !self.is_unit_ty(self.typed_body.expr_ty(self.db, binding.value));
-                        self.push_inst_here(MirInst::EvalExpr {
-                            expr: binding.value,
-                            value,
-                            bind_value,
-                        });
+                    if self.current_block().is_some() {
+                        let ty = self.typed_body.expr_ty(self.db, binding.value);
+                        if self.is_unit_ty(ty) {
+                            self.push_inst_here(MirInst::EvalValue { value });
+                        } else {
+                            self.push_inst_here(MirInst::BindValue { value });
+                        }
                     }
                 }
 
@@ -198,13 +197,19 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                 self.lower_if(expr, *cond, *then_expr, *else_expr)
             }
             Partial::Present(Expr::Call(callee, call_args)) => {
-                let _ = self.lower_expr(*callee);
+                if self.try_lower_intrinsic_stmt(expr).is_some() {
+                    return self.ensure_value(expr);
+                }
+                let _ = callee;
                 for arg in call_args {
                     let _ = self.lower_expr(arg.expr);
                 }
                 self.ensure_value(expr)
             }
             Partial::Present(Expr::MethodCall(receiver, _, _, call_args)) => {
+                if self.try_lower_intrinsic_stmt(expr).is_some() {
+                    return self.ensure_value(expr);
+                }
                 let _ = self.lower_expr(*receiver);
                 for arg in call_args {
                     let _ = self.lower_expr(arg.expr);
@@ -244,29 +249,14 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
             return Some(value_id);
         }
 
-        let callable = self.typed_body.callable_expr(expr)?;
-        let (mut args, arg_exprs) = self.collect_call_args(expr)?;
-        let mut receiver_space = None;
-        if self.is_method_call(expr) && !args.is_empty() {
-            let needs_space = callable
-                .callable_def
-                .receiver_ty(self.db)
-                .is_some_and(|binder| {
-                    let ty = binder.instantiate_identity();
-                    ty.adt_ref(self.db)
-                        .is_some_and(|adt| matches!(adt, AdtRef::Struct(_)))
-                });
-            if needs_space {
-                let receiver_value = args[0];
-                receiver_space = Some(self.value_address_space(receiver_value));
-            }
-        }
-
         let ty = self.typed_body.expr_ty(self.db, expr);
+        let callable_def = self.callable_def_for_call_expr(expr)?;
 
-        if callable.callable_def.ingot(self.db).kind(self.db) == IngotKind::Core
-            && callable
-                .callable_def
+        let (args, arg_exprs) = self.collect_call_args(expr)?;
+        let mut receiver_space = None;
+
+        if callable_def.ingot(self.db).kind(self.db) == IngotKind::Core
+            && callable_def
                 .name(self.db)
                 .is_some_and(|name| name.data(self.db) == "contract_field_slot")
             && let Some(contract_fn) = extract_contract_function(self.db, self.func)
@@ -283,33 +273,37 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
             return Some(value_id);
         }
 
-        if let Some(kind) = self.intrinsic_kind(callable.callable_def) {
+        let _ = arg_exprs;
+
+        if let Some(kind) = self.intrinsic_kind(callable_def) {
             if !kind.returns_value() {
                 return None;
             }
-            let mut code_region = None;
-            if matches!(
-                kind,
-                IntrinsicOp::CodeRegionOffset | IntrinsicOp::CodeRegionLen
-            ) {
-                if let Some(arg_expr) = arg_exprs.first() {
-                    code_region = self.code_region_target(*arg_expr);
-                }
-                args.clear();
-            }
             let value_id = self.builder.body.alloc_value(ValueData {
                 ty,
-                origin: ValueOrigin::Intrinsic(IntrinsicValue {
-                    op: kind,
-                    args,
-                    code_region,
-                }),
+                origin: ValueOrigin::Intrinsic(IntrinsicValue { op: kind, args }),
             });
             if matches!(kind, IntrinsicOp::StorAt) {
                 self.value_address_space
                     .insert(value_id, AddressSpaceKind::Storage);
             }
             return Some(value_id);
+        }
+
+        let callable = self.typed_body.callable_expr(expr)?;
+        if self.is_method_call(expr) && !args.is_empty() {
+            let needs_space = callable
+                .callable_def
+                .receiver_ty(self.db)
+                .is_some_and(|binder| {
+                    let ty = binder.instantiate_identity();
+                    ty.adt_ref(self.db)
+                        .is_some_and(|adt| matches!(adt, AdtRef::Struct(_)))
+                });
+            if needs_space {
+                let receiver_value = args[0];
+                receiver_space = Some(self.value_address_space(receiver_value));
+            }
         }
 
         let mut effect_args = Vec::new();
@@ -510,18 +504,99 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         match stmt {
             Stmt::Let(pat, ty, value) => {
                 self.move_to_block(block);
+                let Partial::Present(pat_data) = pat.data(self.db, self.body) else {
+                    return;
+                };
                 let value_id = value.map(|expr| self.lower_expr(expr));
                 if let Some(val) = value_id {
                     let space = self.value_address_space(val);
                     self.set_pat_address_space(*pat, space);
                 }
-                if self.current_block().is_some() {
-                    self.push_inst_here(MirInst::Let {
-                        stmt: stmt_id,
-                        pat: *pat,
-                        ty: *ty,
-                        value: value_id,
-                    });
+                if self.current_block().is_none() {
+                    return;
+                }
+
+                match pat_data {
+                    Pat::Path(..) => {
+                        let binding =
+                            self.typed_body
+                                .pat_binding(*pat)
+                                .unwrap_or(LocalBinding::Local {
+                                    pat: *pat,
+                                    is_mut: matches!(pat_data, Pat::Path(_, true)),
+                                });
+                        let Some(local) = self.local_for_binding(binding) else {
+                            return;
+                        };
+                        self.push_inst_here(MirInst::LocalInit {
+                            stmt: stmt_id,
+                            local,
+                            ty: *ty,
+                            value: value_id,
+                        });
+                    }
+                    Pat::WildCard | Pat::Rest => {
+                        if let Some(value_id) = value_id {
+                            self.push_inst_here(MirInst::Eval {
+                                stmt: stmt_id,
+                                value: value_id,
+                            });
+                        }
+                    }
+                    Pat::Tuple(pats) => {
+                        let Some(tuple_value) = value_id else {
+                            return;
+                        };
+                        let base_space = self.value_address_space(tuple_value);
+                        for (field_idx, field_pat) in pats.iter().enumerate() {
+                            let Partial::Present(field_pat_data) =
+                                field_pat.data(self.db, self.body)
+                            else {
+                                continue;
+                            };
+                            if matches!(field_pat_data, Pat::WildCard | Pat::Rest) {
+                                continue;
+                            }
+                            let binding = self.typed_body.pat_binding(*field_pat).unwrap_or(
+                                LocalBinding::Local {
+                                    pat: *field_pat,
+                                    is_mut: matches!(field_pat_data, Pat::Path(_, true)),
+                                },
+                            );
+                            let Some(local) = self.local_for_binding(binding) else {
+                                continue;
+                            };
+                            let field_ty = self.typed_body.pat_ty(self.db, *field_pat);
+                            let is_aggregate = self.is_aggregate_ty(field_ty);
+                            let place = Place::new(
+                                tuple_value,
+                                MirProjectionPath::from_projection(Projection::Field(field_idx)),
+                                base_space,
+                            );
+                            let field_value = self.builder.body.alloc_value(ValueData {
+                                ty: field_ty,
+                                origin: if is_aggregate {
+                                    ValueOrigin::PlaceRef(place)
+                                } else {
+                                    ValueOrigin::PlaceLoad(place)
+                                },
+                            });
+                            self.push_inst_here(MirInst::LocalInit {
+                                stmt: stmt_id,
+                                local,
+                                ty: None,
+                                value: Some(field_value),
+                            });
+                        }
+                    }
+                    _ => {
+                        if let Some(value_id) = value_id {
+                            self.push_inst_here(MirInst::Eval {
+                                stmt: stmt_id,
+                                value: value_id,
+                            });
+                        }
+                    }
                 }
             }
             Stmt::For(_, _, _) => {
@@ -538,9 +613,22 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
             }
             Stmt::Return(value) => {
                 self.move_to_block(block);
-                let ret_value = value.map(|expr| self.lower_expr(expr));
-                if self.current_block().is_some() {
-                    self.set_current_terminator(Terminator::Return(ret_value));
+                if let Some(expr) = value {
+                    let ret_ty = self.func.return_ty(self.db);
+                    let returns_value = !self.is_unit_ty(ret_ty) && !ret_ty.is_never(self.db);
+                    if returns_value {
+                        let ret_value = Some(self.lower_expr(*expr));
+                        if self.current_block().is_some() {
+                            self.set_current_terminator(Terminator::Return(ret_value));
+                        }
+                    } else {
+                        self.lower_expr_stmt(stmt_id, *expr);
+                        if self.current_block().is_some() {
+                            self.set_current_terminator(Terminator::Return(None));
+                        }
+                    }
+                } else if self.current_block().is_some() {
+                    self.set_current_terminator(Terminator::Return(None));
                 }
             }
             Stmt::Expr(expr) => self.lower_expr_stmt(stmt_id, *expr),
@@ -656,8 +744,9 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
             }
 
             self.builder.body.match_info.insert(
-                if_expr,
+                value,
                 MatchLoweringInfo {
+                    result: value,
                     scrutinee: cond_val,
                     merge_block,
                     arms: vec![
@@ -695,7 +784,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                     },
                 ],
                 else_block,
-                SwitchOrigin::MatchExpr(if_expr),
+                SwitchOrigin::MatchValue(value),
             );
 
             if let Some(merge) = merge_block {
@@ -779,6 +868,37 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         };
 
         match expr_data {
+            Expr::With(_, _) => {
+                self.move_to_block(block);
+                let value_id = self.lower_expr(expr);
+                let ty = self.typed_body.expr_ty(self.db, expr);
+                if self.current_block().is_some() && !self.is_unit_ty(ty) && !ty.is_never(self.db) {
+                    self.push_inst_here(MirInst::Eval {
+                        stmt: stmt_id,
+                        value: value_id,
+                    });
+                }
+            }
+            Expr::Block(stmts) => {
+                self.move_to_block(block);
+                if stmts.is_empty() {
+                    return;
+                }
+                let (head, last) = stmts.split_at(stmts.len() - 1);
+                self.lower_block(head);
+                if self.current_block().is_none() {
+                    return;
+                }
+                let stmt_id = last[0];
+                let Partial::Present(stmt) = stmt_id.data(self.db, self.body) else {
+                    return;
+                };
+                if let Stmt::Expr(expr) = stmt {
+                    self.lower_expr_stmt(stmt_id, *expr);
+                } else {
+                    self.lower_stmt(stmt_id);
+                }
+            }
             Expr::Assign(target, value) => {
                 self.move_to_block(block);
                 let value_id = self.lower_expr(*value);
@@ -790,15 +910,22 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                 }
                 if let Some(place) = self.place_for_expr(*target) {
                     self.push_inst_here(MirInst::Store {
-                        expr,
                         place,
                         value: value_id,
                     });
                     return;
                 }
-                self.push_inst_here(MirInst::Assign {
+                let Some(local) = self
+                    .typed_body
+                    .expr_prop(self.db, *target)
+                    .binding
+                    .and_then(|binding| self.local_for_binding(binding))
+                else {
+                    return;
+                };
+                self.push_inst_here(MirInst::LocalSet {
                     stmt: stmt_id,
-                    target: *target,
+                    local,
                     value: value_id,
                 });
             }
@@ -811,9 +938,17 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                     let space = self.value_address_space(value_id);
                     self.set_pat_address_space(pat, space);
                 }
-                self.push_inst_here(MirInst::AugAssign {
+                let Some(local) = self
+                    .typed_body
+                    .expr_prop(self.db, *target)
+                    .binding
+                    .and_then(|binding| self.local_for_binding(binding))
+                else {
+                    return;
+                };
+                self.push_inst_here(MirInst::LocalAugAssign {
                     stmt: stmt_id,
-                    target: *target,
+                    local,
                     value: value_id,
                     op: *op,
                 });

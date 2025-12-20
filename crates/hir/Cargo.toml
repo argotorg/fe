@@ -33,18 +33,14 @@ common.workspace = true
 parser.workspace = true
 test-utils.workspace = true
 url.workspace = true
+codespan-reporting.workspace = true
 
 [features]
-testutils = ["dep:codespan-reporting"]
-
-[dependencies.codespan-reporting]
-workspace = true
-optional = true
+testutils = []
 
 [dev-dependencies]
 ascii_tree = "0.1"
 camino.workspace = true
-codespan-reporting.workspace = true
 dir-test.workspace = true
 driver.workspace = true
 test-utils.workspace = true

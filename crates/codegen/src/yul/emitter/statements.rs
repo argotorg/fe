@@ -3,103 +3,16 @@
 //! The functions defined in this module operate within `FunctionEmitter` and walk
 //! straight-line MIR instructions (non-terminators) to produce Yul statements.
 
-use hir::analysis::ty::ty_check::LocalBinding;
-use hir::hir_def::{
-    Expr, ExprId, Partial, Pat, PatId,
-    expr::{ArithBinOp, BinOp},
-};
+use hir::hir_def::expr::ArithBinOp;
 use hir::projection::Projection;
 use mir::ir::{IntrinsicOp, IntrinsicValue};
-use mir::{self, MirProjectionPath, ValueId, ValueOrigin, layout};
+use mir::{self, LocalId, MirProjectionPath, ValueId, ValueOrigin, layout};
 
 use crate::yul::{doc::YulDoc, state::BlockState};
 
 use super::{YulError, function::FunctionEmitter};
 
 impl<'db> FunctionEmitter<'db> {
-    fn try_emit_field_assign(
-        &self,
-        docs: &mut Vec<YulDoc>,
-        target: ExprId,
-        value: ValueId,
-        state: &BlockState,
-    ) -> Result<bool, YulError> {
-        match self.expect_expr(target)? {
-            Expr::Field(..) | Expr::Bin(_, _, BinOp::Index) => {}
-            _ => return Ok(false),
-        }
-        let Some(value_id) = self.mir_func.body.expr_values.get(&target).copied() else {
-            return Err(YulError::Unsupported(
-                "missing lowered value for field assignment target".into(),
-            ));
-        };
-        let target_value = self.mir_func.body.value(value_id);
-        let ValueOrigin::PlaceLoad(place) = &target_value.origin else {
-            return Err(YulError::Unsupported(
-                "field assignment target must be a scalar place".into(),
-            ));
-        };
-
-        let addr = self.lower_place_ref(place, state)?;
-        let rhs = self.lower_value(value, state)?;
-        let line = match place.address_space {
-            mir::ir::AddressSpaceKind::Memory => format!("mstore({addr}, {rhs})"),
-            mir::ir::AddressSpaceKind::Storage => format!("sstore({addr}, {rhs})"),
-        };
-        docs.push(YulDoc::line(line));
-        Ok(true)
-    }
-
-    fn try_emit_field_augassign(
-        &self,
-        docs: &mut Vec<YulDoc>,
-        target: ExprId,
-        value: ValueId,
-        op: ArithBinOp,
-        state: &BlockState,
-    ) -> Result<bool, YulError> {
-        match self.expect_expr(target)? {
-            Expr::Field(..) | Expr::Bin(_, _, BinOp::Index) => {}
-            _ => return Ok(false),
-        };
-        let Some(value_id) = self.mir_func.body.expr_values.get(&target).copied() else {
-            return Err(YulError::Unsupported(
-                "missing lowered value for field assignment target".into(),
-            ));
-        };
-        let target_value = self.mir_func.body.value(value_id);
-        let ValueOrigin::PlaceLoad(place) = &target_value.origin else {
-            return Err(YulError::Unsupported(
-                "field augmented assignment target must be a scalar place".into(),
-            ));
-        };
-
-        let addr = self.lower_place_ref(place, state)?;
-        let lhs = self.lower_value(value_id, state)?;
-        let rhs = self.lower_value(value, state)?;
-
-        let updated = match op {
-            ArithBinOp::Add => format!("add({lhs}, {rhs})"),
-            ArithBinOp::Sub => format!("sub({lhs}, {rhs})"),
-            ArithBinOp::Mul => format!("mul({lhs}, {rhs})"),
-            ArithBinOp::Div => format!("div({lhs}, {rhs})"),
-            ArithBinOp::Rem => format!("mod({lhs}, {rhs})"),
-            ArithBinOp::Pow => format!("exp({lhs}, {rhs})"),
-            ArithBinOp::LShift => format!("shl({rhs}, {lhs})"),
-            ArithBinOp::RShift => format!("shr({rhs}, {lhs})"),
-            ArithBinOp::BitAnd => format!("and({lhs}, {rhs})"),
-            ArithBinOp::BitOr => format!("or({lhs}, {rhs})"),
-            ArithBinOp::BitXor => format!("xor({lhs}, {rhs})"),
-        };
-
-        let line = match place.address_space {
-            mir::ir::AddressSpaceKind::Memory => format!("mstore({addr}, {updated})"),
-            mir::ir::AddressSpaceKind::Storage => format!("sstore({addr}, {updated})"),
-        };
-        docs.push(YulDoc::line(line));
-        Ok(true)
-    }
-
     /// Lowers a linear sequence of MIR instructions into Yul docs.
     ///
     /// * `insts` - MIR instructions belonging to the current block.
@@ -132,205 +45,110 @@ impl<'db> FunctionEmitter<'db> {
         state: &mut BlockState,
     ) -> Result<(), YulError> {
         match inst {
-            mir::MirInst::Let { pat, value, .. } => {
-                self.emit_let_inst(docs, *pat, *value, state)?
+            mir::MirInst::LocalInit { local, value, .. } => {
+                self.emit_local_init_inst(docs, *local, *value, state)?
             }
-            mir::MirInst::Assign { target, value, .. } => {
-                self.emit_assign_inst(docs, *target, *value, state)?
+            mir::MirInst::LocalSet { local, value, .. } => {
+                self.emit_local_set_inst(docs, *local, *value, state)?
             }
-            mir::MirInst::AugAssign {
-                target, value, op, ..
-            } => self.emit_augassign_inst(docs, *target, *value, *op, state)?,
+            mir::MirInst::LocalAugAssign {
+                local, value, op, ..
+            } => self.emit_local_augassign_inst(docs, *local, *value, *op, state)?,
             mir::MirInst::Eval { value, .. } => self.emit_eval_inst(docs, *value, state)?,
-            mir::MirInst::EvalExpr {
-                expr,
-                value,
-                bind_value,
-            } => self.emit_eval_expr_inst(docs, *expr, *value, *bind_value, state)?,
-            mir::MirInst::IntrinsicStmt { op, args, .. } => {
+            mir::MirInst::EvalValue { value } => self.emit_eval_inst(docs, *value, state)?,
+            mir::MirInst::BindValue { value } => self.emit_bind_value_inst(docs, *value, state)?,
+            mir::MirInst::IntrinsicStmt { op, args } => {
                 self.emit_intrinsic_inst(docs, *op, args, state)?
             }
-            mir::MirInst::Store { expr, place, value } => {
-                self.emit_store_inst(docs, *expr, place, *value, state)?
+            mir::MirInst::Store { place, value } => {
+                self.emit_store_inst(docs, place, *value, state)?
             }
-            mir::MirInst::InitAggregate { expr, place, inits } => {
-                self.emit_init_aggregate_inst(docs, *expr, place, inits, state)?
+            mir::MirInst::InitAggregate { place, inits } => {
+                self.emit_init_aggregate_inst(docs, place, inits, state)?
             }
-            mir::MirInst::SetDiscriminant {
-                expr,
-                place,
-                variant,
-            } => self.emit_set_discriminant_inst(docs, *expr, place, *variant, state)?,
+            mir::MirInst::SetDiscriminant { place, variant } => {
+                self.emit_set_discriminant_inst(docs, place, *variant, state)?
+            }
         }
         Ok(())
     }
 
-    /// Lowers a `let` instruction, allocating or updating the binding.
-    ///
-    /// * `docs` - Output vector receiving the generated Yul statement.
-    /// * `pat` - Pattern representing the binding name.
-    /// * `value` - Optional initializer value.
-    /// * `state` - Binding table used to store/reuse the lowered slot.
-    ///
-    /// Returns `Ok(())` when the binding has been populated.
-    fn emit_let_inst(
+    fn emit_local_init_inst(
         &mut self,
         docs: &mut Vec<YulDoc>,
-        pat_id: PatId,
+        local: LocalId,
         value: Option<ValueId>,
         state: &mut BlockState,
     ) -> Result<(), YulError> {
-        let pat = self.expect_pat(pat_id)?;
-        match pat {
-            Pat::Path(..) => {
-                let binding = self.pattern_ident(pat_id)?;
-                let existing = state.binding(&binding);
-                let value = match value {
-                    Some(val) => self.lower_value(val, state)?,
-                    None => "0".into(),
-                };
-                if let Some(name) = existing {
-                    docs.push(YulDoc::line(format!("{name} := {value}")));
-                } else {
-                    let temp = state.alloc_local();
-                    state.insert_binding(binding.clone(), temp.clone());
-                    docs.push(YulDoc::line(format!("let {temp} := {value}")));
+        if let Some(value_id) = value {
+            let value_ty = self.mir_func.body.value(value_id).ty;
+            if (value_ty.is_tuple(self.db) && value_ty.field_count(self.db) == 0)
+                || value_ty.is_never(self.db)
+            {
+                if let Some(doc) = self.render_eval(value_id, state)? {
+                    docs.push(doc);
                 }
-                Ok(())
+                state.insert_local(local, "0".into());
+                return Ok(());
             }
-            Pat::Tuple(pats) => {
-                let value_id = value.ok_or_else(|| {
-                    YulError::Unsupported("tuple pattern bindings require an initializer".into())
-                })?;
 
-                let tuple_ty = self.mir_func.body.value(value_id).ty;
-                if !tuple_ty.is_tuple(self.db) {
-                    return Err(YulError::Unsupported(
-                        "tuple patterns require a tuple initializer".into(),
-                    ));
-                }
-                let field_types = tuple_ty.field_types(self.db);
-                if field_types.len() != pats.len() {
-                    return Err(YulError::Unsupported(format!(
-                        "tuple pattern has {} elements but initializer has {} fields",
-                        pats.len(),
-                        field_types.len()
-                    )));
-                }
-
-                let base = self.lower_value(value_id, state)?;
-                let base_temp = state.alloc_local();
-                state.insert_value_temp(value_id.index(), base_temp.clone());
-                docs.push(YulDoc::line(format!("let {base_temp} := {base}")));
-
-                for (field_idx, field_pat_id) in pats.iter().enumerate() {
-                    let field_pat = self.expect_pat(*field_pat_id)?;
-                    let Pat::Path(..) = field_pat else {
-                        if matches!(field_pat, Pat::WildCard | Pat::Rest) {
-                            continue;
-                        }
-                        return Err(YulError::Unsupported(
-                            "only identifier patterns are supported".into(),
-                        ));
-                    };
-                    let binding = self.pattern_ident(*field_pat_id)?;
-                    let field_ty = field_types[field_idx];
-                    let is_aggregate = field_ty.field_count(self.db) > 0;
-                    let place = mir::ir::Place::new(
-                        value_id,
-                        MirProjectionPath::from_projection(Projection::Field(field_idx)),
-                        mir::ir::AddressSpaceKind::Memory,
-                    );
-                    let value = if is_aggregate {
-                        self.lower_place_ref(&place, state)?
-                    } else {
-                        self.lower_place_load(&place, field_ty, state)?
-                    };
-
-                    if let Some(existing) = state.binding(&binding) {
-                        docs.push(YulDoc::line(format!("{existing} := {value}")));
-                    } else {
-                        let local = state.alloc_local();
-                        state.insert_binding(binding.clone(), local.clone());
-                        docs.push(YulDoc::line(format!("let {local} := {value}")));
-                    }
-                }
-
-                Ok(())
+            let rhs = self.lower_value(value_id, state)?;
+            if let Some(existing) = state.local(local) {
+                docs.push(YulDoc::line(format!("{existing} := {rhs}")));
+                return Ok(());
             }
-            Pat::WildCard | Pat::Rest => {
-                if let Some(value) = value {
-                    let lowered = self.lower_value(value, state)?;
-                    let value_data = self.mir_func.body.value(value);
-                    let is_call = matches!(value_data.origin, ValueOrigin::Call(..));
-                    let is_zero_sized = (value_data.ty.is_tuple(self.db)
-                        && value_data.ty.field_count(self.db) == 0)
-                        || value_data.ty.is_never(self.db);
-                    if is_call && !is_zero_sized {
-                        docs.push(YulDoc::line(format!("pop({lowered})")));
-                    } else {
-                        docs.push(YulDoc::line(lowered));
-                    }
-                }
-                Ok(())
-            }
-            _ => Err(YulError::Unsupported(
-                "only identifier and tuple patterns are supported".into(),
-            )),
-        }
-    }
-
-    /// Lowers a plain assignment (`x = y`) into Yul.
-    ///
-    /// * `docs` - Collection where the resulting assignment is appended.
-    /// * `target` - Assignment LHS expression.
-    /// * `value` - MIR value providing the RHS.
-    /// * `state` - Block state storing active Yul bindings.
-    ///
-    /// Returns `Ok(())` once the assignment has been recorded.
-    fn emit_assign_inst(
-        &mut self,
-        docs: &mut Vec<YulDoc>,
-        target: ExprId,
-        value: ValueId,
-        state: &mut BlockState,
-    ) -> Result<(), YulError> {
-        if self.try_emit_field_assign(docs, target, value, state)? {
+            let temp = state.alloc_local();
+            state.insert_local(local, temp.clone());
+            docs.push(YulDoc::line(format!("let {temp} := {rhs}")));
             return Ok(());
         }
-        let binding = self.path_from_expr(target)?;
-        let yul_name = state
-            .binding(&binding)
-            .ok_or_else(|| YulError::Unsupported("assignment to unknown binding".into()))?;
-        let value_expr = self.lower_value(value, state)?;
-        docs.push(YulDoc::line(format!("{yul_name} := {value_expr}")));
+
+        if let Some(existing) = state.local(local) {
+            docs.push(YulDoc::line(format!("{existing} := 0")));
+            return Ok(());
+        }
+        let temp = state.alloc_local();
+        state.insert_local(local, temp.clone());
+        docs.push(YulDoc::line(format!("let {temp} := 0")));
         Ok(())
     }
 
-    /// Emits an augmented assignment (`+=`, `-=`, …) into the corresponding Yul op.
-    ///
-    /// * `docs` - Collector for the generated statement.
-    /// * `target` - Assignment LHS expression.
-    /// * `value` - RHS operand.
-    /// * `op` - Arithmetic operator used in the augmentation.
-    /// * `state` - Block state providing access to binding slots.
-    ///
-    /// Returns `Ok(())` when the augmented assignment has been emitted.
-    fn emit_augassign_inst(
+    fn emit_local_set_inst(
         &mut self,
         docs: &mut Vec<YulDoc>,
-        target: ExprId,
+        local: LocalId,
+        value: ValueId,
+        state: &mut BlockState,
+    ) -> Result<(), YulError> {
+        if !self.mir_func.body.local(local).is_mut {
+            return Err(YulError::Unsupported(
+                "assignment to immutable local".into(),
+            ));
+        }
+        let Some(yul_name) = state.local(local) else {
+            return Err(YulError::Unsupported("assignment to unknown local".into()));
+        };
+        let rhs = self.lower_value(value, state)?;
+        docs.push(YulDoc::line(format!("{yul_name} := {rhs}")));
+        Ok(())
+    }
+
+    fn emit_local_augassign_inst(
+        &mut self,
+        docs: &mut Vec<YulDoc>,
+        local: LocalId,
         value: ValueId,
         op: ArithBinOp,
         state: &mut BlockState,
     ) -> Result<(), YulError> {
-        if self.try_emit_field_augassign(docs, target, value, op, state)? {
-            return Ok(());
+        if !self.mir_func.body.local(local).is_mut {
+            return Err(YulError::Unsupported(
+                "assignment to immutable local".into(),
+            ));
         }
-        let binding = self.path_from_expr(target)?;
-        let yul_name = state
-            .binding(&binding)
-            .ok_or_else(|| YulError::Unsupported("assignment to unknown binding".into()))?;
+        let Some(yul_name) = state.local(local) else {
+            return Err(YulError::Unsupported("assignment to unknown local".into()));
+        };
         let rhs = self.lower_value(value, state)?;
         let assignment = match op {
             ArithBinOp::Add => format!("add({yul_name}, {rhs})"),
@@ -381,60 +199,44 @@ impl<'db> FunctionEmitter<'db> {
         Ok(())
     }
 
-    /// Emits evaluation logic for expressions that optionally bind to a temporary.
-    ///
-    /// * `docs` - Output buffer for the emitted stmt or binding.
-    /// * `expr` - Source expression ID.
-    /// * `value` - MIR value produced for that expression.
-    /// * `bind_value` - Whether the result should be bound for reuse.
-    /// * `state` - Mutable per-block scope that owns temporaries.
-    ///
-    /// Returns `Ok(())` when the expression has been handled.
-    fn emit_eval_expr_inst(
+    fn emit_bind_value_inst(
         &mut self,
         docs: &mut Vec<YulDoc>,
-        expr: ExprId,
         value: ValueId,
-        bind_value: bool,
         state: &mut BlockState,
     ) -> Result<(), YulError> {
-        let value_data = self.mir_func.body.value(value);
-        if let ValueOrigin::Alloc { .. } = value_data.origin {
-            if !bind_value {
-                return Err(YulError::Unsupported(
-                    "alloc values must be bound to a temporary".into(),
-                ));
-            }
-            let size_bytes = layout::ty_size_bytes(self.db, value_data.ty).ok_or_else(|| {
-                YulError::Unsupported("alloc requires a statically sized type".into())
-            })?;
-            let temp = state.alloc_local();
-            self.expr_temps.insert(expr, temp.clone());
-            state.insert_value_temp(value.index(), temp.clone());
-            self.emit_alloc_value(docs, &temp, size_bytes);
+        if state.value_temp(value.index()).is_some() {
             return Ok(());
         }
 
-        let lowered = self.lower_value(value, state)?;
-        if bind_value {
-            let temp = state.alloc_local();
-            self.expr_temps.insert(expr, temp.clone());
-            // Also cache by ValueId in the BlockState so that arguments referencing
-            // this value can reuse it (properly scoped to the current branch).
-            state.insert_value_temp(value.index(), temp.clone());
-            docs.push(YulDoc::line(format!("let {temp} := {lowered}")));
-        } else {
-            let is_call = matches!(value_data.origin, ValueOrigin::Call(..));
-            let is_zero_sized = (value_data.ty.is_tuple(self.db)
-                && value_data.ty.field_count(self.db) == 0)
-                || value_data.ty.is_never(self.db);
-            if is_call && !is_zero_sized {
-                docs.push(YulDoc::line(format!("pop({lowered})")));
-            } else {
-                docs.push(YulDoc::line(lowered));
+        let value_data = self.mir_func.body.value(value);
+        if (value_data.ty.is_tuple(self.db) && value_data.ty.field_count(self.db) == 0)
+            || value_data.ty.is_never(self.db)
+        {
+            if let Some(doc) = self.render_eval(value, state)? {
+                docs.push(doc);
+            }
+            return Ok(());
+        }
+
+        let temp = state.alloc_local();
+        match &value_data.origin {
+            ValueOrigin::Alloc { .. } => {
+                let size_bytes =
+                    layout::ty_size_bytes(self.db, value_data.ty).ok_or_else(|| {
+                        YulError::Unsupported("alloc requires a statically sized type".into())
+                    })?;
+                state.insert_value_temp(value.index(), temp.clone());
+                self.emit_alloc_value(docs, &temp, size_bytes);
+                Ok(())
+            }
+            _ => {
+                let lowered = self.lower_value(value, state)?;
+                state.insert_value_temp(value.index(), temp.clone());
+                docs.push(YulDoc::line(format!("let {temp} := {lowered}")));
+                Ok(())
             }
         }
-        Ok(())
     }
 
     fn emit_alloc_value(&self, docs: &mut Vec<YulDoc>, temp: &str, size_bytes: usize) {
@@ -450,7 +252,6 @@ impl<'db> FunctionEmitter<'db> {
     fn emit_store_inst(
         &mut self,
         docs: &mut Vec<YulDoc>,
-        _expr: ExprId,
         place: &mir::ir::Place<'db>,
         value: ValueId,
         state: &mut BlockState,
@@ -483,7 +284,6 @@ impl<'db> FunctionEmitter<'db> {
     fn emit_init_aggregate_inst(
         &mut self,
         docs: &mut Vec<YulDoc>,
-        expr: ExprId,
         place: &mir::ir::Place<'db>,
         inits: &[(MirProjectionPath<'db>, ValueId)],
         state: &mut BlockState,
@@ -493,7 +293,7 @@ impl<'db> FunctionEmitter<'db> {
             for proj in path.iter() {
                 target = self.extend_place(&target, proj.clone());
             }
-            self.emit_store_inst(docs, expr, &target, *value, state)?;
+            self.emit_store_inst(docs, &target, *value, state)?;
         }
         Ok(())
     }
@@ -621,7 +421,6 @@ impl<'db> FunctionEmitter<'db> {
     fn emit_set_discriminant_inst(
         &mut self,
         docs: &mut Vec<YulDoc>,
-        _expr: ExprId,
         place: &mir::ir::Place<'db>,
         variant: hir::hir_def::EnumVariant<'db>,
         state: &mut BlockState,
@@ -645,75 +444,7 @@ impl<'db> FunctionEmitter<'db> {
         match &value_data.origin {
             ValueOrigin::PlaceRef(place) | ValueOrigin::PlaceLoad(place) => place.address_space,
             ValueOrigin::Alloc { address_space } => *address_space,
-            ValueOrigin::Expr(expr_id) => self.expr_address_space(*expr_id),
             _ => fallback,
-        }
-    }
-
-    fn expr_address_space(&self, expr: ExprId) -> mir::ir::AddressSpaceKind {
-        let Some(body) = self.mir_func.typed_body.body() else {
-            return mir::ir::AddressSpaceKind::Memory;
-        };
-        let exprs = body.exprs(self.db);
-        if let Partial::Present(expr_data) = &exprs[expr] {
-            match expr_data {
-                Expr::Field(base, _) => {
-                    if matches!(
-                        self.expr_address_space(*base),
-                        mir::ir::AddressSpaceKind::Storage
-                    ) {
-                        return mir::ir::AddressSpaceKind::Storage;
-                    }
-                }
-                Expr::Bin(base, _, BinOp::Index) => {
-                    if matches!(
-                        self.expr_address_space(*base),
-                        mir::ir::AddressSpaceKind::Storage
-                    ) {
-                        return mir::ir::AddressSpaceKind::Storage;
-                    }
-                }
-                _ => {}
-            }
-        }
-
-        let prop = self.mir_func.typed_body.expr_prop(self.db, expr);
-        if let Some(binding) = prop.binding {
-            self.address_space_for_binding(&binding)
-        } else {
-            mir::ir::AddressSpaceKind::Memory
-        }
-    }
-
-    fn address_space_for_binding(&self, binding: &LocalBinding<'db>) -> mir::ir::AddressSpaceKind {
-        match binding {
-            LocalBinding::EffectParam { idx, .. } => match self
-                .mir_func
-                .effect_provider_kinds
-                .get(*idx)
-                .copied()
-                .unwrap_or(mir::ir::EffectProviderKind::Storage)
-            {
-                mir::ir::EffectProviderKind::Memory => mir::ir::AddressSpaceKind::Memory,
-                mir::ir::EffectProviderKind::Storage => mir::ir::AddressSpaceKind::Storage,
-                mir::ir::EffectProviderKind::Calldata => mir::ir::AddressSpaceKind::Memory,
-            },
-            LocalBinding::Local { pat, .. } => self
-                .mir_func
-                .body
-                .pat_address_space
-                .get(pat)
-                .copied()
-                .unwrap_or(mir::ir::AddressSpaceKind::Memory),
-            LocalBinding::Param { idx, .. } => {
-                if *idx == 0 {
-                    return self
-                        .mir_func
-                        .receiver_space
-                        .unwrap_or(mir::ir::AddressSpaceKind::Memory);
-                }
-                mir::ir::AddressSpaceKind::Memory
-            }
         }
     }
 
@@ -757,7 +488,6 @@ impl<'db> FunctionEmitter<'db> {
         let intr = IntrinsicValue {
             op,
             args: args.to_vec(),
-            code_region: None,
         };
         if let Some(doc) = self.lower_intrinsic_stmt(&intr, state)? {
             docs.push(doc);
@@ -836,7 +566,7 @@ impl<'db> FunctionEmitter<'db> {
     /// Returns the Yul expression describing the intrinsic invocation.
     pub(super) fn lower_intrinsic_value(
         &self,
-        intr: &IntrinsicValue<'db>,
+        intr: &IntrinsicValue,
         state: &BlockState,
     ) -> Result<String, YulError> {
         if !intr.op.returns_value() {
@@ -846,19 +576,13 @@ impl<'db> FunctionEmitter<'db> {
         }
         if matches!(intr.op, IntrinsicOp::AddrOf) {
             let args = self.lower_intrinsic_args(intr, state)?;
-            self.expect_intrinsic_arity(intr.op, &args, 1)?;
-            return Ok(args
-                .into_iter()
-                .next()
-                .expect("addr_of arity already checked"));
+            debug_assert_eq!(args.len(), 1, "addr_of expects 1 argument");
+            return Ok(args.into_iter().next().expect("addr_of expects 1 argument"));
         }
         if matches!(intr.op, IntrinsicOp::StorAt) {
             let args = self.lower_intrinsic_args(intr, state)?;
-            self.expect_intrinsic_arity(intr.op, &args, 1)?;
-            return Ok(args
-                .into_iter()
-                .next()
-                .expect("stor_at arity already checked"));
+            debug_assert_eq!(args.len(), 1, "stor_at expects 1 argument");
+            return Ok(args.into_iter().next().expect("stor_at expects 1 argument"));
         }
         if matches!(
             intr.op,
@@ -867,14 +591,6 @@ impl<'db> FunctionEmitter<'db> {
             return self.lower_code_region_query(intr);
         }
         let args = self.lower_intrinsic_args(intr, state)?;
-        let expected = match intr.op {
-            IntrinsicOp::Keccak => 2,
-            IntrinsicOp::Caller => 0,
-            IntrinsicOp::Codesize => 0,
-            IntrinsicOp::Calldatasize | IntrinsicOp::Returndatasize => 0,
-            _ => 1,
-        };
-        self.expect_intrinsic_arity(intr.op, &args, expected)?;
         Ok(format!(
             "{}({})",
             self.intrinsic_name(intr.op),
@@ -883,13 +599,25 @@ impl<'db> FunctionEmitter<'db> {
     }
 
     /// Lowers `code_region_offset/len` into `dataoffset/datasize`.
-    fn lower_code_region_query(&self, intr: &IntrinsicValue<'db>) -> Result<String, YulError> {
-        let target = intr.code_region.as_ref().ok_or_else(|| {
-            YulError::Unsupported("code region intrinsic missing target metadata".into())
-        })?;
-        let symbol = target.symbol.as_deref().ok_or_else(|| {
-            YulError::Unsupported("code region intrinsic has no resolved symbol".into())
-        })?;
+    fn lower_code_region_query(&self, intr: &IntrinsicValue) -> Result<String, YulError> {
+        debug_assert_eq!(
+            intr.args.len(),
+            1,
+            "code region intrinsic expects 1 argument"
+        );
+        let arg = intr.args[0];
+        let symbol = match &self.mir_func.body.value(arg).origin {
+            mir::ValueOrigin::FuncItem(root) => root.symbol.as_deref().ok_or_else(|| {
+                YulError::Unsupported(
+                    "code region function item is missing a resolved symbol".into(),
+                )
+            })?,
+            _ => {
+                return Err(YulError::Unsupported(
+                    "code region intrinsic argument must be a function item".into(),
+                ));
+            }
+        };
         let label = self.code_regions.get(symbol).ok_or_else(|| {
             YulError::Unsupported(format!("no code region available for `{symbol}`"))
         })?;
@@ -909,36 +637,38 @@ impl<'db> FunctionEmitter<'db> {
     /// Returns the emitted doc when the intrinsic performs work.
     pub(super) fn lower_intrinsic_stmt(
         &self,
-        intr: &IntrinsicValue<'db>,
+        intr: &IntrinsicValue,
         state: &BlockState,
     ) -> Result<Option<YulDoc>, YulError> {
         if intr.op.returns_value() {
             return Ok(None);
         }
         let args = self.lower_intrinsic_args(intr, state)?;
-        let expected = match intr.op {
-            IntrinsicOp::Codecopy => 3,
-            IntrinsicOp::Calldatacopy | IntrinsicOp::Returndatacopy => 3,
-            IntrinsicOp::Mstore | IntrinsicOp::Mstore8 | IntrinsicOp::Sstore => 2,
-            IntrinsicOp::ReturnData | IntrinsicOp::Revert => 2,
-            IntrinsicOp::Caller => 0,
-            _ => unreachable!(),
-        };
-        self.expect_intrinsic_arity(intr.op, &args, expected)?;
         let line = match intr.op {
-            IntrinsicOp::Mstore => format!("mstore({}, {})", args[0], args[1]),
-            IntrinsicOp::Mstore8 => format!("mstore8({}, {})", args[0], args[1]),
-            IntrinsicOp::Sstore => format!("sstore({}, {})", args[0], args[1]),
-            IntrinsicOp::ReturnData => format!("return({}, {})", args[0], args[1]),
-            IntrinsicOp::Revert => format!("revert({}, {})", args[0], args[1]),
-            IntrinsicOp::Codecopy => format!("codecopy({}, {}, {})", args[0], args[1], args[2]),
+            IntrinsicOp::Mstore => {
+                format!("mstore({}, {})", args[0], args[1])
+            }
+            IntrinsicOp::Mstore8 => {
+                format!("mstore8({}, {})", args[0], args[1])
+            }
+            IntrinsicOp::Sstore => {
+                format!("sstore({}, {})", args[0], args[1])
+            }
+            IntrinsicOp::ReturnData => {
+                format!("return({}, {})", args[0], args[1])
+            }
+            IntrinsicOp::Revert => {
+                format!("revert({}, {})", args[0], args[1])
+            }
+            IntrinsicOp::Codecopy => {
+                format!("codecopy({}, {}, {})", args[0], args[1], args[2])
+            }
             IntrinsicOp::Calldatacopy => {
                 format!("calldatacopy({}, {}, {})", args[0], args[1], args[2])
             }
             IntrinsicOp::Returndatacopy => {
                 format!("returndatacopy({}, {}, {})", args[0], args[1], args[2])
             }
-            IntrinsicOp::Caller => String::from("caller()"),
             _ => unreachable!(),
         };
         Ok(Some(YulDoc::line(line)))
@@ -952,37 +682,13 @@ impl<'db> FunctionEmitter<'db> {
     /// Returns the lowered argument list in call order.
     fn lower_intrinsic_args(
         &self,
-        intr: &IntrinsicValue<'db>,
+        intr: &IntrinsicValue,
         state: &BlockState,
     ) -> Result<Vec<String>, YulError> {
         intr.args
             .iter()
             .map(|arg| self.lower_value(*arg, state))
             .collect()
-    }
-
-    /// Ensures the intrinsic received the expected number of operands.
-    ///
-    /// * `op` - Intrinsic opcode being validated.
-    /// * `args` - Lowered operand list.
-    /// * `expected` - Required arity for the opcode.
-    ///
-    /// Returns `Ok(())` when the arity matches, otherwise an unsupported error.
-    fn expect_intrinsic_arity(
-        &self,
-        op: IntrinsicOp,
-        args: &[String],
-        expected: usize,
-    ) -> Result<(), YulError> {
-        if args.len() == expected {
-            Ok(())
-        } else {
-            Err(YulError::Unsupported(format!(
-                "intrinsic `{}` expects {expected} arguments, got {}",
-                self.intrinsic_name(op),
-                args.len()
-            )))
-        }
     }
 
     /// Returns the Yul builtin name for an intrinsic opcode.

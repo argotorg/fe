@@ -31,13 +31,13 @@ pub const DISCRIMINANT_SIZE_BYTES: usize = WORD_SIZE_BYTES;
 
 /// Computes the byte size of a type.
 ///
-/// Returns `None` for unsupported types (unsized, unresolved, enums).
-/// For enum sizes, use [`enum_size_bytes`] which handles discriminant + max payload.
+/// Returns `None` for unsupported/unsized types.
 ///
 /// # Supported Types
-/// - Primitives: bool (1), u8-u256/i8-i256 (1-32 bytes)
-/// - Tuples: sum of field sizes
-/// - Structs: sum of field sizes
+/// - Primitives: bool (1), u8-u256/i8-i256 (1-32 bytes), pointers/strings (32 bytes)
+/// - Tuples/structs: sum of field sizes
+/// - Fixed-size arrays: `len * stride`
+/// - Enums: 32-byte discriminant + max variant payload
 pub fn ty_size_bytes(db: &dyn HirAnalysisDb, ty: TyId<'_>) -> Option<usize> {
     // Handle tuples first (check base type for TyApp cases)
     if ty.is_tuple(db) {
@@ -56,6 +56,16 @@ pub fn ty_size_bytes(db: &dyn HirAnalysisDb, ty: TyId<'_>) -> Option<usize> {
         if let Some(bits) = prim_int_bits(*prim) {
             return Some(bits / 8);
         }
+        if matches!(prim, PrimTy::String | PrimTy::Ptr) {
+            return Some(WORD_SIZE_BYTES);
+        }
+    }
+
+    // Handle fixed-size arrays
+    if ty.is_array(db) {
+        let len = array_len(db, ty)?;
+        let stride = array_elem_stride_bytes(db, ty)?;
+        return Some(len * stride);
     }
 
     // Handle ADT types (structs) - use adt_def() which handles TyApp
@@ -67,6 +77,23 @@ pub fn ty_size_bytes(db: &dyn HirAnalysisDb, ty: TyId<'_>) -> Option<usize> {
             size += ty_size_bytes(db, field_ty)?;
         }
         return Some(size);
+    }
+
+    // Handle enums: discriminant + max variant payload
+    if let Some(adt_def) = ty.adt_def(db)
+        && let AdtRef::Enum(enm) = adt_def.adt_ref(db)
+    {
+        let mut max_payload = 0;
+        for variant in enm.variants(db) {
+            let ev = EnumVariant::new(enm, variant.idx);
+            let ctor = ConstructorKind::Variant(ev, ty);
+            let mut payload = 0;
+            for field_ty in ctor.field_types(db) {
+                payload += ty_size_bytes(db, field_ty)?;
+            }
+            max_payload = max_payload.max(payload);
+        }
+        return Some(DISCRIMINANT_SIZE_BYTES + max_payload);
     }
 
     None

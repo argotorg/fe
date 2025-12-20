@@ -54,10 +54,15 @@ pub struct MirBody<'db> {
     pub entry: BasicBlockId,
     pub blocks: Vec<BasicBlock<'db>>,
     pub values: Vec<ValueData<'db>>,
+    pub locals: Vec<LocalData<'db>>,
+    /// Local IDs for explicit function parameters in source order.
+    pub param_locals: Vec<LocalId>,
+    /// Local IDs for effect parameters in source order.
+    pub effect_param_locals: Vec<LocalId>,
     pub expr_values: FxHashMap<ExprId, ValueId>,
     pub pat_address_space: FxHashMap<PatId, AddressSpaceKind>,
     pub loop_headers: FxHashMap<BasicBlockId, LoopInfo>,
-    pub match_info: FxHashMap<ExprId, MatchLoweringInfo>,
+    pub match_info: FxHashMap<ValueId, MatchLoweringInfo>,
 }
 
 impl<'db> MirBody<'db> {
@@ -66,6 +71,9 @@ impl<'db> MirBody<'db> {
             entry: BasicBlockId(0),
             blocks: Vec::new(),
             values: Vec::new(),
+            locals: Vec::new(),
+            param_locals: Vec::new(),
+            effect_param_locals: Vec::new(),
             expr_values: FxHashMap::default(),
             pat_address_space: FxHashMap::default(),
             loop_headers: FxHashMap::default(),
@@ -92,12 +100,22 @@ impl<'db> MirBody<'db> {
         id
     }
 
+    pub fn alloc_local(&mut self, data: LocalData<'db>) -> LocalId {
+        let id = LocalId(self.locals.len() as u32);
+        self.locals.push(data);
+        id
+    }
+
     pub fn value(&self, id: ValueId) -> &ValueData<'db> {
         &self.values[id.index()]
     }
 
-    pub fn match_info(&self, expr: ExprId) -> Option<&MatchLoweringInfo> {
-        self.match_info.get(&expr)
+    pub fn local(&self, id: LocalId) -> &LocalData<'db> {
+        &self.locals[id.index()]
+    }
+
+    pub fn match_info(&self, result: ValueId) -> Option<&MatchLoweringInfo> {
+        self.match_info.get(&result)
     }
 }
 
@@ -124,6 +142,22 @@ impl ValueId {
     pub fn index(self) -> usize {
         self.0 as usize
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct LocalId(pub u32);
+
+impl LocalId {
+    pub fn index(self) -> usize {
+        self.0 as usize
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct LocalData<'db> {
+    pub name: String,
+    pub ty: TyId<'db>,
+    pub is_mut: bool,
 }
 
 /// MIR projection using MIR value IDs for dynamic indices.
@@ -166,64 +200,56 @@ impl<'db> Default for BasicBlock<'db> {
 #[derive(Debug, Clone)]
 pub enum MirInst<'db> {
     /// A `let` binding statement.
-    Let {
+    LocalInit {
         stmt: StmtId,
-        pat: PatId,
+        local: LocalId,
         ty: Option<HirTypeId<'db>>,
         value: Option<ValueId>,
     },
     /// Desugared assignment statement.
-    Assign {
+    LocalSet {
         stmt: StmtId,
-        target: ExprId,
+        local: LocalId,
         value: ValueId,
     },
     /// Augmented assignment (`+=`, `-=`, ...).
-    AugAssign {
+    LocalAugAssign {
         stmt: StmtId,
-        target: ExprId,
+        local: LocalId,
         value: ValueId,
         op: ArithBinOp,
     },
     /// Store a value into a place (projection write).
-    Store {
-        expr: ExprId,
-        place: Place<'db>,
-        value: ValueId,
-    },
+    Store { place: Place<'db>, value: ValueId },
     /// Initialize an aggregate place (record/tuple/array/enum) from a set of projected writes.
     ///
     /// This is a higher-level form used during lowering so that codegen can decide the final
     /// layout/offsets for the target architecture while still preserving evaluation order
     /// (values are lowered before this instruction is emitted).
     InitAggregate {
-        expr: ExprId,
         place: Place<'db>,
         inits: Vec<(MirProjectionPath<'db>, ValueId)>,
     },
     /// Store an enum discriminant into a place.
     SetDiscriminant {
-        expr: ExprId,
         place: Place<'db>,
         variant: EnumVariant<'db>,
     },
     /// Plain expression statement (no bindings).
     Eval { stmt: StmtId, value: ValueId },
-    /// Synthetic expression emitted during lowering (no originating statement). This lets
-    /// expression lowering insert helper calls (e.g. alloc/store_field) while still keeping
-    /// the resulting value associated with its originating expression.
-    EvalExpr {
-        expr: ExprId,
-        value: ValueId,
-        /// Whether the value should be bound to a temporary for later reuse.
-        bind_value: bool,
-    },
+    /// Evaluate a value for side effects (no originating statement).
+    ///
+    /// This is used by lowering to enforce evaluation order in contexts where we don't have a
+    /// source statement ID (e.g. desugared constructs). Codegen should only emit something when
+    /// the value is effectful.
+    EvalValue { value: ValueId },
+    /// Bind a value into a temporary for later reuse.
+    ///
+    /// This instruction is keyed by `ValueId` (not `ExprId`) so later MIR transforms can move
+    /// and rewrite values without needing to preserve HIR node IDs.
+    BindValue { value: ValueId },
     /// Statement-only intrinsic (e.g. `mstore`) that produces no value.
-    IntrinsicStmt {
-        expr: ExprId,
-        op: IntrinsicOp,
-        args: Vec<ValueId>,
-    },
+    IntrinsicStmt { op: IntrinsicOp, args: Vec<ValueId> },
 }
 
 /// Control-flow terminating instruction.
@@ -263,7 +289,7 @@ pub struct SwitchTarget {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SwitchOrigin {
     None,
-    MatchExpr(ExprId),
+    MatchValue(ValueId),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -314,15 +340,43 @@ pub struct ValueData<'db> {
 
 #[derive(Debug, Clone)]
 pub enum ValueOrigin<'db> {
+    /// Unlowered HIR expression.
+    ///
+    /// This should not reach codegen; it exists as a construction-time placeholder for
+    /// expressions that require additional MIR lowering.
     Expr(ExprId),
+    /// Value produced by control-flow lowering (e.g. `if`/`match` expressions).
+    ///
+    /// Codegen should treat this as a value that is assigned along CFG edges (phi-like).
+    ControlFlowResult {
+        expr: ExprId,
+    },
+    /// Unit value `()`.
+    Unit,
+    /// Unary scalar operation.
+    Unary {
+        op: hir::hir_def::expr::UnOp,
+        inner: ValueId,
+    },
+    /// Binary scalar operation (arithmetic, comparison, logical).
+    ///
+    /// Indexing should be lowered into `PlaceLoad`/`PlaceRef` before codegen.
+    Binary {
+        op: hir::hir_def::expr::BinOp,
+        lhs: ValueId,
+        rhs: ValueId,
+    },
     Synthetic(SyntheticValue),
-    Pat(PatId),
-    Param(Func<'db>, usize),
-    /// Reference a named Yul binding in the current function scope.
-    BindingName(String),
+    /// Reference a MIR local (function parameter, effect parameter, or local variable).
+    Local(LocalId),
+    /// A first-class reference to a function item (compile-time only).
+    ///
+    /// This is not a runtime value, but can be consumed by intrinsics like
+    /// `code_region_offset/len` that refer to function code regions.
+    FuncItem(CodeRegionRoot<'db>),
     Call(CallOrigin<'db>),
     /// Call to a compiler intrinsic that should lower to a raw opcode, not a function call.
-    Intrinsic(IntrinsicValue<'db>),
+    Intrinsic(IntrinsicValue),
     /// Pointer arithmetic for accessing a nested struct field (no load, just offset).
     FieldPtr(FieldPtrOrigin),
     /// Load a value from a place (for primitives/scalars).
@@ -360,10 +414,16 @@ pub enum SyntheticValue {
     Int(BigUint),
     /// Boolean literal stored as `0` or `1`.
     Bool(bool),
+    /// Byte string literal encoded as a `0x...` word.
+    ///
+    /// This is a stopgap representation: the literal is emitted inline as a numeric constant.
+    Bytes(Vec<u8>),
 }
 
 #[derive(Debug, Clone)]
 pub struct MatchLoweringInfo {
+    /// The MIR value representing the match/if expression result.
+    pub result: ValueId,
     /// The scrutinee value (e.g. enum pointer) for this match expression.
     pub scrutinee: ValueId,
     /// Merge block selected when any arm continues execution; `None` when all arms terminate.
@@ -391,8 +451,7 @@ pub struct MatchArmLowering {
 /// Maps a variable name to the MIR value representing its extracted value.
 #[derive(Debug, Clone)]
 pub struct DecisionTreeBinding {
-    /// The variable name (e.g., "x", "y").
-    pub name: String,
+    pub local: LocalId,
     /// MIR value referencing the bound location (pointer/address expression).
     ///
     /// This is emitted as a `PlaceRef` value so downstream passes that care about
@@ -483,13 +542,11 @@ impl<'db> Place<'db> {
 }
 
 #[derive(Debug, Clone)]
-pub struct IntrinsicValue<'db> {
+pub struct IntrinsicValue {
     /// Which intrinsic operation this value represents.
     pub op: IntrinsicOp,
     /// Already-lowered argument `ValueId`s (still need converting to Yul expressions later).
     pub args: Vec<ValueId>,
-    /// Target metadata for intrinsics that refer to a function's code region.
-    pub code_region: Option<CodeRegionRoot<'db>>,
 }
 
 /// Identifies the root function for a code region along with its concrete instantiation.

@@ -5,17 +5,16 @@ input_file: tests/fixtures/storage.fe
 ---
 object "Coin" {
   code {
-    init()
     function init() {
       let v0 := datasize("Coin_deployed")
       let v1 := dataoffset("Coin_deployed")
       codecopy(0, v1, v0)
     }
+    init()
   }
 
   object "Coin_deployed" {
     code {
-      runtime()
       function abi_encode(value) {
         let v0 := 0
         mstore(v0, value)
@@ -87,8 +86,8 @@ object "Coin" {
             return(0, 0)
           }
           case 960555502 {
-            v1 := total_supply(v3)
-            abi_encode(v1)
+            let v16 := total_supply(v3)
+            abi_encode(v16)
             return(0, 0)
           }
           default {
@@ -157,6 +156,8 @@ object "Coin" {
           }
         ret := v0
       }
+      runtime()
+      return(0, 0)
     }
   }
 }

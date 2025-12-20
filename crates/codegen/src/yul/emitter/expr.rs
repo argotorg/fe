@@ -3,17 +3,18 @@
 use hir::analysis::ty::simplified_pattern::ConstructorKind;
 use hir::analysis::ty::ty_def::{PrimTy, TyBase, TyData, TyId};
 use hir::hir_def::{
-    CallableDef, Expr, ExprId, LitKind, Stmt, StmtId,
+    CallableDef,
     expr::{ArithBinOp, BinOp, CompBinOp, LogicalBinOp, UnOp},
 };
 use hir::projection::{IndexSource, Projection};
+use hir::span::LazySpan;
 use mir::{
     CallOrigin, ValueId, ValueOrigin,
     ir::{FieldPtrOrigin, Place, SyntheticValue},
     layout,
 };
 
-use crate::yul::{doc::YulDoc, state::BlockState};
+use crate::yul::state::BlockState;
 
 use super::{
     YulError,
@@ -22,6 +23,49 @@ use super::{
 };
 
 impl<'db> FunctionEmitter<'db> {
+    fn format_hir_expr_context(&self, expr: hir::hir_def::ExprId) -> String {
+        let Some(body) = self.mir_func.func.body(self.db) else {
+            return format!(
+                "func={} expr={expr:?} (missing HIR body)",
+                self.mir_func.symbol_name
+            );
+        };
+
+        let span = expr.span(body).resolve(self.db);
+        let span_context = if let Some(span) = span {
+            let path = span
+                .file
+                .path(self.db)
+                .as_ref()
+                .map(|p| p.to_string())
+                .unwrap_or_else(|| "<unknown file>".into());
+            let start: usize = u32::from(span.range.start()) as usize;
+            let text = span.file.text(self.db);
+            let (mut line, mut col) = (1usize, 1usize);
+            for byte in text.as_bytes().iter().take(start) {
+                if *byte == b'\n' {
+                    line += 1;
+                    col = 1;
+                } else {
+                    col += 1;
+                }
+            }
+            format!("{path}:{line}:{col}")
+        } else {
+            "<no span>".into()
+        };
+
+        let expr_data = match expr.data(self.db, body) {
+            hir::hir_def::Partial::Present(expr) => format!("{expr:?}"),
+            hir::hir_def::Partial::Absent => "<absent>".into(),
+        };
+
+        format!(
+            "func={} expr={expr:?} at {}: {}",
+            self.mir_func.symbol_name, span_context, expr_data
+        )
+    }
+
     /// Lowers a MIR `ValueId` into a Yul expression string.
     ///
     /// * `value_id` - Identifier selecting the MIR value.
@@ -40,88 +84,17 @@ impl<'db> FunctionEmitter<'db> {
         let value = self.mir_func.body.value(value_id);
         let value_ty = value.ty;
         match &value.origin {
-            ValueOrigin::Expr(expr_id) => {
-                if let Some(temp) = self.match_values.get(expr_id) {
-                    Ok(temp.clone())
-                } else {
-                    self.lower_expr(*expr_id, state)
-                }
-            }
-            ValueOrigin::BindingName(name) => Ok(state.resolve_name(name)),
-            ValueOrigin::Call(call) => self.lower_call_value(call, state),
-            ValueOrigin::Intrinsic(intr) => self.lower_intrinsic_value(intr, state),
-            ValueOrigin::Synthetic(synth) => self.lower_synthetic_value(synth),
-            ValueOrigin::FieldPtr(field_ptr) => self.lower_field_ptr(field_ptr, state),
-            ValueOrigin::PlaceLoad(place) => self.lower_place_load(place, value_ty, state),
-            ValueOrigin::PlaceRef(place) => self.lower_place_ref(place, state),
-            ValueOrigin::Alloc { .. } => Err(YulError::Unsupported(
-                "alloc values must be bound to a temporary".into(),
-            )),
-            _ => Err(YulError::Unsupported(
-                "only expression-derived values are supported".into(),
-            )),
-        }
-    }
-
-    /// Lowers a HIR expression into a Yul expression string.
-    ///
-    /// * `expr_id` - Expression to render.
-    /// * `state` - Binding state used for nested expressions.
-    ///
-    /// Returns the fully-lowered Yul expression.
-    pub(super) fn lower_expr(
-        &self,
-        expr_id: ExprId,
-        state: &BlockState,
-    ) -> Result<String, YulError> {
-        if let Some(temp) = self.expr_temps.get(&expr_id) {
-            return Ok(temp.clone());
-        }
-        if let Some(temp) = self.match_values.get(&expr_id) {
-            return Ok(temp.clone());
-        }
-        if let Some(value_id) = self.mir_func.body.expr_values.get(&expr_id) {
-            let value = self.mir_func.body.value(*value_id);
-            let value_ty = value.ty;
-            match &value.origin {
-                ValueOrigin::Call(call) => return self.lower_call_value(call, state),
-                ValueOrigin::Synthetic(synth) => {
-                    return self.lower_synthetic_value(synth);
-                }
-                ValueOrigin::FieldPtr(field_ptr) => {
-                    return self.lower_field_ptr(field_ptr, state);
-                }
-                ValueOrigin::Intrinsic(intr) => {
-                    return self.lower_intrinsic_value(intr, state);
-                }
-                ValueOrigin::PlaceLoad(place) => {
-                    return self.lower_place_load(place, value_ty, state);
-                }
-                ValueOrigin::PlaceRef(place) => {
-                    return self.lower_place_ref(place, state);
-                }
-                ValueOrigin::Alloc { .. } => {
-                    return Err(YulError::Unsupported(
-                        "alloc values must be bound to a temporary".into(),
-                    ));
-                }
-                // For Expr origins, we just continue to process the expression below
-                // to avoid infinite recursion when expr_values[expr_id] points to Expr(expr_id)
-                ValueOrigin::Expr(_) => {}
-                _ => {}
-            }
-        }
-
-        let expr = self.expect_expr(expr_id)?;
-        match expr {
-            Expr::Lit(LitKind::Int(int_id)) => Ok(int_id.data(self.db).to_string()),
-            Expr::Lit(LitKind::Bool(value)) => Ok(if *value { "1" } else { "0" }.into()),
-            Expr::Lit(LitKind::String(str_id)) => Ok(format!(
-                "0x{}",
-                hex::encode(str_id.data(self.db).as_bytes())
-            )),
-            Expr::Un(inner, op) => {
-                let value = self.lower_expr(*inner, state)?;
+            ValueOrigin::Expr(expr) => unreachable!(
+                "unlowered HIR expression reached codegen (MIR lowering should have failed earlier): {}",
+                self.format_hir_expr_context(*expr)
+            ),
+            ValueOrigin::ControlFlowResult { expr } => unreachable!(
+                "control-flow result value reached codegen without binding (MIR lowering should have inserted/used a temp): {}",
+                self.format_hir_expr_context(*expr)
+            ),
+            ValueOrigin::Unit => Ok("0".into()),
+            ValueOrigin::Unary { op, inner } => {
+                let value = self.lower_value(*inner, state)?;
                 match op {
                     UnOp::Minus => Ok(format!("sub(0, {value})")),
                     UnOp::Not => Ok(format!("iszero({value})")),
@@ -129,35 +102,11 @@ impl<'db> FunctionEmitter<'db> {
                     UnOp::BitNot => Ok(format!("not({value})")),
                 }
             }
-            Expr::Tuple(elems) => {
-                // Some tuple expressions (e.g. in generic templates) may survive MIR lowering.
-                // Emit a tuple expression directly as a fallback.
-                let mut lowered = Vec::with_capacity(elems.len());
-                for elem in elems {
-                    lowered.push(self.lower_expr(*elem, state)?);
-                }
-                Ok(format!("tuple({})", lowered.join(", ")))
-            }
-            Expr::Call(callee, call_args) => {
-                let callee_expr = self.lower_expr(*callee, state)?;
-                let mut lowered_args = Vec::with_capacity(call_args.len());
-                for arg in call_args {
-                    lowered_args.push(self.lower_expr(arg.expr, state)?);
-                }
-                if let Some(arg) = try_collapse_cast_shim(&callee_expr, &lowered_args)? {
-                    return Ok(arg);
-                }
-                if lowered_args.is_empty() {
-                    Ok(format!("{callee_expr}()"))
-                } else {
-                    Ok(format!("{callee_expr}({})", lowered_args.join(", ")))
-                }
-            }
-            Expr::Bin(lhs, rhs, bin_op) => match bin_op {
-                BinOp::Arith(op) => {
-                    let left = self.lower_expr(*lhs, state)?;
-                    let right = self.lower_expr(*rhs, state)?;
-                    match op {
+            ValueOrigin::Binary { op, lhs, rhs } => {
+                let left = self.lower_value(*lhs, state)?;
+                let right = self.lower_value(*rhs, state)?;
+                match op {
+                    BinOp::Arith(op) => match op {
                         ArithBinOp::Add => Ok(format!("add({left}, {right})")),
                         ArithBinOp::Sub => Ok(format!("sub({left}, {right})")),
                         ArithBinOp::Mul => Ok(format!("mul({left}, {right})")),
@@ -169,90 +118,50 @@ impl<'db> FunctionEmitter<'db> {
                         ArithBinOp::BitAnd => Ok(format!("and({left}, {right})")),
                         ArithBinOp::BitOr => Ok(format!("or({left}, {right})")),
                         ArithBinOp::BitXor => Ok(format!("xor({left}, {right})")),
+                    },
+                    BinOp::Comp(op) => {
+                        let expr = match op {
+                            CompBinOp::Eq => format!("eq({left}, {right})"),
+                            CompBinOp::NotEq => format!("iszero(eq({left}, {right}))"),
+                            CompBinOp::Lt => format!("lt({left}, {right})"),
+                            CompBinOp::LtEq => format!("iszero(gt({left}, {right}))"),
+                            CompBinOp::Gt => format!("gt({left}, {right})"),
+                            CompBinOp::GtEq => format!("iszero(lt({left}, {right}))"),
+                        };
+                        Ok(expr)
                     }
-                }
-                BinOp::Comp(op) => {
-                    let left = self.lower_expr(*lhs, state)?;
-                    let right = self.lower_expr(*rhs, state)?;
-                    let expr = match op {
-                        CompBinOp::Eq => format!("eq({left}, {right})"),
-                        CompBinOp::NotEq => format!("iszero(eq({left}, {right}))"),
-                        CompBinOp::Lt => format!("lt({left}, {right})"),
-                        CompBinOp::LtEq => format!("iszero(gt({left}, {right}))"),
-                        CompBinOp::Gt => format!("gt({left}, {right})"),
-                        CompBinOp::GtEq => format!("iszero(lt({left}, {right}))"),
-                    };
-                    Ok(expr)
-                }
-                BinOp::Logical(op) => {
-                    let left = self.lower_expr(*lhs, state)?;
-                    let right = self.lower_expr(*rhs, state)?;
-                    let func = match op {
-                        LogicalBinOp::And => "and",
-                        LogicalBinOp::Or => "or",
-                    };
-                    Ok(format!("{func}({left}, {right})"))
-                }
-                BinOp::Index => Err(YulError::Unsupported(
-                    "index expressions should be lowered to place loads before codegen".into(),
-                )),
-            },
-            Expr::Block(stmts) => {
-                if let Some(expr) = self.last_expr(stmts) {
-                    self.lower_expr(expr, state)
-                } else {
-                    Ok("0".into())
+                    BinOp::Logical(op) => {
+                        let func = match op {
+                            LogicalBinOp::And => "and",
+                            LogicalBinOp::Or => "or",
+                        };
+                        Ok(format!("{func}({left}, {right})"))
+                    }
+                    BinOp::Index => Err(YulError::Unsupported(
+                        "index expressions should be lowered to places before codegen".into(),
+                    )),
                 }
             }
-            Expr::Path(path) => {
-                let original = self.path_ident(*path).ok_or_else(|| {
-                    let pretty = path
-                        .to_opt()
-                        .map(|path| path.pretty_print(self.db))
-                        .unwrap_or_else(|| "_".to_string());
-                    YulError::Unsupported(format!("unsupported path expression `{pretty}`"))
-                })?;
-                Ok(state.resolve_name(&original))
-            }
-            Expr::Field(..) => {
-                // Field expressions should have been lowered to place loads/refs before codegen.
-                let ty = self.mir_func.typed_body.expr_ty(self.db, expr_id);
-                Err(YulError::Unsupported(format!(
-                    "field expressions should be lowered to place projections before codegen (expr type {})",
-                    ty.pretty_print(self.db)
-                )))
-            }
-            Expr::RecordInit(..) => {
-                if let Some(temp) = self.expr_temps.get(&expr_id) {
-                    Ok(temp.clone())
-                } else {
-                    Err(YulError::Unsupported(
-                        "record initializers should be lowered before codegen".into(),
-                    ))
-                }
-            }
-            other => Err(YulError::Unsupported(format!(
-                "only simple expressions are supported: {other:?}"
+            ValueOrigin::Local(local) => state
+                .resolve_local(*local)
+                .ok_or_else(|| YulError::Unsupported("unbound MIR local reached codegen".into())),
+            ValueOrigin::FuncItem(root) => Err(YulError::Unsupported(format!(
+                "function item has no runtime value (symbol={})",
+                root.symbol.as_deref().unwrap_or("<unresolved symbol>")
+            ))),
+            ValueOrigin::Call(call) => self.lower_call_value(call, state),
+            ValueOrigin::Intrinsic(intr) => self.lower_intrinsic_value(intr, state),
+            ValueOrigin::Synthetic(synth) => self.lower_synthetic_value(synth),
+            ValueOrigin::FieldPtr(field_ptr) => self.lower_field_ptr(field_ptr, state),
+            ValueOrigin::PlaceLoad(place) => self.lower_place_load(place, value_ty, state),
+            ValueOrigin::PlaceRef(place) => self.lower_place_ref(place, state),
+            ValueOrigin::Alloc { .. } => Err(YulError::Unsupported(format!(
+                "alloc values must be bound to a temporary (func={}, value=v{}, ty={})",
+                self.mir_func.symbol_name,
+                value_id.index(),
+                value_ty.pretty_print(self.db)
             ))),
         }
-    }
-
-    /// Returns the last expression statement in a block, if any.
-    ///
-    /// * `stmts` - Slice of statement IDs to inspect.
-    ///
-    /// Returns the expression ID for the trailing expression statement when present.
-    fn last_expr(&self, stmts: &[StmtId]) -> Option<ExprId> {
-        stmts.iter().rev().find_map(|stmt_id| {
-            let Ok(stmt) = self.expect_stmt(*stmt_id) else {
-                return None;
-            };
-            if let Stmt::Expr(expr) = stmt {
-                Some(*expr)
-            } else {
-                None
-            }
-        })
     }
 
     /// Lowers a MIR call into a Yul function invocation.
@@ -304,60 +213,8 @@ impl<'db> FunctionEmitter<'db> {
         match value {
             SyntheticValue::Int(int) => Ok(int.to_string()),
             SyntheticValue::Bool(flag) => Ok(if *flag { "1" } else { "0" }.into()),
+            SyntheticValue::Bytes(bytes) => Ok(format!("0x{}", hex::encode(bytes))),
         }
-    }
-
-    /// Lowers expressions that may require extra statements (e.g. `if`).
-    ///
-    /// * `expr_id` - Expression to lower.
-    /// * `docs` - Doc list to append emitted statements into.
-    /// * `state` - Binding state for allocating temporaries.
-    ///
-    /// Returns either the inline expression or the name of a temporary containing the result.
-    pub(super) fn lower_expr_with_statements(
-        &mut self,
-        expr_id: ExprId,
-        docs: &mut Vec<YulDoc>,
-        state: &mut BlockState,
-    ) -> Result<String, YulError> {
-        if let Some(temp) = self.expr_temps.get(&expr_id) {
-            return Ok(temp.clone());
-        }
-        if let Some(temp) = self.match_values.get(&expr_id) {
-            return Ok(temp.clone());
-        }
-
-        let expr = self.expect_expr(expr_id)?;
-        if let Expr::If(cond, then_expr, else_expr) = expr {
-            let temp = state.alloc_local();
-            docs.push(YulDoc::line(format!("let {temp} := 0")));
-            let cond_expr = self.lower_expr(*cond, state)?;
-            let then_expr_str = self.lower_expr(*then_expr, state)?;
-            docs.push(YulDoc::block(
-                format!("if {cond_expr} "),
-                vec![YulDoc::line(format!("{temp} := {then_expr_str}"))],
-            ));
-            if let Some(else_expr) = else_expr {
-                let else_expr_str = self.lower_expr(*else_expr, state)?;
-                docs.push(YulDoc::block(
-                    format!("if iszero({cond_expr}) "),
-                    vec![YulDoc::line(format!("{temp} := {else_expr_str}"))],
-                ));
-            }
-            Ok(temp)
-        } else {
-            self.lower_expr(expr_id, state)
-        }
-    }
-
-    /// Returns `true` when the given expression's type is the unit tuple.
-    ///
-    /// * `expr_id` - Expression identifier whose type should be tested.
-    ///
-    /// Returns `true` if the expression's type is the unit tuple.
-    pub(super) fn expr_is_unit(&self, expr_id: ExprId) -> bool {
-        let ty = self.mir_func.typed_body.expr_ty(self.db, expr_id);
-        ty.is_tuple(self.db) && ty.field_count(self.db) == 0
     }
 
     /// Lowers a FieldPtr (pointer arithmetic for nested struct access) into a Yul add expression.

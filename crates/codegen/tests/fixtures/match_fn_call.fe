@@ -1,3 +1,5 @@
+use core::intrinsic::calldataload
+
 fn example() -> u256 {
     match read_selector() {
         0x12345678 => 1,

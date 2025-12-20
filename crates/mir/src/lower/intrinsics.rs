@@ -4,6 +4,40 @@
 use super::*;
 
 impl<'db, 'a> MirBuilder<'db, 'a> {
+    pub(super) fn callable_def_for_call_expr(&self, expr: ExprId) -> Option<CallableDef<'db>> {
+        if let Some(callable) = self.typed_body.callable_expr(expr) {
+            return Some(callable.callable_def);
+        }
+
+        let (callee, _) = match expr.data(self.db, self.body) {
+            Partial::Present(Expr::Call(callee, args)) => (*callee, args),
+            Partial::Present(Expr::MethodCall(..)) => return None,
+            _ => return None,
+        };
+
+        let Partial::Present(Expr::Path(path)) = callee.data(self.db, self.body) else {
+            return None;
+        };
+        let path = path.to_opt()?;
+
+        let func_ty = match resolve_path(
+            self.db,
+            path,
+            self.body.scope(),
+            PredicateListId::empty_list(self.db),
+            true,
+        ) {
+            Ok(PathRes::Func(func_ty)) => func_ty,
+            _ => return None,
+        };
+
+        let (base, _) = func_ty.decompose_ty_app(self.db);
+        let TyData::TyBase(TyBase::Func(callable_def)) = base.data(self.db) else {
+            return None;
+        };
+        Some(*callable_def)
+    }
+
     /// Attempts to lower a statement-only intrinsic call (`mstore`, `codecopy`, etc.).
     ///
     /// # Parameters
@@ -32,7 +66,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
             self.set_current_terminator(term);
             return Some(value_id);
         }
-        self.push_inst_here(MirInst::IntrinsicStmt { expr, op, args });
+        self.push_inst_here(MirInst::IntrinsicStmt { op, args });
         Some(value_id)
     }
 
@@ -47,8 +81,8 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         &mut self,
         expr: ExprId,
     ) -> Option<(IntrinsicOp, Vec<ValueId>)> {
-        let callable = self.typed_body.callable_expr(expr)?;
-        let op = self.intrinsic_kind(callable.callable_def)?;
+        let callable_def = self.callable_def_for_call_expr(expr)?;
+        let op = self.intrinsic_kind(callable_def)?;
         if op.returns_value() {
             return None;
         }

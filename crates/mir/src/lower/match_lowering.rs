@@ -19,7 +19,7 @@ use super::*;
 struct MatchLoweringCtx<'db> {
     scrutinee_value: ValueId,
     scrutinee_ty: TyId<'db>,
-    match_expr: ExprId,
+    match_result: ValueId,
     /// Block for the wildcard arm (if any), used as default fallback.
     wildcard_arm_block: Option<BasicBlockId>,
 }
@@ -160,6 +160,28 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
             pat.data(self.db, self.body),
             Partial::Present(Pat::WildCard)
         )
+    }
+
+    fn pat_id_for_binding_name(&self, pat: PatId, name: &str) -> Option<PatId> {
+        let Partial::Present(pat_data) = pat.data(self.db, self.body) else {
+            return None;
+        };
+        match pat_data {
+            Pat::Path(path, _) => {
+                let ident = path.to_opt()?.as_ident(self.db)?;
+                (ident.data(self.db) == name).then_some(pat)
+            }
+            Pat::Tuple(pats) | Pat::PathTuple(_, pats) => pats
+                .iter()
+                .find_map(|inner| self.pat_id_for_binding_name(*inner, name)),
+            Pat::Record(_, fields) => fields
+                .iter()
+                .find_map(|field| self.pat_id_for_binding_name(field.pat, name)),
+            Pat::Or(lhs, rhs) => self
+                .pat_id_for_binding_name(*lhs, name)
+                .or_else(|| self.pat_id_for_binding_name(*rhs, name)),
+            Pat::WildCard | Pat::Rest | Pat::Lit(_) => None,
+        }
     }
 
     /// Lowers a match expression using decision trees for optimized codegen.
@@ -307,14 +329,24 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         for (arm_idx, arm_info) in arms_info.iter_mut().enumerate() {
             if let Some(bindings) = leaf_bindings.get(&arm_idx) {
                 for (name, path) in bindings {
-                    let (place, value) = self.lower_projection_path_for_binding(
-                        path,
-                        scrutinee_value,
-                        scrutinee_ty,
-                        match_expr,
-                    );
+                    let (place, value) =
+                        self.lower_projection_path_for_binding(path, scrutinee_value, scrutinee_ty);
+                    let Some(binding_pat) = self.pat_id_for_binding_name(arms[arm_idx].pat, name)
+                    else {
+                        continue;
+                    };
+                    let binding =
+                        self.typed_body
+                            .pat_binding(binding_pat)
+                            .unwrap_or(LocalBinding::Local {
+                                pat: binding_pat,
+                                is_mut: false,
+                            });
+                    let Some(local) = self.local_for_binding(binding) else {
+                        continue;
+                    };
                     arm_info.decision_tree_bindings.push(DecisionTreeBinding {
-                        name: name.clone(),
+                        local,
                         place,
                         value,
                     });
@@ -324,8 +356,9 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
 
         // Store match info for codegen
         self.builder.body.match_info.insert(
-            match_expr,
+            value,
             MatchLoweringInfo {
+                result: value,
                 scrutinee: scrutinee_value,
                 merge_block,
                 arms: arms_info,
@@ -335,7 +368,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         let ctx = MatchLoweringCtx {
             scrutinee_value,
             scrutinee_ty,
-            match_expr,
+            match_result: value,
             wildcard_arm_block,
         };
         let tree_entry = self.lower_decision_tree(&tree, &arm_blocks, &ctx);
@@ -461,11 +494,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
             unreachable
         });
 
-        // Always use MatchExpr origin for all switches in a decision tree match.
-        // This ensures emit_match_switch is called, which reuses the same match temp
-        // via match_values.entry(expr_id). All switches in the same match share
-        // the same temp variable for collecting results.
-        let origin = SwitchOrigin::MatchExpr(ctx.match_expr);
+        let origin = SwitchOrigin::MatchValue(ctx.match_result);
 
         self.move_to_block(test_block);
         self.switch(test_value, targets, default, origin);
@@ -577,7 +606,6 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         path: &ProjectionPath<'db>,
         scrutinee_value: ValueId,
         scrutinee_ty: TyId<'db>,
-        _match_expr: ExprId,
     ) -> (ValueId, ValueId) {
         // Empty path means we bind to the scrutinee itself
         if path.is_empty() {

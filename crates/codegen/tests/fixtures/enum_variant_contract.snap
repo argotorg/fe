@@ -5,18 +5,17 @@ input_file: tests/fixtures/enum_variant_contract.fe
 ---
 object "EnumContract" {
   code {
-    init()
     function init() {
       let v0 := datasize("EnumContract_deployed")
       let v1 := dataoffset("EnumContract_deployed")
       codecopy(0, v1, v0)
       return(0, v0)
     }
+    init()
   }
 
   object "EnumContract_deployed" {
     code {
-      runtime()
       function abi_encode_u256(value) {
         let v0 := 0
         mstore(v0, value)
@@ -107,6 +106,8 @@ object "EnumContract" {
           }
         }
       }
+      runtime()
+      return(0, 0)
     }
   }
 }

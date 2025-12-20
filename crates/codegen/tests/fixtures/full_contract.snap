@@ -5,17 +5,16 @@ input_file: tests/fixtures/full_contract.fe
 ---
 object "ShapeDispatcher" {
   code {
-    init()
     function init() {
       let v0 := datasize("ShapeDispatcher_deployed")
       let v1 := dataoffset("ShapeDispatcher_deployed")
       codecopy(0, v1, v0)
     }
+    init()
   }
 
   object "ShapeDispatcher_deployed" {
     code {
-      dispatch()
       function abi_encode(value) {
         let v0 := 0
         mstore(v0, value)
@@ -39,45 +38,22 @@ object "ShapeDispatcher" {
           mstore(add(v5, 32), add(mload(add(v5, 32)), 2))
           let v6 := point_area_mem(v5)
           abi_encode(v6)
-          let v7 := eq(v0, 2066295049)
-          if v7 {
-            let v8 := calldataload(4)
-            let v9 := mload(0x40)
-            if iszero(v9) {
-              v9 := 0x80
-            }
-            mstore(0x40, add(v9, 32))
-            mstore(v9, v8)
-            let v10 := v9
-            mstore(v10, add(mload(v10), 3))
-            v6 := square_area_mem(v10)
-            abi_encode(v6)
-            return(0, 0)
-          }
-          if iszero(v7) {
-            return(0, 0)
-          }
         }
-        if iszero(v1) {
-          let v11 := eq(v0, 2066295049)
-          if v11 {
-            let v12 := calldataload(4)
-            let v13 := mload(0x40)
-            if iszero(v13) {
-              v13 := 0x80
-            }
-            mstore(0x40, add(v13, 32))
-            mstore(v13, v12)
-            let v14 := v13
-            mstore(v14, add(mload(v14), 3))
-            let v15 := square_area_mem(v14)
-            abi_encode(v15)
-            return(0, 0)
+        let v7 := eq(v0, 2066295049)
+        if v7 {
+          let v8 := calldataload(4)
+          let v9 := mload(0x40)
+          if iszero(v9) {
+            v9 := 0x80
           }
-          if iszero(v11) {
-            return(0, 0)
-          }
+          mstore(0x40, add(v9, 32))
+          mstore(v9, v8)
+          let v10 := v9
+          mstore(v10, add(mload(v10), 3))
+          let v11 := square_area_mem(v10)
+          abi_encode(v11)
         }
+        return(0, 0)
       }
       function point_area_mem(self) -> ret {
         ret := mul(mload(self), mload(add(self, 32)))
@@ -86,6 +62,8 @@ object "ShapeDispatcher" {
         let v0 := mload(self)
         ret := mul(v0, v0)
       }
+      dispatch()
+      return(0, 0)
     }
   }
 }

@@ -5,18 +5,17 @@ input_file: tests/fixtures/nested_struct.fe
 ---
 object "NestedStruct" {
   code {
-    init()
     function init() {
       let v0 := datasize("NestedStruct_deployed")
       let v1 := dataoffset("NestedStruct_deployed")
       codecopy(0, v1, v0)
       return(0, v0)
     }
+    init()
   }
 
   object "NestedStruct_deployed" {
     code {
-      runtime()
       function abi_encode(value) {
         mstore(0, value)
         return(0, 32)
@@ -48,11 +47,11 @@ object "NestedStruct" {
         switch v2
           case 3091856072 {
             let v3 := calldataload(4)
-            write_inner(v3, v0)
+            write_inner(v3, v1)
             abi_encode(v3)
           }
           case 3513050253 {
-            abi_encode(read_inner(v0))
+            abi_encode(read_inner(v1))
           }
           case 2154770637 {
             let v4 := calldataload(4)
@@ -65,6 +64,8 @@ object "NestedStruct" {
       function write_inner(value, outer) {
         sstore(outer, value)
       }
+      runtime()
+      return(0, 0)
     }
   }
 }

@@ -45,7 +45,7 @@ fn init() {
 
 #[contract_runtime(NestedStruct)]
 fn runtime() {
-    let mut outer: Outer = core::effect_ref::StorPtr<Outer>::at_offset(0)
+    let mut outer = core::effect_ref::StorPtr<Outer>::at_offset(0)
     with (outer) {
         let selector = calldataload(0) >> 224
         match selector {

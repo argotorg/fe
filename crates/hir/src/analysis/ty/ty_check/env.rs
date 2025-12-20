@@ -1230,7 +1230,7 @@ impl<'db> LocalBinding<'db> {
         Self::Local { pat, is_mut }
     }
 
-    pub(super) fn is_mut(&self) -> bool {
+    pub fn is_mut(&self) -> bool {
         match self {
             LocalBinding::Local { is_mut, .. }
             | LocalBinding::Param { is_mut, .. }

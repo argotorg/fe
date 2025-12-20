@@ -5,6 +5,7 @@ use std::{
 
 use hir::analysis::{
     HirAnalysisDb,
+    diagnostics::SpannedHirAnalysisDb,
     ty::{
         fold::{TyFoldable, TyFolder},
         trait_def::resolve_trait_method,
@@ -16,11 +17,8 @@ use hir::hir_def::{CallableDef, Func, item::ItemKind, scope_graph::ScopeId};
 use rustc_hash::FxHashMap;
 
 use crate::{
-    CallOrigin, MirFunction, ValueOrigin,
-    dedup::deduplicate_mir,
-    ir::AddressSpaceKind,
-    ir::{EffectProviderKind, IntrinsicOp},
-    lower::lower_function,
+    CallOrigin, MirFunction, ValueOrigin, dedup::deduplicate_mir, ir::AddressSpaceKind,
+    ir::EffectProviderKind, lower::lower_function,
 };
 
 /// Walks generic MIR templates, cloning them per concrete substitution so
@@ -34,7 +32,7 @@ use crate::{
 /// type substitution directly on MIR so later passes do not need to reason
 /// about generics.
 pub(crate) fn monomorphize_functions<'db>(
-    db: &'db dyn HirAnalysisDb,
+    db: &'db dyn SpannedHirAnalysisDb,
     templates: Vec<MirFunction<'db>>,
 ) -> Vec<MirFunction<'db>> {
     let mut monomorphizer = Monomorphizer::new(db, templates);
@@ -45,7 +43,7 @@ pub(crate) fn monomorphize_functions<'db>(
 
 /// Worklist-driven builder that instantiates concrete MIR bodies on demand.
 struct Monomorphizer<'db> {
-    db: &'db dyn HirAnalysisDb,
+    db: &'db dyn SpannedHirAnalysisDb,
     templates: Vec<MirFunction<'db>>,
     func_index: FxHashMap<TemplateKey<'db>, usize>,
     func_defs: FxHashMap<Func<'db>, CallableDef<'db>>,
@@ -96,7 +94,7 @@ impl<'db> InstanceKey<'db> {
 
 impl<'db> Monomorphizer<'db> {
     /// Build the bookkeeping structures (template lookup + lowered FuncDef cache).
-    fn new(db: &'db dyn HirAnalysisDb, templates: Vec<MirFunction<'db>>) -> Self {
+    fn new(db: &'db dyn SpannedHirAnalysisDb, templates: Vec<MirFunction<'db>>) -> Self {
         let func_index = templates
             .iter()
             .enumerate()
@@ -189,7 +187,7 @@ impl<'db> Monomorphizer<'db> {
             sites
         };
 
-        let code_region_sites = {
+        let func_item_sites = {
             let function = &self.instances[func_idx];
             function
                 .body
@@ -197,14 +195,8 @@ impl<'db> Monomorphizer<'db> {
                 .iter()
                 .enumerate()
                 .filter_map(|(value_idx, value)| {
-                    if let ValueOrigin::Intrinsic(intr) = &value.origin
-                        && matches!(
-                            intr.op,
-                            IntrinsicOp::CodeRegionOffset | IntrinsicOp::CodeRegionLen
-                        )
-                        && let Some(target) = &intr.code_region
-                    {
-                        Some((value_idx, target.clone()))
+                    if let ValueOrigin::FuncItem(root) = &value.origin {
+                        Some((value_idx, root.clone()))
                     } else {
                         None
                     }
@@ -230,12 +222,11 @@ impl<'db> Monomorphizer<'db> {
             }
         }
 
-        for (value_idx, target) in code_region_sites {
+        for (value_idx, target) in func_item_sites {
             if let Some((_, symbol)) =
                 self.ensure_instance(target.func, &target.generic_args, None, &[])
-                && let ValueOrigin::Intrinsic(intr) =
+                && let ValueOrigin::FuncItem(target) =
                     &mut self.instances[func_idx].body.values[value_idx].origin
-                && let Some(target) = &mut intr.code_region
             {
                 target.symbol = Some(symbol);
             }
@@ -324,9 +315,7 @@ impl<'db> Monomorphizer<'db> {
                 call.callable = call.callable.clone().fold_with(self.db, &mut folder);
                 call.resolved_name = None;
             }
-            if let ValueOrigin::Intrinsic(intr) = &mut value.origin
-                && let Some(target) = &mut intr.code_region
-            {
+            if let ValueOrigin::FuncItem(target) = &mut value.origin {
                 target.generic_args = target
                     .generic_args
                     .iter()

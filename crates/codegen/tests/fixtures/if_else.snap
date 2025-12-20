@@ -1,16 +1,19 @@
 ---
 source: crates/codegen/tests/yul.rs
-assertion_line: 31
 expression: output
 input_file: tests/fixtures/if_else.fe
 ---
 function if_else(cond) -> ret {
   let v0 := 0
-  if cond {
-    v0 := 1
-  }
-  if iszero(cond) {
-    v0 := 2
-  }
+  switch cond
+    case 1 {
+      v0 := 1
+    }
+    case 0 {
+      v0 := 2
+    }
+    default {
+      v0 := 2
+    }
   ret := v0
 }

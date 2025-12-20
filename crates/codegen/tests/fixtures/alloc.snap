@@ -13,11 +13,8 @@ function alloc(size) -> ret {
   let v0 := mload(64)
   let v1 := eq(v0, 0)
   if v1 {
-    mstore(64, add(v0, size))
-    ret := v0
+    v0 := 128
   }
-  if iszero(v1) {
-    mstore(64, add(v0, size))
-    ret := v0
-  }
+  mstore(64, add(v0, size))
+  ret := v0
 }

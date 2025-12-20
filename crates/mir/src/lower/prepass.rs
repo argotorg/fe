@@ -145,10 +145,45 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         }
 
         let ty = self.typed_body.expr_ty(self.db, expr);
-        let value = self.builder.body.alloc_value(ValueData {
-            ty,
-            origin: ValueOrigin::Expr(expr),
-        });
+        let origin = match expr.data(self.db, self.body) {
+            Partial::Present(Expr::Lit(LitKind::Int(int_id))) => {
+                ValueOrigin::Synthetic(SyntheticValue::Int(int_id.data(self.db).clone()))
+            }
+            Partial::Present(Expr::Lit(LitKind::Bool(flag))) => {
+                ValueOrigin::Synthetic(SyntheticValue::Bool(*flag))
+            }
+            Partial::Present(Expr::Lit(LitKind::String(str_id))) => ValueOrigin::Synthetic(
+                SyntheticValue::Bytes(str_id.data(self.db).as_bytes().to_vec()),
+            ),
+            Partial::Present(Expr::Path(_)) => {
+                if let Some(binding) = self.typed_body.expr_prop(self.db, expr).binding
+                    && let Some(local) = self.local_for_binding(binding)
+                {
+                    ValueOrigin::Local(local)
+                } else if let Some(target) = self.code_region_target(expr) {
+                    ValueOrigin::FuncItem(target)
+                } else {
+                    ValueOrigin::Expr(expr)
+                }
+            }
+            Partial::Present(Expr::Un(inner, op)) => ValueOrigin::Unary {
+                op: *op,
+                inner: self.ensure_value(*inner),
+            },
+            Partial::Present(Expr::Bin(lhs, rhs, op)) => ValueOrigin::Binary {
+                op: *op,
+                lhs: self.ensure_value(*lhs),
+                rhs: self.ensure_value(*rhs),
+            },
+            Partial::Present(Expr::If(..) | Expr::Match(..)) => {
+                ValueOrigin::ControlFlowResult { expr }
+            }
+            Partial::Present(Expr::Block(..)) => ValueOrigin::Unit,
+            _ if ty.is_tuple(self.db) && ty.field_count(self.db) == 0 => ValueOrigin::Unit,
+            _ => ValueOrigin::Expr(expr),
+        };
+
+        let value = self.builder.body.alloc_value(ValueData { ty, origin });
         self.record_value_address_space(expr, value);
         value
     }

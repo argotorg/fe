@@ -5,18 +5,17 @@ input_file: tests/fixtures/storage_map_contract.fe
 ---
 object "BalanceMap" {
   code {
-    init()
     function init() {
       let v0 := datasize("BalanceMap_deployed")
       let v1 := dataoffset("BalanceMap_deployed")
       codecopy(0, v1, v0)
       return(0, v0)
     }
+    init()
   }
 
   object "BalanceMap_deployed" {
     code {
-      runtime()
       function abi_encode(value) {
         let v0 := 0
         mstore(v0, value)
@@ -110,6 +109,8 @@ object "BalanceMap" {
         mstore(ptr, self)
         ret := 32
       }
+      runtime()
+      return(0, 0)
     }
   }
 }

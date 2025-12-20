@@ -1,8 +1,7 @@
 //! Helpers for lowering MIR control-flow constructs into Yul blocks.
 
-use hir::hir_def::ExprId;
 use mir::{
-    BasicBlockId, LoopInfo, Terminator, ValueId, ValueOrigin,
+    BasicBlockId, LoopInfo, Terminator, ValueId,
     ir::{
         DecisionTreeBinding, MatchArmLowering, MatchLoweringInfo, SwitchOrigin, SwitchTarget,
         SwitchValue,
@@ -53,12 +52,12 @@ impl<'db> FunctionEmitter<'db> {
         for binding in bindings {
             // API stub: cache address expression for future reference semantics.
             if let Ok(place_expr) = self.lower_value(binding.place, state) {
-                state.insert_place_expr(binding.name.clone(), place_expr);
+                state.insert_place_expr(binding.local, place_expr);
             }
             let load_expr = self.lower_value(binding.value, state)?;
             let temp_name = state.alloc_local();
             docs.push(YulDoc::line(format!("let {temp_name} := {load_expr}")));
-            state.insert_binding(binding.name.clone(), temp_name);
+            state.insert_local(binding.local, temp_name);
         }
         Ok(())
     }
@@ -223,10 +222,7 @@ impl<'db> FunctionEmitter<'db> {
             docs.push(YulDoc::line("ret := 0"));
             return Ok(());
         }
-        let expr = match &value.origin {
-            ValueOrigin::Expr(expr_id) => self.lower_expr_with_statements(*expr_id, docs, state)?,
-            _ => self.lower_value(value_id, state)?,
-        };
+        let expr = self.lower_value(value_id, state)?;
         docs.push(YulDoc::line(format!("ret := {expr}")));
         Ok(())
     }
@@ -248,16 +244,68 @@ impl<'db> FunctionEmitter<'db> {
         ctx.docs
             .push(YulDoc::line(format!("let {cond_temp} := {cond_expr}")));
         let loop_ctx = ctx.loop_ctx;
+        let (join, emit_false_branch) = {
+            let then_term = &self
+                .mir_func
+                .body
+                .blocks
+                .get(then_bb.index())
+                .ok_or_else(|| YulError::Unsupported("invalid then block".into()))?
+                .terminator;
+            let else_term = &self
+                .mir_func
+                .body
+                .blocks
+                .get(else_bb.index())
+                .ok_or_else(|| YulError::Unsupported("invalid else block".into()))?
+                .terminator;
+
+            let then_target = match then_term {
+                Terminator::Goto { target } => Some(*target),
+                _ => None,
+            };
+            let else_target = match else_term {
+                Terminator::Goto { target } => Some(*target),
+                _ => None,
+            };
+
+            // Common patterns:
+            // - if-without-else: then -> goto else_bb, else_bb is the join.
+            // - if/else: then -> goto join, else -> goto join.
+            let join = if then_target == Some(else_bb) {
+                Some(else_bb)
+            } else if else_target == Some(then_bb) {
+                Some(then_bb)
+            } else if then_target.is_some_and(|then| else_target == Some(then)) {
+                then_target
+            } else {
+                None
+            };
+            let emit_false_branch = !(join == Some(else_bb) && then_target == Some(else_bb));
+            (join, emit_false_branch)
+        };
+
         let mut then_state = ctx.cloned_state();
         let mut else_state = ctx.cloned_state();
         let then_docs =
-            self.emit_block_internal(then_bb, loop_ctx, &mut then_state, ctx.stop_block)?;
+            self.emit_block_internal(then_bb, loop_ctx, &mut then_state, join.or(ctx.stop_block))?;
         ctx.docs
             .push(YulDoc::block(format!("if {cond_temp} "), then_docs));
-        let else_docs =
-            self.emit_block_internal(else_bb, loop_ctx, &mut else_state, ctx.stop_block)?;
-        ctx.docs
-            .push(YulDoc::block(format!("if iszero({cond_temp}) "), else_docs));
+        if emit_false_branch {
+            let else_docs = self.emit_block_internal(
+                else_bb,
+                loop_ctx,
+                &mut else_state,
+                join.or(ctx.stop_block),
+            )?;
+            ctx.docs
+                .push(YulDoc::block(format!("if iszero({cond_temp}) "), else_docs));
+        }
+
+        if let Some(join) = join {
+            let join_docs = self.emit_block_with_ctx(join, loop_ctx, ctx.state)?;
+            ctx.docs.extend(join_docs);
+        }
         Ok(())
     }
 
@@ -277,8 +325,8 @@ impl<'db> FunctionEmitter<'db> {
         ctx: &mut BlockEmitCtx<'_, '_>,
     ) -> Result<(), YulError> {
         match origin {
-            SwitchOrigin::MatchExpr(expr_id) => {
-                self.emit_match_switch(*expr_id, discr, targets, default, ctx)
+            SwitchOrigin::MatchValue(result) => {
+                self.emit_match_switch(*result, discr, targets, default, ctx)
             }
             SwitchOrigin::None => {
                 let discr_expr = self.lower_value(discr, ctx.state)?;
@@ -315,18 +363,20 @@ impl<'db> FunctionEmitter<'db> {
     /// * `ctx` - Shared block context containing current state/docs.
     fn emit_match_switch(
         &mut self,
-        expr_id: ExprId,
+        result: ValueId,
         discr: ValueId,
         targets: &[SwitchTarget],
         default: BasicBlockId,
         ctx: &mut BlockEmitCtx<'_, '_>,
     ) -> Result<(), YulError> {
         let discr_expr = self.lower_value(discr, ctx.state)?;
-        let match_info = self.mir_func.body.match_info(expr_id).ok_or_else(|| {
+        let match_info = self.mir_func.body.match_info(result).ok_or_else(|| {
             YulError::Unsupported("missing match lowering info for switch".into())
         })?;
         let merge_block = self.match_merge_block(match_info)?;
-        if self.expr_is_unit(expr_id) {
+        let result_ty = self.mir_func.body.value(match_info.result).ty;
+        let is_unit = result_ty.is_tuple(self.db) && result_ty.field_count(self.db) == 0;
+        if is_unit {
             ctx.docs.push(YulDoc::line(format!("switch {discr_expr}")));
             let loop_ctx = ctx.loop_ctx;
             for target in targets {
@@ -353,19 +403,16 @@ impl<'db> FunctionEmitter<'db> {
             return Ok(());
         }
 
-        // For decision tree matches, multiple switches share the same temp variable.
-        // Only emit `let` for the first switch; nested switches reuse the existing temp.
-        let is_first_switch = !self.match_values.contains_key(&expr_id);
         let temp = merge_block.map(|_| {
-            self.match_values
-                .entry(expr_id)
-                .or_insert_with(|| ctx.state.alloc_local())
-                .to_owned()
-        });
-
-        if is_first_switch && let Some(temp_name) = temp.as_ref() {
+            if let Some(existing) = ctx.state.value_temp(match_info.result.index()) {
+                return existing.clone();
+            }
+            let temp_name = ctx.state.alloc_local();
+            ctx.state
+                .insert_value_temp(match_info.result.index(), temp_name.clone());
             ctx.docs.push(YulDoc::line(format!("let {temp_name} := 0")));
-        }
+            temp_name
+        });
         ctx.docs.push(YulDoc::line(format!("switch {discr_expr}")));
 
         // Build a map from block ID to arm for looking up arm info from targets.
