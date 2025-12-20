@@ -13,6 +13,7 @@ function make_tuple() -> ret {
   mstore(add(v0, 8), 99)
   let v1 := v0
   ret := v1
+  leave
 }
 function access_tuple() -> ret {
   let v0 := mload(0x40)
@@ -24,5 +25,7 @@ function access_tuple() -> ret {
   mstore(add(v0, 32), 2)
   mstore(add(v0, 64), 3)
   let v1 := v0
-  ret := mload(add(v1, 32))
+  let v2 := mload(add(v1, 32))
+  ret := v2
+  leave
 }

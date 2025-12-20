@@ -1,7 +1,6 @@
 ---
-source: crates/hir/tests/desugar.rs
-expression: output
-input_file: test_files/desugar/erc20.fe
+source: crates/codegen/tests/yul.rs
+expression: desugared
 ---
 use core::prelude::*
 use core::storage_map::StorageMap

@@ -89,13 +89,47 @@ impl Erc20 {
     }
 }
 
+fn do_init() uses (mut erc20: Erc20) {
+    erc20.set_owner_once(owner: caller())
+}
+
+fn balance_of(addr: u256) -> u256 uses (erc20: Erc20) {
+    erc20.balances.get(key: addr)
+}
+
+fn allowance(owner: u256, spender: u256) -> u256 uses (erc20: Erc20) {
+    erc20.allowances.get(key: (owner, spender))
+}
+
+fn transfer(to: u256, amount: u256) -> u256 uses (mut erc20: Erc20) {
+    erc20.transfer(from: caller(), to: to, amount: amount)
+    1
+}
+
+fn approve(spender: u256, amount: u256) -> u256 uses (mut erc20: Erc20) {
+    erc20.approve(owner: caller(), spender: spender, value: amount)
+    1
+}
+
+fn transfer_from(from: u256, to: u256, amount: u256) -> u256 uses (mut erc20: Erc20) {
+    erc20.transfer_from(owner: from, to: to, amount: amount)
+    1
+}
+
+fn mint(to: u256, amount: u256) -> u256 uses (mut erc20: Erc20) {
+    erc20.mint(to: to, amount: amount)
+    1
+}
+
 // Entry points ----------------------------------------------------------
 
 #[contract_init(Erc20Contract)]
 fn init()
 {
     let mut erc20 = core::effect_ref::StorPtr<Erc20>::at_offset(0)
-    erc20.set_owner_once(owner: caller())
+    with (erc20) {
+        do_init()
+    }
     let len = code_region_len(runtime)
     let offset = code_region_offset(runtime)
     codecopy(dest: 0, offset, len)
@@ -105,58 +139,56 @@ fn init()
 #[contract_runtime(Erc20Contract)]
 fn runtime()
 {
-    let mut erc20: Erc20 = core::effect_ref::StorPtr<Erc20>::at_offset(0)
+    let mut erc20 = core::effect_ref::StorPtr<Erc20>::at_offset(0)
     let selector = calldataload(0) >> 224
-    match selector {
-        0x70a08231 => { // balanceOf(address)
-            let owner = calldataload(4)
-            abi_encode_u256(value: erc20.balance_of(addr: owner))
+    with (erc20) {
+        match selector {
+            0x70a08231 => { // balanceOf(address)
+                let owner = calldataload(4)
+                abi_encode_u256(value: balance_of(addr: owner))
+            }
+            0xdd62ed3e => { // allowance(address,address)
+                let owner = calldataload(4)
+                let spender = calldataload(36)
+                abi_encode_u256(value: allowance(owner: owner, spender: spender))
+            }
+            0x06fdde03 => { // name()
+                abi_encode_string(
+                    word: 0x4665546f6b656e00000000000000000000000000000000000000000000000000,
+                    len: 7,
+                )
+            }
+            0x95d89b41 => { // symbol()
+                abi_encode_string(
+                    word: 0x4645540000000000000000000000000000000000000000000000000000000000,
+                    len: 3,
+                )
+            }
+            0x313ce567 => { // decimals()
+                abi_encode_u256(value: 18)
+            }
+            0xa9059cbb => { // transfer(address,uint256)
+                let to = calldataload(4)
+                let amount = calldataload(36)
+                abi_encode_u256(value: transfer(to: to, amount: amount))
+            }
+            0x095ea7b3 => { // approve(address,uint256)
+                let spender = calldataload(4)
+                let amount = calldataload(36)
+                abi_encode_u256(value: approve(spender: spender, amount: amount))
+            }
+            0x23b872dd => { // transferFrom(address,address,uint256)
+                let from = calldataload(4)
+                let to = calldataload(36)
+                let amount = calldataload(68)
+                abi_encode_u256(value: transfer_from(from: from, to: to, amount: amount))
+            }
+            0x40c10f19 => { // mint(address,uint256)
+                let to = calldataload(4)
+                let amount = calldataload(36)
+                abi_encode_u256(value: mint(to: to, amount: amount))
+            }
+            _ => revert(0, 0)
         }
-        0xdd62ed3e => { // allowance(address,address)
-            let owner = calldataload(4)
-            let spender = calldataload(36)
-            abi_encode_u256(value: erc20.allowance(owner: owner, spender: spender))
-        }
-        0x06fdde03 => { // name()
-            abi_encode_string(
-                word: 0x4665546f6b656e00000000000000000000000000000000000000000000000000,
-                len: 7,
-            )
-        }
-        0x95d89b41 => { // symbol()
-            abi_encode_string(
-                word: 0x4645540000000000000000000000000000000000000000000000000000000000,
-                len: 3,
-            )
-        }
-        0x313ce567 => { // decimals()
-            abi_encode_u256(value: 18)
-        }
-        0xa9059cbb => { // transfer(address,uint256)
-            let to = calldataload(4)
-            let amount = calldataload(36)
-            erc20.transfer(from: caller(), to: to, amount: amount)
-            abi_encode_u256(value: 1)
-        }
-        0x095ea7b3 => { // approve(address,uint256)
-            let spender = calldataload(4)
-            let amount = calldataload(36)
-            erc20.approve(owner: caller(), spender: spender, value: amount)
-            abi_encode_u256(value: 1)
-        }
-        0x23b872dd => { // transferFrom(address,address,uint256)
-            let from = calldataload(4)
-            let to = calldataload(36)
-            let amount = calldataload(68)
-            erc20.transfer_from(owner: from, to: to, amount: amount)
-            abi_encode_u256(value: 1)
-        }
-        0x40c10f19 => { // mint(address,uint256)
-            let to = calldataload(4)
-            let amount = calldataload(36)
-            erc20.mint(to: to, amount: amount)
-            abi_encode_u256(value: 1)
-        }
-        _ => revert(0, 0)
     }
 }

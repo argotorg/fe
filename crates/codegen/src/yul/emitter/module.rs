@@ -3,7 +3,7 @@
 use driver::DriverDataBase;
 use hir::hir_def::TopLevelMod;
 use mir::ir::ContractFunctionKind;
-use mir::{MirFunction, lower_module};
+use mir::{MirFunction, layout, lower_module};
 use rustc_hash::{FxHashMap, FxHashSet};
 use std::{collections::VecDeque, sync::Arc};
 
@@ -34,7 +34,7 @@ pub fn emit_module_yul(
         .map(|func| {
             (
                 func.symbol_name.clone(),
-                func.func.has_explicit_return_ty(db),
+                !layout::is_zero_sized_ty(db, func.func.return_ty(db)),
             )
         })
         .collect();
@@ -81,23 +81,30 @@ pub fn emit_module_yul(
         let Some(contract_fn) = &func.contract_function else {
             continue;
         };
-        for value in &func.body.values {
-            if let mir::ValueOrigin::Intrinsic(intr) = &value.origin
-                && matches!(
-                    intr.op,
-                    mir::ir::IntrinsicOp::CodeRegionOffset | mir::ir::IntrinsicOp::CodeRegionLen
-                )
-                && intr.args.len() == 1
-                && let mir::ValueOrigin::FuncItem(target) = &func.body.value(intr.args[0]).origin
-                && let Some(symbol) = &target.symbol
-                && let Some(child_name) = symbol_to_contract.get(symbol)
-                && *child_name != contract_fn.contract_name
-            {
-                contract_edges
-                    .entry(contract_fn.contract_name.clone())
-                    .or_default()
-                    .insert(child_name.clone());
-                referenced_contracts.insert(child_name.clone());
+        for block in &func.body.blocks {
+            for inst in &block.insts {
+                if let mir::MirInst::Assign {
+                    rvalue: mir::Rvalue::Intrinsic { op, args },
+                    ..
+                } = inst
+                    && matches!(
+                        *op,
+                        mir::ir::IntrinsicOp::CodeRegionOffset
+                            | mir::ir::IntrinsicOp::CodeRegionLen
+                    )
+                    && args.len() == 1
+                    && let Some(arg) = args.first().copied()
+                    && let mir::ValueOrigin::FuncItem(target) = &func.body.value(arg).origin
+                    && let Some(symbol) = &target.symbol
+                    && let Some(child_name) = symbol_to_contract.get(symbol)
+                    && *child_name != contract_fn.contract_name
+                {
+                    contract_edges
+                        .entry(contract_fn.contract_name.clone())
+                        .or_default()
+                        .insert(child_name.clone());
+                    referenced_contracts.insert(child_name.clone());
+                }
             }
         }
     }
@@ -180,17 +187,24 @@ fn collect_code_region_roots(functions: &[MirFunction<'_>]) -> Vec<String> {
         if func.contract_function.is_some() {
             roots.insert(func.symbol_name.clone());
         }
-        for value in &func.body.values {
-            if let mir::ValueOrigin::Intrinsic(intr) = &value.origin
-                && matches!(
-                    intr.op,
-                    mir::ir::IntrinsicOp::CodeRegionOffset | mir::ir::IntrinsicOp::CodeRegionLen
-                )
-                && intr.args.len() == 1
-                && let mir::ValueOrigin::FuncItem(target) = &func.body.value(intr.args[0]).origin
-                && let Some(symbol) = &target.symbol
-            {
-                roots.insert(symbol.clone());
+        for block in &func.body.blocks {
+            for inst in &block.insts {
+                if let mir::MirInst::Assign {
+                    rvalue: mir::Rvalue::Intrinsic { op, args },
+                    ..
+                } = inst
+                    && matches!(
+                        *op,
+                        mir::ir::IntrinsicOp::CodeRegionOffset
+                            | mir::ir::IntrinsicOp::CodeRegionLen
+                    )
+                    && args.len() == 1
+                    && let Some(arg) = args.first().copied()
+                    && let mir::ValueOrigin::FuncItem(target) = &func.body.value(arg).origin
+                    && let Some(symbol) = &target.symbol
+                {
+                    roots.insert(symbol.clone());
+                }
             }
         }
     }
@@ -207,8 +221,21 @@ fn build_call_graph(functions: &[MirFunction<'_>]) -> FxHashMap<String, Vec<Stri
 
     for func in functions {
         let mut callees = FxHashSet::default();
-        for value in &func.body.values {
-            if let mir::ValueOrigin::Call(call) = &value.origin
+        for block in &func.body.blocks {
+            for inst in &block.insts {
+                if let mir::MirInst::Assign {
+                    rvalue: mir::Rvalue::Call(call),
+                    ..
+                } = inst
+                    && let Some(target) = &call.resolved_name
+                    && known.contains(target)
+                {
+                    callees.insert(target.clone());
+                }
+            }
+
+            if let mir::Terminator::TerminatingCall(mir::TerminatingCall::Call(call)) =
+                &block.terminator
                 && let Some(target) = &call.resolved_name
                 && known.contains(target)
             {

@@ -1,6 +1,5 @@
 ---
 source: crates/codegen/tests/yul.rs
-assertion_line: 31
 expression: output
 input_file: tests/fixtures/match_literal.fe
 ---
@@ -14,6 +13,7 @@ function match_bool(e) -> ret {
       v0 := 2
     }
   ret := v0
+  leave
 }
 function match_u8(e) -> ret {
   let v0 := 0
@@ -28,6 +28,7 @@ function match_u8(e) -> ret {
       v0 := 3
     }
   ret := v0
+  leave
 }
 function match_u16(e) -> ret {
   let v0 := 0
@@ -42,6 +43,7 @@ function match_u16(e) -> ret {
       v0 := 3
     }
   ret := v0
+  leave
 }
 function match_u32(e) -> ret {
   let v0 := 0
@@ -56,6 +58,7 @@ function match_u32(e) -> ret {
       v0 := 3
     }
   ret := v0
+  leave
 }
 function match_u64(e) -> ret {
   let v0 := 0
@@ -70,6 +73,7 @@ function match_u64(e) -> ret {
       v0 := 3
     }
   ret := v0
+  leave
 }
 function match_u128(e) -> ret {
   let v0 := 0
@@ -84,6 +88,7 @@ function match_u128(e) -> ret {
       v0 := 3
     }
   ret := v0
+  leave
 }
 function match_u256(e) -> ret {
   let v0 := 0
@@ -98,6 +103,7 @@ function match_u256(e) -> ret {
       v0 := 3
     }
   ret := v0
+  leave
 }
 function match_i8(e) -> ret {
   let v0 := 0
@@ -112,6 +118,7 @@ function match_i8(e) -> ret {
       v0 := 3
     }
   ret := v0
+  leave
 }
 function match_i16(e) -> ret {
   let v0 := 0
@@ -126,6 +133,7 @@ function match_i16(e) -> ret {
       v0 := 3
     }
   ret := v0
+  leave
 }
 function match_i32(e) -> ret {
   let v0 := 0
@@ -140,6 +148,7 @@ function match_i32(e) -> ret {
       v0 := 3
     }
   ret := v0
+  leave
 }
 function match_i64(e) -> ret {
   let v0 := 0
@@ -154,6 +163,7 @@ function match_i64(e) -> ret {
       v0 := 3
     }
   ret := v0
+  leave
 }
 function match_i128(e) -> ret {
   let v0 := 0
@@ -168,6 +178,7 @@ function match_i128(e) -> ret {
       v0 := 3
     }
   ret := v0
+  leave
 }
 function match_i256(e) -> ret {
   let v0 := 0
@@ -182,4 +193,5 @@ function match_i256(e) -> ret {
       v0 := 3
     }
   ret := v0
+  leave
 }

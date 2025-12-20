@@ -8,9 +8,6 @@ use std::cell::Cell;
 #[derive(Clone)]
 pub(super) struct BlockState {
     locals: FxHashMap<LocalId, String>,
-    /// API stub: mapping from Fe bindings to the Yul expression representing their address.
-    /// Populated for future reference semantics support.
-    place_exprs: FxHashMap<LocalId, String>,
     next_local: Rc<Cell<usize>>,
     /// Mapping from MIR ValueId index to Yul temp name for values bound in this scope.
     value_temps: FxHashMap<usize, String>,
@@ -21,7 +18,6 @@ impl BlockState {
     pub(super) fn new() -> Self {
         Self {
             locals: FxHashMap::default(),
-            place_exprs: FxHashMap::default(),
             next_local: Rc::new(Cell::new(0)),
             value_temps: FxHashMap::default(),
         }
@@ -51,21 +47,9 @@ impl BlockState {
         name
     }
 
-    /// Caches a Yul expression that represents the address for a local.
-    pub(super) fn insert_place_expr(&mut self, local: LocalId, expr: String) {
-        self.place_exprs.insert(local, expr);
-    }
-
     /// Returns the known Yul name for a local, if it exists.
     pub(super) fn local(&self, local: LocalId) -> Option<String> {
         self.locals.get(&local).cloned()
-    }
-
-    /// API stub: returns the Yul address expression for a binding, if cached.
-    /// For future reference semantics support.
-    #[allow(dead_code)]
-    pub(super) fn resolve_place(&self, local: LocalId) -> Option<String> {
-        self.place_exprs.get(&local).cloned()
     }
 
     /// Resolves a local to its lowered Yul name/expression.

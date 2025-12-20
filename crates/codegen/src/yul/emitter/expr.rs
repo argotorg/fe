@@ -82,7 +82,6 @@ impl<'db> FunctionEmitter<'db> {
             return Ok(temp.clone());
         }
         let value = self.mir_func.body.value(value_id);
-        let value_ty = value.ty;
         match &value.origin {
             ValueOrigin::Expr(expr) => unreachable!(
                 "unlowered HIR expression reached codegen (MIR lowering should have failed earlier): {}",
@@ -144,23 +143,25 @@ impl<'db> FunctionEmitter<'db> {
             }
             ValueOrigin::Local(local) => state
                 .resolve_local(*local)
-                .ok_or_else(|| YulError::Unsupported("unbound MIR local reached codegen".into())),
+                .ok_or_else(|| {
+                    let local_data = self.mir_func.body.local(*local);
+                    let is_param = self.mir_func.body.param_locals.contains(local);
+                    let is_effect = self.mir_func.body.effect_param_locals.contains(local);
+                    YulError::Unsupported(format!(
+                        "unbound MIR local reached codegen (func={}, local=l{} `{}`, ty={}, param={is_param}, effect={is_effect})",
+                        self.mir_func.symbol_name,
+                        local.index(),
+                        local_data.name,
+                        local_data.ty.pretty_print(self.db),
+                    ))
+                }),
             ValueOrigin::FuncItem(root) => Err(YulError::Unsupported(format!(
                 "function item has no runtime value (symbol={})",
                 root.symbol.as_deref().unwrap_or("<unresolved symbol>")
             ))),
-            ValueOrigin::Call(call) => self.lower_call_value(call, state),
-            ValueOrigin::Intrinsic(intr) => self.lower_intrinsic_value(intr, state),
             ValueOrigin::Synthetic(synth) => self.lower_synthetic_value(synth),
             ValueOrigin::FieldPtr(field_ptr) => self.lower_field_ptr(field_ptr, state),
-            ValueOrigin::PlaceLoad(place) => self.lower_place_load(place, value_ty, state),
             ValueOrigin::PlaceRef(place) => self.lower_place_ref(place, state),
-            ValueOrigin::Alloc { .. } => Err(YulError::Unsupported(format!(
-                "alloc values must be bound to a temporary (func={}, value=v{}, ty={})",
-                self.mir_func.symbol_name,
-                value_id.index(),
-                value_ty.pretty_print(self.db)
-            ))),
         }
     }
 
@@ -251,6 +252,9 @@ impl<'db> FunctionEmitter<'db> {
         loaded_ty: TyId<'db>,
         state: &BlockState,
     ) -> Result<String, YulError> {
+        if layout::ty_size_bytes(self.db, loaded_ty).is_some_and(|size| size == 0) {
+            return Ok("0".into());
+        }
         let addr = self.lower_place_address(place, state)?;
         let raw_load = match place.address_space {
             mir::ir::AddressSpaceKind::Memory => format!("mload({addr})"),

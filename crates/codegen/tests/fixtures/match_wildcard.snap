@@ -5,7 +5,8 @@ input_file: tests/fixtures/match_wildcard.fe
 ---
 function match_with_wildcard(c) -> ret {
   let v0 := 0
-  switch mload(c)
+  let v1 := mload(c)
+  switch v1
     case 0 {
       v0 := 1
     }
@@ -13,6 +14,7 @@ function match_with_wildcard(c) -> ret {
       v0 := 0
     }
   ret := v0
+  leave
 }
 function wildcard_not_last(x) -> ret {
   let v0 := 0
@@ -24,10 +26,12 @@ function wildcard_not_last(x) -> ret {
       v0 := 99
     }
   ret := v0
+  leave
 }
 function multiple_before_wildcard(c) -> ret {
   let v0 := 0
-  switch mload(c)
+  let v1 := mload(c)
+  switch v1
     case 0 {
       v0 := 1
     }
@@ -38,4 +42,5 @@ function multiple_before_wildcard(c) -> ret {
       v0 := 3
     }
   ret := v0
+  leave
 }

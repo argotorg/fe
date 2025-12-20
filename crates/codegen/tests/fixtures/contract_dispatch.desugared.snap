@@ -1,0 +1,14 @@
+---
+source: crates/codegen/tests/yul.rs
+expression: desugared
+---
+use core::prelude::*
+
+fn emit_code() -> u64 {
+    1
+}
+
+#[contract_runtime(MinimalDispatcher)]
+fn dispatch() {
+    let _value: u64 = emit_code()
+}

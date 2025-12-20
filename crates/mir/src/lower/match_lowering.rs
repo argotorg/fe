@@ -19,56 +19,11 @@ use super::*;
 struct MatchLoweringCtx<'db> {
     scrutinee_value: ValueId,
     scrutinee_ty: TyId<'db>,
-    match_result: ValueId,
     /// Block for the wildcard arm (if any), used as default fallback.
     wildcard_arm_block: Option<BasicBlockId>,
 }
 
 impl<'db, 'a> MirBuilder<'db, 'a> {
-    /// Extracts a literal `SwitchValue` from a pattern when possible.
-    ///
-    /// # Parameters
-    /// - `pat`: Pattern id to inspect.
-    ///
-    /// # Returns
-    /// Literal switch value or `None` when not supported.
-    pub(super) fn literal_pat_value(&self, pat: PatId) -> Option<SwitchValue> {
-        let Partial::Present(pat_data) = pat.data(self.db, self.body) else {
-            return None;
-        };
-
-        match pat_data {
-            Pat::Lit(lit) => {
-                let Partial::Present(lit) = lit else {
-                    return None;
-                };
-                match lit {
-                    LitKind::Int(value) => {
-                        let ty = self.typed_body.pat_ty(self.db, pat);
-                        let bits = self.int_type_bits(ty)?;
-                        if bits > 256 {
-                            return None;
-                        }
-                        let literal = value.data(self.db).clone();
-                        let literal_bits = literal.bits();
-                        if literal_bits > bits as u64 {
-                            return None;
-                        }
-                        Some(SwitchValue::Int(literal))
-                    }
-                    LitKind::Bool(value) => {
-                        if !self.typed_body.pat_ty(self.db, pat).is_bool(self.db) {
-                            return None;
-                        }
-                        Some(SwitchValue::Bool(*value))
-                    }
-                    _ => None,
-                }
-            }
-            _ => None,
-        }
-    }
-
     /// Resolves an enum variant path within a scope.
     ///
     /// # Parameters
@@ -94,58 +49,6 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
             PathRes::EnumVariant(variant) => Some(variant),
             _ => None,
         }
-    }
-
-    /// Converts enum patterns into `MatchArmPattern` when resolvable.
-    ///
-    /// # Parameters
-    /// - `pat`: Pattern id to inspect.
-    ///
-    /// # Returns
-    /// Enum pattern info or `None` when not an enum pattern.
-    pub(super) fn enum_pat_value(&self, pat: PatId) -> Option<MatchArmPattern> {
-        let Partial::Present(pat_data) = pat.data(self.db, self.body) else {
-            return None;
-        };
-        let body = self.typed_body.body()?;
-        let scope = body.scope();
-
-        if let Pat::Path(path, ..) = pat_data
-            && let Some(path) = path.to_opt()
-            && let Some(variant) = self.resolve_enum_variant(path, scope)
-        {
-            let enum_name = variant
-                .enum_(self.db)
-                .name(self.db)
-                .to_opt()
-                .unwrap()
-                .data(self.db)
-                .to_string();
-            return Some(MatchArmPattern::Enum {
-                variant_index: variant.variant.idx as u64,
-                enum_name,
-            });
-        }
-
-        if let Pat::PathTuple(path, _elem_pats) = pat_data
-            && let Some(path) = path.to_opt()
-            && let Some(variant) = self.resolve_enum_variant(path, scope)
-        {
-            let enum_name = variant
-                .enum_(self.db)
-                .name(self.db)
-                .to_opt()
-                .unwrap()
-                .data(self.db)
-                .to_string();
-
-            return Some(MatchArmPattern::Enum {
-                variant_index: variant.variant.idx as u64,
-                enum_name,
-            });
-        }
-
-        None
     }
 
     /// Returns `true` if the pattern is a wildcard (`_`).
@@ -204,6 +107,9 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
             return value;
         };
 
+        let match_ty = self.typed_body.expr_ty(self.db, match_expr);
+        let produces_value = !self.is_unit_ty(match_ty) && !match_ty.is_never(self.db);
+
         // Lower the scrutinee to get its value.
         self.move_to_block(block);
         let scrutinee_value = self.lower_expr(scrutinee);
@@ -259,80 +165,33 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         // Build decision tree from pattern matrix
         let tree = build_decision_tree(self.db, &matrix);
 
-        // Pre-lower each arm body to determine termination status and create blocks
+        let leaf_bindings = self.collect_leaf_bindings(&tree);
+
+        let result_local = produces_value.then(|| {
+            let local = self.alloc_temp_local(match_ty, true, "match");
+            self.builder.body.values[value.index()].origin = ValueOrigin::Local(local);
+            local
+        });
+        if !produces_value {
+            self.builder.body.values[value.index()].origin = ValueOrigin::Unit;
+        }
+
+        // Pre-lower each arm body to determine termination status and create blocks.
         let mut merge_block: Option<BasicBlockId> = None;
-        let mut arm_blocks = Vec::with_capacity(arms.len());
-        let mut arm_values = Vec::with_capacity(arms.len());
+        let mut arm_blocks: Vec<BasicBlockId> = Vec::with_capacity(arms.len());
+        let mut wildcard_arm_block = None;
         for arm in arms {
             let arm_entry = self.alloc_block();
             self.move_to_block(arm_entry);
-            let arm_value = self.lower_expr(arm.body);
-            let arm_end = self.current_block();
-            let terminates = arm_end.is_none();
-            if let Some(end_block) = arm_end {
-                let merge = match merge_block {
-                    Some(block) => block,
-                    None => {
-                        let block = self.alloc_block();
-                        merge_block = Some(block);
-                        block
-                    }
-                };
-                self.move_to_block(end_block);
-                self.goto(merge);
+
+            if wildcard_arm_block.is_none() && self.is_wildcard_pat(arm.pat) {
+                wildcard_arm_block = Some(arm_entry);
             }
-            arm_values.push(if terminates { None } else { Some(arm_value) });
-            arm_blocks.push((arm_entry, terminates));
-        }
 
-        // Find the wildcard arm block (if any) for use as default fallback.
-        // This ensures that even for complete matches, the default routes to the
-        // wildcard arm rather than unreachable.
-        let wildcard_arm_block = arms
-            .iter()
-            .zip(arm_blocks.iter())
-            .find(|(arm, _)| self.is_wildcard_pat(arm.pat))
-            .map(|(_, (block_id, _))| *block_id);
-
-        // Collect arm info for codegen (needed for match_info)
-        let mut arms_info: Vec<MatchArmLowering> = arms
-            .iter()
-            .zip(arm_blocks.iter())
-            .zip(arm_values.iter())
-            .map(|((arm, (block_id, terminates)), value)| {
-                // Determine the pattern type for codegen
-                let pattern = if self.is_wildcard_pat(arm.pat) {
-                    MatchArmPattern::Wildcard
-                } else if let Some(lit_val) = self.literal_pat_value(arm.pat) {
-                    MatchArmPattern::Literal(lit_val)
-                } else if let Some(enum_pat) = self.enum_pat_value(arm.pat) {
-                    enum_pat
-                } else {
-                    // Fallback to wildcard for unsupported patterns
-                    MatchArmPattern::Wildcard
-                };
-
-                MatchArmLowering {
-                    pattern,
-                    body: arm.body,
-                    block: *block_id,
-                    terminates: *terminates,
-                    decision_tree_bindings: Vec::new(),
-                    value: *value,
-                }
-            })
-            .collect();
-
-        // Populate decision tree bindings for tuple/struct/enum patterns.
-        // Decision tree bindings handle all patterns uniformly, including nested enums.
-        let leaf_bindings = self.collect_leaf_bindings(&tree);
-        for (arm_idx, arm_info) in arms_info.iter_mut().enumerate() {
+            let arm_idx = arm_blocks.len();
             if let Some(bindings) = leaf_bindings.get(&arm_idx) {
                 for (name, path) in bindings {
-                    let (place, value) =
-                        self.lower_projection_path_for_binding(path, scrutinee_value, scrutinee_ty);
-                    let Some(binding_pat) = self.pat_id_for_binding_name(arms[arm_idx].pat, name)
-                    else {
+                    let Some(binding_pat) = self.pat_id_for_binding_name(arm.pat, name) else {
                         continue;
                     };
                     let binding =
@@ -345,36 +204,56 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                     let Some(local) = self.local_for_binding(binding) else {
                         continue;
                     };
-                    arm_info.decision_tree_bindings.push(DecisionTreeBinding {
-                        local,
-                        place,
-                        value,
+                    let (_place, value_id) =
+                        self.lower_projection_path_for_binding(path, scrutinee_value, scrutinee_ty);
+                    self.push_inst_here(MirInst::Assign {
+                        stmt: None,
+                        dest: Some(local),
+                        rvalue: crate::ir::Rvalue::Value(value_id),
                     });
                 }
             }
-        }
 
-        // Store match info for codegen
-        self.builder.body.match_info.insert(
-            value,
-            MatchLoweringInfo {
-                result: value,
-                scrutinee: scrutinee_value,
-                merge_block,
-                arms: arms_info,
-            },
-        );
+            let arm_value = self.lower_expr(arm.body);
+            let arm_end = self.current_block();
+            if let Some(end_block) = arm_end {
+                let merge = match merge_block {
+                    Some(block) => block,
+                    None => {
+                        let block = self.alloc_block();
+                        merge_block = Some(block);
+                        block
+                    }
+                };
+                self.move_to_block(end_block);
+                if let Some(result_local) = result_local {
+                    self.push_inst_here(MirInst::Assign {
+                        stmt: None,
+                        dest: Some(result_local),
+                        rvalue: crate::ir::Rvalue::Value(arm_value),
+                    });
+                }
+                self.goto(merge);
+            }
+            arm_blocks.push(arm_entry);
+        }
 
         let ctx = MatchLoweringCtx {
             scrutinee_value,
             scrutinee_ty,
-            match_result: value,
             wildcard_arm_block,
         };
         let tree_entry = self.lower_decision_tree(&tree, &arm_blocks, &ctx);
 
         // Set scrut_block to jump to the tree entry
         self.move_to_block(scrut_block);
+        if let Some(result_local) = result_local {
+            self.push_inst_here(MirInst::Assign {
+                stmt: None,
+                dest: Some(result_local),
+                rvalue: crate::ir::Rvalue::ZeroInit,
+            });
+        }
         self.goto(tree_entry);
 
         if let Some(merge) = merge_block {
@@ -395,7 +274,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
     fn lower_decision_tree(
         &mut self,
         tree: &DecisionTree<'db>,
-        arm_blocks: &[(BasicBlockId, bool)],
+        arm_blocks: &[BasicBlockId],
         ctx: &MatchLoweringCtx<'db>,
     ) -> BasicBlockId {
         match tree {
@@ -410,19 +289,18 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
     fn lower_leaf_node(
         &mut self,
         leaf: &LeafNode<'db>,
-        arm_blocks: &[(BasicBlockId, bool)],
+        arm_blocks: &[BasicBlockId],
     ) -> BasicBlockId {
         // Return the pre-created block for this arm
         // The arm body was already lowered during the pre-lowering phase
-        let (arm_block, _terminates) = arm_blocks[leaf.arm_index];
-        arm_block
+        arm_blocks[leaf.arm_index]
     }
 
     /// Lowers a switch node (test and branch) to MIR basic blocks.
     fn lower_switch_node(
         &mut self,
         switch_node: &SwitchNode<'db>,
-        arm_blocks: &[(BasicBlockId, bool)],
+        arm_blocks: &[BasicBlockId],
         ctx: &MatchLoweringCtx<'db>,
     ) -> BasicBlockId {
         // For Type constructors (tuples/structs), there's no discriminant to switch on.
@@ -455,8 +333,10 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         }
 
         let test_block = self.alloc_block();
+        self.move_to_block(test_block);
 
-        // Extract the value to test based on the occurrence path
+        // Extract the value to test based on the occurrence path.
+        // Any scalar loads needed to compute the test value are emitted into `test_block`.
         let test_value = self.lower_occurrence(
             &switch_node.occurrence,
             ctx.scrutinee_value,
@@ -494,10 +374,8 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
             unreachable
         });
 
-        let origin = SwitchOrigin::MatchValue(ctx.match_result);
-
         self.move_to_block(test_block);
-        self.switch(test_value, targets, default, origin);
+        self.switch(test_value, targets, default);
 
         test_block
     }
@@ -512,6 +390,31 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         scrutinee_value: ValueId,
         scrutinee_ty: TyId<'db>,
     ) -> ValueId {
+        fn alloc_local_value<'db>(
+            builder: &mut MirBuilder<'db, '_>,
+            ty: TyId<'db>,
+            local: LocalId,
+        ) -> ValueId {
+            builder.builder.body.alloc_value(ValueData {
+                ty,
+                origin: ValueOrigin::Local(local),
+            })
+        }
+
+        fn emit_load_to_temp<'db>(
+            builder: &mut MirBuilder<'db, '_>,
+            ty: TyId<'db>,
+            place: Place<'db>,
+        ) -> ValueId {
+            let dest = builder.alloc_temp_local(ty, false, "load");
+            builder.push_inst_here(MirInst::Assign {
+                stmt: None,
+                dest: Some(dest),
+                rvalue: crate::ir::Rvalue::Load { place },
+            });
+            alloc_local_value(builder, ty, dest)
+        }
+
         // Helper to check if a type is an enum
         fn is_enum_type(db: &dyn HirAnalysisDb, ty: TyId<'_>) -> bool {
             let (base_ty, _) = ty.decompose_ty_app(db);
@@ -534,10 +437,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                 MirProjectionPath::from_projection(MirProjection::Discriminant),
                 addr_space,
             );
-            return self.builder.body.alloc_value(ValueData {
-                ty: self.u256_ty(),
-                origin: ValueOrigin::PlaceLoad(place),
-            });
+            return emit_load_to_temp(self, self.u256_ty(), place);
         }
 
         // Compute the result type of the projection
@@ -556,28 +456,24 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
             addr_space,
         );
 
-        // Use PlaceRef for aggregates (returns pointer), PlaceLoad for scalars (loads value)
-        let origin = if is_aggregate {
-            ValueOrigin::PlaceRef(place)
+        // Use PlaceRef for aggregates (returns pointer), explicit load for scalars.
+        let current_value = if is_aggregate {
+            let value_id = self.builder.body.alloc_value(ValueData {
+                ty: result_ty,
+                origin: ValueOrigin::PlaceRef(place),
+            });
+            self.value_address_space.insert(value_id, addr_space);
+            value_id
         } else {
-            ValueOrigin::PlaceLoad(place)
+            emit_load_to_temp(self, result_ty, place)
         };
-
-        let current_value = self.builder.body.alloc_value(ValueData {
-            ty: result_ty,
-            origin,
-        });
-        self.value_address_space.insert(current_value, addr_space);
 
         // For enums, extract the discriminant for switching
         if is_enum_type(self.db, result_ty) {
             let mut discr_path = self.mir_projection_from_decision_path(path);
             discr_path.push(MirProjection::Discriminant);
             let place = Place::new(scrutinee_value, discr_path, addr_space);
-            return self.builder.body.alloc_value(ValueData {
-                ty: self.u256_ty(),
-                origin: ValueOrigin::PlaceLoad(place),
-            });
+            return emit_load_to_temp(self, self.u256_ty(), place);
         }
 
         current_value
@@ -607,6 +503,17 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         scrutinee_value: ValueId,
         scrutinee_ty: TyId<'db>,
     ) -> (ValueId, ValueId) {
+        fn alloc_local_value<'db>(
+            builder: &mut MirBuilder<'db, '_>,
+            ty: TyId<'db>,
+            local: LocalId,
+        ) -> ValueId {
+            builder.builder.body.alloc_value(ValueData {
+                ty,
+                origin: ValueOrigin::Local(local),
+            })
+        }
+
         // Empty path means we bind to the scrutinee itself
         if path.is_empty() {
             return (scrutinee_value, scrutinee_value);
@@ -636,17 +543,18 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         });
         self.value_address_space.insert(place_ref_id, addr_space);
 
-        // Use PlaceRef for aggregates (pointer only), PlaceLoad for scalars (load value).
+        // Use PlaceRef for aggregates (pointer only), explicit load for scalars.
         // When aggregate, re-use the place ref as the "value".
         let value_id = if is_aggregate {
             place_ref_id
         } else {
-            let loaded_id = self.builder.body.alloc_value(ValueData {
-                ty: final_ty,
-                origin: ValueOrigin::PlaceLoad(place),
+            let dest = self.alloc_temp_local(final_ty, false, "load");
+            self.push_inst_here(MirInst::Assign {
+                stmt: None,
+                dest: Some(dest),
+                rvalue: crate::ir::Rvalue::Load { place },
             });
-            self.value_address_space.insert(loaded_id, addr_space);
-            loaded_id
+            alloc_local_value(self, final_ty, dest)
         };
 
         (place_ref_id, value_id)

@@ -25,7 +25,7 @@ use url::Url;
 const MEMORY_SOURCE_URL: &str = "file:///contract.fe";
 
 /// Error type returned by the harness.
-#[derive(Debug, Error)]
+#[derive(Error)]
 pub enum HarnessError {
     #[error("fe compiler diagnostics:\n{0}")]
     CompilerDiagnostics(String),
@@ -49,6 +49,12 @@ pub enum HarnessError {
     Hex(#[from] hex::FromHexError),
     #[error("io error: {0}")]
     Io(#[from] std::io::Error),
+}
+
+impl fmt::Debug for HarnessError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Display::fmt(self, f)
+    }
 }
 
 impl From<YulcError> for HarnessError {
@@ -426,6 +432,14 @@ mod tests {
             .status()
             .map(|status| status.success())
             .unwrap_or(false)
+    }
+
+    #[test]
+    fn harness_error_debug_is_human_readable() {
+        let err = HarnessError::Solc("DeclarationError: missing".to_string());
+        let dbg = format!("{err:?}");
+        assert!(dbg.starts_with("solc error: DeclarationError:"));
+        assert!(!dbg.contains("Solc(\""));
     }
 
     #[test]

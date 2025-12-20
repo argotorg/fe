@@ -6,9 +6,7 @@ pub use body_builder::BodyBuilder;
 
 use hir::analysis::ty::ty_check::{Callable, TypedBody};
 use hir::analysis::ty::ty_def::TyId;
-use hir::hir_def::{
-    EnumVariant, ExprId, Func, PatId, StmtId, TopLevelMod, TypeId as HirTypeId, expr::ArithBinOp,
-};
+use hir::hir_def::{EnumVariant, ExprId, Func, PatId, StmtId, TopLevelMod};
 use hir::projection::{Projection, ProjectionPath};
 use num_bigint::BigUint;
 use rustc_hash::FxHashMap;
@@ -62,7 +60,6 @@ pub struct MirBody<'db> {
     pub expr_values: FxHashMap<ExprId, ValueId>,
     pub pat_address_space: FxHashMap<PatId, AddressSpaceKind>,
     pub loop_headers: FxHashMap<BasicBlockId, LoopInfo>,
-    pub match_info: FxHashMap<ValueId, MatchLoweringInfo>,
 }
 
 impl<'db> MirBody<'db> {
@@ -77,7 +74,6 @@ impl<'db> MirBody<'db> {
             expr_values: FxHashMap::default(),
             pat_address_space: FxHashMap::default(),
             loop_headers: FxHashMap::default(),
-            match_info: FxHashMap::default(),
         }
     }
 
@@ -112,10 +108,6 @@ impl<'db> MirBody<'db> {
 
     pub fn local(&self, id: LocalId) -> &LocalData<'db> {
         &self.locals[id.index()]
-    }
-
-    pub fn match_info(&self, result: ValueId) -> Option<&MatchLoweringInfo> {
-        self.match_info.get(&result)
     }
 }
 
@@ -158,6 +150,11 @@ pub struct LocalData<'db> {
     pub name: String,
     pub ty: TyId<'db>,
     pub is_mut: bool,
+    /// Address space for pointer-like values stored in this local.
+    ///
+    /// For non-pointer scalars this is ignored, but storing it here lets codegen
+    /// interpret locals that represent aggregate pointers (memory vs storage).
+    pub address_space: AddressSpaceKind,
 }
 
 /// MIR projection using MIR value IDs for dynamic indices.
@@ -170,7 +167,7 @@ pub type MirProjectionPath<'db> = ProjectionPath<TyId<'db>, EnumVariant<'db>, Va
 #[derive(Debug, Clone)]
 pub struct BasicBlock<'db> {
     pub insts: Vec<MirInst<'db>>,
-    pub terminator: Terminator,
+    pub terminator: Terminator<'db>,
 }
 
 impl<'db> BasicBlock<'db> {
@@ -185,7 +182,7 @@ impl<'db> BasicBlock<'db> {
         self.insts.push(inst);
     }
 
-    pub fn set_terminator(&mut self, term: Terminator) {
+    pub fn set_terminator(&mut self, term: Terminator<'db>) {
         self.terminator = term;
     }
 }
@@ -199,25 +196,14 @@ impl<'db> Default for BasicBlock<'db> {
 /// General MIR instruction (does not change control flow).
 #[derive(Debug, Clone)]
 pub enum MirInst<'db> {
-    /// A `let` binding statement.
-    LocalInit {
-        stmt: StmtId,
-        local: LocalId,
-        ty: Option<HirTypeId<'db>>,
-        value: Option<ValueId>,
-    },
-    /// Desugared assignment statement.
-    LocalSet {
-        stmt: StmtId,
-        local: LocalId,
-        value: ValueId,
-    },
-    /// Augmented assignment (`+=`, `-=`, ...).
-    LocalAugAssign {
-        stmt: StmtId,
-        local: LocalId,
-        value: ValueId,
-        op: ArithBinOp,
+    /// Assigns an rvalue, optionally storing its result into `dest`.
+    ///
+    /// When `dest` is `None`, the rvalue is evaluated for side effects only.
+    Assign {
+        /// Optional originating statement for diagnostics/debug output.
+        stmt: Option<StmtId>,
+        dest: Option<LocalId>,
+        rvalue: Rvalue<'db>,
     },
     /// Store a value into a place (projection write).
     Store { place: Place<'db>, value: ValueId },
@@ -235,32 +221,40 @@ pub enum MirInst<'db> {
         place: Place<'db>,
         variant: EnumVariant<'db>,
     },
-    /// Plain expression statement (no bindings).
-    Eval { stmt: StmtId, value: ValueId },
-    /// Evaluate a value for side effects (no originating statement).
-    ///
-    /// This is used by lowering to enforce evaluation order in contexts where we don't have a
-    /// source statement ID (e.g. desugared constructs). Codegen should only emit something when
-    /// the value is effectful.
-    EvalValue { value: ValueId },
     /// Bind a value into a temporary for later reuse.
     ///
     /// This instruction is keyed by `ValueId` (not `ExprId`) so later MIR transforms can move
     /// and rewrite values without needing to preserve HIR node IDs.
     BindValue { value: ValueId },
-    /// Statement-only intrinsic (e.g. `mstore`) that produces no value.
-    IntrinsicStmt { op: IntrinsicOp, args: Vec<ValueId> },
+}
+
+/// Rvalue describing a computation or effectful operation.
+#[derive(Debug, Clone)]
+pub enum Rvalue<'db> {
+    /// Default-initialize a destination to zero (backend-specific representation, typically `0`).
+    ///
+    /// This is used to declare locals in a scope before conditional assignments without needing
+    /// a well-typed `ValueId` for the default.
+    ZeroInit,
+    /// Pure MIR value (`ValueId` DAG).
+    Value(ValueId),
+    /// Effectful call (user function or lowered intrinsic wrapper).
+    Call(CallOrigin<'db>),
+    /// Low-level intrinsic operation, optionally yielding a value.
+    Intrinsic { op: IntrinsicOp, args: Vec<ValueId> },
+    /// Load a scalar value from a place.
+    Load { place: Place<'db> },
+    /// Allocate an address in the given address space.
+    Alloc { address_space: AddressSpaceKind },
 }
 
 /// Control-flow terminating instruction.
 #[derive(Debug, Clone)]
-pub enum Terminator {
+pub enum Terminator<'db> {
     /// Return from the function with an optional value.
     Return(Option<ValueId>),
-    /// Return from the function using raw memory pointer/size (core::return_data).
-    ReturnData { offset: ValueId, size: ValueId },
-    /// Abort execution and revert with memory region at `offset`/`size`.
-    Revert { offset: ValueId, size: ValueId },
+    /// A call that does not return (callee has return type `!`).
+    TerminatingCall(TerminatingCall<'db>),
     /// Unconditional jump to another block.
     Goto { target: BasicBlockId },
     /// Conditional branch based on a boolean value.
@@ -274,22 +268,22 @@ pub enum Terminator {
         discr: ValueId,
         targets: Vec<SwitchTarget>,
         default: BasicBlockId,
-        origin: SwitchOrigin,
     },
     /// Unreachable terminator (used for bodies without an expression).
     Unreachable,
+}
+
+/// A call-like operation used as a terminator (never returns).
+#[derive(Debug, Clone)]
+pub enum TerminatingCall<'db> {
+    Call(CallOrigin<'db>),
+    Intrinsic { op: IntrinsicOp, args: Vec<ValueId> },
 }
 
 #[derive(Debug, Clone)]
 pub struct SwitchTarget {
     pub value: SwitchValue,
     pub block: BasicBlockId,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SwitchOrigin {
-    None,
-    MatchValue(ValueId),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -359,8 +353,6 @@ pub enum ValueOrigin<'db> {
         inner: ValueId,
     },
     /// Binary scalar operation (arithmetic, comparison, logical).
-    ///
-    /// Indexing should be lowered into `PlaceLoad`/`PlaceRef` before codegen.
     Binary {
         op: hir::hir_def::expr::BinOp,
         lhs: ValueId,
@@ -374,37 +366,10 @@ pub enum ValueOrigin<'db> {
     /// This is not a runtime value, but can be consumed by intrinsics like
     /// `code_region_offset/len` that refer to function code regions.
     FuncItem(CodeRegionRoot<'db>),
-    Call(CallOrigin<'db>),
-    /// Call to a compiler intrinsic that should lower to a raw opcode, not a function call.
-    Intrinsic(IntrinsicValue),
     /// Pointer arithmetic for accessing a nested struct field (no load, just offset).
     FieldPtr(FieldPtrOrigin),
-    /// Load a value from a place (for primitives/scalars).
-    PlaceLoad(Place<'db>),
     /// Reference to a place (for aggregates - pointer arithmetic only, no load).
     PlaceRef(Place<'db>),
-    /// Allocate memory for an aggregate value.
-    Alloc {
-        address_space: AddressSpaceKind,
-    },
-}
-
-impl<'db> ValueOrigin<'db> {
-    /// Returns the contained call origin if this value represents a function call.
-    pub fn as_call(&self) -> Option<&CallOrigin<'db>> {
-        match self {
-            ValueOrigin::Call(call) => Some(call),
-            _ => None,
-        }
-    }
-
-    /// Returns the contained call origin mutably if this value represents a call.
-    pub fn as_call_mut(&mut self) -> Option<&mut CallOrigin<'db>> {
-        match self {
-            ValueOrigin::Call(call) => Some(call),
-            _ => None,
-        }
-    }
 }
 
 /// Captures compile-time literals synthesized by lowering.
@@ -418,58 +383,6 @@ pub enum SyntheticValue {
     ///
     /// This is a stopgap representation: the literal is emitted inline as a numeric constant.
     Bytes(Vec<u8>),
-}
-
-#[derive(Debug, Clone)]
-pub struct MatchLoweringInfo {
-    /// The MIR value representing the match/if expression result.
-    pub result: ValueId,
-    /// The scrutinee value (e.g. enum pointer) for this match expression.
-    pub scrutinee: ValueId,
-    /// Merge block selected when any arm continues execution; `None` when all arms terminate.
-    pub merge_block: Option<BasicBlockId>,
-    pub arms: Vec<MatchArmLowering>,
-}
-
-#[derive(Debug, Clone)]
-pub struct MatchArmLowering {
-    pub pattern: MatchArmPattern,
-    pub body: ExprId,
-    pub block: BasicBlockId,
-    pub terminates: bool,
-    /// Resulting value for value-producing matches/ifs.
-    ///
-    /// When present, codegen should evaluate the arm's MIR block (for side effects and
-    /// temporaries) and then assign this value into the match/if result temp.
-    pub value: Option<ValueId>,
-    /// Bindings from decision tree pattern matching (for tuple/struct patterns).
-    /// These map variable names to MIR values extracted from the scrutinee.
-    pub decision_tree_bindings: Vec<DecisionTreeBinding>,
-}
-
-/// A binding from decision tree pattern matching.
-/// Maps a variable name to the MIR value representing its extracted value.
-#[derive(Debug, Clone)]
-pub struct DecisionTreeBinding {
-    pub local: LocalId,
-    /// MIR value referencing the bound location (pointer/address expression).
-    ///
-    /// This is emitted as a `PlaceRef` value so downstream passes that care about
-    /// reference semantics can recover the underlying place/projection path even
-    /// when the binding's value is loaded eagerly.
-    pub place: ValueId,
-    /// MIR value for the extracted field (computed via lower_occurrence).
-    pub value: ValueId,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum MatchArmPattern {
-    Literal(SwitchValue),
-    Wildcard,
-    Enum {
-        variant_index: u64,
-        enum_name: String,
-    },
 }
 
 /// Address space where a value lives.

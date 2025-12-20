@@ -10,7 +10,8 @@ use num_bigint::BigUint;
 use rustc_hash::FxHashMap;
 
 use crate::{
-    CallOrigin, MirFunction, MirInst, MirProjection, SwitchValue, Terminator, ValueId, ValueOrigin,
+    CallOrigin, MirFunction, MirInst, MirProjection, Rvalue, SwitchValue, TerminatingCall,
+    Terminator, ValueId, ValueOrigin,
     ir::{Place, SyntheticValue},
 };
 
@@ -193,19 +194,6 @@ impl<'db, 'a> FunctionHasher<'db, 'a> {
                     });
                 self.write_str(&symbol);
             }
-            ValueOrigin::Call(call) => {
-                self.write_u8(0x0B);
-                self.hash_call_origin(call);
-            }
-            ValueOrigin::Intrinsic(intr) => {
-                self.write_u8(0x0C);
-                self.write_u8(intr.op as u8);
-                self.write_usize(intr.args.len());
-                for arg in &intr.args {
-                    let slot = self.placeholder_value(*arg);
-                    self.write_u32(slot);
-                }
-            }
             ValueOrigin::FieldPtr(field_ptr) => {
                 self.write_u8(0x0D);
                 let slot = self.placeholder_value(field_ptr.base);
@@ -216,20 +204,9 @@ impl<'db, 'a> FunctionHasher<'db, 'a> {
                     crate::ir::AddressSpaceKind::Storage => 2,
                 });
             }
-            ValueOrigin::PlaceLoad(place) => {
-                self.write_u8(0x0E);
-                self.hash_place(place);
-            }
             ValueOrigin::PlaceRef(place) => {
                 self.write_u8(0x0F);
                 self.hash_place(place);
-            }
-            ValueOrigin::Alloc { address_space } => {
-                self.write_u8(0x10);
-                self.write_u8(match address_space {
-                    crate::ir::AddressSpaceKind::Memory => 1,
-                    crate::ir::AddressSpaceKind::Storage => 2,
-                });
             }
         }
     }
@@ -331,55 +308,53 @@ impl<'db, 'a> FunctionHasher<'db, 'a> {
     /// Hash a MIR instruction, tagging each variant with a unique byte.
     fn hash_inst(&mut self, inst: &MirInst<'db>) {
         match inst {
-            MirInst::LocalInit { local, value, .. } => {
+            MirInst::Assign { dest, rvalue, .. } => {
                 self.write_u8(0x20);
-                self.write_u32(local.0);
-                if let Some(val) = value {
+                if let Some(dest) = dest {
                     self.write_u8(1);
-                    let slot = self.placeholder_value(*val);
-                    self.write_u32(slot);
+                    self.write_u32(dest.0);
                 } else {
                     self.write_u8(0);
                 }
-            }
-            MirInst::LocalSet { local, value, .. } => {
-                self.write_u8(0x21);
-                self.write_u32(local.0);
-                let slot = self.placeholder_value(*value);
-                self.write_u32(slot);
-            }
-            MirInst::LocalAugAssign {
-                local, value, op, ..
-            } => {
-                self.write_u8(0x22);
-                self.write_u32(local.0);
-                let slot = self.placeholder_value(*value);
-                self.write_u32(slot);
-                self.write_u8(*op as u8);
-            }
-            MirInst::Eval { value, .. } => {
-                self.write_u8(0x23);
-                let slot = self.placeholder_value(*value);
-                self.write_u32(slot);
-            }
-            MirInst::EvalValue { value } => {
-                self.write_u8(0x24);
-                let slot = self.placeholder_value(*value);
-                self.write_u32(slot);
+                match rvalue {
+                    Rvalue::ZeroInit => {
+                        self.write_u8(0);
+                    }
+                    Rvalue::Value(value) => {
+                        self.write_u8(1);
+                        let slot = self.placeholder_value(*value);
+                        self.write_u32(slot);
+                    }
+                    Rvalue::Call(call) => {
+                        self.write_u8(2);
+                        self.hash_call_origin(call);
+                    }
+                    Rvalue::Intrinsic { op, args } => {
+                        self.write_u8(3);
+                        self.write_u8(*op as u8);
+                        self.write_usize(args.len());
+                        for arg in args {
+                            let slot = self.placeholder_value(*arg);
+                            self.write_u32(slot);
+                        }
+                    }
+                    Rvalue::Load { place } => {
+                        self.write_u8(4);
+                        self.hash_place(place);
+                    }
+                    Rvalue::Alloc { address_space } => {
+                        self.write_u8(5);
+                        self.write_u8(match address_space {
+                            crate::ir::AddressSpaceKind::Memory => 1,
+                            crate::ir::AddressSpaceKind::Storage => 2,
+                        });
+                    }
+                }
             }
             MirInst::BindValue { value } => {
                 self.write_u8(0x25);
                 let slot = self.placeholder_value(*value);
                 self.write_u32(slot);
-            }
-            MirInst::IntrinsicStmt { op, args } => {
-                self.write_u8(0x2A);
-                self.write_u8(*op as u8);
-                self.write_usize(args.len());
-                for arg in args {
-                    let slot = self.placeholder_value(*arg);
-                    self.write_u32(slot);
-                }
             }
             MirInst::Store { place, value } => {
                 self.write_u8(0x26);
@@ -409,7 +384,7 @@ impl<'db, 'a> FunctionHasher<'db, 'a> {
     }
 
     /// Hash a terminator, including block indices for CFG structure.
-    fn hash_terminator(&mut self, term: &Terminator) {
+    fn hash_terminator(&mut self, term: &Terminator<'db>) {
         match term {
             Terminator::Return(val) => {
                 self.write_u8(0x30);
@@ -421,19 +396,23 @@ impl<'db, 'a> FunctionHasher<'db, 'a> {
                     self.write_u8(0);
                 }
             }
-            Terminator::ReturnData { offset, size } => {
-                self.write_u8(0x35);
-                let offset_slot = self.placeholder_value(*offset);
-                let size_slot = self.placeholder_value(*size);
-                self.write_u32(offset_slot);
-                self.write_u32(size_slot);
-            }
-            Terminator::Revert { offset, size } => {
+            Terminator::TerminatingCall(call) => {
                 self.write_u8(0x36);
-                let offset_slot = self.placeholder_value(*offset);
-                let size_slot = self.placeholder_value(*size);
-                self.write_u32(offset_slot);
-                self.write_u32(size_slot);
+                match call {
+                    TerminatingCall::Call(call) => {
+                        self.write_u8(0);
+                        self.hash_call_origin(call);
+                    }
+                    TerminatingCall::Intrinsic { op, args } => {
+                        self.write_u8(1);
+                        self.write_u8(*op as u8);
+                        self.write_usize(args.len());
+                        for arg in args {
+                            let slot = self.placeholder_value(*arg);
+                            self.write_u32(slot);
+                        }
+                    }
+                }
             }
             Terminator::Goto { target } => {
                 self.write_u8(0x31);
@@ -454,7 +433,6 @@ impl<'db, 'a> FunctionHasher<'db, 'a> {
                 discr,
                 targets,
                 default,
-                ..
             } => {
                 self.write_u8(0x33);
                 let slot = self.placeholder_value(*discr);

@@ -9,6 +9,7 @@ object "ShapeDispatcher" {
       let v0 := datasize("ShapeDispatcher_deployed")
       let v1 := dataoffset("ShapeDispatcher_deployed")
       codecopy(0, v1, v0)
+      leave
     }
     init()
   }
@@ -21,46 +22,54 @@ object "ShapeDispatcher" {
         return(v0, 32)
       }
       function dispatch() {
-        let v0 := shr(224, calldataload(0))
-        let v1 := eq(v0, 151146943)
-        if v1 {
-          let v2 := calldataload(4)
-          let v3 := calldataload(36)
-          let v4 := mload(0x40)
-          if iszero(v4) {
-            v4 := 0x80
+        let v0 := calldataload(0)
+        let v1 := shr(224, v0)
+        let v2 := eq(v1, 151146943)
+        if v2 {
+          let v3 := calldataload(4)
+          let v4 := calldataload(36)
+          let v5 := mload(0x40)
+          if iszero(v5) {
+            v5 := 0x80
           }
-          mstore(0x40, add(v4, 64))
-          mstore(v4, v2)
-          mstore(add(v4, 32), v3)
-          let v5 := v4
-          mstore(v5, add(mload(v5), 1))
-          mstore(add(v5, 32), add(mload(add(v5, 32)), 2))
-          let v6 := point_area_mem(v5)
-          abi_encode(v6)
+          mstore(0x40, add(v5, 64))
+          mstore(v5, v3)
+          mstore(add(v5, 32), v4)
+          let v6 := v5
+          let v7 := mload(v6)
+          mstore(v6, add(v7, 1))
+          let v8 := mload(add(v6, 32))
+          mstore(add(v6, 32), add(v8, 2))
+          let v9 := point_area_mem(v6)
+          abi_encode(v9)
         }
-        let v7 := eq(v0, 2066295049)
-        if v7 {
-          let v8 := calldataload(4)
-          let v9 := mload(0x40)
-          if iszero(v9) {
-            v9 := 0x80
+        let v10 := eq(v1, 2066295049)
+        if v10 {
+          let v11 := calldataload(4)
+          let v12 := mload(0x40)
+          if iszero(v12) {
+            v12 := 0x80
           }
-          mstore(0x40, add(v9, 32))
-          mstore(v9, v8)
-          let v10 := v9
-          mstore(v10, add(mload(v10), 3))
-          let v11 := square_area_mem(v10)
-          abi_encode(v11)
+          mstore(0x40, add(v12, 32))
+          mstore(v12, v11)
+          let v13 := v12
+          let v14 := mload(v13)
+          mstore(v13, add(v14, 3))
+          let v15 := square_area_mem(v13)
+          abi_encode(v15)
         }
         return(0, 0)
       }
       function point_area_mem(self) -> ret {
-        ret := mul(mload(self), mload(add(self, 32)))
+        let v0 := mload(self)
+        let v1 := mload(add(self, 32))
+        ret := mul(v0, v1)
+        leave
       }
       function square_area_mem(self) -> ret {
         let v0 := mload(self)
         ret := mul(v0, v0)
+        leave
       }
       dispatch()
       return(0, 0)

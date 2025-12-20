@@ -16,4 +16,5 @@ function if_else(cond) -> ret {
       v0 := 2
     }
   ret := v0
+  leave
 }

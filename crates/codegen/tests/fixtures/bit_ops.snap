@@ -20,7 +20,9 @@ function bit_ops(x, y) -> ret {
   mstore(add(v5, 96), v3)
   mstore(add(v5, 128), v4)
   ret := v5
+  leave
 }
 function pow_op(x, y) -> ret {
   ret := exp(x, y)
+  leave
 }

@@ -29,34 +29,6 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         }
     }
 
-    /// Forces all field expressions to have associated MIR values.
-    ///
-    /// # Returns
-    /// Nothing; fills `expr_values` for field expressions.
-    pub(super) fn ensure_field_expr_values(&mut self) {
-        self.ensure_expr_values(
-            |expr| matches!(expr, Expr::Field(..) | Expr::Bin(_, _, BinOp::Index)),
-            |this, expr_id| {
-                if let Some(value_id) = this.try_lower_field(expr_id) {
-                    this.mir_body.expr_values.entry(expr_id).or_insert(value_id);
-                }
-            },
-        );
-    }
-
-    /// Forces all call expressions (including method calls) to have associated MIR values.
-    ///
-    /// This is required for codegen, which only supports lowering call targets once they've been
-    /// rewritten into MIR `Call`/`Intrinsic`/`Synthetic` values.
-    pub(super) fn ensure_call_expr_values(&mut self) {
-        self.ensure_expr_values(
-            |expr| matches!(expr, Expr::Call(..) | Expr::MethodCall(..)),
-            |this, expr_id| {
-                this.ensure_value(expr_id);
-            },
-        );
-    }
-
     /// Forces all const path expressions to lower into synthetic literals.
     ///
     /// # Returns
@@ -127,18 +99,6 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
     /// # Returns
     /// The allocated `ValueId` (lowered call/field/const where applicable).
     pub(super) fn alloc_expr_value(&mut self, expr: ExprId) -> ValueId {
-        if let Some(value) = self.try_lower_call(expr) {
-            self.record_value_address_space(expr, value);
-            return value;
-        }
-        if let Some(value) = self.try_lower_field(expr) {
-            self.record_value_address_space(expr, value);
-            return value;
-        }
-        if let Some(value) = self.try_lower_index(expr) {
-            self.record_value_address_space(expr, value);
-            return value;
-        }
         if let Some(value) = self.try_const_expr(expr) {
             self.record_value_address_space(expr, value);
             return value;
@@ -209,7 +169,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                 let mut arg_exprs = Vec::with_capacity(call_args.len());
                 for arg in call_args.iter() {
                     arg_exprs.push(arg.expr);
-                    args.push(self.ensure_value(arg.expr));
+                    args.push(self.lower_expr(arg.expr));
                 }
                 Some((args, arg_exprs))
             }
@@ -217,10 +177,10 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                 let mut args = Vec::with_capacity(call_args.len() + 1);
                 let mut arg_exprs = Vec::with_capacity(call_args.len() + 1);
                 arg_exprs.push(*receiver);
-                args.push(self.ensure_value(*receiver));
+                args.push(self.lower_expr(*receiver));
                 for arg in call_args.iter() {
                     arg_exprs.push(arg.expr);
-                    args.push(self.ensure_value(arg.expr));
+                    args.push(self.lower_expr(arg.expr));
                 }
                 Some((args, arg_exprs))
             }

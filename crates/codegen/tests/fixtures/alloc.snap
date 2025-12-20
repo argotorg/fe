@@ -4,10 +4,14 @@ expression: output
 input_file: tests/fixtures/alloc.fe
 ---
 function bump(size) -> ret {
-  ret := alloc(size)
+  let v0 := alloc(size)
+  ret := v0
+  leave
 }
 function bump_const() -> ret {
-  ret := alloc(64)
+  let v0 := alloc(64)
+  ret := v0
+  leave
 }
 function alloc(size) -> ret {
   let v0 := mload(64)
@@ -17,4 +21,5 @@ function alloc(size) -> ret {
   }
   mstore(64, add(v0, size))
   ret := v0
+  leave
 }

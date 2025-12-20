@@ -29,6 +29,17 @@ use num_traits::ToPrimitive;
 pub const WORD_SIZE_BYTES: usize = 32;
 pub const DISCRIMINANT_SIZE_BYTES: usize = WORD_SIZE_BYTES;
 
+/// Returns `true` when the type is known to have zero runtime size.
+///
+/// This is used to avoid emitting allocations, loads, and stores for types that
+/// do not have a runtime representation.
+pub fn is_zero_sized_ty(db: &dyn HirAnalysisDb, ty: TyId<'_>) -> bool {
+    if ty.is_never(db) {
+        return true;
+    }
+    ty_size_bytes(db, ty).is_some_and(|size| size == 0)
+}
+
 /// Computes the byte size of a type.
 ///
 /// Returns `None` for unsupported/unsized types.
@@ -97,6 +108,66 @@ pub fn ty_size_bytes(db: &dyn HirAnalysisDb, ty: TyId<'_>) -> Option<usize> {
     }
 
     None
+}
+
+/// Computes the byte size of a type, falling back to word alignment for unknown layouts.
+///
+/// This is useful when the compiler needs a conservative allocation size even when precise
+/// layout information is unavailable (e.g. generic type parameters). Unknown leaf types are
+/// treated as occupying a single 32-byte word.
+pub fn ty_size_bytes_or_word_aligned(db: &dyn HirAnalysisDb, ty: TyId<'_>) -> usize {
+    ty_size_bytes(db, ty).unwrap_or_else(|| ty_size_bytes_word_aligned_fallback(db, ty))
+}
+
+fn ty_size_bytes_word_aligned_fallback(db: &dyn HirAnalysisDb, ty: TyId<'_>) -> usize {
+    if ty.is_tuple(db) {
+        return ty
+            .field_types(db)
+            .iter()
+            .copied()
+            .map(|field_ty| ty_size_bytes_or_word_aligned(db, field_ty))
+            .sum();
+    }
+
+    if ty.is_array(db) {
+        let len = array_len(db, ty).unwrap_or_else(|| {
+            panic!(
+                "array length must be known to compute fallback layout size (ty={})",
+                ty.pretty_print(db)
+            )
+        });
+        let stride = array_elem_stride_bytes(db, ty).unwrap_or(WORD_SIZE_BYTES);
+        return len * stride;
+    }
+
+    if let Some(adt_def) = ty.adt_def(db)
+        && matches!(adt_def.adt_ref(db), AdtRef::Struct(_))
+    {
+        return ty
+            .field_types(db)
+            .iter()
+            .copied()
+            .map(|field_ty| ty_size_bytes_or_word_aligned(db, field_ty))
+            .sum();
+    }
+
+    if let Some(adt_def) = ty.adt_def(db)
+        && let AdtRef::Enum(enm) = adt_def.adt_ref(db)
+    {
+        let mut max_payload = 0;
+        for variant in enm.variants(db) {
+            let ev = EnumVariant::new(enm, variant.idx);
+            let ctor = ConstructorKind::Variant(ev, ty);
+            let mut payload = 0;
+            for field_ty in ctor.field_types(db) {
+                payload += ty_size_bytes_or_word_aligned(db, field_ty);
+            }
+            max_payload = max_payload.max(payload);
+        }
+        return DISCRIMINANT_SIZE_BYTES + max_payload;
+    }
+
+    WORD_SIZE_BYTES
 }
 
 /// Returns the element type for a fixed-size array.

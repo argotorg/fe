@@ -5,11 +5,14 @@ input_file: tests/fixtures/match_tuple_nested.fe
 ---
 function match_nested_tuple(t) -> ret {
   let v0 := 0
-  switch iszero(eq(mload(t), 0))
+  let v1 := iszero(eq(mload(t), 0))
+  switch v1
     case 1 {
-      switch iszero(eq(mload(add(t, 1)), 0))
+      let v2 := iszero(eq(mload(add(t, 1)), 0))
+      switch v2
         case 1 {
-          switch iszero(eq(mload(add(t, 2)), 0))
+          let v3 := iszero(eq(mload(add(t, 2)), 0))
+          switch v3
             case 1 {
               v0 := 7
             }
@@ -18,17 +21,16 @@ function match_nested_tuple(t) -> ret {
             }
             default {
             }
-          ret := v0
         }
         case 0 {
           v0 := 5
         }
         default {
         }
-      ret := v0
     }
     case 0 {
-      switch iszero(eq(mload(add(t, 2)), 0))
+      let v4 := iszero(eq(mload(add(t, 2)), 0))
+      switch v4
         case 1 {
           v0 := 2
         }
@@ -37,38 +39,39 @@ function match_nested_tuple(t) -> ret {
         }
         default {
         }
-      ret := v0
     }
     default {
     }
   ret := v0
+  leave
 }
 function match_deeply_nested(t) -> ret {
   let v0 := 0
-  switch iszero(eq(mload(t), 0))
+  let v1 := iszero(eq(mload(t), 0))
+  switch v1
     case 1 {
-      switch iszero(eq(mload(add(t, 3)), 0))
+      let v2 := iszero(eq(mload(add(t, 3)), 0))
+      switch v2
         case 1 {
-          switch iszero(eq(mload(add(t, 2)), 0))
+          let v3 := iszero(eq(mload(add(t, 2)), 0))
+          switch v3
             case 1 {
-              switch iszero(eq(mload(add(t, 1)), 0))
+              let v4 := iszero(eq(mload(add(t, 1)), 0))
+              switch v4
                 case 1 {
                   v0 := 15
                 }
                 default {
                   v0 := 8
                 }
-              ret := v0
             }
             default {
               v0 := 8
             }
-          ret := v0
         }
         default {
           v0 := 8
         }
-      ret := v0
     }
     case 0 {
       v0 := 0
@@ -76,4 +79,5 @@ function match_deeply_nested(t) -> ret {
     default {
     }
   ret := v0
+  leave
 }

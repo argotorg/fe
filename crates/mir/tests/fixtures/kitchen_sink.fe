@@ -1,0 +1,73 @@
+use core::{StorageMap, calldataload}
+use core::effect_ref::{MemPtr, StorPtr}
+
+struct Foo {
+    a: u256,
+    b: u256,
+}
+
+enum Opt {
+    None,
+    Some(u64),
+}
+
+fn bump() uses (mut foo: Foo) {
+    foo.a = foo.a + 1
+    foo.b = foo.b + 2
+}
+
+fn maybe_inc(opt: Opt) -> u64 {
+    // Mixed return + value-producing arms
+    let x = match opt {
+        Opt::None => { return 0 }
+        Opt::Some(v) => { v }
+    }
+
+    let mut i = 0
+    while i < 3 {
+        i = i + 1
+    }
+
+    x + i
+}
+
+fn test_effects_and_aggregates() {
+    // Exercise `with` effects across domains and aggregate init
+    let mp = MemPtr<Foo> { addr: 0x100 }
+    with (mp) { bump() }
+
+    let sp = StorPtr<Foo> { slot: 0 }
+    with (sp) { bump() }
+
+    let mut foo = Foo { a: 10, b: 20 }
+    with (foo) { bump() }
+
+    // Exercise StorageMap effect lowering without contract runtime
+    let mut balances = core::effect_ref::StorPtr<StorageMap<u256, u256>>::at_offset(0)
+    with (balances) {
+        set_balance(key: 1, value: 7)
+        let _b = get_balance(key: 1)
+    }
+}
+
+fn get_balance(key: u256) -> u256
+    uses (balances: StorageMap<u256, u256>)
+{
+    balances.get(key: key)
+}
+
+fn set_balance(key: u256, value: u256)
+    uses (mut balances: StorageMap<u256, u256>)
+{
+    balances.set(key: key, value: value)
+}
+
+fn selector_match() -> u256 {
+    // Exercise `match` lowering over a computed discriminant.
+    let selector = calldataload(0) >> 224
+    match selector {
+        0x090251bf => 1
+        0x7b292909 => 2
+        _ => 0
+    }
+}

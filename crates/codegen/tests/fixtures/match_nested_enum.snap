@@ -5,25 +5,29 @@ input_file: tests/fixtures/match_nested_enum.fe
 ---
 function match_nested_enum(outer) -> ret {
   let v0 := 0
-  switch mload(outer)
+  let v1 := mload(outer)
+  switch v1
     case 0 {
-      switch mload(add(outer, 32))
+      let v2 := mload(add(outer, 32))
+      switch v2
         case 0 {
           v0 := 0
         }
         case 1 {
-          let v1 := and(mload(add(outer, 64)), 0xff)
-          v0 := v1
+          let v3 := and(mload(add(outer, 64)), 0xff)
+          let v4 := v3
+          v0 := v4
         }
         default {
         }
-      ret := v0
     }
     case 1 {
-      let v2 := and(mload(add(outer, 32)), 0xff)
-      v0 := v2
+      let v5 := and(mload(add(outer, 32)), 0xff)
+      let v6 := v5
+      v0 := v6
     }
     default {
     }
   ret := v0
+  leave
 }

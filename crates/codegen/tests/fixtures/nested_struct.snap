@@ -32,37 +32,47 @@ object "NestedStruct" {
           v1 := 0x80
         }
         mstore(0x40, add(v1, 32))
-        mstore(v1, mload(v0))
-        let v2 := v1
-        mstore(v2, value)
-        ret := mload(v2)
+        let v2 := v0
+        mstore(v1, mload(v2))
+        let v3 := v1
+        mstore(v3, value)
+        let v4 := mload(v3)
+        ret := v4
+        leave
       }
       function read_inner(outer) -> ret {
-        ret := sload(outer)
+        let v0 := sload(outer)
+        ret := v0
+        leave
       }
       function runtime() {
         let v0 := 0
         let v1 := v0
-        let v2 := shr(224, calldataload(0))
-        switch v2
+        let v2 := calldataload(0)
+        let v3 := shr(224, v2)
+        switch v3
           case 3091856072 {
-            let v3 := calldataload(4)
-            write_inner(v3, v1)
-            abi_encode(v3)
+            let v4 := calldataload(4)
+            write_inner(v4, v1)
+            abi_encode(v4)
           }
           case 3513050253 {
-            abi_encode(read_inner(v1))
+            let v5 := read_inner(v1)
+            abi_encode(v5)
           }
           case 2154770637 {
-            let v4 := calldataload(4)
-            abi_encode(mem_read(v4))
+            let v6 := calldataload(4)
+            let v7 := mem_read(v6)
+            abi_encode(v7)
           }
           default {
             return(0, 0)
           }
+        leave
       }
       function write_inner(value, outer) {
         sstore(outer, value)
+        leave
       }
       runtime()
       return(0, 0)

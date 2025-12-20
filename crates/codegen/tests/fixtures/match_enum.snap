@@ -5,7 +5,8 @@ input_file: tests/fixtures/match_enum.fe
 ---
 function match_enum(e) -> ret {
   let v0 := 0
-  switch mload(e)
+  let v1 := mload(e)
+  switch v1
     case 0 {
       v0 := 1
     }
@@ -19,4 +20,5 @@ function match_enum(e) -> ret {
       v0 := 4
     }
   ret := v0
+  leave
 }

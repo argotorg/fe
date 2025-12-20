@@ -4,8 +4,11 @@ expression: output
 input_file: tests/fixtures/effect_ptr_domains.fe
 ---
 function bump(foo) {
-  sstore(foo, add(sload(foo), 1))
-  sstore(add(foo, 1), add(sload(add(foo, 1)), 2))
+  let v0 := sload(foo)
+  sstore(foo, add(v0, 1))
+  let v1 := sload(add(foo, 1))
+  sstore(add(foo, 1), add(v1, 2))
+  leave
 }
 function test_effect_ptr_domains() {
   let v0 := 256
@@ -24,8 +27,12 @@ function test_effect_ptr_domains() {
   let v5 := v4
   let v6 := v5
   bump__eff_mem(v5)
+  leave
 }
 function bump__eff_mem(foo) {
-  mstore(foo, add(mload(foo), 1))
-  mstore(add(foo, 32), add(mload(add(foo, 32)), 2))
+  let v0 := mload(foo)
+  mstore(foo, add(v0, 1))
+  let v1 := mload(add(foo, 32))
+  mstore(add(foo, 32), add(v1, 2))
+  leave
 }

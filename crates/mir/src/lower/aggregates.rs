@@ -1,7 +1,6 @@
 //! Aggregate lowering helpers for MIR: allocations, initializer emission, and type helpers.
 
 use super::*;
-use hir::analysis::ty::ty_def::prim_int_bits;
 use hir::projection::{IndexSource, Projection};
 use num_bigint::BigUint;
 
@@ -14,16 +13,33 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
     /// # Returns
     /// The `ValueId` of the allocated pointer.
     pub(super) fn emit_alloc(&mut self, expr: ExprId, alloc_ty: TyId<'db>) -> ValueId {
-        let alloc_value = self.builder.body.alloc_value(ValueData {
-            ty: alloc_ty,
-            origin: ValueOrigin::Alloc {
+        let value_id = self.ensure_value(expr);
+        if self.current_block().is_none() {
+            return value_id;
+        }
+
+        let dest = self.alloc_temp_local(alloc_ty, false, "alloc");
+        self.emit_alloc_into_local(expr, dest)
+    }
+
+    pub(super) fn emit_alloc_into_local(&mut self, expr: ExprId, dest: LocalId) -> ValueId {
+        let value_id = self.ensure_value(expr);
+        if self.current_block().is_none() {
+            return value_id;
+        }
+
+        self.builder.body.locals[dest.index()].address_space = AddressSpaceKind::Memory;
+        self.push_inst_here(MirInst::Assign {
+            stmt: None,
+            dest: Some(dest),
+            rvalue: crate::ir::Rvalue::Alloc {
                 address_space: AddressSpaceKind::Memory,
             },
         });
-        self.builder.body.expr_values.insert(expr, alloc_value);
+        self.builder.body.values[value_id.index()].origin = ValueOrigin::Local(dest);
         self.value_address_space
-            .insert(alloc_value, AddressSpaceKind::Memory);
-        alloc_value
+            .insert(value_id, AddressSpaceKind::Memory);
+        value_id
     }
 
     pub(super) fn emit_init_aggregate(
@@ -163,15 +179,13 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
 
         let value_id = self.emit_alloc(expr, array_ty);
 
-        let addr_space = self.value_address_space(value_id);
         let mut inits = Vec::with_capacity(lowered_elems.len());
         for (idx, elem_value) in lowered_elems.into_iter().enumerate() {
             let proj =
                 MirProjectionPath::from_projection(Projection::Index(IndexSource::Constant(idx)));
             inits.push((proj, elem_value));
         }
-        let place = Place::new(value_id, MirProjectionPath::new(), addr_space);
-        self.push_inst_here(MirInst::InitAggregate { place, inits });
+        self.emit_init_aggregate(value_id, inits);
 
         value_id
     }
@@ -203,31 +217,15 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
 
         let value_id = self.emit_alloc(expr, array_ty);
 
-        let addr_space = self.value_address_space(value_id);
         let mut inits = Vec::with_capacity(count);
         for idx in 0..count {
             let proj =
                 MirProjectionPath::from_projection(Projection::Index(IndexSource::Constant(idx)));
             inits.push((proj, elem_value));
         }
-        let place = Place::new(value_id, MirProjectionPath::new(), addr_space);
-        self.push_inst_here(MirInst::InitAggregate { place, inits });
+        self.emit_init_aggregate(value_id, inits);
 
         value_id
-    }
-
-    /// Returns the bit width for a primitive integer type.
-    ///
-    /// # Parameters
-    /// - `ty`: Type to inspect.
-    ///
-    /// # Returns
-    /// Bit width when the type is a supported primitive, otherwise `None`.
-    pub(super) fn int_type_bits(&self, ty: TyId<'db>) -> Option<usize> {
-        match ty.data(self.db) {
-            TyData::TyBase(TyBase::Prim(prim)) => prim_int_bits(*prim),
-            _ => None,
-        }
     }
 
     /// Returns the field type and byte offset for a given receiver/field pair.

@@ -12,4 +12,5 @@ function tuple_expr() -> ret {
   mstore(v0, and(add(1, 2), 0xffffffffffffffff))
   mstore(add(v0, 8), iszero(iszero(iszero(0))))
   ret := v0
+  leave
 }

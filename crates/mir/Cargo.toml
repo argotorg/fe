@@ -21,3 +21,4 @@ cranelift-entity.workspace = true
 driver.workspace = true
 url.workspace = true
 dir-test.workspace = true
+test-utils.workspace = true

@@ -5,7 +5,8 @@ input_file: tests/fixtures/match_mixed_return.fe
 ---
 function f(e) -> ret {
   let v0 := 0
-  switch mload(e)
+  let v1 := mload(e)
+  switch v1
     case 0 {
       ret := 0
       leave
@@ -15,6 +16,7 @@ function f(e) -> ret {
     }
     default {
     }
-  let v1 := v0
-  ret := add(v1, 1)
+  let v2 := v0
+  ret := add(v2, 1)
+  leave
 }

@@ -1,9 +1,10 @@
 ---
 source: crates/codegen/tests/yul.rs
-assertion_line: 31
 expression: output
 input_file: tests/fixtures/keccak_intrinsic.fe
 ---
 function hash(ptr, len) -> ret {
-  ret := keccak256(ptr, len)
+  let v0 := keccak256(ptr, len)
+  ret := v0
+  leave
 }

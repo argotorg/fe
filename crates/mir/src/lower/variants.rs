@@ -12,7 +12,11 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
     ///
     /// # Returns
     /// The allocated variant value when applicable.
-    pub(super) fn try_lower_variant_ctor(&mut self, expr: ExprId) -> Option<ValueId> {
+    pub(super) fn try_lower_variant_ctor(
+        &mut self,
+        expr: ExprId,
+        dest_override: Option<LocalId>,
+    ) -> Option<ValueId> {
         let Partial::Present(Expr::Call(_, call_args)) = expr.data(self.db, self.body) else {
             return None;
         };
@@ -34,7 +38,11 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
             return Some(self.ensure_value(expr));
         }
 
-        let value_id = self.emit_alloc(expr, enum_ty);
+        let value_id = if let Some(dest) = dest_override {
+            self.emit_alloc_into_local(expr, dest)
+        } else {
+            self.emit_alloc(expr, enum_ty)
+        };
 
         let addr_space = self.value_address_space(value_id);
         let mut inits = Vec::with_capacity(1 + lowered_args.len());
@@ -64,7 +72,11 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
     ///
     /// # Returns
     /// The allocated variant value when applicable.
-    pub(super) fn try_lower_unit_variant(&mut self, expr: ExprId) -> Option<ValueId> {
+    pub(super) fn try_lower_unit_variant(
+        &mut self,
+        expr: ExprId,
+        dest_override: Option<LocalId>,
+    ) -> Option<ValueId> {
         let Partial::Present(Expr::Path(path)) = expr.data(self.db, self.body) else {
             return None;
         };
@@ -82,7 +94,11 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         let enum_ty = self.typed_body.expr_ty(self.db, expr);
 
         self.move_to_block(block);
-        let value_id = self.emit_alloc(expr, enum_ty);
+        let value_id = if let Some(dest) = dest_override {
+            self.emit_alloc_into_local(expr, dest)
+        } else {
+            self.emit_alloc(expr, enum_ty)
+        };
         let addr_space = self.value_address_space(value_id);
         let discr_value = self.synthetic_u256(BigUint::from(variant.variant.idx as u64));
         let inits = vec![(

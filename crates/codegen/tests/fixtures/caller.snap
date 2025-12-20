@@ -4,5 +4,7 @@ expression: output
 input_file: tests/fixtures/caller.fe
 ---
 function who_called() -> ret {
-  ret := caller()
+  let v0 := caller()
+  ret := v0
+  leave
 }

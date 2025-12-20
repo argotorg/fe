@@ -4,7 +4,8 @@ expression: output
 input_file: tests/fixtures/match_return.fe
 ---
 function f(e) {
-  switch mload(e)
+  let v0 := mload(e)
+  switch v0
     case 0 {
       return(0, 0)
     }

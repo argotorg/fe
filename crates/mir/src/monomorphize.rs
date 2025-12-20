@@ -17,8 +17,8 @@ use hir::hir_def::{CallableDef, Func, item::ItemKind, scope_graph::ScopeId};
 use rustc_hash::FxHashMap;
 
 use crate::{
-    CallOrigin, MirFunction, ValueOrigin, dedup::deduplicate_mir, ir::AddressSpaceKind,
-    ir::EffectProviderKind, lower::lower_function,
+    CallOrigin, MirFunction, dedup::deduplicate_mir, ir::AddressSpaceKind, ir::EffectProviderKind,
+    lower::lower_function,
 };
 
 /// Walks generic MIR templates, cloning them per concrete substitution so
@@ -160,23 +160,45 @@ impl<'db> Monomorphizer<'db> {
 
     /// Inspect every call inside the function at `func_idx` and enqueue its targets.
     fn resolve_calls(&mut self, func_idx: usize) {
-        let call_sites = {
+        #[allow(clippy::type_complexity)] // TODO: refactor
+        let call_sites: Vec<(
+            usize,
+            Option<usize>,
+            CallTarget<'db>,
+            Vec<TyId<'db>>,
+            Option<AddressSpaceKind>,
+            Vec<EffectProviderKind>,
+        )> = {
             let function = &self.instances[func_idx];
-            #[allow(clippy::type_complexity)] // TODO: refactor
-            let mut sites: Vec<(
-                usize,
-                CallTarget<'db>,
-                Vec<TyId<'db>>,
-                Option<AddressSpaceKind>,
-                Vec<EffectProviderKind>,
-            )> = Vec::new();
-            for (value_idx, value) in function.body.values.iter().enumerate() {
-                if let ValueOrigin::Call(call) = &value.origin
+            let mut sites = Vec::new();
+            for (bb_idx, block) in function.body.blocks.iter().enumerate() {
+                for (inst_idx, inst) in block.insts.iter().enumerate() {
+                    if let crate::MirInst::Assign {
+                        rvalue: crate::ir::Rvalue::Call(call),
+                        ..
+                    } = inst
+                        && let Some(target_func) = self.resolve_call_target(call)
+                    {
+                        let args = call.callable.generic_args().to_vec();
+                        sites.push((
+                            bb_idx,
+                            Some(inst_idx),
+                            target_func,
+                            args,
+                            call.receiver_space,
+                            call.effect_kinds.clone(),
+                        ));
+                    }
+                }
+
+                if let crate::Terminator::TerminatingCall(crate::ir::TerminatingCall::Call(call)) =
+                    &block.terminator
                     && let Some(target_func) = self.resolve_call_target(call)
                 {
                     let args = call.callable.generic_args().to_vec();
                     sites.push((
-                        value_idx,
+                        bb_idx,
+                        None,
                         target_func,
                         args,
                         call.receiver_space,
@@ -195,7 +217,7 @@ impl<'db> Monomorphizer<'db> {
                 .iter()
                 .enumerate()
                 .filter_map(|(value_idx, value)| {
-                    if let ValueOrigin::FuncItem(root) = &value.origin {
+                    if let crate::ValueOrigin::FuncItem(root) = &value.origin {
                         Some((value_idx, root.clone()))
                     } else {
                         None
@@ -204,7 +226,7 @@ impl<'db> Monomorphizer<'db> {
                 .collect::<Vec<_>>()
         };
 
-        for (value_idx, target, args, receiver_space, effect_kinds) in call_sites {
+        for (bb_idx, inst_idx, target, args, receiver_space, effect_kinds) in call_sites {
             let resolved_name = match target {
                 CallTarget::Template(func) => self
                     .ensure_instance(func, &args, receiver_space, &effect_kinds)
@@ -214,18 +236,36 @@ impl<'db> Monomorphizer<'db> {
                 }
             };
 
-            if let Some(name) = resolved_name
-                && let ValueOrigin::Call(call) =
-                    &mut self.instances[func_idx].body.values[value_idx].origin
-            {
-                call.resolved_name = Some(name);
+            if let Some(name) = resolved_name {
+                match inst_idx {
+                    Some(inst_idx) => {
+                        let inst =
+                            &mut self.instances[func_idx].body.blocks[bb_idx].insts[inst_idx];
+                        if let crate::MirInst::Assign {
+                            rvalue: crate::ir::Rvalue::Call(call),
+                            ..
+                        } = inst
+                        {
+                            call.resolved_name = Some(name);
+                        }
+                    }
+                    None => {
+                        let term = &mut self.instances[func_idx].body.blocks[bb_idx].terminator;
+                        if let crate::Terminator::TerminatingCall(
+                            crate::ir::TerminatingCall::Call(call),
+                        ) = term
+                        {
+                            call.resolved_name = Some(name);
+                        }
+                    }
+                }
             }
         }
 
         for (value_idx, target) in func_item_sites {
             if let Some((_, symbol)) =
                 self.ensure_instance(target.func, &target.generic_args, None, &[])
-                && let ValueOrigin::FuncItem(target) =
+                && let crate::ValueOrigin::FuncItem(target) =
                     &mut self.instances[func_idx].body.values[value_idx].origin
             {
                 target.symbol = Some(symbol);
@@ -311,11 +351,7 @@ impl<'db> Monomorphizer<'db> {
 
         for value in &mut function.body.values {
             value.ty = value.ty.fold_with(self.db, &mut folder);
-            if let ValueOrigin::Call(call) = &mut value.origin {
-                call.callable = call.callable.clone().fold_with(self.db, &mut folder);
-                call.resolved_name = None;
-            }
-            if let ValueOrigin::FuncItem(target) = &mut value.origin {
+            if let crate::ValueOrigin::FuncItem(target) = &mut value.origin {
                 target.generic_args = target
                     .generic_args
                     .iter()
@@ -323,6 +359,26 @@ impl<'db> Monomorphizer<'db> {
                     .collect();
                 target.symbol =
                     Some(self.mangled_name(target.func, &target.generic_args, None, &[]));
+            }
+        }
+
+        for block in &mut function.body.blocks {
+            for inst in &mut block.insts {
+                if let crate::MirInst::Assign {
+                    rvalue: crate::ir::Rvalue::Call(call),
+                    ..
+                } = inst
+                {
+                    call.callable = call.callable.clone().fold_with(self.db, &mut folder);
+                    call.resolved_name = None;
+                }
+            }
+
+            if let crate::Terminator::TerminatingCall(crate::ir::TerminatingCall::Call(call)) =
+                &mut block.terminator
+            {
+                call.callable = call.callable.clone().fold_with(self.db, &mut folder);
+                call.resolved_name = None;
             }
         }
     }

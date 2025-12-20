@@ -44,11 +44,11 @@ impl<'db> BodyBuilder<'db> {
         self.body.block_mut(block).push_inst(inst);
     }
 
-    pub fn set_block_terminator(&mut self, block: BasicBlockId, term: Terminator) {
+    pub fn set_block_terminator(&mut self, block: BasicBlockId, term: Terminator<'db>) {
         self.body.block_mut(block).set_terminator(term);
     }
 
-    pub fn terminate_current(&mut self, term: Terminator) {
+    pub fn terminate_current(&mut self, term: Terminator<'db>) {
         if let Some(block) = self.current_block {
             self.set_block_terminator(block, term);
             self.current_block = None;

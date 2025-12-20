@@ -3,7 +3,6 @@
 //! The functions defined in this module operate within `FunctionEmitter` and walk
 //! straight-line MIR instructions (non-terminators) to produce Yul statements.
 
-use hir::hir_def::expr::ArithBinOp;
 use hir::projection::Projection;
 use mir::ir::{IntrinsicOp, IntrinsicValue};
 use mir::{self, LocalId, MirProjectionPath, ValueId, ValueOrigin, layout};
@@ -45,21 +44,10 @@ impl<'db> FunctionEmitter<'db> {
         state: &mut BlockState,
     ) -> Result<(), YulError> {
         match inst {
-            mir::MirInst::LocalInit { local, value, .. } => {
-                self.emit_local_init_inst(docs, *local, *value, state)?
+            mir::MirInst::Assign { dest, rvalue, .. } => {
+                self.emit_assign_inst(docs, *dest, rvalue, state)?
             }
-            mir::MirInst::LocalSet { local, value, .. } => {
-                self.emit_local_set_inst(docs, *local, *value, state)?
-            }
-            mir::MirInst::LocalAugAssign {
-                local, value, op, ..
-            } => self.emit_local_augassign_inst(docs, *local, *value, *op, state)?,
-            mir::MirInst::Eval { value, .. } => self.emit_eval_inst(docs, *value, state)?,
-            mir::MirInst::EvalValue { value } => self.emit_eval_inst(docs, *value, state)?,
             mir::MirInst::BindValue { value } => self.emit_bind_value_inst(docs, *value, state)?,
-            mir::MirInst::IntrinsicStmt { op, args } => {
-                self.emit_intrinsic_inst(docs, *op, args, state)?
-            }
             mir::MirInst::Store { place, value } => {
                 self.emit_store_inst(docs, place, *value, state)?
             }
@@ -73,97 +61,57 @@ impl<'db> FunctionEmitter<'db> {
         Ok(())
     }
 
-    fn emit_local_init_inst(
+    fn emit_assign_inst(
         &mut self,
         docs: &mut Vec<YulDoc>,
-        local: LocalId,
-        value: Option<ValueId>,
+        dest: Option<LocalId>,
+        rvalue: &mir::ir::Rvalue<'db>,
         state: &mut BlockState,
     ) -> Result<(), YulError> {
-        if let Some(value_id) = value {
-            let value_ty = self.mir_func.body.value(value_id).ty;
-            if (value_ty.is_tuple(self.db) && value_ty.field_count(self.db) == 0)
-                || value_ty.is_never(self.db)
-            {
-                if let Some(doc) = self.render_eval(value_id, state)? {
-                    docs.push(doc);
+        match rvalue {
+            mir::ir::Rvalue::ZeroInit => {
+                let Some(dest) = dest else {
+                    return Err(YulError::Unsupported(
+                        "zero init without destination".into(),
+                    ));
+                };
+                let (yul_name, declared) = self.resolve_local_for_write(dest, state)?;
+                if declared {
+                    docs.push(YulDoc::line(format!("let {yul_name} := 0")));
+                } else {
+                    docs.push(YulDoc::line(format!("{yul_name} := 0")));
                 }
-                state.insert_local(local, "0".into());
-                return Ok(());
             }
-
-            let rhs = self.lower_value(value_id, state)?;
-            if let Some(existing) = state.local(local) {
-                docs.push(YulDoc::line(format!("{existing} := {rhs}")));
-                return Ok(());
+            mir::ir::Rvalue::Value(value_id) => {
+                if let Some(dest) = dest {
+                    let rhs = self.lower_value(*value_id, state)?;
+                    let (yul_name, declared) = self.resolve_local_for_write(dest, state)?;
+                    if declared {
+                        docs.push(YulDoc::line(format!("let {yul_name} := {rhs}")));
+                    } else {
+                        docs.push(YulDoc::line(format!("{yul_name} := {rhs}")));
+                    }
+                } else {
+                    self.emit_eval_inst(docs, *value_id, state)?;
+                }
             }
-            let temp = state.alloc_local();
-            state.insert_local(local, temp.clone());
-            docs.push(YulDoc::line(format!("let {temp} := {rhs}")));
-            return Ok(());
+            mir::ir::Rvalue::Call(call) => self.emit_call_inst(docs, dest, call, state)?,
+            mir::ir::Rvalue::Intrinsic { op, args } => {
+                self.emit_intrinsic_inst(docs, dest, *op, args, state)?
+            }
+            mir::ir::Rvalue::Load { place } => {
+                let Some(dest) = dest else {
+                    return Err(YulError::Unsupported("load without destination".into()));
+                };
+                self.emit_load_inst(docs, dest, place, state)?
+            }
+            mir::ir::Rvalue::Alloc { address_space } => {
+                let Some(dest) = dest else {
+                    return Err(YulError::Unsupported("alloc without destination".into()));
+                };
+                self.emit_alloc_inst(docs, dest, *address_space, state)?
+            }
         }
-
-        if let Some(existing) = state.local(local) {
-            docs.push(YulDoc::line(format!("{existing} := 0")));
-            return Ok(());
-        }
-        let temp = state.alloc_local();
-        state.insert_local(local, temp.clone());
-        docs.push(YulDoc::line(format!("let {temp} := 0")));
-        Ok(())
-    }
-
-    fn emit_local_set_inst(
-        &mut self,
-        docs: &mut Vec<YulDoc>,
-        local: LocalId,
-        value: ValueId,
-        state: &mut BlockState,
-    ) -> Result<(), YulError> {
-        if !self.mir_func.body.local(local).is_mut {
-            return Err(YulError::Unsupported(
-                "assignment to immutable local".into(),
-            ));
-        }
-        let Some(yul_name) = state.local(local) else {
-            return Err(YulError::Unsupported("assignment to unknown local".into()));
-        };
-        let rhs = self.lower_value(value, state)?;
-        docs.push(YulDoc::line(format!("{yul_name} := {rhs}")));
-        Ok(())
-    }
-
-    fn emit_local_augassign_inst(
-        &mut self,
-        docs: &mut Vec<YulDoc>,
-        local: LocalId,
-        value: ValueId,
-        op: ArithBinOp,
-        state: &mut BlockState,
-    ) -> Result<(), YulError> {
-        if !self.mir_func.body.local(local).is_mut {
-            return Err(YulError::Unsupported(
-                "assignment to immutable local".into(),
-            ));
-        }
-        let Some(yul_name) = state.local(local) else {
-            return Err(YulError::Unsupported("assignment to unknown local".into()));
-        };
-        let rhs = self.lower_value(value, state)?;
-        let assignment = match op {
-            ArithBinOp::Add => format!("add({yul_name}, {rhs})"),
-            ArithBinOp::Sub => format!("sub({yul_name}, {rhs})"),
-            ArithBinOp::Mul => format!("mul({yul_name}, {rhs})"),
-            ArithBinOp::Div => format!("div({yul_name}, {rhs})"),
-            ArithBinOp::Rem => format!("mod({yul_name}, {rhs})"),
-            ArithBinOp::Pow => format!("exp({yul_name}, {rhs})"),
-            ArithBinOp::LShift => format!("shl({rhs}, {yul_name})"),
-            ArithBinOp::RShift => format!("shr({rhs}, {yul_name})"),
-            ArithBinOp::BitAnd => format!("and({yul_name}, {rhs})"),
-            ArithBinOp::BitOr => format!("or({yul_name}, {rhs})"),
-            ArithBinOp::BitXor => format!("xor({yul_name}, {rhs})"),
-        };
-        docs.push(YulDoc::line(format!("{yul_name} := {assignment}")));
         Ok(())
     }
 
@@ -173,28 +121,58 @@ impl<'db> FunctionEmitter<'db> {
     /// * `value` - MIR value used for the expression statement.
     /// * `state` - Block state containing active bindings.
     ///
-    /// Refrains from re-emitting expressions consumed elsewhere and returns
-    /// `Ok(())` after optionally pushing a doc.
-    ///
-    /// However, unit-returning calls are always emitted here because the return
-    /// terminator won't emit them (it skips unit values).
+    /// Refrains from re-emitting expressions consumed elsewhere and returns `Ok(())`
+    /// after optionally pushing a doc.
     fn emit_eval_inst(
         &mut self,
         docs: &mut Vec<YulDoc>,
         value: ValueId,
         state: &mut BlockState,
     ) -> Result<(), YulError> {
-        let value_data = self.mir_func.body.value(value);
-        let is_unit_call = matches!(&value_data.origin, ValueOrigin::Call(..))
-            && value_data.ty.is_tuple(self.db)
-            && value_data.ty.field_count(self.db) == 0;
+        if state.value_temp(value.index()).is_some() {
+            return Ok(());
+        }
 
-        // Unit-returning calls must always be emitted here since the return
-        // terminator won't render them.
-        if (self.value_use_counts[value.index()] == 1 || is_unit_call)
-            && let Some(doc) = self.render_eval(value, state)?
-        {
-            docs.push(doc);
+        let expr = self.lower_value(value, state)?;
+        docs.push(YulDoc::line(format!("pop({expr})")));
+        Ok(())
+    }
+
+    fn resolve_local_for_write(
+        &self,
+        local: LocalId,
+        state: &mut BlockState,
+    ) -> Result<(String, bool), YulError> {
+        if let Some(existing) = state.local(local) {
+            if !self.mir_func.body.local(local).is_mut {
+                return Err(YulError::Unsupported(
+                    "assignment to immutable local".into(),
+                ));
+            }
+            return Ok((existing, false));
+        }
+        let temp = state.alloc_local();
+        state.insert_local(local, temp.clone());
+        Ok((temp, true))
+    }
+
+    fn emit_call_inst(
+        &mut self,
+        docs: &mut Vec<YulDoc>,
+        dest: Option<LocalId>,
+        call: &mir::CallOrigin<'db>,
+        state: &mut BlockState,
+    ) -> Result<(), YulError> {
+        let call_expr = self.lower_call_value(call, state)?;
+        if let Some(dest) = dest {
+            let (yul_name, declared) = self.resolve_local_for_write(dest, state)?;
+            if declared {
+                docs.push(YulDoc::line(format!("let {yul_name} := {call_expr}")));
+            } else {
+                docs.push(YulDoc::line(format!("{yul_name} := {call_expr}")));
+            }
+        } else {
+            docs.push(YulDoc::line(call_expr));
         }
         Ok(())
     }
@@ -209,44 +187,68 @@ impl<'db> FunctionEmitter<'db> {
             return Ok(());
         }
 
-        let value_data = self.mir_func.body.value(value);
-        if (value_data.ty.is_tuple(self.db) && value_data.ty.field_count(self.db) == 0)
-            || value_data.ty.is_never(self.db)
-        {
-            if let Some(doc) = self.render_eval(value, state)? {
-                docs.push(doc);
-            }
-            return Ok(());
-        }
-
         let temp = state.alloc_local();
-        match &value_data.origin {
-            ValueOrigin::Alloc { .. } => {
-                let size_bytes =
-                    layout::ty_size_bytes(self.db, value_data.ty).ok_or_else(|| {
-                        YulError::Unsupported("alloc requires a statically sized type".into())
-                    })?;
-                state.insert_value_temp(value.index(), temp.clone());
-                self.emit_alloc_value(docs, &temp, size_bytes);
-                Ok(())
-            }
-            _ => {
-                let lowered = self.lower_value(value, state)?;
-                state.insert_value_temp(value.index(), temp.clone());
-                docs.push(YulDoc::line(format!("let {temp} := {lowered}")));
-                Ok(())
-            }
-        }
+        let lowered = self.lower_value(value, state)?;
+        state.insert_value_temp(value.index(), temp.clone());
+        docs.push(YulDoc::line(format!("let {temp} := {lowered}")));
+        Ok(())
     }
 
-    fn emit_alloc_value(&self, docs: &mut Vec<YulDoc>, temp: &str, size_bytes: usize) {
+    fn emit_alloc_value(
+        &self,
+        docs: &mut Vec<YulDoc>,
+        name: &str,
+        size_bytes: usize,
+        declare: bool,
+    ) {
         let size = size_bytes.to_string();
-        docs.push(YulDoc::line(format!("let {temp} := mload(0x40)")));
+        if declare {
+            docs.push(YulDoc::line(format!("let {name} := mload(0x40)")));
+        } else {
+            docs.push(YulDoc::line(format!("{name} := mload(0x40)")));
+        }
         docs.push(YulDoc::block(
-            format!("if iszero({temp}) "),
-            vec![YulDoc::line(format!("{temp} := 0x80"))],
+            format!("if iszero({name}) "),
+            vec![YulDoc::line(format!("{name} := 0x80"))],
         ));
-        docs.push(YulDoc::line(format!("mstore(0x40, add({temp}, {size}))")));
+        docs.push(YulDoc::line(format!("mstore(0x40, add({name}, {size}))")));
+    }
+
+    fn emit_alloc_inst(
+        &mut self,
+        docs: &mut Vec<YulDoc>,
+        dest: LocalId,
+        address_space: mir::ir::AddressSpaceKind,
+        state: &mut BlockState,
+    ) -> Result<(), YulError> {
+        if !matches!(address_space, mir::ir::AddressSpaceKind::Memory) {
+            return Err(YulError::Unsupported(
+                "alloc is only supported for memory".into(),
+            ));
+        }
+        let ty = self.mir_func.body.local(dest).ty;
+        let size_bytes = layout::ty_size_bytes_or_word_aligned(self.db, ty);
+        let (yul_name, declared) = self.resolve_local_for_write(dest, state)?;
+        self.emit_alloc_value(docs, &yul_name, size_bytes, declared);
+        Ok(())
+    }
+
+    fn emit_load_inst(
+        &mut self,
+        docs: &mut Vec<YulDoc>,
+        dest: LocalId,
+        place: &mir::ir::Place<'db>,
+        state: &mut BlockState,
+    ) -> Result<(), YulError> {
+        let ty = self.mir_func.body.local(dest).ty;
+        let rhs = self.lower_place_load(place, ty, state)?;
+        let (yul_name, declared) = self.resolve_local_for_write(dest, state)?;
+        if declared {
+            docs.push(YulDoc::line(format!("let {yul_name} := {rhs}")));
+        } else {
+            docs.push(YulDoc::line(format!("{yul_name} := {rhs}")));
+        }
+        Ok(())
     }
 
     fn emit_store_inst(
@@ -306,6 +308,9 @@ impl<'db> FunctionEmitter<'db> {
         value_ty: hir::analysis::ty::ty_def::TyId<'db>,
         state: &mut BlockState,
     ) -> Result<(), YulError> {
+        if layout::ty_size_bytes(self.db, value_ty).is_some_and(|size| size == 0) {
+            return Ok(());
+        }
         if value_ty.is_array(self.db) {
             let Some(len) = layout::array_len(self.db, value_ty) else {
                 return Err(YulError::Unsupported(
@@ -442,8 +447,8 @@ impl<'db> FunctionEmitter<'db> {
     ) -> mir::ir::AddressSpaceKind {
         let value_data = self.mir_func.body.value(value);
         match &value_data.origin {
-            ValueOrigin::PlaceRef(place) | ValueOrigin::PlaceLoad(place) => place.address_space,
-            ValueOrigin::Alloc { address_space } => *address_space,
+            ValueOrigin::PlaceRef(place) => place.address_space,
+            ValueOrigin::Local(local) => self.mir_func.body.local(*local).address_space,
             _ => fallback,
         }
     }
@@ -470,9 +475,10 @@ impl<'db> FunctionEmitter<'db> {
                 .is_some_and(|adt| matches!(adt, hir::analysis::ty::adt_def::AdtRef::Enum(_)))
     }
 
-    /// Emits Yul for a statement-only intrinsic (e.g. `mstore`).
+    /// Emits Yul for an intrinsic instruction.
     ///
     /// * `docs` - Collection to append the statement to when one is emitted.
+    /// * `dest` - Optional destination local (value-returning intrinsics only).
     /// * `op` - Intrinsic opcode.
     /// * `args` - MIR value arguments.
     /// * `state` - Block-local bindings used to lower the arguments.
@@ -481,6 +487,7 @@ impl<'db> FunctionEmitter<'db> {
     fn emit_intrinsic_inst(
         &mut self,
         docs: &mut Vec<YulDoc>,
+        dest: Option<LocalId>,
         op: IntrinsicOp,
         args: &[ValueId],
         state: &mut BlockState,
@@ -489,73 +496,27 @@ impl<'db> FunctionEmitter<'db> {
             op,
             args: args.to_vec(),
         };
+        if let Some(dest) = dest {
+            let expr = self.lower_intrinsic_value(&intr, state)?;
+            let (yul_name, declared) = self.resolve_local_for_write(dest, state)?;
+            if declared {
+                docs.push(YulDoc::line(format!("let {yul_name} := {expr}")));
+            } else {
+                docs.push(YulDoc::line(format!("{yul_name} := {expr}")));
+            }
+            return Ok(());
+        }
+
+        if intr.op.returns_value() {
+            let expr = self.lower_intrinsic_value(&intr, state)?;
+            docs.push(YulDoc::line(format!("pop({expr})")));
+            return Ok(());
+        }
+
         if let Some(doc) = self.lower_intrinsic_stmt(&intr, state)? {
             docs.push(doc);
         }
         Ok(())
-    }
-
-    /// Emits statements for expression statements, returning a doc when work was done.
-    ///
-    /// * `value_id` - MIR value representing the expression.
-    /// * `state` - Block state containing active bindings.
-    ///
-    /// Returns a doc describing the evaluation side effects, if any.
-    pub(super) fn render_eval(
-        &mut self,
-        value_id: ValueId,
-        state: &mut BlockState,
-    ) -> Result<Option<YulDoc>, YulError> {
-        let value = self.mir_func.body.value(value_id);
-        match &value.origin {
-            ValueOrigin::Intrinsic(intr) => self.lower_intrinsic_stmt(intr, state),
-            ValueOrigin::Call(call) => {
-                let call_expr = self.lower_call_value(call, state)?;
-                let is_zero_sized = (value.ty.is_tuple(self.db)
-                    && value.ty.field_count(self.db) == 0)
-                    || value.ty.is_never(self.db);
-                let line = if is_zero_sized {
-                    call_expr
-                } else {
-                    format!("pop({call_expr})")
-                };
-                Ok(Some(YulDoc::line(line)))
-            }
-            _ => Ok(None),
-        }
-    }
-
-    /// Handles `return intrinsic::<op>(...)` for void intrinsics by emitting the
-    /// side effect plus a `ret := 0`.
-    ///
-    /// * `value_id` - MIR value representing the intrinsic call.
-    /// * `docs` - Yul statement accumulator.
-    /// * `state` - Immutable view over block bindings to resolve arguments.
-    ///
-    /// Returns `Ok(true)` when the intrinsic produced a replacement return statement.
-    pub(super) fn emit_intrinsic_return(
-        &mut self,
-        value_id: ValueId,
-        docs: &mut Vec<YulDoc>,
-        state: &BlockState,
-        bind_ret: bool,
-    ) -> Result<bool, YulError> {
-        let value = self.mir_func.body.value(value_id);
-        if let ValueOrigin::Intrinsic(intr) = &value.origin
-            && !intr.op.returns_value()
-        {
-            if let Some(doc) = self.lower_intrinsic_stmt(intr, state)? {
-                docs.push(doc);
-            }
-            if matches!(intr.op, IntrinsicOp::ReturnData) {
-                return Ok(true);
-            }
-            if bind_ret {
-                docs.push(YulDoc::line("ret := 0"));
-            }
-            return Ok(true);
-        }
-        Ok(false)
     }
 
     /// Converts intrinsic value-producing operations (`mload`/`sload`) into Yul.

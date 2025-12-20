@@ -1,6 +1,5 @@
 ---
 source: crates/codegen/tests/yul.rs
-assertion_line: 31
 expression: output
 input_file: tests/fixtures/comparison_ops.fe
 ---
@@ -20,4 +19,5 @@ function comparison_ops() -> ret {
   mstore(add(v3, 4), iszero(iszero(gt(v2, v1))))
   mstore(add(v3, 5), iszero(iszero(iszero(lt(v2, v2)))))
   ret := v3
+  leave
 }

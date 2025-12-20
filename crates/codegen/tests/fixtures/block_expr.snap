@@ -1,9 +1,9 @@
 ---
 source: crates/codegen/tests/yul.rs
-assertion_line: 31
 expression: output
 input_file: tests/fixtures/block_expr.fe
 ---
 function block_expr() -> ret {
   ret := add(1, 2)
+  leave
 }

@@ -9,6 +9,7 @@ object "Coin" {
       let v0 := datasize("Coin_deployed")
       let v1 := dataoffset("Coin_deployed")
       codecopy(0, v1, v0)
+      leave
     }
     init()
   }
@@ -24,70 +25,86 @@ object "Coin" {
         let v0 := 0
         switch user
           case 0 {
-            v0 := sload(store)
+            let v1 := sload(store)
+            v0 := v1
           }
           default {
-            v0 := sload(add(store, 1))
+            let v2 := sload(add(store, 1))
+            v0 := v2
           }
         ret := v0
+        leave
       }
       function credit_alice(amount, store, supply) -> ret {
-        sstore(store, add(sload(store), amount))
-        sstore(supply, add(sload(supply), amount))
-        ret := sload(store)
+        let v0 := sload(store)
+        sstore(store, add(v0, amount))
+        let v1 := sload(supply)
+        sstore(supply, add(v1, amount))
+        let v2 := sload(store)
+        ret := v2
+        leave
       }
       function credit_bob(amount, store, supply) -> ret {
-        sstore(add(store, 1), add(sload(add(store, 1)), amount))
-        sstore(supply, add(sload(supply), amount))
-        ret := sload(add(store, 1))
+        let v0 := sload(add(store, 1))
+        sstore(add(store, 1), add(v0, amount))
+        let v1 := sload(supply)
+        sstore(supply, add(v1, amount))
+        let v2 := sload(add(store, 1))
+        ret := v2
+        leave
       }
       function runtime() {
         let v0 := 0
         let v1 := 2
         let v2 := v0
         let v3 := v1
-        let v4 := shr(224, calldataload(0))
-        switch v4
+        let v4 := calldataload(0)
+        let v5 := shr(224, v4)
+        switch v5
           case 2877082652 {
-            let v5 := calldataload(4)
-            let v6 := calldataload(36)
-            let v7 := 0
-            switch v5
+            let v6 := calldataload(4)
+            let v7 := calldataload(36)
+            let v8 := 0
+            switch v6
               case 0 {
-                v7 := credit_alice(v6, v2, v3)
+                let v9 := credit_alice(v7, v2, v3)
+                v8 := v9
               }
               default {
-                v7 := credit_bob(v6, v2, v3)
+                let v10 := credit_bob(v7, v2, v3)
+                v8 := v10
               }
-            let v8 := v7
-            abi_encode(v8)
+            let v11 := v8
+            abi_encode(v11)
             return(0, 0)
           }
           case 1818602213 {
-            let v9 := calldataload(4)
-            let v10 := balance_of_raw(v9, v2)
-            abi_encode(v10)
+            let v12 := calldataload(4)
+            let v13 := balance_of_raw(v12, v2)
+            abi_encode(v13)
             return(0, 0)
           }
           case 217554442 {
-            let v11 := calldataload(4)
-            let v12 := calldataload(36)
-            let v13 := 0
-            switch v11
+            let v14 := calldataload(4)
+            let v15 := calldataload(36)
+            let v16 := 0
+            switch v14
               case 0 {
-                v13 := transfer_from_alice(v12, v2)
+                let v17 := transfer_from_alice(v15, v2)
+                v16 := v17
               }
               default {
-                v13 := transfer_from_bob(v12, v2)
+                let v18 := transfer_from_bob(v15, v2)
+                v16 := v18
               }
-            let v14 := v13
-            let v15 := transfer_result_code(v14)
-            abi_encode(v15)
+            let v19 := v16
+            let v20 := transfer_result_code(v19)
+            abi_encode(v20)
             return(0, 0)
           }
           case 960555502 {
-            let v16 := total_supply(v3)
-            abi_encode(v16)
+            let v21 := total_supply(v3)
+            abi_encode(v21)
             return(0, 0)
           }
           default {
@@ -95,57 +112,70 @@ object "Coin" {
           }
       }
       function total_supply(supply) -> ret {
-        ret := sload(supply)
+        let v0 := sload(supply)
+        ret := v0
+        leave
       }
       function transfer_from_alice(amount, store) -> ret {
-        let v0 := lt(sload(store), amount)
-        if v0 {
-          let v1 := mload(0x40)
-          if iszero(v1) {
-            v1 := 0x80
-          }
-          mstore(0x40, add(v1, 32))
-          mstore(v1, 1)
-          ret := v1
-        }
-        if iszero(v0) {
-          sstore(store, sub(sload(store), amount))
-          sstore(add(store, 1), add(sload(add(store, 1)), amount))
+        let v0 := sload(store)
+        let v1 := lt(v0, amount)
+        if v1 {
           let v2 := mload(0x40)
           if iszero(v2) {
             v2 := 0x80
           }
           mstore(0x40, add(v2, 32))
-          mstore(v2, 0)
+          mstore(v2, 1)
           ret := v2
+          leave
+        }
+        if iszero(v1) {
+          let v3 := sload(store)
+          sstore(store, sub(v3, amount))
+          let v4 := sload(add(store, 1))
+          sstore(add(store, 1), add(v4, amount))
+          let v5 := mload(0x40)
+          if iszero(v5) {
+            v5 := 0x80
+          }
+          mstore(0x40, add(v5, 32))
+          mstore(v5, 0)
+          ret := v5
+          leave
         }
       }
       function transfer_from_bob(amount, store) -> ret {
-        let v0 := lt(sload(add(store, 1)), amount)
-        if v0 {
-          let v1 := mload(0x40)
-          if iszero(v1) {
-            v1 := 0x80
-          }
-          mstore(0x40, add(v1, 32))
-          mstore(v1, 1)
-          ret := v1
-        }
-        if iszero(v0) {
-          sstore(add(store, 1), sub(sload(add(store, 1)), amount))
-          sstore(store, add(sload(store), amount))
+        let v0 := sload(add(store, 1))
+        let v1 := lt(v0, amount)
+        if v1 {
           let v2 := mload(0x40)
           if iszero(v2) {
             v2 := 0x80
           }
           mstore(0x40, add(v2, 32))
-          mstore(v2, 0)
+          mstore(v2, 1)
           ret := v2
+          leave
+        }
+        if iszero(v1) {
+          let v3 := sload(add(store, 1))
+          sstore(add(store, 1), sub(v3, amount))
+          let v4 := sload(store)
+          sstore(store, add(v4, amount))
+          let v5 := mload(0x40)
+          if iszero(v5) {
+            v5 := 0x80
+          }
+          mstore(0x40, add(v5, 32))
+          mstore(v5, 0)
+          ret := v5
+          leave
         }
       }
       function transfer_result_code(res) -> ret {
         let v0 := 0
-        switch mload(res)
+        let v1 := mload(res)
+        switch v1
           case 0 {
             v0 := 0
           }
@@ -155,6 +185,7 @@ object "Coin" {
           default {
           }
         ret := v0
+        leave
       }
       runtime()
       return(0, 0)

@@ -32,11 +32,9 @@ use crate::{
     core_lib::{CoreHelperTy, CoreLib, CoreLibError},
     ir::{
         AddressSpaceKind, BasicBlockId, BodyBuilder, CallOrigin, CodeRegionRoot, ContractFunction,
-        ContractFunctionKind, DecisionTreeBinding, EffectProviderKind, IntrinsicOp, IntrinsicValue,
-        LocalData, LocalId, LoopInfo, MatchArmLowering, MatchArmPattern, MatchLoweringInfo,
+        ContractFunctionKind, EffectProviderKind, IntrinsicOp, LocalData, LocalId, LoopInfo,
         MirBody, MirFunction, MirInst, MirModule, MirProjection, MirProjectionPath, Place,
-        SwitchOrigin, SwitchTarget, SwitchValue, SyntheticValue, Terminator, ValueData, ValueId,
-        ValueOrigin,
+        SwitchTarget, SwitchValue, SyntheticValue, Terminator, ValueData, ValueId, ValueOrigin,
     },
     monomorphize::monomorphize_functions,
 };
@@ -179,7 +177,11 @@ pub fn lower_module<'db>(
         templates.push(lowered);
     }
 
-    let functions = monomorphize_functions(db, templates);
+    let mut functions = monomorphize_functions(db, templates);
+    for func in &mut functions {
+        crate::transform::insert_temp_binds(db, &mut func.body);
+        crate::transform::canonicalize_zero_sized(db, &mut func.body);
+    }
     Ok(MirModule { top_mod, functions })
 }
 
@@ -224,8 +226,6 @@ pub(crate) fn lower_function<'db>(
     builder.move_to_block(entry);
     builder.lower_root(body.expr(db));
     builder.ensure_const_expr_values();
-    builder.ensure_field_expr_values();
-    builder.ensure_call_expr_values();
     if let Some(block) = builder.current_block() {
         let ret_ty = func.return_ty(db);
         let returns_value = !builder.is_unit_ty(ret_ty) && !ret_ty.is_never(db);
@@ -236,8 +236,7 @@ pub(crate) fn lower_function<'db>(
             builder.set_terminator(block, Terminator::Return(None));
         }
     }
-    let mut mir_body = builder.finish();
-    crate::transform::insert_temp_binds(db, &mut mir_body);
+    let mir_body = builder.finish();
 
     if let Some(expr) = first_unlowered_expr_used_by_mir(&mir_body) {
         let expr_context = format_hir_expr_context(db, body, expr);
@@ -356,11 +355,11 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
     /// # Parameters
     /// - `block`: Target basic block.
     /// - `term`: Terminator to assign.
-    fn set_terminator(&mut self, block: BasicBlockId, term: Terminator) {
+    fn set_terminator(&mut self, block: BasicBlockId, term: Terminator<'db>) {
         self.builder.set_block_terminator(block, term);
     }
 
-    fn set_current_terminator(&mut self, term: Terminator) {
+    fn set_current_terminator(&mut self, term: Terminator<'db>) {
         self.builder.terminate_current(term);
     }
 
@@ -376,19 +375,23 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         });
     }
 
-    fn switch(
-        &mut self,
-        discr: ValueId,
-        targets: Vec<SwitchTarget>,
-        default: BasicBlockId,
-        origin: SwitchOrigin,
-    ) {
+    fn switch(&mut self, discr: ValueId, targets: Vec<SwitchTarget>, default: BasicBlockId) {
         self.set_current_terminator(Terminator::Switch {
             discr,
             targets,
             default,
-            origin,
         });
+    }
+
+    pub(super) fn alloc_temp_local(&mut self, ty: TyId<'db>, is_mut: bool, hint: &str) -> LocalId {
+        let idx = self.builder.body.locals.len();
+        let name = format!("tmp_{hint}{idx}");
+        self.builder.body.alloc_local(LocalData {
+            name,
+            ty,
+            is_mut,
+            address_space: AddressSpaceKind::Memory,
+        })
     }
 
     /// Appends an instruction to the given block.
@@ -433,12 +436,24 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                 .get(pat)
                 .copied()
                 .unwrap_or(AddressSpaceKind::Memory),
-            LocalBinding::Param { idx, .. } => {
-                if *idx == 0 {
-                    return self.receiver_space.unwrap_or(AddressSpaceKind::Memory);
+            LocalBinding::Param { site, idx, .. } => match site {
+                ParamSite::Func(_) => {
+                    if *idx == 0 {
+                        return self.receiver_space.unwrap_or(AddressSpaceKind::Memory);
+                    }
+                    AddressSpaceKind::Memory
                 }
-                AddressSpaceKind::Memory
-            }
+                ParamSite::EffectField(_) => match self
+                    .effect_provider_kinds
+                    .get(*idx)
+                    .copied()
+                    .unwrap_or(EffectProviderKind::Storage)
+                {
+                    EffectProviderKind::Memory => AddressSpaceKind::Memory,
+                    EffectProviderKind::Storage => AddressSpaceKind::Storage,
+                    EffectProviderKind::Calldata => AddressSpaceKind::Memory,
+                },
+            },
         }
     }
 
@@ -506,6 +521,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                 name,
                 ty,
                 is_mut: binding.is_mut(),
+                address_space: self.address_space_for_binding(&binding),
             });
             self.builder.body.param_locals.push(local);
             self.binding_locals.insert(binding, local);
@@ -536,6 +552,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                 name,
                 ty: self.u256_ty(),
                 is_mut: binding.is_mut(),
+                address_space: self.address_space_for_binding(&binding),
             });
             self.builder.body.effect_param_locals.push(local);
             self.binding_locals.insert(binding, local);
@@ -546,16 +563,39 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         if let Some(&local) = self.binding_locals.get(&binding) {
             return Some(local);
         }
+        let needs_effect_param_local = matches!(
+            binding,
+            LocalBinding::EffectParam {
+                site: EffectParamSite::Contract(_) | EffectParamSite::ContractRecvArm { .. },
+                ..
+            }
+        );
+        if let LocalBinding::Param {
+            site: ParamSite::EffectField(effect_site),
+            idx,
+            ..
+        } = binding
+            && matches!(effect_site, EffectParamSite::Func(func) if func == self.func)
+            && let Some(&local) = self.builder.body.effect_param_locals.get(idx)
+        {
+            self.binding_locals.insert(binding, local);
+            return Some(local);
+        }
         let name = self.binding_name(binding)?;
         let (ty, is_mut) = match binding {
             LocalBinding::Local { pat, is_mut } => (self.typed_body.pat_ty(self.db, pat), is_mut),
             LocalBinding::Param { ty, is_mut, .. } => (ty, is_mut),
             LocalBinding::EffectParam { is_mut, .. } => (self.u256_ty(), is_mut),
         };
-        let local = self
-            .builder
-            .body
-            .alloc_local(LocalData { name, ty, is_mut });
+        let local = self.builder.body.alloc_local(LocalData {
+            name,
+            ty,
+            is_mut,
+            address_space: self.address_space_for_binding(&binding),
+        });
+        if needs_effect_param_local {
+            self.builder.body.effect_param_locals.push(local);
+        }
         self.binding_locals.insert(binding, local);
         Some(local)
     }
@@ -576,7 +616,31 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                     .and_then(|param| param.name(self.db))
                     .map(|ident| ident.data(self.db).to_string())
                     .or_else(|| Some(format!("arg{idx}"))),
-                ParamSite::EffectField(_) => None,
+                ParamSite::EffectField(effect_site) => {
+                    let name = match effect_site {
+                        EffectParamSite::Func(func) => func
+                            .effect_params(self.db)
+                            .nth(idx)
+                            .and_then(|effect| effect.name(self.db)),
+                        EffectParamSite::Contract(contract) => contract
+                            .effects(self.db)
+                            .data(self.db)
+                            .get(idx)
+                            .and_then(|effect| effect.name),
+                        EffectParamSite::ContractRecvArm {
+                            contract,
+                            recv_idx,
+                            arm_idx,
+                        } => contract
+                            .recv_arm(self.db, recv_idx as usize, arm_idx as usize)?
+                            .effects
+                            .data(self.db)
+                            .get(idx)
+                            .and_then(|effect| effect.name),
+                    };
+                    name.map(|ident| ident.data(self.db).to_string())
+                        .or_else(|| Some(format!("effect_field{idx}")))
+                }
             },
             LocalBinding::EffectParam {
                 site,
@@ -590,7 +654,23 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                         .nth(idx)
                         .and_then(|effect| effect.name(self.db))
                         .map(|ident| ident.data(self.db).to_string()),
-                    _ => None,
+                    EffectParamSite::Contract(contract) => contract
+                        .effects(self.db)
+                        .data(self.db)
+                        .get(idx)
+                        .and_then(|effect| effect.name)
+                        .map(|ident| ident.data(self.db).to_string()),
+                    EffectParamSite::ContractRecvArm {
+                        contract,
+                        recv_idx,
+                        arm_idx,
+                    } => contract
+                        .recv_arm(self.db, recv_idx as usize, arm_idx as usize)?
+                        .effects
+                        .data(self.db)
+                        .get(idx)
+                        .and_then(|effect| effect.name)
+                        .map(|ident| ident.data(self.db).to_string()),
                 };
                 explicit.or_else(|| {
                     key_path
@@ -744,20 +824,26 @@ fn first_unlowered_expr_used_by_mir<'db>(body: &MirBody<'db>) -> Option<ExprId> 
     for block in &body.blocks {
         for inst in &block.insts {
             match inst {
-                MirInst::LocalInit { value, .. } => {
-                    if let Some(value) = value {
+                MirInst::Assign { rvalue, .. } => match rvalue {
+                    crate::ir::Rvalue::ZeroInit => {}
+                    crate::ir::Rvalue::Value(value) => {
                         used_values.insert(*value);
                     }
-                }
-                MirInst::LocalSet { value, .. }
-                | MirInst::LocalAugAssign { value, .. }
-                | MirInst::Eval { value, .. }
-                | MirInst::EvalValue { value }
-                | MirInst::BindValue { value } => {
+                    crate::ir::Rvalue::Call(call) => {
+                        used_values.extend(call.args.iter().copied());
+                        used_values.extend(call.effect_args.iter().copied());
+                    }
+                    crate::ir::Rvalue::Intrinsic { args, .. } => {
+                        used_values.extend(args.iter().copied());
+                    }
+                    crate::ir::Rvalue::Load { place } => {
+                        used_values.insert(place.base);
+                        used_values.extend(dynamic_indices(&place.projection));
+                    }
+                    crate::ir::Rvalue::Alloc { .. } => {}
+                },
+                MirInst::BindValue { value } => {
                     used_values.insert(*value);
-                }
-                MirInst::IntrinsicStmt { args, .. } => {
-                    used_values.extend(args.iter().copied());
                 }
                 MirInst::Store { place, value } => {
                     used_values.insert(place.base);
@@ -783,10 +869,15 @@ fn first_unlowered_expr_used_by_mir<'db>(body: &MirBody<'db>) -> Option<ExprId> 
             Terminator::Return(Some(value)) => {
                 used_values.insert(*value);
             }
-            Terminator::ReturnData { offset, size } | Terminator::Revert { offset, size } => {
-                used_values.insert(*offset);
-                used_values.insert(*size);
-            }
+            Terminator::TerminatingCall(call) => match call {
+                crate::ir::TerminatingCall::Call(call) => {
+                    used_values.extend(call.args.iter().copied());
+                    used_values.extend(call.effect_args.iter().copied());
+                }
+                crate::ir::TerminatingCall::Intrinsic { args, .. } => {
+                    used_values.extend(args.iter().copied());
+                }
+            },
             Terminator::Branch { cond, .. } => {
                 used_values.insert(*cond);
             }
@@ -794,20 +885,6 @@ fn first_unlowered_expr_used_by_mir<'db>(body: &MirBody<'db>) -> Option<ExprId> 
                 used_values.insert(*discr);
             }
             Terminator::Return(None) | Terminator::Goto { .. } | Terminator::Unreachable => {}
-        }
-    }
-
-    for match_info in body.match_info.values() {
-        used_values.insert(match_info.result);
-        used_values.insert(match_info.scrutinee);
-        for arm in &match_info.arms {
-            if let Some(value) = arm.value {
-                used_values.insert(value);
-            }
-            for binding in &arm.decision_tree_bindings {
-                used_values.insert(binding.place);
-                used_values.insert(binding.value);
-            }
         }
     }
 

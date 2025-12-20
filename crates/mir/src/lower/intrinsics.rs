@@ -56,17 +56,16 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                 args.len() == 2,
                 "terminating intrinsics should have exactly two arguments"
             );
-            let offset = args[0];
-            let size = args[1];
-            let term = match op {
-                IntrinsicOp::ReturnData => Terminator::ReturnData { offset, size },
-                IntrinsicOp::Revert => Terminator::Revert { offset, size },
-                _ => unreachable!(),
-            };
-            self.set_current_terminator(term);
+            self.set_current_terminator(Terminator::TerminatingCall(
+                crate::ir::TerminatingCall::Intrinsic { op, args },
+            ));
             return Some(value_id);
         }
-        self.push_inst_here(MirInst::IntrinsicStmt { op, args });
+        self.push_inst_here(MirInst::Assign {
+            stmt: None,
+            dest: None,
+            rvalue: crate::ir::Rvalue::Intrinsic { op, args },
+        });
         Some(value_id)
     }
 

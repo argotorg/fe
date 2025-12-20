@@ -13,6 +13,7 @@ object "Foo" {
       }
       mstore(64, add(v0, bytes))
       ret := v0
+      leave
     }
     function init() {
       let v0 := datasize("Child")
@@ -37,9 +38,11 @@ object "Foo" {
       function read_selector() -> ret {
         let v0 := calldataload(0)
         ret := shr(224, v0)
+        leave
       }
       function runtime() {
-        switch read_selector()
+        let v0 := read_selector()
+        switch v0
           case 305419896 {
             transfer()
           }

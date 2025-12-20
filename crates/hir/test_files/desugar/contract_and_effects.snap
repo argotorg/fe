@@ -35,8 +35,22 @@ mod __Counter {
         }
     }
 
+    fn init_contract(start: u64) uses (mut count: u64) {
+        return {
+            count = start
+        }
+    }
+
     #[contract_init(Counter)]
     fn init() {
+        let mut count = StorPtr<u64>::at_offset(contract_field_slot(0))
+        let __calldata = CallData {  }
+        let mut __d = SolDecoder<CallData>::new(__calldata)
+        if calldatasize() < encoded_size<u64>() {
+            revert(0, 0)
+        }
+        let start: u64 = u64::decode(__d)
+        with (count) { init_contract(start) }
         let __len = code_region_len(runtime)
         let __offset = code_region_offset(runtime)
         codecopy(dest: 0, __offset, __len)

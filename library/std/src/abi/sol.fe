@@ -118,8 +118,9 @@ impl AbiEncoder<Sol> for SolEncoder {
     }
 
     fn write_word(mut self, v: u256) {
-        mstore(self.pos, v)
-        self.pos = self.pos + 32
+        let p = self.pos
+        mstore(p, v)
+        self.pos = p + 32
     }
 
     fn write_word_at(mut self, at: u256, v: u256) {
@@ -138,6 +139,7 @@ impl AbiEncoder<Sol> for SolEncoder {
     }
 
     fn finish(self) -> (u256, u256) {
-        (self.start, self.end - self.start)
+        let start = self.start
+        (start, self.end - start)
     }
 }

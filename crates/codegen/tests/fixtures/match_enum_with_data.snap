@@ -12,13 +12,16 @@ function make_some(value) -> ret {
   mstore(v0, 1)
   mstore(add(v0, 32), and(value, 0xffffffffffffffff))
   ret := v0
+  leave
 }
 function match_option(opt) -> ret {
   let v0 := 0
-  switch mload(opt)
+  let v1 := mload(opt)
+  switch v1
     case 1 {
-      let v1 := and(mload(add(opt, 32)), 0xffffffffffffffff)
-      v0 := v1
+      let v2 := and(mload(add(opt, 32)), 0xffffffffffffffff)
+      let v3 := v2
+      v0 := v3
     }
     case 0 {
       v0 := 0
@@ -26,4 +29,5 @@ function match_option(opt) -> ret {
     default {
     }
   ret := v0
+  leave
 }

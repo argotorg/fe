@@ -1,0 +1,127 @@
+---
+source: crates/mir/tests/lowering_snapshots.rs
+expression: mir_output
+---
+fn bump(v0: u256) -> ():
+  bb0:
+    v1: u256 = load stor[v0].0
+    store stor[v0].0 = (v1 + 1)
+    v2: u256 = load stor[v0].1
+    store stor[v0].1 = (v2 + 2)
+    ret
+
+fn maybe_inc(v0: Opt) -> u64:
+  bb0:
+    v2: u64 = 0
+    jmp bb4
+  bb1:
+    ret 0
+  bb2:
+    v4: u64 = load mem[v0].1[0]
+    v3: u64 = v4
+    v2 = v3
+    jmp bb3
+  bb3:
+    v1: u64 = v2
+    v6: u64 = 0
+    jmp bb6
+  bb4:
+    v5: u256 = load mem[v0].discr
+    switch v5 [0 => bb1, 1 => bb2] else bb5
+  bb5:
+    unreachable
+  bb6:
+    br (v6 < 3) bb7 bb8
+  bb7:
+    v6 = (v6 + 1)
+    jmp bb6
+  bb8:
+    ret (v1 + v6)
+
+fn test_effects_and_aggregates() -> ():
+  bb0:
+    v0: MemPtr<Foo> = 256
+    bind v0
+    eval bump__eff_mem(v0)
+    v1: StorPtr<Foo> = 0
+    bind v1
+    eval bump(v1)
+    v3: Foo = alloc mem
+    init mem[v3] { .0 = 10, .1 = 20 }
+    v2: Foo = v3
+    bind v2
+    eval bump__eff_mem(v2)
+    v4: StorPtr<StorageMap<u256, u256>> = stor_at(0)
+    bind v4
+    eval set_balance(1, 7, v4)
+    v5: u256 = get_balance(1, v4)
+    ret
+
+fn get_balance(v0: u256, v1: u256) -> u256:
+  bb0:
+    v2: u256 = storagemap_k__v__get_stor__u256_u256__cc308d1bea3fb6e4(v1, v0)
+    ret v2
+
+fn set_balance(v0: u256, v1: u256, v2: u256) -> ():
+  bb0:
+    eval storagemap_k__v__set_stor__u256_u256__cc308d1bea3fb6e4(v2, v0, v1)
+    ret
+
+fn selector_match() -> u256:
+  bb0:
+    v1: u256 = calldataload(0)
+    v0: u256 = (v1 >> 224)
+    v2: u256 = 0
+    jmp bb5
+  bb1:
+    v2 = 1
+    jmp bb2
+  bb2:
+    ret v2
+  bb3:
+    v2 = 2
+    jmp bb2
+  bb4:
+    v2 = 0
+    jmp bb2
+  bb5:
+    switch v0 [151146943 => bb1, 2066295049 => bb3] else bb4
+
+fn bump__eff_mem(v0: u256) -> ():
+  bb0:
+    v1: u256 = load mem[v0].0
+    store mem[v0].0 = (v1 + 1)
+    v2: u256 = load mem[v0].1
+    store mem[v0].1 = (v2 + 2)
+    ret
+
+fn storagemap_k__v__get_stor__u256_u256__cc308d1bea3fb6e4(v0: StorageMap<K, V>, v1: K) -> V:
+  bb0:
+    v2: u256 = storagemap_k__v__storage_slot_stor__u256_u256__cc308d1bea3fb6e4(v0, v1)
+    v3: u256 = sload(v2)
+    v4: u256 = to_word__deduped(v3)
+    ret v4
+
+fn storagemap_k__v__set_stor__u256_u256__cc308d1bea3fb6e4(v0: StorageMap<K, V>, v1: K, v2: V) -> ():
+  bb0:
+    v3: u256 = storagemap_k__v__storage_slot_stor__u256_u256__cc308d1bea3fb6e4(v0, v1)
+    v4: u256 = to_word__deduped(v2)
+    eval sstore(v3, v4)
+    ret
+
+fn storagemap_k__v__storage_slot_stor__u256_u256__cc308d1bea3fb6e4(v0: StorageMap<K, V>, v1: K) -> u256:
+  bb0:
+    v2: u256 = write_key__u256__3271ca15373d4483(0, v1)
+    v3: u256 = addr_of(v0)
+    eval mstore(v2, v3)
+    v4: u256 = keccak256(0, (v2 + 32))
+    ret v4
+
+fn to_word__deduped(v0: u256) -> u256:
+  bb0:
+    ret v0
+
+fn write_key__u256__3271ca15373d4483(v0: u256, v1: u256) -> u256:
+  bb0:
+    eval mstore(v0, v1)
+    ret 32

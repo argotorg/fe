@@ -599,6 +599,7 @@ fn lower_contract_entrypoints_and_handlers<'db>(
 ) {
     let db = ctxt.db();
     let contract_ptr = AstPtr::new(contract_ast);
+    let init_ast = contract_ast.init_block();
 
     let Some(contract_name) = contract.name(db).to_opt() else {
         return;
@@ -644,8 +645,19 @@ fn lower_contract_entrypoints_and_handlers<'db>(
         }
     }
 
+    // Synthesize init handler (user init block) so the init entrypoint can call it.
+    if let Some(init_ast) = init_ast.clone() {
+        lower_contract_init_handler_func(ctxt, contract, contract_ptr.clone(), init_ast);
+    }
+
     // Synthesize init/runtime entrypoints.
-    lower_contract_init_entrypoint_func(ctxt, contract, contract_ptr.clone(), contract_name);
+    lower_contract_init_entrypoint_func(
+        ctxt,
+        contract,
+        contract_ptr.clone(),
+        contract_name,
+        init_ast,
+    );
     lower_contract_runtime_entrypoint_func(ctxt, contract, contract_name, contract_ast);
 
     // Create and close the module
@@ -969,6 +981,7 @@ fn lower_contract_init_entrypoint_func<'db>(
     contract: Contract<'db>,
     contract_ptr: AstPtr<ast::Contract>,
     contract_name: IdentId<'db>,
+    init_ast: Option<ast::ContractInit>,
 ) -> Func<'db> {
     let db = ctxt.db();
     let desugared = ContractLoweringDesugared {
@@ -993,6 +1006,143 @@ fn lower_contract_init_entrypoint_func<'db>(
 
     {
         let mut b = HirBuilder::new(&mut body_ctxt, desugared.clone());
+
+        if let Some(init_ast) = init_ast {
+            // Instantiate contract fields as storage pointers.
+            for (idx, field) in contract.fields(db).data(db).iter().enumerate() {
+                let (Some(field_name), Some(field_ty)) =
+                    (field.name.to_opt(), field.type_ref.to_opt())
+                else {
+                    continue;
+                };
+
+                // let mut field = StorPtr<FieldTy>::at_offset(contract_field_slot(idx))
+                let slot_idx = b.int_lit(idx);
+                let field_slot = b.path_expr(&["contract_field_slot"]);
+                let slot_expr = b.call(field_slot, vec![slot_idx]);
+
+                let stor_ptr_path = b
+                    .path_with_generic(&[], "StorPtr", field_ty)
+                    .push_str(db, "at_offset");
+                let at_offset = b.path_id_expr(stor_ptr_path);
+                let ptr_init = b.call(at_offset, vec![slot_expr]);
+
+                let bind_pat = b.body_ctxt.push_pat(
+                    Pat::Path(Partial::Present(PathId::from_ident(db, field_name)), true),
+                    b.origin(),
+                );
+                stmts.push(
+                    b.body_ctxt
+                        .push_stmt(Stmt::Let(bind_pat, None, Some(ptr_init)), b.origin()),
+                );
+            }
+
+            // Decode init args from calldata and call user init logic.
+            // let __calldata = CallData {}
+            let call_data_path = b.path(&["CallData"]);
+            let call_data_init = b.record_init(call_data_path, vec![]);
+            b.let_stmt(&mut stmts, "__calldata", false, call_data_init);
+
+            // let mut __d = SolDecoder<CallData>::new(__calldata)
+            let call_data_ident = b.ident("__calldata");
+            let call_data_ty = TypeId::new(
+                db,
+                TypeKind::Path(Partial::Present(PathId::from_str(db, "CallData"))),
+            );
+            let sol_decoder_path = b
+                .path_with_generic(&[], "SolDecoder", call_data_ty)
+                .push_str(db, "new");
+            let sol_decoder = b.path_id_expr(sol_decoder_path);
+            let call_data_expr = b.body_ctxt.push_expr(
+                Expr::Path(Partial::Present(PathId::from_ident(db, call_data_ident))),
+                b.origin(),
+            );
+            let d_init = b.call(sol_decoder, vec![call_data_expr]);
+            b.let_stmt(&mut stmts, "__d", true, d_init);
+
+            // if calldatasize() < sum(encoded_size<ParamTy>()) { revert(0, 0) }
+            let required_size = {
+                let mut total: Option<ExprId> = None;
+                if let Some(params_ast) = init_ast.params() {
+                    let params_hir = FuncParamListId::lower_ast(b.body_ctxt.f_ctxt, params_ast);
+                    for param in params_hir.data(db) {
+                        let Some(param_ty) = param.ty.to_opt() else {
+                            continue;
+                        };
+                        let sz = b.encoded_size_of_ty(param_ty);
+                        total = Some(match total {
+                            None => sz,
+                            Some(acc) => b.add(acc, sz),
+                        });
+                    }
+                }
+                total.unwrap_or_else(|| b.int_lit(0))
+            };
+
+            let calldatasize_fn = b.path_expr(&["calldatasize"]);
+            let calldata_size = b.call(calldatasize_fn, vec![]);
+            let is_too_short = b.lt(calldata_size, required_size);
+            let revert_expr = b.revert_call();
+            let revert_stmt = b.body_ctxt.push_stmt(Stmt::Expr(revert_expr), b.origin());
+            let then_block = b.block(vec![revert_stmt]);
+            let guard = b.if_(is_too_short, then_block);
+            b.expr_stmt(&mut stmts, guard);
+
+            // Decode each param and bind it as a local.
+            let mut arg_names: Vec<IdentId<'db>> = Vec::new();
+            if let Some(params_ast) = init_ast.params() {
+                let params_hir = FuncParamListId::lower_ast(b.body_ctxt.f_ctxt, params_ast);
+                for param in params_hir.data(db) {
+                    let Some(param_ty) = param.ty.to_opt() else {
+                        continue;
+                    };
+                    let FuncParamName::Ident(param_name) = param
+                        .name
+                        .to_opt()
+                        .unwrap_or_else(|| FuncParamName::Ident(IdentId::new(db, "_".to_string())))
+                    else {
+                        continue;
+                    };
+
+                    let decode_path = match param_ty.data(db) {
+                        TypeKind::Path(path) => path
+                            .to_opt()
+                            .unwrap_or_else(|| PathId::from_str(db, "_"))
+                            .push_str(db, "decode"),
+                        _ => PathId::from_str(db, "_"),
+                    };
+                    let decode_fn = b.path_id_expr(decode_path);
+                    let d_expr = b.var_expr("__d");
+                    let decoded = b.call(decode_fn, vec![d_expr]);
+                    b.let_stmt_typed(&mut stmts, param_name.data(db), false, param_ty, decoded);
+                    arg_names.push(param_name);
+                }
+            }
+
+            // Call init_user(...) under the init block's `uses` bindings.
+            let raw_uses = lower_uses_clause_opt(b.body_ctxt.f_ctxt, init_ast.uses_clause());
+            let with_names: Vec<_> = raw_uses
+                .data(db)
+                .iter()
+                .filter_map(|eff| {
+                    eff.name
+                        .or_else(|| eff.key_path.to_opt().and_then(|p| p.as_ident(db)))
+                })
+                .collect();
+
+            let init_user_ident = IdentId::new(db, "init_contract".to_string());
+            let init_user = b.body_ctxt.push_expr(
+                Expr::Path(Partial::Present(PathId::from_ident(db, init_user_ident))),
+                b.origin(),
+            );
+            let call_args: Vec<_> = arg_names
+                .iter()
+                .map(|name| b.var_expr(name.data(db)))
+                .collect();
+            let call = b.call(init_user, call_args);
+            let wrapped = b.with_expr(with_names, call);
+            b.expr_stmt(&mut stmts, wrapped);
+        }
 
         // let __len = code_region_len(runtime)
         let runtime_expr = b.var_expr(&runtime_fn_name);
@@ -1047,6 +1197,73 @@ fn lower_contract_init_entrypoint_func<'db>(
     );
 
     ctxt.leave_item_scope(init_fn)
+}
+
+fn lower_contract_init_handler_func<'db>(
+    ctxt: &mut FileLowerCtxt<'db>,
+    contract: Contract<'db>,
+    contract_ptr: AstPtr<ast::Contract>,
+    init_ast: ast::ContractInit,
+) -> Func<'db> {
+    let db = ctxt.db();
+    let desugared = ContractLoweringDesugared {
+        contract: contract_ptr,
+        recv_idx: None,
+        arm_idx: None,
+        focus: ContractLoweringDesugaredFocus::InitBlock,
+    };
+
+    let fn_name = Partial::Present(IdentId::new(db, "init_contract".to_string()));
+    let id = ctxt.joined_id(TrackedItemVariant::Func(fn_name));
+    ctxt.enter_item_scope(id, false);
+
+    let params = init_ast
+        .params()
+        .map(|p| FuncParamListId::lower_ast(ctxt, p))
+        .unwrap_or_else(|| FuncParamListId::new(db, vec![]));
+    let uses = lower_contract_typed_uses_clause(ctxt, contract, init_ast.uses_clause());
+
+    let body_ast = init_ast
+        .body()
+        .map(|b| ast::Expr::cast(b.syntax().clone()).unwrap());
+
+    let mut body_ctxt = BodyCtxt::new(ctxt, ctxt.joined_id(TrackedItemVariant::FuncBody));
+    let mut stmts = Vec::new();
+    body_ctxt.f_ctxt.enter_block_scope();
+
+    if let Some(body_ast) = body_ast {
+        let inner_expr = Expr::lower_ast(&mut body_ctxt, body_ast);
+        stmts.push(body_ctxt.push_stmt(
+            Stmt::Return(Some(inner_expr)),
+            HirOrigin::desugared(desugared.clone()),
+        ));
+    } else {
+        stmts
+            .push(body_ctxt.push_stmt(Stmt::Return(None), HirOrigin::desugared(desugared.clone())));
+    }
+
+    let root_expr =
+        body_ctxt.push_expr(Expr::Block(stmts), HirOrigin::desugared(desugared.clone()));
+    body_ctxt.f_ctxt.leave_block_scope(root_expr);
+    let body = body_ctxt.build(None, root_expr, BodyKind::FuncBody);
+
+    let init_user = Func::new(
+        db,
+        id,
+        fn_name,
+        AttrListId::new(db, vec![]),
+        GenericParamListId::new(db, vec![]),
+        WhereClauseId::new(db, vec![]),
+        Partial::Present(params),
+        uses,
+        None,
+        ItemModifier::None,
+        Some(body),
+        ctxt.top_mod(),
+        HirOrigin::desugared(desugared),
+    );
+
+    ctxt.leave_item_scope(init_user)
 }
 
 fn lower_contract_runtime_entrypoint_func<'db>(
