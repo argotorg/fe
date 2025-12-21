@@ -483,6 +483,9 @@ fn is_method_call<S: TokenStream>(parser: &mut Parser<S>) -> bool {
             return false;
         }
 
+        // After the identifier, require `<` or `(` to be on the same line
+        parser.set_newline_as_trivia(false);
+
         if parser.current_kind() == Some(SyntaxKind::Lt)
             && (is_lt_eq(parser)
                 || is_lshift(parser)
