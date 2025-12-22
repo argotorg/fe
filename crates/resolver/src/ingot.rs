@@ -21,6 +21,11 @@ pub fn project_files_resolver() -> FilesResolver {
         .with_pattern("src/**/*.fe")
 }
 
+/// Files resolver used for workspace discovery. Requires only `fe.toml`.
+pub fn workspace_files_resolver() -> FilesResolver {
+    minimal_files_resolver()
+}
+
 /// Convenience alias for the standard local ingot graph resolver.
 pub type LocalGraphResolver<H, E, P> = GraphResolverImpl<FilesResolver, H, E, P>;
 
@@ -364,5 +369,107 @@ impl Resolver for IngotResolver {
             IngotDescriptor::Local(url) => self.resolve_local(handler, url),
             IngotDescriptor::Remote(desc) => self.resolve_remote(handler, desc),
         }
+    }
+}
+
+#[derive(Debug)]
+pub struct WorkspaceResource {
+    pub workspace_url: Url,
+    pub files: FilesResource,
+}
+
+#[derive(Debug)]
+pub enum WorkspaceResolutionError {
+    Files(FilesResolutionError),
+}
+
+#[derive(Debug)]
+pub enum WorkspaceResolutionDiagnostic {
+    Files(FilesResolutionDiagnostic),
+}
+
+pub struct WorkspaceResolver {
+    files: FilesResolver,
+}
+
+impl WorkspaceResolver {
+    pub fn new(files: FilesResolver) -> Self {
+        Self { files }
+    }
+
+    fn resolve_files<H>(
+        &mut self,
+        handler: &mut H,
+        workspace_url: &Url,
+    ) -> Result<FilesResource, FilesResolutionError>
+    where
+        H: ResolutionHandler<Self>,
+    {
+        struct ForwardDiagnostics<'a, H> {
+            workspace_handler: &'a mut H,
+        }
+        impl<'a, H> ResolutionHandler<FilesResolver> for ForwardDiagnostics<'a, H>
+        where
+            H: ResolutionHandler<WorkspaceResolver>,
+        {
+            type Item = FilesResource;
+
+            fn on_resolution_diagnostic(&mut self, diagnostic: FilesResolutionDiagnostic) {
+                self.workspace_handler
+                    .on_resolution_diagnostic(WorkspaceResolutionDiagnostic::Files(diagnostic));
+            }
+
+            fn handle_resolution(
+                &mut self,
+                _description: &Url,
+                resource: FilesResource,
+            ) -> Self::Item {
+                resource
+            }
+        }
+
+        let mut handler = ForwardDiagnostics {
+            workspace_handler: handler,
+        };
+        let files = self.files.resolve(&mut handler, workspace_url)?;
+        Ok(files)
+    }
+}
+
+impl std::fmt::Display for WorkspaceResolutionError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            WorkspaceResolutionError::Files(err) => err.fmt(f),
+        }
+    }
+}
+
+impl std::error::Error for WorkspaceResolutionError {}
+
+impl Resolver for WorkspaceResolver {
+    type Description = Url;
+    type Resource = WorkspaceResource;
+    type Error = WorkspaceResolutionError;
+    type Diagnostic = WorkspaceResolutionDiagnostic;
+
+    fn resolve<H>(
+        &mut self,
+        handler: &mut H,
+        description: &Self::Description,
+    ) -> Result<H::Item, Self::Error>
+    where
+        H: ResolutionHandler<Self>,
+    {
+        handler.on_resolution_start(description);
+        let files = self
+            .resolve_files(handler, description)
+            .map_err(WorkspaceResolutionError::Files)?;
+        Ok(handler.handle_resolution(
+            description,
+            WorkspaceResource {
+                workspace_url: description.clone(),
+                files,
+            },
+        ))
     }
 }
