@@ -1,0 +1,19 @@
+struct TestStruct {}
+
+impl TestStruct {
+    pub fn get_value1(self) -> u64 {
+        42
+    }
+    pub fn get_value2(self, x: u64) -> u64 {
+        x * 24
+    }
+}
+
+pub fn test_if_else(x: u64) -> u64 {
+    let s = TestStruct {}
+    if x > 10 {
+        s.get_value1()
+    } else {
+        s.get_value2(x: 10)
+    }
+}

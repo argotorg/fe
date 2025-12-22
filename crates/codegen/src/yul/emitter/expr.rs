@@ -4,8 +4,9 @@ use hir::analysis::ty::decision_tree::Projection;
 use hir::analysis::ty::simplified_pattern::ConstructorKind;
 use hir::analysis::ty::ty_def::{PrimTy, TyBase, TyData, TyId};
 use hir::hir_def::{
-    CallableDef, Expr, ExprId, LitKind, Stmt, StmtId,
+    CallableDef, Expr, ExprId, ItemKind, LitKind, Stmt, StmtId,
     expr::{ArithBinOp, BinOp, CompBinOp, LogicalBinOp, UnOp},
+    scope_graph::ScopeId,
 };
 use mir::{
     CallOrigin, ValueId, ValueOrigin,
@@ -161,14 +162,45 @@ impl<'db> FunctionEmitter<'db> {
                 for arg in call_args {
                     lowered_args.push(self.lower_expr(arg.expr, state)?);
                 }
-                if let Some(arg) = try_collapse_cast_shim(&callee_expr, &lowered_args)? {
-                    return Ok(arg);
+                Self::lower_and_format_call(&callee_expr, lowered_args)
+            }
+            Expr::MethodCall(receiver, _method_name, _generic_args, call_args) => {
+                let callable =
+                    self.mir_func
+                        .typed_body
+                        .callable_expr(expr_id)
+                        .ok_or_else(|| {
+                            YulError::Unsupported(
+                                "method call expression does not have a registered callable".into(),
+                            )
+                        })?;
+
+                let callee = match callable.callable_def {
+                    CallableDef::Func(func) => {
+                        let base = function_name(self.db, func);
+                        let ScopeId::Item(ItemKind::Impl(impl_block)) =
+                            func.scope().parent(self.db).unwrap()
+                        else {
+                            unreachable!()
+                        };
+                        let prefix = impl_block.ty(self.db).pretty_print(self.db).to_lowercase();
+                        format!("{prefix}_{base}")
+                    }
+                    CallableDef::VariantCtor(_) => {
+                        return Err(YulError::Unsupported(
+                            "variant constructor method calls are not supported yet".into(),
+                        ));
+                    }
+                };
+
+                let receiver_expr = self.lower_expr(*receiver, state)?;
+                let mut lowered_args = vec![receiver_expr];
+
+                for arg in call_args {
+                    lowered_args.push(self.lower_expr(arg.expr, state)?);
                 }
-                if lowered_args.is_empty() {
-                    Ok(format!("{callee_expr}()"))
-                } else {
-                    Ok(format!("{callee_expr}({})", lowered_args.join(", ")))
-                }
+
+                Self::lower_and_format_call(&callee, lowered_args)
             }
             Expr::Bin(lhs, rhs, bin_op) => match bin_op {
                 BinOp::Arith(op) => {
@@ -274,6 +306,24 @@ impl<'db> FunctionEmitter<'db> {
         })
     }
 
+    /// Formats a function call with the given callee and arguments, handling cast shim collapsing.
+    ///
+    /// * `callee` - Function name to call.
+    /// * `lowered_args` - Already-lowered argument expressions.
+    ///
+    /// Returns the Yul function call string, possibly collapsed via cast shim.
+    fn lower_and_format_call(callee: &str, lowered_args: Vec<String>) -> Result<String, YulError> {
+        if let Some(arg) = try_collapse_cast_shim(callee, &lowered_args)? {
+            return Ok(arg);
+        }
+        let result = if lowered_args.is_empty() {
+            format!("{callee}()")
+        } else {
+            format!("{callee}({})", lowered_args.join(", "))
+        };
+        Ok(result)
+    }
+
     /// Lowers a MIR call into a Yul function invocation.
     ///
     /// * `call` - Call origin describing the callee and arguments.
@@ -304,14 +354,7 @@ impl<'db> FunctionEmitter<'db> {
         for &arg in &call.effect_args {
             lowered_args.push(self.lower_value(arg, state)?);
         }
-        if let Some(arg) = try_collapse_cast_shim(&callee, &lowered_args)? {
-            return Ok(arg);
-        }
-        if lowered_args.is_empty() {
-            Ok(format!("{callee}()"))
-        } else {
-            Ok(format!("{callee}({})", lowered_args.join(", ")))
-        }
+        Self::lower_and_format_call(&callee, lowered_args)
     }
 
     /// Lowers special MIR synthetic values such as constants into Yul expressions.
