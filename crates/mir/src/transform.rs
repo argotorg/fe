@@ -247,7 +247,13 @@ pub(crate) fn canonicalize_zero_sized<'db>(db: &'db dyn HirAnalysisDb, body: &mu
                                     values[value.index()].origin = ValueOrigin::Unit;
                                 }
                             }
-                            Rvalue::Load { .. } | Rvalue::Alloc { .. } | Rvalue::ZeroInit => {}
+                            Rvalue::Load { place } => {
+                                // Even though the loaded value is ZST (so the write can be
+                                // dropped), we must still evaluate the load's place to preserve
+                                // any side effects in the base/index expressions.
+                                push_place_eval(db, values, &mut rewritten, &place);
+                            }
+                            Rvalue::Alloc { .. } | Rvalue::ZeroInit => {}
                         }
                     }
                     _ => {

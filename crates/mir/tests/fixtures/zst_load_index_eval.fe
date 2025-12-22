@@ -1,0 +1,17 @@
+struct Zst {}
+
+struct Counter {
+    i: usize,
+}
+
+fn next_idx() -> usize uses (mut counter: Counter) {
+    counter.i = counter.i + 1
+    counter.i
+}
+
+pub fn zst_load_index_eval() -> usize {
+    let arr: [Zst; 2] = [Zst {}; 2]
+    let mut counter: Counter = Counter { i: 0 }
+    let _z: Zst = arr[with (counter) { next_idx() }]
+    counter.i
+}

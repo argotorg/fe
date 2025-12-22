@@ -202,6 +202,7 @@ fn cursor_i__new__CallData__b9ab8dc8a4b2f9e(v0: I) -> Cursor<I>:
 
 fn cursor_i__fork_mem__CallData__b9ab8dc8a4b2f9e(v0: Cursor<I>, v1: u256) -> Cursor<I>:
   bb0:
+    eval v0
     v4: Cursor<CallData> = alloc mem
     eval v4
     init mem[v4] { .1 = v1 }
