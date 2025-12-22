@@ -1,0 +1,11 @@
+fn lt_ten(value: u64) -> bool {
+    value < 10
+}
+
+pub fn while_cond_call() -> u64 {
+    let mut i = 0
+    while lt_ten(i) {
+        i = i + 1
+    }
+    i
+}

@@ -6,7 +6,11 @@ use mir::{
 };
 use rustc_hash::{FxHashMap, FxHashSet};
 
-use crate::yul::{doc::YulDoc, errors::YulError, state::BlockState};
+use crate::yul::{
+    doc::{YulDoc, render_docs},
+    errors::YulError,
+    state::BlockState,
+};
 
 use super::function::FunctionEmitter;
 
@@ -460,6 +464,39 @@ impl<'db> FunctionEmitter<'db> {
         state: &mut BlockState,
         stop_blocks: &[BasicBlockId],
     ) -> Result<(YulDoc, BasicBlockId), YulError> {
+        fn docs_inline(docs: &[YulDoc]) -> String {
+            let mut lines = Vec::new();
+            render_docs(docs, 0, &mut lines);
+            lines
+                .into_iter()
+                .map(|line| line.trim().to_string())
+                .filter(|line| !line.is_empty())
+                .collect::<Vec<_>>()
+                .join(" ")
+        }
+
+        fn rewrite_lets_to_assignments(doc: &YulDoc) -> YulDoc {
+            match doc {
+                YulDoc::Line(text) => {
+                    if let Some(rest) = text.strip_prefix("let ")
+                        && rest.contains(":=")
+                    {
+                        YulDoc::line(rest.to_string())
+                    } else {
+                        YulDoc::line(text.clone())
+                    }
+                }
+                YulDoc::Block { caption, body } => YulDoc::block(
+                    caption.clone(),
+                    body.iter().map(rewrite_lets_to_assignments).collect(),
+                ),
+                YulDoc::WideBlock { caption, body } => YulDoc::wide_block(
+                    caption.clone(),
+                    body.iter().map(rewrite_lets_to_assignments).collect(),
+                ),
+            }
+        }
+
         let block = self
             .mir_func
             .body
@@ -481,6 +518,22 @@ impl<'db> FunctionEmitter<'db> {
                 "loop metadata inconsistent with terminator".into(),
             ));
         }
+
+        let init_docs = self.render_statements(&block.insts, state)?;
+        let post_docs: Vec<_> = init_docs.iter().map(rewrite_lets_to_assignments).collect();
+        let init_inline = docs_inline(&init_docs);
+        let init_block = if init_inline.is_empty() {
+            "{ }".to_string()
+        } else {
+            format!("{{ {init_inline} }}")
+        };
+        let post_inline = docs_inline(&post_docs);
+        let post_block = if post_inline.is_empty() {
+            "{ }".to_string()
+        } else {
+            format!("{{ {post_inline} }}")
+        };
+
         let cond_expr = self.lower_value(cond, state)?;
         let loop_ctx = LoopEmitCtx {
             continue_target: header,
@@ -488,7 +541,10 @@ impl<'db> FunctionEmitter<'db> {
             implicit_continue: info.backedge,
         };
         let body_docs = self.emit_block_internal(info.body, Some(loop_ctx), state, stop_blocks)?;
-        let loop_doc = YulDoc::block(format!("for {{ }} {cond_expr} {{ }} "), body_docs);
+        let loop_doc = YulDoc::block(
+            format!("for {init_block} {cond_expr} {post_block} "),
+            body_docs,
+        );
         Ok((loop_doc, info.exit))
     }
 }
