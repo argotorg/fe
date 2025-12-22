@@ -1,0 +1,52 @@
+enum Inner {
+    A,
+    B,
+    C
+}
+
+enum Outer {
+    First(Inner),
+    Second(Inner)
+}
+
+// Nested defaults: wildcard catches both outer and inner defaults
+pub fn nested_with_defaults(o: Outer) -> u8 {
+    match o {
+        Outer::First(Inner::A) => 1
+        Outer::Second(Inner::B) => 2
+        _ => 0
+    }
+}
+
+// Specific outer, wildcard inner - the bug case!
+// Outer::First(_) should match First(B) and First(C), returning 2
+// _ should only match Second variants, returning 3
+pub fn outer_specific_inner_wildcard(o: Outer) -> u8 {
+    match o {
+        Outer::First(Inner::A) => 1
+        Outer::First(_) => 2
+        _ => 3
+    }
+}
+
+// Deep nesting with wildcards at multiple levels
+enum Deep {
+    Wrap(Outer)
+}
+
+pub fn deeply_nested_wildcard(d: Deep) -> u8 {
+    match d {
+        Deep::Wrap(Outer::First(Inner::A)) => 1
+        _ => 0
+    }
+}
+
+// Exhaustive inner match with outer wildcard
+pub fn exhaustive_inner_outer_wildcard(o: Outer) -> u8 {
+    match o {
+        Outer::First(Inner::A) => 1
+        Outer::First(Inner::B) => 2
+        Outer::First(Inner::C) => 3
+        _ => 0
+    }
+}

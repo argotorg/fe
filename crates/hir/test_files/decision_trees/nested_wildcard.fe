@@ -1,0 +1,19 @@
+enum Inner {
+    A,
+    B,
+    C
+}
+
+enum Outer {
+    First(Inner),
+    Second
+}
+
+// Bug case: wildcard inside constructor should match before top-level wildcard
+fn test_nested_wildcard(o: Outer) -> u8 {
+    match o {
+        Outer::First(Inner::A) => 1
+        Outer::First(_) => 2   // Should match First(B) and First(C)
+        _ => 3                 // Should only match Second
+    }
+}

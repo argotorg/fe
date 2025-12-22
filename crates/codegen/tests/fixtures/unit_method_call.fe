@@ -1,0 +1,12 @@
+struct Counter {
+    value: u256,
+}
+
+impl Counter {
+    fn increment(self) {
+    }
+}
+
+fn call_unit_method(c: Counter) {
+    c.increment()
+}

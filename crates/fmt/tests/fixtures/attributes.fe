@@ -1,0 +1,36 @@
+// Attribute formatting tests
+
+// Simple attribute
+#[foo]
+fn simple() {}
+
+// Attribute with path
+#[path::to::attr]
+fn with_path() {}
+
+// Attribute with arguments (formatting normalizes spacing)
+#[cfg(target="evm",abi="solidity")]
+fn with_args() {}
+
+// Multiple attributes
+#[foo]
+#[bar(x=1,y=2)]
+fn multiple_attrs() {}
+
+// Doc comments
+/// This is a doc comment
+fn documented() {}
+
+// Mixed doc comments and attributes
+/// Documentation here
+#[deprecated]
+/// More docs
+fn mixed() {}
+
+// Attribute on struct
+#[derive(Debug,Clone)]
+struct MyStruct { x: i32 }
+
+// Long attribute args that might wrap
+#[cfg(first_very_long_arg = "value", second_long_arg = "another", third = 123)]
+fn long_args() {}

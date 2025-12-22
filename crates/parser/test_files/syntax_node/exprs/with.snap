@@ -1,10 +1,9 @@
 ---
 source: crates/parser/tests/syntax_node.rs
-assertion_line: 46
 expression: node
 input_file: test_files/syntax_node/exprs/with.fe
 ---
-Root@0..79
+Root@0..156
   WithExpr@0..49
     Ident@0..4 "with"
     WhiteSpace@4..5 " "
@@ -90,4 +89,92 @@ Root@0..79
             RParen@75..76 ")"
       WhiteSpace@76..77 " "
       RBrace@77..78 "}"
-  Newline@78..79 "\n"
+  Newline@78..80 "\n\n"
+  WithExpr@80..113
+    Ident@80..84 "with"
+    WhiteSpace@84..85 " "
+    WithParamList@85..105
+      LParen@85..86 "("
+      WithParam@86..88
+        PathExpr@86..88
+          Path@86..88
+            PathSegment@86..88
+              Ident@86..88 "st"
+      Comma@88..89 ","
+      WhiteSpace@89..90 " "
+      WithParam@90..104
+        CallExpr@90..104
+          PathExpr@90..102
+            Path@90..102
+              PathSegment@90..97
+                Ident@90..97 "MockCtx"
+              Colon2@97..99 "::"
+              PathSegment@99..102
+                Ident@99..102 "new"
+          CallArgList@102..104
+            LParen@102..103 "("
+            RParen@103..104 ")"
+      RParen@104..105 ")"
+    WhiteSpace@105..106 " "
+    BlockExpr@106..113
+      LBrace@106..107 "{"
+      WhiteSpace@107..108 " "
+      ExprStmt@108..111
+        CallExpr@108..111
+          PathExpr@108..109
+            Path@108..109
+              PathSegment@108..109
+                Ident@108..109 "g"
+          CallArgList@109..111
+            LParen@109..110 "("
+            RParen@110..111 ")"
+      WhiteSpace@111..112 " "
+      RBrace@112..113 "}"
+  Newline@113..115 "\n\n"
+  WithExpr@115..155
+    Ident@115..119 "with"
+    WhiteSpace@119..120 " "
+    WithParamList@120..147
+      LParen@120..121 "("
+      WithParam@121..130
+        Path@121..124
+          PathSegment@121..124
+            Ident@121..124 "Ctx"
+        WhiteSpace@124..125 " "
+        Eq@125..126 "="
+        WhiteSpace@126..127 " "
+        PathExpr@127..130
+          Path@127..130
+            PathSegment@127..130
+              Ident@127..130 "ctx"
+      Comma@130..131 ","
+      WhiteSpace@131..132 " "
+      WithParam@132..137
+        PathExpr@132..137
+          Path@132..137
+            PathSegment@132..137
+              Ident@132..137 "owner"
+      Comma@137..138 ","
+      WhiteSpace@138..139 " "
+      WithParam@139..146
+        PathExpr@139..146
+          Path@139..146
+            PathSegment@139..146
+              Ident@139..146 "balance"
+      RParen@146..147 ")"
+    WhiteSpace@147..148 " "
+    BlockExpr@148..155
+      LBrace@148..149 "{"
+      WhiteSpace@149..150 " "
+      ExprStmt@150..153
+        CallExpr@150..153
+          PathExpr@150..151
+            Path@150..151
+              PathSegment@150..151
+                Ident@150..151 "g"
+          CallArgList@151..153
+            LParen@151..152 "("
+            RParen@152..153 ")"
+      WhiteSpace@153..154 " "
+      RBrace@154..155 "}"
+  Newline@155..156 "\n"

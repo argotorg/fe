@@ -27,7 +27,10 @@ pub use reference::{
 
 use crate::HirDb;
 use crate::analysis::HirAnalysisDb;
+use crate::analysis::ty::diagnostics::{ImplDiag, TyLowerDiag};
+use crate::analysis::ty::normalize::normalize_ty;
 use crate::analysis::ty::ty_def::Kind;
+use crate::analysis::ty::ty_error::collect_hir_ty_diags;
 use crate::hir_def::params::KindBound as HirKindBound;
 use crate::hir_def::scope_graph::ScopeId;
 
@@ -60,7 +63,7 @@ use crate::analysis::ty::trait_lower::{TraitRefLowerError, lower_trait_ref};
 use crate::analysis::ty::trait_resolution::constraint::{
     collect_adt_constraints, collect_constraints, collect_func_def_constraints,
 };
-use crate::analysis::ty::ty_def::TyData;
+use crate::analysis::ty::ty_def::{TyBase, TyData};
 use crate::analysis::ty::ty_lower::{GenericParamTypeSet, collect_generic_params};
 use crate::analysis::ty::visitor::{TyVisitor, walk_ty};
 use crate::analysis::ty::{
@@ -70,9 +73,10 @@ use crate::analysis::ty::{
     ty_error::collect_ty_lower_errors,
     ty_lower::{TyAlias, lower_hir_ty, lower_type_alias, lower_type_alias_from_hir},
 };
-use crate::core::adt_lower::lower_adt;
+use crate::core::adt_lower::{lower_adt, lower_contract_fields};
 use common::indexmap::IndexMap;
 use indexmap::IndexSet;
+use salsa::Update;
 // Re-export from crate root for backwards compatibility
 pub use crate::diagnosable as diagnostics;
 
@@ -94,7 +98,8 @@ pub fn constraints_for<'db>(
     match item {
         ItemKind::Struct(s) => collect_adt_constraints(db, s.as_adt(db)).instantiate_identity(),
         ItemKind::Enum(e) => collect_adt_constraints(db, e.as_adt(db)).instantiate_identity(),
-        ItemKind::Contract(c) => collect_adt_constraints(db, c.as_adt(db)).instantiate_identity(),
+        // Contracts have no generic parameters, so no constraints
+        ItemKind::Contract(_) => PredicateListId::empty_list(db),
         ItemKind::Func(f) => {
             collect_func_def_constraints(db, f.into(), true).instantiate_identity()
         }
@@ -196,6 +201,40 @@ impl<'db> Func<'db> {
             self.span().sig().ret_ty(),
             assumptions,
         )
+    }
+
+    /// Returns the containing `impl Trait` block if this function is a method
+    /// inside an impl trait block.
+    pub fn containing_impl_trait(self, db: &'db dyn HirDb) -> Option<ImplTrait<'db>> {
+        match self.scope().parent(db)? {
+            ScopeId::Item(ItemKind::ImplTrait(impl_trait)) => Some(impl_trait),
+            _ => None,
+        }
+    }
+
+    /// Returns the containing trait if this function is a method inside a trait definition.
+    pub fn containing_trait(self, db: &'db dyn HirDb) -> Option<Trait<'db>> {
+        match self.scope().parent(db)? {
+            ScopeId::Item(ItemKind::Trait(trait_)) => Some(trait_),
+            _ => None,
+        }
+    }
+
+    /// If this function is a method inside an `impl Trait` block, returns the
+    /// corresponding trait method definition.
+    ///
+    /// Returns `None` if:
+    /// - This function is not inside an impl trait block
+    /// - The impl trait block's trait cannot be resolved
+    /// - No matching method exists in the trait definition
+    pub fn trait_method_def(self, db: &'db dyn HirAnalysisDb) -> Option<Func<'db>> {
+        let impl_trait = self.containing_impl_trait(db)?;
+        let trait_ = impl_trait.trait_def(db)?;
+        let method_name = self.name(db).to_opt()?;
+
+        trait_
+            .methods(db)
+            .find(|m| m.name(db).to_opt() == Some(method_name))
     }
 }
 
@@ -433,10 +472,6 @@ impl<'db> FuncParamView<'db> {
 
     /// All type-related diagnostics for this parameter.
     pub fn ty_diags(self, db: &'db dyn HirAnalysisDb) -> Vec<TyDiagCollection<'db>> {
-        use crate::analysis::ty::diagnostics::ImplDiag;
-        use crate::analysis::ty::normalize::normalize_ty;
-        use crate::analysis::ty::ty_error::collect_hir_ty_diags;
-
         let func = self.func;
         let assumptions = func.assumptions(db);
 
@@ -463,14 +498,14 @@ impl<'db> FuncParamView<'db> {
         let mut out = Vec::new();
 
         if !ty.has_star_kind(db) {
-            out.push(TyDiagCollection::from(
-                crate::analysis::ty::diagnostics::TyLowerDiag::ExpectedStarKind(ty_span.clone()),
-            ));
+            out.push(TyDiagCollection::from(TyLowerDiag::ExpectedStarKind(
+                ty_span.clone(),
+            )));
             return out;
         }
         if ty.is_const_ty(db) {
             out.push(
-                crate::analysis::ty::diagnostics::TyLowerDiag::NormalTypeExpected {
+                TyLowerDiag::NormalTypeExpected {
                     span: ty_span.clone(),
                     given: ty,
                 }
@@ -522,15 +557,109 @@ impl<'db> FuncParamView<'db> {
 
 // Effect param views --------------------------------------------------------
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Update)]
+pub struct RecvView<'db> {
+    contract: Contract<'db>,
+    recv_idx: u32,
+}
+
+impl<'db> RecvView<'db> {
+    pub fn contract(self) -> Contract<'db> {
+        self.contract
+    }
+
+    pub fn index(self) -> u32 {
+        self.recv_idx
+    }
+
+    pub fn msg_path(self, db: &'db dyn HirDb) -> Option<PathId<'db>> {
+        self.contract
+            .recvs(db)
+            .data(db)
+            .get(self.recv_idx as usize)
+            .and_then(|r| r.msg_path)
+    }
+
+    pub fn arm(self, db: &'db dyn HirDb, arm_idx: u32) -> Option<RecvArmView<'db>> {
+        self.contract
+            .recv_arm(db, self.recv_idx as usize, arm_idx as usize)
+            .map(|_| RecvArmView {
+                recv: self,
+                arm_idx,
+            })
+    }
+
+    pub fn arms(self, db: &'db dyn HirDb) -> impl Iterator<Item = RecvArmView<'db>> + 'db {
+        let len = self
+            .contract
+            .recvs(db)
+            .data(db)
+            .get(self.recv_idx as usize)
+            .map(|r| r.arms.data(db).len())
+            .unwrap_or(0);
+        (0..len).map(move |arm_idx| RecvArmView {
+            recv: self,
+            arm_idx: arm_idx as u32,
+        })
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Update)]
+pub struct RecvArmView<'db> {
+    recv: RecvView<'db>,
+    arm_idx: u32,
+}
+
+impl<'db> RecvArmView<'db> {
+    pub fn recv(self) -> RecvView<'db> {
+        self.recv
+    }
+
+    pub fn contract(self) -> Contract<'db> {
+        self.recv.contract
+    }
+
+    pub fn arm(self, db: &'db dyn HirDb) -> Option<ContractRecvArm<'db>> {
+        self.contract()
+            .recv_arm(db, self.recv.recv_idx as usize, self.arm_idx as usize)
+    }
+
+    pub fn effects(self, db: &'db dyn HirDb) -> EffectParamListId<'db> {
+        self.arm(db)
+            .map(|a| a.effects)
+            .unwrap_or_else(|| EffectParamListId::new(db, Vec::new()))
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Update)]
+pub enum EffectParamOwner<'db> {
+    Func(Func<'db>),
+    Contract(Contract<'db>),
+    RecvArm(RecvArmView<'db>),
+}
+impl<'db> EffectParamOwner<'db> {
+    pub fn scope(self) -> ScopeId<'db> {
+        match self {
+            EffectParamOwner::Func(func) => func.scope(),
+            EffectParamOwner::Contract(contract) => contract.scope(),
+            EffectParamOwner::RecvArm(arm) => arm.contract().scope(),
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug)]
 pub struct EffectParamView<'db> {
-    func: Func<'db>,
+    pub owner: EffectParamOwner<'db>,
     idx: usize,
 }
 
 impl<'db> EffectParamView<'db> {
     fn effect(self, db: &'db dyn HirDb) -> &'db crate::core::hir_def::EffectParam<'db> {
-        &self.func.effects(db).data(db)[self.idx]
+        match self.owner {
+            EffectParamOwner::Func(func) => &func.effects(db).data(db)[self.idx],
+            EffectParamOwner::Contract(contract) => &contract.effects(db).data(db)[self.idx],
+            EffectParamOwner::RecvArm(arm) => &arm.effects(db).data(db)[self.idx],
+        }
     }
 
     /// Optional name for this effect parameter.
@@ -552,11 +681,6 @@ impl<'db> EffectParamView<'db> {
     pub fn index(self) -> usize {
         self.idx
     }
-
-    /// The function owning this effect parameter.
-    pub fn func(self) -> Func<'db> {
-        self.func
-    }
 }
 
 impl<'db> Func<'db> {
@@ -576,12 +700,62 @@ impl<'db> Func<'db> {
         db: &'db dyn HirDb,
     ) -> impl Iterator<Item = EffectParamView<'db>> + 'db {
         let len = self.effects(db).data(db).len();
-        (0..len).map(move |idx| EffectParamView { func: self, idx })
+        let owner = EffectParamOwner::Func(self);
+        (0..len).map(move |idx| EffectParamView { owner, idx })
     }
 
     /// Returns true if this function has any effect parameters.
     pub fn has_effects(self, db: &'db dyn HirDb) -> bool {
         !self.effects(db).data(db).is_empty()
+    }
+}
+
+impl<'db> Contract<'db> {
+    pub fn recv(self, db: &'db dyn HirDb, recv_idx: u32) -> Option<RecvView<'db>> {
+        self.recvs(db)
+            .data(db)
+            .get(recv_idx as usize)
+            .map(|_| RecvView {
+                contract: self,
+                recv_idx,
+            })
+    }
+
+    pub fn recv_views(self, db: &'db dyn HirDb) -> impl Iterator<Item = RecvView<'db>> + 'db {
+        let len = self.recvs(db).data(db).len();
+        (0..len).map(move |idx| RecvView {
+            contract: self,
+            recv_idx: idx as u32,
+        })
+    }
+
+    pub fn effect_params(
+        self,
+        db: &'db dyn HirDb,
+    ) -> impl Iterator<Item = EffectParamView<'db>> + 'db {
+        let len = self.effects(db).data(db).len();
+        let owner = EffectParamOwner::Contract(self);
+        (0..len).map(move |idx| EffectParamView { owner, idx })
+    }
+}
+
+/// Helper to check if a type's base matches a given ADT.
+fn matches_adt<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>, adt: AdtDef<'db>) -> bool {
+    match ty.base_ty(db).data(db) {
+        TyData::TyBase(TyBase::Adt(ty_adt)) => *ty_adt == adt,
+        _ => false,
+    }
+}
+
+/// Helper to check if a type's base matches a given contract.
+fn matches_contract<'db>(
+    db: &'db dyn HirAnalysisDb,
+    ty: TyId<'db>,
+    contract: Contract<'db>,
+) -> bool {
+    match ty.base_ty(db).data(db) {
+        TyData::TyBase(TyBase::Contract(c)) => *c == contract,
+        _ => false,
     }
 }
 
@@ -602,6 +776,30 @@ impl<'db> Enum<'db> {
     /// Semantic ADT definition for this enum (cached via tracked query).
     pub fn as_adt(self, db: &'db dyn HirAnalysisDb) -> AdtDef<'db> {
         lower_adt(db, AdtRef::from(self))
+    }
+
+    /// Returns all inherent `impl` blocks for this enum within the same ingot.
+    pub fn all_impls(self, db: &'db dyn HirAnalysisDb) -> Vec<Impl<'db>> {
+        let adt = self.as_adt(db);
+        self.top_mod(db)
+            .ingot(db)
+            .all_impls(db)
+            .iter()
+            .copied()
+            .filter(|impl_| matches_adt(db, impl_.ty(db), adt))
+            .collect()
+    }
+
+    /// Returns all `impl Trait for Enum` blocks for this enum within the same ingot.
+    pub fn all_impl_traits(self, db: &'db dyn HirAnalysisDb) -> Vec<ImplTrait<'db>> {
+        let adt = self.as_adt(db);
+        self.top_mod(db)
+            .ingot(db)
+            .all_impl_traits(db)
+            .iter()
+            .copied()
+            .filter(|impl_trait| matches_adt(db, impl_trait.ty(db), adt))
+            .collect()
     }
 }
 
@@ -633,14 +831,35 @@ impl<'db> Struct<'db> {
     pub fn as_adt(self, db: &'db dyn HirAnalysisDb) -> AdtDef<'db> {
         lower_adt(db, AdtRef::from(self))
     }
+
+    /// Returns all inherent `impl` blocks for this struct within the same ingot.
+    pub fn all_impls(self, db: &'db dyn HirAnalysisDb) -> Vec<Impl<'db>> {
+        let adt = self.as_adt(db);
+        self.top_mod(db)
+            .ingot(db)
+            .all_impls(db)
+            .iter()
+            .copied()
+            .filter(|impl_| matches_adt(db, impl_.ty(db), adt))
+            .collect()
+    }
+
+    /// Returns all `impl Trait for Struct` blocks for this struct within the same ingot.
+    pub fn all_impl_traits(self, db: &'db dyn HirAnalysisDb) -> Vec<ImplTrait<'db>> {
+        let adt = self.as_adt(db);
+        self.top_mod(db)
+            .ingot(db)
+            .all_impl_traits(db)
+            .iter()
+            .copied()
+            .filter(|impl_trait| matches_adt(db, impl_trait.ty(db), adt))
+            .collect()
+    }
 }
 
 impl<'db> Contract<'db> {
     /// Returns semantic types of all fields, bound to identity parameters.
     pub fn field_tys(self, db: &'db dyn HirAnalysisDb) -> Vec<Binder<TyId<'db>>> {
-        use crate::analysis::ty::ty_def::{InvalidCause, TyId};
-        use crate::analysis::ty::ty_lower::lower_hir_ty;
-
         let scope = self.scope();
         // Contracts currently have no generic params/where-clause; use empty assumptions.
         let assumptions = PredicateListId::empty_list(db);
@@ -659,9 +878,26 @@ impl<'db> Contract<'db> {
             .collect()
     }
 
-    /// Semantic ADT definition for this contract (cached via tracked query).
-    pub fn as_adt(self, db: &'db dyn HirAnalysisDb) -> AdtDef<'db> {
-        lower_adt(db, AdtRef::from(self))
+    /// Returns all inherent `impl` blocks for this contract within the same ingot.
+    pub fn all_impls(self, db: &'db dyn HirAnalysisDb) -> Vec<Impl<'db>> {
+        self.top_mod(db)
+            .ingot(db)
+            .all_impls(db)
+            .iter()
+            .copied()
+            .filter(|impl_| matches_contract(db, impl_.ty(db), self))
+            .collect()
+    }
+
+    /// Returns all `impl Trait for Contract` blocks for this contract within the same ingot.
+    pub fn all_impl_traits(self, db: &'db dyn HirAnalysisDb) -> Vec<ImplTrait<'db>> {
+        self.top_mod(db)
+            .ingot(db)
+            .all_impl_traits(db)
+            .iter()
+            .copied()
+            .filter(|impl_trait| matches_contract(db, impl_trait.ty(db), self))
+            .collect()
     }
 }
 
@@ -728,9 +964,7 @@ impl<'db> WherePredicateView<'db> {
             HirTyKind::Path(p) => p.to_opt()?,
             _ => return None,
         };
-        if !path.is_bare_ident(db) {
-            return None;
-        }
+
         let ident = path.as_ident(db)?;
         let owner = GenericParamOwner::from_item_opt(self.owner_item())?;
         let params = owner.params_list(db).data(db);
@@ -824,7 +1058,7 @@ impl<'db> WherePredicateView<'db> {
                     if !actual.does_match(&expected) {
                         let span = self.span().bounds().bound(i).kind_bound();
                         out.push(
-                            crate::analysis::ty::diagnostics::TyLowerDiag::InconsistentKindBound {
+                            TyLowerDiag::InconsistentKindBound {
                                 span: span.into(),
                                 ty: subject,
                                 bound: expected,
@@ -1051,6 +1285,41 @@ impl<'db> Trait<'db> {
         db: &'db dyn HirAnalysisDb,
     ) -> IndexSet<Binder<TraitInstId<'db>>> {
         self.super_trait_bounds(db).map(Binder::bind).collect()
+    }
+
+    /// Returns all `impl Trait for Type` blocks that implement this trait
+    /// within the same ingot.
+    pub fn all_impl_traits(self, db: &'db dyn HirAnalysisDb) -> Vec<ImplTrait<'db>> {
+        self.ingot(db)
+            .all_impl_traits(db)
+            .iter()
+            .copied()
+            .filter(|impl_trait| impl_trait.trait_def(db) == Some(self))
+            .collect()
+    }
+
+    /// Returns all implementations of a specific method from this trait.
+    ///
+    /// Given a method name, finds all `impl Trait for Type` blocks that implement
+    /// this trait and returns the corresponding method implementations.
+    pub fn method_implementations(
+        self,
+        db: &'db dyn HirAnalysisDb,
+        method_name: IdentId<'db>,
+    ) -> Vec<Func<'db>> {
+        self.all_impl_traits(db)
+            .into_iter()
+            .filter_map(|impl_trait| {
+                impl_trait
+                    .methods(db)
+                    .find(|m| m.name(db).to_opt() == Some(method_name))
+            })
+            .collect()
+    }
+
+    /// Returns the method definition in this trait with the given name.
+    pub fn method(self, db: &'db dyn HirDb, name: IdentId<'db>) -> Option<Func<'db>> {
+        self.methods(db).find(|m| m.name(db).to_opt() == Some(name))
     }
 }
 
@@ -1918,6 +2187,10 @@ impl<'db> TraitAssocConstView<'db> {
         self.decl(db).default.is_some()
     }
 
+    pub fn default_body(self, db: &'db dyn HirDb) -> Option<crate::core::hir_def::Body<'db>> {
+        self.decl(db).default.and_then(|body| body.to_opt())
+    }
+
     /// Semantic type of this associated const, lowered in the trait's scope.
     pub fn ty(self, db: &'db dyn HirAnalysisDb) -> Option<TyId<'db>> {
         let hir = self.decl(db).ty.to_opt()?;
@@ -2068,7 +2341,7 @@ impl<'db> FieldView<'db> {
     }
 
     /// Returns the semantic ADT field-set and index for this field.
-    pub fn as_adt_field(self, db: &'db dyn HirAnalysisDb) -> (&'db AdtField<'db>, usize) {
+    pub fn as_adt_field(self, db: &'db dyn HirAnalysisDb) -> (AdtField<'db>, usize) {
         (self.parent.as_adt_fields(db), self.idx)
     }
 
@@ -2130,15 +2403,12 @@ impl<'db> FieldView<'db> {
         let span = self.ty_span();
 
         if !ty.has_star_kind(db) {
-            out.push(
-                crate::analysis::ty::diagnostics::TyLowerDiag::ExpectedStarKind(span.clone())
-                    .into(),
-            );
+            out.push(TyLowerDiag::ExpectedStarKind(span.clone()).into());
             return out;
         }
         if ty.is_const_ty(db) {
             out.push(
-                crate::analysis::ty::diagnostics::TyLowerDiag::NormalTypeExpected {
+                TyLowerDiag::NormalTypeExpected {
                     span: span.clone(),
                     given: ty,
                 }
@@ -2179,7 +2449,7 @@ impl<'db> FieldView<'db> {
             let expected_ty = expected.ty(db);
             if !expected_ty.has_invalid(db) && !ty.has_invalid(db) && ty != expected_ty {
                 out.push(
-                    crate::analysis::ty::diagnostics::TyLowerDiag::ConstTyMismatch {
+                    TyLowerDiag::ConstTyMismatch {
                         span,
                         expected: expected_ty,
                         given: ty,
@@ -2202,11 +2472,11 @@ impl<'db> FieldParent<'db> {
     }
 
     /// Semantic field-set for this parent.
-    pub fn as_adt_fields(self, db: &'db dyn HirAnalysisDb) -> &'db AdtField<'db> {
+    pub fn as_adt_fields(self, db: &'db dyn HirAnalysisDb) -> AdtField<'db> {
         match self {
-            FieldParent::Struct(s) => &s.as_adt(db).fields(db)[0],
-            FieldParent::Contract(c) => &c.as_adt(db).fields(db)[0],
-            FieldParent::Variant(v) => v.as_adt_fields(db),
+            FieldParent::Struct(s) => s.as_adt(db).fields(db)[0].clone(),
+            FieldParent::Contract(c) => lower_contract_fields(db, c),
+            FieldParent::Variant(v) => v.as_adt_fields(db).clone(),
         }
     }
 }
@@ -2216,5 +2486,23 @@ impl<'db> EnumVariant<'db> {
     pub fn as_adt_fields(self, db: &'db dyn HirAnalysisDb) -> &'db AdtField<'db> {
         let def = lower_adt(db, AdtRef::from(self.enum_));
         &def.fields(db)[self.idx as usize]
+    }
+}
+
+// Type traversal helpers ----------------------------------------------------
+
+impl<'db> TyId<'db> {
+    /// Returns the field parent for this type if it's a struct or contract.
+    /// This provides access to fields via `field_parent.fields(db)`.
+    pub fn field_parent(self, db: &'db dyn HirAnalysisDb) -> Option<FieldParent<'db>> {
+        // Check for contract first
+        if let Some(contract) = self.as_contract(db) {
+            return Some(FieldParent::Contract(contract));
+        }
+        // Check for struct
+        match self.adt_ref(db)? {
+            AdtRef::Struct(s) => Some(FieldParent::Struct(s)),
+            AdtRef::Enum(_) => None, // Enums don't have direct field access
+        }
     }
 }

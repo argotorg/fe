@@ -1,202 +1,30 @@
 //! Match lowering for MIR: converts supported `match` expressions into switches and prepares
-//! enum pattern bindings.
+//! enum pattern bindings using decision trees for optimized codegen.
+
+use hir::analysis::ty::{
+    decision_tree::{
+        Case, DecisionTree, LeafNode, Projection, ProjectionPath, SwitchNode, build_decision_tree,
+    },
+    pattern_analysis::PatternMatrix,
+    simplified_pattern::ConstructorKind,
+    ty_def::InvalidCause,
+};
 
 use super::*;
 
+/// Context passed through decision tree lowering recursion.
+///
+/// Bundles the invariant data needed at each level of the tree traversal,
+/// keeping the recursive function signatures manageable.
+struct MatchLoweringCtx<'db> {
+    scrutinee_value: ValueId,
+    scrutinee_ty: TyId<'db>,
+    match_expr: ExprId,
+    /// Block for the wildcard arm (if any), used as default fallback.
+    wildcard_arm_block: Option<BasicBlockId>,
+}
+
 impl<'db, 'a> MirBuilder<'db, 'a> {
-    /// Lowers a `match` expression into a MIR `Switch`.
-    ///
-    /// # Parameters
-    /// - `block`: Entry block for the match.
-    /// - `match_expr`: Expression id of the match.
-    /// - `scrutinee`: Scrutinee expression id.
-    /// - `arms`: Match arms to lower.
-    /// - `patterns`: Precomputed arm patterns.
-    ///
-    /// # Returns
-    /// Successor merge block (if any) and the value representing the match expression.
-    pub(super) fn lower_match_expr(
-        &mut self,
-        block: BasicBlockId,
-        match_expr: ExprId,
-        scrutinee: ExprId,
-        arms: &[MatchArm],
-        patterns: &mut [MatchArmPattern],
-    ) -> (Option<BasicBlockId>, ValueId) {
-        debug_assert_eq!(arms.len(), patterns.len());
-        let (scrut_block_opt, discr_value) = self.lower_expr_in(block, scrutinee);
-        let scrutinee_value = discr_value;
-        let Some(scrut_block) = scrut_block_opt else {
-            let value = self.ensure_value(match_expr);
-            return (None, value);
-        };
-
-        let mut merge_block: Option<BasicBlockId> = None;
-        let mut arm_blocks = Vec::with_capacity(arms.len());
-        for arm in arms {
-            let arm_entry = self.alloc_block();
-            let (arm_end, _) = self.lower_expr_in(arm_entry, arm.body);
-            let terminates = arm_end.is_none();
-            if let Some(end_block) = arm_end {
-                let merge = match merge_block {
-                    Some(block) => block,
-                    None => {
-                        let block = self.alloc_block();
-                        merge_block = Some(block);
-                        block
-                    }
-                };
-                self.set_terminator(end_block, Terminator::Goto { target: merge });
-            }
-            arm_blocks.push((arm_entry, terminates));
-        }
-
-        let mut targets = Vec::new();
-        let mut default_block = None;
-        for (idx, pattern) in patterns.iter().enumerate() {
-            let (block_id, _) = arm_blocks[idx];
-            match pattern {
-                MatchArmPattern::Literal(value) => targets.push(SwitchTarget {
-                    value: value.clone(),
-                    block: block_id,
-                }),
-                MatchArmPattern::Enum { variant_index, .. } => targets.push(SwitchTarget {
-                    value: SwitchValue::Enum(*variant_index),
-                    block: block_id,
-                }),
-                MatchArmPattern::Wildcard => default_block = Some(block_id),
-            }
-        }
-
-        let default_block = default_block.unwrap_or_else(|| {
-            let unreachable_block = self.alloc_block();
-            self.set_terminator(unreachable_block, Terminator::Unreachable);
-            unreachable_block
-        });
-
-        self.populate_enum_binding_values(patterns, scrutinee_value, match_expr);
-
-        // For enum scrutinees, always switch on the in-memory discriminant instead of the heap
-        // pointer, even for payload-less enums.
-        let discr_value = if patterns
-            .iter()
-            .any(|pat| matches!(pat, MatchArmPattern::Enum { .. }))
-        {
-            let scrut_ty = self.typed_body.expr_ty(self.db, scrutinee);
-            let (base_ty, _) = scrut_ty.decompose_ty_app(self.db);
-            let is_address_space = base_ty == self.core.helper_ty(CoreHelperTy::AddressSpace);
-            if let TyData::TyBase(TyBase::Adt(adt_def)) = base_ty.data(self.db)
-                && matches!(adt_def.adt_ref(self.db), AdtRef::Enum(_))
-                && !is_address_space
-            {
-                let callable =
-                    self.core
-                        .make_callable(match_expr, CoreHelper::GetDiscriminant, &[]);
-                let space_value = self.synthetic_address_space_memory();
-                let ty = callable.ret_ty(self.db);
-                self.mir_body.alloc_value(ValueData {
-                    ty,
-                    origin: ValueOrigin::Call(CallOrigin {
-                        expr: match_expr,
-                        callable,
-                        args: vec![scrutinee_value, space_value],
-                        resolved_name: None,
-                    }),
-                })
-            } else {
-                discr_value
-            }
-        } else {
-            discr_value
-        };
-
-        self.set_terminator(
-            scrut_block,
-            Terminator::Switch {
-                discr: discr_value,
-                targets,
-                default: default_block,
-                origin: SwitchOrigin::MatchExpr(match_expr),
-            },
-        );
-
-        let arms_info = arms
-            .iter()
-            .zip(patterns.iter())
-            .zip(arm_blocks.iter())
-            .map(
-                |((arm, pattern), (block_id, terminates))| MatchArmLowering {
-                    pattern: pattern.clone(),
-                    body: arm.body,
-                    block: *block_id,
-                    terminates: *terminates,
-                },
-            )
-            .collect();
-
-        self.mir_body.match_info.insert(
-            match_expr,
-            MatchLoweringInfo {
-                scrutinee: scrutinee_value,
-                merge_block,
-                arms: arms_info,
-            },
-        );
-
-        let value_id = self.ensure_value(match_expr);
-        (merge_block, value_id)
-    }
-
-    /// Collects supported match arm patterns, rejecting unsupported combinations.
-    ///
-    /// # Parameters
-    /// - `arms`: Match arms to analyze.
-    ///
-    /// # Returns
-    /// Vector of patterns if supported, otherwise `None`.
-    pub(super) fn match_arm_patterns(&self, arms: &[MatchArm]) -> Option<Vec<MatchArmPattern>> {
-        if arms.is_empty() {
-            return None;
-        }
-
-        let mut seen_values: FxHashSet<SwitchValue> = FxHashSet::default();
-        let mut has_wildcard = false;
-        let mut patterns = Vec::with_capacity(arms.len());
-
-        for arm in arms {
-            if self.is_wildcard_pat(arm.pat) {
-                if has_wildcard {
-                    return None;
-                }
-                has_wildcard = true;
-                patterns.push(MatchArmPattern::Wildcard);
-                continue;
-            }
-
-            if let Some(value) = self.literal_pat_value(arm.pat) {
-                if !seen_values.insert(value.clone()) {
-                    return None;
-                }
-                patterns.push(MatchArmPattern::Literal(value));
-                continue;
-            }
-
-            if let Some(pattern) = self.enum_pat_value(arm.pat) {
-                if let MatchArmPattern::Enum { variant_index, .. } = pattern
-                    && !seen_values.insert(SwitchValue::Enum(variant_index))
-                {
-                    return None;
-                }
-                patterns.push(pattern);
-                continue;
-            }
-
-            return None;
-        }
-
-        Some(patterns)
-    }
-
     /// Extracts a literal `SwitchValue` from a pattern when possible.
     ///
     /// # Parameters
@@ -279,7 +107,8 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         let Partial::Present(pat_data) = pat.data(self.db, self.body) else {
             return None;
         };
-        let scope = self.typed_body.body().unwrap().scope();
+        let body = self.typed_body.body()?;
+        let scope = body.scope();
 
         if let Pat::Path(path, ..) = pat_data
             && let Some(path) = path.to_opt()
@@ -295,11 +124,10 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
             return Some(MatchArmPattern::Enum {
                 variant_index: variant.variant.idx as u64,
                 enum_name,
-                bindings: Vec::new(),
             });
         }
 
-        if let Pat::PathTuple(path, elem_pats) = pat_data
+        if let Pat::PathTuple(path, _elem_pats) = pat_data
             && let Some(path) = path.to_opt()
             && let Some(variant) = self.resolve_enum_variant(path, scope)
         {
@@ -311,78 +139,13 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                 .data(self.db)
                 .to_string();
 
-            let mut bindings = Vec::new();
-            let mut offset: u64 = 0;
-            for elem_pat in elem_pats {
-                let elem_ty = self.typed_body.pat_ty(self.db, *elem_pat);
-                let elem_size = self.ty_size_bytes(elem_ty).unwrap_or(32);
-
-                if let Partial::Present(Pat::Path(elem_path, _)) = elem_pat.data(self.db, self.body)
-                    && let Some(elem_path) = elem_path.to_opt()
-                    && elem_path.is_bare_ident(self.db)
-                {
-                    bindings.push(PatternBinding {
-                        pat_id: *elem_pat,
-                        field_offset: offset,
-                        value: None,
-                    });
-                }
-
-                offset += elem_size;
-            }
-
             return Some(MatchArmPattern::Enum {
                 variant_index: variant.variant.idx as u64,
                 enum_name,
-                bindings,
             });
         }
 
         None
-    }
-
-    /// Populates enum pattern bindings with lowered `get_variant_field` calls.
-    ///
-    /// # Parameters
-    /// - `patterns`: Patterns to update.
-    /// - `scrutinee_value`: Value representing the enum scrutinee.
-    /// - `match_expr`: Match expression id for context.
-    ///
-    /// # Returns
-    /// Nothing; updates bindings in place.
-    pub(super) fn populate_enum_binding_values(
-        &mut self,
-        patterns: &mut [MatchArmPattern],
-        scrutinee_value: ValueId,
-        match_expr: ExprId,
-    ) {
-        for pattern in patterns.iter_mut() {
-            let MatchArmPattern::Enum { bindings, .. } = pattern else {
-                continue;
-            };
-            for binding in bindings.iter_mut() {
-                if binding.value.is_some() {
-                    continue;
-                }
-                let binding_ty = self.typed_body.pat_ty(self.db, binding.pat_id);
-                let callable =
-                    self.core
-                        .make_callable(match_expr, CoreHelper::GetVariantField, &[binding_ty]);
-                let space_value =
-                    self.address_space_literal(self.value_address_space(scrutinee_value));
-                let offset_value = self.synthetic_u256(BigUint::from(binding.field_offset));
-                let load_value = self.mir_body.alloc_value(ValueData {
-                    ty: binding_ty,
-                    origin: ValueOrigin::Call(CallOrigin {
-                        expr: match_expr,
-                        callable,
-                        args: vec![scrutinee_value, space_value, offset_value],
-                        resolved_name: None,
-                    }),
-                });
-                binding.value = Some(load_value);
-            }
-        }
     }
 
     /// Returns `true` if the pattern is a wildcard (`_`).
@@ -397,5 +160,568 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
             pat.data(self.db, self.body),
             Partial::Present(Pat::WildCard)
         )
+    }
+
+    /// Lowers a match expression using decision trees for optimized codegen.
+    ///
+    /// # Parameters
+    /// - `block`: Entry block for the match.
+    /// - `match_expr`: Expression id of the match.
+    /// - `scrutinee`: Scrutinee expression id.
+    /// - `arms`: Match arms to lower.
+    ///
+    /// # Returns
+    /// Successor merge block (if any) and the value representing the match expression.
+    pub(super) fn lower_match_with_decision_tree(
+        &mut self,
+        block: BasicBlockId,
+        match_expr: ExprId,
+        scrutinee: ExprId,
+        arms: &[MatchArm],
+    ) -> (Option<BasicBlockId>, ValueId) {
+        // Lower the scrutinee to get its value
+        let (scrut_block_opt, scrutinee_value) = self.lower_expr_in(block, scrutinee);
+        let Some(scrut_block) = scrut_block_opt else {
+            let value = self.ensure_value(match_expr);
+            return (None, value);
+        };
+
+        // Build pattern matrix from match arms
+        let scrutinee_ty = self.typed_body.expr_ty(self.db, scrutinee);
+        let Some(body) = self.typed_body.body() else {
+            // No body available - this shouldn't happen for valid code.
+            self.set_terminator(scrut_block, Terminator::Unreachable);
+            let value = self.ensure_value(match_expr);
+            return (None, value);
+        };
+        let scope = body.scope();
+
+        let patterns: Vec<Pat> = arms
+            .iter()
+            .filter_map(|arm| {
+                if let Partial::Present(pat) = arm.pat.data(self.db, self.body) {
+                    Some(pat.clone())
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        if patterns.len() != arms.len() {
+            // Some patterns couldn't be resolved. This indicates:
+            // 1. Malformed AST from parsing errors, or
+            // 2. Upstream type/name resolution errors that should have emitted diagnostics
+            //
+            // For valid programs, all patterns will be Present. Absent patterns mean the
+            // HIR layer already reported errors, so we produce Unreachable MIR rather than
+            // attempting to lower patterns we can't understand. This prevents cascading
+            // errors from incomplete pattern information.
+            debug_assert!(
+                false,
+                "MIR lowering: {} of {} match arm patterns are Absent - \
+                 upstream errors should have been reported",
+                arms.len() - patterns.len(),
+                arms.len()
+            );
+            self.set_terminator(scrut_block, Terminator::Unreachable);
+            let value = self.ensure_value(match_expr);
+            return (None, value);
+        }
+
+        let matrix =
+            PatternMatrix::from_hir_patterns(self.db, &patterns, self.body, scope, scrutinee_ty);
+
+        // Build decision tree from pattern matrix
+        let tree = build_decision_tree(self.db, &matrix);
+
+        // Pre-lower each arm body to determine termination status and create blocks
+        let mut merge_block: Option<BasicBlockId> = None;
+        let mut arm_blocks = Vec::with_capacity(arms.len());
+        for arm in arms {
+            let arm_entry = self.alloc_block();
+            let (arm_end, _) = self.lower_expr_in(arm_entry, arm.body);
+            let terminates = arm_end.is_none();
+            if let Some(end_block) = arm_end {
+                let merge = match merge_block {
+                    Some(block) => block,
+                    None => {
+                        let block = self.alloc_block();
+                        merge_block = Some(block);
+                        block
+                    }
+                };
+                self.set_terminator(end_block, Terminator::Goto { target: merge });
+            }
+            arm_blocks.push((arm_entry, terminates));
+        }
+
+        // Find the wildcard arm block (if any) for use as default fallback.
+        // This ensures that even for complete matches, the default routes to the
+        // wildcard arm rather than unreachable.
+        let wildcard_arm_block = arms
+            .iter()
+            .zip(arm_blocks.iter())
+            .find(|(arm, _)| self.is_wildcard_pat(arm.pat))
+            .map(|(_, (block_id, _))| *block_id);
+
+        // Collect arm info for codegen (needed for match_info)
+        let mut arms_info: Vec<MatchArmLowering> = arms
+            .iter()
+            .zip(arm_blocks.iter())
+            .map(|(arm, (block_id, terminates))| {
+                // Determine the pattern type for codegen
+                let pattern = if self.is_wildcard_pat(arm.pat) {
+                    MatchArmPattern::Wildcard
+                } else if let Some(lit_val) = self.literal_pat_value(arm.pat) {
+                    MatchArmPattern::Literal(lit_val)
+                } else if let Some(enum_pat) = self.enum_pat_value(arm.pat) {
+                    enum_pat
+                } else {
+                    // Fallback to wildcard for unsupported patterns
+                    MatchArmPattern::Wildcard
+                };
+
+                MatchArmLowering {
+                    pattern,
+                    body: arm.body,
+                    block: *block_id,
+                    terminates: *terminates,
+                    decision_tree_bindings: Vec::new(),
+                }
+            })
+            .collect();
+
+        // Populate decision tree bindings for tuple/struct/enum patterns.
+        // Decision tree bindings handle all patterns uniformly, including nested enums.
+        let leaf_bindings = self.collect_leaf_bindings(&tree);
+        for (arm_idx, arm_info) in arms_info.iter_mut().enumerate() {
+            if let Some(bindings) = leaf_bindings.get(&arm_idx) {
+                for (name, path) in bindings {
+                    let (place, value) = self.lower_projection_path_for_binding(
+                        path,
+                        scrutinee_value,
+                        scrutinee_ty,
+                        match_expr,
+                    );
+                    arm_info.decision_tree_bindings.push(DecisionTreeBinding {
+                        name: name.clone(),
+                        place,
+                        value,
+                    });
+                }
+            }
+        }
+
+        // Store match info for codegen
+        self.mir_body.match_info.insert(
+            match_expr,
+            MatchLoweringInfo {
+                scrutinee: scrutinee_value,
+                merge_block,
+                arms: arms_info,
+            },
+        );
+
+        let ctx = MatchLoweringCtx {
+            scrutinee_value,
+            scrutinee_ty,
+            match_expr,
+            wildcard_arm_block,
+        };
+        let tree_entry = self.lower_decision_tree(&tree, &arm_blocks, &ctx);
+
+        // Set scrut_block to jump to the tree entry
+        self.set_terminator(scrut_block, Terminator::Goto { target: tree_entry });
+
+        let value_id = self.ensure_value(match_expr);
+        (merge_block, value_id)
+    }
+
+    /// Recursively lowers a decision tree to MIR basic blocks.
+    ///
+    /// # Parameters
+    /// - `tree`: Decision tree node to lower.
+    /// - `arm_blocks`: Pre-created blocks and termination status for each arm.
+    /// - `ctx`: Match lowering context with scrutinee info and merge block.
+    ///
+    /// # Returns
+    /// The entry basic block for this tree node.
+    fn lower_decision_tree(
+        &mut self,
+        tree: &DecisionTree<'db>,
+        arm_blocks: &[(BasicBlockId, bool)],
+        ctx: &MatchLoweringCtx<'db>,
+    ) -> BasicBlockId {
+        match tree {
+            DecisionTree::Leaf(leaf) => self.lower_leaf_node(leaf, arm_blocks),
+            DecisionTree::Switch(switch_node) => {
+                self.lower_switch_node(switch_node, arm_blocks, ctx)
+            }
+        }
+    }
+
+    /// Lowers a leaf node (match arm execution) to the pre-created arm block.
+    fn lower_leaf_node(
+        &mut self,
+        leaf: &LeafNode<'db>,
+        arm_blocks: &[(BasicBlockId, bool)],
+    ) -> BasicBlockId {
+        // Return the pre-created block for this arm
+        // The arm body was already lowered during the pre-lowering phase
+        let (arm_block, _terminates) = arm_blocks[leaf.arm_index];
+        arm_block
+    }
+
+    /// Lowers a switch node (test and branch) to MIR basic blocks.
+    fn lower_switch_node(
+        &mut self,
+        switch_node: &SwitchNode<'db>,
+        arm_blocks: &[(BasicBlockId, bool)],
+        ctx: &MatchLoweringCtx<'db>,
+    ) -> BasicBlockId {
+        // For Type constructors (tuples/structs), there's no discriminant to switch on.
+        // We skip straight to the subtree and let the inner switches handle the actual values.
+        let is_structural_only = switch_node.arms.iter().all(|(case, _)| {
+            matches!(
+                case,
+                Case::Constructor(ConstructorKind::Type(_)) | Case::Default
+            )
+        });
+
+        if is_structural_only && !switch_node.arms.is_empty() {
+            // Find the structural subtree to descend into
+            let structural_subtree = switch_node
+                .arms
+                .iter()
+                .find(|(case, _)| matches!(case, Case::Constructor(ConstructorKind::Type(_))))
+                .or_else(|| {
+                    switch_node
+                        .arms
+                        .iter()
+                        .find(|(case, _)| matches!(case, Case::Default))
+                })
+                .map(|(_, subtree)| subtree);
+
+            if let Some(subtree) = structural_subtree {
+                // For structural types, directly lower the subtree - no switch needed at this level
+                return self.lower_decision_tree(subtree, arm_blocks, ctx);
+            }
+        }
+
+        let test_block = self.alloc_block();
+
+        // Extract the value to test based on the occurrence path
+        let test_value = self.lower_occurrence(
+            &switch_node.occurrence,
+            ctx.scrutinee_value,
+            ctx.scrutinee_ty,
+            ctx.match_expr,
+        );
+
+        // Recursively lower each case
+        let mut targets = vec![];
+        let mut default_block = None;
+
+        for (case, subtree) in &switch_node.arms {
+            let subtree_entry = self.lower_decision_tree(subtree, arm_blocks, ctx);
+
+            match case {
+                Case::Constructor(ctor) => {
+                    if let Some(switch_val) = self.constructor_to_switch_value(ctor) {
+                        targets.push(SwitchTarget {
+                            value: switch_val,
+                            block: subtree_entry,
+                        });
+                    }
+                }
+                Case::Default => {
+                    default_block = Some(subtree_entry);
+                }
+            }
+        }
+
+        // Use the decision tree's default, then wildcard arm, then unreachable.
+        // This ensures MIR explicitly routes defaults to the wildcard arm rather than
+        // having codegen rediscover it.
+        let default = default_block.or(ctx.wildcard_arm_block).unwrap_or_else(|| {
+            let unreachable = self.alloc_block();
+            self.set_terminator(unreachable, Terminator::Unreachable);
+            unreachable
+        });
+
+        // Always use MatchExpr origin for all switches in a decision tree match.
+        // This ensures emit_match_switch is called, which reuses the same match temp
+        // via match_values.entry(expr_id). All switches in the same match share
+        // the same temp variable for collecting results.
+        let origin = SwitchOrigin::MatchExpr(ctx.match_expr);
+
+        self.set_terminator(
+            test_block,
+            Terminator::Switch {
+                discr: test_value,
+                targets,
+                default,
+                origin,
+            },
+        );
+
+        test_block
+    }
+
+    /// Extracts a value from the scrutinee based on a projection path.
+    ///
+    /// Uses Place with projections - offset computation is deferred to codegen.
+    /// This keeps MIR semantic and enables better analysis.
+    fn lower_occurrence(
+        &mut self,
+        path: &ProjectionPath<'db>,
+        scrutinee_value: ValueId,
+        scrutinee_ty: TyId<'db>,
+        match_expr: ExprId,
+    ) -> ValueId {
+        // Helper to check if a type is an enum
+        fn is_enum_type(db: &dyn HirAnalysisDb, ty: TyId<'_>) -> bool {
+            let (base_ty, _) = ty.decompose_ty_app(db);
+            if let TyData::TyBase(TyBase::Adt(adt_def)) = base_ty.data(db) {
+                matches!(adt_def.adt_ref(db), AdtRef::Enum(_))
+            } else {
+                false
+            }
+        }
+
+        // Empty path means access the scrutinee directly
+        // But we still need to extract discriminant for enums
+        if path.is_empty() {
+            if !is_enum_type(self.db, scrutinee_ty) {
+                return scrutinee_value;
+            }
+            // Fall through to enum handling below
+            let ptr_ty = match self.value_address_space(scrutinee_value) {
+                AddressSpaceKind::Memory => self.core.helper_ty(CoreHelperTy::MemPtr),
+                AddressSpaceKind::Storage => self.core.helper_ty(CoreHelperTy::StorPtr),
+            };
+            let callable =
+                self.core
+                    .make_callable(match_expr, CoreHelper::GetDiscriminant, &[ptr_ty]);
+            let ty = callable.ret_ty(self.db);
+            return self.mir_body.alloc_value(ValueData {
+                ty,
+                origin: ValueOrigin::Call(CallOrigin {
+                    expr: match_expr,
+                    callable,
+                    args: vec![scrutinee_value],
+                    effect_args: Vec::new(),
+                    effect_kinds: Vec::new(),
+                    receiver_space: None,
+                    resolved_name: None,
+                }),
+            });
+        }
+
+        // Compute the result type of the projection
+        let result_ty = self.compute_projection_result_type(scrutinee_ty, path);
+        let addr_space = self.value_address_space(scrutinee_value);
+        let is_aggregate = result_ty.field_count(self.db) > 0;
+
+        // Build Place with the full projection path
+        let place = Place::new(scrutinee_value, path.clone(), addr_space);
+
+        // Use PlaceRef for aggregates (returns pointer), PlaceLoad for scalars (loads value)
+        let origin = if is_aggregate {
+            ValueOrigin::PlaceRef(place)
+        } else {
+            ValueOrigin::PlaceLoad(place)
+        };
+
+        let current_value = self.mir_body.alloc_value(ValueData {
+            ty: result_ty,
+            origin,
+        });
+        self.value_address_space.insert(current_value, addr_space);
+
+        // For enums, extract the discriminant for switching
+        if is_enum_type(self.db, result_ty) {
+            let ptr_ty = match self.value_address_space(current_value) {
+                AddressSpaceKind::Memory => self.core.helper_ty(CoreHelperTy::MemPtr),
+                AddressSpaceKind::Storage => self.core.helper_ty(CoreHelperTy::StorPtr),
+            };
+            let callable =
+                self.core
+                    .make_callable(match_expr, CoreHelper::GetDiscriminant, &[ptr_ty]);
+            let ty = callable.ret_ty(self.db);
+            return self.mir_body.alloc_value(ValueData {
+                ty,
+                origin: ValueOrigin::Call(CallOrigin {
+                    expr: match_expr,
+                    callable,
+                    args: vec![current_value],
+                    effect_args: Vec::new(),
+                    effect_kinds: Vec::new(),
+                    receiver_space: None,
+                    resolved_name: None,
+                }),
+            });
+        }
+
+        current_value
+    }
+
+    /// Converts a constructor to a switch value for MIR.
+    fn constructor_to_switch_value(&self, ctor: &ConstructorKind<'db>) -> Option<SwitchValue> {
+        match ctor {
+            ConstructorKind::Variant(variant, _) => Some(SwitchValue::Enum(variant.idx as u64)),
+            ConstructorKind::Literal(lit, _) => match lit {
+                LitKind::Int(value) => Some(SwitchValue::Int(value.data(self.db).clone())),
+                LitKind::Bool(value) => Some(SwitchValue::Bool(*value)),
+                _ => None,
+            },
+            ConstructorKind::Type(_) => None,
+        }
+    }
+
+    /// Extracts a value from the scrutinee for binding purposes.
+    ///
+    /// Returns both:
+    /// - a `PlaceRef` value that references the bound location, and
+    /// - the binding's "value" (a `PlaceLoad` for scalars, `PlaceRef` for aggregates).
+    fn lower_projection_path_for_binding(
+        &mut self,
+        path: &ProjectionPath<'db>,
+        scrutinee_value: ValueId,
+        scrutinee_ty: TyId<'db>,
+        _match_expr: ExprId,
+    ) -> (ValueId, ValueId) {
+        // Empty path means we bind to the scrutinee itself
+        if path.is_empty() {
+            return (scrutinee_value, scrutinee_value);
+        }
+
+        // Compute the final type by walking the projection path
+        let final_ty = self.compute_projection_result_type(scrutinee_ty, path);
+        let is_aggregate = final_ty.field_count(self.db) > 0;
+
+        // Track address space for the result
+        let addr_space = self.value_address_space(scrutinee_value);
+
+        // Create the Place
+        let place = Place::new(scrutinee_value, path.clone(), addr_space);
+
+        let place_ref_id = self.mir_body.alloc_value(ValueData {
+            ty: final_ty,
+            origin: ValueOrigin::PlaceRef(place.clone()),
+        });
+        self.value_address_space.insert(place_ref_id, addr_space);
+
+        // Use PlaceRef for aggregates (pointer only), PlaceLoad for scalars (load value).
+        // When aggregate, re-use the place ref as the "value".
+        let value_id = if is_aggregate {
+            place_ref_id
+        } else {
+            let loaded_id = self.mir_body.alloc_value(ValueData {
+                ty: final_ty,
+                origin: ValueOrigin::PlaceLoad(place),
+            });
+            self.value_address_space.insert(loaded_id, addr_space);
+            loaded_id
+        };
+
+        (place_ref_id, value_id)
+    }
+
+    /// Computes the result type of applying a projection path to a type.
+    ///
+    /// Returns an invalid type if any projection step is out of bounds,
+    /// which will cause downstream type errors rather than silent bugs.
+    fn compute_projection_result_type(
+        &self,
+        base_ty: TyId<'db>,
+        path: &ProjectionPath<'db>,
+    ) -> TyId<'db> {
+        let mut current_ty = base_ty;
+
+        for proj in path.iter() {
+            match proj {
+                Projection::Field(field_idx) => {
+                    let field_types = current_ty.field_types(self.db);
+                    if let Some(&field_ty) = field_types.get(*field_idx) {
+                        current_ty = field_ty;
+                    } else {
+                        // Out of bounds field access - return invalid type
+                        return TyId::invalid(self.db, InvalidCause::Other);
+                    }
+                }
+                Projection::VariantField {
+                    variant,
+                    enum_ty,
+                    field_idx,
+                } => {
+                    let ctor = ConstructorKind::Variant(*variant, *enum_ty);
+                    let field_types = ctor.field_types(self.db);
+                    if let Some(&field_ty) = field_types.get(*field_idx) {
+                        current_ty = field_ty;
+                    } else {
+                        // Out of bounds variant field access - return invalid type
+                        return TyId::invalid(self.db, InvalidCause::Other);
+                    }
+                }
+
+                // Index projections use Infallible for the dynamic index type in HIR,
+                // so Dynamic(...) is impossible to construct. Constant index would
+                // require array pattern support which doesn't exist yet.
+                // Return invalid type for error recovery.
+                Projection::Index(idx_source) => match idx_source {
+                    hir::projection::IndexSource::Constant(_) => {
+                        return TyId::invalid(self.db, InvalidCause::Other);
+                    }
+                    hir::projection::IndexSource::Dynamic(infallible) => match *infallible {},
+                },
+                Projection::Deref => {
+                    return TyId::invalid(self.db, InvalidCause::Other);
+                }
+            }
+        }
+
+        current_ty
+    }
+
+    /// Collects all bindings from decision tree leaves, grouped by arm index.
+    ///
+    /// Returns a map from arm_index to a list of (variable_name, projection_path) pairs.
+    fn collect_leaf_bindings(
+        &self,
+        tree: &DecisionTree<'db>,
+    ) -> FxHashMap<usize, Vec<(String, ProjectionPath<'db>)>> {
+        let mut bindings_by_arm: FxHashMap<usize, Vec<(String, ProjectionPath<'db>)>> =
+            FxHashMap::default();
+        self.collect_leaf_bindings_recursive(tree, &mut bindings_by_arm);
+        bindings_by_arm
+    }
+
+    fn collect_leaf_bindings_recursive(
+        &self,
+        tree: &DecisionTree<'db>,
+        bindings_by_arm: &mut FxHashMap<usize, Vec<(String, ProjectionPath<'db>)>>,
+    ) {
+        match tree {
+            DecisionTree::Leaf(leaf) => {
+                let arm_bindings = bindings_by_arm.entry(leaf.arm_index).or_default();
+                for ((ident_id, _binding_idx), path) in &leaf.bindings {
+                    let name = ident_id.data(self.db).to_string();
+                    // Deduplicate by name. The binding_idx in the key distinguishes
+                    // different binding sites in the decision tree, but within a single
+                    // arm all occurrences of a variable name should resolve to the same
+                    // binding. Taking the first occurrence is correct because all paths
+                    // to this leaf will produce the same binding for that name.
+                    if !arm_bindings.iter().any(|(n, _)| n == &name) {
+                        arm_bindings.push((name, path.clone()));
+                    }
+                }
+            }
+            DecisionTree::Switch(switch_node) => {
+                for (_, subtree) in &switch_node.arms {
+                    self.collect_leaf_bindings_recursive(subtree, bindings_by_arm);
+                }
+            }
+        }
     }
 }

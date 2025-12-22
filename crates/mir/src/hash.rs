@@ -4,13 +4,14 @@ use std::collections::hash_map::DefaultHasher;
 use std::hash::Hasher;
 
 use hir::analysis::HirAnalysisDb;
+use hir::analysis::ty::decision_tree::Projection;
 use hir::hir_def::{ExprId, PatId};
 use num_bigint::BigUint;
 use rustc_hash::FxHashMap;
 
 use crate::{
     CallOrigin, MirFunction, MirInst, SwitchValue, Terminator, ValueId, ValueOrigin,
-    ir::SyntheticValue,
+    ir::{Place, SyntheticValue},
 };
 
 /// Hashes a MIR function (including its callees) so structurally equivalent bodies
@@ -77,6 +78,15 @@ impl<'db, 'a> FunctionHasher<'db, 'a> {
         }
         self.next_value = func.body.values.len() as u32;
 
+        // Include receiver_space in the hash so functions differing only by
+        // address space (e.g. storage_slot_mem vs storage_slot_stor) are not
+        // erroneously deduplicated.
+        match func.receiver_space {
+            Some(crate::ir::AddressSpaceKind::Memory) => self.write_u8(1),
+            Some(crate::ir::AddressSpaceKind::Storage) => self.write_u8(2),
+            None => self.write_u8(0),
+        }
+
         self.write_usize(func.body.entry.index());
         self.write_usize(func.body.values.len());
         for value in func.body.values.iter() {
@@ -123,6 +133,10 @@ impl<'db, 'a> FunctionHasher<'db, 'a> {
                 self.write_u8(0x05);
                 self.write_usize(*idx);
             }
+            ValueOrigin::BindingName(name) => {
+                self.write_u8(0x09);
+                self.write_str(name);
+            }
             ValueOrigin::Call(call) => {
                 self.write_u8(0x06);
                 self.hash_call_origin(call);
@@ -136,6 +150,75 @@ impl<'db, 'a> FunctionHasher<'db, 'a> {
                     self.write_u32(slot);
                 }
             }
+            ValueOrigin::FieldPtr(field_ptr) => {
+                self.write_u8(0x08);
+                let slot = self.placeholder_value(field_ptr.base);
+                self.write_u32(slot);
+                self.write_u64(field_ptr.offset_bytes as u64);
+                self.write_u8(match field_ptr.addr_space {
+                    crate::ir::AddressSpaceKind::Memory => 1,
+                    crate::ir::AddressSpaceKind::Storage => 2,
+                });
+            }
+            ValueOrigin::PlaceLoad(place) => {
+                self.write_u8(0x09);
+                self.hash_place(place);
+            }
+            ValueOrigin::PlaceRef(place) => {
+                self.write_u8(0x0A);
+                self.hash_place(place);
+            }
+        }
+    }
+
+    fn hash_place(&mut self, place: &Place<'db>) {
+        let slot = self.placeholder_value(place.base);
+        self.write_u32(slot);
+        // Hash address space (0 for memory, 1 for storage)
+        self.write_u8(match place.address_space {
+            crate::ir::AddressSpaceKind::Memory => 0,
+            crate::ir::AddressSpaceKind::Storage => 1,
+        });
+        self.write_usize(place.projection.len());
+        for proj in place.projection.iter() {
+            match proj {
+                Projection::Field(idx) => {
+                    self.write_u8(0x00);
+                    self.write_usize(*idx);
+                }
+                Projection::VariantField {
+                    variant,
+                    enum_ty,
+                    field_idx,
+                } => {
+                    // Include variant index and enum type identity to distinguish
+                    // operations on different enum types/variants. While structurally
+                    // equivalent code might produce the same Yul, we hash the enum
+                    // type to preserve type system semantics in deduplication.
+                    self.write_u8(0x01);
+                    self.write_str(enum_ty.pretty_print(self.db));
+                    self.write_usize(variant.idx as usize);
+                    self.write_usize(*field_idx);
+                }
+                Projection::Index(idx_source) => {
+                    self.write_u8(0x02);
+                    match idx_source {
+                        hir::projection::IndexSource::Constant(idx) => {
+                            self.write_u8(0x00);
+                            self.write_usize(*idx);
+                        }
+                        hir::projection::IndexSource::Dynamic(infallible) => {
+                            // HIR projections use Infallible for Idx, making Dynamic
+                            // impossible to construct. This match arm is exhaustive
+                            // but can never be reached.
+                            match *infallible {}
+                        }
+                    }
+                }
+                Projection::Deref => {
+                    self.write_u8(0x03);
+                }
+            }
         }
     }
 
@@ -145,6 +228,19 @@ impl<'db, 'a> FunctionHasher<'db, 'a> {
         for arg in &call.args {
             let slot = self.placeholder_value(*arg);
             self.write_u32(slot);
+        }
+        self.write_usize(call.effect_args.len());
+        for arg in &call.effect_args {
+            let slot = self.placeholder_value(*arg);
+            self.write_u32(slot);
+        }
+        self.write_usize(call.effect_kinds.len());
+        for kind in &call.effect_kinds {
+            self.write_u8(match kind {
+                crate::ir::EffectProviderKind::Memory => 1,
+                crate::ir::EffectProviderKind::Storage => 2,
+                crate::ir::EffectProviderKind::Calldata => 3,
+            });
         }
         self.write_usize(call.callable.generic_args().len());
         let symbol = call
@@ -233,6 +329,13 @@ impl<'db, 'a> FunctionHasher<'db, 'a> {
             }
             Terminator::ReturnData { offset, size } => {
                 self.write_u8(0x35);
+                let offset_slot = self.placeholder_value(*offset);
+                let size_slot = self.placeholder_value(*size);
+                self.write_u32(offset_slot);
+                self.write_u32(size_slot);
+            }
+            Terminator::Revert { offset, size } => {
+                self.write_u8(0x36);
                 let offset_slot = self.placeholder_value(*offset);
                 let size_slot = self.placeholder_value(*size);
                 self.write_u32(offset_slot);

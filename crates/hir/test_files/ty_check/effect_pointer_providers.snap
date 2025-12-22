@@ -1,0 +1,204 @@
+---
+source: crates/hir/tests/ty_check.rs
+assertion_line: 41
+expression: res
+input_file: test_files/ty_check/effect_pointer_providers.fe
+---
+note: 
+  ┌─ effect_pointer_providers.fe:1:36
+  │  
+1 │   fn read_x() -> u256 uses (x: u256) {
+  │ ╭────────────────────────────────────^
+2 │ │     x
+3 │ │ }
+  │ ╰─^ u256
+
+note: 
+  ┌─ effect_pointer_providers.fe:2:5
+  │
+2 │     x
+  │     ^ u256
+
+note: 
+  ┌─ effect_pointer_providers.fe:5:32
+  │  
+5 │   fn bump_x() uses (mut x: u256) {
+  │ ╭────────────────────────────────^
+6 │ │     x += 1
+7 │ │ }
+  │ ╰─^ ()
+
+note: 
+  ┌─ effect_pointer_providers.fe:6:5
+  │
+6 │     x += 1
+  │     ^ u256
+
+note: 
+  ┌─ effect_pointer_providers.fe:6:5
+  │
+6 │     x += 1
+  │     ^^^^^^ ()
+
+note: 
+  ┌─ effect_pointer_providers.fe:6:10
+  │
+6 │     x += 1
+  │          ^ u256
+
+note: 
+   ┌─ effect_pointer_providers.fe:9:19
+   │  
+ 9 │   fn test_mem_ptr() {
+   │ ╭───────────────────^
+10 │ │     let p = core::effect_ref::MemPtr<u256> { addr: 0 }
+11 │ │     with (p) {
+12 │ │         let _v = read_x()
+13 │ │         bump_x()
+14 │ │     }
+15 │ │ }
+   │ ╰─^ ()
+
+note: 
+   ┌─ effect_pointer_providers.fe:10:9
+   │
+10 │     let p = core::effect_ref::MemPtr<u256> { addr: 0 }
+   │         ^ MemPtr<u256>
+
+note: 
+   ┌─ effect_pointer_providers.fe:10:13
+   │
+10 │     let p = core::effect_ref::MemPtr<u256> { addr: 0 }
+   │             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ MemPtr<u256>
+
+note: 
+   ┌─ effect_pointer_providers.fe:10:52
+   │
+10 │     let p = core::effect_ref::MemPtr<u256> { addr: 0 }
+   │                                                    ^ u256
+
+note: 
+   ┌─ effect_pointer_providers.fe:11:5
+   │  
+11 │ ╭     with (p) {
+12 │ │         let _v = read_x()
+13 │ │         bump_x()
+14 │ │     }
+   │ ╰─────^ ()
+
+note: 
+   ┌─ effect_pointer_providers.fe:11:11
+   │
+11 │     with (p) {
+   │           ^ MemPtr<u256>
+
+note: 
+   ┌─ effect_pointer_providers.fe:11:14
+   │  
+11 │       with (p) {
+   │ ╭──────────────^
+12 │ │         let _v = read_x()
+13 │ │         bump_x()
+14 │ │     }
+   │ ╰─────^ ()
+
+note: 
+   ┌─ effect_pointer_providers.fe:12:13
+   │
+12 │         let _v = read_x()
+   │             ^^ u256
+
+note: 
+   ┌─ effect_pointer_providers.fe:12:18
+   │
+12 │         let _v = read_x()
+   │                  ^^^^^^ fn read_x
+
+note: 
+   ┌─ effect_pointer_providers.fe:12:18
+   │
+12 │         let _v = read_x()
+   │                  ^^^^^^^^ u256
+
+note: 
+   ┌─ effect_pointer_providers.fe:13:9
+   │
+13 │         bump_x()
+   │         ^^^^^^ fn bump_x
+
+note: 
+   ┌─ effect_pointer_providers.fe:13:9
+   │
+13 │         bump_x()
+   │         ^^^^^^^^ ()
+
+note: 
+   ┌─ effect_pointer_providers.fe:17:33
+   │  
+17 │   fn test_calldata_ptr_readonly() {
+   │ ╭─────────────────────────────────^
+18 │ │     let c = core::effect_ref::CalldataPtr<u256> { offset: 0 }
+19 │ │     with (c) {
+20 │ │         let _v = read_x()
+21 │ │     }
+22 │ │ }
+   │ ╰─^ ()
+
+note: 
+   ┌─ effect_pointer_providers.fe:18:9
+   │
+18 │     let c = core::effect_ref::CalldataPtr<u256> { offset: 0 }
+   │         ^ CalldataPtr<u256>
+
+note: 
+   ┌─ effect_pointer_providers.fe:18:13
+   │
+18 │     let c = core::effect_ref::CalldataPtr<u256> { offset: 0 }
+   │             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ CalldataPtr<u256>
+
+note: 
+   ┌─ effect_pointer_providers.fe:18:59
+   │
+18 │     let c = core::effect_ref::CalldataPtr<u256> { offset: 0 }
+   │                                                           ^ u256
+
+note: 
+   ┌─ effect_pointer_providers.fe:19:5
+   │  
+19 │ ╭     with (c) {
+20 │ │         let _v = read_x()
+21 │ │     }
+   │ ╰─────^ ()
+
+note: 
+   ┌─ effect_pointer_providers.fe:19:11
+   │
+19 │     with (c) {
+   │           ^ CalldataPtr<u256>
+
+note: 
+   ┌─ effect_pointer_providers.fe:19:14
+   │  
+19 │       with (c) {
+   │ ╭──────────────^
+20 │ │         let _v = read_x()
+21 │ │     }
+   │ ╰─────^ ()
+
+note: 
+   ┌─ effect_pointer_providers.fe:20:13
+   │
+20 │         let _v = read_x()
+   │             ^^ u256
+
+note: 
+   ┌─ effect_pointer_providers.fe:20:18
+   │
+20 │         let _v = read_x()
+   │                  ^^^^^^ fn read_x
+
+note: 
+   ┌─ effect_pointer_providers.fe:20:18
+   │
+20 │         let _v = read_x()
+   │                  ^^^^^^^^ u256

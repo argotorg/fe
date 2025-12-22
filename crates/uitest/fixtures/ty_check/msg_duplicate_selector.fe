@@ -1,0 +1,19 @@
+// Test that msg variants within the same msg block cannot have duplicate selectors
+
+msg TokenMsg {
+    #[selector = 0x01]
+    Transfer { to: u64, amount: u64 } -> bool,
+
+    // Error: duplicate selector 0x01
+    #[selector = 0x01]
+    Approve { spender: u64, amount: u64 } -> bool,
+
+    #[selector = 0x02]
+    Balance { addr: u64 } -> u64,
+
+    // Error: duplicate selector 0x02
+    #[selector = 0x02]
+    TotalSupply -> u64,
+}
+
+// No contract needed - the check is at the msg block level

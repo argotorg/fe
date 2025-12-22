@@ -1,0 +1,52 @@
+---
+source: crates/codegen/tests/yul.rs
+expression: output
+input_file: tests/fixtures/match_struct.fe
+---
+function match_struct_fields(p) -> ret {
+  let v0 := 0
+  switch and(mload(add(p, 1)), 0xff)
+    case 0 {
+      switch and(mload(p), 0xff)
+        case 0 {
+          v0 := 0
+        }
+        default {
+          let v1 := and(mload(p), 0xff)
+          v0 := v1
+        }
+      ret := v0
+    }
+    default {
+      switch and(mload(p), 0xff)
+        case 0 {
+          let v2 := and(mload(add(p, 1)), 0xff)
+          v0 := v2
+        }
+        default {
+          let v3 := and(mload(add(p, 1)), 0xff)
+          let v4 := and(mload(p), 0xff)
+          v0 := add(v4, v3)
+        }
+      ret := v0
+    }
+  ret := v0
+}
+function match_struct_wildcard(p) -> ret {
+  let v0 := 0
+  switch and(mload(p), 0xff)
+    case 0 {
+      v0 := 1
+    }
+    default {
+      switch and(mload(add(p, 1)), 0xff)
+        case 0 {
+          v0 := 2
+        }
+        default {
+          v0 := 3
+        }
+      ret := v0
+    }
+  ret := v0
+}

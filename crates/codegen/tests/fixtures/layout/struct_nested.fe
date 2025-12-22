@@ -1,0 +1,17 @@
+// Test layout of nested structs
+
+struct Inner {
+    x: u8,
+    y: u8,
+}
+
+struct Outer {
+    inner: Inner,
+    z: u256,
+}
+
+struct DeepNest {
+    a: Inner,
+    b: Inner,
+    c: u8,
+}

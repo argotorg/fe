@@ -55,6 +55,7 @@ macro_rules! define_core_helpers {
         }
 
         /// Core helper types used during MIR lowering.
+        #[allow(clippy::enum_variant_names)]
         #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
         pub enum CoreHelperTy { $($t_variant,)+ }
 
@@ -91,7 +92,11 @@ define_core_helpers! {
         GetVariantField => "core::enum_repr::get_variant_field",
     }
     types {
-        AddressSpace => "core::ptr::AddressSpace",
+        MemPtr => "core::ptr::MemPtr",
+        StorPtr => "core::ptr::StorPtr",
+        EffectMemPtr => "core::effect_ref::MemPtr",
+        EffectStorPtr => "core::effect_ref::StorPtr",
+        EffectCalldataPtr => "core::effect_ref::CalldataPtr",
     }
 }
 
@@ -168,7 +173,7 @@ impl<'db> CoreLib<'db> {
     /// Look up a previously resolved core helper type.
     ///
     /// * `self` - Library containing resolved core helper types.
-    /// * `key` - Which helper type to retrieve (e.g. `AddressSpace`).
+    /// * `key` - Which helper type to retrieve (e.g. `MemPtr`).
     ///
     /// Returns the resolved [`TyId`] for the requested helper type.
     pub fn helper_ty(&self, key: CoreHelperTy) -> TyId<'db> {
@@ -209,7 +214,7 @@ impl<'db> CoreLib<'db> {
     ///
     /// * `db` - Analysis database used for name/type queries.
     /// * `body` - The body whose scope anchors path resolution.
-    /// * `path` - Fully-qualified path string (e.g. `"core::ptr::AddressSpace"`).
+    /// * `path` - Fully-qualified path string (e.g. `"core::ptr::MemPtr"`).
     ///
     /// Returns the `TyId` on success or a [`CoreLibError::MissingType`] if resolution fails.
     fn resolve_core_type(

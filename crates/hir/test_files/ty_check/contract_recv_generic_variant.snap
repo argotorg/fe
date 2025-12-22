@@ -1,0 +1,97 @@
+---
+source: crates/hir/tests/ty_check.rs
+expression: res
+input_file: test_files/ty_check/contract_recv_generic_variant.fe
+---
+note: 
+   ┌─ contract_recv_generic_variant.fe:29:9
+   │
+29 │         GenericMsg<u8> { value } -> u8 uses () {
+   │         ^^^^^^^^^^^^^^^^^^^^^^^^ GenericMsg<u8>
+
+note: 
+   ┌─ contract_recv_generic_variant.fe:29:26
+   │
+29 │         GenericMsg<u8> { value } -> u8 uses () {
+   │                          ^^^^^ u8
+
+note: 
+   ┌─ contract_recv_generic_variant.fe:29:48
+   │  
+29 │           GenericMsg<u8> { value } -> u8 uses () {
+   │ ╭────────────────────────────────────────────────^
+30 │ │             value
+31 │ │         }
+   │ ╰─────────^ u8
+
+note: 
+   ┌─ contract_recv_generic_variant.fe:30:13
+   │
+30 │             value
+   │             ^^^^^ u8
+
+note: 
+   ┌─ contract_recv_generic_variant.fe:32:9
+   │
+32 │         GenericMsg<u16> { value } -> u16 uses () {
+   │         ^^^^^^^^^^^^^^^^^^^^^^^^^ GenericMsg<u16>
+
+note: 
+   ┌─ contract_recv_generic_variant.fe:32:27
+   │
+32 │         GenericMsg<u16> { value } -> u16 uses () {
+   │                           ^^^^^ u16
+
+note: 
+   ┌─ contract_recv_generic_variant.fe:32:50
+   │  
+32 │           GenericMsg<u16> { value } -> u16 uses () {
+   │ ╭──────────────────────────────────────────────────^
+33 │ │             value
+34 │ │         }
+   │ ╰─────────^ u16
+
+note: 
+   ┌─ contract_recv_generic_variant.fe:33:13
+   │
+33 │             value
+   │             ^^^^^ u16
+
+note: 
+   ┌─ contract_recv_generic_variant.fe:35:9
+   │
+35 │         GenericMsg<u64> { value } -> u64 uses (data) {
+   │         ^^^^^^^^^^^^^^^^^^^^^^^^^ GenericMsg<u64>
+
+note: 
+   ┌─ contract_recv_generic_variant.fe:35:27
+   │
+35 │         GenericMsg<u64> { value } -> u64 uses (data) {
+   │                           ^^^^^ u64
+
+note: 
+   ┌─ contract_recv_generic_variant.fe:35:54
+   │  
+35 │           GenericMsg<u64> { value } -> u64 uses (data) {
+   │ ╭──────────────────────────────────────────────────────^
+36 │ │             data + value
+37 │ │         }
+   │ ╰─────────^ u64
+
+note: 
+   ┌─ contract_recv_generic_variant.fe:36:13
+   │
+36 │             data + value
+   │             ^^^^ u64
+
+note: 
+   ┌─ contract_recv_generic_variant.fe:36:13
+   │
+36 │             data + value
+   │             ^^^^^^^^^^^^ u64
+
+note: 
+   ┌─ contract_recv_generic_variant.fe:36:20
+   │
+36 │             data + value
+   │                    ^^^^^ u64

@@ -38,17 +38,18 @@ pub mod lazy_spans {
             LazyUnExprSpan,
         },
         item::{
-            LazyBodySpan, LazyConstSpan, LazyContractSpan, LazyEnumSpan, LazyFieldDefListSpan,
-            LazyFieldDefSpan, LazyFuncSignatureSpan, LazyFuncSpan, LazyImplSpan, LazyImplTraitSpan,
-            LazyItemModifierSpan, LazyItemSpan, LazyModSpan, LazyStructSpan, LazyTopModSpan,
-            LazyTraitSpan, LazyTypeAliasSpan, LazyUseSpan, LazyVariantDefListSpan,
-            LazyVariantDefSpan,
+            LazyBodySpan, LazyConstSpan, LazyContractRecvSpan, LazyContractSpan, LazyEnumSpan,
+            LazyFieldDefListSpan, LazyFieldDefSpan, LazyFuncSignatureSpan, LazyFuncSpan,
+            LazyImplSpan, LazyImplTraitSpan, LazyItemModifierSpan, LazyItemSpan, LazyModSpan,
+            LazyRecvArmListSpan, LazyRecvArmSpan, LazyStructSpan, LazyTopModSpan, LazyTraitSpan,
+            LazyTypeAliasSpan, LazyUseSpan, LazyVariantDefListSpan, LazyVariantDefSpan,
         },
         params::{
             LazyConstGenericParamSpan, LazyFuncParamListSpan, LazyFuncParamSpan,
             LazyGenericArgListSpan, LazyGenericArgSpan, LazyGenericParamListSpan,
             LazyGenericParamSpan, LazyKindBoundSpan, LazyTraitRefSpan, LazyTypeBoundListSpan,
-            LazyTypeBoundSpan, LazyTypeGenericArgSpan, LazyWhereClauseSpan, LazyWherePredicateSpan,
+            LazyTypeBoundSpan, LazyTypeGenericArgSpan, LazyUsesClauseSpan, LazyUsesParamListSpan,
+            LazyUsesParamSpan, LazyWhereClauseSpan, LazyWherePredicateSpan,
         },
         pat::{
             LazyLitPatSpan, LazyPatSpan, LazyPathPatSpan, LazyPathTuplePatSpan,
@@ -231,6 +232,80 @@ pub enum DesugaredOrigin {
     /// The HIR node is the result of desugaring a AST use.
     /// In HIR lowering, nested use tree is flattened into a single use path.
     Use(UseDesugared),
+    /// The HIR node is the result of desugaring a `msg` block.
+    /// `msg` blocks are desugared into modules containing structs and trait impls.
+    Msg(MsgDesugared),
+    /// The HIR node is the result of desugaring a contract `init` block.
+    /// Contract init blocks are desugared into private `init` functions.
+    ContractInit(ContractInitDesugared),
+    /// The HIR node is the result of lowering/desugaring a high-level `contract`
+    /// item into generated entrypoints and recv-arm handlers.
+    ContractLowering(ContractLoweringDesugared),
+}
+
+/// Tracks the origin of HIR nodes desugared from a `msg` block.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct MsgDesugared {
+    /// The original `msg` AST node.
+    pub msg: AstPtr<ast::Msg>,
+    /// If this is a desugared variant, the index of the variant.
+    pub variant_idx: Option<usize>,
+    /// Which part of the msg/variant to point to.
+    pub focus: MsgDesugaredFocus,
+}
+
+/// Specifies which part of a desugared msg block to point to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub enum MsgDesugaredFocus {
+    /// Point to the entire msg block (or variant if variant_idx is set).
+    #[default]
+    Block,
+    /// Point to the variant name.
+    VariantName,
+    /// Point to the selector attribute value (if any).
+    Selector,
+}
+
+/// Tracks the origin of HIR nodes desugared from a contract `init` block.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct ContractInitDesugared {
+    /// The original contract init AST node.
+    pub init: AstPtr<ast::ContractInit>,
+    /// Which part of the init block to point to.
+    pub focus: ContractInitDesugaredFocus,
+}
+
+/// Specifies which part of a desugared contract init to point to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub enum ContractInitDesugaredFocus {
+    /// Point to the entire init block.
+    #[default]
+    Block,
+}
+
+/// Tracks the origin of HIR nodes synthesized from a high-level `contract` item.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct ContractLoweringDesugared {
+    /// The original `contract` AST node.
+    pub contract: AstPtr<ast::Contract>,
+    /// If this is associated with a specific recv arm, the recv index.
+    pub recv_idx: Option<usize>,
+    /// If this is associated with a specific recv arm, the arm index.
+    pub arm_idx: Option<usize>,
+    /// Which part of the contract to point to.
+    pub focus: ContractLoweringDesugaredFocus,
+}
+
+/// Specifies which part of a desugared contract to point to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub enum ContractLoweringDesugaredFocus {
+    /// Point to the entire contract item.
+    #[default]
+    Contract,
+    /// Point to the contract's `init` block (if present).
+    InitBlock,
+    /// Point to the contract's recv arm (if recv/arm indices are present).
+    RecvArm,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]

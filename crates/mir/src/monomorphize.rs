@@ -16,7 +16,10 @@ use hir::hir_def::{CallableDef, Func, item::ItemKind, scope_graph::ScopeId};
 use rustc_hash::FxHashMap;
 
 use crate::{
-    CallOrigin, MirFunction, ValueOrigin, dedup::deduplicate_mir, ir::IntrinsicOp,
+    CallOrigin, MirFunction, ValueOrigin,
+    dedup::deduplicate_mir,
+    ir::AddressSpaceKind,
+    ir::{EffectProviderKind, IntrinsicOp},
     lower::lower_function,
 };
 
@@ -44,7 +47,7 @@ pub(crate) fn monomorphize_functions<'db>(
 struct Monomorphizer<'db> {
     db: &'db dyn HirAnalysisDb,
     templates: Vec<MirFunction<'db>>,
-    func_index: FxHashMap<Func<'db>, usize>,
+    func_index: FxHashMap<TemplateKey<'db>, usize>,
     func_defs: FxHashMap<Func<'db>, CallableDef<'db>>,
     instances: Vec<MirFunction<'db>>,
     instance_map: FxHashMap<InstanceKey<'db>, usize>,
@@ -55,6 +58,14 @@ struct Monomorphizer<'db> {
 struct InstanceKey<'db> {
     func: Func<'db>,
     args: Vec<TyId<'db>>,
+    receiver_space: Option<AddressSpaceKind>,
+    effect_kinds: Vec<EffectProviderKind>,
+}
+#[derive(Clone, PartialEq, Eq, Hash)]
+struct TemplateKey<'db> {
+    func: Func<'db>,
+    receiver_space: Option<AddressSpaceKind>,
+    effect_kinds: Vec<EffectProviderKind>,
 }
 
 /// How a call target should be handled during monomorphization.
@@ -68,10 +79,17 @@ enum CallTarget<'db> {
 
 impl<'db> InstanceKey<'db> {
     /// Pack a function and its (possibly empty) substitution list for hashing.
-    fn new(func: Func<'db>, args: &[TyId<'db>]) -> Self {
+    fn new(
+        func: Func<'db>,
+        args: &[TyId<'db>],
+        receiver_space: Option<AddressSpaceKind>,
+        effect_kinds: &[EffectProviderKind],
+    ) -> Self {
         Self {
             func,
             args: args.to_vec(),
+            receiver_space,
+            effect_kinds: effect_kinds.to_vec(),
         }
     }
 }
@@ -82,7 +100,16 @@ impl<'db> Monomorphizer<'db> {
         let func_index = templates
             .iter()
             .enumerate()
-            .map(|(idx, func)| (func.func, idx))
+            .map(|(idx, func)| {
+                (
+                    TemplateKey {
+                        func: func.func,
+                        receiver_space: func.receiver_space,
+                        effect_kinds: func.effect_provider_kinds.clone(),
+                    },
+                    idx,
+                )
+            })
             .collect();
         let mut func_defs = FxHashMap::default();
         for func in templates.iter().map(|f| f.func) {
@@ -113,14 +140,22 @@ impl<'db> Monomorphizer<'db> {
                 .is_none_or(|def| def.params(self.db).is_empty());
             if should_seed {
                 // Seed non-generic functions immediately so we always emit them.
-                let _ = self.ensure_instance(func, &[]);
+                let receiver_space = self.templates[idx].receiver_space;
+                let default_effects =
+                    vec![EffectProviderKind::Storage; func.effect_params(self.db).count()];
+                let _ = self.ensure_instance(func, &[], receiver_space, &default_effects);
             }
         }
     }
 
     /// Drain the worklist by resolving calls in each newly-created instance.
     fn process_worklist(&mut self) {
+        let mut iterations: usize = 0;
         while let Some(func_idx) = self.worklist.pop_front() {
+            iterations += 1;
+            if iterations > 100_000 {
+                panic!("monomorphization worklist exceeded 100k iterations; possible cycle");
+            }
             self.resolve_calls(func_idx);
         }
     }
@@ -129,13 +164,26 @@ impl<'db> Monomorphizer<'db> {
     fn resolve_calls(&mut self, func_idx: usize) {
         let call_sites = {
             let function = &self.instances[func_idx];
-            let mut sites: Vec<(usize, CallTarget<'db>, Vec<TyId<'db>>)> = Vec::new();
+            #[allow(clippy::type_complexity)] // TODO: refactor
+            let mut sites: Vec<(
+                usize,
+                CallTarget<'db>,
+                Vec<TyId<'db>>,
+                Option<AddressSpaceKind>,
+                Vec<EffectProviderKind>,
+            )> = Vec::new();
             for (value_idx, value) in function.body.values.iter().enumerate() {
                 if let ValueOrigin::Call(call) = &value.origin
                     && let Some(target_func) = self.resolve_call_target(call)
                 {
                     let args = call.callable.generic_args().to_vec();
-                    sites.push((value_idx, target_func, args));
+                    sites.push((
+                        value_idx,
+                        target_func,
+                        args,
+                        call.receiver_space,
+                        call.effect_kinds.clone(),
+                    ));
                 }
             }
             sites
@@ -164,12 +212,14 @@ impl<'db> Monomorphizer<'db> {
                 .collect::<Vec<_>>()
         };
 
-        for (value_idx, target, args) in call_sites {
+        for (value_idx, target, args, receiver_space, effect_kinds) in call_sites {
             let resolved_name = match target {
-                CallTarget::Template(func) => {
-                    self.ensure_instance(func, &args).map(|(_, symbol)| symbol)
+                CallTarget::Template(func) => self
+                    .ensure_instance(func, &args, receiver_space, &effect_kinds)
+                    .map(|(_, symbol)| symbol),
+                CallTarget::Decl(func) => {
+                    Some(self.mangled_name(func, &args, receiver_space, &effect_kinds))
                 }
-                CallTarget::Decl(func) => Some(self.mangled_name(func, &args)),
             };
 
             if let Some(name) = resolved_name
@@ -181,7 +231,8 @@ impl<'db> Monomorphizer<'db> {
         }
 
         for (value_idx, target) in code_region_sites {
-            if let Some((_, symbol)) = self.ensure_instance(target.func, &target.generic_args)
+            if let Some((_, symbol)) =
+                self.ensure_instance(target.func, &target.generic_args, None, &[])
                 && let ValueOrigin::Intrinsic(intr) =
                     &mut self.instances[func_idx].body.values[value_idx].origin
                 && let Some(target) = &mut intr.code_region
@@ -192,18 +243,47 @@ impl<'db> Monomorphizer<'db> {
     }
 
     /// Ensure a `(func, args)` instance exists, cloning and substituting if needed.
-    fn ensure_instance(&mut self, func: Func<'db>, args: &[TyId<'db>]) -> Option<(usize, String)> {
-        let key = InstanceKey::new(func, args);
+    fn ensure_instance(
+        &mut self,
+        func: Func<'db>,
+        args: &[TyId<'db>],
+        receiver_space: Option<AddressSpaceKind>,
+        effect_kinds: &[EffectProviderKind],
+    ) -> Option<(usize, String)> {
+        let key = InstanceKey::new(func, args, receiver_space, effect_kinds);
         if let Some(&idx) = self.instance_map.get(&key) {
             let symbol = self.instances[idx].symbol_name.clone();
             return Some((idx, symbol));
         }
 
-        let template_idx = self.ensure_template(func)?;
-        let mut instance = self.templates[template_idx].clone();
-        instance.generic_args = args.to_vec();
-        instance.symbol_name = self.mangled_name(func, &instance.generic_args);
-        self.apply_substitution(&mut instance);
+        let symbol_name = self.mangled_name(func, args, receiver_space, effect_kinds);
+
+        let instance = if args.is_empty() {
+            let template_idx = self.ensure_template(func, receiver_space, effect_kinds)?;
+            let mut instance = self.templates[template_idx].clone();
+            instance.receiver_space = receiver_space;
+            instance.effect_provider_kinds = effect_kinds.to_vec();
+            instance.symbol_name = symbol_name.clone();
+            self.apply_substitution(&mut instance);
+            instance
+        } else {
+            let (_diags, typed_body) = check_func_body(self.db, func);
+            let mut folder = ParamSubstFolder { args };
+            let typed_body = typed_body.clone().fold_with(self.db, &mut folder);
+            let mut instance = lower_function(
+                self.db,
+                func,
+                typed_body,
+                receiver_space,
+                effect_kinds.to_vec(),
+            )
+            .ok()?;
+            instance.generic_args = args.to_vec();
+            instance.receiver_space = receiver_space;
+            instance.effect_provider_kinds = effect_kinds.to_vec();
+            instance.symbol_name = symbol_name.clone();
+            instance
+        };
 
         let idx = self.instances.len();
         let symbol = instance.symbol_name.clone();
@@ -252,13 +332,20 @@ impl<'db> Monomorphizer<'db> {
                     .iter()
                     .map(|ty| ty.fold_with(self.db, &mut folder))
                     .collect();
-                target.symbol = Some(self.mangled_name(target.func, &target.generic_args));
+                target.symbol =
+                    Some(self.mangled_name(target.func, &target.generic_args, None, &[]));
             }
         }
     }
 
     /// Produce a globally unique (yet mostly readable) symbol name per instance.
-    fn mangled_name(&self, func: Func<'db>, args: &[TyId<'db>]) -> String {
+    fn mangled_name(
+        &self,
+        func: Func<'db>,
+        args: &[TyId<'db>],
+        receiver_space: Option<AddressSpaceKind>,
+        effect_kinds: &[EffectProviderKind],
+    ) -> String {
         let mut base = func
             .name(self.db)
             .to_opt()
@@ -266,6 +353,28 @@ impl<'db> Monomorphizer<'db> {
             .unwrap_or_else(|| "<anonymous>".into());
         if let Some(prefix) = self.associated_prefix(func) {
             base = format!("{prefix}_{base}");
+        }
+        if let Some(space) = receiver_space {
+            let suffix = match space {
+                AddressSpaceKind::Memory => "mem",
+                AddressSpaceKind::Storage => "stor",
+            };
+            base = format!("{base}_{suffix}");
+        }
+        if effect_kinds
+            .iter()
+            .any(|kind| !matches!(kind, EffectProviderKind::Storage))
+        {
+            let suffix = effect_kinds
+                .iter()
+                .map(|kind| match kind {
+                    EffectProviderKind::Memory => "mem",
+                    EffectProviderKind::Storage => "stor",
+                    EffectProviderKind::Calldata => "calldata",
+                })
+                .collect::<Vec<_>>()
+                .join("_");
+            base = format!("{base}__eff_{suffix}");
         }
         if args.is_empty() {
             return base;
@@ -305,16 +414,33 @@ impl<'db> Monomorphizer<'db> {
     }
 
     /// Ensure we have lowered MIR for `func`, lowering on demand for dependency ingots.
-    fn ensure_template(&mut self, func: Func<'db>) -> Option<usize> {
-        if let Some(&idx) = self.func_index.get(&func) {
+    fn ensure_template(
+        &mut self,
+        func: Func<'db>,
+        receiver_space: Option<AddressSpaceKind>,
+        effect_kinds: &[EffectProviderKind],
+    ) -> Option<usize> {
+        let key = TemplateKey {
+            func,
+            receiver_space,
+            effect_kinds: effect_kinds.to_vec(),
+        };
+        if let Some(&idx) = self.func_index.get(&key) {
             return Some(idx);
         }
 
         let (_diags, typed_body) = check_func_body(self.db, func);
-        let lowered = lower_function(self.db, func, typed_body.clone()).ok()?;
+        let lowered = lower_function(
+            self.db,
+            func,
+            typed_body.clone(),
+            receiver_space,
+            effect_kinds.to_vec(),
+        )
+        .ok()?;
         let idx = self.templates.len();
         self.templates.push(lowered);
-        self.func_index.insert(func, idx);
+        self.func_index.insert(key, idx);
         if let Some(def) = func.as_callable(self.db) {
             self.func_defs.insert(func, def);
         }

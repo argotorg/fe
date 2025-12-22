@@ -1,8 +1,7 @@
-mod test_db;
 use std::path::Path;
 
 use dir_test::{Fixture, dir_test};
-use test_db::HirAnalysisTestDb;
+use fe_hir::test_db::HirAnalysisTestDb;
 
 #[dir_test(
     dir: "$CARGO_MANIFEST_DIR/test_files/def_analysis",

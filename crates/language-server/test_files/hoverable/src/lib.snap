@@ -1,6 +1,5 @@
 ---
 source: crates/language-server/src/functionality/references.rs
-assertion_line: 372
 expression: snapshot
 input_file: test_files/hoverable/src/lib.fe
 ---
@@ -31,19 +30,19 @@ note:
 note: 
   ┌─ lib.fe:2:5
   │
-2 │ use stuff::calculations::ambiguous;
+2 │ use stuff::calculations::ambiguous
   │     ^^^^^ ref: 2:4
 
 note: 
   ┌─ lib.fe:2:12
   │
-2 │ use stuff::calculations::ambiguous;
+2 │ use stuff::calculations::ambiguous
   │            ^^^^^^^^^^^^ ref: 2:11
 
 note: 
   ┌─ lib.fe:2:26
   │
-2 │ use stuff::calculations::ambiguous;
+2 │ use stuff::calculations::ambiguous
   │                          ^^^^^^^^^ ref: 2:25
 
 note: 
@@ -65,226 +64,256 @@ note:
   │                    ^^^^^^^^^^^ ref: 8:19
 
 note: 
-   ┌─ lib.fe:12:8
+   ┌─ lib.fe:11:4
    │
-12 │ pub fn add(x: i32, y: i32) -> i32 {
-   │        ^^^ def: defined here @ 12:7 (1 refs)
+11 │ fn calculate() {
+   │    ^^^^^^^^^ def: defined here @ 11:3 (1 refs)
 
 note: 
-   ┌─ lib.fe:12:12
+   ┌─ lib.fe:12:3
    │
-12 │ pub fn add(x: i32, y: i32) -> i32 {
-   │            ^ def: defined here @ 12:11 (2 refs)
-
-note: 
-   ┌─ lib.fe:12:20
-   │
-12 │ pub fn add(x: i32, y: i32) -> i32 {
-   │                    ^ def: defined here @ 12:19 (2 refs)
-
-note: 
-   ┌─ lib.fe:13:3
-   │
-13 │   x + y
-   │   ^ ref: 13:2
+12 │   return_seven()
+   │   ^^^^^^^^^^^^ ref: 12:2
 
 note: 
    ┌─ lib.fe:13:7
    │
-13 │   x + y
-   │       ^ ref: 13:6
+13 │   let x: stuff::calculations::ambiguous
+   │       ^ def: defined here @ 13:6 (1 refs)
 
 note: 
-   ┌─ lib.fe:16:4
+   ┌─ lib.fe:13:10
    │
-16 │ fn calculate() {
-   │    ^^^^^^^^^ def: defined here @ 16:3 (1 refs)
+13 │   let x: stuff::calculations::ambiguous
+   │          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ ref: 13:9
 
 note: 
-   ┌─ lib.fe:17:3
+   ┌─ lib.fe:18:11
    │
-17 │   return_seven()
-   │   ^^^^^^^^^^^^ ref: 17:2
+18 │ pub trait Calculatable {
+   │           ^^^^^^^^^^^^ def: defined here @ 18:10 (4 refs)
 
 note: 
-   ┌─ lib.fe:18:7
+   ┌─ lib.fe:19:6
    │
-18 │   let x: stuff::calculations::ambiguous
-   │       ^ def: defined here @ 18:6 (1 refs)
+19 │   fn calculate(self) -> i32
+   │      ^^^^^^^^^ def: defined here @ 19:5 (1 refs)
 
 note: 
-   ┌─ lib.fe:18:10
+   ┌─ lib.fe:19:16
    │
-18 │   let x: stuff::calculations::ambiguous
-   │          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ ref: 18:9
+19 │   fn calculate(self) -> i32
+   │                ^^^^ ref: 19:15
 
 note: 
-   ┌─ lib.fe:23:11
+   ┌─ lib.fe:23:8
    │
-23 │ pub trait Calculatable {
-   │           ^^^^^^^^^^^^ def: defined here @ 23:10 (4 refs)
+23 │ struct Numbers {
+   │        ^^^^^^^ def: defined here @ 23:7 (4 refs)
 
 note: 
-   ┌─ lib.fe:24:6
+   ┌─ lib.fe:28:4
    │
-24 │   fn calculate(self)
-   │      ^^^^^^^^^ def: defined here @ 24:5 (1 refs)
-
-note: 
-   ┌─ lib.fe:24:16
-   │
-24 │   fn calculate(self)
-   │                ^^^^ ref: 24:15
+28 │ fn add(x: i32, y: i32) -> i32 {
+   │    ^^^ def: defined here @ 28:3 (2 refs)
 
 note: 
    ┌─ lib.fe:28:8
    │
-28 │ struct Numbers {
-   │        ^^^^^^^ def: defined here @ 28:7 (4 refs)
+28 │ fn add(x: i32, y: i32) -> i32 {
+   │        ^ def: defined here @ 28:7 (2 refs)
+
+note: 
+   ┌─ lib.fe:28:16
+   │
+28 │ fn add(x: i32, y: i32) -> i32 {
+   │                ^ def: defined here @ 28:15 (2 refs)
+
+note: 
+   ┌─ lib.fe:29:5
+   │
+29 │     x + y
+   │     ^ ref: 29:4
+
+note: 
+   ┌─ lib.fe:29:9
+   │
+29 │     x + y
+   │         ^ ref: 29:8
+
+note: 
+   ┌─ lib.fe:32:6
+   │
+32 │ impl Calculatable for Numbers {
+   │      ^^^^^^^^^^^^ ref: 32:5
+
+note: 
+   ┌─ lib.fe:32:23
+   │
+32 │ impl Calculatable for Numbers {
+   │                       ^^^^^^^ ref: 32:22
 
 note: 
    ┌─ lib.fe:33:6
    │
-33 │ impl Calculatable for Numbers {
-   │      ^^^^^^^^^^^^ ref: 33:5
+33 │   fn calculate(self) -> i32 {
+   │      ^^^^^^^^^ def: defined here @ 33:5 (1 refs)
 
 note: 
-   ┌─ lib.fe:33:23
+   ┌─ lib.fe:33:16
    │
-33 │ impl Calculatable for Numbers {
-   │                       ^^^^^^^ ref: 33:22
+33 │   fn calculate(self) -> i32 {
+   │                ^^^^ def: defined here @ 33:15 (3 refs)
 
 note: 
-   ┌─ lib.fe:34:6
+   ┌─ lib.fe:34:11
    │
-34 │   fn calculate(self) {
-   │      ^^^^^^^^^ def: defined here @ 34:5 (1 refs)
+34 │       let z = self.x
+   │           ^ def: defined here @ 34:10 (2 refs)
 
 note: 
-   ┌─ lib.fe:34:16
+   ┌─ lib.fe:34:15
    │
-34 │   fn calculate(self) {
-   │                ^^^^ def: defined here @ 34:15 (3 refs)
+34 │       let z = self.x
+   │               ^^^^ ref: 34:14
 
 note: 
-   ┌─ lib.fe:35:5
+   ┌─ lib.fe:35:11
    │
-35 │     self.x + self.y
-   │     ^^^^ ref: 35:4
+35 │       let w = self.y
+   │           ^ def: defined here @ 35:10 (2 refs)
 
 note: 
-   ┌─ lib.fe:35:14
+   ┌─ lib.fe:35:15
    │
-35 │     self.x + self.y
-   │              ^^^^ ref: 35:13
+35 │       let w = self.y
+   │               ^^^^ ref: 35:14
 
 note: 
-   ┌─ lib.fe:39:6
+   ┌─ lib.fe:36:7
    │
-39 │ enum Option {
-   │      ^^^^^^ def: defined here @ 39:5 (2 refs)
+36 │       add(z, w)
+   │       ^^^ ref: 36:6
 
 note: 
-   ┌─ lib.fe:45:4
+   ┌─ lib.fe:36:11
    │
-45 │ fn test_locals(x: i32) -> i32 {
-   │    ^^^^^^^^^^^ def: defined here @ 45:3 (1 refs)
+36 │       add(z, w)
+   │           ^ ref: 36:10
 
 note: 
-   ┌─ lib.fe:45:16
+   ┌─ lib.fe:36:14
    │
-45 │ fn test_locals(x: i32) -> i32 {
-   │                ^ def: defined here @ 45:15 (2 refs)
+36 │       add(z, w)
+   │              ^ ref: 36:13
 
 note: 
-   ┌─ lib.fe:46:7
+   ┌─ lib.fe:40:6
    │
-46 │   let a = x
-   │       ^ def: defined here @ 46:6 (2 refs)
+40 │ enum Option {
+   │      ^^^^^^ def: defined here @ 40:5 (2 refs)
 
 note: 
-   ┌─ lib.fe:46:11
+   ┌─ lib.fe:46:4
    │
-46 │   let a = x
-   │           ^ ref: 46:10
+46 │ fn test_locals(x: i32) -> i32 {
+   │    ^^^^^^^^^^^ def: defined here @ 46:3 (1 refs)
+
+note: 
+   ┌─ lib.fe:46:16
+   │
+46 │ fn test_locals(x: i32) -> i32 {
+   │                ^ def: defined here @ 46:15 (2 refs)
 
 note: 
    ┌─ lib.fe:47:7
    │
-47 │   let x = a + 1
+47 │   let a = x
    │       ^ def: defined here @ 47:6 (2 refs)
 
 note: 
    ┌─ lib.fe:47:11
    │
-47 │   let x = a + 1
+47 │   let a = x
    │           ^ ref: 47:10
 
 note: 
-   ┌─ lib.fe:49:9
+   ┌─ lib.fe:48:7
    │
-49 │     let x = x + 1
-   │         ^ def: defined here @ 49:8 (2 refs)
+48 │   let x = a + 1
+   │       ^ def: defined here @ 48:6 (2 refs)
 
 note: 
-   ┌─ lib.fe:49:13
+   ┌─ lib.fe:48:11
    │
-49 │     let x = x + 1
-   │             ^ ref: 49:12
+48 │   let x = a + 1
+   │           ^ ref: 48:10
 
 note: 
-   ┌─ lib.fe:50:5
+   ┌─ lib.fe:50:9
    │
-50 │     x
-   │     ^ ref: 50:4
+50 │     let x = x + 1
+   │         ^ def: defined here @ 50:8 (2 refs)
 
 note: 
-   ┌─ lib.fe:55:4
+   ┌─ lib.fe:50:13
    │
-55 │ fn test_match(opt: Option) -> i32 {
-   │    ^^^^^^^^^^ def: defined here @ 55:3 (1 refs)
+50 │     let x = x + 1
+   │             ^ ref: 50:12
 
 note: 
-   ┌─ lib.fe:55:15
+   ┌─ lib.fe:51:5
    │
-55 │ fn test_match(opt: Option) -> i32 {
-   │               ^^^ def: defined here @ 55:14 (2 refs)
+51 │     x
+   │     ^ ref: 51:4
 
 note: 
-   ┌─ lib.fe:55:20
+   ┌─ lib.fe:56:4
    │
-55 │ fn test_match(opt: Option) -> i32 {
-   │                    ^^^^^^ ref: 55:19
+56 │ fn test_match(opt: Option) -> i32 {
+   │    ^^^^^^^^^^ def: defined here @ 56:3 (1 refs)
 
 note: 
-   ┌─ lib.fe:56:9
+   ┌─ lib.fe:56:15
    │
-56 │   match opt {
-   │         ^^^ ref: 56:8
+56 │ fn test_match(opt: Option) -> i32 {
+   │               ^^^ def: defined here @ 56:14 (2 refs)
 
 note: 
-   ┌─ lib.fe:57:5
+   ┌─ lib.fe:56:20
    │
-57 │     Option::Some(val) => val
-   │     ^^^^^^^^^^^^ ref: 57:4
+56 │ fn test_match(opt: Option) -> i32 {
+   │                    ^^^^^^ ref: 56:19
 
 note: 
-   ┌─ lib.fe:57:18
+   ┌─ lib.fe:57:9
    │
-57 │     Option::Some(val) => val
-   │                  ^^^ def: defined here @ 57:17 (2 refs)
-
-note: 
-   ┌─ lib.fe:57:26
-   │
-57 │     Option::Some(val) => val
-   │                          ^^^ ref: 57:25
+57 │   match opt {
+   │         ^^^ ref: 57:8
 
 note: 
    ┌─ lib.fe:58:5
    │
-58 │     Option::None => 0
+58 │     Option::Some(val) => val
    │     ^^^^^^^^^^^^ ref: 58:4
+
+note: 
+   ┌─ lib.fe:58:18
+   │
+58 │     Option::Some(val) => val
+   │                  ^^^ def: defined here @ 58:17 (2 refs)
+
+note: 
+   ┌─ lib.fe:58:26
+   │
+58 │     Option::Some(val) => val
+   │                          ^^^ ref: 58:25
+
+note: 
+   ┌─ lib.fe:59:5
+   │
+59 │     Option::None => 0
+   │     ^^^^^^^^^^^^ ref: 59:4
 
 note: 
   ┌─ stuff.fe:2:9

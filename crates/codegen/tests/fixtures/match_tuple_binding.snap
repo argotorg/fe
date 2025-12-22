@@ -1,0 +1,68 @@
+---
+source: crates/codegen/tests/yul.rs
+expression: output
+input_file: tests/fixtures/match_tuple_binding.fe
+---
+function match_tuple_extract(t) -> ret {
+  let v0 := 0
+  switch and(mload(t), 0xff)
+    case 0 {
+      let v1 := and(mload(add(t, 1)), 0xff)
+      v0 := v1
+    }
+    default {
+      switch and(mload(add(t, 1)), 0xff)
+        case 0 {
+          let v2 := and(mload(t), 0xff)
+          v0 := v2
+        }
+        default {
+          let v3 := and(mload(t), 0xff)
+          let v4 := and(mload(add(t, 1)), 0xff)
+          v0 := add(v3, v4)
+        }
+      ret := v0
+    }
+  ret := v0
+}
+function match_nested_extract(t) -> ret {
+  let v0 := 0
+  switch and(mload(add(t, 1)), 0xff)
+    case 0 {
+      switch and(mload(t), 0xff)
+        case 0 {
+          let v1 := and(mload(add(t, 2)), 0xff)
+          v0 := v1
+        }
+        default {
+          switch and(mload(add(t, 2)), 0xff)
+            case 0 {
+              let v2 := and(mload(add(t, 1)), 0xff)
+              let v3 := and(mload(t), 0xff)
+              v0 := add(v3, v2)
+            }
+            default {
+              let v4 := and(mload(t), 0xff)
+              let v5 := and(mload(add(t, 2)), 0xff)
+              v0 := add(v4, v5)
+            }
+          ret := v0
+        }
+      ret := v0
+    }
+    default {
+      switch and(mload(add(t, 2)), 0xff)
+        case 0 {
+          let v6 := and(mload(add(t, 1)), 0xff)
+          let v7 := and(mload(t), 0xff)
+          v0 := add(v7, v6)
+        }
+        default {
+          let v8 := and(mload(t), 0xff)
+          let v9 := and(mload(add(t, 2)), 0xff)
+          v0 := add(v8, v9)
+        }
+      ret := v0
+    }
+  ret := v0
+}

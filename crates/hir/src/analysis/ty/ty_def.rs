@@ -170,7 +170,7 @@ impl<'db> TyId<'db> {
                 )
             }
             TyData::TyApp(_, _) => pretty_print_ty_app(db, self),
-            TyData::TyBase(ty_con) => ty_con.pretty_print(db),
+            TyData::TyBase(base) => base.pretty_print(db),
             TyData::ConstTy(const_ty) => const_ty.pretty_print(db),
             TyData::Never => "!".to_string(),
             TyData::Invalid(cause) => format!("invalid({})", cause.pretty_print(db)),
@@ -263,6 +263,13 @@ impl<'db> TyId<'db> {
         Self::new(db, TyData::TyBase(TyBase::Adt(adt)))
     }
 
+    pub(crate) fn contract(
+        db: &'db dyn HirAnalysisDb,
+        contract: crate::hir_def::Contract<'db>,
+    ) -> Self {
+        Self::new(db, TyData::TyBase(TyBase::Contract(contract)))
+    }
+
     // TODO: Add semantic view and restrict visibility
     pub fn func(db: &'db dyn HirAnalysisDb, func: CallableDef<'db>) -> Self {
         Self::new(db, TyData::TyBase(TyBase::Func(func)))
@@ -282,6 +289,14 @@ impl<'db> TyId<'db> {
 
     pub(crate) fn is_const_ty(self, db: &dyn HirAnalysisDb) -> bool {
         matches!(self.base_ty(db).data(db), TyData::ConstTy(_))
+    }
+
+    /// Returns the contract if this type is a contract type.
+    pub fn as_contract(self, db: &'db dyn HirAnalysisDb) -> Option<crate::hir_def::Contract<'db>> {
+        match self.base_ty(db).data(db) {
+            TyData::TyBase(base) => base.contract(),
+            _ => None,
+        }
     }
 
     pub fn is_tuple(self, db: &dyn HirAnalysisDb) -> bool {
@@ -348,6 +363,7 @@ impl<'db> TyId<'db> {
             TyData::AssocTy(assoc_ty) => Some(assoc_ty.scope(db)),
             TyData::QualifiedTy(trait_inst) => Some(trait_inst.def(db).scope()),
             TyData::TyBase(TyBase::Adt(adt)) => Some(adt.scope(db)),
+            TyData::TyBase(TyBase::Contract(c)) => Some(c.scope()),
             TyData::TyBase(TyBase::Func(func)) => Some(func.scope()),
             TyData::TyBase(TyBase::Prim(..)) => None,
             TyData::ConstTy(const_ty) => match const_ty.data(db) {
@@ -371,6 +387,7 @@ impl<'db> TyId<'db> {
             TyData::QualifiedTy(trait_inst) => trait_inst.def(db).scope().name_span(db),
 
             TyData::TyBase(TyBase::Adt(adt)) => Some(adt.name_span(db)),
+            TyData::TyBase(TyBase::Contract(c)) => c.scope().name_span(db),
             TyData::TyBase(TyBase::Func(func)) => Some(func.name_span()),
             TyData::TyBase(TyBase::Prim(_)) => None,
 
@@ -1069,6 +1086,7 @@ enum Variant {
 pub enum TyBase<'db> {
     Prim(PrimTy),
     Adt(AdtDef<'db>),
+    Contract(crate::hir_def::Contract<'db>),
     Func(CallableDef<'db>),
 }
 
@@ -1125,6 +1143,12 @@ impl<'db> TyBase<'db> {
                 .map(|i| i.data(db).to_string())
                 .unwrap_or_else(|| "<unknown>".to_string()),
 
+            Self::Contract(contract) => contract
+                .name(db)
+                .to_opt()
+                .map(|i| i.data(db).to_string())
+                .unwrap_or_else(|| "<unknown>".to_string()),
+
             Self::Func(func) => format!(
                 "fn {}",
                 func.name(db)
@@ -1137,6 +1161,13 @@ impl<'db> TyBase<'db> {
     pub(super) fn adt(self) -> Option<AdtDef<'db>> {
         match self {
             Self::Adt(adt) => Some(adt),
+            _ => None,
+        }
+    }
+
+    pub fn contract(self) -> Option<crate::hir_def::Contract<'db>> {
+        match self {
+            Self::Contract(c) => Some(c),
             _ => None,
         }
     }
@@ -1222,7 +1253,7 @@ impl PrimTy {
 }
 
 /// Returns the width (in bits) for the given primitive integer type, or `None` when unknown.
-pub fn prim_int_bits(prim: PrimTy) -> Option<u16> {
+pub fn prim_int_bits(prim: PrimTy) -> Option<usize> {
     use PrimTy::*;
     match prim {
         U8 | I8 => Some(8),
@@ -1246,7 +1277,7 @@ impl HasKind for TyData<'_> {
             TyData::TyParam(ty_param) => ty_param.kind.clone(),
             TyData::AssocTy(_) => Kind::Star,
             TyData::QualifiedTy(_) => Kind::Star,
-            TyData::TyBase(ty_const) => ty_const.kind(db),
+            TyData::TyBase(base) => base.kind(db),
             TyData::TyApp(abs, _) => match abs.kind(db) {
                 // `TyId::app` method handles the kind mismatch, so we don't need to verify it again
                 // here.
@@ -1274,6 +1305,7 @@ impl HasKind for TyBase<'_> {
         match self {
             TyBase::Prim(prim) => prim.kind(db),
             TyBase::Adt(adt) => adt.kind(db),
+            TyBase::Contract(_) => Kind::Star, // Contracts have no generic params
             TyBase::Func(func) => func.kind(db),
         }
     }

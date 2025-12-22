@@ -1,0 +1,36 @@
+extern {
+    fn foo() -> bool
+}
+
+pub trait Serialize {
+    fn serialize(self) -> [u8; 32]
+}
+
+pub trait Clone {
+    fn clone(self) -> Self
+}
+
+pub struct Point<T> {
+    pub x: T,
+    pub y: T,
+}
+
+impl<T> Point<T> where T: Clone {
+    pub fn new(x: T, y: T) -> Self {
+        Point { x, y }
+    }
+
+    pub fn swap(mut self) {
+        let temp: T = self.x.clone()
+        self.x = self.y.clone()
+        self.y = temp
+    }
+}
+
+impl<T> Clone for Point<T> where T: Clone {
+    fn clone(self) -> Self {
+        Point { x: self.x.clone(), y: self.y.clone() }
+    }
+}
+
+type Foo = String<8>

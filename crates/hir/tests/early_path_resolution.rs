@@ -1,4 +1,3 @@
-mod test_db;
 use std::path::Path;
 
 use dir_test::{Fixture, dir_test};
@@ -6,11 +5,11 @@ use fe_hir::analysis::{
     name_resolution::{NameDomain, resolve_path},
     ty::trait_resolution::PredicateListId,
 };
+use fe_hir::test_db::{HirAnalysisTestDb, HirPropertyFormatter};
 use fe_hir::{
     hir_def::{Expr, ExprId, ItemKind, Pat, PatId, PathId, TopLevelMod, TypeId},
     visitor::prelude::*,
 };
-use test_db::{HirAnalysisTestDb, HirPropertyFormatter};
 use test_utils::snap_test;
 
 // xxx remove this

@@ -10,9 +10,12 @@ use async_lsp::lsp_types::notification::{
     self, DidChangeTextDocument, DidChangeWatchedFiles, DidOpenTextDocument, DidSaveTextDocument,
     Initialized,
 };
+
 use async_lsp::lsp_types::request::{
-    DocumentHighlightRequest, GotoDefinition, GotoTypeDefinition, HoverRequest, References, Rename,
-    SemanticTokensFullRequest, Shutdown,
+    CodeActionRequest, Completion, DocumentHighlightRequest, DocumentSymbolRequest, Formatting,
+    GotoDefinition, GotoImplementation, GotoTypeDefinition, HoverRequest, InlayHintRequest,
+    References, Rename, SemanticTokensFullRequest, Shutdown, SignatureHelpRequest,
+    WorkspaceSymbolRequest,
 };
 use async_std::stream::StreamExt;
 use futures_batch::ChunksTimeoutStreamExt;
@@ -22,7 +25,9 @@ use tracing::{info, warn};
 
 use crate::backend::Backend;
 use crate::functionality::{
-    goto, handlers, highlight, references, rename, semantic_tokens, type_definition,
+    code_actions, completion, document_symbols, goto, handlers, highlight, implementations,
+    inlay_hints, references, rename, semantic_tokens, signature_help, type_definition,
+    workspace_symbols,
 };
 use async_lsp::lsp_types::request::Initialize;
 use async_lsp::router::Router;
@@ -52,11 +57,19 @@ pub(crate) fn setup(
         // non-mutating handlers
         .handle_notification::<Initialized>(handlers::initialized)
         .handle_request::<HoverRequest>(handlers::handle_hover_request)
+        .handle_request::<Completion>(completion::handle_completion)
+        .handle_request::<SignatureHelpRequest>(signature_help::handle_signature_help)
+        .handle_request::<CodeActionRequest>(code_actions::handle_code_action)
         .handle_request::<References>(references::handle_references)
         .handle_request::<DocumentHighlightRequest>(highlight::handle_document_highlight)
         .handle_request::<GotoTypeDefinition>(type_definition::handle_goto_type_definition)
+        .handle_request::<GotoImplementation>(implementations::handle_goto_implementation)
         .handle_request::<Rename>(rename::handle_rename)
         .handle_request::<SemanticTokensFullRequest>(semantic_tokens::handle_semantic_tokens_full)
+        .handle_request::<Formatting>(handlers::handle_formatting)
+        .handle_request::<InlayHintRequest>(inlay_hints::handle_inlay_hints)
+        .handle_request::<DocumentSymbolRequest>(document_symbols::handle_document_symbols)
+        .handle_request::<WorkspaceSymbolRequest>(workspace_symbols::handle_workspace_symbols)
         .handle_notification::<DidOpenTextDocument>(handlers::handle_did_open_text_document)
         .handle_notification::<DidChangeTextDocument>(handlers::handle_did_change_text_document)
         .handle_notification::<DidChangeWatchedFiles>(handlers::handle_did_change_watched_files)

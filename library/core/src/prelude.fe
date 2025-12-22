@@ -1,5 +1,6 @@
 pub use super::{
     default::Default,
+    message::MsgVariant,
     option::Option::{self, *},
     result::Result::{self, *},
     todo, panic,

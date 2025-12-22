@@ -58,6 +58,7 @@ pub fn to_lsp_location_from_scope(
     scope: ScopeId,
 ) -> Result<async_lsp::lsp_types::Location, Box<dyn std::error::Error>> {
     use hir::hir_def::ItemKind;
+    use hir::span::DynLazySpan;
 
     // For file modules (TopLevelMod), navigate to the start of the file
     if let ScopeId::Item(ItemKind::TopMod(top_mod)) = scope
@@ -77,6 +78,21 @@ pub fn to_lsp_location_from_scope(
                 },
             },
         });
+    }
+
+    // For impl blocks (Impl, ImplTrait), navigate to the start of the impl block
+    // since they don't have a single "name" to point to
+    if let ScopeId::Item(ItemKind::Impl(impl_)) = scope {
+        let lazy_span: DynLazySpan = impl_.span().into();
+        let span = lazy_span.resolve(db).ok_or("Failed to resolve impl span")?;
+        return to_lsp_location_from_span(db, span);
+    }
+    if let ScopeId::Item(ItemKind::ImplTrait(impl_trait)) = scope {
+        let lazy_span: DynLazySpan = impl_trait.span().into();
+        let span = lazy_span
+            .resolve(db)
+            .ok_or("Failed to resolve impl trait span")?;
+        return to_lsp_location_from_span(db, span);
     }
 
     let lazy_span = scope.name_span(db).ok_or("Failed to get name span")?;

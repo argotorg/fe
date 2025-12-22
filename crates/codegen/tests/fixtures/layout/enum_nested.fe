@@ -1,0 +1,12 @@
+// Test layout of enums with aggregate payloads
+
+struct Point {
+    x: u64,
+    y: u64,
+}
+
+enum Shape {
+    Empty,
+    Circle(u64),
+    Rectangle(Point)
+}

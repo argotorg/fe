@@ -1,6 +1,9 @@
 //! Variant lowering helpers for MIR: handles enum constructor calls and unit variant paths.
 
+use crate::layout;
+
 use super::*;
+use num_bigint::BigUint;
 
 impl<'db, 'a> MirBuilder<'db, 'a> {
     /// Lowers an enum variant constructor call into allocation and payload/discriminant stores.
@@ -48,20 +51,46 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         let value_id = self.emit_alloc(expr, curr_block, total_size);
         self.emit_store_discriminant(expr, curr_block, value_id, variant_index);
 
-        let mut offset: u64 = 0;
         let mut stores = Vec::with_capacity(lowered_args.len());
-        for (i, arg_value) in lowered_args.iter().enumerate() {
-            let arg_ty = self.typed_body.expr_ty(self.db, call_args[i].expr);
+        for (field_idx, arg_value) in lowered_args.iter().enumerate() {
+            let arg_ty = self.typed_body.expr_ty(self.db, call_args[field_idx].expr);
+            let offset = layout::variant_field_offset_bytes_or_word_aligned(
+                self.db, enum_ty, variant, field_idx,
+            );
             stores.push((offset, arg_ty, *arg_value));
-            offset += self.ty_size_bytes(arg_ty).unwrap_or(32);
         }
-        self.emit_store_fields(
-            expr,
-            curr_block,
-            value_id,
-            &stores,
-            CoreHelper::StoreVariantField,
-        );
+        let ptr_ty = match self.value_address_space(value_id) {
+            AddressSpaceKind::Memory => self.core.helper_ty(CoreHelperTy::MemPtr),
+            AddressSpaceKind::Storage => self.core.helper_ty(CoreHelperTy::StorPtr),
+        };
+        for (offset_bytes, field_ty, field_value) in stores {
+            let callable =
+                self.core
+                    .make_callable(expr, CoreHelper::StoreVariantField, &[ptr_ty, field_ty]);
+            let offset_value = self.synthetic_u256(BigUint::from(offset_bytes));
+            let store_ret_ty = callable.ret_ty(self.db);
+            let store_call = self.mir_body.alloc_value(ValueData {
+                ty: store_ret_ty,
+                origin: ValueOrigin::Call(CallOrigin {
+                    expr,
+                    callable,
+                    args: vec![value_id, offset_value, field_value],
+                    effect_args: Vec::new(),
+                    effect_kinds: Vec::new(),
+                    receiver_space: None,
+                    resolved_name: None,
+                }),
+            });
+
+            self.push_inst(
+                curr_block,
+                MirInst::EvalExpr {
+                    expr,
+                    value: store_call,
+                    bind_value: false,
+                },
+            );
+        }
 
         Some((Some(curr_block), value_id))
     }

@@ -1,5 +1,5 @@
 ---
-source: crates/hir-analysis/tests/ty_check.rs
+source: crates/hir/tests/ty_check.rs
 expression: res
 input_file: test_files/ty_check/effects_trait.fe
 ---
@@ -34,7 +34,7 @@ note:
    │  
 16 │   pub fn provide_logger() {
    │ ╭─────────────────────────^
-17 │ │     with (Logger = Console {}) {
+17 │ │     with (Console {}) {
 18 │ │         log_once()
 19 │ │     }
 20 │ │ }
@@ -43,22 +43,22 @@ note:
 note: 
    ┌─ effects_trait.fe:17:5
    │  
-17 │ ╭     with (Logger = Console {}) {
+17 │ ╭     with (Console {}) {
 18 │ │         log_once()
 19 │ │     }
    │ ╰─────^ ()
 
 note: 
-   ┌─ effects_trait.fe:17:20
+   ┌─ effects_trait.fe:17:11
    │
-17 │     with (Logger = Console {}) {
-   │                    ^^^^^^^^^^ Console
+17 │     with (Console {}) {
+   │           ^^^^^^^^^^ Console
 
 note: 
-   ┌─ effects_trait.fe:17:32
+   ┌─ effects_trait.fe:17:23
    │  
-17 │       with (Logger = Console {}) {
-   │ ╭────────────────────────────────^
+17 │       with (Console {}) {
+   │ ╭───────────────────────^
 18 │ │         log_once()
 19 │ │     }
    │ ╰─────^ ()

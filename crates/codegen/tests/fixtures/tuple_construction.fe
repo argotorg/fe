@@ -1,0 +1,9 @@
+pub fn make_tuple() -> (u64, u256) {
+    let t: (u64, u256) = (42, 99)
+    t
+}
+
+pub fn access_tuple() -> u256 {
+    let t: (u256, u256, u256) = (1, 2, 3)
+    t.1
+}

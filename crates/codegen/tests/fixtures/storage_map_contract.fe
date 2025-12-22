@@ -1,0 +1,103 @@
+use core::{StorageMap, calldataload, code_region_len, code_region_offset, codecopy, mstore, return_data}
+
+fn abi_encode(value: u256) {
+    let ptr: u256 = 0
+    mstore(ptr, value)
+    return_data(ptr, 32)
+}
+
+// Two separate StorageMaps - balances and allowances
+fn get_balance(addr: u256) -> u256
+    uses (balances: StorageMap<u256, u256>)
+{
+    balances.get(key: addr)
+}
+
+fn set_balance(addr: u256, value: u256)
+    uses (mut balances: StorageMap<u256, u256>)
+{
+    balances.set(key: addr, value)
+}
+
+fn get_allowance(addr: u256) -> u256
+    uses (allowances: StorageMap<u256, u256>)
+{
+    allowances.get(key: addr)
+}
+
+fn set_allowance(addr: u256, value: u256)
+    uses (mut allowances: StorageMap<u256, u256>)
+{
+    allowances.set(key: addr, value)
+}
+
+fn transfer(from: u256, to: u256, amount: u256) -> u256
+    uses (mut balances: StorageMap<u256, u256>)
+{
+    let from_balance = balances.get(key: from)
+    if from_balance < amount {
+        return 1  // insufficient funds
+    }
+    let to_balance = balances.get(key: to)
+    balances.set(key: from, value: from_balance - amount)
+    balances.set(key: to, value: to_balance + amount)
+    0  // success
+}
+
+#[contract_init(BalanceMap)]
+fn init() {
+    let len = code_region_len(runtime)
+    let offset = code_region_offset(runtime)
+    codecopy(dest: 0, offset, len)
+    return_data(0, len)
+}
+
+#[contract_runtime(BalanceMap)]
+fn runtime() {
+    let mut balances = core::effect_ref::StorPtr<StorageMap<u256, u256>>::at_offset(0)
+    let mut allowances = core::effect_ref::StorPtr<StorageMap<u256, u256>>::at_offset(1)
+    let selector = calldataload(0) >> 224
+    match selector {
+        0x9cc7f708 => {
+            // balanceOf(uint256)
+            let addr = calldataload(4)
+            let balance = with (balances) {
+                get_balance(addr)
+            }
+            abi_encode(value: balance)
+        }
+        0x4a4b9feb => {
+            // setBalance(uint256,uint256)
+            let addr = calldataload(4)
+            let value = calldataload(36)
+            with (balances) {
+                set_balance(addr, value)
+            }
+            abi_encode(value: 0)
+        }
+        0x90dd2627 => {
+            // transfer(uint256,uint256,uint256)
+            let from = calldataload(4)
+            let to = calldataload(36)
+            let amount = calldataload(68)
+            let result = with (balances) { transfer(from, to, amount) }
+            abi_encode(value: result)
+        }
+        0xc960174e => {
+            // getAllowance(uint256)
+            let addr = calldataload(4)
+            let allowance = with (allowances) { get_allowance(addr) }
+            abi_encode(value: allowance)
+        }
+        0x0bca4841 => {
+            // setAllowance(uint256,uint256)
+            let addr = calldataload(4)
+            let value = calldataload(36)
+            with (allowances) {
+                set_allowance(addr, value)
+            }
+            abi_encode(value: 0)
+        }
+        _ => return_data(0, 0)
+    }
+}

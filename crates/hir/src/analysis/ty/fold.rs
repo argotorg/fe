@@ -221,7 +221,12 @@ impl<'db> TyFolder<'db> for AssocTySubst<'db> {
             TyData::TyParam(param) => {
                 // If this is a trait self parameter, substitute with the trait instance's self type
                 if param.is_trait_self() {
-                    return self.trait_inst.self_ty(db).fold_with(db, self);
+                    let self_ty = self.trait_inst.self_ty(db);
+                    // Avoid infinite recursion when the instance `Self` is the same param.
+                    if self_ty == ty {
+                        return ty;
+                    }
+                    return self_ty.fold_with(db, self);
                 }
                 ty.super_fold_with(db, self)
             }

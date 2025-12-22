@@ -6,6 +6,11 @@
 use crate::analysis::HirAnalysisDb;
 use crate::analysis::name_resolution::{PathRes, ResolvedVariant, resolve_path};
 use crate::analysis::ty::ty_def::{InvalidCause, TyId};
+use crate::analysis::ty::{
+    const_ty::{ConstTyData, ConstTyId, EvaluatedConstTy},
+    trait_def::assoc_const_body_for_trait_inst,
+    trait_resolution::PredicateListId,
+};
 use crate::core::hir_def::{
     Body as HirBody, LitKind, Partial, Pat as HirPat, PathId, VariantKind, scope_graph::ScopeId,
 };
@@ -14,7 +19,6 @@ use rustc_hash::FxHashMap;
 use smallvec1::SmallVec;
 
 use super::adt_def::AdtRef;
-use super::trait_resolution::PredicateListId;
 
 /// A simplified representation of a pattern for analysis
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -82,9 +86,22 @@ impl<'db> SimplifiedPattern<'db> {
                     Self::resolve_constructor(path_partial, db, scope, Some(expected_ty))
                 {
                     SimplifiedPattern::constructor(ctor, vec![], ctor_ty)
+                } else if let Some(lit) =
+                    Self::resolve_literal_pat_from_path(path_partial, db, scope, expected_ty)
+                {
+                    let ctor = ConstructorKind::Literal(lit, expected_ty);
+                    SimplifiedPattern::constructor(ctor, vec![], expected_ty)
                 } else if let Partial::Present(path_id) = path_partial {
-                    let binding_name = path_id.ident(db).to_opt().map(|ident| (ident, arm_idx));
-                    SimplifiedPattern::wildcard(binding_name, expected_ty)
+                    // Only a single-segment path can be a binding. If we have a qualified
+                    // path (e.g. `Type::CONST`) and it didn't resolve to a constructor or const,
+                    // treat it as an errored pattern so we don't incorrectly consider it a
+                    // wildcard that makes later patterns unreachable.
+                    if path_id.parent(db).is_some() {
+                        SimplifiedPattern::error(expected_ty)
+                    } else {
+                        let binding_name = path_id.ident(db).to_opt().map(|ident| (ident, arm_idx));
+                        SimplifiedPattern::wildcard(binding_name, expected_ty)
+                    }
                 } else {
                     SimplifiedPattern::wildcard(None, expected_ty)
                 }
@@ -256,6 +273,71 @@ impl<'db> SimplifiedPattern<'db> {
         }
 
         None
+    }
+
+    fn resolve_literal_pat_from_path(
+        path_partial: &Partial<PathId<'db>>,
+        db: &'db dyn HirAnalysisDb,
+        scope: ScopeId<'db>,
+        expected_ty: TyId<'db>,
+    ) -> Option<LitKind<'db>> {
+        let Partial::Present(path_id) = path_partial else {
+            return None;
+        };
+
+        let assumptions = PredicateListId::empty_list(db);
+        let resolved = resolve_path(db, *path_id, scope, assumptions, true).ok()?;
+
+        match resolved {
+            PathRes::Const(const_def, const_ty) => {
+                let body = const_def.body(db).to_opt()?;
+                let const_ty = ConstTyId::from_body(db, body, Some(const_ty), Some(const_def));
+                let const_ty = const_ty.evaluate(db, Some(expected_ty));
+
+                match const_ty.data(db) {
+                    ConstTyData::Evaluated(EvaluatedConstTy::LitInt(i), _) => {
+                        Some(LitKind::Int(*i))
+                    }
+                    ConstTyData::Evaluated(EvaluatedConstTy::LitBool(b), _) => {
+                        Some(LitKind::Bool(*b))
+                    }
+                    _ => None,
+                }
+            }
+            PathRes::TraitConst(_recv_ty, trait_inst, const_name) => {
+                // Best-effort evaluation: try to pick a unique impl and use its const body, else
+                // fall back to the trait's default (if any). This is intentionally incomplete:
+                // - Selection may be ambiguous or require confirmation in some contexts
+                // - Const evaluation only supports very simple literal expressions today
+                let body =
+                    assoc_const_body_for_trait_inst(db, trait_inst, const_name).or_else(|| {
+                        trait_inst
+                            .def(db)
+                            .const_(db, const_name)
+                            .and_then(|v| v.default_body(db))
+                    })?;
+
+                let declared_ty = trait_inst
+                    .def(db)
+                    .const_(db, const_name)
+                    .and_then(|v| v.ty_binder(db))
+                    .map(|b| b.instantiate(db, trait_inst.args(db)));
+
+                let const_ty = ConstTyId::from_body(db, body, declared_ty, None);
+                let const_ty = const_ty.evaluate(db, Some(expected_ty));
+
+                match const_ty.data(db) {
+                    ConstTyData::Evaluated(EvaluatedConstTy::LitInt(i), _) => {
+                        Some(LitKind::Int(*i))
+                    }
+                    ConstTyData::Evaluated(EvaluatedConstTy::LitBool(b), _) => {
+                        Some(LitKind::Bool(*b))
+                    }
+                    _ => None,
+                }
+            }
+            _ => None,
+        }
     }
 }
 

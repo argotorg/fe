@@ -34,7 +34,10 @@ impl<'db> GenericArgListId<'db> {
                 self.data(db)
                     .iter()
                     .map(|p| match p {
-                        GenericArg::Const(_) => "<const>".into(),
+                        GenericArg::Const(c) => c
+                            .body
+                            .to_opt()
+                            .map_or_else(|| "<missing>".into(), |b| b.pretty_print(db)),
                         GenericArg::Type(t) => {
                             t.ty.to_opt()
                                 .map_or_else(|| "<missing>".into(), |t| t.pretty_print(db))
@@ -203,15 +206,15 @@ pub enum FuncParamName<'db> {
 }
 
 impl<'db> FuncParamName<'db> {
-    pub fn ident(&self) -> Option<IdentId<'db>> {
-        match self {
-            FuncParamName::Ident(name) => Some(*name),
-            _ => None,
-        }
+    pub fn ident(db: &'db dyn HirDb, name: &str) -> Self {
+        Self::Ident(IdentId::new(db, name))
     }
 
     pub fn is_self(&self, db: &dyn HirDb) -> bool {
-        self.ident().is_some_and(|id| id.is_self(db))
+        match self {
+            FuncParamName::Ident(id) => id.is_self(db),
+            _ => false,
+        }
     }
 
     pub fn pretty_print(&self, db: &dyn HirDb) -> String {

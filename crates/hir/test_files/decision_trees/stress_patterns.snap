@@ -1,5 +1,5 @@
 ---
-source: crates/hir-analysis/tests/decision_tree.rs
+source: crates/hir/tests/decision_tree.rs
 expression: res
 input_file: test_files/decision_trees/stress_patterns.fe
 ---
@@ -198,30 +198,30 @@ note:
    │ ╰─────^ Decision Tree for test_enum_data_decision_tree:
  Switch on expr
  ├─ Circle =>
- │  └─ Switch on expr.0
+ │  └─ Switch on expr.Circle[0]
  │     └─ record{} =>
- │        └─ Switch on expr.0.1
+ │        └─ Switch on expr.Circle[0].1
  │           ├─ 0 =>
- │           │  └─ Switch on expr.0.0
+ │           │  └─ Switch on expr.Circle[0].0
  │           │     ├─ 0 =>
  │           │     │  └─ Execute arm #0
- │           │     │       radius ← expr.1
+ │           │     │       radius ← expr.Circle[1]
  │           │     └─ _ =>
  │           │        └─ Execute arm #1
- │           │             y ← expr.0.1
- │           │             x ← expr.0.0
+ │           │             y ← expr.Circle[0].1
+ │           │             x ← expr.Circle[0].0
  │           └─ _ =>
  │              └─ Execute arm #1
- │                   y ← expr.0.1
- │                   x ← expr.0.0
+ │                   y ← expr.Circle[0].1
+ │                   x ← expr.Circle[0].0
  ├─ Rect =>
- │  └─ Switch on expr.0
+ │  └─ Switch on expr.Rect[0]
  │     └─ record{} =>
- │        └─ Switch on expr.0.0
+ │        └─ Switch on expr.Rect[0].0
  │           └─ record{} =>
- │              └─ Switch on expr.0.0.1
+ │              └─ Switch on expr.Rect[0].0.1
  │                 ├─ 0 =>
- │                 │  └─ Switch on expr.0.0.0
+ │                 │  └─ Switch on expr.Rect[0].0.0
  │                 │     ├─ 0 =>
  │                 │     │  └─ Execute arm #2
  │                 │     └─ _ =>
@@ -229,17 +229,17 @@ note:
  │                 └─ _ =>
  │                    └─ Execute arm #3
  └─ Line =>
-    └─ Switch on expr.1
+    └─ Switch on expr.Line[1]
        └─ record{} =>
-          └─ Switch on expr.0
+          └─ Switch on expr.Line[0]
              └─ record{} =>
-                └─ Switch on expr.1.0
+                └─ Switch on expr.Line[1].0
                    ├─ 1 =>
-                   │  └─ Switch on expr.0.0
+                   │  └─ Switch on expr.Line[0].0
                    │     ├─ 0 =>
-                   │     │  └─ Switch on expr.0.1
+                   │     │  └─ Switch on expr.Line[0].1
                    │     │     ├─ 0 =>
-                   │     │     │  └─ Switch on expr.1.1
+                   │     │     │  └─ Switch on expr.Line[1].1
                    │     │     │     ├─ 1 =>
                    │     │     │     │  └─ Execute arm #4
                    │     │     │     └─ _ =>

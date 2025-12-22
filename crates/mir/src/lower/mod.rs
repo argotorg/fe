@@ -14,8 +14,11 @@ use hir::analysis::{
     ty::{
         adt_def::AdtRef,
         trait_resolution::PredicateListId,
-        ty_check::{LocalBinding, RecordLike, TypedBody, check_func_body},
+        ty_check::{
+            EffectParamSite, LocalBinding, ParamSite, RecordLike, TypedBody, check_func_body,
+        },
         ty_def::{PrimTy, TyBase, TyData, TyId},
+        ty_lower::lower_opt_hir_ty,
     },
 };
 use hir::hir_def::{
@@ -27,11 +30,11 @@ use hir::hir_def::{
 use crate::{
     core_lib::{CoreHelper, CoreHelperTy, CoreLib, CoreLibError},
     ir::{
-        BasicBlock, BasicBlockId, CallOrigin, CodeRegionRoot, ContractFunction,
-        ContractFunctionKind, IntrinsicOp, IntrinsicValue, LoopInfo, MatchArmLowering,
-        MatchArmPattern, MatchLoweringInfo, MirBody, MirFunction, MirInst, MirModule,
-        PatternBinding, SwitchOrigin, SwitchTarget, SwitchValue, SyntheticValue, Terminator,
-        ValueData, ValueId, ValueOrigin,
+        AddressSpaceKind, BasicBlock, BasicBlockId, CallOrigin, CodeRegionRoot, ContractFunction,
+        ContractFunctionKind, DecisionTreeBinding, EffectProviderKind, FieldPtrOrigin, IntrinsicOp,
+        IntrinsicValue, LoopInfo, MatchArmLowering, MatchArmPattern, MatchLoweringInfo, MirBody,
+        MirFunction, MirInst, MirModule, Place, SwitchOrigin, SwitchTarget, SwitchValue,
+        SyntheticValue, Terminator, ValueData, ValueId, ValueOrigin,
     },
     monomorphize::monomorphize_functions,
 };
@@ -86,10 +89,9 @@ pub type MirLowerResult<T> = Result<T, MirLowerError>;
 /// Field type and byte offset information used when lowering record/variant accesses.
 pub(super) struct FieldAccessInfo<'db> {
     pub(super) field_ty: TyId<'db>,
-    pub(super) offset_bytes: u64,
+    pub(super) offset_bytes: usize,
+    pub(super) field_idx: usize,
 }
-
-const ENUM_DISCRIMINANT_SIZE_BYTES: u64 = 32;
 
 /// Lowers every function within the top-level module into MIR.
 ///
@@ -131,9 +133,9 @@ pub fn lower_module<'db>(
         if func.body(db).is_none() {
             continue;
         }
-
         let (_diags, typed_body) = check_func_body(db, func);
-        let lowered = lower_function(db, func, typed_body.clone())?;
+        let default_effects = vec![EffectProviderKind::Storage; func.effect_params(db).count()];
+        let lowered = lower_function(db, func, typed_body.clone(), None, default_effects)?;
         templates.push(lowered);
     }
 
@@ -154,6 +156,8 @@ pub(crate) fn lower_function<'db>(
     db: &'db dyn HirAnalysisDb,
     func: Func<'db>,
     typed_body: TypedBody<'db>,
+    receiver_space: Option<AddressSpaceKind>,
+    effect_provider_kinds: Vec<EffectProviderKind>,
 ) -> MirLowerResult<MirFunction<'db>> {
     let Some(body) = func.body(db) else {
         let func_name = func
@@ -164,11 +168,20 @@ pub(crate) fn lower_function<'db>(
         return Err(MirLowerError::MissingBody { func_name });
     };
 
-    let mut builder = MirBuilder::new(db, body, &typed_body)?;
+    let effect_provider_kinds_for_func = effect_provider_kinds.clone();
+    let mut builder = MirBuilder::new(
+        db,
+        func,
+        body,
+        &typed_body,
+        receiver_space,
+        effect_provider_kinds,
+    )?;
     let entry = builder.alloc_block();
     let fallthrough = builder.lower_root(entry, body.expr(db));
     builder.ensure_const_expr_values();
     builder.ensure_field_expr_values();
+    builder.ensure_call_expr_values();
     let ret_val = builder.ensure_value(body.expr(db));
     if let Some(block) = fallthrough {
         builder.set_terminator(block, Terminator::Return(Some(ret_val)));
@@ -185,14 +198,17 @@ pub(crate) fn lower_function<'db>(
         body: mir_body,
         typed_body,
         generic_args: Vec::new(),
+        effect_provider_kinds: effect_provider_kinds_for_func,
         contract_function: extract_contract_function(db, func),
         symbol_name,
+        receiver_space,
     })
 }
 
 /// Stateful helper that incrementally constructs MIR while walking HIR.
 pub(super) struct MirBuilder<'db, 'a> {
     pub(super) db: &'db dyn HirAnalysisDb,
+    pub(super) func: Func<'db>,
     pub(super) body: Body<'db>,
     pub(super) typed_body: &'a TypedBody<'db>,
     pub(super) mir_body: MirBody<'db>,
@@ -201,6 +217,9 @@ pub(super) struct MirBuilder<'db, 'a> {
     pub(super) const_cache: FxHashMap<Const<'db>, ValueId>,
     pub(super) pat_address_space: FxHashMap<PatId, AddressSpaceKind>,
     pub(super) value_address_space: FxHashMap<ValueId, AddressSpaceKind>,
+    /// For methods, the address space variant being lowered.
+    pub(super) receiver_space: Option<AddressSpaceKind>,
+    pub(super) effect_provider_kinds: Vec<EffectProviderKind>,
 }
 
 /// Loop context capturing break/continue targets.
@@ -208,13 +227,6 @@ pub(super) struct MirBuilder<'db, 'a> {
 pub(super) struct LoopScope {
     pub(super) continue_target: BasicBlockId,
     pub(super) break_target: BasicBlockId,
-}
-
-/// Tracks which address space a value or binding resides in.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub(super) enum AddressSpaceKind {
-    Memory,
-    Storage,
 }
 
 impl<'db, 'a> MirBuilder<'db, 'a> {
@@ -229,13 +241,17 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
     /// A ready-to-use `MirBuilder` or an error if core helpers are missing.
     fn new(
         db: &'db dyn HirAnalysisDb,
+        func: Func<'db>,
         body: Body<'db>,
         typed_body: &'a TypedBody<'db>,
+        receiver_space: Option<AddressSpaceKind>,
+        effect_provider_kinds: Vec<EffectProviderKind>,
     ) -> Result<Self, MirLowerError> {
         let core = CoreLib::new(db, body)?;
 
-        Ok(Self {
+        let builder = Self {
             db,
+            func,
             body,
             typed_body,
             mir_body: MirBody::new(),
@@ -244,7 +260,11 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
             const_cache: FxHashMap::default(),
             pat_address_space: FxHashMap::default(),
             value_address_space: FxHashMap::default(),
-        })
+            receiver_space,
+            effect_provider_kinds,
+        };
+
+        Ok(builder)
     }
 
     /// Consumes the builder and returns the accumulated MIR body.
@@ -261,6 +281,13 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
     /// The identifier for the newly created block.
     fn alloc_block(&mut self) -> BasicBlockId {
         self.mir_body.push_block(BasicBlock::new())
+    }
+
+    fn offset_units_for_space(&self, space: AddressSpaceKind, offset_bytes: usize) -> usize {
+        match space {
+            AddressSpaceKind::Memory => offset_bytes,
+            AddressSpaceKind::Storage => offset_bytes / 32,
+        }
     }
 
     /// Sets the terminator for the specified block.
@@ -293,13 +320,27 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         binding: &LocalBinding<'db>,
     ) -> AddressSpaceKind {
         match binding {
-            LocalBinding::EffectParam { .. } => AddressSpaceKind::Storage,
+            LocalBinding::EffectParam { idx, .. } => match self
+                .effect_provider_kinds
+                .get(*idx)
+                .copied()
+                .unwrap_or(EffectProviderKind::Storage)
+            {
+                EffectProviderKind::Memory => AddressSpaceKind::Memory,
+                EffectProviderKind::Storage => AddressSpaceKind::Storage,
+                EffectProviderKind::Calldata => AddressSpaceKind::Memory,
+            },
             LocalBinding::Local { pat, .. } => self
                 .pat_address_space
                 .get(pat)
                 .copied()
                 .unwrap_or(AddressSpaceKind::Memory),
-            LocalBinding::Param { .. } => AddressSpaceKind::Memory,
+            LocalBinding::Param { idx, .. } => {
+                if *idx == 0 {
+                    return self.receiver_space.unwrap_or(AddressSpaceKind::Memory);
+                }
+                AddressSpaceKind::Memory
+            }
         }
     }
 
@@ -311,12 +352,137 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
     /// # Returns
     /// The address space kind for the expression.
     pub(super) fn expr_address_space(&self, expr: ExprId) -> AddressSpaceKind {
+        // Propagate storage space through field projections so nested storage fields
+        // continue to be treated as storage pointers.
+        let exprs = self.body.exprs(self.db);
+        if let Partial::Present(Expr::Field(base, _)) = &exprs[expr] {
+            let base_space = self.expr_address_space(*base);
+            if matches!(base_space, AddressSpaceKind::Storage) {
+                return AddressSpaceKind::Storage;
+            }
+        }
+
         let prop = self.typed_body.expr_prop(self.db, expr);
-        if let Some(binding) = prop.binding() {
+        if let Some(binding) = prop.binding {
             self.address_space_for_binding(&binding)
         } else {
             AddressSpaceKind::Memory
         }
+    }
+
+    pub(super) fn u256_ty(&self) -> TyId<'db> {
+        TyId::new(self.db, TyData::TyBase(TyBase::Prim(PrimTy::U256)))
+    }
+
+    pub(super) fn binding_name(&self, binding: LocalBinding<'db>) -> Option<String> {
+        match binding {
+            LocalBinding::Local { pat, .. } => match pat.data(self.db, self.body) {
+                Partial::Present(Pat::Path(path, _)) => path
+                    .to_opt()
+                    .and_then(|path| path.as_ident(self.db))
+                    .map(|ident| ident.data(self.db).to_string()),
+                _ => None,
+            },
+            LocalBinding::Param { site, idx, .. } => match site {
+                ParamSite::Func(func) => func
+                    .params(self.db)
+                    .nth(idx)
+                    .and_then(|param| param.name(self.db))
+                    .map(|ident| ident.data(self.db).to_string())
+                    .or_else(|| Some(format!("arg{idx}"))),
+                ParamSite::EffectField(_) => None,
+            },
+            LocalBinding::EffectParam {
+                site,
+                idx,
+                key_path,
+                ..
+            } => {
+                let explicit = match site {
+                    EffectParamSite::Func(func) => func
+                        .effect_params(self.db)
+                        .nth(idx)
+                        .and_then(|effect| effect.name(self.db))
+                        .map(|ident| ident.data(self.db).to_string()),
+                    _ => None,
+                };
+                explicit.or_else(|| {
+                    key_path
+                        .ident(self.db)
+                        .to_opt()
+                        .map(|ident| ident.data(self.db).to_string())
+                })
+            }
+        }
+    }
+
+    pub(super) fn binding_value(&mut self, binding: LocalBinding<'db>) -> Option<ValueId> {
+        let name = self.binding_name(binding)?;
+        let value_id = self.mir_body.alloc_value(ValueData {
+            ty: self.u256_ty(),
+            origin: ValueOrigin::BindingName(name),
+        });
+        Some(value_id)
+    }
+
+    pub(super) fn effect_provider_kind_for_binding(
+        &self,
+        binding: LocalBinding<'db>,
+    ) -> EffectProviderKind {
+        match binding {
+            LocalBinding::EffectParam { idx, .. } => self
+                .effect_provider_kinds
+                .get(idx)
+                .copied()
+                .unwrap_or(EffectProviderKind::Storage),
+            LocalBinding::Param { ty, .. } => self
+                .effect_provider_kind_for_provider_ty(ty)
+                .unwrap_or(EffectProviderKind::Storage),
+            LocalBinding::Local { pat, .. } => {
+                let ty = self.typed_body.pat_ty(self.db, pat);
+                self.effect_provider_kind_for_provider_ty(ty)
+                    .unwrap_or(EffectProviderKind::Storage)
+            }
+        }
+    }
+
+    pub(super) fn effect_provider_kind_for_address_space(
+        &self,
+        space: AddressSpaceKind,
+    ) -> EffectProviderKind {
+        match space {
+            AddressSpaceKind::Memory => EffectProviderKind::Memory,
+            AddressSpaceKind::Storage => EffectProviderKind::Storage,
+        }
+    }
+
+    pub(super) fn effect_provider_kind_for_provider_ty(
+        &self,
+        provider_ty: TyId<'db>,
+    ) -> Option<EffectProviderKind> {
+        let base_ty = provider_ty.base_ty(self.db);
+        let mem_base = self
+            .core
+            .helper_ty(CoreHelperTy::EffectMemPtr)
+            .base_ty(self.db);
+        if base_ty == mem_base {
+            return Some(EffectProviderKind::Memory);
+        }
+        let stor_base = self
+            .core
+            .helper_ty(CoreHelperTy::EffectStorPtr)
+            .base_ty(self.db);
+        if base_ty == stor_base {
+            return Some(EffectProviderKind::Storage);
+        }
+        let calldata_base = self
+            .core
+            .helper_ty(CoreHelperTy::EffectCalldataPtr)
+            .base_ty(self.db);
+        if base_ty == calldata_base {
+            return Some(EffectProviderKind::Calldata);
+        }
+        None
     }
 
     /// Records the address space for a newly allocated value derived from an expression.
@@ -326,7 +492,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
     /// - `value`: Newly allocated value id.
     pub(super) fn record_value_address_space(&mut self, expr: ExprId, value: ValueId) {
         let space = self.expr_address_space(expr);
-        self.value_address_space.insert(value, space);
+        self.value_address_space.entry(value).or_insert(space);
     }
 
     /// Returns the address space for a value, defaulting to memory.
@@ -350,19 +516,5 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
     /// - `space`: Address space kind to record.
     pub(super) fn set_pat_address_space(&mut self, pat: PatId, space: AddressSpaceKind) {
         self.pat_address_space.insert(pat, space);
-    }
-
-    /// Returns a synthetic literal representing the provided address space.
-    ///
-    /// # Parameters
-    /// - `space`: Address space kind to encode.
-    ///
-    /// # Returns
-    /// Synthetic value id for the address space.
-    pub(super) fn address_space_literal(&mut self, space: AddressSpaceKind) -> ValueId {
-        match space {
-            AddressSpaceKind::Memory => self.synthetic_address_space_memory(),
-            AddressSpaceKind::Storage => self.synthetic_address_space_storage(),
-        }
     }
 }

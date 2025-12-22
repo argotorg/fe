@@ -1,0 +1,27 @@
+---
+source: crates/uitest/tests/ty_check.rs
+assertion_line: 27
+expression: diags
+input_file: fixtures/ty_check/recv_not_variant_of_msg.fe
+---
+error[8-0045]: recv block missing msg variants
+   ┌─ recv_not_variant_of_msg.fe:29:10
+   │
+29 │     recv BankMsg {
+   │          ^^^^^^^ missing variants: Withdraw
+
+error[8-0048]: type is not a variant of the specified msg
+   ┌─ recv_not_variant_of_msg.fe:37:9
+   │
+37 │         TokenMsg::Transfer { to, amount } -> bool uses () {
+   │         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `Transfer` is not a variant of `BankMsg`
+   │
+   = in a named recv block, only variants defined in that `msg` block are allowed
+
+error[8-0048]: type is not a variant of the specified msg
+   ┌─ recv_not_variant_of_msg.fe:42:9
+   │
+42 │         CustomMsg { data: d } -> bool uses () {
+   │         ^^^^^^^^^^^^^^^^^^^^^ `CustomMsg` is not a variant of `BankMsg`
+   │
+   = in a named recv block, only variants defined in that `msg` block are allowed

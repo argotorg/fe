@@ -1,0 +1,39 @@
+---
+source: crates/parser/tests/syntax_node.rs
+expression: node
+input_file: test_files/syntax_node/items/contract_fields_no_commas.fe
+---
+Root@0..39
+  ItemList@0..37
+    Item@0..37
+      Contract@0..37
+        ContractKw@0..8 "contract"
+        WhiteSpace@8..9 " "
+        Ident@9..10 "A"
+        WhiteSpace@10..11 " "
+        LBrace@11..12 "{"
+        Newline@12..13 "\n"
+        WhiteSpace@13..17 "    "
+        ContractFields@17..35
+          RecordFieldDef@17..23
+            Ident@17..18 "x"
+            Colon@18..19 ":"
+            WhiteSpace@19..20 " "
+            PathType@20..23
+              Path@20..23
+                PathSegment@20..23
+                  Ident@20..23 "i32"
+          Newline@23..24 "\n"
+          WhiteSpace@24..28 "    "
+          RecordFieldDef@28..35
+            Ident@28..29 "y"
+            Colon@29..30 ":"
+            WhiteSpace@30..31 " "
+            PathType@31..35
+              Path@31..35
+                PathSegment@31..35
+                  Ident@31..35 "u256"
+        Newline@35..36 "\n"
+        RBrace@36..37 "}"
+  Newline@37..39 "\n\n"
+

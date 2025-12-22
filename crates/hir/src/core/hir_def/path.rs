@@ -21,6 +21,10 @@ pub enum PathKind<'db> {
 }
 
 impl<'db> PathId<'db> {
+    pub fn from_str(db: &'db dyn HirDb, s: &str) -> Self {
+        Self::from_ident(db, IdentId::new(db, s.to_string()))
+    }
+
     pub fn from_ident(db: &'db dyn HirDb, ident: IdentId<'db>) -> Self {
         Self::new(
             db,
@@ -30,6 +34,16 @@ impl<'db> PathId<'db> {
             },
             None,
         )
+    }
+
+    pub fn from_segments(db: &'db dyn HirDb, segments: &[&str]) -> Self {
+        debug_assert!(!segments.is_empty());
+        let mut segs = segments.iter();
+        let mut path = PathId::from_ident(db, IdentId::new(db, segs.next().unwrap().to_string()));
+        for s in segs {
+            path = path.push_ident(db, IdentId::new(db, s.to_string()));
+        }
+        path
     }
 
     pub fn self_ty(db: &'db dyn HirDb, args: GenericArgListId<'db>) -> Self {
@@ -89,14 +103,7 @@ impl<'db> PathId<'db> {
     }
 
     pub fn is_bare_ident(self, db: &dyn HirDb) -> bool {
-        self.parent(db).is_none()
-            && match self.kind(db) {
-                PathKind::Ident {
-                    ident,
-                    generic_args,
-                } => ident.is_present() && generic_args.is_empty(db),
-                PathKind::QualifiedType { .. } => false,
-            }
+        self.as_ident(db).is_some()
     }
 
     pub fn is_self_ty(self, db: &dyn HirDb) -> bool {
@@ -148,6 +155,10 @@ impl<'db> PathId<'db> {
 
     pub fn push(self, db: &'db dyn HirDb, kind: PathKind<'db>) -> Self {
         Self::new(db, kind, Some(self))
+    }
+
+    pub fn push_str(self, db: &'db dyn HirDb, s: &str) -> Self {
+        self.push_ident(db, IdentId::new(db, s.to_string()))
     }
 
     pub fn push_ident(self, db: &'db dyn HirDb, ident: IdentId<'db>) -> Self {

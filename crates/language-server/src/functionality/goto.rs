@@ -2,7 +2,7 @@ use async_lsp::ResponseError;
 use common::InputDb;
 use hir::{
     core::semantic::reference::{Target, TargetResolution},
-    hir_def::TopLevelMod,
+    hir_def::{ItemKind, TopLevelMod},
     lower::map_file_to_mod,
 };
 
@@ -29,40 +29,38 @@ pub async fn handle_goto_definition(
     backend: &mut Backend,
     params: async_lsp::lsp_types::GotoDefinitionParams,
 ) -> Result<Option<async_lsp::lsp_types::GotoDefinitionResponse>, ResponseError> {
-    // Convert the position to an offset in the file
     let params = params.text_document_position_params;
-    let file_text = std::fs::read_to_string(params.text_document.uri.path()).ok();
-    let cursor: Cursor = to_offset_from_position(params.position, file_text.unwrap().as_str());
-
-    // Get the module and the goto info
     let file_path_str = params.text_document.uri.path();
-    let url = url::Url::from_file_path(file_path_str).map_err(|()| {
-        ResponseError::new(
-            async_lsp::ErrorCode::INTERNAL_ERROR,
-            format!("Invalid file path: {file_path_str}"),
-        )
-    })?;
-    let file = backend
-        .db
-        .workspace()
-        .get(&backend.db, &url)
-        .ok_or_else(|| {
-            ResponseError::new(
-                async_lsp::ErrorCode::INTERNAL_ERROR,
-                format!("File not found in index: {url} (original path: {file_path_str})"),
-            )
-        })?;
-    let top_mod = map_file_to_mod(&backend.db, file);
 
-    // Get target resolution (may be ambiguous)
+    let Ok(url) = url::Url::from_file_path(file_path_str) else {
+        return Ok(None);
+    };
+
+    let Some(file) = backend.db.workspace().get(&backend.db, &url) else {
+        return Ok(None);
+    };
+
+    let file_text = file.text(&backend.db);
+    let cursor: Cursor = to_offset_from_position(params.position, file_text.as_str());
+
+    let top_mod = map_file_to_mod(&backend.db, file);
     let resolution = goto_target_at_cursor(&backend.db, top_mod, cursor);
 
     // Convert targets to LSP locations
+    // Special case: if this is a method in an impl trait block, navigate to the trait method
     let locations: Vec<_> = resolution
         .as_slice()
         .iter()
         .filter_map(|target| match target {
-            Target::Scope(scope) => to_lsp_location_from_scope(&backend.db, *scope).ok(),
+            Target::Scope(scope) => {
+                // If this is a method inside an impl trait block, go to the trait method definition
+                if let ItemKind::Func(func) = scope.item()
+                    && let Some(trait_method) = func.trait_method_def(&backend.db)
+                {
+                    return to_lsp_location_from_scope(&backend.db, trait_method.scope()).ok();
+                }
+                to_lsp_location_from_scope(&backend.db, *scope).ok()
+            }
             Target::Local { span, .. } => {
                 to_lsp_location_from_lazy_span(&backend.db, span.clone()).ok()
             }

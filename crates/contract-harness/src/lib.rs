@@ -13,7 +13,7 @@ use revm::{
     },
     database::InMemoryDB,
     handler::{ExecuteCommitEvm, MainBuilder, MainContext, MainnetContext, MainnetEvm},
-    primitives::{Address, Bytes as EvmBytes},
+    primitives::{Address, Bytes as EvmBytes, TxKind},
     state::AccountInfo,
 };
 use solc_runner::{ContractBytecode, YulcError, compile_single_contract};
@@ -193,6 +193,66 @@ impl RuntimeInstance {
         })
     }
 
+    /// Deploys a contract by executing its init bytecode and using the returned runtime code.
+    /// This properly runs any initialization logic in the constructor.
+    pub fn deploy(init_bytecode_hex: &str) -> Result<Self, HarnessError> {
+        let init_code = hex_to_bytes(init_bytecode_hex)?;
+        let caller = Address::ZERO;
+
+        let mut db = InMemoryDB::default();
+        // Give the caller some balance for deployment
+        db.insert_account_info(
+            caller,
+            AccountInfo::new(
+                U256::from(1_000_000_000u64),
+                0,
+                Default::default(),
+                Bytecode::default(),
+            ),
+        );
+
+        let ctx = Context::mainnet().with_db(db);
+        let mut evm = ctx.build_mainnet();
+
+        // Create deployment transaction (TxKind::Create means contract creation)
+        let tx = TxEnv::builder()
+            .caller(caller)
+            .gas_limit(10_000_000)
+            .gas_price(0)
+            .kind(TxKind::Create)
+            .data(EvmBytes::from(init_code))
+            .nonce(0)
+            .build()
+            .map_err(|err| HarnessError::Execution(format!("{err:?}")))?;
+
+        let result = evm
+            .transact_commit(tx)
+            .map_err(|err| HarnessError::Execution(err.to_string()))?;
+
+        match result {
+            ExecutionResult::Success {
+                output: Output::Create(_, Some(deployed_address)),
+                ..
+            } => {
+                // The contract was deployed successfully; revm has already inserted the account
+                Ok(Self {
+                    evm,
+                    address: deployed_address,
+                    next_nonce: 1,
+                })
+            }
+            ExecutionResult::Success { output, .. } => Err(HarnessError::Execution(format!(
+                "deployment returned unexpected output: {output:?}"
+            ))),
+            ExecutionResult::Revert { output, .. } => {
+                Err(HarnessError::Revert(RevertData(output.to_vec())))
+            }
+            ExecutionResult::Halt { reason, gas_used } => {
+                Err(HarnessError::Halted { reason, gas_used })
+            }
+        }
+    }
+
     /// Executes the runtime with arbitrary calldata.
     pub fn call_raw(
         &mut self,
@@ -302,6 +362,17 @@ impl FeContractHarness {
     /// Creates a persistent runtime instance that can serve multiple calls.
     pub fn deploy_instance(&self) -> Result<RuntimeInstance, HarnessError> {
         RuntimeInstance::new(&self.contract.runtime_bytecode)
+    }
+
+    /// Deploys a contract by running the init bytecode, initializing storage.
+    /// Use this when your contract has initialization logic (e.g., storage setup).
+    pub fn deploy_with_init(&self) -> Result<RuntimeInstance, HarnessError> {
+        RuntimeInstance::deploy(&self.contract.bytecode)
+    }
+
+    /// Returns the raw init bytecode emitted by `solc`.
+    pub fn init_bytecode(&self) -> &str {
+        &self.contract.bytecode
     }
 }
 
@@ -606,6 +677,188 @@ object "Counter" {
             bytes_to_u256(&make_none_result.return_data).unwrap(),
             U256::from(0u64),
             "make_none() should return 0 (is_some of None)"
+        );
+    }
+
+    #[test]
+    fn storage_map_contract_test() {
+        if !solc_available() {
+            eprintln!("skipping storage_map_contract_test because solc is missing");
+            return;
+        }
+        let source_path = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../codegen/tests/fixtures/storage_map_contract.fe"
+        );
+        let harness = FeContractHarness::compile_from_file(
+            "BalanceMap",
+            source_path,
+            CompileOptions::default(),
+        )
+        .expect("compilation should succeed");
+
+        // Use deploy_with_init to properly run init code that initializes storage
+        let mut instance = harness.deploy_with_init().expect("deployment succeeds");
+        let options = ExecutionOptions::default();
+
+        // Use address-like values for accounts
+        let alice = Token::Uint(AbiU256::from(0x1111u64));
+        let bob = Token::Uint(AbiU256::from(0x2222u64));
+
+        // Initially, balances should be zero
+        let bal_alice_call =
+            encode_function_call("balanceOf(uint256)", std::slice::from_ref(&alice)).unwrap();
+        let bal_alice = instance
+            .call_raw(&bal_alice_call, options)
+            .expect("balanceOf alice should succeed");
+        assert_eq!(
+            bytes_to_u256(&bal_alice.return_data).unwrap(),
+            U256::from(0u64),
+            "initial alice balance should be 0"
+        );
+
+        // Set Alice's balance to 100
+        let set_alice = encode_function_call(
+            "setBalance(uint256,uint256)",
+            &[alice.clone(), Token::Uint(AbiU256::from(100u64))],
+        )
+        .unwrap();
+        instance
+            .call_raw(&set_alice, options)
+            .expect("setBalance alice should succeed");
+
+        // Verify Alice's balance is now 100
+        let bal_alice = instance
+            .call_raw(&bal_alice_call, options)
+            .expect("balanceOf alice should succeed");
+        assert_eq!(
+            bytes_to_u256(&bal_alice.return_data).unwrap(),
+            U256::from(100u64),
+            "alice balance should be 100 after set"
+        );
+
+        // Set Bob's balance to 50
+        let set_bob = encode_function_call(
+            "setBalance(uint256,uint256)",
+            &[bob.clone(), Token::Uint(AbiU256::from(50u64))],
+        )
+        .unwrap();
+        instance
+            .call_raw(&set_bob, options)
+            .expect("setBalance bob should succeed");
+
+        // Transfer 30 from Alice to Bob (should succeed, return 0)
+        let transfer_call = encode_function_call(
+            "transfer(uint256,uint256,uint256)",
+            &[
+                alice.clone(),
+                bob.clone(),
+                Token::Uint(AbiU256::from(30u64)),
+            ],
+        )
+        .unwrap();
+        let transfer_result = instance
+            .call_raw(&transfer_call, options)
+            .expect("transfer should succeed");
+        assert_eq!(
+            bytes_to_u256(&transfer_result.return_data).unwrap(),
+            U256::from(0u64),
+            "transfer should return 0 (success)"
+        );
+
+        // Verify balances after transfer: Alice = 70, Bob = 80
+        let bal_alice = instance
+            .call_raw(&bal_alice_call, options)
+            .expect("balanceOf alice should succeed");
+        assert_eq!(
+            bytes_to_u256(&bal_alice.return_data).unwrap(),
+            U256::from(70u64),
+            "alice balance should be 70 after transfer"
+        );
+
+        let bal_bob_call =
+            encode_function_call("balanceOf(uint256)", std::slice::from_ref(&bob)).unwrap();
+        let bal_bob = instance
+            .call_raw(&bal_bob_call, options)
+            .expect("balanceOf bob should succeed");
+        assert_eq!(
+            bytes_to_u256(&bal_bob.return_data).unwrap(),
+            U256::from(80u64),
+            "bob balance should be 80 after transfer"
+        );
+
+        // Try to transfer more than Alice has (should fail, return 1)
+        let transfer_fail = encode_function_call(
+            "transfer(uint256,uint256,uint256)",
+            &[
+                alice.clone(),
+                bob.clone(),
+                Token::Uint(AbiU256::from(1000u64)),
+            ],
+        )
+        .unwrap();
+        let transfer_fail_result = instance
+            .call_raw(&transfer_fail, options)
+            .expect("transfer should execute");
+        assert_eq!(
+            bytes_to_u256(&transfer_fail_result.return_data).unwrap(),
+            U256::from(1u64),
+            "transfer should return 1 (insufficient funds)"
+        );
+
+        // Verify balances unchanged after failed transfer
+        let bal_alice = instance
+            .call_raw(&bal_alice_call, options)
+            .expect("balanceOf alice should succeed");
+        assert_eq!(
+            bytes_to_u256(&bal_alice.return_data).unwrap(),
+            U256::from(70u64),
+            "alice balance should still be 70 after failed transfer"
+        );
+
+        // ========== Test that allowances map is separate from balances ==========
+        // Set Alice's allowance to 999
+        let set_allowance_alice = encode_function_call(
+            "setAllowance(uint256,uint256)",
+            &[alice.clone(), Token::Uint(AbiU256::from(999u64))],
+        )
+        .unwrap();
+        instance
+            .call_raw(&set_allowance_alice, options)
+            .expect("setAllowance alice should succeed");
+
+        // Verify Alice's allowance is 999
+        let get_allowance_alice =
+            encode_function_call("getAllowance(uint256)", std::slice::from_ref(&alice)).unwrap();
+        let allowance_alice = instance
+            .call_raw(&get_allowance_alice, options)
+            .expect("getAllowance alice should succeed");
+        assert_eq!(
+            bytes_to_u256(&allowance_alice.return_data).unwrap(),
+            U256::from(999u64),
+            "alice allowance should be 999"
+        );
+
+        // CRITICAL: Verify Alice's balance is STILL 70 (not affected by allowance)
+        let bal_alice = instance
+            .call_raw(&bal_alice_call, options)
+            .expect("balanceOf alice should succeed");
+        assert_eq!(
+            bytes_to_u256(&bal_alice.return_data).unwrap(),
+            U256::from(70u64),
+            "alice balance should still be 70 after setting allowance - maps must be independent!"
+        );
+
+        // And verify Bob's allowance is 0 (default, never set)
+        let get_allowance_bob =
+            encode_function_call("getAllowance(uint256)", std::slice::from_ref(&bob)).unwrap();
+        let allowance_bob = instance
+            .call_raw(&get_allowance_bob, options)
+            .expect("getAllowance bob should succeed");
+        assert_eq!(
+            bytes_to_u256(&allowance_bob.return_data).unwrap(),
+            U256::from(0u64),
+            "bob allowance should be 0 (never set)"
         );
     }
 }

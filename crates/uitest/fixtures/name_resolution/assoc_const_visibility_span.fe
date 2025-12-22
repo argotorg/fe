@@ -1,0 +1,17 @@
+mod inner {
+    trait T {
+        type A
+        const C: u32
+    }
+
+    pub struct S {}
+
+    impl T for S {
+        type A = u32
+        const C: u32 = 1
+    }
+}
+
+fn f() -> u32 {
+    inner::S::C
+}

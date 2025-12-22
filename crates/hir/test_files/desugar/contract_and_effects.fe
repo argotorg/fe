@@ -1,0 +1,31 @@
+pub contract Counter {
+    count: u64,
+
+    init(start: u64) uses (mut count) {
+        count = start
+    }
+
+    recv CounterMsg {
+        Increment uses (mut count) {
+            count += 1
+        }
+        Get -> u64 uses (count) {
+            count
+        }
+    }
+}
+
+msg CounterMsg {
+    #[selector = 0x01]
+    Increment,
+    #[selector = 0x02]
+    Get -> u64,
+}
+
+pub struct Storage {
+    pub value: u256,
+}
+
+fn use_storage() uses (mut Storage) {
+    Storage.value = 100
+}

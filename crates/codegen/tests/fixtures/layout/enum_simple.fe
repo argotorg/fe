@@ -1,0 +1,18 @@
+// Test layout of simple enums
+
+enum UnitOnly {
+    A,
+    B,
+    C
+}
+
+enum WithPayload {
+    None,
+    Some(u256)
+}
+
+enum MultiField {
+    Empty,
+    One(u8),
+    Two(u8, u16)
+}

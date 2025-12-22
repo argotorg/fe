@@ -1,0 +1,108 @@
+// Test various recv block patterns:
+// 1. Named recv with `msg` block
+// 2. Named recv with manually defined module
+// 3. Bare recv with standalone MsgVariant structs
+
+// ============================================
+// 1. Standard msg block (desugars to module)
+// ============================================
+msg BankMsg {
+    #[selector = 0x01]
+    Deposit { amount: u64 } -> u64,
+    #[selector = 0x02]
+    Withdraw { amount: u64 } -> bool,
+}
+
+// ============================================
+// 2. Manually defined module with MsgVariant impls
+// ============================================
+mod TokenMsg {
+    pub struct Transfer {
+        pub to: u64,
+        pub amount: u64,
+    }
+
+    impl core::message::MsgVariant<std::abi::Sol> for Transfer {
+        const SELECTOR: u32 = 0x10
+        type Args = (u64, u64)
+        type Return = bool
+    }
+
+    pub struct Balance {
+        pub addr: u64,
+    }
+
+    impl core::message::MsgVariant<std::abi::Sol> for Balance {
+        const SELECTOR: u32 = 0x11
+        type Args = (u64,)
+        type Return = u64
+    }
+}
+
+// ============================================
+// 3. Standalone struct with MsgVariant impl
+// ============================================
+struct CustomQuery {
+    pub key: u64,
+}
+
+impl core::message::MsgVariant<std::abi::Sol> for CustomQuery {
+    const SELECTOR: u32 = 0x20
+    type Args = (u64,)
+    type Return = u64
+}
+
+// ============================================
+// Contract using all three patterns
+// ============================================
+pub contract MultiRecvContract {
+    balance: u64,
+    tokens: u64,
+
+    init(start_balance: u64) uses (mut balance, mut tokens) {
+        balance = start_balance
+        tokens = 0
+    }
+
+    // Named recv with msg block
+    recv BankMsg {
+        Deposit { amount } -> u64 uses (mut balance) {
+            balance += amount
+            balance
+        }
+        Withdraw { amount } -> bool uses (mut balance) {
+            if amount > balance {
+                false
+            } else {
+                balance -= amount
+                true
+            }
+        }
+    }
+
+    // Named recv with manually defined module
+    recv TokenMsg {
+        Transfer { to, amount } -> bool uses (mut tokens) {
+            if amount > tokens {
+                false
+            } else {
+                tokens -= amount
+                true
+            }
+        }
+        Balance { addr } -> u64 uses (tokens) {
+            tokens
+        }
+    }
+
+    // Bare recv with standalone MsgVariant struct
+    recv {
+        CustomQuery { key } -> u64 uses (balance, tokens) {
+            if key == 0 {
+                balance
+            } else {
+                tokens
+            }
+        }
+    }
+}

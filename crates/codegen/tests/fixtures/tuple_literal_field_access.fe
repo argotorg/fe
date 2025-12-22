@@ -1,0 +1,22 @@
+struct PairWrap {
+    pair: (u256, u256),
+}
+
+pub fn tuple_literal_field_access() -> u256 {
+    let a: u256 = 1
+    let b: u256 = 2
+    (a, b).1
+}
+
+pub fn tuple_literal_nested_access() -> u256 {
+    let a: u256 = 1
+    let b: u256 = 2
+    let c: u256 = 3
+    (a, (b, c)).1.0
+}
+
+pub fn tuple_literal_struct_chain() -> u256 {
+    let a: u256 = 1
+    let b: u256 = 2
+    PairWrap { pair: (a, b) }.pair.1
+}

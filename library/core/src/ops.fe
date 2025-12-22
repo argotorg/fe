@@ -87,7 +87,9 @@ pub trait BitNot {
 // Comparison operators
 pub trait Eq<T = Self> {
     fn eq(self, _ other: T) -> bool
-    fn ne(self, _ other: T) -> bool
+    fn ne(self, _ other: T) -> bool {
+        !self.eq(other)
+    }
 }
 
 pub trait Ord<T = Self> {

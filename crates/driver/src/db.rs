@@ -6,12 +6,13 @@ use codespan_reporting::term::{
 use common::file::File;
 use common::{define_input_db, diagnostics::CompleteDiagnostic};
 use hir::analysis::{
-    analysis_pass::{AnalysisPassManager, ParsingPass},
+    analysis_pass::{AnalysisPassManager, MsgLowerPass, ParsingPass},
     diagnostics::DiagnosticVoucher,
     name_resolution::ImportAnalysisPass,
     ty::{
-        AdtDefAnalysisPass, BodyAnalysisPass, DefConflictAnalysisPass, FuncAnalysisPass,
-        ImplAnalysisPass, ImplTraitAnalysisPass, TraitAnalysisPass, TypeAliasAnalysisPass,
+        AdtDefAnalysisPass, BodyAnalysisPass, ContractAnalysisPass, DefConflictAnalysisPass,
+        FuncAnalysisPass, ImplAnalysisPass, ImplTraitAnalysisPass, TraitAnalysisPass,
+        TypeAliasAnalysisPass,
     },
 };
 use hir::{
@@ -102,6 +103,7 @@ impl DiagnosticsCollection<'_> {
 fn initialize_analysis_pass() -> AnalysisPassManager {
     let mut pass_manager = AnalysisPassManager::new();
     pass_manager.add_module_pass(Box::new(ParsingPass {}));
+    pass_manager.add_module_pass(Box::new(MsgLowerPass {}));
     pass_manager.add_module_pass(Box::new(DefConflictAnalysisPass {}));
     pass_manager.add_module_pass(Box::new(ImportAnalysisPass {}));
     pass_manager.add_module_pass(Box::new(AdtDefAnalysisPass {}));
@@ -111,5 +113,6 @@ fn initialize_analysis_pass() -> AnalysisPassManager {
     pass_manager.add_module_pass(Box::new(ImplTraitAnalysisPass {}));
     pass_manager.add_module_pass(Box::new(FuncAnalysisPass {}));
     pass_manager.add_module_pass(Box::new(BodyAnalysisPass {}));
+    pass_manager.add_module_pass(Box::new(ContractAnalysisPass {}));
     pass_manager
 }

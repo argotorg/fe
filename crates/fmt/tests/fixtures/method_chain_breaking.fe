@@ -1,0 +1,37 @@
+// Short method chains stay on one line
+fn short_chain() {
+    let x = foo.bar()
+    let y = obj.field.method()
+}
+
+// Short root (<=4 chars): first segment stays inline, dots align
+fn short_root_chain() {
+    self.alpha_field.beta_field.gamma_field.delta_field.epsilon_field.zeta_field.eta_field.theta_field
+    foo.alpha_field.beta_field.gamma_field.delta_field.epsilon_field.zeta_field.eta_field.theta_field
+}
+
+// Long root (>4 chars): all segments on new lines when broken
+fn long_root_chain() {
+    some_receiver.alpha_field.beta_field.gamma_field.delta_field.epsilon_field.zeta_field.eta_field.theta_field
+    let x = foo.alpha_field.beta_field.gamma_field.delta_field.epsilon_field.zeta_field.eta_field.theta_field
+}
+
+// Long method chains should break before each dot
+fn long_method_chain() {
+    let result = some_receiver_object.first_method_call(arg1, arg2).second_method_call(arg3).third_method_call()
+}
+
+// Long field access chains should break before dots
+fn long_field_chain() {
+    let value = some_very_long_struct_name.first_field_name.second_field_name.third_field_name.fourth_field_name.fifth_field
+}
+
+// Mixed method calls and field access
+fn mixed_chain() {
+    let result = very_long_receiver_name.some_field.method_call(argument).another_field.final_method()
+}
+
+// Chained calls with long arguments
+fn chain_with_args() {
+    let x = receiver.method_one(first_long_argument, second_long_argument).method_two(third_argument)
+}

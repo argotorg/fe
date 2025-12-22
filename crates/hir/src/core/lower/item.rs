@@ -6,8 +6,39 @@ use crate::{
         AttrListId, Body, EffectParamListId, FuncParamListId, GenericParamListId, IdentId, PathId,
         TraitRefId, TupleTypeId, TypeBound, TypeId, WhereClauseId, item::*,
     },
+    lower::msg::lower_msg_as_mod,
     span::HirOrigin,
 };
+
+/// Selector-related errors accumulated during msg block lowering.
+#[salsa::accumulator]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct SelectorError {
+    pub kind: SelectorErrorKind,
+    pub file: common::file::File,
+    /// Range of the primary span (selector attribute or variant name)
+    pub primary_range: parser::TextRange,
+    /// Range of the secondary span (for duplicates - the first occurrence)
+    pub secondary_range: Option<parser::TextRange>,
+    pub variant_name: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum SelectorErrorKind {
+    /// Selector value overflows u32.
+    Overflow,
+    /// Selector has invalid type (string or bool).
+    InvalidType,
+    /// No `#[selector]` attribute found.
+    Missing,
+    /// Selector attribute has invalid form (e.g. `#[selector(value)]` instead of `#[selector = value]`).
+    InvalidForm,
+    /// Duplicate selector value.
+    Duplicate {
+        first_variant_name: String,
+        selector: u32,
+    },
+}
 
 pub(crate) fn lower_module_items(ctxt: &mut FileLowerCtxt<'_>, items: ast::ItemList) {
     for item in items {
@@ -36,6 +67,9 @@ impl<'db> ItemKind<'db> {
             }
             ast::ItemKind::Enum(enum_) => {
                 Enum::lower_ast(ctxt, enum_);
+            }
+            ast::ItemKind::Msg(msg) => {
+                lower_msg_as_mod(ctxt, msg);
             }
             ast::ItemKind::TypeAlias(alias) => {
                 TypeAlias::lower_ast(ctxt, alias);
@@ -101,7 +135,7 @@ impl<'db> Func<'db> {
             .map(|params| FuncParamListId::lower_ast(ctxt, params))
             .into();
         let ret_ty = sig.ret_ty().map(|ty| TypeId::lower_ast(ctxt, ty));
-        let effects = lower_effects(ctxt, &ast);
+        let effects = lower_uses_clause_opt(ctxt, ast.sig().uses_clause());
         let modifier = ItemModifier::lower_ast(ast.modifier());
         let body = ast
             .body()
@@ -125,41 +159,6 @@ impl<'db> Func<'db> {
         );
         ctxt.leave_item_scope(fn_)
     }
-}
-
-fn lower_effects<'db>(ctxt: &mut FileLowerCtxt<'db>, ast: &ast::Func) -> EffectParamListId<'db> {
-    use crate::hir_def::{EffectParam, EffectParamListId};
-
-    let mut data: Vec<EffectParam<'db>> = Vec::new();
-
-    if let Some(uses) = ast.sig().uses_clause() {
-        if let Some(list) = uses.param_list() {
-            for p in list {
-                let name = p.name().map(|n| IdentId::lower_token(ctxt, n.syntax()));
-
-                let is_mut = p.mut_token().is_some();
-                let key_path = p.path().map(|path| PathId::lower_ast(ctxt, path)).into();
-
-                data.push(EffectParam {
-                    name,
-                    key_path,
-                    is_mut,
-                });
-            }
-        } else if let Some(p) = uses.param() {
-            let name = p.name().map(|n| IdentId::lower_token(ctxt, n.syntax()));
-            let is_mut = p.mut_token().is_some();
-            let key_path = p.path().map(|path| PathId::lower_ast(ctxt, path)).into();
-
-            data.push(EffectParam {
-                name,
-                key_path,
-                is_mut,
-            });
-        }
-    }
-
-    EffectParamListId::new(ctxt.db(), data)
 }
 
 impl<'db> Struct<'db> {
@@ -191,29 +190,39 @@ impl<'db> Struct<'db> {
     }
 }
 
-impl<'db> Contract<'db> {
-    pub(super) fn lower_ast(ctxt: &mut FileLowerCtxt<'db>, ast: ast::Contract) -> Self {
-        let name = IdentId::lower_token_partial(ctxt, ast.name());
-        let id = ctxt.joined_id(TrackedItemVariant::Contract(name));
-        ctxt.enter_item_scope(id, false);
+pub(super) fn lower_uses_clause_opt<'db>(
+    ctxt: &mut FileLowerCtxt<'db>,
+    uses: Option<ast::UsesClause>,
+) -> EffectParamListId<'db> {
+    use crate::hir_def::{EffectParam, EffectParamListId};
 
-        let attributes = AttrListId::lower_ast_opt(ctxt, ast.attr_list());
-        let vis = ItemModifier::lower_ast(ast.modifier()).to_visibility();
-        let fields = FieldDefListId::lower_ast_opt(ctxt, ast.fields());
-        let origin = HirOrigin::raw(&ast);
+    let mut data: Vec<EffectParam<'db>> = Vec::new();
 
-        let contract = Self::new(
-            ctxt.db(),
-            id,
-            name,
-            attributes,
-            vis,
-            fields,
-            ctxt.top_mod(),
-            origin,
-        );
-        ctxt.leave_item_scope(contract)
+    if let Some(uses) = uses {
+        if let Some(list) = uses.param_list() {
+            for p in list {
+                let name = p.name().map(|n| IdentId::lower_token(ctxt, n.syntax()));
+                let is_mut = p.mut_token().is_some();
+                let key_path = p.path().map(|path| PathId::lower_ast(ctxt, path)).into();
+                data.push(EffectParam {
+                    name,
+                    key_path,
+                    is_mut,
+                });
+            }
+        } else if let Some(p) = uses.param() {
+            let name = p.name().map(|n| IdentId::lower_token(ctxt, n.syntax()));
+            let is_mut = p.mut_token().is_some();
+            let key_path = p.path().map(|path| PathId::lower_ast(ctxt, path)).into();
+            data.push(EffectParam {
+                name,
+                key_path,
+                is_mut,
+            });
+        }
     }
+
+    EffectParamListId::new(ctxt.db(), data)
 }
 
 impl<'db> Enum<'db> {
@@ -517,7 +526,7 @@ impl<'db> FieldDefListId<'db> {
 }
 
 impl<'db> FieldDef<'db> {
-    fn lower_ast(ctxt: &mut FileLowerCtxt<'db>, ast: ast::RecordFieldDef) -> Self {
+    pub(super) fn lower_ast(ctxt: &mut FileLowerCtxt<'db>, ast: ast::RecordFieldDef) -> Self {
         let attributes = AttrListId::lower_ast_opt(ctxt, ast.attr_list());
         let name = IdentId::lower_token_partial(ctxt, ast.name());
         let type_ref = TypeId::lower_ast_partial(ctxt, ast.ty());
