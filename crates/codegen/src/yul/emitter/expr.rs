@@ -3,6 +3,7 @@
 use hir::hir_def::{
     Attr, CallableDef, Expr, ExprId, Func, ItemKind, LitKind, Stmt, StmtId,
     expr::{ArithBinOp, BinOp, CompBinOp, LogicalBinOp, UnOp},
+    scope_graph::ScopeId,
 };
 use mir::{
     CallOrigin, ValueId, ValueOrigin,
@@ -123,7 +124,16 @@ impl<'db> FunctionEmitter<'db> {
                         })?;
 
                 let callee = match callable.callable_def {
-                    CallableDef::Func(func) => function_name(self.db, func),
+                    CallableDef::Func(func) => {
+                        let base = function_name(self.db, func);
+                        let ScopeId::Item(ItemKind::Impl(impl_block)) =
+                            func.scope().parent(self.db).unwrap()
+                        else {
+                            unreachable!()
+                        };
+                        let prefix = impl_block.ty(self.db).pretty_print(self.db).to_lowercase();
+                        format!("{prefix}_{base}")
+                    }
                     CallableDef::VariantCtor(_) => {
                         return Err(YulError::Unsupported(
                             "variant constructor method calls are not supported yet".into(),

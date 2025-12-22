@@ -15,10 +15,10 @@ function test_if_else(x) -> ret {
   let v1 := v0
   let v2 := 0
   if gt(x, 10) {
-    v2 := get_value1(v1)
+    v2 := teststruct_get_value1(v1)
   }
   if iszero(gt(x, 10)) {
-    v2 := get_value2(v1, 10)
+    v2 := teststruct_get_value2(v1, 10)
   }
   ret := v2
 }
