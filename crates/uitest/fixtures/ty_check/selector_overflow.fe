@@ -1,0 +1,9 @@
+// Test: selector values that overflow u32 should emit an error
+
+msg TestMsg {
+    #[selector = 0xFFFFFFFFFF]
+    Overflow {} -> (),
+
+    #[selector = 0x01]
+    GoodOne {} -> (),
+}

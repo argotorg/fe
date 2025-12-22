@@ -1,6 +1,7 @@
 pub mod diagnostics;
 
 mod import_resolver;
+pub(crate) mod items_in_scope;
 pub(crate) mod method_selection;
 mod name_resolver;
 pub mod path_resolver;
@@ -10,6 +11,7 @@ mod visibility_checker;
 use crate::core::hir_def::TopLevelMod;
 use common::ingot::Ingot;
 pub use import_resolver::ResolvedImports;
+pub use items_in_scope::items_in_scope;
 pub use name_resolver::{
     EarlyNameQueryId, NameDerivation, NameDomain, NameRes, NameResBucket, NameResKind,
     NameResolutionError, QueryDirective,

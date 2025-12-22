@@ -1,10 +1,17 @@
 mod capabilities;
+pub(super) mod code_actions;
+pub(super) mod completion;
+pub(super) mod document_symbols;
 pub(super) mod goto;
 pub(super) mod handlers;
 pub(super) mod highlight;
 pub(super) mod hover;
+pub(super) mod implementations;
+pub(super) mod inlay_hints;
 pub(super) mod item_info;
 pub(super) mod references;
 pub(super) mod rename;
 pub(super) mod semantic_tokens;
+pub(super) mod signature_help;
 pub(super) mod type_definition;
+pub(super) mod workspace_symbols;

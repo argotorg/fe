@@ -1,0 +1,5 @@
+use core::keccak
+
+pub fn hash(ptr: u256, len: u256) -> u256 {
+    keccak(ptr, len)
+}

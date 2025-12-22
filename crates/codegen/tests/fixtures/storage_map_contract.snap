@@ -1,0 +1,111 @@
+---
+source: crates/codegen/tests/yul.rs
+assertion_line: 31
+expression: output
+input_file: tests/fixtures/storage_map_contract.fe
+---
+object "BalanceMap" {
+  code {
+    init()
+    function init() {
+      let v0 := datasize("BalanceMap_deployed")
+      let v1 := dataoffset("BalanceMap_deployed")
+      codecopy(0, v1, v0)
+      return(0, v0)
+    }
+  }
+
+  object "BalanceMap_deployed" {
+    code {
+      runtime()
+      function abi_encode(value) {
+        let v0 := 0
+        mstore(v0, value)
+        return(v0, 32)
+      }
+      function from_word__u256__3271ca15373d4483(word) -> ret {
+        ret := word
+      }
+      function get_allowance(addr, allowances) -> ret {
+        ret := storagemap_k__v__get_stor__u256_u256__cc308d1bea3fb6e4(allowances, addr)
+      }
+      function get_balance(addr, balances) -> ret {
+        ret := storagemap_k__v__get_stor__u256_u256__cc308d1bea3fb6e4(balances, addr)
+      }
+      function runtime() {
+        let v0 := 0
+        let v1 := add(0, 32)
+        let v2 := shr(224, calldataload(0))
+        switch v2
+          case 2630350600 {
+            let v3 := calldataload(4)
+            let v4 := get_balance(v3, v0)
+            abi_encode(v4)
+          }
+          case 1246470123 {
+            let v5 := calldataload(4)
+            let v6 := calldataload(36)
+            set_balance(v5, v6, v0)
+            abi_encode(0)
+          }
+          case 2430412327 {
+            let v7 := calldataload(4)
+            let v8 := calldataload(36)
+            let v9 := calldataload(68)
+            let v10 := transfer(v7, v8, v9, v0)
+            abi_encode(v10)
+          }
+          case 3378517838 {
+            let v11 := calldataload(4)
+            let v12 := get_allowance(v11, v1)
+            abi_encode(v12)
+          }
+          case 197806145 {
+            let v13 := calldataload(4)
+            let v14 := calldataload(36)
+            set_allowance(v13, v14, v1)
+            abi_encode(0)
+          }
+          default {
+            return(0, 0)
+          }
+      }
+      function set_allowance(addr, value, allowances) {
+        storagemap_k__v__set_stor__u256_u256__cc308d1bea3fb6e4(allowances, addr, value)
+      }
+      function set_balance(addr, value, balances) {
+        storagemap_k__v__set_stor__u256_u256__cc308d1bea3fb6e4(balances, addr, value)
+      }
+      function storagemap_k__v__get_stor__u256_u256__cc308d1bea3fb6e4(self, key) -> ret {
+        let v0 := storagemap_k__v__storage_slot_stor__u256_u256__cc308d1bea3fb6e4(self, key)
+        ret := from_word__u256__3271ca15373d4483(sload(v0))
+      }
+      function storagemap_k__v__set_stor__u256_u256__cc308d1bea3fb6e4(self, key, value) {
+        let v0 := storagemap_k__v__storage_slot_stor__u256_u256__cc308d1bea3fb6e4(self, key)
+        sstore(v0, from_word__u256__3271ca15373d4483(value))
+      }
+      function storagemap_k__v__storage_slot_stor__u256_u256__cc308d1bea3fb6e4(self, key) -> ret {
+        let v0 := write_key__u256__3271ca15373d4483(0, key)
+        mstore(v0, self)
+        ret := keccak256(0, add(v0, 32))
+      }
+      function transfer(from, to, amount, balances) -> ret {
+        let v0 := storagemap_k__v__get_stor__u256_u256__cc308d1bea3fb6e4(balances, from)
+        let v1 := lt(v0, amount)
+        if v1 {
+          ret := 1
+        }
+        if iszero(v1) {
+          let v2 := storagemap_k__v__get_stor__u256_u256__cc308d1bea3fb6e4(balances, to)
+          storagemap_k__v__set_stor__u256_u256__cc308d1bea3fb6e4(balances, from, sub(v0, amount))
+          storagemap_k__v__set_stor__u256_u256__cc308d1bea3fb6e4(balances, to, add(v2, amount))
+          ret := 0
+        }
+      }
+      function write_key__u256__3271ca15373d4483(ptr, self) -> ret {
+        mstore(ptr, self)
+        ret := 32
+      }
+    }
+  }
+}

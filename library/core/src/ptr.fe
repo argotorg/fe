@@ -17,11 +17,11 @@ const I64_SIGN_BIT: u256 = 0x8000000000000000
 const I128_SIGN_BIT: u256 = 0x80000000000000000000000000000000
 const I256_SIGN_BIT: u256 = 0x8000000000000000000000000000000000000000000000000000000000000000
 
-/// Tracks where a value lives so loaders can choose the right builtin.
-pub enum AddressSpace {
-    Memory,
-    Storage,
-}
+/// Memory pointer marker type.
+pub struct MemPtr {}
+
+/// Storage pointer marker type.
+pub struct StorPtr {}
 
 /// Every scalar that can be reconstructed from a raw 256-bit slot implements this.
 pub trait LoadableScalar {
@@ -121,6 +121,32 @@ pub trait StorableScalar {
     fn to_word(self) -> u256
 }
 
+/// Pointer abstraction over raw u256 addresses/slots.
+pub trait Ptr {
+    fn load(addr: u256) -> u256
+    fn store(addr: u256, value: u256)
+}
+
+impl Ptr for MemPtr {
+    fn load(addr: u256) -> u256 {
+        mload(addr)
+    }
+
+    fn store(addr: u256, value: u256) {
+        mstore(addr, value)
+    }
+}
+
+impl Ptr for StorPtr {
+    fn load(addr: u256) -> u256 {
+        sload(slot:addr)
+    }
+
+    fn store(addr: u256, value: u256) {
+        sstore(slot:addr, value)
+    }
+}
+
 impl StorableScalar for u8 {
     fn to_word(self) -> u256 {
         __u8_as_u256(self)
@@ -212,25 +238,13 @@ impl StorableScalar for isize {
 }
 
 /// Generic field reader for byte-addressable structs.
-pub fn get_field<T, F: LoadableScalar>(addr: u256, space: AddressSpace, offset: u256) -> F {
-    let target = addr + offset
-    let word = match space {
-        AddressSpace::Memory => mload(target)
-        AddressSpace::Storage => sload(slot:target)
-    }
-    F::from_word(word)
+pub fn get_field<P: Ptr, F: LoadableScalar>(ptr: u256, offset: u256) -> F {
+    let target = ptr + offset
+    F::from_word(word: P::load(addr:target))
 }
 
-/// Writes a scalar field into the given address/space with the provided offset.
-pub fn store_field<T: StorableScalar>(
-    addr: u256,
-    space: AddressSpace,
-    offset: u256,
-    value: T,
-) {
-    let target = addr + offset
-    match space {
-        AddressSpace::Memory => mstore(target, value.to_word())
-        AddressSpace::Storage => sstore(slot:target, value.to_word())
-    }
+/// Writes a scalar field into the given address with the provided offset.
+pub fn store_field<P: Ptr, T: StorableScalar>(ptr: u256, offset: u256, value: T) {
+    let target = ptr + offset
+    P::store(addr: target, value: value.to_word())
 }

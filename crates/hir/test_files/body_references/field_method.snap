@@ -1,6 +1,5 @@
 ---
 source: crates/hir/tests/body_references.rs
-assertion_line: 80
 expression: res
 input_file: test_files/body_references/field_method.fe
 ---

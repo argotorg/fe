@@ -6,15 +6,15 @@ input_file: tests/fixtures/match_enum_with_data.fe
 ---
 function make_some(value) -> ret {
   let v0 := alloc(40)
-  store_discriminant(v0, 0, 1)
-  store_variant_field__u64__aee7f05a097ffa16(v0, 0, 0, value)
+  store_discriminant__MemPtr__d0292394fccae3e4(v0, 1)
+  store_variant_field__MemPtr_u64__6be88d17f715c1ad(v0, 0, value)
   ret := v0
 }
 function match_option(opt) -> ret {
   let v0 := 0
-  switch get_discriminant(opt, 0)
+  switch get_discriminant__MemPtr__d0292394fccae3e4(opt)
     case 1 {
-      let v1 := get_variant_field__u64__aee7f05a097ffa16(opt, 0, 0)
+      let v1 := get_variant_field__MemPtr_u64__6be88d17f715c1ad(opt, 0)
       v0 := v1
     }
     case 0 {
@@ -37,59 +37,28 @@ function alloc(size) -> ret {
     ret := v0
   }
 }
-function store_discriminant(addr, space, discriminant) {
-  switch space
-    case 0 {
-      mstore(addr, discriminant)
-    }
-    case 1 {
-      sstore(addr, discriminant)
-    }
-    default {
-    }
+function store_discriminant__MemPtr__d0292394fccae3e4(addr, discriminant) {
+  store__MemPtr__d0292394fccae3e4(addr, discriminant)
 }
-function store_variant_field__u64__aee7f05a097ffa16(addr, space, field_offset, value) {
+function store_variant_field__MemPtr_u64__6be88d17f715c1ad(addr, field_offset, value) {
   let v0 := add(add(addr, 32), field_offset)
-  switch space
-    case 0 {
-      mstore(v0, to_word__deduped(value))
-    }
-    case 1 {
-      sstore(v0, to_word__deduped(value))
-    }
-    default {
-    }
+  store__MemPtr__d0292394fccae3e4(v0, to_word__deduped(value))
 }
-function get_variant_field__u64__aee7f05a097ffa16(addr, space, field_offset) -> ret {
-  let v1 := add(add(addr, 32), field_offset)
-  let v0 := 0
-  switch space
-    case 0 {
-      v0 := mload(v1)
-    }
-    case 1 {
-      v0 := sload(v1)
-    }
-    default {
-    }
-  let v2 := v0
-  ret := from_word__u64__aee7f05a097ffa16(v2)
+function get_variant_field__MemPtr_u64__6be88d17f715c1ad(addr, field_offset) -> ret {
+  let v0 := add(add(addr, 32), field_offset)
+  ret := from_word__u64__aee7f05a097ffa16(load__MemPtr__d0292394fccae3e4(v0))
 }
-function get_discriminant(addr, space) -> ret {
-  let v0 := 0
-  switch space
-    case 0 {
-      v0 := mload(addr)
-    }
-    case 1 {
-      v0 := sload(addr)
-    }
-    default {
-    }
-  ret := v0
+function get_discriminant__MemPtr__d0292394fccae3e4(addr) -> ret {
+  ret := load__MemPtr__d0292394fccae3e4(addr)
+}
+function store__MemPtr__d0292394fccae3e4(addr, value) {
+  mstore(addr, value)
 }
 function to_word__deduped(self) -> ret {
   ret := self
+}
+function load__MemPtr__d0292394fccae3e4(addr) -> ret {
+  ret := mload(addr)
 }
 function from_word__u64__aee7f05a097ffa16(word) -> ret {
   ret := and(word, 18446744073709551615)

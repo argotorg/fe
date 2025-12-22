@@ -12,8 +12,12 @@ extern {
     pub fn mstore(_: u256, _: u256)
     /// Return `size` bytes starting at `offset` to the caller.
     pub fn return_data(_: u256, _: u256) -> !
+    /// Revert with `size` bytes starting at `offset`.
+    pub fn revert(_: u256, _: u256) -> !
     /// Store the low byte of the second argument at the memory address.
     pub fn mstore8(_: u256, _: u8)
+    /// Return the address of a pointer value as `u256`.
+    pub fn addr_of<T>(_: T) -> u256
     /// Load a 32-byte word from storage.
     pub fn sload(_: u256) -> u256
     /// Store a 32-byte word to storage.
@@ -21,6 +25,10 @@ extern {
     /// Copy runtime code into memory.
     pub fn codecopy(dest: u256, offset: u256, len: u256)
     pub fn create2(value: u256, offset: u256, len: u256, salt: u256)
+    /// Compute `keccak256` over a memory region.
+    pub fn keccak(_: u256, _: u256) -> u256
+    /// Return the address of the caller.
+    pub fn caller() -> u256
     /// Return the code offset/size for the call graph rooted at `func`.
     ///
     /// This is resolved at compile time and is intended for low-level contract

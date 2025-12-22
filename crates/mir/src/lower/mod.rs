@@ -27,11 +27,11 @@ use hir::hir_def::{
 use crate::{
     core_lib::{CoreHelper, CoreHelperTy, CoreLib, CoreLibError},
     ir::{
-        BasicBlock, BasicBlockId, CallOrigin, CodeRegionRoot, ContractFunction,
-        ContractFunctionKind, IntrinsicOp, IntrinsicValue, LoopInfo, MatchArmLowering,
-        MatchArmPattern, MatchLoweringInfo, MirBody, MirFunction, MirInst, MirModule,
-        PatternBinding, SwitchOrigin, SwitchTarget, SwitchValue, SyntheticValue, Terminator,
-        ValueData, ValueId, ValueOrigin,
+        AddressSpaceKind, BasicBlock, BasicBlockId, CallOrigin, CodeRegionRoot, ContractFunction,
+        ContractFunctionKind, FieldPtrOrigin, IntrinsicOp, IntrinsicValue, LoopInfo,
+        MatchArmLowering, MatchArmPattern, MatchLoweringInfo, MirBody, MirFunction, MirInst,
+        MirModule, PatternBinding, SwitchOrigin, SwitchTarget, SwitchValue, SyntheticValue,
+        Terminator, ValueData, ValueId, ValueOrigin,
     },
     monomorphize::monomorphize_functions,
 };
@@ -131,9 +131,8 @@ pub fn lower_module<'db>(
         if func.body(db).is_none() {
             continue;
         }
-
         let (_diags, typed_body) = check_func_body(db, func);
-        let lowered = lower_function(db, func, typed_body.clone())?;
+        let lowered = lower_function(db, func, typed_body.clone(), None)?;
         templates.push(lowered);
     }
 
@@ -154,6 +153,7 @@ pub(crate) fn lower_function<'db>(
     db: &'db dyn HirAnalysisDb,
     func: Func<'db>,
     typed_body: TypedBody<'db>,
+    receiver_space: Option<AddressSpaceKind>,
 ) -> MirLowerResult<MirFunction<'db>> {
     let Some(body) = func.body(db) else {
         let func_name = func
@@ -164,7 +164,7 @@ pub(crate) fn lower_function<'db>(
         return Err(MirLowerError::MissingBody { func_name });
     };
 
-    let mut builder = MirBuilder::new(db, body, &typed_body)?;
+    let mut builder = MirBuilder::new(db, body, &typed_body, receiver_space)?;
     let entry = builder.alloc_block();
     let fallthrough = builder.lower_root(entry, body.expr(db));
     builder.ensure_const_expr_values();
@@ -187,6 +187,7 @@ pub(crate) fn lower_function<'db>(
         generic_args: Vec::new(),
         contract_function: extract_contract_function(db, func),
         symbol_name,
+        receiver_space,
     })
 }
 
@@ -201,6 +202,8 @@ pub(super) struct MirBuilder<'db, 'a> {
     pub(super) const_cache: FxHashMap<Const<'db>, ValueId>,
     pub(super) pat_address_space: FxHashMap<PatId, AddressSpaceKind>,
     pub(super) value_address_space: FxHashMap<ValueId, AddressSpaceKind>,
+    /// For methods, the address space variant being lowered.
+    pub(super) receiver_space: Option<AddressSpaceKind>,
 }
 
 /// Loop context capturing break/continue targets.
@@ -208,13 +211,6 @@ pub(super) struct MirBuilder<'db, 'a> {
 pub(super) struct LoopScope {
     pub(super) continue_target: BasicBlockId,
     pub(super) break_target: BasicBlockId,
-}
-
-/// Tracks which address space a value or binding resides in.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub(super) enum AddressSpaceKind {
-    Memory,
-    Storage,
 }
 
 impl<'db, 'a> MirBuilder<'db, 'a> {
@@ -231,10 +227,11 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         db: &'db dyn HirAnalysisDb,
         body: Body<'db>,
         typed_body: &'a TypedBody<'db>,
+        receiver_space: Option<AddressSpaceKind>,
     ) -> Result<Self, MirLowerError> {
         let core = CoreLib::new(db, body)?;
 
-        Ok(Self {
+        let builder = Self {
             db,
             body,
             typed_body,
@@ -244,7 +241,10 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
             const_cache: FxHashMap::default(),
             pat_address_space: FxHashMap::default(),
             value_address_space: FxHashMap::default(),
-        })
+            receiver_space,
+        };
+
+        Ok(builder)
     }
 
     /// Consumes the builder and returns the accumulated MIR body.
@@ -299,7 +299,12 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                 .get(pat)
                 .copied()
                 .unwrap_or(AddressSpaceKind::Memory),
-            LocalBinding::Param { .. } => AddressSpaceKind::Memory,
+            LocalBinding::Param { idx, .. } => {
+                if *idx == 0 {
+                    return self.receiver_space.unwrap_or(AddressSpaceKind::Memory);
+                }
+                AddressSpaceKind::Memory
+            }
         }
     }
 
@@ -311,8 +316,18 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
     /// # Returns
     /// The address space kind for the expression.
     pub(super) fn expr_address_space(&self, expr: ExprId) -> AddressSpaceKind {
+        // Propagate storage space through field projections so nested storage fields
+        // continue to be treated as storage pointers.
+        let exprs = self.body.exprs(self.db);
+        if let Partial::Present(Expr::Field(base, _)) = &exprs[expr] {
+            let base_space = self.expr_address_space(*base);
+            if matches!(base_space, AddressSpaceKind::Storage) {
+                return AddressSpaceKind::Storage;
+            }
+        }
+
         let prop = self.typed_body.expr_prop(self.db, expr);
-        if let Some(binding) = prop.binding() {
+        if let Some(binding) = prop.binding {
             self.address_space_for_binding(&binding)
         } else {
             AddressSpaceKind::Memory
@@ -350,19 +365,5 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
     /// - `space`: Address space kind to record.
     pub(super) fn set_pat_address_space(&mut self, pat: PatId, space: AddressSpaceKind) {
         self.pat_address_space.insert(pat, space);
-    }
-
-    /// Returns a synthetic literal representing the provided address space.
-    ///
-    /// # Parameters
-    /// - `space`: Address space kind to encode.
-    ///
-    /// # Returns
-    /// Synthetic value id for the address space.
-    pub(super) fn address_space_literal(&mut self, space: AddressSpaceKind) -> ValueId {
-        match space {
-            AddressSpaceKind::Memory => self.synthetic_address_space_memory(),
-            AddressSpaceKind::Storage => self.synthetic_address_space_storage(),
-        }
     }
 }

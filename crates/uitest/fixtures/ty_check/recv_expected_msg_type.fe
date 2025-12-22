@@ -1,0 +1,32 @@
+// Test that recv blocks require a msg type, not other types
+
+pub struct NotAMsg {
+    value: u64,
+}
+
+pub enum NotAMsgEither {
+    Foo,
+    Bar(u64),
+}
+
+pub contract BadContract {
+    data: u64,
+
+    // Error: recv block expects a msg type, but struct is given
+    recv NotAMsg {
+        value -> u64 uses () {
+            value
+        }
+    }
+}
+
+pub contract BadContract2 {
+    data: u64,
+
+    // Error: recv block expects a msg type, but enum is given
+    recv NotAMsgEither {
+        Foo -> u64 uses () {
+            0
+        }
+    }
+}

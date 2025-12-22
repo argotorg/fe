@@ -1,0 +1,11 @@
+/// Trait implemented by message variants in a `msg` block.
+///
+/// Each variant in a `msg` definition desugars to a struct that implements
+/// this trait, providing the selector and return type information.
+pub trait MsgVariant {
+    /// The 4-byte selector used to identify this message variant in calldata.
+    const SELECTOR: u32
+
+    /// The return type of this message variant.
+    type Return
+}

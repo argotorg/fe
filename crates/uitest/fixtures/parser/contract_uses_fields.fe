@@ -1,0 +1,5 @@
+contract Coin uses (mut ctx: Ctx) {
+    mut store: CoinStore,
+    creator: Address
+}
+

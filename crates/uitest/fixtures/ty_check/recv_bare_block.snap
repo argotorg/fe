@@ -1,0 +1,6 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/recv_bare_block.fe
+---
+

@@ -1,7 +1,7 @@
 ---
 source: crates/uitest/tests/parser.rs
 expression: diags
-input_file: crates/uitest/fixtures/parser/match_.fe
+input_file: fixtures/parser/match_.fe
 ---
 error[1-0001]: unexpected syntax while parsing `match` expression
   ┌─ match_.fe:2:10
@@ -16,15 +16,13 @@ error[1-0001]: expected `=>`
   │       ^ expected `=>`
 
 error[1-0001]: expected pattern
-  ┌─ match_.fe:8:13
+  ┌─ match_.fe:8:16
   │
 8 │    Foo(i, j,   => true x
-  │             ^ expected pattern
+  │                ^ expected pattern
 
 error[1-0001]: unexpected syntax while parsing `match` arm list
   ┌─ match_.fe:8:24
   │
 8 │    Foo(i, j,   => true x
   │                        ^ unexpected
-
-

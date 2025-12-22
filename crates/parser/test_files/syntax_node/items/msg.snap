@@ -1,0 +1,272 @@
+---
+source: crates/parser/tests/syntax_node.rs
+expression: node
+input_file: test_files/syntax_node/items/msg.fe
+---
+Root@0..843
+  ItemList@0..842
+    Item@0..842
+      Msg@0..842
+        MsgKw@0..3 "msg"
+        WhiteSpace@3..4 " "
+        Ident@4..12 "Erc20Msg"
+        WhiteSpace@12..13 " "
+        MsgVariantList@13..842
+          LBrace@13..14 "{"
+          Newline@14..15 "\n"
+          WhiteSpace@15..17 "  "
+          Comment@17..70 "// Transfers `amount` ..."
+          Newline@70..71 "\n"
+          WhiteSpace@71..73 "  "
+          MsgVariant@73..119
+            Ident@73..81 "Transfer"
+            WhiteSpace@81..82 " "
+            MsgVariantParams@82..111
+              LBrace@82..83 "{"
+              WhiteSpace@83..84 " "
+              RecordFieldDef@84..95
+                Ident@84..86 "to"
+                Colon@86..87 ":"
+                WhiteSpace@87..88 " "
+                PathType@88..95
+                  Path@88..95
+                    PathSegment@88..95
+                      Ident@88..95 "Address"
+              Comma@95..96 ","
+              WhiteSpace@96..97 " "
+              RecordFieldDef@97..109
+                Ident@97..103 "amount"
+                Colon@103..104 ":"
+                WhiteSpace@104..105 " "
+                PathType@105..109
+                  Path@105..109
+                    PathSegment@105..109
+                      Ident@105..109 "u256"
+              WhiteSpace@109..110 " "
+              RBrace@110..111 "}"
+            WhiteSpace@111..112 " "
+            Arrow@112..114 "->"
+            WhiteSpace@114..115 " "
+            PathType@115..119
+              Path@115..119
+                PathSegment@115..119
+                  Ident@115..119 "bool"
+          Comma@119..120 ","
+          Newline@120..121 "\n"
+          WhiteSpace@121..123 "  "
+          Comment@123..155 "// Returns the balanc ..."
+          Newline@155..156 "\n"
+          WhiteSpace@156..158 "  "
+          MsgVariant@158..191
+            Ident@158..165 "Balance"
+            WhiteSpace@165..166 " "
+            MsgVariantParams@166..183
+              LBrace@166..167 "{"
+              WhiteSpace@167..168 " "
+              RecordFieldDef@168..181
+                Ident@168..172 "addr"
+                Colon@172..173 ":"
+                WhiteSpace@173..174 " "
+                PathType@174..181
+                  Path@174..181
+                    PathSegment@174..181
+                      Ident@174..181 "Address"
+              WhiteSpace@181..182 " "
+              RBrace@182..183 "}"
+            WhiteSpace@183..184 " "
+            Arrow@184..186 "->"
+            WhiteSpace@186..187 " "
+            PathType@187..191
+              Path@187..191
+                PathSegment@187..191
+                  Ident@187..191 "u256"
+          Comma@191..192 ","
+          Newline@192..193 "\n"
+          WhiteSpace@193..195 "  "
+          Comment@195..228 "// Returns the total  ..."
+          Newline@228..229 "\n"
+          WhiteSpace@229..231 "  "
+          MsgVariant@231..250
+            Ident@231..242 "TotalSupply"
+            WhiteSpace@242..243 " "
+            Arrow@243..245 "->"
+            WhiteSpace@245..246 " "
+            PathType@246..250
+              Path@246..250
+                PathSegment@246..250
+                  Ident@246..250 "u256"
+          Comma@250..251 ","
+          Newline@251..252 "\n"
+          WhiteSpace@252..254 "  "
+          Comment@254..326 "// Returns the remain ..."
+          Newline@326..327 "\n"
+          WhiteSpace@327..329 "  "
+          MsgVariant@329..383
+            Ident@329..338 "Allowance"
+            WhiteSpace@338..339 " "
+            MsgVariantParams@339..375
+              LBrace@339..340 "{"
+              WhiteSpace@340..341 " "
+              RecordFieldDef@341..355
+                Ident@341..346 "owner"
+                Colon@346..347 ":"
+                WhiteSpace@347..348 " "
+                PathType@348..355
+                  Path@348..355
+                    PathSegment@348..355
+                      Ident@348..355 "Address"
+              Comma@355..356 ","
+              WhiteSpace@356..357 " "
+              RecordFieldDef@357..373
+                Ident@357..364 "spender"
+                Colon@364..365 ":"
+                WhiteSpace@365..366 " "
+                PathType@366..373
+                  Path@366..373
+                    PathSegment@366..373
+                      Ident@366..373 "Address"
+              WhiteSpace@373..374 " "
+              RBrace@374..375 "}"
+            WhiteSpace@375..376 " "
+            Arrow@376..378 "->"
+            WhiteSpace@378..379 " "
+            PathType@379..383
+              Path@379..383
+                PathSegment@379..383
+                  Ident@379..383 "u256"
+          Comma@383..384 ","
+          Newline@384..385 "\n"
+          WhiteSpace@385..387 "  "
+          Comment@387..450 "// Approves `spender` ..."
+          Newline@450..451 "\n"
+          WhiteSpace@451..453 "  "
+          MsgVariant@453..503
+            Ident@453..460 "Approve"
+            WhiteSpace@460..461 " "
+            MsgVariantParams@461..495
+              LBrace@461..462 "{"
+              WhiteSpace@462..463 " "
+              RecordFieldDef@463..479
+                Ident@463..470 "spender"
+                Colon@470..471 ":"
+                WhiteSpace@471..472 " "
+                PathType@472..479
+                  Path@472..479
+                    PathSegment@472..479
+                      Ident@472..479 "Address"
+              Comma@479..480 ","
+              WhiteSpace@480..481 " "
+              RecordFieldDef@481..493
+                Ident@481..487 "amount"
+                Colon@487..488 ":"
+                WhiteSpace@488..489 " "
+                PathType@489..493
+                  Path@489..493
+                    PathSegment@489..493
+                      Ident@489..493 "u256"
+              WhiteSpace@493..494 " "
+              RBrace@494..495 "}"
+            WhiteSpace@495..496 " "
+            Arrow@496..498 "->"
+            WhiteSpace@498..499 " "
+            PathType@499..503
+              Path@499..503
+                PathSegment@499..503
+                  Ident@499..503 "bool"
+          Comma@503..504 ","
+          Newline@504..505 "\n"
+          WhiteSpace@505..507 "  "
+          Comment@507..588 "// Transfers `amount` ..."
+          Newline@588..589 "\n"
+          WhiteSpace@589..591 "  "
+          MsgVariant@591..656
+            Ident@591..603 "TransferFrom"
+            WhiteSpace@603..604 " "
+            MsgVariantParams@604..648
+              LBrace@604..605 "{"
+              WhiteSpace@605..606 " "
+              RecordFieldDef@606..619
+                Ident@606..610 "from"
+                Colon@610..611 ":"
+                WhiteSpace@611..612 " "
+                PathType@612..619
+                  Path@612..619
+                    PathSegment@612..619
+                      Ident@612..619 "Address"
+              Comma@619..620 ","
+              WhiteSpace@620..621 " "
+              RecordFieldDef@621..632
+                Ident@621..623 "to"
+                Colon@623..624 ":"
+                WhiteSpace@624..625 " "
+                PathType@625..632
+                  Path@625..632
+                    PathSegment@625..632
+                      Ident@625..632 "Address"
+              Comma@632..633 ","
+              WhiteSpace@633..634 " "
+              RecordFieldDef@634..646
+                Ident@634..640 "amount"
+                Colon@640..641 ":"
+                WhiteSpace@641..642 " "
+                PathType@642..646
+                  Path@642..646
+                    PathSegment@642..646
+                      Ident@642..646 "u256"
+              WhiteSpace@646..647 " "
+              RBrace@647..648 "}"
+            WhiteSpace@648..649 " "
+            Arrow@649..651 "->"
+            WhiteSpace@651..652 " "
+            PathType@652..656
+              Path@652..656
+                PathSegment@652..656
+                  Ident@652..656 "bool"
+          Comma@656..657 ","
+          Newline@657..658 "\n"
+          WhiteSpace@658..660 "  "
+          Comment@660..697 "// Optional: Returns  ..."
+          Newline@697..698 "\n"
+          WhiteSpace@698..700 "  "
+          MsgVariant@700..714
+            Ident@700..704 "Name"
+            WhiteSpace@704..705 " "
+            Arrow@705..707 "->"
+            WhiteSpace@707..708 " "
+            PathType@708..714
+              Path@708..714
+                PathSegment@708..714
+                  Ident@708..714 "string"
+          Comma@714..715 ","
+          Newline@715..716 "\n"
+          WhiteSpace@716..718 "  "
+          Comment@718..757 "// Optional: Returns  ..."
+          Newline@757..758 "\n"
+          WhiteSpace@758..760 "  "
+          MsgVariant@760..776
+            Ident@760..766 "Symbol"
+            WhiteSpace@766..767 " "
+            Arrow@767..769 "->"
+            WhiteSpace@769..770 " "
+            PathType@770..776
+              Path@770..776
+                PathSegment@770..776
+                  Ident@770..776 "string"
+          Comma@776..777 ","
+          Newline@777..778 "\n"
+          WhiteSpace@778..780 "  "
+          Comment@780..823 "// Optional: Returns  ..."
+          Newline@823..824 "\n"
+          WhiteSpace@824..826 "  "
+          MsgVariant@826..840
+            Ident@826..834 "Decimals"
+            WhiteSpace@834..835 " "
+            Arrow@835..837 "->"
+            WhiteSpace@837..838 " "
+            PathType@838..840
+              Path@838..840
+                PathSegment@838..840
+                  Ident@838..840 "u8"
+          Newline@840..841 "\n"
+          RBrace@841..842 "}"
+  Newline@842..843 "\n"

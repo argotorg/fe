@@ -1,0 +1,21 @@
+contract Foo {
+    x: i32,
+
+    init(owner: Address) uses (mut ctx, mut auth) {}
+
+    recv Erc20 {
+        Transfer { to, amount } -> bool
+          uses (ctx, mut store) {
+            true
+        }
+        Balance { addr } -> u256 {
+            0
+        }
+    }
+
+    recv {
+        RawCall { data } uses (mut ctx) {
+            ctx.revert()
+        }
+    }
+}

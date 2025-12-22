@@ -2,15 +2,22 @@ pub struct Storage {
     value: u64,
 }
 
+pub fn example() {
+    let mut st = Storage { value: 0 }
+    with (Storage = st) {
+        mint_twice(5)
+    }
+}
+
+pub fn mint_twice(_ amount: u64)
+  uses (mut Storage)
+{
+    mint(amount)
+    mint(amount)
+}
+
 pub fn mint(_ amount: u64)
   uses (mut st: Storage)
 {
     st.value += amount
-}
-
-pub fn example() {
-    let mut st = Storage { value: 0 }
-    with (Storage = st) {
-        mint(5)
-    }
 }

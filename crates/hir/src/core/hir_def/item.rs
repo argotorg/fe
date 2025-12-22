@@ -10,12 +10,13 @@ use parser::ast;
 
 use super::{
     AttrListId, Body, EffectParamListId, FuncParamListId, FuncParamName, GenericParamListId,
-    HirIngot, IdentId, Partial, TupleTypeId, TypeBound, TypeId, UseAlias, WhereClauseId,
+    HirIngot, IdentId, Partial, Pat, PatId, TupleTypeId, TypeBound, TypeId, UseAlias,
+    WhereClauseId,
     scope_graph::{ScopeGraph, ScopeId},
 };
 use crate::{
     HirDb,
-    hir_def::TraitRefId,
+    hir_def::{PathId, TraitRefId},
     lower,
     span::{
         DynLazySpan, HirOrigin,
@@ -423,8 +424,8 @@ impl<'db> TopLevelMod<'db> {
         self,
         db: &'db dyn HirDb,
     ) -> impl Iterator<Item = TopLevelMod<'db>> + 'db {
-        // let ingot = self.index(db).containing_ingot(db, location)
         let module_tree = self.ingot(db).module_tree(db);
+        // Error is logged by tree_node() if module not found
         module_tree.children(self)
     }
 
@@ -448,6 +449,7 @@ impl<'db> TopLevelMod<'db> {
 
     pub fn parent(self, db: &'db dyn HirDb) -> Option<TopLevelMod<'db>> {
         let module_tree = self.ingot(db).module_tree(db);
+        // Error is logged by tree_node() if module not found
         module_tree.parent(self)
     }
 
@@ -565,6 +567,19 @@ impl<'db> TopLevelMod<'db> {
             })
             .collect()
     }
+
+    /// Returns all mods in the top level module including ones in nested
+    /// modules.
+    #[salsa::tracked(return_ref)]
+    pub fn all_mods(self, db: &'db dyn HirDb) -> Vec<Mod<'db>> {
+        self.all_items(db)
+            .iter()
+            .filter_map(|item| match item {
+                ItemKind::Mod(mod_) => Some(*mod_),
+                _ => None,
+            })
+            .collect()
+    }
 }
 
 #[salsa::tracked]
@@ -612,7 +627,7 @@ pub struct Func<'db> {
     pub(in crate::core) generic_params: GenericParamListId<'db>,
     pub(in crate::core) where_clause: WhereClauseId<'db>,
     pub(in crate::core) params_list: Partial<FuncParamListId<'db>>,
-    pub(in crate::core) effects: EffectParamListId<'db>,
+    pub(crate) effects: EffectParamListId<'db>,
     pub(in crate::core) ret_type_ref: Option<TypeId<'db>>,
     pub modifier: ItemModifier,
     pub body: Option<Body<'db>>,
@@ -732,6 +747,10 @@ pub struct Contract<'db> {
     pub(in crate::core) attributes: AttrListId<'db>,
     pub vis: Visibility,
     pub(in crate::core) fields: FieldDefListId<'db>,
+    /// `uses` clause attached to the contract header
+    pub effects: EffectParamListId<'db>,
+    /// Receive handlers declared in the contract
+    pub recvs: ContractRecvListId<'db>,
     pub top_mod: TopLevelMod<'db>,
 
     #[return_ref]
@@ -744,6 +763,85 @@ impl<'db> Contract<'db> {
 
     pub fn scope(self) -> ScopeId<'db> {
         ScopeId::from_item(self.into())
+    }
+
+    pub fn init_func(self, db: &'db dyn HirDb) -> Option<Func<'db>> {
+        let s_graph = self.top_mod(db).scope_graph(db);
+        let scope = ScopeId::from_item(self.into());
+        s_graph.child_items(scope).find_map(|item| match item {
+            ItemKind::Func(func) => {
+                if let Some(name) = func.name(db).to_opt()
+                    && name.data(db).as_str() == "init"
+                {
+                    Some(func)
+                } else {
+                    None
+                }
+            }
+            _ => None,
+        })
+    }
+
+    pub fn recv_arm(
+        self,
+        db: &'db dyn HirDb,
+        recv_idx: usize,
+        arm_idx: usize,
+    ) -> Option<ContractRecvArm<'db>> {
+        self.recvs(db)
+            .data(db)
+            .get(recv_idx)?
+            .arms
+            .data(db)
+            .get(arm_idx)
+            .copied()
+    }
+}
+
+#[salsa::interned]
+#[derive(Debug)]
+pub struct ContractRecvListId<'db> {
+    #[return_ref]
+    pub data: Vec<ContractRecv<'db>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct ContractRecv<'db> {
+    pub msg_path: Option<PathId<'db>>,
+    pub arms: ContractRecvArmListId<'db>,
+}
+
+#[salsa::interned]
+#[derive(Debug)]
+pub struct ContractRecvArmListId<'db> {
+    #[return_ref]
+    pub data: Vec<ContractRecvArm<'db>>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct ContractRecvArm<'db> {
+    pub pat: PatId,
+    pub ret_ty: Option<TypeId<'db>>,
+    pub effects: EffectParamListId<'db>,
+    pub body: Body<'db>,
+}
+
+impl<'db> ContractRecvArm<'db> {
+    /// Returns the path from the arm's pattern, if it has one.
+    ///
+    /// This extracts the path from patterns like `Foo::Bar`, `Foo::Bar(..)`,
+    /// or `Foo::Bar { .. }`.
+    pub fn variant_path(&self, db: &'db dyn HirDb) -> Option<PathId<'db>> {
+        let Partial::Present(pat) = self.pat.data(db, self.body) else {
+            return None;
+        };
+
+        match pat {
+            Pat::Path(Partial::Present(path), ..)
+            | Pat::PathTuple(Partial::Present(path), ..)
+            | Pat::Record(Partial::Present(path), ..) => Some(*path),
+            _ => None,
+        }
     }
 }
 
@@ -981,12 +1079,12 @@ pub struct ImplTrait<'db> {
     id: TrackedItemId<'db>,
 
     pub(in crate::core) trait_ref: Partial<TraitRefId<'db>>,
-    pub(in crate::core) type_ref: Partial<TypeId<'db>>,
+    pub(crate) type_ref: Partial<TypeId<'db>>,
     pub(in crate::core) attributes: AttrListId<'db>,
     pub(in crate::core) generic_params: GenericParamListId<'db>,
     pub(in crate::core) where_clause: WhereClauseId<'db>,
     #[return_ref]
-    pub(in crate::core) types: Vec<AssocTyDef<'db>>,
+    pub(crate) types: Vec<AssocTyDef<'db>>,
     #[return_ref]
     pub(in crate::core) consts: Vec<AssocConstDef<'db>>,
     pub top_mod: TopLevelMod<'db>,
@@ -997,6 +1095,16 @@ pub struct ImplTrait<'db> {
 impl<'db> ImplTrait<'db> {
     pub fn span(self) -> LazyImplTraitSpan<'db> {
         LazyImplTraitSpan::new(self)
+    }
+
+    /// Returns the trait reference for this impl.
+    pub fn hir_trait_ref(self, db: &'db dyn HirDb) -> Partial<TraitRefId<'db>> {
+        self.trait_ref(db)
+    }
+
+    /// Returns the raw associated const definitions from the HIR.
+    pub fn hir_consts(self, db: &'db dyn HirDb) -> &'db [AssocConstDef<'db>] {
+        self.consts(db)
     }
 
     pub fn associated_type_span(
@@ -1038,7 +1146,7 @@ impl<'db> ImplTrait<'db> {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, salsa::Update)]
 pub struct AssocTyDef<'db> {
     pub name: Partial<IdentId<'db>>,
-    pub(in crate::core) type_ref: Partial<TypeId<'db>>,
+    pub(crate) type_ref: Partial<TypeId<'db>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, salsa::Update)]
@@ -1389,6 +1497,7 @@ pub enum TrackedItemVariant<'db> {
     Trait(Partial<IdentId<'db>>),
     ImplTrait(Partial<TraitRefId<'db>>, Partial<TypeId<'db>>),
     Const(Partial<IdentId<'db>>),
+    ContractRecvArm { recv_idx: u32, arm_idx: u32 },
     Use(Partial<super::UsePathId<'db>>),
     FuncBody,
     NamelessBody,

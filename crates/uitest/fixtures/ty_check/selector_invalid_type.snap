@@ -1,0 +1,20 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/selector_invalid_type.fe
+---
+error[9-0002]: selector must be an integer for msg variant `BadString`
+  ┌─ selector_invalid_type.fe:4:5
+  │
+4 │     #[selector = "not_a_number"]
+  │     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected integer literal
+  │
+  = use an integer literal like `#[selector = 0x01]`
+
+error[9-0002]: selector must be an integer for msg variant `BadBool`
+  ┌─ selector_invalid_type.fe:7:5
+  │
+7 │     #[selector = true]
+  │     ^^^^^^^^^^^^^^^^^^ expected integer literal
+  │
+  = use an integer literal like `#[selector = 0x01]`

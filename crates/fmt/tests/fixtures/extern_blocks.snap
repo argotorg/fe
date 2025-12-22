@@ -1,0 +1,12 @@
+---
+source: crates/fmt/tests/format_snapshots.rs
+expression: output
+input_file: tests/fixtures/extern_blocks.fe
+---
+extern {}
+
+extern {
+    pub unsafe fn write(loc: *u32, value: u32) -> bool
+    pub unsafe fn read(loc: *u32, len: usize) -> usize
+    fn foo()
+}

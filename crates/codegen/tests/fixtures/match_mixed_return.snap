@@ -6,7 +6,7 @@ input_file: tests/fixtures/match_mixed_return.fe
 ---
 function f(e) -> ret {
   let v0 := 0
-  switch get_discriminant(e, 0)
+  switch get_discriminant__MemPtr__d0292394fccae3e4(e)
     case 0 {
       ret := 0
       leave
@@ -19,16 +19,9 @@ function f(e) -> ret {
   let v1 := v0
   ret := add(v1, 1)
 }
-function get_discriminant(addr, space) -> ret {
-  let v0 := 0
-  switch space
-    case 0 {
-      v0 := mload(addr)
-    }
-    case 1 {
-      v0 := sload(addr)
-    }
-    default {
-    }
-  ret := v0
+function get_discriminant__MemPtr__d0292394fccae3e4(addr) -> ret {
+  ret := load__MemPtr__d0292394fccae3e4(addr)
+}
+function load__MemPtr__d0292394fccae3e4(addr) -> ret {
+  ret := mload(addr)
 }

@@ -19,14 +19,19 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
     ) -> Option<(Option<BasicBlockId>, ValueId)> {
         let (op, args) = self.intrinsic_stmt_args(expr)?;
         let value_id = self.ensure_value(expr);
-        if op == IntrinsicOp::ReturnData {
+        if matches!(op, IntrinsicOp::ReturnData | IntrinsicOp::Revert) {
             debug_assert!(
                 args.len() == 2,
-                "return_data should have exactly two arguments"
+                "terminating intrinsics should have exactly two arguments"
             );
             let offset = args[0];
             let size = args[1];
-            self.set_terminator(block, Terminator::ReturnData { offset, size });
+            let term = match op {
+                IntrinsicOp::ReturnData => Terminator::ReturnData { offset, size },
+                IntrinsicOp::Revert => Terminator::Revert { offset, size },
+                _ => unreachable!(),
+            };
+            self.set_terminator(block, term);
             return Some((None, value_id));
         }
         self.push_inst(block, MirInst::IntrinsicStmt { expr, op, args });
@@ -69,14 +74,18 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         match name.data(self.db).as_str() {
             "mload" => Some(IntrinsicOp::Mload),
             "calldataload" => Some(IntrinsicOp::Calldataload),
+            "addr_of" => Some(IntrinsicOp::AddrOf),
             "mstore" => Some(IntrinsicOp::Mstore),
             "mstore8" => Some(IntrinsicOp::Mstore8),
             "sload" => Some(IntrinsicOp::Sload),
             "sstore" => Some(IntrinsicOp::Sstore),
             "return_data" => Some(IntrinsicOp::ReturnData),
+            "revert" => Some(IntrinsicOp::Revert),
             "codecopy" => Some(IntrinsicOp::Codecopy),
             "code_region_offset" => Some(IntrinsicOp::CodeRegionOffset),
             "code_region_len" => Some(IntrinsicOp::CodeRegionLen),
+            "keccak" => Some(IntrinsicOp::Keccak),
+            "caller" => Some(IntrinsicOp::Caller),
             _ => None,
         }
     }

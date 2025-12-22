@@ -60,7 +60,7 @@ use crate::analysis::ty::trait_lower::{TraitRefLowerError, lower_trait_ref};
 use crate::analysis::ty::trait_resolution::constraint::{
     collect_adt_constraints, collect_constraints, collect_func_def_constraints,
 };
-use crate::analysis::ty::ty_def::TyData;
+use crate::analysis::ty::ty_def::{TyBase, TyData};
 use crate::analysis::ty::ty_lower::{GenericParamTypeSet, collect_generic_params};
 use crate::analysis::ty::visitor::{TyVisitor, walk_ty};
 use crate::analysis::ty::{
@@ -196,6 +196,40 @@ impl<'db> Func<'db> {
             self.span().sig().ret_ty(),
             assumptions,
         )
+    }
+
+    /// Returns the containing `impl Trait` block if this function is a method
+    /// inside an impl trait block.
+    pub fn containing_impl_trait(self, db: &'db dyn HirDb) -> Option<ImplTrait<'db>> {
+        match self.scope().parent(db)? {
+            ScopeId::Item(ItemKind::ImplTrait(impl_trait)) => Some(impl_trait),
+            _ => None,
+        }
+    }
+
+    /// Returns the containing trait if this function is a method inside a trait definition.
+    pub fn containing_trait(self, db: &'db dyn HirDb) -> Option<Trait<'db>> {
+        match self.scope().parent(db)? {
+            ScopeId::Item(ItemKind::Trait(trait_)) => Some(trait_),
+            _ => None,
+        }
+    }
+
+    /// If this function is a method inside an `impl Trait` block, returns the
+    /// corresponding trait method definition.
+    ///
+    /// Returns `None` if:
+    /// - This function is not inside an impl trait block
+    /// - The impl trait block's trait cannot be resolved
+    /// - No matching method exists in the trait definition
+    pub fn trait_method_def(self, db: &'db dyn HirAnalysisDb) -> Option<Func<'db>> {
+        let impl_trait = self.containing_impl_trait(db)?;
+        let trait_ = impl_trait.trait_def(db)?;
+        let method_name = self.name(db).to_opt()?;
+
+        trait_
+            .methods(db)
+            .find(|m| m.name(db).to_opt() == Some(method_name))
     }
 }
 
@@ -585,6 +619,14 @@ impl<'db> Func<'db> {
     }
 }
 
+/// Helper to check if a type's base matches a given ADT.
+fn matches_adt<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>, adt: AdtDef<'db>) -> bool {
+    match ty.base_ty(db).data(db) {
+        TyData::TyBase(TyBase::Adt(ty_adt)) => *ty_adt == adt,
+        _ => false,
+    }
+}
+
 impl<'db> Enum<'db> {
     pub fn len_variants(&self, db: &'db dyn HirDb) -> usize {
         self.variants_list(db).data(db).len()
@@ -602,6 +644,30 @@ impl<'db> Enum<'db> {
     /// Semantic ADT definition for this enum (cached via tracked query).
     pub fn as_adt(self, db: &'db dyn HirAnalysisDb) -> AdtDef<'db> {
         lower_adt(db, AdtRef::from(self))
+    }
+
+    /// Returns all inherent `impl` blocks for this enum within the same ingot.
+    pub fn all_impls(self, db: &'db dyn HirAnalysisDb) -> Vec<Impl<'db>> {
+        let adt = self.as_adt(db);
+        self.top_mod(db)
+            .ingot(db)
+            .all_impls(db)
+            .iter()
+            .copied()
+            .filter(|impl_| matches_adt(db, impl_.ty(db), adt))
+            .collect()
+    }
+
+    /// Returns all `impl Trait for Enum` blocks for this enum within the same ingot.
+    pub fn all_impl_traits(self, db: &'db dyn HirAnalysisDb) -> Vec<ImplTrait<'db>> {
+        let adt = self.as_adt(db);
+        self.top_mod(db)
+            .ingot(db)
+            .all_impl_traits(db)
+            .iter()
+            .copied()
+            .filter(|impl_trait| matches_adt(db, impl_trait.ty(db), adt))
+            .collect()
     }
 }
 
@@ -633,6 +699,30 @@ impl<'db> Struct<'db> {
     pub fn as_adt(self, db: &'db dyn HirAnalysisDb) -> AdtDef<'db> {
         lower_adt(db, AdtRef::from(self))
     }
+
+    /// Returns all inherent `impl` blocks for this struct within the same ingot.
+    pub fn all_impls(self, db: &'db dyn HirAnalysisDb) -> Vec<Impl<'db>> {
+        let adt = self.as_adt(db);
+        self.top_mod(db)
+            .ingot(db)
+            .all_impls(db)
+            .iter()
+            .copied()
+            .filter(|impl_| matches_adt(db, impl_.ty(db), adt))
+            .collect()
+    }
+
+    /// Returns all `impl Trait for Struct` blocks for this struct within the same ingot.
+    pub fn all_impl_traits(self, db: &'db dyn HirAnalysisDb) -> Vec<ImplTrait<'db>> {
+        let adt = self.as_adt(db);
+        self.top_mod(db)
+            .ingot(db)
+            .all_impl_traits(db)
+            .iter()
+            .copied()
+            .filter(|impl_trait| matches_adt(db, impl_trait.ty(db), adt))
+            .collect()
+    }
 }
 
 impl<'db> Contract<'db> {
@@ -662,6 +752,30 @@ impl<'db> Contract<'db> {
     /// Semantic ADT definition for this contract (cached via tracked query).
     pub fn as_adt(self, db: &'db dyn HirAnalysisDb) -> AdtDef<'db> {
         lower_adt(db, AdtRef::from(self))
+    }
+
+    /// Returns all inherent `impl` blocks for this contract within the same ingot.
+    pub fn all_impls(self, db: &'db dyn HirAnalysisDb) -> Vec<Impl<'db>> {
+        let adt = self.as_adt(db);
+        self.top_mod(db)
+            .ingot(db)
+            .all_impls(db)
+            .iter()
+            .copied()
+            .filter(|impl_| matches_adt(db, impl_.ty(db), adt))
+            .collect()
+    }
+
+    /// Returns all `impl Trait for Contract` blocks for this contract within the same ingot.
+    pub fn all_impl_traits(self, db: &'db dyn HirAnalysisDb) -> Vec<ImplTrait<'db>> {
+        let adt = self.as_adt(db);
+        self.top_mod(db)
+            .ingot(db)
+            .all_impl_traits(db)
+            .iter()
+            .copied()
+            .filter(|impl_trait| matches_adt(db, impl_trait.ty(db), adt))
+            .collect()
     }
 }
 
@@ -728,9 +842,7 @@ impl<'db> WherePredicateView<'db> {
             HirTyKind::Path(p) => p.to_opt()?,
             _ => return None,
         };
-        if !path.is_bare_ident(db) {
-            return None;
-        }
+
         let ident = path.as_ident(db)?;
         let owner = GenericParamOwner::from_item_opt(self.owner_item())?;
         let params = owner.params_list(db).data(db);
@@ -1051,6 +1163,41 @@ impl<'db> Trait<'db> {
         db: &'db dyn HirAnalysisDb,
     ) -> IndexSet<Binder<TraitInstId<'db>>> {
         self.super_trait_bounds(db).map(Binder::bind).collect()
+    }
+
+    /// Returns all `impl Trait for Type` blocks that implement this trait
+    /// within the same ingot.
+    pub fn all_impl_traits(self, db: &'db dyn HirAnalysisDb) -> Vec<ImplTrait<'db>> {
+        self.ingot(db)
+            .all_impl_traits(db)
+            .iter()
+            .copied()
+            .filter(|impl_trait| impl_trait.trait_def(db) == Some(self))
+            .collect()
+    }
+
+    /// Returns all implementations of a specific method from this trait.
+    ///
+    /// Given a method name, finds all `impl Trait for Type` blocks that implement
+    /// this trait and returns the corresponding method implementations.
+    pub fn method_implementations(
+        self,
+        db: &'db dyn HirAnalysisDb,
+        method_name: IdentId<'db>,
+    ) -> Vec<Func<'db>> {
+        self.all_impl_traits(db)
+            .into_iter()
+            .filter_map(|impl_trait| {
+                impl_trait
+                    .methods(db)
+                    .find(|m| m.name(db).to_opt() == Some(method_name))
+            })
+            .collect()
+    }
+
+    /// Returns the method definition in this trait with the given name.
+    pub fn method(self, db: &'db dyn HirDb, name: IdentId<'db>) -> Option<Func<'db>> {
+        self.methods(db).find(|m| m.name(db).to_opt() == Some(name))
     }
 }
 
@@ -2216,5 +2363,19 @@ impl<'db> EnumVariant<'db> {
     pub fn as_adt_fields(self, db: &'db dyn HirAnalysisDb) -> &'db AdtField<'db> {
         let def = lower_adt(db, AdtRef::from(self.enum_));
         &def.fields(db)[self.idx as usize]
+    }
+}
+
+// Type traversal helpers ----------------------------------------------------
+
+impl<'db> TyId<'db> {
+    /// Returns the field parent for this type if it's a struct or contract.
+    /// This provides access to fields via `field_parent.fields(db)`.
+    pub fn field_parent(self, db: &'db dyn HirAnalysisDb) -> Option<FieldParent<'db>> {
+        match self.adt_ref(db)? {
+            AdtRef::Struct(s) => Some(FieldParent::Struct(s)),
+            AdtRef::Contract(c) => Some(FieldParent::Contract(c)),
+            AdtRef::Enum(_) => None, // Enums don't have direct field access
+        }
     }
 }

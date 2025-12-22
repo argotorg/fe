@@ -11,8 +11,14 @@ function foo_gen_value(self) -> ret {
   ret := make_value()
 }
 function foo_return_value(self) -> ret {
-  ret := foo_gen_value(self)
+  ret := foo_gen_value_mem(self)
 }
 function call_method(foo) -> ret {
-  ret := foo_return_value(foo)
+  ret := foo_return_value_mem(foo)
+}
+function foo_gen_value_mem(self) -> ret {
+  ret := make_value()
+}
+function foo_return_value_mem(self) -> ret {
+  ret := foo_gen_value_mem(self)
 }

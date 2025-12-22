@@ -2,9 +2,11 @@ pub use option::Option
 pub use result::Result
 pub use default::Default
 pub use dispatcher::Dispatcher
-pub use ops::*
+pub use message::MsgVariant
+pub use ops::{self, *}
 pub use ptr::*
 pub use enum_repr::*
+pub use storage_map::{StorageKey, StorageMap}
 pub use intrinsic::{
     calldatacopy,
     calldataload,
@@ -12,10 +14,14 @@ pub use intrinsic::{
     code_region_offset,
     codecopy,
     create2,
+    keccak,
     mload,
     mstore,
     mstore8,
+    addr_of,
     return_data,
+    revert,
+    caller,
     sload,
     sstore,
 }

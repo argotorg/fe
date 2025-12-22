@@ -1,0 +1,24 @@
+---
+source: crates/fmt/tests/format_snapshots.rs
+expression: output
+input_file: tests/fixtures/qualified_types.fe
+---
+// Qualified type formatting tests
+
+// Basic trait projection
+fn test_basic<T>(x: T) -> <T as Iterator>::Item where T: Iterator {
+    x.next()
+}
+
+// Nested qualified types
+fn test_nested<T>(x: T) -> <<T as IntoIterator>::IntoIter as Iterator>::Item
+where T: IntoIterator
+{
+    x.into_iter().next()
+}
+
+// Qualified type in type alias
+type Alias<T> = <T as Iterator>::Item
+
+// Qualified type in struct field
+struct Wrapper<T> { item: <T as Iterator>::Item }
