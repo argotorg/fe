@@ -4,7 +4,7 @@ use hir::analysis::ty::decision_tree::Projection;
 use hir::analysis::ty::simplified_pattern::ConstructorKind;
 use hir::analysis::ty::ty_def::{PrimTy, TyBase, TyData, TyId};
 use hir::hir_def::{
-    CallableDef, Expr, ExprId, LitKind, Stmt, StmtId,
+    CallableDef, Expr, ExprId, ItemKind, LitKind, Stmt, StmtId,
     expr::{ArithBinOp, BinOp, CompBinOp, LogicalBinOp, UnOp},
     scope_graph::ScopeId,
 };
@@ -644,5 +644,25 @@ impl<'db> FunctionEmitter<'db> {
         } else {
             Ok(format!("add({base}, {total_offset})"))
         }
+    }
+
+    /// Lowers effect arguments for a function call by looking up effect parameter bindings in the current state.
+    ///
+    /// * `func_def` - The function being called.
+    /// * `state` - Current binding state containing effect parameter values.
+    ///
+    /// Returns a vector of lowered effect argument expressions.
+    fn lower_effect_arguments(
+        &self,
+        func_def: hir::hir_def::Func<'db>,
+        state: &BlockState,
+    ) -> Result<Vec<String>, YulError> {
+        let mut effect_args = Vec::new();
+        for effect in func_def.effect_params(self.db) {
+            let binding = self.effect_binding_name(effect);
+            let yul_expr = state.resolve_name(&binding);
+            effect_args.push(yul_expr);
+        }
+        Ok(effect_args)
     }
 }
