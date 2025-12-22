@@ -21,6 +21,10 @@ pub enum PathKind<'db> {
 }
 
 impl<'db> PathId<'db> {
+    pub fn from_str(db: &'db dyn HirDb, s: &str) -> Self {
+        Self::from_ident(db, IdentId::new(db, s.to_string()))
+    }
+
     pub fn from_ident(db: &'db dyn HirDb, ident: IdentId<'db>) -> Self {
         Self::new(
             db,
@@ -151,6 +155,10 @@ impl<'db> PathId<'db> {
 
     pub fn push(self, db: &'db dyn HirDb, kind: PathKind<'db>) -> Self {
         Self::new(db, kind, Some(self))
+    }
+
+    pub fn push_str(self, db: &'db dyn HirDb, s: &str) -> Self {
+        self.push_ident(db, IdentId::new(db, s.to_string()))
     }
 
     pub fn push_ident(self, db: &'db dyn HirDb, ident: IdentId<'db>) -> Self {

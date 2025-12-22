@@ -1,13 +1,17 @@
 //! Expression and value lowering helpers shared across the Yul emitter.
 
+use hir::analysis::ty::decision_tree::Projection;
+use hir::analysis::ty::simplified_pattern::ConstructorKind;
+use hir::analysis::ty::ty_def::{PrimTy, TyBase, TyData, TyId};
 use hir::hir_def::{
-    Attr, CallableDef, Expr, ExprId, Func, ItemKind, LitKind, Stmt, StmtId,
+    CallableDef, Expr, ExprId, LitKind, Stmt, StmtId,
     expr::{ArithBinOp, BinOp, CompBinOp, LogicalBinOp, UnOp},
     scope_graph::ScopeId,
 };
 use mir::{
     CallOrigin, ValueId, ValueOrigin,
-    ir::{ContractFunctionKind, FieldPtrOrigin, SyntheticValue},
+    ir::{FieldPtrOrigin, Place, SyntheticValue},
+    layout,
 };
 
 use crate::yul::{doc::YulDoc, state::BlockState};
@@ -35,18 +39,32 @@ impl<'db> FunctionEmitter<'db> {
             return Ok(temp.clone());
         }
         let value = self.mir_func.body.value(value_id);
+        let value_ty = value.ty;
         match &value.origin {
             ValueOrigin::Expr(expr_id) => {
                 if let Some(temp) = self.match_values.get(expr_id) {
-                    Ok(temp.clone())
-                } else {
-                    self.lower_expr(*expr_id, state)
+                    return Ok(temp.clone());
                 }
+                // Check if there's a better (non-Expr) value for this expression in expr_values.
+                // This can happen when a tuple was pre-lowered via emit_alloc but the call's
+                // args still reference an old ValueId with ValueOrigin::Expr.
+                if let Some(better_value_id) = self.mir_func.body.expr_values.get(expr_id)
+                    && *better_value_id != value_id
+                {
+                    let better_value = self.mir_func.body.value(*better_value_id);
+                    if !matches!(&better_value.origin, ValueOrigin::Expr(_)) {
+                        return self.lower_value(*better_value_id, state);
+                    }
+                }
+                self.lower_expr(*expr_id, state)
             }
+            ValueOrigin::BindingName(name) => Ok(state.resolve_name(name)),
             ValueOrigin::Call(call) => self.lower_call_value(call, state),
             ValueOrigin::Intrinsic(intr) => self.lower_intrinsic_value(intr, state),
             ValueOrigin::Synthetic(synth) => self.lower_synthetic_value(synth),
             ValueOrigin::FieldPtr(field_ptr) => self.lower_field_ptr(field_ptr, state),
+            ValueOrigin::PlaceLoad(place) => self.lower_place_load(place, value_ty, state),
+            ValueOrigin::PlaceRef(place) => self.lower_place_ref(place, state),
             _ => Err(YulError::Unsupported(
                 "only expression-derived values are supported".into(),
             )),
@@ -72,6 +90,7 @@ impl<'db> FunctionEmitter<'db> {
         }
         if let Some(value_id) = self.mir_func.body.expr_values.get(&expr_id) {
             let value = self.mir_func.body.value(*value_id);
+            let value_ty = value.ty;
             match &value.origin {
                 ValueOrigin::Call(call) => return self.lower_call_value(call, state),
                 ValueOrigin::Synthetic(synth) => {
@@ -82,6 +101,12 @@ impl<'db> FunctionEmitter<'db> {
                 }
                 ValueOrigin::Intrinsic(intr) => {
                     return self.lower_intrinsic_value(intr, state);
+                }
+                ValueOrigin::PlaceLoad(place) => {
+                    return self.lower_place_load(place, value_ty, state);
+                }
+                ValueOrigin::PlaceRef(place) => {
+                    return self.lower_place_ref(place, state);
                 }
                 // For Expr origins, we just continue to process the expression below
                 // to avoid infinite recursion when expr_values[expr_id] points to Expr(expr_id)
@@ -107,12 +132,29 @@ impl<'db> FunctionEmitter<'db> {
                     UnOp::BitNot => Ok(format!("not({value})")),
                 }
             }
-            Expr::Tuple(values) => {
-                let parts = values
-                    .iter()
-                    .map(|expr| self.lower_expr(*expr, state))
-                    .collect::<Result<Vec<_>, _>>()?;
-                Ok(format!("tuple({})", parts.join(", ")))
+            Expr::Tuple(elems) => {
+                // Tuples should be lowered to struct-like alloc+store_field operations in MIR.
+                // If we reach here, something went wrong in MIR lowering.
+                // Check if this is a unit tuple, which doesn't need allocation
+                if elems.is_empty() {
+                    return Ok("0".to_string()); // Unit tuple represented as 0
+                }
+                // Non-empty tuples must have been lowered - panic with diagnostic info
+                let func_name = self
+                    .mir_func
+                    .func
+                    .name(self.db)
+                    .to_opt()
+                    .map(|n| n.data(self.db).to_string())
+                    .unwrap_or_default();
+                panic!(
+                    "tuple expression with {} elements was not lowered before codegen in function '{}'. \
+                     expr_id: {:?}, expr_values contains: {}",
+                    elems.len(),
+                    func_name,
+                    expr_id,
+                    self.mir_func.body.expr_values.contains_key(&expr_id)
+                );
             }
             Expr::Call(callee, call_args) => {
                 let callee_expr = self.lower_expr(*callee, state)?;
@@ -217,9 +259,13 @@ impl<'db> FunctionEmitter<'db> {
                 }
             }
             Expr::Path(path) => {
-                let original = self
-                    .path_ident(*path)
-                    .ok_or_else(|| YulError::Unsupported("unsupported path expression".into()))?;
+                let original = self.path_ident(*path).ok_or_else(|| {
+                    let pretty = path
+                        .to_opt()
+                        .map(|path| path.pretty_print(self.db))
+                        .unwrap_or_else(|| "_".to_string());
+                    YulError::Unsupported(format!("unsupported path expression `{pretty}`"))
+                })?;
                 Ok(state.resolve_name(&original))
             }
             Expr::Field(..) => {
@@ -310,9 +356,8 @@ impl<'db> FunctionEmitter<'db> {
         for &arg in &call.args {
             lowered_args.push(self.lower_value(arg, state)?);
         }
-        if let CallableDef::Func(func_def) = call.callable.callable_def {
-            let effect_args = self.lower_effect_arguments(func_def, state)?;
-            lowered_args.extend(effect_args);
+        for &arg in &call.effect_args {
+            lowered_args.push(self.lower_value(arg, state)?);
         }
         Self::lower_and_format_call(&callee, lowered_args)
     }
@@ -382,62 +427,6 @@ impl<'db> FunctionEmitter<'db> {
         ty.is_tuple(self.db) && ty.field_count(self.db) == 0
     }
 
-    /// Computes extra arguments for a callee's effect parameters and appends them to the call.
-    ///
-    /// * `func` - The function being called.
-    /// * `state` - Current block bindings used to resolve effect names to Yul locals.
-    ///
-    /// Returns any effect arguments that should be passed (empty for contract init/runtime).
-    fn lower_effect_arguments(
-        &self,
-        func: Func<'db>,
-        state: &BlockState,
-    ) -> Result<Vec<String>, YulError> {
-        if !func.has_effects(self.db) {
-            return Ok(Vec::new());
-        }
-        if self.function_contract_kind(func).is_some() {
-            return Ok(Vec::new());
-        }
-
-        let mut args = Vec::new();
-        for binding in func
-            .effect_params(self.db)
-            .map(|effect| self.effect_binding_name(effect))
-        {
-            if let Some(name) = state.binding(&binding) {
-                args.push(name);
-            } else {
-                return Err(YulError::Unsupported(format!(
-                    "missing effect binding `{binding}` when calling {}",
-                    function_name(self.db, func)
-                )));
-            }
-        }
-        Ok(args)
-    }
-
-    /// Detects whether `func` is a contract init/runtime entrypoint by inspecting attributes.
-    fn function_contract_kind(&self, func: Func<'db>) -> Option<ContractFunctionKind> {
-        let attrs = ItemKind::Func(func).attrs(self.db)?;
-        for attr in attrs.data(self.db) {
-            if let Attr::Normal(normal) = attr {
-                let Some(path) = normal.path.to_opt() else {
-                    continue;
-                };
-                let Some(name) = path.as_ident(self.db) else {
-                    continue;
-                };
-                match name.data(self.db).as_str() {
-                    "contract_init" => return Some(ContractFunctionKind::Init),
-                    "contract_runtime" => return Some(ContractFunctionKind::Runtime),
-                    _ => {}
-                }
-            }
-        }
-        None
-    }
-
     /// Lowers a FieldPtr (pointer arithmetic for nested struct access) into a Yul add expression.
     ///
     /// * `field_ptr` - The FieldPtrOrigin containing base pointer and offset.
@@ -453,7 +442,207 @@ impl<'db> FunctionEmitter<'db> {
         if field_ptr.offset_bytes == 0 {
             Ok(base)
         } else {
-            Ok(format!("add({}, {})", base, field_ptr.offset_bytes))
+            let offset = match field_ptr.addr_space {
+                mir::ir::AddressSpaceKind::Memory => field_ptr.offset_bytes,
+                mir::ir::AddressSpaceKind::Storage => field_ptr.offset_bytes / 32,
+            };
+            Ok(format!("add({}, {})", base, offset))
+        }
+    }
+
+    /// Lowers a PlaceLoad (load value from a place with projection path).
+    ///
+    /// Walks the projection path to compute the byte offset from the base,
+    /// then emits a load instruction based on the address space, applying
+    /// the appropriate type conversion (masking, sign extension, etc.).
+    pub(super) fn lower_place_load(
+        &self,
+        place: &Place<'db>,
+        loaded_ty: TyId<'db>,
+        state: &BlockState,
+    ) -> Result<String, YulError> {
+        if layout::ty_size_bytes(self.db, loaded_ty) == Some(0) {
+            return Ok("0".into());
+        }
+        let addr = self.lower_place_address(place, state)?;
+        let raw_load = match place.address_space {
+            mir::ir::AddressSpaceKind::Memory => format!("mload({addr})"),
+            mir::ir::AddressSpaceKind::Storage => format!("sload({addr})"),
+        };
+
+        // Apply type-specific conversion (LoadableScalar::from_word equivalent)
+        Ok(self.apply_from_word_conversion(&raw_load, loaded_ty))
+    }
+
+    /// Applies the LoadableScalar::from_word conversion for a given type.
+    ///
+    /// This mirrors the Fe core library's from_word implementations defined in:
+    /// - `library/core/src/ptr.fe` (LoadableScalar trait)
+    /// - `library/core/src/enum_repr.fe` (enum discriminant handling)
+    ///
+    /// Conversion rules:
+    /// - bool: word != 0
+    /// - u8/u16/u32/u64/u128: mask to appropriate width
+    /// - u256: identity
+    /// - i8/i16/i32/i64/i128/i256: sign extension
+    ///
+    /// NOTE: This is a single source of truth for codegen. If the core library
+    /// semantics change, this function must be updated to match.
+    fn apply_from_word_conversion(&self, raw_load: &str, ty: TyId<'db>) -> String {
+        let base_ty = ty.base_ty(self.db);
+        if let TyData::TyBase(TyBase::Prim(prim)) = base_ty.data(self.db) {
+            match prim {
+                PrimTy::Bool => {
+                    // bool: iszero(eq(word, 0)) which is equivalent to word != 0
+                    format!("iszero(eq({raw_load}, 0))")
+                }
+                PrimTy::U8 => format!("and({raw_load}, 0xff)"),
+                PrimTy::U16 => format!("and({raw_load}, 0xffff)"),
+                PrimTy::U32 => format!("and({raw_load}, 0xffffffff)"),
+                PrimTy::U64 => format!("and({raw_load}, 0xffffffffffffffff)"),
+                PrimTy::U128 => {
+                    format!("and({raw_load}, 0xffffffffffffffffffffffffffffffff)")
+                }
+                PrimTy::U256 | PrimTy::Usize => {
+                    // No conversion needed for full-width unsigned
+                    raw_load.to_string()
+                }
+                PrimTy::I8 => {
+                    // Sign extension for i8
+                    format!("signextend(0, and({raw_load}, 0xff))")
+                }
+                PrimTy::I16 => {
+                    format!("signextend(1, and({raw_load}, 0xffff))")
+                }
+                PrimTy::I32 => {
+                    format!("signextend(3, and({raw_load}, 0xffffffff))")
+                }
+                PrimTy::I64 => {
+                    format!("signextend(7, and({raw_load}, 0xffffffffffffffff))")
+                }
+                PrimTy::I128 => {
+                    format!("signextend(15, and({raw_load}, 0xffffffffffffffffffffffffffffffff))")
+                }
+                PrimTy::I256 | PrimTy::Isize => {
+                    // Full-width signed doesn't need masking, sign is already there
+                    raw_load.to_string()
+                }
+                // String, Array, Tuple, Ptr are aggregate/pointer types - no conversion
+                PrimTy::String | PrimTy::Array | PrimTy::Tuple(_) | PrimTy::Ptr => {
+                    raw_load.to_string()
+                }
+            }
+        } else {
+            // Non-primitive types (aggregates, etc.) - no conversion
+            raw_load.to_string()
+        }
+    }
+
+    /// Lowers a PlaceRef (reference to a place with projection path).
+    ///
+    /// Walks the projection path to compute the byte offset from the base,
+    /// returning the pointer without loading.
+    pub(super) fn lower_place_ref(
+        &self,
+        place: &Place<'db>,
+        state: &BlockState,
+    ) -> Result<String, YulError> {
+        self.lower_place_address(place, state)
+    }
+
+    /// Computes the address for a place by walking the projection path.
+    ///
+    /// Returns a Yul expression representing the memory/storage address.
+    /// For memory, computes byte offsets. For storage, computes slot offsets.
+    fn lower_place_address(
+        &self,
+        place: &Place<'db>,
+        state: &BlockState,
+    ) -> Result<String, YulError> {
+        let base = self.lower_value(place.base, state)?;
+
+        if place.projection.is_empty() {
+            return Ok(base);
+        }
+
+        // Get the base value's type to navigate projections
+        let base_value = self.mir_func.body.value(place.base);
+        let mut current_ty = base_value.ty;
+        let mut total_offset = 0;
+        let is_storage = matches!(place.address_space, mir::ir::AddressSpaceKind::Storage);
+
+        for proj in place.projection.iter() {
+            match proj {
+                Projection::Field(field_idx) => {
+                    let field_types = current_ty.field_types(self.db);
+                    if field_types.is_empty() {
+                        return Err(YulError::Unsupported(format!(
+                            "place projection: no field types for type but accessing field {}",
+                            field_idx
+                        )));
+                    }
+                    // Use slot-based offsets for storage, byte-based for memory
+                    total_offset += if is_storage {
+                        layout::field_offset_slots(self.db, current_ty, *field_idx)
+                    } else {
+                        layout::field_offset_bytes_or_word_aligned(self.db, current_ty, *field_idx)
+                    };
+                    // Update current type to the field's type
+                    current_ty = *field_types.get(*field_idx).ok_or_else(|| {
+                        YulError::Unsupported(format!(
+                            "place projection: target field {} out of bounds (have {} fields)",
+                            field_idx,
+                            field_types.len()
+                        ))
+                    })?;
+                }
+                Projection::VariantField {
+                    variant,
+                    enum_ty,
+                    field_idx,
+                } => {
+                    // Skip discriminant then compute field offset
+                    // Use slot-based offsets for storage, byte-based for memory
+                    if is_storage {
+                        total_offset += 1;
+                        total_offset += layout::variant_field_offset_slots(
+                            self.db, *enum_ty, *variant, *field_idx,
+                        );
+                    } else {
+                        total_offset += layout::DISCRIMINANT_SIZE_BYTES;
+                        total_offset += layout::variant_field_offset_bytes_or_word_aligned(
+                            self.db, *enum_ty, *variant, *field_idx,
+                        );
+                    }
+                    // Update current type to the field's type
+                    let ctor = ConstructorKind::Variant(*variant, *enum_ty);
+                    let field_types = ctor.field_types(self.db);
+                    current_ty = *field_types.get(*field_idx).ok_or_else(|| {
+                        YulError::Unsupported(format!(
+                            "place projection: target variant field {} out of bounds (have {} fields)",
+                            field_idx,
+                            field_types.len()
+                        ))
+                    })?;
+                }
+                // Index and Deref projections are not yet implemented
+                Projection::Index(_) => {
+                    return Err(YulError::Unsupported(
+                        "place projection: array index access not yet implemented".to_string(),
+                    ));
+                }
+                Projection::Deref => {
+                    return Err(YulError::Unsupported(
+                        "place projection: pointer dereference not yet implemented".to_string(),
+                    ));
+                }
+            }
+        }
+
+        if total_offset == 0 {
+            Ok(base)
+        } else {
+            Ok(format!("add({base}, {total_offset})"))
         }
     }
 }

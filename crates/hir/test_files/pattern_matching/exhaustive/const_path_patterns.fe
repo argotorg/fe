@@ -1,0 +1,13 @@
+// Const path patterns should be treated as values (not bindings).
+
+const A: u8 = 1
+const B: u8 = 2
+
+fn test_const_path_patterns(x: u8) -> u8 {
+    match x {
+        A => 10
+        B => 11
+        _ => 0
+    }
+}
+

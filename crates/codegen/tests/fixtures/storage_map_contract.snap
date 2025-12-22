@@ -1,6 +1,5 @@
 ---
 source: crates/codegen/tests/yul.rs
-assertion_line: 31
 expression: output
 input_file: tests/fixtures/storage_map_contract.fe
 ---
@@ -34,36 +33,41 @@ object "BalanceMap" {
       }
       function runtime() {
         let v0 := 0
-        let v1 := add(0, 32)
+        let v1 := 1
         let v2 := shr(224, calldataload(0))
         switch v2
           case 2630350600 {
             let v3 := calldataload(4)
-            let v4 := get_balance(v3, v0)
-            abi_encode(v4)
+            let v4 := v0
+            let v5 := get_balance(v3, v4)
+            abi_encode(v5)
           }
           case 1246470123 {
-            let v5 := calldataload(4)
-            let v6 := calldataload(36)
-            set_balance(v5, v6, v0)
+            let v6 := calldataload(4)
+            let v7 := calldataload(36)
+            let v8 := v0
+            set_balance(v6, v7, v8)
             abi_encode(0)
           }
           case 2430412327 {
-            let v7 := calldataload(4)
-            let v8 := calldataload(36)
-            let v9 := calldataload(68)
-            let v10 := transfer(v7, v8, v9, v0)
-            abi_encode(v10)
+            let v9 := calldataload(4)
+            let v10 := calldataload(36)
+            let v11 := calldataload(68)
+            let v12 := v0
+            let v13 := transfer(v9, v10, v11, v12)
+            abi_encode(v13)
           }
           case 3378517838 {
-            let v11 := calldataload(4)
-            let v12 := get_allowance(v11, v1)
-            abi_encode(v12)
+            let v14 := calldataload(4)
+            let v15 := v1
+            let v16 := get_allowance(v14, v15)
+            abi_encode(v16)
           }
           case 197806145 {
-            let v13 := calldataload(4)
-            let v14 := calldataload(36)
-            set_allowance(v13, v14, v1)
+            let v17 := calldataload(4)
+            let v18 := calldataload(36)
+            let v19 := v1
+            set_allowance(v17, v18, v19)
             abi_encode(0)
           }
           default {

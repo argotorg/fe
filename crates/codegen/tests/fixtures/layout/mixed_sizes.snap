@@ -1,0 +1,23 @@
+---
+source: crates/hir/tests/layout.rs
+assertion_line: 144
+expression: report
+input_file: test_files/layout/mixed_sizes.fe
+---
+struct PackedSmall:
+  size: 3 bytes
+  fields:
+    [0]: offset=0, size=1
+    [1]: offset=1, size=1
+    [2]: offset=2, size=1
+struct PackedMixed:
+  size: 34 bytes
+  fields:
+    [0]: offset=0, size=1
+    [1]: offset=1, size=32
+    [2]: offset=33, size=1
+struct ReverseMixed:
+  size: 33 bytes
+  fields:
+    [0]: offset=0, size=32
+    [1]: offset=32, size=1

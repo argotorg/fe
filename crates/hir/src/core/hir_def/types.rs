@@ -38,13 +38,31 @@ impl<'db> TypeId<'db> {
             TypeKind::Path(p) => p
                 .to_opt()
                 .map_or_else(|| "<missing>".into(), |p| p.pretty_print(db)),
-            TypeKind::Tuple(tup) => tup
-                .data(db)
-                .iter()
-                .map(print_ty)
-                .collect::<Vec<_>>()
-                .join(", "),
-            TypeKind::Array(t, _) => format!("[{}; {{..}}]", print_ty(t)),
+            TypeKind::Tuple(tup) => {
+                let elems = tup
+                    .data(db)
+                    .iter()
+                    .map(print_ty)
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                format!("({})", elems)
+            }
+            TypeKind::Array(t, len_body) => {
+                let elem_ty = print_ty(t);
+                let len_str = len_body
+                    .to_opt()
+                    .map(|body| {
+                        use crate::hir_def::{Expr, LitKind};
+                        // Try to get the body expression and print it
+                        let expr_id = body.expr(db);
+                        match body.exprs(db).get(expr_id).and_then(|e| e.clone().to_opt()) {
+                            Some(Expr::Lit(LitKind::Int(int_id))) => int_id.data(db).to_string(),
+                            _ => "<expr>".into(),
+                        }
+                    })
+                    .unwrap_or_else(|| "<missing>".into());
+                format!("[{}; {}]", elem_ty, len_str)
+            }
             TypeKind::Never => "!".into(),
         }
     }

@@ -25,10 +25,13 @@ pub use callable::Callable;
 use env::TyCheckEnv;
 pub use env::{EffectParamSite, ExprProp, LocalBinding, ParamSite};
 pub(super) use expr::TraitOps;
-use owner::BodyOwner;
+pub use owner::BodyOwner;
+pub use owner::EffectParamOwner;
 
 use rustc_hash::{FxHashMap, FxHashSet};
 use salsa::Update;
+
+use crate::analysis::place::Place;
 
 use super::{
     diagnostics::{BodyDiag, FuncBodyDiag, TyDiagCollection, TyLowerDiag},
@@ -53,10 +56,10 @@ pub fn check_func_body<'db>(
     db: &'db dyn HirAnalysisDb,
     func: Func<'db>,
 ) -> (Vec<FuncBodyDiag<'db>>, TypedBody<'db>) {
-    check_body_owner(db, BodyOwner::Func(func))
+    check_body(db, BodyOwner::Func(func))
 }
 
-pub(super) fn check_body_owner<'db>(
+pub(super) fn check_body<'db>(
     db: &'db dyn HirAnalysisDb,
     owner: BodyOwner<'db>,
 ) -> (Vec<FuncBodyDiag<'db>>, TypedBody<'db>) {
@@ -85,15 +88,24 @@ impl<'db> TyChecker<'db> {
     }
 
     fn run(&mut self) {
+        self.check_effect_param_keys_resolve();
+
         if let BodyOwner::ContractRecvArm {
             contract,
-            msg_path,
-            arm,
-            ..
+            recv_idx,
+            arm_idx,
         } = self.env.owner()
         {
             let recv_span = self.env.owner().recv_span().unwrap();
             let arm_span = self.env.owner().recv_arm_span().unwrap();
+            let arm = contract
+                .recv_arm(self.db, recv_idx as usize, arm_idx as usize)
+                .expect("recv arm exists");
+            let msg_path = contract
+                .recvs(self.db)
+                .data(self.db)
+                .get(recv_idx as usize)
+                .and_then(|r| r.msg_path);
             let (pat_ty, ret_ty) =
                 self.resolve_recv_arm_types(contract, msg_path, arm, recv_span.path(), arm_span);
             self.expected = ret_ty;
@@ -104,6 +116,129 @@ impl<'db> TyChecker<'db> {
 
         let root_expr = self.env.body().expr(self.db);
         self.check_expr(root_expr, self.expected);
+    }
+
+    fn check_effect_param_keys_resolve(&mut self) {
+        match self.env.owner() {
+            owner @ BodyOwner::Func(func) => {
+                if let Some(crate::hir_def::ItemKind::Contract(contract)) =
+                    func.scope().parent_item(self.db)
+                {
+                    self.check_contract_scoped_effect_list(owner, contract, func.effects(self.db));
+                } else {
+                    self.check_free_func_effect_list(func, func.effects(self.db));
+                }
+            }
+            owner @ BodyOwner::ContractRecvArm { contract, .. } => {
+                self.check_contract_scoped_effect_list(owner, contract, owner.effects(self.db));
+            }
+        }
+    }
+
+    fn check_free_func_effect_list(
+        &mut self,
+        func: Func<'db>,
+        effects: crate::hir_def::EffectParamListId<'db>,
+    ) {
+        for (idx, effect) in effects.data(self.db).iter().enumerate() {
+            let Some(key_path) = effect.key_path.to_opt() else {
+                continue;
+            };
+
+            if crate::analysis::name_resolution::resolve_path(
+                self.db,
+                key_path,
+                func.scope(),
+                self.env.assumptions(),
+                false,
+            )
+            .is_err()
+            {
+                self.push_diag(BodyDiag::InvalidEffectKey {
+                    owner: EffectParamOwner::Func(func),
+                    key: key_path,
+                    idx,
+                });
+            }
+        }
+    }
+
+    fn check_contract_scoped_effect_list(
+        &mut self,
+        owner: BodyOwner<'db>,
+        contract: Contract<'db>,
+        effects: crate::hir_def::EffectParamListId<'db>,
+    ) {
+        let owner = match owner {
+            BodyOwner::Func(func) => EffectParamOwner::Func(func),
+            BodyOwner::ContractRecvArm {
+                contract,
+                recv_idx,
+                arm_idx,
+            } => EffectParamOwner::ContractRecvArm {
+                contract,
+                recv_idx,
+                arm_idx,
+            },
+        };
+        let contract_effect_names: FxHashSet<_> = contract
+            .effects(self.db)
+            .data(self.db)
+            .iter()
+            .filter_map(|e| e.name)
+            .collect();
+        let contract_field_names: FxHashSet<_> = crate::hir_def::FieldParent::Contract(contract)
+            .fields(self.db)
+            .filter_map(|f| f.name(self.db))
+            .collect();
+
+        for (idx, effect) in effects.data(self.db).iter().enumerate() {
+            let Some(key_path) = effect.key_path.to_opt() else {
+                continue;
+            };
+
+            // Labeled effects are always type/trait keyed: `name: Type`.
+            if effect.name.is_some() {
+                if crate::analysis::name_resolution::resolve_path(
+                    self.db,
+                    key_path,
+                    contract.scope(),
+                    self.env.assumptions(),
+                    false,
+                )
+                .is_err()
+                {
+                    self.push_diag(BodyDiag::InvalidEffectKey {
+                        owner,
+                        key: key_path,
+                        idx,
+                    });
+                }
+                continue;
+            }
+
+            // Unlabeled contract-scoped effects refer to a contract field name or an
+            // existing named contract effect (e.g. `ctx`).
+            let Some(ident) = key_path.ident(self.db).to_opt() else {
+                self.push_diag(BodyDiag::InvalidEffectKey {
+                    owner,
+                    key: key_path,
+                    idx,
+                });
+                continue;
+            };
+
+            if key_path.len(self.db) != 1
+                || (!contract_effect_names.contains(&ident)
+                    && !contract_field_names.contains(&ident))
+            {
+                self.push_diag(BodyDiag::InvalidEffectKey {
+                    owner,
+                    key: key_path,
+                    idx,
+                });
+            }
+        }
     }
 
     fn finish(self) -> (Vec<FuncBodyDiag<'db>>, TypedBody<'db>) {
@@ -151,7 +286,7 @@ impl<'db> TyChecker<'db> {
         ) {
             // Named recv block - resolve within the msg module
             match contract::resolve_variant_in_msg(self.db, msg_mod, variant_path, assumptions) {
-                contract::VariantResolution::Ok(resolved) => resolved,
+                Ok(resolved) => resolved,
                 _ => {
                     // Return invalid types to suppress spurious type mismatch errors
                     // when the pattern doesn't resolve to a valid msg variant
@@ -161,7 +296,7 @@ impl<'db> TyChecker<'db> {
         } else if msg_path.is_none() {
             // Bare recv block - resolve from contract scope
             match contract::resolve_variant_bare(self.db, contract, variant_path, assumptions) {
-                contract::VariantResolution::Ok(resolved) => resolved,
+                Ok(resolved) => resolved,
                 _ => {
                     // Return invalid types to suppress spurious type mismatch errors
                     return (invalid_ty, invalid_ty);
@@ -441,16 +576,93 @@ impl<'db> TyChecker<'db> {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Update)]
+pub enum EffectArg<'db> {
+    Place(Place<'db>),
+    Value(ExprId),
+    Binding(LocalBinding<'db>),
+    Unknown,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Update)]
+pub enum EffectPassMode {
+    /// The provided effect is already a place; pass it directly.
+    ByPlace,
+    /// The provided effect is an rvalue; materialize it into a block-scoped temp place.
+    ByTempPlace,
+    ByValue,
+    Unknown,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Update)]
+pub struct ResolvedEffectArg<'db> {
+    pub param_idx: usize,
+    pub key: PathId<'db>,
+    pub arg: EffectArg<'db>,
+    pub pass_mode: EffectPassMode,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Update)]
 pub struct TypedBody<'db> {
     body: Option<Body<'db>>,
     pat_ty: FxHashMap<PatId, TyId<'db>>,
     expr_ty: FxHashMap<ExprId, ExprProp<'db>>,
     callables: FxHashMap<ExprId, Callable<'db>>,
+    call_effect_args: FxHashMap<ExprId, Vec<ResolvedEffectArg<'db>>>,
     /// Bindings for function parameters (indexed by param position)
     param_bindings: Vec<LocalBinding<'db>>,
     /// Bindings for local variables (keyed by the pattern that introduces them)
     pat_bindings: FxHashMap<PatId, LocalBinding<'db>>,
+}
+
+impl<'db> crate::analysis::ty::visitor::TyVisitable<'db> for TypedBody<'db> {
+    fn visit_with<V>(&self, visitor: &mut V)
+    where
+        V: crate::analysis::ty::visitor::TyVisitor<'db> + ?Sized,
+    {
+        for ty in self.pat_ty.values() {
+            ty.visit_with(visitor);
+        }
+        for prop in self.expr_ty.values() {
+            prop.visit_with(visitor);
+        }
+        for callable in self.callables.values() {
+            callable.visit_with(visitor);
+        }
+    }
+}
+
+impl<'db> crate::analysis::ty::fold::TyFoldable<'db> for TypedBody<'db> {
+    fn super_fold_with<F>(self, db: &'db dyn HirAnalysisDb, folder: &mut F) -> Self
+    where
+        F: crate::analysis::ty::fold::TyFolder<'db>,
+    {
+        let pat_ty = self
+            .pat_ty
+            .into_iter()
+            .map(|(pat, ty)| (pat, ty.fold_with(db, folder)))
+            .collect();
+        let expr_ty = self
+            .expr_ty
+            .into_iter()
+            .map(|(expr, prop)| (expr, prop.fold_with(db, folder)))
+            .collect();
+        let callables = self
+            .callables
+            .into_iter()
+            .map(|(expr, callable)| (expr, callable.fold_with(db, folder)))
+            .collect();
+
+        Self {
+            body: self.body,
+            pat_ty,
+            expr_ty,
+            callables,
+            call_effect_args: self.call_effect_args,
+            param_bindings: self.param_bindings,
+            pat_bindings: self.pat_bindings,
+        }
+    }
 }
 
 impl<'db> TypedBody<'db> {
@@ -478,6 +690,10 @@ impl<'db> TypedBody<'db> {
 
     pub fn callable_expr(&self, expr: ExprId) -> Option<&Callable<'db>> {
         self.callables.get(&expr)
+    }
+
+    pub fn call_effect_args(&self, call_expr: ExprId) -> Option<&[ResolvedEffectArg<'db>]> {
+        self.call_effect_args.get(&call_expr).map(|v| v.as_slice())
     }
 
     /// Get the binding for a function parameter by index.
@@ -508,6 +724,11 @@ impl<'db> TypedBody<'db> {
     /// Returns the identity of the binding (param index, pattern id, or effect param ident).
     pub fn expr_binding(&self, expr: ExprId) -> Option<LocalBinding<'db>> {
         self.expr_ty.get(&expr)?.binding
+    }
+
+    /// Returns a place representation for `expr` if it denotes an assignable location.
+    pub fn expr_place(&self, db: &'db dyn HirAnalysisDb, expr: ExprId) -> Option<Place<'db>> {
+        Place::from_expr(db, self, expr)
     }
 
     /// Find all expressions that reference the same local binding as the given expression.
@@ -556,6 +777,7 @@ impl<'db> TypedBody<'db> {
             pat_ty: FxHashMap::default(),
             expr_ty: FxHashMap::default(),
             callables: FxHashMap::default(),
+            call_effect_args: FxHashMap::default(),
             param_bindings: Vec::new(),
             pat_bindings: FxHashMap::default(),
         }

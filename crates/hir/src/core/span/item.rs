@@ -310,14 +310,73 @@ define_lazy_span_node!(
     }
 );
 
-define_lazy_span_node!(
-    LazyTraitItemListSpan,
-    ast::TraitItemList,
-    @idx {
-        (assoc_type, LazyTraitTypeSpan),
-        (assoc_const, LazyTraitConstSpan),
+define_lazy_span_node!(LazyTraitItemListSpan, ast::TraitItemList,);
+
+impl<'db> LazyTraitItemListSpan<'db> {
+    pub fn assoc_type(mut self, idx: usize) -> LazyTraitTypeSpan<'db> {
+        use crate::span::transition::{LazyArg, LazyTransitionFn, ResolvedOrigin};
+        use parser::ast::prelude::*;
+
+        fn f(origin: ResolvedOrigin, arg: LazyArg) -> ResolvedOrigin {
+            let idx = match arg {
+                LazyArg::Idx(idx) => idx,
+                _ => unreachable!(),
+            };
+
+            origin.map(|node| {
+                ast::TraitItemList::cast(node)
+                    .and_then(|list| {
+                        list.into_iter()
+                            .filter_map(|item| match item.kind() {
+                                ast::TraitItemKind::Type(ty) => Some(ty),
+                                _ => None,
+                            })
+                            .nth(idx)
+                    })
+                    .map(|n| n.syntax().clone().into())
+            })
+        }
+
+        let lazy_transition = LazyTransitionFn {
+            f,
+            arg: LazyArg::Idx(idx),
+        };
+        self.0.push(lazy_transition);
+        LazyTraitTypeSpan(self.0)
     }
-);
+
+    pub fn assoc_const(mut self, idx: usize) -> LazyTraitConstSpan<'db> {
+        use crate::span::transition::{LazyArg, LazyTransitionFn, ResolvedOrigin};
+        use parser::ast::prelude::*;
+
+        fn f(origin: ResolvedOrigin, arg: LazyArg) -> ResolvedOrigin {
+            let idx = match arg {
+                LazyArg::Idx(idx) => idx,
+                _ => unreachable!(),
+            };
+
+            origin.map(|node| {
+                ast::TraitItemList::cast(node)
+                    .and_then(|list| {
+                        list.into_iter()
+                            .filter_map(|item| match item.kind() {
+                                ast::TraitItemKind::Const(c) => Some(c),
+                                _ => None,
+                            })
+                            .nth(idx)
+                    })
+                    .map(|n| n.syntax().clone().into())
+            })
+        }
+
+        let lazy_transition = LazyTransitionFn {
+            f,
+            arg: LazyArg::Idx(idx),
+        };
+        self.0.push(lazy_transition);
+        LazyTraitConstSpan(self.0)
+    }
+}
 
 define_lazy_span_node!(
     LazyTraitTypeSpan,

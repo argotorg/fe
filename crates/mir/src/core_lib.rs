@@ -55,6 +55,7 @@ macro_rules! define_core_helpers {
         }
 
         /// Core helper types used during MIR lowering.
+        #[allow(clippy::enum_variant_names)]
         #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
         pub enum CoreHelperTy { $($t_variant,)+ }
 
@@ -93,6 +94,9 @@ define_core_helpers! {
     types {
         MemPtr => "core::ptr::MemPtr",
         StorPtr => "core::ptr::StorPtr",
+        EffectMemPtr => "core::effect_ref::MemPtr",
+        EffectStorPtr => "core::effect_ref::StorPtr",
+        EffectCalldataPtr => "core::effect_ref::CalldataPtr",
     }
 }
 

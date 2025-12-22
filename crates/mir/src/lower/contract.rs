@@ -56,7 +56,7 @@ fn contract_name_from_attr_args(db: &dyn HirAnalysisDb, args: &[AttrArg<'_>]) ->
             .to_opt()
             .and_then(|path| path.as_ident(db))
             .map(|id| id.data(db).to_string())
-            .or_else(|| match arg.value.clone().to_opt()? {
+            .or_else(|| match arg.value.clone()? {
                 AttrArgValue::Ident(id) => Some(id.data(db).to_string()),
                 _ => None,
             })

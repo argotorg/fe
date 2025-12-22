@@ -123,11 +123,18 @@ pub trait StorableScalar {
 
 /// Pointer abstraction over raw u256 addresses/slots.
 pub trait Ptr {
+    /// Byte width of a single addressable unit for this pointer.
+    ///
+    /// - `MemPtr` is byte-addressed (stride = 1).
+    /// - `StorPtr` is slot-addressed (stride = 32).
+    const STRIDE: usize
     fn load(addr: u256) -> u256
     fn store(addr: u256, value: u256)
 }
 
 impl Ptr for MemPtr {
+    const STRIDE: usize = 1
+
     fn load(addr: u256) -> u256 {
         mload(addr)
     }
@@ -138,6 +145,8 @@ impl Ptr for MemPtr {
 }
 
 impl Ptr for StorPtr {
+    const STRIDE: usize = 32
+
     fn load(addr: u256) -> u256 {
         sload(slot:addr)
     }
@@ -237,7 +246,7 @@ impl StorableScalar for isize {
     }
 }
 
-/// Generic field reader for byte-addressable structs.
+/// Generic field reader for `Ptr` addressable structs.
 pub fn get_field<P: Ptr, F: LoadableScalar>(ptr: u256, offset: u256) -> F {
     let target = ptr + offset
     F::from_word(word: P::load(addr:target))

@@ -34,6 +34,13 @@ parser.workspace = true
 test-utils.workspace = true
 url.workspace = true
 
+[features]
+testutils = ["dep:codespan-reporting"]
+
+[dependencies.codespan-reporting]
+workspace = true
+optional = true
+
 [dev-dependencies]
 ascii_tree = "0.1"
 camino.workspace = true

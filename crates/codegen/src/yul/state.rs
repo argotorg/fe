@@ -7,6 +7,9 @@ use std::cell::Cell;
 #[derive(Clone)]
 pub(super) struct BlockState {
     locals: FxHashMap<String, String>,
+    /// API stub: mapping from Fe bindings to the Yul expression representing their address.
+    /// Populated for future reference semantics support.
+    place_exprs: FxHashMap<String, String>,
     next_local: Rc<Cell<usize>>,
     /// Mapping from MIR ValueId index to Yul temp name for values bound in this scope.
     value_temps: FxHashMap<usize, String>,
@@ -17,6 +20,7 @@ impl BlockState {
     pub(super) fn new() -> Self {
         Self {
             locals: FxHashMap::default(),
+            place_exprs: FxHashMap::default(),
             next_local: Rc::new(Cell::new(0)),
             value_temps: FxHashMap::default(),
         }
@@ -46,9 +50,21 @@ impl BlockState {
         name
     }
 
+    /// Caches a Yul expression that represents the address for a binding.
+    pub(super) fn insert_place_expr(&mut self, binding: String, expr: String) {
+        self.place_exprs.insert(binding, expr);
+    }
+
     /// Returns the known Yul name for a binding, if it exists.
     pub(super) fn binding(&self, binding: &str) -> Option<String> {
         self.locals.get(binding).cloned()
+    }
+
+    /// API stub: returns the Yul address expression for a binding, if cached.
+    /// For future reference semantics support.
+    #[allow(dead_code)]
+    pub(super) fn resolve_place(&self, binding: &str) -> Option<String> {
+        self.place_exprs.get(binding).cloned()
     }
 
     /// Resolves a binding to an existing Yul name or falls back to the original identifier.

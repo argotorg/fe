@@ -150,14 +150,25 @@ impl<'db> TyChecker<'db> {
                 PathRes::Ty(ty)
                 | PathRes::TyAlias(_, ty)
                 | PathRes::Func(ty)
-                | PathRes::Const(_, ty)
-                | PathRes::TraitConst(ty, ..),
+                | PathRes::Const(_, ty),
             ) => {
                 let record_like = RecordLike::from_ty(ty);
                 if record_like.is_record(self.db) {
                     self.emit_unit_variant_expected(pat, record_like)
                 } else {
                     ty
+                }
+            }
+
+            Ok(PathRes::TraitConst(_recv_ty, inst, name)) => {
+                let trait_ = inst.def(self.db);
+                if let Some(const_view) = trait_.const_(self.db, name)
+                    && let Some(ty_binder) = const_view.ty_binder(self.db)
+                {
+                    let instantiated = ty_binder.instantiate(self.db, inst.args(self.db));
+                    self.table.instantiate_to_term(instantiated)
+                } else {
+                    TyId::invalid(self.db, InvalidCause::Other)
                 }
             }
 

@@ -61,7 +61,11 @@ impl<'db> ScopeGraph<'db> {
 
     /// Returns the all edges outgoing from the given `scope`.
     pub fn edges(&self, scope: ScopeId<'db>) -> &IndexSet<ScopeEdge<'db>> {
-        &self.scopes[&scope].edges
+        let scope_data = self
+            .scopes
+            .get(&scope)
+            .unwrap_or_else(|| panic!("no scope entry for key: {scope:?}"));
+        &scope_data.edges
     }
 
     /// Write a scope graph as a dot file format to given `w`.

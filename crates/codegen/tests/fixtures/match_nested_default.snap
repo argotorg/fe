@@ -1,0 +1,106 @@
+---
+source: crates/codegen/tests/yul.rs
+expression: output
+input_file: tests/fixtures/match_nested_default.fe
+---
+function nested_with_defaults(o) -> ret {
+  let v0 := 0
+  switch get_discriminant__MemPtr__d0292394fccae3e4(o)
+    case 0 {
+      switch get_discriminant__MemPtr__d0292394fccae3e4(mload(add(o, 32)))
+        case 0 {
+          v0 := 1
+        }
+        default {
+          v0 := 0
+        }
+      ret := v0
+    }
+    case 1 {
+      switch get_discriminant__MemPtr__d0292394fccae3e4(mload(add(o, 32)))
+        case 1 {
+          v0 := 2
+        }
+        default {
+          v0 := 0
+        }
+      ret := v0
+    }
+    default {
+      v0 := 0
+    }
+  ret := v0
+}
+function outer_specific_inner_wildcard(o) -> ret {
+  let v0 := 0
+  switch get_discriminant__MemPtr__d0292394fccae3e4(o)
+    case 0 {
+      switch get_discriminant__MemPtr__d0292394fccae3e4(mload(add(o, 32)))
+        case 0 {
+          v0 := 1
+        }
+        default {
+          v0 := 2
+        }
+      ret := v0
+    }
+    default {
+      v0 := 3
+    }
+  ret := v0
+}
+function deeply_nested_wildcard(d) -> ret {
+  let v0 := 0
+  switch get_discriminant__MemPtr__d0292394fccae3e4(d)
+    case 0 {
+      switch get_discriminant__MemPtr__d0292394fccae3e4(mload(add(d, 32)))
+        case 0 {
+          switch get_discriminant__MemPtr__d0292394fccae3e4(mload(add(d, 64)))
+            case 0 {
+              v0 := 1
+            }
+            default {
+              v0 := 0
+            }
+          ret := v0
+        }
+        default {
+          v0 := 0
+        }
+      ret := v0
+    }
+    default {
+      v0 := 0
+    }
+  ret := v0
+}
+function exhaustive_inner_outer_wildcard(o) -> ret {
+  let v0 := 0
+  switch get_discriminant__MemPtr__d0292394fccae3e4(o)
+    case 0 {
+      switch get_discriminant__MemPtr__d0292394fccae3e4(mload(add(o, 32)))
+        case 0 {
+          v0 := 1
+        }
+        case 1 {
+          v0 := 2
+        }
+        case 2 {
+          v0 := 3
+        }
+        default {
+          v0 := 0
+        }
+      ret := v0
+    }
+    default {
+      v0 := 0
+    }
+  ret := v0
+}
+function get_discriminant__MemPtr__d0292394fccae3e4(addr) -> ret {
+  ret := load__MemPtr__d0292394fccae3e4(addr)
+}
+function load__MemPtr__d0292394fccae3e4(addr) -> ret {
+  ret := mload(addr)
+}

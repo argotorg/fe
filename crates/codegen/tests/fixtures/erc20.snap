@@ -1,193 +1,675 @@
 ---
 source: crates/codegen/tests/yul.rs
+assertion_line: 31
 expression: output
 input_file: tests/fixtures/erc20.fe
 ---
-object "Erc20Contract" {
+object "CoolCoin" {
   code {
     init()
-    function erc20_set_owner_once_stor(self, owner) {
-      let v0 := iszero(eq(get_field__StorPtr_u256__2bec36171fad53de(self, 96), 0))
-      if v0 {
-        revert(0, 0)
-      }
-      if iszero(v0) {
-        store_field__StorPtr_u256__2bec36171fad53de(self, 96, owner)
-      }
-    }
-    function get_field__StorPtr_u256__2bec36171fad53de(ptr, offset) -> ret {
-      let v0 := add(ptr, offset)
-      ret := to_word__deduped(load__StorPtr__7f7854645e12e266(v0))
-    }
     function init() {
       let v0 := 0
-      erc20_set_owner_once_stor(v0, caller())
-      let v1 := datasize("Erc20Contract_deployed")
-      let v2 := dataoffset("Erc20Contract_deployed")
-      codecopy(0, v2, v1)
-      return(0, v1)
-    }
-    function load__StorPtr__7f7854645e12e266(addr) -> ret {
-      ret := sload(addr)
-    }
-    function store__StorPtr__7f7854645e12e266(addr, value) {
-      sstore(addr, value)
-    }
-    function store_field__StorPtr_u256__2bec36171fad53de(ptr, offset, value) {
-      let v0 := add(ptr, offset)
-      store__StorPtr__7f7854645e12e266(v0, to_word__deduped(value))
-    }
-    function to_word__deduped(self) -> ret {
-      ret := self
+      let v1 := 0
+      let v2 := datasize("CoolCoin_deployed")
+      let v3 := dataoffset("CoolCoin_deployed")
+      codecopy(0, v3, v2)
+      return(0, v2)
     }
   }
 
-  object "Erc20Contract_deployed" {
+  object "CoolCoin_deployed" {
     code {
       runtime()
-      function abi_encode_string(word, len) {
-        mstore(0, 32)
-        mstore(32, len)
-        mstore(64, word)
-        return(0, 96)
+      function accesscontrol_require_stor(self, role, ctx) {
+        let v0 := alloc(64)
+        store_field__MemPtr_u256__97fe9178c4597e85(v0, 0, role)
+        store_field__MemPtr_u256__97fe9178c4597e85(v0, 32, get_field__MemPtr_u256__97fe9178c4597e85(ctx_caller_stor(ctx), 0))
+        let v1 := v0
+        let v2 := storagemap_k__v__get_stor___u256__Address__bool__ac1f217814dd9c46(self, v1)
+        let v3 := eq(v2, 1)
+        assert(v3)
       }
-      function abi_encode_u256(value) {
-        mstore(0, value)
-        return(0, 32)
+      function address_zero() -> ret {
+        let v0 := alloc(32)
+        store_field__MemPtr_u256__97fe9178c4597e85(v0, 0, 0)
+        ret := v0
       }
-      function allowance_key(owner, spender) -> ret {
-        mstore(0, owner)
-        mstore(32, spender)
-        ret := keccak256(0, 64)
+      function alloc(size) -> ret {
+        let v0 := mload(64)
+        let v1 := eq(v0, 0)
+        if v1 {
+          v0 := 128
+          mstore(64, add(v0, size))
+          ret := v0
+        }
+        if iszero(v1) {
+          mstore(64, add(v0, size))
+          ret := v0
+        }
       }
-      function erc20_allowance_stor(self, owner, spender) -> ret {
-        ret := storagemap_k__v__get_stor__u256_u256__cc308d1bea3fb6e4(add(self, 32), allowance_key(owner, spender))
+      function approve(owner, spender, amount, store, log) {
+        assert(iszero(eq(owner, address_zero())))
+        assert(iszero(eq(spender, address_zero())))
+        let v0 := alloc(64)
+        store_field__MemPtr_u256__97fe9178c4597e85(v0, 0, get_field__MemPtr_u256__97fe9178c4597e85(owner, 0))
+        store_field__MemPtr_u256__97fe9178c4597e85(v0, 32, get_field__MemPtr_u256__97fe9178c4597e85(spender, 0))
+        let v1 := v0
+        storagemap_k__v__set_stor___Address__Address__u256__380d6b10c386a4ee(add(store, 2), v1, amount)
+        let v2 := alloc(96)
+        store_field__MemPtr_u256__97fe9178c4597e85(v2, 0, get_field__MemPtr_u256__97fe9178c4597e85(owner, 0))
+        store_field__MemPtr_u256__97fe9178c4597e85(v2, 32, get_field__MemPtr_u256__97fe9178c4597e85(spender, 0))
+        store_field__MemPtr_u256__97fe9178c4597e85(v2, 64, amount)
+        let v3 := v2
+        log_emit_stor__ApprovalEvent__6cbed5fbaac6c5ee(log, v3)
       }
-      function erc20_approve_stor(self, owner, spender, value) {
-        storagemap_k__v__set_stor__u256_u256__cc308d1bea3fb6e4(add(self, 32), allowance_key(owner, spender), value)
-      }
-      function erc20_balance_of_stor(self, addr) -> ret {
-        ret := storagemap_k__v__get_stor__u256_u256__cc308d1bea3fb6e4(self, addr)
-      }
-      function erc20_mint_stor(self, to, amount) {
-        let v0 := iszero(eq(caller(), get_field__StorPtr_u256__2bec36171fad53de(self, 96)))
+      function assert(b) {
+        let v0 := iszero(b)
         if v0 {
           revert(0, 0)
         }
         if iszero(v0) {
-          let v1 := erc20_balance_of_stor(self, to)
-          storagemap_k__v__set_stor__u256_u256__cc308d1bea3fb6e4(self, to, add(v1, amount))
-          store_field__StorPtr_u256__2bec36171fad53de(self, 64, add(get_field__StorPtr_u256__2bec36171fad53de(self, 64), amount))
         }
       }
-      function erc20_transfer_from_stor(self, owner, to, amount) {
-        let v0 := caller()
-        let v1 := erc20_allowance_stor(self, owner, v0)
-        let v2 := lt(v1, amount)
-        if v2 {
-          revert(0, 0)
+      function burn(from, amount, store, log) {
+        assert(iszero(eq(from, address_zero())))
+        let v0 := storagemap_k__v__get_stor__Address_u256__cdd966cb4c9acb9d(add(store, 1), from)
+        assert(iszero(lt(v0, amount)))
+        storagemap_k__v__set_stor__Address_u256__cdd966cb4c9acb9d(add(store, 1), from, sub(v0, amount))
+        sstore(store, sub(sload(store), amount))
+        let v1 := alloc(96)
+        store_field__MemPtr_u256__97fe9178c4597e85(v1, 0, get_field__MemPtr_u256__97fe9178c4597e85(from, 0))
+        store_field__MemPtr_u256__97fe9178c4597e85(v1, 32, get_field__MemPtr_u256__97fe9178c4597e85(address_zero(), 0))
+        store_field__MemPtr_u256__97fe9178c4597e85(v1, 64, amount)
+        let v2 := v1
+        log_emit_stor__TransferEvent__3286f1804ad8a121(log, v2)
+      }
+      function ctx_caller_stor(self) -> ret {
+        let v0 := alloc(32)
+        store_field__MemPtr_u256__97fe9178c4597e85(v0, 0, caller())
+        ret := v0
+      }
+      function cursor_i__fork_mem__CallData__b9ab8dc8a4b2f9e(self, pos) -> ret {
+        let v0 := alloc(32)
+        store_field__MemPtr_u256__97fe9178c4597e85(v0, 0, pos)
+        let v1 := v0
+        ret := v1
+      }
+      function cursor_i__new__CallData__b9ab8dc8a4b2f9e(input) -> ret {
+        let v0 := alloc(32)
+        store_field__MemPtr_u256__97fe9178c4597e85(v0, 0, 0)
+        let v1 := v0
+        ret := v1
+      }
+      function decode___Address__Address__Sol_SolDecoder_CallData___e31bed4b2a2f8934(d) -> ret {
+        let v0 := decode__Sol__Address__Address__D__b402438b260cf9b1(d)
+        let v1 := decode__SolDecoder_CallData___Address__Address__D__b6be4b00dd50c951(d)
+        let v2 := alloc(64)
+        store_field__MemPtr_u256__97fe9178c4597e85(v2, 0, get_field__MemPtr_u256__97fe9178c4597e85(v1, 0))
+        store_field__MemPtr_u256__97fe9178c4597e85(v2, 32, get_field__MemPtr_u256__97fe9178c4597e85(v1, 32))
+        ret := v2
+      }
+      function decode___Address__Address__u256__Sol_SolDecoder_CallData___16d092d427f220c3(d) -> ret {
+        let v0 := decode__Sol__Address__Address__u256__D__60abfb0945b8d7dc(d)
+        let v1 := decode__SolDecoder_CallData___Address__Address__u256__D__39cecc5133ca4b03(d)
+        let v2 := decode__T2__Address__Address__u256__D__e0b2049d12f3b65d(d)
+        let v3 := alloc(96)
+        store_field__MemPtr_u256__97fe9178c4597e85(v3, 32, get_field__MemPtr_u256__97fe9178c4597e85(v1, 0))
+        store_field__MemPtr_u256__97fe9178c4597e85(v3, 64, get_field__MemPtr_u256__97fe9178c4597e85(v1, 32))
+        store_field__MemPtr_T2__2a55174bb0902485(v3, 64, v2)
+        ret := v3
+      }
+      function decode___Address__Sol_SolDecoder_CallData___d6e81cef65afc660(d) -> ret {
+        let v0 := decode__Sol__Address__SolDecoder_CallData___837b6199b786c084(d)
+        ret := 0
+      }
+      function decode___Address__u256__Sol_SolDecoder_CallData___d238c7fab3868e5(d) -> ret {
+        let v0 := decode__Sol__Address__u256__D__c58b7732f9964bee(d)
+        let v1 := decode__SolDecoder_CallData___Address__u256__D__8ef70367b3bd0686(d)
+        let v2 := alloc(64)
+        store_field__MemPtr_u256__97fe9178c4597e85(v2, 0, get_field__MemPtr_u256__97fe9178c4597e85(v1, 0))
+        store_field__MemPtr_u256__97fe9178c4597e85(v2, 32, get_field__MemPtr_u256__97fe9178c4597e85(v1, 32))
+        ret := v2
+      }
+      function decode_____Sol_SolDecoder_CallData___7a33f8e14ea06d71(d) -> ret {
+        ret := 0
+      }
+      function decode___u256__Sol_SolDecoder_CallData___6bbc79d2596eeb59(d) -> ret {
+        let v0 := decode__Sol__u256__SolDecoder_CallData___2b0102c53e22c9ee(d)
+        ret := 0
+      }
+      function encode__String_32__Sol_SolEncoder__fcdbe6cb3c922c20(self, e) {
+        todo()
+      }
+      function encode__bool_Sol_SolEncoder__adf1e84b81136aa9(self, e) {
+        let v0 := self
+        if v0 {
+          write_word__Sol_bool__648cecf79920cf14(e, 1)
         }
-        if iszero(v2) {
-          erc20_transfer_stor(self, owner, to, amount)
-          storagemap_k__v__set_stor__u256_u256__cc308d1bea3fb6e4(add(self, 32), allowance_key(owner, v0), sub(v1, amount))
+        if iszero(v0) {
+          write_word__Sol_bool__648cecf79920cf14(e, 0)
         }
       }
-      function erc20_transfer_stor(self, from, to, amount) {
-        let v0 := erc20_balance_of_stor(self, from)
-        let v1 := lt(v0, amount)
-        if v1 {
-          revert(0, 0)
-        }
-        if iszero(v1) {
-          let v2 := erc20_balance_of_stor(self, to)
-          storagemap_k__v__set_stor__u256_u256__cc308d1bea3fb6e4(self, from, sub(v0, amount))
-          storagemap_k__v__set_stor__u256_u256__cc308d1bea3fb6e4(self, to, add(v2, amount))
-        }
+      function encode__u256_Sol_SolEncoder__ce94c1790aa7f5c9(self, e) {
+        write_word__Sol_u256__cb19b1dcad253a4a(e, self)
       }
-      function get_field__StorPtr_u256__2bec36171fad53de(ptr, offset) -> ret {
+      function encode__u8_Sol_SolEncoder__c247f0ed5c0eeb6b(self, e) {
+        write_word__Sol_u8__a4f49285964f3d70(e, self)
+      }
+      function finish__SolEncoder_Sol__822e2f0488b7f288(self) -> ret {
+        let v0 := alloc(64)
+        store_field__MemPtr_u256__97fe9178c4597e85(v0, 0, mload(self))
+        store_field__MemPtr_u256__97fe9178c4597e85(v0, 32, sub(mload(add(self, 64)), mload(self)))
+        ret := v0
+      }
+      function get_field__MemPtr_u256__97fe9178c4597e85(ptr, offset) -> ret {
         let v0 := add(ptr, offset)
-        ret := to_word__deduped(load__StorPtr__7f7854645e12e266(v0))
+        ret := decode_____Sol_SolDecoder_CallData___7a33f8e14ea06d71(load__MemPtr__d0292394fccae3e4(v0))
       }
-      function load__StorPtr__7f7854645e12e266(addr) -> ret {
-        ret := sload(addr)
+      function load__MemPtr__d0292394fccae3e4(addr) -> ret {
+        ret := mload(addr)
+      }
+      function log_emit_stor__ApprovalEvent__6cbed5fbaac6c5ee(self, event) {
+        todo()
+      }
+      function log_emit_stor__TransferEvent__3286f1804ad8a121(self, event) {
+        todo()
+      }
+      function mint(to, amount, store, log) {
+        assert(iszero(eq(to, address_zero())))
+        sstore(store, add(sload(store), amount))
+        storagemap_k__v__set_stor__Address_u256__cdd966cb4c9acb9d(add(store, 1), to, add(storagemap_k__v__get_stor__Address_u256__cdd966cb4c9acb9d(add(store, 1), to), amount))
+        let v0 := alloc(96)
+        store_field__MemPtr_u256__97fe9178c4597e85(v0, 0, get_field__MemPtr_u256__97fe9178c4597e85(address_zero(), 0))
+        store_field__MemPtr_u256__97fe9178c4597e85(v0, 32, get_field__MemPtr_u256__97fe9178c4597e85(to, 0))
+        store_field__MemPtr_u256__97fe9178c4597e85(v0, 64, amount)
+        let v1 := v0
+        log_emit_stor__TransferEvent__3286f1804ad8a121(log, v1)
+      }
+      function recv_Erc20Extended_BurnFrom_1_2(args, ctx, store, log) -> ret {
+        let v0 := args
+        let v1 := mload(add(args, 32))
+        spend_allowance(v0, ctx_caller_stor(ctx), v1, store)
+        burn(v0, v1, store, log)
+        ret := 1
+      }
+      function recv_Erc20Extended_Burn_1_1(args, ctx, store, log) -> ret {
+        let v0 := mload(args)
+        burn(ctx_caller_stor(ctx), v0, store, log)
+        ret := 1
+      }
+      function recv_Erc20Extended_DecreaseAllowance_1_4(args, ctx, store, log) -> ret {
+        let v0 := args
+        let v1 := mload(add(args, 32))
+        let v2 := ctx_caller_stor(ctx)
+        let v3 := alloc(64)
+        store_field__MemPtr_u256__97fe9178c4597e85(v3, 0, get_field__MemPtr_u256__97fe9178c4597e85(v2, 0))
+        store_field__MemPtr_u256__97fe9178c4597e85(v3, 32, get_field__MemPtr_u256__97fe9178c4597e85(v0, 0))
+        let v4 := v3
+        let v5 := storagemap_k__v__get_stor___Address__Address__u256__380d6b10c386a4ee(add(store, 2), v4)
+        assert(iszero(lt(v5, v1)))
+        approve(v2, v0, sub(v5, v1), store, log)
+        ret := 1
+      }
+      function recv_Erc20Extended_IncreaseAllowance_1_3(args, ctx, store, log) -> ret {
+        let v0 := args
+        let v1 := mload(add(args, 32))
+        let v2 := ctx_caller_stor(ctx)
+        let v3 := alloc(64)
+        store_field__MemPtr_u256__97fe9178c4597e85(v3, 0, get_field__MemPtr_u256__97fe9178c4597e85(v2, 0))
+        store_field__MemPtr_u256__97fe9178c4597e85(v3, 32, get_field__MemPtr_u256__97fe9178c4597e85(v0, 0))
+        let v4 := v3
+        let v5 := storagemap_k__v__get_stor___Address__Address__u256__380d6b10c386a4ee(add(store, 2), v4)
+        approve(v2, v0, add(v5, v1), store, log)
+        ret := 1
+      }
+      function recv_Erc20Extended_Mint_1_0(args, ctx, store, log, auth) -> ret {
+        let v0 := args
+        let v1 := mload(add(args, 32))
+        accesscontrol_require_stor(auth, 1, ctx)
+        mint(v0, v1, store, log)
+        ret := 1
+      }
+      function recv_Erc20_Allowance_0_4(args, store) -> ret {
+        let v0 := args
+        let v1 := add(args, 32)
+        let v2 := alloc(64)
+        store_field__MemPtr_u256__97fe9178c4597e85(v2, 0, get_field__MemPtr_u256__97fe9178c4597e85(v0, 0))
+        store_field__MemPtr_u256__97fe9178c4597e85(v2, 32, get_field__MemPtr_u256__97fe9178c4597e85(v1, 0))
+        let v3 := v2
+        ret := storagemap_k__v__get_stor___Address__Address__u256__380d6b10c386a4ee(add(store, 2), v3)
+      }
+      function recv_Erc20_Approve_0_1(args, ctx, store, log) -> ret {
+        let v0 := args
+        let v1 := mload(add(args, 32))
+        approve(ctx_caller_stor(ctx), v0, v1, store, log)
+        ret := 1
+      }
+      function recv_Erc20_BalanceOf_0_3(args, store) -> ret {
+        let v0 := args
+        ret := storagemap_k__v__get_stor__Address_u256__cdd966cb4c9acb9d(add(store, 1), v0)
+      }
+      function recv_Erc20_Decimals_0_8(args) -> ret {
+        ret := 18
+      }
+      function recv_Erc20_Name_0_6(args) -> ret {
+        ret := 0x436f6f6c436f696e
+      }
+      function recv_Erc20_Symbol_0_7(args) -> ret {
+        ret := 0x434f4f4c
+      }
+      function recv_Erc20_TotalSupply_0_5(args, store) -> ret {
+        ret := sload(store)
+      }
+      function recv_Erc20_TransferFrom_0_2(args, ctx, store, log) -> ret {
+        let v0 := args
+        let v1 := add(args, 32)
+        let v2 := mload(add(args, 64))
+        spend_allowance(v0, ctx_caller_stor(ctx), v2, store)
+        transfer(v0, v1, v2, store, log)
+        ret := 1
+      }
+      function recv_Erc20_Transfer_0_0(args, ctx, store, log) -> ret {
+        let v0 := args
+        let v1 := mload(add(args, 32))
+        transfer(ctx_caller_stor(ctx), v0, v1, store, log)
+        ret := 1
+      }
+      function reserve_head__SolEncoder_Sol__822e2f0488b7f288(self, bytes) -> ret {
+        solencoder_ensure_init_mem(self, bytes)
+        ret := mload(self)
       }
       function runtime() {
         let v0 := 0
-        let v1 := shr(224, calldataload(0))
-        switch v1
-          case 1889567281 {
-            let v2 := calldataload(4)
-            abi_encode_u256(erc20_balance_of_stor(v0, v2))
-          }
-          case 3714247998 {
-            let v3 := calldataload(4)
-            let v4 := calldataload(36)
-            abi_encode_u256(erc20_allowance_stor(v0, v3, v4))
-          }
-          case 117300739 {
-            abi_encode_string(31840933704928615426292613906591192052886564858731089189578963311002547912704, 7)
-          }
-          case 2514000705 {
-            abi_encode_string(31784391594991486112232083260356792451358613714049171750120207607087736291328, 3)
-          }
-          case 826074471 {
-            abi_encode_u256(18)
-          }
-          case 2835717307 {
-            let v5 := calldataload(4)
-            let v6 := calldataload(36)
-            erc20_transfer_stor(v0, caller(), v5, v6)
-            abi_encode_u256(1)
-          }
-          case 157198259 {
-            let v7 := calldataload(4)
-            let v8 := calldataload(36)
-            erc20_approve_stor(v0, caller(), v7, v8)
-            abi_encode_u256(1)
-          }
-          case 599290589 {
-            let v9 := calldataload(4)
-            let v10 := calldataload(36)
-            let v11 := calldataload(68)
-            erc20_transfer_from_stor(v0, v9, v10, v11)
-            abi_encode_u256(1)
-          }
-          case 1086394137 {
-            let v12 := calldataload(4)
-            let v13 := calldataload(36)
-            erc20_mint_stor(v0, v12, v13)
-            abi_encode_u256(1)
-          }
-          default {
-            revert(0, 0)
-          }
+        let v1 := 0
+        let v2 := 0
+        let v3 := 3
+        let v4 := 0
+        let v5 := lt(calldatasize(), 4)
+        if v5 {
+          revert(0, 0)
+        }
+        if iszero(v5) {
+          let v6 := selector_from_prefix__Sol__c9e55515628bbda1(calldataload(0))
+          switch v6
+            case 2835717307 {
+              let v7 := soldecoder_i__with_base__CallData__b9ab8dc8a4b2f9e(v4, 4)
+              let v8 := lt(calldatasize(), add(4, 64))
+              if v8 {
+                revert(0, 0)
+              }
+              if iszero(v8) {
+                let v9 := decode___Address__u256__Sol_SolDecoder_CallData___d238c7fab3868e5(v7)
+                let v10 := v0
+                let v11 := v2
+                let v12 := v1
+                let v13 := recv_Erc20_Transfer_0_0(v9, v0, v11, v1)
+                let v14 := solencoder_new()
+                pop(reserve_head__SolEncoder_Sol__822e2f0488b7f288(v14, 32))
+                encode__bool_Sol_SolEncoder__adf1e84b81136aa9(v13, v14)
+                let v15 := finish__SolEncoder_Sol__822e2f0488b7f288(v14)
+                return(mload(v15), mload(add(v15, 32)))
+              }
+            }
+            case 157198259 {
+              let v16 := soldecoder_i__with_base__CallData__b9ab8dc8a4b2f9e(v4, 4)
+              let v17 := lt(calldatasize(), add(4, 64))
+              if v17 {
+                revert(0, 0)
+              }
+              if iszero(v17) {
+                let v18 := decode___Address__u256__Sol_SolDecoder_CallData___d238c7fab3868e5(v16)
+                let v19 := v0
+                let v20 := v2
+                let v21 := v1
+                let v22 := recv_Erc20_Approve_0_1(v18, v0, v20, v1)
+                let v23 := solencoder_new()
+                pop(reserve_head__SolEncoder_Sol__822e2f0488b7f288(v23, 32))
+                encode__bool_Sol_SolEncoder__adf1e84b81136aa9(v22, v23)
+                let v24 := finish__SolEncoder_Sol__822e2f0488b7f288(v23)
+                return(mload(v24), mload(add(v24, 32)))
+              }
+            }
+            case 599290589 {
+              let v25 := soldecoder_i__with_base__CallData__b9ab8dc8a4b2f9e(v4, 4)
+              let v26 := lt(calldatasize(), add(4, 96))
+              if v26 {
+                revert(0, 0)
+              }
+              if iszero(v26) {
+                let v27 := decode___Address__Address__u256__Sol_SolDecoder_CallData___16d092d427f220c3(v25)
+                let v28 := v0
+                let v29 := v2
+                let v30 := v1
+                let v31 := recv_Erc20_TransferFrom_0_2(v27, v0, v29, v1)
+                let v32 := solencoder_new()
+                pop(reserve_head__SolEncoder_Sol__822e2f0488b7f288(v32, 32))
+                encode__bool_Sol_SolEncoder__adf1e84b81136aa9(v31, v32)
+                let v33 := finish__SolEncoder_Sol__822e2f0488b7f288(v32)
+                return(mload(v33), mload(add(v33, 32)))
+              }
+            }
+            case 1889567281 {
+              let v34 := soldecoder_i__with_base__CallData__b9ab8dc8a4b2f9e(v4, 4)
+              let v35 := lt(calldatasize(), add(4, 32))
+              if v35 {
+                revert(0, 0)
+              }
+              if iszero(v35) {
+                let v36 := decode___Address__Sol_SolDecoder_CallData___d6e81cef65afc660(v34)
+                let v37 := v2
+                let v38 := recv_Erc20_BalanceOf_0_3(v36, v37)
+                let v39 := solencoder_new()
+                pop(reserve_head__SolEncoder_Sol__822e2f0488b7f288(v39, 32))
+                encode__u256_Sol_SolEncoder__ce94c1790aa7f5c9(v38, v39)
+                let v40 := finish__SolEncoder_Sol__822e2f0488b7f288(v39)
+                return(mload(v40), mload(add(v40, 32)))
+              }
+            }
+            case 3714247998 {
+              let v41 := soldecoder_i__with_base__CallData__b9ab8dc8a4b2f9e(v4, 4)
+              let v42 := lt(calldatasize(), add(4, 64))
+              if v42 {
+                revert(0, 0)
+              }
+              if iszero(v42) {
+                let v43 := decode___Address__Address__Sol_SolDecoder_CallData___e31bed4b2a2f8934(v41)
+                let v44 := v2
+                let v45 := recv_Erc20_Allowance_0_4(v43, v44)
+                let v46 := solencoder_new()
+                pop(reserve_head__SolEncoder_Sol__822e2f0488b7f288(v46, 32))
+                encode__u256_Sol_SolEncoder__ce94c1790aa7f5c9(v45, v46)
+                let v47 := finish__SolEncoder_Sol__822e2f0488b7f288(v46)
+                return(mload(v47), mload(add(v47, 32)))
+              }
+            }
+            case 404098525 {
+              let v48 := soldecoder_i__with_base__CallData__b9ab8dc8a4b2f9e(v4, 4)
+              let v49 := lt(calldatasize(), add(4, 0))
+              if v49 {
+                revert(0, 0)
+              }
+              if iszero(v49) {
+                let v50 := decode_____Sol_SolDecoder_CallData___7a33f8e14ea06d71(v48)
+                let v51 := v2
+                let v52 := recv_Erc20_TotalSupply_0_5(v50, v51)
+                let v53 := solencoder_new()
+                pop(reserve_head__SolEncoder_Sol__822e2f0488b7f288(v53, 32))
+                encode__u256_Sol_SolEncoder__ce94c1790aa7f5c9(v52, v53)
+                let v54 := finish__SolEncoder_Sol__822e2f0488b7f288(v53)
+                return(mload(v54), mload(add(v54, 32)))
+              }
+            }
+            case 117300739 {
+              let v55 := soldecoder_i__with_base__CallData__b9ab8dc8a4b2f9e(v4, 4)
+              let v56 := lt(calldatasize(), add(4, 0))
+              if v56 {
+                revert(0, 0)
+              }
+              if iszero(v56) {
+                let v57 := decode_____Sol_SolDecoder_CallData___7a33f8e14ea06d71(v55)
+                let v58 := recv_Erc20_Name_0_6(v57)
+                let v59 := solencoder_new()
+                pop(reserve_head__SolEncoder_Sol__822e2f0488b7f288(v59, 32))
+                encode__String_32__Sol_SolEncoder__fcdbe6cb3c922c20(v58, v59)
+                let v60 := finish__SolEncoder_Sol__822e2f0488b7f288(v59)
+                return(mload(v60), mload(add(v60, 32)))
+              }
+            }
+            case 2514000705 {
+              let v61 := soldecoder_i__with_base__CallData__b9ab8dc8a4b2f9e(v4, 4)
+              let v62 := lt(calldatasize(), add(4, 0))
+              if v62 {
+                revert(0, 0)
+              }
+              if iszero(v62) {
+                let v63 := decode_____Sol_SolDecoder_CallData___7a33f8e14ea06d71(v61)
+                let v64 := recv_Erc20_Symbol_0_7(v63)
+                let v65 := solencoder_new()
+                pop(reserve_head__SolEncoder_Sol__822e2f0488b7f288(v65, 32))
+                encode__String_32__Sol_SolEncoder__fcdbe6cb3c922c20(v64, v65)
+                let v66 := finish__SolEncoder_Sol__822e2f0488b7f288(v65)
+                return(mload(v66), mload(add(v66, 32)))
+              }
+            }
+            case 826074471 {
+              let v67 := soldecoder_i__with_base__CallData__b9ab8dc8a4b2f9e(v4, 4)
+              let v68 := lt(calldatasize(), add(4, 0))
+              if v68 {
+                revert(0, 0)
+              }
+              if iszero(v68) {
+                let v69 := decode_____Sol_SolDecoder_CallData___7a33f8e14ea06d71(v67)
+                let v70 := recv_Erc20_Decimals_0_8(v69)
+                let v71 := solencoder_new()
+                pop(reserve_head__SolEncoder_Sol__822e2f0488b7f288(v71, 32))
+                encode__u8_Sol_SolEncoder__c247f0ed5c0eeb6b(v70, v71)
+                let v72 := finish__SolEncoder_Sol__822e2f0488b7f288(v71)
+                return(mload(v72), mload(add(v72, 32)))
+              }
+            }
+            case 1086394137 {
+              let v73 := soldecoder_i__with_base__CallData__b9ab8dc8a4b2f9e(v4, 4)
+              let v74 := lt(calldatasize(), add(4, 64))
+              if v74 {
+                revert(0, 0)
+              }
+              if iszero(v74) {
+                let v75 := decode___Address__u256__Sol_SolDecoder_CallData___d238c7fab3868e5(v73)
+                let v76 := v0
+                let v77 := v2
+                let v78 := v1
+                let v79 := v3
+                let v80 := recv_Erc20Extended_Mint_1_0(v75, v0, v77, v1, v79)
+                let v81 := solencoder_new()
+                pop(reserve_head__SolEncoder_Sol__822e2f0488b7f288(v81, 32))
+                encode__bool_Sol_SolEncoder__adf1e84b81136aa9(v80, v81)
+                let v82 := finish__SolEncoder_Sol__822e2f0488b7f288(v81)
+                return(mload(v82), mload(add(v82, 32)))
+              }
+            }
+            case 1117154408 {
+              let v83 := soldecoder_i__with_base__CallData__b9ab8dc8a4b2f9e(v4, 4)
+              let v84 := lt(calldatasize(), add(4, 32))
+              if v84 {
+                revert(0, 0)
+              }
+              if iszero(v84) {
+                let v85 := decode___u256__Sol_SolDecoder_CallData___6bbc79d2596eeb59(v83)
+                let v86 := v0
+                let v87 := v2
+                let v88 := v1
+                let v89 := recv_Erc20Extended_Burn_1_1(v85, v0, v87, v1)
+                let v90 := solencoder_new()
+                pop(reserve_head__SolEncoder_Sol__822e2f0488b7f288(v90, 32))
+                encode__bool_Sol_SolEncoder__adf1e84b81136aa9(v89, v90)
+                let v91 := finish__SolEncoder_Sol__822e2f0488b7f288(v90)
+                return(mload(v91), mload(add(v91, 32)))
+              }
+            }
+            case 2043438992 {
+              let v92 := soldecoder_i__with_base__CallData__b9ab8dc8a4b2f9e(v4, 4)
+              let v93 := lt(calldatasize(), add(4, 64))
+              if v93 {
+                revert(0, 0)
+              }
+              if iszero(v93) {
+                let v94 := decode___Address__u256__Sol_SolDecoder_CallData___d238c7fab3868e5(v92)
+                let v95 := v0
+                let v96 := v2
+                let v97 := v1
+                let v98 := recv_Erc20Extended_BurnFrom_1_2(v94, v0, v96, v1)
+                let v99 := solencoder_new()
+                pop(reserve_head__SolEncoder_Sol__822e2f0488b7f288(v99, 32))
+                encode__bool_Sol_SolEncoder__adf1e84b81136aa9(v98, v99)
+                let v100 := finish__SolEncoder_Sol__822e2f0488b7f288(v99)
+                return(mload(v100), mload(add(v100, 32)))
+              }
+            }
+            case 961581905 {
+              let v101 := soldecoder_i__with_base__CallData__b9ab8dc8a4b2f9e(v4, 4)
+              let v102 := lt(calldatasize(), add(4, 64))
+              if v102 {
+                revert(0, 0)
+              }
+              if iszero(v102) {
+                let v103 := decode___Address__u256__Sol_SolDecoder_CallData___d238c7fab3868e5(v101)
+                let v104 := v0
+                let v105 := v2
+                let v106 := v1
+                let v107 := recv_Erc20Extended_IncreaseAllowance_1_3(v103, v0, v105, v1)
+                let v108 := solencoder_new()
+                pop(reserve_head__SolEncoder_Sol__822e2f0488b7f288(v108, 32))
+                encode__bool_Sol_SolEncoder__adf1e84b81136aa9(v107, v108)
+                let v109 := finish__SolEncoder_Sol__822e2f0488b7f288(v108)
+                return(mload(v109), mload(add(v109, 32)))
+              }
+            }
+            case 2757214935 {
+              let v110 := soldecoder_i__with_base__CallData__b9ab8dc8a4b2f9e(v4, 4)
+              let v111 := lt(calldatasize(), add(4, 64))
+              if v111 {
+                revert(0, 0)
+              }
+              if iszero(v111) {
+                let v112 := decode___Address__u256__Sol_SolDecoder_CallData___d238c7fab3868e5(v110)
+                let v113 := v0
+                let v114 := v2
+                let v115 := v1
+                let v116 := recv_Erc20Extended_DecreaseAllowance_1_4(v112, v0, v114, v1)
+                let v117 := solencoder_new()
+                pop(reserve_head__SolEncoder_Sol__822e2f0488b7f288(v117, 32))
+                encode__bool_Sol_SolEncoder__adf1e84b81136aa9(v116, v117)
+                let v118 := finish__SolEncoder_Sol__822e2f0488b7f288(v117)
+                return(mload(v118), mload(add(v118, 32)))
+              }
+            }
+            default {
+              revert(0, 0)
+            }
+        }
       }
-      function storagemap_k__v__get_stor__u256_u256__cc308d1bea3fb6e4(self, key) -> ret {
-        let v0 := storagemap_k__v__storage_slot_stor__u256_u256__cc308d1bea3fb6e4(self, key)
-        ret := to_word__deduped(sload(v0))
+      function selector_from_prefix__Sol__c9e55515628bbda1(prefix) -> ret {
+        ret := shr(224, prefix)
       }
-      function storagemap_k__v__set_stor__u256_u256__cc308d1bea3fb6e4(self, key, value) {
-        let v0 := storagemap_k__v__storage_slot_stor__u256_u256__cc308d1bea3fb6e4(self, key)
-        sstore(v0, to_word__deduped(value))
+      function soldecoder_i__with_base__CallData__b9ab8dc8a4b2f9e(input, base) -> ret {
+        let v0 := cursor_i__fork_mem__CallData__b9ab8dc8a4b2f9e(cursor_i__new__CallData__b9ab8dc8a4b2f9e(input), base)
+        let v1 := alloc(64)
+        store_field__MemPtr_u256__97fe9178c4597e85(v1, 0, get_field__MemPtr_u256__97fe9178c4597e85(v0, 0))
+        store_field__MemPtr_u256__97fe9178c4597e85(v1, 32, base)
+        let v2 := v1
+        ret := v2
       }
-      function storagemap_k__v__storage_slot_stor__u256_u256__cc308d1bea3fb6e4(self, key) -> ret {
-        let v0 := write_key__u256__3271ca15373d4483(0, key)
+      function solencoder_ensure_init_mem(self, bytes) {
+        let v0 := eq(mload(self), 0)
+        if v0 {
+          let v1 := alloc(bytes)
+          store_field__MemPtr_u256__97fe9178c4597e85(self, 0, v1)
+          store_field__MemPtr_u256__97fe9178c4597e85(self, 32, v1)
+          store_field__MemPtr_u256__97fe9178c4597e85(self, 64, add(v1, bytes))
+        }
+        if iszero(v0) {
+        }
+      }
+      function solencoder_new() -> ret {
+        let v0 := alloc(96)
+        store_field__MemPtr_u256__97fe9178c4597e85(v0, 0, 0)
+        store_field__MemPtr_u256__97fe9178c4597e85(v0, 32, 0)
+        store_field__MemPtr_u256__97fe9178c4597e85(v0, 64, 0)
+        let v1 := v0
+        ret := v1
+      }
+      function spend_allowance(owner, spender, amount, store) {
+        let v0 := alloc(64)
+        store_field__MemPtr_u256__97fe9178c4597e85(v0, 0, get_field__MemPtr_u256__97fe9178c4597e85(owner, 0))
+        store_field__MemPtr_u256__97fe9178c4597e85(v0, 32, get_field__MemPtr_u256__97fe9178c4597e85(spender, 0))
+        let v1 := v0
+        let v2 := storagemap_k__v__get_stor___Address__Address__u256__380d6b10c386a4ee(add(store, 2), v1)
+        assert(iszero(lt(v2, amount)))
+        let v3 := alloc(64)
+        store_field__MemPtr_u256__97fe9178c4597e85(v3, 0, get_field__MemPtr_u256__97fe9178c4597e85(owner, 0))
+        store_field__MemPtr_u256__97fe9178c4597e85(v3, 32, get_field__MemPtr_u256__97fe9178c4597e85(spender, 0))
+        let v4 := v3
+        storagemap_k__v__set_stor___Address__Address__u256__380d6b10c386a4ee(add(store, 2), v4, sub(v2, amount))
+      }
+      function storagemap_k__v__get_stor__Address_u256__cdd966cb4c9acb9d(self, key) -> ret {
+        let v0 := storagemap_k__v__storage_slot_stor__Address_u256__cdd966cb4c9acb9d(self, key)
+        ret := decode_____Sol_SolDecoder_CallData___7a33f8e14ea06d71(sload(v0))
+      }
+      function storagemap_k__v__get_stor___Address__Address__u256__380d6b10c386a4ee(self, key) -> ret {
+        let v0 := storagemap_k__v__storage_slot_stor___Address__Address__u256__380d6b10c386a4ee(self, key)
+        ret := decode_____Sol_SolDecoder_CallData___7a33f8e14ea06d71(sload(v0))
+      }
+      function storagemap_k__v__get_stor___u256__Address__bool__ac1f217814dd9c46(self, key) -> ret {
+        let v0 := storagemap_k__v__storage_slot_stor___u256__Address__bool__ac1f217814dd9c46(self, key)
+        ret := decode_____Sol_SolDecoder_CallData___7a33f8e14ea06d71(sload(v0))
+      }
+      function storagemap_k__v__set_stor__Address_u256__cdd966cb4c9acb9d(self, key, value) {
+        let v0 := storagemap_k__v__storage_slot_stor__Address_u256__cdd966cb4c9acb9d(self, key)
+        sstore(v0, decode_____Sol_SolDecoder_CallData___7a33f8e14ea06d71(value))
+      }
+      function storagemap_k__v__set_stor___Address__Address__u256__380d6b10c386a4ee(self, key, value) {
+        let v0 := storagemap_k__v__storage_slot_stor___Address__Address__u256__380d6b10c386a4ee(self, key)
+        sstore(v0, decode_____Sol_SolDecoder_CallData___7a33f8e14ea06d71(value))
+      }
+      function storagemap_k__v__storage_slot_stor__Address_u256__cdd966cb4c9acb9d(self, key) -> ret {
+        let v0 := write_key__Address__ce8f588742192062(0, key)
         mstore(v0, self)
         ret := keccak256(0, add(v0, 32))
       }
-      function store__StorPtr__7f7854645e12e266(addr, value) {
-        sstore(addr, value)
+      function storagemap_k__v__storage_slot_stor___Address__Address__u256__380d6b10c386a4ee(self, key) -> ret {
+        let v0 := write_key___Address__Address___c32d499da259c78e(0, key)
+        mstore(v0, self)
+        ret := keccak256(0, add(v0, 32))
       }
-      function store_field__StorPtr_u256__2bec36171fad53de(ptr, offset, value) {
+      function storagemap_k__v__storage_slot_stor___u256__Address__bool__ac1f217814dd9c46(self, key) -> ret {
+        let v0 := write_key___u256__Address___c7c570db20cdd393(0, key)
+        mstore(v0, self)
+        ret := keccak256(0, add(v0, 32))
+      }
+      function store__MemPtr__d0292394fccae3e4(addr, value) {
+        mstore(addr, value)
+      }
+      function store_field__MemPtr_T2__2a55174bb0902485(ptr, offset, value) {
         let v0 := add(ptr, offset)
-        store__StorPtr__7f7854645e12e266(v0, to_word__deduped(value))
+        store__MemPtr__d0292394fccae3e4(v0, to_word__T2__fef5b07433665000(value))
       }
-      function to_word__deduped(self) -> ret {
-        ret := self
+      function store_field__MemPtr_u256__97fe9178c4597e85(ptr, offset, value) {
+        let v0 := add(ptr, offset)
+        store__MemPtr__d0292394fccae3e4(v0, decode_____Sol_SolDecoder_CallData___7a33f8e14ea06d71(value))
       }
-      function write_key__u256__3271ca15373d4483(ptr, self) -> ret {
-        mstore(ptr, self)
+      function transfer(from, to, amount, store, log) {
+        assert(iszero(eq(from, address_zero())))
+        assert(iszero(eq(to, address_zero())))
+        let v0 := storagemap_k__v__get_stor__Address_u256__cdd966cb4c9acb9d(add(store, 1), from)
+        assert(iszero(lt(v0, amount)))
+        storagemap_k__v__set_stor__Address_u256__cdd966cb4c9acb9d(add(store, 1), from, sub(v0, amount))
+        storagemap_k__v__set_stor__Address_u256__cdd966cb4c9acb9d(add(store, 1), to, add(storagemap_k__v__get_stor__Address_u256__cdd966cb4c9acb9d(add(store, 1), to), amount))
+        let v1 := alloc(96)
+        store_field__MemPtr_u256__97fe9178c4597e85(v1, 0, get_field__MemPtr_u256__97fe9178c4597e85(from, 0))
+        store_field__MemPtr_u256__97fe9178c4597e85(v1, 32, get_field__MemPtr_u256__97fe9178c4597e85(to, 0))
+        store_field__MemPtr_u256__97fe9178c4597e85(v1, 64, amount)
+        let v2 := v1
+        log_emit_stor__TransferEvent__3286f1804ad8a121(log, v2)
+      }
+      function write_key__Address__ce8f588742192062(ptr, self) -> ret {
+        mstore(ptr, mload(self))
         ret := 32
+      }
+      function write_key___Address__Address___c32d499da259c78e(ptr, self) -> ret {
+        let v0 := self
+        let v1 := v0
+        let v2 := mload(add(v0, 64))
+        let v3 := write_key___Address__Address___c32d499da259c78e(ptr, v1)
+        let v4 := write_key__B__faff03d368f2339b(add(ptr, v3), v2)
+        ret := add(v3, v4)
+      }
+      function write_key___u256__Address___c7c570db20cdd393(ptr, self) -> ret {
+        let v0 := self
+        let v1 := v0
+        let v2 := mload(add(v0, 64))
+        let v3 := write_key___u256__Address___c7c570db20cdd393(ptr, v1)
+        let v4 := write_key__B__faff03d368f2339b(add(ptr, v3), v2)
+        ret := add(v3, v4)
       }
     }
   }

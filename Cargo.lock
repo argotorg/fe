@@ -1929,6 +1929,7 @@ name = "fe-mir"
 version = "0.1.0"
 dependencies = [
  "cranelift-entity",
+ "dir-test",
  "fe-common",
  "fe-driver",
  "fe-hir",

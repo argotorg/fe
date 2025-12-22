@@ -1,6 +1,5 @@
 ---
 source: crates/codegen/tests/yul.rs
-assertion_line: 31
 expression: output
 input_file: tests/fixtures/match_enum_with_data.fe
 ---
@@ -14,7 +13,7 @@ function match_option(opt) -> ret {
   let v0 := 0
   switch get_discriminant__MemPtr__d0292394fccae3e4(opt)
     case 1 {
-      let v1 := get_variant_field__MemPtr_u64__6be88d17f715c1ad(opt, 0)
+      let v1 := and(mload(add(opt, 32)), 0xffffffffffffffff)
       v0 := v1
     }
     case 0 {
@@ -44,10 +43,6 @@ function store_variant_field__MemPtr_u64__6be88d17f715c1ad(addr, field_offset, v
   let v0 := add(add(addr, 32), field_offset)
   store__MemPtr__d0292394fccae3e4(v0, to_word__deduped(value))
 }
-function get_variant_field__MemPtr_u64__6be88d17f715c1ad(addr, field_offset) -> ret {
-  let v0 := add(add(addr, 32), field_offset)
-  ret := from_word__u64__aee7f05a097ffa16(load__MemPtr__d0292394fccae3e4(v0))
-}
 function get_discriminant__MemPtr__d0292394fccae3e4(addr) -> ret {
   ret := load__MemPtr__d0292394fccae3e4(addr)
 }
@@ -59,7 +54,4 @@ function to_word__deduped(self) -> ret {
 }
 function load__MemPtr__d0292394fccae3e4(addr) -> ret {
   ret := mload(addr)
-}
-function from_word__u64__aee7f05a097ffa16(word) -> ret {
-  ret := and(word, 18446744073709551615)
 }

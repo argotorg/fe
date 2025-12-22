@@ -7,6 +7,7 @@
 pub mod adt_lower;
 pub mod hir_def;
 pub mod lower;
+pub mod print;
 pub mod semantic;
 pub mod span;
 pub mod visitor;

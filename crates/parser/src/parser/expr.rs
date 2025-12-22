@@ -102,7 +102,7 @@ fn parse_expr_atom<S: TokenStream>(
 ) -> Result<Checkpoint, Recovery<ErrProof>> {
     match parser.current_kind() {
         Some(kind) if prefix_binding_power(kind).is_some() => {
-            parser.parse_cp(UnExprScope::default(), None)
+            parser.parse_cp(UnExprScope::new(allow_struct_init), None)
         }
         Some(kind) if is_expr_atom_head(kind) => {
             expr_atom::parse_expr_atom(parser, allow_struct_init)
@@ -207,7 +207,7 @@ fn infix_binding_power<S: TokenStream>(parser: &mut Parser<S>) -> Option<(u8, u8
     Some(bp)
 }
 
-define_scope! { UnExprScope, UnExpr }
+define_scope! { UnExprScope { allow_struct_init: bool }, UnExpr }
 impl super::Parse for UnExprScope {
     type Error = Recovery<ErrProof>;
 
@@ -216,7 +216,7 @@ impl super::Parse for UnExprScope {
         let kind = parser.current_kind().unwrap();
         let bp = prefix_binding_power(kind).unwrap();
         parser.bump();
-        parse_expr_with_min_bp(parser, bp, true)
+        parse_expr_with_min_bp(parser, bp, self.allow_struct_init)
     }
 }
 

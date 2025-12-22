@@ -214,12 +214,25 @@ impl super::Parse for WithParamScope {
     fn parse<S: TokenStream>(&mut self, parser: &mut Parser<S>) -> Result<(), Self::Error> {
         parser.set_newline_as_trivia(false);
 
-        // effect key path
-        parser.or_recover(|p| p.parse(path::PathScope::default()))?;
-        parser.bump_expected(SyntaxKind::Eq);
+        // `with` parameter supports either:
+        // - `Key = value` (legacy)
+        // - `value` (shorthand; key inferred from value type / usage)
+        let is_keyed = parser.dry_run(|p| {
+            if !p.parse_ok(path::PathScope::default()).is_ok_and(identity) {
+                return false;
+            }
+            p.current_kind() == Some(SyntaxKind::Eq)
+        });
 
-        // effect_value is always a full expression now
-        parse_expr(parser)
+        if is_keyed {
+            // effect key path
+            parser.or_recover(|p| p.parse(path::PathScope::default()))?;
+            parser.bump_expected(SyntaxKind::Eq);
+            parse_expr(parser)
+        } else {
+            // shorthand value expression
+            parse_expr(parser)
+        }
     }
 }
 
@@ -257,11 +270,13 @@ impl super::Parse for MatchArmListScope {
             parser.parse(MatchArmScope::default())?;
             parser.set_newline_as_trivia(false);
 
-            // Allow optional comma after match arm, then newline or closing brace
-            parser.bump_if(SyntaxKind::Comma);
-
-            parser.expect(&[SyntaxKind::Newline, SyntaxKind::RBrace], None)?;
-            if !parser.bump_if(SyntaxKind::Newline) {
+            parser.expect(
+                &[SyntaxKind::Comma, SyntaxKind::Newline, SyntaxKind::RBrace],
+                None,
+            )?;
+            let comma = parser.bump_if(SyntaxKind::Comma);
+            let nl = parser.bump_if(SyntaxKind::Newline);
+            if !(comma || nl) {
                 break;
             }
         }

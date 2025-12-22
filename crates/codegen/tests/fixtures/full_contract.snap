@@ -1,6 +1,5 @@
 ---
 source: crates/codegen/tests/yul.rs
-assertion_line: 31
 expression: output
 input_file: tests/fixtures/full_contract.fe
 ---
@@ -45,8 +44,8 @@ object "ShapeDispatcher" {
           store_field__deduped(v4, 0, v2)
           store_field__deduped(v4, 32, v3)
           let v5 := v4
-          store_field__deduped(v5, 0, add(get_field__MemPtr_u256__97fe9178c4597e85(v5, 0), 1))
-          store_field__deduped(v5, 32, add(get_field__MemPtr_u256__97fe9178c4597e85(v5, 32), 2))
+          store_field__deduped(v5, 0, add(mload(v5), 1))
+          store_field__deduped(v5, 32, add(mload(add(v5, 32)), 2))
           let v6 := point_area_mem(v5)
           abi_encode(v6)
           let v7 := eq(v0, 2066295049)
@@ -55,7 +54,7 @@ object "ShapeDispatcher" {
             let v9 := alloc(32)
             store_field__deduped(v9, 0, v8)
             let v10 := v9
-            store_field__deduped(v10, 0, add(get_field__MemPtr_u256__97fe9178c4597e85(v10, 0), 3))
+            store_field__deduped(v10, 0, add(mload(v10), 3))
             v6 := square_area_mem(v10)
             abi_encode(v6)
             return(0, 0)
@@ -71,7 +70,7 @@ object "ShapeDispatcher" {
             let v13 := alloc(32)
             store_field__deduped(v13, 0, v12)
             let v14 := v13
-            store_field__deduped(v14, 0, add(get_field__MemPtr_u256__97fe9178c4597e85(v14, 0), 3))
+            store_field__deduped(v14, 0, add(mload(v14), 3))
             let v15 := square_area_mem(v14)
             abi_encode(v15)
             return(0, 0)
@@ -81,18 +80,11 @@ object "ShapeDispatcher" {
           }
         }
       }
-      function get_field__MemPtr_u256__97fe9178c4597e85(ptr, offset) -> ret {
-        let v0 := add(ptr, offset)
-        ret := to_word__deduped(load__MemPtr__d0292394fccae3e4(v0))
-      }
-      function load__MemPtr__d0292394fccae3e4(addr) -> ret {
-        ret := mload(addr)
-      }
       function point_area_mem(self) -> ret {
-        ret := mul(get_field__MemPtr_u256__97fe9178c4597e85(self, 0), get_field__MemPtr_u256__97fe9178c4597e85(self, 32))
+        ret := mul(mload(self), mload(add(self, 32)))
       }
       function square_area_mem(self) -> ret {
-        let v0 := get_field__MemPtr_u256__97fe9178c4597e85(self, 0)
+        let v0 := mload(self)
         ret := mul(v0, v0)
       }
       function store__MemPtr__d0292394fccae3e4(addr, value) {

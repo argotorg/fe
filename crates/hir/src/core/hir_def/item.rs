@@ -634,7 +634,7 @@ pub struct Func<'db> {
     pub top_mod: TopLevelMod<'db>,
 
     #[return_ref]
-    pub(crate) origin: HirOrigin<ast::Func>,
+    pub origin: HirOrigin<ast::Func>,
 }
 impl<'db> Func<'db> {
     pub fn span(self) -> LazyFuncSpan<'db> {
@@ -763,6 +763,10 @@ impl<'db> Contract<'db> {
 
     pub fn scope(self) -> ScopeId<'db> {
         ScopeId::from_item(self.into())
+    }
+
+    pub fn hir_fields(self, db: &'db dyn HirDb) -> FieldDefListId<'db> {
+        self.fields(db)
     }
 
     pub fn init_func(self, db: &'db dyn HirDb) -> Option<Func<'db>> {
@@ -1408,6 +1412,10 @@ impl<'db> FieldDef<'db> {
             type_ref,
             vis,
         }
+    }
+
+    pub fn type_ref(&self) -> Partial<TypeId<'db>> {
+        self.type_ref
     }
 }
 

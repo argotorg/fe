@@ -27,7 +27,10 @@ pub use reference::{
 
 use crate::HirDb;
 use crate::analysis::HirAnalysisDb;
+use crate::analysis::ty::diagnostics::{ImplDiag, TyLowerDiag};
+use crate::analysis::ty::normalize::normalize_ty;
 use crate::analysis::ty::ty_def::Kind;
+use crate::analysis::ty::ty_error::collect_hir_ty_diags;
 use crate::hir_def::params::KindBound as HirKindBound;
 use crate::hir_def::scope_graph::ScopeId;
 
@@ -70,9 +73,10 @@ use crate::analysis::ty::{
     ty_error::collect_ty_lower_errors,
     ty_lower::{TyAlias, lower_hir_ty, lower_type_alias, lower_type_alias_from_hir},
 };
-use crate::core::adt_lower::lower_adt;
+use crate::core::adt_lower::{lower_adt, lower_contract_fields};
 use common::indexmap::IndexMap;
 use indexmap::IndexSet;
+use salsa::Update;
 // Re-export from crate root for backwards compatibility
 pub use crate::diagnosable as diagnostics;
 
@@ -94,7 +98,8 @@ pub fn constraints_for<'db>(
     match item {
         ItemKind::Struct(s) => collect_adt_constraints(db, s.as_adt(db)).instantiate_identity(),
         ItemKind::Enum(e) => collect_adt_constraints(db, e.as_adt(db)).instantiate_identity(),
-        ItemKind::Contract(c) => collect_adt_constraints(db, c.as_adt(db)).instantiate_identity(),
+        // Contracts have no generic parameters, so no constraints
+        ItemKind::Contract(_) => PredicateListId::empty_list(db),
         ItemKind::Func(f) => {
             collect_func_def_constraints(db, f.into(), true).instantiate_identity()
         }
@@ -467,10 +472,6 @@ impl<'db> FuncParamView<'db> {
 
     /// All type-related diagnostics for this parameter.
     pub fn ty_diags(self, db: &'db dyn HirAnalysisDb) -> Vec<TyDiagCollection<'db>> {
-        use crate::analysis::ty::diagnostics::ImplDiag;
-        use crate::analysis::ty::normalize::normalize_ty;
-        use crate::analysis::ty::ty_error::collect_hir_ty_diags;
-
         let func = self.func;
         let assumptions = func.assumptions(db);
 
@@ -497,14 +498,14 @@ impl<'db> FuncParamView<'db> {
         let mut out = Vec::new();
 
         if !ty.has_star_kind(db) {
-            out.push(TyDiagCollection::from(
-                crate::analysis::ty::diagnostics::TyLowerDiag::ExpectedStarKind(ty_span.clone()),
-            ));
+            out.push(TyDiagCollection::from(TyLowerDiag::ExpectedStarKind(
+                ty_span.clone(),
+            )));
             return out;
         }
         if ty.is_const_ty(db) {
             out.push(
-                crate::analysis::ty::diagnostics::TyLowerDiag::NormalTypeExpected {
+                TyLowerDiag::NormalTypeExpected {
                     span: ty_span.clone(),
                     given: ty,
                 }
@@ -556,15 +557,109 @@ impl<'db> FuncParamView<'db> {
 
 // Effect param views --------------------------------------------------------
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Update)]
+pub struct RecvView<'db> {
+    contract: Contract<'db>,
+    recv_idx: u32,
+}
+
+impl<'db> RecvView<'db> {
+    pub fn contract(self) -> Contract<'db> {
+        self.contract
+    }
+
+    pub fn index(self) -> u32 {
+        self.recv_idx
+    }
+
+    pub fn msg_path(self, db: &'db dyn HirDb) -> Option<PathId<'db>> {
+        self.contract
+            .recvs(db)
+            .data(db)
+            .get(self.recv_idx as usize)
+            .and_then(|r| r.msg_path)
+    }
+
+    pub fn arm(self, db: &'db dyn HirDb, arm_idx: u32) -> Option<RecvArmView<'db>> {
+        self.contract
+            .recv_arm(db, self.recv_idx as usize, arm_idx as usize)
+            .map(|_| RecvArmView {
+                recv: self,
+                arm_idx,
+            })
+    }
+
+    pub fn arms(self, db: &'db dyn HirDb) -> impl Iterator<Item = RecvArmView<'db>> + 'db {
+        let len = self
+            .contract
+            .recvs(db)
+            .data(db)
+            .get(self.recv_idx as usize)
+            .map(|r| r.arms.data(db).len())
+            .unwrap_or(0);
+        (0..len).map(move |arm_idx| RecvArmView {
+            recv: self,
+            arm_idx: arm_idx as u32,
+        })
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Update)]
+pub struct RecvArmView<'db> {
+    recv: RecvView<'db>,
+    arm_idx: u32,
+}
+
+impl<'db> RecvArmView<'db> {
+    pub fn recv(self) -> RecvView<'db> {
+        self.recv
+    }
+
+    pub fn contract(self) -> Contract<'db> {
+        self.recv.contract
+    }
+
+    pub fn arm(self, db: &'db dyn HirDb) -> Option<ContractRecvArm<'db>> {
+        self.contract()
+            .recv_arm(db, self.recv.recv_idx as usize, self.arm_idx as usize)
+    }
+
+    pub fn effects(self, db: &'db dyn HirDb) -> EffectParamListId<'db> {
+        self.arm(db)
+            .map(|a| a.effects)
+            .unwrap_or_else(|| EffectParamListId::new(db, Vec::new()))
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Update)]
+pub enum EffectParamOwner<'db> {
+    Func(Func<'db>),
+    Contract(Contract<'db>),
+    RecvArm(RecvArmView<'db>),
+}
+impl<'db> EffectParamOwner<'db> {
+    pub fn scope(self) -> ScopeId<'db> {
+        match self {
+            EffectParamOwner::Func(func) => func.scope(),
+            EffectParamOwner::Contract(contract) => contract.scope(),
+            EffectParamOwner::RecvArm(arm) => arm.contract().scope(),
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug)]
 pub struct EffectParamView<'db> {
-    func: Func<'db>,
+    pub owner: EffectParamOwner<'db>,
     idx: usize,
 }
 
 impl<'db> EffectParamView<'db> {
     fn effect(self, db: &'db dyn HirDb) -> &'db crate::core::hir_def::EffectParam<'db> {
-        &self.func.effects(db).data(db)[self.idx]
+        match self.owner {
+            EffectParamOwner::Func(func) => &func.effects(db).data(db)[self.idx],
+            EffectParamOwner::Contract(contract) => &contract.effects(db).data(db)[self.idx],
+            EffectParamOwner::RecvArm(arm) => &arm.effects(db).data(db)[self.idx],
+        }
     }
 
     /// Optional name for this effect parameter.
@@ -586,11 +681,6 @@ impl<'db> EffectParamView<'db> {
     pub fn index(self) -> usize {
         self.idx
     }
-
-    /// The function owning this effect parameter.
-    pub fn func(self) -> Func<'db> {
-        self.func
-    }
 }
 
 impl<'db> Func<'db> {
@@ -610,7 +700,8 @@ impl<'db> Func<'db> {
         db: &'db dyn HirDb,
     ) -> impl Iterator<Item = EffectParamView<'db>> + 'db {
         let len = self.effects(db).data(db).len();
-        (0..len).map(move |idx| EffectParamView { func: self, idx })
+        let owner = EffectParamOwner::Func(self);
+        (0..len).map(move |idx| EffectParamView { owner, idx })
     }
 
     /// Returns true if this function has any effect parameters.
@@ -619,10 +710,51 @@ impl<'db> Func<'db> {
     }
 }
 
+impl<'db> Contract<'db> {
+    pub fn recv(self, db: &'db dyn HirDb, recv_idx: u32) -> Option<RecvView<'db>> {
+        self.recvs(db)
+            .data(db)
+            .get(recv_idx as usize)
+            .map(|_| RecvView {
+                contract: self,
+                recv_idx,
+            })
+    }
+
+    pub fn recv_views(self, db: &'db dyn HirDb) -> impl Iterator<Item = RecvView<'db>> + 'db {
+        let len = self.recvs(db).data(db).len();
+        (0..len).map(move |idx| RecvView {
+            contract: self,
+            recv_idx: idx as u32,
+        })
+    }
+
+    pub fn effect_params(
+        self,
+        db: &'db dyn HirDb,
+    ) -> impl Iterator<Item = EffectParamView<'db>> + 'db {
+        let len = self.effects(db).data(db).len();
+        let owner = EffectParamOwner::Contract(self);
+        (0..len).map(move |idx| EffectParamView { owner, idx })
+    }
+}
+
 /// Helper to check if a type's base matches a given ADT.
 fn matches_adt<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>, adt: AdtDef<'db>) -> bool {
     match ty.base_ty(db).data(db) {
         TyData::TyBase(TyBase::Adt(ty_adt)) => *ty_adt == adt,
+        _ => false,
+    }
+}
+
+/// Helper to check if a type's base matches a given contract.
+fn matches_contract<'db>(
+    db: &'db dyn HirAnalysisDb,
+    ty: TyId<'db>,
+    contract: Contract<'db>,
+) -> bool {
+    match ty.base_ty(db).data(db) {
+        TyData::TyBase(TyBase::Contract(c)) => *c == contract,
         _ => false,
     }
 }
@@ -728,9 +860,6 @@ impl<'db> Struct<'db> {
 impl<'db> Contract<'db> {
     /// Returns semantic types of all fields, bound to identity parameters.
     pub fn field_tys(self, db: &'db dyn HirAnalysisDb) -> Vec<Binder<TyId<'db>>> {
-        use crate::analysis::ty::ty_def::{InvalidCause, TyId};
-        use crate::analysis::ty::ty_lower::lower_hir_ty;
-
         let scope = self.scope();
         // Contracts currently have no generic params/where-clause; use empty assumptions.
         let assumptions = PredicateListId::empty_list(db);
@@ -749,32 +878,25 @@ impl<'db> Contract<'db> {
             .collect()
     }
 
-    /// Semantic ADT definition for this contract (cached via tracked query).
-    pub fn as_adt(self, db: &'db dyn HirAnalysisDb) -> AdtDef<'db> {
-        lower_adt(db, AdtRef::from(self))
-    }
-
     /// Returns all inherent `impl` blocks for this contract within the same ingot.
     pub fn all_impls(self, db: &'db dyn HirAnalysisDb) -> Vec<Impl<'db>> {
-        let adt = self.as_adt(db);
         self.top_mod(db)
             .ingot(db)
             .all_impls(db)
             .iter()
             .copied()
-            .filter(|impl_| matches_adt(db, impl_.ty(db), adt))
+            .filter(|impl_| matches_contract(db, impl_.ty(db), self))
             .collect()
     }
 
     /// Returns all `impl Trait for Contract` blocks for this contract within the same ingot.
     pub fn all_impl_traits(self, db: &'db dyn HirAnalysisDb) -> Vec<ImplTrait<'db>> {
-        let adt = self.as_adt(db);
         self.top_mod(db)
             .ingot(db)
             .all_impl_traits(db)
             .iter()
             .copied()
-            .filter(|impl_trait| matches_adt(db, impl_trait.ty(db), adt))
+            .filter(|impl_trait| matches_contract(db, impl_trait.ty(db), self))
             .collect()
     }
 }
@@ -936,7 +1058,7 @@ impl<'db> WherePredicateView<'db> {
                     if !actual.does_match(&expected) {
                         let span = self.span().bounds().bound(i).kind_bound();
                         out.push(
-                            crate::analysis::ty::diagnostics::TyLowerDiag::InconsistentKindBound {
+                            TyLowerDiag::InconsistentKindBound {
                                 span: span.into(),
                                 ty: subject,
                                 bound: expected,
@@ -2065,6 +2187,10 @@ impl<'db> TraitAssocConstView<'db> {
         self.decl(db).default.is_some()
     }
 
+    pub fn default_body(self, db: &'db dyn HirDb) -> Option<crate::core::hir_def::Body<'db>> {
+        self.decl(db).default.and_then(|body| body.to_opt())
+    }
+
     /// Semantic type of this associated const, lowered in the trait's scope.
     pub fn ty(self, db: &'db dyn HirAnalysisDb) -> Option<TyId<'db>> {
         let hir = self.decl(db).ty.to_opt()?;
@@ -2215,7 +2341,7 @@ impl<'db> FieldView<'db> {
     }
 
     /// Returns the semantic ADT field-set and index for this field.
-    pub fn as_adt_field(self, db: &'db dyn HirAnalysisDb) -> (&'db AdtField<'db>, usize) {
+    pub fn as_adt_field(self, db: &'db dyn HirAnalysisDb) -> (AdtField<'db>, usize) {
         (self.parent.as_adt_fields(db), self.idx)
     }
 
@@ -2277,15 +2403,12 @@ impl<'db> FieldView<'db> {
         let span = self.ty_span();
 
         if !ty.has_star_kind(db) {
-            out.push(
-                crate::analysis::ty::diagnostics::TyLowerDiag::ExpectedStarKind(span.clone())
-                    .into(),
-            );
+            out.push(TyLowerDiag::ExpectedStarKind(span.clone()).into());
             return out;
         }
         if ty.is_const_ty(db) {
             out.push(
-                crate::analysis::ty::diagnostics::TyLowerDiag::NormalTypeExpected {
+                TyLowerDiag::NormalTypeExpected {
                     span: span.clone(),
                     given: ty,
                 }
@@ -2326,7 +2449,7 @@ impl<'db> FieldView<'db> {
             let expected_ty = expected.ty(db);
             if !expected_ty.has_invalid(db) && !ty.has_invalid(db) && ty != expected_ty {
                 out.push(
-                    crate::analysis::ty::diagnostics::TyLowerDiag::ConstTyMismatch {
+                    TyLowerDiag::ConstTyMismatch {
                         span,
                         expected: expected_ty,
                         given: ty,
@@ -2349,11 +2472,11 @@ impl<'db> FieldParent<'db> {
     }
 
     /// Semantic field-set for this parent.
-    pub fn as_adt_fields(self, db: &'db dyn HirAnalysisDb) -> &'db AdtField<'db> {
+    pub fn as_adt_fields(self, db: &'db dyn HirAnalysisDb) -> AdtField<'db> {
         match self {
-            FieldParent::Struct(s) => &s.as_adt(db).fields(db)[0],
-            FieldParent::Contract(c) => &c.as_adt(db).fields(db)[0],
-            FieldParent::Variant(v) => v.as_adt_fields(db),
+            FieldParent::Struct(s) => s.as_adt(db).fields(db)[0].clone(),
+            FieldParent::Contract(c) => lower_contract_fields(db, c),
+            FieldParent::Variant(v) => v.as_adt_fields(db).clone(),
         }
     }
 }
@@ -2372,9 +2495,13 @@ impl<'db> TyId<'db> {
     /// Returns the field parent for this type if it's a struct or contract.
     /// This provides access to fields via `field_parent.fields(db)`.
     pub fn field_parent(self, db: &'db dyn HirAnalysisDb) -> Option<FieldParent<'db>> {
+        // Check for contract first
+        if let Some(contract) = self.as_contract(db) {
+            return Some(FieldParent::Contract(contract));
+        }
+        // Check for struct
         match self.adt_ref(db)? {
             AdtRef::Struct(s) => Some(FieldParent::Struct(s)),
-            AdtRef::Contract(c) => Some(FieldParent::Contract(c)),
             AdtRef::Enum(_) => None, // Enums don't have direct field access
         }
     }

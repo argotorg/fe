@@ -4,6 +4,34 @@ expression: res
 input_file: test_files/ty_check/recv_nested_patterns.fe
 ---
 note: 
+  ┌─ recv_nested_patterns.fe:5:5
+  │  
+5 │ ╭     #[selector = 0x01]
+6 │ │     SetPair { pair: (u64, bool) } -> u64,
+  │ ╰────────────────────────────────────────^ (u64, bool)
+
+note: 
+  ┌─ recv_nested_patterns.fe:7:5
+  │  
+7 │ ╭     #[selector = 0x02]
+8 │ │     SetTriple { triple: (u64, u64, u64) } -> u64,
+  │ ╰────────────────────────────────────────────────^ (u64, u64, u64)
+
+note: 
+   ┌─ recv_nested_patterns.fe:9:5
+   │  
+ 9 │ ╭     #[selector = 0x03]
+10 │ │     SetNested { nested: ((u64, u64), bool) } -> u64,
+   │ ╰───────────────────────────────────────────────────^ ((u64, u64), bool)
+
+note: 
+   ┌─ recv_nested_patterns.fe:11:5
+   │  
+11 │ ╭     #[selector = 0x04]
+12 │ │     Multi { a: (u64, u64), b: (bool, bool) } -> bool,
+   │ ╰────────────────────────────────────────────────────^ (bool, bool)
+
+note: 
    ┌─ recv_nested_patterns.fe:20:9
    │
 20 │         SetPair { pair: (first, second) } -> u64 uses () {
@@ -917,6 +945,13 @@ note:
    │                   ^^ bool
 
 note: 
+    ┌─ recv_nested_patterns.fe:108:5
+    │  
+108 │ ╭     #[selector = 0x20]
+109 │ │     TypeMismatch { pair: (u64, u64) } -> u64,
+    │ ╰────────────────────────────────────────────^ (u64, u64)
+
+note: 
     ┌─ recv_nested_patterns.fe:117:9
     │
 117 │         TypeMismatch { pair: (a, b) } -> u64 uses () {
@@ -966,6 +1001,13 @@ note:
     │
 118 │             a + b
     │                 ^ u64
+
+note: 
+    ┌─ recv_nested_patterns.fe:125:5
+    │  
+125 │ ╭     #[selector = 0x30]
+126 │ │     Deep { nested: (((u64, u64), u64), bool) } -> u64,
+    │ ╰─────────────────────────────────────────────────────^ (((u64, u64), u64), bool)
 
 note: 
     ┌─ recv_nested_patterns.fe:134:9

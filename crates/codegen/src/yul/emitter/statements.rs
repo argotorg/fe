@@ -3,7 +3,8 @@
 //! The functions defined in this module operate within `FunctionEmitter` and walk
 //! straight-line MIR instructions (non-terminators) to produce Yul statements.
 
-use hir::hir_def::{ExprId, PatId, expr::ArithBinOp};
+use hir::analysis::ty::decision_tree::{Projection, ProjectionPath};
+use hir::hir_def::{Expr, ExprId, Pat, PatId, expr::ArithBinOp};
 use mir::ir::{IntrinsicOp, IntrinsicValue};
 use mir::{self, ValueId, ValueOrigin};
 
@@ -12,6 +13,87 @@ use crate::yul::{doc::YulDoc, state::BlockState};
 use super::{YulError, function::FunctionEmitter};
 
 impl<'db> FunctionEmitter<'db> {
+    fn try_emit_field_assign(
+        &self,
+        docs: &mut Vec<YulDoc>,
+        target: ExprId,
+        value: ValueId,
+        state: &BlockState,
+    ) -> Result<bool, YulError> {
+        let Expr::Field(..) = self.expect_expr(target)? else {
+            return Ok(false);
+        };
+        let Some(value_id) = self.mir_func.body.expr_values.get(&target).copied() else {
+            return Err(YulError::Unsupported(
+                "missing lowered value for field assignment target".into(),
+            ));
+        };
+        let target_value = self.mir_func.body.value(value_id);
+        let ValueOrigin::PlaceLoad(place) = &target_value.origin else {
+            return Err(YulError::Unsupported(
+                "field assignment target must be a scalar place".into(),
+            ));
+        };
+
+        let addr = self.lower_place_ref(place, state)?;
+        let rhs = self.lower_value(value, state)?;
+        let line = match place.address_space {
+            mir::ir::AddressSpaceKind::Memory => format!("mstore({addr}, {rhs})"),
+            mir::ir::AddressSpaceKind::Storage => format!("sstore({addr}, {rhs})"),
+        };
+        docs.push(YulDoc::line(line));
+        Ok(true)
+    }
+
+    fn try_emit_field_augassign(
+        &self,
+        docs: &mut Vec<YulDoc>,
+        target: ExprId,
+        value: ValueId,
+        op: ArithBinOp,
+        state: &BlockState,
+    ) -> Result<bool, YulError> {
+        let Expr::Field(..) = self.expect_expr(target)? else {
+            return Ok(false);
+        };
+        let Some(value_id) = self.mir_func.body.expr_values.get(&target).copied() else {
+            return Err(YulError::Unsupported(
+                "missing lowered value for field assignment target".into(),
+            ));
+        };
+        let target_value = self.mir_func.body.value(value_id);
+        let ValueOrigin::PlaceLoad(place) = &target_value.origin else {
+            return Err(YulError::Unsupported(
+                "field augmented assignment target must be a scalar place".into(),
+            ));
+        };
+
+        let addr = self.lower_place_ref(place, state)?;
+        let lhs = self.lower_expr(target, state)?;
+        let rhs = self.lower_value(value, state)?;
+
+        let updated = match op {
+            ArithBinOp::Add => format!("add({lhs}, {rhs})"),
+            ArithBinOp::Sub => format!("sub({lhs}, {rhs})"),
+            ArithBinOp::Mul => format!("mul({lhs}, {rhs})"),
+            ArithBinOp::Div => format!("div({lhs}, {rhs})"),
+            ArithBinOp::Rem => format!("mod({lhs}, {rhs})"),
+            ArithBinOp::Pow => format!("exp({lhs}, {rhs})"),
+            ArithBinOp::LShift => format!("shl({rhs}, {lhs})"),
+            ArithBinOp::RShift => format!("shr({rhs}, {lhs})"),
+            ArithBinOp::BitAnd => format!("and({lhs}, {rhs})"),
+            ArithBinOp::BitOr => format!("or({lhs}, {rhs})"),
+            ArithBinOp::BitXor => format!("xor({lhs}, {rhs})"),
+        };
+
+        let line = match place.address_space {
+            mir::ir::AddressSpaceKind::Memory => format!("mstore({addr}, {updated})"),
+            mir::ir::AddressSpaceKind::Storage => format!("sstore({addr}, {updated})"),
+        };
+        docs.push(YulDoc::line(line));
+        Ok(true)
+    }
+
     /// Lowers a linear sequence of MIR instructions into Yul docs.
     ///
     /// * `insts` - MIR instructions belonging to the current block.
@@ -77,24 +159,108 @@ impl<'db> FunctionEmitter<'db> {
     fn emit_let_inst(
         &mut self,
         docs: &mut Vec<YulDoc>,
-        pat: PatId,
+        pat_id: PatId,
         value: Option<ValueId>,
         state: &mut BlockState,
     ) -> Result<(), YulError> {
-        let binding = self.pattern_ident(pat)?;
-        let existing = state.binding(&binding);
-        let value = match value {
-            Some(val) => self.lower_value(val, state)?,
-            None => "0".into(),
-        };
-        if let Some(name) = existing {
-            docs.push(YulDoc::line(format!("{name} := {value}")));
-        } else {
-            let temp = state.alloc_local();
-            state.insert_binding(binding.clone(), temp.clone());
-            docs.push(YulDoc::line(format!("let {temp} := {value}")));
+        let pat = self.expect_pat(pat_id)?;
+        match pat {
+            Pat::Path(..) => {
+                let binding = self.pattern_ident(pat_id)?;
+                let existing = state.binding(&binding);
+                let value = match value {
+                    Some(val) => self.lower_value(val, state)?,
+                    None => "0".into(),
+                };
+                if let Some(name) = existing {
+                    docs.push(YulDoc::line(format!("{name} := {value}")));
+                } else {
+                    let temp = state.alloc_local();
+                    state.insert_binding(binding.clone(), temp.clone());
+                    docs.push(YulDoc::line(format!("let {temp} := {value}")));
+                }
+                Ok(())
+            }
+            Pat::Tuple(pats) => {
+                let value_id = value.ok_or_else(|| {
+                    YulError::Unsupported("tuple pattern bindings require an initializer".into())
+                })?;
+
+                let tuple_ty = self.mir_func.body.value(value_id).ty;
+                if !tuple_ty.is_tuple(self.db) {
+                    return Err(YulError::Unsupported(
+                        "tuple patterns require a tuple initializer".into(),
+                    ));
+                }
+                let field_types = tuple_ty.field_types(self.db);
+                if field_types.len() != pats.len() {
+                    return Err(YulError::Unsupported(format!(
+                        "tuple pattern has {} elements but initializer has {} fields",
+                        pats.len(),
+                        field_types.len()
+                    )));
+                }
+
+                let base = self.lower_value(value_id, state)?;
+                let base_temp = state.alloc_local();
+                state.insert_value_temp(value_id.index(), base_temp.clone());
+                docs.push(YulDoc::line(format!("let {base_temp} := {base}")));
+
+                for (field_idx, field_pat_id) in pats.iter().enumerate() {
+                    let field_pat = self.expect_pat(*field_pat_id)?;
+                    let Pat::Path(..) = field_pat else {
+                        if matches!(field_pat, Pat::WildCard | Pat::Rest) {
+                            continue;
+                        }
+                        return Err(YulError::Unsupported(
+                            "only identifier patterns are supported".into(),
+                        ));
+                    };
+                    let binding = self.pattern_ident(*field_pat_id)?;
+                    let field_ty = field_types[field_idx];
+                    let is_aggregate = field_ty.field_count(self.db) > 0;
+                    let place = mir::ir::Place::new(
+                        value_id,
+                        ProjectionPath::from_projection(Projection::Field(field_idx)),
+                        mir::ir::AddressSpaceKind::Memory,
+                    );
+                    let value = if is_aggregate {
+                        self.lower_place_ref(&place, state)?
+                    } else {
+                        self.lower_place_load(&place, field_ty, state)?
+                    };
+
+                    if let Some(existing) = state.binding(&binding) {
+                        docs.push(YulDoc::line(format!("{existing} := {value}")));
+                    } else {
+                        let local = state.alloc_local();
+                        state.insert_binding(binding.clone(), local.clone());
+                        docs.push(YulDoc::line(format!("let {local} := {value}")));
+                    }
+                }
+
+                Ok(())
+            }
+            Pat::WildCard | Pat::Rest => {
+                if let Some(value) = value {
+                    let lowered = self.lower_value(value, state)?;
+                    let value_data = self.mir_func.body.value(value);
+                    let is_call = matches!(value_data.origin, ValueOrigin::Call(..));
+                    let is_zero_sized = (value_data.ty.is_tuple(self.db)
+                        && value_data.ty.field_count(self.db) == 0)
+                        || value_data.ty.is_never(self.db);
+                    if is_call && !is_zero_sized {
+                        docs.push(YulDoc::line(format!("pop({lowered})")));
+                    } else {
+                        docs.push(YulDoc::line(lowered));
+                    }
+                }
+                Ok(())
+            }
+            _ => Err(YulError::Unsupported(
+                "only identifier and tuple patterns are supported".into(),
+            )),
         }
-        Ok(())
     }
 
     /// Lowers a plain assignment (`x = y`) into Yul.
@@ -112,6 +278,9 @@ impl<'db> FunctionEmitter<'db> {
         value: ValueId,
         state: &mut BlockState,
     ) -> Result<(), YulError> {
+        if self.try_emit_field_assign(docs, target, value, state)? {
+            return Ok(());
+        }
         let binding = self.path_from_expr(target)?;
         let yul_name = state
             .binding(&binding)
@@ -138,6 +307,9 @@ impl<'db> FunctionEmitter<'db> {
         op: ArithBinOp,
         state: &mut BlockState,
     ) -> Result<(), YulError> {
+        if self.try_emit_field_augassign(docs, target, value, op, state)? {
+            return Ok(());
+        }
         let binding = self.path_from_expr(target)?;
         let yul_name = state
             .binding(&binding)
@@ -345,6 +517,14 @@ impl<'db> FunctionEmitter<'db> {
                 .next()
                 .expect("addr_of arity already checked"));
         }
+        if matches!(intr.op, IntrinsicOp::StorAt) {
+            let args = self.lower_intrinsic_args(intr, state)?;
+            self.expect_intrinsic_arity(intr.op, &args, 1)?;
+            return Ok(args
+                .into_iter()
+                .next()
+                .expect("stor_at arity already checked"));
+        }
         if matches!(
             intr.op,
             IntrinsicOp::CodeRegionOffset | IntrinsicOp::CodeRegionLen
@@ -355,6 +535,8 @@ impl<'db> FunctionEmitter<'db> {
         let expected = match intr.op {
             IntrinsicOp::Keccak => 2,
             IntrinsicOp::Caller => 0,
+            IntrinsicOp::Codesize => 0,
+            IntrinsicOp::Calldatasize | IntrinsicOp::Returndatasize => 0,
             _ => 1,
         };
         self.expect_intrinsic_arity(intr.op, &args, expected)?;
@@ -401,6 +583,7 @@ impl<'db> FunctionEmitter<'db> {
         let args = self.lower_intrinsic_args(intr, state)?;
         let expected = match intr.op {
             IntrinsicOp::Codecopy => 3,
+            IntrinsicOp::Calldatacopy | IntrinsicOp::Returndatacopy => 3,
             IntrinsicOp::Mstore | IntrinsicOp::Mstore8 | IntrinsicOp::Sstore => 2,
             IntrinsicOp::ReturnData | IntrinsicOp::Revert => 2,
             IntrinsicOp::Caller => 0,
@@ -414,6 +597,12 @@ impl<'db> FunctionEmitter<'db> {
             IntrinsicOp::ReturnData => format!("return({}, {})", args[0], args[1]),
             IntrinsicOp::Revert => format!("revert({}, {})", args[0], args[1]),
             IntrinsicOp::Codecopy => format!("codecopy({}, {}, {})", args[0], args[1], args[2]),
+            IntrinsicOp::Calldatacopy => {
+                format!("calldatacopy({}, {}, {})", args[0], args[1], args[2])
+            }
+            IntrinsicOp::Returndatacopy => {
+                format!("returndatacopy({}, {}, {})", args[0], args[1], args[2])
+            }
             IntrinsicOp::Caller => String::from("caller()"),
             _ => unreachable!(),
         };
@@ -470,6 +659,10 @@ impl<'db> FunctionEmitter<'db> {
         match op {
             IntrinsicOp::Mload => "mload",
             IntrinsicOp::Calldataload => "calldataload",
+            IntrinsicOp::Calldatacopy => "calldatacopy",
+            IntrinsicOp::Calldatasize => "calldatasize",
+            IntrinsicOp::Returndatacopy => "returndatacopy",
+            IntrinsicOp::Returndatasize => "returndatasize",
             IntrinsicOp::AddrOf => "addr_of",
             IntrinsicOp::Mstore => "mstore",
             IntrinsicOp::Mstore8 => "mstore8",
@@ -478,10 +671,12 @@ impl<'db> FunctionEmitter<'db> {
             IntrinsicOp::ReturnData => "return",
             IntrinsicOp::Revert => "revert",
             IntrinsicOp::Codecopy => "codecopy",
+            IntrinsicOp::Codesize => "codesize",
             IntrinsicOp::CodeRegionOffset => "code_region_offset",
             IntrinsicOp::CodeRegionLen => "code_region_len",
             IntrinsicOp::Keccak => "keccak256",
             IntrinsicOp::Caller => "caller",
+            IntrinsicOp::StorAt => "stor_at",
         }
     }
 }

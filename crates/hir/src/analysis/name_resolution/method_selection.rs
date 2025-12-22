@@ -12,7 +12,7 @@ use crate::analysis::{
         method_table::probe_method,
         trait_def::{TraitInstId, impls_for_ty},
         trait_resolution::{GoalSatisfiability, PredicateListId, is_goal_satisfiable},
-        ty_def::TyId,
+        ty_def::{TyData, TyId},
         unify::UnificationTable,
     },
 };
@@ -133,8 +133,21 @@ impl<'db> CandidateAssembler<'db> {
     fn assemble_trait_method_candidates(&mut self) {
         let ingot = self.scope.ingot(self.db);
 
-        for &imp in impls_for_ty(self.db, ingot, self.receiver_ty) {
-            self.insert_trait_method_cand(imp.skip_binder().trait_(self.db));
+        // When the receiver is a type parameter (e.g. `D` in `fn f<D: Trait>(d: D)`),
+        // we don't know its concrete type yet, so probing impls would pull in many
+        // unrelated candidates and frequently lead to spurious ambiguity.
+        //
+        // In that case, rely on in-scope bounds (`assumptions`) to provide method
+        // candidates.
+        let receiver_is_ty_param = matches!(
+            self.receiver_ty.value.base_ty(self.db).data(self.db),
+            TyData::TyParam(_)
+        );
+
+        if !receiver_is_ty_param {
+            for &imp in impls_for_ty(self.db, ingot, self.receiver_ty) {
+                self.insert_trait_method_cand(imp.skip_binder().trait_(self.db));
+            }
         }
 
         let mut table = UnificationTable::new(self.db);
@@ -285,8 +298,22 @@ impl<'db> MethodSelector<'db> {
         // canonicalization can safely probe them.
         let _ = self.receiver.extract_identity(&mut table);
 
+        // If the receiver is a type parameter (e.g. `D` in `fn f<D: Trait>(d: D)`),
+        // prefer preserving any trait arguments coming from bounds rather than
+        // introducing fresh inference vars. Otherwise, unconstrained trait args
+        // can trigger spurious "type annotation needed" diagnostics on method calls
+        // whose signatures don't mention those args (e.g. `AbiDecoder<A>::read_word`).
+        let receiver_is_ty_param = matches!(
+            self.receiver.value.base_ty(self.db).data(self.db),
+            TyData::TyParam(_)
+        );
+
         let canonical_cand = Canonicalized::new(self.db, inst);
-        let inst = table.instantiate_with_fresh_vars(Binder::bind(inst));
+        let inst = if receiver_is_ty_param {
+            inst
+        } else {
+            table.instantiate_with_fresh_vars(Binder::bind(inst))
+        };
 
         match is_goal_satisfiable(
             self.db,
@@ -298,8 +325,13 @@ impl<'db> MethodSelector<'db> {
                 // Map back the solution to the current context.
                 let solution = canonical_cand.extract_solution(&mut table, *solution);
                 // Replace TyParams in the solved instance with fresh inference vars so
-                // downstream unification can bind them (e.g., T = u32).
-                let solution = table.instantiate_with_fresh_vars(Binder::bind(solution));
+                // downstream unification can bind them (e.g., T = u32). For receiver type
+                // parameters, keep the bound's args intact.
+                let solution = if receiver_is_ty_param {
+                    solution
+                } else {
+                    table.instantiate_with_fresh_vars(Binder::bind(solution))
+                };
 
                 MethodCandidate::TraitMethod(TraitMethodCand::new(
                     self.receiver

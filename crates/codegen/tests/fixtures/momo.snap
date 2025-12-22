@@ -1,19 +1,8 @@
 ---
 source: crates/codegen/tests/yul.rs
-assertion_line: 31
 expression: output
 input_file: tests/fixtures/momo.fe
 ---
 function read_x(val) -> ret {
-  ret := add(get_field__MemPtr_u8__78f06769553d0434(val, 0), get_field__MemPtr_u8__78f06769553d0434(val, 1))
-}
-function get_field__MemPtr_u8__78f06769553d0434(ptr, offset) -> ret {
-  let v0 := add(ptr, offset)
-  ret := from_word__u8__bc9d6eeaea22ffb5(load__MemPtr__d0292394fccae3e4(v0))
-}
-function load__MemPtr__d0292394fccae3e4(addr) -> ret {
-  ret := mload(addr)
-}
-function from_word__u8__bc9d6eeaea22ffb5(word) -> ret {
-  ret := and(word, 255)
+  ret := add(and(mload(val), 0xff), and(mload(add(val, 1)), 0xff))
 }

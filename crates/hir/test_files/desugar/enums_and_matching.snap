@@ -1,0 +1,54 @@
+---
+source: crates/hir/tests/print.rs
+expression: output
+input_file: test_files/print/enums_and_matching.fe
+---
+use core::prelude::*
+
+pub enum Option<T> {
+    Some(T),
+    None,
+}
+
+pub enum Result<T, E> {
+    Ok(T),
+    Err(E),
+}
+
+pub struct Error {
+    pub code: u32,
+}
+
+fn unwrap_or<T>(opt: Option<T>, default: T) -> T {
+    match opt {
+        Option::Some(val) => val,
+        Option::None => default,
+    }
+}
+
+fn is_ok<T, E>(res: Result<T, E>) -> bool {
+    match res {
+        Result::Ok(_) => true,
+        Result::Err(_) => false,
+    }
+}
+
+fn process_values(arr: [u32; 5]) -> u32 {
+    let mut sum: u32 = 0
+    for val in arr {
+        if val > 10 {
+            sum += val
+        }
+    }
+    sum
+}
+
+fn factorial(n: u32) -> u32 {
+    let mut result: u32 = 1
+    let mut i: u32 = 1
+    while i <= n {
+        result *= i
+        i += 1
+    }
+    result
+}

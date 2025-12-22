@@ -1,0 +1,18 @@
+msg EchoMsg {
+    #[selector = 1]
+    Answer -> u256,
+    #[selector = 2]
+    Echo { x: u256 } -> u256,
+}
+
+pub contract EchoContract {
+    recv EchoMsg {
+        Answer -> u256 {
+            42
+        }
+
+        Echo { x } -> u256 {
+            x
+        }
+    }
+}

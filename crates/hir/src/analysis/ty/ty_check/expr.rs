@@ -1,4 +1,5 @@
 use either::Either;
+use smallvec1::SmallVec;
 
 use crate::core::hir_def::{
     ArithBinOp, BinOp, CallableDef, Expr, ExprId, FieldIndex, IdentId, Partial, Pat, PatId, PathId,
@@ -11,6 +12,7 @@ use super::{
     env::{EffectOrigin, ExprProp, LocalBinding, ProvidedEffect, TyCheckEnv},
     path::ResolvedPathInBody,
 };
+use crate::analysis::place::{Place, PlaceBase};
 use crate::analysis::ty::{
     binder::Binder,
     canonical::Canonicalized,
@@ -42,10 +44,19 @@ use crate::analysis::{
         ty_def::{InvalidCause, TyId},
     },
 };
+use common::indexmap::IndexMap;
 
+#[derive(Debug, Clone, Copy)]
 enum EffectRequirement<'db> {
     Type(TyId<'db>),
     Trait(TraitInstId<'db>),
+}
+
+#[derive(Debug, Clone, Copy)]
+enum EffectSatisfaction<'db> {
+    Direct,
+    Provider { target_ty: TyId<'db> },
+    TraitByValue,
 }
 
 impl<'db> TyChecker<'db> {
@@ -203,9 +214,6 @@ impl<'db> TyChecker<'db> {
 
         for binding in bindings {
             let value_prop = self.check_expr_unknown(binding.value);
-            let Some(key_path) = binding.key_path.to_opt() else {
-                continue;
-            };
 
             let is_mut = value_prop
                 .binding
@@ -218,9 +226,19 @@ impl<'db> TyChecker<'db> {
                 },
                 ty: value_prop.ty,
                 is_mut,
+                binding: value_prop.binding,
             };
 
-            self.env.insert_effect_binding(key_path, provided);
+            match binding.key_path {
+                Some(key_path) => {
+                    if let Some(key_path) = key_path.to_opt() {
+                        self.env.insert_effect_binding(key_path, provided);
+                    }
+                }
+                None => {
+                    self.env.insert_unkeyed_effect_binding(provided);
+                }
+            }
         }
 
         let result = self.check_expr(body_expr, expected);
@@ -294,115 +312,444 @@ impl<'db> TyChecker<'db> {
             return;
         }
 
-        let call_span = expr.span(self.body());
+        let body = self.body();
+        let call_span = expr.span(body);
         let callee_assumptions = collect_func_def_constraints(self.db, func.into(), true)
             .instantiate_identity()
             .extend_all_bounds(self.db);
 
-        for effect in func.effect_params(self.db) {
+        let ingot = self.env.body().top_mod(self.db).ingot(self.db);
+        let effect_ref_trait =
+            resolve_core_trait(self.db, self.env.scope(), &["effect_ref", "EffectRef"]);
+        let effect_ref_mut_trait =
+            resolve_core_trait(self.db, self.env.scope(), &["effect_ref", "EffectRefMut"]);
+        let target_ident = IdentId::new(self.db, "Target".to_string());
+
+        let provided_span = |provided: ProvidedEffect<'db>| match provided.origin {
+            EffectOrigin::With { value_expr } => Some(value_expr.span(body).into()),
+            EffectOrigin::Param { .. } => None,
+        };
+
+        let can_unify = |this: &mut Self, expected: TyId<'db>, given: TyId<'db>| {
+            let snapshot = this.table.snapshot();
+            let ok = this.table.unify(expected, given).is_ok();
+            this.table.rollback_to(snapshot);
+            ok
+        };
+
+        let place_for = |this: &mut Self, provided: ProvidedEffect<'db>| match provided.origin {
+            EffectOrigin::With { value_expr } => this.env.expr_place(value_expr),
+            EffectOrigin::Param { .. } => provided
+                .binding
+                .map(|binding| Place::new(PlaceBase::Binding(binding))),
+        };
+
+        let direct_pass_mode_for =
+            |provided: ProvidedEffect<'db>, place: Option<&Place<'db>>| match (
+                place,
+                provided.origin,
+            ) {
+                (Some(_), _) => super::EffectPassMode::ByPlace,
+                (None, EffectOrigin::With { .. }) => super::EffectPassMode::ByTempPlace,
+                _ => super::EffectPassMode::Unknown,
+            };
+
+        let provider_target_ty = |this: &mut Self,
+                                  provided_ty: TyId<'db>,
+                                  required_mut: bool|
+         -> Option<TyId<'db>> {
+            let effect_ref_inst = TraitInstId::new(
+                this.db,
+                effect_ref_trait,
+                vec![provided_ty],
+                IndexMap::new(),
+            );
+            let canonical_ref = Canonicalized::new(this.db, effect_ref_inst);
+            let ref_sat =
+                is_goal_satisfiable(this.db, ingot, canonical_ref.value, this.env.assumptions());
+            if matches!(
+                ref_sat,
+                GoalSatisfiability::UnSat(_) | GoalSatisfiability::ContainsInvalid
+            ) {
+                return None;
+            }
+
+            if required_mut {
+                let effect_ref_mut_inst = TraitInstId::new(
+                    this.db,
+                    effect_ref_mut_trait,
+                    vec![provided_ty],
+                    IndexMap::new(),
+                );
+                let canonical_mut = Canonicalized::new(this.db, effect_ref_mut_inst);
+                let mut_sat = is_goal_satisfiable(
+                    this.db,
+                    ingot,
+                    canonical_mut.value,
+                    this.env.assumptions(),
+                );
+                if matches!(
+                    mut_sat,
+                    GoalSatisfiability::UnSat(_) | GoalSatisfiability::ContainsInvalid
+                ) {
+                    return None;
+                }
+            }
+
+            let target_assoc = effect_ref_inst.assoc_ty(this.db, target_ident)?;
+            let target_ty = normalize_ty(
+                this.db,
+                target_assoc,
+                this.env.scope(),
+                this.env.assumptions(),
+            )
+            .fold_with(this.db, &mut this.table);
+            Some(target_ty)
+        };
+
+        for (param_idx, effect) in func.effect_params(self.db).enumerate() {
             let Some(key_path) = effect.key_path(self.db) else {
                 continue;
             };
 
-            let cands =
-                self.env
-                    .effect_candidates_in_scope(key_path, func.scope(), callee_assumptions);
-            let provided = match cands.as_slice() {
-                [] => {
-                    let diag = BodyDiag::MissingEffect {
-                        primary: call_span.clone().into(),
-                        func,
-                        key: key_path,
-                    };
-                    self.push_diag(diag);
-                    continue;
-                }
-                [one] => *one,
-                _ => {
-                    let diag = BodyDiag::AmbiguousEffect {
-                        primary: call_span.clone().into(),
-                        func,
-                        key: key_path,
-                    };
-                    self.push_diag(diag);
-                    continue;
-                }
+            // If the callee's effect key doesn't resolve, avoid cascading into
+            // confusing "missing effect" diagnostics at call sites.
+            let Ok(path_res) =
+                resolve_path(self.db, key_path, func.scope(), callee_assumptions, false)
+            else {
+                continue;
             };
+            if !matches!(
+                path_res,
+                PathRes::Ty(_) | PathRes::TyAlias(_, _) | PathRes::Trait(_)
+            ) {
+                continue;
+            }
 
-            if effect.is_mut(self.db) && !provided.is_mut {
-                let provided_span = match provided.origin {
-                    EffectOrigin::With { value_expr } => Some(value_expr.span(self.body()).into()),
-                    EffectOrigin::Param { .. } => None,
-                };
-                let diag = BodyDiag::EffectMutabilityMismatch {
+            let candidate_frames = self.env.effect_candidate_frames_in_scope(
+                key_path,
+                func.scope(),
+                callee_assumptions,
+            );
+            if candidate_frames.is_empty() {
+                let diag = BodyDiag::MissingEffect {
                     primary: call_span.clone().into(),
                     func,
                     key: key_path,
-                    provided_span,
                 };
                 self.push_diag(diag);
                 continue;
             }
 
-            let Some(requirement) = self.resolve_effect_requirement(
-                key_path,
-                callable,
-                func.scope(),
-                callee_assumptions,
-                provided.ty,
-            ) else {
-                continue;
+            let required_mut = effect.is_mut(self.db);
+
+            let mut compute_viable = |cands: &[ProvidedEffect<'db>]| {
+                let mut viable: SmallVec<
+                    [(
+                        ProvidedEffect<'db>,
+                        EffectRequirement<'db>,
+                        EffectSatisfaction<'db>,
+                    ); 2],
+                > = SmallVec::new();
+
+                for provided in cands.iter().copied() {
+                    let Some(requirement) = self.resolve_effect_requirement(
+                        key_path,
+                        callable,
+                        func.scope(),
+                        callee_assumptions,
+                        provided.ty,
+                    ) else {
+                        continue;
+                    };
+
+                    match requirement {
+                        EffectRequirement::Type(expected) => {
+                            let place = place_for(self, provided);
+                            let direct_pass_mode = direct_pass_mode_for(provided, place.as_ref());
+                            let direct_mut_ok = !required_mut
+                                || direct_pass_mode == super::EffectPassMode::ByTempPlace
+                                || (direct_pass_mode == super::EffectPassMode::ByPlace
+                                    && provided.is_mut);
+
+                            if direct_pass_mode != super::EffectPassMode::Unknown
+                                && direct_mut_ok
+                                && can_unify(self, expected, provided.ty)
+                            {
+                                viable.push((
+                                    provided,
+                                    EffectRequirement::Type(expected),
+                                    EffectSatisfaction::Direct,
+                                ));
+                                continue;
+                            }
+
+                            if let Some(target_ty) =
+                                provider_target_ty(self, provided.ty, required_mut)
+                                && can_unify(self, expected, target_ty)
+                            {
+                                viable.push((
+                                    provided,
+                                    EffectRequirement::Type(expected),
+                                    EffectSatisfaction::Provider { target_ty },
+                                ));
+                            }
+                        }
+                        EffectRequirement::Trait(trait_req) => {
+                            let canonical = Canonicalized::new(self.db, trait_req);
+                            if !matches!(
+                                is_goal_satisfiable(
+                                    self.db,
+                                    ingot,
+                                    canonical.value,
+                                    self.env.assumptions(),
+                                ),
+                                GoalSatisfiability::UnSat(_) | GoalSatisfiability::ContainsInvalid
+                            ) {
+                                viable.push((
+                                    provided,
+                                    EffectRequirement::Trait(trait_req),
+                                    EffectSatisfaction::TraitByValue,
+                                ))
+                            }
+                        }
+                    }
+                }
+
+                viable
             };
 
-            match requirement {
-                EffectRequirement::Type(expected) => {
-                    if self.table.unify(expected, provided.ty).is_err() {
-                        let provided_span = match provided.origin {
-                            EffectOrigin::With { value_expr } => {
-                                Some(value_expr.span(self.body()).into())
+            let mut viable: SmallVec<
+                [(
+                    ProvidedEffect<'db>,
+                    EffectRequirement<'db>,
+                    EffectSatisfaction<'db>,
+                ); 2],
+            > = SmallVec::new();
+
+            for frame_cands in &candidate_frames {
+                viable = compute_viable(frame_cands);
+                if !viable.is_empty() {
+                    break;
+                }
+            }
+
+            if viable.is_empty() {
+                let all_candidates: SmallVec<[ProvidedEffect<'db>; 2]> =
+                    candidate_frames.iter().flatten().copied().collect();
+
+                if let [provided] = all_candidates.as_slice()
+                    && let Some(requirement) = self.resolve_effect_requirement(
+                        key_path,
+                        callable,
+                        func.scope(),
+                        callee_assumptions,
+                        provided.ty,
+                    )
+                {
+                    match requirement {
+                        EffectRequirement::Type(expected) => {
+                            let place = place_for(self, *provided);
+                            let direct_pass_mode = direct_pass_mode_for(*provided, place.as_ref());
+
+                            if can_unify(self, expected, provided.ty) {
+                                if required_mut
+                                    && direct_pass_mode == super::EffectPassMode::ByPlace
+                                    && !provided.is_mut
+                                {
+                                    let diag = BodyDiag::EffectMutabilityMismatch {
+                                        primary: call_span.clone().into(),
+                                        func,
+                                        key: key_path,
+                                        provided_span: provided_span(*provided),
+                                    };
+                                    self.push_diag(diag);
+                                } else {
+                                    let diag = BodyDiag::MissingEffect {
+                                        primary: call_span.clone().into(),
+                                        func,
+                                        key: key_path,
+                                    };
+                                    self.push_diag(diag);
+                                }
+                            } else {
+                                let diag = BodyDiag::EffectTypeMismatch {
+                                    primary: call_span.clone().into(),
+                                    func,
+                                    key: key_path,
+                                    expected,
+                                    given: provided.ty,
+                                    provided_span: provided_span(*provided),
+                                };
+                                self.push_diag(diag);
                             }
-                            EffectOrigin::Param { .. } => None,
-                        };
-                        let diag = BodyDiag::EffectTypeMismatch {
+                        }
+                        EffectRequirement::Trait(trait_req) => {
+                            let canonical = Canonicalized::new(self.db, trait_req);
+                            let sat = is_goal_satisfiable(
+                                self.db,
+                                ingot,
+                                canonical.value,
+                                self.env.assumptions(),
+                            );
+
+                            if matches!(
+                                sat,
+                                GoalSatisfiability::UnSat(_) | GoalSatisfiability::ContainsInvalid
+                            ) {
+                                let diag = BodyDiag::EffectTraitUnsatisfied {
+                                    primary: call_span.clone().into(),
+                                    func,
+                                    key: key_path,
+                                    trait_req,
+                                    given: provided.ty,
+                                    provided_span: provided_span(*provided),
+                                };
+                                self.push_diag(diag);
+                            } else {
+                                let diag = BodyDiag::MissingEffect {
+                                    primary: call_span.clone().into(),
+                                    func,
+                                    key: key_path,
+                                };
+                                self.push_diag(diag);
+                            }
+                        }
+                    }
+                    continue;
+                }
+
+                let diag = BodyDiag::MissingEffect {
+                    primary: call_span.clone().into(),
+                    func,
+                    key: key_path,
+                };
+                self.push_diag(diag);
+                continue;
+            }
+
+            let (provided, requirement, satisfaction) = match viable.as_slice() {
+                [(provided, requirement, satisfaction)] => (*provided, *requirement, *satisfaction),
+                _ => {
+                    let Some(required_name) = effect.name(self.db) else {
+                        let diag = BodyDiag::AmbiguousEffect {
                             primary: call_span.clone().into(),
                             func,
                             key: key_path,
-                            expected,
-                            given: provided.ty,
-                            provided_span,
                         };
                         self.push_diag(diag);
+                        continue;
+                    };
+
+                    let mut name_matches = viable.iter().copied().filter(|(provided, ..)| {
+                        match (provided.origin, provided.binding) {
+                            (
+                                EffectOrigin::Param {
+                                    name: Some(name), ..
+                                },
+                                _,
+                            ) => name == required_name,
+                            (EffectOrigin::With { .. }, Some(binding)) => {
+                                binding.binding_name(&self.env) == required_name
+                            }
+                            _ => false,
+                        }
+                    });
+
+                    if let Some(best) = name_matches.next()
+                        && name_matches.next().is_none()
+                    {
+                        best
+                    } else {
+                        let diag = BodyDiag::AmbiguousEffect {
+                            primary: call_span.clone().into(),
+                            func,
+                            key: key_path,
+                        };
+                        self.push_diag(diag);
+                        continue;
                     }
                 }
-                EffectRequirement::Trait(trait_req) => {
-                    let canonical = Canonicalized::new(self.db, trait_req);
-                    let ingot = self.env.body().top_mod(self.db).ingot(self.db);
-                    match is_goal_satisfiable(
-                        self.db,
-                        ingot,
-                        canonical.value,
-                        self.env.assumptions(),
-                    ) {
-                        GoalSatisfiability::UnSat(_) => {
-                            let provided_span = match provided.origin {
-                                EffectOrigin::With { value_expr } => {
-                                    Some(value_expr.span(self.body()).into())
-                                }
-                                EffectOrigin::Param { .. } => None,
-                            };
-                            let diag = BodyDiag::EffectTraitUnsatisfied {
-                                primary: call_span.clone().into(),
-                                func,
-                                key: key_path,
-                                trait_req,
-                                given: provided.ty,
-                                provided_span,
-                            };
-                            self.push_diag(diag);
+            };
+
+            let (arg, pass_mode) = match satisfaction {
+                EffectSatisfaction::Direct => {
+                    let place = match provided.origin {
+                        EffectOrigin::With { value_expr } => self.env.expr_place(value_expr),
+                        EffectOrigin::Param { .. } => provided
+                            .binding
+                            .map(|binding| Place::new(PlaceBase::Binding(binding))),
+                    };
+
+                    let arg = if let Some(place) = place {
+                        super::EffectArg::Place(place)
+                    } else {
+                        match provided.origin {
+                            EffectOrigin::With { value_expr } => {
+                                super::EffectArg::Value(value_expr)
+                            }
+                            EffectOrigin::Param { .. } => super::EffectArg::Unknown,
                         }
-                        GoalSatisfiability::ContainsInvalid => {}
-                        _ => {}
-                    }
+                    };
+
+                    let pass_mode = if matches!(arg, super::EffectArg::Place(..)) {
+                        super::EffectPassMode::ByPlace
+                    } else if matches!(provided.origin, EffectOrigin::With { .. }) {
+                        super::EffectPassMode::ByTempPlace
+                    } else {
+                        super::EffectPassMode::Unknown
+                    };
+
+                    (arg, pass_mode)
+                }
+                EffectSatisfaction::Provider { .. } | EffectSatisfaction::TraitByValue => {
+                    let arg = match provided.origin {
+                        EffectOrigin::With { value_expr } => super::EffectArg::Value(value_expr),
+                        EffectOrigin::Param { .. } => provided
+                            .binding
+                            .map(super::EffectArg::Binding)
+                            .unwrap_or(super::EffectArg::Unknown),
+                    };
+                    (arg, super::EffectPassMode::ByValue)
+                }
+            };
+
+            if required_mut && matches!(pass_mode, super::EffectPassMode::Unknown) {
+                let diag = BodyDiag::EffectMutabilityMismatch {
+                    primary: call_span.clone().into(),
+                    func,
+                    key: key_path,
+                    provided_span: provided_span(provided),
+                };
+                self.push_diag(diag);
+                continue;
+            }
+
+            self.env.push_call_effect_arg(
+                expr,
+                super::ResolvedEffectArg {
+                    param_idx,
+                    key: key_path,
+                    arg,
+                    pass_mode,
+                },
+            );
+
+            if let EffectRequirement::Type(expected) = requirement {
+                let given = match satisfaction {
+                    EffectSatisfaction::Provider { target_ty } => target_ty,
+                    _ => provided.ty,
+                };
+                if self.table.unify(expected, given).is_err() {
+                    let diag = BodyDiag::EffectTypeMismatch {
+                        primary: call_span.clone().into(),
+                        func,
+                        key: key_path,
+                        expected,
+                        given: provided.ty,
+                        provided_span: provided_span(provided),
+                    };
+                    self.push_diag(diag);
                 }
             }
         }

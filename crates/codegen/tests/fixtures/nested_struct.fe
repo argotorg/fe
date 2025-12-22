@@ -44,23 +44,24 @@ fn init() {
 }
 
 #[contract_runtime(NestedStruct)]
-fn runtime()
-  uses (mut outer: Outer)
-{
-    let selector = calldataload(0) >> 224
-    match selector {
-        0xb849fac8 => { // write_inner(uint256)
-            let value = calldataload(4)
-            write_inner(value)
-            abi_encode(value: value)
+fn runtime() {
+    let mut outer: Outer = core::effect_ref::StorPtr<Outer>::at_offset(0)
+    with (outer) {
+        let selector = calldataload(0) >> 224
+        match selector {
+            0xb849fac8 => { // write_inner(uint256)
+                let value = calldataload(4)
+                write_inner(value)
+                abi_encode(value: value)
+            }
+            0xd164e48d => { // read_inner()
+                abi_encode(value: read_inner())
+            }
+            0x806f30cd => { // mem_read(uint256)
+                let value = calldataload(4)
+                abi_encode(value: mem_read(value))
+            }
+            _ => return_data(0, 0)
         }
-        0xd164e48d => { // read_inner()
-            abi_encode(value: read_inner())
-        }
-        0x806f30cd => { // mem_read(uint256)
-            let value = calldataload(4)
-            abi_encode(value: mem_read(value))
-        }
-        _ => return_data(0, 0)
     }
 }

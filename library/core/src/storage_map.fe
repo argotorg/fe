@@ -38,3 +38,14 @@ impl<K: StorageKey, V: LoadableScalar + StorableScalar> StorageMap<K, V> {
         keccak(0, key_len + 32)
     }
 }
+
+impl<A, B> StorageKey for (A, B)
+where A: StorageKey,
+      B: StorageKey {
+    fn write_key(ptr: u256, self) -> u256 {
+        let (a, b) = self
+        let a_len = A::write_key(ptr, a)
+        let b_len = B::write_key(ptr + a_len, b)
+        a_len + b_len
+    }
+}

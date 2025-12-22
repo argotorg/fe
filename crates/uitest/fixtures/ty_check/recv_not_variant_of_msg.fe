@@ -17,8 +17,9 @@ struct CustomMsg {
     pub data: u64,
 }
 
-impl core::message::MsgVariant for CustomMsg {
+impl core::message::MsgVariant<std::abi::Sol> for CustomMsg {
     const SELECTOR: u32 = 0x10
+    type Args = (u64,)
     type Return = bool
 }
 

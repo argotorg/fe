@@ -1,0 +1,72 @@
+---
+source: crates/codegen/tests/yul.rs
+expression: output
+input_file: tests/fixtures/match_tuple.fe
+---
+function match_bool_tuple(t) -> ret {
+  let v0 := 0
+  switch iszero(eq(mload(add(t, 1)), 0))
+    case 1 {
+      switch iszero(eq(mload(t), 0))
+        case 1 {
+          v0 := 3
+        }
+        case 0 {
+          v0 := 1
+        }
+        default {
+        }
+      ret := v0
+    }
+    case 0 {
+      switch iszero(eq(mload(t), 0))
+        case 1 {
+          v0 := 2
+        }
+        case 0 {
+          v0 := 0
+        }
+        default {
+        }
+      ret := v0
+    }
+    default {
+    }
+  ret := v0
+}
+function match_tuple_with_wildcard(t) -> ret {
+  let v0 := 0
+  switch iszero(eq(mload(t), 0))
+    case 1 {
+      v0 := 1
+    }
+    case 0 {
+      v0 := 0
+    }
+    default {
+    }
+  ret := v0
+}
+function match_mixed_tuple(t) -> ret {
+  let v0 := 0
+  switch iszero(eq(mload(t), 0))
+    case 1 {
+      switch and(mload(add(t, 1)), 0xff)
+        case 0 {
+          v0 := 10
+        }
+        case 1 {
+          v0 := 11
+        }
+        default {
+          v0 := 12
+        }
+      ret := v0
+    }
+    case 0 {
+      v0 := 0
+    }
+    default {
+    }
+  ret := v0
+}

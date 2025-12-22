@@ -27,8 +27,10 @@ pub(crate) mod parse;
 
 mod attr;
 mod body;
+mod contract;
 mod expr;
 mod item;
+mod msg;
 mod params;
 mod pat;
 mod path;

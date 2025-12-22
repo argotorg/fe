@@ -1507,7 +1507,7 @@ pub fn walk_attribute<'db, V>(
                                             },
                                         );
 
-                                        match arg.value.clone().to_opt() {
+                                        match arg.value.clone() {
                                             Some(AttrArgValue::Ident(id)) => {
                                                 ctxt.with_new_ctxt(
                                                     |span| span.value().ident(),

@@ -20,3 +20,4 @@ cranelift-entity.workspace = true
 [dev-dependencies]
 driver.workspace = true
 url.workspace = true
+dir-test.workspace = true

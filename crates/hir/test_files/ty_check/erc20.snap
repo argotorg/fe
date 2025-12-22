@@ -2362,139 +2362,264 @@ note:
     │                                    ^^^^^ bool
 
 note: 
-    ┌─ erc20.fe:265:27
+    ┌─ erc20.fe:195:5
     │  
-265 │       pub fn zero() -> Self {
+195 │ ╭     #[selector = 0x06fdde03]
+196 │ │     Name -> String<32>,
+    │ ╰──────────────────────^ Name
+
+note: 
+    ┌─ erc20.fe:198:5
+    │  
+198 │ ╭     #[selector = 0x95d89b41]
+199 │ │     Symbol -> String<8>,
+    │ ╰───────────────────────^ Symbol
+
+note: 
+    ┌─ erc20.fe:201:5
+    │  
+201 │ ╭     #[selector = 0x313ce567]
+202 │ │     Decimals -> u8,
+    │ ╰──────────────────^ Decimals
+
+note: 
+    ┌─ erc20.fe:204:5
+    │  
+204 │ ╭     #[selector = 0x18160ddd]
+205 │ │     TotalSupply -> u256,
+    │ ╰───────────────────────^ TotalSupply
+
+note: 
+    ┌─ erc20.fe:207:5
+    │  
+207 │ ╭     #[selector = 0x70a08231]
+208 │ │     BalanceOf { account: Address } -> u256,
+    │ ╰──────────────────────────────────────────^ Address
+
+note: 
+    ┌─ erc20.fe:210:5
+    │  
+210 │ ╭     #[selector = 0xdd62ed3e]
+211 │ │     Allowance { owner: Address, spender: Address } -> u256,
+    │ ╰──────────────────────────────────────────────────────────^ Address
+
+note: 
+    ┌─ erc20.fe:213:5
+    │  
+213 │ ╭     #[selector = 0xa9059cbb]
+214 │ │     Transfer { to: Address, amount: u256 } -> bool,
+    │ ╰──────────────────────────────────────────────────^ u256
+
+note: 
+    ┌─ erc20.fe:216:5
+    │  
+216 │ ╭     #[selector = 0x095ea7b3]
+217 │ │     Approve { spender: Address, amount: u256 } -> bool,
+    │ ╰──────────────────────────────────────────────────────^ u256
+
+note: 
+    ┌─ erc20.fe:219:5
+    │  
+219 │ ╭     #[selector = 0x23b872dd]
+220 │ │     TransferFrom { from: Address, to: Address, amount: u256 } -> bool,
+    │ ╰─────────────────────────────────────────────────────────────────────^ u256
+
+note: 
+    ┌─ erc20.fe:225:5
+    │  
+225 │ ╭     #[selector = 0x40c10f19]
+226 │ │     Mint { to: Address, amount: u256 } -> bool,
+    │ ╰──────────────────────────────────────────────^ u256
+
+note: 
+    ┌─ erc20.fe:228:5
+    │  
+228 │ ╭     #[selector = 0x42966c68]
+229 │ │     Burn { amount: u256 } -> bool,
+    │ ╰─────────────────────────────────^ u256
+
+note: 
+    ┌─ erc20.fe:231:5
+    │  
+231 │ ╭     #[selector = 0x79cc6790]
+232 │ │     BurnFrom { from: Address, amount: u256 } -> bool,
+    │ ╰────────────────────────────────────────────────────^ u256
+
+note: 
+    ┌─ erc20.fe:234:5
+    │  
+234 │ ╭     #[selector = 0x39509351]
+235 │ │     IncreaseAllowance { spender: Address, added_value: u256 } -> bool,
+    │ ╰─────────────────────────────────────────────────────────────────────^ u256
+
+note: 
+    ┌─ erc20.fe:237:5
+    │  
+237 │ ╭     #[selector = 0xa457c2d7]
+238 │ │     DecreaseAllowance { spender: Address, subtracted_value: u256 } -> bool,
+    │ ╰──────────────────────────────────────────────────────────────────────────^ u256
+
+note: 
+    ┌─ erc20.fe:267:27
+    │  
+267 │       pub fn zero() -> Self {
     │ ╭───────────────────────────^
-266 │ │         Address { inner: 0 }
-267 │ │     }
+268 │ │         Address { inner: 0 }
+269 │ │     }
     │ ╰─────^ Address
 
 note: 
-    ┌─ erc20.fe:266:9
+    ┌─ erc20.fe:268:9
     │
-266 │         Address { inner: 0 }
+268 │         Address { inner: 0 }
     │         ^^^^^^^^^^^^^^^^^^^^ Address
 
 note: 
-    ┌─ erc20.fe:266:26
+    ┌─ erc20.fe:268:26
     │
-266 │         Address { inner: 0 }
+268 │         Address { inner: 0 }
     │                          ^ u256
 
 note: 
-    ┌─ erc20.fe:270:43
+    ┌─ erc20.fe:272:53
     │  
-270 │       fn eq(self, _ other: Address) -> bool {
+272 │       fn decode<D: AbiDecoder<A>>(mut _ d: D) -> Self {
+    │ ╭─────────────────────────────────────────────────────^
+273 │ │         Address { inner: d.read_word() }
+274 │ │     }
+    │ ╰─────^ Address
+
+note: 
+    ┌─ erc20.fe:273:9
+    │
+273 │         Address { inner: d.read_word() }
+    │         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ Address
+
+note: 
+    ┌─ erc20.fe:273:26
+    │
+273 │         Address { inner: d.read_word() }
+    │                          ^ D
+
+note: 
+    ┌─ erc20.fe:273:26
+    │
+273 │         Address { inner: d.read_word() }
+    │                          ^^^^^^^^^^^^^ u256
+
+note: 
+    ┌─ erc20.fe:277:43
+    │  
+277 │       fn eq(self, _ other: Address) -> bool {
     │ ╭───────────────────────────────────────────^
-271 │ │         self.inner == other.inner
-272 │ │     }
-    │ ╰─────^ bool
-
-note: 
-    ┌─ erc20.fe:271:9
-    │
-271 │         self.inner == other.inner
-    │         ^^^^ Address
-
-note: 
-    ┌─ erc20.fe:271:9
-    │
-271 │         self.inner == other.inner
-    │         ^^^^^^^^^^ u256
-
-note: 
-    ┌─ erc20.fe:271:9
-    │
-271 │         self.inner == other.inner
-    │         ^^^^^^^^^^^^^^^^^^^^^^^^^ bool
-
-note: 
-    ┌─ erc20.fe:271:23
-    │
-271 │         self.inner == other.inner
-    │                       ^^^^^ Address
-
-note: 
-    ┌─ erc20.fe:271:23
-    │
-271 │         self.inner == other.inner
-    │                       ^^^^^^^^^^^ u256
-
-note: 
-    ┌─ erc20.fe:277:26
-    │  
-277 │       pub fn new() -> Self {
-    │ ╭──────────────────────────^
-278 │ │         Map {}
+278 │ │         self.inner == other.inner
 279 │ │     }
-    │ ╰─────^ Map<K, V>
+    │ ╰─────^ bool
 
 note: 
     ┌─ erc20.fe:278:9
     │
-278 │         Map {}
+278 │         self.inner == other.inner
+    │         ^^^^ Address
+
+note: 
+    ┌─ erc20.fe:278:9
+    │
+278 │         self.inner == other.inner
+    │         ^^^^^^^^^^ u256
+
+note: 
+    ┌─ erc20.fe:278:9
+    │
+278 │         self.inner == other.inner
+    │         ^^^^^^^^^^^^^^^^^^^^^^^^^ bool
+
+note: 
+    ┌─ erc20.fe:278:23
+    │
+278 │         self.inner == other.inner
+    │                       ^^^^^ Address
+
+note: 
+    ┌─ erc20.fe:278:23
+    │
+278 │         self.inner == other.inner
+    │                       ^^^^^^^^^^^ u256
+
+note: 
+    ┌─ erc20.fe:284:26
+    │  
+284 │       pub fn new() -> Self {
+    │ ╭──────────────────────────^
+285 │ │         Map {}
+286 │ │     }
+    │ ╰─────^ Map<K, V>
+
+note: 
+    ┌─ erc20.fe:285:9
+    │
+285 │         Map {}
     │         ^^^^^^ Map<K, V>
 
 note: 
-    ┌─ erc20.fe:283:35
+    ┌─ erc20.fe:290:35
     │  
-283 │       fn index(self, _ key: K) -> V {
+290 │       fn index(self, _ key: K) -> V {
     │ ╭───────────────────────────────────^
-284 │ │         todo()
-285 │ │     }
+291 │ │         todo()
+292 │ │     }
     │ ╰─────^ V
 
 note: 
-    ┌─ erc20.fe:284:9
+    ┌─ erc20.fe:291:9
     │
-284 │         todo()
+291 │         todo()
     │         ^^^^ fn todo
 
 note: 
-    ┌─ erc20.fe:284:9
+    ┌─ erc20.fe:291:9
     │
-284 │         todo()
+291 │         todo()
     │         ^^^^^^ V
 
 note: 
-    ┌─ erc20.fe:290:36
+    ┌─ erc20.fe:297:36
     │  
-290 │       pub fn caller(self) -> Address {
+297 │       pub fn caller(self) -> Address {
     │ ╭────────────────────────────────────^
-291 │ │         todo()
-292 │ │     }
+298 │ │         todo()
+299 │ │     }
     │ ╰─────^ Address
 
 note: 
-    ┌─ erc20.fe:291:9
+    ┌─ erc20.fe:298:9
     │
-291 │         todo()
+298 │         todo()
     │         ^^^^ fn todo
 
 note: 
-    ┌─ erc20.fe:291:9
+    ┌─ erc20.fe:298:9
     │
-291 │         todo()
+298 │         todo()
     │         ^^^^^^ Address
 
 note: 
-    ┌─ erc20.fe:297:38
+    ┌─ erc20.fe:304:38
     │  
-297 │       pub fn emit<T>(self, _ event: T) {
+304 │       pub fn emit<T>(self, _ event: T) {
     │ ╭──────────────────────────────────────^
-298 │ │         todo()
-299 │ │     }
+305 │ │         todo()
+306 │ │     }
     │ ╰─────^ ()
 
 note: 
-    ┌─ erc20.fe:298:9
+    ┌─ erc20.fe:305:9
     │
-298 │         todo()
+305 │         todo()
     │         ^^^^ fn todo
 
 note: 
-    ┌─ erc20.fe:298:9
+    ┌─ erc20.fe:305:9
     │
-298 │         todo()
+305 │         todo()
     │         ^^^^^^ ()

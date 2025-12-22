@@ -1,0 +1,72 @@
+---
+source: crates/codegen/tests/yul.rs
+expression: output
+input_file: tests/fixtures/tuple_literal_field_access.fe
+---
+function tuple_literal_field_access() -> ret {
+  let v0 := 1
+  let v1 := 2
+  let v2 := alloc(64)
+  store_field__deduped(v2, 0, v0)
+  store_field__deduped(v2, 32, v1)
+  let v3 := v2
+  ret := mload(add(v3, 32))
+}
+function tuple_literal_nested_access() -> ret {
+  let v0 := 1
+  let v1 := 2
+  let v2 := 3
+  let v3 := alloc(64)
+  store_field__deduped(v3, 0, v1)
+  store_field__deduped(v3, 32, v2)
+  let v4 := alloc(96)
+  store_field__deduped(v4, 0, v0)
+  store_field__deduped(v4, 32, get_field__MemPtr_u256__97fe9178c4597e85(v3, 0))
+  store_field__deduped(v4, 64, get_field__MemPtr_u256__97fe9178c4597e85(v3, 32))
+  let v5 := v4
+  let v6 := add(v5, 32)
+  ret := mload(v6)
+}
+function tuple_literal_struct_chain() -> ret {
+  let v0 := 1
+  let v1 := 2
+  let v2 := alloc(64)
+  store_field__deduped(v2, 0, v0)
+  store_field__deduped(v2, 32, v1)
+  let v3 := alloc(64)
+  store_field__deduped(v3, 0, get_field__MemPtr_u256__97fe9178c4597e85(v2, 0))
+  store_field__deduped(v3, 32, get_field__MemPtr_u256__97fe9178c4597e85(v2, 32))
+  let v4 := v3
+  let v5 := v4
+  ret := mload(add(v5, 32))
+}
+function alloc(size) -> ret {
+  let v0 := mload(64)
+  let v1 := eq(v0, 0)
+  if v1 {
+    v0 := 128
+    mstore(64, add(v0, size))
+    ret := v0
+  }
+  if iszero(v1) {
+    mstore(64, add(v0, size))
+    ret := v0
+  }
+}
+function store_field__deduped(ptr, offset, value) {
+  let v0 := add(ptr, offset)
+  store__MemPtr__d0292394fccae3e4(v0, from_word__u256__3271ca15373d4483(value))
+}
+function get_field__MemPtr_u256__97fe9178c4597e85(ptr, offset) -> ret {
+  let v0 := add(ptr, offset)
+  ret := from_word__u256__3271ca15373d4483(load__MemPtr__d0292394fccae3e4(v0))
+}
+function store__MemPtr__d0292394fccae3e4(addr, value) {
+  mstore(addr, value)
+}
+function load__MemPtr__d0292394fccae3e4(addr) -> ret {
+  ret := mload(addr)
+}
+function from_word__u256__3271ca15373d4483(word) -> ret {
+  ret := word
+}

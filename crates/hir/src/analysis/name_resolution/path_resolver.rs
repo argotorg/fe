@@ -492,9 +492,9 @@ impl<'db> PathRes<'db> {
             PathRes::Ty(ty) | PathRes::Func(ty) => is_ty_visible_from(db, *ty, from_scope),
             PathRes::Const(const_, _) => is_scope_visible_from(db, const_.scope(), from_scope),
             PathRes::TraitConst(_, inst, _) => {
-                // Visible if the trait is available in scope
-                let available = super::available_traits_in_scope(db, from_scope);
-                available.contains(&inst.def(db))
+                // Associated consts behave like trait methods: the trait does not
+                // need to be imported as long as it's otherwise visible.
+                is_scope_visible_from(db, inst.def(db).scope(), from_scope)
             }
             PathRes::Method(_, cand) => {
                 // Method visibility depends on the method's defining scope
@@ -1089,9 +1089,22 @@ pub fn resolve_name_res<'db>(
         }
         NameResKind::Scope(scope_id) => match scope_id {
             ScopeId::Item(item) => match item {
-                ItemKind::Struct(_) | ItemKind::Contract(_) | ItemKind::Enum(_) => {
+                ItemKind::Struct(_) | ItemKind::Enum(_) => {
                     let adt_ref = AdtRef::try_from_item(item).unwrap();
                     PathRes::Ty(ty_from_adtref(db, path, adt_ref, args, assumptions)?)
+                }
+                ItemKind::Contract(contract) => {
+                    // Contracts have no generic parameters
+                    if !args.is_empty() {
+                        return Err(PathResError::new(
+                            PathResErrorKind::ArgNumMismatch {
+                                expected: 0,
+                                given: args.len(),
+                            },
+                            path,
+                        ));
+                    }
+                    PathRes::Ty(TyId::contract(db, contract))
                 }
 
                 ItemKind::Mod(_) | ItemKind::TopMod(_) => PathRes::Mod(scope_id),

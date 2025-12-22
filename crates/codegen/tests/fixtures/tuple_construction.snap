@@ -1,0 +1,50 @@
+---
+source: crates/codegen/tests/yul.rs
+expression: output
+input_file: tests/fixtures/tuple_construction.fe
+---
+function make_tuple() -> ret {
+  let v0 := alloc(40)
+  store_field__MemPtr_u64__6be88d17f715c1ad(v0, 0, 42)
+  store_field__MemPtr_u256__97fe9178c4597e85(v0, 8, 99)
+  let v1 := v0
+  ret := v1
+}
+function access_tuple() -> ret {
+  let v0 := alloc(96)
+  store_field__MemPtr_u256__97fe9178c4597e85(v0, 0, 1)
+  store_field__MemPtr_u256__97fe9178c4597e85(v0, 32, 2)
+  store_field__MemPtr_u256__97fe9178c4597e85(v0, 64, 3)
+  let v1 := v0
+  ret := mload(add(v1, 32))
+}
+function alloc(size) -> ret {
+  let v0 := mload(64)
+  let v1 := eq(v0, 0)
+  if v1 {
+    v0 := 128
+    mstore(64, add(v0, size))
+    ret := v0
+  }
+  if iszero(v1) {
+    mstore(64, add(v0, size))
+    ret := v0
+  }
+}
+function store_field__MemPtr_u64__6be88d17f715c1ad(ptr, offset, value) {
+  let v0 := add(ptr, offset)
+  store__MemPtr__d0292394fccae3e4(v0, to_word__u64__aee7f05a097ffa16(value))
+}
+function store_field__MemPtr_u256__97fe9178c4597e85(ptr, offset, value) {
+  let v0 := add(ptr, offset)
+  store__MemPtr__d0292394fccae3e4(v0, to_word__u256__3271ca15373d4483(value))
+}
+function to_word__u64__aee7f05a097ffa16(self) -> ret {
+  ret := self
+}
+function store__MemPtr__d0292394fccae3e4(addr, value) {
+  mstore(addr, value)
+}
+function to_word__u256__3271ca15373d4483(self) -> ret {
+  ret := self
+}

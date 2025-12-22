@@ -74,6 +74,10 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         match name.data(self.db).as_str() {
             "mload" => Some(IntrinsicOp::Mload),
             "calldataload" => Some(IntrinsicOp::Calldataload),
+            "calldatacopy" => Some(IntrinsicOp::Calldatacopy),
+            "calldatasize" => Some(IntrinsicOp::Calldatasize),
+            "returndatacopy" => Some(IntrinsicOp::Returndatacopy),
+            "returndatasize" => Some(IntrinsicOp::Returndatasize),
             "addr_of" => Some(IntrinsicOp::AddrOf),
             "mstore" => Some(IntrinsicOp::Mstore),
             "mstore8" => Some(IntrinsicOp::Mstore8),
@@ -82,10 +86,13 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
             "return_data" => Some(IntrinsicOp::ReturnData),
             "revert" => Some(IntrinsicOp::Revert),
             "codecopy" => Some(IntrinsicOp::Codecopy),
+            "codesize" => Some(IntrinsicOp::Codesize),
             "code_region_offset" => Some(IntrinsicOp::CodeRegionOffset),
             "code_region_len" => Some(IntrinsicOp::CodeRegionLen),
             "keccak" => Some(IntrinsicOp::Keccak),
             "caller" => Some(IntrinsicOp::Caller),
+            "stor_at" => Some(IntrinsicOp::StorAt),
+            "at_offset" => Some(IntrinsicOp::StorAt),
             _ => None,
         }
     }

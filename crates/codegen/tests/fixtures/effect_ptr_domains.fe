@@ -1,0 +1,28 @@
+use core::effect_ref::{MemPtr, StorPtr}
+
+struct Foo {
+    a: u256,
+    b: u256,
+}
+
+fn bump() uses (mut foo: Foo) {
+    foo.a = foo.a + 1
+    foo.b = foo.b + 2
+}
+
+fn test_effect_ptr_domains() {
+    let mp = MemPtr<Foo> { addr: 0x100 }
+    with (mp) {
+        bump()
+    }
+
+    let sp = StorPtr<Foo> { slot: 0 }
+    with (sp) {
+        bump()
+    }
+
+    let mut foo = Foo { a: 10, b: 20 }
+    with (foo) {
+        bump()
+    }
+}

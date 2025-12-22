@@ -1,0 +1,27 @@
+// Test basic tuple pattern matching
+// This exercises decision tree occurrence paths for tuple decomposition
+
+pub fn match_bool_tuple(t: (bool, bool)) -> u8 {
+    match t {
+        (true, true) => 3,
+        (true, false) => 2,
+        (false, true) => 1,
+        (false, false) => 0,
+    }
+}
+
+pub fn match_tuple_with_wildcard(t: (bool, bool)) -> u8 {
+    match t {
+        (true, _) => 1,
+        (false, _) => 0,
+    }
+}
+
+pub fn match_mixed_tuple(t: (bool, u8)) -> u8 {
+    match t {
+        (true, 0) => 10,
+        (true, 1) => 11,
+        (true, _) => 12,
+        (false, _) => 0,
+    }
+}

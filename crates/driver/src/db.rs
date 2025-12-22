@@ -10,8 +10,9 @@ use hir::analysis::{
     diagnostics::DiagnosticVoucher,
     name_resolution::ImportAnalysisPass,
     ty::{
-        AdtDefAnalysisPass, BodyAnalysisPass, DefConflictAnalysisPass, FuncAnalysisPass,
-        ImplAnalysisPass, ImplTraitAnalysisPass, TraitAnalysisPass, TypeAliasAnalysisPass,
+        AdtDefAnalysisPass, BodyAnalysisPass, ContractAnalysisPass, DefConflictAnalysisPass,
+        FuncAnalysisPass, ImplAnalysisPass, ImplTraitAnalysisPass, TraitAnalysisPass,
+        TypeAliasAnalysisPass,
     },
 };
 use hir::{
@@ -112,5 +113,6 @@ fn initialize_analysis_pass() -> AnalysisPassManager {
     pass_manager.add_module_pass(Box::new(ImplTraitAnalysisPass {}));
     pass_manager.add_module_pass(Box::new(FuncAnalysisPass {}));
     pass_manager.add_module_pass(Box::new(BodyAnalysisPass {}));
+    pass_manager.add_module_pass(Box::new(ContractAnalysisPass {}));
     pass_manager
 }

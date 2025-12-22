@@ -5,5 +5,42 @@ expression: output
 input_file: tests/fixtures/comparison_ops.fe
 ---
 function comparison_ops() -> ret {
-  ret := tuple(eq(1, 1), iszero(eq(1, 2)), lt(1, 2), iszero(gt(2, 2)), gt(3, 2), iszero(lt(3, 3)))
+  let v0 := alloc(6)
+  store_field__deduped(v0, 0, eq(1, 1))
+  store_field__deduped(v0, 1, iszero(eq(1, 2)))
+  store_field__deduped(v0, 2, lt(1, 2))
+  store_field__deduped(v0, 3, iszero(gt(2, 2)))
+  store_field__deduped(v0, 4, gt(3, 2))
+  store_field__deduped(v0, 5, iszero(lt(3, 3)))
+  ret := v0
+}
+function alloc(size) -> ret {
+  let v0 := mload(64)
+  let v1 := eq(v0, 0)
+  if v1 {
+    v0 := 128
+    mstore(64, add(v0, size))
+    ret := v0
+  }
+  if iszero(v1) {
+    mstore(64, add(v0, size))
+    ret := v0
+  }
+}
+function store_field__deduped(ptr, offset, value) {
+  let v0 := add(ptr, offset)
+  store__MemPtr__d0292394fccae3e4(v0, to_word__deduped(value))
+}
+function to_word__deduped(self) -> ret {
+  let v0 := 0
+  if self {
+    v0 := 1
+  }
+  if iszero(self) {
+    v0 := 0
+  }
+  ret := v0
+}
+function store__MemPtr__d0292394fccae3e4(addr, value) {
+  mstore(addr, value)
 }

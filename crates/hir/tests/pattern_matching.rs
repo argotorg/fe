@@ -1,4 +1,3 @@
-mod test_db;
 use std::path::Path;
 
 use codespan_reporting::term::{
@@ -7,7 +6,7 @@ use codespan_reporting::term::{
 };
 use dir_test::{Fixture, dir_test};
 use driver::diagnostics::{CsDbWrapper, ToCsDiag};
-use test_db::{HirAnalysisTestDb, initialize_analysis_pass};
+use fe_hir::test_db::{HirAnalysisTestDb, initialize_analysis_pass};
 use test_utils::snap_test;
 
 #[dir_test(

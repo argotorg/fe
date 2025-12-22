@@ -90,14 +90,19 @@ pub fn resolve_trait_method<'db>(
     inst: TraitInstId<'db>,
     method: IdentId<'db>,
 ) -> Option<Func<'db>> {
-    let ingot = inst.def(db).ingot(db);
     let canonical = Canonical::new(db, inst);
-    for implementor in impls_for_trait(db, ingot, canonical) {
-        let implementor = implementor.instantiate_identity();
-        if let Some(callable) = implementor.methods(db).get(&method)
-            && let CallableDef::Func(func) = callable
-        {
-            return Some(*func);
+
+    // Search Self's ingot, and the trait's ingot.
+    for ingot in [inst.self_ty(db).ingot(db), Some(inst.def(db).ingot(db))] {
+        let Some(ingot) = ingot else { continue };
+
+        for implementor in impls_for_trait(db, ingot, canonical) {
+            let implementor = implementor.instantiate_identity();
+            if let Some(callable) = implementor.methods(db).get(&method)
+                && let CallableDef::Func(func) = callable
+            {
+                return Some(*func);
+            }
         }
     }
     None
@@ -211,6 +216,49 @@ pub(crate) fn impls_for_ty<'db>(
             is_ok
         })
         .collect()
+}
+
+/// Looks up the HIR body for an associated const defined in the selected trait impl, if unique.
+pub fn assoc_const_body_for_trait_inst<'db>(
+    db: &'db dyn HirAnalysisDb,
+    inst: TraitInstId<'db>,
+    const_name: IdentId<'db>,
+) -> Option<crate::hir_def::Body<'db>> {
+    let mut matches = Vec::new();
+    let canonical_self_ty = Canonical::new(db, inst.self_ty(db));
+
+    for ingot in [inst.self_ty(db).ingot(db), Some(inst.def(db).ingot(db))] {
+        let Some(ingot) = ingot else { continue };
+        for implementor in impls_for_ty(db, ingot, canonical_self_ty).iter() {
+            let implementor = implementor.skip_binder();
+            if implementor.trait_def(db) != inst.def(db) {
+                continue;
+            }
+
+            if implementor.trait_(db).args(db) != inst.args(db) {
+                continue;
+            }
+
+            let hir_impl = implementor.hir_impl_trait(db);
+            let Some(def) = hir_impl
+                .hir_consts(db)
+                .iter()
+                .find(|c| c.name.to_opt() == Some(const_name))
+            else {
+                continue;
+            };
+
+            let Some(body) = def.value.to_opt() else {
+                continue;
+            };
+
+            matches.push(body);
+            if matches.len() > 1 {
+                return None;
+            }
+        }
+    }
+    matches.pop()
 }
 
 /// Represents the trait environment of an ingot, which maintain all trait

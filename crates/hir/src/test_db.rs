@@ -1,9 +1,31 @@
+//! Test database utilities for HIR analysis.
+//!
+//! This module is only available when the `testutils` feature is enabled.
+
 // TODO tracing::error doesn't log. set up default logger?
 #![allow(clippy::print_stderr)]
 
 use std::collections::BTreeMap;
+use std::ops::Range;
 
-use camino::Utf8PathBuf;
+use crate::analysis::{
+    analysis_pass::{AnalysisPassManager, MsgLowerPass, ParsingPass},
+    diagnostics::{DiagnosticVoucher, SpannedHirAnalysisDb},
+    name_resolution::ImportAnalysisPass,
+    ty::{
+        AdtDefAnalysisPass, BodyAnalysisPass, DefConflictAnalysisPass, FuncAnalysisPass,
+        ImplAnalysisPass, ImplTraitAnalysisPass, TraitAnalysisPass, TypeAliasAnalysisPass,
+    },
+};
+use crate::{
+    SpannedHirDb,
+    hir_def::{ItemKind, TopLevelMod, scope_graph::ScopeGraph},
+    lower::{self, map_file_to_mod, scope_graph},
+    span::{DynLazySpan, LazySpan},
+};
+use camino::{Utf8Path, Utf8PathBuf};
+use codespan_reporting::diagnostic as cs_diag;
+use codespan_reporting::files as cs_files;
 use codespan_reporting::{
     diagnostic::{Diagnostic, Label},
     files::SimpleFiles,
@@ -14,31 +36,133 @@ use codespan_reporting::{
 };
 use common::{
     InputDb, define_input_db,
-    diagnostics::Span,
+    diagnostics::{LabelStyle, Severity, Span},
     file::File,
     indexmap::IndexMap,
     stdlib::{HasBuiltinCore, HasBuiltinStd},
 };
-use driver::diagnostics::{CsDbWrapper, ToCsDiag};
-use fe_hir::analysis::{
-    analysis_pass::{AnalysisPassManager, MsgLowerPass, ParsingPass},
-    name_resolution::ImportAnalysisPass,
-    ty::{
-        AdtDefAnalysisPass, BodyAnalysisPass, DefConflictAnalysisPass, FuncAnalysisPass,
-        ImplAnalysisPass, ImplTraitAnalysisPass, TraitAnalysisPass, TypeAliasAnalysisPass,
-    },
-};
-use fe_hir::{
-    SpannedHirDb,
-    hir_def::TopLevelMod,
-    lower,
-    span::{DynLazySpan, LazySpan},
-};
+use derive_more::TryIntoError;
 use rustc_hash::FxHashMap;
 use test_utils::url_utils::UrlExt;
 use url::Url;
 
 type CodeSpanFileId = usize;
+
+// --- Codespan diagnostic helpers (inlined from driver::diagnostics) ---
+
+trait ToCsDiag {
+    fn to_cs(&self, db: &dyn SpannedInputDb) -> cs_diag::Diagnostic<File>;
+}
+
+trait SpannedInputDb: SpannedHirAnalysisDb + InputDb {}
+impl<T> SpannedInputDb for T where T: SpannedHirAnalysisDb + InputDb {}
+
+impl<T> ToCsDiag for T
+where
+    T: DiagnosticVoucher,
+{
+    fn to_cs(&self, db: &dyn SpannedInputDb) -> cs_diag::Diagnostic<File> {
+        let complete = self.to_complete(db);
+
+        let severity = match complete.severity {
+            Severity::Error => cs_diag::Severity::Error,
+            Severity::Warning => cs_diag::Severity::Warning,
+            Severity::Note => cs_diag::Severity::Note,
+        };
+        let code = Some(complete.error_code.to_string());
+        let message = complete.message;
+
+        let labels = complete
+            .sub_diagnostics
+            .into_iter()
+            .filter_map(|sub_diag| {
+                let span = sub_diag.span?;
+                match sub_diag.style {
+                    LabelStyle::Primary => {
+                        cs_diag::Label::new(cs_diag::LabelStyle::Primary, span.file, span.range)
+                    }
+                    LabelStyle::Secondary => {
+                        cs_diag::Label::new(cs_diag::LabelStyle::Secondary, span.file, span.range)
+                    }
+                }
+                .with_message(sub_diag.message)
+                .into()
+            })
+            .collect();
+
+        cs_diag::Diagnostic {
+            severity,
+            code,
+            message,
+            labels,
+            notes: complete.notes,
+        }
+    }
+}
+
+fn file_line_starts(db: &dyn SpannedHirAnalysisDb, file: File) -> Vec<usize> {
+    codespan_reporting::files::line_starts(file.text(db)).collect()
+}
+
+struct CsDbWrapper<'a>(&'a dyn SpannedHirAnalysisDb);
+
+impl<'db> cs_files::Files<'db> for CsDbWrapper<'db> {
+    type FileId = File;
+    type Name = &'db Utf8Path;
+    type Source = &'db str;
+
+    fn name(&'db self, file_id: Self::FileId) -> Result<Self::Name, cs_files::Error> {
+        match file_id.path(self.0) {
+            Some(path) => Ok(path.as_path()),
+            None => Err(cs_files::Error::FileMissing),
+        }
+    }
+
+    fn source(&'db self, file_id: Self::FileId) -> Result<Self::Source, cs_files::Error> {
+        Ok(file_id.text(self.0))
+    }
+
+    fn line_index(
+        &'db self,
+        file_id: Self::FileId,
+        byte_index: usize,
+    ) -> Result<usize, cs_files::Error> {
+        let starts = file_line_starts(self.0, file_id);
+        Ok(starts
+            .binary_search(&byte_index)
+            .unwrap_or_else(|next_line| next_line - 1))
+    }
+
+    fn line_range(
+        &'db self,
+        file_id: Self::FileId,
+        line_index: usize,
+    ) -> Result<Range<usize>, cs_files::Error> {
+        let line_starts = file_line_starts(self.0, file_id);
+
+        let start = *line_starts
+            .get(line_index)
+            .ok_or(cs_files::Error::LineTooLarge {
+                given: line_index,
+                max: line_starts.len() - 1,
+            })?;
+
+        let end = if line_index == line_starts.len() - 1 {
+            file_id.text(self.0).len()
+        } else {
+            *line_starts
+                .get(line_index + 1)
+                .ok_or(cs_files::Error::LineTooLarge {
+                    given: line_index,
+                    max: line_starts.len() - 1,
+                })?
+        };
+
+        Ok(Range { start, end })
+    }
+}
+
+// --- End codespan helpers ---
 
 define_input_db!(HirAnalysisTestDb);
 
@@ -235,7 +359,7 @@ impl Default for HirPropertyFormatter<'_> {
     }
 }
 
-pub(crate) fn initialize_analysis_pass() -> AnalysisPassManager {
+pub fn initialize_analysis_pass() -> AnalysisPassManager {
     let mut pass_manager = AnalysisPassManager::new();
     pass_manager.add_module_pass(Box::new(ParsingPass {}));
     pass_manager.add_module_pass(Box::new(MsgLowerPass {}));
@@ -249,4 +373,52 @@ pub(crate) fn initialize_analysis_pass() -> AnalysisPassManager {
     pass_manager.add_module_pass(Box::new(FuncAnalysisPass {}));
     pass_manager.add_module_pass(Box::new(BodyAnalysisPass {}));
     pass_manager
+}
+
+// --- Simple test database for unit tests ---
+
+define_input_db!(TestDb);
+
+#[allow(dead_code)]
+impl TestDb {
+    pub fn parse_source(&self, file: File) -> &ScopeGraph<'_> {
+        let top_mod = map_file_to_mod(self, file);
+        scope_graph(self, top_mod)
+    }
+
+    /// Parses the given source text and returns the first inner item in the file.
+    pub fn expect_item<'db, T>(&'db self, file: File) -> T
+    where
+        ItemKind<'db>: TryInto<T, Error = TryIntoError<ItemKind<'db>>>,
+    {
+        let tree = self.parse_source(file);
+        tree.items_dfs(self)
+            .find_map(|it| it.try_into().ok())
+            .unwrap()
+    }
+
+    pub fn expect_items<'db, T>(&'db self, file: File) -> Vec<T>
+    where
+        ItemKind<'db>: TryInto<T, Error = TryIntoError<ItemKind<'db>>>,
+    {
+        let tree = self.parse_source(file);
+        tree.items_dfs(self)
+            .filter_map(|it| it.try_into().ok())
+            .collect()
+    }
+
+    pub fn text_at(&self, top_mod: TopLevelMod, span: &impl LazySpan) -> &str {
+        let range = span.resolve(self).unwrap().range;
+        let file = top_mod.file(self);
+        let text = file.text(self);
+        &text[range.start().into()..range.end().into()]
+    }
+
+    pub fn standalone_file(&mut self, text: &str) -> File {
+        self.workspace().touch(
+            self,
+            Url::parse("file:///hir_test/test_file.fe").unwrap(),
+            Some(text.into()),
+        )
+    }
 }
