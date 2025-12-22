@@ -200,11 +200,6 @@ impl<'db> FunctionEmitter<'db> {
                     lowered_args.push(self.lower_expr(arg.expr, state)?);
                 }
 
-                if let CallableDef::Func(func_def) = callable.callable_def {
-                    let effect_args = self.lower_effect_arguments(func_def, state)?;
-                    lowered_args.extend(effect_args);
-                }
-
                 Self::lower_and_format_call(&callee, lowered_args)
             }
             Expr::Bin(lhs, rhs, bin_op) => match bin_op {
@@ -644,25 +639,5 @@ impl<'db> FunctionEmitter<'db> {
         } else {
             Ok(format!("add({base}, {total_offset})"))
         }
-    }
-
-    /// Lowers effect arguments for a function call by looking up effect parameter bindings in the current state.
-    ///
-    /// * `func_def` - The function being called.
-    /// * `state` - Current binding state containing effect parameter values.
-    ///
-    /// Returns a vector of lowered effect argument expressions.
-    fn lower_effect_arguments(
-        &self,
-        func_def: hir::hir_def::Func<'db>,
-        state: &BlockState,
-    ) -> Result<Vec<String>, YulError> {
-        let mut effect_args = Vec::new();
-        for effect in func_def.effect_params(self.db) {
-            let binding = self.effect_binding_name(effect);
-            let yul_expr = state.resolve_name(&binding);
-            effect_args.push(yul_expr);
-        }
-        Ok(effect_args)
     }
 }
