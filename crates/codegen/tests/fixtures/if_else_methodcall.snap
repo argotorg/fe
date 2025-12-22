@@ -11,27 +11,19 @@ function teststruct_get_value2(self, x) -> ret {
   ret := mul(x, 24)
 }
 function test_if_else(x) -> ret {
-  let v0 := alloc(0)
-  let v1 := v0
-  let v2 := 0
+  let v0 := 0
+  let v1 := 0
   if gt(x, 10) {
-    v2 := teststruct_get_value1(v1)
+    v1 := teststruct_get_value1_mem(v0)
   }
   if iszero(gt(x, 10)) {
-    v2 := teststruct_get_value2(v1, 10)
+    v1 := teststruct_get_value2_mem(v0, 10)
   }
-  ret := v2
+  ret := v1
 }
-function alloc(size) -> ret {
-  let v0 := mload(64)
-  let v1 := eq(v0, 0)
-  if v1 {
-    v0 := 128
-    mstore(64, add(v0, size))
-    ret := v0
-  }
-  if iszero(v1) {
-    mstore(64, add(v0, size))
-    ret := v0
-  }
+function teststruct_get_value1_mem(self) -> ret {
+  ret := 42
+}
+function teststruct_get_value2_mem(self, x) -> ret {
+  ret := mul(x, 24)
 }
