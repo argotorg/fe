@@ -89,6 +89,13 @@ impl GitResolver {
     pub fn has_valid_cached_checkout(&self, _description: &GitDescription) -> bool {
         false
     }
+
+    pub fn ensure_checkout_resource(
+        &self,
+        _description: &GitDescription,
+    ) -> Result<GitResource, GitResolutionError> {
+        Err(GitResolutionError::UnsupportedTarget)
+    }
 }
 
 impl Resolver for GitResolver {

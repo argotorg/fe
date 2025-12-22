@@ -38,4 +38,3 @@ pub trait Monad: Applicative
 {
     fn bind<T, U, F: Fn<T, Self<U>>>(self: Self<T>, _ func: F) -> Self<U>
 }
-

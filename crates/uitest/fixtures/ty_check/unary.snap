@@ -20,3 +20,9 @@ error[8-0016]: `core::ops::Not` trait is not implemented
   │     │
   │     `!` can't be applied to `Foo`
   │     Try implementing `core::ops::Not` for `Foo`
+
+error[8-0052]: unary `+` is not supported
+  ┌─ unary.fe:5:5
+  │
+5 │     +f
+  │     ^^ remove the unary `+`

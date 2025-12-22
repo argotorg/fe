@@ -773,7 +773,7 @@ mod tests {
         let scope_graph = db.parse_source(file);
         let items: Vec<_> = scope_graph
             .items_dfs(&db)
-            .filter(|item| !matches!(item, ItemKind::Use(use_) if use_.is_prelude_use(&db)))
+            .filter(|item| !matches!(item, ItemKind::Use(use_) if use_.is_synthetic_use(&db)))
             .collect();
         assert_eq!(items.len(), 8);
 
@@ -807,7 +807,9 @@ mod tests {
         let root = scope_graph.top_mod.scope();
         let enum_ = scope_graph
             .children(root)
-            .find(|scope| !matches!(scope.item(), ItemKind::Use(use_) if use_.is_prelude_use(&db)))
+            .find(
+                |scope| !matches!(scope.item(), ItemKind::Use(use_) if use_.is_synthetic_use(&db)),
+            )
             .unwrap();
         assert!(matches!(enum_.item(), ItemKind::Enum(_)));
 
@@ -840,7 +842,7 @@ mod tests {
             .unwrap();
         assert!(matches!(msg_mod.item(), ItemKind::Mod(_)));
 
-        // Skip the Use item (prelude) and find the struct
+        // Skip the Use item (implicit import) and find the struct
         let variant_struct = scope_graph
             .children(msg_mod)
             .find(|scope| matches!(scope.item(), ItemKind::Struct(_)))

@@ -284,7 +284,7 @@ impl<'db> FunctionEmitter<'db> {
     /// Applies the `WordRepr::from_word` conversion for a given type.
     ///
     /// This mirrors the stdlib word-conversion semantics defined in:
-    /// - `library/std/src/evm/word.fe` (`WordRepr` trait)
+    /// - `ingots/std/src/evm/word.fe` (`WordRepr` trait)
     ///
     /// Conversion rules:
     /// - bool: word != 0

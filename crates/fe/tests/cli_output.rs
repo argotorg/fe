@@ -37,12 +37,19 @@ fn run_fe_test(path: &str) -> (String, i32) {
 
 // Helper function to run fe binary with specified subcommand
 fn run_fe_command(subcommand: &str, path: &str) -> (String, i32) {
-    run_fe_main(&[subcommand, path])
+    run_fe_command_with_args(subcommand, path, &[])
+}
+
+fn run_fe_command_with_args(subcommand: &str, path: &str, extra: &[&str]) -> (String, i32) {
+    let mut args = Vec::with_capacity(2 + extra.len());
+    args.push(subcommand);
+    args.extend_from_slice(extra);
+    args.push(path);
+    run_fe_main(&args)
 }
 
 // Helper function to run fe binary with specified args
 fn run_fe_main(args: &[&str]) -> (String, i32) {
-    // Build the fe binary
     let cargo_exe = std::env::var("CARGO").unwrap_or_else(|_| "cargo".to_string());
     let output = Command::new(&cargo_exe)
         .args(["build", "--bin", "fe"])
@@ -56,7 +63,6 @@ fn run_fe_main(args: &[&str]) -> (String, i32) {
         );
     }
 
-    // Run fe subcommand
     let fe_binary = std::env::current_exe()
         .expect("Failed to get current exe")
         .parent()
@@ -171,4 +177,23 @@ fn test_fe_test_runner(fixture: Fixture<&str>) {
 
     let (output, _) = run_fe_main(&args);
     snap_test!(output, fixture.path());
+}
+
+#[dir_test(
+    dir: "$CARGO_MANIFEST_DIR/tests/fixtures/cli_output/ingots/library",
+    glob: "**/app/fe.toml",
+)]
+fn test_cli_library(fixture: Fixture<&str>) {
+    let app_dir = std::path::Path::new(fixture.path())
+        .parent()
+        .expect("fe.toml should have parent");
+    let (output, _) = run_fe_check(app_dir.to_str().unwrap());
+    let case_name = app_dir
+        .parent()
+        .and_then(|parent| parent.file_name())
+        .expect("library fixture parent")
+        .to_str()
+        .unwrap();
+    let snapshot_path = app_dir.join(format!("library_{}", case_name));
+    snap_test!(output, snapshot_path.to_str().unwrap());
 }

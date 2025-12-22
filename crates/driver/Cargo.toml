@@ -24,6 +24,7 @@ url.workspace = true
 tracing.workspace = true
 mir.workspace = true
 petgraph.workspace = true
+glob.workspace = true
 
 [dev-dependencies]
 tempfile = "3.13"

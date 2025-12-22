@@ -133,10 +133,6 @@ impl<'db> TyChecker<'db> {
             unreachable!()
         };
         let prop = self.check_expr_unknown(*lhs);
-        if *op == UnOp::Plus {
-            // TODO: remove support for unary plus? what should it do?
-            return prop;
-        }
         if prop.ty.has_invalid(self.db) {
             return ExprProp::invalid(self.db);
         }
@@ -149,6 +145,15 @@ impl<'db> TyChecker<'db> {
         let base_ty = prop.ty.base_ty(self.db);
         if base_ty.is_ty_var(self.db) {
             let diag = BodyDiag::TypeMustBeKnown(lhs.span(self.body()).into());
+            self.push_diag(diag);
+            return ExprProp::invalid(self.db);
+        }
+
+        if *op == UnOp::Plus {
+            if prop.ty.is_integral(self.db) {
+                return prop;
+            }
+            let diag = BodyDiag::UnsupportedUnaryPlus(expr.span(self.body()).into());
             self.push_diag(diag);
             return ExprProp::invalid(self.db);
         }
@@ -1914,12 +1919,12 @@ fn resolve_ident_expr<'db>(
                     let mut cand_spans = Vec::new();
                     for name in cands.iter() {
                         if let Some(span) = name.kind.name_span(db) {
-                            let from_prelude = name
+                            let from_implicit = name
                                 .derivation
                                 .use_stmt()
-                                .map(|use_| use_.is_prelude_use(db))
+                                .map(|use_| use_.is_synthetic_use(db))
                                 .unwrap_or(false);
-                            cand_spans.push((span, from_prelude));
+                            cand_spans.push((span, from_implicit));
                         }
                     }
 

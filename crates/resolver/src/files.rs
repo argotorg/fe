@@ -7,6 +7,7 @@ use url::Url;
 
 use crate::Resolver;
 
+#[derive(Clone)]
 pub struct FilesResolver {
     pub file_patterns: Vec<String>,
     pub required_files: Vec<RequiredFile>,
@@ -175,8 +176,7 @@ impl Resolver for FilesResolver {
             return Err(FilesResolutionError::DirectoryDoesNotExist(url.clone()));
         }
 
-        // Check for required directories first
-        for required_dir in &self.required_directories {
+        for required_dir in self.required_directories.clone() {
             let required_dir_path = ingot_path.join(&required_dir.path);
             if !required_dir_path.exists() || !required_dir_path.is_dir() {
                 handler.on_resolution_diagnostic(
@@ -188,38 +188,36 @@ impl Resolver for FilesResolver {
             }
         }
 
-        // Check for required files
-        for required_file in &self.required_files {
+        for required_file in self.required_files.clone() {
             let required_path = ingot_path.join(&required_file.path);
             if !required_path.exists() {
                 handler.on_resolution_diagnostic(FilesResolutionDiagnostic::RequiredFileMissing(
                     url.clone(),
                     required_file.path.clone(),
                 ));
-            } else {
-                // If required file exists, load it
-                match fs::read_to_string(&required_path) {
-                    Ok(content) => {
-                        tracing::info!(target: "resolver", "Successfully read required file: {}", required_path);
-                        files.push(File {
-                            path: required_path,
-                            content,
-                        });
-                    }
-                    Err(error) => {
-                        tracing::warn!(target: "resolver", "Failed to read required file {}: {}", required_path, error);
-                        handler.on_resolution_diagnostic(FilesResolutionDiagnostic::FileIoError(
-                            required_path,
-                            error,
-                        ));
-                    }
+                continue;
+            }
+
+            match fs::read_to_string(&required_path) {
+                Ok(content) => {
+                    tracing::info!(target: "resolver", "Successfully read required file: {}", required_path);
+                    files.push(File {
+                        path: required_path,
+                        content,
+                    });
+                }
+                Err(error) => {
+                    tracing::warn!(target: "resolver", "Failed to read required file {}: {}", required_path, error);
+                    handler.on_resolution_diagnostic(FilesResolutionDiagnostic::FileIoError(
+                        required_path,
+                        error,
+                    ));
                 }
             }
         }
 
-        // Process file patterns
-        for pattern in &self.file_patterns {
-            let pattern_path = ingot_path.join(pattern);
+        for pattern in self.file_patterns.clone() {
+            let pattern_path = ingot_path.join(&pattern);
             let entries =
                 glob(pattern_path.as_str()).map_err(FilesResolutionError::PatternError)?;
 
