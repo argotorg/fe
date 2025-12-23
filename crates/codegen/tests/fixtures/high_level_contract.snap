@@ -74,6 +74,7 @@ object "EchoContract" {
         leave
       }
       function cursor_i__fork_mem__CallData__b9ab8dc8a4b2f9e(self, pos) -> ret {
+        pop(self)
         let v0 := mload(0x40)
         if iszero(v0) {
           v0 := 0x80

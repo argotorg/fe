@@ -18,7 +18,7 @@ use crate::analysis::ty::{
     canonical::Canonicalized,
     corelib::resolve_core_trait,
     diagnostics::{BodyDiag, FuncBodyDiag},
-    fold::{AssocTySubst, TyFoldable as _},
+    fold::{AssocTySubst, TyFoldable as _, TyFolder},
     trait_def::TraitInstId,
     trait_resolution::{
         GoalSatisfiability, PredicateListId, constraint::collect_func_def_constraints,
@@ -1108,6 +1108,75 @@ impl<'db> TyChecker<'db> {
 
                     ExprProp::new(instantiated_method_ty, true)
                 }
+                PathRes::TraitMethod(trait_inst, method) => {
+                    if let Some(existing) = self.env.callable_expr(expr) {
+                        return ExprProp::new(existing.ty(self.db), true);
+                    }
+
+                    let inst = if matches!(
+                        trait_inst.self_ty(self.db).data(self.db),
+                        TyData::TyParam(param) if param.is_trait_self()
+                    ) {
+                        let old_self = trait_inst.self_ty(self.db);
+                        let new_self = self.table.new_var_from_param(old_self);
+
+                        struct ReplaceSelf<'db> {
+                            from: TyId<'db>,
+                            to: TyId<'db>,
+                        }
+
+                        impl<'db> TyFolder<'db> for ReplaceSelf<'db> {
+                            fn fold_ty(
+                                &mut self,
+                                db: &'db dyn HirAnalysisDb,
+                                ty: TyId<'db>,
+                            ) -> TyId<'db> {
+                                if ty == self.from {
+                                    return self.to;
+                                }
+                                ty.super_fold_with(db, self)
+                            }
+                        }
+
+                        let mut folder = ReplaceSelf {
+                            from: old_self,
+                            to: new_self,
+                        };
+
+                        let args = trait_inst
+                            .args(self.db)
+                            .iter()
+                            .map(|&ty| ty.fold_with(self.db, &mut folder))
+                            .collect::<Vec<_>>();
+
+                        let assoc_type_bindings: IndexMap<IdentId<'db>, TyId<'db>> = trait_inst
+                            .assoc_type_bindings(self.db)
+                            .iter()
+                            .map(|(name, ty)| (*name, ty.fold_with(self.db, &mut folder)))
+                            .collect();
+
+                        TraitInstId::new(
+                            self.db,
+                            trait_inst.def(self.db),
+                            args,
+                            assoc_type_bindings,
+                        )
+                    } else {
+                        trait_inst
+                    };
+
+                    self.env
+                        .register_confirmation(inst, path_expr_span.clone().into());
+
+                    let func_ty =
+                        super::instantiate_trait_assoc_fn(self.db, method, &mut self.table, inst);
+
+                    let callable =
+                        Callable::new(self.db, func_ty, expr.span(self.body()).into(), Some(inst))
+                            .expect("trait method path should resolve to callable");
+                    self.env.register_callable(expr, callable);
+                    ExprProp::new(func_ty, true)
+                }
                 PathRes::TraitConst(_recv_ty, inst, name) => {
                     // Look up the associated const's declared type in the trait and
                     // instantiate it with the trait instance's args (including Self).
@@ -1164,7 +1233,7 @@ impl<'db> TyChecker<'db> {
                 self.push_diag(diag);
                 ExprProp::invalid(self.db)
             }
-            PathRes::Method(..) | PathRes::FuncParam(..) => {
+            PathRes::TraitMethod(..) | PathRes::Method(..) | PathRes::FuncParam(..) => {
                 let diag = BodyDiag::record_expected(self.db, span.path().into(), None);
                 self.push_diag(diag);
                 ExprProp::invalid(self.db)

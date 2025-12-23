@@ -11,6 +11,7 @@ pub use self::contract::{
     check_contract_recv_arm_body, check_contract_recv_block, check_contract_recv_blocks,
 };
 pub use self::path::RecordLike;
+use crate::hir_def::CallableDef;
 use crate::{
     hir_def::{
         Body, Contract, ContractRecvArm, Expr, ExprId, Func, LitKind, Partial, Pat, PatId, PathId,
@@ -801,7 +802,7 @@ impl Typeable<'_> {
 
 pub fn instantiate_trait_method<'db>(
     db: &'db dyn HirAnalysisDb,
-    method: crate::hir_def::CallableDef<'db>,
+    method: CallableDef<'db>,
     table: &mut UnificationTable<'db>,
     receiver_ty: TyId<'db>,
     inst: TraitInstId<'db>,
@@ -811,6 +812,22 @@ pub fn instantiate_trait_method<'db>(
     let inst_self = table.instantiate_to_term(inst.self_ty(db));
     table.unify(inst_self, receiver_ty).unwrap();
 
+    let instantiated = table.instantiate_to_term(ty);
+
+    // Apply associated type substitutions from the trait instance
+    use crate::analysis::ty::fold::{AssocTySubst, TyFoldable};
+    let mut subst = AssocTySubst::new(inst);
+    instantiated.fold_with(db, &mut subst)
+}
+
+/// Instantiate a trait-associated function type (no receiver), e.g. `T::make`.
+pub fn instantiate_trait_assoc_fn<'db>(
+    db: &'db dyn HirAnalysisDb,
+    method: CallableDef<'db>,
+    table: &mut UnificationTable<'db>,
+    inst: TraitInstId<'db>,
+) -> TyId<'db> {
+    let ty = TyId::foldl(db, TyId::func(db, method), inst.args(db));
     let instantiated = table.instantiate_to_term(ty);
 
     // Apply associated type substitutions from the trait instance

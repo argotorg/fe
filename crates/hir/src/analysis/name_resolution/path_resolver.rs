@@ -1,3 +1,4 @@
+use crate::core::hir_def::GenericArg;
 use crate::hir_def::CallableDef;
 use crate::{
     core::hir_def::{
@@ -444,6 +445,13 @@ pub enum PathRes<'db> {
     Func(TyId<'db>),
     FuncParam(ItemKind<'db>, u16),
     Trait(TraitInstId<'db>),
+    /// A trait-associated function resolved via a trait path, e.g. `T::make`.
+    ///
+    /// Carries the trait reference as written (including generic args and assoc-type bindings),
+    /// with `Self` still bound to the trait's `Self` type parameter. The type checker is
+    /// responsible for instantiating `Self` to an inference variable and later confirming that
+    /// an impl exists.
+    TraitMethod(TraitInstId<'db>, CallableDef<'db>),
     EnumVariant(ResolvedVariant<'db>),
     Const(Const<'db>, TyId<'db>),
     Mod(ScopeId<'db>),
@@ -465,7 +473,10 @@ impl<'db> PathRes<'db> {
             // TODO: map over candidate ty?
             PathRes::Method(ty, candidate) => PathRes::Method(f(ty), candidate),
             PathRes::TraitConst(ty, inst, name) => PathRes::TraitConst(f(ty), inst, name),
-            r @ (PathRes::Trait(_) | PathRes::Mod(_) | PathRes::FuncParam(..)) => r,
+            r @ (PathRes::Trait(_)
+            | PathRes::TraitMethod(..)
+            | PathRes::Mod(_)
+            | PathRes::FuncParam(..)) => r,
         }
     }
 
@@ -480,6 +491,7 @@ impl<'db> PathRes<'db> {
             }
             PathRes::TyAlias(alias, _) => Some(alias.alias.scope()),
             PathRes::Trait(trait_) => Some(trait_.def(db).scope()),
+            PathRes::TraitMethod(_inst, method) => Some(method.scope()),
             PathRes::EnumVariant(variant) => Some(ScopeId::Variant(variant.variant)),
             PathRes::FuncParam(item, idx) => Some(ScopeId::FuncParam(*item, *idx)),
             PathRes::Mod(scope) => Some(*scope),
@@ -495,6 +507,11 @@ impl<'db> PathRes<'db> {
                 // Associated consts behave like trait methods: the trait does not
                 // need to be imported as long as it's otherwise visible.
                 is_scope_visible_from(db, inst.def(db).scope(), from_scope)
+            }
+            PathRes::TraitMethod(_inst, method) => {
+                // Trait method visibility depends on the method's defining scope,
+                // not on trait imports (the trait is explicitly referenced).
+                is_scope_visible_from(db, method.scope(), from_scope)
             }
             PathRes::Method(_, cand) => {
                 // Method visibility depends on the method's defining scope
@@ -538,6 +555,7 @@ impl<'db> PathRes<'db> {
                 ty_path(*ty).unwrap_or_else(|| "<missing>".into()),
                 name.data(db)
             )),
+            PathRes::TraitMethod(..) => self.as_scope(db)?.pretty_path(db),
             r @ (PathRes::Trait(..) | PathRes::Mod(..) | PathRes::FuncParam(..)) => {
                 r.as_scope(db).unwrap().pretty_path(db)
             }
@@ -557,6 +575,7 @@ impl<'db> PathRes<'db> {
             PathRes::Func(_) => "function",
             PathRes::FuncParam(..) => "function parameter",
             PathRes::Trait(_) => "trait",
+            PathRes::TraitMethod(..) => "trait method",
             PathRes::EnumVariant(_) => "enum variant",
             PathRes::Const(..) => "constant",
             PathRes::TraitConst(..) => "constant",
@@ -777,6 +796,16 @@ where
                     return Ok(r);
                 }
 
+                // Associated function on a specific trait instance
+                if is_tail
+                    && resolve_tail_as_value
+                    && let Some(&method) = trait_inst.def(db).method_defs(db).get(&ident)
+                {
+                    let r = PathRes::TraitMethod(*trait_inst, method);
+                    observer(path, &r);
+                    return Ok(r);
+                }
+
                 // Associated const on a specific trait instance
                 if resolve_tail_as_value && trait_inst.def(db).const_(db, ident).is_some() {
                     let r = PathRes::TraitConst(trait_inst.self_ty(db), *trait_inst, ident);
@@ -876,14 +905,29 @@ where
             }
         }
 
-        Some(PathRes::Func(_) | PathRes::EnumVariant(..) | PathRes::TraitConst(..)) => {
+        Some(
+            PathRes::Func(_)
+            | PathRes::EnumVariant(..)
+            | PathRes::TraitConst(..)
+            | PathRes::TraitMethod(..),
+        ) => {
             return Err(PathResError::new(
                 PathResErrorKind::InvalidPathSegment(parent_res.unwrap()),
                 path,
             ));
         }
         Some(PathRes::FuncParam(..) | PathRes::Method(..)) => unreachable!(),
-        Some(PathRes::Const(..) | PathRes::Mod(_) | PathRes::Trait(_)) | None => {}
+        Some(PathRes::Trait(trait_inst)) => {
+            if is_tail
+                && resolve_tail_as_value
+                && let Some(&method) = trait_inst.def(db).method_defs(db).get(&ident)
+            {
+                let r = PathRes::TraitMethod(trait_inst, method);
+                observer(path, &r);
+                return Ok(r);
+            }
+        }
+        Some(PathRes::Const(..) | PathRes::Mod(_)) | None => {}
     };
 
     let query = make_query(db, path, parent_scope);
@@ -1187,7 +1231,7 @@ pub fn resolve_name_res<'db>(
                         if !path.generic_args(db).is_empty(db) {
                             let gen_args = path.generic_args(db).data(db);
                             for (idx, ga) in gen_args.iter().enumerate() {
-                                if let crate::core::hir_def::GenericArg::Type(ty_arg) = ga
+                                if let GenericArg::Type(ty_arg) = ga
                                     && let Some(hir_ty) = ty_arg.ty.to_opt()
                                     && let TypeKind::Path(p) = hir_ty.data(db)
                                     && let Some(arg_path) = p.to_opt()

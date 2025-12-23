@@ -1,0 +1,36 @@
+---
+source: crates/mir/tests/lowering_snapshots.rs
+expression: mir_output
+---
+fn make() -> Bar:
+  bb0:
+    v0: Bar = alloc mem
+    init mem[v0] { .0 = 10 }
+    ret v0
+
+fn example() -> Bar:
+  bb0:
+    v0: Bar = make__Bar__65003a6f97476550()
+    v1: Bar = make__Bar__65003a6f97476550()
+    v3: Bar = 0
+    switch true [true => bb1, false => bb2] else bb2
+  bb1:
+    v3 = v0
+    jmp bb3
+  bb2:
+    v3 = v1
+    jmp bb3
+  bb3:
+    v2: Bar = v3
+    ret v2
+
+fn f() -> Bar:
+  bb0:
+    v0: Bar = make__Bar__65003a6f97476550()
+    ret v0
+
+fn make__Bar__65003a6f97476550() -> Bar:
+  bb0:
+    v0: Bar = alloc mem
+    init mem[v0] { .0 = 10 }
+    ret v0

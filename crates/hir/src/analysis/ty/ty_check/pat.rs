@@ -198,7 +198,7 @@ impl<'db> TyChecker<'db> {
                 TyId::invalid(self.db, InvalidCause::Other)
             }
 
-            Ok(PathRes::Method(..) | PathRes::FuncParam(..)) => {
+            Ok(PathRes::TraitMethod(..) | PathRes::Method(..) | PathRes::FuncParam(..)) => {
                 TyId::invalid(self.db, InvalidCause::Other)
             }
 
@@ -269,7 +269,7 @@ impl<'db> TyChecker<'db> {
                     return TyId::invalid(self.db, InvalidCause::Other);
                 }
 
-                PathRes::Method(..) | PathRes::FuncParam(..) => {
+                PathRes::TraitMethod(..) | PathRes::Method(..) | PathRes::FuncParam(..) => {
                     let diag = BodyDiag::tuple_variant_expected(self.db, span.into(), None);
                     self.push_diag(diag);
                     return TyId::invalid(self.db, InvalidCause::Other);
@@ -411,7 +411,7 @@ impl<'db> TyChecker<'db> {
                     TyId::invalid(self.db, InvalidCause::Other)
                 }
 
-                PathRes::Method(..) | PathRes::FuncParam(..) => {
+                PathRes::TraitMethod(..) | PathRes::Method(..) | PathRes::FuncParam(..) => {
                     let diag =
                         BodyDiag::record_expected(self.db, pat.span(self.body()).into(), None);
                     self.push_diag(diag);
