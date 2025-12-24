@@ -1182,16 +1182,11 @@ impl<'db> Trait<'db> {
         collect_generic_params(db, self.into()).explicit_params(db)
     }
 
-    pub fn method_defs(
-        self,
-        db: &'db dyn HirAnalysisDb,
-    ) -> IndexMap<IdentId<'db>, CallableDef<'db>> {
+    pub fn method_defs(self, db: &'db dyn HirAnalysisDb) -> IndexMap<IdentId<'db>, Func<'db>> {
         let mut methods = IndexMap::default();
         for method in self.methods(db) {
-            if let Some(func) = method.as_callable(db)
-                && let Some(name) = func.name(db)
-            {
-                methods.insert(name, func);
+            if let Some(name) = method.name(db).to_opt() {
+                methods.insert(name, method);
             }
         }
         methods

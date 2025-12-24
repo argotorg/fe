@@ -26,7 +26,6 @@ use super::{
     unify::UnificationTable,
 };
 use crate::analysis::HirAnalysisDb;
-use crate::hir_def::CallableDef;
 
 /// Returns [`TraitEnv`] for the given ingot.
 #[salsa::tracked(return_ref, cycle_fn=ingot_trait_env_cycle_recover, cycle_initial=ingot_trait_env_cycle_initial)]
@@ -98,10 +97,8 @@ pub fn resolve_trait_method<'db>(
 
         for implementor in impls_for_trait(db, ingot, canonical) {
             let implementor = implementor.instantiate_identity();
-            if let Some(callable) = implementor.methods(db).get(&method)
-                && let CallableDef::Func(func) = callable
-            {
-                return Some(*func);
+            if let Some(&func) = implementor.methods(db).get(&method) {
+                return Some(func);
             }
         }
     }
@@ -362,7 +359,7 @@ impl<'db> ImplementorId<'db> {
     pub(crate) fn methods(
         self,
         db: &'db dyn HirAnalysisDb,
-    ) -> &'db IndexMap<IdentId<'db>, CallableDef<'db>> {
+    ) -> &'db IndexMap<IdentId<'db>, Func<'db>> {
         collect_implementor_methods(db, self)
     }
 
@@ -377,7 +374,7 @@ impl<'db> ImplementorId<'db> {
         let trait_methods = self.trait_def(db).method_defs(db);
         let mut required_methods: IndexSet<_> = trait_methods
             .iter()
-            .filter_map(|(name, &trait_method)| (!trait_method.has_body(db)).then_some(*name))
+            .filter_map(|(name, &trait_method)| trait_method.body(db).is_none().then_some(*name))
             .collect();
 
         for (name, impl_m) in impl_methods {
@@ -392,7 +389,13 @@ impl<'db> ImplementorId<'db> {
                 );
                 continue;
             };
-            compare_impl_method(db, *impl_m, *trait_m, self.trait_(db), &mut diags);
+            compare_impl_method(
+                db,
+                impl_m.as_callable(db).unwrap(),
+                trait_m.as_callable(db).unwrap(),
+                self.trait_(db),
+                &mut diags,
+            );
             required_methods.remove(name);
         }
 

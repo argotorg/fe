@@ -16,7 +16,7 @@ use crate::analysis::{
         unify::UnificationTable,
     },
 };
-use crate::hir_def::CallableDef;
+use crate::hir_def::{CallableDef, Func};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, salsa::Update)]
 pub enum MethodCandidate<'db> {
@@ -31,9 +31,11 @@ impl<'db> MethodCandidate<'db> {
             MethodCandidate::InherentMethod(func_def) => {
                 func_def.name(db).expect("inherent methods have names")
             }
-            MethodCandidate::TraitMethod(cand) | MethodCandidate::NeedsConfirmation(cand) => {
-                cand.method.name(db).expect("trait methods have names")
-            }
+            MethodCandidate::TraitMethod(cand) | MethodCandidate::NeedsConfirmation(cand) => cand
+                .method
+                .name(db)
+                .to_opt()
+                .expect("trait methods have names"),
         }
     }
 }
@@ -41,11 +43,11 @@ impl<'db> MethodCandidate<'db> {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, salsa::Update)]
 pub struct TraitMethodCand<'db> {
     pub inst: Solution<TraitInstId<'db>>,
-    pub method: CallableDef<'db>,
+    pub method: Func<'db>,
 }
 
 impl<'db> TraitMethodCand<'db> {
-    fn new(inst: Solution<TraitInstId<'db>>, method: CallableDef<'db>) -> Self {
+    fn new(inst: Solution<TraitInstId<'db>>, method: Func<'db>) -> Self {
         Self { inst, method }
     }
 }
@@ -292,7 +294,7 @@ impl<'db> MethodSelector<'db> {
     /// checks if the goal is satisfiable given the current assumptions.
     /// Depending on the result, it either returns a confirmed trait method
     /// candidate or one that needs further confirmation.
-    fn check_inst(&self, inst: TraitInstId<'db>, method: CallableDef<'db>) -> MethodCandidate<'db> {
+    fn check_inst(&self, inst: TraitInstId<'db>, method: Func<'db>) -> MethodCandidate<'db> {
         let mut table = UnificationTable::new(self.db);
         // Seed the table with receiver's canonical variables so that subsequent
         // canonicalization can safely probe them.
@@ -394,7 +396,7 @@ pub enum MethodSelectionError<'db> {
 #[derive(Default)]
 struct AssembledCandidates<'db> {
     inherent_methods: FxHashSet<CallableDef<'db>>,
-    traits: IndexSet<(TraitInstId<'db>, CallableDef<'db>)>,
+    traits: IndexSet<(TraitInstId<'db>, Func<'db>)>,
 }
 
 impl<'db> AssembledCandidates<'db> {

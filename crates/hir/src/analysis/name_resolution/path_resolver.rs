@@ -1,5 +1,5 @@
 use crate::core::hir_def::GenericArg;
-use crate::hir_def::CallableDef;
+use crate::hir_def::{CallableDef, Func};
 use crate::{
     core::hir_def::{
         Const, Enum, EnumVariant, GenericParamOwner, IdentId, ImplTrait, ItemKind, PathId,
@@ -451,7 +451,7 @@ pub enum PathRes<'db> {
     /// with `Self` still bound to the trait's `Self` type parameter. The type checker is
     /// responsible for instantiating `Self` to an inference variable and later confirming that
     /// an impl exists.
-    TraitMethod(TraitInstId<'db>, CallableDef<'db>),
+    TraitMethod(TraitInstId<'db>, Func<'db>),
     EnumVariant(ResolvedVariant<'db>),
     Const(Const<'db>, TyId<'db>),
     Mod(ScopeId<'db>),

@@ -1168,8 +1168,12 @@ impl<'db> TyChecker<'db> {
                     self.env
                         .register_confirmation(inst, path_expr_span.clone().into());
 
-                    let func_ty =
-                        super::instantiate_trait_assoc_fn(self.db, method, &mut self.table, inst);
+                    let func_ty = super::instantiate_trait_assoc_fn(
+                        self.db,
+                        method.as_callable(self.db).unwrap(),
+                        &mut self.table,
+                        inst,
+                    );
 
                     let callable =
                         Callable::new(self.db, func_ty, expr.span(self.body()).into(), Some(inst))

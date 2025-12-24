@@ -1,8 +1,11 @@
 //! This module implements the trait and impl trait lowering process.
 
-use crate::core::hir_def::{
-    AssocTypeGenericArg, HirIngot, IdentId, ImplTrait, Partial, PathId, Trait, TraitRefId,
-    params::GenericArg, scope_graph::ScopeId,
+use crate::{
+    core::hir_def::{
+        AssocTypeGenericArg, HirIngot, IdentId, ImplTrait, Partial, PathId, Trait, TraitRefId,
+        params::GenericArg, scope_graph::ScopeId,
+    },
+    hir_def::Func,
 };
 use common::{indexmap::IndexMap, ingot::Ingot};
 use rustc_hash::FxHashMap;
@@ -25,7 +28,6 @@ use crate::analysis::{
         ty_lower::lower_opt_hir_ty,
     },
 };
-use crate::hir_def::CallableDef;
 
 type TraitImplTable<'db> = FxHashMap<Trait<'db>, Vec<Binder<ImplementorId<'db>>>>;
 
@@ -248,13 +250,11 @@ pub(crate) fn lower_trait_ref_impl<'db>(
 pub(crate) fn collect_implementor_methods<'db>(
     db: &'db dyn HirAnalysisDb,
     implementor: ImplementorId<'db>,
-) -> IndexMap<IdentId<'db>, CallableDef<'db>> {
+) -> IndexMap<IdentId<'db>, Func<'db>> {
     let mut methods = IndexMap::default();
     for method in implementor.hir_impl_trait(db).methods(db) {
-        if let Some(func) = method.as_callable(db) {
-            let name = func.name(db).expect("impl methods have names");
-            methods.insert(name, func);
-        }
+        let name = method.name(db).to_opt().expect("impl methods have names");
+        methods.insert(name, method);
     }
 
     methods

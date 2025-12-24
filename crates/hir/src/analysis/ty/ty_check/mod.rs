@@ -802,12 +802,16 @@ impl Typeable<'_> {
 
 pub fn instantiate_trait_method<'db>(
     db: &'db dyn HirAnalysisDb,
-    method: CallableDef<'db>,
+    method: Func<'db>,
     table: &mut UnificationTable<'db>,
     receiver_ty: TyId<'db>,
     inst: TraitInstId<'db>,
 ) -> TyId<'db> {
-    let ty = TyId::foldl(db, TyId::func(db, method), inst.args(db));
+    let ty = TyId::foldl(
+        db,
+        TyId::func(db, method.as_callable(db).unwrap()),
+        inst.args(db),
+    );
 
     let inst_self = table.instantiate_to_term(inst.self_ty(db));
     table.unify(inst_self, receiver_ty).unwrap();
