@@ -2,7 +2,7 @@
 source: crates/mir/tests/lowering_snapshots.rs
 expression: mir_output
 ---
-fn make() -> Bar:
+fn bar_t_make() -> Bar:
   bb0:
     v0: Bar = alloc mem
     init mem[v0] { .0 = 10 }
@@ -10,8 +10,8 @@ fn make() -> Bar:
 
 fn example() -> Bar:
   bb0:
-    v0: Bar = make__Bar__65003a6f97476550()
-    v1: Bar = make__Bar__65003a6f97476550()
+    v0: Bar = bar_t_make()
+    v1: Bar = bar_t_make()
     v3: Bar = 0
     switch true [true => bb1, false => bb2] else bb2
   bb1:
@@ -26,11 +26,5 @@ fn example() -> Bar:
 
 fn f() -> Bar:
   bb0:
-    v0: Bar = make__Bar__65003a6f97476550()
-    ret v0
-
-fn make__Bar__65003a6f97476550() -> Bar:
-  bb0:
-    v0: Bar = alloc mem
-    init mem[v0] { .0 = 10 }
+    v0: Bar = bar_t_make()
     ret v0

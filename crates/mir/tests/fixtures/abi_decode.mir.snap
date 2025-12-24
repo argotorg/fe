@@ -1,0 +1,49 @@
+---
+source: crates/mir/tests/lowering_snapshots.rs
+expression: mir_output
+---
+fn decode_u256() -> u256:
+  bb0:
+    v0: SolDecoder<CallData> = soldecoder_i__new__CallData__b9ab8dc8a4b2f9e(())
+    v2: u256 = u256_decode_decode__Sol_SolDecoder_CallData___828c6f2e3bda3cab(v0)
+    ret v2
+
+fn soldecoder_i__new__CallData__b9ab8dc8a4b2f9e(v0: I) -> SolDecoder<I>:
+  bb0:
+    v1: Cursor<CallData> = cursor_i__new__CallData__b9ab8dc8a4b2f9e(v0)
+    v3: SolDecoder<CallData> = alloc mem
+    init mem[v3] { .0 = v1, .1 = 0 }
+    v2: SolDecoder<CallData> = v3
+    ret v2
+
+fn u256_decode_decode__Sol_SolDecoder_CallData___828c6f2e3bda3cab(v0: D) -> u256:
+  bb0:
+    v1: u256 = soldecoder_i__abidecoder_read_word__CallData__b9ab8dc8a4b2f9e(v0)
+    ret v1
+
+fn cursor_i__new__CallData__b9ab8dc8a4b2f9e(v0: I) -> Cursor<I>:
+  bb0:
+    v2: Cursor<CallData> = alloc mem
+    eval v2
+    init mem[v2] { .1 = 0 }
+    v1: Cursor<CallData> = v2
+    ret v1
+
+fn soldecoder_i__abidecoder_read_word__CallData__b9ab8dc8a4b2f9e(v0: SolDecoder<I>) -> u256:
+  bb0:
+    v1: u256 = cursor_i__read_word_mem__CallData__b9ab8dc8a4b2f9e(&mem[v0].0)
+    ret v1
+
+fn cursor_i__read_word_mem__CallData__b9ab8dc8a4b2f9e(v0: Cursor<I>) -> u256:
+  bb0:
+    eval v0
+    v3: u256 = load mem[v0].1
+    v1: u256 = calldata_byteinput_word_at((), v3)
+    v4: u256 = load mem[v0].1
+    store mem[v0].1 = (v4 + 32)
+    ret v1
+
+fn calldata_byteinput_word_at(v0: CallData, v1: u256) -> u256:
+  bb0:
+    v2: u256 = calldataload(v1)
+    ret v2

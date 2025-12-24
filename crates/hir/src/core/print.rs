@@ -972,6 +972,16 @@ impl<'db> ItemKind<'db> {
 impl<'db> Func<'db> {
     /// Pretty-prints a function.
     pub fn pretty_print(self, db: &'db dyn HirDb) -> String {
+        let mut result = self.pretty_print_signature(db);
+        if let Some(body) = self.body(db) {
+            result.push(' ');
+            result.push_str(&body.pretty_print(db));
+        }
+
+        result
+    }
+
+    pub fn pretty_print_signature(self, db: &'db dyn HirDb) -> String {
         let mut result = String::new();
 
         // Attributes
@@ -1005,13 +1015,6 @@ impl<'db> Func<'db> {
 
         // Where clause
         result.push_str(&self.where_clause(db).pretty_print(db));
-
-        // Body
-        if let Some(body) = self.body(db) {
-            result.push(' ');
-            result.push_str(&body.pretty_print(db));
-        }
-
         result
     }
 }

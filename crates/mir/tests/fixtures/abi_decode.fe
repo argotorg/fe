@@ -1,0 +1,8 @@
+use core::abi::Decode
+use std::abi::sol::SolDecoder
+use std::evm::calldata::CallData
+
+pub fn decode_u256() -> u256 {
+    let d = SolDecoder::new(CallData {})
+    u256::decode(d)
+}

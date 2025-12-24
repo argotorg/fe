@@ -1,0 +1,11 @@
+trait Foo {
+    fn foo(self) -> u32 {
+        10
+    }
+}
+
+impl Foo for u256 {}
+
+pub fn example(x: u256) -> u32 {
+    x.foo()
+}

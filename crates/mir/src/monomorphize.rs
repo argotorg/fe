@@ -8,12 +8,12 @@ use hir::analysis::{
     diagnostics::SpannedHirAnalysisDb,
     ty::{
         fold::{TyFoldable, TyFolder},
-        trait_def::resolve_trait_method,
+        trait_def::resolve_trait_method_instance,
         ty_check::check_func_body,
         ty_def::{TyData, TyId},
     },
 };
-use hir::hir_def::{CallableDef, Func, item::ItemKind, scope_graph::ScopeId};
+use hir::hir_def::{CallableDef, Func, PathKind, item::ItemKind, scope_graph::ScopeId};
 use rustc_hash::FxHashMap;
 
 use crate::{
@@ -177,9 +177,8 @@ impl<'db> Monomorphizer<'db> {
                         rvalue: crate::ir::Rvalue::Call(call),
                         ..
                     } = inst
-                        && let Some(target_func) = self.resolve_call_target(call)
+                        && let Some((target_func, args)) = self.resolve_call_target(call)
                     {
-                        let args = call.callable.generic_args().to_vec();
                         sites.push((
                             bb_idx,
                             Some(inst_idx),
@@ -193,9 +192,8 @@ impl<'db> Monomorphizer<'db> {
 
                 if let crate::Terminator::TerminatingCall(crate::ir::TerminatingCall::Call(call)) =
                     &block.terminator
-                    && let Some(target_func) = self.resolve_call_target(call)
+                    && let Some((target_func, args)) = self.resolve_call_target(call)
                 {
-                    let args = call.callable.generic_args().to_vec();
                     sites.push((
                         bb_idx,
                         None,
@@ -228,9 +226,15 @@ impl<'db> Monomorphizer<'db> {
 
         for (bb_idx, inst_idx, target, args, receiver_space, effect_kinds) in call_sites {
             let resolved_name = match target {
-                CallTarget::Template(func) => self
-                    .ensure_instance(func, &args, receiver_space, &effect_kinds)
-                    .map(|(_, symbol)| symbol),
+                CallTarget::Template(func) => {
+                    let (_, symbol) = self
+                        .ensure_instance(func, &args, receiver_space, &effect_kinds)
+                        .unwrap_or_else(|| {
+                            let name = func.pretty_print_signature(self.db);
+                            panic!("failed to instantiate MIR for `{name}`");
+                        });
+                    Some(symbol)
+                }
                 CallTarget::Decl(func) => {
                     Some(self.mangled_name(func, &args, receiver_space, &effect_kinds))
                 }
@@ -263,10 +267,14 @@ impl<'db> Monomorphizer<'db> {
         }
 
         for (value_idx, target) in func_item_sites {
-            if let Some((_, symbol)) =
-                self.ensure_instance(target.func, &target.generic_args, None, &[])
-                && let crate::ValueOrigin::FuncItem(target) =
-                    &mut self.instances[func_idx].body.values[value_idx].origin
+            let (_, symbol) = self
+                .ensure_instance(target.func, &target.generic_args, None, &[])
+                .unwrap_or_else(|| {
+                    let name = target.func.pretty_print(self.db);
+                    panic!("failed to instantiate MIR for `{name}`");
+                });
+            if let crate::ValueOrigin::FuncItem(target) =
+                &mut self.instances[func_idx].body.values[value_idx].origin
             {
                 target.symbol = Some(symbol);
             }
@@ -325,20 +333,60 @@ impl<'db> Monomorphizer<'db> {
     }
 
     /// Returns the concrete HIR function targeted by the given call, accounting for trait impls.
-    fn resolve_call_target(&self, call: &CallOrigin<'db>) -> Option<CallTarget<'db>> {
-        if let CallableDef::Func(func) = call.callable.callable_def
-            && func.body(self.db).is_some()
-        {
-            return Some(CallTarget::Template(func));
+    fn resolve_call_target(
+        &self,
+        call: &CallOrigin<'db>,
+    ) -> Option<(CallTarget<'db>, Vec<TyId<'db>>)> {
+        let base_args = call.callable.generic_args().to_vec();
+        if let Some(inst) = call.callable.trait_inst() {
+            let method_name = call
+                .callable
+                .callable_def
+                .name(self.db)
+                .expect("trait method call missing name");
+            let trait_arg_len = inst.args(self.db).len();
+            if base_args.len() < trait_arg_len {
+                let inst_desc = inst.pretty_print(self.db, false);
+                let name = method_name.data(self.db);
+                panic!(
+                    "trait method `{name}` args too short for `{inst_desc}`: got {}, expected at least {}",
+                    base_args.len(),
+                    trait_arg_len
+                );
+            }
+            if let Some((func, impl_args)) =
+                resolve_trait_method_instance(self.db, inst, method_name)
+            {
+                let mut resolved_args = impl_args;
+                resolved_args.extend_from_slice(&base_args[trait_arg_len..]);
+                return Some((CallTarget::Template(func), resolved_args));
+            }
+
+            if let CallableDef::Func(func) = call.callable.callable_def
+                && func.body(self.db).is_some()
+            {
+                return Some((CallTarget::Template(func), base_args));
+            }
+
+            let inst_desc = inst.pretty_print(self.db, false);
+            let name = method_name.data(self.db);
+            panic!(
+                "failed to resolve trait method `{name}` for `{inst_desc}` (no impl and no default)"
+            );
         }
-        if let Some(inst) = call.callable.trait_inst()
-            && let Some(method_name) = call.callable.callable_def.name(self.db)
-            && let Some(func) = resolve_trait_method(self.db, inst, method_name)
-        {
-            return Some(CallTarget::Template(func));
-        }
+
         if let CallableDef::Func(func) = call.callable.callable_def {
-            return Some(CallTarget::Decl(func));
+            if func.body(self.db).is_some() {
+                return Some((CallTarget::Template(func), base_args));
+            }
+            if let Some(parent) = func.scope().parent(self.db)
+                && let ScopeId::Item(item) = parent
+                && matches!(item, ItemKind::Trait(_) | ItemKind::ImplTrait(_))
+            {
+                let name = func.pretty_print_signature(self.db);
+                panic!("unresolved trait method `{name}` during monomorphization");
+            }
+            return Some((CallTarget::Decl(func), base_args));
         }
         None
     }
@@ -449,6 +497,28 @@ impl<'db> Monomorphizer<'db> {
                 return None;
             }
             Some(sanitize_symbol_component(ty.pretty_print(self.db)).to_lowercase())
+        } else if let ItemKind::ImplTrait(impl_trait) = item {
+            let ty = impl_trait.ty(self.db);
+            if ty.has_invalid(self.db) {
+                return None;
+            }
+            let self_part = sanitize_symbol_component(ty.pretty_print(self.db)).to_lowercase();
+            let trait_part = impl_trait
+                .hir_trait_ref(self.db)
+                .to_opt()
+                .and_then(|trait_ref| trait_ref.path(self.db).to_opt())
+                .and_then(|path| path.segment(self.db, path.segment_index(self.db)))
+                .and_then(|segment| match segment.kind(self.db) {
+                    PathKind::Ident { ident, .. } => ident.to_opt(),
+                    PathKind::QualifiedType { .. } => None,
+                })
+                .map(|ident| sanitize_symbol_component(ident.data(self.db)).to_lowercase());
+            let prefix = if let Some(trait_part) = trait_part {
+                format!("{self_part}_{trait_part}")
+            } else {
+                self_part
+            };
+            Some(prefix)
         } else {
             None
         }

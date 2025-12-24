@@ -99,29 +99,29 @@ fn storagemap_k__v__get_stor__u256_u256__cc308d1bea3fb6e4(v0: StorageMap<K, V>, 
   bb0:
     v2: u256 = storagemap_k__v__storage_slot_stor__u256_u256__cc308d1bea3fb6e4(v0, v1)
     v3: u256 = sload(v2)
-    v4: u256 = to_word__deduped(v3)
+    v4: u256 = u256_storablescalar_to_word(v3)
     ret v4
 
 fn storagemap_k__v__set_stor__u256_u256__cc308d1bea3fb6e4(v0: StorageMap<K, V>, v1: K, v2: V) -> ():
   bb0:
     v3: u256 = storagemap_k__v__storage_slot_stor__u256_u256__cc308d1bea3fb6e4(v0, v1)
-    v4: u256 = to_word__deduped(v2)
+    v4: u256 = u256_storablescalar_to_word(v2)
     eval sstore(v3, v4)
     ret
 
 fn storagemap_k__v__storage_slot_stor__u256_u256__cc308d1bea3fb6e4(v0: StorageMap<K, V>, v1: K) -> u256:
   bb0:
-    v2: u256 = write_key__u256__3271ca15373d4483(0, v1)
+    v2: u256 = u256_storagekey_write_key(0, v1)
     v3: u256 = addr_of(v0)
     eval mstore(v2, v3)
     v4: u256 = keccak256(0, (v2 + 32))
     ret v4
 
-fn to_word__deduped(v0: u256) -> u256:
+fn u256_storablescalar_to_word(v0: u256) -> u256:
   bb0:
     ret v0
 
-fn write_key__u256__3271ca15373d4483(v0: u256, v1: u256) -> u256:
+fn u256_storagekey_write_key(v0: u256, v1: u256) -> u256:
   bb0:
     eval mstore(v0, v1)
     ret 32

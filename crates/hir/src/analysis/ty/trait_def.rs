@@ -105,6 +105,39 @@ pub fn resolve_trait_method<'db>(
     None
 }
 
+/// Resolves the concrete HIR function that implements `method` for the given
+/// trait instance, returning both the function and the impl's instantiated
+/// generic arguments.
+pub fn resolve_trait_method_instance<'db>(
+    db: &'db dyn HirAnalysisDb,
+    inst: TraitInstId<'db>,
+    method: IdentId<'db>,
+) -> Option<(Func<'db>, Vec<TyId<'db>>)> {
+    let canonical = Canonical::new(db, inst);
+
+    // Search Self's ingot, and the trait's ingot.
+    for ingot in [inst.self_ty(db).ingot(db), Some(inst.def(db).ingot(db))] {
+        let Some(ingot) = ingot else { continue };
+
+        for implementor in impls_for_trait(db, ingot, canonical) {
+            let mut table = UnificationTable::new(db);
+            let implementor = table.instantiate_with_fresh_vars(*implementor);
+            if table.unify(implementor.trait_(db), inst).is_err() {
+                continue;
+            }
+            if let Some(func) = implementor.methods(db).get(&method) {
+                let impl_args = implementor
+                    .params(db)
+                    .iter()
+                    .map(|&ty| ty.fold_with(db, &mut table))
+                    .collect::<Vec<_>>();
+                return Some((*func, impl_args));
+            }
+        }
+    }
+    None
+}
+
 /// Returns all implementors for the given `ty` that satisfy the given assumptions.
 pub(crate) fn impls_for_ty_with_constraints<'db>(
     db: &'db dyn HirAnalysisDb,

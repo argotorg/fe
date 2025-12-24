@@ -1,6 +1,5 @@
 ---
 source: crates/codegen/tests/yul.rs
-assertion_line: 42
 expression: output
 input_file: tests/fixtures/erc20_low_level.fe
 ---
@@ -34,6 +33,14 @@ object "Erc20Contract" {
 
   object "Erc20Contract_deployed" {
     code {
+      function _a__b__storagekey_write_key__u256_u256__cc308d1bea3fb6e4(ptr, self) -> ret {
+        let v0 := mload(self)
+        let v1 := mload(add(self, 32))
+        let v2 := u256_storagekey_write_key(ptr, v0)
+        let v3 := u256_storagekey_write_key(add(ptr, v2), v1)
+        ret := add(v2, v3)
+        leave
+      }
       function abi_encode_string(word, len) {
         mstore(0, 32)
         mstore(32, len)
@@ -201,31 +208,31 @@ object "Erc20Contract" {
       function storagemap_k__v__get_stor___u256__u256__u256__8f2563d4f83caf64(self, key) -> ret {
         let v0 := storagemap_k__v__storage_slot_stor___u256__u256__u256__8f2563d4f83caf64(self, key)
         let v1 := sload(v0)
-        let v2 := to_word__deduped(v1)
+        let v2 := u256_storablescalar_to_word(v1)
         ret := v2
         leave
       }
       function storagemap_k__v__get_stor__u256_u256__cc308d1bea3fb6e4(self, key) -> ret {
         let v0 := storagemap_k__v__storage_slot_stor__u256_u256__cc308d1bea3fb6e4(self, key)
         let v1 := sload(v0)
-        let v2 := to_word__deduped(v1)
+        let v2 := u256_storablescalar_to_word(v1)
         ret := v2
         leave
       }
       function storagemap_k__v__set_stor___u256__u256__u256__8f2563d4f83caf64(self, key, value) {
         let v0 := storagemap_k__v__storage_slot_stor___u256__u256__u256__8f2563d4f83caf64(self, key)
-        let v1 := to_word__deduped(value)
+        let v1 := u256_storablescalar_to_word(value)
         sstore(v0, v1)
         leave
       }
       function storagemap_k__v__set_stor__u256_u256__cc308d1bea3fb6e4(self, key, value) {
         let v0 := storagemap_k__v__storage_slot_stor__u256_u256__cc308d1bea3fb6e4(self, key)
-        let v1 := to_word__deduped(value)
+        let v1 := u256_storablescalar_to_word(value)
         sstore(v0, v1)
         leave
       }
       function storagemap_k__v__storage_slot_stor___u256__u256__u256__8f2563d4f83caf64(self, key) -> ret {
-        let v0 := write_key___u256__u256___f8fb67624e92e2b2(0, key)
+        let v0 := _a__b__storagekey_write_key__u256_u256__cc308d1bea3fb6e4(0, key)
         let v1 := self
         mstore(v0, v1)
         let v2 := keccak256(0, add(v0, 32))
@@ -233,15 +240,11 @@ object "Erc20Contract" {
         leave
       }
       function storagemap_k__v__storage_slot_stor__u256_u256__cc308d1bea3fb6e4(self, key) -> ret {
-        let v0 := write_key__u256__3271ca15373d4483(0, key)
+        let v0 := u256_storagekey_write_key(0, key)
         let v1 := self
         mstore(v0, v1)
         let v2 := keccak256(0, add(v0, 32))
         ret := v2
-        leave
-      }
-      function to_word__deduped(self) -> ret {
-        ret := self
         leave
       }
       function transfer(to, amount, erc20) -> ret {
@@ -255,15 +258,11 @@ object "Erc20Contract" {
         ret := 1
         leave
       }
-      function write_key___u256__u256___f8fb67624e92e2b2(ptr, self) -> ret {
-        let v0 := self
-        let v1 := mload(add(self, 64))
-        let v2 := write_key___u256__u256___f8fb67624e92e2b2(ptr, v0)
-        let v3 := write_key__B__faff03d368f2339b(add(ptr, v2), v1)
-        ret := add(v2, v3)
+      function u256_storablescalar_to_word(self) -> ret {
+        ret := self
         leave
       }
-      function write_key__u256__3271ca15373d4483(ptr, self) -> ret {
+      function u256_storagekey_write_key(ptr, self) -> ret {
         mstore(ptr, self)
         ret := 32
         leave
