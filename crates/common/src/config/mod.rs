@@ -1,0 +1,342 @@
+use std::fmt::Display;
+
+use smol_str::SmolStr;
+use toml::Value;
+use url::Url;
+
+use crate::{
+    dependencies::{Dependency, DependencyLocation, LocalFiles},
+    urlext::UrlExt,
+};
+
+mod dependency;
+mod ingot;
+mod workspace;
+
+pub use dependency::{DependencyEntry, DependencyEntryLocation, parse_dependencies_table};
+pub use ingot::IngotMetadata;
+pub use workspace::{WorkspaceConfig, WorkspaceMemberSelection, WorkspaceResolution};
+
+#[derive(Debug, Clone)]
+pub struct Config {
+    pub metadata: IngotMetadata,
+    pub dependency_entries: Vec<DependencyEntry>,
+    pub workspace: Option<WorkspaceConfig>,
+    pub diagnostics: Vec<ConfigDiagnostic>,
+}
+
+impl PartialEq for Config {
+    fn eq(&self, other: &Self) -> bool {
+        self.metadata == other.metadata
+            && self.dependency_entries == other.dependency_entries
+            && self.workspace == other.workspace
+            && self.diagnostics == other.diagnostics
+    }
+}
+
+impl Eq for Config {}
+
+impl Config {
+    pub fn parse(content: &str) -> Result<Self, String> {
+        let mut diagnostics = Vec::new();
+
+        let parsed: Value = content
+            .parse()
+            .map_err(|e: toml::de::Error| e.to_string())?;
+
+        let has_workspace_table = parsed.get("workspace").is_some();
+        let has_ingot_table = parsed.get("ingot").is_some();
+
+        let metadata = ingot::parse_ingot(&parsed, has_workspace_table, &mut diagnostics);
+        let workspace = workspace::parse_workspace(&parsed, &mut diagnostics);
+        let mut dependency_entries = dependency::parse_root_dependencies(&parsed, &mut diagnostics);
+
+        if has_workspace_table && has_ingot_table {
+            diagnostics.push(ConfigDiagnostic::ConflictingManifestRoles);
+        }
+
+        let mut workspace = workspace;
+        if has_workspace_table && !has_ingot_table {
+            if let Some(workspace) = workspace.as_mut() {
+                workspace.dependencies = dependency_entries.clone();
+                dependency_entries = Vec::new();
+            }
+        }
+
+        Ok(Self {
+            metadata,
+            dependency_entries,
+            workspace,
+            diagnostics,
+        })
+    }
+
+    pub fn dependencies(&self, base_url: &Url) -> Vec<Dependency> {
+        self.dependency_entries
+            .iter()
+            .map(|dependency| match &dependency.location {
+                DependencyEntryLocation::RelativePath(path) => {
+                    let url = base_url.join_directory(path).unwrap();
+                    Dependency {
+                        alias: dependency.alias.clone(),
+                        arguments: dependency.arguments.clone(),
+                        location: DependencyLocation::Local(LocalFiles {
+                            path: path.clone(),
+                            url,
+                        }),
+                    }
+                }
+                DependencyEntryLocation::Remote(remote) => Dependency {
+                    alias: dependency.alias.clone(),
+                    arguments: dependency.arguments.clone(),
+                    location: DependencyLocation::Remote(remote.clone()),
+                },
+            })
+            .collect()
+    }
+
+    pub fn formatted_diagnostics(&self) -> Option<String> {
+        if self.diagnostics.is_empty() {
+            None
+        } else {
+            Some(
+                self.diagnostics
+                    .iter()
+                    .map(|diag| format!("  {diag}"))
+                    .collect::<Vec<_>>()
+                    .join("\n"),
+            )
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum ConfigDiagnostic {
+    MissingIngotMetadata,
+    MissingName,
+    MissingVersion,
+    InvalidName(SmolStr),
+    InvalidVersion(SmolStr),
+    MissingWorkspaceMembers,
+    InvalidWorkspaceMember(SmolStr),
+    InvalidWorkspaceDevMember(SmolStr),
+    InvalidWorkspaceDefaultMember(SmolStr),
+    InvalidWorkspaceExclude(SmolStr),
+    InvalidWorkspaceMemberName(SmolStr),
+    InvalidWorkspaceMemberVersion(SmolStr),
+    MissingWorkspaceMemberPath,
+    InvalidWorkspaceName(SmolStr),
+    InvalidWorkspaceVersion(SmolStr),
+    ConflictingWorkspaceMembersSpec,
+    ConflictingManifestRoles,
+    WorkspaceDependenciesUnsupported,
+    InvalidDependencyAlias(SmolStr),
+    InvalidDependencyName(SmolStr),
+    InvalidDependencyVersion(SmolStr),
+    MissingDependencyPath {
+        alias: SmolStr,
+        description: String,
+    },
+    MissingDependencySource {
+        alias: SmolStr,
+    },
+    MissingDependencyRev {
+        alias: SmolStr,
+    },
+    InvalidDependencySource {
+        alias: SmolStr,
+        value: SmolStr,
+    },
+    UnexpectedTomlData {
+        field: SmolStr,
+        found: SmolStr,
+        expected: Option<SmolStr>,
+    },
+}
+
+impl Display for ConfigDiagnostic {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::MissingIngotMetadata => write!(f, "Missing ingot metadata"),
+            Self::MissingName => write!(f, "Missing ingot name"),
+            Self::MissingVersion => write!(f, "Missing ingot version"),
+            Self::InvalidName(name) => write!(f, "Invalid ingot name \"{name}\""),
+            Self::InvalidVersion(version) => write!(f, "Invalid ingot version \"{version}\""),
+            Self::MissingWorkspaceMembers => write!(f, "Missing workspace members"),
+            Self::InvalidWorkspaceMember(value) => {
+                write!(f, "Invalid workspace member entry \"{value}\"")
+            }
+            Self::InvalidWorkspaceDevMember(value) => {
+                write!(f, "Invalid workspace dev member entry \"{value}\"")
+            }
+            Self::InvalidWorkspaceDefaultMember(value) => {
+                write!(f, "Invalid workspace default member entry \"{value}\"")
+            }
+            Self::InvalidWorkspaceExclude(value) => {
+                write!(f, "Invalid workspace exclude entry \"{value}\"")
+            }
+            Self::InvalidWorkspaceMemberName(value) => {
+                write!(f, "Invalid workspace member name \"{value}\"")
+            }
+            Self::InvalidWorkspaceMemberVersion(value) => {
+                write!(f, "Invalid workspace member version \"{value}\"")
+            }
+            Self::MissingWorkspaceMemberPath => write!(f, "Workspace member is missing a path"),
+            Self::InvalidWorkspaceName(name) => write!(f, "Invalid workspace name \"{name}\""),
+            Self::InvalidWorkspaceVersion(version) => {
+                write!(f, "Invalid workspace version \"{version}\"")
+            }
+            Self::ConflictingWorkspaceMembersSpec => {
+                write!(f, "Cannot mix flat and categorized workspace members")
+            }
+            Self::ConflictingManifestRoles => {
+                write!(f, "Cannot mix [workspace] and [ingot] sections in the same manifest")
+            }
+            Self::WorkspaceDependenciesUnsupported => write!(
+                f,
+                "workspace.dependencies is not supported; use root [dependencies] for workspaces"
+            ),
+            Self::InvalidDependencyAlias(alias) => {
+                write!(f, "Invalid dependency alias \"{alias}\"")
+            }
+            Self::InvalidDependencyName(name) => {
+                write!(f, "Invalid dependency name \"{name}\"")
+            }
+            Self::InvalidDependencyVersion(version) => {
+                write!(f, "Invalid dependency version \"{version}\"")
+            }
+            Self::MissingDependencyPath { alias, description } => write!(
+                f,
+                "The dependency \"{alias}\" is missing a path argument \"{description}\""
+            ),
+            Self::MissingDependencySource { alias } => {
+                write!(f, "The dependency \"{alias}\" is missing a source field")
+            }
+            Self::MissingDependencyRev { alias } => {
+                write!(f, "The dependency \"{alias}\" is missing a rev field")
+            }
+            Self::InvalidDependencySource { alias, value } => write!(
+                f,
+                "The dependency \"{alias}\" has an invalid source \"{value}\""
+            ),
+            Self::UnexpectedTomlData {
+                field,
+                found,
+                expected,
+            } => {
+                if let Some(expected) = expected {
+                    write!(
+                        f,
+                        "Expected a {expected} in field {field}, but found a {found}"
+                    )
+                } else {
+                    write!(f, "Unexpected field {field}")
+                }
+            }
+        }
+    }
+}
+
+pub(crate) fn is_valid_name_char(c: char) -> bool {
+    c.is_alphanumeric() || c == '_'
+}
+
+pub(crate) fn is_valid_name(s: &str) -> bool {
+    s.chars().all(is_valid_name_char)
+}
+
+pub(crate) fn parse_string_array_field(
+    parent: &str,
+    key: &str,
+    value: &Value,
+    diagnostics: &mut Vec<ConfigDiagnostic>,
+) -> Vec<SmolStr> {
+    match value {
+        Value::Array(entries) => {
+            let mut parsed = Vec::new();
+            for entry in entries {
+                if let Some(value) = entry.as_str() {
+                    parsed.push(SmolStr::new(value));
+                } else {
+                    diagnostics.push(ConfigDiagnostic::UnexpectedTomlData {
+                        field: format!("{parent}.{key}").into(),
+                        found: entry.type_str().to_lowercase().into(),
+                        expected: Some("string".into()),
+                    });
+                }
+            }
+            parsed
+        }
+        other => {
+            diagnostics.push(ConfigDiagnostic::UnexpectedTomlData {
+                field: format!("{parent}.{key}").into(),
+                found: other.type_str().to_lowercase().into(),
+                expected: Some("array".into()),
+            });
+            vec![]
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_git_dependency_entry() {
+        let toml = r#"
+[ingot]
+name = "root"
+version = "1.0.0"
+
+[dependencies]
+remote = { source = "https://example.com/fe.git", rev = "abcd1234", path = "contracts" }
+"#;
+        let config = Config::parse(toml).expect("config parses");
+        assert!(
+            config.diagnostics.is_empty(),
+            "unexpected diagnostics: {:?}",
+            config.diagnostics
+        );
+        let base = Url::parse("file:///workspace/root/").unwrap();
+        let dependencies = config.dependencies(&base);
+        assert_eq!(dependencies.len(), 1);
+        match &dependencies[0].location {
+            DependencyLocation::Remote(remote) => {
+                assert_eq!(remote.source.as_str(), "https://example.com/fe.git");
+                assert_eq!(remote.rev, "abcd1234");
+                assert_eq!(
+                    remote.path.as_ref().map(|path| path.as_str()),
+                    Some("contracts")
+                );
+            }
+            other => panic!("expected git dependency, found {other:?}"),
+        }
+    }
+
+    #[test]
+    fn reports_diagnostics_for_incomplete_git_dependency() {
+        let toml = r#"
+[ingot]
+name = "root"
+version = "1.0.0"
+
+[dependencies]
+missing_rev = { source = "https://example.com/repo.git" }
+invalid_source = { source = "not a url", rev = "1234" }
+"#;
+        let config = Config::parse(toml).expect("config parses");
+        assert!(
+            config
+                .diagnostics
+                .iter()
+                .any(|diag| matches!(diag, ConfigDiagnostic::MissingDependencyRev { .. }))
+        );
+        assert!(
+            config
+                .diagnostics
+                .iter()
+                .any(|diag| matches!(diag, ConfigDiagnostic::InvalidDependencySource { .. }))
+        );
+    }
+}

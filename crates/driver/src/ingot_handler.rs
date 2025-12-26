@@ -102,6 +102,29 @@ impl<'a> IngotHandler<'a> {
         origin: &IngotOrigin,
         dependency: common::dependencies::Dependency,
     ) -> Option<(IngotDescriptor, (DependencyAlias, DependencyArguments))> {
+        if let (Some(name), Some(version)) = (
+            dependency.arguments.name.clone(),
+            dependency.arguments.version.clone(),
+        ) {
+            if let Some(url) = self
+                .db
+                .dependency_graph()
+                .ingot_by_name_version(self.db, &name, &version)
+            {
+                return Some((
+                    IngotDescriptor::Local(url),
+                    (dependency.alias, dependency.arguments),
+                ));
+            }
+            self.report_error(IngotInitDiagnostics::IngotByNameResolutionFailed {
+                ingot_url: ingot_url.clone(),
+                dependency: dependency.alias,
+                name,
+                version,
+            });
+            return None;
+        }
+
         match dependency.location {
             DependencyLocation::Local(local) => match origin {
                 IngotOrigin::Local => Some((
@@ -312,6 +335,18 @@ impl<'a> ResolutionHandler<IngotResolver> for IngotHandler<'a> {
         self.db
             .dependency_graph()
             .ensure_node(self.db, &resource.ingot_url);
+
+        if let (Some(name), Some(version)) = (
+            config.metadata.name.clone(),
+            config.metadata.version.clone(),
+        ) {
+            self.db.dependency_graph().register_ingot_metadata(
+                self.db,
+                &resource.ingot_url,
+                name,
+                version,
+            );
+        }
 
         let mut dependencies = Vec::new();
         for dependency in config.dependencies(&resource.ingot_url) {

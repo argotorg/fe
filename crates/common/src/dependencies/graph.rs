@@ -5,10 +5,11 @@ use std::collections::{HashMap, HashSet};
 use petgraph::graph::{DiGraph, NodeIndex};
 use petgraph::visit::{Dfs, EdgeRef};
 use salsa::Setter;
+use smol_str::SmolStr;
 use url::Url;
 
 use super::{DependencyAlias, DependencyArguments, RemoteFiles};
-use crate::InputDb;
+use crate::{InputDb, ingot::Version};
 
 type EdgeWeight = (DependencyAlias, DependencyArguments);
 
@@ -19,6 +20,7 @@ pub struct DependencyGraph {
     node_map: HashMap<Url, NodeIndex>,
     git_locations: HashMap<Url, RemoteFiles>,
     reverse_git_map: HashMap<RemoteFiles, Url>,
+    ingots_by_metadata: HashMap<(SmolStr, Version), Url>,
 }
 
 #[salsa::tracked]
@@ -27,6 +29,7 @@ impl DependencyGraph {
         DependencyGraph::new(
             db,
             DiGraph::new(),
+            HashMap::new(),
             HashMap::new(),
             HashMap::new(),
             HashMap::new(),
@@ -56,6 +59,29 @@ impl DependencyGraph {
         Self::allocate_node(&mut graph, &mut node_map, url);
         self.set_graph(db).to(graph);
         self.set_node_map(db).to(node_map);
+    }
+
+    pub fn register_ingot_metadata(
+        &self,
+        db: &mut dyn InputDb,
+        url: &Url,
+        name: SmolStr,
+        version: Version,
+    ) {
+        let mut map = self.ingots_by_metadata(db);
+        map.entry((name, version)).or_insert_with(|| url.clone());
+        self.set_ingots_by_metadata(db).to(map);
+    }
+
+    pub fn ingot_by_name_version(
+        &self,
+        db: &dyn InputDb,
+        name: &SmolStr,
+        version: &Version,
+    ) -> Option<Url> {
+        self.ingots_by_metadata(db)
+            .get(&(name.clone(), version.clone()))
+            .cloned()
     }
 
     pub fn contains_url(&self, db: &dyn InputDb, url: &Url) -> bool {
@@ -178,5 +204,26 @@ impl DependencyGraph {
 
     pub fn local_for_remote_git(&self, db: &dyn InputDb, remote: &RemoteFiles) -> Option<Url> {
         self.reverse_git_map(db).get(remote).cloned()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::define_input_db;
+
+    define_input_db!(TestDatabase);
+
+    #[test]
+    fn finds_ingot_by_metadata() {
+        let mut db = TestDatabase::default();
+        let graph = DependencyGraph::default(&db);
+
+        let url = Url::parse("file:///workspace/ingot/").unwrap();
+        let version = Version::parse("0.1.0").unwrap();
+        graph.register_ingot_metadata(&mut db, &url, "foo".into(), version.clone());
+
+        let found = graph.ingot_by_name_version(&db, &"foo".into(), &version);
+        assert_eq!(found, Some(url));
     }
 }
