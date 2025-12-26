@@ -3,7 +3,7 @@ source: crates/codegen/tests/yul.rs
 expression: output
 input_file: tests/fixtures/caller.fe
 ---
-function who_called() -> ret {
+function who_called(ctx) -> ret {
   let v0 := caller()
   ret := v0
   leave

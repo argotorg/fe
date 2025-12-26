@@ -1,12 +1,9 @@
-/// Effect reference traits and pointer-like types.
+/// Effect reference traits.
 ///
-/// This module provides a type-level interface for "effect providers" that act as
+/// These traits provide a type-level interface for "effect providers" that act as
 /// references (pointers) to some underlying `Target` type.
 ///
-/// The typechecker uses these traits to accept pointer-like values (e.g. `MemPtr<Foo>`)
-/// where an effect requirement is written in terms of the target type (`Foo`).
-
-use ingot::intrinsic::stor_at
+/// Concrete pointer types are backend-specific and live outside of `core`.
 
 /// Read-only effect reference: values implementing this trait can provide access to `Target`.
 pub trait EffectRef {
@@ -15,40 +12,3 @@ pub trait EffectRef {
 
 /// Mutable effect reference: values implementing this trait can provide mutable access to `Target`.
 pub trait EffectRefMut: EffectRef {}
-
-/// Memory pointer to a value of type `T`.
-pub struct MemPtr<T> {
-    pub addr: u256
-}
-
-/// Storage pointer to a value of type `T`.
-pub struct StorPtr<T> {
-    pub slot: u256
-}
-
-/// Calldata pointer to a value of type `T` (read-only).
-pub struct CalldataPtr<T> {
-    pub offset: u256
-}
-
-impl<T> StorPtr<T> {
-    pub fn at_offset(slot: u256) -> Self {
-        let _ = stor_at<T>(slot)
-        let p = Self { slot }
-        p
-    }
-}
-
-impl<T> EffectRef for MemPtr<T> {
-    type Target = T
-}
-impl<T> EffectRefMut for MemPtr<T> {}
-
-impl<T> EffectRef for StorPtr<T> {
-    type Target = T
-}
-impl<T> EffectRefMut for StorPtr<T> {}
-
-impl<T> EffectRef for CalldataPtr<T> {
-    type Target = T
-}

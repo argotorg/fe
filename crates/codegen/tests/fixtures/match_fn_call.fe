@@ -1,6 +1,6 @@
-use core::intrinsic::calldataload
+use std::evm::RawOps
 
-fn example() -> u256 {
+fn example() -> u256 uses (ops: RawOps) {
     match read_selector() {
         0x12345678 => 1,
         0x23456789 => 2,
@@ -8,8 +8,8 @@ fn example() -> u256 {
     }
 }
 
-pub fn read_selector() -> u256 {
-    let word = calldataload(0)
+pub fn read_selector() -> u256 uses (ops: RawOps) {
+    let word = ops.calldataload(0)
     // Shift right by 224 bits to keep only the first four bytes.
     word >> 224
 }

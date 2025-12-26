@@ -1,5 +1,6 @@
 ---
 source: crates/mir/tests/lowering_snapshots.rs
+assertion_line: 26
 expression: mir_output
 ---
 fn answer_decode(v0: SolDecoder<CallData>) -> Answer:
@@ -43,97 +44,102 @@ fn init_contract(v0: u256, v1: u256, v2: u256) -> ():
     store stor[v2].1 = v1
     ret
 
-fn init() -> ():
+fn init(v0: u256) -> ():
   bb0:
-    v0: StorPtr<Foo> = stor_at(0)
-    v3: SolDecoder<CallData> = soldecoder_i__new__CallData__b9ab8dc8a4b2f9e(())
-    v4: u256 = calldatasize()
-    br (v4 < (32 + 32)) bb1 bb2
+    v1: StorPtr<Foo> = stor_ptr__Evm_Foo__c3089d776807df8e(v0, 0)
+    v4: SolDecoder<CallData> = soldecoder_i__new__CallData__b9ab8dc8a4b2f9e(())
+    v5: u256 = calldatasize()
+    br (v5 < (32 + 32)) bb1 bb2
   bb1:
     terminate revert(0, 0)
   bb2:
-    v5: u256 = u256_decode_decode__Sol_SolDecoder_CallData___828c6f2e3bda3cab(v3)
-    v6: u256 = u256_decode_decode__Sol_SolDecoder_CallData___828c6f2e3bda3cab(v3)
-    bind v0
-    eval init_contract(v5, v6, v0)
-    v7: u256 = code_region_len(func_item(runtime))
-    v8: u256 = code_region_offset(func_item(runtime))
-    eval codecopy(0, v8, v7)
-    terminate return_data(0, v7)
+    v6: u256 = u256_decode_decode__Sol_SolDecoder_CallData___828c6f2e3bda3cab(v4)
+    v7: u256 = u256_decode_decode__Sol_SolDecoder_CallData___828c6f2e3bda3cab(v4)
+    bind v1
+    eval init_contract(v6, v7, v1)
+    v8: u256 = code_region_len(func_item(runtime))
+    v9: u256 = code_region_offset(func_item(runtime))
+    eval codecopy(0, v9, v8)
+    terminate return_data(0, v8)
 
-fn runtime() -> ():
+fn runtime(v0: u256) -> ():
   bb0:
-    v0: StorPtr<Foo> = stor_at(0)
-    v3: u256 = calldatasize()
-    br (v3 < 4) bb1 bb2
+    v1: StorPtr<Foo> = stor_ptr__Evm_Foo__c3089d776807df8e(v0, 0)
+    v4: u256 = calldatasize()
+    br (v4 < 4) bb1 bb2
   bb1:
     terminate revert(0, 0)
   bb2:
-    v5: u256 = calldataload(0)
-    v4: u32 = sol_abi_selector_from_prefix(v5)
+    v6: u256 = calldataload(0)
+    v5: u32 = sol_abi_selector_from_prefix(v6)
     jmp bb13
   bb3:
-    v6: SolDecoder<CallData> = soldecoder_i__with_base__CallData__b9ab8dc8a4b2f9e((), 4)
-    v7: u256 = calldatasize()
-    br (v7 < (4 + 0)) bb4 bb5
+    v7: SolDecoder<CallData> = soldecoder_i__with_base__CallData__b9ab8dc8a4b2f9e((), 4)
+    v8: u256 = calldatasize()
+    br (v8 < (4 + 0)) bb4 bb5
   bb4:
     terminate revert(0, 0)
   bb5:
-    eval ___decode_decode__Sol_SolDecoder_CallData___828c6f2e3bda3cab(v6)
-    v9: u256 = recv_EchoMsg_Answer_0_0(())
-    v10: SolEncoder = solencoder_new()
-    v11: u256 = solencoder_abiencoder_reserve_head(v10, 32)
-    eval v11
-    eval u256_encode_encode__Sol_SolEncoder__dce63ad1a1fe4ae2(v9, v10)
-    v12: (u256, u256) = solencoder_abiencoder_finish(v10)
-    v13: u256 = load mem[v12].0
-    v14: u256 = load mem[v12].1
-    terminate return_data(v13, v14)
+    eval ___decode_decode__Sol_SolDecoder_CallData___828c6f2e3bda3cab(v7)
+    v10: u256 = recv_EchoMsg_Answer_0_0(())
+    v11: SolEncoder = solencoder_new()
+    v12: u256 = solencoder_abiencoder_reserve_head(v11, 32)
+    eval v12
+    eval u256_encode_encode__Sol_SolEncoder__dce63ad1a1fe4ae2(v10, v11)
+    v13: (u256, u256) = solencoder_abiencoder_finish(v11)
+    v14: u256 = load mem[v13].0
+    v15: u256 = load mem[v13].1
+    terminate return_data(v14, v15)
   bb6:
-    v15: SolDecoder<CallData> = soldecoder_i__with_base__CallData__b9ab8dc8a4b2f9e((), 4)
-    v16: u256 = calldatasize()
-    br (v16 < (4 + 32)) bb7 bb8
+    v16: SolDecoder<CallData> = soldecoder_i__with_base__CallData__b9ab8dc8a4b2f9e((), 4)
+    v17: u256 = calldatasize()
+    br (v17 < (4 + 32)) bb7 bb8
   bb7:
     terminate revert(0, 0)
   bb8:
-    v17: (u256) = _t0__decode_decode__Sol_u256_SolDecoder_CallData___51fc2f6931ec5edc(v15)
-    v18: u256 = recv_EchoMsg_Echo_0_1(v17)
-    v19: SolEncoder = solencoder_new()
-    v20: u256 = solencoder_abiencoder_reserve_head(v19, 32)
-    eval v20
-    eval u256_encode_encode__Sol_SolEncoder__dce63ad1a1fe4ae2(v18, v19)
-    v21: (u256, u256) = solencoder_abiencoder_finish(v19)
-    v22: u256 = load mem[v21].0
-    v23: u256 = load mem[v21].1
-    terminate return_data(v22, v23)
+    v18: (u256) = _t0__decode_decode__Sol_u256_SolDecoder_CallData___51fc2f6931ec5edc(v16)
+    v19: u256 = recv_EchoMsg_Echo_0_1(v18)
+    v20: SolEncoder = solencoder_new()
+    v21: u256 = solencoder_abiencoder_reserve_head(v20, 32)
+    eval v21
+    eval u256_encode_encode__Sol_SolEncoder__dce63ad1a1fe4ae2(v19, v20)
+    v22: (u256, u256) = solencoder_abiencoder_finish(v20)
+    v23: u256 = load mem[v22].0
+    v24: u256 = load mem[v22].1
+    terminate return_data(v23, v24)
   bb9:
-    v24: SolDecoder<CallData> = soldecoder_i__with_base__CallData__b9ab8dc8a4b2f9e((), 4)
-    v25: u256 = calldatasize()
-    br (v25 < (4 + 0)) bb10 bb11
+    v25: SolDecoder<CallData> = soldecoder_i__with_base__CallData__b9ab8dc8a4b2f9e((), 4)
+    v26: u256 = calldatasize()
+    br (v26 < (4 + 0)) bb10 bb11
   bb10:
     terminate revert(0, 0)
   bb11:
-    eval ___decode_decode__Sol_SolDecoder_CallData___828c6f2e3bda3cab(v24)
-    bind v0
-    v28: u256 = recv_EchoMsg_GetX_0_2((), v0)
-    v27: u256 = v28
-    v29: SolEncoder = solencoder_new()
-    v30: u256 = solencoder_abiencoder_reserve_head(v29, 32)
-    eval v30
-    eval u256_encode_encode__Sol_SolEncoder__dce63ad1a1fe4ae2(v27, v29)
-    v31: (u256, u256) = solencoder_abiencoder_finish(v29)
-    v32: u256 = load mem[v31].0
-    v33: u256 = load mem[v31].1
-    terminate return_data(v32, v33)
+    eval ___decode_decode__Sol_SolDecoder_CallData___828c6f2e3bda3cab(v25)
+    bind v1
+    v29: u256 = recv_EchoMsg_GetX_0_2((), v1)
+    v28: u256 = v29
+    v30: SolEncoder = solencoder_new()
+    v31: u256 = solencoder_abiencoder_reserve_head(v30, 32)
+    eval v31
+    eval u256_encode_encode__Sol_SolEncoder__dce63ad1a1fe4ae2(v28, v30)
+    v32: (u256, u256) = solencoder_abiencoder_finish(v30)
+    v33: u256 = load mem[v32].0
+    v34: u256 = load mem[v32].1
+    terminate return_data(v33, v34)
   bb12:
     terminate revert(0, 0)
   bb13:
-    switch v4 [1 => bb3, 2 => bb6, 3 => bb9] else bb12
+    switch v5 [1 => bb3, 2 => bb6, 3 => bb9] else bb12
 
 fn u256_decode_decode__Sol_SolDecoder_CallData___828c6f2e3bda3cab(v0: D) -> u256:
   bb0:
     v1: u256 = soldecoder_i__abidecoder_read_word__CallData__b9ab8dc8a4b2f9e(v0)
     ret v1
+
+fn stor_ptr__Evm_Foo__c3089d776807df8e(v0: Self, v1: u256) -> StorPtr<T>:
+  bb0:
+    v2: StorPtr<Foo> = v1
+    ret v2
 
 fn soldecoder_i__new__CallData__b9ab8dc8a4b2f9e(v0: I) -> SolDecoder<I>:
   bb0:
@@ -142,6 +148,75 @@ fn soldecoder_i__new__CallData__b9ab8dc8a4b2f9e(v0: I) -> SolDecoder<I>:
     init mem[v3] { .0 = v1, .1 = 0 }
     v2: SolDecoder<CallData> = v3
     ret v2
+
+fn runtime(v0: u256) -> ():
+  bb0:
+    v1: StorPtr<Foo> = stor_ptr__Evm_Foo__c3089d776807df8e(v0, 0)
+    v4: u256 = calldatasize()
+    br (v4 < 4) bb1 bb2
+  bb1:
+    terminate revert(0, 0)
+  bb2:
+    v6: u256 = calldataload(0)
+    v5: u32 = sol_abi_selector_from_prefix(v6)
+    jmp bb13
+  bb3:
+    v7: SolDecoder<CallData> = soldecoder_i__with_base__CallData__b9ab8dc8a4b2f9e((), 4)
+    v8: u256 = calldatasize()
+    br (v8 < (4 + 0)) bb4 bb5
+  bb4:
+    terminate revert(0, 0)
+  bb5:
+    eval ___decode_decode__Sol_SolDecoder_CallData___828c6f2e3bda3cab(v7)
+    v10: u256 = recv_EchoMsg_Answer_0_0(())
+    v11: SolEncoder = solencoder_new()
+    v12: u256 = solencoder_abiencoder_reserve_head(v11, 32)
+    eval v12
+    eval u256_encode_encode__Sol_SolEncoder__dce63ad1a1fe4ae2(v10, v11)
+    v13: (u256, u256) = solencoder_abiencoder_finish(v11)
+    v14: u256 = load mem[v13].0
+    v15: u256 = load mem[v13].1
+    terminate return_data(v14, v15)
+  bb6:
+    v16: SolDecoder<CallData> = soldecoder_i__with_base__CallData__b9ab8dc8a4b2f9e((), 4)
+    v17: u256 = calldatasize()
+    br (v17 < (4 + 32)) bb7 bb8
+  bb7:
+    terminate revert(0, 0)
+  bb8:
+    v18: (u256) = _t0__decode_decode__Sol_u256_SolDecoder_CallData___51fc2f6931ec5edc(v16)
+    v19: u256 = recv_EchoMsg_Echo_0_1(v18)
+    v20: SolEncoder = solencoder_new()
+    v21: u256 = solencoder_abiencoder_reserve_head(v20, 32)
+    eval v21
+    eval u256_encode_encode__Sol_SolEncoder__dce63ad1a1fe4ae2(v19, v20)
+    v22: (u256, u256) = solencoder_abiencoder_finish(v20)
+    v23: u256 = load mem[v22].0
+    v24: u256 = load mem[v22].1
+    terminate return_data(v23, v24)
+  bb9:
+    v25: SolDecoder<CallData> = soldecoder_i__with_base__CallData__b9ab8dc8a4b2f9e((), 4)
+    v26: u256 = calldatasize()
+    br (v26 < (4 + 0)) bb10 bb11
+  bb10:
+    terminate revert(0, 0)
+  bb11:
+    eval ___decode_decode__Sol_SolDecoder_CallData___828c6f2e3bda3cab(v25)
+    bind v1
+    v29: u256 = recv_EchoMsg_GetX_0_2((), v1)
+    v28: u256 = v29
+    v30: SolEncoder = solencoder_new()
+    v31: u256 = solencoder_abiencoder_reserve_head(v30, 32)
+    eval v31
+    eval u256_encode_encode__Sol_SolEncoder__dce63ad1a1fe4ae2(v28, v30)
+    v32: (u256, u256) = solencoder_abiencoder_finish(v30)
+    v33: u256 = load mem[v32].0
+    v34: u256 = load mem[v32].1
+    terminate return_data(v33, v34)
+  bb12:
+    terminate revert(0, 0)
+  bb13:
+    switch v5 [1 => bb3, 2 => bb6, 3 => bb9] else bb12
 
 fn sol_abi_selector_from_prefix(v0: u256) -> u32:
   bb0:

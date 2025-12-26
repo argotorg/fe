@@ -6,104 +6,103 @@ input_file: tests/fixtures/enum_variant_contract.fe
 object "EnumContract" {
   code {
     function init() {
-      let v0 := datasize("EnumContract_deployed")
-      let v1 := dataoffset("EnumContract_deployed")
-      codecopy(0, v1, v0)
-      return(0, v0)
+      let v0 := 0
+      let v1 := datasize("EnumContract_deployed")
+      let v2 := dataoffset("EnumContract_deployed")
+      codecopy(0, v2, v1)
+      return(0, v1)
     }
     init()
   }
 
   object "EnumContract_deployed" {
     code {
-      function abi_encode_u256(value) {
+      function abi_encode_u256(value, ops) {
         let v0 := 0
         mstore(v0, value)
         return(v0, 32)
       }
       function runtime() {
-        let v0 := calldataload(0)
-        let v1 := shr(224, v0)
-        let v2 := eq(v1, 1817627404)
-        if v2 {
-          let v3 := calldataload(4)
-          let v4 := mload(0x40)
-          if iszero(v4) {
-            v4 := 0x80
+        let v0 := 0
+        let v1 := calldataload(0)
+        let v2 := shr(224, v1)
+        let v3 := eq(v2, 1817627404)
+        if v3 {
+          let v4 := calldataload(4)
+          let v5 := mload(0x40)
+          if iszero(v5) {
+            v5 := 0x80
           }
-          mstore(0x40, add(v4, 64))
-          mstore(v4, 1)
-          mstore(add(v4, 32), v3)
-          let v5 := 0
-          let v6 := mload(v4)
-          switch v6
+          mstore(0x40, add(v5, 64))
+          mstore(v5, 1)
+          mstore(add(v5, 32), v4)
+          let v6 := 0
+          let v7 := mload(v5)
+          switch v7
             case 1 {
-              let v7 := mload(add(v4, 32))
-              let v8 := v7
-              v5 := v8
+              let v8 := mload(add(v5, 32))
+              let v9 := v8
+              v6 := v9
             }
             case 0 {
-              v5 := 0
+              v6 := 0
             }
             default {
             }
-          let v9 := v5
-          abi_encode_u256(v9)
-          return(0, 0)
+          let v10 := v6
+          abi_encode_u256(v10, 0)
         }
-        if iszero(v2) {
-          let v10 := eq(v1, 1163776883)
-          if v10 {
-            let v11 := mload(0x40)
-            if iszero(v11) {
-              v11 := 0x80
+        if iszero(v3) {
+          let v11 := eq(v2, 1163776883)
+          if v11 {
+            let v12 := mload(0x40)
+            if iszero(v12) {
+              v12 := 0x80
             }
-            mstore(0x40, add(v11, 64))
-            mstore(v11, 0)
-            let v12 := 0
-            let v13 := mload(v11)
-            switch v13
+            mstore(0x40, add(v12, 64))
+            mstore(v12, 0)
+            let v13 := 0
+            let v14 := mload(v12)
+            switch v14
               case 1 {
-                let v14 := mload(add(v11, 32))
-                let v15 := v14
-                v12 := v15
+                let v15 := mload(add(v12, 32))
+                let v16 := v15
+                v13 := v16
               }
               case 0 {
-                v12 := 0
+                v13 := 0
               }
               default {
               }
-            let v16 := v12
-            abi_encode_u256(v16)
-            return(0, 0)
+            let v17 := v13
+            abi_encode_u256(v17, 0)
           }
-          if iszero(v10) {
-            let v17 := eq(v1, 3572425762)
-            if iszero(v17) {
+          if iszero(v11) {
+            let v18 := eq(v2, 3572425762)
+            if iszero(v18) {
               return(0, 0)
             }
-            let v18 := calldataload(4)
-            let v19 := mload(0x40)
-            if iszero(v19) {
-              v19 := 0x80
+            let v19 := calldataload(4)
+            let v20 := mload(0x40)
+            if iszero(v20) {
+              v20 := 0x80
             }
-            mstore(0x40, add(v19, 64))
-            mstore(v19, 1)
-            mstore(add(v19, 32), v18)
-            let v20 := 0
-            let v21 := mload(v19)
-            switch v21
+            mstore(0x40, add(v20, 64))
+            mstore(v20, 1)
+            mstore(add(v20, 32), v19)
+            let v21 := 0
+            let v22 := mload(v20)
+            switch v22
               case 1 {
-                v20 := 1
+                v21 := 1
               }
               case 0 {
-                v20 := 0
+                v21 := 0
               }
               default {
               }
-            let v22 := v20
-            abi_encode_u256(v22)
-            return(0, 0)
+            let v23 := v21
+            abi_encode_u256(v23, 0)
           }
         }
       }

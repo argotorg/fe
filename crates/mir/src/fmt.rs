@@ -398,6 +398,5 @@ fn format_intrinsic(op: IntrinsicOp) -> &'static str {
         IntrinsicOp::Keccak => "keccak256",
         IntrinsicOp::Revert => "revert",
         IntrinsicOp::Caller => "caller",
-        IntrinsicOp::StorAt => "stor_at",
     }
 }

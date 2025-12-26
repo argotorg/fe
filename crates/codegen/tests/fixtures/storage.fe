@@ -1,4 +1,4 @@
-use core::{calldataload, code_region_len, code_region_offset, codecopy, mstore, return_data, sload, sstore}
+use std::evm::{Evm, RawMem, RawOps, RawStorage, StorPtr}
 
 enum User {
     Alice,
@@ -26,10 +26,10 @@ fn transfer_result_code(res: TransferResult) -> u256 {
     }
 }
 
-fn abi_encode(value: u256) {
+fn abi_encode(value: u256) -> ! uses (mut ops: RawOps) {
     let ptr: u256 = 0
-    mstore(ptr, value)
-    return_data(ptr, 32)
+    ops.mstore(ptr, value)
+    ops.return_data(ptr, 32)
 }
 
 fn credit(user: User, amount: u256) -> u256
@@ -114,56 +114,53 @@ fn transfer_from_bob(amount: u256) -> TransferResult
 }
 
 #[contract_init(Coin)]
-fn init() {
-    let len = code_region_len(runtime)
-    let offset = code_region_offset(runtime)
-    codecopy(dest: 0, offset, len)
+fn init() uses (mut evm: Evm) {
+    let len = evm.code_region_len(runtime)
+    let offset = evm.code_region_offset(runtime)
+    evm.codecopy(dest: 0, offset, len)
+    evm.return_data(0, len)
 }
 
 #[contract_runtime(Coin)]
-fn runtime() {
-    let mut store = core::effect_ref::StorPtr<CoinStore>::at_offset(0)
-    let mut supply = core::effect_ref::StorPtr<TotalSupply>::at_offset(2)
-    with (store, supply) {
-        let selector = calldataload(0) >> 224
+fn runtime() uses (mut evm: Evm) {
+    let mut store: StorPtr<CoinStore> = evm.stor_ptr(0)
+    let mut supply: StorPtr<TotalSupply> = evm.stor_ptr(2)
+    with (store, supply, RawOps = evm) {
+        let selector = evm.calldataload(0) >> 224
         match selector {
             0xab7ccc1c => {
                 // credit(uint256,uint256)
-                let who_raw = calldataload(4)
-                let amount = calldataload(36)
+                let who_raw = evm.calldataload(4)
+                let amount = evm.calldataload(36)
                 let new_balance = match who_raw {
                     0 => credit_alice(amount)
                     _ => credit_bob(amount)
                 }
                 abi_encode(value: new_balance)
-                return_data(0, 0)
             }
             0x6c65aae5 => {
                 // balance_of(uint256)
-                let who_raw = calldataload(4)
+                let who_raw = evm.calldataload(4)
                 let value = balance_of_raw(who_raw)
                 abi_encode(value: value)
-                return_data(0, 0)
             }
             0x0cf79e0a => {
                 // transfer(uint256,uint256)
-                let who_raw = calldataload(4)
-                let amount = calldataload(36)
+                let who_raw = evm.calldataload(4)
+                let amount = evm.calldataload(36)
                 let res = match who_raw {
                     0 => transfer_from_alice(amount)
                     _ => transfer_from_bob(amount)
                 }
                 let code = transfer_result_code(res: res)
                 abi_encode(value: code)
-                return_data(0, 0)
             }
             0x3940e9ee => {
                 // total_supply()
                 let supply = total_supply()
                 abi_encode(value: supply)
-                return_data(0, 0)
             }
-            _ => return_data(0, 0)
+            _ => evm.return_data(0, 0)
         }
     }
 }

@@ -86,7 +86,14 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
             return None;
         }
 
-        let (args, _) = self.collect_call_args(expr)?;
+        let (mut args, _) = self.collect_call_args(expr)?;
+        let is_method_call = matches!(
+            expr.data(self.db, self.body),
+            Partial::Present(Expr::MethodCall(..))
+        );
+        if is_method_call && !args.is_empty() {
+            args.remove(0);
+        }
         Some((op, args))
     }
 
@@ -98,8 +105,9 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
     /// # Returns
     /// Matching `IntrinsicOp` if the callable is a core intrinsic.
     pub(super) fn intrinsic_kind(&self, func_def: CallableDef<'db>) -> Option<IntrinsicOp> {
-        if func_def.ingot(self.db).kind(self.db) != IngotKind::Core {
-            return None;
+        match func_def.ingot(self.db).kind(self.db) {
+            IngotKind::Core | IngotKind::Std => {}
+            _ => return None,
         }
         let name = func_def.name(self.db)?;
         match name.data(self.db).as_str() {
@@ -120,10 +128,8 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
             "codesize" => Some(IntrinsicOp::Codesize),
             "code_region_offset" => Some(IntrinsicOp::CodeRegionOffset),
             "code_region_len" => Some(IntrinsicOp::CodeRegionLen),
-            "keccak" => Some(IntrinsicOp::Keccak),
+            "keccak" | "keccak256" => Some(IntrinsicOp::Keccak),
             "caller" => Some(IntrinsicOp::Caller),
-            "stor_at" => Some(IntrinsicOp::StorAt),
-            "at_offset" => Some(IntrinsicOp::StorAt),
             _ => None,
         }
     }

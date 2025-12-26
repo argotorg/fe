@@ -1,6 +1,6 @@
 use core::abi::ByteInput
 use core::num::__u256_as_u8
-use core::mload
+use ingot::evm::ops::mload
 
 pub struct MemoryBytes {
     pub base: u256,

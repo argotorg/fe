@@ -1,62 +1,8 @@
-/// Low-level EVM intrinsics that Fe surface-level code can import as
-/// `core::intrinsic::mload`, etc. Their bodies are provided by the compiler
-/// backend, so we declare them in an `extern` block.
+/// Backend-agnostic compiler intrinsics.
 extern {
-    /// Load a 32-byte word from memory.
-    pub fn mload(_: u256) -> u256
-    /// Load a 32-byte word from calldata.
-    pub fn calldataload(_: u256) -> u256
-    pub fn calldatacopy(dest: u256, offset: u256, len: u256)
-    pub fn calldatasize() -> u256
-    pub fn returndatacopy(dest: u256, offset: u256, len: u256)
-    pub fn returndatasize() -> u256
-
-    /// Store a 32-byte word to memory.
-    pub fn mstore(_: u256, _: u256)
-    /// Return `size` bytes starting at `offset` to the caller.
-    pub fn return_data(_: u256, _: u256) -> !
-    /// Revert with `size` bytes starting at `offset`.
-    pub fn revert(_: u256, _: u256) -> !
-    /// Store the low byte of the second argument at the memory address.
-    pub fn mstore8(_: u256, _: u8)
-    /// Return the address of a pointer value as `u256`.
+    /// Return the address of a pointer-like value as `u256`.
     pub fn addr_of<T>(_: T) -> u256
+
     /// Return the byte size of a type at compile time.
     pub fn size_of<T>() -> u256
-    /// Return the Solidity ABI-encoded size of a type at compile time.
-    ///
-    /// This differs from `size_of` in that primitive types are padded to 32 bytes
-    /// and struct fields are each individually padded.
-    pub fn encoded_size<T>() -> u256
-    /// Load a 32-byte word from storage.
-    pub fn sload(_: u256) -> u256
-    /// Store a 32-byte word to storage.
-    pub fn sstore(_: u256, _: u256)
-    /// Copy runtime code into memory.
-    pub fn codecopy(dest: u256, offset: u256, len: u256)
-    /// Return the size of the current contract's code.
-    pub fn codesize() -> u256
-    pub fn create2(value: u256, offset: u256, len: u256, salt: u256)
-    /// Compute `keccak256` over a memory region.
-    pub fn keccak(_: u256, _: u256) -> u256
-    /// Return the address of the caller.
-    pub fn caller() -> u256
-    /// Reinterpret a storage slot as a storage-backed value of type `T`.
-    ///
-    /// This is a compiler intrinsic used to construct storage-backed struct values
-    /// (thin pointers) at a known slot offset.
-    pub fn stor_at<T>(slot: u256) -> T
-    /// Return the code offset/size for the call graph rooted at `func`.
-    ///
-    /// This is resolved at compile time and is intended for low-level contract
-    /// initialization routines that need to `codecopy` the runtime.
-    pub fn code_region_offset<F>(_: F) -> u256
-    /// Return the deployed code size for the call graph rooted at `func`.
-    pub fn code_region_len<F>(_: F) -> u256
-
-    /// Returns the fixed storage slot offset (in 32-byte slots) for the given contract field
-    /// index within the current contract.
-    ///
-    /// This is intended for compiler-generated code; the backend replaces this with a literal.
-    pub fn contract_field_slot(field_idx: u256) -> u256
 }

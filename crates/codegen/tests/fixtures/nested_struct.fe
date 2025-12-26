@@ -1,4 +1,4 @@
-use core::{calldataload, code_region_len, code_region_offset, codecopy, mstore, return_data}
+use std::evm::{Evm, RawMem, RawOps, RawStorage, StorPtr}
 
 struct Inner {
     value: u256,
@@ -12,9 +12,9 @@ struct MemOuter {
     inner: Inner,
 }
 
-fn abi_encode(value: u256) {
-    mstore(0, value)
-    return_data(0, 32)
+fn abi_encode(value: u256) -> ! uses (mut ops: RawOps) {
+    ops.mstore(0, value)
+    ops.return_data(0, 32)
 }
 
 fn read_inner() -> u256
@@ -36,21 +36,21 @@ fn mem_read(value: u256) -> u256 {
 }
 
 #[contract_init(NestedStruct)]
-fn init() {
-    let len = code_region_len(runtime)
-    let offset = code_region_offset(runtime)
-    codecopy(dest: 0, offset, len)
-    return_data(0, len)
+fn init() uses (mut evm: Evm) {
+    let len = evm.code_region_len(runtime)
+    let offset = evm.code_region_offset(runtime)
+    evm.codecopy(dest: 0, offset, len)
+    evm.return_data(0, len)
 }
 
 #[contract_runtime(NestedStruct)]
-fn runtime() {
-    let mut outer = core::effect_ref::StorPtr<Outer>::at_offset(0)
-    with (outer) {
-        let selector = calldataload(0) >> 224
+fn runtime() uses (mut evm: Evm) {
+    let mut outer: StorPtr<Outer> = evm.stor_ptr(0)
+    with (outer, RawOps = evm) {
+        let selector = evm.calldataload(0) >> 224
         match selector {
             0xb849fac8 => { // write_inner(uint256)
-                let value = calldataload(4)
+                let value = evm.calldataload(4)
                 write_inner(value)
                 abi_encode(value: value)
             }
@@ -58,10 +58,10 @@ fn runtime() {
                 abi_encode(value: read_inner())
             }
             0x806f30cd => { // mem_read(uint256)
-                let value = calldataload(4)
+                let value = evm.calldataload(4)
                 abi_encode(value: mem_read(value))
             }
-            _ => return_data(0, 0)
+            _ => evm.return_data(0, 0)
         }
     }
 }

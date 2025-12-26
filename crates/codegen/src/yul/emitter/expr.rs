@@ -261,15 +261,14 @@ impl<'db> FunctionEmitter<'db> {
             mir::ir::AddressSpaceKind::Storage => format!("sload({addr})"),
         };
 
-        // Apply type-specific conversion (LoadableScalar::from_word equivalent)
+        // Apply type-specific conversion (std::evm::word::WordRepr::from_word equivalent)
         Ok(self.apply_from_word_conversion(&raw_load, loaded_ty))
     }
 
-    /// Applies the LoadableScalar::from_word conversion for a given type.
+    /// Applies the `WordRepr::from_word` conversion for a given type.
     ///
-    /// This mirrors the Fe core library's from_word implementations defined in:
-    /// - `library/core/src/ptr.fe` (LoadableScalar trait)
-    /// - `library/core/src/enum_repr.fe` (enum discriminant handling)
+    /// This mirrors the stdlib word-conversion semantics defined in:
+    /// - `library/std/src/evm/word.fe` (`WordRepr` trait)
     ///
     /// Conversion rules:
     /// - bool: word != 0
@@ -277,8 +276,8 @@ impl<'db> FunctionEmitter<'db> {
     /// - u256: identity
     /// - i8/i16/i32/i64/i128/i256: sign extension
     ///
-    /// NOTE: This is a single source of truth for codegen. If the core library
-    /// semantics change, this function must be updated to match.
+    /// NOTE: This is a single source of truth for codegen. If the stdlib word
+    /// conversion semantics change, this function must be updated to match.
     fn apply_from_word_conversion(&self, raw_load: &str, ty: TyId<'db>) -> String {
         let base_ty = ty.base_ty(self.db);
         if let TyData::TyBase(TyBase::Prim(prim)) = base_ty.data(self.db) {
@@ -329,7 +328,7 @@ impl<'db> FunctionEmitter<'db> {
         }
     }
 
-    /// Applies the StorableScalar::to_word conversion for a given type.
+    /// Applies the `WordRepr::to_word` conversion for a given type.
     pub(super) fn apply_to_word_conversion(&self, raw_value: &str, ty: TyId<'db>) -> String {
         let base_ty = ty.base_ty(self.db);
         if let TyData::TyBase(TyBase::Prim(prim)) = base_ty.data(self.db) {

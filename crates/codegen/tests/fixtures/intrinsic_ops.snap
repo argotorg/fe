@@ -3,33 +3,33 @@ source: crates/codegen/tests/yul.rs
 expression: output
 input_file: tests/fixtures/intrinsic_ops.fe
 ---
-function load_word(ptr) -> ret {
+function load_word(ptr, mem) -> ret {
   let v0 := mload(ptr)
   ret := v0
   leave
 }
-function store_word(ptr, value) {
+function store_word(ptr, value, mem) {
   mstore(ptr, value)
   leave
 }
-function store_byte(ptr, value) {
+function store_byte(ptr, value, mem) {
   mstore8(ptr, value)
   leave
 }
-function load_slot(slot) -> ret {
+function load_slot(slot, sto) -> ret {
   let v0 := sload(slot)
   ret := v0
   leave
 }
-function store_slot(slot, value) {
+function store_slot(slot, value, sto) {
   sstore(slot, value)
   leave
 }
-function load_calldata(offset) -> ret {
+function load_calldata(offset, ops) -> ret {
   let v0 := calldataload(offset)
   ret := v0
   leave
 }
-function finish(ptr, len) {
+function finish(ptr, len, ops) {
   return(ptr, len)
 }

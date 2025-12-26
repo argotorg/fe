@@ -1,9 +1,9 @@
 use driver::DriverDataBase;
 use hir::analysis::{
-    name_resolution::{PathRes, resolve_path},
+    name_resolution::{resolve_path, PathRes},
     ty::trait_resolution::PredicateListId,
 };
-use mir::{BasicBlockId, MirFunction, Terminator, layout};
+use mir::{layout, BasicBlockId, MirFunction, Terminator};
 use rustc_hash::FxHashMap;
 
 use crate::yul::{doc::YulDoc, errors::YulError, state::BlockState};
@@ -131,10 +131,8 @@ impl<'db> FunctionEmitter<'db> {
         }
     }
 
-    /// Returns the Yul expression used as the storage base pointer for contract entrypoints.
-    /// Computes the storage slot size of an effect type (for contract entrypoints).
-    ///
-    /// Returns an error if the effect type cannot be resolved or its size cannot be computed.
+    // xxx codegen shouldn't be resolving paths;
+    // it should get all info from the MIR representation
     fn effect_storage_slots(
         &self,
         effect: hir::core::semantic::EffectParamView<'db>,
@@ -160,6 +158,7 @@ impl<'db> FunctionEmitter<'db> {
         })?;
         let ty = match path_res {
             PathRes::Ty(ty) | PathRes::TyAlias(_, ty) => ty,
+            PathRes::Trait(_) => return Ok(0),
             _ => {
                 return Err(YulError::Unsupported(format!(
                     "cannot determine storage size for effect `{binding_name}`: path does not resolve to a type"

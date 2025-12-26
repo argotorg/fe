@@ -3,7 +3,7 @@ source: crates/codegen/tests/yul.rs
 expression: output
 input_file: tests/fixtures/match_return.fe
 ---
-function f(e) {
+function f(e, ops) {
   let v0 := mload(e)
   switch v0
     case 0 {

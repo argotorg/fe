@@ -4,8 +4,10 @@ expression: output
 input_file: test_files/desugar/erc20.fe
 ---
 use core::prelude::*
-use core::storage_map::StorageMap
-use core::storage_map::StorageKey
+use std::evm::Address
+use std::evm::Ctx
+use std::evm::StorageMap
+use std::evm::assert
 
 const MINTER: u256 = 1
 
@@ -13,21 +15,17 @@ const BURNER: u256 = 2
 
 mod __CoolCoin {
     use super::*
-    use core::effect_ref::StorPtr
-    use core::intrinsic::contract_field_slot
-    use core::calldataload
-    use core::calldatasize
-    use core::codecopy
-    use core::code_region_len
-    use core::code_region_offset
-    use core::return_data
-    use core::revert
     use core::size_of
-    use core::encoded_size
+    use std::evm::effects::Evm
+    use std::evm::effects::RawOps
+    use std::evm::effects::RawStorage
+    use std::evm::effects::StorPtr
+    use std::evm::contract_field_slot
     use std::evm::calldata::CallData
     use std::abi::Sol
     use std::abi::sol::SolDecoder
     use std::abi::sol::SolEncoder
+    use std::abi::sol::encoded_size
 
     fn recv_Erc20_Transfer_0_0(args: Erc20::Transfer::Args) -> bool uses (ctx: Ctx, mut store: TokenStore, mut log: Log) {
         let to = args.0
@@ -159,37 +157,37 @@ mod __CoolCoin {
     }
 
     #[contract_init(CoolCoin)]
-    fn init() uses (mut ctx: Ctx, mut log: Log) {
-        let mut store = StorPtr<TokenStore>::at_offset(contract_field_slot(0))
-        let mut auth = StorPtr<AccessControl>::at_offset(contract_field_slot(1))
+    fn init() uses (mut ctx: Ctx, mut log: Log, mut evm: Evm) {
+        let mut store: StorPtr<TokenStore> = evm.stor_ptr(contract_field_slot(0))
+        let mut auth: StorPtr<AccessControl> = evm.stor_ptr(contract_field_slot(1))
         let __calldata = CallData {  }
         let mut __d = SolDecoder<CallData>::new(__calldata)
-        if calldatasize() < encoded_size<u256>() + encoded_size<Address>() {
-            revert(0, 0)
+        if evm.calldatasize() < encoded_size<u256>() + encoded_size<Address>() {
+            evm.revert(0, 0)
         }
         let initial_supply: u256 = u256::decode(__d)
         let owner: Address = Address::decode(__d)
         with (store, auth, ctx, log) { init_contract(initial_supply, owner) }
-        let __len = code_region_len(runtime)
-        let __offset = code_region_offset(runtime)
-        codecopy(dest: 0, __offset, __len)
-        return_data(0, __len)
+        let __len = evm.code_region_len(runtime)
+        let __offset = evm.code_region_offset(runtime)
+        evm.codecopy(0, __offset, __len)
+        evm.return_data(0, __len)
     }
 
     #[contract_runtime(CoolCoin)]
-    fn runtime() uses (mut ctx: Ctx, mut log: Log) {
-        let mut store = StorPtr<TokenStore>::at_offset(contract_field_slot(0))
-        let mut auth = StorPtr<AccessControl>::at_offset(contract_field_slot(1))
+    fn runtime() uses (mut ctx: Ctx, mut log: Log, mut evm: Evm) {
+        let mut store: StorPtr<TokenStore> = evm.stor_ptr(contract_field_slot(0))
+        let mut auth: StorPtr<AccessControl> = evm.stor_ptr(contract_field_slot(1))
         let __calldata = CallData {  }
-        if calldatasize() < size_of<Sol::Selector>() {
-            revert(0, 0)
+        if evm.calldatasize() < size_of<Sol::Selector>() {
+            evm.revert(0, 0)
         }
-        let __selector = Sol::selector_from_prefix(calldataload(0))
+        let __selector = Sol::selector_from_prefix(evm.calldataload(0))
         match __selector {
             Erc20::Transfer::SELECTOR => {
                 let mut __d = SolDecoder<CallData>::with_base(__calldata, size_of<Sol::Selector>())
-                if calldatasize() < size_of<Sol::Selector>() + encoded_size<Erc20::Transfer::Args>() {
-                    revert(0, 0)
+                if evm.calldatasize() < size_of<Sol::Selector>() + encoded_size<Erc20::Transfer::Args>() {
+                    evm.revert(0, 0)
                 }
                 let __args: Erc20::Transfer::Args = Erc20::Transfer::Args::decode(__d)
                 let __result = with (ctx, store, log) { recv_Erc20_Transfer_0_0(__args) }
@@ -197,12 +195,12 @@ mod __CoolCoin {
                 __enc.reserve_head(32)
                 __result.encode(__enc)
                 let __out = __enc.finish()
-                return_data(__out.0, __out.1)
+                evm.return_data(__out.0, __out.1)
             },
             Erc20::Approve::SELECTOR => {
                 let mut __d = SolDecoder<CallData>::with_base(__calldata, size_of<Sol::Selector>())
-                if calldatasize() < size_of<Sol::Selector>() + encoded_size<Erc20::Approve::Args>() {
-                    revert(0, 0)
+                if evm.calldatasize() < size_of<Sol::Selector>() + encoded_size<Erc20::Approve::Args>() {
+                    evm.revert(0, 0)
                 }
                 let __args: Erc20::Approve::Args = Erc20::Approve::Args::decode(__d)
                 let __result = with (ctx, store, log) { recv_Erc20_Approve_0_1(__args) }
@@ -210,12 +208,12 @@ mod __CoolCoin {
                 __enc.reserve_head(32)
                 __result.encode(__enc)
                 let __out = __enc.finish()
-                return_data(__out.0, __out.1)
+                evm.return_data(__out.0, __out.1)
             },
             Erc20::TransferFrom::SELECTOR => {
                 let mut __d = SolDecoder<CallData>::with_base(__calldata, size_of<Sol::Selector>())
-                if calldatasize() < size_of<Sol::Selector>() + encoded_size<Erc20::TransferFrom::Args>() {
-                    revert(0, 0)
+                if evm.calldatasize() < size_of<Sol::Selector>() + encoded_size<Erc20::TransferFrom::Args>() {
+                    evm.revert(0, 0)
                 }
                 let __args: Erc20::TransferFrom::Args = Erc20::TransferFrom::Args::decode(__d)
                 let __result = with (ctx, store, log) { recv_Erc20_TransferFrom_0_2(__args) }
@@ -223,12 +221,12 @@ mod __CoolCoin {
                 __enc.reserve_head(32)
                 __result.encode(__enc)
                 let __out = __enc.finish()
-                return_data(__out.0, __out.1)
+                evm.return_data(__out.0, __out.1)
             },
             Erc20::BalanceOf::SELECTOR => {
                 let mut __d = SolDecoder<CallData>::with_base(__calldata, size_of<Sol::Selector>())
-                if calldatasize() < size_of<Sol::Selector>() + encoded_size<Erc20::BalanceOf::Args>() {
-                    revert(0, 0)
+                if evm.calldatasize() < size_of<Sol::Selector>() + encoded_size<Erc20::BalanceOf::Args>() {
+                    evm.revert(0, 0)
                 }
                 let __args: Erc20::BalanceOf::Args = Erc20::BalanceOf::Args::decode(__d)
                 let __result = with (store) { recv_Erc20_BalanceOf_0_3(__args) }
@@ -236,12 +234,12 @@ mod __CoolCoin {
                 __enc.reserve_head(32)
                 __result.encode(__enc)
                 let __out = __enc.finish()
-                return_data(__out.0, __out.1)
+                evm.return_data(__out.0, __out.1)
             },
             Erc20::Allowance::SELECTOR => {
                 let mut __d = SolDecoder<CallData>::with_base(__calldata, size_of<Sol::Selector>())
-                if calldatasize() < size_of<Sol::Selector>() + encoded_size<Erc20::Allowance::Args>() {
-                    revert(0, 0)
+                if evm.calldatasize() < size_of<Sol::Selector>() + encoded_size<Erc20::Allowance::Args>() {
+                    evm.revert(0, 0)
                 }
                 let __args: Erc20::Allowance::Args = Erc20::Allowance::Args::decode(__d)
                 let __result = with (store) { recv_Erc20_Allowance_0_4(__args) }
@@ -249,12 +247,12 @@ mod __CoolCoin {
                 __enc.reserve_head(32)
                 __result.encode(__enc)
                 let __out = __enc.finish()
-                return_data(__out.0, __out.1)
+                evm.return_data(__out.0, __out.1)
             },
             Erc20::TotalSupply::SELECTOR => {
                 let mut __d = SolDecoder<CallData>::with_base(__calldata, size_of<Sol::Selector>())
-                if calldatasize() < size_of<Sol::Selector>() + encoded_size<Erc20::TotalSupply::Args>() {
-                    revert(0, 0)
+                if evm.calldatasize() < size_of<Sol::Selector>() + encoded_size<Erc20::TotalSupply::Args>() {
+                    evm.revert(0, 0)
                 }
                 let __args: Erc20::TotalSupply::Args = Erc20::TotalSupply::Args::decode(__d)
                 let __result = with (store) { recv_Erc20_TotalSupply_0_5(__args) }
@@ -262,12 +260,12 @@ mod __CoolCoin {
                 __enc.reserve_head(32)
                 __result.encode(__enc)
                 let __out = __enc.finish()
-                return_data(__out.0, __out.1)
+                evm.return_data(__out.0, __out.1)
             },
             Erc20::Name::SELECTOR => {
                 let mut __d = SolDecoder<CallData>::with_base(__calldata, size_of<Sol::Selector>())
-                if calldatasize() < size_of<Sol::Selector>() + encoded_size<Erc20::Name::Args>() {
-                    revert(0, 0)
+                if evm.calldatasize() < size_of<Sol::Selector>() + encoded_size<Erc20::Name::Args>() {
+                    evm.revert(0, 0)
                 }
                 let __args: Erc20::Name::Args = Erc20::Name::Args::decode(__d)
                 let __result = recv_Erc20_Name_0_6(__args)
@@ -275,12 +273,12 @@ mod __CoolCoin {
                 __enc.reserve_head(32)
                 __result.encode(__enc)
                 let __out = __enc.finish()
-                return_data(__out.0, __out.1)
+                evm.return_data(__out.0, __out.1)
             },
             Erc20::Symbol::SELECTOR => {
                 let mut __d = SolDecoder<CallData>::with_base(__calldata, size_of<Sol::Selector>())
-                if calldatasize() < size_of<Sol::Selector>() + encoded_size<Erc20::Symbol::Args>() {
-                    revert(0, 0)
+                if evm.calldatasize() < size_of<Sol::Selector>() + encoded_size<Erc20::Symbol::Args>() {
+                    evm.revert(0, 0)
                 }
                 let __args: Erc20::Symbol::Args = Erc20::Symbol::Args::decode(__d)
                 let __result = recv_Erc20_Symbol_0_7(__args)
@@ -288,12 +286,12 @@ mod __CoolCoin {
                 __enc.reserve_head(32)
                 __result.encode(__enc)
                 let __out = __enc.finish()
-                return_data(__out.0, __out.1)
+                evm.return_data(__out.0, __out.1)
             },
             Erc20::Decimals::SELECTOR => {
                 let mut __d = SolDecoder<CallData>::with_base(__calldata, size_of<Sol::Selector>())
-                if calldatasize() < size_of<Sol::Selector>() + encoded_size<Erc20::Decimals::Args>() {
-                    revert(0, 0)
+                if evm.calldatasize() < size_of<Sol::Selector>() + encoded_size<Erc20::Decimals::Args>() {
+                    evm.revert(0, 0)
                 }
                 let __args: Erc20::Decimals::Args = Erc20::Decimals::Args::decode(__d)
                 let __result = recv_Erc20_Decimals_0_8(__args)
@@ -301,12 +299,12 @@ mod __CoolCoin {
                 __enc.reserve_head(32)
                 __result.encode(__enc)
                 let __out = __enc.finish()
-                return_data(__out.0, __out.1)
+                evm.return_data(__out.0, __out.1)
             },
             Erc20Extended::Mint::SELECTOR => {
                 let mut __d = SolDecoder<CallData>::with_base(__calldata, size_of<Sol::Selector>())
-                if calldatasize() < size_of<Sol::Selector>() + encoded_size<Erc20Extended::Mint::Args>() {
-                    revert(0, 0)
+                if evm.calldatasize() < size_of<Sol::Selector>() + encoded_size<Erc20Extended::Mint::Args>() {
+                    evm.revert(0, 0)
                 }
                 let __args: Erc20Extended::Mint::Args = Erc20Extended::Mint::Args::decode(__d)
                 let __result = with (ctx, store, log, auth) { recv_Erc20Extended_Mint_1_0(__args) }
@@ -314,12 +312,12 @@ mod __CoolCoin {
                 __enc.reserve_head(32)
                 __result.encode(__enc)
                 let __out = __enc.finish()
-                return_data(__out.0, __out.1)
+                evm.return_data(__out.0, __out.1)
             },
             Erc20Extended::Burn::SELECTOR => {
                 let mut __d = SolDecoder<CallData>::with_base(__calldata, size_of<Sol::Selector>())
-                if calldatasize() < size_of<Sol::Selector>() + encoded_size<Erc20Extended::Burn::Args>() {
-                    revert(0, 0)
+                if evm.calldatasize() < size_of<Sol::Selector>() + encoded_size<Erc20Extended::Burn::Args>() {
+                    evm.revert(0, 0)
                 }
                 let __args: Erc20Extended::Burn::Args = Erc20Extended::Burn::Args::decode(__d)
                 let __result = with (ctx, store, log) { recv_Erc20Extended_Burn_1_1(__args) }
@@ -327,12 +325,12 @@ mod __CoolCoin {
                 __enc.reserve_head(32)
                 __result.encode(__enc)
                 let __out = __enc.finish()
-                return_data(__out.0, __out.1)
+                evm.return_data(__out.0, __out.1)
             },
             Erc20Extended::BurnFrom::SELECTOR => {
                 let mut __d = SolDecoder<CallData>::with_base(__calldata, size_of<Sol::Selector>())
-                if calldatasize() < size_of<Sol::Selector>() + encoded_size<Erc20Extended::BurnFrom::Args>() {
-                    revert(0, 0)
+                if evm.calldatasize() < size_of<Sol::Selector>() + encoded_size<Erc20Extended::BurnFrom::Args>() {
+                    evm.revert(0, 0)
                 }
                 let __args: Erc20Extended::BurnFrom::Args = Erc20Extended::BurnFrom::Args::decode(__d)
                 let __result = with (ctx, store, log) { recv_Erc20Extended_BurnFrom_1_2(__args) }
@@ -340,12 +338,12 @@ mod __CoolCoin {
                 __enc.reserve_head(32)
                 __result.encode(__enc)
                 let __out = __enc.finish()
-                return_data(__out.0, __out.1)
+                evm.return_data(__out.0, __out.1)
             },
             Erc20Extended::IncreaseAllowance::SELECTOR => {
                 let mut __d = SolDecoder<CallData>::with_base(__calldata, size_of<Sol::Selector>())
-                if calldatasize() < size_of<Sol::Selector>() + encoded_size<Erc20Extended::IncreaseAllowance::Args>() {
-                    revert(0, 0)
+                if evm.calldatasize() < size_of<Sol::Selector>() + encoded_size<Erc20Extended::IncreaseAllowance::Args>() {
+                    evm.revert(0, 0)
                 }
                 let __args: Erc20Extended::IncreaseAllowance::Args = Erc20Extended::IncreaseAllowance::Args::decode(__d)
                 let __result = with (ctx, store, log) { recv_Erc20Extended_IncreaseAllowance_1_3(__args) }
@@ -353,12 +351,12 @@ mod __CoolCoin {
                 __enc.reserve_head(32)
                 __result.encode(__enc)
                 let __out = __enc.finish()
-                return_data(__out.0, __out.1)
+                evm.return_data(__out.0, __out.1)
             },
             Erc20Extended::DecreaseAllowance::SELECTOR => {
                 let mut __d = SolDecoder<CallData>::with_base(__calldata, size_of<Sol::Selector>())
-                if calldatasize() < size_of<Sol::Selector>() + encoded_size<Erc20Extended::DecreaseAllowance::Args>() {
-                    revert(0, 0)
+                if evm.calldatasize() < size_of<Sol::Selector>() + encoded_size<Erc20Extended::DecreaseAllowance::Args>() {
+                    evm.revert(0, 0)
                 }
                 let __args: Erc20Extended::DecreaseAllowance::Args = Erc20Extended::DecreaseAllowance::Args::decode(__d)
                 let __result = with (ctx, store, log) { recv_Erc20Extended_DecreaseAllowance_1_4(__args) }
@@ -366,9 +364,9 @@ mod __CoolCoin {
                 __enc.reserve_head(32)
                 __result.encode(__enc)
                 let __out = __enc.finish()
-                return_data(__out.0, __out.1)
+                evm.return_data(__out.0, __out.1)
             },
-            _ => revert(0, 0),
+            _ => evm.revert(0, 0),
         }
     }
 }
@@ -719,58 +717,6 @@ struct ApprovalEvent {
     owner: Address,
     spender: Address,
     value: u256,
-}
-
-fn assert(_ b: bool) {
-    if !b {
-        core::intrinsic::revert(0, 0)
-    }
-}
-
-use core::abi::Abi
-use core::abi::AbiDecoder
-use core::abi::Decode
-
-pub struct Address {
-    inner: u256,
-}
-
-impl Address {
-    pub fn zero() -> Self {
-        Address { inner: 0 }
-    }
-
-}
-
-impl<A: Abi> Decode<A> for Address {
-
-    fn decode<D: AbiDecoder<A>>(mut _ d: D) -> Self {
-        Address { inner: d.read_word() }
-    }
-}
-
-impl core::ops::Eq for Address {
-
-    fn eq(self, _ other: Address) -> bool {
-        self.inner == other.inner
-    }
-}
-
-impl StorageKey for Address {
-
-    fn write_key(ptr: u256, self) -> u256 {
-        core::intrinsic::mstore(ptr, self.inner)
-        32
-    }
-}
-
-pub struct Ctx {}
-
-impl Ctx {
-    pub fn caller(self) -> Address {
-        Address { inner: core::intrinsic::caller() }
-    }
-
 }
 
 pub struct Log {}

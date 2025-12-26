@@ -3,7 +3,7 @@ source: crates/codegen/tests/yul.rs
 expression: output
 input_file: tests/fixtures/revert.fe
 ---
-function fail() {
+function fail(ops) {
   mstore(0, 42)
   revert(0, 32)
 }

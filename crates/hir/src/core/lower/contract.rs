@@ -6,8 +6,8 @@ use crate::{
     HirDb,
     hir_def::{
         Attr, AttrListId, Body, BodyKind, CallArg, Contract, ContractRecv, ContractRecvArm,
-        ContractRecvArmListId, ContractRecvListId, EffectParamListId, Expr, ExprId, FieldDef,
-        FieldDefListId, Func, FuncParam, FuncParamListId, FuncParamName, GenericArg,
+        ContractRecvArmListId, ContractRecvListId, EffectParam, EffectParamListId, Expr, ExprId,
+        FieldDef, FieldDefListId, Func, FuncParam, FuncParamListId, FuncParamName, GenericArg,
         GenericArgListId, GenericParamListId, IdentId, IntegerId, ItemModifier, LitKind, MatchArm,
         NormalAttr, Partial, Pat, PatId, PathId, PathKind, Stmt, StmtId, TrackedItemVariant,
         TypeGenericArg, TypeId, TypeKind, Use, Visibility, WhereClauseId,
@@ -255,16 +255,16 @@ impl<'a, 'ctxt, 'db> HirBuilder<'a, 'ctxt, 'db> {
 
     /// Creates a `revert(0, 0)` call.
     fn revert_call(&mut self) -> ExprId {
-        let revert = self.path_expr(&["revert"]);
+        let evm = self.var_expr("evm");
         let z0 = self.int_lit(0);
         let z1 = self.int_lit(0);
-        self.call(revert, vec![z0, z1])
+        self.method_call(evm, "revert", vec![z0, z1])
     }
 
     /// Creates `return_data(ptr, len)` call.
     fn return_data_call(&mut self, ptr: ExprId, len: ExprId) -> ExprId {
-        let return_data = self.path_expr(&["return_data"]);
-        self.call(return_data, vec![ptr, len])
+        let evm = self.var_expr("evm");
+        self.method_call(evm, "return_data", vec![ptr, len])
     }
 
     /// Creates an Ok pattern: `Result::Ok(inner_pat)`.
@@ -700,23 +700,19 @@ fn insert_contract_use_statements(ctxt: &mut FileLowerCtxt<'_>) {
     };
 
     // Core types
-    insert_use(&["core", "effect_ref", "StorPtr"]);
-    insert_use(&["core", "intrinsic", "contract_field_slot"]);
-    insert_use(&["core", "calldataload"]);
-    insert_use(&["core", "calldatasize"]);
-    insert_use(&["core", "codecopy"]);
-    insert_use(&["core", "code_region_len"]);
-    insert_use(&["core", "code_region_offset"]);
-    insert_use(&["core", "return_data"]);
-    insert_use(&["core", "revert"]);
     insert_use(&["core", "size_of"]);
-    insert_use(&["core", "encoded_size"]);
 
     // Std types
+    insert_use(&["std", "evm", "effects", "Evm"]);
+    insert_use(&["std", "evm", "effects", "RawOps"]);
+    insert_use(&["std", "evm", "effects", "RawStorage"]);
+    insert_use(&["std", "evm", "effects", "StorPtr"]);
+    insert_use(&["std", "evm", "contract_field_slot"]);
     insert_use(&["std", "evm", "calldata", "CallData"]);
     insert_use(&["std", "abi", "Sol"]);
     insert_use(&["std", "abi", "sol", "SolDecoder"]);
     insert_use(&["std", "abi", "sol", "SolEncoder"]);
+    insert_use(&["std", "abi", "sol", "encoded_size"]);
 }
 
 /// Converts a path to an underscore-separated name string.
@@ -1016,25 +1012,24 @@ fn lower_contract_init_entrypoint_func<'db>(
                     continue;
                 };
 
-                // let mut field = StorPtr<FieldTy>::at_offset(contract_field_slot(idx))
+                // let mut field = evm.stor_ptr(contract_field_slot(idx))
                 let slot_idx = b.int_lit(idx);
                 let field_slot = b.path_expr(&["contract_field_slot"]);
                 let slot_expr = b.call(field_slot, vec![slot_idx]);
 
-                let stor_ptr_path = b
-                    .path_with_generic(&[], "StorPtr", field_ty)
-                    .push_str(db, "at_offset");
-                let at_offset = b.path_id_expr(stor_ptr_path);
-                let ptr_init = b.call(at_offset, vec![slot_expr]);
+                let evm = b.var_expr("evm");
+                let ptr_init = b.method_call(evm, "stor_ptr", vec![slot_expr]);
+                let stor_ptr_path = b.path_with_generic(&[], "StorPtr", field_ty);
+                let stor_ptr_ty = TypeId::new(db, TypeKind::Path(Partial::Present(stor_ptr_path)));
 
                 let bind_pat = b.body_ctxt.push_pat(
                     Pat::Path(Partial::Present(PathId::from_ident(db, field_name)), true),
                     b.origin(),
                 );
-                stmts.push(
-                    b.body_ctxt
-                        .push_stmt(Stmt::Let(bind_pat, None, Some(ptr_init)), b.origin()),
-                );
+                stmts.push(b.body_ctxt.push_stmt(
+                    Stmt::Let(bind_pat, Some(stor_ptr_ty), Some(ptr_init)),
+                    b.origin(),
+                ));
             }
 
             // Decode init args from calldata and call user init logic.
@@ -1079,8 +1074,8 @@ fn lower_contract_init_entrypoint_func<'db>(
                 total.unwrap_or_else(|| b.int_lit(0))
             };
 
-            let calldatasize_fn = b.path_expr(&["calldatasize"]);
-            let calldata_size = b.call(calldatasize_fn, vec![]);
+            let evm = b.var_expr("evm");
+            let calldata_size = b.method_call(evm, "calldatasize", vec![]);
             let is_too_short = b.lt(calldata_size, required_size);
             let revert_expr = b.revert_call();
             let revert_stmt = b.body_ctxt.push_stmt(Stmt::Expr(revert_expr), b.origin());
@@ -1146,25 +1141,22 @@ fn lower_contract_init_entrypoint_func<'db>(
 
         // let __len = code_region_len(runtime)
         let runtime_expr = b.var_expr(&runtime_fn_name);
-        let code_region_len = b.path_expr(&["code_region_len"]);
-        let len_call = b.call(code_region_len, vec![runtime_expr]);
+        let evm = b.var_expr("evm");
+        let len_call = b.method_call(evm, "code_region_len", vec![runtime_expr]);
         b.let_stmt(&mut stmts, "__len", false, len_call);
 
         // let __offset = code_region_offset(runtime)
         let runtime_expr2 = b.var_expr(&runtime_fn_name);
-        let code_region_offset = b.path_expr(&["code_region_offset"]);
-        let offset_call = b.call(code_region_offset, vec![runtime_expr2]);
+        let evm = b.var_expr("evm");
+        let offset_call = b.method_call(evm, "code_region_offset", vec![runtime_expr2]);
         b.let_stmt(&mut stmts, "__offset", false, offset_call);
 
         // codecopy(dest: 0, __offset, __len)
-        let codecopy = b.path_expr(&["codecopy"]);
         let dest0 = b.int_lit(0);
         let offset_expr = b.var_expr("__offset");
         let len_expr = b.var_expr("__len");
-        let codecopy_call = b.call_labeled(
-            codecopy,
-            vec![(Some("dest"), dest0), (None, offset_expr), (None, len_expr)],
-        );
+        let evm = b.var_expr("evm");
+        let codecopy_call = b.method_call(evm, "codecopy", vec![dest0, offset_expr, len_expr]);
         b.expr_stmt(&mut stmts, codecopy_call);
 
         // return_data(0, __len)
@@ -1180,6 +1172,27 @@ fn lower_contract_init_entrypoint_func<'db>(
     body_ctxt.f_ctxt.leave_block_scope(root_expr);
     let body = body_ctxt.build(None, root_expr, BodyKind::FuncBody);
 
+    let entrypoint_effects = {
+        let mut effects = contract.effects(db).data(db).clone();
+        let evm_ident = IdentId::new(db, "evm".to_string());
+        let has_evm = effects.iter().any(|effect| {
+            effect.name.is_some_and(|name| name == evm_ident)
+                || effect.key_path.to_opt().is_some_and(|path| {
+                    path.ident(db)
+                        .to_opt()
+                        .is_some_and(|id| id.data(db) == "Evm")
+                })
+        });
+        if !has_evm {
+            effects.push(EffectParam {
+                name: Some(evm_ident),
+                key_path: Partial::Present(PathId::from_str(db, "Evm")),
+                is_mut: true,
+            });
+        }
+        EffectParamListId::new(db, effects)
+    };
+
     let init_fn = Func::new(
         db,
         init_fn_id,
@@ -1188,7 +1201,7 @@ fn lower_contract_init_entrypoint_func<'db>(
         GenericParamListId::new(db, vec![]),
         WhereClauseId::new(db, vec![]),
         Partial::Present(FuncParamListId::new(db, vec![])),
-        contract.effects(db),
+        entrypoint_effects,
         None,
         ItemModifier::None,
         Some(body),
@@ -1302,23 +1315,22 @@ fn lower_contract_runtime_entrypoint_func<'db>(
                 continue;
             };
 
-            // let field = StorPtr<FieldTy>::at_offset(contract_field_slot(idx))
+            // let field = evm.stor_ptr(contract_field_slot(idx))
             let slot_idx = b.int_lit(idx);
             let field_slot = b.path_expr(&["contract_field_slot"]);
             let slot_expr = b.call(field_slot, vec![slot_idx]);
 
-            let stor_ptr_path = b
-                .path_with_generic(&[], "StorPtr", field_ty)
-                .push_str(db, "at_offset");
-            let at_offset = b.path_id_expr(stor_ptr_path);
-            let ptr_init = b.call(at_offset, vec![slot_expr]);
+            let evm = b.var_expr("evm");
+            let ptr_init = b.method_call(evm, "stor_ptr", vec![slot_expr]);
+            let stor_ptr_path = b.path_with_generic(&[], "StorPtr", field_ty);
+            let stor_ptr_ty = TypeId::new(db, TypeKind::Path(Partial::Present(stor_ptr_path)));
 
             let bind_pat = b.body_ctxt.push_pat(
                 Pat::Path(Partial::Present(PathId::from_ident(db, field_name)), true),
                 HirOrigin::desugared(desugared.clone()),
             );
             stmts.push(b.body_ctxt.push_stmt(
-                Stmt::Let(bind_pat, None, Some(ptr_init)),
+                Stmt::Let(bind_pat, Some(stor_ptr_ty), Some(ptr_init)),
                 HirOrigin::desugared(desugared.clone()),
             ));
         }
@@ -1334,8 +1346,8 @@ fn lower_contract_runtime_entrypoint_func<'db>(
         let call_data_init = b.record_init(call_data_path, vec![]);
         b.let_stmt(&mut stmts, "__calldata", false, call_data_init);
 
-        let calldatasize_fn = b.path_expr(&["calldatasize"]);
-        let calldata_size = b.call(calldatasize_fn, vec![]);
+        let evm = b.var_expr("evm");
+        let calldata_size = b.method_call(evm, "calldatasize", vec![]);
         let selector_size = b.sol_selector_size();
         let is_too_short = b.lt(calldata_size, selector_size);
         let revert_expr = b.revert_call();
@@ -1347,9 +1359,9 @@ fn lower_contract_runtime_entrypoint_func<'db>(
         let guard = b.if_(is_too_short, then_block);
         b.expr_stmt(&mut stmts, guard);
 
-        let calldataload_fn = b.path_expr(&["calldataload"]);
         let zero = b.int_lit(0);
-        let word0 = b.call(calldataload_fn, vec![zero]);
+        let evm = b.var_expr("evm");
+        let word0 = b.method_call(evm, "calldataload", vec![zero]);
         let sol_selector = b.path_expr(&["Sol", "selector_from_prefix"]);
         let selector_call = b.call(sol_selector, vec![word0]);
         b.let_stmt(&mut stmts, "__selector", false, selector_call);
@@ -1469,6 +1481,27 @@ fn lower_contract_runtime_entrypoint_func<'db>(
     body_ctxt.f_ctxt.leave_block_scope(root_expr);
     let body = body_ctxt.build(None, root_expr, BodyKind::FuncBody);
 
+    let entrypoint_effects = {
+        let mut effects = contract.effects(db).data(db).clone();
+        let evm_ident = IdentId::new(db, "evm".to_string());
+        let has_evm = effects.iter().any(|effect| {
+            effect.name.is_some_and(|name| name == evm_ident)
+                || effect.key_path.to_opt().is_some_and(|path| {
+                    path.ident(db)
+                        .to_opt()
+                        .is_some_and(|id| id.data(db) == "Evm")
+                })
+        });
+        if !has_evm {
+            effects.push(EffectParam {
+                name: Some(evm_ident),
+                key_path: Partial::Present(PathId::from_str(db, "Evm")),
+                is_mut: true,
+            });
+        }
+        EffectParamListId::new(db, effects)
+    };
+
     let runtime_fn = Func::new(
         db,
         runtime_fn_id,
@@ -1477,7 +1510,7 @@ fn lower_contract_runtime_entrypoint_func<'db>(
         GenericParamListId::new(db, vec![]),
         WhereClauseId::new(db, vec![]),
         Partial::Present(FuncParamListId::new(db, vec![])),
-        contract.effects(db),
+        entrypoint_effects,
         None,
         ItemModifier::None,
         Some(body),
@@ -1530,8 +1563,8 @@ fn lower_contract_runtime_dispatch_arm_body<'ctxt, 'db>(
         let mut b = HirBuilder::new(body_ctxt, desugared.clone());
 
         // if calldatasize() < size_of<Sol::Selector>() + encoded_size<Args>() { revert(0, 0) }
-        let calldatasize_fn = b.path_expr(&["calldatasize"]);
-        let calldata_size = b.call(calldatasize_fn, vec![]);
+        let evm = b.var_expr("evm");
+        let calldata_size = b.method_call(evm, "calldatasize", vec![]);
         let selector_size = b.sol_selector_size();
         let args_size = b.encoded_size_of_ty(args_ty);
         let required_size = b.add(selector_size, args_size);

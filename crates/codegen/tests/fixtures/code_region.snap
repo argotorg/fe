@@ -5,7 +5,7 @@ input_file: tests/fixtures/code_region.fe
 ---
 object "Foo" {
   code {
-    function allocate(bytes) -> ret {
+    function allocate(bytes, mem) -> ret {
       let v0 := mload(64)
       let v1 := eq(v0, 0)
       if v1 {
@@ -15,45 +15,61 @@ object "Foo" {
       ret := v0
       leave
     }
+    function evm_create_create2(self, value, offset, len, salt) -> ret {
+      let v0 := create2(value, offset, len, salt)
+      let v1 := mload(0x40)
+      if iszero(v1) {
+        v1 := 0x80
+      }
+      mstore(0x40, add(v1, 32))
+      mstore(v1, v0)
+      ret := v1
+      leave
+    }
     function init() {
-      let v0 := datasize("Child")
-      let v1 := dataoffset("Child")
-      let v2 := allocate(v0)
-      codecopy(v2, v1, v0)
-      create2(0, v1, v0, 4660)
-      let v3 := datasize("Foo_deployed")
-      let v4 := dataoffset("Foo_deployed")
-      let v5 := allocate(v3)
-      codecopy(v5, v4, v3)
-      return(v5, v3)
+      let v0 := 0
+      let v1 := datasize("Child")
+      let v2 := dataoffset("Child")
+      let v3 := allocate(v1, 0)
+      let v4 := v3
+      codecopy(v4, v2, v1)
+      let v5 := evm_create_create2(v0, 0, v2, v1, 4660)
+      pop(v5)
+      let v6 := datasize("Foo_deployed")
+      let v7 := dataoffset("Foo_deployed")
+      let v8 := allocate(v6, 0)
+      let v9 := v8
+      codecopy(v9, v7, v6)
+      return(v9, v6)
     }
     init()
   }
 
   object "Foo_deployed" {
     code {
-      function balance() {
+      function balance(ops) {
         return(0, 0)
       }
-      function read_selector() -> ret {
+      function read_selector(ops) -> ret {
         let v0 := calldataload(0)
         ret := shr(224, v0)
         leave
       }
       function runtime() {
-        let v0 := read_selector()
-        switch v0
+        let v0 := 0
+        let v1 := read_selector(0)
+        switch v1
           case 305419896 {
-            transfer()
+            transfer(0)
           }
           case 591751049 {
-            balance()
+            balance(0)
           }
           default {
           }
         return(0, 0)
       }
-      function transfer() {
+      function transfer(ops) {
         return(0, 0)
       }
       runtime()
@@ -63,10 +79,11 @@ object "Foo" {
   object "Child" {
     code {
       function child_init() {
-        let v0 := datasize("Child_deployed")
-        let v1 := dataoffset("Child_deployed")
-        codecopy(0, v1, v0)
-        return(0, v0)
+        let v0 := 0
+        let v1 := datasize("Child_deployed")
+        let v2 := dataoffset("Child_deployed")
+        codecopy(0, v2, v1)
+        return(0, v1)
       }
       child_init()
     }
@@ -74,6 +91,7 @@ object "Foo" {
     object "Child_deployed" {
       code {
         function child_runtime() {
+          let v0 := 0
           calldatacopy(0, 0, 4)
           return(0, 4)
         }

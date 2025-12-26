@@ -7,21 +7,17 @@ use core::prelude::*
 
 mod __Counter {
     use super::*
-    use core::effect_ref::StorPtr
-    use core::intrinsic::contract_field_slot
-    use core::calldataload
-    use core::calldatasize
-    use core::codecopy
-    use core::code_region_len
-    use core::code_region_offset
-    use core::return_data
-    use core::revert
     use core::size_of
-    use core::encoded_size
+    use std::evm::effects::Evm
+    use std::evm::effects::RawOps
+    use std::evm::effects::RawStorage
+    use std::evm::effects::StorPtr
+    use std::evm::contract_field_slot
     use std::evm::calldata::CallData
     use std::abi::Sol
     use std::abi::sol::SolDecoder
     use std::abi::sol::SolEncoder
+    use std::abi::sol::encoded_size
 
     fn recv_CounterMsg_Increment_0_0(args: CounterMsg::Increment::Args) uses (mut count: u64) {
         return {
@@ -42,43 +38,43 @@ mod __Counter {
     }
 
     #[contract_init(Counter)]
-    fn init() {
-        let mut count = StorPtr<u64>::at_offset(contract_field_slot(0))
+    fn init() uses (mut evm: Evm) {
+        let mut count: StorPtr<u64> = evm.stor_ptr(contract_field_slot(0))
         let __calldata = CallData {  }
         let mut __d = SolDecoder<CallData>::new(__calldata)
-        if calldatasize() < encoded_size<u64>() {
-            revert(0, 0)
+        if evm.calldatasize() < encoded_size<u64>() {
+            evm.revert(0, 0)
         }
         let start: u64 = u64::decode(__d)
         with (count) { init_contract(start) }
-        let __len = code_region_len(runtime)
-        let __offset = code_region_offset(runtime)
-        codecopy(dest: 0, __offset, __len)
-        return_data(0, __len)
+        let __len = evm.code_region_len(runtime)
+        let __offset = evm.code_region_offset(runtime)
+        evm.codecopy(0, __offset, __len)
+        evm.return_data(0, __len)
     }
 
     #[contract_runtime(Counter)]
-    fn runtime() {
-        let mut count = StorPtr<u64>::at_offset(contract_field_slot(0))
+    fn runtime() uses (mut evm: Evm) {
+        let mut count: StorPtr<u64> = evm.stor_ptr(contract_field_slot(0))
         let __calldata = CallData {  }
-        if calldatasize() < size_of<Sol::Selector>() {
-            revert(0, 0)
+        if evm.calldatasize() < size_of<Sol::Selector>() {
+            evm.revert(0, 0)
         }
-        let __selector = Sol::selector_from_prefix(calldataload(0))
+        let __selector = Sol::selector_from_prefix(evm.calldataload(0))
         match __selector {
             CounterMsg::Increment::SELECTOR => {
                 let mut __d = SolDecoder<CallData>::with_base(__calldata, size_of<Sol::Selector>())
-                if calldatasize() < size_of<Sol::Selector>() + encoded_size<CounterMsg::Increment::Args>() {
-                    revert(0, 0)
+                if evm.calldatasize() < size_of<Sol::Selector>() + encoded_size<CounterMsg::Increment::Args>() {
+                    evm.revert(0, 0)
                 }
                 let __args: CounterMsg::Increment::Args = CounterMsg::Increment::Args::decode(__d)
                 with (count) { recv_CounterMsg_Increment_0_0(__args) }
-                return_data(0, 0)
+                evm.return_data(0, 0)
             },
             CounterMsg::Get::SELECTOR => {
                 let mut __d = SolDecoder<CallData>::with_base(__calldata, size_of<Sol::Selector>())
-                if calldatasize() < size_of<Sol::Selector>() + encoded_size<CounterMsg::Get::Args>() {
-                    revert(0, 0)
+                if evm.calldatasize() < size_of<Sol::Selector>() + encoded_size<CounterMsg::Get::Args>() {
+                    evm.revert(0, 0)
                 }
                 let __args: CounterMsg::Get::Args = CounterMsg::Get::Args::decode(__d)
                 let __result = with (count) { recv_CounterMsg_Get_0_1(__args) }
@@ -86,9 +82,9 @@ mod __Counter {
                 __enc.reserve_head(32)
                 __result.encode(__enc)
                 let __out = __enc.finish()
-                return_data(__out.0, __out.1)
+                evm.return_data(__out.0, __out.1)
             },
-            _ => revert(0, 0),
+            _ => evm.revert(0, 0),
         }
     }
 }

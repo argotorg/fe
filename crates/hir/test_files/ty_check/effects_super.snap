@@ -1,0 +1,219 @@
+---
+source: crates/hir/tests/ty_check.rs
+expression: res
+input_file: test_files/ty_check/effects_super.fe
+---
+note: 
+   ┌─ effects_super.fe:16:29
+   │  
+16 │       fn caller(self) -> u256 {
+   │ ╭─────────────────────────────^
+17 │ │         0
+18 │ │     }
+   │ ╰─────^ u256
+
+note: 
+   ┌─ effects_super.fe:17:9
+   │
+17 │         0
+   │         ^ u256
+
+note: 
+   ┌─ effects_super.fe:21:41
+   │  
+21 │       fn load(self, offset: u256) -> u256 {
+   │ ╭─────────────────────────────────────────^
+22 │ │         0
+23 │ │     }
+   │ ╰─────^ u256
+
+note: 
+   ┌─ effects_super.fe:22:9
+   │
+22 │         0
+   │         ^ u256
+
+note: 
+   ┌─ effects_super.fe:24:51
+   │  
+24 │       fn store(mut self, offset: u256, value: u256) {
+   │ ╭───────────────────────────────────────────────────^
+25 │ │     }
+   │ ╰─────^ ()
+
+note: 
+   ┌─ effects_super.fe:28:39
+   │  
+28 │       fn load(self, slot: u256) -> u256 {
+   │ ╭───────────────────────────────────────^
+29 │ │         0
+30 │ │     }
+   │ ╰─────^ u256
+
+note: 
+   ┌─ effects_super.fe:29:9
+   │
+29 │         0
+   │         ^ u256
+
+note: 
+   ┌─ effects_super.fe:31:49
+   │  
+31 │       fn store(mut self, slot: u256, value: u256) {
+   │ ╭─────────────────────────────────────────────────^
+32 │ │     }
+   │ ╰─────^ ()
+
+note: 
+   ┌─ effects_super.fe:36:14
+   │  
+36 │   fn example() {
+   │ ╭──────────────^
+37 │ │     let mut r = Root {}
+38 │ │     with (r) {
+39 │ │         do_stuff(10)
+40 │ │     }
+41 │ │     ()
+42 │ │ }
+   │ ╰─^ ()
+
+note: 
+   ┌─ effects_super.fe:37:9
+   │
+37 │     let mut r = Root {}
+   │         ^^^^^ Root
+
+note: 
+   ┌─ effects_super.fe:37:17
+   │
+37 │     let mut r = Root {}
+   │                 ^^^^^^^ Root
+
+note: 
+   ┌─ effects_super.fe:38:5
+   │  
+38 │ ╭     with (r) {
+39 │ │         do_stuff(10)
+40 │ │     }
+   │ ╰─────^ u256
+
+note: 
+   ┌─ effects_super.fe:38:11
+   │
+38 │     with (r) {
+   │           ^ Root
+
+note: 
+   ┌─ effects_super.fe:38:14
+   │  
+38 │       with (r) {
+   │ ╭──────────────^
+39 │ │         do_stuff(10)
+40 │ │     }
+   │ ╰─────^ u256
+
+note: 
+   ┌─ effects_super.fe:39:9
+   │
+39 │         do_stuff(10)
+   │         ^^^^^^^^ fn do_stuff
+
+note: 
+   ┌─ effects_super.fe:39:9
+   │
+39 │         do_stuff(10)
+   │         ^^^^^^^^^^^^ u256
+
+note: 
+   ┌─ effects_super.fe:39:18
+   │
+39 │         do_stuff(10)
+   │                  ^^ u256
+
+note: 
+   ┌─ effects_super.fe:41:5
+   │
+41 │     ()
+   │     ^^ ()
+
+note: 
+   ┌─ effects_super.fe:46:1
+   │  
+46 │ ╭ {
+47 │ │     mem.store(offset: x, value: ctx.caller())
+48 │ │     sto.store(slot: x, value: 100)
+49 │ │     sto.load(slot: x)
+50 │ │ }
+   │ ╰─^ u256
+
+note: 
+   ┌─ effects_super.fe:47:5
+   │
+47 │     mem.store(offset: x, value: ctx.caller())
+   │     ^^^ mem: Mem
+
+note: 
+   ┌─ effects_super.fe:47:5
+   │
+47 │     mem.store(offset: x, value: ctx.caller())
+   │     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ ()
+
+note: 
+   ┌─ effects_super.fe:47:23
+   │
+47 │     mem.store(offset: x, value: ctx.caller())
+   │                       ^ u256
+
+note: 
+   ┌─ effects_super.fe:47:33
+   │
+47 │     mem.store(offset: x, value: ctx.caller())
+   │                                 ^^^ ctx: Ctx
+
+note: 
+   ┌─ effects_super.fe:47:33
+   │
+47 │     mem.store(offset: x, value: ctx.caller())
+   │                                 ^^^^^^^^^^^^ u256
+
+note: 
+   ┌─ effects_super.fe:48:5
+   │
+48 │     sto.store(slot: x, value: 100)
+   │     ^^^ sto: Storage
+
+note: 
+   ┌─ effects_super.fe:48:5
+   │
+48 │     sto.store(slot: x, value: 100)
+   │     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ ()
+
+note: 
+   ┌─ effects_super.fe:48:21
+   │
+48 │     sto.store(slot: x, value: 100)
+   │                     ^ u256
+
+note: 
+   ┌─ effects_super.fe:48:31
+   │
+48 │     sto.store(slot: x, value: 100)
+   │                               ^^^ u256
+
+note: 
+   ┌─ effects_super.fe:49:5
+   │
+49 │     sto.load(slot: x)
+   │     ^^^ sto: Storage
+
+note: 
+   ┌─ effects_super.fe:49:5
+   │
+49 │     sto.load(slot: x)
+   │     ^^^^^^^^^^^^^^^^^ u256
+
+note: 
+   ┌─ effects_super.fe:49:20
+   │
+49 │     sto.load(slot: x)
+   │                    ^ u256

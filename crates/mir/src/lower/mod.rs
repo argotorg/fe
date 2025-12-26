@@ -727,26 +727,32 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         provider_ty: TyId<'db>,
     ) -> Option<EffectProviderKind> {
         let base_ty = provider_ty.base_ty(self.db);
-        let mem_base = self
+        if let Some(mem_base) = self
             .core
             .helper_ty(CoreHelperTy::EffectMemPtr)
-            .base_ty(self.db);
-        if base_ty == mem_base {
-            return Some(EffectProviderKind::Memory);
+            .map(|ty| ty.base_ty(self.db))
+        {
+            if base_ty == mem_base {
+                return Some(EffectProviderKind::Memory);
+            }
         }
-        let stor_base = self
+        if let Some(stor_base) = self
             .core
             .helper_ty(CoreHelperTy::EffectStorPtr)
-            .base_ty(self.db);
-        if base_ty == stor_base {
-            return Some(EffectProviderKind::Storage);
+            .map(|ty| ty.base_ty(self.db))
+        {
+            if base_ty == stor_base {
+                return Some(EffectProviderKind::Storage);
+            }
         }
-        let calldata_base = self
+        if let Some(calldata_base) = self
             .core
             .helper_ty(CoreHelperTy::EffectCalldataPtr)
-            .base_ty(self.db);
-        if base_ty == calldata_base {
-            return Some(EffectProviderKind::Calldata);
+            .map(|ty| ty.base_ty(self.db))
+        {
+            if base_ty == calldata_base {
+                return Some(EffectProviderKind::Calldata);
+            }
         }
         None
     }

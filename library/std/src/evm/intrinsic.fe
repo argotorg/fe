@@ -1,0 +1,16 @@
+/// EVM-related compiler intrinsics (not Yul builtins).
+///
+/// These are provided by the compiler backend and/or resolved at compile time.
+extern {
+    /// Return the code offset/size for the call graph rooted at `func`.
+    ///
+    /// Lowered to `dataoffset/datasize` during codegen.
+    pub fn code_region_offset<F>(_: F) -> u256
+    pub fn code_region_len<F>(_: F) -> u256
+
+    /// Returns the fixed storage slot offset (in 32-byte slots) for the given contract field
+    /// index within the current contract.
+    ///
+    /// This is intended for compiler-generated code; the backend replaces this with a literal.
+    pub fn contract_field_slot(field_idx: u256) -> u256
+}

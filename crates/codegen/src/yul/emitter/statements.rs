@@ -540,11 +540,6 @@ impl<'db> FunctionEmitter<'db> {
             debug_assert_eq!(args.len(), 1, "addr_of expects 1 argument");
             return Ok(args.into_iter().next().expect("addr_of expects 1 argument"));
         }
-        if matches!(intr.op, IntrinsicOp::StorAt) {
-            let args = self.lower_intrinsic_args(intr, state)?;
-            debug_assert_eq!(args.len(), 1, "stor_at expects 1 argument");
-            return Ok(args.into_iter().next().expect("stor_at expects 1 argument"));
-        }
         if matches!(
             intr.op,
             IntrinsicOp::CodeRegionOffset | IntrinsicOp::CodeRegionLen
@@ -678,7 +673,6 @@ impl<'db> FunctionEmitter<'db> {
             IntrinsicOp::CodeRegionLen => "code_region_len",
             IntrinsicOp::Keccak => "keccak256",
             IntrinsicOp::Caller => "caller",
-            IntrinsicOp::StorAt => "stor_at",
         }
     }
 }

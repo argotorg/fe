@@ -64,21 +64,17 @@ pub struct Foo {
 
 mod __EchoContract {
     use super::*
-    use core::effect_ref::StorPtr
-    use core::intrinsic::contract_field_slot
-    use core::calldataload
-    use core::calldatasize
-    use core::codecopy
-    use core::code_region_len
-    use core::code_region_offset
-    use core::return_data
-    use core::revert
     use core::size_of
-    use core::encoded_size
+    use std::evm::effects::Evm
+    use std::evm::effects::RawOps
+    use std::evm::effects::RawStorage
+    use std::evm::effects::StorPtr
+    use std::evm::contract_field_slot
     use std::evm::calldata::CallData
     use std::abi::Sol
     use std::abi::sol::SolDecoder
     use std::abi::sol::SolEncoder
+    use std::abi::sol::encoded_size
 
     fn recv_EchoMsg_Answer_0_0(args: EchoMsg::Answer::Args) -> u256 {
         return {
@@ -107,35 +103,35 @@ mod __EchoContract {
     }
 
     #[contract_init(EchoContract)]
-    fn init() {
-        let mut state = StorPtr<Foo>::at_offset(contract_field_slot(0))
+    fn init() uses (mut evm: Evm) {
+        let mut state: StorPtr<Foo> = evm.stor_ptr(contract_field_slot(0))
         let __calldata = CallData {  }
         let mut __d = SolDecoder<CallData>::new(__calldata)
-        if calldatasize() < encoded_size<u256>() + encoded_size<u256>() {
-            revert(0, 0)
+        if evm.calldatasize() < encoded_size<u256>() + encoded_size<u256>() {
+            evm.revert(0, 0)
         }
         let x: u256 = u256::decode(__d)
         let y: u256 = u256::decode(__d)
         with (state) { init_contract(x, y) }
-        let __len = code_region_len(runtime)
-        let __offset = code_region_offset(runtime)
-        codecopy(dest: 0, __offset, __len)
-        return_data(0, __len)
+        let __len = evm.code_region_len(runtime)
+        let __offset = evm.code_region_offset(runtime)
+        evm.codecopy(0, __offset, __len)
+        evm.return_data(0, __len)
     }
 
     #[contract_runtime(EchoContract)]
-    fn runtime() {
-        let mut state = StorPtr<Foo>::at_offset(contract_field_slot(0))
+    fn runtime() uses (mut evm: Evm) {
+        let mut state: StorPtr<Foo> = evm.stor_ptr(contract_field_slot(0))
         let __calldata = CallData {  }
-        if calldatasize() < size_of<Sol::Selector>() {
-            revert(0, 0)
+        if evm.calldatasize() < size_of<Sol::Selector>() {
+            evm.revert(0, 0)
         }
-        let __selector = Sol::selector_from_prefix(calldataload(0))
+        let __selector = Sol::selector_from_prefix(evm.calldataload(0))
         match __selector {
             EchoMsg::Answer::SELECTOR => {
                 let mut __d = SolDecoder<CallData>::with_base(__calldata, size_of<Sol::Selector>())
-                if calldatasize() < size_of<Sol::Selector>() + encoded_size<EchoMsg::Answer::Args>() {
-                    revert(0, 0)
+                if evm.calldatasize() < size_of<Sol::Selector>() + encoded_size<EchoMsg::Answer::Args>() {
+                    evm.revert(0, 0)
                 }
                 let __args: EchoMsg::Answer::Args = EchoMsg::Answer::Args::decode(__d)
                 let __result = recv_EchoMsg_Answer_0_0(__args)
@@ -143,12 +139,12 @@ mod __EchoContract {
                 __enc.reserve_head(32)
                 __result.encode(__enc)
                 let __out = __enc.finish()
-                return_data(__out.0, __out.1)
+                evm.return_data(__out.0, __out.1)
             },
             EchoMsg::Echo::SELECTOR => {
                 let mut __d = SolDecoder<CallData>::with_base(__calldata, size_of<Sol::Selector>())
-                if calldatasize() < size_of<Sol::Selector>() + encoded_size<EchoMsg::Echo::Args>() {
-                    revert(0, 0)
+                if evm.calldatasize() < size_of<Sol::Selector>() + encoded_size<EchoMsg::Echo::Args>() {
+                    evm.revert(0, 0)
                 }
                 let __args: EchoMsg::Echo::Args = EchoMsg::Echo::Args::decode(__d)
                 let __result = recv_EchoMsg_Echo_0_1(__args)
@@ -156,12 +152,12 @@ mod __EchoContract {
                 __enc.reserve_head(32)
                 __result.encode(__enc)
                 let __out = __enc.finish()
-                return_data(__out.0, __out.1)
+                evm.return_data(__out.0, __out.1)
             },
             EchoMsg::GetX::SELECTOR => {
                 let mut __d = SolDecoder<CallData>::with_base(__calldata, size_of<Sol::Selector>())
-                if calldatasize() < size_of<Sol::Selector>() + encoded_size<EchoMsg::GetX::Args>() {
-                    revert(0, 0)
+                if evm.calldatasize() < size_of<Sol::Selector>() + encoded_size<EchoMsg::GetX::Args>() {
+                    evm.revert(0, 0)
                 }
                 let __args: EchoMsg::GetX::Args = EchoMsg::GetX::Args::decode(__d)
                 let __result = with (state) { recv_EchoMsg_GetX_0_2(__args) }
@@ -169,9 +165,9 @@ mod __EchoContract {
                 __enc.reserve_head(32)
                 __result.encode(__enc)
                 let __out = __enc.finish()
-                return_data(__out.0, __out.1)
+                evm.return_data(__out.0, __out.1)
             },
-            _ => revert(0, 0),
+            _ => evm.revert(0, 0),
         }
     }
 }

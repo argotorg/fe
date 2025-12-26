@@ -1,5 +1,6 @@
 ---
 source: crates/mir/tests/lowering_snapshots.rs
+assertion_line: 26
 expression: mir_output
 ---
 fn bump(v0: u256) -> ():
@@ -38,23 +39,23 @@ fn maybe_inc(v0: Opt) -> u64:
   bb8:
     ret (v1 + v6)
 
-fn test_effects_and_aggregates() -> ():
+fn test_effects_and_aggregates(v0: u256, v1: u256) -> ():
   bb0:
-    v0: MemPtr<Foo> = 256
-    bind v0
-    eval bump__eff_mem(v0)
-    v1: StorPtr<Foo> = 0
-    bind v1
-    eval bump(v1)
-    v3: Foo = alloc mem
-    init mem[v3] { .0 = 10, .1 = 20 }
-    v2: Foo = v3
+    v2: MemPtr<Foo> = mem_ptr__mem__RawMem_Foo__19292a5189c12f79(v1, 256)
     bind v2
     eval bump__eff_mem(v2)
-    v4: StorPtr<StorageMap<u256, u256>> = stor_at(0)
+    v3: StorPtr<Foo> = stor_ptr__sto__RawStorage_Foo__b1b82e9d4c608c02(v0, 0)
+    bind v3
+    eval bump(v3)
+    v5: Foo = alloc mem
+    init mem[v5] { .0 = 10, .1 = 20 }
+    v4: Foo = v5
     bind v4
-    eval set_balance(1, 7, v4)
-    v5: u256 = get_balance(1, v4)
+    eval bump__eff_mem(v4)
+    v6: StorPtr<StorageMap<u256, u256>> = stor_ptr__sto__RawStorage_StorageMap_u256__u256___6212d4158f52b2b2(v0, 0)
+    bind v6
+    eval set_balance(1, 7, v6)
+    v7: u256 = get_balance(1, v6)
     ret
 
 fn get_balance(v0: u256, v1: u256) -> u256:
@@ -67,25 +68,30 @@ fn set_balance(v0: u256, v1: u256, v2: u256) -> ():
     eval storagemap_k__v__set_stor__u256_u256__cc308d1bea3fb6e4(v2, v0, v1)
     ret
 
-fn selector_match() -> u256:
+fn selector_match(v0: u256) -> u256:
   bb0:
-    v1: u256 = calldataload(0)
-    v0: u256 = (v1 >> 224)
-    v2: u256 = 0
+    v2: u256 = calldataload(0)
+    v1: u256 = (v2 >> 224)
+    v3: u256 = 0
     jmp bb5
   bb1:
-    v2 = 1
+    v3 = 1
     jmp bb2
   bb2:
-    ret v2
+    ret v3
   bb3:
-    v2 = 2
+    v3 = 2
     jmp bb2
   bb4:
-    v2 = 0
+    v3 = 0
     jmp bb2
   bb5:
-    switch v0 [151146943 => bb1, 2066295049 => bb3] else bb4
+    switch v1 [151146943 => bb1, 2066295049 => bb3] else bb4
+
+fn mem_ptr__mem__RawMem_Foo__19292a5189c12f79(v0: Self, v1: u256) -> MemPtr<T>:
+  bb0:
+    v2: MemPtr<Foo> = v1
+    ret v2
 
 fn bump__eff_mem(v0: u256) -> ():
   bb0:
@@ -95,17 +101,27 @@ fn bump__eff_mem(v0: u256) -> ():
     store mem[v0].1 = (v2 + 2)
     ret
 
+fn stor_ptr__sto__RawStorage_Foo__b1b82e9d4c608c02(v0: Self, v1: u256) -> StorPtr<T>:
+  bb0:
+    v2: StorPtr<Foo> = v1
+    ret v2
+
+fn stor_ptr__sto__RawStorage_StorageMap_u256__u256___6212d4158f52b2b2(v0: Self, v1: u256) -> StorPtr<T>:
+  bb0:
+    v2: StorPtr<StorageMap<u256, u256>> = v1
+    ret v2
+
 fn storagemap_k__v__get_stor__u256_u256__cc308d1bea3fb6e4(v0: StorageMap<K, V>, v1: K) -> V:
   bb0:
     v2: u256 = storagemap_k__v__storage_slot_stor__u256_u256__cc308d1bea3fb6e4(v0, v1)
     v3: u256 = sload(v2)
-    v4: u256 = u256_storablescalar_to_word(v3)
+    v4: u256 = u256_wordrepr_from_word(v3)
     ret v4
 
 fn storagemap_k__v__set_stor__u256_u256__cc308d1bea3fb6e4(v0: StorageMap<K, V>, v1: K, v2: V) -> ():
   bb0:
     v3: u256 = storagemap_k__v__storage_slot_stor__u256_u256__cc308d1bea3fb6e4(v0, v1)
-    v4: u256 = u256_storablescalar_to_word(v2)
+    v4: u256 = u256_wordrepr_to_word(v2)
     eval sstore(v3, v4)
     ret
 
@@ -117,7 +133,11 @@ fn storagemap_k__v__storage_slot_stor__u256_u256__cc308d1bea3fb6e4(v0: StorageMa
     v4: u256 = keccak256(0, (v2 + 32))
     ret v4
 
-fn u256_storablescalar_to_word(v0: u256) -> u256:
+fn u256_wordrepr_from_word(v0: u256) -> u256:
+  bb0:
+    ret v0
+
+fn u256_wordrepr_to_word(v0: u256) -> u256:
   bb0:
     ret v0
 

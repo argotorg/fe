@@ -1,0 +1,50 @@
+trait Ctx {
+    fn caller(self) -> u256
+}
+trait Mem {
+    fn load(self, offset: u256) -> u256
+    fn store(mut self, offset: u256, value: u256)
+}
+trait Storage {
+    fn load(self, slot: u256) -> u256
+    fn store(mut self, slot: u256, value: u256)
+}
+trait Super: Ctx + Mem + Storage {}
+
+struct Root {}
+impl Ctx for Root {
+    fn caller(self) -> u256 {
+        0
+    }
+}
+impl Mem for Root {
+    fn load(self, offset: u256) -> u256 {
+        0
+    }
+    fn store(mut self, offset: u256, value: u256) {
+    }
+}
+impl Storage for Root {
+    fn load(self, slot: u256) -> u256 {
+        0
+    }
+    fn store(mut self, slot: u256, value: u256) {
+    }
+}
+impl Super for Root {}
+
+fn example() {
+    let mut r = Root {}
+    with (r) {
+        do_stuff(10)
+    }
+    ()
+}
+
+fn do_stuff(x: u256) -> u256
+  uses (ctx: Ctx, mut mem: Mem, mut sto: Storage)
+{
+    mem.store(offset: x, value: ctx.caller())
+    sto.store(slot: x, value: 100)
+    sto.load(slot: x)
+}

@@ -1,4 +1,4 @@
-use core::StorageMap
+use std::evm::StorageMap
 
 fn get_balance(addr: u256) -> u256
     uses (balances: StorageMap<u256, u256>)

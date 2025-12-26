@@ -16,24 +16,16 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
     /// Try to lower a `size_of<T>()` or `encoded_size<T>()` call to a constant.
     fn try_lower_size_intrinsic_call(&mut self, expr: ExprId) -> Option<ValueId> {
         let callable = self.typed_body.callable_expr(expr)?;
-        if callable.callable_def.ingot(self.db).kind(self.db) != IngotKind::Core {
-            return None;
-        }
-
+        let ingot_kind = callable.callable_def.ingot(self.db).kind(self.db);
         let name = callable.callable_def.name(self.db)?;
-        let is_size_of = name.data(self.db) == "size_of";
-        let is_encoded_size = name.data(self.db) == "encoded_size";
-        if !is_size_of && !is_encoded_size {
-            return None;
-        }
 
         // Get the type argument from the callable's generic args
         let ty = *callable.generic_args().first()?;
 
-        let size_bytes = if is_size_of {
-            layout::ty_size_bytes(self.db, ty)?
-        } else {
-            self.abi_static_size_bytes(ty)?
+        let size_bytes = match (ingot_kind, name.data(self.db).as_str()) {
+            (IngotKind::Core, "size_of") => layout::ty_size_bytes(self.db, ty)?,
+            (IngotKind::Std, "encoded_size") => self.abi_static_size_bytes(ty)?,
+            _ => return None,
         };
 
         let value_id = self.ensure_value(expr);
@@ -273,7 +265,36 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
             return value_id;
         };
 
-        if callable_def.ingot(self.db).kind(self.db) == IngotKind::Core
+        let result_space = self
+            .effect_provider_kind_for_provider_ty(ty)
+            .map(|kind| match kind {
+                EffectProviderKind::Memory => AddressSpaceKind::Memory,
+                EffectProviderKind::Storage => AddressSpaceKind::Storage,
+                EffectProviderKind::Calldata => AddressSpaceKind::Memory,
+            })
+            .unwrap_or_else(|| self.expr_address_space(expr));
+
+        if callable_def.ingot(self.db).kind(self.db) == IngotKind::Std
+            && callable_def
+                .name(self.db)
+                .is_some_and(|name| name.data(self.db) == "at_offset")
+            && self.effect_provider_kind_for_provider_ty(ty).is_some()
+            && args.len() == 1
+            && returns_value
+        {
+            let dest = dest_override.unwrap_or_else(|| self.alloc_temp_local(ty, false, "ptr"));
+            self.builder.body.locals[dest.index()].address_space = result_space;
+            self.push_inst_here(MirInst::Assign {
+                stmt,
+                dest: Some(dest),
+                rvalue: crate::ir::Rvalue::Value(args[0]),
+            });
+            self.builder.body.values[value_id.index()].origin = ValueOrigin::Local(dest);
+            self.value_address_space.insert(value_id, result_space);
+            return value_id;
+        }
+
+        if callable_def.ingot(self.db).kind(self.db) == IngotKind::Std
             && callable_def
                 .name(self.db)
                 .is_some_and(|name| name.data(self.db) == "contract_field_slot")
@@ -298,23 +319,24 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         }
 
         if let Some(op) = self.intrinsic_kind(callable_def) {
+            let mut intrinsic_args = args.clone();
+            if self.is_method_call(expr) && !intrinsic_args.is_empty() {
+                intrinsic_args.remove(0);
+            }
             if op.returns_value() {
                 let dest =
                     dest_override.unwrap_or_else(|| self.alloc_temp_local(ty, false, "intr"));
-                self.builder.body.locals[dest.index()].address_space =
-                    self.expr_address_space(expr);
+                self.builder.body.locals[dest.index()].address_space = result_space;
                 self.push_inst_here(MirInst::Assign {
                     stmt,
                     dest: Some(dest),
-                    rvalue: crate::ir::Rvalue::Intrinsic { op, args },
+                    rvalue: crate::ir::Rvalue::Intrinsic {
+                        op,
+                        args: intrinsic_args,
+                    },
                 });
                 self.builder.body.values[value_id.index()].origin = ValueOrigin::Local(dest);
-                if matches!(op, IntrinsicOp::StorAt) {
-                    self.value_address_space
-                        .insert(value_id, AddressSpaceKind::Storage);
-                    self.builder.body.locals[dest.index()].address_space =
-                        AddressSpaceKind::Storage;
-                }
+                self.value_address_space.insert(value_id, result_space);
                 return value_id;
             }
 
@@ -398,7 +420,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
             None
         };
         if let Some(dest) = dest {
-            self.builder.body.locals[dest.index()].address_space = self.expr_address_space(expr);
+            self.builder.body.locals[dest.index()].address_space = result_space;
         }
         let call_origin = CallOrigin {
             expr,
@@ -423,6 +445,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         });
         self.builder.body.values[value_id.index()].origin =
             dest.map(ValueOrigin::Local).unwrap_or(ValueOrigin::Unit);
+        self.value_address_space.insert(value_id, result_space);
         value_id
     }
 

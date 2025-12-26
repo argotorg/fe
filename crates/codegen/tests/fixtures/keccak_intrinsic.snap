@@ -3,7 +3,7 @@ source: crates/codegen/tests/yul.rs
 expression: output
 input_file: tests/fixtures/keccak_intrinsic.fe
 ---
-function hash(ptr, len) -> ret {
+function hash(ptr, len, ops) -> ret {
   let v0 := keccak256(ptr, len)
   ret := v0
   leave

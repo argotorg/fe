@@ -6,17 +6,18 @@ input_file: tests/fixtures/nested_struct.fe
 object "NestedStruct" {
   code {
     function init() {
-      let v0 := datasize("NestedStruct_deployed")
-      let v1 := dataoffset("NestedStruct_deployed")
-      codecopy(0, v1, v0)
-      return(0, v0)
+      let v0 := 0
+      let v1 := datasize("NestedStruct_deployed")
+      let v2 := dataoffset("NestedStruct_deployed")
+      codecopy(0, v2, v1)
+      return(0, v1)
     }
     init()
   }
 
   object "NestedStruct_deployed" {
     code {
-      function abi_encode(value) {
+      function abi_encode(value, ops) {
         mstore(0, value)
         return(0, 32)
       }
@@ -47,27 +48,32 @@ object "NestedStruct" {
       }
       function runtime() {
         let v0 := 0
-        let v1 := v0
-        let v2 := calldataload(0)
-        let v3 := shr(224, v2)
-        switch v3
+        let v1 := stor_ptr__Evm_Outer__31089a952466fa6f(v0, 0)
+        let v2 := v1
+        let v3 := calldataload(0)
+        let v4 := shr(224, v3)
+        switch v4
           case 3091856072 {
-            let v4 := calldataload(4)
-            write_inner(v4, v1)
-            abi_encode(v4)
+            let v5 := calldataload(4)
+            write_inner(v5, v2)
+            abi_encode(v5, 0)
           }
           case 3513050253 {
-            let v5 := read_inner(v1)
-            abi_encode(v5)
+            let v6 := read_inner(v2)
+            abi_encode(v6, 0)
           }
           case 2154770637 {
-            let v6 := calldataload(4)
-            let v7 := mem_read(v6)
-            abi_encode(v7)
+            let v7 := calldataload(4)
+            let v8 := mem_read(v7)
+            abi_encode(v8, 0)
           }
           default {
             return(0, 0)
           }
+      }
+      function stor_ptr__Evm_Outer__31089a952466fa6f(self, slot) -> ret {
+        let v0 := slot
+        ret := v0
         leave
       }
       function write_inner(value, outer) {

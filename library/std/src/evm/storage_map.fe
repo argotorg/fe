@@ -1,5 +1,7 @@
-use ingot::intrinsic::{addr_of, keccak, mstore, sload, sstore}
-use ingot::ptr::{LoadableScalar, StorableScalar}
+use core::intrinsic::addr_of
+use super::effects::Address
+use ingot::evm::ops::{keccak256, mstore, sload, sstore}
+use ingot::evm::word::WordRepr
 
 /// Keys that can be written into the mapping preimage for keccak hashing.
 pub trait StorageKey {
@@ -14,13 +16,19 @@ impl StorageKey for u256 {
     }
 }
 
+impl StorageKey for Address {
+    fn write_key(ptr: u256, self) -> u256 {
+        u256::write_key(ptr, self.inner)
+    }
+}
+
 /// A storage-backed mapping from keys `K` to values `V`.
 pub struct StorageMap<K, V> {
     /// Private marker field to give the type a non-zero size for layout purposes.
     _m: u256,
 }
 
-impl<K: StorageKey, V: LoadableScalar + StorableScalar> StorageMap<K, V> {
+impl<K: StorageKey, V: WordRepr> StorageMap<K, V> {
     pub fn get(self, key: K) -> V {
         let storage_slot = self.storage_slot(key)
         V::from_word(word: sload(storage_slot))
@@ -35,7 +43,7 @@ impl<K: StorageKey, V: LoadableScalar + StorableScalar> StorageMap<K, V> {
         // keccak256(key ++ slot) - standard Solidity mapping layout
         let key_len = K::write_key(ptr:0, key)
         mstore(key_len, addr_of(self))
-        keccak(0, key_len + 32)
+        keccak256(0, key_len + 32)
     }
 }
 

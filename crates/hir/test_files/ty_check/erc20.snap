@@ -2481,145 +2481,145 @@ note:
     │                          ^ u256
 
 note: 
-    ┌─ erc20.fe:272:53
+    ┌─ erc20.fe:277:53
     │  
-272 │       fn decode<D: AbiDecoder<A>>(mut _ d: D) -> Self {
+277 │       fn decode<D: AbiDecoder<A>>(mut _ d: D) -> Self {
     │ ╭─────────────────────────────────────────────────────^
-273 │ │         Address { inner: d.read_word() }
-274 │ │     }
+278 │ │         Address { inner: d.read_word() }
+279 │ │     }
     │ ╰─────^ Address
 
 note: 
-    ┌─ erc20.fe:273:9
+    ┌─ erc20.fe:278:9
     │
-273 │         Address { inner: d.read_word() }
+278 │         Address { inner: d.read_word() }
     │         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ Address
 
 note: 
-    ┌─ erc20.fe:273:26
+    ┌─ erc20.fe:278:26
     │
-273 │         Address { inner: d.read_word() }
+278 │         Address { inner: d.read_word() }
     │                          ^ D
 
 note: 
-    ┌─ erc20.fe:273:26
+    ┌─ erc20.fe:278:26
     │
-273 │         Address { inner: d.read_word() }
+278 │         Address { inner: d.read_word() }
     │                          ^^^^^^^^^^^^^ u256
 
 note: 
-    ┌─ erc20.fe:277:43
+    ┌─ erc20.fe:282:43
     │  
-277 │       fn eq(self, _ other: Address) -> bool {
+282 │       fn eq(self, _ other: Address) -> bool {
     │ ╭───────────────────────────────────────────^
-278 │ │         self.inner == other.inner
-279 │ │     }
+283 │ │         self.inner == other.inner
+284 │ │     }
     │ ╰─────^ bool
 
 note: 
-    ┌─ erc20.fe:278:9
+    ┌─ erc20.fe:283:9
     │
-278 │         self.inner == other.inner
+283 │         self.inner == other.inner
     │         ^^^^ Address
 
 note: 
-    ┌─ erc20.fe:278:9
+    ┌─ erc20.fe:283:9
     │
-278 │         self.inner == other.inner
+283 │         self.inner == other.inner
     │         ^^^^^^^^^^ u256
 
 note: 
-    ┌─ erc20.fe:278:9
+    ┌─ erc20.fe:283:9
     │
-278 │         self.inner == other.inner
+283 │         self.inner == other.inner
     │         ^^^^^^^^^^^^^^^^^^^^^^^^^ bool
 
 note: 
-    ┌─ erc20.fe:278:23
+    ┌─ erc20.fe:283:23
     │
-278 │         self.inner == other.inner
+283 │         self.inner == other.inner
     │                       ^^^^^ Address
 
 note: 
-    ┌─ erc20.fe:278:23
+    ┌─ erc20.fe:283:23
     │
-278 │         self.inner == other.inner
+283 │         self.inner == other.inner
     │                       ^^^^^^^^^^^ u256
 
 note: 
-    ┌─ erc20.fe:284:26
+    ┌─ erc20.fe:289:26
     │  
-284 │       pub fn new() -> Self {
+289 │       pub fn new() -> Self {
     │ ╭──────────────────────────^
-285 │ │         Map {}
-286 │ │     }
+290 │ │         Map {}
+291 │ │     }
     │ ╰─────^ Map<K, V>
 
 note: 
-    ┌─ erc20.fe:285:9
+    ┌─ erc20.fe:290:9
     │
-285 │         Map {}
+290 │         Map {}
     │         ^^^^^^ Map<K, V>
 
 note: 
-    ┌─ erc20.fe:290:35
+    ┌─ erc20.fe:295:35
     │  
-290 │       fn index(self, _ key: K) -> V {
+295 │       fn index(self, _ key: K) -> V {
     │ ╭───────────────────────────────────^
-291 │ │         todo()
-292 │ │     }
+296 │ │         todo()
+297 │ │     }
     │ ╰─────^ V
 
 note: 
-    ┌─ erc20.fe:291:9
+    ┌─ erc20.fe:296:9
     │
-291 │         todo()
+296 │         todo()
     │         ^^^^ fn todo
 
 note: 
-    ┌─ erc20.fe:291:9
+    ┌─ erc20.fe:296:9
     │
-291 │         todo()
+296 │         todo()
     │         ^^^^^^ V
 
 note: 
-    ┌─ erc20.fe:297:36
+    ┌─ erc20.fe:302:36
     │  
-297 │       pub fn caller(self) -> Address {
+302 │       pub fn caller(self) -> Address {
     │ ╭────────────────────────────────────^
-298 │ │         todo()
-299 │ │     }
+303 │ │         todo()
+304 │ │     }
     │ ╰─────^ Address
 
 note: 
-    ┌─ erc20.fe:298:9
+    ┌─ erc20.fe:303:9
     │
-298 │         todo()
+303 │         todo()
     │         ^^^^ fn todo
 
 note: 
-    ┌─ erc20.fe:298:9
+    ┌─ erc20.fe:303:9
     │
-298 │         todo()
+303 │         todo()
     │         ^^^^^^ Address
 
 note: 
-    ┌─ erc20.fe:304:38
+    ┌─ erc20.fe:309:38
     │  
-304 │       pub fn emit<T>(self, _ event: T) {
+309 │       pub fn emit<T>(self, _ event: T) {
     │ ╭──────────────────────────────────────^
-305 │ │         todo()
-306 │ │     }
+310 │ │         todo()
+311 │ │     }
     │ ╰─────^ ()
 
 note: 
-    ┌─ erc20.fe:305:9
+    ┌─ erc20.fe:310:9
     │
-305 │         todo()
+310 │         todo()
     │         ^^^^ fn todo
 
 note: 
-    ┌─ erc20.fe:305:9
+    ┌─ erc20.fe:310:9
     │
-305 │         todo()
+310 │         todo()
     │         ^^^^^^ ()

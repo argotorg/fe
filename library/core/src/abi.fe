@@ -142,11 +142,18 @@ pub trait AbiEncoder<A: Abi> {
     fn finish(self) -> (u256, u256)
 }
 
-pub trait Decode<A: Abi> {
+/// ABI static encoded size in bytes.
+///
+/// This is the fixed (compile-time) encoded size for a type under Fe's ABI model.
+pub trait AbiSize {
+    const ENCODED_SIZE: u256
+}
+
+pub trait Decode<A: Abi>: AbiSize {
     fn decode<D: AbiDecoder<A>>(mut _: D) -> Self
 }
 
-pub trait Encode<A: Abi> {
+pub trait Encode<A: Abi>: AbiSize {
     fn encode<E: AbiEncoder<A>>(self, mut _: E)
 }
 
@@ -176,6 +183,215 @@ impl<I> BytesView<I>
 
 pub struct StringView<I> {
     pub bytes: BytesView<I>,
+}
+
+impl AbiSize for u256 {
+    const ENCODED_SIZE: u256 = 32
+}
+
+impl<const N: usize> AbiSize for String<N> {
+    const ENCODED_SIZE: u256 = 32
+}
+
+impl AbiSize for bool {
+    const ENCODED_SIZE: u256 = 32
+}
+
+impl AbiSize for u8 {
+    const ENCODED_SIZE: u256 = 32
+}
+
+impl AbiSize for u16 {
+    const ENCODED_SIZE: u256 = 32
+}
+
+impl AbiSize for u32 {
+    const ENCODED_SIZE: u256 = 32
+}
+
+impl AbiSize for u64 {
+    const ENCODED_SIZE: u256 = 32
+}
+
+impl AbiSize for u128 {
+    const ENCODED_SIZE: u256 = 32
+}
+
+impl AbiSize for i8 {
+    const ENCODED_SIZE: u256 = 32
+}
+
+impl AbiSize for i16 {
+    const ENCODED_SIZE: u256 = 32
+}
+
+impl AbiSize for i32 {
+    const ENCODED_SIZE: u256 = 32
+}
+
+impl AbiSize for i64 {
+    const ENCODED_SIZE: u256 = 32
+}
+
+impl AbiSize for i128 {
+    const ENCODED_SIZE: u256 = 32
+}
+
+impl AbiSize for i256 {
+    const ENCODED_SIZE: u256 = 32
+}
+
+impl AbiSize for usize {
+    const ENCODED_SIZE: u256 = 32
+}
+
+impl AbiSize for isize {
+    const ENCODED_SIZE: u256 = 32
+}
+
+impl AbiSize for () {
+    const ENCODED_SIZE: u256 = 0
+}
+
+impl<T0> AbiSize for (T0,)
+    where T0: AbiSize
+{
+    const ENCODED_SIZE: u256 = T0::ENCODED_SIZE
+}
+
+impl<T0, T1> AbiSize for (T0, T1)
+    where T0: AbiSize, T1: AbiSize
+{
+    const ENCODED_SIZE: u256 = T0::ENCODED_SIZE + T1::ENCODED_SIZE
+}
+
+impl<T0, T1, T2> AbiSize for (T0, T1, T2)
+    where T0: AbiSize, T1: AbiSize, T2: AbiSize
+{
+    const ENCODED_SIZE: u256 = T0::ENCODED_SIZE + T1::ENCODED_SIZE + T2::ENCODED_SIZE
+}
+
+impl<T0, T1, T2, T3> AbiSize for (T0, T1, T2, T3)
+    where T0: AbiSize, T1: AbiSize, T2: AbiSize, T3: AbiSize
+{
+    const ENCODED_SIZE: u256 =
+        T0::ENCODED_SIZE + T1::ENCODED_SIZE + T2::ENCODED_SIZE + T3::ENCODED_SIZE
+}
+
+impl<T0, T1, T2, T3, T4> AbiSize for (T0, T1, T2, T3, T4)
+    where T0: AbiSize,
+          T1: AbiSize,
+          T2: AbiSize,
+          T3: AbiSize,
+          T4: AbiSize
+{
+    const ENCODED_SIZE: u256 =
+        T0::ENCODED_SIZE + T1::ENCODED_SIZE + T2::ENCODED_SIZE + T3::ENCODED_SIZE + T4::ENCODED_SIZE
+}
+
+impl<T0, T1, T2, T3, T4, T5> AbiSize for (T0, T1, T2, T3, T4, T5)
+    where T0: AbiSize,
+          T1: AbiSize,
+          T2: AbiSize,
+          T3: AbiSize,
+          T4: AbiSize,
+          T5: AbiSize
+{
+    const ENCODED_SIZE: u256 =
+        T0::ENCODED_SIZE + T1::ENCODED_SIZE + T2::ENCODED_SIZE + T3::ENCODED_SIZE + T4::ENCODED_SIZE + T5::ENCODED_SIZE
+}
+
+impl<T0, T1, T2, T3, T4, T5, T6> AbiSize for (T0, T1, T2, T3, T4, T5, T6)
+    where T0: AbiSize,
+          T1: AbiSize,
+          T2: AbiSize,
+          T3: AbiSize,
+          T4: AbiSize,
+          T5: AbiSize,
+          T6: AbiSize
+{
+    const ENCODED_SIZE: u256 =
+        T0::ENCODED_SIZE + T1::ENCODED_SIZE + T2::ENCODED_SIZE + T3::ENCODED_SIZE + T4::ENCODED_SIZE + T5::ENCODED_SIZE + T6::ENCODED_SIZE
+}
+
+impl<T0, T1, T2, T3, T4, T5, T6, T7> AbiSize for (T0, T1, T2, T3, T4, T5, T6, T7)
+    where T0: AbiSize,
+          T1: AbiSize,
+          T2: AbiSize,
+          T3: AbiSize,
+          T4: AbiSize,
+          T5: AbiSize,
+          T6: AbiSize,
+          T7: AbiSize
+{
+    const ENCODED_SIZE: u256 =
+        T0::ENCODED_SIZE + T1::ENCODED_SIZE + T2::ENCODED_SIZE + T3::ENCODED_SIZE + T4::ENCODED_SIZE + T5::ENCODED_SIZE + T6::ENCODED_SIZE + T7::ENCODED_SIZE
+}
+
+impl<T0, T1, T2, T3, T4, T5, T6, T7, T8> AbiSize for (T0, T1, T2, T3, T4, T5, T6, T7, T8)
+    where T0: AbiSize,
+          T1: AbiSize,
+          T2: AbiSize,
+          T3: AbiSize,
+          T4: AbiSize,
+          T5: AbiSize,
+          T6: AbiSize,
+          T7: AbiSize,
+          T8: AbiSize
+{
+    const ENCODED_SIZE: u256 =
+        T0::ENCODED_SIZE + T1::ENCODED_SIZE + T2::ENCODED_SIZE + T3::ENCODED_SIZE + T4::ENCODED_SIZE + T5::ENCODED_SIZE + T6::ENCODED_SIZE + T7::ENCODED_SIZE + T8::ENCODED_SIZE
+}
+
+impl<T0, T1, T2, T3, T4, T5, T6, T7, T8, T9> AbiSize for (T0, T1, T2, T3, T4, T5, T6, T7, T8, T9)
+    where T0: AbiSize,
+          T1: AbiSize,
+          T2: AbiSize,
+          T3: AbiSize,
+          T4: AbiSize,
+          T5: AbiSize,
+          T6: AbiSize,
+          T7: AbiSize,
+          T8: AbiSize,
+          T9: AbiSize
+{
+    const ENCODED_SIZE: u256 =
+        T0::ENCODED_SIZE + T1::ENCODED_SIZE + T2::ENCODED_SIZE + T3::ENCODED_SIZE + T4::ENCODED_SIZE + T5::ENCODED_SIZE + T6::ENCODED_SIZE + T7::ENCODED_SIZE + T8::ENCODED_SIZE + T9::ENCODED_SIZE
+}
+
+impl<T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10> AbiSize for (T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10)
+    where T0: AbiSize,
+          T1: AbiSize,
+          T2: AbiSize,
+          T3: AbiSize,
+          T4: AbiSize,
+          T5: AbiSize,
+          T6: AbiSize,
+          T7: AbiSize,
+          T8: AbiSize,
+          T9: AbiSize,
+          T10: AbiSize
+{
+    const ENCODED_SIZE: u256 =
+        T0::ENCODED_SIZE + T1::ENCODED_SIZE + T2::ENCODED_SIZE + T3::ENCODED_SIZE + T4::ENCODED_SIZE + T5::ENCODED_SIZE + T6::ENCODED_SIZE + T7::ENCODED_SIZE + T8::ENCODED_SIZE + T9::ENCODED_SIZE + T10::ENCODED_SIZE
+}
+
+impl<T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11> AbiSize for (T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11)
+    where T0: AbiSize,
+          T1: AbiSize,
+          T2: AbiSize,
+          T3: AbiSize,
+          T4: AbiSize,
+          T5: AbiSize,
+          T6: AbiSize,
+          T7: AbiSize,
+          T8: AbiSize,
+          T9: AbiSize,
+          T10: AbiSize,
+          T11: AbiSize
+{
+    const ENCODED_SIZE: u256 =
+        T0::ENCODED_SIZE + T1::ENCODED_SIZE + T2::ENCODED_SIZE + T3::ENCODED_SIZE + T4::ENCODED_SIZE + T5::ENCODED_SIZE + T6::ENCODED_SIZE + T7::ENCODED_SIZE + T8::ENCODED_SIZE + T9::ENCODED_SIZE + T10::ENCODED_SIZE + T11::ENCODED_SIZE
 }
 
 impl<A: Abi> Decode<A> for u256 {

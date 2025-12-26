@@ -82,17 +82,17 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
 
         let record_ty = self.typed_body.expr_ty(self.db, expr);
         let record_base = record_ty.base_ty(self.db);
-        let effect_ptr_bases = [
-            self.core
-                .helper_ty(CoreHelperTy::EffectMemPtr)
-                .base_ty(self.db),
-            self.core
-                .helper_ty(CoreHelperTy::EffectStorPtr)
-                .base_ty(self.db),
-            self.core
-                .helper_ty(CoreHelperTy::EffectCalldataPtr)
-                .base_ty(self.db),
-        ];
+        let mut effect_ptr_bases = Vec::new();
+        if let Some(ty) = self.core.helper_ty(CoreHelperTy::EffectMemPtr) {
+            effect_ptr_bases.push(ty.base_ty(self.db));
+        }
+        if let Some(ty) = self.core.helper_ty(CoreHelperTy::EffectStorPtr) {
+            effect_ptr_bases.push(ty.base_ty(self.db));
+        }
+        if let Some(ty) = self.core.helper_ty(CoreHelperTy::EffectCalldataPtr) {
+            effect_ptr_bases.push(ty.base_ty(self.db));
+        }
+
         if effect_ptr_bases.contains(&record_base) && lowered_fields.len() == 1 {
             let value = lowered_fields[0].1;
             self.builder.body.expr_values.insert(expr, value);

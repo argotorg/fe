@@ -1,6 +1,6 @@
 use core::abi::ByteInput
 use core::num::__u256_as_u8
-use core::{calldataload, calldatasize}
+use ingot::evm::ops::{calldataload, calldatasize}
 
 pub struct CallData {}
 

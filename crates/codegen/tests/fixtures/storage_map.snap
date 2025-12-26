@@ -15,13 +15,13 @@ function set_balance(addr, value, balances) {
 function storagemap_k__v__get_stor__u256_u256__cc308d1bea3fb6e4(self, key) -> ret {
   let v0 := storagemap_k__v__storage_slot_stor__u256_u256__cc308d1bea3fb6e4(self, key)
   let v1 := sload(v0)
-  let v2 := u256_loadablescalar_from_word(v1)
+  let v2 := u256_wordrepr_from_word(v1)
   ret := v2
   leave
 }
 function storagemap_k__v__set_stor__u256_u256__cc308d1bea3fb6e4(self, key, value) {
   let v0 := storagemap_k__v__storage_slot_stor__u256_u256__cc308d1bea3fb6e4(self, key)
-  let v1 := u256_loadablescalar_from_word(value)
+  let v1 := u256_wordrepr_to_word(value)
   sstore(v0, v1)
   leave
 }
@@ -33,8 +33,12 @@ function storagemap_k__v__storage_slot_stor__u256_u256__cc308d1bea3fb6e4(self, k
   ret := v2
   leave
 }
-function u256_loadablescalar_from_word(word) -> ret {
+function u256_wordrepr_from_word(word) -> ret {
   ret := word
+  leave
+}
+function u256_wordrepr_to_word(self) -> ret {
+  ret := self
   leave
 }
 function u256_storagekey_write_key(ptr, self) -> ret {

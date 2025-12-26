@@ -1,10 +1,10 @@
- use core::return_data
+use std::evm::RawOps
 
 enum E { A, B }
 
-fn f(e: E) {
+fn f(e: E) uses (ops: RawOps) {
     match e {
-        E::A => { return_data(0, 0) }
-        E::B => { return_data(0, 0) }
+        E::A => { ops.return_data(0, 0) }
+        E::B => { ops.return_data(0, 0) }
     }
 }

@@ -1,4 +1,4 @@
-use core::storage_map::{StorageMap, StorageKey}
+use std::evm::{Address, Ctx, StorageMap, assert}
 
 // roles
 const MINTER: u256 = 1
@@ -249,45 +249,6 @@ struct ApprovalEvent {
     #[indexed]
     spender: Address,
     value: u256,
-}
-
-fn assert(_ b: bool) {
-    if !b {
-        core::intrinsic::revert(0, 0)
-    }
-}
-
-use core::abi::{Abi, AbiDecoder, Decode}
-
-pub struct Address { inner: u256 }
-impl Address {
-    pub fn zero() -> Self {
-        Address { inner: 0 }
-    }
-}
-impl<A: Abi> Decode<A> for Address {
-    fn decode<D: AbiDecoder<A>>(mut _ d: D) -> Self {
-        Address { inner: d.read_word() }
-    }
-}
-impl core::ops::Eq for Address {
-    fn eq(self, _ other: Address) -> bool {
-        self.inner == other.inner
-    }
-}
-
-impl StorageKey for Address {
-    fn write_key(ptr: u256, self) -> u256 {
-        core::intrinsic::mstore(ptr, self.inner)
-        32
-    }
-}
-
-pub struct Ctx {}
-impl Ctx {
-    pub fn caller(self) -> Address {
-        Address { inner: core::intrinsic::caller() }
-    }
 }
 
 pub struct Log {}

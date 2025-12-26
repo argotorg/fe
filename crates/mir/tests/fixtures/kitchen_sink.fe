@@ -1,5 +1,4 @@
-use core::{StorageMap, calldataload}
-use core::effect_ref::{MemPtr, StorPtr}
+use std::evm::{MemPtr, RawMem, RawOps, RawStorage, StorageMap, StorPtr}
 
 struct Foo {
     a: u256,
@@ -31,19 +30,19 @@ fn maybe_inc(opt: Opt) -> u64 {
     x + i
 }
 
-fn test_effects_and_aggregates() {
+fn test_effects_and_aggregates() uses (mut sto: RawStorage, mut mem: RawMem) {
     // Exercise `with` effects across domains and aggregate init
-    let mp = MemPtr<Foo> { addr: 0x100 }
+    let mp: MemPtr<Foo> = mem.mem_ptr(0x100)
     with (mp) { bump() }
 
-    let sp = StorPtr<Foo> { slot: 0 }
+    let sp: StorPtr<Foo> = sto.stor_ptr(0)
     with (sp) { bump() }
 
     let mut foo = Foo { a: 10, b: 20 }
     with (foo) { bump() }
 
     // Exercise StorageMap effect lowering without contract runtime
-    let mut balances = core::effect_ref::StorPtr<StorageMap<u256, u256>>::at_offset(0)
+    let mut balances: StorPtr<StorageMap<u256, u256>> = sto.stor_ptr(0)
     with (balances) {
         set_balance(key: 1, value: 7)
         let _b = get_balance(key: 1)
@@ -62,9 +61,9 @@ fn set_balance(key: u256, value: u256)
     balances.set(key: key, value: value)
 }
 
-fn selector_match() -> u256 {
+fn selector_match() -> u256 uses (ops: RawOps) {
     // Exercise `match` lowering over a computed discriminant.
-    let selector = calldataload(0) >> 224
+    let selector = ops.calldataload(0) >> 224
     match selector {
         0x090251bf => 1
         0x7b292909 => 2

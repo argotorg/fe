@@ -1,4 +1,4 @@
-use core::effect_ref::{MemPtr, StorPtr}
+use std::evm::{MemPtr, RawMem, RawStorage, StorPtr}
 
 struct Foo {
     a: u256,
@@ -10,13 +10,13 @@ fn bump() uses (mut foo: Foo) {
     foo.b = foo.b + 2
 }
 
-fn test_effect_ptr_domains() {
-    let mp = MemPtr<Foo> { addr: 0x100 }
+fn test_effect_ptr_domains() uses (mut st: RawStorage, mut mem: RawMem) {
+    let mp: MemPtr<Foo> = mem.mem_ptr(0x100)
     with (mp) {
         bump()
     }
 
-    let sp = StorPtr<Foo> { slot: 0 }
+    let sp: StorPtr<Foo> = st.stor_ptr(0)
     with (sp) {
         bump()
     }

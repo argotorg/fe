@@ -1,9 +1,13 @@
 use core::abi::{Abi, AbiDecoder, AbiEncoder, ByteInput, Cursor}
-use core::mem
 use core::num::{__u256_as_u32, __u256_as_u8, __u32_as_u256, __u8_as_u256}
-use core::{mstore, mstore8}
+use ingot::evm::mem
+use ingot::evm::ops::{mstore, mstore8}
 
 pub struct Sol {}
+
+extern {
+    pub fn encoded_size<T>() -> u256
+}
 
 impl Abi for Sol {
     type Selector = u32

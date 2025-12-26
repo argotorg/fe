@@ -1,4 +1,4 @@
-use ingot::{mload, mstore}
+use ingot::evm::ops::{mload, mstore}
 
 const FREE_MEMORY_PTR: u256 = 0x40
 const INITIAL_FREE_MEMORY: u256 = 0x80

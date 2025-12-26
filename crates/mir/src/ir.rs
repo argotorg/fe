@@ -525,8 +525,6 @@ pub enum IntrinsicOp {
     Revert,
     /// `caller()`
     Caller,
-    /// `stor_at(slot)` - interpret a slot as a storage-backed `T` pointer value.
-    StorAt,
 }
 
 impl IntrinsicOp {
@@ -545,7 +543,6 @@ impl IntrinsicOp {
                 | IntrinsicOp::CodeRegionLen
                 | IntrinsicOp::Keccak
                 | IntrinsicOp::Caller
-                | IntrinsicOp::StorAt
         )
     }
 }
