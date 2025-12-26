@@ -1,5 +1,6 @@
 #![allow(clippy::print_stderr, clippy::print_stdout)]
 mod check;
+mod doc;
 #[cfg(not(target_arch = "wasm32"))]
 mod tree;
 
@@ -32,6 +33,27 @@ pub enum Command {
         dump_mir: bool,
         #[arg(long)]
         emit_yul_min: bool,
+    },
+    /// Generate documentation for a Fe project
+    Doc {
+        /// Path to a .fe file or ingot directory
+        #[arg(default_value_t = default_project_path())]
+        path: Utf8PathBuf,
+        /// Output path for generated docs
+        #[arg(short, long)]
+        output: Option<Utf8PathBuf>,
+        /// Output raw JSON instead of summary
+        #[arg(long)]
+        json: bool,
+        /// Start HTTP server to browse docs
+        #[arg(long)]
+        serve: bool,
+        /// Port for HTTP server (default: 8080)
+        #[arg(long, default_value = "8080")]
+        port: u16,
+        /// Use client-side rendering with WASM (experimental)
+        #[arg(long)]
+        csr: bool,
     },
     #[cfg(not(target_arch = "wasm32"))]
     Tree {
@@ -67,6 +89,16 @@ pub fn run(opts: &Options) {
         } => {
             //: TODO readd custom core
             check(path, *dump_mir, *emit_yul_min);
+        }
+        Command::Doc {
+            path,
+            output,
+            json,
+            serve,
+            port,
+            csr,
+        } => {
+            doc::generate_docs(path, output.as_ref(), *json, *serve, *port, *csr);
         }
         #[cfg(not(target_arch = "wasm32"))]
         Command::Tree { path } => {
