@@ -7,7 +7,7 @@ use url::Url;
 
 use crate::{
     InputDb,
-    config::Config,
+    config::{IngotConfig, Manifest},
     dependencies::DependencyLocation,
     file::{File, Workspace},
     stdlib::{BUILTIN_CORE_BASE_URL, BUILTIN_STD_BASE_URL},
@@ -116,13 +116,21 @@ impl<'db> Ingot<'db> {
     }
 
     #[salsa::tracked]
-    fn parse_config(self, db: &'db dyn InputDb) -> Option<Result<Config, String>> {
+    fn parse_config(self, db: &'db dyn InputDb) -> Option<Result<IngotConfig, String>> {
         self.config_file(db)
-            .map(|config_file| Config::parse(config_file.text(db)))
+            .map(|config_file| Manifest::parse(config_file.text(db)))
+            .map(|result| {
+                result.and_then(|manifest| match manifest {
+                    Manifest::Ingot(config) => Ok(config),
+                    Manifest::Workspace(_) => {
+                        Err("Expected an ingot manifest but found a workspace manifest".to_string())
+                    }
+                })
+            })
     }
 
     #[salsa::tracked]
-    pub fn config(self, db: &'db dyn InputDb) -> Option<Config> {
+    pub fn config(self, db: &'db dyn InputDb) -> Option<IngotConfig> {
         self.parse_config(db).and_then(|result| result.ok())
     }
 
@@ -143,15 +151,18 @@ impl<'db> Ingot<'db> {
             Some(config) => config
                 .dependencies(&base_url)
                 .into_iter()
-                .map(|dependency| {
+                .filter_map(|dependency| {
                     let url = match &dependency.location {
                         DependencyLocation::Remote(remote) => db
                             .dependency_graph()
                             .local_for_remote_git(db, remote)
                             .unwrap_or_else(|| remote.source.clone()),
                         DependencyLocation::Local(local) => local.url.clone(),
+                        DependencyLocation::WorkspaceCurrent => {
+                            return None;
+                        }
                     };
-                    (dependency.alias.clone(), url)
+                    Some((dependency.alias.clone(), url))
                 })
                 .collect(),
             None => vec![],

@@ -32,6 +32,7 @@ impl DependencyEntry {
 pub enum DependencyEntryLocation {
     RelativePath(Utf8PathBuf),
     Remote(RemoteFiles),
+    WorkspaceCurrent,
 }
 
 pub fn parse_root_dependencies(
@@ -67,9 +68,11 @@ pub fn parse_dependencies_table(
             }
             Value::Table(table) => {
                 let mut arguments = crate::dependencies::DependencyArguments::default();
+                let mut has_name = false;
                 if let Some(name) = table.get("name").and_then(|value| value.as_str()) {
                     if is_valid_name(name) {
                         arguments.name = Some(SmolStr::new(name));
+                        has_name = true;
                     } else {
                         diagnostics.push(ConfigDiagnostic::InvalidDependencyName(name.into()));
                     }
@@ -95,6 +98,12 @@ pub fn parse_dependencies_table(
                     dependencies.push(DependencyEntry::new(
                         alias.clone(),
                         DependencyEntryLocation::RelativePath(Utf8PathBuf::from(path)),
+                        arguments,
+                    ));
+                } else if has_name {
+                    dependencies.push(DependencyEntry::new(
+                        alias.clone(),
+                        DependencyEntryLocation::WorkspaceCurrent,
                         arguments,
                     ));
                 } else {

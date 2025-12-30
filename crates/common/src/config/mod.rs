@@ -14,63 +14,37 @@ mod ingot;
 mod workspace;
 
 pub use dependency::{DependencyEntry, DependencyEntryLocation, parse_dependencies_table};
-pub use ingot::IngotMetadata;
-pub use workspace::{WorkspaceConfig, WorkspaceMemberSelection, WorkspaceResolution};
+pub use ingot::{IngotConfig, IngotMetadata};
+pub use workspace::{
+    WorkspaceConfig, WorkspaceManifest, WorkspaceMemberSelection, WorkspaceResolution,
+};
 
-#[derive(Debug, Clone)]
-pub struct Config {
-    pub metadata: IngotMetadata,
-    pub dependency_entries: Vec<DependencyEntry>,
-    pub workspace: Option<WorkspaceConfig>,
-    pub diagnostics: Vec<ConfigDiagnostic>,
+#[derive(Debug, Clone, PartialEq)]
+pub enum Manifest {
+    Ingot(IngotConfig),
+    Workspace(Box<WorkspaceManifest>),
 }
 
-impl PartialEq for Config {
-    fn eq(&self, other: &Self) -> bool {
-        self.metadata == other.metadata
-            && self.dependency_entries == other.dependency_entries
-            && self.workspace == other.workspace
-            && self.diagnostics == other.diagnostics
-    }
-}
-
-impl Eq for Config {}
-
-impl Config {
+impl Manifest {
     pub fn parse(content: &str) -> Result<Self, String> {
-        let mut diagnostics = Vec::new();
-
         let parsed: Value = content
             .parse()
             .map_err(|e: toml::de::Error| e.to_string())?;
 
-        let has_workspace_table = parsed.get("workspace").is_some();
         let has_ingot_table = parsed.get("ingot").is_some();
 
-        let metadata = ingot::parse_ingot(&parsed, has_workspace_table, &mut diagnostics);
-        let workspace = workspace::parse_workspace(&parsed, &mut diagnostics);
-        let mut dependency_entries = dependency::parse_root_dependencies(&parsed, &mut diagnostics);
-
-        if has_workspace_table && has_ingot_table {
-            diagnostics.push(ConfigDiagnostic::ConflictingManifestRoles);
+        if has_ingot_table {
+            return Ok(Manifest::Ingot(ingot::IngotConfig::parse_from_value(
+                &parsed,
+            )));
         }
 
-        let mut workspace = workspace;
-        if has_workspace_table && !has_ingot_table {
-            if let Some(workspace) = workspace.as_mut() {
-                workspace.dependencies = dependency_entries.clone();
-                dependency_entries = Vec::new();
-            }
-        }
-
-        Ok(Self {
-            metadata,
-            dependency_entries,
-            workspace,
-            diagnostics,
-        })
+        workspace::parse_workspace_manifest(&parsed)
+            .map(|manifest| Manifest::Workspace(Box::new(manifest)))
     }
+}
 
+impl IngotConfig {
     pub fn dependencies(&self, base_url: &Url) -> Vec<Dependency> {
         self.dependency_entries
             .iter()
@@ -91,6 +65,11 @@ impl Config {
                     arguments: dependency.arguments.clone(),
                     location: DependencyLocation::Remote(remote.clone()),
                 },
+                DependencyEntryLocation::WorkspaceCurrent => Dependency {
+                    alias: dependency.alias.clone(),
+                    arguments: dependency.arguments.clone(),
+                    location: DependencyLocation::WorkspaceCurrent,
+                },
             })
             .collect()
     }
@@ -110,7 +89,7 @@ impl Config {
     }
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ConfigDiagnostic {
     MissingIngotMetadata,
     MissingName,
@@ -125,11 +104,7 @@ pub enum ConfigDiagnostic {
     InvalidWorkspaceMemberName(SmolStr),
     InvalidWorkspaceMemberVersion(SmolStr),
     MissingWorkspaceMemberPath,
-    InvalidWorkspaceName(SmolStr),
-    InvalidWorkspaceVersion(SmolStr),
     ConflictingWorkspaceMembersSpec,
-    ConflictingManifestRoles,
-    WorkspaceDependenciesUnsupported,
     InvalidDependencyAlias(SmolStr),
     InvalidDependencyName(SmolStr),
     InvalidDependencyVersion(SmolStr),
@@ -182,20 +157,9 @@ impl Display for ConfigDiagnostic {
                 write!(f, "Invalid workspace member version \"{value}\"")
             }
             Self::MissingWorkspaceMemberPath => write!(f, "Workspace member is missing a path"),
-            Self::InvalidWorkspaceName(name) => write!(f, "Invalid workspace name \"{name}\""),
-            Self::InvalidWorkspaceVersion(version) => {
-                write!(f, "Invalid workspace version \"{version}\"")
-            }
             Self::ConflictingWorkspaceMembersSpec => {
                 write!(f, "Cannot mix flat and categorized workspace members")
             }
-            Self::ConflictingManifestRoles => {
-                write!(f, "Cannot mix [workspace] and [ingot] sections in the same manifest")
-            }
-            Self::WorkspaceDependenciesUnsupported => write!(
-                f,
-                "workspace.dependencies is not supported; use root [dependencies] for workspaces"
-            ),
             Self::InvalidDependencyAlias(alias) => {
                 write!(f, "Invalid dependency alias \"{alias}\"")
             }
@@ -259,7 +223,7 @@ pub(crate) fn parse_string_array_field(
                     parsed.push(SmolStr::new(value));
                 } else {
                     diagnostics.push(ConfigDiagnostic::UnexpectedTomlData {
-                        field: format!("{parent}.{key}").into(),
+                        field: format_field_path(parent, key).into(),
                         found: entry.type_str().to_lowercase().into(),
                         expected: Some("string".into()),
                     });
@@ -269,12 +233,20 @@ pub(crate) fn parse_string_array_field(
         }
         other => {
             diagnostics.push(ConfigDiagnostic::UnexpectedTomlData {
-                field: format!("{parent}.{key}").into(),
+                field: format_field_path(parent, key).into(),
                 found: other.type_str().to_lowercase().into(),
                 expected: Some("array".into()),
             });
             vec![]
         }
+    }
+}
+
+fn format_field_path(parent: &str, key: &str) -> String {
+    if parent.is_empty() {
+        key.to_string()
+    } else {
+        format!("{parent}.{key}")
     }
 }
 
@@ -292,7 +264,10 @@ version = "1.0.0"
 [dependencies]
 remote = { source = "https://example.com/fe.git", rev = "abcd1234", path = "contracts" }
 "#;
-        let config = Config::parse(toml).expect("config parses");
+        let manifest = Manifest::parse(toml).expect("manifest parses");
+        let Manifest::Ingot(config) = manifest else {
+            panic!("expected ingot manifest");
+        };
         assert!(
             config.diagnostics.is_empty(),
             "unexpected diagnostics: {:?}",
@@ -325,7 +300,10 @@ version = "1.0.0"
 missing_rev = { source = "https://example.com/repo.git" }
 invalid_source = { source = "not a url", rev = "1234" }
 "#;
-        let config = Config::parse(toml).expect("config parses");
+        let manifest = Manifest::parse(toml).expect("manifest parses");
+        let Manifest::Ingot(config) = manifest else {
+            panic!("expected ingot manifest");
+        };
         assert!(
             config
                 .diagnostics
@@ -338,5 +316,33 @@ invalid_source = { source = "not a url", rev = "1234" }
                 .iter()
                 .any(|diag| matches!(diag, ConfigDiagnostic::InvalidDependencySource { .. }))
         );
+    }
+
+    #[test]
+    fn parses_name_only_dependency() {
+        let toml = r#"
+[ingot]
+name = "root"
+version = "1.0.0"
+
+[dependencies]
+util = { name = "utils" }
+"#;
+        let manifest = Manifest::parse(toml).expect("manifest parses");
+        let Manifest::Ingot(config) = manifest else {
+            panic!("expected ingot manifest");
+        };
+        assert_eq!(
+            config
+                .dependencies(&Url::parse("file:///workspace/root/").unwrap())
+                .len(),
+            1
+        );
+        let dependency = &config.dependencies(&Url::parse("file:///workspace/root/").unwrap())[0];
+        assert_eq!(dependency.arguments.name.as_deref(), Some("utils"));
+        assert!(matches!(
+            dependency.location,
+            DependencyLocation::WorkspaceCurrent
+        ));
     }
 }

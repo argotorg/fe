@@ -3,7 +3,7 @@ use toml::Value;
 
 use crate::ingot::Version;
 
-use super::{ConfigDiagnostic, is_valid_name};
+use super::{ConfigDiagnostic, dependency, is_valid_name};
 
 #[derive(Debug, Default, Clone, PartialEq, Eq, Hash)]
 pub struct IngotMetadata {
@@ -11,9 +11,29 @@ pub struct IngotMetadata {
     pub version: Option<Version>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IngotConfig {
+    pub metadata: IngotMetadata,
+    pub dependency_entries: Vec<dependency::DependencyEntry>,
+    pub diagnostics: Vec<ConfigDiagnostic>,
+}
+
+impl IngotConfig {
+    pub fn parse_from_value(parsed: &Value) -> Self {
+        let mut diagnostics = Vec::new();
+        let metadata = parse_ingot(parsed, &mut diagnostics);
+        let dependency_entries = dependency::parse_root_dependencies(parsed, &mut diagnostics);
+
+        Self {
+            metadata,
+            dependency_entries,
+            diagnostics,
+        }
+    }
+}
+
 pub(crate) fn parse_ingot(
     parsed: &Value,
-    has_workspace_table: bool,
     diagnostics: &mut Vec<ConfigDiagnostic>,
 ) -> IngotMetadata {
     let mut metadata = IngotMetadata::default();
@@ -41,7 +61,7 @@ pub(crate) fn parse_ingot(
         } else {
             diagnostics.push(ConfigDiagnostic::MissingVersion);
         }
-    } else if !has_workspace_table {
+    } else {
         diagnostics.push(ConfigDiagnostic::MissingIngotMetadata);
     }
 

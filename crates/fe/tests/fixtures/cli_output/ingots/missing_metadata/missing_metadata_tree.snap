@@ -3,10 +3,9 @@ source: crates/fe/tests/cli_output.rs
 expression: output
 ---
 === STDOUT ===
-null vnull
+No workspace members found
 
 === STDERR ===
-❌ Erroneous fe.toml file in file://<project>/crates/fe/tests/fixtures/cli_output/ingots/missing_metadata/: Missing ingot metadata
-❌ Failed to resolve ingot dependency 'file://<project>/crates/fe/tests/fixtures/cli_output/ingots/missing_metadata/nonexistent/': Directory does not exist: file://<project>/crates/fe/tests/fixtures/cli_output/ingots/missing_metadata/nonexistent/
+❌ Erroneous workspace fe.toml in file://<project>/crates/fe/tests/fixtures/cli_output/ingots/missing_metadata/: Missing workspace members
 
 === EXIT CODE: 0 ===

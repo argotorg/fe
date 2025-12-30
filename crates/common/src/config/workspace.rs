@@ -3,14 +3,10 @@ use toml::Value;
 
 use crate::ingot::Version;
 
-use super::{
-    ConfigDiagnostic, dependency, is_valid_name, parse_string_array_field,
-};
+use super::{ConfigDiagnostic, dependency, is_valid_name, parse_string_array_field};
 
 #[derive(Debug, Default, Clone, PartialEq)]
 pub struct WorkspaceConfig {
-    pub name: Option<SmolStr>,
-    pub version: Option<Version>,
     pub members: Vec<WorkspaceMemberSpec>,
     pub dev_members: Vec<WorkspaceMemberSpec>,
     pub default_members: Option<Vec<SmolStr>>,
@@ -54,6 +50,12 @@ pub enum WorkspaceMemberSelection {
     PrimaryOnly,
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct WorkspaceManifest {
+    pub workspace: WorkspaceConfig,
+    pub diagnostics: Vec<ConfigDiagnostic>,
+}
+
 impl WorkspaceConfig {
     pub fn members_for_selection(
         &self,
@@ -93,31 +95,12 @@ impl WorkspaceConfig {
 pub(crate) fn parse_workspace(
     parsed: &Value,
     diagnostics: &mut Vec<ConfigDiagnostic>,
-) -> Option<WorkspaceConfig> {
-    let Some(table) = parsed.get("workspace").and_then(|value| value.as_table()) else {
-        return None;
+) -> WorkspaceConfig {
+    let Some(table) = parsed.as_table() else {
+        return WorkspaceConfig::default();
     };
 
     let mut workspace = WorkspaceConfig::default();
-
-    if let Some(name) = table.get("name") {
-        match name.as_str() {
-            Some(name) if is_valid_name(name) => workspace.name = Some(SmolStr::new(name)),
-            Some(name) => diagnostics.push(ConfigDiagnostic::InvalidWorkspaceName(name.into())),
-            None => diagnostics.push(ConfigDiagnostic::InvalidWorkspaceName(
-                name.to_string().into(),
-            )),
-        }
-    }
-
-    if let Some(version) = table.get("version") {
-        match version.as_str().and_then(|value| value.parse().ok()) {
-            Some(version) => workspace.version = Some(version),
-            None => diagnostics.push(ConfigDiagnostic::InvalidWorkspaceVersion(
-                version.to_string().into(),
-            )),
-        }
-    }
 
     parse_members(table, &mut workspace, diagnostics);
     parse_default_members(table, &mut workspace, diagnostics);
@@ -126,11 +109,20 @@ pub(crate) fn parse_workspace(
     parse_profiles(table, &mut workspace, diagnostics);
     parse_scripts(table, &mut workspace, diagnostics);
     workspace.resolution = parse_resolution(table, diagnostics);
-    if table.contains_key("dependencies") {
-        diagnostics.push(ConfigDiagnostic::WorkspaceDependenciesUnsupported);
-    }
 
-    Some(workspace)
+    workspace
+}
+
+pub(crate) fn parse_workspace_manifest(parsed: &Value) -> Result<WorkspaceManifest, String> {
+    let mut diagnostics = Vec::new();
+    let mut workspace = parse_workspace(parsed, &mut diagnostics);
+
+    workspace.dependencies = dependency::parse_root_dependencies(parsed, &mut diagnostics);
+
+    Ok(WorkspaceManifest {
+        workspace,
+        diagnostics,
+    })
 }
 
 fn parse_members(
@@ -145,23 +137,21 @@ fn parse_members(
 
     match value {
         Value::Array(_entries) => {
-            workspace.members = parse_member_array_field("workspace.members", value, diagnostics);
+            workspace.members = parse_member_array_field("members", value, diagnostics);
         }
         Value::Table(member_table) => {
             if let Some(main) = member_table.get("main") {
-                workspace.members =
-                    parse_member_array_field("workspace.members.main", main, diagnostics);
+                workspace.members = parse_member_array_field("members.main", main, diagnostics);
             } else {
                 diagnostics.push(ConfigDiagnostic::MissingWorkspaceMembers);
             }
             if let Some(dev) = member_table.get("dev") {
-                workspace.dev_members =
-                    parse_member_array_field("workspace.members.dev", dev, diagnostics);
+                workspace.dev_members = parse_member_array_field("members.dev", dev, diagnostics);
             }
         }
         other => {
             diagnostics.push(ConfigDiagnostic::UnexpectedTomlData {
-                field: "workspace.members".into(),
+                field: "members".into(),
                 found: other.type_str().to_lowercase().into(),
                 expected: Some("array".into()),
             });
@@ -178,7 +168,7 @@ fn parse_default_members(
         return;
     };
 
-    let defaults = parse_string_array_field("workspace", "default-members", value, diagnostics);
+    let defaults = parse_string_array_field("", "default-members", value, diagnostics);
     workspace.default_members = Some(defaults);
 }
 
@@ -190,7 +180,7 @@ fn parse_exclude(
     let Some(value) = table.get("exclude") else {
         return;
     };
-    workspace.exclude = parse_string_array_field("workspace", "exclude", value, diagnostics);
+    workspace.exclude = parse_string_array_field("", "exclude", value, diagnostics);
 }
 
 fn parse_member_array_field(
@@ -260,7 +250,7 @@ fn parse_metadata(
         match value.as_table() {
             Some(table) => workspace.metadata = Some(table.clone()),
             None => diagnostics.push(ConfigDiagnostic::UnexpectedTomlData {
-                field: "workspace.metadata".into(),
+                field: "metadata".into(),
                 found: value.type_str().to_lowercase().into(),
                 expected: Some("table".into()),
             }),
@@ -277,7 +267,7 @@ fn parse_profiles(
         match value.as_table() {
             Some(table) => workspace.profiles = Some(table.clone()),
             None => diagnostics.push(ConfigDiagnostic::UnexpectedTomlData {
-                field: "workspace.profiles".into(),
+                field: "profiles".into(),
                 found: value.type_str().to_lowercase().into(),
                 expected: Some("table".into()),
             }),
@@ -300,7 +290,7 @@ fn parse_scripts(
                             command: SmolStr::new(command),
                         }),
                         None => diagnostics.push(ConfigDiagnostic::UnexpectedTomlData {
-                            field: format!("workspace.scripts.{name}").into(),
+                            field: format!("scripts.{name}").into(),
                             found: value.type_str().to_lowercase().into(),
                             expected: Some("string".into()),
                         }),
@@ -308,7 +298,7 @@ fn parse_scripts(
                 }
             }
             other => diagnostics.push(ConfigDiagnostic::UnexpectedTomlData {
-                field: "workspace.scripts".into(),
+                field: "scripts".into(),
                 found: other.type_str().to_lowercase().into(),
                 expected: Some("table".into()),
             }),
@@ -320,13 +310,11 @@ fn parse_resolution(
     table: &toml::value::Table,
     diagnostics: &mut Vec<ConfigDiagnostic>,
 ) -> Option<WorkspaceResolution> {
-    let Some(value) = table.get("resolution") else {
-        return None;
-    };
+    let value = table.get("resolution")?;
 
     let Value::Table(entries) = value else {
         diagnostics.push(ConfigDiagnostic::UnexpectedTomlData {
-            field: "workspace.resolution".into(),
+            field: "resolution".into(),
             found: value.type_str().to_lowercase().into(),
             expected: Some("table".into()),
         });
@@ -339,7 +327,7 @@ fn parse_resolution(
             "registry" => match value.as_str() {
                 Some(registry) => resolution.registry = Some(registry.into()),
                 None => diagnostics.push(ConfigDiagnostic::UnexpectedTomlData {
-                    field: "workspace.resolution.registry".into(),
+                    field: "resolution.registry".into(),
                     found: value.type_str().to_lowercase().into(),
                     expected: Some("string".into()),
                 }),
@@ -347,7 +335,7 @@ fn parse_resolution(
             "source" => match value.as_str() {
                 Some(source) => resolution.source = Some(source.into()),
                 None => diagnostics.push(ConfigDiagnostic::UnexpectedTomlData {
-                    field: "workspace.resolution.source".into(),
+                    field: "resolution.source".into(),
                     found: value.type_str().to_lowercase().into(),
                     expected: Some("string".into()),
                 }),
@@ -355,7 +343,7 @@ fn parse_resolution(
             "lockfile" => match value.as_bool() {
                 Some(lockfile) => resolution.lockfile = Some(lockfile),
                 None => diagnostics.push(ConfigDiagnostic::UnexpectedTomlData {
-                    field: "workspace.resolution.lockfile".into(),
+                    field: "resolution.lockfile".into(),
                     found: value.type_str().to_lowercase().into(),
                     expected: Some("boolean".into()),
                 }),
@@ -376,24 +364,21 @@ mod tests {
     #[test]
     fn parses_workspace_section_with_extras() {
         let toml = r#"
-[workspace]
-name = "root_ws"
-version = "0.2.0"
 members = { main = ["ingot-a", "ingot-b/**"], dev = ["examples/**"] }
 default-members = ["ingot-a"]
 exclude = ["target", "ignored/**"]
 
-[workspace.metadata]
+[metadata]
 docs = true
 
-[workspace.profiles.release]
+[profiles.release]
 opt-level = 3
 
-[workspace.scripts]
+[scripts]
 fmt = "fe fmt"
 ci = "fe check"
 
-[workspace.resolution]
+[resolution]
 registry = "local"
 source = "https://example.com"
 lockfile = false
@@ -402,10 +387,11 @@ other = "keep"
 [dependencies]
 util = { path = "ingots/util" }
 "#;
-        let config = crate::config::Config::parse(toml).expect("config parses");
-        let workspace = config.workspace.expect("workspace present");
-        assert_eq!(workspace.name.as_deref(), Some("root_ws"));
-        assert_eq!(workspace.version.unwrap().to_string(), "0.2.0");
+        let manifest = crate::config::Manifest::parse(toml).expect("manifest parses");
+        let crate::config::Manifest::Workspace(workspace_manifest) = manifest else {
+            panic!("expected workspace manifest");
+        };
+        let workspace = workspace_manifest.workspace;
         assert_eq!(
             workspace.members,
             vec![
@@ -429,7 +415,10 @@ util = { path = "ingots/util" }
                 version: None,
             }]
         );
-        assert_eq!(workspace.default_members.unwrap(), vec!["ingot-a".into()]);
+        assert_eq!(
+            workspace.default_members.unwrap(),
+            vec![SmolStr::new("ingot-a")]
+        );
         assert_eq!(workspace.exclude, vec!["target", "ignored/**"]);
         assert!(workspace.metadata.is_some());
         assert!(workspace.profiles.is_some());

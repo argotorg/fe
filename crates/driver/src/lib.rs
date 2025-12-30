@@ -4,6 +4,7 @@ pub mod db;
 pub mod diagnostics;
 pub mod files;
 mod ingot_handler;
+mod workspace_lookup;
 
 pub use common::dependencies::DependencyTree;
 
@@ -14,7 +15,7 @@ use camino::Utf8PathBuf;
 use common::{
     InputDb,
     cache::remote_git_cache_dir,
-    config::{Config, WorkspaceMemberSelection},
+    config::{Manifest, WorkspaceMemberSelection},
     ingot::Version,
 };
 pub use db::DriverDataBase;
@@ -145,19 +146,15 @@ fn init_ingot_graph(db: &mut DriverDataBase, ingot_url: &Url) -> bool {
 }
 
 fn should_use_workspace(ingot_url: &Url) -> bool {
-    manifest_config(ingot_url).is_some_and(|config| {
-        config.workspace.is_some()
-            && config.metadata.name.is_none()
-            && config.metadata.version.is_none()
-    })
+    manifest_config(ingot_url).is_some_and(|manifest| matches!(manifest, Manifest::Workspace(_)))
 }
 
-fn manifest_config(ingot_url: &Url) -> Option<Config> {
+fn manifest_config(ingot_url: &Url) -> Option<Manifest> {
     let mut path = ingot_url.to_file_path().ok()?;
     path.push("fe.toml");
     fs::read_to_string(path)
         .ok()
-        .and_then(|content| Config::parse(&content).ok())
+        .and_then(|content| Manifest::parse(&content).ok())
 }
 
 pub fn init_workspace(db: &mut DriverDataBase, workspace_url: &Url) -> bool {
@@ -193,8 +190,8 @@ pub fn init_workspace(db: &mut DriverDataBase, workspace_url: &Url) -> bool {
         }
     };
 
-    let config = match Config::parse(&manifest_file.content) {
-        Ok(config) => config,
+    let manifest = match Manifest::parse(&manifest_file.content) {
+        Ok(manifest) => manifest,
         Err(error) => {
             handler.report_error(IngotInitDiagnostics::WorkspaceConfigParseError {
                 workspace_url: workspace_url.clone(),
@@ -204,21 +201,23 @@ pub fn init_workspace(db: &mut DriverDataBase, workspace_url: &Url) -> bool {
         }
     };
 
-    if !config.diagnostics.is_empty() {
+    let Manifest::Workspace(workspace_manifest) = manifest else {
+        handler.report_error(IngotInitDiagnostics::WorkspaceMembersError {
+            workspace_url: workspace_url.clone(),
+            error: "manifest is not a workspace".to_string(),
+        });
+        return true;
+    };
+
+    if !workspace_manifest.diagnostics.is_empty() {
         handler.report_warn(IngotInitDiagnostics::WorkspaceDiagnostics {
             workspace_url: workspace_url.clone(),
-            diagnostics: config.diagnostics.clone(),
+            diagnostics: workspace_manifest.diagnostics.clone(),
         });
         had_diagnostics = true;
     }
 
-    let Some(workspace) = config.workspace.clone() else {
-        handler.report_error(IngotInitDiagnostics::WorkspaceMembersError {
-            workspace_url: workspace_url.clone(),
-            error: "missing [workspace] section in manifest".to_string(),
-        });
-        return true;
-    };
+    let workspace = workspace_manifest.workspace.clone();
 
     let member_selection = if workspace.default_members.is_some() {
         WorkspaceMemberSelection::DefaultOnly
@@ -237,12 +236,47 @@ pub fn init_workspace(db: &mut DriverDataBase, workspace_url: &Url) -> bool {
     };
 
     for member in &members {
+        handler
+            .db
+            .dependency_graph()
+            .register_workspace_member_root(handler.db, workspace_url, &member.url);
+
         if let (Some(name), Some(version)) = (&member.name, &member.version) {
-            db.dependency_graph().register_ingot_metadata(
-                db,
-                &member.url,
-                name.clone(),
-                version.clone(),
+            handler
+                .db
+                .dependency_graph()
+                .register_expected_member_metadata(
+                    handler.db,
+                    &member.url,
+                    name.clone(),
+                    version.clone(),
+                );
+        }
+
+        if let Some(name) = &member.name {
+            let existing = handler.db.dependency_graph().workspace_members_by_name(
+                handler.db,
+                workspace_url,
+                name,
+            );
+            if existing.iter().any(|other| other.version == member.version) {
+                handler.report_error(IngotInitDiagnostics::WorkspaceMemberDuplicate {
+                    workspace_url: workspace_url.clone(),
+                    name: name.clone(),
+                    version: member.version.clone(),
+                });
+                return true;
+            }
+            let record = common::dependencies::WorkspaceMemberRecord {
+                name: name.clone(),
+                version: member.version.clone(),
+                path: member.path.clone(),
+                url: member.url.clone(),
+            };
+            handler.db.dependency_graph().register_workspace_member(
+                handler.db,
+                workspace_url,
+                record,
             );
         }
     }
@@ -266,8 +300,17 @@ pub fn find_ingot_by_metadata(db: &DriverDataBase, name: &str, version: &Version
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 struct ExpandedWorkspaceMember {
     url: Url,
+    path: Utf8PathBuf,
     name: Option<SmolStr>,
     version: Option<Version>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WorkspaceMember {
+    pub url: Url,
+    pub path: Utf8PathBuf,
+    pub name: Option<SmolStr>,
+    pub version: Option<Version>,
 }
 
 fn _dump_scope_graph(db: &DriverDataBase, top_mod: TopLevelMod) -> String {
@@ -353,7 +396,7 @@ impl<'a> resolver::ResolutionHandler<WorkspaceResolver> for WorkspaceHandler<'a>
     }
 }
 
-fn expand_workspace_members(
+pub(crate) fn expand_workspace_members(
     workspace: &common::config::WorkspaceConfig,
     base_url: &Url,
     selection: WorkspaceMemberSelection,
@@ -410,6 +453,7 @@ fn expand_workspace_members(
             if seen.insert(url.clone()) {
                 members.push(ExpandedWorkspaceMember {
                     url,
+                    path: Utf8PathBuf::from(pattern),
                     name: spec.name.clone(),
                     version: spec.version.clone(),
                 });
@@ -439,8 +483,12 @@ fn expand_workspace_members(
             let url = Url::from_directory_path(utf8_path.as_std_path())
                 .map_err(|_| "failed to convert member path to URL".to_string())?;
             if seen.insert(url.clone()) {
+                let relative = utf8_path
+                    .strip_prefix(&base_path)
+                    .map_err(|_| "member path escaped workspace root".to_string())?;
                 members.push(ExpandedWorkspaceMember {
                     url,
+                    path: relative.to_owned(),
                     name: None,
                     version: None,
                 });
@@ -449,6 +497,40 @@ fn expand_workspace_members(
     }
 
     Ok(members)
+}
+
+pub fn workspace_member_urls(
+    workspace: &common::config::WorkspaceConfig,
+    workspace_url: &Url,
+) -> Result<Vec<Url>, String> {
+    let members = workspace_members(workspace, workspace_url)?;
+    Ok(members
+        .into_iter()
+        .filter(|member| member.url != *workspace_url)
+        .map(|member| member.url)
+        .collect())
+}
+
+pub fn workspace_members(
+    workspace: &common::config::WorkspaceConfig,
+    workspace_url: &Url,
+) -> Result<Vec<WorkspaceMember>, String> {
+    let selection = if workspace.default_members.is_some() {
+        WorkspaceMemberSelection::DefaultOnly
+    } else {
+        WorkspaceMemberSelection::All
+    };
+    let members = expand_workspace_members(workspace, workspace_url, selection)?;
+    Ok(members
+        .into_iter()
+        .filter(|member| member.url != *workspace_url)
+        .map(|member| WorkspaceMember {
+            url: member.url,
+            path: member.path,
+            name: member.name,
+            version: member.version,
+        })
+        .collect())
 }
 
 // Maybe the driver should eventually only support WASI?
@@ -490,6 +572,27 @@ pub enum IngotInitDiagnostics {
     },
     WorkspaceMembersError {
         workspace_url: Url,
+        error: String,
+    },
+    WorkspaceMemberDuplicate {
+        workspace_url: Url,
+        name: SmolStr,
+        version: Option<Version>,
+    },
+    WorkspaceMemberMetadataMismatch {
+        ingot_url: Url,
+        expected_name: SmolStr,
+        expected_version: Version,
+        found_name: Option<SmolStr>,
+        found_version: Option<Version>,
+    },
+    WorkspaceNameLookupUnavailable {
+        ingot_url: Url,
+        dependency: SmolStr,
+    },
+    WorkspaceMemberResolutionFailed {
+        ingot_url: Url,
+        dependency: SmolStr,
         error: String,
     },
     IngotByNameResolutionFailed {
@@ -596,6 +699,54 @@ impl std::fmt::Display for IngotInitDiagnostics {
             } => {
                 write!(f, "Workspace members error in {workspace_url}: {error}")
             }
+            IngotInitDiagnostics::WorkspaceMemberDuplicate {
+                workspace_url,
+                name,
+                version,
+            } => {
+                if let Some(version) = version {
+                    write!(
+                        f,
+                        "Workspace member {name}@{version} is duplicated in {workspace_url}"
+                    )
+                } else {
+                    write!(
+                        f,
+                        "Workspace member {name} is duplicated in {workspace_url}"
+                    )
+                }
+            }
+            IngotInitDiagnostics::WorkspaceMemberMetadataMismatch {
+                ingot_url,
+                expected_name,
+                expected_version,
+                found_name,
+                found_version,
+            } => {
+                write!(
+                    f,
+                    "Workspace member {expected_name}@{expected_version} in {ingot_url} has mismatched metadata (found {found_name:?}@{found_version:?})"
+                )
+            }
+            IngotInitDiagnostics::WorkspaceNameLookupUnavailable {
+                ingot_url,
+                dependency,
+            } => {
+                write!(
+                    f,
+                    "Dependency '{dependency}' in {ingot_url} uses name-only lookup outside a workspace"
+                )
+            }
+            IngotInitDiagnostics::WorkspaceMemberResolutionFailed {
+                ingot_url,
+                dependency,
+                error,
+            } => {
+                write!(
+                    f,
+                    "Failed to resolve workspace member for '{dependency}' in {ingot_url}: {error}"
+                )
+            }
             IngotInitDiagnostics::IngotByNameResolutionFailed {
                 ingot_url,
                 dependency,
@@ -648,7 +799,7 @@ impl std::fmt::Display for IngotInitDiagnostics {
     }
 }
 
-fn remote_checkout_root(ingot_url: &Url) -> Utf8PathBuf {
+pub(crate) fn remote_checkout_root(ingot_url: &Url) -> Utf8PathBuf {
     if let Some(root) = remote_git_cache_dir() {
         return root;
     }

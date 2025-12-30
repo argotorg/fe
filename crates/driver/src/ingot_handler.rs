@@ -7,14 +7,17 @@ use common::{
 };
 use resolver::{
     ResolutionHandler,
-    git::GitDescription,
+    git::{GitDescription, GitResolver},
     graph::{DiGraph, GraphResolutionHandler, UnresolvedNode, petgraph::visit::EdgeRef},
     ingot::{IngotDescriptor, IngotOrigin, IngotPriority, IngotResolver, IngotResource},
 };
 use smol_str::SmolStr;
 use url::Url;
 
-use crate::IngotInitDiagnostics;
+use crate::{
+    IngotInitDiagnostics, remote_checkout_root,
+    workspace_lookup::{resolve_local_workspace_member, resolve_remote_workspace_member},
+};
 
 pub struct IngotHandler<'a> {
     pub db: &'a mut dyn InputDb,
@@ -102,27 +105,38 @@ impl<'a> IngotHandler<'a> {
         origin: &IngotOrigin,
         dependency: common::dependencies::Dependency,
     ) -> Option<(IngotDescriptor, (DependencyAlias, DependencyArguments))> {
-        if let (Some(name), Some(version)) = (
-            dependency.arguments.name.clone(),
-            dependency.arguments.version.clone(),
-        ) {
-            if let Some(url) = self
-                .db
-                .dependency_graph()
-                .ingot_by_name_version(self.db, &name, &version)
-            {
-                return Some((
-                    IngotDescriptor::Local(url),
-                    (dependency.alias, dependency.arguments),
-                ));
+        if let Some(name) = dependency.arguments.name.clone() {
+            if let Some(result) = self.resolve_workspace_dependency(ingot_url, &dependency, &name) {
+                return Some((result, (dependency.alias, dependency.arguments)));
             }
-            self.report_error(IngotInitDiagnostics::IngotByNameResolutionFailed {
-                ingot_url: ingot_url.clone(),
-                dependency: dependency.alias,
-                name,
-                version,
-            });
-            return None;
+
+            if let Some(version) = dependency.arguments.version.clone() {
+                if let Some(url) = self
+                    .db
+                    .dependency_graph()
+                    .ingot_by_name_version(self.db, &name, &version)
+                {
+                    return Some((
+                        IngotDescriptor::Local(url),
+                        (dependency.alias, dependency.arguments),
+                    ));
+                }
+                self.report_error(IngotInitDiagnostics::IngotByNameResolutionFailed {
+                    ingot_url: ingot_url.clone(),
+                    dependency: dependency.alias,
+                    name,
+                    version,
+                });
+                return None;
+            }
+
+            if matches!(dependency.location, DependencyLocation::WorkspaceCurrent) {
+                self.report_error(IngotInitDiagnostics::WorkspaceNameLookupUnavailable {
+                    ingot_url: ingot_url.clone(),
+                    dependency: dependency.alias,
+                });
+                return None;
+            }
         }
 
         match dependency.location {
@@ -169,6 +183,98 @@ impl<'a> IngotHandler<'a> {
                     IngotDescriptor::Remote(next_description),
                     (dependency.alias, dependency.arguments),
                 ))
+            }
+            DependencyLocation::WorkspaceCurrent => None,
+        }
+    }
+
+    fn resolve_workspace_dependency(
+        &mut self,
+        ingot_url: &Url,
+        dependency: &common::dependencies::Dependency,
+        name: &SmolStr,
+    ) -> Option<IngotDescriptor> {
+        let version = dependency.arguments.version.as_ref();
+        let path_hint = match &dependency.location {
+            DependencyLocation::Remote(remote) => remote.path.as_ref(),
+            _ => None,
+        };
+
+        match &dependency.location {
+            DependencyLocation::WorkspaceCurrent => {
+                let Some(workspace_root) = self
+                    .db
+                    .dependency_graph()
+                    .workspace_root_for_member(self.db, ingot_url)
+                else {
+                    self.report_error(IngotInitDiagnostics::WorkspaceNameLookupUnavailable {
+                        ingot_url: ingot_url.clone(),
+                        dependency: dependency.alias.clone(),
+                    });
+                    return None;
+                };
+                match resolve_local_workspace_member(self.db, &workspace_root, name, version, None)
+                {
+                    Ok(result) => Some(IngotDescriptor::Local(result.member.url)),
+                    Err(err) => {
+                        self.report_error(IngotInitDiagnostics::WorkspaceMemberResolutionFailed {
+                            ingot_url: ingot_url.clone(),
+                            dependency: dependency.alias.clone(),
+                            error: err.to_string(),
+                        });
+                        None
+                    }
+                }
+            }
+            DependencyLocation::Local(local) => {
+                match resolve_local_workspace_member(self.db, &local.url, name, version, None) {
+                    Ok(result) => Some(IngotDescriptor::Local(result.member.url)),
+                    Err(err) => match err {
+                        crate::workspace_lookup::WorkspaceLookupError::NotWorkspace => None,
+                        _ => {
+                            self.report_error(
+                                IngotInitDiagnostics::WorkspaceMemberResolutionFailed {
+                                    ingot_url: ingot_url.clone(),
+                                    dependency: dependency.alias.clone(),
+                                    error: err.to_string(),
+                                },
+                            );
+                            None
+                        }
+                    },
+                }
+            }
+            DependencyLocation::Remote(remote) => {
+                let git = GitResolver::new(remote_checkout_root(ingot_url));
+                match resolve_remote_workspace_member(
+                    self.db,
+                    &git,
+                    &GitDescription::new(remote.source.clone(), remote.rev.to_string()),
+                    name,
+                    version,
+                    path_hint,
+                ) {
+                    Ok(result) => {
+                        let member_path = result.member.path.clone();
+                        let descriptor =
+                            GitDescription::new(remote.source.clone(), remote.rev.to_string())
+                                .with_path(member_path);
+                        Some(IngotDescriptor::Remote(descriptor))
+                    }
+                    Err(err) => match err {
+                        crate::workspace_lookup::WorkspaceLookupError::NotWorkspace => None,
+                        _ => {
+                            self.report_error(
+                                IngotInitDiagnostics::WorkspaceMemberResolutionFailed {
+                                    ingot_url: ingot_url.clone(),
+                                    dependency: dependency.alias.clone(),
+                                    error: err.to_string(),
+                                },
+                            );
+                            None
+                        }
+                    },
+                }
             }
         }
     }
@@ -335,6 +441,23 @@ impl<'a> ResolutionHandler<IngotResolver> for IngotHandler<'a> {
         self.db
             .dependency_graph()
             .ensure_node(self.db, &resource.ingot_url);
+
+        if let Some((expected_name, expected_version)) = self
+            .db
+            .dependency_graph()
+            .expected_member_metadata_for(self.db, &resource.ingot_url)
+            && (config.metadata.name.as_ref() != Some(&expected_name)
+                || config.metadata.version.as_ref() != Some(&expected_version))
+        {
+            self.report_error(IngotInitDiagnostics::WorkspaceMemberMetadataMismatch {
+                ingot_url: resource.ingot_url.clone(),
+                expected_name,
+                expected_version,
+                found_name: config.metadata.name.clone(),
+                found_version: config.metadata.version.clone(),
+            });
+            return Vec::new();
+        }
 
         if let (Some(name), Some(version)) = (
             config.metadata.name.clone(),

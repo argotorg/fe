@@ -42,6 +42,12 @@ pub struct GitResource {
     pub checkout_path: Utf8PathBuf,
 }
 
+#[derive(Debug, Clone, Copy)]
+pub enum SparseCheckoutMode {
+    Cone,
+    NoCone,
+}
+
 #[derive(Debug)]
 pub enum GitResolutionError {
     UnsupportedTarget,
@@ -88,6 +94,15 @@ impl GitResolver {
 
     pub fn has_valid_cached_checkout(&self, _description: &GitDescription) -> bool {
         false
+    }
+
+    pub fn ensure_sparse_checkout(
+        &self,
+        _description: &GitDescription,
+        _patterns: &[String],
+        _mode: SparseCheckoutMode,
+    ) -> Result<GitResource, GitResolutionError> {
+        Err(GitResolutionError::UnsupportedTarget)
     }
 }
 

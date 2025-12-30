@@ -8,7 +8,7 @@ use salsa::Setter;
 use smol_str::SmolStr;
 use url::Url;
 
-use super::{DependencyAlias, DependencyArguments, RemoteFiles};
+use super::{DependencyAlias, DependencyArguments, RemoteFiles, WorkspaceMemberRecord};
 use crate::{InputDb, ingot::Version};
 
 type EdgeWeight = (DependencyAlias, DependencyArguments);
@@ -21,6 +21,9 @@ pub struct DependencyGraph {
     git_locations: HashMap<Url, RemoteFiles>,
     reverse_git_map: HashMap<RemoteFiles, Url>,
     ingots_by_metadata: HashMap<(SmolStr, Version), Url>,
+    workspace_members: HashMap<Url, Vec<WorkspaceMemberRecord>>,
+    workspace_root_by_member: HashMap<Url, Url>,
+    expected_member_metadata: HashMap<Url, (SmolStr, Version)>,
 }
 
 #[salsa::tracked]
@@ -29,6 +32,9 @@ impl DependencyGraph {
         DependencyGraph::new(
             db,
             DiGraph::new(),
+            HashMap::new(),
+            HashMap::new(),
+            HashMap::new(),
             HashMap::new(),
             HashMap::new(),
             HashMap::new(),
@@ -82,6 +88,86 @@ impl DependencyGraph {
         self.ingots_by_metadata(db)
             .get(&(name.clone(), version.clone()))
             .cloned()
+    }
+
+    pub fn register_workspace_member(
+        &self,
+        db: &mut dyn InputDb,
+        workspace_root: &Url,
+        member: WorkspaceMemberRecord,
+    ) {
+        let mut members = self.workspace_members(db);
+        members
+            .entry(workspace_root.clone())
+            .or_default()
+            .push(member.clone());
+        self.set_workspace_members(db).to(members);
+
+        self.register_workspace_member_root(db, workspace_root, &member.url);
+    }
+
+    pub fn register_workspace_member_root(
+        &self,
+        db: &mut dyn InputDb,
+        workspace_root: &Url,
+        member_url: &Url,
+    ) {
+        let mut roots = self.workspace_root_by_member(db);
+        roots.insert(member_url.clone(), workspace_root.clone());
+        self.set_workspace_root_by_member(db).to(roots);
+    }
+
+    pub fn workspace_member_records(
+        &self,
+        db: &dyn InputDb,
+        workspace_root: &Url,
+    ) -> Vec<WorkspaceMemberRecord> {
+        self.workspace_members(db)
+            .get(workspace_root)
+            .cloned()
+            .unwrap_or_default()
+    }
+
+    pub fn workspace_members_by_name(
+        &self,
+        db: &dyn InputDb,
+        workspace_root: &Url,
+        name: &SmolStr,
+    ) -> Vec<WorkspaceMemberRecord> {
+        self.workspace_members(db)
+            .get(workspace_root)
+            .map(|members| {
+                members
+                    .iter()
+                    .filter(|member| member.name == *name)
+                    .cloned()
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    pub fn workspace_root_for_member(&self, db: &dyn InputDb, url: &Url) -> Option<Url> {
+        self.workspace_root_by_member(db).get(url).cloned()
+    }
+
+    pub fn register_expected_member_metadata(
+        &self,
+        db: &mut dyn InputDb,
+        url: &Url,
+        name: SmolStr,
+        version: Version,
+    ) {
+        let mut map = self.expected_member_metadata(db);
+        map.insert(url.clone(), (name, version));
+        self.set_expected_member_metadata(db).to(map);
+    }
+
+    pub fn expected_member_metadata_for(
+        &self,
+        db: &dyn InputDb,
+        url: &Url,
+    ) -> Option<(SmolStr, Version)> {
+        self.expected_member_metadata(db).get(url).cloned()
     }
 
     pub fn contains_url(&self, db: &dyn InputDb, url: &Url) -> bool {

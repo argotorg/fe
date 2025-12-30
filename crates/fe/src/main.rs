@@ -9,9 +9,9 @@ use camino::Utf8PathBuf;
 use check::check;
 use clap::{Parser, Subcommand};
 use colored::Colorize;
-use common::config::{Config, WorkspaceMemberSelection};
-use glob::Pattern;
+use common::config::{Manifest, WorkspaceMemberSelection};
 use fmt as fe_fmt;
+use glob::Pattern;
 use similar::{ChangeTag, TextDiff};
 use toml::Value;
 use walkdir::WalkDir;
@@ -272,11 +272,6 @@ fn init_workspace_layout(base: &Utf8PathBuf) -> Result<(), String> {
     write_if_absent(
         &workspace_manifest,
         r#"# Workspace manifest
-[workspace]
-# Name/version are optional but recommended for registry-based workflows.
-# name = "my_workspace"
-# version = "0.1.0"
-
 # Members can be a flat array or a table with main/dev groups.
 members = ["ingots/*"]
 # members = { main = ["ingots/*"], dev = ["examples/*"] }
@@ -295,7 +290,7 @@ exclude = ["target"]
 # remote_util = { source = "https://example.com/fe.git", rev = "abcd1234", path = "ingots/util" }
 
 # Optional scripts for common tasks.
-# [workspace.scripts]
+# [scripts]
 # fmt = "fe fmt"
 # test = "fe check"
 "#,
@@ -372,14 +367,12 @@ fn absolute_target(path: Option<&Utf8PathBuf>) -> Result<Utf8PathBuf, String> {
 fn find_workspace_root(target: &Utf8PathBuf) -> Option<Utf8PathBuf> {
     for ancestor in target.ancestors() {
         let manifest = ancestor.join("fe.toml");
-        if manifest.is_file() {
-            if let Ok(content) = fs::read_to_string(manifest.as_std_path()) {
-                if let Ok(config) = Config::parse(&content) {
-                    if config.workspace.is_some() {
-                        return Some(ancestor.to_path_buf());
-                    }
-                }
-            }
+        if manifest.is_file()
+            && let Ok(content) = fs::read_to_string(manifest.as_std_path())
+            && let Ok(manifest) = Manifest::parse(&content)
+            && matches!(manifest, Manifest::Workspace(_))
+        {
+            return Some(ancestor.to_path_buf());
         }
     }
     None
@@ -392,11 +385,14 @@ fn update_workspace_members(
     let manifest_path = workspace_root.join("fe.toml");
     let manifest_str = fs::read_to_string(manifest_path.as_std_path())
         .map_err(|err| format!("Failed to read {}: {err}", manifest_path))?;
-    let config = Config::parse(&manifest_str)
+    let manifest = Manifest::parse(&manifest_str)
         .map_err(|err| format!("Failed to parse {}: {err}", manifest_path))?;
-    let workspace = config
-        .workspace
-        .ok_or_else(|| format!("{} is not a workspace manifest", manifest_path))?;
+    let workspace = match manifest {
+        Manifest::Workspace(workspace_manifest) => workspace_manifest.workspace,
+        Manifest::Ingot(_) => {
+            return Err(format!("{} is not a workspace manifest", manifest_path));
+        }
+    };
 
     let relative_member = member_dir
         .strip_prefix(workspace_root)
@@ -421,11 +417,10 @@ fn update_workspace_members(
     let mut value: Value = manifest_str
         .parse()
         .map_err(|err| format!("Failed to parse {}: {err}", manifest_path))?;
-    let workspace_table = value
-        .get_mut("workspace")
-        .and_then(Value::as_table_mut)
+    let root_table = value
+        .as_table_mut()
         .ok_or_else(|| format!("{} is not a workspace manifest", manifest_path))?;
-    let members = workspace_members_array(workspace_table)?;
+    let members = workspace_members_array(root_table)?;
 
     if !members
         .iter()
@@ -457,9 +452,8 @@ fn matches_any_pattern(
     label: &str,
 ) -> Result<bool, String> {
     for pattern in patterns {
-        let compiled = Pattern::new(pattern.as_str()).map_err(|err| {
-            format!("Invalid {label} pattern \"{pattern}\": {err}")
-        })?;
+        let compiled = Pattern::new(pattern.as_str())
+            .map_err(|err| format!("Invalid {label} pattern \"{pattern}\": {err}"))?;
         if compiled.matches(candidate) {
             return Ok(true);
         }
@@ -467,10 +461,8 @@ fn matches_any_pattern(
     Ok(false)
 }
 
-fn workspace_members_array<'a>(
-    workspace_table: &'a mut toml::value::Table,
-) -> Result<&'a mut Vec<Value>, String> {
-    let members_value = workspace_table
+fn workspace_members_array(root_table: &mut toml::value::Table) -> Result<&mut Vec<Value>, String> {
+    let members_value = root_table
         .entry("members")
         .or_insert_with(|| Value::Array(Vec::new()));
 
@@ -482,8 +474,8 @@ fn workspace_members_array<'a>(
                 .or_insert_with(|| Value::Array(Vec::new()));
             main_value
                 .as_array_mut()
-                .ok_or_else(|| "workspace.members.main is not an array".to_string())
+                .ok_or_else(|| "members.main is not an array".to_string())
         }
-        _ => Err("workspace.members is not an array or table".to_string()),
+        _ => Err("members is not an array or table".to_string()),
     }
 }
