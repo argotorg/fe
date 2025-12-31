@@ -43,6 +43,14 @@ fn indent_lines(result: &mut String, text: &str, indent_level: usize) {
     }
 }
 
+/// Indents each line of text and returns the indented string.
+fn indent_text(text: &str, indent_level: usize) -> String {
+    text.lines()
+        .map(|line| format!("{}{}", indent_str(indent_level), line))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 /// Formats a list of bounds separated by " + ".
 fn format_bounds<'db>(bounds: &[TypeBound<'db>], db: &dyn HirDb) -> String {
     bounds
@@ -67,6 +75,25 @@ fn indent_continuation(text: &str, indent_level: usize) -> String {
         result.push_str(&indent_str(indent_level));
         result.push_str(line);
     }
+
+    result
+}
+
+fn format_field_def<'db>(field: &FieldDef<'db>, db: &dyn HirDb, indent_level: usize) -> String {
+    let mut result = String::new();
+    let attrs = field.attributes.pretty_print(db);
+    if !attrs.is_empty() {
+        result.push_str(&indent_text(&attrs, indent_level));
+        result.push('\n');
+    }
+
+    let vis = field.vis.pretty_print();
+    let name = unwrap_partial(field.name, "FieldDef::name");
+    let ty = unwrap_partial(field.type_ref, "FieldDef::type_ref");
+    result.push_str(&indent_text(
+        &format!("{}{}: {}", vis, name.data(db), ty.pretty_print(db)),
+        indent_level,
+    ));
 
     result
 }
@@ -1061,12 +1088,7 @@ impl<'db> FieldDefListId<'db> {
 
         let fields_str = fields
             .iter()
-            .map(|f| {
-                let vis = f.vis.pretty_print();
-                let name = unwrap_partial(f.name, "FieldDef::name");
-                let ty = unwrap_partial(f.type_ref, "FieldDef::type_ref");
-                format!("    {}{}: {}", vis, name.data(db), ty.pretty_print(db))
-            })
+            .map(|f| format_field_def(f, db, 1))
             .collect::<Vec<_>>()
             .join(",\n");
 
@@ -1116,7 +1138,7 @@ impl<'db> VariantDefListId<'db> {
 
         let variants_str = variants
             .iter()
-            .map(|v| format!("    {}", v.pretty_print(db)))
+            .map(|v| indent_text(&v.pretty_print(db), 1))
             .collect::<Vec<_>>()
             .join(",\n");
 
@@ -1127,8 +1149,9 @@ impl<'db> VariantDefListId<'db> {
 impl<'db> VariantDef<'db> {
     /// Pretty-prints a variant definition.
     pub fn pretty_print(&self, db: &dyn HirDb) -> String {
+        let mut result = self.attributes.pretty_print_with_newline(db);
         let name = unwrap_partial(self.name, "VariantDef::name");
-        let mut result = name.data(db).to_string();
+        result.push_str(name.data(db));
 
         match &self.kind {
             VariantKind::Unit => {}
@@ -1180,15 +1203,8 @@ impl<'db> Contract<'db> {
 
         // Fields
         for field in self.fields(db).data(db) {
-            let vis = field.vis.pretty_print();
-            let name = unwrap_partial(field.name, "Contract field::name");
-            let ty = unwrap_partial(field.type_ref, "Contract field::type_ref");
-            result.push_str(&format!(
-                "    {}{}: {},\n",
-                vis,
-                name.data(db),
-                ty.pretty_print(db)
-            ));
+            let field_str = format_field_def(field, db, 1);
+            result.push_str(&format!("{},\n", field_str));
         }
 
         // Get child items (init function, etc.)

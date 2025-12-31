@@ -1,0 +1,66 @@
+#[mod_attr]
+mod inner {
+    #[struct_attr]
+    struct Point {
+        #[field_attr]
+        x: u32,
+        /// Y field docs.
+        #[field_attr_args(flag, key = 1)]
+        y: u32,
+    }
+
+    #[enum_attr]
+    enum Choice {
+        #[unit_variant_attr]
+        A,
+        #[record_variant_attr]
+        B {
+            #[field_attr]
+            value: u32,
+        },
+    }
+
+    #[trait_attr]
+    trait Foo {
+        #[trait_method_attr]
+        fn bar(self) -> u32
+    }
+
+    #[impl_attr]
+    impl Point {
+        #[impl_method_attr]
+        fn new(x: u32, y: u32) -> Self {
+            Point { x, y }
+        }
+    }
+
+    #[impl_trait_attr]
+    impl Foo for Point {
+        #[impl_trait_method_attr]
+        fn bar(self) -> u32 {
+            self.x
+        }
+    }
+
+    #[alias_attr]
+    type Alias = u32
+
+    #[const_attr]
+    const MAGIC: u32 = 7
+
+    #[fn_attr]
+    fn top(x: u32) -> u32 {
+        x
+    }
+
+    extern {
+        #[extern_attr]
+        fn external(x: u32) -> u32
+    }
+}
+
+#[contract_attr]
+contract Vault {
+    #[field_attr]
+    total: u256
+}

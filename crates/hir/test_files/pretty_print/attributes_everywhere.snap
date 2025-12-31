@@ -1,0 +1,112 @@
+---
+source: crates/hir/tests/pretty_print.rs
+expression: output
+input_file: test_files/pretty_print/attributes_everywhere.fe
+---
+use core::prelude::*
+
+#[mod_attr]
+mod inner {
+    use core::prelude::*
+
+    #[struct_attr]
+    struct Point {
+        #[field_attr]
+        x: u32,
+        ///  Y field docs.
+        #[field_attr_args(flag, key = 1)]
+        y: u32,
+    }
+
+    #[enum_attr]
+    enum Choice {
+        #[unit_variant_attr]
+        A,
+        #[record_variant_attr]
+        B {
+            #[field_attr]
+            value: u32,
+        },
+    }
+
+    #[trait_attr]
+    trait Foo {
+    
+        #[trait_method_attr]
+        fn bar(self) -> u32
+    }
+
+    #[impl_attr]
+    impl Point {
+        #[impl_method_attr]
+        fn new(x: u32, y: u32) -> Self {
+            Point { x, y }
+        }
+    
+    }
+
+    #[impl_trait_attr]
+    impl Foo for Point {
+    
+        #[impl_trait_method_attr]
+        fn bar(self) -> u32 {
+            self.x
+        }
+    }
+
+    #[alias_attr]
+    type Alias = u32
+
+    #[const_attr]
+    const MAGIC: u32 = 7
+
+    #[fn_attr]
+    fn top(x: u32) -> u32 {
+        x
+    }
+
+    extern {
+        #[extern_attr]
+        fn external(x: u32) -> u32
+    }
+}
+
+#[contract_attr]
+contract Vault {
+    #[field_attr]
+    total: u256,
+}
+
+mod __Vault {
+    use super::*
+    use core::contracts::ContractHost
+    use core::contracts::Target
+    use core::abi::Abi
+    use core::abi::AbiEncoder
+    use core::abi::AbiSize
+    use core::abi::ByteInput
+    use core::abi::prefix
+    use core::abi::Encode
+    use std::evm::EvmTarget
+
+    type __Target = EvmTarget
+
+    type __RootEffect = __Target::RootEffect
+
+    type __DefaultAbi = __Target::DefaultAbi
+
+    #[contract_init(Vault)]
+    fn init() uses (mut root: __RootEffect) {
+        root.create_contract(runtime)
+    }
+
+    #[contract_runtime(Vault)]
+    fn runtime() uses (mut root: __RootEffect) {
+        let mut total = root.field<u256>(core::contract_field_slot(0))
+        let __selector = root.runtime_selector<__DefaultAbi>()
+        let mut __d = root.runtime_decoder<__DefaultAbi>()
+        match __selector {
+            _ => root.abort(),
+        }
+    }
+}
