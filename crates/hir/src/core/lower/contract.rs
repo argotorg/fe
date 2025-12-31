@@ -5,12 +5,13 @@ use parser::ast::{
 use crate::{
     HirDb,
     hir_def::{
-        Attr, AttrListId, Body, BodyKind, CallArg, Contract, ContractRecv, ContractRecvArm,
-        ContractRecvArmListId, ContractRecvListId, EffectParam, EffectParamListId, Expr, ExprId,
-        FieldDef, FieldDefListId, Func, FuncParam, FuncParamListId, FuncParamName, GenericArg,
-        GenericArgListId, GenericParamListId, IdentId, IntegerId, ItemModifier, LitKind, MatchArm,
-        NormalAttr, Partial, Pat, PatId, PathId, PathKind, Stmt, StmtId, TrackedItemVariant,
-        TypeAlias, TypeGenericArg, TypeId, TypeKind, Use, Visibility, WhereClauseId, WithBinding,
+        AssocConstDef, AssocTyDef, Attr, AttrListId, Body, BodyKind, CallArg, Contract,
+        ContractRecv, ContractRecvArm, ContractRecvArmListId, ContractRecvListId, EffectParam,
+        EffectParamListId, Expr, ExprId, FieldDef, FieldDefListId, Func, FuncParam,
+        FuncParamListId, FuncParamName, GenericArg, GenericArgListId, GenericParamListId, IdentId,
+        ImplTrait, IntegerId, ItemModifier, LitKind, MatchArm, NormalAttr, Partial, Pat, PatId,
+        PathId, PathKind, Stmt, StmtId, TrackedItemVariant, TraitRefId, TupleTypeId, TypeAlias,
+        TypeGenericArg, TypeId, TypeKind, Use, Visibility, WhereClauseId, WithBinding,
         use_tree::{UsePathId, UsePathSegment},
     },
     lower::{FileLowerCtxt, body::BodyCtxt, item::lower_uses_clause_opt},
@@ -326,6 +327,7 @@ fn lower_contract_entrypoints_and_handlers<'db>(
     let db = ctxt.db();
     let contract_ptr = AstPtr::new(contract_ast);
     let init_ast = contract_ast.init_block();
+    let init_ast_for_metadata = init_ast.clone();
 
     let Some(contract_name) = contract.name(db).to_opt() else {
         return;
@@ -386,6 +388,14 @@ fn lower_contract_entrypoints_and_handlers<'db>(
     );
     lower_contract_runtime_entrypoint_func(ctxt, contract, contract_name, contract_ast);
 
+    // Synthesize `impl std::evm::Contract for <ContractName> { .. }` metadata for typed CREATE.
+    lower_contract_deploy_metadata_impl(
+        ctxt,
+        contract_ptr.clone(),
+        contract_name,
+        init_ast_for_metadata,
+    );
+
     // Create and close the module
     let desugared = ContractLoweringDesugared {
         contract: contract_ptr,
@@ -404,6 +414,153 @@ fn lower_contract_entrypoints_and_handlers<'db>(
         origin,
     );
     ctxt.leave_item_scope(mod_);
+}
+
+fn lower_contract_deploy_metadata_impl<'db>(
+    ctxt: &mut FileLowerCtxt<'db>,
+    contract_ptr: AstPtr<ast::Contract>,
+    contract_name: IdentId<'db>,
+    init_ast: Option<ast::ContractInit>,
+) {
+    let db = ctxt.db();
+    let desugared = ContractLoweringDesugared {
+        contract: contract_ptr,
+        recv_idx: None,
+        arm_idx: None,
+        focus: ContractLoweringDesugaredFocus::Contract,
+    };
+
+    let contract_trait_path = PathId::from_segments(db, &["std", "evm", "Contract"]);
+    let trait_ref = TraitRefId::new(db, Partial::Present(contract_trait_path));
+
+    let self_ty_path = PathId::from_ident(db, contract_name);
+    let ty = TypeId::new(db, TypeKind::Path(Partial::Present(self_ty_path)));
+
+    let id = ctxt.joined_id(TrackedItemVariant::ImplTrait(
+        Partial::Present(trait_ref),
+        Partial::Present(ty),
+    ));
+    ctxt.enter_item_scope(id, false);
+
+    // Associated type: `type InitArgs = (T0, T1, ...)` from the contract init params.
+    let init_args_name = IdentId::new(db, "InitArgs".to_string());
+    let init_args_ty = {
+        let elems = init_ast
+            .and_then(|init| init.params())
+            .map(|params_ast| {
+                let params_hir = FuncParamListId::lower_ast(ctxt, params_ast);
+                params_hir
+                    .data(db)
+                    .iter()
+                    .filter_map(|param| param.ty.to_opt())
+                    .map(Partial::Present)
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        TypeId::new(db, TypeKind::Tuple(TupleTypeId::new(db, elems)))
+    };
+    let types = vec![AssocTyDef {
+        attributes: AttrListId::new(db, vec![]),
+        name: Partial::Present(init_args_name),
+        type_ref: Partial::Present(init_args_ty),
+    }];
+
+    let consts: Vec<AssocConstDef<'db>> = vec![];
+
+    // Methods: `init_code_offset/len` forward to `std::evm::code_region_offset/len(init)`.
+    lower_contract_deploy_metadata_method(
+        ctxt,
+        desugared.clone(),
+        "init_code_offset",
+        "code_region_offset",
+    );
+    lower_contract_deploy_metadata_method(
+        ctxt,
+        desugared.clone(),
+        "init_code_len",
+        "code_region_len",
+    );
+
+    let impl_trait = ImplTrait::new(
+        db,
+        id,
+        Partial::Present(trait_ref),
+        Partial::Present(ty),
+        AttrListId::new(db, vec![]),
+        GenericParamListId::new(db, vec![]),
+        WhereClauseId::new(db, vec![]),
+        types,
+        consts,
+        ctxt.top_mod(),
+        HirOrigin::desugared(desugared),
+    );
+    ctxt.leave_item_scope(impl_trait);
+}
+
+fn lower_contract_deploy_metadata_method<'db>(
+    ctxt: &mut FileLowerCtxt<'db>,
+    desugared: ContractLoweringDesugared,
+    method_name: &str,
+    intrinsic_name: &str,
+) -> Func<'db> {
+    let db = ctxt.db();
+
+    let fn_name = Partial::Present(IdentId::new(db, method_name.to_string()));
+    let fn_id = ctxt.joined_id(TrackedItemVariant::Func(fn_name));
+    ctxt.enter_item_scope(fn_id, false);
+
+    let mut body_ctxt = BodyCtxt::new(ctxt, ctxt.joined_id(TrackedItemVariant::FuncBody));
+    let expr_origin = HirOrigin::desugared(desugared.clone());
+    let stmt_origin = HirOrigin::desugared(desugared.clone());
+
+    // std::evm::<intrinsic_name>(init)
+    let callee_path = PathId::from_segments(db, &["std", "evm", intrinsic_name]);
+    let callee = body_ctxt.push_expr(
+        Expr::Path(Partial::Present(callee_path)),
+        expr_origin.clone(),
+    );
+    let init_path = PathId::from_str(db, "init");
+    let init_fn = body_ctxt.push_expr(Expr::Path(Partial::Present(init_path)), expr_origin.clone());
+    let call = body_ctxt.push_expr(
+        Expr::Call(
+            callee,
+            vec![CallArg {
+                label: None,
+                expr: init_fn,
+            }],
+        ),
+        expr_origin.clone(),
+    );
+
+    // return <call>
+    let stmts = vec![body_ctxt.push_stmt(Stmt::Return(Some(call)), stmt_origin)];
+
+    body_ctxt.f_ctxt.enter_block_scope();
+    let root_expr = body_ctxt.push_expr(Expr::Block(stmts), expr_origin);
+    body_ctxt.f_ctxt.leave_block_scope(root_expr);
+    let body = body_ctxt.build(None, root_expr, BodyKind::FuncBody);
+
+    let ret_ty = Some(TypeId::new(
+        db,
+        TypeKind::Path(Partial::Present(PathId::from_str(db, "u256"))),
+    ));
+    let func = Func::new(
+        db,
+        fn_id,
+        fn_name,
+        AttrListId::new(db, vec![]),
+        GenericParamListId::new(db, vec![]),
+        WhereClauseId::new(db, vec![]),
+        Partial::Present(FuncParamListId::new(db, vec![])),
+        EffectParamListId::new(db, vec![]),
+        ret_ty,
+        ItemModifier::None,
+        Some(body),
+        ctxt.top_mod(),
+        HirOrigin::desugared(desugared),
+    );
+
+    ctxt.leave_item_scope(func)
 }
 
 /// Inserts use statements for common core/std types used in generated contract code.

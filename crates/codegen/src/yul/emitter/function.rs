@@ -149,10 +149,9 @@ fn compute_immediate_postdominators(body: &mir::MirBody<'_>) -> Vec<Option<Basic
                 Terminator::Switch {
                     targets, default, ..
                 } => {
-                    let mut out = Vec::with_capacity(targets.len() + 1);
-                    out.extend(targets.iter().map(|t| t.block.index()));
-                    out.push(default.index());
-                    out
+                    let mut s: Vec<_> = targets.iter().map(|(_, bb)| bb.index()).collect();
+                    s.push(default.index());
+                    s
                 }
                 Terminator::Return(..)
                 | Terminator::TerminatingCall(_)

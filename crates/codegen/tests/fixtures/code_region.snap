@@ -15,7 +15,7 @@ object "Foo" {
       ret := v0
       leave
     }
-    function evm_create_create2(self, value, offset, len, salt) -> ret {
+    function evm_create_create2_raw(self, value, offset, len, salt) -> ret {
       let v0 := create2(value, offset, len, salt)
       let v1 := mload(0x40)
       if iszero(v1) {
@@ -32,7 +32,7 @@ object "Foo" {
       let v2 := allocate(v0, 0)
       let v3 := v2
       codecopy(v3, v1, v0)
-      let v4 := evm_create_create2(0, 0, v1, v0, 4660)
+      let v4 := evm_create_create2_raw(0, 0, v1, v0, 4660)
       pop(v4)
       let v5 := datasize("Foo_deployed")
       let v6 := dataoffset("Foo_deployed")

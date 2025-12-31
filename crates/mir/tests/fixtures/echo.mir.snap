@@ -1,6 +1,5 @@
 ---
 source: crates/mir/tests/lowering_snapshots.rs
-assertion_line: 26
 expression: mir_output
 ---
 fn answer_decode(v0: SolDecoder<CallData>) -> Answer:
@@ -18,7 +17,7 @@ fn getx_decode(v0: SolDecoder<CallData>) -> GetX:
   bb0:
     ret
 
-fn init(v0: u256, v1: u256, v2: u256) -> ():
+fn root_init(v0: u256, v1: u256, v2: u256) -> ():
   bb0:
     store stor[v2].0 = v0
     store stor[v2].1 = v1
@@ -44,7 +43,7 @@ fn init_contract(v0: u256, v1: u256, v2: u256) -> ():
     store stor[v2].1 = v1
     ret
 
-fn init(v0: u256) -> ():
+fn __echocontract_init(v0: u256) -> ():
   bb0:
     v1: StorPtr<Foo> = init_field__Evm_Foo__c3089d776807df8e((), 0)
     v3: MemoryBytes = evm_contracthost_init_input__fn_runtime__7cd036468b9a6201((), func_item(runtime))
@@ -80,6 +79,16 @@ fn runtime(v0: u256) -> ():
     terminate evm_contracthost_abort(())
   bb5:
     switch v2 [1 => bb1, 2 => bb2, 3 => bb3] else bb4
+
+fn echocontract_contract_init_code_offset() -> u256:
+  bb0:
+    v0: u256 = code_region_offset(func_item(__echocontract_init))
+    ret v0
+
+fn echocontract_contract_init_code_len() -> u256:
+  bb0:
+    v0: u256 = code_region_len(func_item(__echocontract_init))
+    ret v0
 
 fn u256_decode_decode__Sol_SolDecoder_CallData___828c6f2e3bda3cab(v0: D) -> u256:
   bb0:
@@ -198,6 +207,18 @@ fn _t0__decode_decode__Sol_u256_SolDecoder_CallData___51fc2f6931ec5edc(v0: D) ->
 fn evm_contracthost_abort(v0: Evm) -> !:
   bb0:
     terminate revert(0, 0)
+
+fn __echocontract_init(v0: u256) -> ():
+  bb0:
+    v1: StorPtr<Foo> = init_field__Evm_Foo__c3089d776807df8e((), 0)
+    v3: MemoryBytes = evm_contracthost_init_input__fn_runtime__7cd036468b9a6201((), func_item(runtime))
+    v2: SolDecoder<MemoryBytes> = sol_abi_decoder_new__MemoryBytes__b48f82585f3ed728(v3)
+    v4: u256 = u256_decode_decode__Sol_SolDecoder_MemoryBytes___c66d50dfccf37f39(v2)
+    v5: u256 = u256_decode_decode__Sol_SolDecoder_MemoryBytes___c66d50dfccf37f39(v2)
+    bind v1
+    eval init_contract(v4, v5, v1)
+    eval evm_contracthost_create_contract__fn_runtime__7cd036468b9a6201((), func_item(runtime))
+    ret
 
 fn soldecoder_i__abidecoder_read_word__CallData__b9ab8dc8a4b2f9e(v0: SolDecoder<I>) -> u256:
   bb0:

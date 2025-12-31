@@ -14,7 +14,7 @@ fn runtime() uses (mut evm: Evm) {
     let offset = evm.code_region_offset(child::child_init)
     let dest = with (RawMem = evm) { allocate(bytes: len) }
     evm.codecopy(dest, offset, len)
-    let addr = evm.create2(value: 0, offset: dest, len: len, salt: 0x1234)
+    let addr = evm.create2_raw(value: 0, offset: dest, len: len, salt: 0x1234)
     evm.mstore(0, addr.inner)
     evm.return_data(0, 32)
 }
