@@ -585,10 +585,12 @@ fn lower_msg_variant_impl<'db>(
     };
     let types = vec![
         AssocTyDef {
+            attributes: AttrListId::new(db, vec![]),
             name: Partial::Present(args_name),
             type_ref: args_ty,
         },
         AssocTyDef {
+            attributes: AttrListId::new(db, vec![]),
             name: Partial::Present(return_name),
             type_ref: return_ty,
         },
@@ -787,6 +789,7 @@ fn create_selector_const<'db>(
     let body = create_lit_body_desugared(ctxt, lit_kind, msg_desugared);
 
     AssocConstDef {
+        attributes: AttrListId::new(db, vec![]),
         name: Partial::Present(selector_name),
         ty: Partial::Present(selector_ty),
         value: Partial::Present(body),

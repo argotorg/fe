@@ -1,6 +1,5 @@
 ---
 source: crates/codegen/tests/yul.rs
-assertion_line: 34
 expression: desugared
 ---
 use core::prelude::*
@@ -591,13 +590,17 @@ mod Erc20Extended {
 }
 
 struct TransferEvent {
+    #[indexed]
     from: Address,
+    #[indexed]
     to: Address,
     value: u256,
 }
 
 struct ApprovalEvent {
+    #[indexed]
     owner: Address,
+    #[indexed]
     spender: Address,
     value: u256,
 }

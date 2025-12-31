@@ -2,12 +2,13 @@ use parser::ast::{self, prelude::*};
 
 use super::FileLowerCtxt;
 use crate::{
-    hir_def::{IdentId, ItemModifier, Partial, TrackedItemVariant, Use, use_tree::*},
+    hir_def::{AttrListId, IdentId, ItemModifier, Partial, TrackedItemVariant, Use, use_tree::*},
     span::{HirOrigin, UseDesugared},
 };
 
 impl<'db> Use<'db> {
     pub(super) fn lower_ast(ctxt: &mut FileLowerCtxt<'db>, ast: ast::Use) -> Vec<Self> {
+        let attributes = AttrListId::lower_ast_opt(ctxt, ast.attr_list());
         let vis = ItemModifier::lower_ast(ast.modifier()).to_visibility();
 
         let Some(use_tree) = ast.use_tree() else {
@@ -17,7 +18,7 @@ impl<'db> Use<'db> {
             let alias = None;
             let top_mod = ctxt.top_mod();
             let origin = HirOrigin::raw(&ast);
-            let use_ = Self::new(ctxt.db(), id, path, alias, vis, top_mod, origin);
+            let use_ = Self::new(ctxt.db(), id, attributes, path, alias, vis, top_mod, origin);
             ctxt.leave_item_scope(use_);
             return vec![use_];
         };
@@ -32,7 +33,7 @@ impl<'db> Use<'db> {
                 .map(|alias| UseAlias::lower_ast_partial(ctxt, alias));
             let top_mod = ctxt.top_mod();
             let origin = HirOrigin::raw(&ast);
-            let use_ = Self::new(ctxt.db(), id, path, alias, vis, top_mod, origin);
+            let use_ = Self::new(ctxt.db(), id, attributes, path, alias, vis, top_mod, origin);
             ctxt.leave_item_scope(use_);
             return vec![use_];
         }
@@ -45,7 +46,7 @@ impl<'db> Use<'db> {
                 ctxt.enter_item_scope(id, false);
                 let top_mod = ctxt.top_mod();
                 let origin = HirOrigin::desugared(origin);
-                let use_ = Self::new(ctxt.db(), id, path, alias, vis, top_mod, origin);
+                let use_ = Self::new(ctxt.db(), id, attributes, path, alias, vis, top_mod, origin);
                 ctxt.leave_item_scope(use_)
             })
             .collect()

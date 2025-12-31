@@ -446,7 +446,17 @@ fn insert_contract_use_statements<'db>(ctxt: &mut FileLowerCtxt<'db>) {
         ctxt.enter_item_scope(id, false);
         let top_mod = ctxt.top_mod();
         let origin = HirOrigin::synthetic();
-        let use_ = Use::new(db, id, path, None, Visibility::Private, top_mod, origin);
+        let attrs = AttrListId::new(db, vec![]);
+        let use_ = Use::new(
+            db,
+            id,
+            attrs,
+            path,
+            None,
+            Visibility::Private,
+            top_mod,
+            origin,
+        );
         ctxt.leave_item_scope(use_);
     };
 

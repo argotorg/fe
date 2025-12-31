@@ -370,6 +370,7 @@ impl<'db> Trait<'db> {
 
 impl<'db> AssocTyDecl<'db> {
     pub(super) fn lower_ast(ctxt: &mut FileLowerCtxt<'db>, ast: ast::TraitTypeItem) -> Self {
+        let attributes = AttrListId::lower_ast_opt(ctxt, ast.attr_list());
         let name = IdentId::lower_token_partial(ctxt, ast.name());
         let bounds = ast
             .bounds()
@@ -384,6 +385,7 @@ impl<'db> AssocTyDecl<'db> {
         let default = TypeId::lower_ast_partial(ctxt, ast.ty()).to_opt();
 
         AssocTyDecl {
+            attributes,
             name,
             bounds,
             default,
@@ -438,7 +440,9 @@ impl<'db> ImplTrait<'db> {
 
 impl<'db> AssocTyDef<'db> {
     fn lower_ast(ctxt: &mut FileLowerCtxt<'db>, ast: ast::TraitTypeItem) -> Self {
+        let attributes = AttrListId::lower_ast_opt(ctxt, ast.attr_list());
         AssocTyDef {
+            attributes,
             name: IdentId::lower_token_partial(ctxt, ast.name()),
             type_ref: TypeId::lower_ast_partial(ctxt, ast.ty()),
         }
@@ -447,20 +451,28 @@ impl<'db> AssocTyDef<'db> {
 
 impl<'db> AssocConstDecl<'db> {
     fn lower_ast(ctxt: &mut FileLowerCtxt<'db>, ast: ast::TraitConstItem) -> Self {
+        let attributes = AttrListId::lower_ast_opt(ctxt, ast.attr_list());
         let name = IdentId::lower_token_partial(ctxt, ast.name());
         let ty = TypeId::lower_ast_partial(ctxt, ast.ty());
         let default = ast
             .value()
             .map(|expr| crate::hir_def::Partial::Present(Body::lower_ast(ctxt, expr)));
-        AssocConstDecl { name, ty, default }
+        AssocConstDecl {
+            attributes,
+            name,
+            ty,
+            default,
+        }
     }
 }
 
 impl<'db> AssocConstDef<'db> {
     fn lower_ast(ctxt: &mut FileLowerCtxt<'db>, ast: ast::TraitConstItem) -> Self {
+        let attributes = AttrListId::lower_ast_opt(ctxt, ast.attr_list());
         let value = ast.value().map(|expr| Body::lower_ast(ctxt, expr)).into();
 
         AssocConstDef {
+            attributes,
             name: IdentId::lower_token_partial(ctxt, ast.name()),
             ty: TypeId::lower_ast_partial(ctxt, ast.ty()),
             value,
