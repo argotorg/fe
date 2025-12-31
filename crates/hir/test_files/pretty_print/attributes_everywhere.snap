@@ -8,6 +8,8 @@ use core::prelude::*
 #[mod_attr]
 mod inner {
     use core::prelude::*
+    #[use_attr]
+    use core::ops::Eq
 
     #[struct_attr]
     struct Point {

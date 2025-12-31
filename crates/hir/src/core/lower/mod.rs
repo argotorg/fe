@@ -13,8 +13,8 @@ use self::{item::lower_module_items, scope_builder::ScopeGraphBuilder};
 use crate::{
     HirDb, LowerHirDb,
     hir_def::{
-        ExprId, IdentId, IntegerId, ItemKind, LitKind, ModuleTree, Partial, StringId, TopLevelMod,
-        TrackedItemId, TrackedItemVariant, Use, Visibility, module_tree_impl,
+        AttrListId, ExprId, IdentId, IntegerId, ItemKind, LitKind, ModuleTree, Partial, StringId,
+        TopLevelMod, TrackedItemId, TrackedItemVariant, Use, Visibility, module_tree_impl,
         scope_graph::ScopeGraph,
         use_tree::{UsePathId, UsePathSegment},
     },
@@ -147,7 +147,17 @@ impl<'db> FileLowerCtxt<'db> {
 
         let top_mod = self.top_mod();
         let origin = HirOrigin::synthetic();
-        let use_ = Use::new(db, id, path, None, Visibility::Private, top_mod, origin);
+        let attrs = AttrListId::new(db, vec![]);
+        let use_ = Use::new(
+            db,
+            id,
+            attrs,
+            path,
+            None,
+            Visibility::Private,
+            top_mod,
+            origin,
+        );
         self.leave_item_scope(use_);
     }
 
@@ -168,7 +178,17 @@ impl<'db> FileLowerCtxt<'db> {
 
         let top_mod = self.top_mod();
         let origin = HirOrigin::synthetic();
-        let use_ = Use::new(db, id, path, None, Visibility::Private, top_mod, origin);
+        let attrs = AttrListId::new(db, vec![]);
+        let use_ = Use::new(
+            db,
+            id,
+            attrs,
+            path,
+            None,
+            Visibility::Private,
+            top_mod,
+            origin,
+        );
         self.leave_item_scope(use_);
     }
 

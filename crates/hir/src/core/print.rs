@@ -1521,6 +1521,9 @@ impl<'db> Use<'db> {
     pub fn pretty_print(self, db: &'db dyn HirDb) -> String {
         let mut result = String::new();
 
+        // Attributes
+        result.push_str(&self.attributes(db).pretty_print_with_newline(db));
+
         // Visibility
         result.push_str(self.vis(db).pretty_print());
 

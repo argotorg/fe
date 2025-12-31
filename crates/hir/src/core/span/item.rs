@@ -445,7 +445,13 @@ impl<'db> LazyConstSpan<'db> {
     }
 }
 
-define_lazy_span_node!(LazyUseSpan, ast::Use);
+define_lazy_span_node!(
+    LazyUseSpan,
+    ast::Use,
+    @node {
+        (attributes, attr_list, LazyAttrListSpan),
+    }
+);
 impl<'db> LazyUseSpan<'db> {
     pub fn new(u: Use<'db>) -> Self {
         Self(crate::span::transition::SpanTransitionChain::new(u))

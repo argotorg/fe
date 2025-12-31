@@ -1,5 +1,8 @@
 #[mod_attr]
 mod inner {
+    #[use_attr]
+    use core::ops::Eq
+
     #[struct_attr]
     struct Point {
         #[field_attr]

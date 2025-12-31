@@ -98,6 +98,7 @@ impl<'db> ItemKind<'db> {
             Self::Trait(trait_) => trait_.attributes(db),
             Self::ImplTrait(impl_trait) => impl_trait.attributes(db),
             Self::Const(const_) => const_.attributes(db),
+            Self::Use(use_) => use_.attributes(db),
             _ => return None,
         }
         .into()
@@ -1200,6 +1201,7 @@ pub struct Use<'db> {
     #[id]
     id: TrackedItemId<'db>,
 
+    pub(in crate::core) attributes: AttrListId<'db>,
     pub path: Partial<super::UsePathId<'db>>,
     pub alias: Option<Partial<UseAlias<'db>>>,
     pub vis: Visibility,
