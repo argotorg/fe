@@ -166,9 +166,86 @@ pub trait Log {
     }
 }
 
+/// Metadata for deployable high-level contracts.
+///
+/// The compiler synthesizes an implementation of this trait for each high-level
+/// `contract` item, enabling typed `CREATE`/`CREATE2` from within other
+/// contracts.
+pub trait Contract {
+    /// Constructor argument tuple, ABI-encodable under the default ABI.
+    type InitArgs: Encode<Sol>
+
+    /// Offset of this contract's initcode within the current artifact.
+    fn init_code_offset() -> u256
+
+    /// Length (in bytes) of this contract's initcode within the current artifact.
+    fn init_code_len() -> u256
+}
+
 pub trait Create {
-    fn create(mut self, value: u256, offset: u256, len: u256) -> Address
-    fn create2(mut self, value: u256, offset: u256, len: u256, salt: u256) -> Address
+    /// Low-level `CREATE` opcode.
+    fn create_raw(mut self, value: u256, offset: u256, len: u256) -> Address {
+        Address { inner: ops::create(value, offset, len) }
+    }
+
+    /// Low-level `CREATE2` opcode.
+    fn create2_raw(mut self, value: u256, offset: u256, len: u256, salt: u256) -> Address {
+        Address { inner: ops::create2(value, offset, len, salt) }
+    }
+
+    /// Deploy a high-level contract using `CREATE`, bubbling revert data on failure.
+    fn create<C: Contract>(mut self, value: u256, args: C::InitArgs) -> Address {
+        let init_len = C::init_code_len()
+        let init_off = C::init_code_offset()
+        let args_len = encoded_size<C::InitArgs>()
+        let total_len = init_len + args_len
+
+        // Build `initcode || abi.encode(args)` contiguously.
+        let init_ptr = mem::alloc(total_len)
+        ops::codecopy(dest: init_ptr, offset: init_off, len: init_len)
+        let args_ptr = init_ptr + init_len
+        let enc = SolEncoder { start: args_ptr, pos: args_ptr, end: args_ptr + args_len }
+        args.encode(enc)
+
+        let addr = self.create_raw(value, init_ptr, total_len)
+
+        // Solidity-style behavior: bubble revert data if creation fails.
+        if addr.inner == 0 {
+            let ret_len = ops::returndatasize()
+            let ret_ptr = mem::alloc(ret_len)
+            ops::returndatacopy(dest: ret_ptr, offset: 0, len: ret_len)
+            ops::revert(ret_ptr, ret_len)
+        }
+
+        addr
+    }
+
+    /// Deploy a high-level contract using `CREATE2`, bubbling revert data on failure.
+    fn create2<C: Contract>(mut self, value: u256, args: C::InitArgs, salt: u256) -> Address {
+        let init_len = C::init_code_len()
+        let init_off = C::init_code_offset()
+        let args_len = encoded_size<C::InitArgs>()
+        let total_len = init_len + args_len
+
+        // Build `initcode || abi.encode(args)` contiguously.
+        let init_ptr = mem::alloc(total_len)
+        ops::codecopy(dest: init_ptr, offset: init_off, len: init_len)
+        let args_ptr = init_ptr + init_len
+        let enc = SolEncoder { start: args_ptr, pos: args_ptr, end: args_ptr + args_len }
+        args.encode(enc)
+
+        let addr = self.create2_raw(value, init_ptr, total_len, salt)
+
+        // Solidity-style behavior: bubble revert data if creation fails.
+        if addr.inner == 0 {
+            let ret_len = ops::returndatasize()
+            let ret_ptr = mem::alloc(ret_len)
+            ops::returndatacopy(dest: ret_ptr, offset: 0, len: ret_len)
+            ops::revert(ret_ptr, ret_len)
+        }
+
+        addr
+    }
 }
 
 /// High-level contract calls with ABI encoding/decoding.
@@ -257,10 +334,10 @@ impl Log for Evm {
 }
 
 impl Create for Evm {
-    fn create(mut self, value: u256, offset: u256, len: u256) -> Address {
+    fn create_raw(mut self, value: u256, offset: u256, len: u256) -> Address {
         Address { inner: ops::create(value, offset, len) }
     }
-    fn create2(mut self, value: u256, offset: u256, len: u256, salt: u256) -> Address {
+    fn create2_raw(mut self, value: u256, offset: u256, len: u256, salt: u256) -> Address {
         Address { inner: ops::create2(value, offset, len, salt) }
     }
 }

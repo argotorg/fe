@@ -7,7 +7,7 @@ fn init() uses (mut evm: Evm) {
         let offset = evm.code_region_offset(child_init)
         let dest = with (RawMem = evm) { allocate(bytes: len) }
         evm.codecopy(dest, offset, len)
-        evm.create2(value: 0, offset, len: len, salt: 0x1234)
+        evm.create2_raw(value: 0, offset, len: len, salt: 0x1234)
     }
 
     let len = evm.code_region_len(runtime)

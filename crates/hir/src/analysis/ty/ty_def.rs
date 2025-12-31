@@ -124,6 +124,9 @@ impl<'db> TyId<'db> {
             loop {
                 match ty.data(db) {
                     TyData::TyBase(TyBase::Adt(adt)) => return adt.ingot(db).into(),
+                    TyData::TyBase(TyBase::Contract(contract)) => {
+                        return contract.top_mod(db).ingot(db).into();
+                    }
                     TyData::TyBase(TyBase::Func(def)) => return def.ingot(db).into(),
                     TyData::TyApp(lhs, _) => {
                         ty = *lhs;
@@ -135,6 +138,7 @@ impl<'db> TyId<'db> {
 
         match self.data(db) {
             TyData::TyBase(TyBase::Adt(adt)) => adt.ingot(db).into(),
+            TyData::TyBase(TyBase::Contract(contract)) => contract.top_mod(db).ingot(db).into(),
             TyData::TyBase(TyBase::Func(def)) => def.ingot(db).into(),
             TyData::TyApp(lhs, _) => lhs.ingot(db),
             // Projection types don't have a single defining ingot, but we still want an ingot

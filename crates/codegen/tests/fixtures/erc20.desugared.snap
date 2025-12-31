@@ -251,6 +251,18 @@ mod __CoolCoin {
             _ => root.abort(),
         }
     }
+
+    impl std::evm::Contract for CoolCoin {
+        type InitArgs = (u256, Address)
+    
+        fn init_code_offset() -> u256 {
+            return std::evm::code_region_offset(init)
+        }
+    
+        fn init_code_len() -> u256 {
+            return std::evm::code_region_len(init)
+        }
+    }
 }
 
 fn transfer(from: Address, to: Address, amount: u256) uses (mut store: TokenStore, mut log: Log) {
