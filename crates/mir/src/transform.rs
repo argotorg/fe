@@ -1,9 +1,13 @@
 use hir::analysis::HirAnalysisDb;
+use hir::analysis::ty::simplified_pattern::ConstructorKind;
+use hir::analysis::ty::ty_def::{PrimTy, TyBase, TyData, TyId};
+use hir::hir_def::EnumVariant;
 use hir::projection::{IndexSource, Projection};
 use rustc_hash::FxHashSet;
 
 use crate::ir::{
-    MirBody, MirInst, Rvalue, TerminatingCall, Terminator, ValueData, ValueId, ValueOrigin,
+    AddressSpaceKind, LocalData, MirBody, MirInst, MirProjectionPath, Place, Rvalue,
+    TerminatingCall, Terminator, ValueData, ValueId, ValueOrigin, ValueRepr,
 };
 use crate::layout;
 
@@ -153,6 +157,177 @@ pub(crate) fn insert_temp_binds<'db>(db: &'db dyn HirAnalysisDb, body: &mut MirB
         }
         block.insts = rewritten;
     }
+}
+
+/// Canonicalize transparent-newtype operations in MIR.
+///
+/// This pass enforces a single representation strategy for transparent newtypes (single-field
+/// structs):
+/// - Collapses chains of `ValueOrigin::TransparentCast` so downstream passes don't need to chase
+///   multiple hops.
+/// - Rewrites `Place` projection paths to peel `.0` field projections over transparent newtypes
+///   by inserting type-only `TransparentCast`s on the base address value and removing the no-op
+///   field projection.
+///
+/// This is intended as a post-lowering cleanup that reduces scattered newtype handling in later
+/// passes and in codegen.
+pub(crate) fn canonicalize_transparent_newtypes<'db>(
+    db: &'db dyn HirAnalysisDb,
+    body: &mut MirBody<'db>,
+) {
+    fn alloc_value<'db>(values: &mut Vec<ValueData<'db>>, data: ValueData<'db>) -> ValueId {
+        let id = ValueId(values.len() as u32);
+        values.push(data);
+        id
+    }
+
+    fn flatten_transparent_cast_chains<'db>(values: &mut [ValueData<'db>]) {
+        for idx in 0..values.len() {
+            let ValueOrigin::TransparentCast { value: mut inner } = values[idx].origin else {
+                continue;
+            };
+            // Bound the walk defensively (cycles should be impossible).
+            for _ in 0..values.len() {
+                match values.get(inner.index()).map(|v| &v.origin) {
+                    Some(ValueOrigin::TransparentCast { value }) => inner = *value,
+                    _ => break,
+                }
+            }
+            values[idx].origin = ValueOrigin::TransparentCast { value: inner };
+        }
+    }
+
+    fn apply_projection_to_ty<'db>(
+        db: &'db dyn HirAnalysisDb,
+        ty: TyId<'db>,
+        proj: &Projection<TyId<'db>, EnumVariant<'db>, ValueId>,
+    ) -> Option<TyId<'db>> {
+        match proj {
+            Projection::Field(field_idx) => ty.field_types(db).get(*field_idx).copied(),
+            Projection::VariantField {
+                variant,
+                enum_ty,
+                field_idx,
+            } => {
+                let ctor = ConstructorKind::Variant(*variant, *enum_ty);
+                ctor.field_types(db).get(*field_idx).copied()
+            }
+            Projection::Discriminant => {
+                Some(TyId::new(db, TyData::TyBase(TyBase::Prim(PrimTy::U256))))
+            }
+            Projection::Index(_idx) => {
+                let (base, args) = ty.decompose_ty_app(db);
+                (base.is_array(db) && !args.is_empty()).then(|| args[0])
+            }
+            Projection::Deref => None,
+        }
+    }
+
+    fn canonicalize_place<'db>(
+        db: &'db dyn HirAnalysisDb,
+        values: &mut Vec<ValueData<'db>>,
+        locals: &[LocalData<'db>],
+        place: Place<'db>,
+    ) -> Place<'db> {
+        // Only attempt to canonicalize places rooted at pointer-like values. If the base is a
+        // pure word with no address space, treating it as an address is a bug; this pass avoids
+        // "fixing" such cases into memory loads/stores.
+        if values
+            .get(place.base.index())
+            .is_none_or(|v| v.repr.address_space().is_none())
+        {
+            return place;
+        }
+
+        let mut base = place.base;
+        let mut current_ty = values[base.index()].ty;
+        let mut path = MirProjectionPath::new();
+
+        for proj in place.projection.iter() {
+            // Peel transparent-newtype field 0 projections by retyping the base address.
+            if let Projection::Field(0) = proj
+                && let Some(inner_ty) = crate::repr::transparent_newtype_field_ty(db, current_ty)
+            {
+                let base_at_point = if path.is_empty() {
+                    base
+                } else {
+                    let addr_space = crate::ir::try_value_address_space_in(values, locals, base)
+                        .unwrap_or(AddressSpaceKind::Memory);
+                    let prefix_place = Place::new(base, path);
+                    alloc_value(
+                        values,
+                        ValueData {
+                            ty: current_ty,
+                            origin: ValueOrigin::PlaceRef(prefix_place),
+                            repr: ValueRepr::Ref(addr_space),
+                        },
+                    )
+                };
+
+                let repr = values[base_at_point.index()].repr;
+                base = alloc_value(
+                    values,
+                    ValueData {
+                        ty: inner_ty,
+                        origin: ValueOrigin::TransparentCast {
+                            value: base_at_point,
+                        },
+                        repr,
+                    },
+                );
+                current_ty = inner_ty;
+                path = MirProjectionPath::new();
+                continue;
+            }
+
+            path.push(proj.clone());
+            if let Some(next) = apply_projection_to_ty(db, current_ty, proj) {
+                current_ty = next;
+            }
+        }
+
+        Place::new(base, path)
+    }
+
+    flatten_transparent_cast_chains(&mut body.values);
+
+    let (values, blocks, locals) = (&mut body.values, &mut body.blocks, &body.locals);
+
+    let initial_values_len = values.len();
+    for idx in 0..initial_values_len {
+        let place = match &values[idx].origin {
+            ValueOrigin::PlaceRef(place) => Some(place.clone()),
+            _ => None,
+        };
+        if let Some(place) = place {
+            let updated = canonicalize_place(db, values, locals, place);
+            values[idx].origin = ValueOrigin::PlaceRef(updated);
+        }
+    }
+
+    for block in blocks {
+        for inst in &mut block.insts {
+            match inst {
+                MirInst::Assign { rvalue, .. } => {
+                    if let Rvalue::Load { place } = rvalue {
+                        *place = canonicalize_place(db, values, locals, place.clone());
+                    }
+                }
+                MirInst::Store { place, .. } => {
+                    *place = canonicalize_place(db, values, locals, place.clone());
+                }
+                MirInst::InitAggregate { place, .. } => {
+                    *place = canonicalize_place(db, values, locals, place.clone());
+                }
+                MirInst::SetDiscriminant { place, .. } => {
+                    *place = canonicalize_place(db, values, locals, place.clone());
+                }
+                MirInst::BindValue { .. } => {}
+            }
+        }
+    }
+
+    flatten_transparent_cast_chains(values);
 }
 
 /// Canonicalize zero-sized types (ZSTs) in MIR.

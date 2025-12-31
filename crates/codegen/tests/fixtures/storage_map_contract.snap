@@ -1,5 +1,6 @@
 ---
 source: crates/codegen/tests/yul.rs
+assertion_line: 42
 expression: output
 input_file: tests/fixtures/storage_map_contract.fe
 ---
@@ -22,12 +23,12 @@ object "BalanceMap" {
         return(v0, 32)
       }
       function get_allowance(addr, allowances) -> ret {
-        let v0 := storagemap_k__v__get_stor__u256_u256__cc308d1bea3fb6e4(allowances, addr)
+        let v0 := storagemap_k__v__get__u256_u256__cc308d1bea3fb6e4(allowances, addr)
         ret := v0
         leave
       }
       function get_balance(addr, balances) -> ret {
-        let v0 := storagemap_k__v__get_stor__u256_u256__cc308d1bea3fb6e4(balances, addr)
+        let v0 := storagemap_k__v__get__u256_u256__cc308d1bea3fb6e4(balances, addr)
         ret := v0
         leave
       }
@@ -79,31 +80,31 @@ object "BalanceMap" {
           }
       }
       function set_allowance(addr, value, allowances) {
-        storagemap_k__v__set_stor__u256_u256__cc308d1bea3fb6e4(allowances, addr, value)
+        storagemap_k__v__set__u256_u256__cc308d1bea3fb6e4(allowances, addr, value)
         leave
       }
       function set_balance(addr, value, balances) {
-        storagemap_k__v__set_stor__u256_u256__cc308d1bea3fb6e4(balances, addr, value)
+        storagemap_k__v__set__u256_u256__cc308d1bea3fb6e4(balances, addr, value)
         leave
       }
       function stor_ptr__Evm_StorageMap_u256__u256___a32410dee911f369(self, slot) -> ret {
         ret := slot
         leave
       }
-      function storagemap_k__v__get_stor__u256_u256__cc308d1bea3fb6e4(self, key) -> ret {
-        let v0 := storagemap_k__v__storage_slot_stor__u256_u256__cc308d1bea3fb6e4(self, key)
+      function storagemap_k__v__get__u256_u256__cc308d1bea3fb6e4(self, key) -> ret {
+        let v0 := storagemap_k__v__storage_slot__u256_u256__cc308d1bea3fb6e4(self, key)
         let v1 := sload(v0)
         let v2 := u256_wordrepr_from_word(v1)
         ret := v2
         leave
       }
-      function storagemap_k__v__set_stor__u256_u256__cc308d1bea3fb6e4(self, key, value) {
-        let v0 := storagemap_k__v__storage_slot_stor__u256_u256__cc308d1bea3fb6e4(self, key)
+      function storagemap_k__v__set__u256_u256__cc308d1bea3fb6e4(self, key, value) {
+        let v0 := storagemap_k__v__storage_slot__u256_u256__cc308d1bea3fb6e4(self, key)
         let v1 := u256_wordrepr_to_word(value)
         sstore(v0, v1)
         leave
       }
-      function storagemap_k__v__storage_slot_stor__u256_u256__cc308d1bea3fb6e4(self, key) -> ret {
+      function storagemap_k__v__storage_slot__u256_u256__cc308d1bea3fb6e4(self, key) -> ret {
         let v0 := mload(64)
         let v1 := u256_storagekey_write_key(v0, key)
         let v2 := self
@@ -113,16 +114,16 @@ object "BalanceMap" {
         leave
       }
       function transfer(from, to, amount, balances) -> ret {
-        let v0 := storagemap_k__v__get_stor__u256_u256__cc308d1bea3fb6e4(balances, from)
+        let v0 := storagemap_k__v__get__u256_u256__cc308d1bea3fb6e4(balances, from)
         let v1 := lt(v0, amount)
         if v1 {
           ret := 1
           leave
         }
         if iszero(v1) {
-          let v2 := storagemap_k__v__get_stor__u256_u256__cc308d1bea3fb6e4(balances, to)
-          storagemap_k__v__set_stor__u256_u256__cc308d1bea3fb6e4(balances, from, sub(v0, amount))
-          storagemap_k__v__set_stor__u256_u256__cc308d1bea3fb6e4(balances, to, add(v2, amount))
+          let v2 := storagemap_k__v__get__u256_u256__cc308d1bea3fb6e4(balances, to)
+          storagemap_k__v__set__u256_u256__cc308d1bea3fb6e4(balances, from, sub(v0, amount))
+          storagemap_k__v__set__u256_u256__cc308d1bea3fb6e4(balances, to, add(v2, amount))
           ret := 0
           leave
         }

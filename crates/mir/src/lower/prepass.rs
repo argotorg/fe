@@ -98,7 +98,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         }
 
         let ty = self.typed_body.expr_ty(self.db, expr);
-        let repr = self.value_repr_for_expr(expr, ty);
+        let mut repr = self.value_repr_for_expr(expr, ty);
         let origin = match expr.data(self.db, self.body) {
             Partial::Present(Expr::Lit(LitKind::Int(int_id))) => {
                 ValueOrigin::Synthetic(SyntheticValue::Int(int_id.data(self.db).clone()))
@@ -126,6 +126,16 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                     } else if let Some(target) = self.code_region_target_from_ty(ty) {
                         ValueOrigin::FuncItem(target)
                     } else if let Some(local) = self.local_for_binding(binding) {
+                        if matches!(binding, LocalBinding::EffectParam { .. })
+                            && matches!(repr, ValueRepr::Word)
+                            && !crate::layout::is_zero_sized_ty(self.db, ty)
+                        {
+                            // Effect params are addressable providers; even when their runtime
+                            // representation is a single word, treat them as `Ref` roots so
+                            // lowering can emit `Place`-based loads/stores (including transparent
+                            // newtype peeling over field-0 projections).
+                            repr = ValueRepr::Ref(self.address_space_for_binding(&binding));
+                        }
                         ValueOrigin::Local(local)
                     } else if let Some(target) = self.code_region_target(expr) {
                         ValueOrigin::FuncItem(target)

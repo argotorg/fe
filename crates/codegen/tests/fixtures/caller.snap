@@ -1,16 +1,11 @@
 ---
 source: crates/codegen/tests/yul.rs
+assertion_line: 42
 expression: output
 input_file: tests/fixtures/caller.fe
 ---
 function who_called(ctx) -> ret {
-  let v0 := mload(0x40)
-  if iszero(v0) {
-    v0 := 0x80
-  }
-  mstore(0x40, add(v0, 32))
-  let v1 := caller()
-  mstore(v0, v1)
+  let v0 := caller()
   ret := v0
   leave
 }

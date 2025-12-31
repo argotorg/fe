@@ -174,41 +174,37 @@ object "EchoContract" {
       }
       function calldata_byteinput_len(self) -> ret {
         let v0 := calldatasize()
-        let v1 := mload(self)
-        ret := sub(v0, v1)
+        ret := sub(v0, self)
         leave
       }
       function calldata_byteinput_word_at(self, byte_offset) -> ret {
-        let v0 := mload(self)
-        let v1 := calldataload(add(v0, byte_offset))
-        ret := v1
+        let v0 := calldataload(add(self, byte_offset))
+        ret := v0
         leave
       }
       function cursor_i__fork_mem__CallData__b9ab8dc8a4b2f9e(self, pos) -> ret {
+        let v0 := mload(self)
+        let v1 := mload(0x40)
+        if iszero(v1) {
+          v1 := 0x80
+        }
+        mstore(0x40, add(v1, 64))
+        mstore(v1, v0)
+        mstore(add(v1, 32), pos)
+        let v2 := v1
+        ret := v2
+        leave
+      }
+      function cursor_i__new__CallData__b9ab8dc8a4b2f9e(input) -> ret {
         let v0 := mload(0x40)
         if iszero(v0) {
           v0 := 0x80
         }
         mstore(0x40, add(v0, 64))
-        let v1 := self
-        mstore(v0, mload(v1))
-        mstore(add(v0, 32), pos)
-        let v2 := v0
-        ret := v2
-        leave
-      }
-      function cursor_i__new__MemoryBytes__b48f82585f3ed728(input) -> ret {
-        let v0 := mload(0x40)
-        if iszero(v0) {
-          v0 := 0x80
-        }
-        mstore(0x40, add(v0, 96))
-        let v1 := input
-        mstore(v0, mload(v1))
-        mstore(add(v0, 32), mload(add(v1, 32)))
-        mstore(add(v0, 64), 0)
-        let v2 := v0
-        ret := v2
+        mstore(v0, input)
+        mstore(add(v0, 32), 0)
+        let v1 := v0
+        ret := v1
         leave
       }
       function evm_contracthost_abort(self) {
@@ -220,13 +216,7 @@ object "EchoContract" {
         leave
       }
       function evm_contracthost_input(self) -> ret {
-        let v0 := mload(0x40)
-        if iszero(v0) {
-          v0 := 0x80
-        }
-        mstore(0x40, add(v0, 32))
-        mstore(v0, 0)
-        ret := v0
+        ret := 0
         leave
       }
       function evm_contracthost_return_bytes(self, ptr, len) {
@@ -316,22 +306,24 @@ object "EchoContract" {
         leave
       }
       function soldecoder_i__abidecoder_read_word__CallData__b9ab8dc8a4b2f9e(self) -> ret {
-        let v0 := calldata_byteinput_len(self)
-        let v1 := mload(add(self, 32))
-        let v2 := add(v1, 32)
-        let v3 := mload(add(self, 32))
-        let v4 := or(lt(v2, v3), gt(v2, v0))
-        if v4 {
+        let v0 := mload(self)
+        let v1 := calldata_byteinput_len(v0)
+        let v2 := mload(add(self, 32))
+        let v3 := add(v2, 32)
+        let v4 := mload(add(self, 32))
+        let v5 := or(lt(v3, v4), gt(v3, v1))
+        if v5 {
           revert(0, 0)
         }
-        let v5 := mload(add(self, 32))
-        let v6 := calldata_byteinput_word_at(self, v5)
-        mstore(add(self, 32), v2)
-        ret := v6
+        let v6 := mload(self)
+        let v7 := mload(add(self, 32))
+        let v8 := calldata_byteinput_word_at(v6, v7)
+        mstore(add(self, 32), v3)
+        ret := v8
         leave
       }
       function soldecoder_i__with_base__CallData__b9ab8dc8a4b2f9e(input, base) -> ret {
-        let v0 := cursor_i__new__MemoryBytes__b48f82585f3ed728(input)
+        let v0 := cursor_i__new__CallData__b9ab8dc8a4b2f9e(input)
         let v1 := cursor_i__fork_mem__CallData__b9ab8dc8a4b2f9e(v0, base)
         let v2 := mload(0x40)
         if iszero(v2) {

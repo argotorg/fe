@@ -1,5 +1,6 @@
 ---
 source: crates/codegen/tests/yul.rs
+assertion_line: 42
 expression: output
 input_file: tests/fixtures/nested_struct.fe
 ---
@@ -21,23 +22,9 @@ object "NestedStruct" {
         return(0, 32)
       }
       function mem_read(value) -> ret {
-        let v0 := mload(0x40)
-        if iszero(v0) {
-          v0 := 0x80
-        }
-        mstore(0x40, add(v0, 32))
-        mstore(v0, 0)
-        let v1 := mload(0x40)
-        if iszero(v1) {
-          v1 := 0x80
-        }
-        mstore(0x40, add(v1, 32))
-        let v2 := v0
-        mstore(v1, mload(v2))
-        let v3 := v1
-        mstore(v3, value)
-        let v4 := mload(v3)
-        ret := v4
+        let v0 := 0
+        v0 := value
+        ret := v0
         leave
       }
       function read_inner(outer) -> ret {

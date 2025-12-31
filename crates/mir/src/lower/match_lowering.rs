@@ -353,6 +353,61 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         test_block
     }
 
+    fn try_lower_non_ref_scrutinee_projection_as_transparent_cast(
+        &mut self,
+        context: &'static str,
+        scrutinee_value: ValueId,
+        scrutinee_ty: TyId<'db>,
+        path: &ProjectionPath<'db>,
+        result_ty: TyId<'db>,
+    ) -> Option<ValueId> {
+        let scrutinee_repr = self.builder.body.value(scrutinee_value).repr;
+        if matches!(scrutinee_repr, ValueRepr::Ref(_)) {
+            return None;
+        }
+
+        // Non-`Ref` scrutinee (word/opaque pointer): only transparent-newtype peeling is valid.
+        //
+        // For nested newtypes (`A { inner: B { inner: u256 } }`), the decision-tree projection
+        // path can contain multiple `Field(0)` steps. These are all representation-preserving
+        // casts that must not be lowered as place/projection loads.
+        let mut current_ty = scrutinee_ty;
+        for proj in path.iter() {
+            if let Projection::Field(0) = proj
+                && let Some(inner) = crate::repr::transparent_newtype_field_ty(self.db, current_ty)
+                {
+                    current_ty = inner;
+                    continue;
+                }
+
+            panic!(
+                "{context} requires `Ref` scrutinee (ty={}, repr={:?}, path_len={})",
+                scrutinee_ty.pretty_print(self.db),
+                scrutinee_repr,
+                path.len()
+            );
+        }
+
+        debug_assert_eq!(
+            current_ty,
+            result_ty,
+            "transparent-newtype projection produced unexpected type (got={}, expected={})",
+            current_ty.pretty_print(self.db),
+            result_ty.pretty_print(self.db),
+        );
+
+        let space = scrutinee_repr
+            .address_space()
+            .unwrap_or(AddressSpaceKind::Memory);
+        Some(self.builder.body.alloc_value(ValueData {
+            ty: result_ty,
+            origin: ValueOrigin::TransparentCast {
+                value: scrutinee_value,
+            },
+            repr: self.value_repr_for_ty(result_ty, space),
+        }))
+    }
+
     /// Extracts a value from the scrutinee based on a projection path.
     ///
     /// Uses Place with projections - offset computation is deferred to codegen.
@@ -415,6 +470,15 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
 
         // Compute the result type of the projection
         let result_ty = self.compute_projection_result_type(scrutinee_ty, path);
+        if let Some(value) = self.try_lower_non_ref_scrutinee_projection_as_transparent_cast(
+            "match projection path",
+            scrutinee_value,
+            scrutinee_ty,
+            path,
+            result_ty,
+        ) {
+            return value;
+        }
         let addr_space = self.value_address_space(scrutinee_value);
 
         // Build Place with the full projection path
@@ -491,7 +555,15 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         let final_ty = self.compute_projection_result_type(scrutinee_ty, path);
         let is_by_ref = self.is_by_ref_ty(final_ty);
 
-        // Track address space for the result
+        if let Some(cast) = self.try_lower_non_ref_scrutinee_projection_as_transparent_cast(
+            "match binding projection path",
+            scrutinee_value,
+            scrutinee_ty,
+            path,
+            final_ty,
+        ) {
+            return (cast, cast);
+        }
         let addr_space = self.value_address_space(scrutinee_value);
 
         // Create the Place

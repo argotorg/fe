@@ -7,6 +7,7 @@ pub mod ir;
 pub mod layout;
 mod lower;
 mod monomorphize;
+pub mod repr;
 mod transform;
 
 pub use ir::{

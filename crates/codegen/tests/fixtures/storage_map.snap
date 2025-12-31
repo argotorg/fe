@@ -1,31 +1,32 @@
 ---
 source: crates/codegen/tests/yul.rs
+assertion_line: 42
 expression: output
 input_file: tests/fixtures/storage_map.fe
 ---
 function get_balance(addr, balances) -> ret {
-  let v0 := storagemap_k__v__get_stor__u256_u256__cc308d1bea3fb6e4(balances, addr)
+  let v0 := storagemap_k__v__get__u256_u256__cc308d1bea3fb6e4(balances, addr)
   ret := v0
   leave
 }
 function set_balance(addr, value, balances) {
-  storagemap_k__v__set_stor__u256_u256__cc308d1bea3fb6e4(balances, addr, value)
+  storagemap_k__v__set__u256_u256__cc308d1bea3fb6e4(balances, addr, value)
   leave
 }
-function storagemap_k__v__get_stor__u256_u256__cc308d1bea3fb6e4(self, key) -> ret {
-  let v0 := storagemap_k__v__storage_slot_stor__u256_u256__cc308d1bea3fb6e4(self, key)
+function storagemap_k__v__get__u256_u256__cc308d1bea3fb6e4(self, key) -> ret {
+  let v0 := storagemap_k__v__storage_slot__u256_u256__cc308d1bea3fb6e4(self, key)
   let v1 := sload(v0)
   let v2 := u256_wordrepr_from_word(v1)
   ret := v2
   leave
 }
-function storagemap_k__v__set_stor__u256_u256__cc308d1bea3fb6e4(self, key, value) {
-  let v0 := storagemap_k__v__storage_slot_stor__u256_u256__cc308d1bea3fb6e4(self, key)
+function storagemap_k__v__set__u256_u256__cc308d1bea3fb6e4(self, key, value) {
+  let v0 := storagemap_k__v__storage_slot__u256_u256__cc308d1bea3fb6e4(self, key)
   let v1 := u256_wordrepr_to_word(value)
   sstore(v0, v1)
   leave
 }
-function storagemap_k__v__storage_slot_stor__u256_u256__cc308d1bea3fb6e4(self, key) -> ret {
+function storagemap_k__v__storage_slot__u256_u256__cc308d1bea3fb6e4(self, key) -> ret {
   let v0 := mload(64)
   let v1 := u256_storagekey_write_key(v0, key)
   let v2 := self

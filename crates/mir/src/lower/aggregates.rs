@@ -82,19 +82,12 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         }
 
         let record_ty = self.typed_body.expr_ty(self.db, expr);
-        let record_base = record_ty.base_ty(self.db);
-        let mut effect_ptr_bases = Vec::new();
-        if let Some(ty) = self.core.helper_ty(CoreHelperTy::EffectMemPtr) {
-            effect_ptr_bases.push(ty.base_ty(self.db));
-        }
-        if let Some(ty) = self.core.helper_ty(CoreHelperTy::EffectStorPtr) {
-            effect_ptr_bases.push(ty.base_ty(self.db));
-        }
-        if let Some(ty) = self.core.helper_ty(CoreHelperTy::EffectCalldataPtr) {
-            effect_ptr_bases.push(ty.base_ty(self.db));
-        }
 
-        if effect_ptr_bases.contains(&record_base) && lowered_fields.len() == 1 {
+        // Transparent newtypes (single-field structs) are represented identically to their single
+        // field, so record literals lower to a representation-preserving cast.
+        if crate::repr::transparent_newtype_field_ty(self.db, record_ty).is_some()
+            && lowered_fields.len() == 1
+        {
             let field_value = lowered_fields[0].1;
             self.builder.body.values[fallback.index()].origin =
                 ValueOrigin::TransparentCast { value: field_value };

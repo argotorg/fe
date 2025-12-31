@@ -1,0 +1,18 @@
+---
+source: crates/codegen/tests/yul.rs
+expression: output
+input_file: tests/fixtures/newtype_u8_word_conversion.fe
+---
+function newtype_u8_roundtrip(x) -> ret {
+  let v0 := mload(0x40)
+  if iszero(v0) {
+    v0 := 0x80
+  }
+  mstore(0x40, add(v0, 33))
+  mstore(v0, and(x, 0xff))
+  mstore(add(v0, 1), 0)
+  let v1 := v0
+  let v2 := and(mload(v1), 0xff)
+  ret := v2
+  leave
+}

@@ -4,25 +4,25 @@ expression: mir_output
 ---
 fn next_idx(v0: u256) -> usize:
   bb0:
-    v1: usize = load stor[v0].0
-    store stor[v0].0 = (v1 + 1)
-    v2: usize = load stor[v0].0
+    v1: usize = load stor[v0]
+    store stor[v0] = (v1 + 1)
+    v2: usize = load stor[v0]
     ret v2
 
 fn zst_load_index_eval() -> usize:
   bb0:
-    v4: Counter = alloc mem
-    init mem[v4] { .0 = 0 }
-    v3: Counter = v4
+    v3: Counter = 0
     bind v3
-    v6: usize = next_idx__eff_mem(v3)
+    v5: Counter = alloc mem
+    store mem[v5] = v3
+    v6: usize = next_idx__eff_mem(v5)
+    v3 = load mem[v5]
     eval v6
-    v7: usize = load mem[v3].0
-    ret v7
+    ret v3
 
 fn next_idx__eff_mem(v0: u256) -> usize:
   bb0:
-    v1: usize = load mem[v0].0
-    store mem[v0].0 = (v1 + 1)
-    v2: usize = load mem[v0].0
+    v1: usize = load mem[v0]
+    store mem[v0] = (v1 + 1)
+    v2: usize = load mem[v0]
     ret v2

@@ -132,22 +132,28 @@ impl<'db> MirBody<'db> {
         self.value_address_space(place.base)
     }
 
-    fn try_place_address_space(&self, place: &Place<'db>) -> Option<AddressSpaceKind> {
-        self.try_value_address_space(place.base)
-    }
-
     fn try_value_address_space(&self, value: ValueId) -> Option<AddressSpaceKind> {
-        let value_data = self.value(value);
-        if let Some(space) = value_data.repr.address_space() {
-            return Some(space);
+        try_value_address_space_in(&self.values, &self.locals, value)
+    }
+}
+
+pub(crate) fn try_value_address_space_in<'db>(
+    values: &[ValueData<'db>],
+    locals: &[LocalData<'db>],
+    value: ValueId,
+) -> Option<AddressSpaceKind> {
+    let value_data = values.get(value.index())?;
+    if let Some(space) = value_data.repr.address_space() {
+        return Some(space);
+    }
+    match &value_data.origin {
+        ValueOrigin::Local(local) => locals.get(local.index()).map(|l| l.address_space),
+        ValueOrigin::TransparentCast { value } => {
+            try_value_address_space_in(values, locals, *value)
         }
-        match &value_data.origin {
-            ValueOrigin::Local(local) => Some(self.local(*local).address_space),
-            ValueOrigin::TransparentCast { value } => self.try_value_address_space(*value),
-            ValueOrigin::FieldPtr(field_ptr) => Some(field_ptr.addr_space),
-            ValueOrigin::PlaceRef(place) => self.try_place_address_space(place),
-            _ => None,
-        }
+        ValueOrigin::FieldPtr(field_ptr) => Some(field_ptr.addr_space),
+        ValueOrigin::PlaceRef(place) => try_value_address_space_in(values, locals, place.base),
+        _ => None,
     }
 }
 
