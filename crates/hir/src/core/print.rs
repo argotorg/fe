@@ -51,6 +51,19 @@ fn indent_text(text: &str, indent_level: usize) -> String {
         .join("\n")
 }
 
+fn write_attrs<'db>(
+    result: &mut String,
+    attrs: AttrListId<'db>,
+    db: &dyn HirDb,
+    indent_level: usize,
+) {
+    let attrs_str = attrs.pretty_print(db);
+    if !attrs_str.is_empty() {
+        result.push_str(&indent_text(&attrs_str, indent_level));
+        result.push('\n');
+    }
+}
+
 /// Formats a list of bounds separated by " + ".
 fn format_bounds<'db>(bounds: &[TypeBound<'db>], db: &dyn HirDb) -> String {
     bounds
@@ -81,11 +94,7 @@ fn indent_continuation(text: &str, indent_level: usize) -> String {
 
 fn format_field_def<'db>(field: &FieldDef<'db>, db: &dyn HirDb, indent_level: usize) -> String {
     let mut result = String::new();
-    let attrs = field.attributes.pretty_print(db);
-    if !attrs.is_empty() {
-        result.push_str(&indent_text(&attrs, indent_level));
-        result.push('\n');
-    }
+    write_attrs(&mut result, field.attributes, db, indent_level);
 
     let vis = field.vis.pretty_print();
     let name = unwrap_partial(field.name, "FieldDef::name");
@@ -1293,6 +1302,7 @@ impl<'db> Trait<'db> {
 
         // Associated types
         for assoc_ty in self.types(db) {
+            write_attrs(&mut result, assoc_ty.attributes, db, 1);
             result.push_str("    type ");
             let name = unwrap_partial(assoc_ty.name, "AssocTyDecl::name");
             result.push_str(name.data(db));
@@ -1315,6 +1325,7 @@ impl<'db> Trait<'db> {
 
         // Associated consts
         for assoc_const in self.consts(db) {
+            write_attrs(&mut result, assoc_const.attributes, db, 1);
             result.push_str("    const ");
             let name = unwrap_partial(assoc_const.name, "AssocConstDecl::name");
             result.push_str(name.data(db));
@@ -1407,6 +1418,7 @@ impl<'db> ImplTrait<'db> {
 
         // Associated types
         for assoc_ty in self.types(db) {
+            write_attrs(&mut result, assoc_ty.attributes, db, 1);
             result.push_str("    type ");
             let name = unwrap_partial(assoc_ty.name, "AssocTyDef::name");
             result.push_str(name.data(db));
@@ -1418,6 +1430,7 @@ impl<'db> ImplTrait<'db> {
 
         // Associated consts
         for assoc_const in self.hir_consts(db) {
+            write_attrs(&mut result, assoc_const.attributes, db, 1);
             result.push_str("    const ");
             let name = unwrap_partial(assoc_const.name, "AssocConstDef::name");
             result.push_str(name.data(db));

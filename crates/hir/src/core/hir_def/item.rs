@@ -1064,6 +1064,7 @@ impl<'db> Trait<'db> {
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, salsa::Update)]
 pub struct AssocTyDecl<'db> {
+    pub attributes: AttrListId<'db>,
     pub name: Partial<IdentId<'db>>,
     pub bounds: Vec<TypeBound<'db>>,
     pub default: Option<TypeId<'db>>,
@@ -1071,6 +1072,7 @@ pub struct AssocTyDecl<'db> {
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, salsa::Update)]
 pub struct AssocConstDecl<'db> {
+    pub attributes: AttrListId<'db>,
     pub name: Partial<IdentId<'db>>,
     pub ty: Partial<TypeId<'db>>,
     pub default: Option<Partial<Body<'db>>>,
@@ -1149,12 +1151,14 @@ impl<'db> ImplTrait<'db> {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, salsa::Update)]
 pub struct AssocTyDef<'db> {
+    pub attributes: AttrListId<'db>,
     pub name: Partial<IdentId<'db>>,
     pub(crate) type_ref: Partial<TypeId<'db>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, salsa::Update)]
 pub struct AssocConstDef<'db> {
+    pub attributes: AttrListId<'db>,
     pub name: Partial<IdentId<'db>>,
     pub ty: Partial<TypeId<'db>>,
     pub value: Partial<Body<'db>>,

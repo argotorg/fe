@@ -31,6 +31,10 @@ mod inner {
 
     #[trait_attr]
     trait Foo {
+        #[assoc_ty_attr]
+        type Item = u32;
+        #[assoc_const_attr]
+        const LIMIT: u32 = 10;
     
         #[trait_method_attr]
         fn bar(self) -> u32
@@ -47,6 +51,10 @@ mod inner {
 
     #[impl_trait_attr]
     impl Foo for Point {
+        #[impl_assoc_ty_attr]
+        type Item = u32
+        #[impl_assoc_const_attr]
+        const LIMIT: u32 = 10
     
         #[impl_trait_method_attr]
         fn bar(self) -> u32 {
