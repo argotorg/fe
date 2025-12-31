@@ -141,4 +141,16 @@ mod __EchoContract {
             _ => root.abort(),
         }
     }
+
+    impl std::evm::Contract for EchoContract {
+        type InitArgs = (u256, u256)
+    
+        fn init_code_offset() -> u256 {
+            return std::evm::code_region_offset(init)
+        }
+    
+        fn init_code_len() -> u256 {
+            return std::evm::code_region_len(init)
+        }
+    }
 }

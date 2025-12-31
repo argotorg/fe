@@ -1,6 +1,5 @@
 ---
 source: crates/hir/tests/desugar.rs
-assertion_line: 32
 expression: output
 input_file: test_files/desugar/contract_and_effects.fe
 ---
@@ -68,6 +67,18 @@ mod __Counter {
                 root.return_value<__DefaultAbi, u64>(__result)
             },
             _ => root.abort(),
+        }
+    }
+
+    impl std::evm::Contract for Counter {
+        type InitArgs = (u64)
+    
+        fn init_code_offset() -> u256 {
+            return std::evm::code_region_offset(init)
+        }
+    
+        fn init_code_len() -> u256 {
+            return std::evm::code_region_len(init)
         }
     }
 }

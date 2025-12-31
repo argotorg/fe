@@ -13,11 +13,11 @@ use hir::analysis::{
         trait_def::resolve_trait_method_instance,
         trait_resolution::PredicateListId,
         ty_check::check_func_body,
-        ty_def::{TyData, TyId},
+        ty_def::{TyBase, TyData, TyId},
     },
 };
 use hir::hir_def::{CallableDef, Func, HirIngot, PathKind, item::ItemKind, scope_graph::ScopeId};
-use rustc_hash::FxHashMap;
+use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::{
     CallOrigin, MirFunction, dedup::deduplicate_mir, ir::AddressSpaceKind, ir::EffectProviderKind,
@@ -54,6 +54,7 @@ struct Monomorphizer<'db> {
     instance_map: FxHashMap<InstanceKey<'db>, usize>,
     worklist: VecDeque<usize>,
     current_symbol: Option<String>,
+    ambiguous_bases: FxHashSet<String>,
 }
 
 #[derive(Clone, PartialEq, Eq, Hash)]
@@ -120,7 +121,7 @@ impl<'db> Monomorphizer<'db> {
             }
         }
 
-        Self {
+        let mut monomorphizer = Self {
             db,
             templates,
             func_index,
@@ -129,7 +130,31 @@ impl<'db> Monomorphizer<'db> {
             instance_map: FxHashMap::default(),
             worklist: VecDeque::new(),
             current_symbol: None,
+            ambiguous_bases: FxHashSet::default(),
+        };
+        monomorphizer.ambiguous_bases = monomorphizer.compute_ambiguous_bases();
+        monomorphizer
+    }
+
+    fn compute_ambiguous_bases(&self) -> FxHashSet<String> {
+        let mut qualifiers_by_base: FxHashMap<String, FxHashSet<String>> = FxHashMap::default();
+        for template in &self.templates {
+            let base = self.base_name_without_disambiguation(
+                template.func,
+                template.receiver_space,
+                &template.effect_provider_kinds,
+            );
+            let qualifier = self.function_qualifier(template.func);
+            qualifiers_by_base
+                .entry(base)
+                .or_default()
+                .insert(qualifier);
         }
+
+        qualifiers_by_base
+            .into_iter()
+            .filter_map(|(base, qualifiers)| (qualifiers.len() > 1).then_some(base))
+            .collect()
     }
 
     /// Instantiate all non-generic templates up front so they are always emitted
@@ -474,6 +499,55 @@ impl<'db> Monomorphizer<'db> {
         receiver_space: Option<AddressSpaceKind>,
         effect_kinds: &[EffectProviderKind],
     ) -> String {
+        let mut base = self.base_name_without_disambiguation(func, receiver_space, effect_kinds);
+        if self.ambiguous_bases.contains(&base) {
+            let qualifier = self.function_qualifier(func);
+            base = format!("{qualifier}_{base}");
+        }
+        if args.is_empty() {
+            return base;
+        }
+
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        let mut parts = Vec::with_capacity(args.len());
+        for ty in args {
+            let pretty = self.type_mangle_component(*ty);
+            pretty.hash(&mut hasher);
+            parts.push(sanitize_symbol_component(&pretty));
+        }
+        let hash = hasher.finish();
+        let suffix = parts.join("_");
+        format!("{base}__{suffix}__{hash:08x}")
+    }
+
+    fn type_mangle_component(&self, ty: TyId<'db>) -> String {
+        match ty.data(self.db) {
+            TyData::TyBase(TyBase::Func(callable)) => match callable {
+                CallableDef::Func(func) => {
+                    let name = func
+                        .name(self.db)
+                        .to_opt()
+                        .map(|ident| ident.data(self.db).to_string())
+                        .unwrap_or_else(|| "<unknown>".to_string());
+                    if self.ambiguous_bases.contains(&name) {
+                        let qualifier = self.function_qualifier(*func);
+                        format!("fn {qualifier}::{name}")
+                    } else {
+                        format!("fn {name}")
+                    }
+                }
+                CallableDef::VariantCtor(_) => ty.pretty_print(self.db).to_string(),
+            },
+            _ => ty.pretty_print(self.db).to_string(),
+        }
+    }
+
+    fn base_name_without_disambiguation(
+        &self,
+        func: Func<'db>,
+        receiver_space: Option<AddressSpaceKind>,
+        effect_kinds: &[EffectProviderKind],
+    ) -> String {
         let mut base = func
             .name(self.db)
             .to_opt()
@@ -504,20 +578,33 @@ impl<'db> Monomorphizer<'db> {
                 .join("_");
             base = format!("{base}__eff_{suffix}");
         }
-        if args.is_empty() {
-            return base;
+        base
+    }
+
+    fn function_qualifier(&self, func: Func<'db>) -> String {
+        let mut parts = Vec::new();
+        let mut scope = func.scope();
+        while let Some(parent) = scope.parent_module(self.db) {
+            match parent {
+                ScopeId::Item(ItemKind::TopMod(_)) => break,
+                ScopeId::Item(ItemKind::Mod(mod_)) => {
+                    if let Some(name) = mod_.name(self.db).to_opt() {
+                        parts.push(name.data(self.db).to_string());
+                    }
+                    scope = parent;
+                }
+                _ => scope = parent,
+            }
         }
 
-        let mut hasher = std::collections::hash_map::DefaultHasher::new();
-        let mut parts = Vec::with_capacity(args.len());
-        for ty in args {
-            let pretty = ty.pretty_print(self.db);
-            pretty.hash(&mut hasher);
-            parts.push(sanitize_symbol_component(pretty));
+        parts.reverse();
+        let qualifier = parts.join("_");
+        let qualifier = sanitize_symbol_component(&qualifier).to_lowercase();
+        if qualifier.is_empty() {
+            "root".to_string()
+        } else {
+            qualifier
         }
-        let hash = hasher.finish();
-        let suffix = parts.join("_");
-        format!("{base}__{suffix}__{hash:08x}")
     }
 
     /// Returns a sanitized prefix for associated functions/methods based on their owner.

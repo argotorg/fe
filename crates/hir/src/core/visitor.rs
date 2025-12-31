@@ -1059,6 +1059,14 @@ pub fn walk_use<'db, V>(
 ) where
     V: Visitor<'db> + ?Sized,
 {
+    ctxt.with_new_ctxt(
+        |span| span.attributes(),
+        |ctxt| {
+            let id = use_.attributes(ctxt.db);
+            visitor.visit_attribute_list(ctxt, id);
+        },
+    );
+
     if let Some(use_path) = use_.path(ctxt.db).to_opt() {
         ctxt.with_new_ctxt(
             |span| span.path(),

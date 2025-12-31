@@ -1,0 +1,35 @@
+use std::evm::{Address, Create}
+
+msg FactoryMsg {
+    #[selector = 1]
+    Deploy { x: u256, y: u256 } -> Address,
+
+    #[selector = 2]
+    Deploy2 { x: u256, y: u256, salt: u256 } -> Address,
+}
+
+pub struct Pair {
+    x: u256,
+    y: u256,
+}
+
+pub contract Child {
+    state: Pair
+
+    init(x: u256, y: u256) uses (mut state) {
+        state.x = x
+        state.y = y
+    }
+}
+
+pub contract Factory uses (mut create: Create) {
+    recv FactoryMsg {
+        Deploy { x, y } -> Address uses (mut create) {
+            create.create<Child>(value: 0, args: (x, y))
+        }
+
+        Deploy2 { x, y, salt } -> Address uses (mut create) {
+            create.create2<Child>(value: 0, args: (x, y), salt: salt)
+        }
+    }
+}
