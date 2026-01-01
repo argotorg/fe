@@ -1,6 +1,5 @@
 ---
 source: crates/codegen/tests/yul.rs
-assertion_line: 34
 expression: desugared
 ---
 use core::prelude::*
@@ -250,6 +249,18 @@ mod __CoolCoin {
                 root.return_value<__DefaultAbi, bool>(__result)
             },
             _ => root.abort(),
+        }
+    }
+
+    impl std::evm::Contract for CoolCoin {
+        type InitArgs = (u256, Address)
+    
+        fn init_code_offset() -> u256 {
+            return std::evm::code_region_offset(init)
+        }
+    
+        fn init_code_len() -> u256 {
+            return std::evm::code_region_len(init)
         }
     }
 }
@@ -591,13 +602,17 @@ mod Erc20Extended {
 }
 
 struct TransferEvent {
+    #[indexed]
     from: Address,
+    #[indexed]
     to: Address,
     value: u256,
 }
 
 struct ApprovalEvent {
+    #[indexed]
     owner: Address,
+    #[indexed]
     spender: Address,
     value: u256,
 }

@@ -1,11 +1,10 @@
 ---
 source: crates/uitest/tests/name_resolution.rs
-assertion_line: 26
 expression: diags
 input_file: fixtures/name_resolution/import_ambiguous_builtin.fe
 ---
-error[2-0005]: `i32` can't be used as a middle segment of a path
+error[2-0004]: `i32` is ambiguous
   ┌─ import_ambiguous_builtin.fe:3:5
   │
 3 │ use i32::*
-  │     ^^^ `i32` can't be used as a middle segment of a path
+  │     ^^^ `i32` is ambiguous

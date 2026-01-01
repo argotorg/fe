@@ -13,4 +13,4 @@ note:
    ┌─ goto_ambiguous.fe:16:12
    │
 16 │     let x: Thing
-   │            ^^^^^ -> goto_ambiguous::bar::Thing
+   │            ^^^^^ -> goto_ambiguous::foo::Thing
