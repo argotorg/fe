@@ -1,9 +1,12 @@
+use crate::doc_server::GotoSourceRequest;
 use crate::fallback::WithFallbackService;
-use crate::functionality::handlers::{FileChange, FilesNeedDiagnostics, NeedsDiagnostics};
+use crate::functionality::handlers::{
+    CursorPositionNotification, DocNavigate, FileChange, FilesNeedDiagnostics, NeedsDiagnostics,
+};
 use crate::logging;
 use crate::lsp_actor::LspActor;
 use crate::lsp_actor::service::LspActorService;
-use crate::lsp_streams::RouterStreams;
+use crate::lsp_streams::{RouterStreams, StreamPipeExt};
 use act_locally::builder::ActorBuilder;
 use async_lsp::ClientSocket;
 use async_lsp::lsp_types::notification::{
@@ -12,15 +15,13 @@ use async_lsp::lsp_types::notification::{
 };
 
 use async_lsp::lsp_types::request::{
-    CodeActionRequest, Completion, DocumentHighlightRequest, DocumentSymbolRequest, Formatting,
-    GotoDefinition, GotoImplementation, GotoTypeDefinition, HoverRequest, InlayHintRequest,
-    References, Rename, SemanticTokensFullRequest, Shutdown, SignatureHelpRequest,
-    WorkspaceSymbolRequest,
+    CodeActionRequest, Completion, DocumentHighlightRequest, DocumentSymbolRequest, ExecuteCommand,
+    Formatting, GotoDefinition, GotoImplementation, GotoTypeDefinition, HoverRequest,
+    InlayHintRequest, References, Rename, SemanticTokensFullRequest, Shutdown,
+    SignatureHelpRequest, WorkspaceSymbolRequest,
 };
-use async_std::stream::StreamExt;
+use futures::StreamExt;
 use futures_batch::ChunksTimeoutStreamExt;
-// use serde_json::Value;
-use tracing::instrument::WithSubscriber;
 use tracing::{info, warn};
 
 use crate::backend::Backend;
@@ -54,8 +55,10 @@ pub(crate) fn setup(
         .handle_request_mut::<GotoDefinition>(goto::handle_goto_definition)
         .handle_event_mut::<FileChange>(handlers::handle_file_change)
         .handle_event::<FilesNeedDiagnostics>(handlers::handle_files_need_diagnostics)
-        // non-mutating handlers
-        .handle_notification::<Initialized>(handlers::initialized)
+        .handle_event_mut::<DocNavigate>(handlers::handle_doc_navigate)
+        .handle_event::<GotoSourceRequest>(handlers::handle_goto_source)
+        // doc server starts on initialization
+        .handle_notification_mut::<Initialized>(handlers::initialized)
         .handle_request::<HoverRequest>(handlers::handle_hover_request)
         .handle_request::<Completion>(completion::handle_completion)
         .handle_request::<SignatureHelpRequest>(signature_help::handle_signature_help)
@@ -74,8 +77,10 @@ pub(crate) fn setup(
         .handle_notification::<DidChangeTextDocument>(handlers::handle_did_change_text_document)
         .handle_notification::<DidChangeWatchedFiles>(handlers::handle_did_change_watched_files)
         .handle_notification::<DidSaveTextDocument>(handlers::handle_did_save_text_document)
+        .handle_notification::<CursorPositionNotification>(handlers::handle_cursor_position)
         .handle_notification::<notification::Exit>(handlers::handle_exit)
-        .handle_request::<Shutdown>(handlers::handle_shutdown);
+        .handle_request::<Shutdown>(handlers::handle_shutdown)
+        .handle_request_mut::<ExecuteCommand>(handlers::handle_execute_command);
 
     let mut streaming_router = Router::new(());
     setup_streams(client.clone(), &mut streaming_router);
@@ -87,20 +92,12 @@ pub(crate) fn setup(
 fn setup_streams(client: ClientSocket, router: &mut Router<()>) {
     info!("setting up streams");
 
-    let mut diagnostics_stream = router
+    // Batch diagnostics events and re-emit as FilesNeedDiagnostics
+    router
         .event_stream::<NeedsDiagnostics>()
         .chunks_timeout(500, std::time::Duration::from_millis(30))
         .map(FilesNeedDiagnostics)
-        .fuse();
-
-    tokio::spawn(
-        async move {
-            while let Some(files_need_diagnostics) = diagnostics_stream.next().await {
-                let _ = client.emit(files_need_diagnostics);
-            }
-        }
-        .with_current_subscriber(),
-    );
+        .pipe_emit(client);
 }
 
 fn setup_unhandled(router: &mut Router<()>) {

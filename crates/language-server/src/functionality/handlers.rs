@@ -1,16 +1,20 @@
 use crate::backend::Backend;
+use crate::doc_server::{DocServerHandle, GotoSourceRequest};
 
 use async_lsp::lsp_types::FileChangeType;
 use async_lsp::{
     ErrorCode, LanguageClient, ResponseError,
     lsp_types::{
-        DocumentFormattingParams, Hover, HoverParams, InitializeParams, InitializeResult,
-        InitializedParams, LogMessageParams, Position, Range, TextEdit,
+        DocumentFormattingParams, ExecuteCommandParams, Hover, HoverParams, InitializeParams,
+        InitializeResult, InitializedParams, LogMessageParams, Position, Range, ShowDocumentParams,
+        TextEdit,
     },
 };
 
 use common::InputDb;
+use doc_engine::DocExtractor;
 use driver::init_ingot;
+use hir::hir_def::HirIngot;
 use rustc_hash::FxHashSet;
 use url::Url;
 
@@ -48,6 +52,54 @@ pub enum ChangeKind {
     Create,
     Edit(Option<String>),
     Delete,
+}
+
+/// Event to navigate the doc browser to a specific path.
+/// Used for: renames, go-to-definition, newly created items, etc.
+#[derive(Debug, Clone)]
+pub struct DocNavigate {
+    /// Target path to navigate to (e.g., "mymod::MyStruct")
+    pub path: String,
+    /// Optional: if set, only redirect if browser is currently on this path
+    pub if_on_path: Option<String>,
+}
+
+/// Custom LSP notification for cursor position updates.
+/// The extension sends this when the text cursor moves in an Fe file.
+/// Method: "fe/cursorPosition"
+pub enum CursorPositionNotification {}
+
+impl async_lsp::lsp_types::notification::Notification for CursorPositionNotification {
+    type Params = async_lsp::lsp_types::TextDocumentPositionParams;
+    const METHOD: &'static str = "fe/cursorPosition";
+}
+
+impl DocNavigate {
+    /// Navigate unconditionally to a path
+    pub fn to(path: impl Into<String>) -> Self {
+        Self {
+            path: path.into(),
+            if_on_path: None,
+        }
+    }
+
+    /// Navigate only if the browser is currently viewing old_path (for renames)
+    pub fn redirect(old_path: impl Into<String>, new_path: impl Into<String>) -> Self {
+        Self {
+            path: new_path.into(),
+            if_on_path: Some(old_path.into()),
+        }
+    }
+}
+
+impl std::fmt::Display for DocNavigate {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if let Some(ref from) = self.if_on_path {
+            write!(f, "DocNavigate({} -> {})", from, self.path)
+        } else {
+            write!(f, "DocNavigate({})", self.path)
+        }
+    }
 }
 
 // Implementation moved to backend/mod.rs
@@ -112,8 +164,28 @@ pub async fn initialize(
         .and_then(|folder| folder.uri.to_file_path().ok())
         .unwrap_or_else(|| std::env::current_dir().unwrap());
 
+    // Store workspace root
+    backend.workspace_root = Some(root.clone());
+
+    // Check if client supports window/showDocument
+    backend.supports_show_document = message
+        .capabilities
+        .window
+        .as_ref()
+        .and_then(|w| w.show_document.as_ref())
+        .map(|sd| sd.support)
+        .unwrap_or(false);
+    info!(
+        "Client supports window/showDocument: {}",
+        backend.supports_show_document
+    );
+
     // Discover and load all ingots in the workspace
     discover_and_load_ingots(backend, &root).await?;
+
+    // Note: Doc server is started lazily on first file change to avoid blocking init
+    // Store workspace root for later use
+    backend.server_info.workspace_root = Some(root.to_string_lossy().to_string());
 
     let capabilities = server_capabilities();
     let initialize_result = InitializeResult {
@@ -127,10 +199,18 @@ pub async fn initialize(
 }
 
 pub async fn initialized(
-    backend: &Backend,
+    backend: &mut Backend,
     _message: InitializedParams,
 ) -> Result<(), ResponseError> {
     info!("language server initialized! recieved notification!");
+    info!("workspace_root: {:?}", backend.workspace_root);
+
+    // Start doc server immediately
+    update_docs(backend).await;
+    info!(
+        "update_docs completed, doc_server running: {}",
+        backend.doc_server.is_some()
+    );
 
     // Get all files from the workspace
     let all_files: Vec<_> = backend
@@ -305,6 +385,9 @@ pub async fn handle_file_change(
         }
     }
 
+    // Update documentation (starts server on first change if needed)
+    update_docs(backend).await;
+
     let _ = backend.client.emit(NeedsDiagnostics(message.uri));
     Ok(())
 }
@@ -383,6 +466,210 @@ pub async fn handle_files_need_diagnostics(
     Ok(())
 }
 
+/// Start the doc server if not running, and update the documentation index.
+/// This is called after file changes to keep docs in sync.
+async fn update_docs(backend: &mut Backend) {
+    info!(
+        "update_docs called, doc_server exists: {}",
+        backend.doc_server.is_some()
+    );
+
+    // Start doc server if not already running
+    if backend.doc_server.is_none() {
+        info!("Starting doc server...");
+        // Use the workers runtime since act_locally runs on a separate thread without tokio
+        let client = backend.client.clone();
+        let supports_goto_source = backend.supports_show_document;
+        let handle_result = backend
+            .workers
+            .block_on(DocServerHandle::start(client, supports_goto_source));
+        match handle_result {
+            Ok(handle) => {
+                info!("Started documentation server at {}", handle.url);
+
+                // Log to client so user can see the URL
+                let _ = backend.client.clone().log_message(LogMessageParams {
+                    typ: async_lsp::lsp_types::MessageType::INFO,
+                    message: format!("Fe docs available at {}", handle.url),
+                });
+
+                // Update server info
+                backend.server_info.docs_url = Some(handle.url.clone());
+
+                // Write server info file if we have a workspace root
+                if let Some(ref root) = backend.workspace_root {
+                    info!("Writing .fe-lsp.json to {:?}", root);
+                    match backend.server_info.write_to_workspace(root) {
+                        Ok(()) => info!("Successfully wrote .fe-lsp.json"),
+                        Err(e) => warn!("Failed to write server info: {}", e),
+                    }
+                } else {
+                    warn!("No workspace root set, cannot write .fe-lsp.json");
+                }
+
+                backend.doc_server = Some(handle);
+            }
+            Err(e) => {
+                error!("Failed to start doc server: {}", e);
+                return;
+            }
+        }
+    }
+
+    // Extract docs from all ingots
+    let extractor = if let Some(ref root) = backend.workspace_root {
+        DocExtractor::new(&backend.db).with_root_path(root)
+    } else {
+        DocExtractor::new(&backend.db)
+    };
+    let mut combined_index = doc_engine::DocIndex::default();
+
+    // Get all unique ingots from workspace files
+    let ingots: FxHashSet<_> = backend
+        .db
+        .workspace()
+        .all_files(&backend.db)
+        .iter()
+        .filter_map(|(url, _)| {
+            backend
+                .db
+                .workspace()
+                .containing_ingot(&backend.db, url.clone())
+        })
+        .collect();
+
+    // Collect trait impl links from all ingots
+    let mut all_trait_impl_links = Vec::new();
+
+    for ingot in ingots {
+        // Skip ingots without valid config (no fe.toml or missing name)
+        let has_valid_config = ingot
+            .config(&backend.db)
+            .and_then(|c| c.metadata.name)
+            .is_some();
+        if !has_valid_config {
+            continue;
+        }
+
+        // Extract items from ALL modules in the ingot (not just root)
+        for top_mod in ingot.all_modules(&backend.db) {
+            for item in top_mod.children_nested(&backend.db) {
+                if let Some(doc_item) = extractor.extract_item_for_ingot(item, ingot) {
+                    combined_index.items.push(doc_item);
+                }
+            }
+        }
+        // Build module tree from root (it handles file-based children)
+        let root_mod = ingot.root_mod(&backend.db);
+        let module_tree = extractor.build_module_tree_for_ingot(ingot, root_mod);
+        combined_index.modules.extend(module_tree);
+
+        // Extract trait implementation links
+        all_trait_impl_links.extend(extractor.extract_trait_impl_links(ingot));
+    }
+
+    // Link trait implementations to their target types
+    combined_index.link_trait_impls(all_trait_impl_links);
+
+    // Link types in signatures to their documentation pages
+    combined_index.link_signature_types();
+
+    // Sort for consistent ordering
+    combined_index.items.sort_by(|a, b| a.path.cmp(&b.path));
+    combined_index.modules.sort_by(|a, b| a.path.cmp(&b.path));
+
+    // Update the doc server (use workers runtime for tokio async)
+    if let Some(ref doc_server) = backend.doc_server {
+        backend
+            .workers
+            .block_on(doc_server.update_index(combined_index));
+    }
+}
+
+/// Handle doc navigation events - notify the browser to navigate
+pub async fn handle_doc_navigate(
+    backend: &mut Backend,
+    event: DocNavigate,
+) -> Result<(), ResponseError> {
+    info!("Doc navigate: {}", event);
+
+    // Notify the doc server to send navigation message to browser
+    if let Some(ref doc_server) = backend.doc_server {
+        doc_server.notify_navigate(&event.path, event.if_on_path.as_deref());
+    }
+
+    // If this was a rename (conditional redirect), also update the doc index
+    if event.if_on_path.is_some() {
+        update_docs(backend).await;
+    }
+
+    Ok(())
+}
+
+/// Handle goto source requests from the doc viewer.
+/// This tells the editor to navigate to the source location.
+pub async fn handle_goto_source(
+    backend: &Backend,
+    request: GotoSourceRequest,
+) -> Result<(), ResponseError> {
+    info!("Goto source: {}", request);
+
+    // Convert the file path to a URL
+    let file_url = Url::from_file_path(&request.file).map_err(|_| {
+        ResponseError::new(
+            ErrorCode::INVALID_PARAMS,
+            format!("Invalid file path: {}", request.file),
+        )
+    })?;
+
+    // LSP uses 0-based line/column, but source locations are typically 1-based
+    let line = request.line.saturating_sub(1);
+    let column = request.column.saturating_sub(1);
+    let position = Position::new(line, column);
+
+    if backend.supports_show_document {
+        // Use LSP window/showDocument (LSP 3.16+)
+        let params = ShowDocumentParams {
+            uri: file_url,
+            external: None,
+            take_focus: Some(true),
+            selection: Some(Range::new(position, position)),
+        };
+
+        let mut client = backend.client.clone();
+        match client.show_document(params).await {
+            Ok(result) => {
+                if result.success {
+                    info!("Successfully opened document in editor");
+                } else {
+                    warn!("Editor reported failure opening document");
+                }
+            }
+            Err(e) => {
+                error!("Failed to open document: {:?}", e);
+            }
+        }
+    } else {
+        // Fallback: try opening the file directly
+        // Many editors support file:///path#L<line> format
+        let url_with_line = format!("{}:{}", request.file, request.line);
+        info!(
+            "window/showDocument not supported, trying fallback: {}",
+            url_with_line
+        );
+
+        if let Err(e) = open::that(&url_with_line) {
+            // If that fails, try just opening the file
+            warn!("Failed to open with line number ({}), trying plain file", e);
+            if let Err(e) = open::that(&request.file) {
+                error!("Failed to open file: {}", e);
+            }
+        }
+    }
+
+    Ok(())
+}
+
 pub async fn handle_hover_request(
     backend: &Backend,
     message: HoverParams,
@@ -405,16 +692,61 @@ pub async fn handle_hover_request(
     };
 
     info!("handling hover request in file: {:?}", file);
-    let response = hover_helper(&backend.db, file, message).unwrap_or_else(|e| {
+    let result = hover_helper(&backend.db, file, message).unwrap_or_else(|e| {
         error!("Error handling hover: {:?}", e);
-        None
+        super::hover::HoverResult {
+            hover: None,
+            doc_path: None,
+        }
     });
-    info!("sending hover response: {:?}", response);
-    Ok(response)
+
+    // Emit navigation event for auto-follow mode (browser will ignore if disabled)
+    if let Some(doc_path) = result.doc_path {
+        let _ = backend.client.clone().emit(DocNavigate::to(doc_path));
+    }
+
+    info!("sending hover response: {:?}", result.hover);
+    Ok(result.hover)
 }
 
-pub async fn handle_shutdown(_backend: &Backend, _message: ()) -> Result<(), ResponseError> {
-    info!("received shutdown request");
+/// Handle cursor position notifications from the extension.
+/// This enables text cursor following for the documentation viewer.
+pub async fn handle_cursor_position(
+    backend: &Backend,
+    message: async_lsp::lsp_types::TextDocumentPositionParams,
+) -> Result<(), ResponseError> {
+    use crate::util::to_offset_from_position;
+    use hir::{core::semantic::reference::Target, lower::map_file_to_mod};
+
+    let path_str = message.text_document.uri.path();
+
+    let Ok(url) = url::Url::from_file_path(path_str) else {
+        return Ok(());
+    };
+    let Some(file) = backend.db.workspace().get(&backend.db, &url) else {
+        return Ok(());
+    };
+
+    let file_text = file.text(&backend.db);
+    let cursor = to_offset_from_position(message.position, file_text.as_str());
+    let top_mod = map_file_to_mod(&backend.db, file);
+
+    // Look up the symbol at cursor position
+    let resolution = top_mod.target_at(&backend.db, cursor);
+
+    // Skip navigation if ambiguous (don't auto-follow to an arbitrary choice)
+    if resolution.is_ambiguous() {
+        return Ok(());
+    }
+
+    if let Some(Target::Scope(scope)) = resolution.first() {
+        // Use shared doc-engine function for qualified path
+        if let Some(doc_path) = doc_engine::scope_to_doc_path(&backend.db, *scope) {
+            // Emit navigation event (browser will ignore if auto-follow is disabled)
+            let _ = backend.client.clone().emit(DocNavigate::to(doc_path));
+        }
+    }
+
     Ok(())
 }
 
@@ -460,5 +792,67 @@ pub async fn handle_formatting(
             Ok(None)
         }
         Err(fmt::FormatError::Io(_)) => Ok(None),
+    }
+}
+
+pub async fn handle_shutdown(backend: &Backend, _message: ()) -> Result<(), ResponseError> {
+    info!("received shutdown request");
+
+    // Clean up server info file
+    if let Some(ref root) = backend.workspace_root {
+        crate::doc_server::LspServerInfo::remove_from_workspace(root);
+    }
+
+    Ok(())
+}
+
+pub async fn handle_execute_command(
+    backend: &mut Backend,
+    params: ExecuteCommandParams,
+) -> Result<Option<serde_json::Value>, ResponseError> {
+    info!("execute command: {:?}", params.command);
+
+    match params.command.as_str() {
+        "fe.openDocs" => {
+            // Start doc server if not running
+            if backend.doc_server.is_none() {
+                info!("Doc server not running, starting it...");
+                update_docs(backend).await;
+            }
+
+            if let Some(ref doc_server) = backend.doc_server {
+                // Extract optional item path from arguments
+                let item_path = params.arguments.first().and_then(|arg| arg.as_str());
+
+                // Build the full URL
+                let full_url = if let Some(path) = item_path {
+                    format!("{}/doc/{}", doc_server.url.trim_end_matches('/'), path)
+                } else {
+                    doc_server.url.clone()
+                };
+
+                info!("Opening docs at {}", full_url);
+
+                // Use open crate to open in default browser
+                if let Err(e) = open::that(&full_url) {
+                    error!("Failed to open browser: {}", e);
+                    return Err(ResponseError::new(
+                        ErrorCode::INTERNAL_ERROR,
+                        format!("Failed to open browser: {}", e),
+                    ));
+                }
+
+                Ok(Some(serde_json::json!({ "opened": full_url })))
+            } else {
+                Err(ResponseError::new(
+                    ErrorCode::INTERNAL_ERROR,
+                    "Failed to start documentation server".to_string(),
+                ))
+            }
+        }
+        _ => Err(ResponseError::new(
+            ErrorCode::INVALID_PARAMS,
+            format!("Unknown command: {}", params.command),
+        )),
     }
 }
