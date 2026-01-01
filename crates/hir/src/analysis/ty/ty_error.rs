@@ -97,7 +97,13 @@ impl<'db> Visitor<'db> for HirTyErrVisitor<'db> {
         // report a diag about a nested invalid type; the downside of this is that the diag's
         // span will be too wide (it'll be the span of the current type, not the nested type).
         let before = self.diags.len();
-        walk_type(self, ctxt, hir_ty);
+        // If the semantic type is a const type, don't traverse the underlying HIR type
+        // structure as a normal type. Const expressions inside types are validated via
+        // const-ty lowering/evaluation, and walking their HIR representation as a type
+        // produces spurious "expected type" diagnostics for paths like `SALT`.
+        if !ty.is_const_ty(self.db) {
+            walk_type(self, ctxt, hir_ty);
+        }
         let did_fild_child_err = self.diags.len() > before;
 
         let span = ctxt.span().unwrap().into();
