@@ -1,5 +1,7 @@
 use std::evm::{MemPtr, RawMem, RawOps, RawStorage, StorageMap, StorPtr}
 
+const BALANCES_SALT: u256 = 0
+
 struct Foo {
     a: u256,
     b: u256,
@@ -42,7 +44,7 @@ fn test_effects_and_aggregates() uses (mut sto: RawStorage, mut mem: RawMem) {
     with (foo) { bump() }
 
     // Exercise StorageMap effect lowering without contract runtime
-    let mut balances: StorPtr<StorageMap<u256, u256>> = sto.stor_ptr(0)
+    let mut balances: StorPtr<StorageMap<u256, u256, BALANCES_SALT>> = sto.stor_ptr(0)
     with (balances) {
         set_balance(key: 1, value: 7)
         let _b = get_balance(key: 1)
@@ -50,13 +52,13 @@ fn test_effects_and_aggregates() uses (mut sto: RawStorage, mut mem: RawMem) {
 }
 
 fn get_balance(key: u256) -> u256
-    uses (balances: StorageMap<u256, u256>)
+    uses (balances: StorageMap<u256, u256, BALANCES_SALT>)
 {
     balances.get(key: key)
 }
 
 fn set_balance(key: u256, value: u256)
-    uses (mut balances: StorageMap<u256, u256>)
+    uses (mut balances: StorageMap<u256, u256, BALANCES_SALT>)
 {
     balances.set(key: key, value: value)
 }

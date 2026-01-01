@@ -1,6 +1,5 @@
 ---
 source: crates/codegen/tests/yul.rs
-assertion_line: 42
 expression: output
 input_file: tests/fixtures/storage_map_contract.fe
 ---
@@ -22,108 +21,124 @@ object "BalanceMap" {
         mstore(v0, value)
         return(v0, 32)
       }
-      function get_allowance(addr, allowances) -> ret {
-        let v0 := storagemap_k__v__get__u256_u256__cc308d1bea3fb6e4(allowances, addr)
+      function get_allowance__eff_mem(addr, allowances) -> ret {
+        let v0 := storagemap_k__v__const_salt__u256__get__u256_u256_1__3c02c0f2b86be0bb(allowances, addr)
         ret := v0
         leave
       }
-      function get_balance(addr, balances) -> ret {
-        let v0 := storagemap_k__v__get__u256_u256__cc308d1bea3fb6e4(balances, addr)
+      function get_balance__eff_mem(addr, balances) -> ret {
+        let v0 := storagemap_k__v__const_salt__u256__get__u256_u256_0__6a346ad3c930d971(balances, addr)
         ret := v0
         leave
       }
       function runtime() {
-        let v0 := stor_ptr__Evm_StorageMap_u256__u256___a32410dee911f369(0, 0)
-        let v1 := stor_ptr__Evm_StorageMap_u256__u256___a32410dee911f369(0, 1)
-        let v2 := calldataload(0)
-        let v3 := shr(224, v2)
-        switch v3
+        storagemap_k__v__const_salt__u256__new__u256_u256_0__6a346ad3c930d971()
+        storagemap_k__v__const_salt__u256__new__u256_u256_1__3c02c0f2b86be0bb()
+        let v0 := calldataload(0)
+        let v1 := shr(224, v0)
+        switch v1
           case 2630350600 {
-            let v4 := calldataload(4)
-            let v5 := v0
-            let v6 := get_balance(v4, v5)
-            let v7 := v6
-            abi_encode(v7, 0)
+            let v2 := calldataload(4)
+            let v3 := get_balance__eff_mem(v2, 0)
+            let v4 := v3
+            abi_encode(v4, 0)
           }
           case 1246470123 {
-            let v8 := calldataload(4)
-            let v9 := calldataload(36)
-            let v10 := v0
-            set_balance(v8, v9, v10)
+            let v5 := calldataload(4)
+            let v6 := calldataload(36)
+            set_balance__eff_mem(v5, v6, 0)
             abi_encode(0, 0)
           }
           case 2430412327 {
-            let v11 := calldataload(4)
-            let v12 := calldataload(36)
-            let v13 := calldataload(68)
-            let v14 := v0
-            let v15 := transfer(v11, v12, v13, v14)
-            let v16 := v15
-            abi_encode(v16, 0)
+            let v7 := calldataload(4)
+            let v8 := calldataload(36)
+            let v9 := calldataload(68)
+            let v10 := transfer__eff_mem(v7, v8, v9, 0)
+            let v11 := v10
+            abi_encode(v11, 0)
           }
           case 3378517838 {
-            let v17 := calldataload(4)
-            let v18 := v1
-            let v19 := get_allowance(v17, v18)
-            let v20 := v19
-            abi_encode(v20, 0)
+            let v12 := calldataload(4)
+            let v13 := get_allowance__eff_mem(v12, 0)
+            let v14 := v13
+            abi_encode(v14, 0)
           }
           case 197806145 {
-            let v21 := calldataload(4)
-            let v22 := calldataload(36)
-            let v23 := v1
-            set_allowance(v21, v22, v23)
+            let v15 := calldataload(4)
+            let v16 := calldataload(36)
+            set_allowance__eff_mem(v15, v16, 0)
             abi_encode(0, 0)
           }
           default {
             return(0, 0)
           }
       }
-      function set_allowance(addr, value, allowances) {
-        storagemap_k__v__set__u256_u256__cc308d1bea3fb6e4(allowances, addr, value)
+      function set_allowance__eff_mem(addr, value, allowances) {
+        storagemap_k__v__const_salt__u256__set__u256_u256_1__3c02c0f2b86be0bb(allowances, addr, value)
         leave
       }
-      function set_balance(addr, value, balances) {
-        storagemap_k__v__set__u256_u256__cc308d1bea3fb6e4(balances, addr, value)
+      function set_balance__eff_mem(addr, value, balances) {
+        storagemap_k__v__const_salt__u256__set__u256_u256_0__6a346ad3c930d971(balances, addr, value)
         leave
       }
-      function stor_ptr__Evm_StorageMap_u256__u256___a32410dee911f369(self, slot) -> ret {
-        ret := slot
-        leave
-      }
-      function storagemap_k__v__get__u256_u256__cc308d1bea3fb6e4(self, key) -> ret {
-        let v0 := storagemap_k__v__storage_slot__u256_u256__cc308d1bea3fb6e4(self, key)
+      function storagemap_get_word_with_salt__u256__3271ca15373d4483(key, salt) -> ret {
+        let v0 := storagemap_storage_slot_with_salt__u256__3271ca15373d4483(key, salt)
         let v1 := sload(v0)
-        let v2 := u256_wordrepr_from_word(v1)
+        ret := v1
+        leave
+      }
+      function storagemap_k__v__const_salt__u256__get__u256_u256_0__6a346ad3c930d971(self, key) -> ret {
+        let v0 := storagemap_get_word_with_salt__u256__3271ca15373d4483(key, 0)
+        let v1 := u256_wordrepr_from_word(v0)
+        ret := v1
+        leave
+      }
+      function storagemap_k__v__const_salt__u256__get__u256_u256_1__3c02c0f2b86be0bb(self, key) -> ret {
+        let v0 := storagemap_get_word_with_salt__u256__3271ca15373d4483(key, 1)
+        let v1 := u256_wordrepr_from_word(v0)
+        ret := v1
+        leave
+      }
+      function storagemap_k__v__const_salt__u256__new__u256_u256_0__6a346ad3c930d971() {
+        leave
+      }
+      function storagemap_k__v__const_salt__u256__new__u256_u256_1__3c02c0f2b86be0bb() {
+        leave
+      }
+      function storagemap_k__v__const_salt__u256__set__u256_u256_0__6a346ad3c930d971(self, key, value) {
+        let v0 := u256_wordrepr_to_word(value)
+        storagemap_set_word_with_salt__u256__3271ca15373d4483(key, 0, v0)
+        leave
+      }
+      function storagemap_k__v__const_salt__u256__set__u256_u256_1__3c02c0f2b86be0bb(self, key, value) {
+        let v0 := u256_wordrepr_to_word(value)
+        storagemap_set_word_with_salt__u256__3271ca15373d4483(key, 1, v0)
+        leave
+      }
+      function storagemap_set_word_with_salt__u256__3271ca15373d4483(key, salt, word) {
+        let v0 := storagemap_storage_slot_with_salt__u256__3271ca15373d4483(key, salt)
+        sstore(v0, word)
+        leave
+      }
+      function storagemap_storage_slot_with_salt__u256__3271ca15373d4483(key, salt) -> ret {
+        let v0 := mload(64)
+        let v1 := u256_storagekey_write_key(v0, key)
+        mstore(add(v0, v1), salt)
+        let v2 := keccak256(v0, add(v1, 32))
         ret := v2
         leave
       }
-      function storagemap_k__v__set__u256_u256__cc308d1bea3fb6e4(self, key, value) {
-        let v0 := storagemap_k__v__storage_slot__u256_u256__cc308d1bea3fb6e4(self, key)
-        let v1 := u256_wordrepr_to_word(value)
-        sstore(v0, v1)
-        leave
-      }
-      function storagemap_k__v__storage_slot__u256_u256__cc308d1bea3fb6e4(self, key) -> ret {
-        let v0 := mload(64)
-        let v1 := u256_storagekey_write_key(v0, key)
-        let v2 := self
-        mstore(add(v0, v1), v2)
-        let v3 := keccak256(v0, add(v1, 32))
-        ret := v3
-        leave
-      }
-      function transfer(from, to, amount, balances) -> ret {
-        let v0 := storagemap_k__v__get__u256_u256__cc308d1bea3fb6e4(balances, from)
+      function transfer__eff_mem(from, to, amount, balances) -> ret {
+        let v0 := storagemap_k__v__const_salt__u256__get__u256_u256_0__6a346ad3c930d971(balances, from)
         let v1 := lt(v0, amount)
         if v1 {
           ret := 1
           leave
         }
         if iszero(v1) {
-          let v2 := storagemap_k__v__get__u256_u256__cc308d1bea3fb6e4(balances, to)
-          storagemap_k__v__set__u256_u256__cc308d1bea3fb6e4(balances, from, sub(v0, amount))
-          storagemap_k__v__set__u256_u256__cc308d1bea3fb6e4(balances, to, add(v2, amount))
+          let v2 := storagemap_k__v__const_salt__u256__get__u256_u256_0__6a346ad3c930d971(balances, to)
+          storagemap_k__v__const_salt__u256__set__u256_u256_0__6a346ad3c930d971(balances, from, sub(v0, amount))
+          storagemap_k__v__const_salt__u256__set__u256_u256_0__6a346ad3c930d971(balances, to, add(v2, amount))
           ret := 0
           leave
         }

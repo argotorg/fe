@@ -1,12 +1,13 @@
 ---
 source: crates/mir/tests/lowering_snapshots.rs
+assertion_line: 26
 expression: mir_output
 ---
 fn next_idx(v0: u256) -> usize:
   bb0:
-    v1: usize = load stor[v0]
+    v1: Counter = load stor[v0]
     store stor[v0] = (v1 + 1)
-    v2: usize = load stor[v0]
+    v2: Counter = load stor[v0]
     ret v2
 
 fn zst_load_index_eval() -> usize:
@@ -22,7 +23,7 @@ fn zst_load_index_eval() -> usize:
 
 fn next_idx__eff_mem(v0: u256) -> usize:
   bb0:
-    v1: usize = load mem[v0]
+    v1: Counter = load mem[v0]
     store mem[v0] = (v1 + 1)
-    v2: usize = load mem[v0]
+    v2: Counter = load mem[v0]
     ret v2

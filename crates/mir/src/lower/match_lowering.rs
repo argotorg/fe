@@ -375,10 +375,10 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         for proj in path.iter() {
             if let Projection::Field(0) = proj
                 && let Some(inner) = crate::repr::transparent_newtype_field_ty(self.db, current_ty)
-                {
-                    current_ty = inner;
-                    continue;
-                }
+            {
+                current_ty = inner;
+                continue;
+            }
 
             panic!(
                 "{context} requires `Ref` scrutinee (ty={}, repr={:?}, path_len={})",

@@ -8,6 +8,7 @@ use hir::analysis::{
     diagnostics::SpannedHirAnalysisDb,
     diagnostics::format_diags,
     ty::{
+        const_ty::ConstTyData,
         fold::{TyFoldable, TyFolder},
         normalize::normalize_ty,
         trait_def::resolve_trait_method_instance,
@@ -614,6 +615,12 @@ impl<'db> TyFolder<'db> for ParamSubstFolder<'db, '_> {
     fn fold_ty(&mut self, db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> TyId<'db> {
         match ty.data(db) {
             TyData::TyParam(param) => self.args.get(param.idx).copied().unwrap_or(ty),
+            TyData::ConstTy(const_ty) => {
+                if let ConstTyData::TyParam(param, _) = const_ty.data(db) {
+                    return self.args.get(param.idx).copied().unwrap_or(ty);
+                }
+                ty.super_fold_with(db, self)
+            }
             _ => ty.super_fold_with(db, self),
         }
     }

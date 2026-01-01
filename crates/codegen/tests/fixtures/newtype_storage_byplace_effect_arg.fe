@@ -1,0 +1,27 @@
+msg Msg {
+    #[selector = 1]
+    Bump -> u256
+}
+
+struct Wrap {
+    inner: u256,
+}
+
+fn bump() uses (mut w: Wrap) {
+    w.inner += 1
+}
+
+pub contract NewtypeByPlaceEffectArg {
+    x: u256
+    w: Wrap
+
+    init() {}
+
+    recv Msg {
+        Bump -> u256 uses (mut w, mut x) {
+            bump()
+            x += 1
+            x
+        }
+    }
+}

@@ -630,7 +630,7 @@ impl<'db> TyCheckEnv<'db> {
             }
 
             // Prefer call-site validation over eager deduplication: multiple distinct providers
-            // may share the same type (e.g. two `StorageMap<u256, u256>` effects).
+            // may share the same type (e.g. two `StorageMap<u256, u256, 0>` effects).
             let mut seen = rustc_hash::FxHashSet::default();
             out.retain(|p| seen.insert(*p));
             frames_out.push(out);

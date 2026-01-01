@@ -223,6 +223,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
             Partial::Present(Expr::Field(lhs, field_index)) => {
                 self.lower_field_expr(expr, *lhs, *field_index)
             }
+            Partial::Present(Expr::Path(_)) => self.lower_path_expr(expr),
             Partial::Present(Expr::Assign(_, _) | Expr::AugAssign(_, _, _)) => {
                 // Assignment expressions are expected to be lowered in statement position.
                 self.ensure_value(expr)
@@ -537,8 +538,9 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
 
             let value_repr = self.value_repr_for_ty(binding_ty, addr_space);
 
-            // Already has address space: use directly
-            if value_repr.address_space().is_some() {
+            // Storage providers are already addressable as slots even when their logical type is
+            // word-represented (e.g. transparent newtypes around `u256`).
+            if value_repr.address_space().is_some() || kind == EffectProviderKind::Storage {
                 let value = self.alloc_value(binding_ty, ValueOrigin::Local(local), value_repr);
                 return (kind, value);
             }
@@ -750,6 +752,78 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         }
     }
 
+    fn effect_param_key_is_trait(&self, binding: LocalBinding<'db>) -> bool {
+        let LocalBinding::EffectParam { key_path, .. } = binding else {
+            return false;
+        };
+        let Ok(res) = hir::analysis::name_resolution::path_resolver::resolve_path(
+            self.db,
+            key_path,
+            self.func.scope(),
+            PredicateListId::empty_list(self.db),
+            false,
+        ) else {
+            return false;
+        };
+        matches!(
+            res,
+            hir::analysis::name_resolution::path_resolver::PathRes::Trait(_)
+                | hir::analysis::name_resolution::path_resolver::PathRes::TraitMethod(..)
+        )
+    }
+
+    fn lower_path_expr(&mut self, expr: ExprId) -> ValueId {
+        let value_id = self.ensure_value(expr);
+        if self.current_block().is_none() {
+            return value_id;
+        }
+        let Partial::Present(Expr::Path(_)) = expr.data(self.db, self.body) else {
+            return value_id;
+        };
+
+        let ty = self.typed_body.expr_ty(self.db, expr);
+        let prop = self.typed_body.expr_prop(self.db, expr);
+        let Some(binding) = prop.binding else {
+            return value_id;
+        };
+        if !matches!(binding, LocalBinding::EffectParam { .. }) {
+            return value_id;
+        }
+        if self.effect_param_key_is_trait(binding) {
+            return value_id;
+        }
+
+        // Effect params are passed as provider addresses/slots. When their logical type is
+        // word-represented (including transparent-newtype wrappers), path expressions should load
+        // the value from that place (rather than treating the provider address as the value).
+        if !matches!(
+            crate::repr::repr_kind_for_ty(self.db, &self.core, ty),
+            crate::repr::ReprKind::Word
+        ) {
+            return value_id;
+        }
+
+        let Some(binding_local) = self.local_for_binding(binding) else {
+            return value_id;
+        };
+        if !matches!(
+            self.builder.body.value(value_id).origin,
+            ValueOrigin::Local(local) if local == binding_local
+        ) {
+            return value_id;
+        }
+
+        let Some(place) = self.place_for_expr(expr) else {
+            return value_id;
+        };
+        let dest = self.alloc_temp_local(ty, false, "load");
+        self.builder.body.locals[dest.index()].address_space = self.expr_address_space(expr);
+        self.assign(None, Some(dest), Rvalue::Load { place });
+        self.builder.body.values[value_id.index()].origin = ValueOrigin::Local(dest);
+        self.builder.body.values[value_id.index()].repr = ValueRepr::Word;
+        value_id
+    }
+
     fn lower_field_expr(
         &mut self,
         expr: ExprId,
@@ -865,6 +939,27 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
 
     fn place_for_expr(&mut self, expr: ExprId) -> Option<Place<'db>> {
         match expr.data(self.db, self.body) {
+            Partial::Present(Expr::Path(_)) => {
+                let binding = self.typed_body.expr_prop(self.db, expr).binding?;
+                if !matches!(binding, LocalBinding::EffectParam { .. }) {
+                    return None;
+                }
+                if self.effect_param_key_is_trait(binding) {
+                    return None;
+                }
+
+                let ty = self.typed_body.expr_ty(self.db, expr);
+                match crate::repr::repr_kind_for_ty(self.db, &self.core, ty) {
+                    crate::repr::ReprKind::Zst | crate::repr::ReprKind::Ptr(_) => return None,
+                    crate::repr::ReprKind::Word | crate::repr::ReprKind::Ref => {}
+                }
+
+                let local = self.local_for_binding(binding)?;
+                let addr_space = self.address_space_for_binding(&binding);
+                let base_value =
+                    self.alloc_value(ty, ValueOrigin::Local(local), ValueRepr::Ref(addr_space));
+                Some(Place::new(base_value, MirProjectionPath::new()))
+            }
             Partial::Present(Expr::Field(lhs, field_index)) => {
                 let field_index = field_index.to_opt()?;
                 let lhs_ty = self.typed_body.expr_ty(self.db, *lhs);
@@ -932,22 +1027,11 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         }
     }
 
-    fn root_lvalue_for_expr(
-        &mut self,
-        expr: ExprId,
-        treat_effect_param_as_place: bool,
-    ) -> Option<RootLvalue<'db>> {
+    fn root_lvalue_for_expr(&mut self, expr: ExprId) -> Option<RootLvalue<'db>> {
         if let Some(place) = self.place_for_expr(expr) {
             return Some(RootLvalue::Place(place));
         }
         let binding = self.typed_body.expr_prop(self.db, expr).binding?;
-        if treat_effect_param_as_place && matches!(binding, LocalBinding::EffectParam { .. }) {
-            let base_value = self.lower_expr(expr);
-            return Some(RootLvalue::Place(Place::new(
-                base_value,
-                MirProjectionPath::new(),
-            )));
-        }
         self.local_for_binding(binding).map(RootLvalue::Local)
     }
 
@@ -976,13 +1060,13 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                 ValueOrigin::TransparentCast { value },
                 self.value_repr_for_expr(peeled_target, root_ty),
             );
-            if let Some(lvalue) = self.root_lvalue_for_expr(peeled_target, true) {
+            if let Some(lvalue) = self.root_lvalue_for_expr(peeled_target) {
                 self.store_to_root_lvalue(Some(stmt_id), lvalue, wrapped);
                 return;
             }
         }
 
-        if let Some(lvalue) = self.root_lvalue_for_expr(target, false) {
+        if let Some(lvalue) = self.root_lvalue_for_expr(target) {
             self.store_to_root_lvalue(Some(stmt_id), lvalue, value);
         }
     }
@@ -1001,7 +1085,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         let root_ty = self.typed_body.expr_ty(self.db, root_expr);
         let lhs_ty = self.typed_body.expr_ty(self.db, target);
 
-        let Some(root_lvalue) = self.root_lvalue_for_expr(root_expr, is_peeled) else {
+        let Some(root_lvalue) = self.root_lvalue_for_expr(root_expr) else {
             return;
         };
 

@@ -1,7 +1,9 @@
 //! Prepass utilities for MIR lowering: ensures expressions have values and resolves consts.
 
 use super::*;
-use hir::analysis::ty::const_eval::{ConstValue, try_eval_const_ref};
+use hir::analysis::name_resolution::{PathRes, resolve_path};
+use hir::analysis::ty::const_eval::{ConstValue, try_eval_const_body, try_eval_const_ref};
+use hir::analysis::ty::const_ty::{ConstTyData, EvaluatedConstTy};
 
 impl<'db, 'a> MirBuilder<'db, 'a> {
     /// Helper to iterate expressions and conditionally force value lowering.
@@ -218,28 +220,73 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
     /// # Returns
     /// A MIR `ValueId` referencing a synthetic literal when successful.
     pub(super) fn try_const_expr(&mut self, expr: ExprId) -> Option<ValueId> {
-        let Partial::Present(Expr::Path(_)) = expr.data(self.db, self.body) else {
+        let Partial::Present(Expr::Path(path)) = expr.data(self.db, self.body) else {
+            return None;
+        };
+        let path = path.to_opt()?;
+
+        if let Some(cref) = self.typed_body.expr_const_ref(expr) {
+            if let hir::analysis::ty::ty_check::ConstRef::Const(const_def) = cref
+                && let Some(&cached) = self.const_cache.get(&const_def)
+            {
+                return Some(cached);
+            }
+
+            let ty = self.typed_body.expr_ty(self.db, expr);
+            let value = match try_eval_const_ref(self.db, cref, ty)? {
+                ConstValue::Int(int) => SyntheticValue::Int(int),
+                ConstValue::Bool(flag) => SyntheticValue::Bool(flag),
+            };
+
+            let value_id = self.alloc_synthetic_value(ty, value);
+            if let hir::analysis::ty::ty_check::ConstRef::Const(const_def) = cref {
+                self.const_cache.insert(const_def, value_id);
+            }
+            return Some(value_id);
+        }
+
+        // Const generic parameter (e.g. `const SALT: u256`).
+        if self.generic_args.is_empty() {
+            return None;
+        }
+        if self.typed_body.expr_prop(self.db, expr).binding.is_some() {
+            return None;
+        }
+
+        let assumptions = PredicateListId::empty_list(self.db);
+        let resolved = resolve_path(self.db, path, self.body.scope(), assumptions, true).ok()?;
+        let ty = match resolved {
+            PathRes::Ty(ty) | PathRes::TyAlias(_, ty) => ty,
+            _ => return None,
+        };
+
+        let TyData::ConstTy(const_ty) = ty.data(self.db) else {
+            return None;
+        };
+        let ConstTyData::TyParam(param, _) = const_ty.data(self.db) else {
+            return None;
+        };
+        let arg = *self.generic_args.get(param.idx)?;
+        let TyData::ConstTy(const_arg) = arg.data(self.db) else {
             return None;
         };
 
-        let cref = self.typed_body.expr_const_ref(expr)?;
-        if let hir::analysis::ty::ty_check::ConstRef::Const(const_def) = cref
-            && let Some(&cached) = self.const_cache.get(&const_def)
-        {
-            return Some(cached);
-        }
-
-        let ty = self.typed_body.expr_ty(self.db, expr);
-        let value = match try_eval_const_ref(self.db, cref, ty)? {
-            ConstValue::Int(int) => SyntheticValue::Int(int),
-            ConstValue::Bool(flag) => SyntheticValue::Bool(flag),
+        let expected_ty = self.typed_body.expr_ty(self.db, expr);
+        let value = match const_arg.data(self.db) {
+            ConstTyData::Evaluated(EvaluatedConstTy::LitInt(value), _) => {
+                SyntheticValue::Int(value.data(self.db).clone())
+            }
+            ConstTyData::Evaluated(EvaluatedConstTy::LitBool(flag), _) => {
+                SyntheticValue::Bool(*flag)
+            }
+            ConstTyData::UnEvaluated { body, .. } => match try_eval_const_body(self.db, *body)? {
+                ConstValue::Int(value) => SyntheticValue::Int(value),
+                ConstValue::Bool(flag) => SyntheticValue::Bool(flag),
+            },
+            _ => return None,
         };
 
-        let value_id = self.alloc_synthetic_value(ty, value);
-        if let hir::analysis::ty::ty_check::ConstRef::Const(const_def) = cref {
-            self.const_cache.insert(const_def, value_id);
-        }
-        Some(value_id)
+        Some(self.alloc_synthetic_value(expected_ty, value))
     }
 
     /// Allocates a synthetic literal value with the provided type.
