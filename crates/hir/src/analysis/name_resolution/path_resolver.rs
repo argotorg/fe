@@ -1285,7 +1285,18 @@ pub fn resolve_name_res<'db>(
                     path,
                 })
             }
-            ScopeId::FuncParam(item, idx) => PathRes::FuncParam(item, idx),
+            ScopeId::FuncParam(item, idx) => {
+                if !args.is_empty() {
+                    return Err(PathResError::new(
+                        PathResErrorKind::ArgNumMismatch {
+                            expected: 0,
+                            given: args.len(),
+                        },
+                        path,
+                    ));
+                }
+                PathRes::FuncParam(item, idx)
+            }
             ScopeId::Field(..) => unreachable!(),
             ScopeId::Block(..) => unreachable!(),
         },

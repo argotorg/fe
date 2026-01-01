@@ -779,14 +779,7 @@ impl<'db> TyChecker<'db> {
                     self.push_diag(diag);
                     ExprProp::invalid(self.db)
                 }
-                PathRes::FuncParam(item, _) => {
-                    let diag = BodyDiag::NotValue {
-                        primary: path_expr_span.clone().into(),
-                        given: Either::Left(item),
-                    };
-                    self.push_diag(diag);
-                    ExprProp::invalid(self.db)
-                }
+                PathRes::FuncParam(..) => unreachable!("func params should be resolved as bindings"),
             },
         }
     }
