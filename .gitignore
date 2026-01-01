@@ -6,3 +6,10 @@ tarpaulin-report.html
 /docs/tmp_snippets
 .vscode
 .DS_Store
+
+# OpenSpec and AI assistant files
+openspec/
+AGENTS.md
+CLAUDE.md
+.claude/
+.gemini/
