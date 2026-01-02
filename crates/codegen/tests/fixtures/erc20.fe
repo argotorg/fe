@@ -5,6 +5,11 @@ use std::evm::effects::Log
 const MINTER: u256 = 1
 const BURNER: u256 = 2
 
+// StorageMap salts (type-level discriminators)
+const BALANCES_SALT: u256 = 0
+const ALLOWANCES_SALT: u256 = 1
+const ROLES_SALT: u256 = 2
+
 pub contract CoolCoin uses (mut ctx: Ctx, mut log: Log) {
     // Storage fields. These act as effects within the contract.
     mut store: TokenStore,
@@ -161,12 +166,12 @@ fn spend_allowance(owner: Address, spender: Address, amount: u256)
 
 struct TokenStore {
     total_supply: u256,
-    balances: StorageMap<Address, u256>,
-    allowances: StorageMap<(Address, Address), u256>,
+    balances: StorageMap<Address, u256, BALANCES_SALT>,
+    allowances: StorageMap<(Address, Address), u256, ALLOWANCES_SALT>,
 }
 
 pub struct AccessControl {
-    roles: StorageMap<(u256, Address), bool>,
+    roles: StorageMap<(u256, Address), bool, ROLES_SALT>,
 }
 
 impl AccessControl {

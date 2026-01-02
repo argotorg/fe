@@ -2,6 +2,9 @@ use std::evm::{Address, Ctx, Evm, RawMem, RawOps, RawStorage, StorageMap, StorPt
 
 // Helpers ---------------------------------------------------------------
 
+const BALANCES_SALT: u256 = 0
+const ALLOWANCES_SALT: u256 = 1
+
 fn abi_encode_u256(value: u256) -> ! uses (mut ops: RawOps) {
     ops.mstore(0, value)
     ops.return_data(0, 32)
@@ -18,8 +21,8 @@ fn abi_encode_string(word: u256, len: u256) -> ! uses (mut ops: RawOps) {
 // ERC20 storage ---------------------------------------------------------
 
 struct Erc20 {
-    balances: StorageMap<Address, u256>,
-    allowances: StorageMap<(Address, Address), u256>,
+    balances: StorageMap<Address, u256, BALANCES_SALT>,
+    allowances: StorageMap<(Address, Address), u256, ALLOWANCES_SALT>,
     supply: u256,
     owner: Address,
 }

@@ -1,5 +1,6 @@
 ---
 source: crates/codegen/tests/yul.rs
+assertion_line: 42
 expression: output
 input_file: tests/fixtures/tuple_literal_field_access.fe
 ---
@@ -51,15 +52,7 @@ function tuple_literal_struct_chain() -> ret {
   mstore(0x40, add(v2, 64))
   mstore(v2, v0)
   mstore(add(v2, 32), v1)
-  let v3 := mload(0x40)
-  if iszero(v3) {
-    v3 := 0x80
-  }
-  mstore(0x40, add(v3, 64))
-  let v4 := v2
-  mstore(v3, mload(v4))
-  mstore(add(v3, 32), mload(add(v4, 32)))
-  let v5 := mload(add(v3, 32))
-  ret := v5
+  let v3 := mload(add(v2, 32))
+  ret := v3
   leave
 }

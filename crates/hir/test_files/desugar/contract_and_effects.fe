@@ -1,4 +1,7 @@
+use std::evm::StorageMap
+
 pub contract Counter {
+    map: StorageMap<u256, u64, 0>
     count: u64,
 
     init(start: u64) uses (mut count) {
@@ -6,11 +9,12 @@ pub contract Counter {
     }
 
     recv CounterMsg {
-        Increment uses (mut count) {
+        Increment uses (mut count, mut map) {
+            map.set(0, count)
             count += 1
         }
-        Get -> u64 uses (count) {
-            count
+        Get -> (u64, u64) uses (count, map) {
+            (count, map.get(0))
         }
     }
 }
@@ -19,13 +23,5 @@ msg CounterMsg {
     #[selector = 0x01]
     Increment,
     #[selector = 0x02]
-    Get -> u64,
-}
-
-pub struct Storage {
-    pub value: u256,
-}
-
-fn use_storage() uses (mut Storage) {
-    Storage.value = 100
+    Get -> (u64, u64),
 }

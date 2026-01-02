@@ -1,5 +1,6 @@
 ---
 source: crates/codegen/tests/yul.rs
+assertion_line: 42
 expression: output
 input_file: tests/fixtures/storage.fe
 ---

@@ -4,34 +4,29 @@ expression: output
 input_file: tests/fixtures/storage_map.fe
 ---
 function get_balance(addr, balances) -> ret {
-  let v0 := storagemap_k__v__get_stor__u256_u256__cc308d1bea3fb6e4(balances, addr)
+  let v0 := storagemap_k__v__const_salt__u256__get__u256_u256_0__6a346ad3c930d971(balances, addr)
   ret := v0
   leave
 }
 function set_balance(addr, value, balances) {
-  storagemap_k__v__set_stor__u256_u256__cc308d1bea3fb6e4(balances, addr, value)
+  storagemap_k__v__const_salt__u256__set__u256_u256_0__6a346ad3c930d971(balances, addr, value)
   leave
 }
-function storagemap_k__v__get_stor__u256_u256__cc308d1bea3fb6e4(self, key) -> ret {
-  let v0 := storagemap_k__v__storage_slot_stor__u256_u256__cc308d1bea3fb6e4(self, key)
+function storagemap_k__v__const_salt__u256__get__u256_u256_0__6a346ad3c930d971(self, key) -> ret {
+  let v0 := storagemap_get_word_with_salt__u256__3271ca15373d4483(key, 0)
+  let v1 := u256_wordrepr_from_word(v0)
+  ret := v1
+  leave
+}
+function storagemap_k__v__const_salt__u256__set__u256_u256_0__6a346ad3c930d971(self, key, value) {
+  let v0 := u256_wordrepr_to_word(value)
+  storagemap_set_word_with_salt__u256__3271ca15373d4483(key, 0, v0)
+  leave
+}
+function storagemap_get_word_with_salt__u256__3271ca15373d4483(key, salt) -> ret {
+  let v0 := storagemap_storage_slot_with_salt__u256__3271ca15373d4483(key, salt)
   let v1 := sload(v0)
-  let v2 := u256_wordrepr_from_word(v1)
-  ret := v2
-  leave
-}
-function storagemap_k__v__set_stor__u256_u256__cc308d1bea3fb6e4(self, key, value) {
-  let v0 := storagemap_k__v__storage_slot_stor__u256_u256__cc308d1bea3fb6e4(self, key)
-  let v1 := u256_wordrepr_to_word(value)
-  sstore(v0, v1)
-  leave
-}
-function storagemap_k__v__storage_slot_stor__u256_u256__cc308d1bea3fb6e4(self, key) -> ret {
-  let v0 := mload(64)
-  let v1 := u256_storagekey_write_key(v0, key)
-  let v2 := self
-  mstore(add(v0, v1), v2)
-  let v3 := keccak256(v0, add(v1, 32))
-  ret := v3
+  ret := v1
   leave
 }
 function u256_wordrepr_from_word(word) -> ret {
@@ -40,6 +35,19 @@ function u256_wordrepr_from_word(word) -> ret {
 }
 function u256_wordrepr_to_word(self) -> ret {
   ret := self
+  leave
+}
+function storagemap_set_word_with_salt__u256__3271ca15373d4483(key, salt, word) {
+  let v0 := storagemap_storage_slot_with_salt__u256__3271ca15373d4483(key, salt)
+  sstore(v0, word)
+  leave
+}
+function storagemap_storage_slot_with_salt__u256__3271ca15373d4483(key, salt) -> ret {
+  let v0 := mload(64)
+  let v1 := u256_storagekey_write_key(v0, key)
+  mstore(add(v0, v1), salt)
+  let v2 := keccak256(v0, add(v1, 32))
+  ret := v2
   leave
 }
 function u256_storagekey_write_key(ptr, self) -> ret {

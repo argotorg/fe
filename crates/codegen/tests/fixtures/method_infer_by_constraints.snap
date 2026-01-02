@@ -1,29 +1,23 @@
 ---
 source: crates/codegen/tests/yul.rs
+assertion_line: 42
 expression: output
 input_file: tests/fixtures/method_infer_by_constraints.fe
 ---
 function call() -> ret {
+  let v0 := 10
+  let v1 := s_t__foo_foo__u64__aee7f05a097ffa16(v0)
+  ret := v1
+  leave
+}
+function s_t__foo_foo__u64__aee7f05a097ffa16(self) -> ret {
   let v0 := mload(0x40)
   if iszero(v0) {
     v0 := 0x80
   }
-  mstore(0x40, add(v0, 8))
-  mstore(v0, and(10, 0xffffffffffffffff))
-  let v1 := v0
-  let v2 := s_t__foo_foo__u64__aee7f05a097ffa16(v1)
-  ret := v2
-  leave
-}
-function s_t__foo_foo__u64__aee7f05a097ffa16(self) -> ret {
-  let v0 := and(mload(self), 0xffffffffffffffff)
-  let v1 := mload(0x40)
-  if iszero(v1) {
-    v1 := 0x80
-  }
-  mstore(0x40, add(v1, 16))
-  mstore(v1, and(v0, 0xffffffffffffffff))
-  mstore(add(v1, 8), and(1, 0xffffffffffffffff))
-  ret := v1
+  mstore(0x40, add(v0, 16))
+  mstore(v0, and(self, 0xffffffffffffffff))
+  mstore(add(v0, 8), and(1, 0xffffffffffffffff))
+  ret := v0
   leave
 }

@@ -1,0 +1,19 @@
+struct B {
+    inner: u256,
+}
+
+struct A {
+    inner: B,
+}
+
+pub fn match_newtype_nested(a: A) -> u256 {
+    match a {
+        A { inner: B { inner: 0 } } => 0,
+        A { inner: B { inner: x } } => x,
+    }
+}
+
+fn f() -> u256 {
+    let a = A { inner: B { inner: 10 }}
+    match_newtype_nested(a)
+}

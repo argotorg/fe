@@ -1,5 +1,6 @@
 ---
 source: crates/codegen/tests/yul.rs
+assertion_line: 42
 expression: output
 input_file: tests/fixtures/full_contract.fe
 ---
@@ -46,17 +47,10 @@ object "ShapeDispatcher" {
         let v10 := eq(v1, 2066295049)
         if v10 {
           let v11 := calldataload(4)
-          let v12 := mload(0x40)
-          if iszero(v12) {
-            v12 := 0x80
-          }
-          mstore(0x40, add(v12, 32))
-          mstore(v12, v11)
-          let v13 := v12
-          let v14 := mload(v13)
-          mstore(v13, add(v14, 3))
-          let v15 := square_area_mem(v13)
-          abi_encode(v15, 0)
+          let v12 := v11
+          v12 := add(v12, 3)
+          let v13 := square_area(v12)
+          abi_encode(v13, 0)
         }
         return(0, 0)
       }
@@ -66,8 +60,8 @@ object "ShapeDispatcher" {
         ret := mul(v0, v1)
         leave
       }
-      function square_area_mem(self) -> ret {
-        let v0 := mload(self)
+      function square_area(self) -> ret {
+        let v0 := self
         ret := mul(v0, v0)
         leave
       }

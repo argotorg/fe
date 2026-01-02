@@ -1,0 +1,27 @@
+---
+source: crates/hir/tests/ty_check.rs
+assertion_line: 48
+expression: res
+input_file: test_files/ty_check/const_generic_const_arg.fe
+---
+note: 
+  ┌─ const_generic_const_arg.fe:5:61
+  │  
+5 │   fn uses_const_generic_arg(m: Map<u256, bool, SALT>) -> u256 {
+  │ ╭─────────────────────────────────────────────────────────────^
+6 │ │     m
+7 │ │     SALT
+8 │ │ }
+  │ ╰─^ u256
+
+note: 
+  ┌─ const_generic_const_arg.fe:6:5
+  │
+6 │     m
+  │     ^ Map<u256, bool, 0>
+
+note: 
+  ┌─ const_generic_const_arg.fe:7:5
+  │
+7 │     SALT
+  │     ^^^^ u256

@@ -1,5 +1,8 @@
 use std::evm::{Evm, RawMem, RawOps, RawStorage, StorageMap, StorPtr}
 
+const BALANCES_SALT: u256 = 0
+const ALLOWANCES_SALT: u256 = 1
+
 fn abi_encode(value: u256) -> ! uses (mut ops: RawOps) {
     let ptr: u256 = 0
     ops.mstore(ptr, value)
@@ -8,31 +11,31 @@ fn abi_encode(value: u256) -> ! uses (mut ops: RawOps) {
 
 // Two separate StorageMaps - balances and allowances
 fn get_balance(addr: u256) -> u256
-    uses (balances: StorageMap<u256, u256>)
+    uses (balances: StorageMap<u256, u256, BALANCES_SALT>)
 {
     balances.get(key: addr)
 }
 
 fn set_balance(addr: u256, value: u256)
-    uses (mut balances: StorageMap<u256, u256>)
+    uses (mut balances: StorageMap<u256, u256, BALANCES_SALT>)
 {
     balances.set(key: addr, value)
 }
 
 fn get_allowance(addr: u256) -> u256
-    uses (allowances: StorageMap<u256, u256>)
+    uses (allowances: StorageMap<u256, u256, ALLOWANCES_SALT>)
 {
     allowances.get(key: addr)
 }
 
 fn set_allowance(addr: u256, value: u256)
-    uses (mut allowances: StorageMap<u256, u256>)
+    uses (mut allowances: StorageMap<u256, u256, ALLOWANCES_SALT>)
 {
     allowances.set(key: addr, value)
 }
 
 fn transfer(from: u256, to: u256, amount: u256) -> u256
-    uses (mut balances: StorageMap<u256, u256>)
+    uses (mut balances: StorageMap<u256, u256, BALANCES_SALT>)
 {
     let from_balance = balances.get(key: from)
     if from_balance < amount {
@@ -54,8 +57,8 @@ fn init() uses (mut evm: Evm) {
 
 #[contract_runtime(BalanceMap)]
 fn runtime() uses (mut evm: Evm) {
-    let mut balances: StorPtr<StorageMap<u256, u256>> = evm.stor_ptr(0)
-    let mut allowances: StorPtr<StorageMap<u256, u256>> = evm.stor_ptr(1)
+    let mut balances: StorageMap<u256, u256, BALANCES_SALT> = StorageMap::new()
+    let mut allowances: StorageMap<u256, u256, ALLOWANCES_SALT> = StorageMap::new()
     let selector = evm.calldataload(0) >> 224
     with (RawOps = evm) {
         match selector {

@@ -1,12 +1,11 @@
 ---
 source: crates/mir/tests/lowering_snapshots.rs
+assertion_line: 26
 expression: mir_output
 ---
 fn bar_t_make() -> Bar:
   bb0:
-    v0: Bar = alloc mem
-    init mem[v0] { .0 = 10 }
-    ret v0
+    ret 10
 
 fn example() -> Bar:
   bb0:

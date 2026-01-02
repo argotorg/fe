@@ -1,0 +1,14 @@
+struct WrapU8 {
+    inner: u8,
+}
+
+struct Container {
+    w: WrapU8,
+    pad: u256,
+}
+
+pub fn newtype_u8_roundtrip(x: u8) -> u8 {
+    let c = Container { w: WrapU8 { inner: x }, pad: 0 }
+    let w = c.w
+    w.inner
+}

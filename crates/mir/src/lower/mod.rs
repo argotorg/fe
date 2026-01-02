@@ -25,11 +25,11 @@ use hir::hir_def::{
 };
 
 use crate::{
-    core_lib::{CoreHelperTy, CoreLib, CoreLibError},
+    core_lib::{CoreLib, CoreLibError},
     ir::{
         AddressSpaceKind, BasicBlockId, BodyBuilder, CallOrigin, CodeRegionRoot, ContractFunction,
         ContractFunctionKind, EffectProviderKind, IntrinsicOp, LocalData, LocalId, LoopInfo,
-        MirBody, MirFunction, MirInst, MirModule, MirProjection, MirProjectionPath, Place,
+        MirBody, MirFunction, MirInst, MirModule, MirProjection, MirProjectionPath, Place, Rvalue,
         SwitchTarget, SwitchValue, SyntheticValue, Terminator, ValueData, ValueId, ValueOrigin,
         ValueRepr,
     },
@@ -190,6 +190,7 @@ pub fn lower_module<'db>(
 
     let mut functions = monomorphize_functions(db, templates);
     for func in &mut functions {
+        crate::transform::canonicalize_transparent_newtypes(db, &mut func.body);
         crate::transform::insert_temp_binds(db, &mut func.body);
         crate::transform::canonicalize_zero_sized(db, &mut func.body);
     }
@@ -232,6 +233,7 @@ pub(crate) fn lower_function<'db>(
         func,
         body,
         &typed_body,
+        &generic_args,
         receiver_space,
         effect_provider_kinds,
     )?;
@@ -277,6 +279,7 @@ pub(super) struct MirBuilder<'db, 'a> {
     pub(super) func: Func<'db>,
     pub(super) body: Body<'db>,
     pub(super) typed_body: &'a TypedBody<'db>,
+    pub(super) generic_args: &'a [TyId<'db>],
     pub(super) builder: BodyBuilder<'db>,
     pub(super) core: CoreLib<'db>,
     pub(super) loop_stack: Vec<LoopScope>,
@@ -310,6 +313,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         func: Func<'db>,
         body: Body<'db>,
         typed_body: &'a TypedBody<'db>,
+        generic_args: &'a [TyId<'db>],
         receiver_space: Option<AddressSpaceKind>,
         effect_provider_kinds: Vec<EffectProviderKind>,
     ) -> Result<Self, MirLowerError> {
@@ -320,6 +324,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
             func,
             body,
             typed_body,
+            generic_args,
             builder: BodyBuilder::new(),
             core,
             loop_stack: Vec::new(),
@@ -420,6 +425,16 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         }
     }
 
+    fn assign(&mut self, stmt: Option<StmtId>, dest: Option<LocalId>, rvalue: Rvalue<'db>) {
+        self.push_inst_here(MirInst::Assign { stmt, dest, rvalue });
+    }
+
+    fn alloc_value(&mut self, ty: TyId<'db>, origin: ValueOrigin<'db>, repr: ValueRepr) -> ValueId {
+        self.builder
+            .body
+            .alloc_value(ValueData { ty, origin, repr })
+    }
+
     /// Determines the address space for a binding.
     ///
     /// # Parameters
@@ -515,44 +530,25 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
     /// space. Effect pointer provider newtypes (`MemPtr`/`StorPtr`/`CalldataPtr`) are *not*
     /// represented by-reference: they are single-word values at runtime.
     pub(super) fn is_by_ref_ty(&self, ty: TyId<'db>) -> bool {
-        if self.effect_provider_kind_for_provider_ty(ty).is_some() {
-            return false;
-        }
-        if ty.field_count(self.db) > 0 || ty.is_array(self.db) {
-            return true;
-        }
-        ty.adt_ref(self.db)
-            .is_some_and(|adt| matches!(adt, AdtRef::Enum(_)))
+        matches!(
+            crate::repr::repr_kind_for_ty(self.db, &self.core, ty),
+            crate::repr::ReprKind::Ref
+        )
     }
 
     pub(super) fn value_repr_for_expr(&self, expr: ExprId, ty: TyId<'db>) -> ValueRepr {
-        if let Some(kind) = self.effect_provider_kind_for_provider_ty(ty) {
-            let space = match kind {
-                EffectProviderKind::Memory => AddressSpaceKind::Memory,
-                EffectProviderKind::Storage => AddressSpaceKind::Storage,
-                EffectProviderKind::Calldata => AddressSpaceKind::Memory,
-            };
-            return ValueRepr::Ptr(space);
-        }
-        if self.is_by_ref_ty(ty) {
-            ValueRepr::Ref(self.expr_address_space(expr))
-        } else {
-            ValueRepr::Word
+        match crate::repr::repr_kind_for_ty(self.db, &self.core, ty) {
+            crate::repr::ReprKind::Ptr(space) => ValueRepr::Ptr(space),
+            crate::repr::ReprKind::Ref => ValueRepr::Ref(self.expr_address_space(expr)),
+            crate::repr::ReprKind::Zst | crate::repr::ReprKind::Word => ValueRepr::Word,
         }
     }
 
     pub(super) fn value_repr_for_ty(&self, ty: TyId<'db>, space: AddressSpaceKind) -> ValueRepr {
-        if let Some(kind) = self.effect_provider_kind_for_provider_ty(ty) {
-            return match kind {
-                EffectProviderKind::Memory => ValueRepr::Ptr(AddressSpaceKind::Memory),
-                EffectProviderKind::Storage => ValueRepr::Ptr(AddressSpaceKind::Storage),
-                EffectProviderKind::Calldata => ValueRepr::Ptr(AddressSpaceKind::Memory),
-            };
-        }
-        if self.is_by_ref_ty(ty) {
-            ValueRepr::Ref(space)
-        } else {
-            ValueRepr::Word
+        match crate::repr::repr_kind_for_ty(self.db, &self.core, ty) {
+            crate::repr::ReprKind::Ptr(space) => ValueRepr::Ptr(space),
+            crate::repr::ReprKind::Ref => ValueRepr::Ref(space),
+            crate::repr::ReprKind::Zst | crate::repr::ReprKind::Word => ValueRepr::Word,
         }
     }
 
@@ -785,33 +781,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         &self,
         provider_ty: TyId<'db>,
     ) -> Option<EffectProviderKind> {
-        let base_ty = provider_ty.base_ty(self.db);
-        if let Some(mem_base) = self
-            .core
-            .helper_ty(CoreHelperTy::EffectMemPtr)
-            .map(|ty| ty.base_ty(self.db))
-            && base_ty == mem_base
-        {
-            return Some(EffectProviderKind::Memory);
-        }
-
-        if let Some(stor_base) = self
-            .core
-            .helper_ty(CoreHelperTy::EffectStorPtr)
-            .map(|ty| ty.base_ty(self.db))
-            && base_ty == stor_base
-        {
-            return Some(EffectProviderKind::Storage);
-        }
-        if let Some(calldata_base) = self
-            .core
-            .helper_ty(CoreHelperTy::EffectCalldataPtr)
-            .map(|ty| ty.base_ty(self.db))
-            && base_ty == calldata_base
-        {
-            return Some(EffectProviderKind::Calldata);
-        }
-        None
+        crate::repr::effect_provider_kind_for_ty(self.db, &self.core, provider_ty)
     }
 
     /// Determines the address space associated with a MIR value.

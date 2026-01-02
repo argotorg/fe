@@ -1,7 +1,7 @@
-use core::intrinsic::addr_of
 use super::effects::Address
 use ingot::evm::ops::{keccak256, mload, mstore, sload, sstore}
 use ingot::evm::word::WordRepr
+use core::{EffectRef, EffectRefMut}
 
 /// Keys that can be written into the mapping preimage for keccak hashing.
 pub trait StorageKey {
@@ -23,31 +23,52 @@ impl StorageKey for Address {
 }
 
 /// A storage-backed mapping from keys `K` to values `V`.
-pub struct StorageMap<K, V> {
-    /// Private marker field to give the type a non-zero size for layout purposes.
-    _m: u256,
+///
+/// `SALT` is the mapping's slot seed (the `slot` component in
+/// `keccak256(key ++ slot)`), chosen explicitly for each mapping instance to
+/// prevent collisions.
+pub struct StorageMap<K, V, const SALT: u256> {}
+
+fn storagemap_storage_slot_with_salt<K>(key: K, salt: u256) -> u256
+    where K: StorageKey
+{
+    // keccak256(key ++ slot) - standard Solidity mapping layout
+    // TODO: fn alloc_tmp
+    let ptr = mload(0x40)
+    let key_len = K::write_key(ptr, key)
+    mstore(ptr + key_len, salt)
+    keccak256(ptr, key_len + 32)
 }
 
-impl<K: StorageKey, V: WordRepr> StorageMap<K, V> {
+fn storagemap_get_word_with_salt<K>(key: K, salt: u256) -> u256
+    where K: StorageKey
+{
+    let storage_slot = storagemap_storage_slot_with_salt(key, salt)
+    sload(storage_slot)
+}
+
+fn storagemap_set_word_with_salt<K>(key: K, salt: u256, word: u256)
+    where K: StorageKey
+{
+    let storage_slot = storagemap_storage_slot_with_salt(key, salt)
+    sstore(storage_slot, word)
+}
+
+impl<K: StorageKey, V: WordRepr, const SALT: u256> StorageMap<K, V, SALT> {
+    pub fn new() -> Self {
+        Self {}
+    }
+
     pub fn get(self, key: K) -> V {
-        let storage_slot = self.storage_slot(key)
-        V::from_word(word: sload(storage_slot))
+        V::from_word(word: storagemap_get_word_with_salt(key, SALT))
     }
 
     pub fn set(self, key: K, value: V) {
-        let storage_slot = self.storage_slot(key)
-        sstore(storage_slot, value.to_word())
-    }
-
-    fn storage_slot(self, key: K) -> u256 {
-        // keccak256(key ++ slot) - standard Solidity mapping layout
-        // TODO: fn alloc_tmp
-        let ptr = mload(0x40)
-        let key_len = K::write_key(ptr, key)
-        mstore(ptr + key_len, addr_of(self))
-        keccak256(ptr, key_len + 32)
+        storagemap_set_word_with_salt(key, SALT, value.to_word())
     }
 }
+
+
 
 impl<A, B> StorageKey for (A, B)
 where A: StorageKey,

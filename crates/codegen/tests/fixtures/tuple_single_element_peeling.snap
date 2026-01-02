@@ -1,0 +1,34 @@
+---
+source: crates/codegen/tests/yul.rs
+expression: output
+input_file: tests/fixtures/tuple_single_element_peeling.fe
+---
+function tuple_single_passthrough(x) -> ret {
+  let v0 := x
+  ret := v0
+  leave
+}
+function tuple_single_nested_passthrough(x) -> ret {
+  let v0 := x
+  ret := v0
+  leave
+}
+function tuple_single_struct_newtype_nested(x) -> ret {
+  let v0 := x
+  ret := v0
+  leave
+}
+function match_single_element_tuple(t) -> ret {
+  let v0 := 0
+  switch t
+    case 1 {
+      v0 := 1
+    }
+    case 0 {
+      v0 := 0
+    }
+    default {
+    }
+  ret := v0
+  leave
+}

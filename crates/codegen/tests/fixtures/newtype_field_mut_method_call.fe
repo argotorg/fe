@@ -1,0 +1,36 @@
+struct Counter {
+    value: u256,
+    pad: u256,
+}
+
+impl Counter {
+    fn bump(mut self) {
+        self.value += 1
+    }
+}
+
+struct WrapCounter {
+    inner: Counter,
+}
+
+impl WrapCounter {
+    fn bump(mut self) {
+        self.inner.value += 1
+    }
+}
+
+struct Container {
+    pad: u256,
+    w: WrapCounter,
+}
+
+pub fn newtype_field_mut_method_call(x: u256) -> u256 {
+    let mut c = Container {
+        pad: 0,
+        w: WrapCounter {
+            inner: Counter { value: x, pad: 0 },
+        },
+    }
+    c.w.bump()
+    c.w.inner.value
+}

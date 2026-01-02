@@ -82,19 +82,12 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         }
 
         let record_ty = self.typed_body.expr_ty(self.db, expr);
-        let record_base = record_ty.base_ty(self.db);
-        let mut effect_ptr_bases = Vec::new();
-        if let Some(ty) = self.core.helper_ty(CoreHelperTy::EffectMemPtr) {
-            effect_ptr_bases.push(ty.base_ty(self.db));
-        }
-        if let Some(ty) = self.core.helper_ty(CoreHelperTy::EffectStorPtr) {
-            effect_ptr_bases.push(ty.base_ty(self.db));
-        }
-        if let Some(ty) = self.core.helper_ty(CoreHelperTy::EffectCalldataPtr) {
-            effect_ptr_bases.push(ty.base_ty(self.db));
-        }
 
-        if effect_ptr_bases.contains(&record_base) && lowered_fields.len() == 1 {
+        // Transparent newtypes (single-field structs) are represented identically to their single
+        // field, so record literals lower to a representation-preserving cast.
+        if crate::repr::transparent_newtype_field_ty(self.db, record_ty).is_some()
+            && lowered_fields.len() == 1
+        {
             let field_value = lowered_fields[0].1;
             self.builder.body.values[fallback.index()].origin =
                 ValueOrigin::TransparentCast { value: field_value };
@@ -126,6 +119,9 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
     /// Tuples are treated as struct-like aggregates: memory is allocated for the
     /// full tuple size, and each element is stored at its computed byte offset.
     ///
+    /// Transparent single-element tuples `(T,)` are represented identically to `T`, so tuple
+    /// literals lower to a representation-preserving cast.
+    ///
     /// # Parameters
     /// - `expr`: Tuple literal expression id.
     /// - `elems`: Element expressions.
@@ -148,6 +144,17 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
             if self.current_block().is_none() {
                 return fallback;
             }
+        }
+
+        if crate::repr::transparent_newtype_field_ty(self.db, tuple_ty).is_some()
+            && lowered_elems.len() == 1
+        {
+            let elem_value = lowered_elems[0];
+            self.builder.body.values[fallback.index()].origin =
+                ValueOrigin::TransparentCast { value: elem_value };
+            self.builder.body.values[fallback.index()].repr =
+                self.value_repr_for_expr(expr, tuple_ty);
+            return fallback;
         }
 
         let value_id = self.emit_alloc(expr, tuple_ty);
