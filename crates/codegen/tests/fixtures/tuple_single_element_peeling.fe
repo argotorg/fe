@@ -1,0 +1,27 @@
+// Tests transparent peeling for single-element tuples `(T,)`.
+
+struct WrapU256 {
+    inner: u256,
+}
+
+pub fn tuple_single_passthrough(x: u256) -> u256 {
+    let t: (u256,) = (x,)
+    t.0
+}
+
+pub fn tuple_single_nested_passthrough(x: u256) -> u256 {
+    let t: ((u256,),) = ((x,),)
+    t.0.0
+}
+
+pub fn tuple_single_struct_newtype_nested(x: u256) -> u256 {
+    let t: (WrapU256,) = (WrapU256 { inner: x },)
+    t.0.inner
+}
+
+pub fn match_single_element_tuple(t: (bool,)) -> u8 {
+    match t {
+        (true,) => 1,
+        (false,) => 0,
+    }
+}

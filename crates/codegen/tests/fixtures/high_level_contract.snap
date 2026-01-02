@@ -1,6 +1,5 @@
 ---
 source: crates/codegen/tests/yul.rs
-assertion_line: 42
 expression: output
 input_file: tests/fixtures/high_level_contract.fe
 ---
@@ -153,13 +152,7 @@ object "EchoContract" {
       }
       function _t0__decode_decode__Sol_u256_SolDecoder_CallData___51fc2f6931ec5edc(d) -> ret {
         let v0 := u256_decode_decode__Sol_SolDecoder_CallData___828c6f2e3bda3cab(d)
-        let v1 := mload(0x40)
-        if iszero(v1) {
-          v1 := 0x80
-        }
-        mstore(0x40, add(v1, 32))
-        mstore(v1, v0)
-        ret := v1
+        ret := v0
         leave
       }
       function alloc(size) -> ret {
@@ -227,7 +220,7 @@ object "EchoContract" {
         leave
       }
       function recv_EchoMsg_Echo_0_1(args) -> ret {
-        let v0 := mload(args)
+        let v0 := args
         ret := v0
         leave
       }

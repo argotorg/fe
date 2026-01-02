@@ -161,8 +161,8 @@ pub(crate) fn insert_temp_binds<'db>(db: &'db dyn HirAnalysisDb, body: &mut MirB
 
 /// Canonicalize transparent-newtype operations in MIR.
 ///
-/// This pass enforces a single representation strategy for transparent newtypes (single-field
-/// structs):
+/// This pass enforces a single representation strategy for transparent single-field wrappers
+/// (single-field structs and single-element tuples):
 /// - Collapses chains of `ValueOrigin::TransparentCast` so downstream passes don't need to chase
 ///   multiple hops.
 /// - Rewrites `Place` projection paths to peel `.0` field projections over transparent newtypes

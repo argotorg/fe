@@ -328,24 +328,12 @@ object "CoolCoin" {
       }
       function _t0__decode_decode__Sol_Address_SolDecoder_CallData___c3cd70daebc6e8b9(d) -> ret {
         let v0 := address_decode_decode__Sol_SolDecoder_CallData___828c6f2e3bda3cab(d)
-        let v1 := mload(0x40)
-        if iszero(v1) {
-          v1 := 0x80
-        }
-        mstore(0x40, add(v1, 32))
-        mstore(v1, v0)
-        ret := v1
+        ret := v0
         leave
       }
       function _t0__decode_decode__Sol_u256_SolDecoder_CallData___51fc2f6931ec5edc(d) -> ret {
         let v0 := u256_decode_decode__Sol_SolDecoder_CallData___828c6f2e3bda3cab(d)
-        let v1 := mload(0x40)
-        if iszero(v1) {
-          v1 := 0x80
-        }
-        mstore(0x40, add(v1, 32))
-        mstore(v1, v0)
-        ret := v1
+        ret := v0
         leave
       }
       function _t0__t1__decode_decode__Sol_Address_Address_SolDecoder_CallData___7ed19c3f9fd70917(d) -> ret {
@@ -586,7 +574,7 @@ object "CoolCoin" {
         leave
       }
       function recv_Erc20Extended_Burn_1_1(args, ctx, store, log) -> ret {
-        let v0 := mload(args)
+        let v0 := args
         let v1 := caller()
         burn(v1, v0, store, log)
         ret := 1
@@ -659,7 +647,7 @@ object "CoolCoin" {
         leave
       }
       function recv_Erc20_BalanceOf_0_3(args, store) -> ret {
-        let v0 := mload(args)
+        let v0 := args
         pop(store)
         let v1 := storagemap_k__v__const_salt__u256__get__Address_u256_0__b8b2f68065fe2328(0, v0)
         ret := v1

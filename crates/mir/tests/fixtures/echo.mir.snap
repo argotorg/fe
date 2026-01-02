@@ -1,6 +1,5 @@
 ---
 source: crates/mir/tests/lowering_snapshots.rs
-assertion_line: 26
 expression: mir_output
 ---
 fn answer_decode(v0: SolDecoder<CallData>) -> Answer:
@@ -28,7 +27,7 @@ fn recv_EchoMsg_Answer_0_0(v0: ()) -> u256:
 
 fn recv_EchoMsg_Echo_0_1(v0: (u256)) -> u256:
   bb0:
-    v1: u256 = load mem[v0].0
+    v1: u256 = v0
     ret v1
 
 fn recv_EchoMsg_GetX_0_2(v0: (), v1: u256) -> u256:
@@ -189,9 +188,7 @@ fn return_value__Evm_Sol_u256__fe091c64bccbbbf1(v0: Self, v1: T) -> !:
 fn _t0__decode_decode__Sol_u256_SolDecoder_CallData___51fc2f6931ec5edc(v0: D) -> (T0):
   bb0:
     v1: u256 = u256_decode_decode__Sol_SolDecoder_CallData___828c6f2e3bda3cab(v0)
-    v2: (u256) = alloc mem
-    init mem[v2] { .0 = v1 }
-    ret v2
+    ret v1
 
 fn evm_contracthost_abort(v0: Evm) -> !:
   bb0:

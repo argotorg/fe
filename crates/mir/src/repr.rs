@@ -7,9 +7,10 @@
 //! - by-reference aggregates (`ValueRepr::Ref`)
 //!
 //! This module centralizes the logic for computing those representation categories, including
-//! recursive elimination of "newtype" structs (single-field structs). Newtypes are treated as
-//! transparent wrappers: their runtime representation is the same as their (recursively unwrapped)
-//! single field, while preserving the logical type (`TyId`) elsewhere in MIR.
+//! recursive elimination of "newtype" wrappers (single-field structs and single-element tuples).
+//! Newtypes are treated as transparent wrappers: their runtime representation is the same as their
+//! (recursively unwrapped) single field, while preserving the logical type (`TyId`) elsewhere in
+//! MIR.
 
 use hir::analysis::HirAnalysisDb;
 use hir::analysis::ty::adt_def::AdtRef;
@@ -32,7 +33,11 @@ pub enum ReprKind {
     Ref,
 }
 
-/// Returns the single field type if `ty` is a single-field `struct` ADT.
+/// Returns the single field type if `ty` is a transparent single-field wrapper.
+///
+/// Transparent wrappers include:
+/// - single-field `struct` ADTs
+/// - single-element tuples `(T,)`
 ///
 /// This intentionally does *not* look through nested wrappers. Callers that want to peel multiple
 /// levels should loop over this helper.
@@ -40,6 +45,11 @@ pub fn transparent_newtype_field_ty<'db>(
     db: &'db dyn HirAnalysisDb,
     ty: TyId<'db>,
 ) -> Option<TyId<'db>> {
+    if ty.is_tuple(db) {
+        let field_tys = ty.field_types(db);
+        return (field_tys.len() == 1).then(|| field_tys[0]);
+    }
+
     let base_ty = ty.base_ty(db);
     let TyData::TyBase(TyBase::Adt(adt_def)) = base_ty.data(db) else {
         return None;
