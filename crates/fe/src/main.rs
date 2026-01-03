@@ -1,5 +1,6 @@
 #![allow(clippy::print_stderr, clippy::print_stdout)]
 mod check;
+mod test;
 #[cfg(not(target_arch = "wasm32"))]
 mod tree;
 
@@ -45,6 +46,18 @@ pub enum Command {
         #[arg(long)]
         check: bool,
     },
+    /// Run Fe tests in a file or directory.
+    Test {
+        /// Path to a .fe file or directory containing an ingot with tests.
+        #[arg(default_value_t = default_project_path())]
+        path: Utf8PathBuf,
+        /// Optional filter pattern for test names.
+        #[arg(short, long)]
+        filter: Option<String>,
+        /// Show event logs from test execution.
+        #[arg(long)]
+        show_logs: bool,
+    },
     New,
 }
 
@@ -74,6 +87,13 @@ pub fn run(opts: &Options) {
         }
         Command::Fmt { path, check } => {
             run_fmt(path.as_ref(), *check);
+        }
+        Command::Test {
+            path,
+            filter,
+            show_logs,
+        } => {
+            test::run_tests(path, filter.as_deref(), *show_logs);
         }
         Command::New => eprintln!("`fe new` doesn't work at the moment"),
     }
