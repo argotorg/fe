@@ -13,7 +13,7 @@ use revm::{
     },
     database::InMemoryDB,
     handler::{ExecuteCommitEvm, MainBuilder, MainContext, MainnetContext, MainnetEvm},
-    primitives::{Address, Bytes as EvmBytes, TxKind},
+    primitives::{Address, Bytes as EvmBytes, Log, TxKind},
     state::AccountInfo,
 };
 use solc_runner::{ContractBytecode, YulcError, compile_single_contract};
@@ -122,6 +122,13 @@ pub struct CallResult {
     pub gas_used: u64,
 }
 
+/// Output returned from executing contract runtime bytecode along with logs.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CallResultWithLogs {
+    pub result: CallResult,
+    pub logs: Vec<String>,
+}
+
 fn prepare_account(
     runtime_bytecode_hex: &str,
 ) -> Result<(Bytecode, Address, InMemoryDB), HarnessError> {
@@ -138,6 +145,26 @@ fn transact(
     options: ExecutionOptions,
     nonce: u64,
 ) -> Result<CallResult, HarnessError> {
+    let outcome = transact_with_logs(evm, address, calldata, options, nonce)?;
+    Ok(outcome.result)
+}
+
+/// Executes a call transaction and returns the result plus formatted logs.
+///
+/// * `evm` - Mutable EVM instance to execute against.
+/// * `address` - Target contract address.
+/// * `calldata` - ABI-encoded call data.
+/// * `options` - Execution options (gas, caller, value).
+/// * `nonce` - Transaction nonce to use.
+///
+/// Returns the call result along with any logs emitted by the execution.
+fn transact_with_logs(
+    evm: &mut MainnetEvm<MainnetContext<InMemoryDB>>,
+    address: Address,
+    calldata: &[u8],
+    options: ExecutionOptions,
+    nonce: u64,
+) -> Result<CallResultWithLogs, HarnessError> {
     let tx = TxEnv::builder()
         .caller(options.caller)
         .gas_limit(options.gas_limit)
@@ -156,10 +183,14 @@ fn transact(
         ExecutionResult::Success {
             output: Output::Call(bytes),
             gas_used,
+            logs,
             ..
-        } => Ok(CallResult {
-            return_data: bytes.to_vec(),
-            gas_used,
+        } => Ok(CallResultWithLogs {
+            result: CallResult {
+                return_data: bytes.to_vec(),
+                gas_used,
+            },
+            logs: format_logs(&logs),
         }),
         ExecutionResult::Success {
             output: Output::Create(..),
@@ -172,6 +203,15 @@ fn transact(
             Err(HarnessError::Halted { reason, gas_used })
         }
     }
+}
+
+/// Formats raw EVM logs into debug strings for display.
+///
+/// * `logs` - Logs emitted by the EVM execution.
+///
+/// Returns a vector of formatted log strings.
+fn format_logs(logs: &[Log]) -> Vec<String> {
+    logs.iter().map(|log| format!("{log:?}")).collect()
 }
 
 /// Stateful runtime instance backed by a persistent in-memory database.
@@ -291,6 +331,16 @@ impl RuntimeInstance {
     ) -> Result<CallResult, HarnessError> {
         let nonce = self.effective_nonce(options);
         transact(&mut self.evm, self.address, calldata, options, nonce)
+    }
+
+    /// Executes the runtime with arbitrary calldata, returning execution logs.
+    pub fn call_raw_with_logs(
+        &mut self,
+        calldata: &[u8],
+        options: ExecutionOptions,
+    ) -> Result<CallResultWithLogs, HarnessError> {
+        let nonce = self.effective_nonce(options);
+        transact_with_logs(&mut self.evm, self.address, calldata, options, nonce)
     }
 
     /// Executes the runtime at an arbitrary address using the same underlying EVM state.

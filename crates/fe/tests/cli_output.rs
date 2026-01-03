@@ -26,6 +26,15 @@ fn run_fe_tree(path: &str) -> (String, i32) {
     run_fe_command("tree", path)
 }
 
+/// Helper to run `fe test` on a fixture path.
+///
+/// * `path` - File or directory path passed to the CLI.
+///
+/// Returns the combined CLI output and exit code.
+fn run_fe_test(path: &str) -> (String, i32) {
+    run_fe_command("test", path)
+}
+
 // Helper function to run fe binary with specified subcommand
 fn run_fe_command(subcommand: &str, path: &str) -> (String, i32) {
     // Build the fe binary
@@ -126,4 +135,19 @@ fn test_tree_output(fixture: Fixture<&str>) {
     let ingot_name = ingot_dir.file_name().unwrap().to_str().unwrap();
     let snapshot_path = ingot_dir.join(format!("{}_tree", ingot_name));
     snap_test!(output, snapshot_path.to_str().unwrap());
+}
+
+/// Executes `fe test` against each fixture and asserts a zero exit code.
+///
+/// * `fixture` - Fixture containing the test source path.
+///
+/// Returns nothing; asserts on the CLI exit status.
+#[dir_test(
+    dir: "$CARGO_MANIFEST_DIR/tests/fixtures/fe_test",
+    glob: "*.fe",
+)]
+fn test_fe_test(fixture: Fixture<&str>) {
+    let (output, exit_code) = run_fe_test(fixture.path());
+    // All fe test fixtures should pass (exit code 0)
+    assert_eq!(exit_code, 0, "fe test failed:\n{}", output);
 }

@@ -1,0 +1,22 @@
+---
+source: crates/codegen/tests/test_yul_tests.rs
+expression: "output.tests[0].yul"
+input_file: tests/fixtures/test_output/effect_test.fe
+---
+object "test_test_effect" {
+  code {
+    datacopy(0, dataoffset("runtime"), datasize("runtime"))
+    return(0, datasize("runtime"))
+  }
+
+  object "runtime" {
+    code {
+      function test_effect(x) {
+        x := add(x, 1)
+        leave
+      }
+      test_effect(0)
+      return(0, 0)
+    }
+  }
+}

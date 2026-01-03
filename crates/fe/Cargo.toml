@@ -17,6 +17,8 @@ hir.workspace = true
 mir.workspace = true
 cranelift-entity.workspace = true
 codegen = { path = "../codegen", package = "fe-codegen" }
+contract-harness = { path = "../contract-harness", package = "fe-contract-harness" }
+solc-runner = { path = "../solc-runner", package = "fe-solc-runner" }
 fmt.workspace = true
 walkdir = "2"
 similar = "2"

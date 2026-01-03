@@ -1,0 +1,14 @@
+use std::evm::effects::assert
+
+#[test]
+fn test_multiple_effect_params() uses (mut x: u256, mut y: u256) {
+    x += 1
+    y += 2
+    assert(true)
+}
+
+#[test]
+fn test_non_evm_effect_param() uses (mut value: u256) {
+    value += 1
+    assert(true)
+}

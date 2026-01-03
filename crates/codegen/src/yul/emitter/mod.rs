@@ -2,7 +2,7 @@ use std::fmt;
 
 use crate::yul::errors::YulError;
 
-pub use module::emit_module_yul;
+pub use module::{TestMetadata, TestModuleOutput, emit_module_yul, emit_test_module_yul};
 
 mod control_flow;
 mod expr;
