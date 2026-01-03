@@ -8,7 +8,9 @@ mod path;
 mod stmt;
 
 pub use self::contract::{
-    check_contract_recv_arm_body, check_contract_recv_block, check_contract_recv_blocks,
+    ResolvedRecvVariant, VariantResError, check_contract_init_body, check_contract_recv_arm_body,
+    check_contract_recv_block, check_contract_recv_blocks, resolve_variant_bare,
+    resolve_variant_in_msg,
 };
 pub use self::path::RecordLike;
 use crate::analysis::ty::fold::TyFoldable;
@@ -45,6 +47,7 @@ use super::{
     ty_lower::lower_hir_ty,
     unify::{InferenceKey, UnificationError, UnificationTable},
 };
+use crate::analysis::ty::ty_def::{TyBase, TyData};
 use crate::analysis::ty::{
     fold::AssocTySubst, normalize::normalize_ty, ty_error::collect_ty_lower_errors,
 };
@@ -81,6 +84,7 @@ pub struct TyChecker<'db> {
     env: TyCheckEnv<'db>,
     table: UnificationTable<'db>,
     expected: TyId<'db>,
+    effect_provider_keys: FxHashSet<InferenceKey<'db>>,
     diags: Vec<FuncBodyDiag<'db>>,
 }
 
@@ -134,6 +138,9 @@ impl<'db> TyChecker<'db> {
                     self.check_free_func_effect_list(func, func.effects(self.db));
                 }
             }
+            owner @ BodyOwner::ContractInit { contract } => {
+                self.check_contract_scoped_effect_list(owner, contract, owner.effects(self.db));
+            }
             owner @ BodyOwner::ContractRecvArm { contract, .. } => {
                 self.check_contract_scoped_effect_list(owner, contract, owner.effects(self.db));
             }
@@ -176,6 +183,7 @@ impl<'db> TyChecker<'db> {
     ) {
         let owner = match owner {
             BodyOwner::Func(func) => EffectParamOwner::Func(func),
+            BodyOwner::ContractInit { contract } => EffectParamOwner::ContractInit { contract },
             BodyOwner::ContractRecvArm {
                 contract,
                 recv_idx,
@@ -278,6 +286,7 @@ impl<'db> TyChecker<'db> {
                 let trait_method = *inst.def(db).method_defs(db).get(&pending.method_name)?;
                 let func_ty =
                     instantiate_trait_method(db, trait_method, &mut this.table, recv_ty, inst);
+                let func_ty = this.table.instantiate_to_term(func_ty);
                 let callable =
                     Callable::new(db, func_ty, receiver.span(body).into(), Some(inst)).ok()?;
 
@@ -429,10 +438,8 @@ impl<'db> TyChecker<'db> {
                                     .method_defs(db)
                                     .get(&pending.method_name)
                                     .unwrap();
-                                let func_ty = instantiate_trait_method(
-                                    db,
+                                let func_ty = self.instantiate_trait_method_to_term(
                                     trait_method,
-                                    &mut self.table,
                                     recv_ty,
                                     *inst,
                                 );
@@ -579,6 +586,7 @@ impl<'db> TyChecker<'db> {
             env,
             table,
             expected,
+            effect_provider_keys: FxHashSet::default(),
             diags: Vec::new(),
         }
     }
@@ -878,7 +886,7 @@ impl<'db> TyChecker<'db> {
             resolve_tail_as_value,
             &mut check_visibility,
         ) {
-            Ok(r) => Ok(r.map_over_ty(|ty| self.table.instantiate_to_term(ty))),
+            Ok(r) => Ok(r.map_over_ty(|ty| self.instantiate_to_term(ty))),
             Err(err) => Err(err),
         };
 
@@ -890,6 +898,59 @@ impl<'db> TyChecker<'db> {
         }
 
         res
+    }
+
+    fn instantiate_to_term(&mut self, ty: TyId<'db>) -> TyId<'db> {
+        let base = ty.base_ty(self.db);
+        let TyData::TyBase(TyBase::Func(def)) = base.data(self.db) else {
+            return self.table.instantiate_to_term(ty);
+        };
+        self.instantiate_callable_to_term(ty, *def)
+    }
+
+    fn instantiate_trait_method_to_term(
+        &mut self,
+        method: Func<'db>,
+        receiver_ty: TyId<'db>,
+        inst: TraitInstId<'db>,
+    ) -> TyId<'db> {
+        let ty = instantiate_trait_method(self.db, method, &mut self.table, receiver_ty, inst);
+        self.instantiate_to_term(ty)
+    }
+
+    fn instantiate_trait_assoc_fn_to_term(
+        &mut self,
+        method: CallableDef<'db>,
+        inst: TraitInstId<'db>,
+    ) -> TyId<'db> {
+        let ty = instantiate_trait_assoc_fn(self.db, method, inst);
+        self.instantiate_to_term(ty)
+    }
+
+    fn instantiate_callable_to_term(
+        &mut self,
+        mut ty: TyId<'db>,
+        callable: CallableDef<'db>,
+    ) -> TyId<'db> {
+        if ty.has_invalid(self.db) {
+            return ty;
+        }
+
+        while let Some(prop) = ty.applicable_ty(self.db) {
+            let (_, args) = ty.decompose_ty_app(self.db);
+            let param_index = args.len();
+            let param_ty = callable.params(self.db).get(param_index).copied();
+            let arg = self.table.new_var_for(prop);
+            if let Some(param_ty) = param_ty
+                && matches!(param_ty.data(self.db), TyData::TyParam(p) if p.is_effect_provider())
+            {
+                self.effect_provider_keys
+                    .extend(inference_keys(self.db, &arg));
+            }
+            ty = TyId::app(self.db, ty, arg);
+        }
+
+        ty
     }
 
     /// Resolve associated type to concrete type if possible
@@ -1178,7 +1239,7 @@ impl Typeable<'_> {
     }
 }
 
-pub fn instantiate_trait_method<'db>(
+fn instantiate_trait_method<'db>(
     db: &'db dyn HirAnalysisDb,
     method: Func<'db>,
     table: &mut UnificationTable<'db>,
@@ -1194,28 +1255,24 @@ pub fn instantiate_trait_method<'db>(
     let inst_self = table.instantiate_to_term(inst.self_ty(db));
     table.unify(inst_self, receiver_ty).unwrap();
 
-    let instantiated = table.instantiate_to_term(ty);
-
     // Apply associated type substitutions from the trait instance
     use crate::analysis::ty::fold::{AssocTySubst, TyFoldable};
     let mut subst = AssocTySubst::new(inst);
-    instantiated.fold_with(db, &mut subst)
+    ty.fold_with(db, &mut subst)
 }
 
 /// Instantiate a trait-associated function type (no receiver), e.g. `T::make`.
-pub fn instantiate_trait_assoc_fn<'db>(
+fn instantiate_trait_assoc_fn<'db>(
     db: &'db dyn HirAnalysisDb,
     method: CallableDef<'db>,
-    table: &mut UnificationTable<'db>,
     inst: TraitInstId<'db>,
 ) -> TyId<'db> {
     let ty = TyId::foldl(db, TyId::func(db, method), inst.args(db));
-    let instantiated = table.instantiate_to_term(ty);
 
     // Apply associated type substitutions from the trait instance
     use crate::analysis::ty::fold::{AssocTySubst, TyFoldable};
     let mut subst = AssocTySubst::new(inst);
-    instantiated.fold_with(db, &mut subst)
+    ty.fold_with(db, &mut subst)
 }
 
 struct TyCheckerFinalizer<'db> {
@@ -1223,6 +1280,7 @@ struct TyCheckerFinalizer<'db> {
     body: TypedBody<'db>,
     assumptions: PredicateListId<'db>,
     ty_vars: FxHashSet<InferenceKey<'db>>,
+    effect_provider_keys: FxHashSet<InferenceKey<'db>>,
     diags: Vec<FuncBodyDiag<'db>>,
 }
 
@@ -1289,6 +1347,7 @@ impl<'db> TyCheckerFinalizer<'db> {
             body,
             assumptions,
             ty_vars: FxHashSet::default(),
+            effect_provider_keys: checker.effect_provider_keys,
             diags: checker.diags,
         }
     }
@@ -1311,8 +1370,17 @@ impl<'db> TyCheckerFinalizer<'db> {
             return;
         }
 
+        let keys = inference_keys(self.db, &ty);
+        if !keys.is_empty()
+            && keys
+                .iter()
+                .all(|key| self.effect_provider_keys.contains(key))
+        {
+            return;
+        }
+
         let mut skip_diag = false;
-        for key in inference_keys(self.db, &ty) {
+        for key in keys {
             // If at least one of the inference keys are already seen, we will skip emitting
             // diagnostics.
             skip_diag |= !self.ty_vars.insert(key);

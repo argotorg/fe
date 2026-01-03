@@ -27,12 +27,15 @@ pub use reference::{
 
 use crate::HirDb;
 use crate::analysis::HirAnalysisDb;
+use crate::analysis::ty::canonical::Canonicalized;
+use crate::analysis::ty::corelib::resolve_core_trait;
 use crate::analysis::ty::diagnostics::{ImplDiag, TyLowerDiag};
 use crate::analysis::ty::normalize::normalize_ty;
 use crate::analysis::ty::ty_def::Kind;
 use crate::analysis::ty::ty_error::collect_hir_ty_diags;
 use crate::hir_def::params::KindBound as HirKindBound;
 use crate::hir_def::scope_graph::ScopeId;
+use rustc_hash::FxHashMap;
 
 pub fn lower_hir_kind_local(k: &HirKindBound) -> Kind {
     use crate::hir_def::Partial;
@@ -56,8 +59,9 @@ use crate::hir_def::*;
 // When adding real methods, prefer calling internal lowering/normalization here
 // rather than exposing raw syntax.
 use crate::analysis::ty::adt_def::{AdtCycleMember, AdtDef, AdtField, AdtRef};
+use crate::analysis::ty::effects::EffectKeyKind;
 use crate::analysis::ty::trait_def::{
-    ImplementorId, TraitInstId, does_impl_trait_conflict, ingot_trait_env,
+    ImplementorId, ImplementorOrigin, TraitInstId, does_impl_trait_conflict, ingot_trait_env,
 };
 use crate::analysis::ty::trait_lower::{TraitRefLowerError, lower_trait_ref};
 use crate::analysis::ty::trait_resolution::constraint::{
@@ -68,10 +72,15 @@ use crate::analysis::ty::ty_lower::{GenericParamTypeSet, collect_generic_params}
 use crate::analysis::ty::visitor::{TyVisitor, walk_ty};
 use crate::analysis::ty::{
     diagnostics::{TraitConstraintDiag, TyDiagCollection},
-    trait_resolution::{PredicateListId, WellFormedness, check_ty_wf},
-    ty_def::{InvalidCause, TyId},
+    trait_resolution::{
+        GoalSatisfiability, PredicateListId, WellFormedness, check_ty_wf, is_goal_satisfiable,
+    },
+    ty_check::EffectParamSite,
+    ty_def::{InvalidCause, PrimTy, TyId},
     ty_error::collect_ty_lower_errors,
-    ty_lower::{TyAlias, lower_hir_ty, lower_type_alias, lower_type_alias_from_hir},
+    ty_lower::{
+        TyAlias, lower_hir_ty, lower_opt_hir_ty, lower_type_alias, lower_type_alias_from_hir,
+    },
 };
 use crate::core::adt_lower::{lower_adt, lower_contract_fields};
 use common::indexmap::IndexMap;
@@ -557,77 +566,842 @@ impl<'db> FuncParamView<'db> {
 
 // Effect param views --------------------------------------------------------
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Update)]
+#[salsa::interned]
+#[derive(Debug)]
 pub struct RecvView<'db> {
-    contract: Contract<'db>,
-    recv_idx: u32,
+    pub contract: Contract<'db>,
+    pub recv_idx: u32,
 }
 
 impl<'db> RecvView<'db> {
-    pub fn contract(self) -> Contract<'db> {
-        self.contract
-    }
-
-    pub fn index(self) -> u32 {
-        self.recv_idx
+    pub fn index(self, db: &'db dyn HirDb) -> u32 {
+        self.recv_idx(db)
     }
 
     pub fn msg_path(self, db: &'db dyn HirDb) -> Option<PathId<'db>> {
-        self.contract
+        self.contract(db)
             .recvs(db)
             .data(db)
-            .get(self.recv_idx as usize)
+            .get(self.recv_idx(db) as usize)
             .and_then(|r| r.msg_path)
     }
 
     pub fn arm(self, db: &'db dyn HirDb, arm_idx: u32) -> Option<RecvArmView<'db>> {
-        self.contract
-            .recv_arm(db, self.recv_idx as usize, arm_idx as usize)
-            .map(|_| RecvArmView {
-                recv: self,
-                arm_idx,
-            })
+        self.contract(db)
+            .recv_arm(db, self.recv_idx(db) as usize, arm_idx as usize)
+            .map(|_| RecvArmView::new(db, self, arm_idx))
     }
 
     pub fn arms(self, db: &'db dyn HirDb) -> impl Iterator<Item = RecvArmView<'db>> + 'db {
         let len = self
-            .contract
+            .contract(db)
             .recvs(db)
             .data(db)
-            .get(self.recv_idx as usize)
+            .get(self.recv_idx(db) as usize)
             .map(|r| r.arms.data(db).len())
             .unwrap_or(0);
-        (0..len).map(move |arm_idx| RecvArmView {
-            recv: self,
-            arm_idx: arm_idx as u32,
-        })
+        (0..len).map(move |arm_idx| RecvArmView::new(db, self, arm_idx as u32))
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Update)]
+#[salsa::interned]
+#[derive(Debug)]
 pub struct RecvArmView<'db> {
-    recv: RecvView<'db>,
-    arm_idx: u32,
+    pub recv: RecvView<'db>,
+    pub arm_idx: u32,
 }
 
 impl<'db> RecvArmView<'db> {
-    pub fn recv(self) -> RecvView<'db> {
-        self.recv
+    pub fn index(self, db: &'db dyn HirDb) -> u32 {
+        self.arm_idx(db)
     }
 
-    pub fn contract(self) -> Contract<'db> {
-        self.recv.contract
+    pub fn contract(self, db: &'db dyn HirDb) -> Contract<'db> {
+        self.recv(db).contract(db)
     }
 
     pub fn arm(self, db: &'db dyn HirDb) -> Option<ContractRecvArm<'db>> {
-        self.contract()
-            .recv_arm(db, self.recv.recv_idx as usize, self.arm_idx as usize)
+        let recv = self.recv(db);
+        recv.contract(db)
+            .recv_arm(db, recv.recv_idx(db) as usize, self.arm_idx(db) as usize)
     }
 
     pub fn effects(self, db: &'db dyn HirDb) -> EffectParamListId<'db> {
         self.arm(db)
             .map(|a| a.effects)
             .unwrap_or_else(|| EffectParamListId::new(db, Vec::new()))
+    }
+
+    pub fn effective_effect_env(self, db: &'db dyn HirAnalysisDb) -> EffectEnvView<'db> {
+        let contract = self.contract(db);
+        let recv_idx = self.recv(db).recv_idx(db);
+        let arm_idx = self.arm_idx(db);
+        EffectEnvView {
+            site: EffectParamSite::ContractRecvArm {
+                contract,
+                recv_idx,
+                arm_idx,
+            },
+        }
+    }
+}
+
+#[salsa::tracked]
+impl<'db> RecvArmView<'db> {
+    #[salsa::tracked]
+    pub fn variant_ty(self, db: &'db dyn HirAnalysisDb) -> TyId<'db> {
+        let assumptions = PredicateListId::empty_list(db);
+        let recv = self.recv(db);
+        let contract = recv.contract(db);
+
+        let recv_is_bare = recv.msg_path(db).is_none();
+        let msg_mod = recv
+            .msg_path(db)
+            .and_then(|p| resolve_msg_mod(db, contract, p, assumptions));
+
+        let Some(hir_arm) = self.arm(db) else {
+            return TyId::invalid(db, InvalidCause::Other);
+        };
+
+        let (_variant_struct, variant_ty) =
+            resolve_recv_variant(db, contract, msg_mod, recv_is_bare, hir_arm, assumptions);
+
+        variant_ty.unwrap_or_else(|| TyId::invalid(db, InvalidCause::Other))
+    }
+
+    #[salsa::tracked]
+    pub fn abi_info(self, db: &'db dyn HirAnalysisDb, abi: TyId<'db>) -> RecvArmAbiInfo<'db> {
+        let assumptions = PredicateListId::empty_list(db);
+        let recv = self.recv(db);
+        let contract = recv.contract(db);
+
+        let variant_ty = self.variant_ty(db);
+        let selector_value = variant_struct_from_ty(db, variant_ty)
+            .and_then(|s| get_variant_selector(db, s))
+            .unwrap_or_default();
+
+        let msg_variant_trait =
+            resolve_core_trait(db, contract.scope(), &["message", "MsgVariant"]);
+        let args_ident = IdentId::new(db, "Args".to_string());
+        let return_ident = IdentId::new(db, "Return".to_string());
+
+        let (args_ty, variant_ret_ty) = if !variant_ty.has_invalid(db) && !abi.has_invalid(db) {
+            let inst = TraitInstId::new(
+                db,
+                msg_variant_trait,
+                vec![variant_ty, abi],
+                IndexMap::new(),
+            );
+            let args_proj = TyId::assoc_ty(db, inst, args_ident);
+            let return_proj = TyId::assoc_ty(db, inst, return_ident);
+            (
+                normalize_ty(db, args_proj, contract.scope(), assumptions),
+                normalize_ty(db, return_proj, contract.scope(), assumptions),
+            )
+        } else {
+            (
+                TyId::invalid(db, InvalidCause::Other),
+                TyId::invalid(db, InvalidCause::Other),
+            )
+        };
+
+        let ret_ty = (variant_ret_ty != TyId::unit(db)).then_some(variant_ret_ty);
+
+        RecvArmAbiInfo {
+            selector_value,
+            args_ty,
+            ret_ty,
+        }
+    }
+
+    #[salsa::tracked(return_ref)]
+    pub fn arg_bindings(self, db: &'db dyn HirAnalysisDb) -> Vec<ArgBinding<'db>> {
+        let assumptions = PredicateListId::empty_list(db);
+        let recv = self.recv(db);
+        let contract = recv.contract(db);
+
+        let Some(sol_ty) = resolve_sol_abi_ty(db, contract.scope(), assumptions) else {
+            return Vec::new();
+        };
+
+        let variant_ty = self.variant_ty(db);
+        let Some(variant_struct) = variant_struct_from_ty(db, variant_ty) else {
+            return Vec::new();
+        };
+
+        let Some(hir_arm) = self.arm(db) else {
+            return Vec::new();
+        };
+
+        let abi_info = self.abi_info(db, sol_ty);
+        compute_arg_bindings(
+            db,
+            variant_struct,
+            abi_info.args_ty,
+            hir_arm.pat,
+            hir_arm.body,
+        )
+        .unwrap_or_default()
+    }
+
+    #[salsa::tracked(return_ref)]
+    pub fn effective_effect_bindings(self, db: &'db dyn HirAnalysisDb) -> Vec<EffectBinding<'db>> {
+        let contract = self.contract(db);
+        let recv_idx = self.recv(db).recv_idx(db);
+        let arm_idx = self.arm_idx(db);
+        let Some(arm) = self.arm(db) else {
+            return Vec::new();
+        };
+
+        let site = EffectParamSite::ContractRecvArm {
+            contract,
+            recv_idx,
+            arm_idx,
+        };
+        contract_scoped_effect_bindings(db, contract, site, arm.effects)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Update)]
+pub struct ContractFieldInfo<'db> {
+    pub index: u32,
+    pub name: Option<IdentId<'db>>,
+    pub declared_ty: TyId<'db>,
+    pub is_provider: bool,
+    pub target_ty: TyId<'db>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Update)]
+pub struct ArgBinding<'db> {
+    pub pat: PatId,
+    pub tuple_index: u32,
+    pub ty: TyId<'db>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Update)]
+pub enum EffectSource {
+    Root,
+    Field(u32),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Update)]
+pub struct EffectBinding<'db> {
+    pub binding_name: IdentId<'db>,
+    pub key_kind: EffectKeyKind,
+    pub key_ty: Option<TyId<'db>>,
+    pub key_trait: Option<TraitInstId<'db>>,
+    pub is_mut: bool,
+    pub source: EffectSource,
+    pub binding_site: EffectParamSite<'db>,
+    pub binding_idx: u32,
+    pub binding_key_path: PathId<'db>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Update)]
+pub struct EffectEnvView<'db> {
+    site: EffectParamSite<'db>,
+}
+
+impl<'db> EffectEnvView<'db> {
+    pub fn site(self) -> EffectParamSite<'db> {
+        self.site
+    }
+
+    pub fn bindings(self, db: &'db dyn HirAnalysisDb) -> &'db [EffectBinding<'db>] {
+        match self.site {
+            EffectParamSite::Contract(contract) => contract.effect_bindings(db).as_slice(),
+            EffectParamSite::ContractInit { contract } => {
+                contract.init_effect_bindings(db).as_slice()
+            }
+            EffectParamSite::ContractRecvArm {
+                contract,
+                recv_idx,
+                arm_idx,
+            } => {
+                let recv = RecvView::new(db, contract, recv_idx);
+                let arm = RecvArmView::new(db, recv, arm_idx);
+                arm.effective_effect_bindings(db).as_slice()
+            }
+            EffectParamSite::Func(func) => func.effect_bindings(db).as_slice(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Update)]
+pub struct RecvArmAbiInfo<'db> {
+    pub selector_value: u32,
+    pub args_ty: TyId<'db>,
+    pub ret_ty: Option<TyId<'db>>,
+}
+
+fn variant_struct_from_ty<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> Option<Struct<'db>> {
+    match ty.base_ty(db).data(db) {
+        TyData::TyBase(TyBase::Adt(adt)) => match adt.adt_ref(db) {
+            AdtRef::Struct(struct_) => Some(struct_),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+#[salsa::tracked]
+impl<'db> Contract<'db> {
+    pub fn recv(self, db: &'db dyn HirDb, recv_idx: u32) -> Option<RecvView<'db>> {
+        self.recvs(db)
+            .data(db)
+            .get(recv_idx as usize)
+            .map(|_| RecvView::new(db, self, recv_idx))
+    }
+
+    pub fn init_effect_env(self, db: &'db dyn HirDb) -> Option<EffectEnvView<'db>> {
+        self.init(db).map(|_| EffectEnvView {
+            site: EffectParamSite::ContractInit { contract: self },
+        })
+    }
+
+    pub fn recv_views(self, db: &'db dyn HirDb) -> impl Iterator<Item = RecvView<'db>> + 'db {
+        let len = self.recvs(db).data(db).len();
+        (0..len).map(move |idx| RecvView::new(db, self, idx as u32))
+    }
+
+    pub fn effect_params(
+        self,
+        db: &'db dyn HirDb,
+    ) -> impl Iterator<Item = EffectParamView<'db>> + 'db {
+        let len = self.effects(db).data(db).len();
+        let owner = EffectParamOwner::Contract(self);
+        (0..len).map(move |idx| EffectParamView { owner, idx })
+    }
+
+    #[salsa::tracked(return_ref)]
+    pub fn field_infos(self, db: &'db dyn HirAnalysisDb) -> Vec<ContractFieldInfo<'db>> {
+        let scope = self.top_mod(db).scope();
+        let assumptions = PredicateListId::empty_list(db);
+        let ingot = self.top_mod(db).ingot(db);
+
+        let effect_ref = resolve_core_trait(db, scope, &["effect_ref", "EffectRef"]);
+        let target_ident = IdentId::new(db, "Target".to_string());
+
+        let hir_fields = self.hir_fields(db).data(db);
+
+        hir_fields
+            .iter()
+            .enumerate()
+            .map(|(idx, field)| {
+                let name = field.name.to_opt();
+                let declared_ty = lower_opt_hir_ty(db, field.type_ref(), scope, assumptions);
+
+                let inst = TraitInstId::new(db, effect_ref, vec![declared_ty], IndexMap::new());
+                let goal = Canonicalized::new(db, inst).value;
+                let (is_provider, target_ty) =
+                    match is_goal_satisfiable(db, ingot, goal, assumptions) {
+                        GoalSatisfiability::UnSat(_) | GoalSatisfiability::ContainsInvalid => {
+                            (false, None)
+                        }
+                        GoalSatisfiability::Satisfied(_)
+                        | GoalSatisfiability::NeedsConfirmation(_) => (
+                            true,
+                            inst.assoc_ty(db, target_ident)
+                                .map(|assoc| normalize_ty(db, assoc, scope, assumptions)),
+                        ),
+                    };
+
+                ContractFieldInfo {
+                    index: idx as u32,
+                    name,
+                    declared_ty,
+                    is_provider,
+                    target_ty: target_ty.unwrap_or(declared_ty),
+                }
+            })
+            .collect()
+    }
+
+    #[salsa::tracked]
+    pub fn init_args_ty(self, db: &'db dyn HirAnalysisDb) -> TyId<'db> {
+        let Some(init) = self.init(db) else {
+            return TyId::unit(db);
+        };
+
+        let assumptions = PredicateListId::empty_list(db);
+        let param_tys: Vec<TyId<'db>> = init
+            .params(db)
+            .data(db)
+            .iter()
+            .map(|p| match p.ty.to_opt() {
+                Some(hir_ty) => {
+                    lower_opt_hir_ty(db, Partial::Present(hir_ty), self.scope(), assumptions)
+                }
+                None => TyId::invalid(db, InvalidCause::ParseError),
+            })
+            .collect();
+
+        let base = TyId::new(
+            db,
+            TyData::TyBase(TyBase::Prim(PrimTy::Tuple(param_tys.len()))),
+        );
+        param_tys
+            .into_iter()
+            .fold(base, |acc, elem| TyId::app(db, acc, elem))
+    }
+
+    #[salsa::tracked(return_ref)]
+    pub fn effect_bindings(self, db: &'db dyn HirAnalysisDb) -> Vec<EffectBinding<'db>> {
+        let assumptions = PredicateListId::empty_list(db);
+        let contract_site = EffectParamSite::Contract(self);
+        self.effects(db)
+            .data(db)
+            .iter()
+            .enumerate()
+            .filter_map(|(idx, effect)| {
+                let key_path = effect.key_path.to_opt()?;
+                let binding_name = effect
+                    .name
+                    .or_else(|| key_path.ident(db).to_opt())
+                    .unwrap_or_else(|| IdentId::new(db, "_effect".to_string()));
+                let (key_kind, key_ty, key_trait) =
+                    resolve_effect_key(db, key_path, self.scope(), assumptions);
+                Some(EffectBinding {
+                    binding_name,
+                    key_kind,
+                    key_ty,
+                    key_trait,
+                    is_mut: effect.is_mut,
+                    source: EffectSource::Root,
+                    binding_site: contract_site,
+                    binding_idx: idx as u32,
+                    binding_key_path: key_path,
+                })
+            })
+            .collect()
+    }
+
+    #[salsa::tracked(return_ref)]
+    pub fn init_effect_bindings(self, db: &'db dyn HirAnalysisDb) -> Vec<EffectBinding<'db>> {
+        let Some(init) = self.init(db) else {
+            return Vec::new();
+        };
+        contract_scoped_effect_bindings(
+            db,
+            self,
+            EffectParamSite::ContractInit { contract: self },
+            init.effects(db),
+        )
+    }
+}
+
+#[salsa::tracked]
+impl<'db> Func<'db> {
+    #[salsa::tracked(return_ref)]
+    pub fn effect_bindings(self, db: &'db dyn HirAnalysisDb) -> Vec<EffectBinding<'db>> {
+        let assumptions = PredicateListId::empty_list(db);
+        self.effects(db)
+            .data(db)
+            .iter()
+            .enumerate()
+            .filter_map(|(idx, effect)| {
+                let key_path = effect.key_path.to_opt()?;
+                let binding_name = effect
+                    .name
+                    .or_else(|| key_path.ident(db).to_opt())
+                    .unwrap_or_else(|| IdentId::new(db, "_effect".to_string()));
+                let (key_kind, key_ty, key_trait) =
+                    resolve_effect_key(db, key_path, self.scope(), assumptions);
+                Some(EffectBinding {
+                    binding_name,
+                    key_kind,
+                    key_ty,
+                    key_trait,
+                    is_mut: effect.is_mut,
+                    source: EffectSource::Root,
+                    binding_site: EffectParamSite::Func(self),
+                    binding_idx: idx as u32,
+                    binding_key_path: key_path,
+                })
+            })
+            .collect()
+    }
+}
+
+fn field_name_index_map<'db>(fields: &[ContractFieldInfo<'db>]) -> FxHashMap<IdentId<'db>, u32> {
+    let mut map = FxHashMap::default();
+    for f in fields {
+        if let Some(name) = f.name {
+            map.insert(name, f.index);
+        }
+    }
+    map
+}
+
+fn contract_effect_decl_map<'db>(
+    db: &'db dyn HirAnalysisDb,
+    contract: Contract<'db>,
+) -> FxHashMap<IdentId<'db>, (u32, PathId<'db>, bool)> {
+    let mut out = FxHashMap::default();
+    for (idx, effect) in contract.effects(db).data(db).iter().enumerate() {
+        if let Some(name) = effect.name
+            && let Some(key_path) = effect.key_path.to_opt()
+        {
+            out.insert(name, (idx as u32, key_path, effect.is_mut));
+        }
+    }
+    out
+}
+
+fn contract_scoped_effect_bindings<'db>(
+    db: &'db dyn HirAnalysisDb,
+    contract: Contract<'db>,
+    list_site: EffectParamSite<'db>,
+    list: EffectParamListId<'db>,
+) -> Vec<EffectBinding<'db>> {
+    let fields = contract.field_infos(db);
+    let field_name_to_index = field_name_index_map(fields);
+    let contract_named_effects = contract_effect_decl_map(db, contract);
+    let assumptions = PredicateListId::empty_list(db);
+
+    let mut out = Vec::new();
+    for (idx, effect) in list.data(db).iter().enumerate() {
+        let Some(key_path) = effect.key_path.to_opt() else {
+            continue;
+        };
+
+        if let Some(binding_name) = effect.name {
+            let (key_kind, key_ty, key_trait) =
+                resolve_effect_key(db, key_path, contract.scope(), assumptions);
+            out.push(EffectBinding {
+                binding_name,
+                key_kind,
+                key_ty,
+                key_trait,
+                is_mut: effect.is_mut,
+                source: EffectSource::Root,
+                binding_site: list_site,
+                binding_idx: idx as u32,
+                binding_key_path: key_path,
+            });
+            continue;
+        }
+
+        if key_path.len(db) == 1
+            && let Some(name) = key_path.ident(db).to_opt()
+            && let Some(&field_idx) = field_name_to_index.get(&name)
+        {
+            let target_ty = fields
+                .get(field_idx as usize)
+                .map(|f| f.target_ty)
+                .unwrap_or_else(|| TyId::invalid(db, InvalidCause::Other));
+
+            out.push(EffectBinding {
+                binding_name: name,
+                key_kind: EffectKeyKind::Type,
+                key_ty: Some(target_ty),
+                key_trait: None,
+                is_mut: effect.is_mut,
+                source: EffectSource::Field(field_idx),
+                binding_site: list_site,
+                binding_idx: idx as u32,
+                binding_key_path: key_path,
+            });
+            continue;
+        }
+
+        if key_path.len(db) == 1
+            && let Some(name) = key_path.ident(db).to_opt()
+            && let Some((binding_idx, referenced_key, is_mut)) =
+                contract_named_effects.get(&name).copied()
+        {
+            let (key_kind, key_ty, key_trait) =
+                resolve_effect_key(db, referenced_key, contract.scope(), assumptions);
+
+            out.push(EffectBinding {
+                binding_name: name,
+                key_kind,
+                key_ty,
+                key_trait,
+                is_mut,
+                source: EffectSource::Root,
+                binding_site: EffectParamSite::Contract(contract),
+                binding_idx,
+                binding_key_path: referenced_key,
+            });
+            continue;
+        }
+
+        // Unlabeled contract-scoped effects are either references (field/contract effect) or
+        // invalid. Diagnostics are emitted by the type checker; keep lowering conservative.
+        let binding_name = key_path
+            .ident(db)
+            .to_opt()
+            .unwrap_or_else(|| IdentId::new(db, "_effect".to_string()));
+
+        out.push(EffectBinding {
+            binding_name,
+            key_kind: EffectKeyKind::Other,
+            key_ty: None,
+            key_trait: None,
+            is_mut: effect.is_mut,
+            source: EffectSource::Root,
+            binding_site: list_site,
+            binding_idx: idx as u32,
+            binding_key_path: key_path,
+        });
+    }
+
+    check_field_mutability_invariants(db, contract, fields, &mut out);
+    out
+}
+
+fn check_field_mutability_invariants<'db>(
+    db: &'db dyn HirAnalysisDb,
+    contract: Contract<'db>,
+    fields: &[ContractFieldInfo<'db>],
+    effects: &mut [EffectBinding<'db>],
+) {
+    // This is intentionally best-effort; diagnostics are emitted by analysis passes.
+    let assumptions = PredicateListId::empty_list(db);
+    let contract_ingot = contract.top_mod(db).ingot(db);
+
+    let effect_ref_mut = resolve_core_trait(db, contract.scope(), &["effect_ref", "EffectRefMut"]);
+
+    let stor_ptr_ctor = resolve_core_stor_ptr_ctor(db, contract.scope(), assumptions);
+
+    for effect in effects {
+        let EffectSource::Field(field_idx) = effect.source else {
+            continue;
+        };
+        if !effect.is_mut {
+            continue;
+        }
+        let Some(field) = fields.get(field_idx as usize) else {
+            continue;
+        };
+
+        let provider_ty = if field.is_provider {
+            Some(field.declared_ty)
+        } else {
+            stor_ptr_ctor.map(|ctor| TyId::app(db, ctor, field.declared_ty))
+        };
+        let Some(provider_ty) = provider_ty else {
+            continue;
+        };
+
+        let inst = TraitInstId::new(db, effect_ref_mut, vec![provider_ty], IndexMap::new());
+        let canonical = Canonicalized::new(db, inst);
+        let sat = is_goal_satisfiable(db, contract_ingot, canonical.value, assumptions);
+        if matches!(
+            sat,
+            GoalSatisfiability::UnSat(_) | GoalSatisfiability::ContainsInvalid
+        ) {
+            // Mark the key as invalid to keep downstream lowering conservative.
+            effect.key_kind = EffectKeyKind::Other;
+            effect.key_ty = None;
+            effect.key_trait = None;
+        }
+    }
+}
+
+fn resolve_effect_key<'db>(
+    db: &'db dyn HirAnalysisDb,
+    key_path: PathId<'db>,
+    scope: ScopeId<'db>,
+    assumptions: PredicateListId<'db>,
+) -> (EffectKeyKind, Option<TyId<'db>>, Option<TraitInstId<'db>>) {
+    use crate::analysis::name_resolution::{PathRes, resolve_path};
+
+    match resolve_path(db, key_path, scope, assumptions, false) {
+        Ok(PathRes::Ty(ty) | PathRes::TyAlias(_, ty)) => (EffectKeyKind::Type, Some(ty), None),
+        Ok(PathRes::Trait(inst)) => (EffectKeyKind::Trait, None, Some(inst)),
+        _ => (EffectKeyKind::Other, None, None),
+    }
+}
+
+fn compute_arg_bindings<'db>(
+    db: &'db dyn HirAnalysisDb,
+    variant_struct: Struct<'db>,
+    args_ty: TyId<'db>,
+    arm_pat: PatId,
+    arm_body: Body<'db>,
+) -> Option<Vec<ArgBinding<'db>>> {
+    let Partial::Present(pat) = arm_pat.data(db, arm_body) else {
+        return None;
+    };
+
+    let elem_tys = args_ty.field_types(db);
+
+    let bindings = match pat {
+        Pat::Record(_, fields) => {
+            let mut out = Vec::new();
+            for f in fields {
+                let Some(label) = f.label(db, arm_body) else {
+                    continue;
+                };
+                let Some(field_idx) = variant_struct.hir_fields(db).field_idx(db, label) else {
+                    continue;
+                };
+                let Some(elem_ty) = elem_tys.get(field_idx).copied() else {
+                    continue;
+                };
+                out.push(ArgBinding {
+                    pat: f.pat,
+                    tuple_index: field_idx as u32,
+                    ty: elem_ty,
+                });
+            }
+            out
+        }
+        Pat::PathTuple(_, pats) | Pat::Tuple(pats) => pats
+            .iter()
+            .enumerate()
+            .filter_map(|(idx, pat)| {
+                let ty = elem_tys.get(idx).copied()?;
+                Some(ArgBinding {
+                    pat: *pat,
+                    tuple_index: idx as u32,
+                    ty,
+                })
+            })
+            .collect(),
+        _ => Vec::new(),
+    };
+
+    Some(bindings)
+}
+
+fn resolve_msg_mod<'db>(
+    db: &'db dyn HirAnalysisDb,
+    contract: Contract<'db>,
+    msg_path: PathId<'db>,
+    assumptions: PredicateListId<'db>,
+) -> Option<Mod<'db>> {
+    use crate::analysis::name_resolution::{PathRes, resolve_path};
+    use crate::hir_def::ItemKind;
+
+    if let PathRes::Mod(ScopeId::Item(ItemKind::Mod(m))) =
+        resolve_path(db, msg_path, contract.scope(), assumptions, false).ok()?
+    {
+        Some(m)
+    } else {
+        None
+    }
+}
+
+fn resolve_recv_variant<'db>(
+    db: &'db dyn HirAnalysisDb,
+    contract: Contract<'db>,
+    msg_mod: Option<Mod<'db>>,
+    recv_is_bare: bool,
+    arm: ContractRecvArm<'db>,
+    assumptions: PredicateListId<'db>,
+) -> (Option<Struct<'db>>, Option<TyId<'db>>) {
+    let Some(variant_path) = arm.variant_path(db) else {
+        return (None, None);
+    };
+
+    if let Some(msg_mod) = msg_mod {
+        match crate::analysis::ty::ty_check::resolve_variant_in_msg(
+            db,
+            msg_mod,
+            variant_path,
+            assumptions,
+        ) {
+            Ok(resolved) => (Some(resolved.variant_struct), Some(resolved.ty)),
+            _ => (None, None),
+        }
+    } else if recv_is_bare {
+        match crate::analysis::ty::ty_check::resolve_variant_bare(
+            db,
+            contract,
+            variant_path,
+            assumptions,
+        ) {
+            Ok(resolved) => (Some(resolved.variant_struct), Some(resolved.ty)),
+            _ => (None, None),
+        }
+    } else {
+        (None, None)
+    }
+}
+
+fn resolve_sol_abi_ty<'db>(
+    db: &'db dyn HirAnalysisDb,
+    scope: ScopeId<'db>,
+    assumptions: PredicateListId<'db>,
+) -> Option<TyId<'db>> {
+    use crate::analysis::name_resolution::{PathRes, resolve_path};
+    use common::ingot::IngotKind;
+
+    let ingot = scope.ingot(db);
+    let std_root = if ingot.kind(db) == IngotKind::Std {
+        IdentId::make_ingot(db)
+    } else {
+        IdentId::new(db, "std".to_string())
+    };
+
+    let sol_path = PathId::from_ident(db, std_root)
+        .push_ident(db, IdentId::new(db, "abi".to_string()))
+        .push_ident(db, IdentId::new(db, "Sol".to_string()));
+
+    match resolve_path(db, sol_path, scope, assumptions, false).ok()? {
+        PathRes::Ty(ty) | PathRes::TyAlias(_, ty) => Some(ty),
+        _ => None,
+    }
+}
+
+fn resolve_core_stor_ptr_ctor<'db>(
+    db: &'db dyn HirAnalysisDb,
+    scope: ScopeId<'db>,
+    assumptions: PredicateListId<'db>,
+) -> Option<TyId<'db>> {
+    use crate::analysis::name_resolution::{PathRes, resolve_path};
+    use common::ingot::IngotKind;
+
+    let ingot = scope.ingot(db);
+    let root = if ingot.kind(db) == IngotKind::Core {
+        IdentId::make_ingot(db)
+    } else {
+        IdentId::make_core(db)
+    };
+
+    let stor_ptr_path = PathId::from_ident(db, root)
+        .push_ident(db, IdentId::new(db, "effect_ref".to_string()))
+        .push_ident(db, IdentId::new(db, "StorPtr".to_string()));
+
+    match resolve_path(db, stor_ptr_path, scope, assumptions, false).ok()? {
+        PathRes::Ty(ty) | PathRes::TyAlias(_, ty) => Some(ty),
+        _ => None,
+    }
+}
+
+fn get_variant_selector<'db>(db: &'db dyn HirAnalysisDb, struct_: Struct<'db>) -> Option<u32> {
+    use crate::hir_def::{Expr, LitKind};
+    use num_traits::ToPrimitive;
+
+    let msg_variant_trait = resolve_core_trait(db, struct_.scope(), &["message", "MsgVariant"]);
+
+    let adt_def = crate::analysis::ty::adt_def::AdtRef::from(struct_).as_adt(db);
+    let ty = TyId::adt(db, adt_def);
+    let canonical_ty = crate::analysis::ty::canonical::Canonical::new(db, ty);
+    let ingot = struct_.top_mod(db).ingot(db);
+
+    let impl_ = crate::analysis::ty::trait_def::impls_for_ty(db, ingot, canonical_ty)
+        .iter()
+        .find(|impl_| impl_.skip_binder().trait_def(db).eq(&msg_variant_trait))?
+        .skip_binder();
+
+    let selector_name = IdentId::new(db, "SELECTOR".to_string());
+    let hir_impl = impl_.hir_impl_trait(db);
+    let selector_const = hir_impl
+        .hir_consts(db)
+        .iter()
+        .find(|c| c.name.to_opt() == Some(selector_name))?;
+
+    let body = selector_const.value.to_opt()?;
+    let root_expr = body.expr(db);
+    let expr = body.exprs(db).get(root_expr)?.clone().to_opt()?;
+
+    match expr {
+        Expr::Lit(LitKind::Int(int_id)) => int_id.data(db).to_u32(),
+        _ => None,
     }
 }
 
@@ -638,11 +1412,11 @@ pub enum EffectParamOwner<'db> {
     RecvArm(RecvArmView<'db>),
 }
 impl<'db> EffectParamOwner<'db> {
-    pub fn scope(self) -> ScopeId<'db> {
+    pub fn scope(self, db: &'db dyn HirDb) -> ScopeId<'db> {
         match self {
             EffectParamOwner::Func(func) => func.scope(),
             EffectParamOwner::Contract(contract) => contract.scope(),
-            EffectParamOwner::RecvArm(arm) => arm.contract().scope(),
+            EffectParamOwner::RecvArm(arm) => arm.contract(db).scope(),
         }
     }
 }
@@ -710,51 +1484,10 @@ impl<'db> Func<'db> {
     }
 }
 
-impl<'db> Contract<'db> {
-    pub fn recv(self, db: &'db dyn HirDb, recv_idx: u32) -> Option<RecvView<'db>> {
-        self.recvs(db)
-            .data(db)
-            .get(recv_idx as usize)
-            .map(|_| RecvView {
-                contract: self,
-                recv_idx,
-            })
-    }
-
-    pub fn recv_views(self, db: &'db dyn HirDb) -> impl Iterator<Item = RecvView<'db>> + 'db {
-        let len = self.recvs(db).data(db).len();
-        (0..len).map(move |idx| RecvView {
-            contract: self,
-            recv_idx: idx as u32,
-        })
-    }
-
-    pub fn effect_params(
-        self,
-        db: &'db dyn HirDb,
-    ) -> impl Iterator<Item = EffectParamView<'db>> + 'db {
-        let len = self.effects(db).data(db).len();
-        let owner = EffectParamOwner::Contract(self);
-        (0..len).map(move |idx| EffectParamView { owner, idx })
-    }
-}
-
 /// Helper to check if a type's base matches a given ADT.
 fn matches_adt<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>, adt: AdtDef<'db>) -> bool {
     match ty.base_ty(db).data(db) {
         TyData::TyBase(TyBase::Adt(ty_adt)) => *ty_adt == adt,
-        _ => false,
-    }
-}
-
-/// Helper to check if a type's base matches a given contract.
-fn matches_contract<'db>(
-    db: &'db dyn HirAnalysisDb,
-    ty: TyId<'db>,
-    contract: Contract<'db>,
-) -> bool {
-    match ty.base_ty(db).data(db) {
-        TyData::TyBase(TyBase::Contract(c)) => *c == contract,
         _ => false,
     }
 }
@@ -856,52 +1589,6 @@ impl<'db> Struct<'db> {
             .collect()
     }
 }
-
-impl<'db> Contract<'db> {
-    /// Returns semantic types of all fields, bound to identity parameters.
-    pub fn field_tys(self, db: &'db dyn HirAnalysisDb) -> Vec<Binder<TyId<'db>>> {
-        let scope = self.scope();
-        // Contracts currently have no generic params/where-clause; use empty assumptions.
-        let assumptions = PredicateListId::empty_list(db);
-        let fields = self.fields(db);
-
-        fields
-            .data(db)
-            .iter()
-            .map(|field| {
-                let ty = match field.type_ref.to_opt() {
-                    Some(hir_ty) => lower_hir_ty(db, hir_ty, scope, assumptions),
-                    None => TyId::invalid(db, InvalidCause::ParseError),
-                };
-                Binder::bind(ty)
-            })
-            .collect()
-    }
-
-    /// Returns all inherent `impl` blocks for this contract within the same ingot.
-    pub fn all_impls(self, db: &'db dyn HirAnalysisDb) -> Vec<Impl<'db>> {
-        self.top_mod(db)
-            .ingot(db)
-            .all_impls(db)
-            .iter()
-            .copied()
-            .filter(|impl_| matches_contract(db, impl_.ty(db), self))
-            .collect()
-    }
-
-    /// Returns all `impl Trait for Contract` blocks for this contract within the same ingot.
-    pub fn all_impl_traits(self, db: &'db dyn HirAnalysisDb) -> Vec<ImplTrait<'db>> {
-        self.top_mod(db)
-            .ingot(db)
-            .all_impl_traits(db)
-            .iter()
-            .copied()
-            .filter(|impl_trait| matches_contract(db, impl_trait.ty(db), self))
-            .collect()
-    }
-}
-
-// Where-clause traversal (scaffold) -----------------------------------------
 
 #[derive(Clone, Copy, Debug)]
 pub struct WhereClauseView<'db> {
@@ -1111,10 +1798,6 @@ impl<'db> WherePredicateBoundView<'db> {
         lower_trait_ref(db, subject, self.trait_ref(db), scope, assumptions, None).ok()
     }
 }
-
-impl<'db> Contract<'db> {}
-
-// Type alias ---------------------------------------------------------------
 
 impl<'db> TypeAlias<'db> {
     /// Semantic alias target type (convenience over lower_type_alias).
@@ -1566,7 +2249,13 @@ impl<'db> ImplTrait<'db> {
         // Build implementor view
         let params = self.impl_params(db);
         let types = self.assoc_type_bindings_for_trait_inst(db, trait_inst);
-        let implementor = Binder::bind(ImplementorId::new(db, trait_inst, params, types, self));
+        let implementor = Binder::bind(ImplementorId::new(
+            db,
+            trait_inst,
+            params,
+            types,
+            ImplementorOrigin::Hir(self),
+        ));
 
         // Conflict check
         let trait_ = implementor.skip_binder().trait_(db);

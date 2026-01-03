@@ -26,7 +26,7 @@ fn hir_desugar(fixture: Fixture<&str>) {
     let top_mod = map_file_to_mod(&db, file);
 
     // Print desugared output (skips contract definitions to avoid duplicates)
-    let output = top_mod.pretty_print_desugared(&db);
+    let output = top_mod.pretty_print(&db);
 
     // Generate snapshot first (even if analysis fails)
     snap_test!(output, fixture.path());

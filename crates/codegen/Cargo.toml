@@ -7,6 +7,7 @@ edition.workspace = true
 driver = { path = "../driver", package = "fe-driver" }
 mir = { path = "../mir", package = "fe-mir" }
 hir.workspace = true
+common.workspace = true
 hex = "0.4"
 rustc-hash.workspace = true
 
@@ -14,5 +15,4 @@ rustc-hash.workspace = true
 dir-test.workspace = true
 test-utils.workspace = true
 url.workspace = true
-common.workspace = true
 hir = { workspace = true, features = ["testutils"] }

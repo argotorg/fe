@@ -35,7 +35,7 @@ pub fn format_function(db: &dyn HirAnalysisDb, func: &MirFunction<'_>) -> String
         .map(|local| format_local_decl(db, &func.body, *local))
         .collect();
     let params_str = params.join(", ");
-    let return_ty = func.func.return_ty(db).pretty_print(db);
+    let return_ty = func.ret_ty.pretty_print(db);
     out.push_str(&format!(
         "fn {}({}) -> {}:\n",
         func.symbol_name, params_str, return_ty
@@ -183,7 +183,9 @@ fn format_rvalue(body: &MirBody<'_>, rvalue: &Rvalue<'_>) -> String {
         Rvalue::Alloc { address_space } => {
             let space = match address_space {
                 AddressSpaceKind::Memory => "mem",
+                AddressSpaceKind::Calldata => "calldata",
                 AddressSpaceKind::Storage => "stor",
+                AddressSpaceKind::TransientStorage => "tstor",
             };
             format!("alloc {space}")
         }
@@ -275,7 +277,9 @@ fn format_local(local: LocalId) -> String {
 fn format_place(body: &MirBody<'_>, place: &Place<'_>) -> String {
     let space = match body.place_address_space(place) {
         AddressSpaceKind::Memory => "mem",
+        AddressSpaceKind::Calldata => "calldata",
         AddressSpaceKind::Storage => "stor",
+        AddressSpaceKind::TransientStorage => "tstor",
     };
     let base = format_value(body, place.base);
     let proj = format_projection_path(body, place.projection.iter());

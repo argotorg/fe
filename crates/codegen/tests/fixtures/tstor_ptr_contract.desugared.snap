@@ -1,0 +1,39 @@
+---
+source: crates/codegen/tests/yul.rs
+assertion_line: 36
+expression: desugared
+---
+use core::prelude::*
+use std::evm::effects::TStorPtr
+
+mod GuardMsg {
+    use core::prelude::*
+    use super::*
+
+    pub struct Flip {}
+
+    impl core::message::MsgVariant<std::abi::Sol> for Flip {
+        type Args = ()
+        type Return = bool
+        const SELECTOR: u32 = 1
+    }
+
+    impl Flip {
+        pub fn decode(mut _ d: std::abi::sol::SolDecoder<std::evm::calldata::CallData>) -> Self {
+            return Self {  }
+        }
+    
+    }
+}
+
+pub contract GuardContract {
+    block_reentrance: TStorPtr<bool>,
+
+    recv GuardMsg {
+        Flip -> bool uses (mut block_reentrance) {
+            let old = block_reentrance
+            block_reentrance = !old
+            old
+        }
+    }
+}

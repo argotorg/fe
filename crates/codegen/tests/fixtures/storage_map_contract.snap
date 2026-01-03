@@ -5,13 +5,13 @@ input_file: tests/fixtures/storage_map_contract.fe
 ---
 object "BalanceMap" {
   code {
-    function init() {
+    function init__StorPtr_Evm___207f35a85ac4062e() {
       let v0 := datasize("BalanceMap_deployed")
       let v1 := dataoffset("BalanceMap_deployed")
       codecopy(0, v1, v0)
       return(0, v0)
     }
-    init()
+    init__StorPtr_Evm___207f35a85ac4062e()
   }
 
   object "BalanceMap_deployed" {
@@ -21,17 +21,17 @@ object "BalanceMap" {
         mstore(v0, value)
         return(v0, 32)
       }
-      function get_allowance__eff_mem(addr, allowances) -> ret {
+      function get_allowance__MemPtr_StorageMap_u256__u256__1____e8f0bd5888eece94(addr, allowances) -> ret {
         let v0 := storagemap_k__v__const_salt__u256__get__u256_u256_1__3c02c0f2b86be0bb(allowances, addr)
         ret := v0
         leave
       }
-      function get_balance__eff_mem(addr, balances) -> ret {
+      function get_balance__MemPtr_StorageMap_u256__u256__0____3cd7ace0c4584833(addr, balances) -> ret {
         let v0 := storagemap_k__v__const_salt__u256__get__u256_u256_0__6a346ad3c930d971(balances, addr)
         ret := v0
         leave
       }
-      function runtime() {
+      function runtime__StorPtr_Evm___207f35a85ac4062e() {
         storagemap_k__v__const_salt__u256__new__u256_u256_0__6a346ad3c930d971()
         storagemap_k__v__const_salt__u256__new__u256_u256_1__3c02c0f2b86be0bb()
         let v0 := calldataload(0)
@@ -39,45 +39,45 @@ object "BalanceMap" {
         switch v1
           case 2630350600 {
             let v2 := calldataload(4)
-            let v3 := get_balance__eff_mem(v2, 0)
+            let v3 := get_balance__MemPtr_StorageMap_u256__u256__0____3cd7ace0c4584833(v2, 0)
             let v4 := v3
             abi_encode(v4, 0)
           }
           case 1246470123 {
             let v5 := calldataload(4)
             let v6 := calldataload(36)
-            set_balance__eff_mem(v5, v6, 0)
+            set_balance__MemPtr_StorageMap_u256__u256__0____3cd7ace0c4584833(v5, v6, 0)
             abi_encode(0, 0)
           }
           case 2430412327 {
             let v7 := calldataload(4)
             let v8 := calldataload(36)
             let v9 := calldataload(68)
-            let v10 := transfer__eff_mem(v7, v8, v9, 0)
+            let v10 := transfer__MemPtr_StorageMap_u256__u256__0____3cd7ace0c4584833(v7, v8, v9, 0)
             let v11 := v10
             abi_encode(v11, 0)
           }
           case 3378517838 {
             let v12 := calldataload(4)
-            let v13 := get_allowance__eff_mem(v12, 0)
+            let v13 := get_allowance__MemPtr_StorageMap_u256__u256__1____e8f0bd5888eece94(v12, 0)
             let v14 := v13
             abi_encode(v14, 0)
           }
           case 197806145 {
             let v15 := calldataload(4)
             let v16 := calldataload(36)
-            set_allowance__eff_mem(v15, v16, 0)
+            set_allowance__MemPtr_StorageMap_u256__u256__1____e8f0bd5888eece94(v15, v16, 0)
             abi_encode(0, 0)
           }
           default {
             return(0, 0)
           }
       }
-      function set_allowance__eff_mem(addr, value, allowances) {
+      function set_allowance__MemPtr_StorageMap_u256__u256__1____e8f0bd5888eece94(addr, value, allowances) {
         storagemap_k__v__const_salt__u256__set__u256_u256_1__3c02c0f2b86be0bb(allowances, addr, value)
         leave
       }
-      function set_balance__eff_mem(addr, value, balances) {
+      function set_balance__MemPtr_StorageMap_u256__u256__0____3cd7ace0c4584833(addr, value, balances) {
         storagemap_k__v__const_salt__u256__set__u256_u256_0__6a346ad3c930d971(balances, addr, value)
         leave
       }
@@ -128,7 +128,7 @@ object "BalanceMap" {
         ret := v2
         leave
       }
-      function transfer__eff_mem(from, to, amount, balances) -> ret {
+      function transfer__MemPtr_StorageMap_u256__u256__0____3cd7ace0c4584833(from, to, amount, balances) -> ret {
         let v0 := storagemap_k__v__const_salt__u256__get__u256_u256_0__6a346ad3c930d971(balances, from)
         let v1 := lt(v0, amount)
         if v1 {
@@ -156,7 +156,7 @@ object "BalanceMap" {
         ret := self
         leave
       }
-      runtime()
+      runtime__StorPtr_Evm___207f35a85ac4062e()
       return(0, 0)
     }
   }

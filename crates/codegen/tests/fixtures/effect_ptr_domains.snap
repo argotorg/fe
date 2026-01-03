@@ -3,7 +3,7 @@ source: crates/codegen/tests/yul.rs
 expression: output
 input_file: tests/fixtures/effect_ptr_domains.fe
 ---
-function bump(foo) {
+function bump__StorPtr_Foo___3698cc3c4b2626e3(foo) {
   let v0 := sload(foo)
   sstore(foo, add(v0, 1))
   let v1 := sload(add(foo, 1))
@@ -13,10 +13,10 @@ function bump(foo) {
 function test_effect_ptr_domains(st, mem) {
   let v0 := mem_ptr__mem__RawMem_Foo__19292a5189c12f79(mem, 256)
   let v1 := v0
-  bump__eff_mem(v1)
+  bump__MemPtr_Foo___cdd30998d577b6ea(v1)
   let v2 := stor_ptr__st__RawStorage_Foo__d44156c896232646(st, 0)
   let v3 := v2
-  bump(v3)
+  bump__StorPtr_Foo___3698cc3c4b2626e3(v3)
   let v4 := mload(0x40)
   if iszero(v4) {
     v4 := 0x80
@@ -26,14 +26,15 @@ function test_effect_ptr_domains(st, mem) {
   mstore(add(v4, 32), 20)
   let v5 := v4
   let v6 := v5
-  bump__eff_mem(v5)
+  bump__MemPtr_Foo___cdd30998d577b6ea(v5)
   leave
 }
 function mem_ptr__mem__RawMem_Foo__19292a5189c12f79(self, addr) -> ret {
-  ret := addr
+  let v0 := memptr_t__effectref_from_raw__Foo__668f96d7165c93b(addr)
+  ret := v0
   leave
 }
-function bump__eff_mem(foo) {
+function bump__MemPtr_Foo___cdd30998d577b6ea(foo) {
   let v0 := mload(foo)
   mstore(foo, add(v0, 1))
   let v1 := mload(add(foo, 32))
@@ -41,6 +42,15 @@ function bump__eff_mem(foo) {
   leave
 }
 function stor_ptr__st__RawStorage_Foo__d44156c896232646(self, slot) -> ret {
-  ret := slot
+  let v0 := storptr_t__effectref_from_raw__Foo__668f96d7165c93b(slot)
+  ret := v0
+  leave
+}
+function memptr_t__effectref_from_raw__Foo__668f96d7165c93b(raw) -> ret {
+  ret := raw
+  leave
+}
+function storptr_t__effectref_from_raw__Foo__668f96d7165c93b(raw) -> ret {
+  ret := raw
   leave
 }

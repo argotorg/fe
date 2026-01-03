@@ -1,5 +1,6 @@
 ---
 source: crates/codegen/tests/yul.rs
+assertion_line: 36
 expression: desugared
 ---
 use core::prelude::*
@@ -58,132 +59,18 @@ pub struct Pair {
     y: u256,
 }
 
-mod __Child {
-    use super::*
-    use core::contracts::ContractHost
-    use core::contracts::Target
-    use core::abi::Abi
-    use core::abi::AbiEncoder
-    use core::abi::AbiSize
-    use core::abi::ByteInput
-    use core::abi::prefix
-    use core::abi::Encode
-    use std::evm::EvmTarget
-
-    type __Target = EvmTarget
-
-    type __RootEffect = __Target::RootEffect
-
-    type __DefaultAbi = __Target::DefaultAbi
-
-    fn init_contract(x: u256, y: u256) uses (mut state: Pair) {
-        return {
-            state.x = x
-            state.y = y
-        }
-    }
-
-    #[contract_init(Child)]
-    fn init() uses (mut root: __RootEffect) {
-        let mut state = root.init_field<Pair>(core::contract_field_slot(0))
-        let mut __d = __DefaultAbi::decoder_new(root.init_input(runtime))
-        let x: u256 = u256::decode(__d)
-        let y: u256 = u256::decode(__d)
-        with (Pair = state) { init_contract(x, y) }
-        root.create_contract(runtime)
-    }
-
-    #[contract_runtime(Child)]
-    fn runtime() uses (mut root: __RootEffect) {
-        let mut state = root.field<Pair>(core::contract_field_slot(0))
-        let __selector = root.runtime_selector<__DefaultAbi>()
-        let mut __d = root.runtime_decoder<__DefaultAbi>()
-        match __selector {
-            _ => root.abort(),
-        }
-    }
-
-    impl std::evm::Contract for Child {
-        type InitArgs = (u256, u256)
-    
-        fn init_code_offset() -> u256 {
-            return std::evm::code_region_offset(init)
-        }
-    
-        fn init_code_len() -> u256 {
-            return std::evm::code_region_len(init)
-        }
-    }
+pub contract Child {
+    state: Pair,
 }
 
-mod __Factory {
-    use super::*
-    use core::contracts::ContractHost
-    use core::contracts::Target
-    use core::abi::Abi
-    use core::abi::AbiEncoder
-    use core::abi::AbiSize
-    use core::abi::ByteInput
-    use core::abi::prefix
-    use core::abi::Encode
-    use std::evm::EvmTarget
+pub contract Factory uses (mut create: Create) {
 
-    type __Target = EvmTarget
-
-    type __RootEffect = __Target::RootEffect
-
-    type __DefaultAbi = __Target::DefaultAbi
-
-    fn recv_FactoryMsg_Deploy_0_0(args: FactoryMsg::Deploy::Args) -> Address uses (mut create: Create) {
-        let x = args.0
-        let y = args.1
-        return {
+    recv FactoryMsg {
+        Deploy { x, y } -> Address uses (mut create) {
             create.create<Child>(value: 0, args: (x, y))
         }
-    }
-
-    fn recv_FactoryMsg_Deploy2_0_1(args: FactoryMsg::Deploy2::Args) -> Address uses (mut create: Create) {
-        let x = args.0
-        let y = args.1
-        let salt = args.2
-        return {
+        Deploy2 { x, y, salt } -> Address uses (mut create) {
             create.create2<Child>(value: 0, args: (x, y), salt: salt)
-        }
-    }
-
-    #[contract_init(Factory)]
-    fn init() uses (mut root: __RootEffect) {
-        root.create_contract(runtime)
-    }
-
-    #[contract_runtime(Factory)]
-    fn runtime() uses (mut root: __RootEffect) {
-        let __selector = root.runtime_selector<__DefaultAbi>()
-        let mut __d = root.runtime_decoder<__DefaultAbi>()
-        match __selector {
-            FactoryMsg::Deploy::SELECTOR => {
-                let __args: FactoryMsg::Deploy::Args = FactoryMsg::Deploy::Args::decode(__d)
-                let __result = with (Create = root) { recv_FactoryMsg_Deploy_0_0(__args) }
-                root.return_value<__DefaultAbi, Address>(__result)
-            },
-            FactoryMsg::Deploy2::SELECTOR => {
-                let __args: FactoryMsg::Deploy2::Args = FactoryMsg::Deploy2::Args::decode(__d)
-                let __result = with (Create = root) { recv_FactoryMsg_Deploy2_0_1(__args) }
-                root.return_value<__DefaultAbi, Address>(__result)
-            },
-            _ => root.abort(),
-        }
-    }
-
-    impl std::evm::Contract for Factory {
-        type InitArgs = ()
-    
-        fn init_code_offset() -> u256 {
-            return std::evm::code_region_offset(init)
-        }
-    
-        fn init_code_len() -> u256 {
-            return std::evm::code_region_len(init)
         }
     }
 }

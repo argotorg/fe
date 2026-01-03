@@ -2,11 +2,11 @@ use std::fmt;
 
 mod body_builder;
 
-pub use body_builder::BodyBuilder;
+pub use body_builder::{BodyBuilder, LocalValue};
 
-use hir::analysis::ty::ty_check::{Callable, TypedBody};
+use hir::analysis::ty::trait_def::TraitInstId;
 use hir::analysis::ty::ty_def::TyId;
-use hir::hir_def::{EnumVariant, ExprId, Func, PatId, StmtId, TopLevelMod};
+use hir::hir_def::{CallableDef, Contract, EnumVariant, ExprId, Func, PatId, StmtId, TopLevelMod};
 use hir::projection::{Projection, ProjectionPath};
 use num_bigint::BigUint;
 use rustc_hash::FxHashMap;
@@ -31,23 +31,43 @@ impl<'db> MirModule<'db> {
 /// MIR for a single function.
 #[derive(Debug, Clone)]
 pub struct MirFunction<'db> {
-    pub func: Func<'db>,
+    pub origin: MirFunctionOrigin<'db>,
     pub body: MirBody<'db>,
-    pub typed_body: TypedBody<'db>,
+    pub typed_body: Option<hir::analysis::ty::ty_check::TypedBody<'db>>,
     /// Concrete generic arguments used to instantiate this function instance.
     pub generic_args: Vec<TyId<'db>>,
     /// Return type after monomorphization and associated-type normalization.
     pub ret_ty: TyId<'db>,
     /// Whether this function has a runtime return value (`ret_ty` is not zero-sized).
     pub returns_value: bool,
-    /// Effect provider kinds for this instance, indexed by effect param position.
-    pub effect_provider_kinds: Vec<EffectProviderKind>,
     /// Optional contract association declared via attributes.
     pub contract_function: Option<ContractFunction>,
     /// Symbol name used for codegen (includes monomorphization suffix when present).
     pub symbol_name: String,
     /// For methods, the address space variant of the receiver for this instance.
     pub receiver_space: Option<AddressSpaceKind>,
+}
+
+/// Source identity of a MIR function.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum MirFunctionOrigin<'db> {
+    Hir(Func<'db>),
+    Synthetic(SyntheticId<'db>),
+}
+
+/// Stable identity for compiler-generated MIR-only functions.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum SyntheticId<'db> {
+    ContractInitEntrypoint(Contract<'db>),
+    ContractRuntimeEntrypoint(Contract<'db>),
+    ContractInitHandler(Contract<'db>),
+    ContractRecvArmHandler {
+        contract: Contract<'db>,
+        recv_idx: u32,
+        arm_idx: u32,
+    },
+    ContractInitCodeOffset(Contract<'db>),
+    ContractInitCodeLen(Contract<'db>),
 }
 
 /// A function body expressed as basic blocks.
@@ -451,7 +471,9 @@ pub enum SyntheticValue {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum AddressSpaceKind {
     Memory,
+    Calldata,
     Storage,
+    TransientStorage,
 }
 
 /// Runtime representation category for a MIR value.
@@ -483,27 +505,25 @@ impl ValueRepr {
     }
 }
 
-/// Runtime "domain" for an effect provider value.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum EffectProviderKind {
-    Memory,
-    Storage,
-    Calldata,
-}
-
 #[derive(Debug, Clone)]
 pub struct CallOrigin<'db> {
-    pub expr: ExprId,
-    pub callable: Callable<'db>,
+    pub expr: Option<ExprId>,
+    pub hir_target: Option<HirCallTarget<'db>>,
     pub args: Vec<ValueId>,
     /// Explicit lowered effect arguments for this call, in callee effect-param order.
     pub effect_args: Vec<ValueId>,
-    /// Effect provider kinds for this call, in callee effect-param order.
-    pub effect_kinds: Vec<EffectProviderKind>,
     /// Final lowered symbol name of the callee after monomorphization.
     pub resolved_name: Option<String>,
     /// For methods on struct types, the statically known address space of the receiver.
     pub receiver_space: Option<AddressSpaceKind>,
+}
+
+/// HIR-based call target metadata used by monomorphization and diagnostics.
+#[derive(Debug, Clone)]
+pub struct HirCallTarget<'db> {
+    pub callable_def: CallableDef<'db>,
+    pub generic_args: Vec<TyId<'db>>,
+    pub trait_inst: Option<TraitInstId<'db>>,
 }
 
 /// Pointer offset for accessing a nested aggregate field (struct within struct).
@@ -546,7 +566,7 @@ pub struct IntrinsicValue {
 /// Identifies the root function for a code region along with its concrete instantiation.
 #[derive(Debug, Clone)]
 pub struct CodeRegionRoot<'db> {
-    pub func: Func<'db>,
+    pub origin: MirFunctionOrigin<'db>,
     pub generic_args: Vec<TyId<'db>>,
     pub symbol: Option<String>,
 }

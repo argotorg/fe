@@ -9,7 +9,7 @@ object "Erc20Contract" {
       ret := 0
       leave
     }
-    function do_init(erc20, ctx, ops) {
+    function do_init__StorPtr_Erc20___2745299687a147d4(erc20, ctx, ops) {
       let v0 := caller()
       erc20_set_owner_once_stor(erc20, v0, ops)
       leave
@@ -24,20 +24,25 @@ object "Erc20Contract" {
       sstore(add(self, 1), owner)
       leave
     }
-    function init() {
+    function init__StorPtr_Evm___207f35a85ac4062e() {
       let v0 := stor_ptr__Evm_Erc20__c294a0aeae425afd(0, 0)
       let v1 := v0
-      do_init(v1, 0, 0)
+      do_init__StorPtr_Erc20___2745299687a147d4(v1, 0, 0)
       let v2 := datasize("Erc20Contract_deployed")
       let v3 := dataoffset("Erc20Contract_deployed")
       codecopy(0, v3, v2)
       return(0, v2)
     }
     function stor_ptr__Evm_Erc20__c294a0aeae425afd(self, slot) -> ret {
-      ret := slot
+      let v0 := storptr_t__effectref_from_raw__Erc20__88e369469f2b52ef(slot)
+      ret := v0
       leave
     }
-    init()
+    function storptr_t__effectref_from_raw__Erc20__88e369469f2b52ef(raw) -> ret {
+      ret := raw
+      leave
+    }
+    init__StorPtr_Evm___207f35a85ac4062e()
   }
 
   object "Erc20Contract_deployed" {
@@ -65,7 +70,7 @@ object "Erc20Contract" {
         ret := v0
         leave
       }
-      function allowance(owner, spender, erc20) -> ret {
+      function allowance__StorPtr_Erc20___2745299687a147d4(owner, spender, erc20) -> ret {
         pop(erc20)
         let v0 := mload(0x40)
         if iszero(v0) {
@@ -78,13 +83,13 @@ object "Erc20Contract" {
         ret := v1
         leave
       }
-      function approve(spender, amount, erc20, ctx) -> ret {
+      function approve__StorPtr_Erc20___2745299687a147d4(spender, amount, erc20, ctx) -> ret {
         let v0 := caller()
         erc20_approve_stor(erc20, v0, spender, amount)
         ret := 1
         leave
       }
-      function balance_of(addr, erc20) -> ret {
+      function balance_of__StorPtr_Erc20___2745299687a147d4(addr, erc20) -> ret {
         pop(erc20)
         let v0 := storagemap_k__v__const_salt__u256__get__Address_u256_0__b8b2f68065fe2328(0, addr)
         ret := v0
@@ -167,12 +172,12 @@ object "Erc20Contract" {
         storagemap_k__v__const_salt__u256__set__Address_u256_0__b8b2f68065fe2328(0, to, add(v2, amount))
         leave
       }
-      function mint(to, amount, erc20, ctx, ops) -> ret {
+      function mint__StorPtr_Erc20___2745299687a147d4(to, amount, erc20, ctx, ops) -> ret {
         erc20_mint_stor(erc20, to, amount, ctx, ops)
         ret := 1
         leave
       }
-      function runtime() {
+      function runtime__StorPtr_Evm___207f35a85ac4062e() {
         let v0 := stor_ptr__Evm_Erc20__c294a0aeae425afd(0, 0)
         let v1 := calldataload(0)
         let v2 := shr(224, v1)
@@ -181,7 +186,7 @@ object "Erc20Contract" {
           case 1889567281 {
             let v4 := calldataload(4)
             let v5 := v4
-            let v6 := balance_of(v5, v3)
+            let v6 := balance_of__StorPtr_Erc20___2745299687a147d4(v5, v3)
             abi_encode_u256(v6, 0)
           }
           case 3714247998 {
@@ -189,7 +194,7 @@ object "Erc20Contract" {
             let v8 := v7
             let v9 := calldataload(36)
             let v10 := v9
-            let v11 := allowance(v8, v10, v3)
+            let v11 := allowance__StorPtr_Erc20___2745299687a147d4(v8, v10, v3)
             abi_encode_u256(v11, 0)
           }
           case 117300739 {
@@ -205,14 +210,14 @@ object "Erc20Contract" {
             let v12 := calldataload(4)
             let v13 := v12
             let v14 := calldataload(36)
-            let v15 := transfer(v13, v14, v3, 0, 0)
+            let v15 := transfer__StorPtr_Erc20___2745299687a147d4(v13, v14, v3, 0, 0)
             abi_encode_u256(v15, 0)
           }
           case 157198259 {
             let v16 := calldataload(4)
             let v17 := v16
             let v18 := calldataload(36)
-            let v19 := approve(v17, v18, v3, 0)
+            let v19 := approve__StorPtr_Erc20___2745299687a147d4(v17, v18, v3, 0)
             abi_encode_u256(v19, 0)
           }
           case 599290589 {
@@ -221,14 +226,14 @@ object "Erc20Contract" {
             let v22 := calldataload(36)
             let v23 := v22
             let v24 := calldataload(68)
-            let v25 := transfer_from(v21, v23, v24, v3, 0, 0)
+            let v25 := transfer_from__StorPtr_Erc20___2745299687a147d4(v21, v23, v24, v3, 0, 0)
             abi_encode_u256(v25, 0)
           }
           case 1086394137 {
             let v26 := calldataload(4)
             let v27 := v26
             let v28 := calldataload(36)
-            let v29 := mint(v27, v28, v3, 0, 0)
+            let v29 := mint__StorPtr_Erc20___2745299687a147d4(v27, v28, v3, 0, 0)
             abi_encode_u256(v29, 0)
           }
           default {
@@ -236,7 +241,8 @@ object "Erc20Contract" {
           }
       }
       function stor_ptr__Evm_Erc20__c294a0aeae425afd(self, slot) -> ret {
-        ret := slot
+        let v0 := storptr_t__effectref_from_raw__Erc20__88e369469f2b52ef(slot)
+        ret := v0
         leave
       }
       function storagemap_get_word_with_salt__Address__ce8f588742192062(key, salt) -> ret {
@@ -299,13 +305,17 @@ object "Erc20Contract" {
         ret := v2
         leave
       }
-      function transfer(to, amount, erc20, ctx, ops) -> ret {
+      function storptr_t__effectref_from_raw__Erc20__88e369469f2b52ef(raw) -> ret {
+        ret := raw
+        leave
+      }
+      function transfer__StorPtr_Erc20___2745299687a147d4(to, amount, erc20, ctx, ops) -> ret {
         let v0 := caller()
         erc20_transfer_stor(erc20, v0, to, amount, ops)
         ret := 1
         leave
       }
-      function transfer_from(from, to, amount, erc20, ctx, ops) -> ret {
+      function transfer_from__StorPtr_Erc20___2745299687a147d4(from, to, amount, erc20, ctx, ops) -> ret {
         erc20_transfer_from_stor(erc20, from, to, amount, ctx, ops)
         ret := 1
         leave
@@ -323,7 +333,7 @@ object "Erc20Contract" {
         ret := self
         leave
       }
-      runtime()
+      runtime__StorPtr_Evm___207f35a85ac4062e()
       return(0, 0)
     }
   }

@@ -235,7 +235,7 @@ impl<'db> ScopeId<'db> {
 
     /// Returns the `Scope` data for this scope.
     pub fn data(self, db: &'db dyn HirDb) -> &'db Scope<'db> {
-        self.top_mod(db).scope_graph(db).scope_data(&self)
+        self.scope_graph(db).scope_data(&self)
     }
 
     /// Returns the parent scope of this scope.
@@ -330,7 +330,7 @@ impl<'db> ScopeId<'db> {
     }
 
     pub fn name(self, db: &'db dyn HirDb) -> Option<IdentId<'db>> {
-        match self.data(db).id {
+        match self {
             ScopeId::Item(item) => item.name(db),
 
             ScopeId::Variant(..) => self.resolve_to::<&VariantDef>(db).unwrap().name.to_opt(),
@@ -359,7 +359,7 @@ impl<'db> ScopeId<'db> {
     }
 
     pub fn name_span(self, db: &'db dyn HirDb) -> Option<DynLazySpan<'db>> {
-        match self.data(db).id {
+        match self {
             ScopeId::Item(item) => item.name_span(),
 
             ScopeId::Variant(v) => Some(v.span().name().into()),

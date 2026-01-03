@@ -159,8 +159,12 @@ fn dedup_runtime_helpers<'db>(functions: Vec<MirFunction<'db>>) -> Vec<MirFuncti
 /// Only dedup compiler-owned helpers (core/external ingots) to avoid altering user ABI,
 /// returning `true` when the function qualifies for deduplication.
 fn is_dedup_candidate<'db>(db: &'db dyn HirAnalysisDb, func: &MirFunction<'db>) -> bool {
+    let hir_func = match func.origin {
+        crate::ir::MirFunctionOrigin::Hir(func) => func,
+        crate::ir::MirFunctionOrigin::Synthetic(_) => return false,
+    };
     matches!(
-        func.func.top_mod(db).ingot(db).kind(db),
+        hir_func.top_mod(db).ingot(db).kind(db),
         IngotKind::Core | IngotKind::External
     )
 }

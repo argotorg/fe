@@ -10,6 +10,9 @@ use salsa::Update;
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Update)]
 pub enum BodyOwner<'db> {
     Func(Func<'db>),
+    ContractInit {
+        contract: Contract<'db>,
+    },
     ContractRecvArm {
         contract: Contract<'db>,
         recv_idx: u32,
@@ -22,6 +25,9 @@ pub enum BodyOwner<'db> {
 pub enum EffectParamOwner<'db> {
     Func(Func<'db>),
     Contract(Contract<'db>),
+    ContractInit {
+        contract: Contract<'db>,
+    },
     ContractRecvArm {
         contract: Contract<'db>,
         recv_idx: u32,
@@ -34,6 +40,10 @@ impl<'db> EffectParamOwner<'db> {
         match self {
             EffectParamOwner::Func(func) => func.effects(db),
             EffectParamOwner::Contract(contract) => contract.effects(db),
+            EffectParamOwner::ContractInit { contract } => contract
+                .init(db)
+                .map(|init| init.effects(db))
+                .unwrap_or_else(|| EffectParamListId::new(db, Vec::new())),
             EffectParamOwner::ContractRecvArm {
                 contract,
                 recv_idx,
@@ -55,6 +65,13 @@ impl<'db> EffectParamOwner<'db> {
             EffectParamOwner::Contract(contract) => {
                 contract.span().effects().param_idx(idx).path().into()
             }
+            EffectParamOwner::ContractInit { contract } => contract
+                .span()
+                .init_block()
+                .effects()
+                .param_idx(idx)
+                .path()
+                .into(),
             EffectParamOwner::ContractRecvArm {
                 contract,
                 recv_idx,
@@ -78,6 +95,7 @@ impl<'db> BodyOwner<'db> {
         db: &'db dyn HirAnalysisDb,
     ) -> Option<crate::hir_def::ContractRecvArm<'db>> {
         match self {
+            BodyOwner::ContractInit { .. } => None,
             BodyOwner::ContractRecvArm {
                 contract,
                 recv_idx,
@@ -99,6 +117,7 @@ impl<'db> BodyOwner<'db> {
     pub fn body(self, db: &'db dyn HirAnalysisDb) -> Option<Body<'db>> {
         match self {
             BodyOwner::Func(func) => func.body(db),
+            BodyOwner::ContractInit { contract } => Some(contract.init(db)?.body(db)),
             BodyOwner::ContractRecvArm {
                 contract,
                 recv_idx,
@@ -115,6 +134,7 @@ impl<'db> BodyOwner<'db> {
     pub fn scope(self) -> ScopeId<'db> {
         match self {
             BodyOwner::Func(func) => func.scope(),
+            BodyOwner::ContractInit { contract } => contract.scope(),
             BodyOwner::ContractRecvArm { contract, .. } => contract.scope(),
         }
     }
@@ -122,6 +142,10 @@ impl<'db> BodyOwner<'db> {
     pub fn effects(self, db: &'db dyn HirAnalysisDb) -> EffectParamListId<'db> {
         match self {
             BodyOwner::Func(func) => func.effects(db),
+            BodyOwner::ContractInit { contract } => contract
+                .init(db)
+                .map(|init| init.effects(db))
+                .unwrap_or_else(|| EffectParamListId::new(db, Vec::new())),
             BodyOwner::ContractRecvArm {
                 contract,
                 recv_idx,
@@ -141,6 +165,13 @@ impl<'db> BodyOwner<'db> {
     ) -> DynLazySpan<'db> {
         match self {
             BodyOwner::Func(func) => func.span().effects().param_idx(idx).path().into(),
+            BodyOwner::ContractInit { contract } => contract
+                .span()
+                .init_block()
+                .effects()
+                .param_idx(idx)
+                .path()
+                .into(),
             BodyOwner::ContractRecvArm {
                 contract,
                 recv_idx,

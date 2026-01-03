@@ -3,7 +3,7 @@ use smallvec1::SmallVec;
 
 use crate::core::hir_def::{
     ArithBinOp, BinOp, CallableDef, Expr, ExprId, FieldIndex, IdentId, Partial, Pat, PatId, PathId,
-    UnOp, VariantKind, WithBinding, scope_graph::ScopeId,
+    UnOp, VariantKind, WithBinding,
 };
 use crate::span::DynLazySpan;
 
@@ -16,8 +16,9 @@ use crate::analysis::place::{Place, PlaceBase};
 use crate::analysis::ty::{
     binder::Binder,
     canonical::Canonicalized,
-    corelib::resolve_core_trait,
+    corelib::{resolve_core_trait, resolve_lib_type_path},
     diagnostics::{BodyDiag, FuncBodyDiag},
+    effects::place_effect_provider_param_index_map,
     fold::{AssocTySubst, TyFoldable as _, TyFolder},
     trait_def::TraitInstId,
     trait_resolution::{
@@ -44,6 +45,7 @@ use crate::analysis::{
         ty_def::{InvalidCause, TyId},
     },
 };
+use crate::hir_def::{Attr, ItemKind};
 use common::indexmap::IndexMap;
 
 #[derive(Debug, Clone, Copy)]
@@ -60,6 +62,100 @@ enum EffectSatisfaction<'db> {
 }
 
 impl<'db> TyChecker<'db> {
+    fn is_contract_entrypoint_func(&self, func: crate::hir_def::Func<'db>) -> bool {
+        let Some(attrs) = ItemKind::Func(func).attrs(self.db) else {
+            return false;
+        };
+        attrs.data(self.db).iter().any(|attr| {
+            let Attr::Normal(normal) = attr else {
+                return false;
+            };
+            let Some(path) = normal.path.to_opt() else {
+                return false;
+            };
+            let Some(name) = path.as_ident(self.db) else {
+                return false;
+            };
+            matches!(
+                name.data(self.db).as_str(),
+                "contract_init" | "contract_runtime"
+            )
+        })
+    }
+
+    fn instantiate_contract_func_item_ty(&mut self, ty: TyId<'db>) -> TyId<'db> {
+        let (base, args) = ty.decompose_ty_app(self.db);
+        let TyData::TyBase(TyBase::Func(CallableDef::Func(func))) = base.data(self.db) else {
+            return self.instantiate_to_term(ty);
+        };
+        if !self.is_contract_entrypoint_func(*func) {
+            return self.instantiate_to_term(ty);
+        }
+        // If the path already supplies (or has been instantiated with) non-inference generic args,
+        // preserve the usual inference behavior.
+        //
+        // We only canonicalize contract entrypoint function-items when their generic arguments are
+        // absent or still purely inference vars (common when resolved through `resolve_path`,
+        // which instantiates callables to terms eagerly).
+        if !args.is_empty()
+            && !args
+                .iter()
+                .all(|arg| matches!(arg.data(self.db), TyData::TyVar(_)))
+        {
+            return self.instantiate_to_term(ty);
+        }
+        let entry_params = CallableDef::Func(*func).params(self.db);
+        if let Some(current_callable) = self.env.func()
+            && entry_params.len() == current_callable.params(self.db).len()
+        {
+            return TyId::foldl(self.db, base, current_callable.params(self.db));
+        }
+        let provider_param_count = entry_params
+            .iter()
+            .filter(|ty| matches!(ty.data(self.db), TyData::TyParam(p) if p.is_effect_provider()))
+            .count();
+        if provider_param_count != 0
+            && provider_param_count == entry_params.len()
+            && let Some(args) = self.default_effect_provider_args(*func, provider_param_count)
+        {
+            return TyId::foldl(self.db, base, &args);
+        }
+        TyId::foldl(self.db, base, entry_params)
+    }
+
+    fn default_effect_provider_args(
+        &mut self,
+        func: crate::hir_def::Func<'db>,
+        provider_param_count: usize,
+    ) -> Option<Vec<TyId<'db>>> {
+        let scope = self.env.body().scope();
+        let stor_ptr_ctor = resolve_lib_type_path(self.db, scope, "core::effect_ref::StorPtr")?;
+        let mut args = Vec::with_capacity(provider_param_count);
+        let assumptions = PredicateListId::empty_list(self.db);
+        for effect in func.effect_params(self.db) {
+            let Some(key_path) = effect.key_path(self.db) else {
+                continue;
+            };
+            let Ok(path_res) = resolve_path(self.db, key_path, func.scope(), assumptions, false)
+            else {
+                continue;
+            };
+            let target_ty = match path_res {
+                PathRes::Ty(ty) | PathRes::TyAlias(_, ty) => ty,
+                _ => continue,
+            };
+            if !target_ty.is_star_kind(self.db) {
+                continue;
+            }
+            args.push(TyId::app(self.db, stor_ptr_ctor, target_ty));
+        }
+        if args.len() == provider_param_count {
+            Some(args)
+        } else {
+            None
+        }
+    }
+
     pub(super) fn check_expr(&mut self, expr: ExprId, expected: TyId<'db>) -> ExprProp<'db> {
         let Partial::Present(expr_data) = self.env.expr_data(expr) else {
             let typed = ExprProp::invalid(self.db);
@@ -333,6 +429,9 @@ impl<'db> TyChecker<'db> {
             resolve_core_trait(self.db, self.env.scope(), &["effect_ref", "EffectRefMut"]);
         let target_ident = IdentId::new(self.db, "Target".to_string());
 
+        let callee_provider_arg_idx_by_effect =
+            place_effect_provider_param_index_map(self.db, func);
+
         let provided_span = |provided: ProvidedEffect<'db>| match provided.origin {
             EffectOrigin::With { value_expr } => Some(value_expr.span(body).into()),
             EffectOrigin::Param { .. } => None,
@@ -434,6 +533,16 @@ impl<'db> TyChecker<'db> {
                 continue;
             }
 
+            let provider_arg_idx_for_param = match path_res {
+                PathRes::Ty(ty) | PathRes::TyAlias(_, ty) if ty.is_star_kind(self.db) => {
+                    callee_provider_arg_idx_by_effect
+                        .get(effect.index())
+                        .copied()
+                        .flatten()
+                }
+                _ => None,
+            };
+
             let candidate_frames = self.env.effect_candidate_frames_in_scope(
                 key_path,
                 func.scope(),
@@ -461,13 +570,9 @@ impl<'db> TyChecker<'db> {
                 > = SmallVec::new();
 
                 for provided in cands.iter().copied() {
-                    let Some(requirement) = self.resolve_effect_requirement(
-                        key_path,
-                        callable,
-                        func.scope(),
-                        callee_assumptions,
-                        provided.ty,
-                    ) else {
+                    let Some(requirement) =
+                        self.resolve_effect_requirement(&path_res, callable, provided.ty)
+                    else {
                         continue;
                     };
 
@@ -547,13 +652,8 @@ impl<'db> TyChecker<'db> {
                     candidate_frames.iter().flatten().copied().collect();
 
                 if let [provided] = all_candidates.as_slice()
-                    && let Some(requirement) = self.resolve_effect_requirement(
-                        key_path,
-                        callable,
-                        func.scope(),
-                        callee_assumptions,
-                        provided.ty,
-                    )
+                    && let Some(requirement) =
+                        self.resolve_effect_requirement(&path_res, callable, provided.ty)
                 {
                     match requirement {
                         EffectRequirement::Type(expected) => {
@@ -733,6 +833,32 @@ impl<'db> TyChecker<'db> {
                 continue;
             }
 
+            // If the caller supplies a concrete provider value (e.g. `MemPtr<T>`), unify it with
+            // the callee's hidden provider generic argument now so later stages don't have to
+            // re-infer it from expression types.
+            if let Some(provider_arg_idx) = provider_arg_idx_for_param
+                && matches!(satisfaction, EffectSatisfaction::Provider { .. })
+                && let Some(provider_var) = callable.generic_args().get(provider_arg_idx).copied()
+            {
+                let existing_provider = self.table.fold_ty(self.db, provider_var);
+                let snapshot = self.table.snapshot();
+                if self.table.unify(provider_var, provided.ty).is_err() {
+                    self.table.rollback_to(snapshot);
+                    let diag = BodyDiag::EffectProviderMismatch {
+                        primary: call_span.clone().into(),
+                        func,
+                        key: key_path,
+                        expected: existing_provider,
+                        given: provided.ty,
+                        provided_span: provided_span(provided),
+                    };
+                    self.push_diag(diag);
+                }
+            }
+
+            // Provider generic argument selection for direct place-effects is deferred to MIR
+            // lowering (Option B). The type checker records the effect argument form + pass mode only.
+
             self.env.push_call_effect_arg(
                 expr,
                 super::ResolvedEffectArg {
@@ -765,17 +891,13 @@ impl<'db> TyChecker<'db> {
 
     fn resolve_effect_requirement(
         &mut self,
-        key_path: PathId<'db>,
+        path_res: &PathRes<'db>,
         callable: &Callable<'db>,
-        scope: ScopeId<'db>,
-        assumptions: PredicateListId<'db>,
         provided_ty: TyId<'db>,
     ) -> Option<EffectRequirement<'db>> {
-        let path_res = resolve_path(self.db, key_path, scope, assumptions, false).ok()?;
-
         match path_res {
             PathRes::Ty(ty) | PathRes::TyAlias(_, ty) => {
-                let mut expected = Binder::bind(ty).instantiate(self.db, callable.generic_args());
+                let mut expected = Binder::bind(*ty).instantiate(self.db, callable.generic_args());
                 if let Some(inst) = callable.trait_inst() {
                     let mut subst = AssocTySubst::new(inst);
                     expected = expected.fold_with(self.db, &mut subst);
@@ -788,7 +910,7 @@ impl<'db> TyChecker<'db> {
                 instantiation_args.extend_from_slice(callable.generic_args());
 
                 let mut trait_req =
-                    Binder::bind(trait_inst).instantiate(self.db, &instantiation_args);
+                    Binder::bind(*trait_inst).instantiate(self.db, &instantiation_args);
                 if let Some(inst) = callable.trait_inst() {
                     let mut subst = AssocTySubst::new(inst);
                     trait_req = trait_req.fold_with(self.db, &mut subst);
@@ -875,18 +997,13 @@ impl<'db> TyChecker<'db> {
         let (func_ty, trait_inst) = match candidate {
             MethodCandidate::InherentMethod(func_def) => {
                 let func_ty = TyId::func(self.db, func_def);
-                (self.table.instantiate_to_term(func_ty), None)
+                (self.instantiate_to_term(func_ty), None)
             }
 
             MethodCandidate::TraitMethod(cand) => {
                 let inst = canonical_r_ty.extract_solution(&mut self.table, cand.inst);
-                let func_ty = super::instantiate_trait_method(
-                    self.db,
-                    cand.method,
-                    &mut self.table,
-                    receiver_prop.ty,
-                    inst,
-                );
+                let func_ty =
+                    self.instantiate_trait_method_to_term(cand.method, receiver_prop.ty, inst);
                 (func_ty, Some(inst))
             }
 
@@ -894,13 +1011,8 @@ impl<'db> TyChecker<'db> {
                 let inst = canonical_r_ty.extract_solution(&mut self.table, cand.inst);
                 self.env
                     .register_confirmation(inst, call_span.clone().into());
-                let func_ty = super::instantiate_trait_method(
-                    self.db,
-                    cand.method,
-                    &mut self.table,
-                    receiver_prop.ty,
-                    inst,
-                );
+                let func_ty =
+                    self.instantiate_trait_method_to_term(cand.method, receiver_prop.ty, inst);
                 (func_ty, Some(inst))
             }
         };
@@ -1031,7 +1143,9 @@ impl<'db> TyChecker<'db> {
                         ExprProp::invalid(self.db)
                     }
                 }
-                PathRes::Func(ty) => ExprProp::new(self.table.instantiate_to_term(ty), true),
+                PathRes::Func(ty) => {
+                    ExprProp::new(self.instantiate_contract_func_item_ty(ty), true)
+                }
                 PathRes::Trait(trait_) => {
                     let diag = BodyDiag::NotValue {
                         primary: path_expr_span.clone().into(),
@@ -1045,7 +1159,7 @@ impl<'db> TyChecker<'db> {
                         VariantKind::Unit => variant.ty,
                         VariantKind::Tuple(_) => {
                             let ty = variant.constructor_func_ty(self.db).unwrap();
-                            self.table.instantiate_to_term(ty)
+                            self.instantiate_to_term(ty)
                         }
                         VariantKind::Record(_) => {
                             let record_like = RecordLike::from_variant(variant);
@@ -1060,7 +1174,7 @@ impl<'db> TyChecker<'db> {
                         }
                     };
 
-                    ExprProp::new(self.table.instantiate_to_term(ty), true)
+                    ExprProp::new(self.instantiate_to_term(ty), true)
                 }
                 PathRes::Const(const_def, ty) => {
                     self.env
@@ -1084,7 +1198,7 @@ impl<'db> TyChecker<'db> {
                                     break;
                                 }
                             }
-                            (method_ty, None)
+                            (self.instantiate_to_term(method_ty), None)
                         }
                         MethodCandidate::TraitMethod(cand)
                         | MethodCandidate::NeedsConfirmation(cand) => {
@@ -1093,10 +1207,8 @@ impl<'db> TyChecker<'db> {
                                 self.env
                                     .register_confirmation(inst, path_expr_span.clone().into());
                             }
-                            let method_ty = super::instantiate_trait_method(
-                                self.db,
+                            let method_ty = self.instantiate_trait_method_to_term(
                                 cand.method,
-                                &mut self.table,
                                 receiver_ty,
                                 inst,
                             );
@@ -1104,11 +1216,10 @@ impl<'db> TyChecker<'db> {
                         }
                     };
 
-                    let instantiated_method_ty = self.table.instantiate_to_term(method_ty);
                     if self.env.callable_expr(expr).is_none() {
                         let callable = Callable::new(
                             self.db,
-                            instantiated_method_ty,
+                            method_ty,
                             expr.span(self.body()).into(),
                             trait_inst,
                         )
@@ -1116,7 +1227,7 @@ impl<'db> TyChecker<'db> {
                         self.env.register_callable(expr, callable);
                     }
 
-                    ExprProp::new(instantiated_method_ty, true)
+                    ExprProp::new(method_ty, true)
                 }
                 PathRes::TraitMethod(trait_inst, method) => {
                     if let Some(existing) = self.env.callable_expr(expr) {
@@ -1178,10 +1289,8 @@ impl<'db> TyChecker<'db> {
                     self.env
                         .register_confirmation(inst, path_expr_span.clone().into());
 
-                    let func_ty = super::instantiate_trait_assoc_fn(
-                        self.db,
+                    let func_ty = self.instantiate_trait_assoc_fn_to_term(
                         method.as_callable(self.db).unwrap(),
-                        &mut self.table,
                         inst,
                     );
 
@@ -1582,11 +1691,9 @@ impl<'db> TyChecker<'db> {
         let typed_lhs = self.check_expr(*lhs, lhs_ty);
         self.check_expr(*rhs, lhs_ty);
 
-        let result_ty = TyId::unit(self.db);
-
         self.check_assign_lhs(*lhs, &typed_lhs);
 
-        ExprProp::new(result_ty, true)
+        ExprProp::new(TyId::unit(self.db), true)
     }
 
     fn check_aug_assign(&mut self, expr: ExprId, expr_data: &Expr<'db>) -> ExprProp<'db> {
@@ -1655,13 +1762,7 @@ impl<'db> TyChecker<'db> {
                         .register_confirmation(inst, expr.span(self.body()).into());
                 }
 
-                let func_ty = super::instantiate_trait_method(
-                    self.db,
-                    cand.method,
-                    &mut self.table,
-                    lhs_ty,
-                    inst,
-                );
+                let func_ty = self.instantiate_trait_method_to_term(cand.method, lhs_ty, inst);
 
                 if let Some(rhs_expr) = rhs_expr {
                     // Derive expected RHS type from the instantiated function type
@@ -1701,6 +1802,7 @@ impl<'db> TyChecker<'db> {
                         lhs_ty,
                         inst,
                     );
+                    let candidate_func_ty = self.table.instantiate_to_term(candidate_func_ty);
                     let (base, gen_args) = candidate_func_ty.decompose_ty_app(self.db);
                     let expected_rhs =
                         if let TyData::TyBase(TyBase::Func(func_def)) = base.data(self.db) {
@@ -1952,7 +2054,7 @@ fn resolve_ident_expr<'db>(
         }
 
         let scope = block.scope;
-        let directive = QueryDirective::new().disallow_lex();
+        let directive = QueryDirective::for_scope(db, scope).disallow_lex();
         let query = EarlyNameQueryId::new(db, ident, scope, directive);
         let bucket = resolve_query(db, query);
 
@@ -1968,7 +2070,9 @@ fn resolve_ident_expr<'db>(
         }
     }
 
-    let query = EarlyNameQueryId::new(db, ident, env.body().scope(), QueryDirective::default());
+    let body_scope = env.body().scope();
+    let directive = QueryDirective::for_scope(db, body_scope);
+    let query = EarlyNameQueryId::new(db, ident, body_scope, directive);
     let bucket = resolve_query(db, query);
     match resolve_bucket(bucket, env.scope()) {
         ResolvedPathInBody::Invalid => ResolvedPathInBody::NewBinding(ident),

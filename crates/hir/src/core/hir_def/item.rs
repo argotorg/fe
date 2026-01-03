@@ -611,8 +611,8 @@ impl<'db> Mod<'db> {
         self,
         db: &'db dyn HirDb,
     ) -> impl Iterator<Item = ItemKind<'db>> + 'db {
-        let s_graph = self.top_mod(db).scope_graph(db);
         let scope = ScopeId::from_item(self.into());
+        let s_graph = scope.scope_graph(db);
         s_graph.child_items(scope)
     }
 }
@@ -723,6 +723,10 @@ impl<'db> Struct<'db> {
         ScopeId::from_item(self.into())
     }
 
+    pub fn hir_fields(self, db: &'db dyn HirDb) -> FieldDefListId<'db> {
+        self.fields(db)
+    }
+
     /// Returns the human readable string of the expected struct initializer.
     /// ## Example
     /// When `S` is a struct defined as below:
@@ -750,6 +754,8 @@ pub struct Contract<'db> {
     pub(in crate::core) fields: FieldDefListId<'db>,
     /// `uses` clause attached to the contract header
     pub effects: EffectParamListId<'db>,
+    /// Optional init block owned by the contract.
+    pub init: Option<ContractInit<'db>>,
     /// Receive handlers declared in the contract
     pub recvs: ContractRecvListId<'db>,
     pub top_mod: TopLevelMod<'db>,
@@ -770,23 +776,6 @@ impl<'db> Contract<'db> {
         self.fields(db)
     }
 
-    pub fn init_func(self, db: &'db dyn HirDb) -> Option<Func<'db>> {
-        let s_graph = self.top_mod(db).scope_graph(db);
-        let scope = ScopeId::from_item(self.into());
-        s_graph.child_items(scope).find_map(|item| match item {
-            ItemKind::Func(func) => {
-                if let Some(name) = func.name(db).to_opt()
-                    && name.data(db).as_str() == "init"
-                {
-                    Some(func)
-                } else {
-                    None
-                }
-            }
-            _ => None,
-        })
-    }
-
     pub fn recv_arm(
         self,
         db: &'db dyn HirDb,
@@ -801,6 +790,22 @@ impl<'db> Contract<'db> {
             .get(arm_idx)
             .copied()
     }
+}
+
+/// Contract-owned init block.
+#[salsa::tracked]
+#[derive(Debug)]
+pub struct ContractInit<'db> {
+    #[id]
+    id: TrackedItemId<'db>,
+
+    pub params: FuncParamListId<'db>,
+    pub effects: EffectParamListId<'db>,
+    pub body: Body<'db>,
+    pub top_mod: TopLevelMod<'db>,
+
+    #[return_ref]
+    pub(crate) origin: HirOrigin<ast::ContractInit>,
 }
 
 #[salsa::interned]
@@ -977,14 +982,14 @@ impl<'db> Impl<'db> {
         self,
         db: &'db dyn HirDb,
     ) -> impl Iterator<Item = ItemKind<'db>> + 'db {
-        let s_graph = self.top_mod(db).scope_graph(db);
         let scope = ScopeId::from_item(self.into());
+        let s_graph = scope.scope_graph(db);
         s_graph.child_items(scope)
     }
 
     pub fn funcs(self, db: &'db dyn HirDb) -> impl Iterator<Item = Func<'db>> + 'db {
-        let s_graph = self.top_mod(db).scope_graph(db);
         let scope = ScopeId::from_item(self.into());
+        let s_graph = scope.scope_graph(db);
         s_graph.child_items(scope).filter_map(|item| match item {
             ItemKind::Func(func) => Some(func),
             _ => None,
@@ -1033,8 +1038,8 @@ impl<'db> Trait<'db> {
         self,
         db: &'db dyn HirDb,
     ) -> impl Iterator<Item = ItemKind<'db>> + 'db {
-        let s_graph = self.top_mod(db).scope_graph(db);
         let scope = ScopeId::from_item(self.into());
+        let s_graph = scope.scope_graph(db);
         s_graph.child_items(scope)
     }
 
@@ -1043,8 +1048,8 @@ impl<'db> Trait<'db> {
     }
 
     pub fn methods(self, db: &'db dyn HirDb) -> impl Iterator<Item = Func<'db>> + 'db {
-        let s_graph = self.top_mod(db).scope_graph(db);
         let scope = ScopeId::from_item(self.into());
+        let s_graph = scope.scope_graph(db);
         s_graph.child_items(scope).filter_map(|item| match item {
             ItemKind::Func(func) => Some(func),
             _ => None,
@@ -1129,8 +1134,8 @@ impl<'db> ImplTrait<'db> {
         self,
         db: &'db dyn HirDb,
     ) -> impl Iterator<Item = ItemKind<'db>> + 'db {
-        let s_graph = self.top_mod(db).scope_graph(db);
         let scope = ScopeId::from_item(self.into());
+        let s_graph = scope.scope_graph(db);
         s_graph.child_items(scope)
     }
 
@@ -1511,6 +1516,7 @@ pub enum TrackedItemVariant<'db> {
     Trait(Partial<IdentId<'db>>),
     ImplTrait(Partial<TraitRefId<'db>>, Partial<TypeId<'db>>),
     Const(Partial<IdentId<'db>>),
+    ContractInit,
     ContractRecvArm { recv_idx: u32, arm_idx: u32 },
     Use(Partial<super::UsePathId<'db>>),
     FuncBody,

@@ -1,18 +1,17 @@
 ---
 source: crates/codegen/tests/yul.rs
-assertion_line: 42
 expression: output
 input_file: tests/fixtures/nested_struct.fe
 ---
 object "NestedStruct" {
   code {
-    function init() {
+    function init__StorPtr_Evm___207f35a85ac4062e() {
       let v0 := datasize("NestedStruct_deployed")
       let v1 := dataoffset("NestedStruct_deployed")
       codecopy(0, v1, v0)
       return(0, v0)
     }
-    init()
+    init__StorPtr_Evm___207f35a85ac4062e()
   }
 
   object "NestedStruct_deployed" {
@@ -27,12 +26,12 @@ object "NestedStruct" {
         ret := v0
         leave
       }
-      function read_inner(outer) -> ret {
+      function read_inner__StorPtr_Outer___dab28b9da6c3e28(outer) -> ret {
         let v0 := sload(outer)
         ret := v0
         leave
       }
-      function runtime() {
+      function runtime__StorPtr_Evm___207f35a85ac4062e() {
         let v0 := stor_ptr__Evm_Outer__31089a952466fa6f(0, 0)
         let v1 := v0
         let v2 := calldataload(0)
@@ -40,11 +39,11 @@ object "NestedStruct" {
         switch v3
           case 3091856072 {
             let v4 := calldataload(4)
-            write_inner(v4, v1)
+            write_inner__StorPtr_Outer___dab28b9da6c3e28(v4, v1)
             abi_encode(v4, 0)
           }
           case 3513050253 {
-            let v5 := read_inner(v1)
+            let v5 := read_inner__StorPtr_Outer___dab28b9da6c3e28(v1)
             abi_encode(v5, 0)
           }
           case 2154770637 {
@@ -57,14 +56,19 @@ object "NestedStruct" {
           }
       }
       function stor_ptr__Evm_Outer__31089a952466fa6f(self, slot) -> ret {
-        ret := slot
+        let v0 := storptr_t__effectref_from_raw__Outer__ffb1d3cc5087d727(slot)
+        ret := v0
         leave
       }
-      function write_inner(value, outer) {
+      function storptr_t__effectref_from_raw__Outer__ffb1d3cc5087d727(raw) -> ret {
+        ret := raw
+        leave
+      }
+      function write_inner__StorPtr_Outer___dab28b9da6c3e28(value, outer) {
         sstore(outer, value)
         leave
       }
-      runtime()
+      runtime__StorPtr_Evm___207f35a85ac4062e()
       return(0, 0)
     }
   }

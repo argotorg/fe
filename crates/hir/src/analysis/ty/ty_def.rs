@@ -248,8 +248,12 @@ impl<'db> TyId<'db> {
         ty
     }
 
-    pub(super) fn bool(db: &'db dyn HirAnalysisDb) -> Self {
+    pub fn bool(db: &'db dyn HirAnalysisDb) -> Self {
         Self::new(db, TyData::TyBase(TyBase::Prim(PrimTy::Bool)))
+    }
+
+    pub fn u256(db: &'db dyn HirAnalysisDb) -> Self {
+        Self::new(db, TyData::TyBase(TyBase::Prim(PrimTy::U256)))
     }
 
     pub(super) fn array(db: &'db dyn HirAnalysisDb, elem: TyId<'db>) -> Self {
@@ -268,11 +272,11 @@ impl<'db> TyId<'db> {
         TyId::app(db, array, len)
     }
 
-    pub(crate) fn unit(db: &'db dyn HirAnalysisDb) -> Self {
+    pub fn unit(db: &'db dyn HirAnalysisDb) -> Self {
         Self::tuple(db, 0)
     }
 
-    pub(super) fn never(db: &'db dyn HirAnalysisDb) -> Self {
+    pub fn never(db: &'db dyn HirAnalysisDb) -> Self {
         Self::new(db, TyData::Never)
     }
 
@@ -492,7 +496,7 @@ impl<'db> TyId<'db> {
     }
 
     /// Perform type level application.
-    pub(crate) fn app(db: &'db dyn HirAnalysisDb, lhs: Self, rhs: Self) -> TyId<'db> {
+    pub fn app(db: &'db dyn HirAnalysisDb, lhs: Self, rhs: Self) -> TyId<'db> {
         let Some(applicable_ty) = lhs.applicable_ty(db) else {
             return Self::invalid(
                 db,
@@ -1047,6 +1051,10 @@ impl<'db> TyParam<'db> {
         matches!(self.variant, Variant::Effect)
     }
 
+    pub fn is_effect_provider(&self) -> bool {
+        matches!(self.variant, Variant::EffectProvider)
+    }
+
     pub(super) fn normal_param(
         name: IdentId<'db>,
         idx: usize,
@@ -1083,6 +1091,17 @@ impl<'db> TyParam<'db> {
         }
     }
 
+    /// Create a synthetic generic parameter that carries the "provider type" for a type effect.
+    pub fn effect_provider_param(name: IdentId<'db>, idx: usize, scope: ScopeId<'db>) -> Self {
+        Self {
+            name,
+            idx,
+            kind: Kind::Star,
+            variant: Variant::EffectProvider,
+            owner: scope,
+        }
+    }
+
     pub fn original_idx(&self, db: &'db dyn HirAnalysisDb) -> usize {
         match self.variant {
             Variant::Normal | Variant::TraitSelf => {
@@ -1094,6 +1113,7 @@ impl<'db> TyParam<'db> {
                 self.idx - offset
             }
             Variant::Effect => self.idx,
+            Variant::EffectProvider => self.idx,
         }
     }
 
@@ -1104,6 +1124,7 @@ impl<'db> TyParam<'db> {
                 ScopeId::GenericParam(self.owner.item(), self.original_idx(db) as u16)
             }
             Variant::Effect => ScopeId::FuncParam(self.owner.item(), self.idx as u16),
+            Variant::EffectProvider => self.owner,
         }
     }
 }
@@ -1114,6 +1135,11 @@ enum Variant {
     TraitSelf,
     /// Effect parameter local to a function `uses` list
     Effect,
+    /// Synthetic generic parameter used to encode type-effect provider domains.
+    ///
+    /// These are inserted by type lowering for functions that have type effects so that
+    /// monomorphization can treat effect domains as ordinary generic arguments.
+    EffectProvider,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, derive_more::From, Update)]
@@ -1473,12 +1499,30 @@ fn pretty_print_ty_app<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> String
         }
 
         _ => {
-            let mut args = args.iter();
             let mut s = (base.pretty_print(db)).to_string();
-            if let Some(first) = args.next() {
+
+            let args_to_print: Vec<TyId<'db>> = match base.data(db) {
+                TyData::TyBase(Func(func_def)) => {
+                    let params = func_def.params(db);
+                    args.iter()
+                        .copied()
+                        .enumerate()
+                        .filter_map(|(idx, arg)| {
+                            let is_provider = params.get(idx).is_some_and(|param_ty| {
+                                matches!(param_ty.data(db), TyData::TyParam(p) if p.is_effect_provider())
+                            });
+                            (!is_provider).then_some(arg)
+                        })
+                        .collect()
+                }
+                _ => args.clone(),
+            };
+
+            let mut args_iter = args_to_print.iter();
+            if let Some(first) = args_iter.next() {
                 s.push('<');
                 s.push_str(first.pretty_print(db));
-                for arg in args {
+                for arg in args_iter {
                     s.push_str(", ");
                     s.push_str(arg.pretty_print(db));
                 }

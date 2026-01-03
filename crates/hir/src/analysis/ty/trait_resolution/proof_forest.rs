@@ -369,8 +369,9 @@ impl GeneratorNode {
             // TODO: require candidates to be pre-normalized
             // Normalize trait instance arguments before unification
             let normalized_gen_cand = {
-                let trait_inst = gen_cand.trait_(db);
-                trait_inst.normalize(db, scope, g_node.assumptions)
+                gen_cand
+                    .trait_inst(db)
+                    .normalize(db, scope, g_node.assumptions)
             };
 
             if table.unify(normalized_gen_cand, normalized_goal).is_err() {

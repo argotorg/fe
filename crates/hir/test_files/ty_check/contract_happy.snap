@@ -1,35 +1,9 @@
 ---
 source: crates/hir/tests/ty_check.rs
+assertion_line: 48
 expression: res
 input_file: test_files/ty_check/contract_happy.fe
 ---
-note: 
-  ┌─ contract_happy.fe:5:39
-  │  
-5 │       init(start: u64) uses (mut total) {
-  │ ╭───────────────────────────────────────^
-6 │ │         total = start
-7 │ │     }
-  │ ╰─────^ ()
-
-note: 
-  ┌─ contract_happy.fe:6:9
-  │
-6 │         total = start
-  │         ^^^^^ u64
-
-note: 
-  ┌─ contract_happy.fe:6:9
-  │
-6 │         total = start
-  │         ^^^^^^^^^^^^^ ()
-
-note: 
-  ┌─ contract_happy.fe:6:17
-  │
-6 │         total = start
-  │                 ^^^^^ u64
-
 note: 
    ┌─ contract_happy.fe:10:9
    │

@@ -25,6 +25,7 @@ pub mod canonical;
 pub mod const_eval;
 pub mod const_ty;
 pub mod corelib;
+pub mod effects;
 
 pub mod decision_tree;
 pub mod diagnostics;
@@ -184,18 +185,6 @@ impl ModuleAnalysisPass for ContractAnalysisPass {
         db: &'db dyn HirAnalysisDb,
         top_mod: TopLevelMod<'db>,
     ) -> Vec<Box<dyn DiagnosticVoucher + 'db>> {
-        let contract_desugared_funcs: Vec<_> = top_mod
-            .all_funcs(db)
-            .iter()
-            .filter(|func| {
-                matches!(
-                    func.origin(db),
-                    HirOrigin::Desugared(DesugaredOrigin::ContractLowering(_))
-                )
-            })
-            .copied()
-            .collect();
-
         let mut diags: Vec<Box<dyn DiagnosticVoucher + 'db>> = vec![];
 
         for &contract in top_mod.all_contracts(db) {
@@ -228,6 +217,15 @@ impl ModuleAnalysisPass for ContractAnalysisPass {
                     .map(|diag| diag.to_voucher()),
             );
 
+            if contract.init(db).is_some() {
+                diags.extend(
+                    ty_check::check_contract_init_body(db, contract)
+                        .0
+                        .iter()
+                        .map(|diag| diag.to_voucher()),
+                );
+            }
+
             let recvs = contract.recvs(db);
             for (recv_idx, recv) in recvs.data(db).iter().enumerate() {
                 diags.extend(
@@ -249,21 +247,6 @@ impl ModuleAnalysisPass for ContractAnalysisPass {
                         .map(|diag| diag.to_voucher()),
                     );
                 }
-            }
-        }
-
-        // 4. Only type-check desugared functions if there are no contract errors.
-        // This prevents cascading errors from malformed contract types.
-        if diags.is_empty() {
-            let desugared_diags: Vec<Box<dyn DiagnosticVoucher + 'db>> = contract_desugared_funcs
-                .iter()
-                .flat_map(|func| &ty_check::check_func_body(db, *func).0)
-                .map(|diag| diag.to_voucher())
-                .collect();
-
-            if !desugared_diags.is_empty() {
-                tracing::error!("Desugared contract functions have diagnostics");
-                diags.extend(desugared_diags);
             }
         }
 

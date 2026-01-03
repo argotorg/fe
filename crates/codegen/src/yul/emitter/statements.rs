@@ -276,7 +276,9 @@ impl<'db> FunctionEmitter<'db> {
         let stored = self.apply_to_word_conversion(&rhs, value_ty);
         let line = match self.mir_func.body.place_address_space(place) {
             mir::ir::AddressSpaceKind::Memory => format!("mstore({addr}, {stored})"),
+            mir::ir::AddressSpaceKind::Calldata => unreachable!("write to calldata"),
             mir::ir::AddressSpaceKind::Storage => format!("sstore({addr}, {stored})"),
+            mir::ir::AddressSpaceKind::TransientStorage => format!("tstore({addr}, {stored})"),
         };
         docs.push(YulDoc::line(line));
         Ok(())
@@ -354,7 +356,9 @@ impl<'db> FunctionEmitter<'db> {
         let stored = self.apply_to_word_conversion(&rhs, value_ty);
         let line = match self.mir_func.body.place_address_space(dst_place) {
             mir::ir::AddressSpaceKind::Memory => format!("mstore({addr}, {stored})"),
+            mir::ir::AddressSpaceKind::Calldata => unreachable!("write to calldata"),
             mir::ir::AddressSpaceKind::Storage => format!("sstore({addr}, {stored})"),
+            mir::ir::AddressSpaceKind::TransientStorage => format!("tstore({addr}, {stored})"),
         };
         docs.push(YulDoc::line(line));
         Ok(())
@@ -374,13 +378,19 @@ impl<'db> FunctionEmitter<'db> {
         let dst_space = self.mir_func.body.place_address_space(dst_place);
         let discr = match src_space {
             mir::ir::AddressSpaceKind::Memory => format!("mload({src_addr})"),
+            mir::ir::AddressSpaceKind::Calldata => format!("calldataload({src_addr})"),
             mir::ir::AddressSpaceKind::Storage => format!("sload({src_addr})"),
+            mir::ir::AddressSpaceKind::TransientStorage => format!("tload({src_addr})"),
         };
         let discr_temp = state.alloc_local();
         docs.push(YulDoc::line(format!("let {discr_temp} := {discr}")));
         let store_discr = match dst_space {
             mir::ir::AddressSpaceKind::Memory => format!("mstore({dst_addr}, {discr_temp})"),
+            mir::ir::AddressSpaceKind::Calldata => unreachable!("write to calldata"),
             mir::ir::AddressSpaceKind::Storage => format!("sstore({dst_addr}, {discr_temp})"),
+            mir::ir::AddressSpaceKind::TransientStorage => {
+                format!("tstore({dst_addr}, {discr_temp})")
+            }
         };
         docs.push(YulDoc::line(store_discr));
 
@@ -435,7 +445,9 @@ impl<'db> FunctionEmitter<'db> {
         let value = variant.idx as u64;
         let line = match self.mir_func.body.place_address_space(place) {
             mir::ir::AddressSpaceKind::Memory => format!("mstore({addr}, {value})"),
+            mir::ir::AddressSpaceKind::Calldata => unreachable!("write to calldata"),
             mir::ir::AddressSpaceKind::Storage => format!("sstore({addr}, {value})"),
+            mir::ir::AddressSpaceKind::TransientStorage => format!("tstore({addr}, {value})"),
         };
         docs.push(YulDoc::line(line));
         Ok(())

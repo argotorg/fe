@@ -62,45 +62,51 @@ impl<A: Abi> Encode<A> for Address {
 // -----------------------------------------------------------------------------
 
 /// Memory pointer to a value of type `T`.
-pub struct MemPtr<T> {
-    addr: u256
-}
+pub use core::effect_ref::MemPtr
 
-/// Storage pointer to a value of type `T`.
-pub struct StorPtr<T> {
-    slot: u256
-}
+/// Storage pointer/handle to a value of type `T`.
+pub use core::effect_ref::StorPtr
 
 /// Calldata pointer to a value of type `T` (read-only).
 pub struct CalldataPtr<T> {
     pub offset: u256
 }
 
-impl<T> StorPtr<T> {
-    fn at_offset(slot: u256) -> Self {
-        Self { slot }
-    }
-}
-
-impl<T> MemPtr<T> {
-    fn at_offset(addr: u256) -> Self {
-        Self { addr }
-    }
-}
-
-impl<T> EffectRef for MemPtr<T> {
-    type Target = T
-}
-impl<T> EffectRefMut for MemPtr<T> {}
-
-impl<T> EffectRef for StorPtr<T> {
-    type Target = T
-}
-impl<T> EffectRefMut for StorPtr<T> {}
-
 impl<T> EffectRef for CalldataPtr<T> {
     type Target = T
+    type AddressSpace = core::effect_ref::Calldata
+
+    fn from_raw(raw: u256) -> Self {
+        Self { offset: raw }
+    }
+
+    fn raw(self) -> u256 {
+        self.offset
+    }
 }
+
+/// Transient storage pointer/handle to a value of type `T`.
+///
+/// This is like `StorPtr<T>`, but reads/writes are intended to compile to
+/// EVM transient storage operations (TLOAD/TSTORE).
+pub struct TStorPtr<T> {
+    pub slot: u256
+}
+
+impl<T> EffectRef for TStorPtr<T> {
+    type Target = T
+    type AddressSpace = core::effect_ref::TransientStorage
+
+    fn from_raw(raw: u256) -> Self {
+        Self { slot: raw }
+    }
+
+    fn raw(self) -> u256 {
+        self.slot
+    }
+}
+
+impl<T> EffectRefMut for TStorPtr<T> {}
 
 // -----------------------------------------------------------------------------
 // EVM effects
@@ -121,7 +127,7 @@ pub trait RawMem {
     fn mstore(mut self, addr: u256, value: u256)
     fn mstore8(mut self, addr: u256, value: u8)
     fn mem_ptr<T>(self, addr: u256) -> MemPtr<T> {
-        MemPtr::at_offset(addr)
+        MemPtr::from_raw(addr)
     }
 }
 
@@ -130,7 +136,7 @@ pub trait RawStorage {
     fn sload(self, slot: u256) -> u256
     fn sstore(mut self, slot: u256, value: u256)
     fn stor_ptr<T>(self, slot: u256) -> StorPtr<T> {
-        StorPtr::at_offset(slot)
+        StorPtr::from_raw(slot)
     }
 }
 
@@ -460,7 +466,6 @@ pub fn assert(_ b: bool) {
 impl Super for Evm {}
 
 impl ContractHost for Evm {
-    type FieldPtr = StorPtr
     type Input = CallData
     type InitInput = MemoryBytes
 
@@ -482,7 +487,7 @@ impl ContractHost for Evm {
         MemoryBytes { base: args_ptr, len: args_len }
     }
 
-    fn field<T>(mut self, slot: u256) -> Self::FieldPtr<T> {
+    fn field<T>(mut self, slot: u256) -> core::effect_ref::StorPtr<T> {
         self.stor_ptr(slot)
     }
 

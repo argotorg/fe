@@ -1,5 +1,6 @@
 ---
 source: crates/codegen/tests/yul.rs
+assertion_line: 36
 expression: desugared
 ---
 use core::prelude::*
@@ -19,254 +20,71 @@ const ALLOWANCES_SALT: u256 = 1
 
 const ROLES_SALT: u256 = 2
 
-mod __CoolCoin {
-    use super::*
-    use core::contracts::ContractHost
-    use core::contracts::Target
-    use core::abi::Abi
-    use core::abi::AbiEncoder
-    use core::abi::AbiSize
-    use core::abi::ByteInput
-    use core::abi::prefix
-    use core::abi::Encode
-    use std::evm::EvmTarget
+pub contract CoolCoin uses (mut ctx: Ctx, mut log: Log) {
+    store: TokenStore,
+    auth: AccessControl,
 
-    type __Target = EvmTarget
-
-    type __RootEffect = __Target::RootEffect
-
-    type __DefaultAbi = __Target::DefaultAbi
-
-    fn recv_Erc20_Transfer_0_0(args: Erc20::Transfer::Args) -> bool uses (ctx: Ctx, mut store: TokenStore, mut log: Log) {
-        let to = args.0
-        let amount = args.1
-        return {
+    recv Erc20 {
+        Transfer { to, amount } -> bool uses (ctx, mut store, mut log) {
             transfer(from: ctx.caller(), to, amount)
             true
         }
-    }
-
-    fn recv_Erc20_Approve_0_1(args: Erc20::Approve::Args) -> bool uses (ctx: Ctx, mut store: TokenStore, mut log: Log) {
-        let spender = args.0
-        let amount = args.1
-        return {
+        Approve { spender, amount } -> bool uses (ctx, mut store, mut log) {
             approve(owner: ctx.caller(), spender, amount)
             true
         }
-    }
-
-    fn recv_Erc20_TransferFrom_0_2(args: Erc20::TransferFrom::Args) -> bool uses (ctx: Ctx, mut store: TokenStore, mut log: Log) {
-        let from = args.0
-        let to = args.1
-        let amount = args.2
-        return {
+        TransferFrom { from, to, amount } -> bool uses (ctx, mut store, mut log) {
             spend_allowance(owner: from, spender: ctx.caller(), amount)
             transfer(from, to, amount)
             true
         }
-    }
-
-    fn recv_Erc20_BalanceOf_0_3(args: Erc20::BalanceOf::Args) -> u256 uses (store: TokenStore) {
-        let account = args.0
-        return {
+        BalanceOf { account } -> u256 uses (store) {
             store.balances.get(account)
         }
-    }
-
-    fn recv_Erc20_Allowance_0_4(args: Erc20::Allowance::Args) -> u256 uses (store: TokenStore) {
-        let owner = args.0
-        let spender = args.1
-        return {
+        Allowance { owner, spender } -> u256 uses (store) {
             store.allowances.get((owner, spender))
         }
-    }
-
-    fn recv_Erc20_TotalSupply_0_5(args: Erc20::TotalSupply::Args) -> u256 uses (store: TokenStore) {
-        return {
+        TotalSupply {  } -> u256 uses (store) {
             store.total_supply
         }
-    }
-
-    fn recv_Erc20_Name_0_6(args: Erc20::Name::Args) -> String<32> {
-        return {
+        Name {  } -> String<32> {
             "CoolCoin"
         }
-    }
-
-    fn recv_Erc20_Symbol_0_7(args: Erc20::Symbol::Args) -> String<8> {
-        return {
+        Symbol {  } -> String<8> {
             "COOL"
         }
-    }
-
-    fn recv_Erc20_Decimals_0_8(args: Erc20::Decimals::Args) -> u8 {
-        return {
+        Decimals {  } -> u8 {
             18
         }
     }
 
-    fn recv_Erc20Extended_Mint_1_0(args: Erc20Extended::Mint::Args) -> bool uses (ctx: Ctx, mut store: TokenStore, mut log: Log, auth: AccessControl) {
-        let to = args.0
-        let amount = args.1
-        return {
+    recv Erc20Extended {
+        Mint { to, amount } -> bool uses (ctx, mut store, mut log, auth) {
             auth.require(role: MINTER)
             mint(to, amount)
             true
         }
-    }
-
-    fn recv_Erc20Extended_Burn_1_1(args: Erc20Extended::Burn::Args) -> bool uses (ctx: Ctx, mut store: TokenStore, mut log: Log) {
-        let amount = args.0
-        return {
+        Burn { amount } -> bool uses (ctx, mut store, mut log) {
             burn(from: ctx.caller(), amount)
             true
         }
-    }
-
-    fn recv_Erc20Extended_BurnFrom_1_2(args: Erc20Extended::BurnFrom::Args) -> bool uses (ctx: Ctx, mut store: TokenStore, mut log: Log) {
-        let from = args.0
-        let amount = args.1
-        return {
+        BurnFrom { from, amount } -> bool uses (ctx, mut store, mut log) {
             spend_allowance(owner: from, spender: ctx.caller(), amount)
             burn(from, amount)
             true
         }
-    }
-
-    fn recv_Erc20Extended_IncreaseAllowance_1_3(args: Erc20Extended::IncreaseAllowance::Args) -> bool uses (ctx: Ctx, mut store: TokenStore, mut log: Log) {
-        let spender = args.0
-        let added_value = args.1
-        return {
+        IncreaseAllowance { spender, added_value } -> bool uses (ctx, mut store, mut log) {
             let owner = ctx.caller()
             let current = store.allowances.get((owner, spender))
             approve(owner, spender, amount: current + added_value)
             true
         }
-    }
-
-    fn recv_Erc20Extended_DecreaseAllowance_1_4(args: Erc20Extended::DecreaseAllowance::Args) -> bool uses (ctx: Ctx, mut store: TokenStore, mut log: Log) {
-        let spender = args.0
-        let subtracted_value = args.1
-        return {
+        DecreaseAllowance { spender, subtracted_value } -> bool uses (ctx, mut store, mut log) {
             let owner = ctx.caller()
             let current = store.allowances.get((owner, spender))
             assert(current >= subtracted_value)
             approve(owner, spender, amount: current - subtracted_value)
             true
-        }
-    }
-
-    fn init_contract(initial_supply: u256, owner: Address) uses (mut store: TokenStore, mut auth: AccessControl, mut ctx: Ctx, mut log: Log) {
-        return {
-            auth.grant(role: MINTER, to: owner)
-            auth.grant(role: BURNER, to: owner)
-            if initial_supply > 0 {
-                mint(to: owner, amount: initial_supply)
-            }
-        }
-    }
-
-    #[contract_init(CoolCoin)]
-    fn init() uses (mut root: __RootEffect) {
-        let mut store = root.init_field<TokenStore>(core::contract_field_slot(0))
-        let mut auth = root.init_field<AccessControl>(core::contract_field_slot(1))
-        let mut __d = __DefaultAbi::decoder_new(root.init_input(runtime))
-        let initial_supply: u256 = u256::decode(__d)
-        let owner: Address = Address::decode(__d)
-        with (TokenStore = store, AccessControl = auth, Ctx = root, Log = root) { init_contract(initial_supply, owner) }
-        root.create_contract(runtime)
-    }
-
-    #[contract_runtime(CoolCoin)]
-    fn runtime() uses (mut root: __RootEffect) {
-        let mut store = root.field<TokenStore>(core::contract_field_slot(0))
-        let mut auth = root.field<AccessControl>(core::contract_field_slot(1))
-        let __selector = root.runtime_selector<__DefaultAbi>()
-        let mut __d = root.runtime_decoder<__DefaultAbi>()
-        match __selector {
-            Erc20::Transfer::SELECTOR => {
-                let __args: Erc20::Transfer::Args = Erc20::Transfer::Args::decode(__d)
-                let __result = with (Ctx = root, TokenStore = store, Log = root) { recv_Erc20_Transfer_0_0(__args) }
-                root.return_value<__DefaultAbi, bool>(__result)
-            },
-            Erc20::Approve::SELECTOR => {
-                let __args: Erc20::Approve::Args = Erc20::Approve::Args::decode(__d)
-                let __result = with (Ctx = root, TokenStore = store, Log = root) { recv_Erc20_Approve_0_1(__args) }
-                root.return_value<__DefaultAbi, bool>(__result)
-            },
-            Erc20::TransferFrom::SELECTOR => {
-                let __args: Erc20::TransferFrom::Args = Erc20::TransferFrom::Args::decode(__d)
-                let __result = with (Ctx = root, TokenStore = store, Log = root) { recv_Erc20_TransferFrom_0_2(__args) }
-                root.return_value<__DefaultAbi, bool>(__result)
-            },
-            Erc20::BalanceOf::SELECTOR => {
-                let __args: Erc20::BalanceOf::Args = Erc20::BalanceOf::Args::decode(__d)
-                let __result = with (TokenStore = store) { recv_Erc20_BalanceOf_0_3(__args) }
-                root.return_value<__DefaultAbi, u256>(__result)
-            },
-            Erc20::Allowance::SELECTOR => {
-                let __args: Erc20::Allowance::Args = Erc20::Allowance::Args::decode(__d)
-                let __result = with (TokenStore = store) { recv_Erc20_Allowance_0_4(__args) }
-                root.return_value<__DefaultAbi, u256>(__result)
-            },
-            Erc20::TotalSupply::SELECTOR => {
-                let __args: Erc20::TotalSupply::Args = Erc20::TotalSupply::Args::decode(__d)
-                let __result = with (TokenStore = store) { recv_Erc20_TotalSupply_0_5(__args) }
-                root.return_value<__DefaultAbi, u256>(__result)
-            },
-            Erc20::Name::SELECTOR => {
-                let __args: Erc20::Name::Args = Erc20::Name::Args::decode(__d)
-                let __result = recv_Erc20_Name_0_6(__args)
-                root.return_value<__DefaultAbi, String<32> >(__result)
-            },
-            Erc20::Symbol::SELECTOR => {
-                let __args: Erc20::Symbol::Args = Erc20::Symbol::Args::decode(__d)
-                let __result = recv_Erc20_Symbol_0_7(__args)
-                root.return_value<__DefaultAbi, String<8> >(__result)
-            },
-            Erc20::Decimals::SELECTOR => {
-                let __args: Erc20::Decimals::Args = Erc20::Decimals::Args::decode(__d)
-                let __result = recv_Erc20_Decimals_0_8(__args)
-                root.return_value<__DefaultAbi, u8>(__result)
-            },
-            Erc20Extended::Mint::SELECTOR => {
-                let __args: Erc20Extended::Mint::Args = Erc20Extended::Mint::Args::decode(__d)
-                let __result = with (Ctx = root, TokenStore = store, Log = root, AccessControl = auth) { recv_Erc20Extended_Mint_1_0(__args) }
-                root.return_value<__DefaultAbi, bool>(__result)
-            },
-            Erc20Extended::Burn::SELECTOR => {
-                let __args: Erc20Extended::Burn::Args = Erc20Extended::Burn::Args::decode(__d)
-                let __result = with (Ctx = root, TokenStore = store, Log = root) { recv_Erc20Extended_Burn_1_1(__args) }
-                root.return_value<__DefaultAbi, bool>(__result)
-            },
-            Erc20Extended::BurnFrom::SELECTOR => {
-                let __args: Erc20Extended::BurnFrom::Args = Erc20Extended::BurnFrom::Args::decode(__d)
-                let __result = with (Ctx = root, TokenStore = store, Log = root) { recv_Erc20Extended_BurnFrom_1_2(__args) }
-                root.return_value<__DefaultAbi, bool>(__result)
-            },
-            Erc20Extended::IncreaseAllowance::SELECTOR => {
-                let __args: Erc20Extended::IncreaseAllowance::Args = Erc20Extended::IncreaseAllowance::Args::decode(__d)
-                let __result = with (Ctx = root, TokenStore = store, Log = root) { recv_Erc20Extended_IncreaseAllowance_1_3(__args) }
-                root.return_value<__DefaultAbi, bool>(__result)
-            },
-            Erc20Extended::DecreaseAllowance::SELECTOR => {
-                let __args: Erc20Extended::DecreaseAllowance::Args = Erc20Extended::DecreaseAllowance::Args::decode(__d)
-                let __result = with (Ctx = root, TokenStore = store, Log = root) { recv_Erc20Extended_DecreaseAllowance_1_4(__args) }
-                root.return_value<__DefaultAbi, bool>(__result)
-            },
-            _ => root.abort(),
-        }
-    }
-
-    impl std::evm::Contract for CoolCoin {
-        type InitArgs = (u256, Address)
-    
-        fn init_code_offset() -> u256 {
-            return std::evm::code_region_offset(init)
-        }
-    
-        fn init_code_len() -> u256 {
-            return std::evm::code_region_len(init)
         }
     }
 }

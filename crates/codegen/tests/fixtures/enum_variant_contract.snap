@@ -5,13 +5,13 @@ input_file: tests/fixtures/enum_variant_contract.fe
 ---
 object "EnumContract" {
   code {
-    function init() {
+    function init__StorPtr_Evm___207f35a85ac4062e() {
       let v0 := datasize("EnumContract_deployed")
       let v1 := dataoffset("EnumContract_deployed")
       codecopy(0, v1, v0)
       return(0, v0)
     }
-    init()
+    init__StorPtr_Evm___207f35a85ac4062e()
   }
 
   object "EnumContract_deployed" {
@@ -21,7 +21,7 @@ object "EnumContract" {
         mstore(v0, value)
         return(v0, 32)
       }
-      function runtime() {
+      function runtime__StorPtr_Evm___207f35a85ac4062e() {
         let v0 := calldataload(0)
         let v1 := shr(224, v0)
         let v2 := eq(v1, 1817627404)
@@ -104,7 +104,7 @@ object "EnumContract" {
           }
         }
       }
-      runtime()
+      runtime__StorPtr_Evm___207f35a85ac4062e()
       return(0, 0)
     }
   }

@@ -80,7 +80,9 @@ impl<'db, 'a> FunctionHasher<'db, 'a> {
         // erroneously deduplicated.
         match func.receiver_space {
             Some(crate::ir::AddressSpaceKind::Memory) => self.write_u8(1),
-            Some(crate::ir::AddressSpaceKind::Storage) => self.write_u8(2),
+            Some(crate::ir::AddressSpaceKind::Calldata) => self.write_u8(2),
+            Some(crate::ir::AddressSpaceKind::Storage) => self.write_u8(3),
+            Some(crate::ir::AddressSpaceKind::TransientStorage) => self.write_u8(4),
             None => self.write_u8(0),
         }
 
@@ -107,9 +109,13 @@ impl<'db, 'a> FunctionHasher<'db, 'a> {
         match value.repr {
             ValueRepr::Word => self.write_u8(0),
             ValueRepr::Ref(crate::ir::AddressSpaceKind::Memory) => self.write_u8(1),
-            ValueRepr::Ref(crate::ir::AddressSpaceKind::Storage) => self.write_u8(2),
-            ValueRepr::Ptr(crate::ir::AddressSpaceKind::Memory) => self.write_u8(3),
-            ValueRepr::Ptr(crate::ir::AddressSpaceKind::Storage) => self.write_u8(4),
+            ValueRepr::Ref(crate::ir::AddressSpaceKind::Calldata) => self.write_u8(2),
+            ValueRepr::Ref(crate::ir::AddressSpaceKind::Storage) => self.write_u8(3),
+            ValueRepr::Ref(crate::ir::AddressSpaceKind::TransientStorage) => self.write_u8(4),
+            ValueRepr::Ptr(crate::ir::AddressSpaceKind::Memory) => self.write_u8(5),
+            ValueRepr::Ptr(crate::ir::AddressSpaceKind::Calldata) => self.write_u8(6),
+            ValueRepr::Ptr(crate::ir::AddressSpaceKind::Storage) => self.write_u8(7),
+            ValueRepr::Ptr(crate::ir::AddressSpaceKind::TransientStorage) => self.write_u8(8),
         }
         self.hash_value_origin(&value.origin);
     }
@@ -193,12 +199,13 @@ impl<'db, 'a> FunctionHasher<'db, 'a> {
                     })
                     .cloned()
                     .or_else(|| root.symbol.clone())
-                    .unwrap_or_else(|| {
-                        root.func
+                    .unwrap_or_else(|| match root.origin {
+                        crate::ir::MirFunctionOrigin::Hir(func) => func
                             .name(self.db)
                             .to_opt()
                             .map(|ident| ident.data(self.db).to_string())
-                            .unwrap_or_else(|| "<unknown>".to_string())
+                            .unwrap_or_else(|| "<unknown>".to_string()),
+                        crate::ir::MirFunctionOrigin::Synthetic(id) => format!("{id:?}"),
                     });
                 self.write_str(&symbol);
             }
@@ -209,7 +216,9 @@ impl<'db, 'a> FunctionHasher<'db, 'a> {
                 self.write_u64(field_ptr.offset_bytes as u64);
                 self.write_u8(match field_ptr.addr_space {
                     crate::ir::AddressSpaceKind::Memory => 1,
-                    crate::ir::AddressSpaceKind::Storage => 2,
+                    crate::ir::AddressSpaceKind::Calldata => 2,
+                    crate::ir::AddressSpaceKind::Storage => 3,
+                    crate::ir::AddressSpaceKind::TransientStorage => 4,
                 });
             }
             ValueOrigin::PlaceRef(place) => {
@@ -284,15 +293,12 @@ impl<'db, 'a> FunctionHasher<'db, 'a> {
             let slot = self.placeholder_value(*arg);
             self.write_u32(slot);
         }
-        self.write_usize(call.effect_kinds.len());
-        for kind in &call.effect_kinds {
-            self.write_u8(match kind {
-                crate::ir::EffectProviderKind::Memory => 1,
-                crate::ir::EffectProviderKind::Storage => 2,
-                crate::ir::EffectProviderKind::Calldata => 3,
-            });
-        }
-        self.write_usize(call.callable.generic_args().len());
+        self.write_usize(
+            call.hir_target
+                .as_ref()
+                .map(|target| target.generic_args.len())
+                .unwrap_or(0),
+        );
         let symbol = call
             .resolved_name
             .as_ref()
@@ -304,9 +310,9 @@ impl<'db, 'a> FunctionHasher<'db, 'a> {
             .cloned()
             .or_else(|| call.resolved_name.clone())
             .unwrap_or_else(|| {
-                call.callable
-                    .callable_def
-                    .name(self.db)
+                call.hir_target
+                    .as_ref()
+                    .and_then(|target| target.callable_def.name(self.db))
                     .map(|n| n.data(self.db).to_string())
                     .unwrap_or_else(|| "<unknown>".to_string())
             });
@@ -354,7 +360,9 @@ impl<'db, 'a> FunctionHasher<'db, 'a> {
                         self.write_u8(5);
                         self.write_u8(match address_space {
                             crate::ir::AddressSpaceKind::Memory => 1,
-                            crate::ir::AddressSpaceKind::Storage => 2,
+                            crate::ir::AddressSpaceKind::Calldata => 2,
+                            crate::ir::AddressSpaceKind::Storage => 3,
+                            crate::ir::AddressSpaceKind::TransientStorage => 4,
                         });
                     }
                 }

@@ -1,12 +1,10 @@
 use super::abi::{Abi, AbiEncoder, AbiSize, ByteInput, Encode}
+use super::effect_ref::StorPtr
 
 /// Host interface required by compiler-generated contract entrypoints.
 ///
 /// This trait is implemented by the target's root effect type (e.g. `std::evm::effects::Evm`).
 pub trait ContractHost {
-    /// Higher-kinded pointer type for contract storage fields.
-    type FieldPtr: * -> *
-
     /// ABI input source (e.g. EVM calldata).
     type Input: ByteInput
 
@@ -16,8 +14,8 @@ pub trait ContractHost {
     fn input(self) -> Self::Input
     fn init_input<F>(mut self, runtime: F) -> Self::InitInput
 
-    fn field<T>(mut self, slot: u256) -> Self::FieldPtr<T>
-    fn init_field<T>(mut self, slot: u256) -> Self::FieldPtr<T> {
+    fn field<T>(mut self, slot: u256) -> StorPtr<T>
+    fn init_field<T>(mut self, slot: u256) -> StorPtr<T> {
         self.field(slot)
     }
 

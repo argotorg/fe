@@ -93,6 +93,10 @@ impl<'db> Callable<'db> {
         &self.generic_args
     }
 
+    pub fn generic_args_mut(&mut self) -> &mut Vec<TyId<'db>> {
+        &mut self.generic_args
+    }
+
     pub fn trait_inst(&self) -> Option<TraitInstId<'db>> {
         self.trait_inst
     }
