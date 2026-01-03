@@ -8,9 +8,9 @@ use rustc_hash::FxHashSet;
 use salsa::Update;
 
 use super::{
-    AssocTyDecl, AttrListId, Body, Const, Contract, Enum, EnumVariant, ExprId, FieldDef,
-    FieldParent, Func, FuncParam, FuncParamName, GenericParam, IdentId, Impl, ImplTrait, ItemKind,
-    Mod, Struct, TopLevelMod, Trait, TypeAlias, Use, VariantDef, VariantKind, Visibility,
+    AssocConstDecl, AssocTyDecl, AttrListId, Body, Const, Contract, Enum, EnumVariant, ExprId,
+    FieldDef, FieldParent, Func, FuncParam, FuncParamName, GenericParam, IdentId, Impl, ImplTrait,
+    ItemKind, Mod, Struct, TopLevelMod, Trait, TypeAlias, Use, VariantDef, VariantKind, Visibility,
     scope_graph_viz::ScopeGraphFormatter,
 };
 use crate::{
@@ -181,6 +181,8 @@ impl<'db> ScopeId<'db> {
                 let def: &VariantDef = self.resolve_to(db).unwrap();
                 Some(def.attributes)
             }
+            ScopeId::TraitType(t, idx) => t.types(db).get(idx as usize).map(|d| d.attributes),
+            ScopeId::TraitConst(t, idx) => t.consts(db).get(idx as usize).map(|d| d.attributes),
             _ => None,
         }
     }
@@ -725,6 +727,15 @@ impl<'db> FromScope<'db> for &'db AssocTyDecl<'db> {
             return None;
         };
         Some(t.assoc_ty_by_index(db, idx as usize))
+    }
+}
+
+impl<'db> FromScope<'db> for &'db AssocConstDecl<'db> {
+    fn from_scope(scope: ScopeId<'db>, db: &'db dyn HirDb) -> Option<Self> {
+        let ScopeId::TraitConst(t, idx) = scope else {
+            return None;
+        };
+        Some(&t.consts(db)[idx as usize])
     }
 }
 

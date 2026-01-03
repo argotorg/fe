@@ -1,11 +1,21 @@
 ---
 source: crates/codegen/tests/yul.rs
-assertion_line: 42
 expression: output
 input_file: tests/fixtures/high_level_contract.fe
 ---
 object "EchoContract" {
   code {
+    function __echocontract_init() {
+      let v0 := init_field__Evm_Foo__c3089d776807df8e(0, 0)
+      let v1 := evm_contracthost_init_input__fn_runtime__7cd036468b9a6201(0, 0)
+      let v2 := sol_abi_decoder_new__MemoryBytes__b48f82585f3ed728(v1)
+      let v3 := u256_decode_decode__Sol_SolDecoder_MemoryBytes___c66d50dfccf37f39(v2)
+      let v4 := u256_decode_decode__Sol_SolDecoder_MemoryBytes___c66d50dfccf37f39(v2)
+      let v5 := v0
+      init_contract(v3, v4, v5)
+      evm_contracthost_create_contract__fn_runtime__7cd036468b9a6201(0, 0)
+      leave
+    }
     function alloc(size) -> ret {
       let v0 := mload(64)
       let v1 := eq(v0, 0)
@@ -64,17 +74,6 @@ object "EchoContract" {
       mstore(v7, v6)
       mstore(add(v7, 32), v5)
       ret := v7
-      leave
-    }
-    function init() {
-      let v0 := init_field__Evm_Foo__c3089d776807df8e(0, 0)
-      let v1 := evm_contracthost_init_input__fn_runtime__7cd036468b9a6201(0, 0)
-      let v2 := sol_abi_decoder_new__MemoryBytes__b48f82585f3ed728(v1)
-      let v3 := u256_decode_decode__Sol_SolDecoder_MemoryBytes___c66d50dfccf37f39(v2)
-      let v4 := u256_decode_decode__Sol_SolDecoder_MemoryBytes___c66d50dfccf37f39(v2)
-      let v5 := v0
-      init_contract(v3, v4, v5)
-      evm_contracthost_create_contract__fn_runtime__7cd036468b9a6201(0, 0)
       leave
     }
     function init_contract(x, y, state) {
@@ -143,7 +142,7 @@ object "EchoContract" {
       ret := v0
       leave
     }
-    init()
+    __echocontract_init()
   }
 
   object "EchoContract_deployed" {
