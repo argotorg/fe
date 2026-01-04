@@ -329,76 +329,42 @@ fn execute_test(name: &str, bytecode_hex: &str, show_logs: bool) -> (TestResult,
 
     // Execute the test (empty calldata since test functions take no args)
     let options = ExecutionOptions::default();
-    if show_logs {
-        match instance.call_raw_with_logs(&[], options) {
-            Ok(outcome) => (
-                TestResult {
-                    name: name.to_string(),
-                    passed: true,
-                    error_message: None,
-                },
-                outcome.logs,
-            ),
-            Err(contract_harness::HarnessError::Revert(data)) => (
-                TestResult {
-                    name: name.to_string(),
-                    passed: false,
-                    error_message: Some(format!("Test reverted: {data}")),
-                },
-                Vec::new(),
-            ),
-            Err(contract_harness::HarnessError::Halted { reason, gas_used }) => (
-                TestResult {
-                    name: name.to_string(),
-                    passed: false,
-                    error_message: Some(format!("Test halted: {reason:?} (gas: {gas_used})")),
-                },
-                Vec::new(),
-            ),
-            Err(err) => (
-                TestResult {
-                    name: name.to_string(),
-                    passed: false,
-                    error_message: Some(format!("Test execution error: {err}")),
-                },
-                Vec::new(),
-            ),
-        }
+    let call_result = if show_logs {
+        instance
+            .call_raw_with_logs(&[], options)
+            .map(|outcome| outcome.logs)
     } else {
-        match instance.call_raw(&[], options) {
-            Ok(_) => (
-                TestResult {
-                    name: name.to_string(),
-                    passed: true,
-                    error_message: None,
-                },
-                Vec::new(),
-            ),
-            Err(contract_harness::HarnessError::Revert(data)) => (
-                TestResult {
-                    name: name.to_string(),
-                    passed: false,
-                    error_message: Some(format!("Test reverted: {data}")),
-                },
-                Vec::new(),
-            ),
-            Err(contract_harness::HarnessError::Halted { reason, gas_used }) => (
-                TestResult {
-                    name: name.to_string(),
-                    passed: false,
-                    error_message: Some(format!("Test halted: {reason:?} (gas: {gas_used})")),
-                },
-                Vec::new(),
-            ),
-            Err(err) => (
-                TestResult {
-                    name: name.to_string(),
-                    passed: false,
-                    error_message: Some(format!("Test execution error: {err}")),
-                },
-                Vec::new(),
-            ),
+        instance.call_raw(&[], options).map(|_| Vec::new())
+    };
+
+    match call_result {
+        Ok(logs) => (
+            TestResult {
+                name: name.to_string(),
+                passed: true,
+                error_message: None,
+            },
+            logs,
+        ),
+        Err(err) => (
+            TestResult {
+                name: name.to_string(),
+                passed: false,
+                error_message: Some(format_harness_error(err)),
+            },
+            Vec::new(),
+        ),
+    }
+}
+
+/// Formats a harness error into a human-readable message.
+fn format_harness_error(err: contract_harness::HarnessError) -> String {
+    match err {
+        contract_harness::HarnessError::Revert(data) => format!("Test reverted: {data}"),
+        contract_harness::HarnessError::Halted { reason, gas_used } => {
+            format!("Test halted: {reason:?} (gas: {gas_used})")
         }
+        other => format!("Test execution error: {other}"),
     }
 }
 
