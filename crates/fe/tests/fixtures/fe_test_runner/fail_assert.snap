@@ -1,0 +1,18 @@
+---
+source: crates/fe/tests/cli_output.rs
+assertion_line: 173
+expression: output
+input_file: tests/fixtures/fe_test_runner/fail_assert.fe
+---
+=== STDOUT ===
+test test_assert ... FAILED
+
+test result: FAILED. 0 passed; 1 failed
+
+failures:
+    test_assert
+
+=== STDERR ===
+    Test reverted: 0x
+
+=== EXIT CODE: 1 ===

@@ -1,0 +1,12 @@
+---
+source: crates/fe/tests/cli_output.rs
+assertion_line: 173
+expression: output
+input_file: tests/fixtures/fe_test_runner/pass.fe
+---
+=== STDOUT ===
+test test_pass ... ok
+
+test result: ok. 1 passed; 0 failed
+
+=== EXIT CODE: 0 ===

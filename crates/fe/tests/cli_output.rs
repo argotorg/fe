@@ -37,6 +37,11 @@ fn run_fe_test(path: &str) -> (String, i32) {
 
 // Helper function to run fe binary with specified subcommand
 fn run_fe_command(subcommand: &str, path: &str) -> (String, i32) {
+    run_fe_main(&[subcommand, path])
+}
+
+// Helper function to run fe binary with specified args
+fn run_fe_main(args: &[&str]) -> (String, i32) {
     // Build the fe binary
     let cargo_exe = std::env::var("CARGO").unwrap_or_else(|_| "cargo".to_string());
     let output = Command::new(&cargo_exe)
@@ -61,10 +66,10 @@ fn run_fe_command(subcommand: &str, path: &str) -> (String, i32) {
         .join("fe");
 
     let output = Command::new(&fe_binary)
-        .args([subcommand, path])
+        .args(args)
         .env("NO_COLOR", "1") // Disable color output for consistent snapshots across environments
         .output()
-        .unwrap_or_else(|_| panic!("Failed to run fe {}", subcommand));
+        .unwrap_or_else(|_| panic!("Failed to run fe {:?}", args));
 
     // Combine stdout and stderr for snapshot
     let mut full_output = String::new();
@@ -150,4 +155,20 @@ fn test_fe_test(fixture: Fixture<&str>) {
     let (output, exit_code) = run_fe_test(fixture.path());
     // All fe test fixtures should pass (exit code 0)
     assert_eq!(exit_code, 0, "fe test failed:\n{}", output);
+}
+
+/// Runs `fe test` and snapshots the output to verify behavior of passing/failing tests and logs.
+#[dir_test(
+    dir: "$CARGO_MANIFEST_DIR/tests/fixtures/fe_test_runner",
+    glob: "*.fe",
+)]
+fn test_fe_test_runner(fixture: Fixture<&str>) {
+    let mut args = vec!["test"];
+    if fixture.path().contains("logs.fe") {
+        args.push("--show-logs");
+    }
+    args.push(fixture.path());
+
+    let (output, _) = run_fe_main(&args);
+    snap_test!(output, fixture.path());
 }
