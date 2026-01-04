@@ -237,7 +237,7 @@ object "Factory" {
       function evm_contracthost_return_bytes(self, ptr, len) {
         return(ptr, len)
       }
-      function recv_FactoryMsg_Deploy2_0_1(args, create) -> ret {
+      function recv_FactoryMsg_Deploy2_0_1(args, _create) -> ret {
         let v0 := mload(args)
         let v1 := mload(add(args, 32))
         let v2 := mload(add(args, 64))
@@ -248,11 +248,11 @@ object "Factory" {
         mstore(0x40, add(v3, 64))
         mstore(v3, v0)
         mstore(add(v3, 32), v1)
-        let v4 := create2__create__Create_Child__e36b712fd88ef9cd(create, 0, v3, v2)
+        let v4 := create2__create__Create_Child__e36b712fd88ef9cd(_create, 0, v3, v2)
         ret := v4
         leave
       }
-      function recv_FactoryMsg_Deploy_0_0(args, create) -> ret {
+      function recv_FactoryMsg_Deploy_0_0(args, _create) -> ret {
         let v0 := mload(args)
         let v1 := mload(add(args, 32))
         let v2 := mload(0x40)
@@ -262,7 +262,7 @@ object "Factory" {
         mstore(0x40, add(v2, 64))
         mstore(v2, v0)
         mstore(add(v2, 32), v1)
-        let v3 := create__create__Create_Child__e36b712fd88ef9cd(create, 0, v2)
+        let v3 := create__create__Create_Child__e36b712fd88ef9cd(_create, 0, v2)
         ret := v3
         leave
       }

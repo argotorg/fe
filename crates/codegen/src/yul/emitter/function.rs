@@ -1,10 +1,17 @@
 use driver::DriverDataBase;
+use hir::analysis::HirAnalysisDb;
+use hir::analysis::ty::fold::{TyFoldable, TyFolder};
+use hir::analysis::ty::normalize::normalize_ty;
+use hir::analysis::ty::trait_resolution::PredicateListId;
+use hir::analysis::ty::ty_def::{TyData, TyId};
+use hir::hir_def::HirIngot;
+use hir::hir_def::scope_graph::ScopeId;
 use mir::{BasicBlockId, MirFunction, Terminator, layout};
-use rustc_hash::FxHashMap;
+use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::yul::{doc::YulDoc, errors::YulError, state::BlockState};
 
-use super::util::function_name;
+use super::util::{escape_yul_reserved, function_name};
 
 /// Emits Yul for a single MIR function.
 pub(super) struct FunctionEmitter<'db> {
@@ -67,14 +74,17 @@ impl<'db> FunctionEmitter<'db> {
     fn init_entry_state(&self) -> (Vec<String>, BlockState) {
         let mut state = BlockState::new();
         let mut params_out = Vec::new();
+        let mut used_names = FxHashSet::default();
         for &local in &self.mir_func.body.param_locals {
-            let name = self.mir_func.body.local(local).name.clone();
+            let raw_name = self.mir_func.body.local(local).name.clone();
+            let name = unique_yul_name(&raw_name, &mut used_names);
             params_out.push(name.clone());
             state.insert_local(local, name);
         }
         if self.mir_func.contract_function.is_none() {
             for &local in &self.mir_func.body.effect_param_locals {
-                let binding = self.mir_func.body.local(local).name.clone();
+                let raw_name = self.mir_func.body.local(local).name.clone();
+                let binding = unique_yul_name(&raw_name, &mut used_names);
                 params_out.push(binding.clone());
                 state.insert_local(local, binding);
             }
@@ -85,6 +95,23 @@ impl<'db> FunctionEmitter<'db> {
     /// Returns true if the Fe function has a return type.
     pub(super) fn returns_value(&self) -> bool {
         let ret_ty = self.mir_func.func.return_ty(self.db);
+        // Substitute generic parameters with their concrete arguments for monomorphized functions
+        let ret_ty = if !self.mir_func.generic_args.is_empty() {
+            let mut folder = ParamSubstFolder {
+                args: &self.mir_func.generic_args,
+            };
+            let substituted = ret_ty.fold_with(self.db, &mut folder);
+            // Normalize associated types (e.g., M::Return -> () when M = Increment)
+            let scope = normalization_scope_for_args(
+                self.db,
+                self.mir_func.func,
+                &self.mir_func.generic_args,
+            );
+            let assumptions = PredicateListId::empty_list(self.db);
+            normalize_ty(self.db, substituted, scope, assumptions)
+        } else {
+            ret_ty
+        };
         !layout::is_zero_sized_ty(self.db, ret_ty)
     }
 
@@ -98,6 +125,18 @@ impl<'db> FunctionEmitter<'db> {
             format!("function {func_name}({params_str}){ret_suffix}")
         }
     }
+}
+
+fn unique_yul_name(raw_name: &str, used: &mut FxHashSet<String>) -> String {
+    let base = escape_yul_reserved(raw_name);
+    let mut candidate = base.clone();
+    let mut suffix = 0;
+    while used.contains(&candidate) {
+        suffix += 1;
+        candidate = format!("{base}_{suffix}");
+    }
+    used.insert(candidate.clone());
+    candidate
 }
 
 fn compute_immediate_postdominators(body: &mir::MirBody<'_>) -> Vec<Option<BasicBlockId>> {
@@ -149,7 +188,7 @@ fn compute_immediate_postdominators(body: &mir::MirBody<'_>) -> Vec<Option<Basic
                 Terminator::Switch {
                     targets, default, ..
                 } => {
-                    let mut s: Vec<_> = targets.iter().map(|(_, bb)| bb.index()).collect();
+                    let mut s: Vec<_> = targets.iter().map(|t| t.block.index()).collect();
                     s.push(default.index());
                     s
                 }
@@ -198,4 +237,36 @@ fn compute_immediate_postdominators(body: &mir::MirBody<'_>) -> Vec<Option<Basic
     }
 
     ipdom
+}
+
+/// Type folder that substitutes type parameters with concrete types.
+struct ParamSubstFolder<'db, 'a> {
+    args: &'a [TyId<'db>],
+}
+
+impl<'db> TyFolder<'db> for ParamSubstFolder<'db, '_> {
+    fn fold_ty(&mut self, db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> TyId<'db> {
+        match ty.data(db) {
+            TyData::TyParam(param) => self.args.get(param.idx).copied().unwrap_or(ty),
+            _ => ty.super_fold_with(db, self),
+        }
+    }
+}
+
+/// Returns a scope suitable for normalizing types with the given generic arguments.
+///
+/// * `db` - HIR analysis database.
+/// * `func` - Function whose scope is used as a fallback.
+/// * `args` - Concrete generic argument types.
+///
+/// Returns the scope to use for type normalization.
+fn normalization_scope_for_args<'db>(
+    db: &'db dyn HirAnalysisDb,
+    func: hir::hir_def::Func<'db>,
+    args: &[TyId<'db>],
+) -> ScopeId<'db> {
+    args.iter()
+        .find_map(|ty| ty.ingot(db))
+        .map(|ingot| ingot.root_mod(db).scope())
+        .unwrap_or_else(|| func.scope())
 }
