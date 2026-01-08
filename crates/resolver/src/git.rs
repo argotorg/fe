@@ -85,6 +85,19 @@ impl GitResolver {
         self.checkout_root.join(encoded)
     }
 
+    pub fn ensure_checkout_resource(
+        &self,
+        description: &GitDescription,
+    ) -> Result<GitResource, GitResolutionError> {
+        self.ensure_checkout_root()?;
+        let checkout_path = self.checkout_path(description);
+        let status = self.ensure_checkout(description, &checkout_path)?;
+        Ok(GitResource {
+            reused_checkout: matches!(status, CheckoutStatus::Existing),
+            checkout_path,
+        })
+    }
+
     fn ensure_checkout_root(&self) -> Result<(), GitResolutionError> {
         if !self.checkout_root.exists() {
             fs::create_dir_all(self.checkout_root.as_std_path()).map_err(|source| {
@@ -230,14 +243,7 @@ impl Resolver for GitResolver {
         H: ResolutionHandler<Self>,
     {
         handler.on_resolution_start(description);
-        self.ensure_checkout_root()?;
-        let checkout_path = self.checkout_path(description);
-        let status = self.ensure_checkout(description, &checkout_path)?;
-
-        let resource = GitResource {
-            reused_checkout: matches!(status, CheckoutStatus::Existing),
-            checkout_path,
-        };
+        let resource = self.ensure_checkout_resource(description)?;
         Ok(handler.handle_resolution(description, resource))
     }
 }

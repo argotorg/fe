@@ -1,6 +1,8 @@
+use std::collections::HashSet;
+
 use camino::Utf8PathBuf;
 use codegen::emit_module_yul;
-use common::InputDb;
+use common::{InputDb, config::Manifest};
 use driver::DriverDataBase;
 use hir::hir_def::{HirIngot, TopLevelMod};
 use mir::lower_module;
@@ -13,7 +15,16 @@ pub fn check(path: &Utf8PathBuf, dump_mir: bool, emit_yul_min: bool) {
     let has_errors = if path.is_file() && path.extension() == Some("fe") {
         check_single_file(&mut db, path, dump_mir, emit_yul_min)
     } else if path.is_dir() {
-        check_ingot(&mut db, path, dump_mir, emit_yul_min)
+        match manifest_at_path(path) {
+            Ok(Some(Manifest::Workspace(_))) => {
+                check_workspace(&mut db, path, dump_mir, emit_yul_min)
+            }
+            Ok(_) => check_ingot(&mut db, path, dump_mir, emit_yul_min),
+            Err(err) => {
+                eprintln!("❌ Error: {err}");
+                true
+            }
+        }
     } else {
         eprintln!("❌ Error: Path must be either a .fe file or a directory containing fe.toml");
         std::process::exit(1);
@@ -102,7 +113,11 @@ fn check_ingot(
         return true;
     }
 
-    let Some(ingot) = db.workspace().containing_ingot(db, ingot_url.clone()) else {
+    if db
+        .workspace()
+        .containing_ingot(db, ingot_url.clone())
+        .is_none()
+    {
         // Check if the issue is a missing fe.toml file
         let config_url = match ingot_url.join("fe.toml") {
             Ok(url) => url,
@@ -122,9 +137,96 @@ fn check_ingot(
             eprintln!("❌ Error: Could not resolve ingot from directory");
         }
         return true;
+    }
+
+    let mut seen = HashSet::new();
+    check_ingot_and_dependencies(db, &ingot_url, dump_mir, emit_yul_min, &mut seen)
+}
+
+fn check_workspace(
+    db: &mut DriverDataBase,
+    dir_path: &Utf8PathBuf,
+    dump_mir: bool,
+    emit_yul_min: bool,
+) -> bool {
+    let canonical_path = match dir_path.canonicalize_utf8() {
+        Ok(path) => path,
+        Err(_) => {
+            eprintln!("Error: Invalid or non-existent directory path: {dir_path}");
+            eprintln!("       Make sure the directory exists and is accessible");
+            return true;
+        }
     };
 
-    // Check if the ingot has source files before trying to analyze
+    let workspace_url = match Url::from_directory_path(canonical_path.as_str()) {
+        Ok(url) => url,
+        Err(_) => {
+            eprintln!("❌ Error: Invalid directory path: {dir_path}");
+            return true;
+        }
+    };
+
+    let had_init_diagnostics = driver::init_ingot(db, &workspace_url);
+    if had_init_diagnostics {
+        return true;
+    }
+
+    let manifest = match manifest_at_path(dir_path) {
+        Ok(Some(Manifest::Workspace(workspace_manifest))) => workspace_manifest,
+        Ok(Some(Manifest::Ingot(_))) => {
+            eprintln!("❌ Error: Expected a workspace manifest at {dir_path}");
+            return true;
+        }
+        Ok(None) => {
+            eprintln!("❌ Error: No fe.toml file found in the workspace root");
+            return true;
+        }
+        Err(err) => {
+            eprintln!("❌ Error: {err}");
+            return true;
+        }
+    };
+
+    let member_urls = match driver::workspace_member_urls(&manifest.workspace, &workspace_url) {
+        Ok(members) => members,
+        Err(err) => {
+            eprintln!("❌ Error resolving workspace members: {err}");
+            return true;
+        }
+    };
+
+    if member_urls.is_empty() {
+        eprintln!("⚠️  No workspace members found");
+        return false;
+    }
+
+    let mut seen = HashSet::new();
+    let mut has_errors = false;
+    for member_url in member_urls {
+        let member_has_errors =
+            check_ingot_and_dependencies(db, &member_url, dump_mir, emit_yul_min, &mut seen);
+        has_errors |= member_has_errors;
+    }
+
+    has_errors
+}
+
+fn check_ingot_and_dependencies(
+    db: &mut DriverDataBase,
+    ingot_url: &Url,
+    dump_mir: bool,
+    emit_yul_min: bool,
+    seen: &mut HashSet<Url>,
+) -> bool {
+    if !seen.insert(ingot_url.clone()) {
+        return false;
+    }
+
+    let Some(ingot) = db.workspace().containing_ingot(db, ingot_url.clone()) else {
+        eprintln!("❌ Error: Could not resolve ingot {ingot_url}");
+        return true;
+    };
+
     if ingot.root_file(db).is_err() {
         eprintln!(
             "source files resolution error: `src` folder does not exist in the ingot directory"
@@ -148,11 +250,12 @@ fn check_ingot(
         }
     }
 
-    // Collect all dependencies with errors
     let mut dependency_errors = Vec::new();
-    for dependency_url in db.dependency_graph().dependency_urls(db, &ingot_url) {
+    for dependency_url in db.dependency_graph().dependency_urls(db, ingot_url) {
+        if !seen.insert(dependency_url.clone()) {
+            continue;
+        }
         let Some(ingot) = db.workspace().containing_ingot(db, dependency_url.clone()) else {
-            // Skip dependencies that can't be resolved
             continue;
         };
         let diags = db.run_on_ingot(ingot);
@@ -161,7 +264,6 @@ fn check_ingot(
         }
     }
 
-    // Print dependency errors if any exist
     if !dependency_errors.is_empty() {
         has_errors = true;
         if dependency_errors.len() == 1 {
@@ -177,6 +279,18 @@ fn check_ingot(
     }
 
     has_errors
+}
+
+fn manifest_at_path(path: &Utf8PathBuf) -> Result<Option<Manifest>, String> {
+    let manifest_path = path.join("fe.toml");
+    if !manifest_path.is_file() {
+        return Ok(None);
+    }
+    let content = std::fs::read_to_string(manifest_path.as_std_path())
+        .map_err(|err| format!("Failed to read {}: {err}", manifest_path))?;
+    let manifest = Manifest::parse(&content)
+        .map_err(|err| format!("Failed to parse {}: {err}", manifest_path))?;
+    Ok(Some(manifest))
 }
 
 fn print_dependency_info(db: &DriverDataBase, dependency_url: &Url) {

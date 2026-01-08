@@ -33,6 +33,7 @@ pub struct LocalFiles {
 pub enum DependencyLocation {
     Local(LocalFiles),
     Remote(RemoteFiles),
+    WorkspaceCurrent,
 }
 
 #[derive(Clone, Debug)]
@@ -47,6 +48,7 @@ impl Dependency {
         match &self.location {
             DependencyLocation::Local(local) => &local.url,
             DependencyLocation::Remote(remote) => &remote.source,
+            DependencyLocation::WorkspaceCurrent => panic!("workspace current has no URL"),
         }
     }
 }
@@ -57,6 +59,14 @@ pub struct ExternalDependencyEdge {
     pub alias: SmolStr,
     pub arguments: DependencyArguments,
     pub remote: RemoteFiles,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct WorkspaceMemberRecord {
+    pub name: SmolStr,
+    pub version: Option<Version>,
+    pub path: Utf8PathBuf,
+    pub url: Url,
 }
 
 pub use graph::DependencyGraph;
