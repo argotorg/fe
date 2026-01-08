@@ -1,26 +1,29 @@
 use std::{
+    cell::RefCell,
     collections::VecDeque,
     hash::{Hash, Hasher},
 };
 
 use hir::analysis::{
-    HirAnalysisDb,
     diagnostics::SpannedHirAnalysisDb,
     diagnostics::format_diags,
     ty::{
-        fold::{TyFoldable, TyFolder},
-        normalize::normalize_ty,
+        binder::Binder,
+        fold::TyFoldable,
+        normalize::TypeNormalizer,
         trait_def::resolve_trait_method_instance,
-        trait_resolution::PredicateListId,
         ty_check::check_func_body,
         ty_def::{TyBase, TyData, TyId},
     },
 };
-use hir::hir_def::{CallableDef, Func, HirIngot, PathKind, item::ItemKind, scope_graph::ScopeId};
+use hir::core::semantic::constraints_for;
+use hir::hir_def::{CallableDef, Func, PathKind, item::ItemKind, scope_graph::ScopeId};
 use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::{
-    CallOrigin, MirFunction, dedup::deduplicate_mir, ir::AddressSpaceKind, ir::EffectProviderKind,
+    CallOrigin, MirFunction, MirInst,
+    dedup::deduplicate_mir,
+    ir::{AddressSpaceKind, EffectProviderKind, Rvalue},
     lower::lower_function,
 };
 
@@ -80,20 +83,66 @@ enum CallTarget<'db> {
     Decl(Func<'db>),
 }
 
-impl<'db> InstanceKey<'db> {
-    /// Pack a function and its (possibly empty) substitution list for hashing.
+/// Monomorphization + normalization context for a single [`InstanceKey`].
+///
+/// This centralizes generic substitution and associated-type normalization so downstream MIR
+/// passes and codegen never need to special-case type folding.
+struct InstanceCtx<'db> {
+    db: &'db dyn SpannedHirAnalysisDb,
+    key: InstanceKey<'db>,
+    normalizer: RefCell<TypeNormalizer<'db>>,
+}
+
+impl<'db> InstanceCtx<'db> {
     fn new(
+        db: &'db dyn SpannedHirAnalysisDb,
         func: Func<'db>,
         args: &[TyId<'db>],
         receiver_space: Option<AddressSpaceKind>,
         effect_kinds: &[EffectProviderKind],
     ) -> Self {
-        Self {
+        let norm_scope = crate::ty::normalization_scope_for_args(db, func, args);
+        let assumptions_template = constraints_for(db, ItemKind::Func(func));
+
+        // Seed normalization with assumptions instantiated from the raw args, then re-instantiate
+        // using the normalized args so `assumptions` and `generic_args` stay aligned.
+        let seed_assumptions = Binder::bind(assumptions_template).instantiate(db, args);
+        let mut seed_normalizer = TypeNormalizer::new(db, norm_scope, seed_assumptions);
+        let normalized_args = args
+            .iter()
+            .copied()
+            .map(|ty| ty.fold_with(db, &mut seed_normalizer))
+            .collect::<Vec<_>>();
+
+        let assumptions = Binder::bind(assumptions_template).instantiate(db, &normalized_args);
+
+        let mut normalizer = TypeNormalizer::new(db, norm_scope, assumptions);
+        let assumptions = assumptions.fold_with(db, &mut normalizer);
+
+        let key = InstanceKey {
             func,
-            args: args.to_vec(),
+            args: normalized_args,
             receiver_space,
             effect_kinds: effect_kinds.to_vec(),
+        };
+
+        Self {
+            db,
+            key,
+            normalizer: RefCell::new(TypeNormalizer::new(db, norm_scope, assumptions)),
         }
+    }
+
+    fn instantiate_and_normalize<T: TyFoldable<'db>>(&self, value: T) -> T {
+        let b = Binder::bind(value).instantiate(self.db, &self.key.args);
+        b.fold_with(self.db, &mut *self.normalizer.borrow_mut())
+    }
+
+    fn instantiated_ret_ty(&self) -> TyId<'db> {
+        let ret_ty = CallableDef::Func(self.key.func)
+            .ret_ty(self.db)
+            .instantiate(self.db, &self.key.args);
+        ret_ty.fold_with(self.db, &mut *self.normalizer.borrow_mut())
     }
 }
 
@@ -204,8 +253,8 @@ impl<'db> Monomorphizer<'db> {
             let mut sites = Vec::new();
             for (bb_idx, block) in function.body.blocks.iter().enumerate() {
                 for (inst_idx, inst) in block.insts.iter().enumerate() {
-                    if let crate::MirInst::Assign {
-                        rvalue: crate::ir::Rvalue::Call(call),
+                    if let MirInst::Assign {
+                        rvalue: Rvalue::Call(call),
                         ..
                     } = inst
                         && let Some((target_func, args)) = self.resolve_call_target(call)
@@ -267,7 +316,8 @@ impl<'db> Monomorphizer<'db> {
                     Some(symbol)
                 }
                 CallTarget::Decl(func) => {
-                    Some(self.mangled_name(func, &args, receiver_space, &effect_kinds))
+                    let ctx = InstanceCtx::new(self.db, func, &args, receiver_space, &effect_kinds);
+                    Some(self.mangled_name(&ctx))
                 }
             };
 
@@ -276,8 +326,8 @@ impl<'db> Monomorphizer<'db> {
                     Some(inst_idx) => {
                         let inst =
                             &mut self.instances[func_idx].body.blocks[bb_idx].insts[inst_idx];
-                        if let crate::MirInst::Assign {
-                            rvalue: crate::ir::Rvalue::Call(call),
+                        if let MirInst::Assign {
+                            rvalue: Rvalue::Call(call),
                             ..
                         } = inst
                         {
@@ -320,29 +370,21 @@ impl<'db> Monomorphizer<'db> {
         receiver_space: Option<AddressSpaceKind>,
         effect_kinds: &[EffectProviderKind],
     ) -> Option<(usize, String)> {
-        let norm_scope = normalization_scope_for_args(self.db, func, args);
-        let assumptions = PredicateListId::empty_list(self.db);
-        let normalized_args: Vec<_> = args
-            .iter()
-            .copied()
-            .map(|ty| normalize_ty(self.db, ty, norm_scope, assumptions))
-            .collect();
-
-        let key = InstanceKey::new(func, &normalized_args, receiver_space, effect_kinds);
-        if let Some(&idx) = self.instance_map.get(&key) {
+        let ctx = InstanceCtx::new(self.db, func, args, receiver_space, effect_kinds);
+        if let Some(&idx) = self.instance_map.get(&ctx.key) {
             let symbol = self.instances[idx].symbol_name.clone();
             return Some((idx, symbol));
         }
 
-        let symbol_name = self.mangled_name(func, &normalized_args, receiver_space, effect_kinds);
+        let symbol_name = self.mangled_name(&ctx);
 
-        let instance = if args.is_empty() {
-            let template_idx = self.ensure_template(func, receiver_space, effect_kinds)?;
+        let mut instance = if ctx.key.args.is_empty() {
+            let template_idx =
+                self.ensure_template(func, ctx.key.receiver_space, &ctx.key.effect_kinds)?;
             let mut instance = self.templates[template_idx].clone();
-            instance.receiver_space = receiver_space;
-            instance.effect_provider_kinds = effect_kinds.to_vec();
+            instance.receiver_space = ctx.key.receiver_space;
+            instance.effect_provider_kinds = ctx.key.effect_kinds.clone();
             instance.symbol_name = symbol_name.clone();
-            self.apply_substitution(&mut instance);
             instance
         } else {
             let (diags, typed_body) = check_func_body(self.db, func);
@@ -351,38 +393,31 @@ impl<'db> Monomorphizer<'db> {
                 let rendered = format_diags(self.db, diags);
                 panic!("analysis errors while lowering `{name}`:\n{rendered}");
             }
-            let mut folder = ParamSubstFolder {
-                args: &normalized_args,
-            };
-            let typed_body = typed_body.clone().fold_with(self.db, &mut folder);
-
-            // After substitution, normalize any remaining associated types.
-            let mut normalizer = NormalizeFolder {
-                scope: norm_scope,
-                assumptions,
-            };
-            let typed_body = typed_body.fold_with(self.db, &mut normalizer);
+            let typed_body = ctx.instantiate_and_normalize(typed_body.clone());
             let mut instance = lower_function(
                 self.db,
                 func,
                 typed_body,
-                receiver_space,
-                effect_kinds.to_vec(),
-                normalized_args.clone(),
+                ctx.key.receiver_space,
+                ctx.key.effect_kinds.clone(),
+                ctx.key.args.clone(),
             )
             .unwrap_or_else(|err| {
                 let name = func.pretty_print_signature(self.db);
                 panic!("failed to instantiate MIR for `{name}`: {err}");
             });
-            instance.receiver_space = receiver_space;
-            instance.effect_provider_kinds = effect_kinds.to_vec();
+            instance.receiver_space = ctx.key.receiver_space;
+            instance.effect_provider_kinds = ctx.key.effect_kinds.clone();
             instance.symbol_name = symbol_name.clone();
             instance
         };
 
+        self.finalize_instance_types(&ctx, &mut instance);
+
         let idx = self.instances.len();
         let symbol = instance.symbol_name.clone();
         self.instances.push(instance);
+        let InstanceCtx { key, .. } = ctx;
         self.instance_map.insert(key, idx);
         self.worklist.push_back(idx);
         Some((idx, symbol))
@@ -451,66 +486,111 @@ impl<'db> Monomorphizer<'db> {
         None
     }
 
-    /// Substitute concrete type arguments directly into the MIR body values.
-    fn apply_substitution(&self, function: &mut MirFunction<'db>) {
-        let mut folder = ParamSubstFolder {
-            args: &function.generic_args,
-        };
+    fn finalize_instance_types(&self, ctx: &InstanceCtx<'db>, function: &mut MirFunction<'db>) {
+        function.generic_args = ctx.key.args.clone();
+        function.ret_ty = ctx.instantiated_ret_ty();
+        function.returns_value = !crate::layout::is_zero_sized_ty(self.db, function.ret_ty);
+        function.typed_body = ctx.instantiate_and_normalize(function.typed_body.clone());
+
+        for local in &mut function.body.locals {
+            local.ty = ctx.instantiate_and_normalize(local.ty);
+        }
 
         for value in &mut function.body.values {
-            value.ty = value.ty.fold_with(self.db, &mut folder);
-            if let crate::ValueOrigin::FuncItem(target) = &mut value.origin {
-                target.generic_args = target
-                    .generic_args
-                    .iter()
-                    .map(|ty| ty.fold_with(self.db, &mut folder))
-                    .collect();
-                target.symbol =
-                    Some(self.mangled_name(target.func, &target.generic_args, None, &[]));
+            value.ty = ctx.instantiate_and_normalize(value.ty);
+            match &mut value.origin {
+                crate::ValueOrigin::FuncItem(target) => {
+                    target.generic_args = target
+                        .generic_args
+                        .iter()
+                        .copied()
+                        .map(|ty| ctx.instantiate_and_normalize(ty))
+                        .collect();
+                    target.symbol = None;
+                }
+                crate::ValueOrigin::PlaceRef(place) => self.finalize_place_types(ctx, place),
+                _ => {}
             }
         }
 
         for block in &mut function.body.blocks {
             for inst in &mut block.insts {
-                if let crate::MirInst::Assign {
-                    rvalue: crate::ir::Rvalue::Call(call),
-                    ..
-                } = inst
-                {
-                    call.callable = call.callable.clone().fold_with(self.db, &mut folder);
-                    call.resolved_name = None;
+                match inst {
+                    MirInst::Assign { rvalue, .. } => match rvalue {
+                        Rvalue::Call(call) => {
+                            call.callable = ctx.instantiate_and_normalize(call.callable.clone());
+                            call.resolved_name = None;
+                        }
+                        Rvalue::Load { place } => self.finalize_place_types(ctx, place),
+                        _ => {}
+                    },
+                    MirInst::Store { place, .. } | MirInst::SetDiscriminant { place, .. } => {
+                        self.finalize_place_types(ctx, place);
+                    }
+                    MirInst::InitAggregate { place, inits } => {
+                        self.finalize_place_types(ctx, place);
+                        for (path, _) in inits {
+                            self.finalize_projection_path_types(ctx, path);
+                        }
+                    }
+                    MirInst::BindValue { .. } => {}
                 }
             }
 
             if let crate::Terminator::TerminatingCall(crate::ir::TerminatingCall::Call(call)) =
                 &mut block.terminator
             {
-                call.callable = call.callable.clone().fold_with(self.db, &mut folder);
+                call.callable = ctx.instantiate_and_normalize(call.callable.clone());
                 call.resolved_name = None;
             }
         }
     }
 
-    /// Produce a globally unique (yet mostly readable) symbol name per instance.
-    fn mangled_name(
+    fn finalize_place_types(&self, ctx: &InstanceCtx<'db>, place: &mut crate::ir::Place<'db>) {
+        self.finalize_projection_path_types(ctx, &mut place.projection);
+    }
+
+    fn finalize_projection_path_types(
         &self,
-        func: Func<'db>,
-        args: &[TyId<'db>],
-        receiver_space: Option<AddressSpaceKind>,
-        effect_kinds: &[EffectProviderKind],
-    ) -> String {
-        let mut base = self.base_name_without_disambiguation(func, receiver_space, effect_kinds);
+        ctx: &InstanceCtx<'db>,
+        path: &mut crate::ir::MirProjectionPath<'db>,
+    ) {
+        use hir::projection::Projection;
+        let old = std::mem::take(path);
+        for proj in old.iter() {
+            match proj {
+                Projection::VariantField {
+                    variant,
+                    enum_ty,
+                    field_idx,
+                } => {
+                    path.push(Projection::VariantField {
+                        variant: *variant,
+                        enum_ty: ctx.instantiate_and_normalize(*enum_ty),
+                        field_idx: *field_idx,
+                    });
+                }
+                _ => path.push(proj.clone()),
+            }
+        }
+    }
+
+    /// Produce a globally unique (yet mostly readable) symbol name per instance.
+    fn mangled_name(&self, ctx: &InstanceCtx<'db>) -> String {
+        let key = &ctx.key;
+        let mut base =
+            self.base_name_without_disambiguation(key.func, key.receiver_space, &key.effect_kinds);
         if self.ambiguous_bases.contains(&base) {
-            let qualifier = self.function_qualifier(func);
+            let qualifier = self.function_qualifier(key.func);
             base = format!("{qualifier}_{base}");
         }
-        if args.is_empty() {
+        if key.args.is_empty() {
             return base;
         }
 
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
-        let mut parts = Vec::with_capacity(args.len());
-        for ty in args {
+        let mut parts = Vec::with_capacity(key.args.len());
+        for ty in &key.args {
             let pretty = self.type_mangle_component(*ty);
             pretty.hash(&mut hasher);
             parts.push(sanitize_symbol_component(&pretty));
@@ -689,43 +769,6 @@ impl<'db> Monomorphizer<'db> {
         }
         Some(idx)
     }
-}
-
-/// Simple folder that replaces `TyParam` occurrences with the concrete args for
-/// the instance under construction.
-struct ParamSubstFolder<'db, 'a> {
-    args: &'a [TyId<'db>],
-}
-
-impl<'db> TyFolder<'db> for ParamSubstFolder<'db, '_> {
-    fn fold_ty(&mut self, db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> TyId<'db> {
-        match ty.data(db) {
-            TyData::TyParam(param) => self.args.get(param.idx).copied().unwrap_or(ty),
-            _ => ty.super_fold_with(db, self),
-        }
-    }
-}
-
-struct NormalizeFolder<'db> {
-    scope: ScopeId<'db>,
-    assumptions: PredicateListId<'db>,
-}
-
-impl<'db> TyFolder<'db> for NormalizeFolder<'db> {
-    fn fold_ty(&mut self, db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> TyId<'db> {
-        normalize_ty(db, ty, self.scope, self.assumptions)
-    }
-}
-
-fn normalization_scope_for_args<'db>(
-    db: &'db dyn HirAnalysisDb,
-    func: Func<'db>,
-    args: &[TyId<'db>],
-) -> ScopeId<'db> {
-    args.iter()
-        .find_map(|ty| ty.ingot(db))
-        .map(|ingot| ingot.root_mod(db).scope())
-        .unwrap_or_else(|| func.scope())
 }
 
 /// Replace any non-alphanumeric characters with `_` so the mangled symbol is a

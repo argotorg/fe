@@ -88,7 +88,7 @@ fn selector_match(v0: u256) -> u256:
   bb5:
     switch v1 [151146943 => bb1, 2066295049 => bb3] else bb4
 
-fn mem_ptr__mem__RawMem_Foo__19292a5189c12f79(v0: Self, v1: u256) -> MemPtr<T>:
+fn mem_ptr__mem__RawMem_Foo__19292a5189c12f79(v0: mem: RawMem, v1: u256) -> MemPtr<T>:
   bb0:
     ret v1
 
@@ -100,29 +100,29 @@ fn bump__eff_mem(v0: u256) -> ():
     store mem[v0].1 = (v2 + 2)
     ret
 
-fn stor_ptr__sto__RawStorage_Foo__b1b82e9d4c608c02(v0: Self, v1: u256) -> StorPtr<T>:
+fn stor_ptr__sto__RawStorage_Foo__b1b82e9d4c608c02(v0: sto: RawStorage, v1: u256) -> StorPtr<T>:
   bb0:
     ret v1
 
-fn stor_ptr__sto__RawStorage_StorageMap_u256__u256___6212d4158f52b2b2(v0: Self, v1: u256) -> StorPtr<T>:
+fn stor_ptr__sto__RawStorage_StorageMap_u256__u256___6212d4158f52b2b2(v0: sto: RawStorage, v1: u256) -> StorPtr<T>:
   bb0:
     ret v1
 
-fn storagemap_k__v__get_stor__u256_u256__cc308d1bea3fb6e4(v0: StorageMap<K, V>, v1: K) -> V:
+fn storagemap_k__v__get_stor__u256_u256__cc308d1bea3fb6e4(v0: StorageMap<u256, u256>, v1: u256) -> V:
   bb0:
     v2: u256 = storagemap_k__v__storage_slot_stor__u256_u256__cc308d1bea3fb6e4(v0, v1)
     v3: u256 = sload(v2)
     v4: u256 = u256_wordrepr_from_word(v3)
     ret v4
 
-fn storagemap_k__v__set_stor__u256_u256__cc308d1bea3fb6e4(v0: StorageMap<K, V>, v1: K, v2: V) -> ():
+fn storagemap_k__v__set_stor__u256_u256__cc308d1bea3fb6e4(v0: StorageMap<u256, u256>, v1: u256, v2: u256) -> ():
   bb0:
     v3: u256 = storagemap_k__v__storage_slot_stor__u256_u256__cc308d1bea3fb6e4(v0, v1)
     v4: u256 = u256_wordrepr_to_word(v2)
     eval sstore(v3, v4)
     ret
 
-fn storagemap_k__v__storage_slot_stor__u256_u256__cc308d1bea3fb6e4(v0: StorageMap<K, V>, v1: K) -> u256:
+fn storagemap_k__v__storage_slot_stor__u256_u256__cc308d1bea3fb6e4(v0: StorageMap<u256, u256>, v1: u256) -> u256:
   bb0:
     v2: u256 = mload(64)
     v3: u256 = u256_storagekey_write_key(v2, v1)

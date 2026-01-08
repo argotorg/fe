@@ -1,5 +1,6 @@
 ---
 source: crates/mir/tests/lowering_snapshots.rs
+assertion_line: 26
 expression: mir_output
 ---
 fn example(v0: u256) -> u32:
@@ -7,6 +8,6 @@ fn example(v0: u256) -> u32:
     v1: u32 = foo__u256__3271ca15373d4483(v0)
     ret v1
 
-fn foo__u256__3271ca15373d4483(v0: Self) -> u32:
+fn foo__u256__3271ca15373d4483(v0: u256) -> u32:
   bb0:
     ret 10

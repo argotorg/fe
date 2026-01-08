@@ -1,5 +1,6 @@
 ---
 source: crates/codegen/tests/yul.rs
+assertion_line: 42
 expression: output
 input_file: tests/fixtures/create_contract.fe
 ---
@@ -274,20 +275,20 @@ object "Factory" {
         let v2 := solencoder_abiencoder_finish(v0)
         let v3 := mload(v2)
         let v4 := mload(add(v2, 32))
-        evm_contracthost_return_bytes(self, v3, v4)
+        evm_contracthost_return_bytes(0, v3, v4)
       }
       function runtime_decoder__Evm_Sol__2533f5c49b57a682(self) -> ret {
-        let v0 := evm_contracthost_input(self)
+        let v0 := evm_contracthost_input(0)
         let v1 := sol_abi_decoder_with_base__CallData__b9ab8dc8a4b2f9e(v0, 4)
         ret := v1
         leave
       }
       function runtime_selector__Evm_Sol__2533f5c49b57a682(self) -> ret {
-        let v0 := evm_contracthost_input(self)
+        let v0 := evm_contracthost_input(0)
         let v1 := calldata_byteinput_len(v0)
         let v2 := lt(v1, 4)
         if v2 {
-          evm_contracthost_abort(self)
+          evm_contracthost_abort(0)
         }
         let v3 := calldata_byteinput_word_at(v0, 0)
         let v4 := sol_abi_selector_from_prefix(v3)
@@ -480,7 +481,7 @@ object "Factory" {
           leave
         }
         function init_field__Evm_Pair__9b3d1e5de783f256(self, slot) -> ret {
-          let v0 := evm_contracthost_field__Pair__f889f9d568bc82f1(self, slot)
+          let v0 := evm_contracthost_field__Pair__f889f9d568bc82f1(0, slot)
           ret := v0
           leave
         }
@@ -609,17 +610,17 @@ object "Factory" {
             leave
           }
           function runtime_decoder__Evm_Sol__2533f5c49b57a682(self) -> ret {
-            let v0 := evm_contracthost_input(self)
+            let v0 := evm_contracthost_input(0)
             let v1 := sol_abi_decoder_with_base__CallData__b9ab8dc8a4b2f9e(v0, 4)
             ret := v1
             leave
           }
           function runtime_selector__Evm_Sol__2533f5c49b57a682(self) -> ret {
-            let v0 := evm_contracthost_input(self)
+            let v0 := evm_contracthost_input(0)
             let v1 := calldata_byteinput_len(v0)
             let v2 := lt(v1, 4)
             if v2 {
-              evm_contracthost_abort(self)
+              evm_contracthost_abort(0)
             }
             let v3 := calldata_byteinput_word_at(v0, 0)
             let v4 := sol_abi_selector_from_prefix(v3)

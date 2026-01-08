@@ -33,22 +33,31 @@ pub fn normalize_ty<'db>(
     scope: ScopeId<'db>,
     assumptions: PredicateListId<'db>,
 ) -> TyId<'db> {
-    let mut normalizer = TypeNormalizer {
-        db,
-        scope,
-        assumptions,
-        cache: FxHashMap::default(),
-    };
-
+    let mut normalizer = TypeNormalizer::new(db, scope, assumptions);
     ty.fold_with(db, &mut normalizer)
 }
 
-struct TypeNormalizer<'db> {
+pub struct TypeNormalizer<'db> {
     db: &'db dyn HirAnalysisDb,
     scope: ScopeId<'db>,
     assumptions: PredicateListId<'db>,
     // Projection cache: None = in progress (cycle guard), Some(ty) = normalized result
     cache: FxHashMap<AssocTy<'db>, Option<TyId<'db>>>,
+}
+
+impl<'db> TypeNormalizer<'db> {
+    pub fn new(
+        db: &'db dyn HirAnalysisDb,
+        scope: ScopeId<'db>,
+        assumptions: PredicateListId<'db>,
+    ) -> Self {
+        Self {
+            db,
+            scope,
+            assumptions,
+            cache: FxHashMap::default(),
+        }
+    }
 }
 
 impl<'db> TyFolder<'db> for TypeNormalizer<'db> {

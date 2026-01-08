@@ -36,6 +36,10 @@ pub struct MirFunction<'db> {
     pub typed_body: TypedBody<'db>,
     /// Concrete generic arguments used to instantiate this function instance.
     pub generic_args: Vec<TyId<'db>>,
+    /// Return type after monomorphization and associated-type normalization.
+    pub ret_ty: TyId<'db>,
+    /// Whether this function has a runtime return value (`ret_ty` is not zero-sized).
+    pub returns_value: bool,
     /// Effect provider kinds for this instance, indexed by effect param position.
     pub effect_provider_kinds: Vec<EffectProviderKind>,
     /// Optional contract association declared via attributes.

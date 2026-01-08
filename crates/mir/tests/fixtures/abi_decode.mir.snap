@@ -11,7 +11,7 @@ fn decode_u256() -> u256:
     v2: u256 = u256_decode_decode__Sol_SolDecoder_CallData___828c6f2e3bda3cab(v0)
     ret v2
 
-fn soldecoder_i__new__CallData__b9ab8dc8a4b2f9e(v0: I) -> SolDecoder<I>:
+fn soldecoder_i__new__CallData__b9ab8dc8a4b2f9e(v0: CallData) -> SolDecoder<I>:
   bb0:
     v1: Cursor<CallData> = cursor_i__new__CallData__b9ab8dc8a4b2f9e(v0)
     v3: SolDecoder<CallData> = alloc mem
@@ -19,19 +19,19 @@ fn soldecoder_i__new__CallData__b9ab8dc8a4b2f9e(v0: I) -> SolDecoder<I>:
     v2: SolDecoder<CallData> = v3
     ret v2
 
-fn u256_decode_decode__Sol_SolDecoder_CallData___828c6f2e3bda3cab(v0: D) -> u256:
+fn u256_decode_decode__Sol_SolDecoder_CallData___828c6f2e3bda3cab(v0: SolDecoder<CallData>) -> u256:
   bb0:
     v1: u256 = soldecoder_i__abidecoder_read_word__CallData__b9ab8dc8a4b2f9e(v0)
     ret v1
 
-fn cursor_i__new__CallData__b9ab8dc8a4b2f9e(v0: I) -> Cursor<I>:
+fn cursor_i__new__CallData__b9ab8dc8a4b2f9e(v0: CallData) -> Cursor<I>:
   bb0:
     v2: Cursor<CallData> = alloc mem
     init mem[v2] { .0 = v0, .1 = 0 }
     v1: Cursor<CallData> = v2
     ret v1
 
-fn soldecoder_i__abidecoder_read_word__CallData__b9ab8dc8a4b2f9e(v0: SolDecoder<I>) -> u256:
+fn soldecoder_i__abidecoder_read_word__CallData__b9ab8dc8a4b2f9e(v0: SolDecoder<CallData>) -> u256:
   bb0:
     v1: u256 = calldata_byteinput_len(&mem[&mem[v0].0].0)
     v3: u256 = load mem[&mem[v0].0].1

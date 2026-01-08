@@ -259,11 +259,19 @@ pub(crate) fn lower_function<'db>(
         });
     }
 
+    // Note: `MirFunction` may be used as a generic template during monomorphization.
+    // Monomorphic instances get a fully-instantiated + normalized `ret_ty` in the
+    // monomorphizer; this is the declared return type.
+    let ret_ty = func.return_ty(db);
+    let returns_value = !crate::layout::is_zero_sized_ty(db, ret_ty);
+
     Ok(MirFunction {
         func,
         body: mir_body,
         typed_body,
         generic_args,
+        ret_ty,
+        returns_value,
         effect_provider_kinds: effect_provider_kinds_for_func,
         contract_function,
         symbol_name,

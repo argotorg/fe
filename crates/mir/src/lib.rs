@@ -8,6 +8,7 @@ pub mod layout;
 mod lower;
 mod monomorphize;
 mod transform;
+mod ty;
 
 pub use ir::{
     BasicBlockId, CallOrigin, LocalData, LocalId, LoopInfo, MirBody, MirFunction, MirInst,
