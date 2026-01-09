@@ -77,8 +77,8 @@ impl Encode<Sol> for MapMsg::SetAllowance {
 }
 
 struct BalanceMapStore {
-    balances: StorageMap<u256, u256>,
-    allowances: StorageMap<u256, u256>,
+    balances: StorageMap<u256, u256, 0>,
+    allowances: StorageMap<u256, u256, 1>,
 }
 
 pub contract BalanceMap {

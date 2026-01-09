@@ -97,8 +97,8 @@ impl Encode<Sol> for Erc20Extended::Mint {
 
 struct TokenStore {
     total_supply: u256,
-    balances: StorageMap<Address, u256>,
-    allowances: StorageMap<(Address, Address), u256>,
+    balances: StorageMap<Address, u256, 0>,
+    allowances: StorageMap<(Address, Address), u256, 1>,
 }
 
 pub contract CoolCoin uses (ctx: Ctx) {
