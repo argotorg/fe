@@ -1,0 +1,101 @@
+---
+source: crates/codegen/tests/yul.rs
+expression: desugared
+---
+use core::prelude::*
+
+mod Msg {
+    use core::prelude::*
+    use super::*
+
+    pub struct Bump {}
+
+    impl core::message::MsgVariant<std::abi::Sol> for Bump {
+        type Args = ()
+        type Return = u256
+        const SELECTOR: u32 = 1
+    }
+
+    impl Bump {
+        pub fn decode(mut _ d: std::abi::sol::SolDecoder<std::evm::calldata::CallData>) -> Self {
+            return Self {  }
+        }
+    
+    }
+}
+
+struct Wrap {
+    inner: u256,
+}
+
+fn bump() uses (mut w: Wrap) {
+    w.inner += 1
+}
+
+mod __NewtypeByPlaceEffectArg {
+    use super::*
+    use core::contracts::ContractHost
+    use core::contracts::Target
+    use core::abi::Abi
+    use core::abi::AbiEncoder
+    use core::abi::AbiSize
+    use core::abi::ByteInput
+    use core::abi::prefix
+    use core::abi::Encode
+    use std::evm::EvmTarget
+
+    type __Target = EvmTarget
+
+    type __RootEffect = __Target::RootEffect
+
+    type __DefaultAbi = __Target::DefaultAbi
+
+    fn recv_Msg_Bump_0_0(args: Msg::Bump::Args) -> u256 uses (mut w: Wrap, mut x: u256) {
+        return {
+            bump()
+            x += 1
+            x
+        }
+    }
+
+    fn init_contract() {
+        return {}
+    }
+
+    #[contract_init(NewtypeByPlaceEffectArg)]
+    fn init() uses (mut root: __RootEffect) {
+        let mut x = root.init_field<u256>(core::contract_field_slot(0))
+        let mut w = root.init_field<Wrap>(core::contract_field_slot(1))
+        let mut __d = __DefaultAbi::decoder_new(root.init_input(runtime))
+        init_contract()
+        root.create_contract(runtime)
+    }
+
+    #[contract_runtime(NewtypeByPlaceEffectArg)]
+    fn runtime() uses (mut root: __RootEffect) {
+        let mut x = root.field<u256>(core::contract_field_slot(0))
+        let mut w = root.field<Wrap>(core::contract_field_slot(1))
+        let __selector = root.runtime_selector<__DefaultAbi>()
+        let mut __d = root.runtime_decoder<__DefaultAbi>()
+        match __selector {
+            Msg::Bump::SELECTOR => {
+                let __args: Msg::Bump::Args = Msg::Bump::Args::decode(__d)
+                let __result = with (Wrap = w, u256 = x) { recv_Msg_Bump_0_0(__args) }
+                root.return_value<__DefaultAbi, u256>(__result)
+            },
+            _ => root.abort(),
+        }
+    }
+
+    impl std::evm::Contract for NewtypeByPlaceEffectArg {
+        type InitArgs = ()
+    
+        fn init_code_offset() -> u256 {
+            return std::evm::code_region_offset(init)
+        }
+    
+        fn init_code_len() -> u256 {
+            return std::evm::code_region_len(init)
+        }
+    }
+}

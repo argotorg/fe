@@ -1,0 +1,85 @@
+---
+source: crates/codegen/tests/yul.rs
+expression: output
+input_file: tests/fixtures/match_tuple_binding.fe
+---
+function match_tuple_extract(t) -> ret {
+  let v0 := 0
+  let v1 := and(mload(t), 0xff)
+  switch v1
+    case 0 {
+      let v2 := and(mload(add(t, 1)), 0xff)
+      let v3 := v2
+      v0 := v3
+    }
+    default {
+      let v4 := and(mload(add(t, 1)), 0xff)
+      switch v4
+        case 0 {
+          let v5 := and(mload(t), 0xff)
+          let v6 := v5
+          v0 := v6
+        }
+        default {
+          let v7 := and(mload(t), 0xff)
+          let v8 := v7
+          let v9 := and(mload(add(t, 1)), 0xff)
+          let v10 := v9
+          v0 := add(v8, v10)
+        }
+    }
+  ret := v0
+  leave
+}
+function match_nested_extract(t) -> ret {
+  let v0 := 0
+  let v1 := and(mload(add(t, 1)), 0xff)
+  switch v1
+    case 0 {
+      let v2 := and(mload(t), 0xff)
+      switch v2
+        case 0 {
+          let v3 := and(mload(add(t, 2)), 0xff)
+          let v4 := v3
+          v0 := v4
+        }
+        default {
+          let v5 := and(mload(add(t, 2)), 0xff)
+          switch v5
+            case 0 {
+              let v6 := and(mload(add(t, 1)), 0xff)
+              let v7 := v6
+              let v8 := and(mload(t), 0xff)
+              let v9 := v8
+              v0 := add(v9, v7)
+            }
+            default {
+              let v10 := and(mload(t), 0xff)
+              let v11 := v10
+              let v12 := and(mload(add(t, 2)), 0xff)
+              let v13 := v12
+              v0 := add(v11, v13)
+            }
+        }
+    }
+    default {
+      let v14 := and(mload(add(t, 2)), 0xff)
+      switch v14
+        case 0 {
+          let v15 := and(mload(add(t, 1)), 0xff)
+          let v16 := v15
+          let v17 := and(mload(t), 0xff)
+          let v18 := v17
+          v0 := add(v18, v16)
+        }
+        default {
+          let v19 := and(mload(t), 0xff)
+          let v20 := v19
+          let v21 := and(mload(add(t, 2)), 0xff)
+          let v22 := v21
+          v0 := add(v20, v22)
+        }
+    }
+  ret := v0
+  leave
+}

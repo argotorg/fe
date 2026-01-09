@@ -1,0 +1,210 @@
+use std::evm::{Address, Evm, Call, StorageMap, Ctx}
+use std::evm::effects::assert
+use core::abi::{Abi, AbiEncoder, AbiSize, Encode}
+use std::abi::Sol
+
+msg Erc20 {
+    #[selector = 0x06fdde03]
+    Name -> u256,
+    #[selector = 0x95d89b41]
+    Symbol -> u256,
+    #[selector = 0x313ce567]
+    Decimals -> u8,
+    #[selector = 0x18160ddd]
+    TotalSupply -> u256,
+    #[selector = 0x70a08231]
+    BalanceOf { account: Address } -> u256,
+    #[selector = 0xdd62ed3e]
+    Allowance { owner: Address, spender: Address } -> u256,
+    #[selector = 0xa9059cbb]
+    Transfer { to: Address, amount: u256 } -> bool,
+    #[selector = 0x095ea7b3]
+    Approve { spender: Address, amount: u256 } -> bool,
+    #[selector = 0x23b872dd]
+    TransferFrom { from: Address, to: Address, amount: u256 } -> bool,
+    #[selector = 0xeeeeeeee]
+    WhoAmI -> u256,
+}
+
+msg Erc20Extended {
+    #[selector = 0x40c10f19]
+    Mint { to: Address, amount: u256 } -> bool,
+}
+
+// Boilerplate for Erc20 variants
+impl AbiSize for Erc20::Name { const ENCODED_SIZE: u256 = 0 }
+impl Encode<Sol> for Erc20::Name { fn encode<E: AbiEncoder<Sol>>(self, mut _ e: E) {} }
+
+impl AbiSize for Erc20::Symbol { const ENCODED_SIZE: u256 = 0 }
+impl Encode<Sol> for Erc20::Symbol { fn encode<E: AbiEncoder<Sol>>(self, mut _ e: E) {} }
+
+impl AbiSize for Erc20::Decimals { const ENCODED_SIZE: u256 = 0 }
+impl Encode<Sol> for Erc20::Decimals { fn encode<E: AbiEncoder<Sol>>(self, mut _ e: E) {} }
+
+impl AbiSize for Erc20::TotalSupply { const ENCODED_SIZE: u256 = 0 }
+impl Encode<Sol> for Erc20::TotalSupply { fn encode<E: AbiEncoder<Sol>>(self, mut _ e: E) {} }
+
+impl AbiSize for Erc20::BalanceOf { const ENCODED_SIZE: u256 = 32 }
+impl Encode<Sol> for Erc20::BalanceOf {
+    fn encode<E: AbiEncoder<Sol>>(self, mut _ e: E) {
+        self.account.encode(e)
+    }
+}
+
+impl AbiSize for Erc20::Allowance { const ENCODED_SIZE: u256 = 64 }
+impl Encode<Sol> for Erc20::Allowance {
+    fn encode<E: AbiEncoder<Sol>>(self, mut _ e: E) {
+        self.owner.encode(e)
+        self.spender.encode(e)
+    }
+}
+
+impl AbiSize for Erc20::Transfer { const ENCODED_SIZE: u256 = 64 }
+impl Encode<Sol> for Erc20::Transfer {
+    fn encode<E: AbiEncoder<Sol>>(self, mut _ e: E) {
+        self.to.encode(e)
+        self.amount.encode(e)
+    }
+}
+
+impl AbiSize for Erc20::Approve { const ENCODED_SIZE: u256 = 64 }
+impl Encode<Sol> for Erc20::Approve {
+    fn encode<E: AbiEncoder<Sol>>(self, mut _ e: E) {
+        self.spender.encode(e)
+        self.amount.encode(e)
+    }
+}
+
+impl AbiSize for Erc20::TransferFrom { const ENCODED_SIZE: u256 = 96 }
+impl Encode<Sol> for Erc20::TransferFrom {
+    fn encode<E: AbiEncoder<Sol>>(self, mut _ e: E) {
+        self.from.encode(e)
+        self.to.encode(e)
+        self.amount.encode(e)
+    }
+}
+
+impl AbiSize for Erc20::WhoAmI { const ENCODED_SIZE: u256 = 0 }
+impl Encode<Sol> for Erc20::WhoAmI { fn encode<E: AbiEncoder<Sol>>(self, mut _ e: E) {} }
+
+impl AbiSize for Erc20Extended::Mint { const ENCODED_SIZE: u256 = 64 }
+impl Encode<Sol> for Erc20Extended::Mint {
+    fn encode<E: AbiEncoder<Sol>>(self, mut _ e: E) {
+        self.to.encode(e)
+        self.amount.encode(e)
+    }
+}
+
+struct TokenStore {
+    total_supply: u256,
+    balances: StorageMap<Address, u256, 0>,
+    allowances: StorageMap<(Address, Address), u256, 1>,
+}
+
+pub contract CoolCoin uses (ctx: Ctx) {
+    mut store: TokenStore
+
+    init(initial_supply: u256, owner: Address) uses (mut store) {
+        if initial_supply > 0 {
+            store.total_supply = initial_supply
+            store.balances.set(key: owner, value: initial_supply)
+        }
+    }
+
+    recv Erc20 {
+        Name -> u256 { 0x436f6f6c436f696e }
+        Symbol -> u256 { 0x434f4f4c }
+        Decimals -> u8 { 18 }
+        TotalSupply -> u256 uses store { store.total_supply }
+        BalanceOf { account } -> u256 uses store { store.balances.get(key: account) }
+        Allowance { owner, spender } -> u256 uses store { store.allowances.get(key: (owner, spender)) }
+
+        WhoAmI -> u256 uses ctx {
+            return ctx.caller().inner
+        }
+
+        Transfer { to, amount } -> bool uses (mut store, ctx) {
+            let sender = ctx.caller()
+            let sender_bal = store.balances.get(key: sender)
+            if sender_bal < amount {
+                return false
+            }
+            store.balances.set(key: sender, value: sender_bal - amount)
+            store.balances.set(key: to, value: store.balances.get(key: to) + amount)
+            return true
+        }
+
+        Approve { spender, amount } -> bool uses (mut store, ctx) {
+            let sender = ctx.caller()
+            store.allowances.set(key: (sender, spender), value: amount)
+            return true
+        }
+
+        TransferFrom { from, to, amount } -> bool uses (mut store, ctx) {
+            let spender = ctx.caller()
+            let allowed = store.allowances.get(key: (from, spender))
+            if allowed < amount {
+                return false
+            }
+            let from_bal = store.balances.get(key: from)
+            if from_bal < amount {
+                return false
+            }
+            store.allowances.set(key: (from, spender), value: allowed - amount)
+            store.balances.set(key: from, value: from_bal - amount)
+            store.balances.set(key: to, value: store.balances.get(key: to) + amount)
+            return true
+        }
+    }
+
+    recv Erc20Extended {
+        Mint { to, amount } -> bool uses (mut store) {
+            store.total_supply += amount
+            store.balances.set(key: to, value: store.balances.get(key: to) + amount)
+            return true
+        }
+    }
+}
+
+#[test]
+fn test_erc20() uses (mut evm: Evm) {
+    let owner = Address { inner: 1 }
+    let alice = Address { inner: 2 }
+    let bob = Address { inner: 3 }
+
+    let initial_supply: u256 = 1000
+    let contract_addr = evm.create2<CoolCoin>(value: 0, args: (initial_supply, owner), salt: 0)
+    assert(contract_addr.inner != 0)
+
+    // Check initial state
+    let total: u256 = evm.call(addr: contract_addr, gas: 100000, value: 0, message: Erc20::TotalSupply {})
+    assert(total == 1000)
+
+    let bal_owner: u256 = evm.call(addr: contract_addr, gas: 100000, value: 0, message: Erc20::BalanceOf { account: owner })
+    assert(bal_owner == 1000)
+
+    // Determine my address (the test runner)
+    let me_inner: u256 = evm.call(addr: contract_addr, gas: 100000, value: 0, message: Erc20::WhoAmI {})
+    let me = Address { inner: me_inner }
+
+    // Mint to me so I can transfer
+    evm.call(addr: contract_addr, gas: 100000, value: 0, message: Erc20Extended::Mint { to: me, amount: 500 })
+
+    // Transfer 50 to Alice
+    let res: bool = evm.call(addr: contract_addr, gas: 100000, value: 0, message: Erc20::Transfer { to: alice, amount: 50 })
+    assert(res == true)
+
+    // Check Alice balance
+    let bal_alice: u256 = evm.call(addr: contract_addr, gas: 100000, value: 0, message: Erc20::BalanceOf { account: alice })
+    assert(bal_alice == 50)
+
+    // Check my balance
+    let bal_me: u256 = evm.call(addr: contract_addr, gas: 100000, value: 0, message: Erc20::BalanceOf { account: me })
+    assert(bal_me == 450)
+
+    // Approve Alice to spend 100 from Me
+    evm.call(addr: contract_addr, gas: 100000, value: 0, message: Erc20::Approve { spender: alice, amount: 100 })
+
+    let allow: u256 = evm.call(addr: contract_addr, gas: 100000, value: 0, message: Erc20::Allowance { owner: me, spender: alice })
+    assert(allow == 100)
+}

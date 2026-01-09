@@ -1,34 +1,18 @@
 use driver::DriverDataBase;
-use hir::{
-    analysis::{
-        name_resolution::{PathRes, resolve_path},
-        ty::{
-            adt_def::AdtRef,
-            trait_resolution::PredicateListId,
-            ty_def::{PrimTy, TyBase, TyData, TyId, prim_int_bits},
-        },
-    },
-    hir_def::{Body, Expr, ExprId, Partial, Pat, PatId, PathId, Stmt, StmtId},
-};
-use mir::MirFunction;
-use rustc_hash::FxHashMap;
+use mir::{BasicBlockId, MirFunction, Terminator};
+use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::yul::{doc::YulDoc, errors::YulError, state::BlockState};
 
-use super::util::function_name;
+use super::util::{escape_yul_reserved, function_name};
 
 /// Emits Yul for a single MIR function.
 pub(super) struct FunctionEmitter<'db> {
     pub(super) db: &'db DriverDataBase,
     pub(super) mir_func: &'db MirFunction<'db>,
-    body: Body<'db>,
-    /// Temporaries allocated for expression values that must be re-used later (e.g. struct ptrs).
-    pub(super) expr_temps: FxHashMap<ExprId, String>,
-    pub(super) match_values: FxHashMap<ExprId, String>,
-    /// Number of MIR references per value so we can avoid evaluating them twice.
-    pub(super) value_use_counts: Vec<usize>,
     /// Mapping from monomorphized function symbols to code region labels.
     pub(super) code_regions: &'db FxHashMap<String, String>,
+    ipdom: Vec<Option<BasicBlockId>>,
 }
 
 impl<'db> FunctionEmitter<'db> {
@@ -44,79 +28,27 @@ impl<'db> FunctionEmitter<'db> {
         mir_func: &'db MirFunction<'db>,
         code_regions: &'db FxHashMap<String, String>,
     ) -> Result<Self, YulError> {
-        let body = mir_func
-            .func
-            .body(db)
-            .ok_or_else(|| YulError::MissingBody(function_name(db, mir_func.func)))?;
-        let value_use_counts = Self::collect_value_use_counts(&mir_func.body);
+        if mir_func.func.body(db).is_none() {
+            return Err(YulError::MissingBody(function_name(db, mir_func.func)));
+        }
+        let ipdom = compute_immediate_postdominators(&mir_func.body);
         Ok(Self {
             db,
             mir_func,
-            body,
-            expr_temps: FxHashMap::default(),
-            match_values: FxHashMap::default(),
-            value_use_counts,
             code_regions,
+            ipdom,
         })
     }
 
-    /// Counts how many MIR instructions/terminators use each `ValueId`.
-    fn collect_value_use_counts(body: &mir::MirBody<'db>) -> Vec<usize> {
-        let mut counts = vec![0; body.values.len()];
-        for block in &body.blocks {
-            for inst in &block.insts {
-                match inst {
-                    mir::MirInst::Let { value, .. } => {
-                        if let Some(value) = value {
-                            counts[value.index()] += 1;
-                        }
-                    }
-                    mir::MirInst::Assign { value, .. }
-                    | mir::MirInst::AugAssign { value, .. }
-                    | mir::MirInst::Eval { value, .. }
-                    | mir::MirInst::EvalExpr { value, .. } => {
-                        counts[value.index()] += 1;
-                    }
-                    mir::MirInst::IntrinsicStmt { args, .. } => {
-                        for arg in args {
-                            counts[arg.index()] += 1;
-                        }
-                    }
-                }
-            }
-            match &block.terminator {
-                mir::Terminator::Return(Some(value)) => counts[value.index()] += 1,
-                mir::Terminator::ReturnData { offset, size } => {
-                    counts[offset.index()] += 1;
-                    counts[size.index()] += 1;
-                }
-                mir::Terminator::Revert { offset, size } => {
-                    counts[offset.index()] += 1;
-                    counts[size.index()] += 1;
-                }
-                mir::Terminator::Branch { cond, .. } => counts[cond.index()] += 1,
-                mir::Terminator::Switch { discr, .. } => counts[discr.index()] += 1,
-                mir::Terminator::Return(None)
-                | mir::Terminator::Goto { .. }
-                | mir::Terminator::Unreachable => {}
-            }
-        }
-        counts
+    pub(super) fn ipdom(&self, block: BasicBlockId) -> Option<BasicBlockId> {
+        self.ipdom.get(block.index()).copied().flatten()
     }
 
-    /// Produces the final Yul docs for the current MIR function, including any prologue
-    /// needed to seed effect bindings (e.g. storage base pointer for contract entrypoints).
-    ///
-    /// Returns the document tree containing a single Yul `function` block or a
-    /// [`YulError`] when lowering fails.
+    /// Produces the final Yul docs for the current MIR function.
     pub(super) fn emit_doc(mut self) -> Result<Vec<YulDoc>, YulError> {
         let func_name = self.mir_func.symbol_name.as_str();
-        let (param_names, mut state, mut prologue) = self.init_function_state()?;
-        let mut body_docs = self.emit_block(self.mir_func.body.entry, &mut state)?;
-        if !prologue.is_empty() {
-            prologue.append(&mut body_docs);
-            body_docs = prologue;
-        }
+        let (param_names, mut state) = self.init_entry_state();
+        let body_docs = self.emit_block(self.mir_func.body.entry, &mut state)?;
         let function_doc = YulDoc::block(
             format!(
                 "{} ",
@@ -127,56 +59,35 @@ impl<'db> FunctionEmitter<'db> {
         Ok(vec![function_doc])
     }
 
-    /// Initializes the `BlockState` with parameter bindings, returning Yul parameter names,
-    /// the populated block state, and any prologue statements needed to seed effect bindings
-    /// (contract entrypoints get a synthesized storage pointer; other functions take effects
-    /// as explicit parameters).
-    pub(super) fn init_function_state(
-        &self,
-    ) -> Result<(Vec<String>, BlockState, Vec<YulDoc>), YulError> {
+    /// Initializes the `BlockState` with parameter bindings.
+    ///
+    /// Returns:
+    /// - the Yul function parameter names (in signature order)
+    /// - the initial block state mapping MIR locals to those names
+    fn init_entry_state(&self) -> (Vec<String>, BlockState) {
         let mut state = BlockState::new();
         let mut params_out = Vec::new();
-        for (idx, param) in self.mir_func.func.params(self.db).enumerate() {
-            let original = param
-                .name(self.db)
-                .map(|id| id.data(self.db).to_string())
-                .unwrap_or_else(|| format!("arg{idx}"));
-            let yul_name = original.clone();
-            params_out.push(yul_name.clone());
-            state.insert_binding(original, yul_name);
+        let mut used_names = FxHashSet::default();
+        for &local in &self.mir_func.body.param_locals {
+            let raw_name = self.mir_func.body.local(local).name.clone();
+            let name = unique_yul_name(&raw_name, &mut used_names);
+            params_out.push(name.clone());
+            state.insert_local(local, name);
         }
-        let mut prologue = Vec::new();
-        let effect_params: Vec<_> = self.mir_func.func.effect_params(self.db).collect();
-        let is_contract_entry = self.mir_func.contract_function.is_some();
-        if is_contract_entry {
-            let mut storage_offset = 0u64;
-            for effect in effect_params {
-                let binding = self.effect_binding_name(effect);
-                let temp = state.alloc_local();
-                state.insert_binding(binding.clone(), temp.clone());
-                let base = self.storage_base_ptr_expr();
-                let ptr_expr = if storage_offset == 0 {
-                    base.to_string()
-                } else {
-                    format!("add({base}, {storage_offset})")
-                };
-                prologue.push(YulDoc::line(format!("let {temp} := {ptr_expr}")));
-                let stride = self.effect_size_bytes(effect, &binding)?;
-                storage_offset = storage_offset.saturating_add(stride);
-            }
-        } else {
-            for effect in effect_params {
-                let binding = self.effect_binding_name(effect);
+        if self.mir_func.contract_function.is_none() {
+            for &local in &self.mir_func.body.effect_param_locals {
+                let raw_name = self.mir_func.body.local(local).name.clone();
+                let binding = unique_yul_name(&raw_name, &mut used_names);
                 params_out.push(binding.clone());
-                state.insert_binding(binding.clone(), binding);
+                state.insert_local(local, binding);
             }
         }
-        Ok((params_out, state, prologue))
+        (params_out, state)
     }
 
     /// Returns true if the Fe function has a return type.
     pub(super) fn returns_value(&self) -> bool {
-        self.mir_func.func.has_explicit_return_ty(self.db)
+        self.mir_func.returns_value
     }
 
     /// Formats the Fe function name and parameters into a Yul signature.
@@ -189,159 +100,116 @@ impl<'db> FunctionEmitter<'db> {
             format!("function {func_name}({params_str}){ret_suffix}")
         }
     }
+}
 
-    /// Extracts the identifier bound by a pattern.
-    pub(super) fn pattern_ident(&self, pat_id: PatId) -> Result<String, YulError> {
-        let pat = self.expect_pat(pat_id)?;
-        match pat {
-            Pat::Path(path, _) => self
-                .path_ident(*path)
-                .ok_or_else(|| YulError::Unsupported("unsupported pattern path".into())),
-            _ => Err(YulError::Unsupported(
-                "only identifier patterns are supported".into(),
-            )),
-        }
+fn unique_yul_name(raw_name: &str, used: &mut FxHashSet<String>) -> String {
+    let base = escape_yul_reserved(raw_name);
+    let mut candidate = base.clone();
+    let mut suffix = 0;
+    while used.contains(&candidate) {
+        suffix += 1;
+        candidate = format!("{base}_{suffix}");
+    }
+    used.insert(candidate.clone());
+    candidate
+}
+
+fn compute_immediate_postdominators(body: &mir::MirBody<'_>) -> Vec<Option<BasicBlockId>> {
+    let blocks_len = body.blocks.len();
+    let exit = blocks_len;
+    let node_count = blocks_len + 1;
+    let words = node_count.div_ceil(64);
+    let last_mask = if node_count.is_multiple_of(64) {
+        !0u64
+    } else {
+        (1u64 << (node_count % 64)) - 1
+    };
+
+    fn set_bit(bits: &mut [u64], idx: usize) {
+        bits[idx / 64] |= 1u64 << (idx % 64);
     }
 
-    /// Resolves an expression that should represent a path (e.g. assignment target).
-    pub(super) fn path_from_expr(&self, expr_id: ExprId) -> Result<String, YulError> {
-        let expr = self.expect_expr(expr_id)?;
-        if let Expr::Path(path) = expr {
-            self.path_ident(*path)
-                .ok_or_else(|| YulError::Unsupported("unsupported assignment target".into()))
+    fn clear_bit(bits: &mut [u64], idx: usize) {
+        bits[idx / 64] &= !(1u64 << (idx % 64));
+    }
+
+    fn has_bit(bits: &[u64], idx: usize) -> bool {
+        (bits[idx / 64] & (1u64 << (idx % 64))) != 0
+    }
+
+    fn popcount(bits: &[u64]) -> u32 {
+        bits.iter().map(|w| w.count_ones()).sum()
+    }
+
+    let mut postdom: Vec<Vec<u64>> = vec![vec![0u64; words]; node_count];
+    for (idx, p) in postdom.iter_mut().enumerate() {
+        if idx == exit {
+            set_bit(p, exit);
         } else {
-            Err(YulError::Unsupported(
-                "only identifier assignments are supported".into(),
-            ))
+            p.fill(!0u64);
+            *p.last_mut().expect("postdom bitset") &= last_mask;
         }
     }
 
-    /// Returns the identifier name represented by a path, if it is a plain ident.
-    pub(super) fn path_ident(&self, path: Partial<PathId<'_>>) -> Option<String> {
-        let path = path.to_opt()?;
-        path.as_ident(self.db)
-            .map(|id| id.data(self.db).to_string())
-    }
+    let mut changed = true;
+    while changed {
+        changed = false;
+        for b in 0..blocks_len {
+            let successors: Vec<usize> = match &body.blocks[b].terminator {
+                Terminator::Goto { target } => vec![target.index()],
+                Terminator::Branch {
+                    then_bb, else_bb, ..
+                } => vec![then_bb.index(), else_bb.index()],
+                Terminator::Switch {
+                    targets, default, ..
+                } => {
+                    let mut s: Vec<_> = targets.iter().map(|t| t.block.index()).collect();
+                    s.push(default.index());
+                    s
+                }
+                Terminator::Return(..)
+                | Terminator::TerminatingCall(_)
+                | Terminator::Unreachable => vec![exit],
+            };
 
-    /// Fetches the expression from HIR, converting missing data into `YulError`.
-    pub(super) fn expect_expr(&self, expr_id: ExprId) -> Result<&Expr<'db>, YulError> {
-        match expr_id.data(self.db, self.body) {
-            Partial::Present(expr) => Ok(expr),
-            Partial::Absent => Err(YulError::Unsupported("expression data unavailable".into())),
-        }
-    }
-
-    /// Fetches the pattern from HIR, converting missing data into `YulError`.
-    pub(super) fn expect_pat(&self, pat_id: PatId) -> Result<&Pat<'db>, YulError> {
-        match pat_id.data(self.db, self.body) {
-            Partial::Present(pat) => Ok(pat),
-            Partial::Absent => Err(YulError::Unsupported("unsupported pattern".into())),
-        }
-    }
-
-    /// Fetches the statement from HIR, converting missing data into `YulError`.
-    pub(super) fn expect_stmt(&self, stmt_id: StmtId) -> Result<&Stmt<'db>, YulError> {
-        match stmt_id.data(self.db, self.body) {
-            Partial::Present(stmt) => Ok(stmt),
-            Partial::Absent => Err(YulError::Unsupported("statement data unavailable".into())),
-        }
-    }
-
-    /// Computes the binding name for an effect parameter, following the same fallback
-    /// logic used during type checking (explicit name, otherwise the key ident, otherwise `_effect`).
-    pub(super) fn effect_binding_name(
-        &self,
-        effect: hir::core::semantic::EffectParamView<'db>,
-    ) -> String {
-        if let Some(name) = effect.name(self.db) {
-            name.data(self.db).to_string()
-        } else if let Some(path) = effect.key_path(self.db)
-            && let Some(ident) = path.as_ident(self.db)
-        {
-            ident.data(self.db).to_string()
-        } else {
-            "_effect".to_string()
-        }
-    }
-
-    /// Returns the Yul expression used as the storage base pointer for contract entrypoints.
-    pub(super) fn storage_base_ptr_expr(&self) -> &'static str {
-        "0"
-    }
-
-    /// Computes the byte size of an effect's storage type to space out bindings.
-    ///
-    /// Returns an error if the effect type cannot be resolved or its size cannot be computed.
-    fn effect_size_bytes(
-        &self,
-        effect: hir::core::semantic::EffectParamView<'db>,
-        binding_name: &str,
-    ) -> Result<u64, YulError> {
-        let key_path = effect.key_path(self.db).ok_or_else(|| {
-            YulError::Unsupported(format!(
-                "cannot determine storage size for effect `{binding_name}`: missing type path"
-            ))
-        })?;
-        let scope = effect.func().scope();
-        let path_res = resolve_path(
-            self.db,
-            key_path,
-            scope,
-            PredicateListId::empty_list(self.db),
-            false,
-        )
-        .map_err(|_| {
-            YulError::Unsupported(format!(
-                "cannot determine storage size for effect `{binding_name}`: failed to resolve type"
-            ))
-        })?;
-        let ty = match path_res {
-            PathRes::Ty(ty) | PathRes::TyAlias(_, ty) => ty,
-            _ => {
-                return Err(YulError::Unsupported(format!(
-                    "cannot determine storage size for effect `{binding_name}`: path does not resolve to a type"
-                )));
+            let mut new_bits = vec![!0u64; words];
+            new_bits[words - 1] &= last_mask;
+            for succ in successors {
+                for w in 0..words {
+                    new_bits[w] &= postdom[succ][w];
+                }
             }
-        };
-        self.ty_size_bytes(ty).ok_or_else(|| {
-            YulError::Unsupported(format!(
-                "cannot determine storage size for effect `{binding_name}`: unsupported type"
-            ))
-        })
-    }
+            new_bits[words - 1] &= last_mask;
+            set_bit(&mut new_bits, b);
 
-    /// Best-effort byte size computation for types used as storage effects.
-    fn ty_size_bytes(&self, ty: TyId<'db>) -> Option<u64> {
-        // Handle tuples first (check base type for TyApp cases)
-        if ty.is_tuple(self.db) {
-            let mut size = 0u64;
-            for field_ty in ty.field_types(self.db) {
-                size += self.ty_size_bytes(field_ty)?;
-            }
-            return Some(size);
-        }
-
-        // Handle primitives
-        if let TyData::TyBase(TyBase::Prim(prim)) = ty.base_ty(self.db).data(self.db) {
-            if *prim == PrimTy::Bool {
-                return Some(1);
-            }
-            if let Some(bits) = prim_int_bits(*prim) {
-                return Some((bits / 8) as u64);
+            if new_bits != postdom[b] {
+                postdom[b] = new_bits;
+                changed = true;
             }
         }
-
-        // Handle ADT types (structs) - use adt_def() which handles TyApp
-        if let Some(adt_def) = ty.adt_def(self.db)
-            && matches!(adt_def.adt_ref(self.db), AdtRef::Struct(_))
-        {
-            let mut size = 0u64;
-            for field_ty in ty.field_types(self.db) {
-                size += self.ty_size_bytes(field_ty)?;
-            }
-            return Some(size);
-        }
-
-        None
     }
+
+    let mut ipdom = vec![None; blocks_len];
+    for b in 0..blocks_len {
+        let mut candidates = postdom[b].clone();
+        clear_bit(&mut candidates, b);
+        clear_bit(&mut candidates, exit);
+
+        let mut best = None;
+        let mut best_size = 0u32;
+        #[allow(clippy::needless_range_loop)]
+        for c in 0..blocks_len {
+            if !has_bit(&candidates, c) {
+                continue;
+            }
+            let size = popcount(&postdom[c]);
+            if size > best_size || (size == best_size && best.is_some_and(|best| c < best)) {
+                best = Some(c);
+                best_size = size;
+            }
+        }
+        ipdom[b] = best.map(|idx| BasicBlockId(idx as u32));
+    }
+
+    ipdom
 }

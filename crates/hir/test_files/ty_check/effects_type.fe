@@ -4,7 +4,7 @@ pub struct Storage {
 
 pub fn example() {
     let mut st = Storage { value: 0 }
-    with (Storage = st) {
+    with (st) {
         mint_twice(5)
     }
 }

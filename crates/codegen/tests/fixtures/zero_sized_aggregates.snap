@@ -1,0 +1,48 @@
+---
+source: crates/codegen/tests/yul.rs
+expression: output
+input_file: tests/fixtures/zero_sized_aggregates.fe
+---
+function tuple_with_empty() -> ret {
+  let v0 := 5
+  let v1 := mload(0x40)
+  if iszero(v1) {
+    v1 := 0x80
+  }
+  mstore(0x40, add(v1, 32))
+  pop(v1)
+  mstore(v1, v0)
+  let v2 := v1
+  let v3 := mload(v2)
+  ret := v3
+  leave
+}
+function tuple_only_empty() {
+  leave
+}
+function struct_with_empty() -> ret {
+  let v0 := 7
+  let v1 := mload(0x40)
+  if iszero(v1) {
+    v1 := 0x80
+  }
+  mstore(0x40, add(v1, 32))
+  pop(v1)
+  mstore(v1, v0)
+  let v2 := v1
+  let v3 := mload(v2)
+  ret := v3
+  leave
+}
+function empty_field_assign() {
+  let v0 := mload(0x40)
+  if iszero(v0) {
+    v0 := 0x80
+  }
+  mstore(0x40, add(v0, 32))
+  pop(v0)
+  mstore(v0, 1)
+  let v1 := v0
+  pop(v1)
+  leave
+}

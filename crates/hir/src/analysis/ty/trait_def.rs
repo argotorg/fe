@@ -26,7 +26,6 @@ use super::{
     unify::UnificationTable,
 };
 use crate::analysis::HirAnalysisDb;
-use crate::hir_def::CallableDef;
 
 /// Returns [`TraitEnv`] for the given ingot.
 #[salsa::tracked(return_ref, cycle_fn=ingot_trait_env_cycle_recover, cycle_initial=ingot_trait_env_cycle_initial)]
@@ -90,14 +89,71 @@ pub fn resolve_trait_method<'db>(
     inst: TraitInstId<'db>,
     method: IdentId<'db>,
 ) -> Option<Func<'db>> {
-    let ingot = inst.def(db).ingot(db);
     let canonical = Canonical::new(db, inst);
-    for implementor in impls_for_trait(db, ingot, canonical) {
-        let implementor = implementor.instantiate_identity();
-        if let Some(callable) = implementor.methods(db).get(&method)
-            && let CallableDef::Func(func) = callable
-        {
-            return Some(*func);
+
+    // Search Self's ingot, and the trait's ingot.
+    for ingot in [inst.self_ty(db).ingot(db), Some(inst.def(db).ingot(db))] {
+        let Some(ingot) = ingot else { continue };
+
+        for implementor in impls_for_trait(db, ingot, canonical) {
+            let implementor = implementor.instantiate_identity();
+            if let Some(&func) = implementor.methods(db).get(&method) {
+                return Some(func);
+            }
+        }
+    }
+    None
+}
+
+/// Resolves the concrete HIR function that implements `method` for the given
+/// trait instance, returning both the function and the impl's instantiated
+/// generic arguments.
+pub fn resolve_trait_method_instance<'db>(
+    db: &'db dyn HirAnalysisDb,
+    inst: TraitInstId<'db>,
+    method: IdentId<'db>,
+) -> Option<(Func<'db>, Vec<TyId<'db>>)> {
+    // Normalize the trait instance arguments before searching for implementors.
+    //
+    // This is important for cases where the `Self` type is an associated type
+    // projection (e.g. `<Sol as Abi>::Decoder<I>`). Without normalization, the
+    // projection has no declaring ingot, which prevents us from searching the
+    // ingot that contains the actual implementor type (e.g. `SolDecoder<I>`).
+    //
+    // Monomorphization happens with concrete substitutions, so we can safely
+    // normalize using an ingot picked from the instantiated arguments.
+    let norm_scope = inst
+        .self_ty(db)
+        .ingot(db)
+        .or_else(|| inst.args(db).iter().find_map(|arg| arg.ingot(db)))
+        .map(|ingot| ingot.root_mod(db).scope())
+        .unwrap_or_else(|| {
+            // Fall back to the trait definition's ingot.
+            inst.def(db).ingot(db).root_mod(db).scope()
+        });
+    let assumptions = PredicateListId::empty_list(db);
+    let inst = inst.normalize(db, norm_scope, assumptions);
+
+    let canonical = Canonical::new(db, inst);
+
+    // Search Self's ingot, and the trait's ingot.
+    for ingot in [inst.self_ty(db).ingot(db), Some(inst.def(db).ingot(db))] {
+        let Some(ingot) = ingot else { continue };
+
+        for implementor in impls_for_trait(db, ingot, canonical) {
+            let mut table = UnificationTable::new(db);
+            let implementor = table.instantiate_with_fresh_vars(*implementor);
+            if table.unify(implementor.trait_(db), inst).is_err() {
+                continue;
+            }
+            if let Some(func) = implementor.methods(db).get(&method) {
+                let impl_args = implementor
+                    .params(db)
+                    .iter()
+                    .map(|&ty| ty.fold_with(db, &mut table))
+                    .collect::<Vec<_>>();
+                return Some((*func, impl_args));
+            }
         }
     }
     None
@@ -213,6 +269,50 @@ pub(crate) fn impls_for_ty<'db>(
         .collect()
 }
 
+/// Looks up the HIR body for an associated const defined in the selected trait impl, if unique.
+pub fn assoc_const_body_for_trait_inst<'db>(
+    db: &'db dyn HirAnalysisDb,
+    inst: TraitInstId<'db>,
+    const_name: IdentId<'db>,
+) -> Option<crate::hir_def::Body<'db>> {
+    let mut match_body: Option<crate::hir_def::Body<'db>> = None;
+    let canonical_self_ty = Canonical::new(db, inst.self_ty(db));
+
+    for ingot in [inst.self_ty(db).ingot(db), Some(inst.def(db).ingot(db))] {
+        let Some(ingot) = ingot else { continue };
+        for implementor in impls_for_ty(db, ingot, canonical_self_ty).iter() {
+            // Instantiate and unify against the requested trait instance. This allows
+            // associated const lookups to work for generic impls like
+            // `impl<const N: usize> AbiSize for String<N>`.
+            let mut table = UnificationTable::new(db);
+            let implementor = table.instantiate_with_fresh_vars(*implementor);
+            if table.unify(implementor.trait_(db), inst).is_err() {
+                continue;
+            }
+
+            let hir_impl = implementor.hir_impl_trait(db);
+            let Some(def) = hir_impl
+                .hir_consts(db)
+                .iter()
+                .find(|c| c.name.to_opt() == Some(const_name))
+            else {
+                continue;
+            };
+
+            let Some(body) = def.value.to_opt() else {
+                continue;
+            };
+
+            match match_body {
+                None => match_body = Some(body),
+                Some(existing) if existing == body => {}
+                Some(_) => return None,
+            }
+        }
+    }
+    match_body
+}
+
 /// Represents the trait environment of an ingot, which maintain all trait
 /// implementors which can be used in the ingot.
 #[derive(Debug, PartialEq, Eq, Clone, Update)]
@@ -314,7 +414,7 @@ impl<'db> ImplementorId<'db> {
     pub(crate) fn methods(
         self,
         db: &'db dyn HirAnalysisDb,
-    ) -> &'db IndexMap<IdentId<'db>, CallableDef<'db>> {
+    ) -> &'db IndexMap<IdentId<'db>, Func<'db>> {
         collect_implementor_methods(db, self)
     }
 
@@ -329,7 +429,7 @@ impl<'db> ImplementorId<'db> {
         let trait_methods = self.trait_def(db).method_defs(db);
         let mut required_methods: IndexSet<_> = trait_methods
             .iter()
-            .filter_map(|(name, &trait_method)| (!trait_method.has_body(db)).then_some(*name))
+            .filter_map(|(name, &trait_method)| trait_method.body(db).is_none().then_some(*name))
             .collect();
 
         for (name, impl_m) in impl_methods {
@@ -344,7 +444,13 @@ impl<'db> ImplementorId<'db> {
                 );
                 continue;
             };
-            compare_impl_method(db, *impl_m, *trait_m, self.trait_(db), &mut diags);
+            compare_impl_method(
+                db,
+                impl_m.as_callable(db).unwrap(),
+                trait_m.as_callable(db).unwrap(),
+                self.trait_(db),
+                &mut diags,
+            );
             required_methods.remove(name);
         }
 

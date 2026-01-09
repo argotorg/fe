@@ -1,0 +1,30 @@
+enum Color {
+    Red,
+    Green,
+    Blue
+}
+
+// Simple wildcard as catch-all
+pub fn match_with_wildcard(c: Color) -> u8 {
+    match c {
+        Color::Red => 1
+        _ => 0
+    }
+}
+
+// Wildcard in the middle
+pub fn wildcard_not_last(x: u8) -> u8 {
+    match x {
+        0 => 10
+        _ => 99
+    }
+}
+
+// Multiple specific cases before wildcard
+pub fn multiple_before_wildcard(c: Color) -> u8 {
+    match c {
+        Color::Red => 1
+        Color::Green => 2
+        _ => 3
+    }
+}

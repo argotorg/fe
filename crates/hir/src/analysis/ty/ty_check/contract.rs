@@ -4,7 +4,7 @@
 //! recv blocks, and recv arm bodies.
 use rustc_hash::{FxHashMap, FxHashSet};
 
-use super::{TypedBody, check_body_owner, owner::BodyOwner};
+use super::{TypedBody, owner::BodyOwner};
 
 use crate::{
     analysis::{
@@ -14,21 +14,22 @@ use crate::{
             adt_def::AdtRef,
             canonical::Canonical,
             corelib::resolve_core_trait,
-            diagnostics::{BodyDiag, FuncBodyDiag},
+            diagnostics::{BodyDiag, FuncBodyDiag, TraitConstraintDiag, TyDiagCollection},
+            normalize::normalize_ty,
+            trait_def::TraitInstId,
             trait_def::impls_for_ty,
-            trait_resolution::PredicateListId,
+            trait_resolution::{GoalSatisfiability, PredicateListId, is_goal_satisfiable},
+            ty_check::check_body,
             ty_def::TyId,
         },
     },
     hir_def::{Contract, IdentId, ItemKind, Mod, PathId, Struct, scope_graph::ScopeId},
     span::{DynLazySpan, path::LazyPathSpan},
 };
+use common::{indexmap::IndexMap, ingot::IngotKind};
 
-/// Result of resolving a variant path in a recv arm.
-#[derive(Debug, Clone, Copy)]
-pub enum VariantResolution<'db> {
-    /// Successfully resolved to a valid msg variant.
-    Ok(ResolvedRecvVariant<'db>),
+#[allow(clippy::enum_variant_names)]
+pub enum VariantResError<'db> {
     /// Path doesn't resolve at all.
     NotFound,
     /// Path resolves to a type that doesn't implement MsgVariant.
@@ -50,6 +51,117 @@ fn implements_msg_variant<'db>(db: &'db dyn HirAnalysisDb, struct_: Struct<'db>)
     impls_for_ty(db, ingot, canonical_ty)
         .iter()
         .any(|impl_| impl_.skip_binder().trait_def(db).eq(&msg_variant_trait))
+}
+
+fn resolve_sol_abi_ty<'db>(
+    db: &'db dyn HirAnalysisDb,
+    scope: ScopeId<'db>,
+    assumptions: PredicateListId<'db>,
+) -> Option<TyId<'db>> {
+    let ingot = scope.ingot(db);
+    let std_root = if ingot.kind(db) == IngotKind::Std {
+        IdentId::make_ingot(db)
+    } else {
+        IdentId::new(db, "std".to_string())
+    };
+
+    let sol_path = PathId::from_ident(db, std_root)
+        .push_ident(db, IdentId::new(db, "abi".to_string()))
+        .push_ident(db, IdentId::new(db, "Sol".to_string()));
+
+    match resolve_path(db, sol_path, scope, assumptions, false).ok()? {
+        PathRes::Ty(ty) | PathRes::TyAlias(_, ty) => Some(ty),
+        _ => None,
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn check_ty_decodable<'db>(
+    db: &'db dyn HirAnalysisDb,
+    contract_ingot: common::ingot::Ingot<'db>,
+    decode_trait: crate::hir_def::Trait<'db>,
+    sol_ty: TyId<'db>,
+    ty: TyId<'db>,
+    span: DynLazySpan<'db>,
+    assumptions: PredicateListId<'db>,
+    diags: &mut Vec<FuncBodyDiag<'db>>,
+) {
+    if ty.has_invalid(db) {
+        return;
+    }
+
+    if ty.is_tuple(db) {
+        for elem in ty.field_types(db) {
+            check_ty_decodable(
+                db,
+                contract_ingot,
+                decode_trait,
+                sol_ty,
+                elem,
+                span.clone(),
+                assumptions,
+                diags,
+            );
+        }
+        return;
+    }
+
+    if ty.has_var(db) {
+        return;
+    }
+
+    let inst = TraitInstId::new(db, decode_trait, vec![ty, sol_ty], IndexMap::new());
+    let canonical_inst = Canonical::new(db, inst);
+
+    if let GoalSatisfiability::UnSat(_) =
+        is_goal_satisfiable(db, contract_ingot, canonical_inst, assumptions)
+    {
+        diags.push(
+            TyDiagCollection::from(TraitConstraintDiag::TraitBoundNotSat {
+                span,
+                primary_goal: inst,
+                unsat_subgoal: None,
+            })
+            .into(),
+        );
+    }
+}
+
+fn check_recv_variant_param_types_decodable<'db>(
+    db: &'db dyn HirAnalysisDb,
+    contract: Contract<'db>,
+    variant: ResolvedRecvVariant<'db>,
+    span: DynLazySpan<'db>,
+    assumptions: PredicateListId<'db>,
+    diags: &mut Vec<FuncBodyDiag<'db>>,
+) {
+    let contract_ingot = contract.top_mod(db).ingot(db);
+
+    let Some(sol_ty) = resolve_sol_abi_ty(db, contract.scope(), assumptions) else {
+        return;
+    };
+    let decode_trait = resolve_core_trait(db, contract.scope(), &["abi", "Decode"]);
+
+    let msg_variant_trait = resolve_core_trait(db, contract.scope(), &["message", "MsgVariant"]);
+    let msg_variant_inst = TraitInstId::new(
+        db,
+        msg_variant_trait,
+        vec![variant.ty, sol_ty],
+        IndexMap::new(),
+    );
+
+    let args_assoc = TyId::assoc_ty(db, msg_variant_inst, IdentId::new(db, "Args".to_string()));
+    let args_ty = normalize_ty(db, args_assoc, contract.scope(), assumptions);
+    check_ty_decodable(
+        db,
+        contract_ingot,
+        decode_trait,
+        sol_ty,
+        args_ty,
+        span,
+        assumptions,
+        diags,
+    );
 }
 
 /// Returns all variant structs in a msg module (structs that implement MsgVariant).
@@ -74,18 +186,15 @@ pub struct ResolvedRecvVariant<'db> {
 }
 
 /// Resolves a variant path within a msg module.
-/// First tries to resolve from the msg module's scope (for short names like `Transfer`).
-/// If that fails, tries from the contract scope (for qualified paths like `OtherMsg::Foo`).
-/// Returns a `VariantResolution` indicating success or the specific failure reason.
 pub fn resolve_variant_in_msg<'db>(
     db: &'db dyn HirAnalysisDb,
     msg_mod: Mod<'db>,
     variant_path: PathId<'db>,
     assumptions: PredicateListId<'db>,
-) -> VariantResolution<'db> {
+) -> Result<ResolvedRecvVariant<'db>, VariantResError<'db>> {
     let Ok(PathRes::Ty(ty)) = resolve_path(db, variant_path, msg_mod.scope(), assumptions, false)
     else {
-        return VariantResolution::NotFound;
+        return Err(VariantResError::NotFound);
     };
 
     if let Some(adt_def) = ty.adt_def(db)
@@ -95,15 +204,15 @@ pub fn resolve_variant_in_msg<'db>(
         if let Some(parent) = struct_.scope().parent(db)
             && parent == ScopeId::Item(ItemKind::Mod(msg_mod))
         {
-            return VariantResolution::Ok(ResolvedRecvVariant {
+            return Ok(ResolvedRecvVariant {
                 variant_struct: struct_,
                 ty,
             });
         }
-        return VariantResolution::NotVariantOfMsg(ty);
+        return Err(VariantResError::NotVariantOfMsg(ty));
     }
     // Resolved to a type but it doesn't implement MsgVariant
-    VariantResolution::NotMsgVariant(ty)
+    Err(VariantResError::NotMsgVariant(ty))
 }
 
 /// Resolves a variant path in a bare recv block (no msg module specified).
@@ -113,22 +222,22 @@ pub fn resolve_variant_bare<'db>(
     contract: Contract<'db>,
     variant_path: PathId<'db>,
     assumptions: PredicateListId<'db>,
-) -> VariantResolution<'db> {
+) -> Result<ResolvedRecvVariant<'db>, VariantResError<'db>> {
     match resolve_path(db, variant_path, contract.scope(), assumptions, false) {
         Ok(PathRes::Ty(ty)) => {
             if let Some(adt_def) = ty.adt_def(db)
                 && let AdtRef::Struct(s) = adt_def.adt_ref(db)
                 && implements_msg_variant(db, s)
             {
-                return VariantResolution::Ok(ResolvedRecvVariant {
+                return Ok(ResolvedRecvVariant {
                     variant_struct: s,
                     ty,
                 });
             }
             // Resolved to a type but it doesn't implement MsgVariant
-            VariantResolution::NotMsgVariant(ty)
+            Err(VariantResError::NotMsgVariant(ty))
         }
-        _ => VariantResolution::NotFound,
+        _ => Err(VariantResError::NotFound),
     }
 }
 
@@ -184,6 +293,7 @@ fn check_named_recv_block<'db>(
     let mut seen = FxHashMap::<TyId<'db>, DynLazySpan<'db>>::default();
     // Use Struct for exhaustiveness checking (tracks which base structs are covered)
     let mut covered = FxHashSet::<Struct<'db>>::default();
+    let mut checked_decode = FxHashSet::<Struct<'db>>::default();
 
     // Get msg name for diagnostics
     let Some(msg_name) = msg_mod.name(db).to_opt() else {
@@ -198,7 +308,7 @@ fn check_named_recv_block<'db>(
         };
 
         match resolve_variant_in_msg(db, msg_mod, path, assumptions) {
-            VariantResolution::Ok(resolved) => {
+            Ok(resolved) => {
                 let Some(ident) = resolved.variant_struct.name(db).to_opt() else {
                     continue;
                 };
@@ -217,8 +327,18 @@ fn check_named_recv_block<'db>(
                 }
 
                 covered.insert(resolved.variant_struct);
+                if checked_decode.insert(resolved.variant_struct) {
+                    check_recv_variant_param_types_decodable(
+                        db,
+                        contract,
+                        resolved,
+                        pat_span.clone(),
+                        assumptions,
+                        diags,
+                    );
+                }
             }
-            VariantResolution::NotVariantOfMsg(ty) => {
+            Err(VariantResError::NotVariantOfMsg(ty)) => {
                 // Type implements MsgVariant but is not a child of this msg module
                 diags.push(
                     BodyDiag::RecvArmNotVariantOfMsg {
@@ -229,7 +349,7 @@ fn check_named_recv_block<'db>(
                     .into(),
                 );
             }
-            VariantResolution::NotMsgVariant(ty) => {
+            Err(VariantResError::NotMsgVariant(ty)) => {
                 // Type doesn't implement MsgVariant
                 diags.push(
                     BodyDiag::RecvArmNotMsgVariantTrait {
@@ -239,7 +359,7 @@ fn check_named_recv_block<'db>(
                     .into(),
                 );
             }
-            VariantResolution::NotFound => {
+            Err(VariantResError::NotFound) => {
                 // Path doesn't resolve at all - use the generic error
                 diags.push(
                     BodyDiag::RecvArmNotMsgVariant {
@@ -288,6 +408,7 @@ fn check_bare_recv_block<'db>(
 
     // Use TyId as key to correctly handle generic types like GenericMsg<u8> vs GenericMsg<u16>
     let mut seen = FxHashMap::<TyId<'db>, DynLazySpan<'db>>::default();
+    let mut checked_decode = FxHashSet::<Struct<'db>>::default();
 
     for (arm_idx, arm) in recv.arms.data(db).iter().enumerate() {
         let pat_span: DynLazySpan<'db> = recv_span.clone().arms().arm(arm_idx).pat().into();
@@ -297,7 +418,7 @@ fn check_bare_recv_block<'db>(
         };
 
         match resolve_variant_bare(db, contract, path, assumptions) {
-            VariantResolution::Ok(resolved) => {
+            Ok(resolved) => {
                 let Some(ident) = resolved.variant_struct.name(db).to_opt() else {
                     continue;
                 };
@@ -314,8 +435,19 @@ fn check_bare_recv_block<'db>(
                 } else {
                     seen.insert(resolved.ty, pat_span.clone());
                 }
+
+                if checked_decode.insert(resolved.variant_struct) {
+                    check_recv_variant_param_types_decodable(
+                        db,
+                        contract,
+                        resolved,
+                        pat_span.clone(),
+                        assumptions,
+                        diags,
+                    );
+                }
             }
-            VariantResolution::NotMsgVariant(ty) => {
+            Err(VariantResError::NotMsgVariant(ty)) => {
                 // Type doesn't implement MsgVariant
                 diags.push(
                     BodyDiag::RecvArmNotMsgVariantTrait {
@@ -325,11 +457,11 @@ fn check_bare_recv_block<'db>(
                     .into(),
                 );
             }
-            VariantResolution::NotVariantOfMsg(_) => {
+            Err(VariantResError::NotVariantOfMsg(_)) => {
                 // This shouldn't happen in bare recv blocks
                 unreachable!("NotVariantOfMsg should not occur in bare recv blocks");
             }
-            VariantResolution::NotFound => {
+            Err(VariantResError::NotFound) => {
                 // Path doesn't resolve - this will be caught by name resolution
                 // We don't emit a recv-specific error here
             }
@@ -429,9 +561,7 @@ pub fn check_contract_recv_blocks<'db>(
                     continue;
                 };
 
-                if let VariantResolution::Ok(resolved) =
-                    resolve_variant_bare(db, contract, path, assumptions)
-                {
+                if let Ok(resolved) = resolve_variant_bare(db, contract, path, assumptions) {
                     let Some(variant_name) = resolved.variant_struct.name(db).to_opt() else {
                         continue;
                     };
@@ -554,17 +684,12 @@ pub fn check_contract_recv_arm_body<'db>(
     recv_idx: u32,
     arm_idx: u32,
 ) -> (Vec<FuncBodyDiag<'db>>, TypedBody<'db>) {
-    let recv = contract.recvs(db).data(db).get(recv_idx as usize).unwrap();
-    let arm = *recv.arms.data(db).get(arm_idx as usize).unwrap();
-
-    check_body_owner(
+    check_body(
         db,
         BodyOwner::ContractRecvArm {
             contract,
             recv_idx,
             arm_idx,
-            msg_path: recv.msg_path,
-            arm,
         },
     )
 }

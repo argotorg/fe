@@ -11,10 +11,13 @@ pub use self::contract::{
     check_contract_recv_arm_body, check_contract_recv_block, check_contract_recv_blocks,
 };
 pub use self::path::RecordLike;
+use crate::analysis::ty::fold::TyFoldable;
+use crate::analysis::ty::visitor::TyVisitable;
+use crate::hir_def::CallableDef;
 use crate::{
     hir_def::{
-        Body, Contract, ContractRecvArm, Expr, ExprId, Func, LitKind, Partial, Pat, PatId, PathId,
-        TypeId as HirTyId,
+        Body, Const, Contract, ContractRecvArm, Expr, ExprId, Func, IdentId, LitKind, Partial, Pat,
+        PatId, PathId, TypeId as HirTyId,
     },
     span::{
         DynLazySpan, expr::LazyExprSpan, pat::LazyPatSpan, path::LazyPathSpan, types::LazyTySpan,
@@ -25,21 +28,26 @@ pub use callable::Callable;
 use env::TyCheckEnv;
 pub use env::{EffectParamSite, ExprProp, LocalBinding, ParamSite};
 pub(super) use expr::TraitOps;
-use owner::BodyOwner;
+pub use owner::BodyOwner;
+pub use owner::EffectParamOwner;
 
 use rustc_hash::{FxHashMap, FxHashSet};
 use salsa::Update;
 
+use crate::analysis::place::Place;
+
 use super::{
-    diagnostics::{BodyDiag, FuncBodyDiag, TyDiagCollection, TyLowerDiag},
-    fold::TyFoldable,
+    canonical::{Canonical, Canonicalized},
+    diagnostics::{BodyDiag, FuncBodyDiag, TraitConstraintDiag, TyDiagCollection, TyLowerDiag},
     trait_def::TraitInstId,
-    trait_resolution::PredicateListId,
+    trait_resolution::{GoalSatisfiability, PredicateListId, is_goal_satisfiable},
     ty_def::{InvalidCause, Kind, TyId, TyVarSort},
     ty_lower::lower_hir_ty,
     unify::{InferenceKey, UnificationError, UnificationTable},
 };
-use crate::analysis::ty::{normalize::normalize_ty, ty_error::collect_ty_lower_errors};
+use crate::analysis::ty::{
+    fold::AssocTySubst, normalize::normalize_ty, ty_error::collect_ty_lower_errors,
+};
 use crate::analysis::{
     HirAnalysisDb,
     name_resolution::{
@@ -53,10 +61,10 @@ pub fn check_func_body<'db>(
     db: &'db dyn HirAnalysisDb,
     func: Func<'db>,
 ) -> (Vec<FuncBodyDiag<'db>>, TypedBody<'db>) {
-    check_body_owner(db, BodyOwner::Func(func))
+    check_body(db, BodyOwner::Func(func))
 }
 
-pub(super) fn check_body_owner<'db>(
+pub(super) fn check_body<'db>(
     db: &'db dyn HirAnalysisDb,
     owner: BodyOwner<'db>,
 ) -> (Vec<FuncBodyDiag<'db>>, TypedBody<'db>) {
@@ -85,15 +93,24 @@ impl<'db> TyChecker<'db> {
     }
 
     fn run(&mut self) {
+        self.check_effect_param_keys_resolve();
+
         if let BodyOwner::ContractRecvArm {
             contract,
-            msg_path,
-            arm,
-            ..
+            recv_idx,
+            arm_idx,
         } = self.env.owner()
         {
             let recv_span = self.env.owner().recv_span().unwrap();
             let arm_span = self.env.owner().recv_arm_span().unwrap();
+            let arm = contract
+                .recv_arm(self.db, recv_idx as usize, arm_idx as usize)
+                .expect("recv arm exists");
+            let msg_path = contract
+                .recvs(self.db)
+                .data(self.db)
+                .get(recv_idx as usize)
+                .and_then(|r| r.msg_path);
             let (pat_ty, ret_ty) =
                 self.resolve_recv_arm_types(contract, msg_path, arm, recv_span.path(), arm_span);
             self.expected = ret_ty;
@@ -106,8 +123,453 @@ impl<'db> TyChecker<'db> {
         self.check_expr(root_expr, self.expected);
     }
 
+    fn check_effect_param_keys_resolve(&mut self) {
+        match self.env.owner() {
+            owner @ BodyOwner::Func(func) => {
+                if let Some(crate::hir_def::ItemKind::Contract(contract)) =
+                    func.scope().parent_item(self.db)
+                {
+                    self.check_contract_scoped_effect_list(owner, contract, func.effects(self.db));
+                } else {
+                    self.check_free_func_effect_list(func, func.effects(self.db));
+                }
+            }
+            owner @ BodyOwner::ContractRecvArm { contract, .. } => {
+                self.check_contract_scoped_effect_list(owner, contract, owner.effects(self.db));
+            }
+        }
+    }
+
+    fn check_free_func_effect_list(
+        &mut self,
+        func: Func<'db>,
+        effects: crate::hir_def::EffectParamListId<'db>,
+    ) {
+        for (idx, effect) in effects.data(self.db).iter().enumerate() {
+            let Some(key_path) = effect.key_path.to_opt() else {
+                continue;
+            };
+
+            if crate::analysis::name_resolution::resolve_path(
+                self.db,
+                key_path,
+                func.scope(),
+                self.env.assumptions(),
+                false,
+            )
+            .is_err()
+            {
+                self.push_diag(BodyDiag::InvalidEffectKey {
+                    owner: EffectParamOwner::Func(func),
+                    key: key_path,
+                    idx,
+                });
+            }
+        }
+    }
+
+    fn check_contract_scoped_effect_list(
+        &mut self,
+        owner: BodyOwner<'db>,
+        contract: Contract<'db>,
+        effects: crate::hir_def::EffectParamListId<'db>,
+    ) {
+        let owner = match owner {
+            BodyOwner::Func(func) => EffectParamOwner::Func(func),
+            BodyOwner::ContractRecvArm {
+                contract,
+                recv_idx,
+                arm_idx,
+            } => EffectParamOwner::ContractRecvArm {
+                contract,
+                recv_idx,
+                arm_idx,
+            },
+        };
+        let contract_effect_names: FxHashSet<_> = contract
+            .effects(self.db)
+            .data(self.db)
+            .iter()
+            .filter_map(|e| e.name)
+            .collect();
+        let contract_field_names: FxHashSet<_> = crate::hir_def::FieldParent::Contract(contract)
+            .fields(self.db)
+            .filter_map(|f| f.name(self.db))
+            .collect();
+
+        for (idx, effect) in effects.data(self.db).iter().enumerate() {
+            let Some(key_path) = effect.key_path.to_opt() else {
+                continue;
+            };
+
+            // Labeled effects are always type/trait keyed: `name: Type`.
+            if effect.name.is_some() {
+                if crate::analysis::name_resolution::resolve_path(
+                    self.db,
+                    key_path,
+                    contract.scope(),
+                    self.env.assumptions(),
+                    false,
+                )
+                .is_err()
+                {
+                    self.push_diag(BodyDiag::InvalidEffectKey {
+                        owner,
+                        key: key_path,
+                        idx,
+                    });
+                }
+                continue;
+            }
+
+            // Unlabeled contract-scoped effects refer to a contract field name or an
+            // existing named contract effect (e.g. `ctx`).
+            let Some(ident) = key_path.ident(self.db).to_opt() else {
+                self.push_diag(BodyDiag::InvalidEffectKey {
+                    owner,
+                    key: key_path,
+                    idx,
+                });
+                continue;
+            };
+
+            if key_path.len(self.db) != 1
+                || (!contract_effect_names.contains(&ident)
+                    && !contract_field_names.contains(&ident))
+            {
+                self.push_diag(BodyDiag::InvalidEffectKey {
+                    owner,
+                    key: key_path,
+                    idx,
+                });
+            }
+        }
+    }
+
     fn finish(self) -> (Vec<FuncBodyDiag<'db>>, TypedBody<'db>) {
         TyCheckerFinalizer::new(self).finish()
+    }
+
+    fn resolve_deferred(&mut self) {
+        let db = self.db;
+        let body = self.env.body();
+        let scope = self.env.scope();
+        let assumptions = self.env.assumptions();
+        let ingot = body.top_mod(db).ingot(db);
+
+        let is_viable = |this: &mut Self,
+                         pending: &env::PendingMethod<'db>,
+                         expr_ty: TyId<'db>,
+                         receiver: ExprId,
+                         generic_args: crate::hir_def::GenericArgListId<'db>,
+                         call_args: &[crate::hir_def::CallArg<'db>],
+                         inst: TraitInstId<'db>| {
+            let snap = this.table.snapshot();
+
+            let result = (|| {
+                let recv_ty = {
+                    let mut prober = env::Prober::new(&mut this.table);
+                    pending.recv_ty.fold_with(db, &mut prober)
+                };
+
+                let inst_self = this.table.instantiate_to_term(inst.self_ty(db));
+                this.table.unify(inst_self, recv_ty).ok()?;
+
+                let trait_method = *inst.def(db).method_defs(db).get(&pending.method_name)?;
+                let func_ty =
+                    instantiate_trait_method(db, trait_method, &mut this.table, recv_ty, inst);
+                let callable =
+                    Callable::new(db, func_ty, receiver.span(body).into(), Some(inst)).ok()?;
+
+                let expected_arity = callable.callable_def.arg_tys(db).len();
+                let given_arity = call_args.len() + 1;
+                if expected_arity != given_arity {
+                    return None;
+                }
+
+                if generic_args.is_given(db) {
+                    let given_args = crate::analysis::ty::ty_lower::lower_generic_arg_list(
+                        db,
+                        generic_args,
+                        scope,
+                        assumptions,
+                    );
+                    let offset = callable.callable_def.offset_to_explicit_params_position(db);
+                    let current_args = &callable.generic_args()[offset..];
+                    if current_args.len() != given_args.len() {
+                        return None;
+                    }
+                    for (&given, &current) in given_args.iter().zip(current_args.iter()) {
+                        this.table.unify(given, current).ok()?;
+                    }
+                }
+
+                let receiver_prop = this.env.typed_expr(receiver)?;
+                let mut all_arg_tys = Vec::with_capacity(call_args.len() + 1);
+                all_arg_tys.push(receiver_prop.ty);
+                for arg in call_args.iter() {
+                    let prop = this.env.typed_expr(arg.expr)?;
+                    all_arg_tys.push(prop.ty);
+                }
+
+                for (&given, expected) in all_arg_tys
+                    .iter()
+                    .zip(callable.callable_def.arg_tys(db).iter())
+                {
+                    let mut expected = expected.instantiate(db, callable.generic_args());
+                    if let Some(inst) = callable.trait_inst() {
+                        let mut subst = AssocTySubst::new(inst);
+                        expected = expected.fold_with(db, &mut subst);
+                    }
+                    let expected = normalize_ty(
+                        db,
+                        expected.fold_with(db, &mut this.table),
+                        scope,
+                        assumptions,
+                    );
+                    let given =
+                        normalize_ty(db, given.fold_with(db, &mut this.table), scope, assumptions);
+                    this.table.unify(given, expected).ok()?;
+                }
+
+                let ret_ty = normalize_ty(
+                    db,
+                    callable.ret_ty(db).fold_with(db, &mut this.table),
+                    scope,
+                    assumptions,
+                );
+                this.table.unify(expr_ty, ret_ty).ok()?;
+
+                Some(())
+            })()
+            .is_some();
+
+            this.table.rollback_to(snap);
+            result
+        };
+
+        // Fixed-point pass over deferred tasks.
+        let mut progressed = true;
+        while progressed {
+            progressed = false;
+            let tasks = self.env.take_deferred_tasks();
+            for task in tasks {
+                match task {
+                    env::DeferredTask::Confirm { inst, span } => {
+                        let inst = {
+                            let mut prober = env::Prober::new(&mut self.table);
+                            inst.fold_with(db, &mut prober)
+                        };
+                        let inst = inst.normalize(db, scope, assumptions);
+                        let canonical_inst = Canonicalized::new(db, inst);
+                        match is_goal_satisfiable(db, ingot, canonical_inst.value, assumptions) {
+                            GoalSatisfiability::Satisfied(solution) => {
+                                let solution =
+                                    canonical_inst.extract_solution(&mut self.table, *solution);
+                                self.table.unify(inst, solution).unwrap();
+                                let new_can =
+                                    Canonical::new(db, inst.fold_with(db, &mut self.table));
+                                if new_can != canonical_inst.value {
+                                    progressed = true;
+                                }
+                            }
+                            _ => self.env.register_confirmation(inst, span),
+                        }
+                    }
+                    env::DeferredTask::Method(pending) => {
+                        let (receiver, generic_args, call_args) = match pending.expr.data(db, body)
+                        {
+                            Partial::Present(Expr::MethodCall(receiver, _, generic_args, args)) => {
+                                (*receiver, *generic_args, args.as_slice())
+                            }
+                            _ => continue,
+                        };
+
+                        let Some(expr_prop) = self.env.typed_expr(pending.expr) else {
+                            continue;
+                        };
+                        let expr_ty = {
+                            let mut prober = env::Prober::new(&mut self.table);
+                            expr_prop.ty.fold_with(db, &mut prober)
+                        };
+                        if expr_ty.has_invalid(db) {
+                            self.env.register_pending_method(pending);
+                            continue;
+                        }
+
+                        let viable: Vec<_> = pending
+                            .candidates
+                            .iter()
+                            .copied()
+                            .filter(|&inst| {
+                                is_viable(
+                                    self,
+                                    &pending,
+                                    expr_ty,
+                                    receiver,
+                                    generic_args,
+                                    call_args,
+                                    inst,
+                                )
+                            })
+                            .collect();
+
+                        if let [inst] = viable.as_slice() {
+                            if self.env.callable_expr(pending.expr).is_none() {
+                                let call_span = pending.expr.span(body).into_method_call_expr();
+
+                                let receiver_prop = self
+                                    .env
+                                    .typed_expr(receiver)
+                                    .unwrap_or_else(|| ExprProp::invalid(db));
+                                let recv_ty = receiver_prop.ty;
+
+                                let trait_method = *inst
+                                    .def(db)
+                                    .method_defs(db)
+                                    .get(&pending.method_name)
+                                    .unwrap();
+                                let func_ty = instantiate_trait_method(
+                                    db,
+                                    trait_method,
+                                    &mut self.table,
+                                    recv_ty,
+                                    *inst,
+                                );
+
+                                let mut callable = match Callable::new(
+                                    db,
+                                    func_ty,
+                                    receiver.span(body).into(),
+                                    Some(*inst),
+                                ) {
+                                    Ok(callable) => callable,
+                                    Err(diag) => {
+                                        self.push_diag(diag);
+                                        progressed = true;
+                                        continue;
+                                    }
+                                };
+
+                                if !callable.unify_generic_args(
+                                    self,
+                                    generic_args,
+                                    call_span.clone().generic_args(),
+                                ) {
+                                    progressed = true;
+                                    continue;
+                                }
+
+                                callable.check_args(
+                                    self,
+                                    call_args,
+                                    call_span.clone().args(),
+                                    Some((receiver, receiver_prop)),
+                                    true,
+                                );
+
+                                self.check_callable_effects(pending.expr, &callable);
+                                callable.check_constraints(self, call_span.method_name().into());
+
+                                let ret_ty = self.normalize_ty(callable.ret_ty(db));
+                                self.table.unify(expr_prop.ty, ret_ty).unwrap();
+
+                                self.env.register_callable(pending.expr, callable);
+                            }
+
+                            progressed = true;
+                        } else {
+                            self.env.register_pending_method(pending);
+                        }
+                    }
+                }
+            }
+        }
+
+        // Emit diagnostics for remaining tasks.
+        for task in self.env.take_deferred_tasks() {
+            match task {
+                env::DeferredTask::Confirm { inst, span } => {
+                    let inst = {
+                        let mut prober = env::Prober::new(&mut self.table);
+                        inst.fold_with(db, &mut prober)
+                    };
+                    let inst = inst.normalize(db, scope, assumptions);
+                    let canonical_inst = Canonicalized::new(db, inst);
+                    match is_goal_satisfiable(db, ingot, canonical_inst.value, assumptions) {
+                        GoalSatisfiability::NeedsConfirmation(ambiguous) => {
+                            let cands = ambiguous
+                                .iter()
+                                .map(|s| canonical_inst.extract_solution(&mut self.table, *s))
+                                .collect::<thin_vec::ThinVec<_>>();
+                            if !inst.self_ty(db).has_var(db) {
+                                self.push_diag(BodyDiag::AmbiguousTraitInst {
+                                    primary: span.clone(),
+                                    cands,
+                                });
+                            }
+                        }
+                        GoalSatisfiability::UnSat(subgoal) => {
+                            if !inst.self_ty(db).has_var(db) {
+                                let unsat = subgoal
+                                    .map(|s| canonical_inst.extract_solution(&mut self.table, s));
+                                self.push_diag(TyDiagCollection::from(
+                                    TraitConstraintDiag::TraitBoundNotSat {
+                                        span: span.clone(),
+                                        primary_goal: inst,
+                                        unsat_subgoal: unsat,
+                                    },
+                                ));
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+                env::DeferredTask::Method(pending) => {
+                    let Some(expr_prop) = self.env.typed_expr(pending.expr) else {
+                        continue;
+                    };
+                    let expr_ty = {
+                        let mut prober = env::Prober::new(&mut self.table);
+                        expr_prop.ty.fold_with(db, &mut prober)
+                    };
+                    if expr_ty.has_invalid(db) {
+                        continue;
+                    }
+
+                    let (receiver, generic_args, call_args) = match pending.expr.data(db, body) {
+                        Partial::Present(Expr::MethodCall(receiver, _, generic_args, args)) => {
+                            (*receiver, *generic_args, args.as_slice())
+                        }
+                        _ => continue,
+                    };
+
+                    let viable: thin_vec::ThinVec<_> = pending
+                        .candidates
+                        .iter()
+                        .copied()
+                        .filter(|&inst| {
+                            is_viable(
+                                self,
+                                &pending,
+                                expr_ty,
+                                receiver,
+                                generic_args,
+                                call_args,
+                                inst,
+                            )
+                        })
+                        .collect();
+                    if viable.len() > 1 {
+                        self.push_diag(BodyDiag::AmbiguousTrait {
+                            primary: pending.span.clone(),
+                            method_name: pending.method_name,
+                            traits: viable,
+                        });
+                    }
+                }
+            }
+        }
     }
 
     fn new_internal(db: &'db dyn HirAnalysisDb, env: TyCheckEnv<'db>, expected: TyId<'db>) -> Self {
@@ -151,7 +613,7 @@ impl<'db> TyChecker<'db> {
         ) {
             // Named recv block - resolve within the msg module
             match contract::resolve_variant_in_msg(self.db, msg_mod, variant_path, assumptions) {
-                contract::VariantResolution::Ok(resolved) => resolved,
+                Ok(resolved) => resolved,
                 _ => {
                     // Return invalid types to suppress spurious type mismatch errors
                     // when the pattern doesn't resolve to a valid msg variant
@@ -161,7 +623,7 @@ impl<'db> TyChecker<'db> {
         } else if msg_path.is_none() {
             // Bare recv block - resolve from contract scope
             match contract::resolve_variant_bare(self.db, contract, variant_path, assumptions) {
-                contract::VariantResolution::Ok(resolved) => resolved,
+                Ok(resolved) => resolved,
                 _ => {
                     // Return invalid types to suppress spurious type mismatch errors
                     return (invalid_ty, invalid_ty);
@@ -441,16 +903,140 @@ impl<'db> TyChecker<'db> {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Update)]
+pub enum EffectArg<'db> {
+    Place(Place<'db>),
+    Value(ExprId),
+    Binding(LocalBinding<'db>),
+    Unknown,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Update)]
+pub enum EffectPassMode {
+    /// The provided effect is already a place; pass it directly.
+    ByPlace,
+    /// The provided effect is an rvalue; materialize it into a block-scoped temp place.
+    ByTempPlace,
+    ByValue,
+    Unknown,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Update)]
+pub struct ResolvedEffectArg<'db> {
+    pub param_idx: usize,
+    pub key: PathId<'db>,
+    pub arg: EffectArg<'db>,
+    pub pass_mode: EffectPassMode,
+}
+
+/// Resolved reference for a `const`-valued path expression.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Update)]
+pub enum ConstRef<'db> {
+    Const(Const<'db>),
+    TraitConst {
+        inst: TraitInstId<'db>,
+        name: IdentId<'db>,
+    },
+}
+
+impl<'db> TyVisitable<'db> for ConstRef<'db> {
+    fn visit_with<V>(&self, visitor: &mut V)
+    where
+        V: crate::analysis::ty::visitor::TyVisitor<'db> + ?Sized,
+    {
+        match self {
+            ConstRef::Const(_) => {}
+            ConstRef::TraitConst { inst, .. } => inst.visit_with(visitor),
+        }
+    }
+}
+
+impl<'db> TyFoldable<'db> for ConstRef<'db> {
+    fn super_fold_with<F>(self, db: &'db dyn HirAnalysisDb, folder: &mut F) -> Self
+    where
+        F: crate::analysis::ty::fold::TyFolder<'db>,
+    {
+        match self {
+            ConstRef::Const(const_def) => ConstRef::Const(const_def),
+            ConstRef::TraitConst { inst, name } => ConstRef::TraitConst {
+                inst: inst.fold_with(db, folder),
+                name,
+            },
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Update)]
 pub struct TypedBody<'db> {
     body: Option<Body<'db>>,
     pat_ty: FxHashMap<PatId, TyId<'db>>,
     expr_ty: FxHashMap<ExprId, ExprProp<'db>>,
+    const_refs: FxHashMap<ExprId, ConstRef<'db>>,
     callables: FxHashMap<ExprId, Callable<'db>>,
+    call_effect_args: FxHashMap<ExprId, Vec<ResolvedEffectArg<'db>>>,
     /// Bindings for function parameters (indexed by param position)
     param_bindings: Vec<LocalBinding<'db>>,
     /// Bindings for local variables (keyed by the pattern that introduces them)
     pat_bindings: FxHashMap<PatId, LocalBinding<'db>>,
+}
+
+impl<'db> TyVisitable<'db> for TypedBody<'db> {
+    fn visit_with<V>(&self, visitor: &mut V)
+    where
+        V: crate::analysis::ty::visitor::TyVisitor<'db> + ?Sized,
+    {
+        for ty in self.pat_ty.values() {
+            ty.visit_with(visitor);
+        }
+        for prop in self.expr_ty.values() {
+            prop.visit_with(visitor);
+        }
+        for cref in self.const_refs.values() {
+            cref.visit_with(visitor);
+        }
+        for callable in self.callables.values() {
+            callable.visit_with(visitor);
+        }
+    }
+}
+
+impl<'db> TyFoldable<'db> for TypedBody<'db> {
+    fn super_fold_with<F>(self, db: &'db dyn HirAnalysisDb, folder: &mut F) -> Self
+    where
+        F: crate::analysis::ty::fold::TyFolder<'db>,
+    {
+        let pat_ty = self
+            .pat_ty
+            .into_iter()
+            .map(|(pat, ty)| (pat, ty.fold_with(db, folder)))
+            .collect();
+        let expr_ty = self
+            .expr_ty
+            .into_iter()
+            .map(|(expr, prop)| (expr, prop.fold_with(db, folder)))
+            .collect();
+        let const_refs = self
+            .const_refs
+            .into_iter()
+            .map(|(expr, cref)| (expr, cref.fold_with(db, folder)))
+            .collect();
+        let callables = self
+            .callables
+            .into_iter()
+            .map(|(expr, callable)| (expr, callable.fold_with(db, folder)))
+            .collect();
+
+        Self {
+            body: self.body,
+            pat_ty,
+            expr_ty,
+            const_refs,
+            callables,
+            call_effect_args: self.call_effect_args,
+            param_bindings: self.param_bindings,
+            pat_bindings: self.pat_bindings,
+        }
+    }
 }
 
 impl<'db> TypedBody<'db> {
@@ -469,6 +1055,10 @@ impl<'db> TypedBody<'db> {
             .unwrap_or_else(|| ExprProp::invalid(db))
     }
 
+    pub fn expr_const_ref(&self, expr: ExprId) -> Option<ConstRef<'db>> {
+        self.const_refs.get(&expr).copied()
+    }
+
     pub fn pat_ty(&self, db: &'db dyn HirAnalysisDb, pat: PatId) -> TyId<'db> {
         self.pat_ty
             .get(&pat)
@@ -478,6 +1068,10 @@ impl<'db> TypedBody<'db> {
 
     pub fn callable_expr(&self, expr: ExprId) -> Option<&Callable<'db>> {
         self.callables.get(&expr)
+    }
+
+    pub fn call_effect_args(&self, call_expr: ExprId) -> Option<&[ResolvedEffectArg<'db>]> {
+        self.call_effect_args.get(&call_expr).map(|v| v.as_slice())
     }
 
     /// Get the binding for a function parameter by index.
@@ -508,6 +1102,11 @@ impl<'db> TypedBody<'db> {
     /// Returns the identity of the binding (param index, pattern id, or effect param ident).
     pub fn expr_binding(&self, expr: ExprId) -> Option<LocalBinding<'db>> {
         self.expr_ty.get(&expr)?.binding
+    }
+
+    /// Returns a place representation for `expr` if it denotes an assignable location.
+    pub fn expr_place(&self, db: &'db dyn HirAnalysisDb, expr: ExprId) -> Option<Place<'db>> {
+        Place::from_expr(db, self, expr)
     }
 
     /// Find all expressions that reference the same local binding as the given expression.
@@ -555,7 +1154,9 @@ impl<'db> TypedBody<'db> {
             body: None,
             pat_ty: FxHashMap::default(),
             expr_ty: FxHashMap::default(),
+            const_refs: FxHashMap::default(),
             callables: FxHashMap::default(),
+            call_effect_args: FxHashMap::default(),
             param_bindings: Vec::new(),
             pat_bindings: FxHashMap::default(),
         }
@@ -579,16 +1180,36 @@ impl Typeable<'_> {
 
 pub fn instantiate_trait_method<'db>(
     db: &'db dyn HirAnalysisDb,
-    method: crate::hir_def::CallableDef<'db>,
+    method: Func<'db>,
     table: &mut UnificationTable<'db>,
     receiver_ty: TyId<'db>,
     inst: TraitInstId<'db>,
 ) -> TyId<'db> {
-    let ty = TyId::foldl(db, TyId::func(db, method), inst.args(db));
+    let ty = TyId::foldl(
+        db,
+        TyId::func(db, method.as_callable(db).unwrap()),
+        inst.args(db),
+    );
 
     let inst_self = table.instantiate_to_term(inst.self_ty(db));
     table.unify(inst_self, receiver_ty).unwrap();
 
+    let instantiated = table.instantiate_to_term(ty);
+
+    // Apply associated type substitutions from the trait instance
+    use crate::analysis::ty::fold::{AssocTySubst, TyFoldable};
+    let mut subst = AssocTySubst::new(inst);
+    instantiated.fold_with(db, &mut subst)
+}
+
+/// Instantiate a trait-associated function type (no receiver), e.g. `T::make`.
+pub fn instantiate_trait_assoc_fn<'db>(
+    db: &'db dyn HirAnalysisDb,
+    method: CallableDef<'db>,
+    table: &mut UnificationTable<'db>,
+    inst: TraitInstId<'db>,
+) -> TyId<'db> {
+    let ty = TyId::foldl(db, TyId::func(db, method), inst.args(db));
     let instantiated = table.instantiate_to_term(ty);
 
     // Apply associated type substitutions from the trait instance
@@ -660,7 +1281,8 @@ impl<'db> Visitor<'db> for TyCheckerFinalizer<'db> {
 impl<'db> TyCheckerFinalizer<'db> {
     fn new(mut checker: TyChecker<'db>) -> Self {
         let assumptions = checker.env.assumptions();
-        let body = checker.env.finish(&mut checker.table, &mut checker.diags);
+        checker.resolve_deferred();
+        let body = checker.env.finish(&mut checker.table);
 
         Self {
             db: checker.db,

@@ -1,0 +1,19 @@
+---
+source: crates/hir/tests/ty_check.rs
+expression: res
+input_file: test_files/ty_check/trait_assoc_const_shorthand.fe
+---
+note: 
+  ┌─ trait_assoc_const_shorthand.fe:5:35
+  │  
+5 │   fn selector_size<A: Abi>() -> u32 {
+  │ ╭───────────────────────────────────^
+6 │ │     A::SELECTOR_SIZE
+7 │ │ }
+  │ ╰─^ u32
+
+note: 
+  ┌─ trait_assoc_const_shorthand.fe:6:5
+  │
+6 │     A::SELECTOR_SIZE
+  │     ^^^^^^^^^^^^^^^^ u32

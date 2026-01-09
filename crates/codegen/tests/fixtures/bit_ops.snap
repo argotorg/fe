@@ -1,6 +1,5 @@
 ---
 source: crates/codegen/tests/yul.rs
-assertion_line: 31
 expression: output
 input_file: tests/fixtures/bit_ops.fe
 ---
@@ -10,8 +9,20 @@ function bit_ops(x, y) -> ret {
   let v2 := xor(x, y)
   let v3 := shl(8, x)
   let v4 := shr(2, x)
-  ret := tuple(v0, v1, v2, v3, v4)
+  let v5 := mload(0x40)
+  if iszero(v5) {
+    v5 := 0x80
+  }
+  mstore(0x40, add(v5, 160))
+  mstore(v5, v0)
+  mstore(add(v5, 32), v1)
+  mstore(add(v5, 64), v2)
+  mstore(add(v5, 96), v3)
+  mstore(add(v5, 128), v4)
+  ret := v5
+  leave
 }
 function pow_op(x, y) -> ret {
   ret := exp(x, y)
+  leave
 }

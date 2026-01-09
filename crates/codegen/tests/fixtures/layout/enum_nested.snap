@@ -1,0 +1,20 @@
+---
+source: crates/hir/tests/layout.rs
+assertion_line: 144
+expression: report
+input_file: test_files/layout/enum_nested.fe
+---
+struct Point:
+  size: 16 bytes
+  fields:
+    [0]: offset=0, size=8
+    [1]: offset=8, size=8
+enum Shape:
+  size: 48 bytes
+  discriminant: 32 bytes
+  variants:
+    Empty: (unit)
+    Circle:
+      [0]: offset=32, size=8
+    Rectangle:
+      [0]: offset=32, size=16

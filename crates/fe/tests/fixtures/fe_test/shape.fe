@@ -1,0 +1,102 @@
+use std::evm::{Evm, Call}
+use std::evm::effects::assert
+use core::abi::{Abi, AbiEncoder, AbiSize, Encode}
+use std::abi::Sol
+
+struct Point {
+    x: u256,
+    y: u256,
+}
+
+impl Point {
+    fn area(self) -> u256 {
+        return self.x * self.y
+    }
+}
+
+struct Square {
+    side: u256,
+}
+
+impl Square {
+    fn area(self) -> u256 {
+        return self.side * self.side
+    }
+}
+
+msg ShapeMsg {
+    #[selector = 0x090251bf]
+    DispatchPoint { x: u256, y: u256 } -> u256,
+
+    #[selector = 0x7b292909]
+    DispatchSquare { side: u256 } -> u256,
+}
+
+// Boilerplate for ShapeMsg variants
+
+// DispatchPoint
+impl AbiSize for ShapeMsg::DispatchPoint {
+    const ENCODED_SIZE: u256 = 64
+}
+impl Encode<Sol> for ShapeMsg::DispatchPoint {
+    fn encode<E: AbiEncoder<Sol>>(self, mut _ e: E) {
+        self.x.encode(e)
+        self.y.encode(e)
+    }
+}
+
+// DispatchSquare
+impl AbiSize for ShapeMsg::DispatchSquare {
+    const ENCODED_SIZE: u256 = 32
+}
+impl Encode<Sol> for ShapeMsg::DispatchSquare {
+    fn encode<E: AbiEncoder<Sol>>(self, mut _ e: E) {
+        self.side.encode(e)
+    }
+}
+
+pub contract ShapeDispatcher {
+    recv ShapeMsg {
+        DispatchPoint { x, y } -> u256 {
+            let mut p = Point { x: x, y: y }
+            p.x += 1
+            p.y += 2
+            return p.area()
+        }
+
+        DispatchSquare { side } -> u256 {
+            let mut s = Square { side: side }
+            s.side += 3
+            return s.area()
+        }
+    }
+}
+
+#[test]
+fn test_shape() uses (mut evm: Evm) {
+    let contract_addr = evm.create2<ShapeDispatcher>(value: 0, args: (), salt: 0)
+    assert(contract_addr.inner != 0)
+
+    // Test point(3, 4)
+    // p.x = 3 + 1 = 4
+    // p.y = 4 + 2 = 6
+    // area = 4 * 6 = 24
+    let res: u256 = evm.call(
+        addr: contract_addr,
+        gas: 100000,
+        value: 0,
+        message: ShapeMsg::DispatchPoint { x: 3, y: 4 }
+    )
+    assert(res == 24)
+
+    // Test square(5)
+    // s.side = 5 + 3 = 8
+    // area = 8 * 8 = 64
+    let res: u256 = evm.call(
+        addr: contract_addr,
+        gas: 100000,
+        value: 0,
+        message: ShapeMsg::DispatchSquare { side: 5 }
+    )
+    assert(res == 64)
+}

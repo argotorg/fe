@@ -1,6 +1,9 @@
 //! Prepass utilities for MIR lowering: ensures expressions have values and resolves consts.
 
 use super::*;
+use hir::analysis::name_resolution::{PathRes, resolve_path};
+use hir::analysis::ty::const_eval::{ConstValue, try_eval_const_body, try_eval_const_ref};
+use hir::analysis::ty::const_ty::{ConstTyData, EvaluatedConstTy};
 
 impl<'db, 'a> MirBuilder<'db, 'a> {
     /// Helper to iterate expressions and conditionally force value lowering.
@@ -27,19 +30,6 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         }
     }
 
-    /// Forces all field expressions to have associated MIR values.
-    ///
-    /// # Returns
-    /// Nothing; fills `expr_values` for field expressions.
-    pub(super) fn ensure_field_expr_values(&mut self) {
-        self.ensure_expr_values(
-            |expr| matches!(expr, Expr::Field(..)),
-            |this, expr_id| {
-                this.ensure_value(expr_id);
-            },
-        );
-    }
-
     /// Forces all const path expressions to lower into synthetic literals.
     ///
     /// # Returns
@@ -49,7 +39,11 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
             |expr| matches!(expr, Expr::Path(..)),
             |this, expr_id| {
                 if let Some(value_id) = this.try_const_expr(expr_id) {
-                    this.mir_body.expr_values.entry(expr_id).or_insert(value_id);
+                    this.builder
+                        .body
+                        .expr_values
+                        .entry(expr_id)
+                        .or_insert(value_id);
                 }
             },
         );
@@ -63,11 +57,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
     /// # Returns
     /// The `ValueId` bound to the expression.
     pub(super) fn ensure_value(&mut self, expr: ExprId) -> ValueId {
-        if let Some(&val) = self.mir_body.expr_values.get(&expr) {
-            if !self.value_address_space.contains_key(&val) {
-                let space = self.expr_address_space(expr);
-                self.value_address_space.insert(val, space);
-            }
+        if let Some(&val) = self.builder.body.expr_values.get(&expr) {
             return val;
         }
 
@@ -85,7 +75,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                 });
                 if let Some(inner) = last_expr {
                     let val = self.ensure_value(inner);
-                    self.mir_body.expr_values.insert(expr, val);
+                    self.builder.body.expr_values.insert(expr, val);
                     return val;
                 }
                 self.alloc_expr_value(expr)
@@ -93,8 +83,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
             _ => self.alloc_expr_value(expr),
         };
 
-        self.mir_body.expr_values.insert(expr, value);
-        // Note: record_value_address_space is already called in alloc_expr_value.
+        self.builder.body.expr_values.insert(expr, value);
         value
     }
 
@@ -106,26 +95,81 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
     /// # Returns
     /// The allocated `ValueId` (lowered call/field/const where applicable).
     pub(super) fn alloc_expr_value(&mut self, expr: ExprId) -> ValueId {
-        if let Some(value) = self.try_lower_call(expr) {
-            self.record_value_address_space(expr, value);
-            return value;
-        }
-        if let Some(value) = self.try_lower_field(expr) {
-            self.record_value_address_space(expr, value);
-            return value;
-        }
         if let Some(value) = self.try_const_expr(expr) {
-            self.record_value_address_space(expr, value);
             return value;
         }
 
         let ty = self.typed_body.expr_ty(self.db, expr);
-        let value = self.mir_body.alloc_value(ValueData {
-            ty,
-            origin: ValueOrigin::Expr(expr),
-        });
-        self.record_value_address_space(expr, value);
-        value
+        let mut repr = self.value_repr_for_expr(expr, ty);
+        let origin = match expr.data(self.db, self.body) {
+            Partial::Present(Expr::Lit(LitKind::Int(int_id))) => {
+                ValueOrigin::Synthetic(SyntheticValue::Int(int_id.data(self.db).clone()))
+            }
+            Partial::Present(Expr::Lit(LitKind::Bool(flag))) => {
+                ValueOrigin::Synthetic(SyntheticValue::Bool(*flag))
+            }
+            Partial::Present(Expr::Lit(LitKind::String(str_id))) => ValueOrigin::Synthetic(
+                SyntheticValue::Bytes(str_id.data(self.db).as_bytes().to_vec()),
+            ),
+            Partial::Present(Expr::Path(_)) => {
+                let expr_prop = self.typed_body.expr_prop(self.db, expr);
+                if let Some(binding) = expr_prop.binding {
+                    if extract_contract_function(self.db, self.func).is_some()
+                        && matches!(binding, LocalBinding::EffectParam { .. })
+                    {
+                        // TODO: document/enforce this rule:
+                        //   effect params on contract_init/contract_runtime must be zero-sized concrete types
+                        debug_assert!(
+                            crate::layout::ty_size_bytes(self.db, ty) == Some(0),
+                            "contract entrypoint effect params must be concrete zero-sized providers; got `{}`",
+                            ty.pretty_print(self.db)
+                        );
+                        ValueOrigin::Unit
+                    } else if let Some(target) = self.code_region_target_from_ty(ty) {
+                        ValueOrigin::FuncItem(target)
+                    } else if let Some(local) = self.local_for_binding(binding) {
+                        if matches!(binding, LocalBinding::EffectParam { .. })
+                            && matches!(repr, ValueRepr::Word)
+                            && !crate::layout::is_zero_sized_ty(self.db, ty)
+                        {
+                            // Effect params are addressable providers; even when their runtime
+                            // representation is a single word, treat them as `Ref` roots so
+                            // lowering can emit `Place`-based loads/stores (including transparent
+                            // newtype peeling over field-0 projections).
+                            repr = ValueRepr::Ref(self.address_space_for_binding(&binding));
+                        }
+                        ValueOrigin::Local(local)
+                    } else if let Some(target) = self.code_region_target(expr) {
+                        ValueOrigin::FuncItem(target)
+                    } else {
+                        ValueOrigin::Expr(expr)
+                    }
+                } else if let Some(target) = self.code_region_target(expr) {
+                    ValueOrigin::FuncItem(target)
+                } else {
+                    ValueOrigin::Expr(expr)
+                }
+            }
+            Partial::Present(Expr::Un(inner, op)) => ValueOrigin::Unary {
+                op: *op,
+                inner: self.ensure_value(*inner),
+            },
+            Partial::Present(Expr::Bin(lhs, rhs, op)) => ValueOrigin::Binary {
+                op: *op,
+                lhs: self.ensure_value(*lhs),
+                rhs: self.ensure_value(*rhs),
+            },
+            Partial::Present(Expr::If(..) | Expr::Match(..)) => {
+                ValueOrigin::ControlFlowResult { expr }
+            }
+            Partial::Present(Expr::Block(..)) => ValueOrigin::Unit,
+            _ if ty.is_tuple(self.db) && ty.field_count(self.db) == 0 => ValueOrigin::Unit,
+            _ => ValueOrigin::Expr(expr),
+        };
+
+        self.builder
+            .body
+            .alloc_value(ValueData { ty, origin, repr })
     }
 
     /// Collect all argument expressions and their lowered values for a call or method call.
@@ -149,7 +193,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                 let mut arg_exprs = Vec::with_capacity(call_args.len());
                 for arg in call_args.iter() {
                     arg_exprs.push(arg.expr);
-                    args.push(self.ensure_value(arg.expr));
+                    args.push(self.lower_expr(arg.expr));
                 }
                 Some((args, arg_exprs))
             }
@@ -157,10 +201,10 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                 let mut args = Vec::with_capacity(call_args.len() + 1);
                 let mut arg_exprs = Vec::with_capacity(call_args.len() + 1);
                 arg_exprs.push(*receiver);
-                args.push(self.ensure_value(*receiver));
+                args.push(self.lower_expr(*receiver));
                 for arg in call_args.iter() {
                     arg_exprs.push(arg.expr);
-                    args.push(self.ensure_value(arg.expr));
+                    args.push(self.lower_expr(arg.expr));
                 }
                 Some((args, arg_exprs))
             }
@@ -180,91 +224,69 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
             return None;
         };
         let path = path.to_opt()?;
-        let mut visited = FxHashSet::default();
-        self.const_literal_from_path(path, self.body.scope(), &mut visited)
-    }
 
-    /// Resolves the given path to a const definition in `scope` and lowers it to a literal.
-    ///
-    /// # Parameters
-    /// - `path`: Path to resolve.
-    /// - `scope`: Scope used for resolution.
-    /// - `visited`: Set used to detect const evaluation cycles.
-    ///
-    /// # Returns
-    /// The literal `ValueId` if resolution succeeds.
-    fn const_literal_from_path(
-        &mut self,
-        path: PathId<'db>,
-        scope: ScopeId<'db>,
-        visited: &mut FxHashSet<Const<'db>>,
-    ) -> Option<ValueId> {
-        let PathRes::Const(const_def, ty) = resolve_path(
-            self.db,
-            path,
-            scope,
-            PredicateListId::empty_list(self.db),
-            true,
-        )
-        .ok()?
-        else {
-            return None;
-        };
-        self.const_literal_from_def(const_def, ty, visited)
-    }
+        if let Some(cref) = self.typed_body.expr_const_ref(expr) {
+            if let hir::analysis::ty::ty_check::ConstRef::Const(const_def) = cref
+                && let Some(&cached) = self.const_cache.get(&const_def)
+            {
+                return Some(cached);
+            }
 
-    /// Converts a concrete const definition into a MIR literal value.
-    ///
-    /// # Parameters
-    /// - `const_def`: Const definition to evaluate.
-    /// - `ty`: Type of the const.
-    /// - `visited`: Set used to detect const evaluation cycles.
-    ///
-    /// # Returns
-    /// Cached or newly allocated `ValueId` for the literal, or `None` on failure.
-    fn const_literal_from_def(
-        &mut self,
-        const_def: Const<'db>,
-        ty: TyId<'db>,
-        visited: &mut FxHashSet<Const<'db>>,
-    ) -> Option<ValueId> {
-        if let Some(&value) = self.const_cache.get(&const_def) {
-            return Some(value);
+            let ty = self.typed_body.expr_ty(self.db, expr);
+            let value = match try_eval_const_ref(self.db, cref, ty)? {
+                ConstValue::Int(int) => SyntheticValue::Int(int),
+                ConstValue::Bool(flag) => SyntheticValue::Bool(flag),
+            };
+
+            let value_id = self.alloc_synthetic_value(ty, value);
+            if let hir::analysis::ty::ty_check::ConstRef::Const(const_def) = cref {
+                self.const_cache.insert(const_def, value_id);
+            }
+            return Some(value_id);
         }
-        if !visited.insert(const_def) {
+
+        // Const generic parameter (e.g. `const SALT: u256`).
+        if self.generic_args.is_empty() {
             return None;
         }
-        let body = const_def.body(self.db).to_opt()?;
-        let expr_id = body.expr(self.db);
-        let expr = match expr_id.data(self.db, body) {
-            Partial::Present(expr) => expr,
-            Partial::Absent => {
-                visited.remove(&const_def);
-                return None;
-            }
-        };
-        let const_scope = body.scope();
-        let result = match expr {
-            Expr::Lit(LitKind::Int(value)) => Some(
-                self.alloc_synthetic_value(ty, SyntheticValue::Int(value.data(self.db).clone())),
-            ),
-            Expr::Lit(LitKind::Bool(flag)) => {
-                Some(self.alloc_synthetic_value(ty, SyntheticValue::Bool(*flag)))
-            }
-            Expr::Path(path) => {
-                if let Some(inner_path) = path.to_opt() {
-                    self.const_literal_from_path(inner_path, const_scope, visited)
-                } else {
-                    None
-                }
-            }
-            _ => None,
-        };
-        visited.remove(&const_def);
-        if let Some(value_id) = result {
-            self.const_cache.insert(const_def, value_id);
+        if self.typed_body.expr_prop(self.db, expr).binding.is_some() {
+            return None;
         }
-        result
+
+        let assumptions = PredicateListId::empty_list(self.db);
+        let resolved = resolve_path(self.db, path, self.body.scope(), assumptions, true).ok()?;
+        let ty = match resolved {
+            PathRes::Ty(ty) | PathRes::TyAlias(_, ty) => ty,
+            _ => return None,
+        };
+
+        let TyData::ConstTy(const_ty) = ty.data(self.db) else {
+            return None;
+        };
+        let ConstTyData::TyParam(param, _) = const_ty.data(self.db) else {
+            return None;
+        };
+        let arg = *self.generic_args.get(param.idx)?;
+        let TyData::ConstTy(const_arg) = arg.data(self.db) else {
+            return None;
+        };
+
+        let expected_ty = self.typed_body.expr_ty(self.db, expr);
+        let value = match const_arg.data(self.db) {
+            ConstTyData::Evaluated(EvaluatedConstTy::LitInt(value), _) => {
+                SyntheticValue::Int(value.data(self.db).clone())
+            }
+            ConstTyData::Evaluated(EvaluatedConstTy::LitBool(flag), _) => {
+                SyntheticValue::Bool(*flag)
+            }
+            ConstTyData::UnEvaluated { body, .. } => match try_eval_const_body(self.db, *body)? {
+                ConstValue::Int(value) => SyntheticValue::Int(value),
+                ConstValue::Bool(flag) => SyntheticValue::Bool(flag),
+            },
+            _ => return None,
+        };
+
+        Some(self.alloc_synthetic_value(expected_ty, value))
     }
 
     /// Allocates a synthetic literal value with the provided type.
@@ -280,9 +302,10 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         ty: TyId<'db>,
         value: SyntheticValue,
     ) -> ValueId {
-        self.mir_body.alloc_value(ValueData {
+        self.builder.body.alloc_value(ValueData {
             ty,
             origin: ValueOrigin::Synthetic(value),
+            repr: ValueRepr::Word,
         })
     }
 }

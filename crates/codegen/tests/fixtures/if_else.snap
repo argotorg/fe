@@ -1,16 +1,27 @@
 ---
 source: crates/codegen/tests/yul.rs
-assertion_line: 31
 expression: output
 input_file: tests/fixtures/if_else.fe
 ---
 function if_else(cond) -> ret {
   let v0 := 0
-  if cond {
-    v0 := 1
-  }
-  if iszero(cond) {
-    v0 := 2
-  }
+  switch cond
+    case 1 {
+      let v1 := helper(1)
+      v0 := v1
+    }
+    case 0 {
+      let v2 := helper(2)
+      v0 := v2
+    }
+    default {
+      let v3 := helper(2)
+      v0 := v3
+    }
   ret := v0
+  leave
+}
+function helper(x) -> ret {
+  ret := add(x, 1)
+  leave
 }

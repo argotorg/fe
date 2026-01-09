@@ -48,7 +48,8 @@ pub struct DocCommentAttr<'db> {
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct AttrArg<'db> {
     pub key: Partial<PathId<'db>>,
-    pub value: Partial<AttrArgValue<'db>>,
+    /// The value after `=` in `#[attr(key = value)]`. None for `#[attr(key)]` form.
+    pub value: Option<AttrArgValue<'db>>,
 }
 
 impl<'db> AttrArg<'db> {

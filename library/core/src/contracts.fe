@@ -1,0 +1,59 @@
+use super::abi::{Abi, AbiEncoder, AbiSize, ByteInput, Encode}
+
+/// Host interface required by compiler-generated contract entrypoints.
+///
+/// This trait is implemented by the target's root effect type (e.g. `std::evm::effects::Evm`).
+pub trait ContractHost {
+    /// Higher-kinded pointer type for contract storage fields.
+    type FieldPtr: * -> *
+
+    /// ABI input source (e.g. EVM calldata).
+    type Input: ByteInput
+
+    /// ABI input source for contract initialization (e.g. constructor args).
+    type InitInput: ByteInput
+
+    fn input(self) -> Self::Input
+    fn init_input<F>(mut self, runtime: F) -> Self::InitInput
+
+    fn field<T>(mut self, slot: u256) -> Self::FieldPtr<T>
+    fn init_field<T>(mut self, slot: u256) -> Self::FieldPtr<T> {
+        self.field(slot)
+    }
+
+    fn create_contract<F>(mut self, runtime: F) -> !
+    fn abort(self) -> !
+
+    fn return_bytes(self, ptr: u256, len: u256) -> !
+    fn return_unit(self) -> ! {
+        self.return_bytes(0, 0)
+    }
+
+    fn runtime_selector<A: Abi>(self) -> A::Selector {
+        let input = self.input()
+        if input.len() < A::SELECTOR_SIZE {
+            self.abort()
+        }
+        A::selector_from_prefix(input.word_at(0))
+    }
+
+    fn runtime_decoder<A: Abi>(mut self) -> A::Decoder<Self::Input> {
+        A::decoder_with_base(self.input(), A::SELECTOR_SIZE)
+    }
+
+    fn return_value<A: Abi, T>(mut self, value: T) -> !
+        where T: Encode<A> + AbiSize
+    {
+        let mut enc = A::encoder_new()
+        enc.reserve_head(T::ENCODED_SIZE)
+        value.encode(enc)
+        let out: (u256, u256) = enc.finish()
+        self.return_bytes(out.0, out.1)
+    }
+}
+
+/// Target configuration used by compiler-generated contract entrypoints.
+pub trait Target {
+    type RootEffect: ContractHost
+    type DefaultAbi: Abi
+}

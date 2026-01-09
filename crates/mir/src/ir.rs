@@ -1,10 +1,13 @@
 use std::fmt;
 
+mod body_builder;
+
+pub use body_builder::BodyBuilder;
+
 use hir::analysis::ty::ty_check::{Callable, TypedBody};
 use hir::analysis::ty::ty_def::TyId;
-use hir::hir_def::{
-    ExprId, Func, PatId, StmtId, TopLevelMod, TypeId as HirTypeId, expr::ArithBinOp,
-};
+use hir::hir_def::{EnumVariant, ExprId, Func, PatId, StmtId, TopLevelMod};
+use hir::projection::{Projection, ProjectionPath};
 use num_bigint::BigUint;
 use rustc_hash::FxHashMap;
 
@@ -33,6 +36,12 @@ pub struct MirFunction<'db> {
     pub typed_body: TypedBody<'db>,
     /// Concrete generic arguments used to instantiate this function instance.
     pub generic_args: Vec<TyId<'db>>,
+    /// Return type after monomorphization and associated-type normalization.
+    pub ret_ty: TyId<'db>,
+    /// Whether this function has a runtime return value (`ret_ty` is not zero-sized).
+    pub returns_value: bool,
+    /// Effect provider kinds for this instance, indexed by effect param position.
+    pub effect_provider_kinds: Vec<EffectProviderKind>,
     /// Optional contract association declared via attributes.
     pub contract_function: Option<ContractFunction>,
     /// Symbol name used for codegen (includes monomorphization suffix when present).
@@ -47,9 +56,14 @@ pub struct MirBody<'db> {
     pub entry: BasicBlockId,
     pub blocks: Vec<BasicBlock<'db>>,
     pub values: Vec<ValueData<'db>>,
+    pub locals: Vec<LocalData<'db>>,
+    /// Local IDs for explicit function parameters in source order.
+    pub param_locals: Vec<LocalId>,
+    /// Local IDs for effect parameters in source order.
+    pub effect_param_locals: Vec<LocalId>,
     pub expr_values: FxHashMap<ExprId, ValueId>,
+    pub pat_address_space: FxHashMap<PatId, AddressSpaceKind>,
     pub loop_headers: FxHashMap<BasicBlockId, LoopInfo>,
-    pub match_info: FxHashMap<ExprId, MatchLoweringInfo>,
 }
 
 impl<'db> MirBody<'db> {
@@ -58,9 +72,12 @@ impl<'db> MirBody<'db> {
             entry: BasicBlockId(0),
             blocks: Vec::new(),
             values: Vec::new(),
+            locals: Vec::new(),
+            param_locals: Vec::new(),
+            effect_param_locals: Vec::new(),
             expr_values: FxHashMap::default(),
+            pat_address_space: FxHashMap::default(),
             loop_headers: FxHashMap::default(),
-            match_info: FxHashMap::default(),
         }
     }
 
@@ -83,12 +100,64 @@ impl<'db> MirBody<'db> {
         id
     }
 
+    pub fn alloc_local(&mut self, data: LocalData<'db>) -> LocalId {
+        let id = LocalId(self.locals.len() as u32);
+        self.locals.push(data);
+        id
+    }
+
     pub fn value(&self, id: ValueId) -> &ValueData<'db> {
         &self.values[id.index()]
     }
 
-    pub fn match_info(&self, expr: ExprId) -> Option<&MatchLoweringInfo> {
-        self.match_info.get(&expr)
+    pub fn local(&self, id: LocalId) -> &LocalData<'db> {
+        &self.locals[id.index()]
+    }
+
+    /// Determines the address space associated with a MIR value.
+    ///
+    /// This is only meaningful for pointer-like values (`ValueRepr::Ptr`/`ValueRepr::Ref`) and for
+    /// locals that store such values. Calling this on a pure scalar value is a bug and triggers a
+    /// debug assertion.
+    pub fn value_address_space(&self, value: ValueId) -> AddressSpaceKind {
+        if let Some(space) = self.try_value_address_space(value) {
+            return space;
+        }
+
+        let value_data = self.value(value);
+        panic!(
+            "requested address space for MIR value without one: {value:?} (repr={:?}, origin={:?})",
+            value_data.repr, value_data.origin
+        );
+    }
+
+    /// Determines the address space associated with a place.
+    pub fn place_address_space(&self, place: &Place<'db>) -> AddressSpaceKind {
+        self.value_address_space(place.base)
+    }
+
+    fn try_value_address_space(&self, value: ValueId) -> Option<AddressSpaceKind> {
+        try_value_address_space_in(&self.values, &self.locals, value)
+    }
+}
+
+pub(crate) fn try_value_address_space_in<'db>(
+    values: &[ValueData<'db>],
+    locals: &[LocalData<'db>],
+    value: ValueId,
+) -> Option<AddressSpaceKind> {
+    let value_data = values.get(value.index())?;
+    if let Some(space) = value_data.repr.address_space() {
+        return Some(space);
+    }
+    match &value_data.origin {
+        ValueOrigin::Local(local) => locals.get(local.index()).map(|l| l.address_space),
+        ValueOrigin::TransparentCast { value } => {
+            try_value_address_space_in(values, locals, *value)
+        }
+        ValueOrigin::FieldPtr(field_ptr) => Some(field_ptr.addr_space),
+        ValueOrigin::PlaceRef(place) => try_value_address_space_in(values, locals, place.base),
+        _ => None,
     }
 }
 
@@ -117,11 +186,38 @@ impl ValueId {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct LocalId(pub u32);
+
+impl LocalId {
+    pub fn index(self) -> usize {
+        self.0 as usize
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct LocalData<'db> {
+    pub name: String,
+    pub ty: TyId<'db>,
+    pub is_mut: bool,
+    /// Address space for pointer-like values stored in this local.
+    ///
+    /// For non-pointer scalars this is ignored, but storing it here lets codegen
+    /// interpret locals that represent aggregate pointers (memory vs storage).
+    pub address_space: AddressSpaceKind,
+}
+
+/// MIR projection using MIR value IDs for dynamic indices.
+pub type MirProjection<'db> = Projection<TyId<'db>, EnumVariant<'db>, ValueId>;
+
+/// MIR projection path using MIR value IDs for dynamic indices.
+pub type MirProjectionPath<'db> = ProjectionPath<TyId<'db>, EnumVariant<'db>, ValueId>;
+
 /// A linear sequence of MIR instructions terminated by a control-flow edge.
 #[derive(Debug, Clone)]
 pub struct BasicBlock<'db> {
     pub insts: Vec<MirInst<'db>>,
-    pub terminator: Terminator,
+    pub terminator: Terminator<'db>,
 }
 
 impl<'db> BasicBlock<'db> {
@@ -136,7 +232,7 @@ impl<'db> BasicBlock<'db> {
         self.insts.push(inst);
     }
 
-    pub fn set_terminator(&mut self, term: Terminator) {
+    pub fn set_terminator(&mut self, term: Terminator<'db>) {
         self.terminator = term;
     }
 }
@@ -150,54 +246,65 @@ impl<'db> Default for BasicBlock<'db> {
 /// General MIR instruction (does not change control flow).
 #[derive(Debug, Clone)]
 pub enum MirInst<'db> {
-    /// A `let` binding statement.
-    Let {
-        stmt: StmtId,
-        pat: PatId,
-        ty: Option<HirTypeId<'db>>,
-        value: Option<ValueId>,
-    },
-    /// Desugared assignment statement.
+    /// Assigns an rvalue, optionally storing its result into `dest`.
+    ///
+    /// When `dest` is `None`, the rvalue is evaluated for side effects only.
     Assign {
-        stmt: StmtId,
-        target: ExprId,
-        value: ValueId,
+        /// Optional originating statement for diagnostics/debug output.
+        stmt: Option<StmtId>,
+        dest: Option<LocalId>,
+        rvalue: Rvalue<'db>,
     },
-    /// Augmented assignment (`+=`, `-=`, ...).
-    AugAssign {
-        stmt: StmtId,
-        target: ExprId,
-        value: ValueId,
-        op: ArithBinOp,
+    /// Store a value into a place (projection write).
+    Store { place: Place<'db>, value: ValueId },
+    /// Initialize an aggregate place (record/tuple/array/enum) from a set of projected writes.
+    ///
+    /// This is a higher-level form used during lowering so that codegen can decide the final
+    /// layout/offsets for the target architecture while still preserving evaluation order
+    /// (values are lowered before this instruction is emitted).
+    InitAggregate {
+        place: Place<'db>,
+        inits: Vec<(MirProjectionPath<'db>, ValueId)>,
     },
-    /// Plain expression statement (no bindings).
-    Eval { stmt: StmtId, value: ValueId },
-    /// Synthetic expression emitted during lowering (no originating statement). This lets
-    /// expression lowering insert helper calls (e.g. alloc/store_field) while still keeping
-    /// the resulting value associated with its originating expression.
-    EvalExpr {
-        expr: ExprId,
-        value: ValueId,
-        /// Whether the value should be bound to a temporary for later reuse.
-        bind_value: bool,
+    /// Store an enum discriminant into a place.
+    SetDiscriminant {
+        place: Place<'db>,
+        variant: EnumVariant<'db>,
     },
-    /// Statement-only intrinsic (e.g. `mstore`) that produces no value.
-    IntrinsicStmt {
-        expr: ExprId,
-        op: IntrinsicOp,
-        args: Vec<ValueId>,
-    },
+    /// Bind a value into a temporary for later reuse.
+    ///
+    /// This instruction is keyed by `ValueId` (not `ExprId`) so later MIR transforms can move
+    /// and rewrite values without needing to preserve HIR node IDs.
+    BindValue { value: ValueId },
+}
+
+/// Rvalue describing a computation or effectful operation.
+#[derive(Debug, Clone)]
+pub enum Rvalue<'db> {
+    /// Default-initialize a destination to zero (backend-specific representation, typically `0`).
+    ///
+    /// This is used to declare locals in a scope before conditional assignments without needing
+    /// a well-typed `ValueId` for the default.
+    ZeroInit,
+    /// Pure MIR value (`ValueId` DAG).
+    Value(ValueId),
+    /// Effectful call (user function or lowered intrinsic wrapper).
+    Call(CallOrigin<'db>),
+    /// Low-level intrinsic operation, optionally yielding a value.
+    Intrinsic { op: IntrinsicOp, args: Vec<ValueId> },
+    /// Load a scalar value from a place.
+    Load { place: Place<'db> },
+    /// Allocate an address in the given address space.
+    Alloc { address_space: AddressSpaceKind },
 }
 
 /// Control-flow terminating instruction.
 #[derive(Debug, Clone)]
-pub enum Terminator {
+pub enum Terminator<'db> {
     /// Return from the function with an optional value.
     Return(Option<ValueId>),
-    /// Return from the function using raw memory pointer/size (core::return_data).
-    ReturnData { offset: ValueId, size: ValueId },
-    /// Abort execution and revert with memory region at `offset`/`size`.
-    Revert { offset: ValueId, size: ValueId },
+    /// A call that does not return (callee has return type `!`).
+    TerminatingCall(TerminatingCall<'db>),
     /// Unconditional jump to another block.
     Goto { target: BasicBlockId },
     /// Conditional branch based on a boolean value.
@@ -211,22 +318,22 @@ pub enum Terminator {
         discr: ValueId,
         targets: Vec<SwitchTarget>,
         default: BasicBlockId,
-        origin: SwitchOrigin,
     },
     /// Unreachable terminator (used for bodies without an expression).
     Unreachable,
+}
+
+/// A call-like operation used as a terminator (never returns).
+#[derive(Debug, Clone)]
+pub enum TerminatingCall<'db> {
+    Call(CallOrigin<'db>),
+    Intrinsic { op: IntrinsicOp, args: Vec<ValueId> },
 }
 
 #[derive(Debug, Clone)]
 pub struct SwitchTarget {
     pub value: SwitchValue,
     pub block: BasicBlockId,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SwitchOrigin {
-    None,
-    MatchExpr(ExprId),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -273,37 +380,58 @@ pub struct LoopInfo {
 pub struct ValueData<'db> {
     pub ty: TyId<'db>,
     pub origin: ValueOrigin<'db>,
+    /// Runtime representation category for this MIR value.
+    ///
+    /// Most values are represented as a single EVM word. Aggregate values (structs/tuples/arrays/enums)
+    /// are represented by-reference as an address/slot pointing at their backing storage.
+    pub repr: ValueRepr,
 }
 
 #[derive(Debug, Clone)]
 pub enum ValueOrigin<'db> {
+    /// Unlowered HIR expression.
+    ///
+    /// This should not reach codegen; it exists as a construction-time placeholder for
+    /// expressions that require additional MIR lowering.
     Expr(ExprId),
+    /// Value produced by control-flow lowering (e.g. `if`/`match` expressions).
+    ///
+    /// Codegen should treat this as a value that is assigned along CFG edges (phi-like).
+    ControlFlowResult {
+        expr: ExprId,
+    },
+    /// Unit value `()`.
+    Unit,
+    /// Unary scalar operation.
+    Unary {
+        op: hir::hir_def::expr::UnOp,
+        inner: ValueId,
+    },
+    /// Binary scalar operation (arithmetic, comparison, logical).
+    Binary {
+        op: hir::hir_def::expr::BinOp,
+        lhs: ValueId,
+        rhs: ValueId,
+    },
     Synthetic(SyntheticValue),
-    Pat(PatId),
-    Param(Func<'db>, usize),
-    Call(CallOrigin<'db>),
-    /// Call to a compiler intrinsic that should lower to a raw opcode, not a function call.
-    Intrinsic(IntrinsicValue<'db>),
+    /// Reference a MIR local (function parameter, effect parameter, or local variable).
+    Local(LocalId),
+    /// A first-class reference to a function item (compile-time only).
+    ///
+    /// This is not a runtime value, but can be consumed by intrinsics like
+    /// `code_region_offset/len` that refer to function code regions.
+    FuncItem(CodeRegionRoot<'db>),
     /// Pointer arithmetic for accessing a nested struct field (no load, just offset).
     FieldPtr(FieldPtrOrigin),
-}
-
-impl<'db> ValueOrigin<'db> {
-    /// Returns the contained call origin if this value represents a function call.
-    pub fn as_call(&self) -> Option<&CallOrigin<'db>> {
-        match self {
-            ValueOrigin::Call(call) => Some(call),
-            _ => None,
-        }
-    }
-
-    /// Returns the contained call origin mutably if this value represents a call.
-    pub fn as_call_mut(&mut self) -> Option<&mut CallOrigin<'db>> {
-        match self {
-            ValueOrigin::Call(call) => Some(call),
-            _ => None,
-        }
-    }
+    /// Reference to a place (for aggregates - pointer arithmetic only, no load).
+    PlaceRef(Place<'db>),
+    /// A representation-preserving coercion (e.g. transparent wrapper construction).
+    ///
+    /// This keeps the logical type of the value (`ValueData::ty`) while reusing the runtime
+    /// representation of `value` unchanged.
+    TransparentCast {
+        value: ValueId,
+    },
 }
 
 /// Captures compile-time literals synthesized by lowering.
@@ -313,46 +441,10 @@ pub enum SyntheticValue {
     Int(BigUint),
     /// Boolean literal stored as `0` or `1`.
     Bool(bool),
-}
-
-#[derive(Debug, Clone)]
-pub struct MatchLoweringInfo {
-    /// The scrutinee value (e.g. enum pointer) for this match expression.
-    pub scrutinee: ValueId,
-    /// Merge block selected when any arm continues execution; `None` when all arms terminate.
-    pub merge_block: Option<BasicBlockId>,
-    pub arms: Vec<MatchArmLowering>,
-}
-
-#[derive(Debug, Clone)]
-pub struct MatchArmLowering {
-    pub pattern: MatchArmPattern,
-    pub body: ExprId,
-    pub block: BasicBlockId,
-    pub terminates: bool,
-}
-
-/// Information about a variable binding extracted from a pattern.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PatternBinding {
-    /// The pattern ID representing the binding (e.g., `x` in `Some(x)`).
-    pub pat_id: PatId,
-    /// Byte offset of this field within the variant's data region (after discriminant).
-    pub field_offset: u64,
-    /// MIR value representing the lowered load for this binding (if synthesized).
-    pub value: Option<ValueId>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum MatchArmPattern {
-    Literal(SwitchValue),
-    Wildcard,
-    Enum {
-        variant_index: u64,
-        enum_name: String,
-        /// Bindings extracted from the variant's data (empty for unit variants).
-        bindings: Vec<PatternBinding>,
-    },
+    /// Byte string literal encoded as a `0x...` word.
+    ///
+    /// This is a stopgap representation: the literal is emitted inline as a numeric constant.
+    Bytes(Vec<u8>),
 }
 
 /// Address space where a value lives.
@@ -362,11 +454,52 @@ pub enum AddressSpaceKind {
     Storage,
 }
 
+/// Runtime representation category for a MIR value.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ValueRepr {
+    /// A direct EVM word value (e.g. integer, bool, pointer-provider newtypes).
+    Word,
+    /// A pointer-like word value in an address space.
+    ///
+    /// Unlike [`ValueRepr::Ref`], this does *not* imply by-reference aggregate semantics (deep
+    /// copy on assignment). It is used for opaque pointers such as effect pointer providers
+    /// (`MemPtr`/`StorPtr`/`CalldataPtr`) where the value is a raw address/slot.
+    Ptr(AddressSpaceKind),
+    /// An address/slot into an address space that points at a value of `ValueData::ty`.
+    Ref(AddressSpaceKind),
+}
+
+impl ValueRepr {
+    pub fn is_ref(self) -> bool {
+        matches!(self, Self::Ref(_))
+    }
+
+    pub fn address_space(self) -> Option<AddressSpaceKind> {
+        match self {
+            Self::Word => None,
+            Self::Ptr(space) => Some(space),
+            Self::Ref(space) => Some(space),
+        }
+    }
+}
+
+/// Runtime "domain" for an effect provider value.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum EffectProviderKind {
+    Memory,
+    Storage,
+    Calldata,
+}
+
 #[derive(Debug, Clone)]
 pub struct CallOrigin<'db> {
     pub expr: ExprId,
     pub callable: Callable<'db>,
     pub args: Vec<ValueId>,
+    /// Explicit lowered effect arguments for this call, in callee effect-param order.
+    pub effect_args: Vec<ValueId>,
+    /// Effect provider kinds for this call, in callee effect-param order.
+    pub effect_kinds: Vec<EffectProviderKind>,
     /// Final lowered symbol name of the callee after monomorphization.
     pub resolved_name: Option<String>,
     /// For methods on struct types, the statically known address space of the receiver.
@@ -380,17 +513,34 @@ pub struct FieldPtrOrigin {
     /// Base pointer value being offset.
     pub base: ValueId,
     /// Byte offset to add to the base pointer.
-    pub offset_bytes: u64,
+    pub offset_bytes: usize,
+    /// Address space of the base pointer (controls offset scaling in codegen).
+    pub addr_space: AddressSpaceKind,
+}
+
+/// A place describes a location that can be read from or written to.
+/// Consists of a base value and a projection path describing how to navigate
+/// from the base to the actual location.
+#[derive(Debug, Clone)]
+pub struct Place<'db> {
+    /// The base value (e.g., a local variable, parameter, or allocation).
+    pub base: ValueId,
+    /// Sequence of projections to apply to reach the target location.
+    pub projection: MirProjectionPath<'db>,
+}
+
+impl<'db> Place<'db> {
+    pub fn new(base: ValueId, projection: MirProjectionPath<'db>) -> Self {
+        Self { base, projection }
+    }
 }
 
 #[derive(Debug, Clone)]
-pub struct IntrinsicValue<'db> {
+pub struct IntrinsicValue {
     /// Which intrinsic operation this value represents.
     pub op: IntrinsicOp,
     /// Already-lowered argument `ValueId`s (still need converting to Yul expressions later).
     pub args: Vec<ValueId>,
-    /// Target metadata for intrinsics that refer to a function's code region.
-    pub code_region: Option<CodeRegionRoot<'db>>,
 }
 
 /// Identifies the root function for a code region along with its concrete instantiation.
@@ -422,6 +572,14 @@ pub enum IntrinsicOp {
     Mload,
     /// `calldataload(offset)`
     Calldataload,
+    /// `calldatacopy(dest, offset, size)`
+    Calldatacopy,
+    /// `calldatasize()`
+    Calldatasize,
+    /// `returndatacopy(dest, offset, size)`
+    Returndatacopy,
+    /// `returndatasize()`
+    Returndatasize,
     /// `addr_of(ptr)` - returns the address of a pointer value as `u256`.
     AddrOf,
     /// `mstore(address, value)`
@@ -436,6 +594,8 @@ pub enum IntrinsicOp {
     ReturnData,
     /// `codecopy(dest, offset, size)`
     Codecopy,
+    /// `codesize()`
+    Codesize,
     /// `dataoffset` of the code region rooted at a function.
     CodeRegionOffset,
     /// `datasize` of the code region rooted at a function.
@@ -456,7 +616,10 @@ impl IntrinsicOp {
             IntrinsicOp::Mload
                 | IntrinsicOp::Sload
                 | IntrinsicOp::Calldataload
+                | IntrinsicOp::Calldatasize
+                | IntrinsicOp::Returndatasize
                 | IntrinsicOp::AddrOf
+                | IntrinsicOp::Codesize
                 | IntrinsicOp::CodeRegionOffset
                 | IntrinsicOp::CodeRegionLen
                 | IntrinsicOp::Keccak

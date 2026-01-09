@@ -21,6 +21,10 @@ pub enum PathKind<'db> {
 }
 
 impl<'db> PathId<'db> {
+    pub fn from_str(db: &'db dyn HirDb, s: &str) -> Self {
+        Self::from_ident(db, IdentId::new(db, s.to_string()))
+    }
+
     pub fn from_ident(db: &'db dyn HirDb, ident: IdentId<'db>) -> Self {
         Self::new(
             db,
@@ -153,6 +157,10 @@ impl<'db> PathId<'db> {
         Self::new(db, kind, Some(self))
     }
 
+    pub fn push_str(self, db: &'db dyn HirDb, s: &str) -> Self {
+        self.push_ident(db, IdentId::new(db, s.to_string()))
+    }
+
     pub fn push_ident(self, db: &'db dyn HirDb, ident: IdentId<'db>) -> Self {
         self.push(
             db,
@@ -178,6 +186,19 @@ impl<'db> PathId<'db> {
     }
 
     pub fn pretty_print(self, db: &dyn HirDb) -> String {
+        fn space_adjacent_angles(s: &str) -> String {
+            let mut out = String::with_capacity(s.len());
+            let mut prev: Option<char> = None;
+            for ch in s.chars() {
+                if matches!((prev, ch), (Some('<'), '<') | (Some('>'), '>')) {
+                    out.push(' ');
+                }
+                out.push(ch);
+                prev = Some(ch);
+            }
+            out
+        }
+
         let this = match self.kind(db) {
             PathKind::Ident {
                 ident,
@@ -199,9 +220,9 @@ impl<'db> PathId<'db> {
         };
 
         if let Some(parent) = self.parent(db) {
-            parent.pretty_print(db) + "::" + &this
+            space_adjacent_angles(&(parent.pretty_print(db) + "::" + &this))
         } else {
-            this
+            space_adjacent_angles(&this)
         }
     }
 }

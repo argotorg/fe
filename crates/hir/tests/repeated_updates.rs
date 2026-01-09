@@ -1,11 +1,9 @@
-mod test_db;
-
 use fe_hir::analysis::{
     analysis_pass::AnalysisPassManager,
     ty::{AdtDefAnalysisPass, FuncAnalysisPass},
 };
 use fe_hir::lower::map_file_to_mod;
-use test_db::HirAnalysisTestDb;
+use fe_hir::test_db::HirAnalysisTestDb;
 
 use salsa::Setter;
 

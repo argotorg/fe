@@ -1,0 +1,112 @@
+use std::evm::{Evm, Call}
+use std::evm::effects::assert
+use core::abi::{Abi, AbiEncoder, AbiSize, Encode}
+use std::abi::Sol
+
+enum MyOption {
+    None,
+    Some(u256),
+}
+
+msg EnumMsg {
+    #[selector = 0x6c56cb0c]
+    MakeSome { value: u256 } -> u256,
+
+    #[selector = 0x455dd373]
+    MakeNone -> u256,
+
+    #[selector = 0xd4eee422]
+    IsSomeCheck { value: u256 } -> u256,
+}
+
+// Boilerplate for EnumMsg variants
+
+// MakeSome
+impl AbiSize for EnumMsg::MakeSome {
+    const ENCODED_SIZE: u256 = 32
+}
+impl Encode<Sol> for EnumMsg::MakeSome {
+    fn encode<E: AbiEncoder<Sol>>(self, mut _ e: E) {
+        self.value.encode(e)
+    }
+}
+
+// MakeNone
+impl AbiSize for EnumMsg::MakeNone {
+    const ENCODED_SIZE: u256 = 0
+}
+impl Encode<Sol> for EnumMsg::MakeNone {
+    fn encode<E: AbiEncoder<Sol>>(self, mut _ e: E) {
+    }
+}
+
+// IsSomeCheck
+impl AbiSize for EnumMsg::IsSomeCheck {
+    const ENCODED_SIZE: u256 = 32
+}
+impl Encode<Sol> for EnumMsg::IsSomeCheck {
+    fn encode<E: AbiEncoder<Sol>>(self, mut _ e: E) {
+        self.value.encode(e)
+    }
+}
+
+pub contract EnumContract {
+    recv EnumMsg {
+        MakeSome { value } -> u256 {
+            let opt = MyOption::Some(value)
+            return match opt {
+                MyOption::Some(val) => val
+                MyOption::None => 0
+            }
+        }
+
+        MakeNone -> u256 {
+            let opt = MyOption::None
+            return match opt {
+                MyOption::Some(val) => val
+                MyOption::None => 0
+            }
+        }
+
+        IsSomeCheck { value } -> u256 {
+            let opt = MyOption::Some(value)
+            return match opt {
+                MyOption::Some(_) => 1
+                MyOption::None => 0
+            }
+        }
+    }
+}
+
+#[test]
+fn test_enum() uses (mut evm: Evm) {
+    let contract_addr = evm.create2<EnumContract>(value: 0, args: (), salt: 0)
+    assert(contract_addr.inner != 0)
+
+    // Test make_some(42) - should return 42
+    let res: u256 = evm.call(
+        addr: contract_addr,
+        gas: 100000,
+        value: 0,
+        message: EnumMsg::MakeSome { value: 42 }
+    )
+    assert(res == 42)
+
+    // Test is_some_check(99) - should return 1 (true)
+    let res: u256 = evm.call(
+        addr: contract_addr,
+        gas: 100000,
+        value: 0,
+        message: EnumMsg::IsSomeCheck { value: 99 }
+    )
+    assert(res == 1)
+
+    // Test make_none() - should return 0
+    let res: u256 = evm.call(
+        addr: contract_addr,
+        gas: 100000,
+        value: 0,
+        message: EnumMsg::MakeNone {}
+    )
+    assert(res == 0)
+}

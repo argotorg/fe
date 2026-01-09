@@ -1,6 +1,6 @@
 use common::InputDb;
 use driver::DriverDataBase;
-use fe_mir::{ValueOrigin, lower_module};
+use fe_mir::{MirInst, Rvalue, lower_module};
 use url::Url;
 
 #[test]
@@ -30,13 +30,19 @@ fn main() {
         .expect("main function lowered");
 
     let mut call_names = Vec::new();
-    for value in &main_fn.body.values {
-        if let ValueOrigin::Call(call) = &value.origin {
-            call_names.push(
-                call.resolved_name
-                    .clone()
-                    .expect("extern generic calls should be named"),
-            );
+    for block in &main_fn.body.blocks {
+        for inst in &block.insts {
+            if let MirInst::Assign {
+                rvalue: Rvalue::Call(call),
+                ..
+            } = inst
+            {
+                call_names.push(
+                    call.resolved_name
+                        .clone()
+                        .expect("extern generic calls should be named"),
+                );
+            }
         }
     }
 

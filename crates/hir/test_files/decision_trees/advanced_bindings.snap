@@ -1,5 +1,5 @@
 ---
-source: crates/hir-analysis/tests/decision_tree.rs
+source: crates/hir/tests/decision_tree.rs
 expression: res
 input_file: test_files/decision_trees/advanced_bindings.fe
 ---
@@ -16,15 +16,15 @@ note:
  Switch on expr
  ├─ Value =>
  │  └─ Execute arm #0
- │       x ← expr.0
+ │       x ← expr.Value[0]
  ├─ Pair =>
  │  └─ Execute arm #1
- │       a ← expr.0
- │       b ← expr.1
+ │       a ← expr.Pair[0]
+ │       b ← expr.Pair[1]
  ├─ Triple =>
  │  └─ Execute arm #2
- │       x ← expr.0
- │       y ← expr.1
- │       z ← expr.2
+ │       x ← expr.Triple[0]
+ │       y ← expr.Triple[1]
+ │       z ← expr.Triple[2]
  └─ Empty =>
     └─ Execute arm #3

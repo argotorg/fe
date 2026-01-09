@@ -1,0 +1,18 @@
+---
+source: crates/codegen/tests/yul.rs
+assertion_line: 42
+expression: output
+input_file: tests/fixtures/while_cond_call.fe
+---
+function lt_ten(value) -> ret {
+  ret := lt(value, 10)
+  leave
+}
+function while_cond_call() -> ret {
+  let v0 := 0
+  for { let v1 := lt_ten(v0) } v1 { v1 := lt_ten(v0) } {
+    v0 := add(v0, 1)
+  }
+  ret := v0
+  leave
+}

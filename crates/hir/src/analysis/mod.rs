@@ -1,6 +1,7 @@
 use crate::{HirDb, span::DynLazySpan};
 pub mod analysis_pass;
 pub mod diagnostics;
+pub mod place;
 
 #[salsa::db]
 pub trait HirAnalysisDb: HirDb {}

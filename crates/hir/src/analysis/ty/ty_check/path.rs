@@ -165,7 +165,7 @@ impl<'db> RecordLike<'db> {
         match self {
             RecordLike::Type(ty) => ty
                 .adt_ref(db)
-                .is_some_and(|adt_ref| matches!(adt_ref, AdtRef::Struct(_) | AdtRef::Contract(_))),
+                .is_some_and(|adt_ref| matches!(adt_ref, AdtRef::Struct(_))),
             RecordLike::EnumVariant(variant) => {
                 matches!(variant.kind(db), HirVariantKind::Record(..))
             }
@@ -181,10 +181,7 @@ impl<'db> RecordLike<'db> {
             RecordLike::Type(ty) => {
                 let adt_def = ty.adt_def(db)?;
                 let field_idx = match adt_def.adt_ref(db) {
-                    AdtRef::Struct(s) => crate::hir_def::FieldParent::Struct(s)
-                        .fields(db)
-                        .position(|v| v.name(db) == Some(name))?,
-                    AdtRef::Contract(c) => crate::hir_def::FieldParent::Contract(c)
+                    AdtRef::Struct(s) => FieldParent::Struct(s)
                         .fields(db)
                         .position(|v| v.name(db) == Some(name))?,
                     _ => return None,
@@ -202,11 +199,9 @@ impl<'db> RecordLike<'db> {
             RecordLike::EnumVariant(variant) => {
                 let adt_def = variant.ty.adt_def(db)?;
                 let field_idx = match variant.kind(db) {
-                    HirVariantKind::Record(_) => {
-                        crate::hir_def::FieldParent::Variant(variant.variant)
-                            .fields(db)
-                            .position(|v| v.name(db) == Some(name))?
-                    }
+                    HirVariantKind::Record(_) => FieldParent::Variant(variant.variant)
+                        .fields(db)
+                        .position(|v| v.name(db) == Some(name))?,
                     _ => return None,
                 };
                 let adt_field_list_ref = &adt_def.fields(db)[variant.variant.idx as usize];
@@ -232,7 +227,6 @@ impl<'db> RecordLike<'db> {
                 let adt_def = ty.adt_def(db)?;
                 let parent = match adt_def.adt_ref(db) {
                     AdtRef::Struct(s) => FieldParent::Struct(s),
-                    AdtRef::Contract(c) => FieldParent::Contract(c),
                     _ => return None,
                 };
                 parent
@@ -266,7 +260,6 @@ impl<'db> RecordLike<'db> {
                 let adt_ref = ty.adt_ref(db)?;
                 let parent = match adt_ref {
                     AdtRef::Struct(s) => FieldParent::Struct(s),
-                    AdtRef::Contract(c) => FieldParent::Contract(c),
                     _ => return None,
                 };
                 Some(ScopeId::Field(parent, field_idx as u16))
@@ -287,7 +280,6 @@ impl<'db> RecordLike<'db> {
                 };
                 let parent = match adt_ref {
                     AdtRef::Struct(s) => FieldParent::Struct(s),
-                    AdtRef::Contract(c) => FieldParent::Contract(c),
                     _ => return Vec::default(),
                 };
                 parent.fields(db).filter_map(|v| v.name(db)).collect()
@@ -305,17 +297,12 @@ impl<'db> RecordLike<'db> {
     pub fn initializer_hint(&self, db: &'db dyn HirAnalysisDb) -> Option<String> {
         match self {
             RecordLike::Type(ty) => {
-                if ty.adt_ref(db).is_some() {
-                    let AdtRef::Struct(s) = ty.adt_ref(db)? else {
-                        return None;
-                    };
-
-                    let name = s.name(db).unwrap().data(db);
-                    let init_args = s.format_initializer_args(db);
-                    Some(format!("{name}{init_args}"))
-                } else {
-                    None
-                }
+                let AdtRef::Struct(s) = ty.adt_ref(db)? else {
+                    return None;
+                };
+                let name = s.name(db).unwrap().data(db);
+                let init_args = s.format_initializer_args(db);
+                Some(format!("{name}{init_args}"))
             }
             RecordLike::EnumVariant(variant) => {
                 let expected_sub_pat = variant.variant.format_initializer_args(db);

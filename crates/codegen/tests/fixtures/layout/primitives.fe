@@ -1,0 +1,24 @@
+// Test layout of primitive types in structs
+
+struct SingleU8 {
+    a: u8,
+}
+
+struct SingleU256 {
+    a: u256,
+}
+
+struct MixedPrimitives {
+    a: u8,
+    b: u16,
+    c: u32,
+    d: u64,
+    e: u128,
+    f: u256,
+}
+
+struct Bools {
+    a: bool,
+    b: bool,
+    c: bool,
+}

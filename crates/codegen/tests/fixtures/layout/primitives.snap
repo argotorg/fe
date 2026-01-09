@@ -1,0 +1,29 @@
+---
+source: crates/hir/tests/layout.rs
+assertion_line: 144
+expression: report
+input_file: test_files/layout/primitives.fe
+---
+struct SingleU8:
+  size: 1 bytes
+  fields:
+    [0]: offset=0, size=1
+struct SingleU256:
+  size: 32 bytes
+  fields:
+    [0]: offset=0, size=32
+struct MixedPrimitives:
+  size: 63 bytes
+  fields:
+    [0]: offset=0, size=1
+    [1]: offset=1, size=2
+    [2]: offset=3, size=4
+    [3]: offset=7, size=8
+    [4]: offset=15, size=16
+    [5]: offset=31, size=32
+struct Bools:
+  size: 3 bytes
+  fields:
+    [0]: offset=0, size=1
+    [1]: offset=1, size=1
+    [2]: offset=2, size=1

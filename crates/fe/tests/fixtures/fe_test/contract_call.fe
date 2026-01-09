@@ -1,0 +1,26 @@
+/// Simple test to verify the basic test infrastructure works.
+
+use std::evm::effects::assert
+use std::evm::ops::{mstore, mload}
+
+#[test]
+fn test_basic_assert() {
+    // Simple test to verify the test infrastructure works
+    let a: u256 = 1
+    let b: u256 = 1
+    let expected: u256 = 2
+    assert(a + b == expected)
+
+    let val: u256 = 42
+    let zero: u256 = 0
+    assert(val != zero)
+}
+
+#[test]
+fn test_memory_operations() {
+    // Test basic memory operations
+    let value: u256 = 42
+    mstore(0, value)
+    let val = mload(0)
+    assert(val == value)
+}

@@ -1,6 +1,5 @@
 ---
 source: crates/codegen/tests/yul.rs
-assertion_line: 31
 expression: output
 input_file: tests/fixtures/aug_assign_bit_ops.fe
 ---
@@ -13,4 +12,5 @@ function aug_assign_bit_ops(x, y) -> ret {
   v0 := or(v0, 1)
   v0 := xor(v0, 2)
   ret := v0
+  leave
 }

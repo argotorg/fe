@@ -931,7 +931,6 @@ impl<'db> Diagnosable<'db> for AdtRef<'db> {
         match self {
             AdtRef::Struct(s) => s.diags(db),
             AdtRef::Enum(e) => e.diags(db),
-            AdtRef::Contract(c) => c.diags(db),
         }
     }
 }

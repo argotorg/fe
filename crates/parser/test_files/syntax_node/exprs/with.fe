@@ -1,3 +1,7 @@
 with (Storage = st, Ctx = MockCtx::new()) { g() }
 
 with (Storage = st) { g() }
+
+with (st, MockCtx::new()) { g() }
+
+with (Ctx = ctx, owner, balance) { g() }

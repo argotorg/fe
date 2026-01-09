@@ -1,0 +1,123 @@
+---
+source: crates/hir/tests/desugar.rs
+expression: output
+input_file: test_files/desugar/contract_and_effects.fe
+---
+use core::prelude::*
+use std::evm::StorageMap
+
+mod __Counter {
+    use super::*
+    use core::contracts::ContractHost
+    use core::contracts::Target
+    use core::abi::Abi
+    use core::abi::AbiEncoder
+    use core::abi::AbiSize
+    use core::abi::ByteInput
+    use core::abi::prefix
+    use core::abi::Encode
+    use std::evm::EvmTarget
+
+    type __Target = EvmTarget
+
+    type __RootEffect = __Target::RootEffect
+
+    type __DefaultAbi = __Target::DefaultAbi
+
+    fn recv_CounterMsg_Increment_0_0(args: CounterMsg::Increment::Args) uses (mut count: u64, mut map: StorageMap<u256, u64, 0>) {
+        return {
+            map.set(0, count)
+            count += 1
+        }
+    }
+
+    fn recv_CounterMsg_Get_0_1(args: CounterMsg::Get::Args) -> (u64, u64) uses (count: u64, map: StorageMap<u256, u64, 0>) {
+        return {
+            (count, map.get(0))
+        }
+    }
+
+    fn init_contract(start: u64) uses (mut count: u64) {
+        return {
+            count = start
+        }
+    }
+
+    #[contract_init(Counter)]
+    fn init() uses (mut root: __RootEffect) {
+        let mut map = root.init_field<StorageMap<u256, u64, 0> >(core::contract_field_slot(0))
+        let mut count = root.init_field<u64>(core::contract_field_slot(1))
+        let mut __d = __DefaultAbi::decoder_new(root.init_input(runtime))
+        let start: u64 = u64::decode(__d)
+        with (u64 = count) { init_contract(start) }
+        root.create_contract(runtime)
+    }
+
+    #[contract_runtime(Counter)]
+    fn runtime() uses (mut root: __RootEffect) {
+        let mut map = root.field<StorageMap<u256, u64, 0> >(core::contract_field_slot(0))
+        let mut count = root.field<u64>(core::contract_field_slot(1))
+        let __selector = root.runtime_selector<__DefaultAbi>()
+        let mut __d = root.runtime_decoder<__DefaultAbi>()
+        match __selector {
+            CounterMsg::Increment::SELECTOR => {
+                let __args: CounterMsg::Increment::Args = CounterMsg::Increment::Args::decode(__d)
+                with (u64 = count, StorageMap<u256, u64, 0> = map) { recv_CounterMsg_Increment_0_0(__args) }
+                root.return_unit()
+            },
+            CounterMsg::Get::SELECTOR => {
+                let __args: CounterMsg::Get::Args = CounterMsg::Get::Args::decode(__d)
+                let __result = with (u64 = count, StorageMap<u256, u64, 0> = map) { recv_CounterMsg_Get_0_1(__args) }
+                root.return_value<__DefaultAbi, (u64, u64)>(__result)
+            },
+            _ => root.abort(),
+        }
+    }
+
+    impl std::evm::Contract for Counter {
+        type InitArgs = (u64)
+    
+        fn init_code_offset() -> u256 {
+            return std::evm::code_region_offset(init)
+        }
+    
+        fn init_code_len() -> u256 {
+            return std::evm::code_region_len(init)
+        }
+    }
+}
+
+mod CounterMsg {
+    use core::prelude::*
+    use super::*
+
+    pub struct Increment {}
+
+    impl core::message::MsgVariant<std::abi::Sol> for Increment {
+        type Args = ()
+        type Return = ()
+        const SELECTOR: u32 = 1
+    }
+
+    impl Increment {
+        pub fn decode(mut _ d: std::abi::sol::SolDecoder<std::evm::calldata::CallData>) -> Self {
+            return Self {  }
+        }
+    
+    }
+
+    pub struct Get {}
+
+    impl core::message::MsgVariant<std::abi::Sol> for Get {
+        type Args = ()
+        type Return = (u64, u64)
+        const SELECTOR: u32 = 2
+    }
+
+    impl Get {
+        pub fn decode(mut _ d: std::abi::sol::SolDecoder<std::evm::calldata::CallData>) -> Self {
+            return Self {  }
+        }
+    
+    }
+}

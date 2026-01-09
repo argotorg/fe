@@ -233,6 +233,12 @@ pub enum BodyDiag<'db> {
 
     UndefinedVariable(DynLazySpan<'db>, IdentId<'db>),
 
+    InvalidEffectKey {
+        owner: crate::analysis::ty::ty_check::EffectParamOwner<'db>,
+        key: PathId<'db>,
+        idx: usize,
+    },
+
     MissingEffect {
         primary: DynLazySpan<'db>,
         func: Func<'db>,
@@ -540,6 +546,7 @@ impl<'db> BodyDiag<'db> {
             Self::ExplicitLabelExpectedInRecord { .. } => 10,
             Self::MissingRecordFields { .. } => 11,
             Self::UndefinedVariable(..) => 12,
+            Self::InvalidEffectKey { .. } => 51,
             Self::MissingEffect { .. } => 36,
             Self::EffectMutabilityMismatch { .. } => 37,
             Self::EffectTypeMismatch { .. } => 38,

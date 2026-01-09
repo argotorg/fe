@@ -1,0 +1,27 @@
+// Trait associated const patterns should be treated as values, when we can
+// best-effort evaluate them to literals.
+
+trait HasSelector {
+    const SELECTOR: u8
+}
+
+struct Foo {}
+impl HasSelector for Foo {
+    const SELECTOR: u8 = 1
+}
+
+// Defaulted associated const.
+trait HasDefault {
+    const C: u8 = 2
+}
+struct Bar {}
+impl HasDefault for Bar {}
+
+fn test_trait_assoc_const_patterns(x: u8) -> u8 {
+    match x {
+        Foo::SELECTOR => 10
+        Bar::C => 11
+        _ => 0
+    }
+}
+

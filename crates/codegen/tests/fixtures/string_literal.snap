@@ -1,9 +1,9 @@
 ---
 source: crates/codegen/tests/yul.rs
-assertion_line: 31
 expression: output
 input_file: tests/fixtures/string_literal.fe
 ---
 function string_literal() -> ret {
   ret := 0x68656c6c6f
+  leave
 }

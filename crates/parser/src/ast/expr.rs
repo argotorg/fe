@@ -329,6 +329,9 @@ impl MatchExpr {
 
 ast_node! {
     /// `with (Effect = value, ..) { .. }`
+    ///
+    /// Also supports shorthand `with (value1, value2, ..) { .. }`, where
+    /// effect keys are inferred from the bound values.
     pub struct WithExpr,
     SK::WithExpr
 }

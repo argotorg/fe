@@ -1,4 +1,4 @@
-use core::{calldataload, mstore, return_data, codecopy, code_region_len, code_region_offset}
+use std::evm::{Evm, RawMem, RawOps}
 
 struct Point { x: u256, y: u256 }
 struct Square { side: u256 }
@@ -16,38 +16,39 @@ impl Square {
     }
 }
 
-fn abi_encode(value: u256) {
+fn abi_encode(value: u256) -> ! uses (mut ops: RawOps) {
     let ptr: u256 = 0
-    mstore(ptr, value)
-    return_data(ptr, 32)
+    ops.mstore(ptr, value)
+    ops.return_data(ptr, 32)
 }
 
 #[contract_init(ShapeDispatcher)]
-fn init() {
-    let len = code_region_len(dispatch)
-    let offset = code_region_offset(dispatch)
-    codecopy(dest: 0, offset, len)
+fn init() uses (mut evm: Evm) {
+    let len = evm.code_region_len(dispatch)
+    let offset = evm.code_region_offset(dispatch)
+    evm.codecopy(dest: 0, offset, len)
+    evm.return_data(0, len)
 }
 
 #[contract_runtime(ShapeDispatcher)]
-fn dispatch() {
-    let selector = calldataload(0) >> 224
+fn dispatch() uses (mut evm: Evm) {
+    let selector = evm.calldataload(0) >> 224
     if selector == 0x090251bf {
-        let x = calldataload(4)
-        let y = calldataload(36)
+        let x = evm.calldataload(4)
+        let y = evm.calldataload(36)
         let mut p = Point { x: x, y: y }
         p.x = p.x + 1
         p.y = p.y + 2
         let value = p.area()
-        abi_encode(value)
+        with (RawOps = evm) { abi_encode(value) }
     }
     if selector == 0x7b292909 {
-        let side = calldataload(4)
+        let side = evm.calldataload(4)
         let mut s = Square { side: side }
         s.side = s.side + 3
         let value = s.area()
-        abi_encode(value)
+        with (RawOps = evm) { abi_encode(value) }
     }
 
-    return_data(0, 0)
+    evm.return_data(0, 0)
 }

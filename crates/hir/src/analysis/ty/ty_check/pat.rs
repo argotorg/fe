@@ -150,14 +150,25 @@ impl<'db> TyChecker<'db> {
                 PathRes::Ty(ty)
                 | PathRes::TyAlias(_, ty)
                 | PathRes::Func(ty)
-                | PathRes::Const(_, ty)
-                | PathRes::TraitConst(ty, ..),
+                | PathRes::Const(_, ty),
             ) => {
                 let record_like = RecordLike::from_ty(ty);
                 if record_like.is_record(self.db) {
                     self.emit_unit_variant_expected(pat, record_like)
                 } else {
                     ty
+                }
+            }
+
+            Ok(PathRes::TraitConst(_recv_ty, inst, name)) => {
+                let trait_ = inst.def(self.db);
+                if let Some(const_view) = trait_.const_(self.db, name)
+                    && let Some(ty_binder) = const_view.ty_binder(self.db)
+                {
+                    let instantiated = ty_binder.instantiate(self.db, inst.args(self.db));
+                    self.table.instantiate_to_term(instantiated)
+                } else {
+                    TyId::invalid(self.db, InvalidCause::Other)
                 }
             }
 
@@ -187,7 +198,7 @@ impl<'db> TyChecker<'db> {
                 TyId::invalid(self.db, InvalidCause::Other)
             }
 
-            Ok(PathRes::Method(..) | PathRes::FuncParam(..)) => {
+            Ok(PathRes::TraitMethod(..) | PathRes::Method(..) | PathRes::FuncParam(..)) => {
                 TyId::invalid(self.db, InvalidCause::Other)
             }
 
@@ -258,7 +269,7 @@ impl<'db> TyChecker<'db> {
                     return TyId::invalid(self.db, InvalidCause::Other);
                 }
 
-                PathRes::Method(..) | PathRes::FuncParam(..) => {
+                PathRes::TraitMethod(..) | PathRes::Method(..) | PathRes::FuncParam(..) => {
                     let diag = BodyDiag::tuple_variant_expected(self.db, span.into(), None);
                     self.push_diag(diag);
                     return TyId::invalid(self.db, InvalidCause::Other);
@@ -400,7 +411,7 @@ impl<'db> TyChecker<'db> {
                     TyId::invalid(self.db, InvalidCause::Other)
                 }
 
-                PathRes::Method(..) | PathRes::FuncParam(..) => {
+                PathRes::TraitMethod(..) | PathRes::Method(..) | PathRes::FuncParam(..) => {
                     let diag =
                         BodyDiag::record_expected(self.db, pat.span(self.body()).into(), None);
                     self.push_diag(diag);

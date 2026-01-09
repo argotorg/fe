@@ -1,0 +1,14 @@
+---
+source: crates/uitest/tests/name_resolution.rs
+assertion_line: 26
+expression: diags
+input_file: fixtures/name_resolution/assoc_const_visibility_span.fe
+---
+error[2-0003]: `C` is not visible
+   ┌─ assoc_const_visibility_span.fe:16:15
+   │
+ 4 │         const C: u32
+   │         ------------ `C` is defined here
+   ·
+16 │     inner::S::C
+   │               ^ `C` is not visible

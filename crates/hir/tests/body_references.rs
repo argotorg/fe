@@ -1,12 +1,11 @@
-mod test_db;
 use std::path::Path;
 
 use dir_test::{Fixture, dir_test};
+use fe_hir::test_db::HirAnalysisTestDb;
 use fe_hir::{
     core::semantic::reference::{HasReferences, ReferenceView, Target},
     hir_def::ItemKind,
 };
-use test_db::HirAnalysisTestDb;
 use test_utils::snap_test;
 
 #[dir_test(

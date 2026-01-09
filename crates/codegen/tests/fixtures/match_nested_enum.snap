@@ -1,0 +1,33 @@
+---
+source: crates/codegen/tests/yul.rs
+expression: output
+input_file: tests/fixtures/match_nested_enum.fe
+---
+function match_nested_enum(outer) -> ret {
+  let v0 := 0
+  let v1 := mload(outer)
+  switch v1
+    case 0 {
+      let v2 := mload(add(outer, 32))
+      switch v2
+        case 0 {
+          v0 := 0
+        }
+        case 1 {
+          let v3 := and(mload(add(outer, 64)), 0xff)
+          let v4 := v3
+          v0 := v4
+        }
+        default {
+        }
+    }
+    case 1 {
+      let v5 := and(mload(add(outer, 32)), 0xff)
+      let v6 := v5
+      v0 := v6
+    }
+    default {
+    }
+  ret := v0
+  leave
+}

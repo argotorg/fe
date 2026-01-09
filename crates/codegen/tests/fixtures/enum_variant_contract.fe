@@ -1,46 +1,38 @@
-use core::{
-    calldataload,
-    code_region_len,
-    code_region_offset,
-    codecopy,
-    mstore,
-    return_data,
-}
+use std::evm::{Evm, RawMem, RawOps}
 
 enum MyOption {
     None,
     Some(u256),
 }
 
-fn abi_encode_u256(value: u256) {
+fn abi_encode_u256(value: u256) -> ! uses (mut ops: RawOps) {
     let ptr: u256 = 0
-    mstore(ptr, value)
-    return_data(ptr, 32)
+    ops.mstore(ptr, value)
+    ops.return_data(ptr, 32)
 }
 
 #[contract_init(EnumContract)]
-fn init() {
-    let len = code_region_len(runtime)
-    let offset = code_region_offset(runtime)
-    codecopy(dest: 0, offset, len)
-    return_data(0, len)
+fn init() uses (mut evm: Evm) {
+    let len = evm.code_region_len(runtime)
+    let offset = evm.code_region_offset(runtime)
+    evm.codecopy(dest: 0, offset, len)
+    evm.return_data(0, len)
 }
 
 #[contract_runtime(EnumContract)]
-fn runtime() {
-    let selector = calldataload(0) >> 224
+fn runtime() uses (mut evm: Evm) {
+    let selector = evm.calldataload(0) >> 224
 
     // make_some(uint256) -> returns the value back
     // Selector: keccak256("make_some(uint256)")[:4] = 0x6c56cb0c
     if selector == 0x6c56cb0c {
-        let value = calldataload(4)
+        let value = evm.calldataload(4)
         let opt = MyOption::Some(value)
         let result = match opt {
             MyOption::Some(val) => val
             MyOption::None => 0
         }
-        abi_encode_u256(value: result)
-        return_data(0, 0)
+        with (RawOps = evm) { abi_encode_u256(value: result) }
     }
 
     // make_none() -> returns 0
@@ -51,22 +43,20 @@ fn runtime() {
             MyOption::Some(val) => val
             MyOption::None => 0
         }
-        abi_encode_u256(value: result)
-        return_data(0, 0)
+        with (RawOps = evm) { abi_encode_u256(value: result) }
     }
 
     // is_some_check(uint256) -> returns 1 if constructed as Some
     // Selector: keccak256("is_some_check(uint256)")[:4] = 0xd4eee422
     if selector == 0xd4eee422 {
-        let value = calldataload(4)
+        let value = evm.calldataload(4)
         let opt = MyOption::Some(value)
         let result = match opt {
             MyOption::Some(_) => 1
             MyOption::None => 0
         }
-        abi_encode_u256(value: result)
-        return_data(0, 0)
+        with (RawOps = evm) { abi_encode_u256(value: result) }
     }
 
-    return_data(0, 0)
+    evm.return_data(0, 0)
 }

@@ -1,5 +1,5 @@
 ---
-source: crates/hir-analysis/tests/decision_tree.rs
+source: crates/hir/tests/decision_tree.rs
 expression: res
 input_file: test_files/decision_trees/with_bindings.fe
 ---
@@ -14,12 +14,12 @@ note:
  Switch on expr
  ├─ Rgb =>
  │  └─ Execute arm #0
- │       r ← expr.0
- │       g ← expr.1
- │       b ← expr.2
+ │       r ← expr.Rgb[0]
+ │       g ← expr.Rgb[1]
+ │       b ← expr.Rgb[2]
  └─ Simple =>
     └─ Execute arm #1
-         value ← expr.0
+         value ← expr.Simple[0]
 
 
 note: 
@@ -35,8 +35,8 @@ note:
  │  └─ Execute arm #0
  └─ Coordinate =>
     └─ Execute arm #1
-         x ← expr.0
-         y ← expr.1
+         x ← expr.Coordinate[0]
+         y ← expr.Coordinate[1]
 
 
 note: 
@@ -55,8 +55,8 @@ note:
        │  └─ Switch on expr.0
        │     ├─ Rgb =>
        │     │  └─ Execute arm #0
-       │     │       r ← expr.0.0
-       │     │       x ← expr.1.0
+       │     │       r ← expr.0.Rgb[0]
+       │     │       x ← expr.1.Coordinate[0]
        │     └─ _ =>
        │        └─ Execute arm #2
        └─ Origin =>

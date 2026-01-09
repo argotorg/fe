@@ -1,0 +1,86 @@
+---
+source: crates/mir/tests/lowering_snapshots.rs
+expression: mir_output
+---
+fn abi_encode(v0: u256) -> ():
+  bb0:
+    v1: u256 = 0
+    eval mstore(v1, v0)
+    terminate return_data(v1, 32)
+
+fn get_balance(v0: u256, v1: u256) -> u256:
+  bb0:
+    v2: u256 = call storagemap_k__v__get_stor__u256_u256__cc308d1bea3fb6e4(v1, v0)
+    ret v2
+
+fn transfer(v0: u256, v1: u256, v2: u256, v3: u256) -> u256:
+  bb0:
+    v4: u256 = call storagemap_k__v__get_stor__u256_u256__cc308d1bea3fb6e4(v3, v0)
+    br (v4 < v2) bb1 bb2
+  bb1:
+    ret 1
+  bb2:
+    v5: u256 = call storagemap_k__v__get_stor__u256_u256__cc308d1bea3fb6e4(v3, v1)
+    eval call storagemap_k__v__set_stor__u256_u256__cc308d1bea3fb6e4(v3, v0, (v4 - v2))
+    eval call storagemap_k__v__set_stor__u256_u256__cc308d1bea3fb6e4(v3, v1, (v5 + v2))
+    ret 0
+
+fn runtime() -> ():
+  bb0:
+    v0: StorPtr<StorageMap<u256, u256>> = stor_at(0)
+    v2: u256 = calldataload(0)
+    v1: u256 = (v2 >> 224)
+    jmp bb5
+  bb1:
+    v3: u256 = calldataload(4)
+    bind v0
+    v5: u256 = call get_balance(v3, v0)
+    v4: u256 = v5
+    eval call abi_encode(v4)
+    jmp bb2
+  bb2:
+    ret
+  bb3:
+    v6: u256 = calldataload(4)
+    v7: u256 = calldataload(36)
+    v8: u256 = calldataload(68)
+    bind v0
+    v10: u256 = call transfer(v6, v7, v8, v0)
+    v9: u256 = v10
+    eval call abi_encode(v9)
+    jmp bb2
+  bb4:
+    terminate return_data(0, 0)
+  bb5:
+    switch v1 [2630350600 => bb1, 2430412327 => bb3] else bb4
+
+fn storagemap_k__v__get_stor__u256_u256__cc308d1bea3fb6e4(v0: StorageMap<K, V>, v1: K) -> V:
+  bb0:
+    v2: u256 = call storagemap_k__v__storage_slot_stor__u256_u256__cc308d1bea3fb6e4(v0, v1)
+    v3: u256 = sload(v2)
+    v4: u256 = call from_word__u256__3271ca15373d4483(v3)
+    ret v4
+
+fn storagemap_k__v__set_stor__u256_u256__cc308d1bea3fb6e4(v0: StorageMap<K, V>, v1: K, v2: V) -> ():
+  bb0:
+    v3: u256 = call storagemap_k__v__storage_slot_stor__u256_u256__cc308d1bea3fb6e4(v0, v1)
+    v4: u256 = call from_word__u256__3271ca15373d4483(v2)
+    eval sstore(v3, v4)
+    ret
+
+fn storagemap_k__v__storage_slot_stor__u256_u256__cc308d1bea3fb6e4(v0: StorageMap<K, V>, v1: K) -> u256:
+  bb0:
+    v2: u256 = call write_key__u256__3271ca15373d4483(0, v1)
+    v3: u256 = addr_of(v0)
+    eval mstore(v2, v3)
+    v4: u256 = keccak256(0, (v2 + 32))
+    ret v4
+
+fn from_word__u256__3271ca15373d4483(v0: u256) -> u256:
+  bb0:
+    ret v0
+
+fn write_key__u256__3271ca15373d4483(v0: u256, v1: u256) -> u256:
+  bb0:
+    eval mstore(v0, v1)
+    ret 32

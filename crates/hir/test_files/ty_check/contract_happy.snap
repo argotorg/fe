@@ -178,3 +178,17 @@ note:
    │
 21 │             total
    │             ^^^^^ u64
+
+note: 
+   ┌─ contract_happy.fe:27:5
+   │  
+27 │ ╭     #[selector = 0x01]
+28 │ │     Withdraw { amount: u64 } -> bool,
+   │ ╰────────────────────────────────────^ u64
+
+note: 
+   ┌─ contract_happy.fe:29:5
+   │  
+29 │ ╭     #[selector = 0x02]
+30 │ │     Deposit { amount: u64 } -> u64,
+   │ ╰──────────────────────────────────^ u64

@@ -1,0 +1,18 @@
+// Test packed layout with mixed field sizes
+
+struct PackedSmall {
+    a: u8,
+    b: u8,
+    c: u8,
+}
+
+struct PackedMixed {
+    small1: u8,
+    big: u256,
+    small2: u8,
+}
+
+struct ReverseMixed {
+    big: u256,
+    small: u8,
+}

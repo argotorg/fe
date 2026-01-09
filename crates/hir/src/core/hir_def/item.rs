@@ -98,6 +98,7 @@ impl<'db> ItemKind<'db> {
             Self::Trait(trait_) => trait_.attributes(db),
             Self::ImplTrait(impl_trait) => impl_trait.attributes(db),
             Self::Const(const_) => const_.attributes(db),
+            Self::Use(use_) => use_.attributes(db),
             _ => return None,
         }
         .into()
@@ -634,7 +635,7 @@ pub struct Func<'db> {
     pub top_mod: TopLevelMod<'db>,
 
     #[return_ref]
-    pub(crate) origin: HirOrigin<ast::Func>,
+    pub origin: HirOrigin<ast::Func>,
 }
 impl<'db> Func<'db> {
     pub fn span(self) -> LazyFuncSpan<'db> {
@@ -763,6 +764,10 @@ impl<'db> Contract<'db> {
 
     pub fn scope(self) -> ScopeId<'db> {
         ScopeId::from_item(self.into())
+    }
+
+    pub fn hir_fields(self, db: &'db dyn HirDb) -> FieldDefListId<'db> {
+        self.fields(db)
     }
 
     pub fn init_func(self, db: &'db dyn HirDb) -> Option<Func<'db>> {
@@ -1060,6 +1065,7 @@ impl<'db> Trait<'db> {
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, salsa::Update)]
 pub struct AssocTyDecl<'db> {
+    pub attributes: AttrListId<'db>,
     pub name: Partial<IdentId<'db>>,
     pub bounds: Vec<TypeBound<'db>>,
     pub default: Option<TypeId<'db>>,
@@ -1067,6 +1073,7 @@ pub struct AssocTyDecl<'db> {
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, salsa::Update)]
 pub struct AssocConstDecl<'db> {
+    pub attributes: AttrListId<'db>,
     pub name: Partial<IdentId<'db>>,
     pub ty: Partial<TypeId<'db>>,
     pub default: Option<Partial<Body<'db>>>,
@@ -1145,12 +1152,14 @@ impl<'db> ImplTrait<'db> {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, salsa::Update)]
 pub struct AssocTyDef<'db> {
+    pub attributes: AttrListId<'db>,
     pub name: Partial<IdentId<'db>>,
     pub(crate) type_ref: Partial<TypeId<'db>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, salsa::Update)]
 pub struct AssocConstDef<'db> {
+    pub attributes: AttrListId<'db>,
     pub name: Partial<IdentId<'db>>,
     pub ty: Partial<TypeId<'db>>,
     pub value: Partial<Body<'db>>,
@@ -1192,6 +1201,7 @@ pub struct Use<'db> {
     #[id]
     id: TrackedItemId<'db>,
 
+    pub(in crate::core) attributes: AttrListId<'db>,
     pub path: Partial<super::UsePathId<'db>>,
     pub alias: Option<Partial<UseAlias<'db>>>,
     pub vis: Visibility,
@@ -1408,6 +1418,10 @@ impl<'db> FieldDef<'db> {
             type_ref,
             vis,
         }
+    }
+
+    pub fn type_ref(&self) -> Partial<TypeId<'db>> {
+        self.type_ref
     }
 }
 

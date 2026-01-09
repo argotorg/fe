@@ -1,137 +1,111 @@
 ---
 source: crates/codegen/tests/yul.rs
-assertion_line: 31
 expression: output
 input_file: tests/fixtures/enum_variant_contract.fe
 ---
 object "EnumContract" {
   code {
-    init()
     function init() {
       let v0 := datasize("EnumContract_deployed")
       let v1 := dataoffset("EnumContract_deployed")
       codecopy(0, v1, v0)
       return(0, v0)
     }
+    init()
   }
 
   object "EnumContract_deployed" {
     code {
-      runtime()
-      function abi_encode_u256(value) {
+      function abi_encode_u256(value, ops) {
         let v0 := 0
         mstore(v0, value)
         return(v0, 32)
       }
-      function alloc(size) -> ret {
-        let v0 := mload(64)
-        let v1 := eq(v0, 0)
-        if v1 {
-          v0 := 128
-          mstore(64, add(v0, size))
-          ret := v0
-        }
-        if iszero(v1) {
-          mstore(64, add(v0, size))
-          ret := v0
-        }
-      }
-      function from_word__u256__3271ca15373d4483(word) -> ret {
-        ret := word
-      }
-      function get_discriminant__MemPtr__d0292394fccae3e4(addr) -> ret {
-        ret := load__MemPtr__d0292394fccae3e4(addr)
-      }
-      function get_variant_field__MemPtr_u256__97fe9178c4597e85(addr, field_offset) -> ret {
-        let v0 := add(add(addr, 32), field_offset)
-        ret := from_word__u256__3271ca15373d4483(load__MemPtr__d0292394fccae3e4(v0))
-      }
-      function load__MemPtr__d0292394fccae3e4(addr) -> ret {
-        ret := mload(addr)
-      }
       function runtime() {
-        let v0 := shr(224, calldataload(0))
-        let v1 := eq(v0, 1817627404)
-        if v1 {
+        let v0 := calldataload(0)
+        let v1 := shr(224, v0)
+        let v2 := eq(v1, 1817627404)
+        if v2 {
           let v3 := calldataload(4)
-          let v4 := alloc(64)
-          store_discriminant__MemPtr__d0292394fccae3e4(v4, 1)
-          store_variant_field__MemPtr_u256__97fe9178c4597e85(v4, 0, v3)
-          let v5 := v4
-          let v2 := 0
-          switch get_discriminant__MemPtr__d0292394fccae3e4(v5)
+          let v4 := mload(0x40)
+          if iszero(v4) {
+            v4 := 0x80
+          }
+          mstore(0x40, add(v4, 64))
+          mstore(v4, 1)
+          mstore(add(v4, 32), v3)
+          let v5 := 0
+          let v6 := mload(v4)
+          switch v6
             case 1 {
-              let v6 := get_variant_field__MemPtr_u256__97fe9178c4597e85(v5, 0)
-              v2 := v6
+              let v7 := mload(add(v4, 32))
+              let v8 := v7
+              v5 := v8
             }
             case 0 {
-              v2 := 0
+              v5 := 0
             }
             default {
             }
-          let v7 := v2
-          abi_encode_u256(v7)
-          return(0, 0)
+          let v9 := v5
+          abi_encode_u256(v9, 0)
         }
-        if iszero(v1) {
-          let v8 := eq(v0, 1163776883)
-          if v8 {
-            let v10 := alloc(64)
-            store_discriminant__MemPtr__d0292394fccae3e4(v10, 0)
-            let v11 := v10
-            let v9 := 0
-            switch get_discriminant__MemPtr__d0292394fccae3e4(v11)
+        if iszero(v2) {
+          let v10 := eq(v1, 1163776883)
+          if v10 {
+            let v11 := mload(0x40)
+            if iszero(v11) {
+              v11 := 0x80
+            }
+            mstore(0x40, add(v11, 64))
+            mstore(v11, 0)
+            let v12 := 0
+            let v13 := mload(v11)
+            switch v13
               case 1 {
-                let v12 := get_variant_field__MemPtr_u256__97fe9178c4597e85(v11, 0)
-                v9 := v12
+                let v14 := mload(add(v11, 32))
+                let v15 := v14
+                v12 := v15
               }
               case 0 {
-                v9 := 0
+                v12 := 0
               }
               default {
               }
-            let v13 := v9
-            abi_encode_u256(v13)
-            return(0, 0)
+            let v16 := v12
+            abi_encode_u256(v16, 0)
           }
-          if iszero(v8) {
-            let v14 := eq(v0, 3572425762)
-            if v14 {
-              let v16 := calldataload(4)
-              let v17 := alloc(64)
-              store_discriminant__MemPtr__d0292394fccae3e4(v17, 1)
-              store_variant_field__MemPtr_u256__97fe9178c4597e85(v17, 0, v16)
-              let v18 := v17
-              let v15 := 0
-              switch get_discriminant__MemPtr__d0292394fccae3e4(v18)
-                case 1 {
-                  v15 := 1
-                }
-                case 0 {
-                  v15 := 0
-                }
-                default {
-                }
-              let v19 := v15
-              abi_encode_u256(v19)
+          if iszero(v10) {
+            let v17 := eq(v1, 3572425762)
+            if iszero(v17) {
               return(0, 0)
             }
-            if iszero(v14) {
-              return(0, 0)
+            let v18 := calldataload(4)
+            let v19 := mload(0x40)
+            if iszero(v19) {
+              v19 := 0x80
             }
+            mstore(0x40, add(v19, 64))
+            mstore(v19, 1)
+            mstore(add(v19, 32), v18)
+            let v20 := 0
+            let v21 := mload(v19)
+            switch v21
+              case 1 {
+                v20 := 1
+              }
+              case 0 {
+                v20 := 0
+              }
+              default {
+              }
+            let v22 := v20
+            abi_encode_u256(v22, 0)
           }
         }
       }
-      function store__MemPtr__d0292394fccae3e4(addr, value) {
-        mstore(addr, value)
-      }
-      function store_discriminant__MemPtr__d0292394fccae3e4(addr, discriminant) {
-        store__MemPtr__d0292394fccae3e4(addr, discriminant)
-      }
-      function store_variant_field__MemPtr_u256__97fe9178c4597e85(addr, field_offset, value) {
-        let v0 := add(add(addr, 32), field_offset)
-        store__MemPtr__d0292394fccae3e4(v0, from_word__u256__3271ca15373d4483(value))
-      }
+      runtime()
+      return(0, 0)
     }
   }
 }

@@ -12,7 +12,7 @@ use crate::analysis::{
             TraitLowerDiag, TyDiagCollection, TyLowerDiag,
         },
         trait_def::TraitInstId,
-        ty_check::RecordLike,
+        ty_check::{EffectParamOwner, RecordLike},
         ty_def::{TyData, TyVarSort},
     },
 };
@@ -28,6 +28,8 @@ use common::diagnostics::{
 use either::Either;
 use itertools::Itertools;
 use std::cmp::Ordering;
+
+use common::file::File;
 
 fn cmp_trait_inst_by_name<'db>(
     db: &'db dyn SpannedHirAnalysisDb,
@@ -75,6 +77,143 @@ pub trait SpannedHirAnalysisDb:
 
 #[salsa::db]
 impl<T> SpannedHirAnalysisDb for T where T: HirAnalysisDb + SpannedHirDb {}
+
+pub fn format_diags<'a, D>(
+    db: &dyn SpannedHirAnalysisDb,
+    diags: impl IntoIterator<Item = &'a D>,
+) -> String
+where
+    D: DiagnosticVoucher + 'a,
+{
+    use codespan_reporting::term::{
+        self,
+        termcolor::{BufferWriter, ColorChoice},
+    };
+
+    let writer = BufferWriter::stderr(ColorChoice::Never);
+    let mut buffer = writer.buffer();
+    let config = term::Config::default();
+
+    let mut completes: Vec<_> = diags.into_iter().map(|diag| diag.to_complete(db)).collect();
+    completes.sort_by(|lhs, rhs| match lhs.error_code.cmp(&rhs.error_code) {
+        std::cmp::Ordering::Equal => lhs.primary_span().cmp(&rhs.primary_span()),
+        ord => ord,
+    });
+
+    for diag in completes {
+        term::emit(
+            &mut buffer,
+            &config,
+            &CsDbWrapper(db),
+            &complete_to_cs(diag),
+        )
+        .expect("diagnostic render should succeed");
+    }
+
+    std::str::from_utf8(buffer.as_slice())
+        .expect("diagnostic output is valid utf8")
+        .to_string()
+}
+
+fn complete_to_cs(
+    complete: CompleteDiagnostic,
+) -> codespan_reporting::diagnostic::Diagnostic<File> {
+    use codespan_reporting::diagnostic as cs_diag;
+
+    let severity = match complete.severity {
+        Severity::Error => cs_diag::Severity::Error,
+        Severity::Warning => cs_diag::Severity::Warning,
+        Severity::Note => cs_diag::Severity::Note,
+    };
+    let code = Some(complete.error_code.to_string());
+
+    let labels = complete
+        .sub_diagnostics
+        .into_iter()
+        .filter_map(|sub| {
+            let span = sub.span?;
+            let style = match sub.style {
+                LabelStyle::Primary => cs_diag::LabelStyle::Primary,
+                LabelStyle::Secondary => cs_diag::LabelStyle::Secondary,
+            };
+            Some(cs_diag::Label::new(style, span.file, span.range).with_message(sub.message))
+        })
+        .collect();
+
+    cs_diag::Diagnostic {
+        severity,
+        code,
+        message: complete.message,
+        labels,
+        notes: complete.notes,
+    }
+}
+
+struct CsDbWrapper<'a>(pub &'a dyn SpannedHirAnalysisDb);
+
+impl<'db> codespan_reporting::files::Files<'db> for CsDbWrapper<'db> {
+    type FileId = File;
+    type Name = &'db camino::Utf8Path;
+    type Source = &'db str;
+
+    fn name(
+        &'db self,
+        file_id: Self::FileId,
+    ) -> Result<Self::Name, codespan_reporting::files::Error> {
+        match file_id.path(self.0) {
+            Some(path) => Ok(path.as_path()),
+            None => Err(codespan_reporting::files::Error::FileMissing),
+        }
+    }
+
+    fn source(
+        &'db self,
+        file_id: Self::FileId,
+    ) -> Result<Self::Source, codespan_reporting::files::Error> {
+        Ok(file_id.text(self.0))
+    }
+
+    fn line_index(
+        &'db self,
+        file_id: Self::FileId,
+        byte_index: usize,
+    ) -> Result<usize, codespan_reporting::files::Error> {
+        let starts: Vec<_> = codespan_reporting::files::line_starts(file_id.text(self.0)).collect();
+        Ok(starts
+            .binary_search(&byte_index)
+            .unwrap_or_else(|next_line| next_line - 1))
+    }
+
+    fn line_range(
+        &'db self,
+        file_id: Self::FileId,
+        line_index: usize,
+    ) -> Result<std::ops::Range<usize>, codespan_reporting::files::Error> {
+        let line_starts: Vec<_> =
+            codespan_reporting::files::line_starts(file_id.text(self.0)).collect();
+
+        let start =
+            *line_starts
+                .get(line_index)
+                .ok_or(codespan_reporting::files::Error::LineTooLarge {
+                    given: line_index,
+                    max: line_starts.len().saturating_sub(1),
+                })?;
+
+        let end = if line_index == line_starts.len().saturating_sub(1) {
+            file_id.text(self.0).len()
+        } else {
+            *line_starts.get(line_index + 1).ok_or(
+                codespan_reporting::files::Error::LineTooLarge {
+                    given: line_index + 1,
+                    max: line_starts.len().saturating_sub(1),
+                },
+            )?
+        };
+
+        Ok(std::ops::Range { start, end })
+    }
+}
 
 // `ParseError` has span information, but this is not a problem because the
 // parsing procedure itself depends on the file content, and thus span
@@ -1713,6 +1852,56 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                 notes: vec![],
                 error_code,
             },
+
+            Self::InvalidEffectKey { owner, key, idx } => {
+                let idx = *idx;
+                let key_str = key.pretty_print(db);
+                let span = owner.effect_param_path_span(db, idx).resolve(db);
+                let effect = owner.effects(db).data(db).get(idx);
+                let is_labeled = effect.and_then(|e| e.name).is_some();
+                let is_contract_scoped_uses = match owner {
+                    EffectParamOwner::Contract(_) => false,
+                    EffectParamOwner::ContractRecvArm { .. } => true,
+                    EffectParamOwner::Func(func) => matches!(
+                        func.scope().parent_item(db),
+                        Some(crate::hir_def::ItemKind::Contract(_))
+                    ),
+                };
+
+                let message = "unresolved effect".to_string();
+                let severity = Severity::Error;
+                if is_contract_scoped_uses && !is_labeled {
+                    CompleteDiagnostic {
+                        severity,
+                        message,
+                        sub_diagnostics: vec![SubDiagnostic {
+                            style: LabelStyle::Primary,
+                            message: format!("unknown effect `{}`", key_str),
+                            span,
+                        }],
+                        notes: vec![
+                            "add it to the contract `uses (...)` clause or add a matching contract field"
+                                .to_string(),
+                        ],
+                        error_code,
+                    }
+                } else {
+                    CompleteDiagnostic {
+                        severity,
+                        message,
+                        sub_diagnostics: vec![SubDiagnostic {
+                            style: LabelStyle::Primary,
+                            message: format!("cannot resolve `{}` as a type or trait", key_str),
+                            span,
+                        }],
+                        notes: vec![
+                            format!("consider defining a type or trait named `{}`", key_str),
+                            "or bind the effect value with `uses (name: Type)`".to_string(),
+                        ],
+                        error_code,
+                    }
+                }
+            }
 
             Self::MissingEffect { primary, func, key } => {
                 let func_name = func

@@ -1,0 +1,156 @@
+---
+source: crates/codegen/tests/yul.rs
+assertion_line: 34
+expression: desugared
+---
+use core::prelude::*
+
+mod EchoMsg {
+    use core::prelude::*
+    use super::*
+
+    pub struct Answer {}
+
+    impl core::message::MsgVariant<std::abi::Sol> for Answer {
+        type Args = ()
+        type Return = u256
+        const SELECTOR: u32 = 1
+    }
+
+    impl Answer {
+        pub fn decode(mut _ d: std::abi::sol::SolDecoder<std::evm::calldata::CallData>) -> Self {
+            return Self {  }
+        }
+    
+    }
+
+    pub struct Echo {
+        pub x: u256,
+    }
+
+    impl core::message::MsgVariant<std::abi::Sol> for Echo {
+        type Args = (u256)
+        type Return = u256
+        const SELECTOR: u32 = 2
+    }
+
+    impl Echo {
+        pub fn decode(mut _ d: std::abi::sol::SolDecoder<std::evm::calldata::CallData>) -> Self {
+            let x = u256::decode(d)
+            return Self { x: x }
+        }
+    
+    }
+
+    pub struct GetX {}
+
+    impl core::message::MsgVariant<std::abi::Sol> for GetX {
+        type Args = ()
+        type Return = u256
+        const SELECTOR: u32 = 3
+    }
+
+    impl GetX {
+        pub fn decode(mut _ d: std::abi::sol::SolDecoder<std::evm::calldata::CallData>) -> Self {
+            return Self {  }
+        }
+    
+    }
+}
+
+pub struct Foo {
+    x: u256,
+    y: u256,
+}
+
+mod __EchoContract {
+    use super::*
+    use core::contracts::ContractHost
+    use core::contracts::Target
+    use core::abi::Abi
+    use core::abi::AbiEncoder
+    use core::abi::AbiSize
+    use core::abi::ByteInput
+    use core::abi::prefix
+    use core::abi::Encode
+    use std::evm::EvmTarget
+
+    type __Target = EvmTarget
+
+    type __RootEffect = __Target::RootEffect
+
+    type __DefaultAbi = __Target::DefaultAbi
+
+    fn recv_EchoMsg_Answer_0_0(args: EchoMsg::Answer::Args) -> u256 {
+        return {
+            42
+        }
+    }
+
+    fn recv_EchoMsg_Echo_0_1(args: EchoMsg::Echo::Args) -> u256 {
+        let x = args.0
+        return {
+            x
+        }
+    }
+
+    fn recv_EchoMsg_GetX_0_2(args: EchoMsg::GetX::Args) -> u256 uses (state: Foo) {
+        return {
+            state.x
+        }
+    }
+
+    fn init_contract(x: u256, y: u256) uses (mut state: Foo) {
+        return {
+            state.x = x
+            state.y = y
+        }
+    }
+
+    #[contract_init(EchoContract)]
+    fn init() uses (mut root: __RootEffect) {
+        let mut state = root.init_field<Foo>(core::contract_field_slot(0))
+        let mut __d = __DefaultAbi::decoder_new(root.init_input(runtime))
+        let x: u256 = u256::decode(__d)
+        let y: u256 = u256::decode(__d)
+        with (Foo = state) { init_contract(x, y) }
+        root.create_contract(runtime)
+    }
+
+    #[contract_runtime(EchoContract)]
+    fn runtime() uses (mut root: __RootEffect) {
+        let mut state = root.field<Foo>(core::contract_field_slot(0))
+        let __selector = root.runtime_selector<__DefaultAbi>()
+        let mut __d = root.runtime_decoder<__DefaultAbi>()
+        match __selector {
+            EchoMsg::Answer::SELECTOR => {
+                let __args: EchoMsg::Answer::Args = EchoMsg::Answer::Args::decode(__d)
+                let __result = recv_EchoMsg_Answer_0_0(__args)
+                root.return_value<__DefaultAbi, u256>(__result)
+            },
+            EchoMsg::Echo::SELECTOR => {
+                let __args: EchoMsg::Echo::Args = EchoMsg::Echo::Args::decode(__d)
+                let __result = recv_EchoMsg_Echo_0_1(__args)
+                root.return_value<__DefaultAbi, u256>(__result)
+            },
+            EchoMsg::GetX::SELECTOR => {
+                let __args: EchoMsg::GetX::Args = EchoMsg::GetX::Args::decode(__d)
+                let __result = with (Foo = state) { recv_EchoMsg_GetX_0_2(__args) }
+                root.return_value<__DefaultAbi, u256>(__result)
+            },
+            _ => root.abort(),
+        }
+    }
+
+    impl std::evm::Contract for EchoContract {
+        type InitArgs = (u256, u256)
+    
+        fn init_code_offset() -> u256 {
+            return std::evm::code_region_offset(init)
+        }
+    
+        fn init_code_len() -> u256 {
+            return std::evm::code_region_len(init)
+        }
+    }
+}

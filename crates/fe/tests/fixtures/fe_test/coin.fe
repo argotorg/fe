@@ -1,0 +1,192 @@
+use std::evm::{Address, Evm, Call}
+use std::evm::effects::assert
+use core::abi::{Abi, AbiEncoder, AbiSize, Encode}
+use std::abi::Sol
+
+msg CoinMsg {
+    #[selector = 0xab7ccc1c]
+    Credit { user: u256, amount: u256 } -> u256,
+
+    #[selector = 0x0cf79e0a]
+    Transfer { from: u256, amount: u256 } -> u256,
+
+    #[selector = 0x6c65aae5]
+    BalanceOf { user: u256 } -> u256,
+
+    #[selector = 0x3940e9ee]
+    TotalSupply -> u256,
+}
+
+// Boilerplate for CoinMsg variants
+
+// Credit
+impl AbiSize for CoinMsg::Credit {
+    const ENCODED_SIZE: u256 = 64
+}
+impl Encode<Sol> for CoinMsg::Credit {
+    fn encode<E: AbiEncoder<Sol>>(self, mut _ e: E) {
+        self.user.encode(e)
+        self.amount.encode(e)
+    }
+}
+
+// Transfer
+impl AbiSize for CoinMsg::Transfer {
+    const ENCODED_SIZE: u256 = 64
+}
+impl Encode<Sol> for CoinMsg::Transfer {
+    fn encode<E: AbiEncoder<Sol>>(self, mut _ e: E) {
+        self.from.encode(e)
+        self.amount.encode(e)
+    }
+}
+
+// BalanceOf
+impl AbiSize for CoinMsg::BalanceOf {
+    const ENCODED_SIZE: u256 = 32
+}
+impl Encode<Sol> for CoinMsg::BalanceOf {
+    fn encode<E: AbiEncoder<Sol>>(self, mut _ e: E) {
+        self.user.encode(e)
+    }
+}
+
+// TotalSupply
+impl AbiSize for CoinMsg::TotalSupply {
+    const ENCODED_SIZE: u256 = 0
+}
+impl Encode<Sol> for CoinMsg::TotalSupply {
+    fn encode<E: AbiEncoder<Sol>>(self, mut _ e: E) {
+    }
+}
+
+struct CoinStore {
+    alice: u256,
+    bob: u256,
+    total_supply: u256,
+}
+
+pub contract Coin {
+    mut store: CoinStore
+
+    init() uses (mut store) {
+        store.alice = 0
+        store.bob = 0
+        store.total_supply = 0
+    }
+
+    recv CoinMsg {
+        Credit { user, amount } -> u256 uses (mut store) {
+            if user == 0 {
+                store.alice += amount
+                store.total_supply += amount
+                return store.alice
+            } else {
+                store.bob += amount
+                store.total_supply += amount
+                return store.bob
+            }
+        }
+
+        Transfer { from, amount } -> u256 uses (mut store) {
+            if from == 0 {
+                if store.alice < amount {
+                    return 1
+                }
+                store.alice -= amount
+                store.bob += amount
+                return 0
+            } else {
+                if store.bob < amount {
+                    return 1
+                }
+                store.bob -= amount
+                store.alice += amount
+                return 0
+            }
+        }
+
+        BalanceOf { user } -> u256 uses (store) {
+            if user == 0 {
+                return store.alice
+            } else {
+                return store.bob
+            }
+        }
+
+        TotalSupply -> u256 uses (store) {
+            return store.total_supply
+        }
+    }
+}
+
+#[test]
+fn test_coin() uses (mut evm: Evm) {
+    let contract_addr = evm.create2<Coin>(value: 0, args: (), salt: 0)
+    assert(contract_addr.inner != 0)
+
+    let alice: u256 = 0
+    let bob: u256 = 1
+
+    // Credit Alice 10
+    let res: u256 = evm.call(
+        addr: contract_addr,
+        gas: 100000,
+        value: 0,
+        message: CoinMsg::Credit { user: alice, amount: 10 }
+    )
+    assert(res == 10)
+
+    // Credit Bob 5
+    let res: u256 = evm.call(
+        addr: contract_addr,
+        gas: 100000,
+        value: 0,
+        message: CoinMsg::Credit { user: bob, amount: 5 }
+    )
+    assert(res == 5)
+
+    // Transfer 3 from Alice to Bob
+    let res: u256 = evm.call(
+        addr: contract_addr,
+        gas: 100000,
+        value: 0,
+        message: CoinMsg::Transfer { from: alice, amount: 3 }
+    )
+    assert(res == 0)
+
+    // Check balances
+    let bal_alice: u256 = evm.call(
+        addr: contract_addr,
+        gas: 100000,
+        value: 0,
+        message: CoinMsg::BalanceOf { user: alice }
+    )
+    assert(bal_alice == 7)
+
+    let bal_bob: u256 = evm.call(
+        addr: contract_addr,
+        gas: 100000,
+        value: 0,
+        message: CoinMsg::BalanceOf { user: bob }
+    )
+    assert(bal_bob == 8)
+
+    // Transfer too much from Bob
+    let res: u256 = evm.call(
+        addr: contract_addr,
+        gas: 100000,
+        value: 0,
+        message: CoinMsg::Transfer { from: bob, amount: 20 }
+    )
+    assert(res == 1)
+
+    // Check total supply
+    let total: u256 = evm.call(
+        addr: contract_addr,
+        gas: 100000,
+        value: 0,
+        message: CoinMsg::TotalSupply {}
+    )
+    assert(total == 15)
+}

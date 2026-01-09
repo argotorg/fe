@@ -1,6 +1,6 @@
 use crate::hir_def::{
-    Contract, Enum, GenericParamOwner, IdentId, ItemKind, Partial, Struct, TypeId as HirTyId,
-    VariantKind, scope_graph::ScopeId,
+    Enum, GenericParamOwner, IdentId, ItemKind, Partial, Struct, TypeId as HirTyId, VariantKind,
+    scope_graph::ScopeId,
 };
 use crate::span::DynLazySpan;
 use common::ingot::Ingot;
@@ -73,8 +73,6 @@ impl<'db> AdtDef<'db> {
             }
 
             AdtRef::Struct(s) => s.span().fields().field(field_idx).ty().into(),
-
-            AdtRef::Contract(c) => c.span().fields().field(field_idx).ty().into(),
         }
     }
 
@@ -82,7 +80,6 @@ impl<'db> AdtDef<'db> {
         match self.adt_ref(db) {
             AdtRef::Enum(e) => e.top_mod(db).ingot(db),
             AdtRef::Struct(s) => s.top_mod(db).ingot(db),
-            AdtRef::Contract(c) => c.top_mod(db).ingot(db),
         }
     }
 
@@ -150,7 +147,6 @@ impl<'db> AdtField<'db> {
 pub enum AdtRef<'db> {
     Enum(Enum<'db>),
     Struct(Struct<'db>),
-    Contract(Contract<'db>),
 }
 
 impl<'db> AdtRef<'db> {
@@ -158,7 +154,6 @@ impl<'db> AdtRef<'db> {
         match item {
             ItemKind::Enum(x) => Some(x.into()),
             ItemKind::Struct(x) => Some(x.into()),
-            ItemKind::Contract(x) => Some(x.into()),
             _ => None,
         }
     }
@@ -167,7 +162,6 @@ impl<'db> AdtRef<'db> {
         match self {
             Self::Enum(e) => e.scope(),
             Self::Struct(s) => s.scope(),
-            Self::Contract(c) => c.scope(),
         }
     }
 
@@ -175,7 +169,6 @@ impl<'db> AdtRef<'db> {
         match self {
             AdtRef::Enum(e) => e.into(),
             AdtRef::Struct(s) => s.into(),
-            AdtRef::Contract(c) => c.into(),
         }
     }
 
@@ -183,7 +176,6 @@ impl<'db> AdtRef<'db> {
         match self {
             AdtRef::Enum(e) => e.name(db),
             AdtRef::Struct(s) => s.name(db),
-            AdtRef::Contract(c) => c.name(db),
         }
         .to_opt()
     }
@@ -208,7 +200,6 @@ impl<'db> AdtRef<'db> {
         match self {
             AdtRef::Enum(e) => Some(e.into()),
             AdtRef::Struct(s) => Some(s.into()),
-            AdtRef::Contract(_) => None,
         }
     }
 }

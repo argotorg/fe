@@ -22,8 +22,9 @@ mod TokenMsg {
         pub amount: u64,
     }
 
-    impl core::message::MsgVariant for Transfer {
+    impl core::message::MsgVariant<std::abi::Sol> for Transfer {
         const SELECTOR: u32 = 0x10
+        type Args = (u64, u64)
         type Return = bool
     }
 
@@ -31,8 +32,9 @@ mod TokenMsg {
         pub addr: u64,
     }
 
-    impl core::message::MsgVariant for Balance {
+    impl core::message::MsgVariant<std::abi::Sol> for Balance {
         const SELECTOR: u32 = 0x11
+        type Args = (u64,)
         type Return = u64
     }
 }
@@ -44,8 +46,9 @@ struct CustomQuery {
     pub key: u64,
 }
 
-impl core::message::MsgVariant for CustomQuery {
+impl core::message::MsgVariant<std::abi::Sol> for CustomQuery {
     const SELECTOR: u32 = 0x20
+    type Args = (u64,)
     type Return = u64
 }
 

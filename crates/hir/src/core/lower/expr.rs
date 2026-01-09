@@ -172,13 +172,18 @@ impl<'db> Expr<'db> {
             }
 
             ast::ExprKind::With(with_) => {
-                // Lower `with (K = v, ..) { body }` into HIR::Expr::With(bindings, body)
+                // Lower `with (K = v, ..) { body }` and `with (v, ..) { body }`
+                // into HIR::Expr::With(bindings, body)
                 let mut bindings = Vec::new();
                 if let Some(params) = with_.params() {
                     for p in params {
                         let value = Self::push_to_body_opt(ctxt, p.value_expr());
-                        // Lower key path directly so multi-segment paths are preserved.
-                        let key_path = PathId::lower_ast_partial(ctxt.f_ctxt, p.path());
+                        let key_path = if p.eq().is_some() {
+                            // Lower key path directly so multi-segment paths are preserved.
+                            Some(PathId::lower_ast_partial(ctxt.f_ctxt, p.path()))
+                        } else {
+                            None
+                        };
                         bindings.push(super::super::hir_def::expr::WithBinding { key_path, value });
                     }
                 }

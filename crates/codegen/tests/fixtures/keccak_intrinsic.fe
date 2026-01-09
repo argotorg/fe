@@ -1,5 +1,5 @@
-use core::keccak
+use std::evm::RawOps
 
-pub fn hash(ptr: u256, len: u256) -> u256 {
-    keccak(ptr, len)
+pub fn hash(ptr: u256, len: u256) -> u256 uses (ops: RawOps) {
+    ops.keccak256(ptr, len)
 }

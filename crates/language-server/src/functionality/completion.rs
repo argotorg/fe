@@ -1007,9 +1007,8 @@ fn collect_trait_methods_for_type<'db>(
         let trait_in_scope = available_traits.contains(&trait_def);
 
         // Add methods from this trait
-        for (method_name, callable) in trait_def.method_defs(db) {
+        for (method_name, func) in trait_def.method_defs(db) {
             if seen_methods.insert(method_name)
-                && let hir::hir_def::CallableDef::Func(func) = callable
                 && let Some(mut completion) =
                     build_callable_completion(db, func, CompletionItemKind::METHOD)
             {

@@ -1,5 +1,3 @@
-use std::convert::identity;
-
 use crate::{ParseError, SyntaxKind};
 
 use super::{
@@ -44,9 +42,7 @@ impl super::Parse for PathSegmentScope {
                 if parser.current_kind_same_line() == Some(SyntaxKind::Lt)
                     && !(is_lt_eq(parser) || is_lshift(parser))
                     && parser.dry_run(|parser| {
-                        parser
-                            .parse_ok(GenericArgListScope::new(self.is_expr))
-                            .is_ok_and(identity)
+                        parser.parses_without_error(GenericArgListScope::new(self.is_expr))
                     })
                 {
                     parser

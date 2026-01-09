@@ -1,0 +1,31 @@
+---
+source: crates/codegen/tests/yul.rs
+expression: output
+input_file: tests/fixtures/tuple_construction.fe
+---
+function make_tuple() -> ret {
+  let v0 := mload(0x40)
+  if iszero(v0) {
+    v0 := 0x80
+  }
+  mstore(0x40, add(v0, 40))
+  mstore(v0, and(42, 0xffffffffffffffff))
+  mstore(add(v0, 8), 99)
+  let v1 := v0
+  ret := v1
+  leave
+}
+function access_tuple() -> ret {
+  let v0 := mload(0x40)
+  if iszero(v0) {
+    v0 := 0x80
+  }
+  mstore(0x40, add(v0, 96))
+  mstore(v0, 1)
+  mstore(add(v0, 32), 2)
+  mstore(add(v0, 64), 3)
+  let v1 := v0
+  let v2 := mload(add(v1, 32))
+  ret := v2
+  leave
+}

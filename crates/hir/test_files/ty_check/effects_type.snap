@@ -9,7 +9,7 @@ note:
  5 │   pub fn example() {
    │ ╭──────────────────^
  6 │ │     let mut st = Storage { value: 0 }
- 7 │ │     with (Storage = st) {
+ 7 │ │     with (st) {
  8 │ │         mint_twice(5)
  9 │ │     }
 10 │ │ }
@@ -36,22 +36,22 @@ note:
 note: 
   ┌─ effects_type.fe:7:5
   │  
-7 │ ╭     with (Storage = st) {
+7 │ ╭     with (st) {
 8 │ │         mint_twice(5)
 9 │ │     }
   │ ╰─────^ ()
 
 note: 
-  ┌─ effects_type.fe:7:21
+  ┌─ effects_type.fe:7:11
   │
-7 │     with (Storage = st) {
-  │                     ^^ Storage
+7 │     with (st) {
+  │           ^^ Storage
 
 note: 
-  ┌─ effects_type.fe:7:25
+  ┌─ effects_type.fe:7:15
   │  
-7 │       with (Storage = st) {
-  │ ╭─────────────────────────^
+7 │       with (st) {
+  │ ╭───────────────^
 8 │ │         mint_twice(5)
 9 │ │     }
   │ ╰─────^ ()

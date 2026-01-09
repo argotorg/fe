@@ -226,17 +226,29 @@ fn call_edge_targets<'db>(
     func: &MirFunction<'db>,
     symbol_to_idx: &FxHashMap<String, usize>,
 ) -> Vec<usize> {
-    func.body
-        .values
-        .iter()
-        .filter_map(|value| {
-            value.origin.as_call().and_then(|call| {
-                call.resolved_name
-                    .as_ref()
-                    .and_then(|name| symbol_to_idx.get(name).copied())
-            })
-        })
-        .collect()
+    let mut callees = Vec::new();
+    for block in &func.body.blocks {
+        for inst in &block.insts {
+            if let crate::MirInst::Assign {
+                rvalue: crate::ir::Rvalue::Call(call),
+                ..
+            } = inst
+                && let Some(name) = &call.resolved_name
+                && let Some(&idx) = symbol_to_idx.get(name)
+            {
+                callees.push(idx);
+            }
+        }
+
+        if let crate::Terminator::TerminatingCall(crate::ir::TerminatingCall::Call(call)) =
+            &block.terminator
+            && let Some(name) = &call.resolved_name
+            && let Some(&idx) = symbol_to_idx.get(name)
+        {
+            callees.push(idx);
+        }
+    }
+    callees
 }
 
 /// Applies the canonical call name mapping to every MIR call origin in-place.
@@ -244,15 +256,27 @@ fn rewrite_call_targets<'db>(
     functions: &mut [MirFunction<'db>],
     aliases: &FxHashMap<String, String>,
 ) {
-    functions
-        .iter_mut()
-        .flat_map(|func| func.body.values.iter_mut())
-        .filter_map(|value| value.origin.as_call_mut())
-        .for_each(|call| {
-            if let Some(alias) = canonical_call_name(&call.resolved_name, aliases) {
+    for func in functions {
+        for block in &mut func.body.blocks {
+            for inst in &mut block.insts {
+                if let crate::MirInst::Assign {
+                    rvalue: crate::ir::Rvalue::Call(call),
+                    ..
+                } = inst
+                    && let Some(alias) = canonical_call_name(&call.resolved_name, aliases)
+                {
+                    call.resolved_name = Some(alias);
+                }
+            }
+
+            if let crate::Terminator::TerminatingCall(crate::ir::TerminatingCall::Call(call)) =
+                &mut block.terminator
+                && let Some(alias) = canonical_call_name(&call.resolved_name, aliases)
+            {
                 call.resolved_name = Some(alias);
             }
-        });
+        }
+    }
 }
 
 /// Computes the canonical call name, returning the alias when one exists.

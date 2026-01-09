@@ -1,0 +1,14 @@
+/// Effect reference traits.
+///
+/// These traits provide a type-level interface for "effect providers" that act as
+/// references (pointers) to some underlying `Target` type.
+///
+/// Concrete pointer types are backend-specific and live outside of `core`.
+
+/// Read-only effect reference: values implementing this trait can provide access to `Target`.
+pub trait EffectRef {
+    type Target
+}
+
+/// Mutable effect reference: values implementing this trait can provide mutable access to `Target`.
+pub trait EffectRefMut: EffectRef {}

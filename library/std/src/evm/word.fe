@@ -1,0 +1,171 @@
+use core::num::*
+
+// Masks used to truncate a 256-bit word down to the requested primitive width.
+const U8_MASK: u256 = 0xff
+const U16_MASK: u256 = 0xffff
+const U32_MASK: u256 = 0xffffffff
+const U64_MASK: u256 = 0xffffffffffffffff
+const U128_MASK: u256 = 0xffffffffffffffffffffffffffffffff
+const U256_MASK: u256 = 0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff
+
+// Sign bits used when performing two's-complement sign extension per width.
+const I8_SIGN_BIT: u256 = 0x80
+const I16_SIGN_BIT: u256 = 0x8000
+const I32_SIGN_BIT: u256 = 0x80000000
+const I64_SIGN_BIT: u256 = 0x8000000000000000
+const I128_SIGN_BIT: u256 = 0x80000000000000000000000000000000
+const I256_SIGN_BIT: u256 = 0x8000000000000000000000000000000000000000000000000000000000000000
+
+/// A value that can round-trip through an EVM word (`u256`).
+///
+/// This replaces the older `LoadableScalar` / `StorableScalar` split with a
+/// single trait that supports both primitives and user-defined newtypes.
+pub trait WordRepr {
+    fn from_word(word: u256) -> Self
+    fn to_word(self) -> u256
+}
+
+impl WordRepr for u8 {
+    fn from_word(word: u256) -> Self {
+        __u256_as_u8(word & U8_MASK)
+    }
+    fn to_word(self) -> u256 {
+        __u8_as_u256(self)
+    }
+}
+
+impl WordRepr for u16 {
+    fn from_word(word: u256) -> Self {
+        __u256_as_u16(word & U16_MASK)
+    }
+    fn to_word(self) -> u256 {
+        __u16_as_u256(self)
+    }
+}
+
+impl WordRepr for u32 {
+    fn from_word(word: u256) -> Self {
+        __u256_as_u32(word & U32_MASK)
+    }
+    fn to_word(self) -> u256 {
+        __u32_as_u256(self)
+    }
+}
+
+impl WordRepr for u64 {
+    fn from_word(word: u256) -> Self {
+        __u256_as_u64(word & U64_MASK)
+    }
+    fn to_word(self) -> u256 {
+        __u64_as_u256(self)
+    }
+}
+
+impl WordRepr for u128 {
+    fn from_word(word: u256) -> Self {
+        __u256_as_u128(word & U128_MASK)
+    }
+    fn to_word(self) -> u256 {
+        __u128_as_u256(self)
+    }
+}
+
+impl WordRepr for u256 {
+    fn from_word(word: u256) -> Self {
+        word
+    }
+    fn to_word(self) -> u256 {
+        self
+    }
+}
+
+impl WordRepr for usize {
+    fn from_word(word: u256) -> Self {
+        __u256_as_usize(word)
+    }
+    fn to_word(self) -> u256 {
+        __usize_as_u256(self)
+    }
+}
+
+impl WordRepr for bool {
+    fn from_word(word: u256) -> Self {
+        word != 0
+    }
+    fn to_word(self) -> u256 {
+        if self { 1 } else { 0 }
+    }
+}
+
+impl WordRepr for i8 {
+    fn from_word(word: u256) -> Self {
+        __u256_as_i8(sign_extend(word, U8_MASK, I8_SIGN_BIT))
+    }
+    fn to_word(self) -> u256 {
+        __i8_as_u256(self)
+    }
+}
+
+impl WordRepr for i16 {
+    fn from_word(word: u256) -> Self {
+        __u256_as_i16(sign_extend(word, U16_MASK, I16_SIGN_BIT))
+    }
+    fn to_word(self) -> u256 {
+        __i16_as_u256(self)
+    }
+}
+
+impl WordRepr for i32 {
+    fn from_word(word: u256) -> Self {
+        __u256_as_i32(sign_extend(word, U32_MASK, I32_SIGN_BIT))
+    }
+    fn to_word(self) -> u256 {
+        __i32_as_u256(self)
+    }
+}
+
+impl WordRepr for i64 {
+    fn from_word(word: u256) -> Self {
+        __u256_as_i64(sign_extend(word, U64_MASK, I64_SIGN_BIT))
+    }
+    fn to_word(self) -> u256 {
+        __i64_as_u256(self)
+    }
+}
+
+impl WordRepr for i128 {
+    fn from_word(word: u256) -> Self {
+        __u256_as_i128(sign_extend(word, U128_MASK, I128_SIGN_BIT))
+    }
+    fn to_word(self) -> u256 {
+        __i128_as_u256(self)
+    }
+}
+
+impl WordRepr for i256 {
+    fn from_word(word: u256) -> Self {
+        __u256_as_i256(sign_extend(word, U256_MASK, I256_SIGN_BIT))
+    }
+    fn to_word(self) -> u256 {
+        __i256_as_u256(self)
+    }
+}
+
+impl WordRepr for isize {
+    fn from_word(word: u256) -> Self {
+        __u256_as_isize(word)
+    }
+    fn to_word(self) -> u256 {
+        __isize_as_u256(self)
+    }
+}
+
+/// Performs two's-complement sign extension within the provided mask/sign bit.
+fn sign_extend(word: u256, _ mask: u256, _ sign_bit: u256) -> u256 {
+    let value = word & mask
+    if value & sign_bit != 0 {
+        value | (!mask)
+    } else {
+        value
+    }
+}

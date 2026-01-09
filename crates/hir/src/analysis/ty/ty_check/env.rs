@@ -1,4 +1,5 @@
 use crate::{
+    analysis::place::Place,
     hir_def::{
         Body, Contract, EffectParamListId, Expr, ExprId, FieldParent, Func, IdentId, IntegerId,
         ItemKind, Partial, Pat, PatId, PathId, Stmt, StmtId, TraitRefId, prim_ty::PrimTy,
@@ -16,23 +17,17 @@ use smallvec1::SmallVec;
 use thin_vec::ThinVec;
 
 use super::owner::BodyOwner;
-use super::{Callable, TypedBody};
+use super::{Callable, ConstRef, TypedBody};
 use crate::analysis::{
     HirAnalysisDb,
     name_resolution::{PathRes, resolve_path},
     ty::{
-        canonical::{Canonical, Canonicalized},
         const_ty::{ConstTyData, ConstTyId, EvaluatedConstTy},
-        diagnostics::{BodyDiag, FuncBodyDiag, TraitConstraintDiag, TyDiagCollection},
-        fold::{AssocTySubst, TyFoldable, TyFolder},
-        normalize::normalize_ty,
+        fold::{TyFoldable, TyFolder},
         trait_def::TraitInstId,
         trait_lower::{TraitRefLowerError, lower_trait_ref},
-        trait_resolution::{
-            GoalSatisfiability, PredicateListId, constraint::collect_func_def_constraints,
-            is_goal_satisfiable,
-        },
-        ty_def::{InvalidCause, TyBase, TyData, TyId, TyParam, TyVarSort},
+        trait_resolution::{PredicateListId, constraint::collect_func_def_constraints},
+        ty_def::{InvalidCause, TyData, TyId, TyParam, TyVarSort},
         ty_lower::lower_hir_ty,
         unify::UnificationTable,
     },
@@ -46,6 +41,7 @@ pub(super) struct TyCheckEnv<'db> {
 
     pat_ty: FxHashMap<PatId, TyId<'db>>,
     expr_ty: FxHashMap<ExprId, ExprProp<'db>>,
+    const_refs: FxHashMap<ExprId, ConstRef<'db>>,
     callables: FxHashMap<ExprId, Callable<'db>>,
 
     deferred: Vec<DeferredTask<'db>>,
@@ -62,6 +58,9 @@ pub(super) struct TyCheckEnv<'db> {
     param_bindings: Vec<LocalBinding<'db>>,
     /// Pat bindings for transfer to TypedBody
     pat_bindings: FxHashMap<PatId, LocalBinding<'db>>,
+
+    /// Resolved effect arguments at call sites, keyed by the call expression.
+    call_effect_args: FxHashMap<ExprId, Vec<super::ResolvedEffectArg<'db>>>,
 }
 
 impl<'db> TyCheckEnv<'db> {
@@ -102,6 +101,7 @@ impl<'db> TyCheckEnv<'db> {
             body,
             pat_ty: FxHashMap::default(),
             expr_ty: FxHashMap::default(),
+            const_refs: FxHashMap::default(),
             callables: FxHashMap::default(),
             deferred: Vec::new(),
             effect_env: EffectEnv::new(),
@@ -113,6 +113,7 @@ impl<'db> TyCheckEnv<'db> {
             expr_stack: Vec::new(),
             param_bindings: Vec::new(),
             pat_bindings: FxHashMap::default(),
+            call_effect_args: FxHashMap::default(),
         };
 
         env.enter_scope(body.expr(db));
@@ -206,6 +207,22 @@ impl<'db> TyCheckEnv<'db> {
                 _ => TyId::invalid(self.db, InvalidCause::Other),
             };
 
+            let binding_ident = effect
+                .name(self.db)
+                .or_else(|| key_path.ident(self.db).to_opt());
+            let binding = LocalBinding::EffectParam {
+                site: EffectParamSite::Func(func),
+                idx,
+                key_path,
+                is_mut: effect.is_mut(self.db),
+            };
+            if let Some(ident) = binding_ident {
+                self.var_env
+                    .last_mut()
+                    .expect("function scope exists")
+                    .register_var(ident, binding);
+            }
+
             let origin = EffectOrigin::Param {
                 site: EffectParamSite::Func(func),
                 index: idx,
@@ -215,24 +232,12 @@ impl<'db> TyCheckEnv<'db> {
                 origin,
                 ty: provided_ty,
                 is_mut: effect.is_mut(self.db),
+                binding: Some(binding),
             };
             if let Some(key) =
                 self.effect_key_for_path_in_scope(key_path, func.scope(), base_assumptions)
             {
                 self.effect_env.insert(key, provided);
-            }
-
-            if let Some(ident) = effect.name(self.db) {
-                let binding = LocalBinding::EffectParam {
-                    site: EffectParamSite::Func(func),
-                    idx,
-                    key_path,
-                    is_mut: effect.is_mut(self.db),
-                };
-                self.var_env
-                    .last_mut()
-                    .expect("function scope exists")
-                    .register_var(ident, binding);
             }
         }
     }
@@ -289,6 +294,28 @@ impl<'db> TyCheckEnv<'db> {
                     }
                 };
 
+                let binding = if let Some(field_ty) = field_ty {
+                    LocalBinding::Param {
+                        site: ParamSite::EffectField(site),
+                        idx,
+                        ty: field_ty,
+                        is_mut: effect.is_mut,
+                    }
+                } else {
+                    LocalBinding::EffectParam {
+                        site,
+                        idx,
+                        key_path,
+                        is_mut: effect.is_mut,
+                    }
+                };
+                if let Some(ident) = binding_ident {
+                    self.var_env
+                        .last_mut()
+                        .expect("scope exists")
+                        .register_var(ident, binding);
+                }
+
                 let origin = EffectOrigin::Param {
                     site,
                     index: global_idx,
@@ -298,6 +325,7 @@ impl<'db> TyCheckEnv<'db> {
                     origin,
                     ty: provided_ty,
                     is_mut: effect.is_mut,
+                    binding: Some(binding),
                 };
                 if let Some(field_ty) = field_ty {
                     // Insert effect keyed by the field's type (e.g., TokenStore)
@@ -306,28 +334,6 @@ impl<'db> TyCheckEnv<'db> {
                     self.effect_key_for_path_in_scope(key_path, effect_scope, base_assumptions)
                 {
                     self.effect_env.insert(key, provided);
-                }
-
-                if let Some(ident) = binding_ident {
-                    let binding = if let Some(field_ty) = field_ty {
-                        LocalBinding::Param {
-                            site: ParamSite::EffectField(site),
-                            idx,
-                            ty: field_ty,
-                            is_mut: effect.is_mut,
-                        }
-                    } else {
-                        LocalBinding::EffectParam {
-                            site,
-                            idx,
-                            key_path,
-                            is_mut: effect.is_mut,
-                        }
-                    };
-                    self.var_env
-                        .last_mut()
-                        .expect("scope exists")
-                        .register_var(ident, binding);
                 }
 
                 global_idx += 1;
@@ -353,9 +359,12 @@ impl<'db> TyCheckEnv<'db> {
                 contract,
                 recv_idx,
                 arm_idx,
-                arm,
                 ..
             } => {
+                let Some(arm) = contract.recv_arm(self.db, recv_idx as usize, arm_idx as usize)
+                else {
+                    return Vec::new();
+                };
                 vec![
                     (
                         EffectParamSite::Contract(contract),
@@ -424,9 +433,21 @@ impl<'db> TyCheckEnv<'db> {
         self.expr_ty.get(&expr).cloned()
     }
 
+    pub(super) fn expr_place(&self, expr: ExprId) -> Option<Place<'db>> {
+        Place::from_expr_in_body(self.db, self.body, expr, |expr| {
+            self.typed_expr(expr).and_then(|p| p.binding)
+        })
+    }
+
     pub(super) fn register_callable(&mut self, expr: ExprId, callable: Callable<'db>) {
         if self.callables.insert(expr, callable).is_some() {
             panic!("callable is already registered for the given expr")
+        }
+    }
+
+    pub(super) fn register_const_ref(&mut self, expr: ExprId, const_ref: ConstRef<'db>) {
+        if self.const_refs.insert(expr, const_ref).is_some() {
+            panic!("const ref is already registered for the given expr")
         }
     }
 
@@ -470,7 +491,10 @@ impl<'db> TyCheckEnv<'db> {
                     rt
                 }
             }
-            BodyOwner::ContractRecvArm { arm, .. } => {
+            BodyOwner::ContractRecvArm { .. } => {
+                let Some(arm) = self.owner.recv_arm(self.db) else {
+                    return TyId::invalid(self.db, InvalidCause::Other);
+                };
                 let Some(ret_ty) = arm.ret_ty else {
                     return TyId::unit(self.db);
                 };
@@ -495,20 +519,11 @@ impl<'db> TyCheckEnv<'db> {
 
             LocalBinding::Param { ty, .. } => *ty,
 
-            LocalBinding::EffectParam { key_path, .. } => {
-                if let Some(key) = self.effect_key_for_path_in_scope(
-                    *key_path,
-                    self.owner_scope,
-                    self.assumptions(),
-                ) {
-                    self.effect_env
-                        .lookup(key)
-                        .map(|binding| binding.ty)
-                        .unwrap_or_else(|| TyId::invalid(self.db, InvalidCause::Other))
-                } else {
-                    TyId::invalid(self.db, InvalidCause::Other)
-                }
-            }
+            LocalBinding::EffectParam { .. } => self
+                .effect_env
+                .lookup_by_binding(*binding)
+                .map(|binding| binding.ty)
+                .unwrap_or_else(|| TyId::invalid(self.db, InvalidCause::Other)),
         }
     }
 
@@ -550,54 +565,78 @@ impl<'db> TyCheckEnv<'db> {
         }
     }
 
-    pub(super) fn effect_candidates_in_scope(
+    pub(super) fn insert_unkeyed_effect_binding(&mut self, binding: ProvidedEffect<'db>) {
+        self.effect_env.insert_unkeyed(binding);
+    }
+
+    pub(super) fn push_call_effect_arg(
+        &mut self,
+        call_expr: ExprId,
+        arg: super::ResolvedEffectArg<'db>,
+    ) {
+        self.call_effect_args
+            .entry(call_expr)
+            .or_default()
+            .push(arg);
+    }
+
+    pub(super) fn effect_candidate_frames_in_scope(
         &self,
         key_path: PathId<'db>,
         scope: ScopeId<'db>,
         assumptions: PredicateListId<'db>,
-    ) -> SmallVec<[ProvidedEffect<'db>; 2]> {
-        let mut out = SmallVec::new();
+    ) -> Vec<SmallVec<[ProvidedEffect<'db>; 2]>> {
+        let mut frames_out = Vec::new();
         let Some(path_res) = resolve_path(self.db, key_path, scope, assumptions, false).ok() else {
-            return out;
+            return frames_out;
         };
 
-        match path_res {
-            PathRes::Ty(ty) | PathRes::TyAlias(_, ty) => {
-                if let Some(b) = self.effect_env.lookup(EffectKey::Type(ty)) {
-                    out.push(b);
-                    return out;
-                }
-            }
-            PathRes::Trait(tr) => {
-                if let Some(b) = self.effect_env.lookup(EffectKey::Trait(tr)) {
-                    out.push(b);
-                    return out;
-                }
-            }
-            _ => {}
-        }
-
         for frame in self.effect_env.frames.iter().rev() {
+            let mut out = SmallVec::new();
             for (effect_key, provided) in &frame.bindings {
                 match (&path_res, effect_key) {
                     (PathRes::Ty(req) | PathRes::TyAlias(_, req), EffectKey::Type(got)) => {
                         if req.base_ty(self.db).as_scope(self.db)
                             == got.base_ty(self.db).as_scope(self.db)
                         {
-                            out.push(*provided);
+                            out.extend_from_slice(provided);
                         }
                     }
                     (PathRes::Trait(req), EffectKey::Trait(got)) => {
                         if req.def(self.db) == got.def(self.db) {
-                            out.push(*provided);
+                            out.extend_from_slice(provided);
                         }
                     }
                     _ => {}
                 }
             }
+
+            for provided in frame.unkeyed.iter() {
+                if provided.ty.has_invalid(self.db) {
+                    continue;
+                }
+                match &path_res {
+                    PathRes::Ty(_) | PathRes::TyAlias(_, _) => out.push(*provided),
+                    PathRes::Trait(_) => {
+                        // Trait satisfaction is checked at the call site so we
+                        // can consider type arguments and current assumptions.
+                        out.push(*provided);
+                    }
+                    _ => {}
+                }
+            }
+            if out.is_empty() {
+                continue;
+            }
+
+            // Prefer call-site validation over eager deduplication: multiple distinct providers
+            // may share the same type (e.g. two `StorageMap<u256, u256, 0>` effects).
+            let mut seen = rustc_hash::FxHashSet::default();
+            out.retain(|p| seen.insert(*p));
+            frames_out.push(out);
         }
 
-        out
+        frames_out
     }
 
     pub(super) fn enter_scope(&mut self, block: ExprId) {
@@ -698,8 +737,7 @@ impl<'db> TyCheckEnv<'db> {
     }
 
     /// Completes the type checking environment by finalizing pending trait
-    /// confirmations, folding types with the unification table, and collecting
-    /// diagnostics.
+    /// confirmations and folding types with the unification table.
     ///
     /// # Arguments
     ///
@@ -714,16 +752,8 @@ impl<'db> TyCheckEnv<'db> {
     /// expression types, and callables, all of which have been folded with
     /// the unification table.
     ///
-    /// The vector of `FuncBodyDiag` contains diagnostics related to function
-    /// bodies, such as ambiguous trait instances.
-    pub(super) fn finish(
-        mut self,
-        table: &mut UnificationTable<'db>,
-        sink: &mut Vec<FuncBodyDiag<'db>>,
-    ) -> TypedBody<'db> {
+    pub(super) fn finish(mut self, table: &mut UnificationTable<'db>) -> TypedBody<'db> {
         let mut prober = Prober { table };
-        // Resolve all deferred tasks (confirmations + method disambiguations)
-        self.perform_deferred(&mut prober, sink);
 
         self.expr_ty
             .values_mut()
@@ -732,6 +762,10 @@ impl<'db> TyCheckEnv<'db> {
         self.pat_ty
             .values_mut()
             .for_each(|ty| *ty = ty.fold_with(self.db, &mut prober));
+
+        self.const_refs
+            .values_mut()
+            .for_each(|cref| *cref = (*cref).fold_with(self.db, &mut prober));
 
         let callables = self
             .callables
@@ -743,7 +777,9 @@ impl<'db> TyCheckEnv<'db> {
             body: Some(self.body),
             pat_ty: self.pat_ty,
             expr_ty: self.expr_ty,
+            const_refs: self.const_refs,
             callables,
+            call_effect_args: self.call_effect_args,
             param_bindings: self.param_bindings,
             pat_bindings: self.pat_bindings,
         }
@@ -769,169 +805,8 @@ impl<'db> TyCheckEnv<'db> {
         &self.var_env[idx]
     }
 
-    /// Performs pending trait confirmations and collects diagnostics.
-    ///
-    /// This function attempts to satisfy all pending trait confirmations by
-    /// iteratively probing and unifying trait instances until a fixed point
-    /// is reached. If any trait instance remains ambiguous, a diagnostic is
-    /// generated and added to the diagnostics vector.
-    fn perform_deferred(
-        &mut self,
-        prober: &mut Prober<'db, '_>,
-        sink: &mut Vec<FuncBodyDiag<'db>>,
-    ) {
-        let db = self.db;
-        let scope = self.scope();
-        let assumptions = self.assumptions();
-        let ingot = self.body().top_mod(db).ingot(db);
-
-        let compute_return_ty = |prober: &mut Prober<'db, '_>,
-                                 recv_ty: TyId<'db>,
-                                 inst: TraitInstId<'db>,
-                                 method_name: IdentId<'db>| {
-            let trait_method = *inst.def(db).method_defs(db).get(&method_name).unwrap();
-            let func_ty =
-                super::instantiate_trait_method(db, trait_method, prober.table, recv_ty, inst);
-            let (base, gen_args) = func_ty.decompose_ty_app(db);
-            let TyData::TyBase(TyBase::Func(func_def)) = base.data(db) else {
-                unreachable!();
-            };
-            let mut ret = func_def.ret_ty(db).instantiate(db, gen_args);
-            let mut subst = AssocTySubst::new(inst);
-            ret = ret.fold_with(self.db, &mut subst);
-            normalize_ty(db, ret, scope, assumptions)
-        };
-
-        let is_viable = |prober: &mut Prober<'db, '_>,
-                         pending: &PendingMethod<'db>,
-                         expr_ty: TyId<'db>,
-                         inst: &TraitInstId<'db>| {
-            let snap = prober.table.snapshot();
-            let recv_ty = pending.recv_ty.fold_with(self.db, prober);
-            let inst_self = prober.table.instantiate_to_term(inst.self_ty(db));
-            if prober.table.unify(inst_self, recv_ty).is_err() {
-                prober.table.rollback_to(snap);
-                return false;
-            }
-            let ret_ty = compute_return_ty(prober, recv_ty, *inst, pending.method_name);
-            let ok = prober.table.unify(expr_ty, ret_ty).is_ok();
-            prober.table.rollback_to(snap);
-            ok
-        };
-
-        // Fixed-point pass over deferred tasks
-        let mut progressed = true;
-        while progressed {
-            progressed = false;
-            let mut next: Vec<DeferredTask<'db>> = Vec::new();
-            for task in self.deferred.drain(..) {
-                match task {
-                    DeferredTask::Confirm { inst, span } => {
-                        let inst = inst.fold_with(self.db, prober);
-                        let canonical_inst = Canonicalized::new(db, inst);
-                        match is_goal_satisfiable(db, ingot, canonical_inst.value, assumptions) {
-                            GoalSatisfiability::Satisfied(solution) => {
-                                let solution =
-                                    canonical_inst.extract_solution(prober.table, *solution);
-                                prober.table.unify(inst, solution).unwrap();
-                                let new_can = Canonical::new(db, inst.fold_with(db, prober.table));
-                                if new_can != canonical_inst.value {
-                                    progressed = true;
-                                }
-                            }
-                            _ => next.push(DeferredTask::Confirm { inst, span }),
-                        }
-                    }
-                    DeferredTask::Method(pending) => {
-                        let recv_ty = pending.recv_ty.fold_with(self.db, prober);
-                        let expr_ty = self.expr_ty[&pending.expr].ty.fold_with(self.db, prober);
-                        if expr_ty.has_invalid(db) {
-                            next.push(DeferredTask::Method(pending));
-                            continue;
-                        }
-                        let viable: Vec<_> = pending
-                            .candidates
-                            .iter()
-                            .copied()
-                            .filter(|inst| is_viable(prober, &pending, expr_ty, inst))
-                            .collect();
-                        if let [inst] = viable.as_slice() {
-                            let ret_ty =
-                                compute_return_ty(prober, recv_ty, *inst, pending.method_name);
-                            prober.table.unify(expr_ty, ret_ty).unwrap();
-                            progressed = true;
-                        } else {
-                            next.push(DeferredTask::Method(pending));
-                        }
-                    }
-                }
-            }
-            self.deferred = next;
-        }
-
-        // Emit diagnostics for remaining tasks
-        for task in self.deferred.drain(..) {
-            match task {
-                DeferredTask::Confirm { inst, span } => {
-                    let inst = inst.fold_with(self.db, prober);
-                    let canonical_inst = Canonicalized::new(db, inst);
-                    match is_goal_satisfiable(db, ingot, canonical_inst.value, assumptions) {
-                        GoalSatisfiability::NeedsConfirmation(ambiguous) => {
-                            let cands = ambiguous
-                                .iter()
-                                .map(|s| canonical_inst.extract_solution(prober.table, *s))
-                                .collect::<ThinVec<_>>();
-                            if !inst.self_ty(db).has_var(db) {
-                                sink.push(
-                                    BodyDiag::AmbiguousTraitInst {
-                                        primary: span.clone(),
-                                        cands,
-                                    }
-                                    .into(),
-                                )
-                            }
-                        }
-                        GoalSatisfiability::UnSat(subgoal) => {
-                            if !inst.self_ty(db).has_var(db) {
-                                let unsat = subgoal
-                                    .map(|s| canonical_inst.extract_solution(prober.table, s));
-                                sink.push(
-                                    TyDiagCollection::from(TraitConstraintDiag::TraitBoundNotSat {
-                                        span: span.clone(),
-                                        primary_goal: inst,
-                                        unsat_subgoal: unsat,
-                                    })
-                                    .into(),
-                                )
-                            }
-                        }
-                        _ => {}
-                    }
-                }
-                DeferredTask::Method(pending) => {
-                    let expr_ty = self.expr_ty[&pending.expr].ty.fold_with(self.db, prober);
-                    if expr_ty.has_invalid(self.db) {
-                        continue;
-                    }
-                    let viable: ThinVec<_> = pending
-                        .candidates
-                        .iter()
-                        .copied()
-                        .filter(|inst| is_viable(prober, &pending, expr_ty, inst))
-                        .collect();
-                    if viable.len() > 1 {
-                        sink.push(
-                            BodyDiag::AmbiguousTrait {
-                                primary: pending.span.clone(),
-                                method_name: pending.method_name,
-                                traits: viable,
-                            }
-                            .into(),
-                        );
-                    }
-                }
-            }
-        }
+    pub(super) fn take_deferred_tasks(&mut self) -> Vec<DeferredTask<'db>> {
+        std::mem::take(&mut self.deferred)
     }
 }
 
@@ -973,7 +848,8 @@ pub(super) enum EffectKey<'db> {
 
 #[derive(Default)]
 struct EffectFrame<'db> {
-    bindings: FxHashMap<EffectKey<'db>, ProvidedEffect<'db>>,
+    bindings: FxHashMap<EffectKey<'db>, Vec<ProvidedEffect<'db>>>,
+    unkeyed: Vec<ProvidedEffect<'db>>,
 }
 
 pub(super) struct EffectEnv<'db> {
@@ -1002,14 +878,33 @@ impl<'db> EffectEnv<'db> {
             .last_mut()
             .expect("EffectEnv must always have at least one frame")
             .bindings
-            .insert(key, binding);
+            .entry(key)
+            .or_default()
+            .push(binding);
     }
 
-    pub fn lookup(&self, key: EffectKey<'db>) -> Option<ProvidedEffect<'db>> {
+    pub fn insert_unkeyed(&mut self, binding: ProvidedEffect<'db>) {
         self.frames
-            .iter()
-            .rev()
-            .find_map(|frame| frame.bindings.get(&key).copied())
+            .last_mut()
+            .expect("EffectEnv must always have at least one frame")
+            .unkeyed
+            .push(binding);
+    }
+
+    pub fn lookup_by_binding(&self, binding: LocalBinding<'db>) -> Option<ProvidedEffect<'db>> {
+        for frame in self.frames.iter().rev() {
+            for provided in frame.unkeyed.iter().copied() {
+                if provided.binding == Some(binding) {
+                    return Some(provided);
+                }
+            }
+            for provided in frame.bindings.values().flat_map(|v| v.iter().copied()) {
+                if provided.binding == Some(binding) {
+                    return Some(provided);
+                }
+            }
+        }
+        None
     }
 }
 
@@ -1099,6 +994,7 @@ pub(super) struct ProvidedEffect<'db> {
     pub origin: EffectOrigin<'db>,
     pub ty: TyId<'db>,
     pub is_mut: bool,
+    pub binding: Option<LocalBinding<'db>>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -1171,7 +1067,7 @@ impl<'db> LocalBinding<'db> {
         Self::Local { pat, is_mut }
     }
 
-    pub(super) fn is_mut(&self) -> bool {
+    pub fn is_mut(&self) -> bool {
         match self {
             LocalBinding::Local { is_mut, .. }
             | LocalBinding::Param { is_mut, .. }
@@ -1217,8 +1113,14 @@ impl<'db> LocalBinding<'db> {
     }
 }
 
-struct Prober<'db, 'a> {
+pub(super) struct Prober<'db, 'a> {
     table: &'a mut UnificationTable<'db>,
+}
+
+impl<'db, 'a> Prober<'db, 'a> {
+    pub(super) fn new(table: &'a mut UnificationTable<'db>) -> Self {
+        Self { table }
+    }
 }
 
 impl<'db> TyFolder<'db> for Prober<'db, '_> {
@@ -1250,7 +1152,7 @@ pub(super) struct PendingMethod<'db> {
 }
 
 #[derive(Debug, Clone)]
-enum DeferredTask<'db> {
+pub(super) enum DeferredTask<'db> {
     Confirm {
         inst: TraitInstId<'db>,
         span: DynLazySpan<'db>,

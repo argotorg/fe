@@ -1,21 +1,22 @@
-use crate::core::hir_def::{Body, Const, Expr, IntegerId, LitKind, Partial};
+use crate::core::hir_def::{Body, Const, Expr, IdentId, IntegerId, LitKind, Partial};
 
 use super::{
+    trait_def::TraitInstId,
     ty_def::{InvalidCause, TyId, TyParam, TyVar},
     unify::UnificationTable,
 };
 use crate::analysis::{
     HirAnalysisDb,
     name_resolution::{PathRes, resolve_path},
-    ty::trait_resolution::PredicateListId,
     ty::ty_def::{Kind, TyBase, TyData, TyVarSort},
+    ty::{trait_def::assoc_const_body_for_trait_inst, trait_resolution::PredicateListId},
 };
 
 #[salsa::interned]
 #[derive(Debug)]
 pub struct ConstTyId<'db> {
     #[return_ref]
-    pub(crate) data: ConstTyData<'db>,
+    pub data: ConstTyData<'db>,
 }
 
 #[salsa::tracked]
@@ -85,6 +86,11 @@ pub(crate) fn evaluate_const_ty<'db>(
                         return const_ty.evaluate(db, expected);
                     }
                 }
+                PathRes::TraitConst(_recv_ty, inst, name) => {
+                    if let Some(const_ty) = const_ty_from_trait_const(db, inst, name) {
+                        return const_ty.evaluate(db, expected_ty);
+                    }
+                }
                 _ => {}
             }
         }
@@ -135,6 +141,25 @@ pub(crate) fn evaluate_const_ty<'db>(
     };
 
     ConstTyId::new(db, data)
+}
+
+pub(super) fn const_ty_from_trait_const<'db>(
+    db: &'db dyn HirAnalysisDb,
+    inst: TraitInstId<'db>,
+    name: IdentId<'db>,
+) -> Option<ConstTyId<'db>> {
+    let body = assoc_const_body_for_trait_inst(db, inst, name).or_else(|| {
+        let trait_ = inst.def(db);
+        trait_.const_(db, name).and_then(|c| c.default_body(db))
+    })?;
+
+    let declared_ty = inst
+        .def(db)
+        .const_(db, name)
+        .and_then(|v| v.ty_binder(db))
+        .map(|b| b.instantiate(db, inst.args(db)));
+
+    Some(ConstTyId::from_body(db, body, declared_ty, None))
 }
 
 // FIXME: When we add type inference, we need to use the inference engine to

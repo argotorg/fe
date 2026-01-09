@@ -1,6 +1,5 @@
 ---
 source: crates/codegen/tests/yul.rs
-assertion_line: 31
 expression: output
 input_file: tests/fixtures/while.fe
 ---
@@ -10,4 +9,5 @@ function do_while() -> ret {
     v0 := add(v0, 1)
   }
   ret := v0
+  leave
 }

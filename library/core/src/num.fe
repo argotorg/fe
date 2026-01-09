@@ -290,6 +290,7 @@ extern {
     fn __bitnot_usize(_: usize) -> usize
 
     pub fn __usize_as_u256(_: usize) -> u256
+    pub fn __u256_as_usize(_: u256) -> usize
 }
 
 // Extern intrinsics for i256
@@ -382,6 +383,7 @@ extern {
     fn __bitnot_isize(_: isize) -> isize
 
     pub fn __isize_as_u256(_: isize) -> u256
+    pub fn __u256_as_isize(_: u256) -> isize
 }
 
 // Extern intrinsics for bool

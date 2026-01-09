@@ -1,0 +1,24 @@
+---
+source: crates/codegen/tests/yul.rs
+expression: output
+input_file: tests/fixtures/match_newtype_nested.fe
+---
+function match_newtype_nested(a) -> ret {
+  let v0 := 0
+  switch a
+    case 0 {
+      v0 := 0
+    }
+    default {
+      let v1 := a
+      v0 := v1
+    }
+  ret := v0
+  leave
+}
+function f() -> ret {
+  let v0 := 10
+  let v1 := match_newtype_nested(v0)
+  ret := v1
+  leave
+}

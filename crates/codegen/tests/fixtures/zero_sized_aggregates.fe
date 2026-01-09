@@ -1,0 +1,33 @@
+struct Empty {
+}
+
+struct Wrap {
+    empty: Empty,
+    value: u256,
+}
+
+pub fn tuple_with_empty() -> u256 {
+    let e: Empty = Empty {}
+    let v: u256 = 5
+    let t: (Empty, u256) = (e, v)
+    t.1
+}
+
+pub fn tuple_only_empty() -> (Empty,) {
+    let e: Empty = Empty {}
+    let t: (Empty,) = (e,)
+    t
+}
+
+pub fn struct_with_empty() -> u256 {
+    let e: Empty = Empty {}
+    let v: u256 = 7
+    let w: Wrap = Wrap { empty: e, value: v }
+    w.value
+}
+
+pub fn empty_field_assign() {
+    let e: Empty = Empty {}
+    let mut w: Wrap = Wrap { empty: e, value: 1 }
+    w.empty = Empty {}
+}

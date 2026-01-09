@@ -1,5 +1,5 @@
-use core::caller
+use std::evm::{Address, Ctx}
 
-fn who_called() -> u256 {
-    caller()
+fn who_called() -> Address uses (ctx: Ctx) {
+    ctx.caller()
 }

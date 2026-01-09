@@ -1,6 +1,5 @@
 ---
 source: crates/language-server/src/functionality/completion.rs
-assertion_line: 1728
 expression: snapshot
 input_file: test_files/completion.fe
 ---
@@ -17,6 +16,7 @@ completions:
   - Helpable (Interface) [use utils::Helpable [Helpable]] {+0:use utils::Helpable}
   - Helper (Struct) [use utils::Helper [Helper]] {+0:use utils::Helper}
   - Helper (Struct) [use shadow_test::Helper [Helper]] {+0:use shadow_test::Helper}
+  - MsgVariant (Interface)
   - None (EnumMember)
   - Ok (EnumMember)
   - Option (Enum)

@@ -1,0 +1,9 @@
+use core::contracts::Target
+use super::effects::Evm
+
+pub struct EvmTarget {}
+
+impl Target for EvmTarget {
+    type RootEffect = Evm
+    type DefaultAbi = super::super::abi::Sol
+}

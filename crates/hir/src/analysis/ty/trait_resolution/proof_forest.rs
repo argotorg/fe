@@ -353,6 +353,12 @@ impl GeneratorNode {
     fn step(self, pf: &mut ProofForest) -> bool {
         let g_node = &mut pf.g_nodes[self];
         let db = pf.db;
+        // Normalize against the ingot where the query originates so associated type
+        // projections can resolve using the impls visible from the call-site.
+        let scope = pf.ingot.root_mod(db).scope();
+        let normalized_goal = g_node
+            .extracted_goal
+            .normalize(db, scope, g_node.assumptions);
 
         while let Some(&cand) = g_node.cands.get(g_node.next_cand) {
             g_node.next_cand += 1;
@@ -364,14 +370,10 @@ impl GeneratorNode {
             // Normalize trait instance arguments before unification
             let normalized_gen_cand = {
                 let trait_inst = gen_cand.trait_(db);
-                let scope = g_node.goal.value.ingot(db).root_mod(db).scope();
                 trait_inst.normalize(db, scope, g_node.assumptions)
             };
 
-            if table
-                .unify(normalized_gen_cand, g_node.extracted_goal)
-                .is_err()
-            {
+            if table.unify(normalized_gen_cand, normalized_goal).is_err() {
                 continue;
             }
 
@@ -399,7 +401,7 @@ impl GeneratorNode {
             g_node.next_cand += 1;
             next_cand += 1;
             let mut table = g_node.table.clone();
-            if table.unify(assumption, g_node.extracted_goal).is_ok() {
+            if table.unify(assumption, normalized_goal).is_ok() {
                 self.register_solution_with(pf, &mut table);
                 return true;
             }

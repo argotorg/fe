@@ -200,6 +200,8 @@ impl<'db> Field<'db> {
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, salsa::Update)]
 pub struct WithBinding<'db> {
-    pub key_path: Partial<PathId<'db>>, // Unresolved path key
+    /// Effect key path (e.g. `Ctx` / `Storage<u8>`). When absent, the binding is
+    /// shorthand and the key is inferred from the bound value and effect usage.
+    pub key_path: Option<Partial<PathId<'db>>>,
     pub value: ExprId,
 }

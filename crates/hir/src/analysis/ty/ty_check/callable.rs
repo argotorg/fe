@@ -160,6 +160,7 @@ impl<'db> Callable<'db> {
         call_args: &[HirCallArg<'db>],
         span: LazyCallArgListSpan<'db>,
         receiver: Option<(ExprId, ExprProp<'db>)>,
+        already_typed: bool,
     ) {
         let db = tc.db;
 
@@ -195,8 +196,12 @@ impl<'db> Callable<'db> {
         };
 
         for (i, hir_arg) in call_args.iter().enumerate() {
-            let arg = CallArg::from_hir_arg(tc, hir_arg, span.clone().arg(i));
-            args.push(arg);
+            args.push(CallArg::from_hir_arg(
+                tc,
+                hir_arg,
+                span.clone().arg(i),
+                already_typed,
+            ));
         }
 
         let expected_arg_tys = self.callable_def.arg_tys(db);
@@ -241,9 +246,17 @@ impl<'db> CallArg<'db> {
         tc: &mut TyChecker<'db>,
         arg: &HirCallArg<'db>,
         span: LazyCallArgSpan<'db>,
+        already_typed: bool,
     ) -> Self {
-        let ty = tc.fresh_ty();
-        let expr_prop = tc.check_expr(arg.expr, ty);
+        let expr_prop = if already_typed {
+            let db = tc.db;
+            tc.env
+                .typed_expr(arg.expr)
+                .unwrap_or_else(|| ExprProp::invalid(db))
+        } else {
+            let ty = tc.fresh_ty();
+            tc.check_expr(arg.expr, ty)
+        };
         // Only use explicit labels for function calls, not inferred labels.
         // The `label_eagerly` behavior (inferring labels from variable names) is
         // useful for struct field initialization syntax, but for function calls

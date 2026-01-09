@@ -1,22 +1,23 @@
 //! Variant lowering helpers for MIR: handles enum constructor calls and unit variant paths.
 
 use super::*;
+use hir::hir_def::EnumVariant;
+use hir::projection::Projection;
 use num_bigint::BigUint;
 
 impl<'db, 'a> MirBuilder<'db, 'a> {
     /// Lowers an enum variant constructor call into allocation and payload/discriminant stores.
     ///
     /// # Parameters
-    /// - `block`: Block to start lowering in.
     /// - `expr`: Call expression id for the variant ctor.
     ///
     /// # Returns
-    /// Successor block and the allocated variant value when applicable.
+    /// The allocated variant value when applicable.
     pub(super) fn try_lower_variant_ctor(
         &mut self,
-        block: BasicBlockId,
         expr: ExprId,
-    ) -> Option<(Option<BasicBlockId>, ValueId)> {
+        dest_override: Option<LocalId>,
+    ) -> Option<ValueId> {
         let Partial::Present(Expr::Call(_, call_args)) = expr.data(self.db, self.body) else {
             return None;
         };
@@ -25,105 +26,92 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
             return None;
         };
 
-        let variant_index = variant.idx as u64;
-
-        let mut current = Some(block);
         let mut lowered_args = Vec::with_capacity(call_args.len());
         for arg in call_args.iter() {
-            let Some(curr_block) = current else {
-                break;
-            };
-            let (next_block, value) = self.lower_expr_in(curr_block, arg.expr);
-            current = next_block;
-            lowered_args.push(value);
+            if self.current_block().is_none() {
+                return Some(self.ensure_value(expr));
+            }
+            lowered_args.push(self.lower_expr(arg.expr));
         }
 
         let enum_ty = self.typed_body.expr_ty(self.db, expr);
-        let total_size = self.enum_size_bytes(enum_ty).unwrap_or(64);
-
-        let Some(curr_block) = current else {
-            let value_id = self.ensure_value(expr);
-            return Some((None, value_id));
-        };
-
-        let value_id = self.emit_alloc(expr, curr_block, total_size);
-        self.emit_store_discriminant(expr, curr_block, value_id, variant_index);
-
-        let mut offset: u64 = 0;
-        let mut stores = Vec::with_capacity(lowered_args.len());
-        for (i, arg_value) in lowered_args.iter().enumerate() {
-            let arg_ty = self.typed_body.expr_ty(self.db, call_args[i].expr);
-            stores.push((offset, arg_ty, *arg_value));
-            offset += self.ty_size_bytes(arg_ty).unwrap_or(32);
+        if self.current_block().is_none() {
+            return Some(self.ensure_value(expr));
         }
-        let ptr_ty = match self.value_address_space(value_id) {
-            AddressSpaceKind::Memory => self.core.helper_ty(CoreHelperTy::MemPtr),
-            AddressSpaceKind::Storage => self.core.helper_ty(CoreHelperTy::StorPtr),
+
+        let value_id = if let Some(dest) = dest_override {
+            self.emit_alloc_into_local(expr, dest)
+        } else {
+            self.emit_alloc(expr, enum_ty)
         };
-        for (offset_bytes, field_ty, field_value) in stores {
-            let callable =
-                self.core
-                    .make_callable(expr, CoreHelper::StoreVariantField, &[ptr_ty, field_ty]);
-            let offset_value = self.synthetic_u256(BigUint::from(offset_bytes));
-            let store_ret_ty = callable.ret_ty(self.db);
-            let store_call = self.mir_body.alloc_value(ValueData {
-                ty: store_ret_ty,
-                origin: ValueOrigin::Call(CallOrigin {
-                    expr,
-                    callable,
-                    args: vec![value_id, offset_value, field_value],
-                    receiver_space: None,
-                    resolved_name: None,
-                }),
+        let mut inits = Vec::with_capacity(1 + lowered_args.len());
+        let discr_value = self.synthetic_u256(BigUint::from(variant.idx as u64));
+        inits.push((
+            MirProjectionPath::from_projection(Projection::Discriminant),
+            discr_value,
+        ));
+        for (field_idx, field_value) in lowered_args.iter().enumerate() {
+            let projection = MirProjectionPath::from_projection(Projection::VariantField {
+                variant,
+                enum_ty,
+                field_idx,
             });
-
-            self.push_inst(
-                curr_block,
-                MirInst::EvalExpr {
-                    expr,
-                    value: store_call,
-                    bind_value: false,
-                },
-            );
+            inits.push((projection, *field_value));
         }
+        let place = Place::new(value_id, MirProjectionPath::new());
+        self.push_inst_here(MirInst::InitAggregate { place, inits });
 
-        Some((Some(curr_block), value_id))
+        Some(value_id)
     }
 
     /// Lowers a unit variant path expression into an allocation plus discriminant store.
     ///
     /// # Parameters
-    /// - `block`: Current basic block.
     /// - `expr`: Path expression id resolving to a unit variant.
     ///
     /// # Returns
-    /// Successor block and the allocated variant value when applicable.
+    /// The allocated variant value when applicable.
     pub(super) fn try_lower_unit_variant(
         &mut self,
-        block: BasicBlockId,
         expr: ExprId,
-    ) -> Option<(Option<BasicBlockId>, ValueId)> {
+        dest_override: Option<LocalId>,
+    ) -> Option<ValueId> {
         let Partial::Present(Expr::Path(path)) = expr.data(self.db, self.body) else {
             return None;
         };
+        let Some(block) = self.current_block() else {
+            return Some(self.ensure_value(expr));
+        };
         let path = path.to_opt()?;
-        let scope = self.typed_body.body()?.scope();
-        let variant = self.resolve_enum_variant(path, scope)?;
-
-        if !matches!(variant.kind(self.db), VariantKind::Unit) {
+        let enum_ty = self.typed_body.expr_ty(self.db, expr);
+        let enum_def = enum_ty.as_enum(self.db)?;
+        let variant_name = path.ident(self.db).to_opt()?.data(self.db);
+        let (idx, variant_def) = enum_def.variants(self.db).enumerate().find(|(_, v)| {
+            v.name(self.db)
+                .is_some_and(|name| name.data(self.db) == variant_name)
+        })?;
+        if !matches!(variant_def.kind(self.db), VariantKind::Unit) {
             return None;
         }
+        let variant = EnumVariant {
+            enum_: enum_def,
+            idx: idx as u16,
+        };
 
-        let variant_index = variant.variant.idx as u64;
-        let enum_ty = self.typed_body.expr_ty(self.db, expr);
+        self.move_to_block(block);
+        let value_id = if let Some(dest) = dest_override {
+            self.emit_alloc_into_local(expr, dest)
+        } else {
+            self.emit_alloc(expr, enum_ty)
+        };
+        let discr_value = self.synthetic_u256(BigUint::from(variant.idx as u64));
+        let inits = vec![(
+            MirProjectionPath::from_projection(Projection::Discriminant),
+            discr_value,
+        )];
+        let place = Place::new(value_id, MirProjectionPath::new());
+        self.push_inst_here(MirInst::InitAggregate { place, inits });
 
-        let enum_size = self.enum_size_bytes(enum_ty).unwrap_or(64);
-
-        let curr_block = block;
-
-        let value_id = self.emit_alloc(expr, curr_block, enum_size);
-        self.emit_store_discriminant(expr, curr_block, value_id, variant_index);
-
-        Some((Some(curr_block), value_id))
+        Some(value_id)
     }
 }

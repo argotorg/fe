@@ -58,6 +58,9 @@ pub trait TyVisitor<'db> {
     fn visit_adt(&mut self, adt: AdtDef<'db>) {}
 
     #[allow(unused_variables)]
+    fn visit_contract(&mut self, contract: crate::hir_def::Contract<'db>) {}
+
+    #[allow(unused_variables)]
     fn visit_func(&mut self, func: CallableDef<'db>) {}
 
     #[allow(unused_variables)]
@@ -93,6 +96,7 @@ where
     match ty_con {
         TyBase::Prim(prim) => visitor.visit_prim(prim),
         TyBase::Adt(adt) => visitor.visit_adt(*adt),
+        TyBase::Contract(c) => visitor.visit_contract(*c),
         TyBase::Func(func) => visitor.visit_func(*func),
     }
 }

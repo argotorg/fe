@@ -1,0 +1,244 @@
+use std::evm::{Evm, Call, StorageMap}
+use std::evm::effects::assert
+use core::abi::{Abi, AbiEncoder, AbiSize, Encode}
+use std::abi::Sol
+
+msg MapMsg {
+    #[selector = 0x9cc7f708]
+    BalanceOf { user: u256 } -> u256,
+
+    #[selector = 0x4a4b9feb]
+    SetBalance { user: u256, value: u256 } -> u256,
+
+    #[selector = 0x90dd2627]
+    Transfer { from: u256, to: u256, amount: u256 } -> u256,
+
+    #[selector = 0xc960174e]
+    GetAllowance { user: u256 } -> u256,
+
+    #[selector = 0x0bca4841]
+    SetAllowance { user: u256, value: u256 } -> u256,
+}
+
+// Boilerplate for MapMsg variants
+
+// BalanceOf
+impl AbiSize for MapMsg::BalanceOf {
+    const ENCODED_SIZE: u256 = 32
+}
+impl Encode<Sol> for MapMsg::BalanceOf {
+    fn encode<E: AbiEncoder<Sol>>(self, mut _ e: E) {
+        self.user.encode(e)
+    }
+}
+
+// SetBalance
+impl AbiSize for MapMsg::SetBalance {
+    const ENCODED_SIZE: u256 = 64
+}
+impl Encode<Sol> for MapMsg::SetBalance {
+    fn encode<E: AbiEncoder<Sol>>(self, mut _ e: E) {
+        self.user.encode(e)
+        self.value.encode(e)
+    }
+}
+
+// Transfer
+impl AbiSize for MapMsg::Transfer {
+    const ENCODED_SIZE: u256 = 96
+}
+impl Encode<Sol> for MapMsg::Transfer {
+    fn encode<E: AbiEncoder<Sol>>(self, mut _ e: E) {
+        self.from.encode(e)
+        self.to.encode(e)
+        self.amount.encode(e)
+    }
+}
+
+// GetAllowance
+impl AbiSize for MapMsg::GetAllowance {
+    const ENCODED_SIZE: u256 = 32
+}
+impl Encode<Sol> for MapMsg::GetAllowance {
+    fn encode<E: AbiEncoder<Sol>>(self, mut _ e: E) {
+        self.user.encode(e)
+    }
+}
+
+// SetAllowance
+impl AbiSize for MapMsg::SetAllowance {
+    const ENCODED_SIZE: u256 = 64
+}
+impl Encode<Sol> for MapMsg::SetAllowance {
+    fn encode<E: AbiEncoder<Sol>>(self, mut _ e: E) {
+        self.user.encode(e)
+        self.value.encode(e)
+    }
+}
+
+struct BalanceMapStore {
+    balances: StorageMap<u256, u256, 0>,
+    allowances: StorageMap<u256, u256, 1>,
+}
+
+pub contract BalanceMap {
+    mut store: BalanceMapStore
+
+    init() uses (mut store) {
+        // StorageMaps are empty by default
+    }
+
+    recv MapMsg {
+        BalanceOf { user } -> u256 uses (store) {
+            return store.balances.get(key: user)
+        }
+
+        SetBalance { user, value } -> u256 uses (mut store) {
+            store.balances.set(key: user, value: value)
+            return 0
+        }
+
+        Transfer { from, to, amount } -> u256 uses (mut store) {
+            let from_bal = store.balances.get(key: from)
+            if from_bal < amount {
+                return 1
+            }
+            let to_bal = store.balances.get(key: to)
+            store.balances.set(key: from, value: from_bal - amount)
+            store.balances.set(key: to, value: to_bal + amount)
+            return 0
+        }
+
+        GetAllowance { user } -> u256 uses (store) {
+            return store.allowances.get(key: user)
+        }
+
+        SetAllowance { user, value } -> u256 uses (mut store) {
+            store.allowances.set(key: user, value: value)
+            return 0
+        }
+    }
+}
+
+#[test]
+fn test_storage_map() uses (mut evm: Evm) {
+    let contract_addr = evm.create2<BalanceMap>(value: 0, args: (), salt: 0)
+    assert(contract_addr.inner != 0)
+
+    let alice: u256 = 0x1111
+    let bob: u256 = 0x2222
+
+    // 1. balanceOf(alice) -> 0
+    let bal: u256 = evm.call(
+        addr: contract_addr,
+        gas: 100000,
+        value: 0,
+        message: MapMsg::BalanceOf { user: alice }
+    )
+    assert(bal == 0)
+
+    // 2. setBalance(alice, 100)
+    evm.call(
+        addr: contract_addr,
+        gas: 100000,
+        value: 0,
+        message: MapMsg::SetBalance { user: alice, value: 100 }
+    )
+
+    // 3. balanceOf(alice) -> 100
+    let bal: u256 = evm.call(
+        addr: contract_addr,
+        gas: 100000,
+        value: 0,
+        message: MapMsg::BalanceOf { user: alice }
+    )
+    assert(bal == 100)
+
+    // 4. setBalance(bob, 50)
+    evm.call(
+        addr: contract_addr,
+        gas: 100000,
+        value: 0,
+        message: MapMsg::SetBalance { user: bob, value: 50 }
+    )
+
+    // 5. transfer(alice, bob, 30) -> 0 (success)
+    let res: u256 = evm.call(
+        addr: contract_addr,
+        gas: 100000,
+        value: 0,
+        message: MapMsg::Transfer { from: alice, to: bob, amount: 30 }
+    )
+    assert(res == 0)
+
+    // 6. balanceOf(alice) -> 70
+    let bal: u256 = evm.call(
+        addr: contract_addr,
+        gas: 100000,
+        value: 0,
+        message: MapMsg::BalanceOf { user: alice }
+    )
+    assert(bal == 70)
+
+    // 7. balanceOf(bob) -> 80
+    let bal: u256 = evm.call(
+        addr: contract_addr,
+        gas: 100000,
+        value: 0,
+        message: MapMsg::BalanceOf { user: bob }
+    )
+    assert(bal == 80)
+
+    // 8. transfer(alice, bob, 1000) -> 1 (fail)
+    let res: u256 = evm.call(
+        addr: contract_addr,
+        gas: 100000,
+        value: 0,
+        message: MapMsg::Transfer { from: alice, to: bob, amount: 1000 }
+    )
+    assert(res == 1)
+
+    // 9. balanceOf(alice) -> 70
+    let bal: u256 = evm.call(
+        addr: contract_addr,
+        gas: 100000,
+        value: 0,
+        message: MapMsg::BalanceOf { user: alice }
+    )
+    assert(bal == 70)
+
+    // 10. setAllowance(alice, 999)
+    evm.call(
+        addr: contract_addr,
+        gas: 100000,
+        value: 0,
+        message: MapMsg::SetAllowance { user: alice, value: 999 }
+    )
+
+    // 11. getAllowance(alice) -> 999
+    let allow: u256 = evm.call(
+        addr: contract_addr,
+        gas: 100000,
+        value: 0,
+        message: MapMsg::GetAllowance { user: alice }
+    )
+    assert(allow == 999)
+
+    // 12. balanceOf(alice) -> 70 (maps independent)
+    let bal: u256 = evm.call(
+        addr: contract_addr,
+        gas: 100000,
+        value: 0,
+        message: MapMsg::BalanceOf { user: alice }
+    )
+    assert(bal == 70)
+
+    // 13. getAllowance(bob) -> 0
+    let allow: u256 = evm.call(
+        addr: contract_addr,
+        gas: 100000,
+        value: 0,
+        message: MapMsg::GetAllowance { user: bob }
+    )
+    assert(allow == 0)
+}

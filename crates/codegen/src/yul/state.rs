@@ -1,12 +1,13 @@
 use std::rc::Rc;
 
+use mir::LocalId;
 use rustc_hash::FxHashMap;
 use std::cell::Cell;
 
 /// Tracks the mapping between Fe bindings and their Yul local names within a block.
 #[derive(Clone)]
 pub(super) struct BlockState {
-    locals: FxHashMap<String, String>,
+    locals: FxHashMap<LocalId, String>,
     next_local: Rc<Cell<usize>>,
     /// Mapping from MIR ValueId index to Yul temp name for values bound in this scope.
     value_temps: FxHashMap<usize, String>,
@@ -40,19 +41,19 @@ impl BlockState {
         name
     }
 
-    /// Inserts or updates the mapping for a Fe binding to a Yul name.
-    pub(super) fn insert_binding(&mut self, binding: String, name: String) -> String {
-        self.locals.insert(binding, name.clone());
+    /// Inserts or updates the mapping for a MIR local to a Yul name/expression.
+    pub(super) fn insert_local(&mut self, local: LocalId, name: String) -> String {
+        self.locals.insert(local, name.clone());
         name
     }
 
-    /// Returns the known Yul name for a binding, if it exists.
-    pub(super) fn binding(&self, binding: &str) -> Option<String> {
-        self.locals.get(binding).cloned()
+    /// Returns the known Yul name for a local, if it exists.
+    pub(super) fn local(&self, local: LocalId) -> Option<String> {
+        self.locals.get(&local).cloned()
     }
 
-    /// Resolves a binding to an existing Yul name or falls back to the original identifier.
-    pub(super) fn resolve_name(&self, binding: &str) -> String {
-        self.binding(binding).unwrap_or_else(|| binding.to_string())
+    /// Resolves a local to its lowered Yul name/expression.
+    pub(super) fn resolve_local(&self, local: LocalId) -> Option<String> {
+        self.local(local)
     }
 }

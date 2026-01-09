@@ -1,0 +1,172 @@
+---
+source: crates/hir/tests/ty_check.rs
+expression: res
+input_file: test_files/ty_check/with_shorthand_mixed.fe
+---
+note: 
+  ┌─ with_shorthand_mixed.fe:7:22
+  │
+7 │     fn log(mut self) {}
+  │                      ^^ ()
+
+note: 
+   ┌─ with_shorthand_mixed.fe:16:1
+   │  
+16 │ ╭ {
+17 │ │     logger.log()
+18 │ │ }
+   │ ╰─^ ()
+
+note: 
+   ┌─ with_shorthand_mixed.fe:17:5
+   │
+17 │     logger.log()
+   │     ^^^^^^ logger: Logger
+
+note: 
+   ┌─ with_shorthand_mixed.fe:17:5
+   │
+17 │     logger.log()
+   │     ^^^^^^^^^^^^ ()
+
+note: 
+   ┌─ with_shorthand_mixed.fe:22:1
+   │  
+22 │ ╭ {
+23 │ │     st.value += amount
+24 │ │ }
+   │ ╰─^ ()
+
+note: 
+   ┌─ with_shorthand_mixed.fe:23:5
+   │
+23 │     st.value += amount
+   │     ^^ Storage
+
+note: 
+   ┌─ with_shorthand_mixed.fe:23:5
+   │
+23 │     st.value += amount
+   │     ^^^^^^^^ u64
+
+note: 
+   ┌─ with_shorthand_mixed.fe:23:5
+   │
+23 │     st.value += amount
+   │     ^^^^^^^^^^^^^^^^^^ ()
+
+note: 
+   ┌─ with_shorthand_mixed.fe:23:17
+   │
+23 │     st.value += amount
+   │                 ^^^^^^ u64
+
+note: 
+   ┌─ with_shorthand_mixed.fe:28:1
+   │  
+28 │ ╭ {
+29 │ │     mint(1)
+30 │ │     log_once()
+31 │ │ }
+   │ ╰─^ ()
+
+note: 
+   ┌─ with_shorthand_mixed.fe:29:5
+   │
+29 │     mint(1)
+   │     ^^^^ fn mint
+
+note: 
+   ┌─ with_shorthand_mixed.fe:29:5
+   │
+29 │     mint(1)
+   │     ^^^^^^^ ()
+
+note: 
+   ┌─ with_shorthand_mixed.fe:29:10
+   │
+29 │     mint(1)
+   │          ^ u64
+
+note: 
+   ┌─ with_shorthand_mixed.fe:30:5
+   │
+30 │     log_once()
+   │     ^^^^^^^^ fn log_once
+
+note: 
+   ┌─ with_shorthand_mixed.fe:30:5
+   │
+30 │     log_once()
+   │     ^^^^^^^^^^ ()
+
+note: 
+   ┌─ with_shorthand_mixed.fe:33:23
+   │  
+33 │   pub fn provide_both() {
+   │ ╭───────────────────────^
+34 │ │     let mut st = Storage { value: 0 }
+35 │ │     with (st, Console {}) {
+36 │ │         do_both()
+37 │ │     }
+38 │ │ }
+   │ ╰─^ ()
+
+note: 
+   ┌─ with_shorthand_mixed.fe:34:9
+   │
+34 │     let mut st = Storage { value: 0 }
+   │         ^^^^^^ Storage
+
+note: 
+   ┌─ with_shorthand_mixed.fe:34:18
+   │
+34 │     let mut st = Storage { value: 0 }
+   │                  ^^^^^^^^^^^^^^^^^^^^ Storage
+
+note: 
+   ┌─ with_shorthand_mixed.fe:34:35
+   │
+34 │     let mut st = Storage { value: 0 }
+   │                                   ^ u64
+
+note: 
+   ┌─ with_shorthand_mixed.fe:35:5
+   │  
+35 │ ╭     with (st, Console {}) {
+36 │ │         do_both()
+37 │ │     }
+   │ ╰─────^ ()
+
+note: 
+   ┌─ with_shorthand_mixed.fe:35:11
+   │
+35 │     with (st, Console {}) {
+   │           ^^ Storage
+
+note: 
+   ┌─ with_shorthand_mixed.fe:35:15
+   │
+35 │     with (st, Console {}) {
+   │               ^^^^^^^^^^ Console
+
+note: 
+   ┌─ with_shorthand_mixed.fe:35:27
+   │  
+35 │       with (st, Console {}) {
+   │ ╭───────────────────────────^
+36 │ │         do_both()
+37 │ │     }
+   │ ╰─────^ ()
+
+note: 
+   ┌─ with_shorthand_mixed.fe:36:9
+   │
+36 │         do_both()
+   │         ^^^^^^^ fn do_both
+
+note: 
+   ┌─ with_shorthand_mixed.fe:36:9
+   │
+36 │         do_both()
+   │         ^^^^^^^^^ ()

@@ -1,7 +1,7 @@
 ---
 source: crates/parser/tests/error_recovery.rs
 expression: node
-input_file: crates/parser/test_files/error_recovery/exprs/call.fe
+input_file: test_files/error_recovery/exprs/call.fe
 ---
 Root@0..40
   CallExpr@0..16
@@ -38,44 +38,29 @@ Root@0..40
         SemiColon@14..15 ";"
       RParen@15..16 ")"
   Newline@16..18 "\n\n"
-  CallExpr@18..39
-    PathExpr@18..33
-      Path@18..33
-        PathSegment@18..33
+  BinExpr@18..25
+    PathExpr@18..21
+      Path@18..21
+        PathSegment@18..21
           Ident@18..21 "foo"
-          GenericArgList@21..33
-            Lt@21..22 "<"
-            TypeGenericArg@22..25
-              PathType@22..25
-                Path@22..25
-                  PathSegment@22..25
-                    Ident@22..25 "i32"
-            Comma@25..26 ","
-            WhiteSpace@26..27 " "
-            TypeGenericArg@27..28
-              PathType@27..28
-                Path@27..28
-                  PathSegment@27..28
-                    Ident@27..28 "T"
-            WhiteSpace@28..29 " "
-            Error@29..30
-              Ident@29..30 "E"
-            Comma@30..31 ","
-            WhiteSpace@31..32 " "
-            Gt@32..33 ">"
-    CallArgList@33..39
-      LParen@33..34 "("
-      CallArg@34..35
-        PathExpr@34..35
-          Path@34..35
-            PathSegment@34..35
-              Ident@34..35 "x"
-      Comma@35..36 ","
-      WhiteSpace@36..37 " "
-      CallArg@37..38
-        PathExpr@37..38
-          Path@37..38
-            PathSegment@37..38
-              Ident@37..38 "y"
-      RParen@38..39 ")"
-  Newline@39..40 "\n"
+    Lt@21..22 "<"
+    PathExpr@22..25
+      Path@22..25
+        PathSegment@22..25
+          Ident@22..25 "i32"
+  Error@25..40
+    Comma@25..26 ","
+    WhiteSpace@26..27 " "
+    Ident@27..28 "T"
+    WhiteSpace@28..29 " "
+    Ident@29..30 "E"
+    Comma@30..31 ","
+    WhiteSpace@31..32 " "
+    Gt@32..33 ">"
+    LParen@33..34 "("
+    Ident@34..35 "x"
+    Comma@35..36 ","
+    WhiteSpace@36..37 " "
+    Ident@37..38 "y"
+    RParen@38..39 ")"
+    Newline@39..40 "\n"
