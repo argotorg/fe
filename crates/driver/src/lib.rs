@@ -21,8 +21,8 @@ use resolver::{
     git::{GitDescription, GitResolver},
     graph::{GraphResolver, GraphResolverImpl},
     ingot::{
-        IngotDescriptor, IngotResolutionError, IngotResolver, RemoteProgress,
-        project_files_resolver,
+        IngotDescriptor, IngotResolutionError, IngotResolver, RemoteIngotDescriptor,
+        RemoteProgress, project_files_resolver,
     },
 };
 use url::Url;
@@ -164,7 +164,7 @@ pub enum IngotInitDiagnostics {
         diagnostics: Vec<common::config::ConfigDiagnostic>,
     },
     UnresolvableRemoteDependency {
-        target: GitDescription,
+        target: RemoteIngotDescriptor,
         error: IngotResolutionError,
     },
     RemotePathResolutionError {

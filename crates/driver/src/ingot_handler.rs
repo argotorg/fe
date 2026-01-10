@@ -9,7 +9,10 @@ use resolver::{
     ResolutionHandler,
     git::GitDescription,
     graph::{DiGraph, GraphResolutionHandler, UnresolvedNode, petgraph::visit::EdgeRef},
-    ingot::{IngotDescriptor, IngotOrigin, IngotPriority, IngotResolver, IngotResource},
+    ingot::{
+        IngotDescriptor, IngotOrigin, IngotPriority, IngotResolver, IngotResource,
+        RemoteIngotDescriptor,
+    },
 };
 use smol_str::SmolStr;
 use url::Url;
@@ -122,7 +125,10 @@ impl<'a> IngotHandler<'a> {
                             next_description = next_description.with_path(path);
                         }
                         Some((
-                            IngotDescriptor::Remote(next_description),
+                            IngotDescriptor::Remote(RemoteIngotDescriptor::new(
+                                next_description,
+                                None,
+                            )),
                             (dependency.alias, dependency.arguments),
                         ))
                     }
@@ -142,8 +148,17 @@ impl<'a> IngotHandler<'a> {
                 if let Some(path) = remote.path.clone() {
                     next_description = next_description.with_path(path);
                 }
+                let name = if next_description.path.is_none() {
+                    dependency
+                        .arguments
+                        .name
+                        .as_ref()
+                        .map(|name| name.to_string())
+                } else {
+                    None
+                };
                 Some((
-                    IngotDescriptor::Remote(next_description),
+                    IngotDescriptor::Remote(RemoteIngotDescriptor::new(next_description, name)),
                     (dependency.alias, dependency.arguments),
                 ))
             }
