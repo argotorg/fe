@@ -85,6 +85,8 @@ fn parse_expr_with_min_bp<S: TokenStream>(
                 parser.parse_cp(AssignExprScope::default(), Some(checkpoint))
             } else if is_aug_assign(parser) {
                 parser.parse_cp(AugAssignExprScope::default(), Some(checkpoint))
+            } else if kind == SyntaxKind::Dot2 || kind == SyntaxKind::Dot2Eq {
+                parser.parse_cp(RangeExprScope::default(), Some(checkpoint))
             } else {
                 parser.parse_cp(BinExprScope::default(), Some(checkpoint))
             }?;
@@ -165,6 +167,8 @@ fn infix_binding_power<S: TokenStream>(parser: &mut Parser<S>) -> Option<(u8, u8
     };
 
     let bp = match kind {
+        // Range operators have low precedence (higher than assignment, lower than logical)
+        Dot2 | Dot2Eq => (30, 31),
         Pipe2 => (50, 51),
         Amp2 => (60, 61),
         NotEq | Eq2 => (70, 71),
@@ -253,6 +257,23 @@ impl super::Parse for AssignExprScope {
         let (_, rbp) = infix_binding_power(parser).unwrap();
         parser.bump_expected(SyntaxKind::Eq);
         parse_expr_with_min_bp(parser, rbp, true)
+    }
+}
+
+define_scope! { RangeExprScope, RangeExpr }
+impl super::Parse for RangeExprScope {
+    type Error = Recovery<ErrProof>;
+
+    fn parse<S: TokenStream>(&mut self, parser: &mut Parser<S>) -> Result<(), Self::Error> {
+        parser.set_newline_as_trivia(false);
+        let (_, rbp) = infix_binding_power(parser).unwrap();
+        // Bump either `..` or `..=`
+        if parser.current_kind() == Some(SyntaxKind::Dot2Eq) {
+            parser.bump_expected(SyntaxKind::Dot2Eq);
+        } else {
+            parser.bump_expected(SyntaxKind::Dot2);
+        }
+        parse_expr_with_min_bp(parser, rbp, false)
     }
 }
 

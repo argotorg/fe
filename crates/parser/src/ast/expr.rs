@@ -25,7 +25,8 @@ ast_node! {
     | SK::WithExpr
     | SK::ParenExpr
     | SK::AssignExpr
-    | SK::AugAssignExpr,
+    | SK::AugAssignExpr
+    | SK::RangeExpr,
 }
 
 impl Expr {
@@ -55,6 +56,7 @@ impl Expr {
             SK::ParenExpr => ExprKind::Paren(AstNode::cast(self.syntax().clone()).unwrap()),
             SK::AssignExpr => ExprKind::Assign(AstNode::cast(self.syntax().clone()).unwrap()),
             SK::AugAssignExpr => ExprKind::AugAssign(AstNode::cast(self.syntax().clone()).unwrap()),
+            SK::RangeExpr => ExprKind::Range(AstNode::cast(self.syntax().clone()).unwrap()),
             _ => unreachable!(),
         }
     }
@@ -426,6 +428,28 @@ impl AugAssignExpr {
     }
 }
 
+ast_node! {
+    /// `start..end` or `start..=end`
+    pub struct RangeExpr,
+    SK::RangeExpr,
+}
+impl RangeExpr {
+    /// Returns the start expression of the range.
+    pub fn start(&self) -> Option<Expr> {
+        support::children(self.syntax()).next()
+    }
+
+    /// Returns the end expression of the range.
+    pub fn end(&self) -> Option<Expr> {
+        support::children(self.syntax()).nth(1)
+    }
+
+    /// Returns true if this is an inclusive range (`..=`).
+    pub fn is_inclusive(&self) -> bool {
+        support::token(self.syntax(), SK::Dot2Eq).is_some()
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash, derive_more::From, derive_more::TryInto)]
 pub enum ExprKind {
     Lit(LitExpr),
@@ -447,6 +471,7 @@ pub enum ExprKind {
     Paren(ParenExpr),
     Assign(AssignExpr),
     AugAssign(AugAssignExpr),
+    Range(RangeExpr),
 }
 
 ast_node! {

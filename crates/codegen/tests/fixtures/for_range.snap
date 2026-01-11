@@ -1,0 +1,30 @@
+---
+source: crates/codegen/tests/yul.rs
+assertion_line: 42
+expression: output
+input_file: tests/fixtures/for_range.fe
+---
+function for_range_sum() -> ret {
+  let v0 := 0
+  let v1 := 0
+  let v2 := 10
+  let v3 := v1
+  for { v3 := v1 } lt(v3, v2) { v3 := add(v3, 1) } {
+    let v4 := v3
+    v0 := add(v0, v4)
+  }
+  ret := v0
+  leave
+}
+function for_range_inclusive_sum() -> ret {
+  let v0 := 0
+  let v1 := 1
+  let v2 := 5
+  let v3 := v1
+  for { v3 := v1 } iszero(gt(v3, v2)) { v3 := add(v3, 1) } {
+    let v4 := v3
+    v0 := add(v0, v4)
+  }
+  ret := v0
+  leave
+}

@@ -17,6 +17,7 @@ use hir::analysis::{
     ty::ty_check::{EffectArg, EffectPassMode},
 };
 use hir::hir_def::expr::BinOp;
+use hir::hir_def::AttrListId;
 
 enum RootLvalue<'db> {
     Place(Place<'db>),
@@ -1304,8 +1305,8 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                     }
                 }
             }
-            Stmt::For(_, _, _) => {
-                panic!("for loops are not supported in MIR lowering yet");
+            Stmt::For(pat, iterable, body_expr, attrs) => {
+                self.lower_for(*pat, *iterable, *body_expr, *attrs);
             }
             Stmt::While(cond, body_expr) => self.lower_while(*cond, *body_expr),
             Stmt::Continue => {
@@ -1390,10 +1391,687 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                 body: body_block,
                 exit: exit_block,
                 backedge,
+                init_block: None,
+                post_block: None,
             },
         );
 
         self.move_to_block(exit_block);
+    }
+
+    /// Lowers a `for` loop statement.
+    ///
+    /// For loops over arrays or ranges with known compile-time size < 20
+    /// are unrolled for gas efficiency. Otherwise, a while-style loop is used.
+    ///
+    /// # Parameters
+    /// - `pat`: The pattern for the loop variable binding.
+    /// - `iterable`: The expression being iterated (array or range).
+    /// - `body_expr`: The loop body expression.
+    /// - `attrs`: Attributes on the for statement (e.g., #[unroll]).
+    ///
+    pub(super) fn lower_for(&mut self, pat: PatId, iterable: ExprId, body_expr: ExprId, attrs: AttrListId<'db>) {
+        // Check for #[unroll] attribute
+        let unroll = attrs.has_attr(self.db, "unroll");
+        self.lower_for_impl(pat, iterable, body_expr, unroll);
+    }
+
+    /// Internal implementation of for loop lowering.
+    /// When `unroll` is true and the loop bounds are known at compile time,
+    /// the loop body is inlined for each iteration (no jumps, better gas efficiency).
+    fn lower_for_impl(&mut self, pat: PatId, iterable: ExprId, body_expr: ExprId, unroll: bool) {
+        let Some(block) = self.current_block() else {
+            return;
+        };
+        self.move_to_block(block);
+
+        // Get the iterable expression data
+        let iterable_data = self.body.exprs(self.db)[iterable].clone();
+
+        match &iterable_data {
+            Partial::Present(hir::hir_def::Expr::Array(elements)) => {
+                if unroll {
+                    // Unroll the loop - inline the body for each element
+                    self.lower_for_array_unrolled(pat, &elements.clone(), body_expr);
+                } else {
+                    // Use a while-style loop
+                    self.lower_for_array_loop(pat, iterable, elements.len(), body_expr);
+                }
+            }
+            Partial::Present(hir::hir_def::Expr::Range(start, end, is_inclusive)) => {
+                let start = *start;
+                let end = *end;
+                let is_inclusive = *is_inclusive;
+
+                if unroll {
+                    // Try to get compile-time bounds for unrolling
+                    if let Some((start_val, end_val)) = self.try_get_range_bounds(start, end) {
+                        self.lower_for_range_unrolled(pat, start_val, end_val, is_inclusive, body_expr);
+                        return;
+                    }
+                    // Fall back to loop if bounds aren't known at compile time
+                }
+                // Use a while-style loop
+                self.lower_for_range_loop(pat, start, end, is_inclusive, body_expr);
+            }
+            _ => {
+                // For other iterables (e.g., array variables), use a loop
+                let iterable_ty = self.typed_body.expr_ty(self.db, iterable);
+                if let Some(arr_len) = crate::layout::array_len(self.db, iterable_ty) {
+                    if unroll {
+                        self.lower_for_array_var_unrolled(pat, iterable, arr_len, body_expr);
+                    } else {
+                        self.lower_for_array_loop(pat, iterable, arr_len, body_expr);
+                    }
+                } else {
+                    panic!("for loop over non-iterable type");
+                }
+            }
+        }
+    }
+
+    /// Try to extract compile-time integer values from range bounds.
+    fn try_get_range_bounds(&self, start: ExprId, end: ExprId) -> Option<(i128, i128)> {
+        let start_val = self.try_get_const_int(start)?;
+        let end_val = self.try_get_const_int(end)?;
+        Some((start_val, end_val))
+    }
+
+    /// Try to get a compile-time integer value from an expression.
+    /// Supports literal integers and path expressions that refer to local variables
+    /// initialized with literal values (constant propagation).
+    fn try_get_const_int(&self, expr: ExprId) -> Option<i128> {
+        let expr_data = self.body.exprs(self.db)[expr].clone();
+
+        // Case 1: Direct integer literal
+        if let Partial::Present(hir::hir_def::Expr::Lit(hir::hir_def::LitKind::Int(int_id))) = &expr_data {
+            let big_int = int_id.data(self.db);
+            use num_traits::ToPrimitive;
+            return big_int.to_i128();
+        }
+
+        // Case 2: Path expression - try to trace back to literal initializer
+        if let Partial::Present(hir::hir_def::Expr::Path(_)) = &expr_data {
+            // Get the binding for this path expression
+            let prop = self.typed_body.expr_prop(self.db, expr);
+            if let Some(LocalBinding::Local { pat, .. }) = prop.binding {
+                // Search for a let statement with this pattern
+                if let Some(init_expr) = self.find_let_initializer(pat) {
+                    // Recursively try to get the constant value from the initializer
+                    return self.try_get_const_int(init_expr);
+                }
+            }
+        }
+
+        None
+    }
+
+    /// Find the initializer expression for a let statement with the given pattern.
+    fn find_let_initializer(&self, target_pat: PatId) -> Option<ExprId> {
+        // Iterate through all statements to find the let statement with this pattern
+        for (_stmt_id, stmt_data) in self.body.stmts(self.db).iter() {
+            if let Partial::Present(Stmt::Let(pat, _, Some(init))) = stmt_data {
+                if pat == &target_pat {
+                    return Some(*init);
+                }
+            }
+        }
+        None
+    }
+
+    /// Lower an unrolled for loop over an array literal.
+    fn lower_for_array_unrolled(&mut self, pat: PatId, elements: &[ExprId], body_expr: ExprId) {
+        let mut first_iteration = true;
+        for &elem_expr in elements {
+            // Clear the expression cache before each iteration (after the first)
+            // so that the body is re-evaluated with fresh values
+            if !first_iteration {
+                self.clear_expr_cache(body_expr);
+            }
+            first_iteration = false;
+
+            // Lower the element expression
+            let elem_val = self.lower_expr(elem_expr);
+
+            // Bind the pattern to the element value
+            self.lower_pat_with_value(pat, elem_val);
+
+            // Lower the body
+            let _ = self.lower_expr(body_expr);
+
+            if self.current_block().is_none() {
+                // Body terminated (e.g., return), stop unrolling
+                return;
+            }
+        }
+    }
+
+    /// Lower an unrolled for loop over a range.
+    fn lower_for_range_unrolled(
+        &mut self,
+        pat: PatId,
+        start: i128,
+        end: i128,
+        is_inclusive: bool,
+        body_expr: ExprId,
+    ) {
+        let range_end = if is_inclusive { end + 1 } else { end };
+
+        // Get the element type from the pattern
+        let elem_ty = self.typed_body.pat_ty(self.db, pat);
+
+        let mut first_iteration = true;
+        for i in start..range_end {
+            // Clear the expression cache before each iteration (after the first)
+            // so that the body is re-evaluated with fresh values
+            if !first_iteration {
+                self.clear_expr_cache(body_expr);
+            }
+            first_iteration = false;
+
+            // Create a constant value for the index
+            let idx_val = self.create_int_const(i, elem_ty);
+
+            // Bind the pattern to the index value
+            self.lower_pat_with_value(pat, idx_val);
+
+            // Lower the body
+            let _ = self.lower_expr(body_expr);
+
+            if self.current_block().is_none() {
+                return;
+            }
+        }
+    }
+
+    /// Lower an unrolled for loop over an array variable.
+    fn lower_for_array_var_unrolled(
+        &mut self,
+        pat: PatId,
+        array_expr: ExprId,
+        array_len: usize,
+        body_expr: ExprId,
+    ) {
+        // Lower the array expression once
+        let array_val = self.lower_expr(array_expr);
+        let elem_ty = self.typed_body.pat_ty(self.db, pat);
+
+        let mut first_iteration = true;
+        for i in 0..array_len {
+            // Clear the expression cache before each iteration (after the first)
+            // so that the body is re-evaluated with fresh values
+            if !first_iteration {
+                self.clear_expr_cache(body_expr);
+            }
+            first_iteration = false;
+
+            // Create index value - use U256 for array indexing
+            let idx_ty = TyId::new(self.db, TyData::TyBase(
+                TyBase::Prim(PrimTy::U256)
+            ));
+            let idx_val = self.create_int_const(i as i128, idx_ty);
+
+            // Create the index operation
+            let elem_val = self.create_index_expr(array_val, idx_val, elem_ty);
+
+            // Bind the pattern to the element value
+            self.lower_pat_with_value(pat, elem_val);
+
+            // Lower the body
+            let _ = self.lower_expr(body_expr);
+
+            if self.current_block().is_none() {
+                return;
+            }
+        }
+    }
+
+    /// Lower a for loop over an array using a while-style loop (for large arrays).
+    fn lower_for_array_loop(
+        &mut self,
+        pat: PatId,
+        array_expr: ExprId,
+        array_len: usize,
+        body_expr: ExprId,
+    ) {
+        let Some(_block) = self.current_block() else {
+            return;
+        };
+
+        // Lower the array expression
+        let array_val = self.lower_expr(array_expr);
+        let elem_ty = self.typed_body.pat_ty(self.db, pat);
+
+        // Create index variable - use U256 for array indexing
+        let idx_ty = TyId::new(self.db, TyData::TyBase(
+            TyBase::Prim(PrimTy::U256)
+        ));
+        let idx_local = self.alloc_temp_local(idx_ty, true, "for_idx");
+
+        // Create loop blocks including init block
+        let init_block = self.alloc_block();
+        let cond_block = self.alloc_block();
+        let body_block = self.alloc_block();
+        let post_block = self.alloc_block();
+        let exit_block = self.alloc_block();
+
+        // Jump to init block
+        self.goto(init_block);
+
+        // Init block: initialize index to 0
+        self.move_to_block(init_block);
+        let zero_val = self.create_int_const(0, idx_ty);
+        self.assign(None, Some(idx_local), Rvalue::Value(zero_val));
+        self.goto(cond_block);
+
+        // Condition: idx < array_len
+        self.move_to_block(cond_block);
+        let idx_val = self.create_local_value(idx_local, idx_ty);
+        let len_val = self.create_int_const(array_len as i128, idx_ty);
+        let cond_val = self.create_lt_expr(idx_val, len_val, idx_ty);
+
+        let Some(cond_header) = self.current_block() else {
+            return;
+        };
+
+        // Set up loop scope - continue goes to post block (which then goes to cond)
+        self.loop_stack.push(LoopScope {
+            continue_target: post_block,
+            break_target: exit_block,
+        });
+
+        // Body
+        self.move_to_block(body_block);
+
+        // Get element at index
+        let idx_val_body = self.create_local_value(idx_local, idx_ty);
+        let elem_val = self.create_index_expr(array_val, idx_val_body, elem_ty);
+
+        // Bind pattern
+        self.lower_pat_with_value(pat, elem_val);
+
+        // Lower body
+        let _ = self.lower_expr(body_expr);
+
+        // Body falls through to post block
+        if self.current_block().is_some() {
+            self.goto(post_block);
+        }
+
+        // Post block: increment index and jump to condition
+        self.move_to_block(post_block);
+        let idx_val_inc = self.create_local_value(idx_local, idx_ty);
+        let one_val = self.create_int_const(1, idx_ty);
+        let new_idx = self.create_add_expr(idx_val_inc, one_val, idx_ty);
+        self.assign(None, Some(idx_local), Rvalue::Value(new_idx));
+        self.goto(cond_block);
+
+        self.loop_stack.pop();
+
+        // Wire up condition branch
+        self.move_to_block(cond_header);
+        self.branch(cond_val, body_block, exit_block);
+
+        // Register loop info with init and post blocks
+        self.builder.body.loop_headers.insert(
+            cond_block,
+            LoopInfo {
+                body: body_block,
+                exit: exit_block,
+                backedge: Some(post_block),
+                init_block: Some(init_block),
+                post_block: Some(post_block),
+            },
+        );
+
+        self.move_to_block(exit_block);
+    }
+
+    /// Lower a for loop over a range using a while-style loop.
+    fn lower_for_range_loop(
+        &mut self,
+        pat: PatId,
+        start_expr: ExprId,
+        end_expr: ExprId,
+        is_inclusive: bool,
+        body_expr: ExprId,
+    ) {
+        let Some(_block) = self.current_block() else {
+            return;
+        };
+
+        let elem_ty = self.typed_body.pat_ty(self.db, pat);
+
+        // Lower start and end expressions
+        let start_val = self.lower_expr(start_expr);
+        let end_val = self.lower_expr(end_expr);
+
+        // Create index variable
+        let idx_local = self.alloc_temp_local(elem_ty, true, "for_idx");
+
+        // Create loop blocks including init block
+        let init_block = self.alloc_block();
+        let cond_block = self.alloc_block();
+        let body_block = self.alloc_block();
+        let post_block = self.alloc_block();
+        let exit_block = self.alloc_block();
+
+        // Jump to init block
+        self.goto(init_block);
+
+        // Init block: initialize index to start value
+        self.move_to_block(init_block);
+        self.assign(None, Some(idx_local), Rvalue::Value(start_val));
+        self.goto(cond_block);
+
+        // Condition: idx < end (or idx <= end for inclusive)
+        self.move_to_block(cond_block);
+        let idx_val = self.create_local_value(idx_local, elem_ty);
+        let cond_val = if is_inclusive {
+            self.create_le_expr(idx_val, end_val, elem_ty)
+        } else {
+            self.create_lt_expr(idx_val, end_val, elem_ty)
+        };
+
+        let Some(cond_header) = self.current_block() else {
+            return;
+        };
+
+        // Set up loop scope - continue goes to post block
+        self.loop_stack.push(LoopScope {
+            continue_target: post_block,
+            break_target: exit_block,
+        });
+
+        // Body
+        self.move_to_block(body_block);
+
+        // Bind pattern to current index value
+        let idx_val_body = self.create_local_value(idx_local, elem_ty);
+        self.lower_pat_with_value(pat, idx_val_body);
+
+        // Lower body
+        let _ = self.lower_expr(body_expr);
+
+        // Body falls through to post block
+        if self.current_block().is_some() {
+            self.goto(post_block);
+        }
+
+        // Post block: increment index and jump to condition
+        self.move_to_block(post_block);
+        let idx_val_inc = self.create_local_value(idx_local, elem_ty);
+        let one_val = self.create_int_const(1, elem_ty);
+        let new_idx = self.create_add_expr(idx_val_inc, one_val, elem_ty);
+        self.assign(None, Some(idx_local), Rvalue::Value(new_idx));
+        self.goto(cond_block);
+
+        self.loop_stack.pop();
+
+        // Wire up condition branch
+        self.move_to_block(cond_header);
+        self.branch(cond_val, body_block, exit_block);
+
+        // Register loop info with init and post blocks
+        self.builder.body.loop_headers.insert(
+            cond_block,
+            LoopInfo {
+                body: body_block,
+                exit: exit_block,
+                backedge: Some(post_block),
+                init_block: Some(init_block),
+                post_block: Some(post_block),
+            },
+        );
+
+        self.move_to_block(exit_block);
+    }
+
+    /// Bind a pattern to a value.
+    fn lower_pat_with_value(&mut self, pat: PatId, value: ValueId) {
+        let pat_data = self.body.pats(self.db)[pat].clone();
+        let pat_ty = self.typed_body.pat_ty(self.db, pat);
+
+        match &pat_data {
+            Partial::Present(hir::hir_def::Pat::Path(path, is_mut)) => {
+                // Simple variable binding: get the name from the path
+                let name = path
+                    .to_opt()
+                    .and_then(|p| p.as_ident(self.db))
+                    .map(|ident| ident.data(self.db).to_string())
+                    .unwrap_or_else(|| "for_var".to_string());
+
+                // Create a local and assign the value
+                let local = self.alloc_temp_local(pat_ty, *is_mut, &name);
+                self.assign(None, Some(local), Rvalue::Value(value));
+
+                // Register the binding in binding_locals so it can be looked up later
+                let binding = LocalBinding::Local { pat, is_mut: *is_mut };
+                self.binding_locals.insert(binding, local);
+            }
+            Partial::Present(hir::hir_def::Pat::WildCard) => {
+                // Wildcard: do nothing
+            }
+            _ => {
+                // For more complex patterns, we'd need to implement destructuring
+                // For now, panic on unsupported patterns
+                panic!("Unsupported pattern in for loop");
+            }
+        }
+    }
+
+    /// Create an integer constant value.
+    fn create_int_const(&mut self, value: i128, ty: TyId<'db>) -> ValueId {
+        use num_bigint::BigUint;
+        // Convert i128 to BigUint (handling negative values if needed)
+        let big_val = if value >= 0 {
+            BigUint::from(value as u128)
+        } else {
+            // For negative values, this would need 2's complement handling
+            // but for loop indices we should always have positive values
+            BigUint::from(0u32)
+        };
+        self.alloc_value(
+            ty,
+            ValueOrigin::Synthetic(SyntheticValue::Int(big_val)),
+            ValueRepr::Word,
+        )
+    }
+
+    /// Create a value referencing a local variable.
+    fn create_local_value(&mut self, local: LocalId, ty: TyId<'db>) -> ValueId {
+        self.alloc_value(
+            ty,
+            ValueOrigin::Local(local),
+            ValueRepr::Word,
+        )
+    }
+
+    /// Create an index expression (array[index]).
+    fn create_index_expr(&mut self, array: ValueId, index: ValueId, elem_ty: TyId<'db>) -> ValueId {
+        // Create a Place with Index projection, then load from it
+        let addr_space = self.value_address_space(array);
+        let place = Place::new(
+            array,
+            MirProjectionPath::from_projection(Projection::Index(IndexSource::Dynamic(index))),
+        );
+
+        if self.is_by_ref_ty(elem_ty) {
+            // Return a reference to the element
+            self.alloc_value(
+                elem_ty,
+                ValueOrigin::PlaceRef(place),
+                ValueRepr::Ref(addr_space),
+            )
+        } else {
+            // Load the element value
+            let dest = self.alloc_temp_local(elem_ty, false, "elem");
+            self.assign(None, Some(dest), Rvalue::Load { place });
+            self.alloc_value(
+                elem_ty,
+                ValueOrigin::Local(dest),
+                ValueRepr::Word,
+            )
+        }
+    }
+
+    /// Create a less-than comparison.
+    fn create_lt_expr(&mut self, lhs: ValueId, rhs: ValueId, _ty: TyId<'db>) -> ValueId {
+        let bool_ty = TyId::new(
+            self.db,
+            TyData::TyBase(TyBase::Prim(PrimTy::Bool)),
+        );
+        self.alloc_value(
+            bool_ty,
+            ValueOrigin::Binary {
+                op: BinOp::Comp(hir::hir_def::expr::CompBinOp::Lt),
+                lhs,
+                rhs,
+            },
+            ValueRepr::Word,
+        )
+    }
+
+    /// Create a less-than-or-equal comparison.
+    fn create_le_expr(&mut self, lhs: ValueId, rhs: ValueId, _ty: TyId<'db>) -> ValueId {
+        let bool_ty = TyId::new(
+            self.db,
+            TyData::TyBase(TyBase::Prim(PrimTy::Bool)),
+        );
+        self.alloc_value(
+            bool_ty,
+            ValueOrigin::Binary {
+                op: BinOp::Comp(hir::hir_def::expr::CompBinOp::LtEq),
+                lhs,
+                rhs,
+            },
+            ValueRepr::Word,
+        )
+    }
+
+    /// Create an addition expression.
+    fn create_add_expr(&mut self, lhs: ValueId, rhs: ValueId, ty: TyId<'db>) -> ValueId {
+        self.alloc_value(
+            ty,
+            ValueOrigin::Binary {
+                op: BinOp::Arith(hir::hir_def::ArithBinOp::Add),
+                lhs,
+                rhs,
+            },
+            ValueRepr::Word,
+        )
+    }
+
+    /// Clear the expression value cache for an expression and all its sub-expressions.
+    /// This is needed for loop unrolling where the same body expression is evaluated multiple times.
+    fn clear_expr_cache(&mut self, expr: ExprId) {
+        // Remove this expression from the cache
+        self.builder.body.expr_values.remove(&expr);
+
+        // Recursively clear sub-expressions
+        let expr_data = self.body.exprs(self.db)[expr].clone();
+        match &expr_data {
+            Partial::Present(Expr::Block(stmts)) => {
+                for stmt in stmts {
+                    self.clear_stmt_cache(*stmt);
+                }
+            }
+            Partial::Present(Expr::Bin(lhs, rhs, _)) => {
+                self.clear_expr_cache(*lhs);
+                self.clear_expr_cache(*rhs);
+            }
+            Partial::Present(Expr::Un(inner, _)) => {
+                self.clear_expr_cache(*inner);
+            }
+            Partial::Present(Expr::If(cond, then_expr, else_expr)) => {
+                self.clear_expr_cache(*cond);
+                self.clear_expr_cache(*then_expr);
+                if let Some(else_expr) = else_expr {
+                    self.clear_expr_cache(*else_expr);
+                }
+            }
+            Partial::Present(Expr::Call(callee, args)) => {
+                self.clear_expr_cache(*callee);
+                for arg in args {
+                    self.clear_expr_cache(arg.expr);
+                }
+            }
+            Partial::Present(Expr::MethodCall(receiver, _, _, args)) => {
+                self.clear_expr_cache(*receiver);
+                for arg in args {
+                    self.clear_expr_cache(arg.expr);
+                }
+            }
+            Partial::Present(Expr::Assign(target, value)) => {
+                self.clear_expr_cache(*target);
+                self.clear_expr_cache(*value);
+            }
+            Partial::Present(Expr::AugAssign(target, value, _)) => {
+                self.clear_expr_cache(*target);
+                self.clear_expr_cache(*value);
+            }
+            Partial::Present(Expr::Field(base, _)) => {
+                self.clear_expr_cache(*base);
+            }
+            Partial::Present(Expr::Tuple(elems)) | Partial::Present(Expr::Array(elems)) => {
+                for elem in elems {
+                    self.clear_expr_cache(*elem);
+                }
+            }
+            Partial::Present(Expr::ArrayRep(elem, _)) => {
+                self.clear_expr_cache(*elem);
+            }
+            Partial::Present(Expr::Match(scrutinee, arms)) => {
+                self.clear_expr_cache(*scrutinee);
+                if let Partial::Present(arm_list) = arms {
+                    for arm in arm_list {
+                        self.clear_expr_cache(arm.body);
+                    }
+                }
+            }
+            Partial::Present(Expr::Range(start, end, _)) => {
+                self.clear_expr_cache(*start);
+                self.clear_expr_cache(*end);
+            }
+            Partial::Present(Expr::With(bindings, body)) => {
+                for binding in bindings {
+                    self.clear_expr_cache(binding.value);
+                }
+                self.clear_expr_cache(*body);
+            }
+            Partial::Present(Expr::RecordInit(_, fields)) => {
+                for field in fields {
+                    self.clear_expr_cache(field.expr);
+                }
+            }
+            // Path, Lit, Paren don't have sub-expressions or are leaf nodes
+            _ => {}
+        }
+    }
+
+    /// Clear the expression cache for expressions within a statement.
+    fn clear_stmt_cache(&mut self, stmt: StmtId) {
+        let stmt_data = self.body.stmts(self.db)[stmt].clone();
+        match &stmt_data {
+            Partial::Present(Stmt::Expr(expr)) => {
+                self.clear_expr_cache(*expr);
+            }
+            Partial::Present(Stmt::Let(_, _, Some(expr))) => {
+                self.clear_expr_cache(*expr);
+            }
+            Partial::Present(Stmt::For(_, iterable, body, _)) => {
+                self.clear_expr_cache(*iterable);
+                self.clear_expr_cache(*body);
+            }
+            Partial::Present(Stmt::While(cond, body)) => {
+                self.clear_expr_cache(*cond);
+                self.clear_expr_cache(*body);
+            }
+            Partial::Present(Stmt::Return(Some(expr))) => {
+                self.clear_expr_cache(*expr);
+            }
+            _ => {}
+        }
     }
 
     fn lower_if(

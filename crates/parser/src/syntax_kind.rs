@@ -59,6 +59,9 @@ pub enum SyntaxKind {
     /// `..`
     #[token("..")]
     Dot2,
+    /// `..=`
+    #[token("..=")]
+    Dot2Eq,
     /// `,`
     #[token(",")]
     Comma,
@@ -305,6 +308,8 @@ pub enum SyntaxKind {
     AssignExpr,
     /// x += 1
     AugAssignExpr,
+    /// `0..10` or `0..=10`
+    RangeExpr,
 
     // Statements. These are non-leaf nodes.
     /// `let x = 1`
@@ -586,6 +591,7 @@ impl SyntaxKind {
             SyntaxKind::SemiColon => "`;`",
             SyntaxKind::Dot => "`.`",
             SyntaxKind::Dot2 => "`..`",
+            SyntaxKind::Dot2Eq => "`..=`",
             SyntaxKind::Comma => "`,`",
             SyntaxKind::Arrow => "`->`",
             SyntaxKind::FatArrow => "`=>`",
@@ -692,6 +698,7 @@ impl SyntaxKind {
             SyntaxKind::ParenExpr => "parenthesized expression",
             SyntaxKind::AssignExpr => "assignment expression",
             SyntaxKind::AugAssignExpr => "augmented assignment expression",
+            SyntaxKind::RangeExpr => "range expression",
             SyntaxKind::LetStmt => "`let` statement",
             SyntaxKind::ForStmt => "`for` statement",
             SyntaxKind::WhileStmt => "`while` statement",
@@ -799,6 +806,7 @@ impl SyntaxKind {
                 | SyntaxKind::SemiColon
                 | SyntaxKind::Dot
                 | SyntaxKind::Dot2
+                | SyntaxKind::Dot2Eq
                 | SyntaxKind::Comma
                 | SyntaxKind::Arrow
                 | SyntaxKind::FatArrow

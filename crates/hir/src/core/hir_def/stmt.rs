@@ -1,6 +1,6 @@
 use cranelift_entity::entity_impl;
 
-use super::{Body, ExprId, Partial, PatId, TypeId};
+use super::{AttrListId, Body, ExprId, Partial, PatId, TypeId};
 use crate::{HirDb, span::stmt::LazyStmtSpan};
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, salsa::Update)]
@@ -15,7 +15,9 @@ pub enum Stmt<'db> {
     /// The second `ExprId` is the iterable expression.
     ///
     /// The third `ExprId` is the for-loop body.
-    For(PatId, ExprId, ExprId),
+    ///
+    /// The fourth `AttrListId` contains any attributes on the for statement (e.g., `#[unroll]`).
+    For(PatId, ExprId, ExprId, AttrListId<'db>),
 
     /// The first `ExprId` is the condition of the while-loop.
     /// The second `ExprId` is the body of the while-loop.

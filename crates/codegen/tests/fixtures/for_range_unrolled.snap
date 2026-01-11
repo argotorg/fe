@@ -1,0 +1,23 @@
+---
+source: crates/codegen/tests/yul.rs
+assertion_line: 42
+expression: output
+input_file: tests/fixtures/for_range_unrolled.fe
+---
+function for_range_unrolled() -> ret {
+  let v0 := 0
+  let v1 := 0
+  let v2 := 5
+  let v3 := 0
+  v0 := add(v0, v3)
+  let v4 := 1
+  v0 := add(v0, v4)
+  let v5 := 2
+  v0 := add(v0, v5)
+  let v6 := 3
+  v0 := add(v0, v6)
+  let v7 := 4
+  v0 := add(v0, v7)
+  ret := v0
+  leave
+}

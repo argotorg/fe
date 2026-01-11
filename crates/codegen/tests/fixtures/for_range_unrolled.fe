@@ -1,0 +1,12 @@
+// For loop over a range with #[unroll] attribute
+// Constant propagation traces variable bounds back to their literal initializers
+pub fn for_range_unrolled() -> u64 {
+    let mut sum: u64 = 0
+    let start: u64 = 0
+    let end: u64 = 5
+    #[unroll]
+    for i in start..end {
+        sum = sum + i
+    }
+    sum
+}

@@ -768,6 +768,18 @@ impl<'db> Expr<'db> {
                 };
                 format!("with ({}) {}", bindings_str, body_str)
             }
+
+            Expr::Range(start, end, is_inclusive) => {
+                let start_ref = unwrap_partial_ref(start.data(db, body), "Range::start");
+                let end_ref = unwrap_partial_ref(end.data(db, body), "Range::end");
+                let op = if *is_inclusive { "..=" } else { ".." };
+                format!(
+                    "{}{}{}",
+                    start_ref.pretty_print(db, body, indent),
+                    op,
+                    end_ref.pretty_print(db, body, indent)
+                )
+            }
         }
     }
 }
@@ -923,13 +935,21 @@ impl<'db> Stmt<'db> {
                 result
             }
 
-            Stmt::For(pat, iter, body_expr) => {
+            Stmt::For(pat, iter, body_expr, attrs) => {
                 let pat = unwrap_partial_ref(pat.data(db, body), "For::pat");
                 let iter_expr = unwrap_partial_ref(iter.data(db, body), "For::iter");
                 let body_block = unwrap_partial_ref(body_expr.data(db, body), "For::body");
 
+                let attrs_str = attrs.pretty_print(db);
+                let attrs_prefix = if attrs_str.is_empty() {
+                    String::new()
+                } else {
+                    format!("{}\n{}", attrs_str, " ".repeat(indent))
+                };
+
                 format!(
-                    "for {} in {} {}",
+                    "{}for {} in {} {}",
+                    attrs_prefix,
                     pat.pretty_print(db, body),
                     iter_expr.pretty_print(db, body, indent),
                     body_block.pretty_print(db, body, indent)

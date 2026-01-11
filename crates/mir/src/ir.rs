@@ -413,6 +413,12 @@ pub struct LoopInfo {
     pub body: BasicBlockId,
     pub exit: BasicBlockId,
     pub backedge: Option<BasicBlockId>,
+    /// Optional block containing the loop initialization (e.g., iterator variable init for for-loops).
+    /// If present, this block's instructions are rendered as the Yul for-loop init section.
+    pub init_block: Option<BasicBlockId>,
+    /// Optional block containing the post-iteration code (e.g., increment for for-loops).
+    /// If present, this block's instructions are rendered as the Yul for-loop post section.
+    pub post_block: Option<BasicBlockId>,
 }
 
 #[derive(Debug, Clone)]

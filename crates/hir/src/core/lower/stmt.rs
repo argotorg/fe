@@ -2,7 +2,7 @@ use parser::ast::{self, prelude::*};
 
 use super::body::BodyCtxt;
 use crate::{
-    hir_def::{Expr, Pat, TypeId, stmt::*},
+    hir_def::{AttrListId, Expr, Pat, TypeId, stmt::*},
     span::HirOrigin,
 };
 
@@ -25,8 +25,9 @@ impl<'db> Stmt<'db> {
                     for_.body()
                         .and_then(|body| ast::Expr::cast(body.syntax().clone())),
                 );
+                let attrs = AttrListId::lower_ast_opt(ctxt.f_ctxt, for_.attr_list());
 
-                (Stmt::For(bind, iter, body), HirOrigin::raw(&ast))
+                (Stmt::For(bind, iter, body, attrs), HirOrigin::raw(&ast))
             }
 
             ast::StmtKind::While(while_) => {

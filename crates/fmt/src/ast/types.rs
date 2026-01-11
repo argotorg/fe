@@ -454,6 +454,7 @@ impl ToDoc for ast::Expr {
             ExprKind::Paren(paren) => paren.to_doc(ctx),
             ExprKind::Assign(assign) => assign.to_doc(ctx),
             ExprKind::AugAssign(aug_assign) => aug_assign.to_doc(ctx),
+            ExprKind::Range(range) => range.to_doc(ctx),
         }
     }
 }

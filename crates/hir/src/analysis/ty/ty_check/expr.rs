@@ -88,6 +88,7 @@ impl<'db> TyChecker<'db> {
             Expr::Assign(..) => self.check_assign(expr, expr_data),
             Expr::AugAssign(..) => self.check_aug_assign(expr, expr_data),
             Expr::With(bindings, body) => self.check_with(bindings, *body, expected),
+            Expr::Range(start, end, _is_inclusive) => self.check_range(expr, *start, *end),
         };
         self.env.leave_expr();
 
@@ -1620,6 +1621,21 @@ impl<'db> TyChecker<'db> {
 
         // Return unit ty even if trait resolution fails
         unit
+    }
+
+    /// Check a range expression (start..end or start..=end).
+    /// For now, both start and end must be integers of the same type.
+    fn check_range(&mut self, _expr: ExprId, start: ExprId, end: ExprId) -> ExprProp<'db> {
+        // Check start expression - we expect an integer type
+        let start_prop = self.check_expr_unknown(start);
+        let start_ty = start_prop.ty;
+
+        // Check end expression with start's type as expected
+        let _end_prop = self.check_expr(end, start_ty);
+
+        // For now, ranges "return" the element type (start_ty) for iteration
+        // In the future, this could be a proper Range<T> type
+        ExprProp::new(start_ty, false)
     }
 
     /// Resolve a core::ops trait method for an operator on a given LHS type and

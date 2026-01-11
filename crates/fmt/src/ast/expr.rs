@@ -576,6 +576,24 @@ impl ToDoc for ast::AugAssignExpr {
     }
 }
 
+impl ToDoc for ast::RangeExpr {
+    fn to_doc<'a>(&self, ctx: &'a RewriteContext<'a>) -> Doc<'a> {
+        let alloc = &ctx.alloc;
+
+        let start = match self.start() {
+            Some(e) => e.to_doc(ctx),
+            None => return alloc.nil(),
+        };
+        let end = match self.end() {
+            Some(e) => e.to_doc(ctx),
+            None => return start,
+        };
+        let op = if self.is_inclusive() { "..=" } else { ".." };
+
+        start.append(alloc.text(op)).append(end)
+    }
+}
+
 impl ToDoc for ast::PathExpr {
     fn to_doc<'a>(&self, ctx: &'a RewriteContext<'a>) -> Doc<'a> {
         match self.path() {

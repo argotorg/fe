@@ -1,0 +1,21 @@
+// For loop over a range (unrolled, < 20 iterations)
+pub fn for_range_sum() -> u64 {
+    let mut sum: u64 = 0
+    let start: u64 = 0
+    let end: u64 = 10
+    for i in start..end {
+        sum = sum + i
+    }
+    sum
+}
+
+// For loop with inclusive range
+pub fn for_range_inclusive_sum() -> u64 {
+    let mut sum: u64 = 0
+    let start: u64 = 1
+    let end: u64 = 5
+    for i in start..=end {
+        sum = sum + i
+    }
+    sum
+}

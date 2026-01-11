@@ -6,6 +6,7 @@ use crate::{ExpectedKind, SyntaxKind};
 
 use super::{
     ErrProof, Parser, Recovery, define_scope,
+    attr::parse_attr_list,
     expr::{parse_expr, parse_expr_no_struct},
     expr_atom::BlockExprScope,
     pat::parse_pat,
@@ -16,9 +17,12 @@ use super::{
 pub fn parse_stmt<S: TokenStream>(parser: &mut Parser<S>) -> Result<(), Recovery<ErrProof>> {
     use SyntaxKind::*;
 
+    // Check for attributes before for statements
+    let checkpoint = parse_attr_list(parser)?;
+
     match parser.current_kind() {
         Some(LetKw) => parser.parse(LetStmtScope::default()),
-        Some(ForKw) => parser.parse(ForStmtScope::default()),
+        Some(ForKw) => parser.parse_cp(ForStmtScope::default(), checkpoint).map(|_| ()),
         Some(WhileKw) => parser.parse(WhileStmtScope::default()),
         Some(ContinueKw) => {
             parser
