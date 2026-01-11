@@ -228,8 +228,54 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                 // Assignment expressions are expected to be lowered in statement position.
                 self.ensure_value(expr)
             }
+            Partial::Present(Expr::Lit(LitKind::String(str_id))) => {
+                self.lower_string_literal(expr, *str_id)
+            }
             _ => self.ensure_value(expr),
         }
+    }
+
+    /// Lowers a string literal, using inline bytes for small strings
+    /// and data regions for large strings (>32 bytes).
+    fn lower_string_literal(
+        &mut self,
+        expr: ExprId,
+        str_id: hir::hir_def::StringId<'db>,
+    ) -> ValueId {
+        const MAX_INLINE_SIZE: usize = 32;
+
+        let bytes = str_id.data(self.db).as_bytes();
+        if bytes.len() <= MAX_INLINE_SIZE {
+            // Small string: use inline bytes (handled by prepass)
+            return self.ensure_value(expr);
+        }
+
+        // Large string: use data region
+        let fallback = self.ensure_value(expr);
+        if self.current_block().is_none() {
+            return fallback;
+        }
+
+        let ty = self.typed_body.expr_ty(self.db, expr);
+        let label = self.builder.body.register_data_region(bytes.to_vec());
+        let size = bytes.len();
+
+        // Allocate a local to hold the memory pointer
+        let dest = self.alloc_temp_local(ty, false, "string_data");
+        self.builder.body.locals[dest.index()].address_space = AddressSpaceKind::Memory;
+
+        // Emit the CopyDataRegion instruction
+        self.push_inst_here(MirInst::Assign {
+            stmt: None,
+            dest: Some(dest),
+            rvalue: Rvalue::CopyDataRegion { label, size },
+        });
+
+        // Update the value to reference the local
+        self.builder.body.values[fallback.index()].origin = ValueOrigin::Local(dest);
+        self.builder.body.values[fallback.index()].repr = ValueRepr::Ref(AddressSpaceKind::Memory);
+
+        fallback
     }
 
     fn lower_call_expr(&mut self, expr: ExprId) -> ValueId {

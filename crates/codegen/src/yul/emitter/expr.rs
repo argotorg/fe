@@ -231,6 +231,10 @@ impl<'db> FunctionEmitter<'db> {
             SyntheticValue::Int(int) => Ok(int.to_string()),
             SyntheticValue::Bool(flag) => Ok(if *flag { "1" } else { "0" }.into()),
             SyntheticValue::Bytes(bytes) => Ok(format!("0x{}", hex::encode(bytes))),
+            SyntheticValue::DataRegion { .. } => Err(YulError::Unsupported(
+                "DataRegion synthetic values should be lowered via CopyDataRegion instruction"
+                    .into(),
+            )),
         }
     }
 

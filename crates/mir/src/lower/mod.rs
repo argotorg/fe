@@ -890,6 +890,7 @@ fn first_unlowered_expr_used_by_mir<'db>(body: &MirBody<'db>) -> Option<ExprId> 
                         used_values.extend(dynamic_indices(&place.projection));
                     }
                     crate::ir::Rvalue::Alloc { .. } => {}
+                    crate::ir::Rvalue::CopyDataRegion { .. } => {}
                 },
                 MirInst::BindValue { value } => {
                     used_values.insert(*value);

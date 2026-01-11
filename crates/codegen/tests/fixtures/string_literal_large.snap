@@ -1,0 +1,21 @@
+---
+source: crates/codegen/tests/yul.rs
+assertion_line: 42
+expression: output
+input_file: tests/fixtures/string_literal_large.fe
+---
+object "Module" {
+  code {
+    function large_string() -> ret {
+      let v0 := mload(0x40)
+      if iszero(v0) {
+        v0 := 0x80
+      }
+      mstore(0x40, add(v0, datasize("data_0")))
+      datacopy(v0, dataoffset("data_0"), datasize("data_0"))
+      ret := v0
+      leave
+    }
+  }
+  data "data_0" hex"546869732069732061206c6f6e6720737472696e6720746861742065786365656473207468697274792d74776f20627974657320696e206c656e6774682121"
+}

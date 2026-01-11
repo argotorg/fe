@@ -177,6 +177,12 @@ impl<'db, 'a> FunctionHasher<'db, 'a> {
                 self.write_usize(bytes.len());
                 self.hasher.write(bytes);
             }
+            ValueOrigin::Synthetic(SyntheticValue::DataRegion { label, bytes }) => {
+                self.write_u8(0x12);
+                self.write_str(label);
+                self.write_usize(bytes.len());
+                self.hasher.write(bytes);
+            }
             ValueOrigin::Local(local) => {
                 self.write_u8(0x08);
                 self.write_u32(local.0);
@@ -356,6 +362,11 @@ impl<'db, 'a> FunctionHasher<'db, 'a> {
                             crate::ir::AddressSpaceKind::Memory => 1,
                             crate::ir::AddressSpaceKind::Storage => 2,
                         });
+                    }
+                    Rvalue::CopyDataRegion { label, size } => {
+                        self.write_u8(6);
+                        self.write_str(label);
+                        self.write_usize(*size);
                     }
                 }
             }

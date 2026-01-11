@@ -1,0 +1,4 @@
+// Test: Large string literal (>32 bytes) should use DataRegion
+pub fn large_string() -> String<64> {
+    "This is a long string that exceeds thirty-two bytes in length!!"
+}

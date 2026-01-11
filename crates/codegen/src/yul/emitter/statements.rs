@@ -111,6 +111,14 @@ impl<'db> FunctionEmitter<'db> {
                 };
                 self.emit_alloc_inst(docs, dest, *address_space, state)?
             }
+            mir::ir::Rvalue::CopyDataRegion { label, size } => {
+                let Some(dest) = dest else {
+                    return Err(YulError::Unsupported(
+                        "copy_data_region without destination".into(),
+                    ));
+                };
+                self.emit_copy_data_region_inst(docs, dest, label, *size, state)?
+            }
         }
         Ok(())
     }
@@ -231,6 +239,51 @@ impl<'db> FunctionEmitter<'db> {
         let (yul_name, declared) = self.resolve_local_for_write(dest, state)?;
         self.emit_alloc_value(docs, &yul_name, size_bytes, declared);
         Ok(())
+    }
+
+    /// Emits code to materialize a data region into memory.
+    ///
+    /// This allocates memory and copies data from a Yul data section.
+    fn emit_copy_data_region_inst(
+        &mut self,
+        docs: &mut Vec<YulDoc>,
+        dest: LocalId,
+        label: &str,
+        _size: usize,
+        state: &mut BlockState,
+    ) -> Result<(), YulError> {
+        let (yul_name, declared) = self.resolve_local_for_write(dest, state)?;
+        let size_expr = format!("datasize(\"{label}\")");
+
+        // Allocate memory for the data using datasize for consistency
+        self.emit_alloc_value_expr(docs, &yul_name, &size_expr, declared);
+
+        // Copy data from the data section to memory
+        docs.push(YulDoc::line(format!(
+            "datacopy({yul_name}, dataoffset(\"{label}\"), {size_expr})"
+        )));
+
+        Ok(())
+    }
+
+    /// Emits allocation code with a dynamic size expression.
+    fn emit_alloc_value_expr(
+        &self,
+        docs: &mut Vec<YulDoc>,
+        name: &str,
+        size_expr: &str,
+        declare: bool,
+    ) {
+        if declare {
+            docs.push(YulDoc::line(format!("let {name} := mload(0x40)")));
+        } else {
+            docs.push(YulDoc::line(format!("{name} := mload(0x40)")));
+        }
+        docs.push(YulDoc::block(
+            format!("if iszero({name}) "),
+            vec![YulDoc::line(format!("{name} := 0x80"))],
+        ));
+        docs.push(YulDoc::line(format!("mstore(0x40, add({name}, {size_expr}))")));
     }
 
     fn emit_load_inst(

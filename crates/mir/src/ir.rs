@@ -64,6 +64,20 @@ pub struct MirBody<'db> {
     pub expr_values: FxHashMap<ExprId, ValueId>,
     pub pat_address_space: FxHashMap<PatId, AddressSpaceKind>,
     pub loop_headers: FxHashMap<BasicBlockId, LoopInfo>,
+    /// Counter for generating unique data region labels.
+    data_region_counter: u32,
+    /// Data regions (large const arrays/strings) to be emitted as Yul data sections.
+    /// Maps label -> raw bytes.
+    pub data_regions: Vec<DataRegionDef>,
+}
+
+/// Definition of a data region to be emitted as a Yul data section.
+#[derive(Debug, Clone)]
+pub struct DataRegionDef {
+    /// Unique label for this data region (e.g., "data_0").
+    pub label: String,
+    /// Raw bytes to embed in the data section.
+    pub bytes: Vec<u8>,
 }
 
 impl<'db> MirBody<'db> {
@@ -78,7 +92,22 @@ impl<'db> MirBody<'db> {
             expr_values: FxHashMap::default(),
             pat_address_space: FxHashMap::default(),
             loop_headers: FxHashMap::default(),
+            data_region_counter: 0,
+            data_regions: Vec::new(),
         }
+    }
+
+    /// Registers a data region and returns its label.
+    ///
+    /// The data will be emitted as a Yul data section during codegen.
+    pub fn register_data_region(&mut self, bytes: Vec<u8>) -> String {
+        let label = format!("data_{}", self.data_region_counter);
+        self.data_region_counter += 1;
+        self.data_regions.push(DataRegionDef {
+            label: label.clone(),
+            bytes,
+        });
+        label
     }
 
     pub fn push_block(&mut self, block: BasicBlock<'db>) -> BasicBlockId {
@@ -296,6 +325,16 @@ pub enum Rvalue<'db> {
     Load { place: Place<'db> },
     /// Allocate an address in the given address space.
     Alloc { address_space: AddressSpaceKind },
+    /// Materialize a data region into memory.
+    ///
+    /// Allocates memory of the specified size and copies data from a Yul data section.
+    /// Used for large const arrays and strings that don't fit in a single EVM word.
+    CopyDataRegion {
+        /// Label identifying the data section (e.g., "data_0").
+        label: String,
+        /// Size in bytes of the data to copy.
+        size: usize,
+    },
 }
 
 /// Control-flow terminating instruction.
@@ -444,7 +483,15 @@ pub enum SyntheticValue {
     /// Byte string literal encoded as a `0x...` word.
     ///
     /// This is a stopgap representation: the literal is emitted inline as a numeric constant.
+    /// Only suitable for data that fits in a single EVM word (≤32 bytes).
     Bytes(Vec<u8>),
+    /// Large byte data stored in a Yul data section.
+    ///
+    /// Used for const arrays and strings larger than 32 bytes. The data is stored
+    /// in the contract bytecode and copied to memory when accessed.
+    /// - `label`: Unique identifier for the data section (e.g., "data_0", "data_1")
+    /// - `bytes`: Raw byte content to embed in the data section
+    DataRegion { label: String, bytes: Vec<u8> },
 }
 
 /// Address space where a value lives.
