@@ -16,8 +16,8 @@ use hir::analysis::{
     place::PlaceBase,
     ty::ty_check::{EffectArg, EffectPassMode},
 };
-use hir::hir_def::expr::BinOp;
 use hir::hir_def::AttrListId;
+use hir::hir_def::expr::BinOp;
 
 enum RootLvalue<'db> {
     Place(Place<'db>),
@@ -1410,7 +1410,13 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
     /// - `body_expr`: The loop body expression.
     /// - `attrs`: Attributes on the for statement (e.g., #[unroll]).
     ///
-    pub(super) fn lower_for(&mut self, pat: PatId, iterable: ExprId, body_expr: ExprId, attrs: AttrListId<'db>) {
+    pub(super) fn lower_for(
+        &mut self,
+        pat: PatId,
+        iterable: ExprId,
+        body_expr: ExprId,
+        attrs: AttrListId<'db>,
+    ) {
         // Check for #[unroll] attribute
         let unroll = attrs.has_attr(self.db, "unroll");
         self.lower_for_impl(pat, iterable, body_expr, unroll);
@@ -1446,7 +1452,13 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                 if unroll {
                     // Try to get compile-time bounds for unrolling
                     if let Some((start_val, end_val)) = self.try_get_range_bounds(start, end) {
-                        self.lower_for_range_unrolled(pat, start_val, end_val, is_inclusive, body_expr);
+                        self.lower_for_range_unrolled(
+                            pat,
+                            start_val,
+                            end_val,
+                            is_inclusive,
+                            body_expr,
+                        );
                         return;
                     }
                     // Fall back to loop if bounds aren't known at compile time
@@ -1484,7 +1496,9 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         let expr_data = self.body.exprs(self.db)[expr].clone();
 
         // Case 1: Direct integer literal
-        if let Partial::Present(hir::hir_def::Expr::Lit(hir::hir_def::LitKind::Int(int_id))) = &expr_data {
+        if let Partial::Present(hir::hir_def::Expr::Lit(hir::hir_def::LitKind::Int(int_id))) =
+            &expr_data
+        {
             let big_int = int_id.data(self.db);
             use num_traits::ToPrimitive;
             return big_int.to_i128();
@@ -1510,10 +1524,10 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
     fn find_let_initializer(&self, target_pat: PatId) -> Option<ExprId> {
         // Iterate through all statements to find the let statement with this pattern
         for (_stmt_id, stmt_data) in self.body.stmts(self.db).iter() {
-            if let Partial::Present(Stmt::Let(pat, _, Some(init))) = stmt_data {
-                if pat == &target_pat {
-                    return Some(*init);
-                }
+            if let Partial::Present(Stmt::Let(pat, _, Some(init))) = stmt_data
+                && pat == &target_pat
+            {
+                return Some(*init);
             }
         }
         None
@@ -1606,9 +1620,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
             first_iteration = false;
 
             // Create index value - use U256 for array indexing
-            let idx_ty = TyId::new(self.db, TyData::TyBase(
-                TyBase::Prim(PrimTy::U256)
-            ));
+            let idx_ty = TyId::new(self.db, TyData::TyBase(TyBase::Prim(PrimTy::U256)));
             let idx_val = self.create_int_const(i as i128, idx_ty);
 
             // Create the index operation
@@ -1643,9 +1655,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         let elem_ty = self.typed_body.pat_ty(self.db, pat);
 
         // Create index variable - use U256 for array indexing
-        let idx_ty = TyId::new(self.db, TyData::TyBase(
-            TyBase::Prim(PrimTy::U256)
-        ));
+        let idx_ty = TyId::new(self.db, TyData::TyBase(TyBase::Prim(PrimTy::U256)));
         let idx_local = self.alloc_temp_local(idx_ty, true, "for_idx");
 
         // Create loop blocks including init block
@@ -1846,7 +1856,10 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                 self.assign(None, Some(local), Rvalue::Value(value));
 
                 // Register the binding in binding_locals so it can be looked up later
-                let binding = LocalBinding::Local { pat, is_mut: *is_mut };
+                let binding = LocalBinding::Local {
+                    pat,
+                    is_mut: *is_mut,
+                };
                 self.binding_locals.insert(binding, local);
             }
             Partial::Present(hir::hir_def::Pat::WildCard) => {
@@ -1880,11 +1893,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
 
     /// Create a value referencing a local variable.
     fn create_local_value(&mut self, local: LocalId, ty: TyId<'db>) -> ValueId {
-        self.alloc_value(
-            ty,
-            ValueOrigin::Local(local),
-            ValueRepr::Word,
-        )
+        self.alloc_value(ty, ValueOrigin::Local(local), ValueRepr::Word)
     }
 
     /// Create an index expression (array[index]).
@@ -1907,20 +1916,13 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
             // Load the element value
             let dest = self.alloc_temp_local(elem_ty, false, "elem");
             self.assign(None, Some(dest), Rvalue::Load { place });
-            self.alloc_value(
-                elem_ty,
-                ValueOrigin::Local(dest),
-                ValueRepr::Word,
-            )
+            self.alloc_value(elem_ty, ValueOrigin::Local(dest), ValueRepr::Word)
         }
     }
 
     /// Create a less-than comparison.
     fn create_lt_expr(&mut self, lhs: ValueId, rhs: ValueId, _ty: TyId<'db>) -> ValueId {
-        let bool_ty = TyId::new(
-            self.db,
-            TyData::TyBase(TyBase::Prim(PrimTy::Bool)),
-        );
+        let bool_ty = TyId::new(self.db, TyData::TyBase(TyBase::Prim(PrimTy::Bool)));
         self.alloc_value(
             bool_ty,
             ValueOrigin::Binary {
@@ -1934,10 +1936,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
 
     /// Create a less-than-or-equal comparison.
     fn create_le_expr(&mut self, lhs: ValueId, rhs: ValueId, _ty: TyId<'db>) -> ValueId {
-        let bool_ty = TyId::new(
-            self.db,
-            TyData::TyBase(TyBase::Prim(PrimTy::Bool)),
-        );
+        let bool_ty = TyId::new(self.db, TyData::TyBase(TyBase::Prim(PrimTy::Bool)));
         self.alloc_value(
             bool_ty,
             ValueOrigin::Binary {

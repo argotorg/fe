@@ -193,51 +193,48 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         let elem_size = elem_ty.and_then(|ty| crate::layout::ty_size_bytes(self.db, ty));
 
         // Try to extract constant byte values from all elements
-        if let (Some(elem_ty), Some(elem_size)) = (elem_ty, elem_size) {
-            if let Some(const_bytes) = self.try_extract_const_array_bytes(elems, elem_ty, elem_size)
-            {
-                let total_size = const_bytes.len();
+        if let (Some(elem_ty), Some(elem_size)) = (elem_ty, elem_size)
+            && let Some(const_bytes) = self.try_extract_const_array_bytes(elems, elem_ty, elem_size)
+        {
+            let total_size = const_bytes.len();
 
-                if total_size <= MAX_INLINE_SIZE && self.current_block().is_some() {
-                    // Small const array: use DataRegion (same as large, for consistency)
-                    // Arrays always need memory allocation unlike strings
-                    let label = self.builder.body.register_data_region(const_bytes.clone());
-                    let size = const_bytes.len();
+            if total_size <= MAX_INLINE_SIZE && self.current_block().is_some() {
+                // Small const array: use DataRegion (same as large, for consistency)
+                // Arrays always need memory allocation unlike strings
+                let label = self.builder.body.register_data_region(const_bytes.clone());
+                let size = const_bytes.len();
 
-                    let dest = self.alloc_temp_local(array_ty, false, "array_data");
-                    self.builder.body.locals[dest.index()].address_space =
-                        AddressSpaceKind::Memory;
+                let dest = self.alloc_temp_local(array_ty, false, "array_data");
+                self.builder.body.locals[dest.index()].address_space = AddressSpaceKind::Memory;
 
-                    self.push_inst_here(MirInst::Assign {
-                        stmt: None,
-                        dest: Some(dest),
-                        rvalue: Rvalue::CopyDataRegion { label, size },
-                    });
+                self.push_inst_here(MirInst::Assign {
+                    stmt: None,
+                    dest: Some(dest),
+                    rvalue: Rvalue::CopyDataRegion { label, size },
+                });
 
-                    self.builder.body.values[fallback.index()].origin = ValueOrigin::Local(dest);
-                    self.builder.body.values[fallback.index()].repr =
-                        ValueRepr::Ref(AddressSpaceKind::Memory);
-                    return fallback;
-                } else if total_size > MAX_INLINE_SIZE && self.current_block().is_some() {
-                    // Large const array: use DataRegion
-                    let label = self.builder.body.register_data_region(const_bytes.clone());
-                    let size = const_bytes.len();
+                self.builder.body.values[fallback.index()].origin = ValueOrigin::Local(dest);
+                self.builder.body.values[fallback.index()].repr =
+                    ValueRepr::Ref(AddressSpaceKind::Memory);
+                return fallback;
+            } else if total_size > MAX_INLINE_SIZE && self.current_block().is_some() {
+                // Large const array: use DataRegion
+                let label = self.builder.body.register_data_region(const_bytes.clone());
+                let size = const_bytes.len();
 
-                    let dest = self.alloc_temp_local(array_ty, false, "array_data");
-                    self.builder.body.locals[dest.index()].address_space =
-                        AddressSpaceKind::Memory;
+                let dest = self.alloc_temp_local(array_ty, false, "array_data");
+                self.builder.body.locals[dest.index()].address_space = AddressSpaceKind::Memory;
 
-                    self.push_inst_here(MirInst::Assign {
-                        stmt: None,
-                        dest: Some(dest),
-                        rvalue: Rvalue::CopyDataRegion { label, size },
-                    });
+                self.push_inst_here(MirInst::Assign {
+                    stmt: None,
+                    dest: Some(dest),
+                    rvalue: Rvalue::CopyDataRegion { label, size },
+                });
 
-                    self.builder.body.values[fallback.index()].origin = ValueOrigin::Local(dest);
-                    self.builder.body.values[fallback.index()].repr =
-                        ValueRepr::Ref(AddressSpaceKind::Memory);
-                    return fallback;
-                }
+                self.builder.body.values[fallback.index()].origin = ValueOrigin::Local(dest);
+                self.builder.body.values[fallback.index()].repr =
+                    ValueRepr::Ref(AddressSpaceKind::Memory);
+                return fallback;
             }
         }
 

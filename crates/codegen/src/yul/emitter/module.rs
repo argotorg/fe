@@ -1146,7 +1146,13 @@ fn reachable_data_regions_for_region(
 fn emit_data_sections(data_regions: &[mir::ir::DataRegionDef]) -> Vec<YulDoc> {
     data_regions
         .iter()
-        .map(|dr| YulDoc::line(format!("data \"{}\" hex\"{}\"", dr.label, hex::encode(&dr.bytes))))
+        .map(|dr| {
+            YulDoc::line(format!(
+                "data \"{}\" hex\"{}\"",
+                dr.label,
+                hex::encode(&dr.bytes)
+            ))
+        })
         .collect()
 }
 

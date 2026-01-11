@@ -283,7 +283,9 @@ impl<'db> FunctionEmitter<'db> {
             format!("if iszero({name}) "),
             vec![YulDoc::line(format!("{name} := 0x80"))],
         ));
-        docs.push(YulDoc::line(format!("mstore(0x40, add({name}, {size_expr}))")));
+        docs.push(YulDoc::line(format!(
+            "mstore(0x40, add({name}, {size_expr}))"
+        )));
     }
 
     fn emit_load_inst(
