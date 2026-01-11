@@ -1,0 +1,10 @@
+fn read_x() -> u256 uses (x: u256) {
+    x
+}
+
+fn test_calldata_ptr_domain() {
+    let c = std::evm::CalldataPtr<u256> { offset: 0 }
+    with (c) {
+        let _v = read_x()
+    }
+}

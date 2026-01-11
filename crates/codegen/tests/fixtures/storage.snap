@@ -1,18 +1,17 @@
 ---
 source: crates/codegen/tests/yul.rs
-assertion_line: 42
 expression: output
 input_file: tests/fixtures/storage.fe
 ---
 object "Coin" {
   code {
-    function init() {
+    function init__StorPtr_Evm___207f35a85ac4062e() {
       let v0 := datasize("Coin_deployed")
       let v1 := dataoffset("Coin_deployed")
       codecopy(0, v1, v0)
       return(0, v0)
     }
-    init()
+    init__StorPtr_Evm___207f35a85ac4062e()
   }
 
   object "Coin_deployed" {
@@ -22,7 +21,7 @@ object "Coin" {
         mstore(v0, value)
         return(v0, 32)
       }
-      function balance_of_raw(user, store) -> ret {
+      function balance_of_raw__StorPtr_CoinStore___ba1c0d0726e89ba2(user, store) -> ret {
         let v0 := 0
         switch user
           case 0 {
@@ -36,7 +35,7 @@ object "Coin" {
         ret := v0
         leave
       }
-      function credit_alice(amount, store, supply) -> ret {
+      function credit_alice__StorPtr_CoinStore__StorPtr_TotalSupply___c407f5b00af9ba78(amount, store, supply) -> ret {
         let v0 := sload(store)
         sstore(store, add(v0, amount))
         let v1 := sload(supply)
@@ -45,7 +44,7 @@ object "Coin" {
         ret := v2
         leave
       }
-      function credit_bob(amount, store, supply) -> ret {
+      function credit_bob__StorPtr_CoinStore__StorPtr_TotalSupply___c407f5b00af9ba78(amount, store, supply) -> ret {
         let v0 := sload(add(store, 1))
         sstore(add(store, 1), add(v0, amount))
         let v1 := sload(supply)
@@ -54,7 +53,7 @@ object "Coin" {
         ret := v2
         leave
       }
-      function runtime() {
+      function runtime__StorPtr_Evm___207f35a85ac4062e() {
         let v0 := stor_ptr__Evm_CoinStore__d1ec7298de486d2f(0, 0)
         let v1 := stor_ptr__Evm_TotalSupply__b0f1a753085dcbd(0, 2)
         let v2 := v0
@@ -68,11 +67,11 @@ object "Coin" {
             let v8 := 0
             switch v6
               case 0 {
-                let v9 := credit_alice(v7, v2, v3)
+                let v9 := credit_alice__StorPtr_CoinStore__StorPtr_TotalSupply___c407f5b00af9ba78(v7, v2, v3)
                 v8 := v9
               }
               default {
-                let v10 := credit_bob(v7, v2, v3)
+                let v10 := credit_bob__StorPtr_CoinStore__StorPtr_TotalSupply___c407f5b00af9ba78(v7, v2, v3)
                 v8 := v10
               }
             let v11 := v8
@@ -80,7 +79,7 @@ object "Coin" {
           }
           case 1818602213 {
             let v12 := calldataload(4)
-            let v13 := balance_of_raw(v12, v2)
+            let v13 := balance_of_raw__StorPtr_CoinStore___ba1c0d0726e89ba2(v12, v2)
             abi_encode(v13, 0)
           }
           case 217554442 {
@@ -89,11 +88,11 @@ object "Coin" {
             let v16 := 0
             switch v14
               case 0 {
-                let v17 := transfer_from_alice(v15, v2)
+                let v17 := transfer_from_alice__StorPtr_CoinStore___ba1c0d0726e89ba2(v15, v2)
                 v16 := v17
               }
               default {
-                let v18 := transfer_from_bob(v15, v2)
+                let v18 := transfer_from_bob__StorPtr_CoinStore___ba1c0d0726e89ba2(v15, v2)
                 v16 := v18
               }
             let v19 := v16
@@ -101,7 +100,7 @@ object "Coin" {
             abi_encode(v20, 0)
           }
           case 960555502 {
-            let v21 := total_supply(v3)
+            let v21 := total_supply__StorPtr_TotalSupply___2e654c25952f42f9(v3)
             abi_encode(v21, 0)
           }
           default {
@@ -109,19 +108,25 @@ object "Coin" {
           }
       }
       function stor_ptr__Evm_CoinStore__d1ec7298de486d2f(self, slot) -> ret {
-        ret := slot
+        let v0 := storptr_t__effectref_from_raw__CoinStore__fc61705bf538fde2(slot)
+        ret := v0
         leave
       }
       function stor_ptr__Evm_TotalSupply__b0f1a753085dcbd(self, slot) -> ret {
-        ret := slot
+        let v0 := storptr_t__effectref_from_raw__CoinStore__fc61705bf538fde2(slot)
+        ret := v0
         leave
       }
-      function total_supply(supply) -> ret {
+      function storptr_t__effectref_from_raw__CoinStore__fc61705bf538fde2(raw) -> ret {
+        ret := raw
+        leave
+      }
+      function total_supply__StorPtr_TotalSupply___2e654c25952f42f9(supply) -> ret {
         let v0 := sload(supply)
         ret := v0
         leave
       }
-      function transfer_from_alice(amount, store) -> ret {
+      function transfer_from_alice__StorPtr_CoinStore___ba1c0d0726e89ba2(amount, store) -> ret {
         let v0 := sload(store)
         let v1 := lt(v0, amount)
         if v1 {
@@ -149,7 +154,7 @@ object "Coin" {
           leave
         }
       }
-      function transfer_from_bob(amount, store) -> ret {
+      function transfer_from_bob__StorPtr_CoinStore___ba1c0d0726e89ba2(amount, store) -> ret {
         let v0 := sload(add(store, 1))
         let v1 := lt(v0, amount)
         if v1 {
@@ -192,7 +197,7 @@ object "Coin" {
         ret := v0
         leave
       }
-      runtime()
+      runtime__StorPtr_Evm___207f35a85ac4062e()
       return(0, 0)
     }
   }

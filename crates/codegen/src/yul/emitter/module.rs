@@ -2,12 +2,17 @@
 
 use driver::DriverDataBase;
 use hir::HirDb;
+use hir::analysis::HirAnalysisDb;
 use hir::hir_def::{ItemKind, TopLevelMod};
 use mir::analysis::{
     CallGraph, ContractRegion, ContractRegionKind, build_call_graph, build_contract_graph,
     reachable_functions,
 };
-use mir::{MirFunction, MirInst, Rvalue, ValueOrigin, ir::IntrinsicOp, lower_module};
+use mir::{
+    MirFunction, MirInst, Rvalue, ValueOrigin,
+    ir::{IntrinsicOp, MirFunctionOrigin},
+    lower_module,
+};
 use rustc_hash::{FxHashMap, FxHashSet};
 use std::{collections::VecDeque, sync::Arc};
 
@@ -75,9 +80,12 @@ pub fn emit_module_yul(
     for func in module.functions.iter() {
         let emitter =
             FunctionEmitter::new(db, func, &code_regions).map_err(EmitModuleError::Yul)?;
-        let is_test = ItemKind::from(func.func)
-            .attrs(db)
-            .is_some_and(|attrs| attrs.has_attr(db, "test"));
+        let is_test = match func.origin {
+            MirFunctionOrigin::Hir(hir_func) => ItemKind::from(hir_func)
+                .attrs(db)
+                .is_some_and(|attrs| attrs.has_attr(db, "test")),
+            MirFunctionOrigin::Synthetic(_) => false,
+        };
         if is_test {
             validate_test_function(db, func, emitter.returns_value())?;
         }
@@ -235,9 +243,12 @@ pub fn emit_test_module_yul(
     for func in module.functions.iter() {
         let emitter =
             FunctionEmitter::new(db, func, &code_regions).map_err(EmitModuleError::Yul)?;
-        let is_test = ItemKind::from(func.func)
-            .attrs(db)
-            .is_some_and(|attrs| attrs.has_attr(db, "test"));
+        let is_test = match func.origin {
+            MirFunctionOrigin::Hir(hir_func) => ItemKind::from(hir_func)
+                .attrs(db)
+                .is_some_and(|attrs| attrs.has_attr(db, "test")),
+            MirFunctionOrigin::Synthetic(_) => false,
+        };
         if is_test {
             validate_test_function(db, func, emitter.returns_value())?;
         }
@@ -337,9 +348,10 @@ fn collect_code_region_roots(db: &dyn HirDb, functions: &[MirFunction<'_>]) -> V
         }
 
         // #[test] functions are code region roots
-        if ItemKind::from(func.func)
-            .attrs(db)
-            .is_some_and(|attrs| attrs.has_attr(db, "test"))
+        if let MirFunctionOrigin::Hir(hir_func) = func.origin
+            && ItemKind::from(hir_func)
+                .attrs(db)
+                .is_some_and(|attrs| attrs.has_attr(db, "test"))
         {
             roots.insert(func.symbol_name.clone());
         }
@@ -411,14 +423,18 @@ struct TestDependencies {
 fn collect_test_infos(db: &dyn HirDb, functions: &[MirFunction<'_>]) -> Vec<TestInfo> {
     functions
         .iter()
-        .filter(|mir_func| {
-            ItemKind::from(mir_func.func)
+        .filter_map(|mir_func| {
+            let MirFunctionOrigin::Hir(hir_func) = mir_func.origin else {
+                return None;
+            };
+            if !ItemKind::from(hir_func)
                 .attrs(db)
                 .is_some_and(|attrs| attrs.has_attr(db, "test"))
-        })
-        .map(|mir_func| {
-            let hir_name = mir_func
-                .func
+            {
+                return None;
+            }
+
+            let hir_name = hir_func
                 .name(db)
                 .to_opt()
                 .map(|n| n.data(db).to_string())
@@ -429,14 +445,14 @@ fn collect_test_infos(db: &dyn HirDb, functions: &[MirFunction<'_>]) -> Vec<Test
             } else {
                 0
             };
-            TestInfo {
+            Some(TestInfo {
                 hir_name,
                 display_name: String::new(),
                 symbol_name: mir_func.symbol_name.clone(),
                 object_name: String::new(),
                 value_param_count,
                 effect_param_count,
-            }
+            })
         })
         .collect()
 }
@@ -453,13 +469,19 @@ fn validate_test_function(
     mir_func: &MirFunction<'_>,
     returns_value: bool,
 ) -> Result<(), EmitModuleError> {
-    let name = function_name(db, mir_func.func);
+    let MirFunctionOrigin::Hir(hir_func) = mir_func.origin else {
+        return Err(EmitModuleError::Yul(YulError::Unsupported(
+            "invalid #[test] function: synthetic MIR functions cannot be tests".into(),
+        )));
+    };
+
+    let name = function_name(db, hir_func);
     if mir_func.contract_function.is_some() {
         return Err(EmitModuleError::Yul(YulError::Unsupported(format!(
             "invalid #[test] function `{name}`: contract entrypoints cannot be tests"
         ))));
     }
-    if !is_free_test_function(db, mir_func.func) {
+    if !is_free_test_function(db, hir_func) {
         return Err(EmitModuleError::Yul(YulError::Unsupported(format!(
             "invalid #[test] function `{name}`: tests must be free functions (not in contracts or impls)"
         ))));
@@ -476,7 +498,7 @@ fn validate_test_function(
 ///
 /// * `db` - HIR database for scope queries.
 /// * `func` - HIR function to inspect.
-fn is_free_test_function(db: &dyn HirDb, func: hir::hir_def::Func<'_>) -> bool {
+fn is_free_test_function(db: &dyn HirAnalysisDb, func: hir::hir_def::Func<'_>) -> bool {
     if func.is_associated_func(db) {
         return false;
     }

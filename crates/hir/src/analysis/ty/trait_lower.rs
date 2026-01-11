@@ -2,8 +2,8 @@
 
 use crate::{
     core::hir_def::{
-        AssocTypeGenericArg, HirIngot, IdentId, ImplTrait, Partial, PathId, Trait, TraitRefId,
-        params::GenericArg, scope_graph::ScopeId,
+        AssocTypeGenericArg, HirIngot, IdentId, ImplTrait, ItemKind, Partial, PathId, Trait,
+        TraitRefId, params::GenericArg, scope_graph::ScopeId,
     },
     hir_def::Func,
 };
@@ -15,7 +15,7 @@ use super::{
     binder::Binder,
     const_ty::ConstTyId,
     fold::{TyFoldable, TyFolder},
-    trait_def::{ImplementorId, TraitInstId, does_impl_trait_conflict},
+    trait_def::{ImplementorId, ImplementorOrigin, TraitInstId, does_impl_trait_conflict},
     trait_resolution::PredicateListId,
     ty_def::{InvalidCause, TyId},
     ty_lower::lower_hir_ty,
@@ -70,7 +70,13 @@ pub(crate) fn lower_impl_trait<'db>(
     // merged trait defaults.
     let types = impl_trait.assoc_type_bindings_for_trait_inst(db, trait_inst);
 
-    let implementor = ImplementorId::new(db, trait_inst, params, types, impl_trait);
+    let implementor = ImplementorId::new(
+        db,
+        trait_inst,
+        params,
+        types,
+        ImplementorOrigin::Hir(impl_trait),
+    );
 
     Some(Binder::bind(implementor))
 }
@@ -252,7 +258,16 @@ pub(crate) fn collect_implementor_methods<'db>(
     implementor: ImplementorId<'db>,
 ) -> IndexMap<IdentId<'db>, Func<'db>> {
     let mut methods = IndexMap::default();
-    for method in implementor.hir_impl_trait(db).methods(db) {
+    let impl_trait = match implementor.origin(db) {
+        super::trait_def::ImplementorOrigin::Hir(impl_trait) => impl_trait,
+        super::trait_def::ImplementorOrigin::VirtualContract(_) => return methods,
+    };
+    let scope = impl_trait.scope();
+    let graph = scope.scope_graph(db);
+    for method in graph.child_items(scope).filter_map(|item| match item {
+        ItemKind::Func(func) => Some(func),
+        _ => None,
+    }) {
         let name = method.name(db).to_opt().expect("impl methods have names");
         methods.insert(name, method);
     }

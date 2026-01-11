@@ -11,12 +11,12 @@ object "test_test_effect" {
 
   object "runtime" {
     code {
-      function test_effect(x) {
+      function test_effect__StorPtr_u256___64779554cfbf0358(x) {
         let v0 := sload(x)
         sstore(x, add(v0, 1))
         leave
       }
-      test_effect(0)
+      test_effect__StorPtr_u256___64779554cfbf0358(0)
       return(0, 0)
     }
   }

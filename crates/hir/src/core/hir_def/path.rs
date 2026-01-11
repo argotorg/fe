@@ -185,6 +185,18 @@ impl<'db> PathId<'db> {
         }
     }
 
+    pub fn strip_generic_args(self, db: &'db dyn HirDb) -> PathId<'db> {
+        let parent = self.parent(db).map(|p| p.strip_generic_args(db));
+        let kind = match self.kind(db) {
+            PathKind::Ident { ident, .. } => PathKind::Ident {
+                ident,
+                generic_args: GenericArgListId::none(db),
+            },
+            kind @ PathKind::QualifiedType { .. } => kind,
+        };
+        PathId::new(db, kind, parent)
+    }
+
     pub fn pretty_print(self, db: &dyn HirDb) -> String {
         fn space_adjacent_angles(s: &str) -> String {
             let mut out = String::with_capacity(s.len());

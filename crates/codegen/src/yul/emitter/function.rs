@@ -1,5 +1,5 @@
 use driver::DriverDataBase;
-use mir::{BasicBlockId, MirFunction, Terminator};
+use mir::{BasicBlockId, MirFunction, Terminator, ir::MirFunctionOrigin};
 use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::yul::{doc::YulDoc, errors::YulError, state::BlockState};
@@ -28,8 +28,10 @@ impl<'db> FunctionEmitter<'db> {
         mir_func: &'db MirFunction<'db>,
         code_regions: &'db FxHashMap<String, String>,
     ) -> Result<Self, YulError> {
-        if mir_func.func.body(db).is_none() {
-            return Err(YulError::MissingBody(function_name(db, mir_func.func)));
+        if let MirFunctionOrigin::Hir(func) = mir_func.origin
+            && func.body(db).is_none()
+        {
+            return Err(YulError::MissingBody(function_name(db, func)));
         }
         let ipdom = compute_immediate_postdominators(&mir_func.body);
         Ok(Self {

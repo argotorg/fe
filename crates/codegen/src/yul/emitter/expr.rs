@@ -10,7 +10,7 @@ use hir::projection::{IndexSource, Projection};
 use hir::span::LazySpan;
 use mir::{
     CallOrigin, ValueId, ValueOrigin,
-    ir::{FieldPtrOrigin, Place, SyntheticValue},
+    ir::{FieldPtrOrigin, MirFunctionOrigin, Place, SyntheticValue},
     layout,
 };
 
@@ -24,7 +24,10 @@ use super::{
 
 impl<'db> FunctionEmitter<'db> {
     fn format_hir_expr_context(&self, expr: hir::hir_def::ExprId) -> String {
-        let Some(body) = self.mir_func.func.body(self.db) else {
+        let Some(body) = (match self.mir_func.origin {
+            MirFunctionOrigin::Hir(func) => func.body(self.db),
+            MirFunctionOrigin::Synthetic(_) => None,
+        }) else {
             return format!(
                 "func={} expr={expr:?} (missing HIR body)",
                 self.mir_func.symbol_name
@@ -182,9 +185,9 @@ impl<'db> FunctionEmitter<'db> {
         state: &BlockState,
     ) -> Result<String, YulError> {
         if call
-            .callable
-            .callable_def
-            .name(self.db)
+            .hir_target
+            .as_ref()
+            .and_then(|target| target.callable_def.name(self.db))
             .is_some_and(|name| name.data(self.db) == "contract_field_slot")
         {
             return Err(YulError::Unsupported(
@@ -195,7 +198,12 @@ impl<'db> FunctionEmitter<'db> {
         let callee = if let Some(name) = &call.resolved_name {
             name.clone()
         } else {
-            match call.callable.callable_def {
+            let Some(target) = call.hir_target.as_ref() else {
+                return Err(YulError::Unsupported(
+                    "call is missing a resolved symbol name".into(),
+                ));
+            };
+            match target.callable_def {
                 CallableDef::Func(func) => function_name(self.db, func),
                 CallableDef::VariantCtor(_) => {
                     return Err(YulError::Unsupported(
@@ -250,8 +258,11 @@ impl<'db> FunctionEmitter<'db> {
             Ok(base)
         } else {
             let offset = match field_ptr.addr_space {
-                mir::ir::AddressSpaceKind::Memory => field_ptr.offset_bytes,
-                mir::ir::AddressSpaceKind::Storage => field_ptr.offset_bytes / 32,
+                mir::ir::AddressSpaceKind::Memory | mir::ir::AddressSpaceKind::Calldata => {
+                    field_ptr.offset_bytes
+                }
+                mir::ir::AddressSpaceKind::Storage
+                | mir::ir::AddressSpaceKind::TransientStorage => field_ptr.offset_bytes / 32,
             };
             Ok(format!("add({}, {})", base, offset))
         }
@@ -274,7 +285,9 @@ impl<'db> FunctionEmitter<'db> {
         let addr = self.lower_place_address(place, state)?;
         let raw_load = match self.mir_func.body.place_address_space(place) {
             mir::ir::AddressSpaceKind::Memory => format!("mload({addr})"),
+            mir::ir::AddressSpaceKind::Calldata => format!("calldataload({addr})"),
             mir::ir::AddressSpaceKind::Storage => format!("sload({addr})"),
+            mir::ir::AddressSpaceKind::TransientStorage => format!("tload({addr})"),
         };
 
         // Apply type-specific conversion (std::evm::word::WordRepr::from_word equivalent)
@@ -407,9 +420,9 @@ impl<'db> FunctionEmitter<'db> {
         let base_value = self.mir_func.body.value(place.base);
         let mut current_ty = base_value.ty;
         let mut total_offset: usize = 0;
-        let is_storage = matches!(
+        let is_slot_addressed = matches!(
             self.mir_func.body.place_address_space(place),
-            mir::ir::AddressSpaceKind::Storage
+            mir::ir::AddressSpaceKind::Storage | mir::ir::AddressSpaceKind::TransientStorage
         );
 
         for proj in place.projection.iter() {
@@ -423,7 +436,7 @@ impl<'db> FunctionEmitter<'db> {
                         )));
                     }
                     // Use slot-based offsets for storage, byte-based for memory
-                    total_offset += if is_storage {
+                    total_offset += if is_slot_addressed {
                         layout::field_offset_slots(self.db, current_ty, *field_idx)
                     } else {
                         layout::field_offset_bytes_or_word_aligned(self.db, current_ty, *field_idx)
@@ -444,7 +457,7 @@ impl<'db> FunctionEmitter<'db> {
                 } => {
                     // Skip discriminant then compute field offset
                     // Use slot-based offsets for storage, byte-based for memory
-                    if is_storage {
+                    if is_slot_addressed {
                         total_offset += 1;
                         total_offset += layout::variant_field_offset_slots(
                             self.db, *enum_ty, *variant, *field_idx,
@@ -470,7 +483,7 @@ impl<'db> FunctionEmitter<'db> {
                     current_ty = TyId::new(self.db, TyData::TyBase(TyBase::Prim(PrimTy::U256)));
                 }
                 Projection::Index(idx_source) => {
-                    let stride = if is_storage {
+                    let stride = if is_slot_addressed {
                         layout::array_elem_stride_slots(self.db, current_ty)
                     } else {
                         layout::array_elem_stride_bytes(self.db, current_ty)

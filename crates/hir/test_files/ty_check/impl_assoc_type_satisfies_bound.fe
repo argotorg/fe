@@ -1,0 +1,17 @@
+trait Tr {
+    type Item
+}
+
+struct S {}
+struct A {}
+
+impl Tr for S {
+    type Item = A
+}
+
+fn takes<T: Tr<Item = A>>(_ x: T) {
+}
+
+fn test() {
+    takes(S {})
+}

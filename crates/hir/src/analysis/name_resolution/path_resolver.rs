@@ -417,7 +417,8 @@ pub fn resolve_ident_to_bucket<'db>(
     scope: ScopeId<'db>,
 ) -> &'db NameResBucket<'db> {
     assert!(path.parent(db).is_none());
-    let query = make_query(db, path, scope);
+    let directive = QueryDirective::for_scope(db, scope);
+    let query = make_query(db, path, scope, directive);
     resolve_query(db, query)
 }
 
@@ -426,8 +427,9 @@ fn make_query<'db>(
     db: &'db dyn HirAnalysisDb,
     path: PathId<'db>,
     scope: ScopeId<'db>,
+    base_directive: QueryDirective,
 ) -> EarlyNameQueryId<'db> {
-    let mut directive = QueryDirective::new();
+    let mut directive = base_directive;
 
     if path.segment_index(db) != 0 {
         directive = directive.disallow_external();
@@ -641,12 +643,14 @@ pub fn resolve_path<'db>(
     assumptions: PredicateListId<'db>,
     resolve_tail_as_value: bool,
 ) -> PathResolutionResult<'db, PathRes<'db>> {
+    let directive = QueryDirective::for_scope(db, scope);
     resolve_path_impl(
         db,
         path,
         scope,
         assumptions,
         resolve_tail_as_value,
+        directive,
         true,
         &mut |_, _| {},
     )
@@ -663,23 +667,27 @@ pub fn resolve_path_with_observer<'db, F>(
 where
     F: FnMut(PathId<'db>, &PathRes<'db>),
 {
+    let directive = QueryDirective::for_scope(db, scope);
     resolve_path_impl(
         db,
         path,
         scope,
         assumptions,
         resolve_tail_as_value,
+        directive,
         true,
         observer,
     )
 }
 
+#[allow(clippy::too_many_arguments)]
 fn resolve_path_impl<'db, F>(
     db: &'db dyn HirAnalysisDb,
     path: PathId<'db>,
     scope: ScopeId<'db>,
     assumptions: PredicateListId<'db>,
     resolve_tail_as_value: bool,
+    base_directive: QueryDirective,
     is_tail: bool,
     observer: &mut F,
 ) -> PathResolutionResult<'db, PathRes<'db>>
@@ -695,6 +703,7 @@ where
                 scope,
                 assumptions,
                 resolve_tail_as_value,
+                base_directive,
                 false,
                 observer,
             )
@@ -819,7 +828,8 @@ where
                 // We need to use the concrete enum scope instead of
                 // parent_scope to resolve the variants in all cases,
                 // eg when parent is `Self`
-                let query = make_query(db, path, enum_.scope());
+                let directive = QueryDirective::for_scope(db, enum_.scope());
+                let query = make_query(db, path, enum_.scope(), directive);
                 let bucket = resolve_query(db, query);
 
                 if let Ok(res) = bucket.pick(NameDomain::VALUE)
@@ -948,7 +958,7 @@ where
         Some(PathRes::Const(..) | PathRes::Mod(_)) | None => {}
     };
 
-    let query = make_query(db, path, parent_scope);
+    let query = make_query(db, path, parent_scope, base_directive);
     let bucket = resolve_query(db, query);
 
     let parent_ty = parent_res.as_ref().and_then(|res| match res {

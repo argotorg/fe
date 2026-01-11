@@ -1,6 +1,5 @@
 ---
 source: crates/codegen/tests/yul.rs
-assertion_line: 42
 expression: output
 input_file: tests/fixtures/code_region.fe
 ---
@@ -21,7 +20,7 @@ object "Foo" {
       ret := v0
       leave
     }
-    function init() {
+    function init__StorPtr_Evm___207f35a85ac4062e() {
       let v0 := datasize("Child")
       let v1 := dataoffset("Child")
       let v2 := allocate(v0, 0)
@@ -36,7 +35,7 @@ object "Foo" {
       codecopy(v8, v6, v5)
       return(v8, v5)
     }
-    init()
+    init__StorPtr_Evm___207f35a85ac4062e()
   }
 
   object "Foo_deployed" {
@@ -49,7 +48,7 @@ object "Foo" {
         ret := shr(224, v0)
         leave
       }
-      function runtime() {
+      function runtime__StorPtr_Evm___207f35a85ac4062e() {
         let v0 := read_selector(0)
         switch v0
           case 305419896 {
@@ -65,28 +64,28 @@ object "Foo" {
       function transfer(ops) {
         return(0, 0)
       }
-      runtime()
+      runtime__StorPtr_Evm___207f35a85ac4062e()
       return(0, 0)
     }
   }
   object "Child" {
     code {
-      function child_init() {
+      function child_init__StorPtr_Evm___207f35a85ac4062e() {
         let v0 := datasize("Child_deployed")
         let v1 := dataoffset("Child_deployed")
         codecopy(0, v1, v0)
         return(0, v0)
       }
-      child_init()
+      child_init__StorPtr_Evm___207f35a85ac4062e()
     }
 
     object "Child_deployed" {
       code {
-        function child_runtime() {
+        function child_runtime__StorPtr_Evm___207f35a85ac4062e() {
           calldatacopy(0, 0, 4)
           return(0, 4)
         }
-        child_runtime()
+        child_runtime__StorPtr_Evm___207f35a85ac4062e()
         return(0, 0)
       }
     }

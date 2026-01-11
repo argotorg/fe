@@ -267,6 +267,15 @@ pub enum BodyDiag<'db> {
         provided_span: Option<DynLazySpan<'db>>,
     },
 
+    EffectProviderMismatch {
+        primary: DynLazySpan<'db>,
+        func: Func<'db>,
+        key: PathId<'db>,
+        expected: TyId<'db>,
+        given: TyId<'db>,
+        provided_span: Option<DynLazySpan<'db>>,
+    },
+
     EffectTraitUnsatisfied {
         primary: DynLazySpan<'db>,
         func: Func<'db>,
@@ -550,6 +559,7 @@ impl<'db> BodyDiag<'db> {
             Self::MissingEffect { .. } => 36,
             Self::EffectMutabilityMismatch { .. } => 37,
             Self::EffectTypeMismatch { .. } => 38,
+            Self::EffectProviderMismatch { .. } => 52,
             Self::EffectTraitUnsatisfied { .. } => 39,
             Self::AmbiguousEffect { .. } => 40,
             Self::ReturnedTypeMismatch { .. } => 13,

@@ -694,6 +694,14 @@ pub fn check_contract_recv_arm_body<'db>(
     )
 }
 
+#[salsa::tracked(return_ref)]
+pub fn check_contract_init_body<'db>(
+    db: &'db dyn HirAnalysisDb,
+    contract: Contract<'db>,
+) -> (Vec<FuncBodyDiag<'db>>, TypedBody<'db>) {
+    check_body(db, BodyOwner::ContractInit { contract })
+}
+
 pub(super) fn resolve_recv_msg_mod<'db>(
     db: &'db dyn HirAnalysisDb,
     contract: Contract<'db>,

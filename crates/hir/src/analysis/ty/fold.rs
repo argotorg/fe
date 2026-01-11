@@ -167,7 +167,7 @@ impl<'db> TyFoldable<'db> for ImplementorId<'db> {
             .iter()
             .map(|ty| ty.fold_with(db, folder))
             .collect::<Vec<_>>();
-        let hir_impl_trait = self.hir_impl_trait(db);
+        let origin = self.origin(db);
 
         let types = self
             .types(db)
@@ -175,7 +175,7 @@ impl<'db> TyFoldable<'db> for ImplementorId<'db> {
             .map(|(ident, ty)| (*ident, ty.fold_with(db, folder)))
             .collect::<IndexMap<_, _>>();
 
-        ImplementorId::new(db, trait_inst, params, types, hir_impl_trait)
+        ImplementorId::new(db, trait_inst, params, types, origin)
     }
 }
 

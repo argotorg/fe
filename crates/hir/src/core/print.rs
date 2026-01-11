@@ -511,8 +511,10 @@ impl<'db> Pat<'db> {
 impl<'db> RecordPatField<'db> {
     /// Pretty-prints a record pattern field.
     pub fn pretty_print(&self, db: &'db dyn HirDb, body: Body<'db>) -> String {
-        let label = unwrap_partial(self.label, "RecordPatField::label");
         let pat = unwrap_partial_ref(self.pat.data(db, body), "RecordPatField::pat");
+        let Some(label) = self.label(db, body) else {
+            return pat.pretty_print(db, body);
+        };
 
         // Check if the pattern is just a binding with the same name as the label
         if let Pat::Path(Partial::Present(path), false) = pat
@@ -1217,8 +1219,8 @@ impl<'db> Contract<'db> {
         }
 
         // Get child items (init function, etc.)
-        let scope_graph = self.top_mod(db).scope_graph(db);
         let scope = ScopeId::from_item(self.into());
+        let scope_graph = scope.scope_graph(db);
         for item in scope_graph.child_items(scope) {
             if let ItemKind::Func(func) = item {
                 result.push('\n');
@@ -1588,22 +1590,6 @@ impl<'db> TopLevelMod<'db> {
     pub fn pretty_print(self, db: &'db dyn HirDb) -> String {
         let mut result = String::new();
         let items: Vec<_> = self.children_non_nested(db).collect();
-        print_items_with_extern_blocks(&mut result, db, &items, 0);
-        result
-    }
-
-    /// Pretty-prints only the desugared output, skipping contract definitions.
-    ///
-    /// This is useful for testing contract desugaring: contracts generate
-    /// synthetic functions during lowering, so printing both the contract
-    /// and its desugared functions would cause duplicates on roundtrip.
-    /// By skipping contracts, we print only the desugared result.
-    pub fn pretty_print_desugared(self, db: &'db dyn HirDb) -> String {
-        let mut result = String::new();
-        let items: Vec<_> = self
-            .children_non_nested(db)
-            .filter(|item| !matches!(item, ItemKind::Contract(_)))
-            .collect();
         print_items_with_extern_blocks(&mut result, db, &items, 0);
         result
     }

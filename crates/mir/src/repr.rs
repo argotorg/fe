@@ -15,10 +15,18 @@
 use hir::analysis::HirAnalysisDb;
 use hir::analysis::ty::adt_def::AdtRef;
 use hir::analysis::ty::ty_def::{TyBase, TyData, TyId};
+use hir::analysis::ty::{
+    canonical::Canonicalized,
+    corelib::resolve_core_trait,
+    trait_def::TraitInstId,
+    trait_resolution::{GoalSatisfiability, PredicateListId, is_goal_satisfiable},
+};
+use hir::hir_def::IdentId;
 
-use crate::core_lib::{CoreHelperTy, CoreLib};
-use crate::ir::{AddressSpaceKind, EffectProviderKind};
+use crate::core_lib::CoreLib;
+use crate::ir::AddressSpaceKind;
 use crate::layout;
+use common::indexmap::IndexMap;
 
 /// Canonical representation categories for a type after transparent-newtype peeling.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -69,40 +77,66 @@ pub fn peel_transparent_newtypes<'db>(db: &'db dyn HirAnalysisDb, mut ty: TyId<'
     ty
 }
 
-/// Returns the effect provider kind for a type, looking through transparent newtype wrappers.
-pub fn effect_provider_kind_for_ty<'db>(
+/// Returns the effect provider's address space for a type, looking through transparent newtype wrappers.
+pub fn effect_provider_space_for_ty<'db>(
     db: &'db dyn HirAnalysisDb,
     core: &CoreLib<'db>,
     ty: TyId<'db>,
-) -> Option<EffectProviderKind> {
-    let base_ty = ty.base_ty(db);
-
-    if let Some(mem_base) = core
-        .helper_ty(CoreHelperTy::EffectMemPtr)
-        .map(|ty| ty.base_ty(db))
-        && base_ty == mem_base
-    {
-        return Some(EffectProviderKind::Memory);
-    }
-
-    if let Some(stor_base) = core
-        .helper_ty(CoreHelperTy::EffectStorPtr)
-        .map(|ty| ty.base_ty(db))
-        && base_ty == stor_base
-    {
-        return Some(EffectProviderKind::Storage);
-    }
-
-    if let Some(calldata_base) = core
-        .helper_ty(CoreHelperTy::EffectCalldataPtr)
-        .map(|ty| ty.base_ty(db))
-        && base_ty == calldata_base
-    {
-        return Some(EffectProviderKind::Calldata);
+) -> Option<AddressSpaceKind> {
+    if let Some(space) = effect_provider_space_via_domain_trait(db, core, ty) {
+        return Some(space);
     }
 
     transparent_newtype_field_ty(db, ty)
-        .and_then(|inner| effect_provider_kind_for_ty(db, core, inner))
+        .and_then(|inner| effect_provider_space_for_ty(db, core, inner))
+}
+
+fn effect_provider_space_via_domain_trait<'db>(
+    db: &'db dyn HirAnalysisDb,
+    core: &CoreLib<'db>,
+    ty: TyId<'db>,
+) -> Option<AddressSpaceKind> {
+    let memory_space = core.effect_address_space_memory();
+    let calldata_space = core.effect_address_space_calldata();
+    let storage_space = core.effect_address_space_storage();
+    let transient_storage_space = core.effect_address_space_transient_storage();
+
+    let effect_ref = resolve_core_trait(db, core.scope, &["effect_ref", "EffectRef"]);
+    let ingot = core.scope.top_mod(db).ingot(db);
+    let assumptions = PredicateListId::empty_list(db);
+
+    let address_space_ident = IdentId::new(db, "AddressSpace".to_string());
+
+    // First, determine whether `ty` is an effect provider at all.
+    let inst = TraitInstId::new(db, effect_ref, vec![ty], IndexMap::new());
+    let goal = Canonicalized::new(db, inst).value;
+    match is_goal_satisfiable(db, ingot, goal, assumptions) {
+        GoalSatisfiability::Satisfied(_) => {}
+        GoalSatisfiability::NeedsConfirmation(_) => return None,
+        GoalSatisfiability::ContainsInvalid | GoalSatisfiability::UnSat(_) => return None,
+    }
+
+    for (space_ty, space_kind) in [
+        (memory_space, AddressSpaceKind::Memory),
+        (calldata_space, AddressSpaceKind::Calldata),
+        (transient_storage_space, AddressSpaceKind::TransientStorage),
+        (storage_space, AddressSpaceKind::Storage),
+    ] {
+        let mut assoc = IndexMap::new();
+        assoc.insert(address_space_ident, space_ty);
+        let inst = TraitInstId::new(db, effect_ref, vec![ty], assoc);
+        let goal = Canonicalized::new(db, inst).value;
+        match is_goal_satisfiable(db, ingot, goal, assumptions) {
+            GoalSatisfiability::Satisfied(_) => return Some(space_kind),
+            GoalSatisfiability::NeedsConfirmation(_) => return None,
+            GoalSatisfiability::ContainsInvalid | GoalSatisfiability::UnSat(_) => {}
+        }
+    }
+
+    panic!(
+        "`{}` implements `EffectRef` but `AddressSpace` is not one of: core::effect_ref::Memory | Calldata | Storage | TransientStorage",
+        ty.pretty_print(db)
+    )
 }
 
 /// Computes the canonical MIR representation kind for `ty`.
@@ -119,12 +153,7 @@ pub fn repr_kind_for_ty<'db>(
         return ReprKind::Zst;
     }
 
-    if let Some(kind) = effect_provider_kind_for_ty(db, core, ty) {
-        let space = match kind {
-            EffectProviderKind::Memory => AddressSpaceKind::Memory,
-            EffectProviderKind::Storage => AddressSpaceKind::Storage,
-            EffectProviderKind::Calldata => AddressSpaceKind::Memory,
-        };
+    if let Some(space) = effect_provider_space_for_ty(db, core, ty) {
         return ReprKind::Ptr(space);
     }
 

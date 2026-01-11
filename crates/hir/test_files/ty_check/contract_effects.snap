@@ -1,60 +1,9 @@
 ---
 source: crates/hir/tests/ty_check.rs
+assertion_line: 48
 expression: res
 input_file: test_files/ty_check/contract_effects.fe
 ---
-note: 
-  ┌─ contract_effects.fe:5:61
-  │  
-5 │       init(starting: u256) uses (ctx, mut balance, mut owner) {
-  │ ╭─────────────────────────────────────────────────────────────^
-6 │ │         owner = ctx.caller()
-7 │ │         balance = starting
-8 │ │     }
-  │ ╰─────^ ()
-
-note: 
-  ┌─ contract_effects.fe:6:9
-  │
-6 │         owner = ctx.caller()
-  │         ^^^^^ Address
-
-note: 
-  ┌─ contract_effects.fe:6:9
-  │
-6 │         owner = ctx.caller()
-  │         ^^^^^^^^^^^^^^^^^^^^ ()
-
-note: 
-  ┌─ contract_effects.fe:6:17
-  │
-6 │         owner = ctx.caller()
-  │                 ^^^ ctx
-
-note: 
-  ┌─ contract_effects.fe:6:17
-  │
-6 │         owner = ctx.caller()
-  │                 ^^^^^^^^^^^^ Address
-
-note: 
-  ┌─ contract_effects.fe:7:9
-  │
-7 │         balance = starting
-  │         ^^^^^^^ u256
-
-note: 
-  ┌─ contract_effects.fe:7:9
-  │
-7 │         balance = starting
-  │         ^^^^^^^^^^^^^^^^^^ ()
-
-note: 
-  ┌─ contract_effects.fe:7:19
-  │
-7 │         balance = starting
-  │                   ^^^^^^^^ u256
-
 note: 
    ┌─ contract_effects.fe:11:9
    │

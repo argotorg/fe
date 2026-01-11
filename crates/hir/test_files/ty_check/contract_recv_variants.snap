@@ -1,5 +1,6 @@
 ---
 source: crates/hir/tests/ty_check.rs
+assertion_line: 48
 expression: res
 input_file: test_files/ty_check/contract_recv_variants.fe
 ---
@@ -16,52 +17,6 @@ note:
 12 │ ╭     #[selector = 0x02]
 13 │ │     Withdraw { amount: u64 } -> bool,
    │ ╰────────────────────────────────────^ u64
-
-note: 
-   ┌─ contract_recv_variants.fe:62:61
-   │  
-62 │       init(start_balance: u64) uses (mut balance, mut tokens) {
-   │ ╭─────────────────────────────────────────────────────────────^
-63 │ │         balance = start_balance
-64 │ │         tokens = 0
-65 │ │     }
-   │ ╰─────^ ()
-
-note: 
-   ┌─ contract_recv_variants.fe:63:9
-   │
-63 │         balance = start_balance
-   │         ^^^^^^^ u64
-
-note: 
-   ┌─ contract_recv_variants.fe:63:9
-   │
-63 │         balance = start_balance
-   │         ^^^^^^^^^^^^^^^^^^^^^^^ ()
-
-note: 
-   ┌─ contract_recv_variants.fe:63:19
-   │
-63 │         balance = start_balance
-   │                   ^^^^^^^^^^^^^ u64
-
-note: 
-   ┌─ contract_recv_variants.fe:64:9
-   │
-64 │         tokens = 0
-   │         ^^^^^^ u64
-
-note: 
-   ┌─ contract_recv_variants.fe:64:9
-   │
-64 │         tokens = 0
-   │         ^^^^^^^^^^ ()
-
-note: 
-   ┌─ contract_recv_variants.fe:64:18
-   │
-64 │         tokens = 0
-   │                  ^ u64
 
 note: 
    ┌─ contract_recv_variants.fe:69:9

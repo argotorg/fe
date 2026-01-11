@@ -1861,6 +1861,7 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                 let is_labeled = effect.and_then(|e| e.name).is_some();
                 let is_contract_scoped_uses = match owner {
                     EffectParamOwner::Contract(_) => false,
+                    EffectParamOwner::ContractInit { .. } => true,
                     EffectParamOwner::ContractRecvArm { .. } => true,
                     EffectParamOwner::Func(func) => matches!(
                         func.scope().parent_item(db),
@@ -2035,6 +2036,52 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                     message: format!(
                         "effect `{}` provided to `{}` has type `{}`, but `{}` is required",
                         key_str, func_name, given_ty, expected_ty
+                    ),
+                    sub_diagnostics,
+                    notes: vec![],
+                    error_code,
+                }
+            }
+
+            Self::EffectProviderMismatch {
+                primary,
+                func,
+                key,
+                expected,
+                given,
+                provided_span,
+            } => {
+                let func_name = func
+                    .name(db)
+                    .to_opt()
+                    .map(|n| n.data(db).to_string())
+                    .unwrap_or_else(|| "<unknown>".to_string());
+                let key_str = key.pretty_print(db);
+                let expected_ty = expected.pretty_print(db).to_string();
+                let given_ty = given.pretty_print(db).to_string();
+
+                let mut sub_diagnostics = vec![SubDiagnostic {
+                    style: LabelStyle::Primary,
+                    message: format!(
+                        "expected effect provider `{}`, found `{}` for `{}`",
+                        expected_ty, given_ty, key_str
+                    ),
+                    span: primary.resolve(db),
+                }];
+
+                if let Some(span) = provided_span.as_ref().map(|s| s.resolve(db)) {
+                    sub_diagnostics.push(SubDiagnostic {
+                        style: LabelStyle::Secondary,
+                        message: format!("effect `{}` is provided here", key_str),
+                        span,
+                    });
+                }
+
+                CompleteDiagnostic {
+                    severity: Severity::Error,
+                    message: format!(
+                        "effect provider mismatch for `{}` when calling `{}`",
+                        key_str, func_name
                     ),
                     sub_diagnostics,
                     notes: vec![],

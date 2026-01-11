@@ -6,6 +6,12 @@ use hir::{
     projection::{IndexSource, Projection},
 };
 
+use hir::analysis::ty::{
+    binder::Binder,
+    fold::{AssocTySubst, TyFoldable},
+    normalize::normalize_ty,
+};
+
 use crate::{
     ir::{Place, Rvalue},
     layout::{self, ty_storage_slots},
@@ -70,13 +76,27 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
             return None;
         }
 
-        let scope = contract.scope();
-        let assumptions = PredicateListId::empty_list(self.db);
+        let infos = contract.field_infos(self.db);
 
-        let mut offset = 0;
-        for field in fields.iter().take(field_idx) {
-            let field_ty = lower_opt_hir_ty(self.db, field.type_ref(), scope, assumptions);
-            offset += ty_storage_slots(self.db, field_ty)?;
+        let desired_space = infos.get(field_idx).and_then(|info| {
+            if info.is_provider {
+                self.effect_provider_space_for_provider_ty(info.declared_ty)
+            } else {
+                Some(AddressSpaceKind::Storage)
+            }
+        })?;
+
+        let mut offset = 0usize;
+        for info in infos.iter().take(field_idx) {
+            let space = if info.is_provider {
+                self.effect_provider_space_for_provider_ty(info.declared_ty)?
+            } else {
+                AddressSpaceKind::Storage
+            };
+            if space != desired_space {
+                continue;
+            }
+            offset += ty_storage_slots(self.db, info.target_ty)?;
         }
         Some(offset)
     }
@@ -260,7 +280,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
             }
             return value_id;
         }
-        let Some(callable) = self.typed_body.callable_expr(expr).cloned() else {
+        let Some(mut callable) = self.typed_body.callable_expr(expr).cloned() else {
             return value_id;
         };
         let callable_def = callable.callable_def;
@@ -269,33 +289,8 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
             return value_id;
         };
 
-        let provider_kind = self.effect_provider_kind_for_provider_ty(ty);
-        let result_space = provider_kind
-            .map(|kind| match kind {
-                EffectProviderKind::Memory => AddressSpaceKind::Memory,
-                EffectProviderKind::Storage => AddressSpaceKind::Storage,
-                EffectProviderKind::Calldata => AddressSpaceKind::Memory,
-            })
-            .unwrap_or_else(|| self.expr_address_space(expr));
-
-        // Effect pointer provider newtypes (`MemPtr`/`StorPtr`) are represented as a single word
-        // at runtime (the raw address/slot). Stdlib constructors for these types are transparent
-        // wrappers and can be lowered as a representation-preserving cast.
-        if callable_def.ingot(self.db).kind(self.db) == IngotKind::Std
-            && provider_kind.is_some()
-            && args.len() == 1
-            && returns_value
-        {
-            if let Some(dest) = dest_override {
-                self.builder.body.locals[dest.index()].address_space = result_space;
-                self.assign(stmt, Some(dest), Rvalue::Value(args[0]));
-                self.builder.body.values[value_id.index()].origin = ValueOrigin::Local(dest);
-            } else {
-                self.builder.body.values[value_id.index()].origin =
-                    ValueOrigin::TransparentCast { value: args[0] };
-            }
-            return value_id;
-        }
+        let provider_space = self.effect_provider_space_for_provider_ty(ty);
+        let result_space = provider_space.unwrap_or_else(|| self.expr_address_space(expr));
 
         if matches!(
             callable_def.ingot(self.db).kind(self.db),
@@ -303,7 +298,8 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         ) && callable_def
             .name(self.db)
             .is_some_and(|name| name.data(self.db) == "contract_field_slot")
-            && let Some(contract_fn) = extract_contract_function(self.db, self.func)
+            && let Some(func) = self.hir_func
+            && let Some(contract_fn) = extract_contract_function(self.db, func)
             && let Some(arg_expr) = arg_exprs.first().copied()
             && let Some(field_idx) = self.u256_lit_from_expr(arg_expr)
             && let Some(field_idx) = field_idx.to_usize()
@@ -426,17 +422,16 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         }
 
         let mut effect_args = Vec::new();
-        let mut effect_kinds = Vec::new();
         let mut effect_writebacks: Vec<(LocalId, Place<'db>)> = Vec::new();
         if let CallableDef::Func(func_def) = callable.callable_def
             && func_def.has_effects(self.db)
             && extract_contract_function(self.db, func_def).is_none()
             && let Some(resolved) = self.typed_body.call_effect_args(expr)
         {
+            self.finalize_place_effect_provider_args_for_call(func_def, &mut callable, resolved);
             for resolved_arg in resolved {
-                let (kind, value) = self.lower_effect_arg(resolved_arg, &mut effect_writebacks);
+                let value = self.lower_effect_arg(resolved_arg, &mut effect_writebacks);
                 effect_args.push(value);
-                effect_kinds.push(kind);
             }
         }
 
@@ -448,14 +443,18 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         if let Some(dest) = dest {
             self.builder.body.locals[dest.index()].address_space = result_space;
         }
+        let hir_target = crate::ir::HirCallTarget {
+            callable_def: callable.callable_def,
+            generic_args: callable.generic_args().to_vec(),
+            trait_inst: callable.trait_inst(),
+        };
         let call_origin = CallOrigin {
-            expr,
-            callable: callable.clone(),
+            expr: Some(expr),
+            hir_target: Some(hir_target),
             args,
             effect_args,
-            effect_kinds,
-            receiver_space,
             resolved_name: None,
+            receiver_space,
         };
         if ty.is_never(self.db) {
             self.set_current_terminator(Terminator::TerminatingCall(
@@ -471,6 +470,118 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         self.builder.body.values[value_id.index()].origin =
             dest.map(ValueOrigin::Local).unwrap_or(ValueOrigin::Unit);
         value_id
+    }
+
+    fn finalize_place_effect_provider_args_for_call(
+        &mut self,
+        callee: Func<'db>,
+        callable: &mut hir::analysis::ty::ty_check::Callable<'db>,
+        resolved: &[ResolvedEffectArg<'db>],
+    ) {
+        let assumptions = PredicateListId::empty_list(self.db);
+        let provider_arg_idx_by_effect =
+            hir::analysis::ty::effects::place_effect_provider_param_index_map(self.db, callee);
+        let caller_provider_arg_idx_by_effect = self.hir_func.map(|func| {
+            hir::analysis::ty::effects::place_effect_provider_param_index_map(self.db, func)
+        });
+
+        for resolved_arg in resolved {
+            let Some(effect_view) = callee.effect_params(self.db).nth(resolved_arg.param_idx)
+            else {
+                continue;
+            };
+            let effect_idx = effect_view.index();
+            let Some(provider_arg_idx) = provider_arg_idx_by_effect
+                .get(effect_idx)
+                .copied()
+                .flatten()
+            else {
+                continue;
+            };
+
+            // Don't stomp explicit provider arguments (HIR unifies those already).
+            if let Some(existing) = callable.generic_args().get(provider_arg_idx).copied()
+                && !matches!(existing.data(self.db), TyData::TyVar(_))
+            {
+                continue;
+            }
+
+            let Some(key_path) = effect_view.key_path(self.db) else {
+                continue;
+            };
+            let Ok(path_res) = resolve_path(self.db, key_path, callee.scope(), assumptions, false)
+            else {
+                continue;
+            };
+            let base_target_ty = match path_res {
+                PathRes::Ty(ty) | PathRes::TyAlias(_, ty) if ty.is_star_kind(self.db) => ty,
+                _ => continue,
+            };
+
+            let mut target_ty =
+                Binder::bind(base_target_ty).instantiate(self.db, callable.generic_args());
+            if let Some(inst) = callable.trait_inst() {
+                let mut subst = AssocTySubst::new(inst);
+                target_ty = target_ty.fold_with(self.db, &mut subst);
+            }
+            target_ty = normalize_ty(self.db, target_ty, callee.scope(), assumptions);
+
+            let inferred_provider_ty = match resolved_arg.pass_mode {
+                EffectPassMode::ByTempPlace => {
+                    TyId::app(self.db, self.core.effect_mem_ptr_ctor(), target_ty)
+                }
+                EffectPassMode::ByPlace => {
+                    let provider_for_effect_param_binding =
+                        |this: &Self, binding: LocalBinding<'db>| -> Option<TyId<'db>> {
+                            let LocalBinding::EffectParam { site, idx, .. } = binding else {
+                                return None;
+                            };
+                            let current_func = this.hir_func?;
+                            let EffectParamSite::Func(binding_func) = site else {
+                                return None;
+                            };
+                            if binding_func != current_func {
+                                return None;
+                            }
+                            let caller_provider_arg_idx_by_effect =
+                                caller_provider_arg_idx_by_effect?;
+                            let provider_idx = caller_provider_arg_idx_by_effect
+                                .get(idx)
+                                .copied()
+                                .flatten()?;
+                            if let Some(concrete) = this.generic_args.get(provider_idx).copied() {
+                                return Some(concrete);
+                            }
+                            CallableDef::Func(current_func)
+                                .params(this.db)
+                                .get(provider_idx)
+                                .copied()
+                        };
+
+                    let EffectArg::Place(place) = &resolved_arg.arg else {
+                        continue;
+                    };
+                    let PlaceBase::Binding(binding) = place.base;
+                    match binding {
+                        binding @ LocalBinding::EffectParam { .. } => {
+                            provider_for_effect_param_binding(self, binding).unwrap_or_else(|| {
+                                TyId::app(self.db, self.core.effect_mem_ptr_ctor(), target_ty)
+                            })
+                        }
+                        LocalBinding::Param {
+                            site: ParamSite::EffectField(_),
+                            ..
+                        } => TyId::app(self.db, self.core.effect_stor_ptr_ctor(), target_ty),
+                        _ => TyId::app(self.db, self.core.effect_mem_ptr_ctor(), target_ty),
+                    }
+                }
+                _ => continue,
+            };
+
+            if let Some(slot) = callable.generic_args_mut().get_mut(provider_arg_idx) {
+                *slot = inferred_provider_ty;
+            }
+        }
     }
 
     fn materialize_value_in_temp_place(
@@ -507,7 +618,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         &mut self,
         resolved_arg: &ResolvedEffectArg<'db>,
         effect_writebacks: &mut Vec<(LocalId, Place<'db>)>,
-    ) -> (EffectProviderKind, ValueId) {
+    ) -> ValueId {
         // Handle ByPlace: resolve binding and materialize as needed
         if resolved_arg.pass_mode == EffectPassMode::ByPlace {
             let EffectArg::Place(place) = &resolved_arg.arg else {
@@ -516,14 +627,14 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
             let PlaceBase::Binding(binding) = place.base;
 
             let addr_space = self.address_space_for_binding(&binding);
-            let kind = self.effect_provider_kind_for_address_space(addr_space);
+            let is_non_memory = !matches!(addr_space, AddressSpaceKind::Memory);
 
             // EffectParam: just get the binding value
             if matches!(binding, LocalBinding::EffectParam { .. }) {
                 let value = self
                     .binding_value(binding)
                     .unwrap_or_else(|| self.synthetic_u256(BigUint::from(0u8)));
-                return (kind, value);
+                return value;
             }
 
             let binding_ty = match binding {
@@ -538,15 +649,15 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
 
             let value_repr = self.value_repr_for_ty(binding_ty, addr_space);
 
-            // Storage providers are already addressable as slots even when their logical type is
+            // Storage providers are addressable as handles even when their logical type is
             // word-represented (e.g. transparent newtypes around `u256`).
-            if value_repr.address_space().is_some() || kind == EffectProviderKind::Storage {
+            if value_repr.address_space().is_some() || is_non_memory {
                 let value = self.alloc_value(binding_ty, ValueOrigin::Local(local), value_repr);
-                return (kind, value);
+                return value;
             }
 
             // Memory provider: materialize in temp place
-            if kind == EffectProviderKind::Memory {
+            if matches!(addr_space, AddressSpaceKind::Memory) {
                 let initial =
                     self.alloc_value(binding_ty, ValueOrigin::Local(local), ValueRepr::Word);
                 let (addr_value, addr_place) = self.materialize_value_in_temp_place(
@@ -558,7 +669,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                 if binding.is_mut() {
                     effect_writebacks.push((local, addr_place));
                 }
-                return (kind, addr_value);
+                return addr_value;
             }
 
             return self.default_effect_arg();
@@ -571,10 +682,9 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
             };
 
             let value = self.lower_expr(*expr_id);
-            let kind = EffectProviderKind::Memory;
 
             if self.builder.body.value(value).repr.is_ref() {
-                return (kind, value);
+                return value;
             }
 
             let ty = self.typed_body.expr_ty(self.db, *expr_id);
@@ -584,21 +694,11 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                 AddressSpaceKind::Memory,
                 "eff_tmp",
             );
-            return (kind, addr_value);
+            return addr_value;
         }
 
         // Handle ByValue: lower the value directly
         if resolved_arg.pass_mode == EffectPassMode::ByValue {
-            let kind = match &resolved_arg.arg {
-                EffectArg::Value(expr_id) => self
-                    .effect_provider_kind_for_provider_ty(
-                        self.typed_body.expr_ty(self.db, *expr_id),
-                    )
-                    .unwrap_or(EffectProviderKind::Storage),
-                EffectArg::Binding(binding) => self.effect_provider_kind_for_binding(*binding),
-                _ => EffectProviderKind::Storage,
-            };
-
             let value = match &resolved_arg.arg {
                 EffectArg::Value(expr_id) => self.lower_expr(*expr_id),
                 EffectArg::Binding(binding) => self
@@ -607,18 +707,15 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                 EffectArg::Unknown | EffectArg::Place(_) => self.synthetic_u256(BigUint::from(0u8)),
             };
 
-            return (kind, value);
+            return value;
         }
 
         // Unknown or any other case
         self.default_effect_arg()
     }
 
-    fn default_effect_arg(&mut self) -> (EffectProviderKind, ValueId) {
-        (
-            EffectProviderKind::Storage,
-            self.synthetic_u256(BigUint::from(0u8)),
-        )
+    fn default_effect_arg(&mut self) -> ValueId {
+        self.synthetic_u256(BigUint::from(0u8))
     }
 
     fn lower_expr_into_local(&mut self, stmt: StmtId, expr: ExprId, dest: LocalId) -> ValueId {
@@ -759,7 +856,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         let Ok(res) = hir::analysis::name_resolution::path_resolver::resolve_path(
             self.db,
             key_path,
-            self.func.scope(),
+            self.owner.scope(),
             PredicateListId::empty_list(self.db),
             false,
         ) else {
@@ -786,10 +883,20 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         let Some(binding) = prop.binding else {
             return value_id;
         };
-        if !matches!(binding, LocalBinding::EffectParam { .. }) {
+        let is_effect_binding = matches!(binding, LocalBinding::EffectParam { .. })
+            || matches!(
+                binding,
+                LocalBinding::Param {
+                    site: ParamSite::EffectField(_),
+                    ..
+                }
+            );
+        if !is_effect_binding {
             return value_id;
         }
-        if self.effect_param_key_is_trait(binding) {
+        if matches!(binding, LocalBinding::EffectParam { .. })
+            && self.effect_param_key_is_trait(binding)
+        {
             return value_id;
         }
 
@@ -941,11 +1048,17 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         match expr.data(self.db, self.body) {
             Partial::Present(Expr::Path(_)) => {
                 let binding = self.typed_body.expr_prop(self.db, expr).binding?;
-                if !matches!(binding, LocalBinding::EffectParam { .. }) {
-                    return None;
-                }
-                if self.effect_param_key_is_trait(binding) {
-                    return None;
+                match binding {
+                    LocalBinding::EffectParam { .. } => {
+                        if self.effect_param_key_is_trait(binding) {
+                            return None;
+                        }
+                    }
+                    LocalBinding::Param {
+                        site: ParamSite::EffectField(_),
+                        ..
+                    } => {}
+                    _ => return None,
                 }
 
                 let ty = self.typed_body.expr_ty(self.db, expr);
@@ -1273,7 +1386,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
             Stmt::Return(value) => {
                 self.move_to_block(block);
                 if let Some(expr) = value {
-                    let ret_ty = self.func.return_ty(self.db);
+                    let ret_ty = self.return_ty;
                     let returns_value = !self.is_unit_ty(ret_ty) && !ret_ty.is_never(self.db);
                     if returns_value {
                         let ret_value = Some(self.lower_expr(*expr));

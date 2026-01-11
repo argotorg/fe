@@ -6,11 +6,11 @@ use crate::{
         trait_lower::collect_trait_impls,
         trait_resolution::{GoalSatisfiability, PredicateListId},
     },
-    hir_def::{Func, HirIngot, IdentId, ImplTrait, Trait},
+    hir_def::{Contract, Func, HirIngot, IdentId, ImplTrait, Trait},
 };
 use common::{
     indexmap::{IndexMap, IndexSet},
-    ingot::Ingot,
+    ingot::{Ingot, IngotKind},
 };
 use rustc_hash::FxHashMap;
 use salsa::Update;
@@ -44,21 +44,115 @@ pub(crate) fn impls_for_trait<'db>(
     let trait_ = trait_.extract_identity(&mut table);
 
     let env = ingot_trait_env(db, ingot);
-    let Some(impls) = env.impls.get(&trait_.def(db)) else {
-        return vec![];
-    };
-
-    impls
-        .iter()
+    let mut out: Vec<_> = env
+        .impls
+        .get(&trait_.def(db))
+        .into_iter()
+        .flatten()
         .filter(|impl_| {
             let snapshot = table.snapshot();
             let inst = table.instantiate_with_fresh_vars(**impl_);
-            let is_ok = table.unify(inst.trait_(db), trait_).is_ok();
+            let is_ok = table.unify(inst.trait_inst(db), trait_).is_ok();
             table.rollback_to(snapshot);
             is_ok
         })
         .cloned()
-        .collect()
+        .collect();
+
+    if is_std_evm_contract_trait_def(db, trait_.def(db)) {
+        for impl_ in contract_virtual_impls(db, ingot).iter().copied() {
+            let snapshot = table.snapshot();
+            let inst = table.instantiate_with_fresh_vars(impl_);
+            let is_ok = table.unify(inst.trait_inst(db), trait_).is_ok();
+            table.rollback_to(snapshot);
+            if is_ok {
+                out.push(impl_);
+            }
+        }
+    }
+
+    out
+}
+
+fn is_std_evm_contract_trait_def<'db>(db: &'db dyn HirAnalysisDb, trait_def: Trait<'db>) -> bool {
+    let Some(name) = trait_def.name(db).to_opt() else {
+        return false;
+    };
+    if name.data(db) != "Contract" {
+        return false;
+    }
+    if trait_def.top_mod(db).ingot(db).kind(db) != IngotKind::Std {
+        return false;
+    }
+    true
+}
+
+#[salsa::tracked(return_ref)]
+fn contract_virtual_impls<'db>(
+    db: &'db dyn HirAnalysisDb,
+    ingot: Ingot<'db>,
+) -> Vec<Binder<ImplementorId<'db>>> {
+    let Some(contract_trait) = std_evm_contract_trait_def(db, ingot) else {
+        return Vec::new();
+    };
+
+    let init_args_ident = IdentId::new(db, "InitArgs".to_string());
+
+    let mut out = Vec::new();
+    for top_mod in ingot.all_modules(db) {
+        for &contract in top_mod.all_contracts(db).iter() {
+            let self_ty = TyId::contract(db, contract);
+            let trait_inst = TraitInstId::new(db, contract_trait, vec![self_ty], IndexMap::new());
+
+            let init_args_ty = contract.init_args_ty(db);
+            let mut types = IndexMap::new();
+            types.insert(init_args_ident, init_args_ty);
+
+            let implementor = ImplementorId::new(
+                db,
+                trait_inst,
+                Vec::new(),
+                types,
+                ImplementorOrigin::VirtualContract(contract),
+            );
+            out.push(Binder::bind(implementor));
+        }
+    }
+
+    out
+}
+
+#[salsa::tracked]
+fn std_evm_contract_trait_def<'db>(
+    db: &'db dyn HirAnalysisDb,
+    ingot: Ingot<'db>,
+) -> Option<Trait<'db>> {
+    use crate::analysis::name_resolution::resolve_path;
+    use common::ingot::IngotKind;
+
+    let scope = ingot.root_mod(db).scope();
+    let assumptions = PredicateListId::empty_list(db);
+
+    let std_root = if ingot.kind(db) == IngotKind::Std {
+        IdentId::make_ingot(db)
+    } else {
+        IdentId::new(db, "std".to_string())
+    };
+
+    let path = crate::hir_def::PathId::from_ident(db, std_root)
+        .push_ident(db, IdentId::new(db, "evm".to_string()))
+        .push_ident(db, IdentId::new(db, "Contract".to_string()));
+
+    match resolve_path(db, path, scope, assumptions, false).ok()? {
+        crate::analysis::name_resolution::PathRes::Trait(inst) => Some(inst.def(db)),
+        _ => None,
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Update)]
+pub(crate) enum ImplementorOrigin<'db> {
+    Hir(ImplTrait<'db>),
+    VirtualContract(Contract<'db>),
 }
 
 fn ingot_trait_env_cycle_initial<'db>(
@@ -143,7 +237,7 @@ pub fn resolve_trait_method_instance<'db>(
         for implementor in impls_for_trait(db, ingot, canonical) {
             let mut table = UnificationTable::new(db);
             let implementor = table.instantiate_with_fresh_vars(*implementor);
-            if table.unify(implementor.trait_(db), inst).is_err() {
+            if table.unify(implementor.trait_inst(db), inst).is_err() {
                 continue;
             }
             if let Some(func) = implementor.methods(db).get(&method) {
@@ -185,10 +279,15 @@ pub(crate) fn impls_for_ty_with_constraints<'db>(
         table.rollback_to(snapshot);
     }
 
-    cands
+    let mut raw_impls: Vec<Binder<ImplementorId<'db>>> =
+        cands.into_iter().flatten().copied().collect();
+
+    if ty.as_contract(db).is_some() {
+        raw_impls.extend(contract_virtual_impls(db, ingot).iter().copied());
+    }
+
+    raw_impls
         .into_iter()
-        .flatten()
-        .copied()
         .filter(|impl_| {
             let snapshot = table.snapshot();
 
@@ -250,10 +349,15 @@ pub(crate) fn impls_for_ty<'db>(
         table.rollback_to(snapshot);
     }
 
-    cands
+    let mut raw_impls: Vec<Binder<ImplementorId<'db>>> =
+        cands.into_iter().flatten().copied().collect();
+
+    if ty.as_contract(db).is_some() {
+        raw_impls.extend(contract_virtual_impls(db, ingot).iter().copied());
+    }
+
+    raw_impls
         .into_iter()
-        .flatten()
-        .copied()
         .filter(|impl_| {
             let snapshot = table.snapshot();
 
@@ -286,11 +390,14 @@ pub fn assoc_const_body_for_trait_inst<'db>(
             // `impl<const N: usize> AbiSize for String<N>`.
             let mut table = UnificationTable::new(db);
             let implementor = table.instantiate_with_fresh_vars(*implementor);
-            if table.unify(implementor.trait_(db), inst).is_err() {
+            if table.unify(implementor.trait_inst(db), inst).is_err() {
                 continue;
             }
 
-            let hir_impl = implementor.hir_impl_trait(db);
+            let hir_impl = match implementor.origin(db) {
+                ImplementorOrigin::Hir(impl_trait) => impl_trait,
+                ImplementorOrigin::VirtualContract(_) => continue,
+            };
             let Some(def) = hir_impl
                 .hir_consts(db)
                 .iter()
@@ -380,11 +487,24 @@ pub(crate) struct ImplementorId<'db> {
     #[return_ref]
     pub(crate) types: IndexMap<IdentId<'db>, TyId<'db>>,
 
-    /// The original hir.
-    pub(crate) hir_impl_trait: ImplTrait<'db>,
+    pub(crate) origin: ImplementorOrigin<'db>,
 }
 
 impl<'db> ImplementorId<'db> {
+    pub(crate) fn hir_impl_trait(self, db: &'db dyn HirAnalysisDb) -> ImplTrait<'db> {
+        match self.origin(db) {
+            ImplementorOrigin::Hir(impl_trait) => impl_trait,
+            ImplementorOrigin::VirtualContract(contract) => panic!(
+                "requested HIR impl-trait for virtual implementor (contract={})",
+                contract
+                    .name(db)
+                    .to_opt()
+                    .map(|n| n.data(db).to_string())
+                    .unwrap_or_else(|| "<unknown>".to_string())
+            ),
+        }
+    }
+
     /// Associated type defined in this impl, if any.
     pub(crate) fn assoc_ty(
         self,
@@ -404,10 +524,35 @@ impl<'db> ImplementorId<'db> {
         self.trait_(db).self_ty(db)
     }
 
+    /// Trait instance realized by this impl, including its associated type definitions.
+    pub(crate) fn trait_inst(self, db: &'db dyn HirAnalysisDb) -> TraitInstId<'db> {
+        let trait_inst = self.trait_(db);
+        if self.types(db).is_empty() {
+            return trait_inst;
+        }
+
+        let mut assoc_type_bindings = trait_inst.assoc_type_bindings(db).clone();
+        for (name, ty) in self.types(db) {
+            assoc_type_bindings.insert(*name, *ty);
+        }
+
+        TraitInstId::new(
+            db,
+            trait_inst.def(db),
+            trait_inst.args(db).to_vec(),
+            assoc_type_bindings,
+        )
+    }
+
     /// Returns the constraints that the implementor requires when the
     /// implementation is selected.
     pub(crate) fn constraints(self, db: &'db dyn HirAnalysisDb) -> PredicateListId<'db> {
-        collect_constraints(db, self.hir_impl_trait(db).into()).instantiate(db, self.params(db))
+        match self.origin(db) {
+            ImplementorOrigin::Hir(impl_trait) => {
+                collect_constraints(db, impl_trait.into()).instantiate(db, self.params(db))
+            }
+            ImplementorOrigin::VirtualContract(_) => PredicateListId::empty_list(db),
+        }
     }
 
     /// Method map for this impl, keyed by name.
@@ -423,6 +568,9 @@ impl<'db> ImplementorId<'db> {
         self,
         db: &'db dyn HirAnalysisDb,
     ) -> Vec<TyDiagCollection<'db>> {
+        if !matches!(self.origin(db), ImplementorOrigin::Hir(_)) {
+            return Vec::new();
+        }
         let mut diags = vec![];
         let impl_methods = self.methods(db);
         let hir_trait = self.trait_def(db);

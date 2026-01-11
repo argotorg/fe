@@ -1,40 +1,79 @@
 ---
 source: crates/codegen/tests/yul.rs
+assertion_line: 33
 expression: output
 input_file: tests/fixtures/create_contract.fe
 ---
 object "Factory" {
   code {
-    function __factory_init() {
-      evm_contracthost_create_contract__fn___factory__runtime__95b77824a5ea1d5b(0, 0)
-      leave
+    function __Factory_init() {
+      let v0 := dataoffset("Factory_deployed")
+      let v1 := datasize("Factory_deployed")
+      codecopy(0, v0, v1)
+      return(0, v1)
     }
-    function evm_contracthost_create_contract__fn___factory__runtime__95b77824a5ea1d5b(self, runtime) {
-      let v0 := datasize("Factory_deployed")
-      let v1 := dataoffset("Factory_deployed")
-      codecopy(0, v1, v0)
-      return(0, v0)
-    }
-    __factory_init()
+    __Factory_init()
   }
 
   object "Factory_deployed" {
     code {
-      function __factory_runtime() {
+      function __Child_init_code_len() -> ret {
+        let v0 := datasize("Child")
+        ret := v0
+        leave
+      }
+      function __Child_init_code_offset() -> ret {
+        let v0 := dataoffset("Child")
+        ret := v0
+        leave
+      }
+      function __Factory_recv_0_0(args, _create) -> ret {
+        let v0 := mload(args)
+        let v1 := v0
+        let v2 := mload(add(args, 32))
+        let v3 := v2
+        let v4 := mload(0x40)
+        if iszero(v4) {
+          v4 := 0x80
+        }
+        mstore(0x40, add(v4, 64))
+        mstore(v4, v1)
+        mstore(add(v4, 32), v3)
+        let v5 := create__create_Child__e2746b83ea72887d(_create, 0, v4)
+        ret := v5
+        leave
+      }
+      function __Factory_recv_0_1(args, _create) -> ret {
+        let v0 := mload(args)
+        let v1 := v0
+        let v2 := mload(add(args, 32))
+        let v3 := v2
+        let v4 := mload(add(args, 64))
+        let v5 := v4
+        let v6 := mload(0x40)
+        if iszero(v6) {
+          v6 := 0x80
+        }
+        mstore(0x40, add(v6, 64))
+        mstore(v6, v1)
+        mstore(add(v6, 32), v3)
+        let v7 := create2__create_Child__e2746b83ea72887d(_create, 0, v6, v5)
+        ret := v7
+        leave
+      }
+      function __Factory_runtime() {
         let v0 := runtime_selector__Evm_Sol__2533f5c49b57a682(0)
         let v1 := runtime_decoder__Evm_Sol__2533f5c49b57a682(0)
         switch v0
           case 1 {
             let v2 := _t0__t1__decode_decode__Sol_u256_u256_SolDecoder_CallData___ebb124e1ac998b61(v1)
-            let v3 := recv_FactoryMsg_Deploy_0_0(v2, 0)
-            let v4 := v3
-            return_value__Evm_Sol_Address__a87e34cebc0d4cc4(0, v4)
+            let v3 := __Factory_recv_0_0(v2, 0)
+            return_value__Evm_Sol_Address__a87e34cebc0d4cc4(0, v3)
           }
           case 2 {
-            let v5 := _t0__t1__t2__decode_decode__Sol_u256_u256_u256_SolDecoder_CallData___56886a7fb37b995f(v1)
-            let v6 := recv_FactoryMsg_Deploy2_0_1(v5, 0)
-            let v7 := v6
-            return_value__Evm_Sol_Address__a87e34cebc0d4cc4(0, v7)
+            let v4 := _t0__t1__t2__decode_decode__Sol_u256_u256_u256_SolDecoder_CallData___56886a7fb37b995f(v1)
+            let v5 := __Factory_recv_0_1(v4, 0)
+            return_value__Evm_Sol_Address__a87e34cebc0d4cc4(0, v5)
           }
           default {
             evm_contracthost_abort(0)
@@ -99,19 +138,9 @@ object "Factory" {
         ret := v0
         leave
       }
-      function child_contract_init_code_len() -> ret {
-        let v0 := datasize("Child")
-        ret := v0
-        leave
-      }
-      function child_contract_init_code_offset() -> ret {
-        let v0 := dataoffset("Child")
-        ret := v0
-        leave
-      }
-      function create2__create__Create_Child__e36b712fd88ef9cd(self, value, args, salt) -> ret {
-        let v0 := child_contract_init_code_len()
-        let v1 := child_contract_init_code_offset()
+      function create2__create_Child__e2746b83ea72887d(self, value, args, salt) -> ret {
+        let v0 := __Child_init_code_len()
+        let v1 := __Child_init_code_offset()
         let v2 := 64
         let v3 := add(v0, v2)
         let v4 := alloc(v3)
@@ -127,7 +156,7 @@ object "Factory" {
         mstore(add(v6, 64), add(v5, v2))
         let v7 := v6
         _t0__t1__encode_encode__Sol_u256_u256_SolEncoder__549b20784d368532(args, v7)
-        let v8 := create2_raw__create__Create__f2d8e914499ae45(self, value, v4, v3, salt)
+        let v8 := create2_raw__create__5f761ab4aca1cedd(self, value, v4, v3, salt)
         let v9 := eq(v8, 0)
         if v9 {
           let v10 := returndatasize()
@@ -138,14 +167,14 @@ object "Factory" {
         ret := v8
         leave
       }
-      function create2_raw__create__Create__f2d8e914499ae45(self, value, offset, len, salt) -> ret {
+      function create2_raw__create__5f761ab4aca1cedd(self, value, offset, len, salt) -> ret {
         let v0 := create2(value, offset, len, salt)
         ret := v0
         leave
       }
-      function create__create__Create_Child__e36b712fd88ef9cd(self, value, args) -> ret {
-        let v0 := child_contract_init_code_len()
-        let v1 := child_contract_init_code_offset()
+      function create__create_Child__e2746b83ea72887d(self, value, args) -> ret {
+        let v0 := __Child_init_code_len()
+        let v1 := __Child_init_code_offset()
         let v2 := 64
         let v3 := add(v0, v2)
         let v4 := alloc(v3)
@@ -161,7 +190,7 @@ object "Factory" {
         mstore(add(v6, 64), add(v5, v2))
         let v7 := v6
         _t0__t1__encode_encode__Sol_u256_u256_SolEncoder__549b20784d368532(args, v7)
-        let v8 := create_raw__create__Create__f2d8e914499ae45(self, value, v4, v3)
+        let v8 := create_raw__create__5f761ab4aca1cedd(self, value, v4, v3)
         let v9 := eq(v8, 0)
         if v9 {
           let v10 := returndatasize()
@@ -172,7 +201,7 @@ object "Factory" {
         ret := v8
         leave
       }
-      function create_raw__create__Create__f2d8e914499ae45(self, value, offset, len) -> ret {
+      function create_raw__create__5f761ab4aca1cedd(self, value, offset, len) -> ret {
         let v0 := create(value, offset, len)
         ret := v0
         leave
@@ -212,35 +241,6 @@ object "Factory" {
       function evm_contracthost_return_bytes(self, ptr, len) {
         return(ptr, len)
       }
-      function recv_FactoryMsg_Deploy2_0_1(args, _create) -> ret {
-        let v0 := mload(args)
-        let v1 := mload(add(args, 32))
-        let v2 := mload(add(args, 64))
-        let v3 := mload(0x40)
-        if iszero(v3) {
-          v3 := 0x80
-        }
-        mstore(0x40, add(v3, 64))
-        mstore(v3, v0)
-        mstore(add(v3, 32), v1)
-        let v4 := create2__create__Create_Child__e36b712fd88ef9cd(_create, 0, v3, v2)
-        ret := v4
-        leave
-      }
-      function recv_FactoryMsg_Deploy_0_0(args, _create) -> ret {
-        let v0 := mload(args)
-        let v1 := mload(add(args, 32))
-        let v2 := mload(0x40)
-        if iszero(v2) {
-          v2 := 0x80
-        }
-        mstore(0x40, add(v2, 64))
-        mstore(v2, v0)
-        mstore(add(v2, 32), v1)
-        let v3 := create__create__Create_Child__e36b712fd88ef9cd(_create, 0, v2)
-        ret := v3
-        leave
-      }
       function return_value__Evm_Sol_Address__a87e34cebc0d4cc4(self, value) {
         let v0 := sol_abi_encoder_new()
         let v1 := solencoder_abiencoder_reserve_head(v0, 32)
@@ -249,20 +249,20 @@ object "Factory" {
         let v2 := solencoder_abiencoder_finish(v0)
         let v3 := mload(v2)
         let v4 := mload(add(v2, 32))
-        evm_contracthost_return_bytes(0, v3, v4)
+        evm_contracthost_return_bytes(self, v3, v4)
       }
       function runtime_decoder__Evm_Sol__2533f5c49b57a682(self) -> ret {
-        let v0 := evm_contracthost_input(0)
+        let v0 := evm_contracthost_input(self)
         let v1 := sol_abi_decoder_with_base__CallData__b9ab8dc8a4b2f9e(v0, 4)
         ret := v1
         leave
       }
       function runtime_selector__Evm_Sol__2533f5c49b57a682(self) -> ret {
-        let v0 := evm_contracthost_input(0)
+        let v0 := evm_contracthost_input(self)
         let v1 := calldata_byteinput_len(v0)
         let v2 := lt(v1, 4)
         if v2 {
-          evm_contracthost_abort(0)
+          evm_contracthost_abort(self)
         }
         let v3 := calldata_byteinput_word_at(v0, 0)
         let v4 := sol_abi_selector_from_prefix(v3)
@@ -375,20 +375,41 @@ object "Factory" {
         solencoder_abiencoder_write_word(e, self)
         leave
       }
-      __factory_runtime()
+      __Factory_runtime()
       return(0, 0)
     }
     object "Child" {
       code {
-        function __child_init() {
+        function __Child_init() {
           let v0 := init_field__Evm_Pair__9b3d1e5de783f256(0, 0)
-          let v1 := evm_contracthost_init_input__fn___child__runtime__e966a856ecb90469(0, 0)
-          let v2 := sol_abi_decoder_new__MemoryBytes__b48f82585f3ed728(v1)
-          let v3 := u256_decode_decode__Sol_SolDecoder_MemoryBytes___c66d50dfccf37f39(v2)
-          let v4 := u256_decode_decode__Sol_SolDecoder_MemoryBytes___c66d50dfccf37f39(v2)
-          let v5 := v0
-          init_contract(v3, v4, v5)
-          evm_contracthost_create_contract__fn___child__runtime__e966a856ecb90469(0, 0)
+          let v1 := dataoffset("Child_deployed")
+          let v2 := datasize("Child_deployed")
+          let v3 := codesize()
+          let v4 := add(v1, v2)
+          let v5 := lt(v3, v4)
+          if v5 {
+            evm_contracthost_abort(0)
+          }
+          let v6 := sub(v3, v4)
+          let v7 := alloc(v6)
+          codecopy(v7, v4, v6)
+          let v8 := mload(0x40)
+          if iszero(v8) {
+            v8 := 0x80
+          }
+          mstore(0x40, add(v8, 64))
+          mstore(v8, v7)
+          mstore(add(v8, 32), v6)
+          let v9 := sol_abi_decoder_new__MemoryBytes__b48f82585f3ed728(v8)
+          let v10 := u256_decode_decode__Sol_SolDecoder_MemoryBytes___c66d50dfccf37f39(v9)
+          let v11 := u256_decode_decode__Sol_SolDecoder_MemoryBytes___c66d50dfccf37f39(v9)
+          __Child_init_contract(v10, v11, v0)
+          codecopy(0, v1, v2)
+          return(0, v2)
+        }
+        function __Child_init_contract(x, y, state) {
+          sstore(state, x)
+          sstore(add(state, 1), y)
           leave
         }
         function alloc(size) -> ret {
@@ -418,46 +439,13 @@ object "Factory" {
         function evm_contracthost_abort(self) {
           revert(0, 0)
         }
-        function evm_contracthost_create_contract__fn___child__runtime__e966a856ecb90469(self, runtime) {
-          let v0 := datasize("Child_deployed")
-          let v1 := dataoffset("Child_deployed")
-          codecopy(0, v1, v0)
-          return(0, v0)
-        }
         function evm_contracthost_field__Pair__f889f9d568bc82f1(self, slot) -> ret {
           let v0 := stor_ptr__Evm_Pair__9b3d1e5de783f256(0, slot)
           ret := v0
           leave
         }
-        function evm_contracthost_init_input__fn___child__runtime__e966a856ecb90469(self, runtime) -> ret {
-          let v0 := dataoffset("Child_deployed")
-          let v1 := datasize("Child_deployed")
-          let v2 := add(v0, v1)
-          let v3 := codesize()
-          let v4 := lt(v3, v2)
-          if v4 {
-            evm_contracthost_abort(0)
-          }
-          let v5 := sub(v3, v2)
-          let v6 := alloc(v5)
-          codecopy(v6, v2, v5)
-          let v7 := mload(0x40)
-          if iszero(v7) {
-            v7 := 0x80
-          }
-          mstore(0x40, add(v7, 64))
-          mstore(v7, v6)
-          mstore(add(v7, 32), v5)
-          ret := v7
-          leave
-        }
-        function init_contract(x, y, state) {
-          sstore(state, x)
-          sstore(add(state, 1), y)
-          leave
-        }
         function init_field__Evm_Pair__9b3d1e5de783f256(self, slot) -> ret {
-          let v0 := evm_contracthost_field__Pair__f889f9d568bc82f1(0, slot)
+          let v0 := evm_contracthost_field__Pair__f889f9d568bc82f1(self, slot)
           ret := v0
           leave
         }
@@ -509,7 +497,12 @@ object "Factory" {
           leave
         }
         function stor_ptr__Evm_Pair__9b3d1e5de783f256(self, slot) -> ret {
-          ret := slot
+          let v0 := storptr_t__effectref_from_raw__Pair__f889f9d568bc82f1(slot)
+          ret := v0
+          leave
+        }
+        function storptr_t__effectref_from_raw__Pair__f889f9d568bc82f1(raw) -> ret {
+          ret := raw
           leave
         }
         function u256_decode_decode__Sol_SolDecoder_MemoryBytes___c66d50dfccf37f39(d) -> ret {
@@ -517,15 +510,18 @@ object "Factory" {
           ret := v0
           leave
         }
-        __child_init()
+        __Child_init()
       }
 
       object "Child_deployed" {
         code {
-          function __child_runtime() {
+          function __Child_runtime() {
             let v0 := evm_contracthost_field__Pair__f889f9d568bc82f1(0, 0)
             let v1 := runtime_selector__Evm_Sol__2533f5c49b57a682(0)
             let v2 := runtime_decoder__Evm_Sol__2533f5c49b57a682(0)
+            switch v1
+              default {
+              }
             evm_contracthost_abort(0)
           }
           function calldata_byteinput_len(self) -> ret {
@@ -576,17 +572,17 @@ object "Factory" {
             leave
           }
           function runtime_decoder__Evm_Sol__2533f5c49b57a682(self) -> ret {
-            let v0 := evm_contracthost_input(0)
+            let v0 := evm_contracthost_input(self)
             let v1 := sol_abi_decoder_with_base__CallData__b9ab8dc8a4b2f9e(v0, 4)
             ret := v1
             leave
           }
           function runtime_selector__Evm_Sol__2533f5c49b57a682(self) -> ret {
-            let v0 := evm_contracthost_input(0)
+            let v0 := evm_contracthost_input(self)
             let v1 := calldata_byteinput_len(v0)
             let v2 := lt(v1, 4)
             if v2 {
-              evm_contracthost_abort(0)
+              evm_contracthost_abort(self)
             }
             let v3 := calldata_byteinput_word_at(v0, 0)
             let v4 := sol_abi_selector_from_prefix(v3)
@@ -620,10 +616,15 @@ object "Factory" {
             leave
           }
           function stor_ptr__Evm_Pair__9b3d1e5de783f256(self, slot) -> ret {
-            ret := slot
+            let v0 := storptr_t__effectref_from_raw__Pair__f889f9d568bc82f1(slot)
+            ret := v0
             leave
           }
-          __child_runtime()
+          function storptr_t__effectref_from_raw__Pair__f889f9d568bc82f1(raw) -> ret {
+            ret := raw
+            leave
+          }
+          __Child_runtime()
           return(0, 0)
         }
       }
