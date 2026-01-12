@@ -1396,8 +1396,8 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                     }
                 }
             }
-            Stmt::For(_, _, _) => {
-                panic!("for loops are not supported in MIR lowering yet");
+            Stmt::For(pat, iter_expr, body) => {
+                self.lower_for(stmt_id, *pat, *iter_expr, *body);
             }
             Stmt::While(cond, body_expr) => self.lower_while(*cond, *body_expr),
             Stmt::Continue => {
@@ -1476,6 +1476,379 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         self.move_to_block(cond_header);
         self.branch(cond_val, body_block, exit_block);
 
+        self.builder.body.loop_headers.insert(
+            cond_entry,
+            LoopInfo {
+                body: body_block,
+                exit: exit_block,
+                backedge,
+            },
+        );
+
+        self.move_to_block(exit_block);
+    }
+
+    /// Lowers a `for` loop by desugaring into a while loop.
+    ///
+    /// For DynRange (`for i in start..end`):
+    ///   - The loop variable `i` is initialized to `start`
+    ///   - Loop continues while `i < end`
+    ///   - Each iteration increments `i` by 1
+    ///
+    /// For arrays (`for x in arr`):
+    ///   - A hidden index variable is created and initialized to 0
+    ///   - Loop continues while `idx < array_len`
+    ///   - Each iteration: `x = arr[idx]`, then body, then `idx += 1`
+    fn lower_for(&mut self, stmt: StmtId, pat: PatId, iter_expr: ExprId, body_expr: ExprId) {
+        let Some(block) = self.current_block() else {
+            return;
+        };
+
+        // Get the type of the iterable
+        let iter_ty = self.typed_body.expr_ty(self.db, iter_expr);
+
+        // Check if it's an array or a DynRange
+        if iter_ty.is_array(self.db) {
+            self.lower_for_array(stmt, pat, iter_expr, body_expr, block);
+        } else {
+            // Assume it's a DynRange (or similar range type with start/end fields)
+            self.lower_for_range(stmt, pat, iter_expr, body_expr, block);
+        }
+    }
+
+    /// Lower a for-loop over a DynRange.
+    ///
+    /// Desugars `for i in start..end` into:
+    /// ```
+    /// let mut i = range.start
+    /// while i < range.end {
+    ///     body
+    ///     i = i + 1
+    /// }
+    /// ```
+    fn lower_for_range(
+        &mut self,
+        stmt: StmtId,
+        pat: PatId,
+        iter_expr: ExprId,
+        body_expr: ExprId,
+        block: BasicBlockId,
+    ) {
+        let usize_ty = TyId::new(self.db, TyData::TyBase(TyBase::Prim(PrimTy::Usize)));
+
+        // Lower the range expression to get a DynRange value
+        self.move_to_block(block);
+        let range_value = self.lower_expr(iter_expr);
+        let Some(after_range_block) = self.current_block() else {
+            return;
+        };
+
+        // Get the range type and extract start/end fields
+        let range_ty = self.typed_body.expr_ty(self.db, iter_expr);
+        let start_ident = IdentId::new(self.db, "start".to_string());
+        let end_ident = IdentId::new(self.db, "end".to_string());
+
+        // Extract the start value from the range
+        let start_value = if let Some(info) =
+            self.field_access_info(range_ty, FieldIndex::Ident(start_ident))
+        {
+            let place = Place::new(
+                range_value,
+                MirProjectionPath::from_projection(Projection::Field(info.field_idx)),
+            );
+            let start_val = self.builder.body.alloc_value(ValueData {
+                ty: usize_ty,
+                origin: ValueOrigin::PlaceRef(place.clone()),
+                repr: ValueRepr::Word,
+            });
+            // Emit a load instruction for the start value
+            self.assign(None, None, Rvalue::Load { place });
+            start_val
+        } else {
+            // Fallback: just use 0
+            self.synthetic_u256(BigUint::from(0u64))
+        };
+
+        // Extract the end value from the range
+        let end_value = if let Some(info) =
+            self.field_access_info(range_ty, FieldIndex::Ident(end_ident))
+        {
+            let place = Place::new(
+                range_value,
+                MirProjectionPath::from_projection(Projection::Field(info.field_idx)),
+            );
+            let end_val = self.builder.body.alloc_value(ValueData {
+                ty: usize_ty,
+                origin: ValueOrigin::PlaceRef(place.clone()),
+                repr: ValueRepr::Word,
+            });
+            self.assign(None, None, Rvalue::Load { place });
+            end_val
+        } else {
+            // Fallback
+            self.synthetic_u256(BigUint::from(0u64))
+        };
+
+        // Get the loop variable binding from the pattern
+        let Partial::Present(pat_data) = pat.data(self.db, self.body) else {
+            return;
+        };
+        let binding = self
+            .typed_body
+            .pat_binding(pat)
+            .unwrap_or(LocalBinding::Local {
+                pat,
+                is_mut: matches!(pat_data, Pat::Path(_, true)),
+            });
+        let Some(loop_var_local) = self.local_for_binding(binding) else {
+            return;
+        };
+
+        // Initialize the loop variable with start value
+        self.move_to_block(after_range_block);
+        self.assign(Some(stmt), Some(loop_var_local), Rvalue::Value(start_value));
+
+        // Allocate blocks for the loop structure
+        let cond_entry = self.alloc_block();
+        let body_block = self.alloc_block();
+        let exit_block = self.alloc_block();
+
+        // Jump to condition
+        self.goto(cond_entry);
+
+        // Condition block: loop_var < end
+        self.move_to_block(cond_entry);
+        let loop_var_value = self.builder.body.alloc_value(ValueData {
+            ty: usize_ty,
+            origin: ValueOrigin::Local(loop_var_local),
+            repr: ValueRepr::Word,
+        });
+        let cond_value = self.builder.body.alloc_value(ValueData {
+            ty: TyId::new(self.db, TyData::TyBase(TyBase::Prim(PrimTy::Bool))),
+            origin: ValueOrigin::Binary {
+                op: BinOp::Comp(hir::hir_def::expr::CompBinOp::Lt),
+                lhs: loop_var_value,
+                rhs: end_value,
+            },
+            repr: ValueRepr::Word,
+        });
+        let cond_header = cond_entry;
+
+        // Set up loop scope
+        self.loop_stack.push(LoopScope {
+            continue_target: cond_entry,
+            break_target: exit_block,
+        });
+
+        // Body block
+        self.move_to_block(body_block);
+        let _ = self.lower_expr(body_expr);
+        let body_end = self.current_block();
+
+        self.loop_stack.pop();
+
+        // Backedge: increment loop var and jump back to condition
+        let mut backedge = None;
+        if let Some(body_end_block) = body_end {
+            self.move_to_block(body_end_block);
+
+            // loop_var = loop_var + 1
+            let one = self.synthetic_u256(BigUint::from(1u64));
+            let current_val = self.builder.body.alloc_value(ValueData {
+                ty: usize_ty,
+                origin: ValueOrigin::Local(loop_var_local),
+                repr: ValueRepr::Word,
+            });
+            let incremented = self.builder.body.alloc_value(ValueData {
+                ty: usize_ty,
+                origin: ValueOrigin::Binary {
+                    op: BinOp::Arith(ArithBinOp::Add),
+                    lhs: current_val,
+                    rhs: one,
+                },
+                repr: ValueRepr::Word,
+            });
+            self.assign(None, Some(loop_var_local), Rvalue::Value(incremented));
+
+            self.goto(cond_entry);
+            backedge = Some(body_end_block);
+        }
+
+        // Wire up the branch
+        self.move_to_block(cond_header);
+        self.branch(cond_value, body_block, exit_block);
+
+        // Register loop info
+        self.builder.body.loop_headers.insert(
+            cond_entry,
+            LoopInfo {
+                body: body_block,
+                exit: exit_block,
+                backedge,
+            },
+        );
+
+        self.move_to_block(exit_block);
+    }
+
+    /// Lower a for-loop over an array.
+    ///
+    /// Desugars `for x in arr` into:
+    /// ```
+    /// let mut __idx = 0
+    /// while __idx < arr.len {
+    ///     let x = arr[__idx]
+    ///     body
+    ///     __idx = __idx + 1
+    /// }
+    /// ```
+    fn lower_for_array(
+        &mut self,
+        stmt: StmtId,
+        pat: PatId,
+        iter_expr: ExprId,
+        body_expr: ExprId,
+        block: BasicBlockId,
+    ) {
+        let usize_ty = TyId::new(self.db, TyData::TyBase(TyBase::Prim(PrimTy::Usize)));
+
+        // Lower the array expression
+        self.move_to_block(block);
+        let array_value = self.lower_expr(iter_expr);
+        let Some(after_array_block) = self.current_block() else {
+            return;
+        };
+
+        // Get array type info
+        let array_ty = self.typed_body.expr_ty(self.db, iter_expr);
+        let args = array_ty.generic_args(self.db);
+        let elem_ty = args.first().copied().unwrap_or(usize_ty);
+
+        // Get array length from type
+        let array_len = layout::array_len(self.db, array_ty).unwrap_or(0);
+        let len_value = self.synthetic_u256(BigUint::from(array_len));
+
+        // Create hidden index local
+        let idx_local = self.alloc_temp_local(usize_ty, true, "for_idx");
+
+        // Get the element binding from the pattern
+        let Partial::Present(pat_data) = pat.data(self.db, self.body) else {
+            return;
+        };
+        let binding = self
+            .typed_body
+            .pat_binding(pat)
+            .unwrap_or(LocalBinding::Local {
+                pat,
+                is_mut: matches!(pat_data, Pat::Path(_, true)),
+            });
+        let elem_local = self.local_for_binding(binding);
+
+        // Initialize index to 0
+        self.move_to_block(after_array_block);
+        let zero = self.synthetic_u256(BigUint::from(0u64));
+        self.assign(Some(stmt), Some(idx_local), Rvalue::Value(zero));
+
+        // Allocate blocks
+        let cond_entry = self.alloc_block();
+        let body_block = self.alloc_block();
+        let exit_block = self.alloc_block();
+
+        // Jump to condition
+        self.goto(cond_entry);
+
+        // Condition: idx < len
+        self.move_to_block(cond_entry);
+        let idx_value = self.builder.body.alloc_value(ValueData {
+            ty: usize_ty,
+            origin: ValueOrigin::Local(idx_local),
+            repr: ValueRepr::Word,
+        });
+        let cond_value = self.builder.body.alloc_value(ValueData {
+            ty: TyId::new(self.db, TyData::TyBase(TyBase::Prim(PrimTy::Bool))),
+            origin: ValueOrigin::Binary {
+                op: BinOp::Comp(hir::hir_def::expr::CompBinOp::Lt),
+                lhs: idx_value,
+                rhs: len_value,
+            },
+            repr: ValueRepr::Word,
+        });
+        let cond_header = cond_entry;
+
+        // Set up loop scope
+        self.loop_stack.push(LoopScope {
+            continue_target: cond_entry,
+            break_target: exit_block,
+        });
+
+        // Body block: first bind element, then execute body
+        self.move_to_block(body_block);
+
+        // Bind element: elem = arr[idx]
+        if let Some(elem_local) = elem_local {
+            let idx_for_access = self.builder.body.alloc_value(ValueData {
+                ty: usize_ty,
+                origin: ValueOrigin::Local(idx_local),
+                repr: ValueRepr::Word,
+            });
+
+            let place = Place::new(
+                array_value,
+                MirProjectionPath::from_projection(Projection::Index(IndexSource::Dynamic(
+                    idx_for_access,
+                ))),
+            );
+
+            if self.is_by_ref_ty(elem_ty) {
+                let addr_space = self.value_address_space(array_value);
+                let elem_value = self.builder.body.alloc_value(ValueData {
+                    ty: elem_ty,
+                    origin: ValueOrigin::PlaceRef(place),
+                    repr: ValueRepr::Ref(addr_space),
+                });
+                self.assign(None, Some(elem_local), Rvalue::Value(elem_value));
+            } else {
+                self.assign(None, Some(elem_local), Rvalue::Load { place });
+            }
+        }
+
+        // Execute the body
+        let _ = self.lower_expr(body_expr);
+        let body_end = self.current_block();
+
+        self.loop_stack.pop();
+
+        // Backedge: increment index
+        let mut backedge = None;
+        if let Some(body_end_block) = body_end {
+            self.move_to_block(body_end_block);
+
+            let one = self.synthetic_u256(BigUint::from(1u64));
+            let current_idx = self.builder.body.alloc_value(ValueData {
+                ty: usize_ty,
+                origin: ValueOrigin::Local(idx_local),
+                repr: ValueRepr::Word,
+            });
+            let incremented = self.builder.body.alloc_value(ValueData {
+                ty: usize_ty,
+                origin: ValueOrigin::Binary {
+                    op: BinOp::Arith(ArithBinOp::Add),
+                    lhs: current_idx,
+                    rhs: one,
+                },
+                repr: ValueRepr::Word,
+            });
+            self.assign(None, Some(idx_local), Rvalue::Value(incremented));
+
+            self.goto(cond_entry);
+            backedge = Some(body_end_block);
+        }
+
+        // Wire up branch
+        self.move_to_block(cond_header);
+        self.branch(cond_value, body_block, exit_block);
+
+        // Register loop info
         self.builder.body.loop_headers.insert(
             cond_entry,
             LoopInfo {
