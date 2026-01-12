@@ -120,6 +120,10 @@ impl<'db> FunctionEmitter<'db> {
                         ArithBinOp::BitAnd => Ok(format!("and({left}, {right})")),
                         ArithBinOp::BitOr => Ok(format!("or({left}, {right})")),
                         ArithBinOp::BitXor => Ok(format!("xor({left}, {right})")),
+                        // Range should be lowered to Range type construction before codegen
+                        ArithBinOp::Range => {
+                            todo!("Range operator should be handled during type checking/MIR lowering")
+                        }
                     },
                     BinOp::Comp(op) => {
                         let expr = match op {

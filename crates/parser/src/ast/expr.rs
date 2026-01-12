@@ -584,6 +584,8 @@ pub enum ArithBinOp {
     BitOr(SyntaxToken),
     /// `^`
     BitXor(SyntaxToken),
+    /// `..`
+    Range(SyntaxToken),
 }
 impl ArithBinOp {
     pub fn syntax(&self) -> crate::NodeOrToken {
@@ -599,6 +601,7 @@ impl ArithBinOp {
             ArithBinOp::BitAnd(token) => token.clone().into(),
             ArithBinOp::BitOr(token) => token.clone().into(),
             ArithBinOp::BitXor(token) => token.clone().into(),
+            ArithBinOp::Range(token) => token.clone().into(),
         }
     }
 
@@ -632,6 +635,7 @@ impl ArithBinOp {
             SK::Amp => Some(Self::BitAnd(token)),
             SK::Pipe => Some(Self::BitOr(token)),
             SK::Hat => Some(Self::BitXor(token)),
+            SK::Dot2 => Some(Self::Range(token)),
             _ => None,
         }
     }
@@ -1062,5 +1066,28 @@ mod tests {
             aug_assign_expr.op().unwrap(),
             crate::ast::ArithBinOp::LShift(_)
         ));
+    }
+
+    #[test]
+    #[wasm_bindgen_test]
+    fn range_expr() {
+        let range_expr: BinExpr = parse_expr("0..10");
+        assert!(matches!(range_expr.lhs().unwrap().kind(), ExprKind::Lit(_)));
+        assert!(matches!(
+            range_expr.op().unwrap(),
+            BinOp::Arith(ArithBinOp::Range(_))
+        ));
+        assert!(matches!(range_expr.rhs().unwrap().kind(), ExprKind::Lit(_)));
+
+        // Range with expressions
+        let range_expr: BinExpr = parse_expr("start..end");
+        assert!(matches!(range_expr.lhs().unwrap().kind(), ExprKind::Path(_)));
+        assert!(matches!(range_expr.rhs().unwrap().kind(), ExprKind::Path(_)));
+
+        // Range with arithmetic (lower precedence than +)
+        let range_expr: BinExpr = parse_expr("0..n + 1");
+        assert!(matches!(range_expr.lhs().unwrap().kind(), ExprKind::Lit(_)));
+        // rhs should be (n + 1) since .. has lower precedence
+        assert!(matches!(range_expr.rhs().unwrap().kind(), ExprKind::Bin(_)));
     }
 }

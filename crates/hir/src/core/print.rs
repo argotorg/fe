@@ -859,6 +859,7 @@ impl ArithBinOp {
             ArithBinOp::BitAnd => "&",
             ArithBinOp::BitOr => "|",
             ArithBinOp::BitXor => "^",
+            ArithBinOp::Range => "..",
         }
     }
 }

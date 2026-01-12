@@ -17,6 +17,8 @@ use super::types::{Doc, ToDoc, block_list};
 fn bin_op_precedence(op: &BinOp) -> u8 {
     use parser::ast::ArithBinOp;
     match op {
+        // Range has lowest precedence
+        BinOp::Arith(ArithBinOp::Range(_)) => 0,
         BinOp::Logical(LogicalBinOp::Or(_)) => 1,
         BinOp::Logical(LogicalBinOp::And(_)) => 2,
         BinOp::Comp(_) => 3,

@@ -2140,6 +2140,9 @@ impl TraitOps for BinOp {
                     BitAnd => ["BitAnd", "bitand", "&"],
                     BitOr => ["BitOr", "bitor", "|"],
                     BitXor => ["BitXor", "bitxor", "^"],
+                    // Range is handled specially - it constructs a Range type
+                    // rather than calling a trait method
+                    Range => ["Range", "range", ".."],
                 }
             }
 
@@ -2184,6 +2187,8 @@ impl TraitOps for AugAssignOp {
             BitAnd => ["BitAndAssign", "bitand_assign", "&="],
             BitOr => ["BitOrAssign", "bitor_assign", "|="],
             BitXor => ["BitXorAssign", "bitxor_assign", "^="],
+            // Range doesn't have an augmented assignment form
+            Range => unreachable!("Range operator cannot be used in augmented assignment"),
         }
     }
 }
