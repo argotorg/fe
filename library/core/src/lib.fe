@@ -9,6 +9,7 @@ pub use functional::{Fn, Functor, Applicative, Monad}
 pub use effect_ref::{EffectRef, EffectRefMut, MemPtr, StorPtr}
 pub use contracts::{self, *}
 pub use range::{Range, DynRange}
+pub use seq::{Const, Dyn, Seq}
 
 extern {
     pub fn panic() -> !
