@@ -1,0 +1,22 @@
+/// A range with compile-time known length: `start..start+N`
+pub struct Range<const N: usize> {
+    pub start: usize,
+}
+
+/// A range with runtime-determined length: `start..end`
+pub struct DynRange {
+    pub start: usize,
+    pub end: usize,
+}
+
+impl<const N: usize> Range<N> {
+    pub fn new(start: usize) -> Self {
+        Range { start }
+    }
+}
+
+impl DynRange {
+    pub fn new(start: usize, end: usize) -> Self {
+        DynRange { start, end }
+    }
+}

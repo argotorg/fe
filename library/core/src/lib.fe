@@ -8,6 +8,7 @@ pub use intrinsic::{addr_of, contract_field_slot, size_of}
 pub use functional::{Fn, Functor, Applicative, Monad}
 pub use effect_ref::{EffectRef, EffectRefMut, MemPtr, StorPtr}
 pub use contracts::{self, *}
+pub use range::{Range, DynRange}
 
 extern {
     pub fn panic() -> !
