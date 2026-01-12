@@ -35,3 +35,17 @@ pub trait Seq<T> {
     /// Returns the element at the given index.
     fn get(self, i: usize) -> T
 }
+
+/// Seq implementation for arrays.
+/// Enables loop unrolling when iterating over fixed-size arrays.
+impl<T, const N: usize> Seq<T> for [T; N] {
+    type Len = Const<N>
+
+    fn len(self) -> Const<N> {
+        Const {}
+    }
+
+    fn get(self, i: usize) -> T {
+        self[i]
+    }
+}
