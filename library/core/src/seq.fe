@@ -7,6 +7,13 @@ pub trait Seq<T> {
     fn get(self, i: usize) -> T
 }
 
-// NOTE: Array Seq implementation (`impl<T, const N: usize> Seq<T> for [T; N]`)
-// is intentionally omitted. Const generics in array type positions are not yet
-// fully supported. Arrays are handled as a special case in the type checker.
+/// Array implementation of Seq.
+impl<T, const N: usize> Seq<T> for [T; N] {
+    fn len(self) -> usize {
+        N
+    }
+
+    fn get(self, i: usize) -> T {
+        self[i]
+    }
+}
