@@ -1,36 +1,7 @@
-/// Marker type for compile-time known length.
-/// The length N is encoded in the type itself.
-pub struct Const<const N: usize> {}
-
-/// Marker type for runtime-determined length.
-/// The actual length is stored as a value.
-pub struct Dyn {
-    pub value: usize,
-}
-
-impl<const N: usize> Const<N> {
-    pub fn value(self) -> usize {
-        N
-    }
-}
-
-impl Dyn {
-    pub fn value(self) -> usize {
-        self.value
-    }
-}
-
 /// Trait for types that can be iterated over.
-///
-/// The associated type `Len` determines whether the length is known
-/// at compile time (`Const<N>`) or only at runtime (`Dyn`).
-/// This enables the compiler to unroll loops when iterating over
-/// sequences with compile-time known length.
 pub trait Seq<T> {
-    type Len
-
     /// Returns the length of the sequence.
-    fn len(self) -> Self::Len
+    fn len(self) -> usize
 
     /// Returns the element at the given index.
     fn get(self, i: usize) -> T

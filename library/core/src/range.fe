@@ -1,48 +1,20 @@
-use ingot::seq::{Seq, Const, Dyn}
+use ingot::seq::Seq
 
-/// A range with compile-time known length: `start..start+N`
-pub struct Range<const N: usize> {
-    pub start: usize,
-}
-
-/// A range with runtime-determined length: `start..end`
-pub struct DynRange {
+/// A range from start to end (exclusive): `start..end`
+pub struct Range {
     pub start: usize,
     pub end: usize,
 }
 
-impl<const N: usize> Range<N> {
-    pub fn new(start: usize) -> Self {
-        Range { start }
-    }
-}
-
-impl DynRange {
+impl Range {
     pub fn new(start: usize, end: usize) -> Self {
-        DynRange { start, end }
+        Range { start, end }
     }
 }
 
-/// Seq implementation for const-length Range.
-/// Enables loop unrolling when iterating over `0..N` where N is const.
-impl<const N: usize> Seq<usize> for Range<N> {
-    type Len = Const<N>
-
-    fn len(self) -> Const<N> {
-        Const {}
-    }
-
-    fn get(self, i: usize) -> usize {
-        self.start + i
-    }
-}
-
-/// Seq implementation for dynamic-length Range.
-impl Seq<usize> for DynRange {
-    type Len = Dyn
-
-    fn len(self) -> Dyn {
-        Dyn { value: self.end - self.start }
+impl Seq<usize> for Range {
+    fn len(self) -> usize {
+        self.end - self.start
     }
 
     fn get(self, i: usize) -> usize {

@@ -229,7 +229,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                 self.lower_index_expr(expr, *lhs, *rhs)
             }
             Partial::Present(Expr::Bin(lhs, rhs, BinOp::Arith(ArithBinOp::Range))) => {
-                // Desugar range expression `start..end` into DynRange struct construction
+                // Desugar range expression `start..end` into Range struct construction
                 self.lower_range_expr(expr, *lhs, *rhs)
             }
             Partial::Present(Expr::Bin(lhs, rhs, _)) => {
@@ -993,11 +993,11 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         value_id
     }
 
-    /// Lower a range expression `start..end` into DynRange struct construction.
+    /// Lower a range expression `start..end` into Range struct construction.
     ///
     /// This desugars range expressions into:
     /// 1. Evaluating start and end expressions
-    /// 2. Allocating a DynRange struct
+    /// 2. Allocating a Range struct
     /// 3. Storing start and end into the struct fields
     fn lower_range_expr(&mut self, expr: ExprId, start: ExprId, end: ExprId) -> ValueId {
         let value_id = self.ensure_value(expr);
@@ -1015,7 +1015,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
             return value_id;
         }
 
-        // Get the DynRange type (already set by type checker)
+        // Get the Range type (already set by type checker)
         let range_ty = self.typed_body.expr_ty(self.db, expr);
 
         // Allocate memory for the struct
@@ -1490,7 +1490,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
 
     /// Lowers a `for` loop by desugaring into a while loop.
     ///
-    /// For DynRange (`for i in start..end`):
+    /// For Range (`for i in start..end`):
     ///   - The loop variable `i` is initialized to `start`
     ///   - Loop continues while `i < end`
     ///   - Each iteration increments `i` by 1
@@ -1507,16 +1507,16 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         // Get the type of the iterable
         let iter_ty = self.typed_body.expr_ty(self.db, iter_expr);
 
-        // Check if it's an array or a DynRange
+        // Check if it's an array or a Range
         if iter_ty.is_array(self.db) {
             self.lower_for_array(stmt, pat, iter_expr, body_expr, block);
         } else {
-            // Assume it's a DynRange (or similar range type with start/end fields)
+            // Assume it's a Range (or similar range type with start/end fields)
             self.lower_for_range(stmt, pat, iter_expr, body_expr, block);
         }
     }
 
-    /// Lower a for-loop over a DynRange.
+    /// Lower a for-loop over a Range.
     ///
     /// Desugars `for i in start..end` into:
     /// ```
@@ -1536,7 +1536,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
     ) {
         let usize_ty = TyId::new(self.db, TyData::TyBase(TyBase::Prim(PrimTy::Usize)));
 
-        // Lower the range expression to get a DynRange value
+        // Lower the range expression to get a Range value
         self.move_to_block(block);
         let range_value = self.lower_expr(iter_expr);
         let Some(after_range_block) = self.current_block() else {

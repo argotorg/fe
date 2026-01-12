@@ -271,7 +271,7 @@ impl<'db> TyChecker<'db> {
             };
         }
 
-        // Range expressions construct DynRange types directly
+        // Range expressions construct Range types directly
         if matches!(op, BinOp::Arith(ArithBinOp::Range)) {
             return self.check_range_expr(expr, lhs_expr, rhs_expr);
         }
@@ -313,10 +313,9 @@ impl<'db> TyChecker<'db> {
         self.check_ops_trait(expr, lhs.ty, &op, Some(rhs_expr))
     }
 
-    /// Check a range expression `start..end` and return the DynRange type.
+    /// Check a range expression `start..end` and return the Range type.
     ///
-    /// Both operands must be `usize`. The result type is `DynRange`.
-    /// TODO: When both bounds are compile-time constants, produce `Range<N>` instead.
+    /// Both operands must be `usize`. The result type is `Range`.
     fn check_range_expr(
         &mut self,
         _expr: ExprId,
@@ -329,12 +328,12 @@ impl<'db> TyChecker<'db> {
         self.check_expr(start_expr, usize_ty);
         self.check_expr(end_expr, usize_ty);
 
-        // Resolve DynRange type from core library
-        let dyn_range_ty = resolve_lib_type_path(self.db, self.env.body(), "core::range::DynRange");
-        match dyn_range_ty {
+        // Resolve Range type from core library
+        let range_ty = resolve_lib_type_path(self.db, self.env.body(), "core::range::Range");
+        match range_ty {
             Some(ty) => ExprProp::new(ty, true),
             None => {
-                // Fallback: if DynRange isn't found, return invalid
+                // Fallback: if Range isn't found, return invalid
                 // This shouldn't happen in normal usage
                 ExprProp::invalid(self.db)
             }
