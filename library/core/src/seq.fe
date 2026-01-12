@@ -36,16 +36,6 @@ pub trait Seq<T> {
     fn get(self, i: usize) -> T
 }
 
-/// Seq implementation for arrays.
-/// Enables loop unrolling when iterating over fixed-size arrays.
-impl<T, const N: usize> Seq<T> for [T; N] {
-    type Len = Const<N>
-
-    fn len(self) -> Const<N> {
-        Const {}
-    }
-
-    fn get(self, i: usize) -> T {
-        self[i]
-    }
-}
+// NOTE: Array Seq implementation (`impl<T, const N: usize> Seq<T> for [T; N]`)
+// is intentionally omitted. Const generics in array type positions are not yet
+// fully supported. Arrays are handled as a special case in the type checker.

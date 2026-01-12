@@ -1,5 +1,6 @@
 ---
 source: crates/uitest/tests/ty_check.rs
+assertion_line: 27
 expression: diags
 input_file: fixtures/ty_check/for_.fe
 ---
@@ -18,11 +19,11 @@ error[8-0018]: left-hand side of assignment is immutable
 17 │         res += x
    │         ^^^ immutable assignment
 
-error[8-0020]: `Iterator` needs to be implemented for Foo
+error[8-0020]: `Seq` needs to be implemented for Foo
    ┌─ for_.fe:11:14
    │
 11 │     for i in foo { }
    │              ^^^
    │              │
-   │              `Iterator` needs to be implemented for `Foo`
-   │              consider implementing `Iterator` for `Foo`
+   │              `Seq` needs to be implemented for `Foo`
+   │              consider implementing `Seq` for `Foo`

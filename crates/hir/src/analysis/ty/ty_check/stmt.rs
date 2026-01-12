@@ -2,8 +2,11 @@ use crate::core::hir_def::{IdentId, Partial, Stmt, StmtId};
 
 use super::TyChecker;
 use crate::analysis::ty::{
+    canonical::Canonical,
+    corelib::resolve_core_trait,
     diagnostics::BodyDiag,
     fold::TyFoldable,
+    trait_def::impls_for_ty,
     ty_def::{InvalidCause, TyId},
 };
 
@@ -56,27 +59,7 @@ impl<'db> TyChecker<'db> {
             .fold_with(self.db, &mut self.table);
         let expr_ty = typed_expr.ty;
 
-        let (base, arg) = expr_ty.decompose_ty_app(self.db);
-        // TODO: We can generalize this by just checking the `expr_ty` implements
-        // `Iterator` trait when `std::iter::Iterator` is implemented.
-        let elem_ty = if base.is_array(self.db) {
-            arg[0]
-        } else if base.has_invalid(self.db) {
-            TyId::invalid(self.db, InvalidCause::Other)
-        } else if base.is_ty_var(self.db) {
-            let diag = BodyDiag::TypeMustBeKnown(expr.span(self.body()).into());
-            self.push_diag(diag);
-            TyId::invalid(self.db, InvalidCause::Other)
-        } else {
-            let diag = BodyDiag::TraitNotImplemented {
-                primary: expr.span(self.body()).into(),
-                ty: expr_ty.pretty_print(self.db).to_string(),
-                trait_name: IdentId::new(self.db, "Iterator".to_string()),
-            };
-            self.push_diag(diag);
-
-            TyId::invalid(self.db, InvalidCause::Other)
-        };
+        let elem_ty = self.resolve_seq_element_ty(expr_ty, *expr);
 
         self.check_pat(*pat, elem_ty);
 
@@ -91,6 +74,64 @@ impl<'db> TyChecker<'db> {
         self.env.leave_loop();
 
         TyId::unit(self.db)
+    }
+
+    /// Resolve the element type for a type that can be iterated over.
+    ///
+    /// Handles:
+    /// 1. Arrays `[T; N]` - element type is T (special case since const generics
+    ///    in array type positions aren't fully supported yet)
+    /// 2. Types implementing `Seq<T>` - element type is T from the trait impl
+    fn resolve_seq_element_ty(
+        &mut self,
+        iterable_ty: TyId<'db>,
+        expr: crate::core::hir_def::ExprId,
+    ) -> TyId<'db> {
+        let (base, args) = iterable_ty.decompose_ty_app(self.db);
+
+        // Handle invalid and unknown types
+        if base.has_invalid(self.db) {
+            return TyId::invalid(self.db, InvalidCause::Other);
+        }
+        if base.is_ty_var(self.db) {
+            let diag = BodyDiag::TypeMustBeKnown(expr.span(self.body()).into());
+            self.push_diag(diag);
+            return TyId::invalid(self.db, InvalidCause::Other);
+        }
+
+        // Special case: arrays have element type as first type argument
+        // This is needed because const generics in array type positions (e.g. `[T; N]`)
+        // aren't fully supported yet, so we can't have `impl<T, const N> Seq<T> for [T; N]`
+        if base.is_array(self.db) {
+            return args[0];
+        }
+
+        // Look up Seq trait and check if iterable_ty implements it
+        let seq_trait = resolve_core_trait(self.db, self.env.scope(), &["seq", "Seq"]);
+        let ingot = self.env.body().top_mod(self.db).ingot(self.db);
+        let canonical_ty = Canonical::new(self.db, iterable_ty);
+
+        for impl_ in impls_for_ty(self.db, ingot, canonical_ty) {
+            let impl_id = impl_.skip_binder();
+            if impl_id.trait_def(self.db) == seq_trait {
+                // For Seq<T>, the trait args are [Self, T]
+                // args[0] is Self, args[1] is the element type T
+                let trait_inst = impl_id.trait_(self.db);
+                let trait_args = trait_inst.args(self.db);
+                if trait_args.len() >= 2 {
+                    return trait_args[1];
+                }
+            }
+        }
+
+        // Type doesn't implement Seq and is not an array
+        let diag = BodyDiag::TraitNotImplemented {
+            primary: expr.span(self.body()).into(),
+            ty: iterable_ty.pretty_print(self.db).to_string(),
+            trait_name: IdentId::new(self.db, "Seq".to_string()),
+        };
+        self.push_diag(diag);
+        TyId::invalid(self.db, InvalidCause::Other)
     }
 
     fn check_while(&mut self, stmt: StmtId, stmt_data: &Stmt<'db>) -> TyId<'db> {
