@@ -42,7 +42,7 @@ use crate::analysis::{
         const_ty::ConstTyId,
         normalize::normalize_ty,
         ty_check::{TyChecker, path::RecordInitChecker},
-        ty_def::{InvalidCause, TyId},
+        ty_def::{InvalidCause, PrimTy, TyId},
     },
 };
 use crate::hir_def::{Attr, ItemKind};
@@ -271,6 +271,11 @@ impl<'db> TyChecker<'db> {
             };
         }
 
+        // Range expressions construct DynRange types directly
+        if matches!(op, BinOp::Arith(ArithBinOp::Range)) {
+            return self.check_range_expr(expr, lhs_expr, rhs_expr);
+        }
+
         let lhs = self.check_expr_unknown(lhs_expr);
         if lhs.ty.has_invalid(self.db) {
             return ExprProp::invalid(self.db);
@@ -306,6 +311,34 @@ impl<'db> TyChecker<'db> {
         }
 
         self.check_ops_trait(expr, lhs.ty, &op, Some(rhs_expr))
+    }
+
+    /// Check a range expression `start..end` and return the DynRange type.
+    ///
+    /// Both operands must be `usize`. The result type is `DynRange`.
+    /// TODO: When both bounds are compile-time constants, produce `Range<N>` instead.
+    fn check_range_expr(
+        &mut self,
+        _expr: ExprId,
+        start_expr: ExprId,
+        end_expr: ExprId,
+    ) -> ExprProp<'db> {
+        let usize_ty = TyId::new(self.db, TyData::TyBase(TyBase::Prim(PrimTy::Usize)));
+
+        // Check that both operands are usize
+        self.check_expr(start_expr, usize_ty);
+        self.check_expr(end_expr, usize_ty);
+
+        // Resolve DynRange type from core library
+        let dyn_range_ty = resolve_lib_type_path(self.db, self.env.body(), "core::range::DynRange");
+        match dyn_range_ty {
+            Some(ty) => ExprProp::new(ty, true),
+            None => {
+                // Fallback: if DynRange isn't found, return invalid
+                // This shouldn't happen in normal usage
+                ExprProp::invalid(self.db)
+            }
+        }
     }
 
     fn check_with(
