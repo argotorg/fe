@@ -21,8 +21,8 @@ use hir::analysis::{
 };
 use hir::hir_def::{
     Attr, AttrArg, AttrArgValue, Body, CallableDef, Const, Expr, ExprId, Field, FieldIndex, Func,
-    ItemKind, LitKind, MatchArm, Partial, Pat, PatId, Stmt, StmtId, TopLevelMod, VariantKind,
-    expr::BinOp,
+    IdentId, ItemKind, LitKind, MatchArm, Partial, Pat, PatId, Stmt, StmtId, TopLevelMod,
+    VariantKind, expr::BinOp,
 };
 
 use crate::{

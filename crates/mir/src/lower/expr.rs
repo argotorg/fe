@@ -22,7 +22,7 @@ use hir::analysis::{
     place::PlaceBase,
     ty::ty_check::{EffectArg, EffectPassMode},
 };
-use hir::hir_def::expr::BinOp;
+use hir::hir_def::expr::{ArithBinOp, BinOp};
 
 enum RootLvalue<'db> {
     Place(Place<'db>),
@@ -227,6 +227,10 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
             }
             Partial::Present(Expr::Bin(lhs, rhs, BinOp::Index)) => {
                 self.lower_index_expr(expr, *lhs, *rhs)
+            }
+            Partial::Present(Expr::Bin(lhs, rhs, BinOp::Arith(ArithBinOp::Range))) => {
+                // Desugar range expression `start..end` into DynRange struct construction
+                self.lower_range_expr(expr, *lhs, *rhs)
             }
             Partial::Present(Expr::Bin(lhs, rhs, _)) => {
                 let _ = self.lower_expr(*lhs);
@@ -987,6 +991,62 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         self.assign(None, Some(dest), Rvalue::Load { place });
         self.builder.body.values[value_id.index()].origin = ValueOrigin::Local(dest);
         value_id
+    }
+
+    /// Lower a range expression `start..end` into DynRange struct construction.
+    ///
+    /// This desugars range expressions into:
+    /// 1. Evaluating start and end expressions
+    /// 2. Allocating a DynRange struct
+    /// 3. Storing start and end into the struct fields
+    fn lower_range_expr(&mut self, expr: ExprId, start: ExprId, end: ExprId) -> ValueId {
+        let value_id = self.ensure_value(expr);
+        if self.current_block().is_none() {
+            return value_id;
+        }
+
+        // Lower start and end expressions
+        let start_value = self.lower_expr(start);
+        if self.current_block().is_none() {
+            return value_id;
+        }
+        let end_value = self.lower_expr(end);
+        if self.current_block().is_none() {
+            return value_id;
+        }
+
+        // Get the DynRange type (already set by type checker)
+        let range_ty = self.typed_body.expr_ty(self.db, expr);
+
+        // Allocate memory for the struct
+        let alloc_value = self.emit_alloc(expr, range_ty);
+
+        // Get field indices for start and end
+        let start_ident = IdentId::new(self.db, "start".to_string());
+        let end_ident = IdentId::new(self.db, "end".to_string());
+
+        let mut inits = Vec::with_capacity(2);
+
+        // Add start field initialization
+        if let Some(info) = self.field_access_info(range_ty, FieldIndex::Ident(start_ident)) {
+            inits.push((
+                MirProjectionPath::from_projection(Projection::Field(info.field_idx)),
+                start_value,
+            ));
+        }
+
+        // Add end field initialization
+        if let Some(info) = self.field_access_info(range_ty, FieldIndex::Ident(end_ident)) {
+            inits.push((
+                MirProjectionPath::from_projection(Projection::Field(info.field_idx)),
+                end_value,
+            ));
+        }
+
+        // Emit the aggregate initialization
+        self.emit_init_aggregate(alloc_value, inits);
+
+        alloc_value
     }
 
     fn lower_index_expr(&mut self, expr: ExprId, lhs: ExprId, rhs: ExprId) -> ValueId {
