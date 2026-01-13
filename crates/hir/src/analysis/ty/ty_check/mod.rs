@@ -20,7 +20,7 @@ use crate::hir_def::CallableDef;
 use crate::{
     hir_def::{
         Body, Const, Contract, ContractRecvArm, Expr, ExprId, Func, IdentId, LitKind, Partial, Pat,
-        PatId, PathId, TypeId as HirTyId,
+        PatId, PathId, StmtId, TypeId as HirTyId,
     },
     span::{
         DynLazySpan, expr::LazyExprSpan, pat::LazyPatSpan, path::LazyPathSpan, types::LazyTySpan,
@@ -30,6 +30,7 @@ use crate::{
 pub use callable::Callable;
 use env::TyCheckEnv;
 pub use env::{EffectParamSite, ExprProp, LocalBinding, ParamSite};
+pub use stmt::ForLoopSeq;
 pub(super) use expr::TraitOps;
 pub use owner::BodyOwner;
 pub use owner::EffectParamOwner;
@@ -1074,6 +1075,8 @@ pub struct TypedBody<'db> {
     param_bindings: Vec<LocalBinding<'db>>,
     /// Bindings for local variables (keyed by the pattern that introduces them)
     pat_bindings: FxHashMap<PatId, LocalBinding<'db>>,
+    /// Resolved Seq trait methods for for-loops
+    for_loop_seq: FxHashMap<StmtId, ForLoopSeq<'db>>,
 }
 
 impl<'db> TyVisitable<'db> for TypedBody<'db> {
@@ -1092,6 +1095,9 @@ impl<'db> TyVisitable<'db> for TypedBody<'db> {
         }
         for callable in self.callables.values() {
             callable.visit_with(visitor);
+        }
+        for seq in self.for_loop_seq.values() {
+            seq.visit_with(visitor);
         }
     }
 }
@@ -1121,6 +1127,11 @@ impl<'db> TyFoldable<'db> for TypedBody<'db> {
             .into_iter()
             .map(|(expr, callable)| (expr, callable.fold_with(db, folder)))
             .collect();
+        let for_loop_seq = self
+            .for_loop_seq
+            .into_iter()
+            .map(|(stmt, seq)| (stmt, seq.fold_with(db, folder)))
+            .collect();
 
         Self {
             body: self.body,
@@ -1131,6 +1142,7 @@ impl<'db> TyFoldable<'db> for TypedBody<'db> {
             call_effect_args: self.call_effect_args,
             param_bindings: self.param_bindings,
             pat_bindings: self.pat_bindings,
+            for_loop_seq,
         }
     }
 }
@@ -1178,6 +1190,11 @@ impl<'db> TypedBody<'db> {
     /// Get the binding for a local variable by its pattern.
     pub fn pat_binding(&self, pat: PatId) -> Option<LocalBinding<'db>> {
         self.pat_bindings.get(&pat).copied()
+    }
+
+    /// Get the resolved Seq methods for a for-loop statement.
+    pub fn for_loop_seq(&self, stmt: StmtId) -> Option<&ForLoopSeq<'db>> {
+        self.for_loop_seq.get(&stmt)
     }
 
     /// Get the definition span for an expression that references a local binding.
@@ -1255,6 +1272,7 @@ impl<'db> TypedBody<'db> {
             call_effect_args: FxHashMap::default(),
             param_bindings: Vec::new(),
             pat_bindings: FxHashMap::default(),
+            for_loop_seq: FxHashMap::default(),
         }
     }
 }

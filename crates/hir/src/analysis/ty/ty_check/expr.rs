@@ -440,16 +440,30 @@ impl<'db> TyChecker<'db> {
     }
 
     pub(super) fn check_callable_effects(&mut self, expr: ExprId, callable: &Callable<'db>) {
+        let body = self.body();
+        let call_span: DynLazySpan<'db> = expr.span(body).into();
+        let args = self.resolve_callable_effects(call_span.clone(), callable);
+        for arg in args {
+            self.env.push_call_effect_arg(expr, arg);
+        }
+    }
+
+    pub(super) fn resolve_callable_effects(
+        &mut self,
+        call_span: DynLazySpan<'db>,
+        callable: &Callable<'db>,
+    ) -> Vec<super::ResolvedEffectArg<'db>> {
         let CallableDef::Func(func) = callable.callable_def else {
-            return;
+            return Vec::new();
         };
 
         if !func.has_effects(self.db) {
-            return;
+            return Vec::new();
         }
 
+        let mut resolved_args: Vec<super::ResolvedEffectArg<'db>> = Vec::new();
+
         let body = self.body();
-        let call_span = expr.span(body);
         let callee_assumptions = collect_func_def_constraints(self.db, func.into(), true)
             .instantiate_identity()
             .extend_all_bounds(self.db);
@@ -582,7 +596,7 @@ impl<'db> TyChecker<'db> {
             );
             if candidate_frames.is_empty() {
                 let diag = BodyDiag::MissingEffect {
-                    primary: call_span.clone().into(),
+                    primary: call_span.clone(),
                     func,
                     key: key_path,
                 };
@@ -802,7 +816,7 @@ impl<'db> TyChecker<'db> {
                         best
                     } else {
                         let diag = BodyDiag::AmbiguousEffect {
-                            primary: call_span.clone().into(),
+                            primary: call_span.clone(),
                             func,
                             key: key_path,
                         };
@@ -856,7 +870,7 @@ impl<'db> TyChecker<'db> {
 
             if required_mut && matches!(pass_mode, super::EffectPassMode::Unknown) {
                 let diag = BodyDiag::EffectMutabilityMismatch {
-                    primary: call_span.clone().into(),
+                    primary: call_span.clone(),
                     func,
                     key: key_path,
                     provided_span: provided_span(provided),
@@ -908,7 +922,7 @@ impl<'db> TyChecker<'db> {
                 };
                 if self.table.unify(expected, given).is_err() {
                     let diag = BodyDiag::EffectTypeMismatch {
-                        primary: call_span.clone().into(),
+                        primary: call_span.clone(),
                         func,
                         key: key_path,
                         expected,
@@ -919,6 +933,8 @@ impl<'db> TyChecker<'db> {
                 }
             }
         }
+
+        resolved_args
     }
 
     fn resolve_effect_requirement(
