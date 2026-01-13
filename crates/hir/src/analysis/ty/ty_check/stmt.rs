@@ -166,7 +166,7 @@ impl<'db> TyChecker<'db> {
         let ingot = self.env.body().top_mod(self.db).ingot(self.db);
         let canonical_ty = Canonical::new(self.db, iterable_ty);
 
-        for impl_ in impls_for_ty(self.db, ingot, canonical_ty.clone()) {
+        for impl_ in impls_for_ty(self.db, ingot, canonical_ty) {
             let snapshot = self.table.snapshot();
             let impl_id = impl_.skip_binder();
             if impl_id.trait_def(self.db) != seq_trait {
@@ -177,9 +177,11 @@ impl<'db> TyChecker<'db> {
             // Instantiate the impl's trait instance with fresh type variables
             // and unify to get the concrete types
             let raw_trait_inst = impl_id.trait_(self.db);
-            let trait_inst = self.table.instantiate_with_fresh_vars(
-                crate::analysis::ty::binder::Binder::bind(raw_trait_inst),
-            );
+            let trait_inst =
+                self.table
+                    .instantiate_with_fresh_vars(crate::analysis::ty::binder::Binder::bind(
+                        raw_trait_inst,
+                    ));
 
             // Unify the trait's Self type with the iterable type
             let self_ty = trait_inst.self_ty(self.db);
@@ -217,8 +219,13 @@ impl<'db> TyChecker<'db> {
             // Create Callable objects for the methods
             let span: crate::span::DynLazySpan<'db> = expr.span(self.body()).into();
 
-            let len_func_ty =
-                instantiate_trait_method(self.db, len_method, &mut self.table, iterable_ty, trait_inst);
+            let len_func_ty = instantiate_trait_method(
+                self.db,
+                len_method,
+                &mut self.table,
+                iterable_ty,
+                trait_inst,
+            );
             let Ok(len_callable) =
                 Callable::new(self.db, len_func_ty, span.clone(), Some(trait_inst))
             else {
@@ -226,8 +233,13 @@ impl<'db> TyChecker<'db> {
                 continue;
             };
 
-            let get_func_ty =
-                instantiate_trait_method(self.db, get_method, &mut self.table, iterable_ty, trait_inst);
+            let get_func_ty = instantiate_trait_method(
+                self.db,
+                get_method,
+                &mut self.table,
+                iterable_ty,
+                trait_inst,
+            );
             let Ok(get_callable) = Callable::new(self.db, get_func_ty, span, Some(trait_inst))
             else {
                 self.table.rollback_to(snapshot);

@@ -712,7 +712,7 @@ impl<'db> TyChecker<'db> {
                                     && !provided.is_mut
                                 {
                                     let diag = BodyDiag::EffectMutabilityMismatch {
-                                        primary: call_span.clone().into(),
+                                        primary: call_span.clone(),
                                         func,
                                         key: key_path,
                                         provided_span: provided_span(*provided),
@@ -720,7 +720,7 @@ impl<'db> TyChecker<'db> {
                                     self.push_diag(diag);
                                 } else {
                                     let diag = BodyDiag::MissingEffect {
-                                        primary: call_span.clone().into(),
+                                        primary: call_span.clone(),
                                         func,
                                         key: key_path,
                                     };
@@ -728,7 +728,7 @@ impl<'db> TyChecker<'db> {
                                 }
                             } else {
                                 let diag = BodyDiag::EffectTypeMismatch {
-                                    primary: call_span.clone().into(),
+                                    primary: call_span.clone(),
                                     func,
                                     key: key_path,
                                     expected,
@@ -752,7 +752,7 @@ impl<'db> TyChecker<'db> {
                                 GoalSatisfiability::UnSat(_) | GoalSatisfiability::ContainsInvalid
                             ) {
                                 let diag = BodyDiag::EffectTraitUnsatisfied {
-                                    primary: call_span.clone().into(),
+                                    primary: call_span.clone(),
                                     func,
                                     key: key_path,
                                     trait_req,
@@ -762,7 +762,7 @@ impl<'db> TyChecker<'db> {
                                 self.push_diag(diag);
                             } else {
                                 let diag = BodyDiag::MissingEffect {
-                                    primary: call_span.clone().into(),
+                                    primary: call_span.clone(),
                                     func,
                                     key: key_path,
                                 };
@@ -774,7 +774,7 @@ impl<'db> TyChecker<'db> {
                 }
 
                 let diag = BodyDiag::MissingEffect {
-                    primary: call_span.clone().into(),
+                    primary: call_span.clone(),
                     func,
                     key: key_path,
                 };
@@ -787,7 +787,7 @@ impl<'db> TyChecker<'db> {
                 _ => {
                     let Some(required_name) = effect.name(self.db) else {
                         let diag = BodyDiag::AmbiguousEffect {
-                            primary: call_span.clone().into(),
+                            primary: call_span.clone(),
                             func,
                             key: key_path,
                         };

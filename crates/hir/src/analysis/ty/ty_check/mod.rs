@@ -30,10 +30,10 @@ use crate::{
 pub use callable::Callable;
 use env::TyCheckEnv;
 pub use env::{EffectParamSite, ExprProp, LocalBinding, ParamSite};
-pub use stmt::ForLoopSeq;
 pub(super) use expr::TraitOps;
 pub use owner::BodyOwner;
 pub use owner::EffectParamOwner;
+pub use stmt::ForLoopSeq;
 
 use rustc_hash::{FxHashMap, FxHashSet};
 use salsa::Update;

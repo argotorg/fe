@@ -165,7 +165,7 @@ fn infix_binding_power<S: TokenStream>(parser: &mut Parser<S>) -> Option<(u8, u8
     };
 
     let bp = match kind {
-        Dot2 => (40, 41),  // Range operator, lower precedence than most
+        Dot2 => (40, 41), // Range operator, lower precedence than most
         Pipe2 => (50, 51),
         Amp2 => (60, 61),
         NotEq | Eq2 => (70, 71),

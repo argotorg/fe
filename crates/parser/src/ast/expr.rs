@@ -1081,8 +1081,14 @@ mod tests {
 
         // Range with expressions
         let range_expr: BinExpr = parse_expr("start..end");
-        assert!(matches!(range_expr.lhs().unwrap().kind(), ExprKind::Path(_)));
-        assert!(matches!(range_expr.rhs().unwrap().kind(), ExprKind::Path(_)));
+        assert!(matches!(
+            range_expr.lhs().unwrap().kind(),
+            ExprKind::Path(_)
+        ));
+        assert!(matches!(
+            range_expr.rhs().unwrap().kind(),
+            ExprKind::Path(_)
+        ));
 
         // Range with arithmetic (lower precedence than +)
         let range_expr: BinExpr = parse_expr("0..n + 1");

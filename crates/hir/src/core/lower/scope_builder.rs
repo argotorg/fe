@@ -307,7 +307,10 @@ impl<'db> ScopeGraphBuilder<'db> {
     }
 
     pub(super) fn current_id(&self) -> TrackedItemId<'db> {
-        *self.id_stack.last().expect("scope graph builder has no current id")
+        *self
+            .id_stack
+            .last()
+            .expect("scope graph builder has no current id")
     }
 
     pub(super) fn set_current_id(&mut self, id: TrackedItemId<'db>) {

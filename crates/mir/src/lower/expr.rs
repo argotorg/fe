@@ -1626,14 +1626,13 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                 origin: ValueOrigin::Local(idx_local),
                 repr: ValueRepr::Word,
             });
-            let elem_value =
-                self.emit_seq_get_call(
-                    iterable_value,
-                    idx_for_get,
-                    elem_ty,
-                    &seq_info.get_callable,
-                    &seq_info.get_effect_args,
-                );
+            let elem_value = self.emit_seq_get_call(
+                iterable_value,
+                idx_for_get,
+                elem_ty,
+                &seq_info.get_callable,
+                &seq_info.get_effect_args,
+            );
 
             self.assign(None, Some(elem_local), Rvalue::Value(elem_value));
         }
@@ -1857,45 +1856,43 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         let end_ident = IdentId::new(self.db, "end".to_string());
 
         // Extract the start value from the range
-        let start_value = if let Some(info) =
-            self.field_access_info(range_ty, FieldIndex::Ident(start_ident))
-        {
-            let place = Place::new(
-                range_value,
-                MirProjectionPath::from_projection(Projection::Field(info.field_idx)),
-            );
-            let start_val = self.builder.body.alloc_value(ValueData {
-                ty: usize_ty,
-                origin: ValueOrigin::PlaceRef(place.clone()),
-                repr: ValueRepr::Word,
-            });
-            // Emit a load instruction for the start value
-            self.assign(None, None, Rvalue::Load { place });
-            start_val
-        } else {
-            // Fallback: just use 0
-            self.synthetic_u256(BigUint::from(0u64))
-        };
+        let start_value =
+            if let Some(info) = self.field_access_info(range_ty, FieldIndex::Ident(start_ident)) {
+                let place = Place::new(
+                    range_value,
+                    MirProjectionPath::from_projection(Projection::Field(info.field_idx)),
+                );
+                let start_val = self.builder.body.alloc_value(ValueData {
+                    ty: usize_ty,
+                    origin: ValueOrigin::PlaceRef(place.clone()),
+                    repr: ValueRepr::Word,
+                });
+                // Emit a load instruction for the start value
+                self.assign(None, None, Rvalue::Load { place });
+                start_val
+            } else {
+                // Fallback: just use 0
+                self.synthetic_u256(BigUint::from(0u64))
+            };
 
         // Extract the end value from the range
-        let end_value = if let Some(info) =
-            self.field_access_info(range_ty, FieldIndex::Ident(end_ident))
-        {
-            let place = Place::new(
-                range_value,
-                MirProjectionPath::from_projection(Projection::Field(info.field_idx)),
-            );
-            let end_val = self.builder.body.alloc_value(ValueData {
-                ty: usize_ty,
-                origin: ValueOrigin::PlaceRef(place.clone()),
-                repr: ValueRepr::Word,
-            });
-            self.assign(None, None, Rvalue::Load { place });
-            end_val
-        } else {
-            // Fallback
-            self.synthetic_u256(BigUint::from(0u64))
-        };
+        let end_value =
+            if let Some(info) = self.field_access_info(range_ty, FieldIndex::Ident(end_ident)) {
+                let place = Place::new(
+                    range_value,
+                    MirProjectionPath::from_projection(Projection::Field(info.field_idx)),
+                );
+                let end_val = self.builder.body.alloc_value(ValueData {
+                    ty: usize_ty,
+                    origin: ValueOrigin::PlaceRef(place.clone()),
+                    repr: ValueRepr::Word,
+                });
+                self.assign(None, None, Rvalue::Load { place });
+                end_val
+            } else {
+                // Fallback
+                self.synthetic_u256(BigUint::from(0u64))
+            };
 
         // Get the loop variable binding from the pattern
         let Partial::Present(pat_data) = pat.data(self.db, self.body) else {
