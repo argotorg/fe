@@ -1,0 +1,10 @@
+pub fn for_continue() -> usize {
+    let mut sum: usize = 0
+    for i in 0..4 {
+        if i == 2 {
+            continue
+        }
+        sum = sum + 1
+    }
+    sum
+}
