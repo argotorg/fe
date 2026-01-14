@@ -58,6 +58,7 @@ fn resolves_workspace_member_by_name_local() {
     write_file(
         &workspace_root.join("fe.toml"),
         r#"
+[workspace]
 name = "local-workspace"
 version = "0.1.0"
 members = [
