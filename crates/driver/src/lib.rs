@@ -10,12 +10,20 @@ pub use common::dependencies::DependencyTree;
 use std::collections::{HashMap, HashSet};
 
 use camino::Utf8PathBuf;
-use common::{InputDb, cache::remote_git_cache_dir};
+use common::{
+    InputDb,
+    cache::remote_git_cache_dir,
+    config::WorkspaceMemberSelection,
+    ingot::Version,
+    stdlib::{HasBuiltinCore, HasBuiltinStd},
+};
 pub use db::DriverDataBase;
 use ingot_handler::IngotHandler;
 use smol_str::SmolStr;
 
+use hir::analysis::core_requirements;
 use hir::hir_def::TopLevelMod;
+pub use resolver::files::{ExpandedWorkspaceMember, expand_workspace_members};
 use resolver::{
     files::FilesResolutionDiagnostic,
     git::{GitDescription, GitResolver},
@@ -55,7 +63,41 @@ fn ingot_resolver(remote_checkout_root: Utf8PathBuf) -> IngotResolver {
 }
 
 pub fn init_ingot(db: &mut DriverDataBase, ingot_url: &Url) -> bool {
-    tracing::info!(target: "resolver", "Starting workspace ingot resolution for: {}", ingot_url);
+    init_ingot_graph(db, ingot_url)
+}
+
+pub fn check_library_requirements(db: &DriverDataBase) -> Vec<String> {
+    let mut missing = Vec::new();
+
+    let core = db.builtin_core();
+    if let Ok(core_file) = core.root_file(db) {
+        let top_mod = db.top_mod(core_file);
+        missing.extend(
+            core_requirements::check_core_requirements(db, top_mod.scope(), core.kind(db))
+                .into_iter()
+                .map(|req| req.to_string()),
+        );
+    } else {
+        missing.push("missing required core ingot".to_string());
+    }
+
+    let std_ingot = db.builtin_std();
+    if let Ok(std_file) = std_ingot.root_file(db) {
+        let top_mod = db.top_mod(std_file);
+        missing.extend(
+            core_requirements::check_std_type_requirements(db, top_mod.scope(), std_ingot.kind(db))
+                .into_iter()
+                .map(|req| req.to_string()),
+        );
+    } else {
+        missing.push("missing required std ingot".to_string());
+    }
+
+    missing
+}
+
+fn init_ingot_graph(db: &mut DriverDataBase, ingot_url: &Url) -> bool {
+    tracing::info!(target: "resolver", "Starting ingot resolution for: {}", ingot_url);
     let mut handler = IngotHandler::new(db).with_stdout(true);
     let mut ingot_graph_resolver =
         GraphResolverImpl::new(ingot_resolver(remote_checkout_root(ingot_url)));
@@ -123,10 +165,61 @@ pub fn init_ingot(db: &mut DriverDataBase, ingot_url: &Url) -> bool {
     had_diagnostics
 }
 
+pub fn init_workspace(db: &mut DriverDataBase, workspace_url: &Url) -> bool {
+    init_ingot_graph(db, workspace_url)
+}
+
+pub fn find_ingot_by_metadata(db: &DriverDataBase, name: &str, version: &Version) -> Option<Url> {
+    db.dependency_graph()
+        .ingot_by_name_version(db, &SmolStr::new(name), version)
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WorkspaceMember {
+    pub url: Url,
+    pub path: Utf8PathBuf,
+    pub name: Option<SmolStr>,
+    pub version: Option<Version>,
+}
+
 fn _dump_scope_graph(db: &DriverDataBase, top_mod: TopLevelMod) -> String {
     let mut s = vec![];
     top_mod.scope_graph(db).write_as_dot(db, &mut s).unwrap();
     String::from_utf8(s).unwrap()
+}
+
+pub fn workspace_member_urls(
+    workspace: &common::config::WorkspaceSettings,
+    workspace_url: &Url,
+) -> Result<Vec<Url>, String> {
+    let members = workspace_members(workspace, workspace_url)?;
+    Ok(members
+        .into_iter()
+        .filter(|member| member.url != *workspace_url)
+        .map(|member| member.url)
+        .collect())
+}
+
+pub fn workspace_members(
+    workspace: &common::config::WorkspaceSettings,
+    workspace_url: &Url,
+) -> Result<Vec<WorkspaceMember>, String> {
+    let selection = if workspace.default_members.is_some() {
+        WorkspaceMemberSelection::DefaultOnly
+    } else {
+        WorkspaceMemberSelection::All
+    };
+    let members = expand_workspace_members(workspace, workspace_url, selection)?;
+    Ok(members
+        .into_iter()
+        .filter(|member| member.url != *workspace_url)
+        .map(|member| WorkspaceMember {
+            url: member.url,
+            path: member.path,
+            name: member.name,
+            version: member.version,
+        })
+        .collect())
 }
 
 // Maybe the driver should eventually only support WASI?
@@ -150,6 +243,59 @@ pub enum IngotInitDiagnostics {
     ConfigDiagnostics {
         ingot_url: Url,
         diagnostics: Vec<common::config::ConfigDiagnostic>,
+    },
+    WorkspaceConfigParseError {
+        workspace_url: Url,
+        error: String,
+    },
+    WorkspaceDiagnostics {
+        workspace_url: Url,
+        diagnostics: Vec<common::config::ConfigDiagnostic>,
+    },
+    WorkspaceMembersError {
+        workspace_url: Url,
+        error: String,
+    },
+    WorkspaceMemberDuplicate {
+        workspace_url: Url,
+        name: SmolStr,
+        version: Option<Version>,
+    },
+    WorkspaceMemberMetadataMismatch {
+        ingot_url: Url,
+        expected_name: SmolStr,
+        expected_version: Version,
+        found_name: Option<SmolStr>,
+        found_version: Option<Version>,
+    },
+    WorkspacePathRequiresSelection {
+        ingot_url: Url,
+        dependency: SmolStr,
+        workspace_url: Url,
+    },
+    WorkspaceNameLookupUnavailable {
+        ingot_url: Url,
+        dependency: SmolStr,
+    },
+    DependencyMetadataMismatch {
+        ingot_url: Url,
+        dependency: SmolStr,
+        dependency_url: Url,
+        expected_name: SmolStr,
+        expected_version: Option<Version>,
+        found_name: Option<SmolStr>,
+        found_version: Option<Version>,
+    },
+    WorkspaceMemberResolutionFailed {
+        ingot_url: Url,
+        dependency: SmolStr,
+        error: String,
+    },
+    IngotByNameResolutionFailed {
+        ingot_url: Url,
+        dependency: SmolStr,
+        name: SmolStr,
+        version: Version,
     },
     RemoteFileError {
         ingot_url: Url,
@@ -210,6 +356,126 @@ impl std::fmt::Display for IngotInitDiagnostics {
                     Ok(())
                 }
             }
+            IngotInitDiagnostics::WorkspaceConfigParseError {
+                workspace_url,
+                error,
+            } => {
+                write!(f, "Invalid workspace fe.toml in {workspace_url}: {error}")
+            }
+            IngotInitDiagnostics::WorkspaceDiagnostics {
+                workspace_url,
+                diagnostics,
+            } => {
+                if diagnostics.len() == 1 {
+                    write!(
+                        f,
+                        "Erroneous workspace fe.toml in {workspace_url}: {}",
+                        diagnostics[0]
+                    )
+                } else {
+                    writeln!(f, "Erroneous workspace fe.toml in {workspace_url}:")?;
+                    for diagnostic in diagnostics {
+                        writeln!(f, "  • {diagnostic}")?;
+                    }
+                    Ok(())
+                }
+            }
+            IngotInitDiagnostics::WorkspaceMembersError {
+                workspace_url,
+                error,
+            } => {
+                write!(f, "Workspace members error in {workspace_url}: {error}")
+            }
+            IngotInitDiagnostics::WorkspaceMemberDuplicate {
+                workspace_url,
+                name,
+                version,
+            } => {
+                if let Some(version) = version {
+                    write!(
+                        f,
+                        "Workspace member {name}@{version} is duplicated in {workspace_url}"
+                    )
+                } else {
+                    write!(
+                        f,
+                        "Workspace member {name} is duplicated in {workspace_url}"
+                    )
+                }
+            }
+            IngotInitDiagnostics::WorkspaceMemberMetadataMismatch {
+                ingot_url,
+                expected_name,
+                expected_version,
+                found_name,
+                found_version,
+            } => {
+                write!(
+                    f,
+                    "Workspace member {expected_name}@{expected_version} in {ingot_url} has mismatched metadata (found {found_name:?}@{found_version:?})"
+                )
+            }
+            IngotInitDiagnostics::WorkspacePathRequiresSelection {
+                ingot_url,
+                dependency,
+                workspace_url,
+            } => {
+                write!(
+                    f,
+                    "Dependency '{dependency}' in {ingot_url} points to a workspace at {workspace_url}; provide an ingot path or a name/version"
+                )
+            }
+            IngotInitDiagnostics::WorkspaceNameLookupUnavailable {
+                ingot_url,
+                dependency,
+            } => {
+                write!(
+                    f,
+                    "Dependency '{dependency}' in {ingot_url} uses name-only lookup outside a workspace"
+                )
+            }
+            IngotInitDiagnostics::DependencyMetadataMismatch {
+                ingot_url,
+                dependency,
+                dependency_url,
+                expected_name,
+                expected_version,
+                found_name,
+                found_version,
+            } => {
+                if let Some(expected_version) = expected_version {
+                    write!(
+                        f,
+                        "Dependency '{dependency}' in {ingot_url} expected {expected_name}@{expected_version} at {dependency_url} but found {found_name:?}@{found_version:?}"
+                    )
+                } else {
+                    write!(
+                        f,
+                        "Dependency '{dependency}' in {ingot_url} expected {expected_name} at {dependency_url} but found {found_name:?}@{found_version:?}"
+                    )
+                }
+            }
+            IngotInitDiagnostics::WorkspaceMemberResolutionFailed {
+                ingot_url,
+                dependency,
+                error,
+            } => {
+                write!(
+                    f,
+                    "Failed to resolve workspace member for '{dependency}' in {ingot_url}: {error}"
+                )
+            }
+            IngotInitDiagnostics::IngotByNameResolutionFailed {
+                ingot_url,
+                dependency,
+                name,
+                version,
+            } => {
+                write!(
+                    f,
+                    "Dependency '{dependency}' in {ingot_url} requested ingot {name}@{version} but it was not found in the workspace registry"
+                )
+            }
             IngotInitDiagnostics::RemoteFileError { ingot_url, error } => {
                 write!(f, "Remote file error at {ingot_url}: {error}")
             }
@@ -251,7 +517,7 @@ impl std::fmt::Display for IngotInitDiagnostics {
     }
 }
 
-fn remote_checkout_root(ingot_url: &Url) -> Utf8PathBuf {
+pub(crate) fn remote_checkout_root(ingot_url: &Url) -> Utf8PathBuf {
     if let Some(root) = remote_git_cache_dir() {
         return root;
     }

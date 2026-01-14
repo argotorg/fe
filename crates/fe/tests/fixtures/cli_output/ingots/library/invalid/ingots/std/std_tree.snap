@@ -1,0 +1,9 @@
+---
+source: crates/fe/tests/cli_output.rs
+expression: output
+---
+=== STDOUT ===
+std v0.1.0
+└── core v0.1.0
+
+=== EXIT CODE: 0 ===

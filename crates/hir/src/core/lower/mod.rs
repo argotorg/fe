@@ -134,10 +134,17 @@ impl<'db> FileLowerCtxt<'db> {
 
         let core = IdentId::new(db, "core".to_string());
         let prelude = IdentId::new(db, "prelude".to_string());
+        self.insert_synthetic_use(vec![core, prelude]);
+    }
+
+    /// Inserts `use super::*` to re-export parent module items into current scope.
+    pub(super) fn insert_synthetic_super_use(&mut self) {
+        let db = self.db();
+
+        let super_ident = IdentId::new(db, "super".to_string());
 
         let segs = vec![
-            Partial::Present(UsePathSegment::Ident(core)),
-            Partial::Present(UsePathSegment::Ident(prelude)),
+            Partial::Present(UsePathSegment::Ident(super_ident)),
             Partial::Present(UsePathSegment::Glob),
         ];
         let path = Partial::Present(UsePathId::new(db, segs));
@@ -161,16 +168,13 @@ impl<'db> FileLowerCtxt<'db> {
         self.leave_item_scope(use_);
     }
 
-    /// Inserts `use super::*` to re-export parent module items into current scope.
-    pub(super) fn insert_synthetic_super_use(&mut self) {
+    fn insert_synthetic_use(&mut self, segments: Vec<IdentId<'db>>) {
         let db = self.db();
-
-        let super_ident = IdentId::new(db, "super".to_string());
-
-        let segs = vec![
-            Partial::Present(UsePathSegment::Ident(super_ident)),
-            Partial::Present(UsePathSegment::Glob),
-        ];
+        let segs: Vec<Partial<UsePathSegment<'db>>> = segments
+            .into_iter()
+            .map(|ident| Partial::Present(UsePathSegment::Ident(ident)))
+            .chain(std::iter::once(Partial::Present(UsePathSegment::Glob)))
+            .collect();
         let path = Partial::Present(UsePathId::new(db, segs));
 
         let id = self.joined_id(TrackedItemVariant::Use(path));

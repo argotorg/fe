@@ -536,7 +536,7 @@ impl<'db> ImportResolver<'db> {
     fn register_error(&mut self, i_use: &IntermediateUse<'db>, err: NameResolutionError<'db>) {
         self.suspicious_imports.remove(&i_use.use_);
 
-        if i_use.use_.is_prelude_use(self.db) {
+        if i_use.use_.is_synthetic_use(self.db) {
             return;
         }
 

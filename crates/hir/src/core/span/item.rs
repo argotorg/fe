@@ -838,7 +838,7 @@ mod tests {
         let uses = db.expect_items::<Use>(file);
         let use_ = uses
             .into_iter()
-            .find(|use_| !use_.is_prelude_use(&db))
+            .find(|use_| !use_.is_synthetic_use(&db))
             .unwrap();
 
         let top_mod = use_.top_mod(&db);
@@ -862,7 +862,7 @@ mod tests {
         let uses: Vec<_> = db
             .expect_items::<Use>(file)
             .into_iter()
-            .filter(|use_| !use_.is_prelude_use(&db))
+            .filter(|use_| !use_.is_synthetic_use(&db))
             .collect();
         assert_eq!(uses.len(), 2);
 

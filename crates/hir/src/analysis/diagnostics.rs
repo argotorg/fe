@@ -518,15 +518,15 @@ impl DiagnosticVoucher for PathResDiag<'_> {
 
                 let mut cand_spans: Vec<_> = candidates
                     .iter()
-                    .filter_map(|(span, from_prelude)| {
-                        span.resolve(db).map(|resolved| (resolved, *from_prelude))
+                    .filter_map(|(span, from_implicit)| {
+                        span.resolve(db).map(|resolved| (resolved, *from_implicit))
                     })
                     .collect();
                 cand_spans.sort_unstable_by(|(a, _), (b, _)| a.cmp(b));
                 diags.extend(cand_spans.into_iter().enumerate().map(
-                    |(i, (span, from_prelude))| {
-                        let label = if from_prelude {
-                            format!("candidate {} (from prelude)", i + 1)
+                    |(i, (span, from_implicit))| {
+                        let label = if from_implicit {
+                            format!("candidate {} (from implicit import)", i + 1)
                         } else {
                             format!("candidate {}", i + 1)
                         };
@@ -2215,6 +2215,17 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                     error_code,
                 }
             }
+            Self::UnsupportedUnaryPlus(primary) => CompleteDiagnostic {
+                severity: Severity::Error,
+                message: "unary `+` is not supported".to_string(),
+                sub_diagnostics: vec![SubDiagnostic {
+                    style: LabelStyle::Primary,
+                    message: "remove the unary `+`".to_string(),
+                    span: primary.resolve(db),
+                }],
+                notes: vec![],
+                error_code,
+            },
 
             Self::NonAssignableExpr(primary) => CompleteDiagnostic {
                 severity: Severity::Error,

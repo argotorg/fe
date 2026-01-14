@@ -1,4 +1,6 @@
 use camino::{Utf8Path, Utf8PathBuf};
+use common::config::looks_like_workspace;
+use toml::Value;
 use url::Url;
 
 use crate::{
@@ -15,10 +17,15 @@ pub fn minimal_files_resolver() -> FilesResolver {
 
 /// Files resolver used for project ingots. Requires a `src/lib.fe` entrypoint.
 pub fn project_files_resolver() -> FilesResolver {
-    minimal_files_resolver()
+    FilesResolver::new()
         .with_required_directory("src")
         .with_required_file("src/lib.fe")
         .with_pattern("src/**/*.fe")
+}
+
+/// Files resolver used for workspace roots. Gathers member configs by pattern.
+pub fn workspace_files_resolver() -> FilesResolver {
+    FilesResolver::with_patterns(&["**/fe.toml"])
 }
 
 /// Convenience alias for the standard local ingot graph resolver.
@@ -189,7 +196,7 @@ impl IngotResolver {
         let ingot_url = Url::from_directory_path(ingot_path.as_std_path())
             .expect("Failed to convert ingot path to URL");
         let files = self
-            .resolve_files(handler, &ingot_url)
+            .resolve_ingot_files(handler, &ingot_url)
             .map_err(IngotResolutionError::Files)?;
 
         Ok((
@@ -209,9 +216,10 @@ impl IngotResolver {
         ))
     }
 
-    fn resolve_files<H>(
+    fn resolve_files_with<H>(
         &mut self,
         handler: &mut H,
+        resolver: &mut FilesResolver,
         ingot_url: &Url,
     ) -> Result<FilesResource, FilesResolutionError>
     where
@@ -243,8 +251,7 @@ impl IngotResolver {
         let mut handler = ForwardDiagnostics {
             ingot_handler: handler,
         };
-        let files = self.files.resolve(&mut handler, ingot_url)?;
-        Ok(files)
+        resolver.resolve(&mut handler, ingot_url)
     }
 
     fn resolve_git<H>(
@@ -294,7 +301,7 @@ impl IngotResolver {
     {
         handler.on_resolution_start(&IngotDescriptor::Local(url.clone()));
         let files = self
-            .resolve_files(handler, url)
+            .resolve_ingot_files(handler, url)
             .map_err(IngotResolutionError::Files)?;
         Ok(handler.handle_resolution(
             &IngotDescriptor::Local(url.clone()),
@@ -344,6 +351,66 @@ impl IngotResolver {
         self.progress.success(description, &ingot_url);
         Ok(result)
     }
+
+    fn resolve_ingot_files<H>(
+        &mut self,
+        handler: &mut H,
+        ingot_url: &Url,
+    ) -> Result<FilesResource, FilesResolutionError>
+    where
+        H: ResolutionHandler<Self>,
+    {
+        let mut config_resolver = minimal_files_resolver();
+        let config_files = self.resolve_files_with(handler, &mut config_resolver, ingot_url)?;
+        let ingot_path = Utf8PathBuf::from(ingot_url.path());
+        let config_kind = config_kind_from_files(&ingot_path, &config_files);
+
+        let mut extra_resolver = match config_kind {
+            Some(ConfigKind::Workspace) => workspace_files_resolver(),
+            Some(ConfigKind::Ingot) => self.files.clone(),
+            None => return Ok(config_files),
+        };
+
+        let extra_files = self.resolve_files_with(handler, &mut extra_resolver, ingot_url)?;
+        Ok(merge_files(config_files, extra_files))
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ConfigKind {
+    Ingot,
+    Workspace,
+}
+
+fn config_kind_from_files(root: &Utf8PathBuf, files: &FilesResource) -> Option<ConfigKind> {
+    let config_path = root.join("fe.toml");
+    let file = files.files.iter().find(|file| file.path == config_path)?;
+    config_kind_from_content(&file.content)
+}
+
+fn config_kind_from_content(content: &str) -> Option<ConfigKind> {
+    let parsed: Value = content.parse().ok()?;
+    let table = parsed.as_table()?;
+    if table.contains_key("workspace") || looks_like_workspace(&parsed) {
+        return Some(ConfigKind::Workspace);
+    }
+    if table.contains_key("ingot") {
+        return Some(ConfigKind::Ingot);
+    }
+    Some(ConfigKind::Ingot)
+}
+
+fn merge_files(mut base: FilesResource, extra: FilesResource) -> FilesResource {
+    let mut seen = std::collections::HashSet::new();
+    for file in base.files.iter() {
+        seen.insert(file.path.clone());
+    }
+    for file in extra.files {
+        if seen.insert(file.path.clone()) {
+            base.files.push(file);
+        }
+    }
+    base
 }
 
 impl Resolver for IngotResolver {

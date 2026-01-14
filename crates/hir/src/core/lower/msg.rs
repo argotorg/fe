@@ -46,7 +46,7 @@ pub(super) fn lower_msg_as_mod<'db>(ctxt: &mut FileLowerCtxt<'db>, ast: ast::Msg
     let id = ctxt.joined_id(TrackedItemVariant::Mod(name));
     ctxt.enter_item_scope(id, true);
 
-    // Insert synthetic prelude use for the module
+    // Insert synthetic core::prelude use for the module
     ctxt.insert_synthetic_prelude_use();
     // Insert `use super::*` so msg modules can see parent types
     ctxt.insert_synthetic_super_use();
@@ -502,7 +502,7 @@ fn lower_msg_variant_impl<'db>(
     let db = ctxt.db();
 
     // Build a fully qualified path to core::message::MsgVariant to ensure we
-    // always reference the core trait, even if the prelude is shadowed.
+    // always reference the core trait, even if the implicit import is shadowed.
     let ingot = ctxt.top_mod().ingot(db);
     let root = if ingot.kind(db) == IngotKind::Core {
         IdentId::make_ingot(db)

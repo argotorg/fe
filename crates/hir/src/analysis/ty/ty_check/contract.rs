@@ -41,7 +41,11 @@ pub enum VariantResError<'db> {
 
 /// Returns true if a struct implements the core MsgVariant trait.
 fn implements_msg_variant<'db>(db: &'db dyn HirAnalysisDb, struct_: Struct<'db>) -> bool {
-    let msg_variant_trait = resolve_core_trait(db, struct_.scope(), &["message", "MsgVariant"]);
+    let Some(msg_variant_trait) =
+        resolve_core_trait(db, struct_.scope(), &["message", "MsgVariant"])
+    else {
+        return false;
+    };
 
     let adt_def = AdtRef::from(struct_).as_adt(db);
     let ty = TyId::adt(db, adt_def);
@@ -140,9 +144,14 @@ fn check_recv_variant_param_types_decodable<'db>(
     let Some(sol_ty) = resolve_sol_abi_ty(db, contract.scope(), assumptions) else {
         return;
     };
-    let decode_trait = resolve_core_trait(db, contract.scope(), &["abi", "Decode"]);
-
-    let msg_variant_trait = resolve_core_trait(db, contract.scope(), &["message", "MsgVariant"]);
+    let Some(decode_trait) = resolve_core_trait(db, contract.scope(), &["abi", "Decode"]) else {
+        return;
+    };
+    let Some(msg_variant_trait) =
+        resolve_core_trait(db, contract.scope(), &["message", "MsgVariant"])
+    else {
+        return;
+    };
     let msg_variant_inst = TraitInstId::new(
         db,
         msg_variant_trait,
@@ -644,7 +653,7 @@ fn get_variant_selector<'db>(db: &'db dyn HirAnalysisDb, struct_: Struct<'db>) -
     use num_traits::ToPrimitive;
 
     // Find the MsgVariant trait
-    let msg_variant_trait = resolve_core_trait(db, struct_.scope(), &["message", "MsgVariant"]);
+    let msg_variant_trait = resolve_core_trait(db, struct_.scope(), &["message", "MsgVariant"])?;
 
     // Get the impl for this struct
     let adt_def = AdtRef::from(struct_).as_adt(db);
@@ -750,7 +759,7 @@ pub(super) fn get_msg_variant_return_type<'db>(
     variant_ty: TyId<'db>,
     scope: ScopeId<'db>,
 ) -> Option<TyId<'db>> {
-    let msg_variant_trait = resolve_core_trait(db, scope, &["message", "MsgVariant"]);
+    let msg_variant_trait = resolve_core_trait(db, scope, &["message", "MsgVariant"])?;
 
     let canonical_ty = Canonical::new(db, variant_ty);
     let ingot = scope.ingot(db);

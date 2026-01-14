@@ -3,6 +3,7 @@ source: crates/fe/tests/cli_output.rs
 expression: output
 ---
 === STDERR ===
-❌ Erroneous fe.toml file in file://<project>/crates/fe/tests/fixtures/cli_output/ingots/missing_dep_path/: The dependency "foo" is missing a path argument "{ version = "0.1.0" }"
+❌ Dependency 'foo' in file://<project>/crates/fe/tests/fixtures/cli_output/ingots/missing_dep_path/ uses name-only lookup outside a workspace
+❌ Dependency 'foo' in file://<project>/crates/fe/tests/fixtures/cli_output/ingots/missing_dep_path/ requested ingot foo@0.1.0 but it was not found in the workspace registry
 
 === EXIT CODE: 1 ===

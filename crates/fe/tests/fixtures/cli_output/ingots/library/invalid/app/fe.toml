@@ -1,0 +1,4 @@
+# Ingot config
+[ingot]
+name = "library_app_invalid"
+version = "0.1.0"

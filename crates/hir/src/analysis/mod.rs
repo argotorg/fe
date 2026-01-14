@@ -1,5 +1,6 @@
 use crate::{HirDb, span::DynLazySpan};
 pub mod analysis_pass;
+pub mod core_requirements;
 pub mod diagnostics;
 pub mod place;
 
