@@ -1,7 +1,4 @@
-use std::{
-    collections::{HashMap, HashSet},
-    fs,
-};
+use std::collections::{HashMap, HashSet};
 
 use camino::{Utf8Path, Utf8PathBuf};
 use common::{
@@ -163,7 +160,7 @@ impl<'a> IngotHandler<'a> {
         match dependency.location {
             DependencyLocation::Local(local) => match origin {
                 IngotOrigin::Local => {
-                    if let Ok(config) = config_at_url(&local.url)
+                    if let Ok(config) = config_at_url(self.db, &local.url)
                         && matches!(config, Config::Workspace(_))
                     {
                         self.report_error(IngotInitDiagnostics::WorkspacePathRequiresSelection {
@@ -184,7 +181,7 @@ impl<'a> IngotHandler<'a> {
                     ..
                 } => match relative_path_within_checkout(checkout_path.as_path(), &local.url) {
                     Ok(relative_path) => {
-                        if let Ok(config) = config_at_url(&local.url)
+                        if let Ok(config) = config_at_url(self.db, &local.url)
                             && matches!(config, Config::Workspace(_))
                         {
                             self.report_error(
@@ -277,7 +274,7 @@ impl<'a> IngotHandler<'a> {
                 }
             }
             DependencyLocation::Local(local) => {
-                if let Ok(config) = config_at_url(&local.url) {
+                if let Ok(config) = config_at_url(self.db, &local.url) {
                     match config {
                         Config::Ingot(ingot) => {
                             if self.verify_dependency_metadata(
@@ -461,7 +458,7 @@ impl<'a> IngotHandler<'a> {
         if member.name.is_some() && member.version.is_some() {
             return Ok((member.name.clone(), member.version.clone()));
         }
-        let config = config_at_url(&member.url)?;
+        let config = config_at_url(self.db, &member.url)?;
         let Config::Ingot(ingot) = config else {
             return Err(format!("Expected ingot config at {}", member.url));
         };
@@ -480,7 +477,7 @@ impl<'a> IngotHandler<'a> {
             return Ok(());
         }
 
-        let config = config_at_url(workspace_root)?;
+        let config = config_at_url(self.db, workspace_root)?;
         let Config::Workspace(workspace_config) = config else {
             return Err("target is not a workspace".to_string());
         };
@@ -850,7 +847,7 @@ impl<'a> ResolutionHandler<IngotResolver> for IngotHandler<'a> {
             return Vec::new();
         }
 
-        let config = match config_at_url(&resource.ingot_url) {
+        let config = match config_at_url(self.db, &resource.ingot_url) {
             Ok(config) => config,
             Err(error) => {
                 match &resource.origin {
@@ -1012,18 +1009,26 @@ impl<'a>
     }
 }
 
-fn config_at_url(url: &Url) -> Result<Config, String> {
-    let path = url
+fn config_at_url(db: &dyn InputDb, url: &Url) -> Result<Config, String> {
+    let config_url = url
+        .join("fe.toml")
+        .map_err(|_| "failed to locate fe.toml for dependency".to_string())?;
+    if let Some(file) = db.workspace().get(db, &config_url) {
+        return Config::parse(file.text(db))
+            .map_err(|err| format!("Failed to parse {config_url}: {err}"));
+    }
+
+    let path = config_url
         .to_file_path()
-        .map_err(|_| "dependency URL is not a file path".to_string())?;
-    let path =
-        Utf8PathBuf::from_path_buf(path).map_err(|_| "dependency path is not UTF-8".to_string())?;
-    config_at_path(&path)
+        .map_err(|_| format!("Missing config at {config_url}"))?;
+    let content = resolver::files::read_file_text(path.as_path())
+        .map_err(|err| format!("Failed to read {config_url}: {err}"))?;
+    Config::parse(&content).map_err(|err| format!("Failed to parse {config_url}: {err}"))
 }
 
 fn config_at_path(path: &Utf8Path) -> Result<Config, String> {
     let config_path = path.join("fe.toml");
-    let content = fs::read_to_string(config_path.as_std_path())
+    let content = resolver::files::read_file_text(config_path.as_std_path())
         .map_err(|err| format!("Failed to read {}: {err}", config_path))?;
     Config::parse(&content).map_err(|err| format!("Failed to parse {config_path}: {err}"))
 }
@@ -1034,19 +1039,7 @@ fn looks_like_workspace_config(files: &FilesResource, root_url: &Url) -> bool {
     let Some(file) = files.files.iter().find(|file| file.path == config_path) else {
         return false;
     };
-    for line in file.content.lines() {
-        let trimmed = line.trim_start();
-        if trimmed.starts_with("[workspace]") {
-            return true;
-        }
-        if trimmed.starts_with("members")
-            || trimmed.starts_with("default-members")
-            || trimmed.starts_with("exclude")
-        {
-            return true;
-        }
-    }
-    false
+    common::config::is_workspace_content(&file.content)
 }
 
 fn relative_path_within_checkout(

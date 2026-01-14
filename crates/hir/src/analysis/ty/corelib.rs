@@ -14,7 +14,7 @@ pub fn resolve_core_trait<'db>(
     db: &'db dyn HirAnalysisDb,
     scope: ScopeId<'db>,
     segments: &[&str],
-) -> Trait<'db> {
+) -> Option<Trait<'db>> {
     let ingot = scope.top_mod(db).ingot(db);
     let root = if ingot.kind(db) == IngotKind::Core {
         IdentId::make_ingot(db)
@@ -35,16 +35,13 @@ pub fn resolve_core_trait<'db>(
     let assumptions = PredicateListId::empty_list(db);
     let Ok(PathRes::Mod(mod_scope)) = resolve_path(db, module_path, scope, assumptions, false)
     else {
-        panic!("failed to resolve core trait module path: {segments:?}");
+        return None;
     };
 
     // Resolve the trait name within the module
     let bucket = resolve_ident_to_bucket(db, PathId::from_ident(db, trait_name), mod_scope);
-    let nameres = bucket
-        .pick(NameDomain::TYPE)
-        .as_ref()
-        .expect("failed to resolve core trait");
-    nameres.trait_().expect("resolved name is not a trait")
+    let nameres = bucket.pick(NameDomain::TYPE).as_ref().ok()?;
+    nameres.trait_()
 }
 
 #[salsa::interned]

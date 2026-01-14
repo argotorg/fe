@@ -128,6 +128,10 @@ impl DependencyGraph {
             .unwrap_or_default()
     }
 
+    pub fn workspace_roots(&self, db: &dyn InputDb) -> Vec<Url> {
+        self.workspace_members(db).keys().cloned().collect()
+    }
+
     pub fn workspace_members_by_name(
         &self,
         db: &dyn InputDb,

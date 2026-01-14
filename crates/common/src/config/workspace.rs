@@ -151,6 +151,13 @@ fn parse_identity(
 
 pub(crate) fn parse_workspace_config(parsed: &Value) -> Result<WorkspaceConfig, String> {
     let mut diagnostics = Vec::new();
+    let has_workspace_section = parsed
+        .get("workspace")
+        .and_then(|value| value.as_table())
+        .is_some();
+    if !has_workspace_section && super::looks_like_workspace(parsed) {
+        diagnostics.push(ConfigDiagnostic::MissingWorkspaceSection);
+    }
     let workspace_value = if let (Some(root), Some(workspace)) = (
         parsed.as_table(),
         parsed.get("workspace").and_then(|value| value.as_table()),

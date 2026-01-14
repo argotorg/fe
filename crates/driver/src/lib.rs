@@ -18,12 +18,12 @@ use common::{
     stdlib::{HasBuiltinCore, HasBuiltinStd},
 };
 pub use db::DriverDataBase;
-use glob::glob;
 use ingot_handler::IngotHandler;
 use smol_str::SmolStr;
 
 use hir::analysis::core_requirements;
 use hir::hir_def::TopLevelMod;
+pub use resolver::files::{ExpandedWorkspaceMember, expand_workspace_members};
 use resolver::{
     files::FilesResolutionDiagnostic,
     git::{GitDescription, GitResolver},
@@ -174,14 +174,6 @@ pub fn find_ingot_by_metadata(db: &DriverDataBase, name: &str, version: &Version
         .ingot_by_name_version(db, &SmolStr::new(name), version)
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-struct ExpandedWorkspaceMember {
-    url: Url,
-    path: Utf8PathBuf,
-    name: Option<SmolStr>,
-    version: Option<Version>,
-}
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WorkspaceMember {
     pub url: Url,
@@ -194,109 +186,6 @@ fn _dump_scope_graph(db: &DriverDataBase, top_mod: TopLevelMod) -> String {
     let mut s = vec![];
     top_mod.scope_graph(db).write_as_dot(db, &mut s).unwrap();
     String::from_utf8(s).unwrap()
-}
-
-pub(crate) fn expand_workspace_members(
-    workspace: &common::config::WorkspaceSettings,
-    base_url: &Url,
-    selection: WorkspaceMemberSelection,
-) -> Result<Vec<ExpandedWorkspaceMember>, String> {
-    let base_path_buf = base_url
-        .to_file_path()
-        .map_err(|_| "workspace URL is not a file URL".to_string())?;
-    let base_path = Utf8PathBuf::from_path_buf(base_path_buf)
-        .map_err(|_| "workspace path is not UTF-8".to_string())?;
-
-    let mut excluded = HashSet::new();
-    for pattern in &workspace.exclude {
-        let pattern_path = base_path.join(pattern.as_str());
-        let entries = glob(pattern_path.as_str())
-            .map_err(|err| format!("Invalid exclude pattern \"{pattern}\": {err}"))?;
-        for entry in entries {
-            let path = entry
-                .map_err(|err| format!("Glob error for exclude pattern \"{pattern}\": {err}"))?;
-            if !path.starts_with(&base_path) {
-                return Err(format!(
-                    "Exclude pattern \"{pattern}\" escapes workspace root {base_path}"
-                ));
-            }
-            if let Ok(path) = Utf8PathBuf::from_path_buf(path) {
-                excluded.insert(path);
-            }
-        }
-    }
-
-    let mut members = Vec::new();
-    let mut seen = HashSet::new();
-    for spec in workspace.members_for_selection(selection) {
-        let pattern = spec.path.as_str();
-        if spec.name.is_some() || spec.version.is_some() {
-            if pattern.contains(['*', '?', '[']) {
-                return Err(format!(
-                    "Member path \"{pattern}\" with name/version cannot contain glob patterns"
-                ));
-            }
-            let path = base_path.join(pattern);
-            if !path.starts_with(&base_path) {
-                return Err(format!(
-                    "Member path \"{pattern}\" escapes workspace root {base_path}"
-                ));
-            }
-            if !path.is_dir() {
-                continue;
-            }
-            if excluded.contains(&path) {
-                continue;
-            }
-            let url = Url::from_directory_path(path.as_std_path())
-                .map_err(|_| "failed to convert member path to URL".to_string())?;
-            if seen.insert(url.clone()) {
-                members.push(ExpandedWorkspaceMember {
-                    url,
-                    path: Utf8PathBuf::from(pattern),
-                    name: spec.name.clone(),
-                    version: spec.version.clone(),
-                });
-            }
-            continue;
-        }
-
-        let pattern_path = base_path.join(pattern);
-        let entries = glob(pattern_path.as_str())
-            .map_err(|err| format!("Invalid member pattern \"{pattern}\": {err}"))?;
-        for entry in entries {
-            let path = entry
-                .map_err(|err| format!("Glob error for member pattern \"{pattern}\": {err}"))?;
-            if !path.starts_with(&base_path) {
-                return Err(format!(
-                    "Member pattern \"{pattern}\" escapes workspace root {base_path}"
-                ));
-            }
-            if !path.is_dir() {
-                continue;
-            }
-            let utf8_path = Utf8PathBuf::from_path_buf(path)
-                .map_err(|_| "member path is not UTF-8".to_string())?;
-            if excluded.contains(&utf8_path) {
-                continue;
-            }
-            let url = Url::from_directory_path(utf8_path.as_std_path())
-                .map_err(|_| "failed to convert member path to URL".to_string())?;
-            if seen.insert(url.clone()) {
-                let relative = utf8_path
-                    .strip_prefix(&base_path)
-                    .map_err(|_| "member path escaped workspace root".to_string())?;
-                members.push(ExpandedWorkspaceMember {
-                    url,
-                    path: relative.to_owned(),
-                    name: None,
-                    version: None,
-                });
-            }
-        }
-    }
-
-    Ok(members)
 }
 
 pub fn workspace_member_urls(

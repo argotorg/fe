@@ -6,8 +6,12 @@ use common::{
     diagnostics::{CompleteDiagnostic, Severity, Span},
 };
 use hir::{SpannedHirDb, hir_def::scope_graph::ScopeId, span::LazySpan};
+use resolver::files::path_exists;
 use rustc_hash::FxHashMap;
+use smol_str::SmolStr;
+use std::{ffi::OsStr, path::PathBuf};
 use tracing::error;
+use url::Url;
 
 pub fn calculate_line_offsets(text: &str) -> Vec<usize> {
     text.lines()
@@ -65,6 +69,7 @@ pub fn to_lsp_location_from_scope(
         && let Some(resolved_span) = top_mod.span().resolve(db)
     {
         let uri = resolved_span.file.url(db).ok_or("Failed to get file URL")?;
+        let uri = map_builtin_url(db, uri);
         return Ok(async_lsp::lsp_types::Location {
             uri,
             range: async_lsp::lsp_types::Range {
@@ -178,6 +183,7 @@ fn to_lsp_location_from_span(
     span: Span,
 ) -> Result<async_lsp::lsp_types::Location, Box<dyn std::error::Error>> {
     let url = span.file.url(db).expect("Failed to get file URL");
+    let url = map_builtin_url(db, url);
     let range = to_lsp_range_from_span(span, db)?;
     Ok(async_lsp::lsp_types::Location { uri: url, range })
 }
@@ -191,6 +197,74 @@ pub fn to_lsp_location_from_lazy_span<'db>(
 ) -> Result<async_lsp::lsp_types::Location, Box<dyn std::error::Error>> {
     let span = lazy_span.resolve(db).ok_or("Failed to resolve lazy span")?;
     to_lsp_location_from_span(db, span)
+}
+
+fn map_builtin_url(db: &dyn InputDb, url: Url) -> Url {
+    match url.scheme() {
+        "builtin-core" => map_builtin_to_workspace(db, url, "core"),
+        "builtin-std" => map_builtin_to_workspace(db, url, "std"),
+        _ => url,
+    }
+}
+
+fn map_builtin_to_workspace(db: &dyn InputDb, url: Url, name: &str) -> Url {
+    let roots = db.dependency_graph().workspace_roots(db);
+    let name = SmolStr::new(name);
+    let relative = url.path().trim_start_matches('/').to_string();
+
+    for root in roots {
+        let members = db
+            .dependency_graph()
+            .workspace_members_by_name(db, &root, &name);
+        if let Some(member) = members.first()
+            && let Ok(mapped) = member.url.join(&relative)
+        {
+            return mapped;
+        }
+    }
+
+    map_builtin_by_suffix(db, url, &relative, name.as_str())
+}
+
+fn map_builtin_by_suffix(db: &dyn InputDb, url: Url, relative: &str, name: &str) -> Url {
+    if let Some(root) = guess_workspace_root(db) {
+        let candidate = root.join("ingots").join(name).join(relative);
+        if path_exists(&candidate)
+            && let Ok(mapped) = Url::from_file_path(candidate)
+        {
+            return mapped;
+        }
+    }
+
+    let suffix = format!("/ingots/{name}/{relative}");
+    let all_files = db.workspace().all_files(db);
+    for (file_url, _) in all_files.iter() {
+        if file_url.scheme() == "file" && file_url.path().ends_with(&suffix) {
+            return file_url.clone();
+        }
+    }
+
+    url
+}
+
+fn guess_workspace_root(db: &dyn InputDb) -> Option<PathBuf> {
+    let all_files = db.workspace().all_files(db);
+    for (file_url, _) in all_files.iter() {
+        if file_url.scheme() != "file" {
+            continue;
+        }
+        let Ok(path) = file_url.to_file_path() else {
+            continue;
+        };
+        for ancestor in path.ancestors() {
+            if ancestor.file_name() == Some(OsStr::new("ingots"))
+                && let Some(root) = ancestor.parent()
+            {
+                return Some(root.to_path_buf());
+            }
+        }
+    }
+    None
 }
 
 #[cfg(target_arch = "wasm32")]

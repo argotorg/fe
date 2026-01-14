@@ -1,4 +1,5 @@
 use camino::{Utf8Path, Utf8PathBuf};
+use common::config::looks_like_workspace;
 use toml::Value;
 use url::Url;
 
@@ -390,22 +391,13 @@ fn config_kind_from_files(root: &Utf8PathBuf, files: &FilesResource) -> Option<C
 fn config_kind_from_content(content: &str) -> Option<ConfigKind> {
     let parsed: Value = content.parse().ok()?;
     let table = parsed.as_table()?;
-    if table.contains_key("workspace") || looks_like_workspace(table) {
+    if table.contains_key("workspace") || looks_like_workspace(&parsed) {
         return Some(ConfigKind::Workspace);
     }
     if table.contains_key("ingot") {
         return Some(ConfigKind::Ingot);
     }
     Some(ConfigKind::Ingot)
-}
-
-fn looks_like_workspace(table: &toml::map::Map<String, Value>) -> bool {
-    table.contains_key("members")
-        || table.contains_key("default-members")
-        || table.contains_key("exclude")
-        || table.contains_key("resolution")
-        || table.contains_key("profiles")
-        || table.contains_key("scripts")
 }
 
 fn merge_files(mut base: FilesResource, extra: FilesResource) -> FilesResource {

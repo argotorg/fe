@@ -51,7 +51,7 @@ impl Config {
     }
 }
 
-fn looks_like_workspace(parsed: &Value) -> bool {
+pub fn looks_like_workspace(parsed: &Value) -> bool {
     let Some(table) = parsed.as_table() else {
         return false;
     };
@@ -62,6 +62,14 @@ fn looks_like_workspace(parsed: &Value) -> bool {
         || table.contains_key("resolution")
         || table.contains_key("profiles")
         || table.contains_key("scripts")
+}
+
+pub fn is_workspace_content(content: &str) -> bool {
+    let parsed: Value = match content.parse() {
+        Ok(parsed) => parsed,
+        Err(_) => return false,
+    };
+    parsed.get("workspace").is_some() || looks_like_workspace(&parsed)
 }
 
 impl IngotConfig {
@@ -124,6 +132,7 @@ pub enum ConfigDiagnostic {
     InvalidWorkspaceMemberName(SmolStr),
     InvalidWorkspaceMemberVersion(SmolStr),
     InvalidWorkspaceVersion(SmolStr),
+    MissingWorkspaceSection,
     MissingWorkspaceMemberPath,
     ConflictingWorkspaceMembersSpec,
     InvalidDependencyAlias(SmolStr),
@@ -179,6 +188,9 @@ impl Display for ConfigDiagnostic {
             }
             Self::InvalidWorkspaceVersion(value) => {
                 write!(f, "Invalid workspace version \"{value}\"")
+            }
+            Self::MissingWorkspaceSection => {
+                write!(f, "Workspace config is missing a [workspace] section")
             }
             Self::MissingWorkspaceMemberPath => write!(f, "Workspace member is missing a path"),
             Self::ConflictingWorkspaceMembersSpec => {

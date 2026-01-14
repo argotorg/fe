@@ -11,6 +11,7 @@ use async_lsp::{
 
 use common::InputDb;
 use driver::init_ingot;
+use resolver::files::{discover_context, read_file_text};
 use rustc_hash::FxHashSet;
 use url::Url;
 
@@ -56,41 +57,35 @@ async fn discover_and_load_ingots(
     backend: &mut Backend,
     root_path: &std::path::Path,
 ) -> Result<(), ResponseError> {
-    // Find all fe.toml files in the workspace
-    let pattern = format!("{}/**/fe.toml", root_path.to_string_lossy());
-    let config_paths = glob::glob(&pattern)
-        .map_err(|e| ResponseError::new(ErrorCode::INTERNAL_ERROR, format!("Glob error: {e}")))?
-        .filter_map(Result::ok)
-        .collect::<Vec<_>>();
+    let root_url = Url::from_directory_path(root_path).map_err(|_| {
+        ResponseError::new(
+            ErrorCode::INTERNAL_ERROR,
+            format!("Invalid workspace root path: {root_path:?}"),
+        )
+    })?;
 
-    // Initialize each ingot using the driver's init_ingot function
-    for config_path in &config_paths {
-        let ingot_dir = config_path.parent().unwrap();
-        let ingot_url = Url::from_directory_path(ingot_dir).map_err(|_| {
-            ResponseError::new(
-                ErrorCode::INTERNAL_ERROR,
-                format!("Invalid ingot path: {ingot_dir:?}"),
-            )
-        })?;
+    let discovery = discover_context(&root_url).map_err(|e| {
+        ResponseError::new(ErrorCode::INTERNAL_ERROR, format!("Discovery error: {e}"))
+    })?;
 
-        let had_diagnostics = init_ingot(&mut backend.db, &ingot_url);
+    if let Some(workspace_root) = discovery.workspace_root.as_ref() {
+        let had_diagnostics = init_ingot(&mut backend.db, workspace_root);
+        if had_diagnostics {
+            warn!("Ingot initialization produced diagnostics for workspace root");
+        }
+    }
+
+    for ingot_url in &discovery.ingot_roots {
+        let had_diagnostics = init_ingot(&mut backend.db, ingot_url);
         if had_diagnostics {
             warn!(
                 "Ingot initialization produced diagnostics for {:?}",
-                ingot_dir
+                ingot_url
             );
         }
     }
 
-    // Also check if the root itself is an ingot (no fe.toml in subdirectories)
-    if config_paths.is_empty() {
-        let root_url = Url::from_directory_path(root_path).map_err(|_| {
-            ResponseError::new(
-                ErrorCode::INTERNAL_ERROR,
-                format!("Invalid workspace root path: {root_path:?}"),
-            )
-        })?;
-
+    if discovery.workspace_root.is_none() && discovery.ingot_roots.is_empty() {
         let had_diagnostics = init_ingot(&mut backend.db, &root_url);
         if had_diagnostics {
             warn!("Ingot initialization produced diagnostics for workspace root");
@@ -98,6 +93,13 @@ async fn discover_and_load_ingots(
     }
 
     Ok(())
+}
+
+async fn read_file_text_optional(path: std::path::PathBuf) -> Option<String> {
+    match tokio::task::spawn_blocking(move || read_file_text(&path)).await {
+        Ok(Ok(content)) => Some(content),
+        _ => None,
+    }
 }
 
 pub async fn initialize(
@@ -253,12 +255,9 @@ pub async fn handle_file_change(
         }
         ChangeKind::Create => {
             info!("file created: {:?}", &path_str);
-            let contents = match tokio::fs::read_to_string(&path).await {
-                Ok(c) => c,
-                Err(e) => {
-                    error!("Failed to read file {}: {}", path_str, e);
-                    return Ok(());
-                }
+            let Some(contents) = read_file_text_optional(path.clone()).await else {
+                error!("Failed to read file {}", path_str);
+                return Ok(());
             };
             if let Ok(url) = url::Url::from_file_path(&path) {
                 backend
@@ -277,13 +276,11 @@ pub async fn handle_file_change(
             let contents = if let Some(text) = contents {
                 text
             } else {
-                match tokio::fs::read_to_string(&path).await {
-                    Ok(c) => c,
-                    Err(e) => {
-                        error!("Failed to read file {}: {}", path_str, e);
-                        return Ok(());
-                    }
-                }
+                let Some(contents) = read_file_text_optional(path.clone()).await else {
+                    error!("Failed to read file {}", path_str);
+                    return Ok(());
+                };
+                contents
             };
             if let Ok(url) = url::Url::from_file_path(&path) {
                 backend

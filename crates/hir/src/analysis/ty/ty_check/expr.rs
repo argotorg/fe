@@ -332,10 +332,16 @@ impl<'db> TyChecker<'db> {
             .extend_all_bounds(self.db);
 
         let ingot = self.env.body().top_mod(self.db).ingot(self.db);
-        let effect_ref_trait =
-            resolve_core_trait(self.db, self.env.scope(), &["effect_ref", "EffectRef"]);
-        let effect_ref_mut_trait =
-            resolve_core_trait(self.db, self.env.scope(), &["effect_ref", "EffectRefMut"]);
+        let Some(effect_ref_trait) =
+            resolve_core_trait(self.db, self.env.scope(), &["effect_ref", "EffectRef"])
+        else {
+            return;
+        };
+        let Some(effect_ref_mut_trait) =
+            resolve_core_trait(self.db, self.env.scope(), &["effect_ref", "EffectRefMut"])
+        else {
+            return;
+        };
         let target_ident = IdentId::new(self.db, "Target".to_string());
 
         let provided_span = |provided: ProvidedEffect<'db>| match provided.origin {
@@ -1637,7 +1643,11 @@ impl<'db> TyChecker<'db> {
         op: &dyn TraitOps,
         rhs_expr: Option<ExprId>,
     ) -> ExprProp<'db> {
-        let trait_def = resolve_core_trait(self.db, self.env.scope(), &op.trait_path_segments());
+        let Some(trait_def) =
+            resolve_core_trait(self.db, self.env.scope(), &op.trait_path_segments())
+        else {
+            return ExprProp::invalid(self.db);
+        };
 
         let c_lhs_ty = Canonicalized::new(self.db, lhs_ty);
 
