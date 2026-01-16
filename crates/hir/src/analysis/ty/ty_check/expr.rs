@@ -946,7 +946,7 @@ impl<'db> TyChecker<'db> {
                 if self.table.unify(provider_var, provided.ty).is_err() {
                     self.table.rollback_to(snapshot);
                     let diag = BodyDiag::EffectProviderMismatch {
-                        primary: call_span.clone().into(),
+                        primary: call_span.clone(),
                         func,
                         key: key_path,
                         expected: existing_provider,
