@@ -345,6 +345,12 @@ pub(crate) fn canonicalize_zero_sized<'db>(db: &'db dyn HirAnalysisDb, body: &mu
         layout::is_zero_sized_ty(db, ty)
     }
 
+    fn mark_unit<'db>(values: &mut [ValueData<'db>], value: ValueId) {
+        let data = &mut values[value.index()];
+        data.origin = ValueOrigin::Unit;
+        data.repr = ValueRepr::Word;
+    }
+
     fn push_eval_value<'db>(
         db: &'db dyn HirAnalysisDb,
         values: &mut [ValueData<'db>],
@@ -362,7 +368,7 @@ pub(crate) fn canonicalize_zero_sized<'db>(db: &'db dyn HirAnalysisDb, body: &mu
         }
 
         // ZST: the value has no runtime representation.
-        values[value.index()].origin = ValueOrigin::Unit;
+        mark_unit(values, value);
     }
 
     fn push_place_eval<'db>(
@@ -419,7 +425,7 @@ pub(crate) fn canonicalize_zero_sized<'db>(db: &'db dyn HirAnalysisDb, body: &mu
                             Rvalue::Value(value) => {
                                 // Pure value, no runtime representation needed.
                                 if is_zst(db, values[value.index()].ty) {
-                                    values[value.index()].origin = ValueOrigin::Unit;
+                                    mark_unit(values, value);
                                 }
                             }
                             Rvalue::Load { place } => {
@@ -438,7 +444,7 @@ pub(crate) fn canonicalize_zero_sized<'db>(db: &'db dyn HirAnalysisDb, body: &mu
                         {
                             let value_ty = values[value.index()].ty;
                             if is_zst(db, value_ty) {
-                                values[value.index()].origin = ValueOrigin::Unit;
+                                mark_unit(values, *value);
                                 continue;
                             }
                         }
@@ -523,6 +529,7 @@ pub(crate) fn canonicalize_zero_sized<'db>(db: &'db dyn HirAnalysisDb, body: &mu
             && zst_locals.get(local.index()).copied().unwrap_or(false)
         {
             value.origin = ValueOrigin::Unit;
+            value.repr = ValueRepr::Word;
         }
     }
 }

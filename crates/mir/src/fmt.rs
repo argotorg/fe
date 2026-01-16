@@ -358,6 +358,7 @@ fn format_bin_op(op: BinOp) -> &'static str {
             ArithBinOp::BitAnd => "&",
             ArithBinOp::BitOr => "|",
             ArithBinOp::BitXor => "^",
+            ArithBinOp::Range => "..",
         },
         BinOp::Comp(comp) => match comp {
             CompBinOp::Eq => "==",

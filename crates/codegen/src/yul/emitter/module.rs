@@ -11,6 +11,7 @@ use mir::analysis::{
 use mir::{
     MirFunction, MirInst, Rvalue, ValueOrigin,
     ir::{IntrinsicOp, MirFunctionOrigin},
+    layout::{self, TargetDataLayout},
     lower_module,
 };
 use rustc_hash::{FxHashMap, FxHashSet};
@@ -55,6 +56,14 @@ pub fn emit_module_yul(
     db: &DriverDataBase,
     top_mod: TopLevelMod<'_>,
 ) -> Result<String, EmitModuleError> {
+    emit_module_yul_with_layout(db, top_mod, layout::EVM_LAYOUT)
+}
+
+pub fn emit_module_yul_with_layout(
+    db: &DriverDataBase,
+    top_mod: TopLevelMod<'_>,
+    layout: TargetDataLayout,
+) -> Result<String, EmitModuleError> {
     let module = lower_module(db, top_mod).map_err(EmitModuleError::MirLower)?;
 
     let contract_graph = build_contract_graph(&module.functions);
@@ -83,7 +92,7 @@ pub fn emit_module_yul(
     let mut function_docs: Vec<Vec<YulDoc>> = Vec::with_capacity(module.functions.len());
     for func in module.functions.iter() {
         let emitter =
-            FunctionEmitter::new(db, func, &code_regions).map_err(EmitModuleError::Yul)?;
+            FunctionEmitter::new(db, func, &code_regions, layout).map_err(EmitModuleError::Yul)?;
         let is_test = match func.origin {
             MirFunctionOrigin::Hir(hir_func) => ItemKind::from(hir_func)
                 .attrs(db)
@@ -218,6 +227,14 @@ pub fn emit_test_module_yul(
     db: &DriverDataBase,
     top_mod: TopLevelMod<'_>,
 ) -> Result<TestModuleOutput, EmitModuleError> {
+    emit_test_module_yul_with_layout(db, top_mod, layout::EVM_LAYOUT)
+}
+
+pub fn emit_test_module_yul_with_layout(
+    db: &DriverDataBase,
+    top_mod: TopLevelMod<'_>,
+    layout: TargetDataLayout,
+) -> Result<TestModuleOutput, EmitModuleError> {
     let module = lower_module(db, top_mod).map_err(EmitModuleError::MirLower)?;
 
     let contract_graph = build_contract_graph(&module.functions);
@@ -246,7 +263,7 @@ pub fn emit_test_module_yul(
     let mut function_docs: Vec<Vec<YulDoc>> = Vec::with_capacity(module.functions.len());
     for func in module.functions.iter() {
         let emitter =
-            FunctionEmitter::new(db, func, &code_regions).map_err(EmitModuleError::Yul)?;
+            FunctionEmitter::new(db, func, &code_regions, layout).map_err(EmitModuleError::Yul)?;
         let is_test = match func.origin {
             MirFunctionOrigin::Hir(hir_func) => ItemKind::from(hir_func)
                 .attrs(db)

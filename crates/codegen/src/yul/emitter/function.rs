@@ -1,4 +1,5 @@
 use driver::DriverDataBase;
+use mir::layout::TargetDataLayout;
 use mir::{BasicBlockId, MirFunction, Terminator, ir::MirFunctionOrigin};
 use rustc_hash::{FxHashMap, FxHashSet};
 
@@ -12,6 +13,7 @@ pub(super) struct FunctionEmitter<'db> {
     pub(super) mir_func: &'db MirFunction<'db>,
     /// Mapping from monomorphized function symbols to code region labels.
     pub(super) code_regions: &'db FxHashMap<String, String>,
+    pub(super) layout: TargetDataLayout,
     ipdom: Vec<Option<BasicBlockId>>,
 }
 
@@ -27,6 +29,7 @@ impl<'db> FunctionEmitter<'db> {
         db: &'db DriverDataBase,
         mir_func: &'db MirFunction<'db>,
         code_regions: &'db FxHashMap<String, String>,
+        layout: TargetDataLayout,
     ) -> Result<Self, YulError> {
         if let MirFunctionOrigin::Hir(func) = mir_func.origin
             && func.body(db).is_none()
@@ -38,6 +41,7 @@ impl<'db> FunctionEmitter<'db> {
             db,
             mir_func,
             code_regions,
+            layout,
             ipdom,
         })
     }

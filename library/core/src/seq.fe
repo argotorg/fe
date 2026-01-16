@@ -1,0 +1,19 @@
+/// Trait for types that can be iterated over.
+pub trait Seq<T> {
+    /// Returns the length of the sequence.
+    fn len(self) -> usize
+
+    /// Returns the element at the given index.
+    fn get(self, i: usize) -> T
+}
+
+/// Array implementation of Seq.
+impl<T, const N: usize> Seq<T> for [T; N] {
+    fn len(self) -> usize {
+        N
+    }
+
+    fn get(self, i: usize) -> T {
+        self[i]
+    }
+}

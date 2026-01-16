@@ -67,6 +67,26 @@ pub fn resolve_lib_type_path<'db>(
     resolve_lib_path(db, scope, path_id)
 }
 
+pub struct CoreRangeTypes<'db> {
+    pub range: TyId<'db>,
+    pub known: TyId<'db>,
+    pub unknown: TyId<'db>,
+}
+
+pub fn resolve_core_range_types<'db>(
+    db: &'db dyn HirAnalysisDb,
+    scope: ScopeId<'db>,
+) -> Option<CoreRangeTypes<'db>> {
+    let range = resolve_lib_type_path(db, scope, "core::range::Range")?;
+    let known = resolve_lib_type_path(db, scope, "core::range::Known")?;
+    let unknown = resolve_lib_type_path(db, scope, "core::range::Unknown")?;
+    Some(CoreRangeTypes {
+        range,
+        known,
+        unknown,
+    })
+}
+
 #[salsa::tracked]
 fn resolve_lib_path<'db>(
     db: &'db dyn HirAnalysisDb,

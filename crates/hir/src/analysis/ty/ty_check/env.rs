@@ -17,7 +17,7 @@ use smallvec1::SmallVec;
 use thin_vec::ThinVec;
 
 use super::owner::BodyOwner;
-use super::{Callable, ConstRef, TypedBody};
+use super::{Callable, ConstRef, TypedBody, stmt::ForLoopSeq};
 use crate::analysis::{
     HirAnalysisDb,
     name_resolution::{PathRes, resolve_path},
@@ -61,6 +61,9 @@ pub(super) struct TyCheckEnv<'db> {
 
     /// Resolved effect arguments at call sites, keyed by the call expression.
     call_effect_args: FxHashMap<ExprId, Vec<super::ResolvedEffectArg<'db>>>,
+
+    /// Resolved Seq trait methods for for-loops, keyed by the for statement.
+    for_loop_seq: FxHashMap<StmtId, ForLoopSeq<'db>>,
 }
 
 impl<'db> TyCheckEnv<'db> {
@@ -114,6 +117,7 @@ impl<'db> TyCheckEnv<'db> {
             param_bindings: Vec::new(),
             pat_bindings: FxHashMap::default(),
             call_effect_args: FxHashMap::default(),
+            for_loop_seq: FxHashMap::default(),
         };
 
         env.enter_scope(body.expr(db));
@@ -495,6 +499,12 @@ impl<'db> TyCheckEnv<'db> {
         }
     }
 
+    pub(super) fn register_for_loop_seq(&mut self, stmt: StmtId, seq: ForLoopSeq<'db>) {
+        if self.for_loop_seq.insert(stmt, seq).is_some() {
+            panic!("for loop seq is already registered for the given stmt")
+        }
+    }
+
     pub(super) fn callable_expr(&self, expr: ExprId) -> Option<&Callable<'db>> {
         self.callables.get(&expr)
     }
@@ -818,6 +828,12 @@ impl<'db> TyCheckEnv<'db> {
             .map(|(expr, callable)| (expr, callable.fold_with(self.db, &mut prober)))
             .collect();
 
+        let for_loop_seq = self
+            .for_loop_seq
+            .into_iter()
+            .map(|(stmt, seq)| (stmt, seq.fold_with(self.db, &mut prober)))
+            .collect();
+
         TypedBody {
             body: Some(self.body),
             pat_ty: self.pat_ty,
@@ -827,6 +843,7 @@ impl<'db> TyCheckEnv<'db> {
             call_effect_args: self.call_effect_args,
             param_bindings: self.param_bindings,
             pat_bindings: self.pat_bindings,
+            for_loop_seq,
         }
     }
 

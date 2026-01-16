@@ -2,8 +2,8 @@ use either::Either;
 use smallvec1::SmallVec;
 
 use crate::core::hir_def::{
-    ArithBinOp, BinOp, CallableDef, Expr, ExprId, FieldIndex, IdentId, Partial, Pat, PatId, PathId,
-    UnOp, VariantKind, WithBinding,
+    ArithBinOp, BinOp, CallableDef, Expr, ExprId, FieldIndex, IdentId, IntegerId, LitKind, Partial,
+    Pat, PatId, PathId, UnOp, VariantKind, WithBinding,
 };
 use crate::span::DynLazySpan;
 
@@ -16,7 +16,7 @@ use crate::analysis::place::{Place, PlaceBase};
 use crate::analysis::ty::{
     binder::Binder,
     canonical::Canonicalized,
-    corelib::{resolve_core_trait, resolve_lib_type_path},
+    corelib::{resolve_core_range_types, resolve_core_trait, resolve_lib_type_path},
     diagnostics::{BodyDiag, FuncBodyDiag},
     effects::place_effect_provider_param_index_map,
     fold::{AssocTySubst, TyFoldable as _, TyFolder},
@@ -39,10 +39,10 @@ use crate::analysis::{
         resolve_name_res, resolve_path, resolve_query,
     },
     ty::{
-        const_ty::ConstTyId,
+        const_ty::{ConstTyData, ConstTyId, EvaluatedConstTy},
         normalize::normalize_ty,
         ty_check::{TyChecker, path::RecordInitChecker},
-        ty_def::{InvalidCause, TyId},
+        ty_def::{InvalidCause, PrimTy, TyId},
     },
 };
 use crate::hir_def::{Attr, ItemKind};
@@ -174,7 +174,7 @@ impl<'db> TyChecker<'db> {
             Expr::Call(..) => self.check_call(expr, expr_data),
             Expr::MethodCall(..) => self.check_method_call(expr, expr_data),
             Expr::Path(..) => self.check_path(expr, expr_data),
-            Expr::RecordInit(..) => self.check_record_init(expr, expr_data),
+            Expr::RecordInit(..) => self.check_record_init(expr, expr_data, expected),
             Expr::Field(..) => self.check_field(expr, expr_data),
             Expr::Tuple(..) => self.check_tuple(expr, expr_data, expected),
             Expr::Array(..) => self.check_array(expr, expr_data, expected),
@@ -271,6 +271,11 @@ impl<'db> TyChecker<'db> {
             };
         }
 
+        // Range expressions construct Range types directly
+        if matches!(op, BinOp::Arith(ArithBinOp::Range)) {
+            return self.check_range_expr(expr, lhs_expr, rhs_expr);
+        }
+
         let lhs = self.check_expr_unknown(lhs_expr);
         if lhs.ty.has_invalid(self.db) {
             return ExprProp::invalid(self.db);
@@ -306,6 +311,86 @@ impl<'db> TyChecker<'db> {
         }
 
         self.check_ops_trait(expr, lhs.ty, &op, Some(rhs_expr))
+    }
+
+    /// Check a range expression `start..end` and return the Range type.
+    ///
+    /// Both operands must be `usize`. The result type depends on whether bounds
+    /// are compile-time constants:
+    /// - `Range<Known<S>, Known<E>>` when both are literals (0 words)
+    /// - `Range<Known<S>, Unknown>` when only start is literal (1 word)
+    /// - `Range<Unknown, Known<E>>` when only end is literal (1 word)
+    /// - `Range<Unknown, Unknown>` when neither is literal (2 words)
+    fn check_range_expr(
+        &mut self,
+        _expr: ExprId,
+        start_expr: ExprId,
+        end_expr: ExprId,
+    ) -> ExprProp<'db> {
+        let usize_ty = TyId::new(self.db, TyData::TyBase(TyBase::Prim(PrimTy::Usize)));
+
+        // Check that both operands are usize
+        self.check_expr(start_expr, usize_ty);
+        self.check_expr(end_expr, usize_ty);
+
+        // Try to detect if bounds are literal integers
+        let start_lit = self.try_get_literal_int(start_expr);
+        let end_lit = self.try_get_literal_int(end_expr);
+
+        // Resolve Range types from core library
+        match resolve_core_range_types(self.db, self.env.scope()) {
+            Some(types) => {
+                // Construct appropriate bound types based on constness
+                let start_bound =
+                    self.make_range_bound(start_lit, types.known, types.unknown, usize_ty);
+                let end_bound =
+                    self.make_range_bound(end_lit, types.known, types.unknown, usize_ty);
+
+                // Construct Range<StartBound, EndBound>
+                let range_s = TyId::app(self.db, types.range, start_bound);
+                let range_full = TyId::app(self.db, range_s, end_bound);
+                ExprProp::new(range_full, true)
+            }
+            _ => {
+                // Fallback: if Range/Known/Unknown isn't found, return invalid
+                // This shouldn't happen in normal usage
+                ExprProp::invalid(self.db)
+            }
+        }
+    }
+
+    /// Try to extract a literal integer value from an expression.
+    /// Returns `Some(IntegerId)` if the expression is a literal integer, `None` otherwise.
+    fn try_get_literal_int(&self, expr: ExprId) -> Option<IntegerId<'db>> {
+        let Partial::Present(expr_data) = self.env.expr_data(expr) else {
+            return None;
+        };
+
+        match expr_data {
+            Expr::Lit(LitKind::Int(int_id)) => Some(*int_id),
+            _ => None,
+        }
+    }
+
+    /// Create a range bound type: either `Known<N>` for a literal or `Unknown`.
+    fn make_range_bound(
+        &self,
+        lit: Option<IntegerId<'db>>,
+        known_base: TyId<'db>,
+        unknown_ty: TyId<'db>,
+        usize_ty: TyId<'db>,
+    ) -> TyId<'db> {
+        match lit {
+            Some(int_id) => {
+                // Create Known<N> where N is the literal value
+                let const_value = EvaluatedConstTy::LitInt(int_id);
+                let const_data = ConstTyData::Evaluated(const_value, usize_ty);
+                let const_ty = ConstTyId::new(self.db, const_data);
+                let const_ty_id = TyId::const_ty(self.db, const_ty);
+                TyId::app(self.db, known_base, const_ty_id)
+            }
+            None => unknown_ty,
+        }
     }
 
     fn check_with(
@@ -408,16 +493,30 @@ impl<'db> TyChecker<'db> {
     }
 
     pub(super) fn check_callable_effects(&mut self, expr: ExprId, callable: &Callable<'db>) {
+        let body = self.body();
+        let call_span: DynLazySpan<'db> = expr.span(body).into();
+        let args = self.resolve_callable_effects(call_span.clone(), callable);
+        for arg in args {
+            self.env.push_call_effect_arg(expr, arg);
+        }
+    }
+
+    pub(super) fn resolve_callable_effects(
+        &mut self,
+        call_span: DynLazySpan<'db>,
+        callable: &Callable<'db>,
+    ) -> Vec<super::ResolvedEffectArg<'db>> {
         let CallableDef::Func(func) = callable.callable_def else {
-            return;
+            return Vec::new();
         };
 
         if !func.has_effects(self.db) {
-            return;
+            return Vec::new();
         }
 
+        let mut resolved_args: Vec<super::ResolvedEffectArg<'db>> = Vec::new();
+
         let body = self.body();
-        let call_span = expr.span(body);
         let callee_assumptions = collect_func_def_constraints(self.db, func.into(), true)
             .instantiate_identity()
             .extend_all_bounds(self.db);
@@ -550,7 +649,7 @@ impl<'db> TyChecker<'db> {
             );
             if candidate_frames.is_empty() {
                 let diag = BodyDiag::MissingEffect {
-                    primary: call_span.clone().into(),
+                    primary: call_span.clone(),
                     func,
                     key: key_path,
                 };
@@ -666,7 +765,7 @@ impl<'db> TyChecker<'db> {
                                     && !provided.is_mut
                                 {
                                     let diag = BodyDiag::EffectMutabilityMismatch {
-                                        primary: call_span.clone().into(),
+                                        primary: call_span.clone(),
                                         func,
                                         key: key_path,
                                         provided_span: provided_span(*provided),
@@ -674,7 +773,7 @@ impl<'db> TyChecker<'db> {
                                     self.push_diag(diag);
                                 } else {
                                     let diag = BodyDiag::MissingEffect {
-                                        primary: call_span.clone().into(),
+                                        primary: call_span.clone(),
                                         func,
                                         key: key_path,
                                     };
@@ -682,7 +781,7 @@ impl<'db> TyChecker<'db> {
                                 }
                             } else {
                                 let diag = BodyDiag::EffectTypeMismatch {
-                                    primary: call_span.clone().into(),
+                                    primary: call_span.clone(),
                                     func,
                                     key: key_path,
                                     expected,
@@ -706,7 +805,7 @@ impl<'db> TyChecker<'db> {
                                 GoalSatisfiability::UnSat(_) | GoalSatisfiability::ContainsInvalid
                             ) {
                                 let diag = BodyDiag::EffectTraitUnsatisfied {
-                                    primary: call_span.clone().into(),
+                                    primary: call_span.clone(),
                                     func,
                                     key: key_path,
                                     trait_req,
@@ -716,7 +815,7 @@ impl<'db> TyChecker<'db> {
                                 self.push_diag(diag);
                             } else {
                                 let diag = BodyDiag::MissingEffect {
-                                    primary: call_span.clone().into(),
+                                    primary: call_span.clone(),
                                     func,
                                     key: key_path,
                                 };
@@ -728,7 +827,7 @@ impl<'db> TyChecker<'db> {
                 }
 
                 let diag = BodyDiag::MissingEffect {
-                    primary: call_span.clone().into(),
+                    primary: call_span.clone(),
                     func,
                     key: key_path,
                 };
@@ -741,7 +840,7 @@ impl<'db> TyChecker<'db> {
                 _ => {
                     let Some(required_name) = effect.name(self.db) else {
                         let diag = BodyDiag::AmbiguousEffect {
-                            primary: call_span.clone().into(),
+                            primary: call_span.clone(),
                             func,
                             key: key_path,
                         };
@@ -770,7 +869,7 @@ impl<'db> TyChecker<'db> {
                         best
                     } else {
                         let diag = BodyDiag::AmbiguousEffect {
-                            primary: call_span.clone().into(),
+                            primary: call_span.clone(),
                             func,
                             key: key_path,
                         };
@@ -824,7 +923,7 @@ impl<'db> TyChecker<'db> {
 
             if required_mut && matches!(pass_mode, super::EffectPassMode::Unknown) {
                 let diag = BodyDiag::EffectMutabilityMismatch {
-                    primary: call_span.clone().into(),
+                    primary: call_span.clone(),
                     func,
                     key: key_path,
                     provided_span: provided_span(provided),
@@ -845,7 +944,7 @@ impl<'db> TyChecker<'db> {
                 if self.table.unify(provider_var, provided.ty).is_err() {
                     self.table.rollback_to(snapshot);
                     let diag = BodyDiag::EffectProviderMismatch {
-                        primary: call_span.clone().into(),
+                        primary: call_span.clone(),
                         func,
                         key: key_path,
                         expected: existing_provider,
@@ -856,18 +955,12 @@ impl<'db> TyChecker<'db> {
                 }
             }
 
-            // Provider generic argument selection for direct place-effects is deferred to MIR
-            // lowering (Option B). The type checker records the effect argument form + pass mode only.
-
-            self.env.push_call_effect_arg(
-                expr,
-                super::ResolvedEffectArg {
-                    param_idx,
-                    key: key_path,
-                    arg,
-                    pass_mode,
-                },
-            );
+            resolved_args.push(super::ResolvedEffectArg {
+                param_idx,
+                key: key_path,
+                arg,
+                pass_mode,
+            });
 
             if let EffectRequirement::Type(expected) = requirement {
                 let given = match satisfaction {
@@ -876,7 +969,7 @@ impl<'db> TyChecker<'db> {
                 };
                 if self.table.unify(expected, given).is_err() {
                     let diag = BodyDiag::EffectTypeMismatch {
-                        primary: call_span.clone().into(),
+                        primary: call_span.clone(),
                         func,
                         key: key_path,
                         expected,
@@ -887,6 +980,8 @@ impl<'db> TyChecker<'db> {
                 }
             }
         }
+
+        resolved_args
     }
 
     fn resolve_effect_requirement(
@@ -1323,7 +1418,12 @@ impl<'db> TyChecker<'db> {
         }
     }
 
-    fn check_record_init(&mut self, expr: ExprId, expr_data: &Expr<'db>) -> ExprProp<'db> {
+    fn check_record_init(
+        &mut self,
+        expr: ExprId,
+        expr_data: &Expr<'db>,
+        expected: TyId<'db>,
+    ) -> ExprProp<'db> {
         let Expr::RecordInit(path, ..) = expr_data else {
             unreachable!()
         };
@@ -1339,6 +1439,17 @@ impl<'db> TyChecker<'db> {
 
         match reso {
             PathRes::Ty(ty) | PathRes::TyAlias(_, ty) => {
+                // Use the expected type to constrain the record's generic args
+                // before checking fields. This is important when record fields
+                // depend on generic parameters (e.g. via associated types).
+                let snapshot = self.table.snapshot();
+                if self.table.unify(ty, expected).is_ok() {
+                    self.table.commit(snapshot);
+                } else {
+                    self.table.rollback_to(snapshot);
+                }
+                let ty = ty.fold_with(self.db, &mut self.table);
+
                 let record_like = RecordLike::from_ty(ty);
                 if record_like.is_record(self.db) {
                     self.check_record_init_fields(&record_like, expr);
@@ -1365,7 +1476,17 @@ impl<'db> TyChecker<'db> {
             }
 
             PathRes::EnumVariant(variant) => {
+                // Constrain the variant type with the expected type before
+                // checking fields (same rationale as record inits).
                 let ty = variant.ty;
+                let snapshot = self.table.snapshot();
+                if self.table.unify(ty, expected).is_ok() {
+                    self.table.commit(snapshot);
+                } else {
+                    self.table.rollback_to(snapshot);
+                }
+                let ty = ty.fold_with(self.db, &mut self.table);
+
                 let record_like = RecordLike::from_variant(variant);
                 if record_like.is_record(self.db) {
                     self.check_record_init_fields(&record_like, expr);
@@ -2140,6 +2261,9 @@ impl TraitOps for BinOp {
                     BitAnd => ["BitAnd", "bitand", "&"],
                     BitOr => ["BitOr", "bitor", "|"],
                     BitXor => ["BitXor", "bitxor", "^"],
+                    // Range is handled specially - it constructs a Range type
+                    // rather than calling a trait method
+                    Range => ["Range", "range", ".."],
                 }
             }
 
@@ -2184,6 +2308,8 @@ impl TraitOps for AugAssignOp {
             BitAnd => ["BitAndAssign", "bitand_assign", "&="],
             BitOr => ["BitOrAssign", "bitor_assign", "|="],
             BitXor => ["BitXorAssign", "bitxor_assign", "^="],
+            // Range doesn't have an augmented assignment form
+            Range => unreachable!("Range operator cannot be used in augmented assignment"),
         }
     }
 }

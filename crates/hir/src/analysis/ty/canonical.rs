@@ -155,6 +155,32 @@ where
         let mut extractor = SolutionExtractor::new(table, map);
         solution.value.fold_with(db, &mut extractor)
     }
+
+    /// Substitute canonical variables back to the original variables.
+    ///
+    /// This is useful when you want to run unification in a canonicalized
+    /// environment (e.g. to avoid mixing inference keys from different tables)
+    /// but need to return a result in the original environment.
+    pub fn decanonicalize<U>(&self, db: &'db dyn HirAnalysisDb, value: U) -> U
+    where
+        U: TyFoldable<'db>,
+    {
+        struct Decanonicalizer<'a, 'db> {
+            subst: &'a FxHashMap<TyId<'db>, TyId<'db>>,
+        }
+
+        impl<'db> TyFolder<'db> for Decanonicalizer<'_, 'db> {
+            fn fold_ty(&mut self, db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> TyId<'db> {
+                if let Some(&ty) = self.subst.get(&ty) {
+                    return ty;
+                }
+                ty.super_fold_with(db, self)
+            }
+        }
+
+        let mut folder = Decanonicalizer { subst: &self.subst };
+        value.fold_with(db, &mut folder)
+    }
 }
 
 /// Represents a solution to a [`Canonical`] query.

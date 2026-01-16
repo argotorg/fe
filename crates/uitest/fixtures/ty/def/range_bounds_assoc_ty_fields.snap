@@ -1,0 +1,6 @@
+---
+source: crates/uitest/tests/ty.rs
+expression: diags
+input_file: fixtures/ty/def/range_bounds_assoc_ty_fields.fe
+---
+

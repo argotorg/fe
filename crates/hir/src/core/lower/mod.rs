@@ -205,6 +205,14 @@ impl<'db> FileLowerCtxt<'db> {
         self.builder.joined_id(id)
     }
 
+    pub(super) fn current_id(&self) -> TrackedItemId<'db> {
+        self.builder.current_id()
+    }
+
+    pub(super) fn set_current_id(&mut self, id: TrackedItemId<'db>) {
+        self.builder.set_current_id(id);
+    }
+
     /// Creates a new scope for an item.
     fn enter_item_scope(&mut self, id: TrackedItemId<'db>, is_mod: bool) {
         self.builder.enter_item_scope(id, is_mod);

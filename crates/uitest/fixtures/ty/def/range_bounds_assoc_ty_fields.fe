@@ -1,0 +1,32 @@
+trait Bound {
+    type Repr
+}
+
+struct Known<const N: usize> {}
+struct Unknown {}
+
+impl<const N: usize> Bound for Known<N> {
+    type Repr = ()
+}
+
+impl Bound for Unknown {
+    type Repr = usize
+}
+
+struct Range<S: Bound, E: Bound> {
+    pub start: <S as Bound>::Repr,
+    pub end: <E as Bound>::Repr,
+}
+
+fn test_const_range() -> Range<Known<0>, Known<10>> {
+    Range { start: (), end: () }
+}
+
+fn test_dynamic_end(n: usize) -> Range<Known<0>, Unknown> {
+    Range { start: (), end: n }
+}
+
+fn test_fully_dynamic(s: usize, e: usize) -> Range<Unknown, Unknown> {
+    Range { start: s, end: e }
+}
+
