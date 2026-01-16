@@ -1,0 +1,9 @@
+// For loop with #[unroll] attribute - inlines the loop body for each iteration
+pub fn for_array_unrolled() -> u64 {
+    let mut sum: u64 = 0
+    #[unroll]
+    for elem in [1, 2, 3, 4, 5] {
+        sum = sum + elem
+    }
+    sum
+}

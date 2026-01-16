@@ -212,6 +212,13 @@ impl<'db> Expr<'db> {
                 let op = ArithBinOp::lower_ast(op);
                 Self::AugAssign(lhs, rhs, op)
             }
+
+            ast::ExprKind::Range(range) => {
+                let start = Self::push_to_body_opt(ctxt, range.start());
+                let end = Self::push_to_body_opt(ctxt, range.end());
+                let is_inclusive = range.is_inclusive();
+                Self::Range(start, end, is_inclusive)
+            }
         };
 
         ctxt.push_expr(expr, HirOrigin::raw(&ast))

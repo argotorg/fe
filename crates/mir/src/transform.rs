@@ -108,7 +108,9 @@ pub(crate) fn insert_temp_binds<'db>(db: &'db dyn HirAnalysisDb, body: &mut MirB
                     }
                     MirInst::Assign { stmt, dest, rvalue } => {
                         match &rvalue {
-                            Rvalue::ZeroInit | Rvalue::Alloc { .. } => {}
+                            Rvalue::ZeroInit
+                            | Rvalue::Alloc { .. }
+                            | Rvalue::CopyDataRegion { .. } => {}
                             Rvalue::Value(value) => {
                                 ctx.stabilize_value(*value, dest.is_some(), false);
                             }
@@ -428,7 +430,9 @@ pub(crate) fn canonicalize_zero_sized<'db>(db: &'db dyn HirAnalysisDb, body: &mu
                                 // any side effects in the base/index expressions.
                                 push_place_eval(db, values, &mut rewritten, &place);
                             }
-                            Rvalue::Alloc { .. } | Rvalue::ZeroInit => {}
+                            Rvalue::Alloc { .. }
+                            | Rvalue::ZeroInit
+                            | Rvalue::CopyDataRegion { .. } => {}
                         }
                     }
                     _ => {
@@ -595,7 +599,7 @@ fn compute_value_use_counts<'db>(body: &MirBody<'db>) -> Vec<usize> {
             match inst {
                 MirInst::BindValue { value } => bump(*value),
                 MirInst::Assign { rvalue, .. } => match rvalue {
-                    Rvalue::ZeroInit | Rvalue::Alloc { .. } => {}
+                    Rvalue::ZeroInit | Rvalue::Alloc { .. } | Rvalue::CopyDataRegion { .. } => {}
                     Rvalue::Value(value) => bump(*value),
                     Rvalue::Call(call) => {
                         for arg in call.args.iter().chain(call.effect_args.iter()) {

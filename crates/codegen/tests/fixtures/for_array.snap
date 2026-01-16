@@ -1,0 +1,29 @@
+---
+source: crates/codegen/tests/yul.rs
+assertion_line: 42
+expression: output
+input_file: tests/fixtures/for_array.fe
+---
+object "Module" {
+  code {
+    function for_array_sum() -> ret {
+      let v0 := mload(0x40)
+      if iszero(v0) {
+        v0 := 0x80
+      }
+      mstore(0x40, add(v0, datasize("data_0")))
+      datacopy(v0, dataoffset("data_0"), datasize("data_0"))
+      let v1 := v0
+      let v2 := 0
+      let v3 := 0
+      for { v3 := 0 } lt(v3, 25) { v3 := add(v3, 1) } {
+        let v4 := and(mload(add(v1, mul(v3, 8))), 0xffffffffffffffff)
+        let v5 := v4
+        v2 := add(v2, v5)
+      }
+      ret := v2
+      leave
+    }
+  }
+  data "data_0" hex"000000000000000100000000000000020000000000000003000000000000000400000000000000050000000000000006000000000000000700000000000000080000000000000009000000000000000a000000000000000b000000000000000c000000000000000d000000000000000e000000000000000f0000000000000010000000000000001100000000000000120000000000000013000000000000001400000000000000150000000000000016000000000000001700000000000000180000000000000019"
+}

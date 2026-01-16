@@ -1128,7 +1128,7 @@ pub fn walk_stmt<'db, V>(
             }
         }
 
-        Stmt::For(pat_id, cond_id, for_body_id) => {
+        Stmt::For(pat_id, cond_id, for_body_id, _attrs) => {
             visit_node_in_body!(visitor, ctxt, pat_id, pat);
             visit_node_in_body!(visitor, ctxt, cond_id, expr);
             visit_node_in_body!(visitor, ctxt, for_body_id, expr);
@@ -1351,6 +1351,11 @@ pub fn walk_expr<'db, V>(
                 visit_node_in_body!(visitor, ctxt, &b.value, expr);
             }
             visit_node_in_body!(visitor, ctxt, body_expr, expr);
+        }
+
+        Expr::Range(start_expr, end_expr, _is_inclusive) => {
+            visit_node_in_body!(visitor, ctxt, start_expr, expr);
+            visit_node_in_body!(visitor, ctxt, end_expr, expr);
         }
     }
 }

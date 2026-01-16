@@ -1,4 +1,4 @@
-use crate::core::hir_def::{IdentId, Partial, Stmt, StmtId};
+use crate::core::hir_def::{Expr, IdentId, Partial, Stmt, StmtId};
 
 use super::TyChecker;
 use crate::analysis::ty::{
@@ -46,9 +46,13 @@ impl<'db> TyChecker<'db> {
     }
 
     fn check_for(&mut self, stmt: StmtId, stmt_data: &Stmt<'db>) -> TyId<'db> {
-        let Stmt::For(pat, expr, body) = stmt_data else {
+        let Stmt::For(pat, expr, body, _attrs) = stmt_data else {
             unreachable!()
         };
+
+        // Check if the expression is a range expression
+        let expr_data = self.env.expr_data(*expr);
+        let is_range = matches!(expr_data, Partial::Present(Expr::Range(..)));
 
         let expr_ty = self.fresh_ty();
         let typed_expr = self
@@ -56,26 +60,39 @@ impl<'db> TyChecker<'db> {
             .fold_with(self.db, &mut self.table);
         let expr_ty = typed_expr.ty;
 
-        let (base, arg) = expr_ty.decompose_ty_app(self.db);
-        // TODO: We can generalize this by just checking the `expr_ty` implements
-        // `Iterator` trait when `std::iter::Iterator` is implemented.
-        let elem_ty = if base.is_array(self.db) {
-            arg[0]
-        } else if base.has_invalid(self.db) {
-            TyId::invalid(self.db, InvalidCause::Other)
-        } else if base.is_ty_var(self.db) {
-            let diag = BodyDiag::TypeMustBeKnown(expr.span(self.body()).into());
-            self.push_diag(diag);
-            TyId::invalid(self.db, InvalidCause::Other)
+        // For range expressions, the expression type IS the element type
+        // For arrays, the element type is extracted from the array type
+        let elem_ty = if is_range {
+            // Range expression: element type is the range's type directly
+            if expr_ty.is_ty_var(self.db) {
+                let diag = BodyDiag::TypeMustBeKnown(expr.span(self.body()).into());
+                self.push_diag(diag);
+                TyId::invalid(self.db, InvalidCause::Other)
+            } else {
+                expr_ty
+            }
         } else {
-            let diag = BodyDiag::TraitNotImplemented {
-                primary: expr.span(self.body()).into(),
-                ty: expr_ty.pretty_print(self.db).to_string(),
-                trait_name: IdentId::new(self.db, "Iterator".to_string()),
-            };
-            self.push_diag(diag);
+            let (base, arg) = expr_ty.decompose_ty_app(self.db);
+            // TODO: We can generalize this by just checking the `expr_ty` implements
+            // `Iterator` trait when `std::iter::Iterator` is implemented.
+            if base.is_array(self.db) {
+                arg[0]
+            } else if base.has_invalid(self.db) {
+                TyId::invalid(self.db, InvalidCause::Other)
+            } else if base.is_ty_var(self.db) {
+                let diag = BodyDiag::TypeMustBeKnown(expr.span(self.body()).into());
+                self.push_diag(diag);
+                TyId::invalid(self.db, InvalidCause::Other)
+            } else {
+                let diag = BodyDiag::TraitNotImplemented {
+                    primary: expr.span(self.body()).into(),
+                    ty: expr_ty.pretty_print(self.db).to_string(),
+                    trait_name: IdentId::new(self.db, "Iterator".to_string()),
+                };
+                self.push_diag(diag);
 
-            TyId::invalid(self.db, InvalidCause::Other)
+                TyId::invalid(self.db, InvalidCause::Other)
+            }
         };
 
         self.check_pat(*pat, elem_ty);

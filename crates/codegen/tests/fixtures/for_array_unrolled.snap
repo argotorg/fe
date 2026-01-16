@@ -1,0 +1,21 @@
+---
+source: crates/codegen/tests/yul.rs
+assertion_line: 42
+expression: output
+input_file: tests/fixtures/for_array_unrolled.fe
+---
+function for_array_unrolled() -> ret {
+  let v0 := 0
+  let v1 := 1
+  v0 := add(v0, v1)
+  let v2 := 2
+  v0 := add(v0, v2)
+  let v3 := 3
+  v0 := add(v0, v3)
+  let v4 := 4
+  v0 := add(v0, v4)
+  let v5 := 5
+  v0 := add(v0, v5)
+  ret := v0
+  leave
+}

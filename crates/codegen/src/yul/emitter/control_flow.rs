@@ -475,28 +475,6 @@ impl<'db> FunctionEmitter<'db> {
                 .join(" ")
         }
 
-        fn rewrite_lets_to_assignments(doc: &YulDoc) -> YulDoc {
-            match doc {
-                YulDoc::Line(text) => {
-                    if let Some(rest) = text.strip_prefix("let ")
-                        && rest.contains(":=")
-                    {
-                        YulDoc::line(rest.to_string())
-                    } else {
-                        YulDoc::line(text.clone())
-                    }
-                }
-                YulDoc::Block { caption, body } => YulDoc::block(
-                    caption.clone(),
-                    body.iter().map(rewrite_lets_to_assignments).collect(),
-                ),
-                YulDoc::WideBlock { caption, body } => YulDoc::wide_block(
-                    caption.clone(),
-                    body.iter().map(rewrite_lets_to_assignments).collect(),
-                ),
-            }
-        }
-
         let block = self
             .mir_func
             .body
@@ -519,30 +497,73 @@ impl<'db> FunctionEmitter<'db> {
             ));
         }
 
-        let init_docs = self.render_statements(&block.insts, state)?;
-        let post_docs: Vec<_> = init_docs.iter().map(rewrite_lets_to_assignments).collect();
-        let init_inline = docs_inline(&init_docs);
-        let init_block = if init_inline.is_empty() {
-            "{ }".to_string()
+        // Init block: use dedicated init_block if present, otherwise header (for while-style loops)
+        let init_block_str = if let Some(init_bb) = info.init_block {
+            let init_block_data = self
+                .mir_func
+                .body
+                .blocks
+                .get(init_bb.index())
+                .ok_or_else(|| YulError::Unsupported("invalid init block".into()))?;
+            let init_docs = self.render_statements(&init_block_data.insts, state)?;
+            let init_inline = docs_inline(&init_docs);
+            if init_inline.is_empty() {
+                "{ }".to_string()
+            } else {
+                format!("{{ {init_inline} }}")
+            }
         } else {
-            format!("{{ {init_inline} }}")
+            // Fallback for while-style loops: use header statements
+            let init_docs = self.render_statements(&block.insts, state)?;
+            let init_inline = docs_inline(&init_docs);
+            if init_inline.is_empty() {
+                "{ }".to_string()
+            } else {
+                format!("{{ {init_inline} }}")
+            }
         };
-        let post_inline = docs_inline(&post_docs);
-        let post_block = if post_inline.is_empty() {
-            "{ }".to_string()
+
+        // Post block: render from the dedicated post_block if present
+        let post_block_str = if let Some(post_bb) = info.post_block {
+            let post_block_data = self
+                .mir_func
+                .body
+                .blocks
+                .get(post_bb.index())
+                .ok_or_else(|| YulError::Unsupported("invalid post block".into()))?;
+            let post_docs = self.render_statements(&post_block_data.insts, state)?;
+            let post_inline = docs_inline(&post_docs);
+            if post_inline.is_empty() {
+                "{ }".to_string()
+            } else {
+                format!("{{ {post_inline} }}")
+            }
         } else {
-            format!("{{ {post_inline} }}")
+            "{ }".to_string()
         };
 
         let cond_expr = self.lower_value(cond, state)?;
+
+        // Continue target is the post block if present, otherwise the header
+        let continue_target = info.post_block.unwrap_or(header);
         let loop_ctx = LoopEmitCtx {
-            continue_target: header,
+            continue_target,
             break_target: info.exit,
             implicit_continue: info.backedge,
         };
-        let body_docs = self.emit_block_internal(info.body, Some(loop_ctx), state, stop_blocks)?;
+
+        // Stop at init and post blocks when emitting body (they're handled separately)
+        let mut body_stops = stop_blocks.to_vec();
+        if let Some(init_bb) = info.init_block {
+            body_stops.push(init_bb);
+        }
+        if let Some(post_bb) = info.post_block {
+            body_stops.push(post_bb);
+        }
+        let body_docs = self.emit_block_internal(info.body, Some(loop_ctx), state, &body_stops)?;
+
         let loop_doc = YulDoc::block(
-            format!("for {init_block} {cond_expr} {post_block} "),
+            format!("for {init_block_str} {cond_expr} {post_block_str} "),
             body_docs,
         );
         Ok((loop_doc, info.exit))

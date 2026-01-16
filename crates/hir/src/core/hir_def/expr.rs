@@ -47,6 +47,10 @@ pub enum Expr<'db> {
 
     /// `with (K = v, ..) { body }`
     With(Vec<WithBinding<'db>>, ExprId),
+
+    /// Range expression: `start..end` (exclusive) or `start..=end` (inclusive)
+    /// The bool is true for inclusive ranges.
+    Range(ExprId, ExprId, bool),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, salsa::Update)]
