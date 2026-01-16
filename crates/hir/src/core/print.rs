@@ -585,6 +585,15 @@ impl<'db> Expr<'db> {
                 )
             }
 
+            Expr::Cast(expr, ty) => {
+                let expr = unwrap_partial_ref(expr.data(db, body), "Cast::expr");
+                let ty = ty
+                    .to_opt()
+                    .map(|ty| ty.pretty_print(db))
+                    .unwrap_or_else(|| "<missing>".into());
+                format!("{} as {}", expr.pretty_print(db, body, indent), ty)
+            }
+
             Expr::Call(callee, args) => {
                 let callee_expr = unwrap_partial_ref(callee.data(db, body), "Call::callee");
                 let args_str = args

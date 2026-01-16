@@ -1,9 +1,10 @@
 use either::Either;
+use num_bigint::BigUint;
 use smallvec1::SmallVec;
 
 use crate::core::hir_def::{
-    ArithBinOp, BinOp, CallableDef, Expr, ExprId, FieldIndex, IdentId, Partial, Pat, PatId, PathId,
-    UnOp, VariantKind, WithBinding,
+    ArithBinOp, BinOp, CallableDef, Expr, ExprId, FieldIndex, IdentId, LitKind, Partial, Pat,
+    PatId, PathId, UnOp, VariantKind, WithBinding,
 };
 use crate::span::DynLazySpan;
 
@@ -26,7 +27,7 @@ use crate::analysis::ty::{
         is_goal_satisfiable,
     },
     ty_check::callable::Callable,
-    ty_def::{TyBase, TyData},
+    ty_def::{PrimTy, TyBase, TyData, prim_int_bits},
 };
 use crate::analysis::{
     HirAnalysisDb, Spanned,
@@ -170,6 +171,7 @@ impl<'db> TyChecker<'db> {
             Expr::Lit(lit) => ExprProp::new(self.lit_ty(lit), true),
             Expr::Block(..) => self.check_block(expr, expr_data, expected),
             Expr::Un(..) => self.check_unary(expr, expr_data),
+            Expr::Cast(inner, ty) => self.check_cast(expr, *inner, *ty),
             Expr::Bin(lhs, rhs, op) => self.check_binary(expr, *lhs, *rhs, *op),
             Expr::Call(..) => self.check_call(expr, expr_data),
             Expr::MethodCall(..) => self.check_method_call(expr, expr_data),
@@ -250,6 +252,173 @@ impl<'db> TyChecker<'db> {
         }
 
         self.check_ops_trait(expr, prop.ty, op, None)
+    }
+
+    fn check_cast(
+        &mut self,
+        expr: ExprId,
+        inner_expr: ExprId,
+        target_ty: Partial<crate::hir_def::TypeId<'db>>,
+    ) -> ExprProp<'db> {
+        let inner_prop = self.check_expr_unknown(inner_expr);
+        if inner_prop.ty.has_invalid(self.db) {
+            return ExprProp::invalid(self.db);
+        }
+
+        let Some(hir_target_ty) = target_ty.to_opt() else {
+            return ExprProp::invalid(self.db);
+        };
+
+        let span = expr.span(self.body()).into_cast_expr().ty();
+        let target_ty = self.lower_ty(hir_target_ty, span, true);
+        if target_ty.has_invalid(self.db) {
+            return ExprProp::invalid(self.db);
+        }
+
+        let from = normalize_ty(
+            self.db,
+            inner_prop.ty,
+            self.env.scope(),
+            self.env.assumptions(),
+        );
+        let to = normalize_ty(self.db, target_ty, self.env.scope(), self.env.assumptions());
+
+        if from == to {
+            return ExprProp::new(to, true);
+        }
+
+        if let Partial::Present(Expr::Lit(LitKind::Int(int_id))) =
+            inner_expr.data(self.db, self.body())
+        {
+            let value = int_id.data(self.db);
+            if self.int_literal_fits_in_ty(value, to) {
+                return ExprProp::new(to, true);
+            }
+
+            let leaf = self.peel_transparent_newtypes(to);
+            let diag = BodyDiag::InvalidCast {
+                primary: expr.span(self.body()).into(),
+                from,
+                to,
+                hint: Some(format!(
+                    "integer literal `{}` is not representable in `{}`",
+                    value,
+                    leaf.pretty_print(self.db),
+                )),
+            };
+            self.push_diag(diag);
+            return ExprProp::invalid(self.db);
+        }
+
+        // Fail if the source type is unknown.
+        if from.base_ty(self.db).is_ty_var(self.db) {
+            let diag = BodyDiag::TypeMustBeKnown(inner_expr.span(self.body()).into());
+            self.push_diag(diag);
+            return ExprProp::invalid(self.db);
+        }
+
+        if self.is_lossless_cast(from, to) {
+            return ExprProp::new(to, true);
+        }
+
+        let diag = BodyDiag::InvalidCast {
+            primary: expr.span(self.body()).into(),
+            from,
+            to,
+            hint: None,
+        };
+        self.push_diag(diag);
+        ExprProp::invalid(self.db)
+    }
+
+    fn is_lossless_cast(&self, from: TyId<'db>, to: TyId<'db>) -> bool {
+        if from == to {
+            return true;
+        }
+
+        // Disallow casts involving `bool` unless they are identity (handled above).
+        if from.is_bool(self.db) || to.is_bool(self.db) {
+            return false;
+        }
+
+        let from_leaf = self.peel_transparent_newtypes(from);
+        let to_leaf = self.peel_transparent_newtypes(to);
+
+        if from_leaf == to_leaf {
+            return true;
+        }
+
+        // Disallow casts involving `bool` through wrappers.
+        if from_leaf.is_bool(self.db) || to_leaf.is_bool(self.db) {
+            return false;
+        }
+
+        self.is_lossless_int_cast(from_leaf, to_leaf)
+    }
+
+    fn transparent_newtype_field_ty(&self, ty: TyId<'db>) -> Option<TyId<'db>> {
+        if ty.is_tuple(self.db) || ty.is_struct(self.db) {
+            let field_tys = ty.field_types(self.db);
+            return (field_tys.len() == 1).then(|| field_tys[0]);
+        }
+        None
+    }
+
+    fn peel_transparent_newtypes(&self, mut ty: TyId<'db>) -> TyId<'db> {
+        while let Some(inner) = self.transparent_newtype_field_ty(ty) {
+            ty = inner;
+        }
+        ty
+    }
+
+    fn prim_int_signed_bits(&self, ty: TyId<'db>) -> Option<(bool, usize)> {
+        let base = ty.base_ty(self.db);
+        let TyData::TyBase(TyBase::Prim(prim)) = base.data(self.db) else {
+            return None;
+        };
+        let bits = prim_int_bits(*prim)?;
+        let signed = matches!(
+            prim,
+            PrimTy::I8
+                | PrimTy::I16
+                | PrimTy::I32
+                | PrimTy::I64
+                | PrimTy::I128
+                | PrimTy::I256
+                | PrimTy::Isize
+        );
+        Some((signed, bits))
+    }
+
+    fn is_lossless_int_cast(&self, from: TyId<'db>, to: TyId<'db>) -> bool {
+        let Some((from_signed, from_bits)) = self.prim_int_signed_bits(from) else {
+            return false;
+        };
+        let Some((to_signed, to_bits)) = self.prim_int_signed_bits(to) else {
+            return false;
+        };
+
+        match (from_signed, to_signed) {
+            (false, false) => to_bits >= from_bits,
+            (true, true) => to_bits >= from_bits,
+            (false, true) => to_bits > from_bits,
+            (true, false) => false,
+        }
+    }
+
+    fn int_literal_fits_in_ty(&self, value: &BigUint, target_ty: TyId<'db>) -> bool {
+        let leaf = self.peel_transparent_newtypes(target_ty);
+        let Some((signed, bits)) = self.prim_int_signed_bits(leaf) else {
+            return false;
+        };
+
+        if signed {
+            let max = (BigUint::from(1u8) << (bits - 1)) - BigUint::from(1u8);
+            value <= &max
+        } else {
+            let max = (BigUint::from(1u8) << bits) - BigUint::from(1u8);
+            value <= &max
+        }
     }
 
     fn check_binary(

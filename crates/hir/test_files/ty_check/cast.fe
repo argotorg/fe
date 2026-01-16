@@ -1,0 +1,22 @@
+use std::evm::effects::Address
+
+pub struct WrapU32 {
+    inner: u32
+}
+
+pub fn foo(x: u32, idx: u32, a: Address) -> (u8, i64, u256, u256, Address) {
+    let arr: [u8; 4] = [1, 2, 3, 4]
+    let b: u8 = arr[idx as usize]
+
+    let i: i64 = -x as i64
+
+    let w: WrapU32 = x as WrapU32
+    let word: u256 = w as u256
+
+    let z: u256 = x as u64 as u256
+
+    let a_word: u256 = a as u256
+    let a2: Address = a_word as Address
+
+    (b, i, word, z, a2)
+}

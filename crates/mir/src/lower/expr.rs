@@ -225,6 +225,10 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                 let _ = self.lower_expr(*inner);
                 self.ensure_value(expr)
             }
+            Partial::Present(Expr::Cast(inner, _)) => {
+                let _ = self.lower_expr(*inner);
+                self.ensure_value(expr)
+            }
             Partial::Present(Expr::Bin(lhs, rhs, BinOp::Index)) => {
                 self.lower_index_expr(expr, *lhs, *rhs)
             }
@@ -301,6 +305,23 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         {
             self.builder.body.values[value_id.index()].origin =
                 ValueOrigin::Synthetic(SyntheticValue::Int(BigUint::from(offset)));
+            if returns_value && let Some(dest) = dest_override {
+                self.assign(stmt, Some(dest), Rvalue::Value(value_id));
+            }
+            return value_id;
+        }
+
+        if self.is_cast_intrinsic(callable_def) {
+            let mut cast_args = args.clone();
+            if self.is_method_call(expr) && !cast_args.is_empty() {
+                cast_args.remove(0);
+            }
+            if cast_args.len() != 1 {
+                return value_id;
+            }
+            let arg_value = cast_args[0];
+            self.builder.body.values[value_id.index()].origin =
+                ValueOrigin::TransparentCast { value: arg_value };
             if returns_value && let Some(dest) = dest_override {
                 self.assign(stmt, Some(dest), Rvalue::Value(value_id));
             }

@@ -156,6 +156,9 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                 op: *op,
                 inner: self.ensure_value(*inner),
             },
+            Partial::Present(Expr::Cast(inner, _)) => ValueOrigin::TransparentCast {
+                value: self.ensure_value(*inner),
+            },
             Partial::Present(Expr::Bin(lhs, rhs, op)) => ValueOrigin::Binary {
                 op: *op,
                 lhs: self.ensure_value(*lhs),

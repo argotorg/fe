@@ -3,7 +3,8 @@ use parser::ast::{self, prelude::*};
 use super::body::BodyCtxt;
 use crate::{
     hir_def::{
-        Body, GenericArgListId, IdentId, IntegerId, ItemKind, LitKind, Pat, PathId, Stmt, expr::*,
+        Body, GenericArgListId, IdentId, IntegerId, ItemKind, LitKind, Pat, PathId, Stmt, TypeId,
+        expr::*,
     },
     span::HirOrigin,
 };
@@ -51,6 +52,12 @@ impl<'db> Expr<'db> {
                 let op = un.op().expect("parser guarantees op presence");
                 let op = UnOp::lower_ast(op);
                 Self::Un(expr, op)
+            }
+
+            ast::ExprKind::Cast(cast) => {
+                let expr = Self::push_to_body_opt(ctxt, cast.expr());
+                let ty = TypeId::lower_ast_partial(ctxt.f_ctxt, cast.ty());
+                Self::Cast(expr, ty)
             }
 
             ast::ExprKind::Call(call) => {

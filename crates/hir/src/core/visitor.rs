@@ -1190,6 +1190,19 @@ pub fn walk_expr<'db, V>(
             visit_node_in_body!(visitor, ctxt, expr_id, expr);
         }
 
+        Expr::Cast(expr_id, ty) => {
+            visit_node_in_body!(visitor, ctxt, expr_id, expr);
+
+            if let Some(ty) = ty.to_opt() {
+                ctxt.with_new_ctxt(
+                    |span| span.into_cast_expr().ty(),
+                    |ctxt| {
+                        visitor.visit_ty(ctxt, ty);
+                    },
+                );
+            }
+        }
+
         Expr::Call(callee_id, call_args) => {
             visit_node_in_body!(visitor, ctxt, callee_id, expr);
             ctxt.with_new_ctxt(

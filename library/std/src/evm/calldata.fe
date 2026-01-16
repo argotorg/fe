@@ -1,5 +1,5 @@
 use core::abi::ByteInput
-use core::num::__u256_as_u8
+use core::num::IntDowncast
 use ingot::evm::ops::{calldataload, calldatasize}
 
 pub struct CallData {
@@ -20,6 +20,6 @@ impl ByteInput for CallData {
         let word = calldataload(self.base + word_offset)
         let idx = byte_offset - word_offset
         let shift = (31 - idx) * 8
-        __u256_as_u8((word >> shift) & 0xff)
+        ((word >> shift) & 0xff).downcast_unchecked()
     }
 }

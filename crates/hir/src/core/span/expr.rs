@@ -8,7 +8,10 @@ use super::{
 use crate::{
     SpannedHirDb,
     hir_def::{Body, ExprId},
-    span::{LazyLitSpan, LazySpanAtom, params::LazyGenericArgListSpan, path::LazyPathSpan},
+    span::{
+        LazyLitSpan, LazySpanAtom, params::LazyGenericArgListSpan, path::LazyPathSpan,
+        types::LazyTySpan,
+    },
 };
 
 define_lazy_span_node!(LazyExprSpan, ast::Expr,);
@@ -28,6 +31,10 @@ impl<'db> LazyExprSpan<'db> {
 
     pub fn into_un_expr(self) -> LazyUnExprSpan<'db> {
         LazyUnExprSpan(self.0)
+    }
+
+    pub fn into_cast_expr(self) -> LazyCastExprSpan<'db> {
+        LazyCastExprSpan(self.0)
     }
 
     pub fn into_call_expr(self) -> LazyCallExprSpan<'db> {
@@ -100,6 +107,17 @@ define_lazy_span_node!(
     ast::UnExpr,
     @node {
         (op, op, LazySpanAtom),
+    }
+);
+
+define_lazy_span_node!(
+    LazyCastExprSpan,
+    ast::CastExpr,
+    @token {
+        (as_kw, as_kw),
+    }
+    @node {
+        (ty, ty, LazyTySpan),
     }
 );
 

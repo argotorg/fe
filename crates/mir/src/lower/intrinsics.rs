@@ -104,6 +104,29 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         }
     }
 
+    /// Returns `true` if the callable definition refers to a compiler-provided cast shim.
+    ///
+    /// These are external (no-body) functions in core/std that follow the `__{src}_as_{dst}`
+    /// naming convention. During MIR lowering they are treated as representation-preserving casts.
+    pub(super) fn is_cast_intrinsic(&self, func_def: CallableDef<'db>) -> bool {
+        match func_def.ingot(self.db).kind(self.db) {
+            IngotKind::Core | IngotKind::Std => {}
+            _ => return false,
+        }
+
+        let CallableDef::Func(func) = func_def else {
+            return false;
+        };
+        if func.body(self.db).is_some() {
+            return false;
+        }
+
+        let Some(name) = func_def.name(self.db) else {
+            return false;
+        };
+        is_cast_intrinsic_name(name.data(self.db).as_str())
+    }
+
     /// Resolves the `code_region` target represented by an intrinsic argument path.
     ///
     /// # Parameters
@@ -149,4 +172,21 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
             symbol: None,
         })
     }
+}
+
+fn is_cast_intrinsic_name(name: &str) -> bool {
+    let name = name.strip_prefix("__").unwrap_or(name);
+    let Some((src, dst)) = name.split_once("_as_") else {
+        return false;
+    };
+    if src.is_empty() || dst.is_empty() {
+        return false;
+    }
+
+    fn is_cast_ident(part: &str) -> bool {
+        part.chars()
+            .all(|ch| ch.is_ascii_lowercase() || ch.is_ascii_digit())
+    }
+
+    is_cast_ident(src) && is_cast_ident(dst)
 }

@@ -1,0 +1,15 @@
+pub fn u64_to_i64(x: u64) -> i64 {
+    x as i64
+}
+
+pub fn i64_to_u64(x: i64) -> u64 {
+    x as u64
+}
+
+pub fn bool_to_u8(x: bool) -> u8 {
+    x as u8
+}
+
+pub fn lit_out_of_range() -> u8 {
+    256 as u8
+}

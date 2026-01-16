@@ -1,5 +1,5 @@
 use core::abi::{Abi, AbiDecoder, AbiEncoder, ByteInput, Cursor}
-use core::num::{__u256_as_u32, __u256_as_u8, __u32_as_u256, __u8_as_u256}
+use core::num::IntDowncast
 use ingot::evm::mem
 use ingot::evm::ops::{mstore, mstore8, revert}
 
@@ -16,7 +16,7 @@ impl Abi for Sol {
     const SELECTOR_SIZE: u256 = 4
 
     fn selector_from_prefix(_ prefix: u256) -> Self::Selector {
-        __u256_as_u32(prefix >> 224)
+        (prefix >> 224).downcast_unchecked()
     }
 
     fn decoder_new<I: ByteInput>(_ input: I) -> Self::Decoder<I> {

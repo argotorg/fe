@@ -32,10 +32,10 @@ pub mod lazy_spans {
         },
         expr::{
             LazyAssignExprSpan, LazyAugAssignExprSpan, LazyBinExprSpan, LazyCallArgListSpan,
-            LazyCallArgSpan, LazyCallExprSpan, LazyExprSpan, LazyFieldExprSpan, LazyFieldListSpan,
-            LazyFieldSpan, LazyLitExprSpan, LazyMatchArmListSpan, LazyMatchArmSpan,
-            LazyMatchExprSpan, LazyMethodCallExprSpan, LazyPathExprSpan, LazyRecordInitExprSpan,
-            LazyUnExprSpan,
+            LazyCallArgSpan, LazyCallExprSpan, LazyCastExprSpan, LazyExprSpan, LazyFieldExprSpan,
+            LazyFieldListSpan, LazyFieldSpan, LazyLitExprSpan, LazyMatchArmListSpan,
+            LazyMatchArmSpan, LazyMatchExprSpan, LazyMethodCallExprSpan, LazyPathExprSpan,
+            LazyRecordInitExprSpan, LazyUnExprSpan,
         },
         item::{
             LazyBodySpan, LazyConstSpan, LazyContractRecvSpan, LazyContractSpan, LazyEnumSpan,

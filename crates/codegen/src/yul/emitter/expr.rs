@@ -19,7 +19,7 @@ use crate::yul::state::BlockState;
 use super::{
     YulError,
     function::FunctionEmitter,
-    util::{function_name, is_std_evm_ops, prefix_yul_name, try_collapse_cast_shim},
+    util::{function_name, is_std_evm_ops, prefix_yul_name},
 };
 
 impl<'db> FunctionEmitter<'db> {
@@ -232,9 +232,6 @@ impl<'db> FunctionEmitter<'db> {
         }
         for &arg in &call.effect_args {
             lowered_args.push(self.lower_value(arg, state)?);
-        }
-        if let Some(arg) = try_collapse_cast_shim(&callee, &lowered_args)? {
-            return Ok(arg);
         }
         if lowered_args.is_empty() {
             Ok(format!("{callee}()"))

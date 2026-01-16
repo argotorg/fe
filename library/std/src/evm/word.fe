@@ -27,46 +27,46 @@ pub trait WordRepr {
 
 impl WordRepr for u8 {
     fn from_word(word: u256) -> Self {
-        __u256_as_u8(word & U8_MASK)
+        (word & U8_MASK).downcast_unchecked()
     }
     fn to_word(self) -> u256 {
-        __u8_as_u256(self)
+        self as u256
     }
 }
 
 impl WordRepr for u16 {
     fn from_word(word: u256) -> Self {
-        __u256_as_u16(word & U16_MASK)
+        (word & U16_MASK).downcast_unchecked()
     }
     fn to_word(self) -> u256 {
-        __u16_as_u256(self)
+        self as u256
     }
 }
 
 impl WordRepr for u32 {
     fn from_word(word: u256) -> Self {
-        __u256_as_u32(word & U32_MASK)
+        (word & U32_MASK).downcast_unchecked()
     }
     fn to_word(self) -> u256 {
-        __u32_as_u256(self)
+        self as u256
     }
 }
 
 impl WordRepr for u64 {
     fn from_word(word: u256) -> Self {
-        __u256_as_u64(word & U64_MASK)
+        (word & U64_MASK).downcast_unchecked()
     }
     fn to_word(self) -> u256 {
-        __u64_as_u256(self)
+        self as u256
     }
 }
 
 impl WordRepr for u128 {
     fn from_word(word: u256) -> Self {
-        __u256_as_u128(word & U128_MASK)
+        (word & U128_MASK).downcast_unchecked()
     }
     fn to_word(self) -> u256 {
-        __u128_as_u256(self)
+        self as u256
     }
 }
 
@@ -81,10 +81,10 @@ impl WordRepr for u256 {
 
 impl WordRepr for usize {
     fn from_word(word: u256) -> Self {
-        __u256_as_usize(word)
+        word as usize
     }
     fn to_word(self) -> u256 {
-        __usize_as_u256(self)
+        self as u256
     }
 }
 
@@ -99,64 +99,64 @@ impl WordRepr for bool {
 
 impl WordRepr for i8 {
     fn from_word(word: u256) -> Self {
-        __u256_as_i8(sign_extend(word, U8_MASK, I8_SIGN_BIT))
+        sign_extend(word, U8_MASK, I8_SIGN_BIT).downcast_unchecked()
     }
     fn to_word(self) -> u256 {
-        __i8_as_u256(self)
+        self.downcast_unchecked()
     }
 }
 
 impl WordRepr for i16 {
     fn from_word(word: u256) -> Self {
-        __u256_as_i16(sign_extend(word, U16_MASK, I16_SIGN_BIT))
+        sign_extend(word, U16_MASK, I16_SIGN_BIT).downcast_unchecked()
     }
     fn to_word(self) -> u256 {
-        __i16_as_u256(self)
+        self.downcast_unchecked()
     }
 }
 
 impl WordRepr for i32 {
     fn from_word(word: u256) -> Self {
-        __u256_as_i32(sign_extend(word, U32_MASK, I32_SIGN_BIT))
+        sign_extend(word, U32_MASK, I32_SIGN_BIT).downcast_unchecked()
     }
     fn to_word(self) -> u256 {
-        __i32_as_u256(self)
+        self.downcast_unchecked()
     }
 }
 
 impl WordRepr for i64 {
     fn from_word(word: u256) -> Self {
-        __u256_as_i64(sign_extend(word, U64_MASK, I64_SIGN_BIT))
+        sign_extend(word, U64_MASK, I64_SIGN_BIT).downcast_unchecked()
     }
     fn to_word(self) -> u256 {
-        __i64_as_u256(self)
+        self.downcast_unchecked()
     }
 }
 
 impl WordRepr for i128 {
     fn from_word(word: u256) -> Self {
-        __u256_as_i128(sign_extend(word, U128_MASK, I128_SIGN_BIT))
+        sign_extend(word, U128_MASK, I128_SIGN_BIT).downcast_unchecked()
     }
     fn to_word(self) -> u256 {
-        __i128_as_u256(self)
+        self.downcast_unchecked()
     }
 }
 
 impl WordRepr for i256 {
     fn from_word(word: u256) -> Self {
-        __u256_as_i256(sign_extend(word, U256_MASK, I256_SIGN_BIT))
+        sign_extend(word, U256_MASK, I256_SIGN_BIT).downcast_unchecked()
     }
     fn to_word(self) -> u256 {
-        __i256_as_u256(self)
+        self.downcast_unchecked()
     }
 }
 
 impl WordRepr for isize {
     fn from_word(word: u256) -> Self {
-        __u256_as_isize(word)
+        word.downcast_unchecked()
     }
     fn to_word(self) -> u256 {
-        __isize_as_u256(self)
+        self.downcast_unchecked()
     }
 }
 

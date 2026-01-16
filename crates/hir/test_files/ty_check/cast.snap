@@ -1,0 +1,239 @@
+---
+source: crates/hir/tests/ty_check.rs
+expression: res
+input_file: test_files/ty_check/cast.fe
+---
+note: 
+   ┌─ cast.fe:7:76
+   │  
+ 7 │   pub fn foo(x: u32, idx: u32, a: Address) -> (u8, i64, u256, u256, Address) {
+   │ ╭────────────────────────────────────────────────────────────────────────────^
+ 8 │ │     let arr: [u8; 4] = [1, 2, 3, 4]
+ 9 │ │     let b: u8 = arr[idx as usize]
+10 │ │ 
+   · │
+21 │ │     (b, i, word, z, a2)
+22 │ │ }
+   │ ╰─^ (u8, i64, u256, u256, Address)
+
+note: 
+  ┌─ cast.fe:8:9
+  │
+8 │     let arr: [u8; 4] = [1, 2, 3, 4]
+  │         ^^^ [u8; 4]
+
+note: 
+  ┌─ cast.fe:8:24
+  │
+8 │     let arr: [u8; 4] = [1, 2, 3, 4]
+  │                        ^^^^^^^^^^^^ [u8; 4]
+
+note: 
+  ┌─ cast.fe:8:25
+  │
+8 │     let arr: [u8; 4] = [1, 2, 3, 4]
+  │                         ^ u8
+
+note: 
+  ┌─ cast.fe:8:28
+  │
+8 │     let arr: [u8; 4] = [1, 2, 3, 4]
+  │                            ^ u8
+
+note: 
+  ┌─ cast.fe:8:31
+  │
+8 │     let arr: [u8; 4] = [1, 2, 3, 4]
+  │                               ^ u8
+
+note: 
+  ┌─ cast.fe:8:34
+  │
+8 │     let arr: [u8; 4] = [1, 2, 3, 4]
+  │                                  ^ u8
+
+note: 
+  ┌─ cast.fe:9:9
+  │
+9 │     let b: u8 = arr[idx as usize]
+  │         ^ u8
+
+note: 
+  ┌─ cast.fe:9:17
+  │
+9 │     let b: u8 = arr[idx as usize]
+  │                 ^^^ [u8; 4]
+
+note: 
+  ┌─ cast.fe:9:17
+  │
+9 │     let b: u8 = arr[idx as usize]
+  │                 ^^^^^^^^^^^^^^^^^ u8
+
+note: 
+  ┌─ cast.fe:9:21
+  │
+9 │     let b: u8 = arr[idx as usize]
+  │                     ^^^ u32
+
+note: 
+  ┌─ cast.fe:9:21
+  │
+9 │     let b: u8 = arr[idx as usize]
+  │                     ^^^^^^^^^^^^ usize
+
+note: 
+   ┌─ cast.fe:11:9
+   │
+11 │     let i: i64 = -x as i64
+   │         ^ i64
+
+note: 
+   ┌─ cast.fe:11:18
+   │
+11 │     let i: i64 = -x as i64
+   │                  ^^^^^^^^^ i64
+
+note: 
+   ┌─ cast.fe:11:19
+   │
+11 │     let i: i64 = -x as i64
+   │                   ^ u32
+
+note: 
+   ┌─ cast.fe:11:19
+   │
+11 │     let i: i64 = -x as i64
+   │                   ^^^^^^^^ i64
+
+note: 
+   ┌─ cast.fe:13:9
+   │
+13 │     let w: WrapU32 = x as WrapU32
+   │         ^ WrapU32
+
+note: 
+   ┌─ cast.fe:13:22
+   │
+13 │     let w: WrapU32 = x as WrapU32
+   │                      ^ u32
+
+note: 
+   ┌─ cast.fe:13:22
+   │
+13 │     let w: WrapU32 = x as WrapU32
+   │                      ^^^^^^^^^^^^ WrapU32
+
+note: 
+   ┌─ cast.fe:14:9
+   │
+14 │     let word: u256 = w as u256
+   │         ^^^^ u256
+
+note: 
+   ┌─ cast.fe:14:22
+   │
+14 │     let word: u256 = w as u256
+   │                      ^ WrapU32
+
+note: 
+   ┌─ cast.fe:14:22
+   │
+14 │     let word: u256 = w as u256
+   │                      ^^^^^^^^^ u256
+
+note: 
+   ┌─ cast.fe:16:9
+   │
+16 │     let z: u256 = x as u64 as u256
+   │         ^ u256
+
+note: 
+   ┌─ cast.fe:16:19
+   │
+16 │     let z: u256 = x as u64 as u256
+   │                   ^ u32
+
+note: 
+   ┌─ cast.fe:16:19
+   │
+16 │     let z: u256 = x as u64 as u256
+   │                   ^^^^^^^^ u64
+
+note: 
+   ┌─ cast.fe:16:19
+   │
+16 │     let z: u256 = x as u64 as u256
+   │                   ^^^^^^^^^^^^^^^^ u256
+
+note: 
+   ┌─ cast.fe:18:9
+   │
+18 │     let a_word: u256 = a as u256
+   │         ^^^^^^ u256
+
+note: 
+   ┌─ cast.fe:18:24
+   │
+18 │     let a_word: u256 = a as u256
+   │                        ^ Address
+
+note: 
+   ┌─ cast.fe:18:24
+   │
+18 │     let a_word: u256 = a as u256
+   │                        ^^^^^^^^^ u256
+
+note: 
+   ┌─ cast.fe:19:9
+   │
+19 │     let a2: Address = a_word as Address
+   │         ^^ Address
+
+note: 
+   ┌─ cast.fe:19:23
+   │
+19 │     let a2: Address = a_word as Address
+   │                       ^^^^^^ u256
+
+note: 
+   ┌─ cast.fe:19:23
+   │
+19 │     let a2: Address = a_word as Address
+   │                       ^^^^^^^^^^^^^^^^^ Address
+
+note: 
+   ┌─ cast.fe:21:5
+   │
+21 │     (b, i, word, z, a2)
+   │     ^^^^^^^^^^^^^^^^^^^ (u8, i64, u256, u256, Address)
+
+note: 
+   ┌─ cast.fe:21:6
+   │
+21 │     (b, i, word, z, a2)
+   │      ^ u8
+
+note: 
+   ┌─ cast.fe:21:9
+   │
+21 │     (b, i, word, z, a2)
+   │         ^ i64
+
+note: 
+   ┌─ cast.fe:21:12
+   │
+21 │     (b, i, word, z, a2)
+   │            ^^^^ u256
+
+note: 
+   ┌─ cast.fe:21:18
+   │
+21 │     (b, i, word, z, a2)
+   │                  ^ u256
+
+note: 
+   ┌─ cast.fe:21:21
+   │
+21 │     (b, i, word, z, a2)
+   │                     ^^ Address

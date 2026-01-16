@@ -270,6 +270,12 @@ object "Factory" {
         ret := v4
         leave
       }
+      function $s_intdowncast_downcast_unchecked__u256_u32__6e3637cd3e911b35($self) -> ret {
+        let v0 := $u256_intword_to_word($self)
+        let v1 := $u32_intword_from_word(v0)
+        ret := v1
+        leave
+      }
       function $sol_abi_decoder_with_base__CallData__b9ab8dc8a4b2f9e($input, $base) -> ret {
         let v0 := $soldecoder_i__with_base__CallData__b9ab8dc8a4b2f9e($input, $base)
         ret := v0
@@ -281,7 +287,7 @@ object "Factory" {
         leave
       }
       function $sol_abi_selector_from_prefix($prefix) -> ret {
-        let v0 := shr(224, $prefix)
+        let v0 := $s_intdowncast_downcast_unchecked__u256_u32__6e3637cd3e911b35(shr(224, $prefix))
         ret := v0
         leave
       }
@@ -374,6 +380,14 @@ object "Factory" {
       }
       function $u256_encode_encode__Sol_SolEncoder__dce63ad1a1fe4ae2($self, $e) {
         $solencoder_abiencoder_write_word($e, $self)
+        leave
+      }
+      function $u256_intword_to_word($self) -> ret {
+        ret := $self
+        leave
+      }
+      function $u32_intword_from_word($word) -> ret {
+        ret := $word
         leave
       }
       $__Factory_runtime()
@@ -590,13 +604,19 @@ object "Factory" {
             ret := v4
             leave
           }
+          function $s_intdowncast_downcast_unchecked__u256_u32__6e3637cd3e911b35($self) -> ret {
+            let v0 := $u256_intword_to_word($self)
+            let v1 := $u32_intword_from_word(v0)
+            ret := v1
+            leave
+          }
           function $sol_abi_decoder_with_base__CallData__b9ab8dc8a4b2f9e($input, $base) -> ret {
             let v0 := $soldecoder_i__with_base__CallData__b9ab8dc8a4b2f9e($input, $base)
             ret := v0
             leave
           }
           function $sol_abi_selector_from_prefix($prefix) -> ret {
-            let v0 := shr(224, $prefix)
+            let v0 := $s_intdowncast_downcast_unchecked__u256_u32__6e3637cd3e911b35(shr(224, $prefix))
             ret := v0
             leave
           }
@@ -623,6 +643,14 @@ object "Factory" {
           }
           function $storptr_t__effectref_from_raw__Pair__f889f9d568bc82f1($raw) -> ret {
             ret := $raw
+            leave
+          }
+          function $u256_intword_to_word($self) -> ret {
+            ret := $self
+            leave
+          }
+          function $u32_intword_from_word($word) -> ret {
+            ret := $word
             leave
           }
           $__Child_runtime()
