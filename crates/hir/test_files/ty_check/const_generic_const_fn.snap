@@ -1,0 +1,26 @@
+---
+source: crates/hir/tests/ty_check.rs
+assertion_line: 40
+expression: res
+input_file: test_files/ty_check/const_generic_const_fn.fe
+---
+note: 
+  ┌─ const_generic_const_fn.fe:5:19
+  │  
+5 │   fn foo() -> usize {
+  │ ╭───────────────────^
+6 │ │     next_slot<u32>()
+7 │ │ }
+  │ ╰─^ usize
+
+note: 
+  ┌─ const_generic_const_fn.fe:6:5
+  │
+6 │     next_slot<u32>()
+  │     ^^^^^^^^^^^^^^ fn next_slot<u32>
+
+note: 
+  ┌─ const_generic_const_fn.fe:6:5
+  │
+6 │     next_slot<u32>()
+  │     ^^^^^^^^^^^^^^^^ usize

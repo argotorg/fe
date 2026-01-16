@@ -1,14 +1,13 @@
 ---
 source: crates/uitest/tests/parser.rs
-assertion_line: 26
 expression: diags
 input_file: fixtures/parser/extern_.fe
 ---
-error[1-0001]: expected `}`, newline, doc comment, doc comment, `unsafe`, `pub`, `fn`, `where`, `uses` or `->`
+error[1-0001]: expected `}`, newline, doc comment, doc comment, `unsafe`, `pub`, `const`, `fn`, `where`, `uses` or `->`
   ┌─ extern_.fe:2:33
   │
 2 │     pub unsafe fn Foo(x: *usize)
-  │                                 ^ expected `}`, newline, doc comment, doc comment, `unsafe`, `pub`, `fn`, `where`, `uses` or `->`
+  │                                 ^ expected `}`, newline, doc comment, doc comment, `unsafe`, `pub`, `const`, `fn`, `where`, `uses` or `->`
 
 error[1-0001]: expected name for field
   ┌─ extern_.fe:6:8

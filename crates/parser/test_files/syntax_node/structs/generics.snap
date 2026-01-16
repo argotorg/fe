@@ -1,14 +1,14 @@
 ---
 source: crates/parser/tests/syntax_node.rs
+assertion_line: 25
 expression: node
-input_file: crates/parser/test_files/syntax_node/structs/generics.fe
+input_file: test_files/syntax_node/structs/generics.fe
 ---
 Root@0..563
   ItemList@0..563
     Item@0..76
       Struct@0..76
-        ItemModifier@0..3
-          PubKw@0..3 "pub"
+        PubKw@0..3 "pub"
         WhiteSpace@3..4 " "
         StructKw@4..10 "struct"
         WhiteSpace@10..11 " "
@@ -67,8 +67,7 @@ Root@0..563
     Newline@76..78 "\n\n"
     Item@78..190
       Struct@78..190
-        ItemModifier@78..81
-          PubKw@78..81 "pub"
+        PubKw@78..81 "pub"
         WhiteSpace@81..82 " "
         StructKw@82..88 "struct"
         WhiteSpace@88..89 " "
@@ -156,8 +155,7 @@ Root@0..563
     Newline@190..192 "\n\n"
     Item@192..414
       Struct@192..414
-        ItemModifier@192..195
-          PubKw@192..195 "pub"
+        PubKw@192..195 "pub"
         WhiteSpace@195..196 " "
         StructKw@196..202 "struct"
         WhiteSpace@202..203 " "
@@ -345,8 +343,7 @@ Root@0..563
     Newline@414..416 "\n\n"
     Item@416..563
       Struct@416..563
-        ItemModifier@416..419
-          PubKw@416..419 "pub"
+        PubKw@416..419 "pub"
         WhiteSpace@419..420 " "
         StructKw@420..426 "struct"
         WhiteSpace@426..427 " "

@@ -1,0 +1,11 @@
+---
+source: crates/uitest/tests/ty.rs
+assertion_line: 27
+expression: diags
+input_file: fixtures/ty/def/const_fn_nyi.fe
+---
+error[3-0023]: `const fn` is not implemented yet
+  ┌─ const_fn_nyi.fe:5:1
+  │
+5 │ const fn foo() {}
+  │ ^^^^^ non-extern `const fn` is not supported yet

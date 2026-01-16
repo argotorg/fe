@@ -15,7 +15,9 @@ pub trait Add<T = Self> {
 // No blank lines - should stay compact
 pub trait Compact {
     type Output
+
     fn foo(self)
+
     fn bar(self)
 }
 

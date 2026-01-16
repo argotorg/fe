@@ -1,5 +1,6 @@
 ---
 source: crates/parser/tests/syntax_node.rs
+assertion_line: 15
 expression: node
 input_file: test_files/syntax_node/items/trait.fe
 ---
@@ -17,8 +18,7 @@ Root@0..746
     Newline@15..17 "\n\n"
     Item@17..182
       Trait@17..182
-        ItemModifier@17..20
-          PubKw@17..20 "pub"
+        PubKw@17..20 "pub"
         WhiteSpace@20..21 " "
         TraitKw@21..26 "trait"
         WhiteSpace@26..27 " "
@@ -180,8 +180,7 @@ Root@0..746
     Newline@182..184 "\n\n"
     Item@184..271
       Trait@184..271
-        ItemModifier@184..187
-          PubKw@184..187 "pub"
+        PubKw@184..187 "pub"
         WhiteSpace@187..188 " "
         TraitKw@188..193 "trait"
         WhiteSpace@193..194 " "
@@ -256,8 +255,7 @@ Root@0..746
     Newline@271..274 "\n\n\n"
     Item@274..355
       Trait@274..355
-        ItemModifier@274..277
-          PubKw@274..277 "pub"
+        PubKw@274..277 "pub"
         WhiteSpace@277..278 " "
         TraitKw@278..283 "trait"
         WhiteSpace@283..284 " "
@@ -366,11 +364,10 @@ Root@0..746
         Newline@408..409 "\n"
         ImplItemList@409..592
           LBrace@409..410 "{"
-          Newline@410..411 "\n"
-          WhiteSpace@411..415 "    "
-          Func@415..590
-            ItemModifier@415..418
-              PubKw@415..418 "pub"
+          Func@410..590
+            Newline@410..411 "\n"
+            WhiteSpace@411..415 "    "
+            PubKw@415..418 "pub"
             WhiteSpace@418..419 " "
             FnKw@419..421 "fn"
             WhiteSpace@421..422 " "
@@ -493,8 +490,7 @@ Root@0..746
     Newline@592..595 "\n\n\n"
     Item@595..652
       Trait@595..652
-        ItemModifier@595..598
-          PubKw@595..598 "pub"
+        PubKw@595..598 "pub"
         WhiteSpace@598..599 " "
         TraitKw@599..604 "trait"
         WhiteSpace@604..605 " "
@@ -559,8 +555,7 @@ Root@0..746
     Newline@652..654 "\n\n"
     Item@654..745
       Trait@654..745
-        ItemModifier@654..657
-          PubKw@654..657 "pub"
+        PubKw@654..657 "pub"
         WhiteSpace@657..658 " "
         TraitKw@658..663 "trait"
         WhiteSpace@663..664 " "

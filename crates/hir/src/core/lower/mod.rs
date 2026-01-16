@@ -40,6 +40,18 @@ mod stmt;
 mod types;
 mod use_tree;
 
+pub(super) fn lower_visibility(owner: &impl ItemModifierOwner) -> Visibility {
+    if owner.pub_kw().is_some() {
+        Visibility::Public
+    } else {
+        Visibility::Private
+    }
+}
+
+pub(super) fn lower_is_unsafe(owner: &impl ItemModifierOwner) -> bool {
+    owner.unsafe_kw().is_some()
+}
+
 /// Maps the given file to a top-level module.
 /// This function just maps the file to a top-level module, and doesn't perform
 /// any parsing or lowering.

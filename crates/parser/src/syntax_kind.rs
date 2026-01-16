@@ -414,9 +414,6 @@ pub enum SyntaxKind {
     ExternItemList,
     ItemList,
 
-    /// `pub unsafe `
-    ItemModifier,
-
     // Types. These are non-leaf nodes.
     /// `*i32`
     PtrType,
@@ -743,7 +740,6 @@ impl SyntaxKind {
             SyntaxKind::Extern => "`extern` block",
             SyntaxKind::ExternItemList => "`extern` body",
             SyntaxKind::ItemList => "item list",
-            SyntaxKind::ItemModifier => "item modifier",
             SyntaxKind::PtrType => "pointer type",
             SyntaxKind::SelfType => "`Self` type",
             SyntaxKind::TupleType => "tuple type definition",
