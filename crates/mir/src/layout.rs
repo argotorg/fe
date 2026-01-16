@@ -28,9 +28,26 @@ use hir::{
 };
 use num_traits::ToPrimitive;
 
+#[derive(Clone, Copy, Debug)]
+pub struct TargetDataLayout {
+    pub word_size_bytes: usize,
+    pub discriminant_size_bytes: usize,
+}
+
+impl TargetDataLayout {
+    pub const fn evm() -> Self {
+        Self {
+            word_size_bytes: 32,
+            discriminant_size_bytes: 32,
+        }
+    }
+}
+
+pub const EVM_LAYOUT: TargetDataLayout = TargetDataLayout::evm();
+
 /// Size of an EVM word in bytes (256 bits).
-pub const WORD_SIZE_BYTES: usize = 32;
-pub const DISCRIMINANT_SIZE_BYTES: usize = WORD_SIZE_BYTES;
+pub const WORD_SIZE_BYTES: usize = EVM_LAYOUT.word_size_bytes;
+pub const DISCRIMINANT_SIZE_BYTES: usize = EVM_LAYOUT.discriminant_size_bytes;
 
 fn normalize_ty_for_layout<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> Option<TyId<'db>> {
     if ty.has_invalid(db) || ty.has_param(db) || ty.has_var(db) {
@@ -78,10 +95,14 @@ fn first_assoc_scope<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> Option<S
 /// This is used to avoid emitting allocations, loads, and stores for types that
 /// do not have a runtime representation.
 pub fn is_zero_sized_ty(db: &dyn HirAnalysisDb, ty: TyId<'_>) -> bool {
+    is_zero_sized_ty_in(db, &EVM_LAYOUT, ty)
+}
+
+pub fn is_zero_sized_ty_in(db: &dyn HirAnalysisDb, layout: &TargetDataLayout, ty: TyId<'_>) -> bool {
     if ty.is_never(db) {
         return true;
     }
-    ty_size_bytes(db, ty).is_some_and(|size| size == 0)
+    ty_size_bytes_in(db, layout, ty).is_some_and(|size| size == 0)
 }
 
 /// Computes the byte size of a type.
@@ -94,15 +115,23 @@ pub fn is_zero_sized_ty(db: &dyn HirAnalysisDb, ty: TyId<'_>) -> bool {
 /// - Fixed-size arrays: `len * stride`
 /// - Enums: 32-byte discriminant + max variant payload
 pub fn ty_size_bytes(db: &dyn HirAnalysisDb, ty: TyId<'_>) -> Option<usize> {
+    ty_size_bytes_in(db, &EVM_LAYOUT, ty)
+}
+
+pub fn ty_size_bytes_in(
+    db: &dyn HirAnalysisDb,
+    layout: &TargetDataLayout,
+    ty: TyId<'_>,
+) -> Option<usize> {
     if let Some(normalized) = normalize_ty_for_layout(db, ty) {
-        return ty_size_bytes(db, normalized);
+        return ty_size_bytes_in(db, layout, normalized);
     }
 
     // Handle tuples first (check base type for TyApp cases)
     if ty.is_tuple(db) {
         let mut size = 0;
         for field_ty in ty.field_types(db) {
-            size += ty_size_bytes(db, field_ty)?;
+            size += ty_size_bytes_in(db, layout, field_ty)?;
         }
         return Some(size);
     }
@@ -121,14 +150,14 @@ pub fn ty_size_bytes(db: &dyn HirAnalysisDb, ty: TyId<'_>) -> Option<usize> {
             return Some(bits / 8);
         }
         if matches!(prim, PrimTy::String | PrimTy::Ptr) {
-            return Some(WORD_SIZE_BYTES);
+            return Some(layout.word_size_bytes);
         }
     }
 
     // Handle fixed-size arrays
     if ty.is_array(db) {
         let len = array_len(db, ty)?;
-        let stride = array_elem_stride_bytes(db, ty)?;
+        let stride = array_elem_stride_bytes_in(db, layout, ty)?;
         return Some(len * stride);
     }
 
@@ -138,7 +167,7 @@ pub fn ty_size_bytes(db: &dyn HirAnalysisDb, ty: TyId<'_>) -> Option<usize> {
     {
         let mut size = 0;
         for field_ty in ty.field_types(db) {
-            size += ty_size_bytes(db, field_ty)?;
+            size += ty_size_bytes_in(db, layout, field_ty)?;
         }
         return Some(size);
     }
@@ -153,11 +182,11 @@ pub fn ty_size_bytes(db: &dyn HirAnalysisDb, ty: TyId<'_>) -> Option<usize> {
             let ctor = ConstructorKind::Variant(ev, ty);
             let mut payload = 0;
             for field_ty in ctor.field_types(db) {
-                payload += ty_size_bytes(db, field_ty)?;
+                payload += ty_size_bytes_in(db, layout, field_ty)?;
             }
             max_payload = max_payload.max(payload);
         }
-        return Some(DISCRIMINANT_SIZE_BYTES + max_payload);
+        return Some(layout.discriminant_size_bytes + max_payload);
     }
 
     None
@@ -169,16 +198,29 @@ pub fn ty_size_bytes(db: &dyn HirAnalysisDb, ty: TyId<'_>) -> Option<usize> {
 /// layout information is unavailable (e.g. generic type parameters). Unknown leaf types are
 /// treated as occupying a single 32-byte word.
 pub fn ty_size_bytes_or_word_aligned(db: &dyn HirAnalysisDb, ty: TyId<'_>) -> usize {
-    ty_size_bytes(db, ty).unwrap_or_else(|| ty_size_bytes_word_aligned_fallback(db, ty))
+    ty_size_bytes_or_word_aligned_in(db, &EVM_LAYOUT, ty)
 }
 
-fn ty_size_bytes_word_aligned_fallback(db: &dyn HirAnalysisDb, ty: TyId<'_>) -> usize {
+pub fn ty_size_bytes_or_word_aligned_in(
+    db: &dyn HirAnalysisDb,
+    layout: &TargetDataLayout,
+    ty: TyId<'_>,
+) -> usize {
+    ty_size_bytes_in(db, layout, ty)
+        .unwrap_or_else(|| ty_size_bytes_word_aligned_fallback_in(db, layout, ty))
+}
+
+fn ty_size_bytes_word_aligned_fallback_in(
+    db: &dyn HirAnalysisDb,
+    layout: &TargetDataLayout,
+    ty: TyId<'_>,
+) -> usize {
     if ty.is_tuple(db) {
         return ty
             .field_types(db)
             .iter()
             .copied()
-            .map(|field_ty| ty_size_bytes_or_word_aligned(db, field_ty))
+            .map(|field_ty| ty_size_bytes_or_word_aligned_in(db, layout, field_ty))
             .sum();
     }
 
@@ -189,7 +231,7 @@ fn ty_size_bytes_word_aligned_fallback(db: &dyn HirAnalysisDb, ty: TyId<'_>) -> 
                 ty.pretty_print(db)
             )
         });
-        let stride = array_elem_stride_bytes(db, ty).unwrap_or(WORD_SIZE_BYTES);
+        let stride = array_elem_stride_bytes_in(db, layout, ty).unwrap_or(layout.word_size_bytes);
         return len * stride;
     }
 
@@ -200,7 +242,7 @@ fn ty_size_bytes_word_aligned_fallback(db: &dyn HirAnalysisDb, ty: TyId<'_>) -> 
             .field_types(db)
             .iter()
             .copied()
-            .map(|field_ty| ty_size_bytes_or_word_aligned(db, field_ty))
+            .map(|field_ty| ty_size_bytes_or_word_aligned_in(db, layout, field_ty))
             .sum();
     }
 
@@ -211,16 +253,16 @@ fn ty_size_bytes_word_aligned_fallback(db: &dyn HirAnalysisDb, ty: TyId<'_>) -> 
         for variant in enm.variants(db) {
             let ev = EnumVariant::new(enm, variant.idx);
             let ctor = ConstructorKind::Variant(ev, ty);
-            let mut payload = 0;
-            for field_ty in ctor.field_types(db) {
-                payload += ty_size_bytes_or_word_aligned(db, field_ty);
+                let mut payload = 0;
+                for field_ty in ctor.field_types(db) {
+                    payload += ty_size_bytes_or_word_aligned_in(db, layout, field_ty);
+                }
+                max_payload = max_payload.max(payload);
             }
-            max_payload = max_payload.max(payload);
-        }
-        return DISCRIMINANT_SIZE_BYTES + max_payload;
+        return layout.discriminant_size_bytes + max_payload;
     }
 
-    WORD_SIZE_BYTES
+    layout.word_size_bytes
 }
 
 /// Returns the element type for a fixed-size array.
@@ -250,8 +292,16 @@ pub fn array_len(db: &dyn HirAnalysisDb, ty: TyId<'_>) -> Option<usize> {
 
 /// Returns the byte stride for an array element, falling back to word alignment.
 pub fn array_elem_stride_bytes(db: &dyn HirAnalysisDb, ty: TyId<'_>) -> Option<usize> {
+    array_elem_stride_bytes_in(db, &EVM_LAYOUT, ty)
+}
+
+pub fn array_elem_stride_bytes_in(
+    db: &dyn HirAnalysisDb,
+    layout: &TargetDataLayout,
+    ty: TyId<'_>,
+) -> Option<usize> {
     let elem_ty = array_elem_ty(db, ty)?;
-    Some(ty_size_bytes(db, elem_ty).unwrap_or(WORD_SIZE_BYTES))
+    Some(ty_size_bytes_in(db, layout, elem_ty).unwrap_or(layout.word_size_bytes))
 }
 
 /// Returns the slot stride for an array element in storage.
@@ -339,6 +389,15 @@ pub fn ty_storage_slots<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> Optio
 /// - `Some(offset)` if the type has fields and offset can be computed
 /// - `None` if field_idx is out of bounds or type has no fields
 pub fn field_offset_bytes(db: &dyn HirAnalysisDb, ty: TyId<'_>, field_idx: usize) -> Option<usize> {
+    field_offset_bytes_in(db, &EVM_LAYOUT, ty, field_idx)
+}
+
+pub fn field_offset_bytes_in(
+    db: &dyn HirAnalysisDb,
+    layout: &TargetDataLayout,
+    ty: TyId<'_>,
+    field_idx: usize,
+) -> Option<usize> {
     let field_types = ty.field_types(db);
     if field_idx >= field_types.len() {
         return None;
@@ -346,7 +405,7 @@ pub fn field_offset_bytes(db: &dyn HirAnalysisDb, ty: TyId<'_>, field_idx: usize
 
     let mut offset = 0;
     for field_ty in field_types.iter().take(field_idx) {
-        offset += ty_size_bytes(db, *field_ty)?;
+        offset += ty_size_bytes_in(db, layout, *field_ty)?;
     }
     Some(offset)
 }
@@ -360,7 +419,17 @@ pub fn field_offset_bytes_or_word_aligned(
     ty: TyId<'_>,
     field_idx: usize,
 ) -> usize {
-    field_offset_bytes(db, ty, field_idx).unwrap_or(WORD_SIZE_BYTES * field_idx)
+    field_offset_bytes_or_word_aligned_in(db, &EVM_LAYOUT, ty, field_idx)
+}
+
+pub fn field_offset_bytes_or_word_aligned_in(
+    db: &dyn HirAnalysisDb,
+    layout: &TargetDataLayout,
+    ty: TyId<'_>,
+    field_idx: usize,
+) -> usize {
+    field_offset_bytes_in(db, layout, ty, field_idx)
+        .unwrap_or(layout.word_size_bytes * field_idx)
 }
 
 /// Computes the byte offset to a field within an enum variant's payload.
@@ -378,6 +447,16 @@ pub fn variant_field_offset_bytes(
     variant: EnumVariant<'_>,
     field_idx: usize,
 ) -> Option<usize> {
+    variant_field_offset_bytes_in(db, &EVM_LAYOUT, enum_ty, variant, field_idx)
+}
+
+pub fn variant_field_offset_bytes_in(
+    db: &dyn HirAnalysisDb,
+    layout: &TargetDataLayout,
+    enum_ty: TyId<'_>,
+    variant: EnumVariant<'_>,
+    field_idx: usize,
+) -> Option<usize> {
     let ctor = ConstructorKind::Variant(variant, enum_ty);
     let field_types = ctor.field_types(db);
 
@@ -387,7 +466,7 @@ pub fn variant_field_offset_bytes(
 
     let mut offset = 0;
     for field_ty in field_types.iter().take(field_idx) {
-        offset += ty_size_bytes(db, *field_ty)?;
+        offset += ty_size_bytes_in(db, layout, *field_ty)?;
     }
     Some(offset)
 }
@@ -401,8 +480,18 @@ pub fn variant_field_offset_bytes_or_word_aligned(
     variant: EnumVariant<'_>,
     field_idx: usize,
 ) -> usize {
-    variant_field_offset_bytes(db, enum_ty, variant, field_idx)
-        .unwrap_or(WORD_SIZE_BYTES * field_idx)
+    variant_field_offset_bytes_or_word_aligned_in(db, &EVM_LAYOUT, enum_ty, variant, field_idx)
+}
+
+pub fn variant_field_offset_bytes_or_word_aligned_in(
+    db: &dyn HirAnalysisDb,
+    layout: &TargetDataLayout,
+    enum_ty: TyId<'_>,
+    variant: EnumVariant<'_>,
+    field_idx: usize,
+) -> usize {
+    variant_field_offset_bytes_in(db, layout, enum_ty, variant, field_idx)
+        .unwrap_or(layout.word_size_bytes * field_idx)
 }
 
 /// Computes the byte size of a variant's payload (sum of field sizes).
@@ -415,12 +504,21 @@ pub fn variant_payload_size_bytes(
     enum_ty: TyId<'_>,
     variant: EnumVariant<'_>,
 ) -> Option<usize> {
+    variant_payload_size_bytes_in(db, &EVM_LAYOUT, enum_ty, variant)
+}
+
+pub fn variant_payload_size_bytes_in(
+    db: &dyn HirAnalysisDb,
+    layout: &TargetDataLayout,
+    enum_ty: TyId<'_>,
+    variant: EnumVariant<'_>,
+) -> Option<usize> {
     let ctor = ConstructorKind::Variant(variant, enum_ty);
     let field_types = ctor.field_types(db);
 
     let mut size = 0;
     for field_ty in field_types.iter() {
-        size += ty_size_bytes(db, *field_ty)?;
+        size += ty_size_bytes_in(db, layout, *field_ty)?;
     }
     Some(size)
 }
