@@ -174,7 +174,7 @@ impl<'db> TyChecker<'db> {
             Expr::Call(..) => self.check_call(expr, expr_data),
             Expr::MethodCall(..) => self.check_method_call(expr, expr_data),
             Expr::Path(..) => self.check_path(expr, expr_data),
-            Expr::RecordInit(..) => self.check_record_init(expr, expr_data),
+            Expr::RecordInit(..) => self.check_record_init(expr, expr_data, expected),
             Expr::Field(..) => self.check_field(expr, expr_data),
             Expr::Tuple(..) => self.check_tuple(expr, expr_data, expected),
             Expr::Array(..) => self.check_array(expr, expr_data, expected),
@@ -1371,7 +1371,12 @@ impl<'db> TyChecker<'db> {
         }
     }
 
-    fn check_record_init(&mut self, expr: ExprId, expr_data: &Expr<'db>) -> ExprProp<'db> {
+    fn check_record_init(
+        &mut self,
+        expr: ExprId,
+        expr_data: &Expr<'db>,
+        expected: TyId<'db>,
+    ) -> ExprProp<'db> {
         let Expr::RecordInit(path, ..) = expr_data else {
             unreachable!()
         };
@@ -1387,6 +1392,17 @@ impl<'db> TyChecker<'db> {
 
         match reso {
             PathRes::Ty(ty) | PathRes::TyAlias(_, ty) => {
+                // Use the expected type to constrain the record's generic args
+                // before checking fields. This is important when record fields
+                // depend on generic parameters (e.g. via associated types).
+                let snapshot = self.table.snapshot();
+                if self.table.unify(ty, expected).is_ok() {
+                    self.table.commit(snapshot);
+                } else {
+                    self.table.rollback_to(snapshot);
+                }
+                let ty = ty.fold_with(self.db, &mut self.table);
+
                 let record_like = RecordLike::from_ty(ty);
                 if record_like.is_record(self.db) {
                     self.check_record_init_fields(&record_like, expr);
@@ -1413,7 +1429,17 @@ impl<'db> TyChecker<'db> {
             }
 
             PathRes::EnumVariant(variant) => {
+                // Constrain the variant type with the expected type before
+                // checking fields (same rationale as record inits).
                 let ty = variant.ty;
+                let snapshot = self.table.snapshot();
+                if self.table.unify(ty, expected).is_ok() {
+                    self.table.commit(snapshot);
+                } else {
+                    self.table.rollback_to(snapshot);
+                }
+                let ty = ty.fold_with(self.db, &mut self.table);
+
                 let record_like = RecordLike::from_variant(variant);
                 if record_like.is_record(self.db) {
                     self.check_record_init_fields(&record_like, expr);

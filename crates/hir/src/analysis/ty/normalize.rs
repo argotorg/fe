@@ -12,6 +12,7 @@ use rustc_hash::FxHashMap;
 
 use super::{
     canonical::Canonical,
+    canonical::Canonicalized,
     fold::{TyFoldable, TyFolder},
     trait_def::impls_for_ty_with_constraints,
     trait_resolution::PredicateListId,
@@ -190,28 +191,45 @@ impl<'db> TypeNormalizer<'db> {
             search_ingots.push(trait_ingot);
         }
 
+        // Canonicalize the target trait instance so we can unify against it in a
+        // fresh table without mixing inference keys from other tables.
+        let canonical_target = Canonicalized::new(self.db, assoc.trait_);
+        let canonical_inst = canonical_target.value;
+
+        let mut table = UnificationTable::new(self.db);
+        let target_inst = canonical_inst.extract_identity(&mut table);
+
         for ingot in search_ingots {
             for implementor in
                 impls_for_ty_with_constraints(self.db, ingot, canonical_self_ty, self.assumptions)
             {
-                let mut table = UnificationTable::new(self.db);
+                let snapshot = table.snapshot();
                 let implementor = table.instantiate_with_fresh_vars(implementor);
-                if table
-                    .unify(implementor.trait_(self.db), assoc.trait_)
-                    .is_err()
-                {
+
+                // Filter by trait before unifying (cheap early out).
+                if implementor.trait_def(self.db) != trait_def {
+                    table.rollback_to(snapshot);
+                    continue;
+                }
+
+                if table.unify(implementor.trait_(self.db), target_inst).is_err() {
+                    table.rollback_to(snapshot);
                     continue;
                 }
 
                 let Some(assoc_ty) = implementor.assoc_ty(self.db, assoc.name) else {
+                    table.rollback_to(snapshot);
                     continue;
                 };
 
-                // Apply substitutions and continue folding so nested projections
-                // are also normalized before dedup.
+                // Apply substitutions, then decanonicalize back to the original
+                // inference vars before further normalization.
                 let folded = assoc_ty.fold_with(self.db, &mut table);
+                let folded = canonical_target.decanonicalize(self.db, folded);
                 let norm = self.fold_ty(self.db, folded);
                 dedup.entry(norm).or_insert(());
+
+                table.rollback_to(snapshot);
             }
         }
 
