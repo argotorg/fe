@@ -1005,6 +1005,9 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
             return value_id;
         }
 
+        // Get the Range type (already set by type checker)
+        let range_ty = self.typed_body.expr_ty(self.db, expr);
+
         // Lower start and end expressions
         let start_value = self.lower_expr(start);
         if self.current_block().is_none() {
@@ -1015,8 +1018,12 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
             return value_id;
         }
 
-        // Get the Range type (already set by type checker)
-        let range_ty = self.typed_body.expr_ty(self.db, expr);
+        if layout::is_zero_sized_ty(self.db, range_ty) {
+            let value = &mut self.builder.body.values[value_id.index()];
+            value.origin = ValueOrigin::Unit;
+            value.repr = ValueRepr::Word;
+            return value_id;
+        }
 
         // Allocate memory for the struct
         let alloc_value = self.emit_alloc(expr, range_ty);
@@ -1029,18 +1036,22 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
 
         // Add start field initialization
         if let Some(info) = self.field_access_info(range_ty, FieldIndex::Ident(start_ident)) {
-            inits.push((
-                MirProjectionPath::from_projection(Projection::Field(info.field_idx)),
-                start_value,
-            ));
+            if !layout::is_zero_sized_ty(self.db, info.field_ty) {
+                inits.push((
+                    MirProjectionPath::from_projection(Projection::Field(info.field_idx)),
+                    start_value,
+                ));
+            }
         }
 
         // Add end field initialization
         if let Some(info) = self.field_access_info(range_ty, FieldIndex::Ident(end_ident)) {
-            inits.push((
-                MirProjectionPath::from_projection(Projection::Field(info.field_idx)),
-                end_value,
-            ));
+            if !layout::is_zero_sized_ty(self.db, info.field_ty) {
+                inits.push((
+                    MirProjectionPath::from_projection(Projection::Field(info.field_idx)),
+                    end_value,
+                ));
+            }
         }
 
         // Emit the aggregate initialization

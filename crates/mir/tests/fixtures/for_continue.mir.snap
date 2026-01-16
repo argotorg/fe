@@ -5,19 +5,17 @@ expression: mir_output
 fn for_continue() -> usize:
   bb0:
     v0: usize = 0
-    v1: Range<Known<0>, Known<4>> = alloc mem
-    init mem[v1] { .0 = 0, .1 = 4 }
-    v2: usize = 0
-    v3: usize = range_known_const_s__usize___known_const_e__usize___seq_len__0_4__f9605efabd18106c(v1)
+    v1: usize = 0
+    v2: usize = range_known_const_s__usize___known_const_e__usize___seq_len__0_4__f9605efabd18106c(())
     jmp bb1
   bb1:
-    br (v2 < v3) bb2 bb4
+    br (v1 < v2) bb2 bb4
   bb2:
-    v5: usize = range_known_const_s__usize___known_const_e__usize___seq_get__0_4__f9605efabd18106c(v1, v2)
-    v4: usize = v5
-    br (v4 == 2) bb5 bb6
+    v4: usize = range_known_const_s__usize___known_const_e__usize___seq_get__0_4__f9605efabd18106c((), v1)
+    v3: usize = v4
+    br (v3 == 2) bb5 bb6
   bb3:
-    v2 = (v2 + 1)
+    v1 = (v1 + 1)
     jmp bb1
   bb4:
     ret v0

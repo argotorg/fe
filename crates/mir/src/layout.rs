@@ -17,17 +17,61 @@ use hir::{
         ty::{
             adt_def::AdtRef,
             const_ty::{ConstTyData, EvaluatedConstTy},
+            normalize::normalize_ty,
             simplified_pattern::ConstructorKind,
+            trait_resolution::PredicateListId,
             ty_def::{PrimTy, TyBase, TyData, TyId, prim_int_bits},
+            visitor::{TyVisitable, TyVisitor, walk_ty},
         },
     },
-    hir_def::EnumVariant,
+    hir_def::{EnumVariant, scope_graph::ScopeId},
 };
 use num_traits::ToPrimitive;
 
 /// Size of an EVM word in bytes (256 bits).
 pub const WORD_SIZE_BYTES: usize = 32;
 pub const DISCRIMINANT_SIZE_BYTES: usize = WORD_SIZE_BYTES;
+
+fn normalize_ty_for_layout<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> Option<TyId<'db>> {
+    if ty.has_invalid(db) || ty.has_param(db) || ty.has_var(db) {
+        return None;
+    }
+
+    let scope = first_assoc_scope(db, ty)?;
+    let normalized = normalize_ty(db, ty, scope, PredicateListId::empty_list(db));
+    if normalized == ty || normalized.has_invalid(db) {
+        return None;
+    }
+    Some(normalized)
+}
+
+fn first_assoc_scope<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> Option<ScopeId<'db>> {
+    struct Finder<'db> {
+        db: &'db dyn HirAnalysisDb,
+        scope: Option<ScopeId<'db>>,
+    }
+
+    impl<'db> TyVisitor<'db> for Finder<'db> {
+        fn db(&self) -> &'db dyn HirAnalysisDb {
+            self.db
+        }
+
+        fn visit_ty(&mut self, ty: TyId<'db>) {
+            if self.scope.is_some() {
+                return;
+            }
+            if let TyData::AssocTy(assoc) = ty.data(self.db) {
+                self.scope = Some(assoc.scope(self.db));
+                return;
+            }
+            walk_ty(self, ty);
+        }
+    }
+
+    let mut finder = Finder { db, scope: None };
+    ty.visit_with(&mut finder);
+    finder.scope
+}
 
 /// Returns `true` when the type is known to have zero runtime size.
 ///
@@ -50,6 +94,10 @@ pub fn is_zero_sized_ty(db: &dyn HirAnalysisDb, ty: TyId<'_>) -> bool {
 /// - Fixed-size arrays: `len * stride`
 /// - Enums: 32-byte discriminant + max variant payload
 pub fn ty_size_bytes(db: &dyn HirAnalysisDb, ty: TyId<'_>) -> Option<usize> {
+    if let Some(normalized) = normalize_ty_for_layout(db, ty) {
+        return ty_size_bytes(db, normalized);
+    }
+
     // Handle tuples first (check base type for TyApp cases)
     if ty.is_tuple(db) {
         let mut size = 0;
