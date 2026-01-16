@@ -118,6 +118,18 @@ pub enum IngotResolutionDiagnostic {
     Git(GitResolutionDiagnostic),
 }
 
+#[derive(Debug, Clone)]
+pub enum IngotResolutionEvent {
+    RemoteCheckoutStart {
+        description: GitDescription,
+    },
+    RemoteCheckoutComplete {
+        description: GitDescription,
+        ingot_url: Url,
+        reused_checkout: bool,
+    },
+}
+
 pub trait RemoteProgress {
     fn start(&mut self, description: &GitDescription);
     fn success(&mut self, description: &GitDescription, ingot_url: &Url);
@@ -156,7 +168,9 @@ impl std::fmt::Display for IngotResolutionDiagnostic {
 }
 
 pub trait IngotResolutionHandler<R>:
-    ResolutionHandler<R> + ResolutionHandler<FilesResolver, Item = FilesResource>
+    ResolutionHandler<R>
+    + ResolutionHandler<FilesResolver, Item = FilesResource>
+    + IngotResolutionEventHandler
 where
     R: Resolver,
 {
@@ -165,8 +179,14 @@ where
 impl<R, T> IngotResolutionHandler<R> for T
 where
     R: Resolver,
-    T: ResolutionHandler<R> + ResolutionHandler<FilesResolver, Item = FilesResource>,
+    T: ResolutionHandler<R>
+        + ResolutionHandler<FilesResolver, Item = FilesResource>
+        + IngotResolutionEventHandler,
 {
+}
+
+pub trait IngotResolutionEventHandler {
+    fn on_ingot_event(&mut self, _event: IngotResolutionEvent) {}
 }
 
 pub trait IngotResolver:
@@ -349,6 +369,12 @@ impl IngotResolverImpl {
             handler,
             &IngotDescriptor::Remote(description.clone()),
         );
+        IngotResolutionEventHandler::on_ingot_event(
+            handler,
+            IngotResolutionEvent::RemoteCheckoutStart {
+                description: description.clone(),
+            },
+        );
         self.progress.start(description);
         let git_resource = match self.resolve_git(handler, description) {
             Ok(resource) => resource,
@@ -364,6 +390,14 @@ impl IngotResolverImpl {
             git_resource.checkout_path.as_path(),
             git_resource.reused_checkout,
         )?;
+        IngotResolutionEventHandler::on_ingot_event(
+            handler,
+            IngotResolutionEvent::RemoteCheckoutComplete {
+                description: description.clone(),
+                ingot_url: ingot_url.clone(),
+                reused_checkout: git_resource.reused_checkout,
+            },
+        );
         self.progress.success(description, &ingot_url);
         Ok(result)
     }
@@ -491,6 +525,8 @@ where
         resource
     }
 }
+
+impl<'a, H> IngotResolutionEventHandler for ForwardingHandler<'a, H> {}
 
 impl Resolver for IngotResolverImpl {
     type Description = IngotDescriptor;

@@ -14,7 +14,10 @@ use resolver::{
     files::{FilesResolutionDiagnostic, FilesResolver, FilesResource},
     git::{GitDescription, GitResolver},
     graph::{DiGraph, GraphResolutionHandler, UnresolvedNode, petgraph::visit::EdgeRef},
-    ingot::{IngotDescriptor, IngotOrigin, IngotPriority, IngotResolverImpl, IngotResource},
+    ingot::{
+        IngotDescriptor, IngotOrigin, IngotPriority, IngotResolutionEvent,
+        IngotResolutionEventHandler, IngotResolverImpl, IngotResource,
+    },
 };
 use smol_str::SmolStr;
 use url::Url;
@@ -765,6 +768,39 @@ impl<'a> ResolutionHandler<FilesResolver> for IngotHandler<'a> {
     }
 }
 
+impl<'a> IngotResolutionEventHandler for IngotHandler<'a> {
+    fn on_ingot_event(&mut self, event: IngotResolutionEvent) {
+        match event {
+            IngotResolutionEvent::RemoteCheckoutStart { description } => {
+                if self.trace_enabled {
+                    tracing::info!(target: "resolver", "Checking out {description}");
+                }
+                if self.stdout_enabled {
+                    eprintln!("Checking out {description}");
+                }
+            }
+            IngotResolutionEvent::RemoteCheckoutComplete {
+                ingot_url,
+                reused_checkout,
+                ..
+            } => {
+                if reused_checkout {
+                    if self.trace_enabled {
+                        tracing::debug!(target: "resolver", "Using cached checkout {}", ingot_url);
+                    }
+                    return;
+                }
+                if self.trace_enabled {
+                    tracing::info!(target: "resolver", "✅ Checked out {}", ingot_url);
+                }
+                if self.stdout_enabled {
+                    eprintln!("✅ Checked out {}", ingot_url);
+                }
+            }
+        }
+    }
+}
+
 impl<'a> ResolutionHandler<IngotResolverImpl> for IngotHandler<'a> {
     type Item =
         Vec<UnresolvedNode<IngotPriority, IngotDescriptor, (DependencyAlias, DependencyArguments)>>;
@@ -774,14 +810,6 @@ impl<'a> ResolutionHandler<IngotResolverImpl> for IngotHandler<'a> {
             && let IngotDescriptor::Local(url) = description
         {
             self.root_ingot_url = Some(url.clone());
-        }
-        if matches!(description, IngotDescriptor::Remote(_)) {
-            if self.trace_enabled {
-                tracing::info!(target: "resolver", "Checking out {description}");
-            }
-            if self.stdout_enabled {
-                eprintln!("Checking out {description}");
-            }
         }
     }
 
@@ -838,28 +866,6 @@ impl<'a> ResolutionHandler<IngotResolverImpl> for IngotHandler<'a> {
         descriptor: &IngotDescriptor,
         resource: IngotResource,
     ) -> Self::Item {
-        if let IngotOrigin::Remote {
-            reused_checkout, ..
-        } = &resource.origin
-        {
-            if *reused_checkout {
-                // Skip noisy checkout logs when using cached repositories.
-            } else {
-                if self.trace_enabled {
-                    tracing::info!(target: "resolver", "✅ Checked out {}", resource.ingot_url);
-                }
-                if self.stdout_enabled {
-                    eprintln!("✅ Checked out {}", resource.ingot_url);
-                }
-            }
-        } else if matches!(descriptor, IngotDescriptor::Remote(_)) {
-            if self.trace_enabled {
-                tracing::info!(target: "resolver", "✅ Checked out {}", resource.ingot_url);
-            }
-            if self.stdout_enabled {
-                eprintln!("✅ Checked out {}", resource.ingot_url);
-            }
-        }
         self.ingot_urls
             .insert(descriptor.clone(), resource.ingot_url.clone());
         self.register_remote_mapping(&resource.ingot_url, &resource.origin);
