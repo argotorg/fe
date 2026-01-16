@@ -316,6 +316,10 @@ pub fn array_elem_stride_slots(db: &dyn HirAnalysisDb, ty: TyId<'_>) -> Option<u
 
 /// Best-effort slot size computation for types in storage.
 pub fn ty_storage_slots<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> Option<usize> {
+    if let Some(normalized) = normalize_ty_for_layout(db, ty) {
+        return ty_storage_slots(db, normalized);
+    }
+
     // Handle tuples first (check base type for TyApp cases)
     if ty.is_tuple(db) {
         let mut size = 0;
@@ -585,6 +589,10 @@ pub fn variant_field_offset_slots(
 /// - Structs/tuples: sum of field slot counts
 /// - Unknown types: 1 slot (conservative fallback)
 pub fn ty_size_slots(db: &dyn HirAnalysisDb, ty: TyId<'_>) -> usize {
+    if let Some(normalized) = normalize_ty_for_layout(db, ty) {
+        return ty_size_slots(db, normalized);
+    }
+
     // Handle tuples
     if ty.is_tuple(db) {
         let mut size = 0;
