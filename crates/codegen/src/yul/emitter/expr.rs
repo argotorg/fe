@@ -164,7 +164,7 @@ impl<'db> FunctionEmitter<'db> {
                 }),
             ValueOrigin::FuncItem(_) => {
                 debug_assert!(
-                    layout::is_zero_sized_ty(self.db, value.ty),
+                    layout::is_zero_sized_ty_in(self.db, &self.layout, value.ty),
                     "function item values should be zero-sized (ty={})",
                     value.ty.pretty_print(self.db)
                 );
@@ -297,7 +297,8 @@ impl<'db> FunctionEmitter<'db> {
         loaded_ty: TyId<'db>,
         state: &BlockState,
     ) -> Result<String, YulError> {
-        if layout::ty_size_bytes(self.db, loaded_ty).is_some_and(|size| size == 0) {
+        if layout::ty_size_bytes_in(self.db, &self.layout, loaded_ty).is_some_and(|size| size == 0)
+        {
             return Ok("0".into());
         }
         let addr = self.lower_place_address(place, state)?;
@@ -457,7 +458,12 @@ impl<'db> FunctionEmitter<'db> {
                     total_offset += if is_slot_addressed {
                         layout::field_offset_slots(self.db, current_ty, *field_idx)
                     } else {
-                        layout::field_offset_bytes_or_word_aligned(self.db, current_ty, *field_idx)
+                        layout::field_offset_bytes_or_word_aligned_in(
+                            self.db,
+                            &self.layout,
+                            current_ty,
+                            *field_idx,
+                        )
                     };
                     // Update current type to the field's type
                     current_ty = *field_types.get(*field_idx).ok_or_else(|| {
@@ -481,9 +487,13 @@ impl<'db> FunctionEmitter<'db> {
                             self.db, *enum_ty, *variant, *field_idx,
                         );
                     } else {
-                        total_offset += layout::DISCRIMINANT_SIZE_BYTES;
-                        total_offset += layout::variant_field_offset_bytes_or_word_aligned(
-                            self.db, *enum_ty, *variant, *field_idx,
+                        total_offset += self.layout.discriminant_size_bytes;
+                        total_offset += layout::variant_field_offset_bytes_or_word_aligned_in(
+                            self.db,
+                            &self.layout,
+                            *enum_ty,
+                            *variant,
+                            *field_idx,
                         );
                     }
                     // Update current type to the field's type
@@ -504,7 +514,7 @@ impl<'db> FunctionEmitter<'db> {
                     let stride = if is_slot_addressed {
                         layout::array_elem_stride_slots(self.db, current_ty)
                     } else {
-                        layout::array_elem_stride_bytes(self.db, current_ty)
+                        layout::array_elem_stride_bytes_in(self.db, &self.layout, current_ty)
                     }
                     .ok_or_else(|| {
                         YulError::Unsupported(

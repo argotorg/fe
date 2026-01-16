@@ -227,7 +227,7 @@ impl<'db> FunctionEmitter<'db> {
             ));
         }
         let ty = self.mir_func.body.local(dest).ty;
-        let size_bytes = layout::ty_size_bytes_or_word_aligned(self.db, ty);
+        let size_bytes = layout::ty_size_bytes_or_word_aligned_in(self.db, &self.layout, ty);
         let (yul_name, declared) = self.resolve_local_for_write(dest, state)?;
         self.emit_alloc_value(docs, &yul_name, size_bytes, declared);
         Ok(())
@@ -304,7 +304,7 @@ impl<'db> FunctionEmitter<'db> {
         value_ty: hir::analysis::ty::ty_def::TyId<'db>,
         state: &mut BlockState,
     ) -> Result<(), YulError> {
-        if layout::ty_size_bytes(self.db, value_ty).is_some_and(|size| size == 0) {
+        if layout::ty_size_bytes_in(self.db, &self.layout, value_ty).is_some_and(|size| size == 0) {
             return Ok(());
         }
         if value_ty.is_array(self.db) {
