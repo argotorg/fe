@@ -1035,23 +1035,23 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         let mut inits = Vec::with_capacity(2);
 
         // Add start field initialization
-        if let Some(info) = self.field_access_info(range_ty, FieldIndex::Ident(start_ident)) {
-            if !layout::is_zero_sized_ty(self.db, info.field_ty) {
-                inits.push((
-                    MirProjectionPath::from_projection(Projection::Field(info.field_idx)),
-                    start_value,
-                ));
-            }
+        if let Some(info) = self.field_access_info(range_ty, FieldIndex::Ident(start_ident))
+            && !layout::is_zero_sized_ty(self.db, info.field_ty)
+        {
+            inits.push((
+                MirProjectionPath::from_projection(Projection::Field(info.field_idx)),
+                start_value,
+            ));
         }
 
         // Add end field initialization
-        if let Some(info) = self.field_access_info(range_ty, FieldIndex::Ident(end_ident)) {
-            if !layout::is_zero_sized_ty(self.db, info.field_ty) {
-                inits.push((
-                    MirProjectionPath::from_projection(Projection::Field(info.field_idx)),
-                    end_value,
-                ));
-            }
+        if let Some(info) = self.field_access_info(range_ty, FieldIndex::Ident(end_ident))
+            && !layout::is_zero_sized_ty(self.db, info.field_ty)
+        {
+            inits.push((
+                MirProjectionPath::from_projection(Projection::Field(info.field_idx)),
+                end_value,
+            ));
         }
 
         // Emit the aggregate initialization

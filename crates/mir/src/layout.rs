@@ -98,7 +98,11 @@ pub fn is_zero_sized_ty(db: &dyn HirAnalysisDb, ty: TyId<'_>) -> bool {
     is_zero_sized_ty_in(db, &EVM_LAYOUT, ty)
 }
 
-pub fn is_zero_sized_ty_in(db: &dyn HirAnalysisDb, layout: &TargetDataLayout, ty: TyId<'_>) -> bool {
+pub fn is_zero_sized_ty_in(
+    db: &dyn HirAnalysisDb,
+    layout: &TargetDataLayout,
+    ty: TyId<'_>,
+) -> bool {
     if ty.is_never(db) {
         return true;
     }
@@ -253,12 +257,12 @@ fn ty_size_bytes_word_aligned_fallback_in(
         for variant in enm.variants(db) {
             let ev = EnumVariant::new(enm, variant.idx);
             let ctor = ConstructorKind::Variant(ev, ty);
-                let mut payload = 0;
-                for field_ty in ctor.field_types(db) {
-                    payload += ty_size_bytes_or_word_aligned_in(db, layout, field_ty);
-                }
-                max_payload = max_payload.max(payload);
+            let mut payload = 0;
+            for field_ty in ctor.field_types(db) {
+                payload += ty_size_bytes_or_word_aligned_in(db, layout, field_ty);
             }
+            max_payload = max_payload.max(payload);
+        }
         return layout.discriminant_size_bytes + max_payload;
     }
 
@@ -428,8 +432,7 @@ pub fn field_offset_bytes_or_word_aligned_in(
     ty: TyId<'_>,
     field_idx: usize,
 ) -> usize {
-    field_offset_bytes_in(db, layout, ty, field_idx)
-        .unwrap_or(layout.word_size_bytes * field_idx)
+    field_offset_bytes_in(db, layout, ty, field_idx).unwrap_or(layout.word_size_bytes * field_idx)
 }
 
 /// Computes the byte offset to a field within an enum variant's payload.
