@@ -16,7 +16,7 @@ use crate::analysis::place::{Place, PlaceBase};
 use crate::analysis::ty::{
     binder::Binder,
     canonical::Canonicalized,
-    corelib::{resolve_core_trait, resolve_lib_type_path},
+    corelib::{resolve_core_range_types, resolve_core_trait, resolve_lib_type_path},
     diagnostics::{BodyDiag, FuncBodyDiag},
     effects::place_effect_provider_param_index_map,
     fold::{AssocTySubst, TyFoldable as _, TyFolder},
@@ -337,19 +337,17 @@ impl<'db> TyChecker<'db> {
         let start_lit = self.try_get_literal_int(start_expr);
         let end_lit = self.try_get_literal_int(end_expr);
 
-        // Resolve Range type from core library
-        let range_base = resolve_lib_type_path(self.db, self.env.scope(), "core::range::Range");
-        let known_base = resolve_lib_type_path(self.db, self.env.scope(), "core::range::Known");
-        let unknown_ty = resolve_lib_type_path(self.db, self.env.scope(), "core::range::Unknown");
-
-        match (range_base, known_base, unknown_ty) {
-            (Some(range), Some(known), Some(unknown)) => {
+        // Resolve Range types from core library
+        match resolve_core_range_types(self.db, self.env.scope()) {
+            Some(types) => {
                 // Construct appropriate bound types based on constness
-                let start_bound = self.make_range_bound(start_lit, known, unknown, usize_ty);
-                let end_bound = self.make_range_bound(end_lit, known, unknown, usize_ty);
+                let start_bound =
+                    self.make_range_bound(start_lit, types.known, types.unknown, usize_ty);
+                let end_bound =
+                    self.make_range_bound(end_lit, types.known, types.unknown, usize_ty);
 
                 // Construct Range<StartBound, EndBound>
-                let range_s = TyId::app(self.db, range, start_bound);
+                let range_s = TyId::app(self.db, types.range, start_bound);
                 let range_full = TyId::app(self.db, range_s, end_bound);
                 ExprProp::new(range_full, true)
             }
