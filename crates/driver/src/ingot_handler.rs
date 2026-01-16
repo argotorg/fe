@@ -11,10 +11,10 @@ use common::{
 };
 use resolver::{
     ResolutionHandler,
-    files::FilesResource,
+    files::{FilesResolutionDiagnostic, FilesResolver, FilesResource},
     git::{GitDescription, GitResolver},
     graph::{DiGraph, GraphResolutionHandler, UnresolvedNode, petgraph::visit::EdgeRef},
-    ingot::{IngotDescriptor, IngotOrigin, IngotPriority, IngotResolver, IngotResource},
+    ingot::{IngotDescriptor, IngotOrigin, IngotPriority, IngotResolverImpl, IngotResource},
 };
 use smol_str::SmolStr;
 use url::Url;
@@ -92,16 +92,22 @@ impl<'a> IngotHandler<'a> {
         }
     }
 
-    fn record_files(&mut self, resource: &IngotResource) -> Option<()> {
-        let mut has_config = false;
-        for file in &resource.files.files {
+    fn record_files_from_resource(&mut self, resource: &FilesResource) {
+        for file in &resource.files {
             let file_url =
                 Url::from_file_path(file.path.as_std_path()).expect("resolved path to url");
-            has_config |= file.path.as_str().ends_with("fe.toml");
             self.db
                 .workspace()
                 .touch(self.db, file_url, Some(file.content.clone()));
         }
+    }
+
+    fn record_files(&mut self, resource: &IngotResource) -> Option<()> {
+        let mut has_config = false;
+        for file in &resource.files.files {
+            has_config |= file.path.as_str().ends_with("fe.toml");
+        }
+        self.record_files_from_resource(&resource.files);
         has_config.then_some(())
     }
 
@@ -467,16 +473,7 @@ impl<'a> IngotHandler<'a> {
         Ok((name, version))
     }
 
-    fn ensure_workspace_registry(&mut self, workspace_root: &Url) -> Result<(), String> {
-        if !self
-            .db
-            .dependency_graph()
-            .workspace_member_records(self.db, workspace_root)
-            .is_empty()
-        {
-            return Ok(());
-        }
-
+    fn populate_workspace_registry(&mut self, workspace_root: &Url) -> Result<(), String> {
         let config = config_at_url(self.db, workspace_root)?;
         let Config::Workspace(workspace_config) = config else {
             return Err("target is not a workspace".to_string());
@@ -531,6 +528,19 @@ impl<'a> IngotHandler<'a> {
         Ok(())
     }
 
+    fn ensure_workspace_registry(&mut self, workspace_root: &Url) -> Result<(), String> {
+        if !self
+            .db
+            .dependency_graph()
+            .workspace_member_records(self.db, workspace_root)
+            .is_empty()
+        {
+            return Ok(());
+        }
+
+        self.populate_workspace_registry(workspace_root)
+    }
+
     fn select_workspace_member(
         &mut self,
         workspace_root: &Url,
@@ -538,6 +548,13 @@ impl<'a> IngotHandler<'a> {
         version: Option<&common::ingot::Version>,
     ) -> Result<WorkspaceMemberRecord, String> {
         self.ensure_workspace_registry(workspace_root)?;
+        let candidates =
+            self.db
+                .dependency_graph()
+                .workspace_members_by_name(self.db, workspace_root, name);
+        if candidates.is_empty() {
+            self.populate_workspace_registry(workspace_root)?;
+        }
         let candidates =
             self.db
                 .dependency_graph()
@@ -735,7 +752,20 @@ impl<'a> IngotHandler<'a> {
     }
 }
 
-impl<'a> ResolutionHandler<IngotResolver> for IngotHandler<'a> {
+impl<'a> ResolutionHandler<FilesResolver> for IngotHandler<'a> {
+    type Item = FilesResource;
+
+    fn on_resolution_diagnostic(&mut self, diagnostic: FilesResolutionDiagnostic) {
+        self.report_warn(IngotInitDiagnostics::FileError { diagnostic });
+    }
+
+    fn handle_resolution(&mut self, _description: &Url, resource: FilesResource) -> Self::Item {
+        self.record_files_from_resource(&resource);
+        resource
+    }
+}
+
+impl<'a> ResolutionHandler<IngotResolverImpl> for IngotHandler<'a> {
     type Item =
         Vec<UnresolvedNode<IngotPriority, IngotDescriptor, (DependencyAlias, DependencyArguments)>>;
 

@@ -7,6 +7,7 @@ pub mod git_stub;
 pub use git_stub as git;
 pub mod graph;
 pub mod ingot;
+pub mod workspace;
 
 pub trait Resolver: Sized {
     type Description;

@@ -11,7 +11,8 @@ use async_lsp::{
 
 use common::InputDb;
 use driver::init_ingot;
-use resolver::files::{discover_context, read_file_text};
+use resolver::files::read_file_text;
+use resolver::workspace::discover_context;
 use rustc_hash::FxHashSet;
 use url::Url;
 

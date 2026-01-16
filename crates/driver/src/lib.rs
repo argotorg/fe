@@ -23,14 +23,13 @@ use smol_str::SmolStr;
 
 use hir::analysis::core_requirements;
 use hir::hir_def::TopLevelMod;
-pub use resolver::files::{ExpandedWorkspaceMember, expand_workspace_members};
+pub use resolver::workspace::{ExpandedWorkspaceMember, expand_workspace_members};
 use resolver::{
     files::FilesResolutionDiagnostic,
     git::{GitDescription, GitResolver},
-    graph::{GraphResolver, GraphResolverImpl},
     ingot::{
-        IngotDescriptor, IngotResolutionError, IngotResolver, RemoteProgress,
-        project_files_resolver,
+        IngotDescriptor, IngotGraphResolverImpl, IngotResolutionError, IngotResolverImpl,
+        RemoteProgress,
     },
 };
 use url::Url;
@@ -56,10 +55,9 @@ impl RemoteProgress for LoggingProgress {
     }
 }
 
-fn ingot_resolver(remote_checkout_root: Utf8PathBuf) -> IngotResolver {
-    let files_resolver = project_files_resolver();
+fn ingot_resolver(remote_checkout_root: Utf8PathBuf) -> IngotResolverImpl {
     let git_resolver = GitResolver::new(remote_checkout_root);
-    IngotResolver::new(files_resolver, git_resolver).with_progress(Box::new(LoggingProgress))
+    IngotResolverImpl::new(git_resolver).with_progress(Box::new(LoggingProgress))
 }
 
 pub fn init_ingot(db: &mut DriverDataBase, ingot_url: &Url) -> bool {
@@ -100,7 +98,7 @@ fn init_ingot_graph(db: &mut DriverDataBase, ingot_url: &Url) -> bool {
     tracing::info!(target: "resolver", "Starting ingot resolution for: {}", ingot_url);
     let mut handler = IngotHandler::new(db).with_stdout(true);
     let mut ingot_graph_resolver =
-        GraphResolverImpl::new(ingot_resolver(remote_checkout_root(ingot_url)));
+        IngotGraphResolverImpl::new(ingot_resolver(remote_checkout_root(ingot_url)));
 
     // Root ingot resolution should never fail since directory existence is validated earlier.
     // If it fails, it indicates a bug in the resolver or an unexpected system condition.
