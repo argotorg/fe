@@ -1,4 +1,4 @@
-use std::{fmt, fs, io};
+use std::{fmt, fs, io, process::Command};
 
 use camino::{Utf8Path, Utf8PathBuf};
 use git2::{Repository, build::CheckoutBuilder};
@@ -49,6 +49,12 @@ pub struct GitResolver {
     pub checkout_root: Utf8PathBuf,
 }
 
+#[derive(Debug, Clone, Copy)]
+pub enum SparseCheckoutMode {
+    Cone,
+    NoCone,
+}
+
 impl GitResolver {
     pub fn new(checkout_root: impl Into<Utf8PathBuf>) -> Self {
         Self {
@@ -57,6 +63,9 @@ impl GitResolver {
     }
 
     pub fn has_valid_cached_checkout(&self, description: &GitDescription) -> bool {
+        if description.path.is_some() {
+            return false;
+        }
         let checkout_path = self.checkout_path(description);
         if !checkout_path.exists() {
             return false;
@@ -208,6 +217,178 @@ impl GitResolver {
             Ok(description.source.as_str().to_owned())
         }
     }
+
+    pub fn ensure_sparse_checkout(
+        &self,
+        description: &GitDescription,
+        patterns: &[String],
+        mode: SparseCheckoutMode,
+    ) -> Result<GitResource, GitResolutionError> {
+        self.ensure_checkout_root()?;
+        let checkout_path = self.checkout_path(description);
+        let existed = checkout_path.exists();
+
+        if !checkout_path.exists() {
+            if let Some(parent) = checkout_path.parent() {
+                fs::create_dir_all(parent.as_std_path()).map_err(|source| {
+                    GitResolutionError::PrepareCheckoutDirectory {
+                        path: parent.to_owned(),
+                        source,
+                    }
+                })?;
+            }
+            let source = Self::source_for_clone(description)?;
+            let output = Command::new("git")
+                .arg("clone")
+                .arg("--filter=blob:none")
+                .arg("--no-checkout")
+                .arg(source)
+                .arg(checkout_path.as_std_path())
+                .output()
+                .map_err(|error| GitResolutionError::GitCommand {
+                    command: "git clone".to_string(),
+                    error,
+                })?;
+            if !output.status.success() {
+                return Err(GitResolutionError::GitCommandFailure {
+                    command: "git clone".to_string(),
+                    status: output.status,
+                    stderr: String::from_utf8_lossy(&output.stderr).to_string(),
+                });
+            }
+        }
+
+        let pattern_args: Vec<&str> = patterns.iter().map(|pattern| pattern.as_str()).collect();
+        let mode_arg = match mode {
+            SparseCheckoutMode::Cone => "--cone",
+            SparseCheckoutMode::NoCone => "--no-cone",
+        };
+        self.run_git(
+            &checkout_path,
+            &["config", "core.sparseCheckout", "true"],
+            &[],
+        )?;
+        let cone_value = match mode {
+            SparseCheckoutMode::Cone => "true",
+            SparseCheckoutMode::NoCone => "false",
+        };
+        self.run_git(
+            &checkout_path,
+            &["config", "core.sparseCheckoutCone", cone_value],
+            &[],
+        )?;
+        self.run_git_allow_failure(
+            &checkout_path,
+            &["sparse-checkout", "init", mode_arg],
+            &[],
+            &["already initialized", "already enabled", "already exists"],
+        )?;
+        self.run_git(
+            &checkout_path,
+            &["sparse-checkout", "set", mode_arg],
+            &pattern_args,
+        )?;
+        self.fetch_revision_sparse(&checkout_path, description)?;
+        self.run_git(
+            &checkout_path,
+            &["checkout", "--detach", &description.rev],
+            &[],
+        )?;
+        if matches!(mode, SparseCheckoutMode::Cone) {
+            for pattern in patterns {
+                self.run_git(
+                    &checkout_path,
+                    &["checkout", &description.rev, "--", pattern.as_str()],
+                    &[],
+                )?;
+            }
+        }
+
+        Ok(GitResource {
+            reused_checkout: existed,
+            checkout_path,
+        })
+    }
+
+    fn run_git(
+        &self,
+        checkout_path: &Utf8Path,
+        args: &[&str],
+        extra_args: &[&str],
+    ) -> Result<(), GitResolutionError> {
+        let mut command = Command::new("git");
+        command.arg("-C").arg(checkout_path.as_std_path());
+        command.args(args);
+        command.args(extra_args);
+        let output = command
+            .output()
+            .map_err(|error| GitResolutionError::GitCommand {
+                command: format!("git {}", args.join(" ")),
+                error,
+            })?;
+        if output.status.success() {
+            Ok(())
+        } else {
+            Err(GitResolutionError::GitCommandFailure {
+                command: format!("git {}", args.join(" ")),
+                status: output.status,
+                stderr: String::from_utf8_lossy(&output.stderr).to_string(),
+            })
+        }
+    }
+
+    fn run_git_allow_failure(
+        &self,
+        checkout_path: &Utf8Path,
+        args: &[&str],
+        extra_args: &[&str],
+        allowed_errors: &[&str],
+    ) -> Result<(), GitResolutionError> {
+        let mut command = Command::new("git");
+        command.arg("-C").arg(checkout_path.as_std_path());
+        command.args(args);
+        command.args(extra_args);
+        let output = command
+            .output()
+            .map_err(|error| GitResolutionError::GitCommand {
+                command: format!("git {}", args.join(" ")),
+                error,
+            })?;
+        if output.status.success() {
+            return Ok(());
+        }
+        let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+        if allowed_errors
+            .iter()
+            .any(|allowed| stderr.contains(allowed))
+        {
+            return Ok(());
+        }
+        Err(GitResolutionError::GitCommandFailure {
+            command: format!("git {}", args.join(" ")),
+            status: output.status,
+            stderr,
+        })
+    }
+
+    fn fetch_revision_sparse(
+        &self,
+        checkout_path: &Utf8Path,
+        description: &GitDescription,
+    ) -> Result<(), GitResolutionError> {
+        if self
+            .run_git(
+                checkout_path,
+                &["fetch", "--depth=1", "origin", &description.rev],
+                &[],
+            )
+            .is_ok()
+        {
+            return Ok(());
+        }
+
+        self.run_git(checkout_path, &["fetch", "origin", &description.rev], &[])
+    }
 }
 
 enum CheckoutStatus {
@@ -230,13 +411,17 @@ impl Resolver for GitResolver {
         H: ResolutionHandler<Self>,
     {
         handler.on_resolution_start(description);
-        self.ensure_checkout_root()?;
-        let checkout_path = self.checkout_path(description);
-        let status = self.ensure_checkout(description, &checkout_path)?;
-
-        let resource = GitResource {
-            reused_checkout: matches!(status, CheckoutStatus::Existing),
-            checkout_path,
+        let resource = if let Some(path) = &description.path {
+            let patterns = vec![path.as_str().to_string()];
+            self.ensure_sparse_checkout(description, &patterns, SparseCheckoutMode::Cone)?
+        } else {
+            self.ensure_checkout_root()?;
+            let checkout_path = self.checkout_path(description);
+            let status = self.ensure_checkout(description, &checkout_path)?;
+            GitResource {
+                reused_checkout: matches!(status, CheckoutStatus::Existing),
+                checkout_path,
+            }
         };
         Ok(handler.handle_resolution(description, resource))
     }
@@ -267,6 +452,15 @@ pub enum GitResolutionError {
     Checkout {
         rev: String,
         error: git2::Error,
+    },
+    GitCommand {
+        command: String,
+        error: io::Error,
+    },
+    GitCommandFailure {
+        command: String,
+        status: std::process::ExitStatus,
+        stderr: String,
     },
     FetchRepository {
         source: Url,
@@ -306,6 +500,16 @@ impl fmt::Display for GitResolutionError {
             GitResolutionError::Checkout { rev, error } => {
                 write!(f, "Failed to checkout revision '{rev}': {error}")
             }
+            GitResolutionError::GitCommand { command, error } => {
+                write!(f, "Failed to run {command}: {error}")
+            }
+            GitResolutionError::GitCommandFailure {
+                command,
+                status,
+                stderr,
+            } => {
+                write!(f, "Command {command} failed ({status}): {stderr}")
+            }
             GitResolutionError::FetchRepository { source, error } => {
                 write!(
                     f,
@@ -338,9 +542,11 @@ impl std::error::Error for GitResolutionError {
             GitResolutionError::InvalidRevision { error, .. } => Some(error),
             GitResolutionError::RevisionLookup { error, .. } => Some(error),
             GitResolutionError::Checkout { error, .. } => Some(error),
+            GitResolutionError::GitCommand { error, .. } => Some(error),
             GitResolutionError::FetchRepository { error, .. } => Some(error),
             GitResolutionError::MissingSubdirectory { .. } => None,
             GitResolutionError::SourcePathConversion { .. } => None,
+            GitResolutionError::GitCommandFailure { .. } => None,
         }
     }
 }

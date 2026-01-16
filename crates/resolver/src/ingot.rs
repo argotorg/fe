@@ -1,10 +1,15 @@
 use camino::{Utf8Path, Utf8PathBuf};
+use common::config::Config;
+use std::collections::HashSet;
 use url::Url;
 
 use crate::{
     ResolutionHandler, Resolver,
     files::{FilesResolutionDiagnostic, FilesResolutionError, FilesResolver, FilesResource},
-    git::{GitDescription, GitResolutionDiagnostic, GitResolutionError, GitResolver, GitResource},
+    git::{
+        GitDescription, GitResolutionDiagnostic, GitResolutionError, GitResolver, GitResource,
+        SparseCheckoutMode,
+    },
     graph::GraphResolverImpl,
 };
 
@@ -28,9 +33,30 @@ pub type LocalGraphResolver<H, E, P> = GraphResolverImpl<FilesResolver, H, E, P>
 pub type RemoteGraphResolver<H, E, P> = GraphResolverImpl<GitResolver, H, E, P>;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct RemoteIngotDescriptor {
+    pub description: GitDescription,
+    pub name: Option<String>,
+}
+
+impl RemoteIngotDescriptor {
+    pub fn new(description: GitDescription, name: Option<String>) -> Self {
+        Self { description, name }
+    }
+}
+
+impl std::fmt::Display for RemoteIngotDescriptor {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match &self.name {
+            Some(name) => write!(f, "{} (name={})", self.description, name),
+            None => write!(f, "{}", self.description),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum IngotDescriptor {
     Local(Url),
-    Remote(GitDescription),
+    Remote(RemoteIngotDescriptor),
 }
 
 impl std::fmt::Display for IngotDescriptor {
@@ -98,6 +124,15 @@ impl PartialOrd for IngotPriority {
 pub enum IngotResolutionError {
     Files(FilesResolutionError),
     Git(GitResolutionError),
+    RemoteIngotNameNotFound {
+        name: String,
+        source: Url,
+        rev: String,
+    },
+    RemoteIngotNameAmbiguous {
+        name: String,
+        candidates: Vec<Utf8PathBuf>,
+    },
 }
 
 #[derive(Debug)]
@@ -128,6 +163,20 @@ impl std::fmt::Display for IngotResolutionError {
         match self {
             IngotResolutionError::Files(err) => err.fmt(f),
             IngotResolutionError::Git(err) => err.fmt(f),
+            IngotResolutionError::RemoteIngotNameNotFound { name, source, rev } => {
+                write!(f, "No ingot named '{name}' found in {source}#{rev}")
+            }
+            IngotResolutionError::RemoteIngotNameAmbiguous { name, candidates } => {
+                write!(
+                    f,
+                    "Multiple ingots named '{name}' found: {}",
+                    candidates
+                        .iter()
+                        .map(|path| path.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                )
+            }
         }
     }
 }
@@ -149,6 +198,7 @@ pub struct IngotResolver {
     progress: Box<dyn RemoteProgress>,
 }
 
+#[allow(clippy::result_large_err)]
 impl IngotResolver {
     pub fn new(files: FilesResolver, git: GitResolver) -> Self {
         Self {
@@ -166,6 +216,7 @@ impl IngotResolver {
     fn load_remote_files<H>(
         &mut self,
         handler: &mut H,
+        descriptor: &RemoteIngotDescriptor,
         description: &GitDescription,
         checkout_path: &Utf8Path,
         reused_checkout: bool,
@@ -194,7 +245,7 @@ impl IngotResolver {
 
         Ok((
             handler.handle_resolution(
-                &IngotDescriptor::Remote(description.clone()),
+                &IngotDescriptor::Remote(descriptor.clone()),
                 IngotResource {
                     ingot_url: ingot_url.clone(),
                     files,
@@ -209,9 +260,9 @@ impl IngotResolver {
         ))
     }
 
-    fn resolve_files<H>(
-        &mut self,
+    fn resolve_files_with<H>(
         handler: &mut H,
+        files_resolver: &mut FilesResolver,
         ingot_url: &Url,
     ) -> Result<FilesResource, FilesResolutionError>
     where
@@ -243,8 +294,19 @@ impl IngotResolver {
         let mut handler = ForwardDiagnostics {
             ingot_handler: handler,
         };
-        let files = self.files.resolve(&mut handler, ingot_url)?;
+        let files = files_resolver.resolve(&mut handler, ingot_url)?;
         Ok(files)
+    }
+
+    fn resolve_files<H>(
+        &mut self,
+        handler: &mut H,
+        ingot_url: &Url,
+    ) -> Result<FilesResource, FilesResolutionError>
+    where
+        H: ResolutionHandler<Self>,
+    {
+        Self::resolve_files_with(handler, &mut self.files, ingot_url)
     }
 
     fn resolve_git<H>(
@@ -284,6 +346,101 @@ impl IngotResolver {
         self.git.resolve(&mut handler, description)
     }
 
+    fn find_named_remote_ingot<H>(
+        &mut self,
+        handler: &mut H,
+        checkout_url: &Url,
+        name: &str,
+    ) -> Result<Vec<Utf8PathBuf>, IngotResolutionError>
+    where
+        H: ResolutionHandler<Self>,
+    {
+        let mut files_resolver = FilesResolver::with_patterns(&["fe.toml", "**/fe.toml"]);
+        let files = Self::resolve_files_with(handler, &mut files_resolver, checkout_url)
+            .map_err(IngotResolutionError::Files)?;
+        let mut matches = HashSet::new();
+
+        for file in files.files {
+            if file
+                .path
+                .components()
+                .any(|component| component.as_str() == ".git")
+            {
+                continue;
+            }
+            let Ok(config) = Config::parse(&file.content) else {
+                continue;
+            };
+            let Some(config_name) = config.metadata.name.as_deref() else {
+                continue;
+            };
+            if config_name == name
+                && let Some(parent) = file.path.parent()
+            {
+                matches.insert(parent.to_owned());
+            }
+        }
+
+        Ok(matches.into_iter().collect())
+    }
+
+    fn resolve_named_remote_path<H>(
+        &mut self,
+        handler: &mut H,
+        description: &GitDescription,
+        name: &str,
+    ) -> Result<Option<Utf8PathBuf>, IngotResolutionError>
+    where
+        H: ResolutionHandler<Self>,
+    {
+        let checkout_path = self.git.checkout_path(description);
+        let checkout_url = Url::from_directory_path(checkout_path.as_std_path())
+            .expect("valid url for checkout path");
+        let mut matches = Vec::new();
+
+        if self.git.has_valid_cached_checkout(description) && checkout_path.exists() {
+            matches = self.find_named_remote_ingot(handler, &checkout_url, name)?;
+        }
+
+        if matches.is_empty() {
+            let patterns = vec!["fe.toml".to_string(), "**/fe.toml".to_string()];
+            self.git
+                .ensure_sparse_checkout(description, &patterns, SparseCheckoutMode::NoCone)
+                .map_err(IngotResolutionError::Git)?;
+            matches = self.find_named_remote_ingot(handler, &checkout_url, name)?;
+        }
+
+        matches.sort_by(|left, right| left.as_str().cmp(right.as_str()));
+        matches.dedup();
+
+        let mut relative_matches = Vec::new();
+        for path in matches {
+            if let Ok(relative) = path.strip_prefix(checkout_path.as_path()) {
+                relative_matches.push(relative.to_owned());
+            }
+        }
+
+        match relative_matches.len() {
+            0 => Err(IngotResolutionError::RemoteIngotNameNotFound {
+                name: name.to_string(),
+                source: description.source.clone(),
+                rev: description.rev.clone(),
+            }),
+            1 => {
+                let match_path = &relative_matches[0];
+                if match_path.as_str().is_empty() {
+                    Ok(None)
+                } else {
+                    Ok(Some(match_path.to_owned()))
+                }
+            }
+            _ => Err(IngotResolutionError::RemoteIngotNameAmbiguous {
+                name: name.to_string(),
+                candidates: relative_matches,
+            }),
+        }
+    }
+
     fn resolve_local<H>(
         &mut self,
         handler: &mut H,
@@ -309,39 +466,52 @@ impl IngotResolver {
     fn resolve_remote<H>(
         &mut self,
         handler: &mut H,
-        description: &GitDescription,
+        descriptor: &RemoteIngotDescriptor,
     ) -> Result<H::Item, IngotResolutionError>
     where
         H: ResolutionHandler<Self>,
     {
-        let checkout_path = self.git.checkout_path(description);
+        let mut description = descriptor.description.clone();
+        if description.path.is_none()
+            && let Some(name) = descriptor.name.as_deref()
+            && let Some(path) = self.resolve_named_remote_path(handler, &description, name)?
+        {
+            description = description.with_path(path);
+        }
+        let checkout_path = self.git.checkout_path(&description);
 
         // Try to use an existing valid checkout without hitting the network.
-        if self.git.has_valid_cached_checkout(description)
-            && let Ok((result, _)) =
-                self.load_remote_files(handler, description, checkout_path.as_path(), true)
+        if self.git.has_valid_cached_checkout(&description)
+            && let Ok((result, _)) = self.load_remote_files(
+                handler,
+                descriptor,
+                &description,
+                checkout_path.as_path(),
+                true,
+            )
         {
             return Ok(result);
         }
 
         // Fallback to fetching/refreshing the checkout and then reading files.
-        handler.on_resolution_start(&IngotDescriptor::Remote(description.clone()));
-        self.progress.start(description);
-        let git_resource = match self.resolve_git(handler, description) {
+        handler.on_resolution_start(&IngotDescriptor::Remote(descriptor.clone()));
+        self.progress.start(&description);
+        let git_resource = match self.resolve_git(handler, &description) {
             Ok(resource) => resource,
             Err(err) => {
                 let wrapped = IngotResolutionError::Git(err);
-                self.progress.error(description, &wrapped);
+                self.progress.error(&description, &wrapped);
                 return Err(wrapped);
             }
         };
         let (result, ingot_url) = self.load_remote_files(
             handler,
-            description,
+            descriptor,
+            &description,
             git_resource.checkout_path.as_path(),
             git_resource.reused_checkout,
         )?;
-        self.progress.success(description, &ingot_url);
+        self.progress.success(&description, &ingot_url);
         Ok(result)
     }
 }

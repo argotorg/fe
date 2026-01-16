@@ -12,6 +12,7 @@ use clap::{Parser, Subcommand};
 use colored::Colorize;
 use fmt as fe_fmt;
 use similar::{ChangeTag, TextDiff};
+use tracing_subscriber::EnvFilter;
 use walkdir::WalkDir;
 
 #[derive(Debug, Clone, Parser)]
@@ -66,8 +67,14 @@ fn default_project_path() -> Utf8PathBuf {
 }
 
 fn main() {
+    init_tracing();
     let opts = Options::parse();
     run(&opts);
+}
+
+fn init_tracing() {
+    let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("warn"));
+    let _ = tracing_subscriber::fmt().with_env_filter(filter).try_init();
 }
 pub fn run(opts: &Options) {
     match &opts.command {
