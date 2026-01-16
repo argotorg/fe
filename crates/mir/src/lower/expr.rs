@@ -1717,25 +1717,27 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         }
 
         let mut effect_args = Vec::new();
-        let mut effect_kinds = Vec::new();
         let mut effect_writebacks: Vec<(LocalId, Place<'db>)> = Vec::new();
         if let hir::hir_def::CallableDef::Func(func_def) = callable.callable_def
             && func_def.has_effects(self.db)
             && extract_contract_function(self.db, func_def).is_none()
         {
             for resolved_arg in resolved_effect_args {
-                let (kind, value) = self.lower_effect_arg(resolved_arg, &mut effect_writebacks);
+                let value = self.lower_effect_arg(resolved_arg, &mut effect_writebacks);
                 effect_args.push(value);
-                effect_kinds.push(kind);
             }
         }
 
+        let hir_target = crate::ir::HirCallTarget {
+            callable_def: callable.callable_def,
+            generic_args: callable.generic_args().to_vec(),
+            trait_inst: callable.trait_inst(),
+        };
         let call_origin = CallOrigin {
             expr: None,
-            callable: callable.clone(),
+            hir_target: Some(hir_target),
             args: vec![receiver],
             effect_args,
-            effect_kinds,
             receiver_space,
             resolved_name: None,
         };
@@ -1788,25 +1790,27 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         }
 
         let mut effect_args = Vec::new();
-        let mut effect_kinds = Vec::new();
         let mut effect_writebacks: Vec<(LocalId, Place<'db>)> = Vec::new();
         if let hir::hir_def::CallableDef::Func(func_def) = callable.callable_def
             && func_def.has_effects(self.db)
             && extract_contract_function(self.db, func_def).is_none()
         {
             for resolved_arg in resolved_effect_args {
-                let (kind, value) = self.lower_effect_arg(resolved_arg, &mut effect_writebacks);
+                let value = self.lower_effect_arg(resolved_arg, &mut effect_writebacks);
                 effect_args.push(value);
-                effect_kinds.push(kind);
             }
         }
 
+        let hir_target = crate::ir::HirCallTarget {
+            callable_def: callable.callable_def,
+            generic_args: callable.generic_args().to_vec(),
+            trait_inst: callable.trait_inst(),
+        };
         let call_origin = CallOrigin {
             expr: None,
-            callable: callable.clone(),
+            hir_target: Some(hir_target),
             args: vec![receiver, index],
             effect_args,
-            effect_kinds,
             receiver_space,
             resolved_name: None,
         };

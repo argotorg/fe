@@ -2,8 +2,8 @@ use either::Either;
 use smallvec1::SmallVec;
 
 use crate::core::hir_def::{
-    ArithBinOp, BinOp, CallableDef, Expr, ExprId, FieldIndex, IdentId, Partial, Pat, PatId, PathId,
-    UnOp, VariantKind, WithBinding,
+    ArithBinOp, BinOp, CallableDef, Expr, ExprId, FieldIndex, IdentId, IntegerId, LitKind, Partial,
+    Pat, PatId, PathId, UnOp, VariantKind, WithBinding,
 };
 use crate::span::DynLazySpan;
 
@@ -39,7 +39,7 @@ use crate::analysis::{
         resolve_name_res, resolve_path, resolve_query,
     },
     ty::{
-        const_ty::ConstTyId,
+        const_ty::{ConstTyData, ConstTyId, EvaluatedConstTy},
         normalize::normalize_ty,
         ty_check::{TyChecker, path::RecordInitChecker},
         ty_def::{InvalidCause, PrimTy, TyId},
@@ -315,7 +315,12 @@ impl<'db> TyChecker<'db> {
 
     /// Check a range expression `start..end` and return the Range type.
     ///
-    /// Both operands must be `usize`. The result type is `Range`.
+    /// Both operands must be `usize`. The result type depends on whether bounds
+    /// are compile-time constants:
+    /// - `Range<Known<S>, Known<E>>` when both are literals (0 words)
+    /// - `Range<Known<S>, Unknown>` when only start is literal (1 word)
+    /// - `Range<Unknown, Known<E>>` when only end is literal (1 word)
+    /// - `Range<Unknown, Unknown>` when neither is literal (2 words)
     fn check_range_expr(
         &mut self,
         _expr: ExprId,
@@ -328,15 +333,65 @@ impl<'db> TyChecker<'db> {
         self.check_expr(start_expr, usize_ty);
         self.check_expr(end_expr, usize_ty);
 
+        // Try to detect if bounds are literal integers
+        let start_lit = self.try_get_literal_int(start_expr);
+        let end_lit = self.try_get_literal_int(end_expr);
+
         // Resolve Range type from core library
-        let range_ty = resolve_lib_type_path(self.db, self.env.body(), "core::range::Range");
-        match range_ty {
-            Some(ty) => ExprProp::new(ty, true),
-            None => {
-                // Fallback: if Range isn't found, return invalid
+        let range_base = resolve_lib_type_path(self.db, self.env.scope(), "core::range::Range");
+        let known_base = resolve_lib_type_path(self.db, self.env.scope(), "core::range::Known");
+        let unknown_ty = resolve_lib_type_path(self.db, self.env.scope(), "core::range::Unknown");
+
+        match (range_base, known_base, unknown_ty) {
+            (Some(range), Some(known), Some(unknown)) => {
+                // Construct appropriate bound types based on constness
+                let start_bound = self.make_range_bound(start_lit, known, unknown, usize_ty);
+                let end_bound = self.make_range_bound(end_lit, known, unknown, usize_ty);
+
+                // Construct Range<StartBound, EndBound>
+                let range_s = TyId::app(self.db, range, start_bound);
+                let range_full = TyId::app(self.db, range_s, end_bound);
+                ExprProp::new(range_full, true)
+            }
+            _ => {
+                // Fallback: if Range/Known/Unknown isn't found, return invalid
                 // This shouldn't happen in normal usage
                 ExprProp::invalid(self.db)
             }
+        }
+    }
+
+    /// Try to extract a literal integer value from an expression.
+    /// Returns `Some(IntegerId)` if the expression is a literal integer, `None` otherwise.
+    fn try_get_literal_int(&self, expr: ExprId) -> Option<IntegerId<'db>> {
+        let Partial::Present(expr_data) = self.env.expr_data(expr) else {
+            return None;
+        };
+
+        match expr_data {
+            Expr::Lit(LitKind::Int(int_id)) => Some(*int_id),
+            _ => None,
+        }
+    }
+
+    /// Create a range bound type: either `Known<N>` for a literal or `Unknown`.
+    fn make_range_bound(
+        &self,
+        lit: Option<IntegerId<'db>>,
+        known_base: TyId<'db>,
+        unknown_ty: TyId<'db>,
+        usize_ty: TyId<'db>,
+    ) -> TyId<'db> {
+        match lit {
+            Some(int_id) => {
+                // Create Known<N> where N is the literal value
+                let const_value = EvaluatedConstTy::LitInt(int_id);
+                let const_data = ConstTyData::Evaluated(const_value, usize_ty);
+                let const_ty = ConstTyId::new(self.db, const_data);
+                let const_ty_id = TyId::const_ty(self.db, const_ty);
+                TyId::app(self.db, known_base, const_ty_id)
+            }
+            None => unknown_ty,
         }
     }
 
@@ -902,18 +957,12 @@ impl<'db> TyChecker<'db> {
                 }
             }
 
-            // Provider generic argument selection for direct place-effects is deferred to MIR
-            // lowering (Option B). The type checker records the effect argument form + pass mode only.
-
-            self.env.push_call_effect_arg(
-                expr,
-                super::ResolvedEffectArg {
-                    param_idx,
-                    key: key_path,
-                    arg,
-                    pass_mode,
-                },
-            );
+            resolved_args.push(super::ResolvedEffectArg {
+                param_idx,
+                key: key_path,
+                arg,
+                pass_mode,
+            });
 
             if let EffectRequirement::Type(expected) = requirement {
                 let given = match satisfaction {

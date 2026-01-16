@@ -212,7 +212,10 @@ impl<'db> TypeNormalizer<'db> {
                     continue;
                 }
 
-                if table.unify(implementor.trait_(self.db), target_inst).is_err() {
+                if table
+                    .unify(implementor.trait_(self.db), target_inst)
+                    .is_err()
+                {
                     table.rollback_to(snapshot);
                     continue;
                 }
