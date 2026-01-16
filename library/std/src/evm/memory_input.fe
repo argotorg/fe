@@ -21,6 +21,6 @@ impl ByteInput for MemoryBytes {
         let word = mload(self.base + word_offset)
         let idx = byte_offset - word_offset
         let shift = (31 - idx) * 8
-        ((word >> shift) & 0xff).downcast_unchecked()
+        (word >> shift).downcast_truncate()
     }
 }
