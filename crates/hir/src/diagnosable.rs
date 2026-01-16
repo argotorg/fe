@@ -264,6 +264,14 @@ impl<'db> WherePredicateBoundView<'db> {
 }
 
 impl<'db> Func<'db> {
+    pub fn diags_const_fn(self, db: &'db dyn HirAnalysisDb) -> Vec<TyDiagCollection<'db>> {
+        if self.is_const(db) && !self.is_extern(db) {
+            vec![TyLowerDiag::ConstFnNotImplemented(self).into()]
+        } else {
+            Vec::new()
+        }
+    }
+
     /// Diagnostics related to parameters (duplicate names/labels).
     pub fn diags_parameters(self, db: &'db dyn HirAnalysisDb) -> Vec<TyDiagCollection<'db>> {
         check_duplicate_names(self.params(db).map(|v| v.name(db)), |idxs| {
@@ -1305,6 +1313,7 @@ impl<'db> Diagnosable<'db> for Func<'db> {
         use ty::method_table::probe_method;
 
         let mut out = Vec::new();
+        out.extend(self.diags_const_fn(db));
         out.extend(self.diags_parameters(db));
         out.extend(self.diags_param_types(db));
         out.extend(self.diags_return(db));

@@ -7,6 +7,8 @@ extern {}
 
 extern {
     pub unsafe fn write(loc: *u32, value: u32) -> bool
+
     pub unsafe fn read(loc: *u32, len: usize) -> usize
+
     fn foo()
 }

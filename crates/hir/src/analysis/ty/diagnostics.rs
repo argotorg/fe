@@ -103,6 +103,8 @@ pub enum TyLowerDiag<'db> {
     DuplicateVariantName(Enum<'db>, SmallVec<[u16; 4]>),
     DuplicateGenericParamName(GenericParamOwner<'db>, SmallVec<[u16; 4]>),
 
+    ConstFnNotImplemented(Func<'db>),
+
     InvalidConstParamTy(DynLazySpan<'db>),
     RecursiveConstParamTy(DynLazySpan<'db>),
 
@@ -157,6 +159,7 @@ impl TyLowerDiag<'_> {
             Self::DuplicateGenericParamName(..) => 19,
             Self::NonTrailingDefaultGenericParam(_) => 21,
             Self::GenericDefaultForwardRef { .. } => 22,
+            Self::ConstFnNotImplemented(..) => 23,
         }
     }
 }

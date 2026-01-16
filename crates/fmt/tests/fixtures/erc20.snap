@@ -56,9 +56,11 @@ pub contract CoolCoin uses (mut ctx: Ctx, mut log: Log) {
         Name {} -> String<32> {
             "CoolCoin"
         }
+
         Symbol {} -> String<8> {
             "COOL"
         }
+
         Decimals {} -> u8 {
             18
         }
@@ -70,10 +72,12 @@ pub contract CoolCoin uses (mut ctx: Ctx, mut log: Log) {
             mint(to, amount)
             true
         }
+
         Burn { amount } -> bool uses (ctx, mut store, mut log) {
             burn(from: ctx.caller(), amount)
             true
         }
+
         BurnFrom { from, amount } -> bool uses (ctx, mut store, mut log) {
             spend_allowance(owner: from, spender: ctx.caller(), amount)
             burn(from, amount)
@@ -305,6 +309,7 @@ impl<K, V> Map<K, V> {
 }
 impl<K, V> core::ops::Index<K> for Map<K, V> {
     type Output = V
+
     fn index(self, _ key: K) -> V {
         todo()
     }

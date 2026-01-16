@@ -1,5 +1,6 @@
 ---
 source: crates/parser/tests/error_recovery.rs
+assertion_line: 15
 expression: node
 input_file: test_files/error_recovery/items/extern_.fe
 ---
@@ -11,23 +12,21 @@ Root@0..93
         WhiteSpace@6..7 " "
         ExternItemList@7..48
           LBrace@7..8 "{"
-          Newline@8..9 "\n"
-          WhiteSpace@9..13 "    "
-          Func@13..30
-            ItemModifier@13..23
-              PubKw@13..16 "pub"
-              WhiteSpace@16..17 " "
-              UnsafeKw@17..23 "unsafe"
+          Func@8..30
+            Newline@8..9 "\n"
+            WhiteSpace@9..13 "    "
+            PubKw@13..16 "pub"
+            WhiteSpace@16..17 " "
+            UnsafeKw@17..23 "unsafe"
             WhiteSpace@23..24 " "
             FnKw@24..26 "fn"
             WhiteSpace@26..27 " "
             FuncSignature@27..30
               Ident@27..30 "Foo"
-          Newline@30..32 "\n\n"
-          WhiteSpace@32..36 "    "
-          Func@36..48
-            ItemModifier@36..39
-              PubKw@36..39 "pub"
+          Func@30..48
+            Newline@30..32 "\n\n"
+            WhiteSpace@32..36 "    "
+            PubKw@36..39 "pub"
             WhiteSpace@39..40 " "
             FnKw@40..42 "fn"
             WhiteSpace@42..43 " "
@@ -53,8 +52,7 @@ Root@0..93
     WhiteSpace@75..76 " "
     Item@76..93
       Func@76..93
-        ItemModifier@76..82
-          UnsafeKw@76..82 "unsafe"
+        UnsafeKw@76..82 "unsafe"
         WhiteSpace@82..83 " "
         FnKw@83..85 "fn"
         WhiteSpace@85..86 " "

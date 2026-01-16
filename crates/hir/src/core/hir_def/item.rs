@@ -645,6 +645,7 @@ pub struct Func<'db> {
     #[return_ref]
     pub origin: HirOrigin<ast::Func>,
 }
+
 impl<'db> Func<'db> {
     pub fn span(self) -> LazyFuncSpan<'db> {
         LazyFuncSpan::new(self)
@@ -738,6 +739,7 @@ pub struct Struct<'db> {
     #[return_ref]
     pub(crate) origin: HirOrigin<ast::Struct>,
 }
+
 impl<'db> Struct<'db> {
     pub fn span(self) -> LazyStructSpan<'db> {
         LazyStructSpan::new(self)
@@ -787,6 +789,7 @@ pub struct Contract<'db> {
     #[return_ref]
     pub(crate) origin: HirOrigin<ast::Contract>,
 }
+
 impl<'db> Contract<'db> {
     pub fn span(self) -> LazyContractSpan<'db> {
         LazyContractSpan::new(self)
@@ -892,6 +895,7 @@ pub struct Enum<'db> {
     #[return_ref]
     pub(crate) origin: HirOrigin<ast::Enum>,
 }
+
 impl<'db> Enum<'db> {
     pub fn span(self) -> LazyEnumSpan<'db> {
         LazyEnumSpan::new(self)
@@ -966,6 +970,7 @@ pub struct TypeAlias<'db> {
     #[return_ref]
     pub(crate) origin: HirOrigin<ast::TypeAlias>,
 }
+
 impl<'db> TypeAlias<'db> {
     pub fn span(self) -> LazyTypeAliasSpan<'db> {
         LazyTypeAliasSpan::new(self)
@@ -993,6 +998,7 @@ pub struct Impl<'db> {
     #[return_ref]
     pub(crate) origin: HirOrigin<ast::Impl>,
 }
+
 impl<'db> Impl<'db> {
     pub fn span(self) -> LazyImplSpan<'db> {
         LazyImplSpan::new(self)
@@ -1049,6 +1055,7 @@ pub struct Trait<'db> {
     #[return_ref]
     pub(crate) origin: HirOrigin<ast::Trait>,
 }
+
 impl<'db> Trait<'db> {
     pub fn span(self) -> LazyTraitSpan<'db> {
         LazyTraitSpan::new(self)
@@ -1124,6 +1131,7 @@ pub struct ImplTrait<'db> {
     #[return_ref]
     pub(crate) origin: HirOrigin<ast::ImplTrait>,
 }
+
 impl<'db> ImplTrait<'db> {
     pub fn span(self) -> LazyImplTraitSpan<'db> {
         LazyImplTraitSpan::new(self)
@@ -1206,6 +1214,7 @@ pub struct Const<'db> {
     #[return_ref]
     pub(crate) origin: HirOrigin<ast::Const>,
 }
+
 impl<'db> Const<'db> {
     pub fn span(self) -> LazyConstSpan<'db> {
         LazyConstSpan::new(self)
@@ -1235,6 +1244,7 @@ pub struct Use<'db> {
     #[return_ref]
     pub(crate) origin: HirOrigin<ast::Use>,
 }
+
 impl<'db> Use<'db> {
     pub fn span(self) -> LazyUseSpan<'db> {
         LazyUseSpan::new(self)
@@ -1302,6 +1312,17 @@ impl<'db> Use<'db> {
         self.path(db)
             .to_opt()
             .map_or_else(|| "{invalid}".to_string(), |path| path.pretty_path(db))
+    }
+}
+
+impl FuncModifiers {
+    pub fn new(vis: Visibility, is_unsafe: bool, is_const: bool, is_extern: bool) -> Self {
+        Self {
+            vis,
+            is_unsafe,
+            is_const,
+            is_extern,
+        }
     }
 }
 

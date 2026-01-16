@@ -1,7 +1,7 @@
-use parser::ast::{self, AttrListOwner as _, ItemModifierOwner as _};
+use parser::ast::{self, AttrListOwner as _};
 use salsa::Accumulator as _;
 
-use super::{hir_builder::HirBuilder, item::lower_visibility};
+use super::hir_builder::HirBuilder;
 
 use crate::{
     HirDb, SelectorError, SelectorErrorKind,
@@ -43,7 +43,7 @@ pub(super) fn lower_msg_as_mod<'db>(ctxt: &mut FileLowerCtxt<'db>, ast: ast::Msg
     // Lower any existing attributes on the msg block
     let attributes = AttrListId::lower_ast_opt(ctxt, ast.attr_list());
 
-    let vis = lower_visibility(ast.modifier());
+    let vis = super::lower_visibility(&ast);
 
     // Create the desugared origin pointing to the original msg AST
     let msg_desugared = MsgDesugared {
@@ -176,12 +176,7 @@ fn lower_msg_variant_encode_impl<'db>(
             e_generic_params,
             params,
             None,
-            FuncModifiers {
-                vis: Visibility::Private,
-                is_unsafe: false,
-                is_const: false,
-                is_extern: false,
-            },
+            FuncModifiers::new(Visibility::Private, false, false, false),
             |body| {
                 body.let_self_record(&field_names);
                 body.encode_fields(&field_names, encoder_ident);
@@ -214,12 +209,7 @@ fn lower_msg_variant_decode_trait_impl<'db>(
             d_generic_params,
             params,
             Some(builder.self_ty()),
-            FuncModifiers {
-                vis: Visibility::Private,
-                is_unsafe: false,
-                is_const: false,
-                is_extern: false,
-            },
+            FuncModifiers::new(Visibility::Private, false, false, false),
             |body| {
                 for (name, ty) in fields.iter().copied() {
                     body.decode_into(name, ty);

@@ -1,5 +1,6 @@
 ---
 source: crates/parser/tests/error_recovery.rs
+assertion_line: 15
 expression: node
 input_file: test_files/error_recovery/items/struct_.fe
 ---
@@ -7,8 +8,7 @@ Root@0..160
   ItemList@0..160
     Item@0..74
       Struct@0..74
-        ItemModifier@0..3
-          PubKw@0..3 "pub"
+        PubKw@0..3 "pub"
         WhiteSpace@3..4 " "
         StructKw@4..10 "struct"
         GenericParamList@10..15
@@ -71,8 +71,7 @@ Root@0..160
     Newline@74..76 "\n\n"
     Item@76..160
       Struct@76..160
-        ItemModifier@76..79
-          PubKw@76..79 "pub"
+        PubKw@76..79 "pub"
         WhiteSpace@79..80 " "
         StructKw@80..86 "struct"
         WhiteSpace@86..87 " "

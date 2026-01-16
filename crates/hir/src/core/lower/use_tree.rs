@@ -1,6 +1,6 @@
 use parser::ast::{self, prelude::*};
 
-use super::{FileLowerCtxt, item::lower_visibility};
+use super::FileLowerCtxt;
 use crate::{
     hir_def::{AttrListId, IdentId, Partial, TrackedItemVariant, Use, use_tree::*},
     span::{HirOrigin, UseDesugared},
@@ -9,7 +9,7 @@ use crate::{
 impl<'db> Use<'db> {
     pub(super) fn lower_ast(ctxt: &mut FileLowerCtxt<'db>, ast: ast::Use) -> Vec<Self> {
         let attributes = AttrListId::lower_ast_opt(ctxt, ast.attr_list());
-        let vis = lower_visibility(ast.modifier());
+        let vis = super::lower_visibility(&ast);
 
         let Some(use_tree) = ast.use_tree() else {
             let id = ctxt.joined_id(TrackedItemVariant::Use(Partial::Absent));

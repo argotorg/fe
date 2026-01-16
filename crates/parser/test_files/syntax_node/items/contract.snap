@@ -1,5 +1,6 @@
 ---
 source: crates/parser/tests/syntax_node.rs
+assertion_line: 15
 expression: node
 input_file: test_files/syntax_node/items/contract.fe
 ---
@@ -17,8 +18,7 @@ Root@0..90
     Newline@17..19 "\n\n"
     Item@19..90
       Contract@19..90
-        ItemModifier@19..22
-          PubKw@19..22 "pub"
+        PubKw@19..22 "pub"
         WhiteSpace@22..23 " "
         ContractKw@23..31 "contract"
         WhiteSpace@31..32 " "

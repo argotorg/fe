@@ -40,9 +40,9 @@ pub mod lazy_spans {
         item::{
             LazyBodySpan, LazyConstSpan, LazyContractRecvSpan, LazyContractSpan, LazyEnumSpan,
             LazyFieldDefListSpan, LazyFieldDefSpan, LazyFuncSignatureSpan, LazyFuncSpan,
-            LazyImplSpan, LazyImplTraitSpan, LazyItemModifierSpan, LazyItemSpan, LazyModSpan,
-            LazyRecvArmListSpan, LazyRecvArmSpan, LazyStructSpan, LazyTopModSpan, LazyTraitSpan,
-            LazyTypeAliasSpan, LazyUseSpan, LazyVariantDefListSpan, LazyVariantDefSpan,
+            LazyImplSpan, LazyImplTraitSpan, LazyItemSpan, LazyModSpan, LazyRecvArmListSpan,
+            LazyRecvArmSpan, LazyStructSpan, LazyTopModSpan, LazyTraitSpan, LazyTypeAliasSpan,
+            LazyUseSpan, LazyVariantDefListSpan, LazyVariantDefSpan,
         },
         params::{
             LazyConstGenericParamSpan, LazyFuncParamListSpan, LazyFuncParamSpan,

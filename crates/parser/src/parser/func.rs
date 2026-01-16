@@ -37,6 +37,7 @@ impl super::Parse for FuncScope {
     type Error = Recovery<ErrProof>;
 
     fn parse<S: TokenStream>(&mut self, parser: &mut Parser<S>) -> Result<(), Self::Error> {
+        parser.bump_if(SyntaxKind::ConstKw);
         parser.bump_expected(SyntaxKind::FnKw);
 
         match self.fn_def_scope {
@@ -62,6 +63,7 @@ impl super::Parse for FuncSignatureScope {
             SyntaxKind::UsesKw,
             SyntaxKind::WhereKw,
             SyntaxKind::FnKw,
+            SyntaxKind::ConstKw,
             SyntaxKind::PubKw,
             SyntaxKind::UnsafeKw,
             SyntaxKind::DocComment,

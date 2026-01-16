@@ -25,8 +25,7 @@ Root@0..179
           DocCommentAttr@42..57
             DocComment@42..57 "/// DocComment2"
           Newline@57..58 "\n"
-        ItemModifier@58..61
-          PubKw@58..61 "pub"
+        PubKw@58..61 "pub"
         WhiteSpace@61..62 " "
         StructKw@62..68 "struct"
         WhiteSpace@68..69 " "

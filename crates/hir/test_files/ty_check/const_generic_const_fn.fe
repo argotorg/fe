@@ -1,0 +1,7 @@
+extern {
+    const fn next_slot<T>() -> usize
+}
+
+fn foo() -> usize {
+    next_slot<u32>()
+}

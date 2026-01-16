@@ -58,14 +58,13 @@ define_lazy_span_node!(
 define_lazy_span_node!(
     LazyModSpan,
     ast::Mod,
-    @token
-    {
+    @token {
+        (pub_kw, pub_kw),
+        (unsafe_kw, unsafe_kw),
         (name, name),
     }
-    @node
-    {
+    @node {
         (attributes, attr_list, LazyAttrListSpan),
-        (modifier, modifier, LazyItemModifierSpan),
     }
 );
 impl<'db> LazyModSpan<'db> {
@@ -77,10 +76,14 @@ impl<'db> LazyModSpan<'db> {
 define_lazy_span_node!(
     LazyFuncSpan,
     ast::Func,
+    @token {
+        (pub_kw, pub_kw),
+        (unsafe_kw, unsafe_kw),
+        (const_kw, const_kw),
+    }
     @node {
         (sig, signature_opt, LazyFuncSignatureSpan),
         (attributes, attr_list, LazyAttrListSpan),
-        (modifier, modifier, LazyItemModifierSpan),
     }
 );
 impl<'db> LazyFuncSpan<'db> {
@@ -143,11 +146,14 @@ define_lazy_span_node!(
     LazyStructSpan,
     ast::Struct,
     // Note: `name` is handled specially below to support msg desugared structs
+    @token {
+        (pub_kw, pub_kw),
+        (unsafe_kw, unsafe_kw),
+    }
     @node {
         (attributes, attr_list, LazyAttrListSpan),
         (generic_params, generic_params, LazyGenericParamListSpan),
         (where_clause, where_clause, LazyWhereClauseSpan),
-        (modifier, modifier, LazyItemModifierSpan),
         (fields, fields, LazyFieldDefListSpan),
     }
 );
@@ -186,11 +192,12 @@ define_lazy_span_node!(
     LazyContractSpan,
     ast::Contract,
     @token {
+        (pub_kw, pub_kw),
+        (unsafe_kw, unsafe_kw),
         (name, name),
     }
     @node {
         (attributes, attr_list, LazyAttrListSpan),
-        (modifier, modifier, LazyItemModifierSpan),
         (effects, uses_clause, LazyUsesClauseSpan),
         (fields, fields, LazyContractFieldsSpan),
         (init_block, init_block, LazyContractInitSpan),
@@ -206,13 +213,14 @@ define_lazy_span_node!(
     LazyEnumSpan,
     ast::Enum,
     @token {
+        (pub_kw, pub_kw),
+        (unsafe_kw, unsafe_kw),
         (name, name),
     }
     @node {
         (attributes, attr_list, LazyAttrListSpan),
         (generic_params, generic_params, LazyGenericParamListSpan),
         (where_clause, where_clause, LazyWhereClauseSpan),
-        (modifier, modifier, LazyItemModifierSpan),
         (variants, variants, LazyVariantDefListSpan),
     }
 );
@@ -226,12 +234,13 @@ define_lazy_span_node!(
     LazyTypeAliasSpan,
     ast::TypeAlias,
     @token {
+        (pub_kw, pub_kw),
+        (unsafe_kw, unsafe_kw),
         (alias, alias),
     }
     @node {
         (attributes, attr_list, LazyAttrListSpan),
         (generic_params, generic_params, LazyGenericParamListSpan),
-        (modifier, modifier, LazyItemModifierSpan),
         (ty, ty, LazyTySpan),
     }
 );
@@ -261,6 +270,8 @@ define_lazy_span_node!(
     LazyTraitSpan,
     ast::Trait,
     @token {
+        (pub_kw, pub_kw),
+        (unsafe_kw, unsafe_kw),
         (name, name),
     }
     @node {
@@ -268,7 +279,6 @@ define_lazy_span_node!(
         (generic_params, generic_params, LazyGenericParamListSpan),
         (super_traits, super_trait_list, LazySuperTraitListSpan),
         (where_clause, where_clause, LazyWhereClauseSpan),
-        (modifier, modifier, LazyItemModifierSpan),
         (item_list, item_list, LazyTraitItemListSpan),
     }
 );
@@ -609,15 +619,6 @@ define_lazy_span_node!(
     }
 );
 
-define_lazy_span_node!(
-    LazyItemModifierSpan,
-    ast::ItemModifier,
-    @token {
-        (pub_kw, pub_kw),
-        (unsafe_kw, unsafe_kw),
-    }
-);
-
 #[cfg(test)]
 mod tests {
 
@@ -799,7 +800,7 @@ mod tests {
         let top_mod = alias.top_mod(&db);
         assert_eq!("Foo", db.text_at(top_mod, &alias.span().alias()));
         assert_eq!("u32", db.text_at(top_mod, &alias.span().ty()));
-        assert_eq!("pub", db.text_at(top_mod, &alias.span().modifier()));
+        assert_eq!("pub", db.text_at(top_mod, &alias.span().pub_kw()));
     }
 
     #[test]

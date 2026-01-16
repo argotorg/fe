@@ -1368,6 +1368,18 @@ impl DiagnosticVoucher for TyLowerDiag<'_> {
                 }
             }
 
+            Self::ConstFnNotImplemented(func) => CompleteDiagnostic {
+                severity: Severity::Error,
+                message: "`const fn` is not implemented yet".to_string(),
+                sub_diagnostics: vec![SubDiagnostic {
+                    style: LabelStyle::Primary,
+                    message: "non-extern `const fn` is not supported yet".to_string(),
+                    span: func.span().const_kw().resolve(db),
+                }],
+                notes: vec![],
+                error_code,
+            },
+
             Self::InvalidConstParamTy(span) => CompleteDiagnostic {
                 severity: Severity::Error,
                 message: "invalid const parameter type".to_string(),

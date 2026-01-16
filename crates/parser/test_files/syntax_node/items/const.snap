@@ -1,14 +1,14 @@
 ---
 source: crates/parser/tests/syntax_node.rs
+assertion_line: 15
 expression: node
-input_file: crates/parser/test_files/syntax_node/items/const.fe
+input_file: test_files/syntax_node/items/const.fe
 ---
 Root@0..160
   ItemList@0..159
     Item@0..22
       Const@0..22
-        ItemModifier@0..3
-          PubKw@0..3 "pub"
+        PubKw@0..3 "pub"
         WhiteSpace@3..4 " "
         ConstKw@4..9 "const"
         WhiteSpace@9..10 " "

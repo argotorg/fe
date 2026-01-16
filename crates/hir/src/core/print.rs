@@ -1018,14 +1018,14 @@ impl<'db> Func<'db> {
         // Attributes
         result.push_str(&self.attributes(db).pretty_print_with_newline(db));
 
-        // Modifiers (pub, const, unsafe)
+        // Modifiers (pub, unsafe, const)
         let modifiers = self.modifiers(db);
         result.push_str(modifiers.vis.pretty_print());
-        if modifiers.is_const {
-            result.push_str("const ");
-        }
         if modifiers.is_unsafe {
             result.push_str("unsafe ");
+        }
+        if modifiers.is_const {
+            result.push_str("const ");
         }
 
         // fn keyword

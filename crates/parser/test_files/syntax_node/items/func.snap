@@ -8,8 +8,7 @@ Root@0..436
   ItemList@0..435
     Item@0..30
       Func@0..30
-        ItemModifier@0..3
-          PubKw@0..3 "pub"
+        PubKw@0..3 "pub"
         WhiteSpace@3..4 " "
         FnKw@4..6 "fn"
         WhiteSpace@6..7 " "

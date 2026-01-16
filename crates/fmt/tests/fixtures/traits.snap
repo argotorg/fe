@@ -13,18 +13,21 @@ trait Foo {
 // Trait with associated type
 trait WithType {
     type Output
+
     fn get(self) -> Self::Output
 }
 
 // Trait with associated const
 trait WithConst {
     const VALUE: i32
+
     fn value(self) -> i32
 }
 
 // Simple impl
 impl Point {
     fn new(x: i32, y: i32) -> Self {}
+
     fn x(self) -> i32 {
         self.x
     }
@@ -40,6 +43,7 @@ impl Foo for Point {
 // Impl trait with associated type
 impl WithType for Point {
     type Output = i32
+
     fn get(self) -> Self::Output {
         self.x
     }
