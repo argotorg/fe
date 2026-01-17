@@ -105,6 +105,10 @@ impl FuncSignature {
 impl super::AttrListOwner for Func {}
 impl super::ItemModifierOwner for Func {}
 impl Func {
+    pub fn const_kw(&self) -> Option<SyntaxToken> {
+        support::token(self.syntax(), SK::ConstKw)
+    }
+
     /// Returns the function's signature if present in the syntax tree.
     /// This is primarily for consumers (like lazy spans) that need to handle
     /// malformed code without panicking.
@@ -612,25 +616,13 @@ ast_node! {
     IntoIterator<Item=Func>,
 }
 
-ast_node! {
-    /// A modifier on an item.
-    /// `pub unsafe`
-    pub struct ItemModifier,
-    SK::ItemModifier,
-}
-impl ItemModifier {
-    pub fn pub_kw(&self) -> Option<SyntaxToken> {
+pub trait ItemModifierOwner: AstNode<Language = FeLang> {
+    fn pub_kw(&self) -> Option<SyntaxToken> {
         support::token(self.syntax(), SK::PubKw)
     }
 
-    pub fn unsafe_kw(&self) -> Option<SyntaxToken> {
+    fn unsafe_kw(&self) -> Option<SyntaxToken> {
         support::token(self.syntax(), SK::UnsafeKw)
-    }
-}
-
-pub trait ItemModifierOwner: AstNode<Language = FeLang> {
-    fn modifier(&self) -> Option<ItemModifier> {
-        support::child(self.syntax())
     }
 }
 
@@ -792,9 +784,8 @@ mod tests {
             func.sig().ret_ty().unwrap().kind(),
             TypeKind::Tuple(_)
         ));
-        let modifier = func.modifier().unwrap();
-        assert!(modifier.pub_kw().is_some());
-        assert!(modifier.unsafe_kw().is_some());
+        assert!(func.pub_kw().is_some());
+        assert!(func.unsafe_kw().is_some());
     }
 
     #[test]

@@ -1,0 +1,5 @@
+struct Foo<const N: usize = 10>{}
+
+fn f() {
+    let f: Foo
+}

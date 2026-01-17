@@ -177,6 +177,10 @@ impl ConstGenericParam {
     pub fn ty(&self) -> Option<super::Type> {
         support::child(self.syntax())
     }
+
+    pub fn default_expr(&self) -> Option<super::Expr> {
+        support::child(self.syntax())
+    }
 }
 
 ast_node! {
@@ -646,6 +650,21 @@ mod tests {
 
     #[test]
     #[wasm_bindgen_test]
+    fn const_generic_param_default() {
+        let source = r#"<const N: usize = 10>"#;
+        let gp = parse_generic_params(source);
+        let mut params = gp.into_iter();
+
+        let GenericParamKind::Const(p1) = params.next().unwrap().kind() else {
+            panic!("expected const param");
+        };
+        assert_eq!(p1.name().unwrap().text(), "N");
+        assert!(p1.ty().is_some());
+        assert!(p1.default_expr().is_some());
+    }
+
+    #[test]
+    #[wasm_bindgen_test]
     fn generic_arg() {
         let source = r#"<T, "foo">"#;
         let ga = parse_generic_arg(source);
@@ -658,6 +677,19 @@ mod tests {
             panic!("expected const arg");
         };
         assert!(a2.expr().is_some());
+    }
+
+    #[test]
+    #[wasm_bindgen_test]
+    fn const_generic_arg_call() {
+        let source = r#"<foo()>"#;
+        let ga = parse_generic_arg(source);
+        let mut args = ga.iter();
+
+        let GenericArgKind::Const(arg) = args.next().unwrap().kind() else {
+            panic!("expected const arg");
+        };
+        assert!(arg.expr().is_some());
     }
 
     #[test]

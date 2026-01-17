@@ -1,0 +1,13 @@
+---
+source: crates/uitest/tests/ty_check.rs
+assertion_line: 27
+expression: diags
+input_file: fixtures/ty_check/const_fn/with_not_allowed.fe
+---
+error[8-0056]: `with` expressions are not allowed in a `const fn`
+   ┌─ with_not_allowed.fe:14:5
+   │  
+14 │ ╭     with (Logger = Silent {}) {
+15 │ │         1
+16 │ │     }
+   │ ╰─────^ `with` is not supported in const evaluation

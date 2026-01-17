@@ -1,5 +1,6 @@
 ---
 source: crates/parser/tests/syntax_node.rs
+assertion_line: 15
 expression: node
 input_file: test_files/syntax_node/items/mod.fe
 ---
@@ -7,8 +8,7 @@ Root@0..146
   ItemList@0..146
     Item@0..107
       Mod@0..107
-        ItemModifier@0..3
-          PubKw@0..3 "pub"
+        PubKw@0..3 "pub"
         WhiteSpace@3..4 " "
         ModKw@4..7 "mod"
         WhiteSpace@7..8 " "
@@ -72,8 +72,7 @@ Root@0..146
           WhiteSpace@84..88 "    "
           Item@88..105
             Struct@88..105
-              ItemModifier@88..91
-                PubKw@88..91 "pub"
+              PubKw@88..91 "pub"
               WhiteSpace@91..92 " "
               StructKw@92..98 "struct"
               WhiteSpace@98..99 " "
@@ -87,8 +86,7 @@ Root@0..146
     Newline@107..109 "\n\n"
     Item@109..146
       Mod@109..146
-        ItemModifier@109..112
-          PubKw@109..112 "pub"
+        PubKw@109..112 "pub"
         WhiteSpace@112..113 " "
         ModKw@113..116 "mod"
         WhiteSpace@116..117 " "
@@ -100,8 +98,7 @@ Root@0..146
           WhiteSpace@123..127 "    "
           Item@127..144
             Struct@127..144
-              ItemModifier@127..130
-                PubKw@127..130 "pub"
+              PubKw@127..130 "pub"
               WhiteSpace@130..131 " "
               StructKw@131..137 "struct"
               WhiteSpace@137..138 " "

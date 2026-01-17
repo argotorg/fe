@@ -26,13 +26,11 @@ fn modifier_doc<'a, N: ItemModifierOwner + AstNode>(
 ) -> Doc<'a> {
     let alloc = &ctx.alloc;
     let mut doc = alloc.nil();
-    if let Some(modifier) = node.modifier() {
-        if modifier.pub_kw().is_some() {
-            doc = doc.append(alloc.text("pub "));
-        }
-        if modifier.unsafe_kw().is_some() {
-            doc = doc.append(alloc.text("unsafe "));
-        }
+    if node.pub_kw().is_some() {
+        doc = doc.append(alloc.text("pub "));
+    }
+    if node.unsafe_kw().is_some() {
+        doc = doc.append(alloc.text("unsafe "));
     }
     doc
 }
@@ -96,40 +94,25 @@ fn block_items_doc<'a, T: ToDoc>(
     cast_fn: impl Fn(parser::SyntaxNode) -> Option<T>,
     ctx: &'a RewriteContext<'a>,
 ) -> Doc<'a> {
-    use parser::syntax_kind::SyntaxKind;
-    use parser::syntax_node::NodeOrToken;
-
     let alloc = &ctx.alloc;
     let mut inner = alloc.nil();
-    let mut pending_newlines = 0usize;
-    let mut is_first = true;
 
-    for child in syntax.children_with_tokens() {
-        match child {
-            NodeOrToken::Node(node) => {
-                if let Some(item) = cast_fn(node) {
-                    // Always add at least one newline before each item.
-                    // If source had 2+ newlines (blank line), add exactly 2 (one blank line).
-                    // Multiple blank lines are collapsed to one.
-                    let newlines_to_add = if pending_newlines >= 2 { 2 } else { 1 };
-                    for _ in 0..newlines_to_add {
-                        inner = inner.append(alloc.hardline());
-                    }
-                    pending_newlines = 0;
-                    is_first = false;
-                    inner = inner.append(item.to_doc(ctx));
-                }
+    let mut prefix_lines = 1;
+    for node in syntax.children() {
+        if let Some(item) = cast_fn(node) {
+            // Always add at least one newline before each item.
+            // If source had 2+ newlines (blank line), add exactly 2 (one blank line).
+            // Multiple blank lines are collapsed to one.
+            for _ in 0..prefix_lines {
+                inner = inner.append(alloc.hardline());
             }
-            NodeOrToken::Token(token) => {
-                if token.kind() == SyntaxKind::Newline {
-                    let text = ctx.snippet(token.text_range());
-                    pending_newlines = text.chars().filter(|c| *c == '\n').count();
-                }
-            }
+            inner = inner.append(item.to_doc(ctx));
         }
+        prefix_lines = 2;
     }
 
-    if is_first {
+    if prefix_lines == 1 {
+        // no children
         return alloc.text("{}");
     }
 
@@ -430,6 +413,11 @@ impl ToDoc for ast::Func {
 
         let attrs = attrs_doc(self, ctx);
         let modifier = modifier_doc(self, ctx);
+        let const_kw = if self.const_kw().is_some() {
+            alloc.text("const ")
+        } else {
+            alloc.nil()
+        };
 
         let doc = if let Some(body) = self.body() {
             let has_where = self.sig().where_clause().is_some();
@@ -452,7 +440,7 @@ impl ToDoc for ast::Func {
             self.sig().to_doc(ctx)
         };
 
-        attrs.append(modifier).append(doc)
+        attrs.append(modifier).append(const_kw).append(doc)
     }
 }
 

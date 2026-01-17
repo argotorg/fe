@@ -14,6 +14,19 @@ pub fn parse_expr<S: TokenStream>(parser: &mut Parser<S>) -> Result<(), Recovery
     parse_expr_with_min_bp(parser, 0, true)
 }
 
+/// Parses a restricted expression form suitable for const-generic arguments and
+/// defaults inside `<...>` contexts.
+///
+/// This intentionally avoids parsing infix operators so that `>` can be
+/// interpreted as a delimiter rather than a comparison operator.
+pub fn parse_const_generic_expr<S: TokenStream>(
+    parser: &mut Parser<S>,
+) -> Result<(), Recovery<ErrProof>> {
+    // Allow postfix chaining (call/index/field), but avoid infix operators like
+    // `>` / `>>` which would conflict with closing `>` tokens of generic lists.
+    parse_expr_with_min_bp(parser, 142, true)
+}
+
 /// Parses expression except for `struct` initialization expression.
 pub fn parse_expr_no_struct<S: TokenStream>(
     parser: &mut Parser<S>,

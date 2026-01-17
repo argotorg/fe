@@ -1,17 +1,17 @@
 ---
-source: crates/hir-analysis/tests/pattern_matching.rs
+source: crates/hir/tests/pattern_matching.rs
 expression: diagnostic_output
 input_file: test_files/pattern_matching/misc_tests/bindings.fe
 ---
 Misc test file bindings.fe has 12 diagnostic(s):
 
-error[8-0014]: type must be known here
+error[8-0014]: type must be known
    ┌─ bindings.fe:35:47
    │
 35 │         (Option::Some(a), Option::Some(b)) => a + b
    │                                               ^ type must be known here
 
-error[8-0014]: type must be known here
+error[8-0014]: type must be known
    ┌─ bindings.fe:53:47
    │
 53 │         (Option::Some(a), Option::Some(b)) => a + b

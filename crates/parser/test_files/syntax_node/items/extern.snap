@@ -1,10 +1,11 @@
 ---
 source: crates/parser/tests/syntax_node.rs
+assertion_line: 15
 expression: node
 input_file: test_files/syntax_node/items/extern.fe
 ---
-Root@0..146
-  ItemList@0..146
+Root@0..184
+  ItemList@0..183
     Item@0..11
       Extern@0..11
         ExternKw@0..6 "extern"
@@ -14,19 +15,18 @@ Root@0..146
           Newline@8..10 "\n\n"
           RBrace@10..11 "}"
     Newline@11..13 "\n\n"
-    Item@13..146
-      Extern@13..146
+    Item@13..183
+      Extern@13..183
         ExternKw@13..19 "extern"
         WhiteSpace@19..20 " "
-        ExternItemList@20..146
+        ExternItemList@20..183
           LBrace@20..21 "{"
-          Newline@21..22 "\n"
-          WhiteSpace@22..26 "    "
-          Func@26..76
-            ItemModifier@26..36
-              PubKw@26..29 "pub"
-              WhiteSpace@29..30 " "
-              UnsafeKw@30..36 "unsafe"
+          Func@21..76
+            Newline@21..22 "\n"
+            WhiteSpace@22..26 "    "
+            PubKw@26..29 "pub"
+            WhiteSpace@29..30 " "
+            UnsafeKw@30..36 "unsafe"
             WhiteSpace@36..37 " "
             FnKw@37..39 "fn"
             WhiteSpace@39..40 " "
@@ -62,13 +62,12 @@ Root@0..146
                 Path@72..76
                   PathSegment@72..76
                     Ident@72..76 "bool"
-          Newline@76..77 "\n"
-          WhiteSpace@77..81 "    "
-          Func@81..131
-            ItemModifier@81..91
-              PubKw@81..84 "pub"
-              WhiteSpace@84..85 " "
-              UnsafeKw@85..91 "unsafe"
+          Func@76..131
+            Newline@76..77 "\n"
+            WhiteSpace@77..81 "    "
+            PubKw@81..84 "pub"
+            WhiteSpace@84..85 " "
+            UnsafeKw@85..91 "unsafe"
             WhiteSpace@91..92 " "
             FnKw@92..94 "fn"
             WhiteSpace@94..95 " "
@@ -115,4 +114,29 @@ Root@0..146
                 LParen@142..143 "("
                 RParen@143..144 ")"
           Newline@144..145 "\n"
-          RBrace@145..146 "}"
+          WhiteSpace@145..149 "    "
+          Func@149..181
+            ConstKw@149..154 "const"
+            WhiteSpace@154..155 " "
+            FnKw@155..157 "fn"
+            WhiteSpace@157..158 " "
+            FuncSignature@158..181
+              Ident@158..167 "next_slot"
+              GenericParamList@167..170
+                Lt@167..168 "<"
+                TypeGenericParam@168..169
+                  Ident@168..169 "T"
+                Gt@169..170 ">"
+              FuncParamList@170..172
+                LParen@170..171 "("
+                RParen@171..172 ")"
+              WhiteSpace@172..173 " "
+              Arrow@173..175 "->"
+              WhiteSpace@175..176 " "
+              PathType@176..181
+                Path@176..181
+                  PathSegment@176..181
+                    Ident@176..181 "usize"
+          Newline@181..182 "\n"
+          RBrace@182..183 "}"
+  Newline@183..184 "\n"

@@ -3,7 +3,12 @@ source: crates/codegen/tests/yul.rs
 expression: output
 input_file: tests/fixtures/literal_add.fe
 ---
-function $literal_add() -> ret {
-  ret := add(1, 2)
+function $main() -> ret {
+  let v0 := $add(10, 20)
+  ret := v0
+  leave
+}
+function $add($a, $b) -> ret {
+  ret := add($a, $b)
   leave
 }

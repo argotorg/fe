@@ -6,9 +6,9 @@ use crate::{
     HirDb,
     hir_def::{
         AssocConstDef, AssocTyDef, AttrListId, Body, BodyKind, EffectParamListId, Expr, ExprId,
-        FieldDefListId, Func, FuncParam, FuncParamListId, FuncParamName, GenericArgListId,
-        GenericParam, GenericParamListId, IdentId, ImplTrait, IntegerId, ItemKind, ItemModifier,
-        LitKind, Mod, Partial, Pat, PatId, PathId, RecordPatField, Stmt, StmtId, Struct,
+        FieldDefListId, Func, FuncModifiers, FuncParam, FuncParamListId, FuncParamName,
+        GenericArgListId, GenericParam, GenericParamListId, IdentId, ImplTrait, IntegerId,
+        ItemKind, LitKind, Mod, Partial, Pat, PatId, PathId, RecordPatField, Stmt, StmtId, Struct,
         TopLevelMod, TrackedItemId, TrackedItemVariant, TraitRefId, TypeBound, TypeGenericParam,
         TypeId, TypeKind, Visibility, WhereClauseId, expr::CallArg,
     },
@@ -394,7 +394,7 @@ where
         generic_params: GenericParamListId<'db>,
         params: FuncParamListId<'db>,
         ret_ty: Option<TypeId<'db>>,
-        modifier: ItemModifier,
+        vis: Visibility,
         build_body: impl FnOnce(&mut BodyBuilder<'_, 'db, O>),
     ) -> Func<'db> {
         let attrs = self.empty_attrs();
@@ -422,7 +422,7 @@ where
                     Partial::Present(params),
                     effects,
                     ret_ty,
-                    modifier,
+                    FuncModifiers::new(vis, false, false, false),
                     Some(body),
                     this.top_mod(),
                     this.origin(),
@@ -437,7 +437,7 @@ where
         generic_params: GenericParamListId<'db>,
         params: FuncParamListId<'db>,
         ret_ty: Option<TypeId<'db>>,
-        modifier: ItemModifier,
+        vis: Visibility,
         build_body: impl FnOnce(&mut BodyBuilder<'_, 'db, O>),
     ) -> Func<'db> {
         self.func_with_body(
@@ -445,7 +445,7 @@ where
             generic_params,
             params,
             ret_ty,
-            modifier,
+            vis,
             build_body,
         )
     }

@@ -12,7 +12,8 @@ use super::{
 };
 use crate::analysis::{
     HirAnalysisDb,
-    ty::const_ty::{ConstTyData, ConstTyId},
+    ty::const_expr::{ConstExpr, ConstExprId},
+    ty::const_ty::{ConstTyData, ConstTyId, EvaluatedConstTy},
 };
 
 pub trait TyFoldable<'db>
@@ -63,7 +64,57 @@ impl<'db> TyFoldable<'db> for TyId<'db> {
                     }
                     Evaluated(val, ty) => {
                         let ty = folder.fold_ty(db, *ty);
-                        Evaluated(val.clone(), ty)
+                        let val = match val {
+                            EvaluatedConstTy::Tuple(elems) => EvaluatedConstTy::Tuple(
+                                elems
+                                    .iter()
+                                    .copied()
+                                    .map(|elem| folder.fold_ty(db, elem))
+                                    .collect(),
+                            ),
+                            EvaluatedConstTy::Array(elems) => EvaluatedConstTy::Array(
+                                elems
+                                    .iter()
+                                    .copied()
+                                    .map(|elem| folder.fold_ty(db, elem))
+                                    .collect(),
+                            ),
+                            EvaluatedConstTy::Record(fields) => EvaluatedConstTy::Record(
+                                fields
+                                    .iter()
+                                    .copied()
+                                    .map(|field| folder.fold_ty(db, field))
+                                    .collect(),
+                            ),
+                            EvaluatedConstTy::ConstFnCall {
+                                func,
+                                generic_args,
+                                value_args,
+                            } => {
+                                let generic_args = generic_args
+                                    .iter()
+                                    .copied()
+                                    .map(|arg| folder.fold_ty(db, arg))
+                                    .collect();
+                                let value_args = value_args
+                                    .iter()
+                                    .copied()
+                                    .map(|arg| folder.fold_ty(db, arg))
+                                    .collect();
+                                EvaluatedConstTy::ConstFnCall {
+                                    func: *func,
+                                    generic_args,
+                                    value_args,
+                                }
+                            }
+                            _ => val.clone(),
+                        };
+                        Evaluated(val, ty)
+                    }
+                    Abstract(expr, ty) => {
+                        let ty = folder.fold_ty(db, *ty);
+                        let expr = fold_const_expr_id(db, folder, *expr);
+                        Abstract(expr, ty)
                     }
                     UnEvaluated {
                         body,
@@ -103,6 +154,42 @@ impl<'db> TyFoldable<'db> for TyId<'db> {
         F: TyFolder<'db>,
     {
         folder.fold_ty(db, self)
+    }
+}
+
+fn fold_const_expr_id<'db, F>(
+    db: &'db dyn HirAnalysisDb,
+    folder: &mut F,
+    expr: ConstExprId<'db>,
+) -> ConstExprId<'db>
+where
+    F: TyFolder<'db>,
+{
+    match expr.data(db) {
+        ConstExpr::ExternConstFnCall {
+            func,
+            generic_args,
+            args,
+        } => {
+            let generic_args = generic_args
+                .iter()
+                .copied()
+                .map(|arg| folder.fold_ty(db, arg))
+                .collect();
+            let args = args
+                .iter()
+                .copied()
+                .map(|arg| folder.fold_ty(db, arg))
+                .collect();
+            ConstExprId::new(
+                db,
+                ConstExpr::ExternConstFnCall {
+                    func: *func,
+                    generic_args,
+                    args,
+                },
+            )
+        }
     }
 }
 

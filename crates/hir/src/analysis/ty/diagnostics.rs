@@ -125,6 +125,12 @@ pub enum TyLowerDiag<'db> {
 
     InvalidConstTyExpr(DynLazySpan<'db>),
 
+    ConstEvalUnsupported(DynLazySpan<'db>),
+    ConstEvalNonConstCall(DynLazySpan<'db>),
+    ConstEvalDivisionByZero(DynLazySpan<'db>),
+    ConstEvalStepLimitExceeded(DynLazySpan<'db>),
+    ConstEvalRecursionLimitExceeded(DynLazySpan<'db>),
+
     NonTrailingDefaultGenericParam(LazyGenericParamSpan<'db>),
 
     // Default generic parameter diagnostics
@@ -152,6 +158,11 @@ impl TyLowerDiag<'_> {
             Self::ConstTyExpected { .. } => 12,
             Self::NormalTypeExpected { .. } => 13,
             Self::InvalidConstTyExpr(_) => 15,
+            Self::ConstEvalUnsupported(_) => 23,
+            Self::ConstEvalNonConstCall(_) => 24,
+            Self::ConstEvalDivisionByZero(_) => 25,
+            Self::ConstEvalStepLimitExceeded(_) => 26,
+            Self::ConstEvalRecursionLimitExceeded(_) => 27,
             Self::TooManyGenericArgs { .. } => 16,
             Self::DuplicateFieldName(..) => 17,
             Self::DuplicateVariantName(..) => 18,
@@ -307,6 +318,7 @@ pub enum BodyDiag<'db> {
     },
 
     TypeMustBeKnown(DynLazySpan<'db>),
+    ConstValueMustBeKnown(DynLazySpan<'db>),
 
     AccessedFieldNotFound {
         primary: DynLazySpan<'db>,
@@ -477,6 +489,23 @@ pub enum BodyDiag<'db> {
         first_use: DynLazySpan<'db>,
         handler_ty: TyId<'db>,
     },
+
+    // Const fn / const-check diagnostics -----------------------------------
+    ConstFnEffectsNotAllowed(DynLazySpan<'db>),
+    ConstFnWithNotAllowed(DynLazySpan<'db>),
+    ConstFnLoopNotAllowed(DynLazySpan<'db>),
+    ConstFnMatchNotAllowed(DynLazySpan<'db>),
+    ConstFnAssignmentNotAllowed(DynLazySpan<'db>),
+    ConstFnAggregateNotAllowed(DynLazySpan<'db>),
+    ConstFnMutableBindingNotAllowed(DynLazySpan<'db>),
+    ConstFnNonConstCall {
+        primary: DynLazySpan<'db>,
+        callee: CallableDef<'db>,
+    },
+    ConstFnEffectfulCall {
+        primary: DynLazySpan<'db>,
+        callee: CallableDef<'db>,
+    },
 }
 
 impl<'db> BodyDiag<'db> {
@@ -580,6 +609,7 @@ impl<'db> BodyDiag<'db> {
             Self::AmbiguousEffect { .. } => 40,
             Self::ReturnedTypeMismatch { .. } => 13,
             Self::TypeMustBeKnown(..) => 14,
+            Self::ConstValueMustBeKnown(..) => 64,
             Self::AccessedFieldNotFound { .. } => 15,
             Self::OpsTraitNotImplemented { .. } => 16,
             Self::NonAssignableExpr(..) => 17,
@@ -610,6 +640,15 @@ impl<'db> BodyDiag<'db> {
             Self::RecvArmNotVariantOfMsg { .. } => 48,
             Self::RecvArmNotMsgVariantTrait { .. } => 49,
             Self::RecvDuplicateHandler { .. } => 50,
+            Self::ConstFnEffectsNotAllowed(_) => 55,
+            Self::ConstFnWithNotAllowed(_) => 56,
+            Self::ConstFnLoopNotAllowed(_) => 57,
+            Self::ConstFnMatchNotAllowed(_) => 58,
+            Self::ConstFnAssignmentNotAllowed(_) => 59,
+            Self::ConstFnAggregateNotAllowed(_) => 60,
+            Self::ConstFnMutableBindingNotAllowed(_) => 61,
+            Self::ConstFnNonConstCall { .. } => 62,
+            Self::ConstFnEffectfulCall { .. } => 63,
         }
     }
 }

@@ -1,5 +1,6 @@
 ---
 source: crates/parser/tests/syntax_node.rs
+assertion_line: 15
 expression: node
 input_file: test_files/syntax_node/items/impl.fe
 ---
@@ -40,11 +41,10 @@ Root@0..272
         WhiteSpace@24..25 " "
         ImplItemList@25..137
           LBrace@25..26 "{"
-          Newline@26..27 "\n"
-          WhiteSpace@27..31 "    "
-          Func@31..135
-            ItemModifier@31..34
-              PubKw@31..34 "pub"
+          Func@26..135
+            Newline@26..27 "\n"
+            WhiteSpace@27..31 "    "
+            PubKw@31..34 "pub"
             WhiteSpace@34..35 " "
             FnKw@35..37 "fn"
             WhiteSpace@37..38 " "

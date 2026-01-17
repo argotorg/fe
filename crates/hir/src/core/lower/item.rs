@@ -92,7 +92,7 @@ impl<'db> ItemKind<'db> {
             ast::ItemKind::Extern(extern_) => {
                 if let Some(extern_block) = extern_.extern_block() {
                     for fn_ in extern_block {
-                        Func::lower_ast(ctxt, fn_);
+                        Func::lower_ast_impl(ctxt, fn_, true);
                     }
                 }
             }
@@ -109,7 +109,7 @@ impl<'db> Mod<'db> {
         ctxt.insert_synthetic_prelude_use();
 
         let attributes = AttrListId::lower_ast_opt(ctxt, ast.attr_list());
-        let vis = ItemModifier::lower_ast(ast.modifier()).to_visibility();
+        let vis = super::lower_visibility(&ast);
         if let Some(items) = ast.items() {
             lower_module_items(ctxt, items);
         }
@@ -122,6 +122,10 @@ impl<'db> Mod<'db> {
 
 impl<'db> Func<'db> {
     pub(super) fn lower_ast(ctxt: &mut FileLowerCtxt<'db>, ast: ast::Func) -> Self {
+        Self::lower_ast_impl(ctxt, ast, false)
+    }
+
+    fn lower_ast_impl(ctxt: &mut FileLowerCtxt<'db>, ast: ast::Func, is_extern: bool) -> Self {
         let sig = ast.sig();
         let name = IdentId::lower_token_partial(ctxt, sig.name());
         let id = ctxt.joined_id(TrackedItemVariant::Func(name));
@@ -136,7 +140,10 @@ impl<'db> Func<'db> {
             .into();
         let ret_ty = sig.ret_ty().map(|ty| TypeId::lower_ast(ctxt, ty));
         let effects = lower_uses_clause_opt(ctxt, ast.sig().uses_clause());
-        let modifier = ItemModifier::lower_ast(ast.modifier());
+        let vis = super::lower_visibility(&ast);
+        let is_unsafe = super::lower_is_unsafe(&ast);
+        let is_const = ast.const_kw().is_some();
+        let modifiers = FuncModifiers::new(vis, is_unsafe, is_const, is_extern);
         let body = ast
             .body()
             .map(|body| Body::lower_ast(ctxt, ast::Expr::cast(body.syntax().clone()).unwrap()));
@@ -152,7 +159,7 @@ impl<'db> Func<'db> {
             params,
             effects,
             ret_ty,
-            modifier,
+            modifiers,
             body,
             ctxt.top_mod(),
             origin,
@@ -168,7 +175,7 @@ impl<'db> Struct<'db> {
         ctxt.enter_item_scope(id, false);
 
         let attributes = AttrListId::lower_ast_opt(ctxt, ast.attr_list());
-        let vis = ItemModifier::lower_ast(ast.modifier()).to_visibility();
+        let vis = super::lower_visibility(&ast);
         let generic_params = GenericParamListId::lower_ast_opt(ctxt, ast.generic_params());
         let where_clause = WhereClauseId::lower_ast_opt(ctxt, ast.where_clause());
         let fields = FieldDefListId::lower_ast_opt(ctxt, ast.fields());
@@ -232,7 +239,7 @@ impl<'db> Enum<'db> {
         ctxt.enter_item_scope(id, false);
 
         let attributes = AttrListId::lower_ast_opt(ctxt, ast.attr_list());
-        let vis = ItemModifier::lower_ast(ast.modifier()).to_visibility();
+        let vis = super::lower_visibility(&ast);
         let generic_params = GenericParamListId::lower_ast_opt(ctxt, ast.generic_params());
         let where_clause = WhereClauseId::lower_ast_opt(ctxt, ast.where_clause());
         let variants = VariantDefListId::lower_ast_opt(ctxt, ast.variants());
@@ -261,7 +268,7 @@ impl<'db> TypeAlias<'db> {
         ctxt.enter_item_scope(id, false);
 
         let attributes = AttrListId::lower_ast_opt(ctxt, ast.attr_list());
-        let vis = ItemModifier::lower_ast(ast.modifier()).to_visibility();
+        let vis = super::lower_visibility(&ast);
         let generic_params = GenericParamListId::lower_ast_opt(ctxt, ast.generic_params());
         let ty = TypeId::lower_ast_partial(ctxt, ast.ty());
         let origin = HirOrigin::raw(&ast);
@@ -319,7 +326,7 @@ impl<'db> Trait<'db> {
         ctxt.enter_item_scope(id, false);
 
         let attributes = AttrListId::lower_ast_opt(ctxt, ast.attr_list());
-        let vis = ItemModifier::lower_ast(ast.modifier()).to_visibility();
+        let vis = super::lower_visibility(&ast);
         let generic_params = GenericParamListId::lower_ast_opt(ctxt, ast.generic_params());
         let where_clause = WhereClauseId::lower_ast_opt(ctxt, ast.where_clause());
         let super_traits = if let Some(super_traits) = ast.super_trait_list() {
@@ -489,7 +496,7 @@ impl<'db> Const<'db> {
         let attributes = AttrListId::lower_ast_opt(ctxt, ast.attr_list());
         let ty = TypeId::lower_ast_partial(ctxt, ast.ty());
         let body = ast.value().map(|ast| Body::lower_ast(ctxt, ast)).into();
-        let vis = ItemModifier::lower_ast(ast.modifier()).to_visibility();
+        let vis = super::lower_visibility(&ast);
         let origin = HirOrigin::raw(&ast);
 
         let const_ = Self::new(
@@ -504,21 +511,6 @@ impl<'db> Const<'db> {
             origin,
         );
         ctxt.leave_item_scope(const_)
-    }
-}
-
-impl ItemModifier {
-    pub(super) fn lower_ast(ast: Option<ast::ItemModifier>) -> Self {
-        let Some(ast) = ast else {
-            return Self::None;
-        };
-
-        match (ast.pub_kw().is_some(), ast.unsafe_kw().is_some()) {
-            (true, true) => Self::PubAndUnsafe,
-            (true, false) => Self::Pub,
-            (false, true) => Self::Unsafe,
-            (false, false) => Self::None,
-        }
     }
 }
 

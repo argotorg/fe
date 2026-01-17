@@ -1,0 +1,10 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/const_eval/array_rep_requires_literal.fe
+---
+error[8-0064]: const value must be resolvable during type checking
+  ┌─ array_rep_requires_literal.fe:6:28
+  │
+6 │     let x: [u8; n()] = [0; n()]
+  │                            ^^^ requires fully-resolved const value

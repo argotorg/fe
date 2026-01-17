@@ -4,7 +4,7 @@ use std::fmt;
 
 use crate::{
     hir_def::{
-        Body, Enum, GenericParamOwner, IdentId, IntegerId, ItemKind, PathId,
+        Body, Enum, ExprId, GenericParamOwner, IdentId, IntegerId, ItemKind, PathId,
         TypeAlias as HirTypeAlias,
         prim_ty::{IntTy as HirIntTy, PrimTy as HirPrimTy, UintTy as HirUintTy},
         scope_graph::ScopeId,
@@ -454,6 +454,7 @@ impl<'db> TyId<'db> {
                 ConstTyData::TyVar(..) => None,
                 ConstTyData::TyParam(ty_param, _) => Some(ty_param.scope(db)),
                 ConstTyData::Evaluated(..) => None,
+                ConstTyData::Abstract(..) => None,
                 ConstTyData::UnEvaluated { body, .. } => Some(body.scope()),
             },
 
@@ -668,12 +669,9 @@ impl<'db> TyId<'db> {
                 }
             }
 
-            (None, TyData::ConstTy(const_ty)) => {
-                let evaluated_const_ty = const_ty.evaluate(db, None);
-                Err(InvalidCause::NormalTypeExpected {
-                    given: TyId::const_ty(db, evaluated_const_ty),
-                })
-            }
+            (None, TyData::ConstTy(const_ty)) => Err(InvalidCause::NormalTypeExpected {
+                given: TyId::const_ty(db, *const_ty),
+            }),
 
             (None, _) => Ok(self),
         }
@@ -861,6 +859,31 @@ pub enum InvalidCause<'db> {
         body: Body<'db>,
     },
 
+    ConstEvalUnsupported {
+        body: Body<'db>,
+        expr: ExprId,
+    },
+
+    ConstEvalNonConstCall {
+        body: Body<'db>,
+        expr: ExprId,
+    },
+
+    ConstEvalDivisionByZero {
+        body: Body<'db>,
+        expr: ExprId,
+    },
+
+    ConstEvalStepLimitExceeded {
+        body: Body<'db>,
+        expr: ExprId,
+    },
+
+    ConstEvalRecursionLimitExceeded {
+        body: Body<'db>,
+        expr: ExprId,
+    },
+
     // TraitConstraintNotSat(PredicateId),
     ParseError,
 
@@ -921,6 +944,13 @@ impl InvalidCause<'_> {
             | InvalidCause::Other => format!("{self:?}"),
 
             InvalidCause::InvalidConstTyExpr { body: _ } => "InvalidConstTyExpr".into(),
+            InvalidCause::ConstEvalUnsupported { .. } => "ConstEvalUnsupported".into(),
+            InvalidCause::ConstEvalNonConstCall { .. } => "ConstEvalNonConstCall".into(),
+            InvalidCause::ConstEvalDivisionByZero { .. } => "ConstEvalDivisionByZero".into(),
+            InvalidCause::ConstEvalStepLimitExceeded { .. } => "ConstEvalStepLimitExceeded".into(),
+            InvalidCause::ConstEvalRecursionLimitExceeded { .. } => {
+                "ConstEvalRecursionLimitExceeded".into()
+            }
         }
     }
 }
@@ -1213,10 +1243,6 @@ impl<'db> TyBase<'db> {
 
     pub(super) fn tuple(n: usize) -> Self {
         Self::Prim(PrimTy::Tuple(n))
-    }
-
-    pub(super) fn bool() -> Self {
-        Self::Prim(PrimTy::Bool)
     }
 
     fn pretty_print(&self, db: &dyn HirAnalysisDb) -> String {

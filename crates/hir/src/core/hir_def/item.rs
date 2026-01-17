@@ -630,7 +630,7 @@ pub struct Func<'db> {
     pub(in crate::core) params_list: Partial<FuncParamListId<'db>>,
     pub(crate) effects: EffectParamListId<'db>,
     pub(in crate::core) ret_type_ref: Option<TypeId<'db>>,
-    pub modifier: ItemModifier,
+    pub(in crate::core) modifiers: FuncModifiers,
     pub body: Option<Body<'db>>,
     pub top_mod: TopLevelMod<'db>,
 
@@ -647,7 +647,19 @@ impl<'db> Func<'db> {
     }
 
     pub fn vis(self, db: &dyn HirDb) -> Visibility {
-        self.modifier(db).to_visibility()
+        self.modifiers(db).vis
+    }
+
+    pub fn is_unsafe(self, db: &dyn HirDb) -> bool {
+        self.modifiers(db).is_unsafe
+    }
+
+    pub fn is_const(self, db: &dyn HirDb) -> bool {
+        self.modifiers(db).is_const
+    }
+
+    pub fn is_extern(self, db: &dyn HirDb) -> bool {
+        self.modifiers(db).is_extern
     }
 
     pub fn is_method(self, db: &dyn HirDb) -> bool {
@@ -1282,18 +1294,20 @@ impl<'db> Use<'db> {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum ItemModifier {
-    Pub,
-    Unsafe,
-    PubAndUnsafe,
-    None,
+pub struct FuncModifiers {
+    pub vis: Visibility,
+    pub is_unsafe: bool,
+    pub is_const: bool,
+    pub is_extern: bool,
 }
 
-impl ItemModifier {
-    pub fn to_visibility(self) -> Visibility {
-        match self {
-            ItemModifier::Pub | ItemModifier::PubAndUnsafe => Visibility::Public,
-            ItemModifier::Unsafe | ItemModifier::None => Visibility::Private,
+impl FuncModifiers {
+    pub fn new(vis: Visibility, is_unsafe: bool, is_const: bool, is_extern: bool) -> Self {
+        Self {
+            vis,
+            is_unsafe,
+            is_const,
+            is_extern,
         }
     }
 }

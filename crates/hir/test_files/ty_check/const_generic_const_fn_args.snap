@@ -1,0 +1,41 @@
+---
+source: crates/hir/tests/ty_check.rs
+assertion_line: 40
+expression: res
+input_file: test_files/ty_check/const_generic_const_fn_args.fe
+---
+note: 
+   ┌─ const_generic_const_fn_args.fe:12:8
+   │  
+12 │   fn f() {
+   │ ╭────────^
+13 │ │     let x: Foo
+14 │ │     let y: Foo<add(ONE, TWO)>
+15 │ │     let z: Bar<4>
+16 │ │     let w: Bar<4, plus1(ONE)>
+17 │ │ }
+   │ ╰─^ ()
+
+note: 
+   ┌─ const_generic_const_fn_args.fe:13:9
+   │
+13 │     let x: Foo
+   │         ^ Foo<add(1, 2)>
+
+note: 
+   ┌─ const_generic_const_fn_args.fe:14:9
+   │
+14 │     let y: Foo<add(ONE, TWO)>
+   │         ^ Foo<add(1, 2)>
+
+note: 
+   ┌─ const_generic_const_fn_args.fe:15:9
+   │
+15 │     let z: Bar<4>
+   │         ^ Bar<4, plus1(4)>
+
+note: 
+   ┌─ const_generic_const_fn_args.fe:16:9
+   │
+16 │     let w: Bar<4, plus1(ONE)>
+   │         ^ Bar<4, plus1(1)>

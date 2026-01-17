@@ -1,16 +1,21 @@
 use crate::core::hir_def::{Body, Const, Expr, IdentId, IntegerId, LitKind, Partial};
 
+use super::const_expr::ConstExprId;
 use super::{
+    ctfe::{CtfeConfig, CtfeInterpreter},
+    diagnostics::{BodyDiag, FuncBodyDiag},
     trait_def::TraitInstId,
+    ty_check::{check_anon_const_body, check_const_body},
     ty_def::{InvalidCause, TyId, TyParam, TyVar},
     unify::UnificationTable,
 };
 use crate::analysis::{
     HirAnalysisDb,
     name_resolution::{PathRes, resolve_path},
-    ty::ty_def::{Kind, TyBase, TyData, TyVarSort},
+    ty::ty_def::TyData,
     ty::{trait_def::assoc_const_body_for_trait_inst, trait_resolution::PredicateListId},
 };
+use crate::hir_def::Func;
 
 #[salsa::interned]
 #[derive(Debug)]
@@ -25,7 +30,7 @@ pub(crate) fn evaluate_const_ty<'db>(
     const_ty: ConstTyId<'db>,
     expected_ty: Option<TyId<'db>>,
 ) -> ConstTyId<'db> {
-    let (body, const_ty_ty, _const_def) = match const_ty.data(db) {
+    let (body, const_ty_ty, const_def) = match const_ty.data(db) {
         ConstTyData::UnEvaluated {
             body,
             ty,
@@ -112,35 +117,40 @@ pub(crate) fn evaluate_const_ty<'db>(
         );
     }
 
-    let mut table = UnificationTable::new(db);
-    let (resolved, ty) = match expr {
-        Expr::Lit(LitKind::Bool(b)) => (
-            EvaluatedConstTy::LitBool(b),
-            TyId::new(db, TyData::TyBase(TyBase::bool())),
-        ),
+    let Some(expected_ty) = expected_ty else {
+        return ConstTyId::invalid(db, InvalidCause::InvalidConstTyExpr { body });
+    };
 
-        Expr::Lit(LitKind::Int(i)) => (
-            EvaluatedConstTy::LitInt(i),
-            table.new_var(TyVarSort::Integral, &Kind::Star),
-        ),
-
-        _ => {
-            return ConstTyId::new(
-                db,
-                ConstTyData::Evaluated(
-                    EvaluatedConstTy::Invalid,
-                    TyId::invalid(db, InvalidCause::InvalidConstTyExpr { body }),
-                ),
-            );
+    let (diags, typed_body) = match const_def {
+        Some(const_def) => {
+            let result = check_const_body(db, const_def);
+            (result.0.clone(), result.1.clone())
+        }
+        None => {
+            let result = check_anon_const_body(db, body, expected_ty);
+            (result.0.clone(), result.1.clone())
         }
     };
 
-    let data = match check_const_ty(db, ty, expected_ty, &mut table) {
-        Ok(ty) => ConstTyData::Evaluated(resolved, ty),
-        Err(err) => ConstTyData::Evaluated(resolved, TyId::invalid(db, err)),
-    };
+    if let Some((expected, given)) = diags.iter().find_map(|diag| match diag {
+        FuncBodyDiag::Body(BodyDiag::TypeMismatch {
+            expected, given, ..
+        }) => Some((*expected, *given)),
+        _ => None,
+    }) {
+        return ConstTyId::invalid(db, InvalidCause::ConstTyMismatch { expected, given });
+    }
 
-    ConstTyId::new(db, data)
+    let mut interp = CtfeInterpreter::new(db, CtfeConfig::default());
+    let evaluated = interp
+        .eval_const_body(body, typed_body)
+        .unwrap_or_else(|cause| ConstTyId::invalid(db, cause));
+
+    let mut table = UnificationTable::new(db);
+    match check_const_ty(db, evaluated.ty(db), Some(expected_ty), &mut table) {
+        Ok(ty) => evaluated.swap_ty(db, ty),
+        Err(cause) => evaluated.swap_ty(db, TyId::invalid(db, cause)),
+    }
 }
 
 pub(super) fn const_ty_from_trait_const<'db>(
@@ -170,6 +180,10 @@ fn check_const_ty<'db>(
     expected_ty: Option<TyId<'db>>,
     table: &mut UnificationTable<'db>,
 ) -> Result<TyId<'db>, InvalidCause<'db>> {
+    if let Some(cause) = const_ty_ty.invalid_cause(db) {
+        return Err(cause);
+    }
+
     if const_ty_ty.has_invalid(db) {
         return Err(InvalidCause::Other);
     }
@@ -195,6 +209,7 @@ impl<'db> ConstTyId<'db> {
             ConstTyData::TyVar(_, ty) => *ty,
             ConstTyData::TyParam(_, ty) => *ty,
             ConstTyData::Evaluated(_, ty) => *ty,
+            ConstTyData::Abstract(_, ty) => *ty,
             ConstTyData::UnEvaluated { ty, .. } => {
                 ty.unwrap_or_else(|| TyId::invalid(db, InvalidCause::Other))
             }
@@ -208,6 +223,7 @@ impl<'db> ConstTyId<'db> {
                 format!("const {}: {}", param.pretty_print(db), ty.pretty_print(db))
             }
             ConstTyData::Evaluated(resolved, _) => resolved.pretty_print(db),
+            ConstTyData::Abstract(expr, _) => expr.pretty_print(db),
             ConstTyData::UnEvaluated {
                 body, const_def, ..
             } => {
@@ -223,12 +239,10 @@ impl<'db> ConstTyId<'db> {
                 };
 
                 match expr {
-                    Expr::Lit(LitKind::Bool(value)) => format!("const {}", value),
-                    Expr::Lit(LitKind::Int(int)) => format!("const {}", int.data(db)),
-                    Expr::Lit(LitKind::String(string)) => format!("const \"{}\"", string.data(db)),
-                    Expr::Path(path) if path.is_present() => {
-                        format!("const {}", path.unwrap().pretty_print(db))
-                    }
+                    Expr::Lit(LitKind::Bool(value)) => format!("{value}"),
+                    Expr::Lit(LitKind::Int(int)) => format!("{}", int.data(db)),
+                    Expr::Lit(LitKind::String(string)) => format!("\"{}\"", string.data(db)),
+                    Expr::Path(path) if path.is_present() => path.unwrap().pretty_print(db),
                     _ => "const value".into(),
                 }
             }
@@ -276,6 +290,7 @@ impl<'db> ConstTyId<'db> {
             ConstTyData::TyVar(var, _) => ConstTyData::TyVar(var.clone(), ty),
             ConstTyData::TyParam(param, _) => ConstTyData::TyParam(param.clone(), ty),
             ConstTyData::Evaluated(evaluated, _) => ConstTyData::Evaluated(evaluated.clone(), ty),
+            ConstTyData::Abstract(expr, _) => ConstTyData::Abstract(*expr, ty),
             ConstTyData::UnEvaluated {
                 body, const_def, ..
             } => ConstTyData::UnEvaluated {
@@ -294,6 +309,7 @@ pub enum ConstTyData<'db> {
     TyVar(TyVar<'db>, TyId<'db>),
     TyParam(TyParam<'db>, TyId<'db>),
     Evaluated(EvaluatedConstTy<'db>, TyId<'db>),
+    Abstract(ConstExprId<'db>, TyId<'db>),
     UnEvaluated {
         body: Body<'db>,
         ty: Option<TyId<'db>>,
@@ -305,6 +321,15 @@ pub enum ConstTyData<'db> {
 pub enum EvaluatedConstTy<'db> {
     LitInt(IntegerId<'db>),
     LitBool(bool),
+    Unit,
+    Tuple(Vec<TyId<'db>>),
+    Array(Vec<TyId<'db>>),
+    Record(Vec<TyId<'db>>),
+    ConstFnCall {
+        func: Func<'db>,
+        generic_args: Vec<TyId<'db>>,
+        value_args: Vec<TyId<'db>>,
+    },
     Invalid,
 }
 
@@ -315,6 +340,61 @@ impl EvaluatedConstTy<'_> {
                 format!("{}", val.data(db))
             }
             EvaluatedConstTy::LitBool(val) => format!("{val}"),
+            EvaluatedConstTy::Unit => "()".to_string(),
+            EvaluatedConstTy::Tuple(elems) => {
+                let elems = elems
+                    .iter()
+                    .map(|elem| elem.pretty_print(db).as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                format!("({elems})")
+            }
+            EvaluatedConstTy::Array(elems) => {
+                let elems = elems
+                    .iter()
+                    .map(|elem| elem.pretty_print(db).as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                format!("[{elems}]")
+            }
+            EvaluatedConstTy::Record(fields) => {
+                let fields = fields
+                    .iter()
+                    .map(|field| field.pretty_print(db).as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                format!("{{{fields}}}")
+            }
+            EvaluatedConstTy::ConstFnCall {
+                func,
+                generic_args,
+                value_args,
+            } => {
+                let name = func
+                    .name(db)
+                    .to_opt()
+                    .map(|n| n.data(db).as_str())
+                    .unwrap_or("<unknown>");
+
+                let generic_args = if generic_args.is_empty() {
+                    String::new()
+                } else {
+                    let generic_args = generic_args
+                        .iter()
+                        .map(|a| a.pretty_print(db).as_str())
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    format!("<{generic_args}>")
+                };
+
+                let value_args = value_args
+                    .iter()
+                    .map(|a| a.pretty_print(db).as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ");
+
+                format!("{name}{generic_args}({value_args})")
+            }
             EvaluatedConstTy::Invalid => "<invalid>".to_string(),
         }
     }

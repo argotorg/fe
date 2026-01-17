@@ -50,7 +50,11 @@ use super::{
 };
 use crate::analysis::ty::ty_def::{TyBase, TyData};
 use crate::analysis::ty::{
-    fold::AssocTySubst, normalize::normalize_ty, ty_error::collect_ty_lower_errors,
+    const_ty::ConstTyData,
+    ctfe::{CtfeConfig, CtfeInterpreter},
+    fold::AssocTySubst,
+    normalize::normalize_ty,
+    ty_error::collect_ty_lower_errors,
 };
 use crate::analysis::{
     HirAnalysisDb,
@@ -68,6 +72,23 @@ pub fn check_func_body<'db>(
     check_body(db, BodyOwner::Func(func))
 }
 
+#[salsa::tracked(return_ref)]
+pub fn check_const_body<'db>(
+    db: &'db dyn HirAnalysisDb,
+    const_: Const<'db>,
+) -> (Vec<FuncBodyDiag<'db>>, TypedBody<'db>) {
+    check_body(db, BodyOwner::Const(const_))
+}
+
+#[salsa::tracked(return_ref)]
+pub fn check_anon_const_body<'db>(
+    db: &'db dyn HirAnalysisDb,
+    body: Body<'db>,
+    expected: TyId<'db>,
+) -> (Vec<FuncBodyDiag<'db>>, TypedBody<'db>) {
+    check_body(db, BodyOwner::AnonConstBody { body, expected })
+}
+
 pub(super) fn check_body<'db>(
     db: &'db dyn HirAnalysisDb,
     owner: BodyOwner<'db>,
@@ -77,7 +98,40 @@ pub(super) fn check_body<'db>(
     };
 
     checker.run();
-    checker.finish()
+    let (mut diags, typed_body) = checker.finish();
+    if let BodyOwner::Func(func) = owner
+        && func.is_const(db)
+        && !func.is_extern(db)
+    {
+        diags.extend(crate::analysis::ty::const_check::check_const_fn_body(
+            db,
+            func,
+            &typed_body,
+        ));
+    }
+
+    if let BodyOwner::Const(const_) = owner
+        && diags.is_empty()
+        && let Some(body) = const_.body(db).to_opt()
+        && !const_.ty(db).has_invalid(db)
+    {
+        let mut interp = CtfeInterpreter::new(db, CtfeConfig::default());
+        match interp.eval_const_body(body, typed_body.clone()) {
+            Ok(const_ty) => {
+                if !matches!(const_ty.data(db), ConstTyData::Evaluated(..)) {
+                    diags.push(BodyDiag::ConstValueMustBeKnown(body.span().into()).into());
+                }
+            }
+            Err(cause) => {
+                let ty = TyId::invalid(db, cause);
+                if let Some(diag) = ty.emit_diag(db, body.span().into()) {
+                    diags.push(diag.into());
+                }
+            }
+        }
+    }
+
+    (diags, typed_body)
 }
 
 pub struct TyChecker<'db> {
@@ -139,6 +193,7 @@ impl<'db> TyChecker<'db> {
                     self.check_free_func_effect_list(func, func.effects(self.db));
                 }
             }
+            BodyOwner::Const(_) | BodyOwner::AnonConstBody { .. } => {}
             owner @ BodyOwner::ContractInit { contract } => {
                 self.check_contract_scoped_effect_list(owner, contract, owner.effects(self.db));
             }
@@ -184,6 +239,7 @@ impl<'db> TyChecker<'db> {
     ) {
         let owner = match owner {
             BodyOwner::Func(func) => EffectParamOwner::Func(func),
+            BodyOwner::Const(_) | BodyOwner::AnonConstBody { .. } => unreachable!(),
             BodyOwner::ContractInit { contract } => EffectParamOwner::ContractInit { contract },
             BodyOwner::ContractRecvArm {
                 contract,

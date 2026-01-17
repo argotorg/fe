@@ -1,4 +1,4 @@
-use parser::ast::{self, AttrListOwner as _, ItemModifierOwner as _};
+use parser::ast::{self, AttrListOwner as _};
 use salsa::Accumulator as _;
 
 use super::hir_builder::HirBuilder;
@@ -7,8 +7,8 @@ use crate::{
     HirDb, SelectorError, SelectorErrorKind,
     hir_def::{
         AssocConstDef, AttrListId, Body, BodyKind, BodySourceMap, Expr, ExprId, FieldDef,
-        FieldDefListId, IdentId, ImplTrait, ItemModifier, LitKind, Mod, NodeStore, Partial, PathId,
-        Struct, TrackedItemVariant, TraitRefId, TupleTypeId, TypeId, TypeKind, Visibility,
+        FieldDefListId, IdentId, ImplTrait, LitKind, Mod, NodeStore, Partial, PathId, Struct,
+        TrackedItemVariant, TraitRefId, TupleTypeId, TypeId, TypeKind, Visibility,
     },
     lower::FileLowerCtxt,
     span::{HirOrigin, MsgDesugared, MsgDesugaredFocus},
@@ -43,7 +43,7 @@ pub(super) fn lower_msg_as_mod<'db>(ctxt: &mut FileLowerCtxt<'db>, ast: ast::Msg
     // Lower any existing attributes on the msg block
     let attributes = AttrListId::lower_ast_opt(ctxt, ast.attr_list());
 
-    let vis = ItemModifier::lower_ast(ast.modifier()).to_visibility();
+    let vis = super::lower_visibility(&ast);
 
     // Create the desugared origin pointing to the original msg AST
     let msg_desugared = MsgDesugared {
@@ -176,7 +176,7 @@ fn lower_msg_variant_encode_impl<'db>(
             e_generic_params,
             params,
             None,
-            ItemModifier::None,
+            Visibility::Private,
             |body| {
                 body.let_self_record(&field_names);
                 body.encode_fields(&field_names, encoder_ident);
@@ -209,7 +209,7 @@ fn lower_msg_variant_decode_trait_impl<'db>(
             d_generic_params,
             params,
             Some(builder.self_ty()),
-            ItemModifier::None,
+            Visibility::Private,
             |body| {
                 for (name, ty) in fields.iter().copied() {
                     body.decode_into(name, ty);

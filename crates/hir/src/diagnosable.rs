@@ -264,6 +264,12 @@ impl<'db> WherePredicateBoundView<'db> {
 }
 
 impl<'db> Func<'db> {
+    pub fn diags_const_fn(self, db: &'db dyn HirAnalysisDb) -> Vec<TyDiagCollection<'db>> {
+        // Const-safety diagnostics are handled by the const-check pass on the body.
+        let _ = db;
+        Vec::new()
+    }
+
     /// Diagnostics related to parameters (duplicate names/labels).
     pub fn diags_parameters(self, db: &'db dyn HirAnalysisDb) -> Vec<TyDiagCollection<'db>> {
         let mut diags = Vec::new();
@@ -1002,9 +1008,12 @@ impl<'db> GenericParamOwner<'db> {
         let mut out = Vec::new();
         let mut default_idxs = Vec::new();
         for view in self.params(db) {
-            let is_defaulted_type =
-                matches!(view.param, GenericParam::Type(tp) if tp.default_ty.is_some());
-            if is_defaulted_type {
+            let is_defaulted = match view.param {
+                GenericParam::Type(tp) => tp.default_ty.is_some(),
+                GenericParam::Const(c) => c.default.is_some(),
+            };
+
+            if is_defaulted {
                 default_idxs.push(view.idx);
             } else if !default_idxs.is_empty() {
                 for &idx in &default_idxs {
@@ -1318,6 +1327,7 @@ impl<'db> Diagnosable<'db> for Func<'db> {
         use ty::method_table::probe_method;
 
         let mut out = Vec::new();
+        out.extend(self.diags_const_fn(db));
         out.extend(self.diags_parameters(db));
         out.extend(self.diags_param_types(db));
         out.extend(self.diags_return(db));

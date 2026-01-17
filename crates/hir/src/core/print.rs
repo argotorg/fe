@@ -121,18 +121,6 @@ impl Visibility {
     }
 }
 
-impl ItemModifier {
-    /// Returns the modifier keywords.
-    pub fn pretty_print(self) -> &'static str {
-        match self {
-            ItemModifier::Pub => "pub ",
-            ItemModifier::Unsafe => "unsafe ",
-            ItemModifier::PubAndUnsafe => "pub unsafe ",
-            ItemModifier::None => "",
-        }
-    }
-}
-
 // ============================================================================
 // Literals
 // ============================================================================
@@ -279,7 +267,12 @@ impl<'db> ConstGenericParam<'db> {
             .data(db)
             .to_string();
         let ty = unwrap_partial(self.ty, "ConstGenericParam::ty").pretty_print(db);
-        format!("const {}: {}", name, ty)
+        let mut out = format!("const {name}: {ty}");
+        if let Some(default) = self.default {
+            out.push_str(" = ");
+            out.push_str(&default.pretty_print(db));
+        }
+        out
     }
 }
 
@@ -1026,7 +1019,14 @@ impl<'db> Func<'db> {
         result.push_str(&self.attributes(db).pretty_print_with_newline(db));
 
         // Modifiers (pub, unsafe)
-        result.push_str(self.modifier(db).pretty_print());
+        result.push_str(self.vis(db).pretty_print());
+        if self.is_unsafe(db) {
+            result.push_str("unsafe ");
+        }
+
+        if self.is_const(db) {
+            result.push_str("const ");
+        }
 
         // fn keyword
         result.push_str("fn ");

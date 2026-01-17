@@ -1,0 +1,7 @@
+---
+source: crates/hir/tests/ty_check.rs
+assertion_line: 40
+expression: res
+input_file: test_files/ty_check/const_generic_const_fn.fe
+---
+
