@@ -491,7 +491,6 @@ pub enum BodyDiag<'db> {
     },
 
     // Const fn / const-check diagnostics -----------------------------------
-
     ConstFnEffectsNotAllowed(DynLazySpan<'db>),
     ConstFnWithNotAllowed(DynLazySpan<'db>),
     ConstFnLoopNotAllowed(DynLazySpan<'db>),

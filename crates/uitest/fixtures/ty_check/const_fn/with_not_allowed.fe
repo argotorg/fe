@@ -1,0 +1,17 @@
+pub trait Logger {
+    fn log(self) -> u8
+}
+
+pub struct Silent {}
+
+impl Logger for Silent {
+    fn log(self) -> u8 {
+        1
+    }
+}
+
+pub const fn bad_with() -> u8 {
+    with (Logger = Silent {}) {
+        1
+    }
+}

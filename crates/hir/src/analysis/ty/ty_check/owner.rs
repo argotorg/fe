@@ -1,10 +1,10 @@
+use crate::analysis::ty::ty_def::TyId;
 use crate::span::DynLazySpan;
 use crate::{
     analysis::HirAnalysisDb,
     hir_def::{Body, Const, Contract, EffectParamListId, Func, PathId, scope_graph::ScopeId},
     span::item::{LazyContractRecvSpan, LazyRecvArmSpan},
 };
-use crate::analysis::ty::ty_def::TyId;
 use salsa::Update;
 
 /// Identifies the HIR owner of a [`Body`].
@@ -12,7 +12,10 @@ use salsa::Update;
 pub enum BodyOwner<'db> {
     Func(Func<'db>),
     Const(Const<'db>),
-    AnonConstBody { body: Body<'db>, expected: TyId<'db> },
+    AnonConstBody {
+        body: Body<'db>,
+        expected: TyId<'db>,
+    },
     ContractInit {
         contract: Contract<'db>,
     },

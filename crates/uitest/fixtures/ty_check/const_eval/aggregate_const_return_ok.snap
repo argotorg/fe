@@ -1,0 +1,7 @@
+---
+source: crates/uitest/tests/ty_check.rs
+assertion_line: 27
+expression: diags
+input_file: fixtures/ty_check/const_eval/aggregate_const_return_ok.fe
+---
+

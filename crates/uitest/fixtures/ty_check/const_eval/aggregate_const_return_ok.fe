@@ -1,0 +1,37 @@
+pub struct Foo {
+    a: u256,
+    b: u256,
+}
+
+const fn make_foo() -> Foo {
+    Foo { a: 1, b: 2 }
+}
+
+const FOO: Foo = make_foo()
+
+const fn make_pair() -> (u256, u256) {
+    (1, 2)
+}
+
+const PAIR: (u256, u256) = make_pair()
+
+const fn second_elem() -> u8 {
+    let xs: [u8; 3] = [1, 2, 3]
+    xs[1]
+}
+
+const SECOND: u8 = second_elem()
+
+const fn make_triplet(x: u8) -> [u8; 3] {
+    [x; 3]
+}
+
+const TRIPLET: [u8; 3] = make_triplet(7)
+const TRIPLET_SECOND: u8 = make_triplet(7)[1]
+
+const fn foo_a() -> u256 {
+    let foo = make_foo()
+    foo.a
+}
+
+const A: u256 = foo_a()

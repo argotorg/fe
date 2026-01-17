@@ -525,13 +525,12 @@ impl<'db> GenericParamCollector<'db> {
                     let name = param.name;
                     let hir_ty = param.ty.to_opt();
 
-                    self.params
-                        .push(TyParamPrecursor::const_ty_param(
-                            name,
-                            idx,
-                            hir_ty,
-                            param.default,
-                        ))
+                    self.params.push(TyParamPrecursor::const_ty_param(
+                        name,
+                        idx,
+                        hir_ty,
+                        param.default,
+                    ))
                 }
             }
         }

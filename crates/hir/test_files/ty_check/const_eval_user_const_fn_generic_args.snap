@@ -1,0 +1,61 @@
+---
+source: crates/hir/tests/ty_check.rs
+assertion_line: 40
+expression: res
+input_file: test_files/ty_check/const_eval_user_const_fn_generic_args.fe
+---
+note: 
+  ┌─ const_eval_user_const_fn_generic_args.fe:1:43
+  │  
+1 │   const fn add(a: usize, b: usize) -> usize {
+  │ ╭───────────────────────────────────────────^
+2 │ │     a + b
+3 │ │ }
+  │ ╰─^ usize
+
+note: 
+  ┌─ const_eval_user_const_fn_generic_args.fe:2:5
+  │
+2 │     a + b
+  │     ^ usize
+
+note: 
+  ┌─ const_eval_user_const_fn_generic_args.fe:2:5
+  │
+2 │     a + b
+  │     ^^^^^ usize
+
+note: 
+  ┌─ const_eval_user_const_fn_generic_args.fe:2:9
+  │
+2 │     a + b
+  │         ^ usize
+
+note: 
+   ┌─ const_eval_user_const_fn_generic_args.fe:7:8
+   │  
+ 7 │   fn f() {
+   │ ╭────────^
+ 8 │ │     let a: Foo
+ 9 │ │     let b: Foo<add(5, 6)>
+10 │ │     let c: Foo<{ add(5, 6) }>
+11 │ │ }
+   │ ╰─^ ()
+
+note: 
+  ┌─ const_eval_user_const_fn_generic_args.fe:8:9
+  │
+8 │     let a: Foo
+  │         ^ Foo<3>
+
+note: 
+  ┌─ const_eval_user_const_fn_generic_args.fe:9:9
+  │
+9 │     let b: Foo<add(5, 6)>
+  │         ^ Foo<11>
+
+note: 
+   ┌─ const_eval_user_const_fn_generic_args.fe:10:9
+   │
+10 │     let c: Foo<{ add(5, 6) }>
+   │         ^ Foo<11>

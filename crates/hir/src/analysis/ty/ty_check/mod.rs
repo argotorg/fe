@@ -52,7 +52,9 @@ use crate::analysis::ty::ty_def::{TyBase, TyData};
 use crate::analysis::ty::{
     const_ty::ConstTyData,
     ctfe::{CtfeConfig, CtfeInterpreter},
-    fold::AssocTySubst, normalize::normalize_ty, ty_error::collect_ty_lower_errors,
+    fold::AssocTySubst,
+    normalize::normalize_ty,
+    ty_error::collect_ty_lower_errors,
 };
 use crate::analysis::{
     HirAnalysisDb,
@@ -114,7 +116,7 @@ pub(super) fn check_body<'db>(
         && !const_.ty(db).has_invalid(db)
     {
         let mut interp = CtfeInterpreter::new(db, CtfeConfig::default());
-        match interp.eval_const_body(body, &typed_body) {
+        match interp.eval_const_body(body, typed_body.clone()) {
             Ok(const_ty) => {
                 if !matches!(const_ty.data(db), ConstTyData::Evaluated(..)) {
                     diags.push(BodyDiag::ConstValueMustBeKnown(body.span().into()).into());

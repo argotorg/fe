@@ -27,12 +27,12 @@ use crate::semantic::diagnostics::Diagnosable;
 pub mod adt_def;
 pub mod binder;
 pub mod canonical;
-pub mod const_expr;
-pub mod const_eval;
 pub(crate) mod const_check;
-pub(crate) mod ctfe;
+pub mod const_eval;
+pub mod const_expr;
 pub mod const_ty;
 pub mod corelib;
+pub(crate) mod ctfe;
 pub mod effects;
 
 pub mod decision_tree;

@@ -129,9 +129,13 @@ pub fn ty_size_bytes_or_word_aligned(db: &dyn HirAnalysisDb, ty: TyId<'_>) -> Op
 
 fn ty_size_bytes_word_aligned_fallback(db: &dyn HirAnalysisDb, ty: TyId<'_>) -> Option<usize> {
     if ty.is_tuple(db) {
-        return ty.field_types(db).iter().copied().try_fold(0usize, |acc, field_ty| {
-            Some(acc + ty_size_bytes_or_word_aligned(db, field_ty)?)
-        });
+        return ty
+            .field_types(db)
+            .iter()
+            .copied()
+            .try_fold(0usize, |acc, field_ty| {
+                Some(acc + ty_size_bytes_or_word_aligned(db, field_ty)?)
+            });
     }
 
     if ty.is_array(db) {
@@ -143,9 +147,13 @@ fn ty_size_bytes_word_aligned_fallback(db: &dyn HirAnalysisDb, ty: TyId<'_>) -> 
     if let Some(adt_def) = ty.adt_def(db)
         && matches!(adt_def.adt_ref(db), AdtRef::Struct(_))
     {
-        return ty.field_types(db).iter().copied().try_fold(0usize, |acc, field_ty| {
-            Some(acc + ty_size_bytes_or_word_aligned(db, field_ty)?)
-        });
+        return ty
+            .field_types(db)
+            .iter()
+            .copied()
+            .try_fold(0usize, |acc, field_ty| {
+                Some(acc + ty_size_bytes_or_word_aligned(db, field_ty)?)
+            });
     }
 
     if let Some(adt_def) = ty.adt_def(db)

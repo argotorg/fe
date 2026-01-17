@@ -55,4 +55,3 @@ impl<'db> ConstExprId<'db> {
         }
     }
 }
-
