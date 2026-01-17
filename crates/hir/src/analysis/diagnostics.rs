@@ -31,6 +31,26 @@ use std::cmp::Ordering;
 
 use common::file::File;
 
+fn primary_diag(
+    severity: Severity,
+    message: &str,
+    label: &str,
+    span: Option<Span>,
+    error_code: GlobalErrorCode,
+) -> CompleteDiagnostic {
+    CompleteDiagnostic::new(
+        severity,
+        message.to_string(),
+        vec![SubDiagnostic::new(
+            LabelStyle::Primary,
+            label.to_string(),
+            span,
+        )],
+        vec![],
+        error_code,
+    )
+}
+
 fn cmp_trait_inst_by_name<'db>(
     db: &'db dyn SpannedHirAnalysisDb,
     a: &TraitInstId<'db>,
@@ -1443,77 +1463,53 @@ impl DiagnosticVoucher for TyLowerDiag<'_> {
                 error_code,
             },
 
-            Self::InvalidConstTyExpr(span) => CompleteDiagnostic {
-                severity: Severity::Error,
-                message: "the expression is not supported yet in a const type context".to_string(),
-                sub_diagnostics: vec![SubDiagnostic {
-                    style: LabelStyle::Primary,
-                    message: "only literal expression is supported".to_string(),
-                    span: span.resolve(db),
-                }],
-                notes: vec![],
+            Self::InvalidConstTyExpr(span) => primary_diag(
+                Severity::Error,
+                "the expression is not supported in a const type context",
+                "expected a literal, const, or const fn call",
+                span.resolve(db),
                 error_code,
-            },
+            ),
 
-            Self::ConstEvalUnsupported(span) => CompleteDiagnostic {
-                severity: Severity::Error,
-                message: "the expression cannot be evaluated at compile time".to_string(),
-                sub_diagnostics: vec![SubDiagnostic {
-                    style: LabelStyle::Primary,
-                    message: "unsupported in const evaluation".to_string(),
-                    span: span.resolve(db),
-                }],
-                notes: vec![],
+            Self::ConstEvalUnsupported(span) => primary_diag(
+                Severity::Error,
+                "the expression cannot be evaluated at compile time",
+                "unsupported in const evaluation",
+                span.resolve(db),
                 error_code,
-            },
+            ),
 
-            Self::ConstEvalNonConstCall(span) => CompleteDiagnostic {
-                severity: Severity::Error,
-                message: "non-const function call in const context".to_string(),
-                sub_diagnostics: vec![SubDiagnostic {
-                    style: LabelStyle::Primary,
-                    message: "calls in const context must be `const fn`".to_string(),
-                    span: span.resolve(db),
-                }],
-                notes: vec![],
+            Self::ConstEvalNonConstCall(span) => primary_diag(
+                Severity::Error,
+                "non-const function call in const context",
+                "calls in const context must be `const fn`",
+                span.resolve(db),
                 error_code,
-            },
+            ),
 
-            Self::ConstEvalDivisionByZero(span) => CompleteDiagnostic {
-                severity: Severity::Error,
-                message: "division by zero in const context".to_string(),
-                sub_diagnostics: vec![SubDiagnostic {
-                    style: LabelStyle::Primary,
-                    message: "cannot divide by zero".to_string(),
-                    span: span.resolve(db),
-                }],
-                notes: vec![],
+            Self::ConstEvalDivisionByZero(span) => primary_diag(
+                Severity::Error,
+                "division by zero in const context",
+                "cannot divide by zero",
+                span.resolve(db),
                 error_code,
-            },
+            ),
 
-            Self::ConstEvalStepLimitExceeded(span) => CompleteDiagnostic {
-                severity: Severity::Error,
-                message: "const evaluation exceeded the step limit".to_string(),
-                sub_diagnostics: vec![SubDiagnostic {
-                    style: LabelStyle::Primary,
-                    message: "const evaluation takes too many steps".to_string(),
-                    span: span.resolve(db),
-                }],
-                notes: vec![],
+            Self::ConstEvalStepLimitExceeded(span) => primary_diag(
+                Severity::Error,
+                "const evaluation exceeded the step limit",
+                "const evaluation takes too many steps",
+                span.resolve(db),
                 error_code,
-            },
+            ),
 
-            Self::ConstEvalRecursionLimitExceeded(span) => CompleteDiagnostic {
-                severity: Severity::Error,
-                message: "const evaluation exceeded the recursion limit".to_string(),
-                sub_diagnostics: vec![SubDiagnostic {
-                    style: LabelStyle::Primary,
-                    message: "const evaluation recurses too deeply".to_string(),
-                    span: span.resolve(db),
-                }],
-                notes: vec![],
+            Self::ConstEvalRecursionLimitExceeded(span) => primary_diag(
+                Severity::Error,
+                "const evaluation exceeded the recursion limit",
+                "const evaluation recurses too deeply",
+                span.resolve(db),
                 error_code,
-            },
+            ),
 
             Self::NonTrailingDefaultGenericParam(span) => CompleteDiagnostic {
                 severity: Severity::Error,
@@ -2282,17 +2278,13 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                 error_code,
             },
 
-            Self::ConstValueMustBeKnown(span) => CompleteDiagnostic {
-                severity: Severity::Error,
-                message: "const value must be resolvable during type checking".to_string(),
-                sub_diagnostics: vec![SubDiagnostic {
-                    style: LabelStyle::Primary,
-                    message: "requires fully-resolved const value".to_string(),
-                    span: span.resolve(db),
-                }],
-                notes: vec![],
+            Self::ConstValueMustBeKnown(span) => primary_diag(
+                severity,
+                "const value must be resolvable during type checking",
+                "requires fully-resolved const value",
+                span.resolve(db),
                 error_code,
-            },
+            ),
 
             Self::InvalidCast {
                 primary,
@@ -3113,113 +3105,85 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                 }
             }
 
-            BodyDiag::ConstFnEffectsNotAllowed(primary) => CompleteDiagnostic {
+            BodyDiag::ConstFnEffectsNotAllowed(primary) => primary_diag(
                 severity,
-                message: "effects are not allowed in a `const fn`".to_string(),
-                sub_diagnostics: vec![SubDiagnostic {
-                    style: LabelStyle::Primary,
-                    message: "remove the `uses (...)` clause".to_string(),
-                    span: primary.resolve(db),
-                }],
-                notes: vec![],
+                "effects are not allowed in a `const fn`",
+                "remove the `uses (...)` clause",
+                primary.resolve(db),
                 error_code,
-            },
+            ),
 
-            BodyDiag::ConstFnWithNotAllowed(primary) => CompleteDiagnostic {
+            BodyDiag::ConstFnWithNotAllowed(primary) => primary_diag(
                 severity,
-                message: "`with` expressions are not allowed in a `const fn`".to_string(),
-                sub_diagnostics: vec![SubDiagnostic {
-                    style: LabelStyle::Primary,
-                    message: "`with` is not supported in const evaluation".to_string(),
-                    span: primary.resolve(db),
-                }],
-                notes: vec![],
+                "`with` expressions are not allowed in a `const fn`",
+                "`with` is not supported in const evaluation",
+                primary.resolve(db),
                 error_code,
-            },
+            ),
 
-            BodyDiag::ConstFnLoopNotAllowed(primary) => CompleteDiagnostic {
+            BodyDiag::ConstFnLoopNotAllowed(primary) => primary_diag(
                 severity,
-                message: "loops are not allowed in a `const fn`".to_string(),
-                sub_diagnostics: vec![SubDiagnostic {
-                    style: LabelStyle::Primary,
-                    message: "loops are not supported in const evaluation (MVP)".to_string(),
-                    span: primary.resolve(db),
-                }],
-                notes: vec![],
+                "loops are not allowed in a `const fn`",
+                "loops are not supported in const evaluation (MVP)",
+                primary.resolve(db),
                 error_code,
-            },
+            ),
 
-            BodyDiag::ConstFnMatchNotAllowed(primary) => CompleteDiagnostic {
+            BodyDiag::ConstFnMatchNotAllowed(primary) => primary_diag(
                 severity,
-                message: "`match` is not allowed in a `const fn`".to_string(),
-                sub_diagnostics: vec![SubDiagnostic {
-                    style: LabelStyle::Primary,
-                    message: "`match` is not supported in const evaluation (MVP)".to_string(),
-                    span: primary.resolve(db),
-                }],
-                notes: vec![],
+                "`match` is not allowed in a `const fn`",
+                "`match` is not supported in const evaluation (MVP)",
+                primary.resolve(db),
                 error_code,
-            },
+            ),
 
-            BodyDiag::ConstFnAssignmentNotAllowed(primary) => CompleteDiagnostic {
+            BodyDiag::ConstFnAssignmentNotAllowed(primary) => primary_diag(
                 severity,
-                message: "assignment is not allowed in a `const fn`".to_string(),
-                sub_diagnostics: vec![SubDiagnostic {
-                    style: LabelStyle::Primary,
-                    message: "mutation is not supported in const evaluation (MVP)".to_string(),
-                    span: primary.resolve(db),
-                }],
-                notes: vec![],
+                "assignment is not allowed in a `const fn`",
+                "mutation is not supported in const evaluation (MVP)",
+                primary.resolve(db),
                 error_code,
-            },
+            ),
 
-            BodyDiag::ConstFnAggregateNotAllowed(primary) => CompleteDiagnostic {
+            BodyDiag::ConstFnAggregateNotAllowed(primary) => primary_diag(
                 severity,
-                message: "aggregate operations are not allowed in a `const fn`".to_string(),
-                sub_diagnostics: vec![SubDiagnostic {
-                    style: LabelStyle::Primary,
-                    message: "aggregates are not supported in const evaluation (MVP)".to_string(),
-                    span: primary.resolve(db),
-                }],
-                notes: vec![],
+                "aggregate operations are not allowed in a `const fn`",
+                "aggregates are not supported in const evaluation (MVP)",
+                primary.resolve(db),
                 error_code,
-            },
+            ),
 
-            BodyDiag::ConstFnMutableBindingNotAllowed(primary) => CompleteDiagnostic {
+            BodyDiag::ConstFnMutableBindingNotAllowed(primary) => primary_diag(
                 severity,
-                message: "`mut` bindings are not allowed in a `const fn`".to_string(),
-                sub_diagnostics: vec![SubDiagnostic {
-                    style: LabelStyle::Primary,
-                    message: "mutation is not supported in const evaluation (MVP)".to_string(),
-                    span: primary.resolve(db),
-                }],
-                notes: vec![],
+                "`mut` bindings are not allowed in a `const fn`",
+                "mutation is not supported in const evaluation (MVP)",
+                primary.resolve(db),
                 error_code,
-            },
+            ),
 
             BodyDiag::ConstFnNonConstCall { primary, callee } => {
                 let name = callee
                     .name(db)
                     .map(|n| n.data(db).as_str())
                     .unwrap_or("<unknown>");
-                CompleteDiagnostic {
+                CompleteDiagnostic::new(
                     severity,
-                    message: "non-const call in `const fn`".to_string(),
-                    sub_diagnostics: vec![
-                        SubDiagnostic {
-                            style: LabelStyle::Primary,
-                            message: format!("`{name}` is not a `const fn`"),
-                            span: primary.resolve(db),
-                        },
-                        SubDiagnostic {
-                            style: LabelStyle::Secondary,
-                            message: "callee defined here".to_string(),
-                            span: callee.name_span().resolve(db),
-                        },
+                    "non-const call in `const fn`".to_string(),
+                    vec![
+                        SubDiagnostic::new(
+                            LabelStyle::Primary,
+                            format!("`{name}` is not a `const fn`"),
+                            primary.resolve(db),
+                        ),
+                        SubDiagnostic::new(
+                            LabelStyle::Secondary,
+                            "callee defined here".to_string(),
+                            callee.name_span().resolve(db),
+                        ),
                     ],
-                    notes: vec![],
+                    vec![],
                     error_code,
-                }
+                )
             }
 
             BodyDiag::ConstFnEffectfulCall { primary, callee } => {
@@ -3227,24 +3191,24 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                     .name(db)
                     .map(|n| n.data(db).as_str())
                     .unwrap_or("<unknown>");
-                CompleteDiagnostic {
+                CompleteDiagnostic::new(
                     severity,
-                    message: "effectful call in `const fn`".to_string(),
-                    sub_diagnostics: vec![
-                        SubDiagnostic {
-                            style: LabelStyle::Primary,
-                            message: format!("`{name}` requires effects"),
-                            span: primary.resolve(db),
-                        },
-                        SubDiagnostic {
-                            style: LabelStyle::Secondary,
-                            message: "callee defined here".to_string(),
-                            span: callee.name_span().resolve(db),
-                        },
+                    "effectful call in `const fn`".to_string(),
+                    vec![
+                        SubDiagnostic::new(
+                            LabelStyle::Primary,
+                            format!("`{name}` requires effects"),
+                            primary.resolve(db),
+                        ),
+                        SubDiagnostic::new(
+                            LabelStyle::Secondary,
+                            "callee defined here".to_string(),
+                            callee.name_span().resolve(db),
+                        ),
                     ],
-                    notes: vec![],
+                    vec![],
                     error_code,
-                }
+                )
             }
         }
     }

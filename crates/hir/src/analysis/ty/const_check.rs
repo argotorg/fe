@@ -91,26 +91,24 @@ impl<'db> ConstFnChecker<'db, '_> {
         };
 
         match expr_data {
-            Expr::Lit(lit) => {
-                if !matches!(
-                    lit,
-                    crate::hir_def::LitKind::Int(_) | crate::hir_def::LitKind::Bool(_)
-                ) {
-                    self.push(BodyDiag::ConstFnAggregateNotAllowed(
-                        expr.span(self.body).into(),
-                    ));
-                }
-            }
-            Expr::Block(stmts) => {
-                for stmt in stmts {
-                    self.check_stmt(*stmt);
-                }
-            }
+            Expr::Lit(crate::hir_def::LitKind::Int(_) | crate::hir_def::LitKind::Bool(_))
+            | Expr::Path(_) => {}
+
+            Expr::Lit(_) => self.push(BodyDiag::ConstFnAggregateNotAllowed(
+                expr.span(self.body).into(),
+            )),
+
+            Expr::Block(stmts) => stmts.iter().for_each(|stmt| self.check_stmt(*stmt)),
+
             Expr::Bin(lhs, rhs, _) => {
                 self.check_expr(*lhs);
                 self.check_expr(*rhs);
             }
-            Expr::Un(inner, _) => self.check_expr(*inner),
+
+            Expr::Un(inner, _) | Expr::Field(inner, _) | Expr::ArrayRep(inner, _) => {
+                self.check_expr(*inner);
+            }
+
             Expr::If(cond, then, else_) => {
                 self.check_expr(*cond);
                 self.check_expr(*then);
@@ -119,51 +117,41 @@ impl<'db> ConstFnChecker<'db, '_> {
                 }
             }
             Expr::Call(_callee, args) => {
-                for arg in args {
-                    self.check_expr(arg.expr);
-                }
+                args.iter().for_each(|arg| self.check_expr(arg.expr));
 
                 let Some(callable) = self.typed_body.callable_expr(expr) else {
                     return;
                 };
-                match callable.callable_def {
-                    CallableDef::Func(callee) => {
-                        if !callee.is_const(self.db) {
-                            self.push(BodyDiag::ConstFnNonConstCall {
-                                primary: expr.span(self.body).into(),
-                                callee: callable.callable_def,
-                            });
-                        } else if callee.has_effects(self.db) {
-                            self.push(BodyDiag::ConstFnEffectfulCall {
-                                primary: expr.span(self.body).into(),
-                                callee: callable.callable_def,
-                            });
-                        }
+                if let CallableDef::Func(callee) = callable.callable_def {
+                    if !callee.is_const(self.db) {
+                        self.push(BodyDiag::ConstFnNonConstCall {
+                            primary: expr.span(self.body).into(),
+                            callee: callable.callable_def,
+                        });
+                    } else if callee.has_effects(self.db) {
+                        self.push(BodyDiag::ConstFnEffectfulCall {
+                            primary: expr.span(self.body).into(),
+                            callee: callable.callable_def,
+                        });
                     }
-                    CallableDef::VariantCtor(_) => {
-                        self.push(BodyDiag::ConstFnAggregateNotAllowed(
-                            expr.span(self.body).into(),
-                        ));
-                    }
+                } else {
+                    self.push(BodyDiag::ConstFnAggregateNotAllowed(
+                        expr.span(self.body).into(),
+                    ));
                 }
             }
             Expr::MethodCall(receiver, _name, _generic_args, args) => {
                 self.check_expr(*receiver);
-                for arg in args {
-                    self.check_expr(arg.expr);
-                }
+                args.iter().for_each(|arg| self.check_expr(arg.expr));
                 // Keep MVP simple: only allow direct `f(...)` calls.
                 self.push(BodyDiag::ConstFnAggregateNotAllowed(
                     expr.span(self.body).into(),
                 ));
             }
-            Expr::Path(_) => {}
             Expr::Match(scrutinee, arms) => {
                 self.check_expr(*scrutinee);
                 if let Some(arms) = arms.clone().to_opt() {
-                    for arm in arms {
-                        self.check_expr(arm.body);
-                    }
+                    arms.iter().for_each(|arm| self.check_expr(arm.body));
                 }
                 self.push(BodyDiag::ConstFnMatchNotAllowed(
                     expr.span(self.body).into(),
@@ -180,17 +168,12 @@ impl<'db> ConstFnChecker<'db, '_> {
                 self.push(BodyDiag::ConstFnWithNotAllowed(expr.span(self.body).into()));
             }
             Expr::RecordInit(_path, fields) => {
-                for field in fields {
-                    self.check_expr(field.expr);
-                }
+                fields.iter().for_each(|field| self.check_expr(field.expr));
             }
-            Expr::Field(lhs, _) => self.check_expr(*lhs),
+
             Expr::Tuple(elems) | Expr::Array(elems) => {
-                for elem in elems {
-                    self.check_expr(*elem);
-                }
+                elems.iter().for_each(|elem| self.check_expr(*elem));
             }
-            Expr::ArrayRep(elem, _len) => self.check_expr(*elem),
         }
     }
 }

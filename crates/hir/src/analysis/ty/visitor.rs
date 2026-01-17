@@ -117,14 +117,6 @@ where
             | EvaluatedConstTy::Record(elems) => {
                 elems.visit_with(visitor);
             }
-            EvaluatedConstTy::ConstFnCall {
-                generic_args,
-                value_args,
-                ..
-            } => {
-                generic_args.visit_with(visitor);
-                value_args.visit_with(visitor);
-            }
             _ => {}
         },
         ConstTyData::Abstract(expr, _) => match expr.data(db) {

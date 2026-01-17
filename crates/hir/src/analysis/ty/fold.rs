@@ -86,27 +86,6 @@ impl<'db> TyFoldable<'db> for TyId<'db> {
                                     .map(|field| folder.fold_ty(db, field))
                                     .collect(),
                             ),
-                            EvaluatedConstTy::ConstFnCall {
-                                func,
-                                generic_args,
-                                value_args,
-                            } => {
-                                let generic_args = generic_args
-                                    .iter()
-                                    .copied()
-                                    .map(|arg| folder.fold_ty(db, arg))
-                                    .collect();
-                                let value_args = value_args
-                                    .iter()
-                                    .copied()
-                                    .map(|arg| folder.fold_ty(db, arg))
-                                    .collect();
-                                EvaluatedConstTy::ConstFnCall {
-                                    func: *func,
-                                    generic_args,
-                                    value_args,
-                                }
-                            }
                             _ => val.clone(),
                         };
                         Evaluated(val, ty)

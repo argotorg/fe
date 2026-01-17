@@ -15,7 +15,6 @@ use crate::analysis::{
     ty::ty_def::TyData,
     ty::{trait_def::assoc_const_body_for_trait_inst, trait_resolution::PredicateListId},
 };
-use crate::hir_def::Func;
 
 #[salsa::interned]
 #[derive(Debug)]
@@ -325,11 +324,6 @@ pub enum EvaluatedConstTy<'db> {
     Tuple(Vec<TyId<'db>>),
     Array(Vec<TyId<'db>>),
     Record(Vec<TyId<'db>>),
-    ConstFnCall {
-        func: Func<'db>,
-        generic_args: Vec<TyId<'db>>,
-        value_args: Vec<TyId<'db>>,
-    },
     Invalid,
 }
 
@@ -364,36 +358,6 @@ impl EvaluatedConstTy<'_> {
                     .collect::<Vec<_>>()
                     .join(", ");
                 format!("{{{fields}}}")
-            }
-            EvaluatedConstTy::ConstFnCall {
-                func,
-                generic_args,
-                value_args,
-            } => {
-                let name = func
-                    .name(db)
-                    .to_opt()
-                    .map(|n| n.data(db).as_str())
-                    .unwrap_or("<unknown>");
-
-                let generic_args = if generic_args.is_empty() {
-                    String::new()
-                } else {
-                    let generic_args = generic_args
-                        .iter()
-                        .map(|a| a.pretty_print(db).as_str())
-                        .collect::<Vec<_>>()
-                        .join(", ");
-                    format!("<{generic_args}>")
-                };
-
-                let value_args = value_args
-                    .iter()
-                    .map(|a| a.pretty_print(db).as_str())
-                    .collect::<Vec<_>>()
-                    .join(", ");
-
-                format!("{name}{generic_args}({value_args})")
             }
             EvaluatedConstTy::Invalid => "<invalid>".to_string(),
         }
