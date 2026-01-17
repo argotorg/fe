@@ -2272,7 +2272,7 @@ impl DiagnosticVoucher for BodyDiag<'_> {
             }
             Self::TypeMustBeKnown(span) => CompleteDiagnostic {
                 severity: Severity::Error,
-                message: "type must be known here".to_string(),
+                message: "type must be known".to_string(),
                 sub_diagnostics: vec![SubDiagnostic {
                     style: LabelStyle::Primary,
                     message: "type must be known here".to_string(),
@@ -2284,10 +2284,10 @@ impl DiagnosticVoucher for BodyDiag<'_> {
 
             Self::ConstValueMustBeKnown(span) => CompleteDiagnostic {
                 severity: Severity::Error,
-                message: "const value must be known here".to_string(),
+                message: "const value must be resolvable during type checking".to_string(),
                 sub_diagnostics: vec![SubDiagnostic {
                     style: LabelStyle::Primary,
-                    message: "this const expression must be known at compile time here".to_string(),
+                    message: "requires fully-resolved const value".to_string(),
                     span: span.resolve(db),
                 }],
                 notes: vec![],

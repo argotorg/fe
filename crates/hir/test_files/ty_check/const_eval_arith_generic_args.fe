@@ -1,0 +1,6 @@
+struct Foo<const N: usize = { 1 + 2 }> {}
+
+fn f() {
+    let a: Foo
+    let b: Foo<{ 5 + 6 }>
+}

@@ -1,3 +1,8 @@
-pub fn literal_add() -> u64 {
-    1 + 2
+fn main() -> u64 {
+    let x: u64 = add(10, 20)
+    x
+}
+
+const fn add(a: u64, b: u64) -> u64 {
+    a + b
 }

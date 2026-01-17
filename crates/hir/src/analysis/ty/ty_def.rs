@@ -669,11 +669,9 @@ impl<'db> TyId<'db> {
                 }
             }
 
-            (None, TyData::ConstTy(const_ty)) => {
-                Err(InvalidCause::NormalTypeExpected {
-                    given: TyId::const_ty(db, *const_ty),
-                })
-            }
+            (None, TyData::ConstTy(const_ty)) => Err(InvalidCause::NormalTypeExpected {
+                given: TyId::const_ty(db, *const_ty),
+            }),
 
             (None, _) => Ok(self),
         }

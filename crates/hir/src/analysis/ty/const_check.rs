@@ -20,9 +20,9 @@ pub(crate) fn check_const_fn_body<'db>(
     };
 
     if func.has_effects(db) {
-        checker.diags.push(
-            BodyDiag::ConstFnEffectsNotAllowed(func.span().effects().into()).into(),
-        );
+        checker
+            .diags
+            .push(BodyDiag::ConstFnEffectsNotAllowed(func.span().effects().into()).into());
     }
 
     checker.check_expr(body.expr(db));
@@ -79,7 +79,9 @@ impl<'db> ConstFnChecker<'db, '_> {
                     ));
                 }
             }
-            _ => self.push(BodyDiag::ConstFnAggregateNotAllowed(pat.span(self.body).into())),
+            _ => self.push(BodyDiag::ConstFnAggregateNotAllowed(
+                pat.span(self.body).into(),
+            )),
         }
     }
 
@@ -90,8 +92,10 @@ impl<'db> ConstFnChecker<'db, '_> {
 
         match expr_data {
             Expr::Lit(lit) => {
-                if !matches!(lit, crate::hir_def::LitKind::Int(_) | crate::hir_def::LitKind::Bool(_))
-                {
+                if !matches!(
+                    lit,
+                    crate::hir_def::LitKind::Int(_) | crate::hir_def::LitKind::Bool(_)
+                ) {
                     self.push(BodyDiag::ConstFnAggregateNotAllowed(
                         expr.span(self.body).into(),
                     ));
@@ -137,7 +141,9 @@ impl<'db> ConstFnChecker<'db, '_> {
                         }
                     }
                     CallableDef::VariantCtor(_) => {
-                        self.push(BodyDiag::ConstFnAggregateNotAllowed(expr.span(self.body).into()));
+                        self.push(BodyDiag::ConstFnAggregateNotAllowed(
+                            expr.span(self.body).into(),
+                        ));
                     }
                 }
             }
@@ -147,7 +153,9 @@ impl<'db> ConstFnChecker<'db, '_> {
                     self.check_expr(arg.expr);
                 }
                 // Keep MVP simple: only allow direct `f(...)` calls.
-                self.push(BodyDiag::ConstFnAggregateNotAllowed(expr.span(self.body).into()));
+                self.push(BodyDiag::ConstFnAggregateNotAllowed(
+                    expr.span(self.body).into(),
+                ));
             }
             Expr::Path(_) => {}
             Expr::Match(scrutinee, arms) => {
@@ -157,7 +165,9 @@ impl<'db> ConstFnChecker<'db, '_> {
                         self.check_expr(arm.body);
                     }
                 }
-                self.push(BodyDiag::ConstFnMatchNotAllowed(expr.span(self.body).into()));
+                self.push(BodyDiag::ConstFnMatchNotAllowed(
+                    expr.span(self.body).into(),
+                ));
             }
             Expr::Assign(lhs, rhs) | Expr::AugAssign(lhs, rhs, _) => {
                 self.check_expr(*lhs);

@@ -1,0 +1,12 @@
+extern {
+    const fn a() -> usize
+    const fn b() -> usize
+}
+
+type A = [u8; a()]
+
+fn takes_b(_x: [u8; b()]) {}
+
+fn test(x: A) {
+    takes_b(x)
+}

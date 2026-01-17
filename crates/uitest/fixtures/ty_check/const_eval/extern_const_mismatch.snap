@@ -1,0 +1,11 @@
+---
+source: crates/uitest/tests/ty_check.rs
+assertion_line: 27
+expression: diags
+input_file: fixtures/ty_check/const_eval/extern_const_mismatch.fe
+---
+error[8-0000]: type mismatch
+   ┌─ extern_const_mismatch.fe:11:13
+   │
+11 │     takes_b(x)
+   │             ^ expected `[u8; b()]`, but `[u8; a()]` is given

@@ -1,0 +1,10 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/const_eval/const_item_requires_known.fe
+---
+error[8-0064]: const value must be resolvable during type checking
+  ┌─ const_item_requires_known.fe:5:18
+  │
+5 │ const N: usize = n()
+  │                  ^^^ requires fully-resolved const value

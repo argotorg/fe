@@ -1,0 +1,8 @@
+extern {
+    const fn n() -> usize
+}
+
+fn foo() {
+    let x: [u8; n()] = [0; n()]
+    ()
+}

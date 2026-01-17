@@ -2,6 +2,6 @@
 source: crates/uitest/tests/ty.rs
 assertion_line: 27
 expression: diags
-input_file: fixtures/ty/def/const_fn_nyi.fe
+input_file: fixtures/ty/def/extern_const_identity.fe
 ---
 

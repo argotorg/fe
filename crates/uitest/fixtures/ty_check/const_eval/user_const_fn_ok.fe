@@ -1,0 +1,23 @@
+const fn add(a: usize, b: usize) -> usize {
+    a + b
+}
+
+const fn pick(flag: bool) -> usize {
+    if flag {
+        1
+    } else {
+        2
+    }
+}
+
+type Arr = [u8; add(1, 2)]
+type Arr2 = [u8; add(pick(true), pick(false))]
+
+const N: usize = add(1, 2)
+const M: usize = add(pick(true), pick(false))
+
+fn takes_arr(_x: Arr) {}
+
+fn ok(x: Arr) {
+    takes_arr(x)
+}

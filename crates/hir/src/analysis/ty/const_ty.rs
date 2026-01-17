@@ -1,13 +1,12 @@
-use crate::core::hir_def::{
-    Body, Const, Expr, IdentId, IntegerId, LitKind, Partial,
-};
+use crate::core::hir_def::{Body, Const, Expr, IdentId, IntegerId, LitKind, Partial};
 
+use super::const_expr::ConstExprId;
 use super::{
     ctfe::{CtfeConfig, CtfeInterpreter},
     diagnostics::{BodyDiag, FuncBodyDiag},
     trait_def::TraitInstId,
-    ty_def::{InvalidCause, TyId, TyParam, TyVar},
     ty_check::{check_anon_const_body, check_const_body},
+    ty_def::{InvalidCause, TyId, TyParam, TyVar},
     unify::UnificationTable,
 };
 use crate::analysis::{
@@ -17,7 +16,6 @@ use crate::analysis::{
     ty::{trait_def::assoc_const_body_for_trait_inst, trait_resolution::PredicateListId},
 };
 use crate::hir_def::Func;
-use super::const_expr::ConstExprId;
 
 #[salsa::interned]
 #[derive(Debug)]
@@ -135,9 +133,9 @@ pub(crate) fn evaluate_const_ty<'db>(
     };
 
     if let Some((expected, given)) = diags.iter().find_map(|diag| match diag {
-        FuncBodyDiag::Body(BodyDiag::TypeMismatch { expected, given, .. }) => {
-            Some((*expected, *given))
-        }
+        FuncBodyDiag::Body(BodyDiag::TypeMismatch {
+            expected, given, ..
+        }) => Some((*expected, *given)),
         _ => None,
     }) {
         return ConstTyId::invalid(db, InvalidCause::ConstTyMismatch { expected, given });
@@ -145,7 +143,7 @@ pub(crate) fn evaluate_const_ty<'db>(
 
     let mut interp = CtfeInterpreter::new(db, CtfeConfig::default());
     let evaluated = interp
-        .eval_const_body(body, &typed_body)
+        .eval_const_body(body, typed_body)
         .unwrap_or_else(|cause| ConstTyId::invalid(db, cause));
 
     let mut table = UnificationTable::new(db);

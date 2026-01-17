@@ -1,0 +1,5 @@
+extern {
+    const fn n() -> usize
+}
+
+const N: usize = n()

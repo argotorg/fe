@@ -111,29 +111,25 @@ where
     match &const_ty.data(db) {
         ConstTyData::TyVar(var, _) => visitor.visit_var(var),
         ConstTyData::TyParam(param, ty) => visitor.visit_const_param(param, *ty),
-        ConstTyData::Evaluated(val, _) => {
-            match val {
-                EvaluatedConstTy::Tuple(elems)
-                | EvaluatedConstTy::Array(elems)
-                | EvaluatedConstTy::Record(elems) => {
-                    elems.visit_with(visitor);
-                }
-                EvaluatedConstTy::ConstFnCall {
-                    generic_args,
-                    value_args,
-                    ..
-                } => {
-                    generic_args.visit_with(visitor);
-                    value_args.visit_with(visitor);
-                }
-                _ => {}
+        ConstTyData::Evaluated(val, _) => match val {
+            EvaluatedConstTy::Tuple(elems)
+            | EvaluatedConstTy::Array(elems)
+            | EvaluatedConstTy::Record(elems) => {
+                elems.visit_with(visitor);
             }
-        }
+            EvaluatedConstTy::ConstFnCall {
+                generic_args,
+                value_args,
+                ..
+            } => {
+                generic_args.visit_with(visitor);
+                value_args.visit_with(visitor);
+            }
+            _ => {}
+        },
         ConstTyData::Abstract(expr, _) => match expr.data(db) {
             ConstExpr::ExternConstFnCall {
-                generic_args,
-                args,
-                ..
+                generic_args, args, ..
             } => {
                 generic_args.visit_with(visitor);
                 args.visit_with(visitor);

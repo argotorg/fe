@@ -3,13 +3,13 @@ source: crates/uitest/tests/ty_check.rs
 expression: diags
 input_file: fixtures/ty_check/method_selection/receiver_type_must_be_known.fe
 ---
-error[8-0014]: type must be known here
+error[8-0014]: type must be known
    ┌─ receiver_type_must_be_known.fe:26:5
    │
 26 │     x.foo()
    │     ^ type must be known here
 
-error[8-0014]: type must be known here
+error[8-0014]: type must be known
    ┌─ receiver_type_must_be_known.fe:29:5
    │
 29 │     y.double()

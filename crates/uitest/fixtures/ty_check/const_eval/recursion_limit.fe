@@ -1,0 +1,5 @@
+const fn recurse() -> usize {
+    recurse()
+}
+
+const N: usize = recurse()

@@ -1,9 +1,9 @@
 ---
 source: crates/uitest/tests/ty_check.rs
 expression: diags
-input_file: crates/uitest/fixtures/ty_check/field_access.fe
+input_file: fixtures/ty_check/field_access.fe
 ---
-error[8-0014]: type must be known here
+error[8-0014]: type must be known
   ┌─ field_access.fe:7:5
   │
 7 │     x.1
@@ -29,5 +29,3 @@ error[8-0031]: type annotation is needed
   │         │
   │         type annotation is needed
   │         consider giving `: Type` here
-
-
