@@ -1,8 +1,11 @@
-use crate::core::hir_def::{Body, Const, Expr, IdentId, IntegerId, LitKind, Partial};
+use crate::core::hir_def::{
+    Body, CallArg, Const, Expr, ExprId, IdentId, IntegerId, LitKind, Partial, PathId,
+};
 
 use super::{
     trait_def::TraitInstId,
     ty_def::{InvalidCause, TyId, TyParam, TyVar},
+    ty_lower::{collect_generic_params, lower_generic_arg_list},
     unify::UnificationTable,
 };
 use crate::analysis::{
@@ -11,7 +14,8 @@ use crate::analysis::{
     ty::ty_def::{Kind, TyBase, TyData, TyVarSort},
     ty::{trait_def::assoc_const_body_for_trait_inst, trait_resolution::PredicateListId},
 };
-use super::const_expr::ConstExprId;
+use crate::hir_def::{CallableDef, Func};
+use super::const_expr::{ConstExpr, ConstExprId};
 
 #[salsa::interned]
 #[derive(Debug)]
@@ -113,6 +117,10 @@ pub(crate) fn evaluate_const_ty<'db>(
         );
     }
 
+    if let Expr::Call(callee, call_args) = &expr {
+        return evaluate_const_call_expr(db, body, *callee, call_args, expected_ty);
+    }
+
     let mut table = UnificationTable::new(db);
     let (resolved, ty) = match expr {
         Expr::Lit(LitKind::Bool(b)) => (
@@ -142,6 +150,221 @@ pub(crate) fn evaluate_const_ty<'db>(
     };
 
     ConstTyId::new(db, data)
+}
+
+fn evaluate_const_expr_in_body<'db>(
+    db: &'db dyn HirAnalysisDb,
+    body: Body<'db>,
+    expr_id: ExprId,
+    expected_ty: Option<TyId<'db>>,
+) -> ConstTyId<'db> {
+    let invalid = || invalid_const_ty_expr(db, body);
+    let Partial::Present(expr) = expr_id.data(db, body) else {
+        return ConstTyId::invalid(db, InvalidCause::ParseError);
+    };
+
+    match expr {
+        Expr::Call(callee, call_args) => {
+            evaluate_const_call_expr(db, body, *callee, call_args, expected_ty)
+        }
+        Expr::Path(path) => {
+            let Some(path) = path.to_opt() else {
+                return ConstTyId::invalid(db, InvalidCause::ParseError);
+            };
+            eval_const_path_expr(db, body, path, expected_ty).unwrap_or_else(invalid)
+        }
+        Expr::Lit(LitKind::Bool(b)) => {
+            let mut table = UnificationTable::new(db);
+            evaluated_const_ty_checked(
+                db,
+                &mut table,
+                EvaluatedConstTy::LitBool(*b),
+                TyId::new(db, TyData::TyBase(TyBase::bool())),
+                expected_ty,
+            )
+        }
+        Expr::Lit(LitKind::Int(i)) => {
+            let mut table = UnificationTable::new(db);
+            let ty = table.new_var(TyVarSort::Integral, &Kind::Star);
+            evaluated_const_ty_checked(
+                db,
+                &mut table,
+                EvaluatedConstTy::LitInt(*i),
+                ty,
+                expected_ty,
+            )
+        }
+        _ => invalid(),
+    }
+}
+
+fn evaluate_const_call_expr<'db>(
+    db: &'db dyn HirAnalysisDb,
+    body: Body<'db>,
+    callee: ExprId,
+    call_args: &[CallArg<'db>],
+    expected_ty: Option<TyId<'db>>,
+) -> ConstTyId<'db> {
+    let invalid = || invalid_const_ty_expr(db, body);
+    let Partial::Present(callee) = callee.data(db, body) else {
+        return ConstTyId::invalid(db, InvalidCause::ParseError);
+    };
+
+    let Expr::Path(Partial::Present(path)) = callee else {
+        return invalid();
+    };
+
+    let Some((func, callable_def, generic_args, full_args)) =
+        resolve_const_fn_call(db, body, *path)
+    else {
+        return invalid();
+    };
+
+    let expected_arg_tys = callable_def.arg_tys(db);
+    if call_args.len() != expected_arg_tys.len() {
+        return invalid();
+    }
+
+    let Some(value_args) = call_args
+        .iter()
+        .zip(expected_arg_tys.iter())
+        .enumerate()
+        .map(|(idx, (arg, expected))| {
+            if let Some(given_label) = arg.label
+                && let Some(expected_label) = callable_def.param_label(db, idx)
+                && !expected_label.is_self(db)
+                && given_label != expected_label
+            {
+                return None;
+            }
+
+            let expected = expected.instantiate(db, &full_args);
+            let evaluated = evaluate_const_expr_in_body(db, body, arg.expr, Some(expected));
+            Some(TyId::const_ty(db, evaluated))
+        })
+        .collect()
+    else {
+        return invalid();
+    };
+
+    let mut table = UnificationTable::new(db);
+    let ret_ty = callable_def.ret_ty(db).instantiate(db, &full_args);
+
+    if func.is_extern(db) {
+        let expr_id = ConstExprId::new(
+            db,
+            ConstExpr::ExternConstFnCall {
+                func,
+                generic_args,
+                args: value_args,
+            },
+        );
+
+        let ty =
+            check_const_ty(db, ret_ty, expected_ty, &mut table).unwrap_or_else(|err| {
+                TyId::invalid(db, err)
+            });
+
+        return ConstTyId::new(db, ConstTyData::Abstract(expr_id, ty));
+    }
+
+    evaluated_const_ty_checked(
+        db,
+        &mut table,
+        EvaluatedConstTy::ConstFnCall {
+            func,
+            generic_args,
+            value_args,
+        },
+        ret_ty,
+        expected_ty,
+    )
+}
+
+fn invalid_const_ty_expr<'db>(db: &'db dyn HirAnalysisDb, body: Body<'db>) -> ConstTyId<'db> {
+    ConstTyId::invalid(db, InvalidCause::InvalidConstTyExpr { body })
+}
+
+fn evaluated_const_ty_checked<'db>(
+    db: &'db dyn HirAnalysisDb,
+    table: &mut UnificationTable<'db>,
+    resolved: EvaluatedConstTy<'db>,
+    ty: TyId<'db>,
+    expected_ty: Option<TyId<'db>>,
+) -> ConstTyId<'db> {
+    let ty =
+        check_const_ty(db, ty, expected_ty, table).unwrap_or_else(|err| TyId::invalid(db, err));
+    ConstTyId::new(db, ConstTyData::Evaluated(resolved, ty))
+}
+
+fn eval_const_path_expr<'db>(
+    db: &'db dyn HirAnalysisDb,
+    body: Body<'db>,
+    path: PathId<'db>,
+    expected_ty: Option<TyId<'db>>,
+) -> Option<ConstTyId<'db>> {
+    let assumptions = PredicateListId::empty_list(db);
+    match resolve_path(db, path, body.scope(), assumptions, true).ok()? {
+        PathRes::Ty(ty) | PathRes::TyAlias(_, ty) => match ty.data(db) {
+            TyData::ConstTy(const_ty) => Some(const_ty.evaluate(db, expected_ty)),
+            _ => None,
+        },
+        PathRes::Const(const_def, ty) => {
+            let body = const_def.body(db).to_opt()?;
+            let const_ty = ConstTyId::from_body(db, body, Some(ty), Some(const_def));
+            Some(const_ty.evaluate(db, expected_ty.or(Some(ty))))
+        }
+        PathRes::TraitConst(_recv_ty, inst, name) => {
+            Some(const_ty_from_trait_const(db, inst, name)?.evaluate(db, expected_ty))
+        }
+        _ => None,
+    }
+}
+
+fn resolve_const_fn_call<'db>(
+    db: &'db dyn HirAnalysisDb,
+    body: Body<'db>,
+    path: PathId<'db>,
+) -> Option<(Func<'db>, CallableDef<'db>, Vec<TyId<'db>>, Vec<TyId<'db>>)> {
+    let assumptions = PredicateListId::empty_list(db);
+    let PathRes::Func(func_ty) = resolve_path(
+        db,
+        path.strip_generic_args(db),
+        body.scope(),
+        assumptions,
+        true,
+    )
+    .ok()?
+    else {
+        return None;
+    };
+
+    let TyData::TyBase(TyBase::Func(callable_def)) = func_ty.base_ty(db).data(db) else {
+        return None;
+    };
+    let CallableDef::Func(func) = *callable_def else {
+        return None;
+    };
+    if !func.is_const(db) {
+        return None;
+    }
+
+    let param_set = collect_generic_params(db, func.into());
+    let provided_explicit =
+        lower_generic_arg_list(db, path.generic_args(db), body.scope(), assumptions);
+    let explicit_args =
+        param_set.complete_explicit_args_with_defaults(db, None, &provided_explicit, assumptions);
+    if explicit_args.len() != param_set.explicit_params(db).len() {
+        return None;
+    }
+
+    let mut full_args = param_set.params(db).to_vec();
+    let offset = param_set.offset_to_explicit_params_position(db);
+    full_args
+        .get_mut(offset..offset + explicit_args.len())?
+        .clone_from_slice(&explicit_args);
+
+    Some((func, *callable_def, explicit_args, full_args))
 }
 
 pub(super) fn const_ty_from_trait_const<'db>(
@@ -310,6 +533,11 @@ pub enum ConstTyData<'db> {
 pub enum EvaluatedConstTy<'db> {
     LitInt(IntegerId<'db>),
     LitBool(bool),
+    ConstFnCall {
+        func: Func<'db>,
+        generic_args: Vec<TyId<'db>>,
+        value_args: Vec<TyId<'db>>,
+    },
     Invalid,
 }
 
@@ -320,6 +548,36 @@ impl EvaluatedConstTy<'_> {
                 format!("{}", val.data(db))
             }
             EvaluatedConstTy::LitBool(val) => format!("{val}"),
+            EvaluatedConstTy::ConstFnCall {
+                func,
+                generic_args,
+                value_args,
+            } => {
+                let name = func
+                    .name(db)
+                    .to_opt()
+                    .map(|n| n.data(db).as_str())
+                    .unwrap_or("<unknown>");
+
+                let generic_args = if generic_args.is_empty() {
+                    String::new()
+                } else {
+                    let generic_args = generic_args
+                        .iter()
+                        .map(|a| a.pretty_print(db).as_str())
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    format!("<{generic_args}>")
+                };
+
+                let value_args = value_args
+                    .iter()
+                    .map(|a| a.pretty_print(db).as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ");
+
+                format!("{name}{generic_args}({value_args})")
+            }
             EvaluatedConstTy::Invalid => "<invalid>".to_string(),
         }
     }
