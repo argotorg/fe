@@ -15,7 +15,7 @@ use crate::analysis::{
     ty::{trait_def::assoc_const_body_for_trait_inst, trait_resolution::PredicateListId},
 };
 use crate::hir_def::{CallableDef, Func};
-use super::const_expr::ConstExprId;
+use super::const_expr::{ConstExpr, ConstExprId};
 
 #[salsa::interned]
 #[derive(Debug)]
@@ -248,6 +248,26 @@ fn evaluate_const_call_expr<'db>(
     };
 
     let mut table = UnificationTable::new(db);
+    let ret_ty = callable_def.ret_ty(db).instantiate(db, &full_args);
+
+    if func.is_extern(db) {
+        let expr_id = ConstExprId::new(
+            db,
+            ConstExpr::ExternConstFnCall {
+                func,
+                generic_args,
+                args: value_args,
+            },
+        );
+
+        let ty =
+            check_const_ty(db, ret_ty, expected_ty, &mut table).unwrap_or_else(|err| {
+                TyId::invalid(db, err)
+            });
+
+        return ConstTyId::new(db, ConstTyData::Abstract(expr_id, ty));
+    }
+
     evaluated_const_ty_checked(
         db,
         &mut table,
@@ -256,7 +276,7 @@ fn evaluate_const_call_expr<'db>(
             generic_args,
             value_args,
         },
-        callable_def.ret_ty(db).instantiate(db, &full_args),
+        ret_ty,
         expected_ty,
     )
 }
