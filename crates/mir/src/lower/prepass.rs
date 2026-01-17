@@ -285,7 +285,11 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
             ConstTyData::Evaluated(EvaluatedConstTy::LitBool(flag), _) => {
                 SyntheticValue::Bool(*flag)
             }
-            ConstTyData::UnEvaluated { body, .. } => match try_eval_const_body(self.db, *body)? {
+            ConstTyData::UnEvaluated { body, .. } => match try_eval_const_body(
+                self.db,
+                *body,
+                expected_ty,
+            )? {
                 ConstValue::Int(value) => SyntheticValue::Int(value),
                 ConstValue::Bool(flag) => SyntheticValue::Bool(flag),
             },

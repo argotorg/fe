@@ -124,6 +124,12 @@ pub enum TyLowerDiag<'db> {
 
     InvalidConstTyExpr(DynLazySpan<'db>),
 
+    ConstEvalUnsupported(DynLazySpan<'db>),
+    ConstEvalNonConstCall(DynLazySpan<'db>),
+    ConstEvalDivisionByZero(DynLazySpan<'db>),
+    ConstEvalStepLimitExceeded(DynLazySpan<'db>),
+    ConstEvalRecursionLimitExceeded(DynLazySpan<'db>),
+
     NonTrailingDefaultGenericParam(LazyGenericParamSpan<'db>),
 
     // Default generic parameter diagnostics
@@ -151,6 +157,11 @@ impl TyLowerDiag<'_> {
             Self::ConstTyExpected { .. } => 12,
             Self::NormalTypeExpected { .. } => 13,
             Self::InvalidConstTyExpr(_) => 15,
+            Self::ConstEvalUnsupported(_) => 23,
+            Self::ConstEvalNonConstCall(_) => 24,
+            Self::ConstEvalDivisionByZero(_) => 25,
+            Self::ConstEvalStepLimitExceeded(_) => 26,
+            Self::ConstEvalRecursionLimitExceeded(_) => 27,
             Self::TooManyGenericArgs { .. } => 16,
             Self::DuplicateFieldName(..) => 17,
             Self::DuplicateVariantName(..) => 18,

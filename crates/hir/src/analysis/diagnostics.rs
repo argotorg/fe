@@ -1455,6 +1455,66 @@ impl DiagnosticVoucher for TyLowerDiag<'_> {
                 error_code,
             },
 
+            Self::ConstEvalUnsupported(span) => CompleteDiagnostic {
+                severity: Severity::Error,
+                message: "the expression cannot be evaluated at compile time".to_string(),
+                sub_diagnostics: vec![SubDiagnostic {
+                    style: LabelStyle::Primary,
+                    message: "unsupported in const evaluation".to_string(),
+                    span: span.resolve(db),
+                }],
+                notes: vec![],
+                error_code,
+            },
+
+            Self::ConstEvalNonConstCall(span) => CompleteDiagnostic {
+                severity: Severity::Error,
+                message: "non-const function call in const context".to_string(),
+                sub_diagnostics: vec![SubDiagnostic {
+                    style: LabelStyle::Primary,
+                    message: "calls in const context must be `const fn`".to_string(),
+                    span: span.resolve(db),
+                }],
+                notes: vec![],
+                error_code,
+            },
+
+            Self::ConstEvalDivisionByZero(span) => CompleteDiagnostic {
+                severity: Severity::Error,
+                message: "division by zero in const context".to_string(),
+                sub_diagnostics: vec![SubDiagnostic {
+                    style: LabelStyle::Primary,
+                    message: "cannot divide by zero".to_string(),
+                    span: span.resolve(db),
+                }],
+                notes: vec![],
+                error_code,
+            },
+
+            Self::ConstEvalStepLimitExceeded(span) => CompleteDiagnostic {
+                severity: Severity::Error,
+                message: "const evaluation exceeded the step limit".to_string(),
+                sub_diagnostics: vec![SubDiagnostic {
+                    style: LabelStyle::Primary,
+                    message: "const evaluation takes too many steps".to_string(),
+                    span: span.resolve(db),
+                }],
+                notes: vec![],
+                error_code,
+            },
+
+            Self::ConstEvalRecursionLimitExceeded(span) => CompleteDiagnostic {
+                severity: Severity::Error,
+                message: "const evaluation exceeded the recursion limit".to_string(),
+                sub_diagnostics: vec![SubDiagnostic {
+                    style: LabelStyle::Primary,
+                    message: "const evaluation recurses too deeply".to_string(),
+                    span: span.resolve(db),
+                }],
+                notes: vec![],
+                error_code,
+            },
+
             Self::NonTrailingDefaultGenericParam(span) => CompleteDiagnostic {
                 severity: Severity::Error,
                 message: "generic parameters with a default must be trailing".to_string(),

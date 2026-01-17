@@ -16,9 +16,13 @@ pub enum ConstValue {
     Bool(bool),
 }
 
-pub fn try_eval_const_body<'db>(db: &'db dyn HirAnalysisDb, body: Body<'db>) -> Option<ConstValue> {
-    let const_ty = ConstTyId::from_body(db, body, None, None);
-    try_eval_const_ty(db, const_ty, None)
+pub fn try_eval_const_body<'db>(
+    db: &'db dyn HirAnalysisDb,
+    body: Body<'db>,
+    expected_ty: TyId<'db>,
+) -> Option<ConstValue> {
+    let const_ty = ConstTyId::from_body(db, body, Some(expected_ty), None);
+    try_eval_const_ty(db, const_ty, Some(expected_ty))
 }
 
 pub fn try_eval_const_ref<'db>(
