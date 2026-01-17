@@ -354,6 +354,26 @@ fn diag_from_invalid_cause<'db>(
             TyLowerDiag::InvalidConstTyExpr(body.span().into()).into()
         }
 
+        InvalidCause::ConstEvalUnsupported { body, expr } => {
+            TyLowerDiag::ConstEvalUnsupported(expr.span(body).into()).into()
+        }
+
+        InvalidCause::ConstEvalNonConstCall { body, expr } => {
+            TyLowerDiag::ConstEvalNonConstCall(expr.span(body).into()).into()
+        }
+
+        InvalidCause::ConstEvalDivisionByZero { body, expr } => {
+            TyLowerDiag::ConstEvalDivisionByZero(expr.span(body).into()).into()
+        }
+
+        InvalidCause::ConstEvalStepLimitExceeded { body, expr } => {
+            TyLowerDiag::ConstEvalStepLimitExceeded(expr.span(body).into()).into()
+        }
+
+        InvalidCause::ConstEvalRecursionLimitExceeded { body, expr } => {
+            TyLowerDiag::ConstEvalRecursionLimitExceeded(expr.span(body).into()).into()
+        }
+
         InvalidCause::NotAType(_) => return None,
 
         // These errors should be caught and reported elsewhere

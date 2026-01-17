@@ -30,6 +30,7 @@ pub mod canonical;
 pub mod const_expr;
 pub mod const_eval;
 pub(crate) mod const_check;
+pub(crate) mod ctfe;
 pub mod const_ty;
 pub mod corelib;
 pub mod effects;

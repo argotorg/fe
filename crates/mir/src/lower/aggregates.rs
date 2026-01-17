@@ -217,10 +217,15 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         let Some(len_body) = len.to_opt() else {
             return fallback;
         };
-        let Some(ConstValue::Int(count)) = try_eval_const_body(self.db, len_body) else {
-            unreachable!("array len must be an int")
+        let expected_len_ty = TyId::new(self.db, TyData::TyBase(TyBase::Prim(PrimTy::Usize)));
+        let Some(ConstValue::Int(count)) = try_eval_const_body(self.db, len_body, expected_len_ty)
+        else {
+            return fallback;
         };
-        let count = count.to_u32().expect("array with more than 2^32 elements") as usize;
+        let Some(count) = count.to_u32() else {
+            return fallback;
+        };
+        let count = count as usize;
 
         let elem_value = self.lower_expr(elem);
         if self.current_block().is_none() {
