@@ -180,6 +180,7 @@ impl Resolver for FilesResolver {
     type Resource = FilesResource;
     type Error = FilesResolutionError;
     type Diagnostic = FilesResolutionDiagnostic;
+    type Event = ();
 
     fn resolve<H>(&mut self, handler: &mut H, url: &Url) -> Result<H::Item, Self::Error>
     where

@@ -1,7 +1,5 @@
 use camino::{Utf8Path, Utf8PathBuf};
 use common::config::looks_like_workspace;
-use indexmap::IndexMap;
-use std::marker::PhantomData;
 use toml::Value;
 use url::Url;
 
@@ -9,10 +7,7 @@ use crate::{
     ResolutionHandler, Resolver,
     files::{FilesResolutionDiagnostic, FilesResolutionError, FilesResolver, FilesResource},
     git::{GitDescription, GitResolutionDiagnostic, GitResolutionError, GitResolver, GitResource},
-    graph::{
-        DiGraph, GraphResolutionHandler, GraphResolverImpl, NodeIndex, UnresolvableRootNode,
-        UnresolvedNode,
-    },
+    graph::GraphResolverImpl,
 };
 
 /// Files resolver used for basic ingot discovery. Requires only `fe.toml`.
@@ -118,18 +113,6 @@ pub enum IngotResolutionDiagnostic {
     Git(GitResolutionDiagnostic),
 }
 
-#[derive(Debug, Clone)]
-pub enum IngotResolutionEvent {
-    RemoteCheckoutStart {
-        description: GitDescription,
-    },
-    RemoteCheckoutComplete {
-        description: GitDescription,
-        ingot_url: Url,
-        reused_checkout: bool,
-    },
-}
-
 pub trait RemoteProgress {
     fn start(&mut self, description: &GitDescription);
     fn success(&mut self, description: &GitDescription, ingot_url: &Url);
@@ -167,10 +150,19 @@ impl std::fmt::Display for IngotResolutionDiagnostic {
     }
 }
 
+#[derive(Debug, Clone)]
+pub enum IngotResolutionEvent {
+    RemoteCheckoutStart { description: GitDescription },
+    RemoteCheckoutComplete {
+        description: GitDescription,
+        ingot_url: Url,
+        reused_checkout: bool,
+    },
+}
+
 pub trait IngotResolutionHandler<R>:
     ResolutionHandler<R>
     + ResolutionHandler<FilesResolver, Item = FilesResource>
-    + IngotResolutionEventHandler
 where
     R: Resolver,
 {
@@ -179,14 +171,8 @@ where
 impl<R, T> IngotResolutionHandler<R> for T
 where
     R: Resolver,
-    T: ResolutionHandler<R>
-        + ResolutionHandler<FilesResolver, Item = FilesResource>
-        + IngotResolutionEventHandler,
+    T: ResolutionHandler<R> + ResolutionHandler<FilesResolver, Item = FilesResource>,
 {
-}
-
-pub trait IngotResolutionEventHandler {
-    fn on_ingot_event(&mut self, _event: IngotResolutionEvent) {}
 }
 
 pub trait IngotResolver:
@@ -369,7 +355,7 @@ impl IngotResolverImpl {
             handler,
             &IngotDescriptor::Remote(description.clone()),
         );
-        IngotResolutionEventHandler::on_ingot_event(
+        <H as ResolutionHandler<Self>>::on_resolution_event(
             handler,
             IngotResolutionEvent::RemoteCheckoutStart {
                 description: description.clone(),
@@ -390,7 +376,7 @@ impl IngotResolverImpl {
             git_resource.checkout_path.as_path(),
             git_resource.reused_checkout,
         )?;
-        IngotResolutionEventHandler::on_ingot_event(
+        <H as ResolutionHandler<Self>>::on_resolution_event(
             handler,
             IngotResolutionEvent::RemoteCheckoutComplete {
                 description: description.clone(),
@@ -497,6 +483,10 @@ where
         self.ingot_handler.on_resolution_diagnostic(diagnostic);
     }
 
+    fn on_resolution_event(&mut self, event: IngotResolutionEvent) {
+        self.ingot_handler.on_resolution_event(event);
+    }
+
     fn on_resolution_error(&mut self, description: &IngotDescriptor, error: IngotResolutionError) {
         self.ingot_handler.on_resolution_error(description, error);
     }
@@ -526,13 +516,12 @@ where
     }
 }
 
-impl<'a, H> IngotResolutionEventHandler for ForwardingHandler<'a, H> {}
-
 impl Resolver for IngotResolverImpl {
     type Description = IngotDescriptor;
     type Resource = IngotResource;
     type Error = IngotResolutionError;
     type Diagnostic = IngotResolutionDiagnostic;
+    type Event = IngotResolutionEvent;
 
     fn resolve<H>(
         &mut self,
@@ -547,162 +536,4 @@ impl Resolver for IngotResolverImpl {
         };
         self.resolve_ingot(&mut forwarding, description)
     }
-}
-
-type BackEdges<E> = Vec<(NodeIndex, E)>;
-type UnresolvedMap<D, E> = IndexMap<D, (IngotPriority, BackEdges<E>)>;
-
-pub struct IngotGraphResolverImpl<IR, H, E> {
-    pub node_resolver: IR,
-    pub _handler: PhantomData<H>,
-    pub _edge: PhantomData<E>,
-}
-
-impl<IR, H, E> IngotGraphResolverImpl<IR, H, E>
-where
-    IR: IngotResolver,
-{
-    pub fn new(node_resolver: IR) -> Self {
-        Self {
-            node_resolver,
-            _handler: PhantomData,
-            _edge: PhantomData,
-        }
-    }
-}
-
-impl<IR, H, E> IngotGraphResolverImpl<IR, H, E>
-where
-    IR: IngotResolver,
-    H: GraphResolutionHandler<IngotDescriptor, DiGraph<IngotDescriptor, E>>
-        + IngotResolutionHandler<IR>,
-    <H as ResolutionHandler<IR>>::Item:
-        IntoIterator<Item = UnresolvedNode<IngotPriority, IngotDescriptor, E>>,
-    E: Clone,
-{
-    pub fn graph_resolve(
-        &mut self,
-        handler: &mut H,
-        root_node: &IngotDescriptor,
-    ) -> Result<
-        <H as GraphResolutionHandler<IngotDescriptor, DiGraph<IngotDescriptor, E>>>::Item,
-        UnresolvableRootNode,
-    > {
-        tracing::info!(target: "resolver", "Starting ingot graph resolution");
-
-        let mut graph = DiGraph::default();
-        let mut nodes: IndexMap<IngotDescriptor, NodeIndex> = IndexMap::new();
-        let mut unresolved_nodes: UnresolvedMap<IngotDescriptor, E> = IndexMap::new();
-        let mut unresolvable_nodes: IndexMap<IngotDescriptor, BackEdges<E>> = IndexMap::new();
-
-        unresolved_nodes
-            .entry(root_node.clone())
-            .or_insert_with(|| (IngotPriority::default(), Vec::new()));
-
-        while let Some((unresolved_node_description, back_nodes)) =
-            take_highest_priority(&mut unresolved_nodes)
-        {
-            tracing::info!(target: "resolver", "Resolving node");
-            match self
-                .node_resolver
-                .resolve_ingot(handler, &unresolved_node_description)
-            {
-                Ok(forward_nodes) => {
-                    tracing::info!(target: "resolver", "Successfully resolved node");
-                    let resolved_node_description = unresolved_node_description;
-
-                    let resolved_node_index = graph.add_node(resolved_node_description.clone());
-                    nodes.insert(resolved_node_description.clone(), resolved_node_index);
-
-                    for (back_node_index, back_edge) in &back_nodes {
-                        graph.add_edge(*back_node_index, resolved_node_index, back_edge.clone());
-                    }
-
-                    for UnresolvedNode {
-                        priority,
-                        description: forward_node_description,
-                        edge: forward_edge,
-                    } in forward_nodes
-                    {
-                        if unresolvable_nodes.contains_key(&forward_node_description) {
-                            unresolvable_nodes
-                                .entry(forward_node_description)
-                                .or_default()
-                                .push((resolved_node_index, forward_edge));
-                        } else if !nodes.contains_key(&forward_node_description) {
-                            unresolved_nodes
-                                .entry(forward_node_description)
-                                .and_modify(|(existing_priority, back_edges)| {
-                                    if priority > *existing_priority {
-                                        *existing_priority = priority;
-                                    }
-                                    back_edges.push((resolved_node_index, forward_edge.clone()));
-                                })
-                                .or_insert_with(|| {
-                                    (priority, vec![(resolved_node_index, forward_edge)])
-                                });
-                        } else if let Some(&existing_index) = nodes.get(&forward_node_description) {
-                            graph.add_edge(resolved_node_index, existing_index, forward_edge);
-                        }
-                    }
-                }
-                Err(error) => {
-                    tracing::warn!(target: "resolver", "Failed to resolve node");
-                    <H as ResolutionHandler<IR>>::on_resolution_error(
-                        handler,
-                        &unresolved_node_description,
-                        error,
-                    );
-                    unresolvable_nodes
-                        .entry(unresolved_node_description)
-                        .or_default()
-                        .extend(back_nodes);
-                }
-            }
-        }
-
-        if graph.node_count() == 0 {
-            tracing::warn!(
-                target: "resolver",
-                "Graph resolution failed: root node is unresolvable"
-            );
-            Err(UnresolvableRootNode)
-        } else {
-            tracing::info!(
-                target: "resolver",
-                "Graph resolution completed successfully with {} nodes",
-                graph.node_count()
-            );
-            let result = handler.handle_graph_resolution(root_node, graph);
-            Ok(result)
-        }
-    }
-}
-
-fn take_highest_priority<D, E>(
-    unresolved_nodes: &mut UnresolvedMap<D, E>,
-) -> Option<(D, BackEdges<E>)>
-where
-    D: Eq + std::hash::Hash + Clone,
-{
-    let mut best_index = None;
-    let mut best_priority: Option<IngotPriority> = None;
-
-    for (index, (_description, (priority, _))) in unresolved_nodes.iter().enumerate() {
-        let should_replace = match &best_priority {
-            None => true,
-            Some(current_best) => priority > current_best,
-        };
-
-        if should_replace {
-            best_priority = Some(*priority);
-            best_index = Some(index);
-        }
-    }
-
-    best_index.and_then(|index| {
-        unresolved_nodes
-            .shift_remove_index(index)
-            .map(|(description, (_priority, back_nodes))| (description, back_nodes))
-    })
 }

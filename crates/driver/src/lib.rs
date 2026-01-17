@@ -27,9 +27,9 @@ pub use resolver::workspace::{ExpandedWorkspaceMember, expand_workspace_members}
 use resolver::{
     files::FilesResolutionDiagnostic,
     git::{GitDescription, GitResolver},
+    graph::{GraphResolver, GraphResolverImpl},
     ingot::{
-        IngotDescriptor, IngotGraphResolverImpl, IngotResolutionError, IngotResolverImpl,
-        RemoteProgress,
+        IngotDescriptor, IngotResolutionError, IngotResolverImpl, RemoteProgress,
     },
 };
 use url::Url;
@@ -96,9 +96,9 @@ pub fn check_library_requirements(db: &DriverDataBase) -> Vec<String> {
 
 fn init_ingot_graph(db: &mut DriverDataBase, ingot_url: &Url) -> bool {
     tracing::info!(target: "resolver", "Starting ingot resolution for: {}", ingot_url);
-    let mut handler = IngotHandler::new(db).with_stdout(true);
-    let mut ingot_graph_resolver =
-        IngotGraphResolverImpl::new(ingot_resolver(remote_checkout_root(ingot_url)));
+    let checkout_root = remote_checkout_root(ingot_url);
+    let mut handler = IngotHandler::new(db, checkout_root.clone()).with_stdout(true);
+    let mut ingot_graph_resolver = GraphResolverImpl::new(ingot_resolver(checkout_root));
 
     // Root ingot resolution should never fail since directory existence is validated earlier.
     // If it fails, it indicates a bug in the resolver or an unexpected system condition.

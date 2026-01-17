@@ -15,19 +15,20 @@ use resolver::{
     git::{GitDescription, GitResolver},
     graph::{DiGraph, GraphResolutionHandler, UnresolvedNode, petgraph::visit::EdgeRef},
     ingot::{
-        IngotDescriptor, IngotOrigin, IngotPriority, IngotResolutionEvent,
-        IngotResolutionEventHandler, IngotResolverImpl, IngotResource,
+        IngotDescriptor, IngotOrigin, IngotPriority, IngotResolutionEvent, IngotResolverImpl,
+        IngotResource,
     },
 };
 use smol_str::SmolStr;
 use url::Url;
 
-use crate::{IngotInitDiagnostics, remote_checkout_root};
+use crate::IngotInitDiagnostics;
 
 pub struct IngotHandler<'a> {
     pub db: &'a mut dyn InputDb,
     ingot_urls: HashMap<IngotDescriptor, Url>,
     root_ingot_url: Option<Url>,
+    remote_checkout_root: Utf8PathBuf,
     had_diagnostics: bool,
     trace_enabled: bool,
     stdout_enabled: bool,
@@ -51,11 +52,12 @@ fn workspace_version_for_member(
 }
 
 impl<'a> IngotHandler<'a> {
-    pub fn new(db: &'a mut dyn InputDb) -> Self {
+    pub fn new(db: &'a mut dyn InputDb, remote_checkout_root: Utf8PathBuf) -> Self {
         Self {
             db,
             ingot_urls: HashMap::new(),
             root_ingot_url: None,
+            remote_checkout_root,
             had_diagnostics: false,
             trace_enabled: true,
             stdout_enabled: false,
@@ -225,7 +227,7 @@ impl<'a> IngotHandler<'a> {
                 },
             },
             DependencyLocation::Remote(remote) => {
-                if let Some((config, path_url)) = self.config_at_remote_path(ingot_url, &remote)
+                if let Some((config, path_url)) = self.config_at_remote_path(&remote)
                     && matches!(config, Config::Workspace(_))
                 {
                     self.report_error(IngotInitDiagnostics::WorkspacePathRequiresSelection {
@@ -320,7 +322,7 @@ impl<'a> IngotHandler<'a> {
                 }
             }
             DependencyLocation::Remote(remote) => {
-                let git = GitResolver::new(remote_checkout_root(ingot_url));
+                let git = GitResolver::new(self.remote_checkout_root.clone());
                 let description =
                     GitDescription::new(remote.source.clone(), remote.rev.to_string());
                 let checkout = match git.ensure_checkout_resource(&description) {
@@ -737,12 +739,8 @@ impl<'a> IngotHandler<'a> {
         dependencies
     }
 
-    fn config_at_remote_path(
-        &mut self,
-        ingot_url: &Url,
-        remote: &RemoteFiles,
-    ) -> Option<(Config, Url)> {
-        let git = GitResolver::new(remote_checkout_root(ingot_url));
+    fn config_at_remote_path(&mut self, remote: &RemoteFiles) -> Option<(Config, Url)> {
+        let git = GitResolver::new(self.remote_checkout_root.clone());
         let description = GitDescription::new(remote.source.clone(), remote.rev.to_string());
         let checkout = git.ensure_checkout_resource(&description).ok()?;
         let base_path = match &remote.path {
@@ -765,39 +763,6 @@ impl<'a> ResolutionHandler<FilesResolver> for IngotHandler<'a> {
     fn handle_resolution(&mut self, _description: &Url, resource: FilesResource) -> Self::Item {
         self.record_files_from_resource(&resource);
         resource
-    }
-}
-
-impl<'a> IngotResolutionEventHandler for IngotHandler<'a> {
-    fn on_ingot_event(&mut self, event: IngotResolutionEvent) {
-        match event {
-            IngotResolutionEvent::RemoteCheckoutStart { description } => {
-                if self.trace_enabled {
-                    tracing::info!(target: "resolver", "Checking out {description}");
-                }
-                if self.stdout_enabled {
-                    eprintln!("Checking out {description}");
-                }
-            }
-            IngotResolutionEvent::RemoteCheckoutComplete {
-                ingot_url,
-                reused_checkout,
-                ..
-            } => {
-                if reused_checkout {
-                    if self.trace_enabled {
-                        tracing::debug!(target: "resolver", "Using cached checkout {}", ingot_url);
-                    }
-                    return;
-                }
-                if self.trace_enabled {
-                    tracing::info!(target: "resolver", "✅ Checked out {}", ingot_url);
-                }
-                if self.stdout_enabled {
-                    eprintln!("✅ Checked out {}", ingot_url);
-                }
-            }
-        }
     }
 }
 
@@ -824,6 +789,37 @@ impl<'a> ResolutionHandler<IngotResolverImpl> for IngotHandler<'a> {
                         ingot_url,
                         error: diagnostic.to_string(),
                     });
+                }
+            }
+        }
+    }
+
+    fn on_resolution_event(&mut self, event: IngotResolutionEvent) {
+        match event {
+            IngotResolutionEvent::RemoteCheckoutStart { description } => {
+                if self.trace_enabled {
+                    tracing::info!(target: "resolver", "Checking out {description}");
+                }
+                if self.stdout_enabled {
+                    eprintln!("Checking out {description}");
+                }
+            }
+            IngotResolutionEvent::RemoteCheckoutComplete {
+                ingot_url,
+                reused_checkout,
+                ..
+            } => {
+                if reused_checkout {
+                    if self.trace_enabled {
+                        tracing::debug!(target: "resolver", "Using cached checkout {}", ingot_url);
+                    }
+                    return;
+                }
+                if self.trace_enabled {
+                    tracing::info!(target: "resolver", "✅ Checked out {}", ingot_url);
+                }
+                if self.stdout_enabled {
+                    eprintln!("✅ Checked out {}", ingot_url);
                 }
             }
         }

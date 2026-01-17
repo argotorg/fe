@@ -9,7 +9,6 @@ use crate::Resolver;
 
 type BackEdges<E> = Vec<(NodeIndex, E)>;
 type UnresolvedMap<D, P, E> = IndexMap<D, (P, BackEdges<E>)>;
-
 pub trait GraphResolutionHandler<D, R> {
     type Item;
 
@@ -133,7 +132,11 @@ where
             tracing::warn!(target: "resolver", "Graph resolution failed: root node is unresolvable");
             Err(UnresolvableRootNode)
         } else {
-            tracing::info!(target: "resolver", "Graph resolution completed successfully with {} nodes", graph.node_count());
+            tracing::info!(
+                target: "resolver",
+                "Graph resolution completed successfully with {} nodes",
+                graph.node_count()
+            );
             let result = handler.handle_graph_resolution(root_node, graph);
             Ok(result)
         }

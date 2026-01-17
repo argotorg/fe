@@ -233,6 +233,7 @@ impl Resolver for GitResolver {
     type Resource = GitResource;
     type Error = GitResolutionError;
     type Diagnostic = GitResolutionDiagnostic;
+    type Event = ();
 
     fn resolve<H>(
         &mut self,

@@ -14,6 +14,7 @@ pub trait Resolver: Sized {
     type Resource;
     type Error;
     type Diagnostic;
+    type Event;
 
     fn resolve<H>(
         &mut self,
@@ -33,6 +34,8 @@ where
     fn on_resolution_start(&mut self, _description: &R::Description) {}
 
     fn on_resolution_diagnostic(&mut self, _diagnostic: R::Diagnostic) {}
+
+    fn on_resolution_event(&mut self, _event: R::Event) {}
 
     fn on_resolution_error(&mut self, _description: &R::Description, _error: R::Error) {}
 
