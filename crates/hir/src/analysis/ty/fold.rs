@@ -65,6 +65,27 @@ impl<'db> TyFoldable<'db> for TyId<'db> {
                     Evaluated(val, ty) => {
                         let ty = folder.fold_ty(db, *ty);
                         let val = match val {
+                            EvaluatedConstTy::Tuple(elems) => EvaluatedConstTy::Tuple(
+                                elems
+                                    .iter()
+                                    .copied()
+                                    .map(|elem| folder.fold_ty(db, elem))
+                                    .collect(),
+                            ),
+                            EvaluatedConstTy::Array(elems) => EvaluatedConstTy::Array(
+                                elems
+                                    .iter()
+                                    .copied()
+                                    .map(|elem| folder.fold_ty(db, elem))
+                                    .collect(),
+                            ),
+                            EvaluatedConstTy::Record(fields) => EvaluatedConstTy::Record(
+                                fields
+                                    .iter()
+                                    .copied()
+                                    .map(|field| folder.fold_ty(db, field))
+                                    .collect(),
+                            ),
                             EvaluatedConstTy::ConstFnCall {
                                 func,
                                 generic_args,

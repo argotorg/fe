@@ -9,14 +9,14 @@ use crate::analysis::{
         const_ty::{ConstTyData, ConstTyId, EvaluatedConstTy},
         fold::{TyFoldable, TyFolder},
         trait_resolution::PredicateListId,
-        ty_check::{ConstRef, LocalBinding, TypedBody, check_func_body},
+        ty_check::{ConstRef, LocalBinding, RecordLike, TypedBody, check_anon_const_body, check_func_body},
         ty_def::{InvalidCause, PrimTy, TyBase, TyData, TyId, prim_int_bits},
     },
     HirAnalysisDb,
 };
 use crate::hir_def::{
-    Body, CallableDef, Expr, ExprId, IntegerId, LitKind, Partial, Pat, PatId, PathId, Stmt,
-    StmtId,
+    Body, CallableDef, Expr, ExprId, Field, IntegerId, LitKind, Partial, Pat, PatId, PathId, Stmt,
+    StmtId, VariantKind,
     expr::{ArithBinOp, BinOp, CompBinOp, LogicalBinOp, UnOp},
 };
 
@@ -44,7 +44,6 @@ pub(crate) struct CtfeInterpreter<'db> {
 
 #[derive(Debug, Clone)]
 enum Value<'db> {
-    Unit,
     Const(ConstTyId<'db>),
 }
 
@@ -81,7 +80,7 @@ impl<'db> CtfeInterpreter<'db> {
         let out = match out {
             Outcome::Return(v) | Outcome::Value(v) => v,
         };
-        value_as_const(out, body, root)
+        Ok(value_as_const(out))
     }
 
     fn tick(&mut self, body: Body<'db>, expr: ExprId) -> Result<(), InvalidCause<'db>> {
@@ -154,13 +153,29 @@ impl<'db> CtfeInterpreter<'db> {
                 } else if let Some(else_) = else_ {
                     self.eval_expr(body, typed_body, generic_args, env, *else_)
                 } else {
-                    Ok(Outcome::Value(Value::Unit))
+                    Ok(Outcome::Value(Value::Const(unit_const(self.db))))
                 }
             }
 
             Expr::Block(stmts) => self.eval_block(body, typed_body, generic_args, env, expr, stmts),
 
             Expr::Call(_, _) => self.eval_call_expr(body, typed_body, generic_args, env, expr),
+
+            Expr::Tuple(elems) => self.eval_tuple(body, typed_body, generic_args, env, expr, elems),
+
+            Expr::Array(elems) => self.eval_array(body, typed_body, generic_args, env, expr, elems),
+
+            Expr::ArrayRep(elem, len) => {
+                self.eval_array_rep(body, typed_body, generic_args, env, expr, *elem, len)
+            }
+
+            Expr::RecordInit(path, fields) => {
+                self.eval_record_init(body, typed_body, generic_args, env, expr, path, fields)
+            }
+
+            Expr::Field(lhs, field) => {
+                self.eval_field(body, typed_body, generic_args, env, expr, *lhs, field)
+            }
 
             _ => Err(InvalidCause::ConstEvalUnsupported { body, expr }),
         }
@@ -176,7 +191,7 @@ impl<'db> CtfeInterpreter<'db> {
         stmts: &[StmtId],
     ) -> Result<Outcome<'db>, InvalidCause<'db>> {
         if stmts.is_empty() {
-            return Ok(Outcome::Value(Value::Unit));
+            return Ok(Outcome::Value(Value::Const(unit_const(self.db))));
         }
 
         for (idx, stmt) in stmts.iter().enumerate() {
@@ -218,7 +233,7 @@ impl<'db> CtfeInterpreter<'db> {
                     Outcome::Return(v) => return Ok(Outcome::Return(v)),
                 };
                 self.bind_pat(body, typed_body, env, *pat, out)?;
-                Ok(Outcome::Value(Value::Unit))
+                Ok(Outcome::Value(Value::Const(unit_const(self.db))))
             }
 
             Stmt::Expr(expr) => self.eval_expr(body, typed_body, generic_args, env, *expr),
@@ -227,7 +242,7 @@ impl<'db> CtfeInterpreter<'db> {
                 let out = if let Some(expr) = expr {
                     self.eval_expr(body, typed_body, generic_args, env, *expr)?
                 } else {
-                    Outcome::Value(Value::Unit)
+                    Outcome::Value(Value::Const(unit_const(self.db)))
                 };
                 let value = match out {
                     Outcome::Value(v) | Outcome::Return(v) => v,
@@ -464,7 +479,37 @@ impl<'db> CtfeInterpreter<'db> {
                 Ok(Outcome::Value(Value::Const(out)))
             }
 
-            BinOp::Index => Err(InvalidCause::ConstEvalUnsupported { body, expr }),
+            BinOp::Index => {
+                let lhs = self.eval_expr(body, typed_body, generic_args, env, lhs_expr)?;
+                let lhs = match lhs {
+                    Outcome::Value(v) => v,
+                    Outcome::Return(v) => return Ok(Outcome::Return(v)),
+                };
+                let rhs = self.eval_expr(body, typed_body, generic_args, env, rhs_expr)?;
+                let rhs = match rhs {
+                    Outcome::Value(v) => v,
+                    Outcome::Return(v) => return Ok(Outcome::Return(v)),
+                };
+
+                let idx = value_as_int(self.db, rhs, body, expr)?;
+                let Some(idx) = idx.to_usize() else {
+                    return Err(InvalidCause::ConstEvalUnsupported { body, expr });
+                };
+
+                let lhs_const = value_as_const(lhs);
+                match lhs_const.data(self.db) {
+                    ConstTyData::Evaluated(EvaluatedConstTy::Array(elems), _) => {
+                        let Some(elem) = elems.get(idx).copied() else {
+                            return Err(InvalidCause::ConstEvalUnsupported { body, expr });
+                        };
+                        let TyData::ConstTy(const_ty) = elem.data(self.db) else {
+                            return Err(InvalidCause::ConstEvalUnsupported { body, expr });
+                        };
+                        Ok(Outcome::Value(Value::Const(*const_ty)))
+                    }
+                    _ => Err(InvalidCause::ConstEvalUnsupported { body, expr }),
+                }
+            }
         }
     }
 
@@ -539,6 +584,234 @@ impl<'db> CtfeInterpreter<'db> {
         ))
     }
 
+    fn eval_tuple(
+        &mut self,
+        body: Body<'db>,
+        typed_body: &TypedBody<'db>,
+        generic_args: &[TyId<'db>],
+        env: &mut Env<'db>,
+        expr: ExprId,
+        elems: &[ExprId],
+    ) -> Result<Outcome<'db>, InvalidCause<'db>> {
+        let mut values = Vec::with_capacity(elems.len());
+        for &elem_expr in elems {
+            let out = self.eval_expr(body, typed_body, generic_args, env, elem_expr)?;
+            let out = match out {
+                Outcome::Value(v) => v,
+                Outcome::Return(v) => return Ok(Outcome::Return(v)),
+            };
+            let const_ty = value_as_const(out);
+            values.push(TyId::const_ty(self.db, const_ty));
+        }
+
+        let ty = typed_body.expr_ty(self.db, expr);
+        let const_ty = ConstTyId::new(
+            self.db,
+            ConstTyData::Evaluated(EvaluatedConstTy::Tuple(values), ty),
+        );
+        Ok(Outcome::Value(Value::Const(const_ty)))
+    }
+
+    fn eval_array(
+        &mut self,
+        body: Body<'db>,
+        typed_body: &TypedBody<'db>,
+        generic_args: &[TyId<'db>],
+        env: &mut Env<'db>,
+        expr: ExprId,
+        elems: &[ExprId],
+    ) -> Result<Outcome<'db>, InvalidCause<'db>> {
+        let mut values = Vec::with_capacity(elems.len());
+        for &elem_expr in elems {
+            let out = self.eval_expr(body, typed_body, generic_args, env, elem_expr)?;
+            let out = match out {
+                Outcome::Value(v) => v,
+                Outcome::Return(v) => return Ok(Outcome::Return(v)),
+            };
+            let const_ty = value_as_const(out);
+            values.push(TyId::const_ty(self.db, const_ty));
+        }
+
+        let ty = typed_body.expr_ty(self.db, expr);
+        let const_ty = ConstTyId::new(
+            self.db,
+            ConstTyData::Evaluated(EvaluatedConstTy::Array(values), ty),
+        );
+        Ok(Outcome::Value(Value::Const(const_ty)))
+    }
+
+    fn eval_array_rep(
+        &mut self,
+        body: Body<'db>,
+        typed_body: &TypedBody<'db>,
+        generic_args: &[TyId<'db>],
+        env: &mut Env<'db>,
+        expr: ExprId,
+        elem_expr: ExprId,
+        len: &Partial<Body<'db>>,
+    ) -> Result<Outcome<'db>, InvalidCause<'db>> {
+        let Some(len_body) = len.to_opt() else {
+            return Err(InvalidCause::ParseError);
+        };
+
+        let expected_len_ty = TyId::new(self.db, TyData::TyBase(TyBase::Prim(PrimTy::Usize)));
+        let typed_len_body = check_anon_const_body(self.db, len_body, expected_len_ty)
+            .1
+            .clone();
+
+        let len_const = self.eval_const_body(len_body, &typed_len_body)?;
+        let ConstTyData::Evaluated(EvaluatedConstTy::LitInt(len), _) = len_const.data(self.db)
+        else {
+            return Err(InvalidCause::ConstEvalUnsupported { body, expr });
+        };
+        let Some(len) = len.data(self.db).to_usize() else {
+            return Err(InvalidCause::ConstEvalUnsupported { body, expr });
+        };
+
+        let out = self.eval_expr(body, typed_body, generic_args, env, elem_expr)?;
+        let out = match out {
+            Outcome::Value(v) => v,
+            Outcome::Return(v) => return Ok(Outcome::Return(v)),
+        };
+        let elem_const = value_as_const(out);
+        let elem_const = TyId::const_ty(self.db, elem_const);
+
+        let values = std::iter::repeat(elem_const).take(len).collect::<Vec<_>>();
+        let ty = typed_body.expr_ty(self.db, expr);
+        let const_ty = ConstTyId::new(
+            self.db,
+            ConstTyData::Evaluated(EvaluatedConstTy::Array(values), ty),
+        );
+        Ok(Outcome::Value(Value::Const(const_ty)))
+    }
+
+    fn eval_record_init(
+        &mut self,
+        body: Body<'db>,
+        typed_body: &TypedBody<'db>,
+        generic_args: &[TyId<'db>],
+        env: &mut Env<'db>,
+        expr: ExprId,
+        path: &Partial<PathId<'db>>,
+        fields: &[Field<'db>],
+    ) -> Result<Outcome<'db>, InvalidCause<'db>> {
+        let Partial::Present(path) = path else {
+            return Err(InvalidCause::ParseError);
+        };
+
+        let assumptions = PredicateListId::empty_list(self.db);
+        let resolved =
+            resolve_path(self.db, *path, body.scope(), assumptions, true)
+                .map_err(|_| InvalidCause::ConstEvalUnsupported { body, expr })?;
+
+        let record_like = match resolved {
+            PathRes::Ty(ty) | PathRes::TyAlias(_, ty) => RecordLike::from_ty(ty),
+            PathRes::EnumVariant(variant) => RecordLike::from_variant(variant),
+            _ => return Err(InvalidCause::ConstEvalUnsupported { body, expr }),
+        };
+
+        if !record_like.is_record(self.db) {
+            return Err(InvalidCause::ConstEvalUnsupported { body, expr });
+        }
+
+        let field_count = match &record_like {
+            RecordLike::Type(ty) => ty.field_count(self.db),
+            RecordLike::EnumVariant(variant) => match variant.kind(self.db) {
+                VariantKind::Record(fields) => fields.data(self.db).len(),
+                _ => return Err(InvalidCause::ConstEvalUnsupported { body, expr }),
+            },
+        };
+
+        let mut values = vec![None; field_count];
+        for field in fields {
+            let Some(label) = field.label_eagerly(self.db, body) else {
+                return Err(InvalidCause::ConstEvalUnsupported { body, expr });
+            };
+            let Some(idx) = record_like.record_field_idx(self.db, label) else {
+                return Err(InvalidCause::ConstEvalUnsupported { body, expr });
+            };
+            let out = self.eval_expr(body, typed_body, generic_args, env, field.expr)?;
+            let out = match out {
+                Outcome::Value(v) => v,
+                Outcome::Return(v) => return Ok(Outcome::Return(v)),
+            };
+            let const_ty = value_as_const(out);
+            values[idx] = Some(TyId::const_ty(self.db, const_ty));
+        }
+
+        if values.iter().any(|v| v.is_none()) {
+            return Err(InvalidCause::ConstEvalUnsupported { body, expr });
+        }
+
+        let values = values.into_iter().flatten().collect::<Vec<_>>();
+        let ty = typed_body.expr_ty(self.db, expr);
+        let const_ty = ConstTyId::new(
+            self.db,
+            ConstTyData::Evaluated(EvaluatedConstTy::Record(values), ty),
+        );
+        Ok(Outcome::Value(Value::Const(const_ty)))
+    }
+
+    fn eval_field(
+        &mut self,
+        body: Body<'db>,
+        typed_body: &TypedBody<'db>,
+        generic_args: &[TyId<'db>],
+        env: &mut Env<'db>,
+        expr: ExprId,
+        lhs_expr: ExprId,
+        field: &Partial<crate::hir_def::FieldIndex<'db>>,
+    ) -> Result<Outcome<'db>, InvalidCause<'db>> {
+        let Some(field) = field.to_opt() else {
+            return Err(InvalidCause::ParseError);
+        };
+
+        let out = self.eval_expr(body, typed_body, generic_args, env, lhs_expr)?;
+        let out = match out {
+            Outcome::Value(v) => v,
+            Outcome::Return(v) => return Ok(Outcome::Return(v)),
+        };
+        let lhs_const = value_as_const(out);
+
+        match (lhs_const.data(self.db), field) {
+            (
+                ConstTyData::Evaluated(EvaluatedConstTy::Tuple(elems), _),
+                crate::hir_def::FieldIndex::Index(index),
+            ) => {
+                let Some(index) = index.data(self.db).to_usize() else {
+                    return Err(InvalidCause::ConstEvalUnsupported { body, expr });
+                };
+                let Some(elem) = elems.get(index).copied() else {
+                    return Err(InvalidCause::ConstEvalUnsupported { body, expr });
+                };
+                let TyData::ConstTy(const_ty) = elem.data(self.db) else {
+                    return Err(InvalidCause::ConstEvalUnsupported { body, expr });
+                };
+                Ok(Outcome::Value(Value::Const(*const_ty)))
+            }
+
+            (
+                ConstTyData::Evaluated(EvaluatedConstTy::Record(fields), _),
+                crate::hir_def::FieldIndex::Ident(name),
+            ) => {
+                let lhs_ty = typed_body.expr_ty(self.db, lhs_expr);
+                let record_like = RecordLike::from_ty(lhs_ty);
+                let Some(idx) = record_like.record_field_idx(self.db, name) else {
+                    return Err(InvalidCause::ConstEvalUnsupported { body, expr });
+                };
+                let Some(field) = fields.get(idx).copied() else {
+                    return Err(InvalidCause::ConstEvalUnsupported { body, expr });
+                };
+                let TyData::ConstTy(const_ty) = field.data(self.db) else {
+                    return Err(InvalidCause::ConstEvalUnsupported { body, expr });
+                };
+                Ok(Outcome::Value(Value::Const(*const_ty)))
+            }
+
+            _ => Err(InvalidCause::ConstEvalUnsupported { body, expr }),
+        }
+    }
+
     fn eval_call_expr(
         &mut self,
         body: Body<'db>,
@@ -568,7 +841,7 @@ impl<'db> CtfeInterpreter<'db> {
                 Outcome::Value(v) => v,
                 Outcome::Return(v) => return Ok(Outcome::Return(v)),
             };
-            let out = value_as_const(out, body, expr)?;
+            let out = value_as_const(out);
             value_args.push(out);
         }
 
@@ -646,7 +919,7 @@ impl<'db> CtfeInterpreter<'db> {
         let out = match out {
             Outcome::Return(v) | Outcome::Value(v) => v,
         };
-        value_as_const(out, body, root)
+        Ok(value_as_const(out))
     }
 }
 
@@ -685,14 +958,16 @@ fn instantiate_typed_body<'db>(
     typed_body.fold_with(db, &mut subst)
 }
 
-fn value_as_const<'db>(
-    value: Value<'db>,
-    body: Body<'db>,
-    expr: ExprId,
-) -> Result<ConstTyId<'db>, InvalidCause<'db>> {
+fn unit_const<'db>(db: &'db dyn HirAnalysisDb) -> ConstTyId<'db> {
+    ConstTyId::new(
+        db,
+        ConstTyData::Evaluated(EvaluatedConstTy::Unit, TyId::unit(db)),
+    )
+}
+
+fn value_as_const<'db>(value: Value<'db>) -> ConstTyId<'db> {
     match value {
-        Value::Const(c) => Ok(c),
-        Value::Unit => Err(InvalidCause::ConstEvalUnsupported { body, expr }),
+        Value::Const(c) => c,
     }
 }
 
@@ -702,7 +977,7 @@ fn value_as_bool<'db>(
     body: Body<'db>,
     expr: ExprId,
 ) -> Result<bool, InvalidCause<'db>> {
-    let value = value_as_const(value, body, expr)?;
+    let value = value_as_const(value);
     match value.data(db) {
         ConstTyData::Evaluated(EvaluatedConstTy::LitBool(flag), _) => Ok(*flag),
         _ => Err(InvalidCause::ConstEvalUnsupported { body, expr }),
@@ -715,7 +990,7 @@ fn value_as_int<'db>(
     body: Body<'db>,
     expr: ExprId,
 ) -> Result<BigUint, InvalidCause<'db>> {
-    let value = value_as_const(value, body, expr)?;
+    let value = value_as_const(value);
     match value.data(db) {
         ConstTyData::Evaluated(EvaluatedConstTy::LitInt(int_id), _) => Ok(int_id.data(db).clone()),
         _ => Err(InvalidCause::ConstEvalUnsupported { body, expr }),

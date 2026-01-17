@@ -1,7 +1,7 @@
 use crate::analysis::HirAnalysisDb;
 use crate::analysis::ty::diagnostics::{BodyDiag, FuncBodyDiag};
 use crate::analysis::ty::ty_check::TypedBody;
-use crate::hir_def::{Body, CallableDef, Expr, ExprId, Func, Partial, Pat, Stmt, StmtId, expr::BinOp};
+use crate::hir_def::{Body, CallableDef, Expr, ExprId, Func, Partial, Pat, Stmt, StmtId};
 
 pub(crate) fn check_const_fn_body<'db>(
     db: &'db dyn HirAnalysisDb,
@@ -102,10 +102,7 @@ impl<'db> ConstFnChecker<'db, '_> {
                     self.check_stmt(*stmt);
                 }
             }
-            Expr::Bin(lhs, rhs, op) => {
-                if matches!(op, BinOp::Index) {
-                    self.push(BodyDiag::ConstFnAggregateNotAllowed(expr.span(self.body).into()));
-                }
+            Expr::Bin(lhs, rhs, _) => {
                 self.check_expr(*lhs);
                 self.check_expr(*rhs);
             }
@@ -172,13 +169,18 @@ impl<'db> ConstFnChecker<'db, '_> {
             Expr::With(_bindings, _body) => {
                 self.push(BodyDiag::ConstFnWithNotAllowed(expr.span(self.body).into()));
             }
-            Expr::RecordInit(_, _)
-            | Expr::Field(_, _)
-            | Expr::Tuple(_)
-            | Expr::Array(_)
-            | Expr::ArrayRep(_, _) => {
-                self.push(BodyDiag::ConstFnAggregateNotAllowed(expr.span(self.body).into()));
+            Expr::RecordInit(_path, fields) => {
+                for field in fields {
+                    self.check_expr(field.expr);
+                }
             }
+            Expr::Field(lhs, _) => self.check_expr(*lhs),
+            Expr::Tuple(elems) | Expr::Array(elems) => {
+                for elem in elems {
+                    self.check_expr(*elem);
+                }
+            }
+            Expr::ArrayRep(elem, _len) => self.check_expr(*elem),
         }
     }
 }
