@@ -253,6 +253,8 @@ pub enum SyntaxKind {
     BinExpr,
     /// `!x`
     UnExpr,
+    /// `expr as Type`
+    CastExpr,
     /// `foo(x, y)`
     CallExpr,
     /// `(arg: 1, y)`
@@ -669,6 +671,7 @@ impl SyntaxKind {
             SyntaxKind::Lit => "literal",
             SyntaxKind::BinExpr => "binary expression",
             SyntaxKind::UnExpr => "unary expression",
+            SyntaxKind::CastExpr => "cast expression",
             SyntaxKind::CallExpr => "function call expression",
             SyntaxKind::CallArg => "function call argument",
             SyntaxKind::MethodCallExpr => "method call expression",

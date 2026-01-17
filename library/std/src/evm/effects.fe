@@ -3,7 +3,6 @@ use core::{size_of}
 use core::abi::{Abi, AbiDecoder, AbiEncoder, AbiSize, Decode, Encode}
 use core::contracts::ContractHost
 use core::message::MsgVariant
-use core::num::{__u32_as_u256}
 
 use ingot::evm::intrinsic::{
     code_region_len as intrinsic_code_region_len,
@@ -359,7 +358,7 @@ fn encode_calldata<M>(selector: u32, message: M) -> (u256, u256)
 
     // Encode the 4-byte selector into the first word (big-endian),
     // leaving the remaining 28 bytes as zeros.
-    let selector_word = __u32_as_u256(selector) << 224
+    let selector_word = (selector as u256) << 224
     ops::mstore(base, selector_word)
 
     enc.set_pos(base + selector_size)

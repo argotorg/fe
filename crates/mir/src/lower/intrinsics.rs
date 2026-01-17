@@ -104,6 +104,29 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         }
     }
 
+    /// Returns `true` if the callable definition refers to the `__bitcast` intrinsic.
+    ///
+    /// This is the generic bitcast intrinsic `__bitcast<From, To>(value: From) -> To` in core
+    /// that reinterprets bits between primitive integer types without runtime cost.
+    pub(super) fn is_cast_intrinsic(&self, func_def: CallableDef<'db>) -> bool {
+        match func_def.ingot(self.db).kind(self.db) {
+            IngotKind::Core | IngotKind::Std => {}
+            _ => return false,
+        }
+
+        let CallableDef::Func(func) = func_def else {
+            return false;
+        };
+        if func.body(self.db).is_some() {
+            return false;
+        }
+
+        let Some(name) = func_def.name(self.db) else {
+            return false;
+        };
+        name.data(self.db).as_str() == "__bitcast"
+    }
+
     /// Resolves the `code_region` target represented by an intrinsic argument path.
     ///
     /// # Parameters

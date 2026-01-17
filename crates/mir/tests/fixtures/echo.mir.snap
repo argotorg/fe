@@ -199,7 +199,7 @@ fn calldata_byteinput_word_at(v0: CallData, v1: u256) -> u256:
 
 fn sol_abi_selector_from_prefix(v0: u256) -> u32:
   bb0:
-    v1: u32 = __u256_as_u32((v0 >> 224))
+    v1: u32 = s_intdowncast_downcast_unchecked__u256_u32__6e3637cd3e911b35((v0 >> 224))
     ret v1
 
 fn sol_abi_decoder_with_base__CallData__b9ab8dc8a4b2f9e(v0: I, v1: u256) -> SolDecoder<CallData>:
@@ -262,6 +262,12 @@ fn storptr_t__effectref_from_raw__Foo__668f96d7165c93b(v0: u256) -> StorPtr<Foo>
   bb0:
     ret v0
 
+fn s_intdowncast_downcast_unchecked__u256_u32__6e3637cd3e911b35(v0: S) -> u32:
+  bb0:
+    v1: u256 = u256_intword_to_word(v0)
+    v2: u32 = u32_intword_from_word(v1)
+    ret v2
+
 fn soldecoder_i__with_base__CallData__b9ab8dc8a4b2f9e(v0: I, v1: u256) -> SolDecoder<CallData>:
   bb0:
     v3: Cursor<CallData> = cursor_i__new__CallData__b9ab8dc8a4b2f9e(v0)
@@ -314,6 +320,14 @@ fn soldecoder_i__abidecoder_read_word__CallData__b9ab8dc8a4b2f9e(v0: SolDecoder<
     v6: u256 = calldata_byteinput_word_at(v7, v8)
     store mem[&mem[v0].0].1 = v3
     ret v6
+
+fn u256_intword_to_word(v0: u256) -> u256:
+  bb0:
+    ret v0
+
+fn u32_intword_from_word(v0: u256) -> u32:
+  bb0:
+    ret v0
 
 fn cursor_i__new__CallData__b9ab8dc8a4b2f9e(v0: I) -> Cursor<CallData>:
   bb0:

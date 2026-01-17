@@ -395,6 +395,23 @@ impl ToDoc for ast::UnExpr {
     }
 }
 
+impl ToDoc for ast::CastExpr {
+    fn to_doc<'a>(&self, ctx: &'a RewriteContext<'a>) -> Doc<'a> {
+        let alloc = &ctx.alloc;
+
+        let expr = match self.expr() {
+            Some(e) => e.to_doc(ctx),
+            None => return alloc.nil(),
+        };
+        let ty = match self.ty() {
+            Some(t) => t.to_doc(ctx),
+            None => return expr,
+        };
+
+        expr.append(alloc.text(" as ")).append(ty)
+    }
+}
+
 impl ToDoc for ast::CallArg {
     fn to_doc<'a>(&self, ctx: &'a RewriteContext<'a>) -> Doc<'a> {
         let alloc = &ctx.alloc;

@@ -308,6 +308,13 @@ pub enum BodyDiag<'db> {
 
     TypeMustBeKnown(DynLazySpan<'db>),
 
+    InvalidCast {
+        primary: DynLazySpan<'db>,
+        from: TyId<'db>,
+        to: TyId<'db>,
+        hint: Option<String>,
+    },
+
     AccessedFieldNotFound {
         primary: DynLazySpan<'db>,
         given_ty: TyId<'db>,
@@ -580,6 +587,7 @@ impl<'db> BodyDiag<'db> {
             Self::AmbiguousEffect { .. } => 40,
             Self::ReturnedTypeMismatch { .. } => 13,
             Self::TypeMustBeKnown(..) => 14,
+            Self::InvalidCast { .. } => 55,
             Self::AccessedFieldNotFound { .. } => 15,
             Self::OpsTraitNotImplemented { .. } => 16,
             Self::NonAssignableExpr(..) => 17,

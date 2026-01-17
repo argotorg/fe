@@ -439,6 +439,7 @@ impl ToDoc for ast::Expr {
             ExprKind::Block(block) => block.to_doc(ctx),
             ExprKind::Bin(bin) => bin.to_doc(ctx),
             ExprKind::Un(un) => un.to_doc(ctx),
+            ExprKind::Cast(cast) => cast.to_doc(ctx),
             ExprKind::Call(call) => call.to_doc(ctx),
             ExprKind::MethodCall(method) => method.to_doc(ctx),
             ExprKind::Path(path) => path.to_doc(ctx),

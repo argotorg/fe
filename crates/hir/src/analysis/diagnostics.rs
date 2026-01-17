@@ -2254,6 +2254,43 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                 error_code,
             },
 
+            Self::InvalidCast {
+                primary,
+                from,
+                to,
+                hint,
+            } => {
+                let involves_bool = from.is_bool(db) || to.is_bool(db);
+                let mut notes = if involves_bool {
+                    vec!["casts involving `bool` are not supported".to_string()]
+                } else {
+                    vec![concat!(
+                        "try using `.downcast()` for checked narrowing/sign changes, ",
+                        "or `.downcast_truncate()` / `.downcast_saturate()` / `.downcast_unchecked()`"
+                    )
+                    .to_string()]
+                };
+                if let Some(hint) = hint {
+                    notes.push(hint.clone());
+                }
+
+                CompleteDiagnostic {
+                    severity: Severity::Error,
+                    message: "cast is not provably lossless".to_string(),
+                    sub_diagnostics: vec![SubDiagnostic {
+                        style: LabelStyle::Primary,
+                        message: format!(
+                            "cannot cast `{}` to `{}` with `as`",
+                            from.pretty_print(db),
+                            to.pretty_print(db),
+                        ),
+                        span: primary.resolve(db),
+                    }],
+                    notes,
+                    error_code,
+                }
+            }
+
             Self::AccessedFieldNotFound {
                 primary,
                 given_ty,

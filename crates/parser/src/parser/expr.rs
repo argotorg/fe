@@ -68,6 +68,10 @@ fn parse_expr_with_min_bp<S: TokenStream>(
                             continue;
                         }
                     }
+                    SyntaxKind::AsKw => {
+                        parser.parse_cp(CastExprScope::default(), Some(checkpoint))?;
+                        continue;
+                    }
                     _ => unreachable!(),
                 }
             }
@@ -135,6 +139,7 @@ fn postfix_binding_power<S: TokenStream>(parser: &mut Parser<S>) -> Option<u8> {
     parser.set_newline_as_trivia(false);
     let power = match parser.current_kind() {
         Some(LBracket | LParen) => Some(147),
+        Some(AsKw) => Some(146),
         _ => None,
     };
 
@@ -217,6 +222,18 @@ impl super::Parse for UnExprScope {
         let bp = prefix_binding_power(kind).unwrap();
         parser.bump();
         parse_expr_with_min_bp(parser, bp, self.allow_struct_init)
+    }
+}
+
+define_scope! { CastExprScope, CastExpr }
+impl super::Parse for CastExprScope {
+    type Error = Recovery<ErrProof>;
+
+    fn parse<S: TokenStream>(&mut self, parser: &mut Parser<S>) -> Result<(), Self::Error> {
+        parser.set_newline_as_trivia(false);
+        parser.bump_expected(SyntaxKind::AsKw);
+        super::type_::parse_type(parser, None)?;
+        Ok(())
     }
 }
 

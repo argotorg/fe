@@ -1,0 +1,31 @@
+use core::num::IntDowncast
+use core::option::Option
+use std::evm::effects::assert
+use std::evm::Evm
+
+#[test]
+fn test_int_downcast() uses (mut evm: Evm) {
+    let x: u256 = 256
+    let y: Option<u8> = x.downcast()
+    assert(y.is_none())
+
+    let t: u8 = x.downcast_truncate()
+    assert(t == 0)
+
+    let s: u8 = x.downcast_saturate()
+    assert(s == 255)
+
+    let in_range: u256 = 200
+    let u: u8 = in_range.downcast_unchecked()
+    assert(u == 200)
+
+    let neg: i256 = -1
+    let neg_checked: Option<u8> = neg.downcast()
+    assert(neg_checked.is_none())
+
+    let t2: u8 = neg.downcast_truncate()
+    assert(t2 == 255)
+
+    let s2: u8 = neg.downcast_saturate()
+    assert(s2 == 0)
+}

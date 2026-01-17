@@ -10,6 +10,7 @@ ast_node! {
     SK::BlockExpr
     | SK::BinExpr
     | SK::UnExpr
+    | SK::CastExpr
     | SK::CallExpr
     | SK::MethodCallExpr
     | SK::PathExpr
@@ -35,6 +36,7 @@ impl Expr {
             SK::BlockExpr => ExprKind::Block(AstNode::cast(self.syntax().clone()).unwrap()),
             SK::BinExpr => ExprKind::Bin(AstNode::cast(self.syntax().clone()).unwrap()),
             SK::UnExpr => ExprKind::Un(AstNode::cast(self.syntax().clone()).unwrap()),
+            SK::CastExpr => ExprKind::Cast(AstNode::cast(self.syntax().clone()).unwrap()),
             SK::CallExpr => ExprKind::Call(AstNode::cast(self.syntax().clone()).unwrap()),
             SK::MethodCallExpr => {
                 ExprKind::MethodCall(AstNode::cast(self.syntax().clone()).unwrap())
@@ -119,6 +121,28 @@ impl UnExpr {
             rowan::NodeOrToken::Token(token) => UnOp::from_token(token),
             rowan::NodeOrToken::Node(_) => None,
         })
+    }
+}
+
+ast_node! {
+    /// `expr as Type`
+    pub struct CastExpr,
+    SK::CastExpr
+}
+impl CastExpr {
+    /// Returns the cast operand.
+    pub fn expr(&self) -> Option<Expr> {
+        support::child(self.syntax())
+    }
+
+    /// Returns the cast target type.
+    pub fn ty(&self) -> Option<super::Type> {
+        support::child(self.syntax())
+    }
+
+    /// Returns the `as` token.
+    pub fn as_kw(&self) -> Option<SyntaxToken> {
+        support::token(self.syntax(), SK::AsKw)
     }
 }
 
@@ -432,6 +456,7 @@ pub enum ExprKind {
     Block(BlockExpr),
     Bin(BinExpr),
     Un(UnExpr),
+    Cast(CastExpr),
     Call(CallExpr),
     MethodCall(MethodCallExpr),
     Path(PathExpr),

@@ -76,7 +76,7 @@ function $__u32_as_u256($x) -> ret {
   leave
 }
 function $test_cast_shim_collision() -> ret {
-  let v0 := 42
+  let v0 := $__u32_as_u256(42)
   ret := v0
   leave
 }

@@ -1,31 +1,4 @@
-use ingot::num::{
-    __i128_as_u256,
-    __i16_as_u256,
-    __i256_as_u256,
-    __i32_as_u256,
-    __i64_as_u256,
-    __i8_as_u256,
-    __isize_as_u256,
-    __u128_as_u256,
-    __u16_as_u256,
-    __u256_as_i128,
-    __u256_as_i16,
-    __u256_as_i256,
-    __u256_as_i32,
-    __u256_as_i64,
-    __u256_as_i8,
-    __u256_as_isize,
-    __u256_as_u128,
-    __u256_as_u16,
-    __u256_as_u32,
-    __u256_as_u64,
-    __u256_as_u8,
-    __u256_as_usize,
-    __u32_as_u256,
-    __u64_as_u256,
-    __u8_as_u256,
-    __usize_as_u256,
-}
+use ingot::num::IntDowncast
 
 /// Errors returned by ABI decoding/encoding helpers.
 pub enum AbiError {
@@ -448,157 +421,157 @@ impl<A: Abi> Encode<A> for bool {
 
 impl<A: Abi> Decode<A> for u8 {
     fn decode<D: AbiDecoder<A>>(mut _ d: D) -> Self {
-        __u256_as_u8(d.read_word())
+        d.read_word().downcast_unchecked()
     }
 }
 
 impl<A: Abi> Encode<A> for u8 {
     fn encode<E: AbiEncoder<A>>(self, mut _ e: E) {
-        e.write_word(__u8_as_u256(self))
+        e.write_word(self as u256)
     }
 }
 
 impl<A: Abi> Decode<A> for u16 {
     fn decode<D: AbiDecoder<A>>(mut _ d: D) -> Self {
-        __u256_as_u16(d.read_word())
+        d.read_word().downcast_unchecked()
     }
 }
 
 impl<A: Abi> Encode<A> for u16 {
     fn encode<E: AbiEncoder<A>>(self, mut _ e: E) {
-        e.write_word(__u16_as_u256(self))
+        e.write_word(self as u256)
     }
 }
 
 impl<A: Abi> Decode<A> for u32 {
     fn decode<D: AbiDecoder<A>>(mut _ d: D) -> Self {
-        __u256_as_u32(d.read_word())
+        d.read_word().downcast_unchecked()
     }
 }
 
 impl<A: Abi> Encode<A> for u32 {
     fn encode<E: AbiEncoder<A>>(self, mut _ e: E) {
-        e.write_word(__u32_as_u256(self))
+        e.write_word(self as u256)
     }
 }
 
 impl<A: Abi> Decode<A> for u64 {
     fn decode<D: AbiDecoder<A>>(mut _ d: D) -> Self {
-        __u256_as_u64(d.read_word())
+        d.read_word().downcast_unchecked()
     }
 }
 
 impl<A: Abi> Encode<A> for u64 {
     fn encode<E: AbiEncoder<A>>(self, mut _ e: E) {
-        e.write_word(__u64_as_u256(self))
+        e.write_word(self as u256)
     }
 }
 
 impl<A: Abi> Decode<A> for u128 {
     fn decode<D: AbiDecoder<A>>(mut _ d: D) -> Self {
-        __u256_as_u128(d.read_word())
+        d.read_word().downcast_unchecked()
     }
 }
 
 impl<A: Abi> Encode<A> for u128 {
     fn encode<E: AbiEncoder<A>>(self, mut _ e: E) {
-        e.write_word(__u128_as_u256(self))
+        e.write_word(self as u256)
     }
 }
 
 impl<A: Abi> Decode<A> for i8 {
     fn decode<D: AbiDecoder<A>>(mut _ d: D) -> Self {
-        __u256_as_i8(d.read_word())
+        d.read_word().downcast_unchecked()
     }
 }
 
 impl<A: Abi> Encode<A> for i8 {
     fn encode<E: AbiEncoder<A>>(self, mut _ e: E) {
-        e.write_word(__i8_as_u256(self))
+        e.write_word(self.downcast_unchecked())
     }
 }
 
 impl<A: Abi> Decode<A> for i16 {
     fn decode<D: AbiDecoder<A>>(mut _ d: D) -> Self {
-        __u256_as_i16(d.read_word())
+        d.read_word().downcast_unchecked()
     }
 }
 
 impl<A: Abi> Encode<A> for i16 {
     fn encode<E: AbiEncoder<A>>(self, mut _ e: E) {
-        e.write_word(__i16_as_u256(self))
+        e.write_word(self.downcast_unchecked())
     }
 }
 
 impl<A: Abi> Decode<A> for i32 {
     fn decode<D: AbiDecoder<A>>(mut _ d: D) -> Self {
-        __u256_as_i32(d.read_word())
+        d.read_word().downcast_unchecked()
     }
 }
 
 impl<A: Abi> Encode<A> for i32 {
     fn encode<E: AbiEncoder<A>>(self, mut _ e: E) {
-        e.write_word(__i32_as_u256(self))
+        e.write_word(self.downcast_unchecked())
     }
 }
 
 impl<A: Abi> Decode<A> for i64 {
     fn decode<D: AbiDecoder<A>>(mut _ d: D) -> Self {
-        __u256_as_i64(d.read_word())
+        d.read_word().downcast_unchecked()
     }
 }
 
 impl<A: Abi> Encode<A> for i64 {
     fn encode<E: AbiEncoder<A>>(self, mut _ e: E) {
-        e.write_word(__i64_as_u256(self))
+        e.write_word(self.downcast_unchecked())
     }
 }
 
 impl<A: Abi> Decode<A> for i128 {
     fn decode<D: AbiDecoder<A>>(mut _ d: D) -> Self {
-        __u256_as_i128(d.read_word())
+        d.read_word().downcast_unchecked()
     }
 }
 
 impl<A: Abi> Encode<A> for i128 {
     fn encode<E: AbiEncoder<A>>(self, mut _ e: E) {
-        e.write_word(__i128_as_u256(self))
+        e.write_word(self.downcast_unchecked())
     }
 }
 
 impl<A: Abi> Decode<A> for i256 {
     fn decode<D: AbiDecoder<A>>(mut _ d: D) -> Self {
-        __u256_as_i256(d.read_word())
+        d.read_word().downcast_unchecked()
     }
 }
 
 impl<A: Abi> Encode<A> for i256 {
     fn encode<E: AbiEncoder<A>>(self, mut _ e: E) {
-        e.write_word(__i256_as_u256(self))
+        e.write_word(self.downcast_unchecked())
     }
 }
 
 impl<A: Abi> Decode<A> for usize {
     fn decode<D: AbiDecoder<A>>(mut _ d: D) -> Self {
-        __u256_as_usize(d.read_word())
+        d.read_word() as usize
     }
 }
 
 impl<A: Abi> Encode<A> for usize {
     fn encode<E: AbiEncoder<A>>(self, mut _ e: E) {
-        e.write_word(__usize_as_u256(self))
+        e.write_word(self as u256)
     }
 }
 
 impl<A: Abi> Decode<A> for isize {
     fn decode<D: AbiDecoder<A>>(mut _ d: D) -> Self {
-        __u256_as_isize(d.read_word())
+        d.read_word().downcast_unchecked()
     }
 }
 
 impl<A: Abi> Encode<A> for isize {
     fn encode<E: AbiEncoder<A>>(self, mut _ e: E) {
-        e.write_word(__isize_as_u256(self))
+        e.write_word(self.downcast_unchecked())
     }
 }
 

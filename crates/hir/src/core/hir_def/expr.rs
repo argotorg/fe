@@ -1,6 +1,8 @@
 use cranelift_entity::entity_impl;
 
-use super::{Body, GenericArgListId, IdentId, IntegerId, LitKind, Partial, PatId, PathId, StmtId};
+use super::{
+    Body, GenericArgListId, IdentId, IntegerId, LitKind, Partial, PatId, PathId, StmtId, TypeId,
+};
 use crate::{HirDb, span::expr::LazyExprSpan};
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, salsa::Update)]
@@ -10,6 +12,8 @@ pub enum Expr<'db> {
     /// The first `ExprId` is the lhs, the second is the rhs.
     Bin(ExprId, ExprId, BinOp),
     Un(ExprId, UnOp),
+    /// `expr as Type`
+    Cast(ExprId, Partial<TypeId<'db>>),
     /// (callee, call args)
     Call(ExprId, Vec<CallArg<'db>>),
     /// (receiver, method_name, generic args, call args)
