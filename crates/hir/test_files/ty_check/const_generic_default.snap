@@ -1,0 +1,20 @@
+---
+source: crates/hir/tests/ty_check.rs
+assertion_line: 40
+expression: res
+input_file: test_files/ty_check/const_generic_default.fe
+---
+note: 
+  ┌─ const_generic_default.fe:3:8
+  │  
+3 │   fn f() {
+  │ ╭────────^
+4 │ │     let f: Foo
+5 │ │ }
+  │ ╰─^ ()
+
+note: 
+  ┌─ const_generic_default.fe:4:9
+  │
+4 │     let f: Foo
+  │         ^ Foo<10>

@@ -1010,9 +1010,12 @@ impl<'db> GenericParamOwner<'db> {
         let mut out = Vec::new();
         let mut default_idxs = Vec::new();
         for view in self.params(db) {
-            let is_defaulted_type =
-                matches!(view.param, GenericParam::Type(tp) if tp.default_ty.is_some());
-            if is_defaulted_type {
+            let is_defaulted = match view.param {
+                GenericParam::Type(tp) => tp.default_ty.is_some(),
+                GenericParam::Const(c) => c.default.is_some(),
+            };
+
+            if is_defaulted {
                 default_idxs.push(view.idx);
             } else if !default_idxs.is_empty() {
                 for &idx in &default_idxs {

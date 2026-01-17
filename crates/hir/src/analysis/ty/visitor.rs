@@ -2,7 +2,7 @@ use common::indexmap::IndexSet;
 
 use super::{
     adt_def::AdtDef,
-    const_ty::{ConstTyData, ConstTyId},
+    const_ty::{ConstTyData, ConstTyId, EvaluatedConstTy},
     trait_def::{ImplementorId, TraitInstId},
     trait_resolution::PredicateListId,
     ty_check::ExprProp,
@@ -110,7 +110,18 @@ where
     match &const_ty.data(db) {
         ConstTyData::TyVar(var, _) => visitor.visit_var(var),
         ConstTyData::TyParam(param, ty) => visitor.visit_const_param(param, *ty),
-        ConstTyData::Evaluated(..) | ConstTyData::UnEvaluated { .. } => {}
+        ConstTyData::Evaluated(val, _) => {
+            if let EvaluatedConstTy::ConstFnCall {
+                generic_args,
+                value_args,
+                ..
+            } = val
+            {
+                generic_args.visit_with(visitor);
+                value_args.visit_with(visitor);
+            }
+        }
+        ConstTyData::UnEvaluated { .. } => {}
     }
 }
 

@@ -1,7 +1,13 @@
 extern {
-    const fn next_slot<T>() -> usize
+    const fn a() -> usize
+    const fn b() -> usize
+    const fn foo() -> usize
 }
 
-fn foo() -> usize {
-    next_slot<u32>()
-}
+struct Foo<const N: usize = a()> {}
+type F = Foo<b()>
+
+struct Transient{} // Marker type for transient address space
+
+struct Map<K, V, const SLOT: usize = foo()> {}
+type M = Map<u32, u32, foo()>
