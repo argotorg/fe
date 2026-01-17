@@ -13,7 +13,7 @@ use super::{
 use crate::analysis::{
     HirAnalysisDb,
     ty::const_expr::{ConstExpr, ConstExprId},
-    ty::const_ty::{ConstTyData, ConstTyId},
+    ty::const_ty::{ConstTyData, ConstTyId, EvaluatedConstTy},
 };
 
 pub trait TyFoldable<'db>
@@ -64,7 +64,52 @@ impl<'db> TyFoldable<'db> for TyId<'db> {
                     }
                     Evaluated(val, ty) => {
                         let ty = folder.fold_ty(db, *ty);
-                        Evaluated(val.clone(), ty)
+                        let val = match val {
+                            EvaluatedConstTy::Tuple(elems) => EvaluatedConstTy::Tuple(
+                                elems
+                                    .iter()
+                                    .copied()
+                                    .map(|elem| folder.fold_ty(db, elem))
+                                    .collect(),
+                            ),
+                            EvaluatedConstTy::Array(elems) => EvaluatedConstTy::Array(
+                                elems
+                                    .iter()
+                                    .copied()
+                                    .map(|elem| folder.fold_ty(db, elem))
+                                    .collect(),
+                            ),
+                            EvaluatedConstTy::Record(fields) => EvaluatedConstTy::Record(
+                                fields
+                                    .iter()
+                                    .copied()
+                                    .map(|field| folder.fold_ty(db, field))
+                                    .collect(),
+                            ),
+                            EvaluatedConstTy::ConstFnCall {
+                                func,
+                                generic_args,
+                                value_args,
+                            } => {
+                                let generic_args = generic_args
+                                    .iter()
+                                    .copied()
+                                    .map(|arg| folder.fold_ty(db, arg))
+                                    .collect();
+                                let value_args = value_args
+                                    .iter()
+                                    .copied()
+                                    .map(|arg| folder.fold_ty(db, arg))
+                                    .collect();
+                                EvaluatedConstTy::ConstFnCall {
+                                    func: *func,
+                                    generic_args,
+                                    value_args,
+                                }
+                            }
+                            _ => val.clone(),
+                        };
+                        Evaluated(val, ty)
                     }
                     Abstract(expr, ty) => {
                         let ty = folder.fold_ty(db, *ty);

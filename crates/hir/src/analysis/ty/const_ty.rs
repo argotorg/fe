@@ -305,6 +305,10 @@ pub enum ConstTyData<'db> {
 pub enum EvaluatedConstTy<'db> {
     LitInt(IntegerId<'db>),
     LitBool(bool),
+    Unit,
+    Tuple(Vec<TyId<'db>>),
+    Array(Vec<TyId<'db>>),
+    Record(Vec<TyId<'db>>),
     ConstFnCall {
         func: Func<'db>,
         generic_args: Vec<TyId<'db>>,
@@ -320,6 +324,31 @@ impl EvaluatedConstTy<'_> {
                 format!("{}", val.data(db))
             }
             EvaluatedConstTy::LitBool(val) => format!("{val}"),
+            EvaluatedConstTy::Unit => "()".to_string(),
+            EvaluatedConstTy::Tuple(elems) => {
+                let elems = elems
+                    .iter()
+                    .map(|elem| elem.pretty_print(db).as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                format!("({elems})")
+            }
+            EvaluatedConstTy::Array(elems) => {
+                let elems = elems
+                    .iter()
+                    .map(|elem| elem.pretty_print(db).as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                format!("[{elems}]")
+            }
+            EvaluatedConstTy::Record(fields) => {
+                let fields = fields
+                    .iter()
+                    .map(|field| field.pretty_print(db).as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                format!("{{{fields}}}")
+            }
             EvaluatedConstTy::ConstFnCall {
                 func,
                 generic_args,
