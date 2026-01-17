@@ -2,6 +2,7 @@ use common::indexmap::IndexSet;
 
 use super::{
     adt_def::AdtDef,
+    const_expr::ConstExpr,
     const_ty::{ConstTyData, ConstTyId, EvaluatedConstTy},
     trait_def::{ImplementorId, TraitInstId},
     trait_resolution::PredicateListId,
@@ -121,6 +122,16 @@ where
                 value_args.visit_with(visitor);
             }
         }
+        ConstTyData::Abstract(expr, _) => match expr.data(db) {
+            ConstExpr::ExternConstFnCall {
+                generic_args,
+                args,
+                ..
+            } => {
+                generic_args.visit_with(visitor);
+                args.visit_with(visitor);
+            }
+        },
         ConstTyData::UnEvaluated { .. } => {}
     }
 }

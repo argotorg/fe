@@ -265,11 +265,9 @@ impl<'db> WherePredicateBoundView<'db> {
 
 impl<'db> Func<'db> {
     pub fn diags_const_fn(self, db: &'db dyn HirAnalysisDb) -> Vec<TyDiagCollection<'db>> {
-        if self.is_const(db) && !self.is_extern(db) {
-            vec![TyLowerDiag::ConstFnNotImplemented(self).into()]
-        } else {
-            Vec::new()
-        }
+        // Const-safety diagnostics are handled by the const-check pass on the body.
+        let _ = db;
+        Vec::new()
     }
 
     /// Diagnostics related to parameters (duplicate names/labels).

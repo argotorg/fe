@@ -68,6 +68,23 @@ pub fn check_func_body<'db>(
     check_body(db, BodyOwner::Func(func))
 }
 
+#[salsa::tracked(return_ref)]
+pub fn check_const_body<'db>(
+    db: &'db dyn HirAnalysisDb,
+    const_: Const<'db>,
+) -> (Vec<FuncBodyDiag<'db>>, TypedBody<'db>) {
+    check_body(db, BodyOwner::Const(const_))
+}
+
+#[salsa::tracked(return_ref)]
+pub fn check_anon_const_body<'db>(
+    db: &'db dyn HirAnalysisDb,
+    body: Body<'db>,
+    expected: TyId<'db>,
+) -> (Vec<FuncBodyDiag<'db>>, TypedBody<'db>) {
+    check_body(db, BodyOwner::AnonConstBody { body, expected })
+}
+
 pub(super) fn check_body<'db>(
     db: &'db dyn HirAnalysisDb,
     owner: BodyOwner<'db>,
@@ -77,7 +94,18 @@ pub(super) fn check_body<'db>(
     };
 
     checker.run();
-    checker.finish()
+    let (mut diags, typed_body) = checker.finish();
+    if let BodyOwner::Func(func) = owner
+        && func.is_const(db)
+        && !func.is_extern(db)
+    {
+        diags.extend(crate::analysis::ty::const_check::check_const_fn_body(
+            db,
+            func,
+            &typed_body,
+        ));
+    }
+    (diags, typed_body)
 }
 
 pub struct TyChecker<'db> {
@@ -139,6 +167,7 @@ impl<'db> TyChecker<'db> {
                     self.check_free_func_effect_list(func, func.effects(self.db));
                 }
             }
+            BodyOwner::Const(_) | BodyOwner::AnonConstBody { .. } => {}
             owner @ BodyOwner::ContractInit { contract } => {
                 self.check_contract_scoped_effect_list(owner, contract, owner.effects(self.db));
             }
@@ -184,6 +213,7 @@ impl<'db> TyChecker<'db> {
     ) {
         let owner = match owner {
             BodyOwner::Func(func) => EffectParamOwner::Func(func),
+            BodyOwner::Const(_) | BodyOwner::AnonConstBody { .. } => unreachable!(),
             BodyOwner::ContractInit { contract } => EffectParamOwner::ContractInit { contract },
             BodyOwner::ContractRecvArm {
                 contract,
