@@ -28,9 +28,7 @@ use resolver::{
     files::FilesResolutionDiagnostic,
     git::{GitDescription, GitResolver},
     graph::{GraphResolver, GraphResolverImpl},
-    ingot::{
-        IngotDescriptor, IngotResolutionError, IngotResolverImpl, RemoteProgress,
-    },
+    ingot::{IngotDescriptor, IngotResolutionError, IngotResolverImpl, RemoteProgress},
 };
 use url::Url;
 

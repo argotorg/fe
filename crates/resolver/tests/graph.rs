@@ -19,6 +19,7 @@ impl<K: Eq + Hash, V: Clone> Resolver for FixtureEntryResolver<K, V> {
     type Resource = V;
     type Error = EntryDoesNotExist;
     type Diagnostic = ();
+    type Event = ();
 
     fn resolve<H>(
         &mut self,

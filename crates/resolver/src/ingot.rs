@@ -152,7 +152,9 @@ impl std::fmt::Display for IngotResolutionDiagnostic {
 
 #[derive(Debug, Clone)]
 pub enum IngotResolutionEvent {
-    RemoteCheckoutStart { description: GitDescription },
+    RemoteCheckoutStart {
+        description: GitDescription,
+    },
     RemoteCheckoutComplete {
         description: GitDescription,
         ingot_url: Url,
@@ -163,6 +165,7 @@ pub enum IngotResolutionEvent {
 pub trait IngotResolutionHandler<R>:
     ResolutionHandler<R>
     + ResolutionHandler<FilesResolver, Item = FilesResource>
+    + ResolutionHandler<GitResolver, Item = GitResource>
 where
     R: Resolver,
 {
@@ -171,7 +174,9 @@ where
 impl<R, T> IngotResolutionHandler<R> for T
 where
     R: Resolver,
-    T: ResolutionHandler<R> + ResolutionHandler<FilesResolver, Item = FilesResource>,
+    T: ResolutionHandler<R>
+        + ResolutionHandler<FilesResolver, Item = FilesResource>
+        + ResolutionHandler<GitResolver, Item = GitResource>,
 {
 }
 
@@ -275,35 +280,9 @@ impl IngotResolverImpl {
         description: &GitDescription,
     ) -> Result<GitResource, GitResolutionError>
     where
-        H: ResolutionHandler<Self>,
+        H: IngotResolutionHandler<Self>,
     {
-        struct ForwardDiagnostics<'a, H> {
-            ingot_handler: &'a mut H,
-        }
-        impl<'a, H> ResolutionHandler<GitResolver> for ForwardDiagnostics<'a, H>
-        where
-            H: ResolutionHandler<IngotResolverImpl>,
-        {
-            type Item = GitResource;
-
-            fn on_resolution_diagnostic(&mut self, diagnostic: GitResolutionDiagnostic) {
-                self.ingot_handler
-                    .on_resolution_diagnostic(IngotResolutionDiagnostic::Git(diagnostic));
-            }
-
-            fn handle_resolution(
-                &mut self,
-                _description: &GitDescription,
-                resource: GitResource,
-            ) -> Self::Item {
-                resource
-            }
-        }
-
-        let mut handler = ForwardDiagnostics {
-            ingot_handler: handler,
-        };
-        self.git.resolve(&mut handler, description)
+        self.git.resolve(handler, description)
     }
 
     fn resolve_local<H>(
@@ -512,6 +491,26 @@ where
     }
 
     fn handle_resolution(&mut self, _description: &Url, resource: FilesResource) -> Self::Item {
+        resource
+    }
+}
+
+impl<'a, H> ResolutionHandler<GitResolver> for ForwardingHandler<'a, H>
+where
+    H: ResolutionHandler<IngotResolverImpl>,
+{
+    type Item = GitResource;
+
+    fn on_resolution_diagnostic(&mut self, diagnostic: GitResolutionDiagnostic) {
+        self.ingot_handler
+            .on_resolution_diagnostic(IngotResolutionDiagnostic::Git(diagnostic));
+    }
+
+    fn handle_resolution(
+        &mut self,
+        _description: &GitDescription,
+        resource: GitResource,
+    ) -> Self::Item {
         resource
     }
 }

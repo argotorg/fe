@@ -228,12 +228,24 @@ enum CheckoutStatus {
     Existing,
 }
 
+#[derive(Debug, Clone)]
+pub enum GitResolutionEvent {
+    CheckoutStart {
+        description: GitDescription,
+    },
+    CheckoutComplete {
+        description: GitDescription,
+        checkout_path: Utf8PathBuf,
+        reused_checkout: bool,
+    },
+}
+
 impl Resolver for GitResolver {
     type Description = GitDescription;
     type Resource = GitResource;
     type Error = GitResolutionError;
     type Diagnostic = GitResolutionDiagnostic;
-    type Event = ();
+    type Event = GitResolutionEvent;
 
     fn resolve<H>(
         &mut self,
@@ -244,7 +256,15 @@ impl Resolver for GitResolver {
         H: ResolutionHandler<Self>,
     {
         handler.on_resolution_start(description);
+        handler.on_resolution_event(GitResolutionEvent::CheckoutStart {
+            description: description.clone(),
+        });
         let resource = self.ensure_checkout_resource(description)?;
+        handler.on_resolution_event(GitResolutionEvent::CheckoutComplete {
+            description: description.clone(),
+            checkout_path: resource.checkout_path.clone(),
+            reused_checkout: resource.reused_checkout,
+        });
         Ok(handler.handle_resolution(description, resource))
     }
 }

@@ -13,6 +13,7 @@ use resolver::{
     ResolutionHandler,
     files::{FilesResolutionDiagnostic, FilesResolver, FilesResource},
     git::{GitDescription, GitResolver},
+    git::{GitResolutionDiagnostic, GitResolutionEvent, GitResource},
     graph::{DiGraph, GraphResolutionHandler, UnresolvedNode, petgraph::visit::EdgeRef},
     ingot::{
         IngotDescriptor, IngotOrigin, IngotPriority, IngotResolutionEvent, IngotResolverImpl,
@@ -762,6 +763,62 @@ impl<'a> ResolutionHandler<FilesResolver> for IngotHandler<'a> {
 
     fn handle_resolution(&mut self, _description: &Url, resource: FilesResource) -> Self::Item {
         self.record_files_from_resource(&resource);
+        resource
+    }
+}
+
+impl<'a> ResolutionHandler<GitResolver> for IngotHandler<'a> {
+    type Item = GitResource;
+
+    fn on_resolution_diagnostic(&mut self, diagnostic: GitResolutionDiagnostic) {
+        if let Some(ingot_url) = self.root_ingot_url.clone() {
+            self.report_error(IngotInitDiagnostics::RemoteFileError {
+                ingot_url,
+                error: diagnostic.to_string(),
+            });
+        }
+    }
+
+    fn on_resolution_event(&mut self, event: GitResolutionEvent) {
+        match event {
+            GitResolutionEvent::CheckoutStart { description } => {
+                if self.trace_enabled {
+                    tracing::info!(target: "resolver", "Checking out {description}");
+                }
+                if self.stdout_enabled {
+                    eprintln!("Checking out {description}");
+                }
+            }
+            GitResolutionEvent::CheckoutComplete {
+                checkout_path,
+                reused_checkout,
+                ..
+            } => {
+                if reused_checkout {
+                    if self.trace_enabled {
+                        tracing::debug!(
+                            target: "resolver",
+                            "Using cached checkout {}",
+                            checkout_path
+                        );
+                    }
+                    return;
+                }
+                if self.trace_enabled {
+                    tracing::info!(target: "resolver", "✅ Checked out {}", checkout_path);
+                }
+                if self.stdout_enabled {
+                    eprintln!("✅ Checked out {}", checkout_path);
+                }
+            }
+        }
+    }
+
+    fn handle_resolution(
+        &mut self,
+        _description: &GitDescription,
+        resource: GitResource,
+    ) -> Self::Item {
         resource
     }
 }
