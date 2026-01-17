@@ -4,6 +4,7 @@ use crate::core::hir_def::{
 
 use super::{
     ctfe::{CtfeConfig, CtfeInterpreter},
+    diagnostics::{BodyDiag, FuncBodyDiag},
     trait_def::TraitInstId,
     ty_def::{InvalidCause, TyId, TyParam, TyVar},
     ty_check::{check_anon_const_body, check_const_body},
@@ -122,10 +123,25 @@ pub(crate) fn evaluate_const_ty<'db>(
         return ConstTyId::invalid(db, InvalidCause::InvalidConstTyExpr { body });
     };
 
-    let typed_body = match const_def {
-        Some(const_def) => check_const_body(db, const_def).1.clone(),
-        None => check_anon_const_body(db, body, expected_ty).1.clone(),
+    let (diags, typed_body) = match const_def {
+        Some(const_def) => {
+            let result = check_const_body(db, const_def);
+            (result.0.clone(), result.1.clone())
+        }
+        None => {
+            let result = check_anon_const_body(db, body, expected_ty);
+            (result.0.clone(), result.1.clone())
+        }
     };
+
+    if let Some((expected, given)) = diags.iter().find_map(|diag| match diag {
+        FuncBodyDiag::Body(BodyDiag::TypeMismatch { expected, given, .. }) => {
+            Some((*expected, *given))
+        }
+        _ => None,
+    }) {
+        return ConstTyId::invalid(db, InvalidCause::ConstTyMismatch { expected, given });
+    }
 
     let mut interp = CtfeInterpreter::new(db, CtfeConfig::default());
     let evaluated = interp
@@ -166,6 +182,10 @@ fn check_const_ty<'db>(
     expected_ty: Option<TyId<'db>>,
     table: &mut UnificationTable<'db>,
 ) -> Result<TyId<'db>, InvalidCause<'db>> {
+    if let Some(cause) = const_ty_ty.invalid_cause(db) {
+        return Err(cause);
+    }
+
     if const_ty_ty.has_invalid(db) {
         return Err(InvalidCause::Other);
     }
@@ -221,12 +241,10 @@ impl<'db> ConstTyId<'db> {
                 };
 
                 match expr {
-                    Expr::Lit(LitKind::Bool(value)) => format!("const {}", value),
-                    Expr::Lit(LitKind::Int(int)) => format!("const {}", int.data(db)),
-                    Expr::Lit(LitKind::String(string)) => format!("const \"{}\"", string.data(db)),
-                    Expr::Path(path) if path.is_present() => {
-                        format!("const {}", path.unwrap().pretty_print(db))
-                    }
+                    Expr::Lit(LitKind::Bool(value)) => format!("{value}"),
+                    Expr::Lit(LitKind::Int(int)) => format!("{}", int.data(db)),
+                    Expr::Lit(LitKind::String(string)) => format!("\"{}\"", string.data(db)),
+                    Expr::Path(path) if path.is_present() => path.unwrap().pretty_print(db),
                     _ => "const value".into(),
                 }
             }

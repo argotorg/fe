@@ -670,9 +670,8 @@ impl<'db> TyId<'db> {
             }
 
             (None, TyData::ConstTy(const_ty)) => {
-                let evaluated_const_ty = const_ty.evaluate(db, None);
                 Err(InvalidCause::NormalTypeExpected {
-                    given: TyId::const_ty(db, evaluated_const_ty),
+                    given: TyId::const_ty(db, *const_ty),
                 })
             }
 
