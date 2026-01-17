@@ -164,13 +164,27 @@ impl ModuleAnalysisPass for BodyAnalysisPass {
         db: &'db dyn HirAnalysisDb,
         top_mod: TopLevelMod<'db>,
     ) -> Vec<Box<dyn DiagnosticVoucher + 'db>> {
-        // Check function bodies; contract-specific analysis is handled separately.
-        top_mod
+        // Check function and const bodies; contract-specific analysis is handled separately.
+        let mut diags: Vec<Box<dyn DiagnosticVoucher + 'db>> = top_mod
             .all_funcs(db)
             .iter()
             .flat_map(|func| &ty_check::check_func_body(db, *func).0)
             .map(|diag| diag.to_voucher())
-            .collect()
+            .collect();
+
+        diags.extend(
+            top_mod
+                .all_items(db)
+                .iter()
+                .filter_map(|item| match item {
+                    ItemKind::Const(const_) => Some(*const_),
+                    _ => None,
+                })
+                .flat_map(|const_| &ty_check::check_const_body(db, const_).0)
+                .map(|diag| diag.to_voucher()),
+        );
+
+        diags
     }
 }
 

@@ -16,6 +16,7 @@ use crate::analysis::place::{Place, PlaceBase};
 use crate::analysis::ty::{
     binder::Binder,
     canonical::Canonicalized,
+    const_ty::{ConstTyData, EvaluatedConstTy},
     corelib::{resolve_core_trait, resolve_lib_type_path},
     diagnostics::{BodyDiag, FuncBodyDiag},
     effects::place_effect_provider_param_index_map,
@@ -1568,6 +1569,18 @@ impl<'db> TyChecker<'db> {
 
             if let Some(diag) = array_ty.emit_diag(self.db, len_body.span().into()) {
                 self.push_diag(diag);
+            }
+
+            if !array_ty.has_invalid(self.db)
+                && let (_, args) = array_ty.decompose_ty_app(self.db)
+                && let Some(len_ty) = args.get(1)
+                && let TyData::ConstTy(const_ty) = len_ty.data(self.db)
+                && !matches!(
+                    const_ty.data(self.db),
+                    ConstTyData::Evaluated(EvaluatedConstTy::LitInt(_), _)
+                )
+            {
+                self.push_diag(BodyDiag::ConstValueMustBeKnown(len_body.span().into()));
             }
 
             array_ty
