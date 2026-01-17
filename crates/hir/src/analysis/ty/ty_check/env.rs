@@ -146,6 +146,7 @@ impl<'db> TyCheckEnv<'db> {
                     };
                 }
             }
+            BodyOwner::Const(_) | BodyOwner::AnonConstBody { .. } => {}
             BodyOwner::ContractInit { contract } => {
                 let Some(init) = contract.init(db) else {
                     return Ok(env);
@@ -195,6 +196,7 @@ impl<'db> TyCheckEnv<'db> {
                     self.seed_func_effects(func, base_assumptions)
                 }
             }
+            BodyOwner::Const(_) | BodyOwner::AnonConstBody { .. } => {}
             BodyOwner::ContractInit { .. } => self.seed_contract_effects(base_assumptions),
             BodyOwner::ContractRecvArm { .. } => self.seed_contract_effects(base_assumptions),
         }
@@ -312,6 +314,7 @@ impl<'db> TyCheckEnv<'db> {
 
         let body_effects = match self.owner {
             BodyOwner::Func(func) => func.effects(self.db),
+            BodyOwner::Const(_) | BodyOwner::AnonConstBody { .. } => Vec::new(),
             BodyOwner::ContractInit { contract } => {
                 let Some(init) = contract.init(self.db) else {
                     return;
@@ -569,6 +572,21 @@ impl<'db> TyCheckEnv<'db> {
                     }
                 } else {
                     rt
+                }
+            }
+            BodyOwner::Const(const_) => {
+                let ty = const_.ty(self.db);
+                if ty.is_star_kind(self.db) {
+                    ty
+                } else {
+                    TyId::invalid(self.db, InvalidCause::Other)
+                }
+            }
+            BodyOwner::AnonConstBody { expected, .. } => {
+                if expected.is_star_kind(self.db) {
+                    expected
+                } else {
+                    TyId::invalid(self.db, InvalidCause::Other)
                 }
             }
             BodyOwner::ContractInit { .. } => TyId::unit(self.db),

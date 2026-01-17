@@ -12,6 +12,7 @@ use super::{
 };
 use crate::analysis::{
     HirAnalysisDb,
+    ty::const_expr::{ConstExpr, ConstExprId},
     ty::const_ty::{ConstTyData, ConstTyId},
 };
 
@@ -65,6 +66,11 @@ impl<'db> TyFoldable<'db> for TyId<'db> {
                         let ty = folder.fold_ty(db, *ty);
                         Evaluated(val.clone(), ty)
                     }
+                    Abstract(expr, ty) => {
+                        let ty = folder.fold_ty(db, *ty);
+                        let expr = fold_const_expr_id(db, folder, *expr);
+                        Abstract(expr, ty)
+                    }
                     UnEvaluated {
                         body,
                         ty,
@@ -103,6 +109,42 @@ impl<'db> TyFoldable<'db> for TyId<'db> {
         F: TyFolder<'db>,
     {
         folder.fold_ty(db, self)
+    }
+}
+
+fn fold_const_expr_id<'db, F>(
+    db: &'db dyn HirAnalysisDb,
+    folder: &mut F,
+    expr: ConstExprId<'db>,
+) -> ConstExprId<'db>
+where
+    F: TyFolder<'db>,
+{
+    match expr.data(db) {
+        ConstExpr::ExternConstFnCall {
+            func,
+            generic_args,
+            args,
+        } => {
+            let generic_args = generic_args
+                .iter()
+                .copied()
+                .map(|arg| folder.fold_ty(db, arg))
+                .collect();
+            let args = args
+                .iter()
+                .copied()
+                .map(|arg| folder.fold_ty(db, arg))
+                .collect();
+            ConstExprId::new(
+                db,
+                ConstExpr::ExternConstFnCall {
+                    func: *func,
+                    generic_args,
+                    args,
+                },
+            )
+        }
     }
 }
 

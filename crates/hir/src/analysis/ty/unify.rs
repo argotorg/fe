@@ -163,7 +163,8 @@ where
                     (_, ConstTyData::TyVar(var, _)) => self.unify_var_value(var, ty1),
 
                     (ConstTyData::TyParam(..), ConstTyData::TyParam(..))
-                    | (ConstTyData::Evaluated(..), ConstTyData::Evaluated(..)) => {
+                    | (ConstTyData::Evaluated(..), ConstTyData::Evaluated(..))
+                    | (ConstTyData::Abstract(..), ConstTyData::Abstract(..)) => {
                         if const_ty1 == const_ty2 {
                             Ok(())
                         } else {

@@ -103,8 +103,6 @@ pub enum TyLowerDiag<'db> {
     DuplicateVariantName(Enum<'db>, SmallVec<[u16; 4]>),
     DuplicateGenericParamName(GenericParamOwner<'db>, SmallVec<[u16; 4]>),
 
-    ConstFnNotImplemented(Func<'db>),
-
     InvalidConstParamTy(DynLazySpan<'db>),
     RecursiveConstParamTy(DynLazySpan<'db>),
 
@@ -159,7 +157,6 @@ impl TyLowerDiag<'_> {
             Self::DuplicateGenericParamName(..) => 19,
             Self::NonTrailingDefaultGenericParam(_) => 21,
             Self::GenericDefaultForwardRef { .. } => 22,
-            Self::ConstFnNotImplemented(..) => 23,
         }
     }
 }
@@ -486,6 +483,24 @@ pub enum BodyDiag<'db> {
         first_use: DynLazySpan<'db>,
         handler_ty: TyId<'db>,
     },
+
+    // Const fn / const-check diagnostics -----------------------------------
+
+    ConstFnEffectsNotAllowed(DynLazySpan<'db>),
+    ConstFnWithNotAllowed(DynLazySpan<'db>),
+    ConstFnLoopNotAllowed(DynLazySpan<'db>),
+    ConstFnMatchNotAllowed(DynLazySpan<'db>),
+    ConstFnAssignmentNotAllowed(DynLazySpan<'db>),
+    ConstFnAggregateNotAllowed(DynLazySpan<'db>),
+    ConstFnMutableBindingNotAllowed(DynLazySpan<'db>),
+    ConstFnNonConstCall {
+        primary: DynLazySpan<'db>,
+        callee: CallableDef<'db>,
+    },
+    ConstFnEffectfulCall {
+        primary: DynLazySpan<'db>,
+        callee: CallableDef<'db>,
+    },
 }
 
 impl<'db> BodyDiag<'db> {
@@ -621,6 +636,15 @@ impl<'db> BodyDiag<'db> {
             Self::RecvArmNotVariantOfMsg { .. } => 48,
             Self::RecvArmNotMsgVariantTrait { .. } => 49,
             Self::RecvDuplicateHandler { .. } => 50,
+            Self::ConstFnEffectsNotAllowed(_) => 55,
+            Self::ConstFnWithNotAllowed(_) => 56,
+            Self::ConstFnLoopNotAllowed(_) => 57,
+            Self::ConstFnMatchNotAllowed(_) => 58,
+            Self::ConstFnAssignmentNotAllowed(_) => 59,
+            Self::ConstFnAggregateNotAllowed(_) => 60,
+            Self::ConstFnMutableBindingNotAllowed(_) => 61,
+            Self::ConstFnNonConstCall { .. } => 62,
+            Self::ConstFnEffectfulCall { .. } => 63,
         }
     }
 }

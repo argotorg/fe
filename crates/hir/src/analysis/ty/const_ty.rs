@@ -11,6 +11,7 @@ use crate::analysis::{
     ty::ty_def::{Kind, TyBase, TyData, TyVarSort},
     ty::{trait_def::assoc_const_body_for_trait_inst, trait_resolution::PredicateListId},
 };
+use super::const_expr::ConstExprId;
 
 #[salsa::interned]
 #[derive(Debug)]
@@ -195,6 +196,7 @@ impl<'db> ConstTyId<'db> {
             ConstTyData::TyVar(_, ty) => *ty,
             ConstTyData::TyParam(_, ty) => *ty,
             ConstTyData::Evaluated(_, ty) => *ty,
+            ConstTyData::Abstract(_, ty) => *ty,
             ConstTyData::UnEvaluated { ty, .. } => {
                 ty.unwrap_or_else(|| TyId::invalid(db, InvalidCause::Other))
             }
@@ -208,6 +210,7 @@ impl<'db> ConstTyId<'db> {
                 format!("const {}: {}", param.pretty_print(db), ty.pretty_print(db))
             }
             ConstTyData::Evaluated(resolved, _) => resolved.pretty_print(db),
+            ConstTyData::Abstract(expr, _) => expr.pretty_print(db),
             ConstTyData::UnEvaluated {
                 body, const_def, ..
             } => {
@@ -276,6 +279,7 @@ impl<'db> ConstTyId<'db> {
             ConstTyData::TyVar(var, _) => ConstTyData::TyVar(var.clone(), ty),
             ConstTyData::TyParam(param, _) => ConstTyData::TyParam(param.clone(), ty),
             ConstTyData::Evaluated(evaluated, _) => ConstTyData::Evaluated(evaluated.clone(), ty),
+            ConstTyData::Abstract(expr, _) => ConstTyData::Abstract(*expr, ty),
             ConstTyData::UnEvaluated {
                 body, const_def, ..
             } => ConstTyData::UnEvaluated {
@@ -294,6 +298,7 @@ pub enum ConstTyData<'db> {
     TyVar(TyVar<'db>, TyId<'db>),
     TyParam(TyParam<'db>, TyId<'db>),
     Evaluated(EvaluatedConstTy<'db>, TyId<'db>),
+    Abstract(ConstExprId<'db>, TyId<'db>),
     UnEvaluated {
         body: Body<'db>,
         ty: Option<TyId<'db>>,
