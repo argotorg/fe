@@ -6,7 +6,7 @@ use ingot::evm::ops::{mstore, mstore8, revert}
 pub struct Sol {}
 
 extern {
-    pub fn encoded_size<T>() -> u256
+    pub const fn encoded_size<T>() -> u256
 }
 
 impl Abi for Sol {
