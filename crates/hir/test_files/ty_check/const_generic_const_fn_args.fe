@@ -1,0 +1,17 @@
+extern {
+    const fn add(x: usize, y: usize) -> usize
+    const fn plus1(x: usize) -> usize
+}
+
+const ONE: usize = 1
+const TWO: usize = 2
+
+struct Foo<const N: usize = add(ONE, 2)> {}
+struct Bar<const N: usize, const M: usize = plus1(N)> {}
+
+fn f() {
+    let x: Foo
+    let y: Foo<add(ONE, TWO)>
+    let z: Bar<4>
+    let w: Bar<4, plus1(ONE)>
+}
