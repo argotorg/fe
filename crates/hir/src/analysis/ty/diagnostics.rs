@@ -316,6 +316,7 @@ pub enum BodyDiag<'db> {
     },
 
     TypeMustBeKnown(DynLazySpan<'db>),
+    ConstValueMustBeKnown(DynLazySpan<'db>),
 
     InvalidCast {
         primary: DynLazySpan<'db>,
@@ -616,6 +617,7 @@ impl<'db> BodyDiag<'db> {
             Self::ReturnedTypeMismatch { .. } => 13,
             Self::TypeMustBeKnown(..) => 14,
             Self::InvalidCast { .. } => 55,
+            Self::ConstValueMustBeKnown(..) => 64,
             Self::AccessedFieldNotFound { .. } => 15,
             Self::OpsTraitNotImplemented { .. } => 16,
             Self::UnsupportedUnaryPlus(..) => 52,

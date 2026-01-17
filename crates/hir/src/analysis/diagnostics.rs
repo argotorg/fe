@@ -2282,6 +2282,18 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                 error_code,
             },
 
+            Self::ConstValueMustBeKnown(span) => CompleteDiagnostic {
+                severity: Severity::Error,
+                message: "const value must be known here".to_string(),
+                sub_diagnostics: vec![SubDiagnostic {
+                    style: LabelStyle::Primary,
+                    message: "this const expression must be known at compile time here".to_string(),
+                    span: span.resolve(db),
+                }],
+                notes: vec![],
+                error_code,
+            },
+
             Self::InvalidCast {
                 primary,
                 from,
@@ -2317,7 +2329,6 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                     error_code,
                 }
             }
-
             Self::AccessedFieldNotFound {
                 primary,
                 given_ty,

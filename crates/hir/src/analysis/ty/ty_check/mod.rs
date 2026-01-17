@@ -52,6 +52,8 @@ use super::{
 };
 use crate::analysis::ty::ty_def::{TyBase, TyData};
 use crate::analysis::ty::{
+    const_ty::ConstTyData,
+    ctfe::{CtfeConfig, CtfeInterpreter},
     fold::AssocTySubst, normalize::normalize_ty, ty_error::collect_ty_lower_errors,
 };
 use crate::analysis::{
@@ -107,6 +109,28 @@ pub(super) fn check_body<'db>(
             &typed_body,
         ));
     }
+
+    if let BodyOwner::Const(const_) = owner
+        && diags.is_empty()
+        && let Some(body) = const_.body(db).to_opt()
+        && !const_.ty(db).has_invalid(db)
+    {
+        let mut interp = CtfeInterpreter::new(db, CtfeConfig::default());
+        match interp.eval_const_body(body, &typed_body) {
+            Ok(const_ty) => {
+                if !matches!(const_ty.data(db), ConstTyData::Evaluated(..)) {
+                    diags.push(BodyDiag::ConstValueMustBeKnown(body.span().into()).into());
+                }
+            }
+            Err(cause) => {
+                let ty = TyId::invalid(db, cause);
+                if let Some(diag) = ty.emit_diag(db, body.span().into()) {
+                    diags.push(diag.into());
+                }
+            }
+        }
+    }
+
     (diags, typed_body)
 }
 
