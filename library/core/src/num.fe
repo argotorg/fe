@@ -2,6 +2,11 @@ use super::ops::*
 use super::default::Default
 use super::option::Option::{self, *}
 
+// Generic bitcast intrinsic - reinterprets bits between any two primitive integer types
+extern {
+    fn __bitcast<From, To>(value: From) -> To
+}
+
 // Extern intrinsics for u8
 extern {
     fn __add_u8(_: u8, _: u8) -> u8
@@ -24,8 +29,6 @@ extern {
     fn __ge_u8(_: u8, _: u8) -> bool
 
     fn __bitnot_u8(_: u8) -> u8
-
-    fn __u8_as_u256(_: u8) -> u256
 }
 
 // Extern intrinsics for i8
@@ -51,8 +54,6 @@ extern {
 
     fn __neg_i8(_: i8) -> i8
     fn __bitnot_i8(_: i8) -> i8
-
-    fn __i8_as_u256(_: i8) -> u256
 }
 
 // Extern intrinsics for i16
@@ -78,8 +79,6 @@ extern {
 
     fn __neg_i16(_: i16) -> i16
     fn __bitnot_i16(_: i16) -> i16
-
-    fn __i16_as_u256(_: i16) -> u256
 }
 
 // Extern intrinsics for u16
@@ -104,8 +103,6 @@ extern {
     fn __ge_u16(_: u16, _: u16) -> bool
 
     fn __bitnot_u16(_: u16) -> u16
-
-    fn __u16_as_u256(_: u16) -> u256
 }
 
 // Extern intrinsics for i32
@@ -131,8 +128,6 @@ extern {
 
     fn __neg_i32(_: i32) -> i32
     fn __bitnot_i32(_: i32) -> i32
-
-    fn __i32_as_u256(_: i32) -> u256
 }
 
 // Extern intrinsics for u32
@@ -157,8 +152,6 @@ extern {
     fn __ge_u32(_: u32, _: u32) -> bool
 
     fn __bitnot_u32(_: u32) -> u32
-
-    fn __u32_as_u256(_: u32) -> u256
 }
 
 // Extern intrinsics for i64
@@ -184,8 +177,6 @@ extern {
 
     fn __neg_i64(_: i64) -> i64
     fn __bitnot_i64(_: i64) -> i64
-
-    fn __i64_as_u256(_: i64) -> u256
 }
 
 // Extern intrinsics for i128
@@ -211,8 +202,6 @@ extern {
 
     fn __neg_i128(_: i128) -> i128
     fn __bitnot_i128(_: i128) -> i128
-
-    fn __i128_as_u256(_: i128) -> u256
 }
 
 // Extern intrinsics for u64
@@ -237,8 +226,6 @@ extern {
     fn __ge_u64(_: u64, _: u64) -> bool
 
      fn __bitnot_u64(_: u64) -> u64
-
-    fn __u64_as_u256(_: u64) -> u256
 }
 
 // Extern intrinsics for u128
@@ -263,8 +250,6 @@ extern {
     fn __ge_u128(_: u128, _: u128) -> bool
 
     fn __bitnot_u128(_: u128) -> u128
-
-    fn __u128_as_u256(_: u128) -> u256
 }
 
 // Extern intrinsics for usize
@@ -289,9 +274,6 @@ extern {
     fn __ge_usize(_: usize, _: usize) -> bool
 
     fn __bitnot_usize(_: usize) -> usize
-
-    fn __usize_as_u256(_: usize) -> u256
-    fn __u256_as_usize(_: u256) -> usize
 }
 
 // Extern intrinsics for i256
@@ -317,8 +299,6 @@ extern {
 
     fn __neg_i256(_: i256) -> i256
     fn __bitnot_i256(_: i256) -> i256
-
-    fn __i256_as_u256(_: i256) -> u256
 }
 
 // Extern intrinsics for u256
@@ -343,20 +323,6 @@ extern {
     fn __ge_u256(_: u256, _: u256) -> bool
 
     fn __bitnot_u256(_: u256) -> u256
-
-    fn __u256_as_u8(_: u256) -> u8
-    fn __u256_as_u16(_: u256) -> u16
-    fn __u256_as_u32(_: u256) -> u32
-    fn __u256_as_u64(_: u256) -> u64
-    fn __u256_as_u128(_: u256) -> u128
-    fn __u256_as_u256(_: u256) -> u256
-
-    fn __u256_as_i8(_: u256) -> i8
-    fn __u256_as_i16(_: u256) -> i16
-    fn __u256_as_i32(_: u256) -> i32
-    fn __u256_as_i64(_: u256) -> i64
-    fn __u256_as_i128(_: u256) -> i128
-    fn __u256_as_i256(_: u256) -> i256
 }
 
 // Extern intrinsics for isize
@@ -382,9 +348,6 @@ extern {
 
     fn __neg_isize(_: isize) -> isize
     fn __bitnot_isize(_: isize) -> isize
-
-    fn __isize_as_u256(_: isize) -> u256
-    fn __u256_as_isize(_: u256) -> isize
 }
 
 // Extern intrinsics for bool
@@ -435,7 +398,7 @@ impl IntWord for u8 {
     const IS_SIGNED: bool = false
 
     fn to_word(self) -> u256 { self as u256 }
-    fn from_word(word: u256) -> Self { __u256_as_u8(word) }
+    fn from_word(word: u256) -> Self { __bitcast(word) }
 }
 
 impl IntWord for u16 {
@@ -444,7 +407,7 @@ impl IntWord for u16 {
     const IS_SIGNED: bool = false
 
     fn to_word(self) -> u256 { self as u256 }
-    fn from_word(word: u256) -> Self { __u256_as_u16(word) }
+    fn from_word(word: u256) -> Self { __bitcast(word) }
 }
 
 impl IntWord for u32 {
@@ -453,7 +416,7 @@ impl IntWord for u32 {
     const IS_SIGNED: bool = false
 
     fn to_word(self) -> u256 { self as u256 }
-    fn from_word(word: u256) -> Self { __u256_as_u32(word) }
+    fn from_word(word: u256) -> Self { __bitcast(word) }
 }
 
 impl IntWord for u64 {
@@ -462,7 +425,7 @@ impl IntWord for u64 {
     const IS_SIGNED: bool = false
 
     fn to_word(self) -> u256 { self as u256 }
-    fn from_word(word: u256) -> Self { __u256_as_u64(word) }
+    fn from_word(word: u256) -> Self { __bitcast(word) }
 }
 
 impl IntWord for u128 {
@@ -471,7 +434,7 @@ impl IntWord for u128 {
     const IS_SIGNED: bool = false
 
     fn to_word(self) -> u256 { self as u256 }
-    fn from_word(word: u256) -> Self { __u256_as_u128(word) }
+    fn from_word(word: u256) -> Self { __bitcast(word) }
 }
 
 impl IntWord for u256 {
@@ -489,7 +452,7 @@ impl IntWord for usize {
     const IS_SIGNED: bool = false
 
     fn to_word(self) -> u256 { self as u256 }
-    fn from_word(word: u256) -> Self { __u256_as_usize(word) }
+    fn from_word(word: u256) -> Self { __bitcast(word) }
 }
 
 impl IntWord for i8 {
@@ -497,8 +460,8 @@ impl IntWord for i8 {
     const SIGN_BIT: u256 = I8_SIGN_BIT
     const IS_SIGNED: bool = true
 
-    fn to_word(self) -> u256 { __i256_as_u256(self as i256) }
-    fn from_word(word: u256) -> Self { __u256_as_i8(word) }
+    fn to_word(self) -> u256 { __bitcast(self as i256) }
+    fn from_word(word: u256) -> Self { __bitcast(word) }
 }
 
 impl IntWord for i16 {
@@ -506,8 +469,8 @@ impl IntWord for i16 {
     const SIGN_BIT: u256 = I16_SIGN_BIT
     const IS_SIGNED: bool = true
 
-    fn to_word(self) -> u256 { __i256_as_u256(self as i256) }
-    fn from_word(word: u256) -> Self { __u256_as_i16(word) }
+    fn to_word(self) -> u256 { __bitcast(self as i256) }
+    fn from_word(word: u256) -> Self { __bitcast(word) }
 }
 
 impl IntWord for i32 {
@@ -515,8 +478,8 @@ impl IntWord for i32 {
     const SIGN_BIT: u256 = I32_SIGN_BIT
     const IS_SIGNED: bool = true
 
-    fn to_word(self) -> u256 { __i256_as_u256(self as i256) }
-    fn from_word(word: u256) -> Self { __u256_as_i32(word) }
+    fn to_word(self) -> u256 { __bitcast(self as i256) }
+    fn from_word(word: u256) -> Self { __bitcast(word) }
 }
 
 impl IntWord for i64 {
@@ -524,8 +487,8 @@ impl IntWord for i64 {
     const SIGN_BIT: u256 = I64_SIGN_BIT
     const IS_SIGNED: bool = true
 
-    fn to_word(self) -> u256 { __i256_as_u256(self as i256) }
-    fn from_word(word: u256) -> Self { __u256_as_i64(word) }
+    fn to_word(self) -> u256 { __bitcast(self as i256) }
+    fn from_word(word: u256) -> Self { __bitcast(word) }
 }
 
 impl IntWord for i128 {
@@ -533,8 +496,8 @@ impl IntWord for i128 {
     const SIGN_BIT: u256 = I128_SIGN_BIT
     const IS_SIGNED: bool = true
 
-    fn to_word(self) -> u256 { __i256_as_u256(self as i256) }
-    fn from_word(word: u256) -> Self { __u256_as_i128(word) }
+    fn to_word(self) -> u256 { __bitcast(self as i256) }
+    fn from_word(word: u256) -> Self { __bitcast(word) }
 }
 
 impl IntWord for i256 {
@@ -542,8 +505,8 @@ impl IntWord for i256 {
     const SIGN_BIT: u256 = I256_SIGN_BIT
     const IS_SIGNED: bool = true
 
-    fn to_word(self) -> u256 { __i256_as_u256(self) }
-    fn from_word(word: u256) -> Self { __u256_as_i256(word) }
+    fn to_word(self) -> u256 { __bitcast(self) }
+    fn from_word(word: u256) -> Self { __bitcast(word) }
 }
 
 impl IntWord for isize {
@@ -551,8 +514,8 @@ impl IntWord for isize {
     const SIGN_BIT: u256 = I256_SIGN_BIT
     const IS_SIGNED: bool = true
 
-    fn to_word(self) -> u256 { __i256_as_u256(self as i256) }
-    fn from_word(word: u256) -> Self { __u256_as_isize(word) }
+    fn to_word(self) -> u256 { __bitcast(self as i256) }
+    fn from_word(word: u256) -> Self { __bitcast(word) }
 }
 
 impl<S: IntWord, T: IntWord> IntDowncast<T> for S {
@@ -561,13 +524,13 @@ impl<S: IntWord, T: IntWord> IntDowncast<T> for S {
         if T::IS_SIGNED {
             let t_min_word = sign_extend(T::SIGN_BIT, T::MASK, T::SIGN_BIT)
             let t_max_word = T::SIGN_BIT - 1
-            let t_min: i256 = __u256_as_i256(t_min_word)
-            let t_max: i256 = __u256_as_i256(t_max_word)
+            let t_min: i256 = __bitcast(t_min_word)
+            let t_max: i256 = __bitcast(t_max_word)
 
             if !S::IS_SIGNED && (word & I256_SIGN_BIT != 0) {
                 Option::None
             } else {
-                let x: i256 = __u256_as_i256(word)
+                let x: i256 = __bitcast(word)
                 if x < t_min {
                     Option::None
                 } else if x > t_max {
@@ -612,11 +575,11 @@ impl<S: IntWord, T: IntWord> IntDowncast<T> for S {
         } else {
             let t_min_word = sign_extend(T::SIGN_BIT, T::MASK, T::SIGN_BIT)
             let t_max_word = T::SIGN_BIT - 1
-            let t_min: i256 = __u256_as_i256(t_min_word)
-            let t_max: i256 = __u256_as_i256(t_max_word)
+            let t_min: i256 = __bitcast(t_min_word)
+            let t_max: i256 = __bitcast(t_max_word)
 
             if S::IS_SIGNED {
-                let x: i256 = __u256_as_i256(word)
+                let x: i256 = __bitcast(word)
                 if x < t_min {
                     T::from_word(t_min_word)
                 } else if x > t_max {
@@ -628,7 +591,7 @@ impl<S: IntWord, T: IntWord> IntDowncast<T> for S {
                 if word & I256_SIGN_BIT != 0 {
                     T::from_word(t_max_word)
                 } else {
-                    let x: i256 = __u256_as_i256(word)
+                    let x: i256 = __bitcast(word)
                     if x > t_max {
                         T::from_word(t_max_word)
                     } else {
