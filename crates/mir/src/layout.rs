@@ -201,7 +201,10 @@ pub fn ty_size_bytes_in(
 /// This is useful when the compiler needs a conservative allocation size even when precise
 /// layout information is unavailable (e.g. generic type parameters). Unknown leaf types are
 /// treated as occupying a single 32-byte word.
-pub fn ty_size_bytes_or_word_aligned(db: &dyn HirAnalysisDb, ty: TyId<'_>) -> usize {
+///
+/// Returns `None` for types that require a concrete size but cannot be computed yet (for example,
+/// arrays with non-literal lengths).
+pub fn ty_size_bytes_or_word_aligned(db: &dyn HirAnalysisDb, ty: TyId<'_>) -> Option<usize> {
     ty_size_bytes_or_word_aligned_in(db, &EVM_LAYOUT, ty)
 }
 
@@ -209,34 +212,29 @@ pub fn ty_size_bytes_or_word_aligned_in(
     db: &dyn HirAnalysisDb,
     layout: &TargetDataLayout,
     ty: TyId<'_>,
-) -> usize {
-    ty_size_bytes_in(db, layout, ty)
-        .unwrap_or_else(|| ty_size_bytes_word_aligned_fallback_in(db, layout, ty))
+) -> Option<usize> {
+    ty_size_bytes_in(db, layout, ty).or_else(|| ty_size_bytes_word_aligned_fallback_in(db, layout, ty))
 }
 
 fn ty_size_bytes_word_aligned_fallback_in(
     db: &dyn HirAnalysisDb,
     layout: &TargetDataLayout,
     ty: TyId<'_>,
-) -> usize {
+) -> Option<usize> {
     if ty.is_tuple(db) {
         return ty
             .field_types(db)
             .iter()
             .copied()
-            .map(|field_ty| ty_size_bytes_or_word_aligned_in(db, layout, field_ty))
-            .sum();
+            .try_fold(0usize, |acc, field_ty| {
+                Some(acc + ty_size_bytes_or_word_aligned_in(db, layout, field_ty)?)
+            });
     }
 
     if ty.is_array(db) {
-        let len = array_len(db, ty).unwrap_or_else(|| {
-            panic!(
-                "array length must be known to compute fallback layout size (ty={})",
-                ty.pretty_print(db)
-            )
-        });
+        let len = array_len(db, ty)?;
         let stride = array_elem_stride_bytes_in(db, layout, ty).unwrap_or(layout.word_size_bytes);
-        return len * stride;
+        return Some(len * stride);
     }
 
     if let Some(adt_def) = ty.adt_def(db)
@@ -246,8 +244,9 @@ fn ty_size_bytes_word_aligned_fallback_in(
             .field_types(db)
             .iter()
             .copied()
-            .map(|field_ty| ty_size_bytes_or_word_aligned_in(db, layout, field_ty))
-            .sum();
+            .try_fold(0usize, |acc, field_ty| {
+                Some(acc + ty_size_bytes_or_word_aligned_in(db, layout, field_ty)?)
+            });
     }
 
     if let Some(adt_def) = ty.adt_def(db)
@@ -259,14 +258,14 @@ fn ty_size_bytes_word_aligned_fallback_in(
             let ctor = ConstructorKind::Variant(ev, ty);
             let mut payload = 0;
             for field_ty in ctor.field_types(db) {
-                payload += ty_size_bytes_or_word_aligned_in(db, layout, field_ty);
+                payload += ty_size_bytes_or_word_aligned_in(db, layout, field_ty)?;
             }
             max_payload = max_payload.max(payload);
         }
-        return layout.discriminant_size_bytes + max_payload;
+        return Some(layout.discriminant_size_bytes + max_payload);
     }
 
-    layout.word_size_bytes
+    Some(layout.word_size_bytes)
 }
 
 /// Returns the element type for a fixed-size array.
