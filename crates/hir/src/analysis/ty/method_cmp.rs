@@ -2,17 +2,18 @@ use thin_vec::ThinVec;
 
 use super::{
     canonical::Canonical,
+    const_ty::const_ty_from_trait_const,
     diagnostics::{ImplDiag, TyDiagCollection},
-    fold::{AssocTySubst, TyFoldable},
+    fold::{AssocTySubst, TyFoldable, TyFolder},
     normalize::normalize_ty,
     trait_def::TraitInstId,
     trait_resolution::{
         GoalSatisfiability, constraint::collect_func_def_constraints, is_goal_satisfiable,
     },
-    ty_def::TyId,
+    ty_def::{TyData, TyId},
 };
 use crate::analysis::HirAnalysisDb;
-use crate::hir_def::CallableDef;
+use crate::hir_def::{CallableDef, Expr, Partial, PathKind};
 
 /// Compares the implementation method with the trait method to ensure they
 /// match.
@@ -221,6 +222,8 @@ fn compare_ty<'db>(
         let trait_m_ty_normalized =
             normalize_ty(db, trait_m_ty_substituted, impl_m.scope(), assumptions);
         let impl_m_ty_normalized = normalize_ty(db, impl_m_ty, impl_m.scope(), assumptions);
+        let trait_m_ty_normalized = normalize_const_tys(db, trait_m_ty_normalized, trait_inst);
+        let impl_m_ty_normalized = normalize_const_tys(db, impl_m_ty_normalized, trait_inst);
 
         // 4) Compare for equality
         if !impl_m_ty.has_invalid(db) && trait_m_ty_normalized != impl_m_ty_normalized {
@@ -246,6 +249,8 @@ fn compare_ty<'db>(
     let trait_m_ret_ty_normalized =
         normalize_ty(db, trait_m_ret_ty_substituted, impl_m.scope(), assumptions);
     let impl_m_ret_ty_normalized = normalize_ty(db, impl_m_ret_ty, impl_m.scope(), assumptions);
+    let trait_m_ret_ty_normalized = normalize_const_tys(db, trait_m_ret_ty_normalized, trait_inst);
+    let impl_m_ret_ty_normalized = normalize_const_tys(db, impl_m_ret_ty_normalized, trait_inst);
 
     if !impl_m_ret_ty.has_invalid(db)
         && !trait_m_ret_ty.has_invalid(db)
@@ -265,6 +270,68 @@ fn compare_ty<'db>(
     }
 
     !err
+}
+
+fn normalize_const_tys<'db>(
+    db: &'db dyn HirAnalysisDb,
+    ty: TyId<'db>,
+    trait_inst: TraitInstId<'db>,
+) -> TyId<'db> {
+    struct ConstFolder<'db> {
+        trait_inst: TraitInstId<'db>,
+    }
+
+    impl<'db> TyFolder<'db> for ConstFolder<'db> {
+        fn fold_ty(&mut self, db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> TyId<'db> {
+            let TyData::ConstTy(const_ty) = ty.data(db) else {
+                return ty.super_fold_with(db, self);
+            };
+
+            let super::const_ty::ConstTyData::UnEvaluated {
+                body,
+                ty: expected_ty,
+                ..
+            } = const_ty.data(db)
+            else {
+                return ty.super_fold_with(db, self);
+            };
+            let Some(expected_ty) = *expected_ty else {
+                return ty.super_fold_with(db, self);
+            };
+            let expr = body.expr(db);
+            let Partial::Present(expr) = expr.data(db, *body) else {
+                return ty.super_fold_with(db, self);
+            };
+            let Expr::Path(path) = expr else {
+                return ty.super_fold_with(db, self);
+            };
+            let Some(path) = path.to_opt() else {
+                return ty.super_fold_with(db, self);
+            };
+
+            let mut const_ty = *const_ty;
+            if let Some(parent) = path.parent(db)
+                && parent.is_self_ty(db)
+                && let PathKind::Ident {
+                    ident,
+                    generic_args,
+                } = path.kind(db)
+                && generic_args.is_empty(db)
+                && let Some(name) = ident.to_opt()
+                && let Some(repl) = const_ty_from_trait_const(db, self.trait_inst, name)
+            {
+                const_ty = repl;
+            }
+
+            TyId::new(
+                db,
+                TyData::ConstTy(const_ty.evaluate(db, Some(expected_ty))),
+            )
+        }
+    }
+
+    let mut folder = ConstFolder { trait_inst };
+    ty.fold_with(db, &mut folder)
 }
 
 /// Checks if the method constraints are stricter than the trait constraints.
