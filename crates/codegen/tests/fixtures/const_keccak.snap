@@ -1,0 +1,10 @@
+---
+source: crates/codegen/tests/yul.rs
+assertion_line: 33
+expression: output
+input_file: tests/fixtures/const_keccak.fe
+---
+function $main() -> ret {
+  ret := 12910348618308260923200348219926901280687058984330794534952861439530514639560
+  leave
+}

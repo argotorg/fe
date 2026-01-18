@@ -1,0 +1,4 @@
+fn f() -> u256 {
+    let x: u256 = 1
+    core::keccak(x)
+}

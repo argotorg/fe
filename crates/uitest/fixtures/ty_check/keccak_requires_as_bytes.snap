@@ -1,0 +1,11 @@
+---
+source: crates/uitest/tests/ty_check.rs
+assertion_line: 27
+expression: diags
+input_file: fixtures/ty_check/keccak_requires_as_bytes.fe
+---
+error[6-0003]: trait bound is not satisfied
+  ┌─ keccak_requires_as_bytes.fe:3:5
+  │
+3 │     core::keccak(x)
+  │     ^^^^^^^^^^^^ `u256` doesn't implement `AsBytes`
