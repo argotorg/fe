@@ -323,6 +323,7 @@ pub enum EvaluatedConstTy<'db> {
     Unit,
     Tuple(Vec<TyId<'db>>),
     Array(Vec<TyId<'db>>),
+    Bytes(Vec<u8>),
     Record(Vec<TyId<'db>>),
     Invalid,
 }
@@ -350,6 +351,14 @@ impl EvaluatedConstTy<'_> {
                     .collect::<Vec<_>>()
                     .join(", ");
                 format!("[{elems}]")
+            }
+            EvaluatedConstTy::Bytes(bytes) => {
+                let bytes = bytes
+                    .iter()
+                    .map(|b| b.to_string())
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                format!("[{bytes}]")
             }
             EvaluatedConstTy::Record(fields) => {
                 let fields = fields

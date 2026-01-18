@@ -1,6 +1,7 @@
 use num_bigint::{BigInt, BigUint, Sign};
 use num_traits::{One, ToPrimitive, Zero};
 use rustc_hash::FxHashMap;
+use tiny_keccak::{Hasher, Keccak};
 
 use crate::analysis::{
     HirAnalysisDb,
@@ -173,7 +174,14 @@ impl<'db> CtfeInterpreter<'db> {
                 Ok(lit_int(self.db, ty, value))
             }
 
-            Expr::Lit(_) => Err(InvalidCause::ConstEvalUnsupported { body, expr }.into()),
+            Expr::Lit(LitKind::String(string_id)) => {
+                let ty = self.typed_body().expr_ty(self.db, expr);
+                Ok(lit_bytes(
+                    self.db,
+                    ty,
+                    string_id.data(self.db).as_bytes().to_vec(),
+                ))
+            }
 
             Expr::Path(Partial::Present(path)) => self.eval_path_expr(*path, expr),
             Expr::Path(Partial::Absent) => Err(InvalidCause::ParseError.into()),
@@ -431,6 +439,13 @@ impl<'db> CtfeInterpreter<'db> {
                         };
                         Ok(*const_ty)
                     }
+                    ConstTyData::Evaluated(EvaluatedConstTy::Bytes(bytes), _) => {
+                        let Some(byte) = bytes.get(idx).copied() else {
+                            return Err(InvalidCause::ConstEvalUnsupported { body, expr }.into());
+                        };
+                        let ty = self.typed_body().expr_ty(self.db, expr);
+                        Ok(lit_int(self.db, ty, BigUint::from(byte)))
+                    }
                     _ => Err(InvalidCause::ConstEvalUnsupported { body, expr }.into()),
                 }
             }
@@ -519,8 +534,17 @@ impl<'db> CtfeInterpreter<'db> {
     }
 
     fn eval_array(&mut self, expr: ExprId, elems: &[ExprId]) -> CtfeEval<'db> {
-        let values = self.eval_const_elems(elems)?;
         let ty = self.typed_body().expr_ty(self.db, expr);
+        if is_u8_array_ty(self.db, ty) {
+            let body = self.body();
+            let bytes = elems
+                .iter()
+                .map(|&elem| Ok(const_as_u8(self.db, self.eval_expr(elem)?, body, expr)?))
+                .collect::<CtfeResult<'db, Vec<_>>>()?;
+            return Ok(lit_bytes(self.db, ty, bytes));
+        }
+
+        let values = self.eval_const_elems(elems)?;
         Ok(ConstTyId::new(
             self.db,
             ConstTyData::Evaluated(EvaluatedConstTy::Array(values), ty),
@@ -552,9 +576,16 @@ impl<'db> CtfeInterpreter<'db> {
             return Err(InvalidCause::ConstEvalUnsupported { body, expr }.into());
         };
 
+        let ty = self.typed_body().expr_ty(self.db, expr);
+        if is_u8_array_ty(self.db, ty) {
+            let elem = self.eval_expr(elem_expr)?;
+            let byte = const_as_u8(self.db, elem, body, expr)?;
+            let bytes = std::iter::repeat_n(byte, len).collect::<Vec<_>>();
+            return Ok(lit_bytes(self.db, ty, bytes));
+        }
+
         let elem_const = TyId::const_ty(self.db, self.eval_expr(elem_expr)?);
         let values = std::iter::repeat_n(elem_const, len).collect::<Vec<_>>();
-        let ty = self.typed_body().expr_ty(self.db, expr);
         Ok(ConstTyId::new(
             self.db,
             ConstTyData::Evaluated(EvaluatedConstTy::Array(values), ty),
@@ -691,6 +722,9 @@ impl<'db> CtfeInterpreter<'db> {
 
         if func.is_extern(self.db) {
             let ret_ty = self.typed_body().expr_ty(self.db, expr);
+            if let Some(value) = self.eval_extern_const_fn(expr, func, ret_ty, &value_args)? {
+                return Ok(value);
+            }
             let args = value_args
                 .iter()
                 .copied()
@@ -767,6 +801,65 @@ impl<'db> CtfeInterpreter<'db> {
             Err(CtfeAbort::Invalid(cause)) => Err(cause),
         }
     }
+
+    fn eval_extern_const_fn(
+        &mut self,
+        expr: ExprId,
+        func: crate::hir_def::Func<'db>,
+        ret_ty: TyId<'db>,
+        args: &[ConstTyId<'db>],
+    ) -> CtfeResult<'db, Option<ConstTyId<'db>>> {
+        let Some(name) = func.name(self.db).to_opt() else {
+            return Ok(None);
+        };
+
+        match name.data(self.db).as_str() {
+            "__as_bytes" => Ok(Some(self.eval_intrinsic_as_bytes(expr, ret_ty, args)?)),
+            "__keccak256" => Ok(Some(self.eval_intrinsic_keccak(expr, ret_ty, args)?)),
+            _ => Ok(None),
+        }
+    }
+
+    fn eval_intrinsic_as_bytes(
+        &self,
+        expr: ExprId,
+        ret_ty: TyId<'db>,
+        args: &[ConstTyId<'db>],
+    ) -> Result<ConstTyId<'db>, InvalidCause<'db>> {
+        let body = self.body();
+        if !is_u8_array_ty(self.db, ret_ty) {
+            return Err(InvalidCause::ConstEvalUnsupported { body, expr });
+        };
+        let [value] = args else {
+            return Err(InvalidCause::ConstEvalUnsupported { body, expr });
+        };
+        let bytes = const_as_bytes(self.db, *value, body, expr)?;
+        if let Some(len) = u8_array_len(self.db, ret_ty)
+            && bytes.len() != len
+        {
+            return Err(InvalidCause::ConstEvalUnsupported { body, expr });
+        }
+        Ok(lit_bytes(self.db, ret_ty, bytes))
+    }
+
+    fn eval_intrinsic_keccak(
+        &self,
+        expr: ExprId,
+        ret_ty: TyId<'db>,
+        args: &[ConstTyId<'db>],
+    ) -> Result<ConstTyId<'db>, InvalidCause<'db>> {
+        let body = self.body();
+        let [value] = args else {
+            return Err(InvalidCause::ConstEvalUnsupported { body, expr });
+        };
+
+        let bytes = const_as_bytes(self.db, *value, body, expr)?;
+        let mut hasher = Keccak::v256();
+        hasher.update(&bytes);
+        let mut out = [0u8; 32];
+        hasher.finalize(&mut out);
+        Ok(lit_int(self.db, ret_ty, BigUint::from_bytes_be(&out)))
+    }
 }
 
 fn instantiate_typed_body<'db>(
@@ -821,6 +914,13 @@ fn lit_int<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>, value: BigUint) -> Co
     )
 }
 
+fn lit_bytes<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>, bytes: Vec<u8>) -> ConstTyId<'db> {
+    ConstTyId::new(
+        db,
+        ConstTyData::Evaluated(EvaluatedConstTy::Bytes(bytes), ty),
+    )
+}
+
 fn const_as_bool<'db>(
     db: &'db dyn HirAnalysisDb,
     value: ConstTyId<'db>,
@@ -841,6 +941,37 @@ fn const_as_int<'db>(
 ) -> Result<BigUint, InvalidCause<'db>> {
     match value.data(db) {
         ConstTyData::Evaluated(EvaluatedConstTy::LitInt(int_id), _) => Ok(int_id.data(db).clone()),
+        _ => Err(InvalidCause::ConstEvalUnsupported { body, expr }),
+    }
+}
+
+fn const_as_u8<'db>(
+    db: &'db dyn HirAnalysisDb,
+    value: ConstTyId<'db>,
+    body: Body<'db>,
+    expr: ExprId,
+) -> Result<u8, InvalidCause<'db>> {
+    let value = const_as_int(db, value, body, expr)?;
+    value
+        .to_u8()
+        .ok_or(InvalidCause::ConstEvalUnsupported { body, expr })
+}
+
+fn const_as_bytes<'db>(
+    db: &'db dyn HirAnalysisDb,
+    value: ConstTyId<'db>,
+    body: Body<'db>,
+    expr: ExprId,
+) -> Result<Vec<u8>, InvalidCause<'db>> {
+    match value.data(db) {
+        ConstTyData::Evaluated(EvaluatedConstTy::Bytes(bytes), _) => Ok(bytes.clone()),
+        ConstTyData::Evaluated(EvaluatedConstTy::Array(elems), _) => elems
+            .iter()
+            .map(|elem| match elem.data(db) {
+                TyData::ConstTy(const_ty) => const_as_u8(db, *const_ty, body, expr),
+                _ => Err(InvalidCause::ConstEvalUnsupported { body, expr }),
+            })
+            .collect(),
         _ => Err(InvalidCause::ConstEvalUnsupported { body, expr }),
     }
 }
@@ -964,4 +1095,40 @@ fn from_signed(bits: usize, value: BigInt) -> BigUint {
     let modulus = BigInt::from_biguint(Sign::Plus, BigUint::one() << bits);
     let v = ((value % &modulus) + &modulus) % &modulus;
     v.to_biguint().expect("mod result should be non-negative")
+}
+
+fn is_u8_ty<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> bool {
+    matches!(
+        ty.base_ty(db).data(db),
+        TyData::TyBase(TyBase::Prim(PrimTy::U8))
+    )
+}
+
+fn is_u8_array_ty<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> bool {
+    if !ty.is_array(db) {
+        return false;
+    }
+
+    let (_, args) = ty.decompose_ty_app(db);
+    matches!(args.first().copied(), Some(elem) if is_u8_ty(db, elem))
+}
+
+fn u8_array_len<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> Option<usize> {
+    if !is_u8_array_ty(db, ty) {
+        return None;
+    }
+
+    let (_, args) = ty.decompose_ty_app(db);
+    const_ty_to_usize(db, *args.get(1)?)
+}
+
+fn const_ty_to_usize<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> Option<usize> {
+    let TyData::ConstTy(const_ty) = ty.data(db) else {
+        return None;
+    };
+
+    match const_ty.data(db) {
+        ConstTyData::Evaluated(EvaluatedConstTy::LitInt(int_id), _) => int_id.data(db).to_usize(),
+        _ => None,
+    }
 }

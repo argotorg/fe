@@ -28,6 +28,7 @@ smallvec.workspace = true
 smallvec1.workspace = true
 thin-vec.workspace = true
 tracing.workspace = true
+tiny-keccak = { version = "2.0.2", features = ["keccak"] }
 
 common.workspace = true
 parser.workspace = true
