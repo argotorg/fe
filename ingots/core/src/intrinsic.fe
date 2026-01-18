@@ -6,6 +6,16 @@ extern {
     /// Return the byte size of a type at compile time.
     pub const fn size_of<T>() -> u256
 
+    /// Converts a value into its byte representation.
+    ///
+    /// This is intended for compiler-generated code. Prefer using `core::AsBytes`.
+    pub const fn __as_bytes<T, const N: usize>(_: T) -> [u8; N]
+
+    /// Computes `keccak256` over a compile-time byte array.
+    ///
+    /// This is intended for compiler-generated code. Prefer using `core::keccak`.
+    pub const fn __keccak256<const N: usize>(_: [u8; N]) -> u256
+
     /// Returns the fixed storage slot offset (in 32-byte slots) for the given contract field
     /// index within the current contract.
     ///

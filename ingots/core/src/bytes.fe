@@ -1,0 +1,21 @@
+use super::intrinsic
+
+pub trait AsBytes {
+    const N: usize
+    const fn as_bytes(self) -> [u8; Self::N]
+}
+
+impl<const LEN: usize> AsBytes for [u8; LEN] {
+    const N: usize = LEN
+    const fn as_bytes(self) -> [u8; Self::N] { self }
+}
+
+impl<const LEN: usize> AsBytes for String<LEN> {
+    const N: usize = LEN
+    const fn as_bytes(self) -> [u8; Self::N] { intrinsic::__as_bytes(self) }
+}
+
+pub const fn keccak<T: AsBytes>(x: T) -> u256 {
+    let bytes: [u8; T::N] = intrinsic::__as_bytes(x)
+    intrinsic::__keccak256(bytes)
+}

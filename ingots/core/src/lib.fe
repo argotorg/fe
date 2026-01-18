@@ -4,6 +4,7 @@ pub use default::Default
 pub use abi::{self, *}
 pub use message::MsgVariant
 pub use ops::{self, *}
+pub use bytes::{AsBytes, keccak}
 pub use intrinsic::{addr_of, contract_field_slot, size_of}
 pub use functional::{Fn, Functor, Applicative, Monad}
 pub use effect_ref::{EffectHandle, EffectHandleMut, EffectRef, EffectRefMut, MemPtr, StorPtr}
