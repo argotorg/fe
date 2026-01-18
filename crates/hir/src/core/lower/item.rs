@@ -295,32 +295,15 @@ impl<'db> TypeAlias<'db> {
 
 impl<'db> Impl<'db> {
     pub(super) fn lower_ast(ctxt: &mut FileLowerCtxt<'db>, ast: ast::Impl) -> Self {
-        // Enter scope FIRST with a preliminary ID so that generic params are
-        // available when lowering the target type. This is needed for const
-        // generics in array types like `impl<const N: usize> Foo for [T; N]`.
-        //
-        // Note: the final impl id depends on the lowered `ty`, so we enter
-        // scope with a temporary id and then swap in the real id once `ty` is
-        // available. This keeps the final impl id stable (i.e. avoids
-        // `... -> Impl(Absent) -> Impl(ty)`), while still ensuring that bodies
-        // created during type lowering are nested under the impl scope.
-        let parent_id = ctxt.current_id();
-        let prelim_id = parent_id.join(ctxt.db(), TrackedItemVariant::Impl(Partial::Absent));
-        ctxt.enter_item_scope(prelim_id, false);
+        let idx = ctxt.next_impl_idx();
+        let id = ctxt.joined_id(TrackedItemVariant::Impl(idx));
+        ctxt.enter_item_scope(id, false);
 
-        // Lower generic params first (now they're in scope for type lowering)
+        // Lower generic params first so they are in scope for type and where-clause lowering.
         let generic_params = GenericParamListId::lower_ast_opt(ctxt, ast.generic_params());
-
-        // Now lower the target type (const expressions can resolve generic params)
-        let ty = TypeId::lower_ast_partial(ctxt, ast.ty());
-
-        // Switch to the final id so nested items (e.g. methods) are keyed under
-        // the real impl identity.
-        let id = parent_id.join(ctxt.db(), TrackedItemVariant::Impl(ty));
-        ctxt.set_current_id(id);
-
         let attributes = AttrListId::lower_ast_opt(ctxt, ast.attr_list());
         let where_clause = WhereClauseId::lower_ast_opt(ctxt, ast.where_clause());
+        let ty = TypeId::lower_ast_partial(ctxt, ast.ty());
         let origin = HirOrigin::raw(&ast);
 
         if let Some(item_list) = ast.item_list() {
@@ -426,36 +409,16 @@ impl<'db> AssocTyDecl<'db> {
 
 impl<'db> ImplTrait<'db> {
     pub(super) fn lower_ast(ctxt: &mut FileLowerCtxt<'db>, ast: ast::ImplTrait) -> Self {
-        // Enter scope FIRST with a preliminary ID so that generic params are
-        // available when lowering the trait ref and target type. This is
-        // needed for const generics in array types like:
-        // `impl<T, const N: usize> Seq<T> for [T; N]`.
-        //
-        // Like inherent impls, the final impl-trait id depends on the lowered
-        // `trait_ref` and `ty`. Enter with a temporary id, then swap in the
-        // final id once both are available to avoid
-        // `... -> ImplTrait(Absent, Absent) -> ImplTrait(trait_ref, ty)`.
-        let parent_id = ctxt.current_id();
-        let prelim_id = parent_id.join(
-            ctxt.db(),
-            TrackedItemVariant::ImplTrait(Partial::Absent, Partial::Absent),
-        );
-        ctxt.enter_item_scope(prelim_id, false);
-
-        // Lower generic params first (now they're in scope for type lowering)
-        let generic_params = GenericParamListId::lower_ast_opt(ctxt, ast.generic_params());
-
-        // Now lower trait ref and target type (const expressions can resolve generic params)
-        let trait_ref = TraitRefId::lower_ast_partial(ctxt, ast.trait_ref());
-        let ty = TypeId::lower_ast_partial(ctxt, ast.ty());
-
-        // Switch to the final id so nested items (e.g. methods) are keyed under
-        // the real impl-trait identity.
-        let id = parent_id.join(ctxt.db(), TrackedItemVariant::ImplTrait(trait_ref, ty));
-        ctxt.set_current_id(id);
+        let idx = ctxt.next_impl_trait_idx();
+        let id = ctxt.joined_id(TrackedItemVariant::ImplTrait(idx));
+        ctxt.enter_item_scope(id, false);
 
         let attributes = AttrListId::lower_ast_opt(ctxt, ast.attr_list());
+        // Lower generic params first so they are in scope for trait-ref/type and where-clause lowering.
+        let generic_params = GenericParamListId::lower_ast_opt(ctxt, ast.generic_params());
         let where_clause = WhereClauseId::lower_ast_opt(ctxt, ast.where_clause());
+        let trait_ref = TraitRefId::lower_ast_partial(ctxt, ast.trait_ref());
+        let ty = TypeId::lower_ast_partial(ctxt, ast.ty());
         let origin = HirOrigin::raw(&ast);
 
         let mut types = vec![];

@@ -116,12 +116,16 @@ pub(crate) fn top_mod_ast(db: &dyn HirDb, top_mod: TopLevelMod) -> ast::Root {
 
 pub(super) struct FileLowerCtxt<'db> {
     builder: ScopeGraphBuilder<'db>,
+    next_impl_idx: u32,
+    next_impl_trait_idx: u32,
 }
 
 impl<'db> FileLowerCtxt<'db> {
     pub(super) fn enter_top_mod(db: &'db dyn HirDb, top_mod: TopLevelMod<'db>) -> Self {
         Self {
             builder: ScopeGraphBuilder::enter_top_mod(db, top_mod),
+            next_impl_idx: 0,
+            next_impl_trait_idx: 0,
         }
     }
 
@@ -219,6 +223,18 @@ impl<'db> FileLowerCtxt<'db> {
 
     pub(super) fn joined_id(&self, id: TrackedItemVariant<'db>) -> TrackedItemId<'db> {
         self.builder.joined_id(id)
+    }
+
+    pub(super) fn next_impl_idx(&mut self) -> u32 {
+        let idx = self.next_impl_idx;
+        self.next_impl_idx += 1;
+        idx
+    }
+
+    pub(super) fn next_impl_trait_idx(&mut self) -> u32 {
+        let idx = self.next_impl_trait_idx;
+        self.next_impl_trait_idx += 1;
+        idx
     }
 
     pub(super) fn current_id(&self) -> TrackedItemId<'db> {

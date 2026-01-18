@@ -364,7 +364,8 @@ where
         let trait_ref = Partial::Present(trait_ref);
         let ty = Partial::Present(ty);
 
-        self.with_item_scope(TrackedItemVariant::ImplTrait(trait_ref, ty), |this, id| {
+        let idx = self.ctxt.next_impl_trait_idx();
+        self.with_item_scope(TrackedItemVariant::ImplTrait(idx), |this, id| {
             let (types, consts) = build_assocs(this);
             this.new_impl_trait(id, trait_ref, ty, types, consts, this.origin())
         })
@@ -381,7 +382,8 @@ where
         let trait_ref = Partial::Present(trait_ref);
         let ty = Partial::Present(ty);
 
-        self.with_item_scope(TrackedItemVariant::ImplTrait(trait_ref, ty), |this, id| {
+        let idx = self.ctxt.next_impl_trait_idx();
+        self.with_item_scope(TrackedItemVariant::ImplTrait(idx), |this, id| {
             let impl_trait = this.new_impl_trait(id, trait_ref, ty, types, consts, this.origin());
             build_children(this);
             impl_trait
