@@ -79,7 +79,13 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
             IngotKind::Core | IngotKind::Std => {}
             _ => return None,
         }
-        let name = func_def.name(self.db)?;
+        let CallableDef::Func(func) = func_def else {
+            return None;
+        };
+        if func.body(self.db).is_some() {
+            return None;
+        }
+        let name = func.name(self.db).to_opt()?;
         match name.data(self.db).as_str() {
             "mload" => Some(IntrinsicOp::Mload),
             "calldataload" => Some(IntrinsicOp::Calldataload),
