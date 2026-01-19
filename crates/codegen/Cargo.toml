@@ -9,6 +9,7 @@ mir = { path = "../mir", package = "fe-mir" }
 hir.workspace = true
 common.workspace = true
 hex = "0.4"
+num-bigint.workspace = true
 rustc-hash.workspace = true
 sonatina-ir = { path = "../../../sonatina/crates/ir" }
 sonatina-triple = { path = "../../../sonatina/crates/triple" }
