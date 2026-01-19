@@ -23,6 +23,7 @@ fmt.workspace = true
 walkdir = "2"
 similar = "2"
 colored = "2"
+hex = "0.4"
 
 [dev-dependencies]
 dir-test.workspace = true

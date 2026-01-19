@@ -1759,6 +1759,7 @@ dependencies = [
  "fe-resolver",
  "fe-solc-runner",
  "fe-test-utils",
+ "hex",
  "petgraph",
  "similar",
  "smol_str",
