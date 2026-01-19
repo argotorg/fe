@@ -24,6 +24,7 @@ fmt.workspace = true
 walkdir = "2"
 similar = "2"
 colored = "2"
+hex = "0.4"
 toml = "0.8.8"
 glob.workspace = true
 
