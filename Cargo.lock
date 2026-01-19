@@ -1189,12 +1189,27 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "720b93bd86ebbb23ebfb2db1ed44d54b2ecbdbb2d034d485bc64aa605ee787ab"
 
 [[package]]
+name = "cranelift-bitset"
+version = "0.126.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "006fe8776f6d81acb83571f52e7737a54c6dec1ba75e2b7b5a68af15451f88ee"
+
+[[package]]
 name = "cranelift-entity"
 version = "0.115.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "760af4b5e051b5f82097a27274b917e3751736369fa73660513488248d27f23d"
 dependencies = [
- "cranelift-bitset",
+ "cranelift-bitset 0.115.1",
+]
+
+[[package]]
+name = "cranelift-entity"
+version = "0.126.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bcca10e8c33eac67a45be4e09d236e274697831ca6bf4c4a927f7570eb8436a8"
+dependencies = [
+ "cranelift-bitset 0.126.2",
 ]
 
 [[package]]
@@ -1357,6 +1372,7 @@ dependencies = [
  "lock_api",
  "once_cell",
  "parking_lot_core",
+ "rayon",
 ]
 
 [[package]]
@@ -1508,6 +1524,11 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "855423f2158bcc73798b3b9a666ec4204597a72370dc91dbdb8e7f9519de8cc3"
 
 [[package]]
+name = "dot2"
+version = "1.0.0"
+source = "git+https://github.com/sanpii/dot2.rs.git#5c4ffa7182d3e6c14b91b94bb9efaad1e218022b"
+
+[[package]]
 name = "dyn-clone"
 version = "1.0.20"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1624,7 +1645,7 @@ dependencies = [
  "serde_json",
  "sha3",
  "thiserror 1.0.69",
- "uint",
+ "uint 0.9.5",
 ]
 
 [[package]]
@@ -1653,9 +1674,9 @@ dependencies = [
  "impl-codec",
  "impl-rlp",
  "impl-serde",
- "primitive-types",
+ "primitive-types 0.12.2",
  "scale-info",
- "uint",
+ "uint 0.9.5",
 ]
 
 [[package]]
@@ -1747,7 +1768,7 @@ dependencies = [
  "camino",
  "clap",
  "colored",
- "cranelift-entity",
+ "cranelift-entity 0.115.1",
  "dir-test",
  "fe-codegen",
  "fe-common",
@@ -1763,7 +1784,7 @@ dependencies = [
  "hex",
  "petgraph",
  "similar",
- "smol_str",
+ "smol_str 0.1.24",
  "tempfile",
  "toml",
  "tracing",
@@ -1797,6 +1818,8 @@ dependencies = [
  "fe-test-utils",
  "hex",
  "rustc-hash 2.1.1",
+ "sonatina-ir",
+ "sonatina-triple",
  "url",
 ]
 
@@ -1814,7 +1837,7 @@ dependencies = [
  "rustc-hash 2.1.1",
  "salsa",
  "serde-semver",
- "smol_str",
+ "smol_str 0.1.24",
  "toml",
  "tracing",
  "url",
@@ -1849,7 +1872,7 @@ dependencies = [
  "glob",
  "petgraph",
  "salsa",
- "smol_str",
+ "smol_str 0.1.24",
  "tempfile",
  "tracing",
  "url",
@@ -1873,10 +1896,10 @@ dependencies = [
  "bitflags 2.10.0",
  "camino",
  "codespan-reporting",
- "cranelift-entity",
+ "cranelift-entity 0.115.1",
  "derive_more 1.0.0",
  "dir-test",
- "dot2",
+ "dot2 1.0.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "either",
  "ena",
  "fe-common",
@@ -1923,7 +1946,7 @@ dependencies = [
  "rustc-hash 2.1.1",
  "salsa",
  "serde_json",
- "smol_str",
+ "smol_str 0.1.24",
  "tempfile",
  "tokio",
  "tower",
@@ -1937,7 +1960,7 @@ dependencies = [
 name = "fe-mir"
 version = "0.1.0"
 dependencies = [
- "cranelift-entity",
+ "cranelift-entity 0.115.1",
  "dir-test",
  "fe-common",
  "fe-driver",
@@ -1981,7 +2004,7 @@ dependencies = [
  "indexmap 2.12.1",
  "petgraph",
  "sha2",
- "smol_str",
+ "smol_str 0.1.24",
  "tempfile",
  "toml",
  "tracing",
@@ -3354,7 +3377,17 @@ dependencies = [
  "impl-rlp",
  "impl-serde",
  "scale-info",
- "uint",
+ "uint 0.9.5",
+]
+
+[[package]]
+name = "primitive-types"
+version = "0.14.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "721a1da530b5a2633218dc9f75713394c983c352be88d2d7c9ee85e2c4c21794"
+dependencies = [
+ "fixed-hash",
+ "uint 0.10.0",
 ]
 
 [[package]]
@@ -3848,7 +3881,7 @@ dependencies = [
  "num-integer",
  "num-traits",
  "parity-scale-codec",
- "primitive-types",
+ "primitive-types 0.12.2",
  "proptest",
  "rand 0.8.5",
  "rand 0.9.2",
@@ -4395,6 +4428,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "smol_str"
+version = "0.3.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0f7a918bd2a9951d18ee6e48f076843e8e73a9a5d22cf05bcd4b7a81bdd04e17"
+dependencies = [
+ "borsh",
+ "serde_core",
+]
+
+[[package]]
 name = "socket2"
 version = "0.6.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4402,6 +4445,41 @@ checksum = "17129e116933cf371d018bb80ae557e889637989d8638274fb25622827b03881"
 dependencies = [
  "libc",
  "windows-sys 0.60.2",
+]
+
+[[package]]
+name = "sonatina-ir"
+version = "0.0.3-alpha"
+dependencies = [
+ "bitflags 2.10.0",
+ "cranelift-entity 0.126.2",
+ "dashmap",
+ "dot2 1.0.0 (git+https://github.com/sanpii/dot2.rs.git)",
+ "dyn-clone",
+ "indexmap 2.12.1",
+ "primitive-types 0.14.0",
+ "rayon",
+ "rustc-hash 2.1.1",
+ "smallvec 1.15.1",
+ "smol_str 0.3.5",
+ "sonatina-macros",
+ "sonatina-triple",
+]
+
+[[package]]
+name = "sonatina-macros"
+version = "0.0.3-alpha"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.111",
+]
+
+[[package]]
+name = "sonatina-triple"
+version = "0.0.3-alpha"
+dependencies = [
+ "thiserror 2.0.17",
 ]
 
 [[package]]
@@ -4878,6 +4956,18 @@ name = "uint"
 version = "0.9.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "76f64bba2c53b04fcab63c01a7d7427eadc821e3bc48c34dc9ba29c501164b52"
+dependencies = [
+ "byteorder",
+ "crunchy",
+ "hex",
+ "static_assertions",
+]
+
+[[package]]
+name = "uint"
+version = "0.10.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "909988d098b2f738727b161a106cfc7cab00c539c2687a8836f8e565976fb53e"
 dependencies = [
  "byteorder",
  "crunchy",
