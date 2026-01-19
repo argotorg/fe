@@ -1,5 +1,6 @@
 ---
 source: crates/uitest/tests/ty_check.rs
+assertion_line: 27
 expression: diags
 input_file: fixtures/ty_check/cast_invalid.fe
 ---
@@ -42,5 +43,20 @@ error[8-0055]: cast is not provably lossless
 14 │     256 as u8
    │     ^^^^^^^^^ cannot cast `{integer}` to `u8` with `as`
    │
-   = try using `.downcast()` for checked narrowing/sign changes, or `.downcast_truncate()` / `.downcast_saturate()` / `.downcast_unchecked()`
    = integer literal `256` is not representable in `u8`
+
+error[8-0055]: cast is not provably lossless
+   ┌─ cast_invalid.fe:24:5
+   │
+24 │     x as wrapper::PrivateFieldWrapper
+   │     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ cannot cast `u32` to `PrivateFieldWrapper` with `as`
+   │
+   = cast is not allowed because the struct field is not `pub`
+
+error[8-0055]: cast is not provably lossless
+   ┌─ cast_invalid.fe:28:5
+   │
+28 │     x as u32
+   │     ^^^^^^^^ cannot cast `PrivateFieldWrapper` to `u32` with `as`
+   │
+   = cast is not allowed because the struct field is not `pub`

@@ -13,3 +13,17 @@ pub fn bool_to_u8(x: bool) -> u8 {
 pub fn lit_out_of_range() -> u8 {
     256 as u8
 }
+
+mod wrapper {
+    pub struct PrivateFieldWrapper {
+        inner: u32
+    }
+}
+
+pub fn cast_to_private_field_struct(x: u32) -> wrapper::PrivateFieldWrapper {
+    x as wrapper::PrivateFieldWrapper
+}
+
+pub fn cast_from_private_field_struct(x: wrapper::PrivateFieldWrapper) -> u32 {
+    x as u32
+}

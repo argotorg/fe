@@ -2260,8 +2260,10 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                 to,
                 hint,
             } => {
-                let involves_bool = from.is_bool(db) || to.is_bool(db);
-                let mut notes = if involves_bool {
+                let notes = if let Some(hint) = hint {
+                    // Use the specific hint instead of the generic downcast suggestion.
+                    vec![hint.clone()]
+                } else if from.is_bool(db) || to.is_bool(db) {
                     vec!["casts involving `bool` are not supported".to_string()]
                 } else {
                     vec![concat!(
@@ -2270,9 +2272,6 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                     )
                     .to_string()]
                 };
-                if let Some(hint) = hint {
-                    notes.push(hint.clone());
-                }
 
                 CompleteDiagnostic {
                     severity: Severity::Error,

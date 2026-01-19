@@ -1,7 +1,7 @@
 use std::evm::effects::Address
 
 pub struct WrapU32 {
-    inner: u32
+    pub inner: u32
 }
 
 pub fn foo(x: u32, idx: u32, a: Address) -> (u8, i64, u256, u256, Address) {
