@@ -1,5 +1,6 @@
 ---
 source: crates/hir/tests/ty_check.rs
+assertion_line: 40
 expression: res
 input_file: test_files/ty_check/cast.fe
 ---
@@ -237,3 +238,24 @@ note:
    │
 21 │     (b, i, word, z, a2)
    │                     ^^ Address
+
+note: 
+   ┌─ cast.fe:24:29
+   │  
+24 │   pub fn literal_cast() -> u8 {
+   │ ╭─────────────────────────────^
+25 │ │     255 as u8
+26 │ │ }
+   │ ╰─^ u8
+
+note: 
+   ┌─ cast.fe:25:5
+   │
+25 │     255 as u8
+   │     ^^^ u8
+
+note: 
+   ┌─ cast.fe:25:5
+   │
+25 │     255 as u8
+   │     ^^^^^^^^^ u8

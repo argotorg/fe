@@ -20,3 +20,7 @@ pub fn foo(x: u32, idx: u32, a: Address) -> (u8, i64, u256, u256, Address) {
 
     (b, i, word, z, a2)
 }
+
+pub fn literal_cast() -> u8 {
+    255 as u8
+}

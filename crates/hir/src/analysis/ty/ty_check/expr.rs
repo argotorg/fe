@@ -293,10 +293,16 @@ impl<'db> TyChecker<'db> {
         {
             let value = int_id.data(self.db);
             if self.int_literal_fits_in_ty(value, to) {
+                // Unify the literal's type variable with the target leaf type
+                // so it doesn't remain unresolved.
+                let leaf = self.peel_transparent_newtypes(to);
+                let _ = self.table.unify(from, leaf);
                 return ExprProp::new(to, true);
             }
 
             let leaf = self.peel_transparent_newtypes(to);
+            // Unify to prevent a spurious "type annotation needed" error.
+            let _ = self.table.unify(from, leaf);
             let diag = BodyDiag::InvalidCast {
                 primary: expr.span(self.body()).into(),
                 from,

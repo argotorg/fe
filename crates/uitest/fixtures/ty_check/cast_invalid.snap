@@ -4,15 +4,6 @@ assertion_line: 27
 expression: diags
 input_file: fixtures/ty_check/cast_invalid.fe
 ---
-error[8-0031]: type annotation is needed
-   ┌─ cast_invalid.fe:14:5
-   │
-14 │     256 as u8
-   │     ^^^
-   │     │
-   │     type annotation is needed
-   │     no default type is provided for an integer type. consider giving integer type
-
 error[8-0055]: cast is not provably lossless
   ┌─ cast_invalid.fe:2:5
   │
