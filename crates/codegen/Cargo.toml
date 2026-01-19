@@ -10,6 +10,8 @@ hir.workspace = true
 common.workspace = true
 hex = "0.4"
 rustc-hash.workspace = true
+sonatina-ir = { path = "../../../sonatina/crates/ir" }
+sonatina-triple = { path = "../../../sonatina/crates/triple" }
 
 [dev-dependencies]
 dir-test.workspace = true
