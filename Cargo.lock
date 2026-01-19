@@ -1827,6 +1827,7 @@ dependencies = [
  "fe-mir",
  "fe-test-utils",
  "hex",
+ "num-bigint",
  "rustc-hash 2.1.1",
  "sonatina-ir",
  "sonatina-triple",

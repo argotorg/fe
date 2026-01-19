@@ -7,13 +7,23 @@ mod types;
 
 use driver::DriverDataBase;
 use hir::hir_def::TopLevelMod;
+use hir::hir_def::expr::{ArithBinOp, BinOp, CompBinOp, LogicalBinOp, UnOp};
 use mir::{MirModule, layout::TargetDataLayout, lower_module};
+use mir::ir::{IntrinsicOp, SyntheticValue};
+use num_bigint::BigUint;
 use rustc_hash::FxHashMap;
 use sonatina_ir::{
-    BlockId, Module, Signature, ValueId,
+    BlockId, I256, Module, Signature, Type, ValueId,
     builder::ModuleBuilder,
     func_cursor::InstInserter,
-    inst::control_flow::{Br, Jump, Return},
+    inst::{
+        arith::{Add, Mul, Neg, Shl, Shr, Sub},
+        cmp::{Eq, IsZero, Sgt, Slt},
+        control_flow::{Br, Jump, Return},
+        data::Mload,
+        evm::{EvmSdiv, EvmSmod},
+        logic::{And, Not, Or, Xor},
+    },
     isa::{Isa, evm::Evm},
     module::{FuncRef, ModuleCtx},
 };
@@ -190,6 +200,9 @@ impl<'db, 'a> ModuleLowerer<'db, 'a> {
         // Maps MIR value IDs to Sonatina value IDs
         let mut value_map: FxHashMap<mir::ValueId, ValueId> = FxHashMap::default();
 
+        // Maps MIR local IDs to Sonatina value IDs (for SSA)
+        let mut local_map: FxHashMap<mir::LocalId, ValueId> = FxHashMap::default();
+
         // Create blocks
         for (idx, _block) in func.body.blocks.iter().enumerate() {
             let block_id = mir::BasicBlockId(idx as u32);
@@ -201,14 +214,11 @@ impl<'db, 'a> ModuleLowerer<'db, 'a> {
         let entry_block = func.body.entry;
         let _sonatina_entry = block_map[&entry_block];
 
-        // Map function arguments
-        let args = fb.args();
-        for (i, _local_id) in func.body.param_locals.iter().enumerate() {
-            // Find the value ID for this parameter local
-            // Parameters are typically the first values in the value array
-            let value_id = mir::ValueId(i as u32);
+        // Map function arguments to parameter locals
+        let args = fb.args().to_vec();
+        for (i, &local_id) in func.body.param_locals.iter().enumerate() {
             if i < args.len() {
-                value_map.insert(value_id, args[i]);
+                local_map.insert(local_id, args[i]);
             }
         }
 
@@ -218,13 +228,27 @@ impl<'db, 'a> ModuleLowerer<'db, 'a> {
             let sonatina_block = block_map[&block_id];
             fb.switch_to_block(sonatina_block);
 
-            // TODO: Lower instructions in this block
-            for _inst in block.insts.iter() {
-                // Instruction lowering will be implemented in Phase 2
+            // Lower instructions in this block
+            for inst in block.insts.iter() {
+                lower_instruction(
+                    &mut fb,
+                    inst,
+                    &func.body,
+                    &mut value_map,
+                    &mut local_map,
+                    is,
+                )?;
             }
 
             // Lower terminator
-            lower_terminator(&mut fb, &block.terminator, &block_map, &value_map, is)?;
+            lower_terminator(
+                &mut fb,
+                &block.terminator,
+                &block_map,
+                &func.body,
+                &mut value_map,
+                is,
+            )?;
         }
 
         // Seal all blocks and finalize
@@ -235,19 +259,390 @@ impl<'db, 'a> ModuleLowerer<'db, 'a> {
     }
 }
 
-/// Lower a block terminator.
-fn lower_terminator<C: sonatina_ir::func_cursor::FuncCursor>(
+/// Lower a MIR instruction.
+fn lower_instruction<'db, C: sonatina_ir::func_cursor::FuncCursor>(
     fb: &mut sonatina_ir::builder::FunctionBuilder<C>,
-    term: &mir::Terminator<'_>,
+    inst: &mir::MirInst<'db>,
+    body: &mir::MirBody<'db>,
+    value_map: &mut FxHashMap<mir::ValueId, ValueId>,
+    local_map: &mut FxHashMap<mir::LocalId, ValueId>,
+    is: &sonatina_ir::inst::evm::inst_set::EvmInstSet,
+) -> Result<(), LowerError> {
+    use mir::MirInst;
+
+    match inst {
+        MirInst::Assign { dest, rvalue, .. } => {
+            let result = lower_rvalue(fb, rvalue, body, value_map, local_map, is)?;
+            if let (Some(dest_local), Some(result_val)) = (dest, result) {
+                local_map.insert(*dest_local, result_val);
+            }
+        }
+        MirInst::Store { place, value } => {
+            // For now, just evaluate the value - store lowering needs place handling
+            let _ = lower_value(fb, *value, body, value_map, local_map, is)?;
+            let _ = place; // TODO: implement place-based stores
+        }
+        MirInst::InitAggregate { .. } => {
+            // TODO: implement aggregate initialization
+        }
+        MirInst::SetDiscriminant { .. } => {
+            // TODO: implement discriminant setting
+        }
+        MirInst::BindValue { value } => {
+            // Ensure the value is lowered and cached
+            let _ = lower_value(fb, *value, body, value_map, local_map, is)?;
+        }
+    }
+
+    Ok(())
+}
+
+/// Lower a MIR rvalue to a Sonatina value.
+fn lower_rvalue<'db, C: sonatina_ir::func_cursor::FuncCursor>(
+    fb: &mut sonatina_ir::builder::FunctionBuilder<C>,
+    rvalue: &mir::Rvalue<'db>,
+    body: &mir::MirBody<'db>,
+    value_map: &mut FxHashMap<mir::ValueId, ValueId>,
+    local_map: &mut FxHashMap<mir::LocalId, ValueId>,
+    is: &sonatina_ir::inst::evm::inst_set::EvmInstSet,
+) -> Result<Option<ValueId>, LowerError> {
+    use mir::Rvalue;
+
+    match rvalue {
+        Rvalue::ZeroInit => {
+            // Create a zero constant
+            let zero = fb.make_imm_value(I256::zero());
+            Ok(Some(zero))
+        }
+        Rvalue::Value(value_id) => {
+            let val = lower_value(fb, *value_id, body, value_map, local_map, is)?;
+            Ok(Some(val))
+        }
+        Rvalue::Call(_) => {
+            // TODO: implement function calls
+            Err(LowerError::Unsupported("function calls".to_string()))
+        }
+        Rvalue::Intrinsic { op, args } => {
+            lower_intrinsic(fb, *op, args, body, value_map, local_map, is)
+        }
+        Rvalue::Load { place } => {
+            // For now, simple load from base value
+            let base = lower_value(fb, place.base, body, value_map, local_map, is)?;
+            // TODO: handle projections properly
+            if place.projection.is_empty() {
+                // Just return the base value if no projection
+                Ok(Some(base))
+            } else {
+                // Load from memory address
+                let load = Mload::new(is, base, Type::I256);
+                let result = fb.insert_inst(load, Type::I256);
+                Ok(Some(result))
+            }
+        }
+        Rvalue::Alloc { .. } => {
+            // TODO: implement memory allocation
+            Err(LowerError::Unsupported("memory allocation".to_string()))
+        }
+    }
+}
+
+/// Lower a MIR value to a Sonatina value.
+fn lower_value<'db, C: sonatina_ir::func_cursor::FuncCursor>(
+    fb: &mut sonatina_ir::builder::FunctionBuilder<C>,
+    value_id: mir::ValueId,
+    body: &mir::MirBody<'db>,
+    value_map: &mut FxHashMap<mir::ValueId, ValueId>,
+    local_map: &mut FxHashMap<mir::LocalId, ValueId>,
+    is: &sonatina_ir::inst::evm::inst_set::EvmInstSet,
+) -> Result<ValueId, LowerError> {
+    // Check if already lowered
+    if let Some(&val) = value_map.get(&value_id) {
+        return Ok(val);
+    }
+
+    let value_data = &body.values[value_id.index()];
+    let result = lower_value_origin(fb, &value_data.origin, body, value_map, local_map, is)?;
+
+    value_map.insert(value_id, result);
+    Ok(result)
+}
+
+/// Lower a MIR value origin to a Sonatina value.
+fn lower_value_origin<'db, C: sonatina_ir::func_cursor::FuncCursor>(
+    fb: &mut sonatina_ir::builder::FunctionBuilder<C>,
+    origin: &mir::ValueOrigin<'db>,
+    body: &mir::MirBody<'db>,
+    value_map: &mut FxHashMap<mir::ValueId, ValueId>,
+    local_map: &mut FxHashMap<mir::LocalId, ValueId>,
+    is: &sonatina_ir::inst::evm::inst_set::EvmInstSet,
+) -> Result<ValueId, LowerError> {
+    use mir::ValueOrigin;
+
+    match origin {
+        ValueOrigin::Synthetic(syn) => match syn {
+            SyntheticValue::Int(n) => {
+                let i256_val = biguint_to_i256(n);
+                Ok(fb.make_imm_value(i256_val))
+            }
+            SyntheticValue::Bool(b) => {
+                let val = if *b { I256::one() } else { I256::zero() };
+                Ok(fb.make_imm_value(val))
+            }
+            SyntheticValue::Bytes(bytes) => {
+                // Convert bytes to I256 (right-padded to 32 bytes)
+                let i256_val = bytes_to_i256(bytes);
+                Ok(fb.make_imm_value(i256_val))
+            }
+        },
+        ValueOrigin::Local(local_id) => {
+            local_map.get(local_id).copied().ok_or_else(|| {
+                LowerError::Internal(format!("local {:?} not found", local_id))
+            })
+        }
+        ValueOrigin::Unit => {
+            // Unit is represented as 0
+            Ok(fb.make_imm_value(I256::zero()))
+        }
+        ValueOrigin::Unary { op, inner } => {
+            let inner_val = lower_value(fb, *inner, body, value_map, local_map, is)?;
+            lower_unary_op(fb, *op, inner_val, is)
+        }
+        ValueOrigin::Binary { op, lhs, rhs } => {
+            let lhs_val = lower_value(fb, *lhs, body, value_map, local_map, is)?;
+            let rhs_val = lower_value(fb, *rhs, body, value_map, local_map, is)?;
+            lower_binary_op(fb, *op, lhs_val, rhs_val, is)
+        }
+        ValueOrigin::TransparentCast { value } => {
+            // Transparent cast just passes through the inner value
+            lower_value(fb, *value, body, value_map, local_map, is)
+        }
+        ValueOrigin::ControlFlowResult { .. } => {
+            // Control flow results need phi nodes - for now return zero
+            // TODO: proper SSA phi handling
+            Ok(fb.make_imm_value(I256::zero()))
+        }
+        ValueOrigin::PlaceRef(place) => {
+            // Lower the base value - the place ref is a pointer
+            lower_value(fb, place.base, body, value_map, local_map, is)
+        }
+        ValueOrigin::FieldPtr(_) => {
+            // TODO: field pointer arithmetic
+            Err(LowerError::Unsupported("field pointer".to_string()))
+        }
+        ValueOrigin::FuncItem(_) => {
+            // Function items are compile-time only - return zero
+            Ok(fb.make_imm_value(I256::zero()))
+        }
+        ValueOrigin::Expr(_) => {
+            // Unlowered expressions shouldn't reach codegen
+            Err(LowerError::Internal("unlowered expression in codegen".to_string()))
+        }
+    }
+}
+
+/// Lower a unary operation.
+fn lower_unary_op<C: sonatina_ir::func_cursor::FuncCursor>(
+    fb: &mut sonatina_ir::builder::FunctionBuilder<C>,
+    op: UnOp,
+    inner: ValueId,
+    is: &sonatina_ir::inst::evm::inst_set::EvmInstSet,
+) -> Result<ValueId, LowerError> {
+    match op {
+        UnOp::Not => {
+            // Logical not: iszero
+            let result = fb.insert_inst(IsZero::new(is, inner), Type::I1);
+            Ok(result)
+        }
+        UnOp::Minus => {
+            // Arithmetic negation
+            let result = fb.insert_inst(Neg::new(is, inner), Type::I256);
+            Ok(result)
+        }
+        UnOp::BitNot => {
+            // Bitwise not
+            let result = fb.insert_inst(Not::new(is, inner), Type::I256);
+            Ok(result)
+        }
+        UnOp::Plus => {
+            // Unary plus is a no-op
+            Ok(inner)
+        }
+    }
+}
+
+/// Lower a binary operation.
+fn lower_binary_op<C: sonatina_ir::func_cursor::FuncCursor>(
+    fb: &mut sonatina_ir::builder::FunctionBuilder<C>,
+    op: BinOp,
+    lhs: ValueId,
+    rhs: ValueId,
+    is: &sonatina_ir::inst::evm::inst_set::EvmInstSet,
+) -> Result<ValueId, LowerError> {
+    match op {
+        BinOp::Arith(arith_op) => lower_arith_op(fb, arith_op, lhs, rhs, is),
+        BinOp::Comp(comp_op) => lower_comp_op(fb, comp_op, lhs, rhs, is),
+        BinOp::Logical(log_op) => lower_logical_op(fb, log_op, lhs, rhs, is),
+        BinOp::Index => {
+            // Index operations are handled via projections, not as binary ops
+            Err(LowerError::Unsupported("index binary op".to_string()))
+        }
+    }
+}
+
+/// Lower an arithmetic binary operation.
+fn lower_arith_op<C: sonatina_ir::func_cursor::FuncCursor>(
+    fb: &mut sonatina_ir::builder::FunctionBuilder<C>,
+    op: ArithBinOp,
+    lhs: ValueId,
+    rhs: ValueId,
+    is: &sonatina_ir::inst::evm::inst_set::EvmInstSet,
+) -> Result<ValueId, LowerError> {
+    let result = match op {
+        ArithBinOp::Add => fb.insert_inst(Add::new(is, lhs, rhs), Type::I256),
+        ArithBinOp::Sub => fb.insert_inst(Sub::new(is, lhs, rhs), Type::I256),
+        ArithBinOp::Mul => fb.insert_inst(Mul::new(is, lhs, rhs), Type::I256),
+        ArithBinOp::Div => fb.insert_inst(EvmSdiv::new(is, lhs, rhs), Type::I256),
+        ArithBinOp::Rem => fb.insert_inst(EvmSmod::new(is, lhs, rhs), Type::I256),
+        ArithBinOp::Pow => {
+            // TODO: use EvmExp
+            return Err(LowerError::Unsupported("exponentiation".to_string()));
+        }
+        ArithBinOp::LShift => fb.insert_inst(Shl::new(is, lhs, rhs), Type::I256),
+        ArithBinOp::RShift => fb.insert_inst(Shr::new(is, lhs, rhs), Type::I256),
+        ArithBinOp::BitOr => fb.insert_inst(Or::new(is, lhs, rhs), Type::I256),
+        ArithBinOp::BitXor => fb.insert_inst(Xor::new(is, lhs, rhs), Type::I256),
+        ArithBinOp::BitAnd => fb.insert_inst(And::new(is, lhs, rhs), Type::I256),
+        ArithBinOp::Range => {
+            // Range is handled at HIR level, shouldn't reach MIR binary ops
+            return Err(LowerError::Unsupported("range operator".to_string()));
+        }
+    };
+    Ok(result)
+}
+
+/// Lower a comparison binary operation.
+fn lower_comp_op<C: sonatina_ir::func_cursor::FuncCursor>(
+    fb: &mut sonatina_ir::builder::FunctionBuilder<C>,
+    op: CompBinOp,
+    lhs: ValueId,
+    rhs: ValueId,
+    is: &sonatina_ir::inst::evm::inst_set::EvmInstSet,
+) -> Result<ValueId, LowerError> {
+    let result = match op {
+        CompBinOp::Eq => fb.insert_inst(Eq::new(is, lhs, rhs), Type::I1),
+        CompBinOp::NotEq => {
+            // neq = iszero(eq(lhs, rhs))
+            let eq_result = fb.insert_inst(Eq::new(is, lhs, rhs), Type::I1);
+            fb.insert_inst(IsZero::new(is, eq_result), Type::I1)
+        }
+        CompBinOp::Lt => fb.insert_inst(Slt::new(is, lhs, rhs), Type::I1),
+        CompBinOp::LtEq => {
+            // lhs <= rhs  <==>  !(lhs > rhs)
+            let gt_result = fb.insert_inst(Sgt::new(is, lhs, rhs), Type::I1);
+            fb.insert_inst(IsZero::new(is, gt_result), Type::I1)
+        }
+        CompBinOp::Gt => fb.insert_inst(Sgt::new(is, lhs, rhs), Type::I1),
+        CompBinOp::GtEq => {
+            // lhs >= rhs  <==>  !(lhs < rhs)
+            let lt_result = fb.insert_inst(Slt::new(is, lhs, rhs), Type::I1);
+            fb.insert_inst(IsZero::new(is, lt_result), Type::I1)
+        }
+    };
+    Ok(result)
+}
+
+/// Lower a logical binary operation.
+fn lower_logical_op<C: sonatina_ir::func_cursor::FuncCursor>(
+    fb: &mut sonatina_ir::builder::FunctionBuilder<C>,
+    op: LogicalBinOp,
+    lhs: ValueId,
+    rhs: ValueId,
+    is: &sonatina_ir::inst::evm::inst_set::EvmInstSet,
+) -> Result<ValueId, LowerError> {
+    // Logical ops work on booleans (I1), but we use I256 for EVM
+    let result = match op {
+        LogicalBinOp::And => fb.insert_inst(And::new(is, lhs, rhs), Type::I256),
+        LogicalBinOp::Or => fb.insert_inst(Or::new(is, lhs, rhs), Type::I256),
+    };
+    Ok(result)
+}
+
+/// Lower a MIR intrinsic operation.
+fn lower_intrinsic<'db, C: sonatina_ir::func_cursor::FuncCursor>(
+    fb: &mut sonatina_ir::builder::FunctionBuilder<C>,
+    op: IntrinsicOp,
+    args: &[mir::ValueId],
+    body: &mir::MirBody<'db>,
+    value_map: &mut FxHashMap<mir::ValueId, ValueId>,
+    local_map: &mut FxHashMap<mir::LocalId, ValueId>,
+    is: &sonatina_ir::inst::evm::inst_set::EvmInstSet,
+) -> Result<Option<ValueId>, LowerError> {
+    // Lower all arguments first
+    let mut lowered_args = Vec::with_capacity(args.len());
+    for &arg in args {
+        let val = lower_value(fb, arg, body, value_map, local_map, is)?;
+        lowered_args.push(val);
+    }
+
+    match op {
+        IntrinsicOp::Mload { .. } => {
+            if let Some(&addr) = lowered_args.first() {
+                let load = Mload::new(is, addr, Type::I256);
+                let result = fb.insert_inst(load, Type::I256);
+                Ok(Some(result))
+            } else {
+                Err(LowerError::Internal("mload requires address argument".to_string()))
+            }
+        }
+        // TODO: Add more intrinsics as needed
+        _ => Err(LowerError::Unsupported(format!("intrinsic {:?}", op))),
+    }
+}
+
+/// Convert a BigUint to I256.
+fn biguint_to_i256(n: &BigUint) -> I256 {
+    // Convert to bytes and then to I256
+    let bytes = n.to_bytes_be();
+    if bytes.is_empty() {
+        return I256::zero();
+    }
+    // Pad to 32 bytes (right-aligned for big-endian)
+    let mut padded = [0u8; 32];
+    let start = 32usize.saturating_sub(bytes.len());
+    let copy_len = bytes.len().min(32);
+    padded[start..start + copy_len].copy_from_slice(&bytes[bytes.len() - copy_len..]);
+    I256::from_be_bytes(&padded)
+}
+
+/// Convert bytes to I256 (left-aligned, right-padded with zeros).
+fn bytes_to_i256(bytes: &[u8]) -> I256 {
+    let mut padded = [0u8; 32];
+    let copy_len = bytes.len().min(32);
+    padded[..copy_len].copy_from_slice(&bytes[..copy_len]);
+    I256::from_be_bytes(&padded)
+}
+
+/// Lower a block terminator.
+fn lower_terminator<'db, C: sonatina_ir::func_cursor::FuncCursor>(
+    fb: &mut sonatina_ir::builder::FunctionBuilder<C>,
+    term: &mir::Terminator<'db>,
     block_map: &FxHashMap<mir::BasicBlockId, BlockId>,
-    value_map: &FxHashMap<mir::ValueId, ValueId>,
+    body: &mir::MirBody<'db>,
+    value_map: &mut FxHashMap<mir::ValueId, ValueId>,
     is: &sonatina_ir::inst::evm::inst_set::EvmInstSet,
 ) -> Result<(), LowerError> {
     use mir::Terminator;
 
+    // Dummy local map for value lowering in terminators
+    let mut local_map: FxHashMap<mir::LocalId, ValueId> = FxHashMap::default();
+
     match term {
         Terminator::Return(ret_val) => {
-            let ret_sonatina = ret_val.and_then(|v| value_map.get(&v).copied());
+            let ret_sonatina = if let Some(v) = ret_val {
+                Some(lower_value(fb, *v, body, value_map, &mut local_map, is)?)
+            } else {
+                None
+            };
             fb.insert_inst_no_result(Return::new(is, ret_sonatina));
         }
         Terminator::Goto { target } => {
@@ -255,9 +650,7 @@ fn lower_terminator<C: sonatina_ir::func_cursor::FuncCursor>(
             fb.insert_inst_no_result(Jump::new(is, target_block));
         }
         Terminator::Branch { cond, then_bb, else_bb } => {
-            let cond_val = value_map.get(cond).copied().ok_or_else(|| {
-                LowerError::Internal(format!("branch condition {:?} not found", cond))
-            })?;
+            let cond_val = lower_value(fb, *cond, body, value_map, &mut local_map, is)?;
             let then_block = block_map[then_bb];
             let else_block = block_map[else_bb];
             // Br: cond, nz_dest (then), z_dest (else)
