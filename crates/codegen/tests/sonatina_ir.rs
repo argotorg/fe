@@ -7,7 +7,7 @@
 //! Snapshots are stored in `fixtures/sonatina_ir/` to avoid conflicting with Yul snapshots.
 
 use common::InputDb;
-use dir_test::{dir_test, Fixture};
+use dir_test::{Fixture, dir_test};
 use driver::DriverDataBase;
 use fe_codegen::emit_module_sonatina_ir;
 use std::path::Path;
@@ -42,20 +42,12 @@ fn sonatina_ir_snap(fixture: Fixture<&str>) {
         Ok(ir) => ir,
         Err(fe_codegen::LowerError::Unsupported(msg)) => {
             // Skip unsupported fixtures - they'll be tracked separately
-            eprintln!(
-                "SKIP {}: unsupported ({})",
-                fixture.path(),
-                msg
-            );
+            eprintln!("SKIP {}: unsupported ({})", fixture.path(), msg);
             return;
         }
         Err(fe_codegen::LowerError::Internal(msg)) => {
             // Skip fixtures with internal errors (missing features, etc.)
-            eprintln!(
-                "SKIP {}: internal error ({})",
-                fixture.path(),
-                msg
-            );
+            eprintln!("SKIP {}: internal error ({})", fixture.path(), msg);
             return;
         }
         Err(err) => panic!("Sonatina IR lowering failed: {err}"),

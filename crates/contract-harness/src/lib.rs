@@ -7,6 +7,7 @@ use hex::FromHex;
 use mir::layout;
 pub use revm::primitives::U256;
 use revm::{
+    InspectCommitEvm,
     bytecode::Bytecode,
     context::{
         Context, TxEnv,
@@ -14,7 +15,6 @@ use revm::{
     },
     database::InMemoryDB,
     handler::{ExecuteCommitEvm, MainBuilder, MainContext, MainnetContext, MainnetEvm},
-    InspectCommitEvm,
     primitives::{Address, Bytes as EvmBytes, Log, TxKind},
     state::AccountInfo,
 };
@@ -650,9 +650,12 @@ mod tests {
         );
         let source = std::fs::read_to_string(&source_path).expect("fixture readable");
 
-        let yul_harness =
-            FeContractHarness::compile_from_source(contract_name, &source, CompileOptions::default())
-                .expect("yul/solc compile");
+        let yul_harness = FeContractHarness::compile_from_source(
+            contract_name,
+            &source,
+            CompileOptions::default(),
+        )
+        .expect("yul/solc compile");
         let yul_instance =
             RuntimeInstance::new(yul_harness.runtime_bytecode()).expect("yul instantiation");
 
@@ -744,7 +747,10 @@ object "Counter" {
             let point_result_sonatina = instance
                 .call_raw(&point_call, options)
                 .expect("point selector should succeed (sonatina)");
-            assert_eq!(point_result_yul.return_data, point_result_sonatina.return_data);
+            assert_eq!(
+                point_result_yul.return_data,
+                point_result_sonatina.return_data
+            );
         }
 
         let square_call =
@@ -760,7 +766,10 @@ object "Counter" {
             let square_result_sonatina = instance
                 .call_raw(&square_call, options)
                 .expect("square selector should succeed (sonatina)");
-            assert_eq!(square_result_yul.return_data, square_result_sonatina.return_data);
+            assert_eq!(
+                square_result_yul.return_data,
+                square_result_sonatina.return_data
+            );
         }
     }
 
@@ -896,7 +905,10 @@ object "Counter" {
             let transfer_bob_sonatina = instance
                 .call_raw(&transfer_bob, options)
                 .expect("transfer from bob should run (sonatina)");
-            assert_eq!(transfer_bob_yul.return_data, transfer_bob_sonatina.return_data);
+            assert_eq!(
+                transfer_bob_yul.return_data,
+                transfer_bob_sonatina.return_data
+            );
         }
 
         // total_supply should equal alice + bob (10 + 5 = 15)

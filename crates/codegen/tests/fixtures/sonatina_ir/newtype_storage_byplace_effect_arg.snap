@@ -1,6 +1,5 @@
 ---
 source: crates/codegen/tests/sonatina_ir.rs
-assertion_line: 74
 expression: output
 input_file: crates/codegen/tests/fixtures/newtype_storage_byplace_effect_arg.fe
 ---
@@ -140,25 +139,20 @@ func public %return_value__Evm_Sol_u256__fe091c64bccbbbf1(v0.i256, v1.i256) {
 func public %soldecoder_i__new__MemoryBytes__b48f82585f3ed728(v0.i256) -> i256 {
     block0:
         v1.i256 = call %cursor_i__new__MemoryBytes__b48f82585f3ed728 v0;
-        v3.i256 = mload 64.i256 i256;
-        v4.i256 = is_zero v3;
-        v6.i256 = mul v4 128.i256;
-        v7.i256 = or v3 v6;
-        v8.i256 = add v7 128.i256;
-        mstore 64.i256 v8 i256;
-        v9.i256 = mload v1 i256;
-        mstore v7 v9 i256;
-        v11.i256 = add v1 32.i256;
-        v12.i256 = mload v11 i256;
-        v13.i256 = add v7 32.i256;
-        mstore v13 v12 i256;
-        v14.i256 = add v1 64.i256;
-        v15.i256 = mload v14 i256;
-        v16.i256 = add v7 64.i256;
-        mstore v16 v15 i256;
-        v19.i256 = add v7 96.i256;
-        mstore v19 0.i256 i256;
-        return v7;
+        v3.i256 = evm_malloc 128.i256;
+        v4.i256 = mload v1 i256;
+        mstore v3 v4 i256;
+        v6.i256 = add v1 32.i256;
+        v7.i256 = mload v6 i256;
+        v8.i256 = add v3 32.i256;
+        mstore v8 v7 i256;
+        v10.i256 = add v1 64.i256;
+        v11.i256 = mload v10 i256;
+        v12.i256 = add v3 64.i256;
+        mstore v12 v11 i256;
+        v15.i256 = add v3 96.i256;
+        mstore v15 0.i256 i256;
+        return v3;
 }
 
 func public %stor_ptr__Evm_u256__5d0807bcb3704261(v0.i256, v1.i256) -> i256 {
@@ -229,17 +223,12 @@ func public %solencoder_abiencoder_finish(v0.i256) -> i256 {
         v1.i256 = mload v0 i256;
         v3.i256 = add v0 64.i256;
         v4.i256 = mload v3 i256;
-        v5.i256 = mload 64.i256 i256;
-        v6.i256 = is_zero v5;
-        v8.i256 = mul v6 128.i256;
-        v9.i256 = or v5 v8;
-        v10.i256 = add v9 64.i256;
-        mstore 64.i256 v10 i256;
-        mstore v9 v1 i256;
-        v11.i256 = sub v4 v1;
-        v13.i256 = add v9 32.i256;
-        mstore v13 v11 i256;
-        return v9;
+        v5.i256 = evm_malloc 64.i256;
+        mstore v5 v1 i256;
+        v6.i256 = sub v4 v1;
+        v8.i256 = add v5 32.i256;
+        mstore v8 v6 i256;
+        return v5;
 }
 
 func public %evm_contracthost_return_bytes(v0.i256, v1.i256, v2.i256) {
@@ -249,21 +238,16 @@ func public %evm_contracthost_return_bytes(v0.i256, v1.i256, v2.i256) {
 
 func public %cursor_i__new__MemoryBytes__b48f82585f3ed728(v0.i256) -> i256 {
     block0:
-        v2.i256 = mload 64.i256 i256;
-        v3.i256 = is_zero v2;
-        v5.i256 = mul v3 128.i256;
-        v6.i256 = or v2 v5;
-        v8.i256 = add v6 96.i256;
-        mstore 64.i256 v8 i256;
-        v9.i256 = mload v0 i256;
-        mstore v6 v9 i256;
-        v11.i256 = add v0 32.i256;
-        v12.i256 = mload v11 i256;
-        v13.i256 = add v6 32.i256;
-        mstore v13 v12 i256;
-        v15.i256 = add v6 64.i256;
-        mstore v15 0.i256 i256;
-        return v6;
+        v2.i256 = evm_malloc 96.i256;
+        v3.i256 = mload v0 i256;
+        mstore v2 v3 i256;
+        v5.i256 = add v0 32.i256;
+        v6.i256 = mload v5 i256;
+        v7.i256 = add v2 32.i256;
+        mstore v7 v6 i256;
+        v10.i256 = add v2 64.i256;
+        mstore v10 0.i256 i256;
+        return v2;
 }
 
 func public %storptr_t__effectref_from_raw__u256__3271ca15373d4483(v0.i256) -> i256 {
@@ -282,37 +266,27 @@ func public %soldecoder_i__with_base__CallData__b9ab8dc8a4b2f9e(v0.i256, v1.i256
     block0:
         v2.i256 = call %cursor_i__new__CallData__b9ab8dc8a4b2f9e v0;
         v3.i256 = call %cursor_i__fork_mem__CallData__b9ab8dc8a4b2f9e v2 v1;
-        v5.i256 = mload 64.i256 i256;
-        v6.i256 = is_zero v5;
-        v8.i256 = mul v6 128.i256;
-        v9.i256 = or v5 v8;
-        v11.i256 = add v9 96.i256;
-        mstore 64.i256 v11 i256;
-        v12.i256 = mload v3 i256;
-        mstore v9 v12 i256;
-        v14.i256 = add v3 32.i256;
-        v15.i256 = mload v14 i256;
-        v16.i256 = add v9 32.i256;
-        mstore v16 v15 i256;
-        v17.i256 = add v9 64.i256;
-        mstore v17 v1 i256;
-        return v9;
+        v5.i256 = evm_malloc 96.i256;
+        v6.i256 = mload v3 i256;
+        mstore v5 v6 i256;
+        v8.i256 = add v3 32.i256;
+        v9.i256 = mload v8 i256;
+        v10.i256 = add v5 32.i256;
+        mstore v10 v9 i256;
+        v12.i256 = add v5 64.i256;
+        mstore v12 v1 i256;
+        return v5;
 }
 
 func public %solencoder_new() -> i256 {
     block0:
-        v1.i256 = mload 64.i256 i256;
-        v2.i256 = is_zero v1;
-        v4.i256 = mul v2 128.i256;
-        v5.i256 = or v1 v4;
-        v7.i256 = add v5 96.i256;
-        mstore 64.i256 v7 i256;
-        mstore v5 0.i256 i256;
-        v10.i256 = add v5 32.i256;
-        mstore v10 0.i256 i256;
-        v11.i256 = add v5 64.i256;
-        mstore v11 0.i256 i256;
-        return v5;
+        v1.i256 = evm_malloc 96.i256;
+        mstore v1 0.i256 i256;
+        v4.i256 = add v1 32.i256;
+        mstore v4 0.i256 i256;
+        v6.i256 = add v1 64.i256;
+        mstore v6 0.i256 i256;
+        return v1;
 }
 
 func public %solencoder_ensure_init_mem(v0.i256, v1.i256) {
@@ -358,31 +332,21 @@ func public %u32_intword_from_word(v0.i256) -> i256 {
 
 func public %cursor_i__new__CallData__b9ab8dc8a4b2f9e(v0.i256) -> i256 {
     block0:
-        v2.i256 = mload 64.i256 i256;
-        v3.i256 = is_zero v2;
-        v5.i256 = mul v3 128.i256;
-        v6.i256 = or v2 v5;
-        v7.i256 = add v6 64.i256;
-        mstore 64.i256 v7 i256;
-        mstore v6 v0 i256;
-        v10.i256 = add v6 32.i256;
-        mstore v10 0.i256 i256;
-        return v6;
+        v2.i256 = evm_malloc 64.i256;
+        mstore v2 v0 i256;
+        v5.i256 = add v2 32.i256;
+        mstore v5 0.i256 i256;
+        return v2;
 }
 
 func public %cursor_i__fork_mem__CallData__b9ab8dc8a4b2f9e(v0.i256, v1.i256) -> i256 {
     block0:
         v2.i256 = mload v0 i256;
-        v4.i256 = mload 64.i256 i256;
-        v5.i256 = is_zero v4;
-        v7.i256 = mul v5 128.i256;
-        v8.i256 = or v4 v7;
-        v9.i256 = add v8 64.i256;
-        mstore 64.i256 v9 i256;
-        mstore v8 v2 i256;
-        v11.i256 = add v8 32.i256;
-        mstore v11 v1 i256;
-        return v8;
+        v4.i256 = evm_malloc 64.i256;
+        mstore v4 v2 i256;
+        v6.i256 = add v4 32.i256;
+        mstore v6 v1 i256;
+        return v4;
 }
 
 

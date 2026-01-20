@@ -7,19 +7,18 @@ mod types;
 
 use driver::DriverDataBase;
 use hir::analysis::ty::adt_def::AdtRef;
+use hir::analysis::ty::ty_def::{PrimTy, TyBase, TyData};
 use hir::hir_def::TopLevelMod;
 use hir::hir_def::expr::{ArithBinOp, BinOp, CompBinOp, LogicalBinOp, UnOp};
 use hir::projection::{IndexSource, Projection};
-use mir::{MirModule, layout, layout::TargetDataLayout, lower_module};
 use mir::ir::{AddressSpaceKind, IntrinsicOp, Place, SyntheticValue};
+use mir::{MirModule, layout, layout::TargetDataLayout, lower_module};
 use num_bigint::BigUint;
 use rustc_hash::FxHashMap;
-use hir::analysis::ty::ty_def::{PrimTy, TyBase, TyData};
 use sonatina_ir::{
     BlockId, I256, Module, Signature, Type, ValueId,
     builder::{ModuleBuilder, Variable},
     func_cursor::InstInserter,
-    ir_writer::ModuleWriter,
     inst::{
         arith::{Add, Mul, Neg, Shl, Shr, Sub},
         cast::{Sext, Trunc, Zext},
@@ -27,18 +26,14 @@ use sonatina_ir::{
         control_flow::{Br, Call, Jump, Return},
         data::{Mload, Mstore},
         evm::{
-            EvmCalldataCopy, EvmCalldataLoad, EvmCalldataSize,
-            EvmCaller, EvmCodeCopy, EvmCodeSize,
-            EvmExp, EvmInvalid, EvmKeccak256,
-            EvmMstore8,
-            EvmRevert, EvmReturn,
-            EvmReturnDataCopy, EvmReturnDataSize,
-            EvmSload, EvmSstore,
-            EvmStop,
-            EvmTload, EvmTstore, EvmUdiv, EvmUmod,
+            EvmCalldataCopy, EvmCalldataLoad, EvmCalldataSize, EvmCaller, EvmCodeCopy, EvmCodeSize,
+            EvmExp, EvmInvalid, EvmKeccak256, EvmMalloc, EvmMstore8, EvmReturn, EvmReturnDataCopy,
+            EvmReturnDataSize, EvmRevert, EvmSload, EvmSstore, EvmStop, EvmTload, EvmTstore,
+            EvmUdiv, EvmUmod,
         },
         logic::{And, Not, Or, Xor},
     },
+    ir_writer::ModuleWriter,
     isa::{Isa, evm::Evm},
     module::{FuncRef, ModuleCtx},
     object::{Directive, Object, ObjectName, Section, SectionName},
@@ -219,7 +214,8 @@ impl<'db, 'a> ModuleLowerer<'db, 'a> {
 
             self.func_map.insert(idx, func_ref);
             self.name_map.insert(name.clone(), func_ref);
-            self.returns_value_map.insert(name.clone(), func.returns_value);
+            self.returns_value_map
+                .insert(name.clone(), func.returns_value);
         }
         Ok(())
     }
@@ -313,8 +309,7 @@ impl<'db, 'a> ModuleLowerer<'db, 'a> {
                 .functions
                 .iter()
                 .enumerate()
-                .filter(|(idx, _)| self.func_map.contains_key(idx))
-                .next()
+                .find(|(idx, _)| self.func_map.contains_key(idx))
         };
 
         let (entry_idx, entry_mir_func, is_contract_runtime) =
@@ -369,9 +364,9 @@ impl<'db, 'a> ModuleLowerer<'db, 'a> {
         };
 
         // Add object to module
-        self.builder.declare_object(object).map_err(|e| {
-            LowerError::Internal(format!("failed to declare object: {e}"))
-        })?;
+        self.builder
+            .declare_object(object)
+            .map_err(|e| LowerError::Internal(format!("failed to declare object: {e}")))?;
 
         Ok(())
     }
@@ -400,7 +395,9 @@ impl<'db, 'a> ModuleLowerer<'db, 'a> {
             types::unit_type(),
         );
         let func_ref = self.builder.declare_function(sig).map_err(|e| {
-            LowerError::Internal(format!("failed to declare entry wrapper `{WRAPPER_NAME}`: {e}"))
+            LowerError::Internal(format!(
+                "failed to declare entry wrapper `{WRAPPER_NAME}`: {e}"
+            ))
         })?;
 
         let mut fb = self.builder.func_builder::<InstInserter>(func_ref);
@@ -489,7 +486,9 @@ impl<'db, 'a> ModuleLowerer<'db, 'a> {
             // and regular params shouldn't exist for entry functions.
             for local_id in all_param_locals {
                 let var = local_vars.get(&local_id).copied().ok_or_else(|| {
-                    LowerError::Internal(format!("missing SSA variable for param local {local_id:?}"))
+                    LowerError::Internal(format!(
+                        "missing SSA variable for param local {local_id:?}"
+                    ))
                 })?;
                 let zero = fb.make_imm_value(I256::zero());
                 fb.def_var(var, zero);
@@ -500,7 +499,9 @@ impl<'db, 'a> ModuleLowerer<'db, 'a> {
             for (i, local_id) in all_param_locals.into_iter().enumerate() {
                 let Some(&arg_val) = args.get(i) else { break };
                 let var = local_vars.get(&local_id).copied().ok_or_else(|| {
-                    LowerError::Internal(format!("missing SSA variable for param local {local_id:?}"))
+                    LowerError::Internal(format!(
+                        "missing SSA variable for param local {local_id:?}"
+                    ))
                 })?;
                 fb.def_var(var, arg_val);
             }
@@ -575,15 +576,8 @@ fn lower_instruction<'db, C: sonatina_ir::func_cursor::FuncCursor>(
                         "alloc rvalue without destination local".to_string(),
                     ));
                 };
-                let value = lower_alloc(
-                    fb,
-                    db,
-                    target_layout,
-                    *dest_local,
-                    *address_space,
-                    body,
-                    is,
-                )?;
+                let value =
+                    lower_alloc(fb, db, target_layout, *dest_local, *address_space, body, is)?;
                 let dest_var = local_vars.get(dest_local).copied().ok_or_else(|| {
                     LowerError::Internal(format!("missing SSA variable for local {dest_local:?}"))
                 })?;
@@ -609,7 +603,9 @@ fn lower_instruction<'db, C: sonatina_ir::func_cursor::FuncCursor>(
                 })?;
                 // Apply from_word conversion for Load operations
                 let converted = if matches!(rvalue, mir::Rvalue::Load { .. }) {
-                    let dest_ty = body.locals.get(dest_local.index())
+                    let dest_ty = body
+                        .locals
+                        .get(dest_local.index())
                         .map(|l| l.ty)
                         .unwrap_or_else(|| body.values[0].ty); // fallback shouldn't happen
                     apply_from_word(fb, db, result_val, dest_ty, is)
@@ -667,7 +663,16 @@ fn lower_instruction<'db, C: sonatina_ir::func_cursor::FuncCursor>(
         }
         MirInst::BindValue { value } => {
             // Ensure the value is lowered and cached
-            let _ = lower_value(fb, db, target_layout, *value, body, value_map, local_vars, is)?;
+            let _ = lower_value(
+                fb,
+                db,
+                target_layout,
+                *value,
+                body,
+                value_map,
+                local_vars,
+                is,
+            )?;
         }
     }
 
@@ -696,7 +701,16 @@ fn lower_rvalue<'db, C: sonatina_ir::func_cursor::FuncCursor>(
             Ok(Some(zero))
         }
         Rvalue::Value(value_id) => {
-            let val = lower_value(fb, db, target_layout, *value_id, body, value_map, local_vars, is)?;
+            let val = lower_value(
+                fb,
+                db,
+                target_layout,
+                *value_id,
+                body,
+                value_map,
+                local_vars,
+                is,
+            )?;
             Ok(Some(val))
         }
         Rvalue::Call(call) => {
@@ -705,9 +719,9 @@ fn lower_rvalue<'db, C: sonatina_ir::func_cursor::FuncCursor>(
                 LowerError::Unsupported("call without resolved symbol name".to_string())
             })?;
 
-            let func_ref = name_map.get(callee_name).ok_or_else(|| {
-                LowerError::Internal(format!("unknown function: {callee_name}"))
-            })?;
+            let func_ref = name_map
+                .get(callee_name)
+                .ok_or_else(|| LowerError::Internal(format!("unknown function: {callee_name}")))?;
 
             // Lower arguments (regular args + effect args)
             let mut args = Vec::with_capacity(call.args.len() + call.effect_args.len());
@@ -731,14 +745,11 @@ fn lower_rvalue<'db, C: sonatina_ir::func_cursor::FuncCursor>(
 
             // Emit call instruction with proper return type
             let call_inst = Call::new(is, *func_ref, args.into());
-            let callee_returns = returns_value_map
-                .get(callee_name)
-                .copied()
-                .ok_or_else(|| {
-                    LowerError::Internal(format!(
-                        "missing return type metadata for function: {callee_name}"
-                    ))
-                })?;
+            let callee_returns = returns_value_map.get(callee_name).copied().ok_or_else(|| {
+                LowerError::Internal(format!(
+                    "missing return type metadata for function: {callee_name}"
+                ))
+            })?;
             if callee_returns {
                 let result = fb.insert_inst(call_inst, types::word_type());
                 Ok(Some(result))
@@ -748,12 +759,28 @@ fn lower_rvalue<'db, C: sonatina_ir::func_cursor::FuncCursor>(
                 Ok(None)
             }
         }
-        Rvalue::Intrinsic { op, args } => {
-            lower_intrinsic(fb, db, target_layout, *op, args, body, value_map, local_vars, is)
-        }
+        Rvalue::Intrinsic { op, args } => lower_intrinsic(
+            fb,
+            db,
+            target_layout,
+            *op,
+            args,
+            body,
+            value_map,
+            local_vars,
+            is,
+        ),
         Rvalue::Load { place } => {
-            let addr =
-                lower_place_address(fb, db, target_layout, place, body, value_map, local_vars, is)?;
+            let addr = lower_place_address(
+                fb,
+                db,
+                target_layout,
+                place,
+                body,
+                value_map,
+                local_vars,
+                is,
+            )?;
             let addr_space = body.place_address_space(place);
 
             let result = match addr_space {
@@ -776,11 +803,9 @@ fn lower_rvalue<'db, C: sonatina_ir::func_cursor::FuncCursor>(
             };
             Ok(Some(result))
         }
-        Rvalue::Alloc { .. } => {
-            Err(LowerError::Internal(
-                "Alloc rvalue should be handled directly in Assign lowering".to_string(),
-            ))
-        }
+        Rvalue::Alloc { .. } => Err(LowerError::Internal(
+            "Alloc rvalue should be handled directly in Assign lowering".to_string(),
+        )),
     }
 }
 
@@ -803,10 +828,8 @@ fn lower_value<'db, C: sonatina_ir::func_cursor::FuncCursor>(
         value_data.origin,
         mir::ValueOrigin::Local(_) | mir::ValueOrigin::PlaceRef(_)
     );
-    if cacheable {
-        if let Some(&val) = value_map.get(&value_id) {
-            return Ok(val);
-        }
+    if cacheable && let Some(&val) = value_map.get(&value_id) {
+        return Ok(val);
     }
 
     let result = lower_value_origin(
@@ -866,8 +889,16 @@ fn lower_value_origin<'db, C: sonatina_ir::func_cursor::FuncCursor>(
             Ok(fb.make_imm_value(I256::zero()))
         }
         ValueOrigin::Unary { op, inner } => {
-            let inner_val =
-                lower_value(fb, db, target_layout, *inner, body, value_map, local_vars, is)?;
+            let inner_val = lower_value(
+                fb,
+                db,
+                target_layout,
+                *inner,
+                body,
+                value_map,
+                local_vars,
+                is,
+            )?;
             lower_unary_op(fb, *op, inner_val, is)
         }
         ValueOrigin::Binary { op, lhs, rhs } => {
@@ -879,7 +910,16 @@ fn lower_value_origin<'db, C: sonatina_ir::func_cursor::FuncCursor>(
         }
         ValueOrigin::TransparentCast { value } => {
             // Transparent cast just passes through the inner value
-            lower_value(fb, db, target_layout, *value, body, value_map, local_vars, is)
+            lower_value(
+                fb,
+                db,
+                target_layout,
+                *value,
+                body,
+                value_map,
+                local_vars,
+                is,
+            )
         }
         ValueOrigin::ControlFlowResult { expr } => {
             // ControlFlowResult values should be converted to Local values during MIR lowering.
@@ -890,7 +930,16 @@ fn lower_value_origin<'db, C: sonatina_ir::func_cursor::FuncCursor>(
         }
         ValueOrigin::PlaceRef(place) => {
             // Compute the full address including projections
-            lower_place_address(fb, db, target_layout, place, body, value_map, local_vars, is)
+            lower_place_address(
+                fb,
+                db,
+                target_layout,
+                place,
+                body,
+                value_map,
+                local_vars,
+                is,
+            )
         }
         ValueOrigin::FieldPtr(_) => {
             // TODO: field pointer arithmetic
@@ -905,7 +954,9 @@ fn lower_value_origin<'db, C: sonatina_ir::func_cursor::FuncCursor>(
         }
         ValueOrigin::Expr(_) => {
             // Unlowered expressions shouldn't reach codegen
-            Err(LowerError::Internal("unlowered expression in codegen".to_string()))
+            Err(LowerError::Internal(
+                "unlowered expression in codegen".to_string(),
+            ))
         }
     }
 }
@@ -1057,42 +1108,53 @@ fn lower_intrinsic<'db, C: sonatina_ir::func_cursor::FuncCursor>(
     match op {
         IntrinsicOp::AddrOf => {
             let Some(&arg) = lowered_args.first() else {
-                return Err(LowerError::Internal("addr_of requires 1 argument".to_string()));
+                return Err(LowerError::Internal(
+                    "addr_of requires 1 argument".to_string(),
+                ));
             };
             Ok(Some(arg))
         }
         IntrinsicOp::Mload => {
             let Some(&addr) = lowered_args.first() else {
-                return Err(LowerError::Internal("mload requires address argument".to_string()));
+                return Err(LowerError::Internal(
+                    "mload requires address argument".to_string(),
+                ));
             };
-            Ok(Some(fb.insert_inst(
-                Mload::new(is, addr, Type::I256),
-                Type::I256,
-            )))
+            Ok(Some(
+                fb.insert_inst(Mload::new(is, addr, Type::I256), Type::I256),
+            ))
         }
         IntrinsicOp::Mstore => {
             let [addr, val] = lowered_args.as_slice() else {
-                return Err(LowerError::Internal("mstore requires 2 arguments".to_string()));
+                return Err(LowerError::Internal(
+                    "mstore requires 2 arguments".to_string(),
+                ));
             };
             fb.insert_inst_no_result(Mstore::new(is, *addr, *val, Type::I256));
             Ok(None)
         }
         IntrinsicOp::Mstore8 => {
             let [addr, val] = lowered_args.as_slice() else {
-                return Err(LowerError::Internal("mstore8 requires 2 arguments".to_string()));
+                return Err(LowerError::Internal(
+                    "mstore8 requires 2 arguments".to_string(),
+                ));
             };
             fb.insert_inst_no_result(EvmMstore8::new(is, *addr, *val));
             Ok(None)
         }
         IntrinsicOp::Sload => {
             let Some(&key) = lowered_args.first() else {
-                return Err(LowerError::Internal("sload requires 1 argument".to_string()));
+                return Err(LowerError::Internal(
+                    "sload requires 1 argument".to_string(),
+                ));
             };
             Ok(Some(fb.insert_inst(EvmSload::new(is, key), Type::I256)))
         }
         IntrinsicOp::Sstore => {
             let [key, val] = lowered_args.as_slice() else {
-                return Err(LowerError::Internal("sstore requires 2 arguments".to_string()));
+                return Err(LowerError::Internal(
+                    "sstore requires 2 arguments".to_string(),
+                ));
             };
             fb.insert_inst_no_result(EvmSstore::new(is, *key, *val));
             Ok(None)
@@ -1103,10 +1165,9 @@ fn lower_intrinsic<'db, C: sonatina_ir::func_cursor::FuncCursor>(
                     "calldataload requires 1 argument".to_string(),
                 ));
             };
-            Ok(Some(fb.insert_inst(
-                EvmCalldataLoad::new(is, offset),
-                Type::I256,
-            )))
+            Ok(Some(
+                fb.insert_inst(EvmCalldataLoad::new(is, offset), Type::I256),
+            ))
         }
         IntrinsicOp::Calldatasize => Ok(Some(fb.insert_inst(EvmCalldataSize::new(is), Type::I256))),
         IntrinsicOp::Calldatacopy => {
@@ -1118,9 +1179,9 @@ fn lower_intrinsic<'db, C: sonatina_ir::func_cursor::FuncCursor>(
             fb.insert_inst_no_result(EvmCalldataCopy::new(is, *dst, *offset, *len));
             Ok(None)
         }
-        IntrinsicOp::Returndatasize => Ok(Some(
-            fb.insert_inst(EvmReturnDataSize::new(is), Type::I256),
-        )),
+        IntrinsicOp::Returndatasize => {
+            Ok(Some(fb.insert_inst(EvmReturnDataSize::new(is), Type::I256)))
+        }
         IntrinsicOp::Returndatacopy => {
             let [dst, offset, len] = lowered_args.as_slice() else {
                 return Err(LowerError::Internal(
@@ -1145,7 +1206,9 @@ fn lower_intrinsic<'db, C: sonatina_ir::func_cursor::FuncCursor>(
         )),
         IntrinsicOp::Keccak => {
             let [addr, len] = lowered_args.as_slice() else {
-                return Err(LowerError::Internal("keccak requires 2 arguments".to_string()));
+                return Err(LowerError::Internal(
+                    "keccak requires 2 arguments".to_string(),
+                ));
             };
             Ok(Some(fb.insert_inst(
                 EvmKeccak256::new(is, *addr, *len),
@@ -1205,7 +1268,13 @@ fn prim_to_sonatina_type(prim: PrimTy) -> Option<Type> {
 fn prim_is_signed(prim: PrimTy) -> bool {
     matches!(
         prim,
-        PrimTy::I8 | PrimTy::I16 | PrimTy::I32 | PrimTy::I64 | PrimTy::I128 | PrimTy::I256 | PrimTy::Isize
+        PrimTy::I8
+            | PrimTy::I16
+            | PrimTy::I32
+            | PrimTy::I64
+            | PrimTy::I128
+            | PrimTy::I256
+            | PrimTy::Isize
     )
 }
 
@@ -1320,8 +1389,16 @@ fn lower_place_address<'db, C: sonatina_ir::func_cursor::FuncCursor>(
     local_vars: &FxHashMap<mir::LocalId, Variable>,
     is: &sonatina_ir::inst::evm::inst_set::EvmInstSet,
 ) -> Result<ValueId, LowerError> {
-    let mut base_val =
-        lower_value(fb, db, target_layout, place.base, body, value_map, local_vars, is)?;
+    let mut base_val = lower_value(
+        fb,
+        db,
+        target_layout,
+        place.base,
+        body,
+        value_map,
+        local_vars,
+        is,
+    )?;
 
     if place.projection.is_empty() {
         return Ok(base_val);
@@ -1353,9 +1430,7 @@ fn lower_place_address<'db, C: sonatina_ir::func_cursor::FuncCursor>(
                 // Update current type to the field's type
                 let field_types = current_ty.field_types(db);
                 current_ty = *field_types.get(*field_idx).ok_or_else(|| {
-                    LowerError::Unsupported(format!(
-                        "projection: field {field_idx} out of bounds"
-                    ))
+                    LowerError::Unsupported(format!("projection: field {field_idx} out of bounds"))
                 })?;
             }
             Projection::VariantField {
@@ -1366,9 +1441,8 @@ fn lower_place_address<'db, C: sonatina_ir::func_cursor::FuncCursor>(
                 // Skip discriminant then compute field offset
                 if is_slot_addressed {
                     total_offset += 1; // discriminant takes one slot
-                    total_offset += layout::variant_field_offset_slots(
-                        db, *enum_ty, *variant, *field_idx,
-                    );
+                    total_offset +=
+                        layout::variant_field_offset_slots(db, *enum_ty, *variant, *field_idx);
                 } else {
                     total_offset += target_layout.discriminant_size_bytes;
                     total_offset += layout::variant_field_offset_bytes_or_word_aligned_in(
@@ -1380,7 +1454,9 @@ fn lower_place_address<'db, C: sonatina_ir::func_cursor::FuncCursor>(
                     );
                 }
                 // Update current type to the field's type
-                let ctor = hir::analysis::ty::simplified_pattern::ConstructorKind::Variant(*variant, *enum_ty);
+                let ctor = hir::analysis::ty::simplified_pattern::ConstructorKind::Variant(
+                    *variant, *enum_ty,
+                );
                 let field_types = ctor.field_types(db);
                 current_ty = *field_types.get(*field_idx).ok_or_else(|| {
                     LowerError::Unsupported(format!(
@@ -1393,8 +1469,10 @@ fn lower_place_address<'db, C: sonatina_ir::func_cursor::FuncCursor>(
                 current_ty = hir::analysis::ty::ty_def::TyId::new(
                     db,
                     hir::analysis::ty::ty_def::TyData::TyBase(
-                        hir::analysis::ty::ty_def::TyBase::Prim(hir::analysis::ty::ty_def::PrimTy::U256)
-                    )
+                        hir::analysis::ty::ty_def::TyBase::Prim(
+                            hir::analysis::ty::ty_def::PrimTy::U256,
+                        ),
+                    ),
                 );
             }
             Projection::Index(idx_source) => {
@@ -1404,9 +1482,7 @@ fn lower_place_address<'db, C: sonatina_ir::func_cursor::FuncCursor>(
                     layout::array_elem_stride_bytes_in(db, target_layout, current_ty)
                 }
                 .ok_or_else(|| {
-                    LowerError::Unsupported(
-                        "projection: array index on non-array type".to_string(),
-                    )
+                    LowerError::Unsupported("projection: array index on non-array type".to_string())
                 })?;
 
                 match idx_source {
@@ -1417,7 +1493,8 @@ fn lower_place_address<'db, C: sonatina_ir::func_cursor::FuncCursor>(
                         // Flush accumulated offset first
                         if total_offset != 0 {
                             let offset_val = fb.make_imm_value(I256::from(total_offset as u64));
-                            base_val = fb.insert_inst(Add::new(is, base_val, offset_val), Type::I256);
+                            base_val =
+                                fb.insert_inst(Add::new(is, base_val, offset_val), Type::I256);
                             total_offset = 0;
                         }
                         // Compute dynamic index offset: idx * stride
@@ -1443,9 +1520,7 @@ fn lower_place_address<'db, C: sonatina_ir::func_cursor::FuncCursor>(
 
                 // Update current type to element type
                 let elem_ty = layout::array_elem_ty(db, current_ty).ok_or_else(|| {
-                    LowerError::Unsupported(
-                        "projection: array index on non-array type".to_string(),
-                    )
+                    LowerError::Unsupported("projection: array index on non-array type".to_string())
                 })?;
                 current_ty = elem_ty;
             }
@@ -1495,7 +1570,16 @@ fn lower_terminator<'db, C: sonatina_ir::func_cursor::FuncCursor>(
             } else {
                 // Non-entry function: emit internal Return for function call semantics.
                 let ret_sonatina = if let Some(v) = ret_val {
-                    Some(lower_value(fb, db, target_layout, *v, body, value_map, local_vars, is)?)
+                    Some(lower_value(
+                        fb,
+                        db,
+                        target_layout,
+                        *v,
+                        body,
+                        value_map,
+                        local_vars,
+                        is,
+                    )?)
                 } else {
                     None
                 };
@@ -1506,9 +1590,21 @@ fn lower_terminator<'db, C: sonatina_ir::func_cursor::FuncCursor>(
             let target_block = block_map[target];
             fb.insert_inst_no_result(Jump::new(is, target_block));
         }
-        Terminator::Branch { cond, then_bb, else_bb } => {
-            let cond_val =
-                lower_value(fb, db, target_layout, *cond, body, value_map, local_vars, is)?;
+        Terminator::Branch {
+            cond,
+            then_bb,
+            else_bb,
+        } => {
+            let cond_val = lower_value(
+                fb,
+                db,
+                target_layout,
+                *cond,
+                body,
+                value_map,
+                local_vars,
+                is,
+            )?;
             let then_block = block_map[then_bb];
             let else_block = block_map[else_bb];
             // Br: cond, nz_dest (then), z_dest (else)
@@ -1519,8 +1615,16 @@ fn lower_terminator<'db, C: sonatina_ir::func_cursor::FuncCursor>(
             targets,
             default,
         } => {
-            let discr_val =
-                lower_value(fb, db, target_layout, *discr, body, value_map, local_vars, is)?;
+            let discr_val = lower_value(
+                fb,
+                db,
+                target_layout,
+                *discr,
+                body,
+                value_map,
+                local_vars,
+                is,
+            )?;
             let default_block = block_map[default];
 
             // NOTE: Sonatina's current EVM backend `BrTable` lowering is broken (it does not
@@ -1670,23 +1774,10 @@ fn lower_alloc<C: sonatina_ir::func_cursor::FuncCursor>(
         return Ok(fb.make_imm_value(I256::zero()));
     }
 
-    // Allocate from the free memory pointer at 0x40 (defaulting to 0x80 if unset).
-    let free_ptr_addr = fb.make_imm_value(I256::from(0x40u64));
-    let raw_ptr = fb.insert_inst(Mload::new(is, free_ptr_addr, Type::I256), Type::I256);
-    let is_zero = fb.insert_inst(IsZero::new(is, raw_ptr), Type::I256);
-    let default_ptr = fb.make_imm_value(I256::from(0x80u64));
-    let fallback = fb.insert_inst(
-        Mul::new(is, is_zero, default_ptr),
-        Type::I256,
-    );
-    let ptr = fb.insert_inst(Or::new(is, raw_ptr, fallback), Type::I256);
-
+    // Use Sonatina's EvmMalloc to allocate memory. This delegates memory management
+    // to Sonatina's codegen, avoiding conflicts with its stack frame handling.
     let size_val = fb.make_imm_value(I256::from(size_bytes as u64));
-    let new_free = fb.insert_inst(
-        Add::new(is, ptr, size_val),
-        Type::I256,
-    );
-    fb.insert_inst_no_result(Mstore::new(is, free_ptr_addr, new_free, Type::I256));
+    let ptr = fb.insert_inst(EvmMalloc::new(is, size_val), Type::I256);
 
     Ok(ptr)
 }
@@ -1728,9 +1819,28 @@ fn lower_store_inst<'db, C: sonatina_ir::func_cursor::FuncCursor>(
         return Ok(());
     }
 
-    let raw_val = lower_value(fb, db, target_layout, value, body, value_map, local_vars, is)?;
+    let raw_val = lower_value(
+        fb,
+        db,
+        target_layout,
+        value,
+        body,
+        value_map,
+        local_vars,
+        is,
+    )?;
     let val = apply_to_word(fb, db, raw_val, value_ty, is);
-    store_word_to_place(fb, db, target_layout, place, val, body, value_map, local_vars, is)
+    store_word_to_place(
+        fb,
+        db,
+        target_layout,
+        place,
+        val,
+        body,
+        value_map,
+        local_vars,
+        is,
+    )
 }
 
 fn store_word_to_place<'db, C: sonatina_ir::func_cursor::FuncCursor>(
@@ -1744,7 +1854,16 @@ fn store_word_to_place<'db, C: sonatina_ir::func_cursor::FuncCursor>(
     local_vars: &FxHashMap<mir::LocalId, Variable>,
     is: &sonatina_ir::inst::evm::inst_set::EvmInstSet,
 ) -> Result<(), LowerError> {
-    let addr = lower_place_address(fb, db, target_layout, place, body, value_map, local_vars, is)?;
+    let addr = lower_place_address(
+        fb,
+        db,
+        target_layout,
+        place,
+        body,
+        value_map,
+        local_vars,
+        is,
+    )?;
     match body.place_address_space(place) {
         AddressSpaceKind::Memory => {
             fb.insert_inst_no_result(Mstore::new(is, addr, val, Type::I256));
@@ -1777,7 +1896,16 @@ fn load_place_typed<'db, C: sonatina_ir::func_cursor::FuncCursor>(
         return Ok(fb.make_imm_value(I256::zero()));
     }
 
-    let addr = lower_place_address(fb, db, target_layout, place, body, value_map, local_vars, is)?;
+    let addr = lower_place_address(
+        fb,
+        db,
+        target_layout,
+        place,
+        body,
+        value_map,
+        local_vars,
+        is,
+    )?;
     let raw = match body.place_address_space(place) {
         AddressSpaceKind::Memory => fb.insert_inst(Mload::new(is, addr, Type::I256), Type::I256),
         AddressSpaceKind::Storage => fb.insert_inst(EvmSload::new(is, addr), Type::I256),
@@ -1812,10 +1940,8 @@ fn deep_copy_from_places<'db, C: sonatina_ir::func_cursor::FuncCursor>(
         let elem_ty = layout::array_elem_ty(db, value_ty)
             .ok_or_else(|| LowerError::Unsupported("array store requires element type".into()))?;
         for idx in 0..len {
-            let dst_elem =
-                extend_place(dst_place, Projection::Index(IndexSource::Constant(idx)));
-            let src_elem =
-                extend_place(src_place, Projection::Index(IndexSource::Constant(idx)));
+            let dst_elem = extend_place(dst_place, Projection::Index(IndexSource::Constant(idx)));
+            let src_elem = extend_place(src_place, Projection::Index(IndexSource::Constant(idx)));
             deep_copy_from_places(
                 fb,
                 db,
@@ -1908,17 +2034,19 @@ fn deep_copy_enum_from_places<'db, C: sonatina_ir::func_cursor::FuncCursor>(
     is: &sonatina_ir::inst::evm::inst_set::EvmInstSet,
 ) -> Result<(), LowerError> {
     let Some(adt_def) = enum_ty.adt_def(db) else {
-        return Err(LowerError::Unsupported("enum store requires enum adt".into()));
+        return Err(LowerError::Unsupported(
+            "enum store requires enum adt".into(),
+        ));
     };
     let AdtRef::Enum(enm) = adt_def.adt_ref(db) else {
-        return Err(LowerError::Unsupported("enum store requires enum adt".into()));
+        return Err(LowerError::Unsupported(
+            "enum store requires enum adt".into(),
+        ));
     };
 
     // Copy discriminant first.
-    let discr_ty = hir::analysis::ty::ty_def::TyId::new(
-        db,
-        TyData::TyBase(TyBase::Prim(PrimTy::U256)),
-    );
+    let discr_ty =
+        hir::analysis::ty::ty_def::TyId::new(db, TyData::TyBase(TyBase::Prim(PrimTy::U256)));
     let discr = load_place_typed(
         fb,
         db,

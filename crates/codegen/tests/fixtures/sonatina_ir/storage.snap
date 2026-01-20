@@ -1,6 +1,5 @@
 ---
 source: crates/codegen/tests/sonatina_ir.rs
-assertion_line: 74
 expression: output
 input_file: crates/codegen/tests/fixtures/storage.fe
 ---
@@ -189,32 +188,22 @@ func public %transfer_from_alice__StorPtr_CoinStore___ba1c0d0726e89ba2(v0.i256, 
         br v3 block1 block2;
 
     block1:
-        v5.i256 = mload 64.i256 i256;
-        v6.i256 = is_zero v5;
-        v8.i256 = mul v6 128.i256;
-        v9.i256 = or v5 v8;
-        v11.i256 = add v9 32.i256;
-        mstore 64.i256 v11 i256;
-        mstore v9 1.i256 i256;
-        return v9;
+        v5.i256 = evm_malloc 32.i256;
+        mstore v5 1.i256 i256;
+        return v5;
 
     block2:
-        v14.i256 = evm_sload v1;
-        v16.i256 = sub v14 v0;
-        evm_sstore v1 v16;
-        v17.i256 = add v1 1.i256;
-        v18.i256 = evm_sload v17;
-        v19.i256 = add v18 v0;
-        v20.i256 = add v1 1.i256;
-        evm_sstore v20 v19;
-        v21.i256 = mload 64.i256 i256;
-        v22.i256 = is_zero v21;
-        v23.i256 = mul v22 128.i256;
-        v24.i256 = or v21 v23;
-        v25.i256 = add v24 32.i256;
-        mstore 64.i256 v25 i256;
-        mstore v24 0.i256 i256;
-        return v24;
+        v8.i256 = evm_sload v1;
+        v10.i256 = sub v8 v0;
+        evm_sstore v1 v10;
+        v11.i256 = add v1 1.i256;
+        v12.i256 = evm_sload v11;
+        v13.i256 = add v12 v0;
+        v14.i256 = add v1 1.i256;
+        evm_sstore v14 v13;
+        v15.i256 = evm_malloc 32.i256;
+        mstore v15 0.i256 i256;
+        return v15;
 }
 
 func public %transfer_from_bob__StorPtr_CoinStore___ba1c0d0726e89ba2(v0.i256, v1.i256) -> i256 {
@@ -225,32 +214,22 @@ func public %transfer_from_bob__StorPtr_CoinStore___ba1c0d0726e89ba2(v0.i256, v1
         br v5 block1 block2;
 
     block1:
-        v7.i256 = mload 64.i256 i256;
-        v8.i256 = is_zero v7;
-        v10.i256 = mul v8 128.i256;
-        v11.i256 = or v7 v10;
-        v13.i256 = add v11 32.i256;
-        mstore 64.i256 v13 i256;
-        mstore v11 1.i256 i256;
-        return v11;
+        v7.i256 = evm_malloc 32.i256;
+        mstore v7 1.i256 i256;
+        return v7;
 
     block2:
-        v15.i256 = add v1 1.i256;
-        v16.i256 = evm_sload v15;
-        v18.i256 = sub v16 v0;
-        v19.i256 = add v1 1.i256;
-        evm_sstore v19 v18;
-        v20.i256 = evm_sload v1;
-        v21.i256 = add v20 v0;
-        evm_sstore v1 v21;
-        v22.i256 = mload 64.i256 i256;
-        v23.i256 = is_zero v22;
-        v24.i256 = mul v23 128.i256;
-        v25.i256 = or v22 v24;
-        v26.i256 = add v25 32.i256;
-        mstore 64.i256 v26 i256;
-        mstore v25 0.i256 i256;
-        return v25;
+        v9.i256 = add v1 1.i256;
+        v10.i256 = evm_sload v9;
+        v12.i256 = sub v10 v0;
+        v13.i256 = add v1 1.i256;
+        evm_sstore v13 v12;
+        v14.i256 = evm_sload v1;
+        v15.i256 = add v14 v0;
+        evm_sstore v1 v15;
+        v16.i256 = evm_malloc 32.i256;
+        mstore v16 0.i256 i256;
+        return v16;
 }
 
 func public %runtime__StorPtr_Evm___207f35a85ac4062e() {

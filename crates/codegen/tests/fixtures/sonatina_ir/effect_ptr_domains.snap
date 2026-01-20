@@ -1,6 +1,5 @@
 ---
 source: crates/codegen/tests/sonatina_ir.rs
-assertion_line: 65
 expression: output
 input_file: crates/codegen/tests/fixtures/effect_ptr_domains.fe
 ---
@@ -25,16 +24,11 @@ func public %test_effect_ptr_domains(v0.i256, v1.i256) {
         call %bump__MemPtr_Foo___cdd30998d577b6ea v3;
         v5.i256 = call %stor_ptr__st__RawStorage_Foo__d44156c896232646 v0 0.i256;
         call %bump__StorPtr_Foo___3698cc3c4b2626e3 v5;
-        v7.i256 = mload 64.i256 i256;
-        v8.i256 = is_zero v7;
-        v10.i256 = mul v8 128.i256;
-        v11.i256 = or v7 v10;
-        v12.i256 = add v11 64.i256;
-        mstore 64.i256 v12 i256;
-        mstore v11 10.i256 i256;
-        v16.i256 = add v11 32.i256;
-        mstore v16 20.i256 i256;
-        call %bump__MemPtr_Foo___cdd30998d577b6ea v11;
+        v7.i256 = evm_malloc 64.i256;
+        mstore v7 10.i256 i256;
+        v11.i256 = add v7 32.i256;
+        mstore v11 20.i256 i256;
+        call %bump__MemPtr_Foo___cdd30998d577b6ea v7;
         return;
 }
 
