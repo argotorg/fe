@@ -19,7 +19,7 @@ use sonatina_ir::{
     inst::{
         arith::{Add, Mul, Neg, Shl, Shr, Sub},
         cmp::{Eq, Gt, IsZero, Lt},
-        control_flow::{Br, Jump, Return},
+        control_flow::{Br, Call, Jump, Return},
         data::{Mload, Mstore},
         evm::{EvmCalldataLoad, EvmExp, EvmSload, EvmSstore, EvmTload, EvmTstore, EvmUdiv, EvmUmod},
         logic::{And, Not, Or, Xor},
@@ -106,6 +106,8 @@ struct ModuleLowerer<'db, 'a> {
     isa: &'a Evm,
     /// Maps function indices to Sonatina function references.
     func_map: FxHashMap<usize, FuncRef>,
+    /// Maps function symbol names to Sonatina function references.
+    name_map: FxHashMap<String, FuncRef>,
 }
 
 impl<'db, 'a> ModuleLowerer<'db, 'a> {
@@ -121,6 +123,7 @@ impl<'db, 'a> ModuleLowerer<'db, 'a> {
             mir,
             isa,
             func_map: FxHashMap::default(),
+            name_map: FxHashMap::default(),
         }
     }
 
@@ -151,6 +154,7 @@ impl<'db, 'a> ModuleLowerer<'db, 'a> {
             })?;
 
             self.func_map.insert(idx, func_ref);
+            self.name_map.insert(name.clone(), func_ref);
         }
         Ok(())
     }
@@ -236,6 +240,7 @@ impl<'db, 'a> ModuleLowerer<'db, 'a> {
                     &func.body,
                     &mut value_map,
                     &mut local_map,
+                    &self.name_map,
                     is,
                 )?;
             }
@@ -267,13 +272,14 @@ fn lower_instruction<'db, C: sonatina_ir::func_cursor::FuncCursor>(
     body: &mir::MirBody<'db>,
     value_map: &mut FxHashMap<mir::ValueId, ValueId>,
     local_map: &mut FxHashMap<mir::LocalId, ValueId>,
+    name_map: &FxHashMap<String, FuncRef>,
     is: &sonatina_ir::inst::evm::inst_set::EvmInstSet,
 ) -> Result<(), LowerError> {
     use mir::MirInst;
 
     match inst {
         MirInst::Assign { dest, rvalue, .. } => {
-            let result = lower_rvalue(fb, rvalue, body, value_map, local_map, is)?;
+            let result = lower_rvalue(fb, rvalue, body, value_map, local_map, name_map, is)?;
             if let (Some(dest_local), Some(result_val)) = (dest, result) {
                 local_map.insert(*dest_local, result_val);
             }
@@ -329,6 +335,7 @@ fn lower_rvalue<'db, C: sonatina_ir::func_cursor::FuncCursor>(
     body: &mir::MirBody<'db>,
     value_map: &mut FxHashMap<mir::ValueId, ValueId>,
     local_map: &mut FxHashMap<mir::LocalId, ValueId>,
+    name_map: &FxHashMap<String, FuncRef>,
     is: &sonatina_ir::inst::evm::inst_set::EvmInstSet,
 ) -> Result<Option<ValueId>, LowerError> {
     use mir::Rvalue;
@@ -343,9 +350,31 @@ fn lower_rvalue<'db, C: sonatina_ir::func_cursor::FuncCursor>(
             let val = lower_value(fb, *value_id, body, value_map, local_map, is)?;
             Ok(Some(val))
         }
-        Rvalue::Call(_) => {
-            // TODO: implement function calls
-            Err(LowerError::Unsupported("function calls".to_string()))
+        Rvalue::Call(call) => {
+            // Get the callee function reference
+            let callee_name = call.resolved_name.as_ref().ok_or_else(|| {
+                LowerError::Unsupported("call without resolved symbol name".to_string())
+            })?;
+
+            let func_ref = name_map.get(callee_name).ok_or_else(|| {
+                LowerError::Internal(format!("unknown function: {callee_name}"))
+            })?;
+
+            // Lower arguments (regular args + effect args)
+            let mut args = Vec::with_capacity(call.args.len() + call.effect_args.len());
+            for &arg in &call.args {
+                let val = lower_value(fb, arg, body, value_map, local_map, is)?;
+                args.push(val);
+            }
+            for &effect_arg in &call.effect_args {
+                let val = lower_value(fb, effect_arg, body, value_map, local_map, is)?;
+                args.push(val);
+            }
+
+            // Emit call instruction
+            let call_inst = Call::new(is, *func_ref, args.into());
+            let result = fb.insert_inst(call_inst, Type::I256);
+            Ok(Some(result))
         }
         Rvalue::Intrinsic { op, args } => {
             lower_intrinsic(fb, *op, args, body, value_map, local_map, is)
