@@ -205,14 +205,52 @@ impl Backend for SonatinaBackend {
         top_mod: TopLevelMod<'_>,
         layout: TargetDataLayout,
     ) -> Result<BackendOutput, BackendError> {
-        // Lower to Sonatina IR
-        let _module = crate::sonatina::compile_module(db, top_mod, layout)?;
+        use sonatina_codegen::isa::evm::EvmBackend;
+        use sonatina_codegen::object::{CompileOptions, EvmObjectBackend, compile_object};
+        use sonatina_ir::isa::evm::Evm;
+        use sonatina_triple::{Architecture, EvmVersion, OperatingSystem, TargetTriple, Vendor};
 
-        // TODO: Run Sonatina codegen passes to emit EVM bytecode
-        // For now, return empty bytecode as a placeholder
-        Err(BackendError::Sonatina(
-            "Sonatina IR lowering succeeded but bytecode emission is not yet implemented"
-                .to_string(),
-        ))
+        // Lower to Sonatina IR
+        let module = crate::sonatina::compile_module(db, top_mod, layout)?;
+
+        // Check if there are any objects to compile
+        if module.objects.is_empty() {
+            return Err(BackendError::Sonatina(
+                "no objects to compile (module has no functions?)".to_string(),
+            ));
+        }
+
+        // Create the EVM backend for codegen
+        let triple = TargetTriple::new(
+            Architecture::Evm,
+            Vendor::Ethereum,
+            OperatingSystem::Evm(EvmVersion::Osaka),
+        );
+        let isa = Evm::new(triple);
+        let evm_backend = EvmBackend::new(isa);
+        let object_backend = EvmObjectBackend::new(evm_backend);
+
+        // Compile the "Contract" object
+        let opts = CompileOptions::default();
+        let artifact = compile_object(&module, &object_backend, "Contract", &opts)
+            .map_err(|errors| {
+                let msg = errors
+                    .iter()
+                    .map(|e| format!("{:?}", e))
+                    .collect::<Vec<_>>()
+                    .join("; ");
+                BackendError::Sonatina(msg)
+            })?;
+
+        // Extract bytecode from the runtime section
+        let runtime_section = artifact
+            .sections
+            .iter()
+            .find(|(name, _)| name.0.as_str() == "runtime")
+            .ok_or_else(|| {
+                BackendError::Sonatina("compiled object has no runtime section".to_string())
+            })?;
+
+        Ok(BackendOutput::Bytecode(runtime_section.1.bytes.clone()))
     }
 }
