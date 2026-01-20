@@ -6,6 +6,7 @@
 mod types;
 
 use driver::DriverDataBase;
+use hir::analysis::ty::adt_def::AdtRef;
 use hir::hir_def::TopLevelMod;
 use hir::hir_def::expr::{ArithBinOp, BinOp, CompBinOp, LogicalBinOp, UnOp};
 use hir::projection::{IndexSource, Projection};
@@ -22,10 +23,16 @@ use sonatina_ir::{
         arith::{Add, Mul, Neg, Shl, Shr, Sub},
         cast::{Sext, Trunc, Zext},
         cmp::{Eq, Gt, IsZero, Lt, Ne},
-        control_flow::{Br, Call, Jump, Return},
+        control_flow::{Br, BrTable, Call, Jump, Return},
         data::{Mload, Mstore},
         evm::{
-            EvmCalldataLoad, EvmExp, EvmInvalid, EvmSload, EvmSstore,
+            EvmCalldataCopy, EvmCalldataLoad, EvmCalldataSize,
+            EvmCaller, EvmCodeCopy, EvmCodeSize,
+            EvmExp, EvmInvalid, EvmKeccak256,
+            EvmMstore8,
+            EvmRevert, EvmReturn,
+            EvmReturnDataCopy, EvmReturnDataSize,
+            EvmSload, EvmSstore,
             EvmStop,
             EvmTload, EvmTstore, EvmUdiv, EvmUmod,
         },
@@ -404,6 +411,7 @@ impl<'db, 'a> ModuleLowerer<'db, 'a> {
                 &func.body,
                 &mut value_map,
                 &local_vars,
+                &self.name_map,
                 is,
             )?;
         }
@@ -433,6 +441,28 @@ fn lower_instruction<'db, C: sonatina_ir::func_cursor::FuncCursor>(
 
     match inst {
         MirInst::Assign { dest, rvalue, .. } => {
+            if let mir::Rvalue::Alloc { address_space } = rvalue {
+                let Some(dest_local) = dest else {
+                    return Err(LowerError::Internal(
+                        "alloc rvalue without destination local".to_string(),
+                    ));
+                };
+                let value = lower_alloc(
+                    fb,
+                    db,
+                    target_layout,
+                    *dest_local,
+                    *address_space,
+                    body,
+                    is,
+                )?;
+                let dest_var = local_vars.get(dest_local).copied().ok_or_else(|| {
+                    LowerError::Internal(format!("missing SSA variable for local {dest_local:?}"))
+                })?;
+                fb.def_var(dest_var, value);
+                return Ok(());
+            }
+
             let result = lower_rvalue(
                 fb,
                 db,
@@ -462,75 +492,50 @@ fn lower_instruction<'db, C: sonatina_ir::func_cursor::FuncCursor>(
             }
         }
         MirInst::Store { place, value } => {
-            let addr = lower_place_address(
+            lower_store_inst(
                 fb,
                 db,
                 target_layout,
                 place,
-                body,
-                value_map,
-                local_vars,
-                is,
-            )?;
-            let raw_val = lower_value(
-                fb,
-                db,
-                target_layout,
                 *value,
                 body,
                 value_map,
                 local_vars,
                 is,
             )?;
-
-            // Check if this is a by-ref value that needs deep-copy
-            // TODO: Implement deep-copy for ValueRepr::Ref like the Yul emitter does.
-            // Currently we just do a simple word store, which is incorrect for aggregates.
-            let value_data = body.values.get(value.index());
-            if value_data.is_some_and(|v| v.repr.is_ref()) {
-                return Err(LowerError::Unsupported(
-                    "deep-copy for by-ref aggregates not yet implemented".to_string(),
-                ));
-            }
-
-            // Apply to_word conversion for the stored value
-            let value_ty = value_data.map(|v| v.ty);
-            let val = if let Some(ty) = value_ty {
-                apply_to_word(fb, db, raw_val, ty, is)
-            } else {
-                raw_val
-            };
-
-            let addr_space = body.place_address_space(place);
-
-            match addr_space {
-                AddressSpaceKind::Memory => {
-                    let store = Mstore::new(is, addr, val, Type::I256);
-                    fb.insert_inst_no_result(store);
+        }
+        MirInst::InitAggregate { place, inits } => {
+            for (path, value) in inits {
+                let mut target = place.clone();
+                for proj in path.iter() {
+                    target.projection.push(proj.clone());
                 }
-                AddressSpaceKind::Storage => {
-                    let store = EvmSstore::new(is, addr, val);
-                    fb.insert_inst_no_result(store);
-                }
-                AddressSpaceKind::TransientStorage => {
-                    let store = EvmTstore::new(is, addr, val);
-                    fb.insert_inst_no_result(store);
-                }
-                AddressSpaceKind::Calldata => {
-                    // Calldata is read-only, cannot store to it
-                    return Err(LowerError::Unsupported("store to calldata".to_string()));
-                }
+                lower_store_inst(
+                    fb,
+                    db,
+                    target_layout,
+                    &target,
+                    *value,
+                    body,
+                    value_map,
+                    local_vars,
+                    is,
+                )?;
             }
         }
-        MirInst::InitAggregate { .. } => {
-            return Err(LowerError::Unsupported(
-                "aggregate initialization not yet implemented".to_string(),
-            ));
-        }
-        MirInst::SetDiscriminant { .. } => {
-            return Err(LowerError::Unsupported(
-                "discriminant setting not yet implemented".to_string(),
-            ));
+        MirInst::SetDiscriminant { place, variant } => {
+            let val = fb.make_imm_value(I256::from(variant.idx as u64));
+            store_word_to_place(
+                fb,
+                db,
+                target_layout,
+                place,
+                val,
+                body,
+                value_map,
+                local_vars,
+                is,
+            )?;
         }
         MirInst::BindValue { value } => {
             // Ensure the value is lowered and cached
@@ -644,8 +649,9 @@ fn lower_rvalue<'db, C: sonatina_ir::func_cursor::FuncCursor>(
             Ok(Some(result))
         }
         Rvalue::Alloc { .. } => {
-            // TODO: implement memory allocation
-            Err(LowerError::Unsupported("memory allocation".to_string()))
+            Err(LowerError::Internal(
+                "Alloc rvalue should be handled directly in Assign lowering".to_string(),
+            ))
         }
     }
 }
@@ -921,17 +927,107 @@ fn lower_intrinsic<'db, C: sonatina_ir::func_cursor::FuncCursor>(
     }
 
     match op {
-        IntrinsicOp::Mload => {
-            if let Some(&addr) = lowered_args.first() {
-                let load = Mload::new(is, addr, Type::I256);
-                let result = fb.insert_inst(load, Type::I256);
-                Ok(Some(result))
-            } else {
-                Err(LowerError::Internal("mload requires address argument".to_string()))
-            }
+        IntrinsicOp::AddrOf => {
+            let Some(&arg) = lowered_args.first() else {
+                return Err(LowerError::Internal("addr_of requires 1 argument".to_string()));
+            };
+            Ok(Some(arg))
         }
-        // TODO: Add more intrinsics as needed
-        _ => Err(LowerError::Unsupported(format!("intrinsic {:?}", op))),
+        IntrinsicOp::Mload => {
+            let Some(&addr) = lowered_args.first() else {
+                return Err(LowerError::Internal("mload requires address argument".to_string()));
+            };
+            Ok(Some(fb.insert_inst(
+                Mload::new(is, addr, Type::I256),
+                Type::I256,
+            )))
+        }
+        IntrinsicOp::Mstore => {
+            let [addr, val] = lowered_args.as_slice() else {
+                return Err(LowerError::Internal("mstore requires 2 arguments".to_string()));
+            };
+            fb.insert_inst_no_result(Mstore::new(is, *addr, *val, Type::I256));
+            Ok(None)
+        }
+        IntrinsicOp::Mstore8 => {
+            let [addr, val] = lowered_args.as_slice() else {
+                return Err(LowerError::Internal("mstore8 requires 2 arguments".to_string()));
+            };
+            fb.insert_inst_no_result(EvmMstore8::new(is, *addr, *val));
+            Ok(None)
+        }
+        IntrinsicOp::Sload => {
+            let Some(&key) = lowered_args.first() else {
+                return Err(LowerError::Internal("sload requires 1 argument".to_string()));
+            };
+            Ok(Some(fb.insert_inst(EvmSload::new(is, key), Type::I256)))
+        }
+        IntrinsicOp::Sstore => {
+            let [key, val] = lowered_args.as_slice() else {
+                return Err(LowerError::Internal("sstore requires 2 arguments".to_string()));
+            };
+            fb.insert_inst_no_result(EvmSstore::new(is, *key, *val));
+            Ok(None)
+        }
+        IntrinsicOp::Calldataload => {
+            let Some(&offset) = lowered_args.first() else {
+                return Err(LowerError::Internal(
+                    "calldataload requires 1 argument".to_string(),
+                ));
+            };
+            Ok(Some(fb.insert_inst(
+                EvmCalldataLoad::new(is, offset),
+                Type::I256,
+            )))
+        }
+        IntrinsicOp::Calldatasize => Ok(Some(fb.insert_inst(EvmCalldataSize::new(is), Type::I256))),
+        IntrinsicOp::Calldatacopy => {
+            let [dst, offset, len] = lowered_args.as_slice() else {
+                return Err(LowerError::Internal(
+                    "calldatacopy requires 3 arguments".to_string(),
+                ));
+            };
+            fb.insert_inst_no_result(EvmCalldataCopy::new(is, *dst, *offset, *len));
+            Ok(None)
+        }
+        IntrinsicOp::Returndatasize => Ok(Some(
+            fb.insert_inst(EvmReturnDataSize::new(is), Type::I256),
+        )),
+        IntrinsicOp::Returndatacopy => {
+            let [dst, offset, len] = lowered_args.as_slice() else {
+                return Err(LowerError::Internal(
+                    "returndatacopy requires 3 arguments".to_string(),
+                ));
+            };
+            fb.insert_inst_no_result(EvmReturnDataCopy::new(is, *dst, *offset, *len));
+            Ok(None)
+        }
+        IntrinsicOp::Codesize => Ok(Some(fb.insert_inst(EvmCodeSize::new(is), Type::I256))),
+        IntrinsicOp::Codecopy => {
+            let [dst, offset, len] = lowered_args.as_slice() else {
+                return Err(LowerError::Internal(
+                    "codecopy requires 3 arguments".to_string(),
+                ));
+            };
+            fb.insert_inst_no_result(EvmCodeCopy::new(is, *dst, *offset, *len));
+            Ok(None)
+        }
+        IntrinsicOp::CodeRegionOffset | IntrinsicOp::CodeRegionLen => Err(LowerError::Unsupported(
+            "code region intrinsics are not yet supported by the Sonatina backend".to_string(),
+        )),
+        IntrinsicOp::Keccak => {
+            let [addr, len] = lowered_args.as_slice() else {
+                return Err(LowerError::Internal("keccak requires 2 arguments".to_string()));
+            };
+            Ok(Some(fb.insert_inst(
+                EvmKeccak256::new(is, *addr, *len),
+                Type::I256,
+            )))
+        }
+        IntrinsicOp::Caller => Ok(Some(fb.insert_inst(EvmCaller::new(is), Type::I256))),
+        IntrinsicOp::ReturnData | IntrinsicOp::Revert => Err(LowerError::Internal(
+            "terminating intrinsic must be lowered as Terminator::TerminatingCall".to_string(),
+        )),
     }
 }
 
@@ -1252,6 +1348,7 @@ fn lower_terminator<'db, C: sonatina_ir::func_cursor::FuncCursor>(
     body: &mir::MirBody<'db>,
     value_map: &mut FxHashMap<mir::ValueId, ValueId>,
     local_vars: &FxHashMap<mir::LocalId, Variable>,
+    name_map: &FxHashMap<String, FuncRef>,
     is: &sonatina_ir::inst::evm::inst_set::EvmInstSet,
 ) -> Result<(), LowerError> {
     use mir::Terminator;
@@ -1277,12 +1374,100 @@ fn lower_terminator<'db, C: sonatina_ir::func_cursor::FuncCursor>(
             // Br: cond, nz_dest (then), z_dest (else)
             fb.insert_inst_no_result(Br::new(is, cond_val, then_block, else_block));
         }
-        Terminator::Switch { .. } => {
-            return Err(LowerError::Unsupported("switch terminator".to_string()));
+        Terminator::Switch {
+            discr,
+            targets,
+            default,
+        } => {
+            let discr_val =
+                lower_value(fb, db, target_layout, *discr, body, value_map, local_vars, is)?;
+            let default_block = block_map[default];
+            let mut table = Vec::with_capacity(targets.len());
+            for target in targets {
+                let value = fb.make_imm_value(biguint_to_i256(&target.value.as_biguint()));
+                let dest = block_map[&target.block];
+                table.push((value, dest));
+            }
+            fb.insert_inst_no_result(BrTable::new(is, discr_val, Some(default_block), table));
         }
-        Terminator::TerminatingCall(_) => {
-            return Err(LowerError::Unsupported("terminating call".to_string()));
-        }
+        Terminator::TerminatingCall(call) => match call {
+            mir::TerminatingCall::Call(call) => {
+                let callee_name = call.resolved_name.as_ref().ok_or_else(|| {
+                    LowerError::Unsupported("terminating call without resolved name".to_string())
+                })?;
+                let func_ref = name_map.get(callee_name).ok_or_else(|| {
+                    LowerError::Internal(format!("unknown function: {callee_name}"))
+                })?;
+
+                let mut args = Vec::with_capacity(call.args.len() + call.effect_args.len());
+                for &arg in &call.args {
+                    args.push(lower_value(
+                        fb,
+                        db,
+                        target_layout,
+                        arg,
+                        body,
+                        value_map,
+                        local_vars,
+                        is,
+                    )?);
+                }
+                for &arg in &call.effect_args {
+                    args.push(lower_value(
+                        fb,
+                        db,
+                        target_layout,
+                        arg,
+                        body,
+                        value_map,
+                        local_vars,
+                        is,
+                    )?);
+                }
+
+                fb.insert_inst_no_result(Call::new(is, *func_ref, args.into()));
+                fb.insert_inst_no_result(EvmInvalid::new(is));
+            }
+            mir::TerminatingCall::Intrinsic { op, args } => {
+                let mut lowered_args = Vec::with_capacity(args.len());
+                for &arg in args {
+                    lowered_args.push(lower_value(
+                        fb,
+                        db,
+                        target_layout,
+                        arg,
+                        body,
+                        value_map,
+                        local_vars,
+                        is,
+                    )?);
+                }
+                match op {
+                    IntrinsicOp::ReturnData => {
+                        let [addr, len] = lowered_args.as_slice() else {
+                            return Err(LowerError::Internal(
+                                "return_data requires 2 arguments".to_string(),
+                            ));
+                        };
+                        fb.insert_inst_no_result(EvmReturn::new(is, *addr, *len));
+                    }
+                    IntrinsicOp::Revert => {
+                        let [addr, len] = lowered_args.as_slice() else {
+                            return Err(LowerError::Internal(
+                                "revert requires 2 arguments".to_string(),
+                            ));
+                        };
+                        fb.insert_inst_no_result(EvmRevert::new(is, *addr, *len));
+                    }
+                    _ => {
+                        return Err(LowerError::Unsupported(format!(
+                            "terminating intrinsic: {:?}",
+                            op
+                        )));
+                    }
+                }
+            }
+        },
         Terminator::Unreachable => {
             // Emit INVALID opcode (0xFE) - this consumes all gas and reverts
             fb.insert_inst_no_result(EvmInvalid::new(is));
@@ -1290,4 +1475,358 @@ fn lower_terminator<'db, C: sonatina_ir::func_cursor::FuncCursor>(
     }
 
     Ok(())
+}
+
+fn lower_alloc<C: sonatina_ir::func_cursor::FuncCursor>(
+    fb: &mut sonatina_ir::builder::FunctionBuilder<C>,
+    db: &DriverDataBase,
+    target_layout: &TargetDataLayout,
+    dest: mir::LocalId,
+    address_space: AddressSpaceKind,
+    body: &mir::MirBody<'_>,
+    is: &sonatina_ir::inst::evm::inst_set::EvmInstSet,
+) -> Result<ValueId, LowerError> {
+    if !matches!(address_space, AddressSpaceKind::Memory) {
+        return Err(LowerError::Unsupported(
+            "alloc is only supported for memory".to_string(),
+        ));
+    }
+
+    let alloc_ty = body
+        .locals
+        .get(dest.index())
+        .ok_or_else(|| LowerError::Internal(format!("unknown local: {dest:?}")))?
+        .ty;
+
+    let size_bytes = layout::ty_size_bytes_or_word_aligned_in(db, target_layout, alloc_ty);
+    if size_bytes == 0 {
+        return Ok(fb.make_imm_value(I256::zero()));
+    }
+
+    // Allocate from the free memory pointer at 0x40 (defaulting to 0x80 if unset).
+    let free_ptr_addr = fb.make_imm_value(I256::from(0x40u64));
+    let raw_ptr = fb.insert_inst(Mload::new(is, free_ptr_addr, Type::I256), Type::I256);
+    let is_zero = fb.insert_inst(IsZero::new(is, raw_ptr), Type::I256);
+    let default_ptr = fb.make_imm_value(I256::from(0x80u64));
+    let fallback = fb.insert_inst(
+        Mul::new(is, is_zero, default_ptr),
+        Type::I256,
+    );
+    let ptr = fb.insert_inst(Or::new(is, raw_ptr, fallback), Type::I256);
+
+    let size_val = fb.make_imm_value(I256::from(size_bytes as u64));
+    let new_free = fb.insert_inst(
+        Add::new(is, ptr, size_val),
+        Type::I256,
+    );
+    fb.insert_inst_no_result(Mstore::new(is, free_ptr_addr, new_free, Type::I256));
+
+    Ok(ptr)
+}
+
+fn lower_store_inst<'db, C: sonatina_ir::func_cursor::FuncCursor>(
+    fb: &mut sonatina_ir::builder::FunctionBuilder<C>,
+    db: &'db DriverDataBase,
+    target_layout: &TargetDataLayout,
+    place: &Place<'db>,
+    value: mir::ValueId,
+    body: &mir::MirBody<'db>,
+    value_map: &mut FxHashMap<mir::ValueId, ValueId>,
+    local_vars: &FxHashMap<mir::LocalId, Variable>,
+    is: &sonatina_ir::inst::evm::inst_set::EvmInstSet,
+) -> Result<(), LowerError> {
+    let value_data = body
+        .values
+        .get(value.index())
+        .ok_or_else(|| LowerError::Internal(format!("unknown value: {value:?}")))?;
+    let value_ty = value_data.ty;
+    if layout::ty_size_bytes_in(db, target_layout, value_ty).is_some_and(|s| s == 0) {
+        return Ok(());
+    }
+
+    if value_data.repr.is_ref() {
+        let src_place = mir::ir::Place::new(value, mir::ir::MirProjectionPath::new());
+        deep_copy_from_places(
+            fb,
+            db,
+            target_layout,
+            place,
+            &src_place,
+            value_ty,
+            body,
+            value_map,
+            local_vars,
+            is,
+        )?;
+        return Ok(());
+    }
+
+    let raw_val = lower_value(fb, db, target_layout, value, body, value_map, local_vars, is)?;
+    let val = apply_to_word(fb, db, raw_val, value_ty, is);
+    store_word_to_place(fb, db, target_layout, place, val, body, value_map, local_vars, is)
+}
+
+fn store_word_to_place<'db, C: sonatina_ir::func_cursor::FuncCursor>(
+    fb: &mut sonatina_ir::builder::FunctionBuilder<C>,
+    db: &'db DriverDataBase,
+    target_layout: &TargetDataLayout,
+    place: &Place<'db>,
+    val: ValueId,
+    body: &mir::MirBody<'db>,
+    value_map: &mut FxHashMap<mir::ValueId, ValueId>,
+    local_vars: &FxHashMap<mir::LocalId, Variable>,
+    is: &sonatina_ir::inst::evm::inst_set::EvmInstSet,
+) -> Result<(), LowerError> {
+    let addr = lower_place_address(fb, db, target_layout, place, body, value_map, local_vars, is)?;
+    match body.place_address_space(place) {
+        AddressSpaceKind::Memory => {
+            fb.insert_inst_no_result(Mstore::new(is, addr, val, Type::I256));
+        }
+        AddressSpaceKind::Storage => {
+            fb.insert_inst_no_result(EvmSstore::new(is, addr, val));
+        }
+        AddressSpaceKind::TransientStorage => {
+            fb.insert_inst_no_result(EvmTstore::new(is, addr, val));
+        }
+        AddressSpaceKind::Calldata => {
+            return Err(LowerError::Unsupported("store to calldata".to_string()));
+        }
+    }
+    Ok(())
+}
+
+fn load_place_typed<'db, C: sonatina_ir::func_cursor::FuncCursor>(
+    fb: &mut sonatina_ir::builder::FunctionBuilder<C>,
+    db: &'db DriverDataBase,
+    target_layout: &TargetDataLayout,
+    place: &Place<'db>,
+    loaded_ty: hir::analysis::ty::ty_def::TyId<'db>,
+    body: &mir::MirBody<'db>,
+    value_map: &mut FxHashMap<mir::ValueId, ValueId>,
+    local_vars: &FxHashMap<mir::LocalId, Variable>,
+    is: &sonatina_ir::inst::evm::inst_set::EvmInstSet,
+) -> Result<ValueId, LowerError> {
+    if layout::ty_size_bytes_in(db, target_layout, loaded_ty).is_some_and(|s| s == 0) {
+        return Ok(fb.make_imm_value(I256::zero()));
+    }
+
+    let addr = lower_place_address(fb, db, target_layout, place, body, value_map, local_vars, is)?;
+    let raw = match body.place_address_space(place) {
+        AddressSpaceKind::Memory => fb.insert_inst(Mload::new(is, addr, Type::I256), Type::I256),
+        AddressSpaceKind::Storage => fb.insert_inst(EvmSload::new(is, addr), Type::I256),
+        AddressSpaceKind::TransientStorage => fb.insert_inst(EvmTload::new(is, addr), Type::I256),
+        AddressSpaceKind::Calldata => fb.insert_inst(EvmCalldataLoad::new(is, addr), Type::I256),
+    };
+    Ok(apply_from_word(fb, db, raw, loaded_ty, is))
+}
+
+fn deep_copy_from_places<'db, C: sonatina_ir::func_cursor::FuncCursor>(
+    fb: &mut sonatina_ir::builder::FunctionBuilder<C>,
+    db: &'db DriverDataBase,
+    target_layout: &TargetDataLayout,
+    dst_place: &Place<'db>,
+    src_place: &Place<'db>,
+    value_ty: hir::analysis::ty::ty_def::TyId<'db>,
+    body: &mir::MirBody<'db>,
+    value_map: &mut FxHashMap<mir::ValueId, ValueId>,
+    local_vars: &FxHashMap<mir::LocalId, Variable>,
+    is: &sonatina_ir::inst::evm::inst_set::EvmInstSet,
+) -> Result<(), LowerError> {
+    if layout::ty_size_bytes_in(db, target_layout, value_ty).is_some_and(|s| s == 0) {
+        return Ok(());
+    }
+
+    if value_ty.is_array(db) {
+        let Some(len) = layout::array_len(db, value_ty) else {
+            return Err(LowerError::Unsupported(
+                "array store requires a constant length".into(),
+            ));
+        };
+        let elem_ty = layout::array_elem_ty(db, value_ty)
+            .ok_or_else(|| LowerError::Unsupported("array store requires element type".into()))?;
+        for idx in 0..len {
+            let dst_elem =
+                extend_place(dst_place, Projection::Index(IndexSource::Constant(idx)));
+            let src_elem =
+                extend_place(src_place, Projection::Index(IndexSource::Constant(idx)));
+            deep_copy_from_places(
+                fb,
+                db,
+                target_layout,
+                &dst_elem,
+                &src_elem,
+                elem_ty,
+                body,
+                value_map,
+                local_vars,
+                is,
+            )?;
+        }
+        return Ok(());
+    }
+
+    if value_ty.field_count(db) > 0 {
+        for (field_idx, field_ty) in value_ty.field_types(db).iter().copied().enumerate() {
+            let dst_field = extend_place(dst_place, Projection::Field(field_idx));
+            let src_field = extend_place(src_place, Projection::Field(field_idx));
+            deep_copy_from_places(
+                fb,
+                db,
+                target_layout,
+                &dst_field,
+                &src_field,
+                field_ty,
+                body,
+                value_map,
+                local_vars,
+                is,
+            )?;
+        }
+        return Ok(());
+    }
+
+    if value_ty
+        .adt_ref(db)
+        .is_some_and(|adt| matches!(adt, AdtRef::Enum(_)))
+    {
+        return deep_copy_enum_from_places(
+            fb,
+            db,
+            target_layout,
+            dst_place,
+            src_place,
+            value_ty,
+            body,
+            value_map,
+            local_vars,
+            is,
+        );
+    }
+
+    let loaded = load_place_typed(
+        fb,
+        db,
+        target_layout,
+        src_place,
+        value_ty,
+        body,
+        value_map,
+        local_vars,
+        is,
+    )?;
+    let stored = apply_to_word(fb, db, loaded, value_ty, is);
+    store_word_to_place(
+        fb,
+        db,
+        target_layout,
+        dst_place,
+        stored,
+        body,
+        value_map,
+        local_vars,
+        is,
+    )
+}
+
+fn deep_copy_enum_from_places<'db, C: sonatina_ir::func_cursor::FuncCursor>(
+    fb: &mut sonatina_ir::builder::FunctionBuilder<C>,
+    db: &'db DriverDataBase,
+    target_layout: &TargetDataLayout,
+    dst_place: &Place<'db>,
+    src_place: &Place<'db>,
+    enum_ty: hir::analysis::ty::ty_def::TyId<'db>,
+    body: &mir::MirBody<'db>,
+    value_map: &mut FxHashMap<mir::ValueId, ValueId>,
+    local_vars: &FxHashMap<mir::LocalId, Variable>,
+    is: &sonatina_ir::inst::evm::inst_set::EvmInstSet,
+) -> Result<(), LowerError> {
+    let Some(adt_def) = enum_ty.adt_def(db) else {
+        return Err(LowerError::Unsupported("enum store requires enum adt".into()));
+    };
+    let AdtRef::Enum(enm) = adt_def.adt_ref(db) else {
+        return Err(LowerError::Unsupported("enum store requires enum adt".into()));
+    };
+
+    // Copy discriminant first.
+    let discr_ty = hir::analysis::ty::ty_def::TyId::new(
+        db,
+        TyData::TyBase(TyBase::Prim(PrimTy::U256)),
+    );
+    let discr = load_place_typed(
+        fb,
+        db,
+        target_layout,
+        src_place,
+        discr_ty,
+        body,
+        value_map,
+        local_vars,
+        is,
+    )?;
+    store_word_to_place(
+        fb,
+        db,
+        target_layout,
+        dst_place,
+        discr,
+        body,
+        value_map,
+        local_vars,
+        is,
+    )?;
+
+    let origin_block = fb
+        .current_block()
+        .ok_or_else(|| LowerError::Internal("missing current block".to_string()))?;
+    let cont_block = fb.append_block();
+
+    let variants = adt_def.fields(db);
+    let mut table: Vec<(ValueId, BlockId)> = Vec::with_capacity(variants.len());
+    let mut case_blocks = Vec::with_capacity(variants.len());
+    for (idx, _) in variants.iter().enumerate() {
+        let case_block = fb.append_block();
+        case_blocks.push(case_block);
+        table.push((fb.make_imm_value(I256::from(idx as u64)), case_block));
+    }
+
+    fb.switch_to_block(origin_block);
+    fb.insert_inst_no_result(BrTable::new(is, discr, Some(cont_block), table));
+
+    for (idx, case_block) in case_blocks.into_iter().enumerate() {
+        fb.switch_to_block(case_block);
+        let enum_variant = hir::hir_def::EnumVariant::new(enm, idx);
+        let ctor =
+            hir::analysis::ty::simplified_pattern::ConstructorKind::Variant(enum_variant, enum_ty);
+        for (field_idx, field_ty) in ctor.field_types(db).iter().copied().enumerate() {
+            let proj = Projection::VariantField {
+                variant: enum_variant,
+                enum_ty,
+                field_idx,
+            };
+            let dst_field = extend_place(dst_place, proj.clone());
+            let src_field = extend_place(src_place, proj);
+            deep_copy_from_places(
+                fb,
+                db,
+                target_layout,
+                &dst_field,
+                &src_field,
+                field_ty,
+                body,
+                value_map,
+                local_vars,
+                is,
+            )?;
+        }
+        fb.insert_inst_no_result(Jump::new(is, cont_block));
+    }
+
+    fb.switch_to_block(cont_block);
+    Ok(())
+}
+
+fn extend_place<'db>(place: &Place<'db>, proj: mir::ir::MirProjection<'db>) -> Place<'db> {
+    let mut path = place.projection.clone();
+    path.push(proj);
+    Place::new(place.base, path)
 }
