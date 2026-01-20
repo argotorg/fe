@@ -1,0 +1,38 @@
+---
+source: crates/codegen/tests/sonatina_ir.rs
+assertion_line: 65
+expression: output
+input_file: crates/codegen/tests/fixtures/while.fe
+---
+target = evm-ethereum-osaka
+
+func public %do_while() -> i256 {
+    block0:
+        jump block1;
+
+    block1:
+        v1.i256 = phi (0.i256 block0) (v6 block2);
+        v3.i256 = lt v1 10.i256;
+        br v3 block2 block3;
+
+    block2:
+        v6.i256 = add v1 1.i256;
+        jump block1;
+
+    block3:
+        return v1;
+}
+
+func public %__fe_sonatina_entry() {
+    block0:
+        v0.i256 = call %do_while;
+        evm_stop;
+}
+
+
+object @Contract {
+    section runtime {
+        entry %__fe_sonatina_entry;
+        include %do_while;
+    }
+}

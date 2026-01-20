@@ -1,0 +1,364 @@
+---
+source: crates/codegen/tests/sonatina_ir.rs
+assertion_line: 74
+expression: output
+input_file: crates/codegen/tests/fixtures/match_literal.fe
+---
+target = evm-ethereum-osaka
+
+func public %match_bool(v0.i256) -> i256 {
+    block0:
+        jump block4;
+
+    block1:
+        jump block2;
+
+    block2:
+        v3.i256 = phi (1.i256 block1) (2.i256 block3);
+        return v3;
+
+    block3:
+        jump block2;
+
+    block4:
+        v6.i256 = eq v0 1.i256;
+        br v6 block1 block3;
+}
+
+func public %match_u8(v0.i256) -> i256 {
+    block0:
+        jump block5;
+
+    block1:
+        jump block2;
+
+    block2:
+        v3.i256 = phi (1.i256 block1) (2.i256 block3) (3.i256 block4);
+        return v3;
+
+    block3:
+        jump block2;
+
+    block4:
+        jump block2;
+
+    block5:
+        v8.i256 = eq v0 0.i256;
+        br v8 block1 block6;
+
+    block6:
+        v9.i256 = eq v0 255.i256;
+        br v9 block3 block4;
+}
+
+func public %match_u16(v0.i256) -> i256 {
+    block0:
+        jump block5;
+
+    block1:
+        jump block2;
+
+    block2:
+        v3.i256 = phi (1.i256 block1) (2.i256 block3) (3.i256 block4);
+        return v3;
+
+    block3:
+        jump block2;
+
+    block4:
+        jump block2;
+
+    block5:
+        v9.i256 = eq v0 4660.i256;
+        br v9 block1 block6;
+
+    block6:
+        v10.i256 = eq v0 43981.i256;
+        br v10 block3 block4;
+}
+
+func public %match_u32(v0.i256) -> i256 {
+    block0:
+        jump block5;
+
+    block1:
+        jump block2;
+
+    block2:
+        v3.i256 = phi (1.i256 block1) (2.i256 block3) (3.i256 block4);
+        return v3;
+
+    block3:
+        jump block2;
+
+    block4:
+        jump block2;
+
+    block5:
+        v9.i256 = eq v0 3735928559.i256;
+        br v9 block1 block6;
+
+    block6:
+        v10.i256 = eq v0 3405691582.i256;
+        br v10 block3 block4;
+}
+
+func public %match_u64(v0.i256) -> i256 {
+    block0:
+        jump block5;
+
+    block1:
+        jump block2;
+
+    block2:
+        v3.i256 = phi (1.i256 block1) (2.i256 block3) (3.i256 block4);
+        return v3;
+
+    block3:
+        jump block2;
+
+    block4:
+        jump block2;
+
+    block5:
+        v8.i256 = eq v0 0.i256;
+        br v8 block1 block6;
+
+    block6:
+        v9.i256 = eq v0 18446744073709551615.i256;
+        br v9 block3 block4;
+}
+
+func public %match_u128(v0.i256) -> i256 {
+    block0:
+        jump block5;
+
+    block1:
+        jump block2;
+
+    block2:
+        v3.i256 = phi (1.i256 block1) (2.i256 block3) (3.i256 block4);
+        return v3;
+
+    block3:
+        jump block2;
+
+    block4:
+        jump block2;
+
+    block5:
+        v8.i256 = eq v0 0.i256;
+        br v8 block1 block6;
+
+    block6:
+        v9.i256 = eq v0 340282366920938463463374607431768211455.i256;
+        br v9 block3 block4;
+}
+
+func public %match_u256(v0.i256) -> i256 {
+    block0:
+        jump block5;
+
+    block1:
+        jump block2;
+
+    block2:
+        v3.i256 = phi (1.i256 block1) (2.i256 block3) (3.i256 block4);
+        return v3;
+
+    block3:
+        jump block2;
+
+    block4:
+        jump block2;
+
+    block5:
+        v8.i256 = eq v0 0.i256;
+        br v8 block1 block6;
+
+    block6:
+        v9.i256 = eq v0 -1.i256;
+        br v9 block3 block4;
+}
+
+func public %match_i8(v0.i256) -> i256 {
+    block0:
+        jump block5;
+
+    block1:
+        jump block2;
+
+    block2:
+        v3.i256 = phi (1.i256 block1) (2.i256 block3) (3.i256 block4);
+        return v3;
+
+    block3:
+        jump block2;
+
+    block4:
+        jump block2;
+
+    block5:
+        v8.i256 = eq v0 0.i256;
+        br v8 block1 block6;
+
+    block6:
+        v9.i256 = eq v0 99.i256;
+        br v9 block3 block4;
+}
+
+func public %match_i16(v0.i256) -> i256 {
+    block0:
+        jump block5;
+
+    block1:
+        jump block2;
+
+    block2:
+        v3.i256 = phi (1.i256 block1) (2.i256 block3) (3.i256 block4);
+        return v3;
+
+    block3:
+        jump block2;
+
+    block4:
+        jump block2;
+
+    block5:
+        v8.i256 = eq v0 0.i256;
+        br v8 block1 block6;
+
+    block6:
+        v9.i256 = eq v0 32000.i256;
+        br v9 block3 block4;
+}
+
+func public %match_i32(v0.i256) -> i256 {
+    block0:
+        jump block5;
+
+    block1:
+        jump block2;
+
+    block2:
+        v3.i256 = phi (1.i256 block1) (2.i256 block3) (3.i256 block4);
+        return v3;
+
+    block3:
+        jump block2;
+
+    block4:
+        jump block2;
+
+    block5:
+        v8.i256 = eq v0 0.i256;
+        br v8 block1 block6;
+
+    block6:
+        v9.i256 = eq v0 2000000000.i256;
+        br v9 block3 block4;
+}
+
+func public %match_i64(v0.i256) -> i256 {
+    block0:
+        jump block5;
+
+    block1:
+        jump block2;
+
+    block2:
+        v3.i256 = phi (1.i256 block1) (2.i256 block3) (3.i256 block4);
+        return v3;
+
+    block3:
+        jump block2;
+
+    block4:
+        jump block2;
+
+    block5:
+        v8.i256 = eq v0 0.i256;
+        br v8 block1 block6;
+
+    block6:
+        v9.i256 = eq v0 9223372036854775807.i256;
+        br v9 block3 block4;
+}
+
+func public %match_i128(v0.i256) -> i256 {
+    block0:
+        jump block5;
+
+    block1:
+        jump block2;
+
+    block2:
+        v3.i256 = phi (1.i256 block1) (2.i256 block3) (3.i256 block4);
+        return v3;
+
+    block3:
+        jump block2;
+
+    block4:
+        jump block2;
+
+    block5:
+        v8.i256 = eq v0 0.i256;
+        br v8 block1 block6;
+
+    block6:
+        v9.i256 = eq v0 170141183460469231731687303715884105727.i256;
+        br v9 block3 block4;
+}
+
+func public %match_i256(v0.i256) -> i256 {
+    block0:
+        jump block5;
+
+    block1:
+        jump block2;
+
+    block2:
+        v3.i256 = phi (1.i256 block1) (2.i256 block3) (3.i256 block4);
+        return v3;
+
+    block3:
+        jump block2;
+
+    block4:
+        jump block2;
+
+    block5:
+        v8.i256 = eq v0 0.i256;
+        br v8 block1 block6;
+
+    block6:
+        v9.i256 = eq v0 -1.i256;
+        br v9 block3 block4;
+}
+
+func public %__fe_sonatina_entry() {
+    block0:
+        v1.i256 = call %match_bool 0.i256;
+        evm_stop;
+}
+
+
+object @Contract {
+    section runtime {
+        entry %__fe_sonatina_entry;
+        include %match_bool;
+        include %match_u8;
+        include %match_u16;
+        include %match_u32;
+        include %match_u64;
+        include %match_u128;
+        include %match_u256;
+        include %match_i8;
+        include %match_i16;
+        include %match_i32;
+        include %match_i64;
+        include %match_i128;
+        include %match_i256;
+    }
+}

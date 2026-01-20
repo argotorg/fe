@@ -1,0 +1,113 @@
+---
+source: crates/codegen/tests/sonatina_ir.rs
+assertion_line: 74
+expression: output
+input_file: crates/codegen/tests/fixtures/match_struct.fe
+---
+target = evm-ethereum-osaka
+
+func public %match_struct_fields(v0.i256) -> i256 {
+    block0:
+        jump block6;
+
+    block1:
+        jump block2;
+
+    block2:
+        v2.i256 = phi (0.i256 block1) (v8 block3) (v12 block4) (v21 block5);
+        return v2;
+
+    block3:
+        v5.i256 = add v0 1.i256;
+        v6.i256 = mload v5 i256;
+        v7.i8 = trunc v6 i8;
+        v8.i256 = zext v7 i256;
+        jump block2;
+
+    block4:
+        v10.i256 = mload v0 i256;
+        v11.i8 = trunc v10 i8;
+        v12.i256 = zext v11 i256;
+        jump block2;
+
+    block5:
+        v14.i256 = add v0 1.i256;
+        v15.i256 = mload v14 i256;
+        v16.i8 = trunc v15 i8;
+        v17.i256 = zext v16 i256;
+        v18.i256 = mload v0 i256;
+        v19.i8 = trunc v18 i8;
+        v20.i256 = zext v19 i256;
+        v21.i256 = add v20 v17;
+        jump block2;
+
+    block6:
+        v23.i256 = add v0 1.i256;
+        v24.i256 = mload v23 i256;
+        v25.i8 = trunc v24 i8;
+        v26.i256 = zext v25 i256;
+        v27.i256 = eq v26 0.i256;
+        br v27 block7 block8;
+
+    block7:
+        v29.i256 = mload v0 i256;
+        v30.i8 = trunc v29 i8;
+        v31.i256 = zext v30 i256;
+        v32.i256 = eq v31 0.i256;
+        br v32 block1 block4;
+
+    block8:
+        v34.i256 = mload v0 i256;
+        v35.i8 = trunc v34 i8;
+        v36.i256 = zext v35 i256;
+        v37.i256 = eq v36 0.i256;
+        br v37 block3 block5;
+}
+
+func public %match_struct_wildcard(v0.i256) -> i256 {
+    block0:
+        jump block5;
+
+    block1:
+        jump block2;
+
+    block2:
+        v3.i256 = phi (1.i256 block1) (2.i256 block3) (3.i256 block4);
+        return v3;
+
+    block3:
+        jump block2;
+
+    block4:
+        jump block2;
+
+    block5:
+        v7.i256 = mload v0 i256;
+        v8.i8 = trunc v7 i8;
+        v9.i256 = zext v8 i256;
+        v10.i256 = eq v9 0.i256;
+        br v10 block1 block6;
+
+    block6:
+        v12.i256 = add v0 1.i256;
+        v13.i256 = mload v12 i256;
+        v14.i8 = trunc v13 i8;
+        v15.i256 = zext v14 i256;
+        v16.i256 = eq v15 0.i256;
+        br v16 block3 block4;
+}
+
+func public %__fe_sonatina_entry() {
+    block0:
+        v1.i256 = call %match_struct_fields 0.i256;
+        evm_stop;
+}
+
+
+object @Contract {
+    section runtime {
+        entry %__fe_sonatina_entry;
+        include %match_struct_fields;
+        include %match_struct_wildcard;
+    }
+}

@@ -1,0 +1,27 @@
+---
+source: crates/codegen/tests/sonatina_ir.rs
+assertion_line: 65
+expression: output
+input_file: crates/codegen/tests/fixtures/caller.fe
+---
+target = evm-ethereum-osaka
+
+func public %who_called(v0.i256) -> i256 {
+    block0:
+        v1.i256 = evm_caller;
+        return v1;
+}
+
+func public %__fe_sonatina_entry() {
+    block0:
+        v1.i256 = call %who_called 0.i256;
+        evm_stop;
+}
+
+
+object @Contract {
+    section runtime {
+        entry %__fe_sonatina_entry;
+        include %who_called;
+    }
+}

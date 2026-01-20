@@ -1,0 +1,267 @@
+---
+source: crates/codegen/tests/sonatina_ir.rs
+assertion_line: 74
+expression: output
+input_file: crates/codegen/tests/fixtures/range_bounds.fe
+---
+target = evm-ethereum-osaka
+
+func public %sum_const() -> i256 {
+    block0:
+        v1.i256 = call %range_known_const_s__usize___known_const_e__usize___seq_len__0_4__f9605efabd18106c 0.i256;
+        jump block1;
+
+    block1:
+        v14.i256 = phi (0.i256 block0) (v8 block3);
+        v3.i256 = phi (v1 block0) (v3 block3);
+        v2.i256 = phi (0.i256 block0) (v11 block3);
+        v4.i256 = lt v2 v3;
+        br v4 block2 block4;
+
+    block2:
+        v6.i256 = call %range_known_const_s__usize___known_const_e__usize___seq_get__0_4__f9605efabd18106c 0.i256 v2;
+        v8.i256 = add v14 v6;
+        jump block3;
+
+    block3:
+        v11.i256 = add v2 1.i256;
+        jump block1;
+
+    block4:
+        return v14;
+}
+
+func public %sum_dynamic_end(v0.i256) -> i256 {
+    block0:
+        v3.i256 = mload 64.i256 i256;
+        v4.i256 = is_zero v3;
+        v6.i256 = mul v4 128.i256;
+        v7.i256 = or v3 v6;
+        v9.i256 = add v7 32.i256;
+        mstore 64.i256 v9 i256;
+        mstore v7 v0 i256;
+        v10.i256 = call %range_known_const_s__usize___unknown__seq_len__0__fc6647014fb554e5 v7;
+        jump block1;
+
+    block1:
+        v26.i256 = phi (0.i256 block0) (v18 block3);
+        v24.i256 = phi (v7 block0) (v24 block3);
+        v12.i256 = phi (v10 block0) (v12 block3);
+        v11.i256 = phi (0.i256 block0) (v21 block3);
+        v13.i256 = lt v11 v12;
+        br v13 block2 block4;
+
+    block2:
+        v16.i256 = call %range_known_const_s__usize___known_const_e__usize___seq_get__0_4__f9605efabd18106c v24 v11;
+        v18.i256 = add v26 v16;
+        jump block3;
+
+    block3:
+        v21.i256 = add v11 1.i256;
+        jump block1;
+
+    block4:
+        return v26;
+}
+
+func public %sum_dynamic_start(v0.i256) -> i256 {
+    block0:
+        v3.i256 = mload 64.i256 i256;
+        v4.i256 = is_zero v3;
+        v6.i256 = mul v4 128.i256;
+        v7.i256 = or v3 v6;
+        v9.i256 = add v7 32.i256;
+        mstore 64.i256 v9 i256;
+        mstore v7 v0 i256;
+        v10.i256 = call %range_unknown__known_const_e__usize___seq_len__4__f248ae0e02044d7e v7;
+        jump block1;
+
+    block1:
+        v26.i256 = phi (0.i256 block0) (v18 block3);
+        v24.i256 = phi (v7 block0) (v24 block3);
+        v12.i256 = phi (v10 block0) (v12 block3);
+        v11.i256 = phi (0.i256 block0) (v21 block3);
+        v13.i256 = lt v11 v12;
+        br v13 block2 block4;
+
+    block2:
+        v16.i256 = call %range_unknown__known_const_e__usize___seq_get__4__f248ae0e02044d7e v24 v11;
+        v18.i256 = add v26 v16;
+        jump block3;
+
+    block3:
+        v21.i256 = add v11 1.i256;
+        jump block1;
+
+    block4:
+        return v26;
+}
+
+func public %sum_dynamic(v0.i256, v1.i256) -> i256 {
+    block0:
+        v4.i256 = mload 64.i256 i256;
+        v5.i256 = is_zero v4;
+        v7.i256 = mul v5 128.i256;
+        v8.i256 = or v4 v7;
+        v9.i256 = add v8 64.i256;
+        mstore 64.i256 v9 i256;
+        mstore v8 v0 i256;
+        v11.i256 = add v8 32.i256;
+        mstore v11 v1 i256;
+        v12.i256 = call %range_unknown__unknown__seq_len v8;
+        jump block1;
+
+    block1:
+        v28.i256 = phi (0.i256 block0) (v20 block3);
+        v26.i256 = phi (v8 block0) (v26 block3);
+        v14.i256 = phi (v12 block0) (v14 block3);
+        v13.i256 = phi (0.i256 block0) (v23 block3);
+        v15.i256 = lt v13 v14;
+        br v15 block2 block4;
+
+    block2:
+        v18.i256 = call %range_unknown__known_const_e__usize___seq_get__4__f248ae0e02044d7e v26 v13;
+        v20.i256 = add v28 v18;
+        jump block3;
+
+    block3:
+        v23.i256 = add v13 1.i256;
+        jump block1;
+
+    block4:
+        return v28;
+}
+
+func public %range_known_const_s__usize___known_const_e__usize___seq_len__0_4__f9605efabd18106c(v0.i256) -> i256 {
+    block0:
+        v3.i256 = lt 4.i256 0.i256;
+        v5.i256 = eq v3 1.i256;
+        br v5 block1 block4;
+
+    block1:
+        jump block3;
+
+    block2:
+        v7.i256 = sub 4.i256 0.i256;
+        jump block3;
+
+    block3:
+        v8.i256 = phi (0.i256 block1) (v7 block2);
+        return v8;
+
+    block4:
+        v6.i256 = eq v3 0.i256;
+        br v6 block2 block2;
+}
+
+func public %range_known_const_s__usize___known_const_e__usize___seq_get__0_4__f9605efabd18106c(v0.i256, v1.i256) -> i256 {
+    block0:
+        v3.i256 = add 0.i256 v1;
+        return v3;
+}
+
+func public %range_known_const_s__usize___unknown__seq_len__0__fc6647014fb554e5(v0.i256) -> i256 {
+    block0:
+        v1.i256 = mload v0 i256;
+        v3.i256 = lt v1 0.i256;
+        v5.i256 = eq v3 1.i256;
+        br v5 block1 block4;
+
+    block1:
+        jump block3;
+
+    block2:
+        v8.i256 = mload v0 i256;
+        v9.i256 = sub v8 0.i256;
+        jump block3;
+
+    block3:
+        v10.i256 = phi (0.i256 block1) (v9 block2);
+        return v10;
+
+    block4:
+        v6.i256 = eq v3 0.i256;
+        br v6 block2 block2;
+}
+
+func public %range_unknown__known_const_e__usize___seq_len__4__f248ae0e02044d7e(v0.i256) -> i256 {
+    block0:
+        v1.i256 = mload v0 i256;
+        v4.i256 = lt 4.i256 v1;
+        v6.i256 = eq v4 1.i256;
+        br v6 block1 block4;
+
+    block1:
+        jump block3;
+
+    block2:
+        v9.i256 = mload v0 i256;
+        v10.i256 = sub 4.i256 v9;
+        jump block3;
+
+    block3:
+        v11.i256 = phi (0.i256 block1) (v10 block2);
+        return v11;
+
+    block4:
+        v7.i256 = eq v4 0.i256;
+        br v7 block2 block2;
+}
+
+func public %range_unknown__known_const_e__usize___seq_get__4__f248ae0e02044d7e(v0.i256, v1.i256) -> i256 {
+    block0:
+        v2.i256 = mload v0 i256;
+        v3.i256 = add v2 v1;
+        return v3;
+}
+
+func public %range_unknown__unknown__seq_len(v0.i256) -> i256 {
+    block0:
+        v2.i256 = add v0 32.i256;
+        v3.i256 = mload v2 i256;
+        v4.i256 = mload v0 i256;
+        v6.i256 = lt v3 v4;
+        v8.i256 = eq v6 1.i256;
+        br v8 block1 block4;
+
+    block1:
+        jump block3;
+
+    block2:
+        v11.i256 = add v0 32.i256;
+        v12.i256 = mload v11 i256;
+        v13.i256 = mload v0 i256;
+        v14.i256 = sub v12 v13;
+        jump block3;
+
+    block3:
+        v15.i256 = phi (0.i256 block1) (v14 block2);
+        return v15;
+
+    block4:
+        v9.i256 = eq v6 0.i256;
+        br v9 block2 block2;
+}
+
+func public %__fe_sonatina_entry() {
+    block0:
+        v0.i256 = call %sum_const;
+        evm_stop;
+}
+
+
+object @Contract {
+    section runtime {
+        entry %__fe_sonatina_entry;
+        include %sum_const;
+        include %sum_dynamic_end;
+        include %sum_dynamic_start;
+        include %sum_dynamic;
+        include %range_known_const_s__usize___known_const_e__usize___seq_len__0_4__f9605efabd18106c;
+        include %range_known_const_s__usize___known_const_e__usize___seq_get__0_4__f9605efabd18106c;
+        include %range_known_const_s__usize___unknown__seq_len__0__fc6647014fb554e5;
+        include %range_unknown__known_const_e__usize___seq_len__4__f248ae0e02044d7e;
+        include %range_unknown__known_const_e__usize___seq_get__4__f248ae0e02044d7e;
+        include %range_unknown__unknown__seq_len;
+    }
+}

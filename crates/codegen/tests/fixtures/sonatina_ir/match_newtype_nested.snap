@@ -1,0 +1,47 @@
+---
+source: crates/codegen/tests/sonatina_ir.rs
+assertion_line: 74
+expression: output
+input_file: crates/codegen/tests/fixtures/match_newtype_nested.fe
+---
+target = evm-ethereum-osaka
+
+func public %match_newtype_nested(v0.i256) -> i256 {
+    block0:
+        jump block4;
+
+    block1:
+        jump block2;
+
+    block2:
+        v2.i256 = phi (0.i256 block1) (v0 block3);
+        return v2;
+
+    block3:
+        jump block2;
+
+    block4:
+        v5.i256 = eq v0 0.i256;
+        br v5 block1 block3;
+}
+
+func public %f() -> i256 {
+    block0:
+        v1.i256 = call %match_newtype_nested 10.i256;
+        return v1;
+}
+
+func public %__fe_sonatina_entry() {
+    block0:
+        v1.i256 = call %match_newtype_nested 0.i256;
+        evm_stop;
+}
+
+
+object @Contract {
+    section runtime {
+        entry %__fe_sonatina_entry;
+        include %match_newtype_nested;
+        include %f;
+    }
+}

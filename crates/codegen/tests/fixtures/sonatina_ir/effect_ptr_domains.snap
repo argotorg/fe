@@ -1,0 +1,94 @@
+---
+source: crates/codegen/tests/sonatina_ir.rs
+assertion_line: 65
+expression: output
+input_file: crates/codegen/tests/fixtures/effect_ptr_domains.fe
+---
+target = evm-ethereum-osaka
+
+func public %bump__StorPtr_Foo___3698cc3c4b2626e3(v0.i256) {
+    block0:
+        v1.i256 = evm_sload v0;
+        v3.i256 = add v1 1.i256;
+        evm_sstore v0 v3;
+        v4.i256 = add v0 1.i256;
+        v5.i256 = evm_sload v4;
+        v7.i256 = add v5 2.i256;
+        v8.i256 = add v0 1.i256;
+        evm_sstore v8 v7;
+        return;
+}
+
+func public %test_effect_ptr_domains(v0.i256, v1.i256) {
+    block0:
+        v3.i256 = call %mem_ptr__mem__RawMem_Foo__19292a5189c12f79 v1 256.i256;
+        call %bump__MemPtr_Foo___cdd30998d577b6ea v3;
+        v5.i256 = call %stor_ptr__st__RawStorage_Foo__d44156c896232646 v0 0.i256;
+        call %bump__StorPtr_Foo___3698cc3c4b2626e3 v5;
+        v7.i256 = mload 64.i256 i256;
+        v8.i256 = is_zero v7;
+        v10.i256 = mul v8 128.i256;
+        v11.i256 = or v7 v10;
+        v12.i256 = add v11 64.i256;
+        mstore 64.i256 v12 i256;
+        mstore v11 10.i256 i256;
+        v16.i256 = add v11 32.i256;
+        mstore v16 20.i256 i256;
+        call %bump__MemPtr_Foo___cdd30998d577b6ea v11;
+        return;
+}
+
+func public %mem_ptr__mem__RawMem_Foo__19292a5189c12f79(v0.i256, v1.i256) -> i256 {
+    block0:
+        v2.i256 = call %memptr_t__effectref_from_raw__Foo__668f96d7165c93b v1;
+        return v2;
+}
+
+func public %bump__MemPtr_Foo___cdd30998d577b6ea(v0.i256) {
+    block0:
+        v1.i256 = mload v0 i256;
+        v3.i256 = add v1 1.i256;
+        mstore v0 v3 i256;
+        v5.i256 = add v0 32.i256;
+        v6.i256 = mload v5 i256;
+        v8.i256 = add v6 2.i256;
+        v9.i256 = add v0 32.i256;
+        mstore v9 v8 i256;
+        return;
+}
+
+func public %stor_ptr__st__RawStorage_Foo__d44156c896232646(v0.i256, v1.i256) -> i256 {
+    block0:
+        v2.i256 = call %storptr_t__effectref_from_raw__Foo__668f96d7165c93b v1;
+        return v2;
+}
+
+func public %memptr_t__effectref_from_raw__Foo__668f96d7165c93b(v0.i256) -> i256 {
+    block0:
+        return v0;
+}
+
+func public %storptr_t__effectref_from_raw__Foo__668f96d7165c93b(v0.i256) -> i256 {
+    block0:
+        return v0;
+}
+
+func public %__fe_sonatina_entry() {
+    block0:
+        call %bump__StorPtr_Foo___3698cc3c4b2626e3 0.i256;
+        evm_stop;
+}
+
+
+object @Contract {
+    section runtime {
+        entry %__fe_sonatina_entry;
+        include %bump__StorPtr_Foo___3698cc3c4b2626e3;
+        include %test_effect_ptr_domains;
+        include %mem_ptr__mem__RawMem_Foo__19292a5189c12f79;
+        include %bump__MemPtr_Foo___cdd30998d577b6ea;
+        include %stor_ptr__st__RawStorage_Foo__d44156c896232646;
+        include %memptr_t__effectref_from_raw__Foo__668f96d7165c93b;
+        include %storptr_t__effectref_from_raw__Foo__668f96d7165c93b;
+    }
+}

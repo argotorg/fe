@@ -1,0 +1,34 @@
+---
+source: crates/codegen/tests/sonatina_ir.rs
+assertion_line: 65
+expression: output
+input_file: crates/codegen/tests/fixtures/momo.fe
+---
+target = evm-ethereum-osaka
+
+func public %read_x(v0.i256) -> i256 {
+    block0:
+        v1.i256 = mload v0 i256;
+        v2.i8 = trunc v1 i8;
+        v3.i256 = zext v2 i256;
+        v5.i256 = add v0 1.i256;
+        v6.i256 = mload v5 i256;
+        v7.i8 = trunc v6 i8;
+        v8.i256 = zext v7 i256;
+        v9.i256 = add v3 v8;
+        return v9;
+}
+
+func public %__fe_sonatina_entry() {
+    block0:
+        v1.i256 = call %read_x 0.i256;
+        evm_stop;
+}
+
+
+object @Contract {
+    section runtime {
+        entry %__fe_sonatina_entry;
+        include %read_x;
+    }
+}

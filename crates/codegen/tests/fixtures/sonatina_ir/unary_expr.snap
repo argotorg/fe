@@ -1,0 +1,28 @@
+---
+source: crates/codegen/tests/sonatina_ir.rs
+assertion_line: 65
+expression: output
+input_file: crates/codegen/tests/fixtures/unary_expr.fe
+---
+target = evm-ethereum-osaka
+
+func public %unary_expr() -> i256 {
+    block0:
+        v2.i256 = add 1.i256 2.i256;
+        v3.i256 = neg v2;
+        return v3;
+}
+
+func public %__fe_sonatina_entry() {
+    block0:
+        v0.i256 = call %unary_expr;
+        evm_stop;
+}
+
+
+object @Contract {
+    section runtime {
+        entry %__fe_sonatina_entry;
+        include %unary_expr;
+    }
+}

@@ -1,0 +1,648 @@
+---
+source: crates/codegen/tests/sonatina_ir.rs
+assertion_line: 74
+expression: output
+input_file: crates/codegen/tests/fixtures/erc20_low_level.fe
+---
+target = evm-ethereum-osaka
+
+func public %abi_encode_u256(v0.i256, v1.i256) {
+    block0:
+        mstore 0.i256 v0 i256;
+        evm_return 0.i256 32.i256;
+}
+
+func public %abi_encode_string(v0.i256, v1.i256, v2.i256) {
+    block0:
+        mstore 0.i256 32.i256 i256;
+        mstore 32.i256 v1 i256;
+        mstore 64.i256 v0 i256;
+        evm_return 0.i256 96.i256;
+}
+
+func public %erc20_balance_of(v0.i256, v1.i256) -> i256 {
+    block0:
+        v3.i256 = call %storagemap_k__v__const_salt__u256__get__Address_u256_0__b8b2f68065fe2328 0.i256 v1;
+        return v3;
+}
+
+func public %erc20_allowance(v0.i256, v1.i256, v2.i256) -> i256 {
+    block0:
+        v4.i256 = mload 64.i256 i256;
+        v5.i256 = is_zero v4;
+        v7.i256 = mul v5 128.i256;
+        v8.i256 = or v4 v7;
+        v9.i256 = add v8 64.i256;
+        mstore 64.i256 v9 i256;
+        mstore v8 v1 i256;
+        v11.i256 = add v8 32.i256;
+        mstore v11 v2 i256;
+        v13.i256 = call %storagemap_k__v__const_salt__u256__get___Address__Address__u256_1__12414c27d5bfff1f 0.i256 v8;
+        return v13;
+}
+
+func public %erc20_approve(v0.i256, v1.i256, v2.i256, v3.i256) {
+    block0:
+        v5.i256 = mload 64.i256 i256;
+        v6.i256 = is_zero v5;
+        v8.i256 = mul v6 128.i256;
+        v9.i256 = or v5 v8;
+        v10.i256 = add v9 64.i256;
+        mstore 64.i256 v10 i256;
+        mstore v9 v1 i256;
+        v12.i256 = add v9 32.i256;
+        mstore v12 v2 i256;
+        call %storagemap_k__v__const_salt__u256__set___Address__Address__u256_1__12414c27d5bfff1f 0.i256 v9 v3;
+        return;
+}
+
+func public %erc20_total_supply(v0.i256) -> i256 {
+    block0:
+        v1.i256 = mload v0 i256;
+        return v1;
+}
+
+func public %erc20_set_owner_once(v0.i256, v1.i256, v2.i256) {
+    block0:
+        v4.i256 = add v0 32.i256;
+        v5.i256 = mload v4 i256;
+        v6.i256 = call %address_zero;
+        v7.i256 = eq v5 v6;
+        v8.i256 = is_zero v7;
+        br v8 block1 block2;
+
+    block1:
+        evm_revert 0.i256 0.i256;
+
+    block2:
+        v12.i256 = add v0 32.i256;
+        mstore v12 v1 i256;
+        return;
+}
+
+func public %erc20_transfer(v0.i256, v1.i256, v2.i256, v3.i256, v4.i256) {
+    block0:
+        v5.i256 = call %erc20_balance_of_mem v0 v1;
+        v6.i256 = lt v5 v3;
+        br v6 block1 block2;
+
+    block1:
+        evm_revert 0.i256 0.i256;
+
+    block2:
+        v10.i256 = call %erc20_balance_of_mem v0 v2;
+        v14.i256 = sub v5 v3;
+        call %storagemap_k__v__const_salt__u256__set__Address_u256_0__b8b2f68065fe2328 0.i256 v1 v14;
+        v15.i256 = add v10 v3;
+        call %storagemap_k__v__const_salt__u256__set__Address_u256_0__b8b2f68065fe2328 0.i256 v2 v15;
+        return;
+}
+
+func public %erc20_transfer_from(v0.i256, v1.i256, v2.i256, v3.i256, v4.i256, v5.i256) {
+    block0:
+        v6.i256 = evm_caller;
+        v7.i256 = call %erc20_allowance_mem v0 v1 v6;
+        v8.i256 = lt v7 v3;
+        br v8 block1 block2;
+
+    block1:
+        evm_revert 0.i256 0.i256;
+
+    block2:
+        call %erc20_transfer_mem v0 v1 v2 v3 v5;
+        v16.i256 = mload 64.i256 i256;
+        v17.i256 = is_zero v16;
+        v19.i256 = mul v17 128.i256;
+        v20.i256 = or v16 v19;
+        v21.i256 = add v20 64.i256;
+        mstore 64.i256 v21 i256;
+        mstore v20 v1 i256;
+        v24.i256 = add v20 32.i256;
+        mstore v24 v6 i256;
+        v26.i256 = sub v7 v3;
+        call %storagemap_k__v__const_salt__u256__set___Address__Address__u256_1__12414c27d5bfff1f 0.i256 v20 v26;
+        return;
+}
+
+func public %erc20_mint(v0.i256, v1.i256, v2.i256, v3.i256, v4.i256) {
+    block0:
+        v5.i256 = evm_caller;
+        v7.i256 = add v0 32.i256;
+        v8.i256 = mload v7 i256;
+        v9.i256 = eq v5 v8;
+        v10.i256 = is_zero v9;
+        br v10 block1 block2;
+
+    block1:
+        evm_revert 0.i256 0.i256;
+
+    block2:
+        v14.i256 = call %erc20_balance_of_mem v0 v1;
+        v16.i256 = add v14 v2;
+        call %storagemap_k__v__const_salt__u256__set__Address_u256_0__b8b2f68065fe2328 0.i256 v1 v16;
+        v17.i256 = mload v0 i256;
+        v18.i256 = add v17 v2;
+        mstore v0 v18 i256;
+        return;
+}
+
+func public %do_init__StorPtr_Erc20___2745299687a147d4(v0.i256, v1.i256, v2.i256) {
+    block0:
+        v3.i256 = evm_caller;
+        call %erc20_set_owner_once_stor v0 v3 v2;
+        return;
+}
+
+func public %balance_of__StorPtr_Erc20___2745299687a147d4(v0.i256, v1.i256) -> i256 {
+    block0:
+        v3.i256 = call %storagemap_k__v__const_salt__u256__get__Address_u256_0__b8b2f68065fe2328 0.i256 v0;
+        return v3;
+}
+
+func public %allowance__StorPtr_Erc20___2745299687a147d4(v0.i256, v1.i256, v2.i256) -> i256 {
+    block0:
+        v4.i256 = mload 64.i256 i256;
+        v5.i256 = is_zero v4;
+        v7.i256 = mul v5 128.i256;
+        v8.i256 = or v4 v7;
+        v9.i256 = add v8 64.i256;
+        mstore 64.i256 v9 i256;
+        mstore v8 v0 i256;
+        v11.i256 = add v8 32.i256;
+        mstore v11 v1 i256;
+        v13.i256 = call %storagemap_k__v__const_salt__u256__get___Address__Address__u256_1__12414c27d5bfff1f 0.i256 v8;
+        return v13;
+}
+
+func public %transfer__StorPtr_Erc20___2745299687a147d4(v0.i256, v1.i256, v2.i256, v3.i256, v4.i256) -> i256 {
+    block0:
+        v5.i256 = evm_caller;
+        call %erc20_transfer_stor v2 v5 v0 v1 v4;
+        return 1.i256;
+}
+
+func public %approve__StorPtr_Erc20___2745299687a147d4(v0.i256, v1.i256, v2.i256, v3.i256) -> i256 {
+    block0:
+        v4.i256 = evm_caller;
+        call %erc20_approve_stor v2 v4 v0 v1;
+        return 1.i256;
+}
+
+func public %transfer_from__StorPtr_Erc20___2745299687a147d4(v0.i256, v1.i256, v2.i256, v3.i256, v4.i256, v5.i256) -> i256 {
+    block0:
+        call %erc20_transfer_from_stor v3 v0 v1 v2 v4 v5;
+        return 1.i256;
+}
+
+func public %mint__StorPtr_Erc20___2745299687a147d4(v0.i256, v1.i256, v2.i256, v3.i256, v4.i256) -> i256 {
+    block0:
+        call %erc20_mint_stor v2 v0 v1 v3 v4;
+        return 1.i256;
+}
+
+func public %runtime__StorPtr_Evm___207f35a85ac4062e(v0.i256) {
+    block0:
+        v2.i256 = call %stor_ptr__Evm_Erc20__c294a0aeae425afd 0.i256 0.i256;
+        v3.i256 = evm_calldata_load 0.i256;
+        v5.i256 = shr 224.i256 v3;
+        jump block11;
+
+    block1:
+        v7.i256 = evm_calldata_load 4.i256;
+        v9.i256 = call %balance_of__StorPtr_Erc20___2745299687a147d4 v7 v2;
+        call %abi_encode_u256 v9 0.i256;
+        evm_invalid;
+
+    block2:
+        v10.i256 = evm_calldata_load 4.i256;
+        v12.i256 = evm_calldata_load 36.i256;
+        v14.i256 = call %allowance__StorPtr_Erc20___2745299687a147d4 v10 v12 v2;
+        call %abi_encode_u256 v14 0.i256;
+        evm_invalid;
+
+    block3:
+        call %abi_encode_string 31840933704928615426292613906591192052886564858731089189578963311002547912704.i256 7.i256 0.i256;
+        evm_invalid;
+
+    block4:
+        call %abi_encode_string 31784391594991486112232083260356792451358613714049171750120207607087736291328.i256 3.i256 0.i256;
+        evm_invalid;
+
+    block5:
+        call %abi_encode_u256 18.i256 0.i256;
+        evm_invalid;
+
+    block6:
+        v20.i256 = evm_calldata_load 4.i256;
+        v21.i256 = evm_calldata_load 36.i256;
+        v23.i256 = call %transfer__StorPtr_Erc20___2745299687a147d4 v20 v21 v2 0.i256 0.i256;
+        call %abi_encode_u256 v23 0.i256;
+        evm_invalid;
+
+    block7:
+        v24.i256 = evm_calldata_load 4.i256;
+        v25.i256 = evm_calldata_load 36.i256;
+        v27.i256 = call %approve__StorPtr_Erc20___2745299687a147d4 v24 v25 v2 0.i256;
+        call %abi_encode_u256 v27 0.i256;
+        evm_invalid;
+
+    block8:
+        v28.i256 = evm_calldata_load 4.i256;
+        v29.i256 = evm_calldata_load 36.i256;
+        v31.i256 = evm_calldata_load 68.i256;
+        v33.i256 = call %transfer_from__StorPtr_Erc20___2745299687a147d4 v28 v29 v31 v2 0.i256 0.i256;
+        call %abi_encode_u256 v33 0.i256;
+        evm_invalid;
+
+    block9:
+        v34.i256 = evm_calldata_load 4.i256;
+        v35.i256 = evm_calldata_load 36.i256;
+        v37.i256 = call %mint__StorPtr_Erc20___2745299687a147d4 v34 v35 v2 0.i256 0.i256;
+        call %abi_encode_u256 v37 0.i256;
+        evm_invalid;
+
+    block10:
+        evm_revert 0.i256 0.i256;
+
+    block11:
+        v48.i256 = eq v5 1889567281.i256;
+        br v48 block1 block12;
+
+    block12:
+        v49.i256 = eq v5 3714247998.i256;
+        br v49 block2 block13;
+
+    block13:
+        v50.i256 = eq v5 117300739.i256;
+        br v50 block3 block14;
+
+    block14:
+        v51.i256 = eq v5 2514000705.i256;
+        br v51 block4 block15;
+
+    block15:
+        v52.i256 = eq v5 826074471.i256;
+        br v52 block5 block16;
+
+    block16:
+        v53.i256 = eq v5 2835717307.i256;
+        br v53 block6 block17;
+
+    block17:
+        v54.i256 = eq v5 157198259.i256;
+        br v54 block7 block18;
+
+    block18:
+        v55.i256 = eq v5 599290589.i256;
+        br v55 block8 block19;
+
+    block19:
+        v56.i256 = eq v5 1086394137.i256;
+        br v56 block9 block10;
+}
+
+func public %storagemap_k__v__const_salt__u256__get__Address_u256_0__b8b2f68065fe2328(v0.i256, v1.i256) -> i256 {
+    block0:
+        v3.i256 = call %storagemap_get_word_with_salt__Address__ce8f588742192062 v1 0.i256;
+        v4.i256 = call %u256_wordrepr_from_word v3;
+        return v4;
+}
+
+func public %storagemap_k__v__const_salt__u256__get___Address__Address__u256_1__12414c27d5bfff1f(v0.i256, v1.i256) -> i256 {
+    block0:
+        v3.i256 = call %storagemap_get_word_with_salt___Address__Address___c32d499da259c78e v1 1.i256;
+        v4.i256 = call %u256_wordrepr_from_word v3;
+        return v4;
+}
+
+func public %storagemap_k__v__const_salt__u256__set___Address__Address__u256_1__12414c27d5bfff1f(v0.i256, v1.i256, v2.i256) {
+    block0:
+        v3.i256 = call %u256_wordrepr_to_word v2;
+        call %storagemap_set_word_with_salt___Address__Address___c32d499da259c78e v1 1.i256 v3;
+        return;
+}
+
+func public %address_zero() -> i256 {
+    block0:
+        return 0.i256;
+}
+
+func public %erc20_balance_of_mem(v0.i256, v1.i256) -> i256 {
+    block0:
+        v3.i256 = call %storagemap_k__v__const_salt__u256__get__Address_u256_0__b8b2f68065fe2328 0.i256 v1;
+        return v3;
+}
+
+func public %storagemap_k__v__const_salt__u256__set__Address_u256_0__b8b2f68065fe2328(v0.i256, v1.i256, v2.i256) {
+    block0:
+        v3.i256 = call %u256_wordrepr_to_word v2;
+        call %storagemap_set_word_with_salt__Address__ce8f588742192062 v1 0.i256 v3;
+        return;
+}
+
+func public %erc20_allowance_mem(v0.i256, v1.i256, v2.i256) -> i256 {
+    block0:
+        v4.i256 = mload 64.i256 i256;
+        v5.i256 = is_zero v4;
+        v7.i256 = mul v5 128.i256;
+        v8.i256 = or v4 v7;
+        v9.i256 = add v8 64.i256;
+        mstore 64.i256 v9 i256;
+        mstore v8 v1 i256;
+        v11.i256 = add v8 32.i256;
+        mstore v11 v2 i256;
+        v13.i256 = call %storagemap_k__v__const_salt__u256__get___Address__Address__u256_1__12414c27d5bfff1f 0.i256 v8;
+        return v13;
+}
+
+func public %erc20_transfer_mem(v0.i256, v1.i256, v2.i256, v3.i256, v4.i256) {
+    block0:
+        v5.i256 = call %erc20_balance_of_mem v0 v1;
+        v6.i256 = lt v5 v3;
+        br v6 block1 block2;
+
+    block1:
+        evm_revert 0.i256 0.i256;
+
+    block2:
+        v10.i256 = call %erc20_balance_of_mem v0 v2;
+        v14.i256 = sub v5 v3;
+        call %storagemap_k__v__const_salt__u256__set__Address_u256_0__b8b2f68065fe2328 0.i256 v1 v14;
+        v15.i256 = add v10 v3;
+        call %storagemap_k__v__const_salt__u256__set__Address_u256_0__b8b2f68065fe2328 0.i256 v2 v15;
+        return;
+}
+
+func public %erc20_set_owner_once_stor(v0.i256, v1.i256, v2.i256) {
+    block0:
+        v4.i256 = add v0 1.i256;
+        v5.i256 = evm_sload v4;
+        v6.i256 = call %address_zero;
+        v7.i256 = eq v5 v6;
+        v8.i256 = is_zero v7;
+        br v8 block1 block2;
+
+    block1:
+        evm_revert 0.i256 0.i256;
+
+    block2:
+        v12.i256 = add v0 1.i256;
+        evm_sstore v12 v1;
+        return;
+}
+
+func public %erc20_transfer_stor(v0.i256, v1.i256, v2.i256, v3.i256, v4.i256) {
+    block0:
+        v5.i256 = call %erc20_balance_of_stor v0 v1;
+        v6.i256 = lt v5 v3;
+        br v6 block1 block2;
+
+    block1:
+        evm_revert 0.i256 0.i256;
+
+    block2:
+        v10.i256 = call %erc20_balance_of_stor v0 v2;
+        v14.i256 = sub v5 v3;
+        call %storagemap_k__v__const_salt__u256__set__Address_u256_0__b8b2f68065fe2328 0.i256 v1 v14;
+        v15.i256 = add v10 v3;
+        call %storagemap_k__v__const_salt__u256__set__Address_u256_0__b8b2f68065fe2328 0.i256 v2 v15;
+        return;
+}
+
+func public %erc20_approve_stor(v0.i256, v1.i256, v2.i256, v3.i256) {
+    block0:
+        v5.i256 = mload 64.i256 i256;
+        v6.i256 = is_zero v5;
+        v8.i256 = mul v6 128.i256;
+        v9.i256 = or v5 v8;
+        v10.i256 = add v9 64.i256;
+        mstore 64.i256 v10 i256;
+        mstore v9 v1 i256;
+        v12.i256 = add v9 32.i256;
+        mstore v12 v2 i256;
+        call %storagemap_k__v__const_salt__u256__set___Address__Address__u256_1__12414c27d5bfff1f 0.i256 v9 v3;
+        return;
+}
+
+func public %erc20_transfer_from_stor(v0.i256, v1.i256, v2.i256, v3.i256, v4.i256, v5.i256) {
+    block0:
+        v6.i256 = evm_caller;
+        v7.i256 = call %erc20_allowance_stor v0 v1 v6;
+        v8.i256 = lt v7 v3;
+        br v8 block1 block2;
+
+    block1:
+        evm_revert 0.i256 0.i256;
+
+    block2:
+        call %erc20_transfer_stor v0 v1 v2 v3 v5;
+        v16.i256 = mload 64.i256 i256;
+        v17.i256 = is_zero v16;
+        v19.i256 = mul v17 128.i256;
+        v20.i256 = or v16 v19;
+        v21.i256 = add v20 64.i256;
+        mstore 64.i256 v21 i256;
+        mstore v20 v1 i256;
+        v24.i256 = add v20 32.i256;
+        mstore v24 v6 i256;
+        v26.i256 = sub v7 v3;
+        call %storagemap_k__v__const_salt__u256__set___Address__Address__u256_1__12414c27d5bfff1f 0.i256 v20 v26;
+        return;
+}
+
+func public %erc20_mint_stor(v0.i256, v1.i256, v2.i256, v3.i256, v4.i256) {
+    block0:
+        v5.i256 = evm_caller;
+        v7.i256 = add v0 1.i256;
+        v8.i256 = evm_sload v7;
+        v9.i256 = eq v5 v8;
+        v10.i256 = is_zero v9;
+        br v10 block1 block2;
+
+    block1:
+        evm_revert 0.i256 0.i256;
+
+    block2:
+        v14.i256 = call %erc20_balance_of_stor v0 v1;
+        v16.i256 = add v14 v2;
+        call %storagemap_k__v__const_salt__u256__set__Address_u256_0__b8b2f68065fe2328 0.i256 v1 v16;
+        v17.i256 = evm_sload v0;
+        v18.i256 = add v17 v2;
+        evm_sstore v0 v18;
+        return;
+}
+
+func public %stor_ptr__Evm_Erc20__c294a0aeae425afd(v0.i256, v1.i256) -> i256 {
+    block0:
+        v2.i256 = call %storptr_t__effectref_from_raw__Erc20__88e369469f2b52ef v1;
+        return v2;
+}
+
+func public %storagemap_get_word_with_salt__Address__ce8f588742192062(v0.i256, v1.i256) -> i256 {
+    block0:
+        v2.i256 = call %storagemap_storage_slot_with_salt__Address__ce8f588742192062 v0 v1;
+        v3.i256 = evm_sload v2;
+        return v3;
+}
+
+func public %u256_wordrepr_from_word(v0.i256) -> i256 {
+    block0:
+        return v0;
+}
+
+func public %storagemap_get_word_with_salt___Address__Address___c32d499da259c78e(v0.i256, v1.i256) -> i256 {
+    block0:
+        v2.i256 = call %storagemap_storage_slot_with_salt___Address__Address___c32d499da259c78e v0 v1;
+        v3.i256 = evm_sload v2;
+        return v3;
+}
+
+func public %u256_wordrepr_to_word(v0.i256) -> i256 {
+    block0:
+        return v0;
+}
+
+func public %storagemap_set_word_with_salt___Address__Address___c32d499da259c78e(v0.i256, v1.i256, v2.i256) {
+    block0:
+        v3.i256 = call %storagemap_storage_slot_with_salt___Address__Address___c32d499da259c78e v0 v1;
+        evm_sstore v3 v2;
+        return;
+}
+
+func public %storagemap_set_word_with_salt__Address__ce8f588742192062(v0.i256, v1.i256, v2.i256) {
+    block0:
+        v3.i256 = call %storagemap_storage_slot_with_salt__Address__ce8f588742192062 v0 v1;
+        evm_sstore v3 v2;
+        return;
+}
+
+func public %erc20_balance_of_stor(v0.i256, v1.i256) -> i256 {
+    block0:
+        v3.i256 = call %storagemap_k__v__const_salt__u256__get__Address_u256_0__b8b2f68065fe2328 0.i256 v1;
+        return v3;
+}
+
+func public %erc20_allowance_stor(v0.i256, v1.i256, v2.i256) -> i256 {
+    block0:
+        v4.i256 = mload 64.i256 i256;
+        v5.i256 = is_zero v4;
+        v7.i256 = mul v5 128.i256;
+        v8.i256 = or v4 v7;
+        v9.i256 = add v8 64.i256;
+        mstore 64.i256 v9 i256;
+        mstore v8 v1 i256;
+        v11.i256 = add v8 32.i256;
+        mstore v11 v2 i256;
+        v13.i256 = call %storagemap_k__v__const_salt__u256__get___Address__Address__u256_1__12414c27d5bfff1f 0.i256 v8;
+        return v13;
+}
+
+func public %storptr_t__effectref_from_raw__Erc20__88e369469f2b52ef(v0.i256) -> i256 {
+    block0:
+        return v0;
+}
+
+func public %storagemap_storage_slot_with_salt__Address__ce8f588742192062(v0.i256, v1.i256) -> i256 {
+    block0:
+        v3.i256 = mload 64.i256 i256;
+        v4.i256 = call %address_storagekey_write_key v3 v0;
+        v5.i256 = add v3 v4;
+        mstore v5 v1 i256;
+        v7.i256 = add v4 32.i256;
+        v8.i256 = evm_keccak256 v3 v7;
+        return v8;
+}
+
+func public %storagemap_storage_slot_with_salt___Address__Address___c32d499da259c78e(v0.i256, v1.i256) -> i256 {
+    block0:
+        v3.i256 = mload 64.i256 i256;
+        v4.i256 = call %_a__b__storagekey_write_key__Address_Address__397b9a625a435b6f v3 v0;
+        v5.i256 = add v3 v4;
+        mstore v5 v1 i256;
+        v7.i256 = add v4 32.i256;
+        v8.i256 = evm_keccak256 v3 v7;
+        return v8;
+}
+
+func public %address_storagekey_write_key(v0.i256, v1.i256) -> i256 {
+    block0:
+        v2.i256 = call %u256_storagekey_write_key v0 v1;
+        return v2;
+}
+
+func public %_a__b__storagekey_write_key__Address_Address__397b9a625a435b6f(v0.i256, v1.i256) -> i256 {
+    block0:
+        v2.i256 = mload v1 i256;
+        v4.i256 = add v1 32.i256;
+        v5.i256 = mload v4 i256;
+        v6.i256 = call %address_storagekey_write_key v0 v2;
+        v7.i256 = add v0 v6;
+        v8.i256 = call %address_storagekey_write_key v7 v5;
+        v9.i256 = add v6 v8;
+        return v9;
+}
+
+func public %u256_storagekey_write_key(v0.i256, v1.i256) -> i256 {
+    block0:
+        mstore v0 v1 i256;
+        return 32.i256;
+}
+
+func public %__fe_sonatina_entry() {
+    block0:
+        call %runtime__StorPtr_Evm___207f35a85ac4062e 0.i256;
+        evm_stop;
+}
+
+
+object @Contract {
+    section runtime {
+        entry %__fe_sonatina_entry;
+        include %runtime__StorPtr_Evm___207f35a85ac4062e;
+        include %abi_encode_u256;
+        include %abi_encode_string;
+        include %erc20_balance_of;
+        include %erc20_allowance;
+        include %erc20_approve;
+        include %erc20_total_supply;
+        include %erc20_set_owner_once;
+        include %erc20_transfer;
+        include %erc20_transfer_from;
+        include %erc20_mint;
+        include %do_init__StorPtr_Erc20___2745299687a147d4;
+        include %balance_of__StorPtr_Erc20___2745299687a147d4;
+        include %allowance__StorPtr_Erc20___2745299687a147d4;
+        include %transfer__StorPtr_Erc20___2745299687a147d4;
+        include %approve__StorPtr_Erc20___2745299687a147d4;
+        include %transfer_from__StorPtr_Erc20___2745299687a147d4;
+        include %mint__StorPtr_Erc20___2745299687a147d4;
+        include %storagemap_k__v__const_salt__u256__get__Address_u256_0__b8b2f68065fe2328;
+        include %storagemap_k__v__const_salt__u256__get___Address__Address__u256_1__12414c27d5bfff1f;
+        include %storagemap_k__v__const_salt__u256__set___Address__Address__u256_1__12414c27d5bfff1f;
+        include %address_zero;
+        include %erc20_balance_of_mem;
+        include %storagemap_k__v__const_salt__u256__set__Address_u256_0__b8b2f68065fe2328;
+        include %erc20_allowance_mem;
+        include %erc20_transfer_mem;
+        include %erc20_set_owner_once_stor;
+        include %erc20_transfer_stor;
+        include %erc20_approve_stor;
+        include %erc20_transfer_from_stor;
+        include %erc20_mint_stor;
+        include %stor_ptr__Evm_Erc20__c294a0aeae425afd;
+        include %storagemap_get_word_with_salt__Address__ce8f588742192062;
+        include %u256_wordrepr_from_word;
+        include %storagemap_get_word_with_salt___Address__Address___c32d499da259c78e;
+        include %u256_wordrepr_to_word;
+        include %storagemap_set_word_with_salt___Address__Address___c32d499da259c78e;
+        include %storagemap_set_word_with_salt__Address__ce8f588742192062;
+        include %erc20_balance_of_stor;
+        include %erc20_allowance_stor;
+        include %storptr_t__effectref_from_raw__Erc20__88e369469f2b52ef;
+        include %storagemap_storage_slot_with_salt__Address__ce8f588742192062;
+        include %storagemap_storage_slot_with_salt___Address__Address___c32d499da259c78e;
+        include %address_storagekey_write_key;
+        include %_a__b__storagekey_write_key__Address_Address__397b9a625a435b6f;
+        include %u256_storagekey_write_key;
+    }
+}
