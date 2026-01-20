@@ -4,7 +4,8 @@ expression: mir_output
 ---
 fn lt_ten(v0: u64) -> bool:
   bb0:
-    ret (v0 < 10)
+    v1: bool = u64_ord_lt(v0, 10)
+    ret v1
 
 fn while_cond_call() -> u64:
   bb0:
@@ -14,7 +15,23 @@ fn while_cond_call() -> u64:
     v1: bool = lt_ten(v0)
     br v1 bb2 bb3
   bb2:
-    v0 = (v0 + 1)
+    v2: u64 = u64_add_add(v0, 1)
+    v0 = v2
     jmp bb1
   bb3:
     ret v0
+
+fn u64_ord_lt(v0: u64, v1: u64) -> bool:
+  bb0:
+    v2: bool = __lt_u64(v0, v1)
+    ret v2
+
+fn u64_add_add(v0: u64, v1: u64) -> u64:
+  bb0:
+    v2: u64 = __add_u64(v0, v1)
+    v3: bool = __lt_u64(v2, v0)
+    br v3 bb1 bb2
+  bb1:
+    terminate revert(0, 0)
+  bb2:
+    ret v2

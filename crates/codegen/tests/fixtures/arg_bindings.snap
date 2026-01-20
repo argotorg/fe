@@ -1,11 +1,21 @@
 ---
 source: crates/codegen/tests/yul.rs
-assertion_line: 42
 expression: output
 input_file: tests/fixtures/arg_bindings.fe
 ---
 function $arg_bindings($x, $y) -> ret {
-  let v0 := add($x, $y)
+  let v0 := $u64_add_add($x, $y)
+  let v1 := v0
+  ret := v1
+  leave
+}
+function $u64_add_add($self, $other) -> ret {
+  let v0 := and(add(and($self, 0xffffffffffffffff), and($other, 0xffffffffffffffff)), 0xffffffffffffffff)
+  let v1 := lt(and(v0, 0xffffffffffffffff), and($self, 0xffffffffffffffff))
+  let v2 := v1
+  if v2 {
+    revert(0, 0)
+  }
   ret := v0
   leave
 }

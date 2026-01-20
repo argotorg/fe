@@ -8,6 +8,23 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         Some(self.typed_body.callable_expr(expr)?.callable_def)
     }
 
+    fn is_panic_like_call(&self, func_def: CallableDef<'db>) -> bool {
+        match func_def.ingot(self.db).kind(self.db) {
+            IngotKind::Core | IngotKind::Std => {}
+            _ => return false,
+        }
+        let CallableDef::Func(func) = func_def else {
+            return false;
+        };
+        if func.body(self.db).is_some() {
+            return false;
+        }
+        let Some(name) = func_def.name(self.db) else {
+            return false;
+        };
+        matches!(name.data(self.db).as_str(), "panic" | "todo")
+    }
+
     /// Attempts to lower a statement-only intrinsic call (`mstore`, `codecopy`, etc.).
     ///
     /// # Parameters
@@ -19,6 +36,22 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         if self.current_block().is_none() {
             return Some(self.ensure_value(expr));
         }
+
+        // `core::panic()` / `core::todo()` are modeled as terminating calls in MIR.
+        let callable_def = self.callable_def_for_call_expr(expr)?;
+        if self.is_panic_like_call(callable_def) {
+            let value_id = self.ensure_value(expr);
+            let u256_ty = TyId::new(self.db, TyData::TyBase(TyBase::Prim(PrimTy::U256)));
+            let zero = self.alloc_synthetic_value(u256_ty, SyntheticValue::Int(BigUint::from(0u8)));
+            self.set_current_terminator(Terminator::TerminatingCall(
+                crate::ir::TerminatingCall::Intrinsic {
+                    op: IntrinsicOp::Revert,
+                    args: vec![zero, zero],
+                },
+            ));
+            return Some(value_id);
+        }
+
         let (op, args) = self.intrinsic_stmt_args(expr)?;
         let value_id = self.ensure_value(expr);
         if matches!(op, IntrinsicOp::ReturnData | IntrinsicOp::Revert) {

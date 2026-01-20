@@ -5,9 +5,11 @@ input_file: tests/fixtures/effect_ptr_domains.fe
 ---
 function $bump__StorPtr_Foo___3698cc3c4b2626e3($foo) {
   let v0 := sload($foo)
-  sstore($foo, add(v0, 1))
-  let v1 := sload(add($foo, 1))
-  sstore(add($foo, 1), add(v1, 2))
+  let v1 := $u256_add_add(v0, 1)
+  sstore($foo, v1)
+  let v2 := sload(add($foo, 1))
+  let v3 := $u256_add_add(v2, 2)
+  sstore(add($foo, 1), v3)
   leave
 }
 function $test_effect_ptr_domains($st, $mem) {
@@ -29,6 +31,16 @@ function $test_effect_ptr_domains($st, $mem) {
   $bump__MemPtr_Foo___cdd30998d577b6ea(v5)
   leave
 }
+function $u256_add_add($self, $other) -> ret {
+  let v0 := add($self, $other)
+  let v1 := lt(v0, $self)
+  let v2 := v1
+  if v2 {
+    revert(0, 0)
+  }
+  ret := v0
+  leave
+}
 function $mem_ptr__mem__RawMem_Foo__19292a5189c12f79($self, $addr) -> ret {
   let v0 := $memptr_t__effectref_from_raw__Foo__668f96d7165c93b($addr)
   ret := v0
@@ -36,9 +48,11 @@ function $mem_ptr__mem__RawMem_Foo__19292a5189c12f79($self, $addr) -> ret {
 }
 function $bump__MemPtr_Foo___cdd30998d577b6ea($foo) {
   let v0 := mload($foo)
-  mstore($foo, add(v0, 1))
-  let v1 := mload(add($foo, 32))
-  mstore(add($foo, 32), add(v1, 2))
+  let v1 := $u256_add_add(v0, 1)
+  mstore($foo, v1)
+  let v2 := mload(add($foo, 32))
+  let v3 := $u256_add_add(v2, 2)
+  mstore(add($foo, 32), v3)
   leave
 }
 function $stor_ptr__st__RawStorage_Foo__d44156c896232646($self, $slot) -> ret {

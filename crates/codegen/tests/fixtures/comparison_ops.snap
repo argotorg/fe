@@ -7,17 +7,53 @@ function $comparison_ops() -> ret {
   let v0 := 1
   let v1 := 2
   let v2 := 3
-  let v3 := mload(0x40)
-  if iszero(v3) {
-    v3 := 0x80
+  let v3 := $u256_eq_eq(v0, v0)
+  let v4 := $u256_eq_ne(v0, v1)
+  let v5 := $u256_ord_lt(v0, v1)
+  let v6 := $u256_ord_le(v1, v1)
+  let v7 := $u256_ord_gt(v2, v1)
+  let v8 := $u256_ord_ge(v2, v2)
+  let v9 := mload(0x40)
+  if iszero(v9) {
+    v9 := 0x80
   }
-  mstore(0x40, add(v3, 6))
-  mstore(v3, iszero(iszero(eq(v0, v0))))
-  mstore(add(v3, 1), iszero(iszero(iszero(eq(v0, v1)))))
-  mstore(add(v3, 2), iszero(iszero(lt(v0, v1))))
-  mstore(add(v3, 3), iszero(iszero(iszero(gt(v1, v1)))))
-  mstore(add(v3, 4), iszero(iszero(gt(v2, v1))))
-  mstore(add(v3, 5), iszero(iszero(iszero(lt(v2, v2)))))
-  ret := v3
+  mstore(0x40, add(v9, 6))
+  mstore(v9, iszero(iszero(v3)))
+  mstore(add(v9, 1), iszero(iszero(v4)))
+  mstore(add(v9, 2), iszero(iszero(v5)))
+  mstore(add(v9, 3), iszero(iszero(v6)))
+  mstore(add(v9, 4), iszero(iszero(v7)))
+  mstore(add(v9, 5), iszero(iszero(v8)))
+  ret := v9
+  leave
+}
+function $u256_eq_eq($self, $other) -> ret {
+  let v0 := eq($self, $other)
+  ret := v0
+  leave
+}
+function $u256_eq_ne($self, $other) -> ret {
+  let v0 := iszero(eq($self, $other))
+  ret := v0
+  leave
+}
+function $u256_ord_lt($self, $other) -> ret {
+  let v0 := lt($self, $other)
+  ret := v0
+  leave
+}
+function $u256_ord_le($self, $other) -> ret {
+  let v0 := iszero(gt($self, $other))
+  ret := v0
+  leave
+}
+function $u256_ord_gt($self, $other) -> ret {
+  let v0 := gt($self, $other)
+  ret := v0
+  leave
+}
+function $u256_ord_ge($self, $other) -> ret {
+  let v0 := iszero(lt($self, $other))
+  ret := v0
   leave
 }

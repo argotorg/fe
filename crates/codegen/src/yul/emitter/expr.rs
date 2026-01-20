@@ -1,5 +1,6 @@
 //! Expression and value lowering helpers shared across the Yul emitter.
 
+use common::ingot::IngotKind;
 use hir::analysis::ty::simplified_pattern::ConstructorKind;
 use hir::analysis::ty::ty_def::{PrimTy, TyBase, TyData, TyId};
 use hir::hir_def::{
@@ -23,6 +24,331 @@ use super::{
 };
 
 impl<'db> FunctionEmitter<'db> {
+    /// Attempts to lower a call to a core numeric intrinsic directly to inline Yul.
+    ///
+    /// This is an optimization that avoids generating separate Yul functions for
+    /// primitive arithmetic intrinsics like `__add_u8`, `__sub_i32`, `__mul_u256`, etc.
+    /// Instead, it recognizes the naming pattern `__<op>_<type>` and emits the
+    /// corresponding Yul opcode inline with appropriate bit masking.
+    ///
+    /// For types smaller than 256 bits, proper masking is applied:
+    /// - **Unsigned types**: Results are masked with `and(result, mask)` to truncate
+    ///   overflow bits (e.g., `u8` uses mask `0xff`).
+    /// - **Signed types**: Results use `signextend(byte, and(value, mask))` to
+    ///   correctly propagate the sign bit.
+    /// - **256-bit types** (`u256`, `i256`): No masking needed.
+    ///
+    /// # Parameters
+    /// - `call`: The call origin containing the target function and arguments.
+    /// - `state`: Current block state for lowering argument values.
+    ///
+    /// # Returns
+    /// - `Ok(Some(yul))`: The intrinsic was recognized and lowered to inline Yul.
+    /// - `Ok(None)`: The call is not a recognized core numeric intrinsic; the caller
+    ///   should fall back to normal function call emission.
+    /// - `Err(...)`: An error occurred during lowering.
+    fn try_lower_core_numeric_intrinsic_call(
+        &self,
+        call: &CallOrigin<'_>,
+        state: &BlockState,
+    ) -> Result<Option<String>, YulError> {
+        let Some(target) = call.hir_target.as_ref() else {
+            return Ok(None);
+        };
+        let CallableDef::Func(func) = target.callable_def else {
+            return Ok(None);
+        };
+        if func.body(self.db).is_some() {
+            return Ok(None);
+        }
+
+        match target.callable_def.ingot(self.db).kind(self.db) {
+            IngotKind::Core | IngotKind::Std => {}
+            _ => return Ok(None),
+        }
+
+        let Some(name) = target.callable_def.name(self.db) else {
+            return Ok(None);
+        };
+        let name = name.data(self.db).as_str();
+        if name == "__bitcast" || !name.starts_with("__") {
+            return Ok(None);
+        }
+
+        let Some((op, suffix)) = name[2..].rsplit_once('_') else {
+            return Ok(None);
+        };
+
+        let mut lowered_args = Vec::with_capacity(call.args.len());
+        for &arg in &call.args {
+            lowered_args.push(self.lower_value(arg, state)?);
+        }
+        if !call.effect_args.is_empty() {
+            return Err(YulError::Unsupported(format!(
+                "core numeric intrinsic `{name}` unexpectedly has effect args"
+            )));
+        }
+
+        #[derive(Clone, Copy, Debug)]
+        enum IntPrim {
+            Unsigned {
+                mask: Option<&'static str>,
+            },
+            Signed {
+                mask: Option<&'static str>,
+                signextend_byte: Option<u8>,
+            },
+        }
+
+        fn int_prim_from_suffix(suffix: &str) -> Option<IntPrim> {
+            Some(match suffix {
+                "u8" => IntPrim::Unsigned { mask: Some("0xff") },
+                "u16" => IntPrim::Unsigned {
+                    mask: Some("0xffff"),
+                },
+                "u32" => IntPrim::Unsigned {
+                    mask: Some("0xffffffff"),
+                },
+                "u64" => IntPrim::Unsigned {
+                    mask: Some("0xffffffffffffffff"),
+                },
+                "u128" => IntPrim::Unsigned {
+                    mask: Some("0xffffffffffffffffffffffffffffffff"),
+                },
+                "u256" | "usize" => IntPrim::Unsigned { mask: None },
+                "i8" => IntPrim::Signed {
+                    mask: Some("0xff"),
+                    signextend_byte: Some(0),
+                },
+                "i16" => IntPrim::Signed {
+                    mask: Some("0xffff"),
+                    signextend_byte: Some(1),
+                },
+                "i32" => IntPrim::Signed {
+                    mask: Some("0xffffffff"),
+                    signextend_byte: Some(3),
+                },
+                "i64" => IntPrim::Signed {
+                    mask: Some("0xffffffffffffffff"),
+                    signextend_byte: Some(7),
+                },
+                "i128" => IntPrim::Signed {
+                    mask: Some("0xffffffffffffffffffffffffffffffff"),
+                    signextend_byte: Some(15),
+                },
+                "i256" | "isize" => IntPrim::Signed {
+                    mask: None,
+                    signextend_byte: None,
+                },
+                _ => return None,
+            })
+        }
+
+        fn trunc_bits(value: &str, prim: IntPrim) -> String {
+            match prim {
+                IntPrim::Unsigned { mask: Some(mask) }
+                | IntPrim::Signed {
+                    mask: Some(mask), ..
+                } => {
+                    format!("and({value}, {mask})")
+                }
+                IntPrim::Unsigned { mask: None } | IntPrim::Signed { mask: None, .. } => {
+                    value.to_string()
+                }
+            }
+        }
+
+        fn canonical_unsigned(value: &str, mask: Option<&'static str>) -> String {
+            match mask {
+                Some(mask) => format!("and({value}, {mask})"),
+                None => value.to_string(),
+            }
+        }
+
+        fn canonical_signed(
+            value: &str,
+            mask: Option<&'static str>,
+            signextend_byte: Option<u8>,
+        ) -> String {
+            match (mask, signextend_byte) {
+                (Some(mask), Some(byte)) => format!("signextend({byte}, and({value}, {mask}))"),
+                _ => value.to_string(),
+            }
+        }
+
+        let lowered = if suffix == "bool" {
+            let normalize_bool = |value: &str| format!("iszero(iszero({value}))");
+
+            match (op, lowered_args.as_slice()) {
+                ("not", [arg]) => Some(format!("iszero({})", normalize_bool(arg))),
+                ("bitand", [lhs, rhs]) => Some(format!(
+                    "and({}, {})",
+                    normalize_bool(lhs),
+                    normalize_bool(rhs)
+                )),
+                ("bitor", [lhs, rhs]) => Some(format!(
+                    "or({}, {})",
+                    normalize_bool(lhs),
+                    normalize_bool(rhs)
+                )),
+                ("bitxor", [lhs, rhs]) => Some(format!(
+                    "xor({}, {})",
+                    normalize_bool(lhs),
+                    normalize_bool(rhs)
+                )),
+                ("eq", [lhs, rhs]) => Some(format!(
+                    "eq({}, {})",
+                    normalize_bool(lhs),
+                    normalize_bool(rhs)
+                )),
+                ("ne", [lhs, rhs]) => Some(format!(
+                    "iszero(eq({}, {}))",
+                    normalize_bool(lhs),
+                    normalize_bool(rhs)
+                )),
+                _ => None,
+            }
+        } else if let Some(int_prim) = int_prim_from_suffix(suffix) {
+            let (mask, signextend_byte, signed) = match int_prim {
+                IntPrim::Unsigned { mask } => (mask, None, false),
+                IntPrim::Signed {
+                    mask,
+                    signextend_byte,
+                } => (mask, signextend_byte, true),
+            };
+
+            let arg_unsigned = |value: &str| canonical_unsigned(value, mask);
+            let arg_signed = |value: &str| canonical_signed(value, mask, signextend_byte);
+            let result_unsigned = |value: String| canonical_unsigned(&value, mask);
+            let result_signed = |value: String| canonical_signed(&value, mask, signextend_byte);
+
+            match (op, lowered_args.as_slice()) {
+                ("add", [lhs, rhs]) => Some(if signed {
+                    result_signed(format!("add({}, {})", arg_signed(lhs), arg_signed(rhs)))
+                } else {
+                    result_unsigned(format!("add({}, {})", arg_unsigned(lhs), arg_unsigned(rhs)))
+                }),
+                ("sub", [lhs, rhs]) => Some(if signed {
+                    result_signed(format!("sub({}, {})", arg_signed(lhs), arg_signed(rhs)))
+                } else {
+                    result_unsigned(format!("sub({}, {})", arg_unsigned(lhs), arg_unsigned(rhs)))
+                }),
+                ("mul", [lhs, rhs]) => Some(if signed {
+                    result_signed(format!("mul({}, {})", arg_signed(lhs), arg_signed(rhs)))
+                } else {
+                    result_unsigned(format!("mul({}, {})", arg_unsigned(lhs), arg_unsigned(rhs)))
+                }),
+                ("div", [lhs, rhs]) => Some(if signed {
+                    result_signed(format!("sdiv({}, {})", arg_signed(lhs), arg_signed(rhs)))
+                } else {
+                    result_unsigned(format!("div({}, {})", arg_unsigned(lhs), arg_unsigned(rhs)))
+                }),
+                ("rem", [lhs, rhs]) => Some(if signed {
+                    result_signed(format!("smod({}, {})", arg_signed(lhs), arg_signed(rhs)))
+                } else {
+                    result_unsigned(format!("mod({}, {})", arg_unsigned(lhs), arg_unsigned(rhs)))
+                }),
+                ("pow", [lhs, rhs]) => {
+                    let base_bits = trunc_bits(lhs, int_prim);
+                    let exp_bits = trunc_bits(rhs, int_prim);
+                    Some(if signed {
+                        result_signed(format!("exp({base_bits}, {exp_bits})"))
+                    } else {
+                        result_unsigned(format!("exp({base_bits}, {exp_bits})"))
+                    })
+                }
+                ("shl", [lhs, rhs]) => {
+                    let value_bits = trunc_bits(lhs, int_prim);
+                    let shift_bits = trunc_bits(rhs, int_prim);
+                    Some(if signed {
+                        result_signed(format!("shl({shift_bits}, {value_bits})"))
+                    } else {
+                        result_unsigned(format!("shl({shift_bits}, {value_bits})"))
+                    })
+                }
+                ("shr", [lhs, rhs]) => {
+                    let shift_bits = trunc_bits(rhs, int_prim);
+                    Some(if signed {
+                        result_signed(format!("sar({shift_bits}, {})", arg_signed(lhs)))
+                    } else {
+                        result_unsigned(format!("shr({shift_bits}, {})", arg_unsigned(lhs)))
+                    })
+                }
+                ("bitand", [lhs, rhs]) => {
+                    let lhs_bits = trunc_bits(lhs, int_prim);
+                    let rhs_bits = trunc_bits(rhs, int_prim);
+                    Some(if signed {
+                        result_signed(format!("and({lhs_bits}, {rhs_bits})"))
+                    } else {
+                        result_unsigned(format!("and({lhs_bits}, {rhs_bits})"))
+                    })
+                }
+                ("bitor", [lhs, rhs]) => {
+                    let lhs_bits = trunc_bits(lhs, int_prim);
+                    let rhs_bits = trunc_bits(rhs, int_prim);
+                    Some(if signed {
+                        result_signed(format!("or({lhs_bits}, {rhs_bits})"))
+                    } else {
+                        result_unsigned(format!("or({lhs_bits}, {rhs_bits})"))
+                    })
+                }
+                ("bitxor", [lhs, rhs]) => {
+                    let lhs_bits = trunc_bits(lhs, int_prim);
+                    let rhs_bits = trunc_bits(rhs, int_prim);
+                    Some(if signed {
+                        result_signed(format!("xor({lhs_bits}, {rhs_bits})"))
+                    } else {
+                        result_unsigned(format!("xor({lhs_bits}, {rhs_bits})"))
+                    })
+                }
+                ("bitnot", [arg]) => {
+                    let arg_bits = trunc_bits(arg, int_prim);
+                    Some(if signed {
+                        result_signed(format!("not({arg_bits})"))
+                    } else {
+                        result_unsigned(format!("not({arg_bits})"))
+                    })
+                }
+                ("neg", [arg]) => Some(result_signed(format!("sub(0, {})", arg_signed(arg)))),
+                ("eq", [lhs, rhs]) => {
+                    let lhs_bits = trunc_bits(lhs, int_prim);
+                    let rhs_bits = trunc_bits(rhs, int_prim);
+                    Some(format!("eq({lhs_bits}, {rhs_bits})"))
+                }
+                ("ne", [lhs, rhs]) => {
+                    let lhs_bits = trunc_bits(lhs, int_prim);
+                    let rhs_bits = trunc_bits(rhs, int_prim);
+                    Some(format!("iszero(eq({lhs_bits}, {rhs_bits}))"))
+                }
+                ("lt", [lhs, rhs]) => Some(if signed {
+                    format!("slt({}, {})", arg_signed(lhs), arg_signed(rhs))
+                } else {
+                    format!("lt({}, {})", arg_unsigned(lhs), arg_unsigned(rhs))
+                }),
+                ("le", [lhs, rhs]) => Some(if signed {
+                    format!("iszero(sgt({}, {}))", arg_signed(lhs), arg_signed(rhs))
+                } else {
+                    format!("iszero(gt({}, {}))", arg_unsigned(lhs), arg_unsigned(rhs))
+                }),
+                ("gt", [lhs, rhs]) => Some(if signed {
+                    format!("sgt({}, {})", arg_signed(lhs), arg_signed(rhs))
+                } else {
+                    format!("gt({}, {})", arg_unsigned(lhs), arg_unsigned(rhs))
+                }),
+                ("ge", [lhs, rhs]) => Some(if signed {
+                    format!("iszero(slt({}, {}))", arg_signed(lhs), arg_signed(rhs))
+                } else {
+                    format!("iszero(lt({}, {}))", arg_unsigned(lhs), arg_unsigned(rhs))
+                }),
+                _ => None,
+            }
+        } else {
+            None
+        };
+
+        Ok(lowered)
+    }
+
     fn format_hir_expr_context(&self, expr: hir::hir_def::ExprId) -> String {
         let Some(body) = (match self.mir_func.origin {
             MirFunctionOrigin::Hir(func) => func.body(self.db),
@@ -197,6 +523,10 @@ impl<'db> FunctionEmitter<'db> {
             return Err(YulError::Unsupported(
                 "`contract_field_slot` must be constant-folded before codegen".into(),
             ));
+        }
+
+        if let Some(intrinsic) = self.try_lower_core_numeric_intrinsic_call(call, state)? {
+            return Ok(intrinsic);
         }
 
         let is_evm_op = match call.hir_target.as_ref() {

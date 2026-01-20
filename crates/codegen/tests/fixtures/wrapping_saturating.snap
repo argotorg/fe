@@ -1,0 +1,295 @@
+---
+source: crates/codegen/tests/yul.rs
+expression: output
+input_file: tests/fixtures/wrapping_saturating.fe
+---
+function $wrapping_ops_u64($a, $b) -> ret {
+  let v0 := $u64_wrappingadd_wrapping_add($a, $b)
+  let v1 := $u64_wrappingsub_wrapping_sub($a, $b)
+  let v2 := $u64_wrappingmul_wrapping_mul($a, $b)
+  let v3 := mload(0x40)
+  if iszero(v3) {
+    v3 := 0x80
+  }
+  mstore(0x40, add(v3, 24))
+  mstore(v3, and(v0, 0xffffffffffffffff))
+  mstore(add(v3, 8), and(v1, 0xffffffffffffffff))
+  mstore(add(v3, 16), and(v2, 0xffffffffffffffff))
+  ret := v3
+  leave
+}
+function $saturating_ops_u64($a, $b) -> ret {
+  let v0 := $u64_saturatingadd_saturating_add($a, $b)
+  let v1 := $u64_saturatingsub_saturating_sub($a, $b)
+  let v2 := $u64_saturatingmul_saturating_mul($a, $b)
+  let v3 := mload(0x40)
+  if iszero(v3) {
+    v3 := 0x80
+  }
+  mstore(0x40, add(v3, 24))
+  mstore(v3, and(v0, 0xffffffffffffffff))
+  mstore(add(v3, 8), and(v1, 0xffffffffffffffff))
+  mstore(add(v3, 16), and(v2, 0xffffffffffffffff))
+  ret := v3
+  leave
+}
+function $wrapping_ops_u256($a, $b) -> ret {
+  let v0 := $u256_wrappingadd_wrapping_add($a, $b)
+  let v1 := $u256_wrappingsub_wrapping_sub($a, $b)
+  let v2 := $u256_wrappingmul_wrapping_mul($a, $b)
+  let v3 := mload(0x40)
+  if iszero(v3) {
+    v3 := 0x80
+  }
+  mstore(0x40, add(v3, 96))
+  mstore(v3, v0)
+  mstore(add(v3, 32), v1)
+  mstore(add(v3, 64), v2)
+  ret := v3
+  leave
+}
+function $saturating_ops_u256($a, $b) -> ret {
+  let v0 := $u256_saturatingadd_saturating_add($a, $b)
+  let v1 := $u256_saturatingsub_saturating_sub($a, $b)
+  let v2 := $u256_saturatingmul_saturating_mul($a, $b)
+  let v3 := mload(0x40)
+  if iszero(v3) {
+    v3 := 0x80
+  }
+  mstore(0x40, add(v3, 96))
+  mstore(v3, v0)
+  mstore(add(v3, 32), v1)
+  mstore(add(v3, 64), v2)
+  ret := v3
+  leave
+}
+function $u64_wrappingadd_wrapping_add($self, $other) -> ret {
+  let v0 := and(add(and($self, 0xffffffffffffffff), and($other, 0xffffffffffffffff)), 0xffffffffffffffff)
+  ret := v0
+  leave
+}
+function $u64_wrappingsub_wrapping_sub($self, $other) -> ret {
+  let v0 := and(sub(and($self, 0xffffffffffffffff), and($other, 0xffffffffffffffff)), 0xffffffffffffffff)
+  ret := v0
+  leave
+}
+function $u64_wrappingmul_wrapping_mul($self, $other) -> ret {
+  let v0 := and(mul(and($self, 0xffffffffffffffff), and($other, 0xffffffffffffffff)), 0xffffffffffffffff)
+  ret := v0
+  leave
+}
+function $u64_saturatingadd_saturating_add($self, $other) -> ret {
+  let v0 := and(add(and($self, 0xffffffffffffffff), and($other, 0xffffffffffffffff)), 0xffffffffffffffff)
+  let v1 := lt(and(v0, 0xffffffffffffffff), and($self, 0xffffffffffffffff))
+  let v2 := 0
+  switch v1
+    case 1 {
+      v2 := 18446744073709551615
+    }
+    case 0 {
+      v2 := v0
+    }
+    default {
+      v2 := v0
+    }
+  ret := v2
+  leave
+}
+function $u64_saturatingsub_saturating_sub($self, $other) -> ret {
+  let v0 := gt(and($other, 0xffffffffffffffff), and($self, 0xffffffffffffffff))
+  let v1 := 0
+  switch v0
+    case 1 {
+      v1 := 0
+    }
+    case 0 {
+      let v2 := and(sub(and($self, 0xffffffffffffffff), and($other, 0xffffffffffffffff)), 0xffffffffffffffff)
+      v1 := v2
+    }
+    default {
+      let v3 := and(sub(and($self, 0xffffffffffffffff), and($other, 0xffffffffffffffff)), 0xffffffffffffffff)
+      v1 := v3
+    }
+  ret := v1
+  leave
+}
+function $u64_saturatingmul_saturating_mul($self, $other) -> ret {
+  let v0 := $u64_eq_eq($self, 0)
+  let v1 := $u64_eq_eq($other, 0)
+  let v2 := 0
+  switch or(v0, v1)
+    case 1 {
+      v2 := 0
+    }
+    case 0 {
+      let v3 := and(mul(and($self, 0xffffffffffffffff), and($other, 0xffffffffffffffff)), 0xffffffffffffffff)
+      let v4 := $u64_div_div(v3, $self)
+      let v5 := $u64_eq_ne(v4, $other)
+      let v6 := 0
+      switch v5
+        case 1 {
+          v6 := 18446744073709551615
+        }
+        case 0 {
+          v6 := v3
+        }
+        default {
+          v6 := v3
+        }
+      v2 := v6
+    }
+    default {
+      let v7 := and(mul(and($self, 0xffffffffffffffff), and($other, 0xffffffffffffffff)), 0xffffffffffffffff)
+      let v8 := $u64_div_div(v7, $self)
+      let v9 := $u64_eq_ne(v8, $other)
+      let v10 := 0
+      switch v9
+        case 1 {
+          v10 := 18446744073709551615
+        }
+        case 0 {
+          v10 := v7
+        }
+        default {
+          v10 := v7
+        }
+      v2 := v10
+    }
+  ret := v2
+  leave
+}
+function $u256_wrappingadd_wrapping_add($self, $other) -> ret {
+  let v0 := add($self, $other)
+  ret := v0
+  leave
+}
+function $u256_wrappingsub_wrapping_sub($self, $other) -> ret {
+  let v0 := sub($self, $other)
+  ret := v0
+  leave
+}
+function $u256_wrappingmul_wrapping_mul($self, $other) -> ret {
+  let v0 := mul($self, $other)
+  ret := v0
+  leave
+}
+function $u256_saturatingadd_saturating_add($self, $other) -> ret {
+  let v0 := add($self, $other)
+  let v1 := lt(v0, $self)
+  let v2 := 0
+  switch v1
+    case 1 {
+      v2 := 115792089237316195423570985008687907853269984665640564039457584007913129639935
+    }
+    case 0 {
+      v2 := v0
+    }
+    default {
+      v2 := v0
+    }
+  ret := v2
+  leave
+}
+function $u256_saturatingsub_saturating_sub($self, $other) -> ret {
+  let v0 := gt($other, $self)
+  let v1 := 0
+  switch v0
+    case 1 {
+      v1 := 0
+    }
+    case 0 {
+      let v2 := sub($self, $other)
+      v1 := v2
+    }
+    default {
+      let v3 := sub($self, $other)
+      v1 := v3
+    }
+  ret := v1
+  leave
+}
+function $u256_saturatingmul_saturating_mul($self, $other) -> ret {
+  let v0 := $u256_eq_eq($self, 0)
+  let v1 := $u256_eq_eq($other, 0)
+  let v2 := 0
+  switch or(v0, v1)
+    case 1 {
+      v2 := 0
+    }
+    case 0 {
+      let v3 := mul($self, $other)
+      let v4 := $u256_div_div(v3, $self)
+      let v5 := $u256_eq_ne(v4, $other)
+      let v6 := 0
+      switch v5
+        case 1 {
+          v6 := 115792089237316195423570985008687907853269984665640564039457584007913129639935
+        }
+        case 0 {
+          v6 := v3
+        }
+        default {
+          v6 := v3
+        }
+      v2 := v6
+    }
+    default {
+      let v7 := mul($self, $other)
+      let v8 := $u256_div_div(v7, $self)
+      let v9 := $u256_eq_ne(v8, $other)
+      let v10 := 0
+      switch v9
+        case 1 {
+          v10 := 115792089237316195423570985008687907853269984665640564039457584007913129639935
+        }
+        case 0 {
+          v10 := v7
+        }
+        default {
+          v10 := v7
+        }
+      v2 := v10
+    }
+  ret := v2
+  leave
+}
+function $u64_eq_eq($self, $other) -> ret {
+  let v0 := eq(and($self, 0xffffffffffffffff), and($other, 0xffffffffffffffff))
+  ret := v0
+  leave
+}
+function $u64_div_div($self, $other) -> ret {
+  let v0 := $u64_eq_eq($other, 0)
+  let v1 := v0
+  if v1 {
+    revert(0, 0)
+  }
+  let v2 := and(div(and($self, 0xffffffffffffffff), and($other, 0xffffffffffffffff)), 0xffffffffffffffff)
+  ret := v2
+  leave
+}
+function $u64_eq_ne($self, $other) -> ret {
+  let v0 := iszero(eq(and($self, 0xffffffffffffffff), and($other, 0xffffffffffffffff)))
+  ret := v0
+  leave
+}
+function $u256_eq_eq($self, $other) -> ret {
+  let v0 := eq($self, $other)
+  ret := v0
+  leave
+}
+function $u256_div_div($self, $other) -> ret {
+  let v0 := $u256_eq_eq($other, 0)
+  let v1 := v0
+  if v1 {
+    revert(0, 0)
+  }
+  let v2 := div($self, $other)
+  ret := v2
+  leave
+}
+function $u256_eq_ne($self, $other) -> ret {
+  let v0 := iszero(eq($self, $other))
+  ret := v0
+  leave
+}

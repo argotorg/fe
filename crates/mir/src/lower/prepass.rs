@@ -213,6 +213,20 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                 }
                 Some((args, arg_exprs))
             }
+            Expr::Bin(lhs, rhs, _) => {
+                let mut args = Vec::with_capacity(2);
+                let mut arg_exprs = Vec::with_capacity(2);
+                arg_exprs.push(*lhs);
+                args.push(self.lower_expr(*lhs));
+                arg_exprs.push(*rhs);
+                args.push(self.lower_expr(*rhs));
+                Some((args, arg_exprs))
+            }
+            Expr::Un(inner, _) => {
+                let arg_exprs = vec![*inner];
+                let args = vec![self.lower_expr(*inner)];
+                Some((args, arg_exprs))
+            }
             _ => None,
         }
     }

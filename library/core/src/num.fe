@@ -1,6 +1,7 @@
 use super::ops::*
 use super::default::Default
 use super::option::Option::{self, *}
+use super::panic
 
 // Generic bitcast intrinsic - reinterprets bits between any two primitive integer types
 extern {
@@ -618,15 +619,90 @@ fn sign_extend(word: u256, _ mask: u256, _ sign_bit: u256) -> u256 {
     }
 }
 
+fn pow_checked<T>(base: T, exp: T) -> T
+    where T: IntWord, T: Mul<Output = T>
+{
+    let exp_word = exp.to_word() & T::MASK
+    if T::IS_SIGNED && (exp_word & T::SIGN_BIT != 0) {
+        panic()
+    }
+
+    let mut acc = T::from_word(1)
+    let mut base = base
+    let mut exp_word = exp_word
+
+    while exp_word > 0 {
+        if (exp_word & 1) != 0 {
+            acc = acc * base
+        }
+        exp_word = exp_word >> 1
+        if exp_word > 0 {
+            base = base * base
+        }
+    }
+    acc
+}
+
 // u8 impls
 impl BitNot for u8 { fn bit_not(self) -> u8 { __bitnot_u8(self) } }
 impl Not for u8 { fn not(self) -> u8 { __bitnot_u8(self) } }
-impl Add for u8 { fn add(self, _ other: u8) -> u8 { __add_u8(self, other) } }
-impl Sub for u8 { fn sub(self, _ other: u8) -> u8 { __sub_u8(self, other) } }
-impl Mul for u8 { fn mul(self, _ other: u8) -> u8 { __mul_u8(self, other) } }
-impl Div for u8 { fn div(self, _ other: u8) -> u8 { __div_u8(self, other) } }
-impl Rem for u8 { fn rem(self, _ other: u8) -> u8 { __rem_u8(self, other) } }
-impl Pow for u8 { fn pow(self, _ other: u8) -> u8 { __pow_u8(self, other) } }
+impl Add for u8 {
+    fn add(self, _ other: u8) -> u8 {
+        let result = __add_u8(self, other)
+        if __lt_u8(result, self) { panic() }
+        result
+    }
+}
+impl Sub for u8 {
+    fn sub(self, _ other: u8) -> u8 {
+        if __gt_u8(other, self) { panic() }
+        __sub_u8(self, other)
+    }
+}
+impl Mul for u8 {
+    fn mul(self, _ other: u8) -> u8 {
+        let result = __mul_u8(self, other)
+        if self != 0 && result / self != other { panic() }
+        result
+    }
+}
+impl Div for u8 {
+    fn div(self, _ other: u8) -> u8 {
+        if other == 0 { panic() }
+        __div_u8(self, other)
+    }
+}
+impl Rem for u8 {
+    fn rem(self, _ other: u8) -> u8 {
+        if other == 0 { panic() }
+        __rem_u8(self, other)
+    }
+}
+impl Pow for u8 { fn pow(self, _ other: u8) -> u8 { pow_checked(self, other) } }
+impl WrappingAdd for u8 { fn wrapping_add(self, _ other: u8) -> u8 { __add_u8(self, other) } }
+impl WrappingSub for u8 { fn wrapping_sub(self, _ other: u8) -> u8 { __sub_u8(self, other) } }
+impl WrappingMul for u8 { fn wrapping_mul(self, _ other: u8) -> u8 { __mul_u8(self, other) } }
+impl SaturatingAdd for u8 {
+    fn saturating_add(self, _ other: u8) -> u8 {
+        let result = __add_u8(self, other)
+        if __lt_u8(result, self) { __bitcast(U8_MASK) } else { result }
+    }
+}
+impl SaturatingSub for u8 {
+    fn saturating_sub(self, _ other: u8) -> u8 {
+        if __gt_u8(other, self) { 0 } else { __sub_u8(self, other) }
+    }
+}
+impl SaturatingMul for u8 {
+    fn saturating_mul(self, _ other: u8) -> u8 {
+        if self == 0 || other == 0 {
+            0
+        } else {
+            let result = __mul_u8(self, other)
+            if result / self != other { __bitcast(U8_MASK) } else { result }
+        }
+    }
+}
 impl Shl for u8 { fn shl(self, _ other: u8) -> u8 { __shl_u8(self, other) } }
 impl Shr for u8 { fn shr(self, _ other: u8) -> u8 { __shr_u8(self, other) } }
 impl BitAnd for u8 { fn bitand(self, _ other: u8) -> u8 { __bitand_u8(self, other) } }
@@ -642,12 +718,12 @@ impl Ord for u8 {
     fn gt(self, _ other: u8) -> bool { __gt_u8(self, other) }
     fn ge(self, _ other: u8) -> bool { __ge_u8(self, other) }
 }
-impl AddAssign for u8 { fn add_assign(mut self, _ other: u8) { self = self + other } }
-impl SubAssign for u8 { fn sub_assign(mut self, _ other: u8) { self = self - other } }
-impl MulAssign for u8 { fn mul_assign(mut self, _ other: u8) { self = self * other } }
-impl DivAssign for u8 { fn div_assign(mut self, _ other: u8) { self = self / other } }
-impl RemAssign for u8 { fn rem_assign(mut self, _ other: u8) { self = self % other } }
-impl PowAssign for u8 { fn pow_assign(mut self, _ other: u8) { self = self ** other } }
+impl AddAssign for u8 { fn add_assign(self, _ other: u8) -> u8 { self + other } }
+impl SubAssign for u8 { fn sub_assign(self, _ other: u8) -> u8 { self - other } }
+impl MulAssign for u8 { fn mul_assign(self, _ other: u8) -> u8 { self * other } }
+impl DivAssign for u8 { fn div_assign(self, _ other: u8) -> u8 { self / other } }
+impl RemAssign for u8 { fn rem_assign(self, _ other: u8) -> u8 { self % other } }
+impl PowAssign for u8 { fn pow_assign(self, _ other: u8) -> u8 { self ** other } }
 impl ShlAssign for u8 { fn shl_assign(mut self, _ other: u8) { self = self << other } }
 impl ShrAssign for u8 { fn shr_assign(mut self, _ other: u8) { self = self >> other } }
 impl BitAndAssign for u8 { fn bitand_assign(mut self, _ other: u8) { self = self & other } }
@@ -656,15 +732,106 @@ impl BitXorAssign for u8 { fn bitxor_assign(mut self, _ other: u8) { self = self
 impl Default for u8 { fn default() -> Self { 0 } }
 
 // i8 impls
-impl Neg for i8 { fn neg(self) -> i8 { __neg_i8(self) } }
+impl Neg for i8 {
+    fn neg(self) -> i8 {
+        let min: i8 = __bitcast(I8_SIGN_BIT)
+        if self == min { panic() }
+        __neg_i8(self)
+    }
+}
 impl BitNot for i8 { fn bit_not(self) -> i8 { __bitnot_i8(self) } }
 impl Not for i8 { fn not(self) -> i8 { __bitnot_i8(self) } }
-impl Add for i8 { fn add(self, _ other: i8) -> i8 { __add_i8(self, other) } }
-impl Sub for i8 { fn sub(self, _ other: i8) -> i8 { __sub_i8(self, other) } }
-impl Mul for i8 { fn mul(self, _ other: i8) -> i8 { __mul_i8(self, other) } }
-impl Div for i8 { fn div(self, _ other: i8) -> i8 { __div_i8(self, other) } }
-impl Rem for i8 { fn rem(self, _ other: i8) -> i8 { __rem_i8(self, other) } }
-impl Pow for i8 { fn pow(self, _ other: i8) -> i8 { __pow_i8(self, other) } }
+impl Add for i8 {
+    fn add(self, _ other: i8) -> i8 {
+        let result = __add_i8(self, other)
+        let self_sign = (self.to_word() & I8_SIGN_BIT) != 0
+        let other_sign = (other.to_word() & I8_SIGN_BIT) != 0
+        let result_sign = (result.to_word() & I8_SIGN_BIT) != 0
+        if self_sign == other_sign && self_sign != result_sign { panic() }
+        result
+    }
+}
+impl Sub for i8 {
+    fn sub(self, _ other: i8) -> i8 {
+        let result = __sub_i8(self, other)
+        let self_sign = (self.to_word() & I8_SIGN_BIT) != 0
+        let other_sign = (other.to_word() & I8_SIGN_BIT) != 0
+        let result_sign = (result.to_word() & I8_SIGN_BIT) != 0
+        if self_sign != other_sign && self_sign != result_sign { panic() }
+        result
+    }
+}
+impl Mul for i8 {
+    fn mul(self, _ other: i8) -> i8 {
+        let result = __mul_i8(self, other)
+        if self != 0 && result / self != other { panic() }
+        result
+    }
+}
+impl Div for i8 {
+    fn div(self, _ other: i8) -> i8 {
+        if other == 0 { panic() }
+        let min: i8 = __bitcast(I8_SIGN_BIT)
+        if self == min && other == -1 { panic() }
+        __div_i8(self, other)
+    }
+}
+impl Rem for i8 {
+    fn rem(self, _ other: i8) -> i8 {
+        if other == 0 { panic() }
+        __rem_i8(self, other)
+    }
+}
+impl Pow for i8 { fn pow(self, _ other: i8) -> i8 { pow_checked(self, other) } }
+impl WrappingAdd for i8 { fn wrapping_add(self, _ other: i8) -> i8 { __add_i8(self, other) } }
+impl WrappingSub for i8 { fn wrapping_sub(self, _ other: i8) -> i8 { __sub_i8(self, other) } }
+impl WrappingMul for i8 { fn wrapping_mul(self, _ other: i8) -> i8 { __mul_i8(self, other) } }
+impl SaturatingAdd for i8 {
+    fn saturating_add(self, _ other: i8) -> i8 {
+        let result = __add_i8(self, other)
+        let self_sign = (self.to_word() & I8_SIGN_BIT) != 0
+        let other_sign = (other.to_word() & I8_SIGN_BIT) != 0
+        let result_sign = (result.to_word() & I8_SIGN_BIT) != 0
+        if self_sign == other_sign && self_sign != result_sign {
+            if self_sign { __bitcast(I8_SIGN_BIT) } else { __bitcast(I8_SIGN_BIT - 1) }
+        } else {
+            result
+        }
+    }
+}
+impl SaturatingSub for i8 {
+    fn saturating_sub(self, _ other: i8) -> i8 {
+        let result = __sub_i8(self, other)
+        let self_sign = (self.to_word() & I8_SIGN_BIT) != 0
+        let other_sign = (other.to_word() & I8_SIGN_BIT) != 0
+        let result_sign = (result.to_word() & I8_SIGN_BIT) != 0
+        if self_sign != other_sign && self_sign != result_sign {
+            if self_sign { __bitcast(I8_SIGN_BIT) } else { __bitcast(I8_SIGN_BIT - 1) }
+        } else {
+            result
+        }
+    }
+}
+impl SaturatingMul for i8 {
+    fn saturating_mul(self, _ other: i8) -> i8 {
+        if self == 0 || other == 0 {
+            0
+        } else {
+            let min: i8 = __bitcast(I8_SIGN_BIT)
+            if (self == min && other == -1) || (other == min && self == -1) {
+                __bitcast(I8_SIGN_BIT - 1)
+            } else {
+                let result = __mul_i8(self, other)
+                if result / self != other {
+                    let negative = ((self.to_word() ^ other.to_word()) & I8_SIGN_BIT) != 0
+                    if negative { __bitcast(I8_SIGN_BIT) } else { __bitcast(I8_SIGN_BIT - 1) }
+                } else {
+                    result
+                }
+            }
+        }
+    }
+}
 impl Shl for i8 { fn shl(self, _ other: i8) -> i8 { __shl_i8(self, other) } }
 impl Shr for i8 { fn shr(self, _ other: i8) -> i8 { __shr_i8(self, other) } }
 impl BitAnd for i8 { fn bitand(self, _ other: i8) -> i8 { __bitand_i8(self, other) } }
@@ -680,12 +847,12 @@ impl Ord for i8 {
     fn gt(self, _ other: i8) -> bool { __gt_i8(self, other) }
     fn ge(self, _ other: i8) -> bool { __ge_i8(self, other) }
 }
-impl AddAssign for i8 { fn add_assign(mut self, _ other: i8) { self = self + other } }
-impl SubAssign for i8 { fn sub_assign(mut self, _ other: i8) { self = self - other } }
-impl MulAssign for i8 { fn mul_assign(mut self, _ other: i8) { self = self * other } }
-impl DivAssign for i8 { fn div_assign(mut self, _ other: i8) { self = self / other } }
-impl RemAssign for i8 { fn rem_assign(mut self, _ other: i8) { self = self % other } }
-impl PowAssign for i8 { fn pow_assign(mut self, _ other: i8) { self = self ** other } }
+impl AddAssign for i8 { fn add_assign(self, _ other: i8) -> i8 { self + other } }
+impl SubAssign for i8 { fn sub_assign(self, _ other: i8) -> i8 { self - other } }
+impl MulAssign for i8 { fn mul_assign(self, _ other: i8) -> i8 { self * other } }
+impl DivAssign for i8 { fn div_assign(self, _ other: i8) -> i8 { self / other } }
+impl RemAssign for i8 { fn rem_assign(self, _ other: i8) -> i8 { self % other } }
+impl PowAssign for i8 { fn pow_assign(self, _ other: i8) -> i8 { self ** other } }
 impl ShlAssign for i8 { fn shl_assign(mut self, _ other: i8) { self = self << other } }
 impl ShrAssign for i8 { fn shr_assign(mut self, _ other: i8) { self = self >> other } }
 impl BitAndAssign for i8 { fn bitand_assign(mut self, _ other: i8) { self = self & other } }
@@ -694,15 +861,106 @@ impl BitXorAssign for i8 { fn bitxor_assign(mut self, _ other: i8) { self = self
 impl Default for i8 { fn default() -> Self { 0 } }
 
 // i16 impls
-impl Neg for i16 { fn neg(self) -> i16 { __neg_i16(self) } }
+impl Neg for i16 {
+    fn neg(self) -> i16 {
+        let min: i16 = __bitcast(I16_SIGN_BIT)
+        if self == min { panic() }
+        __neg_i16(self)
+    }
+}
 impl BitNot for i16 { fn bit_not(self) -> i16 { __bitnot_i16(self) } }
 impl Not for i16 { fn not(self) -> i16 { __bitnot_i16(self) } }
-impl Add for i16 { fn add(self, _ other: i16) -> i16 { __add_i16(self, other) } }
-impl Sub for i16 { fn sub(self, _ other: i16) -> i16 { __sub_i16(self, other) } }
-impl Mul for i16 { fn mul(self, _ other: i16) -> i16 { __mul_i16(self, other) } }
-impl Div for i16 { fn div(self, _ other: i16) -> i16 { __div_i16(self, other) } }
-impl Rem for i16 { fn rem(self, _ other: i16) -> i16 { __rem_i16(self, other) } }
-impl Pow for i16 { fn pow(self, _ other: i16) -> i16 { __pow_i16(self, other) } }
+impl Add for i16 {
+    fn add(self, _ other: i16) -> i16 {
+        let result = __add_i16(self, other)
+        let self_sign = (self.to_word() & I16_SIGN_BIT) != 0
+        let other_sign = (other.to_word() & I16_SIGN_BIT) != 0
+        let result_sign = (result.to_word() & I16_SIGN_BIT) != 0
+        if self_sign == other_sign && self_sign != result_sign { panic() }
+        result
+    }
+}
+impl Sub for i16 {
+    fn sub(self, _ other: i16) -> i16 {
+        let result = __sub_i16(self, other)
+        let self_sign = (self.to_word() & I16_SIGN_BIT) != 0
+        let other_sign = (other.to_word() & I16_SIGN_BIT) != 0
+        let result_sign = (result.to_word() & I16_SIGN_BIT) != 0
+        if self_sign != other_sign && self_sign != result_sign { panic() }
+        result
+    }
+}
+impl Mul for i16 {
+    fn mul(self, _ other: i16) -> i16 {
+        let result = __mul_i16(self, other)
+        if self != 0 && result / self != other { panic() }
+        result
+    }
+}
+impl Div for i16 {
+    fn div(self, _ other: i16) -> i16 {
+        if other == 0 { panic() }
+        let min: i16 = __bitcast(I16_SIGN_BIT)
+        if self == min && other == -1 { panic() }
+        __div_i16(self, other)
+    }
+}
+impl Rem for i16 {
+    fn rem(self, _ other: i16) -> i16 {
+        if other == 0 { panic() }
+        __rem_i16(self, other)
+    }
+}
+impl Pow for i16 { fn pow(self, _ other: i16) -> i16 { pow_checked(self, other) } }
+impl WrappingAdd for i16 { fn wrapping_add(self, _ other: i16) -> i16 { __add_i16(self, other) } }
+impl WrappingSub for i16 { fn wrapping_sub(self, _ other: i16) -> i16 { __sub_i16(self, other) } }
+impl WrappingMul for i16 { fn wrapping_mul(self, _ other: i16) -> i16 { __mul_i16(self, other) } }
+impl SaturatingAdd for i16 {
+    fn saturating_add(self, _ other: i16) -> i16 {
+        let result = __add_i16(self, other)
+        let self_sign = (self.to_word() & I16_SIGN_BIT) != 0
+        let other_sign = (other.to_word() & I16_SIGN_BIT) != 0
+        let result_sign = (result.to_word() & I16_SIGN_BIT) != 0
+        if self_sign == other_sign && self_sign != result_sign {
+            if self_sign { __bitcast(I16_SIGN_BIT) } else { __bitcast(I16_SIGN_BIT - 1) }
+        } else {
+            result
+        }
+    }
+}
+impl SaturatingSub for i16 {
+    fn saturating_sub(self, _ other: i16) -> i16 {
+        let result = __sub_i16(self, other)
+        let self_sign = (self.to_word() & I16_SIGN_BIT) != 0
+        let other_sign = (other.to_word() & I16_SIGN_BIT) != 0
+        let result_sign = (result.to_word() & I16_SIGN_BIT) != 0
+        if self_sign != other_sign && self_sign != result_sign {
+            if self_sign { __bitcast(I16_SIGN_BIT) } else { __bitcast(I16_SIGN_BIT - 1) }
+        } else {
+            result
+        }
+    }
+}
+impl SaturatingMul for i16 {
+    fn saturating_mul(self, _ other: i16) -> i16 {
+        if self == 0 || other == 0 {
+            0
+        } else {
+            let min: i16 = __bitcast(I16_SIGN_BIT)
+            if (self == min && other == -1) || (other == min && self == -1) {
+                __bitcast(I16_SIGN_BIT - 1)
+            } else {
+                let result = __mul_i16(self, other)
+                if result / self != other {
+                    let negative = ((self.to_word() ^ other.to_word()) & I16_SIGN_BIT) != 0
+                    if negative { __bitcast(I16_SIGN_BIT) } else { __bitcast(I16_SIGN_BIT - 1) }
+                } else {
+                    result
+                }
+            }
+        }
+    }
+}
 impl Shl for i16 { fn shl(self, _ other: i16) -> i16 { __shl_i16(self, other) } }
 impl Shr for i16 { fn shr(self, _ other: i16) -> i16 { __shr_i16(self, other) } }
 impl BitAnd for i16 { fn bitand(self, _ other: i16) -> i16 { __bitand_i16(self, other) } }
@@ -718,12 +976,12 @@ impl Ord for i16 {
     fn gt(self, _ other: i16) -> bool { __gt_i16(self, other) }
     fn ge(self, _ other: i16) -> bool { __ge_i16(self, other) }
 }
-impl AddAssign for i16 { fn add_assign(mut self, _ other: i16) { self = self + other } }
-impl SubAssign for i16 { fn sub_assign(mut self, _ other: i16) { self = self - other } }
-impl MulAssign for i16 { fn mul_assign(mut self, _ other: i16) { self = self * other } }
-impl DivAssign for i16 { fn div_assign(mut self, _ other: i16) { self = self / other } }
-impl RemAssign for i16 { fn rem_assign(mut self, _ other: i16) { self = self % other } }
-impl PowAssign for i16 { fn pow_assign(mut self, _ other: i16) { self = self ** other } }
+impl AddAssign for i16 { fn add_assign(self, _ other: i16) -> i16 { self + other } }
+impl SubAssign for i16 { fn sub_assign(self, _ other: i16) -> i16 { self - other } }
+impl MulAssign for i16 { fn mul_assign(self, _ other: i16) -> i16 { self * other } }
+impl DivAssign for i16 { fn div_assign(self, _ other: i16) -> i16 { self / other } }
+impl RemAssign for i16 { fn rem_assign(self, _ other: i16) -> i16 { self % other } }
+impl PowAssign for i16 { fn pow_assign(self, _ other: i16) -> i16 { self ** other } }
 impl ShlAssign for i16 { fn shl_assign(mut self, _ other: i16) { self = self << other } }
 impl ShrAssign for i16 { fn shr_assign(mut self, _ other: i16) { self = self >> other } }
 impl BitAndAssign for i16 { fn bitand_assign(mut self, _ other: i16) { self = self & other } }
@@ -734,12 +992,63 @@ impl Default for i16 { fn default() -> Self { 0 } }
 // u16 impls
 impl BitNot for u16 { fn bit_not(self) -> u16 { __bitnot_u16(self) } }
 impl Not for u16 { fn not(self) -> u16 { __bitnot_u16(self) } }
-impl Add for u16 { fn add(self, _ other: u16) -> u16 { __add_u16(self, other) } }
-impl Sub for u16 { fn sub(self, _ other: u16) -> u16 { __sub_u16(self, other) } }
-impl Mul for u16 { fn mul(self, _ other: u16) -> u16 { __mul_u16(self, other) } }
-impl Div for u16 { fn div(self, _ other: u16) -> u16 { __div_u16(self, other) } }
-impl Rem for u16 { fn rem(self, _ other: u16) -> u16 { __rem_u16(self, other) } }
-impl Pow for u16 { fn pow(self, _ other: u16) -> u16 { __pow_u16(self, other) } }
+impl Add for u16 {
+    fn add(self, _ other: u16) -> u16 {
+        let result = __add_u16(self, other)
+        if __lt_u16(result, self) { panic() }
+        result
+    }
+}
+impl Sub for u16 {
+    fn sub(self, _ other: u16) -> u16 {
+        if __gt_u16(other, self) { panic() }
+        __sub_u16(self, other)
+    }
+}
+impl Mul for u16 {
+    fn mul(self, _ other: u16) -> u16 {
+        let result = __mul_u16(self, other)
+        if self != 0 && result / self != other { panic() }
+        result
+    }
+}
+impl Div for u16 {
+    fn div(self, _ other: u16) -> u16 {
+        if other == 0 { panic() }
+        __div_u16(self, other)
+    }
+}
+impl Rem for u16 {
+    fn rem(self, _ other: u16) -> u16 {
+        if other == 0 { panic() }
+        __rem_u16(self, other)
+    }
+}
+impl Pow for u16 { fn pow(self, _ other: u16) -> u16 { pow_checked(self, other) } }
+impl WrappingAdd for u16 { fn wrapping_add(self, _ other: u16) -> u16 { __add_u16(self, other) } }
+impl WrappingSub for u16 { fn wrapping_sub(self, _ other: u16) -> u16 { __sub_u16(self, other) } }
+impl WrappingMul for u16 { fn wrapping_mul(self, _ other: u16) -> u16 { __mul_u16(self, other) } }
+impl SaturatingAdd for u16 {
+    fn saturating_add(self, _ other: u16) -> u16 {
+        let result = __add_u16(self, other)
+        if __lt_u16(result, self) { __bitcast(U16_MASK) } else { result }
+    }
+}
+impl SaturatingSub for u16 {
+    fn saturating_sub(self, _ other: u16) -> u16 {
+        if __gt_u16(other, self) { 0 } else { __sub_u16(self, other) }
+    }
+}
+impl SaturatingMul for u16 {
+    fn saturating_mul(self, _ other: u16) -> u16 {
+        if self == 0 || other == 0 {
+            0
+        } else {
+            let result = __mul_u16(self, other)
+            if result / self != other { __bitcast(U16_MASK) } else { result }
+        }
+    }
+}
 impl Shl for u16 { fn shl(self, _ other: u16) -> u16 { __shl_u16(self, other) } }
 impl Shr for u16 { fn shr(self, _ other: u16) -> u16 { __shr_u16(self, other) } }
 impl BitAnd for u16 { fn bitand(self, _ other: u16) -> u16 { __bitand_u16(self, other) } }
@@ -755,12 +1064,12 @@ impl Ord for u16 {
     fn gt(self, _ other: u16) -> bool { __gt_u16(self, other) }
     fn ge(self, _ other: u16) -> bool { __ge_u16(self, other) }
 }
-impl AddAssign for u16 { fn add_assign(mut self, _ other: u16) { self = self + other } }
-impl SubAssign for u16 { fn sub_assign(mut self, _ other: u16) { self = self - other } }
-impl MulAssign for u16 { fn mul_assign(mut self, _ other: u16) { self = self * other } }
-impl DivAssign for u16 { fn div_assign(mut self, _ other: u16) { self = self / other } }
-impl RemAssign for u16 { fn rem_assign(mut self, _ other: u16) { self = self % other } }
-impl PowAssign for u16 { fn pow_assign(mut self, _ other: u16) { self = self ** other } }
+impl AddAssign for u16 { fn add_assign(self, _ other: u16) -> u16 { self + other } }
+impl SubAssign for u16 { fn sub_assign(self, _ other: u16) -> u16 { self - other } }
+impl MulAssign for u16 { fn mul_assign(self, _ other: u16) -> u16 { self * other } }
+impl DivAssign for u16 { fn div_assign(self, _ other: u16) -> u16 { self / other } }
+impl RemAssign for u16 { fn rem_assign(self, _ other: u16) -> u16 { self % other } }
+impl PowAssign for u16 { fn pow_assign(self, _ other: u16) -> u16 { self ** other } }
 impl ShlAssign for u16 { fn shl_assign(mut self, _ other: u16) { self = self << other } }
 impl ShrAssign for u16 { fn shr_assign(mut self, _ other: u16) { self = self >> other } }
 impl BitAndAssign for u16 { fn bitand_assign(mut self, _ other: u16) { self = self & other } }
@@ -770,15 +1079,106 @@ impl Default for u16 { fn default() -> Self { 0 } }
 
 
 // i32 impls
-impl Neg for i32 { fn neg(self) -> i32 { __neg_i32(self) } }
+impl Neg for i32 {
+    fn neg(self) -> i32 {
+        let min: i32 = __bitcast(I32_SIGN_BIT)
+        if self == min { panic() }
+        __neg_i32(self)
+    }
+}
 impl BitNot for i32 { fn bit_not(self) -> i32 { __bitnot_i32(self) } }
 impl Not for i32 { fn not(self) -> i32 { __bitnot_i32(self) } }
-impl Add for i32 { fn add(self, _ other: i32) -> i32 { __add_i32(self, other) } }
-impl Sub for i32 { fn sub(self, _ other: i32) -> i32 { __sub_i32(self, other) } }
-impl Mul for i32 { fn mul(self, _ other: i32) -> i32 { __mul_i32(self, other) } }
-impl Div for i32 { fn div(self, _ other: i32) -> i32 { __div_i32(self, other) } }
-impl Rem for i32 { fn rem(self, _ other: i32) -> i32 { __rem_i32(self, other) } }
-impl Pow for i32 { fn pow(self, _ other: i32) -> i32 { __pow_i32(self, other) } }
+impl Add for i32 {
+    fn add(self, _ other: i32) -> i32 {
+        let result = __add_i32(self, other)
+        let self_sign = (self.to_word() & I32_SIGN_BIT) != 0
+        let other_sign = (other.to_word() & I32_SIGN_BIT) != 0
+        let result_sign = (result.to_word() & I32_SIGN_BIT) != 0
+        if self_sign == other_sign && self_sign != result_sign { panic() }
+        result
+    }
+}
+impl Sub for i32 {
+    fn sub(self, _ other: i32) -> i32 {
+        let result = __sub_i32(self, other)
+        let self_sign = (self.to_word() & I32_SIGN_BIT) != 0
+        let other_sign = (other.to_word() & I32_SIGN_BIT) != 0
+        let result_sign = (result.to_word() & I32_SIGN_BIT) != 0
+        if self_sign != other_sign && self_sign != result_sign { panic() }
+        result
+    }
+}
+impl Mul for i32 {
+    fn mul(self, _ other: i32) -> i32 {
+        let result = __mul_i32(self, other)
+        if self != 0 && result / self != other { panic() }
+        result
+    }
+}
+impl Div for i32 {
+    fn div(self, _ other: i32) -> i32 {
+        if other == 0 { panic() }
+        let min: i32 = __bitcast(I32_SIGN_BIT)
+        if self == min && other == -1 { panic() }
+        __div_i32(self, other)
+    }
+}
+impl Rem for i32 {
+    fn rem(self, _ other: i32) -> i32 {
+        if other == 0 { panic() }
+        __rem_i32(self, other)
+    }
+}
+impl Pow for i32 { fn pow(self, _ other: i32) -> i32 { pow_checked(self, other) } }
+impl WrappingAdd for i32 { fn wrapping_add(self, _ other: i32) -> i32 { __add_i32(self, other) } }
+impl WrappingSub for i32 { fn wrapping_sub(self, _ other: i32) -> i32 { __sub_i32(self, other) } }
+impl WrappingMul for i32 { fn wrapping_mul(self, _ other: i32) -> i32 { __mul_i32(self, other) } }
+impl SaturatingAdd for i32 {
+    fn saturating_add(self, _ other: i32) -> i32 {
+        let result = __add_i32(self, other)
+        let self_sign = (self.to_word() & I32_SIGN_BIT) != 0
+        let other_sign = (other.to_word() & I32_SIGN_BIT) != 0
+        let result_sign = (result.to_word() & I32_SIGN_BIT) != 0
+        if self_sign == other_sign && self_sign != result_sign {
+            if self_sign { __bitcast(I32_SIGN_BIT) } else { __bitcast(I32_SIGN_BIT - 1) }
+        } else {
+            result
+        }
+    }
+}
+impl SaturatingSub for i32 {
+    fn saturating_sub(self, _ other: i32) -> i32 {
+        let result = __sub_i32(self, other)
+        let self_sign = (self.to_word() & I32_SIGN_BIT) != 0
+        let other_sign = (other.to_word() & I32_SIGN_BIT) != 0
+        let result_sign = (result.to_word() & I32_SIGN_BIT) != 0
+        if self_sign != other_sign && self_sign != result_sign {
+            if self_sign { __bitcast(I32_SIGN_BIT) } else { __bitcast(I32_SIGN_BIT - 1) }
+        } else {
+            result
+        }
+    }
+}
+impl SaturatingMul for i32 {
+    fn saturating_mul(self, _ other: i32) -> i32 {
+        if self == 0 || other == 0 {
+            0
+        } else {
+            let min: i32 = __bitcast(I32_SIGN_BIT)
+            if (self == min && other == -1) || (other == min && self == -1) {
+                __bitcast(I32_SIGN_BIT - 1)
+            } else {
+                let result = __mul_i32(self, other)
+                if result / self != other {
+                    let negative = ((self.to_word() ^ other.to_word()) & I32_SIGN_BIT) != 0
+                    if negative { __bitcast(I32_SIGN_BIT) } else { __bitcast(I32_SIGN_BIT - 1) }
+                } else {
+                    result
+                }
+            }
+        }
+    }
+}
 impl Shl for i32 { fn shl(self, _ other: i32) -> i32 { __shl_i32(self, other) } }
 impl Shr for i32 { fn shr(self, _ other: i32) -> i32 { __shr_i32(self, other) } }
 impl BitAnd for i32 { fn bitand(self, _ other: i32) -> i32 { __bitand_i32(self, other) } }
@@ -794,12 +1194,12 @@ impl Ord for i32 {
     fn gt(self, _ other: i32) -> bool { __gt_i32(self, other) }
     fn ge(self, _ other: i32) -> bool { __ge_i32(self, other) }
 }
-impl AddAssign for i32 { fn add_assign(mut self, _ other: i32) { self = self + other } }
-impl SubAssign for i32 { fn sub_assign(mut self, _ other: i32) { self = self - other } }
-impl MulAssign for i32 { fn mul_assign(mut self, _ other: i32) { self = self * other } }
-impl DivAssign for i32 { fn div_assign(mut self, _ other: i32) { self = self / other } }
-impl RemAssign for i32 { fn rem_assign(mut self, _ other: i32) { self = self % other } }
-impl PowAssign for i32 { fn pow_assign(mut self, _ other: i32) { self = self ** other } }
+impl AddAssign for i32 { fn add_assign(self, _ other: i32) -> i32 { self + other } }
+impl SubAssign for i32 { fn sub_assign(self, _ other: i32) -> i32 { self - other } }
+impl MulAssign for i32 { fn mul_assign(self, _ other: i32) -> i32 { self * other } }
+impl DivAssign for i32 { fn div_assign(self, _ other: i32) -> i32 { self / other } }
+impl RemAssign for i32 { fn rem_assign(self, _ other: i32) -> i32 { self % other } }
+impl PowAssign for i32 { fn pow_assign(self, _ other: i32) -> i32 { self ** other } }
 impl ShlAssign for i32 { fn shl_assign(mut self, _ other: i32) { self = self << other } }
 impl ShrAssign for i32 { fn shr_assign(mut self, _ other: i32) { self = self >> other } }
 impl BitAndAssign for i32 { fn bitand_assign(mut self, _ other: i32) { self = self & other } }
@@ -810,12 +1210,63 @@ impl Default for i32 { fn default() -> Self { 0 } }
 // u32 impls
 impl BitNot for u32 { fn bit_not(self) -> u32 { __bitnot_u32(self) } }
 impl Not for u32 { fn not(self) -> u32 { __bitnot_u32(self) } }
-impl Add for u32 { fn add(self, _ other: u32) -> u32 { __add_u32(self, other) } }
-impl Sub for u32 { fn sub(self, _ other: u32) -> u32 { __sub_u32(self, other) } }
-impl Mul for u32 { fn mul(self, _ other: u32) -> u32 { __mul_u32(self, other) } }
-impl Div for u32 { fn div(self, _ other: u32) -> u32 { __div_u32(self, other) } }
-impl Rem for u32 { fn rem(self, _ other: u32) -> u32 { __rem_u32(self, other) } }
-impl Pow for u32 { fn pow(self, _ other: u32) -> u32 { __pow_u32(self, other) } }
+impl Add for u32 {
+    fn add(self, _ other: u32) -> u32 {
+        let result = __add_u32(self, other)
+        if __lt_u32(result, self) { panic() }
+        result
+    }
+}
+impl Sub for u32 {
+    fn sub(self, _ other: u32) -> u32 {
+        if __gt_u32(other, self) { panic() }
+        __sub_u32(self, other)
+    }
+}
+impl Mul for u32 {
+    fn mul(self, _ other: u32) -> u32 {
+        let result = __mul_u32(self, other)
+        if self != 0 && result / self != other { panic() }
+        result
+    }
+}
+impl Div for u32 {
+    fn div(self, _ other: u32) -> u32 {
+        if other == 0 { panic() }
+        __div_u32(self, other)
+    }
+}
+impl Rem for u32 {
+    fn rem(self, _ other: u32) -> u32 {
+        if other == 0 { panic() }
+        __rem_u32(self, other)
+    }
+}
+impl Pow for u32 { fn pow(self, _ other: u32) -> u32 { pow_checked(self, other) } }
+impl WrappingAdd for u32 { fn wrapping_add(self, _ other: u32) -> u32 { __add_u32(self, other) } }
+impl WrappingSub for u32 { fn wrapping_sub(self, _ other: u32) -> u32 { __sub_u32(self, other) } }
+impl WrappingMul for u32 { fn wrapping_mul(self, _ other: u32) -> u32 { __mul_u32(self, other) } }
+impl SaturatingAdd for u32 {
+    fn saturating_add(self, _ other: u32) -> u32 {
+        let result = __add_u32(self, other)
+        if __lt_u32(result, self) { __bitcast(U32_MASK) } else { result }
+    }
+}
+impl SaturatingSub for u32 {
+    fn saturating_sub(self, _ other: u32) -> u32 {
+        if __gt_u32(other, self) { 0 } else { __sub_u32(self, other) }
+    }
+}
+impl SaturatingMul for u32 {
+    fn saturating_mul(self, _ other: u32) -> u32 {
+        if self == 0 || other == 0 {
+            0
+        } else {
+            let result = __mul_u32(self, other)
+            if result / self != other { __bitcast(U32_MASK) } else { result }
+        }
+    }
+}
 impl Shl for u32 { fn shl(self, _ other: u32) -> u32 { __shl_u32(self, other) } }
 impl Shr for u32 { fn shr(self, _ other: u32) -> u32 { __shr_u32(self, other) } }
 impl BitAnd for u32 { fn bitand(self, _ other: u32) -> u32 { __bitand_u32(self, other) } }
@@ -831,12 +1282,12 @@ impl Ord for u32 {
     fn gt(self, _ other: u32) -> bool { __gt_u32(self, other) }
     fn ge(self, _ other: u32) -> bool { __ge_u32(self, other) }
 }
-impl AddAssign for u32 { fn add_assign(mut self, _ other: u32) { self = self + other } }
-impl SubAssign for u32 { fn sub_assign(mut self, _ other: u32) { self = self - other } }
-impl MulAssign for u32 { fn mul_assign(mut self, _ other: u32) { self = self * other } }
-impl DivAssign for u32 { fn div_assign(mut self, _ other: u32) { self = self / other } }
-impl RemAssign for u32 { fn rem_assign(mut self, _ other: u32) { self = self % other } }
-impl PowAssign for u32 { fn pow_assign(mut self, _ other: u32) { self = self ** other } }
+impl AddAssign for u32 { fn add_assign(self, _ other: u32) -> u32 { self + other } }
+impl SubAssign for u32 { fn sub_assign(self, _ other: u32) -> u32 { self - other } }
+impl MulAssign for u32 { fn mul_assign(self, _ other: u32) -> u32 { self * other } }
+impl DivAssign for u32 { fn div_assign(self, _ other: u32) -> u32 { self / other } }
+impl RemAssign for u32 { fn rem_assign(self, _ other: u32) -> u32 { self % other } }
+impl PowAssign for u32 { fn pow_assign(self, _ other: u32) -> u32 { self ** other } }
 impl ShlAssign for u32 { fn shl_assign(mut self, _ other: u32) { self = self << other } }
 impl ShrAssign for u32 { fn shr_assign(mut self, _ other: u32) { self = self >> other } }
 impl BitAndAssign for u32 { fn bitand_assign(mut self, _ other: u32) { self = self & other } }
@@ -845,15 +1296,106 @@ impl BitXorAssign for u32 { fn bitxor_assign(mut self, _ other: u32) { self = se
 impl Default for u32 { fn default() -> Self { 0 } }
 
 // i64 impls
-impl Neg for i64 { fn neg(self) -> i64 { __neg_i64(self) } }
+impl Neg for i64 {
+    fn neg(self) -> i64 {
+        let min: i64 = __bitcast(I64_SIGN_BIT)
+        if self == min { panic() }
+        __neg_i64(self)
+    }
+}
 impl BitNot for i64 { fn bit_not(self) -> i64 { __bitnot_i64(self) } }
 impl Not for i64 { fn not(self) -> i64 { __bitnot_i64(self) } }
-impl Add for i64 { fn add(self, _ other: i64) -> i64 { __add_i64(self, other) } }
-impl Sub for i64 { fn sub(self, _ other: i64) -> i64 { __sub_i64(self, other) } }
-impl Mul for i64 { fn mul(self, _ other: i64) -> i64 { __mul_i64(self, other) } }
-impl Div for i64 { fn div(self, _ other: i64) -> i64 { __div_i64(self, other) } }
-impl Rem for i64 { fn rem(self, _ other: i64) -> i64 { __rem_i64(self, other) } }
-impl Pow for i64 { fn pow(self, _ other: i64) -> i64 { __pow_i64(self, other) } }
+impl Add for i64 {
+    fn add(self, _ other: i64) -> i64 {
+        let result = __add_i64(self, other)
+        let self_sign = (self.to_word() & I64_SIGN_BIT) != 0
+        let other_sign = (other.to_word() & I64_SIGN_BIT) != 0
+        let result_sign = (result.to_word() & I64_SIGN_BIT) != 0
+        if self_sign == other_sign && self_sign != result_sign { panic() }
+        result
+    }
+}
+impl Sub for i64 {
+    fn sub(self, _ other: i64) -> i64 {
+        let result = __sub_i64(self, other)
+        let self_sign = (self.to_word() & I64_SIGN_BIT) != 0
+        let other_sign = (other.to_word() & I64_SIGN_BIT) != 0
+        let result_sign = (result.to_word() & I64_SIGN_BIT) != 0
+        if self_sign != other_sign && self_sign != result_sign { panic() }
+        result
+    }
+}
+impl Mul for i64 {
+    fn mul(self, _ other: i64) -> i64 {
+        let result = __mul_i64(self, other)
+        if self != 0 && result / self != other { panic() }
+        result
+    }
+}
+impl Div for i64 {
+    fn div(self, _ other: i64) -> i64 {
+        if other == 0 { panic() }
+        let min: i64 = __bitcast(I64_SIGN_BIT)
+        if self == min && other == -1 { panic() }
+        __div_i64(self, other)
+    }
+}
+impl Rem for i64 {
+    fn rem(self, _ other: i64) -> i64 {
+        if other == 0 { panic() }
+        __rem_i64(self, other)
+    }
+}
+impl Pow for i64 { fn pow(self, _ other: i64) -> i64 { pow_checked(self, other) } }
+impl WrappingAdd for i64 { fn wrapping_add(self, _ other: i64) -> i64 { __add_i64(self, other) } }
+impl WrappingSub for i64 { fn wrapping_sub(self, _ other: i64) -> i64 { __sub_i64(self, other) } }
+impl WrappingMul for i64 { fn wrapping_mul(self, _ other: i64) -> i64 { __mul_i64(self, other) } }
+impl SaturatingAdd for i64 {
+    fn saturating_add(self, _ other: i64) -> i64 {
+        let result = __add_i64(self, other)
+        let self_sign = (self.to_word() & I64_SIGN_BIT) != 0
+        let other_sign = (other.to_word() & I64_SIGN_BIT) != 0
+        let result_sign = (result.to_word() & I64_SIGN_BIT) != 0
+        if self_sign == other_sign && self_sign != result_sign {
+            if self_sign { __bitcast(I64_SIGN_BIT) } else { __bitcast(I64_SIGN_BIT - 1) }
+        } else {
+            result
+        }
+    }
+}
+impl SaturatingSub for i64 {
+    fn saturating_sub(self, _ other: i64) -> i64 {
+        let result = __sub_i64(self, other)
+        let self_sign = (self.to_word() & I64_SIGN_BIT) != 0
+        let other_sign = (other.to_word() & I64_SIGN_BIT) != 0
+        let result_sign = (result.to_word() & I64_SIGN_BIT) != 0
+        if self_sign != other_sign && self_sign != result_sign {
+            if self_sign { __bitcast(I64_SIGN_BIT) } else { __bitcast(I64_SIGN_BIT - 1) }
+        } else {
+            result
+        }
+    }
+}
+impl SaturatingMul for i64 {
+    fn saturating_mul(self, _ other: i64) -> i64 {
+        if self == 0 || other == 0 {
+            0
+        } else {
+            let min: i64 = __bitcast(I64_SIGN_BIT)
+            if (self == min && other == -1) || (other == min && self == -1) {
+                __bitcast(I64_SIGN_BIT - 1)
+            } else {
+                let result = __mul_i64(self, other)
+                if result / self != other {
+                    let negative = ((self.to_word() ^ other.to_word()) & I64_SIGN_BIT) != 0
+                    if negative { __bitcast(I64_SIGN_BIT) } else { __bitcast(I64_SIGN_BIT - 1) }
+                } else {
+                    result
+                }
+            }
+        }
+    }
+}
 impl Shl for i64 { fn shl(self, _ other: i64) -> i64 { __shl_i64(self, other) } }
 impl Shr for i64 { fn shr(self, _ other: i64) -> i64 { __shr_i64(self, other) } }
 impl BitAnd for i64 { fn bitand(self, _ other: i64) -> i64 { __bitand_i64(self, other) } }
@@ -869,12 +1411,12 @@ impl Ord for i64 {
     fn gt(self, _ other: i64) -> bool { __gt_i64(self, other) }
     fn ge(self, _ other: i64) -> bool { __ge_i64(self, other) }
 }
-impl AddAssign for i64 { fn add_assign(mut self, _ other: i64) { self = self + other } }
-impl SubAssign for i64 { fn sub_assign(mut self, _ other: i64) { self = self - other } }
-impl MulAssign for i64 { fn mul_assign(mut self, _ other: i64) { self = self * other } }
-impl DivAssign for i64 { fn div_assign(mut self, _ other: i64) { self = self / other } }
-impl RemAssign for i64 { fn rem_assign(mut self, _ other: i64) { self = self % other } }
-impl PowAssign for i64 { fn pow_assign(mut self, _ other: i64) { self = self ** other } }
+impl AddAssign for i64 { fn add_assign(self, _ other: i64) -> i64 { self + other } }
+impl SubAssign for i64 { fn sub_assign(self, _ other: i64) -> i64 { self - other } }
+impl MulAssign for i64 { fn mul_assign(self, _ other: i64) -> i64 { self * other } }
+impl DivAssign for i64 { fn div_assign(self, _ other: i64) -> i64 { self / other } }
+impl RemAssign for i64 { fn rem_assign(self, _ other: i64) -> i64 { self % other } }
+impl PowAssign for i64 { fn pow_assign(self, _ other: i64) -> i64 { self ** other } }
 impl ShlAssign for i64 { fn shl_assign(mut self, _ other: i64) { self = self << other } }
 impl ShrAssign for i64 { fn shr_assign(mut self, _ other: i64) { self = self >> other } }
 impl BitAndAssign for i64 { fn bitand_assign(mut self, _ other: i64) { self = self & other } }
@@ -883,15 +1425,106 @@ impl BitXorAssign for i64 { fn bitxor_assign(mut self, _ other: i64) { self = se
 impl Default for i64 { fn default() -> Self { 0 } }
 
 // i128 impls
-impl Neg for i128 { fn neg(self) -> i128 { __neg_i128(self) } }
+impl Neg for i128 {
+    fn neg(self) -> i128 {
+        let min: i128 = __bitcast(I128_SIGN_BIT)
+        if self == min { panic() }
+        __neg_i128(self)
+    }
+}
 impl BitNot for i128 { fn bit_not(self) -> i128 { __bitnot_i128(self) } }
 impl Not for i128 { fn not(self) -> i128 { __bitnot_i128(self) } }
-impl Add for i128 { fn add(self, _ other: i128) -> i128 { __add_i128(self, other) } }
-impl Sub for i128 { fn sub(self, _ other: i128) -> i128 { __sub_i128(self, other) } }
-impl Mul for i128 { fn mul(self, _ other: i128) -> i128 { __mul_i128(self, other) } }
-impl Div for i128 { fn div(self, _ other: i128) -> i128 { __div_i128(self, other) } }
-impl Rem for i128 { fn rem(self, _ other: i128) -> i128 { __rem_i128(self, other) } }
-impl Pow for i128 { fn pow(self, _ other: i128) -> i128 { __pow_i128(self, other) } }
+impl Add for i128 {
+    fn add(self, _ other: i128) -> i128 {
+        let result = __add_i128(self, other)
+        let self_sign = (self.to_word() & I128_SIGN_BIT) != 0
+        let other_sign = (other.to_word() & I128_SIGN_BIT) != 0
+        let result_sign = (result.to_word() & I128_SIGN_BIT) != 0
+        if self_sign == other_sign && self_sign != result_sign { panic() }
+        result
+    }
+}
+impl Sub for i128 {
+    fn sub(self, _ other: i128) -> i128 {
+        let result = __sub_i128(self, other)
+        let self_sign = (self.to_word() & I128_SIGN_BIT) != 0
+        let other_sign = (other.to_word() & I128_SIGN_BIT) != 0
+        let result_sign = (result.to_word() & I128_SIGN_BIT) != 0
+        if self_sign != other_sign && self_sign != result_sign { panic() }
+        result
+    }
+}
+impl Mul for i128 {
+    fn mul(self, _ other: i128) -> i128 {
+        let result = __mul_i128(self, other)
+        if self != 0 && result / self != other { panic() }
+        result
+    }
+}
+impl Div for i128 {
+    fn div(self, _ other: i128) -> i128 {
+        if other == 0 { panic() }
+        let min: i128 = __bitcast(I128_SIGN_BIT)
+        if self == min && other == -1 { panic() }
+        __div_i128(self, other)
+    }
+}
+impl Rem for i128 {
+    fn rem(self, _ other: i128) -> i128 {
+        if other == 0 { panic() }
+        __rem_i128(self, other)
+    }
+}
+impl Pow for i128 { fn pow(self, _ other: i128) -> i128 { pow_checked(self, other) } }
+impl WrappingAdd for i128 { fn wrapping_add(self, _ other: i128) -> i128 { __add_i128(self, other) } }
+impl WrappingSub for i128 { fn wrapping_sub(self, _ other: i128) -> i128 { __sub_i128(self, other) } }
+impl WrappingMul for i128 { fn wrapping_mul(self, _ other: i128) -> i128 { __mul_i128(self, other) } }
+impl SaturatingAdd for i128 {
+    fn saturating_add(self, _ other: i128) -> i128 {
+        let result = __add_i128(self, other)
+        let self_sign = (self.to_word() & I128_SIGN_BIT) != 0
+        let other_sign = (other.to_word() & I128_SIGN_BIT) != 0
+        let result_sign = (result.to_word() & I128_SIGN_BIT) != 0
+        if self_sign == other_sign && self_sign != result_sign {
+            if self_sign { __bitcast(I128_SIGN_BIT) } else { __bitcast(I128_SIGN_BIT - 1) }
+        } else {
+            result
+        }
+    }
+}
+impl SaturatingSub for i128 {
+    fn saturating_sub(self, _ other: i128) -> i128 {
+        let result = __sub_i128(self, other)
+        let self_sign = (self.to_word() & I128_SIGN_BIT) != 0
+        let other_sign = (other.to_word() & I128_SIGN_BIT) != 0
+        let result_sign = (result.to_word() & I128_SIGN_BIT) != 0
+        if self_sign != other_sign && self_sign != result_sign {
+            if self_sign { __bitcast(I128_SIGN_BIT) } else { __bitcast(I128_SIGN_BIT - 1) }
+        } else {
+            result
+        }
+    }
+}
+impl SaturatingMul for i128 {
+    fn saturating_mul(self, _ other: i128) -> i128 {
+        if self == 0 || other == 0 {
+            0
+        } else {
+            let min: i128 = __bitcast(I128_SIGN_BIT)
+            if (self == min && other == -1) || (other == min && self == -1) {
+                __bitcast(I128_SIGN_BIT - 1)
+            } else {
+                let result = __mul_i128(self, other)
+                if result / self != other {
+                    let negative = ((self.to_word() ^ other.to_word()) & I128_SIGN_BIT) != 0
+                    if negative { __bitcast(I128_SIGN_BIT) } else { __bitcast(I128_SIGN_BIT - 1) }
+                } else {
+                    result
+                }
+            }
+        }
+    }
+}
 impl Shl for i128 { fn shl(self, _ other: i128) -> i128 { __shl_i128(self, other) } }
 impl Shr for i128 { fn shr(self, _ other: i128) -> i128 { __shr_i128(self, other) } }
 impl BitAnd for i128 { fn bitand(self, _ other: i128) -> i128 { __bitand_i128(self, other) } }
@@ -907,12 +1540,12 @@ impl Ord for i128 {
     fn gt(self, _ other: i128) -> bool { __gt_i128(self, other) }
     fn ge(self, _ other: i128) -> bool { __ge_i128(self, other) }
 }
-impl AddAssign for i128 { fn add_assign(mut self, _ other: i128) { self = self + other } }
-impl SubAssign for i128 { fn sub_assign(mut self, _ other: i128) { self = self - other } }
-impl MulAssign for i128 { fn mul_assign(mut self, _ other: i128) { self = self * other } }
-impl DivAssign for i128 { fn div_assign(mut self, _ other: i128) { self = self / other } }
-impl RemAssign for i128 { fn rem_assign(mut self, _ other: i128) { self = self % other } }
-impl PowAssign for i128 { fn pow_assign(mut self, _ other: i128) { self = self ** other } }
+impl AddAssign for i128 { fn add_assign(self, _ other: i128) -> i128 { self + other } }
+impl SubAssign for i128 { fn sub_assign(self, _ other: i128) -> i128 { self - other } }
+impl MulAssign for i128 { fn mul_assign(self, _ other: i128) -> i128 { self * other } }
+impl DivAssign for i128 { fn div_assign(self, _ other: i128) -> i128 { self / other } }
+impl RemAssign for i128 { fn rem_assign(self, _ other: i128) -> i128 { self % other } }
+impl PowAssign for i128 { fn pow_assign(self, _ other: i128) -> i128 { self ** other } }
 impl ShlAssign for i128 { fn shl_assign(mut self, _ other: i128) { self = self << other } }
 impl ShrAssign for i128 { fn shr_assign(mut self, _ other: i128) { self = self >> other } }
 impl BitAndAssign for i128 { fn bitand_assign(mut self, _ other: i128) { self = self & other } }
@@ -923,12 +1556,63 @@ impl Default for i128 { fn default() -> Self { 0 } }
 // u64 impls
 impl BitNot for u64 { fn bit_not(self) -> u64 { __bitnot_u64(self) } }
 impl Not for u64 { fn not(self) -> u64 { __bitnot_u64(self) } }
-impl Add for u64 { fn add(self, _ other: u64) -> u64 { __add_u64(self, other) } }
-impl Sub for u64 { fn sub(self, _ other: u64) -> u64 { __sub_u64(self, other) } }
-impl Mul for u64 { fn mul(self, _ other: u64) -> u64 { __mul_u64(self, other) } }
-impl Div for u64 { fn div(self, _ other: u64) -> u64 { __div_u64(self, other) } }
-impl Rem for u64 { fn rem(self, _ other: u64) -> u64 { __rem_u64(self, other) } }
-impl Pow for u64 { fn pow(self, _ other: u64) -> u64 { __pow_u64(self, other) } }
+impl Add for u64 {
+    fn add(self, _ other: u64) -> u64 {
+        let result = __add_u64(self, other)
+        if __lt_u64(result, self) { panic() }
+        result
+    }
+}
+impl Sub for u64 {
+    fn sub(self, _ other: u64) -> u64 {
+        if __gt_u64(other, self) { panic() }
+        __sub_u64(self, other)
+    }
+}
+impl Mul for u64 {
+    fn mul(self, _ other: u64) -> u64 {
+        let result = __mul_u64(self, other)
+        if self != 0 && result / self != other { panic() }
+        result
+    }
+}
+impl Div for u64 {
+    fn div(self, _ other: u64) -> u64 {
+        if other == 0 { panic() }
+        __div_u64(self, other)
+    }
+}
+impl Rem for u64 {
+    fn rem(self, _ other: u64) -> u64 {
+        if other == 0 { panic() }
+        __rem_u64(self, other)
+    }
+}
+impl Pow for u64 { fn pow(self, _ other: u64) -> u64 { pow_checked(self, other) } }
+impl WrappingAdd for u64 { fn wrapping_add(self, _ other: u64) -> u64 { __add_u64(self, other) } }
+impl WrappingSub for u64 { fn wrapping_sub(self, _ other: u64) -> u64 { __sub_u64(self, other) } }
+impl WrappingMul for u64 { fn wrapping_mul(self, _ other: u64) -> u64 { __mul_u64(self, other) } }
+impl SaturatingAdd for u64 {
+    fn saturating_add(self, _ other: u64) -> u64 {
+        let result = __add_u64(self, other)
+        if __lt_u64(result, self) { __bitcast(U64_MASK) } else { result }
+    }
+}
+impl SaturatingSub for u64 {
+    fn saturating_sub(self, _ other: u64) -> u64 {
+        if __gt_u64(other, self) { 0 } else { __sub_u64(self, other) }
+    }
+}
+impl SaturatingMul for u64 {
+    fn saturating_mul(self, _ other: u64) -> u64 {
+        if self == 0 || other == 0 {
+            0
+        } else {
+            let result = __mul_u64(self, other)
+            if result / self != other { __bitcast(U64_MASK) } else { result }
+        }
+    }
+}
 impl Shl for u64 { fn shl(self, _ other: u64) -> u64 { __shl_u64(self, other) } }
 impl Shr for u64 { fn shr(self, _ other: u64) -> u64 { __shr_u64(self, other) } }
 impl BitAnd for u64 { fn bitand(self, _ other: u64) -> u64 { __bitand_u64(self, other) } }
@@ -944,12 +1628,12 @@ impl Ord for u64 {
     fn gt(self, _ other: u64) -> bool { __gt_u64(self, other) }
     fn ge(self, _ other: u64) -> bool { __ge_u64(self, other) }
 }
-impl AddAssign for u64 { fn add_assign(mut self, _ other: u64) { self = self + other } }
-impl SubAssign for u64 { fn sub_assign(mut self, _ other: u64) { self = self - other } }
-impl MulAssign for u64 { fn mul_assign(mut self, _ other: u64) { self = self * other } }
-impl DivAssign for u64 { fn div_assign(mut self, _ other: u64) { self = self / other } }
-impl RemAssign for u64 { fn rem_assign(mut self, _ other: u64) { self = self % other } }
-impl PowAssign for u64 { fn pow_assign(mut self, _ other: u64) { self = self ** other } }
+impl AddAssign for u64 { fn add_assign(self, _ other: u64) -> u64 { self + other } }
+impl SubAssign for u64 { fn sub_assign(self, _ other: u64) -> u64 { self - other } }
+impl MulAssign for u64 { fn mul_assign(self, _ other: u64) -> u64 { self * other } }
+impl DivAssign for u64 { fn div_assign(self, _ other: u64) -> u64 { self / other } }
+impl RemAssign for u64 { fn rem_assign(self, _ other: u64) -> u64 { self % other } }
+impl PowAssign for u64 { fn pow_assign(self, _ other: u64) -> u64 { self ** other } }
 impl ShlAssign for u64 { fn shl_assign(mut self, _ other: u64) { self = self << other } }
 impl ShrAssign for u64 { fn shr_assign(mut self, _ other: u64) { self = self >> other } }
 impl BitAndAssign for u64 { fn bitand_assign(mut self, _ other: u64) { self = self & other } }
@@ -960,12 +1644,63 @@ impl Default for u64 { fn default() -> Self { 0 } }
 // u128 impls
 impl BitNot for u128 { fn bit_not(self) -> u128 { __bitnot_u128(self) } }
 impl Not for u128 { fn not(self) -> u128 { __bitnot_u128(self) } }
-impl Add for u128 { fn add(self, _ other: u128) -> u128 { __add_u128(self, other) } }
-impl Sub for u128 { fn sub(self, _ other: u128) -> u128 { __sub_u128(self, other) } }
-impl Mul for u128 { fn mul(self, _ other: u128) -> u128 { __mul_u128(self, other) } }
-impl Div for u128 { fn div(self, _ other: u128) -> u128 { __div_u128(self, other) } }
-impl Rem for u128 { fn rem(self, _ other: u128) -> u128 { __rem_u128(self, other) } }
-impl Pow for u128 { fn pow(self, _ other: u128) -> u128 { __pow_u128(self, other) } }
+impl Add for u128 {
+    fn add(self, _ other: u128) -> u128 {
+        let result = __add_u128(self, other)
+        if __lt_u128(result, self) { panic() }
+        result
+    }
+}
+impl Sub for u128 {
+    fn sub(self, _ other: u128) -> u128 {
+        if __gt_u128(other, self) { panic() }
+        __sub_u128(self, other)
+    }
+}
+impl Mul for u128 {
+    fn mul(self, _ other: u128) -> u128 {
+        let result = __mul_u128(self, other)
+        if self != 0 && result / self != other { panic() }
+        result
+    }
+}
+impl Div for u128 {
+    fn div(self, _ other: u128) -> u128 {
+        if other == 0 { panic() }
+        __div_u128(self, other)
+    }
+}
+impl Rem for u128 {
+    fn rem(self, _ other: u128) -> u128 {
+        if other == 0 { panic() }
+        __rem_u128(self, other)
+    }
+}
+impl Pow for u128 { fn pow(self, _ other: u128) -> u128 { pow_checked(self, other) } }
+impl WrappingAdd for u128 { fn wrapping_add(self, _ other: u128) -> u128 { __add_u128(self, other) } }
+impl WrappingSub for u128 { fn wrapping_sub(self, _ other: u128) -> u128 { __sub_u128(self, other) } }
+impl WrappingMul for u128 { fn wrapping_mul(self, _ other: u128) -> u128 { __mul_u128(self, other) } }
+impl SaturatingAdd for u128 {
+    fn saturating_add(self, _ other: u128) -> u128 {
+        let result = __add_u128(self, other)
+        if __lt_u128(result, self) { __bitcast(U128_MASK) } else { result }
+    }
+}
+impl SaturatingSub for u128 {
+    fn saturating_sub(self, _ other: u128) -> u128 {
+        if __gt_u128(other, self) { 0 } else { __sub_u128(self, other) }
+    }
+}
+impl SaturatingMul for u128 {
+    fn saturating_mul(self, _ other: u128) -> u128 {
+        if self == 0 || other == 0 {
+            0
+        } else {
+            let result = __mul_u128(self, other)
+            if result / self != other { __bitcast(U128_MASK) } else { result }
+        }
+    }
+}
 impl Shl for u128 { fn shl(self, _ other: u128) -> u128 { __shl_u128(self, other) } }
 impl Shr for u128 { fn shr(self, _ other: u128) -> u128 { __shr_u128(self, other) } }
 impl BitAnd for u128 { fn bitand(self, _ other: u128) -> u128 { __bitand_u128(self, other) } }
@@ -981,12 +1716,12 @@ impl Ord for u128 {
     fn gt(self, _ other: u128) -> bool { __gt_u128(self, other) }
     fn ge(self, _ other: u128) -> bool { __ge_u128(self, other) }
 }
-impl AddAssign for u128 { fn add_assign(mut self, _ other: u128) { self = self + other } }
-impl SubAssign for u128 { fn sub_assign(mut self, _ other: u128) { self = self - other } }
-impl MulAssign for u128 { fn mul_assign(mut self, _ other: u128) { self = self * other } }
-impl DivAssign for u128 { fn div_assign(mut self, _ other: u128) { self = self / other } }
-impl RemAssign for u128 { fn rem_assign(mut self, _ other: u128) { self = self % other } }
-impl PowAssign for u128 { fn pow_assign(mut self, _ other: u128) { self = self ** other } }
+impl AddAssign for u128 { fn add_assign(self, _ other: u128) -> u128 { self + other } }
+impl SubAssign for u128 { fn sub_assign(self, _ other: u128) -> u128 { self - other } }
+impl MulAssign for u128 { fn mul_assign(self, _ other: u128) -> u128 { self * other } }
+impl DivAssign for u128 { fn div_assign(self, _ other: u128) -> u128 { self / other } }
+impl RemAssign for u128 { fn rem_assign(self, _ other: u128) -> u128 { self % other } }
+impl PowAssign for u128 { fn pow_assign(self, _ other: u128) -> u128 { self ** other } }
 impl ShlAssign for u128 { fn shl_assign(mut self, _ other: u128) { self = self << other } }
 impl ShrAssign for u128 { fn shr_assign(mut self, _ other: u128) { self = self >> other } }
 impl BitAndAssign for u128 { fn bitand_assign(mut self, _ other: u128) { self = self & other } }
@@ -997,12 +1732,63 @@ impl Default for u128 { fn default() -> Self { 0 } }
 // usize impls
 impl BitNot for usize { fn bit_not(self) -> usize { __bitnot_usize(self) } }
 impl Not for usize { fn not(self) -> usize { __bitnot_usize(self) } }
-impl Add for usize { fn add(self, _ other: usize) -> usize { __add_usize(self, other) } }
-impl Sub for usize { fn sub(self, _ other: usize) -> usize { __sub_usize(self, other) } }
-impl Mul for usize { fn mul(self, _ other: usize) -> usize { __mul_usize(self, other) } }
-impl Div for usize { fn div(self, _ other: usize) -> usize { __div_usize(self, other) } }
-impl Rem for usize { fn rem(self, _ other: usize) -> usize { __rem_usize(self, other) } }
-impl Pow for usize { fn pow(self, _ other: usize) -> usize { __pow_usize(self, other) } }
+impl Add for usize {
+    fn add(self, _ other: usize) -> usize {
+        let result = __add_usize(self, other)
+        if __lt_usize(result, self) { panic() }
+        result
+    }
+}
+impl Sub for usize {
+    fn sub(self, _ other: usize) -> usize {
+        if __gt_usize(other, self) { panic() }
+        __sub_usize(self, other)
+    }
+}
+impl Mul for usize {
+    fn mul(self, _ other: usize) -> usize {
+        let result = __mul_usize(self, other)
+        if self != 0 && result / self != other { panic() }
+        result
+    }
+}
+impl Div for usize {
+    fn div(self, _ other: usize) -> usize {
+        if other == 0 { panic() }
+        __div_usize(self, other)
+    }
+}
+impl Rem for usize {
+    fn rem(self, _ other: usize) -> usize {
+        if other == 0 { panic() }
+        __rem_usize(self, other)
+    }
+}
+impl Pow for usize { fn pow(self, _ other: usize) -> usize { pow_checked(self, other) } }
+impl WrappingAdd for usize { fn wrapping_add(self, _ other: usize) -> usize { __add_usize(self, other) } }
+impl WrappingSub for usize { fn wrapping_sub(self, _ other: usize) -> usize { __sub_usize(self, other) } }
+impl WrappingMul for usize { fn wrapping_mul(self, _ other: usize) -> usize { __mul_usize(self, other) } }
+impl SaturatingAdd for usize {
+    fn saturating_add(self, _ other: usize) -> usize {
+        let result = __add_usize(self, other)
+        if __lt_usize(result, self) { __bitcast(U256_MASK) } else { result }
+    }
+}
+impl SaturatingSub for usize {
+    fn saturating_sub(self, _ other: usize) -> usize {
+        if __gt_usize(other, self) { 0 } else { __sub_usize(self, other) }
+    }
+}
+impl SaturatingMul for usize {
+    fn saturating_mul(self, _ other: usize) -> usize {
+        if self == 0 || other == 0 {
+            0
+        } else {
+            let result = __mul_usize(self, other)
+            if result / self != other { __bitcast(U256_MASK) } else { result }
+        }
+    }
+}
 impl Shl for usize { fn shl(self, _ other: usize) -> usize { __shl_usize(self, other) } }
 impl Shr for usize { fn shr(self, _ other: usize) -> usize { __shr_usize(self, other) } }
 impl BitAnd for usize { fn bitand(self, _ other: usize) -> usize { __bitand_usize(self, other) } }
@@ -1018,18 +1804,115 @@ impl Ord for usize {
     fn gt(self, _ other: usize) -> bool { __gt_usize(self, other) }
     fn ge(self, _ other: usize) -> bool { __ge_usize(self, other) }
 }
+impl AddAssign for usize { fn add_assign(self, _ other: usize) -> usize { self + other } }
+impl SubAssign for usize { fn sub_assign(self, _ other: usize) -> usize { self - other } }
+impl MulAssign for usize { fn mul_assign(self, _ other: usize) -> usize { self * other } }
+impl DivAssign for usize { fn div_assign(self, _ other: usize) -> usize { self / other } }
+impl RemAssign for usize { fn rem_assign(self, _ other: usize) -> usize { self % other } }
+impl PowAssign for usize { fn pow_assign(self, _ other: usize) -> usize { self ** other } }
 impl Default for usize { fn default() -> Self { 0 } }
 
 // i256 impls
-impl Neg for i256 { fn neg(self) -> i256 { __neg_i256(self) } }
+impl Neg for i256 {
+    fn neg(self) -> i256 {
+        let min: i256 = __bitcast(I256_SIGN_BIT)
+        if self == min { panic() }
+        __neg_i256(self)
+    }
+}
 impl BitNot for i256 { fn bit_not(self) -> i256 { __bitnot_i256(self) } }
 impl Not for i256 { fn not(self) -> i256 { __bitnot_i256(self) } }
-impl Add for i256 { fn add(self, _ other: i256) -> i256 { __add_i256(self, other) } }
-impl Sub for i256 { fn sub(self, _ other: i256) -> i256 { __sub_i256(self, other) } }
-impl Mul for i256 { fn mul(self, _ other: i256) -> i256 { __mul_i256(self, other) } }
-impl Div for i256 { fn div(self, _ other: i256) -> i256 { __div_i256(self, other) } }
-impl Rem for i256 { fn rem(self, _ other: i256) -> i256 { __rem_i256(self, other) } }
-impl Pow for i256 { fn pow(self, _ other: i256) -> i256 { __pow_i256(self, other) } }
+impl Add for i256 {
+    fn add(self, _ other: i256) -> i256 {
+        let result = __add_i256(self, other)
+        let self_sign = (self.to_word() & I256_SIGN_BIT) != 0
+        let other_sign = (other.to_word() & I256_SIGN_BIT) != 0
+        let result_sign = (result.to_word() & I256_SIGN_BIT) != 0
+        if self_sign == other_sign && self_sign != result_sign { panic() }
+        result
+    }
+}
+impl Sub for i256 {
+    fn sub(self, _ other: i256) -> i256 {
+        let result = __sub_i256(self, other)
+        let self_sign = (self.to_word() & I256_SIGN_BIT) != 0
+        let other_sign = (other.to_word() & I256_SIGN_BIT) != 0
+        let result_sign = (result.to_word() & I256_SIGN_BIT) != 0
+        if self_sign != other_sign && self_sign != result_sign { panic() }
+        result
+    }
+}
+impl Mul for i256 {
+    fn mul(self, _ other: i256) -> i256 {
+        let result = __mul_i256(self, other)
+        if self != 0 && result / self != other { panic() }
+        result
+    }
+}
+impl Div for i256 {
+    fn div(self, _ other: i256) -> i256 {
+        if other == 0 { panic() }
+        let min: i256 = __bitcast(I256_SIGN_BIT)
+        if self == min && other == -1 { panic() }
+        __div_i256(self, other)
+    }
+}
+impl Rem for i256 {
+    fn rem(self, _ other: i256) -> i256 {
+        if other == 0 { panic() }
+        __rem_i256(self, other)
+    }
+}
+impl Pow for i256 { fn pow(self, _ other: i256) -> i256 { pow_checked(self, other) } }
+impl WrappingAdd for i256 { fn wrapping_add(self, _ other: i256) -> i256 { __add_i256(self, other) } }
+impl WrappingSub for i256 { fn wrapping_sub(self, _ other: i256) -> i256 { __sub_i256(self, other) } }
+impl WrappingMul for i256 { fn wrapping_mul(self, _ other: i256) -> i256 { __mul_i256(self, other) } }
+impl SaturatingAdd for i256 {
+    fn saturating_add(self, _ other: i256) -> i256 {
+        let result = __add_i256(self, other)
+        let self_sign = (self.to_word() & I256_SIGN_BIT) != 0
+        let other_sign = (other.to_word() & I256_SIGN_BIT) != 0
+        let result_sign = (result.to_word() & I256_SIGN_BIT) != 0
+        if self_sign == other_sign && self_sign != result_sign {
+            if self_sign { __bitcast(I256_SIGN_BIT) } else { __bitcast(I256_SIGN_BIT - 1) }
+        } else {
+            result
+        }
+    }
+}
+impl SaturatingSub for i256 {
+    fn saturating_sub(self, _ other: i256) -> i256 {
+        let result = __sub_i256(self, other)
+        let self_sign = (self.to_word() & I256_SIGN_BIT) != 0
+        let other_sign = (other.to_word() & I256_SIGN_BIT) != 0
+        let result_sign = (result.to_word() & I256_SIGN_BIT) != 0
+        if self_sign != other_sign && self_sign != result_sign {
+            if self_sign { __bitcast(I256_SIGN_BIT) } else { __bitcast(I256_SIGN_BIT - 1) }
+        } else {
+            result
+        }
+    }
+}
+impl SaturatingMul for i256 {
+    fn saturating_mul(self, _ other: i256) -> i256 {
+        if self == 0 || other == 0 {
+            0
+        } else {
+            let min: i256 = __bitcast(I256_SIGN_BIT)
+            if (self == min && other == -1) || (other == min && self == -1) {
+                __bitcast(I256_SIGN_BIT - 1)
+            } else {
+                let result = __mul_i256(self, other)
+                if result / self != other {
+                    let negative = ((self.to_word() ^ other.to_word()) & I256_SIGN_BIT) != 0
+                    if negative { __bitcast(I256_SIGN_BIT) } else { __bitcast(I256_SIGN_BIT - 1) }
+                } else {
+                    result
+                }
+            }
+        }
+    }
+}
 impl Shl for i256 { fn shl(self, _ other: i256) -> i256 { __shl_i256(self, other) } }
 impl Shr for i256 { fn shr(self, _ other: i256) -> i256 { __shr_i256(self, other) } }
 impl BitAnd for i256 { fn bitand(self, _ other: i256) -> i256 { __bitand_i256(self, other) } }
@@ -1045,12 +1928,12 @@ impl Ord for i256 {
     fn gt(self, _ other: i256) -> bool { __gt_i256(self, other) }
     fn ge(self, _ other: i256) -> bool { __ge_i256(self, other) }
 }
-impl AddAssign for i256 { fn add_assign(mut self, _ other: i256) { self = self + other } }
-impl SubAssign for i256 { fn sub_assign(mut self, _ other: i256) { self = self - other } }
-impl MulAssign for i256 { fn mul_assign(mut self, _ other: i256) { self = self * other } }
-impl DivAssign for i256 { fn div_assign(mut self, _ other: i256) { self = self / other } }
-impl RemAssign for i256 { fn rem_assign(mut self, _ other: i256) { self = self % other } }
-impl PowAssign for i256 { fn pow_assign(mut self, _ other: i256) { self = self ** other } }
+impl AddAssign for i256 { fn add_assign(self, _ other: i256) -> i256 { self + other } }
+impl SubAssign for i256 { fn sub_assign(self, _ other: i256) -> i256 { self - other } }
+impl MulAssign for i256 { fn mul_assign(self, _ other: i256) -> i256 { self * other } }
+impl DivAssign for i256 { fn div_assign(self, _ other: i256) -> i256 { self / other } }
+impl RemAssign for i256 { fn rem_assign(self, _ other: i256) -> i256 { self % other } }
+impl PowAssign for i256 { fn pow_assign(self, _ other: i256) -> i256 { self ** other } }
 impl ShlAssign for i256 { fn shl_assign(mut self, _ other: i256) { self = self << other } }
 impl ShrAssign for i256 { fn shr_assign(mut self, _ other: i256) { self = self >> other } }
 impl BitAndAssign for i256 { fn bitand_assign(mut self, _ other: i256) { self = self & other } }
@@ -1061,12 +1944,63 @@ impl Default for i256 { fn default() -> Self { 0 } }
 // u256 impls
 impl BitNot for u256 { fn bit_not(self) -> u256 { __bitnot_u256(self) } }
 impl Not for u256 { fn not(self) -> u256 { __bitnot_u256(self) } }
-impl Add for u256 { fn add(self, _ other: u256) -> u256 { __add_u256(self, other) } }
-impl Sub for u256 { fn sub(self, _ other: u256) -> u256 { __sub_u256(self, other) } }
-impl Mul for u256 { fn mul(self, _ other: u256) -> u256 { __mul_u256(self, other) } }
-impl Div for u256 { fn div(self, _ other: u256) -> u256 { __div_u256(self, other) } }
-impl Rem for u256 { fn rem(self, _ other: u256) -> u256 { __rem_u256(self, other) } }
-impl Pow for u256 { fn pow(self, _ other: u256) -> u256 { __pow_u256(self, other) } }
+impl Add for u256 {
+    fn add(self, _ other: u256) -> u256 {
+        let result = __add_u256(self, other)
+        if __lt_u256(result, self) { panic() }
+        result
+    }
+}
+impl Sub for u256 {
+    fn sub(self, _ other: u256) -> u256 {
+        if __gt_u256(other, self) { panic() }
+        __sub_u256(self, other)
+    }
+}
+impl Mul for u256 {
+    fn mul(self, _ other: u256) -> u256 {
+        let result = __mul_u256(self, other)
+        if self != 0 && result / self != other { panic() }
+        result
+    }
+}
+impl Div for u256 {
+    fn div(self, _ other: u256) -> u256 {
+        if other == 0 { panic() }
+        __div_u256(self, other)
+    }
+}
+impl Rem for u256 {
+    fn rem(self, _ other: u256) -> u256 {
+        if other == 0 { panic() }
+        __rem_u256(self, other)
+    }
+}
+impl Pow for u256 { fn pow(self, _ other: u256) -> u256 { pow_checked(self, other) } }
+impl WrappingAdd for u256 { fn wrapping_add(self, _ other: u256) -> u256 { __add_u256(self, other) } }
+impl WrappingSub for u256 { fn wrapping_sub(self, _ other: u256) -> u256 { __sub_u256(self, other) } }
+impl WrappingMul for u256 { fn wrapping_mul(self, _ other: u256) -> u256 { __mul_u256(self, other) } }
+impl SaturatingAdd for u256 {
+    fn saturating_add(self, _ other: u256) -> u256 {
+        let result = __add_u256(self, other)
+        if __lt_u256(result, self) { U256_MASK } else { result }
+    }
+}
+impl SaturatingSub for u256 {
+    fn saturating_sub(self, _ other: u256) -> u256 {
+        if __gt_u256(other, self) { 0 } else { __sub_u256(self, other) }
+    }
+}
+impl SaturatingMul for u256 {
+    fn saturating_mul(self, _ other: u256) -> u256 {
+        if self == 0 || other == 0 {
+            0
+        } else {
+            let result = __mul_u256(self, other)
+            if result / self != other { U256_MASK } else { result }
+        }
+    }
+}
 impl Shl for u256 { fn shl(self, _ other: u256) -> u256 { __shl_u256(self, other) } }
 impl Shr for u256 { fn shr(self, _ other: u256) -> u256 { __shr_u256(self, other) } }
 impl BitAnd for u256 { fn bitand(self, _ other: u256) -> u256 { __bitand_u256(self, other) } }
@@ -1082,12 +2016,12 @@ impl Ord for u256 {
     fn gt(self, _ other: u256) -> bool { __gt_u256(self, other) }
     fn ge(self, _ other: u256) -> bool { __ge_u256(self, other) }
 }
-impl AddAssign for u256 { fn add_assign(mut self, _ other: u256) { self = self + other } }
-impl SubAssign for u256 { fn sub_assign(mut self, _ other: u256) { self = self - other } }
-impl MulAssign for u256 { fn mul_assign(mut self, _ other: u256) { self = self * other } }
-impl DivAssign for u256 { fn div_assign(mut self, _ other: u256) { self = self / other } }
-impl RemAssign for u256 { fn rem_assign(mut self, _ other: u256) { self = self % other } }
-impl PowAssign for u256 { fn pow_assign(mut self, _ other: u256) { self = self ** other } }
+impl AddAssign for u256 { fn add_assign(self, _ other: u256) -> u256 { self + other } }
+impl SubAssign for u256 { fn sub_assign(self, _ other: u256) -> u256 { self - other } }
+impl MulAssign for u256 { fn mul_assign(self, _ other: u256) -> u256 { self * other } }
+impl DivAssign for u256 { fn div_assign(self, _ other: u256) -> u256 { self / other } }
+impl RemAssign for u256 { fn rem_assign(self, _ other: u256) -> u256 { self % other } }
+impl PowAssign for u256 { fn pow_assign(self, _ other: u256) -> u256 { self ** other } }
 impl ShlAssign for u256 { fn shl_assign(mut self, _ other: u256) { self = self << other } }
 impl ShrAssign for u256 { fn shr_assign(mut self, _ other: u256) { self = self >> other } }
 impl BitAndAssign for u256 { fn bitand_assign(mut self, _ other: u256) { self = self & other } }
@@ -1096,15 +2030,106 @@ impl BitXorAssign for u256 { fn bitxor_assign(mut self, _ other: u256) { self = 
 impl Default for u256 { fn default() -> Self { 0 } }
 
 // isize impls
-impl Neg for isize { fn neg(self) -> isize { __neg_isize(self) } }
+impl Neg for isize {
+    fn neg(self) -> isize {
+        let min: isize = __bitcast(I256_SIGN_BIT)
+        if self == min { panic() }
+        __neg_isize(self)
+    }
+}
 impl BitNot for isize { fn bit_not(self) -> isize { __bitnot_isize(self) } }
 impl Not for isize { fn not(self) -> isize { __bitnot_isize(self) } }
-impl Add for isize { fn add(self, _ other: isize) -> isize { __add_isize(self, other) } }
-impl Sub for isize { fn sub(self, _ other: isize) -> isize { __sub_isize(self, other) } }
-impl Mul for isize { fn mul(self, _ other: isize) -> isize { __mul_isize(self, other) } }
-impl Div for isize { fn div(self, _ other: isize) -> isize { __div_isize(self, other) } }
-impl Rem for isize { fn rem(self, _ other: isize) -> isize { __rem_isize(self, other) } }
-impl Pow for isize { fn pow(self, _ other: isize) -> isize { __pow_isize(self, other) } }
+impl Add for isize {
+    fn add(self, _ other: isize) -> isize {
+        let result = __add_isize(self, other)
+        let self_sign = (self.to_word() & I256_SIGN_BIT) != 0
+        let other_sign = (other.to_word() & I256_SIGN_BIT) != 0
+        let result_sign = (result.to_word() & I256_SIGN_BIT) != 0
+        if self_sign == other_sign && self_sign != result_sign { panic() }
+        result
+    }
+}
+impl Sub for isize {
+    fn sub(self, _ other: isize) -> isize {
+        let result = __sub_isize(self, other)
+        let self_sign = (self.to_word() & I256_SIGN_BIT) != 0
+        let other_sign = (other.to_word() & I256_SIGN_BIT) != 0
+        let result_sign = (result.to_word() & I256_SIGN_BIT) != 0
+        if self_sign != other_sign && self_sign != result_sign { panic() }
+        result
+    }
+}
+impl Mul for isize {
+    fn mul(self, _ other: isize) -> isize {
+        let result = __mul_isize(self, other)
+        if self != 0 && result / self != other { panic() }
+        result
+    }
+}
+impl Div for isize {
+    fn div(self, _ other: isize) -> isize {
+        if other == 0 { panic() }
+        let min: isize = __bitcast(I256_SIGN_BIT)
+        if self == min && other == -1 { panic() }
+        __div_isize(self, other)
+    }
+}
+impl Rem for isize {
+    fn rem(self, _ other: isize) -> isize {
+        if other == 0 { panic() }
+        __rem_isize(self, other)
+    }
+}
+impl Pow for isize { fn pow(self, _ other: isize) -> isize { pow_checked(self, other) } }
+impl WrappingAdd for isize { fn wrapping_add(self, _ other: isize) -> isize { __add_isize(self, other) } }
+impl WrappingSub for isize { fn wrapping_sub(self, _ other: isize) -> isize { __sub_isize(self, other) } }
+impl WrappingMul for isize { fn wrapping_mul(self, _ other: isize) -> isize { __mul_isize(self, other) } }
+impl SaturatingAdd for isize {
+    fn saturating_add(self, _ other: isize) -> isize {
+        let result = __add_isize(self, other)
+        let self_sign = (self.to_word() & I256_SIGN_BIT) != 0
+        let other_sign = (other.to_word() & I256_SIGN_BIT) != 0
+        let result_sign = (result.to_word() & I256_SIGN_BIT) != 0
+        if self_sign == other_sign && self_sign != result_sign {
+            if self_sign { __bitcast(I256_SIGN_BIT) } else { __bitcast(I256_SIGN_BIT - 1) }
+        } else {
+            result
+        }
+    }
+}
+impl SaturatingSub for isize {
+    fn saturating_sub(self, _ other: isize) -> isize {
+        let result = __sub_isize(self, other)
+        let self_sign = (self.to_word() & I256_SIGN_BIT) != 0
+        let other_sign = (other.to_word() & I256_SIGN_BIT) != 0
+        let result_sign = (result.to_word() & I256_SIGN_BIT) != 0
+        if self_sign != other_sign && self_sign != result_sign {
+            if self_sign { __bitcast(I256_SIGN_BIT) } else { __bitcast(I256_SIGN_BIT - 1) }
+        } else {
+            result
+        }
+    }
+}
+impl SaturatingMul for isize {
+    fn saturating_mul(self, _ other: isize) -> isize {
+        if self == 0 || other == 0 {
+            0
+        } else {
+            let min: isize = __bitcast(I256_SIGN_BIT)
+            if (self == min && other == -1) || (other == min && self == -1) {
+                __bitcast(I256_SIGN_BIT - 1)
+            } else {
+                let result = __mul_isize(self, other)
+                if result / self != other {
+                    let negative = ((self.to_word() ^ other.to_word()) & I256_SIGN_BIT) != 0
+                    if negative { __bitcast(I256_SIGN_BIT) } else { __bitcast(I256_SIGN_BIT - 1) }
+                } else {
+                    result
+                }
+            }
+        }
+    }
+}
 impl Shl for isize { fn shl(self, _ other: isize) -> isize { __shl_isize(self, other) } }
 impl Shr for isize { fn shr(self, _ other: isize) -> isize { __shr_isize(self, other) } }
 impl BitAnd for isize { fn bitand(self, _ other: isize) -> isize { __bitand_isize(self, other) } }
@@ -1120,12 +2145,12 @@ impl Ord for isize {
     fn gt(self, _ other: isize) -> bool { __gt_isize(self, other) }
     fn ge(self, _ other: isize) -> bool { __ge_isize(self, other) }
 }
-impl AddAssign for isize { fn add_assign(mut self, _ other: isize) { self = self + other } }
-impl SubAssign for isize { fn sub_assign(mut self, _ other: isize) { self = self - other } }
-impl MulAssign for isize { fn mul_assign(mut self, _ other: isize) { self = self * other } }
-impl DivAssign for isize { fn div_assign(mut self, _ other: isize) { self = self / other } }
-impl RemAssign for isize { fn rem_assign(mut self, _ other: isize) { self = self % other } }
-impl PowAssign for isize { fn pow_assign(mut self, _ other: isize) { self = self ** other } }
+impl AddAssign for isize { fn add_assign(self, _ other: isize) -> isize { self + other } }
+impl SubAssign for isize { fn sub_assign(self, _ other: isize) -> isize { self - other } }
+impl MulAssign for isize { fn mul_assign(self, _ other: isize) -> isize { self * other } }
+impl DivAssign for isize { fn div_assign(self, _ other: isize) -> isize { self / other } }
+impl RemAssign for isize { fn rem_assign(self, _ other: isize) -> isize { self % other } }
+impl PowAssign for isize { fn pow_assign(self, _ other: isize) -> isize { self ** other } }
 impl ShlAssign for isize { fn shl_assign(mut self, _ other: isize) { self = self << other } }
 impl ShrAssign for isize { fn shr_assign(mut self, _ other: isize) { self = self >> other } }
 impl BitAndAssign for isize { fn bitand_assign(mut self, _ other: isize) { self = self & other } }

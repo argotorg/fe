@@ -34,6 +34,37 @@ pub trait Pow<T = Self> {
     fn pow(self, _ other: T) -> Self::Output
 }
 
+// Explicit overflow behavior (opt-in)
+pub trait WrappingAdd<T = Self> {
+    type Output = Self
+    fn wrapping_add(self, _ other: T) -> Self::Output
+}
+
+pub trait WrappingSub<T = Self> {
+    type Output = Self
+    fn wrapping_sub(self, _ other: T) -> Self::Output
+}
+
+pub trait WrappingMul<T = Self> {
+    type Output = Self
+    fn wrapping_mul(self, _ other: T) -> Self::Output
+}
+
+pub trait SaturatingAdd<T = Self> {
+    type Output = Self
+    fn saturating_add(self, _ other: T) -> Self::Output
+}
+
+pub trait SaturatingSub<T = Self> {
+    type Output = Self
+    fn saturating_sub(self, _ other: T) -> Self::Output
+}
+
+pub trait SaturatingMul<T = Self> {
+    type Output = Self
+    fn saturating_mul(self, _ other: T) -> Self::Output
+}
+
 // Bitwise binary operators
 pub trait BitAnd<T = Self> {
     type Output = Self
@@ -106,29 +137,29 @@ pub trait Index<I> {
     fn index(self, _ index: I) -> Self::Output
 }
 
-// Augmented assignment operators (return unit)
+// Augmented assignment operators (return updated value)
 pub trait AddAssign<T = Self> {
-    fn add_assign(mut self, _ other: T)
+    fn add_assign(mut self, _ other: T) -> Self
 }
 
 pub trait SubAssign<T = Self> {
-    fn sub_assign(mut self, _ other: T)
+    fn sub_assign(mut self, _ other: T) -> Self
 }
 
 pub trait MulAssign<T = Self> {
-    fn mul_assign(mut self, _ other: T)
+    fn mul_assign(mut self, _ other: T) -> Self
 }
 
 pub trait DivAssign<T = Self> {
-    fn div_assign(mut self, _ other: T)
+    fn div_assign(mut self, _ other: T) -> Self
 }
 
 pub trait RemAssign<T = Self> {
-    fn rem_assign(mut self, _ other: T)
+    fn rem_assign(mut self, _ other: T) -> Self
 }
 
 pub trait PowAssign<T = Self> {
-    fn pow_assign(mut self, _ other: T)
+    fn pow_assign(mut self, _ other: T) -> Self
 }
 
 pub trait ShlAssign<T = Self> {

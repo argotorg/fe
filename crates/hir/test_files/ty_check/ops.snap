@@ -1,5 +1,6 @@
 ---
-source: crates/hir-analysis/tests/ty_check.rs
+source: crates/hir/tests/ty_check.rs
+assertion_line: 40
 expression: res
 input_file: test_files/ty_check/ops.fe
 ---
@@ -208,23 +209,27 @@ note:
    │                  ^^^^^ Ok
 
 note: 
-   ┌─ ops.fe:34:42
+   ┌─ ops.fe:34:44
    │  
-34 │       fn add_assign(mut self, _ other: Ok) {
-   │ ╭──────────────────────────────────────────^
+34 │       fn add_assign(self, _ other: Ok) -> Ok {
+   │ ╭────────────────────────────────────────────^
 35 │ │         if other == Ok::Yes {
-36 │ │             self = Ok::Yes
-37 │ │         }
-38 │ │     }
-   │ ╰─────^ ()
+36 │ │             Ok::Yes
+37 │ │         } else {
+38 │ │             self
+39 │ │         }
+40 │ │     }
+   │ ╰─────^ Ok
 
 note: 
    ┌─ ops.fe:35:9
    │  
 35 │ ╭         if other == Ok::Yes {
-36 │ │             self = Ok::Yes
-37 │ │         }
-   │ ╰─────────^ ()
+36 │ │             Ok::Yes
+37 │ │         } else {
+38 │ │             self
+39 │ │         }
+   │ ╰─────────^ Ok
 
 note: 
    ┌─ ops.fe:35:12
@@ -249,414 +254,417 @@ note:
    │  
 35 │           if other == Ok::Yes {
    │ ╭─────────────────────────────^
-36 │ │             self = Ok::Yes
-37 │ │         }
-   │ ╰─────────^ ()
+36 │ │             Ok::Yes
+37 │ │         } else {
+   │ ╰─────────^ Ok
 
 note: 
    ┌─ ops.fe:36:13
    │
-36 │             self = Ok::Yes
+36 │             Ok::Yes
+   │             ^^^^^^^ Ok
+
+note: 
+   ┌─ ops.fe:37:16
+   │  
+37 │           } else {
+   │ ╭────────────────^
+38 │ │             self
+39 │ │         }
+   │ ╰─────────^ Ok
+
+note: 
+   ┌─ ops.fe:38:13
+   │
+38 │             self
    │             ^^^^ Ok
 
 note: 
-   ┌─ ops.fe:36:13
-   │
-36 │             self = Ok::Yes
-   │             ^^^^^^^^^^^^^^ ()
-
-note: 
-   ┌─ ops.fe:36:20
-   │
-36 │             self = Ok::Yes
-   │                    ^^^^^^^ Ok
-
-note: 
-   ┌─ ops.fe:47:39
+   ┌─ ops.fe:49:39
    │  
-47 │       fn add(self, _ p: Point) -> Point {
+49 │       fn add(self, _ p: Point) -> Point {
    │ ╭───────────────────────────────────────^
-48 │ │         Point {
-49 │ │             x: self.x + p.x,
-50 │ │             y: self.y + p.y,
-51 │ │         }
-52 │ │     }
+50 │ │         Point {
+51 │ │             x: self.x + p.x,
+52 │ │             y: self.y + p.y,
+53 │ │         }
+54 │ │     }
    │ ╰─────^ Point
 
 note: 
-   ┌─ ops.fe:48:9
+   ┌─ ops.fe:50:9
    │  
-48 │ ╭         Point {
-49 │ │             x: self.x + p.x,
-50 │ │             y: self.y + p.y,
-51 │ │         }
+50 │ ╭         Point {
+51 │ │             x: self.x + p.x,
+52 │ │             y: self.y + p.y,
+53 │ │         }
    │ ╰─────────^ Point
 
 note: 
-   ┌─ ops.fe:49:16
+   ┌─ ops.fe:51:16
    │
-49 │             x: self.x + p.x,
+51 │             x: self.x + p.x,
    │                ^^^^ Point
 
 note: 
-   ┌─ ops.fe:49:16
+   ┌─ ops.fe:51:16
    │
-49 │             x: self.x + p.x,
+51 │             x: self.x + p.x,
    │                ^^^^^^ i32
 
 note: 
-   ┌─ ops.fe:49:16
+   ┌─ ops.fe:51:16
    │
-49 │             x: self.x + p.x,
+51 │             x: self.x + p.x,
    │                ^^^^^^^^^^^^ i32
 
 note: 
-   ┌─ ops.fe:49:25
+   ┌─ ops.fe:51:25
    │
-49 │             x: self.x + p.x,
+51 │             x: self.x + p.x,
    │                         ^ Point
 
 note: 
-   ┌─ ops.fe:49:25
+   ┌─ ops.fe:51:25
    │
-49 │             x: self.x + p.x,
+51 │             x: self.x + p.x,
    │                         ^^^ i32
 
 note: 
-   ┌─ ops.fe:50:16
+   ┌─ ops.fe:52:16
    │
-50 │             y: self.y + p.y,
+52 │             y: self.y + p.y,
    │                ^^^^ Point
 
 note: 
-   ┌─ ops.fe:50:16
+   ┌─ ops.fe:52:16
    │
-50 │             y: self.y + p.y,
+52 │             y: self.y + p.y,
    │                ^^^^^^ i32
 
 note: 
-   ┌─ ops.fe:50:16
+   ┌─ ops.fe:52:16
    │
-50 │             y: self.y + p.y,
+52 │             y: self.y + p.y,
    │                ^^^^^^^^^^^^ i32
 
 note: 
-   ┌─ ops.fe:50:25
+   ┌─ ops.fe:52:25
    │
-50 │             y: self.y + p.y,
+52 │             y: self.y + p.y,
    │                         ^ Point
 
 note: 
-   ┌─ ops.fe:50:25
+   ┌─ ops.fe:52:25
    │
-50 │             y: self.y + p.y,
+52 │             y: self.y + p.y,
    │                         ^^^ i32
 
 note: 
-   ┌─ ops.fe:56:37
+   ┌─ ops.fe:58:37
    │  
-56 │       fn add(self, _ n: i32) -> Point {
+58 │       fn add(self, _ n: i32) -> Point {
    │ ╭─────────────────────────────────────^
-57 │ │         Point {
-58 │ │             x: self.x + n,
-59 │ │             y: self.y + n,
-60 │ │         }
-61 │ │     }
+59 │ │         Point {
+60 │ │             x: self.x + n,
+61 │ │             y: self.y + n,
+62 │ │         }
+63 │ │     }
    │ ╰─────^ Point
 
 note: 
-   ┌─ ops.fe:57:9
+   ┌─ ops.fe:59:9
    │  
-57 │ ╭         Point {
-58 │ │             x: self.x + n,
-59 │ │             y: self.y + n,
-60 │ │         }
+59 │ ╭         Point {
+60 │ │             x: self.x + n,
+61 │ │             y: self.y + n,
+62 │ │         }
    │ ╰─────────^ Point
 
 note: 
-   ┌─ ops.fe:58:16
+   ┌─ ops.fe:60:16
    │
-58 │             x: self.x + n,
+60 │             x: self.x + n,
    │                ^^^^ Point
 
 note: 
-   ┌─ ops.fe:58:16
+   ┌─ ops.fe:60:16
    │
-58 │             x: self.x + n,
+60 │             x: self.x + n,
    │                ^^^^^^ i32
 
 note: 
-   ┌─ ops.fe:58:16
+   ┌─ ops.fe:60:16
    │
-58 │             x: self.x + n,
+60 │             x: self.x + n,
    │                ^^^^^^^^^^ i32
 
 note: 
-   ┌─ ops.fe:58:25
+   ┌─ ops.fe:60:25
    │
-58 │             x: self.x + n,
+60 │             x: self.x + n,
    │                         ^ i32
 
 note: 
-   ┌─ ops.fe:59:16
+   ┌─ ops.fe:61:16
    │
-59 │             y: self.y + n,
+61 │             y: self.y + n,
    │                ^^^^ Point
 
 note: 
-   ┌─ ops.fe:59:16
+   ┌─ ops.fe:61:16
    │
-59 │             y: self.y + n,
+61 │             y: self.y + n,
    │                ^^^^^^ i32
 
 note: 
-   ┌─ ops.fe:59:16
+   ┌─ ops.fe:61:16
    │
-59 │             y: self.y + n,
+61 │             y: self.y + n,
    │                ^^^^^^^^^^ i32
 
 note: 
-   ┌─ ops.fe:59:25
+   ┌─ ops.fe:61:25
    │
-59 │             y: self.y + n,
+61 │             y: self.y + n,
    │                         ^ i32
 
 note: 
-   ┌─ ops.fe:66:47
+   ┌─ ops.fe:68:47
    │  
-66 │       fn index(self, _ i: usize) -> Option<i32> {
+68 │       fn index(self, _ i: usize) -> Option<i32> {
    │ ╭───────────────────────────────────────────────^
-67 │ │         match i {
-68 │ │             0 => Some(self.x)
-69 │ │             1 => Some(self.y)
-70 │ │             _ => None
-71 │ │         }
-72 │ │     }
+69 │ │         match i {
+70 │ │             0 => Some(self.x)
+71 │ │             1 => Some(self.y)
+72 │ │             _ => None
+73 │ │         }
+74 │ │     }
    │ ╰─────^ Option<i32>
 
 note: 
-   ┌─ ops.fe:67:9
+   ┌─ ops.fe:69:9
    │  
-67 │ ╭         match i {
-68 │ │             0 => Some(self.x)
-69 │ │             1 => Some(self.y)
-70 │ │             _ => None
-71 │ │         }
+69 │ ╭         match i {
+70 │ │             0 => Some(self.x)
+71 │ │             1 => Some(self.y)
+72 │ │             _ => None
+73 │ │         }
    │ ╰─────────^ Option<i32>
 
 note: 
-   ┌─ ops.fe:67:15
+   ┌─ ops.fe:69:15
    │
-67 │         match i {
+69 │         match i {
    │               ^ usize
-
-note: 
-   ┌─ ops.fe:68:13
-   │
-68 │             0 => Some(self.x)
-   │             ^ usize
-
-note: 
-   ┌─ ops.fe:68:18
-   │
-68 │             0 => Some(self.x)
-   │                  ^^^^ fn Some<i32>
-
-note: 
-   ┌─ ops.fe:68:18
-   │
-68 │             0 => Some(self.x)
-   │                  ^^^^^^^^^^^^ Option<i32>
-
-note: 
-   ┌─ ops.fe:68:23
-   │
-68 │             0 => Some(self.x)
-   │                       ^^^^ Point
-
-note: 
-   ┌─ ops.fe:68:23
-   │
-68 │             0 => Some(self.x)
-   │                       ^^^^^^ i32
-
-note: 
-   ┌─ ops.fe:69:13
-   │
-69 │             1 => Some(self.y)
-   │             ^ usize
-
-note: 
-   ┌─ ops.fe:69:18
-   │
-69 │             1 => Some(self.y)
-   │                  ^^^^ fn Some<i32>
-
-note: 
-   ┌─ ops.fe:69:18
-   │
-69 │             1 => Some(self.y)
-   │                  ^^^^^^^^^^^^ Option<i32>
-
-note: 
-   ┌─ ops.fe:69:23
-   │
-69 │             1 => Some(self.y)
-   │                       ^^^^ Point
-
-note: 
-   ┌─ ops.fe:69:23
-   │
-69 │             1 => Some(self.y)
-   │                       ^^^^^^ i32
 
 note: 
    ┌─ ops.fe:70:13
    │
-70 │             _ => None
+70 │             0 => Some(self.x)
    │             ^ usize
 
 note: 
    ┌─ ops.fe:70:18
    │
-70 │             _ => None
+70 │             0 => Some(self.x)
+   │                  ^^^^ fn Some<i32>
+
+note: 
+   ┌─ ops.fe:70:18
+   │
+70 │             0 => Some(self.x)
+   │                  ^^^^^^^^^^^^ Option<i32>
+
+note: 
+   ┌─ ops.fe:70:23
+   │
+70 │             0 => Some(self.x)
+   │                       ^^^^ Point
+
+note: 
+   ┌─ ops.fe:70:23
+   │
+70 │             0 => Some(self.x)
+   │                       ^^^^^^ i32
+
+note: 
+   ┌─ ops.fe:71:13
+   │
+71 │             1 => Some(self.y)
+   │             ^ usize
+
+note: 
+   ┌─ ops.fe:71:18
+   │
+71 │             1 => Some(self.y)
+   │                  ^^^^ fn Some<i32>
+
+note: 
+   ┌─ ops.fe:71:18
+   │
+71 │             1 => Some(self.y)
+   │                  ^^^^^^^^^^^^ Option<i32>
+
+note: 
+   ┌─ ops.fe:71:23
+   │
+71 │             1 => Some(self.y)
+   │                       ^^^^ Point
+
+note: 
+   ┌─ ops.fe:71:23
+   │
+71 │             1 => Some(self.y)
+   │                       ^^^^^^ i32
+
+note: 
+   ┌─ ops.fe:72:13
+   │
+72 │             _ => None
+   │             ^ usize
+
+note: 
+   ┌─ ops.fe:72:18
+   │
+72 │             _ => None
    │                  ^^^^ Option<i32>
 
 note: 
-   ┌─ ops.fe:75:26
+   ┌─ ops.fe:77:26
    │  
-75 │   fn f(a: Point, b: Point) {
+77 │   fn f(a: Point, b: Point) {
    │ ╭──────────────────────────^
-76 │ │     let c = a + b
-77 │ │     let c2 = Add::add(a, b)
-78 │ │     // let c3 = Add::add(a, 100) TODO: fix `type annotation is needed`
-79 │ │     let d = c + as_i32(100)
-80 │ │     let x = d[0]
-81 │ │ }
+78 │ │     let c = a + b
+79 │ │     let c2 = Add::add(a, b)
+80 │ │     // let c3 = Add::add(a, 100) TODO: fix `type annotation is needed`
+81 │ │     let d = c + as_i32(100)
+82 │ │     let x = d[0]
+83 │ │ }
    │ ╰─^ ()
 
 note: 
-   ┌─ ops.fe:76:9
+   ┌─ ops.fe:78:9
    │
-76 │     let c = a + b
+78 │     let c = a + b
    │         ^ Point
 
 note: 
-   ┌─ ops.fe:76:13
+   ┌─ ops.fe:78:13
    │
-76 │     let c = a + b
+78 │     let c = a + b
    │             ^ Point
 
 note: 
-   ┌─ ops.fe:76:13
+   ┌─ ops.fe:78:13
    │
-76 │     let c = a + b
+78 │     let c = a + b
    │             ^^^^^ Point
 
 note: 
-   ┌─ ops.fe:76:17
+   ┌─ ops.fe:78:17
    │
-76 │     let c = a + b
+78 │     let c = a + b
    │                 ^ Point
-
-note: 
-   ┌─ ops.fe:77:9
-   │
-77 │     let c2 = Add::add(a, b)
-   │         ^^ Point
-
-note: 
-   ┌─ ops.fe:77:14
-   │
-77 │     let c2 = Add::add(a, b)
-   │              ^^^^^^^^ fn add<Point, Point>
-
-note: 
-   ┌─ ops.fe:77:14
-   │
-77 │     let c2 = Add::add(a, b)
-   │              ^^^^^^^^^^^^^^ Point
-
-note: 
-   ┌─ ops.fe:77:23
-   │
-77 │     let c2 = Add::add(a, b)
-   │                       ^ Point
-
-note: 
-   ┌─ ops.fe:77:26
-   │
-77 │     let c2 = Add::add(a, b)
-   │                          ^ Point
 
 note: 
    ┌─ ops.fe:79:9
    │
-79 │     let d = c + as_i32(100)
+79 │     let c2 = Add::add(a, b)
+   │         ^^ Point
+
+note: 
+   ┌─ ops.fe:79:14
+   │
+79 │     let c2 = Add::add(a, b)
+   │              ^^^^^^^^ fn add<Point, Point>
+
+note: 
+   ┌─ ops.fe:79:14
+   │
+79 │     let c2 = Add::add(a, b)
+   │              ^^^^^^^^^^^^^^ Point
+
+note: 
+   ┌─ ops.fe:79:23
+   │
+79 │     let c2 = Add::add(a, b)
+   │                       ^ Point
+
+note: 
+   ┌─ ops.fe:79:26
+   │
+79 │     let c2 = Add::add(a, b)
+   │                          ^ Point
+
+note: 
+   ┌─ ops.fe:81:9
+   │
+81 │     let d = c + as_i32(100)
    │         ^ Point
 
 note: 
-   ┌─ ops.fe:79:13
+   ┌─ ops.fe:81:13
    │
-79 │     let d = c + as_i32(100)
+81 │     let d = c + as_i32(100)
    │             ^ Point
 
 note: 
-   ┌─ ops.fe:79:13
+   ┌─ ops.fe:81:13
    │
-79 │     let d = c + as_i32(100)
+81 │     let d = c + as_i32(100)
    │             ^^^^^^^^^^^^^^^ Point
 
 note: 
-   ┌─ ops.fe:79:17
+   ┌─ ops.fe:81:17
    │
-79 │     let d = c + as_i32(100)
+81 │     let d = c + as_i32(100)
    │                 ^^^^^^ fn as_i32
 
 note: 
-   ┌─ ops.fe:79:17
+   ┌─ ops.fe:81:17
    │
-79 │     let d = c + as_i32(100)
+81 │     let d = c + as_i32(100)
    │                 ^^^^^^^^^^^ i32
 
 note: 
-   ┌─ ops.fe:79:24
+   ┌─ ops.fe:81:24
    │
-79 │     let d = c + as_i32(100)
+81 │     let d = c + as_i32(100)
    │                        ^^^ i32
 
 note: 
-   ┌─ ops.fe:80:9
+   ┌─ ops.fe:82:9
    │
-80 │     let x = d[0]
+82 │     let x = d[0]
    │         ^ Option<i32>
 
 note: 
-   ┌─ ops.fe:80:13
+   ┌─ ops.fe:82:13
    │
-80 │     let x = d[0]
+82 │     let x = d[0]
    │             ^ Point
 
 note: 
-   ┌─ ops.fe:80:13
+   ┌─ ops.fe:82:13
    │
-80 │     let x = d[0]
+82 │     let x = d[0]
    │             ^^^^ Option<i32>
 
 note: 
-   ┌─ ops.fe:80:15
+   ┌─ ops.fe:82:15
    │
-80 │     let x = d[0]
+82 │     let x = d[0]
    │               ^ usize
 
 note: 
-   ┌─ ops.fe:83:28
+   ┌─ ops.fe:85:28
    │
-83 │ fn as_i32(_ x: i32) -> i32 { x }
+85 │ fn as_i32(_ x: i32) -> i32 { x }
    │                            ^^^^^ i32
 
 note: 
-   ┌─ ops.fe:83:30
+   ┌─ ops.fe:85:30
    │
-83 │ fn as_i32(_ x: i32) -> i32 { x }
+85 │ fn as_i32(_ x: i32) -> i32 { x }
    │                              ^ i32

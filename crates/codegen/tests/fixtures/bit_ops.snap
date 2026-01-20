@@ -1,6 +1,5 @@
 ---
 source: crates/codegen/tests/yul.rs
-assertion_line: 42
 expression: output
 input_file: tests/fixtures/bit_ops.fe
 ---
@@ -24,6 +23,82 @@ function $bit_ops($x, $y) -> ret {
   leave
 }
 function $pow_op($x, $y) -> ret {
-  ret := exp($x, $y)
+  let v0 := $u256_pow_pow($x, $y)
+  ret := v0
+  leave
+}
+function $u256_pow_pow($self, $other) -> ret {
+  let v0 := $pow_checked__u256__3271ca15373d4483($self, $other)
+  ret := v0
+  leave
+}
+function $pow_checked__u256__3271ca15373d4483($base, $exp) -> ret {
+  let v0 := $u256_intword_to_word($exp)
+  let v1 := and(v0, 115792089237316195423570985008687907853269984665640564039457584007913129639935)
+  let v2 := $u256_eq_ne(and(v1, 0), 0)
+  let v3 := and(0, v2)
+  if v3 {
+    revert(0, 0)
+  }
+  let v4 := $u256_intword_to_word(1)
+  let v5 := $base
+  let v6 := v1
+  for { let v7 := $u256_ord_gt(v6, 0) } v7 { v7 := $u256_ord_gt(v6, 0) } {
+    let v8 := $u256_eq_ne(and(v6, 1), 0)
+    let v9 := v8
+    if v9 {
+      let v10 := $u256_mul_mul(v4, v5)
+      v4 := v10
+    }
+    v6 := shr(1, v6)
+    let v11 := $u256_ord_gt(v6, 0)
+    let v12 := v11
+    if v12 {
+      let v13 := $u256_mul_mul(v5, v5)
+      v5 := v13
+    }
+  }
+  ret := v4
+  leave
+}
+function $u256_intword_to_word($self) -> ret {
+  ret := $self
+  leave
+}
+function $u256_eq_ne($self, $other) -> ret {
+  let v0 := iszero(eq($self, $other))
+  ret := v0
+  leave
+}
+function $u256_ord_gt($self, $other) -> ret {
+  let v0 := gt($self, $other)
+  ret := v0
+  leave
+}
+function $u256_mul_mul($self, $other) -> ret {
+  let v0 := mul($self, $other)
+  let v1 := $u256_eq_ne($self, 0)
+  let v2 := $u256_div_div(v0, $self)
+  let v3 := $u256_eq_ne(v2, $other)
+  let v4 := and(v1, v3)
+  if v4 {
+    revert(0, 0)
+  }
+  ret := v0
+  leave
+}
+function $u256_div_div($self, $other) -> ret {
+  let v0 := $u256_eq_eq($other, 0)
+  let v1 := v0
+  if v1 {
+    revert(0, 0)
+  }
+  let v2 := div($self, $other)
+  ret := v2
+  leave
+}
+function $u256_eq_eq($self, $other) -> ret {
+  let v0 := eq($self, $other)
+  ret := v0
   leave
 }

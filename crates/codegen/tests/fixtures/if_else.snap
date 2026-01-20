@@ -1,6 +1,5 @@
 ---
 source: crates/codegen/tests/yul.rs
-assertion_line: 42
 expression: output
 input_file: tests/fixtures/if_else.fe
 ---
@@ -23,6 +22,17 @@ function $if_else($cond) -> ret {
   leave
 }
 function $helper($x) -> ret {
-  ret := add($x, 1)
+  let v0 := $u64_add_add($x, 1)
+  ret := v0
+  leave
+}
+function $u64_add_add($self, $other) -> ret {
+  let v0 := and(add(and($self, 0xffffffffffffffff), and($other, 0xffffffffffffffff)), 0xffffffffffffffff)
+  let v1 := lt(and(v0, 0xffffffffffffffff), and($self, 0xffffffffffffffff))
+  let v2 := v1
+  if v2 {
+    revert(0, 0)
+  }
+  ret := v0
   leave
 }

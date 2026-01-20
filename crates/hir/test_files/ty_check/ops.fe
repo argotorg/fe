@@ -31,9 +31,11 @@ impl Eq for Ok {
 }
 
 impl AddAssign for Ok {
-    fn add_assign(mut self, _ other: Ok) {
+    fn add_assign(self, _ other: Ok) -> Ok {
         if other == Ok::Yes {
-            self = Ok::Yes
+            Ok::Yes
+        } else {
+            self
         }
     }
 }

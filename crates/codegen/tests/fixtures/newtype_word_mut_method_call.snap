@@ -4,7 +4,8 @@ expression: output
 input_file: tests/fixtures/newtype_word_mut_method_call.fe
 ---
 function $wrap_bump($self) -> ret {
-  $self := add($self, 1)
+  let v0 := $u256_addassign_add_assign($self, 1)
+  $self := v0
   ret := $self
   leave
 }
@@ -12,6 +13,21 @@ function $newtype_word_mut_method_call($x) -> ret {
   let v0 := $x
   let v1 := $wrap_bump(v0)
   v0 := v1
+  ret := v0
+  leave
+}
+function $u256_addassign_add_assign($self, $other) -> ret {
+  let v0 := $u256_add_add($self, $other)
+  ret := v0
+  leave
+}
+function $u256_add_add($self, $other) -> ret {
+  let v0 := add($self, $other)
+  let v1 := lt(v0, $self)
+  let v2 := v1
+  if v2 {
+    revert(0, 0)
+  }
   ret := v0
   leave
 }

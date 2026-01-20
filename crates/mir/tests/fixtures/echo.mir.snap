@@ -90,12 +90,14 @@ fn evm_contracthost_abort(v0: Evm) -> !:
 fn alloc(v0: u256) -> u256:
   bb0:
     v1: u256 = mload(64)
-    br (v1 == 0) bb1 bb2
+    v2: bool = u256_eq_eq(v1, 0)
+    br v2 bb1 bb2
   bb1:
     v1 = 128
     jmp bb2
   bb2:
-    eval mstore(64, (v1 + v0))
+    v3: u256 = u256_add_add(v1, v0)
+    eval mstore(64, v3)
     ret v1
 
 fn sol_abi_decoder_new__MemoryBytes__b48f82585f3ed728(v0: I) -> SolDecoder<MemoryBytes>:
@@ -117,13 +119,14 @@ fn runtime_selector__Evm_Sol__2533f5c49b57a682(v0: Self) -> u32:
   bb0:
     v1: CallData = evm_contracthost_input(v0)
     v2: u256 = calldata_byteinput_len(v1)
-    br (v2 < 4) bb1 bb2
+    v3: bool = u256_ord_lt(v2, 4)
+    br v3 bb1 bb2
   bb1:
     terminate evm_contracthost_abort(v0)
   bb2:
-    v3: u256 = calldata_byteinput_word_at(v1, 0)
-    v4: u32 = sol_abi_selector_from_prefix(v3)
-    ret v4
+    v4: u256 = calldata_byteinput_word_at(v1, 0)
+    v5: u32 = sol_abi_selector_from_prefix(v4)
+    ret v5
 
 fn runtime_decoder__Evm_Sol__2533f5c49b57a682(v0: Self) -> SolDecoder<CallData>:
   bb0:
@@ -155,6 +158,21 @@ fn getx_decode_decode__SolDecoder_CallData___c1e4510fd444b966(v0: D) -> GetX:
   bb0:
     ret
 
+fn u256_eq_eq(v0: u256, v1: u256) -> bool:
+  bb0:
+    v2: bool = __eq_u256(v0, v1)
+    ret v2
+
+fn u256_add_add(v0: u256, v1: u256) -> u256:
+  bb0:
+    v2: u256 = __add_u256(v0, v1)
+    v3: bool = __lt_u256(v2, v0)
+    br v3 bb1 bb2
+  bb1:
+    terminate revert(0, 0)
+  bb2:
+    ret v2
+
 fn soldecoder_i__new__MemoryBytes__b48f82585f3ed728(v0: I) -> SolDecoder<MemoryBytes>:
   bb0:
     v1: Cursor<MemoryBytes> = cursor_i__new__MemoryBytes__b48f82585f3ed728(v0)
@@ -167,16 +185,19 @@ fn soldecoder_i__abidecoder_read_word__MemoryBytes__b48f82585f3ed728(v0: SolDeco
   bb0:
     v1: u256 = memorybytes_byteinput_len(&mem[&mem[v0].0].0)
     v3: u256 = load mem[&mem[v0].0].1
-    v2: u256 = (v3 + 32)
-    v4: u256 = load mem[&mem[v0].0].1
-    br ((v2 < v4) || (v2 > v1)) bb1 bb2
+    v4: u256 = u256_add_add(v3, 32)
+    v2: u256 = v4
+    v5: u256 = load mem[&mem[v0].0].1
+    v6: bool = u256_ord_lt(v2, v5)
+    v7: bool = u256_ord_gt(v2, v1)
+    br (v6 || v7) bb1 bb2
   bb1:
     terminate revert(0, 0)
   bb2:
-    v6: u256 = load mem[&mem[v0].0].1
-    v5: u256 = memorybytes_byteinput_word_at(&mem[&mem[v0].0].0, v6)
+    v9: u256 = load mem[&mem[v0].0].1
+    v8: u256 = memorybytes_byteinput_word_at(&mem[&mem[v0].0].0, v9)
     store mem[&mem[v0].0].1 = v2
-    ret v5
+    ret v8
 
 fn stor_ptr__Evm_Foo__c3089d776807df8e(v0: Self, v1: u256) -> StorPtr<Foo>:
   bb0:
@@ -190,12 +211,19 @@ fn evm_contracthost_input(v0: Evm) -> CallData:
 fn calldata_byteinput_len(v0: CallData) -> u256:
   bb0:
     v1: u256 = calldatasize()
-    ret (v1 - v0)
+    v2: u256 = u256_sub_sub(v1, v0)
+    ret v2
+
+fn u256_ord_lt(v0: u256, v1: u256) -> bool:
+  bb0:
+    v2: bool = __lt_u256(v0, v1)
+    ret v2
 
 fn calldata_byteinput_word_at(v0: CallData, v1: u256) -> u256:
   bb0:
-    v2: u256 = calldataload((v0 + v1))
-    ret v2
+    v2: u256 = u256_add_add(v0, v1)
+    v3: u256 = calldataload(v2)
+    ret v3
 
 fn sol_abi_selector_from_prefix(v0: u256) -> u32:
   bb0:
@@ -227,9 +255,10 @@ fn solencoder_abiencoder_finish(v0: SolEncoder) -> (u256, u256):
   bb0:
     v1: u256 = load mem[v0].0
     v2: u256 = load mem[v0].2
-    v3: (u256, u256) = alloc mem
-    init mem[v3] { .0 = v1, .1 = (v2 - v1) }
-    ret v3
+    v3: u256 = u256_sub_sub(v2, v1)
+    v4: (u256, u256) = alloc mem
+    init mem[v4] { .0 = v1, .1 = v3 }
+    ret v4
 
 fn evm_contracthost_return_bytes(v0: Evm, v1: u256, v2: u256) -> !:
   bb0:
@@ -252,15 +281,31 @@ fn memorybytes_byteinput_len(v0: MemoryBytes) -> u256:
     v1: u256 = load mem[v0].1
     ret v1
 
+fn u256_ord_gt(v0: u256, v1: u256) -> bool:
+  bb0:
+    v2: bool = __gt_u256(v0, v1)
+    ret v2
+
 fn memorybytes_byteinput_word_at(v0: MemoryBytes, v1: u256) -> u256:
   bb0:
     v2: u256 = load mem[v0].0
-    v3: u256 = mload((v2 + v1))
-    ret v3
+    v3: u256 = u256_add_add(v2, v1)
+    v4: u256 = mload(v3)
+    ret v4
 
 fn storptr_t__effectref_from_raw__Foo__668f96d7165c93b(v0: u256) -> StorPtr<Foo>:
   bb0:
     ret v0
+
+fn u256_sub_sub(v0: u256, v1: u256) -> u256:
+  bb0:
+    v2: bool = __gt_u256(v1, v0)
+    br v2 bb1 bb2
+  bb1:
+    terminate revert(0, 0)
+  bb2:
+    v3: u256 = __sub_u256(v0, v1)
+    ret v3
 
 fn s_intdowncast_downcast_unchecked__u256_u32__6e3637cd3e911b35(v0: S) -> u32:
   bb0:
@@ -287,12 +332,14 @@ fn solencoder_new() -> SolEncoder:
 fn solencoder_ensure_init_mem(v0: SolEncoder, v1: u256) -> ():
   bb0:
     v2: u256 = load mem[v0].0
-    br (v2 == 0) bb1 bb2
+    v3: bool = u256_eq_eq(v2, 0)
+    br v3 bb1 bb2
   bb1:
-    v3: u256 = alloc(v1)
-    store mem[v0].0 = v3
-    store mem[v0].1 = v3
-    store mem[v0].2 = (v3 + v1)
+    v4: u256 = alloc(v1)
+    store mem[v0].0 = v4
+    store mem[v0].1 = v4
+    v5: u256 = u256_add_add(v4, v1)
+    store mem[v0].2 = v5
     jmp bb2
   bb2:
     ret
@@ -301,7 +348,8 @@ fn solencoder_abiencoder_write_word(v0: SolEncoder, v1: u256) -> ():
   bb0:
     v2: u256 = load mem[v0].1
     eval mstore(v2, v1)
-    store mem[v0].1 = (v2 + 32)
+    v3: u256 = u256_add_add(v2, 32)
+    store mem[v0].1 = v3
     ret
 
 fn soldecoder_i__abidecoder_read_word__CallData__b9ab8dc8a4b2f9e(v0: SolDecoder<I>) -> u256:
@@ -309,17 +357,20 @@ fn soldecoder_i__abidecoder_read_word__CallData__b9ab8dc8a4b2f9e(v0: SolDecoder<
     v2: CallData = load mem[&mem[v0].0].0
     v1: u256 = calldata_byteinput_len(v2)
     v4: u256 = load mem[&mem[v0].0].1
-    v3: u256 = (v4 + 32)
-    v5: u256 = load mem[&mem[v0].0].1
-    br ((v3 < v5) || (v3 > v1)) bb1 bb2
+    v5: u256 = u256_add_add(v4, 32)
+    v3: u256 = v5
+    v6: u256 = load mem[&mem[v0].0].1
+    v7: bool = u256_ord_lt(v3, v6)
+    v8: bool = u256_ord_gt(v3, v1)
+    br (v7 || v8) bb1 bb2
   bb1:
     terminate revert(0, 0)
   bb2:
-    v7: CallData = load mem[&mem[v0].0].0
-    v8: u256 = load mem[&mem[v0].0].1
-    v6: u256 = calldata_byteinput_word_at(v7, v8)
+    v10: CallData = load mem[&mem[v0].0].0
+    v11: u256 = load mem[&mem[v0].0].1
+    v9: u256 = calldata_byteinput_word_at(v10, v11)
     store mem[&mem[v0].0].1 = v3
-    ret v6
+    ret v9
 
 fn u256_intword_to_word(v0: u256) -> u256:
   bb0:

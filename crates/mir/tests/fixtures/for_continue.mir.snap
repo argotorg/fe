@@ -13,7 +13,8 @@ fn for_continue() -> usize:
   bb2:
     v3: usize = range_known_const_s__usize___known_const_e__usize___seq_get__0_4__f9605efabd18106c((), v1)
     v4: usize = v3
-    br (v4 == 2) bb5 bb6
+    v5: bool = usize_eq_eq(v4, 2)
+    br v5 bb5 bb6
   bb3:
     v1 = (v1 + 1)
     jmp bb1
@@ -22,22 +23,56 @@ fn for_continue() -> usize:
   bb5:
     jmp bb3
   bb6:
-    v0 = (v0 + 1)
+    v6: usize = usize_add_add(v0, 1)
+    v0 = v6
     jmp bb3
 
 fn range_known_const_s__usize___known_const_e__usize___seq_len__0_4__f9605efabd18106c(v0: Range<Known<const S: usize>, Known<const E: usize>>) -> usize:
   bb0:
-    v1: usize = 0
-    switch (4 < 0) [true => bb1, false => bb2] else bb2
+    v1: bool = usize_ord_lt(4, 0)
+    v2: usize = 0
+    switch v1 [true => bb1, false => bb2] else bb2
   bb1:
-    v1 = 0
+    v2 = 0
     jmp bb3
   bb2:
-    v1 = (4 - 0)
+    v3: usize = usize_sub_sub(4, 0)
+    v2 = v3
     jmp bb3
   bb3:
-    ret v1
+    ret v2
 
 fn range_known_const_s__usize___known_const_e__usize___seq_get__0_4__f9605efabd18106c(v0: Range<Known<const S: usize>, Known<const E: usize>>, v1: usize) -> usize:
   bb0:
-    ret (0 + v1)
+    v2: usize = usize_add_add(0, v1)
+    ret v2
+
+fn usize_eq_eq(v0: usize, v1: usize) -> bool:
+  bb0:
+    v2: bool = __eq_usize(v0, v1)
+    ret v2
+
+fn usize_add_add(v0: usize, v1: usize) -> usize:
+  bb0:
+    v2: usize = __add_usize(v0, v1)
+    v3: bool = __lt_usize(v2, v0)
+    br v3 bb1 bb2
+  bb1:
+    terminate revert(0, 0)
+  bb2:
+    ret v2
+
+fn usize_ord_lt(v0: usize, v1: usize) -> bool:
+  bb0:
+    v2: bool = __lt_usize(v0, v1)
+    ret v2
+
+fn usize_sub_sub(v0: usize, v1: usize) -> usize:
+  bb0:
+    v2: bool = __gt_usize(v1, v0)
+    br v2 bb1 bb2
+  bb1:
+    terminate revert(0, 0)
+  bb2:
+    v3: usize = __sub_usize(v0, v1)
+    ret v3

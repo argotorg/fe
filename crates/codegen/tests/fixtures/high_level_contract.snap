@@ -39,11 +39,13 @@ object "EchoContract" {
     }
     function $alloc($size) -> ret {
       let v0 := mload(64)
-      let v1 := eq(v0, 0)
-      if v1 {
+      let v1 := $u256_eq_eq(v0, 0)
+      let v2 := v1
+      if v2 {
         v0 := 128
       }
-      mstore(64, add(v0, $size))
+      let v3 := $u256_add_add(v0, $size)
+      mstore(64, v3)
       ret := v0
       leave
     }
@@ -81,8 +83,9 @@ object "EchoContract" {
     }
     function $memorybytes_byteinput_word_at($self, $byte_offset) -> ret {
       let v0 := mload($self)
-      let v1 := mload(add(v0, $byte_offset))
-      ret := v1
+      let v1 := $u256_add_add(v0, $byte_offset)
+      let v2 := mload(v1)
+      ret := v2
       leave
     }
     function $sol_abi_decoder_new__MemoryBytes__b48f82585f3ed728($input) -> ret {
@@ -93,16 +96,19 @@ object "EchoContract" {
     function $soldecoder_i__abidecoder_read_word__MemoryBytes__b48f82585f3ed728($self) -> ret {
       let v0 := $memorybytes_byteinput_len($self)
       let v1 := mload(add($self, 64))
-      let v2 := add(v1, 32)
-      let v3 := mload(add($self, 64))
-      let v4 := or(lt(v2, v3), gt(v2, v0))
-      if v4 {
+      let v2 := $u256_add_add(v1, 32)
+      let v3 := v2
+      let v4 := mload(add($self, 64))
+      let v5 := $u256_ord_lt(v3, v4)
+      let v6 := $u256_ord_gt(v3, v0)
+      let v7 := or(v5, v6)
+      if v7 {
         revert(0, 0)
       }
-      let v5 := mload(add($self, 64))
-      let v6 := $memorybytes_byteinput_word_at($self, v5)
-      mstore(add($self, 64), v2)
-      ret := v6
+      let v8 := mload(add($self, 64))
+      let v9 := $memorybytes_byteinput_word_at($self, v8)
+      mstore(add($self, 64), v3)
+      ret := v9
       leave
     }
     function $soldecoder_i__new__MemoryBytes__b48f82585f3ed728($input) -> ret {
@@ -130,8 +136,33 @@ object "EchoContract" {
       ret := $raw
       leave
     }
+    function $u256_add_add($self, $other) -> ret {
+      let v0 := add($self, $other)
+      let v1 := lt(v0, $self)
+      let v2 := v1
+      if v2 {
+        revert(0, 0)
+      }
+      ret := v0
+      leave
+    }
     function $u256_decode_decode__Sol_SolDecoder_MemoryBytes___c66d50dfccf37f39($d) -> ret {
       let v0 := $soldecoder_i__abidecoder_read_word__MemoryBytes__b48f82585f3ed728($d)
+      ret := v0
+      leave
+    }
+    function $u256_eq_eq($self, $other) -> ret {
+      let v0 := eq($self, $other)
+      ret := v0
+      leave
+    }
+    function $u256_ord_gt($self, $other) -> ret {
+      let v0 := gt($self, $other)
+      ret := v0
+      leave
+    }
+    function $u256_ord_lt($self, $other) -> ret {
+      let v0 := lt($self, $other)
       ret := v0
       leave
     }
@@ -180,11 +211,13 @@ object "EchoContract" {
       }
       function $alloc($size) -> ret {
         let v0 := mload(64)
-        let v1 := eq(v0, 0)
-        if v1 {
+        let v1 := $u256_eq_eq(v0, 0)
+        let v2 := v1
+        if v2 {
           v0 := 128
         }
-        mstore(64, add(v0, $size))
+        let v3 := $u256_add_add(v0, $size)
+        mstore(64, v3)
         ret := v0
         leave
       }
@@ -193,12 +226,14 @@ object "EchoContract" {
       }
       function $calldata_byteinput_len($self) -> ret {
         let v0 := calldatasize()
-        ret := sub(v0, $self)
+        let v1 := $u256_sub_sub(v0, $self)
+        ret := v1
         leave
       }
       function $calldata_byteinput_word_at($self, $byte_offset) -> ret {
-        let v0 := calldataload(add($self, $byte_offset))
-        ret := v0
+        let v0 := $u256_add_add($self, $byte_offset)
+        let v1 := calldataload(v0)
+        ret := v1
         leave
       }
       function $cursor_i__fork_mem__CallData__b9ab8dc8a4b2f9e($self, $pos) -> ret {
@@ -268,13 +303,14 @@ object "EchoContract" {
       function $runtime_selector__Evm_Sol__2533f5c49b57a682($self) -> ret {
         let v0 := $evm_contracthost_input($self)
         let v1 := $calldata_byteinput_len(v0)
-        let v2 := lt(v1, 4)
-        if v2 {
+        let v2 := $u256_ord_lt(v1, 4)
+        let v3 := v2
+        if v3 {
           $evm_contracthost_abort($self)
         }
-        let v3 := $calldata_byteinput_word_at(v0, 0)
-        let v4 := $sol_abi_selector_from_prefix(v3)
-        ret := v4
+        let v4 := $calldata_byteinput_word_at(v0, 0)
+        let v5 := $sol_abi_selector_from_prefix(v4)
+        ret := v5
         leave
       }
       function $s_intdowncast_downcast_unchecked__u256_u32__6e3637cd3e911b35($self) -> ret {
@@ -302,17 +338,20 @@ object "EchoContract" {
         let v0 := mload($self)
         let v1 := $calldata_byteinput_len(v0)
         let v2 := mload(add($self, 32))
-        let v3 := add(v2, 32)
-        let v4 := mload(add($self, 32))
-        let v5 := or(lt(v3, v4), gt(v3, v1))
-        if v5 {
+        let v3 := $u256_add_add(v2, 32)
+        let v4 := v3
+        let v5 := mload(add($self, 32))
+        let v6 := $u256_ord_lt(v4, v5)
+        let v7 := $u256_ord_gt(v4, v1)
+        let v8 := or(v6, v7)
+        if v8 {
           revert(0, 0)
         }
-        let v6 := mload($self)
-        let v7 := mload(add($self, 32))
-        let v8 := $calldata_byteinput_word_at(v6, v7)
-        mstore(add($self, 32), v3)
-        ret := v8
+        let v9 := mload($self)
+        let v10 := mload(add($self, 32))
+        let v11 := $calldata_byteinput_word_at(v9, v10)
+        mstore(add($self, 32), v4)
+        ret := v11
         leave
       }
       function $soldecoder_i__with_base__CallData__b9ab8dc8a4b2f9e($input, $base) -> ret {
@@ -334,14 +373,15 @@ object "EchoContract" {
       function $solencoder_abiencoder_finish($self) -> ret {
         let v0 := mload($self)
         let v1 := mload(add($self, 64))
-        let v2 := mload(0x40)
-        if iszero(v2) {
-          v2 := 0x80
+        let v2 := $u256_sub_sub(v1, v0)
+        let v3 := mload(0x40)
+        if iszero(v3) {
+          v3 := 0x80
         }
-        mstore(0x40, add(v2, 64))
-        mstore(v2, v0)
-        mstore(add(v2, 32), sub(v1, v0))
-        ret := v2
+        mstore(0x40, add(v3, 64))
+        mstore(v3, v0)
+        mstore(add(v3, 32), v2)
+        ret := v3
         leave
       }
       function $solencoder_abiencoder_reserve_head($self, $bytes) -> ret {
@@ -353,17 +393,20 @@ object "EchoContract" {
       function $solencoder_abiencoder_write_word($self, $v) {
         let v0 := mload(add($self, 32))
         mstore(v0, $v)
-        mstore(add($self, 32), add(v0, 32))
+        let v1 := $u256_add_add(v0, 32)
+        mstore(add($self, 32), v1)
         leave
       }
       function $solencoder_ensure_init_mem($self, $bytes) {
         let v0 := mload($self)
-        let v1 := eq(v0, 0)
-        if v1 {
-          let v2 := $alloc($bytes)
-          mstore($self, v2)
-          mstore(add($self, 32), v2)
-          mstore(add($self, 64), add(v2, $bytes))
+        let v1 := $u256_eq_eq(v0, 0)
+        let v2 := v1
+        if v2 {
+          let v3 := $alloc($bytes)
+          mstore($self, v3)
+          mstore(add($self, 32), v3)
+          let v4 := $u256_add_add(v3, $bytes)
+          mstore(add($self, 64), v4)
         }
         leave
       }
@@ -389,6 +432,16 @@ object "EchoContract" {
         ret := $raw
         leave
       }
+      function $u256_add_add($self, $other) -> ret {
+        let v0 := add($self, $other)
+        let v1 := lt(v0, $self)
+        let v2 := v1
+        if v2 {
+          revert(0, 0)
+        }
+        ret := v0
+        leave
+      }
       function $u256_decode_decode__Sol_SolDecoder_CallData___828c6f2e3bda3cab($d) -> ret {
         let v0 := $soldecoder_i__abidecoder_read_word__CallData__b9ab8dc8a4b2f9e($d)
         ret := v0
@@ -398,8 +451,33 @@ object "EchoContract" {
         $solencoder_abiencoder_write_word($e, $self)
         leave
       }
+      function $u256_eq_eq($self, $other) -> ret {
+        let v0 := eq($self, $other)
+        ret := v0
+        leave
+      }
       function $u256_intword_to_word($self) -> ret {
         ret := $self
+        leave
+      }
+      function $u256_ord_gt($self, $other) -> ret {
+        let v0 := gt($self, $other)
+        ret := v0
+        leave
+      }
+      function $u256_ord_lt($self, $other) -> ret {
+        let v0 := lt($self, $other)
+        ret := v0
+        leave
+      }
+      function $u256_sub_sub($self, $other) -> ret {
+        let v0 := gt($other, $self)
+        let v1 := v0
+        if v1 {
+          revert(0, 0)
+        }
+        let v2 := sub($self, $other)
+        ret := v2
         leave
       }
       function $u32_intword_from_word($word) -> ret {

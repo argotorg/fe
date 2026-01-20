@@ -1,14 +1,15 @@
 ---
 source: crates/mir/tests/lowering_snapshots.rs
-assertion_line: 26
 expression: mir_output
 ---
 fn bump__StorPtr_Foo___3698cc3c4b2626e3(v0: u256) -> ():
   bb0:
     v1: u256 = load stor[v0].0
-    store stor[v0].0 = (v1 + 1)
-    v2: u256 = load stor[v0].1
-    store stor[v0].1 = (v2 + 2)
+    v2: u256 = u256_add_add(v1, 1)
+    store stor[v0].0 = v2
+    v3: u256 = load stor[v0].1
+    v4: u256 = u256_add_add(v3, 2)
+    store stor[v0].1 = v4
     ret
 
 fn maybe_inc(v0: Opt) -> u64:
@@ -37,7 +38,8 @@ fn maybe_inc(v0: Opt) -> u64:
     v6 = (v6 + 1)
     jmp bb6
   bb8:
-    ret (v1 + v6)
+    v7: u64 = u64_add_add(v1, v6)
+    ret v7
 
 fn test_effects_and_aggregates(v0: u256, v1: u256) -> ():
   bb0:
@@ -88,6 +90,26 @@ fn selector_match(v0: u256) -> u256:
   bb5:
     switch v1 [151146943 => bb1, 2066295049 => bb3] else bb4
 
+fn u256_add_add(v0: u256, v1: u256) -> u256:
+  bb0:
+    v2: u256 = __add_u256(v0, v1)
+    v3: bool = __lt_u256(v2, v0)
+    br v3 bb1 bb2
+  bb1:
+    terminate revert(0, 0)
+  bb2:
+    ret v2
+
+fn u64_add_add(v0: u64, v1: u64) -> u64:
+  bb0:
+    v2: u64 = __add_u64(v0, v1)
+    v3: bool = __lt_u64(v2, v0)
+    br v3 bb1 bb2
+  bb1:
+    terminate revert(0, 0)
+  bb2:
+    ret v2
+
 fn mem_ptr__mem__RawMem_Foo__19292a5189c12f79(v0: Self, v1: u256) -> MemPtr<Foo>:
   bb0:
     v2: MemPtr<Foo> = memptr_t__effectref_from_raw__Foo__668f96d7165c93b(v1)
@@ -96,9 +118,11 @@ fn mem_ptr__mem__RawMem_Foo__19292a5189c12f79(v0: Self, v1: u256) -> MemPtr<Foo>
 fn bump__MemPtr_Foo___cdd30998d577b6ea(v0: u256) -> ():
   bb0:
     v1: u256 = load mem[v0].0
-    store mem[v0].0 = (v1 + 1)
-    v2: u256 = load mem[v0].1
-    store mem[v0].1 = (v2 + 2)
+    v2: u256 = u256_add_add(v1, 1)
+    store mem[v0].0 = v2
+    v3: u256 = load mem[v0].1
+    v4: u256 = u256_add_add(v3, 2)
+    store mem[v0].1 = v4
     ret
 
 fn stor_ptr__sto__RawStorage_Foo__b1b82e9d4c608c02(v0: Self, v1: u256) -> StorPtr<Foo>:
@@ -155,9 +179,11 @@ fn storagemap_storage_slot_with_salt__u256__3271ca15373d4483(v0: K, v1: u256) ->
   bb0:
     v2: u256 = mload(64)
     v3: u256 = u256_storagekey_write_key(v2, v0)
-    eval mstore((v2 + v3), v1)
-    v4: u256 = keccak256(v2, (v3 + 32))
-    ret v4
+    v4: u256 = u256_add_add(v2, v3)
+    eval mstore(v4, v1)
+    v5: u256 = u256_add_add(v3, 32)
+    v6: u256 = keccak256(v2, v5)
+    ret v6
 
 fn u256_storagekey_write_key(v0: u256, v1: u256) -> u256:
   bb0:
