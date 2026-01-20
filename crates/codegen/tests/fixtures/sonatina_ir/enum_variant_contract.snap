@@ -1,0 +1,156 @@
+---
+source: crates/codegen/tests/sonatina_ir.rs
+assertion_line: 74
+expression: output
+input_file: crates/codegen/tests/fixtures/enum_variant_contract.fe
+---
+target = evm-ethereum-osaka
+
+func public %abi_encode_u256(v0.i256, v1.i256) {
+    block0:
+        mstore 0.i256 v0 i256;
+        evm_return 0.i256 32.i256;
+}
+
+func public %runtime__StorPtr_Evm___207f35a85ac4062e(v0.i256) {
+    block0:
+        v2.i256 = evm_calldata_load 0.i256;
+        v4.i256 = shr 224.i256 v2;
+        v6.i256 = eq v4 1817627404.i256;
+        br v6 block1 block2;
+
+    block1:
+        v8.i256 = evm_calldata_load 4.i256;
+        v10.i256 = mload 64.i256 i256;
+        v11.i256 = is_zero v10;
+        v13.i256 = mul v11 128.i256;
+        v14.i256 = or v10 v13;
+        v15.i256 = add v14 64.i256;
+        mstore 64.i256 v15 i256;
+        mstore v14 1.i256 i256;
+        v18.i256 = add v14 32.i256;
+        mstore v18 v8 i256;
+        jump block6;
+
+    block2:
+        v21.i256 = eq v4 1163776883.i256;
+        br v21 block8 block9;
+
+    block3:
+        v23.i256 = add v14 32.i256;
+        v24.i256 = mload v23 i256;
+        jump block4;
+
+    block4:
+        v25.i256 = phi (v24 block3) (0.i256 block5);
+        call %abi_encode_u256 v25 0.i256;
+        evm_invalid;
+
+    block5:
+        jump block4;
+
+    block6:
+        v27.i256 = mload v14 i256;
+        v28.i256 = eq v27 1.i256;
+        br v28 block3 block22;
+
+    block7:
+        evm_invalid;
+
+    block8:
+        v30.i256 = mload 64.i256 i256;
+        v31.i256 = is_zero v30;
+        v32.i256 = mul v31 128.i256;
+        v33.i256 = or v30 v32;
+        v34.i256 = add v33 64.i256;
+        mstore 64.i256 v34 i256;
+        mstore v33 0.i256 i256;
+        jump block13;
+
+    block9:
+        v37.i256 = eq v4 3572425762.i256;
+        br v37 block15 block16;
+
+    block10:
+        v39.i256 = add v33 32.i256;
+        v40.i256 = mload v39 i256;
+        jump block11;
+
+    block11:
+        v41.i256 = phi (v40 block10) (0.i256 block12);
+        call %abi_encode_u256 v41 0.i256;
+        evm_invalid;
+
+    block12:
+        jump block11;
+
+    block13:
+        v43.i256 = mload v33 i256;
+        v44.i256 = eq v43 1.i256;
+        br v44 block10 block23;
+
+    block14:
+        evm_invalid;
+
+    block15:
+        v46.i256 = evm_calldata_load 4.i256;
+        v47.i256 = mload 64.i256 i256;
+        v48.i256 = is_zero v47;
+        v49.i256 = mul v48 128.i256;
+        v50.i256 = or v47 v49;
+        v51.i256 = add v50 64.i256;
+        mstore 64.i256 v51 i256;
+        mstore v50 1.i256 i256;
+        v52.i256 = add v50 32.i256;
+        mstore v52 v46 i256;
+        jump block20;
+
+    block16:
+        evm_return 0.i256 0.i256;
+
+    block17:
+        jump block18;
+
+    block18:
+        v53.i256 = phi (1.i256 block17) (0.i256 block19);
+        call %abi_encode_u256 v53 0.i256;
+        evm_invalid;
+
+    block19:
+        jump block18;
+
+    block20:
+        v55.i256 = mload v50 i256;
+        v56.i256 = eq v55 1.i256;
+        br v56 block17 block24;
+
+    block21:
+        evm_invalid;
+
+    block22:
+        v29.i256 = eq v27 0.i256;
+        br v29 block5 block7;
+
+    block23:
+        v45.i256 = eq v43 0.i256;
+        br v45 block12 block14;
+
+    block24:
+        v57.i256 = eq v55 0.i256;
+        br v57 block19 block21;
+}
+
+func public %__fe_sonatina_entry() {
+    block0:
+        call %runtime__StorPtr_Evm___207f35a85ac4062e 0.i256;
+        evm_stop;
+}
+
+
+object @Contract {
+    section runtime {
+        entry %__fe_sonatina_entry;
+        include %runtime__StorPtr_Evm___207f35a85ac4062e;
+        include %abi_encode_u256;
+    }
+}

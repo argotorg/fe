@@ -206,7 +206,7 @@ impl Backend for SonatinaBackend {
         layout: TargetDataLayout,
     ) -> Result<BackendOutput, BackendError> {
         use sonatina_codegen::isa::evm::EvmBackend;
-        use sonatina_codegen::object::{CompileOptions, EvmObjectBackend, compile_object};
+        use sonatina_codegen::object::{CompileOptions, compile_object};
         use sonatina_ir::isa::evm::Evm;
         use sonatina_triple::{Architecture, EvmVersion, OperatingSystem, TargetTriple, Vendor};
 
@@ -228,11 +228,10 @@ impl Backend for SonatinaBackend {
         );
         let isa = Evm::new(triple);
         let evm_backend = EvmBackend::new(isa);
-        let object_backend = EvmObjectBackend::new(evm_backend);
 
         // Compile the "Contract" object
-        let opts = CompileOptions::default();
-        let artifact = compile_object(&module, &object_backend, "Contract", &opts)
+        let opts: CompileOptions<_> = CompileOptions::default();
+        let artifact = compile_object(&module, &evm_backend, "Contract", &opts)
             .map_err(|errors| {
                 let msg = errors
                     .iter()
@@ -243,14 +242,11 @@ impl Backend for SonatinaBackend {
             })?;
 
         // Extract bytecode from the runtime section
-        let runtime_section = artifact
-            .sections
-            .iter()
-            .find(|(name, _)| name.0.as_str() == "runtime")
-            .ok_or_else(|| {
-                BackendError::Sonatina("compiled object has no runtime section".to_string())
-            })?;
+        let section_name = sonatina_ir::object::SectionName::from("runtime");
+        let runtime_section = artifact.sections.get(&section_name).ok_or_else(|| {
+            BackendError::Sonatina("compiled object has no runtime section".to_string())
+        })?;
 
-        Ok(BackendOutput::Bytecode(runtime_section.1.bytes.clone()))
+        Ok(BackendOutput::Bytecode(runtime_section.bytes.clone()))
     }
 }

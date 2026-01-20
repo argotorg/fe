@@ -1,0 +1,56 @@
+---
+source: crates/codegen/tests/sonatina_ir.rs
+assertion_line: 74
+expression: output
+input_file: crates/codegen/tests/fixtures/match_fn_call.fe
+---
+target = evm-ethereum-osaka
+
+func public %example(v0.i256) -> i256 {
+    block0:
+        v1.i256 = call %read_selector v0;
+        jump block5;
+
+    block1:
+        jump block2;
+
+    block2:
+        v4.i256 = phi (1.i256 block1) (2.i256 block3) (3.i256 block4);
+        return v4;
+
+    block3:
+        jump block2;
+
+    block4:
+        jump block2;
+
+    block5:
+        v10.i256 = eq v1 305419896.i256;
+        br v10 block1 block6;
+
+    block6:
+        v11.i256 = eq v1 591751049.i256;
+        br v11 block3 block4;
+}
+
+func public %read_selector(v0.i256) -> i256 {
+    block0:
+        v2.i256 = evm_calldata_load 0.i256;
+        v4.i256 = shr 224.i256 v2;
+        return v4;
+}
+
+func public %__fe_sonatina_entry() {
+    block0:
+        v1.i256 = call %example 0.i256;
+        evm_stop;
+}
+
+
+object @Contract {
+    section runtime {
+        entry %__fe_sonatina_entry;
+        include %example;
+        include %read_selector;
+    }
+}

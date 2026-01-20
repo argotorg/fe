@@ -1,0 +1,97 @@
+---
+source: crates/codegen/tests/sonatina_ir.rs
+assertion_line: 65
+expression: output
+input_file: crates/codegen/tests/fixtures/storage_map.fe
+---
+target = evm-ethereum-osaka
+
+func public %get_balance__StorPtr_StorageMap_u256__u256__0____4a2331212cb04e60(v0.i256, v1.i256) -> i256 {
+    block0:
+        v2.i256 = call %storagemap_k__v__const_salt__u256__get__u256_u256_0__6a346ad3c930d971 v1 v0;
+        return v2;
+}
+
+func public %set_balance__StorPtr_StorageMap_u256__u256__0____4a2331212cb04e60(v0.i256, v1.i256, v2.i256) {
+    block0:
+        call %storagemap_k__v__const_salt__u256__set__u256_u256_0__6a346ad3c930d971 v2 v0 v1;
+        return;
+}
+
+func public %storagemap_k__v__const_salt__u256__get__u256_u256_0__6a346ad3c930d971(v0.i256, v1.i256) -> i256 {
+    block0:
+        v3.i256 = call %storagemap_get_word_with_salt__u256__3271ca15373d4483 v1 0.i256;
+        v4.i256 = call %u256_wordrepr_from_word v3;
+        return v4;
+}
+
+func public %storagemap_k__v__const_salt__u256__set__u256_u256_0__6a346ad3c930d971(v0.i256, v1.i256, v2.i256) {
+    block0:
+        v3.i256 = call %u256_wordrepr_to_word v2;
+        call %storagemap_set_word_with_salt__u256__3271ca15373d4483 v1 0.i256 v3;
+        return;
+}
+
+func public %storagemap_get_word_with_salt__u256__3271ca15373d4483(v0.i256, v1.i256) -> i256 {
+    block0:
+        v2.i256 = call %storagemap_storage_slot_with_salt__u256__3271ca15373d4483 v0 v1;
+        v3.i256 = evm_sload v2;
+        return v3;
+}
+
+func public %u256_wordrepr_from_word(v0.i256) -> i256 {
+    block0:
+        return v0;
+}
+
+func public %u256_wordrepr_to_word(v0.i256) -> i256 {
+    block0:
+        return v0;
+}
+
+func public %storagemap_set_word_with_salt__u256__3271ca15373d4483(v0.i256, v1.i256, v2.i256) {
+    block0:
+        v3.i256 = call %storagemap_storage_slot_with_salt__u256__3271ca15373d4483 v0 v1;
+        evm_sstore v3 v2;
+        return;
+}
+
+func public %storagemap_storage_slot_with_salt__u256__3271ca15373d4483(v0.i256, v1.i256) -> i256 {
+    block0:
+        v3.i256 = mload 64.i256 i256;
+        v4.i256 = call %u256_storagekey_write_key v3 v0;
+        v5.i256 = add v3 v4;
+        mstore v5 v1 i256;
+        v7.i256 = add v4 32.i256;
+        v8.i256 = evm_keccak256 v3 v7;
+        return v8;
+}
+
+func public %u256_storagekey_write_key(v0.i256, v1.i256) -> i256 {
+    block0:
+        mstore v0 v1 i256;
+        return 32.i256;
+}
+
+func public %__fe_sonatina_entry() {
+    block0:
+        v1.i256 = call %get_balance__StorPtr_StorageMap_u256__u256__0____4a2331212cb04e60 0.i256 0.i256;
+        evm_stop;
+}
+
+
+object @Contract {
+    section runtime {
+        entry %__fe_sonatina_entry;
+        include %get_balance__StorPtr_StorageMap_u256__u256__0____4a2331212cb04e60;
+        include %set_balance__StorPtr_StorageMap_u256__u256__0____4a2331212cb04e60;
+        include %storagemap_k__v__const_salt__u256__get__u256_u256_0__6a346ad3c930d971;
+        include %storagemap_k__v__const_salt__u256__set__u256_u256_0__6a346ad3c930d971;
+        include %storagemap_get_word_with_salt__u256__3271ca15373d4483;
+        include %u256_wordrepr_from_word;
+        include %u256_wordrepr_to_word;
+        include %storagemap_set_word_with_salt__u256__3271ca15373d4483;
+        include %storagemap_storage_slot_with_salt__u256__3271ca15373d4483;
+        include %u256_storagekey_write_key;
+    }
+}

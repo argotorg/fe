@@ -19,11 +19,12 @@ use sonatina_ir::{
     BlockId, I256, Module, Signature, Type, ValueId,
     builder::{ModuleBuilder, Variable},
     func_cursor::InstInserter,
+    ir_writer::ModuleWriter,
     inst::{
         arith::{Add, Mul, Neg, Shl, Shr, Sub},
         cast::{Sext, Trunc, Zext},
         cmp::{Eq, Gt, IsZero, Lt, Ne},
-        control_flow::{Br, BrTable, Call, Jump, Return},
+        control_flow::{Br, Call, Jump, Return},
         data::{Mload, Mstore},
         evm::{
             EvmCalldataCopy, EvmCalldataLoad, EvmCalldataSize,
@@ -110,6 +111,19 @@ pub fn compile_module(
     lowerer.lower()?;
 
     Ok(lowerer.finish())
+}
+
+/// Compiles a Fe module to Sonatina IR and returns the human-readable text representation.
+///
+/// This is useful for snapshot testing and debugging the IR output.
+pub fn emit_module_sonatina_ir(
+    db: &DriverDataBase,
+    top_mod: TopLevelMod<'_>,
+) -> Result<String, LowerError> {
+    let layout = layout::EVM_LAYOUT;
+    let module = compile_module(db, top_mod, layout)?;
+    let mut writer = ModuleWriter::new(&module);
+    Ok(writer.dump_string())
 }
 
 /// Lowers an entire MIR module to Sonatina IR.
@@ -1435,13 +1449,40 @@ fn lower_terminator<'db, C: sonatina_ir::func_cursor::FuncCursor>(
             let discr_val =
                 lower_value(fb, db, target_layout, *discr, body, value_map, local_vars, is)?;
             let default_block = block_map[default];
-            let mut table = Vec::with_capacity(targets.len());
+
+            // NOTE: Sonatina's current EVM backend `BrTable` lowering is broken (it does not
+            // compare against the scrutinee). Lower to a chain of `Eq` + `Br` instead.
+            if targets.is_empty() {
+                fb.insert_inst_no_result(Jump::new(is, default_block));
+                return Ok(());
+            }
+
+            let mut cases = Vec::with_capacity(targets.len());
             for target in targets {
                 let value = fb.make_imm_value(biguint_to_i256(&target.value.as_biguint()));
                 let dest = block_map[&target.block];
-                table.push((value, dest));
+                cases.push((value, dest));
             }
-            fb.insert_inst_no_result(BrTable::new(is, discr_val, Some(default_block), table));
+
+            // Create additional compare blocks as needed.
+            let mut compare_blocks = Vec::with_capacity(cases.len().saturating_sub(1));
+            for _ in 0..cases.len().saturating_sub(1) {
+                compare_blocks.push(fb.append_block());
+            }
+
+            for (case_idx, (case_value, case_dest)) in cases.into_iter().enumerate() {
+                if case_idx > 0 {
+                    fb.switch_to_block(compare_blocks[case_idx - 1]);
+                }
+
+                let else_dest = if case_idx + 1 < compare_blocks.len() + 1 {
+                    compare_blocks[case_idx]
+                } else {
+                    default_block
+                };
+                let cond = fb.insert_inst(Eq::new(is, discr_val, case_value), Type::I256);
+                fb.insert_inst_no_result(Br::new(is, cond, case_dest, else_dest));
+            }
         }
         Terminator::TerminatingCall(call) => match call {
             mir::TerminatingCall::Call(call) => {
@@ -1834,16 +1875,37 @@ fn deep_copy_enum_from_places<'db, C: sonatina_ir::func_cursor::FuncCursor>(
     let cont_block = fb.append_block();
 
     let variants = adt_def.fields(db);
-    let mut table: Vec<(ValueId, BlockId)> = Vec::with_capacity(variants.len());
+    let mut cases: Vec<(ValueId, BlockId)> = Vec::with_capacity(variants.len());
     let mut case_blocks = Vec::with_capacity(variants.len());
     for (idx, _) in variants.iter().enumerate() {
         let case_block = fb.append_block();
         case_blocks.push(case_block);
-        table.push((fb.make_imm_value(I256::from(idx as u64)), case_block));
+        cases.push((fb.make_imm_value(I256::from(idx as u64)), case_block));
     }
 
     fb.switch_to_block(origin_block);
-    fb.insert_inst_no_result(BrTable::new(is, discr, Some(cont_block), table));
+    if cases.is_empty() {
+        fb.insert_inst_no_result(Jump::new(is, cont_block));
+    } else {
+        let mut compare_blocks = Vec::with_capacity(cases.len().saturating_sub(1));
+        for _ in 0..cases.len().saturating_sub(1) {
+            compare_blocks.push(fb.append_block());
+        }
+
+        for (case_idx, (case_value, case_dest)) in cases.into_iter().enumerate() {
+            if case_idx > 0 {
+                fb.switch_to_block(compare_blocks[case_idx - 1]);
+            }
+
+            let else_dest = if case_idx + 1 < compare_blocks.len() + 1 {
+                compare_blocks[case_idx]
+            } else {
+                cont_block
+            };
+            let cond = fb.insert_inst(Eq::new(is, discr, case_value), Type::I256);
+            fb.insert_inst_no_result(Br::new(is, cond, case_dest, else_dest));
+        }
+    }
 
     for (idx, case_block) in case_blocks.into_iter().enumerate() {
         fb.switch_to_block(case_block);

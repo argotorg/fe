@@ -1,0 +1,153 @@
+---
+source: crates/codegen/tests/sonatina_ir.rs
+assertion_line: 65
+expression: output
+input_file: crates/codegen/tests/fixtures/name_collisions.fe
+---
+target = evm-ethereum-osaka
+
+func public %flattened_fn() -> i256 {
+    block0:
+        return 2.i256;
+}
+
+func public %test_module_qualifier_flatten_collision() -> i256 {
+    block0:
+        v0.i256 = call %flattened_fn;
+        v1.i256 = call %flattened_fn;
+        v2.i256 = add v0 v1;
+        return v2;
+}
+
+func public %test_generic_type_collision() -> i256 {
+    block0:
+        v2.i256 = call %generic_fn__S__33f7c3322e562590 1.i256;
+        v3.i256 = call %generic_fn__S__33f7c3322e562590 2.i256;
+        return 42.i256;
+}
+
+func public %widget_process(v0.i256) -> i256 {
+    block0:
+        v2.i256 = mul v0 3.i256;
+        return v2;
+}
+
+func public %test_impl_method_collision() -> i256 {
+    block0:
+        v2.i256 = call %widget_process 10.i256;
+        v3.i256 = call %widget_process 20.i256;
+        return v2;
+}
+
+func public %multitraitimpl_trait_same_method(v0.i256) -> i256 {
+    block0:
+        v2.i256 = add v0 2.i256;
+        return v2;
+}
+
+func public %test_trait_method_collision() -> i256 {
+    block0:
+        v1.i256 = call %multitraitimpl_trait_same_method 100.i256;
+        v2.i256 = call %multitraitimpl_trait_same_method 100.i256;
+        v3.i256 = add v1 v2;
+        return v3;
+}
+
+func public %param_local_collision(v0.i256) -> i256 {
+    block0:
+        v2.i256 = add v0 1.i256;
+        v4.i256 = add v2 2.i256;
+        return v4;
+}
+
+func public %test_param_local_collision() -> i256 {
+    block0:
+        v1.i256 = call %param_local_collision 10.i256;
+        return v1;
+}
+
+func public %__u32_as_u256(v0.i256) -> i256 {
+    block0:
+        return 999.i256;
+}
+
+func public %test_cast_shim_collision() -> i256 {
+    block0:
+        v1.i256 = call %__u32_as_u256 42.i256;
+        return v1;
+}
+
+func public %ret_param_collision(v0.i256) -> i256 {
+    block0:
+        v2.i256 = add v0 1.i256;
+        return v2;
+}
+
+func public %test_ret_param_collision() -> i256 {
+    block0:
+        v1.i256 = call %ret_param_collision 10.i256;
+        return v1;
+}
+
+func public %add() -> i256 {
+    block0:
+        return 123.i256;
+}
+
+func public %test_yul_reserved_fn_collision() -> i256 {
+    block0:
+        v0.i256 = call %add;
+        return v0;
+}
+
+func public %main() -> i256 {
+    block0:
+        v0.i256 = call %test_module_qualifier_flatten_collision;
+        v1.i256 = call %test_generic_type_collision;
+        v2.i256 = call %test_impl_method_collision;
+        v3.i256 = call %test_trait_method_collision;
+        v4.i256 = call %test_param_local_collision;
+        v5.i256 = call %test_cast_shim_collision;
+        v6.i256 = call %test_ret_param_collision;
+        v7.i256 = call %test_yul_reserved_fn_collision;
+        return 0.i256;
+}
+
+func public %generic_fn__S__33f7c3322e562590(v0.i256) -> i256 {
+    block0:
+        return v0;
+}
+
+func public %__fe_sonatina_entry() {
+    block0:
+        v0.i256 = call %flattened_fn;
+        evm_stop;
+}
+
+
+object @Contract {
+    section runtime {
+        entry %__fe_sonatina_entry;
+        include %flattened_fn;
+        include %flattened_fn;
+        include %test_module_qualifier_flatten_collision;
+        include %test_generic_type_collision;
+        include %widget_process;
+        include %widget_process;
+        include %test_impl_method_collision;
+        include %multitraitimpl_trait_same_method;
+        include %multitraitimpl_trait_same_method;
+        include %test_trait_method_collision;
+        include %param_local_collision;
+        include %test_param_local_collision;
+        include %__u32_as_u256;
+        include %test_cast_shim_collision;
+        include %ret_param_collision;
+        include %test_ret_param_collision;
+        include %add;
+        include %test_yul_reserved_fn_collision;
+        include %main;
+        include %generic_fn__S__33f7c3322e562590;
+        include %generic_fn__S__33f7c3322e562590;
+    }
+}

@@ -1,0 +1,89 @@
+---
+source: crates/codegen/tests/sonatina_ir.rs
+assertion_line: 74
+expression: output
+input_file: crates/codegen/tests/fixtures/match_wildcard.fe
+---
+target = evm-ethereum-osaka
+
+func public %match_with_wildcard(v0.i256) -> i256 {
+    block0:
+        jump block4;
+
+    block1:
+        jump block2;
+
+    block2:
+        v3.i256 = phi (1.i256 block1) (0.i256 block3);
+        return v3;
+
+    block3:
+        jump block2;
+
+    block4:
+        v5.i256 = mload v0 i256;
+        v6.i256 = eq v5 0.i256;
+        br v6 block1 block3;
+}
+
+func public %wildcard_not_last(v0.i256) -> i256 {
+    block0:
+        jump block4;
+
+    block1:
+        jump block2;
+
+    block2:
+        v3.i256 = phi (10.i256 block1) (99.i256 block3);
+        return v3;
+
+    block3:
+        jump block2;
+
+    block4:
+        v6.i256 = eq v0 0.i256;
+        br v6 block1 block3;
+}
+
+func public %multiple_before_wildcard(v0.i256) -> i256 {
+    block0:
+        jump block5;
+
+    block1:
+        jump block2;
+
+    block2:
+        v3.i256 = phi (1.i256 block1) (2.i256 block3) (3.i256 block4);
+        return v3;
+
+    block3:
+        jump block2;
+
+    block4:
+        jump block2;
+
+    block5:
+        v7.i256 = mload v0 i256;
+        v8.i256 = eq v7 0.i256;
+        br v8 block1 block6;
+
+    block6:
+        v9.i256 = eq v7 1.i256;
+        br v9 block3 block4;
+}
+
+func public %__fe_sonatina_entry() {
+    block0:
+        v1.i256 = call %match_with_wildcard 0.i256;
+        evm_stop;
+}
+
+
+object @Contract {
+    section runtime {
+        entry %__fe_sonatina_entry;
+        include %match_with_wildcard;
+        include %wildcard_not_last;
+        include %multiple_before_wildcard;
+    }
+}

@@ -1,0 +1,37 @@
+---
+source: crates/codegen/tests/sonatina_ir.rs
+assertion_line: 65
+expression: output
+input_file: crates/codegen/tests/fixtures/struct_init.fe
+---
+target = evm-ethereum-osaka
+
+func public %make_dummy() -> i256 {
+    block0:
+        v1.i256 = mload 64.i256 i256;
+        v2.i256 = is_zero v1;
+        v4.i256 = mul v2 128.i256;
+        v5.i256 = or v1 v4;
+        v7.i256 = add v5 40.i256;
+        mstore 64.i256 v7 i256;
+        v9.i64 = trunc 42.i256 i64;
+        v10.i256 = zext v9 i256;
+        mstore v5 v10 i256;
+        v13.i256 = add v5 8.i256;
+        mstore v13 99.i256 i256;
+        return v5;
+}
+
+func public %__fe_sonatina_entry() {
+    block0:
+        v0.i256 = call %make_dummy;
+        evm_stop;
+}
+
+
+object @Contract {
+    section runtime {
+        entry %__fe_sonatina_entry;
+        include %make_dummy;
+    }
+}

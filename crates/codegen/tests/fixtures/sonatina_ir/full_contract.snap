@@ -1,0 +1,101 @@
+---
+source: crates/codegen/tests/sonatina_ir.rs
+assertion_line: 65
+expression: output
+input_file: crates/codegen/tests/fixtures/full_contract.fe
+---
+target = evm-ethereum-osaka
+
+func public %point_area(v0.i256) -> i256 {
+    block0:
+        v1.i256 = mload v0 i256;
+        v3.i256 = add v0 32.i256;
+        v4.i256 = mload v3 i256;
+        v5.i256 = mul v1 v4;
+        return v5;
+}
+
+func public %square_area(v0.i256) -> i256 {
+    block0:
+        v1.i256 = mul v0 v0;
+        return v1;
+}
+
+func public %abi_encode(v0.i256, v1.i256) {
+    block0:
+        mstore 0.i256 v0 i256;
+        evm_return 0.i256 32.i256;
+}
+
+func public %dispatch__StorPtr_Evm___207f35a85ac4062e(v0.i256) {
+    block0:
+        v2.i256 = evm_calldata_load 0.i256;
+        v4.i256 = shr 224.i256 v2;
+        v6.i256 = eq v4 151146943.i256;
+        br v6 block1 block2;
+
+    block1:
+        v8.i256 = evm_calldata_load 4.i256;
+        v10.i256 = evm_calldata_load 36.i256;
+        v12.i256 = mload 64.i256 i256;
+        v13.i256 = is_zero v12;
+        v15.i256 = mul v13 128.i256;
+        v16.i256 = or v12 v15;
+        v17.i256 = add v16 64.i256;
+        mstore 64.i256 v17 i256;
+        mstore v16 v8 i256;
+        v19.i256 = add v16 32.i256;
+        mstore v19 v10 i256;
+        v20.i256 = mload v16 i256;
+        v22.i256 = add v20 1.i256;
+        mstore v16 v22 i256;
+        v23.i256 = add v16 32.i256;
+        v24.i256 = mload v23 i256;
+        v26.i256 = add v24 2.i256;
+        v27.i256 = add v16 32.i256;
+        mstore v27 v26 i256;
+        v28.i256 = call %point_area_mem v16;
+        call %abi_encode v28 0.i256;
+        evm_invalid;
+
+    block2:
+        v31.i256 = eq v4 2066295049.i256;
+        br v31 block3 block4;
+
+    block3:
+        v32.i256 = evm_calldata_load 4.i256;
+        v34.i256 = add v32 3.i256;
+        v35.i256 = call %square_area v34;
+        call %abi_encode v35 0.i256;
+        evm_invalid;
+
+    block4:
+        evm_return 0.i256 0.i256;
+}
+
+func public %point_area_mem(v0.i256) -> i256 {
+    block0:
+        v1.i256 = mload v0 i256;
+        v3.i256 = add v0 32.i256;
+        v4.i256 = mload v3 i256;
+        v5.i256 = mul v1 v4;
+        return v5;
+}
+
+func public %__fe_sonatina_entry() {
+    block0:
+        call %dispatch__StorPtr_Evm___207f35a85ac4062e 0.i256;
+        evm_stop;
+}
+
+
+object @Contract {
+    section runtime {
+        entry %__fe_sonatina_entry;
+        include %dispatch__StorPtr_Evm___207f35a85ac4062e;
+        include %point_area;
+        include %square_area;
+        include %abi_encode;
+        include %point_area_mem;
+    }
+}

@@ -1,0 +1,27 @@
+---
+source: crates/codegen/tests/sonatina_ir.rs
+assertion_line: 65
+expression: output
+input_file: crates/codegen/tests/fixtures/revert.fe
+---
+target = evm-ethereum-osaka
+
+func public %fail(v0.i256) {
+    block0:
+        mstore 0.i256 42.i256 i256;
+        evm_revert 0.i256 32.i256;
+}
+
+func public %__fe_sonatina_entry() {
+    block0:
+        call %fail 0.i256;
+        evm_stop;
+}
+
+
+object @Contract {
+    section runtime {
+        entry %__fe_sonatina_entry;
+        include %fail;
+    }
+}
