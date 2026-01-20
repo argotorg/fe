@@ -1,6 +1,5 @@
 ---
 source: crates/codegen/tests/sonatina_ir.rs
-assertion_line: 65
 expression: output
 input_file: crates/codegen/tests/fixtures/newtype_field_mut_method_call.fe
 ---
@@ -24,34 +23,24 @@ func public %wrapcounter_bump(v0.i256) {
 
 func public %newtype_field_mut_method_call(v0.i256) -> i256 {
     block0:
-        v2.i256 = mload 64.i256 i256;
-        v3.i256 = is_zero v2;
-        v5.i256 = mul v3 128.i256;
-        v6.i256 = or v2 v5;
-        v7.i256 = add v6 64.i256;
-        mstore 64.i256 v7 i256;
-        mstore v6 v0 i256;
-        v10.i256 = add v6 32.i256;
-        mstore v10 0.i256 i256;
-        v11.i256 = mload 64.i256 i256;
-        v12.i256 = is_zero v11;
-        v13.i256 = mul v12 128.i256;
-        v14.i256 = or v11 v13;
-        v16.i256 = add v14 96.i256;
-        mstore 64.i256 v16 i256;
-        mstore v14 0.i256 i256;
-        v17.i256 = mload v6 i256;
-        v18.i256 = add v14 32.i256;
-        mstore v18 v17 i256;
-        v19.i256 = add v6 32.i256;
-        v20.i256 = mload v19 i256;
-        v21.i256 = add v14 64.i256;
-        mstore v21 v20 i256;
-        v22.i256 = add v14 32.i256;
-        call %wrapcounter_bump_mem v22;
-        v23.i256 = add v14 32.i256;
-        v24.i256 = mload v23 i256;
-        return v24;
+        v2.i256 = evm_malloc 64.i256;
+        mstore v2 v0 i256;
+        v5.i256 = add v2 32.i256;
+        mstore v5 0.i256 i256;
+        v7.i256 = evm_malloc 96.i256;
+        mstore v7 0.i256 i256;
+        v8.i256 = mload v2 i256;
+        v9.i256 = add v7 32.i256;
+        mstore v9 v8 i256;
+        v10.i256 = add v2 32.i256;
+        v11.i256 = mload v10 i256;
+        v12.i256 = add v7 64.i256;
+        mstore v12 v11 i256;
+        v13.i256 = add v7 32.i256;
+        call %wrapcounter_bump_mem v13;
+        v14.i256 = add v7 32.i256;
+        v15.i256 = mload v14 i256;
+        return v15;
 }
 
 func public %wrapcounter_bump_mem(v0.i256) {

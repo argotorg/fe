@@ -1,6 +1,5 @@
 ---
 source: crates/codegen/tests/sonatina_ir.rs
-assertion_line: 74
 expression: output
 input_file: crates/codegen/tests/fixtures/full_contract.fe
 ---
@@ -37,36 +36,31 @@ func public %dispatch__StorPtr_Evm___207f35a85ac4062e() {
     block1:
         v7.i256 = evm_calldata_load 4.i256;
         v9.i256 = evm_calldata_load 36.i256;
-        v11.i256 = mload 64.i256 i256;
-        v12.i256 = is_zero v11;
-        v14.i256 = mul v12 128.i256;
-        v15.i256 = or v11 v14;
-        v16.i256 = add v15 64.i256;
-        mstore 64.i256 v16 i256;
-        mstore v15 v7 i256;
-        v18.i256 = add v15 32.i256;
-        mstore v18 v9 i256;
-        v19.i256 = mload v15 i256;
-        v21.i256 = add v19 1.i256;
-        mstore v15 v21 i256;
-        v22.i256 = add v15 32.i256;
-        v23.i256 = mload v22 i256;
-        v25.i256 = add v23 2.i256;
-        v26.i256 = add v15 32.i256;
-        mstore v26 v25 i256;
-        v27.i256 = call %point_area_mem v15;
-        call %abi_encode v27 0.i256;
+        v11.i256 = evm_malloc 64.i256;
+        mstore v11 v7 i256;
+        v13.i256 = add v11 32.i256;
+        mstore v13 v9 i256;
+        v14.i256 = mload v11 i256;
+        v16.i256 = add v14 1.i256;
+        mstore v11 v16 i256;
+        v17.i256 = add v11 32.i256;
+        v18.i256 = mload v17 i256;
+        v20.i256 = add v18 2.i256;
+        v21.i256 = add v11 32.i256;
+        mstore v21 v20 i256;
+        v22.i256 = call %point_area_mem v11;
+        call %abi_encode v22 0.i256;
         evm_invalid;
 
     block2:
-        v30.i256 = eq v3 2066295049.i256;
-        br v30 block3 block4;
+        v25.i256 = eq v3 2066295049.i256;
+        br v25 block3 block4;
 
     block3:
-        v31.i256 = evm_calldata_load 4.i256;
-        v33.i256 = add v31 3.i256;
-        v34.i256 = call %square_area v33;
-        call %abi_encode v34 0.i256;
+        v26.i256 = evm_calldata_load 4.i256;
+        v28.i256 = add v26 3.i256;
+        v29.i256 = call %square_area v28;
+        call %abi_encode v29 0.i256;
         evm_invalid;
 
     block4:
