@@ -139,6 +139,9 @@ struct ModuleLowerer<'db, 'a> {
     name_map: FxHashMap<String, FuncRef>,
     /// Maps function symbol names to whether they return a value.
     returns_value_map: FxHashMap<String, bool>,
+    /// Index of the entry function (if any). Entry functions emit `evm_stop`
+    /// instead of internal `Return` since they are executed directly by the EVM.
+    entry_func_idx: Option<usize>,
 }
 
 impl<'db, 'a> ModuleLowerer<'db, 'a> {
@@ -178,6 +181,7 @@ impl<'db, 'a> ModuleLowerer<'db, 'a> {
             func_map: FxHashMap::default(),
             name_map: FxHashMap::default(),
             returns_value_map: FxHashMap::default(),
+            entry_func_idx: None,
         }
     }
 
@@ -222,17 +226,33 @@ impl<'db, 'a> ModuleLowerer<'db, 'a> {
 
     /// Lower function signatures.
     fn lower_signature(&self, func: &mir::MirFunction<'db>) -> Result<Signature, LowerError> {
+        use mir::ir::{ContractFunctionKind, MirFunctionOrigin, SyntheticId};
+
         let name = &func.symbol_name;
         let linkage = sonatina_ir::Linkage::Public; // TODO: proper linkage
 
-        // Convert parameter types - all EVM parameters are 256-bit words
-        // Include both regular params and effect params (e.g., storage/context bindings)
+        // Contract runtime entrypoints are executed directly by the EVM with an empty stack.
+        // Even though MIR models them as taking effect args (e.g. `StorPtr<Evm>`), we cannot
+        // expose those as real EVM stack parameters at entry.
+        let is_contract_runtime_entry = func
+            .contract_function
+            .as_ref()
+            .is_some_and(|cf| cf.kind == ContractFunctionKind::Runtime)
+            || matches!(
+                func.origin,
+                MirFunctionOrigin::Synthetic(SyntheticId::ContractRuntimeEntrypoint(_))
+            );
+
+        // Convert parameter types - all EVM parameters are 256-bit words.
+        // Entry functions have no parameters since the EVM starts with an empty stack.
         let mut params = Vec::new();
-        for _ in func.body.param_locals.iter() {
-            params.push(types::word_type());
-        }
-        for _ in func.body.effect_param_locals.iter() {
-            params.push(types::word_type());
+        if !is_contract_runtime_entry {
+            for _ in func.body.param_locals.iter() {
+                params.push(types::word_type());
+            }
+            for _ in func.body.effect_param_locals.iter() {
+                params.push(types::word_type());
+            }
         }
 
         // Convert return type - use Unit if function doesn't return a value
@@ -251,7 +271,8 @@ impl<'db, 'a> ModuleLowerer<'db, 'a> {
             let Some(&func_ref) = self.func_map.get(&idx) else {
                 continue;
             };
-            self.lower_function(func_ref, func)?;
+            let is_entry = self.entry_func_idx == Some(idx);
+            self.lower_function(func_ref, func, is_entry)?;
         }
         Ok(())
     }
@@ -261,18 +282,16 @@ impl<'db, 'a> ModuleLowerer<'db, 'a> {
     /// Objects define how code is organized for compilation. Each object
     /// has sections (like "runtime" and "init") that contain function entries.
     ///
-    /// TODO: Entry/object semantics need work:
-    /// 1. The entry function should use EvmStop/EvmReturn to halt execution,
-    ///    not internal Return which is for function call/return semantics.
-    /// 2. We currently return runtime section bytes, but BackendOutput::Bytecode
-    ///    is documented as "init code". Need to either generate proper init code
-    ///    (that deploys runtime) or clarify the documentation.
-    /// 3. Entry detection is naive (first non-empty symbol name).
+    /// For contract runtime entrypoints: The entry function emits `evm_stop` instead of
+    /// internal `Return` since contract dispatchers handle return data via `evm_return`.
+    ///
+    /// For simple test files (no explicit contract): A wrapper function calls the entry
+    /// and then does `evm_stop`, preserving internal function call semantics.
     fn create_objects(&mut self) -> Result<(), LowerError> {
         use mir::ir::{ContractFunctionKind, MirFunctionOrigin, SyntheticId};
 
-        // Prefer a contract runtime entrypoint when present.
-        let entry_func = self
+        // Check for an explicit contract runtime entrypoint.
+        let contract_runtime_entry = self
             .mir
             .functions
             .iter()
@@ -286,33 +305,47 @@ impl<'db, 'a> ModuleLowerer<'db, 'a> {
                         f.origin,
                         MirFunctionOrigin::Synthetic(SyntheticId::ContractRuntimeEntrypoint(_))
                     )
-            })
-            // Fallback to "first declared function".
-            .or_else(|| {
-                self.mir
-                    .functions
-                    .iter()
-                    .enumerate()
-                    .filter(|(idx, _)| self.func_map.contains_key(idx))
-                    .next()
             });
 
-        let Some((entry_idx, _entry_mir_func)) = entry_func else {
-            // No functions to compile - this is valid for empty modules
-            return Ok(());
+        // Fallback to first declared function for simple test files.
+        let fallback_entry = || {
+            self.mir
+                .functions
+                .iter()
+                .enumerate()
+                .filter(|(idx, _)| self.func_map.contains_key(idx))
+                .next()
         };
 
+        let (entry_idx, entry_mir_func, is_contract_runtime) =
+            if let Some((idx, func)) = contract_runtime_entry {
+                (idx, func, true)
+            } else if let Some((idx, func)) = fallback_entry() {
+                (idx, func, false)
+            } else {
+                // No functions to compile - this is valid for empty modules
+                return Ok(());
+            };
+
         let entry_ref = self.func_map[&entry_idx];
-        let entry_mir_func = &self.mir.functions[entry_idx];
 
-        // Create a wrapper entrypoint that halts with `STOP` instead of relying on internal
-        // `Return` (which is only valid for intra-module calls with a return PC).
-        let wrapper_ref = self.create_entry_wrapper(entry_ref, entry_mir_func)?;
+        // Only contract runtime entrypoints get direct entry treatment (evm_stop terminators).
+        // Simple test files use a wrapper to preserve internal function call semantics.
+        let (actual_entry, include_wrapped) = if is_contract_runtime {
+            // Contract runtime: emit evm_stop in the entry function itself.
+            self.entry_func_idx = Some(entry_idx);
+            (entry_ref, None)
+        } else {
+            // Simple test file: create a wrapper that calls the entry and then evm_stop.
+            let wrapper_ref = self.create_entry_wrapper(entry_ref, entry_mir_func)?;
+            (wrapper_ref, Some(entry_ref))
+        };
 
-        // Create runtime section with entry wrapper and all declared functions as includes.
-        // Note: we must include the wrapped entry function explicitly; Sonatina objects only
-        // compile functions referenced by directives.
-        let mut directives = vec![Directive::Entry(wrapper_ref), Directive::Include(entry_ref)];
+        // Create runtime section.
+        let mut directives = vec![Directive::Entry(actual_entry)];
+        if let Some(wrapped_func) = include_wrapped {
+            directives.push(Directive::Include(wrapped_func));
+        }
 
         // Include all other declared functions
         for (idx, _func) in self.mir.functions.iter().enumerate() {
@@ -343,6 +376,11 @@ impl<'db, 'a> ModuleLowerer<'db, 'a> {
         Ok(())
     }
 
+    /// Create a wrapper entrypoint for simple test files (non-contract modules).
+    ///
+    /// The wrapper calls the actual entry function and then halts with `evm_stop`.
+    /// This is needed because the entry function uses internal `Return` which requires
+    /// a return address on the stack (pushed by `Call`).
     fn create_entry_wrapper(
         &mut self,
         entry_ref: FuncRef,
@@ -371,9 +409,10 @@ impl<'db, 'a> ModuleLowerer<'db, 'a> {
         let entry_block = fb.append_block();
         fb.switch_to_block(entry_block);
 
-        // Pass zero for all arguments (regular + effect params). Runtime entrypoints
-        // generally ignore these "effect root" placeholders and use EVM intrinsics directly.
-        let argc = entry_mir_func.body.param_locals.len() + entry_mir_func.body.effect_param_locals.len();
+        // Pass zero for all arguments (regular + effect params). Test entry functions
+        // generally don't use effect params meaningfully.
+        let argc =
+            entry_mir_func.body.param_locals.len() + entry_mir_func.body.effect_param_locals.len();
         let mut args = Vec::with_capacity(argc);
         for _ in 0..argc {
             args.push(fb.make_imm_value(I256::zero()));
@@ -394,10 +433,14 @@ impl<'db, 'a> ModuleLowerer<'db, 'a> {
     }
 
     /// Lower a single function body.
+    ///
+    /// If `is_entry` is true, this is the entry function executed directly by the EVM.
+    /// Entry functions emit `evm_stop` instead of internal `Return` for their terminators.
     fn lower_function(
         &self,
         func_ref: FuncRef,
         func: &mir::MirFunction<'db>,
+        is_entry: bool,
     ) -> Result<(), LowerError> {
         let mut fb = self.builder.func_builder::<InstInserter>(func_ref);
         let is = self.isa.inst_set();
@@ -432,18 +475,35 @@ impl<'db, 'a> ModuleLowerer<'db, 'a> {
 
         // Map function arguments to parameter locals (regular params + effect params).
         fb.switch_to_block(_sonatina_entry);
-        let args = fb.args().to_vec();
-        let all_param_locals = func
+        let all_param_locals: Vec<_> = func
             .body
             .param_locals
             .iter()
-            .chain(func.body.effect_param_locals.iter());
-        for (i, &local_id) in all_param_locals.enumerate() {
-            let Some(&arg_val) = args.get(i) else { break };
-            let var = local_vars.get(&local_id).copied().ok_or_else(|| {
-                LowerError::Internal(format!("missing SSA variable for param local {local_id:?}"))
-            })?;
-            fb.def_var(var, arg_val);
+            .chain(func.body.effect_param_locals.iter())
+            .copied()
+            .collect();
+
+        if is_entry {
+            // Entry functions have no Sonatina parameters (EVM starts with empty stack).
+            // Initialize all param locals to zero - effect params are erased at runtime
+            // and regular params shouldn't exist for entry functions.
+            for local_id in all_param_locals {
+                let var = local_vars.get(&local_id).copied().ok_or_else(|| {
+                    LowerError::Internal(format!("missing SSA variable for param local {local_id:?}"))
+                })?;
+                let zero = fb.make_imm_value(I256::zero());
+                fb.def_var(var, zero);
+            }
+        } else {
+            // Non-entry functions: map actual arguments to param locals.
+            let args = fb.args().to_vec();
+            for (i, local_id) in all_param_locals.into_iter().enumerate() {
+                let Some(&arg_val) = args.get(i) else { break };
+                let var = local_vars.get(&local_id).copied().ok_or_else(|| {
+                    LowerError::Internal(format!("missing SSA variable for param local {local_id:?}"))
+                })?;
+                fb.def_var(var, arg_val);
+            }
         }
 
         // Lower each block
@@ -480,6 +540,7 @@ impl<'db, 'a> ModuleLowerer<'db, 'a> {
                 &local_vars,
                 &self.name_map,
                 is,
+                is_entry,
             )?;
         }
 
@@ -1406,6 +1467,9 @@ fn lower_place_address<'db, C: sonatina_ir::func_cursor::FuncCursor>(
 }
 
 /// Lower a block terminator.
+///
+/// If `is_entry` is true, `Return` terminators emit `evm_stop` instead of internal `Return`,
+/// since the entry function is executed directly by the EVM and must halt with an EVM opcode.
 fn lower_terminator<'db, C: sonatina_ir::func_cursor::FuncCursor>(
     fb: &mut sonatina_ir::builder::FunctionBuilder<C>,
     db: &'db DriverDataBase,
@@ -1417,17 +1481,26 @@ fn lower_terminator<'db, C: sonatina_ir::func_cursor::FuncCursor>(
     local_vars: &FxHashMap<mir::LocalId, Variable>,
     name_map: &FxHashMap<String, FuncRef>,
     is: &sonatina_ir::inst::evm::inst_set::EvmInstSet,
+    is_entry: bool,
 ) -> Result<(), LowerError> {
     use mir::Terminator;
 
     match term {
         Terminator::Return(ret_val) => {
-            let ret_sonatina = if let Some(v) = ret_val {
-                Some(lower_value(fb, db, target_layout, *v, body, value_map, local_vars, is)?)
+            if is_entry {
+                // Entry function: emit evm_stop to halt EVM execution.
+                // Any return value is ignored since the entry function should have
+                // already written return data via evm_return if needed.
+                fb.insert_inst_no_result(EvmStop::new(is));
             } else {
-                None
-            };
-            fb.insert_inst_no_result(Return::new(is, ret_sonatina));
+                // Non-entry function: emit internal Return for function call semantics.
+                let ret_sonatina = if let Some(v) = ret_val {
+                    Some(lower_value(fb, db, target_layout, *v, body, value_map, local_vars, is)?)
+                } else {
+                    None
+                };
+                fb.insert_inst_no_result(Return::new(is, ret_sonatina));
+            }
         }
         Terminator::Goto { target } => {
             let target_block = block_map[target];

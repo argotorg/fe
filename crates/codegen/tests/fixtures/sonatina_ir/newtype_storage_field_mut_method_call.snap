@@ -382,17 +382,10 @@ func public %cursor_i__fork_mem__CallData__b9ab8dc8a4b2f9e(v0.i256, v1.i256) -> 
         return v8;
 }
 
-func public %__fe_sonatina_entry() {
-    block0:
-        call %__NewtypeStorageFieldMutMethodCall_runtime;
-        evm_stop;
-}
-
 
 object @Contract {
     section runtime {
-        entry %__fe_sonatina_entry;
-        include %__NewtypeStorageFieldMutMethodCall_runtime;
+        entry %__NewtypeStorageFieldMutMethodCall_runtime;
         include %wrap_bump;
         include %__NewtypeStorageFieldMutMethodCall_recv_0_0;
         include %init_field__Evm_u256__5d0807bcb3704261;

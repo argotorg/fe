@@ -29,44 +29,44 @@ func public %mem_read(v0.i256) -> i256 {
         return v0;
 }
 
-func public %runtime__StorPtr_Evm___207f35a85ac4062e(v0.i256) {
+func public %runtime__StorPtr_Evm___207f35a85ac4062e() {
     block0:
-        v2.i256 = call %stor_ptr__Evm_Outer__31089a952466fa6f 0.i256 0.i256;
-        v3.i256 = evm_calldata_load 0.i256;
-        v5.i256 = shr 224.i256 v3;
+        v1.i256 = call %stor_ptr__Evm_Outer__31089a952466fa6f 0.i256 0.i256;
+        v2.i256 = evm_calldata_load 0.i256;
+        v4.i256 = shr 224.i256 v2;
         jump block5;
 
     block1:
-        v7.i256 = evm_calldata_load 4.i256;
-        call %write_inner__StorPtr_Outer___dab28b9da6c3e28 v7 v2;
-        call %abi_encode v7 0.i256;
+        v6.i256 = evm_calldata_load 4.i256;
+        call %write_inner__StorPtr_Outer___dab28b9da6c3e28 v6 v1;
+        call %abi_encode v6 0.i256;
         evm_invalid;
 
     block2:
-        v10.i256 = call %read_inner__StorPtr_Outer___dab28b9da6c3e28 v2;
-        call %abi_encode v10 0.i256;
+        v9.i256 = call %read_inner__StorPtr_Outer___dab28b9da6c3e28 v1;
+        call %abi_encode v9 0.i256;
         evm_invalid;
 
     block3:
-        v11.i256 = evm_calldata_load 4.i256;
-        v12.i256 = call %mem_read v11;
-        call %abi_encode v12 0.i256;
+        v10.i256 = evm_calldata_load 4.i256;
+        v11.i256 = call %mem_read v10;
+        call %abi_encode v11 0.i256;
         evm_invalid;
 
     block4:
         evm_return 0.i256 0.i256;
 
     block5:
-        v17.i256 = eq v5 3091856072.i256;
-        br v17 block1 block6;
+        v16.i256 = eq v4 3091856072.i256;
+        br v16 block1 block6;
 
     block6:
-        v18.i256 = eq v5 3513050253.i256;
-        br v18 block2 block7;
+        v17.i256 = eq v4 3513050253.i256;
+        br v17 block2 block7;
 
     block7:
-        v19.i256 = eq v5 2154770637.i256;
-        br v19 block3 block4;
+        v18.i256 = eq v4 2154770637.i256;
+        br v18 block3 block4;
 }
 
 func public %stor_ptr__Evm_Outer__31089a952466fa6f(v0.i256, v1.i256) -> i256 {
@@ -80,17 +80,10 @@ func public %storptr_t__effectref_from_raw__Outer__ffb1d3cc5087d727(v0.i256) -> 
         return v0;
 }
 
-func public %__fe_sonatina_entry() {
-    block0:
-        call %runtime__StorPtr_Evm___207f35a85ac4062e 0.i256;
-        evm_stop;
-}
-
 
 object @Contract {
     section runtime {
-        entry %__fe_sonatina_entry;
-        include %runtime__StorPtr_Evm___207f35a85ac4062e;
+        entry %runtime__StorPtr_Evm___207f35a85ac4062e;
         include %abi_encode;
         include %read_inner__StorPtr_Outer___dab28b9da6c3e28;
         include %write_inner__StorPtr_Outer___dab28b9da6c3e28;

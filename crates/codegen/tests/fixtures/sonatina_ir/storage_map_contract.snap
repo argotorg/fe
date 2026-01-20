@@ -54,45 +54,45 @@ func public %transfer__StorPtr_StorageMap_u256__u256__0____4a2331212cb04e60(v0.i
         return 0.i256;
 }
 
-func public %runtime__StorPtr_Evm___207f35a85ac4062e(v0.i256) {
+func public %runtime__StorPtr_Evm___207f35a85ac4062e() {
     block0:
         call %storagemap_k__v__const_salt__u256__new__u256_u256_0__6a346ad3c930d971;
         call %storagemap_k__v__const_salt__u256__new__u256_u256_1__3c02c0f2b86be0bb;
-        v2.i256 = evm_calldata_load 0.i256;
-        v4.i256 = shr 224.i256 v2;
+        v1.i256 = evm_calldata_load 0.i256;
+        v3.i256 = shr 224.i256 v1;
         jump block7;
 
     block1:
-        v6.i256 = evm_calldata_load 4.i256;
-        v7.i256 = call %get_balance__MemPtr_StorageMap_u256__u256__0____3cd7ace0c4584833 v6 0.i256;
-        call %abi_encode v7 0.i256;
+        v5.i256 = evm_calldata_load 4.i256;
+        v6.i256 = call %get_balance__MemPtr_StorageMap_u256__u256__0____3cd7ace0c4584833 v5 0.i256;
+        call %abi_encode v6 0.i256;
         evm_invalid;
 
     block2:
-        v8.i256 = evm_calldata_load 4.i256;
-        v10.i256 = evm_calldata_load 36.i256;
-        call %set_balance__MemPtr_StorageMap_u256__u256__0____3cd7ace0c4584833 v8 v10 0.i256;
+        v7.i256 = evm_calldata_load 4.i256;
+        v9.i256 = evm_calldata_load 36.i256;
+        call %set_balance__MemPtr_StorageMap_u256__u256__0____3cd7ace0c4584833 v7 v9 0.i256;
         call %abi_encode 0.i256 0.i256;
         evm_invalid;
 
     block3:
-        v11.i256 = evm_calldata_load 4.i256;
-        v12.i256 = evm_calldata_load 36.i256;
-        v14.i256 = evm_calldata_load 68.i256;
-        v15.i256 = call %transfer__MemPtr_StorageMap_u256__u256__0____3cd7ace0c4584833 v11 v12 v14 0.i256;
-        call %abi_encode v15 0.i256;
+        v10.i256 = evm_calldata_load 4.i256;
+        v11.i256 = evm_calldata_load 36.i256;
+        v13.i256 = evm_calldata_load 68.i256;
+        v14.i256 = call %transfer__MemPtr_StorageMap_u256__u256__0____3cd7ace0c4584833 v10 v11 v13 0.i256;
+        call %abi_encode v14 0.i256;
         evm_invalid;
 
     block4:
-        v16.i256 = evm_calldata_load 4.i256;
-        v17.i256 = call %get_allowance__MemPtr_StorageMap_u256__u256__1____e8f0bd5888eece94 v16 0.i256;
-        call %abi_encode v17 0.i256;
+        v15.i256 = evm_calldata_load 4.i256;
+        v16.i256 = call %get_allowance__MemPtr_StorageMap_u256__u256__1____e8f0bd5888eece94 v15 0.i256;
+        call %abi_encode v16 0.i256;
         evm_invalid;
 
     block5:
-        v18.i256 = evm_calldata_load 4.i256;
-        v19.i256 = evm_calldata_load 36.i256;
-        call %set_allowance__MemPtr_StorageMap_u256__u256__1____e8f0bd5888eece94 v18 v19 0.i256;
+        v17.i256 = evm_calldata_load 4.i256;
+        v18.i256 = evm_calldata_load 36.i256;
+        call %set_allowance__MemPtr_StorageMap_u256__u256__1____e8f0bd5888eece94 v17 v18 0.i256;
         call %abi_encode 0.i256 0.i256;
         evm_invalid;
 
@@ -100,24 +100,24 @@ func public %runtime__StorPtr_Evm___207f35a85ac4062e(v0.i256) {
         evm_return 0.i256 0.i256;
 
     block7:
-        v26.i256 = eq v4 2630350600.i256;
-        br v26 block1 block8;
+        v25.i256 = eq v3 2630350600.i256;
+        br v25 block1 block8;
 
     block8:
-        v27.i256 = eq v4 1246470123.i256;
-        br v27 block2 block9;
+        v26.i256 = eq v3 1246470123.i256;
+        br v26 block2 block9;
 
     block9:
-        v28.i256 = eq v4 2430412327.i256;
-        br v28 block3 block10;
+        v27.i256 = eq v3 2430412327.i256;
+        br v27 block3 block10;
 
     block10:
-        v29.i256 = eq v4 3378517838.i256;
-        br v29 block4 block11;
+        v28.i256 = eq v3 3378517838.i256;
+        br v28 block4 block11;
 
     block11:
-        v30.i256 = eq v4 197806145.i256;
-        br v30 block5 block6;
+        v29.i256 = eq v3 197806145.i256;
+        br v29 block5 block6;
 }
 
 func public %storagemap_k__v__const_salt__u256__get__u256_u256_0__6a346ad3c930d971(v0.i256, v1.i256) -> i256 {
@@ -241,17 +241,10 @@ func public %u256_storagekey_write_key(v0.i256, v1.i256) -> i256 {
         return 32.i256;
 }
 
-func public %__fe_sonatina_entry() {
-    block0:
-        call %runtime__StorPtr_Evm___207f35a85ac4062e 0.i256;
-        evm_stop;
-}
-
 
 object @Contract {
     section runtime {
-        entry %__fe_sonatina_entry;
-        include %runtime__StorPtr_Evm___207f35a85ac4062e;
+        entry %runtime__StorPtr_Evm___207f35a85ac4062e;
         include %abi_encode;
         include %get_balance__StorPtr_StorageMap_u256__u256__0____4a2331212cb04e60;
         include %set_balance__StorPtr_StorageMap_u256__u256__0____4a2331212cb04e60;
