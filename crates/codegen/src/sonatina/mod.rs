@@ -18,10 +18,10 @@ use sonatina_ir::{
     func_cursor::InstInserter,
     inst::{
         arith::{Add, Mul, Neg, Shl, Shr, Sub},
-        cmp::{Eq, IsZero, Sgt, Slt},
+        cmp::{Eq, Gt, IsZero, Lt},
         control_flow::{Br, Jump, Return},
         data::Mload,
-        evm::{EvmSdiv, EvmSmod},
+        evm::{EvmExp, EvmUdiv, EvmUmod},
         logic::{And, Not, Or, Xor},
     },
     isa::{Isa, evm::Evm},
@@ -71,7 +71,7 @@ fn create_evm_isa() -> Evm {
     let triple = TargetTriple::new(
         Architecture::Evm,
         Vendor::Ethereum,
-        OperatingSystem::Evm(EvmVersion::Cancun),
+        OperatingSystem::Evm(EvmVersion::Osaka),
     );
     Evm::new(triple)
 }
@@ -247,6 +247,7 @@ impl<'db, 'a> ModuleLowerer<'db, 'a> {
                 &block_map,
                 &func.body,
                 &mut value_map,
+                &mut local_map,
                 is,
             )?;
         }
@@ -326,18 +327,12 @@ fn lower_rvalue<'db, C: sonatina_ir::func_cursor::FuncCursor>(
             lower_intrinsic(fb, *op, args, body, value_map, local_map, is)
         }
         Rvalue::Load { place } => {
-            // For now, simple load from base value
+            // Load from memory address.
+            // TODO: handle address spaces (storage, calldata) and projections.
             let base = lower_value(fb, place.base, body, value_map, local_map, is)?;
-            // TODO: handle projections properly
-            if place.projection.is_empty() {
-                // Just return the base value if no projection
-                Ok(Some(base))
-            } else {
-                // Load from memory address
-                let load = Mload::new(is, base, Type::I256);
-                let result = fb.insert_inst(load, Type::I256);
-                Ok(Some(result))
-            }
+            let load = Mload::new(is, base, Type::I256);
+            let result = fb.insert_inst(load, Type::I256);
+            Ok(Some(result))
         }
         Rvalue::Alloc { .. } => {
             // TODO: implement memory allocation
@@ -450,7 +445,7 @@ fn lower_unary_op<C: sonatina_ir::func_cursor::FuncCursor>(
     match op {
         UnOp::Not => {
             // Logical not: iszero
-            let result = fb.insert_inst(IsZero::new(is, inner), Type::I1);
+            let result = fb.insert_inst(IsZero::new(is, inner), Type::I256);
             Ok(result)
         }
         UnOp::Minus => {
@@ -501,14 +496,12 @@ fn lower_arith_op<C: sonatina_ir::func_cursor::FuncCursor>(
         ArithBinOp::Add => fb.insert_inst(Add::new(is, lhs, rhs), Type::I256),
         ArithBinOp::Sub => fb.insert_inst(Sub::new(is, lhs, rhs), Type::I256),
         ArithBinOp::Mul => fb.insert_inst(Mul::new(is, lhs, rhs), Type::I256),
-        ArithBinOp::Div => fb.insert_inst(EvmSdiv::new(is, lhs, rhs), Type::I256),
-        ArithBinOp::Rem => fb.insert_inst(EvmSmod::new(is, lhs, rhs), Type::I256),
-        ArithBinOp::Pow => {
-            // TODO: use EvmExp
-            return Err(LowerError::Unsupported("exponentiation".to_string()));
-        }
-        ArithBinOp::LShift => fb.insert_inst(Shl::new(is, lhs, rhs), Type::I256),
-        ArithBinOp::RShift => fb.insert_inst(Shr::new(is, lhs, rhs), Type::I256),
+        ArithBinOp::Div => fb.insert_inst(EvmUdiv::new(is, lhs, rhs), Type::I256),
+        ArithBinOp::Rem => fb.insert_inst(EvmUmod::new(is, lhs, rhs), Type::I256),
+        ArithBinOp::Pow => fb.insert_inst(EvmExp::new(is, lhs, rhs), Type::I256),
+        // Shl/Shr take (bits, value).
+        ArithBinOp::LShift => fb.insert_inst(Shl::new(is, rhs, lhs), Type::I256),
+        ArithBinOp::RShift => fb.insert_inst(Shr::new(is, rhs, lhs), Type::I256),
         ArithBinOp::BitOr => fb.insert_inst(Or::new(is, lhs, rhs), Type::I256),
         ArithBinOp::BitXor => fb.insert_inst(Xor::new(is, lhs, rhs), Type::I256),
         ArithBinOp::BitAnd => fb.insert_inst(And::new(is, lhs, rhs), Type::I256),
@@ -529,23 +522,23 @@ fn lower_comp_op<C: sonatina_ir::func_cursor::FuncCursor>(
     is: &sonatina_ir::inst::evm::inst_set::EvmInstSet,
 ) -> Result<ValueId, LowerError> {
     let result = match op {
-        CompBinOp::Eq => fb.insert_inst(Eq::new(is, lhs, rhs), Type::I1),
+        CompBinOp::Eq => fb.insert_inst(Eq::new(is, lhs, rhs), Type::I256),
         CompBinOp::NotEq => {
             // neq = iszero(eq(lhs, rhs))
-            let eq_result = fb.insert_inst(Eq::new(is, lhs, rhs), Type::I1);
-            fb.insert_inst(IsZero::new(is, eq_result), Type::I1)
+            let eq_result = fb.insert_inst(Eq::new(is, lhs, rhs), Type::I256);
+            fb.insert_inst(IsZero::new(is, eq_result), Type::I256)
         }
-        CompBinOp::Lt => fb.insert_inst(Slt::new(is, lhs, rhs), Type::I1),
+        CompBinOp::Lt => fb.insert_inst(Lt::new(is, lhs, rhs), Type::I256),
         CompBinOp::LtEq => {
             // lhs <= rhs  <==>  !(lhs > rhs)
-            let gt_result = fb.insert_inst(Sgt::new(is, lhs, rhs), Type::I1);
-            fb.insert_inst(IsZero::new(is, gt_result), Type::I1)
+            let gt_result = fb.insert_inst(Gt::new(is, lhs, rhs), Type::I256);
+            fb.insert_inst(IsZero::new(is, gt_result), Type::I256)
         }
-        CompBinOp::Gt => fb.insert_inst(Sgt::new(is, lhs, rhs), Type::I1),
+        CompBinOp::Gt => fb.insert_inst(Gt::new(is, lhs, rhs), Type::I256),
         CompBinOp::GtEq => {
             // lhs >= rhs  <==>  !(lhs < rhs)
-            let lt_result = fb.insert_inst(Slt::new(is, lhs, rhs), Type::I1);
-            fb.insert_inst(IsZero::new(is, lt_result), Type::I1)
+            let lt_result = fb.insert_inst(Lt::new(is, lhs, rhs), Type::I256);
+            fb.insert_inst(IsZero::new(is, lt_result), Type::I256)
         }
     };
     Ok(result)
@@ -585,7 +578,7 @@ fn lower_intrinsic<'db, C: sonatina_ir::func_cursor::FuncCursor>(
     }
 
     match op {
-        IntrinsicOp::Mload { .. } => {
+        IntrinsicOp::Mload => {
             if let Some(&addr) = lowered_args.first() {
                 let load = Mload::new(is, addr, Type::I256);
                 let result = fb.insert_inst(load, Type::I256);
@@ -614,11 +607,14 @@ fn biguint_to_i256(n: &BigUint) -> I256 {
     I256::from_be_bytes(&padded)
 }
 
-/// Convert bytes to I256 (left-aligned, right-padded with zeros).
+/// Convert bytes to I256.
+///
+/// Matches Yul's `0x...` literal semantics by interpreting the bytes as a big-endian integer.
 fn bytes_to_i256(bytes: &[u8]) -> I256 {
     let mut padded = [0u8; 32];
     let copy_len = bytes.len().min(32);
-    padded[..copy_len].copy_from_slice(&bytes[..copy_len]);
+    let start = 32 - copy_len;
+    padded[start..start + copy_len].copy_from_slice(&bytes[bytes.len() - copy_len..]);
     I256::from_be_bytes(&padded)
 }
 
@@ -629,17 +625,15 @@ fn lower_terminator<'db, C: sonatina_ir::func_cursor::FuncCursor>(
     block_map: &FxHashMap<mir::BasicBlockId, BlockId>,
     body: &mir::MirBody<'db>,
     value_map: &mut FxHashMap<mir::ValueId, ValueId>,
+    local_map: &mut FxHashMap<mir::LocalId, ValueId>,
     is: &sonatina_ir::inst::evm::inst_set::EvmInstSet,
 ) -> Result<(), LowerError> {
     use mir::Terminator;
 
-    // Dummy local map for value lowering in terminators
-    let mut local_map: FxHashMap<mir::LocalId, ValueId> = FxHashMap::default();
-
     match term {
         Terminator::Return(ret_val) => {
             let ret_sonatina = if let Some(v) = ret_val {
-                Some(lower_value(fb, *v, body, value_map, &mut local_map, is)?)
+                Some(lower_value(fb, *v, body, value_map, local_map, is)?)
             } else {
                 None
             };
@@ -650,7 +644,7 @@ fn lower_terminator<'db, C: sonatina_ir::func_cursor::FuncCursor>(
             fb.insert_inst_no_result(Jump::new(is, target_block));
         }
         Terminator::Branch { cond, then_bb, else_bb } => {
-            let cond_val = lower_value(fb, *cond, body, value_map, &mut local_map, is)?;
+            let cond_val = lower_value(fb, *cond, body, value_map, local_map, is)?;
             let then_block = block_map[then_bb];
             let else_block = block_map[else_bb];
             // Br: cond, nz_dest (then), z_dest (else)
