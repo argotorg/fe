@@ -13,13 +13,15 @@ use mir::{MirModule, layout, layout::TargetDataLayout, lower_module};
 use mir::ir::{AddressSpaceKind, IntrinsicOp, Place, SyntheticValue};
 use num_bigint::BigUint;
 use rustc_hash::FxHashMap;
+use hir::analysis::ty::ty_def::{PrimTy, TyBase, TyData};
 use sonatina_ir::{
     BlockId, I256, Module, Signature, Type, ValueId,
     builder::ModuleBuilder,
     func_cursor::InstInserter,
     inst::{
         arith::{Add, Mul, Neg, Shl, Shr, Sub},
-        cmp::{Eq, Gt, IsZero, Lt},
+        cast::{Sext, Trunc, Zext},
+        cmp::{Eq, Gt, IsZero, Lt, Ne},
         control_flow::{Br, Call, Jump, Return},
         data::{Mload, Mstore},
         evm::{
@@ -378,12 +380,40 @@ fn lower_instruction<'db, C: sonatina_ir::func_cursor::FuncCursor>(
         MirInst::Assign { dest, rvalue, .. } => {
             let result = lower_rvalue(fb, db, target_layout, rvalue, body, value_map, local_map, name_map, returns_value_map, is)?;
             if let (Some(dest_local), Some(result_val)) = (dest, result) {
-                local_map.insert(*dest_local, result_val);
+                // Apply from_word conversion for Load operations
+                let converted = if matches!(rvalue, mir::Rvalue::Load { .. }) {
+                    let dest_ty = body.locals.get(dest_local.index())
+                        .map(|l| l.ty)
+                        .unwrap_or_else(|| body.values[0].ty); // fallback shouldn't happen
+                    apply_from_word(fb, db, result_val, dest_ty, is)
+                } else {
+                    result_val
+                };
+                local_map.insert(*dest_local, converted);
             }
         }
         MirInst::Store { place, value } => {
             let addr = lower_place_address(fb, db, target_layout, place, body, value_map, local_map, is)?;
-            let val = lower_value(fb, db, target_layout, *value, body, value_map, local_map, is)?;
+            let raw_val = lower_value(fb, db, target_layout, *value, body, value_map, local_map, is)?;
+
+            // Check if this is a by-ref value that needs deep-copy
+            // TODO: Implement deep-copy for ValueRepr::Ref like the Yul emitter does.
+            // Currently we just do a simple word store, which is incorrect for aggregates.
+            let value_data = body.values.get(value.index());
+            if value_data.is_some_and(|v| v.repr.is_ref()) {
+                return Err(LowerError::Unsupported(
+                    "deep-copy for by-ref aggregates not yet implemented".to_string(),
+                ));
+            }
+
+            // Apply to_word conversion for the stored value
+            let value_ty = value_data.map(|v| v.ty);
+            let val = if let Some(ty) = value_ty {
+                apply_to_word(fb, db, raw_val, ty, is)
+            } else {
+                raw_val
+            };
+
             let addr_space = body.place_address_space(place);
 
             match addr_space {
@@ -805,6 +835,127 @@ fn bytes_to_i256(bytes: &[u8]) -> I256 {
     let start = 32 - copy_len;
     padded[start..start + copy_len].copy_from_slice(&bytes[bytes.len() - copy_len..]);
     I256::from_be_bytes(&padded)
+}
+
+/// Returns the Sonatina Type for a Fe primitive type, or None if not a sub-word type.
+fn prim_to_sonatina_type(prim: PrimTy) -> Option<Type> {
+    match prim {
+        PrimTy::Bool => Some(Type::I1),
+        PrimTy::U8 | PrimTy::I8 => Some(Type::I8),
+        PrimTy::U16 | PrimTy::I16 => Some(Type::I16),
+        PrimTy::U32 | PrimTy::I32 => Some(Type::I32),
+        PrimTy::U64 | PrimTy::I64 => Some(Type::I64),
+        PrimTy::U128 | PrimTy::I128 => Some(Type::I128),
+        // Full-width types don't need conversion
+        PrimTy::U256 | PrimTy::I256 | PrimTy::Usize | PrimTy::Isize => None,
+        // Non-scalar types
+        PrimTy::String | PrimTy::Array | PrimTy::Tuple(_) | PrimTy::Ptr => None,
+    }
+}
+
+/// Returns true if the primitive type is signed.
+fn prim_is_signed(prim: PrimTy) -> bool {
+    matches!(
+        prim,
+        PrimTy::I8 | PrimTy::I16 | PrimTy::I32 | PrimTy::I64 | PrimTy::I128 | PrimTy::I256 | PrimTy::Isize
+    )
+}
+
+/// Applies `from_word` conversion after loading a value.
+///
+/// This mirrors the stdlib `WordRepr::from_word` semantics:
+/// - bool: convert to 0 or 1
+/// - unsigned sub-word: mask to appropriate width
+/// - signed sub-word: mask then sign-extend
+fn apply_from_word<'db, C: sonatina_ir::func_cursor::FuncCursor>(
+    fb: &mut sonatina_ir::builder::FunctionBuilder<C>,
+    db: &'db DriverDataBase,
+    raw_value: ValueId,
+    ty: hir::analysis::ty::ty_def::TyId<'db>,
+    is: &sonatina_ir::inst::evm::inst_set::EvmInstSet,
+) -> ValueId {
+    let ty = mir::repr::word_conversion_leaf_ty(db, ty);
+    let base_ty = ty.base_ty(db);
+
+    if let TyData::TyBase(TyBase::Prim(prim)) = base_ty.data(db) {
+        match prim {
+            PrimTy::Bool => {
+                // bool: value != 0 → 0 or 1
+                let zero = fb.make_imm_value(I256::zero());
+                let cmp = Ne::new(is, raw_value, zero);
+                let bool_val = fb.insert_inst(cmp, Type::I1);
+                // Extend back to I256
+                let ext = Zext::new(is, bool_val, Type::I256);
+                fb.insert_inst(ext, Type::I256)
+            }
+            _ => {
+                if let Some(small_ty) = prim_to_sonatina_type(*prim) {
+                    // Truncate to small type then extend back
+                    let trunc = Trunc::new(is, raw_value, small_ty);
+                    let truncated = fb.insert_inst(trunc, small_ty);
+
+                    if prim_is_signed(*prim) {
+                        let ext = Sext::new(is, truncated, Type::I256);
+                        fb.insert_inst(ext, Type::I256)
+                    } else {
+                        let ext = Zext::new(is, truncated, Type::I256);
+                        fb.insert_inst(ext, Type::I256)
+                    }
+                } else {
+                    // Full-width type, no conversion needed
+                    raw_value
+                }
+            }
+        }
+    } else {
+        // Non-primitive type, no conversion
+        raw_value
+    }
+}
+
+/// Applies `to_word` conversion before storing a value.
+///
+/// This mirrors the stdlib `WordRepr::to_word` semantics:
+/// - bool: convert to 0 or 1
+/// - unsigned sub-word: mask to appropriate width
+/// - signed: no conversion needed (already sign-extended)
+fn apply_to_word<'db, C: sonatina_ir::func_cursor::FuncCursor>(
+    fb: &mut sonatina_ir::builder::FunctionBuilder<C>,
+    db: &'db DriverDataBase,
+    value: ValueId,
+    ty: hir::analysis::ty::ty_def::TyId<'db>,
+    is: &sonatina_ir::inst::evm::inst_set::EvmInstSet,
+) -> ValueId {
+    let ty = mir::repr::word_conversion_leaf_ty(db, ty);
+    let base_ty = ty.base_ty(db);
+
+    if let TyData::TyBase(TyBase::Prim(prim)) = base_ty.data(db) {
+        match prim {
+            PrimTy::Bool => {
+                // bool: iszero(iszero(value)) → 0 or 1
+                let is_zero1 = IsZero::new(is, value);
+                let z1 = fb.insert_inst(is_zero1, Type::I256);
+                let is_zero2 = IsZero::new(is, z1);
+                fb.insert_inst(is_zero2, Type::I256)
+            }
+            PrimTy::U8 | PrimTy::U16 | PrimTy::U32 | PrimTy::U64 | PrimTy::U128 => {
+                // Unsigned: truncate then zero-extend to mask high bits
+                if let Some(small_ty) = prim_to_sonatina_type(*prim) {
+                    let trunc = Trunc::new(is, value, small_ty);
+                    let truncated = fb.insert_inst(trunc, small_ty);
+                    let ext = Zext::new(is, truncated, Type::I256);
+                    fb.insert_inst(ext, Type::I256)
+                } else {
+                    value
+                }
+            }
+            // Signed types and full-width types don't need conversion
+            _ => value,
+        }
+    } else {
+        // Non-primitive type, no conversion
+        value
+    }
 }
 
 /// Computes the address for a place by walking the projection path.
