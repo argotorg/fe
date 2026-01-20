@@ -1929,6 +1929,7 @@ dependencies = [
  "fe-codegen",
  "fe-common",
  "fe-driver",
+ "fe-mir",
  "fe-solc-runner",
  "hex",
  "revm",
