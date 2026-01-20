@@ -200,24 +200,24 @@ func public %mint__StorPtr_Erc20___2745299687a147d4(v0.i256, v1.i256, v2.i256, v
         return 1.i256;
 }
 
-func public %runtime__StorPtr_Evm___207f35a85ac4062e(v0.i256) {
+func public %runtime__StorPtr_Evm___207f35a85ac4062e() {
     block0:
-        v2.i256 = call %stor_ptr__Evm_Erc20__c294a0aeae425afd 0.i256 0.i256;
-        v3.i256 = evm_calldata_load 0.i256;
-        v5.i256 = shr 224.i256 v3;
+        v1.i256 = call %stor_ptr__Evm_Erc20__c294a0aeae425afd 0.i256 0.i256;
+        v2.i256 = evm_calldata_load 0.i256;
+        v4.i256 = shr 224.i256 v2;
         jump block11;
 
     block1:
-        v7.i256 = evm_calldata_load 4.i256;
-        v9.i256 = call %balance_of__StorPtr_Erc20___2745299687a147d4 v7 v2;
-        call %abi_encode_u256 v9 0.i256;
+        v6.i256 = evm_calldata_load 4.i256;
+        v8.i256 = call %balance_of__StorPtr_Erc20___2745299687a147d4 v6 v1;
+        call %abi_encode_u256 v8 0.i256;
         evm_invalid;
 
     block2:
-        v10.i256 = evm_calldata_load 4.i256;
-        v12.i256 = evm_calldata_load 36.i256;
-        v14.i256 = call %allowance__StorPtr_Erc20___2745299687a147d4 v10 v12 v2;
-        call %abi_encode_u256 v14 0.i256;
+        v9.i256 = evm_calldata_load 4.i256;
+        v11.i256 = evm_calldata_load 36.i256;
+        v13.i256 = call %allowance__StorPtr_Erc20___2745299687a147d4 v9 v11 v1;
+        call %abi_encode_u256 v13 0.i256;
         evm_invalid;
 
     block3:
@@ -233,72 +233,72 @@ func public %runtime__StorPtr_Evm___207f35a85ac4062e(v0.i256) {
         evm_invalid;
 
     block6:
-        v20.i256 = evm_calldata_load 4.i256;
-        v21.i256 = evm_calldata_load 36.i256;
-        v23.i256 = call %transfer__StorPtr_Erc20___2745299687a147d4 v20 v21 v2 0.i256 0.i256;
-        call %abi_encode_u256 v23 0.i256;
+        v19.i256 = evm_calldata_load 4.i256;
+        v20.i256 = evm_calldata_load 36.i256;
+        v22.i256 = call %transfer__StorPtr_Erc20___2745299687a147d4 v19 v20 v1 0.i256 0.i256;
+        call %abi_encode_u256 v22 0.i256;
         evm_invalid;
 
     block7:
-        v24.i256 = evm_calldata_load 4.i256;
-        v25.i256 = evm_calldata_load 36.i256;
-        v27.i256 = call %approve__StorPtr_Erc20___2745299687a147d4 v24 v25 v2 0.i256;
-        call %abi_encode_u256 v27 0.i256;
+        v23.i256 = evm_calldata_load 4.i256;
+        v24.i256 = evm_calldata_load 36.i256;
+        v26.i256 = call %approve__StorPtr_Erc20___2745299687a147d4 v23 v24 v1 0.i256;
+        call %abi_encode_u256 v26 0.i256;
         evm_invalid;
 
     block8:
-        v28.i256 = evm_calldata_load 4.i256;
-        v29.i256 = evm_calldata_load 36.i256;
-        v31.i256 = evm_calldata_load 68.i256;
-        v33.i256 = call %transfer_from__StorPtr_Erc20___2745299687a147d4 v28 v29 v31 v2 0.i256 0.i256;
-        call %abi_encode_u256 v33 0.i256;
+        v27.i256 = evm_calldata_load 4.i256;
+        v28.i256 = evm_calldata_load 36.i256;
+        v30.i256 = evm_calldata_load 68.i256;
+        v32.i256 = call %transfer_from__StorPtr_Erc20___2745299687a147d4 v27 v28 v30 v1 0.i256 0.i256;
+        call %abi_encode_u256 v32 0.i256;
         evm_invalid;
 
     block9:
-        v34.i256 = evm_calldata_load 4.i256;
-        v35.i256 = evm_calldata_load 36.i256;
-        v37.i256 = call %mint__StorPtr_Erc20___2745299687a147d4 v34 v35 v2 0.i256 0.i256;
-        call %abi_encode_u256 v37 0.i256;
+        v33.i256 = evm_calldata_load 4.i256;
+        v34.i256 = evm_calldata_load 36.i256;
+        v36.i256 = call %mint__StorPtr_Erc20___2745299687a147d4 v33 v34 v1 0.i256 0.i256;
+        call %abi_encode_u256 v36 0.i256;
         evm_invalid;
 
     block10:
         evm_revert 0.i256 0.i256;
 
     block11:
-        v48.i256 = eq v5 1889567281.i256;
-        br v48 block1 block12;
+        v47.i256 = eq v4 1889567281.i256;
+        br v47 block1 block12;
 
     block12:
-        v49.i256 = eq v5 3714247998.i256;
-        br v49 block2 block13;
+        v48.i256 = eq v4 3714247998.i256;
+        br v48 block2 block13;
 
     block13:
-        v50.i256 = eq v5 117300739.i256;
-        br v50 block3 block14;
+        v49.i256 = eq v4 117300739.i256;
+        br v49 block3 block14;
 
     block14:
-        v51.i256 = eq v5 2514000705.i256;
-        br v51 block4 block15;
+        v50.i256 = eq v4 2514000705.i256;
+        br v50 block4 block15;
 
     block15:
-        v52.i256 = eq v5 826074471.i256;
-        br v52 block5 block16;
+        v51.i256 = eq v4 826074471.i256;
+        br v51 block5 block16;
 
     block16:
-        v53.i256 = eq v5 2835717307.i256;
-        br v53 block6 block17;
+        v52.i256 = eq v4 2835717307.i256;
+        br v52 block6 block17;
 
     block17:
-        v54.i256 = eq v5 157198259.i256;
-        br v54 block7 block18;
+        v53.i256 = eq v4 157198259.i256;
+        br v53 block7 block18;
 
     block18:
-        v55.i256 = eq v5 599290589.i256;
-        br v55 block8 block19;
+        v54.i256 = eq v4 599290589.i256;
+        br v54 block8 block19;
 
     block19:
-        v56.i256 = eq v5 1086394137.i256;
-        br v56 block9 block10;
+        v55.i256 = eq v4 1086394137.i256;
+        br v55 block9 block10;
 }
 
 func public %storagemap_k__v__const_salt__u256__get__Address_u256_0__b8b2f68065fe2328(v0.i256, v1.i256) -> i256 {
@@ -588,17 +588,10 @@ func public %u256_storagekey_write_key(v0.i256, v1.i256) -> i256 {
         return 32.i256;
 }
 
-func public %__fe_sonatina_entry() {
-    block0:
-        call %runtime__StorPtr_Evm___207f35a85ac4062e 0.i256;
-        evm_stop;
-}
-
 
 object @Contract {
     section runtime {
-        entry %__fe_sonatina_entry;
-        include %runtime__StorPtr_Evm___207f35a85ac4062e;
+        entry %runtime__StorPtr_Evm___207f35a85ac4062e;
         include %abi_encode_u256;
         include %abi_encode_string;
         include %erc20_balance_of;

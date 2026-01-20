@@ -14,6 +14,7 @@ use revm::{
     },
     database::InMemoryDB,
     handler::{ExecuteCommitEvm, MainBuilder, MainContext, MainnetContext, MainnetEvm},
+    InspectCommitEvm,
     primitives::{Address, Bytes as EvmBytes, Log, TxKind},
     state::AccountInfo,
 };
@@ -168,16 +169,23 @@ fn transact_with_logs(
     options: ExecutionOptions,
     nonce: u64,
 ) -> Result<CallResultWithLogs, HarnessError> {
-    let tx = TxEnv::builder()
-        .caller(options.caller)
-        .gas_limit(options.gas_limit)
-        .gas_price(options.gas_price)
-        .to(address)
-        .value(options.value)
-        .data(EvmBytes::copy_from_slice(calldata))
-        .nonce(nonce)
-        .build()
-        .map_err(|err| HarnessError::Execution(format!("{err:?}")))?;
+    let build_tx = || {
+        TxEnv::builder()
+            .caller(options.caller)
+            .gas_limit(options.gas_limit)
+            .gas_price(options.gas_price)
+            .to(address)
+            .value(options.value)
+            .data(EvmBytes::copy_from_slice(calldata))
+            .nonce(nonce)
+            .build()
+    };
+
+    if should_trace_evm() {
+        trace_tx(evm, build_tx().expect("tx builder is valid"));
+    }
+
+    let tx = build_tx().map_err(|err| HarnessError::Execution(format!("{err:?}")))?;
 
     let result = evm
         .transact_commit(tx)
@@ -206,6 +214,86 @@ fn transact_with_logs(
             Err(HarnessError::Halted { reason, gas_used })
         }
     }
+}
+
+fn should_trace_evm() -> bool {
+    std::env::var("FE_TRACE_EVM")
+        .map(|v| v != "0" && !v.is_empty())
+        .unwrap_or(false)
+}
+
+fn trace_tx(evm: &MainnetEvm<MainnetContext<InMemoryDB>>, tx: TxEnv) {
+    #[derive(Clone, Debug)]
+    struct Step {
+        pc: usize,
+        opcode: u8,
+        stack_len: usize,
+        gas_remaining: u64,
+    }
+
+    #[derive(Clone, Debug)]
+    struct RingTrace {
+        keep: usize,
+        steps: Vec<Step>,
+        total_steps: u64,
+    }
+
+    impl RingTrace {
+        fn new(keep: usize) -> Self {
+            Self {
+                keep,
+                steps: Vec::with_capacity(keep),
+                total_steps: 0,
+            }
+        }
+
+        fn push(&mut self, step: Step) {
+            self.total_steps += 1;
+            if self.steps.len() == self.keep {
+                self.steps.remove(0);
+            }
+            self.steps.push(step);
+        }
+
+        fn format(&self) -> String {
+            let mut out = String::new();
+            out.push_str(&format!(
+                "TRACE (last {} of {} steps)\n",
+                self.steps.len(),
+                self.total_steps
+            ));
+            for s in &self.steps {
+                out.push_str(&format!(
+                    "pc={:04} op=0x{:02x} stack={} gas_rem={}\n",
+                    s.pc, s.opcode, s.stack_len, s.gas_remaining
+                ));
+            }
+            out
+        }
+    }
+
+    impl<CTX, INTR: revm::interpreter::InterpreterTypes> revm::Inspector<CTX, INTR> for RingTrace {
+        fn step(&mut self, interp: &mut revm::interpreter::Interpreter<INTR>, _context: &mut CTX) {
+            self.push(Step {
+                pc: interp.bytecode.pc(),
+                opcode: interp.bytecode.opcode(),
+                stack_len: interp.stack.len(),
+                gas_remaining: interp.gas.remaining(),
+            });
+        }
+    }
+
+    use revm::interpreter::interpreter_types::{Jumps, StackTr};
+
+    // Clone the EVM (including DB state) for tracing so we don't disturb the caller's state.
+    let ctx = evm.ctx.clone();
+    let mut trace_evm = ctx.build_mainnet_with_inspector(RingTrace::new(200));
+
+    let result = trace_evm.inspect_tx_commit(tx);
+    eprintln!(
+        "{}\ntrace result: {result:?}\n",
+        trace_evm.inspector.format()
+    );
 }
 
 /// Formats raw EVM logs into debug strings for display.

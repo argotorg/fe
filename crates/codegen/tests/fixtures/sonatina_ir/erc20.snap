@@ -1414,17 +1414,10 @@ func public %u256_storagekey_write_key(v0.i256, v1.i256) -> i256 {
         return 32.i256;
 }
 
-func public %__fe_sonatina_entry() {
-    block0:
-        call %__CoolCoin_runtime;
-        evm_stop;
-}
-
 
 object @Contract {
     section runtime {
-        entry %__fe_sonatina_entry;
-        include %__CoolCoin_runtime;
+        entry %__CoolCoin_runtime;
         include %transfer__StorPtr_TokenStore___6cde5b1e4cc29186;
         include %mint__StorPtr_TokenStore___6cde5b1e4cc29186;
         include %burn__StorPtr_TokenStore___6cde5b1e4cc29186;

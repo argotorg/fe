@@ -379,17 +379,10 @@ func public %cursor_i__fork_mem__CallData__b9ab8dc8a4b2f9e(v0.i256, v1.i256) -> 
         return v8;
 }
 
-func public %__fe_sonatina_entry() {
-    block0:
-        call %__GuardContract_runtime;
-        evm_stop;
-}
-
 
 object @Contract {
     section runtime {
-        entry %__fe_sonatina_entry;
-        include %__GuardContract_runtime;
+        entry %__GuardContract_runtime;
         include %__GuardContract_recv_0_0;
         include %init_field__Evm_u256__5d0807bcb3704261;
         include %tstorptr_t__effectref_from_raw__bool__947c0c03c59c6f07;
