@@ -26,6 +26,7 @@ use sonatina_ir::{
     },
     isa::{Isa, evm::Evm},
     module::{FuncRef, ModuleCtx},
+    object::{Directive, Object, ObjectName, Section, SectionName},
 };
 use sonatina_triple::{Architecture, EvmVersion, OperatingSystem, TargetTriple, Vendor};
 
@@ -135,6 +136,9 @@ impl<'db, 'a> ModuleLowerer<'db, 'a> {
         // Second pass: lower function bodies
         self.lower_functions()?;
 
+        // Third pass: create objects for codegen
+        self.create_objects()?;
+
         Ok(())
     }
 
@@ -186,6 +190,56 @@ impl<'db, 'a> ModuleLowerer<'db, 'a> {
             let func_ref = self.func_map[&idx];
             self.lower_function(func_ref, func)?;
         }
+        Ok(())
+    }
+
+    /// Create Sonatina objects for the module.
+    ///
+    /// Objects define how code is organized for compilation. Each object
+    /// has sections (like "runtime" and "init") that contain function entries.
+    fn create_objects(&mut self) -> Result<(), LowerError> {
+        // Find the entry function - typically the first public function
+        // For Fe contracts, this is usually the dispatcher function
+        let entry_func = self.mir.functions.iter().enumerate().find(|(_, f)| {
+            // Use the first function as entry for now
+            // TODO: detect actual entry point (dispatcher)
+            !f.symbol_name.is_empty()
+        });
+
+        let Some((entry_idx, _entry_mir_func)) = entry_func else {
+            // No functions to compile - this is valid for empty modules
+            return Ok(());
+        };
+
+        let entry_ref = self.func_map[&entry_idx];
+
+        // Create runtime section with entry and all other functions as includes
+        let mut directives = vec![Directive::Entry(entry_ref)];
+
+        // Include all other functions
+        for (idx, _func) in self.mir.functions.iter().enumerate() {
+            if idx != entry_idx {
+                let func_ref = self.func_map[&idx];
+                directives.push(Directive::Include(func_ref));
+            }
+        }
+
+        let runtime_section = Section {
+            name: SectionName::from("runtime"),
+            directives,
+        };
+
+        // Create the contract object
+        let object = Object {
+            name: ObjectName::from("Contract"),
+            sections: vec![runtime_section],
+        };
+
+        // Add object to module
+        self.builder.declare_object(object).map_err(|e| {
+            LowerError::Internal(format!("failed to declare object: {e}"))
+        })?;
+
         Ok(())
     }
 

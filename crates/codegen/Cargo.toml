@@ -13,6 +13,7 @@ num-bigint.workspace = true
 rustc-hash.workspace = true
 sonatina-ir = { path = "../../../sonatina/crates/ir" }
 sonatina-triple = { path = "../../../sonatina/crates/triple" }
+sonatina-codegen = { path = "../../../sonatina/crates/codegen" }
 
 [dev-dependencies]
 dir-test.workspace = true
