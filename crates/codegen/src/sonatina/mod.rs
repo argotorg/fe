@@ -9,7 +9,7 @@ use driver::DriverDataBase;
 use hir::hir_def::TopLevelMod;
 use hir::hir_def::expr::{ArithBinOp, BinOp, CompBinOp, LogicalBinOp, UnOp};
 use mir::{MirModule, layout::TargetDataLayout, lower_module};
-use mir::ir::{IntrinsicOp, SyntheticValue};
+use mir::ir::{AddressSpaceKind, IntrinsicOp, SyntheticValue};
 use num_bigint::BigUint;
 use rustc_hash::FxHashMap;
 use sonatina_ir::{
@@ -20,8 +20,8 @@ use sonatina_ir::{
         arith::{Add, Mul, Neg, Shl, Shr, Sub},
         cmp::{Eq, Gt, IsZero, Lt},
         control_flow::{Br, Jump, Return},
-        data::Mload,
-        evm::{EvmExp, EvmUdiv, EvmUmod},
+        data::{Mload, Mstore},
+        evm::{EvmCalldataLoad, EvmExp, EvmSload, EvmSstore, EvmTload, EvmTstore, EvmUdiv, EvmUmod},
         logic::{And, Not, Or, Xor},
     },
     isa::{Isa, evm::Evm},
@@ -279,9 +279,33 @@ fn lower_instruction<'db, C: sonatina_ir::func_cursor::FuncCursor>(
             }
         }
         MirInst::Store { place, value } => {
-            // For now, just evaluate the value - store lowering needs place handling
-            let _ = lower_value(fb, *value, body, value_map, local_map, is)?;
-            let _ = place; // TODO: implement place-based stores
+            // For now, only handle places without projections
+            if !place.projection.is_empty() {
+                return Err(LowerError::Unsupported("store with projections".to_string()));
+            }
+
+            let addr = lower_value(fb, place.base, body, value_map, local_map, is)?;
+            let val = lower_value(fb, *value, body, value_map, local_map, is)?;
+            let addr_space = get_place_address_space(place, body);
+
+            match addr_space {
+                AddressSpaceKind::Memory => {
+                    let store = Mstore::new(is, addr, val, Type::I256);
+                    fb.insert_inst_no_result(store);
+                }
+                AddressSpaceKind::Storage => {
+                    let store = EvmSstore::new(is, addr, val);
+                    fb.insert_inst_no_result(store);
+                }
+                AddressSpaceKind::TransientStorage => {
+                    let store = EvmTstore::new(is, addr, val);
+                    fb.insert_inst_no_result(store);
+                }
+                AddressSpaceKind::Calldata => {
+                    // Calldata is read-only, cannot store to it
+                    return Err(LowerError::Unsupported("store to calldata".to_string()));
+                }
+            }
         }
         MirInst::InitAggregate { .. } => {
             // TODO: implement aggregate initialization
@@ -327,11 +351,32 @@ fn lower_rvalue<'db, C: sonatina_ir::func_cursor::FuncCursor>(
             lower_intrinsic(fb, *op, args, body, value_map, local_map, is)
         }
         Rvalue::Load { place } => {
-            // Load from memory address.
-            // TODO: handle address spaces (storage, calldata) and projections.
-            let base = lower_value(fb, place.base, body, value_map, local_map, is)?;
-            let load = Mload::new(is, base, Type::I256);
-            let result = fb.insert_inst(load, Type::I256);
+            // For now, only handle places without projections
+            if !place.projection.is_empty() {
+                return Err(LowerError::Unsupported("load with projections".to_string()));
+            }
+
+            let addr = lower_value(fb, place.base, body, value_map, local_map, is)?;
+            let addr_space = get_place_address_space(place, body);
+
+            let result = match addr_space {
+                AddressSpaceKind::Memory => {
+                    let load = Mload::new(is, addr, Type::I256);
+                    fb.insert_inst(load, Type::I256)
+                }
+                AddressSpaceKind::Storage => {
+                    let load = EvmSload::new(is, addr);
+                    fb.insert_inst(load, Type::I256)
+                }
+                AddressSpaceKind::TransientStorage => {
+                    let load = EvmTload::new(is, addr);
+                    fb.insert_inst(load, Type::I256)
+                }
+                AddressSpaceKind::Calldata => {
+                    let load = EvmCalldataLoad::new(is, addr);
+                    fb.insert_inst(load, Type::I256)
+                }
+            };
             Ok(Some(result))
         }
         Rvalue::Alloc { .. } => {
@@ -616,6 +661,40 @@ fn bytes_to_i256(bytes: &[u8]) -> I256 {
     let start = 32 - copy_len;
     padded[start..start + copy_len].copy_from_slice(&bytes[bytes.len() - copy_len..]);
     I256::from_be_bytes(&padded)
+}
+
+/// Determine the address space for a place's base value.
+///
+/// Returns `AddressSpaceKind::Memory` as the default if the address space cannot be determined.
+fn get_place_address_space<'db>(
+    place: &mir::ir::Place<'db>,
+    body: &mir::MirBody<'db>,
+) -> AddressSpaceKind {
+    // First try to get address space from the value's repr
+    let value_data = &body.values[place.base.index()];
+    if let Some(space) = value_data.repr.address_space() {
+        return space;
+    }
+
+    // Fall back to checking the value origin
+    match &value_data.origin {
+        mir::ValueOrigin::Local(local_id) => {
+            if let Some(local) = body.locals.get(local_id.index()) {
+                return local.address_space;
+            }
+        }
+        mir::ValueOrigin::PlaceRef(inner_place) => {
+            // Recursively check the inner place
+            return get_place_address_space(inner_place, body);
+        }
+        mir::ValueOrigin::FieldPtr(field_ptr) => {
+            return field_ptr.addr_space;
+        }
+        _ => {}
+    }
+
+    // Default to memory for unknown cases
+    AddressSpaceKind::Memory
 }
 
 /// Lower a block terminator.
