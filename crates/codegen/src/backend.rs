@@ -15,7 +15,7 @@ use std::fmt;
 pub enum BackendOutput {
     /// Yul text output (to be compiled by solc).
     Yul(String),
-    /// Raw EVM bytecode (init code).
+    /// Raw EVM bytecode.
     Bytecode(Vec<u8>),
 }
 
