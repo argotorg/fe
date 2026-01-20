@@ -159,7 +159,9 @@ impl std::str::FromStr for BackendKind {
         match s.to_lowercase().as_str() {
             "yul" => Ok(BackendKind::Yul),
             "sonatina" => Ok(BackendKind::Sonatina),
-            _ => Err(format!("unknown backend: {s} (expected 'yul' or 'sonatina')")),
+            _ => Err(format!(
+                "unknown backend: {s} (expected 'yul' or 'sonatina')"
+            )),
         }
     }
 }
@@ -231,8 +233,8 @@ impl Backend for SonatinaBackend {
 
         // Compile the "Contract" object
         let opts: CompileOptions<_> = CompileOptions::default();
-        let artifact = compile_object(&module, &evm_backend, "Contract", &opts)
-            .map_err(|errors| {
+        let artifact =
+            compile_object(&module, &evm_backend, "Contract", &opts).map_err(|errors| {
                 let msg = errors
                     .iter()
                     .map(|e| format!("{:?}", e))

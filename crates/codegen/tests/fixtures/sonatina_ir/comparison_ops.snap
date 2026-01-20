@@ -1,6 +1,5 @@
 ---
 source: crates/codegen/tests/sonatina_ir.rs
-assertion_line: 65
 expression: output
 input_file: crates/codegen/tests/fixtures/comparison_ops.fe
 ---
@@ -8,45 +7,40 @@ target = evm-ethereum-osaka
 
 func public %comparison_ops() -> i256 {
     block0:
-        v4.i256 = mload 64.i256 i256;
-        v5.i256 = is_zero v4;
-        v7.i256 = mul v5 128.i256;
-        v8.i256 = or v4 v7;
-        v10.i256 = add v8 6.i256;
-        mstore 64.i256 v10 i256;
-        v11.i256 = eq 1.i256 1.i256;
-        v12.i256 = is_zero v11;
-        v13.i256 = is_zero v12;
-        mstore v8 v13 i256;
-        v14.i256 = eq 1.i256 2.i256;
+        v4.i256 = evm_malloc 6.i256;
+        v5.i256 = eq 1.i256 1.i256;
+        v6.i256 = is_zero v5;
+        v7.i256 = is_zero v6;
+        mstore v4 v7 i256;
+        v8.i256 = eq 1.i256 2.i256;
+        v9.i256 = is_zero v8;
+        v10.i256 = is_zero v9;
+        v11.i256 = is_zero v10;
+        v12.i256 = add v4 1.i256;
+        mstore v12 v11 i256;
+        v13.i256 = lt 1.i256 2.i256;
+        v14.i256 = is_zero v13;
         v15.i256 = is_zero v14;
-        v16.i256 = is_zero v15;
-        v17.i256 = is_zero v16;
-        v18.i256 = add v8 1.i256;
-        mstore v18 v17 i256;
-        v19.i256 = lt 1.i256 2.i256;
+        v16.i256 = add v4 2.i256;
+        mstore v16 v15 i256;
+        v17.i256 = gt 2.i256 2.i256;
+        v18.i256 = is_zero v17;
+        v19.i256 = is_zero v18;
         v20.i256 = is_zero v19;
-        v21.i256 = is_zero v20;
-        v22.i256 = add v8 2.i256;
-        mstore v22 v21 i256;
-        v23.i256 = gt 2.i256 2.i256;
+        v21.i256 = add v4 3.i256;
+        mstore v21 v20 i256;
+        v22.i256 = gt 3.i256 2.i256;
+        v23.i256 = is_zero v22;
         v24.i256 = is_zero v23;
-        v25.i256 = is_zero v24;
-        v26.i256 = is_zero v25;
-        v27.i256 = add v8 3.i256;
-        mstore v27 v26 i256;
-        v28.i256 = gt 3.i256 2.i256;
+        v26.i256 = add v4 4.i256;
+        mstore v26 v24 i256;
+        v27.i256 = lt 3.i256 3.i256;
+        v28.i256 = is_zero v27;
         v29.i256 = is_zero v28;
         v30.i256 = is_zero v29;
-        v32.i256 = add v8 4.i256;
+        v32.i256 = add v4 5.i256;
         mstore v32 v30 i256;
-        v33.i256 = lt 3.i256 3.i256;
-        v34.i256 = is_zero v33;
-        v35.i256 = is_zero v34;
-        v36.i256 = is_zero v35;
-        v38.i256 = add v8 5.i256;
-        mstore v38 v36 i256;
-        return v8;
+        return v4;
 }
 
 func public %__fe_sonatina_entry() {

@@ -1,6 +1,5 @@
 ---
 source: crates/codegen/tests/sonatina_ir.rs
-assertion_line: 65
 expression: output
 input_file: crates/codegen/tests/fixtures/bit_ops.fe
 ---
@@ -13,22 +12,17 @@ func public %bit_ops(v0.i256, v1.i256) -> i256 {
         v4.i256 = xor v0 v1;
         v6.i256 = shl 8.i256 v0;
         v8.i256 = shr 2.i256 v0;
-        v10.i256 = mload 64.i256 i256;
-        v11.i256 = is_zero v10;
-        v13.i256 = mul v11 128.i256;
-        v14.i256 = or v10 v13;
-        v16.i256 = add v14 160.i256;
-        mstore 64.i256 v16 i256;
-        mstore v14 v2 i256;
-        v18.i256 = add v14 32.i256;
-        mstore v18 v3 i256;
-        v19.i256 = add v14 64.i256;
-        mstore v19 v4 i256;
-        v21.i256 = add v14 96.i256;
-        mstore v21 v6 i256;
-        v22.i256 = add v14 128.i256;
-        mstore v22 v8 i256;
-        return v14;
+        v10.i256 = evm_malloc 160.i256;
+        mstore v10 v2 i256;
+        v12.i256 = add v10 32.i256;
+        mstore v12 v3 i256;
+        v14.i256 = add v10 64.i256;
+        mstore v14 v4 i256;
+        v16.i256 = add v10 96.i256;
+        mstore v16 v6 i256;
+        v18.i256 = add v10 128.i256;
+        mstore v18 v8 i256;
+        return v10;
 }
 
 func public %pow_op(v0.i256, v1.i256) -> i256 {
