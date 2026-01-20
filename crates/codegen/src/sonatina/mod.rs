@@ -539,10 +539,12 @@ fn lower_value_origin<'db, C: sonatina_ir::func_cursor::FuncCursor>(
             // Transparent cast just passes through the inner value
             lower_value(fb, *value, body, value_map, local_map, is)
         }
-        ValueOrigin::ControlFlowResult { .. } => {
-            // Control flow results need phi nodes - for now return zero
-            // TODO: proper SSA phi handling
-            Ok(fb.make_imm_value(I256::zero()))
+        ValueOrigin::ControlFlowResult { expr } => {
+            // ControlFlowResult values should be converted to Local values during MIR lowering.
+            // If we reach here, it means MIR lowering didn't properly handle this case.
+            Err(LowerError::Internal(format!(
+                "ControlFlowResult value reached codegen without being converted to Local (expr={expr:?})"
+            )))
         }
         ValueOrigin::PlaceRef(place) => {
             // Lower the base value - the place ref is a pointer
