@@ -8,8 +8,9 @@ mod types;
 use driver::DriverDataBase;
 use hir::hir_def::TopLevelMod;
 use hir::hir_def::expr::{ArithBinOp, BinOp, CompBinOp, LogicalBinOp, UnOp};
-use mir::{MirModule, layout::TargetDataLayout, lower_module};
-use mir::ir::{AddressSpaceKind, IntrinsicOp, SyntheticValue};
+use hir::projection::{IndexSource, Projection};
+use mir::{MirModule, layout, layout::TargetDataLayout, lower_module};
+use mir::ir::{AddressSpaceKind, IntrinsicOp, Place, SyntheticValue};
 use num_bigint::BigUint;
 use rustc_hash::FxHashMap;
 use sonatina_ir::{
@@ -81,7 +82,7 @@ fn create_evm_isa() -> Evm {
 pub fn compile_module(
     db: &DriverDataBase,
     top_mod: TopLevelMod<'_>,
-    _layout: TargetDataLayout,
+    layout: TargetDataLayout,
 ) -> Result<Module, LowerError> {
     // Lower HIR to MIR
     let mir_module = lower_module(db, top_mod)?;
@@ -92,7 +93,7 @@ pub fn compile_module(
     let module_builder = ModuleBuilder::new(ctx);
 
     // Create lowerer and process module
-    let mut lowerer = ModuleLowerer::new(db, module_builder, &mir_module, &isa);
+    let mut lowerer = ModuleLowerer::new(db, module_builder, &mir_module, &isa, layout);
     lowerer.lower()?;
 
     Ok(lowerer.finish())
@@ -100,11 +101,11 @@ pub fn compile_module(
 
 /// Lowers an entire MIR module to Sonatina IR.
 struct ModuleLowerer<'db, 'a> {
-    #[allow(unused)]
     db: &'db DriverDataBase,
     builder: ModuleBuilder,
     mir: &'a MirModule<'db>,
     isa: &'a Evm,
+    target_layout: TargetDataLayout,
     /// Maps function indices to Sonatina function references.
     func_map: FxHashMap<usize, FuncRef>,
     /// Maps function symbol names to Sonatina function references.
@@ -117,12 +118,14 @@ impl<'db, 'a> ModuleLowerer<'db, 'a> {
         builder: ModuleBuilder,
         mir: &'a MirModule<'db>,
         isa: &'a Evm,
+        target_layout: TargetDataLayout,
     ) -> Self {
         Self {
             db,
             builder,
             mir,
             isa,
+            target_layout,
             func_map: FxHashMap::default(),
             name_map: FxHashMap::default(),
         }
@@ -290,6 +293,8 @@ impl<'db, 'a> ModuleLowerer<'db, 'a> {
             for inst in block.insts.iter() {
                 lower_instruction(
                     &mut fb,
+                    self.db,
+                    &self.target_layout,
                     inst,
                     &func.body,
                     &mut value_map,
@@ -322,6 +327,8 @@ impl<'db, 'a> ModuleLowerer<'db, 'a> {
 /// Lower a MIR instruction.
 fn lower_instruction<'db, C: sonatina_ir::func_cursor::FuncCursor>(
     fb: &mut sonatina_ir::builder::FunctionBuilder<C>,
+    db: &'db DriverDataBase,
+    target_layout: &TargetDataLayout,
     inst: &mir::MirInst<'db>,
     body: &mir::MirBody<'db>,
     value_map: &mut FxHashMap<mir::ValueId, ValueId>,
@@ -333,18 +340,13 @@ fn lower_instruction<'db, C: sonatina_ir::func_cursor::FuncCursor>(
 
     match inst {
         MirInst::Assign { dest, rvalue, .. } => {
-            let result = lower_rvalue(fb, rvalue, body, value_map, local_map, name_map, is)?;
+            let result = lower_rvalue(fb, db, target_layout, rvalue, body, value_map, local_map, name_map, is)?;
             if let (Some(dest_local), Some(result_val)) = (dest, result) {
                 local_map.insert(*dest_local, result_val);
             }
         }
         MirInst::Store { place, value } => {
-            // For now, only handle places without projections
-            if !place.projection.is_empty() {
-                return Err(LowerError::Unsupported("store with projections".to_string()));
-            }
-
-            let addr = lower_value(fb, place.base, body, value_map, local_map, is)?;
+            let addr = lower_place_address(fb, db, target_layout, place, body, value_map, local_map, is)?;
             let val = lower_value(fb, *value, body, value_map, local_map, is)?;
             let addr_space = get_place_address_space(place, body);
 
@@ -385,6 +387,8 @@ fn lower_instruction<'db, C: sonatina_ir::func_cursor::FuncCursor>(
 /// Lower a MIR rvalue to a Sonatina value.
 fn lower_rvalue<'db, C: sonatina_ir::func_cursor::FuncCursor>(
     fb: &mut sonatina_ir::builder::FunctionBuilder<C>,
+    db: &'db DriverDataBase,
+    target_layout: &TargetDataLayout,
     rvalue: &mir::Rvalue<'db>,
     body: &mir::MirBody<'db>,
     value_map: &mut FxHashMap<mir::ValueId, ValueId>,
@@ -434,12 +438,7 @@ fn lower_rvalue<'db, C: sonatina_ir::func_cursor::FuncCursor>(
             lower_intrinsic(fb, *op, args, body, value_map, local_map, is)
         }
         Rvalue::Load { place } => {
-            // For now, only handle places without projections
-            if !place.projection.is_empty() {
-                return Err(LowerError::Unsupported("load with projections".to_string()));
-            }
-
-            let addr = lower_value(fb, place.base, body, value_map, local_map, is)?;
+            let addr = lower_place_address(fb, db, target_layout, place, body, value_map, local_map, is)?;
             let addr_space = get_place_address_space(place, body);
 
             let result = match addr_space {
@@ -780,6 +779,156 @@ fn get_place_address_space<'db>(
 
     // Default to memory for unknown cases
     AddressSpaceKind::Memory
+}
+
+/// Computes the address for a place by walking the projection path.
+///
+/// For memory, computes byte offsets. For storage, computes slot offsets.
+/// Returns a Sonatina ValueId representing the final address.
+fn lower_place_address<'db, C: sonatina_ir::func_cursor::FuncCursor>(
+    fb: &mut sonatina_ir::builder::FunctionBuilder<C>,
+    db: &'db DriverDataBase,
+    target_layout: &TargetDataLayout,
+    place: &Place<'db>,
+    body: &mir::MirBody<'db>,
+    value_map: &mut FxHashMap<mir::ValueId, ValueId>,
+    local_map: &mut FxHashMap<mir::LocalId, ValueId>,
+    is: &sonatina_ir::inst::evm::inst_set::EvmInstSet,
+) -> Result<ValueId, LowerError> {
+    let mut base_val = lower_value(fb, place.base, body, value_map, local_map, is)?;
+
+    if place.projection.is_empty() {
+        return Ok(base_val);
+    }
+
+    // Get the base value's type to navigate projections
+    let base_value = &body.values[place.base.index()];
+    let mut current_ty = base_value.ty;
+    let mut total_offset: usize = 0;
+    let is_slot_addressed = matches!(
+        get_place_address_space(place, body),
+        AddressSpaceKind::Storage | AddressSpaceKind::TransientStorage
+    );
+
+    for proj in place.projection.iter() {
+        match proj {
+            Projection::Field(field_idx) => {
+                // Use slot-based offsets for storage, byte-based for memory
+                total_offset += if is_slot_addressed {
+                    layout::field_offset_slots(db, current_ty, *field_idx)
+                } else {
+                    layout::field_offset_bytes_or_word_aligned_in(
+                        db,
+                        target_layout,
+                        current_ty,
+                        *field_idx,
+                    )
+                };
+                // Update current type to the field's type
+                let field_types = current_ty.field_types(db);
+                current_ty = *field_types.get(*field_idx).ok_or_else(|| {
+                    LowerError::Unsupported(format!(
+                        "projection: field {field_idx} out of bounds"
+                    ))
+                })?;
+            }
+            Projection::VariantField {
+                variant,
+                enum_ty,
+                field_idx,
+            } => {
+                // Skip discriminant then compute field offset
+                if is_slot_addressed {
+                    total_offset += 1; // discriminant takes one slot
+                    total_offset += layout::variant_field_offset_slots(
+                        db, *enum_ty, *variant, *field_idx,
+                    );
+                } else {
+                    total_offset += target_layout.discriminant_size_bytes;
+                    total_offset += layout::variant_field_offset_bytes_or_word_aligned_in(
+                        db,
+                        target_layout,
+                        *enum_ty,
+                        *variant,
+                        *field_idx,
+                    );
+                }
+                // Update current type to the field's type
+                let ctor = hir::analysis::ty::simplified_pattern::ConstructorKind::Variant(*variant, *enum_ty);
+                let field_types = ctor.field_types(db);
+                current_ty = *field_types.get(*field_idx).ok_or_else(|| {
+                    LowerError::Unsupported(format!(
+                        "projection: variant field {field_idx} out of bounds"
+                    ))
+                })?;
+            }
+            Projection::Discriminant => {
+                // Discriminant is at offset 0, just update the type
+                current_ty = hir::analysis::ty::ty_def::TyId::new(
+                    db,
+                    hir::analysis::ty::ty_def::TyData::TyBase(
+                        hir::analysis::ty::ty_def::TyBase::Prim(hir::analysis::ty::ty_def::PrimTy::U256)
+                    )
+                );
+            }
+            Projection::Index(idx_source) => {
+                let stride = if is_slot_addressed {
+                    layout::array_elem_stride_slots(db, current_ty)
+                } else {
+                    layout::array_elem_stride_bytes_in(db, target_layout, current_ty)
+                }
+                .ok_or_else(|| {
+                    LowerError::Unsupported(
+                        "projection: array index on non-array type".to_string(),
+                    )
+                })?;
+
+                match idx_source {
+                    IndexSource::Constant(idx) => {
+                        total_offset += idx * stride;
+                    }
+                    IndexSource::Dynamic(value_id) => {
+                        // Flush accumulated offset first
+                        if total_offset != 0 {
+                            let offset_val = fb.make_imm_value(I256::from(total_offset as u64));
+                            base_val = fb.insert_inst(Add::new(is, base_val, offset_val), Type::I256);
+                            total_offset = 0;
+                        }
+                        // Compute dynamic index offset: idx * stride
+                        let idx_val = lower_value(fb, *value_id, body, value_map, local_map, is)?;
+                        let offset_val = if stride == 1 {
+                            idx_val
+                        } else {
+                            let stride_val = fb.make_imm_value(I256::from(stride as u64));
+                            fb.insert_inst(Mul::new(is, idx_val, stride_val), Type::I256)
+                        };
+                        base_val = fb.insert_inst(Add::new(is, base_val, offset_val), Type::I256);
+                    }
+                }
+
+                // Update current type to element type
+                let elem_ty = layout::array_elem_ty(db, current_ty).ok_or_else(|| {
+                    LowerError::Unsupported(
+                        "projection: array index on non-array type".to_string(),
+                    )
+                })?;
+                current_ty = elem_ty;
+            }
+            Projection::Deref => {
+                return Err(LowerError::Unsupported(
+                    "projection: pointer dereference not implemented".to_string(),
+                ));
+            }
+        }
+    }
+
+    // Add any remaining accumulated offset
+    if total_offset != 0 {
+        let offset_val = fb.make_imm_value(I256::from(total_offset as u64));
+        base_val = fb.insert_inst(Add::new(is, base_val, offset_val), Type::I256);
+    }
+
+    Ok(base_val)
 }
 
 /// Lower a block terminator.
