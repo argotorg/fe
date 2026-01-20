@@ -128,6 +128,26 @@ struct ModuleLowerer<'db, 'a> {
 }
 
 impl<'db, 'a> ModuleLowerer<'db, 'a> {
+    fn is_excluded_from_runtime(func: &mir::MirFunction<'db>) -> bool {
+        use mir::ir::{ContractFunctionKind, MirFunctionOrigin, SyntheticId};
+
+        if let Some(contract_fn) = func.contract_function.as_ref()
+            && contract_fn.kind == ContractFunctionKind::Init
+        {
+            return true;
+        }
+
+        matches!(
+            func.origin,
+            MirFunctionOrigin::Synthetic(
+                SyntheticId::ContractInitEntrypoint(_)
+                    | SyntheticId::ContractInitHandler(_)
+                    | SyntheticId::ContractInitCodeOffset(_)
+                    | SyntheticId::ContractInitCodeLen(_)
+            )
+        )
+    }
+
     fn new(
         db: &'db DriverDataBase,
         builder: ModuleBuilder,
@@ -149,14 +169,14 @@ impl<'db, 'a> ModuleLowerer<'db, 'a> {
 
     /// Lower the entire module.
     fn lower(&mut self) -> Result<(), LowerError> {
-        // First pass: declare all functions
+        // First pass: declare runtime-relevant functions.
         self.declare_functions()?;
 
-        // Second pass: lower function bodies
-        self.lower_functions()?;
-
-        // Third pass: create objects for codegen
+        // Second pass: create objects for codegen (select entry + section layout).
         self.create_objects()?;
+
+        // Third pass: lower function bodies that are actually declared/included.
+        self.lower_functions()?;
 
         Ok(())
     }
@@ -169,6 +189,9 @@ impl<'db, 'a> ModuleLowerer<'db, 'a> {
     /// Declare all functions in the module.
     fn declare_functions(&mut self) -> Result<(), LowerError> {
         for (idx, func) in self.mir.functions.iter().enumerate() {
+            if func.symbol_name.is_empty() || Self::is_excluded_from_runtime(func) {
+                continue;
+            }
             let name = &func.symbol_name;
             let sig = self.lower_signature(func)?;
 
@@ -211,7 +234,9 @@ impl<'db, 'a> ModuleLowerer<'db, 'a> {
     /// Lower all function bodies.
     fn lower_functions(&mut self) -> Result<(), LowerError> {
         for (idx, func) in self.mir.functions.iter().enumerate() {
-            let func_ref = self.func_map[&idx];
+            let Some(&func_ref) = self.func_map.get(&idx) else {
+                continue;
+            };
             self.lower_function(func_ref, func)?;
         }
         Ok(())
@@ -230,13 +255,33 @@ impl<'db, 'a> ModuleLowerer<'db, 'a> {
     ///    (that deploys runtime) or clarify the documentation.
     /// 3. Entry detection is naive (first non-empty symbol name).
     fn create_objects(&mut self) -> Result<(), LowerError> {
-        // Find the entry function - typically the first public function
-        // For Fe contracts, this is usually the dispatcher function
-        let entry_func = self.mir.functions.iter().enumerate().find(|(_, f)| {
-            // Use the first function as entry for now
-            // TODO: detect actual entry point (dispatcher)
-            !f.symbol_name.is_empty()
-        });
+        use mir::ir::{ContractFunctionKind, MirFunctionOrigin, SyntheticId};
+
+        // Prefer a contract runtime entrypoint when present.
+        let entry_func = self
+            .mir
+            .functions
+            .iter()
+            .enumerate()
+            .filter(|(idx, _)| self.func_map.contains_key(idx))
+            .find(|(_, f)| {
+                f.contract_function
+                    .as_ref()
+                    .is_some_and(|cf| cf.kind == ContractFunctionKind::Runtime)
+                    || matches!(
+                        f.origin,
+                        MirFunctionOrigin::Synthetic(SyntheticId::ContractRuntimeEntrypoint(_))
+                    )
+            })
+            // Fallback to "first declared function".
+            .or_else(|| {
+                self.mir
+                    .functions
+                    .iter()
+                    .enumerate()
+                    .filter(|(idx, _)| self.func_map.contains_key(idx))
+                    .next()
+            });
 
         let Some((entry_idx, _entry_mir_func)) = entry_func else {
             // No functions to compile - this is valid for empty modules
@@ -250,13 +295,17 @@ impl<'db, 'a> ModuleLowerer<'db, 'a> {
         // `Return` (which is only valid for intra-module calls with a return PC).
         let wrapper_ref = self.create_entry_wrapper(entry_ref, entry_mir_func)?;
 
-        // Create runtime section with entry and all other functions as includes
-        let mut directives = vec![Directive::Entry(wrapper_ref)];
+        // Create runtime section with entry wrapper and all declared functions as includes.
+        // Note: we must include the wrapped entry function explicitly; Sonatina objects only
+        // compile functions referenced by directives.
+        let mut directives = vec![Directive::Entry(wrapper_ref), Directive::Include(entry_ref)];
 
-        // Include all other functions
+        // Include all other declared functions
         for (idx, _func) in self.mir.functions.iter().enumerate() {
-            if idx != entry_idx {
-                let func_ref = self.func_map[&idx];
+            if idx == entry_idx {
+                continue;
+            }
+            if let Some(&func_ref) = self.func_map.get(&idx) {
                 directives.push(Directive::Include(func_ref));
             }
         }
@@ -308,15 +357,19 @@ impl<'db, 'a> ModuleLowerer<'db, 'a> {
         let entry_block = fb.append_block();
         fb.switch_to_block(entry_block);
 
-        let can_call = entry_mir_func.body.param_locals.is_empty()
-            && entry_mir_func.body.effect_param_locals.is_empty();
-        if can_call {
-            let call_inst = Call::new(is, entry_ref, Vec::new().into());
-            if entry_mir_func.returns_value {
-                let _ = fb.insert_inst(call_inst, types::word_type());
-            } else {
-                fb.insert_inst_no_result(call_inst);
-            }
+        // Pass zero for all arguments (regular + effect params). Runtime entrypoints
+        // generally ignore these "effect root" placeholders and use EVM intrinsics directly.
+        let argc = entry_mir_func.body.param_locals.len() + entry_mir_func.body.effect_param_locals.len();
+        let mut args = Vec::with_capacity(argc);
+        for _ in 0..argc {
+            args.push(fb.make_imm_value(I256::zero()));
+        }
+
+        let call_inst = Call::new(is, entry_ref, args.into());
+        if entry_mir_func.returns_value {
+            let _ = fb.insert_inst(call_inst, types::word_type());
+        } else {
+            fb.insert_inst_no_result(call_inst);
         }
 
         fb.insert_inst_no_result(EvmStop::new(is));
