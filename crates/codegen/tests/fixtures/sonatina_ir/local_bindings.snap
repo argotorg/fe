@@ -1,0 +1,27 @@
+---
+source: crates/codegen/tests/sonatina_ir.rs
+assertion_line: 65
+expression: output
+input_file: crates/codegen/tests/fixtures/local_bindings.fe
+---
+target = evm-ethereum-osaka
+
+func public %local_bindings() -> i256 {
+    block0:
+        v2.i256 = add 1.i256 2.i256;
+        return 3.i256;
+}
+
+func public %__fe_sonatina_entry() {
+    block0:
+        v0.i256 = call %local_bindings;
+        evm_stop;
+}
+
+
+object @Contract {
+    section runtime {
+        entry %__fe_sonatina_entry;
+        include %local_bindings;
+    }
+}

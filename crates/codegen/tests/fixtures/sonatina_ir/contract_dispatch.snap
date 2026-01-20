@@ -1,0 +1,33 @@
+---
+source: crates/codegen/tests/sonatina_ir.rs
+assertion_line: 65
+expression: output
+input_file: crates/codegen/tests/fixtures/contract_dispatch.fe
+---
+target = evm-ethereum-osaka
+
+func public %emit_code() -> i256 {
+    block0:
+        return 1.i256;
+}
+
+func public %dispatch() {
+    block0:
+        v0.i256 = call %emit_code;
+        return;
+}
+
+func public %__fe_sonatina_entry() {
+    block0:
+        call %dispatch;
+        evm_stop;
+}
+
+
+object @Contract {
+    section runtime {
+        entry %__fe_sonatina_entry;
+        include %dispatch;
+        include %emit_code;
+    }
+}

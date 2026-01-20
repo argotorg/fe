@@ -1,0 +1,428 @@
+---
+source: crates/codegen/tests/sonatina_ir.rs
+assertion_line: 74
+expression: output
+input_file: crates/codegen/tests/fixtures/tstor_ptr_contract.fe
+---
+target = evm-ethereum-osaka
+
+func public %__GuardContract_recv_0_0(v0.i256, v1.i256, v2.i256) -> i256 {
+    block0:
+        v3.i256 = evm_sload v2;
+        v5.i256 = add v3 1.i256;
+        evm_sstore v2 v5;
+        v6.i256 = evm_tload v1;
+        v8.i1 = ne v6 0.i256;
+        v9.i256 = zext v8 i256;
+        v10.i256 = is_zero v9;
+        v11.i256 = is_zero v10;
+        v12.i256 = is_zero v11;
+        evm_tstore v1 v12;
+        return v9;
+}
+
+func public %__GuardContract_runtime() {
+    block0:
+        v1.i256 = call %evm_contracthost_field__u256__3271ca15373d4483 0.i256 0.i256;
+        v2.i256 = call %tstorptr_t__effectref_from_raw__bool__947c0c03c59c6f07 0.i256;
+        v3.i256 = call %runtime_selector__Evm_Sol__2533f5c49b57a682 0.i256;
+        v4.i256 = call %runtime_decoder__Evm_Sol__2533f5c49b57a682 0.i256;
+        v6.i256 = eq v3 1.i256;
+        br v6 block2 block1;
+
+    block1:
+        call %evm_contracthost_abort 0.i256;
+        evm_invalid;
+
+    block2:
+        call %flip_decode_decode__SolDecoder_CallData___c1e4510fd444b966 v4;
+        v10.i256 = call %__GuardContract_recv_0_0 0.i256 v2 v1;
+        call %return_value__Evm_Sol_bool__261f3a707fad09c8 0.i256 v10;
+        evm_invalid;
+}
+
+func public %init_field__Evm_u256__5d0807bcb3704261(v0.i256, v1.i256) -> i256 {
+    block0:
+        v2.i256 = call %evm_contracthost_field__u256__3271ca15373d4483 v0 v1;
+        return v2;
+}
+
+func public %tstorptr_t__effectref_from_raw__bool__947c0c03c59c6f07(v0.i256) -> i256 {
+    block0:
+        return v0;
+}
+
+func public %evm_contracthost_abort(v0.i256) {
+    block0:
+        evm_revert 0.i256 0.i256;
+}
+
+func public %alloc(v0.i256) -> i256 {
+    block0:
+        v2.i256 = mload 64.i256 i256;
+        v4.i256 = eq v2 0.i256;
+        br v4 block1 block2;
+
+    block1:
+        jump block2;
+
+    block2:
+        v6.i256 = phi (v2 block0) (128.i256 block1);
+        v8.i256 = add v6 v0;
+        mstore 64.i256 v8 i256;
+        return v6;
+}
+
+func public %sol_abi_decoder_new__MemoryBytes__b48f82585f3ed728(v0.i256) -> i256 {
+    block0:
+        v1.i256 = call %soldecoder_i__new__MemoryBytes__b48f82585f3ed728 v0;
+        return v1;
+}
+
+func public %evm_contracthost_field__u256__3271ca15373d4483(v0.i256, v1.i256) -> i256 {
+    block0:
+        v3.i256 = call %stor_ptr__Evm_u256__5d0807bcb3704261 0.i256 v1;
+        return v3;
+}
+
+func public %runtime_selector__Evm_Sol__2533f5c49b57a682(v0.i256) -> i256 {
+    block0:
+        v1.i256 = call %evm_contracthost_input v0;
+        v2.i256 = call %calldata_byteinput_len v1;
+        v4.i256 = lt v2 4.i256;
+        br v4 block1 block2;
+
+    block1:
+        call %evm_contracthost_abort v0;
+        evm_invalid;
+
+    block2:
+        v8.i256 = call %calldata_byteinput_word_at v1 0.i256;
+        v9.i256 = call %sol_abi_selector_from_prefix v8;
+        return v9;
+}
+
+func public %runtime_decoder__Evm_Sol__2533f5c49b57a682(v0.i256) -> i256 {
+    block0:
+        v1.i256 = call %evm_contracthost_input v0;
+        v3.i256 = call %sol_abi_decoder_with_base__CallData__b9ab8dc8a4b2f9e v1 4.i256;
+        return v3;
+}
+
+func public %flip_decode_decode__SolDecoder_CallData___c1e4510fd444b966(v0.i256) {
+    block0:
+        return;
+}
+
+func public %return_value__Evm_Sol_bool__261f3a707fad09c8(v0.i256, v1.i256) {
+    block0:
+        v2.i256 = call %sol_abi_encoder_new;
+        v4.i256 = call %solencoder_abiencoder_reserve_head v2 32.i256;
+        call %bool_encode_encode__Sol_SolEncoder__dce63ad1a1fe4ae2 v1 v2;
+        v5.i256 = call %solencoder_abiencoder_finish v2;
+        v6.i256 = mload v5 i256;
+        v7.i256 = add v5 32.i256;
+        v8.i256 = mload v7 i256;
+        call %evm_contracthost_return_bytes v0 v6 v8;
+        evm_invalid;
+}
+
+func public %soldecoder_i__new__MemoryBytes__b48f82585f3ed728(v0.i256) -> i256 {
+    block0:
+        v1.i256 = call %cursor_i__new__MemoryBytes__b48f82585f3ed728 v0;
+        v3.i256 = mload 64.i256 i256;
+        v4.i256 = is_zero v3;
+        v6.i256 = mul v4 128.i256;
+        v7.i256 = or v3 v6;
+        v8.i256 = add v7 128.i256;
+        mstore 64.i256 v8 i256;
+        v9.i256 = mload v1 i256;
+        mstore v7 v9 i256;
+        v11.i256 = add v1 32.i256;
+        v12.i256 = mload v11 i256;
+        v13.i256 = add v7 32.i256;
+        mstore v13 v12 i256;
+        v14.i256 = add v1 64.i256;
+        v15.i256 = mload v14 i256;
+        v16.i256 = add v7 64.i256;
+        mstore v16 v15 i256;
+        v19.i256 = add v7 96.i256;
+        mstore v19 0.i256 i256;
+        return v7;
+}
+
+func public %stor_ptr__Evm_u256__5d0807bcb3704261(v0.i256, v1.i256) -> i256 {
+    block0:
+        v2.i256 = call %storptr_t__effectref_from_raw__u256__3271ca15373d4483 v1;
+        return v2;
+}
+
+func public %evm_contracthost_input(v0.i256) -> i256 {
+    block0:
+        return 0.i256;
+}
+
+func public %calldata_byteinput_len(v0.i256) -> i256 {
+    block0:
+        v1.i256 = evm_calldata_size;
+        v2.i256 = sub v1 v0;
+        return v2;
+}
+
+func public %calldata_byteinput_word_at(v0.i256, v1.i256) -> i256 {
+    block0:
+        v2.i256 = add v0 v1;
+        v3.i256 = evm_calldata_load v2;
+        return v3;
+}
+
+func public %sol_abi_selector_from_prefix(v0.i256) -> i256 {
+    block0:
+        v2.i256 = shr 224.i256 v0;
+        v3.i256 = call %s_intdowncast_downcast_unchecked__u256_u32__6e3637cd3e911b35 v2;
+        return v3;
+}
+
+func public %sol_abi_decoder_with_base__CallData__b9ab8dc8a4b2f9e(v0.i256, v1.i256) -> i256 {
+    block0:
+        v2.i256 = call %soldecoder_i__with_base__CallData__b9ab8dc8a4b2f9e v0 v1;
+        return v2;
+}
+
+func public %sol_abi_encoder_new() -> i256 {
+    block0:
+        v0.i256 = call %solencoder_new;
+        return v0;
+}
+
+func public %solencoder_abiencoder_reserve_head(v0.i256, v1.i256) -> i256 {
+    block0:
+        call %solencoder_ensure_init_mem v0 v1;
+        v2.i256 = mload v0 i256;
+        return v2;
+}
+
+func public %bool_encode_encode__Sol_SolEncoder__dce63ad1a1fe4ae2(v0.i256, v1.i256) {
+    block0:
+        br v0 block1 block3;
+
+    block1:
+        call %solencoder_abiencoder_write_word v1 1.i256;
+        jump block2;
+
+    block2:
+        return;
+
+    block3:
+        call %solencoder_abiencoder_write_word v1 0.i256;
+        jump block2;
+}
+
+func public %solencoder_abiencoder_finish(v0.i256) -> i256 {
+    block0:
+        v1.i256 = mload v0 i256;
+        v3.i256 = add v0 64.i256;
+        v4.i256 = mload v3 i256;
+        v5.i256 = mload 64.i256 i256;
+        v6.i256 = is_zero v5;
+        v8.i256 = mul v6 128.i256;
+        v9.i256 = or v5 v8;
+        v10.i256 = add v9 64.i256;
+        mstore 64.i256 v10 i256;
+        mstore v9 v1 i256;
+        v11.i256 = sub v4 v1;
+        v13.i256 = add v9 32.i256;
+        mstore v13 v11 i256;
+        return v9;
+}
+
+func public %evm_contracthost_return_bytes(v0.i256, v1.i256, v2.i256) {
+    block0:
+        evm_return v1 v2;
+}
+
+func public %cursor_i__new__MemoryBytes__b48f82585f3ed728(v0.i256) -> i256 {
+    block0:
+        v2.i256 = mload 64.i256 i256;
+        v3.i256 = is_zero v2;
+        v5.i256 = mul v3 128.i256;
+        v6.i256 = or v2 v5;
+        v8.i256 = add v6 96.i256;
+        mstore 64.i256 v8 i256;
+        v9.i256 = mload v0 i256;
+        mstore v6 v9 i256;
+        v11.i256 = add v0 32.i256;
+        v12.i256 = mload v11 i256;
+        v13.i256 = add v6 32.i256;
+        mstore v13 v12 i256;
+        v15.i256 = add v6 64.i256;
+        mstore v15 0.i256 i256;
+        return v6;
+}
+
+func public %storptr_t__effectref_from_raw__u256__3271ca15373d4483(v0.i256) -> i256 {
+    block0:
+        return v0;
+}
+
+func public %s_intdowncast_downcast_unchecked__u256_u32__6e3637cd3e911b35(v0.i256) -> i256 {
+    block0:
+        v1.i256 = call %u256_intword_to_word v0;
+        v2.i256 = call %u32_intword_from_word v1;
+        return v2;
+}
+
+func public %soldecoder_i__with_base__CallData__b9ab8dc8a4b2f9e(v0.i256, v1.i256) -> i256 {
+    block0:
+        v2.i256 = call %cursor_i__new__CallData__b9ab8dc8a4b2f9e v0;
+        v3.i256 = call %cursor_i__fork_mem__CallData__b9ab8dc8a4b2f9e v2 v1;
+        v5.i256 = mload 64.i256 i256;
+        v6.i256 = is_zero v5;
+        v8.i256 = mul v6 128.i256;
+        v9.i256 = or v5 v8;
+        v11.i256 = add v9 96.i256;
+        mstore 64.i256 v11 i256;
+        v12.i256 = mload v3 i256;
+        mstore v9 v12 i256;
+        v14.i256 = add v3 32.i256;
+        v15.i256 = mload v14 i256;
+        v16.i256 = add v9 32.i256;
+        mstore v16 v15 i256;
+        v17.i256 = add v9 64.i256;
+        mstore v17 v1 i256;
+        return v9;
+}
+
+func public %solencoder_new() -> i256 {
+    block0:
+        v1.i256 = mload 64.i256 i256;
+        v2.i256 = is_zero v1;
+        v4.i256 = mul v2 128.i256;
+        v5.i256 = or v1 v4;
+        v7.i256 = add v5 96.i256;
+        mstore 64.i256 v7 i256;
+        mstore v5 0.i256 i256;
+        v10.i256 = add v5 32.i256;
+        mstore v10 0.i256 i256;
+        v11.i256 = add v5 64.i256;
+        mstore v11 0.i256 i256;
+        return v5;
+}
+
+func public %solencoder_ensure_init_mem(v0.i256, v1.i256) {
+    block0:
+        v2.i256 = mload v0 i256;
+        v4.i256 = eq v2 0.i256;
+        br v4 block1 block2;
+
+    block1:
+        v6.i256 = call %alloc v1;
+        mstore v0 v6 i256;
+        v9.i256 = add v0 32.i256;
+        mstore v9 v6 i256;
+        v10.i256 = add v6 v1;
+        v12.i256 = add v0 64.i256;
+        mstore v12 v10 i256;
+        jump block2;
+
+    block2:
+        return;
+}
+
+func public %solencoder_abiencoder_write_word(v0.i256, v1.i256) {
+    block0:
+        v3.i256 = add v0 32.i256;
+        v4.i256 = mload v3 i256;
+        mstore v4 v1 i256;
+        v5.i256 = add v4 32.i256;
+        v6.i256 = add v0 32.i256;
+        mstore v6 v5 i256;
+        return;
+}
+
+func public %u256_intword_to_word(v0.i256) -> i256 {
+    block0:
+        return v0;
+}
+
+func public %u32_intword_from_word(v0.i256) -> i256 {
+    block0:
+        return v0;
+}
+
+func public %cursor_i__new__CallData__b9ab8dc8a4b2f9e(v0.i256) -> i256 {
+    block0:
+        v2.i256 = mload 64.i256 i256;
+        v3.i256 = is_zero v2;
+        v5.i256 = mul v3 128.i256;
+        v6.i256 = or v2 v5;
+        v7.i256 = add v6 64.i256;
+        mstore 64.i256 v7 i256;
+        mstore v6 v0 i256;
+        v10.i256 = add v6 32.i256;
+        mstore v10 0.i256 i256;
+        return v6;
+}
+
+func public %cursor_i__fork_mem__CallData__b9ab8dc8a4b2f9e(v0.i256, v1.i256) -> i256 {
+    block0:
+        v2.i256 = mload v0 i256;
+        v4.i256 = mload 64.i256 i256;
+        v5.i256 = is_zero v4;
+        v7.i256 = mul v5 128.i256;
+        v8.i256 = or v4 v7;
+        v9.i256 = add v8 64.i256;
+        mstore 64.i256 v9 i256;
+        mstore v8 v2 i256;
+        v11.i256 = add v8 32.i256;
+        mstore v11 v1 i256;
+        return v8;
+}
+
+func public %__fe_sonatina_entry() {
+    block0:
+        call %__GuardContract_runtime;
+        evm_stop;
+}
+
+
+object @Contract {
+    section runtime {
+        entry %__fe_sonatina_entry;
+        include %__GuardContract_runtime;
+        include %__GuardContract_recv_0_0;
+        include %init_field__Evm_u256__5d0807bcb3704261;
+        include %tstorptr_t__effectref_from_raw__bool__947c0c03c59c6f07;
+        include %evm_contracthost_abort;
+        include %alloc;
+        include %sol_abi_decoder_new__MemoryBytes__b48f82585f3ed728;
+        include %evm_contracthost_field__u256__3271ca15373d4483;
+        include %runtime_selector__Evm_Sol__2533f5c49b57a682;
+        include %runtime_decoder__Evm_Sol__2533f5c49b57a682;
+        include %flip_decode_decode__SolDecoder_CallData___c1e4510fd444b966;
+        include %return_value__Evm_Sol_bool__261f3a707fad09c8;
+        include %soldecoder_i__new__MemoryBytes__b48f82585f3ed728;
+        include %stor_ptr__Evm_u256__5d0807bcb3704261;
+        include %evm_contracthost_input;
+        include %calldata_byteinput_len;
+        include %calldata_byteinput_word_at;
+        include %sol_abi_selector_from_prefix;
+        include %sol_abi_decoder_with_base__CallData__b9ab8dc8a4b2f9e;
+        include %sol_abi_encoder_new;
+        include %solencoder_abiencoder_reserve_head;
+        include %bool_encode_encode__Sol_SolEncoder__dce63ad1a1fe4ae2;
+        include %solencoder_abiencoder_finish;
+        include %evm_contracthost_return_bytes;
+        include %cursor_i__new__MemoryBytes__b48f82585f3ed728;
+        include %storptr_t__effectref_from_raw__u256__3271ca15373d4483;
+        include %s_intdowncast_downcast_unchecked__u256_u32__6e3637cd3e911b35;
+        include %soldecoder_i__with_base__CallData__b9ab8dc8a4b2f9e;
+        include %solencoder_new;
+        include %solencoder_ensure_init_mem;
+        include %solencoder_abiencoder_write_word;
+        include %u256_intword_to_word;
+        include %u32_intword_from_word;
+        include %cursor_i__new__CallData__b9ab8dc8a4b2f9e;
+        include %cursor_i__fork_mem__CallData__b9ab8dc8a4b2f9e;
+    }
+}

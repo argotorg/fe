@@ -1,0 +1,53 @@
+---
+source: crates/codegen/tests/sonatina_ir.rs
+assertion_line: 65
+expression: output
+input_file: crates/codegen/tests/fixtures/bit_ops.fe
+---
+target = evm-ethereum-osaka
+
+func public %bit_ops(v0.i256, v1.i256) -> i256 {
+    block0:
+        v2.i256 = and v0 v1;
+        v3.i256 = or v0 v1;
+        v4.i256 = xor v0 v1;
+        v6.i256 = shl 8.i256 v0;
+        v8.i256 = shr 2.i256 v0;
+        v10.i256 = mload 64.i256 i256;
+        v11.i256 = is_zero v10;
+        v13.i256 = mul v11 128.i256;
+        v14.i256 = or v10 v13;
+        v16.i256 = add v14 160.i256;
+        mstore 64.i256 v16 i256;
+        mstore v14 v2 i256;
+        v18.i256 = add v14 32.i256;
+        mstore v18 v3 i256;
+        v19.i256 = add v14 64.i256;
+        mstore v19 v4 i256;
+        v21.i256 = add v14 96.i256;
+        mstore v21 v6 i256;
+        v22.i256 = add v14 128.i256;
+        mstore v22 v8 i256;
+        return v14;
+}
+
+func public %pow_op(v0.i256, v1.i256) -> i256 {
+    block0:
+        v2.i256 = evm_exp v0 v1;
+        return v2;
+}
+
+func public %__fe_sonatina_entry() {
+    block0:
+        v1.i256 = call %bit_ops 0.i256 0.i256;
+        evm_stop;
+}
+
+
+object @Contract {
+    section runtime {
+        entry %__fe_sonatina_entry;
+        include %bit_ops;
+        include %pow_op;
+    }
+}
