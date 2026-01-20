@@ -16,7 +16,7 @@ use rustc_hash::FxHashMap;
 use hir::analysis::ty::ty_def::{PrimTy, TyBase, TyData};
 use sonatina_ir::{
     BlockId, I256, Module, Signature, Type, ValueId,
-    builder::ModuleBuilder,
+    builder::{ModuleBuilder, Variable},
     func_cursor::InstInserter,
     inst::{
         arith::{Add, Mul, Neg, Shl, Shr, Sub},
@@ -26,6 +26,7 @@ use sonatina_ir::{
         data::{Mload, Mstore},
         evm::{
             EvmCalldataLoad, EvmExp, EvmInvalid, EvmSload, EvmSstore,
+            EvmStop,
             EvmTload, EvmTstore, EvmUdiv, EvmUmod,
         },
         logic::{And, Not, Or, Xor},
@@ -236,9 +237,14 @@ impl<'db, 'a> ModuleLowerer<'db, 'a> {
         };
 
         let entry_ref = self.func_map[&entry_idx];
+        let entry_mir_func = &self.mir.functions[entry_idx];
+
+        // Create a wrapper entrypoint that halts with `STOP` instead of relying on internal
+        // `Return` (which is only valid for intra-module calls with a return PC).
+        let wrapper_ref = self.create_entry_wrapper(entry_ref, entry_mir_func)?;
 
         // Create runtime section with entry and all other functions as includes
-        let mut directives = vec![Directive::Entry(entry_ref)];
+        let mut directives = vec![Directive::Entry(wrapper_ref)];
 
         // Include all other functions
         for (idx, _func) in self.mir.functions.iter().enumerate() {
@@ -267,6 +273,52 @@ impl<'db, 'a> ModuleLowerer<'db, 'a> {
         Ok(())
     }
 
+    fn create_entry_wrapper(
+        &mut self,
+        entry_ref: FuncRef,
+        entry_mir_func: &mir::MirFunction<'db>,
+    ) -> Result<FuncRef, LowerError> {
+        const WRAPPER_NAME: &str = "__fe_sonatina_entry";
+        if self.name_map.contains_key(WRAPPER_NAME) {
+            return Err(LowerError::Internal(format!(
+                "entry wrapper name collision: `{WRAPPER_NAME}`"
+            )));
+        }
+
+        let sig = Signature::new(
+            WRAPPER_NAME,
+            sonatina_ir::Linkage::Public,
+            &[],
+            types::unit_type(),
+        );
+        let func_ref = self.builder.declare_function(sig).map_err(|e| {
+            LowerError::Internal(format!("failed to declare entry wrapper `{WRAPPER_NAME}`: {e}"))
+        })?;
+
+        let mut fb = self.builder.func_builder::<InstInserter>(func_ref);
+        let is = self.isa.inst_set();
+
+        let entry_block = fb.append_block();
+        fb.switch_to_block(entry_block);
+
+        let can_call = entry_mir_func.body.param_locals.is_empty()
+            && entry_mir_func.body.effect_param_locals.is_empty();
+        if can_call {
+            let call_inst = Call::new(is, entry_ref, Vec::new().into());
+            if entry_mir_func.returns_value {
+                let _ = fb.insert_inst(call_inst, types::word_type());
+            } else {
+                fb.insert_inst_no_result(call_inst);
+            }
+        }
+
+        fb.insert_inst_no_result(EvmStop::new(is));
+        fb.seal_all();
+        fb.finish();
+
+        Ok(func_ref)
+    }
+
     /// Lower a single function body.
     fn lower_function(
         &self,
@@ -282,13 +334,13 @@ impl<'db, 'a> ModuleLowerer<'db, 'a> {
         // Maps MIR value IDs to Sonatina value IDs
         let mut value_map: FxHashMap<mir::ValueId, ValueId> = FxHashMap::default();
 
-        // Maps MIR local IDs to Sonatina value IDs (for SSA)
-        // TODO: This is NOT proper SSA construction. local_map is updated linearly per block,
-        // so any local assigned in multiple predecessors needs phi/merge logic. Currently
-        // "last lowered block wins" which is incorrect for diamond/loop CFGs. Sonatina's
-        // FunctionBuilder should handle phi insertion if we seal blocks correctly, but we
-        // may need to use block arguments or explicit phi nodes for locals that merge.
-        let mut local_map: FxHashMap<mir::LocalId, ValueId> = FxHashMap::default();
+        // Maps MIR local IDs to Sonatina SSA variables.
+        let mut local_vars: FxHashMap<mir::LocalId, Variable> = FxHashMap::default();
+        for (idx, _local) in func.body.locals.iter().enumerate() {
+            let local_id = mir::LocalId(idx as u32);
+            let var = fb.declare_var(types::word_type());
+            local_vars.insert(local_id, var);
+        }
 
         // Create blocks
         for (idx, _block) in func.body.blocks.iter().enumerate() {
@@ -304,7 +356,8 @@ impl<'db, 'a> ModuleLowerer<'db, 'a> {
         let entry_block = func.body.entry;
         let _sonatina_entry = block_map[&entry_block];
 
-        // Map function arguments to parameter locals (regular params + effect params)
+        // Map function arguments to parameter locals (regular params + effect params).
+        fb.switch_to_block(_sonatina_entry);
         let args = fb.args().to_vec();
         let all_param_locals = func
             .body
@@ -312,9 +365,11 @@ impl<'db, 'a> ModuleLowerer<'db, 'a> {
             .iter()
             .chain(func.body.effect_param_locals.iter());
         for (i, &local_id) in all_param_locals.enumerate() {
-            if i < args.len() {
-                local_map.insert(local_id, args[i]);
-            }
+            let Some(&arg_val) = args.get(i) else { break };
+            let var = local_vars.get(&local_id).copied().ok_or_else(|| {
+                LowerError::Internal(format!("missing SSA variable for param local {local_id:?}"))
+            })?;
+            fb.def_var(var, arg_val);
         }
 
         // Lower each block
@@ -332,7 +387,7 @@ impl<'db, 'a> ModuleLowerer<'db, 'a> {
                     inst,
                     &func.body,
                     &mut value_map,
-                    &mut local_map,
+                    &local_vars,
                     &self.name_map,
                     &self.returns_value_map,
                     is,
@@ -348,7 +403,7 @@ impl<'db, 'a> ModuleLowerer<'db, 'a> {
                 &block_map,
                 &func.body,
                 &mut value_map,
-                &mut local_map,
+                &local_vars,
                 is,
             )?;
         }
@@ -369,7 +424,7 @@ fn lower_instruction<'db, C: sonatina_ir::func_cursor::FuncCursor>(
     inst: &mir::MirInst<'db>,
     body: &mir::MirBody<'db>,
     value_map: &mut FxHashMap<mir::ValueId, ValueId>,
-    local_map: &mut FxHashMap<mir::LocalId, ValueId>,
+    local_vars: &FxHashMap<mir::LocalId, Variable>,
     name_map: &FxHashMap<String, FuncRef>,
     returns_value_map: &FxHashMap<String, bool>,
     is: &sonatina_ir::inst::evm::inst_set::EvmInstSet,
@@ -378,8 +433,22 @@ fn lower_instruction<'db, C: sonatina_ir::func_cursor::FuncCursor>(
 
     match inst {
         MirInst::Assign { dest, rvalue, .. } => {
-            let result = lower_rvalue(fb, db, target_layout, rvalue, body, value_map, local_map, name_map, returns_value_map, is)?;
+            let result = lower_rvalue(
+                fb,
+                db,
+                target_layout,
+                rvalue,
+                body,
+                value_map,
+                local_vars,
+                name_map,
+                returns_value_map,
+                is,
+            )?;
             if let (Some(dest_local), Some(result_val)) = (dest, result) {
+                let dest_var = local_vars.get(dest_local).copied().ok_or_else(|| {
+                    LowerError::Internal(format!("missing SSA variable for local {dest_local:?}"))
+                })?;
                 // Apply from_word conversion for Load operations
                 let converted = if matches!(rvalue, mir::Rvalue::Load { .. }) {
                     let dest_ty = body.locals.get(dest_local.index())
@@ -389,12 +458,30 @@ fn lower_instruction<'db, C: sonatina_ir::func_cursor::FuncCursor>(
                 } else {
                     result_val
                 };
-                local_map.insert(*dest_local, converted);
+                fb.def_var(dest_var, converted);
             }
         }
         MirInst::Store { place, value } => {
-            let addr = lower_place_address(fb, db, target_layout, place, body, value_map, local_map, is)?;
-            let raw_val = lower_value(fb, db, target_layout, *value, body, value_map, local_map, is)?;
+            let addr = lower_place_address(
+                fb,
+                db,
+                target_layout,
+                place,
+                body,
+                value_map,
+                local_vars,
+                is,
+            )?;
+            let raw_val = lower_value(
+                fb,
+                db,
+                target_layout,
+                *value,
+                body,
+                value_map,
+                local_vars,
+                is,
+            )?;
 
             // Check if this is a by-ref value that needs deep-copy
             // TODO: Implement deep-copy for ValueRepr::Ref like the Yul emitter does.
@@ -447,7 +534,7 @@ fn lower_instruction<'db, C: sonatina_ir::func_cursor::FuncCursor>(
         }
         MirInst::BindValue { value } => {
             // Ensure the value is lowered and cached
-            let _ = lower_value(fb, db, target_layout, *value, body, value_map, local_map, is)?;
+            let _ = lower_value(fb, db, target_layout, *value, body, value_map, local_vars, is)?;
         }
     }
 
@@ -462,7 +549,7 @@ fn lower_rvalue<'db, C: sonatina_ir::func_cursor::FuncCursor>(
     rvalue: &mir::Rvalue<'db>,
     body: &mir::MirBody<'db>,
     value_map: &mut FxHashMap<mir::ValueId, ValueId>,
-    local_map: &mut FxHashMap<mir::LocalId, ValueId>,
+    local_vars: &FxHashMap<mir::LocalId, Variable>,
     name_map: &FxHashMap<String, FuncRef>,
     returns_value_map: &FxHashMap<String, bool>,
     is: &sonatina_ir::inst::evm::inst_set::EvmInstSet,
@@ -476,7 +563,7 @@ fn lower_rvalue<'db, C: sonatina_ir::func_cursor::FuncCursor>(
             Ok(Some(zero))
         }
         Rvalue::Value(value_id) => {
-            let val = lower_value(fb, db, target_layout, *value_id, body, value_map, local_map, is)?;
+            let val = lower_value(fb, db, target_layout, *value_id, body, value_map, local_vars, is)?;
             Ok(Some(val))
         }
         Rvalue::Call(call) => {
@@ -492,11 +579,20 @@ fn lower_rvalue<'db, C: sonatina_ir::func_cursor::FuncCursor>(
             // Lower arguments (regular args + effect args)
             let mut args = Vec::with_capacity(call.args.len() + call.effect_args.len());
             for &arg in &call.args {
-                let val = lower_value(fb, db, target_layout, arg, body, value_map, local_map, is)?;
+                let val = lower_value(fb, db, target_layout, arg, body, value_map, local_vars, is)?;
                 args.push(val);
             }
             for &effect_arg in &call.effect_args {
-                let val = lower_value(fb, db, target_layout, effect_arg, body, value_map, local_map, is)?;
+                let val = lower_value(
+                    fb,
+                    db,
+                    target_layout,
+                    effect_arg,
+                    body,
+                    value_map,
+                    local_vars,
+                    is,
+                )?;
                 args.push(val);
             }
 
@@ -505,7 +601,11 @@ fn lower_rvalue<'db, C: sonatina_ir::func_cursor::FuncCursor>(
             let callee_returns = returns_value_map
                 .get(callee_name)
                 .copied()
-                .unwrap_or(true); // Default to returning value if unknown
+                .ok_or_else(|| {
+                    LowerError::Internal(format!(
+                        "missing return type metadata for function: {callee_name}"
+                    ))
+                })?;
             if callee_returns {
                 let result = fb.insert_inst(call_inst, types::word_type());
                 Ok(Some(result))
@@ -516,10 +616,11 @@ fn lower_rvalue<'db, C: sonatina_ir::func_cursor::FuncCursor>(
             }
         }
         Rvalue::Intrinsic { op, args } => {
-            lower_intrinsic(fb, db, target_layout, *op, args, body, value_map, local_map, is)
+            lower_intrinsic(fb, db, target_layout, *op, args, body, value_map, local_vars, is)
         }
         Rvalue::Load { place } => {
-            let addr = lower_place_address(fb, db, target_layout, place, body, value_map, local_map, is)?;
+            let addr =
+                lower_place_address(fb, db, target_layout, place, body, value_map, local_vars, is)?;
             let addr_space = body.place_address_space(place);
 
             let result = match addr_space {
@@ -557,18 +658,37 @@ fn lower_value<'db, C: sonatina_ir::func_cursor::FuncCursor>(
     value_id: mir::ValueId,
     body: &mir::MirBody<'db>,
     value_map: &mut FxHashMap<mir::ValueId, ValueId>,
-    local_map: &mut FxHashMap<mir::LocalId, ValueId>,
+    local_vars: &FxHashMap<mir::LocalId, Variable>,
     is: &sonatina_ir::inst::evm::inst_set::EvmInstSet,
 ) -> Result<ValueId, LowerError> {
-    // Check if already lowered
-    if let Some(&val) = value_map.get(&value_id) {
-        return Ok(val);
+    let value_data = &body.values[value_id.index()];
+
+    // Some origins depend on the current SSA state / current block; avoid caching them
+    // across the whole function.
+    let cacheable = !matches!(
+        value_data.origin,
+        mir::ValueOrigin::Local(_) | mir::ValueOrigin::PlaceRef(_)
+    );
+    if cacheable {
+        if let Some(&val) = value_map.get(&value_id) {
+            return Ok(val);
+        }
     }
 
-    let value_data = &body.values[value_id.index()];
-    let result = lower_value_origin(fb, db, target_layout, &value_data.origin, body, value_map, local_map, is)?;
+    let result = lower_value_origin(
+        fb,
+        db,
+        target_layout,
+        &value_data.origin,
+        body,
+        value_map,
+        local_vars,
+        is,
+    )?;
 
-    value_map.insert(value_id, result);
+    if cacheable {
+        value_map.insert(value_id, result);
+    }
     Ok(result)
 }
 
@@ -580,7 +700,7 @@ fn lower_value_origin<'db, C: sonatina_ir::func_cursor::FuncCursor>(
     origin: &mir::ValueOrigin<'db>,
     body: &mir::MirBody<'db>,
     value_map: &mut FxHashMap<mir::ValueId, ValueId>,
-    local_map: &mut FxHashMap<mir::LocalId, ValueId>,
+    local_vars: &FxHashMap<mir::LocalId, Variable>,
     is: &sonatina_ir::inst::evm::inst_set::EvmInstSet,
 ) -> Result<ValueId, LowerError> {
     use mir::ValueOrigin;
@@ -602,26 +722,30 @@ fn lower_value_origin<'db, C: sonatina_ir::func_cursor::FuncCursor>(
             }
         },
         ValueOrigin::Local(local_id) => {
-            local_map.get(local_id).copied().ok_or_else(|| {
-                LowerError::Internal(format!("local {:?} not found", local_id))
-            })
+            let var = local_vars.get(local_id).copied().ok_or_else(|| {
+                LowerError::Internal(format!("SSA variable not found for local {local_id:?}"))
+            })?;
+            Ok(fb.use_var(var))
         }
         ValueOrigin::Unit => {
             // Unit is represented as 0
             Ok(fb.make_imm_value(I256::zero()))
         }
         ValueOrigin::Unary { op, inner } => {
-            let inner_val = lower_value(fb, db, target_layout, *inner, body, value_map, local_map, is)?;
+            let inner_val =
+                lower_value(fb, db, target_layout, *inner, body, value_map, local_vars, is)?;
             lower_unary_op(fb, *op, inner_val, is)
         }
         ValueOrigin::Binary { op, lhs, rhs } => {
-            let lhs_val = lower_value(fb, db, target_layout, *lhs, body, value_map, local_map, is)?;
-            let rhs_val = lower_value(fb, db, target_layout, *rhs, body, value_map, local_map, is)?;
+            let lhs_val =
+                lower_value(fb, db, target_layout, *lhs, body, value_map, local_vars, is)?;
+            let rhs_val =
+                lower_value(fb, db, target_layout, *rhs, body, value_map, local_vars, is)?;
             lower_binary_op(fb, *op, lhs_val, rhs_val, is)
         }
         ValueOrigin::TransparentCast { value } => {
             // Transparent cast just passes through the inner value
-            lower_value(fb, db, target_layout, *value, body, value_map, local_map, is)
+            lower_value(fb, db, target_layout, *value, body, value_map, local_vars, is)
         }
         ValueOrigin::ControlFlowResult { expr } => {
             // ControlFlowResult values should be converted to Local values during MIR lowering.
@@ -632,7 +756,7 @@ fn lower_value_origin<'db, C: sonatina_ir::func_cursor::FuncCursor>(
         }
         ValueOrigin::PlaceRef(place) => {
             // Compute the full address including projections
-            lower_place_address(fb, db, target_layout, place, body, value_map, local_map, is)
+            lower_place_address(fb, db, target_layout, place, body, value_map, local_vars, is)
         }
         ValueOrigin::FieldPtr(_) => {
             // TODO: field pointer arithmetic
@@ -786,13 +910,13 @@ fn lower_intrinsic<'db, C: sonatina_ir::func_cursor::FuncCursor>(
     args: &[mir::ValueId],
     body: &mir::MirBody<'db>,
     value_map: &mut FxHashMap<mir::ValueId, ValueId>,
-    local_map: &mut FxHashMap<mir::LocalId, ValueId>,
+    local_vars: &FxHashMap<mir::LocalId, Variable>,
     is: &sonatina_ir::inst::evm::inst_set::EvmInstSet,
 ) -> Result<Option<ValueId>, LowerError> {
     // Lower all arguments first
     let mut lowered_args = Vec::with_capacity(args.len());
     for &arg in args {
-        let val = lower_value(fb, db, target_layout, arg, body, value_map, local_map, is)?;
+        let val = lower_value(fb, db, target_layout, arg, body, value_map, local_vars, is)?;
         lowered_args.push(val);
     }
 
@@ -969,10 +1093,11 @@ fn lower_place_address<'db, C: sonatina_ir::func_cursor::FuncCursor>(
     place: &Place<'db>,
     body: &mir::MirBody<'db>,
     value_map: &mut FxHashMap<mir::ValueId, ValueId>,
-    local_map: &mut FxHashMap<mir::LocalId, ValueId>,
+    local_vars: &FxHashMap<mir::LocalId, Variable>,
     is: &sonatina_ir::inst::evm::inst_set::EvmInstSet,
 ) -> Result<ValueId, LowerError> {
-    let mut base_val = lower_value(fb, db, target_layout, place.base, body, value_map, local_map, is)?;
+    let mut base_val =
+        lower_value(fb, db, target_layout, place.base, body, value_map, local_vars, is)?;
 
     if place.projection.is_empty() {
         return Ok(base_val);
@@ -1072,7 +1197,16 @@ fn lower_place_address<'db, C: sonatina_ir::func_cursor::FuncCursor>(
                             total_offset = 0;
                         }
                         // Compute dynamic index offset: idx * stride
-                        let idx_val = lower_value(fb, db, target_layout, *value_id, body, value_map, local_map, is)?;
+                        let idx_val = lower_value(
+                            fb,
+                            db,
+                            target_layout,
+                            *value_id,
+                            body,
+                            value_map,
+                            local_vars,
+                            is,
+                        )?;
                         let offset_val = if stride == 1 {
                             idx_val
                         } else {
@@ -1117,7 +1251,7 @@ fn lower_terminator<'db, C: sonatina_ir::func_cursor::FuncCursor>(
     block_map: &FxHashMap<mir::BasicBlockId, BlockId>,
     body: &mir::MirBody<'db>,
     value_map: &mut FxHashMap<mir::ValueId, ValueId>,
-    local_map: &mut FxHashMap<mir::LocalId, ValueId>,
+    local_vars: &FxHashMap<mir::LocalId, Variable>,
     is: &sonatina_ir::inst::evm::inst_set::EvmInstSet,
 ) -> Result<(), LowerError> {
     use mir::Terminator;
@@ -1125,7 +1259,7 @@ fn lower_terminator<'db, C: sonatina_ir::func_cursor::FuncCursor>(
     match term {
         Terminator::Return(ret_val) => {
             let ret_sonatina = if let Some(v) = ret_val {
-                Some(lower_value(fb, db, target_layout, *v, body, value_map, local_map, is)?)
+                Some(lower_value(fb, db, target_layout, *v, body, value_map, local_vars, is)?)
             } else {
                 None
             };
@@ -1136,7 +1270,8 @@ fn lower_terminator<'db, C: sonatina_ir::func_cursor::FuncCursor>(
             fb.insert_inst_no_result(Jump::new(is, target_block));
         }
         Terminator::Branch { cond, then_bb, else_bb } => {
-            let cond_val = lower_value(fb, db, target_layout, *cond, body, value_map, local_map, is)?;
+            let cond_val =
+                lower_value(fb, db, target_layout, *cond, body, value_map, local_vars, is)?;
             let then_block = block_map[then_bb];
             let else_block = block_map[else_bb];
             // Br: cond, nz_dest (then), z_dest (else)
