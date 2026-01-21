@@ -5,7 +5,8 @@ expression: mir_output
 fn bump_lock__StorPtr_u256___64779554cfbf0358(v0: u256) -> ():
   bb0:
     v1: u256 = load stor[v0]
-    store stor[v0] = (v1 + 1)
+    v2: u256 = u256_addassign_add_assign(v1, 1)
+    store stor[v0] = v2
     ret
 
 fn __Guard_init_contract(v0: u256) -> ():
@@ -64,10 +65,16 @@ fn __Guard_init_code_len() -> u256:
     v0: u256 = code_region_len(func_item(__Guard_init))
     ret v0
 
+fn u256_addassign_add_assign(v0: u256, v1: u256) -> u256:
+  bb0:
+    v2: u256 = u256_add_add(v0, v1)
+    ret v2
+
 fn bump_lock__TStorPtr_u256___e67d09080c0f1393(v0: u256) -> ():
   bb0:
     v1: u256 = load tstor[v0]
-    store tstor[v0] = (v1 + 1)
+    v2: u256 = u256_addassign_add_assign(v1, 1)
+    store tstor[v0] = v2
     ret
 
 fn tstorptr_t__effectref_from_raw__u256__3271ca15373d4483(v0: u256) -> TStorPtr<u256>:
@@ -81,12 +88,14 @@ fn evm_contracthost_abort(v0: Evm) -> !:
 fn alloc(v0: u256) -> u256:
   bb0:
     v1: u256 = mload(64)
-    br (v1 == 0) bb1 bb2
+    v2: bool = u256_eq_eq(v1, 0)
+    br v2 bb1 bb2
   bb1:
     v1 = 128
     jmp bb2
   bb2:
-    eval mstore(64, (v1 + v0))
+    v3: u256 = u256_add_add(v1, v0)
+    eval mstore(64, v3)
     ret v1
 
 fn sol_abi_decoder_new__MemoryBytes__b48f82585f3ed728(v0: I) -> SolDecoder<MemoryBytes>:
@@ -98,13 +107,14 @@ fn runtime_selector__Evm_Sol__2533f5c49b57a682(v0: Self) -> u32:
   bb0:
     v1: CallData = evm_contracthost_input(v0)
     v2: u256 = calldata_byteinput_len(v1)
-    br (v2 < 4) bb1 bb2
+    v3: bool = u256_ord_lt(v2, 4)
+    br v3 bb1 bb2
   bb1:
     terminate evm_contracthost_abort(v0)
   bb2:
-    v3: u256 = calldata_byteinput_word_at(v1, 0)
-    v4: u32 = sol_abi_selector_from_prefix(v3)
-    ret v4
+    v4: u256 = calldata_byteinput_word_at(v1, 0)
+    v5: u32 = sol_abi_selector_from_prefix(v4)
+    ret v5
 
 fn runtime_decoder__Evm_Sol__2533f5c49b57a682(v0: Self) -> SolDecoder<CallData>:
   bb0:
@@ -119,6 +129,21 @@ fn enter_decode_decode__SolDecoder_CallData___c1e4510fd444b966(v0: D) -> Enter:
 fn return_unit__Evm__1572a3ac6cae1070(v0: Self) -> !:
   bb0:
     terminate evm_contracthost_return_bytes(v0, 0, 0)
+
+fn u256_add_add(v0: u256, v1: u256) -> u256:
+  bb0:
+    v2: u256 = __add_u256(v0, v1)
+    v3: bool = __lt_u256(v2, v0)
+    br v3 bb1 bb2
+  bb1:
+    terminate revert(0, 0)
+  bb2:
+    ret v2
+
+fn u256_eq_eq(v0: u256, v1: u256) -> bool:
+  bb0:
+    v2: bool = __eq_u256(v0, v1)
+    ret v2
 
 fn soldecoder_i__new__MemoryBytes__b48f82585f3ed728(v0: I) -> SolDecoder<MemoryBytes>:
   bb0:
@@ -135,12 +160,19 @@ fn evm_contracthost_input(v0: Evm) -> CallData:
 fn calldata_byteinput_len(v0: CallData) -> u256:
   bb0:
     v1: u256 = calldatasize()
-    ret (v1 - v0)
+    v2: u256 = u256_sub_sub(v1, v0)
+    ret v2
+
+fn u256_ord_lt(v0: u256, v1: u256) -> bool:
+  bb0:
+    v2: bool = __lt_u256(v0, v1)
+    ret v2
 
 fn calldata_byteinput_word_at(v0: CallData, v1: u256) -> u256:
   bb0:
-    v2: u256 = calldataload((v0 + v1))
-    ret v2
+    v2: u256 = u256_add_add(v0, v1)
+    v3: u256 = calldataload(v2)
+    ret v3
 
 fn sol_abi_selector_from_prefix(v0: u256) -> u32:
   bb0:
@@ -162,6 +194,16 @@ fn cursor_i__new__MemoryBytes__b48f82585f3ed728(v0: I) -> Cursor<MemoryBytes>:
     init mem[v2] { .0 = v0, .1 = 0 }
     v1: Cursor<MemoryBytes> = v2
     ret v1
+
+fn u256_sub_sub(v0: u256, v1: u256) -> u256:
+  bb0:
+    v2: bool = __gt_u256(v1, v0)
+    br v2 bb1 bb2
+  bb1:
+    terminate revert(0, 0)
+  bb2:
+    v3: u256 = __sub_u256(v0, v1)
+    ret v3
 
 fn s_intdowncast_downcast_unchecked__u256_u32__6e3637cd3e911b35(v0: S) -> u32:
   bb0:

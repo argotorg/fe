@@ -1,6 +1,5 @@
 ---
 source: crates/codegen/tests/yul.rs
-assertion_line: 42
 expression: output
 input_file: tests/fixtures/ret.fe
 ---
@@ -11,22 +10,56 @@ function $retfoo($b1, $x) -> ret {
     leave
   }
   if iszero(v0) {
-    let v1 := lt($x, 5)
-    if v1 {
+    let v1 := $u64_ord_lt($x, 5)
+    let v2 := v1
+    if v2 {
       ret := 1
       leave
     }
-    if iszero(v1) {
-      let v2 := sub($x, 1)
-      let v3 := eq(v2, 42)
-      if v3 {
+    if iszero(v2) {
+      let v3 := $u64_sub_sub($x, 1)
+      let v4 := v3
+      let v5 := $u64_eq_eq(v4, 42)
+      let v6 := v5
+      if v6 {
         ret := 2
         leave
       }
-      if iszero(v3) {
-        ret := add(v2, 1)
+      if iszero(v6) {
+        let v7 := $u64_add_add(v4, 1)
+        ret := v7
         leave
       }
     }
   }
+}
+function $u64_ord_lt($self, $other) -> ret {
+  let v0 := lt(and($self, 0xffffffffffffffff), and($other, 0xffffffffffffffff))
+  ret := v0
+  leave
+}
+function $u64_sub_sub($self, $other) -> ret {
+  let v0 := gt(and($other, 0xffffffffffffffff), and($self, 0xffffffffffffffff))
+  let v1 := v0
+  if v1 {
+    revert(0, 0)
+  }
+  let v2 := and(sub(and($self, 0xffffffffffffffff), and($other, 0xffffffffffffffff)), 0xffffffffffffffff)
+  ret := v2
+  leave
+}
+function $u64_eq_eq($self, $other) -> ret {
+  let v0 := eq(and($self, 0xffffffffffffffff), and($other, 0xffffffffffffffff))
+  ret := v0
+  leave
+}
+function $u64_add_add($self, $other) -> ret {
+  let v0 := and(add(and($self, 0xffffffffffffffff), and($other, 0xffffffffffffffff)), 0xffffffffffffffff)
+  let v1 := lt(and(v0, 0xffffffffffffffff), and($self, 0xffffffffffffffff))
+  let v2 := v1
+  if v2 {
+    revert(0, 0)
+  }
+  ret := v0
+  leave
 }

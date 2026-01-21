@@ -37,20 +37,24 @@ object "Coin" {
       }
       function $credit_alice__StorPtr_CoinStore__StorPtr_TotalSupply___c407f5b00af9ba78($amount, $store, $supply) -> ret {
         let v0 := sload($store)
-        sstore($store, add(v0, $amount))
-        let v1 := sload($supply)
-        sstore($supply, add(v1, $amount))
-        let v2 := sload($store)
-        ret := v2
+        let v1 := $u256_add_add(v0, $amount)
+        sstore($store, v1)
+        let v2 := sload($supply)
+        let v3 := $u256_add_add(v2, $amount)
+        sstore($supply, v3)
+        let v4 := sload($store)
+        ret := v4
         leave
       }
       function $credit_bob__StorPtr_CoinStore__StorPtr_TotalSupply___c407f5b00af9ba78($amount, $store, $supply) -> ret {
         let v0 := sload(add($store, 1))
-        sstore(add($store, 1), add(v0, $amount))
-        let v1 := sload($supply)
-        sstore($supply, add(v1, $amount))
-        let v2 := sload(add($store, 1))
-        ret := v2
+        let v1 := $u256_add_add(v0, $amount)
+        sstore(add($store, 1), v1)
+        let v2 := sload($supply)
+        let v3 := $u256_add_add(v2, $amount)
+        sstore($supply, v3)
+        let v4 := sload(add($store, 1))
+        ret := v4
         leave
       }
       function $runtime__StorPtr_Evm___207f35a85ac4062e() {
@@ -128,57 +132,63 @@ object "Coin" {
       }
       function $transfer_from_alice__StorPtr_CoinStore___ba1c0d0726e89ba2($amount, $store) -> ret {
         let v0 := sload($store)
-        let v1 := lt(v0, $amount)
-        if v1 {
-          let v2 := mload(0x40)
-          if iszero(v2) {
-            v2 := 0x80
+        let v1 := $u256_ord_lt(v0, $amount)
+        let v2 := v1
+        if v2 {
+          let v3 := mload(0x40)
+          if iszero(v3) {
+            v3 := 0x80
           }
-          mstore(0x40, add(v2, 32))
-          mstore(v2, 1)
-          ret := v2
+          mstore(0x40, add(v3, 32))
+          mstore(v3, 1)
+          ret := v3
           leave
         }
-        if iszero(v1) {
-          let v3 := sload($store)
-          sstore($store, sub(v3, $amount))
-          let v4 := sload(add($store, 1))
-          sstore(add($store, 1), add(v4, $amount))
-          let v5 := mload(0x40)
-          if iszero(v5) {
-            v5 := 0x80
+        if iszero(v2) {
+          let v4 := sload($store)
+          let v5 := $u256_sub_sub(v4, $amount)
+          sstore($store, v5)
+          let v6 := sload(add($store, 1))
+          let v7 := $u256_add_add(v6, $amount)
+          sstore(add($store, 1), v7)
+          let v8 := mload(0x40)
+          if iszero(v8) {
+            v8 := 0x80
           }
-          mstore(0x40, add(v5, 32))
-          mstore(v5, 0)
-          ret := v5
+          mstore(0x40, add(v8, 32))
+          mstore(v8, 0)
+          ret := v8
           leave
         }
       }
       function $transfer_from_bob__StorPtr_CoinStore___ba1c0d0726e89ba2($amount, $store) -> ret {
         let v0 := sload(add($store, 1))
-        let v1 := lt(v0, $amount)
-        if v1 {
-          let v2 := mload(0x40)
-          if iszero(v2) {
-            v2 := 0x80
+        let v1 := $u256_ord_lt(v0, $amount)
+        let v2 := v1
+        if v2 {
+          let v3 := mload(0x40)
+          if iszero(v3) {
+            v3 := 0x80
           }
-          mstore(0x40, add(v2, 32))
-          mstore(v2, 1)
-          ret := v2
+          mstore(0x40, add(v3, 32))
+          mstore(v3, 1)
+          ret := v3
           leave
         }
-        if iszero(v1) {
-          let v3 := sload(add($store, 1))
-          sstore(add($store, 1), sub(v3, $amount))
-          let v4 := sload($store)
-          sstore($store, add(v4, $amount))
-          let v5 := mload(0x40)
-          if iszero(v5) {
-            v5 := 0x80
+        if iszero(v2) {
+          let v4 := sload(add($store, 1))
+          let v5 := $u256_sub_sub(v4, $amount)
+          sstore(add($store, 1), v5)
+          let v6 := sload($store)
+          let v7 := $u256_add_add(v6, $amount)
+          sstore($store, v7)
+          let v8 := mload(0x40)
+          if iszero(v8) {
+            v8 := 0x80
           }
-          mstore(0x40, add(v5, 32))
-          mstore(v5, 0)
-          ret := v5
+          mstore(0x40, add(v8, 32))
+          mstore(v8, 0)
+          ret := v8
           leave
         }
       }
@@ -195,6 +205,31 @@ object "Coin" {
           default {
           }
         ret := v0
+        leave
+      }
+      function $u256_add_add($self, $other) -> ret {
+        let v0 := add($self, $other)
+        let v1 := lt(v0, $self)
+        let v2 := v1
+        if v2 {
+          revert(0, 0)
+        }
+        ret := v0
+        leave
+      }
+      function $u256_ord_lt($self, $other) -> ret {
+        let v0 := lt($self, $other)
+        ret := v0
+        leave
+      }
+      function $u256_sub_sub($self, $other) -> ret {
+        let v0 := gt($other, $self)
+        let v1 := v0
+        if v1 {
+          revert(0, 0)
+        }
+        let v2 := sub($self, $other)
+        ret := v2
         leave
       }
       $runtime__StorPtr_Evm___207f35a85ac4062e()

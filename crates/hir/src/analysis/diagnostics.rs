@@ -1477,10 +1477,10 @@ impl DiagnosticVoucher for TyLowerDiag<'_> {
 
             Self::InvalidConstTyExpr(span) => CompleteDiagnostic {
                 severity: Severity::Error,
-                message: "the expression is not supported yet in a const type context".to_string(),
+                message: "failed to evaluate const expression".to_string(),
                 sub_diagnostics: vec![SubDiagnostic {
                     style: LabelStyle::Primary,
-                    message: "only literal expression is supported".to_string(),
+                    message: "const evaluation failed".to_string(),
                     span: span.resolve(db),
                 }],
                 notes: vec![],

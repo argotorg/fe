@@ -1,13 +1,67 @@
 ---
 source: crates/codegen/tests/yul.rs
-assertion_line: 42
 expression: output
 input_file: tests/fixtures/aug_assign.fe
 ---
 function $aug_assign($x, $y) -> ret {
   let v0 := $x
-  v0 := add(v0, $y)
-  v0 := mul(v0, 2)
-  ret := div(v0, 2)
+  let v1 := $u64_addassign_add_assign(v0, $y)
+  v0 := v1
+  let v2 := $u64_mulassign_mul_assign(v0, 2)
+  v0 := v2
+  let v3 := $u64_div_div(v0, 2)
+  ret := v3
+  leave
+}
+function $u64_addassign_add_assign($self, $other) -> ret {
+  let v0 := $u64_add_add($self, $other)
+  ret := v0
+  leave
+}
+function $u64_mulassign_mul_assign($self, $other) -> ret {
+  let v0 := $u64_mul_mul($self, $other)
+  ret := v0
+  leave
+}
+function $u64_div_div($self, $other) -> ret {
+  let v0 := $u64_eq_eq($other, 0)
+  let v1 := v0
+  if v1 {
+    revert(0, 0)
+  }
+  let v2 := and(div(and($self, 0xffffffffffffffff), and($other, 0xffffffffffffffff)), 0xffffffffffffffff)
+  ret := v2
+  leave
+}
+function $u64_add_add($self, $other) -> ret {
+  let v0 := and(add(and($self, 0xffffffffffffffff), and($other, 0xffffffffffffffff)), 0xffffffffffffffff)
+  let v1 := lt(and(v0, 0xffffffffffffffff), and($self, 0xffffffffffffffff))
+  let v2 := v1
+  if v2 {
+    revert(0, 0)
+  }
+  ret := v0
+  leave
+}
+function $u64_mul_mul($self, $other) -> ret {
+  let v0 := and(mul(and($self, 0xffffffffffffffff), and($other, 0xffffffffffffffff)), 0xffffffffffffffff)
+  let v1 := $u64_eq_ne($self, 0)
+  let v2 := $u64_div_div(v0, $self)
+  let v3 := $u64_eq_ne(v2, $other)
+  let v4 := and(v1, v3)
+  if v4 {
+    revert(0, 0)
+  }
+  ret := v0
+  leave
+}
+function $u64_eq_eq($self, $other) -> ret {
+  let v0 := eq(and($self, 0xffffffffffffffff), and($other, 0xffffffffffffffff))
+  ret := v0
+  leave
+}
+function $u64_eq_ne($self, $other) -> ret {
+  let v0 := iszero(eq(and($self, 0xffffffffffffffff), and($other, 0xffffffffffffffff)))
+  ret := v0
   leave
 }

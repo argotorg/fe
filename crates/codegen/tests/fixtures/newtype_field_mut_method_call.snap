@@ -5,13 +5,15 @@ input_file: tests/fixtures/newtype_field_mut_method_call.fe
 ---
 function $counter_bump($self) {
   let v0 := mload($self)
-  mstore($self, add(v0, 1))
+  let v1 := $u256_addassign_add_assign(v0, 1)
+  mstore($self, v1)
   leave
 }
 function $wrapcounter_bump($self) {
   let v0 := $self
   let v1 := mload(v0)
-  mstore(v0, add(v1, 1))
+  let v2 := $u256_addassign_add_assign(v1, 1)
+  mstore(v0, v2)
   leave
 }
 function $newtype_field_mut_method_call($x) -> ret {
@@ -37,9 +39,25 @@ function $newtype_field_mut_method_call($x) -> ret {
   ret := v4
   leave
 }
+function $u256_addassign_add_assign($self, $other) -> ret {
+  let v0 := $u256_add_add($self, $other)
+  ret := v0
+  leave
+}
 function $wrapcounter_bump_mem($self) {
   let v0 := $self
   let v1 := mload(v0)
-  mstore(v0, add(v1, 1))
+  let v2 := $u256_addassign_add_assign(v1, 1)
+  mstore(v0, v2)
+  leave
+}
+function $u256_add_add($self, $other) -> ret {
+  let v0 := add($self, $other)
+  let v1 := lt(v0, $self)
+  let v2 := v1
+  if v2 {
+    revert(0, 0)
+  }
+  ret := v0
   leave
 }

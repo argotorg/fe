@@ -5,9 +5,10 @@ expression: mir_output
 fn next_idx__StorPtr_Counter___3ec10ccd701e934a(v0: u256) -> usize:
   bb0:
     v1: Counter = load stor[v0]
-    store stor[v0] = (v1 + 1)
-    v2: Counter = load stor[v0]
-    ret v2
+    v2: usize = usize_add_add(v1, 1)
+    store stor[v0] = v2
+    v3: Counter = load stor[v0]
+    ret v3
 
 fn zst_load_index_eval() -> usize:
   bb0:
@@ -20,9 +21,20 @@ fn zst_load_index_eval() -> usize:
     eval v6
     ret v3
 
+fn usize_add_add(v0: usize, v1: usize) -> usize:
+  bb0:
+    v2: usize = __add_usize(v0, v1)
+    v3: bool = __lt_usize(v2, v0)
+    br v3 bb1 bb2
+  bb1:
+    terminate revert(0, 0)
+  bb2:
+    ret v2
+
 fn next_idx__MemPtr_Counter___f160915c54d975dc(v0: u256) -> usize:
   bb0:
     v1: Counter = load mem[v0]
-    store mem[v0] = (v1 + 1)
-    v2: Counter = load mem[v0]
-    ret v2
+    v2: usize = usize_add_add(v1, 1)
+    store mem[v0] = v2
+    v3: Counter = load mem[v0]
+    ret v3

@@ -45,13 +45,25 @@ function $storagemap_set_word_with_salt__u256__3271ca15373d4483($key, $salt, $wo
 function $storagemap_storage_slot_with_salt__u256__3271ca15373d4483($key, $salt) -> ret {
   let v0 := mload(64)
   let v1 := $u256_storagekey_write_key(v0, $key)
-  mstore(add(v0, v1), $salt)
-  let v2 := keccak256(v0, add(v1, 32))
-  ret := v2
+  let v2 := $u256_add_add(v0, v1)
+  mstore(v2, $salt)
+  let v3 := $u256_add_add(v1, 32)
+  let v4 := keccak256(v0, v3)
+  ret := v4
   leave
 }
 function $u256_storagekey_write_key($ptr, $self) -> ret {
   mstore($ptr, $self)
   ret := 32
+  leave
+}
+function $u256_add_add($self, $other) -> ret {
+  let v0 := add($self, $other)
+  let v1 := lt(v0, $self)
+  let v2 := v1
+  if v2 {
+    revert(0, 0)
+  }
+  ret := v0
   leave
 }

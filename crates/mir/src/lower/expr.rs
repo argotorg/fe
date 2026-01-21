@@ -22,7 +22,7 @@ use hir::analysis::{
     place::PlaceBase,
     ty::ty_check::{EffectArg, EffectPassMode},
 };
-use hir::hir_def::expr::{ArithBinOp, BinOp};
+use hir::hir_def::expr::{ArithBinOp, BinOp, UnOp};
 
 enum RootLvalue<'db> {
     Place(Place<'db>),
@@ -221,9 +221,17 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                 let _ = call_args;
                 self.lower_call_expr(expr)
             }
-            Partial::Present(Expr::Un(inner, _)) => {
-                let _ = self.lower_expr(*inner);
-                self.ensure_value(expr)
+            Partial::Present(Expr::Un(inner, op)) => {
+                let _ = inner;
+                match op {
+                    UnOp::Minus if self.typed_body.callable_expr(expr).is_some() => {
+                        self.lower_call_expr(expr)
+                    }
+                    _ => {
+                        let _ = self.lower_expr(*inner);
+                        self.ensure_value(expr)
+                    }
+                }
             }
             Partial::Present(Expr::Cast(inner, _)) => {
                 let _ = self.lower_expr(*inner);
@@ -236,11 +244,26 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                 // Desugar range expression `start..end` into Range struct construction
                 self.lower_range_expr(expr, *lhs, *rhs)
             }
-            Partial::Present(Expr::Bin(lhs, rhs, _)) => {
-                let _ = self.lower_expr(*lhs);
-                let _ = self.lower_expr(*rhs);
-                self.ensure_value(expr)
-            }
+            Partial::Present(Expr::Bin(lhs, rhs, op)) => match op {
+                BinOp::Arith(
+                    ArithBinOp::Add
+                    | ArithBinOp::Sub
+                    | ArithBinOp::Mul
+                    | ArithBinOp::Div
+                    | ArithBinOp::Rem
+                    | ArithBinOp::Pow,
+                )
+                | BinOp::Comp(..)
+                    if self.typed_body.callable_expr(expr).is_some() =>
+                {
+                    self.lower_call_expr(expr)
+                }
+                _ => {
+                    let _ = self.lower_expr(*lhs);
+                    let _ = self.lower_expr(*rhs);
+                    self.ensure_value(expr)
+                }
+            },
             Partial::Present(Expr::Field(lhs, field_index)) => {
                 self.lower_field_expr(expr, *lhs, *field_index)
             }
@@ -424,7 +447,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         }
 
         let mut receiver_space = None;
-        if self.is_method_call(expr) && !args.is_empty() {
+        if !args.is_empty() {
             let needs_space = callable
                 .callable_def
                 .receiver_ty(self.db)
@@ -1350,6 +1373,155 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         self.store_to_root_lvalue(Some(stmt_id), root_lvalue, stored);
     }
 
+    fn lower_arith_aug_assign_via_trait_call(
+        &mut self,
+        stmt_id: StmtId,
+        expr: ExprId,
+        target: ExprId,
+        rhs_value: ValueId,
+        op: hir::hir_def::expr::ArithBinOp,
+    ) -> bool {
+        use hir::hir_def::expr::ArithBinOp;
+
+        if !matches!(
+            op,
+            ArithBinOp::Add
+                | ArithBinOp::Sub
+                | ArithBinOp::Mul
+                | ArithBinOp::Div
+                | ArithBinOp::Rem
+                | ArithBinOp::Pow
+        ) {
+            return false;
+        }
+
+        let Some(mut callable) = self.typed_body.callable_expr(expr).cloned() else {
+            return false;
+        };
+
+        let peeled_target = self.peel_transparent_newtype_field0_lvalue(target);
+        let is_peeled = peeled_target != target;
+
+        let root_expr = if is_peeled { peeled_target } else { target };
+        let root_ty = self.typed_body.expr_ty(self.db, root_expr);
+        let lhs_ty = self.typed_body.expr_ty(self.db, target);
+
+        let Some(root_lvalue) = self.root_lvalue_for_expr(root_expr) else {
+            return true;
+        };
+
+        let lhs_value = match &root_lvalue {
+            RootLvalue::Place(place) => {
+                let loaded_local = self.alloc_temp_local(lhs_ty, false, "load");
+                self.builder.body.locals[loaded_local.index()].address_space =
+                    self.expr_address_space(target);
+                self.assign(
+                    None,
+                    Some(loaded_local),
+                    Rvalue::Load {
+                        place: place.clone(),
+                    },
+                );
+                self.alloc_value(lhs_ty, ValueOrigin::Local(loaded_local), ValueRepr::Word)
+            }
+            RootLvalue::Local(local) => {
+                if is_peeled {
+                    let base_value = self.alloc_value(
+                        root_ty,
+                        ValueOrigin::Local(*local),
+                        self.value_repr_for_ty(
+                            root_ty,
+                            self.builder.body.local(*local).address_space,
+                        ),
+                    );
+                    self.alloc_value(
+                        lhs_ty,
+                        ValueOrigin::TransparentCast { value: base_value },
+                        ValueRepr::Word,
+                    )
+                } else {
+                    self.alloc_value(lhs_ty, ValueOrigin::Local(*local), ValueRepr::Word)
+                }
+            }
+        };
+
+        let args = vec![lhs_value, rhs_value];
+
+        let mut receiver_space = None;
+        if !args.is_empty() {
+            let needs_space = callable
+                .callable_def
+                .receiver_ty(self.db)
+                .is_some_and(|binder| {
+                    let ty = binder.instantiate_identity();
+                    self.value_repr_for_ty(ty, AddressSpaceKind::Memory)
+                        .address_space()
+                        .is_some()
+                });
+            if needs_space {
+                receiver_space = Some(self.value_address_space(args[0]));
+            }
+        }
+
+        let mut effect_args = Vec::new();
+        let mut effect_writebacks: Vec<(LocalId, Place<'db>)> = Vec::new();
+        if let CallableDef::Func(func_def) = callable.callable_def
+            && func_def.has_effects(self.db)
+            && extract_contract_function(self.db, func_def).is_none()
+            && let Some(resolved) = self.typed_body.call_effect_args(expr)
+        {
+            self.finalize_place_effect_provider_args_for_call(func_def, &mut callable, resolved);
+            for resolved_arg in resolved {
+                let value = self.lower_effect_arg(resolved_arg, &mut effect_writebacks);
+                effect_args.push(value);
+            }
+        }
+
+        let result_space = self
+            .effect_provider_space_for_provider_ty(lhs_ty)
+            .unwrap_or_else(|| self.expr_address_space(target));
+        let dest = self.alloc_temp_local(lhs_ty, false, "aug");
+        self.builder.body.locals[dest.index()].address_space = result_space;
+
+        let hir_target = crate::ir::HirCallTarget {
+            callable_def: callable.callable_def,
+            generic_args: callable.generic_args().to_vec(),
+            trait_inst: callable.trait_inst(),
+        };
+        let call_origin = CallOrigin {
+            expr: Some(expr),
+            hir_target: Some(hir_target),
+            args,
+            effect_args,
+            resolved_name: None,
+            receiver_space,
+        };
+
+        self.assign(Some(stmt_id), Some(dest), Rvalue::Call(call_origin));
+        for (writeback_local, place) in effect_writebacks {
+            self.assign(None, Some(writeback_local), Rvalue::Load { place });
+        }
+
+        let updated = self.alloc_value(
+            lhs_ty,
+            ValueOrigin::Local(dest),
+            self.value_repr_for_ty(lhs_ty, result_space),
+        );
+
+        let stored = if is_peeled {
+            self.alloc_value(
+                root_ty,
+                ValueOrigin::TransparentCast { value: updated },
+                self.value_repr_for_expr(root_expr, root_ty),
+            )
+        } else {
+            updated
+        };
+
+        self.store_to_root_lvalue(Some(stmt_id), root_lvalue, stored);
+        true
+    }
+
     /// Lowers a statement in the current block.
     ///
     /// # Parameters
@@ -2228,7 +2400,11 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                     }
                 }
 
-                self.lower_aug_assign_to_lvalue(stmt_id, *target, value_id, *op);
+                if !self
+                    .lower_arith_aug_assign_via_trait_call(stmt_id, expr, *target, value_id, *op)
+                {
+                    self.lower_aug_assign_to_lvalue(stmt_id, *target, value_id, *op);
+                }
             }
             _ => {
                 self.move_to_block(block);

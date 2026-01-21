@@ -123,29 +123,59 @@ object "BalanceMap" {
       function $storagemap_storage_slot_with_salt__u256__3271ca15373d4483($key, $salt) -> ret {
         let v0 := mload(64)
         let v1 := $u256_storagekey_write_key(v0, $key)
-        mstore(add(v0, v1), $salt)
-        let v2 := keccak256(v0, add(v1, 32))
-        ret := v2
+        let v2 := $u256_add_add(v0, v1)
+        mstore(v2, $salt)
+        let v3 := $u256_add_add(v1, 32)
+        let v4 := keccak256(v0, v3)
+        ret := v4
         leave
       }
       function $transfer__MemPtr_StorageMap_u256__u256__0____3cd7ace0c4584833($from, $to, $amount, $balances) -> ret {
         let v0 := $storagemap_k__v__const_salt__u256__get__u256_u256_0__6a346ad3c930d971($balances, $from)
-        let v1 := lt(v0, $amount)
-        if v1 {
+        let v1 := $u256_ord_lt(v0, $amount)
+        let v2 := v1
+        if v2 {
           ret := 1
           leave
         }
-        if iszero(v1) {
-          let v2 := $storagemap_k__v__const_salt__u256__get__u256_u256_0__6a346ad3c930d971($balances, $to)
-          $storagemap_k__v__const_salt__u256__set__u256_u256_0__6a346ad3c930d971($balances, $from, sub(v0, $amount))
-          $storagemap_k__v__const_salt__u256__set__u256_u256_0__6a346ad3c930d971($balances, $to, add(v2, $amount))
+        if iszero(v2) {
+          let v3 := $storagemap_k__v__const_salt__u256__get__u256_u256_0__6a346ad3c930d971($balances, $to)
+          let v4 := $u256_sub_sub(v0, $amount)
+          $storagemap_k__v__const_salt__u256__set__u256_u256_0__6a346ad3c930d971($balances, $from, v4)
+          let v5 := $u256_add_add(v3, $amount)
+          $storagemap_k__v__const_salt__u256__set__u256_u256_0__6a346ad3c930d971($balances, $to, v5)
           ret := 0
           leave
         }
       }
+      function $u256_add_add($self, $other) -> ret {
+        let v0 := add($self, $other)
+        let v1 := lt(v0, $self)
+        let v2 := v1
+        if v2 {
+          revert(0, 0)
+        }
+        ret := v0
+        leave
+      }
+      function $u256_ord_lt($self, $other) -> ret {
+        let v0 := lt($self, $other)
+        ret := v0
+        leave
+      }
       function $u256_storagekey_write_key($ptr, $self) -> ret {
         mstore($ptr, $self)
         ret := 32
+        leave
+      }
+      function $u256_sub_sub($self, $other) -> ret {
+        let v0 := gt($other, $self)
+        let v1 := v0
+        if v1 {
+          revert(0, 0)
+        }
+        let v2 := sub($self, $other)
+        ret := v2
         leave
       }
       function $u256_wordrepr_from_word($word) -> ret {

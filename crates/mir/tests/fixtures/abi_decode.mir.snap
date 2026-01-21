@@ -1,6 +1,5 @@
 ---
 source: crates/mir/tests/lowering_snapshots.rs
-assertion_line: 26
 expression: mir_output
 ---
 fn decode_u256() -> u256:
@@ -34,24 +33,59 @@ fn soldecoder_i__abidecoder_read_word__CallData__b9ab8dc8a4b2f9e(v0: SolDecoder<
     v2: CallData = load mem[&mem[v0].0].0
     v1: u256 = calldata_byteinput_len(v2)
     v4: u256 = load mem[&mem[v0].0].1
-    v3: u256 = (v4 + 32)
-    v5: u256 = load mem[&mem[v0].0].1
-    br ((v3 < v5) || (v3 > v1)) bb1 bb2
+    v5: u256 = u256_add_add(v4, 32)
+    v3: u256 = v5
+    v6: u256 = load mem[&mem[v0].0].1
+    v7: bool = u256_ord_lt(v3, v6)
+    v8: bool = u256_ord_gt(v3, v1)
+    br (v7 || v8) bb1 bb2
   bb1:
     terminate revert(0, 0)
   bb2:
-    v7: CallData = load mem[&mem[v0].0].0
-    v8: u256 = load mem[&mem[v0].0].1
-    v6: u256 = calldata_byteinput_word_at(v7, v8)
+    v10: CallData = load mem[&mem[v0].0].0
+    v11: u256 = load mem[&mem[v0].0].1
+    v9: u256 = calldata_byteinput_word_at(v10, v11)
     store mem[&mem[v0].0].1 = v3
-    ret v6
+    ret v9
 
 fn calldata_byteinput_len(v0: CallData) -> u256:
   bb0:
     v1: u256 = calldatasize()
-    ret (v1 - v0)
+    v2: u256 = u256_sub_sub(v1, v0)
+    ret v2
+
+fn u256_add_add(v0: u256, v1: u256) -> u256:
+  bb0:
+    v2: u256 = __add_u256(v0, v1)
+    v3: bool = __lt_u256(v2, v0)
+    br v3 bb1 bb2
+  bb1:
+    terminate revert(0, 0)
+  bb2:
+    ret v2
+
+fn u256_ord_lt(v0: u256, v1: u256) -> bool:
+  bb0:
+    v2: bool = __lt_u256(v0, v1)
+    ret v2
+
+fn u256_ord_gt(v0: u256, v1: u256) -> bool:
+  bb0:
+    v2: bool = __gt_u256(v0, v1)
+    ret v2
 
 fn calldata_byteinput_word_at(v0: CallData, v1: u256) -> u256:
   bb0:
-    v2: u256 = calldataload((v0 + v1))
-    ret v2
+    v2: u256 = u256_add_add(v0, v1)
+    v3: u256 = calldataload(v2)
+    ret v3
+
+fn u256_sub_sub(v0: u256, v1: u256) -> u256:
+  bb0:
+    v2: bool = __gt_u256(v1, v0)
+    br v2 bb1 bb2
+  bb1:
+    terminate revert(0, 0)
+  bb2:
+    v3: u256 = __sub_u256(v0, v1)
+    ret v3

@@ -14,7 +14,8 @@ function $flattened_fn() -> ret {
 function $test_module_qualifier_flatten_collision() -> ret {
   let v0 := $flattened_fn()
   let v1 := $flattened_fn()
-  ret := add(v0, v1)
+  let v2 := $u32_add_add(v0, v1)
+  ret := v2
   leave
 }
 function $test_generic_type_collision() -> ret {
@@ -28,11 +29,13 @@ function $test_generic_type_collision() -> ret {
   leave
 }
 function $widget_process($self) -> ret {
-  ret := mul($self, 2)
+  let v0 := $u32_mul_mul($self, 2)
+  ret := v0
   leave
 }
 function $widget_process($self) -> ret {
-  ret := mul($self, 3)
+  let v0 := $u64_mul_mul($self, 3)
+  ret := v0
   leave
 }
 function $test_impl_method_collision() -> ret {
@@ -44,11 +47,13 @@ function $test_impl_method_collision() -> ret {
   leave
 }
 function $multitraitimpl_trait_same_method($self) -> ret {
-  ret := add($self, 1)
+  let v0 := $u32_add_add($self, 1)
+  ret := v0
   leave
 }
 function $multitraitimpl_trait_same_method($self) -> ret {
-  ret := add($self, 2)
+  let v0 := $u32_add_add($self, 2)
+  ret := v0
   leave
 }
 function $test_trait_method_collision() -> ret {
@@ -56,13 +61,16 @@ function $test_trait_method_collision() -> ret {
   let v1 := $multitraitimpl_trait_same_method(v0)
   let v2 := 100
   let v3 := $multitraitimpl_trait_same_method(v2)
-  ret := add(v1, v3)
+  let v4 := $u32_add_add(v1, v3)
+  ret := v4
   leave
 }
 function $param_local_collision($v0) -> ret {
-  let v0 := add($v0, 1)
-  let v1 := add(v0, 2)
-  ret := v1
+  let v0 := $u32_add_add($v0, 1)
+  let v1 := v0
+  let v2 := $u32_add_add(v1, 2)
+  let v3 := v2
+  ret := v3
   leave
 }
 function $test_param_local_collision() -> ret {
@@ -81,7 +89,8 @@ function $test_cast_shim_collision() -> ret {
   leave
 }
 function $ret_param_collision($ret) -> ret {
-  ret := add($ret, 1)
+  let v0 := $u32_add_add($ret, 1)
+  ret := v0
   leave
 }
 function $test_ret_param_collision() -> ret {
@@ -118,11 +127,85 @@ function $main() -> ret {
   ret := 0
   leave
 }
+function $u32_add_add($self, $other) -> ret {
+  let v0 := and(add(and($self, 0xffffffff), and($other, 0xffffffff)), 0xffffffff)
+  let v1 := lt(and(v0, 0xffffffff), and($self, 0xffffffff))
+  let v2 := v1
+  if v2 {
+    revert(0, 0)
+  }
+  ret := v0
+  leave
+}
 function $generic_fn__S__33f7c3322e562590($val) -> ret {
   ret := $val
   leave
 }
 function $generic_fn__S__33f7c3322e562590($val) -> ret {
   ret := $val
+  leave
+}
+function $u32_mul_mul($self, $other) -> ret {
+  let v0 := and(mul(and($self, 0xffffffff), and($other, 0xffffffff)), 0xffffffff)
+  let v1 := $u32_eq_ne($self, 0)
+  let v2 := $u32_div_div(v0, $self)
+  let v3 := $u32_eq_ne(v2, $other)
+  let v4 := and(v1, v3)
+  if v4 {
+    revert(0, 0)
+  }
+  ret := v0
+  leave
+}
+function $u64_mul_mul($self, $other) -> ret {
+  let v0 := and(mul(and($self, 0xffffffffffffffff), and($other, 0xffffffffffffffff)), 0xffffffffffffffff)
+  let v1 := $u64_eq_ne($self, 0)
+  let v2 := $u64_div_div(v0, $self)
+  let v3 := $u64_eq_ne(v2, $other)
+  let v4 := and(v1, v3)
+  if v4 {
+    revert(0, 0)
+  }
+  ret := v0
+  leave
+}
+function $u32_eq_ne($self, $other) -> ret {
+  let v0 := iszero(eq(and($self, 0xffffffff), and($other, 0xffffffff)))
+  ret := v0
+  leave
+}
+function $u32_div_div($self, $other) -> ret {
+  let v0 := $u32_eq_eq($other, 0)
+  let v1 := v0
+  if v1 {
+    revert(0, 0)
+  }
+  let v2 := and(div(and($self, 0xffffffff), and($other, 0xffffffff)), 0xffffffff)
+  ret := v2
+  leave
+}
+function $u64_eq_ne($self, $other) -> ret {
+  let v0 := iszero(eq(and($self, 0xffffffffffffffff), and($other, 0xffffffffffffffff)))
+  ret := v0
+  leave
+}
+function $u64_div_div($self, $other) -> ret {
+  let v0 := $u64_eq_eq($other, 0)
+  let v1 := v0
+  if v1 {
+    revert(0, 0)
+  }
+  let v2 := and(div(and($self, 0xffffffffffffffff), and($other, 0xffffffffffffffff)), 0xffffffffffffffff)
+  ret := v2
+  leave
+}
+function $u32_eq_eq($self, $other) -> ret {
+  let v0 := eq(and($self, 0xffffffff), and($other, 0xffffffff))
+  ret := v0
+  leave
+}
+function $u64_eq_eq($self, $other) -> ret {
+  let v0 := eq(and($self, 0xffffffffffffffff), and($other, 0xffffffffffffffff))
+  ret := v0
   leave
 }

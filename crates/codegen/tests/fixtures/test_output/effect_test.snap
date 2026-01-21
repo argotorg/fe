@@ -13,7 +13,23 @@ object "test_test_effect" {
     code {
       function $test_effect__StorPtr_u256___64779554cfbf0358($x) {
         let v0 := sload($x)
-        sstore($x, add(v0, 1))
+        let v1 := $u256_addassign_add_assign(v0, 1)
+        sstore($x, v1)
+        leave
+      }
+      function $u256_add_add($self, $other) -> ret {
+        let v0 := add($self, $other)
+        let v1 := lt(v0, $self)
+        let v2 := v1
+        if v2 {
+          revert(0, 0)
+        }
+        ret := v0
+        leave
+      }
+      function $u256_addassign_add_assign($self, $other) -> ret {
+        let v0 := $u256_add_add($self, $other)
+        ret := v0
         leave
       }
       $test_effect__StorPtr_u256___64779554cfbf0358(0)

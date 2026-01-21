@@ -36,11 +36,13 @@ object "NewtypeStorageFieldMutMethodCall" {
     }
     function $alloc($size) -> ret {
       let v0 := mload(64)
-      let v1 := eq(v0, 0)
-      if v1 {
+      let v1 := $u256_eq_eq(v0, 0)
+      let v2 := v1
+      if v2 {
         v0 := 128
       }
-      mstore(64, add(v0, $size))
+      let v3 := $u256_add_add(v0, $size)
+      mstore(64, v3)
       ret := v0
       leave
     }
@@ -116,6 +118,21 @@ object "NewtypeStorageFieldMutMethodCall" {
       ret := $raw
       leave
     }
+    function $u256_add_add($self, $other) -> ret {
+      let v0 := add($self, $other)
+      let v1 := lt(v0, $self)
+      let v2 := v1
+      if v2 {
+        revert(0, 0)
+      }
+      ret := v0
+      leave
+    }
+    function $u256_eq_eq($self, $other) -> ret {
+      let v0 := eq($self, $other)
+      ret := v0
+      leave
+    }
     $__NewtypeStorageFieldMutMethodCall_init()
   }
 
@@ -146,11 +163,13 @@ object "NewtypeStorageFieldMutMethodCall" {
       }
       function $alloc($size) -> ret {
         let v0 := mload(64)
-        let v1 := eq(v0, 0)
-        if v1 {
+        let v1 := $u256_eq_eq(v0, 0)
+        let v2 := v1
+        if v2 {
           v0 := 128
         }
-        mstore(64, add(v0, $size))
+        let v3 := $u256_add_add(v0, $size)
+        mstore(64, v3)
         ret := v0
         leave
       }
@@ -159,12 +178,14 @@ object "NewtypeStorageFieldMutMethodCall" {
       }
       function $calldata_byteinput_len($self) -> ret {
         let v0 := calldatasize()
-        ret := sub(v0, $self)
+        let v1 := $u256_sub_sub(v0, $self)
+        ret := v1
         leave
       }
       function $calldata_byteinput_word_at($self, $byte_offset) -> ret {
-        let v0 := calldataload(add($self, $byte_offset))
-        ret := v0
+        let v0 := $u256_add_add($self, $byte_offset)
+        let v1 := calldataload(v0)
+        ret := v1
         leave
       }
       function $cursor_i__fork_mem__CallData__b9ab8dc8a4b2f9e($self, $pos) -> ret {
@@ -231,13 +252,14 @@ object "NewtypeStorageFieldMutMethodCall" {
       function $runtime_selector__Evm_Sol__2533f5c49b57a682($self) -> ret {
         let v0 := $evm_contracthost_input($self)
         let v1 := $calldata_byteinput_len(v0)
-        let v2 := lt(v1, 4)
-        if v2 {
+        let v2 := $u256_ord_lt(v1, 4)
+        let v3 := v2
+        if v3 {
           $evm_contracthost_abort($self)
         }
-        let v3 := $calldata_byteinput_word_at(v0, 0)
-        let v4 := $sol_abi_selector_from_prefix(v3)
-        ret := v4
+        let v4 := $calldata_byteinput_word_at(v0, 0)
+        let v5 := $sol_abi_selector_from_prefix(v4)
+        ret := v5
         leave
       }
       function $s_intdowncast_downcast_unchecked__u256_u32__6e3637cd3e911b35($self) -> ret {
@@ -280,14 +302,15 @@ object "NewtypeStorageFieldMutMethodCall" {
       function $solencoder_abiencoder_finish($self) -> ret {
         let v0 := mload($self)
         let v1 := mload(add($self, 64))
-        let v2 := mload(0x40)
-        if iszero(v2) {
-          v2 := 0x80
+        let v2 := $u256_sub_sub(v1, v0)
+        let v3 := mload(0x40)
+        if iszero(v3) {
+          v3 := 0x80
         }
-        mstore(0x40, add(v2, 64))
-        mstore(v2, v0)
-        mstore(add(v2, 32), sub(v1, v0))
-        ret := v2
+        mstore(0x40, add(v3, 64))
+        mstore(v3, v0)
+        mstore(add(v3, 32), v2)
+        ret := v3
         leave
       }
       function $solencoder_abiencoder_reserve_head($self, $bytes) -> ret {
@@ -299,17 +322,20 @@ object "NewtypeStorageFieldMutMethodCall" {
       function $solencoder_abiencoder_write_word($self, $v) {
         let v0 := mload(add($self, 32))
         mstore(v0, $v)
-        mstore(add($self, 32), add(v0, 32))
+        let v1 := $u256_add_add(v0, 32)
+        mstore(add($self, 32), v1)
         leave
       }
       function $solencoder_ensure_init_mem($self, $bytes) {
         let v0 := mload($self)
-        let v1 := eq(v0, 0)
-        if v1 {
-          let v2 := $alloc($bytes)
-          mstore($self, v2)
-          mstore(add($self, 32), v2)
-          mstore(add($self, 64), add(v2, $bytes))
+        let v1 := $u256_eq_eq(v0, 0)
+        let v2 := v1
+        if v2 {
+          let v3 := $alloc($bytes)
+          mstore($self, v3)
+          mstore(add($self, 32), v3)
+          let v4 := $u256_add_add(v3, $bytes)
+          mstore(add($self, 64), v4)
         }
         leave
       }
@@ -340,12 +366,47 @@ object "NewtypeStorageFieldMutMethodCall" {
         ret := $raw
         leave
       }
+      function $u256_add_add($self, $other) -> ret {
+        let v0 := add($self, $other)
+        let v1 := lt(v0, $self)
+        let v2 := v1
+        if v2 {
+          revert(0, 0)
+        }
+        ret := v0
+        leave
+      }
+      function $u256_addassign_add_assign($self, $other) -> ret {
+        let v0 := $u256_add_add($self, $other)
+        ret := v0
+        leave
+      }
       function $u256_encode_encode__Sol_SolEncoder__dce63ad1a1fe4ae2($self, $e) {
         $solencoder_abiencoder_write_word($e, $self)
         leave
       }
+      function $u256_eq_eq($self, $other) -> ret {
+        let v0 := eq($self, $other)
+        ret := v0
+        leave
+      }
       function $u256_intword_to_word($self) -> ret {
         ret := $self
+        leave
+      }
+      function $u256_ord_lt($self, $other) -> ret {
+        let v0 := lt($self, $other)
+        ret := v0
+        leave
+      }
+      function $u256_sub_sub($self, $other) -> ret {
+        let v0 := gt($other, $self)
+        let v1 := v0
+        if v1 {
+          revert(0, 0)
+        }
+        let v2 := sub($self, $other)
+        ret := v2
         leave
       }
       function $u32_intword_from_word($word) -> ret {
@@ -353,7 +414,8 @@ object "NewtypeStorageFieldMutMethodCall" {
         leave
       }
       function $wrap_bump($self) -> ret {
-        $self := add($self, 1)
+        let v0 := $u256_addassign_add_assign($self, 1)
+        $self := v0
         ret := $self
         leave
       }

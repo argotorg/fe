@@ -1,17 +1,33 @@
 ---
 source: crates/codegen/tests/yul.rs
-assertion_line: 42
 expression: output
 input_file: tests/fixtures/while_cond_call.fe
 ---
 function $lt_ten($value) -> ret {
-  ret := lt($value, 10)
+  let v0 := $u64_ord_lt($value, 10)
+  ret := v0
   leave
 }
 function $while_cond_call() -> ret {
   let v0 := 0
   for { let v1 := $lt_ten(v0) } v1 { v1 := $lt_ten(v0) } {
-    v0 := add(v0, 1)
+    let v2 := $u64_add_add(v0, 1)
+    v0 := v2
+  }
+  ret := v0
+  leave
+}
+function $u64_ord_lt($self, $other) -> ret {
+  let v0 := lt(and($self, 0xffffffffffffffff), and($other, 0xffffffffffffffff))
+  ret := v0
+  leave
+}
+function $u64_add_add($self, $other) -> ret {
+  let v0 := and(add(and($self, 0xffffffffffffffff), and($other, 0xffffffffffffffff)), 0xffffffffffffffff)
+  let v1 := lt(and(v0, 0xffffffffffffffff), and($self, 0xffffffffffffffff))
+  let v2 := v1
+  if v2 {
+    revert(0, 0)
   }
   ret := v0
   leave

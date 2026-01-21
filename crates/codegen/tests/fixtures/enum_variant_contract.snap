@@ -24,85 +24,93 @@ object "EnumContract" {
       function $runtime__StorPtr_Evm___207f35a85ac4062e() {
         let v0 := calldataload(0)
         let v1 := shr(224, v0)
-        let v2 := eq(v1, 1817627404)
-        if v2 {
-          let v3 := calldataload(4)
-          let v4 := mload(0x40)
-          if iszero(v4) {
-            v4 := 0x80
+        let v2 := $u256_eq_eq(v1, 1817627404)
+        let v3 := v2
+        if v3 {
+          let v4 := calldataload(4)
+          let v5 := mload(0x40)
+          if iszero(v5) {
+            v5 := 0x80
           }
-          mstore(0x40, add(v4, 64))
-          mstore(v4, 1)
-          mstore(add(v4, 32), v3)
-          let v5 := 0
-          let v6 := mload(v4)
-          switch v6
+          mstore(0x40, add(v5, 64))
+          mstore(v5, 1)
+          mstore(add(v5, 32), v4)
+          let v6 := 0
+          let v7 := mload(v5)
+          switch v7
             case 1 {
-              let v7 := mload(add(v4, 32))
-              let v8 := v7
-              v5 := v8
+              let v8 := mload(add(v5, 32))
+              let v9 := v8
+              v6 := v9
             }
             case 0 {
-              v5 := 0
+              v6 := 0
             }
             default {
             }
-          let v9 := v5
-          $abi_encode_u256(v9, 0)
+          let v10 := v6
+          $abi_encode_u256(v10, 0)
         }
-        if iszero(v2) {
-          let v10 := eq(v1, 1163776883)
-          if v10 {
-            let v11 := mload(0x40)
-            if iszero(v11) {
-              v11 := 0x80
+        if iszero(v3) {
+          let v11 := $u256_eq_eq(v1, 1163776883)
+          let v12 := v11
+          if v12 {
+            let v13 := mload(0x40)
+            if iszero(v13) {
+              v13 := 0x80
             }
-            mstore(0x40, add(v11, 64))
-            mstore(v11, 0)
-            let v12 := 0
-            let v13 := mload(v11)
-            switch v13
+            mstore(0x40, add(v13, 64))
+            mstore(v13, 0)
+            let v14 := 0
+            let v15 := mload(v13)
+            switch v15
               case 1 {
-                let v14 := mload(add(v11, 32))
-                let v15 := v14
-                v12 := v15
+                let v16 := mload(add(v13, 32))
+                let v17 := v16
+                v14 := v17
               }
               case 0 {
-                v12 := 0
+                v14 := 0
               }
               default {
               }
-            let v16 := v12
-            $abi_encode_u256(v16, 0)
+            let v18 := v14
+            $abi_encode_u256(v18, 0)
           }
-          if iszero(v10) {
-            let v17 := eq(v1, 3572425762)
-            if iszero(v17) {
+          if iszero(v12) {
+            let v19 := $u256_eq_eq(v1, 3572425762)
+            let v20 := v19
+            if iszero(v20) {
               return(0, 0)
             }
-            let v18 := calldataload(4)
-            let v19 := mload(0x40)
-            if iszero(v19) {
-              v19 := 0x80
+            let v21 := calldataload(4)
+            let v22 := mload(0x40)
+            if iszero(v22) {
+              v22 := 0x80
             }
-            mstore(0x40, add(v19, 64))
-            mstore(v19, 1)
-            mstore(add(v19, 32), v18)
-            let v20 := 0
-            let v21 := mload(v19)
-            switch v21
+            mstore(0x40, add(v22, 64))
+            mstore(v22, 1)
+            mstore(add(v22, 32), v21)
+            let v23 := 0
+            let v24 := mload(v22)
+            switch v24
               case 1 {
-                v20 := 1
+                v23 := 1
               }
               case 0 {
-                v20 := 0
+                v23 := 0
               }
               default {
               }
-            let v22 := v20
-            $abi_encode_u256(v22, 0)
+            let v25 := v23
+            $abi_encode_u256(v25, 0)
           }
         }
+      }
+      function $u256_eq_eq($self, $other) -> ret {
+        let v0 := eq($self, $other)
+        ret := v0
+        leave
       }
       $runtime__StorPtr_Evm___207f35a85ac4062e()
       return(0, 0)

@@ -7,11 +7,13 @@ object "Foo" {
   code {
     function $allocate($bytes, $mem) -> ret {
       let v0 := mload(64)
-      let v1 := eq(v0, 0)
-      if v1 {
+      let v1 := $u256_eq_eq(v0, 0)
+      let v2 := v1
+      if v2 {
         v0 := 96
       }
-      mstore(64, add(v0, $bytes))
+      let v3 := $u256_add_add(v0, $bytes)
+      mstore(64, v3)
       ret := v0
       leave
     }
@@ -34,6 +36,21 @@ object "Foo" {
       let v8 := v7
       codecopy(v8, v6, v5)
       return(v8, v5)
+    }
+    function $u256_add_add($self, $other) -> ret {
+      let v0 := add($self, $other)
+      let v1 := lt(v0, $self)
+      let v2 := v1
+      if v2 {
+        revert(0, 0)
+      }
+      ret := v0
+      leave
+    }
+    function $u256_eq_eq($self, $other) -> ret {
+      let v0 := eq($self, $other)
+      ret := v0
+      leave
     }
     $init__StorPtr_Evm___207f35a85ac4062e()
   }
