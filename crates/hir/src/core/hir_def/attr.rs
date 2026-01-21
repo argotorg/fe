@@ -25,6 +25,37 @@ impl<'db> AttrListId<'db> {
             }
         })
     }
+
+    /// Returns the attribute with the given name, if present.
+    pub fn get_attr(self, db: &'db dyn HirDb, name: &str) -> Option<&'db NormalAttr<'db>> {
+        self.data(db).iter().find_map(|attr| {
+            if let Attr::Normal(normal_attr) = attr
+                && let Some(path) = normal_attr.path.to_opt()
+                && let Some(ident) = path.as_ident(db)
+                && ident.data(db) == name
+            {
+                Some(normal_attr)
+            } else {
+                None
+            }
+        })
+    }
+}
+
+impl<'db> NormalAttr<'db> {
+    /// Returns true if this attribute has an argument with the given key (no value).
+    ///
+    /// For example, `#[test(should_revert)]` has the argument `should_revert`.
+    pub fn has_arg(&self, db: &'db dyn HirDb, key: &str) -> bool {
+        self.args.iter().any(|arg| {
+            arg.value.is_none()
+                && arg
+                    .key
+                    .to_opt()
+                    .and_then(|p| p.as_ident(db))
+                    .is_some_and(|ident| ident.data(db) == key)
+        })
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, derive_more::From)]
