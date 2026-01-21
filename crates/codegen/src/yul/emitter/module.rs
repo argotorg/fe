@@ -36,6 +36,17 @@ pub struct TestMetadata {
     pub yul: String,
     pub value_param_count: usize,
     pub effect_param_count: usize,
+    pub expected_revert: Option<ExpectedRevert>,
+}
+
+/// Describes the expected revert behavior for a test.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ExpectedRevert {
+    /// Test should revert with any data.
+    Any,
+    // Future phases:
+    // ExactData(Vec<u8>),
+    // Selector([u8; 4]),
 }
 
 /// Output returned by `emit_test_module_yul`.
@@ -333,6 +344,7 @@ pub fn emit_test_module_yul_with_layout(
             yul,
             value_param_count: test.value_param_count,
             effect_param_count: test.effect_param_count,
+            expected_revert: test.expected_revert,
         });
     }
 
@@ -427,6 +439,7 @@ struct TestInfo {
     object_name: String,
     value_param_count: usize,
     effect_param_count: usize,
+    expected_revert: Option<ExpectedRevert>,
 }
 
 /// Dependency set required to emit a single test object.
@@ -448,12 +461,15 @@ fn collect_test_infos(db: &dyn HirDb, functions: &[MirFunction<'_>]) -> Vec<Test
             let MirFunctionOrigin::Hir(hir_func) = mir_func.origin else {
                 return None;
             };
-            if !ItemKind::from(hir_func)
-                .attrs(db)
-                .is_some_and(|attrs| attrs.has_attr(db, "test"))
-            {
-                return None;
-            }
+            let attrs = ItemKind::from(hir_func).attrs(db)?;
+            let test_attr = attrs.get_attr(db, "test")?;
+
+            // Check for #[test(should_revert)]
+            let expected_revert = if test_attr.has_arg(db, "should_revert") {
+                Some(ExpectedRevert::Any)
+            } else {
+                None
+            };
 
             let hir_name = hir_func
                 .name(db)
@@ -473,6 +489,7 @@ fn collect_test_infos(db: &dyn HirDb, functions: &[MirFunction<'_>]) -> Vec<Test
                 object_name: String::new(),
                 value_param_count,
                 effect_param_count,
+                expected_revert,
             })
         })
         .collect()
@@ -1149,6 +1166,7 @@ mod tests {
                 object_name: String::new(),
                 value_param_count: 0,
                 effect_param_count: 0,
+                expected_revert: None,
             },
             TestInfo {
                 hir_name: "foo_bar".to_string(),
@@ -1157,6 +1175,7 @@ mod tests {
                 object_name: String::new(),
                 value_param_count: 0,
                 effect_param_count: 0,
+                expected_revert: None,
             },
         ];
 
