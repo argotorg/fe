@@ -213,7 +213,8 @@ pub fn ty_size_bytes_or_word_aligned_in(
     layout: &TargetDataLayout,
     ty: TyId<'_>,
 ) -> Option<usize> {
-    ty_size_bytes_in(db, layout, ty).or_else(|| ty_size_bytes_word_aligned_fallback_in(db, layout, ty))
+    ty_size_bytes_in(db, layout, ty)
+        .or_else(|| ty_size_bytes_word_aligned_fallback_in(db, layout, ty))
 }
 
 fn ty_size_bytes_word_aligned_fallback_in(

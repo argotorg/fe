@@ -1,8 +1,8 @@
 use crate::{
     analysis::place::Place,
     hir_def::{
-        Body, Contract, Expr, ExprId, Func, IdentId, IntegerId, ItemKind, Partial, Pat, PatId,
-        PathId, Stmt, StmtId, prim_ty::PrimTy, scope_graph::ScopeId,
+        Body, Contract, EffectParamListId, Expr, ExprId, Func, IdentId, IntegerId, ItemKind,
+        Partial, Pat, PatId, PathId, Stmt, StmtId, prim_ty::PrimTy, scope_graph::ScopeId,
     },
     span::DynLazySpan,
 };
@@ -277,27 +277,30 @@ impl<'db> TyCheckEnv<'db> {
     }
 
     fn seed_contract_effects(&mut self, _base_assumptions: PredicateListId<'db>) {
-        let Some(contract) = (match self.owner {
-            BodyOwner::Func(func) => self.parent_contract_for_func(func),
-            BodyOwner::ContractInit { contract } => Some(contract),
-            BodyOwner::ContractRecvArm { contract, .. } => Some(contract),
-        }) else {
-            return;
-        };
-
-        let list_site = match self.owner {
-            BodyOwner::Func(func) => EffectParamSite::Func(func),
-            BodyOwner::ContractInit { contract } => EffectParamSite::ContractInit { contract },
+        let (contract, list_site) = match self.owner {
+            BodyOwner::Func(func) => {
+                let Some(contract) = self.parent_contract_for_func(func) else {
+                    return;
+                };
+                (contract, EffectParamSite::Func(func))
+            }
+            BodyOwner::ContractInit { contract } => {
+                (contract, EffectParamSite::ContractInit { contract })
+            }
             BodyOwner::ContractRecvArm {
                 contract,
                 recv_idx,
                 arm_idx,
                 ..
-            } => EffectParamSite::ContractRecvArm {
+            } => (
                 contract,
-                recv_idx,
-                arm_idx,
-            },
+                EffectParamSite::ContractRecvArm {
+                    contract,
+                    recv_idx,
+                    arm_idx,
+                },
+            ),
+            BodyOwner::Const(_) | BodyOwner::AnonConstBody { .. } => return,
         };
 
         let assumptions = self.assumptions();
@@ -314,7 +317,9 @@ impl<'db> TyCheckEnv<'db> {
 
         let body_effects = match self.owner {
             BodyOwner::Func(func) => func.effects(self.db),
-            BodyOwner::Const(_) | BodyOwner::AnonConstBody { .. } => Vec::new(),
+            BodyOwner::Const(_) | BodyOwner::AnonConstBody { .. } => {
+                EffectParamListId::new(self.db, Vec::new())
+            }
             BodyOwner::ContractInit { contract } => {
                 let Some(init) = contract.init(self.db) else {
                     return;

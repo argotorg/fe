@@ -227,7 +227,8 @@ impl<'db> FunctionEmitter<'db> {
             ));
         }
         let ty = self.mir_func.body.local(dest).ty;
-        let Some(size_bytes) = layout::ty_size_bytes_or_word_aligned_in(self.db, &self.layout, ty) else {
+        let Some(size_bytes) = layout::ty_size_bytes_or_word_aligned_in(self.db, &self.layout, ty)
+        else {
             return Err(YulError::Unsupported(format!(
                 "cannot determine allocation size for `{}`",
                 ty.pretty_print(self.db)

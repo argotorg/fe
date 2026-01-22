@@ -18,7 +18,6 @@ use crate::analysis::ty::{
     adt_def::AdtRef,
     binder::Binder,
     canonical::Canonicalized,
-    const_ty::{ConstTyData, EvaluatedConstTy},
     corelib::{resolve_core_range_types, resolve_core_trait, resolve_lib_type_path},
     diagnostics::{BodyDiag, FuncBodyDiag},
     effects::EffectKeyKind,

@@ -4,3 +4,8 @@ assertion_line: 46
 expression: diags
 input_file: fixtures/ty/const_ty/const_generic_impl_regression.fe
 ---
+error[8-0064]: const value must be resolvable during type checking
+   ┌─ const_generic_impl_regression.fe:35:16
+   │
+35 │         [self; N]
+   │                ^ requires fully-resolved const value

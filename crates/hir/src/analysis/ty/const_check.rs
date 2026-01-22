@@ -105,7 +105,10 @@ impl<'db> ConstFnChecker<'db, '_> {
                 self.check_expr(*rhs);
             }
 
-            Expr::Un(inner, _) | Expr::Field(inner, _) | Expr::ArrayRep(inner, _) => {
+            Expr::Un(inner, _)
+            | Expr::Field(inner, _)
+            | Expr::ArrayRep(inner, _)
+            | Expr::Cast(inner, _) => {
                 self.check_expr(*inner);
             }
 

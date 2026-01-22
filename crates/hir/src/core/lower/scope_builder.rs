@@ -306,20 +306,6 @@ impl<'db> ScopeGraphBuilder<'db> {
         self.id_stack.last().unwrap().join(self.db, variant)
     }
 
-    pub(super) fn current_id(&self) -> TrackedItemId<'db> {
-        *self
-            .id_stack
-            .last()
-            .expect("scope graph builder has no current id")
-    }
-
-    pub(super) fn set_current_id(&mut self, id: TrackedItemId<'db>) {
-        *self
-            .id_stack
-            .last_mut()
-            .expect("scope graph builder has no current id") = id;
-    }
-
     pub(super) fn enter_block_scope(&mut self) {
         let node = self.enter_scope_impl(false);
         self.declared_blocks.last_mut().unwrap().insert(node, None);

@@ -512,6 +512,7 @@ impl<'db> CtfeInterpreter<'db> {
             ArithBinOp::BitAnd => lhs_u & rhs_u,
             ArithBinOp::BitOr => lhs_u | rhs_u,
             ArithBinOp::BitXor => lhs_u ^ rhs_u,
+            ArithBinOp::Range => return Err(InvalidCause::ConstEvalUnsupported { body, expr }),
         };
 
         Ok(lit_int(self.db, ty, out))
@@ -992,10 +993,10 @@ fn eval_cmp<'db>(
         let out = match op {
             CompBinOp::Eq => lhs == rhs,
             CompBinOp::NotEq => lhs != rhs,
-            CompBinOp::Lt => lhs < rhs,
-            CompBinOp::LtEq => lhs <= rhs,
-            CompBinOp::Gt => lhs > rhs,
-            CompBinOp::GtEq => lhs >= rhs,
+            CompBinOp::Lt => !lhs && rhs,
+            CompBinOp::LtEq => !lhs || rhs,
+            CompBinOp::Gt => lhs && !rhs,
+            CompBinOp::GtEq => lhs || !rhs,
         };
         return Ok(lit_bool(db, out));
     }
