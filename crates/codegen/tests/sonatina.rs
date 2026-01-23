@@ -8,13 +8,11 @@ use url::Url;
 #[test]
 fn sonatina_compiles_selected_fixtures() {
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    // NOTE: Fixtures requiring memory allocation (struct_init, match_enum_with_data)
-    // are excluded until Sonatina implements EvmMalloc lowering.
     let fixtures = [
         "tests/fixtures/literal_add.fe",
-        // "tests/fixtures/struct_init.fe",       // blocked: needs EvmMalloc
+        "tests/fixtures/struct_init.fe",
         "tests/fixtures/match_literal.fe",
-        // "tests/fixtures/match_enum_with_data.fe", // blocked: needs EvmMalloc
+        "tests/fixtures/match_enum_with_data.fe",
         "tests/fixtures/intrinsic_ops.fe",
         "tests/fixtures/revert.fe",
         "tests/fixtures/caller.fe",
