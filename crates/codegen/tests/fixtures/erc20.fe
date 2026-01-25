@@ -1,5 +1,6 @@
 use std::evm::{Address, Ctx, StorageMap, assert}
 use std::evm::effects::Log
+use std::abi::sol
 
 // roles
 const MINTER: u256 = 1
@@ -194,49 +195,49 @@ impl AccessControl {
 
 // ERC20 standard message types
 msg Erc20 {
-    #[selector = 0x06fdde03]
+    #[selector = sol("name()")]
     Name -> String<32>,
 
-    #[selector = 0x95d89b41]
+    #[selector = sol("symbol()")]
     Symbol -> String<8>,
 
-    #[selector = 0x313ce567]
+    #[selector = sol("decimals()")]
     Decimals -> u8,
 
-    #[selector = 0x18160ddd]
+    #[selector = sol("totalSupply()")]
     TotalSupply -> u256,
 
-    #[selector = 0x70a08231]
+    #[selector = sol("balanceOf(address)")]
     BalanceOf { account: Address } -> u256,
 
-    #[selector = 0xdd62ed3e]
+    #[selector = sol("allowance(address,address)")]
     Allowance { owner: Address, spender: Address } -> u256,
 
-    #[selector = 0xa9059cbb]
+    #[selector = sol("transfer(address,uint256)")]
     Transfer { to: Address, amount: u256 } -> bool,
 
-    #[selector = 0x095ea7b3]
+    #[selector = sol("approve(address,uint256)")]
     Approve { spender: Address, amount: u256 } -> bool,
 
-    #[selector = 0x23b872dd]
+    #[selector = sol("transferFrom(address,address,uint256)")]
     TransferFrom { from: Address, to: Address, amount: u256 } -> bool,
 }
 
 // Extended ERC20 message types (minting, burning, allowance helpers)
 msg Erc20Extended {
-    #[selector = 0x40c10f19]
+    #[selector = sol("mint(address,uint256)")]
     Mint { to: Address, amount: u256 } -> bool,
 
-    #[selector = 0x42966c68]
+    #[selector = sol("burn(uint256)")]
     Burn { amount: u256 } -> bool,
 
-    #[selector = 0x79cc6790]
+    #[selector = sol("burnFrom(address,uint256)")]
     BurnFrom { from: Address, amount: u256 } -> bool,
 
-    #[selector = 0x39509351]
+    #[selector = sol("increaseAllowance(address,uint256)")]
     IncreaseAllowance { spender: Address, added_value: u256 } -> bool,
 
-    #[selector = 0xa457c2d7]
+    #[selector = sol("decreaseAllowance(address,uint256)")]
     DecreaseAllowance { spender: Address, subtracted_value: u256 } -> bool,
 }
 

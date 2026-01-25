@@ -1,9 +1,17 @@
 use core::abi::{Abi, AbiDecoder, AbiEncoder, ByteInput, Cursor}
+use core::{AsBytes, keccak}
 use core::num::IntDowncast
 use ingot::evm::mem
 use ingot::evm::ops::{mstore, mstore8, revert}
 
 pub struct Sol {}
+
+/// Compute the 4-byte Solidity selector for a signature string.
+///
+/// For example, `sol("transfer(address,uint256)") == 0xa9059cbb`.
+pub const fn sol<T: AsBytes>(sig: T) -> u32 {
+    (keccak(sig) >> 224) as u32
+}
 
 extern {
     pub const fn encoded_size<T>() -> u256

@@ -1,7 +1,9 @@
 use rustc_hash::FxHashMap;
 
-use parser::ast::{AttrListOwner as _, prelude::*};
-use parser::{SyntaxNode, ast};
+use parser::{
+    SyntaxNode,
+    ast::{self, AttrListOwner as _, prelude::*},
+};
 
 use crate::analysis::ty::diagnostics::FuncBodyDiag;
 use crate::analysis::ty::ty_check::eval_msg_variant_selector;
@@ -13,7 +15,7 @@ use crate::lower::parse_file_impl;
 use crate::span::{DesugaredOrigin, HirOrigin, MsgDesugaredFocus};
 use crate::{SelectorError, SelectorErrorKind};
 
-pub struct MsgSelectorAnalysisPass {}
+pub struct MsgSelectorAnalysisPass;
 
 impl ModuleAnalysisPass for MsgSelectorAnalysisPass {
     fn run_on_module<'db>(
@@ -110,36 +112,31 @@ fn msg_variant_focus_range<'db>(
     let root = SyntaxNode::new_root(parse_file_impl(db, top_mod));
     let msg_node = msg_ptr.to_node(&root);
 
-    let variant = msg_node
-        .variants()
-        .and_then(|v| v.into_iter().nth(variant_idx));
-
-    match focus {
-        MsgDesugaredFocus::Selector => {
-            if let Some(v) = &variant
-                && let Some(attr_list) = v.attr_list()
-            {
-                for attr in attr_list {
-                    if let ast::AttrKind::Normal(normal) = attr.kind()
-                        && let Some(path) = normal.path()
-                        && path.text() == "selector"
-                    {
-                        return attr.syntax().text_range();
-                    }
-                }
-            }
-
-            if let Some(v) = variant {
-                if let Some(name) = v.name() {
-                    return name.text_range();
-                }
-                return v.syntax().text_range();
-            }
-
-            msg_node.syntax().text_range()
-        }
-        _ => msg_node.syntax().text_range(),
+    if !matches!(focus, MsgDesugaredFocus::Selector) {
+        return msg_node.syntax().text_range();
     }
+
+    let Some(variant) = msg_node
+        .variants()
+        .and_then(|v| v.into_iter().nth(variant_idx))
+    else {
+        return msg_node.syntax().text_range();
+    };
+
+    if let Some(attr_list) = variant.attr_list() {
+        for attr in attr_list {
+            if let ast::AttrKind::Normal(normal) = attr.kind()
+                && let Some(path) = normal.path()
+                && path.text() == "selector"
+            {
+                return attr.syntax().text_range();
+            }
+        }
+    }
+
+    variant
+        .name()
+        .map_or_else(|| variant.syntax().text_range(), |name| name.text_range())
 }
 
 fn msg_origin_for_variant_struct<'db>(
@@ -149,6 +146,5 @@ fn msg_origin_for_variant_struct<'db>(
     let HirOrigin::Desugared(DesugaredOrigin::Msg(msg)) = struct_.origin(db).clone() else {
         return None;
     };
-    let idx = msg.variant_idx?;
-    Some((msg.msg.clone(), idx))
+    Some((msg.msg.clone(), msg.variant_idx?))
 }

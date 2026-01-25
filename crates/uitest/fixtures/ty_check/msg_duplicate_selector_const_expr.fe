@@ -1,0 +1,15 @@
+// Test that selector attributes accept const expressions and are CTFE-evaluated
+// before checking for duplicates.
+
+use std::abi::sol
+
+msg TokenMsg {
+    #[selector = sol("transfer(address,uint256)")]
+    Transfer { to: u64, amount: u64 } -> bool,
+
+    #[selector = sol("many_msg_babbage(bytes1)")]
+    Approve { spender: u64, amount: u64 } -> bool,
+
+    #[selector = 0xa9059cbb]
+    Foo,
+}

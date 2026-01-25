@@ -191,6 +191,8 @@ impl<'db> CtfeInterpreter<'db> {
                 self.eval_unary(expr, inner, *op)
             }
 
+            Expr::Cast(inner, _) => self.eval_cast(expr, *inner),
+
             Expr::Bin(lhs, rhs, op) => self.eval_binary(expr, *lhs, *rhs, *op),
 
             Expr::If(cond, then, else_) => {
@@ -221,6 +223,22 @@ impl<'db> CtfeInterpreter<'db> {
 
             _ => Err(InvalidCause::ConstEvalUnsupported { body, expr }.into()),
         }
+    }
+
+    fn eval_cast(&mut self, expr: ExprId, inner_expr: ExprId) -> CtfeEval<'db> {
+        let body = self.body();
+        let typed = self.typed_body();
+        let to_ty = typed.expr_ty(self.db, expr);
+        let (from_bits, from_is_signed) =
+            int_layout(self.db, typed.expr_ty(self.db, inner_expr), body, expr)?;
+        let (to_bits, _) = int_layout(self.db, to_ty, body, expr)?;
+        let raw = const_as_int(self.db, self.eval_expr(inner_expr)?, body, expr)?;
+        let value = if from_is_signed {
+            to_signed(from_bits, &raw)
+        } else {
+            BigInt::from_biguint(Sign::Plus, raw)
+        };
+        Ok(lit_int(self.db, to_ty, from_signed(to_bits, value)))
     }
 
     fn eval_block(&mut self, stmts: &[StmtId]) -> CtfeEval<'db> {

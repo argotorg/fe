@@ -1,5 +1,6 @@
 use either::Either;
 use num_bigint::BigUint;
+use num_traits::ToPrimitive;
 use smallvec1::SmallVec;
 
 use crate::core::hir_def::{
@@ -330,7 +331,9 @@ impl<'db> TyChecker<'db> {
             return ExprProp::invalid(self.db);
         }
 
-        if self.is_lossless_cast(from, to) {
+        if self.is_lossless_cast(from, to)
+            || self.is_provably_lossless_cast_expr(inner_expr, from, to)
+        {
             return ExprProp::new(to, true);
         }
 
@@ -351,6 +354,24 @@ impl<'db> TyChecker<'db> {
         };
         self.push_diag(diag);
         ExprProp::invalid(self.db)
+    }
+
+    // Allow eg `(some_u256 >> 224) as u32`
+    fn is_provably_lossless_cast_expr(&self, expr: ExprId, from: TyId<'db>, to: TyId<'db>) -> bool {
+        let body = self.body();
+        if let Some((false, from_bits)) =
+            self.prim_int_signed_bits(self.peel_transparent_newtypes(from))
+            && let Some((false, to_bits)) =
+                self.prim_int_signed_bits(self.peel_transparent_newtypes(to))
+            && let Partial::Present(Expr::Bin(_, rhs, BinOp::Arith(ArithBinOp::RShift))) =
+                expr.data(self.db, body)
+            && let Partial::Present(Expr::Lit(LitKind::Int(shift_int))) = rhs.data(self.db, body)
+            && let Some(shift) = shift_int.data(self.db).to_usize()
+        {
+            to_bits >= from_bits.saturating_sub(shift)
+        } else {
+            false
+        }
     }
 
     fn is_lossless_cast(&self, from: TyId<'db>, to: TyId<'db>) -> bool {

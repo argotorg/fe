@@ -68,7 +68,7 @@ impl super::Parse for AttrScope {
                 parser.parse(AttrArgListScope::default())?;
             }
             Some(SyntaxKind::Eq) => {
-                // Bump '=' then parse an expression value (e.g. `#[selector = sol_sig("...")]`).
+                // Bump '=' then parse an expression value (e.g. `#[selector = sol("...")]`).
                 parser.bump();
                 parser.parse(AttrValueExprScope::default())?;
             }

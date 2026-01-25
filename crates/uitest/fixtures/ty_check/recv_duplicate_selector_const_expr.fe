@@ -1,0 +1,27 @@
+// Test that selector conflicts across recv blocks are checked on CTFE-evaluated
+// selectors (not just integer literals).
+
+msg BankMsg {
+    #[selector = std::abi::sol("transfer(address,uint256)")]
+    Deposit { amount: u64 } -> u64,
+}
+
+msg TokenMsg {
+    #[selector = 0xa9059cbb]
+    Transfer { to: u64, amount: u64 } -> bool,
+}
+
+pub contract MultiRecv {
+    recv BankMsg {
+        Deposit { amount } -> u64 uses () {
+            0
+        }
+    }
+
+    // Error: TokenMsg::Transfer has selector 0xa9059cbb which conflicts with BankMsg::Deposit
+    recv TokenMsg {
+        Transfer { to, amount } -> bool uses () {
+            true
+        }
+    }
+}

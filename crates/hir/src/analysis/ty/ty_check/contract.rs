@@ -6,6 +6,8 @@ use rustc_hash::{FxHashMap, FxHashSet};
 
 use super::{TypedBody, owner::BodyOwner};
 
+use num_traits::ToPrimitive;
+
 use crate::{
     analysis::{
         HirAnalysisDb,
@@ -13,13 +15,15 @@ use crate::{
         ty::{
             adt_def::AdtRef,
             canonical::Canonical,
+            const_ty::{ConstTyData, EvaluatedConstTy},
             corelib::resolve_core_trait,
+            ctfe::{CtfeConfig, CtfeInterpreter},
             diagnostics::{BodyDiag, FuncBodyDiag, TraitConstraintDiag, TyDiagCollection},
             trait_def::TraitInstId,
             trait_def::impls_for_ty,
             trait_resolution::{GoalSatisfiability, PredicateListId, is_goal_satisfiable},
             ty_check::check_body,
-            ty_def::TyId,
+            ty_def::{PrimTy, TyBase, TyData, TyId},
         },
     },
     hir_def::{Contract, IdentId, ItemKind, Mod, PathId, Struct, scope_graph::ScopeId},
@@ -636,46 +640,28 @@ fn check_handler_conflict<'db>(
     }
 }
 
-/// Gets the selector value from a msg variant struct by evaluating its `SELECTOR`
-/// associated const via CTFE.
-///
-/// Used for cross-recv-block duplicate detection.
+/// Evaluates a msg variant's `SELECTOR` associated const via CTFE.
 pub(crate) fn eval_msg_variant_selector<'db>(
     db: &'db dyn HirAnalysisDb,
     struct_: Struct<'db>,
     diags: &mut Vec<FuncBodyDiag<'db>>,
 ) -> Option<u32> {
-    use crate::analysis::ty::{
-        const_ty::{ConstTyData, EvaluatedConstTy},
-        ctfe::{CtfeConfig, CtfeInterpreter},
-        ty_def::{PrimTy, TyBase, TyData},
-    };
-    use num_traits::ToPrimitive;
-
-    // Find the MsgVariant trait
     let msg_variant_trait = resolve_core_trait(db, struct_.scope(), &["message", "MsgVariant"])?;
 
-    // Get the impl for this struct
-    let adt_def = AdtRef::from(struct_).as_adt(db);
-    let ty = TyId::adt(db, adt_def);
-    let canonical_ty = Canonical::new(db, ty);
+    let canonical_ty = Canonical::new(db, TyId::adt(db, AdtRef::from(struct_).as_adt(db)));
     let ingot = struct_.top_mod(db).ingot(db);
-
     let impl_ = impls_for_ty(db, ingot, canonical_ty)
         .iter()
-        .find(|impl_| impl_.skip_binder().trait_def(db).eq(&msg_variant_trait))?
+        .find(|impl_| impl_.skip_binder().trait_def(db) == msg_variant_trait)?
         .skip_binder();
 
-    // Get the SELECTOR const from the impl
     let selector_name = IdentId::new(db, "SELECTOR".to_string());
-    let hir_impl = impl_.hir_impl_trait(db);
-
-    let selector_const = hir_impl
+    let selector_const = impl_
+        .hir_impl_trait(db)
         .hir_consts(db)
         .iter()
         .find(|c| c.name.to_opt() == Some(selector_name))?;
 
-    // Evaluate the const body to a concrete `u32` via CTFE.
     let body = selector_const.value.to_opt()?;
     if matches!(
         body.expr(db).data(db, body),
@@ -692,20 +678,21 @@ pub(crate) fn eval_msg_variant_selector<'db>(
     }
 
     let mut interp = CtfeInterpreter::new(db, CtfeConfig::default());
-
-    match interp.eval_const_body(body, result.1.clone()) {
-        Ok(const_ty) => match const_ty.data(db) {
-            ConstTyData::Evaluated(EvaluatedConstTy::LitInt(int_id), _) => int_id.data(db).to_u32(),
-            _ => {
-                diags.push(BodyDiag::ConstValueMustBeKnown(body.span().into()).into());
-                None
-            }
-        },
+    let const_ty = match interp.eval_const_body(body, result.1.clone()) {
+        Ok(const_ty) => const_ty,
         Err(cause) => {
             let ty = TyId::invalid(db, cause);
             if let Some(diag) = ty.emit_diag(db, body.span().into()) {
                 diags.push(diag.into());
             }
+            return None;
+        }
+    };
+
+    match const_ty.data(db) {
+        ConstTyData::Evaluated(EvaluatedConstTy::LitInt(int_id), _) => int_id.data(db).to_u32(),
+        _ => {
+            diags.push(BodyDiag::ConstValueMustBeKnown(body.span().into()).into());
             None
         }
     }
