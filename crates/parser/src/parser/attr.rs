@@ -62,15 +62,15 @@ impl super::Parse for AttrScope {
         // Parse the attribute path (e.g., foo, foo::bar). Recover on failure.
         parser.parse_or_recover(PathScope::default())?;
 
-        // After the path, support either a meta list `(...)` or a name-value `= literal`.
+        // After the path, support either a meta list `(...)` or a name-value `= <expr>`.
         match parser.current_kind() {
             Some(SyntaxKind::LParen) => {
                 parser.parse(AttrArgListScope::default())?;
             }
             Some(SyntaxKind::Eq) => {
-                // Bump '=' then accept a literal or ident value (doc-style: #[doc = "..."]).
+                // Bump '=' then parse an expression value (e.g. `#[selector = sol_sig("...")]`).
                 parser.bump();
-                parser.parse(AttrArgValueScope::default())?;
+                parser.parse(AttrValueExprScope::default())?;
             }
             _ => {}
         }
@@ -134,6 +134,19 @@ impl super::Parse for AttrArgValueScope {
             }
             _ => parser.error_and_recover("attribute value must be an ident or literal value"),
         }
+    }
+}
+
+// Parses an expression value for the `#[attr = <expr>]` form.
+//
+// This is distinct from `AttrArgValueScope` (used in `#[attr(key = value)]`),
+// which intentionally keeps values restricted to ident/literal for now.
+define_scope! { AttrValueExprScope, AttrArgValue }
+impl super::Parse for AttrValueExprScope {
+    type Error = Recovery<ErrProof>;
+
+    fn parse<S: TokenStream>(&mut self, parser: &mut Parser<S>) -> Result<(), Self::Error> {
+        super::expr::parse_expr(parser)
     }
 }
 

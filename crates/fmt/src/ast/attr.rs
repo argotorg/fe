@@ -51,6 +51,7 @@ impl ToDoc for ast::NormalAttr {
             let val_doc = match val {
                 AttrArgValueKind::Ident(tok) => alloc.text(tok.text().to_string()),
                 AttrArgValueKind::Lit(lit) => lit.to_doc(ctx),
+                AttrArgValueKind::Expr(expr) => expr.to_doc(ctx),
             };
             alloc.text(" = ").append(val_doc)
         } else {
@@ -99,6 +100,7 @@ impl ToDoc for ast::AttrArg {
                 let val_doc = match val {
                     AttrArgValueKind::Ident(tok) => alloc.text(tok.text().to_string()),
                     AttrArgValueKind::Lit(lit) => lit.to_doc(ctx),
+                    AttrArgValueKind::Expr(expr) => expr.to_doc(ctx),
                 };
                 key.append(alloc.text(" = ")).append(val_doc)
             }

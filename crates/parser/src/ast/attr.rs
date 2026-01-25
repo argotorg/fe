@@ -1,6 +1,6 @@
 use rowan::ast::{AstNode, support};
 
-use super::{Path, ast_node, lit::Lit};
+use super::{Expr, Path, ast_node, lit::Lit};
 use crate::{FeLang, SyntaxKind as SK, SyntaxToken};
 
 ast_node! {
@@ -63,6 +63,9 @@ impl NormalAttr {
     /// This is distinct from args() which returns the argument list `(arg1, arg2)`.
     pub fn value(&self) -> Option<AttrArgValueKind> {
         let node = support::child::<AttrArgValue>(self.syntax())?;
+        if let Some(expr) = support::child::<Expr>(node.syntax()) {
+            return Some(expr.into());
+        }
         if let Some(lit) = support::child::<Lit>(node.syntax()) {
             return Some(lit.into());
         }
@@ -91,6 +94,9 @@ impl AttrArg {
 
     pub fn value(&self) -> Option<AttrArgValueKind> {
         let node = support::child::<AttrArgValue>(self.syntax())?;
+        if let Some(expr) = support::child::<Expr>(node.syntax()) {
+            return Some(expr.into());
+        }
         if let Some(lit) = support::child::<Lit>(node.syntax()) {
             return Some(lit.into());
         }
@@ -113,6 +119,7 @@ ast_node! {
 pub enum AttrArgValueKind {
     Ident(SyntaxToken),
     Lit(Lit),
+    Expr(Expr),
 }
 
 ast_node! {
@@ -203,6 +210,9 @@ mod tests {
                                         }
                                         _ => panic!("expected string literal"),
                                     },
+                                    AttrArgValueKind::Expr(_) => {
+                                        panic!("expected string literal, got expr")
+                                    }
                                 }
                             }
                             1 => {
@@ -218,6 +228,9 @@ mod tests {
                                         }
                                         _ => panic!("expected string literal"),
                                     },
+                                    AttrArgValueKind::Expr(_) => {
+                                        panic!("expected string literal, got expr")
+                                    }
                                 }
                             }
                             _ => unreachable!(),
@@ -239,6 +252,7 @@ mod tests {
                             }
                             _ => panic!("expected int literal"),
                         },
+                        AttrArgValueKind::Expr(_) => panic!("expected literal, got expr"),
                         _ => panic!("expected literal"),
                     }
 
@@ -252,6 +266,7 @@ mod tests {
                             }
                             _ => panic!("expected bool literal"),
                         },
+                        AttrArgValueKind::Expr(_) => panic!("expected literal, got expr"),
                         _ => panic!("expected literal"),
                     }
 
@@ -262,6 +277,7 @@ mod tests {
                         AttrArgValueKind::Ident(tok) => {
                             assert_eq!(tok.text(), "Foo")
                         }
+                        AttrArgValueKind::Expr(_) => panic!("expected ident, got expr"),
                         _ => panic!("expected ident"),
                     }
 
