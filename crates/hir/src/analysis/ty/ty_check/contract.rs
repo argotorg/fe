@@ -533,7 +533,7 @@ pub fn check_contract_recv_blocks<'db>(
                 let variant_span: DynLazySpan<'db> = variant.span().name().into();
 
                 // Check selector conflicts
-                if let Some(selector) = get_variant_selector(db, variant) {
+                if let Some(selector) = eval_msg_variant_selector(db, variant, &mut diags) {
                     check_selector_conflict(
                         selector,
                         variant,
@@ -564,7 +564,9 @@ pub fn check_contract_recv_blocks<'db>(
                     };
 
                     // Check selector conflicts
-                    if let Some(selector) = get_variant_selector(db, resolved.variant_struct) {
+                    if let Some(selector) =
+                        eval_msg_variant_selector(db, resolved.variant_struct, &mut diags)
+                    {
                         check_selector_conflict(
                             selector,
                             resolved.variant_struct,
@@ -634,10 +636,20 @@ fn check_handler_conflict<'db>(
     }
 }
 
-/// Gets the selector value from a msg variant struct by reading the SELECTOR const
-/// from its MsgVariant impl. Used for cross-recv-block duplicate detection.
-fn get_variant_selector<'db>(db: &'db dyn HirAnalysisDb, struct_: Struct<'db>) -> Option<u32> {
-    use crate::hir_def::{Expr, LitKind};
+/// Gets the selector value from a msg variant struct by evaluating its `SELECTOR`
+/// associated const via CTFE.
+///
+/// Used for cross-recv-block duplicate detection.
+pub(crate) fn eval_msg_variant_selector<'db>(
+    db: &'db dyn HirAnalysisDb,
+    struct_: Struct<'db>,
+    diags: &mut Vec<FuncBodyDiag<'db>>,
+) -> Option<u32> {
+    use crate::analysis::ty::{
+        const_ty::{ConstTyData, EvaluatedConstTy},
+        ctfe::{CtfeConfig, CtfeInterpreter},
+        ty_def::{PrimTy, TyBase, TyData},
+    };
     use num_traits::ToPrimitive;
 
     // Find the MsgVariant trait
@@ -663,14 +675,39 @@ fn get_variant_selector<'db>(db: &'db dyn HirAnalysisDb, struct_: Struct<'db>) -
         .iter()
         .find(|c| c.name.to_opt() == Some(selector_name))?;
 
-    // Extract the literal value from the const body
+    // Evaluate the const body to a concrete `u32` via CTFE.
     let body = selector_const.value.to_opt()?;
-    let root_expr = body.expr(db);
-    let expr = body.exprs(db).get(root_expr)?.clone().to_opt()?;
+    if matches!(
+        body.expr(db).data(db, body),
+        crate::hir_def::Partial::Absent
+    ) {
+        return None;
+    }
 
-    match expr {
-        Expr::Lit(LitKind::Int(int_id)) => int_id.data(db).to_u32(),
-        _ => None,
+    let expected_ty = TyId::new(db, TyData::TyBase(TyBase::Prim(PrimTy::U32)));
+    let result = super::check_anon_const_body(db, body, expected_ty);
+    diags.extend(result.0.clone());
+    if !result.0.is_empty() {
+        return None;
+    }
+
+    let mut interp = CtfeInterpreter::new(db, CtfeConfig::default());
+
+    match interp.eval_const_body(body, result.1.clone()) {
+        Ok(const_ty) => match const_ty.data(db) {
+            ConstTyData::Evaluated(EvaluatedConstTy::LitInt(int_id), _) => int_id.data(db).to_u32(),
+            _ => {
+                diags.push(BodyDiag::ConstValueMustBeKnown(body.span().into()).into());
+                None
+            }
+        },
+        Err(cause) => {
+            let ty = TyId::invalid(db, cause);
+            if let Some(diag) = ty.emit_diag(db, body.span().into()) {
+                diags.push(diag.into());
+            }
+            None
+        }
     }
 }
 

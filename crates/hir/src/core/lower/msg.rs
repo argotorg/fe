@@ -6,12 +6,12 @@ use super::hir_builder::HirBuilder;
 use crate::{
     HirDb, SelectorError, SelectorErrorKind,
     hir_def::{
-        AssocConstDef, AttrListId, Body, BodyKind, BodySourceMap, Expr, ExprId, FieldDef,
-        FieldDefListId, FuncModifiers, IdentId, ImplTrait, LitKind, Mod, NodeStore, Partial,
-        PathId, Struct, TrackedItemVariant, TraitRefId, TupleTypeId, TypeId, TypeKind, Visibility,
+        AssocConstDef, AttrListId, Body, BodyKind, FieldDef, FieldDefListId, FuncModifiers,
+        IdentId, ImplTrait, Mod, Partial, PathId, Struct, TrackedItemVariant, TraitRefId,
+        TupleTypeId, TypeId, TypeKind, Visibility,
     },
     lower::FileLowerCtxt,
-    span::{HirOrigin, MsgDesugared, MsgDesugaredFocus},
+    span::MsgDesugared,
 };
 
 /// Desugars a `msg` block into a module containing structs and trait impls.
@@ -36,8 +36,6 @@ use crate::{
 /// }
 /// ```
 pub(super) fn lower_msg_as_mod<'db>(ctxt: &mut FileLowerCtxt<'db>, ast: ast::Msg) -> Mod<'db> {
-    use rustc_hash::FxHashMap;
-
     let name = IdentId::lower_token_partial(ctxt, ast.name());
 
     // Lower any existing attributes on the msg block
@@ -52,14 +50,11 @@ pub(super) fn lower_msg_as_mod<'db>(ctxt: &mut FileLowerCtxt<'db>, ast: ast::Msg
         focus: Default::default(),
     };
 
-    // Track selectors for duplicate detection
-    let mut seen_selectors: FxHashMap<u32, SeenSelector> = FxHashMap::default();
-
     let mut builder = HirBuilder::new(ctxt, msg_desugared);
     builder.desugared_mod(name, attributes, vis, |builder| {
         if let Some(variants) = ast.variants() {
             for (idx, variant) in variants.into_iter().enumerate() {
-                lower_msg_variant(builder, &ast, idx, variant, &mut seen_selectors);
+                lower_msg_variant(builder, &ast, idx, variant);
             }
         }
     })
@@ -71,7 +66,6 @@ fn lower_msg_variant<'db>(
     msg_ast: &ast::Msg,
     variant_idx: usize,
     variant: ast::MsgVariant,
-    seen_selectors: &mut rustc_hash::FxHashMap<u32, SeenSelector>,
 ) {
     let mut builder = builder.with_desugared(MsgDesugared {
         msg: parser::ast::AstPtr::new(msg_ast),
@@ -83,14 +77,7 @@ fn lower_msg_variant<'db>(
     let struct_ = lower_msg_variant_struct(&mut builder, &variant);
 
     // Create the impl MsgVariant for this variant
-    lower_msg_variant_impl(
-        &mut builder,
-        msg_ast,
-        variant_idx,
-        &variant,
-        struct_,
-        seen_selectors,
-    );
+    lower_msg_variant_impl(&mut builder, &variant, struct_);
 
     // Create `impl Encode<Sol> for Variant` and `impl Decode<Sol> for Variant`.
     lower_msg_variant_encode_decode_impls(&mut builder, &variant, struct_);
@@ -258,11 +245,8 @@ fn lower_msg_variant_fields<'db>(
 /// Creates an `impl MsgVariant for VariantStruct` block.
 fn lower_msg_variant_impl<'db>(
     builder: &mut HirBuilder<'_, 'db, MsgDesugared>,
-    msg_ast: &ast::Msg,
-    variant_idx: usize,
     variant: &ast::MsgVariant,
     struct_: Struct<'db>,
-    seen_selectors: &mut rustc_hash::FxHashMap<u32, SeenSelector>,
 ) -> ImplTrait<'db> {
     let db = builder.db();
     let roots = builder.roots();
@@ -291,123 +275,31 @@ fn lower_msg_variant_impl<'db>(
         let types = vec![builder.assoc_ty("Return", return_ty)];
         let consts = vec![create_selector_const(
             builder.ctxt(),
-            msg_ast,
             variant,
-            variant_idx,
             &variant_name,
-            seen_selectors,
         )];
         (types, consts)
     })
 }
 
-/// Info about a seen selector for duplicate detection.
-struct SeenSelector {
-    range: parser::TextRange,
-    name: String,
-}
-
 /// Result of parsing a selector attribute from an AST.
-struct ParsedSelector<'db> {
-    /// The literal that was found in the selector attribute.
-    lit: LitKind<'db>,
+struct ParsedSelector {
+    /// The expression from the selector attribute, if present and in `#[selector = <expr>]` form.
+    expr: Option<ast::Expr>,
     /// The text range of the selector attribute for diagnostics.
     range: parser::TextRange,
-    /// The validated selector value, if valid.
-    value: Option<u32>,
     /// The error kind, if validation failed.
     error: Option<SelectorErrorKind>,
 }
 
-impl<'db> ParsedSelector<'db> {
-    /// Validates a literal as a selector value, returning a ParsedSelector.
-    fn from_lit(ctxt: &FileLowerCtxt<'db>, lit: LitKind<'db>, range: parser::TextRange) -> Self {
-        use crate::hir_def::LitKind;
-        use num_bigint::BigUint;
-        use num_traits::ToPrimitive;
-
-        let u32_max = BigUint::from(u32::MAX);
-
-        let (value, error) = match &lit {
-            LitKind::Int(int_id) => {
-                let v = int_id.data(ctxt.db());
-                if v > &u32_max {
-                    (None, Some(SelectorErrorKind::Overflow))
-                } else {
-                    (Some(v.to_u32().unwrap_or(0)), None)
-                }
-            }
-            LitKind::String(_) | LitKind::Bool(_) => (None, Some(SelectorErrorKind::InvalidType)),
-        };
-
-        Self {
-            lit,
-            range,
-            value,
-            error,
-        }
-    }
-
-    /// Reports any errors to the accumulator and handles duplicate detection.
-    /// Returns the literal and focus for creating the const body.
-    fn finalize(
-        self,
-        db: &'db dyn HirDb,
-        file: common::file::File,
-        variant_name: &str,
-        seen_selectors: &mut rustc_hash::FxHashMap<u32, SeenSelector>,
-    ) -> (LitKind<'db>, MsgDesugaredFocus) {
-        if let Some(error_kind) = self.error {
-            SelectorError {
-                kind: error_kind,
-                file,
-                primary_range: self.range,
-                secondary_range: None,
-                variant_name: variant_name.to_string(),
-            }
-            .accumulate(db);
-            return (self.lit, MsgDesugaredFocus::Selector);
-        }
-
-        let selector_value = self.value.unwrap();
-        if let Some(first) = seen_selectors.get(&selector_value) {
-            SelectorError {
-                kind: SelectorErrorKind::Duplicate {
-                    first_variant_name: first.name.clone(),
-                    selector: selector_value,
-                },
-                file,
-                primary_range: self.range,
-                secondary_range: Some(first.range),
-                variant_name: variant_name.to_string(),
-            }
-            .accumulate(db);
-        } else {
-            seen_selectors.insert(
-                selector_value,
-                SeenSelector {
-                    range: self.range,
-                    name: variant_name.to_string(),
-                },
-            );
-        }
-
-        (self.lit, MsgDesugaredFocus::Block)
-    }
-}
-
-/// Creates the SELECTOR associated const from the variant's #[selector = ...] attribute.
-/// Validates the selector value and tracks duplicates.
+/// Creates the `SELECTOR` associated const from the variant's `#[selector = ...]` attribute.
+///
+/// The selector value is lowered as a const expression body, which is evaluated later by CTFE.
 fn create_selector_const<'db>(
     ctxt: &mut FileLowerCtxt<'db>,
-    msg_ast: &ast::Msg,
     variant: &ast::MsgVariant,
-    variant_idx: usize,
     variant_name: &str,
-    seen_selectors: &mut rustc_hash::FxHashMap<u32, SeenSelector>,
 ) -> AssocConstDef<'db> {
-    use crate::hir_def::{IntegerId, LitKind};
-    use num_bigint::BigUint;
     use parser::ast::prelude::*;
 
     let db = ctxt.db();
@@ -425,8 +317,34 @@ fn create_selector_const<'db>(
         .attr_list()
         .and_then(|attr_list| parse_selector_attr(ctxt, attr_list));
 
-    let (lit_kind, focus) = match parsed {
-        Some(selector) => selector.finalize(db, file, variant_name, seen_selectors),
+    let body = match parsed {
+        Some(parsed) => {
+            if let Some(error_kind) = parsed.error {
+                SelectorError {
+                    kind: error_kind,
+                    file,
+                    primary_range: parsed.range,
+                    secondary_range: None,
+                    variant_name: variant_name.to_string(),
+                }
+                .accumulate(db);
+                Body::lower_ast_with_variant(
+                    ctxt,
+                    None,
+                    TrackedItemVariant::NamelessBody,
+                    BodyKind::Anonymous,
+                )
+            } else if let Some(expr) = parsed.expr {
+                Body::lower_ast_nameless(ctxt, expr)
+            } else {
+                Body::lower_ast_with_variant(
+                    ctxt,
+                    None,
+                    TrackedItemVariant::NamelessBody,
+                    BodyKind::Anonymous,
+                )
+            }
+        }
         None => {
             let variant_range = variant
                 .name()
@@ -440,19 +358,14 @@ fn create_selector_const<'db>(
                 variant_name: variant_name.to_string(),
             }
             .accumulate(db);
-            (
-                LitKind::Int(IntegerId::new(db, BigUint::from(0u32))),
-                MsgDesugaredFocus::Block,
+            Body::lower_ast_with_variant(
+                ctxt,
+                None,
+                TrackedItemVariant::NamelessBody,
+                BodyKind::Anonymous,
             )
         }
     };
-
-    let msg_desugared = MsgDesugared {
-        msg: parser::ast::AstPtr::new(msg_ast),
-        variant_idx: Some(variant_idx),
-        focus,
-    };
-    let body = create_lit_body_desugared(ctxt, lit_kind, msg_desugared);
 
     AssocConstDef {
         attributes: AttrListId::new(db, vec![]),
@@ -468,8 +381,9 @@ fn create_selector_const<'db>(
 fn parse_selector_attr<'db>(
     ctxt: &mut FileLowerCtxt<'db>,
     attr_list: ast::AttrList,
-) -> Option<ParsedSelector<'db>> {
+) -> Option<ParsedSelector> {
     use crate::hir_def::LitKind;
+    use num_bigint::BigUint;
     use parser::ast::prelude::*;
 
     for attr in attr_list {
@@ -486,21 +400,43 @@ fn parse_selector_attr<'db>(
 
         let range = attr.syntax().text_range();
 
-        if let Some(ast::AttrArgValueKind::Lit(lit)) = normal_attr.value() {
-            let lit_kind = LitKind::lower_ast(ctxt, lit);
-            return Some(ParsedSelector::from_lit(ctxt, lit_kind, range));
+        if let Some(value) = normal_attr.value() {
+            let expr = match value {
+                ast::AttrArgValueKind::Expr(expr) => Some(expr),
+                _ => None,
+            };
+
+            let error = match &expr {
+                Some(expr) => match expr.kind() {
+                    ast::ExprKind::Lit(lit_expr) => match lit_expr.lit() {
+                        Some(lit) => {
+                            let lit_kind = LitKind::lower_ast(ctxt, lit);
+                            match &lit_kind {
+                                LitKind::Int(int_id) => {
+                                    let u32_max = BigUint::from(u32::MAX);
+                                    let v = int_id.data(ctxt.db());
+                                    (v > &u32_max).then_some(SelectorErrorKind::Overflow)
+                                }
+                                LitKind::String(_) | LitKind::Bool(_) => {
+                                    Some(SelectorErrorKind::InvalidType)
+                                }
+                            }
+                        }
+                        None => Some(SelectorErrorKind::InvalidType),
+                    },
+                    _ => None,
+                },
+                None => None,
+            };
+
+            return Some(ParsedSelector { expr, range, error });
         }
 
         // Reject `#[selector(value)]` form with helpful error
         if normal_attr.args().is_some() {
-            use crate::hir_def::IntegerId;
-            use num_bigint::BigUint;
-            // Use a placeholder literal for the error case
-            let lit = LitKind::Int(IntegerId::new(ctxt.db(), BigUint::from(0u32)));
             return Some(ParsedSelector {
-                lit,
+                expr: None,
                 range,
-                value: None,
                 error: Some(SelectorErrorKind::InvalidForm),
             });
         }
@@ -536,42 +472,4 @@ fn filter_selector_attr<'db>(
         .collect();
 
     AttrListId::new(db, filtered)
-}
-
-/// Creates a Body containing a single literal expression with a desugared origin.
-/// This allows type errors on synthetic bodies to point back to their source.
-fn create_lit_body_desugared<'db>(
-    ctxt: &mut FileLowerCtxt<'db>,
-    lit: LitKind<'db>,
-    origin: MsgDesugared,
-) -> Body<'db> {
-    let db = ctxt.db();
-    let id = ctxt.joined_id(TrackedItemVariant::NamelessBody);
-    ctxt.enter_body_scope(id);
-
-    let mut exprs: NodeStore<ExprId, Partial<Expr<'db>>> = NodeStore::new();
-    let mut source_map = BodySourceMap::default();
-
-    // Create the literal expression with desugared origin
-    let expr = Expr::Lit(lit);
-    let expr_id = exprs.push(Partial::Present(expr));
-    source_map
-        .expr_map
-        .insert(expr_id, HirOrigin::desugared(origin.clone()));
-
-    let body = Body::new(
-        db,
-        id,
-        expr_id,
-        BodyKind::Anonymous,
-        NodeStore::new(), // stmts
-        exprs,
-        NodeStore::new(), // pats
-        ctxt.top_mod(),
-        source_map,
-        HirOrigin::desugared(origin),
-    );
-
-    ctxt.leave_item_scope(body);
-    body
 }

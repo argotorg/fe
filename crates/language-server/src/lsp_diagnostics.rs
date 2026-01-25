@@ -8,7 +8,8 @@ use hir::analysis::analysis_pass::{AnalysisPassManager, MsgLowerPass, ParsingPas
 use hir::analysis::name_resolution::ImportAnalysisPass;
 use hir::analysis::ty::{
     AdtDefAnalysisPass, BodyAnalysisPass, DefConflictAnalysisPass, FuncAnalysisPass,
-    ImplAnalysisPass, ImplTraitAnalysisPass, TraitAnalysisPass, TypeAliasAnalysisPass,
+    ImplAnalysisPass, ImplTraitAnalysisPass, MsgSelectorAnalysisPass, TraitAnalysisPass,
+    TypeAliasAnalysisPass,
 };
 use hir::lower::map_file_to_mod;
 use rustc_hash::FxHashMap;
@@ -130,6 +131,7 @@ fn initialize_analysis_pass() -> AnalysisPassManager {
     let mut pass_manager = AnalysisPassManager::new();
     pass_manager.add_module_pass(Box::new(ParsingPass {}));
     pass_manager.add_module_pass(Box::new(MsgLowerPass {}));
+    pass_manager.add_module_pass(Box::new(MsgSelectorAnalysisPass {}));
     pass_manager.add_module_pass(Box::new(DefConflictAnalysisPass {}));
     pass_manager.add_module_pass(Box::new(ImportAnalysisPass {}));
     pass_manager.add_module_pass(Box::new(AdtDefAnalysisPass {}));

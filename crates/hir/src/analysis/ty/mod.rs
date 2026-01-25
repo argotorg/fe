@@ -34,6 +34,7 @@ pub mod const_ty;
 pub mod corelib;
 pub(crate) mod ctfe;
 pub mod effects;
+pub mod msg_selector;
 
 pub mod decision_tree;
 pub mod diagnostics;
@@ -52,6 +53,8 @@ pub mod ty_error;
 pub mod ty_lower;
 pub mod unify;
 pub mod visitor;
+
+pub use msg_selector::MsgSelectorAnalysisPass;
 
 const DEFAULT_TARGET_TY_PATH: &[&str] = &["std", "evm", "EvmTarget"];
 

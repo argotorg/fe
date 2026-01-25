@@ -7,6 +7,7 @@ mod pat;
 mod path;
 mod stmt;
 
+pub(crate) use self::contract::eval_msg_variant_selector;
 pub use self::contract::{
     ResolvedRecvVariant, VariantResError, check_contract_init_body, check_contract_recv_arm_body,
     check_contract_recv_block, check_contract_recv_blocks, resolve_variant_bare,

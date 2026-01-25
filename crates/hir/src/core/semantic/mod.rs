@@ -1306,7 +1306,10 @@ fn resolve_sol_abi_ty<'db>(
 }
 
 fn get_variant_selector<'db>(db: &'db dyn HirAnalysisDb, struct_: Struct<'db>) -> Option<u32> {
-    use crate::hir_def::{Expr, LitKind};
+    use crate::analysis::ty::{
+        const_eval::{ConstValue, try_eval_const_body},
+        ty_def::{PrimTy, TyBase, TyData},
+    };
     use num_traits::ToPrimitive;
 
     let msg_variant_trait = resolve_core_trait(db, struct_.scope(), &["message", "MsgVariant"])?;
@@ -1329,12 +1332,10 @@ fn get_variant_selector<'db>(db: &'db dyn HirAnalysisDb, struct_: Struct<'db>) -
         .find(|c| c.name.to_opt() == Some(selector_name))?;
 
     let body = selector_const.value.to_opt()?;
-    let root_expr = body.expr(db);
-    let expr = body.exprs(db).get(root_expr)?.clone().to_opt()?;
-
-    match expr {
-        Expr::Lit(LitKind::Int(int_id)) => int_id.data(db).to_u32(),
-        _ => None,
+    let expected_ty = TyId::new(db, TyData::TyBase(TyBase::Prim(PrimTy::U32)));
+    match try_eval_const_body(db, body, expected_ty)? {
+        ConstValue::Int(value) => value.to_u32(),
+        ConstValue::Bool(_) => None,
     }
 }
 

@@ -11,8 +11,8 @@ use hir::analysis::{
     name_resolution::ImportAnalysisPass,
     ty::{
         AdtDefAnalysisPass, BodyAnalysisPass, ContractAnalysisPass, DefConflictAnalysisPass,
-        FuncAnalysisPass, ImplAnalysisPass, ImplTraitAnalysisPass, TraitAnalysisPass,
-        TypeAliasAnalysisPass,
+        FuncAnalysisPass, ImplAnalysisPass, ImplTraitAnalysisPass, MsgSelectorAnalysisPass,
+        TraitAnalysisPass, TypeAliasAnalysisPass,
     },
 };
 use hir::{
@@ -104,6 +104,7 @@ fn initialize_analysis_pass() -> AnalysisPassManager {
     let mut pass_manager = AnalysisPassManager::new();
     pass_manager.add_module_pass(Box::new(ParsingPass {}));
     pass_manager.add_module_pass(Box::new(MsgLowerPass {}));
+    pass_manager.add_module_pass(Box::new(MsgSelectorAnalysisPass {}));
     pass_manager.add_module_pass(Box::new(DefConflictAnalysisPass {}));
     pass_manager.add_module_pass(Box::new(ImportAnalysisPass {}));
     pass_manager.add_module_pass(Box::new(AdtDefAnalysisPass {}));
