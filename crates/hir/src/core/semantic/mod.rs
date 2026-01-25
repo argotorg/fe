@@ -397,9 +397,17 @@ impl<'db> FuncParamView<'db> {
 
     pub fn label(self, db: &'db dyn HirDb) -> Option<IdentId<'db>> {
         let list = self.func.params_list(db).to_opt()?;
-        match list.data(db).get(self.idx)?.label {
-            Some(FuncParamName::Ident(id)) => Some(id),
-            _ => None,
+        let param = list.data(db).get(self.idx)?;
+        (!param.is_label_suppressed && !param.is_self_param(db))
+            .then(|| param.name())
+            .flatten()
+    }
+
+    pub fn is_label_suppressed(self, db: &'db dyn HirDb) -> bool {
+        let list = self.func.params_list(db).to_opt();
+        match list.and_then(|l| l.data(db).get(self.idx)) {
+            Some(p) => p.is_label_suppressed,
+            None => false,
         }
     }
 

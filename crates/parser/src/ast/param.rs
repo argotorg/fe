@@ -14,7 +14,8 @@ ast_node! {
 ast_node! {
     /// A single parameter.
     /// `self`
-    /// `label a: u256`
+    /// `a: u256`
+    /// `_ a: u256`
     pub struct FuncParam,
     SK::FnParam,
 }
@@ -24,19 +25,25 @@ impl FuncParam {
         support::token(self.syntax(), SK::MutKw)
     }
 
-    /// Returns the `label` if the parameter is labeled.
-    /// `label` in `label a: u256`.
-    pub fn label(&self) -> Option<FuncParamLabel> {
-        self.syntax()
-            .children_with_tokens()
-            .find_map(|child| match child {
-                rowan::NodeOrToken::Token(token) => FuncParamLabel::from_token(token),
-                _ => None,
-            })
+    /// Returns `true` if the parameter uses `_` as an argument label (e.g.
+    /// `_ x: u256`), meaning it doesn't have an argument label at the call site.
+    pub fn is_label_suppressed(&self) -> bool {
+        let mut param_names = self.syntax().children_with_tokens().filter_map(|child| {
+            if let rowan::NodeOrToken::Token(token) = child {
+                FuncParamName::from_token(token)
+            } else {
+                None
+            }
+        });
+
+        matches!(
+            (param_names.next(), param_names.next()),
+            (Some(FuncParamName::Underscore(_)), Some(_))
+        )
     }
 
     /// Returns the name of the parameter.
-    /// `a` in `label a: u256`.
+    /// `a` in `_ a: u256`.
     pub fn name(&self) -> Option<FuncParamName> {
         let mut param_names = self.syntax().children_with_tokens().filter_map(|child| {
             if let rowan::NodeOrToken::Token(token) = child {
@@ -46,10 +53,14 @@ impl FuncParam {
             }
         });
 
-        let first = param_names.next();
-        match param_names.next() {
-            Some(second) => Some(second),
-            None => first,
+        let first = param_names.next()?;
+        let second = param_names.next();
+
+        // If the label is `_`, the following name token is the parameter name.
+        // Otherwise, the first token is both the label and the name.
+        match (first, second) {
+            (FuncParamName::Underscore(_), Some(second)) => Some(second),
+            (first, _) => Some(first),
         }
     }
 
@@ -497,32 +508,8 @@ pub trait WhereClauseOwner: AstNode<Language = FeLang> {
     }
 }
 
-pub enum FuncParamLabel {
-    /// `label` in `label a: u256`
-    Ident(SyntaxToken),
-    /// `_` in `_ a: u256`.
-    Underscore(SyntaxToken),
-}
-impl FuncParamLabel {
-    pub fn syntax(&self) -> SyntaxToken {
-        match self {
-            FuncParamLabel::Ident(token) => token,
-            FuncParamLabel::Underscore(token) => token,
-        }
-        .clone()
-    }
-
-    fn from_token(token: SyntaxToken) -> Option<Self> {
-        match token.kind() {
-            SK::Ident => Some(FuncParamLabel::Ident(token)),
-            SK::Underscore => Some(FuncParamLabel::Underscore(token)),
-            _ => None,
-        }
-    }
-}
-
 pub enum FuncParamName {
-    /// `a` in `label a: u256`
+    /// `a` in `a: u256`
     Ident(SyntaxToken),
     /// `self` parameter.
     SelfParam(SyntaxToken),

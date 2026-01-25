@@ -1,31 +1,32 @@
 ---
 source: crates/uitest/tests/ty.rs
+assertion_line: 84
 expression: diags
 input_file: fixtures/ty/trait_impl/impl_method_label_mismatch.fe
 ---
 error[6-0006]: method argument label mismatch
   ┌─ impl_method_label_mismatch.fe:6:18
   │
-2 │     fn foo(self, x y: i32, _: u32, z: u32) 
-  │                  -------- argument label defined here
+2 │     fn foo(self, x: i32, _ y: u32, z: u32)
+  │                  ------ argument label defined here
   ·
-6 │     fn foo(self, y: i32, x: u32, _: u32) {}
+6 │     fn foo(self, y: i32, x: u32, _ z: u32) {}
   │                  ^^^^^^ expected `x` label, but the given label is `y`
 
 error[6-0006]: method argument label mismatch
   ┌─ impl_method_label_mismatch.fe:6:26
   │
-2 │     fn foo(self, x y: i32, _: u32, z: u32) 
-  │                            ------ argument label defined here
+2 │     fn foo(self, x: i32, _ y: u32, z: u32)
+  │                          -------- argument label defined here
   ·
-6 │     fn foo(self, y: i32, x: u32, _: u32) {}
+6 │     fn foo(self, y: i32, x: u32, _ z: u32) {}
   │                          ^^^^^^ expected `_` label, but the given label is `x`
 
 error[6-0006]: method argument label mismatch
   ┌─ impl_method_label_mismatch.fe:6:34
   │
-2 │     fn foo(self, x y: i32, _: u32, z: u32) 
+2 │     fn foo(self, x: i32, _ y: u32, z: u32)
   │                                    ------ argument label defined here
   ·
-6 │     fn foo(self, y: i32, x: u32, _: u32) {}
-  │                                  ^^^^^^ expected `z` label, but the given label is `_`
+6 │     fn foo(self, y: i32, x: u32, _ z: u32) {}
+  │                                  ^^^^^^^^ expected `z` label, but the given label is `_`

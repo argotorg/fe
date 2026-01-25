@@ -183,7 +183,7 @@ pub struct AssocTypeGenericArg<'db> {
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct FuncParam<'db> {
     pub is_mut: bool,
-    pub label: Option<FuncParamName<'db>>,
+    pub is_label_suppressed: bool,
     pub name: Partial<FuncParamName<'db>>,
     pub ty: Partial<TypeId<'db>>,
 
@@ -194,17 +194,13 @@ pub struct FuncParam<'db> {
 
 impl<'db> FuncParam<'db> {
     pub fn label_eagerly(&self) -> Option<IdentId<'db>> {
-        match self.label {
-            Some(FuncParamName::Ident(ident)) => return Some(ident),
-            Some(FuncParamName::Underscore) => return None,
-            _ => {}
-        }
-
-        if let FuncParamName::Ident(ident) = self.name.to_opt()? {
-            Some(ident)
-        } else {
-            None
-        }
+        (!self.is_label_suppressed)
+            .then(|| self.name.to_opt())
+            .flatten()
+            .and_then(|name| match name {
+                FuncParamName::Ident(ident) => Some(ident),
+                FuncParamName::Underscore => None,
+            })
     }
 
     pub fn name(&self) -> Option<IdentId<'db>> {

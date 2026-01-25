@@ -99,7 +99,6 @@ pub enum TyLowerDiag<'db> {
     },
 
     DuplicateArgName(Func<'db>, SmallVec<[u16; 4]>),
-    DuplicateArgLabel(Func<'db>, SmallVec<[u16; 4]>),
     DuplicateFieldName(FieldParent<'db>, SmallVec<[u16; 4]>),
     DuplicateVariantName(Enum<'db>, SmallVec<[u16; 4]>),
     DuplicateGenericParamName(GenericParamOwner<'db>, SmallVec<[u16; 4]>),
@@ -156,7 +155,6 @@ impl TyLowerDiag<'_> {
             Self::DuplicateFieldName(..) => 17,
             Self::DuplicateVariantName(..) => 18,
             Self::DuplicateGenericParamName(..) => 19,
-            Self::DuplicateArgLabel(..) => 20,
             Self::NonTrailingDefaultGenericParam(_) => 21,
             Self::GenericDefaultForwardRef { .. } => 22,
         }

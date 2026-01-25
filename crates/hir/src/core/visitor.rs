@@ -1754,10 +1754,6 @@ pub fn walk_func_param<'db, V>(
 ) where
     V: Visitor<'db> + ?Sized,
 {
-    if let Some(FuncParamName::Ident(ident)) = param.label {
-        ctxt.with_new_ctxt(|span| span.label(), |ctxt| visitor.visit_ident(ctxt, ident));
-    }
-
     if let Some(FuncParamName::Ident(ident)) = param.name.to_opt() {
         ctxt.with_new_ctxt(|span| span.name(), |ctxt| visitor.visit_ident(ctxt, ident));
     }

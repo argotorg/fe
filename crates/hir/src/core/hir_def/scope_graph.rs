@@ -9,8 +9,8 @@ use salsa::Update;
 
 use super::{
     AssocConstDecl, AssocTyDecl, AttrListId, Body, Const, Contract, Enum, EnumVariant, ExprId,
-    FieldDef, FieldParent, Func, FuncParam, FuncParamName, GenericParam, IdentId, Impl, ImplTrait,
-    ItemKind, Mod, Struct, TopLevelMod, Trait, TypeAlias, Use, VariantDef, VariantKind, Visibility,
+    FieldDef, FieldParent, Func, FuncParam, GenericParam, IdentId, Impl, ImplTrait, ItemKind, Mod,
+    Struct, TopLevelMod, Trait, TypeAlias, Use, VariantDef, VariantKind, Visibility,
     scope_graph_viz::ScopeGraphFormatter,
 };
 use crate::{
@@ -339,11 +339,7 @@ impl<'db> ScopeId<'db> {
 
             ScopeId::FuncParam(..) => {
                 let param: &FuncParam = self.resolve_to(db).unwrap();
-                if let Some(FuncParamName::Ident(ident)) = param.label {
-                    Some(ident)
-                } else {
-                    param.name()
-                }
+                param.name()
             }
 
             ScopeId::GenericParam(..) => {
@@ -358,7 +354,7 @@ impl<'db> ScopeId<'db> {
         }
     }
 
-    pub fn name_span(self, db: &'db dyn HirDb) -> Option<DynLazySpan<'db>> {
+    pub fn name_span(self, _db: &'db dyn HirDb) -> Option<DynLazySpan<'db>> {
         match self {
             ScopeId::Item(item) => item.name_span(),
 
@@ -368,13 +364,8 @@ impl<'db> ScopeId<'db> {
 
             ScopeId::FuncParam(parent, idx) => {
                 let func: Func = parent.try_into().unwrap();
-                let param = &func.params_list(db).to_opt()?.data(db)[idx as usize];
                 let param_span = func.span().params().param(idx as usize);
-                if let Some(FuncParamName::Ident(_)) = param.label {
-                    Some(param_span.label().into())
-                } else {
-                    Some(param_span.name().into())
-                }
+                Some(param_span.name().into())
             }
 
             ScopeId::GenericParam(parent, idx) => {

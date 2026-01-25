@@ -179,7 +179,7 @@ where
         let db = self.db();
         FuncParam {
             is_mut: false,
-            label: None,
+            is_label_suppressed: false,
             name: Partial::Present(FuncParamName::Ident(IdentId::make_self(db))),
             ty: Partial::Present(self.self_ty()),
             self_ty_fallback: true,
@@ -193,7 +193,7 @@ where
     ) -> FuncParam<'db> {
         FuncParam {
             is_mut: true,
-            label: Some(FuncParamName::Underscore),
+            is_label_suppressed: true,
             name: Partial::Present(FuncParamName::Ident(name)),
             ty: Partial::Present(ty),
             self_ty_fallback: false,

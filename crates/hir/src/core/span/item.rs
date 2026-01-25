@@ -675,7 +675,7 @@ mod tests {
         let mut db = TestDb::default();
 
         let text = r#"
-            fn my_func<T: Debug, U, const LEN: usize>(x: u32, label y: foo::Bar<2>) -> FooResult
+            fn my_func<T: Debug, U, const LEN: usize>(x: u32, _ y: foo::Bar<2>) -> FooResult
                 where U: Add
         "#;
 
@@ -713,7 +713,7 @@ mod tests {
 
         assert_eq!("x", db.text_at(top_mod, &param_1.clone().name()));
         assert_eq!("u32", db.text_at(top_mod, &param_1.ty()));
-        assert_eq!("label", db.text_at(top_mod, &param_2.clone().label()));
+        assert_eq!("y", db.text_at(top_mod, &param_2.clone().name()));
         assert_eq!("foo::Bar<2>", db.text_at(top_mod, &param_2.ty()));
 
         assert_eq!("FooResult", db.text_at(top_mod, &fn_.span().ret_ty()));

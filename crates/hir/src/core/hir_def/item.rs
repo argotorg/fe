@@ -685,7 +685,11 @@ impl<'db> Func<'db> {
 
     pub fn param_label_or_name(self, db: &'db dyn HirDb, idx: usize) -> Option<FuncParamName<'db>> {
         let param = self.params_list(db).to_opt()?.data(db).get(idx)?;
-        param.label.or(param.name.to_opt())
+        if param.is_label_suppressed {
+            Some(FuncParamName::Underscore)
+        } else {
+            param.name.to_opt()
+        }
     }
 
     /// View as a callable definition (if named).

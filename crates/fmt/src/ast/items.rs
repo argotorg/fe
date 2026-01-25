@@ -474,15 +474,10 @@ impl ToDoc for ast::FuncParam {
             doc = doc.append(alloc.text("mut "));
         }
 
-        let label = self.label();
         let name = self.name();
 
-        if let (Some(label), Some(name_ref)) = (&label, &name)
-            && label.syntax().text_range() != name_ref.syntax().text_range()
-        {
-            doc =
-                doc.append(alloc.text(ctx.snippet(label.syntax().text_range()).trim().to_string()));
-            doc = doc.append(alloc.text(" "));
+        if self.is_label_suppressed() {
+            doc = doc.append(alloc.text("_ "));
         }
 
         if let Some(name) = name {

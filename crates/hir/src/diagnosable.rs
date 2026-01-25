@@ -266,24 +266,11 @@ impl<'db> WherePredicateBoundView<'db> {
 impl<'db> Func<'db> {
     /// Diagnostics related to parameters (duplicate names/labels).
     pub fn diags_parameters(self, db: &'db dyn HirAnalysisDb) -> Vec<TyDiagCollection<'db>> {
-        let mut diags = Vec::new();
-
-        // Duplicate parameter names
-        let dupes = check_duplicate_names(self.params(db).map(|v| v.name(db)), |idxs| {
+        check_duplicate_names(self.params(db).map(|v| v.name(db)), |idxs| {
             TyLowerDiag::DuplicateArgName(self, idxs).into()
-        });
-        let found_dupes = !dupes.is_empty();
-        diags.extend(dupes);
-
-        // Duplicate labels (only if names were unique)
-        if !found_dupes {
-            diags.extend(check_duplicate_names(
-                self.params(db).map(|v| v.label_eagerly(db)),
-                |idxs| TyLowerDiag::DuplicateArgLabel(self, idxs).into(),
-            ));
-        }
-
-        diags
+        })
+        .into_iter()
+        .collect()
     }
 
     /// Diagnostics related to the explicit return type (kind/const checks).

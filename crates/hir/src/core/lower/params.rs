@@ -155,7 +155,7 @@ impl<'db> GenericParam<'db> {
 impl<'db> FuncParam<'db> {
     fn lower_ast(ctxt: &mut FileLowerCtxt<'db>, ast: ast::FuncParam) -> Self {
         let is_mut = ast.mut_token().is_some();
-        let label = ast.label().map(|ast| FuncParamName::lower_label(ctxt, ast));
+        let is_label_suppressed = ast.is_label_suppressed();
         let name = ast.name().map(|ast| FuncParamName::lower_ast(ctxt, ast));
 
         let self_ty_fallback =
@@ -169,7 +169,7 @@ impl<'db> FuncParam<'db> {
 
         Self {
             is_mut,
-            label,
+            is_label_suppressed,
             name: name.into(),
             ty,
             self_ty_fallback,
@@ -237,13 +237,6 @@ impl<'db> FuncParamName<'db> {
             }
             ast::FuncParamName::SelfParam(_) => FuncParamName::Ident(IdentId::make_self(ctxt.db())),
             ast::FuncParamName::Underscore(_) => FuncParamName::Underscore,
-        }
-    }
-
-    fn lower_label(ctxt: &mut FileLowerCtxt<'db>, ast: ast::FuncParamLabel) -> FuncParamName<'db> {
-        match ast {
-            ast::FuncParamLabel::Ident(name) => Self::Ident(IdentId::lower_token(ctxt, name)),
-            ast::FuncParamLabel::Underscore(_) => Self::Underscore,
         }
     }
 }

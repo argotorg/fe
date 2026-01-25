@@ -1,7 +1,8 @@
 ---
-source: crates/hir-analysis/tests/ty_check.rs
+source: crates/hir/tests/ty_check.rs
+assertion_line: 40
 expression: res
-input_file: crates/hir-analysis/test_files/ty_check/method.fe
+input_file: test_files/ty_check/method.fe
 ---
 note: 
   ┌─ method.fe:7:20
@@ -82,10 +83,10 @@ note:
    │                           ^^^^^^^^^^^^ Option<U>
 
 note: 
-   ┌─ method.fe:24:53
+   ┌─ method.fe:24:51
    │  
-24 │       pub fn get_or_insert(mut self, inner t: T) -> T {
-   │ ╭─────────────────────────────────────────────────────^
+24 │       pub fn get_or_insert(mut self, inner: T) -> T {
+   │ ╭───────────────────────────────────────────────────^
 25 │ │         match self {
 26 │ │             Self::Some(t) => t
 27 │ │             Self::None => {
@@ -100,8 +101,8 @@ note:
 25 │ ╭         match self {
 26 │ │             Self::Some(t) => t
 27 │ │             Self::None => {
-28 │ │                 self = Self::Some(t)
-29 │ │                 t
+28 │ │                 self = Self::Some(inner)
+29 │ │                 inner
 30 │ │             }
 31 │ │         }
    │ ╰─────────^ T
@@ -141,46 +142,46 @@ note:
    │  
 27 │               Self::None => {
    │ ╭───────────────────────────^
-28 │ │                 self = Self::Some(t)
-29 │ │                 t
+28 │ │                 self = Self::Some(inner)
+29 │ │                 inner
 30 │ │             }
    │ ╰─────────────^ T
 
 note: 
    ┌─ method.fe:28:17
    │
-28 │                 self = Self::Some(t)
+28 │                 self = Self::Some(inner)
    │                 ^^^^ Option<T>
 
 note: 
    ┌─ method.fe:28:17
    │
-28 │                 self = Self::Some(t)
-   │                 ^^^^^^^^^^^^^^^^^^^^ ()
+28 │                 self = Self::Some(inner)
+   │                 ^^^^^^^^^^^^^^^^^^^^^^^^ ()
 
 note: 
    ┌─ method.fe:28:24
    │
-28 │                 self = Self::Some(t)
+28 │                 self = Self::Some(inner)
    │                        ^^^^^^^^^^ fn Some<T>
 
 note: 
    ┌─ method.fe:28:24
    │
-28 │                 self = Self::Some(t)
-   │                        ^^^^^^^^^^^^^ Option<T>
+28 │                 self = Self::Some(inner)
+   │                        ^^^^^^^^^^^^^^^^^ Option<T>
 
 note: 
    ┌─ method.fe:28:35
    │
-28 │                 self = Self::Some(t)
-   │                                   ^ T
+28 │                 self = Self::Some(inner)
+   │                                   ^^^^^ T
 
 note: 
    ┌─ method.fe:29:17
    │
-29 │                 t
-   │                 ^ T
+29 │                 inner
+   │                 ^^^^^ T
 
 note: 
    ┌─ method.fe:36:42

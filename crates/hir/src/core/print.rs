@@ -367,13 +367,8 @@ impl<'db> FuncParam<'db> {
             result.push_str("mut ");
         }
 
-        // Handle label if different from name
-        if let Some(label) = &self.label {
-            // Only print label separately if different from name
-            if *label != name {
-                result.push_str(&label.pretty_print(db));
-                result.push(' ');
-            }
+        if self.is_label_suppressed {
+            result.push_str("_ ");
         }
 
         // Name

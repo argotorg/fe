@@ -1285,38 +1285,6 @@ impl DiagnosticVoucher for TyLowerDiag<'_> {
                 }
             }
 
-            Self::DuplicateArgLabel(func, idxs) => {
-                let views: Vec<_> = func.params(db).collect();
-                let name = views[idxs[0] as usize]
-                    .label_eagerly(db)
-                    .expect("param label")
-                    .data(db);
-
-                let spans = idxs.iter().map(|i| {
-                    let i = *i as usize;
-                    let s = func.span().params().clone().param(i);
-                    if views[i].label(db).is_some() {
-                        s.label().resolve(db)
-                    } else {
-                        s.name().resolve(db)
-                    }
-                });
-
-                let message = if let Some(name) = func.name(db).to_opt() {
-                    format!("duplicate argument label in function `{}`", name.data(db))
-                } else {
-                    "duplicate argument label in function definition".into()
-                };
-
-                CompleteDiagnostic {
-                    severity: Severity::Error,
-                    message,
-                    sub_diagnostics: duplicate_name_subdiags(name, spans),
-                    notes: vec![],
-                    error_code,
-                }
-            }
-
             Self::DuplicateFieldName(parent, idxs) => {
                 let name = parent
                     .fields(db)

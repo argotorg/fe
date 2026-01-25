@@ -45,7 +45,6 @@ define_lazy_span_node!(
        (mut_kw, mut_token),
     }
     @node {
-       (label, label, LazySpanAtom),
        (name, name, LazySpanAtom),
        (ty, ty, LazyTySpan),
     }

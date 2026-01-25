@@ -58,7 +58,27 @@ impl super::Parse for FnParamScope {
                     parse_type(parser, None)?;
                 }
             }
-            Some(SyntaxKind::Ident | SyntaxKind::Underscore) => {
+            Some(SyntaxKind::Ident) => {
+                parser.bump();
+
+                if matches!(
+                    parser.current_kind(),
+                    Some(SyntaxKind::Ident | SyntaxKind::Underscore)
+                ) {
+                    parser.error_msg_on_current_token(
+                        "parameter label renaming is not supported; use the parameter name as the label",
+                    );
+                    parser.bump();
+                }
+                if parser.find(
+                    SyntaxKind::Colon,
+                    ExpectedKind::TypeSpecifier(SyntaxKind::FnParam),
+                )? {
+                    parser.bump();
+                    parse_type(parser, None)?;
+                }
+            }
+            Some(SyntaxKind::Underscore) => {
                 parser.bump();
 
                 parser.expect(
