@@ -3,6 +3,10 @@ name = "fe"
 version = "0.26.0"
 edition.workspace = true
 
+[features]
+default = ["doc-server"]
+doc-server = ["dep:tokio", "doc-viewer/ssr"]
+
 [dependencies]
 clap.workspace = true
 driver.workspace = true
@@ -19,6 +23,13 @@ cranelift-entity.workspace = true
 codegen = { path = "../codegen", package = "fe-codegen" }
 contract-harness = { path = "../contract-harness", package = "fe-contract-harness" }
 solc-runner = { path = "../solc-runner", package = "fe-solc-runner" }
+# doc-engine for extraction only
+doc-engine = { path = "../doc-engine", package = "fe-doc-engine" }
+# doc-viewer for server and model
+doc-viewer = { path = "../doc-viewer", package = "fe-doc-viewer" }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+tokio = { version = "1.43", features = ["full"], optional = true }
 fmt.workspace = true
 walkdir = "2"
 similar = "2"
