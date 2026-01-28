@@ -659,13 +659,6 @@ mod tests {
         let yul_instance =
             RuntimeInstance::new(yul_harness.runtime_bytecode()).expect("yul instantiation");
 
-        let enable_sonatina = std::env::var("FE_TEST_SONATINA")
-            .map(|v| v != "0" && !v.is_empty())
-            .unwrap_or(false);
-        if !enable_sonatina {
-            return (yul_instance, None);
-        }
-
         let sonatina_runtime =
             compile_runtime_sonatina_from_source(&source).expect("sonatina compile");
         let sonatina_instance =
