@@ -514,6 +514,9 @@ impl DesugaredOrigin {
                     }
                 }
             }
+            Self::Event(super::EventDesugared { event_struct }) => {
+                event_struct.to_node(&root).syntax().text_range()
+            }
         };
 
         Span::new(file, range, SpanKind::Original)

@@ -40,7 +40,24 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
 
         let size_bytes = match (ingot_kind, name.data(self.db).as_str()) {
             (IngotKind::Core, "size_of") => layout::ty_size_bytes(self.db, ty)?,
-            (IngotKind::Std, "encoded_size") => self.abi_static_size_bytes(ty)?,
+            (IngotKind::Std, "encoded_size") => match self.abi_static_size_bytes(ty) {
+                Some(size) => size,
+                None => {
+                    let ty_name = ty.pretty_print(self.db);
+                    let func_name = self
+                        .hir_func
+                        .and_then(|f| f.name(self.db).to_opt())
+                        .map(|ident| ident.data(self.db).to_string())
+                        .unwrap_or_else(|| "<anonymous>".to_string());
+                    self.deferred_error = Some(super::MirLowerError::Unsupported {
+                        func_name,
+                        message: format!(
+                            "`encoded_size<{ty_name}>()` requires a statically-sized type"
+                        ),
+                    });
+                    return None;
+                }
+            },
             _ => return None,
         };
 
