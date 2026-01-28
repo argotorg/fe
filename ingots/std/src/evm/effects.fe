@@ -56,6 +56,11 @@ impl<A: Abi> Encode<A> for Address {
     }
 }
 
+/// Convert an EVM `Address` into its ABI word representation (`u256`).
+pub fn address_to_word(addr: Address) -> u256 {
+    addr.inner
+}
+
 // -----------------------------------------------------------------------------
 // Effect pointer providers
 // -----------------------------------------------------------------------------
@@ -173,7 +178,14 @@ pub trait Log {
     fn log3(mut self, offset: u256, len: u256, topic0: u256, topic1: u256, topic2: u256)
     fn log4(mut self, offset: u256, len: u256, topic0: u256, topic1: u256, topic2: u256, topic3: u256)
 
-    fn emit<T>(mut self, _ event: T) {
+    /// Emit a Solidity-compatible event log (`log1`-`log4`).
+    ///
+    /// This delegates to the `std::evm::Event` implementation generated for
+    /// `#[event]` structs.
+    fn emit<E>(mut self, event: E)
+        where E: super::event::Event
+    {
+        event.emit(self)
     }
 }
 
@@ -331,17 +343,12 @@ impl RawOps for Evm {
 }
 
 impl Log for Evm {
-    // TODO: struct logging
+    // Logging opcodes.
     fn log0(mut self, offset: u256, len: u256) { ops::log0(offset: offset, len: len) }
     fn log1(mut self, offset: u256, len: u256, topic0: u256) { ops::log1(offset: offset, len: len, topic0: topic0) }
     fn log2(mut self, offset: u256, len: u256, topic0: u256, topic1: u256) { ops::log2(offset: offset, len: len, topic0: topic0, topic1: topic1) }
     fn log3(mut self, offset: u256, len: u256, topic0: u256, topic1: u256, topic2: u256) { ops::log3(offset: offset, len: len, topic0: topic0, topic1: topic1, topic2: topic2) }
     fn log4(mut self, offset: u256, len: u256, topic0: u256, topic1: u256, topic2: u256, topic3: u256) { ops::log4(offset: offset, len: len, topic0: topic0, topic1: topic1, topic2: topic2, topic3: topic3) }
-
-    // TODO struct logging
-    fn emit<T>(mut self, _ event: T) {
-        ops::log0(offset: core::addr_of(event), len: size_of<T>())
-    }
 }
 
 impl Create for Evm {

@@ -1,0 +1,11 @@
+struct Address {
+    inner: u256,
+}
+
+#[event]
+struct BadEvent {
+    #[indexed]
+    from: Address,
+    #[indexed]
+    to: std::evm::Address,
+}

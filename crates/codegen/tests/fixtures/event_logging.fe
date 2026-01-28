@@ -1,0 +1,16 @@
+use std::evm::{Address, Evm, Event}
+
+#[event]
+struct Transfer {
+    #[indexed]
+    from: Address,
+    #[indexed]
+    to: Address,
+    amount: u256,
+}
+
+fn emit_transfer(mut evm: Evm, from: Address, to: Address, amount: u256) {
+    let e = Transfer { from, to, amount }
+    e.emit(evm)
+}
+

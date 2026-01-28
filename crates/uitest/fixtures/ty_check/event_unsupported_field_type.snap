@@ -1,0 +1,12 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/event_unsupported_field_type.fe
+---
+error[10-0007]: unsupported event field type
+  ┌─ event_unsupported_field_type.fe:5:12
+  │
+5 │     value: StorageMap<Address, u256, 0>,
+  │            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `StorageMap<Address, u256, 0>` is not supported for event logging (v1)
+  │
+  = supported types: `Address`, `bool`, and `(u|i){8,16,32,64,128,256}`

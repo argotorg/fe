@@ -1,0 +1,10 @@
+#[event]
+struct Collision {
+    #[indexed]
+    log: u256,
+    #[indexed]
+    enc: u256,
+    data_len: u256,
+    data_ptr: u256,
+}
+

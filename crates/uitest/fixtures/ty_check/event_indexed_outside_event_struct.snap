@@ -1,0 +1,12 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/event_indexed_outside_event_struct.fe
+---
+error[10-0004]: `#[indexed]` is only valid within `#[event]` structs
+  ┌─ event_indexed_outside_event_struct.fe:4:5
+  │
+4 │     #[indexed]
+  │     ^^^^^^^^^^ move `#[indexed]` inside a `#[event]` struct
+  │
+  = mark the struct with `#[event]` or remove `#[indexed]`

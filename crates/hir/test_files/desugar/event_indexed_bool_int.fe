@@ -1,0 +1,9 @@
+#[event]
+struct Flags {
+    #[indexed]
+    ok: bool,
+    #[indexed]
+    delta: i8,
+    value: u256,
+}
+

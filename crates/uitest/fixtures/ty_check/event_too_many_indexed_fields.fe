@@ -1,0 +1,14 @@
+use std::evm::Address
+
+#[event]
+struct TooMany {
+    #[indexed]
+    a: Address,
+    #[indexed]
+    b: Address,
+    #[indexed]
+    c: Address,
+    #[indexed]
+    d: Address,
+}
+

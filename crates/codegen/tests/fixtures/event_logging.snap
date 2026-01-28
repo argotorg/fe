@@ -1,0 +1,108 @@
+---
+source: crates/codegen/tests/yul.rs
+expression: output
+input_file: tests/fixtures/event_logging.fe
+---
+function $emit_transfer($evm, $from, $to, $amount) {
+  let v0 := mload(0x40)
+  if iszero(v0) {
+    v0 := 0x80
+  }
+  mstore(0x40, add(v0, 96))
+  mstore(v0, $from)
+  mstore(add(v0, 32), $to)
+  mstore(add(v0, 64), $amount)
+  let v1 := v0
+  $transfer_event_emit__Evm__1572a3ac6cae1070(v1, 0)
+  leave
+}
+function $transfer_event_emit__Evm__1572a3ac6cae1070($self, $log) {
+  let v0 := $solencoder_new()
+  let v1 := 32
+  let v2 := $solencoder_abiencoder_reserve_head(v0, v1)
+  pop(v2)
+  let v3 := mload(add($self, 64))
+  $u256_encode_encode__Sol_SolEncoder__dce63ad1a1fe4ae2(v3, v0)
+  let v4 := $solencoder_abiencoder_finish(v0)
+  let v5 := mload(v4)
+  let v6 := v5
+  let v7 := mload(add(v4, 32))
+  let v8 := v7
+  let v9 := mload($self)
+  let v10 := $address_to_word(v9)
+  let v11 := mload(add($self, 32))
+  let v12 := $address_to_word(v11)
+  $evm_log_log3($log, v6, v8, 100389287136786176327247604509743168900146139575972864366142685224231313322991, v10, v12)
+  leave
+}
+function $solencoder_new() -> ret {
+  let v0 := mload(0x40)
+  if iszero(v0) {
+    v0 := 0x80
+  }
+  mstore(0x40, add(v0, 96))
+  mstore(v0, 0)
+  mstore(add(v0, 32), 0)
+  mstore(add(v0, 64), 0)
+  let v1 := v0
+  ret := v1
+  leave
+}
+function $solencoder_abiencoder_reserve_head($self, $bytes) -> ret {
+  $solencoder_ensure_init($self, $bytes)
+  let v0 := mload($self)
+  ret := v0
+  leave
+}
+function $u256_encode_encode__Sol_SolEncoder__dce63ad1a1fe4ae2($self, $e) {
+  $solencoder_abiencoder_write_word($e, $self)
+  leave
+}
+function $solencoder_abiencoder_finish($self) -> ret {
+  let v0 := mload($self)
+  let v1 := mload(add($self, 64))
+  let v2 := mload(0x40)
+  if iszero(v2) {
+    v2 := 0x80
+  }
+  mstore(0x40, add(v2, 64))
+  mstore(v2, v0)
+  mstore(add(v2, 32), sub(v1, v0))
+  ret := v2
+  leave
+}
+function $address_to_word($addr) -> ret {
+  ret := $addr
+  leave
+}
+function $evm_log_log3($self, $offset, $len, $topic0, $topic1, $topic2) {
+  log3($offset, $len, $topic0, $topic1, $topic2)
+  leave
+}
+function $solencoder_ensure_init($self, $bytes) {
+  let v0 := mload($self)
+  let v1 := eq(v0, 0)
+  if v1 {
+    let v2 := $alloc($bytes)
+    mstore($self, v2)
+    mstore(add($self, 32), v2)
+    mstore(add($self, 64), add(v2, $bytes))
+  }
+  leave
+}
+function $solencoder_abiencoder_write_word($self, $v) {
+  let v0 := mload(add($self, 32))
+  mstore(v0, $v)
+  mstore(add($self, 32), add(v0, 32))
+  leave
+}
+function $alloc($size) -> ret {
+  let v0 := mload(64)
+  let v1 := eq(v0, 0)
+  if v1 {
+    v0 := 128
+  }
+  mstore(64, add(v0, $size))
+  ret := v0
+  leave
+}
