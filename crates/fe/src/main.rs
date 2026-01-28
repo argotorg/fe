@@ -33,6 +33,9 @@ pub enum Command {
         dump_mir: bool,
         #[arg(long)]
         emit_yul_min: bool,
+        /// Code generation backend to use (yul or sonatina).
+        #[arg(long, default_value = "yul")]
+        backend: String,
     },
     #[cfg(not(target_arch = "wasm32"))]
     Tree {
@@ -77,9 +80,10 @@ pub fn run(opts: &Options) {
             core: _,
             dump_mir,
             emit_yul_min,
+            backend,
         } => {
             //: TODO readd custom core
-            check(path, *dump_mir, *emit_yul_min);
+            check(path, *dump_mir, *emit_yul_min, backend);
         }
         #[cfg(not(target_arch = "wasm32"))]
         Command::Tree { path } => {

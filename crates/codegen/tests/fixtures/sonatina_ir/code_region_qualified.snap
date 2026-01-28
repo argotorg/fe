@@ -1,0 +1,19 @@
+---
+source: crates/codegen/tests/sonatina_ir.rs
+assertion_line: 74
+expression: output
+input_file: crates/codegen/tests/fixtures/code_region_qualified.fe
+---
+target = evm-ethereum-osaka
+
+func public %runtime__StorPtr_Evm___207f35a85ac4062e() {
+    block0:
+        evm_return 0.i256 0.i256;
+}
+
+
+object @Contract {
+    section runtime {
+        entry %runtime__StorPtr_Evm___207f35a85ac4062e;
+    }
+}

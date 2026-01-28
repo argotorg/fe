@@ -1,0 +1,161 @@
+---
+source: crates/codegen/tests/sonatina_ir.rs
+assertion_line: 74
+expression: output
+input_file: crates/codegen/tests/fixtures/match_tuple_nested.fe
+---
+target = evm-ethereum-osaka
+
+func public %match_nested_tuple(v0.i256) -> i256 {
+    block0:
+        jump block7;
+
+    block1:
+        jump block2;
+
+    block2:
+        v3.i256 = phi (7.i256 block1) (6.i256 block3) (5.i256 block4) (2.i256 block5) (1.i256 block6);
+        return v3;
+
+    block3:
+        jump block2;
+
+    block4:
+        jump block2;
+
+    block5:
+        jump block2;
+
+    block6:
+        jump block2;
+
+    block7:
+        v9.i256 = mload v0 i256;
+        v10.i1 = ne v9 0.i256;
+        v11.i256 = zext v10 i256;
+        v12.i256 = eq v11 1.i256;
+        br v12 block8 block15;
+
+    block8:
+        v15.i256 = add v0 1.i256;
+        v16.i256 = mload v15 i256;
+        v17.i1 = ne v16 0.i256;
+        v18.i256 = zext v17 i256;
+        v19.i256 = eq v18 1.i256;
+        br v19 block9 block16;
+
+    block9:
+        v22.i256 = add v0 2.i256;
+        v23.i256 = mload v22 i256;
+        v24.i1 = ne v23 0.i256;
+        v25.i256 = zext v24 i256;
+        v26.i256 = eq v25 1.i256;
+        br v26 block1 block17;
+
+    block10:
+        evm_invalid;
+
+    block11:
+        evm_invalid;
+
+    block12:
+        v29.i256 = add v0 2.i256;
+        v30.i256 = mload v29 i256;
+        v31.i1 = ne v30 0.i256;
+        v32.i256 = zext v31 i256;
+        v33.i256 = eq v32 1.i256;
+        br v33 block5 block18;
+
+    block13:
+        evm_invalid;
+
+    block14:
+        evm_invalid;
+
+    block15:
+        v13.i256 = eq v11 0.i256;
+        br v13 block12 block14;
+
+    block16:
+        v20.i256 = eq v18 0.i256;
+        br v20 block4 block11;
+
+    block17:
+        v27.i256 = eq v25 0.i256;
+        br v27 block3 block10;
+
+    block18:
+        v34.i256 = eq v32 0.i256;
+        br v34 block6 block13;
+}
+
+func public %match_deeply_nested(v0.i256) -> i256 {
+    block0:
+        jump block5;
+
+    block1:
+        jump block2;
+
+    block2:
+        v3.i256 = phi (15.i256 block1) (8.i256 block3) (0.i256 block4);
+        return v3;
+
+    block3:
+        jump block2;
+
+    block4:
+        jump block2;
+
+    block5:
+        v6.i256 = mload v0 i256;
+        v7.i1 = ne v6 0.i256;
+        v8.i256 = zext v7 i256;
+        v10.i256 = eq v8 1.i256;
+        br v10 block6 block10;
+
+    block6:
+        v14.i256 = add v0 3.i256;
+        v15.i256 = mload v14 i256;
+        v16.i1 = ne v15 0.i256;
+        v17.i256 = zext v16 i256;
+        v18.i256 = eq v17 1.i256;
+        br v18 block7 block3;
+
+    block7:
+        v21.i256 = add v0 2.i256;
+        v22.i256 = mload v21 i256;
+        v23.i1 = ne v22 0.i256;
+        v24.i256 = zext v23 i256;
+        v25.i256 = eq v24 1.i256;
+        br v25 block8 block3;
+
+    block8:
+        v27.i256 = add v0 1.i256;
+        v28.i256 = mload v27 i256;
+        v29.i1 = ne v28 0.i256;
+        v30.i256 = zext v29 i256;
+        v31.i256 = eq v30 1.i256;
+        br v31 block1 block3;
+
+    block9:
+        evm_invalid;
+
+    block10:
+        v11.i256 = eq v8 0.i256;
+        br v11 block4 block9;
+}
+
+func public %__fe_sonatina_entry() {
+    block0:
+        v1.i256 = call %match_nested_tuple 0.i256;
+        evm_stop;
+}
+
+
+object @Contract {
+    section runtime {
+        entry %__fe_sonatina_entry;
+        include %match_nested_tuple;
+        include %match_deeply_nested;
+    }
+}

@@ -1,0 +1,27 @@
+---
+source: crates/codegen/tests/sonatina_ir.rs
+assertion_line: 65
+expression: output
+input_file: crates/codegen/tests/fixtures/keccak_intrinsic.fe
+---
+target = evm-ethereum-osaka
+
+func public %hash(v0.i256, v1.i256, v2.i256) -> i256 {
+    block0:
+        v3.i256 = evm_keccak256 v0 v1;
+        return v3;
+}
+
+func public %__fe_sonatina_entry() {
+    block0:
+        v1.i256 = call %hash 0.i256 0.i256 0.i256;
+        evm_stop;
+}
+
+
+object @Contract {
+    section runtime {
+        entry %__fe_sonatina_entry;
+        include %hash;
+    }
+}

@@ -1,0 +1,164 @@
+---
+source: crates/codegen/tests/sonatina_ir.rs
+assertion_line: 74
+expression: output
+input_file: crates/codegen/tests/fixtures/match_nested_default.fe
+---
+target = evm-ethereum-osaka
+
+func public %nested_with_defaults(v0.i256) -> i256 {
+    block0:
+        jump block5;
+
+    block1:
+        jump block2;
+
+    block2:
+        v3.i256 = phi (1.i256 block1) (2.i256 block3) (0.i256 block4);
+        return v3;
+
+    block3:
+        jump block2;
+
+    block4:
+        jump block2;
+
+    block5:
+        v6.i256 = mload v0 i256;
+        v7.i256 = eq v6 0.i256;
+        br v7 block6 block8;
+
+    block6:
+        v11.i256 = add v0 32.i256;
+        v12.i256 = mload v11 i256;
+        v13.i256 = eq v12 0.i256;
+        br v13 block1 block4;
+
+    block7:
+        v15.i256 = add v0 32.i256;
+        v16.i256 = mload v15 i256;
+        v17.i256 = eq v16 1.i256;
+        br v17 block3 block4;
+
+    block8:
+        v8.i256 = eq v6 1.i256;
+        br v8 block7 block4;
+}
+
+func public %outer_specific_inner_wildcard(v0.i256) -> i256 {
+    block0:
+        jump block5;
+
+    block1:
+        jump block2;
+
+    block2:
+        v3.i256 = phi (1.i256 block1) (2.i256 block3) (3.i256 block4);
+        return v3;
+
+    block3:
+        jump block2;
+
+    block4:
+        jump block2;
+
+    block5:
+        v7.i256 = mload v0 i256;
+        v8.i256 = eq v7 0.i256;
+        br v8 block6 block4;
+
+    block6:
+        v11.i256 = add v0 32.i256;
+        v12.i256 = mload v11 i256;
+        v13.i256 = eq v12 0.i256;
+        br v13 block1 block3;
+}
+
+func public %deeply_nested_wildcard(v0.i256) -> i256 {
+    block0:
+        jump block4;
+
+    block1:
+        jump block2;
+
+    block2:
+        v3.i256 = phi (1.i256 block1) (0.i256 block3);
+        return v3;
+
+    block3:
+        jump block2;
+
+    block4:
+        v5.i256 = mload v0 i256;
+        v6.i256 = eq v5 0.i256;
+        br v6 block5 block3;
+
+    block5:
+        v9.i256 = add v0 32.i256;
+        v10.i256 = mload v9 i256;
+        v11.i256 = eq v10 0.i256;
+        br v11 block6 block3;
+
+    block6:
+        v14.i256 = add v0 64.i256;
+        v15.i256 = mload v14 i256;
+        v16.i256 = eq v15 0.i256;
+        br v16 block1 block3;
+}
+
+func public %exhaustive_inner_outer_wildcard(v0.i256) -> i256 {
+    block0:
+        jump block6;
+
+    block1:
+        jump block2;
+
+    block2:
+        v3.i256 = phi (1.i256 block1) (2.i256 block3) (3.i256 block4) (0.i256 block5);
+        return v3;
+
+    block3:
+        jump block2;
+
+    block4:
+        jump block2;
+
+    block5:
+        jump block2;
+
+    block6:
+        v7.i256 = mload v0 i256;
+        v8.i256 = eq v7 0.i256;
+        br v8 block7 block5;
+
+    block7:
+        v11.i256 = add v0 32.i256;
+        v12.i256 = mload v11 i256;
+        v13.i256 = eq v12 0.i256;
+        br v13 block1 block8;
+
+    block8:
+        v14.i256 = eq v12 1.i256;
+        br v14 block3 block9;
+
+    block9:
+        v15.i256 = eq v12 2.i256;
+        br v15 block4 block5;
+}
+
+func public %__fe_sonatina_entry() {
+    block0:
+        v1.i256 = call %nested_with_defaults 0.i256;
+        evm_stop;
+}
+
+
+object @Contract {
+    section runtime {
+        entry %__fe_sonatina_entry;
+        include %nested_with_defaults;
+        include %outer_specific_inner_wildcard;
+        include %deeply_nested_wildcard;
+        include %exhaustive_inner_outer_wildcard;
+    }
+}

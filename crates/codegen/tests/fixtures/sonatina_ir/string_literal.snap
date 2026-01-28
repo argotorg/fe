@@ -1,0 +1,26 @@
+---
+source: crates/codegen/tests/sonatina_ir.rs
+assertion_line: 65
+expression: output
+input_file: crates/codegen/tests/fixtures/string_literal.fe
+---
+target = evm-ethereum-osaka
+
+func public %string_literal() -> i256 {
+    block0:
+        return 448378203247.i256;
+}
+
+func public %__fe_sonatina_entry() {
+    block0:
+        v0.i256 = call %string_literal;
+        evm_stop;
+}
+
+
+object @Contract {
+    section runtime {
+        entry %__fe_sonatina_entry;
+        include %string_literal;
+    }
+}

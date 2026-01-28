@@ -6,6 +6,7 @@ edition.workspace = true
 [dependencies]
 driver = { path = "../driver", package = "fe-driver" }
 codegen = { path = "../codegen", package = "fe-codegen" }
+mir = { path = "../mir", package = "fe-mir" }
 solc_runner = { path = "../solc-runner", package = "fe-solc-runner" }
 common = { path = "../common", package = "fe-common" }
 revm = { version = "33.1.0", default-features = false, features = ["std"] }

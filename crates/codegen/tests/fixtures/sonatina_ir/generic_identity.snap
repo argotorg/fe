@@ -1,0 +1,46 @@
+---
+source: crates/codegen/tests/sonatina_ir.rs
+assertion_line: 65
+expression: output
+input_file: crates/codegen/tests/fixtures/generic_identity.fe
+---
+target = evm-ethereum-osaka
+
+func public %call_identity_u32() -> i256 {
+    block0:
+        v1.i256 = call %identity__u32__20aa0c10687491ad 7.i256;
+        return v1;
+}
+
+func public %call_identity_bool() -> i256 {
+    block0:
+        v1.i256 = call %identity__bool__947c0c03c59c6f07 1.i256;
+        return v1;
+}
+
+func public %identity__u32__20aa0c10687491ad(v0.i256) -> i256 {
+    block0:
+        return v0;
+}
+
+func public %identity__bool__947c0c03c59c6f07(v0.i256) -> i256 {
+    block0:
+        return v0;
+}
+
+func public %__fe_sonatina_entry() {
+    block0:
+        v0.i256 = call %call_identity_u32;
+        evm_stop;
+}
+
+
+object @Contract {
+    section runtime {
+        entry %__fe_sonatina_entry;
+        include %call_identity_u32;
+        include %call_identity_bool;
+        include %identity__u32__20aa0c10687491ad;
+        include %identity__bool__947c0c03c59c6f07;
+    }
+}

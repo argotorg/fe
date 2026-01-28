@@ -1,19 +1,28 @@
 use camino::Utf8PathBuf;
-use codegen::emit_module_yul;
+use codegen::{Backend, BackendKind};
 use common::InputDb;
 use driver::DriverDataBase;
 use hir::hir_def::{HirIngot, TopLevelMod};
-use mir::lower_module;
+use mir::{layout, lower_module};
 use url::Url;
 
-pub fn check(path: &Utf8PathBuf, dump_mir: bool, emit_yul_min: bool) {
+pub fn check(path: &Utf8PathBuf, dump_mir: bool, emit_yul_min: bool, backend_name: &str) {
+    // Parse backend selection
+    let backend_kind: BackendKind = match backend_name.parse() {
+        Ok(kind) => kind,
+        Err(err) => {
+            eprintln!("❌ Error: {err}");
+            std::process::exit(1);
+        }
+    };
+    let backend = backend_kind.create();
     let mut db = DriverDataBase::default();
 
     // Determine if we're dealing with a single file or an ingot directory
     let has_errors = if path.is_file() && path.extension() == Some("fe") {
-        check_single_file(&mut db, path, dump_mir, emit_yul_min)
+        check_single_file(&mut db, path, dump_mir, emit_yul_min, backend.as_ref())
     } else if path.is_dir() {
-        check_ingot(&mut db, path, dump_mir, emit_yul_min)
+        check_ingot(&mut db, path, dump_mir, emit_yul_min, backend.as_ref())
     } else {
         eprintln!("❌ Error: Path must be either a .fe file or a directory containing fe.toml");
         std::process::exit(1);
@@ -29,6 +38,7 @@ fn check_single_file(
     file_path: &Utf8PathBuf,
     dump_mir: bool,
     emit_yul_min: bool,
+    backend: &dyn Backend,
 ) -> bool {
     // Create a file URL for the single .fe file
     let file_url = match Url::from_file_path(file_path.canonicalize_utf8().unwrap()) {
@@ -65,7 +75,7 @@ fn check_single_file(
             dump_module_mir(db, top_mod);
         }
         if emit_yul_min {
-            emit_yul(db, top_mod);
+            emit_codegen(db, top_mod, backend);
         }
     } else {
         eprintln!("❌ Error: Could not process file {file_path}");
@@ -80,6 +90,7 @@ fn check_ingot(
     dir_path: &Utf8PathBuf,
     dump_mir: bool,
     emit_yul_min: bool,
+    backend: &dyn Backend,
 ) -> bool {
     let canonical_path = match dir_path.canonicalize_utf8() {
         Ok(path) => path,
@@ -144,7 +155,7 @@ fn check_ingot(
             dump_module_mir(db, root_mod);
         }
         if emit_yul_min {
-            emit_yul(db, root_mod);
+            emit_codegen(db, root_mod, backend);
         }
     }
 
@@ -202,13 +213,19 @@ fn print_dependency_info(db: &DriverDataBase, dependency_url: &Url) {
     eprintln!();
 }
 
-fn emit_yul(db: &DriverDataBase, top_mod: TopLevelMod<'_>) {
-    match emit_module_yul(db, top_mod) {
-        Ok(yul) => {
-            println!("=== Yul ===");
-            println!("{yul}");
-        }
-        Err(err) => eprintln!("⚠️  failed to emit Yul: {err}"),
+fn emit_codegen(db: &DriverDataBase, top_mod: TopLevelMod<'_>, backend: &dyn Backend) {
+    println!("=== {} backend ===", backend.name());
+    match backend.compile(db, top_mod, layout::EVM_LAYOUT) {
+        Ok(output) => match output {
+            codegen::BackendOutput::Yul(yul) => {
+                println!("{yul}");
+            }
+            codegen::BackendOutput::Bytecode(bytes) => {
+                println!("bytecode ({} bytes):", bytes.len());
+                println!("{}", hex::encode(&bytes));
+            }
+        },
+        Err(err) => eprintln!("⚠️  failed to compile: {err}"),
     }
 }
 

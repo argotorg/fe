@@ -1,11 +1,13 @@
 //! Test harness utilities for compiling Fe contracts and exercising their runtimes with `revm`.
-use codegen::emit_module_yul;
+use codegen::{Backend, SonatinaBackend, emit_module_yul};
 use common::InputDb;
 use driver::DriverDataBase;
 use ethers_core::abi::{AbiParser, ParseError as AbiParseError, Token};
 use hex::FromHex;
+use mir::layout;
 pub use revm::primitives::U256;
 use revm::{
+    InspectCommitEvm,
     bytecode::Bytecode,
     context::{
         Context, TxEnv,
@@ -31,6 +33,8 @@ pub enum HarnessError {
     CompilerDiagnostics(String),
     #[error("failed to emit Yul: {0}")]
     EmitYul(#[from] codegen::EmitModuleError),
+    #[error("failed to emit Sonatina bytecode: {0}")]
+    EmitSonatina(String),
     #[error("solc error: {0}")]
     Solc(String),
     #[error("abi encoding failed: {0}")]
@@ -165,16 +169,23 @@ fn transact_with_logs(
     options: ExecutionOptions,
     nonce: u64,
 ) -> Result<CallResultWithLogs, HarnessError> {
-    let tx = TxEnv::builder()
-        .caller(options.caller)
-        .gas_limit(options.gas_limit)
-        .gas_price(options.gas_price)
-        .to(address)
-        .value(options.value)
-        .data(EvmBytes::copy_from_slice(calldata))
-        .nonce(nonce)
-        .build()
-        .map_err(|err| HarnessError::Execution(format!("{err:?}")))?;
+    let build_tx = || {
+        TxEnv::builder()
+            .caller(options.caller)
+            .gas_limit(options.gas_limit)
+            .gas_price(options.gas_price)
+            .to(address)
+            .value(options.value)
+            .data(EvmBytes::copy_from_slice(calldata))
+            .nonce(nonce)
+            .build()
+    };
+
+    if should_trace_evm() {
+        trace_tx(evm, build_tx().expect("tx builder is valid"));
+    }
+
+    let tx = build_tx().map_err(|err| HarnessError::Execution(format!("{err:?}")))?;
 
     let result = evm
         .transact_commit(tx)
@@ -203,6 +214,86 @@ fn transact_with_logs(
             Err(HarnessError::Halted { reason, gas_used })
         }
     }
+}
+
+fn should_trace_evm() -> bool {
+    std::env::var("FE_TRACE_EVM")
+        .map(|v| v != "0" && !v.is_empty())
+        .unwrap_or(false)
+}
+
+fn trace_tx(evm: &MainnetEvm<MainnetContext<InMemoryDB>>, tx: TxEnv) {
+    #[derive(Clone, Debug)]
+    struct Step {
+        pc: usize,
+        opcode: u8,
+        stack_len: usize,
+        gas_remaining: u64,
+    }
+
+    #[derive(Clone, Debug)]
+    struct RingTrace {
+        keep: usize,
+        steps: Vec<Step>,
+        total_steps: u64,
+    }
+
+    impl RingTrace {
+        fn new(keep: usize) -> Self {
+            Self {
+                keep,
+                steps: Vec::with_capacity(keep),
+                total_steps: 0,
+            }
+        }
+
+        fn push(&mut self, step: Step) {
+            self.total_steps += 1;
+            if self.steps.len() == self.keep {
+                self.steps.remove(0);
+            }
+            self.steps.push(step);
+        }
+
+        fn format(&self) -> String {
+            let mut out = String::new();
+            out.push_str(&format!(
+                "TRACE (last {} of {} steps)\n",
+                self.steps.len(),
+                self.total_steps
+            ));
+            for s in &self.steps {
+                out.push_str(&format!(
+                    "pc={:04} op=0x{:02x} stack={} gas_rem={}\n",
+                    s.pc, s.opcode, s.stack_len, s.gas_remaining
+                ));
+            }
+            out
+        }
+    }
+
+    impl<CTX, INTR: revm::interpreter::InterpreterTypes> revm::Inspector<CTX, INTR> for RingTrace {
+        fn step(&mut self, interp: &mut revm::interpreter::Interpreter<INTR>, _context: &mut CTX) {
+            self.push(Step {
+                pc: interp.bytecode.pc(),
+                opcode: interp.bytecode.opcode(),
+                stack_len: interp.stack.len(),
+                gas_remaining: interp.gas.remaining(),
+            });
+        }
+    }
+
+    use revm::interpreter::interpreter_types::{Jumps, StackTr};
+
+    // Clone the EVM (including DB state) for tracing so we don't disturb the caller's state.
+    let ctx = evm.ctx.clone();
+    let mut trace_evm = ctx.build_mainnet_with_inspector(RingTrace::new(200));
+
+    let result = trace_evm.inspect_tx_commit(tx);
+    eprintln!(
+        "{}\ntrace result: {result:?}\n",
+        trace_evm.inspector.format()
+    );
 }
 
 /// Formats raw EVM logs into debug strings for display.
@@ -472,6 +563,31 @@ impl FeContractHarness {
     }
 }
 
+/// Compiles the provided Fe source to Sonatina-generated runtime bytecode (hex-encoded).
+pub fn compile_runtime_sonatina_from_source(source: &str) -> Result<String, HarnessError> {
+    let mut db = DriverDataBase::default();
+    let url = Url::parse(MEMORY_SOURCE_URL).expect("static URL is valid");
+    db.workspace()
+        .touch(&mut db, url.clone(), Some(source.to_string()));
+    let file = db
+        .workspace()
+        .get(&db, &url)
+        .expect("file should exist in workspace");
+    let top_mod = db.top_mod(file);
+    let diags = db.run_on_top_mod(top_mod);
+    if !diags.is_empty() {
+        return Err(HarnessError::CompilerDiagnostics(diags.format_diags(&db)));
+    }
+
+    let output = SonatinaBackend
+        .compile(&db, top_mod, layout::EVM_LAYOUT)
+        .map_err(|err| HarnessError::EmitSonatina(err.to_string()))?;
+    let bytes = output
+        .as_bytecode()
+        .ok_or_else(|| HarnessError::EmitSonatina("backend returned non-bytecode output".into()))?;
+    Ok(hex::encode(bytes))
+}
+
 /// ABI-encodes a function call according to the provided signature.
 pub fn encode_function_call(signature: &str, args: &[Token]) -> Result<Vec<u8>, HarnessError> {
     let function = AbiParser::default().parse_function(signature)?;
@@ -522,6 +638,39 @@ mod tests {
             .status()
             .map(|status| status.success())
             .unwrap_or(false)
+    }
+
+    fn compile_fixture_instances(
+        contract_name: &str,
+        fixture_file: &str,
+    ) -> (RuntimeInstance, Option<RuntimeInstance>) {
+        let source_path = format!(
+            "{}/../codegen/tests/fixtures/{fixture_file}",
+            env!("CARGO_MANIFEST_DIR")
+        );
+        let source = std::fs::read_to_string(&source_path).expect("fixture readable");
+
+        let yul_harness = FeContractHarness::compile_from_source(
+            contract_name,
+            &source,
+            CompileOptions::default(),
+        )
+        .expect("yul/solc compile");
+        let yul_instance =
+            RuntimeInstance::new(yul_harness.runtime_bytecode()).expect("yul instantiation");
+
+        let enable_sonatina = std::env::var("FE_TEST_SONATINA")
+            .map(|v| v != "0" && !v.is_empty())
+            .unwrap_or(false);
+        if !enable_sonatina {
+            return (yul_instance, None);
+        }
+
+        let sonatina_runtime =
+            compile_runtime_sonatina_from_source(&source).expect("sonatina compile");
+        let sonatina_instance =
+            RuntimeInstance::new(&sonatina_runtime).expect("sonatina instantiation");
+        (yul_instance, Some(sonatina_instance))
     }
 
     #[test]
@@ -576,17 +725,8 @@ object "Counter" {
             eprintln!("skipping full_contract_test because solc is missing");
             return;
         }
-        let source_path = concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/../codegen/tests/fixtures/full_contract.fe"
-        );
-        let harness = FeContractHarness::compile_from_file(
-            "ShapeDispatcher",
-            source_path,
-            CompileOptions::default(),
-        )
-        .expect("compilation should succeed");
-        let mut instance = harness.deploy_instance().expect("deployment succeeds");
+        let (mut yul_instance, mut sonatina_instance) =
+            compile_fixture_instances("ShapeDispatcher", "full_contract.fe");
         let options = ExecutionOptions::default();
         let point_call = encode_function_call(
             "point(uint256,uint256)",
@@ -596,23 +736,41 @@ object "Counter" {
             ],
         )
         .unwrap();
-        let point_result = instance
+        let point_result_yul = yul_instance
             .call_raw(&point_call, options)
             .expect("point selector should succeed");
         assert_eq!(
-            bytes_to_u256(&point_result.return_data).unwrap(),
+            bytes_to_u256(&point_result_yul.return_data).unwrap(),
             U256::from(24u64)
         );
+        if let Some(instance) = sonatina_instance.as_mut() {
+            let point_result_sonatina = instance
+                .call_raw(&point_call, options)
+                .expect("point selector should succeed (sonatina)");
+            assert_eq!(
+                point_result_yul.return_data,
+                point_result_sonatina.return_data
+            );
+        }
 
         let square_call =
             encode_function_call("square(uint256)", &[Token::Uint(AbiU256::from(5u64))]).unwrap();
-        let square_result = instance
+        let square_result_yul = yul_instance
             .call_raw(&square_call, options)
             .expect("square selector should succeed");
         assert_eq!(
-            bytes_to_u256(&square_result.return_data).unwrap(),
+            bytes_to_u256(&square_result_yul.return_data).unwrap(),
             U256::from(64u64)
         );
+        if let Some(instance) = sonatina_instance.as_mut() {
+            let square_result_sonatina = instance
+                .call_raw(&square_call, options)
+                .expect("square selector should succeed (sonatina)");
+            assert_eq!(
+                square_result_yul.return_data,
+                square_result_sonatina.return_data
+            );
+        }
     }
 
     #[test]
@@ -621,15 +779,8 @@ object "Counter" {
             eprintln!("skipping storage_contract_test because solc is missing");
             return;
         }
-        let source_path = concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/../codegen/tests/fixtures/storage.fe"
-        );
-        let harness =
-            FeContractHarness::compile_from_file("Coin", source_path, CompileOptions::default())
-                .expect("compilation should succeed");
-
-        let mut instance = harness.deploy_instance().expect("deployment succeeds");
+        let (mut yul_instance, mut sonatina_instance) =
+            compile_fixture_instances("Coin", "storage.fe");
         let options = ExecutionOptions::default();
 
         // Helper discriminants: 0 = Alice, 1 = Bob
@@ -642,13 +793,22 @@ object "Counter" {
             &[alice.clone(), Token::Uint(AbiU256::from(10u64))],
         )
         .unwrap();
-        let credit_alice_res = instance
+        let credit_alice_yul = yul_instance
             .call_raw(&credit_alice, options)
             .expect("credit alice should succeed");
         assert_eq!(
-            bytes_to_u256(&credit_alice_res.return_data).unwrap(),
+            bytes_to_u256(&credit_alice_yul.return_data).unwrap(),
             U256::from(10u64)
         );
+        if let Some(instance) = sonatina_instance.as_mut() {
+            let credit_alice_sonatina = instance
+                .call_raw(&credit_alice, options)
+                .expect("credit alice should succeed (sonatina)");
+            assert_eq!(
+                credit_alice_yul.return_data,
+                credit_alice_sonatina.return_data
+            );
+        }
 
         // credit Bob with 5
         let credit_bob = encode_function_call(
@@ -656,13 +816,19 @@ object "Counter" {
             &[bob.clone(), Token::Uint(AbiU256::from(5u64))],
         )
         .unwrap();
-        let credit_bob_res = instance
+        let credit_bob_yul = yul_instance
             .call_raw(&credit_bob, options)
             .expect("credit bob should succeed");
         assert_eq!(
-            bytes_to_u256(&credit_bob_res.return_data).unwrap(),
+            bytes_to_u256(&credit_bob_yul.return_data).unwrap(),
             U256::from(5u64)
         );
+        if let Some(instance) = sonatina_instance.as_mut() {
+            let credit_bob_sonatina = instance
+                .call_raw(&credit_bob, options)
+                .expect("credit bob should succeed (sonatina)");
+            assert_eq!(credit_bob_yul.return_data, credit_bob_sonatina.return_data);
+        }
 
         // transfer 3 from Alice -> Bob (should succeed, return code 0)
         let transfer_alice = encode_function_call(
@@ -670,35 +836,56 @@ object "Counter" {
             &[alice.clone(), Token::Uint(AbiU256::from(3u64))],
         )
         .unwrap();
-        let transfer_alice_res = instance
+        let transfer_alice_yul = yul_instance
             .call_raw(&transfer_alice, options)
             .expect("transfer from alice should succeed");
         assert_eq!(
-            bytes_to_u256(&transfer_alice_res.return_data).unwrap(),
+            bytes_to_u256(&transfer_alice_yul.return_data).unwrap(),
             U256::from(0u64),
             "successful transfer returns code 0"
         );
+        if let Some(instance) = sonatina_instance.as_mut() {
+            let transfer_alice_sonatina = instance
+                .call_raw(&transfer_alice, options)
+                .expect("transfer from alice should succeed (sonatina)");
+            assert_eq!(
+                transfer_alice_yul.return_data,
+                transfer_alice_sonatina.return_data
+            );
+        }
 
         // balances after transfer
         let bal_alice_call =
             encode_function_call("balance_of(uint256)", std::slice::from_ref(&alice)).unwrap();
-        let bal_alice = instance
+        let bal_alice_yul = yul_instance
             .call_raw(&bal_alice_call, options)
             .expect("balance_of alice should succeed");
         assert_eq!(
-            bytes_to_u256(&bal_alice.return_data).unwrap(),
+            bytes_to_u256(&bal_alice_yul.return_data).unwrap(),
             U256::from(7u64)
         );
+        if let Some(instance) = sonatina_instance.as_mut() {
+            let bal_alice_sonatina = instance
+                .call_raw(&bal_alice_call, options)
+                .expect("balance_of alice should succeed (sonatina)");
+            assert_eq!(bal_alice_yul.return_data, bal_alice_sonatina.return_data);
+        }
 
         let bal_bob_call =
             encode_function_call("balance_of(uint256)", std::slice::from_ref(&bob)).unwrap();
-        let bal_bob = instance
+        let bal_bob_yul = yul_instance
             .call_raw(&bal_bob_call, options)
             .expect("balance_of bob should succeed");
         assert_eq!(
-            bytes_to_u256(&bal_bob.return_data).unwrap(),
+            bytes_to_u256(&bal_bob_yul.return_data).unwrap(),
             U256::from(8u64)
         );
+        if let Some(instance) = sonatina_instance.as_mut() {
+            let bal_bob_sonatina = instance
+                .call_raw(&bal_bob_call, options)
+                .expect("balance_of bob should succeed (sonatina)");
+            assert_eq!(bal_bob_yul.return_data, bal_bob_sonatina.return_data);
+        }
 
         // transfer too much from Bob -> Alice should fail with code 1
         let transfer_bob = encode_function_call(
@@ -706,23 +893,41 @@ object "Counter" {
             &[bob, Token::Uint(AbiU256::from(20u64))],
         )
         .unwrap();
-        let transfer_bob_res = instance
+        let transfer_bob_yul = yul_instance
             .call_raw(&transfer_bob, options)
             .expect("transfer from bob should run");
         assert_eq!(
-            bytes_to_u256(&transfer_bob_res.return_data).unwrap(),
+            bytes_to_u256(&transfer_bob_yul.return_data).unwrap(),
             U256::from(1u64),
             "insufficient funds should return code 1"
         );
+        if let Some(instance) = sonatina_instance.as_mut() {
+            let transfer_bob_sonatina = instance
+                .call_raw(&transfer_bob, options)
+                .expect("transfer from bob should run (sonatina)");
+            assert_eq!(
+                transfer_bob_yul.return_data,
+                transfer_bob_sonatina.return_data
+            );
+        }
 
         // total_supply should equal alice + bob (10 + 5 = 15)
         let total_supply_call = encode_function_call("total_supply()", &[]).unwrap();
-        let total_supply_res = instance
+        let total_supply_yul = yul_instance
             .call_raw(&total_supply_call, options)
             .expect("total_supply should succeed");
-        let total_supply = bytes_to_u256(&total_supply_res.return_data)
+        let total_supply = bytes_to_u256(&total_supply_yul.return_data)
             .expect("total_supply should return a u256");
         assert_eq!(total_supply, U256::from(15u64));
+        if let Some(instance) = sonatina_instance.as_mut() {
+            let total_supply_sonatina = instance
+                .call_raw(&total_supply_call, options)
+                .expect("total_supply should succeed (sonatina)");
+            assert_eq!(
+                total_supply_yul.return_data,
+                total_supply_sonatina.return_data
+            );
+        }
     }
 
     #[test]
@@ -731,31 +936,28 @@ object "Counter" {
             eprintln!("skipping enum_variant_construction_test because solc is missing");
             return;
         }
-        let source_path = concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/../codegen/tests/fixtures/enum_variant_contract.fe"
-        );
-        let harness = FeContractHarness::compile_from_file(
-            "EnumContract",
-            source_path,
-            CompileOptions::default(),
-        )
-        .expect("compilation should succeed");
-        let mut instance = harness.deploy_instance().expect("deployment succeeds");
+        let (mut yul_instance, mut sonatina_instance) =
+            compile_fixture_instances("EnumContract", "enum_variant_contract.fe");
         let options = ExecutionOptions::default();
 
         // Test make_some(42) - should return 42 (unwrapped value)
         let make_some_call =
             encode_function_call("make_some(uint256)", &[Token::Uint(AbiU256::from(42u64))])
                 .unwrap();
-        let make_some_result = instance
+        let make_some_yul = yul_instance
             .call_raw(&make_some_call, options)
             .expect("make_some selector should succeed");
         assert_eq!(
-            bytes_to_u256(&make_some_result.return_data).unwrap(),
+            bytes_to_u256(&make_some_yul.return_data).unwrap(),
             U256::from(42u64),
             "make_some(42) should return 42"
         );
+        if let Some(instance) = sonatina_instance.as_mut() {
+            let make_some_sonatina = instance
+                .call_raw(&make_some_call, options)
+                .expect("make_some selector should succeed (sonatina)");
+            assert_eq!(make_some_yul.return_data, make_some_sonatina.return_data);
+        }
 
         // Test is_some_check(99) - should return 1 (true)
         let is_some_call = encode_function_call(
@@ -763,25 +965,37 @@ object "Counter" {
             &[Token::Uint(AbiU256::from(99u64))],
         )
         .unwrap();
-        let is_some_result = instance
+        let is_some_yul = yul_instance
             .call_raw(&is_some_call, options)
             .expect("is_some_check selector should succeed");
         assert_eq!(
-            bytes_to_u256(&is_some_result.return_data).unwrap(),
+            bytes_to_u256(&is_some_yul.return_data).unwrap(),
             U256::from(1u64),
             "is_some_check should return 1 for Some variant"
         );
+        if let Some(instance) = sonatina_instance.as_mut() {
+            let is_some_sonatina = instance
+                .call_raw(&is_some_call, options)
+                .expect("is_some_check selector should succeed (sonatina)");
+            assert_eq!(is_some_yul.return_data, is_some_sonatina.return_data);
+        }
 
         // Test make_none() - should return 0 (is_some returns 0 for None)
         let make_none_call = encode_function_call("make_none()", &[]).unwrap();
-        let make_none_result = instance
+        let make_none_yul = yul_instance
             .call_raw(&make_none_call, options)
             .expect("make_none selector should succeed");
         assert_eq!(
-            bytes_to_u256(&make_none_result.return_data).unwrap(),
+            bytes_to_u256(&make_none_yul.return_data).unwrap(),
             U256::from(0u64),
             "make_none() should return 0 (is_some of None)"
         );
+        if let Some(instance) = sonatina_instance.as_mut() {
+            let make_none_sonatina = instance
+                .call_raw(&make_none_call, options)
+                .expect("make_none selector should succeed (sonatina)");
+            assert_eq!(make_none_yul.return_data, make_none_sonatina.return_data);
+        }
     }
 
     #[test]
@@ -790,19 +1004,8 @@ object "Counter" {
             eprintln!("skipping storage_map_contract_test because solc is missing");
             return;
         }
-        let source_path = concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/../codegen/tests/fixtures/storage_map_contract.fe"
-        );
-        let harness = FeContractHarness::compile_from_file(
-            "BalanceMap",
-            source_path,
-            CompileOptions::default(),
-        )
-        .expect("compilation should succeed");
-
-        // Use deploy_with_init to properly run init code that initializes storage
-        let mut instance = harness.deploy_with_init().expect("deployment succeeds");
+        let (mut yul_instance, mut sonatina_instance) =
+            compile_fixture_instances("BalanceMap", "storage_map_contract.fe");
         let options = ExecutionOptions::default();
 
         // Use address-like values for accounts
@@ -812,14 +1015,20 @@ object "Counter" {
         // Initially, balances should be zero
         let bal_alice_call =
             encode_function_call("balanceOf(uint256)", std::slice::from_ref(&alice)).unwrap();
-        let bal_alice = instance
+        let bal_alice_yul = yul_instance
             .call_raw(&bal_alice_call, options)
             .expect("balanceOf alice should succeed");
         assert_eq!(
-            bytes_to_u256(&bal_alice.return_data).unwrap(),
+            bytes_to_u256(&bal_alice_yul.return_data).unwrap(),
             U256::from(0u64),
             "initial alice balance should be 0"
         );
+        if let Some(instance) = sonatina_instance.as_mut() {
+            let bal_alice_sonatina = instance
+                .call_raw(&bal_alice_call, options)
+                .expect("balanceOf alice should succeed (sonatina)");
+            assert_eq!(bal_alice_yul.return_data, bal_alice_sonatina.return_data);
+        }
 
         // Set Alice's balance to 100
         let set_alice = encode_function_call(
@@ -827,19 +1036,30 @@ object "Counter" {
             &[alice.clone(), Token::Uint(AbiU256::from(100u64))],
         )
         .unwrap();
-        instance
+        yul_instance
             .call_raw(&set_alice, options)
             .expect("setBalance alice should succeed");
+        if let Some(instance) = sonatina_instance.as_mut() {
+            instance
+                .call_raw(&set_alice, options)
+                .expect("setBalance alice should succeed (sonatina)");
+        }
 
         // Verify Alice's balance is now 100
-        let bal_alice = instance
+        let bal_alice_yul = yul_instance
             .call_raw(&bal_alice_call, options)
             .expect("balanceOf alice should succeed");
         assert_eq!(
-            bytes_to_u256(&bal_alice.return_data).unwrap(),
+            bytes_to_u256(&bal_alice_yul.return_data).unwrap(),
             U256::from(100u64),
             "alice balance should be 100 after set"
         );
+        if let Some(instance) = sonatina_instance.as_mut() {
+            let bal_alice_sonatina = instance
+                .call_raw(&bal_alice_call, options)
+                .expect("balanceOf alice should succeed (sonatina)");
+            assert_eq!(bal_alice_yul.return_data, bal_alice_sonatina.return_data);
+        }
 
         // Set Bob's balance to 50
         let set_bob = encode_function_call(
@@ -847,9 +1067,14 @@ object "Counter" {
             &[bob.clone(), Token::Uint(AbiU256::from(50u64))],
         )
         .unwrap();
-        instance
+        yul_instance
             .call_raw(&set_bob, options)
             .expect("setBalance bob should succeed");
+        if let Some(instance) = sonatina_instance.as_mut() {
+            instance
+                .call_raw(&set_bob, options)
+                .expect("setBalance bob should succeed (sonatina)");
+        }
 
         // Transfer 30 from Alice to Bob (should succeed, return 0)
         let transfer_call = encode_function_call(
@@ -861,35 +1086,53 @@ object "Counter" {
             ],
         )
         .unwrap();
-        let transfer_result = instance
+        let transfer_yul = yul_instance
             .call_raw(&transfer_call, options)
             .expect("transfer should succeed");
         assert_eq!(
-            bytes_to_u256(&transfer_result.return_data).unwrap(),
+            bytes_to_u256(&transfer_yul.return_data).unwrap(),
             U256::from(0u64),
             "transfer should return 0 (success)"
         );
+        if let Some(instance) = sonatina_instance.as_mut() {
+            let transfer_sonatina = instance
+                .call_raw(&transfer_call, options)
+                .expect("transfer should succeed (sonatina)");
+            assert_eq!(transfer_yul.return_data, transfer_sonatina.return_data);
+        }
 
         // Verify balances after transfer: Alice = 70, Bob = 80
-        let bal_alice = instance
+        let bal_alice_yul = yul_instance
             .call_raw(&bal_alice_call, options)
             .expect("balanceOf alice should succeed");
         assert_eq!(
-            bytes_to_u256(&bal_alice.return_data).unwrap(),
+            bytes_to_u256(&bal_alice_yul.return_data).unwrap(),
             U256::from(70u64),
             "alice balance should be 70 after transfer"
         );
+        if let Some(instance) = sonatina_instance.as_mut() {
+            let bal_alice_sonatina = instance
+                .call_raw(&bal_alice_call, options)
+                .expect("balanceOf alice should succeed (sonatina)");
+            assert_eq!(bal_alice_yul.return_data, bal_alice_sonatina.return_data);
+        }
 
         let bal_bob_call =
             encode_function_call("balanceOf(uint256)", std::slice::from_ref(&bob)).unwrap();
-        let bal_bob = instance
+        let bal_bob_yul = yul_instance
             .call_raw(&bal_bob_call, options)
             .expect("balanceOf bob should succeed");
         assert_eq!(
-            bytes_to_u256(&bal_bob.return_data).unwrap(),
+            bytes_to_u256(&bal_bob_yul.return_data).unwrap(),
             U256::from(80u64),
             "bob balance should be 80 after transfer"
         );
+        if let Some(instance) = sonatina_instance.as_mut() {
+            let bal_bob_sonatina = instance
+                .call_raw(&bal_bob_call, options)
+                .expect("balanceOf bob should succeed (sonatina)");
+            assert_eq!(bal_bob_yul.return_data, bal_bob_sonatina.return_data);
+        }
 
         // Try to transfer more than Alice has (should fail, return 1)
         let transfer_fail = encode_function_call(
@@ -901,24 +1144,39 @@ object "Counter" {
             ],
         )
         .unwrap();
-        let transfer_fail_result = instance
+        let transfer_fail_yul = yul_instance
             .call_raw(&transfer_fail, options)
             .expect("transfer should execute");
         assert_eq!(
-            bytes_to_u256(&transfer_fail_result.return_data).unwrap(),
+            bytes_to_u256(&transfer_fail_yul.return_data).unwrap(),
             U256::from(1u64),
             "transfer should return 1 (insufficient funds)"
         );
+        if let Some(instance) = sonatina_instance.as_mut() {
+            let transfer_fail_sonatina = instance
+                .call_raw(&transfer_fail, options)
+                .expect("transfer should execute (sonatina)");
+            assert_eq!(
+                transfer_fail_yul.return_data,
+                transfer_fail_sonatina.return_data
+            );
+        }
 
         // Verify balances unchanged after failed transfer
-        let bal_alice = instance
+        let bal_alice_yul = yul_instance
             .call_raw(&bal_alice_call, options)
             .expect("balanceOf alice should succeed");
         assert_eq!(
-            bytes_to_u256(&bal_alice.return_data).unwrap(),
+            bytes_to_u256(&bal_alice_yul.return_data).unwrap(),
             U256::from(70u64),
             "alice balance should still be 70 after failed transfer"
         );
+        if let Some(instance) = sonatina_instance.as_mut() {
+            let bal_alice_sonatina = instance
+                .call_raw(&bal_alice_call, options)
+                .expect("balanceOf alice should succeed (sonatina)");
+            assert_eq!(bal_alice_yul.return_data, bal_alice_sonatina.return_data);
+        }
 
         // ========== Test that allowances map is separate from balances ==========
         // Set Alice's allowance to 999
@@ -927,43 +1185,72 @@ object "Counter" {
             &[alice.clone(), Token::Uint(AbiU256::from(999u64))],
         )
         .unwrap();
-        instance
+        yul_instance
             .call_raw(&set_allowance_alice, options)
             .expect("setAllowance alice should succeed");
+        if let Some(instance) = sonatina_instance.as_mut() {
+            instance
+                .call_raw(&set_allowance_alice, options)
+                .expect("setAllowance alice should succeed (sonatina)");
+        }
 
         // Verify Alice's allowance is 999
         let get_allowance_alice =
             encode_function_call("getAllowance(uint256)", std::slice::from_ref(&alice)).unwrap();
-        let allowance_alice = instance
+        let allowance_alice_yul = yul_instance
             .call_raw(&get_allowance_alice, options)
             .expect("getAllowance alice should succeed");
         assert_eq!(
-            bytes_to_u256(&allowance_alice.return_data).unwrap(),
+            bytes_to_u256(&allowance_alice_yul.return_data).unwrap(),
             U256::from(999u64),
             "alice allowance should be 999"
         );
+        if let Some(instance) = sonatina_instance.as_mut() {
+            let allowance_alice_sonatina = instance
+                .call_raw(&get_allowance_alice, options)
+                .expect("getAllowance alice should succeed (sonatina)");
+            assert_eq!(
+                allowance_alice_yul.return_data,
+                allowance_alice_sonatina.return_data
+            );
+        }
 
         // CRITICAL: Verify Alice's balance is STILL 70 (not affected by allowance)
-        let bal_alice = instance
+        let bal_alice_yul = yul_instance
             .call_raw(&bal_alice_call, options)
             .expect("balanceOf alice should succeed");
         assert_eq!(
-            bytes_to_u256(&bal_alice.return_data).unwrap(),
+            bytes_to_u256(&bal_alice_yul.return_data).unwrap(),
             U256::from(70u64),
             "alice balance should still be 70 after setting allowance - maps must be independent!"
         );
+        if let Some(instance) = sonatina_instance.as_mut() {
+            let bal_alice_sonatina = instance
+                .call_raw(&bal_alice_call, options)
+                .expect("balanceOf alice should succeed (sonatina)");
+            assert_eq!(bal_alice_yul.return_data, bal_alice_sonatina.return_data);
+        }
 
         // And verify Bob's allowance is 0 (default, never set)
         let get_allowance_bob =
             encode_function_call("getAllowance(uint256)", std::slice::from_ref(&bob)).unwrap();
-        let allowance_bob = instance
+        let allowance_bob_yul = yul_instance
             .call_raw(&get_allowance_bob, options)
             .expect("getAllowance bob should succeed");
         assert_eq!(
-            bytes_to_u256(&allowance_bob.return_data).unwrap(),
+            bytes_to_u256(&allowance_bob_yul.return_data).unwrap(),
             U256::from(0u64),
             "bob allowance should be 0 (never set)"
         );
+        if let Some(instance) = sonatina_instance.as_mut() {
+            let allowance_bob_sonatina = instance
+                .call_raw(&get_allowance_bob, options)
+                .expect("getAllowance bob should succeed (sonatina)");
+            assert_eq!(
+                allowance_bob_yul.return_data,
+                allowance_bob_sonatina.return_data
+            );
+        }
     }
 
     #[test]

@@ -1,0 +1,94 @@
+---
+source: crates/codegen/tests/sonatina_ir.rs
+assertion_line: 74
+expression: output
+input_file: crates/codegen/tests/fixtures/nested_struct.fe
+---
+target = evm-ethereum-osaka
+
+func public %abi_encode(v0.i256, v1.i256) {
+    block0:
+        mstore 0.i256 v0 i256;
+        evm_return 0.i256 32.i256;
+}
+
+func public %read_inner__StorPtr_Outer___dab28b9da6c3e28(v0.i256) -> i256 {
+    block0:
+        v1.i256 = evm_sload v0;
+        return v1;
+}
+
+func public %write_inner__StorPtr_Outer___dab28b9da6c3e28(v0.i256, v1.i256) {
+    block0:
+        evm_sstore v1 v0;
+        return;
+}
+
+func public %mem_read(v0.i256) -> i256 {
+    block0:
+        return v0;
+}
+
+func public %runtime__StorPtr_Evm___207f35a85ac4062e() {
+    block0:
+        v1.i256 = call %stor_ptr__Evm_Outer__31089a952466fa6f 0.i256 0.i256;
+        v2.i256 = evm_calldata_load 0.i256;
+        v4.i256 = shr 224.i256 v2;
+        jump block5;
+
+    block1:
+        v6.i256 = evm_calldata_load 4.i256;
+        call %write_inner__StorPtr_Outer___dab28b9da6c3e28 v6 v1;
+        call %abi_encode v6 0.i256;
+        evm_invalid;
+
+    block2:
+        v9.i256 = call %read_inner__StorPtr_Outer___dab28b9da6c3e28 v1;
+        call %abi_encode v9 0.i256;
+        evm_invalid;
+
+    block3:
+        v10.i256 = evm_calldata_load 4.i256;
+        v11.i256 = call %mem_read v10;
+        call %abi_encode v11 0.i256;
+        evm_invalid;
+
+    block4:
+        evm_return 0.i256 0.i256;
+
+    block5:
+        v16.i256 = eq v4 3091856072.i256;
+        br v16 block1 block6;
+
+    block6:
+        v17.i256 = eq v4 3513050253.i256;
+        br v17 block2 block7;
+
+    block7:
+        v18.i256 = eq v4 2154770637.i256;
+        br v18 block3 block4;
+}
+
+func public %stor_ptr__Evm_Outer__31089a952466fa6f(v0.i256, v1.i256) -> i256 {
+    block0:
+        v2.i256 = call %storptr_t__effectref_from_raw__Outer__ffb1d3cc5087d727 v1;
+        return v2;
+}
+
+func public %storptr_t__effectref_from_raw__Outer__ffb1d3cc5087d727(v0.i256) -> i256 {
+    block0:
+        return v0;
+}
+
+
+object @Contract {
+    section runtime {
+        entry %runtime__StorPtr_Evm___207f35a85ac4062e;
+        include %abi_encode;
+        include %read_inner__StorPtr_Outer___dab28b9da6c3e28;
+        include %write_inner__StorPtr_Outer___dab28b9da6c3e28;
+        include %mem_read;
+        include %stor_ptr__Evm_Outer__31089a952466fa6f;
+        include %storptr_t__effectref_from_raw__Outer__ffb1d3cc5087d727;
+    }
+}
