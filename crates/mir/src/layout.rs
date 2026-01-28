@@ -131,6 +131,14 @@ pub fn ty_size_bytes_in(
         return ty_size_bytes_in(db, layout, normalized);
     }
 
+    // Effect-related and trait-self type parameters are compile-time only and have no runtime
+    // representation.
+    if let TyData::TyParam(param) = ty.data(db)
+        && (param.is_effect() || param.is_effect_provider() || param.is_trait_self())
+    {
+        return Some(0);
+    }
+
     // Handle tuples first (check base type for TyApp cases)
     if ty.is_tuple(db) {
         let mut size = 0;
@@ -142,6 +150,11 @@ pub fn ty_size_bytes_in(
 
     // Function items are compile-time only and have no runtime representation.
     if let TyData::TyBase(TyBase::Func(_)) = ty.base_ty(db).data(db) {
+        return Some(0);
+    }
+
+    // Contract types are compile-time only and have no runtime representation.
+    if let TyData::TyBase(TyBase::Contract(_)) = ty.base_ty(db).data(db) {
         return Some(0);
     }
 

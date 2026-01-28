@@ -34,6 +34,10 @@ pub struct TestMetadata {
     pub symbol_name: String,
     pub object_name: String,
     pub yul: String,
+    /// Backend-produced init bytecode (used by the Sonatina `fe test` backend).
+    ///
+    /// When emitting Yul, this is left empty and the runner compiles `yul` via `solc`.
+    pub bytecode: Vec<u8>,
     pub value_param_count: usize,
     pub effect_param_count: usize,
 }
@@ -331,6 +335,7 @@ pub fn emit_test_module_yul_with_layout(
             symbol_name: test.symbol_name,
             object_name: test.object_name,
             yul,
+            bytecode: Vec::new(),
             value_param_count: test.value_param_count,
             effect_param_count: test.effect_param_count,
         });
