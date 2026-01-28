@@ -1,0 +1,12 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/event_attr_on_non_struct.fe
+---
+error[10-0001]: `#[event]` is only valid on structs (found on fn)
+  ┌─ event_attr_on_non_struct.fe:1:1
+  │
+1 │ #[event]
+  │ ^^^^^^^^ `#[event]` must be placed on a `struct` item
+  │
+  = move `#[event]` to a struct declaration

@@ -1,0 +1,12 @@
+use std::evm::Address
+
+#[event]
+struct Approval {
+    #[indexed]
+    owner: Address,
+    #[indexed]
+    spender: Address,
+    #[indexed]
+    value: u256,
+}
+

@@ -1,0 +1,9 @@
+use std::abi::sol::{Uint160, Int24}
+
+#[event]
+struct Swap {
+    #[indexed]
+    sender: Uint160,
+    tick: Int24,
+    amount: u256,
+}
