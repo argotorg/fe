@@ -4,6 +4,7 @@
 //! to EVM bytecode without going through Yul/solc.
 
 mod types;
+mod tests;
 
 use driver::DriverDataBase;
 use hir::analysis::ty::adt_def::AdtRef;
@@ -24,23 +25,28 @@ use sonatina_ir::{
         cast::{Sext, Trunc, Zext},
         cmp::{Eq, Gt, IsZero, Lt, Ne},
         control_flow::{Br, Call, Jump, Return},
-        data::{Mload, Mstore},
+        data::{Mload, Mstore, SymAddr, SymSize, SymbolRef},
         evm::{
             EvmCalldataCopy, EvmCalldataLoad, EvmCalldataSize, EvmCaller, EvmCodeCopy, EvmCodeSize,
-            EvmExp, EvmInvalid, EvmKeccak256, EvmMalloc, EvmMstore8, EvmReturn, EvmReturnDataCopy,
-            EvmReturnDataSize, EvmRevert, EvmSload, EvmSstore, EvmStop, EvmTload, EvmTstore,
-            EvmUdiv, EvmUmod,
+            EvmExp, EvmInvalid, EvmKeccak256, EvmMalloc, EvmMsize, EvmMstore8, EvmReturn,
+            EvmReturnDataCopy, EvmReturnDataSize, EvmRevert, EvmSload, EvmSstore, EvmStop, EvmTload,
+            EvmTstore, EvmUdiv, EvmUmod,
+            EvmAddress, EvmBaseFee, EvmBlockHash, EvmCall, EvmCallValue, EvmChainId, EvmCoinBase,
+            EvmCreate, EvmCreate2, EvmDelegateCall, EvmGas, EvmGasLimit, EvmLog0,
+            EvmLog1, EvmLog2, EvmLog3, EvmLog4, EvmNumber, EvmOrigin, EvmPrevRandao,
+            EvmSelfBalance, EvmSelfDestruct, EvmStaticCall, EvmTimestamp,
         },
         logic::{And, Not, Or, Xor},
     },
     ir_writer::ModuleWriter,
     isa::{Isa, evm::Evm},
     module::{FuncRef, ModuleCtx},
-    object::{Directive, Object, ObjectName, Section, SectionName},
+    object::{Directive, EmbedSymbol, Object, ObjectName, Section, SectionName},
 };
 use sonatina_triple::{Architecture, EvmVersion, OperatingSystem, TargetTriple, Vendor};
 
 use crate::BackendError;
+pub use tests::emit_test_module_sonatina;
 
 /// Error type for Sonatina lowering failures.
 #[derive(Debug)]
@@ -85,6 +91,14 @@ fn create_evm_isa() -> Evm {
         OperatingSystem::Evm(EvmVersion::Osaka),
     );
     Evm::new(triple)
+}
+
+fn is_erased_runtime_ty(
+    db: &DriverDataBase,
+    target_layout: &TargetDataLayout,
+    ty: hir::analysis::ty::ty_def::TyId<'_>,
+) -> bool {
+    layout::ty_size_bytes_in(db, target_layout, ty).is_some_and(|s| s == 0)
 }
 
 /// Compiles a Fe module to Sonatina IR.
@@ -243,10 +257,32 @@ impl<'db, 'a> ModuleLowerer<'db, 'a> {
         // Entry functions have no parameters since the EVM starts with an empty stack.
         let mut params = Vec::new();
         if !is_contract_runtime_entry {
-            for _ in func.body.param_locals.iter() {
+            for local_id in func.body.param_locals.iter().copied() {
+                let local_ty = func
+                    .body
+                    .locals
+                    .get(local_id.index())
+                    .ok_or_else(|| {
+                        LowerError::Internal(format!("unknown param local: {local_id:?}"))
+                    })?
+                    .ty;
+                if is_erased_runtime_ty(self.db, &self.target_layout, local_ty) {
+                    continue;
+                }
                 params.push(types::word_type());
             }
-            for _ in func.body.effect_param_locals.iter() {
+            for local_id in func.body.effect_param_locals.iter().copied() {
+                let local_ty = func
+                    .body
+                    .locals
+                    .get(local_id.index())
+                    .ok_or_else(|| {
+                        LowerError::Internal(format!("unknown effect param local: {local_id:?}"))
+                    })?
+                    .ty;
+                if is_erased_runtime_ty(self.db, &self.target_layout, local_ty) {
+                    continue;
+                }
                 params.push(types::word_type());
             }
         }
@@ -408,8 +444,22 @@ impl<'db, 'a> ModuleLowerer<'db, 'a> {
 
         // Pass zero for all arguments (regular + effect params). Test entry functions
         // generally don't use effect params meaningfully.
-        let argc =
-            entry_mir_func.body.param_locals.len() + entry_mir_func.body.effect_param_locals.len();
+        let argc = entry_mir_func
+            .body
+            .param_locals
+            .iter()
+            .chain(entry_mir_func.body.effect_param_locals.iter())
+            .copied()
+            .filter(|local_id| {
+                let local_ty = entry_mir_func
+                    .body
+                    .locals
+                    .get(local_id.index())
+                    .map(|l| l.ty);
+                let Some(local_ty) = local_ty else { return true };
+                !is_erased_runtime_ty(self.db, &self.target_layout, local_ty)
+            })
+            .count();
         let mut args = Vec::with_capacity(argc);
         for _ in 0..argc {
             args.push(fb.make_imm_value(I256::zero()));
@@ -496,13 +546,29 @@ impl<'db, 'a> ModuleLowerer<'db, 'a> {
         } else {
             // Non-entry functions: map actual arguments to param locals.
             let args = fb.args().to_vec();
-            for (i, local_id) in all_param_locals.into_iter().enumerate() {
-                let Some(&arg_val) = args.get(i) else { break };
+            let mut arg_iter = args.into_iter();
+            let zero = fb.make_imm_value(I256::zero());
+            for local_id in all_param_locals {
                 let var = local_vars.get(&local_id).copied().ok_or_else(|| {
                     LowerError::Internal(format!(
                         "missing SSA variable for param local {local_id:?}"
                     ))
                 })?;
+
+                let local_ty = func
+                    .body
+                    .locals
+                    .get(local_id.index())
+                    .ok_or_else(|| {
+                        LowerError::Internal(format!("unknown param local: {local_id:?}"))
+                    })?
+                    .ty;
+                if is_erased_runtime_ty(self.db, &self.target_layout, local_ty) {
+                    fb.def_var(var, zero);
+                    continue;
+                }
+
+                let arg_val = arg_iter.next().unwrap_or(zero);
                 fb.def_var(var, arg_val);
             }
         }
@@ -719,6 +785,557 @@ fn lower_rvalue<'db, C: sonatina_ir::func_cursor::FuncCursor>(
                 LowerError::Unsupported("call without resolved symbol name".to_string())
             })?;
 
+            if call.effect_args.is_empty() {
+                // `std::evm::ops` externs (Yul builtins).
+                //
+                // These are declared in Fe as `extern`, so they do not have MIR bodies. The Yul
+                // backend emits them as builtins; the Sonatina backend must lower them directly.
+                match callee_name.as_str() {
+                    // Logs
+                    "log0" | "log1" | "log2" | "log3" | "log4" => {
+                        let mut args = Vec::with_capacity(call.args.len());
+                        for &arg in &call.args {
+                            args.push(lower_value(
+                                fb,
+                                db,
+                                target_layout,
+                                arg,
+                                body,
+                                value_map,
+                                local_vars,
+                                is,
+                            )?);
+                        }
+                        match (callee_name.as_str(), args.as_slice()) {
+                            ("log0", [offset, len]) => {
+                                fb.insert_inst_no_result(EvmLog0::new(is, *offset, *len));
+                                return Ok(None);
+                            }
+                            ("log1", [offset, len, topic0]) => {
+                                fb.insert_inst_no_result(EvmLog1::new(is, *offset, *len, *topic0));
+                                return Ok(None);
+                            }
+                            ("log2", [offset, len, topic0, topic1]) => {
+                                fb.insert_inst_no_result(EvmLog2::new(
+                                    is, *offset, *len, *topic0, *topic1,
+                                ));
+                                return Ok(None);
+                            }
+                            ("log3", [offset, len, topic0, topic1, topic2]) => {
+                                fb.insert_inst_no_result(EvmLog3::new(
+                                    is, *offset, *len, *topic0, *topic1, *topic2,
+                                ));
+                                return Ok(None);
+                            }
+                            ("log4", [offset, len, topic0, topic1, topic2, topic3]) => {
+                                fb.insert_inst_no_result(EvmLog4::new(
+                                    is, *offset, *len, *topic0, *topic1, *topic2, *topic3,
+                                ));
+                                return Ok(None);
+                            }
+                            _ => {
+                                return Err(LowerError::Internal(format!(
+                                    "{callee_name} expects {} args, got {}",
+                                    match callee_name.as_str() {
+                                        "log0" => 2,
+                                        "log1" => 3,
+                                        "log2" => 4,
+                                        "log3" => 5,
+                                        "log4" => 6,
+                                        _ => unreachable!(),
+                                    },
+                                    args.len()
+                                )));
+                            }
+                        }
+                    }
+
+                    // Environment
+                    "address" => return Ok(Some(fb.insert_inst(EvmAddress::new(is), Type::I256))),
+                    "callvalue" => {
+                        return Ok(Some(fb.insert_inst(EvmCallValue::new(is), Type::I256)));
+                    }
+                    "origin" => return Ok(Some(fb.insert_inst(EvmOrigin::new(is), Type::I256))),
+                    "gasprice" => {
+                        return Err(LowerError::Unsupported(
+                            "gasprice is not supported by the Sonatina backend".to_string(),
+                        ));
+                    }
+                    "coinbase" => return Ok(Some(fb.insert_inst(EvmCoinBase::new(is), Type::I256))),
+                    "timestamp" => {
+                        return Ok(Some(fb.insert_inst(EvmTimestamp::new(is), Type::I256)));
+                    }
+                    "number" => return Ok(Some(fb.insert_inst(EvmNumber::new(is), Type::I256))),
+                    "prevrandao" => {
+                        return Ok(Some(fb.insert_inst(EvmPrevRandao::new(is), Type::I256)));
+                    }
+                    "gaslimit" => {
+                        return Ok(Some(fb.insert_inst(EvmGasLimit::new(is), Type::I256)));
+                    }
+                    "chainid" => return Ok(Some(fb.insert_inst(EvmChainId::new(is), Type::I256))),
+                    "basefee" => return Ok(Some(fb.insert_inst(EvmBaseFee::new(is), Type::I256))),
+                    "selfbalance" => {
+                        return Ok(Some(fb.insert_inst(EvmSelfBalance::new(is), Type::I256)));
+                    }
+                    "blockhash" => {
+                        let [block] = call.args.as_slice() else {
+                            return Err(LowerError::Internal(
+                                "blockhash requires 1 argument".to_string(),
+                            ));
+                        };
+                        let block = lower_value(
+                            fb,
+                            db,
+                            target_layout,
+                            *block,
+                            body,
+                            value_map,
+                            local_vars,
+                            is,
+                        )?;
+                        return Ok(Some(fb.insert_inst(EvmBlockHash::new(is, block), Type::I256)));
+                    }
+                    "gas" => return Ok(Some(fb.insert_inst(EvmGas::new(is), Type::I256))),
+
+                    // Memory size
+                    "msize" => return Ok(Some(fb.insert_inst(EvmMsize::new(is), Type::I256))),
+
+                    // Calls / create
+                    "create" => {
+                        let [val, offset, len] = call.args.as_slice() else {
+                            return Err(LowerError::Internal(
+                                "create requires 3 arguments".to_string(),
+                            ));
+                        };
+                        let val = lower_value(
+                            fb,
+                            db,
+                            target_layout,
+                            *val,
+                            body,
+                            value_map,
+                            local_vars,
+                            is,
+                        )?;
+                        let offset = lower_value(
+                            fb,
+                            db,
+                            target_layout,
+                            *offset,
+                            body,
+                            value_map,
+                            local_vars,
+                            is,
+                        )?;
+                        let len = lower_value(
+                            fb,
+                            db,
+                            target_layout,
+                            *len,
+                            body,
+                            value_map,
+                            local_vars,
+                            is,
+                        )?;
+                        return Ok(Some(fb.insert_inst(
+                            EvmCreate::new(is, val, offset, len),
+                            Type::I256,
+                        )));
+                    }
+                    "create2" => {
+                        let [val, offset, len, salt] = call.args.as_slice() else {
+                            return Err(LowerError::Internal(
+                                "create2 requires 4 arguments".to_string(),
+                            ));
+                        };
+                        let val = lower_value(
+                            fb,
+                            db,
+                            target_layout,
+                            *val,
+                            body,
+                            value_map,
+                            local_vars,
+                            is,
+                        )?;
+                        let offset = lower_value(
+                            fb,
+                            db,
+                            target_layout,
+                            *offset,
+                            body,
+                            value_map,
+                            local_vars,
+                            is,
+                        )?;
+                        let len = lower_value(
+                            fb,
+                            db,
+                            target_layout,
+                            *len,
+                            body,
+                            value_map,
+                            local_vars,
+                            is,
+                        )?;
+                        let salt = lower_value(
+                            fb,
+                            db,
+                            target_layout,
+                            *salt,
+                            body,
+                            value_map,
+                            local_vars,
+                            is,
+                        )?;
+                        return Ok(Some(fb.insert_inst(
+                            EvmCreate2::new(is, val, offset, len, salt),
+                            Type::I256,
+                        )));
+                    }
+                    "call" => {
+                        let [gas, addr, val, arg_offset, arg_len, ret_offset, ret_len] =
+                            call.args.as_slice()
+                        else {
+                            return Err(LowerError::Internal(
+                                "call requires 7 arguments".to_string(),
+                            ));
+                        };
+                        let gas = lower_value(
+                            fb,
+                            db,
+                            target_layout,
+                            *gas,
+                            body,
+                            value_map,
+                            local_vars,
+                            is,
+                        )?;
+                        let addr = lower_value(
+                            fb,
+                            db,
+                            target_layout,
+                            *addr,
+                            body,
+                            value_map,
+                            local_vars,
+                            is,
+                        )?;
+                        let val = lower_value(
+                            fb,
+                            db,
+                            target_layout,
+                            *val,
+                            body,
+                            value_map,
+                            local_vars,
+                            is,
+                        )?;
+                        let arg_offset = lower_value(
+                            fb,
+                            db,
+                            target_layout,
+                            *arg_offset,
+                            body,
+                            value_map,
+                            local_vars,
+                            is,
+                        )?;
+                        let arg_len = lower_value(
+                            fb,
+                            db,
+                            target_layout,
+                            *arg_len,
+                            body,
+                            value_map,
+                            local_vars,
+                            is,
+                        )?;
+                        let ret_offset = lower_value(
+                            fb,
+                            db,
+                            target_layout,
+                            *ret_offset,
+                            body,
+                            value_map,
+                            local_vars,
+                            is,
+                        )?;
+                        let ret_len = lower_value(
+                            fb,
+                            db,
+                            target_layout,
+                            *ret_len,
+                            body,
+                            value_map,
+                            local_vars,
+                            is,
+                        )?;
+                        return Ok(Some(fb.insert_inst(
+                            EvmCall::new(is, gas, addr, val, arg_offset, arg_len, ret_offset, ret_len),
+                            Type::I256,
+                        )));
+                    }
+                    "staticcall" => {
+                        let [gas, addr, arg_offset, arg_len, ret_offset, ret_len] =
+                            call.args.as_slice()
+                        else {
+                            return Err(LowerError::Internal(
+                                "staticcall requires 6 arguments".to_string(),
+                            ));
+                        };
+                        let gas = lower_value(
+                            fb,
+                            db,
+                            target_layout,
+                            *gas,
+                            body,
+                            value_map,
+                            local_vars,
+                            is,
+                        )?;
+                        let addr = lower_value(
+                            fb,
+                            db,
+                            target_layout,
+                            *addr,
+                            body,
+                            value_map,
+                            local_vars,
+                            is,
+                        )?;
+                        let arg_offset = lower_value(
+                            fb,
+                            db,
+                            target_layout,
+                            *arg_offset,
+                            body,
+                            value_map,
+                            local_vars,
+                            is,
+                        )?;
+                        let arg_len = lower_value(
+                            fb,
+                            db,
+                            target_layout,
+                            *arg_len,
+                            body,
+                            value_map,
+                            local_vars,
+                            is,
+                        )?;
+                        let ret_offset = lower_value(
+                            fb,
+                            db,
+                            target_layout,
+                            *ret_offset,
+                            body,
+                            value_map,
+                            local_vars,
+                            is,
+                        )?;
+                        let ret_len = lower_value(
+                            fb,
+                            db,
+                            target_layout,
+                            *ret_len,
+                            body,
+                            value_map,
+                            local_vars,
+                            is,
+                        )?;
+                        return Ok(Some(fb.insert_inst(
+                            EvmStaticCall::new(is, gas, addr, arg_offset, arg_len, ret_offset, ret_len),
+                            Type::I256,
+                        )));
+                    }
+                    "delegatecall" => {
+                        let [gas, addr, arg_offset, arg_len, ret_offset, ret_len] =
+                            call.args.as_slice()
+                        else {
+                            return Err(LowerError::Internal(
+                                "delegatecall requires 6 arguments".to_string(),
+                            ));
+                        };
+                        let gas = lower_value(
+                            fb,
+                            db,
+                            target_layout,
+                            *gas,
+                            body,
+                            value_map,
+                            local_vars,
+                            is,
+                        )?;
+                        let addr = lower_value(
+                            fb,
+                            db,
+                            target_layout,
+                            *addr,
+                            body,
+                            value_map,
+                            local_vars,
+                            is,
+                        )?;
+                        let arg_offset = lower_value(
+                            fb,
+                            db,
+                            target_layout,
+                            *arg_offset,
+                            body,
+                            value_map,
+                            local_vars,
+                            is,
+                        )?;
+                        let arg_len = lower_value(
+                            fb,
+                            db,
+                            target_layout,
+                            *arg_len,
+                            body,
+                            value_map,
+                            local_vars,
+                            is,
+                        )?;
+                        let ret_offset = lower_value(
+                            fb,
+                            db,
+                            target_layout,
+                            *ret_offset,
+                            body,
+                            value_map,
+                            local_vars,
+                            is,
+                        )?;
+                        let ret_len = lower_value(
+                            fb,
+                            db,
+                            target_layout,
+                            *ret_len,
+                            body,
+                            value_map,
+                            local_vars,
+                            is,
+                        )?;
+                        return Ok(Some(fb.insert_inst(
+                            EvmDelegateCall::new(is, gas, addr, arg_offset, arg_len, ret_offset, ret_len),
+                            Type::I256,
+                        )));
+                    }
+                    _ => {}
+                }
+            }
+
+            // Special-case a few thin std wrappers that are semantically EVM opcodes.
+            //
+            // These wrappers show up as regular MIR functions (not `extern`), but in the Sonatina
+            // backend we prefer to lower them directly to opcodes to avoid depending on internal
+            // call return-value plumbing for correctness.
+            if call.effect_args.is_empty() {
+                match callee_name.as_str() {
+                    "alloc" => {
+                        let [size] = call.args.as_slice() else {
+                            return Err(LowerError::Internal(
+                                "alloc expects 1 argument (size)".to_string(),
+                            ));
+                        };
+                        let size_ty = body
+                            .values
+                            .get(size.index())
+                            .ok_or_else(|| LowerError::Internal("unknown call argument".to_string()))?
+                            .ty;
+                        if is_erased_runtime_ty(db, target_layout, size_ty) {
+                            return Err(LowerError::Internal(
+                                "alloc size argument unexpectedly erased".to_string(),
+                            ));
+                        }
+                        let size = lower_value(
+                            fb,
+                            db,
+                            target_layout,
+                            *size,
+                            body,
+                            value_map,
+                            local_vars,
+                            is,
+                        )?;
+                        return Ok(Some(fb.insert_inst(EvmMalloc::new(is, size), Type::I256)));
+                    }
+                    "evm_create_create_raw" => {
+                        let mut lowered = Vec::new();
+                        for &arg in &call.args {
+                            let arg_ty = body
+                                .values
+                                .get(arg.index())
+                                .ok_or_else(|| {
+                                    LowerError::Internal("unknown call argument".to_string())
+                                })?
+                                .ty;
+                            if is_erased_runtime_ty(db, target_layout, arg_ty) {
+                                continue;
+                            }
+                            lowered.push(lower_value(
+                                fb,
+                                db,
+                                target_layout,
+                                arg,
+                                body,
+                                value_map,
+                                local_vars,
+                                is,
+                            )?);
+                        }
+
+                        let [val, offset, len] = lowered.as_slice() else {
+                            return Err(LowerError::Internal(format!(
+                                "{callee_name} expects 3 args (value, offset, len) after ZST erasure, got {}",
+                                lowered.len()
+                            )));
+                        };
+                        return Ok(Some(
+                            fb.insert_inst(EvmCreate::new(is, *val, *offset, *len), Type::I256),
+                        ));
+                    }
+                    "evm_create_create2_raw" => {
+                        let mut lowered = Vec::new();
+                        for &arg in &call.args {
+                            let arg_ty = body
+                                .values
+                                .get(arg.index())
+                                .ok_or_else(|| {
+                                    LowerError::Internal("unknown call argument".to_string())
+                                })?
+                                .ty;
+                            if is_erased_runtime_ty(db, target_layout, arg_ty) {
+                                continue;
+                            }
+                            lowered.push(lower_value(
+                                fb,
+                                db,
+                                target_layout,
+                                arg,
+                                body,
+                                value_map,
+                                local_vars,
+                                is,
+                            )?);
+                        }
+
+                        let [val, offset, len, salt] = lowered.as_slice() else {
+                            return Err(LowerError::Internal(format!(
+                                "{callee_name} expects 4 args (value, offset, len, salt) after ZST erasure, got {}",
+                                lowered.len()
+                            )));
+                        };
+                        return Ok(Some(fb.insert_inst(
+                            EvmCreate2::new(is, *val, *offset, *len, *salt),
+                            Type::I256,
+                        )));
+                    }
+                    _ => {}
+                }
+            }
+
             let func_ref = name_map
                 .get(callee_name)
                 .ok_or_else(|| LowerError::Internal(format!("unknown function: {callee_name}")))?;
@@ -726,10 +1343,26 @@ fn lower_rvalue<'db, C: sonatina_ir::func_cursor::FuncCursor>(
             // Lower arguments (regular args + effect args)
             let mut args = Vec::with_capacity(call.args.len() + call.effect_args.len());
             for &arg in &call.args {
+                let arg_ty = body
+                    .values
+                    .get(arg.index())
+                    .ok_or_else(|| LowerError::Internal("unknown call argument".to_string()))?
+                    .ty;
+                if is_erased_runtime_ty(db, target_layout, arg_ty) {
+                    continue;
+                }
                 let val = lower_value(fb, db, target_layout, arg, body, value_map, local_vars, is)?;
                 args.push(val);
             }
             for &effect_arg in &call.effect_args {
+                let arg_ty = body
+                    .values
+                    .get(effect_arg.index())
+                    .ok_or_else(|| LowerError::Internal("unknown call effect argument".to_string()))?
+                    .ty;
+                if is_erased_runtime_ty(db, target_layout, arg_ty) {
+                    continue;
+                }
                 let val = lower_value(
                     fb,
                     db,
@@ -741,6 +1374,22 @@ fn lower_rvalue<'db, C: sonatina_ir::func_cursor::FuncCursor>(
                     is,
                 )?;
                 args.push(val);
+            }
+
+            // If the caller erased some compile-time-only arguments but the callee signature still
+            // expects stack words for them, pad with zeroes to keep the internal call ABI aligned.
+            let expected_argc = fb
+                .module_builder
+                .ctx
+                .func_sig(*func_ref, |sig| sig.args().len());
+            if args.len() > expected_argc {
+                return Err(LowerError::Internal(format!(
+                    "call to `{callee_name}` has too many args (got {}, expected {expected_argc})",
+                    args.len()
+                )));
+            }
+            while args.len() < expected_argc {
+                args.push(fb.make_imm_value(I256::zero()));
             }
 
             // Emit call instruction with proper return type
@@ -824,9 +1473,15 @@ fn lower_value<'db, C: sonatina_ir::func_cursor::FuncCursor>(
 
     // Some origins depend on the current SSA state / current block; avoid caching them
     // across the whole function.
+    // Avoid caching immediates: some backends treat operand lists as a set rather than a multiset,
+    // so reusing the same `ValueId` for repeated immediates can lead to missing stack items when an
+    // instruction needs multiple copies (e.g., `create2` with `value=0` and `salt=0`).
     let cacheable = !matches!(
         value_data.origin,
-        mir::ValueOrigin::Local(_) | mir::ValueOrigin::PlaceRef(_)
+        mir::ValueOrigin::Local(_)
+            | mir::ValueOrigin::PlaceRef(_)
+            | mir::ValueOrigin::Synthetic(_)
+            | mir::ValueOrigin::Unit
     );
     if cacheable && let Some(&val) = value_map.get(&value_id) {
         return Ok(val);
@@ -1098,6 +1753,38 @@ fn lower_intrinsic<'db, C: sonatina_ir::func_cursor::FuncCursor>(
     local_vars: &FxHashMap<mir::LocalId, Variable>,
     is: &sonatina_ir::inst::evm::inst_set::EvmInstSet,
 ) -> Result<Option<ValueId>, LowerError> {
+    if matches!(op, IntrinsicOp::CodeRegionOffset | IntrinsicOp::CodeRegionLen) {
+        let [func_item] = args else {
+            return Err(LowerError::Internal(
+                "code region intrinsics require 1 argument".to_string(),
+            ));
+        };
+        let value_data = body
+            .values
+            .get(func_item.index())
+            .ok_or_else(|| LowerError::Internal("unknown code region argument".to_string()))?;
+        let symbol = match &value_data.origin {
+            mir::ValueOrigin::FuncItem(root) => root.symbol.as_deref().ok_or_else(|| {
+                LowerError::Unsupported(
+                    "code region function item is missing a resolved symbol".to_string(),
+                )
+            })?,
+            _ => {
+                return Err(LowerError::Unsupported(
+                    "code region intrinsic argument must be a function item".to_string(),
+                ));
+            }
+        };
+
+        let embed_sym = EmbedSymbol::from(symbol.to_string());
+        let sym = SymbolRef::Embed(embed_sym);
+        return match op {
+            IntrinsicOp::CodeRegionOffset => Ok(Some(fb.insert_inst(SymAddr::new(is, sym), Type::I256))),
+            IntrinsicOp::CodeRegionLen => Ok(Some(fb.insert_inst(SymSize::new(is, sym), Type::I256))),
+            _ => unreachable!(),
+        };
+    }
+
     // Lower all arguments first
     let mut lowered_args = Vec::with_capacity(args.len());
     for &arg in args {
@@ -1201,9 +1888,9 @@ fn lower_intrinsic<'db, C: sonatina_ir::func_cursor::FuncCursor>(
             fb.insert_inst_no_result(EvmCodeCopy::new(is, *dst, *offset, *len));
             Ok(None)
         }
-        IntrinsicOp::CodeRegionOffset | IntrinsicOp::CodeRegionLen => Err(LowerError::Unsupported(
-            "code region intrinsics are not yet supported by the Sonatina backend".to_string(),
-        )),
+        IntrinsicOp::CodeRegionOffset | IntrinsicOp::CodeRegionLen => unreachable!(
+            "code region intrinsics are handled in the early return above"
+        ),
         IntrinsicOp::Keccak => {
             let [addr, len] = lowered_args.as_slice() else {
                 return Err(LowerError::Internal(
@@ -1407,6 +2094,9 @@ fn lower_place_address<'db, C: sonatina_ir::func_cursor::FuncCursor>(
     // Get the base value's type to navigate projections
     let base_value = &body.values[place.base.index()];
     let mut current_ty = base_value.ty;
+    if is_erased_runtime_ty(db, target_layout, current_ty) {
+        return Ok(base_val);
+    }
     let mut total_offset: usize = 0;
     let is_slot_addressed = matches!(
         body.place_address_space(place),
@@ -1666,12 +2356,55 @@ fn lower_terminator<'db, C: sonatina_ir::func_cursor::FuncCursor>(
                 let callee_name = call.resolved_name.as_ref().ok_or_else(|| {
                     LowerError::Unsupported("terminating call without resolved name".to_string())
                 })?;
+
+                if call.effect_args.is_empty() {
+                    match callee_name.as_str() {
+                        "stop" => {
+                            if !call.args.is_empty() {
+                                return Err(LowerError::Internal(
+                                    "stop takes no arguments".to_string(),
+                                ));
+                            }
+                            fb.insert_inst_no_result(EvmStop::new(is));
+                            return Ok(());
+                        }
+                        "selfdestruct" => {
+                            let [addr] = call.args.as_slice() else {
+                                return Err(LowerError::Internal(
+                                    "selfdestruct requires 1 argument".to_string(),
+                                ));
+                            };
+                            let addr = lower_value(
+                                fb,
+                                db,
+                                target_layout,
+                                *addr,
+                                body,
+                                value_map,
+                                local_vars,
+                                is,
+                            )?;
+                            fb.insert_inst_no_result(EvmSelfDestruct::new(is, addr));
+                            return Ok(());
+                        }
+                        _ => {}
+                    }
+                }
+
                 let func_ref = name_map.get(callee_name).ok_or_else(|| {
                     LowerError::Internal(format!("unknown function: {callee_name}"))
                 })?;
 
                 let mut args = Vec::with_capacity(call.args.len() + call.effect_args.len());
                 for &arg in &call.args {
+                    let arg_ty = body
+                        .values
+                        .get(arg.index())
+                        .ok_or_else(|| LowerError::Internal("unknown call argument".to_string()))?
+                        .ty;
+                    if is_erased_runtime_ty(db, target_layout, arg_ty) {
+                        continue;
+                    }
                     args.push(lower_value(
                         fb,
                         db,
@@ -1684,6 +2417,16 @@ fn lower_terminator<'db, C: sonatina_ir::func_cursor::FuncCursor>(
                     )?);
                 }
                 for &arg in &call.effect_args {
+                    let arg_ty = body
+                        .values
+                        .get(arg.index())
+                        .ok_or_else(|| {
+                            LowerError::Internal("unknown call effect argument".to_string())
+                        })?
+                        .ty;
+                    if is_erased_runtime_ty(db, target_layout, arg_ty) {
+                        continue;
+                    }
                     args.push(lower_value(
                         fb,
                         db,
@@ -1694,6 +2437,20 @@ fn lower_terminator<'db, C: sonatina_ir::func_cursor::FuncCursor>(
                         local_vars,
                         is,
                     )?);
+                }
+
+                let expected_argc = fb
+                    .module_builder
+                    .ctx
+                    .func_sig(*func_ref, |sig| sig.args().len());
+                if args.len() > expected_argc {
+                    return Err(LowerError::Internal(format!(
+                        "terminating call to `{callee_name}` has too many args (got {}, expected {expected_argc})",
+                        args.len()
+                    )));
+                }
+                while args.len() < expected_argc {
+                    args.push(fb.make_imm_value(I256::zero()));
                 }
 
                 fb.insert_inst_no_result(Call::new(is, *func_ref, args.into()));
@@ -1798,7 +2555,7 @@ fn lower_store_inst<'db, C: sonatina_ir::func_cursor::FuncCursor>(
         .get(value.index())
         .ok_or_else(|| LowerError::Internal(format!("unknown value: {value:?}")))?;
     let value_ty = value_data.ty;
-    if layout::ty_size_bytes_in(db, target_layout, value_ty).is_some_and(|s| s == 0) {
+    if is_erased_runtime_ty(db, target_layout, value_ty) {
         return Ok(());
     }
 
@@ -1892,7 +2649,7 @@ fn load_place_typed<'db, C: sonatina_ir::func_cursor::FuncCursor>(
     local_vars: &FxHashMap<mir::LocalId, Variable>,
     is: &sonatina_ir::inst::evm::inst_set::EvmInstSet,
 ) -> Result<ValueId, LowerError> {
-    if layout::ty_size_bytes_in(db, target_layout, loaded_ty).is_some_and(|s| s == 0) {
+    if is_erased_runtime_ty(db, target_layout, loaded_ty) {
         return Ok(fb.make_imm_value(I256::zero()));
     }
 
@@ -1927,7 +2684,7 @@ fn deep_copy_from_places<'db, C: sonatina_ir::func_cursor::FuncCursor>(
     local_vars: &FxHashMap<mir::LocalId, Variable>,
     is: &sonatina_ir::inst::evm::inst_set::EvmInstSet,
 ) -> Result<(), LowerError> {
-    if layout::ty_size_bytes_in(db, target_layout, value_ty).is_some_and(|s| s == 0) {
+    if is_erased_runtime_ty(db, target_layout, value_ty) {
         return Ok(());
     }
 
