@@ -1,0 +1,123 @@
+---
+source: crates/codegen/tests/yul.rs
+expression: output
+input_file: tests/fixtures/event_signed_topic.fe
+---
+function $emit_signed($evm, $val, $data) {
+  let v0 := mload(0x40)
+  if iszero(v0) {
+    v0 := 0x80
+  }
+  mstore(0x40, add(v0, 33))
+  mstore(v0, shl(248, $val))
+  mstore(add(v0, 1), $data)
+  $emit__Evm_hef0af3106e109414_Signed_h75c38b046c4d27e0__6ca963ed748a50f6(0, v0)
+  leave
+}
+function $emit__Evm_hef0af3106e109414_Signed_h75c38b046c4d27e0__6ca963ed748a50f6($self, $event) {
+  $signed_h75c38b046c4d27e0_event_hd33e4481d4a34b05_emit__Evm_hef0af3106e109414__3af54274b2985741($event, $self)
+  leave
+}
+function $signed_h75c38b046c4d27e0_event_hd33e4481d4a34b05_emit__Evm_hef0af3106e109414__3af54274b2985741($self, $log) {
+  let v0 := $solencoder_h1b9228b90dad6928_new()
+  let v1 := 32
+  let v2 := $solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_reserve_head(v0, v1)
+  pop(v2)
+  let v3 := mload(add($self, 1))
+  $u256_h3271ca15373d4483_encode_hab7243eccf2714fb_encode__Sol_hfd482bb803ad8c5f_SolEncoder_h1b9228b90dad6928__1a070c3866d16383(v3, v0)
+  let v4 := $solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_finish(v0)
+  let v5 := mload(v4)
+  let v6 := v5
+  let v7 := mload(add(v4, 32))
+  let v8 := v7
+  let v9 := signextend(0, and(shr(248, mload($self)), 0xff))
+  let v10 := $i8_h1bb527fe1af58754_topicvalue_hc8981c1d4c24e77d_as_topic(v9)
+  $evm_hef0af3106e109414_log_h22d1a10952034bae_log2($log, v6, v8, 79798777186660055823346730227481471595290359517149482070356912665010420421480, v10)
+  leave
+}
+function $solencoder_h1b9228b90dad6928_new() -> ret {
+  let v0 := mload(0x40)
+  if iszero(v0) {
+    v0 := 0x80
+  }
+  mstore(0x40, add(v0, 96))
+  mstore(v0, 0)
+  mstore(add(v0, 32), 0)
+  mstore(add(v0, 64), 0)
+  let v1 := v0
+  ret := v1
+  leave
+}
+function $solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_reserve_head($self, $bytes) -> ret {
+  $solencoder_h1b9228b90dad6928_ensure_init($self, $bytes)
+  let v0 := mload($self)
+  ret := v0
+  leave
+}
+function $u256_h3271ca15373d4483_encode_hab7243eccf2714fb_encode__Sol_hfd482bb803ad8c5f_SolEncoder_h1b9228b90dad6928__1a070c3866d16383($self, $e) {
+  $solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_write_word($e, $self)
+  leave
+}
+function $solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_finish($self) -> ret {
+  let v0 := mload($self)
+  let v1 := mload(add($self, 64))
+  let v2 := mload(0x40)
+  if iszero(v2) {
+    v2 := 0x80
+  }
+  mstore(0x40, add(v2, 64))
+  mstore(v2, v0)
+  mstore(add(v2, 32), sub(v1, v0))
+  ret := v2
+  leave
+}
+function $i8_h1bb527fe1af58754_topicvalue_hc8981c1d4c24e77d_as_topic($self) -> ret {
+  let v0 := $s_h33f7c3322e562590_intdowncast_hf946d58b157999e1_downcast_unchecked__i8_u256__ede8c299e903655a($self)
+  ret := v0
+  leave
+}
+function $evm_hef0af3106e109414_log_h22d1a10952034bae_log2($self, $offset, $len, $topic0, $topic1) {
+  log2($offset, $len, $topic0, $topic1)
+  leave
+}
+function $solencoder_h1b9228b90dad6928_ensure_init($self, $bytes) {
+  let v0 := mload($self)
+  let v1 := eq(v0, 0)
+  if v1 {
+    let v2 := $alloc($bytes)
+    mstore($self, v2)
+    mstore(add($self, 32), v2)
+    mstore(add($self, 64), add(v2, $bytes))
+  }
+  leave
+}
+function $solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_write_word($self, $v) {
+  let v0 := mload(add($self, 32))
+  mstore(v0, $v)
+  mstore(add($self, 32), add(v0, 32))
+  leave
+}
+function $s_h33f7c3322e562590_intdowncast_hf946d58b157999e1_downcast_unchecked__i8_u256__ede8c299e903655a($self) -> ret {
+  let v0 := $i8_h1bb527fe1af58754_intword_h9a147c8c32b1323c_to_word($self)
+  let v1 := $u256_h3271ca15373d4483_intword_h9a147c8c32b1323c_from_word(v0)
+  ret := v1
+  leave
+}
+function $alloc($size) -> ret {
+  let v0 := mload(64)
+  let v1 := eq(v0, 0)
+  if v1 {
+    v0 := 128
+  }
+  mstore(64, add(v0, $size))
+  ret := v0
+  leave
+}
+function $i8_h1bb527fe1af58754_intword_h9a147c8c32b1323c_to_word($self) -> ret {
+  ret := $self
+  leave
+}
+function $u256_h3271ca15373d4483_intword_h9a147c8c32b1323c_from_word($word) -> ret {
+  ret := $word
+  leave
+}

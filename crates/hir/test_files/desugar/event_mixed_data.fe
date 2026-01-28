@@ -1,0 +1,10 @@
+use std::evm::Address
+
+#[event]
+struct Mixed {
+    #[indexed]
+    from: Address,
+    flag: bool,
+    value: i128,
+}
+

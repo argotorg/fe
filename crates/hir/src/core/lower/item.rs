@@ -54,44 +54,85 @@ impl<'db> ItemKind<'db> {
 
         match kind {
             ast::ItemKind::Mod(mod_) => {
+                super::event::report_event_attr_on_non_struct_item(ctxt, mod_.attr_list(), "mod");
                 Mod::lower_ast(ctxt, mod_);
             }
             ast::ItemKind::Func(fn_) => {
+                super::event::report_event_attr_on_non_struct_item(ctxt, fn_.attr_list(), "fn");
                 Func::lower_ast(ctxt, fn_);
             }
             ast::ItemKind::Struct(struct_) => {
                 Struct::lower_ast(ctxt, struct_);
             }
             ast::ItemKind::Contract(contract) => {
+                super::event::report_event_attr_on_non_struct_item(
+                    ctxt,
+                    contract.attr_list(),
+                    "contract",
+                );
                 Contract::lower_ast(ctxt, contract);
             }
             ast::ItemKind::Enum(enum_) => {
+                super::event::report_event_attr_on_non_struct_item(ctxt, enum_.attr_list(), "enum");
                 Enum::lower_ast(ctxt, enum_);
             }
             ast::ItemKind::Msg(msg) => {
+                super::event::report_event_attr_on_non_struct_item(ctxt, msg.attr_list(), "msg");
                 lower_msg_as_mod(ctxt, msg);
             }
             ast::ItemKind::TypeAlias(alias) => {
+                super::event::report_event_attr_on_non_struct_item(
+                    ctxt,
+                    alias.attr_list(),
+                    "type alias",
+                );
                 TypeAlias::lower_ast(ctxt, alias);
             }
             ast::ItemKind::Impl(impl_) => {
+                super::event::report_event_attr_on_non_struct_item(ctxt, impl_.attr_list(), "impl");
                 Impl::lower_ast(ctxt, impl_);
             }
             ast::ItemKind::Trait(trait_) => {
+                super::event::report_event_attr_on_non_struct_item(
+                    ctxt,
+                    trait_.attr_list(),
+                    "trait",
+                );
                 Trait::lower_ast(ctxt, trait_);
             }
             ast::ItemKind::ImplTrait(impl_trait) => {
+                super::event::report_event_attr_on_non_struct_item(
+                    ctxt,
+                    impl_trait.attr_list(),
+                    "impl trait",
+                );
                 ImplTrait::lower_ast(ctxt, impl_trait);
             }
             ast::ItemKind::Const(const_) => {
+                super::event::report_event_attr_on_non_struct_item(
+                    ctxt,
+                    const_.attr_list(),
+                    "const",
+                );
                 Const::lower_ast(ctxt, const_);
             }
             ast::ItemKind::Use(use_) => {
+                super::event::report_event_attr_on_non_struct_item(ctxt, use_.attr_list(), "use");
                 Use::lower_ast(ctxt, use_);
             }
             ast::ItemKind::Extern(extern_) => {
+                super::event::report_event_attr_on_non_struct_item(
+                    ctxt,
+                    extern_.attr_list(),
+                    "extern",
+                );
                 if let Some(extern_block) = extern_.extern_block() {
                     for fn_ in extern_block {
+                        super::event::report_event_attr_on_non_struct_item(
+                            ctxt,
+                            fn_.attr_list(),
+                            "extern fn",
+                        );
                         Func::lower_ast_extern(ctxt, fn_);
                     }
                 }
@@ -175,6 +216,12 @@ impl<'db> Func<'db> {
 
 impl<'db> Struct<'db> {
     pub(super) fn lower_ast(ctxt: &mut FileLowerCtxt<'db>, ast: ast::Struct) -> Self {
+        if super::event::is_event_struct(&ast) {
+            return super::event::lower_event_struct(ctxt, ast);
+        }
+
+        super::event::report_indexed_attrs_outside_event_struct(ctxt, &ast);
+
         let name = IdentId::lower_token_partial(ctxt, ast.name());
         let id = ctxt.joined_id(TrackedItemVariant::Struct(name));
         ctxt.enter_item_scope(id, false);

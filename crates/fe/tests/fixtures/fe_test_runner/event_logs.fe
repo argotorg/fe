@@ -1,0 +1,58 @@
+use std::evm::{Address, Evm}
+
+#[event]
+struct Transfer {
+    #[indexed]
+    from: Address,
+    #[indexed]
+    to: Address,
+    value: u256,
+}
+
+#[event]
+struct SimpleEvent {
+    value: u256,
+}
+
+#[event]
+struct AllIndexed {
+    #[indexed]
+    a: u256,
+    #[indexed]
+    b: u256,
+    #[indexed]
+    c: u256,
+}
+
+#[event]
+struct SignedIndexed {
+    #[indexed]
+    small_neg: i8,
+    #[indexed]
+    medium_neg: i32,
+    value: u256,
+}
+
+#[test]
+fn test_signed_indexed() uses (mut evm: Evm) {
+    let neg1: i8 = -1
+    let neg100: i32 = -100
+    evm.emit(SignedIndexed { small_neg: neg1, medium_neg: neg100, value: 42 })
+}
+
+#[test]
+fn test_transfer_event() uses (mut evm: Evm) {
+    let from = Address { inner: 0x1111111111111111111111111111111111111111 }
+    let to = Address { inner: 0x2222222222222222222222222222222222222222 }
+    evm.emit(Transfer { from, to, value: 1000 })
+}
+
+#[test]
+fn test_simple_event() uses (mut evm: Evm) {
+    evm.emit(SimpleEvent { value: 42 })
+}
+
+#[test]
+fn test_all_indexed() uses (mut evm: Evm) {
+    evm.emit(AllIndexed { a: 1, b: 2, c: 3 })
+}
