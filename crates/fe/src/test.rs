@@ -287,7 +287,12 @@ fn discover_and_run_tests(
 ) -> Vec<TestResult> {
     let backend = backend.to_lowercase();
     if backend == "sonatina" {
-        TestDebugOptions::set_env("SONATINA_DISABLE_TRANSIENT_MALLOC", "1");
+        // Fe tests currently rely on `evm_malloc` results remaining valid across subsequent
+        // allocations; Sonatina's transient malloc optimization may reuse the same base and
+        // overlap allocations. Default to disabling it, but allow explicit override.
+        if std::env::var_os("SONATINA_DISABLE_TRANSIENT_MALLOC").is_none() {
+            TestDebugOptions::set_env("SONATINA_DISABLE_TRANSIENT_MALLOC", "1");
+        }
     }
     let output = match backend.as_str() {
         "yul" => match emit_test_module_yul(db, top_mod) {
