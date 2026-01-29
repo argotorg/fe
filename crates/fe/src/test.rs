@@ -286,6 +286,9 @@ fn discover_and_run_tests(
     debug: &TestDebugOptions,
 ) -> Vec<TestResult> {
     let backend = backend.to_lowercase();
+    if backend == "sonatina" {
+        TestDebugOptions::set_env("SONATINA_DISABLE_TRANSIENT_MALLOC", "1");
+    }
     let output = match backend.as_str() {
         "yul" => match emit_test_module_yul(db, top_mod) {
             Ok(output) => output,
