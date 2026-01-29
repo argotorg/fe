@@ -305,11 +305,13 @@ fn detect_code_region_cycles(graph: &FxHashMap<String, FxHashSet<String>>) -> Re
         marks.insert(node.to_string(), Mark::Visiting);
         stack.push(node.to_string());
         if let Some(deps) = graph.get(node) {
+            let mut deps: Vec<String> = deps.iter().cloned().collect();
+            deps.sort();
             for dep in deps {
                 if dep == node {
                     continue;
                 }
-                dfs(dep, graph, marks, stack)?;
+                dfs(&dep, graph, marks, stack)?;
             }
         }
         stack.pop();
@@ -319,8 +321,10 @@ fn detect_code_region_cycles(graph: &FxHashMap<String, FxHashSet<String>>) -> Re
 
     let mut marks = FxHashMap::default();
     let mut stack = Vec::new();
-    for node in graph.keys() {
-        dfs(node, graph, &mut marks, &mut stack)?;
+    let mut nodes: Vec<String> = graph.keys().cloned().collect();
+    nodes.sort();
+    for node in nodes {
+        dfs(&node, graph, &mut marks, &mut stack)?;
     }
     Ok(())
 }
@@ -423,6 +427,8 @@ fn create_code_regions_object(
         let reachable = region_reachable.get(root).ok_or_else(|| {
             LowerError::Internal(format!("missing reachability for code region `{root}`"))
         })?;
+        let mut reachable: Vec<&String> = reachable.iter().collect();
+        reachable.sort();
         for symbol in reachable {
             if symbol == root {
                 continue;
@@ -433,6 +439,8 @@ fn create_code_regions_object(
         }
 
         let deps = region_deps.get(root).cloned().unwrap_or_default();
+        let mut deps: Vec<String> = deps.into_iter().collect();
+        deps.sort();
         for dep in deps {
             if dep == *root {
                 continue;
@@ -488,16 +496,20 @@ fn create_test_object(
     let deps = collect_code_region_deps(&reachable, funcs_by_symbol);
 
     let mut directives = vec![Directive::Entry(wrapper_ref), Directive::Include(test_ref)];
+    let mut reachable: Vec<String> = reachable.into_iter().collect();
+    reachable.sort();
     for symbol in reachable {
         if symbol == test.symbol_name {
             continue;
         }
-        if let Some(&func_ref) = lowerer.name_map.get(&symbol) {
+        if let Some(&func_ref) = lowerer.name_map.get(symbol.as_str()) {
             directives.push(Directive::Include(func_ref));
         }
     }
 
     let code_regions_obj = ObjectName::from("CodeRegions");
+    let mut deps: Vec<String> = deps.into_iter().collect();
+    deps.sort();
     for dep in deps {
         let dep_section = code_region_sections.get(&dep).cloned().ok_or_else(|| {
             LowerError::Internal(format!(
