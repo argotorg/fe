@@ -10,6 +10,7 @@ use crate::analysis::{
         const_expr::{ConstExpr, ConstExprId},
         const_ty::{ConstTyData, ConstTyId, EvaluatedConstTy},
         fold::{TyFoldable, TyFolder},
+        trait_def::{TraitInstId, resolve_trait_method_instance},
         trait_resolution::PredicateListId,
         ty_check::{
             ConstRef, LocalBinding, RecordLike, TypedBody, check_anon_const_body, check_func_body,
@@ -210,6 +211,8 @@ impl<'db> CtfeInterpreter<'db> {
             Expr::Block(stmts) => self.eval_block(stmts),
 
             Expr::Call(_, _) => self.eval_call_expr(expr),
+
+            Expr::MethodCall(..) => self.eval_method_call_expr(expr),
 
             Expr::Tuple(elems) => self.eval_tuple(expr, elems),
 
@@ -766,6 +769,104 @@ impl<'db> CtfeInterpreter<'db> {
         Ok(self.eval_user_const_fn_call(expr, func, callable.generic_args(), &value_args)?)
     }
 
+    fn eval_method_call_expr(&mut self, expr: ExprId) -> CtfeEval<'db> {
+        let body = self.body();
+        let Some(callable) = self.typed_body().callable_expr(expr).cloned() else {
+            return Err(InvalidCause::ConstEvalUnsupported { body, expr }.into());
+        };
+        let CallableDef::Func(mut func) = callable.callable_def else {
+            return Err(InvalidCause::ConstEvalUnsupported { body, expr }.into());
+        };
+        if !func.is_const(self.db) {
+            return Err(InvalidCause::ConstEvalNonConstCall { body, expr }.into());
+        }
+
+        let Partial::Present(Expr::MethodCall(receiver, _method, _generic_args, args)) =
+            expr.data(self.db, body)
+        else {
+            return Err(InvalidCause::ConstEvalUnsupported { body, expr }.into());
+        };
+
+        let receiver_value = self.eval_expr(*receiver)?;
+        let receiver_ty = receiver_value.ty(self.db);
+        let mut value_args = Vec::with_capacity(args.len() + 1);
+        value_args.push(receiver_value);
+        for arg in args {
+            value_args.push(self.eval_expr(arg.expr)?);
+        }
+
+        let mut generic_args = callable.generic_args().to_vec();
+
+        if let Some(inst) = callable.trait_inst() {
+            let Some(name) = func.name(self.db).to_opt() else {
+                return Err(InvalidCause::ConstEvalUnsupported { body, expr }.into());
+            };
+            let inst = if matches!(
+                inst.self_ty(self.db).data(self.db),
+                TyData::TyParam(_) | TyData::TyVar(_)
+            ) {
+                let mut args = inst.args(self.db).to_vec();
+                if let Some(self_arg) = args.first_mut() {
+                    *self_arg = receiver_ty;
+                }
+                TraitInstId::new(
+                    self.db,
+                    inst.def(self.db),
+                    args,
+                    inst.assoc_type_bindings(self.db).clone(),
+                )
+            } else {
+                inst
+            };
+
+            let trait_arg_len = inst.args(self.db).len();
+            if generic_args.len() < trait_arg_len {
+                return Err(InvalidCause::ConstEvalUnsupported { body, expr }.into());
+            }
+
+            if let Some((impl_func, impl_args)) = resolve_trait_method_instance(self.db, inst, name)
+            {
+                func = impl_func;
+                if !func.is_const(self.db) {
+                    return Err(InvalidCause::ConstEvalNonConstCall { body, expr }.into());
+                }
+
+                let mut resolved_args = impl_args;
+                resolved_args.extend_from_slice(&generic_args[trait_arg_len..]);
+                generic_args = resolved_args;
+            } else if func.body(self.db).is_none() {
+                return Err(InvalidCause::ConstEvalUnsupported { body, expr }.into());
+            }
+        }
+
+        if func.is_extern(self.db) {
+            let ret_ty = self.typed_body().expr_ty(self.db, expr);
+            if let Some(value) = self.eval_extern_const_fn(expr, func, ret_ty, &value_args)? {
+                return Ok(value);
+            }
+
+            let args = value_args
+                .iter()
+                .copied()
+                .map(|v| TyId::const_ty(self.db, v))
+                .collect::<Vec<_>>();
+            let expr_id = ConstExprId::new(
+                self.db,
+                ConstExpr::ExternConstFnCall {
+                    func,
+                    generic_args,
+                    args,
+                },
+            );
+            return Ok(ConstTyId::new(
+                self.db,
+                ConstTyData::Abstract(expr_id, ret_ty),
+            ));
+        }
+
+        Ok(self.eval_user_const_fn_call(expr, func, &generic_args, &value_args)?)
+    }
+
     fn eval_user_const_fn_call(
         &mut self,
         expr: ExprId,
@@ -983,7 +1084,30 @@ fn const_as_bytes<'db>(
     expr: ExprId,
 ) -> Result<Vec<u8>, InvalidCause<'db>> {
     match value.data(db) {
+        ConstTyData::Evaluated(EvaluatedConstTy::LitInt(int_id), _) => {
+            let ty = value.ty(db);
+            let (bits, _) = int_layout(db, ty, body, expr)?;
+            let width = bits / 8;
+            let bytes = int_id.data(db).to_bytes_be();
+            if bytes.len() > width {
+                return Err(InvalidCause::ConstEvalUnsupported { body, expr });
+            }
+            let mut out = vec![0u8; width];
+            let offset = width - bytes.len();
+            out[offset..].copy_from_slice(&bytes);
+            Ok(out)
+        }
         ConstTyData::Evaluated(EvaluatedConstTy::Bytes(bytes), _) => Ok(bytes.clone()),
+        ConstTyData::Evaluated(EvaluatedConstTy::Tuple(elems), _) => {
+            let mut out = Vec::new();
+            for elem in elems.iter() {
+                let TyData::ConstTy(const_ty) = elem.data(db) else {
+                    return Err(InvalidCause::ConstEvalUnsupported { body, expr });
+                };
+                out.extend(const_as_bytes(db, *const_ty, body, expr)?);
+            }
+            Ok(out)
+        }
         ConstTyData::Evaluated(EvaluatedConstTy::Array(elems), _) => elems
             .iter()
             .map(|elem| match elem.data(db) {

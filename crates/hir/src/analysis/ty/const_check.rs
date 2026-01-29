@@ -41,6 +41,30 @@ impl<'db> ConstFnChecker<'db, '_> {
         self.diags.push(diag.into());
     }
 
+    fn check_call_target(&mut self, expr: ExprId) {
+        let Some(callable) = self.typed_body.callable_expr(expr) else {
+            return;
+        };
+        let CallableDef::Func(callee) = callable.callable_def else {
+            self.push(BodyDiag::ConstFnAggregateNotAllowed(
+                expr.span(self.body).into(),
+            ));
+            return;
+        };
+
+        if !callee.is_const(self.db) {
+            self.push(BodyDiag::ConstFnNonConstCall {
+                primary: expr.span(self.body).into(),
+                callee: callable.callable_def,
+            });
+        } else if callee.has_effects(self.db) {
+            self.push(BodyDiag::ConstFnEffectfulCall {
+                primary: expr.span(self.body).into(),
+                callee: callable.callable_def,
+            });
+        }
+    }
+
     fn check_stmt(&mut self, stmt: StmtId) {
         let Partial::Present(stmt_data) = stmt.data(self.db, self.body) else {
             return;
@@ -121,35 +145,12 @@ impl<'db> ConstFnChecker<'db, '_> {
             }
             Expr::Call(_callee, args) => {
                 args.iter().for_each(|arg| self.check_expr(arg.expr));
-
-                let Some(callable) = self.typed_body.callable_expr(expr) else {
-                    return;
-                };
-                if let CallableDef::Func(callee) = callable.callable_def {
-                    if !callee.is_const(self.db) {
-                        self.push(BodyDiag::ConstFnNonConstCall {
-                            primary: expr.span(self.body).into(),
-                            callee: callable.callable_def,
-                        });
-                    } else if callee.has_effects(self.db) {
-                        self.push(BodyDiag::ConstFnEffectfulCall {
-                            primary: expr.span(self.body).into(),
-                            callee: callable.callable_def,
-                        });
-                    }
-                } else {
-                    self.push(BodyDiag::ConstFnAggregateNotAllowed(
-                        expr.span(self.body).into(),
-                    ));
-                }
+                self.check_call_target(expr);
             }
             Expr::MethodCall(receiver, _name, _generic_args, args) => {
                 self.check_expr(*receiver);
                 args.iter().for_each(|arg| self.check_expr(arg.expr));
-                // Keep MVP simple: only allow direct `f(...)` calls.
-                self.push(BodyDiag::ConstFnAggregateNotAllowed(
-                    expr.span(self.body).into(),
-                ));
+                self.check_call_target(expr);
             }
             Expr::Match(scrutinee, arms) => {
                 self.check_expr(*scrutinee);

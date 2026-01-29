@@ -1,6 +1,7 @@
 use crate::analysis::HirAnalysisDb;
+use crate::analysis::ty::trait_def::TraitInstId;
 use crate::analysis::ty::ty_def::TyId;
-use crate::hir_def::Func;
+use crate::hir_def::{Func, IdentId};
 use salsa::Update;
 
 #[salsa::interned]
@@ -16,6 +17,10 @@ pub enum ConstExpr<'db> {
         func: Func<'db>,
         generic_args: Vec<TyId<'db>>,
         args: Vec<TyId<'db>>,
+    },
+    TraitConst {
+        inst: TraitInstId<'db>,
+        name: IdentId<'db>,
     },
 }
 
@@ -51,6 +56,9 @@ impl<'db> ConstExprId<'db> {
                     .join(", ");
 
                 format!("{name}{generic_args}({args})")
+            }
+            ConstExpr::TraitConst { inst, name } => {
+                format!("{}::{}", inst.self_ty(db).pretty_print(db), name.data(db))
             }
         }
     }

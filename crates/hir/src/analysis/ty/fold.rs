@@ -1,6 +1,7 @@
 use std::hash::Hash;
 
 use crate::core::hir_def::IdentId;
+use crate::hir_def::{ItemKind, Trait};
 use common::indexmap::{IndexMap, IndexSet};
 
 use super::{
@@ -169,6 +170,10 @@ where
                 },
             )
         }
+        ConstExpr::TraitConst { inst, name } => {
+            let inst = inst.fold_with(db, folder);
+            ConstExprId::new(db, ConstExpr::TraitConst { inst, name: *name })
+        }
     }
 }
 
@@ -286,18 +291,21 @@ impl<'db> TyFolder<'db> for AssocTySubst<'db> {
         match ty.data(db) {
             TyData::TyParam(param) => {
                 // If this is a trait self parameter, substitute with the trait instance's self type
-                if param.is_trait_self()
-                    && param
-                        .owner
-                        .resolve_to::<crate::core::hir_def::Trait>(db)
-                        .is_some_and(|trait_def| trait_def == self.trait_inst.def(db))
-                {
-                    let self_ty = self.trait_inst.self_ty(db);
-                    // Avoid infinite recursion when the instance `Self` is the same param.
-                    if self_ty == ty {
-                        return ty;
+                if param.is_trait_self() {
+                    let owner_trait = param.owner.resolve_to::<Trait>(db).or_else(|| {
+                        match param.owner.parent_item(db)? {
+                            ItemKind::Trait(trait_) => Some(trait_),
+                            _ => None,
+                        }
+                    });
+                    if owner_trait.is_some_and(|trait_def| trait_def == self.trait_inst.def(db)) {
+                        let self_ty = self.trait_inst.self_ty(db);
+                        // Avoid infinite recursion when the instance `Self` is the same param.
+                        if self_ty == ty {
+                            return ty;
+                        }
+                        return self_ty.fold_with(db, self);
                     }
-                    return self_ty.fold_with(db, self);
                 }
                 ty.super_fold_with(db, self)
             }

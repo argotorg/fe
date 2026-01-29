@@ -1,10 +1,11 @@
 use crate::core::hir_def::{Body, Const, Expr, IdentId, IntegerId, LitKind, Partial};
 
-use super::const_expr::ConstExprId;
+use super::const_expr::{ConstExpr, ConstExprId};
 use super::{
     ctfe::{CtfeConfig, CtfeInterpreter},
     diagnostics::{BodyDiag, FuncBodyDiag},
     trait_def::TraitInstId,
+    trait_resolution::constraint::collect_func_def_constraints,
     ty_check::{check_anon_const_body, check_const_body},
     ty_def::{InvalidCause, TyId, TyParam, TyVar},
     unify::UnificationTable,
@@ -15,6 +16,8 @@ use crate::analysis::{
     ty::ty_def::TyData,
     ty::{trait_def::assoc_const_body_for_trait_inst, trait_resolution::PredicateListId},
 };
+use crate::hir_def::ItemKind;
+use common::indexmap::IndexMap;
 
 #[salsa::interned]
 #[derive(Debug)]
@@ -75,7 +78,25 @@ pub(crate) fn evaluate_const_ty<'db>(
             );
         };
 
-        let assumptions = PredicateListId::empty_list(db);
+        let containing_func = match body.scope().parent_item(db) {
+            Some(ItemKind::Func(func)) => Some(func),
+            Some(ItemKind::Body(parent)) => parent.containing_func(db),
+            _ => None,
+        };
+        let assumptions = if let Some(func) = containing_func {
+            let mut preds =
+                collect_func_def_constraints(db, func.into(), true).instantiate_identity();
+            if let Some(ItemKind::Trait(trait_)) = func.scope().parent_item(db) {
+                let self_pred =
+                    TraitInstId::new(db, trait_, trait_.params(db).to_vec(), IndexMap::new());
+                let mut merged = preds.list(db).to_vec();
+                merged.push(self_pred);
+                preds = PredicateListId::new(db, merged);
+            }
+            preds.extend_all_bounds(db)
+        } else {
+            PredicateListId::empty_list(db)
+        };
         if let Ok(resolved_path) = resolve_path(db, path, body.scope(), assumptions, true) {
             match resolved_path {
                 PathRes::Ty(ty) | PathRes::TyAlias(_, ty) => {
@@ -90,9 +111,36 @@ pub(crate) fn evaluate_const_ty<'db>(
                         return const_ty.evaluate(db, expected);
                     }
                 }
-                PathRes::TraitConst(_recv_ty, inst, name) => {
+                PathRes::TraitConst(recv_ty, inst, name) => {
+                    let mk_abstract = |expected_ty: TyId<'db>| {
+                        let mut args = inst.args(db).clone();
+                        if let Some(self_arg) = args.first_mut() {
+                            *self_arg = recv_ty;
+                        }
+                        let inst = TraitInstId::new(
+                            db,
+                            inst.def(db),
+                            args,
+                            inst.assoc_type_bindings(db).clone(),
+                        );
+                        let expr = ConstExprId::new(db, ConstExpr::TraitConst { inst, name });
+                        ConstTyId::new(db, ConstTyData::Abstract(expr, expected_ty))
+                    };
+
                     if let Some(const_ty) = const_ty_from_trait_const(db, inst, name) {
-                        return const_ty.evaluate(db, expected_ty);
+                        let evaluated = const_ty.evaluate(db, expected_ty);
+                        if matches!(
+                            evaluated.ty(db).invalid_cause(db),
+                            Some(InvalidCause::ConstEvalUnsupported { .. })
+                        ) && let Some(expected_ty) = expected_ty
+                        {
+                            return mk_abstract(expected_ty);
+                        }
+                        return evaluated;
+                    }
+
+                    if let Some(expected_ty) = expected_ty {
+                        return mk_abstract(expected_ty);
                     }
                 }
                 _ => {}

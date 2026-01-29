@@ -126,6 +126,9 @@ where
                 generic_args.visit_with(visitor);
                 args.visit_with(visitor);
             }
+            ConstExpr::TraitConst { inst, .. } => {
+                inst.visit_with(visitor);
+            }
         },
         ConstTyData::UnEvaluated { .. } => {}
     }

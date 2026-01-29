@@ -90,6 +90,33 @@ impl<'db> TyCheckEnv<'db> {
                 let assumptions = preds.extend_all_bounds(db);
                 (preds, assumptions)
             }
+            BodyOwner::AnonConstBody { .. } => {
+                let containing_func = match owner_scope.parent_item(db) {
+                    Some(ItemKind::Func(func)) => Some(func),
+                    Some(ItemKind::Body(parent)) => parent.containing_func(db),
+                    _ => None,
+                };
+                if let Some(func) = containing_func {
+                    let mut preds =
+                        collect_func_def_constraints(db, func.into(), true).instantiate_identity();
+                    if let Some(ItemKind::Trait(trait_)) = func.scope().parent_item(db) {
+                        let self_pred = TraitInstId::new(
+                            db,
+                            trait_,
+                            trait_.params(db).to_vec(),
+                            IndexMap::new(),
+                        );
+                        let mut merged = preds.list(db).to_vec();
+                        merged.push(self_pred);
+                        preds = PredicateListId::new(db, merged);
+                    }
+                    let assumptions = preds.extend_all_bounds(db);
+                    (preds, assumptions)
+                } else {
+                    let empty = PredicateListId::empty_list(db);
+                    (empty, empty)
+                }
+            }
             _ => {
                 let empty = PredicateListId::empty_list(db);
                 (empty, empty)
