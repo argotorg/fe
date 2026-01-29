@@ -5,7 +5,7 @@ expression: diags
 input_file: fixtures/ty_check/keccak_requires_as_bytes.fe
 ---
 error[6-0003]: trait bound is not satisfied
-  ┌─ keccak_requires_as_bytes.fe:3:5
+  ┌─ keccak_requires_as_bytes.fe:5:5
   │
-3 │     core::keccak(x)
-  │     ^^^^^^^^^^^^ `u256` doesn't implement `AsBytes`
+5 │     core::keccak(x)
+  │     ^^^^^^^^^^^^ `NotBytes` doesn't implement `AsBytes`
