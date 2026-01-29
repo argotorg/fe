@@ -21,44 +21,44 @@ func public %abi_encode_string(v0.i256, v1.i256, v2.i256) {
 
 func public %erc20_balance_of(v0.i256, v1.i256) -> i256 {
     block0:
-        v3.i256 = call %storagemap_k__v__const_salt__u256__get__Address_u256_0__b8b2f68065fe2328 0.i256 v1;
+        v3.i256 = call %storagemap_k__v__const_salt__u256__get__Address_u256_0__b8b2f68065fe2328 v1;
         return v3;
 }
 
 func public %erc20_allowance(v0.i256, v1.i256, v2.i256) -> i256 {
     block0:
-        v4.i256 = evm_malloc 64.i256;
-        mstore v4 v1 i256;
-        v6.i256 = add v4 32.i256;
-        mstore v6 v2 i256;
-        v8.i256 = call %storagemap_k__v__const_salt__u256__get___Address__Address__u256_1__12414c27d5bfff1f 0.i256 v4;
+        v5.i256 = evm_malloc 64.i256;
+        mstore v5 v1 i256;
+        v7.i256 = add v5 32.i256;
+        mstore v7 v2 i256;
+        v8.i256 = call %storagemap_k__v__const_salt__u256__get___Address__Address__u256_1__12414c27d5bfff1f v5;
         return v8;
 }
 
 func public %erc20_approve(v0.i256, v1.i256, v2.i256, v3.i256) {
     block0:
-        v5.i256 = evm_malloc 64.i256;
-        mstore v5 v1 i256;
-        v7.i256 = add v5 32.i256;
-        mstore v7 v2 i256;
-        call %storagemap_k__v__const_salt__u256__set___Address__Address__u256_1__12414c27d5bfff1f 0.i256 v5 v3;
+        v6.i256 = evm_malloc 64.i256;
+        mstore v6 v1 i256;
+        v8.i256 = add v6 32.i256;
+        mstore v8 v2 i256;
+        call %storagemap_k__v__const_salt__u256__set___Address__Address__u256_1__12414c27d5bfff1f v6 v3;
         return;
 }
 
 func public %erc20_total_supply(v0.i256) -> i256 {
     block0:
-        v1.i256 = mload v0 i256;
-        return v1;
+        v2.i256 = mload v0 i256;
+        return v2;
 }
 
 func public %erc20_set_owner_once(v0.i256, v1.i256, v2.i256) {
     block0:
-        v4.i256 = add v0 32.i256;
-        v5.i256 = mload v4 i256;
-        v6.i256 = call %address_zero;
-        v7.i256 = eq v5 v6;
-        v8.i256 = is_zero v7;
-        br v8 block1 block2;
+        v5.i256 = add v0 32.i256;
+        v6.i256 = mload v5 i256;
+        v7.i256 = call %address_zero;
+        v8.i256 = eq v6 v7;
+        v9.i256 = is_zero v8;
+        br v9 block1 block2;
 
     block1:
         evm_revert 0.i256 0.i256;
@@ -71,28 +71,28 @@ func public %erc20_set_owner_once(v0.i256, v1.i256, v2.i256) {
 
 func public %erc20_transfer(v0.i256, v1.i256, v2.i256, v3.i256, v4.i256) {
     block0:
-        v5.i256 = call %erc20_balance_of_mem v0 v1;
-        v6.i256 = lt v5 v3;
-        br v6 block1 block2;
+        v6.i256 = call %erc20_balance_of_mem v0 v1;
+        v7.i256 = lt v6 v3;
+        br v7 block1 block2;
 
     block1:
         evm_revert 0.i256 0.i256;
 
     block2:
         v10.i256 = call %erc20_balance_of_mem v0 v2;
-        v14.i256 = sub v5 v3;
-        call %storagemap_k__v__const_salt__u256__set__Address_u256_0__b8b2f68065fe2328 0.i256 v1 v14;
+        v14.i256 = sub v6 v3;
+        call %storagemap_k__v__const_salt__u256__set__Address_u256_0__b8b2f68065fe2328 v1 v14;
         v15.i256 = add v10 v3;
-        call %storagemap_k__v__const_salt__u256__set__Address_u256_0__b8b2f68065fe2328 0.i256 v2 v15;
+        call %storagemap_k__v__const_salt__u256__set__Address_u256_0__b8b2f68065fe2328 v2 v15;
         return;
 }
 
 func public %erc20_transfer_from(v0.i256, v1.i256, v2.i256, v3.i256, v4.i256, v5.i256) {
     block0:
-        v6.i256 = evm_caller;
-        v7.i256 = call %erc20_allowance_mem v0 v1 v6;
-        v8.i256 = lt v7 v3;
-        br v8 block1 block2;
+        v7.i256 = evm_caller;
+        v8.i256 = call %erc20_allowance_mem v0 v1 v7;
+        v9.i256 = lt v8 v3;
+        br v9 block1 block2;
 
     block1:
         evm_revert 0.i256 0.i256;
@@ -102,20 +102,20 @@ func public %erc20_transfer_from(v0.i256, v1.i256, v2.i256, v3.i256, v4.i256, v5
         v16.i256 = evm_malloc 64.i256;
         mstore v16 v1 i256;
         v19.i256 = add v16 32.i256;
-        mstore v19 v6 i256;
-        v21.i256 = sub v7 v3;
-        call %storagemap_k__v__const_salt__u256__set___Address__Address__u256_1__12414c27d5bfff1f 0.i256 v16 v21;
+        mstore v19 v7 i256;
+        v21.i256 = sub v8 v3;
+        call %storagemap_k__v__const_salt__u256__set___Address__Address__u256_1__12414c27d5bfff1f v16 v21;
         return;
 }
 
 func public %erc20_mint(v0.i256, v1.i256, v2.i256, v3.i256, v4.i256) {
     block0:
-        v5.i256 = evm_caller;
-        v7.i256 = add v0 32.i256;
-        v8.i256 = mload v7 i256;
-        v9.i256 = eq v5 v8;
-        v10.i256 = is_zero v9;
-        br v10 block1 block2;
+        v6.i256 = evm_caller;
+        v8.i256 = add v0 32.i256;
+        v9.i256 = mload v8 i256;
+        v10.i256 = eq v6 v9;
+        v11.i256 = is_zero v10;
+        br v11 block1 block2;
 
     block1:
         evm_revert 0.i256 0.i256;
@@ -123,7 +123,7 @@ func public %erc20_mint(v0.i256, v1.i256, v2.i256, v3.i256, v4.i256) {
     block2:
         v14.i256 = call %erc20_balance_of_mem v0 v1;
         v16.i256 = add v14 v2;
-        call %storagemap_k__v__const_salt__u256__set__Address_u256_0__b8b2f68065fe2328 0.i256 v1 v16;
+        call %storagemap_k__v__const_salt__u256__set__Address_u256_0__b8b2f68065fe2328 v1 v16;
         v17.i256 = mload v0 i256;
         v18.i256 = add v17 v2;
         mstore v0 v18 i256;
@@ -132,38 +132,38 @@ func public %erc20_mint(v0.i256, v1.i256, v2.i256, v3.i256, v4.i256) {
 
 func public %do_init__StorPtr_Erc20___2745299687a147d4(v0.i256, v1.i256, v2.i256) {
     block0:
-        v3.i256 = evm_caller;
-        call %erc20_set_owner_once_stor v0 v3 v2;
+        v4.i256 = evm_caller;
+        call %erc20_set_owner_once_stor v0 v4 v2;
         return;
 }
 
 func public %balance_of__StorPtr_Erc20___2745299687a147d4(v0.i256, v1.i256) -> i256 {
     block0:
-        v3.i256 = call %storagemap_k__v__const_salt__u256__get__Address_u256_0__b8b2f68065fe2328 0.i256 v0;
+        v3.i256 = call %storagemap_k__v__const_salt__u256__get__Address_u256_0__b8b2f68065fe2328 v0;
         return v3;
 }
 
 func public %allowance__StorPtr_Erc20___2745299687a147d4(v0.i256, v1.i256, v2.i256) -> i256 {
     block0:
-        v4.i256 = evm_malloc 64.i256;
-        mstore v4 v0 i256;
-        v6.i256 = add v4 32.i256;
-        mstore v6 v1 i256;
-        v8.i256 = call %storagemap_k__v__const_salt__u256__get___Address__Address__u256_1__12414c27d5bfff1f 0.i256 v4;
+        v5.i256 = evm_malloc 64.i256;
+        mstore v5 v0 i256;
+        v7.i256 = add v5 32.i256;
+        mstore v7 v1 i256;
+        v8.i256 = call %storagemap_k__v__const_salt__u256__get___Address__Address__u256_1__12414c27d5bfff1f v5;
         return v8;
 }
 
 func public %transfer__StorPtr_Erc20___2745299687a147d4(v0.i256, v1.i256, v2.i256, v3.i256, v4.i256) -> i256 {
     block0:
-        v5.i256 = evm_caller;
-        call %erc20_transfer_stor v2 v5 v0 v1 v4;
+        v6.i256 = evm_caller;
+        call %erc20_transfer_stor v2 v6 v0 v1 v4;
         return 1.i256;
 }
 
 func public %approve__StorPtr_Erc20___2745299687a147d4(v0.i256, v1.i256, v2.i256, v3.i256) -> i256 {
     block0:
-        v4.i256 = evm_caller;
-        call %erc20_approve_stor v2 v4 v0 v1;
+        v5.i256 = evm_caller;
+        call %erc20_approve_stor v2 v5 v0 v1;
         return 1.i256;
 }
 
@@ -181,7 +181,7 @@ func public %mint__StorPtr_Erc20___2745299687a147d4(v0.i256, v1.i256, v2.i256, v
 
 func public %runtime__StorPtr_Evm___207f35a85ac4062e() {
     block0:
-        v1.i256 = call %stor_ptr__Evm_Erc20__c294a0aeae425afd 0.i256 0.i256;
+        v1.i256 = call %stor_ptr__Evm_Erc20__c294a0aeae425afd 0.i256;
         v2.i256 = evm_calldata_load 0.i256;
         v4.i256 = shr 224.i256 v2;
         jump block11;
@@ -280,24 +280,24 @@ func public %runtime__StorPtr_Evm___207f35a85ac4062e() {
         br v55 block9 block10;
 }
 
-func public %storagemap_k__v__const_salt__u256__get__Address_u256_0__b8b2f68065fe2328(v0.i256, v1.i256) -> i256 {
+func public %storagemap_k__v__const_salt__u256__get__Address_u256_0__b8b2f68065fe2328(v0.i256) -> i256 {
     block0:
-        v3.i256 = call %storagemap_get_word_with_salt__Address__ce8f588742192062 v1 0.i256;
+        v2.i256 = call %storagemap_get_word_with_salt__Address__ce8f588742192062 v0 0.i256;
+        v3.i256 = call %u256_wordrepr_from_word v2;
+        return v3;
+}
+
+func public %storagemap_k__v__const_salt__u256__get___Address__Address__u256_1__12414c27d5bfff1f(v0.i256) -> i256 {
+    block0:
+        v3.i256 = call %storagemap_get_word_with_salt___Address__Address___c32d499da259c78e v0 1.i256;
         v4.i256 = call %u256_wordrepr_from_word v3;
         return v4;
 }
 
-func public %storagemap_k__v__const_salt__u256__get___Address__Address__u256_1__12414c27d5bfff1f(v0.i256, v1.i256) -> i256 {
+func public %storagemap_k__v__const_salt__u256__set___Address__Address__u256_1__12414c27d5bfff1f(v0.i256, v1.i256) {
     block0:
-        v3.i256 = call %storagemap_get_word_with_salt___Address__Address___c32d499da259c78e v1 1.i256;
-        v4.i256 = call %u256_wordrepr_from_word v3;
-        return v4;
-}
-
-func public %storagemap_k__v__const_salt__u256__set___Address__Address__u256_1__12414c27d5bfff1f(v0.i256, v1.i256, v2.i256) {
-    block0:
-        v3.i256 = call %u256_wordrepr_to_word v2;
-        call %storagemap_set_word_with_salt___Address__Address___c32d499da259c78e v1 1.i256 v3;
+        v3.i256 = call %u256_wordrepr_to_word v1;
+        call %storagemap_set_word_with_salt___Address__Address___c32d499da259c78e v0 1.i256 v3;
         return;
 }
 
@@ -308,53 +308,53 @@ func public %address_zero() -> i256 {
 
 func public %erc20_balance_of_mem(v0.i256, v1.i256) -> i256 {
     block0:
-        v3.i256 = call %storagemap_k__v__const_salt__u256__get__Address_u256_0__b8b2f68065fe2328 0.i256 v1;
+        v3.i256 = call %storagemap_k__v__const_salt__u256__get__Address_u256_0__b8b2f68065fe2328 v1;
         return v3;
 }
 
-func public %storagemap_k__v__const_salt__u256__set__Address_u256_0__b8b2f68065fe2328(v0.i256, v1.i256, v2.i256) {
+func public %storagemap_k__v__const_salt__u256__set__Address_u256_0__b8b2f68065fe2328(v0.i256, v1.i256) {
     block0:
-        v3.i256 = call %u256_wordrepr_to_word v2;
-        call %storagemap_set_word_with_salt__Address__ce8f588742192062 v1 0.i256 v3;
+        v3.i256 = call %u256_wordrepr_to_word v1;
+        call %storagemap_set_word_with_salt__Address__ce8f588742192062 v0 0.i256 v3;
         return;
 }
 
 func public %erc20_allowance_mem(v0.i256, v1.i256, v2.i256) -> i256 {
     block0:
-        v4.i256 = evm_malloc 64.i256;
-        mstore v4 v1 i256;
-        v6.i256 = add v4 32.i256;
-        mstore v6 v2 i256;
-        v8.i256 = call %storagemap_k__v__const_salt__u256__get___Address__Address__u256_1__12414c27d5bfff1f 0.i256 v4;
+        v5.i256 = evm_malloc 64.i256;
+        mstore v5 v1 i256;
+        v7.i256 = add v5 32.i256;
+        mstore v7 v2 i256;
+        v8.i256 = call %storagemap_k__v__const_salt__u256__get___Address__Address__u256_1__12414c27d5bfff1f v5;
         return v8;
 }
 
 func public %erc20_transfer_mem(v0.i256, v1.i256, v2.i256, v3.i256, v4.i256) {
     block0:
-        v5.i256 = call %erc20_balance_of_mem v0 v1;
-        v6.i256 = lt v5 v3;
-        br v6 block1 block2;
+        v6.i256 = call %erc20_balance_of_mem v0 v1;
+        v7.i256 = lt v6 v3;
+        br v7 block1 block2;
 
     block1:
         evm_revert 0.i256 0.i256;
 
     block2:
         v10.i256 = call %erc20_balance_of_mem v0 v2;
-        v14.i256 = sub v5 v3;
-        call %storagemap_k__v__const_salt__u256__set__Address_u256_0__b8b2f68065fe2328 0.i256 v1 v14;
+        v14.i256 = sub v6 v3;
+        call %storagemap_k__v__const_salt__u256__set__Address_u256_0__b8b2f68065fe2328 v1 v14;
         v15.i256 = add v10 v3;
-        call %storagemap_k__v__const_salt__u256__set__Address_u256_0__b8b2f68065fe2328 0.i256 v2 v15;
+        call %storagemap_k__v__const_salt__u256__set__Address_u256_0__b8b2f68065fe2328 v2 v15;
         return;
 }
 
 func public %erc20_set_owner_once_stor(v0.i256, v1.i256, v2.i256) {
     block0:
-        v4.i256 = add v0 1.i256;
-        v5.i256 = evm_sload v4;
-        v6.i256 = call %address_zero;
-        v7.i256 = eq v5 v6;
-        v8.i256 = is_zero v7;
-        br v8 block1 block2;
+        v5.i256 = add v0 1.i256;
+        v6.i256 = evm_sload v5;
+        v7.i256 = call %address_zero;
+        v8.i256 = eq v6 v7;
+        v9.i256 = is_zero v8;
+        br v9 block1 block2;
 
     block1:
         evm_revert 0.i256 0.i256;
@@ -367,38 +367,38 @@ func public %erc20_set_owner_once_stor(v0.i256, v1.i256, v2.i256) {
 
 func public %erc20_transfer_stor(v0.i256, v1.i256, v2.i256, v3.i256, v4.i256) {
     block0:
-        v5.i256 = call %erc20_balance_of_stor v0 v1;
-        v6.i256 = lt v5 v3;
-        br v6 block1 block2;
+        v6.i256 = call %erc20_balance_of_stor v0 v1;
+        v7.i256 = lt v6 v3;
+        br v7 block1 block2;
 
     block1:
         evm_revert 0.i256 0.i256;
 
     block2:
         v10.i256 = call %erc20_balance_of_stor v0 v2;
-        v14.i256 = sub v5 v3;
-        call %storagemap_k__v__const_salt__u256__set__Address_u256_0__b8b2f68065fe2328 0.i256 v1 v14;
+        v14.i256 = sub v6 v3;
+        call %storagemap_k__v__const_salt__u256__set__Address_u256_0__b8b2f68065fe2328 v1 v14;
         v15.i256 = add v10 v3;
-        call %storagemap_k__v__const_salt__u256__set__Address_u256_0__b8b2f68065fe2328 0.i256 v2 v15;
+        call %storagemap_k__v__const_salt__u256__set__Address_u256_0__b8b2f68065fe2328 v2 v15;
         return;
 }
 
 func public %erc20_approve_stor(v0.i256, v1.i256, v2.i256, v3.i256) {
     block0:
-        v5.i256 = evm_malloc 64.i256;
-        mstore v5 v1 i256;
-        v7.i256 = add v5 32.i256;
-        mstore v7 v2 i256;
-        call %storagemap_k__v__const_salt__u256__set___Address__Address__u256_1__12414c27d5bfff1f 0.i256 v5 v3;
+        v6.i256 = evm_malloc 64.i256;
+        mstore v6 v1 i256;
+        v8.i256 = add v6 32.i256;
+        mstore v8 v2 i256;
+        call %storagemap_k__v__const_salt__u256__set___Address__Address__u256_1__12414c27d5bfff1f v6 v3;
         return;
 }
 
 func public %erc20_transfer_from_stor(v0.i256, v1.i256, v2.i256, v3.i256, v4.i256, v5.i256) {
     block0:
-        v6.i256 = evm_caller;
-        v7.i256 = call %erc20_allowance_stor v0 v1 v6;
-        v8.i256 = lt v7 v3;
-        br v8 block1 block2;
+        v7.i256 = evm_caller;
+        v8.i256 = call %erc20_allowance_stor v0 v1 v7;
+        v9.i256 = lt v8 v3;
+        br v9 block1 block2;
 
     block1:
         evm_revert 0.i256 0.i256;
@@ -408,20 +408,20 @@ func public %erc20_transfer_from_stor(v0.i256, v1.i256, v2.i256, v3.i256, v4.i25
         v16.i256 = evm_malloc 64.i256;
         mstore v16 v1 i256;
         v19.i256 = add v16 32.i256;
-        mstore v19 v6 i256;
-        v21.i256 = sub v7 v3;
-        call %storagemap_k__v__const_salt__u256__set___Address__Address__u256_1__12414c27d5bfff1f 0.i256 v16 v21;
+        mstore v19 v7 i256;
+        v21.i256 = sub v8 v3;
+        call %storagemap_k__v__const_salt__u256__set___Address__Address__u256_1__12414c27d5bfff1f v16 v21;
         return;
 }
 
 func public %erc20_mint_stor(v0.i256, v1.i256, v2.i256, v3.i256, v4.i256) {
     block0:
-        v5.i256 = evm_caller;
-        v7.i256 = add v0 1.i256;
-        v8.i256 = evm_sload v7;
-        v9.i256 = eq v5 v8;
-        v10.i256 = is_zero v9;
-        br v10 block1 block2;
+        v6.i256 = evm_caller;
+        v8.i256 = add v0 1.i256;
+        v9.i256 = evm_sload v8;
+        v10.i256 = eq v6 v9;
+        v11.i256 = is_zero v10;
+        br v11 block1 block2;
 
     block1:
         evm_revert 0.i256 0.i256;
@@ -429,24 +429,24 @@ func public %erc20_mint_stor(v0.i256, v1.i256, v2.i256, v3.i256, v4.i256) {
     block2:
         v14.i256 = call %erc20_balance_of_stor v0 v1;
         v16.i256 = add v14 v2;
-        call %storagemap_k__v__const_salt__u256__set__Address_u256_0__b8b2f68065fe2328 0.i256 v1 v16;
+        call %storagemap_k__v__const_salt__u256__set__Address_u256_0__b8b2f68065fe2328 v1 v16;
         v17.i256 = evm_sload v0;
         v18.i256 = add v17 v2;
         evm_sstore v0 v18;
         return;
 }
 
-func public %stor_ptr__Evm_Erc20__c294a0aeae425afd(v0.i256, v1.i256) -> i256 {
+func public %stor_ptr__Evm_Erc20__c294a0aeae425afd(v0.i256) -> i256 {
     block0:
-        v2.i256 = call %storptr_t__effectref_from_raw__Erc20__88e369469f2b52ef v1;
+        v2.i256 = call %storptr_t__effectref_from_raw__Erc20__88e369469f2b52ef v0;
         return v2;
 }
 
 func public %storagemap_get_word_with_salt__Address__ce8f588742192062(v0.i256, v1.i256) -> i256 {
     block0:
-        v2.i256 = call %storagemap_storage_slot_with_salt__Address__ce8f588742192062 v0 v1;
-        v3.i256 = evm_sload v2;
-        return v3;
+        v3.i256 = call %storagemap_storage_slot_with_salt__Address__ce8f588742192062 v0 v1;
+        v4.i256 = evm_sload v3;
+        return v4;
 }
 
 func public %u256_wordrepr_from_word(v0.i256) -> i256 {
@@ -456,9 +456,9 @@ func public %u256_wordrepr_from_word(v0.i256) -> i256 {
 
 func public %storagemap_get_word_with_salt___Address__Address___c32d499da259c78e(v0.i256, v1.i256) -> i256 {
     block0:
-        v2.i256 = call %storagemap_storage_slot_with_salt___Address__Address___c32d499da259c78e v0 v1;
-        v3.i256 = evm_sload v2;
-        return v3;
+        v3.i256 = call %storagemap_storage_slot_with_salt___Address__Address___c32d499da259c78e v0 v1;
+        v4.i256 = evm_sload v3;
+        return v4;
 }
 
 func public %u256_wordrepr_to_word(v0.i256) -> i256 {
@@ -468,31 +468,31 @@ func public %u256_wordrepr_to_word(v0.i256) -> i256 {
 
 func public %storagemap_set_word_with_salt___Address__Address___c32d499da259c78e(v0.i256, v1.i256, v2.i256) {
     block0:
-        v3.i256 = call %storagemap_storage_slot_with_salt___Address__Address___c32d499da259c78e v0 v1;
-        evm_sstore v3 v2;
+        v4.i256 = call %storagemap_storage_slot_with_salt___Address__Address___c32d499da259c78e v0 v1;
+        evm_sstore v4 v2;
         return;
 }
 
 func public %storagemap_set_word_with_salt__Address__ce8f588742192062(v0.i256, v1.i256, v2.i256) {
     block0:
-        v3.i256 = call %storagemap_storage_slot_with_salt__Address__ce8f588742192062 v0 v1;
-        evm_sstore v3 v2;
+        v4.i256 = call %storagemap_storage_slot_with_salt__Address__ce8f588742192062 v0 v1;
+        evm_sstore v4 v2;
         return;
 }
 
 func public %erc20_balance_of_stor(v0.i256, v1.i256) -> i256 {
     block0:
-        v3.i256 = call %storagemap_k__v__const_salt__u256__get__Address_u256_0__b8b2f68065fe2328 0.i256 v1;
+        v3.i256 = call %storagemap_k__v__const_salt__u256__get__Address_u256_0__b8b2f68065fe2328 v1;
         return v3;
 }
 
 func public %erc20_allowance_stor(v0.i256, v1.i256, v2.i256) -> i256 {
     block0:
-        v4.i256 = evm_malloc 64.i256;
-        mstore v4 v1 i256;
-        v6.i256 = add v4 32.i256;
-        mstore v6 v2 i256;
-        v8.i256 = call %storagemap_k__v__const_salt__u256__get___Address__Address__u256_1__12414c27d5bfff1f 0.i256 v4;
+        v5.i256 = evm_malloc 64.i256;
+        mstore v5 v1 i256;
+        v7.i256 = add v5 32.i256;
+        mstore v7 v2 i256;
+        v8.i256 = call %storagemap_k__v__const_salt__u256__get___Address__Address__u256_1__12414c27d5bfff1f v5;
         return v8;
 }
 
@@ -503,42 +503,40 @@ func public %storptr_t__effectref_from_raw__Erc20__88e369469f2b52ef(v0.i256) -> 
 
 func public %storagemap_storage_slot_with_salt__Address__ce8f588742192062(v0.i256, v1.i256) -> i256 {
     block0:
-        v3.i256 = mload 64.i256 i256;
-        v4.i256 = call %address_storagekey_write_key v3 v0;
-        v5.i256 = add v3 v4;
+        v4.i256 = call %address_storagekey_write_key 4096.i256 v0;
+        v5.i256 = add 4096.i256 v4;
         mstore v5 v1 i256;
         v7.i256 = add v4 32.i256;
-        v8.i256 = evm_keccak256 v3 v7;
+        v8.i256 = evm_keccak256 4096.i256 v7;
         return v8;
 }
 
 func public %storagemap_storage_slot_with_salt___Address__Address___c32d499da259c78e(v0.i256, v1.i256) -> i256 {
     block0:
-        v3.i256 = mload 64.i256 i256;
-        v4.i256 = call %_a__b__storagekey_write_key__Address_Address__397b9a625a435b6f v3 v0;
-        v5.i256 = add v3 v4;
+        v4.i256 = call %_a__b__storagekey_write_key__Address_Address__397b9a625a435b6f 4096.i256 v0;
+        v5.i256 = add 4096.i256 v4;
         mstore v5 v1 i256;
         v7.i256 = add v4 32.i256;
-        v8.i256 = evm_keccak256 v3 v7;
+        v8.i256 = evm_keccak256 4096.i256 v7;
         return v8;
 }
 
 func public %address_storagekey_write_key(v0.i256, v1.i256) -> i256 {
     block0:
-        v2.i256 = call %u256_storagekey_write_key v0 v1;
-        return v2;
+        v3.i256 = call %u256_storagekey_write_key v0 v1;
+        return v3;
 }
 
 func public %_a__b__storagekey_write_key__Address_Address__397b9a625a435b6f(v0.i256, v1.i256) -> i256 {
     block0:
-        v2.i256 = mload v1 i256;
-        v4.i256 = add v1 32.i256;
-        v5.i256 = mload v4 i256;
-        v6.i256 = call %address_storagekey_write_key v0 v2;
-        v7.i256 = add v0 v6;
-        v8.i256 = call %address_storagekey_write_key v7 v5;
-        v9.i256 = add v6 v8;
-        return v9;
+        v3.i256 = mload v1 i256;
+        v5.i256 = add v1 32.i256;
+        v6.i256 = mload v5 i256;
+        v7.i256 = call %address_storagekey_write_key v0 v3;
+        v8.i256 = add v0 v7;
+        v9.i256 = call %address_storagekey_write_key v8 v6;
+        v10.i256 = add v7 v9;
+        return v10;
 }
 
 func public %u256_storagekey_write_key(v0.i256, v1.i256) -> i256 {

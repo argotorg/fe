@@ -1,0 +1,92 @@
+---
+source: crates/codegen/tests/sonatina_ir.rs
+expression: output
+input_file: crates/codegen/tests/fixtures/code_region.fe
+---
+target = evm-ethereum-osaka
+
+func public %runtime__StorPtr_Evm___207f35a85ac4062e() {
+    block0:
+        v1.i256 = call %read_selector 0.i256;
+        jump block5;
+
+    block1:
+        call %transfer 0.i256;
+        jump block2;
+
+    block2:
+        evm_return 0.i256 0.i256;
+
+    block3:
+        call %balance 0.i256;
+        jump block2;
+
+    block4:
+        jump block2;
+
+    block5:
+        v5.i256 = eq v1 305419896.i256;
+        br v5 block1 block6;
+
+    block6:
+        v6.i256 = eq v1 591751049.i256;
+        br v6 block3 block4;
+}
+
+func public %child_runtime__StorPtr_Evm___207f35a85ac4062e() {
+    block0:
+        evm_calldata_copy 0.i256 0.i256 4.i256;
+        evm_return 0.i256 4.i256;
+}
+
+func public %allocate(v0.i256, v1.i256) -> i256 {
+    block0:
+        v4.i256 = mload 64.i256 i256;
+        v5.i256 = eq v4 0.i256;
+        br v5 block1 block2;
+
+    block1:
+        jump block2;
+
+    block2:
+        v7.i256 = phi (v4 block0) (96.i256 block1);
+        v9.i256 = add v7 v0;
+        mstore 64.i256 v9 i256;
+        return v7;
+}
+
+func public %balance(v0.i256) {
+    block0:
+        evm_return 0.i256 0.i256;
+}
+
+func public %transfer(v0.i256) {
+    block0:
+        evm_return 0.i256 0.i256;
+}
+
+func public %read_selector(v0.i256) -> i256 {
+    block0:
+        v2.i256 = evm_calldata_load 0.i256;
+        v4.i256 = shr 224.i256 v2;
+        return v4;
+}
+
+func public %evm_create_create2_raw(v0.i256, v1.i256, v2.i256, v3.i256) -> i256 {
+    block0:
+        v5.i256 = evm_create2 v0 v1 v2 v3;
+        return v5;
+}
+
+
+object @Contract {
+    section runtime {
+        entry %runtime__StorPtr_Evm___207f35a85ac4062e;
+        include %child_runtime__StorPtr_Evm___207f35a85ac4062e;
+        include %allocate;
+        include %balance;
+        include %transfer;
+        include %read_selector;
+        include %evm_create_create2_raw;
+    }
+}

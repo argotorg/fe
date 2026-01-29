@@ -7,22 +7,22 @@ target = evm-ethereum-osaka
 
 func public %bump__StorPtr_Foo___3698cc3c4b2626e3(v0.i256) {
     block0:
-        v1.i256 = evm_sload v0;
-        v3.i256 = add v1 1.i256;
-        evm_sstore v0 v3;
-        v4.i256 = add v0 1.i256;
-        v5.i256 = evm_sload v4;
-        v7.i256 = add v5 2.i256;
-        v8.i256 = add v0 1.i256;
-        evm_sstore v8 v7;
+        v2.i256 = evm_sload v0;
+        v4.i256 = add v2 1.i256;
+        evm_sstore v0 v4;
+        v5.i256 = add v0 1.i256;
+        v6.i256 = evm_sload v5;
+        v8.i256 = add v6 2.i256;
+        v9.i256 = add v0 1.i256;
+        evm_sstore v9 v8;
         return;
 }
 
 func public %test_effect_ptr_domains(v0.i256, v1.i256) {
     block0:
-        v3.i256 = call %mem_ptr__mem__RawMem_Foo__19292a5189c12f79 v1 256.i256;
-        call %bump__MemPtr_Foo___cdd30998d577b6ea v3;
-        v5.i256 = call %stor_ptr__st__RawStorage_Foo__d44156c896232646 v0 0.i256;
+        v4.i256 = call %mem_ptr__mem__RawMem_Foo__19292a5189c12f79 256.i256;
+        call %bump__MemPtr_Foo___cdd30998d577b6ea v4;
+        v5.i256 = call %stor_ptr__st__RawStorage_Foo__d44156c896232646 0.i256;
         call %bump__StorPtr_Foo___3698cc3c4b2626e3 v5;
         v7.i256 = evm_malloc 64.i256;
         mstore v7 10.i256 i256;
@@ -32,28 +32,28 @@ func public %test_effect_ptr_domains(v0.i256, v1.i256) {
         return;
 }
 
-func public %mem_ptr__mem__RawMem_Foo__19292a5189c12f79(v0.i256, v1.i256) -> i256 {
+func public %mem_ptr__mem__RawMem_Foo__19292a5189c12f79(v0.i256) -> i256 {
     block0:
-        v2.i256 = call %memptr_t__effectref_from_raw__Foo__668f96d7165c93b v1;
+        v2.i256 = call %memptr_t__effectref_from_raw__Foo__668f96d7165c93b v0;
         return v2;
 }
 
 func public %bump__MemPtr_Foo___cdd30998d577b6ea(v0.i256) {
     block0:
-        v1.i256 = mload v0 i256;
-        v3.i256 = add v1 1.i256;
-        mstore v0 v3 i256;
-        v5.i256 = add v0 32.i256;
-        v6.i256 = mload v5 i256;
-        v8.i256 = add v6 2.i256;
-        v9.i256 = add v0 32.i256;
-        mstore v9 v8 i256;
+        v2.i256 = mload v0 i256;
+        v4.i256 = add v2 1.i256;
+        mstore v0 v4 i256;
+        v6.i256 = add v0 32.i256;
+        v7.i256 = mload v6 i256;
+        v9.i256 = add v7 2.i256;
+        v10.i256 = add v0 32.i256;
+        mstore v10 v9 i256;
         return;
 }
 
-func public %stor_ptr__st__RawStorage_Foo__d44156c896232646(v0.i256, v1.i256) -> i256 {
+func public %stor_ptr__st__RawStorage_Foo__d44156c896232646(v0.i256) -> i256 {
     block0:
-        v2.i256 = call %storptr_t__effectref_from_raw__Foo__668f96d7165c93b v1;
+        v2.i256 = call %storptr_t__effectref_from_raw__Foo__668f96d7165c93b v0;
         return v2;
 }
 

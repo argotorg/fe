@@ -7,26 +7,26 @@ target = evm-ethereum-osaka
 
 func public %make_tuple() -> i256 {
     block0:
-        v1.i256 = evm_malloc 40.i256;
-        v3.i64 = trunc 42.i256 i64;
-        v4.i256 = zext v3 i256;
-        mstore v1 v4 i256;
-        v7.i256 = add v1 8.i256;
-        mstore v7 99.i256 i256;
-        return v1;
+        v2.i256 = evm_malloc 40.i256;
+        v4.i64 = trunc 42.i256 i64;
+        v5.i256 = zext v4 i256;
+        mstore v2 v5 i256;
+        v8.i256 = add v2 8.i256;
+        mstore v8 99.i256 i256;
+        return v2;
 }
 
 func public %access_tuple() -> i256 {
     block0:
-        v1.i256 = evm_malloc 96.i256;
-        mstore v1 1.i256 i256;
-        v5.i256 = add v1 32.i256;
-        mstore v5 2.i256 i256;
-        v8.i256 = add v1 64.i256;
-        mstore v8 3.i256 i256;
-        v9.i256 = add v1 32.i256;
-        v10.i256 = mload v9 i256;
-        return v10;
+        v2.i256 = evm_malloc 96.i256;
+        mstore v2 1.i256 i256;
+        v6.i256 = add v2 32.i256;
+        mstore v6 2.i256 i256;
+        v9.i256 = add v2 64.i256;
+        mstore v9 3.i256 i256;
+        v10.i256 = add v2 32.i256;
+        v11.i256 = mload v10 i256;
+        return v11;
 }
 
 func public %__fe_sonatina_entry() {

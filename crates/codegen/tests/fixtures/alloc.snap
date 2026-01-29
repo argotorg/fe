@@ -1,6 +1,5 @@
 ---
 source: crates/codegen/tests/yul.rs
-assertion_line: 42
 expression: output
 input_file: tests/fixtures/alloc.fe
 ---
@@ -16,11 +15,26 @@ function $bump_const() -> ret {
 }
 function $alloc($size) -> ret {
   let v0 := mload(64)
-  let v1 := eq(v0, 0)
-  if v1 {
-    v0 := 128
+  let v1 := mload(128)
+  let v2 := gt(v1, v0)
+  if v2 {
+    v0 := v1
   }
-  mstore(64, add(v0, $size))
-  ret := v0
-  leave
+  let v3 := eq(v0, 0)
+  if v3 {
+    let v4 := msize()
+    v0 := v4
+    let v5 := lt(v0, 8192)
+    if v5 {
+      v0 := 8192
+    }
+    mstore(64, add(v0, $size))
+    ret := v0
+    leave
+  }
+  if iszero(v3) {
+    mstore(64, add(v0, $size))
+    ret := v0
+    leave
+  }
 }

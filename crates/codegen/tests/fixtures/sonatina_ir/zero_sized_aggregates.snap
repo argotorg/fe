@@ -7,10 +7,10 @@ target = evm-ethereum-osaka
 
 func public %tuple_with_empty() -> i256 {
     block0:
-        v2.i256 = evm_malloc 32.i256;
-        mstore v2 5.i256 i256;
-        v3.i256 = mload v2 i256;
-        return v3;
+        v3.i256 = evm_malloc 32.i256;
+        mstore v3 5.i256 i256;
+        v4.i256 = mload v3 i256;
+        return v4;
 }
 
 func public %tuple_only_empty() {
@@ -20,16 +20,16 @@ func public %tuple_only_empty() {
 
 func public %struct_with_empty() -> i256 {
     block0:
-        v2.i256 = evm_malloc 32.i256;
-        mstore v2 7.i256 i256;
-        v3.i256 = mload v2 i256;
-        return v3;
+        v3.i256 = evm_malloc 32.i256;
+        mstore v3 7.i256 i256;
+        v4.i256 = mload v3 i256;
+        return v4;
 }
 
 func public %empty_field_assign() {
     block0:
-        v1.i256 = evm_malloc 32.i256;
-        mstore v1 1.i256 i256;
+        v2.i256 = evm_malloc 32.i256;
+        mstore v2 1.i256 i256;
         return;
 }
 

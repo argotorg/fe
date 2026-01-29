@@ -1,6 +1,5 @@
 ---
 source: crates/codegen/tests/sonatina_ir.rs
-assertion_line: 74
 expression: output
 input_file: crates/codegen/tests/fixtures/nested_struct.fe
 ---
@@ -14,8 +13,8 @@ func public %abi_encode(v0.i256, v1.i256) {
 
 func public %read_inner__StorPtr_Outer___dab28b9da6c3e28(v0.i256) -> i256 {
     block0:
-        v1.i256 = evm_sload v0;
-        return v1;
+        v2.i256 = evm_sload v0;
+        return v2;
 }
 
 func public %write_inner__StorPtr_Outer___dab28b9da6c3e28(v0.i256, v1.i256) {
@@ -31,7 +30,7 @@ func public %mem_read(v0.i256) -> i256 {
 
 func public %runtime__StorPtr_Evm___207f35a85ac4062e() {
     block0:
-        v1.i256 = call %stor_ptr__Evm_Outer__31089a952466fa6f 0.i256 0.i256;
+        v1.i256 = call %stor_ptr__Evm_Outer__31089a952466fa6f 0.i256;
         v2.i256 = evm_calldata_load 0.i256;
         v4.i256 = shr 224.i256 v2;
         jump block5;
@@ -69,9 +68,9 @@ func public %runtime__StorPtr_Evm___207f35a85ac4062e() {
         br v18 block3 block4;
 }
 
-func public %stor_ptr__Evm_Outer__31089a952466fa6f(v0.i256, v1.i256) -> i256 {
+func public %stor_ptr__Evm_Outer__31089a952466fa6f(v0.i256) -> i256 {
     block0:
-        v2.i256 = call %storptr_t__effectref_from_raw__Outer__ffb1d3cc5087d727 v1;
+        v2.i256 = call %storptr_t__effectref_from_raw__Outer__ffb1d3cc5087d727 v0;
         return v2;
 }
 

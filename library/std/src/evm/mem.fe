@@ -1,7 +1,10 @@
-use ingot::evm::ops::{mload, mstore}
+use ingot::evm::ops::{mload, mstore, msize}
 
 const FREE_MEMORY_PTR: u256 = 0x40
-const INITIAL_FREE_MEMORY: u256 = 0x80
+// Sonatina reserves this slot for its dynamic stack pointer.
+const DYN_SP_PTR: u256 = 0x80
+// Keep the heap well above any backend-reserved memory (e.g. Sonatina's static spill area).
+const MIN_FREE_MEMORY: u256 = 0x2000
 
 /// Allocates `size` bytes from the linear memory buffer and returns the start pointer.
 ///
@@ -9,8 +12,17 @@ const INITIAL_FREE_MEMORY: u256 = 0x80
 /// the first time it runs (matching Solidity’s layout).
 pub fn alloc(size: u256) -> u256 {
     let mut ptr = mload(FREE_MEMORY_PTR)
+    let sp = mload(DYN_SP_PTR)
+    if sp > ptr {
+        ptr = sp
+    }
     if ptr == 0 {
-        ptr = INITIAL_FREE_MEMORY
+        // Use `msize()` so we don't clobber backend-reserved memory slots (e.g. Sonatina's
+        // stack/frame metadata).
+        ptr = msize()
+        if ptr < MIN_FREE_MEMORY {
+            ptr = MIN_FREE_MEMORY
+        }
     }
 
     mstore(FREE_MEMORY_PTR, ptr + size)

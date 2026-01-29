@@ -36,13 +36,28 @@ object "NewtypeStorageFieldMutMethodCall" {
     }
     function $alloc($size) -> ret {
       let v0 := mload(64)
-      let v1 := eq(v0, 0)
-      if v1 {
-        v0 := 128
+      let v1 := mload(128)
+      let v2 := gt(v1, v0)
+      if v2 {
+        v0 := v1
       }
-      mstore(64, add(v0, $size))
-      ret := v0
-      leave
+      let v3 := eq(v0, 0)
+      if v3 {
+        let v4 := msize()
+        v0 := v4
+        let v5 := lt(v0, 8192)
+        if v5 {
+          v0 := 8192
+        }
+        mstore(64, add(v0, $size))
+        ret := v0
+        leave
+      }
+      if iszero(v3) {
+        mstore(64, add(v0, $size))
+        ret := v0
+        leave
+      }
     }
     function $cursor_i__new__MemoryBytes__b48f82585f3ed728($input) -> ret {
       let v0 := mload(0x40)
@@ -72,12 +87,12 @@ object "NewtypeStorageFieldMutMethodCall" {
       leave
     }
     function $init_field__Evm_Wrap__321e432d5b6fc018($self, $slot) -> ret {
-      let v0 := $evm_contracthost_field__Wrap__f30e372ad4ad7329($self, $slot)
+      let v0 := $evm_contracthost_field__Wrap__f30e372ad4ad7329(0, $slot)
       ret := v0
       leave
     }
     function $init_field__Evm_u256__5d0807bcb3704261($self, $slot) -> ret {
-      let v0 := $evm_contracthost_field__u256__3271ca15373d4483($self, $slot)
+      let v0 := $evm_contracthost_field__u256__3271ca15373d4483(0, $slot)
       ret := v0
       leave
     }
@@ -146,13 +161,28 @@ object "NewtypeStorageFieldMutMethodCall" {
       }
       function $alloc($size) -> ret {
         let v0 := mload(64)
-        let v1 := eq(v0, 0)
-        if v1 {
-          v0 := 128
+        let v1 := mload(128)
+        let v2 := gt(v1, v0)
+        if v2 {
+          v0 := v1
         }
-        mstore(64, add(v0, $size))
-        ret := v0
-        leave
+        let v3 := eq(v0, 0)
+        if v3 {
+          let v4 := msize()
+          v0 := v4
+          let v5 := lt(v0, 8192)
+          if v5 {
+            v0 := 8192
+          }
+          mstore(64, add(v0, $size))
+          ret := v0
+          leave
+        }
+        if iszero(v3) {
+          mstore(64, add(v0, $size))
+          ret := v0
+          leave
+        }
       }
       function $bump_decode_decode__SolDecoder_CallData___c1e4510fd444b966($d) {
         leave
@@ -220,20 +250,20 @@ object "NewtypeStorageFieldMutMethodCall" {
         let v2 := $solencoder_abiencoder_finish(v0)
         let v3 := mload(v2)
         let v4 := mload(add(v2, 32))
-        $evm_contracthost_return_bytes($self, v3, v4)
+        $evm_contracthost_return_bytes(0, v3, v4)
       }
       function $runtime_decoder__Evm_Sol__2533f5c49b57a682($self) -> ret {
-        let v0 := $evm_contracthost_input($self)
+        let v0 := $evm_contracthost_input(0)
         let v1 := $sol_abi_decoder_with_base__CallData__b9ab8dc8a4b2f9e(v0, 4)
         ret := v1
         leave
       }
       function $runtime_selector__Evm_Sol__2533f5c49b57a682($self) -> ret {
-        let v0 := $evm_contracthost_input($self)
+        let v0 := $evm_contracthost_input(0)
         let v1 := $calldata_byteinput_len(v0)
         let v2 := lt(v1, 4)
         if v2 {
-          $evm_contracthost_abort($self)
+          $evm_contracthost_abort(0)
         }
         let v3 := $calldata_byteinput_word_at(v0, 0)
         let v4 := $sol_abi_selector_from_prefix(v3)

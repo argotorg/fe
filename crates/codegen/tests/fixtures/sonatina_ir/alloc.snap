@@ -1,6 +1,5 @@
 ---
 source: crates/codegen/tests/sonatina_ir.rs
-assertion_line: 65
 expression: output
 input_file: crates/codegen/tests/fixtures/alloc.fe
 ---
@@ -8,30 +7,49 @@ target = evm-ethereum-osaka
 
 func public %bump(v0.i256) -> i256 {
     block0:
-        v1.i256 = call %alloc v0;
-        return v1;
+        v2.i256 = evm_malloc v0;
+        return v2;
 }
 
 func public %bump_const() -> i256 {
     block0:
-        v1.i256 = call %alloc 64.i256;
-        return v1;
+        v2.i256 = evm_malloc 64.i256;
+        return v2;
 }
 
 func public %alloc(v0.i256) -> i256 {
     block0:
-        v2.i256 = mload 64.i256 i256;
-        v4.i256 = eq v2 0.i256;
-        br v4 block1 block2;
+        v3.i256 = mload 64.i256 i256;
+        v5.i256 = mload 128.i256 i256;
+        v6.i256 = gt v5 v3;
+        br v6 block1 block2;
 
     block1:
         jump block2;
 
     block2:
-        v6.i256 = phi (v2 block0) (128.i256 block1);
-        v8.i256 = add v6 v0;
-        mstore 64.i256 v8 i256;
-        return v6;
+        v8.i256 = phi (v3 block0) (v5 block1);
+        v9.i256 = eq v8 0.i256;
+        br v9 block3 block4;
+
+    block3:
+        v10.i256 = evm_msize;
+        v12.i256 = lt v10 8192.i256;
+        br v12 block5 block6;
+
+    block4:
+        v14.i256 = phi (v0 block2) (v0 block6);
+        v13.i256 = phi (v8 block2) (v16 block6);
+        v15.i256 = add v13 v14;
+        mstore 64.i256 v15 i256;
+        return v13;
+
+    block5:
+        jump block6;
+
+    block6:
+        v16.i256 = phi (v10 block3) (8192.i256 block5);
+        jump block4;
 }
 
 func public %__fe_sonatina_entry() {

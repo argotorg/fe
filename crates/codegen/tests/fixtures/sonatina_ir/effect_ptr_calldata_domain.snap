@@ -1,6 +1,5 @@
 ---
 source: crates/codegen/tests/sonatina_ir.rs
-assertion_line: 65
 expression: output
 input_file: crates/codegen/tests/fixtures/effect_ptr_calldata_domain.fe
 ---
@@ -8,8 +7,8 @@ target = evm-ethereum-osaka
 
 func public %read_x__StorPtr_u256___64779554cfbf0358(v0.i256) -> i256 {
     block0:
-        v1.i256 = evm_sload v0;
-        return v1;
+        v2.i256 = evm_sload v0;
+        return v2;
 }
 
 func public %test_calldata_ptr_domain() {
@@ -20,8 +19,8 @@ func public %test_calldata_ptr_domain() {
 
 func public %read_x__CalldataPtr_u256___1e20dc3e834a8f96(v0.i256) -> i256 {
     block0:
-        v1.i256 = evm_calldata_load v0;
-        return v1;
+        v2.i256 = evm_calldata_load v0;
+        return v2;
 }
 
 func public %__fe_sonatina_entry() {
