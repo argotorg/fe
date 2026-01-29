@@ -7,17 +7,17 @@ target = evm-ethereum-osaka
 
 func public %point_area(v0.i256) -> i256 {
     block0:
-        v1.i256 = mload v0 i256;
-        v3.i256 = add v0 32.i256;
-        v4.i256 = mload v3 i256;
-        v5.i256 = mul v1 v4;
-        return v5;
+        v2.i256 = mload v0 i256;
+        v4.i256 = add v0 32.i256;
+        v5.i256 = mload v4 i256;
+        v6.i256 = mul v2 v5;
+        return v6;
 }
 
 func public %square_area(v0.i256) -> i256 {
     block0:
-        v1.i256 = mul v0 v0;
-        return v1;
+        v2.i256 = mul v0 v0;
+        return v2;
 }
 
 func public %abi_encode(v0.i256, v1.i256) {
@@ -69,11 +69,11 @@ func public %dispatch__StorPtr_Evm___207f35a85ac4062e() {
 
 func public %point_area_mem(v0.i256) -> i256 {
     block0:
-        v1.i256 = mload v0 i256;
-        v3.i256 = add v0 32.i256;
-        v4.i256 = mload v3 i256;
-        v5.i256 = mul v1 v4;
-        return v5;
+        v2.i256 = mload v0 i256;
+        v4.i256 = add v0 32.i256;
+        v5.i256 = mload v4 i256;
+        v6.i256 = mul v2 v5;
+        return v6;
 }
 
 

@@ -19,7 +19,12 @@ use revm::{
     state::AccountInfo,
 };
 use solc_runner::{ContractBytecode, YulcError, compile_single_contract};
-use std::{collections::HashMap, fmt, path::Path};
+use std::{
+    collections::HashMap,
+    fmt,
+    io::Write,
+    path::{Path, PathBuf},
+};
 use thiserror::Error;
 use url::Url;
 
@@ -222,6 +227,34 @@ fn should_trace_evm() -> bool {
         .unwrap_or(false)
 }
 
+fn trace_evm_keep_steps() -> usize {
+    std::env::var("FE_TRACE_EVM_KEEP")
+        .ok()
+        .and_then(|v| v.parse::<usize>().ok())
+        .filter(|n| *n > 0)
+        .unwrap_or(200)
+}
+
+fn trace_evm_stack_n() -> usize {
+    std::env::var("FE_TRACE_EVM_STACK_N")
+        .ok()
+        .and_then(|v| v.parse::<usize>().ok())
+        .unwrap_or(0)
+}
+
+fn trace_evm_out_path() -> Option<PathBuf> {
+    std::env::var_os("FE_TRACE_EVM_OUT").map(PathBuf::from)
+}
+
+fn trace_evm_write_stderr(has_out_file: bool) -> bool {
+    if !has_out_file {
+        return true;
+    }
+    std::env::var("FE_TRACE_EVM_STDERR")
+        .map(|v| v != "0" && !v.is_empty())
+        .unwrap_or(false)
+}
+
 fn trace_tx(evm: &MainnetEvm<MainnetContext<InMemoryDB>>, tx: TxEnv) {
     #[derive(Clone, Debug)]
     struct Step {
@@ -229,19 +262,22 @@ fn trace_tx(evm: &MainnetEvm<MainnetContext<InMemoryDB>>, tx: TxEnv) {
         opcode: u8,
         stack_len: usize,
         gas_remaining: u64,
+        stack_top: Vec<String>,
     }
 
     #[derive(Clone, Debug)]
     struct RingTrace {
         keep: usize,
+        stack_n: usize,
         steps: Vec<Step>,
         total_steps: u64,
     }
 
     impl RingTrace {
-        fn new(keep: usize) -> Self {
+        fn new(keep: usize, stack_n: usize) -> Self {
             Self {
                 keep,
+                stack_n,
                 steps: Vec::with_capacity(keep),
                 total_steps: 0,
             }
@@ -263,10 +299,21 @@ fn trace_tx(evm: &MainnetEvm<MainnetContext<InMemoryDB>>, tx: TxEnv) {
                 self.total_steps
             ));
             for s in &self.steps {
-                out.push_str(&format!(
-                    "pc={:04} op=0x{:02x} stack={} gas_rem={}\n",
-                    s.pc, s.opcode, s.stack_len, s.gas_remaining
-                ));
+                if self.stack_n > 0 {
+                    out.push_str(&format!(
+                        "pc={:04} op=0x{:02x} stack={} gas_rem={} top={}\n",
+                        s.pc,
+                        s.opcode,
+                        s.stack_len,
+                        s.gas_remaining,
+                        s.stack_top.join(",")
+                    ));
+                } else {
+                    out.push_str(&format!(
+                        "pc={:04} op=0x{:02x} stack={} gas_rem={}\n",
+                        s.pc, s.opcode, s.stack_len, s.gas_remaining
+                    ));
+                }
             }
             out
         }
@@ -274,11 +321,25 @@ fn trace_tx(evm: &MainnetEvm<MainnetContext<InMemoryDB>>, tx: TxEnv) {
 
     impl<CTX, INTR: revm::interpreter::InterpreterTypes> revm::Inspector<CTX, INTR> for RingTrace {
         fn step(&mut self, interp: &mut revm::interpreter::Interpreter<INTR>, _context: &mut CTX) {
+            let stack_top = if self.stack_n == 0 {
+                Vec::new()
+            } else {
+                interp
+                    .stack
+                    .data()
+                    .iter()
+                    .rev()
+                    .take(self.stack_n)
+                    .rev()
+                    .map(|v| format!("{v:#x}"))
+                    .collect()
+            };
             self.push(Step {
                 pc: interp.bytecode.pc(),
                 opcode: interp.bytecode.opcode(),
                 stack_len: interp.stack.len(),
                 gas_remaining: interp.gas.remaining(),
+                stack_top,
             });
         }
     }
@@ -287,13 +348,34 @@ fn trace_tx(evm: &MainnetEvm<MainnetContext<InMemoryDB>>, tx: TxEnv) {
 
     // Clone the EVM (including DB state) for tracing so we don't disturb the caller's state.
     let ctx = evm.ctx.clone();
-    let mut trace_evm = ctx.build_mainnet_with_inspector(RingTrace::new(200));
+    let mut trace_evm = ctx.build_mainnet_with_inspector(RingTrace::new(
+        trace_evm_keep_steps(),
+        trace_evm_stack_n(),
+    ));
 
     let result = trace_evm.inspect_tx_commit(tx);
-    eprintln!(
-        "{}\ntrace result: {result:?}\n",
-        trace_evm.inspector.format()
-    );
+    let formatted = format!("{}\ntrace result: {result:?}\n", trace_evm.inspector.format());
+    let out_path = trace_evm_out_path();
+    if let Some(path) = out_path {
+        match std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&path)
+            .and_then(|mut f| f.write_all(formatted.as_bytes()))
+        {
+            Ok(()) => {
+                if trace_evm_write_stderr(true) {
+                    eprintln!("{formatted}");
+                }
+            }
+            Err(err) => {
+                eprintln!("FE_TRACE_EVM_OUT: failed to write `{}`: {err}", path.display());
+                eprintln!("{formatted}");
+            }
+        }
+    } else {
+        eprintln!("{formatted}");
+    }
 }
 
 /// Formats raw EVM logs into debug strings for display.

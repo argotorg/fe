@@ -1,6 +1,5 @@
 ---
 source: crates/codegen/tests/sonatina_ir.rs
-assertion_line: 65
 expression: output
 input_file: crates/codegen/tests/fixtures/math_ops.fe
 ---
@@ -8,11 +7,11 @@ target = evm-ethereum-osaka
 
 func public %math_ops() -> i256 {
     block0:
-        v2.i256 = sub 10.i256 3.i256;
-        v4.i256 = mul v2 2.i256;
-        v6.i256 = evm_udiv v4 7.i256;
-        v7.i256 = evm_umod v6 3.i256;
-        return v7;
+        v3.i256 = sub 10.i256 3.i256;
+        v5.i256 = mul v3 2.i256;
+        v7.i256 = evm_udiv v5 7.i256;
+        v8.i256 = evm_umod v7 3.i256;
+        return v8;
 }
 
 func public %__fe_sonatina_entry() {

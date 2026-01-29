@@ -1,6 +1,5 @@
 ---
 source: crates/codegen/tests/sonatina_ir.rs
-assertion_line: 74
 expression: output
 input_file: crates/codegen/tests/fixtures/match_newtype_nested.fe
 ---
@@ -27,8 +26,8 @@ func public %match_newtype_nested(v0.i256) -> i256 {
 
 func public %f() -> i256 {
     block0:
-        v1.i256 = call %match_newtype_nested 10.i256;
-        return v1;
+        v2.i256 = call %match_newtype_nested 10.i256;
+        return v2;
 }
 
 func public %__fe_sonatina_entry() {

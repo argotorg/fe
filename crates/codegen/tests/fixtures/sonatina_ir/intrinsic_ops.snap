@@ -1,6 +1,5 @@
 ---
 source: crates/codegen/tests/sonatina_ir.rs
-assertion_line: 65
 expression: output
 input_file: crates/codegen/tests/fixtures/intrinsic_ops.fe
 ---
@@ -8,8 +7,8 @@ target = evm-ethereum-osaka
 
 func public %load_word(v0.i256, v1.i256) -> i256 {
     block0:
-        v2.i256 = mload v0 i256;
-        return v2;
+        v3.i256 = mload v0 i256;
+        return v3;
 }
 
 func public %store_word(v0.i256, v1.i256, v2.i256) {
@@ -26,8 +25,8 @@ func public %store_byte(v0.i256, v1.i256, v2.i256) {
 
 func public %load_slot(v0.i256, v1.i256) -> i256 {
     block0:
-        v2.i256 = evm_sload v0;
-        return v2;
+        v3.i256 = evm_sload v0;
+        return v3;
 }
 
 func public %store_slot(v0.i256, v1.i256, v2.i256) {
@@ -38,8 +37,8 @@ func public %store_slot(v0.i256, v1.i256, v2.i256) {
 
 func public %load_calldata(v0.i256, v1.i256) -> i256 {
     block0:
-        v2.i256 = evm_calldata_load v0;
-        return v2;
+        v3.i256 = evm_calldata_load v0;
+        return v3;
 }
 
 func public %finish(v0.i256, v1.i256, v2.i256) {
