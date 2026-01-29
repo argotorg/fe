@@ -1,5 +1,6 @@
 //! Expression and value lowering helpers shared across the Yul emitter.
 
+use common::ingot::IngotKind;
 use hir::analysis::ty::simplified_pattern::ConstructorKind;
 use hir::analysis::ty::ty_def::{PrimTy, TyBase, TyData, TyId};
 use hir::hir_def::{
@@ -188,6 +189,20 @@ impl<'db> FunctionEmitter<'db> {
         call: &CallOrigin<'_>,
         state: &BlockState,
     ) -> Result<String, YulError> {
+        if let Some(target) = call.hir_target.as_ref()
+            && matches!(
+                target.callable_def.ingot(self.db).kind(self.db),
+                IngotKind::Core
+            )
+            && target.callable_def.name(self.db).is_some_and(|name| {
+                matches!(name.data(self.db).as_str(), "__as_bytes" | "__keccak256")
+            })
+        {
+            return Err(YulError::Unsupported(
+                "core::keccak requires a compile-time constant value".into(),
+            ));
+        }
+
         if call
             .hir_target
             .as_ref()
