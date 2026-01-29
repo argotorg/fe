@@ -1,0 +1,5 @@
+struct Hash<const H: u256> {}
+
+fn f() {
+    let a: Hash<{ core::keccak((1 as u256, 2 as u256)) }>
+}
