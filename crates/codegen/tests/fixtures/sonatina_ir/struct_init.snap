@@ -7,13 +7,13 @@ target = evm-ethereum-osaka
 
 func public %make_dummy() -> i256 {
     block0:
-        v1.i256 = evm_malloc 40.i256;
-        v3.i64 = trunc 42.i256 i64;
-        v4.i256 = zext v3 i256;
-        mstore v1 v4 i256;
-        v7.i256 = add v1 8.i256;
-        mstore v7 99.i256 i256;
-        return v1;
+        v2.i256 = evm_malloc 40.i256;
+        v4.i64 = trunc 42.i256 i64;
+        v5.i256 = zext v4 i256;
+        mstore v2 v5 i256;
+        v8.i256 = add v2 8.i256;
+        mstore v8 99.i256 i256;
+        return v2;
 }
 
 func public %__fe_sonatina_entry() {

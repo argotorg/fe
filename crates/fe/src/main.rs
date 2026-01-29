@@ -15,6 +15,8 @@ use fmt as fe_fmt;
 use similar::{ChangeTag, TextDiff};
 use walkdir::WalkDir;
 
+use crate::test::TestDebugOptions;
+
 #[derive(Debug, Clone, Parser)]
 #[command(version, about, long_about = None)]
 pub struct Options {
@@ -65,6 +67,30 @@ pub enum Command {
         /// Show event logs from test execution.
         #[arg(long)]
         show_logs: bool,
+        /// Backend to use for codegen (yul or sonatina).
+        #[arg(long, default_value = "yul")]
+        backend: String,
+        /// Trace executed EVM opcodes while running tests.
+        #[arg(long)]
+        trace_evm: bool,
+        /// How many EVM steps to keep in the trace ring buffer.
+        #[arg(long, default_value_t = 200)]
+        trace_evm_keep: usize,
+        /// How many stack items to print per EVM step in traces.
+        #[arg(long, default_value_t = 16)]
+        trace_evm_stack_n: usize,
+        /// Dump the Sonatina runtime symbol table (function offsets/sizes).
+        #[arg(long)]
+        sonatina_symtab: bool,
+        /// Emit Sonatina stackify traces (internal call/stack planning).
+        #[arg(long)]
+        sonatina_stackify_trace: bool,
+        /// Substring filter for Sonatina stackify traces (function name contains this).
+        #[arg(long)]
+        sonatina_stackify_filter: Option<String>,
+        /// Directory to write debug outputs (traces, symtabs) into.
+        #[arg(long)]
+        debug_dir: Option<Utf8PathBuf>,
     },
     /// Create a new ingot or workspace.
     New {
@@ -121,8 +147,25 @@ pub fn run(opts: &Options) {
             path,
             filter,
             show_logs,
+            backend,
+            trace_evm,
+            trace_evm_keep,
+            trace_evm_stack_n,
+            sonatina_symtab,
+            sonatina_stackify_trace,
+            sonatina_stackify_filter,
+            debug_dir,
         } => {
-            test::run_tests(path, filter.as_deref(), *show_logs);
+            let debug = TestDebugOptions {
+                trace_evm: *trace_evm,
+                trace_evm_keep: *trace_evm_keep,
+                trace_evm_stack_n: *trace_evm_stack_n,
+                sonatina_symtab: *sonatina_symtab,
+                sonatina_stackify_trace: *sonatina_stackify_trace,
+                sonatina_stackify_filter: sonatina_stackify_filter.clone(),
+                debug_dir: debug_dir.clone(),
+            };
+            test::run_tests(path, filter.as_deref(), *show_logs, backend, &debug);
         }
         Command::New {
             path,

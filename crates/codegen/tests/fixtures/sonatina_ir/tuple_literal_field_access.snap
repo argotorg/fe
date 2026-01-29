@@ -7,44 +7,44 @@ target = evm-ethereum-osaka
 
 func public %tuple_literal_field_access() -> i256 {
     block0:
-        v3.i256 = evm_malloc 64.i256;
-        mstore v3 1.i256 i256;
-        v5.i256 = add v3 32.i256;
-        mstore v5 2.i256 i256;
-        v6.i256 = add v3 32.i256;
-        v7.i256 = mload v6 i256;
-        return v7;
+        v4.i256 = evm_malloc 64.i256;
+        mstore v4 1.i256 i256;
+        v6.i256 = add v4 32.i256;
+        mstore v6 2.i256 i256;
+        v7.i256 = add v4 32.i256;
+        v8.i256 = mload v7 i256;
+        return v8;
 }
 
 func public %tuple_literal_nested_access() -> i256 {
     block0:
-        v4.i256 = evm_malloc 64.i256;
-        mstore v4 2.i256 i256;
-        v6.i256 = add v4 32.i256;
-        mstore v6 3.i256 i256;
-        v8.i256 = evm_malloc 96.i256;
-        mstore v8 1.i256 i256;
-        v9.i256 = mload v4 i256;
-        v10.i256 = add v8 32.i256;
-        mstore v10 v9 i256;
-        v11.i256 = add v4 32.i256;
-        v12.i256 = mload v11 i256;
-        v13.i256 = add v8 64.i256;
-        mstore v13 v12 i256;
-        v14.i256 = add v8 32.i256;
-        v15.i256 = mload v14 i256;
-        return v15;
+        v5.i256 = evm_malloc 64.i256;
+        mstore v5 2.i256 i256;
+        v7.i256 = add v5 32.i256;
+        mstore v7 3.i256 i256;
+        v9.i256 = evm_malloc 96.i256;
+        mstore v9 1.i256 i256;
+        v10.i256 = mload v5 i256;
+        v11.i256 = add v9 32.i256;
+        mstore v11 v10 i256;
+        v12.i256 = add v5 32.i256;
+        v13.i256 = mload v12 i256;
+        v14.i256 = add v9 64.i256;
+        mstore v14 v13 i256;
+        v15.i256 = add v9 32.i256;
+        v16.i256 = mload v15 i256;
+        return v16;
 }
 
 func public %tuple_literal_struct_chain() -> i256 {
     block0:
-        v3.i256 = evm_malloc 64.i256;
-        mstore v3 1.i256 i256;
-        v5.i256 = add v3 32.i256;
-        mstore v5 2.i256 i256;
-        v6.i256 = add v3 32.i256;
-        v7.i256 = mload v6 i256;
-        return v7;
+        v4.i256 = evm_malloc 64.i256;
+        mstore v4 1.i256 i256;
+        v6.i256 = add v4 32.i256;
+        mstore v6 2.i256 i256;
+        v7.i256 = add v4 32.i256;
+        v8.i256 = mload v7 i256;
+        return v8;
 }
 
 func public %__fe_sonatina_entry() {

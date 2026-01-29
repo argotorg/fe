@@ -4,7 +4,7 @@
 //! executes them using revm.
 
 use camino::Utf8PathBuf;
-use codegen::{ExpectedRevert, TestMetadata, emit_test_module_yul};
+use codegen::{TestMetadata, emit_test_module_sonatina, emit_test_module_yul};
 use colored::Colorize;
 use common::InputDb;
 use contract_harness::{ExecutionOptions, RuntimeInstance};
@@ -27,22 +27,123 @@ struct TestOutcome {
     logs: Vec<String>,
 }
 
+#[derive(Debug, Clone, Default)]
+pub struct TestDebugOptions {
+    pub trace_evm: bool,
+    pub trace_evm_keep: usize,
+    pub trace_evm_stack_n: usize,
+    pub sonatina_symtab: bool,
+    pub sonatina_stackify_trace: bool,
+    pub sonatina_stackify_filter: Option<String>,
+    pub debug_dir: Option<Utf8PathBuf>,
+}
+
+impl TestDebugOptions {
+    fn set_env<K: AsRef<std::ffi::OsStr>, V: AsRef<std::ffi::OsStr>>(key: K, value: V) {
+        unsafe { std::env::set_var(key, value) }
+    }
+
+    fn configure_process_env(&self) {
+        if self.trace_evm {
+            Self::set_env("FE_TRACE_EVM", "1");
+            Self::set_env("FE_TRACE_EVM_KEEP", self.trace_evm_keep.to_string());
+            Self::set_env("FE_TRACE_EVM_STACK_N", self.trace_evm_stack_n.to_string());
+        }
+
+        if self.sonatina_symtab {
+            Self::set_env("FE_SONATINA_DUMP_SYMTAB", "1");
+        }
+
+        if self.sonatina_stackify_trace {
+            Self::set_env("SONATINA_STACKIFY_TRACE", "1");
+            if let Some(filter) = &self.sonatina_stackify_filter {
+                Self::set_env("SONATINA_STACKIFY_TRACE_FUNC", filter);
+            }
+        }
+
+        let Some(dir) = &self.debug_dir else {
+            return;
+        };
+
+        if let Err(err) = std::fs::create_dir_all(dir) {
+            eprintln!("Error: failed to create debug dir `{dir}`: {err}");
+            std::process::exit(1);
+        }
+
+        if self.trace_evm {
+            // When writing traces to files, suppress stderr spam by default.
+            Self::set_env("FE_TRACE_EVM_STDERR", "0");
+        }
+
+        if self.sonatina_symtab {
+            let path = dir.join("sonatina_symtab.txt");
+            truncate_file(&path);
+            Self::set_env("FE_SONATINA_DUMP_SYMTAB_OUT", path.as_str());
+        }
+
+        if self.sonatina_stackify_trace {
+            let path = dir.join("sonatina_stackify_trace.txt");
+            truncate_file(&path);
+            Self::set_env("SONATINA_STACKIFY_TRACE_OUT", path.as_str());
+        }
+    }
+
+    fn configure_per_test_env(&self, test_name: &str) {
+        let Some(dir) = &self.debug_dir else {
+            return;
+        };
+        if !self.trace_evm {
+            return;
+        }
+
+        let mut file = sanitize_filename(test_name);
+        if file.is_empty() {
+            file = "test".to_string();
+        }
+        let path = dir.join(format!("{file}.evm_trace.txt"));
+        truncate_file(&path);
+        Self::set_env("FE_TRACE_EVM_OUT", path.as_str());
+    }
+}
+
+fn truncate_file(path: &Utf8PathBuf) {
+    if let Err(err) = std::fs::write(path, "") {
+        eprintln!("Error: failed to truncate `{path}`: {err}");
+        std::process::exit(1);
+    }
+}
+
+fn sanitize_filename(component: &str) -> String {
+    component
+        .chars()
+        .map(|ch| if ch.is_ascii_alphanumeric() { ch } else { '_' })
+        .collect()
+}
+
 /// Run tests in the given path.
 ///
 /// # Arguments
 /// * `path` - Path to a .fe file or directory containing an ingot
 /// * `filter` - Optional filter pattern for test names
 /// * `show_logs` - Whether to show event logs from test execution
+/// * `backend` - Codegen backend for test artifacts ("yul" or "sonatina")
 ///
 /// Returns nothing; exits the process on invalid input or test failures.
-pub fn run_tests(path: &Utf8PathBuf, filter: Option<&str>, show_logs: bool) {
+pub fn run_tests(
+    path: &Utf8PathBuf,
+    filter: Option<&str>,
+    show_logs: bool,
+    backend: &str,
+    debug: &TestDebugOptions,
+) {
+    debug.configure_process_env();
     let mut db = DriverDataBase::default();
 
     // Determine if we're dealing with a single file or an ingot directory
     let test_results = if path.is_file() && path.extension() == Some("fe") {
-        run_tests_single_file(&mut db, path, filter, show_logs)
+        run_tests_single_file(&mut db, path, filter, show_logs, backend, debug)
     } else if path.is_dir() {
-        run_tests_ingot(&mut db, path, filter, show_logs)
+        run_tests_ingot(&mut db, path, filter, show_logs, backend, debug)
     } else {
         eprintln!("Error: Path must be either a .fe file or a directory containing fe.toml");
         std::process::exit(1);
@@ -70,6 +171,8 @@ fn run_tests_single_file(
     file_path: &Utf8PathBuf,
     filter: Option<&str>,
     show_logs: bool,
+    backend: &str,
+    debug: &TestDebugOptions,
 ) -> Vec<TestResult> {
     // Create a file URL for the single .fe file
     let file_url = match Url::from_file_path(file_path.canonicalize_utf8().unwrap()) {
@@ -110,7 +213,7 @@ fn run_tests_single_file(
     }
 
     // Discover and run tests
-    discover_and_run_tests(db, top_mod, filter, show_logs)
+    discover_and_run_tests(db, top_mod, filter, show_logs, backend, debug)
 }
 
 /// Runs tests in an ingot directory (containing `fe.toml`).
@@ -126,6 +229,8 @@ fn run_tests_ingot(
     dir_path: &Utf8PathBuf,
     filter: Option<&str>,
     show_logs: bool,
+    backend: &str,
+    debug: &TestDebugOptions,
 ) -> Vec<TestResult> {
     let canonical_path = match dir_path.canonicalize_utf8() {
         Ok(path) => path,
@@ -161,7 +266,7 @@ fn run_tests_ingot(
     }
 
     let root_mod = ingot.root_mod(db);
-    discover_and_run_tests(db, root_mod, filter, show_logs)
+    discover_and_run_tests(db, root_mod, filter, show_logs, backend, debug)
 }
 
 /// Discovers `#[test]` functions, compiles them, and executes each one.
@@ -177,11 +282,27 @@ fn discover_and_run_tests(
     top_mod: TopLevelMod<'_>,
     filter: Option<&str>,
     show_logs: bool,
+    backend: &str,
+    debug: &TestDebugOptions,
 ) -> Vec<TestResult> {
-    let output = match emit_test_module_yul(db, top_mod) {
-        Ok(output) => output,
-        Err(err) => {
-            eprintln!("Failed to emit test Yul: {err}");
+    let backend = backend.to_lowercase();
+    let output = match backend.as_str() {
+        "yul" => match emit_test_module_yul(db, top_mod) {
+            Ok(output) => output,
+            Err(err) => {
+                eprintln!("Failed to emit test Yul: {err}");
+                std::process::exit(1);
+            }
+        },
+        "sonatina" => match emit_test_module_sonatina(db, top_mod) {
+            Ok(output) => output,
+            Err(err) => {
+                eprintln!("Failed to emit test Sonatina bytecode: {err}");
+                std::process::exit(1);
+            }
+        },
+        other => {
+            eprintln!("Error: unknown backend `{other}` (expected 'yul' or 'sonatina')");
             std::process::exit(1);
         }
     };
@@ -206,8 +327,10 @@ fn discover_and_run_tests(
         // Print test name
         print!("test {} ... ", case.display_name);
 
+        debug.configure_per_test_env(&case.display_name);
+
         // Compile and run the test
-        let outcome = compile_and_run_test(case, show_logs);
+        let outcome = compile_and_run_test(case, show_logs, backend.as_str());
 
         if outcome.result.passed {
             println!("{}", "ok".green());
@@ -240,9 +363,10 @@ fn discover_and_run_tests(
 ///
 /// * `case` - Test metadata describing the Yul object and parameters.
 /// * `show_logs` - Whether to capture EVM logs for the test run.
+/// * `backend` - Backend selection ("yul" or "sonatina").
 ///
 /// Returns the test outcome (result + logs).
-fn compile_and_run_test(case: &TestMetadata, show_logs: bool) -> TestOutcome {
+fn compile_and_run_test(case: &TestMetadata, show_logs: bool, backend: &str) -> TestOutcome {
     if case.value_param_count > 0 {
         return TestOutcome {
             result: TestResult {
@@ -271,7 +395,27 @@ fn compile_and_run_test(case: &TestMetadata, show_logs: bool) -> TestOutcome {
         };
     }
 
-    // Compile to bytecode using solc
+    if backend == "sonatina" {
+        if case.bytecode.is_empty() {
+            return TestOutcome {
+                result: TestResult {
+                    name: case.display_name.clone(),
+                    passed: false,
+                    error_message: Some(format!(
+                        "missing test bytecode for `{}`",
+                        case.display_name
+                    )),
+                },
+                logs: Vec::new(),
+            };
+        }
+
+        let bytecode_hex = hex::encode(&case.bytecode);
+        let (result, logs) = execute_test(&case.display_name, &bytecode_hex, show_logs);
+        return TestOutcome { result, logs };
+    }
+
+    // Default backend: compile Yul to bytecode using solc.
     if case.yul.trim().is_empty() {
         return TestOutcome {
             result: TestResult {
@@ -298,32 +442,20 @@ fn compile_and_run_test(case: &TestMetadata, show_logs: bool) -> TestOutcome {
     };
 
     // Execute the test bytecode in revm
-    let (result, logs) = execute_test(
-        &case.display_name,
-        &bytecode,
-        show_logs,
-        case.expected_revert.as_ref(),
-    );
+    let (result, logs) = execute_test(&case.display_name, &bytecode, show_logs);
     TestOutcome { result, logs }
 }
 
 /// Deploys and executes compiled test bytecode in revm.
 ///
 /// The test passes if the function returns normally, fails if it reverts.
-/// When `expected_revert` is set, the logic is inverted: the test passes if it reverts.
 ///
 /// * `name` - Display name used for reporting.
 /// * `bytecode_hex` - Hex-encoded init bytecode for the test object.
 /// * `show_logs` - Whether to execute with log collection enabled.
-/// * `expected_revert` - If set, the test is expected to revert.
 ///
 /// Returns the test result and any emitted logs.
-fn execute_test(
-    name: &str,
-    bytecode_hex: &str,
-    show_logs: bool,
-    expected_revert: Option<&ExpectedRevert>,
-) -> (TestResult, Vec<String>) {
+fn execute_test(name: &str, bytecode_hex: &str, show_logs: bool) -> (TestResult, Vec<String>) {
     // Deploy the test contract
     let mut instance = match RuntimeInstance::deploy(bytecode_hex) {
         Ok(instance) => instance,
@@ -349,9 +481,8 @@ fn execute_test(
         instance.call_raw(&[], options).map(|_| Vec::new())
     };
 
-    match (call_result, expected_revert) {
-        // Normal test: execution succeeded
-        (Ok(logs), None) => (
+    match call_result {
+        Ok(logs) => (
             TestResult {
                 name: name.to_string(),
                 passed: true,
@@ -359,8 +490,7 @@ fn execute_test(
             },
             logs,
         ),
-        // Normal test: execution reverted (failure)
-        (Err(err), None) => (
+        Err(err) => (
             TestResult {
                 name: name.to_string(),
                 passed: false,
@@ -368,38 +498,6 @@ fn execute_test(
             },
             Vec::new(),
         ),
-        // Expected revert: execution succeeded (failure - should have reverted)
-        (Ok(_), Some(_)) => (
-            TestResult {
-                name: name.to_string(),
-                passed: false,
-                error_message: Some("Expected test to revert, but it succeeded".to_string()),
-            },
-            Vec::new(),
-        ),
-        // Expected revert: execution reverted (success)
-        (Err(contract_harness::HarnessError::Revert(_)), Some(ExpectedRevert::Any)) => (
-            TestResult {
-                name: name.to_string(),
-                passed: true,
-                error_message: None,
-            },
-            Vec::new(),
-        ),
-        // Expected revert: execution failed for a different reason (failure)
-        (Err(err), Some(ExpectedRevert::Any)) => (
-            TestResult {
-                name: name.to_string(),
-                passed: false,
-                error_message: Some(format!(
-                    "Expected test to revert, but it failed with: {}",
-                    format_harness_error(err)
-                )),
-            },
-            Vec::new(),
-        ),
-        // Future: match specific revert data
-        // (Err(HarnessError::Revert(data)), Some(ExpectedRevert::ExactData(expected))) => { ... }
     }
 }
 

@@ -7,28 +7,28 @@ target = evm-ethereum-osaka
 
 func public %bit_ops(v0.i256, v1.i256) -> i256 {
     block0:
-        v2.i256 = and v0 v1;
-        v3.i256 = or v0 v1;
-        v4.i256 = xor v0 v1;
-        v6.i256 = shl 8.i256 v0;
-        v8.i256 = shr 2.i256 v0;
-        v10.i256 = evm_malloc 160.i256;
-        mstore v10 v2 i256;
-        v12.i256 = add v10 32.i256;
-        mstore v12 v3 i256;
-        v14.i256 = add v10 64.i256;
-        mstore v14 v4 i256;
-        v16.i256 = add v10 96.i256;
-        mstore v16 v6 i256;
-        v18.i256 = add v10 128.i256;
-        mstore v18 v8 i256;
-        return v10;
+        v3.i256 = and v0 v1;
+        v4.i256 = or v0 v1;
+        v5.i256 = xor v0 v1;
+        v7.i256 = shl 8.i256 v0;
+        v9.i256 = shr 2.i256 v0;
+        v11.i256 = evm_malloc 160.i256;
+        mstore v11 v3 i256;
+        v13.i256 = add v11 32.i256;
+        mstore v13 v4 i256;
+        v15.i256 = add v11 64.i256;
+        mstore v15 v5 i256;
+        v17.i256 = add v11 96.i256;
+        mstore v17 v7 i256;
+        v19.i256 = add v11 128.i256;
+        mstore v19 v9 i256;
+        return v11;
 }
 
 func public %pow_op(v0.i256, v1.i256) -> i256 {
     block0:
-        v2.i256 = evm_exp v0 v1;
-        return v2;
+        v3.i256 = evm_exp v0 v1;
+        return v3;
 }
 
 func public %__fe_sonatina_entry() {

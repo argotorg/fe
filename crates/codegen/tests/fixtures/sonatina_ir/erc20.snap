@@ -7,45 +7,45 @@ target = evm-ethereum-osaka
 
 func public %transfer__StorPtr_TokenStore___6cde5b1e4cc29186(v0.i256, v1.i256, v2.i256, v3.i256, v4.i256) {
     block0:
-        v5.i256 = call %address_zero;
-        v6.i256 = eq v0 v5;
-        v7.i256 = is_zero v6;
-        call %assert v7;
-        v8.i256 = call %address_zero;
-        v9.i256 = eq v1 v8;
-        v10.i256 = is_zero v9;
-        call %assert v10;
-        v12.i256 = call %storagemap_k__v__const_salt__u256__get__Address_u256_0__b8b2f68065fe2328 0.i256 v0;
+        v6.i256 = call %address_zero;
+        v7.i256 = eq v0 v6;
+        v8.i256 = is_zero v7;
+        call %assert v8;
+        v9.i256 = call %address_zero;
+        v10.i256 = eq v1 v9;
+        v11.i256 = is_zero v10;
+        call %assert v11;
+        v12.i256 = call %storagemap_k__v__const_salt__u256__get__Address_u256_0__b8b2f68065fe2328 v0;
         v13.i256 = lt v12 v2;
         v14.i256 = is_zero v13;
         call %assert v14;
         v15.i256 = sub v12 v2;
-        call %storagemap_k__v__const_salt__u256__set__Address_u256_0__b8b2f68065fe2328 0.i256 v0 v15;
-        v16.i256 = call %storagemap_k__v__const_salt__u256__get__Address_u256_0__b8b2f68065fe2328 0.i256 v1;
+        call %storagemap_k__v__const_salt__u256__set__Address_u256_0__b8b2f68065fe2328 v0 v15;
+        v16.i256 = call %storagemap_k__v__const_salt__u256__get__Address_u256_0__b8b2f68065fe2328 v1;
         v17.i256 = add v16 v2;
-        call %storagemap_k__v__const_salt__u256__set__Address_u256_0__b8b2f68065fe2328 0.i256 v1 v17;
+        call %storagemap_k__v__const_salt__u256__set__Address_u256_0__b8b2f68065fe2328 v1 v17;
         v19.i256 = evm_malloc 96.i256;
         mstore v19 v0 i256;
         v21.i256 = add v19 32.i256;
         mstore v21 v1 i256;
         v23.i256 = add v19 64.i256;
         mstore v23 v2 i256;
-        call %emit__log__Log_TransferEvent__41b584f23318b0be v4 v19;
+        call %emit__log__Log_TransferEvent__41b584f23318b0be v19;
         return;
 }
 
 func public %mint__StorPtr_TokenStore___6cde5b1e4cc29186(v0.i256, v1.i256, v2.i256, v3.i256) {
     block0:
-        v4.i256 = call %address_zero;
-        v5.i256 = eq v0 v4;
-        v6.i256 = is_zero v5;
-        call %assert v6;
-        v7.i256 = evm_sload v2;
-        v8.i256 = add v7 v1;
-        evm_sstore v2 v8;
-        v10.i256 = call %storagemap_k__v__const_salt__u256__get__Address_u256_0__b8b2f68065fe2328 0.i256 v0;
+        v5.i256 = call %address_zero;
+        v6.i256 = eq v0 v5;
+        v7.i256 = is_zero v6;
+        call %assert v7;
+        v8.i256 = evm_sload v2;
+        v9.i256 = add v8 v1;
+        evm_sstore v2 v9;
+        v10.i256 = call %storagemap_k__v__const_salt__u256__get__Address_u256_0__b8b2f68065fe2328 v0;
         v11.i256 = add v10 v1;
-        call %storagemap_k__v__const_salt__u256__set__Address_u256_0__b8b2f68065fe2328 0.i256 v0 v11;
+        call %storagemap_k__v__const_salt__u256__set__Address_u256_0__b8b2f68065fe2328 v0 v11;
         v12.i256 = call %address_zero;
         v14.i256 = evm_malloc 96.i256;
         mstore v14 v12 i256;
@@ -53,22 +53,22 @@ func public %mint__StorPtr_TokenStore___6cde5b1e4cc29186(v0.i256, v1.i256, v2.i2
         mstore v16 v0 i256;
         v18.i256 = add v14 64.i256;
         mstore v18 v1 i256;
-        call %emit__log__Log_TransferEvent__41b584f23318b0be v3 v14;
+        call %emit__log__Log_TransferEvent__41b584f23318b0be v14;
         return;
 }
 
 func public %burn__StorPtr_TokenStore___6cde5b1e4cc29186(v0.i256, v1.i256, v2.i256, v3.i256) {
     block0:
-        v4.i256 = call %address_zero;
-        v5.i256 = eq v0 v4;
-        v6.i256 = is_zero v5;
-        call %assert v6;
-        v8.i256 = call %storagemap_k__v__const_salt__u256__get__Address_u256_0__b8b2f68065fe2328 0.i256 v0;
+        v5.i256 = call %address_zero;
+        v6.i256 = eq v0 v5;
+        v7.i256 = is_zero v6;
+        call %assert v7;
+        v8.i256 = call %storagemap_k__v__const_salt__u256__get__Address_u256_0__b8b2f68065fe2328 v0;
         v9.i256 = lt v8 v1;
         v10.i256 = is_zero v9;
         call %assert v10;
         v11.i256 = sub v8 v1;
-        call %storagemap_k__v__const_salt__u256__set__Address_u256_0__b8b2f68065fe2328 0.i256 v0 v11;
+        call %storagemap_k__v__const_salt__u256__set__Address_u256_0__b8b2f68065fe2328 v0 v11;
         v12.i256 = evm_sload v2;
         v13.i256 = sub v12 v1;
         evm_sstore v2 v13;
@@ -79,42 +79,42 @@ func public %burn__StorPtr_TokenStore___6cde5b1e4cc29186(v0.i256, v1.i256, v2.i2
         mstore v18 v14 i256;
         v20.i256 = add v16 64.i256;
         mstore v20 v1 i256;
-        call %emit__log__Log_TransferEvent__41b584f23318b0be v3 v16;
+        call %emit__log__Log_TransferEvent__41b584f23318b0be v16;
         return;
 }
 
 func public %approve__StorPtr_TokenStore___6cde5b1e4cc29186(v0.i256, v1.i256, v2.i256, v3.i256, v4.i256) {
     block0:
-        v5.i256 = call %address_zero;
-        v6.i256 = eq v0 v5;
-        v7.i256 = is_zero v6;
-        call %assert v7;
-        v8.i256 = call %address_zero;
-        v9.i256 = eq v1 v8;
-        v10.i256 = is_zero v9;
-        call %assert v10;
-        v12.i256 = evm_malloc 64.i256;
-        mstore v12 v0 i256;
-        v14.i256 = add v12 32.i256;
-        mstore v14 v1 i256;
-        call %storagemap_k__v__const_salt__u256__set___Address__Address__u256_1__12414c27d5bfff1f 0.i256 v12 v2;
+        v6.i256 = call %address_zero;
+        v7.i256 = eq v0 v6;
+        v8.i256 = is_zero v7;
+        call %assert v8;
+        v9.i256 = call %address_zero;
+        v10.i256 = eq v1 v9;
+        v11.i256 = is_zero v10;
+        call %assert v11;
+        v13.i256 = evm_malloc 64.i256;
+        mstore v13 v0 i256;
+        v15.i256 = add v13 32.i256;
+        mstore v15 v1 i256;
+        call %storagemap_k__v__const_salt__u256__set___Address__Address__u256_1__12414c27d5bfff1f v13 v2;
         v17.i256 = evm_malloc 96.i256;
         mstore v17 v0 i256;
         v18.i256 = add v17 32.i256;
         mstore v18 v1 i256;
         v19.i256 = add v17 64.i256;
         mstore v19 v2 i256;
-        call %emit__log__Log_ApprovalEvent__bbf50d88fed22fda v4 v17;
+        call %emit__log__Log_ApprovalEvent__bbf50d88fed22fda v17;
         return;
 }
 
 func public %spend_allowance__StorPtr_TokenStore___6cde5b1e4cc29186(v0.i256, v1.i256, v2.i256, v3.i256) {
     block0:
-        v5.i256 = evm_malloc 64.i256;
-        mstore v5 v0 i256;
-        v7.i256 = add v5 32.i256;
-        mstore v7 v1 i256;
-        v9.i256 = call %storagemap_k__v__const_salt__u256__get___Address__Address__u256_1__12414c27d5bfff1f 0.i256 v5;
+        v6.i256 = evm_malloc 64.i256;
+        mstore v6 v0 i256;
+        v8.i256 = add v6 32.i256;
+        mstore v8 v1 i256;
+        v9.i256 = call %storagemap_k__v__const_salt__u256__get___Address__Address__u256_1__12414c27d5bfff1f v6;
         v10.i256 = lt v9 v2;
         v11.i256 = is_zero v10;
         call %assert v11;
@@ -123,284 +123,284 @@ func public %spend_allowance__StorPtr_TokenStore___6cde5b1e4cc29186(v0.i256, v1.
         v13.i256 = add v12 32.i256;
         mstore v13 v1 i256;
         v14.i256 = sub v9 v2;
-        call %storagemap_k__v__const_salt__u256__set___Address__Address__u256_1__12414c27d5bfff1f 0.i256 v12 v14;
+        call %storagemap_k__v__const_salt__u256__set___Address__Address__u256_1__12414c27d5bfff1f v12 v14;
         return;
 }
 
-func public %accesscontrol_has_role(v0.i256, v1.i256, v2.i256) -> i256 {
+func public %accesscontrol_has_role(v0.i256, v1.i256) -> i256 {
     block0:
         v4.i256 = evm_malloc 64.i256;
-        mstore v4 v1 i256;
+        mstore v4 v0 i256;
         v6.i256 = add v4 32.i256;
-        mstore v6 v2 i256;
-        v8.i256 = call %storagemap_k__v__const_salt__u256__get___u256__Address__bool_2__74418d210da55cc0 0.i256 v4;
-        return v8;
+        mstore v6 v1 i256;
+        v7.i256 = call %storagemap_k__v__const_salt__u256__get___u256__Address__bool_2__74418d210da55cc0 v4;
+        return v7;
 }
 
-func public %accesscontrol_require(v0.i256, v1.i256, v2.i256) {
+func public %accesscontrol_require(v0.i256, v1.i256) {
     block0:
         v3.i256 = evm_caller;
         v5.i256 = evm_malloc 64.i256;
-        mstore v5 v1 i256;
+        mstore v5 v0 i256;
         v7.i256 = add v5 32.i256;
         mstore v7 v3 i256;
-        v9.i256 = call %storagemap_k__v__const_salt__u256__get___u256__Address__bool_2__74418d210da55cc0 0.i256 v5;
-        v11.i256 = eq v9 1.i256;
-        call %assert v11;
+        v8.i256 = call %storagemap_k__v__const_salt__u256__get___u256__Address__bool_2__74418d210da55cc0 v5;
+        v10.i256 = eq v8 1.i256;
+        call %assert v10;
         return;
 }
 
-func public %accesscontrol_grant(v0.i256, v1.i256, v2.i256) {
+func public %accesscontrol_grant(v0.i256, v1.i256) {
     block0:
         v4.i256 = evm_malloc 64.i256;
-        mstore v4 v1 i256;
+        mstore v4 v0 i256;
         v6.i256 = add v4 32.i256;
-        mstore v6 v2 i256;
-        call %storagemap_k__v__const_salt__u256__set___u256__Address__bool_2__74418d210da55cc0 0.i256 v4 1.i256;
+        mstore v6 v1 i256;
+        call %storagemap_k__v__const_salt__u256__set___u256__Address__bool_2__74418d210da55cc0 v4 1.i256;
         return;
 }
 
-func public %accesscontrol_revoke(v0.i256, v1.i256, v2.i256) {
+func public %accesscontrol_revoke(v0.i256, v1.i256) {
     block0:
         v4.i256 = evm_malloc 64.i256;
-        mstore v4 v1 i256;
+        mstore v4 v0 i256;
         v6.i256 = add v4 32.i256;
-        mstore v6 v2 i256;
-        call %storagemap_k__v__const_salt__u256__set___u256__Address__bool_2__74418d210da55cc0 0.i256 v4 0.i256;
+        mstore v6 v1 i256;
+        call %storagemap_k__v__const_salt__u256__set___u256__Address__bool_2__74418d210da55cc0 v4 0.i256;
         return;
 }
 
 func public %__CoolCoin_recv_0_0(v0.i256, v1.i256, v2.i256, v3.i256) -> i256 {
     block0:
-        v4.i256 = mload v0 i256;
-        v6.i256 = add v0 32.i256;
-        v7.i256 = mload v6 i256;
-        v8.i256 = evm_caller;
-        call %transfer__StorPtr_TokenStore___6cde5b1e4cc29186 v8 v4 v7 v2 v3;
+        v5.i256 = mload v0 i256;
+        v7.i256 = add v0 32.i256;
+        v8.i256 = mload v7 i256;
+        v9.i256 = evm_caller;
+        call %transfer__StorPtr_TokenStore___6cde5b1e4cc29186 v9 v5 v8 v2 v3;
         return 1.i256;
 }
 
 func public %__CoolCoin_recv_0_1(v0.i256, v1.i256, v2.i256, v3.i256) -> i256 {
     block0:
-        v4.i256 = mload v0 i256;
-        v6.i256 = add v0 32.i256;
-        v7.i256 = mload v6 i256;
-        v8.i256 = evm_caller;
-        call %approve__StorPtr_TokenStore___6cde5b1e4cc29186 v8 v4 v7 v2 v3;
+        v5.i256 = mload v0 i256;
+        v7.i256 = add v0 32.i256;
+        v8.i256 = mload v7 i256;
+        v9.i256 = evm_caller;
+        call %approve__StorPtr_TokenStore___6cde5b1e4cc29186 v9 v5 v8 v2 v3;
         return 1.i256;
 }
 
 func public %__CoolCoin_recv_0_2(v0.i256, v1.i256, v2.i256, v3.i256) -> i256 {
     block0:
-        v4.i256 = mload v0 i256;
-        v6.i256 = add v0 32.i256;
-        v7.i256 = mload v6 i256;
-        v9.i256 = add v0 64.i256;
-        v10.i256 = mload v9 i256;
-        v11.i256 = evm_caller;
-        call %spend_allowance__StorPtr_TokenStore___6cde5b1e4cc29186 v4 v11 v10 v2;
-        call %transfer__StorPtr_TokenStore___6cde5b1e4cc29186 v4 v7 v10 v2 v3;
+        v5.i256 = mload v0 i256;
+        v7.i256 = add v0 32.i256;
+        v8.i256 = mload v7 i256;
+        v10.i256 = add v0 64.i256;
+        v11.i256 = mload v10 i256;
+        v12.i256 = evm_caller;
+        call %spend_allowance__StorPtr_TokenStore___6cde5b1e4cc29186 v5 v12 v11 v2;
+        call %transfer__StorPtr_TokenStore___6cde5b1e4cc29186 v5 v8 v11 v2 v3;
         return 1.i256;
 }
 
 func public %__CoolCoin_recv_0_3(v0.i256, v1.i256) -> i256 {
     block0:
-        v3.i256 = call %storagemap_k__v__const_salt__u256__get__Address_u256_0__b8b2f68065fe2328 0.i256 v0;
+        v3.i256 = call %storagemap_k__v__const_salt__u256__get__Address_u256_0__b8b2f68065fe2328 v0;
         return v3;
 }
 
 func public %__CoolCoin_recv_0_4(v0.i256, v1.i256) -> i256 {
     block0:
-        v2.i256 = mload v0 i256;
-        v4.i256 = add v0 32.i256;
-        v5.i256 = mload v4 i256;
-        v7.i256 = evm_malloc 64.i256;
-        mstore v7 v2 i256;
-        v8.i256 = add v7 32.i256;
-        mstore v8 v5 i256;
-        v10.i256 = call %storagemap_k__v__const_salt__u256__get___Address__Address__u256_1__12414c27d5bfff1f 0.i256 v7;
+        v3.i256 = mload v0 i256;
+        v5.i256 = add v0 32.i256;
+        v6.i256 = mload v5 i256;
+        v8.i256 = evm_malloc 64.i256;
+        mstore v8 v3 i256;
+        v9.i256 = add v8 32.i256;
+        mstore v9 v6 i256;
+        v10.i256 = call %storagemap_k__v__const_salt__u256__get___Address__Address__u256_1__12414c27d5bfff1f v8;
         return v10;
 }
 
-func public %__CoolCoin_recv_0_5(v0.i256, v1.i256) -> i256 {
+func public %__CoolCoin_recv_0_5(v0.i256) -> i256 {
     block0:
-        v2.i256 = evm_sload v1;
+        v2.i256 = evm_sload v0;
         return v2;
 }
 
-func public %__CoolCoin_recv_0_6(v0.i256) -> i256 {
+func public %__CoolCoin_recv_0_6() -> i256 {
     block0:
         return 4859225033734580590.i256;
 }
 
-func public %__CoolCoin_recv_0_7(v0.i256) -> i256 {
+func public %__CoolCoin_recv_0_7() -> i256 {
     block0:
         return 1129271116.i256;
 }
 
-func public %__CoolCoin_recv_0_8(v0.i256) -> i256 {
+func public %__CoolCoin_recv_0_8() -> i256 {
     block0:
         return 18.i256;
 }
 
 func public %__CoolCoin_recv_1_0(v0.i256, v1.i256, v2.i256, v3.i256, v4.i256) -> i256 {
     block0:
-        v5.i256 = mload v0 i256;
-        v7.i256 = add v0 32.i256;
-        v8.i256 = mload v7 i256;
-        call %accesscontrol_require v4 1.i256 v1;
-        call %mint__StorPtr_TokenStore___6cde5b1e4cc29186 v5 v8 v2 v3;
+        v6.i256 = mload v0 i256;
+        v8.i256 = add v0 32.i256;
+        v9.i256 = mload v8 i256;
+        call %accesscontrol_require 1.i256 v1;
+        call %mint__StorPtr_TokenStore___6cde5b1e4cc29186 v6 v9 v2 v3;
         return 1.i256;
 }
 
 func public %__CoolCoin_recv_1_1(v0.i256, v1.i256, v2.i256, v3.i256) -> i256 {
     block0:
-        v4.i256 = evm_caller;
-        call %burn__StorPtr_TokenStore___6cde5b1e4cc29186 v4 v0 v2 v3;
+        v5.i256 = evm_caller;
+        call %burn__StorPtr_TokenStore___6cde5b1e4cc29186 v5 v0 v2 v3;
         return 1.i256;
 }
 
 func public %__CoolCoin_recv_1_2(v0.i256, v1.i256, v2.i256, v3.i256) -> i256 {
     block0:
-        v4.i256 = mload v0 i256;
-        v6.i256 = add v0 32.i256;
-        v7.i256 = mload v6 i256;
-        v8.i256 = evm_caller;
-        call %spend_allowance__StorPtr_TokenStore___6cde5b1e4cc29186 v4 v8 v7 v2;
-        call %burn__StorPtr_TokenStore___6cde5b1e4cc29186 v4 v7 v2 v3;
+        v5.i256 = mload v0 i256;
+        v7.i256 = add v0 32.i256;
+        v8.i256 = mload v7 i256;
+        v9.i256 = evm_caller;
+        call %spend_allowance__StorPtr_TokenStore___6cde5b1e4cc29186 v5 v9 v8 v2;
+        call %burn__StorPtr_TokenStore___6cde5b1e4cc29186 v5 v8 v2 v3;
         return 1.i256;
 }
 
 func public %__CoolCoin_recv_1_3(v0.i256, v1.i256, v2.i256, v3.i256) -> i256 {
     block0:
-        v4.i256 = mload v0 i256;
-        v6.i256 = add v0 32.i256;
-        v7.i256 = mload v6 i256;
-        v8.i256 = evm_caller;
-        v10.i256 = evm_malloc 64.i256;
-        mstore v10 v8 i256;
-        v11.i256 = add v10 32.i256;
-        mstore v11 v4 i256;
-        v13.i256 = call %storagemap_k__v__const_salt__u256__get___Address__Address__u256_1__12414c27d5bfff1f 0.i256 v10;
-        v14.i256 = add v13 v7;
-        call %approve__StorPtr_TokenStore___6cde5b1e4cc29186 v8 v4 v14 v2 v3;
+        v5.i256 = mload v0 i256;
+        v7.i256 = add v0 32.i256;
+        v8.i256 = mload v7 i256;
+        v9.i256 = evm_caller;
+        v11.i256 = evm_malloc 64.i256;
+        mstore v11 v9 i256;
+        v12.i256 = add v11 32.i256;
+        mstore v12 v5 i256;
+        v13.i256 = call %storagemap_k__v__const_salt__u256__get___Address__Address__u256_1__12414c27d5bfff1f v11;
+        v14.i256 = add v13 v8;
+        call %approve__StorPtr_TokenStore___6cde5b1e4cc29186 v9 v5 v14 v2 v3;
         return 1.i256;
 }
 
 func public %__CoolCoin_recv_1_4(v0.i256, v1.i256, v2.i256, v3.i256) -> i256 {
     block0:
-        v4.i256 = mload v0 i256;
-        v6.i256 = add v0 32.i256;
-        v7.i256 = mload v6 i256;
-        v8.i256 = evm_caller;
-        v10.i256 = evm_malloc 64.i256;
-        mstore v10 v8 i256;
-        v11.i256 = add v10 32.i256;
-        mstore v11 v4 i256;
-        v13.i256 = call %storagemap_k__v__const_salt__u256__get___Address__Address__u256_1__12414c27d5bfff1f 0.i256 v10;
-        v14.i256 = lt v13 v7;
+        v5.i256 = mload v0 i256;
+        v7.i256 = add v0 32.i256;
+        v8.i256 = mload v7 i256;
+        v9.i256 = evm_caller;
+        v11.i256 = evm_malloc 64.i256;
+        mstore v11 v9 i256;
+        v12.i256 = add v11 32.i256;
+        mstore v12 v5 i256;
+        v13.i256 = call %storagemap_k__v__const_salt__u256__get___Address__Address__u256_1__12414c27d5bfff1f v11;
+        v14.i256 = lt v13 v8;
         v15.i256 = is_zero v14;
         call %assert v15;
-        v16.i256 = sub v13 v7;
-        call %approve__StorPtr_TokenStore___6cde5b1e4cc29186 v8 v4 v16 v2 v3;
+        v16.i256 = sub v13 v8;
+        call %approve__StorPtr_TokenStore___6cde5b1e4cc29186 v9 v5 v16 v2 v3;
         return 1.i256;
 }
 
 func public %__CoolCoin_runtime() {
     block0:
-        v1.i256 = call %evm_contracthost_field__TokenStore__cf27701b626eb0c2 0.i256 0.i256;
-        v3.i256 = call %evm_contracthost_field__AccessControl__56bc16b6aa1a86f2 0.i256 1.i256;
-        v4.i256 = call %runtime_selector__Evm_Sol__2533f5c49b57a682 0.i256;
-        v5.i256 = call %runtime_decoder__Evm_Sol__2533f5c49b57a682 0.i256;
+        v1.i256 = call %evm_contracthost_field__TokenStore__cf27701b626eb0c2 0.i256;
+        v3.i256 = call %evm_contracthost_field__AccessControl__56bc16b6aa1a86f2 1.i256;
+        v4.i256 = call %runtime_selector__Evm_Sol__2533f5c49b57a682;
+        v5.i256 = call %runtime_decoder__Evm_Sol__2533f5c49b57a682;
         v20.i256 = eq v4 2835717307.i256;
         br v20 block2 block16;
 
     block1:
-        call %evm_contracthost_abort 0.i256;
+        call %evm_contracthost_abort;
         evm_invalid;
 
     block2:
         v35.i256 = call %transfer_decode_decode__SolDecoder_CallData___c1e4510fd444b966 v5;
         v37.i256 = call %__CoolCoin_recv_0_0 v35 0.i256 v1 0.i256;
-        call %return_value__Evm_Sol_bool__261f3a707fad09c8 0.i256 v37;
+        call %return_value__Evm_Sol_bool__261f3a707fad09c8 v37;
         evm_invalid;
 
     block3:
         v39.i256 = call %approve_decode_decode__SolDecoder_CallData___c1e4510fd444b966 v5;
         v41.i256 = call %__CoolCoin_recv_0_1 v39 0.i256 v1 0.i256;
-        call %return_value__Evm_Sol_bool__261f3a707fad09c8 0.i256 v41;
+        call %return_value__Evm_Sol_bool__261f3a707fad09c8 v41;
         evm_invalid;
 
     block4:
         v43.i256 = call %transferfrom_decode_decode__SolDecoder_CallData___c1e4510fd444b966 v5;
         v45.i256 = call %__CoolCoin_recv_0_2 v43 0.i256 v1 0.i256;
-        call %return_value__Evm_Sol_bool__261f3a707fad09c8 0.i256 v45;
+        call %return_value__Evm_Sol_bool__261f3a707fad09c8 v45;
         evm_invalid;
 
     block5:
         v47.i256 = call %balanceof_decode_decode__SolDecoder_CallData___c1e4510fd444b966 v5;
         v49.i256 = call %__CoolCoin_recv_0_3 v47 v1;
-        call %return_value__Evm_Sol_u256__fe091c64bccbbbf1 0.i256 v49;
+        call %return_value__Evm_Sol_u256__fe091c64bccbbbf1 v49;
         evm_invalid;
 
     block6:
         v51.i256 = call %allowance_decode_decode__SolDecoder_CallData___c1e4510fd444b966 v5;
         v53.i256 = call %__CoolCoin_recv_0_4 v51 v1;
-        call %return_value__Evm_Sol_u256__fe091c64bccbbbf1 0.i256 v53;
+        call %return_value__Evm_Sol_u256__fe091c64bccbbbf1 v53;
         evm_invalid;
 
     block7:
         call %totalsupply_decode_decode__SolDecoder_CallData___c1e4510fd444b966 v5;
-        v56.i256 = call %__CoolCoin_recv_0_5 0.i256 v1;
-        call %return_value__Evm_Sol_u256__fe091c64bccbbbf1 0.i256 v56;
+        v56.i256 = call %__CoolCoin_recv_0_5 v1;
+        call %return_value__Evm_Sol_u256__fe091c64bccbbbf1 v56;
         evm_invalid;
 
     block8:
         call %name_decode_decode__SolDecoder_CallData___c1e4510fd444b966 v5;
-        v58.i256 = call %__CoolCoin_recv_0_6 0.i256;
-        call %return_value__Evm_Sol_String_32___fce5fd9d073f47ee 0.i256 v58;
+        v58.i256 = call %__CoolCoin_recv_0_6;
+        call %return_value__Evm_Sol_String_32___fce5fd9d073f47ee v58;
         evm_invalid;
 
     block9:
         call %symbol_decode_decode__SolDecoder_CallData___c1e4510fd444b966 v5;
-        v60.i256 = call %__CoolCoin_recv_0_7 0.i256;
-        call %return_value__Evm_Sol_String_8___90b3a09bdf47bf15 0.i256 v60;
+        v60.i256 = call %__CoolCoin_recv_0_7;
+        call %return_value__Evm_Sol_String_8___90b3a09bdf47bf15 v60;
         evm_invalid;
 
     block10:
         call %decimals_decode_decode__SolDecoder_CallData___c1e4510fd444b966 v5;
-        v62.i256 = call %__CoolCoin_recv_0_8 0.i256;
-        call %return_value__Evm_Sol_u8__d483d38efd15a73d 0.i256 v62;
+        v62.i256 = call %__CoolCoin_recv_0_8;
+        call %return_value__Evm_Sol_u8__d483d38efd15a73d v62;
         evm_invalid;
 
     block11:
         v64.i256 = call %mint_decode_decode__SolDecoder_CallData___c1e4510fd444b966 v5;
         v67.i256 = call %__CoolCoin_recv_1_0 v64 0.i256 v1 0.i256 v3;
-        call %return_value__Evm_Sol_bool__261f3a707fad09c8 0.i256 v67;
+        call %return_value__Evm_Sol_bool__261f3a707fad09c8 v67;
         evm_invalid;
 
     block12:
         v69.i256 = call %burn_decode_decode__SolDecoder_CallData___c1e4510fd444b966 v5;
         v71.i256 = call %__CoolCoin_recv_1_1 v69 0.i256 v1 0.i256;
-        call %return_value__Evm_Sol_bool__261f3a707fad09c8 0.i256 v71;
+        call %return_value__Evm_Sol_bool__261f3a707fad09c8 v71;
         evm_invalid;
 
     block13:
         v73.i256 = call %burnfrom_decode_decode__SolDecoder_CallData___c1e4510fd444b966 v5;
         v75.i256 = call %__CoolCoin_recv_1_2 v73 0.i256 v1 0.i256;
-        call %return_value__Evm_Sol_bool__261f3a707fad09c8 0.i256 v75;
+        call %return_value__Evm_Sol_bool__261f3a707fad09c8 v75;
         evm_invalid;
 
     block14:
         v77.i256 = call %increaseallowance_decode_decode__SolDecoder_CallData___c1e4510fd444b966 v5;
         v79.i256 = call %__CoolCoin_recv_1_3 v77 0.i256 v1 0.i256;
-        call %return_value__Evm_Sol_bool__261f3a707fad09c8 0.i256 v79;
+        call %return_value__Evm_Sol_bool__261f3a707fad09c8 v79;
         evm_invalid;
 
     block15:
         v81.i256 = call %decreaseallowance_decode_decode__SolDecoder_CallData___c1e4510fd444b966 v5;
         v83.i256 = call %__CoolCoin_recv_1_4 v81 0.i256 v1 0.i256;
-        call %return_value__Evm_Sol_bool__261f3a707fad09c8 0.i256 v83;
+        call %return_value__Evm_Sol_bool__261f3a707fad09c8 v83;
         evm_invalid;
 
     block16:
@@ -463,8 +463,8 @@ func public %address_zero() -> i256 {
 
 func public %assert(v0.i256) {
     block0:
-        v1.i256 = is_zero v0;
-        br v1 block1 block2;
+        v2.i256 = is_zero v0;
+        br v2 block1 block2;
 
     block1:
         evm_revert 0.i256 0.i256;
@@ -473,222 +473,241 @@ func public %assert(v0.i256) {
         return;
 }
 
-func public %storagemap_k__v__const_salt__u256__get__Address_u256_0__b8b2f68065fe2328(v0.i256, v1.i256) -> i256 {
+func public %storagemap_k__v__const_salt__u256__get__Address_u256_0__b8b2f68065fe2328(v0.i256) -> i256 {
     block0:
-        v3.i256 = call %storagemap_get_word_with_salt__Address__ce8f588742192062 v1 0.i256;
+        v2.i256 = call %storagemap_get_word_with_salt__Address__ce8f588742192062 v0 0.i256;
+        v3.i256 = call %u256_wordrepr_from_word v2;
+        return v3;
+}
+
+func public %storagemap_k__v__const_salt__u256__set__Address_u256_0__b8b2f68065fe2328(v0.i256, v1.i256) {
+    block0:
+        v3.i256 = call %u256_wordrepr_to_word v1;
+        call %storagemap_set_word_with_salt__Address__ce8f588742192062 v0 0.i256 v3;
+        return;
+}
+
+func public %emit__log__Log_TransferEvent__41b584f23318b0be(v0.i256) {
+    block0:
+        return;
+}
+
+func public %storagemap_k__v__const_salt__u256__set___Address__Address__u256_1__12414c27d5bfff1f(v0.i256, v1.i256) {
+    block0:
+        v3.i256 = call %u256_wordrepr_to_word v1;
+        call %storagemap_set_word_with_salt___Address__Address___c32d499da259c78e v0 1.i256 v3;
+        return;
+}
+
+func public %emit__log__Log_ApprovalEvent__bbf50d88fed22fda(v0.i256) {
+    block0:
+        return;
+}
+
+func public %storagemap_k__v__const_salt__u256__get___Address__Address__u256_1__12414c27d5bfff1f(v0.i256) -> i256 {
+    block0:
+        v3.i256 = call %storagemap_get_word_with_salt___Address__Address___c32d499da259c78e v0 1.i256;
         v4.i256 = call %u256_wordrepr_from_word v3;
         return v4;
 }
 
-func public %storagemap_k__v__const_salt__u256__set__Address_u256_0__b8b2f68065fe2328(v0.i256, v1.i256, v2.i256) {
+func public %storagemap_k__v__const_salt__u256__get___u256__Address__bool_2__74418d210da55cc0(v0.i256) -> i256 {
     block0:
-        v3.i256 = call %u256_wordrepr_to_word v2;
-        call %storagemap_set_word_with_salt__Address__ce8f588742192062 v1 0.i256 v3;
-        return;
-}
-
-func public %emit__log__Log_TransferEvent__41b584f23318b0be(v0.i256, v1.i256) {
-    block0:
-        return;
-}
-
-func public %storagemap_k__v__const_salt__u256__set___Address__Address__u256_1__12414c27d5bfff1f(v0.i256, v1.i256, v2.i256) {
-    block0:
-        v3.i256 = call %u256_wordrepr_to_word v2;
-        call %storagemap_set_word_with_salt___Address__Address___c32d499da259c78e v1 1.i256 v3;
-        return;
-}
-
-func public %emit__log__Log_ApprovalEvent__bbf50d88fed22fda(v0.i256, v1.i256) {
-    block0:
-        return;
-}
-
-func public %storagemap_k__v__const_salt__u256__get___Address__Address__u256_1__12414c27d5bfff1f(v0.i256, v1.i256) -> i256 {
-    block0:
-        v3.i256 = call %storagemap_get_word_with_salt___Address__Address___c32d499da259c78e v1 1.i256;
-        v4.i256 = call %u256_wordrepr_from_word v3;
-        return v4;
-}
-
-func public %storagemap_k__v__const_salt__u256__get___u256__Address__bool_2__74418d210da55cc0(v0.i256, v1.i256) -> i256 {
-    block0:
-        v3.i256 = call %storagemap_get_word_with_salt___u256__Address___c7c570db20cdd393 v1 2.i256;
+        v3.i256 = call %storagemap_get_word_with_salt___u256__Address___c7c570db20cdd393 v0 2.i256;
         v4.i256 = call %bool_wordrepr_from_word v3;
         return v4;
 }
 
-func public %storagemap_k__v__const_salt__u256__set___u256__Address__bool_2__74418d210da55cc0(v0.i256, v1.i256, v2.i256) {
+func public %storagemap_k__v__const_salt__u256__set___u256__Address__bool_2__74418d210da55cc0(v0.i256, v1.i256) {
     block0:
-        v3.i256 = call %bool_wordrepr_to_word v2;
-        call %storagemap_set_word_with_salt___u256__Address___c7c570db20cdd393 v1 2.i256 v3;
+        v3.i256 = call %bool_wordrepr_to_word v1;
+        call %storagemap_set_word_with_salt___u256__Address___c7c570db20cdd393 v0 2.i256 v3;
         return;
 }
 
-func public %init_field__Evm_TokenStore__f6aa99d6ecaccf30(v0.i256, v1.i256) -> i256 {
+func public %init_field__Evm_TokenStore__f6aa99d6ecaccf30(v0.i256) -> i256 {
     block0:
-        v2.i256 = call %evm_contracthost_field__TokenStore__cf27701b626eb0c2 v0 v1;
+        v2.i256 = call %evm_contracthost_field__TokenStore__cf27701b626eb0c2 v0;
         return v2;
 }
 
-func public %init_field__Evm_AccessControl__9eae422fa78e0dfe(v0.i256, v1.i256) -> i256 {
+func public %init_field__Evm_AccessControl__9eae422fa78e0dfe(v0.i256) -> i256 {
     block0:
-        v2.i256 = call %evm_contracthost_field__AccessControl__56bc16b6aa1a86f2 v0 v1;
+        v2.i256 = call %evm_contracthost_field__AccessControl__56bc16b6aa1a86f2 v0;
         return v2;
 }
 
-func public %evm_contracthost_abort(v0.i256) {
+func public %evm_contracthost_abort() {
     block0:
         evm_revert 0.i256 0.i256;
 }
 
 func public %alloc(v0.i256) -> i256 {
     block0:
-        v2.i256 = mload 64.i256 i256;
-        v4.i256 = eq v2 0.i256;
-        br v4 block1 block2;
+        v3.i256 = mload 64.i256 i256;
+        v5.i256 = mload 128.i256 i256;
+        v6.i256 = gt v5 v3;
+        br v6 block1 block2;
 
     block1:
         jump block2;
 
     block2:
-        v6.i256 = phi (v2 block0) (128.i256 block1);
-        v8.i256 = add v6 v0;
-        mstore 64.i256 v8 i256;
-        return v6;
+        v8.i256 = phi (v3 block0) (v5 block1);
+        v9.i256 = eq v8 0.i256;
+        br v9 block3 block4;
+
+    block3:
+        v10.i256 = evm_msize;
+        v12.i256 = lt v10 8192.i256;
+        br v12 block5 block6;
+
+    block4:
+        v14.i256 = phi (v0 block2) (v0 block6);
+        v13.i256 = phi (v8 block2) (v16 block6);
+        v15.i256 = add v13 v14;
+        mstore 64.i256 v15 i256;
+        return v13;
+
+    block5:
+        jump block6;
+
+    block6:
+        v16.i256 = phi (v10 block3) (8192.i256 block5);
+        jump block4;
 }
 
 func public %sol_abi_decoder_new__MemoryBytes__b48f82585f3ed728(v0.i256) -> i256 {
     block0:
-        v1.i256 = call %soldecoder_i__new__MemoryBytes__b48f82585f3ed728 v0;
-        return v1;
+        v2.i256 = call %soldecoder_i__new__MemoryBytes__b48f82585f3ed728 v0;
+        return v2;
 }
 
 func public %u256_decode_decode__Sol_SolDecoder_MemoryBytes___c66d50dfccf37f39(v0.i256) -> i256 {
     block0:
-        v1.i256 = call %soldecoder_i__abidecoder_read_word__MemoryBytes__b48f82585f3ed728 v0;
-        return v1;
+        v2.i256 = call %soldecoder_i__abidecoder_read_word__MemoryBytes__b48f82585f3ed728 v0;
+        return v2;
 }
 
 func public %address_decode_decode__Sol_SolDecoder_MemoryBytes___c66d50dfccf37f39(v0.i256) -> i256 {
     block0:
-        v1.i256 = call %soldecoder_i__abidecoder_read_word__MemoryBytes__b48f82585f3ed728 v0;
-        return v1;
+        v2.i256 = call %soldecoder_i__abidecoder_read_word__MemoryBytes__b48f82585f3ed728 v0;
+        return v2;
 }
 
-func public %evm_contracthost_field__TokenStore__cf27701b626eb0c2(v0.i256, v1.i256) -> i256 {
+func public %evm_contracthost_field__TokenStore__cf27701b626eb0c2(v0.i256) -> i256 {
     block0:
-        v3.i256 = call %stor_ptr__Evm_TokenStore__f6aa99d6ecaccf30 0.i256 v1;
-        return v3;
+        v2.i256 = call %stor_ptr__Evm_TokenStore__f6aa99d6ecaccf30 v0;
+        return v2;
 }
 
-func public %evm_contracthost_field__AccessControl__56bc16b6aa1a86f2(v0.i256, v1.i256) -> i256 {
+func public %evm_contracthost_field__AccessControl__56bc16b6aa1a86f2(v0.i256) -> i256 {
     block0:
-        v3.i256 = call %stor_ptr__Evm_AccessControl__9eae422fa78e0dfe 0.i256 v1;
-        return v3;
+        v2.i256 = call %stor_ptr__Evm_AccessControl__9eae422fa78e0dfe v0;
+        return v2;
 }
 
-func public %runtime_selector__Evm_Sol__2533f5c49b57a682(v0.i256) -> i256 {
+func public %runtime_selector__Evm_Sol__2533f5c49b57a682() -> i256 {
     block0:
-        v1.i256 = call %evm_contracthost_input v0;
+        v1.i256 = call %evm_contracthost_input;
         v2.i256 = call %calldata_byteinput_len v1;
         v4.i256 = lt v2 4.i256;
         br v4 block1 block2;
 
     block1:
-        call %evm_contracthost_abort v0;
+        call %evm_contracthost_abort;
         evm_invalid;
 
     block2:
-        v8.i256 = call %calldata_byteinput_word_at v1 0.i256;
-        v9.i256 = call %sol_abi_selector_from_prefix v8;
-        return v9;
+        v6.i256 = call %calldata_byteinput_word_at v1 0.i256;
+        v7.i256 = call %sol_abi_selector_from_prefix v6;
+        return v7;
 }
 
-func public %runtime_decoder__Evm_Sol__2533f5c49b57a682(v0.i256) -> i256 {
+func public %runtime_decoder__Evm_Sol__2533f5c49b57a682() -> i256 {
     block0:
-        v1.i256 = call %evm_contracthost_input v0;
+        v1.i256 = call %evm_contracthost_input;
         v3.i256 = call %sol_abi_decoder_with_base__CallData__b9ab8dc8a4b2f9e v1 4.i256;
         return v3;
 }
 
 func public %transfer_decode_decode__SolDecoder_CallData___c1e4510fd444b966(v0.i256) -> i256 {
     block0:
-        v1.i256 = call %address_decode_decode__Sol_SolDecoder_CallData___828c6f2e3bda3cab v0;
-        v2.i256 = call %u256_decode_decode__Sol_SolDecoder_CallData___828c6f2e3bda3cab v0;
-        v4.i256 = evm_malloc 64.i256;
-        mstore v4 v1 i256;
-        v6.i256 = add v4 32.i256;
-        mstore v6 v2 i256;
-        return v4;
+        v2.i256 = call %address_decode_decode__Sol_SolDecoder_CallData___828c6f2e3bda3cab v0;
+        v3.i256 = call %u256_decode_decode__Sol_SolDecoder_CallData___828c6f2e3bda3cab v0;
+        v5.i256 = evm_malloc 64.i256;
+        mstore v5 v2 i256;
+        v7.i256 = add v5 32.i256;
+        mstore v7 v3 i256;
+        return v5;
 }
 
-func public %return_value__Evm_Sol_bool__261f3a707fad09c8(v0.i256, v1.i256) {
+func public %return_value__Evm_Sol_bool__261f3a707fad09c8(v0.i256) {
     block0:
         v2.i256 = call %sol_abi_encoder_new;
         v4.i256 = call %solencoder_abiencoder_reserve_head v2 32.i256;
-        call %bool_encode_encode__Sol_SolEncoder__dce63ad1a1fe4ae2 v1 v2;
+        call %bool_encode_encode__Sol_SolEncoder__dce63ad1a1fe4ae2 v0 v2;
         v5.i256 = call %solencoder_abiencoder_finish v2;
         v6.i256 = mload v5 i256;
         v7.i256 = add v5 32.i256;
         v8.i256 = mload v7 i256;
-        call %evm_contracthost_return_bytes v0 v6 v8;
+        call %evm_contracthost_return_bytes v6 v8;
         evm_invalid;
 }
 
 func public %approve_decode_decode__SolDecoder_CallData___c1e4510fd444b966(v0.i256) -> i256 {
     block0:
-        v1.i256 = call %address_decode_decode__Sol_SolDecoder_CallData___828c6f2e3bda3cab v0;
-        v2.i256 = call %u256_decode_decode__Sol_SolDecoder_CallData___828c6f2e3bda3cab v0;
-        v4.i256 = evm_malloc 64.i256;
-        mstore v4 v1 i256;
-        v6.i256 = add v4 32.i256;
-        mstore v6 v2 i256;
-        return v4;
+        v2.i256 = call %address_decode_decode__Sol_SolDecoder_CallData___828c6f2e3bda3cab v0;
+        v3.i256 = call %u256_decode_decode__Sol_SolDecoder_CallData___828c6f2e3bda3cab v0;
+        v5.i256 = evm_malloc 64.i256;
+        mstore v5 v2 i256;
+        v7.i256 = add v5 32.i256;
+        mstore v7 v3 i256;
+        return v5;
 }
 
 func public %transferfrom_decode_decode__SolDecoder_CallData___c1e4510fd444b966(v0.i256) -> i256 {
     block0:
-        v1.i256 = call %address_decode_decode__Sol_SolDecoder_CallData___828c6f2e3bda3cab v0;
         v2.i256 = call %address_decode_decode__Sol_SolDecoder_CallData___828c6f2e3bda3cab v0;
-        v3.i256 = call %u256_decode_decode__Sol_SolDecoder_CallData___828c6f2e3bda3cab v0;
-        v5.i256 = evm_malloc 96.i256;
-        mstore v5 v1 i256;
-        v7.i256 = add v5 32.i256;
-        mstore v7 v2 i256;
-        v9.i256 = add v5 64.i256;
-        mstore v9 v3 i256;
-        return v5;
+        v3.i256 = call %address_decode_decode__Sol_SolDecoder_CallData___828c6f2e3bda3cab v0;
+        v4.i256 = call %u256_decode_decode__Sol_SolDecoder_CallData___828c6f2e3bda3cab v0;
+        v6.i256 = evm_malloc 96.i256;
+        mstore v6 v2 i256;
+        v8.i256 = add v6 32.i256;
+        mstore v8 v3 i256;
+        v10.i256 = add v6 64.i256;
+        mstore v10 v4 i256;
+        return v6;
 }
 
 func public %balanceof_decode_decode__SolDecoder_CallData___c1e4510fd444b966(v0.i256) -> i256 {
     block0:
-        v1.i256 = call %address_decode_decode__Sol_SolDecoder_CallData___828c6f2e3bda3cab v0;
-        return v1;
+        v2.i256 = call %address_decode_decode__Sol_SolDecoder_CallData___828c6f2e3bda3cab v0;
+        return v2;
 }
 
-func public %return_value__Evm_Sol_u256__fe091c64bccbbbf1(v0.i256, v1.i256) {
+func public %return_value__Evm_Sol_u256__fe091c64bccbbbf1(v0.i256) {
     block0:
         v2.i256 = call %sol_abi_encoder_new;
         v4.i256 = call %solencoder_abiencoder_reserve_head v2 32.i256;
-        call %u256_encode_encode__Sol_SolEncoder__dce63ad1a1fe4ae2 v1 v2;
+        call %u256_encode_encode__Sol_SolEncoder__dce63ad1a1fe4ae2 v0 v2;
         v5.i256 = call %solencoder_abiencoder_finish v2;
         v6.i256 = mload v5 i256;
         v7.i256 = add v5 32.i256;
         v8.i256 = mload v7 i256;
-        call %evm_contracthost_return_bytes v0 v6 v8;
+        call %evm_contracthost_return_bytes v6 v8;
         evm_invalid;
 }
 
 func public %allowance_decode_decode__SolDecoder_CallData___c1e4510fd444b966(v0.i256) -> i256 {
     block0:
-        v1.i256 = call %address_decode_decode__Sol_SolDecoder_CallData___828c6f2e3bda3cab v0;
         v2.i256 = call %address_decode_decode__Sol_SolDecoder_CallData___828c6f2e3bda3cab v0;
-        v4.i256 = evm_malloc 64.i256;
-        mstore v4 v1 i256;
-        v6.i256 = add v4 32.i256;
-        mstore v6 v2 i256;
-        return v4;
+        v3.i256 = call %address_decode_decode__Sol_SolDecoder_CallData___828c6f2e3bda3cab v0;
+        v5.i256 = evm_malloc 64.i256;
+        mstore v5 v2 i256;
+        v7.i256 = add v5 32.i256;
+        mstore v7 v3 i256;
+        return v5;
 }
 
 func public %totalsupply_decode_decode__SolDecoder_CallData___c1e4510fd444b966(v0.i256) {
@@ -701,16 +720,16 @@ func public %name_decode_decode__SolDecoder_CallData___c1e4510fd444b966(v0.i256)
         return;
 }
 
-func public %return_value__Evm_Sol_String_32___fce5fd9d073f47ee(v0.i256, v1.i256) {
+func public %return_value__Evm_Sol_String_32___fce5fd9d073f47ee(v0.i256) {
     block0:
         v2.i256 = call %sol_abi_encoder_new;
         v4.i256 = call %solencoder_abiencoder_reserve_head v2 32.i256;
-        call %string_const_n__usize__encode_encode__Sol_32_SolEncoder__85bcb27fa2f25e8f v1 v2;
+        call %string_const_n__usize__encode_encode__Sol_32_SolEncoder__85bcb27fa2f25e8f v0 v2;
         v5.i256 = call %solencoder_abiencoder_finish v2;
         v6.i256 = mload v5 i256;
         v7.i256 = add v5 32.i256;
         v8.i256 = mload v7 i256;
-        call %evm_contracthost_return_bytes v0 v6 v8;
+        call %evm_contracthost_return_bytes v6 v8;
         evm_invalid;
 }
 
@@ -719,16 +738,16 @@ func public %symbol_decode_decode__SolDecoder_CallData___c1e4510fd444b966(v0.i25
         return;
 }
 
-func public %return_value__Evm_Sol_String_8___90b3a09bdf47bf15(v0.i256, v1.i256) {
+func public %return_value__Evm_Sol_String_8___90b3a09bdf47bf15(v0.i256) {
     block0:
         v2.i256 = call %sol_abi_encoder_new;
         v4.i256 = call %solencoder_abiencoder_reserve_head v2 32.i256;
-        call %string_const_n__usize__encode_encode__Sol_32_SolEncoder__85bcb27fa2f25e8f v1 v2;
+        call %string_const_n__usize__encode_encode__Sol_32_SolEncoder__85bcb27fa2f25e8f v0 v2;
         v5.i256 = call %solencoder_abiencoder_finish v2;
         v6.i256 = mload v5 i256;
         v7.i256 = add v5 32.i256;
         v8.i256 = mload v7 i256;
-        call %evm_contracthost_return_bytes v0 v6 v8;
+        call %evm_contracthost_return_bytes v6 v8;
         evm_invalid;
 }
 
@@ -737,74 +756,74 @@ func public %decimals_decode_decode__SolDecoder_CallData___c1e4510fd444b966(v0.i
         return;
 }
 
-func public %return_value__Evm_Sol_u8__d483d38efd15a73d(v0.i256, v1.i256) {
+func public %return_value__Evm_Sol_u8__d483d38efd15a73d(v0.i256) {
     block0:
         v2.i256 = call %sol_abi_encoder_new;
         v4.i256 = call %solencoder_abiencoder_reserve_head v2 32.i256;
-        call %u8_encode_encode__Sol_SolEncoder__dce63ad1a1fe4ae2 v1 v2;
+        call %u8_encode_encode__Sol_SolEncoder__dce63ad1a1fe4ae2 v0 v2;
         v5.i256 = call %solencoder_abiencoder_finish v2;
         v6.i256 = mload v5 i256;
         v7.i256 = add v5 32.i256;
         v8.i256 = mload v7 i256;
-        call %evm_contracthost_return_bytes v0 v6 v8;
+        call %evm_contracthost_return_bytes v6 v8;
         evm_invalid;
 }
 
 func public %mint_decode_decode__SolDecoder_CallData___c1e4510fd444b966(v0.i256) -> i256 {
     block0:
-        v1.i256 = call %address_decode_decode__Sol_SolDecoder_CallData___828c6f2e3bda3cab v0;
-        v2.i256 = call %u256_decode_decode__Sol_SolDecoder_CallData___828c6f2e3bda3cab v0;
-        v4.i256 = evm_malloc 64.i256;
-        mstore v4 v1 i256;
-        v6.i256 = add v4 32.i256;
-        mstore v6 v2 i256;
-        return v4;
+        v2.i256 = call %address_decode_decode__Sol_SolDecoder_CallData___828c6f2e3bda3cab v0;
+        v3.i256 = call %u256_decode_decode__Sol_SolDecoder_CallData___828c6f2e3bda3cab v0;
+        v5.i256 = evm_malloc 64.i256;
+        mstore v5 v2 i256;
+        v7.i256 = add v5 32.i256;
+        mstore v7 v3 i256;
+        return v5;
 }
 
 func public %burn_decode_decode__SolDecoder_CallData___c1e4510fd444b966(v0.i256) -> i256 {
     block0:
-        v1.i256 = call %u256_decode_decode__Sol_SolDecoder_CallData___828c6f2e3bda3cab v0;
-        return v1;
+        v2.i256 = call %u256_decode_decode__Sol_SolDecoder_CallData___828c6f2e3bda3cab v0;
+        return v2;
 }
 
 func public %burnfrom_decode_decode__SolDecoder_CallData___c1e4510fd444b966(v0.i256) -> i256 {
     block0:
-        v1.i256 = call %address_decode_decode__Sol_SolDecoder_CallData___828c6f2e3bda3cab v0;
-        v2.i256 = call %u256_decode_decode__Sol_SolDecoder_CallData___828c6f2e3bda3cab v0;
-        v4.i256 = evm_malloc 64.i256;
-        mstore v4 v1 i256;
-        v6.i256 = add v4 32.i256;
-        mstore v6 v2 i256;
-        return v4;
+        v2.i256 = call %address_decode_decode__Sol_SolDecoder_CallData___828c6f2e3bda3cab v0;
+        v3.i256 = call %u256_decode_decode__Sol_SolDecoder_CallData___828c6f2e3bda3cab v0;
+        v5.i256 = evm_malloc 64.i256;
+        mstore v5 v2 i256;
+        v7.i256 = add v5 32.i256;
+        mstore v7 v3 i256;
+        return v5;
 }
 
 func public %increaseallowance_decode_decode__SolDecoder_CallData___c1e4510fd444b966(v0.i256) -> i256 {
     block0:
-        v1.i256 = call %address_decode_decode__Sol_SolDecoder_CallData___828c6f2e3bda3cab v0;
-        v2.i256 = call %u256_decode_decode__Sol_SolDecoder_CallData___828c6f2e3bda3cab v0;
-        v4.i256 = evm_malloc 64.i256;
-        mstore v4 v1 i256;
-        v6.i256 = add v4 32.i256;
-        mstore v6 v2 i256;
-        return v4;
+        v2.i256 = call %address_decode_decode__Sol_SolDecoder_CallData___828c6f2e3bda3cab v0;
+        v3.i256 = call %u256_decode_decode__Sol_SolDecoder_CallData___828c6f2e3bda3cab v0;
+        v5.i256 = evm_malloc 64.i256;
+        mstore v5 v2 i256;
+        v7.i256 = add v5 32.i256;
+        mstore v7 v3 i256;
+        return v5;
 }
 
 func public %decreaseallowance_decode_decode__SolDecoder_CallData___c1e4510fd444b966(v0.i256) -> i256 {
     block0:
-        v1.i256 = call %address_decode_decode__Sol_SolDecoder_CallData___828c6f2e3bda3cab v0;
-        v2.i256 = call %u256_decode_decode__Sol_SolDecoder_CallData___828c6f2e3bda3cab v0;
-        v4.i256 = evm_malloc 64.i256;
-        mstore v4 v1 i256;
-        v6.i256 = add v4 32.i256;
-        mstore v6 v2 i256;
-        return v4;
+        v2.i256 = call %address_decode_decode__Sol_SolDecoder_CallData___828c6f2e3bda3cab v0;
+        v3.i256 = call %u256_decode_decode__Sol_SolDecoder_CallData___828c6f2e3bda3cab v0;
+        v5.i256 = evm_malloc 64.i256;
+        mstore v5 v2 i256;
+        v7.i256 = add v5 32.i256;
+        mstore v7 v3 i256;
+        return v5;
 }
 
 func public %storagemap_get_word_with_salt__Address__ce8f588742192062(v0.i256, v1.i256) -> i256 {
     block0:
-        v2.i256 = call %storagemap_storage_slot_with_salt__Address__ce8f588742192062 v0 v1;
-        v3.i256 = evm_sload v2;
-        return v3;
+        v3.i256 = call %storagemap_storage_slot_with_salt__Address__ce8f588742192062 v0 v1;
+        v4.i256 = evm_sload v3;
+        return v4;
 }
 
 func public %u256_wordrepr_from_word(v0.i256) -> i256 {
@@ -819,30 +838,30 @@ func public %u256_wordrepr_to_word(v0.i256) -> i256 {
 
 func public %storagemap_set_word_with_salt__Address__ce8f588742192062(v0.i256, v1.i256, v2.i256) {
     block0:
-        v3.i256 = call %storagemap_storage_slot_with_salt__Address__ce8f588742192062 v0 v1;
-        evm_sstore v3 v2;
+        v4.i256 = call %storagemap_storage_slot_with_salt__Address__ce8f588742192062 v0 v1;
+        evm_sstore v4 v2;
         return;
 }
 
 func public %storagemap_set_word_with_salt___Address__Address___c32d499da259c78e(v0.i256, v1.i256, v2.i256) {
     block0:
-        v3.i256 = call %storagemap_storage_slot_with_salt___Address__Address___c32d499da259c78e v0 v1;
-        evm_sstore v3 v2;
+        v4.i256 = call %storagemap_storage_slot_with_salt___Address__Address___c32d499da259c78e v0 v1;
+        evm_sstore v4 v2;
         return;
 }
 
 func public %storagemap_get_word_with_salt___Address__Address___c32d499da259c78e(v0.i256, v1.i256) -> i256 {
     block0:
-        v2.i256 = call %storagemap_storage_slot_with_salt___Address__Address___c32d499da259c78e v0 v1;
-        v3.i256 = evm_sload v2;
-        return v3;
+        v3.i256 = call %storagemap_storage_slot_with_salt___Address__Address___c32d499da259c78e v0 v1;
+        v4.i256 = evm_sload v3;
+        return v4;
 }
 
 func public %storagemap_get_word_with_salt___u256__Address___c7c570db20cdd393(v0.i256, v1.i256) -> i256 {
     block0:
-        v2.i256 = call %storagemap_storage_slot_with_salt___u256__Address___c7c570db20cdd393 v0 v1;
-        v3.i256 = evm_sload v2;
-        return v3;
+        v3.i256 = call %storagemap_storage_slot_with_salt___u256__Address___c7c570db20cdd393 v0 v1;
+        v4.i256 = evm_sload v3;
+        return v4;
 }
 
 func public %bool_wordrepr_from_word(v0.i256) -> i256 {
@@ -874,42 +893,42 @@ func public %bool_wordrepr_to_word(v0.i256) -> i256 {
 
 func public %storagemap_set_word_with_salt___u256__Address___c7c570db20cdd393(v0.i256, v1.i256, v2.i256) {
     block0:
-        v3.i256 = call %storagemap_storage_slot_with_salt___u256__Address___c7c570db20cdd393 v0 v1;
-        evm_sstore v3 v2;
+        v4.i256 = call %storagemap_storage_slot_with_salt___u256__Address___c7c570db20cdd393 v0 v1;
+        evm_sstore v4 v2;
         return;
 }
 
 func public %soldecoder_i__new__MemoryBytes__b48f82585f3ed728(v0.i256) -> i256 {
     block0:
-        v1.i256 = call %cursor_i__new__MemoryBytes__b48f82585f3ed728 v0;
-        v3.i256 = evm_malloc 128.i256;
-        v4.i256 = mload v1 i256;
-        mstore v3 v4 i256;
-        v6.i256 = add v1 32.i256;
-        v7.i256 = mload v6 i256;
-        v8.i256 = add v3 32.i256;
-        mstore v8 v7 i256;
-        v10.i256 = add v1 64.i256;
-        v11.i256 = mload v10 i256;
-        v12.i256 = add v3 64.i256;
-        mstore v12 v11 i256;
-        v15.i256 = add v3 96.i256;
+        v2.i256 = call %cursor_i__new__MemoryBytes__b48f82585f3ed728 v0;
+        v4.i256 = evm_malloc 128.i256;
+        v5.i256 = mload v2 i256;
+        mstore v4 v5 i256;
+        v7.i256 = add v2 32.i256;
+        v8.i256 = mload v7 i256;
+        v9.i256 = add v4 32.i256;
+        mstore v9 v8 i256;
+        v11.i256 = add v2 64.i256;
+        v12.i256 = mload v11 i256;
+        v13.i256 = add v4 64.i256;
+        mstore v13 v12 i256;
+        v15.i256 = add v4 96.i256;
         mstore v15 0.i256 i256;
-        return v3;
+        return v4;
 }
 
 func public %soldecoder_i__abidecoder_read_word__MemoryBytes__b48f82585f3ed728(v0.i256) -> i256 {
     block0:
-        v1.i256 = call %memorybytes_byteinput_len v0;
-        v3.i256 = add v0 64.i256;
-        v4.i256 = mload v3 i256;
-        v6.i256 = add v4 32.i256;
-        v7.i256 = add v0 64.i256;
-        v8.i256 = mload v7 i256;
-        v9.i256 = lt v6 v8;
-        v10.i256 = gt v6 v1;
-        v11.i256 = or v9 v10;
-        br v11 block1 block2;
+        v2.i256 = call %memorybytes_byteinput_len v0;
+        v4.i256 = add v0 64.i256;
+        v5.i256 = mload v4 i256;
+        v7.i256 = add v5 32.i256;
+        v8.i256 = add v0 64.i256;
+        v9.i256 = mload v8 i256;
+        v10.i256 = lt v7 v9;
+        v11.i256 = gt v7 v2;
+        v12.i256 = or v10 v11;
+        br v12 block1 block2;
 
     block1:
         evm_revert 0.i256 0.i256;
@@ -919,77 +938,77 @@ func public %soldecoder_i__abidecoder_read_word__MemoryBytes__b48f82585f3ed728(v
         v15.i256 = mload v14 i256;
         v16.i256 = call %memorybytes_byteinput_word_at v0 v15;
         v18.i256 = add v0 64.i256;
-        mstore v18 v6 i256;
+        mstore v18 v7 i256;
         return v16;
 }
 
-func public %stor_ptr__Evm_TokenStore__f6aa99d6ecaccf30(v0.i256, v1.i256) -> i256 {
+func public %stor_ptr__Evm_TokenStore__f6aa99d6ecaccf30(v0.i256) -> i256 {
     block0:
-        v2.i256 = call %storptr_t__effectref_from_raw__TokenStore__cf27701b626eb0c2 v1;
+        v2.i256 = call %storptr_t__effectref_from_raw__TokenStore__cf27701b626eb0c2 v0;
         return v2;
 }
 
-func public %stor_ptr__Evm_AccessControl__9eae422fa78e0dfe(v0.i256, v1.i256) -> i256 {
+func public %stor_ptr__Evm_AccessControl__9eae422fa78e0dfe(v0.i256) -> i256 {
     block0:
-        v2.i256 = call %storptr_t__effectref_from_raw__TokenStore__cf27701b626eb0c2 v1;
+        v2.i256 = call %storptr_t__effectref_from_raw__TokenStore__cf27701b626eb0c2 v0;
         return v2;
 }
 
-func public %evm_contracthost_input(v0.i256) -> i256 {
+func public %evm_contracthost_input() -> i256 {
     block0:
         return 0.i256;
 }
 
 func public %calldata_byteinput_len(v0.i256) -> i256 {
     block0:
-        v1.i256 = evm_calldata_size;
-        v2.i256 = sub v1 v0;
-        return v2;
+        v2.i256 = evm_calldata_size;
+        v3.i256 = sub v2 v0;
+        return v3;
 }
 
 func public %calldata_byteinput_word_at(v0.i256, v1.i256) -> i256 {
     block0:
-        v2.i256 = add v0 v1;
-        v3.i256 = evm_calldata_load v2;
-        return v3;
+        v3.i256 = add v0 v1;
+        v4.i256 = evm_calldata_load v3;
+        return v4;
 }
 
 func public %sol_abi_selector_from_prefix(v0.i256) -> i256 {
     block0:
-        v2.i256 = shr 224.i256 v0;
-        v3.i256 = call %s_intdowncast_downcast_unchecked__u256_u32__6e3637cd3e911b35 v2;
-        return v3;
+        v3.i256 = shr 224.i256 v0;
+        v4.i256 = call %s_intdowncast_downcast_unchecked__u256_u32__6e3637cd3e911b35 v3;
+        return v4;
 }
 
 func public %sol_abi_decoder_with_base__CallData__b9ab8dc8a4b2f9e(v0.i256, v1.i256) -> i256 {
     block0:
-        v2.i256 = call %soldecoder_i__with_base__CallData__b9ab8dc8a4b2f9e v0 v1;
-        return v2;
+        v3.i256 = call %soldecoder_i__with_base__CallData__b9ab8dc8a4b2f9e v0 v1;
+        return v3;
 }
 
 func public %address_decode_decode__Sol_SolDecoder_CallData___828c6f2e3bda3cab(v0.i256) -> i256 {
     block0:
-        v1.i256 = call %soldecoder_i__abidecoder_read_word__CallData__b9ab8dc8a4b2f9e v0;
-        return v1;
+        v2.i256 = call %soldecoder_i__abidecoder_read_word__CallData__b9ab8dc8a4b2f9e v0;
+        return v2;
 }
 
 func public %u256_decode_decode__Sol_SolDecoder_CallData___828c6f2e3bda3cab(v0.i256) -> i256 {
     block0:
-        v1.i256 = call %soldecoder_i__abidecoder_read_word__CallData__b9ab8dc8a4b2f9e v0;
-        return v1;
+        v2.i256 = call %soldecoder_i__abidecoder_read_word__CallData__b9ab8dc8a4b2f9e v0;
+        return v2;
 }
 
 func public %sol_abi_encoder_new() -> i256 {
     block0:
-        v0.i256 = call %solencoder_new;
-        return v0;
+        v1.i256 = call %solencoder_new;
+        return v1;
 }
 
 func public %solencoder_abiencoder_reserve_head(v0.i256, v1.i256) -> i256 {
     block0:
         call %solencoder_ensure_init_mem v0 v1;
-        v2.i256 = mload v0 i256;
-        return v2;
+        v3.i256 = mload v0 i256;
+        return v3;
 }
 
 func public %bool_encode_encode__Sol_SolEncoder__dce63ad1a1fe4ae2(v0.i256, v1.i256) {
@@ -1010,20 +1029,20 @@ func public %bool_encode_encode__Sol_SolEncoder__dce63ad1a1fe4ae2(v0.i256, v1.i2
 
 func public %solencoder_abiencoder_finish(v0.i256) -> i256 {
     block0:
-        v1.i256 = mload v0 i256;
-        v3.i256 = add v0 64.i256;
-        v4.i256 = mload v3 i256;
-        v5.i256 = evm_malloc 64.i256;
-        mstore v5 v1 i256;
-        v6.i256 = sub v4 v1;
-        v8.i256 = add v5 32.i256;
-        mstore v8 v6 i256;
-        return v5;
+        v2.i256 = mload v0 i256;
+        v4.i256 = add v0 64.i256;
+        v5.i256 = mload v4 i256;
+        v6.i256 = evm_malloc 64.i256;
+        mstore v6 v2 i256;
+        v7.i256 = sub v5 v2;
+        v9.i256 = add v6 32.i256;
+        mstore v9 v7 i256;
+        return v6;
 }
 
-func public %evm_contracthost_return_bytes(v0.i256, v1.i256, v2.i256) {
+func public %evm_contracthost_return_bytes(v0.i256, v1.i256) {
     block0:
-        evm_return v1 v2;
+        evm_return v0 v1;
 }
 
 func public %u256_encode_encode__Sol_SolEncoder__dce63ad1a1fe4ae2(v0.i256, v1.i256) {
@@ -1046,64 +1065,61 @@ func public %u8_encode_encode__Sol_SolEncoder__dce63ad1a1fe4ae2(v0.i256, v1.i256
 
 func public %storagemap_storage_slot_with_salt__Address__ce8f588742192062(v0.i256, v1.i256) -> i256 {
     block0:
-        v3.i256 = mload 64.i256 i256;
-        v4.i256 = call %address_storagekey_write_key v3 v0;
-        v5.i256 = add v3 v4;
+        v4.i256 = call %address_storagekey_write_key 4096.i256 v0;
+        v5.i256 = add 4096.i256 v4;
         mstore v5 v1 i256;
         v7.i256 = add v4 32.i256;
-        v8.i256 = evm_keccak256 v3 v7;
+        v8.i256 = evm_keccak256 4096.i256 v7;
         return v8;
 }
 
 func public %storagemap_storage_slot_with_salt___Address__Address___c32d499da259c78e(v0.i256, v1.i256) -> i256 {
     block0:
-        v3.i256 = mload 64.i256 i256;
-        v4.i256 = call %_a__b__storagekey_write_key__Address_Address__397b9a625a435b6f v3 v0;
-        v5.i256 = add v3 v4;
+        v4.i256 = call %_a__b__storagekey_write_key__Address_Address__397b9a625a435b6f 4096.i256 v0;
+        v5.i256 = add 4096.i256 v4;
         mstore v5 v1 i256;
         v7.i256 = add v4 32.i256;
-        v8.i256 = evm_keccak256 v3 v7;
+        v8.i256 = evm_keccak256 4096.i256 v7;
         return v8;
 }
 
 func public %storagemap_storage_slot_with_salt___u256__Address___c7c570db20cdd393(v0.i256, v1.i256) -> i256 {
     block0:
-        v3.i256 = mload 64.i256 i256;
-        v4.i256 = call %_a__b__storagekey_write_key__u256_Address__1ae3ad2a1b729a8b v3 v0;
-        v5.i256 = add v3 v4;
+        v4.i256 = call %_a__b__storagekey_write_key__u256_Address__1ae3ad2a1b729a8b 4096.i256 v0;
+        v5.i256 = add 4096.i256 v4;
         mstore v5 v1 i256;
         v7.i256 = add v4 32.i256;
-        v8.i256 = evm_keccak256 v3 v7;
+        v8.i256 = evm_keccak256 4096.i256 v7;
         return v8;
 }
 
 func public %cursor_i__new__MemoryBytes__b48f82585f3ed728(v0.i256) -> i256 {
     block0:
-        v2.i256 = evm_malloc 96.i256;
-        v3.i256 = mload v0 i256;
-        mstore v2 v3 i256;
-        v5.i256 = add v0 32.i256;
-        v6.i256 = mload v5 i256;
-        v7.i256 = add v2 32.i256;
-        mstore v7 v6 i256;
-        v10.i256 = add v2 64.i256;
+        v3.i256 = evm_malloc 96.i256;
+        v4.i256 = mload v0 i256;
+        mstore v3 v4 i256;
+        v6.i256 = add v0 32.i256;
+        v7.i256 = mload v6 i256;
+        v8.i256 = add v3 32.i256;
+        mstore v8 v7 i256;
+        v10.i256 = add v3 64.i256;
         mstore v10 0.i256 i256;
-        return v2;
+        return v3;
 }
 
 func public %memorybytes_byteinput_len(v0.i256) -> i256 {
     block0:
-        v2.i256 = add v0 32.i256;
-        v3.i256 = mload v2 i256;
-        return v3;
+        v3.i256 = add v0 32.i256;
+        v4.i256 = mload v3 i256;
+        return v4;
 }
 
 func public %memorybytes_byteinput_word_at(v0.i256, v1.i256) -> i256 {
     block0:
-        v2.i256 = mload v0 i256;
-        v3.i256 = add v2 v1;
-        v4.i256 = mload v3 i256;
-        return v4;
+        v3.i256 = mload v0 i256;
+        v4.i256 = add v3 v1;
+        v5.i256 = mload v4 i256;
+        return v5;
 }
 
 func public %storptr_t__effectref_from_raw__TokenStore__cf27701b626eb0c2(v0.i256) -> i256 {
@@ -1113,40 +1129,40 @@ func public %storptr_t__effectref_from_raw__TokenStore__cf27701b626eb0c2(v0.i256
 
 func public %s_intdowncast_downcast_unchecked__u256_u32__6e3637cd3e911b35(v0.i256) -> i256 {
     block0:
-        v1.i256 = call %u256_intword_to_word v0;
-        v2.i256 = call %u32_intword_from_word v1;
-        return v2;
+        v2.i256 = call %u256_intword_to_word v0;
+        v3.i256 = call %u32_intword_from_word v2;
+        return v3;
 }
 
 func public %soldecoder_i__with_base__CallData__b9ab8dc8a4b2f9e(v0.i256, v1.i256) -> i256 {
     block0:
-        v2.i256 = call %cursor_i__new__CallData__b9ab8dc8a4b2f9e v0;
-        v3.i256 = call %cursor_i__fork_mem__CallData__b9ab8dc8a4b2f9e v2 v1;
-        v5.i256 = evm_malloc 96.i256;
-        v6.i256 = mload v3 i256;
-        mstore v5 v6 i256;
-        v8.i256 = add v3 32.i256;
-        v9.i256 = mload v8 i256;
-        v10.i256 = add v5 32.i256;
-        mstore v10 v9 i256;
-        v12.i256 = add v5 64.i256;
-        mstore v12 v1 i256;
-        return v5;
+        v3.i256 = call %cursor_i__new__CallData__b9ab8dc8a4b2f9e v0;
+        v4.i256 = call %cursor_i__fork_mem__CallData__b9ab8dc8a4b2f9e v3 v1;
+        v6.i256 = evm_malloc 96.i256;
+        v7.i256 = mload v4 i256;
+        mstore v6 v7 i256;
+        v9.i256 = add v4 32.i256;
+        v10.i256 = mload v9 i256;
+        v11.i256 = add v6 32.i256;
+        mstore v11 v10 i256;
+        v13.i256 = add v6 64.i256;
+        mstore v13 v1 i256;
+        return v6;
 }
 
 func public %soldecoder_i__abidecoder_read_word__CallData__b9ab8dc8a4b2f9e(v0.i256) -> i256 {
     block0:
-        v1.i256 = mload v0 i256;
-        v2.i256 = call %calldata_byteinput_len v1;
-        v4.i256 = add v0 32.i256;
-        v5.i256 = mload v4 i256;
-        v6.i256 = add v5 32.i256;
-        v7.i256 = add v0 32.i256;
-        v8.i256 = mload v7 i256;
-        v9.i256 = lt v6 v8;
-        v10.i256 = gt v6 v2;
-        v11.i256 = or v9 v10;
-        br v11 block1 block2;
+        v2.i256 = mload v0 i256;
+        v3.i256 = call %calldata_byteinput_len v2;
+        v5.i256 = add v0 32.i256;
+        v6.i256 = mload v5 i256;
+        v7.i256 = add v6 32.i256;
+        v8.i256 = add v0 32.i256;
+        v9.i256 = mload v8 i256;
+        v10.i256 = lt v7 v9;
+        v11.i256 = gt v7 v3;
+        v12.i256 = or v10 v11;
+        br v12 block1 block2;
 
     block1:
         evm_revert 0.i256 0.i256;
@@ -1157,29 +1173,29 @@ func public %soldecoder_i__abidecoder_read_word__CallData__b9ab8dc8a4b2f9e(v0.i2
         v16.i256 = mload v15 i256;
         v17.i256 = call %calldata_byteinput_word_at v14 v16;
         v19.i256 = add v0 32.i256;
-        mstore v19 v6 i256;
+        mstore v19 v7 i256;
         return v17;
 }
 
 func public %solencoder_new() -> i256 {
     block0:
-        v1.i256 = evm_malloc 96.i256;
-        mstore v1 0.i256 i256;
-        v4.i256 = add v1 32.i256;
+        v2.i256 = evm_malloc 96.i256;
+        mstore v2 0.i256 i256;
+        v4.i256 = add v2 32.i256;
         mstore v4 0.i256 i256;
-        v6.i256 = add v1 64.i256;
+        v6.i256 = add v2 64.i256;
         mstore v6 0.i256 i256;
-        return v1;
+        return v2;
 }
 
 func public %solencoder_ensure_init_mem(v0.i256, v1.i256) {
     block0:
-        v2.i256 = mload v0 i256;
-        v4.i256 = eq v2 0.i256;
+        v3.i256 = mload v0 i256;
+        v4.i256 = eq v3 0.i256;
         br v4 block1 block2;
 
     block1:
-        v6.i256 = call %alloc v1;
+        v6.i256 = evm_malloc v1;
         mstore v0 v6 i256;
         v9.i256 = add v0 32.i256;
         mstore v9 v6 i256;
@@ -1194,43 +1210,43 @@ func public %solencoder_ensure_init_mem(v0.i256, v1.i256) {
 
 func public %solencoder_abiencoder_write_word(v0.i256, v1.i256) {
     block0:
-        v3.i256 = add v0 32.i256;
-        v4.i256 = mload v3 i256;
-        mstore v4 v1 i256;
-        v5.i256 = add v4 32.i256;
-        v6.i256 = add v0 32.i256;
-        mstore v6 v5 i256;
+        v4.i256 = add v0 32.i256;
+        v5.i256 = mload v4 i256;
+        mstore v5 v1 i256;
+        v6.i256 = add v5 32.i256;
+        v7.i256 = add v0 32.i256;
+        mstore v7 v6 i256;
         return;
 }
 
 func public %address_storagekey_write_key(v0.i256, v1.i256) -> i256 {
     block0:
-        v2.i256 = call %u256_storagekey_write_key v0 v1;
-        return v2;
+        v3.i256 = call %u256_storagekey_write_key v0 v1;
+        return v3;
 }
 
 func public %_a__b__storagekey_write_key__Address_Address__397b9a625a435b6f(v0.i256, v1.i256) -> i256 {
     block0:
-        v2.i256 = mload v1 i256;
-        v4.i256 = add v1 32.i256;
-        v5.i256 = mload v4 i256;
-        v6.i256 = call %address_storagekey_write_key v0 v2;
-        v7.i256 = add v0 v6;
-        v8.i256 = call %address_storagekey_write_key v7 v5;
-        v9.i256 = add v6 v8;
-        return v9;
+        v3.i256 = mload v1 i256;
+        v5.i256 = add v1 32.i256;
+        v6.i256 = mload v5 i256;
+        v7.i256 = call %address_storagekey_write_key v0 v3;
+        v8.i256 = add v0 v7;
+        v9.i256 = call %address_storagekey_write_key v8 v6;
+        v10.i256 = add v7 v9;
+        return v10;
 }
 
 func public %_a__b__storagekey_write_key__u256_Address__1ae3ad2a1b729a8b(v0.i256, v1.i256) -> i256 {
     block0:
-        v2.i256 = mload v1 i256;
-        v4.i256 = add v1 32.i256;
-        v5.i256 = mload v4 i256;
-        v6.i256 = call %u256_storagekey_write_key v0 v2;
-        v7.i256 = add v0 v6;
-        v8.i256 = call %address_storagekey_write_key v7 v5;
-        v9.i256 = add v6 v8;
-        return v9;
+        v3.i256 = mload v1 i256;
+        v5.i256 = add v1 32.i256;
+        v6.i256 = mload v5 i256;
+        v7.i256 = call %u256_storagekey_write_key v0 v3;
+        v8.i256 = add v0 v7;
+        v9.i256 = call %address_storagekey_write_key v8 v6;
+        v10.i256 = add v7 v9;
+        return v10;
 }
 
 func public %u256_intword_to_word(v0.i256) -> i256 {
@@ -1245,21 +1261,21 @@ func public %u32_intword_from_word(v0.i256) -> i256 {
 
 func public %cursor_i__new__CallData__b9ab8dc8a4b2f9e(v0.i256) -> i256 {
     block0:
-        v2.i256 = evm_malloc 64.i256;
-        mstore v2 v0 i256;
-        v5.i256 = add v2 32.i256;
+        v3.i256 = evm_malloc 64.i256;
+        mstore v3 v0 i256;
+        v5.i256 = add v3 32.i256;
         mstore v5 0.i256 i256;
-        return v2;
+        return v3;
 }
 
 func public %cursor_i__fork_mem__CallData__b9ab8dc8a4b2f9e(v0.i256, v1.i256) -> i256 {
     block0:
-        v2.i256 = mload v0 i256;
-        v4.i256 = evm_malloc 64.i256;
-        mstore v4 v2 i256;
-        v6.i256 = add v4 32.i256;
-        mstore v6 v1 i256;
-        return v4;
+        v3.i256 = mload v0 i256;
+        v5.i256 = evm_malloc 64.i256;
+        mstore v5 v3 i256;
+        v7.i256 = add v5 32.i256;
+        mstore v7 v1 i256;
+        return v5;
 }
 
 func public %u256_storagekey_write_key(v0.i256, v1.i256) -> i256 {
