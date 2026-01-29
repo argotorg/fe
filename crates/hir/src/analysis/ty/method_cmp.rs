@@ -2,6 +2,7 @@ use thin_vec::ThinVec;
 
 use super::{
     canonical::Canonical,
+    const_expr::ConstExpr,
     const_ty::const_ty_from_trait_const,
     diagnostics::{ImplDiag, TyDiagCollection},
     fold::{AssocTySubst, TyFoldable, TyFolder},
@@ -10,7 +11,7 @@ use super::{
     trait_resolution::{
         GoalSatisfiability, constraint::collect_func_def_constraints, is_goal_satisfiable,
     },
-    ty_def::{TyData, TyId},
+    ty_def::{InvalidCause, TyData, TyId},
 };
 use crate::analysis::HirAnalysisDb;
 use crate::hir_def::{CallableDef, Expr, Partial, PathKind};
@@ -287,46 +288,66 @@ fn normalize_const_tys<'db>(
                 return ty.super_fold_with(db, self);
             };
 
-            let super::const_ty::ConstTyData::UnEvaluated {
-                body,
-                ty: expected_ty,
-                ..
-            } = const_ty.data(db)
-            else {
-                return ty.super_fold_with(db, self);
-            };
-            let Some(expected_ty) = *expected_ty else {
-                return ty.super_fold_with(db, self);
-            };
-            let expr = body.expr(db);
-            let Partial::Present(expr) = expr.data(db, *body) else {
-                return ty.super_fold_with(db, self);
-            };
-            let Expr::Path(path) = expr else {
-                return ty.super_fold_with(db, self);
-            };
-            let Some(path) = path.to_opt() else {
-                return ty.super_fold_with(db, self);
-            };
+            match const_ty.data(db) {
+                super::const_ty::ConstTyData::Abstract(expr, expected_ty) => {
+                    let ConstExpr::TraitConst { inst, name } = expr.data(db) else {
+                        return ty.super_fold_with(db, self);
+                    };
 
-            let mut const_ty = *const_ty;
-            if let Some(parent) = path.parent(db)
-                && parent.is_self_ty(db)
-                && let PathKind::Ident {
-                    ident,
-                    generic_args,
-                } = path.kind(db)
-                && generic_args.is_empty(db)
-                && let Some(name) = ident.to_opt()
-                && let Some(repl) = const_ty_from_trait_const(db, self.trait_inst, name)
-            {
-                const_ty = repl;
+                    let Some(const_ty) = const_ty_from_trait_const(db, *inst, *name) else {
+                        return ty.super_fold_with(db, self);
+                    };
+
+                    let evaluated = const_ty.evaluate(db, Some(*expected_ty));
+                    if matches!(
+                        evaluated.ty(db).invalid_cause(db),
+                        Some(InvalidCause::ConstEvalUnsupported { .. })
+                    ) {
+                        return ty.super_fold_with(db, self);
+                    }
+
+                    TyId::new(db, TyData::ConstTy(evaluated))
+                }
+                super::const_ty::ConstTyData::UnEvaluated {
+                    body,
+                    ty: expected_ty,
+                    ..
+                } => {
+                    let Some(expected_ty) = *expected_ty else {
+                        return ty.super_fold_with(db, self);
+                    };
+                    let expr = body.expr(db);
+                    let Partial::Present(expr) = expr.data(db, *body) else {
+                        return ty.super_fold_with(db, self);
+                    };
+                    let Expr::Path(path) = expr else {
+                        return ty.super_fold_with(db, self);
+                    };
+                    let Some(path) = path.to_opt() else {
+                        return ty.super_fold_with(db, self);
+                    };
+
+                    let mut const_ty = *const_ty;
+                    if let Some(parent) = path.parent(db)
+                        && parent.is_self_ty(db)
+                        && let PathKind::Ident {
+                            ident,
+                            generic_args,
+                        } = path.kind(db)
+                        && generic_args.is_empty(db)
+                        && let Some(name) = ident.to_opt()
+                        && let Some(repl) = const_ty_from_trait_const(db, self.trait_inst, name)
+                    {
+                        const_ty = repl;
+                    }
+
+                    TyId::new(
+                        db,
+                        TyData::ConstTy(const_ty.evaluate(db, Some(expected_ty))),
+                    )
+                }
+                _ => ty.super_fold_with(db, self),
             }
-
-            TyId::new(
-                db,
-                TyData::ConstTy(const_ty.evaluate(db, Some(expected_ty))),
-            )
         }
     }
 
