@@ -6,7 +6,7 @@ use crate::{ExpectedKind, ParseError, SyntaxKind};
 
 use super::{
     ErrProof, Parser, Recovery, define_scope,
-    expr::parse_expr,
+    expr::{parse_const_generic_expr, parse_expr},
     expr_atom::{BlockExprScope, LitExprScope},
     parse_list,
     path::PathScope,
@@ -160,6 +160,10 @@ impl super::Parse for ConstGenericParamScope {
         // parse trait bound even though it's not allowed (checked in hir)
         if parser.current_kind() == Some(SyntaxKind::Colon) {
             parser.parse(TypeBoundListScope::new(true))?;
+        }
+
+        if parser.bump_if(SyntaxKind::Eq) {
+            parse_const_generic_expr(parser)?;
         }
         Ok(())
     }
@@ -371,6 +375,18 @@ impl super::Parse for GenericArgScope {
             // Parse the type
             parse_type(parser, None)?;
         } else {
+            let is_const_call = parser.dry_run(|parser| {
+                parser
+                    .parse(PathScope::default())
+                    .is_ok_and(|()| parser.current_kind() == Some(SyntaxKind::LParen))
+            });
+
+            if is_const_call {
+                self.set_kind(SyntaxKind::ConstGenericArg);
+                parse_const_generic_expr(parser)?;
+                return Ok(());
+            }
+
             match parser.current_kind() {
                 Some(SyntaxKind::LBrace) => {
                     self.set_kind(SyntaxKind::ConstGenericArg);

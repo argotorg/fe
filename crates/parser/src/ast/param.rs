@@ -188,6 +188,10 @@ impl ConstGenericParam {
     pub fn ty(&self) -> Option<super::Type> {
         support::child(self.syntax())
     }
+
+    pub fn default_expr(&self) -> Option<super::Expr> {
+        support::child(self.syntax())
+    }
 }
 
 ast_node! {

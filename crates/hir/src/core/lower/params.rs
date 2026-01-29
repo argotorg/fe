@@ -93,7 +93,10 @@ impl<'db> ConstGenericParam<'db> {
     fn lower_ast(ctxt: &mut FileLowerCtxt<'db>, ast: ast::ConstGenericParam) -> Self {
         let name = IdentId::lower_token_partial(ctxt, ast.name());
         let ty = TypeId::lower_ast_partial(ctxt, ast.ty());
-        Self { name, ty }
+        let default = ast
+            .default_expr()
+            .map(|expr| Body::lower_ast_nameless(ctxt, expr));
+        Self { name, ty, default }
     }
 }
 

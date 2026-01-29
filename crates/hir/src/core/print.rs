@@ -267,7 +267,12 @@ impl<'db> ConstGenericParam<'db> {
             .data(db)
             .to_string();
         let ty = unwrap_partial(self.ty, "ConstGenericParam::ty").pretty_print(db);
-        format!("const {}: {}", name, ty)
+        let mut out = format!("const {name}: {ty}");
+        if let Some(default) = self.default {
+            out.push_str(" = ");
+            out.push_str(&default.pretty_print(db));
+        }
+        out
     }
 }
 

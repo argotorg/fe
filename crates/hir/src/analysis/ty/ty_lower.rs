@@ -1,5 +1,5 @@
 use crate::core::hir_def::{
-    GenericArg, GenericArgListId, GenericParam, GenericParamOwner, GenericParamView, IdentId,
+    Body, GenericArg, GenericArgListId, GenericParam, GenericParamOwner, GenericParamView, IdentId,
     KindBound as HirKindBound, Partial, PathId, TypeAlias as HirTypeAlias, TypeBound,
     TypeId as HirTyId, TypeKind as HirTyKind, scope_graph::ScopeId,
 };
@@ -400,21 +400,43 @@ impl<'db> GenericParamTypeSet<'db> {
         let scope = self.scope(db);
         for i in (offset + provided_explicit.len())..total {
             let prec = &self.params_precursor(db)[i];
-            match prec.default_hir_ty {
-                Some(hir_ty) => {
-                    let lowered = lower_hir_ty(db, hir_ty, scope, assumptions);
-                    let lowered = {
-                        let mut subst = ParamSubst {
-                            db,
-                            mapping: &mapping,
-                        };
-                        lowered.fold_with(db, &mut subst)
+
+            if let Some(hir_ty) = prec.default_hir_ty {
+                let lowered = lower_hir_ty(db, hir_ty, scope, assumptions);
+                let lowered = {
+                    let mut subst = ParamSubst {
+                        db,
+                        mapping: &mapping,
                     };
-                    mapping[i] = Some(lowered);
-                    result.push(lowered);
-                }
-                None => break, // Missing non-default; stop filling further params
+                    lowered.fold_with(db, &mut subst)
+                };
+                mapping[i] = Some(lowered);
+                result.push(lowered);
+                continue;
             }
+
+            if let Some(default) = prec.default_hir_const {
+                let expected = prec.evaluate(db, scope, i).const_ty_ty(db);
+                let const_ty = ConstTyId::from_body(db, default, expected, None);
+                let lowered = TyId::const_ty(db, const_ty);
+                let lowered = lowered
+                    .evaluate_const_ty(db, expected)
+                    .unwrap_or_else(|cause| TyId::invalid(db, cause));
+
+                let lowered = {
+                    let mut subst = ParamSubst {
+                        db,
+                        mapping: &mapping,
+                    };
+                    lowered.fold_with(db, &mut subst)
+                };
+
+                mapping[i] = Some(lowered);
+                result.push(lowered);
+                continue;
+            }
+
+            break; // Missing non-default; stop filling further params
         }
 
         result
@@ -502,9 +524,10 @@ impl<'db> GenericParamCollector<'db> {
                 GenericParam::Const(param) => {
                     let name = param.name;
                     let hir_ty = param.ty.to_opt();
+                    let default = param.default;
 
                     self.params
-                        .push(TyParamPrecursor::const_ty_param(name, idx, hir_ty))
+                        .push(TyParamPrecursor::const_ty_param(name, idx, hir_ty, default))
                 }
             }
         }
@@ -571,6 +594,7 @@ pub struct TyParamPrecursor<'db> {
     kind: Option<Kind>,
     variant: Variant<'db>,
     default_hir_ty: Option<HirTyId<'db>>, // Only used for type params
+    default_hir_const: Option<Body<'db>>, // Only used for const params
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -629,16 +653,23 @@ impl<'db> TyParamPrecursor<'db> {
             kind,
             variant: Variant::Normal,
             default_hir_ty,
+            default_hir_const: None,
         }
     }
 
-    fn const_ty_param(name: Partial<IdentId<'db>>, idx: usize, ty: Option<HirTyId<'db>>) -> Self {
+    fn const_ty_param(
+        name: Partial<IdentId<'db>>,
+        idx: usize,
+        ty: Option<HirTyId<'db>>,
+        default: Option<Body<'db>>,
+    ) -> Self {
         Self {
             name,
             original_idx: idx.into(),
             kind: None,
             variant: Variant::Const(ty),
             default_hir_ty: None,
+            default_hir_const: default,
         }
     }
 
@@ -649,6 +680,7 @@ impl<'db> TyParamPrecursor<'db> {
             kind: Some(Kind::Star),
             variant: Variant::EffectProvider,
             default_hir_ty: None,
+            default_hir_const: None,
         }
     }
 
@@ -660,6 +692,7 @@ impl<'db> TyParamPrecursor<'db> {
             kind,
             variant: Variant::TraitSelf,
             default_hir_ty: None,
+            default_hir_const: None,
         }
     }
 
