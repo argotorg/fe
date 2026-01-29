@@ -35,6 +35,8 @@ pub struct TestDebugOptions {
     pub sonatina_symtab: bool,
     pub sonatina_stackify_trace: bool,
     pub sonatina_stackify_filter: Option<String>,
+    pub sonatina_transient_malloc_trace: bool,
+    pub sonatina_transient_malloc_filter: Option<String>,
     pub debug_dir: Option<Utf8PathBuf>,
 }
 
@@ -58,6 +60,13 @@ impl TestDebugOptions {
             Self::set_env("SONATINA_STACKIFY_TRACE", "1");
             if let Some(filter) = &self.sonatina_stackify_filter {
                 Self::set_env("SONATINA_STACKIFY_TRACE_FUNC", filter);
+            }
+        }
+
+        if self.sonatina_transient_malloc_trace {
+            Self::set_env("SONATINA_TRANSIENT_MALLOC_TRACE", "1");
+            if let Some(filter) = &self.sonatina_transient_malloc_filter {
+                Self::set_env("SONATINA_TRANSIENT_MALLOC_TRACE_FUNC", filter);
             }
         }
 
@@ -85,6 +94,12 @@ impl TestDebugOptions {
             let path = dir.join("sonatina_stackify_trace.txt");
             truncate_file(&path);
             Self::set_env("SONATINA_STACKIFY_TRACE_OUT", path.as_str());
+        }
+
+        if self.sonatina_transient_malloc_trace {
+            let path = dir.join("sonatina_transient_malloc_trace.txt");
+            truncate_file(&path);
+            Self::set_env("SONATINA_TRANSIENT_MALLOC_TRACE_OUT", path.as_str());
         }
     }
 
