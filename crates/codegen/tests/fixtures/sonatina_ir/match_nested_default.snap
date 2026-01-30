@@ -1,6 +1,5 @@
 ---
 source: crates/codegen/tests/sonatina_ir.rs
-assertion_line: 74
 expression: output
 input_file: crates/codegen/tests/fixtures/match_nested_default.fe
 ---
@@ -156,9 +155,5 @@ func public %__fe_sonatina_entry() {
 object @Contract {
     section runtime {
         entry %__fe_sonatina_entry;
-        include %nested_with_defaults;
-        include %outer_specific_inner_wildcard;
-        include %deeply_nested_wildcard;
-        include %exhaustive_inner_outer_wildcard;
     }
 }

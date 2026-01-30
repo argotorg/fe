@@ -28,6 +28,14 @@ func public %mem_read(v0.i256) -> i256 {
         return v0;
 }
 
+func public %init__StorPtr_Evm___207f35a85ac4062e() {
+    block0:
+        v1.i256 = sym_size &runtime__StorPtr_Evm___207f35a85ac4062e;
+        v2.i256 = sym_addr &runtime__StorPtr_Evm___207f35a85ac4062e;
+        evm_code_copy 0.i256 v2 v1;
+        evm_return 0.i256 v1;
+}
+
 func public %runtime__StorPtr_Evm___207f35a85ac4062e() {
     block0:
         v1.i256 = call %stor_ptr__Evm_Outer__31089a952466fa6f 0.i256;
@@ -80,14 +88,12 @@ func public %storptr_t__effectref_from_raw__Outer__ffb1d3cc5087d727(v0.i256) -> 
 }
 
 
-object @Contract {
+object @NestedStruct {
+    section init {
+        entry %init__StorPtr_Evm___207f35a85ac4062e;
+        embed .runtime as &runtime__StorPtr_Evm___207f35a85ac4062e;
+    }
     section runtime {
         entry %runtime__StorPtr_Evm___207f35a85ac4062e;
-        include %abi_encode;
-        include %read_inner__StorPtr_Outer___dab28b9da6c3e28;
-        include %write_inner__StorPtr_Outer___dab28b9da6c3e28;
-        include %mem_read;
-        include %stor_ptr__Evm_Outer__31089a952466fa6f;
-        include %storptr_t__effectref_from_raw__Outer__ffb1d3cc5087d727;
     }
 }

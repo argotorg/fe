@@ -61,9 +61,5 @@ func public %__fe_sonatina_entry() {
 object @Contract {
     section runtime {
         entry %__fe_sonatina_entry;
-        include %counter_bump;
-        include %wrapcounter_bump;
-        include %newtype_field_mut_method_call;
-        include %wrapcounter_bump_mem;
     }
 }

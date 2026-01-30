@@ -53,6 +53,14 @@ func public %transfer__StorPtr_StorageMap_u256__u256__0____4a2331212cb04e60(v0.i
         return 0.i256;
 }
 
+func public %init__StorPtr_Evm___207f35a85ac4062e() {
+    block0:
+        v1.i256 = sym_size &runtime__StorPtr_Evm___207f35a85ac4062e;
+        v2.i256 = sym_addr &runtime__StorPtr_Evm___207f35a85ac4062e;
+        evm_code_copy 0.i256 v2 v1;
+        evm_return 0.i256 v1;
+}
+
 func public %runtime__StorPtr_Evm___207f35a85ac4062e() {
     block0:
         call %storagemap_k__v__const_salt__u256__new__u256_u256_0__6a346ad3c930d971;
@@ -240,31 +248,12 @@ func public %u256_storagekey_write_key(v0.i256, v1.i256) -> i256 {
 }
 
 
-object @Contract {
+object @BalanceMap {
+    section init {
+        entry %init__StorPtr_Evm___207f35a85ac4062e;
+        embed .runtime as &runtime__StorPtr_Evm___207f35a85ac4062e;
+    }
     section runtime {
         entry %runtime__StorPtr_Evm___207f35a85ac4062e;
-        include %abi_encode;
-        include %get_balance__StorPtr_StorageMap_u256__u256__0____4a2331212cb04e60;
-        include %set_balance__StorPtr_StorageMap_u256__u256__0____4a2331212cb04e60;
-        include %get_allowance__StorPtr_StorageMap_u256__u256__1____61bfe7f974fa0c6e;
-        include %set_allowance__StorPtr_StorageMap_u256__u256__1____61bfe7f974fa0c6e;
-        include %transfer__StorPtr_StorageMap_u256__u256__0____4a2331212cb04e60;
-        include %storagemap_k__v__const_salt__u256__get__u256_u256_0__6a346ad3c930d971;
-        include %storagemap_k__v__const_salt__u256__set__u256_u256_0__6a346ad3c930d971;
-        include %storagemap_k__v__const_salt__u256__get__u256_u256_1__3c02c0f2b86be0bb;
-        include %storagemap_k__v__const_salt__u256__set__u256_u256_1__3c02c0f2b86be0bb;
-        include %storagemap_k__v__const_salt__u256__new__u256_u256_0__6a346ad3c930d971;
-        include %storagemap_k__v__const_salt__u256__new__u256_u256_1__3c02c0f2b86be0bb;
-        include %get_balance__MemPtr_StorageMap_u256__u256__0____3cd7ace0c4584833;
-        include %set_balance__MemPtr_StorageMap_u256__u256__0____3cd7ace0c4584833;
-        include %transfer__MemPtr_StorageMap_u256__u256__0____3cd7ace0c4584833;
-        include %get_allowance__MemPtr_StorageMap_u256__u256__1____e8f0bd5888eece94;
-        include %set_allowance__MemPtr_StorageMap_u256__u256__1____e8f0bd5888eece94;
-        include %storagemap_get_word_with_salt__u256__3271ca15373d4483;
-        include %u256_wordrepr_from_word;
-        include %u256_wordrepr_to_word;
-        include %storagemap_set_word_with_salt__u256__3271ca15373d4483;
-        include %storagemap_storage_slot_with_salt__u256__3271ca15373d4483;
-        include %u256_storagekey_write_key;
     }
 }

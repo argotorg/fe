@@ -37,9 +37,5 @@ func public %__fe_sonatina_entry() {
 object @Contract {
     section runtime {
         entry %__fe_sonatina_entry;
-        include %call_identity_u32;
-        include %call_identity_bool;
-        include %identity__u32__20aa0c10687491ad;
-        include %identity__bool__947c0c03c59c6f07;
     }
 }

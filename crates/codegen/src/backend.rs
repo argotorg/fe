@@ -210,6 +210,7 @@ impl Backend for SonatinaBackend {
         use sonatina_codegen::isa::evm::EvmBackend;
         use sonatina_codegen::object::{CompileOptions, compile_object};
         use sonatina_ir::isa::evm::Evm;
+        use sonatina_ir::object::{Directive, SectionRef};
         use sonatina_triple::{Architecture, EvmVersion, OperatingSystem, TargetTriple, Vendor};
 
         // Lower to Sonatina IR
@@ -231,10 +232,48 @@ impl Backend for SonatinaBackend {
         let isa = Evm::new(triple);
         let evm_backend = EvmBackend::new(isa);
 
-        // Compile the "Contract" object
+        // Compile the root object.
+        //
+        // Non-contract modules use a synthetic `Contract` object; contract modules use their
+        // actual contract name as the object name.
+        let object_name = if module.objects.contains_key("Contract") {
+            "Contract".to_string()
+        } else if module.objects.len() == 1 {
+            module.objects.keys().next().expect("len == 1").to_string()
+        } else {
+            let mut referenced_objects = std::collections::BTreeSet::new();
+            for object in module.objects.values() {
+                for section in &object.sections {
+                    for directive in &section.directives {
+                        let Directive::Embed(embed) = directive else {
+                            continue;
+                        };
+                        let SectionRef::External { object, .. } = &embed.source else {
+                            continue;
+                        };
+                        referenced_objects.insert(object.0.as_str().to_string());
+                    }
+                }
+            }
+
+            let mut roots: Vec<String> = module
+                .objects
+                .keys()
+                .filter(|name| !referenced_objects.contains(*name))
+                .cloned()
+                .collect();
+            roots.sort();
+
+            roots.into_iter().next().ok_or_else(|| {
+                BackendError::Sonatina(
+                    "failed to select root object (all objects are referenced)".to_string(),
+                )
+            })?
+        };
+
         let opts: CompileOptions<_> = CompileOptions::default();
         let artifact =
-            compile_object(&module, &evm_backend, "Contract", &opts).map_err(|errors| {
+            compile_object(&module, &evm_backend, &object_name, &opts).map_err(|errors| {
                 let msg = errors
                     .iter()
                     .map(|e| format!("{:?}", e))

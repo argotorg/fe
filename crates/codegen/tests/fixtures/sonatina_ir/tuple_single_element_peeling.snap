@@ -1,6 +1,5 @@
 ---
 source: crates/codegen/tests/sonatina_ir.rs
-assertion_line: 74
 expression: output
 input_file: crates/codegen/tests/fixtures/tuple_single_element_peeling.fe
 ---
@@ -57,9 +56,5 @@ func public %__fe_sonatina_entry() {
 object @Contract {
     section runtime {
         entry %__fe_sonatina_entry;
-        include %tuple_single_passthrough;
-        include %tuple_single_nested_passthrough;
-        include %tuple_single_struct_newtype_nested;
-        include %match_single_element_tuple;
     }
 }

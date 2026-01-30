@@ -43,7 +43,5 @@ func public %__fe_sonatina_entry() {
 object @Contract {
     section runtime {
         entry %__fe_sonatina_entry;
-        include %if_else;
-        include %helper;
     }
 }

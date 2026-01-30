@@ -170,6 +170,21 @@ func public %accesscontrol_revoke(v0.i256, v1.i256) {
         return;
 }
 
+func public %__CoolCoin_init_contract(v0.i256, v1.i256, v2.i256, v3.i256, v4.i256, v5.i256) {
+    block0:
+        call %accesscontrol_grant 1.i256 v1;
+        call %accesscontrol_grant 2.i256 v1;
+        v9.i256 = gt v0 0.i256;
+        br v9 block1 block2;
+
+    block1:
+        call %mint__StorPtr_TokenStore___6cde5b1e4cc29186 v1 v0 v2 v5;
+        jump block2;
+
+    block2:
+        return;
+}
+
 func public %__CoolCoin_recv_0_0(v0.i256, v1.i256, v2.i256, v3.i256) -> i256 {
     block0:
         v5.i256 = mload v0 i256;
@@ -304,6 +319,37 @@ func public %__CoolCoin_recv_1_4(v0.i256, v1.i256, v2.i256, v3.i256) -> i256 {
         v16.i256 = sub v13 v8;
         call %approve__StorPtr_TokenStore___6cde5b1e4cc29186 v9 v5 v16 v2 v3;
         return 1.i256;
+}
+
+func public %__CoolCoin_init() {
+    block0:
+        v1.i256 = call %init_field__Evm_TokenStore__f6aa99d6ecaccf30 0.i256;
+        v3.i256 = call %init_field__Evm_AccessControl__9eae422fa78e0dfe 1.i256;
+        v4.i256 = sym_addr &__CoolCoin_runtime;
+        v5.i256 = sym_size &__CoolCoin_runtime;
+        v6.i256 = evm_code_size;
+        v7.i256 = add v4 v5;
+        v8.i256 = lt v6 v7;
+        br v8 block1 block2;
+
+    block1:
+        call %evm_contracthost_abort;
+        evm_invalid;
+
+    block2:
+        v10.i256 = sub v6 v7;
+        v11.i256 = evm_malloc v10;
+        evm_code_copy v11 v7 v10;
+        v13.i256 = evm_malloc 64.i256;
+        mstore v13 v11 i256;
+        v15.i256 = add v13 32.i256;
+        mstore v15 v10 i256;
+        v16.i256 = call %sol_abi_decoder_new__MemoryBytes__b48f82585f3ed728 v13;
+        v17.i256 = call %u256_decode_decode__Sol_SolDecoder_MemoryBytes___c66d50dfccf37f39 v16;
+        v18.i256 = call %address_decode_decode__Sol_SolDecoder_MemoryBytes___c66d50dfccf37f39 v16;
+        call %__CoolCoin_init_contract v17 v18 v1 v3 0.i256 0.i256;
+        evm_code_copy 0.i256 v4 v5;
+        evm_return 0.i256 v5;
 }
 
 func public %__CoolCoin_runtime() {
@@ -454,6 +500,18 @@ func public %__CoolCoin_runtime() {
     block28:
         v33.i256 = eq v4 2757214935.i256;
         br v33 block15 block1;
+}
+
+func public %__CoolCoin_init_code_offset() -> i256 {
+    block0:
+        v1.i256 = sym_addr &__CoolCoin_init;
+        return v1;
+}
+
+func public %__CoolCoin_init_code_len() -> i256 {
+    block0:
+        v1.i256 = sym_size &__CoolCoin_init;
+        return v1;
 }
 
 func public %address_zero() -> i256 {
@@ -1285,123 +1343,12 @@ func public %u256_storagekey_write_key(v0.i256, v1.i256) -> i256 {
 }
 
 
-object @Contract {
+object @CoolCoin {
+    section init {
+        entry %__CoolCoin_init;
+        embed .runtime as &__CoolCoin_runtime;
+    }
     section runtime {
         entry %__CoolCoin_runtime;
-        include %transfer__StorPtr_TokenStore___6cde5b1e4cc29186;
-        include %mint__StorPtr_TokenStore___6cde5b1e4cc29186;
-        include %burn__StorPtr_TokenStore___6cde5b1e4cc29186;
-        include %approve__StorPtr_TokenStore___6cde5b1e4cc29186;
-        include %spend_allowance__StorPtr_TokenStore___6cde5b1e4cc29186;
-        include %accesscontrol_has_role;
-        include %accesscontrol_require;
-        include %accesscontrol_grant;
-        include %accesscontrol_revoke;
-        include %__CoolCoin_recv_0_0;
-        include %__CoolCoin_recv_0_1;
-        include %__CoolCoin_recv_0_2;
-        include %__CoolCoin_recv_0_3;
-        include %__CoolCoin_recv_0_4;
-        include %__CoolCoin_recv_0_5;
-        include %__CoolCoin_recv_0_6;
-        include %__CoolCoin_recv_0_7;
-        include %__CoolCoin_recv_0_8;
-        include %__CoolCoin_recv_1_0;
-        include %__CoolCoin_recv_1_1;
-        include %__CoolCoin_recv_1_2;
-        include %__CoolCoin_recv_1_3;
-        include %__CoolCoin_recv_1_4;
-        include %address_zero;
-        include %assert;
-        include %storagemap_k__v__const_salt__u256__get__Address_u256_0__b8b2f68065fe2328;
-        include %storagemap_k__v__const_salt__u256__set__Address_u256_0__b8b2f68065fe2328;
-        include %emit__log__Log_TransferEvent__41b584f23318b0be;
-        include %emit__log__Log_TransferEvent__41b584f23318b0be;
-        include %emit__log__Log_TransferEvent__41b584f23318b0be;
-        include %storagemap_k__v__const_salt__u256__set___Address__Address__u256_1__12414c27d5bfff1f;
-        include %emit__log__Log_ApprovalEvent__bbf50d88fed22fda;
-        include %storagemap_k__v__const_salt__u256__get___Address__Address__u256_1__12414c27d5bfff1f;
-        include %storagemap_k__v__const_salt__u256__get___u256__Address__bool_2__74418d210da55cc0;
-        include %storagemap_k__v__const_salt__u256__set___u256__Address__bool_2__74418d210da55cc0;
-        include %init_field__Evm_TokenStore__f6aa99d6ecaccf30;
-        include %init_field__Evm_AccessControl__9eae422fa78e0dfe;
-        include %evm_contracthost_abort;
-        include %alloc;
-        include %sol_abi_decoder_new__MemoryBytes__b48f82585f3ed728;
-        include %u256_decode_decode__Sol_SolDecoder_MemoryBytes___c66d50dfccf37f39;
-        include %address_decode_decode__Sol_SolDecoder_MemoryBytes___c66d50dfccf37f39;
-        include %evm_contracthost_field__TokenStore__cf27701b626eb0c2;
-        include %evm_contracthost_field__AccessControl__56bc16b6aa1a86f2;
-        include %runtime_selector__Evm_Sol__2533f5c49b57a682;
-        include %runtime_decoder__Evm_Sol__2533f5c49b57a682;
-        include %transfer_decode_decode__SolDecoder_CallData___c1e4510fd444b966;
-        include %return_value__Evm_Sol_bool__261f3a707fad09c8;
-        include %approve_decode_decode__SolDecoder_CallData___c1e4510fd444b966;
-        include %transferfrom_decode_decode__SolDecoder_CallData___c1e4510fd444b966;
-        include %balanceof_decode_decode__SolDecoder_CallData___c1e4510fd444b966;
-        include %return_value__Evm_Sol_u256__fe091c64bccbbbf1;
-        include %allowance_decode_decode__SolDecoder_CallData___c1e4510fd444b966;
-        include %totalsupply_decode_decode__SolDecoder_CallData___c1e4510fd444b966;
-        include %name_decode_decode__SolDecoder_CallData___c1e4510fd444b966;
-        include %return_value__Evm_Sol_String_32___fce5fd9d073f47ee;
-        include %symbol_decode_decode__SolDecoder_CallData___c1e4510fd444b966;
-        include %return_value__Evm_Sol_String_8___90b3a09bdf47bf15;
-        include %decimals_decode_decode__SolDecoder_CallData___c1e4510fd444b966;
-        include %return_value__Evm_Sol_u8__d483d38efd15a73d;
-        include %mint_decode_decode__SolDecoder_CallData___c1e4510fd444b966;
-        include %burn_decode_decode__SolDecoder_CallData___c1e4510fd444b966;
-        include %burnfrom_decode_decode__SolDecoder_CallData___c1e4510fd444b966;
-        include %increaseallowance_decode_decode__SolDecoder_CallData___c1e4510fd444b966;
-        include %decreaseallowance_decode_decode__SolDecoder_CallData___c1e4510fd444b966;
-        include %storagemap_get_word_with_salt__Address__ce8f588742192062;
-        include %u256_wordrepr_from_word;
-        include %u256_wordrepr_to_word;
-        include %storagemap_set_word_with_salt__Address__ce8f588742192062;
-        include %storagemap_set_word_with_salt___Address__Address___c32d499da259c78e;
-        include %storagemap_get_word_with_salt___Address__Address___c32d499da259c78e;
-        include %storagemap_get_word_with_salt___u256__Address___c7c570db20cdd393;
-        include %bool_wordrepr_from_word;
-        include %bool_wordrepr_to_word;
-        include %storagemap_set_word_with_salt___u256__Address___c7c570db20cdd393;
-        include %soldecoder_i__new__MemoryBytes__b48f82585f3ed728;
-        include %soldecoder_i__abidecoder_read_word__MemoryBytes__b48f82585f3ed728;
-        include %stor_ptr__Evm_TokenStore__f6aa99d6ecaccf30;
-        include %stor_ptr__Evm_AccessControl__9eae422fa78e0dfe;
-        include %evm_contracthost_input;
-        include %calldata_byteinput_len;
-        include %calldata_byteinput_word_at;
-        include %sol_abi_selector_from_prefix;
-        include %sol_abi_decoder_with_base__CallData__b9ab8dc8a4b2f9e;
-        include %address_decode_decode__Sol_SolDecoder_CallData___828c6f2e3bda3cab;
-        include %u256_decode_decode__Sol_SolDecoder_CallData___828c6f2e3bda3cab;
-        include %sol_abi_encoder_new;
-        include %solencoder_abiencoder_reserve_head;
-        include %bool_encode_encode__Sol_SolEncoder__dce63ad1a1fe4ae2;
-        include %solencoder_abiencoder_finish;
-        include %evm_contracthost_return_bytes;
-        include %u256_encode_encode__Sol_SolEncoder__dce63ad1a1fe4ae2;
-        include %string_const_n__usize__encode_encode__Sol_32_SolEncoder__85bcb27fa2f25e8f;
-        include %u8_encode_encode__Sol_SolEncoder__dce63ad1a1fe4ae2;
-        include %storagemap_storage_slot_with_salt__Address__ce8f588742192062;
-        include %storagemap_storage_slot_with_salt___Address__Address___c32d499da259c78e;
-        include %storagemap_storage_slot_with_salt___u256__Address___c7c570db20cdd393;
-        include %cursor_i__new__MemoryBytes__b48f82585f3ed728;
-        include %memorybytes_byteinput_len;
-        include %memorybytes_byteinput_word_at;
-        include %storptr_t__effectref_from_raw__TokenStore__cf27701b626eb0c2;
-        include %s_intdowncast_downcast_unchecked__u256_u32__6e3637cd3e911b35;
-        include %soldecoder_i__with_base__CallData__b9ab8dc8a4b2f9e;
-        include %soldecoder_i__abidecoder_read_word__CallData__b9ab8dc8a4b2f9e;
-        include %solencoder_new;
-        include %solencoder_ensure_init_mem;
-        include %solencoder_abiencoder_write_word;
-        include %address_storagekey_write_key;
-        include %_a__b__storagekey_write_key__Address_Address__397b9a625a435b6f;
-        include %_a__b__storagekey_write_key__u256_Address__1ae3ad2a1b729a8b;
-        include %u256_intword_to_word;
-        include %u32_intword_from_word;
-        include %cursor_i__new__CallData__b9ab8dc8a4b2f9e;
-        include %cursor_i__fork_mem__CallData__b9ab8dc8a4b2f9e;
-        include %u256_storagekey_write_key;
     }
 }

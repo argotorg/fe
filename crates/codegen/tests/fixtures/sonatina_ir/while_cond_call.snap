@@ -38,7 +38,5 @@ func public %__fe_sonatina_entry() {
 object @Contract {
     section runtime {
         entry %__fe_sonatina_entry;
-        include %lt_ten;
-        include %while_cond_call;
     }
 }
