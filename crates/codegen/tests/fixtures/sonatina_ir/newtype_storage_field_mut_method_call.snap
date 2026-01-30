@@ -11,6 +11,11 @@ func public %wrap_bump(v0.i256) -> i256 {
         return v3;
 }
 
+func public %__NewtypeStorageFieldMutMethodCall_init_contract() {
+    block0:
+        return;
+}
+
 func public %__NewtypeStorageFieldMutMethodCall_recv_0_0(v0.i256) -> i256 {
     block0:
         v2.i256 = evm_sload v0;
@@ -18,6 +23,35 @@ func public %__NewtypeStorageFieldMutMethodCall_recv_0_0(v0.i256) -> i256 {
         evm_sstore v0 v3;
         v4.i256 = evm_sload v0;
         return v4;
+}
+
+func public %__NewtypeStorageFieldMutMethodCall_init() {
+    block0:
+        v1.i256 = call %init_field__Evm_u256__5d0807bcb3704261 0.i256;
+        v3.i256 = call %init_field__Evm_Wrap__321e432d5b6fc018 1.i256;
+        v4.i256 = sym_addr &__NewtypeStorageFieldMutMethodCall_runtime;
+        v5.i256 = sym_size &__NewtypeStorageFieldMutMethodCall_runtime;
+        v6.i256 = evm_code_size;
+        v7.i256 = add v4 v5;
+        v8.i256 = lt v6 v7;
+        br v8 block1 block2;
+
+    block1:
+        call %evm_contracthost_abort;
+        evm_invalid;
+
+    block2:
+        v10.i256 = sub v6 v7;
+        v11.i256 = evm_malloc v10;
+        evm_code_copy v11 v7 v10;
+        v13.i256 = evm_malloc 64.i256;
+        mstore v13 v11 i256;
+        v15.i256 = add v13 32.i256;
+        mstore v15 v10 i256;
+        v16.i256 = call %sol_abi_decoder_new__MemoryBytes__b48f82585f3ed728 v13;
+        call %__NewtypeStorageFieldMutMethodCall_init_contract;
+        evm_code_copy 0.i256 v4 v5;
+        evm_return 0.i256 v5;
 }
 
 func public %__NewtypeStorageFieldMutMethodCall_runtime() {
@@ -38,6 +72,18 @@ func public %__NewtypeStorageFieldMutMethodCall_runtime() {
         v9.i256 = call %__NewtypeStorageFieldMutMethodCall_recv_0_0 v3;
         call %return_value__Evm_Sol_u256__fe091c64bccbbbf1 v9;
         evm_invalid;
+}
+
+func public %__NewtypeStorageFieldMutMethodCall_init_code_offset() -> i256 {
+    block0:
+        v1.i256 = sym_addr &__NewtypeStorageFieldMutMethodCall_init;
+        return v1;
+}
+
+func public %__NewtypeStorageFieldMutMethodCall_init_code_len() -> i256 {
+    block0:
+        v1.i256 = sym_size &__NewtypeStorageFieldMutMethodCall_init;
+        return v1;
 }
 
 func public %init_field__Evm_u256__5d0807bcb3704261(v0.i256) -> i256 {
@@ -366,45 +412,12 @@ func public %cursor_i__fork_mem__CallData__b9ab8dc8a4b2f9e(v0.i256, v1.i256) -> 
 }
 
 
-object @Contract {
+object @NewtypeStorageFieldMutMethodCall {
+    section init {
+        entry %__NewtypeStorageFieldMutMethodCall_init;
+        embed .runtime as &__NewtypeStorageFieldMutMethodCall_runtime;
+    }
     section runtime {
         entry %__NewtypeStorageFieldMutMethodCall_runtime;
-        include %wrap_bump;
-        include %__NewtypeStorageFieldMutMethodCall_recv_0_0;
-        include %init_field__Evm_u256__5d0807bcb3704261;
-        include %init_field__Evm_Wrap__321e432d5b6fc018;
-        include %evm_contracthost_abort;
-        include %alloc;
-        include %sol_abi_decoder_new__MemoryBytes__b48f82585f3ed728;
-        include %evm_contracthost_field__u256__3271ca15373d4483;
-        include %evm_contracthost_field__Wrap__f30e372ad4ad7329;
-        include %runtime_selector__Evm_Sol__2533f5c49b57a682;
-        include %runtime_decoder__Evm_Sol__2533f5c49b57a682;
-        include %bump_decode_decode__SolDecoder_CallData___c1e4510fd444b966;
-        include %return_value__Evm_Sol_u256__fe091c64bccbbbf1;
-        include %soldecoder_i__new__MemoryBytes__b48f82585f3ed728;
-        include %stor_ptr__Evm_u256__5d0807bcb3704261;
-        include %stor_ptr__Evm_Wrap__321e432d5b6fc018;
-        include %evm_contracthost_input;
-        include %calldata_byteinput_len;
-        include %calldata_byteinput_word_at;
-        include %sol_abi_selector_from_prefix;
-        include %sol_abi_decoder_with_base__CallData__b9ab8dc8a4b2f9e;
-        include %sol_abi_encoder_new;
-        include %solencoder_abiencoder_reserve_head;
-        include %u256_encode_encode__Sol_SolEncoder__dce63ad1a1fe4ae2;
-        include %solencoder_abiencoder_finish;
-        include %evm_contracthost_return_bytes;
-        include %cursor_i__new__MemoryBytes__b48f82585f3ed728;
-        include %storptr_t__effectref_from_raw__u256__3271ca15373d4483;
-        include %s_intdowncast_downcast_unchecked__u256_u32__6e3637cd3e911b35;
-        include %soldecoder_i__with_base__CallData__b9ab8dc8a4b2f9e;
-        include %solencoder_new;
-        include %solencoder_ensure_init_mem;
-        include %solencoder_abiencoder_write_word;
-        include %u256_intword_to_word;
-        include %u32_intword_from_word;
-        include %cursor_i__new__CallData__b9ab8dc8a4b2f9e;
-        include %cursor_i__fork_mem__CallData__b9ab8dc8a4b2f9e;
     }
 }

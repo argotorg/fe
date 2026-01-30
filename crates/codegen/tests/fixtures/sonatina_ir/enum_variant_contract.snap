@@ -11,6 +11,14 @@ func public %abi_encode_u256(v0.i256, v1.i256) {
         evm_return 0.i256 32.i256;
 }
 
+func public %init__StorPtr_Evm___207f35a85ac4062e() {
+    block0:
+        v1.i256 = sym_size &runtime__StorPtr_Evm___207f35a85ac4062e;
+        v2.i256 = sym_addr &runtime__StorPtr_Evm___207f35a85ac4062e;
+        evm_code_copy 0.i256 v2 v1;
+        evm_return 0.i256 v1;
+}
+
 func public %runtime__StorPtr_Evm___207f35a85ac4062e() {
     block0:
         v1.i256 = evm_calldata_load 0.i256;
@@ -125,9 +133,12 @@ func public %runtime__StorPtr_Evm___207f35a85ac4062e() {
 }
 
 
-object @Contract {
+object @EnumContract {
+    section init {
+        entry %init__StorPtr_Evm___207f35a85ac4062e;
+        embed .runtime as &runtime__StorPtr_Evm___207f35a85ac4062e;
+    }
     section runtime {
         entry %runtime__StorPtr_Evm___207f35a85ac4062e;
-        include %abi_encode_u256;
     }
 }

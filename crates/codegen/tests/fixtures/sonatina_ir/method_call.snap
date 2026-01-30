@@ -38,9 +38,5 @@ func public %__fe_sonatina_entry() {
 object @Contract {
     section runtime {
         entry %__fe_sonatina_entry;
-        include %make_value;
-        include %foo_gen_value;
-        include %foo_return_value;
-        include %call_method;
     }
 }

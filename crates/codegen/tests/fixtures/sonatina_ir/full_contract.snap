@@ -26,6 +26,14 @@ func public %abi_encode(v0.i256, v1.i256) {
         evm_return 0.i256 32.i256;
 }
 
+func public %init__StorPtr_Evm___207f35a85ac4062e() {
+    block0:
+        v1.i256 = sym_size &dispatch__StorPtr_Evm___207f35a85ac4062e;
+        v2.i256 = sym_addr &dispatch__StorPtr_Evm___207f35a85ac4062e;
+        evm_code_copy 0.i256 v2 v1;
+        evm_return 0.i256 v1;
+}
+
 func public %dispatch__StorPtr_Evm___207f35a85ac4062e() {
     block0:
         v1.i256 = evm_calldata_load 0.i256;
@@ -77,12 +85,12 @@ func public %point_area_mem(v0.i256) -> i256 {
 }
 
 
-object @Contract {
+object @ShapeDispatcher {
+    section init {
+        entry %init__StorPtr_Evm___207f35a85ac4062e;
+        embed .runtime as &dispatch__StorPtr_Evm___207f35a85ac4062e;
+    }
     section runtime {
         entry %dispatch__StorPtr_Evm___207f35a85ac4062e;
-        include %point_area;
-        include %square_area;
-        include %abi_encode;
-        include %point_area_mem;
     }
 }

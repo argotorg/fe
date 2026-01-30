@@ -1,11 +1,10 @@
 use sonatina_ir::{
-    ValueId,
-    inst::{Inst, evm::EvmCreate2},
-    isa::evm::Evm,
-    isa::Isa,
+    I256, Signature, Type, ValueId,
     builder::ModuleBuilder,
     func_cursor::InstInserter,
-    I256, Signature, Type,
+    inst::{Inst, evm::EvmCreate2},
+    isa::Isa,
+    isa::evm::Evm,
 };
 use sonatina_triple::{Architecture, EvmVersion, OperatingSystem, TargetTriple, Vendor};
 

@@ -127,26 +127,5 @@ func public %__fe_sonatina_entry() {
 object @Contract {
     section runtime {
         entry %__fe_sonatina_entry;
-        include %flattened_fn;
-        include %flattened_fn;
-        include %test_module_qualifier_flatten_collision;
-        include %test_generic_type_collision;
-        include %widget_process;
-        include %widget_process;
-        include %test_impl_method_collision;
-        include %multitraitimpl_trait_same_method;
-        include %multitraitimpl_trait_same_method;
-        include %test_trait_method_collision;
-        include %param_local_collision;
-        include %test_param_local_collision;
-        include %__u32_as_u256;
-        include %test_cast_shim_collision;
-        include %ret_param_collision;
-        include %test_ret_param_collision;
-        include %add;
-        include %test_yul_reserved_fn_collision;
-        include %main;
-        include %generic_fn__S__33f7c3322e562590;
-        include %generic_fn__S__33f7c3322e562590;
     }
 }

@@ -1,6 +1,5 @@
 ---
 source: crates/codegen/tests/sonatina_ir.rs
-assertion_line: 65
 expression: output
 input_file: crates/codegen/tests/fixtures/ret.fe
 ---
@@ -43,6 +42,5 @@ func public %__fe_sonatina_entry() {
 object @Contract {
     section runtime {
         entry %__fe_sonatina_entry;
-        include %retfoo;
     }
 }

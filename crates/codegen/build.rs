@@ -21,4 +21,3 @@ fn watch_dir_recursively(dir: &Path) {
         }
     }
 }
-

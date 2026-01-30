@@ -57,8 +57,5 @@ func public %__fe_sonatina_entry() {
 object @Contract {
     section runtime {
         entry %__fe_sonatina_entry;
-        include %tuple_literal_field_access;
-        include %tuple_literal_nested_access;
-        include %tuple_literal_struct_chain;
     }
 }

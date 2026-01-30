@@ -3,8 +3,8 @@
 //! This module translates Fe MIR to Sonatina IR, which is then compiled
 //! to EVM bytecode without going through Yul/solc.
 
-mod types;
 mod tests;
+mod types;
 
 use driver::DriverDataBase;
 use hir::analysis::ty::adt_def::AdtRef;
@@ -15,7 +15,7 @@ use hir::projection::{IndexSource, Projection};
 use mir::ir::{AddressSpaceKind, IntrinsicOp, Place, SyntheticValue};
 use mir::{MirModule, layout, layout::TargetDataLayout, lower_module};
 use num_bigint::BigUint;
-use rustc_hash::FxHashMap;
+use rustc_hash::{FxHashMap, FxHashSet};
 use sonatina_ir::{
     BlockId, I256, Module, Signature, Type, ValueId,
     builder::{ModuleBuilder, Variable},
@@ -27,21 +27,21 @@ use sonatina_ir::{
         control_flow::{Br, Call, Jump, Return},
         data::{Mload, Mstore, SymAddr, SymSize, SymbolRef},
         evm::{
-            EvmCalldataCopy, EvmCalldataLoad, EvmCalldataSize, EvmCaller, EvmCodeCopy, EvmCodeSize,
-            EvmExp, EvmInvalid, EvmKeccak256, EvmMalloc, EvmMsize, EvmMstore8, EvmReturn,
-            EvmReturnDataCopy, EvmReturnDataSize, EvmRevert, EvmSload, EvmSstore, EvmStop, EvmTload,
-            EvmTstore, EvmUdiv, EvmUmod,
-            EvmAddress, EvmBaseFee, EvmBlockHash, EvmCall, EvmCallValue, EvmChainId, EvmCoinBase,
-            EvmCreate, EvmCreate2, EvmDelegateCall, EvmGas, EvmGasLimit, EvmLog0,
-            EvmLog1, EvmLog2, EvmLog3, EvmLog4, EvmNumber, EvmOrigin, EvmPrevRandao,
-            EvmSelfBalance, EvmSelfDestruct, EvmStaticCall, EvmTimestamp,
+            EvmAddress, EvmBaseFee, EvmBlockHash, EvmCall, EvmCallValue, EvmCalldataCopy,
+            EvmCalldataLoad, EvmCalldataSize, EvmCaller, EvmChainId, EvmCodeCopy, EvmCodeSize,
+            EvmCoinBase, EvmCreate, EvmCreate2, EvmDelegateCall, EvmExp, EvmGas, EvmGasLimit,
+            EvmInvalid, EvmKeccak256, EvmLog0, EvmLog1, EvmLog2, EvmLog3, EvmLog4, EvmMalloc,
+            EvmMsize, EvmMstore8, EvmNumber, EvmOrigin, EvmPrevRandao, EvmReturn,
+            EvmReturnDataCopy, EvmReturnDataSize, EvmRevert, EvmSelfBalance, EvmSelfDestruct,
+            EvmSload, EvmSstore, EvmStaticCall, EvmStop, EvmTimestamp, EvmTload, EvmTstore,
+            EvmUdiv, EvmUmod,
         },
         logic::{And, Not, Or, Xor},
     },
     ir_writer::ModuleWriter,
     isa::{Isa, evm::Evm},
     module::{FuncRef, ModuleCtx},
-    object::{Directive, EmbedSymbol, Object, ObjectName, Section, SectionName},
+    object::{Directive, Embed, EmbedSymbol, Object, ObjectName, Section, SectionName, SectionRef},
 };
 use sonatina_triple::{Architecture, EvmVersion, OperatingSystem, TargetTriple, Vendor};
 
@@ -148,32 +148,13 @@ struct ModuleLowerer<'db, 'a> {
     name_map: FxHashMap<String, FuncRef>,
     /// Maps function symbol names to whether they return a value.
     returns_value_map: FxHashMap<String, bool>,
-    /// Index of the entry function (if any). Entry functions emit `evm_stop`
-    /// instead of internal `Return` since they are executed directly by the EVM.
-    entry_func_idx: Option<usize>,
+    /// Indices of functions executed directly by the EVM (empty stack).
+    ///
+    /// These entry functions emit `evm_stop` instead of internal `Return`.
+    entry_func_idxs: FxHashSet<usize>,
 }
 
 impl<'db, 'a> ModuleLowerer<'db, 'a> {
-    fn is_excluded_from_runtime(func: &mir::MirFunction<'db>) -> bool {
-        use mir::ir::{ContractFunctionKind, MirFunctionOrigin, SyntheticId};
-
-        if let Some(contract_fn) = func.contract_function.as_ref()
-            && contract_fn.kind == ContractFunctionKind::Init
-        {
-            return true;
-        }
-
-        matches!(
-            func.origin,
-            MirFunctionOrigin::Synthetic(
-                SyntheticId::ContractInitEntrypoint(_)
-                    | SyntheticId::ContractInitHandler(_)
-                    | SyntheticId::ContractInitCodeOffset(_)
-                    | SyntheticId::ContractInitCodeLen(_)
-            )
-        )
-    }
-
     fn new(
         db: &'db DriverDataBase,
         builder: ModuleBuilder,
@@ -190,7 +171,7 @@ impl<'db, 'a> ModuleLowerer<'db, 'a> {
             func_map: FxHashMap::default(),
             name_map: FxHashMap::default(),
             returns_value_map: FxHashMap::default(),
-            entry_func_idx: None,
+            entry_func_idxs: FxHashSet::default(),
         }
     }
 
@@ -216,7 +197,7 @@ impl<'db, 'a> ModuleLowerer<'db, 'a> {
     /// Declare all functions in the module.
     fn declare_functions(&mut self) -> Result<(), LowerError> {
         for (idx, func) in self.mir.functions.iter().enumerate() {
-            if func.symbol_name.is_empty() || Self::is_excluded_from_runtime(func) {
+            if func.symbol_name.is_empty() {
                 continue;
             }
             let name = &func.symbol_name;
@@ -241,22 +222,25 @@ impl<'db, 'a> ModuleLowerer<'db, 'a> {
         let name = &func.symbol_name;
         let linkage = sonatina_ir::Linkage::Public; // TODO: proper linkage
 
-        // Contract runtime entrypoints are executed directly by the EVM with an empty stack.
+        // Contract init/runtime entrypoints are executed directly by the EVM with an empty stack.
         // Even though MIR models them as taking effect args (e.g. `StorPtr<Evm>`), we cannot
         // expose those as real EVM stack parameters at entry.
-        let is_contract_runtime_entry = func
-            .contract_function
-            .as_ref()
-            .is_some_and(|cf| cf.kind == ContractFunctionKind::Runtime)
-            || matches!(
-                func.origin,
-                MirFunctionOrigin::Synthetic(SyntheticId::ContractRuntimeEntrypoint(_))
-            );
+        let is_contract_entry = func.contract_function.as_ref().is_some_and(|cf| {
+            matches!(
+                cf.kind,
+                ContractFunctionKind::Init | ContractFunctionKind::Runtime
+            )
+        }) || matches!(
+            func.origin,
+            MirFunctionOrigin::Synthetic(
+                SyntheticId::ContractInitEntrypoint(_) | SyntheticId::ContractRuntimeEntrypoint(_)
+            )
+        );
 
         // Convert parameter types - all EVM parameters are 256-bit words.
         // Entry functions have no parameters since the EVM starts with an empty stack.
         let mut params = Vec::new();
-        if !is_contract_runtime_entry {
+        if !is_contract_entry {
             for local_id in func.body.param_locals.iter().copied() {
                 let local_ty = func
                     .body
@@ -303,7 +287,7 @@ impl<'db, 'a> ModuleLowerer<'db, 'a> {
             let Some(&func_ref) = self.func_map.get(&idx) else {
                 continue;
             };
-            let is_entry = self.entry_func_idx == Some(idx);
+            let is_entry = self.entry_func_idxs.contains(&idx);
             self.lower_function(func_ref, func, is_entry)?;
         }
         Ok(())
@@ -320,91 +304,326 @@ impl<'db, 'a> ModuleLowerer<'db, 'a> {
     /// For simple test files (no explicit contract): A wrapper function calls the entry
     /// and then does `evm_stop`, preserving internal function call semantics.
     fn create_objects(&mut self) -> Result<(), LowerError> {
-        use mir::ir::{ContractFunctionKind, MirFunctionOrigin, SyntheticId};
+        use mir::analysis::build_contract_graph;
 
-        // Check for an explicit contract runtime entrypoint.
-        let contract_runtime_entry = self
+        let contract_graph = build_contract_graph(&self.mir.functions);
+        if !contract_graph.contracts.is_empty() {
+            return self.create_contract_objects(&contract_graph);
+        }
+
+        // No contract annotations: fall back to compiling a single "main" entry. This is used by
+        // snapshot tests for simple files and debugging.
+        let Some((entry_idx, entry_mir_func)) = self
             .mir
             .functions
             .iter()
             .enumerate()
-            .filter(|(idx, _)| self.func_map.contains_key(idx))
-            .find(|(_, f)| {
-                f.contract_function
-                    .as_ref()
-                    .is_some_and(|cf| cf.kind == ContractFunctionKind::Runtime)
-                    || matches!(
-                        f.origin,
-                        MirFunctionOrigin::Synthetic(SyntheticId::ContractRuntimeEntrypoint(_))
-                    )
-            });
-
-        // Fallback to first declared function for simple test files.
-        let fallback_entry = || {
-            self.mir
-                .functions
-                .iter()
-                .enumerate()
-                .find(|(idx, _)| self.func_map.contains_key(idx))
+            .find(|(idx, _)| self.func_map.contains_key(idx))
+        else {
+            // No functions to compile - this is valid for empty modules.
+            return Ok(());
         };
-
-        let (entry_idx, entry_mir_func, is_contract_runtime) =
-            if let Some((idx, func)) = contract_runtime_entry {
-                (idx, func, true)
-            } else if let Some((idx, func)) = fallback_entry() {
-                (idx, func, false)
-            } else {
-                // No functions to compile - this is valid for empty modules
-                return Ok(());
-            };
 
         let entry_ref = self.func_map[&entry_idx];
+        let wrapper_ref = self.create_entry_wrapper(entry_ref, entry_mir_func)?;
+        let directives = vec![Directive::Entry(wrapper_ref)];
 
-        // Only contract runtime entrypoints get direct entry treatment (evm_stop terminators).
-        // Simple test files use a wrapper to preserve internal function call semantics.
-        let (actual_entry, include_wrapped) = if is_contract_runtime {
-            // Contract runtime: emit evm_stop in the entry function itself.
-            self.entry_func_idx = Some(entry_idx);
-            (entry_ref, None)
-        } else {
-            // Simple test file: create a wrapper that calls the entry and then evm_stop.
-            let wrapper_ref = self.create_entry_wrapper(entry_ref, entry_mir_func)?;
-            (wrapper_ref, Some(entry_ref))
-        };
-
-        // Create runtime section.
-        let mut directives = vec![Directive::Entry(actual_entry)];
-        if let Some(wrapped_func) = include_wrapped {
-            directives.push(Directive::Include(wrapped_func));
-        }
-
-        // Include all other declared functions
-        for (idx, _func) in self.mir.functions.iter().enumerate() {
-            if idx == entry_idx {
-                continue;
-            }
-            if let Some(&func_ref) = self.func_map.get(&idx) {
-                directives.push(Directive::Include(func_ref));
-            }
-        }
-
-        let runtime_section = Section {
-            name: SectionName::from("runtime"),
-            directives,
-        };
-
-        // Create the contract object
         let object = Object {
             name: ObjectName::from("Contract"),
-            sections: vec![runtime_section],
+            sections: vec![Section {
+                name: SectionName::from("runtime"),
+                directives,
+            }],
         };
 
-        // Add object to module
         self.builder
             .declare_object(object)
             .map_err(|e| LowerError::Internal(format!("failed to declare object: {e}")))?;
 
         Ok(())
+    }
+
+    fn create_contract_objects(
+        &mut self,
+        contract_graph: &mir::analysis::ContractGraph,
+    ) -> Result<(), LowerError> {
+        use mir::analysis::{ContractRegion, ContractRegionKind};
+        use std::collections::VecDeque;
+
+        let mut func_idx_by_symbol: FxHashMap<&str, usize> = FxHashMap::default();
+        for (idx, func) in self.mir.functions.iter().enumerate() {
+            if !self.func_map.contains_key(&idx) {
+                continue;
+            }
+            func_idx_by_symbol.insert(func.symbol_name.as_str(), idx);
+        }
+
+        // Pick a primary contract to compile:
+        // - prefer a root contract (not referenced by others)
+        // - otherwise fall back to the first contract name (deterministic sort)
+        let mut referenced_contracts: FxHashSet<String> = FxHashSet::default();
+        for (from_region, deps) in &contract_graph.region_deps {
+            for dep in deps {
+                if dep.contract_name != from_region.contract_name {
+                    referenced_contracts.insert(dep.contract_name.clone());
+                }
+            }
+        }
+
+        let mut root_contracts: Vec<String> = contract_graph
+            .contracts
+            .keys()
+            .filter(|name| !referenced_contracts.contains(*name))
+            .cloned()
+            .collect();
+        root_contracts.sort();
+
+        let primary_contract = root_contracts
+            .into_iter()
+            .next()
+            .or_else(|| {
+                let mut names: Vec<String> = contract_graph.contracts.keys().cloned().collect();
+                names.sort();
+                names.into_iter().next()
+            })
+            .ok_or_else(|| {
+                LowerError::Internal("contract graph is unexpectedly empty".to_string())
+            })?;
+
+        // Collect the transitive set of contracts needed by the primary contract.
+        let mut needed_contracts: FxHashSet<String> = FxHashSet::default();
+        let mut queue = VecDeque::new();
+        queue.push_back(primary_contract.clone());
+        while let Some(contract_name) = queue.pop_front() {
+            if !needed_contracts.insert(contract_name.clone()) {
+                continue;
+            }
+
+            for kind in [ContractRegionKind::Init, ContractRegionKind::Deployed] {
+                let region = ContractRegion {
+                    contract_name: contract_name.clone(),
+                    kind,
+                };
+                let Some(deps) = contract_graph.region_deps.get(&region) else {
+                    continue;
+                };
+                for dep in deps {
+                    if dep.contract_name != contract_name {
+                        queue.push_back(dep.contract_name.clone());
+                    }
+                }
+            }
+        }
+
+        // Assign stable object names for each needed contract.
+        let mut contract_object_names: FxHashMap<String, ObjectName> = FxHashMap::default();
+        let mut ordered_contracts: Vec<String> = needed_contracts.into_iter().collect();
+        ordered_contracts.sort();
+        for contract in &ordered_contracts {
+            let object_name = ObjectName::from(contract.clone());
+            contract_object_names.insert(contract.clone(), object_name);
+        }
+
+        // Emit the primary object first for readability, then all remaining contracts.
+        ordered_contracts.retain(|c| c != &primary_contract);
+        ordered_contracts.insert(0, primary_contract.clone());
+
+        for contract_name in ordered_contracts {
+            let object_name = contract_object_names
+                .get(&contract_name)
+                .cloned()
+                .ok_or_else(|| {
+                    LowerError::Internal(format!("missing object name for `{contract_name}`"))
+                })?;
+
+            let Some(info) = contract_graph.contracts.get(&contract_name) else {
+                return Err(LowerError::Internal(format!(
+                    "missing contract info for `{contract_name}`"
+                )));
+            };
+
+            let init_section_name = SectionName::from("init");
+            let runtime_section_name = SectionName::from("runtime");
+
+            let mut sections = Vec::new();
+
+            let runtime_symbol = info.deployed_symbol.as_deref();
+            if let Some(runtime_symbol) = runtime_symbol {
+                let runtime_ref = *self.name_map.get(runtime_symbol).ok_or_else(|| {
+                    LowerError::Internal(format!(
+                        "unknown contract runtime entrypoint symbol: `{runtime_symbol}`"
+                    ))
+                })?;
+                let runtime_idx = *func_idx_by_symbol.get(runtime_symbol).ok_or_else(|| {
+                    LowerError::Internal(format!(
+                        "unknown contract runtime entrypoint index: `{runtime_symbol}`"
+                    ))
+                })?;
+                self.entry_func_idxs.insert(runtime_idx);
+
+                let region = ContractRegion {
+                    contract_name: contract_name.clone(),
+                    kind: ContractRegionKind::Deployed,
+                };
+                let deps = contract_graph
+                    .region_deps
+                    .get(&region)
+                    .cloned()
+                    .unwrap_or_default();
+                let mut directives = vec![Directive::Entry(runtime_ref)];
+                directives.extend(Self::build_embed_directives(
+                    &contract_name,
+                    ContractRegionKind::Deployed,
+                    &deps,
+                    &contract_object_names,
+                    contract_graph,
+                    &init_section_name,
+                    &runtime_section_name,
+                )?);
+
+                sections.push(Section {
+                    name: runtime_section_name.clone(),
+                    directives,
+                });
+            }
+
+            if let Some(init_symbol) = info.init_symbol.as_deref() {
+                let init_ref = *self.name_map.get(init_symbol).ok_or_else(|| {
+                    LowerError::Internal(format!(
+                        "unknown contract init entrypoint symbol: `{init_symbol}`"
+                    ))
+                })?;
+                let init_idx = *func_idx_by_symbol.get(init_symbol).ok_or_else(|| {
+                    LowerError::Internal(format!(
+                        "unknown contract init entrypoint index: `{init_symbol}`"
+                    ))
+                })?;
+                self.entry_func_idxs.insert(init_idx);
+
+                let region = ContractRegion {
+                    contract_name: contract_name.clone(),
+                    kind: ContractRegionKind::Init,
+                };
+                let mut deps = contract_graph
+                    .region_deps
+                    .get(&region)
+                    .cloned()
+                    .unwrap_or_default();
+
+                // The init section must embed the runtime section so `code_region_offset/len`
+                // for the runtime root can be lowered via `symaddr/symsize`.
+                if info.deployed_symbol.is_some() {
+                    deps.insert(ContractRegion {
+                        contract_name: contract_name.clone(),
+                        kind: ContractRegionKind::Deployed,
+                    });
+                }
+
+                let mut directives = vec![Directive::Entry(init_ref)];
+                directives.extend(Self::build_embed_directives(
+                    &contract_name,
+                    ContractRegionKind::Init,
+                    &deps,
+                    &contract_object_names,
+                    contract_graph,
+                    &init_section_name,
+                    &runtime_section_name,
+                )?);
+
+                sections.push(Section {
+                    name: init_section_name,
+                    directives,
+                });
+            }
+
+            // Ensure section order is stable (init before runtime).
+            sections.sort_by(|a, b| a.name.0.cmp(&b.name.0));
+
+            self.builder
+                .declare_object(Object {
+                    name: object_name,
+                    sections,
+                })
+                .map_err(|e| LowerError::Internal(format!("failed to declare object: {e}")))?;
+        }
+
+        Ok(())
+    }
+
+    fn build_embed_directives(
+        current_contract: &str,
+        current_kind: mir::analysis::ContractRegionKind,
+        deps: &FxHashSet<mir::analysis::ContractRegion>,
+        contract_object_names: &FxHashMap<String, ObjectName>,
+        contract_graph: &mir::analysis::ContractGraph,
+        init_section_name: &SectionName,
+        runtime_section_name: &SectionName,
+    ) -> Result<Vec<Directive>, LowerError> {
+        use mir::analysis::{ContractRegion, ContractRegionKind};
+
+        let mut deps: Vec<ContractRegion> = deps.iter().cloned().collect();
+        deps.sort();
+        deps.dedup();
+
+        let mut directives = Vec::new();
+        for dep in deps {
+            if dep.contract_name == current_contract && dep.kind == current_kind {
+                continue;
+            }
+
+            let Some(dep_info) = contract_graph.contracts.get(&dep.contract_name) else {
+                return Err(LowerError::Internal(format!(
+                    "code region dep refers to unknown contract `{}`",
+                    dep.contract_name
+                )));
+            };
+
+            let (dep_symbol, dep_section) = match dep.kind {
+                ContractRegionKind::Init => (
+                    dep_info.init_symbol.as_ref().ok_or_else(|| {
+                        LowerError::Internal(format!(
+                            "contract `{}` has no init entrypoint symbol",
+                            dep.contract_name
+                        ))
+                    })?,
+                    init_section_name.clone(),
+                ),
+                ContractRegionKind::Deployed => (
+                    dep_info.deployed_symbol.as_ref().ok_or_else(|| {
+                        LowerError::Internal(format!(
+                            "contract `{}` has no runtime entrypoint symbol",
+                            dep.contract_name
+                        ))
+                    })?,
+                    runtime_section_name.clone(),
+                ),
+            };
+
+            let source = if dep.contract_name == current_contract {
+                SectionRef::Local(dep_section)
+            } else {
+                let object = contract_object_names
+                    .get(&dep.contract_name)
+                    .cloned()
+                    .ok_or_else(|| {
+                        LowerError::Internal(format!(
+                            "missing object name for dependent contract `{}`",
+                            dep.contract_name
+                        ))
+                    })?;
+                SectionRef::External {
+                    object,
+                    section: dep_section,
+                }
+            };
+
+            directives.push(Directive::Embed(Embed {
+                source,
+                as_symbol: EmbedSymbol::from(dep_symbol.clone()),
+            }));
+        }
+
+        Ok(directives)
     }
 
     /// Create a wrapper entrypoint for simple test files (non-contract modules).
@@ -456,7 +675,9 @@ impl<'db, 'a> ModuleLowerer<'db, 'a> {
                     .locals
                     .get(local_id.index())
                     .map(|l| l.ty);
-                let Some(local_ty) = local_ty else { return true };
+                let Some(local_ty) = local_ty else {
+                    return true;
+                };
                 !is_erased_runtime_ty(self.db, &self.target_layout, local_ty)
             })
             .count();
@@ -861,7 +1082,9 @@ fn lower_rvalue<'db, C: sonatina_ir::func_cursor::FuncCursor>(
                             "gasprice is not supported by the Sonatina backend".to_string(),
                         ));
                     }
-                    "coinbase" => return Ok(Some(fb.insert_inst(EvmCoinBase::new(is), Type::I256))),
+                    "coinbase" => {
+                        return Ok(Some(fb.insert_inst(EvmCoinBase::new(is), Type::I256)));
+                    }
                     "timestamp" => {
                         return Ok(Some(fb.insert_inst(EvmTimestamp::new(is), Type::I256)));
                     }
@@ -893,7 +1116,9 @@ fn lower_rvalue<'db, C: sonatina_ir::func_cursor::FuncCursor>(
                             local_vars,
                             is,
                         )?;
-                        return Ok(Some(fb.insert_inst(EvmBlockHash::new(is, block), Type::I256)));
+                        return Ok(Some(
+                            fb.insert_inst(EvmBlockHash::new(is, block), Type::I256),
+                        ));
                     }
                     "gas" => return Ok(Some(fb.insert_inst(EvmGas::new(is), Type::I256))),
 
@@ -937,10 +1162,9 @@ fn lower_rvalue<'db, C: sonatina_ir::func_cursor::FuncCursor>(
                             local_vars,
                             is,
                         )?;
-                        return Ok(Some(fb.insert_inst(
-                            EvmCreate::new(is, val, offset, len),
-                            Type::I256,
-                        )));
+                        return Ok(Some(
+                            fb.insert_inst(EvmCreate::new(is, val, offset, len), Type::I256),
+                        ));
                     }
                     "create2" => {
                         let [val, offset, len, salt] = call.args.as_slice() else {
@@ -1072,7 +1296,9 @@ fn lower_rvalue<'db, C: sonatina_ir::func_cursor::FuncCursor>(
                             is,
                         )?;
                         return Ok(Some(fb.insert_inst(
-                            EvmCall::new(is, gas, addr, val, arg_offset, arg_len, ret_offset, ret_len),
+                            EvmCall::new(
+                                is, gas, addr, val, arg_offset, arg_len, ret_offset, ret_len,
+                            ),
                             Type::I256,
                         )));
                     }
@@ -1145,7 +1371,9 @@ fn lower_rvalue<'db, C: sonatina_ir::func_cursor::FuncCursor>(
                             is,
                         )?;
                         return Ok(Some(fb.insert_inst(
-                            EvmStaticCall::new(is, gas, addr, arg_offset, arg_len, ret_offset, ret_len),
+                            EvmStaticCall::new(
+                                is, gas, addr, arg_offset, arg_len, ret_offset, ret_len,
+                            ),
                             Type::I256,
                         )));
                     }
@@ -1218,7 +1446,9 @@ fn lower_rvalue<'db, C: sonatina_ir::func_cursor::FuncCursor>(
                             is,
                         )?;
                         return Ok(Some(fb.insert_inst(
-                            EvmDelegateCall::new(is, gas, addr, arg_offset, arg_len, ret_offset, ret_len),
+                            EvmDelegateCall::new(
+                                is, gas, addr, arg_offset, arg_len, ret_offset, ret_len,
+                            ),
                             Type::I256,
                         )));
                     }
@@ -1242,7 +1472,9 @@ fn lower_rvalue<'db, C: sonatina_ir::func_cursor::FuncCursor>(
                         let size_ty = body
                             .values
                             .get(size.index())
-                            .ok_or_else(|| LowerError::Internal("unknown call argument".to_string()))?
+                            .ok_or_else(|| {
+                                LowerError::Internal("unknown call argument".to_string())
+                            })?
                             .ty;
                         if is_erased_runtime_ty(db, target_layout, size_ty) {
                             return Err(LowerError::Internal(
@@ -1358,7 +1590,9 @@ fn lower_rvalue<'db, C: sonatina_ir::func_cursor::FuncCursor>(
                 let arg_ty = body
                     .values
                     .get(effect_arg.index())
-                    .ok_or_else(|| LowerError::Internal("unknown call effect argument".to_string()))?
+                    .ok_or_else(|| {
+                        LowerError::Internal("unknown call effect argument".to_string())
+                    })?
                     .ty;
                 if is_erased_runtime_ty(db, target_layout, arg_ty) {
                     continue;
@@ -1753,7 +1987,10 @@ fn lower_intrinsic<'db, C: sonatina_ir::func_cursor::FuncCursor>(
     local_vars: &FxHashMap<mir::LocalId, Variable>,
     is: &sonatina_ir::inst::evm::inst_set::EvmInstSet,
 ) -> Result<Option<ValueId>, LowerError> {
-    if matches!(op, IntrinsicOp::CodeRegionOffset | IntrinsicOp::CodeRegionLen) {
+    if matches!(
+        op,
+        IntrinsicOp::CodeRegionOffset | IntrinsicOp::CodeRegionLen
+    ) {
         let [func_item] = args else {
             return Err(LowerError::Internal(
                 "code region intrinsics require 1 argument".to_string(),
@@ -1779,8 +2016,12 @@ fn lower_intrinsic<'db, C: sonatina_ir::func_cursor::FuncCursor>(
         let embed_sym = EmbedSymbol::from(symbol.to_string());
         let sym = SymbolRef::Embed(embed_sym);
         return match op {
-            IntrinsicOp::CodeRegionOffset => Ok(Some(fb.insert_inst(SymAddr::new(is, sym), Type::I256))),
-            IntrinsicOp::CodeRegionLen => Ok(Some(fb.insert_inst(SymSize::new(is, sym), Type::I256))),
+            IntrinsicOp::CodeRegionOffset => {
+                Ok(Some(fb.insert_inst(SymAddr::new(is, sym), Type::I256)))
+            }
+            IntrinsicOp::CodeRegionLen => {
+                Ok(Some(fb.insert_inst(SymSize::new(is, sym), Type::I256)))
+            }
             _ => unreachable!(),
         };
     }
@@ -1888,9 +2129,9 @@ fn lower_intrinsic<'db, C: sonatina_ir::func_cursor::FuncCursor>(
             fb.insert_inst_no_result(EvmCodeCopy::new(is, *dst, *offset, *len));
             Ok(None)
         }
-        IntrinsicOp::CodeRegionOffset | IntrinsicOp::CodeRegionLen => unreachable!(
-            "code region intrinsics are handled in the early return above"
-        ),
+        IntrinsicOp::CodeRegionOffset | IntrinsicOp::CodeRegionLen => {
+            unreachable!("code region intrinsics are handled in the early return above")
+        }
         IntrinsicOp::Keccak => {
             let [addr, len] = lowered_args.as_slice() else {
                 return Err(LowerError::Internal(

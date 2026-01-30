@@ -348,13 +348,14 @@ fn trace_tx(evm: &MainnetEvm<MainnetContext<InMemoryDB>>, tx: TxEnv) {
 
     // Clone the EVM (including DB state) for tracing so we don't disturb the caller's state.
     let ctx = evm.ctx.clone();
-    let mut trace_evm = ctx.build_mainnet_with_inspector(RingTrace::new(
-        trace_evm_keep_steps(),
-        trace_evm_stack_n(),
-    ));
+    let mut trace_evm = ctx
+        .build_mainnet_with_inspector(RingTrace::new(trace_evm_keep_steps(), trace_evm_stack_n()));
 
     let result = trace_evm.inspect_tx_commit(tx);
-    let formatted = format!("{}\ntrace result: {result:?}\n", trace_evm.inspector.format());
+    let formatted = format!(
+        "{}\ntrace result: {result:?}\n",
+        trace_evm.inspector.format()
+    );
     let out_path = trace_evm_out_path();
     if let Some(path) = out_path {
         match std::fs::OpenOptions::new()
@@ -369,7 +370,10 @@ fn trace_tx(evm: &MainnetEvm<MainnetContext<InMemoryDB>>, tx: TxEnv) {
                 }
             }
             Err(err) => {
-                eprintln!("FE_TRACE_EVM_OUT: failed to write `{}`: {err}", path.display());
+                eprintln!(
+                    "FE_TRACE_EVM_OUT: failed to write `{}`: {err}",
+                    path.display()
+                );
                 eprintln!("{formatted}");
             }
         }

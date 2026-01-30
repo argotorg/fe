@@ -77,12 +77,5 @@ func public %__fe_sonatina_entry() {
 object @Contract {
     section runtime {
         entry %__fe_sonatina_entry;
-        include %bump__StorPtr_Foo___3698cc3c4b2626e3;
-        include %test_effect_ptr_domains;
-        include %mem_ptr__mem__RawMem_Foo__19292a5189c12f79;
-        include %bump__MemPtr_Foo___cdd30998d577b6ea;
-        include %stor_ptr__st__RawStorage_Foo__d44156c896232646;
-        include %memptr_t__effectref_from_raw__Foo__668f96d7165c93b;
-        include %storptr_t__effectref_from_raw__Foo__668f96d7165c93b;
     }
 }

@@ -4,8 +4,7 @@ use mir::analysis::{CallGraph, build_call_graph, reachable_functions};
 use mir::{
     MirFunction, MirInst, Rvalue,
     ir::{IntrinsicOp, MirFunctionOrigin},
-    layout,
-    lower_module,
+    layout, lower_module,
 };
 use rustc_hash::{FxHashMap, FxHashSet};
 use sonatina_ir::{
@@ -94,7 +93,9 @@ pub fn emit_test_module_sonatina(
         });
     }
 
-    Ok(TestModuleOutput { tests: output_tests })
+    Ok(TestModuleOutput {
+        tests: output_tests,
+    })
 }
 
 #[derive(Debug, Clone)]
@@ -202,7 +203,9 @@ fn runtime_argc(db: &DriverDataBase, func: &MirFunction<'_>) -> usize {
         .copied()
         .filter(|local_id| {
             let local_ty = func.body.locals.get(local_id.index()).map(|l| l.ty);
-            let Some(local_ty) = local_ty else { return true };
+            let Some(local_ty) = local_ty else {
+                return true;
+            };
             !layout::ty_size_bytes_in(db, &layout::EVM_LAYOUT, local_ty).is_some_and(|s| s == 0)
         })
         .count()
@@ -227,11 +230,15 @@ fn collect_code_region_roots(functions: &[MirFunction<'_>]) -> Vec<String> {
                 else {
                     continue;
                 };
-                let Some(arg) = args.first().copied() else { continue };
+                let Some(arg) = args.first().copied() else {
+                    continue;
+                };
                 let mir::ValueOrigin::FuncItem(target) = &func.body.value(arg).origin else {
                     continue;
                 };
-                let Some(symbol) = &target.symbol else { continue };
+                let Some(symbol) = &target.symbol else {
+                    continue;
+                };
                 roots.insert(symbol.clone());
             }
         }
@@ -263,11 +270,15 @@ fn collect_code_region_deps(
                 else {
                     continue;
                 };
-                let Some(arg) = args.first().copied() else { continue };
+                let Some(arg) = args.first().copied() else {
+                    continue;
+                };
                 let mir::ValueOrigin::FuncItem(target) = &func.body.value(arg).origin else {
                     continue;
                 };
-                let Some(target_symbol) = &target.symbol else { continue };
+                let Some(target_symbol) = &target.symbol else {
+                    continue;
+                };
                 deps.insert(target_symbol.clone());
             }
         }
@@ -275,7 +286,9 @@ fn collect_code_region_deps(
     deps
 }
 
-fn detect_code_region_cycles(graph: &FxHashMap<String, FxHashSet<String>>) -> Result<(), LowerError> {
+fn detect_code_region_cycles(
+    graph: &FxHashMap<String, FxHashSet<String>>,
+) -> Result<(), LowerError> {
     #[derive(Clone, Copy, PartialEq, Eq)]
     enum Mark {
         Visiting,
@@ -378,7 +391,10 @@ fn compile_test_objects(
             code_region_sections,
         )?;
         lowerer.builder.declare_object(object).map_err(|e| {
-            LowerError::Internal(format!("failed to declare test object `{}`: {e}", test.object_name))
+            LowerError::Internal(format!(
+                "failed to declare test object `{}`: {e}",
+                test.object_name
+            ))
         })?;
     }
 
@@ -489,8 +505,12 @@ fn create_test_object(
 
     let wrapper_name = format!("__fe_sonatina_test_entry_{}", test.object_name);
     let argc = runtime_argc(lowerer.db, test_func);
-    let wrapper_ref =
-        lowerer.create_call_and_stop_wrapper(&wrapper_name, test_ref, argc, test_func.returns_value)?;
+    let wrapper_ref = lowerer.create_call_and_stop_wrapper(
+        &wrapper_name,
+        test_ref,
+        argc,
+        test_func.returns_value,
+    )?;
 
     let reachable = reachable_functions(call_graph, &test.symbol_name);
     let deps = collect_code_region_deps(&reachable, funcs_by_symbol);
@@ -618,9 +638,7 @@ impl<'db, 'a> ModuleLowerer<'db, 'a> {
             super::types::unit_type(),
         );
         let func_ref = self.builder.declare_function(sig).map_err(|e| {
-            LowerError::Internal(format!(
-                "failed to declare wrapper `{wrapper_name}`: {e}"
-            ))
+            LowerError::Internal(format!("failed to declare wrapper `{wrapper_name}`: {e}"))
         })?;
 
         let mut fb = self.builder.func_builder::<InstInserter>(func_ref);
@@ -651,8 +669,8 @@ impl<'db, 'a> ModuleLowerer<'db, 'a> {
 
 fn compile_runtime_section(module: &Module, object_name: &str) -> Result<Vec<u8>, LowerError> {
     use sonatina_codegen::isa::evm::EvmBackend;
-    use sonatina_codegen::object::{CompileOptions, compile_object};
     use sonatina_codegen::object::SymbolId;
+    use sonatina_codegen::object::{CompileOptions, compile_object};
     use sonatina_ir::isa::evm::Evm;
 
     let triple = TargetTriple::new(
@@ -664,15 +682,14 @@ fn compile_runtime_section(module: &Module, object_name: &str) -> Result<Vec<u8>
     let backend = EvmBackend::new(isa);
 
     let opts: CompileOptions<_> = CompileOptions::default();
-    let artifact =
-        compile_object(module, &backend, object_name, &opts).map_err(|errors| {
-            let msg = errors
-                .iter()
-                .map(|e| format!("{:?}", e))
-                .collect::<Vec<_>>()
-                .join("; ");
-            LowerError::Internal(msg)
-        })?;
+    let artifact = compile_object(module, &backend, object_name, &opts).map_err(|errors| {
+        let msg = errors
+            .iter()
+            .map(|e| format!("{:?}", e))
+            .collect::<Vec<_>>()
+            .join("; ");
+        LowerError::Internal(msg)
+    })?;
 
     let section_name = SectionName::from("runtime");
     let runtime_section = artifact.sections.get(&section_name).ok_or_else(|| {
@@ -688,9 +705,9 @@ fn compile_runtime_section(module: &Module, object_name: &str) -> Result<Vec<u8>
         let mut defs: Vec<(u32, u32, String)> = Vec::new();
         for (sym, def) in &runtime_section.symtab {
             let name = match sym {
-                SymbolId::Func(func_ref) => module
-                    .ctx
-                    .func_sig(*func_ref, |sig| sig.name().to_string()),
+                SymbolId::Func(func_ref) => {
+                    module.ctx.func_sig(*func_ref, |sig| sig.name().to_string())
+                }
                 SymbolId::Global(gv) => format!("{gv:?}"),
                 SymbolId::Embed(embed) => format!("&{}", embed.0.as_str()),
             };
@@ -714,7 +731,11 @@ fn compile_runtime_section(module: &Module, object_name: &str) -> Result<Vec<u8>
     }
 
     if let Ok(offsets) = std::env::var("FE_SONATINA_DUMP_BYTE_AT") {
-        for raw in offsets.split(',').map(|s| s.trim()).filter(|s| !s.is_empty()) {
+        for raw in offsets
+            .split(',')
+            .map(|s| s.trim())
+            .filter(|s| !s.is_empty())
+        {
             let parsed = raw
                 .strip_prefix("0x")
                 .map(|hex| usize::from_str_radix(hex, 16))
@@ -759,7 +780,10 @@ fn emit_debug_output(out_path_env: &str, stderr_env: &str, contents: &str) {
         {
             Ok(()) => {}
             Err(err) => {
-                eprintln!("{out_path_env}: failed to write `{}`: {err}", path.display());
+                eprintln!(
+                    "{out_path_env}: failed to write `{}`: {err}",
+                    path.display()
+                );
                 eprintln!("{contents}");
                 return;
             }

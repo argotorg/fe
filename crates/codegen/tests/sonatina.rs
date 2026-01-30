@@ -17,6 +17,8 @@ fn sonatina_compiles_selected_fixtures() {
         "tests/fixtures/revert.fe",
         "tests/fixtures/caller.fe",
         "tests/fixtures/keccak_intrinsic.fe",
+        "tests/fixtures/contract_dispatch.fe",
+        "tests/fixtures/create_contract.fe",
     ];
 
     for rel_path in fixtures {

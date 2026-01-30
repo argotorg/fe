@@ -33,8 +33,5 @@ func public %__fe_sonatina_entry() {
 object @Contract {
     section runtime {
         entry %__fe_sonatina_entry;
-        include %read_x__StorPtr_u256___64779554cfbf0358;
-        include %test_calldata_ptr_domain;
-        include %read_x__CalldataPtr_u256___1e20dc3e834a8f96;
     }
 }

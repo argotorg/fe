@@ -56,12 +56,5 @@ func public %__fe_sonatina_entry() {
 object @Contract {
     section runtime {
         entry %__fe_sonatina_entry;
-        include %load_word;
-        include %store_word;
-        include %store_byte;
-        include %load_slot;
-        include %store_slot;
-        include %load_calldata;
-        include %finish;
     }
 }

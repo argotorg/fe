@@ -1,6 +1,5 @@
 ---
 source: crates/codegen/tests/sonatina_ir.rs
-assertion_line: 74
 expression: output
 input_file: crates/codegen/tests/fixtures/contract_dispatch.fe
 ---
@@ -18,9 +17,8 @@ func public %dispatch() {
 }
 
 
-object @Contract {
+object @MinimalDispatcher {
     section runtime {
         entry %dispatch;
-        include %emit_code;
     }
 }

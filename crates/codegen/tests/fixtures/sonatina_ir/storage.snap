@@ -232,6 +232,14 @@ func public %transfer_from_bob__StorPtr_CoinStore___ba1c0d0726e89ba2(v0.i256, v1
         return v17;
 }
 
+func public %init__StorPtr_Evm___207f35a85ac4062e() {
+    block0:
+        v1.i256 = sym_size &runtime__StorPtr_Evm___207f35a85ac4062e;
+        v2.i256 = sym_addr &runtime__StorPtr_Evm___207f35a85ac4062e;
+        evm_code_copy 0.i256 v2 v1;
+        evm_return 0.i256 v1;
+}
+
 func public %runtime__StorPtr_Evm___207f35a85ac4062e() {
     block0:
         v1.i256 = call %stor_ptr__Evm_CoinStore__d1ec7298de486d2f 0.i256;
@@ -334,22 +342,12 @@ func public %storptr_t__effectref_from_raw__CoinStore__fc61705bf538fde2(v0.i256)
 }
 
 
-object @Contract {
+object @Coin {
+    section init {
+        entry %init__StorPtr_Evm___207f35a85ac4062e;
+        embed .runtime as &runtime__StorPtr_Evm___207f35a85ac4062e;
+    }
     section runtime {
         entry %runtime__StorPtr_Evm___207f35a85ac4062e;
-        include %transfer_result_code;
-        include %abi_encode;
-        include %credit__StorPtr_CoinStore__StorPtr_TotalSupply___c407f5b00af9ba78;
-        include %transfer__StorPtr_CoinStore___ba1c0d0726e89ba2;
-        include %balance_of__StorPtr_CoinStore___ba1c0d0726e89ba2;
-        include %balance_of_raw__StorPtr_CoinStore___ba1c0d0726e89ba2;
-        include %total_supply__StorPtr_TotalSupply___2e654c25952f42f9;
-        include %credit_alice__StorPtr_CoinStore__StorPtr_TotalSupply___c407f5b00af9ba78;
-        include %credit_bob__StorPtr_CoinStore__StorPtr_TotalSupply___c407f5b00af9ba78;
-        include %transfer_from_alice__StorPtr_CoinStore___ba1c0d0726e89ba2;
-        include %transfer_from_bob__StorPtr_CoinStore___ba1c0d0726e89ba2;
-        include %stor_ptr__Evm_CoinStore__d1ec7298de486d2f;
-        include %stor_ptr__Evm_TotalSupply__b0f1a753085dcbd;
-        include %storptr_t__effectref_from_raw__CoinStore__fc61705bf538fde2;
     }
 }

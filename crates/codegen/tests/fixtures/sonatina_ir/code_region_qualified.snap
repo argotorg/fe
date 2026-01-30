@@ -1,10 +1,17 @@
 ---
 source: crates/codegen/tests/sonatina_ir.rs
-assertion_line: 74
 expression: output
 input_file: crates/codegen/tests/fixtures/code_region_qualified.fe
 ---
 target = evm-ethereum-osaka
+
+func public %init__StorPtr_Evm___207f35a85ac4062e() {
+    block0:
+        v1.i256 = sym_size &runtime__StorPtr_Evm___207f35a85ac4062e;
+        v2.i256 = sym_addr &runtime__StorPtr_Evm___207f35a85ac4062e;
+        evm_code_copy 0.i256 v2 v1;
+        evm_return 0.i256 v1;
+}
 
 func public %runtime__StorPtr_Evm___207f35a85ac4062e() {
     block0:
@@ -12,7 +19,11 @@ func public %runtime__StorPtr_Evm___207f35a85ac4062e() {
 }
 
 
-object @Contract {
+object @Foo {
+    section init {
+        entry %init__StorPtr_Evm___207f35a85ac4062e;
+        embed .runtime as &runtime__StorPtr_Evm___207f35a85ac4062e;
+    }
     section runtime {
         entry %runtime__StorPtr_Evm___207f35a85ac4062e;
     }

@@ -81,15 +81,5 @@ func public %__fe_sonatina_entry() {
 object @Contract {
     section runtime {
         entry %__fe_sonatina_entry;
-        include %get_balance__StorPtr_StorageMap_u256__u256__0____4a2331212cb04e60;
-        include %set_balance__StorPtr_StorageMap_u256__u256__0____4a2331212cb04e60;
-        include %storagemap_k__v__const_salt__u256__get__u256_u256_0__6a346ad3c930d971;
-        include %storagemap_k__v__const_salt__u256__set__u256_u256_0__6a346ad3c930d971;
-        include %storagemap_get_word_with_salt__u256__3271ca15373d4483;
-        include %u256_wordrepr_from_word;
-        include %u256_wordrepr_to_word;
-        include %storagemap_set_word_with_salt__u256__3271ca15373d4483;
-        include %storagemap_storage_slot_with_salt__u256__3271ca15373d4483;
-        include %u256_storagekey_write_key;
     }
 }

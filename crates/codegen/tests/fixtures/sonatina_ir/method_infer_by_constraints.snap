@@ -34,7 +34,5 @@ func public %__fe_sonatina_entry() {
 object @Contract {
     section runtime {
         entry %__fe_sonatina_entry;
-        include %call;
-        include %s_t__foo_foo__u64__aee7f05a097ffa16;
     }
 }

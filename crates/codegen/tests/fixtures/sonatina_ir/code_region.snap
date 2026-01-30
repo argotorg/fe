@@ -5,6 +5,20 @@ input_file: crates/codegen/tests/fixtures/code_region.fe
 ---
 target = evm-ethereum-osaka
 
+func public %init__StorPtr_Evm___207f35a85ac4062e() {
+    block0:
+        v1.i256 = sym_size &child_init__StorPtr_Evm___207f35a85ac4062e;
+        v2.i256 = sym_addr &child_init__StorPtr_Evm___207f35a85ac4062e;
+        v3.i256 = call %allocate v1 0.i256;
+        evm_code_copy v3 v2 v1;
+        v5.i256 = evm_create2 0.i256 v2 v1 4660.i256;
+        v6.i256 = sym_size &runtime__StorPtr_Evm___207f35a85ac4062e;
+        v7.i256 = sym_addr &runtime__StorPtr_Evm___207f35a85ac4062e;
+        v8.i256 = call %allocate v6 0.i256;
+        evm_code_copy v8 v7 v6;
+        evm_return v8 v6;
+}
+
 func public %runtime__StorPtr_Evm___207f35a85ac4062e() {
     block0:
         v1.i256 = call %read_selector 0.i256;
@@ -31,6 +45,14 @@ func public %runtime__StorPtr_Evm___207f35a85ac4062e() {
     block6:
         v6.i256 = eq v1 591751049.i256;
         br v6 block3 block4;
+}
+
+func public %child_init__StorPtr_Evm___207f35a85ac4062e() {
+    block0:
+        v1.i256 = sym_size &child_runtime__StorPtr_Evm___207f35a85ac4062e;
+        v2.i256 = sym_addr &child_runtime__StorPtr_Evm___207f35a85ac4062e;
+        evm_code_copy 0.i256 v2 v1;
+        evm_return 0.i256 v1;
 }
 
 func public %child_runtime__StorPtr_Evm___207f35a85ac4062e() {
@@ -79,14 +101,23 @@ func public %evm_create_create2_raw(v0.i256, v1.i256, v2.i256, v3.i256) -> i256 
 }
 
 
-object @Contract {
+object @Child {
+    section init {
+        entry %child_init__StorPtr_Evm___207f35a85ac4062e;
+        embed .runtime as &child_runtime__StorPtr_Evm___207f35a85ac4062e;
+    }
+    section runtime {
+        entry %child_runtime__StorPtr_Evm___207f35a85ac4062e;
+    }
+}
+
+object @Foo {
+    section init {
+        entry %init__StorPtr_Evm___207f35a85ac4062e;
+        embed @Child.init as &child_init__StorPtr_Evm___207f35a85ac4062e;
+        embed .runtime as &runtime__StorPtr_Evm___207f35a85ac4062e;
+    }
     section runtime {
         entry %runtime__StorPtr_Evm___207f35a85ac4062e;
-        include %child_runtime__StorPtr_Evm___207f35a85ac4062e;
-        include %allocate;
-        include %balance;
-        include %transfer;
-        include %read_selector;
-        include %evm_create_create2_raw;
     }
 }
