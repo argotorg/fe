@@ -115,12 +115,12 @@ impl<'db> ConstFnChecker<'db, '_> {
         };
 
         match expr_data {
-            Expr::Lit(crate::hir_def::LitKind::Int(_) | crate::hir_def::LitKind::Bool(_))
+            Expr::Lit(
+                crate::hir_def::LitKind::Int(_)
+                | crate::hir_def::LitKind::Bool(_)
+                | crate::hir_def::LitKind::String(_),
+            )
             | Expr::Path(_) => {}
-
-            Expr::Lit(_) => self.push(BodyDiag::ConstFnAggregateNotAllowed(
-                expr.span(self.body).into(),
-            )),
 
             Expr::Block(stmts) => stmts.iter().for_each(|stmt| self.check_stmt(*stmt)),
 

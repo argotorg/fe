@@ -2,6 +2,7 @@
 //! to specialized lowering helpers.
 
 use hir::{
+    analysis::ty::const_eval::{ConstValue, try_eval_const_expr},
     analysis::ty::ty_check::{Callable, ForLoopSeq, ResolvedEffectArg},
     projection::{IndexSource, Projection},
 };
@@ -44,6 +45,32 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         let value_id = self.ensure_value(expr);
         self.builder.body.values[value_id.index()].origin =
             ValueOrigin::Synthetic(SyntheticValue::Int(BigUint::from(size_bytes)));
+        Some(value_id)
+    }
+
+    fn try_lower_const_keccak_call(&mut self, expr: ExprId) -> Option<ValueId> {
+        let callable = self.typed_body.callable_expr(expr)?;
+        if !matches!(
+            callable.callable_def.ingot(self.db).kind(self.db),
+            IngotKind::Core
+        ) {
+            return None;
+        }
+
+        let name = callable.callable_def.name(self.db)?;
+        if name.data(self.db) != "keccak" {
+            return None;
+        }
+
+        let ConstValue::Int(value) =
+            try_eval_const_expr(self.db, self.body, self.typed_body, self.generic_args, expr)?
+        else {
+            return None;
+        };
+
+        let value_id = self.ensure_value(expr);
+        self.builder.body.values[value_id.index()].origin =
+            ValueOrigin::Synthetic(SyntheticValue::Int(value));
         Some(value_id)
     }
 
@@ -277,6 +304,14 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
             }
             return value_id;
         }
+
+        if let Some(value_id) = self.try_lower_const_keccak_call(expr) {
+            if returns_value && let Some(dest) = dest_override {
+                self.assign(stmt, Some(dest), Rvalue::Value(value_id));
+            }
+            return value_id;
+        }
+
         let Some(mut callable) = self.typed_body.callable_expr(expr).cloned() else {
             return value_id;
         };

@@ -147,6 +147,23 @@ impl<'db> CtfeInterpreter<'db> {
         }
     }
 
+    pub(crate) fn eval_expr_in_body(
+        &mut self,
+        body: Body<'db>,
+        typed_body: TypedBody<'db>,
+        generic_args: Vec<TyId<'db>>,
+        expr: ExprId,
+    ) -> Result<ConstTyId<'db>, InvalidCause<'db>> {
+        let out = self.with_frame(body, typed_body, generic_args, Env::default(), |this| {
+            this.eval_expr(expr)
+        });
+
+        match out {
+            Ok(v) | Err(CtfeAbort::Return(v)) => Ok(v),
+            Err(CtfeAbort::Invalid(cause)) => Err(cause),
+        }
+    }
+
     fn tick(&mut self, expr: ExprId) -> Result<(), InvalidCause<'db>> {
         if self.steps_left == 0 {
             return Err(InvalidCause::ConstEvalStepLimitExceeded {

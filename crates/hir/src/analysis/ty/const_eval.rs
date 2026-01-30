@@ -4,11 +4,14 @@ use crate::analysis::{
     HirAnalysisDb,
     ty::{
         const_ty::{ConstTyData, ConstTyId, EvaluatedConstTy, const_ty_from_trait_const},
+        ctfe::{CtfeConfig, CtfeInterpreter},
         ty_check::ConstRef,
+        ty_check::TypedBody,
         ty_def::TyId,
     },
 };
 use crate::core::hir_def::Body;
+use crate::hir_def::ExprId;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ConstValue {
@@ -38,6 +41,27 @@ pub fn try_eval_const_ref<'db>(
         ConstRef::TraitConst { inst, name } => const_ty_from_trait_const(db, inst, name)?,
     };
     try_eval_const_ty(db, const_ty, Some(expected_ty))
+}
+
+pub fn try_eval_const_expr<'db>(
+    db: &'db dyn HirAnalysisDb,
+    body: Body<'db>,
+    typed_body: &TypedBody<'db>,
+    generic_args: &[TyId<'db>],
+    expr: ExprId,
+) -> Option<ConstValue> {
+    let mut interp = CtfeInterpreter::new(db, CtfeConfig::default());
+    let const_ty = interp
+        .eval_expr_in_body(body, typed_body.clone(), generic_args.to_vec(), expr)
+        .ok()?;
+
+    match const_ty.data(db) {
+        ConstTyData::Evaluated(EvaluatedConstTy::LitInt(i), _) => {
+            Some(ConstValue::Int(i.data(db).clone()))
+        }
+        ConstTyData::Evaluated(EvaluatedConstTy::LitBool(b), _) => Some(ConstValue::Bool(*b)),
+        _ => None,
+    }
 }
 
 fn try_eval_const_ty<'db>(
