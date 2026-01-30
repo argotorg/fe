@@ -94,25 +94,53 @@ fn block_items_doc<'a, T: ToDoc>(
     cast_fn: impl Fn(parser::SyntaxNode) -> Option<T>,
     ctx: &'a RewriteContext<'a>,
 ) -> Doc<'a> {
+    use parser::syntax_kind::SyntaxKind;
+    use parser::syntax_node::NodeOrToken;
+
     let alloc = &ctx.alloc;
     let mut inner = alloc.nil();
 
-    let mut prefix_lines = 1;
-    for node in syntax.children() {
-        if let Some(item) = cast_fn(node) {
-            // Always add at least one newline before each item.
-            // If source had 2+ newlines (blank line), add exactly 2 (one blank line).
-            // Multiple blank lines are collapsed to one.
-            for _ in 0..prefix_lines {
-                inner = inner.append(alloc.hardline());
-            }
-            inner = inner.append(item.to_doc(ctx));
-        }
-        prefix_lines = 2;
+    #[derive(Clone, Copy)]
+    enum EntryKind {
+        Item,
+        Comment,
     }
 
-    if prefix_lines == 1 {
-        // no children
+    let mut last_emitted = None::<EntryKind>;
+
+    for child in syntax.children_with_tokens() {
+        let (kind, doc) = match child {
+            NodeOrToken::Node(node) => {
+                let Some(item) = cast_fn(node) else {
+                    continue;
+                };
+                (EntryKind::Item, item.to_doc(ctx))
+            }
+            NodeOrToken::Token(token)
+                if matches!(token.kind(), SyntaxKind::Comment | SyntaxKind::DocComment) =>
+            {
+                (
+                    EntryKind::Comment,
+                    alloc.text(ctx.snippet(token.text_range()).trim().to_string()),
+                )
+            }
+            _ => continue,
+        };
+
+        let newlines = match (last_emitted, kind) {
+            (None, _) => 1,
+            (Some(EntryKind::Item), EntryKind::Item | EntryKind::Comment) => 2,
+            (Some(EntryKind::Comment), EntryKind::Item | EntryKind::Comment) => 1,
+        };
+        for _ in 0..newlines {
+            inner = inner.append(alloc.hardline());
+        }
+
+        inner = inner.append(doc);
+        last_emitted = Some(kind);
+    }
+
+    if last_emitted.is_none() {
         return alloc.text("{}");
     }
 

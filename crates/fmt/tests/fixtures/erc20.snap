@@ -73,11 +73,13 @@ pub contract CoolCoin uses (mut ctx: Ctx, mut log: Log) {
             true
         }
 
+        // Burns tokens from caller's balance
         Burn { amount } -> bool uses (ctx, mut store, mut log) {
             burn(from: ctx.caller(), amount)
             true
         }
 
+        // Burns tokens from an account using allowance (requires BURNER or allowance)
         BurnFrom { from, amount } -> bool uses (ctx, mut store, mut log) {
             spend_allowance(owner: from, spender: ctx.caller(), amount)
             burn(from, amount)
