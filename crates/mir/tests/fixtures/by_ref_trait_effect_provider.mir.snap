@@ -3,7 +3,7 @@ source: crates/mir/tests/lowering_snapshots.rs
 assertion_line: 26
 expression: mir_output
 ---
-fn pair_ctx_sum(v0: Pair) -> u256:
+fn pair_h956dff41e88ee341_ctx_h4952b3c1f066f039_sum(v0: Pair) -> u256:
   bb0:
     v1: u256 = load mem[v0].0
     v2: u256 = load mem[v0].1
@@ -15,10 +15,10 @@ fn entry() -> u256:
     init mem[v1] { .0 = 40, .1 = 2 }
     v0: Pair = v1
     bind v0
-    v2: u256 = use_ctx__Pair__f889f9d568bc82f1(v0)
+    v2: u256 = use_ctx__Pair_h956dff41e88ee341__acec41afdc898140(v0)
     ret v2
 
-fn use_ctx__Pair__f889f9d568bc82f1(v0: u256) -> u256:
+fn use_ctx__Pair_h956dff41e88ee341__acec41afdc898140(v0: u256) -> u256:
   bb0:
-    v1: u256 = pair_ctx_sum(v0)
+    v1: u256 = pair_h956dff41e88ee341_ctx_h4952b3c1f066f039_sum(v0)
     ret v1

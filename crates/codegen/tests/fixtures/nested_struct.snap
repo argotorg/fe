@@ -1,5 +1,6 @@
 ---
 source: crates/codegen/tests/yul.rs
+assertion_line: 33
 expression: output
 input_file: tests/fixtures/nested_struct.fe
 ---
@@ -16,7 +17,7 @@ object "NestedStruct" {
 
   object "NestedStruct_deployed" {
     code {
-      function $abi_encode__Evm__1572a3ac6cae1070($value, $ops) {
+      function $abi_encode__Evm_hef0af3106e109414__3af54274b2985741($value, $ops) {
         mstore(0, $value)
         return(0, 32)
       }
@@ -32,7 +33,7 @@ object "NestedStruct" {
         leave
       }
       function $runtime__StorPtr_Evm___207f35a85ac4062e() {
-        let v0 := $stor_ptr__Evm_Outer__31089a952466fa6f(0, 0)
+        let v0 := $stor_ptr__Evm_hef0af3106e109414_Outer_hccd04e332bd35653__177c3c9a6f7ae368(0, 0)
         let v1 := v0
         let v2 := calldataload(0)
         let v3 := shr(224, v2)
@@ -40,27 +41,27 @@ object "NestedStruct" {
           case 3091856072 {
             let v4 := calldataload(4)
             $write_inner__StorPtr_Outer___dab28b9da6c3e28(v4, v1)
-            $abi_encode__Evm__1572a3ac6cae1070(v4, 0)
+            $abi_encode__Evm_hef0af3106e109414__3af54274b2985741(v4, 0)
           }
           case 3513050253 {
             let v5 := $read_inner__StorPtr_Outer___dab28b9da6c3e28(v1)
-            $abi_encode__Evm__1572a3ac6cae1070(v5, 0)
+            $abi_encode__Evm_hef0af3106e109414__3af54274b2985741(v5, 0)
           }
           case 2154770637 {
             let v6 := calldataload(4)
             let v7 := $mem_read(v6)
-            $abi_encode__Evm__1572a3ac6cae1070(v7, 0)
+            $abi_encode__Evm_hef0af3106e109414__3af54274b2985741(v7, 0)
           }
           default {
             return(0, 0)
           }
       }
-      function $stor_ptr__Evm_Outer__31089a952466fa6f($self, $slot) -> ret {
-        let v0 := $storptr_t__effecthandle_from_raw__Outer__ffb1d3cc5087d727($slot)
+      function $stor_ptr__Evm_hef0af3106e109414_Outer_hccd04e332bd35653__177c3c9a6f7ae368($self, $slot) -> ret {
+        let v0 := $storptr_t__hc45dea9607fd5340_effecthandle_hfc52f915596f993a_from_raw__Outer_hccd04e332bd35653__f44d0100de7cf929($slot)
         ret := v0
         leave
       }
-      function $storptr_t__effecthandle_from_raw__Outer__ffb1d3cc5087d727($raw) -> ret {
+      function $storptr_t__hc45dea9607fd5340_effecthandle_hfc52f915596f993a_from_raw__Outer_hccd04e332bd35653__f44d0100de7cf929($raw) -> ret {
         ret := $raw
         leave
       }

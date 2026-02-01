@@ -1,22 +1,23 @@
 ---
 source: crates/codegen/tests/yul.rs
+assertion_line: 33
 expression: output
 input_file: tests/fixtures/erc20_low_level.fe
 ---
 object "Erc20Contract" {
   code {
-    function $address_zero() -> ret {
+    function $address_h257056268eac7027_zero() -> ret {
       ret := 0
       leave
     }
-    function $do_init__StorPtr_Erc20__Evm_Evm__dadfbbe3b69abecd($erc20, $ctx, $ops) {
+    function $do_init__StorPtr_Erc20__Evm_hef0af3106e109414_Evm_hef0af3106e109414__a43599a61c4c3ec5($erc20, $ctx, $ops) {
       let v0 := caller()
-      $erc20_set_owner_once_stor__Evm__1572a3ac6cae1070($erc20, v0, $ops)
+      $erc20_h7a8a7a2800ba6809_set_owner_once_stor__Evm_hef0af3106e109414__3af54274b2985741($erc20, v0, $ops)
       leave
     }
-    function $erc20_set_owner_once_stor__Evm__1572a3ac6cae1070($self, $owner, $ops) {
+    function $erc20_h7a8a7a2800ba6809_set_owner_once_stor__Evm_hef0af3106e109414__3af54274b2985741($self, $owner, $ops) {
       let v0 := sload(add($self, 1))
-      let v1 := $address_zero()
+      let v1 := $address_h257056268eac7027_zero()
       let v2 := iszero(eq(v0, v1))
       if v2 {
         revert(0, 0)
@@ -25,20 +26,20 @@ object "Erc20Contract" {
       leave
     }
     function $init__StorPtr_Evm___207f35a85ac4062e() {
-      let v0 := $stor_ptr__Evm_Erc20__c294a0aeae425afd(0, 0)
+      let v0 := $stor_ptr__Evm_hef0af3106e109414_Erc20_h7a8a7a2800ba6809__828ea75549970aee(0, 0)
       let v1 := v0
-      $do_init__StorPtr_Erc20__Evm_Evm__dadfbbe3b69abecd(v1, 0, 0)
+      $do_init__StorPtr_Erc20__Evm_hef0af3106e109414_Evm_hef0af3106e109414__a43599a61c4c3ec5(v1, 0, 0)
       let v2 := datasize("Erc20Contract_deployed")
       let v3 := dataoffset("Erc20Contract_deployed")
       codecopy(0, v3, v2)
       return(0, v2)
     }
-    function $stor_ptr__Evm_Erc20__c294a0aeae425afd($self, $slot) -> ret {
-      let v0 := $storptr_t__effecthandle_from_raw__Erc20__88e369469f2b52ef($slot)
+    function $stor_ptr__Evm_hef0af3106e109414_Erc20_h7a8a7a2800ba6809__828ea75549970aee($self, $slot) -> ret {
+      let v0 := $storptr_t__hc45dea9607fd5340_effecthandle_hfc52f915596f993a_from_raw__Erc20_h7a8a7a2800ba6809__f6f4aaca4c5af1b3($slot)
       ret := v0
       leave
     }
-    function $storptr_t__effecthandle_from_raw__Erc20__88e369469f2b52ef($raw) -> ret {
+    function $storptr_t__hc45dea9607fd5340_effecthandle_hfc52f915596f993a_from_raw__Erc20_h7a8a7a2800ba6809__f6f4aaca4c5af1b3($raw) -> ret {
       ret := $raw
       leave
     }
@@ -47,28 +48,28 @@ object "Erc20Contract" {
 
   object "Erc20Contract_deployed" {
     code {
-      function $_a__b__storagekey_write_key__Address_Address__397b9a625a435b6f($ptr, $self) -> ret {
+      function $_a__b__h47f120de72304a2d_storagekey_hf9e3d38a13ff4409_write_key__Address_h257056268eac7027_Address_h257056268eac7027__af929e62fa4c68f2($ptr, $self) -> ret {
         let v0 := mload($self)
         let v1 := v0
         let v2 := mload(add($self, 32))
         let v3 := v2
-        let v4 := $address_storagekey_write_key($ptr, v1)
-        let v5 := $address_storagekey_write_key(add($ptr, v4), v3)
+        let v4 := $address_h257056268eac7027_storagekey_hf9e3d38a13ff4409_write_key($ptr, v1)
+        let v5 := $address_h257056268eac7027_storagekey_hf9e3d38a13ff4409_write_key(add($ptr, v4), v3)
         ret := add(v4, v5)
         leave
       }
-      function $abi_encode_string__Evm__1572a3ac6cae1070($word, $len, $ops) {
+      function $abi_encode_string__Evm_hef0af3106e109414__3af54274b2985741($word, $len, $ops) {
         mstore(0, 32)
         mstore(32, $len)
         mstore(64, $word)
         return(0, 96)
       }
-      function $abi_encode_u256__Evm__1572a3ac6cae1070($value, $ops) {
+      function $abi_encode_u256__Evm_hef0af3106e109414__3af54274b2985741($value, $ops) {
         mstore(0, $value)
         return(0, 32)
       }
-      function $address_storagekey_write_key($ptr, $self) -> ret {
-        let v0 := $u256_storagekey_write_key($ptr, $self)
+      function $address_h257056268eac7027_storagekey_hf9e3d38a13ff4409_write_key($ptr, $self) -> ret {
+        let v0 := $u256_h3271ca15373d4483_storagekey_hf9e3d38a13ff4409_write_key($ptr, $self)
         ret := v0
         leave
       }
@@ -81,23 +82,23 @@ object "Erc20Contract" {
         mstore(0x40, add(v0, 64))
         mstore(v0, $owner)
         mstore(add(v0, 32), $spender)
-        let v1 := $storagemap_k__v__const_salt__u256__get___Address__Address__u256_1__12414c27d5bfff1f(0, v0)
+        let v1 := $storagemap_k__v__const_salt__u256__h5955888dd44c2a19_get___Address__Address__u256_1__12414c27d5bfff1f(0, v0)
         ret := v1
         leave
       }
-      function $approve__StorPtr_Erc20__Evm__d800a7d9a907da20($spender, $amount, $erc20, $ctx) -> ret {
+      function $approve__StorPtr_Erc20__Evm_hef0af3106e109414__cb64805ecdbd6d6e($spender, $amount, $erc20, $ctx) -> ret {
         let v0 := caller()
-        $erc20_approve_stor($erc20, v0, $spender, $amount)
+        $erc20_h7a8a7a2800ba6809_approve_stor($erc20, v0, $spender, $amount)
         ret := 1
         leave
       }
       function $balance_of__StorPtr_Erc20___2745299687a147d4($addr, $erc20) -> ret {
         pop($erc20)
-        let v0 := $storagemap_k__v__const_salt__u256__get__Address_u256_0__b8b2f68065fe2328(0, $addr)
+        let v0 := $storagemap_k__v__const_salt__u256__h5955888dd44c2a19_get__Address_h257056268eac7027_u256_0__6e989e4cb63e64c3(0, $addr)
         ret := v0
         leave
       }
-      function $erc20_allowance_stor($self, $owner, $spender) -> ret {
+      function $erc20_h7a8a7a2800ba6809_allowance_stor($self, $owner, $spender) -> ret {
         pop($self)
         let v0 := mload(0x40)
         if iszero(v0) {
@@ -106,11 +107,11 @@ object "Erc20Contract" {
         mstore(0x40, add(v0, 64))
         mstore(v0, $owner)
         mstore(add(v0, 32), $spender)
-        let v1 := $storagemap_k__v__const_salt__u256__get___Address__Address__u256_1__12414c27d5bfff1f(0, v0)
+        let v1 := $storagemap_k__v__const_salt__u256__h5955888dd44c2a19_get___Address__Address__u256_1__12414c27d5bfff1f(0, v0)
         ret := v1
         leave
       }
-      function $erc20_approve_stor($self, $owner, $spender, $value) {
+      function $erc20_h7a8a7a2800ba6809_approve_stor($self, $owner, $spender, $value) {
         pop($self)
         let v0 := mload(0x40)
         if iszero(v0) {
@@ -119,37 +120,37 @@ object "Erc20Contract" {
         mstore(0x40, add(v0, 64))
         mstore(v0, $owner)
         mstore(add(v0, 32), $spender)
-        $storagemap_k__v__const_salt__u256__set___Address__Address__u256_1__12414c27d5bfff1f(0, v0, $value)
+        $storagemap_k__v__const_salt__u256__h5955888dd44c2a19_set___Address__Address__u256_1__12414c27d5bfff1f(0, v0, $value)
         leave
       }
-      function $erc20_balance_of_stor($self, $addr) -> ret {
+      function $erc20_h7a8a7a2800ba6809_balance_of_stor($self, $addr) -> ret {
         pop($self)
-        let v0 := $storagemap_k__v__const_salt__u256__get__Address_u256_0__b8b2f68065fe2328(0, $addr)
+        let v0 := $storagemap_k__v__const_salt__u256__h5955888dd44c2a19_get__Address_h257056268eac7027_u256_0__6e989e4cb63e64c3(0, $addr)
         ret := v0
         leave
       }
-      function $erc20_mint_stor__Evm_Evm__11308ad19242a97c($self, $to, $amount, $ctx, $ops) {
+      function $erc20_h7a8a7a2800ba6809_mint_stor__Evm_hef0af3106e109414_Evm_hef0af3106e109414__7ab75559784fbc59($self, $to, $amount, $ctx, $ops) {
         let v0 := caller()
         let v1 := sload(add($self, 1))
         let v2 := iszero(eq(v0, v1))
         if v2 {
           revert(0, 0)
         }
-        let v3 := $erc20_balance_of_stor($self, $to)
+        let v3 := $erc20_h7a8a7a2800ba6809_balance_of_stor($self, $to)
         pop($self)
-        $storagemap_k__v__const_salt__u256__set__Address_u256_0__b8b2f68065fe2328(0, $to, add(v3, $amount))
+        $storagemap_k__v__const_salt__u256__h5955888dd44c2a19_set__Address_h257056268eac7027_u256_0__6e989e4cb63e64c3(0, $to, add(v3, $amount))
         let v4 := sload($self)
         sstore($self, add(v4, $amount))
         leave
       }
-      function $erc20_transfer_from_stor__Evm_Evm__11308ad19242a97c($self, $owner, $to, $amount, $ctx, $ops) {
+      function $erc20_h7a8a7a2800ba6809_transfer_from_stor__Evm_hef0af3106e109414_Evm_hef0af3106e109414__7ab75559784fbc59($self, $owner, $to, $amount, $ctx, $ops) {
         let v0 := caller()
-        let v1 := $erc20_allowance_stor($self, $owner, v0)
+        let v1 := $erc20_h7a8a7a2800ba6809_allowance_stor($self, $owner, v0)
         let v2 := lt(v1, $amount)
         if v2 {
           revert(0, 0)
         }
-        $erc20_transfer_stor__Evm__1572a3ac6cae1070($self, $owner, $to, $amount, $ops)
+        $erc20_h7a8a7a2800ba6809_transfer_stor__Evm_hef0af3106e109414__3af54274b2985741($self, $owner, $to, $amount, $ops)
         pop($self)
         let v3 := mload(0x40)
         if iszero(v3) {
@@ -158,29 +159,29 @@ object "Erc20Contract" {
         mstore(0x40, add(v3, 64))
         mstore(v3, $owner)
         mstore(add(v3, 32), v0)
-        $storagemap_k__v__const_salt__u256__set___Address__Address__u256_1__12414c27d5bfff1f(0, v3, sub(v1, $amount))
+        $storagemap_k__v__const_salt__u256__h5955888dd44c2a19_set___Address__Address__u256_1__12414c27d5bfff1f(0, v3, sub(v1, $amount))
         leave
       }
-      function $erc20_transfer_stor__Evm__1572a3ac6cae1070($self, $from, $to, $amount, $ops) {
-        let v0 := $erc20_balance_of_stor($self, $from)
+      function $erc20_h7a8a7a2800ba6809_transfer_stor__Evm_hef0af3106e109414__3af54274b2985741($self, $from, $to, $amount, $ops) {
+        let v0 := $erc20_h7a8a7a2800ba6809_balance_of_stor($self, $from)
         let v1 := lt(v0, $amount)
         if v1 {
           revert(0, 0)
         }
-        let v2 := $erc20_balance_of_stor($self, $to)
+        let v2 := $erc20_h7a8a7a2800ba6809_balance_of_stor($self, $to)
         pop($self)
-        $storagemap_k__v__const_salt__u256__set__Address_u256_0__b8b2f68065fe2328(0, $from, sub(v0, $amount))
+        $storagemap_k__v__const_salt__u256__h5955888dd44c2a19_set__Address_h257056268eac7027_u256_0__6e989e4cb63e64c3(0, $from, sub(v0, $amount))
         pop($self)
-        $storagemap_k__v__const_salt__u256__set__Address_u256_0__b8b2f68065fe2328(0, $to, add(v2, $amount))
+        $storagemap_k__v__const_salt__u256__h5955888dd44c2a19_set__Address_h257056268eac7027_u256_0__6e989e4cb63e64c3(0, $to, add(v2, $amount))
         leave
       }
-      function $mint__StorPtr_Erc20__Evm_Evm__dadfbbe3b69abecd($to, $amount, $erc20, $ctx, $ops) -> ret {
-        $erc20_mint_stor__Evm_Evm__11308ad19242a97c($erc20, $to, $amount, $ctx, $ops)
+      function $mint__StorPtr_Erc20__Evm_hef0af3106e109414_Evm_hef0af3106e109414__a43599a61c4c3ec5($to, $amount, $erc20, $ctx, $ops) -> ret {
+        $erc20_h7a8a7a2800ba6809_mint_stor__Evm_hef0af3106e109414_Evm_hef0af3106e109414__7ab75559784fbc59($erc20, $to, $amount, $ctx, $ops)
         ret := 1
         leave
       }
       function $runtime__StorPtr_Evm___207f35a85ac4062e() {
-        let v0 := $stor_ptr__Evm_Erc20__c294a0aeae425afd(0, 0)
+        let v0 := $stor_ptr__Evm_hef0af3106e109414_Erc20_h7a8a7a2800ba6809__828ea75549970aee(0, 0)
         let v1 := calldataload(0)
         let v2 := shr(224, v1)
         let v3 := v0
@@ -189,7 +190,7 @@ object "Erc20Contract" {
             let v4 := calldataload(4)
             let v5 := v4
             let v6 := $balance_of__StorPtr_Erc20___2745299687a147d4(v5, v3)
-            $abi_encode_u256__Evm__1572a3ac6cae1070(v6, 0)
+            $abi_encode_u256__Evm_hef0af3106e109414__3af54274b2985741(v6, 0)
           }
           case 3714247998 {
             let v7 := calldataload(4)
@@ -197,30 +198,30 @@ object "Erc20Contract" {
             let v9 := calldataload(36)
             let v10 := v9
             let v11 := $allowance__StorPtr_Erc20___2745299687a147d4(v8, v10, v3)
-            $abi_encode_u256__Evm__1572a3ac6cae1070(v11, 0)
+            $abi_encode_u256__Evm_hef0af3106e109414__3af54274b2985741(v11, 0)
           }
           case 117300739 {
-            $abi_encode_string__Evm__1572a3ac6cae1070(31840933704928615426292613906591192052886564858731089189578963311002547912704, 7, 0)
+            $abi_encode_string__Evm_hef0af3106e109414__3af54274b2985741(31840933704928615426292613906591192052886564858731089189578963311002547912704, 7, 0)
           }
           case 2514000705 {
-            $abi_encode_string__Evm__1572a3ac6cae1070(31784391594991486112232083260356792451358613714049171750120207607087736291328, 3, 0)
+            $abi_encode_string__Evm_hef0af3106e109414__3af54274b2985741(31784391594991486112232083260356792451358613714049171750120207607087736291328, 3, 0)
           }
           case 826074471 {
-            $abi_encode_u256__Evm__1572a3ac6cae1070(18, 0)
+            $abi_encode_u256__Evm_hef0af3106e109414__3af54274b2985741(18, 0)
           }
           case 2835717307 {
             let v12 := calldataload(4)
             let v13 := v12
             let v14 := calldataload(36)
-            let v15 := $transfer__StorPtr_Erc20__Evm_Evm__dadfbbe3b69abecd(v13, v14, v3, 0, 0)
-            $abi_encode_u256__Evm__1572a3ac6cae1070(v15, 0)
+            let v15 := $transfer__StorPtr_Erc20__Evm_hef0af3106e109414_Evm_hef0af3106e109414__a43599a61c4c3ec5(v13, v14, v3, 0, 0)
+            $abi_encode_u256__Evm_hef0af3106e109414__3af54274b2985741(v15, 0)
           }
           case 157198259 {
             let v16 := calldataload(4)
             let v17 := v16
             let v18 := calldataload(36)
-            let v19 := $approve__StorPtr_Erc20__Evm__d800a7d9a907da20(v17, v18, v3, 0)
-            $abi_encode_u256__Evm__1572a3ac6cae1070(v19, 0)
+            let v19 := $approve__StorPtr_Erc20__Evm_hef0af3106e109414__cb64805ecdbd6d6e(v17, v18, v3, 0)
+            $abi_encode_u256__Evm_hef0af3106e109414__3af54274b2985741(v19, 0)
           }
           case 599290589 {
             let v20 := calldataload(4)
@@ -228,27 +229,27 @@ object "Erc20Contract" {
             let v22 := calldataload(36)
             let v23 := v22
             let v24 := calldataload(68)
-            let v25 := $transfer_from__StorPtr_Erc20__Evm_Evm__dadfbbe3b69abecd(v21, v23, v24, v3, 0, 0)
-            $abi_encode_u256__Evm__1572a3ac6cae1070(v25, 0)
+            let v25 := $transfer_from__StorPtr_Erc20__Evm_hef0af3106e109414_Evm_hef0af3106e109414__a43599a61c4c3ec5(v21, v23, v24, v3, 0, 0)
+            $abi_encode_u256__Evm_hef0af3106e109414__3af54274b2985741(v25, 0)
           }
           case 1086394137 {
             let v26 := calldataload(4)
             let v27 := v26
             let v28 := calldataload(36)
-            let v29 := $mint__StorPtr_Erc20__Evm_Evm__dadfbbe3b69abecd(v27, v28, v3, 0, 0)
-            $abi_encode_u256__Evm__1572a3ac6cae1070(v29, 0)
+            let v29 := $mint__StorPtr_Erc20__Evm_hef0af3106e109414_Evm_hef0af3106e109414__a43599a61c4c3ec5(v27, v28, v3, 0, 0)
+            $abi_encode_u256__Evm_hef0af3106e109414__3af54274b2985741(v29, 0)
           }
           default {
             revert(0, 0)
           }
       }
-      function $stor_ptr__Evm_Erc20__c294a0aeae425afd($self, $slot) -> ret {
-        let v0 := $storptr_t__effecthandle_from_raw__Erc20__88e369469f2b52ef($slot)
+      function $stor_ptr__Evm_hef0af3106e109414_Erc20_h7a8a7a2800ba6809__828ea75549970aee($self, $slot) -> ret {
+        let v0 := $storptr_t__hc45dea9607fd5340_effecthandle_hfc52f915596f993a_from_raw__Erc20_h7a8a7a2800ba6809__f6f4aaca4c5af1b3($slot)
         ret := v0
         leave
       }
-      function $storagemap_get_word_with_salt__Address__ce8f588742192062($key, $salt) -> ret {
-        let v0 := $storagemap_storage_slot_with_salt__Address__ce8f588742192062($key, $salt)
+      function $storagemap_get_word_with_salt__Address_h257056268eac7027__5ab99f7153cdba29($key, $salt) -> ret {
+        let v0 := $storagemap_storage_slot_with_salt__Address_h257056268eac7027__5ab99f7153cdba29($key, $salt)
         let v1 := sload(v0)
         ret := v1
         leave
@@ -259,30 +260,30 @@ object "Erc20Contract" {
         ret := v1
         leave
       }
-      function $storagemap_k__v__const_salt__u256__get__Address_u256_0__b8b2f68065fe2328($self, $key) -> ret {
-        let v0 := $storagemap_get_word_with_salt__Address__ce8f588742192062($key, 0)
-        let v1 := $u256_wordrepr_from_word(v0)
+      function $storagemap_k__v__const_salt__u256__h5955888dd44c2a19_get__Address_h257056268eac7027_u256_0__6e989e4cb63e64c3($self, $key) -> ret {
+        let v0 := $storagemap_get_word_with_salt__Address_h257056268eac7027__5ab99f7153cdba29($key, 0)
+        let v1 := $u256_h3271ca15373d4483_wordrepr_h7483d41ac8178d88_from_word(v0)
         ret := v1
         leave
       }
-      function $storagemap_k__v__const_salt__u256__get___Address__Address__u256_1__12414c27d5bfff1f($self, $key) -> ret {
+      function $storagemap_k__v__const_salt__u256__h5955888dd44c2a19_get___Address__Address__u256_1__12414c27d5bfff1f($self, $key) -> ret {
         let v0 := $storagemap_get_word_with_salt___Address__Address___c32d499da259c78e($key, 1)
-        let v1 := $u256_wordrepr_from_word(v0)
+        let v1 := $u256_h3271ca15373d4483_wordrepr_h7483d41ac8178d88_from_word(v0)
         ret := v1
         leave
       }
-      function $storagemap_k__v__const_salt__u256__set__Address_u256_0__b8b2f68065fe2328($self, $key, $value) {
-        let v0 := $u256_wordrepr_to_word($value)
-        $storagemap_set_word_with_salt__Address__ce8f588742192062($key, 0, v0)
+      function $storagemap_k__v__const_salt__u256__h5955888dd44c2a19_set__Address_h257056268eac7027_u256_0__6e989e4cb63e64c3($self, $key, $value) {
+        let v0 := $u256_h3271ca15373d4483_wordrepr_h7483d41ac8178d88_to_word($value)
+        $storagemap_set_word_with_salt__Address_h257056268eac7027__5ab99f7153cdba29($key, 0, v0)
         leave
       }
-      function $storagemap_k__v__const_salt__u256__set___Address__Address__u256_1__12414c27d5bfff1f($self, $key, $value) {
-        let v0 := $u256_wordrepr_to_word($value)
+      function $storagemap_k__v__const_salt__u256__h5955888dd44c2a19_set___Address__Address__u256_1__12414c27d5bfff1f($self, $key, $value) {
+        let v0 := $u256_h3271ca15373d4483_wordrepr_h7483d41ac8178d88_to_word($value)
         $storagemap_set_word_with_salt___Address__Address___c32d499da259c78e($key, 1, v0)
         leave
       }
-      function $storagemap_set_word_with_salt__Address__ce8f588742192062($key, $salt, $word) {
-        let v0 := $storagemap_storage_slot_with_salt__Address__ce8f588742192062($key, $salt)
+      function $storagemap_set_word_with_salt__Address_h257056268eac7027__5ab99f7153cdba29($key, $salt, $word) {
+        let v0 := $storagemap_storage_slot_with_salt__Address_h257056268eac7027__5ab99f7153cdba29($key, $salt)
         sstore(v0, $word)
         leave
       }
@@ -291,9 +292,9 @@ object "Erc20Contract" {
         sstore(v0, $word)
         leave
       }
-      function $storagemap_storage_slot_with_salt__Address__ce8f588742192062($key, $salt) -> ret {
+      function $storagemap_storage_slot_with_salt__Address_h257056268eac7027__5ab99f7153cdba29($key, $salt) -> ret {
         let v0 := mload(64)
-        let v1 := $address_storagekey_write_key(v0, $key)
+        let v1 := $address_h257056268eac7027_storagekey_hf9e3d38a13ff4409_write_key(v0, $key)
         mstore(add(v0, v1), $salt)
         let v2 := keccak256(v0, add(v1, 32))
         ret := v2
@@ -301,37 +302,37 @@ object "Erc20Contract" {
       }
       function $storagemap_storage_slot_with_salt___Address__Address___c32d499da259c78e($key, $salt) -> ret {
         let v0 := mload(64)
-        let v1 := $_a__b__storagekey_write_key__Address_Address__397b9a625a435b6f(v0, $key)
+        let v1 := $_a__b__h47f120de72304a2d_storagekey_hf9e3d38a13ff4409_write_key__Address_h257056268eac7027_Address_h257056268eac7027__af929e62fa4c68f2(v0, $key)
         mstore(add(v0, v1), $salt)
         let v2 := keccak256(v0, add(v1, 32))
         ret := v2
         leave
       }
-      function $storptr_t__effecthandle_from_raw__Erc20__88e369469f2b52ef($raw) -> ret {
+      function $storptr_t__hc45dea9607fd5340_effecthandle_hfc52f915596f993a_from_raw__Erc20_h7a8a7a2800ba6809__f6f4aaca4c5af1b3($raw) -> ret {
         ret := $raw
         leave
       }
-      function $transfer__StorPtr_Erc20__Evm_Evm__dadfbbe3b69abecd($to, $amount, $erc20, $ctx, $ops) -> ret {
+      function $transfer__StorPtr_Erc20__Evm_hef0af3106e109414_Evm_hef0af3106e109414__a43599a61c4c3ec5($to, $amount, $erc20, $ctx, $ops) -> ret {
         let v0 := caller()
-        $erc20_transfer_stor__Evm__1572a3ac6cae1070($erc20, v0, $to, $amount, $ops)
+        $erc20_h7a8a7a2800ba6809_transfer_stor__Evm_hef0af3106e109414__3af54274b2985741($erc20, v0, $to, $amount, $ops)
         ret := 1
         leave
       }
-      function $transfer_from__StorPtr_Erc20__Evm_Evm__dadfbbe3b69abecd($from, $to, $amount, $erc20, $ctx, $ops) -> ret {
-        $erc20_transfer_from_stor__Evm_Evm__11308ad19242a97c($erc20, $from, $to, $amount, $ctx, $ops)
+      function $transfer_from__StorPtr_Erc20__Evm_hef0af3106e109414_Evm_hef0af3106e109414__a43599a61c4c3ec5($from, $to, $amount, $erc20, $ctx, $ops) -> ret {
+        $erc20_h7a8a7a2800ba6809_transfer_from_stor__Evm_hef0af3106e109414_Evm_hef0af3106e109414__7ab75559784fbc59($erc20, $from, $to, $amount, $ctx, $ops)
         ret := 1
         leave
       }
-      function $u256_storagekey_write_key($ptr, $self) -> ret {
+      function $u256_h3271ca15373d4483_storagekey_hf9e3d38a13ff4409_write_key($ptr, $self) -> ret {
         mstore($ptr, $self)
         ret := 32
         leave
       }
-      function $u256_wordrepr_from_word($word) -> ret {
+      function $u256_h3271ca15373d4483_wordrepr_h7483d41ac8178d88_from_word($word) -> ret {
         ret := $word
         leave
       }
-      function $u256_wordrepr_to_word($self) -> ret {
+      function $u256_h3271ca15373d4483_wordrepr_h7483d41ac8178d88_to_word($self) -> ret {
         ret := $self
         leave
       }

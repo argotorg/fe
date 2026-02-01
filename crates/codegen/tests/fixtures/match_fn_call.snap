@@ -1,10 +1,11 @@
 ---
 source: crates/codegen/tests/yul.rs
+assertion_line: 33
 expression: output
 input_file: tests/fixtures/match_fn_call.fe
 ---
-function $example__Evm__1572a3ac6cae1070($ops) -> ret {
-  let v0 := $read_selector__Evm__1572a3ac6cae1070($ops)
+function $example__Evm_hef0af3106e109414__3af54274b2985741($ops) -> ret {
+  let v0 := $read_selector__Evm_hef0af3106e109414__3af54274b2985741($ops)
   let v1 := 0
   switch v0
     case 305419896 {
@@ -19,7 +20,7 @@ function $example__Evm__1572a3ac6cae1070($ops) -> ret {
   ret := v1
   leave
 }
-function $read_selector__Evm__1572a3ac6cae1070($ops) -> ret {
+function $read_selector__Evm_hef0af3106e109414__3af54274b2985741($ops) -> ret {
   let v0 := calldataload(0)
   ret := shr(224, v0)
   leave

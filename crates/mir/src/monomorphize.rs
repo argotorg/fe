@@ -18,11 +18,13 @@ use hir::analysis::{
         trait_def::{TraitInstId, resolve_trait_method_instance},
         trait_resolution::{GoalSatisfiability, PredicateListId, is_goal_satisfiable},
         ty_check::check_func_body,
-        ty_def::{TyData, TyId},
+        ty_def::{TyBase, TyData, TyId},
     },
 };
-use hir::hir_def::{CallableDef, Func, IdentId, PathKind, item::ItemKind, scope_graph::ScopeId};
-use rustc_hash::FxHashMap;
+use hir::hir_def::{
+    CallableDef, Func, HirIngot, IdentId, PathId, PathKind, item::ItemKind, scope_graph::ScopeId,
+};
+use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::{
     CallOrigin, MirFunction, dedup::deduplicate_mir, ir::AddressSpaceKind, lower::lower_function,
@@ -58,6 +60,7 @@ struct Monomorphizer<'db> {
     instance_map: FxHashMap<InstanceKey<'db>, usize>,
     worklist: VecDeque<usize>,
     current_symbol: Option<String>,
+    ambiguous_bases: FxHashSet<String>,
 }
 
 #[derive(Clone, PartialEq, Eq, Hash)]
@@ -144,7 +147,7 @@ impl<'db> Monomorphizer<'db> {
             }
         }
 
-        Self {
+        let mut monomorphizer = Self {
             db,
             templates,
             func_index,
@@ -153,7 +156,31 @@ impl<'db> Monomorphizer<'db> {
             instance_map: FxHashMap::default(),
             worklist: VecDeque::new(),
             current_symbol: None,
+            ambiguous_bases: FxHashSet::default(),
+        };
+        monomorphizer.ambiguous_bases = monomorphizer.compute_ambiguous_bases();
+        monomorphizer
+    }
+
+    fn compute_ambiguous_bases(&self) -> FxHashSet<String> {
+        let mut qualifiers_by_base: FxHashMap<String, FxHashSet<String>> = FxHashMap::default();
+        for template in &self.templates {
+            let crate::ir::MirFunctionOrigin::Hir(func) = template.origin else {
+                continue;
+            };
+            let receiver_space = canonicalize_receiver_space(template.receiver_space);
+            let base = self.base_name_root_without_disambiguation(func, receiver_space);
+            let qualifier = self.function_qualifier(func);
+            qualifiers_by_base
+                .entry(base)
+                .or_default()
+                .insert(qualifier);
         }
+
+        qualifiers_by_base
+            .into_iter()
+            .filter_map(|(base, qualifiers)| (qualifiers.len() > 1).then_some(base))
+            .collect()
     }
 
     /// Instantiate all non-generic templates up front so they are always emitted
@@ -720,6 +747,156 @@ impl<'db> Monomorphizer<'db> {
         effect_param_space_overrides: &[Option<AddressSpaceKind>],
     ) -> String {
         let receiver_space = canonicalize_receiver_space(receiver_space);
+        let mut base = self.base_name_root_without_disambiguation(func, receiver_space);
+        if self.ambiguous_bases.contains(&base) {
+            let qualifier = self.function_qualifier(func);
+            base = format!("{qualifier}_{base}");
+        }
+
+        let effect_suffix = effect_param_space_suffix(effect_param_space_overrides);
+        if !effect_suffix.is_empty() {
+            base = format!("{base}_{effect_suffix}");
+        }
+
+        if args.is_empty() {
+            return base;
+        }
+
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        let mut parts = Vec::with_capacity(args.len());
+        for ty in args {
+            let pretty = self.type_mangle_component(*ty);
+            pretty.hash(&mut hasher);
+            parts.push(sanitize_symbol_component(&pretty));
+        }
+        let hash = hasher.finish();
+        let suffix = parts.join("_");
+        format!("{base}__{suffix}__{hash:08x}")
+    }
+
+    fn module_path_segments(&self, mut scope: ScopeId<'db>) -> Vec<String> {
+        let ingot = scope.ingot(self.db);
+        let root_mod = ingot.root_mod(self.db);
+
+        let mut parts = Vec::new();
+        while let Some(parent) = scope.parent_module(self.db) {
+            match parent {
+                ScopeId::Item(ItemKind::Mod(mod_)) => {
+                    if let Some(name) = mod_.name(self.db).to_opt() {
+                        parts.push(name.data(self.db).to_string());
+                    }
+                }
+                ScopeId::Item(ItemKind::TopMod(top_mod)) => {
+                    if top_mod != root_mod {
+                        parts.push(top_mod.name(self.db).data(self.db).to_string());
+                    }
+                }
+                _ => {}
+            }
+            scope = parent;
+        }
+
+        parts.reverse();
+        parts
+    }
+
+    fn qualified_path_hash(&self, parts: &[String]) -> u64 {
+        stable_hash(parts)
+    }
+
+    fn ty_identity_hash(&self, ty: TyId<'db>) -> u64 {
+        match ty.data(self.db) {
+            TyData::TyBase(TyBase::Adt(adt)) => {
+                let name = adt
+                    .adt_ref(self.db)
+                    .name(self.db)
+                    .map(|id| id.data(self.db).to_string())
+                    .unwrap_or_else(|| "<unknown>".to_string());
+                let mut parts = self.module_path_segments(adt.scope(self.db));
+                parts.push(name);
+                self.qualified_path_hash(&parts)
+            }
+            TyData::TyBase(TyBase::Contract(contract)) => {
+                let name = contract
+                    .name(self.db)
+                    .to_opt()
+                    .map(|id| id.data(self.db).to_string())
+                    .unwrap_or_else(|| "<unknown>".to_string());
+                let mut parts = self.module_path_segments(contract.scope());
+                parts.push(name);
+                self.qualified_path_hash(&parts)
+            }
+            _ => stable_hash(&ty.pretty_print(self.db).to_string()),
+        }
+    }
+
+    fn trait_ref_identity_hash(&self, trait_ref: hir::hir_def::TraitRefId<'db>) -> Option<u64> {
+        let path = trait_ref.path(self.db).to_opt()?;
+        let parts = self.path_ident_segments(path);
+        Some(self.qualified_path_hash(&parts))
+    }
+
+    fn path_ident_segments(&self, path: PathId<'db>) -> Vec<String> {
+        let mut parts = Vec::new();
+        let mut current = Some(path);
+        while let Some(path) = current {
+            match path.kind(self.db) {
+                PathKind::Ident { ident, .. } => {
+                    if let Some(ident) = ident.to_opt() {
+                        parts.push(ident.data(self.db).to_string());
+                    }
+                }
+                PathKind::QualifiedType { .. } => {}
+            }
+            current = path.parent(self.db);
+        }
+        parts.reverse();
+        parts
+    }
+
+    fn type_mangle_component(&self, ty: TyId<'db>) -> String {
+        match ty.data(self.db) {
+            TyData::TyBase(TyBase::Func(callable)) => match callable {
+                CallableDef::Func(func) => {
+                    let name = func
+                        .name(self.db)
+                        .to_opt()
+                        .map(|ident| ident.data(self.db).to_string())
+                        .unwrap_or_else(|| "<unknown>".to_string());
+                    let mut parts = self.module_path_segments(func.scope());
+                    parts.push(name.clone());
+                    let hash = self.qualified_path_hash(&parts);
+                    format!("fn {name}_h{hash:08x}")
+                }
+                CallableDef::VariantCtor(_) => ty.pretty_print(self.db).to_string(),
+            },
+            TyData::TyBase(TyBase::Adt(adt)) => {
+                let name = adt
+                    .adt_ref(self.db)
+                    .name(self.db)
+                    .map(|id| id.data(self.db).to_string())
+                    .unwrap_or_else(|| "<unknown>".to_string());
+                let hash = self.ty_identity_hash(ty);
+                format!("{name}_h{hash:08x}")
+            }
+            TyData::TyBase(TyBase::Contract(contract)) => {
+                let name = contract
+                    .name(self.db)
+                    .to_opt()
+                    .map(|id| id.data(self.db).to_string())
+                    .unwrap_or_else(|| "<unknown>".to_string());
+                let hash = self.ty_identity_hash(ty);
+                format!("{name}_h{hash:08x}")
+            }
+            _ => ty.pretty_print(self.db).to_string(),
+        }
+    }
+
+    fn base_name_root_without_disambiguation(
+        &self,
+        func: Func<'db>,
+        receiver_space: Option<AddressSpaceKind>,
+    ) -> String {
         let mut base = func
             .name(self.db)
             .to_opt()
@@ -737,29 +914,18 @@ impl<'db> Monomorphizer<'db> {
             };
             base = format!("{base}_{suffix}");
         }
+        base
+    }
 
-        let effect_suffix = effect_param_space_suffix(effect_param_space_overrides);
-        if !effect_suffix.is_empty() {
-            base = format!("{base}_{effect_suffix}");
-        }
-
-        if args.is_empty() {
-            return base;
-        }
-
-        let mut hasher = std::collections::hash_map::DefaultHasher::new();
-        let mut parts = Vec::with_capacity(args.len());
-        for ty in args.iter().copied() {
-            let pretty = ty.pretty_print(self.db);
-            pretty.hash(&mut hasher);
-            parts.push(sanitize_symbol_component(pretty));
-        }
+    fn function_qualifier(&self, func: Func<'db>) -> String {
+        let parts = self.module_path_segments(func.scope());
         if parts.is_empty() {
-            return base;
+            return "root".to_string();
         }
-        let hash = hasher.finish();
-        let suffix = parts.join("_");
-        format!("{base}__{suffix}__{hash:08x}")
+
+        let human = sanitize_symbol_component(&parts.join("_")).to_lowercase();
+        let hash = self.qualified_path_hash(&parts);
+        format!("{human}_h{hash:08x}")
     }
 
     /// Returns a sanitized prefix for associated functions/methods based on their owner.
@@ -773,14 +939,19 @@ impl<'db> Monomorphizer<'db> {
             if ty.has_invalid(self.db) {
                 return None;
             }
-            Some(sanitize_symbol_component(ty.pretty_print(self.db)).to_lowercase())
+            let ty_name = sanitize_symbol_component(ty.pretty_print(self.db)).to_lowercase();
+            let hash = self.ty_identity_hash(ty);
+            Some(format!("{ty_name}_h{hash:08x}"))
         } else if let ItemKind::ImplTrait(impl_trait) = item {
             let ty = impl_trait.ty(self.db);
             if ty.has_invalid(self.db) {
                 return None;
             }
-            let self_part = sanitize_symbol_component(ty.pretty_print(self.db)).to_lowercase();
-            let trait_part = impl_trait
+            let self_name = sanitize_symbol_component(ty.pretty_print(self.db)).to_lowercase();
+            let self_hash = self.ty_identity_hash(ty);
+            let self_part = format!("{self_name}_h{self_hash:08x}");
+
+            let trait_name = impl_trait
                 .hir_trait_ref(self.db)
                 .to_opt()
                 .and_then(|trait_ref| trait_ref.path(self.db).to_opt())
@@ -789,13 +960,17 @@ impl<'db> Monomorphizer<'db> {
                     PathKind::Ident { ident, .. } => ident.to_opt(),
                     PathKind::QualifiedType { .. } => None,
                 })
-                .map(|ident| sanitize_symbol_component(ident.data(self.db)).to_lowercase());
-            let prefix = if let Some(trait_part) = trait_part {
-                format!("{self_part}_{trait_part}")
-            } else {
-                self_part
-            };
-            Some(prefix)
+                .map(|ident| sanitize_symbol_component(ident.data(self.db)).to_lowercase())
+                .unwrap_or_else(|| "trait".to_string());
+
+            let trait_hash = impl_trait
+                .hir_trait_ref(self.db)
+                .to_opt()
+                .and_then(|trait_ref| self.trait_ref_identity_hash(trait_ref))
+                .unwrap_or(0);
+            let trait_part = format!("{trait_name}_h{trait_hash:08x}");
+
+            Some(format!("{self_part}_{trait_part}"))
         } else {
             None
         }
@@ -969,6 +1144,12 @@ fn sanitize_symbol_component(component: &str) -> String {
         .chars()
         .map(|ch| if ch.is_ascii_alphanumeric() { ch } else { '_' })
         .collect()
+}
+
+fn stable_hash<T: Hash + ?Sized>(value: &T) -> u64 {
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    value.hash(&mut hasher);
+    hasher.finish()
 }
 
 fn canonicalize_receiver_space(

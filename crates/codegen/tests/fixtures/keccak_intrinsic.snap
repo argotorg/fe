@@ -1,9 +1,10 @@
 ---
 source: crates/codegen/tests/yul.rs
+assertion_line: 33
 expression: output
 input_file: tests/fixtures/keccak_intrinsic.fe
 ---
-function $hash__Evm__1572a3ac6cae1070($ptr, $len, $ops) -> ret {
+function $hash__Evm_hef0af3106e109414__3af54274b2985741($ptr, $len, $ops) -> ret {
   let v0 := keccak256($ptr, $len)
   ret := v0
   leave

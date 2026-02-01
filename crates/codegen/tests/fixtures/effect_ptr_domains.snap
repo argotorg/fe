@@ -1,5 +1,6 @@
 ---
 source: crates/codegen/tests/yul.rs
+assertion_line: 33
 expression: output
 input_file: tests/fixtures/effect_ptr_domains.fe
 ---
@@ -10,11 +11,11 @@ function $bump__StorPtr_Foo___3698cc3c4b2626e3($foo) {
   sstore(add($foo, 1), add(v1, 2))
   leave
 }
-function $test_effect_ptr_domains__Evm_Evm__11308ad19242a97c($st, $mem) {
-  let v0 := $mem_ptr__Evm_Foo__c3089d776807df8e($mem, 256)
+function $test_effect_ptr_domains__Evm_hef0af3106e109414_Evm_hef0af3106e109414__7ab75559784fbc59($st, $mem) {
+  let v0 := $mem_ptr__Evm_hef0af3106e109414_Foo_h6dbce71a6ea992b8__c09e6c6fc5a7b23d($mem, 256)
   let v1 := v0
   $bump__MemPtr_Foo___cdd30998d577b6ea(v1)
-  let v2 := $stor_ptr__Evm_Foo__c3089d776807df8e($st, 0)
+  let v2 := $stor_ptr__Evm_hef0af3106e109414_Foo_h6dbce71a6ea992b8__c09e6c6fc5a7b23d($st, 0)
   let v3 := v2
   $bump__StorPtr_Foo___3698cc3c4b2626e3(v3)
   let v4 := mload(0x40)
@@ -29,8 +30,8 @@ function $test_effect_ptr_domains__Evm_Evm__11308ad19242a97c($st, $mem) {
   $bump__MemPtr_Foo___cdd30998d577b6ea(v5)
   leave
 }
-function $mem_ptr__Evm_Foo__c3089d776807df8e($self, $addr) -> ret {
-  let v0 := $memptr_t__effecthandle_from_raw__Foo__668f96d7165c93b($addr)
+function $mem_ptr__Evm_hef0af3106e109414_Foo_h6dbce71a6ea992b8__c09e6c6fc5a7b23d($self, $addr) -> ret {
+  let v0 := $memptr_t__hf71ec14ffe47fb3f_effecthandle_hfc52f915596f993a_from_raw__Foo_h6dbce71a6ea992b8__21493237fe9c2c26($addr)
   ret := v0
   leave
 }
@@ -41,16 +42,16 @@ function $bump__MemPtr_Foo___cdd30998d577b6ea($foo) {
   mstore(add($foo, 32), add(v1, 2))
   leave
 }
-function $stor_ptr__Evm_Foo__c3089d776807df8e($self, $slot) -> ret {
-  let v0 := $storptr_t__effecthandle_from_raw__Foo__668f96d7165c93b($slot)
+function $stor_ptr__Evm_hef0af3106e109414_Foo_h6dbce71a6ea992b8__c09e6c6fc5a7b23d($self, $slot) -> ret {
+  let v0 := $storptr_t__hc45dea9607fd5340_effecthandle_hfc52f915596f993a_from_raw__Foo_h6dbce71a6ea992b8__21493237fe9c2c26($slot)
   ret := v0
   leave
 }
-function $memptr_t__effecthandle_from_raw__Foo__668f96d7165c93b($raw) -> ret {
+function $memptr_t__hf71ec14ffe47fb3f_effecthandle_hfc52f915596f993a_from_raw__Foo_h6dbce71a6ea992b8__21493237fe9c2c26($raw) -> ret {
   ret := $raw
   leave
 }
-function $storptr_t__effecthandle_from_raw__Foo__668f96d7165c93b($raw) -> ret {
+function $storptr_t__hc45dea9607fd5340_effecthandle_hfc52f915596f993a_from_raw__Foo_h6dbce71a6ea992b8__21493237fe9c2c26($raw) -> ret {
   ret := $raw
   leave
 }

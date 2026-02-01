@@ -4,12 +4,12 @@ assertion_line: 33
 expression: output
 input_file: tests/fixtures/newtype_field_mut_method_call.fe
 ---
-function $counter_bump($self) {
+function $counter_h872958864d1ad471_bump($self) {
   let v0 := mload($self)
   mstore($self, add(v0, 1))
   leave
 }
-function $wrapcounter_bump($self) {
+function $wrapcounter_hbcbd3a74a267488b_bump($self) {
   let v0 := $self
   let v1 := mload(v0)
   mstore(v0, add(v1, 1))
@@ -33,7 +33,7 @@ function $newtype_field_mut_method_call($x) -> ret {
   mstore(add(v1, 32), mload(v2))
   mstore(add(v1, 64), mload(add(v2, 32)))
   let v3 := v1
-  $wrapcounter_bump(add(v3, 32))
+  $wrapcounter_hbcbd3a74a267488b_bump(add(v3, 32))
   let v4 := mload(add(v3, 32))
   ret := v4
   leave

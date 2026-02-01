@@ -21,14 +21,14 @@ fn __Guard_recv_0_0(v0: Enter, v1: u256) -> ():
 
 fn __Guard_init() -> ():
   bb0:
-    v0: u256 = tstorptr_t__effecthandle_from_raw__u256__3271ca15373d4483(0)
+    v0: u256 = tstorptr_t__hb73db5b342ccdc03_effecthandle_hfc52f915596f993a_from_raw__u256__3271ca15373d4483(0)
     v1: u256 = code_region_offset(func_item(__Guard_runtime))
     v2: u256 = code_region_len(func_item(__Guard_runtime))
     v3: u256 = codesize()
     bind (v1 + v2)
     br (v3 < (v1 + v2)) bb1 bb2
   bb1:
-    terminate evm_contracthost_abort(())
+    terminate evm_hef0af3106e109414_contracthost_h57111e7eb283a125_abort(())
   bb2:
     bind (v1 + v2)
     bind (v3 - (v1 + v2))
@@ -37,23 +37,23 @@ fn __Guard_init() -> ():
     v5: MemoryBytes = alloc mem
     store mem[v5].0 = v4
     store mem[v5].1 = (v3 - (v1 + v2))
-    v6: SolDecoder<MemoryBytes> = sol_abi_decoder_new__MemoryBytes__b48f82585f3ed728(v5)
+    v6: SolDecoder<MemoryBytes> = sol_hfd482bb803ad8c5f_abi_h2da9a2d0b1ddaeb7_decoder_new__MemoryBytes_h1e381015a9b0111b__59e0d528d54cca1b(v5)
     eval __Guard_init_contract(v0)
     eval codecopy(0, v1, v2)
     terminate return_data(0, v2)
 
 fn __Guard_runtime() -> ():
   bb0:
-    v0: u256 = tstorptr_t__effecthandle_from_raw__u256__3271ca15373d4483(0)
-    v1: u32 = runtime_selector__Evm_Sol__2533f5c49b57a682(())
-    v2: SolDecoder<CallData> = runtime_decoder__Evm_Sol__2533f5c49b57a682(())
+    v0: u256 = tstorptr_t__hb73db5b342ccdc03_effecthandle_hfc52f915596f993a_from_raw__u256__3271ca15373d4483(0)
+    v1: u32 = runtime_selector__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f__e4e3f8d20b3805a2(())
+    v2: SolDecoder<CallData> = runtime_decoder__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f__e4e3f8d20b3805a2(())
     switch v1 [0 => bb2] else bb1
   bb1:
-    terminate evm_contracthost_abort(())
+    terminate evm_hef0af3106e109414_contracthost_h57111e7eb283a125_abort(())
   bb2:
-    eval enter_decode_decode__SolDecoder_CallData___c1e4510fd444b966(v2)
+    eval enter_h591c597fc9aaddcc_decode_h624c3cd8c996d995_decode__SolDecoder_CallData___c1e4510fd444b966(v2)
     eval __Guard_recv_0_0((), v0)
-    terminate return_unit__Evm__1572a3ac6cae1070(())
+    terminate return_unit__Evm_hef0af3106e109414__3af54274b2985741(())
 
 fn __Guard_init_code_offset() -> u256:
   bb0:
@@ -71,11 +71,11 @@ fn bump_lock__TStorPtr_u256___e67d09080c0f1393(v0: u256) -> ():
     store tstor[v0] = (v1 + 1)
     ret
 
-fn tstorptr_t__effecthandle_from_raw__u256__3271ca15373d4483(v0: u256) -> TStorPtr<u256>:
+fn tstorptr_t__hb73db5b342ccdc03_effecthandle_hfc52f915596f993a_from_raw__u256__3271ca15373d4483(v0: u256) -> TStorPtr<u256>:
   bb0:
     ret v0
 
-fn evm_contracthost_abort(v0: Evm) -> !:
+fn evm_hef0af3106e109414_contracthost_h57111e7eb283a125_abort(v0: Evm) -> !:
   bb0:
     terminate revert(0, 0)
 
@@ -90,111 +90,111 @@ fn alloc(v0: u256) -> u256:
     eval mstore(64, (v1 + v0))
     ret v1
 
-fn sol_abi_decoder_new__MemoryBytes__b48f82585f3ed728(v0: I) -> SolDecoder<MemoryBytes>:
+fn sol_hfd482bb803ad8c5f_abi_h2da9a2d0b1ddaeb7_decoder_new__MemoryBytes_h1e381015a9b0111b__59e0d528d54cca1b(v0: I) -> SolDecoder<MemoryBytes>:
   bb0:
-    v1: SolDecoder<MemoryBytes> = soldecoder_i__new__MemoryBytes__b48f82585f3ed728(v0)
+    v1: SolDecoder<MemoryBytes> = soldecoder_i__ha12a03fcb5ba844b_new__MemoryBytes_h1e381015a9b0111b__59e0d528d54cca1b(v0)
     ret v1
 
-fn runtime_selector__Evm_Sol__2533f5c49b57a682(v0: Self) -> u32:
+fn runtime_selector__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f__e4e3f8d20b3805a2(v0: Self) -> u32:
   bb0:
-    v1: CallData = evm_contracthost_input(v0)
-    v2: u256 = calldata_byteinput_len(v1)
+    v1: CallData = evm_hef0af3106e109414_contracthost_h57111e7eb283a125_input(v0)
+    v2: u256 = calldata_hf71d505b6ff5dc81_byteinput_hc4c2cb44299530ae_len(v1)
     br (v2 < 4) bb1 bb2
   bb1:
-    terminate evm_contracthost_abort(v0)
+    terminate evm_hef0af3106e109414_contracthost_h57111e7eb283a125_abort(v0)
   bb2:
-    v3: u256 = calldata_byteinput_word_at(v1, 0)
-    v4: u32 = sol_abi_selector_from_prefix(v3)
+    v3: u256 = calldata_hf71d505b6ff5dc81_byteinput_hc4c2cb44299530ae_word_at(v1, 0)
+    v4: u32 = sol_hfd482bb803ad8c5f_abi_h2da9a2d0b1ddaeb7_selector_from_prefix(v3)
     ret v4
 
-fn runtime_decoder__Evm_Sol__2533f5c49b57a682(v0: Self) -> SolDecoder<CallData>:
+fn runtime_decoder__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f__e4e3f8d20b3805a2(v0: Self) -> SolDecoder<CallData>:
   bb0:
-    v1: CallData = evm_contracthost_input(v0)
-    v2: SolDecoder<CallData> = sol_abi_decoder_with_base__CallData__b9ab8dc8a4b2f9e(v1, 4)
+    v1: CallData = evm_hef0af3106e109414_contracthost_h57111e7eb283a125_input(v0)
+    v2: SolDecoder<CallData> = sol_hfd482bb803ad8c5f_abi_h2da9a2d0b1ddaeb7_decoder_with_base__CallData_hf71d505b6ff5dc81__e6d5f05c3478f563(v1, 4)
     ret v2
 
-fn enter_decode_decode__SolDecoder_CallData___c1e4510fd444b966(v0: D) -> Enter:
+fn enter_h591c597fc9aaddcc_decode_h624c3cd8c996d995_decode__SolDecoder_CallData___c1e4510fd444b966(v0: D) -> Enter:
   bb0:
     ret
 
-fn return_unit__Evm__1572a3ac6cae1070(v0: Self) -> !:
+fn return_unit__Evm_hef0af3106e109414__3af54274b2985741(v0: Self) -> !:
   bb0:
-    terminate evm_contracthost_return_bytes(v0, 0, 0)
+    terminate evm_hef0af3106e109414_contracthost_h57111e7eb283a125_return_bytes(v0, 0, 0)
 
-fn soldecoder_i__new__MemoryBytes__b48f82585f3ed728(v0: I) -> SolDecoder<MemoryBytes>:
+fn soldecoder_i__ha12a03fcb5ba844b_new__MemoryBytes_h1e381015a9b0111b__59e0d528d54cca1b(v0: I) -> SolDecoder<MemoryBytes>:
   bb0:
-    v1: Cursor<MemoryBytes> = cursor_i__new__MemoryBytes__b48f82585f3ed728(v0)
+    v1: Cursor<MemoryBytes> = cursor_i__h140a998c67d6d59c_new__MemoryBytes_h1e381015a9b0111b__59e0d528d54cca1b(v0)
     v3: SolDecoder<MemoryBytes> = alloc mem
     init mem[v3] { .0 = v1, .1 = 0 }
     v2: SolDecoder<MemoryBytes> = v3
     ret v2
 
-fn evm_contracthost_input(v0: Evm) -> CallData:
+fn evm_hef0af3106e109414_contracthost_h57111e7eb283a125_input(v0: Evm) -> CallData:
   bb0:
     ret 0
 
-fn calldata_byteinput_len(v0: CallData) -> u256:
+fn calldata_hf71d505b6ff5dc81_byteinput_hc4c2cb44299530ae_len(v0: CallData) -> u256:
   bb0:
     v1: u256 = calldatasize()
     ret (v1 - v0)
 
-fn calldata_byteinput_word_at(v0: CallData, v1: u256) -> u256:
+fn calldata_hf71d505b6ff5dc81_byteinput_hc4c2cb44299530ae_word_at(v0: CallData, v1: u256) -> u256:
   bb0:
     v2: u256 = calldataload((v0 + v1))
     ret v2
 
-fn sol_abi_selector_from_prefix(v0: u256) -> u32:
+fn sol_hfd482bb803ad8c5f_abi_h2da9a2d0b1ddaeb7_selector_from_prefix(v0: u256) -> u32:
   bb0:
-    v1: u32 = s_intdowncast_downcast_unchecked__u256_u32__6e3637cd3e911b35((v0 >> 224))
+    v1: u32 = s_h33f7c3322e562590_intdowncast_hf946d58b157999e1_downcast_unchecked__u256_u32__6e3637cd3e911b35((v0 >> 224))
     ret v1
 
-fn sol_abi_decoder_with_base__CallData__b9ab8dc8a4b2f9e(v0: I, v1: u256) -> SolDecoder<CallData>:
+fn sol_hfd482bb803ad8c5f_abi_h2da9a2d0b1ddaeb7_decoder_with_base__CallData_hf71d505b6ff5dc81__e6d5f05c3478f563(v0: I, v1: u256) -> SolDecoder<CallData>:
   bb0:
-    v2: SolDecoder<CallData> = soldecoder_i__with_base__CallData__b9ab8dc8a4b2f9e(v0, v1)
+    v2: SolDecoder<CallData> = soldecoder_i__ha12a03fcb5ba844b_with_base__CallData_hf71d505b6ff5dc81__e6d5f05c3478f563(v0, v1)
     ret v2
 
-fn evm_contracthost_return_bytes(v0: Evm, v1: u256, v2: u256) -> !:
+fn evm_hef0af3106e109414_contracthost_h57111e7eb283a125_return_bytes(v0: Evm, v1: u256, v2: u256) -> !:
   bb0:
     terminate return_data(v1, v2)
 
-fn cursor_i__new__MemoryBytes__b48f82585f3ed728(v0: I) -> Cursor<MemoryBytes>:
+fn cursor_i__h140a998c67d6d59c_new__MemoryBytes_h1e381015a9b0111b__59e0d528d54cca1b(v0: I) -> Cursor<MemoryBytes>:
   bb0:
     v2: Cursor<MemoryBytes> = alloc mem
     init mem[v2] { .0 = v0, .1 = 0 }
     v1: Cursor<MemoryBytes> = v2
     ret v1
 
-fn s_intdowncast_downcast_unchecked__u256_u32__6e3637cd3e911b35(v0: S) -> u32:
+fn s_h33f7c3322e562590_intdowncast_hf946d58b157999e1_downcast_unchecked__u256_u32__6e3637cd3e911b35(v0: S) -> u32:
   bb0:
-    v1: u256 = u256_intword_to_word(v0)
-    v2: u32 = u32_intword_from_word(v1)
+    v1: u256 = u256_h3271ca15373d4483_intword_h9a147c8c32b1323c_to_word(v0)
+    v2: u32 = u32_h20aa0c10687491ad_intword_h9a147c8c32b1323c_from_word(v1)
     ret v2
 
-fn soldecoder_i__with_base__CallData__b9ab8dc8a4b2f9e(v0: I, v1: u256) -> SolDecoder<CallData>:
+fn soldecoder_i__ha12a03fcb5ba844b_with_base__CallData_hf71d505b6ff5dc81__e6d5f05c3478f563(v0: I, v1: u256) -> SolDecoder<CallData>:
   bb0:
-    v3: Cursor<CallData> = cursor_i__new__CallData__b9ab8dc8a4b2f9e(v0)
-    v2: Cursor<CallData> = cursor_i__fork__CallData__b9ab8dc8a4b2f9e(v3, v1)
+    v3: Cursor<CallData> = cursor_i__h140a998c67d6d59c_new__CallData_hf71d505b6ff5dc81__e6d5f05c3478f563(v0)
+    v2: Cursor<CallData> = cursor_i__h140a998c67d6d59c_fork__CallData_hf71d505b6ff5dc81__e6d5f05c3478f563(v3, v1)
     v5: SolDecoder<CallData> = alloc mem
     init mem[v5] { .0 = v2, .1 = v1 }
     v4: SolDecoder<CallData> = v5
     ret v4
 
-fn u256_intword_to_word(v0: u256) -> u256:
+fn u256_h3271ca15373d4483_intword_h9a147c8c32b1323c_to_word(v0: u256) -> u256:
   bb0:
     ret v0
 
-fn u32_intword_from_word(v0: u256) -> u32:
+fn u32_h20aa0c10687491ad_intword_h9a147c8c32b1323c_from_word(v0: u256) -> u32:
   bb0:
     ret v0
 
-fn cursor_i__new__CallData__b9ab8dc8a4b2f9e(v0: I) -> Cursor<CallData>:
+fn cursor_i__h140a998c67d6d59c_new__CallData_hf71d505b6ff5dc81__e6d5f05c3478f563(v0: I) -> Cursor<CallData>:
   bb0:
     v2: Cursor<CallData> = alloc mem
     init mem[v2] { .0 = v0, .1 = 0 }
     v1: Cursor<CallData> = v2
     ret v1
 
-fn cursor_i__fork__CallData__b9ab8dc8a4b2f9e(v0: Cursor<I>, v1: u256) -> Cursor<CallData>:
+fn cursor_i__h140a998c67d6d59c_fork__CallData_hf71d505b6ff5dc81__e6d5f05c3478f563(v0: Cursor<I>, v1: u256) -> Cursor<CallData>:
   bb0:
     v3: CallData = load mem[v0].0
     v4: Cursor<CallData> = alloc mem

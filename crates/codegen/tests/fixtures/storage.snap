@@ -1,5 +1,6 @@
 ---
 source: crates/codegen/tests/yul.rs
+assertion_line: 33
 expression: output
 input_file: tests/fixtures/storage.fe
 ---
@@ -16,7 +17,7 @@ object "Coin" {
 
   object "Coin_deployed" {
     code {
-      function $abi_encode__Evm__1572a3ac6cae1070($value, $ops) {
+      function $abi_encode__Evm_hef0af3106e109414__3af54274b2985741($value, $ops) {
         let v0 := 0
         mstore(v0, $value)
         return(v0, 32)
@@ -54,8 +55,8 @@ object "Coin" {
         leave
       }
       function $runtime__StorPtr_Evm___207f35a85ac4062e() {
-        let v0 := $stor_ptr__Evm_CoinStore__d1ec7298de486d2f(0, 0)
-        let v1 := $stor_ptr__Evm_TotalSupply__b0f1a753085dcbd(0, 2)
+        let v0 := $stor_ptr__Evm_hef0af3106e109414_CoinStore_hd26a92ca525e0e79__b6feb5585dda62f1(0, 0)
+        let v1 := $stor_ptr__Evm_hef0af3106e109414_TotalSupply_hddb16bb19b5b088e__f5679b0709de743a(0, 2)
         let v2 := v0
         let v3 := v1
         let v4 := calldataload(0)
@@ -75,12 +76,12 @@ object "Coin" {
                 v8 := v10
               }
             let v11 := v8
-            $abi_encode__Evm__1572a3ac6cae1070(v11, 0)
+            $abi_encode__Evm_hef0af3106e109414__3af54274b2985741(v11, 0)
           }
           case 1818602213 {
             let v12 := calldataload(4)
             let v13 := $balance_of_raw__StorPtr_CoinStore___ba1c0d0726e89ba2(v12, v2)
-            $abi_encode__Evm__1572a3ac6cae1070(v13, 0)
+            $abi_encode__Evm_hef0af3106e109414__3af54274b2985741(v13, 0)
           }
           case 217554442 {
             let v14 := calldataload(4)
@@ -97,27 +98,27 @@ object "Coin" {
               }
             let v19 := v16
             let v20 := $transfer_result_code(v19)
-            $abi_encode__Evm__1572a3ac6cae1070(v20, 0)
+            $abi_encode__Evm_hef0af3106e109414__3af54274b2985741(v20, 0)
           }
           case 960555502 {
             let v21 := $total_supply__StorPtr_TotalSupply___2e654c25952f42f9(v3)
-            $abi_encode__Evm__1572a3ac6cae1070(v21, 0)
+            $abi_encode__Evm_hef0af3106e109414__3af54274b2985741(v21, 0)
           }
           default {
             return(0, 0)
           }
       }
-      function $stor_ptr__Evm_CoinStore__d1ec7298de486d2f($self, $slot) -> ret {
-        let v0 := $storptr_t__effecthandle_from_raw__CoinStore__fc61705bf538fde2($slot)
+      function $stor_ptr__Evm_hef0af3106e109414_CoinStore_hd26a92ca525e0e79__b6feb5585dda62f1($self, $slot) -> ret {
+        let v0 := $storptr_t__hc45dea9607fd5340_effecthandle_hfc52f915596f993a_from_raw__CoinStore_hd26a92ca525e0e79__a9c0a742c4f0cede($slot)
         ret := v0
         leave
       }
-      function $stor_ptr__Evm_TotalSupply__b0f1a753085dcbd($self, $slot) -> ret {
-        let v0 := $storptr_t__effecthandle_from_raw__CoinStore__fc61705bf538fde2($slot)
+      function $stor_ptr__Evm_hef0af3106e109414_TotalSupply_hddb16bb19b5b088e__f5679b0709de743a($self, $slot) -> ret {
+        let v0 := $storptr_t__hc45dea9607fd5340_effecthandle_hfc52f915596f993a_from_raw__CoinStore_hd26a92ca525e0e79__a9c0a742c4f0cede($slot)
         ret := v0
         leave
       }
-      function $storptr_t__effecthandle_from_raw__CoinStore__fc61705bf538fde2($raw) -> ret {
+      function $storptr_t__hc45dea9607fd5340_effecthandle_hfc52f915596f993a_from_raw__CoinStore_hd26a92ca525e0e79__a9c0a742c4f0cede($raw) -> ret {
         ret := $raw
         leave
       }

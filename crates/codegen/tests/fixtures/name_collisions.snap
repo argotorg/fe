@@ -1,61 +1,62 @@
 ---
 source: crates/codegen/tests/yul.rs
+assertion_line: 33
 expression: output
 input_file: tests/fixtures/name_collisions.fe
 ---
-function $flattened_fn() -> ret {
+function $a_b_h12fd23afeb13a092_flattened_fn() -> ret {
   ret := 1
   leave
 }
-function $flattened_fn() -> ret {
+function $a_b_h948d5ab23860c017_flattened_fn() -> ret {
   ret := 2
   leave
 }
 function $test_module_qualifier_flatten_collision() -> ret {
-  let v0 := $flattened_fn()
-  let v1 := $flattened_fn()
+  let v0 := $a_b_h12fd23afeb13a092_flattened_fn()
+  let v1 := $a_b_h948d5ab23860c017_flattened_fn()
   ret := add(v0, v1)
   leave
 }
 function $test_generic_type_collision() -> ret {
   let v0 := 1
   let v1 := 2
-  let v2 := $generic_fn__S__33f7c3322e562590(v0)
+  let v2 := $generic_fn__S_h730d9dc564aaaf27__8d32801e7ec9d42b(v0)
   pop(v2)
-  let v3 := $generic_fn__S__33f7c3322e562590(v1)
+  let v3 := $generic_fn__S_h2db58d011b97b333__42a13489a1ec39e8(v1)
   pop(v3)
   ret := 42
   leave
 }
-function $widget_process($self) -> ret {
+function $widget_h8588afca9d68e578_process($self) -> ret {
   ret := mul($self, 2)
   leave
 }
-function $widget_process($self) -> ret {
+function $widget_h6847c0e3e0e4aa1e_process($self) -> ret {
   ret := mul($self, 3)
   leave
 }
 function $test_impl_method_collision() -> ret {
   let v0 := 10
   let v1 := 20
-  let v2 := $widget_process(v0)
-  let v3 := $widget_process(v1)
+  let v2 := $widget_h8588afca9d68e578_process(v0)
+  let v3 := $widget_h6847c0e3e0e4aa1e_process(v1)
   ret := v2
   leave
 }
-function $multitraitimpl_trait_same_method($self) -> ret {
+function $multitraitimpl_h60cc862fc809464_trait_h79853acec5b2b3ad_same_method($self) -> ret {
   ret := add($self, 1)
   leave
 }
-function $multitraitimpl_trait_same_method($self) -> ret {
+function $multitraitimpl_h60cc862fc809464_trait_ha6da5e54b37dd39c_same_method($self) -> ret {
   ret := add($self, 2)
   leave
 }
 function $test_trait_method_collision() -> ret {
   let v0 := 100
-  let v1 := $multitraitimpl_trait_same_method(v0)
+  let v1 := $multitraitimpl_h60cc862fc809464_trait_h79853acec5b2b3ad_same_method(v0)
   let v2 := 100
-  let v3 := $multitraitimpl_trait_same_method(v2)
+  let v3 := $multitraitimpl_h60cc862fc809464_trait_ha6da5e54b37dd39c_same_method(v2)
   ret := add(v1, v3)
   leave
 }
@@ -118,11 +119,11 @@ function $main() -> ret {
   ret := 0
   leave
 }
-function $generic_fn__S__33f7c3322e562590($val) -> ret {
+function $generic_fn__S_h730d9dc564aaaf27__8d32801e7ec9d42b($val) -> ret {
   ret := $val
   leave
 }
-function $generic_fn__S__33f7c3322e562590($val) -> ret {
+function $generic_fn__S_h2db58d011b97b333__42a13489a1ec39e8($val) -> ret {
   ret := $val
   leave
 }

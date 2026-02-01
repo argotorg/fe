@@ -1,11 +1,12 @@
 ---
 source: crates/codegen/tests/yul.rs
+assertion_line: 33
 expression: output
 input_file: tests/fixtures/code_region.fe
 ---
 object "Foo" {
   code {
-    function $allocate__Evm__1572a3ac6cae1070($bytes, $mem) -> ret {
+    function $allocate__Evm_hef0af3106e109414__3af54274b2985741($bytes, $mem) -> ret {
       let v0 := mload(64)
       let v1 := eq(v0, 0)
       if v1 {
@@ -15,7 +16,7 @@ object "Foo" {
       ret := v0
       leave
     }
-    function $evm_create_create2_raw($self, $value, $offset, $len, $salt) -> ret {
+    function $evm_hef0af3106e109414_create_h3f3c4b410ec53b45_create2_raw($self, $value, $offset, $len, $salt) -> ret {
       let v0 := create2($value, $offset, $len, $salt)
       ret := v0
       leave
@@ -23,14 +24,14 @@ object "Foo" {
     function $init__StorPtr_Evm___207f35a85ac4062e() {
       let v0 := datasize("Child")
       let v1 := dataoffset("Child")
-      let v2 := $allocate__Evm__1572a3ac6cae1070(v0, 0)
+      let v2 := $allocate__Evm_hef0af3106e109414__3af54274b2985741(v0, 0)
       let v3 := v2
       codecopy(v3, v1, v0)
-      let v4 := $evm_create_create2_raw(0, 0, v1, v0, 4660)
+      let v4 := $evm_hef0af3106e109414_create_h3f3c4b410ec53b45_create2_raw(0, 0, v1, v0, 4660)
       pop(v4)
       let v5 := datasize("Foo_deployed")
       let v6 := dataoffset("Foo_deployed")
-      let v7 := $allocate__Evm__1572a3ac6cae1070(v5, 0)
+      let v7 := $allocate__Evm_hef0af3106e109414__3af54274b2985741(v5, 0)
       let v8 := v7
       codecopy(v8, v6, v5)
       return(v8, v5)
@@ -40,28 +41,28 @@ object "Foo" {
 
   object "Foo_deployed" {
     code {
-      function $balance__Evm__1572a3ac6cae1070($ops) {
+      function $balance__Evm_hef0af3106e109414__3af54274b2985741($ops) {
         return(0, 0)
       }
-      function $read_selector__Evm__1572a3ac6cae1070($ops) -> ret {
+      function $read_selector__Evm_hef0af3106e109414__3af54274b2985741($ops) -> ret {
         let v0 := calldataload(0)
         ret := shr(224, v0)
         leave
       }
       function $runtime__StorPtr_Evm___207f35a85ac4062e() {
-        let v0 := $read_selector__Evm__1572a3ac6cae1070(0)
+        let v0 := $read_selector__Evm_hef0af3106e109414__3af54274b2985741(0)
         switch v0
           case 305419896 {
-            $transfer__Evm__1572a3ac6cae1070(0)
+            $transfer__Evm_hef0af3106e109414__3af54274b2985741(0)
           }
           case 591751049 {
-            $balance__Evm__1572a3ac6cae1070(0)
+            $balance__Evm_hef0af3106e109414__3af54274b2985741(0)
           }
           default {
           }
         return(0, 0)
       }
-      function $transfer__Evm__1572a3ac6cae1070($ops) {
+      function $transfer__Evm_hef0af3106e109414__3af54274b2985741($ops) {
         return(0, 0)
       }
       $runtime__StorPtr_Evm___207f35a85ac4062e()

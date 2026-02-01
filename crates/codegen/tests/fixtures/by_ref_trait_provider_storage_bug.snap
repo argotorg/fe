@@ -7,14 +7,14 @@ input_file: tests/fixtures/by_ref_trait_provider_storage_bug.fe
 object "ByRefTraitProviderStorageBug" {
   code {
     function $__ByRefTraitProviderStorageBug_init() {
-      let v0 := $init_field__Evm_Pair__9b3d1e5de783f256(0, 0)
+      let v0 := $init_field__Evm_hef0af3106e109414_Pair_h956dff41e88ee341__18f2eb617f185785(0, 0)
       let v1 := dataoffset("ByRefTraitProviderStorageBug_deployed")
       let v2 := datasize("ByRefTraitProviderStorageBug_deployed")
       let v3 := codesize()
       let v4 := add(v1, v2)
       let v5 := lt(v3, v4)
       if v5 {
-        $evm_contracthost_abort(0)
+        $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_abort(0)
       }
       let v6 := sub(v3, v4)
       let v7 := $alloc(v6)
@@ -26,7 +26,7 @@ object "ByRefTraitProviderStorageBug" {
       mstore(0x40, add(v8, 64))
       mstore(v8, v7)
       mstore(add(v8, 32), v6)
-      let v9 := $sol_abi_decoder_new__MemoryBytes__b48f82585f3ed728(v8)
+      let v9 := $sol_hfd482bb803ad8c5f_abi_h2da9a2d0b1ddaeb7_decoder_new__MemoryBytes_h1e381015a9b0111b__59e0d528d54cca1b(v8)
       $__ByRefTraitProviderStorageBug_init_contract(v0)
       codecopy(0, v1, v2)
       return(0, v2)
@@ -54,7 +54,7 @@ object "ByRefTraitProviderStorageBug" {
       ret := v0
       leave
     }
-    function $cursor_i__new__MemoryBytes__b48f82585f3ed728($input) -> ret {
+    function $cursor_i__h140a998c67d6d59c_new__MemoryBytes_h1e381015a9b0111b__59e0d528d54cca1b($input) -> ret {
       let v0 := mload(0x40)
       if iszero(v0) {
         v0 := 0x80
@@ -68,26 +68,26 @@ object "ByRefTraitProviderStorageBug" {
       ret := v2
       leave
     }
-    function $evm_contracthost_abort($self) {
+    function $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_abort($self) {
       revert(0, 0)
     }
-    function $evm_contracthost_field__Pair__f889f9d568bc82f1($self, $slot) -> ret {
-      let v0 := $stor_ptr__Evm_Pair__9b3d1e5de783f256(0, $slot)
+    function $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_field__Pair_h956dff41e88ee341__acec41afdc898140($self, $slot) -> ret {
+      let v0 := $stor_ptr__Evm_hef0af3106e109414_Pair_h956dff41e88ee341__18f2eb617f185785(0, $slot)
       ret := v0
       leave
     }
-    function $init_field__Evm_Pair__9b3d1e5de783f256($self, $slot) -> ret {
-      let v0 := $evm_contracthost_field__Pair__f889f9d568bc82f1($self, $slot)
+    function $init_field__Evm_hef0af3106e109414_Pair_h956dff41e88ee341__18f2eb617f185785($self, $slot) -> ret {
+      let v0 := $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_field__Pair_h956dff41e88ee341__acec41afdc898140($self, $slot)
       ret := v0
       leave
     }
-    function $sol_abi_decoder_new__MemoryBytes__b48f82585f3ed728($input) -> ret {
-      let v0 := $soldecoder_i__new__MemoryBytes__b48f82585f3ed728($input)
+    function $sol_hfd482bb803ad8c5f_abi_h2da9a2d0b1ddaeb7_decoder_new__MemoryBytes_h1e381015a9b0111b__59e0d528d54cca1b($input) -> ret {
+      let v0 := $soldecoder_i__ha12a03fcb5ba844b_new__MemoryBytes_h1e381015a9b0111b__59e0d528d54cca1b($input)
       ret := v0
       leave
     }
-    function $soldecoder_i__new__MemoryBytes__b48f82585f3ed728($input) -> ret {
-      let v0 := $cursor_i__new__MemoryBytes__b48f82585f3ed728($input)
+    function $soldecoder_i__ha12a03fcb5ba844b_new__MemoryBytes_h1e381015a9b0111b__59e0d528d54cca1b($input) -> ret {
+      let v0 := $cursor_i__h140a998c67d6d59c_new__MemoryBytes_h1e381015a9b0111b__59e0d528d54cca1b($input)
       let v1 := mload(0x40)
       if iszero(v1) {
         v1 := 0x80
@@ -102,12 +102,12 @@ object "ByRefTraitProviderStorageBug" {
       ret := v3
       leave
     }
-    function $stor_ptr__Evm_Pair__9b3d1e5de783f256($self, $slot) -> ret {
-      let v0 := $storptr_t__effecthandle_from_raw__Pair__f889f9d568bc82f1($slot)
+    function $stor_ptr__Evm_hef0af3106e109414_Pair_h956dff41e88ee341__18f2eb617f185785($self, $slot) -> ret {
+      let v0 := $storptr_t__hc45dea9607fd5340_effecthandle_hfc52f915596f993a_from_raw__Pair_h956dff41e88ee341__acec41afdc898140($slot)
       ret := v0
       leave
     }
-    function $storptr_t__effecthandle_from_raw__Pair__f889f9d568bc82f1($raw) -> ret {
+    function $storptr_t__hc45dea9607fd5340_effecthandle_hfc52f915596f993a_from_raw__Pair_h956dff41e88ee341__acec41afdc898140($raw) -> ret {
       ret := $raw
       leave
     }
@@ -118,22 +118,22 @@ object "ByRefTraitProviderStorageBug" {
     code {
       function $__ByRefTraitProviderStorageBug_recv_0_0($args, $ctx) -> ret {
         let v0 := $ctx
-        let v1 := $use_ctx_eff0_stor__Pair__f889f9d568bc82f1(v0)
+        let v1 := $use_ctx_eff0_stor__Pair_h956dff41e88ee341__acec41afdc898140(v0)
         ret := v1
         leave
       }
       function $__ByRefTraitProviderStorageBug_runtime() {
-        let v0 := $evm_contracthost_field__Pair__f889f9d568bc82f1(0, 0)
-        let v1 := $runtime_selector__Evm_Sol__2533f5c49b57a682(0)
-        let v2 := $runtime_decoder__Evm_Sol__2533f5c49b57a682(0)
+        let v0 := $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_field__Pair_h956dff41e88ee341__acec41afdc898140(0, 0)
+        let v1 := $runtime_selector__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f__e4e3f8d20b3805a2(0)
+        let v2 := $runtime_decoder__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f__e4e3f8d20b3805a2(0)
         switch v1
           case 1 {
-            $go_decode_decode__SolDecoder_CallData___c1e4510fd444b966(v2)
+            $go_h50739b8917c22b82_decode_h624c3cd8c996d995_decode__SolDecoder_CallData___c1e4510fd444b966(v2)
             let v3 := $__ByRefTraitProviderStorageBug_recv_0_0(0, v0)
-            $return_value__Evm_Sol_u256__fe091c64bccbbbf1(0, v3)
+            $return_value__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f_u256__c4b26908c66ef75f(0, v3)
           }
           default {
-            $evm_contracthost_abort(0)
+            $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_abort(0)
           }
       }
       function $alloc($size) -> ret {
@@ -146,17 +146,17 @@ object "ByRefTraitProviderStorageBug" {
         ret := v0
         leave
       }
-      function $calldata_byteinput_len($self) -> ret {
+      function $calldata_hf71d505b6ff5dc81_byteinput_hc4c2cb44299530ae_len($self) -> ret {
         let v0 := calldatasize()
         ret := sub(v0, $self)
         leave
       }
-      function $calldata_byteinput_word_at($self, $byte_offset) -> ret {
+      function $calldata_hf71d505b6ff5dc81_byteinput_hc4c2cb44299530ae_word_at($self, $byte_offset) -> ret {
         let v0 := calldataload(add($self, $byte_offset))
         ret := v0
         leave
       }
-      function $cursor_i__fork__CallData__b9ab8dc8a4b2f9e($self, $pos) -> ret {
+      function $cursor_i__h140a998c67d6d59c_fork__CallData_hf71d505b6ff5dc81__e6d5f05c3478f563($self, $pos) -> ret {
         let v0 := mload($self)
         let v1 := mload(0x40)
         if iszero(v1) {
@@ -169,7 +169,7 @@ object "ByRefTraitProviderStorageBug" {
         ret := v2
         leave
       }
-      function $cursor_i__new__CallData__b9ab8dc8a4b2f9e($input) -> ret {
+      function $cursor_i__h140a998c67d6d59c_new__CallData_hf71d505b6ff5dc81__e6d5f05c3478f563($input) -> ret {
         let v0 := mload(0x40)
         if iszero(v0) {
           v0 := 0x80
@@ -181,82 +181,82 @@ object "ByRefTraitProviderStorageBug" {
         ret := v1
         leave
       }
-      function $evm_contracthost_abort($self) {
+      function $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_abort($self) {
         revert(0, 0)
       }
-      function $evm_contracthost_field__Pair__f889f9d568bc82f1($self, $slot) -> ret {
-        let v0 := $stor_ptr__Evm_Pair__9b3d1e5de783f256(0, $slot)
+      function $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_field__Pair_h956dff41e88ee341__acec41afdc898140($self, $slot) -> ret {
+        let v0 := $stor_ptr__Evm_hef0af3106e109414_Pair_h956dff41e88ee341__18f2eb617f185785(0, $slot)
         ret := v0
         leave
       }
-      function $evm_contracthost_input($self) -> ret {
+      function $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_input($self) -> ret {
         ret := 0
         leave
       }
-      function $evm_contracthost_return_bytes($self, $ptr, $len) {
+      function $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_return_bytes($self, $ptr, $len) {
         return($ptr, $len)
       }
-      function $go_decode_decode__SolDecoder_CallData___c1e4510fd444b966($d) {
+      function $go_h50739b8917c22b82_decode_h624c3cd8c996d995_decode__SolDecoder_CallData___c1e4510fd444b966($d) {
         leave
       }
-      function $pair_ctx_sum_stor($self) -> ret {
+      function $pair_h956dff41e88ee341_ctx_h4952b3c1f066f039_sum_stor($self) -> ret {
         let v0 := sload($self)
         let v1 := sload(add($self, 1))
         ret := add(v0, v1)
         leave
       }
-      function $return_value__Evm_Sol_u256__fe091c64bccbbbf1($self, $value) {
-        let v0 := $sol_abi_encoder_new()
-        let v1 := $solencoder_abiencoder_reserve_head(v0, 32)
+      function $return_value__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f_u256__c4b26908c66ef75f($self, $value) {
+        let v0 := $sol_hfd482bb803ad8c5f_abi_h2da9a2d0b1ddaeb7_encoder_new()
+        let v1 := $solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_reserve_head(v0, 32)
         pop(v1)
-        $u256_encode_encode__Sol_SolEncoder__dce63ad1a1fe4ae2($value, v0)
-        let v2 := $solencoder_abiencoder_finish(v0)
+        $u256_h3271ca15373d4483_encode_hab7243eccf2714fb_encode__Sol_hfd482bb803ad8c5f_SolEncoder_h1b9228b90dad6928__1a070c3866d16383($value, v0)
+        let v2 := $solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_finish(v0)
         let v3 := mload(v2)
         let v4 := mload(add(v2, 32))
-        $evm_contracthost_return_bytes($self, v3, v4)
+        $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_return_bytes($self, v3, v4)
       }
-      function $runtime_decoder__Evm_Sol__2533f5c49b57a682($self) -> ret {
-        let v0 := $evm_contracthost_input($self)
-        let v1 := $sol_abi_decoder_with_base__CallData__b9ab8dc8a4b2f9e(v0, 4)
+      function $runtime_decoder__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f__e4e3f8d20b3805a2($self) -> ret {
+        let v0 := $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_input($self)
+        let v1 := $sol_hfd482bb803ad8c5f_abi_h2da9a2d0b1ddaeb7_decoder_with_base__CallData_hf71d505b6ff5dc81__e6d5f05c3478f563(v0, 4)
         ret := v1
         leave
       }
-      function $runtime_selector__Evm_Sol__2533f5c49b57a682($self) -> ret {
-        let v0 := $evm_contracthost_input($self)
-        let v1 := $calldata_byteinput_len(v0)
+      function $runtime_selector__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f__e4e3f8d20b3805a2($self) -> ret {
+        let v0 := $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_input($self)
+        let v1 := $calldata_hf71d505b6ff5dc81_byteinput_hc4c2cb44299530ae_len(v0)
         let v2 := lt(v1, 4)
         if v2 {
-          $evm_contracthost_abort($self)
+          $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_abort($self)
         }
-        let v3 := $calldata_byteinput_word_at(v0, 0)
-        let v4 := $sol_abi_selector_from_prefix(v3)
+        let v3 := $calldata_hf71d505b6ff5dc81_byteinput_hc4c2cb44299530ae_word_at(v0, 0)
+        let v4 := $sol_hfd482bb803ad8c5f_abi_h2da9a2d0b1ddaeb7_selector_from_prefix(v3)
         ret := v4
         leave
       }
-      function $s_intdowncast_downcast_unchecked__u256_u32__6e3637cd3e911b35($self) -> ret {
-        let v0 := $u256_intword_to_word($self)
-        let v1 := $u32_intword_from_word(v0)
+      function $s_h33f7c3322e562590_intdowncast_hf946d58b157999e1_downcast_unchecked__u256_u32__6e3637cd3e911b35($self) -> ret {
+        let v0 := $u256_h3271ca15373d4483_intword_h9a147c8c32b1323c_to_word($self)
+        let v1 := $u32_h20aa0c10687491ad_intword_h9a147c8c32b1323c_from_word(v0)
         ret := v1
         leave
       }
-      function $sol_abi_decoder_with_base__CallData__b9ab8dc8a4b2f9e($input, $base) -> ret {
-        let v0 := $soldecoder_i__with_base__CallData__b9ab8dc8a4b2f9e($input, $base)
+      function $sol_hfd482bb803ad8c5f_abi_h2da9a2d0b1ddaeb7_decoder_with_base__CallData_hf71d505b6ff5dc81__e6d5f05c3478f563($input, $base) -> ret {
+        let v0 := $soldecoder_i__ha12a03fcb5ba844b_with_base__CallData_hf71d505b6ff5dc81__e6d5f05c3478f563($input, $base)
         ret := v0
         leave
       }
-      function $sol_abi_encoder_new() -> ret {
-        let v0 := $solencoder_new()
+      function $sol_hfd482bb803ad8c5f_abi_h2da9a2d0b1ddaeb7_encoder_new() -> ret {
+        let v0 := $solencoder_h1b9228b90dad6928_new()
         ret := v0
         leave
       }
-      function $sol_abi_selector_from_prefix($prefix) -> ret {
-        let v0 := $s_intdowncast_downcast_unchecked__u256_u32__6e3637cd3e911b35(shr(224, $prefix))
+      function $sol_hfd482bb803ad8c5f_abi_h2da9a2d0b1ddaeb7_selector_from_prefix($prefix) -> ret {
+        let v0 := $s_h33f7c3322e562590_intdowncast_hf946d58b157999e1_downcast_unchecked__u256_u32__6e3637cd3e911b35(shr(224, $prefix))
         ret := v0
         leave
       }
-      function $soldecoder_i__with_base__CallData__b9ab8dc8a4b2f9e($input, $base) -> ret {
-        let v0 := $cursor_i__new__CallData__b9ab8dc8a4b2f9e($input)
-        let v1 := $cursor_i__fork__CallData__b9ab8dc8a4b2f9e(v0, $base)
+      function $soldecoder_i__ha12a03fcb5ba844b_with_base__CallData_hf71d505b6ff5dc81__e6d5f05c3478f563($input, $base) -> ret {
+        let v0 := $cursor_i__h140a998c67d6d59c_new__CallData_hf71d505b6ff5dc81__e6d5f05c3478f563($input)
+        let v1 := $cursor_i__h140a998c67d6d59c_fork__CallData_hf71d505b6ff5dc81__e6d5f05c3478f563(v0, $base)
         let v2 := mload(0x40)
         if iszero(v2) {
           v2 := 0x80
@@ -270,7 +270,7 @@ object "ByRefTraitProviderStorageBug" {
         ret := v4
         leave
       }
-      function $solencoder_abiencoder_finish($self) -> ret {
+      function $solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_finish($self) -> ret {
         let v0 := mload($self)
         let v1 := mload(add($self, 64))
         let v2 := mload(0x40)
@@ -283,19 +283,19 @@ object "ByRefTraitProviderStorageBug" {
         ret := v2
         leave
       }
-      function $solencoder_abiencoder_reserve_head($self, $bytes) -> ret {
-        $solencoder_ensure_init($self, $bytes)
+      function $solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_reserve_head($self, $bytes) -> ret {
+        $solencoder_h1b9228b90dad6928_ensure_init($self, $bytes)
         let v0 := mload($self)
         ret := v0
         leave
       }
-      function $solencoder_abiencoder_write_word($self, $v) {
+      function $solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_write_word($self, $v) {
         let v0 := mload(add($self, 32))
         mstore(v0, $v)
         mstore(add($self, 32), add(v0, 32))
         leave
       }
-      function $solencoder_ensure_init($self, $bytes) {
+      function $solencoder_h1b9228b90dad6928_ensure_init($self, $bytes) {
         let v0 := mload($self)
         let v1 := eq(v0, 0)
         if v1 {
@@ -306,7 +306,7 @@ object "ByRefTraitProviderStorageBug" {
         }
         leave
       }
-      function $solencoder_new() -> ret {
+      function $solencoder_h1b9228b90dad6928_new() -> ret {
         let v0 := mload(0x40)
         if iszero(v0) {
           v0 := 0x80
@@ -319,29 +319,29 @@ object "ByRefTraitProviderStorageBug" {
         ret := v1
         leave
       }
-      function $stor_ptr__Evm_Pair__9b3d1e5de783f256($self, $slot) -> ret {
-        let v0 := $storptr_t__effecthandle_from_raw__Pair__f889f9d568bc82f1($slot)
+      function $stor_ptr__Evm_hef0af3106e109414_Pair_h956dff41e88ee341__18f2eb617f185785($self, $slot) -> ret {
+        let v0 := $storptr_t__hc45dea9607fd5340_effecthandle_hfc52f915596f993a_from_raw__Pair_h956dff41e88ee341__acec41afdc898140($slot)
         ret := v0
         leave
       }
-      function $storptr_t__effecthandle_from_raw__Pair__f889f9d568bc82f1($raw) -> ret {
+      function $storptr_t__hc45dea9607fd5340_effecthandle_hfc52f915596f993a_from_raw__Pair_h956dff41e88ee341__acec41afdc898140($raw) -> ret {
         ret := $raw
         leave
       }
-      function $u256_encode_encode__Sol_SolEncoder__dce63ad1a1fe4ae2($self, $e) {
-        $solencoder_abiencoder_write_word($e, $self)
+      function $u256_h3271ca15373d4483_encode_hab7243eccf2714fb_encode__Sol_hfd482bb803ad8c5f_SolEncoder_h1b9228b90dad6928__1a070c3866d16383($self, $e) {
+        $solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_write_word($e, $self)
         leave
       }
-      function $u256_intword_to_word($self) -> ret {
+      function $u256_h3271ca15373d4483_intword_h9a147c8c32b1323c_to_word($self) -> ret {
         ret := $self
         leave
       }
-      function $u32_intword_from_word($word) -> ret {
+      function $u32_h20aa0c10687491ad_intword_h9a147c8c32b1323c_from_word($word) -> ret {
         ret := $word
         leave
       }
-      function $use_ctx_eff0_stor__Pair__f889f9d568bc82f1($ctx) -> ret {
-        let v0 := $pair_ctx_sum_stor($ctx)
+      function $use_ctx_eff0_stor__Pair_h956dff41e88ee341__acec41afdc898140($ctx) -> ret {
+        let v0 := $pair_h956dff41e88ee341_ctx_h4952b3c1f066f039_sum_stor($ctx)
         ret := v0
         leave
       }

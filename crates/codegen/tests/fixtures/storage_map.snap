@@ -1,25 +1,26 @@
 ---
 source: crates/codegen/tests/yul.rs
+assertion_line: 33
 expression: output
 input_file: tests/fixtures/storage_map.fe
 ---
 function $get_balance__StorPtr_StorageMap_u256__u256__0____4a2331212cb04e60($addr, $balances) -> ret {
-  let v0 := $storagemap_k__v__const_salt__u256__get__u256_u256_0__6a346ad3c930d971($balances, $addr)
+  let v0 := $storagemap_k__v__const_salt__u256__h5955888dd44c2a19_get__u256_u256_0__6a346ad3c930d971($balances, $addr)
   ret := v0
   leave
 }
 function $set_balance__StorPtr_StorageMap_u256__u256__0____4a2331212cb04e60($addr, $value, $balances) {
-  $storagemap_k__v__const_salt__u256__set__u256_u256_0__6a346ad3c930d971($balances, $addr, $value)
+  $storagemap_k__v__const_salt__u256__h5955888dd44c2a19_set__u256_u256_0__6a346ad3c930d971($balances, $addr, $value)
   leave
 }
-function $storagemap_k__v__const_salt__u256__get__u256_u256_0__6a346ad3c930d971($self, $key) -> ret {
+function $storagemap_k__v__const_salt__u256__h5955888dd44c2a19_get__u256_u256_0__6a346ad3c930d971($self, $key) -> ret {
   let v0 := $storagemap_get_word_with_salt__u256__3271ca15373d4483($key, 0)
-  let v1 := $u256_wordrepr_from_word(v0)
+  let v1 := $u256_h3271ca15373d4483_wordrepr_h7483d41ac8178d88_from_word(v0)
   ret := v1
   leave
 }
-function $storagemap_k__v__const_salt__u256__set__u256_u256_0__6a346ad3c930d971($self, $key, $value) {
-  let v0 := $u256_wordrepr_to_word($value)
+function $storagemap_k__v__const_salt__u256__h5955888dd44c2a19_set__u256_u256_0__6a346ad3c930d971($self, $key, $value) {
+  let v0 := $u256_h3271ca15373d4483_wordrepr_h7483d41ac8178d88_to_word($value)
   $storagemap_set_word_with_salt__u256__3271ca15373d4483($key, 0, v0)
   leave
 }
@@ -29,11 +30,11 @@ function $storagemap_get_word_with_salt__u256__3271ca15373d4483($key, $salt) -> 
   ret := v1
   leave
 }
-function $u256_wordrepr_from_word($word) -> ret {
+function $u256_h3271ca15373d4483_wordrepr_h7483d41ac8178d88_from_word($word) -> ret {
   ret := $word
   leave
 }
-function $u256_wordrepr_to_word($self) -> ret {
+function $u256_h3271ca15373d4483_wordrepr_h7483d41ac8178d88_to_word($self) -> ret {
   ret := $self
   leave
 }
@@ -44,13 +45,13 @@ function $storagemap_set_word_with_salt__u256__3271ca15373d4483($key, $salt, $wo
 }
 function $storagemap_storage_slot_with_salt__u256__3271ca15373d4483($key, $salt) -> ret {
   let v0 := mload(64)
-  let v1 := $u256_storagekey_write_key(v0, $key)
+  let v1 := $u256_h3271ca15373d4483_storagekey_hf9e3d38a13ff4409_write_key(v0, $key)
   mstore(add(v0, v1), $salt)
   let v2 := keccak256(v0, add(v1, 32))
   ret := v2
   leave
 }
-function $u256_storagekey_write_key($ptr, $self) -> ret {
+function $u256_h3271ca15373d4483_storagekey_hf9e3d38a13ff4409_write_key($ptr, $self) -> ret {
   mstore($ptr, $self)
   ret := 32
   leave

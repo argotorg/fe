@@ -1,16 +1,17 @@
 ---
 source: crates/codegen/tests/yul.rs
+assertion_line: 33
 expression: output
 input_file: tests/fixtures/newtype_word_mut_method_call.fe
 ---
-function $wrap_bump($self) -> ret {
+function $wrap_haf9e70905fcbd513_bump($self) -> ret {
   $self := add($self, 1)
   ret := $self
   leave
 }
 function $newtype_word_mut_method_call($x) -> ret {
   let v0 := $x
-  let v1 := $wrap_bump(v0)
+  let v1 := $wrap_haf9e70905fcbd513_bump(v0)
   v0 := v1
   ret := v0
   leave

@@ -1,15 +1,16 @@
 ---
 source: crates/mir/tests/lowering_snapshots.rs
+assertion_line: 26
 expression: mir_output
 ---
-fn bar_t_make() -> Bar:
+fn bar_h9f829bcd60910980_t_ha4fe9660e49389ad_make() -> Bar:
   bb0:
     ret 10
 
 fn example() -> Bar:
   bb0:
-    v0: Bar = bar_t_make()
-    v1: Bar = bar_t_make()
+    v0: Bar = bar_h9f829bcd60910980_t_ha4fe9660e49389ad_make()
+    v1: Bar = bar_h9f829bcd60910980_t_ha4fe9660e49389ad_make()
     v3: Bar = 0
     switch true [true => bb1, false => bb2] else bb2
   bb1:
@@ -24,5 +25,5 @@ fn example() -> Bar:
 
 fn f() -> Bar:
   bb0:
-    v0: Bar = bar_t_make()
+    v0: Bar = bar_h9f829bcd60910980_t_ha4fe9660e49389ad_make()
     ret v0
