@@ -76,9 +76,6 @@ pub enum Command {
         /// Override the default version (default: 0.1.0).
         #[arg(long)]
         version: Option<String>,
-        /// Do not attempt to add this ingot to an enclosing workspace.
-        #[arg(long)]
-        no_workspace_update: bool,
     },
 }
 
@@ -122,15 +119,8 @@ pub fn run(opts: &Options) {
             workspace,
             name,
             version,
-            no_workspace_update,
         } => {
-            if let Err(err) = cli::new::run(
-                path,
-                *workspace,
-                name.as_deref(),
-                version.as_deref(),
-                *no_workspace_update,
-            ) {
+            if let Err(err) = cli::new::run(path, *workspace, name.as_deref(), version.as_deref()) {
                 eprintln!("❌ {err}");
                 std::process::exit(1);
             }

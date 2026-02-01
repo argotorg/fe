@@ -173,11 +173,11 @@ Remote workspaces are supported: a git dependency pointing at a workspace root c
 Creating projects:
 
 - `fe new --workspace <path>` creates a workspace root with `fe.toml` (members are empty by default).
-- `fe new <path>` creates a single ingot; if run inside an existing workspace, it attempts to add the ingot’s relative path to the workspace’s members (disable with `--no-workspace-update`).
+- `fe new <path>` creates a single ingot; if run inside an existing workspace, it prints a suggestion to add the ingot’s relative path to the workspace’s members.
 
 Notes on `fe new`:
 
 - `fe new` refuses to overwrite existing `fe.toml` / `src/lib.fe` files.
-- When adding to an enclosing workspace, `fe new` updates `members` as follows:
-  - If `members` is a table, it adds the new path to `members.main`.
-  - If the new ingot is already covered by an existing `members` glob (or is already listed explicitly), it skips updating the workspace file.
+- When run inside an enclosing workspace, `fe new` prints a member suggestion as follows:
+  - If `members` is a table, it suggests adding the new path to `members.main`.
+  - If the new ingot is already covered by an existing `members` glob (or is already listed explicitly), it prints no suggestion.

@@ -121,7 +121,7 @@ fn new_workspace_creates_workspace_config_without_hardcoded_layout() {
 }
 
 #[test]
-fn new_adds_member_to_enclosing_workspace() {
+fn new_suggests_member_for_enclosing_workspace() {
     let tmp = TempDir::new().expect("tempdir");
     let ws_dir = tmp.path().join("ws");
     std::fs::create_dir_all(&ws_dir).expect("create ws");
@@ -139,48 +139,13 @@ exclude = ["target"]
     let member_dir = ws_dir.join("app");
     let (output, exit_code) = run_fe(&["new", member_dir.to_str().unwrap()], tmp.path());
     assert_eq!(exit_code, 0, "fe new failed:\n{output}");
-
-    let updated = std::fs::read_to_string(ws_dir.join("fe.toml")).expect("read updated fe.toml");
-    let value: toml::Value = updated.parse().expect("parse updated workspace fe.toml");
-    let workspace = value
-        .get("workspace")
-        .and_then(|v| v.as_table())
-        .expect("workspace table");
-    let members = workspace
-        .get("members")
-        .and_then(|v| v.as_array())
-        .expect("members array");
     assert!(
-        members.iter().any(|m| m.as_str() == Some("app")),
-        "expected members to contain \"app\", got: {members:?}"
+        output.contains("add \"app\" to [workspace].members"),
+        "expected `fe new` to print a workspace member suggestion, got:\n{output}"
     );
-}
 
-#[test]
-fn new_does_not_update_workspace_when_no_workspace_update_is_set() {
-    let tmp = TempDir::new().expect("tempdir");
-    let ws_dir = tmp.path().join("ws");
-    std::fs::create_dir_all(&ws_dir).expect("create ws");
-    std::fs::write(
-        ws_dir.join("fe.toml"),
-        r#"[workspace]
-name = "ws"
-version = "0.1.0"
-members = []
-exclude = ["target"]
-"#,
-    )
-    .expect("write fe.toml");
-
-    let member_dir = ws_dir.join("app");
-    let (output, exit_code) = run_fe(
-        &["new", "--no-workspace-update", member_dir.to_str().unwrap()],
-        tmp.path(),
-    );
-    assert_eq!(exit_code, 0, "fe new failed:\n{output}");
-
-    let updated = std::fs::read_to_string(ws_dir.join("fe.toml")).expect("read updated fe.toml");
-    let value: toml::Value = updated.parse().expect("parse updated workspace fe.toml");
+    let updated = std::fs::read_to_string(ws_dir.join("fe.toml")).expect("read fe.toml");
+    let value: toml::Value = updated.parse().expect("parse workspace fe.toml");
     let workspace = value
         .get("workspace")
         .and_then(|v| v.as_table())
@@ -191,12 +156,47 @@ exclude = ["target"]
         .expect("members array");
     assert!(
         members.is_empty(),
-        "expected members to remain empty, got: {members:?}"
+        "expected members to remain empty (no file writes), got: {members:?}"
     );
 }
 
 #[test]
-fn new_does_not_add_member_when_covered_by_existing_glob() {
+fn new_suggests_member_for_root_level_workspace_config() {
+    let tmp = TempDir::new().expect("tempdir");
+    let ws_dir = tmp.path().join("ws");
+    std::fs::create_dir_all(&ws_dir).expect("create ws");
+    std::fs::write(
+        ws_dir.join("fe.toml"),
+        r#"name = "ws"
+version = "0.1.0"
+members = []
+exclude = ["target"]
+"#,
+    )
+    .expect("write fe.toml");
+
+    let member_dir = ws_dir.join("app");
+    let (output, exit_code) = run_fe(&["new", member_dir.to_str().unwrap()], tmp.path());
+    assert_eq!(exit_code, 0, "fe new failed:\n{output}");
+    assert!(
+        output.contains("add \"app\" to members"),
+        "expected `fe new` to suggest adding the member to root-level members, got:\n{output}"
+    );
+
+    let updated = std::fs::read_to_string(ws_dir.join("fe.toml")).expect("read fe.toml");
+    let value: toml::Value = updated.parse().expect("parse workspace fe.toml");
+    let members = value
+        .get("members")
+        .and_then(|v| v.as_array())
+        .expect("members array");
+    assert!(
+        members.is_empty(),
+        "expected members to remain empty (no file writes), got: {members:?}"
+    );
+}
+
+#[test]
+fn new_does_not_suggest_member_when_covered_by_existing_glob() {
     let tmp = TempDir::new().expect("tempdir");
     let ws_dir = tmp.path().join("ws");
     std::fs::create_dir_all(&ws_dir).expect("create ws");
@@ -215,12 +215,12 @@ exclude = ["target"]
     let (output, exit_code) = run_fe(&["new", member_dir.to_str().unwrap()], tmp.path());
     assert_eq!(exit_code, 0, "fe new failed:\n{output}");
     assert!(
-        !output.contains("Added workspace member"),
-        "expected `fe new` to skip workspace update when member is covered by glob, got:\n{output}"
+        !output.contains("Workspace detected at"),
+        "expected `fe new` to skip workspace suggestion when member is covered by glob, got:\n{output}"
     );
 
-    let updated = std::fs::read_to_string(ws_dir.join("fe.toml")).expect("read updated fe.toml");
-    let value: toml::Value = updated.parse().expect("parse updated workspace fe.toml");
+    let updated = std::fs::read_to_string(ws_dir.join("fe.toml")).expect("read fe.toml");
+    let value: toml::Value = updated.parse().expect("parse workspace fe.toml");
     let workspace = value
         .get("workspace")
         .and_then(|v| v.as_table())
@@ -240,7 +240,7 @@ exclude = ["target"]
 }
 
 #[test]
-fn new_adds_member_to_members_main_table() {
+fn new_suggests_member_for_members_main_table() {
     let tmp = TempDir::new().expect("tempdir");
     let ws_dir = tmp.path().join("ws");
     std::fs::create_dir_all(&ws_dir).expect("create ws");
@@ -258,9 +258,13 @@ exclude = ["target"]
     let member_dir = ws_dir.join("app");
     let (output, exit_code) = run_fe(&["new", member_dir.to_str().unwrap()], tmp.path());
     assert_eq!(exit_code, 0, "fe new failed:\n{output}");
+    assert!(
+        output.contains("add \"app\" to [workspace].members.main"),
+        "expected `fe new` to print a workspace member suggestion for members.main, got:\n{output}"
+    );
 
-    let updated = std::fs::read_to_string(ws_dir.join("fe.toml")).expect("read updated fe.toml");
-    let value: toml::Value = updated.parse().expect("parse updated workspace fe.toml");
+    let updated = std::fs::read_to_string(ws_dir.join("fe.toml")).expect("read fe.toml");
+    let value: toml::Value = updated.parse().expect("parse workspace fe.toml");
     let workspace = value
         .get("workspace")
         .and_then(|v| v.as_table())
@@ -272,7 +276,155 @@ exclude = ["target"]
         .and_then(|v| v.as_array())
         .expect("members.main array");
     assert!(
-        main.iter().any(|m| m.as_str() == Some("app")),
-        "expected members.main to contain \"app\", got: {main:?}"
+        main.is_empty(),
+        "expected members.main to remain empty (no file writes), got: {main:?}"
+    );
+}
+
+#[test]
+fn new_errors_when_target_path_is_file() {
+    let tmp = TempDir::new().expect("tempdir");
+    let target_file = tmp.path().join("not_a_dir");
+    std::fs::write(&target_file, "hello").expect("write file");
+
+    let (output, exit_code) = run_fe(&["new", target_file.to_str().unwrap()], tmp.path());
+    assert_ne!(exit_code, 0, "expected `fe new` to fail, got:\n{output}");
+    assert!(
+        output.contains("exists and is a file; expected directory"),
+        "expected file-target error, got:\n{output}"
+    );
+}
+
+#[test]
+fn new_refuses_to_overwrite_existing_fe_toml() {
+    let tmp = TempDir::new().expect("tempdir");
+    let ingot_dir = tmp.path().join("my_ingot");
+    std::fs::create_dir_all(&ingot_dir).expect("create ingot dir");
+    std::fs::write(
+        ingot_dir.join("fe.toml"),
+        "[ingot]\nname = \"x\"\nversion = \"0.1.0\"\n",
+    )
+    .expect("write fe.toml");
+
+    let (output, exit_code) = run_fe(&["new", ingot_dir.to_str().unwrap()], tmp.path());
+    assert_ne!(exit_code, 0, "expected `fe new` to fail, got:\n{output}");
+    assert!(
+        output.contains("Refusing to overwrite existing") && output.contains("fe.toml"),
+        "expected overwrite refusal for fe.toml, got:\n{output}"
+    );
+}
+
+#[test]
+fn new_refuses_to_overwrite_existing_src_lib_fe() {
+    let tmp = TempDir::new().expect("tempdir");
+    let ingot_dir = tmp.path().join("my_ingot");
+    std::fs::create_dir_all(ingot_dir.join("src")).expect("create src dir");
+    std::fs::write(ingot_dir.join("src/lib.fe"), "pub fn main() {}\n").expect("write lib.fe");
+
+    let (output, exit_code) = run_fe(&["new", ingot_dir.to_str().unwrap()], tmp.path());
+    assert_ne!(exit_code, 0, "expected `fe new` to fail, got:\n{output}");
+    assert!(
+        output.contains("Refusing to overwrite existing") && output.contains("src/lib.fe"),
+        "expected overwrite refusal for src/lib.fe, got:\n{output}"
+    );
+}
+
+#[test]
+fn new_does_not_print_workspace_suggestion_outside_workspace() {
+    let tmp = TempDir::new().expect("tempdir");
+    let ingot_dir = tmp.path().join("my_ingot");
+
+    let (output, exit_code) = run_fe(&["new", ingot_dir.to_str().unwrap()], tmp.path());
+    assert_eq!(exit_code, 0, "fe new failed:\n{output}");
+    assert!(
+        !output.contains("Workspace detected at"),
+        "expected no workspace suggestion outside a workspace, got:\n{output}"
+    );
+}
+
+#[test]
+fn new_does_not_suggest_member_when_already_explicitly_listed() {
+    let tmp = TempDir::new().expect("tempdir");
+    let ws_dir = tmp.path().join("ws");
+    std::fs::create_dir_all(&ws_dir).expect("create ws");
+    std::fs::write(
+        ws_dir.join("fe.toml"),
+        r#"[workspace]
+name = "ws"
+version = "0.1.0"
+members = ["app"]
+exclude = ["target"]
+"#,
+    )
+    .expect("write fe.toml");
+
+    let member_dir = ws_dir.join("app");
+    let (output, exit_code) = run_fe(&["new", member_dir.to_str().unwrap()], tmp.path());
+    assert_eq!(exit_code, 0, "fe new failed:\n{output}");
+    assert!(
+        !output.contains("Workspace detected at"),
+        "expected `fe new` to print no suggestion when member is already listed, got:\n{output}"
+    );
+}
+
+#[test]
+fn new_suggests_member_for_nested_path_when_parent_dirs_do_not_exist() {
+    let tmp = TempDir::new().expect("tempdir");
+    let ws_dir = tmp.path().join("ws");
+    std::fs::create_dir_all(&ws_dir).expect("create ws");
+    std::fs::write(
+        ws_dir.join("fe.toml"),
+        r#"[workspace]
+name = "ws"
+version = "0.1.0"
+members = []
+exclude = ["target"]
+"#,
+    )
+    .expect("write fe.toml");
+
+    let member_dir = ws_dir.join("packages").join("app");
+    let (output, exit_code) = run_fe(&["new", member_dir.to_str().unwrap()], tmp.path());
+    assert_eq!(exit_code, 0, "fe new failed:\n{output}");
+    assert!(
+        output.contains("add \"packages/app\" to [workspace].members"),
+        "expected `fe new` to suggest the nested member path, got:\n{output}"
+    );
+    assert!(
+        member_dir.join("fe.toml").is_file(),
+        "expected ingot fe.toml to be created"
+    );
+    assert!(
+        member_dir.join("src/lib.fe").is_file(),
+        "expected ingot src/lib.fe to be created"
+    );
+}
+
+#[test]
+fn new_warns_when_workspace_members_field_is_invalid_type() {
+    let tmp = TempDir::new().expect("tempdir");
+    let ws_dir = tmp.path().join("ws");
+    std::fs::create_dir_all(&ws_dir).expect("create ws");
+    std::fs::write(
+        ws_dir.join("fe.toml"),
+        r#"[workspace]
+name = "ws"
+version = "0.1.0"
+members = "oops"
+exclude = ["target"]
+"#,
+    )
+    .expect("write fe.toml");
+
+    let member_dir = ws_dir.join("app");
+    let (output, exit_code) = run_fe(&["new", member_dir.to_str().unwrap()], tmp.path());
+    assert_eq!(exit_code, 0, "fe new failed:\n{output}");
+    assert!(
+        output.contains("failed to check workspace members"),
+        "expected warning when members is invalid type, got:\n{output}"
+    );
+    assert!(
+        member_dir.join("fe.toml").is_file(),
+        "expected ingot fe.toml to be created"
     );
 }
