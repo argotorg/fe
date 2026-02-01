@@ -565,6 +565,11 @@ impl IngotResolverImpl {
                         let member_description =
                             GitDescription::new(base.source.clone(), base.rev.clone())
                                 .with_path(member_path);
+                        if !self.git.has_valid_cached_checkout(&member_description) {
+                            self.git
+                                .ensure_checkout_resource(&member_description)
+                                .map_err(IngotResolutionError::Git)?;
+                        }
                         (
                             member.url.clone(),
                             IngotOrigin::Remote {
