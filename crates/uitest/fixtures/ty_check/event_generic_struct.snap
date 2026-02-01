@@ -1,0 +1,12 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/event_generic_struct.fe
+---
+error[10-0003]: `#[event]` structs must be non-generic
+  ┌─ event_generic_struct.fe:2:15
+  │
+2 │ struct Generic<T> {
+  │               ^^^ generics are not supported on `#[event]` structs
+  │
+  = remove generic parameters from the event struct
