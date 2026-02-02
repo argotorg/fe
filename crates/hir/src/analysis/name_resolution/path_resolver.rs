@@ -810,7 +810,9 @@ where
 
             // Try to resolve as an associated const on the receiver type
             if is_tail && resolve_tail_as_value {
-                match select_assoc_const_candidate(db, ty, ident, scope, assumptions) {
+                // Use the receiver type's scope when probing impls so `OtherIngotType::CONST`
+                // can find associated consts whose impls live in the receiver ingot.
+                match select_assoc_const_candidate(db, ty, ident, parent_scope, assumptions) {
                     AssocConstSelection::Found(inst) => {
                         let r = PathRes::TraitConst(ty, inst, ident);
                         observer(path, &r);
