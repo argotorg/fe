@@ -1,0 +1,8 @@
+---
+source: crates/mir/tests/lowering_errors.rs
+assertion_line: 27
+expression: err.to_string()
+input_file: tests/fixtures/errors/borrowck_read_under_mut.fe
+---
+MIR errors while lowering `pub fn borrowck_read_under_mut()`:
+borrow conflict: access overlaps active `mut` loan

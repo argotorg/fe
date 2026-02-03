@@ -1,0 +1,8 @@
+---
+source: crates/mir/tests/lowering_errors.rs
+assertion_line: 27
+expression: err.to_string()
+input_file: tests/fixtures/errors/borrowck_write_under_ref.fe
+---
+MIR errors while lowering `pub fn borrowck_write_under_ref()`:
+borrow conflict: write through active `ref` loan

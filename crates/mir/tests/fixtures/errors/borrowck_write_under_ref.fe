@@ -1,0 +1,6 @@
+pub fn borrowck_write_under_ref() {
+    let mut x: u256 = 0
+    let r: ref u256 = ref x
+    x = 1
+    let keep: ref u256 = r
+}
