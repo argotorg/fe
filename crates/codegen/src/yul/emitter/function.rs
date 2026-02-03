@@ -162,7 +162,7 @@ fn compute_immediate_postdominators(body: &mir::MirBody<'_>) -> Vec<Option<Basic
         changed = false;
         for b in 0..blocks_len {
             let successors: Vec<usize> = match &body.blocks[b].terminator {
-                Terminator::Goto { target } => vec![target.index()],
+                Terminator::Goto { target, .. } => vec![target.index()],
                 Terminator::Branch {
                     then_bb, else_bb, ..
                 } => vec![then_bb.index(), else_bb.index()],
@@ -173,9 +173,9 @@ fn compute_immediate_postdominators(body: &mir::MirBody<'_>) -> Vec<Option<Basic
                     s.push(default.index());
                     s
                 }
-                Terminator::Return(..)
-                | Terminator::TerminatingCall(_)
-                | Terminator::Unreachable => vec![exit],
+                Terminator::Return { .. }
+                | Terminator::TerminatingCall { .. }
+                | Terminator::Unreachable { .. } => vec![exit],
             };
 
             let mut new_bits = vec![!0u64; words];

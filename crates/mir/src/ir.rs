@@ -4,9 +4,10 @@ mod body_builder;
 
 pub use body_builder::{BodyBuilder, LocalValue};
 
+use common::diagnostics::Span;
 use hir::analysis::ty::trait_def::TraitInstId;
 use hir::analysis::ty::ty_def::TyId;
-use hir::hir_def::{CallableDef, Contract, EnumVariant, ExprId, Func, PatId, StmtId, TopLevelMod};
+use hir::hir_def::{CallableDef, Contract, EnumVariant, ExprId, Func, PatId, TopLevelMod};
 use hir::projection::{Projection, ProjectionPath};
 use num_bigint::BigUint;
 use rustc_hash::FxHashMap;
@@ -77,6 +78,10 @@ pub struct MirBody<'db> {
     pub blocks: Vec<BasicBlock<'db>>,
     pub values: Vec<ValueData<'db>>,
     pub locals: Vec<LocalData<'db>>,
+    /// Eager spans for MIR nodes, stored out-of-line so sources don't affect hashing/dedup.
+    ///
+    /// `SourceInfoId(0)` is always the synthetic/no-span entry.
+    pub source_infos: Vec<SourceInfo>,
     /// Local IDs for explicit function parameters in source order.
     pub param_locals: Vec<LocalId>,
     /// Local IDs for effect parameters in source order.
@@ -93,12 +98,27 @@ impl<'db> MirBody<'db> {
             blocks: Vec::new(),
             values: Vec::new(),
             locals: Vec::new(),
+            source_infos: vec![SourceInfo { span: None }],
             param_locals: Vec::new(),
             effect_param_locals: Vec::new(),
             expr_values: FxHashMap::default(),
             pat_address_space: FxHashMap::default(),
             loop_headers: FxHashMap::default(),
         }
+    }
+
+    pub fn source_span(&self, source: SourceInfoId) -> Option<Span> {
+        self.source_infos
+            .get(source.index())
+            .unwrap_or_else(|| panic!("invalid SourceInfoId {source:?}"))
+            .span
+            .clone()
+    }
+
+    pub fn alloc_source_info(&mut self, span: Option<Span>) -> SourceInfoId {
+        let id = SourceInfoId(self.source_infos.len() as u32);
+        self.source_infos.push(SourceInfo { span });
+        id
     }
 
     pub fn push_block(&mut self, block: BasicBlock<'db>) -> BasicBlockId {
@@ -216,11 +236,29 @@ impl LocalId {
     }
 }
 
+/// Stable index into [`MirBody::source_infos`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct SourceInfoId(pub u32);
+
+impl SourceInfoId {
+    pub const SYNTHETIC: Self = Self(0);
+
+    pub fn index(self) -> usize {
+        self.0 as usize
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct SourceInfo {
+    pub span: Option<Span>,
+}
+
 #[derive(Debug, Clone)]
 pub struct LocalData<'db> {
     pub name: String,
     pub ty: TyId<'db>,
     pub is_mut: bool,
+    pub source: SourceInfoId,
     /// Address space for pointer-like values stored in this local.
     ///
     /// For non-pointer scalars this is ignored, but storing it here lets codegen
@@ -245,7 +283,9 @@ impl<'db> BasicBlock<'db> {
     pub fn new() -> Self {
         Self {
             insts: Vec::new(),
-            terminator: Terminator::Unreachable,
+            terminator: Terminator::Unreachable {
+                source: SourceInfoId::SYNTHETIC,
+            },
         }
     }
 
@@ -271,24 +311,29 @@ pub enum MirInst<'db> {
     ///
     /// When `dest` is `None`, the rvalue is evaluated for side effects only.
     Assign {
-        /// Optional originating statement for diagnostics/debug output.
-        stmt: Option<StmtId>,
+        source: SourceInfoId,
         dest: Option<LocalId>,
         rvalue: Rvalue<'db>,
     },
     /// Store a value into a place (projection write).
-    Store { place: Place<'db>, value: ValueId },
+    Store {
+        source: SourceInfoId,
+        place: Place<'db>,
+        value: ValueId,
+    },
     /// Initialize an aggregate place (record/tuple/array/enum) from a set of projected writes.
     ///
     /// This is a higher-level form used during lowering so that codegen can decide the final
     /// layout/offsets for the target architecture while still preserving evaluation order
     /// (values are lowered before this instruction is emitted).
     InitAggregate {
+        source: SourceInfoId,
         place: Place<'db>,
         inits: Vec<(MirProjectionPath<'db>, ValueId)>,
     },
     /// Store an enum discriminant into a place.
     SetDiscriminant {
+        source: SourceInfoId,
         place: Place<'db>,
         variant: EnumVariant<'db>,
     },
@@ -296,7 +341,10 @@ pub enum MirInst<'db> {
     ///
     /// This instruction is keyed by `ValueId` (not `ExprId`) so later MIR transforms can move
     /// and rewrite values without needing to preserve HIR node IDs.
-    BindValue { value: ValueId },
+    BindValue {
+        source: SourceInfoId,
+        value: ValueId,
+    },
 }
 
 /// Rvalue describing a computation or effectful operation.
@@ -323,25 +371,36 @@ pub enum Rvalue<'db> {
 #[derive(Debug, Clone)]
 pub enum Terminator<'db> {
     /// Return from the function with an optional value.
-    Return(Option<ValueId>),
+    Return {
+        source: SourceInfoId,
+        value: Option<ValueId>,
+    },
     /// A call that does not return (callee has return type `!`).
-    TerminatingCall(TerminatingCall<'db>),
+    TerminatingCall {
+        source: SourceInfoId,
+        call: TerminatingCall<'db>,
+    },
     /// Unconditional jump to another block.
-    Goto { target: BasicBlockId },
+    Goto {
+        source: SourceInfoId,
+        target: BasicBlockId,
+    },
     /// Conditional branch based on a boolean value.
     Branch {
+        source: SourceInfoId,
         cond: ValueId,
         then_bb: BasicBlockId,
         else_bb: BasicBlockId,
     },
     /// Switch on an integer discriminant.
     Switch {
+        source: SourceInfoId,
         discr: ValueId,
         targets: Vec<SwitchTarget>,
         default: BasicBlockId,
     },
     /// Unreachable terminator (used for bodies without an expression).
-    Unreachable,
+    Unreachable { source: SourceInfoId },
 }
 
 /// A call-like operation used as a terminator (never returns).
@@ -401,6 +460,7 @@ pub struct LoopInfo {
 pub struct ValueData<'db> {
     pub ty: TyId<'db>,
     pub origin: ValueOrigin<'db>,
+    pub source: SourceInfoId,
     /// Runtime representation category for this MIR value.
     ///
     /// Most values are represented as a single EVM word. Aggregate values (structs/tuples/arrays/enums)

@@ -264,9 +264,21 @@ pub(crate) fn lower_function<'db>(
         let returns_value = !builder.is_unit_ty(ret_ty) && !ret_ty.is_never(db);
         if returns_value {
             let ret_val = builder.ensure_value(body.expr(db));
-            builder.set_terminator(block, Terminator::Return(Some(ret_val)));
+            builder.set_terminator(
+                block,
+                Terminator::Return {
+                    source: crate::ir::SourceInfoId::SYNTHETIC,
+                    value: Some(ret_val),
+                },
+            );
         } else {
-            builder.set_terminator(block, Terminator::Return(None));
+            builder.set_terminator(
+                block,
+                Terminator::Return {
+                    source: crate::ir::SourceInfoId::SYNTHETIC,
+                    value: None,
+                },
+            );
         }
     }
     let mir_body = builder.finish();
@@ -433,6 +445,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
             name,
             ty,
             is_mut,
+            source: crate::ir::SourceInfoId::SYNTHETIC,
             address_space: AddressSpaceKind::Memory,
         });
         self.builder.body.param_locals.push(local);
@@ -452,6 +465,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
             name,
             ty: self.u256_ty(),
             is_mut: binding.is_mut(),
+            source: crate::ir::SourceInfoId::SYNTHETIC,
             address_space,
         });
         self.builder.body.effect_param_locals.push(local);
@@ -597,11 +611,15 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
     }
 
     fn goto(&mut self, target: BasicBlockId) {
-        self.set_current_terminator(Terminator::Goto { target });
+        self.set_current_terminator(Terminator::Goto {
+            source: crate::ir::SourceInfoId::SYNTHETIC,
+            target,
+        });
     }
 
     fn branch(&mut self, cond: ValueId, then_bb: BasicBlockId, else_bb: BasicBlockId) {
         self.set_current_terminator(Terminator::Branch {
+            source: crate::ir::SourceInfoId::SYNTHETIC,
             cond,
             then_bb,
             else_bb,
@@ -610,6 +628,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
 
     fn switch(&mut self, discr: ValueId, targets: Vec<SwitchTarget>, default: BasicBlockId) {
         self.set_current_terminator(Terminator::Switch {
+            source: crate::ir::SourceInfoId::SYNTHETIC,
             discr,
             targets,
             default,
@@ -623,6 +642,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
             name,
             ty,
             is_mut,
+            source: crate::ir::SourceInfoId::SYNTHETIC,
             address_space: AddressSpaceKind::Memory,
         })
     }
@@ -643,13 +663,21 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
     }
 
     fn assign(&mut self, stmt: Option<StmtId>, dest: Option<LocalId>, rvalue: Rvalue<'db>) {
-        self.push_inst_here(MirInst::Assign { stmt, dest, rvalue });
+        let _ = stmt;
+        self.push_inst_here(MirInst::Assign {
+            source: crate::ir::SourceInfoId::SYNTHETIC,
+            dest,
+            rvalue,
+        });
     }
 
     fn alloc_value(&mut self, ty: TyId<'db>, origin: ValueOrigin<'db>, repr: ValueRepr) -> ValueId {
-        self.builder
-            .body
-            .alloc_value(ValueData { ty, origin, repr })
+        self.builder.body.alloc_value(ValueData {
+            ty,
+            origin,
+            source: crate::ir::SourceInfoId::SYNTHETIC,
+            repr,
+        })
     }
 
     /// Determines the address space for a binding.
@@ -956,6 +984,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                 name,
                 ty,
                 is_mut: binding.is_mut(),
+                source: crate::ir::SourceInfoId::SYNTHETIC,
                 address_space: self.address_space_for_binding(&binding),
             });
             self.builder.body.param_locals.push(local);
@@ -987,6 +1016,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                 name,
                 ty: self.u256_ty(),
                 is_mut: binding.is_mut(),
+                source: crate::ir::SourceInfoId::SYNTHETIC,
                 address_space: self.address_space_for_binding(&binding),
             });
             self.builder.body.effect_param_locals.push(local);
@@ -1029,6 +1059,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
             name,
             ty,
             is_mut,
+            source: crate::ir::SourceInfoId::SYNTHETIC,
             address_space: self.address_space_for_binding(&binding),
         });
         if needs_effect_param_local {
@@ -1143,11 +1174,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
 
     pub(super) fn binding_value(&mut self, binding: LocalBinding<'db>) -> Option<ValueId> {
         let local = self.local_for_binding(binding)?;
-        let value_id = self.builder.body.alloc_value(ValueData {
-            ty: self.u256_ty(),
-            origin: ValueOrigin::Local(local),
-            repr: ValueRepr::Word,
-        });
+        let value_id = self.alloc_value(self.u256_ty(), ValueOrigin::Local(local), ValueRepr::Word);
         Some(value_id)
     }
 
@@ -1257,15 +1284,15 @@ fn first_unlowered_expr_used_by_mir<'db>(body: &MirBody<'db>) -> Option<ExprId> 
                     }
                     crate::ir::Rvalue::Alloc { .. } => {}
                 },
-                MirInst::BindValue { value } => {
+                MirInst::BindValue { value, .. } => {
                     used_values.insert(*value);
                 }
-                MirInst::Store { place, value } => {
+                MirInst::Store { place, value, .. } => {
                     used_values.insert(place.base);
                     used_values.insert(*value);
                     used_values.extend(dynamic_indices(&place.projection));
                 }
-                MirInst::InitAggregate { place, inits } => {
+                MirInst::InitAggregate { place, inits, .. } => {
                     used_values.insert(place.base);
                     used_values.extend(dynamic_indices(&place.projection));
                     for (path, value) in inits {
@@ -1281,10 +1308,12 @@ fn first_unlowered_expr_used_by_mir<'db>(body: &MirBody<'db>) -> Option<ExprId> 
         }
 
         match &block.terminator {
-            Terminator::Return(Some(value)) => {
+            Terminator::Return {
+                value: Some(value), ..
+            } => {
                 used_values.insert(*value);
             }
-            Terminator::TerminatingCall(call) => match call {
+            Terminator::TerminatingCall { call, .. } => match call {
                 crate::ir::TerminatingCall::Call(call) => {
                     used_values.extend(call.args.iter().copied());
                     used_values.extend(call.effect_args.iter().copied());
@@ -1299,7 +1328,9 @@ fn first_unlowered_expr_used_by_mir<'db>(body: &MirBody<'db>) -> Option<ExprId> 
             Terminator::Switch { discr, .. } => {
                 used_values.insert(*discr);
             }
-            Terminator::Return(None) | Terminator::Goto { .. } | Terminator::Unreachable => {}
+            Terminator::Return { value: None, .. }
+            | Terminator::Goto { .. }
+            | Terminator::Unreachable { .. } => {}
         }
     }
 

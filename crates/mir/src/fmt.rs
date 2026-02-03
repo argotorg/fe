@@ -85,15 +85,15 @@ pub fn format_inst(_db: &dyn HirAnalysisDb, body: &MirBody<'_>, inst: &MirInst<'
                 format!("eval {rendered}")
             }
         }
-        MirInst::BindValue { value } => format!("bind {}", format_value(body, *value)),
-        MirInst::Store { place, value } => {
+        MirInst::BindValue { value, .. } => format!("bind {}", format_value(body, *value)),
+        MirInst::Store { place, value, .. } => {
             format!(
                 "store {} = {}",
                 format_place(body, place),
                 format_value(body, *value)
             )
         }
-        MirInst::InitAggregate { place, inits } => {
+        MirInst::InitAggregate { place, inits, .. } => {
             let inits: Vec<String> = inits
                 .iter()
                 .map(|(path, value)| {
@@ -107,7 +107,7 @@ pub fn format_inst(_db: &dyn HirAnalysisDb, body: &MirBody<'_>, inst: &MirInst<'
                 inits.join(", ")
             )
         }
-        MirInst::SetDiscriminant { place, variant } => {
+        MirInst::SetDiscriminant { place, variant, .. } => {
             format!("set_discr {} = {}", format_place(body, place), variant.idx)
         }
     }
@@ -116,9 +116,11 @@ pub fn format_inst(_db: &dyn HirAnalysisDb, body: &MirBody<'_>, inst: &MirInst<'
 /// Format a MIR terminator.
 pub fn format_terminator(body: &MirBody<'_>, term: &Terminator<'_>) -> String {
     match term {
-        Terminator::Return(Some(val)) => format!("ret {}", format_value(body, *val)),
-        Terminator::Return(None) => "ret".into(),
-        Terminator::TerminatingCall(call) => match call {
+        Terminator::Return {
+            value: Some(val), ..
+        } => format!("ret {}", format_value(body, *val)),
+        Terminator::Return { value: None, .. } => "ret".into(),
+        Terminator::TerminatingCall { call, .. } => match call {
             TerminatingCall::Call(call) => {
                 let rendered = format_call(body, call);
                 format!("terminate {rendered}")
@@ -128,11 +130,12 @@ pub fn format_terminator(body: &MirBody<'_>, term: &Terminator<'_>) -> String {
                 format!("terminate {}({})", format_intrinsic(*op), args.join(", "))
             }
         },
-        Terminator::Goto { target } => format!("jmp bb{}", target.index()),
+        Terminator::Goto { target, .. } => format!("jmp bb{}", target.index()),
         Terminator::Branch {
             cond,
             then_bb,
             else_bb,
+            ..
         } => format!(
             "br {} bb{} bb{}",
             format_value(body, *cond),
@@ -143,6 +146,7 @@ pub fn format_terminator(body: &MirBody<'_>, term: &Terminator<'_>) -> String {
             discr,
             targets,
             default,
+            ..
         } => {
             let arms: Vec<String> = targets
                 .iter()
@@ -155,7 +159,7 @@ pub fn format_terminator(body: &MirBody<'_>, term: &Terminator<'_>) -> String {
                 default.index()
             )
         }
-        Terminator::Unreachable => "unreachable".into(),
+        Terminator::Unreachable { .. } => "unreachable".into(),
     }
 }
 

@@ -341,7 +341,10 @@ impl<'db, 'a> Borrowck<'db, 'a> {
             for inst in &block.insts {
                 self.update_state_for_inst(inst, &mut state);
             }
-            let Terminator::Return(Some(value)) = &block.terminator else {
+            let Terminator::Return {
+                value: Some(value), ..
+            } = &block.terminator
+            else {
                 continue;
             };
             for place in self.canonicalize_base(&state, *value) {
@@ -862,14 +865,14 @@ impl<'db, 'a> Borrowck<'db, 'a> {
                 };
                 state[idx] = self.loans_in_rvalue(state, rvalue);
             }
-            MirInst::Store { place, value } => {
+            MirInst::Store { place, value, .. } => {
                 if let Some(root) = root_memory_local(body, place)
                     && let Some(idx) = self.tracked_local_idx.get(root.index()).copied().flatten()
                 {
                     state[idx].extend(self.loans_in_value(state, *value));
                 }
             }
-            MirInst::InitAggregate { place, inits } => {
+            MirInst::InitAggregate { place, inits, .. } => {
                 if let Some(root) = root_memory_local(body, place)
                     && let Some(idx) = self.tracked_local_idx.get(root.index()).copied().flatten()
                 {
@@ -1418,7 +1421,7 @@ enum AccessKind {
 
 fn successors(term: &Terminator<'_>) -> Vec<BasicBlockId> {
     match term {
-        Terminator::Goto { target } => vec![*target],
+        Terminator::Goto { target, .. } => vec![*target],
         Terminator::Branch {
             then_bb, else_bb, ..
         } => vec![*then_bb, *else_bb],
@@ -1429,9 +1432,9 @@ fn successors(term: &Terminator<'_>) -> Vec<BasicBlockId> {
             .map(|t| t.block)
             .chain(std::iter::once(*default))
             .collect(),
-        Terminator::Return(_) | Terminator::TerminatingCall(_) | Terminator::Unreachable => {
-            Vec::new()
-        }
+        Terminator::Return { .. }
+        | Terminator::TerminatingCall { .. }
+        | Terminator::Unreachable { .. } => Vec::new(),
     }
 }
 
@@ -1456,12 +1459,12 @@ fn locals_used_by_inst<'db>(body: &MirBody<'db>, inst: &MirInst<'db>) -> FxHashS
                 collect_locals_in_place_path(body, &place.projection, &mut out);
             }
         },
-        MirInst::Store { place, value } => {
+        MirInst::Store { place, value, .. } => {
             collect_locals_in_value(body, place.base, &mut out);
             collect_locals_in_place_path(body, &place.projection, &mut out);
             collect_locals_in_value(body, *value, &mut out);
         }
-        MirInst::InitAggregate { place, inits } => {
+        MirInst::InitAggregate { place, inits, .. } => {
             collect_locals_in_value(body, place.base, &mut out);
             collect_locals_in_place_path(body, &place.projection, &mut out);
             for (path, value) in inits {
@@ -1473,7 +1476,7 @@ fn locals_used_by_inst<'db>(body: &MirBody<'db>, inst: &MirInst<'db>) -> FxHashS
             collect_locals_in_value(body, place.base, &mut out);
             collect_locals_in_place_path(body, &place.projection, &mut out);
         }
-        MirInst::BindValue { value } => collect_locals_in_value(body, *value, &mut out),
+        MirInst::BindValue { value, .. } => collect_locals_in_value(body, *value, &mut out),
     }
     out
 }
@@ -1484,8 +1487,10 @@ fn locals_used_by_terminator<'db>(
 ) -> FxHashSet<LocalId> {
     let mut out = FxHashSet::default();
     match term {
-        Terminator::Return(Some(value)) => collect_locals_in_value(body, *value, &mut out),
-        Terminator::TerminatingCall(call) => match call {
+        Terminator::Return {
+            value: Some(value), ..
+        } => collect_locals_in_value(body, *value, &mut out),
+        Terminator::TerminatingCall { call, .. } => match call {
             crate::TerminatingCall::Call(call) => {
                 for arg in call.args.iter().chain(call.effect_args.iter()) {
                     collect_locals_in_value(body, *arg, &mut out);
@@ -1500,7 +1505,9 @@ fn locals_used_by_terminator<'db>(
         Terminator::Branch { cond, .. } | Terminator::Switch { discr: cond, .. } => {
             collect_locals_in_value(body, *cond, &mut out);
         }
-        Terminator::Return(None) | Terminator::Goto { .. } | Terminator::Unreachable => {}
+        Terminator::Return { value: None, .. }
+        | Terminator::Goto { .. }
+        | Terminator::Unreachable { .. } => {}
     }
     out
 }
@@ -1631,15 +1638,17 @@ fn value_operands_in_inst(inst: &MirInst<'_>) -> Vec<ValueId> {
         },
         MirInst::Store { value, .. } => vec![*value],
         MirInst::InitAggregate { inits, .. } => inits.iter().map(|(_, v)| *v).collect(),
-        MirInst::BindValue { value } => vec![*value],
+        MirInst::BindValue { value, .. } => vec![*value],
         MirInst::SetDiscriminant { .. } => Vec::new(),
     }
 }
 
 fn value_operands_in_terminator(term: &Terminator<'_>) -> Vec<ValueId> {
     match term {
-        Terminator::Return(Some(value)) => vec![*value],
-        Terminator::TerminatingCall(call) => match call {
+        Terminator::Return {
+            value: Some(value), ..
+        } => vec![*value],
+        Terminator::TerminatingCall { call, .. } => match call {
             crate::TerminatingCall::Call(call) => call
                 .args
                 .iter()
@@ -1650,7 +1659,9 @@ fn value_operands_in_terminator(term: &Terminator<'_>) -> Vec<ValueId> {
         },
         Terminator::Branch { cond, .. } => vec![*cond],
         Terminator::Switch { discr, .. } => vec![*discr],
-        Terminator::Return(None) | Terminator::Goto { .. } | Terminator::Unreachable => Vec::new(),
+        Terminator::Return { value: None, .. }
+        | Terminator::Goto { .. }
+        | Terminator::Unreachable { .. } => Vec::new(),
     }
 }
 
@@ -1689,12 +1700,12 @@ fn borrow_values_in_inst<'db>(body: &MirBody<'db>, inst: &MirInst<'db>) -> FxHas
             }
             Rvalue::ZeroInit | Rvalue::Alloc { .. } => {}
         },
-        MirInst::Store { place, value } => {
+        MirInst::Store { place, value, .. } => {
             collect_borrow_values(body, place.base, &mut out);
             collect_borrow_values_in_place_path(body, &place.projection, &mut out);
             collect_borrow_values(body, *value, &mut out);
         }
-        MirInst::InitAggregate { place, inits } => {
+        MirInst::InitAggregate { place, inits, .. } => {
             collect_borrow_values(body, place.base, &mut out);
             collect_borrow_values_in_place_path(body, &place.projection, &mut out);
             for (path, value) in inits {
@@ -1706,7 +1717,7 @@ fn borrow_values_in_inst<'db>(body: &MirBody<'db>, inst: &MirInst<'db>) -> FxHas
             collect_borrow_values(body, place.base, &mut out);
             collect_borrow_values_in_place_path(body, &place.projection, &mut out);
         }
-        MirInst::BindValue { value } => collect_borrow_values(body, *value, &mut out),
+        MirInst::BindValue { value, .. } => collect_borrow_values(body, *value, &mut out),
     }
     out
 }
@@ -1717,8 +1728,10 @@ fn borrow_values_in_terminator<'db>(
 ) -> FxHashSet<ValueId> {
     let mut out = FxHashSet::default();
     match term {
-        Terminator::Return(Some(value)) => collect_borrow_values(body, *value, &mut out),
-        Terminator::TerminatingCall(call) => match call {
+        Terminator::Return {
+            value: Some(value), ..
+        } => collect_borrow_values(body, *value, &mut out),
+        Terminator::TerminatingCall { call, .. } => match call {
             crate::TerminatingCall::Call(call) => {
                 for arg in call.args.iter().chain(call.effect_args.iter()) {
                     collect_borrow_values(body, *arg, &mut out);
@@ -1733,7 +1746,9 @@ fn borrow_values_in_terminator<'db>(
         Terminator::Branch { cond, .. } | Terminator::Switch { discr: cond, .. } => {
             collect_borrow_values(body, *cond, &mut out);
         }
-        Terminator::Return(None) | Terminator::Goto { .. } | Terminator::Unreachable => {}
+        Terminator::Return { value: None, .. }
+        | Terminator::Goto { .. }
+        | Terminator::Unreachable { .. } => {}
     }
     out
 }
@@ -1759,12 +1774,12 @@ fn move_places_in_inst<'db>(body: &MirBody<'db>, inst: &MirInst<'db>) -> Vec<Pla
             }
             Rvalue::ZeroInit | Rvalue::Alloc { .. } => {}
         },
-        MirInst::Store { place, value } => {
+        MirInst::Store { place, value, .. } => {
             collect_move_places(body, place.base, &mut out);
             collect_move_places_in_place_path(body, &place.projection, &mut out);
             collect_move_places(body, *value, &mut out);
         }
-        MirInst::InitAggregate { place, inits } => {
+        MirInst::InitAggregate { place, inits, .. } => {
             collect_move_places(body, place.base, &mut out);
             collect_move_places_in_place_path(body, &place.projection, &mut out);
             for (path, value) in inits {
@@ -1776,7 +1791,7 @@ fn move_places_in_inst<'db>(body: &MirBody<'db>, inst: &MirInst<'db>) -> Vec<Pla
             collect_move_places(body, place.base, &mut out);
             collect_move_places_in_place_path(body, &place.projection, &mut out);
         }
-        MirInst::BindValue { value } => collect_move_places(body, *value, &mut out),
+        MirInst::BindValue { value, .. } => collect_move_places(body, *value, &mut out),
     }
     out
 }
@@ -1784,8 +1799,10 @@ fn move_places_in_inst<'db>(body: &MirBody<'db>, inst: &MirInst<'db>) -> Vec<Pla
 fn move_places_in_terminator<'db>(body: &MirBody<'db>, term: &Terminator<'db>) -> Vec<Place<'db>> {
     let mut out = Vec::new();
     match term {
-        Terminator::Return(Some(value)) => collect_move_places(body, *value, &mut out),
-        Terminator::TerminatingCall(call) => match call {
+        Terminator::Return {
+            value: Some(value), ..
+        } => collect_move_places(body, *value, &mut out),
+        Terminator::TerminatingCall { call, .. } => match call {
             crate::TerminatingCall::Call(call) => {
                 for arg in call.args.iter().chain(call.effect_args.iter()) {
                     collect_move_places(body, *arg, &mut out);
@@ -1800,7 +1817,9 @@ fn move_places_in_terminator<'db>(body: &MirBody<'db>, term: &Terminator<'db>) -
         Terminator::Branch { cond, .. } | Terminator::Switch { discr: cond, .. } => {
             collect_move_places(body, *cond, &mut out);
         }
-        Terminator::Return(None) | Terminator::Goto { .. } | Terminator::Unreachable => {}
+        Terminator::Return { value: None, .. }
+        | Terminator::Goto { .. }
+        | Terminator::Unreachable { .. } => {}
     }
     out
 }

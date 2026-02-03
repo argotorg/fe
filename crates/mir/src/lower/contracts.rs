@@ -38,8 +38,8 @@ use crate::{
     ir::{
         AddressSpaceKind, BodyBuilder, CallOrigin, CodeRegionRoot, ContractFunction,
         ContractFunctionKind, HirCallTarget, IntrinsicOp, MirFunction, MirFunctionOrigin, Rvalue,
-        SwitchTarget, SwitchValue, SyntheticId, TerminatingCall, Terminator, ValueId, ValueOrigin,
-        ValueRepr,
+        SourceInfoId, SwitchTarget, SwitchValue, SyntheticId, TerminatingCall, Terminator, ValueId,
+        ValueOrigin, ValueRepr,
     },
     layout, repr,
 };
@@ -822,7 +822,13 @@ fn lower_init_handler<'db>(
     builder.lower_root(body.expr(db));
     builder.ensure_const_expr_values();
     if let Some(block) = builder.current_block() {
-        builder.set_terminator(block, Terminator::Return(None));
+        builder.set_terminator(
+            block,
+            Terminator::Return {
+                source: crate::ir::SourceInfoId::SYNTHETIC,
+                value: None,
+            },
+        );
     }
     let mir_body = builder.finish();
 
@@ -921,9 +927,21 @@ fn lower_recv_arm_handler<'db>(
             && !layout::is_zero_sized_ty(db, ret_ty);
         if returns_value {
             let ret_val = builder.ensure_value(body.expr(db));
-            builder.set_terminator(block, Terminator::Return(Some(ret_val)));
+            builder.set_terminator(
+                block,
+                Terminator::Return {
+                    source: crate::ir::SourceInfoId::SYNTHETIC,
+                    value: Some(ret_val),
+                },
+            );
         } else {
-            builder.set_terminator(block, Terminator::Return(None));
+            builder.set_terminator(
+                block,
+                Terminator::Return {
+                    source: crate::ir::SourceInfoId::SYNTHETIC,
+                    value: None,
+                },
+            );
         }
     }
     let mir_body = builder.finish();
@@ -1105,9 +1123,10 @@ fn lower_init_entrypoint<'db>(
 
         // abort: `root.abort()`
         builder.move_to_block(abort_block);
-        builder.terminate_current(Terminator::TerminatingCall(TerminatingCall::Call(
-            cx.host_abort(root_value),
-        )));
+        builder.terminate_current(Terminator::TerminatingCall {
+            source: crate::ir::SourceInfoId::SYNTHETIC,
+            call: TerminatingCall::Call(cx.host_abort(root_value)),
+        });
 
         // continue block builds the init-input decoder, calls init handler, then returns the runtime region.
         builder.move_to_block(cont_block);
@@ -1191,10 +1210,13 @@ fn lower_init_entrypoint<'db>(
                 args: vec![zero_u256, runtime_offset, runtime_len],
             },
         );
-        builder.terminate_current(Terminator::TerminatingCall(TerminatingCall::Intrinsic {
-            op: IntrinsicOp::ReturnData,
-            args: vec![zero_u256, runtime_len],
-        }));
+        builder.terminate_current(Terminator::TerminatingCall {
+            source: crate::ir::SourceInfoId::SYNTHETIC,
+            call: TerminatingCall::Intrinsic {
+                op: IntrinsicOp::ReturnData,
+                args: vec![zero_u256, runtime_len],
+            },
+        });
     } else {
         // No init block: just return the runtime region.
         builder.assign(
@@ -1204,10 +1226,13 @@ fn lower_init_entrypoint<'db>(
                 args: vec![zero_u256, runtime_offset, runtime_len],
             },
         );
-        builder.terminate_current(Terminator::TerminatingCall(TerminatingCall::Intrinsic {
-            op: IntrinsicOp::ReturnData,
-            args: vec![zero_u256, runtime_len],
-        }));
+        builder.terminate_current(Terminator::TerminatingCall {
+            source: crate::ir::SourceInfoId::SYNTHETIC,
+            call: TerminatingCall::Intrinsic {
+                op: IntrinsicOp::ReturnData,
+                args: vec![zero_u256, runtime_len],
+            },
+        });
     }
 
     Ok(MirFunction {
@@ -1311,25 +1336,32 @@ fn lower_runtime_entrypoint<'db>(
                         Rvalue::Call(cx.call_symbol(handler_symbol, vec![args_value], effect_args)),
                     )
                     .value;
-                builder.terminate_current(Terminator::TerminatingCall(TerminatingCall::Call(
-                    cx.host_return_value(root_value, result_value, ret_ty),
-                )));
+                builder.terminate_current(Terminator::TerminatingCall {
+                    source: SourceInfoId::SYNTHETIC,
+                    call: TerminatingCall::Call(cx.host_return_value(
+                        root_value,
+                        result_value,
+                        ret_ty,
+                    )),
+                });
             } else {
                 builder.assign(
                     None,
                     Rvalue::Call(cx.call_symbol(handler_symbol, vec![args_value], effect_args)),
                 );
-                builder.terminate_current(Terminator::TerminatingCall(TerminatingCall::Call(
-                    cx.host_return_unit(root_value),
-                )));
+                builder.terminate_current(Terminator::TerminatingCall {
+                    source: SourceInfoId::SYNTHETIC,
+                    call: TerminatingCall::Call(cx.host_return_unit(root_value)),
+                });
             }
         }
     }
 
     builder.move_to_block(default_block);
-    builder.terminate_current(Terminator::TerminatingCall(TerminatingCall::Call(
-        cx.host_abort(root_value),
-    )));
+    builder.terminate_current(Terminator::TerminatingCall {
+        source: SourceInfoId::SYNTHETIC,
+        call: TerminatingCall::Call(cx.host_abort(root_value)),
+    });
 
     builder.move_to_block(entry);
     builder.switch(selector_value, targets, default_block);

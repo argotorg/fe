@@ -26,13 +26,14 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                 args.len() == 2,
                 "terminating intrinsics should have exactly two arguments"
             );
-            self.set_current_terminator(Terminator::TerminatingCall(
-                crate::ir::TerminatingCall::Intrinsic { op, args },
-            ));
+            self.set_current_terminator(Terminator::TerminatingCall {
+                source: crate::ir::SourceInfoId::SYNTHETIC,
+                call: crate::ir::TerminatingCall::Intrinsic { op, args },
+            });
             return Some(value_id);
         }
         self.push_inst_here(MirInst::Assign {
-            stmt: None,
+            source: crate::ir::SourceInfoId::SYNTHETIC,
             dest: None,
             rvalue: crate::ir::Rvalue::Intrinsic { op, args },
         });

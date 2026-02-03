@@ -11,7 +11,7 @@ use hir::{
 use hir::analysis::ty::effects::EffectKeyKind;
 
 use crate::{
-    ir::{Place, Rvalue},
+    ir::{Place, Rvalue, SourceInfoId},
     layout::{self, ty_storage_slots},
 };
 
@@ -217,7 +217,10 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                         if self.is_unit_ty(ty) {
                             self.assign(None, None, Rvalue::Value(value));
                         } else {
-                            self.push_inst_here(MirInst::BindValue { value });
+                            self.push_inst_here(MirInst::BindValue {
+                                source: SourceInfoId::SYNTHETIC,
+                                value,
+                            });
                         }
                     }
                 }
@@ -484,6 +487,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                         MirProjectionPath::from_projection(Projection::Field(0)),
                     );
                     self.push_inst_here(MirInst::Store {
+                        source: SourceInfoId::SYNTHETIC,
                         place,
                         value: word_value,
                     });
@@ -573,9 +577,10 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
             receiver_space,
         };
         if ty.is_never(self.db) {
-            self.set_current_terminator(Terminator::TerminatingCall(
-                crate::ir::TerminatingCall::Call(call_origin),
-            ));
+            self.set_current_terminator(Terminator::TerminatingCall {
+                source: SourceInfoId::SYNTHETIC,
+                call: crate::ir::TerminatingCall::Call(call_origin),
+            });
             self.builder.body.values[value_id.index()].origin = ValueOrigin::Unit;
             return value_id;
         }
@@ -715,6 +720,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         );
         let place = Place::new(addr_value, crate::ir::MirProjectionPath::new());
         self.push_inst_here(MirInst::Store {
+            source: SourceInfoId::SYNTHETIC,
             place: place.clone(),
             value,
         });
@@ -1481,7 +1487,11 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
     ) {
         match lvalue {
             RootLvalue::Place(place) => {
-                self.push_inst_here(MirInst::Store { place, value });
+                self.push_inst_here(MirInst::Store {
+                    source: SourceInfoId::SYNTHETIC,
+                    place,
+                    value,
+                });
             }
             RootLvalue::Local(local) => {
                 self.assign(stmt, Some(local), Rvalue::Value(value));
@@ -1691,16 +1701,25 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                     if returns_value {
                         let ret_value = Some(self.lower_expr(*expr));
                         if self.current_block().is_some() {
-                            self.set_current_terminator(Terminator::Return(ret_value));
+                            self.set_current_terminator(Terminator::Return {
+                                source: SourceInfoId::SYNTHETIC,
+                                value: ret_value,
+                            });
                         }
                     } else {
                         self.lower_expr_stmt(stmt_id, *expr);
                         if self.current_block().is_some() {
-                            self.set_current_terminator(Terminator::Return(None));
+                            self.set_current_terminator(Terminator::Return {
+                                source: SourceInfoId::SYNTHETIC,
+                                value: None,
+                            });
                         }
                     }
                 } else if self.current_block().is_some() {
-                    self.set_current_terminator(Terminator::Return(None));
+                    self.set_current_terminator(Terminator::Return {
+                        source: SourceInfoId::SYNTHETIC,
+                        value: None,
+                    });
                 }
             }
             Stmt::Expr(expr) => self.lower_expr_stmt(stmt_id, *expr),
@@ -1854,20 +1873,16 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
 
         // Condition: idx < len
         self.move_to_block(cond_entry);
-        let idx_value = self.builder.body.alloc_value(ValueData {
-            ty: usize_ty,
-            origin: ValueOrigin::Local(idx_local),
-            repr: ValueRepr::Word,
-        });
-        let cond_value = self.builder.body.alloc_value(ValueData {
-            ty: TyId::new(self.db, TyData::TyBase(TyBase::Prim(PrimTy::Bool))),
-            origin: ValueOrigin::Binary {
+        let idx_value = self.alloc_value(usize_ty, ValueOrigin::Local(idx_local), ValueRepr::Word);
+        let cond_value = self.alloc_value(
+            TyId::bool(self.db),
+            ValueOrigin::Binary {
                 op: BinOp::Comp(hir::hir_def::expr::CompBinOp::Lt),
                 lhs: idx_value,
                 rhs: len_value,
             },
-            repr: ValueRepr::Word,
-        });
+            ValueRepr::Word,
+        );
         let cond_header = cond_entry;
 
         // Set up loop scope
@@ -1880,11 +1895,8 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         self.move_to_block(body_block);
 
         // Call Seq::get to get the element
-        let idx_for_get = self.builder.body.alloc_value(ValueData {
-            ty: usize_ty,
-            origin: ValueOrigin::Local(idx_local),
-            repr: ValueRepr::Word,
-        });
+        let idx_for_get =
+            self.alloc_value(usize_ty, ValueOrigin::Local(idx_local), ValueRepr::Word);
         let elem_value = self.emit_seq_get_call(
             iterable_value,
             idx_for_get,
@@ -1910,20 +1922,17 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         // Increment block: idx = idx + 1; goto cond
         self.move_to_block(inc_block);
         let one = self.synthetic_u256(BigUint::from(1u64));
-        let current_idx = self.builder.body.alloc_value(ValueData {
-            ty: usize_ty,
-            origin: ValueOrigin::Local(idx_local),
-            repr: ValueRepr::Word,
-        });
-        let incremented = self.builder.body.alloc_value(ValueData {
-            ty: usize_ty,
-            origin: ValueOrigin::Binary {
+        let current_idx =
+            self.alloc_value(usize_ty, ValueOrigin::Local(idx_local), ValueRepr::Word);
+        let incremented = self.alloc_value(
+            usize_ty,
+            ValueOrigin::Binary {
                 op: BinOp::Arith(ArithBinOp::Add),
                 lhs: current_idx,
                 rhs: one,
             },
-            repr: ValueRepr::Word,
-        });
+            ValueRepr::Word,
+        );
         self.assign(None, Some(idx_local), Rvalue::Value(incremented));
         let Some(inc_end) = self.current_block() else {
             return;
@@ -2004,11 +2013,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
             self.assign(None, Some(dest), Rvalue::Load { place });
         }
 
-        self.builder.body.alloc_value(ValueData {
-            ty: usize_ty,
-            origin: ValueOrigin::Local(result_local),
-            repr: ValueRepr::Word,
-        })
+        self.alloc_value(usize_ty, ValueOrigin::Local(result_local), ValueRepr::Word)
     }
 
     /// Emit a synthesized call to Seq::get(self, i: usize) -> T
@@ -2077,11 +2082,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
             self.assign(None, Some(dest), Rvalue::Load { place });
         }
 
-        self.builder.body.alloc_value(ValueData {
-            ty: elem_ty,
-            origin: ValueOrigin::Local(result_local),
-            repr,
-        })
+        self.alloc_value(elem_ty, ValueOrigin::Local(result_local), repr)
     }
 
     /// Lower a for-loop over an array.
@@ -2140,20 +2141,16 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
 
         // Condition: idx < len
         self.move_to_block(cond_entry);
-        let idx_value = self.builder.body.alloc_value(ValueData {
-            ty: usize_ty,
-            origin: ValueOrigin::Local(idx_local),
-            repr: ValueRepr::Word,
-        });
-        let cond_value = self.builder.body.alloc_value(ValueData {
-            ty: TyId::new(self.db, TyData::TyBase(TyBase::Prim(PrimTy::Bool))),
-            origin: ValueOrigin::Binary {
+        let idx_value = self.alloc_value(usize_ty, ValueOrigin::Local(idx_local), ValueRepr::Word);
+        let cond_value = self.alloc_value(
+            TyId::bool(self.db),
+            ValueOrigin::Binary {
                 op: BinOp::Comp(hir::hir_def::expr::CompBinOp::Lt),
                 lhs: idx_value,
                 rhs: len_value,
             },
-            repr: ValueRepr::Word,
-        });
+            ValueRepr::Word,
+        );
         let cond_header = cond_entry;
 
         // Set up loop scope
@@ -2166,11 +2163,8 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         self.move_to_block(body_block);
 
         // Bind element: elem = arr[idx]
-        let idx_for_access = self.builder.body.alloc_value(ValueData {
-            ty: usize_ty,
-            origin: ValueOrigin::Local(idx_local),
-            repr: ValueRepr::Word,
-        });
+        let idx_for_access =
+            self.alloc_value(usize_ty, ValueOrigin::Local(idx_local), ValueRepr::Word);
 
         let place = Place::new(
             array_value,
@@ -2181,19 +2175,19 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
 
         let elem_value = if self.is_by_ref_ty(elem_ty) {
             let addr_space = self.value_address_space(array_value);
-            self.builder.body.alloc_value(ValueData {
-                ty: elem_ty,
-                origin: ValueOrigin::PlaceRef(place),
-                repr: ValueRepr::Ref(addr_space),
-            })
+            self.alloc_value(
+                elem_ty,
+                ValueOrigin::PlaceRef(place),
+                ValueRepr::Ref(addr_space),
+            )
         } else {
             let dest = self.alloc_temp_local(elem_ty, false, "load");
             self.assign(None, Some(dest), Rvalue::Load { place });
-            self.builder.body.alloc_value(ValueData {
-                ty: elem_ty,
-                origin: ValueOrigin::Local(dest),
-                repr: self.value_repr_for_ty(elem_ty, AddressSpaceKind::Memory),
-            })
+            self.alloc_value(
+                elem_ty,
+                ValueOrigin::Local(dest),
+                self.value_repr_for_ty(elem_ty, AddressSpaceKind::Memory),
+            )
         };
 
         self.bind_pat_value(pat, elem_value);
@@ -2213,20 +2207,17 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
 
         self.move_to_block(inc_block);
         let one = self.synthetic_u256(BigUint::from(1u64));
-        let current_idx = self.builder.body.alloc_value(ValueData {
-            ty: usize_ty,
-            origin: ValueOrigin::Local(idx_local),
-            repr: ValueRepr::Word,
-        });
-        let incremented = self.builder.body.alloc_value(ValueData {
-            ty: usize_ty,
-            origin: ValueOrigin::Binary {
+        let current_idx =
+            self.alloc_value(usize_ty, ValueOrigin::Local(idx_local), ValueRepr::Word);
+        let incremented = self.alloc_value(
+            usize_ty,
+            ValueOrigin::Binary {
                 op: BinOp::Arith(ArithBinOp::Add),
                 lhs: current_idx,
                 rhs: one,
             },
-            repr: ValueRepr::Word,
-        });
+            ValueRepr::Word,
+        );
         self.assign(None, Some(idx_local), Rvalue::Value(incremented));
         let Some(inc_end) = self.current_block() else {
             return;

@@ -374,18 +374,18 @@ impl<'db, 'a> FunctionHasher<'db, 'a> {
                     }
                 }
             }
-            MirInst::BindValue { value } => {
+            MirInst::BindValue { value, .. } => {
                 self.write_u8(0x25);
                 let slot = self.placeholder_value(*value);
                 self.write_u32(slot);
             }
-            MirInst::Store { place, value } => {
+            MirInst::Store { place, value, .. } => {
                 self.write_u8(0x26);
                 self.hash_place(place);
                 let slot = self.placeholder_value(*value);
                 self.write_u32(slot);
             }
-            MirInst::InitAggregate { place, inits } => {
+            MirInst::InitAggregate { place, inits, .. } => {
                 self.write_u8(0x28);
                 self.hash_place(place);
                 self.write_usize(inits.len());
@@ -398,7 +398,7 @@ impl<'db, 'a> FunctionHasher<'db, 'a> {
                     self.write_u32(slot);
                 }
             }
-            MirInst::SetDiscriminant { place, variant } => {
+            MirInst::SetDiscriminant { place, variant, .. } => {
                 self.write_u8(0x27);
                 self.hash_place(place);
                 self.write_usize(variant.idx as usize);
@@ -409,7 +409,7 @@ impl<'db, 'a> FunctionHasher<'db, 'a> {
     /// Hash a terminator, including block indices for CFG structure.
     fn hash_terminator(&mut self, term: &Terminator<'db>) {
         match term {
-            Terminator::Return(val) => {
+            Terminator::Return { value: val, .. } => {
                 self.write_u8(0x30);
                 if let Some(value) = val {
                     self.write_u8(1);
@@ -419,7 +419,7 @@ impl<'db, 'a> FunctionHasher<'db, 'a> {
                     self.write_u8(0);
                 }
             }
-            Terminator::TerminatingCall(call) => {
+            Terminator::TerminatingCall { call, .. } => {
                 self.write_u8(0x36);
                 match call {
                     TerminatingCall::Call(call) => {
@@ -437,7 +437,7 @@ impl<'db, 'a> FunctionHasher<'db, 'a> {
                     }
                 }
             }
-            Terminator::Goto { target } => {
+            Terminator::Goto { target, .. } => {
                 self.write_u8(0x31);
                 self.write_usize(target.index());
             }
@@ -445,6 +445,7 @@ impl<'db, 'a> FunctionHasher<'db, 'a> {
                 cond,
                 then_bb,
                 else_bb,
+                ..
             } => {
                 self.write_u8(0x32);
                 let slot = self.placeholder_value(*cond);
@@ -456,6 +457,7 @@ impl<'db, 'a> FunctionHasher<'db, 'a> {
                 discr,
                 targets,
                 default,
+                ..
             } => {
                 self.write_u8(0x33);
                 let slot = self.placeholder_value(*discr);
@@ -467,7 +469,7 @@ impl<'db, 'a> FunctionHasher<'db, 'a> {
                 }
                 self.write_usize(default.index());
             }
-            Terminator::Unreachable => {
+            Terminator::Unreachable { .. } => {
                 self.write_u8(0x34);
             }
         }

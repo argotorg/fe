@@ -6,7 +6,7 @@ use hir::projection::{IndexSource, Projection};
 use rustc_hash::FxHashSet;
 
 use crate::ir::{
-    AddressSpaceKind, LocalData, MirBody, MirInst, MirProjectionPath, Place, Rvalue,
+    AddressSpaceKind, LocalData, MirBody, MirInst, MirProjectionPath, Place, Rvalue, SourceInfoId,
     TerminatingCall, Terminator, ValueData, ValueId, ValueOrigin, ValueRepr,
 };
 use crate::layout;
@@ -22,8 +22,10 @@ struct StabilizeCtx<'db, 'a, 'b> {
 impl<'db> StabilizeCtx<'db, '_, '_> {
     fn stabilize_terminator(&mut self, term: &Terminator<'db>) {
         match term {
-            Terminator::Return(Some(value)) => self.stabilize_value(*value, true, false),
-            Terminator::TerminatingCall(call) => match call {
+            Terminator::Return {
+                value: Some(value), ..
+            } => self.stabilize_value(*value, true, false),
+            Terminator::TerminatingCall { call, .. } => match call {
                 TerminatingCall::Call(call) => {
                     for arg in call.args.iter().chain(call.effect_args.iter()) {
                         self.stabilize_value(*arg, true, false);
@@ -37,7 +39,9 @@ impl<'db> StabilizeCtx<'db, '_, '_> {
             },
             Terminator::Branch { cond, .. } => self.stabilize_value(*cond, true, false),
             Terminator::Switch { discr, .. } => self.stabilize_value(*discr, true, false),
-            Terminator::Return(None) | Terminator::Goto { .. } | Terminator::Unreachable => {}
+            Terminator::Return { value: None, .. }
+            | Terminator::Goto { .. }
+            | Terminator::Unreachable { .. } => {}
         }
     }
 
@@ -81,7 +85,10 @@ impl<'db> StabilizeCtx<'db, '_, '_> {
             )
             && self.bound_in_block.insert(value)
         {
-            self.rewritten.push(MirInst::BindValue { value });
+            self.rewritten.push(MirInst::BindValue {
+                source: SourceInfoId::SYNTHETIC,
+                value,
+            });
         }
     }
 }
@@ -103,10 +110,14 @@ pub(crate) fn insert_temp_binds<'db>(db: &'db dyn HirAnalysisDb, body: &mut MirB
 
             for inst in std::mem::take(&mut block.insts) {
                 match inst {
-                    MirInst::BindValue { value } => {
+                    MirInst::BindValue { value, .. } => {
                         ctx.stabilize_value(value, true, true);
                     }
-                    MirInst::Assign { stmt, dest, rvalue } => {
+                    MirInst::Assign {
+                        source,
+                        dest,
+                        rvalue,
+                    } => {
                         match &rvalue {
                             Rvalue::ZeroInit | Rvalue::Alloc { .. } => {}
                             Rvalue::Value(value) => {
@@ -127,28 +138,55 @@ pub(crate) fn insert_temp_binds<'db>(db: &'db dyn HirAnalysisDb, body: &mut MirB
                                 ctx.stabilize_path(&place.projection);
                             }
                         }
-                        ctx.rewritten.push(MirInst::Assign { stmt, dest, rvalue });
+                        ctx.rewritten.push(MirInst::Assign {
+                            source,
+                            dest,
+                            rvalue,
+                        });
                     }
-                    MirInst::Store { place, value } => {
+                    MirInst::Store {
+                        source,
+                        place,
+                        value,
+                    } => {
                         ctx.stabilize_value(place.base, true, false);
                         ctx.stabilize_path(&place.projection);
                         ctx.stabilize_value(value, true, false);
-                        ctx.rewritten.push(MirInst::Store { place, value });
+                        ctx.rewritten.push(MirInst::Store {
+                            source,
+                            place,
+                            value,
+                        });
                     }
-                    MirInst::InitAggregate { place, inits } => {
+                    MirInst::InitAggregate {
+                        source,
+                        place,
+                        inits,
+                    } => {
                         ctx.stabilize_value(place.base, true, false);
                         ctx.stabilize_path(&place.projection);
                         for (path, value) in &inits {
                             ctx.stabilize_path(path);
                             ctx.stabilize_value(*value, true, false);
                         }
-                        ctx.rewritten.push(MirInst::InitAggregate { place, inits });
+                        ctx.rewritten.push(MirInst::InitAggregate {
+                            source,
+                            place,
+                            inits,
+                        });
                     }
-                    MirInst::SetDiscriminant { place, variant } => {
+                    MirInst::SetDiscriminant {
+                        source,
+                        place,
+                        variant,
+                    } => {
                         ctx.stabilize_value(place.base, true, false);
                         ctx.stabilize_path(&place.projection);
-                        ctx.rewritten
-                            .push(MirInst::SetDiscriminant { place, variant });
+                        ctx.rewritten.push(MirInst::SetDiscriminant {
+                            source,
+                            place,
+                            variant,
+                        });
                     }
                 }
             }
@@ -259,6 +297,7 @@ pub(crate) fn canonicalize_transparent_newtypes<'db>(
                         ValueData {
                             ty: current_ty,
                             origin: ValueOrigin::PlaceRef(prefix_place),
+                            source: SourceInfoId::SYNTHETIC,
                             repr: ValueRepr::Ref(addr_space),
                         },
                     )
@@ -272,6 +311,7 @@ pub(crate) fn canonicalize_transparent_newtypes<'db>(
                         origin: ValueOrigin::TransparentCast {
                             value: base_at_point,
                         },
+                        source: SourceInfoId::SYNTHETIC,
                         repr,
                     },
                 );
@@ -365,7 +405,7 @@ pub(crate) fn canonicalize_zero_sized<'db>(db: &'db dyn HirAnalysisDb, body: &mu
         let value_ty = values[value.index()].ty;
         if !is_zst(db, value_ty) {
             out.push(MirInst::Assign {
-                stmt: None,
+                source: SourceInfoId::SYNTHETIC,
                 dest: None,
                 rvalue: Rvalue::Value(value),
             });
@@ -413,17 +453,21 @@ pub(crate) fn canonicalize_zero_sized<'db>(db: &'db dyn HirAnalysisDb, body: &mu
         let mut rewritten: Vec<MirInst<'db>> = Vec::with_capacity(block.insts.len());
         for inst in std::mem::take(&mut block.insts) {
             match inst {
-                MirInst::Assign { stmt, dest, rvalue } => match dest {
+                MirInst::Assign {
+                    source,
+                    dest,
+                    rvalue,
+                } => match dest {
                     Some(dest) if zst_locals.get(dest.index()).copied().unwrap_or(false) => {
                         // Dest is ZST: keep side effects, drop runtime write.
                         match rvalue {
                             Rvalue::Call(call) => rewritten.push(MirInst::Assign {
-                                stmt,
+                                source,
                                 dest: None,
                                 rvalue: Rvalue::Call(call),
                             }),
                             Rvalue::Intrinsic { op, args } => rewritten.push(MirInst::Assign {
-                                stmt,
+                                source,
                                 dest: None,
                                 rvalue: Rvalue::Intrinsic { op, args },
                             }),
@@ -453,27 +497,43 @@ pub(crate) fn canonicalize_zero_sized<'db>(db: &'db dyn HirAnalysisDb, body: &mu
                                 continue;
                             }
                         }
-                        rewritten.push(MirInst::Assign { stmt, dest, rvalue });
+                        rewritten.push(MirInst::Assign {
+                            source,
+                            dest,
+                            rvalue,
+                        });
                     }
                 },
-                MirInst::BindValue { value } => {
+                MirInst::BindValue { source, value } => {
                     let value_ty = values[value.index()].ty;
                     if is_zst(db, value_ty) {
                         push_eval_value(db, values, &mut rewritten, value);
                     } else {
-                        rewritten.push(MirInst::BindValue { value });
+                        rewritten.push(MirInst::BindValue { source, value });
                     }
                 }
-                MirInst::Store { place, value } => {
+                MirInst::Store {
+                    source,
+                    place,
+                    value,
+                } => {
                     let value_ty = values[value.index()].ty;
                     if is_zst(db, value_ty) {
                         push_place_eval(db, values, &mut rewritten, &place);
                         push_eval_value(db, values, &mut rewritten, value);
                     } else {
-                        rewritten.push(MirInst::Store { place, value });
+                        rewritten.push(MirInst::Store {
+                            source,
+                            place,
+                            value,
+                        });
                     }
                 }
-                MirInst::InitAggregate { place, inits } => {
+                MirInst::InitAggregate {
+                    source,
+                    place,
+                    inits,
+                } => {
                     let base_ty = values[place.base.index()].ty;
                     if is_zst(db, base_ty) {
                         push_place_eval(db, values, &mut rewritten, &place);
@@ -504,7 +564,11 @@ pub(crate) fn canonicalize_zero_sized<'db>(db: &'db dyn HirAnalysisDb, body: &mu
                                 push_place_eval(db, values, &mut rewritten, &place);
                             }
                         } else {
-                            rewritten.push(MirInst::InitAggregate { place, inits: kept });
+                            rewritten.push(MirInst::InitAggregate {
+                                source,
+                                place,
+                                inits: kept,
+                            });
                         }
                     }
                 }
@@ -512,12 +576,19 @@ pub(crate) fn canonicalize_zero_sized<'db>(db: &'db dyn HirAnalysisDb, body: &mu
             }
         }
 
-        if let Terminator::Return(Some(value)) = &mut block.terminator {
+        if let Terminator::Return {
+            source,
+            value: Some(value),
+        } = &mut block.terminator
+        {
             let ty = values[value.index()].ty;
             if is_zst(db, ty) {
                 // Ensure any side effects are emitted before the return.
                 push_eval_value(db, values, &mut rewritten, *value);
-                block.terminator = Terminator::Return(None);
+                block.terminator = Terminator::Return {
+                    source: *source,
+                    value: None,
+                };
             }
         }
 
@@ -605,7 +676,7 @@ fn compute_value_use_counts<'db>(body: &MirBody<'db>) -> Vec<usize> {
     for block in &body.blocks {
         for inst in &block.insts {
             match inst {
-                MirInst::BindValue { value } => bump(*value),
+                MirInst::BindValue { value, .. } => bump(*value),
                 MirInst::Assign { rvalue, .. } => match rvalue {
                     Rvalue::ZeroInit | Rvalue::Alloc { .. } => {}
                     Rvalue::Value(value) => bump(*value),
@@ -624,12 +695,12 @@ fn compute_value_use_counts<'db>(body: &MirBody<'db>) -> Vec<usize> {
                         bump_place_path(&mut bump, &place.projection);
                     }
                 },
-                MirInst::Store { place, value } => {
+                MirInst::Store { place, value, .. } => {
                     bump(place.base);
                     bump_place_path(&mut bump, &place.projection);
                     bump(*value);
                 }
-                MirInst::InitAggregate { place, inits } => {
+                MirInst::InitAggregate { place, inits, .. } => {
                     bump(place.base);
                     bump_place_path(&mut bump, &place.projection);
                     for (path, value) in inits {
@@ -645,8 +716,10 @@ fn compute_value_use_counts<'db>(body: &MirBody<'db>) -> Vec<usize> {
         }
 
         match &block.terminator {
-            Terminator::Return(Some(value)) => bump(*value),
-            Terminator::TerminatingCall(call) => match call {
+            Terminator::Return {
+                value: Some(value), ..
+            } => bump(*value),
+            Terminator::TerminatingCall { call, .. } => match call {
                 TerminatingCall::Call(call) => {
                     for arg in call.args.iter().chain(call.effect_args.iter()) {
                         bump(*arg);
@@ -660,7 +733,9 @@ fn compute_value_use_counts<'db>(body: &MirBody<'db>) -> Vec<usize> {
             },
             Terminator::Branch { cond, .. } => bump(*cond),
             Terminator::Switch { discr, .. } => bump(*discr),
-            Terminator::Return(None) | Terminator::Goto { .. } | Terminator::Unreachable => {}
+            Terminator::Return { value: None, .. }
+            | Terminator::Goto { .. }
+            | Terminator::Unreachable { .. } => {}
         }
     }
 

@@ -336,8 +336,10 @@ impl<'db> Monomorphizer<'db> {
                     }
                 }
 
-                if let crate::Terminator::TerminatingCall(crate::ir::TerminatingCall::Call(call)) =
-                    &block.terminator
+                if let crate::Terminator::TerminatingCall {
+                    call: crate::ir::TerminatingCall::Call(call),
+                    ..
+                } = &block.terminator
                     && let Some((target_func, args)) = self.resolve_call_target(call)
                 {
                     let effect_param_space_overrides =
@@ -416,9 +418,10 @@ impl<'db> Monomorphizer<'db> {
                     }
                     None => {
                         let term = &mut self.instances[func_idx].body.blocks[bb_idx].terminator;
-                        if let crate::Terminator::TerminatingCall(
-                            crate::ir::TerminatingCall::Call(call),
-                        ) = term
+                        if let crate::Terminator::TerminatingCall {
+                            call: crate::ir::TerminatingCall::Call(call),
+                            ..
+                        } = term
                         {
                             call.resolved_name = Some(name);
                         }
@@ -720,8 +723,10 @@ impl<'db> Monomorphizer<'db> {
                 }
             }
 
-            if let crate::Terminator::TerminatingCall(crate::ir::TerminatingCall::Call(call)) =
-                &mut block.terminator
+            if let crate::Terminator::TerminatingCall {
+                call: crate::ir::TerminatingCall::Call(call),
+                ..
+            } = &mut block.terminator
             {
                 if let Some(target) = &mut call.hir_target {
                     target.generic_args = target

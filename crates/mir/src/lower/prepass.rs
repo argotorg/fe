@@ -173,9 +173,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
             _ => ValueOrigin::Expr(expr),
         };
 
-        self.builder
-            .body
-            .alloc_value(ValueData { ty, origin, repr })
+        self.alloc_value(ty, origin, repr)
     }
 
     /// Collect all argument expressions and their lowered values for a call or method call.
@@ -310,10 +308,6 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         ty: TyId<'db>,
         value: SyntheticValue,
     ) -> ValueId {
-        self.builder.body.alloc_value(ValueData {
-            ty,
-            origin: ValueOrigin::Synthetic(value),
-            repr: ValueRepr::Word,
-        })
+        self.alloc_value(ty, ValueOrigin::Synthetic(value), ValueRepr::Word)
     }
 }

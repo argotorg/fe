@@ -17,12 +17,12 @@ pub fn check_noesc_escapes<'db>(
     for block in &func.body.blocks {
         for inst in &block.insts {
             match inst {
-                MirInst::Store { place, value } => {
+                MirInst::Store { place, value, .. } => {
                     if let Some(err) = check_store(db, func, place, *value) {
                         return Some(err);
                     }
                 }
-                MirInst::InitAggregate { place, inits } => {
+                MirInst::InitAggregate { place, inits, .. } => {
                     for (_, value) in inits {
                         if let Some(err) = check_store(db, func, place, *value) {
                             return Some(err);
