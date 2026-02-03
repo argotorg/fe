@@ -59,6 +59,10 @@ pub enum MirLowerError {
         func_name: String,
         diagnostics: String,
     },
+    MirDiagnostics {
+        func_name: String,
+        diagnostics: String,
+    },
     UnloweredHirExpr {
         func_name: String,
         expr: String,
@@ -80,6 +84,13 @@ impl fmt::Display for MirLowerError {
                 diagnostics,
             } => {
                 writeln!(f, "analysis errors while lowering `{func_name}`:")?;
+                write!(f, "{diagnostics}")
+            }
+            MirLowerError::MirDiagnostics {
+                func_name,
+                diagnostics,
+            } => {
+                writeln!(f, "MIR errors while lowering `{func_name}`:")?;
                 write!(f, "{diagnostics}")
             }
             MirLowerError::UnloweredHirExpr { func_name, expr } => {
@@ -170,6 +181,14 @@ pub fn lower_module<'db>(
         crate::transform::canonicalize_transparent_newtypes(db, &mut func.body);
         crate::transform::insert_temp_binds(db, &mut func.body);
         crate::transform::canonicalize_zero_sized(db, &mut func.body);
+    }
+    for func in &functions {
+        if let Some(diagnostics) = crate::analysis::noesc::check_noesc_escapes(db, func) {
+            return Err(MirLowerError::MirDiagnostics {
+                func_name: func.symbol_name.clone(),
+                diagnostics,
+            });
+        }
     }
     Ok(MirModule { top_mod, functions })
 }

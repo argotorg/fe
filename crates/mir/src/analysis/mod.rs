@@ -1,5 +1,6 @@
 pub mod call_graph;
 pub mod contract_graph;
+pub mod noesc;
 
 pub use call_graph::{CallGraph, build_call_graph, reachable_functions};
 pub use contract_graph::{
