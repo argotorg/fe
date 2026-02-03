@@ -58,9 +58,13 @@ pub enum Command {
     },
     /// Run Fe tests in a file or directory.
     Test {
-        /// Path to a .fe file or directory containing an ingot with tests.
-        #[arg(default_value_t = default_project_path())]
-        path: Utf8PathBuf,
+        /// Path(s) to .fe files or directories containing ingots with tests.
+        ///
+        /// Supports glob patterns (e.g. `crates/fe/tests/fixtures/fe_test/*.fe`).
+        ///
+        /// When omitted, defaults to the current project root (like `cargo test`).
+        #[arg(value_name = "PATH", num_args = 0..)]
+        paths: Vec<Utf8PathBuf>,
         /// Optional filter pattern for test names.
         #[arg(short, long)]
         filter: Option<String>,
@@ -150,7 +154,7 @@ pub fn run(opts: &Options) {
             run_fmt(path.as_ref(), *check);
         }
         Command::Test {
-            path,
+            paths,
             filter,
             show_logs,
             backend,
@@ -175,7 +179,12 @@ pub fn run(opts: &Options) {
                 sonatina_transient_malloc_filter: sonatina_transient_malloc_filter.clone(),
                 debug_dir: debug_dir.clone(),
             };
-            test::run_tests(path, filter.as_deref(), *show_logs, backend, &debug);
+            let paths = if paths.is_empty() {
+                vec![default_project_path()]
+            } else {
+                paths.clone()
+            };
+            test::run_tests(&paths, filter.as_deref(), *show_logs, backend, &debug);
         }
         Command::New {
             path,

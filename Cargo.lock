@@ -1869,6 +1869,7 @@ dependencies = [
  "glob",
  "hex",
  "petgraph",
+ "rustc-hash 2.1.1",
  "similar",
  "smol_str 0.1.24",
  "tempfile",
