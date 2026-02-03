@@ -1,0 +1,6 @@
+pub fn borrow_handles() {
+    let mut x: u256 = 0
+    let p: mut u256 = mut x
+    p = 1
+    p += 1
+}

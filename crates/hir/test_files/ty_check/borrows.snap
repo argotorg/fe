@@ -1,0 +1,108 @@
+---
+source: crates/hir/tests/ty_check.rs
+assertion_line: 40
+expression: res
+input_file: test_files/ty_check/borrows.fe
+---
+note: 
+  ┌─ borrows.fe:1:14
+  │  
+1 │   fn borrows() {
+  │ ╭──────────────^
+2 │ │     let mut x: u256 = 0
+3 │ │     let r: ref u256 = ref x
+4 │ │     let m: mut u256 = mut x
+  · │
+7 │ │     m += 1
+8 │ │ }
+  │ ╰─^ ()
+
+note: 
+  ┌─ borrows.fe:2:9
+  │
+2 │     let mut x: u256 = 0
+  │         ^^^^^ u256
+
+note: 
+  ┌─ borrows.fe:2:23
+  │
+2 │     let mut x: u256 = 0
+  │                       ^ u256
+
+note: 
+  ┌─ borrows.fe:3:9
+  │
+3 │     let r: ref u256 = ref x
+  │         ^ ref u256
+
+note: 
+  ┌─ borrows.fe:3:23
+  │
+3 │     let r: ref u256 = ref x
+  │                       ^^^^^ ref u256
+
+note: 
+  ┌─ borrows.fe:3:27
+  │
+3 │     let r: ref u256 = ref x
+  │                           ^ u256
+
+note: 
+  ┌─ borrows.fe:4:9
+  │
+4 │     let m: mut u256 = mut x
+  │         ^ mut u256
+
+note: 
+  ┌─ borrows.fe:4:23
+  │
+4 │     let m: mut u256 = mut x
+  │                       ^^^^^ mut u256
+
+note: 
+  ┌─ borrows.fe:4:27
+  │
+4 │     let m: mut u256 = mut x
+  │                           ^ u256
+
+note: 
+  ┌─ borrows.fe:5:5
+  │
+5 │     r
+  │     ^ ref u256
+
+note: 
+  ┌─ borrows.fe:6:5
+  │
+6 │     m = 1
+  │     ^ mut u256
+
+note: 
+  ┌─ borrows.fe:6:5
+  │
+6 │     m = 1
+  │     ^^^^^ ()
+
+note: 
+  ┌─ borrows.fe:6:9
+  │
+6 │     m = 1
+  │         ^ u256
+
+note: 
+  ┌─ borrows.fe:7:5
+  │
+7 │     m += 1
+  │     ^ mut u256
+
+note: 
+  ┌─ borrows.fe:7:5
+  │
+7 │     m += 1
+  │     ^^^^^^ ()
+
+note: 
+  ┌─ borrows.fe:7:10
+  │
+7 │     m += 1
+  │          ^ u256

@@ -1,0 +1,14 @@
+---
+source: crates/mir/tests/lowering_snapshots.rs
+assertion_line: 26
+expression: mir_output
+---
+fn borrow_handles() -> ():
+  bb0:
+    v0: u256 = 0
+    v1: mut u256 = &mem[v0]
+    store mem[v1] = 1
+    bind v1
+    v2: u256 = load mem[v1]
+    store mem[v1] = (v2 + 1)
+    ret
