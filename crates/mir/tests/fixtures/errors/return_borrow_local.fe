@@ -1,0 +1,9 @@
+fn borrow_local() -> mut u256 {
+    let mut x: u256 = 0
+    mut x
+}
+
+pub fn return_borrow_local() {
+    let p: mut u256 = borrow_local()
+    p = 1
+}

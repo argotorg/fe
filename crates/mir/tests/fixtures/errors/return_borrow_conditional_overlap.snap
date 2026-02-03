@@ -1,0 +1,8 @@
+---
+source: crates/mir/tests/lowering_errors.rs
+assertion_line: 27
+expression: err.to_string()
+input_file: tests/fixtures/errors/return_borrow_conditional_overlap.fe
+---
+MIR errors while lowering `pub fn return_borrow_conditional_overlap(b: bool)`:
+borrow conflict: overlapping active loans

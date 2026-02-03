@@ -1,0 +1,8 @@
+---
+source: crates/mir/tests/lowering_errors.rs
+assertion_line: 27
+expression: err.to_string()
+input_file: tests/fixtures/errors/return_borrow_view_param.fe
+---
+MIR errors while lowering `fn borrow_view(x: u256) -> ref u256`:
+return borrow must be derived from explicit borrow params
