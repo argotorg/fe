@@ -4,6 +4,7 @@
 use hir::{
     analysis::ty::const_eval::{ConstValue, try_eval_const_expr},
     analysis::ty::ty_check::{Callable, ForLoopSeq, ResolvedEffectArg},
+    hir_def::FuncParamMode,
     projection::{IndexSource, Projection},
 };
 
@@ -349,9 +350,32 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         };
         let callable_def = callable.callable_def;
 
-        let Some((args, arg_exprs)) = self.collect_call_args(expr) else {
+        let Some((mut args, arg_exprs)) = self.collect_call_args(expr) else {
             return value_id;
         };
+        if let CallableDef::Func(func_def) = callable_def {
+            for (idx, param) in func_def.params(self.db).enumerate() {
+                if param.mode(self.db) != FuncParamMode::Move {
+                    continue;
+                }
+                let Some(arg_expr) = arg_exprs.get(idx).copied() else {
+                    panic!("move param index out of bounds");
+                };
+                let ty = self.typed_body.expr_ty(self.db, arg_expr);
+                if ty.as_borrow(self.db).is_some() {
+                    continue;
+                }
+                let Some(place) = self.place_for_borrow_expr(arg_expr) else {
+                    continue;
+                };
+                let moved = self.alloc_value(
+                    ty,
+                    ValueOrigin::MoveOut { place },
+                    self.value_repr_for_expr(arg_expr, ty),
+                );
+                args[idx] = moved;
+            }
+        }
 
         let provider_space = self.effect_provider_space_for_provider_ty(ty);
         let result_space = provider_space.unwrap_or_else(|| self.expr_address_space(expr));

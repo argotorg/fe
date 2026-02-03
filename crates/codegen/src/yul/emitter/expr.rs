@@ -177,7 +177,13 @@ impl<'db> FunctionEmitter<'db> {
             ValueOrigin::Synthetic(synth) => self.lower_synthetic_value(synth),
             ValueOrigin::FieldPtr(field_ptr) => self.lower_field_ptr(field_ptr, state),
             ValueOrigin::PlaceRef(place) => self.lower_place_ref(place, state),
-            ValueOrigin::MoveOut { place } => self.lower_place_load(place, value.ty, state),
+            ValueOrigin::MoveOut { place } => {
+                if value.repr.is_ref() {
+                    self.lower_place_ref(place, state)
+                } else {
+                    self.lower_place_load(place, value.ty, state)
+                }
+            }
             ValueOrigin::TransparentCast { value } => self.lower_value(*value, state),
         }
     }
