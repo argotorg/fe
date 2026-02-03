@@ -13,8 +13,8 @@ use hir::projection::Aliasing;
 use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::ir::{
-    AddressSpaceKind, BasicBlockId, LocalId, MirBody, MirFunction, MirInst, Place, Rvalue,
-    Terminator, ValueId, ValueOrigin, ValueRepr,
+    AddressSpaceKind, BasicBlockId, CallOrigin, LocalId, MirBody, MirFunction, MirInst, Place,
+    Rvalue, Terminator, ValueId, ValueOrigin, ValueRepr,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -36,22 +36,86 @@ struct CanonPlace<'db> {
 struct Loan<'db> {
     kind: BorrowKind,
     targets: FxHashSet<CanonPlace<'db>>,
-    parent: Option<LoanId>,
-    parent_candidates: FxHashSet<LoanId>,
+    parents: FxHashSet<LoanId>,
 }
 
-pub fn check_borrows<'db>(db: &'db dyn HirAnalysisDb, func: &MirFunction<'db>) -> Option<String> {
-    Borrowck::new(db, func).run()
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct BorrowTransform<'db> {
+    pub param_index: u32,
+    pub proj: crate::MirProjectionPath<'db>,
+}
+
+pub type BorrowSummary<'db> = FxHashSet<BorrowTransform<'db>>;
+pub type BorrowSummaryMap<'db> = FxHashMap<String, BorrowSummary<'db>>;
+
+#[derive(Debug)]
+pub struct BorrowSummaryError {
+    pub func_name: String,
+    pub diagnostics: String,
+}
+
+pub fn compute_borrow_summaries<'db>(
+    db: &'db dyn HirAnalysisDb,
+    functions: &[MirFunction<'db>],
+) -> Result<BorrowSummaryMap<'db>, BorrowSummaryError> {
+    let mut summaries: BorrowSummaryMap<'db> = functions
+        .iter()
+        .map(|func| (func.symbol_name.clone(), FxHashSet::default()))
+        .collect();
+
+    loop {
+        let mut changed = false;
+        for func in functions {
+            let func_name = match func.origin {
+                crate::ir::MirFunctionOrigin::Hir(hir_func) => hir_func.pretty_print_signature(db),
+                crate::ir::MirFunctionOrigin::Synthetic(_) => func.symbol_name.clone(),
+            };
+
+            let summary = Borrowck::new(db, func, &summaries)
+                .borrow_summary()
+                .map_err(|err| BorrowSummaryError {
+                    func_name,
+                    diagnostics: err,
+                })?;
+
+            let Some(summary) = summary else {
+                continue;
+            };
+            let Some(existing) = summaries.get_mut(&func.symbol_name) else {
+                panic!("borrow summary missing for {}", func.symbol_name);
+            };
+
+            let before = existing.len();
+            existing.extend(summary);
+            changed |= existing.len() != before;
+        }
+        if !changed {
+            break;
+        }
+    }
+
+    Ok(summaries)
+}
+
+pub fn check_borrows<'db>(
+    db: &'db dyn HirAnalysisDb,
+    func: &MirFunction<'db>,
+    summaries: &BorrowSummaryMap<'db>,
+) -> Option<String> {
+    Borrowck::new(db, func, summaries).check()
 }
 
 struct Borrowck<'db, 'a> {
     db: &'db dyn HirAnalysisDb,
     func: &'a MirFunction<'db>,
+    summaries: &'a BorrowSummaryMap<'db>,
+    borrow_param: Vec<bool>,
     tracked_local_idx: Vec<Option<usize>>,
     tracked_locals: Vec<LocalId>,
     param_index_of_local: Vec<Option<u32>>,
     param_loan_for_local: Vec<Option<LoanId>>,
     loan_for_value: FxHashMap<ValueId, LoanId>,
+    call_loan_for_value: FxHashMap<ValueId, LoanId>,
     loans: Vec<Loan<'db>>,
     entry_states: Vec<Vec<FxHashSet<LoanId>>>,
     live_before: Vec<Vec<FxHashSet<LocalId>>>,
@@ -59,7 +123,11 @@ struct Borrowck<'db, 'a> {
 }
 
 impl<'db, 'a> Borrowck<'db, 'a> {
-    fn new(db: &'db dyn HirAnalysisDb, func: &'a MirFunction<'db>) -> Self {
+    fn new(
+        db: &'db dyn HirAnalysisDb,
+        func: &'a MirFunction<'db>,
+        summaries: &'a BorrowSummaryMap<'db>,
+    ) -> Self {
         let body = &func.body;
         let mut tracked_local_idx = vec![None; body.locals.len()];
         let mut tracked_locals = Vec::new();
@@ -75,15 +143,23 @@ impl<'db, 'a> Borrowck<'db, 'a> {
         for (idx, local) in body.param_locals.iter().enumerate() {
             param_index_of_local[local.index()] = Some(idx as u32);
         }
+        let borrow_param: Vec<_> = body
+            .param_locals
+            .iter()
+            .map(|local| ty_is_borrow(db, body.local(*local).ty).is_some())
+            .collect();
 
         Self {
             db,
             func,
+            summaries,
+            borrow_param,
             tracked_local_idx,
             tracked_locals,
             param_index_of_local,
             param_loan_for_local: vec![None; body.locals.len()],
             loan_for_value: FxHashMap::default(),
+            call_loan_for_value: FxHashMap::default(),
             loans: Vec::new(),
             entry_states: Vec::new(),
             live_before: Vec::new(),
@@ -91,7 +167,7 @@ impl<'db, 'a> Borrowck<'db, 'a> {
         }
     }
 
-    fn run(mut self) -> Option<String> {
+    fn analyze(&mut self) {
         self.entry_states = vec![
             vec![FxHashSet::default(); self.tracked_locals.len()];
             self.func.body.blocks.len()
@@ -100,6 +176,18 @@ impl<'db, 'a> Borrowck<'db, 'a> {
         self.seed_param_loans();
         self.compute_entry_states();
         self.compute_loan_targets_and_parents();
+    }
+
+    fn borrow_summary(mut self) -> Result<Option<BorrowSummary<'db>>, String> {
+        if ty_is_borrow(self.db, self.func.ret_ty).is_none() {
+            return Ok(None);
+        }
+        self.analyze();
+        self.compute_return_summary().map(Some)
+    }
+
+    fn check(mut self) -> Option<String> {
+        self.analyze();
         self.compute_liveness();
         self.check_conflicts()
     }
@@ -120,8 +208,7 @@ impl<'db, 'a> Borrowck<'db, 'a> {
             self.loans.push(Loan {
                 kind,
                 targets,
-                parent: None,
-                parent_candidates: FxHashSet::default(),
+                parents: FxHashSet::default(),
             });
             self.param_loan_for_local[local.index()] = Some(loan);
         }
@@ -140,9 +227,39 @@ impl<'db, 'a> Borrowck<'db, 'a> {
             self.loans.push(Loan {
                 kind,
                 targets: FxHashSet::default(),
-                parent: None,
-                parent_candidates: FxHashSet::default(),
+                parents: FxHashSet::default(),
             });
+        }
+
+        // Each borrow-handle call result becomes a distinct loan whose targets come from the callee
+        // summary applied to the call arguments.
+        for block in &self.func.body.blocks {
+            for inst in &block.insts {
+                let MirInst::Assign {
+                    dest: Some(dest),
+                    rvalue: Rvalue::Call(call),
+                    ..
+                } = inst
+                else {
+                    continue;
+                };
+                let Some((kind, _)) = ty_is_borrow(self.db, self.func.body.local(*dest).ty) else {
+                    continue;
+                };
+                let Some(expr) = call.expr else {
+                    panic!("borrow-handle call must carry its ExprId for analysis");
+                };
+                let Some(&call_value) = self.func.body.expr_values.get(&expr) else {
+                    panic!("missing value id for call expr {expr:?}");
+                };
+                let loan = LoanId(self.loans.len() as u32);
+                self.call_loan_for_value.insert(call_value, loan);
+                self.loans.push(Loan {
+                    kind,
+                    targets: FxHashSet::default(),
+                    parents: FxHashSet::default(),
+                });
+            }
         }
     }
 
@@ -196,11 +313,52 @@ impl<'db, 'a> Borrowck<'db, 'a> {
                 break;
             }
         }
+    }
 
-        for loan in &mut self.loans {
-            loan.parent = (loan.parent_candidates.len() == 1)
-                .then(|| *loan.parent_candidates.iter().next().unwrap());
+    fn compute_return_summary(&self) -> Result<BorrowSummary<'db>, String> {
+        let body = &self.func.body;
+        let mut out = FxHashSet::default();
+        for (bb_idx, block) in body.blocks.iter().enumerate() {
+            let mut state = self.entry_states[bb_idx].clone();
+            for inst in &block.insts {
+                self.update_state_for_inst(inst, &mut state);
+            }
+            let Terminator::Return(Some(value)) = &block.terminator else {
+                continue;
+            };
+            for place in self.canonicalize_base(&state, *value) {
+                let Root::Param(param_index) = place.root else {
+                    return Err(
+                        "return borrow must be derived from explicit borrow params".to_string()
+                    );
+                };
+                if !self
+                    .borrow_param
+                    .get(param_index as usize)
+                    .copied()
+                    .unwrap_or(false)
+                {
+                    return Err(
+                        "return borrow must be derived from explicit borrow params".to_string()
+                    );
+                }
+                for proj in place.proj.iter() {
+                    if let hir::projection::Projection::Index(
+                        hir::projection::IndexSource::Dynamic(_),
+                    ) = proj
+                    {
+                        return Err(
+                            "return borrows with dynamic indices are not supported".to_string()
+                        );
+                    }
+                }
+                out.insert(BorrowTransform {
+                    param_index,
+                    proj: place.proj,
+                });
+            }
         }
+        Ok(out)
     }
 
     fn compute_liveness(&mut self) {
@@ -289,6 +447,9 @@ impl<'db, 'a> Borrowck<'db, 'a> {
                 let mut active = self.active_loans(&state, &self.live_before[bb_idx][inst_idx]);
                 let temp = self.borrow_loans_in_inst(inst);
                 active.extend(temp.iter().copied());
+                if let Some(loan) = self.call_loan_in_inst(inst) {
+                    active.insert(loan);
+                }
                 let suspended = self.suspended_loans(&active);
                 let effective: Vec<_> = active
                     .iter()
@@ -348,6 +509,27 @@ impl<'db, 'a> Borrowck<'db, 'a> {
     fn update_state_for_inst(&self, inst: &MirInst<'db>, state: &mut [FxHashSet<LoanId>]) {
         let body = &self.func.body;
         match inst {
+            MirInst::Assign {
+                dest: Some(dest),
+                rvalue: Rvalue::Call(call),
+                ..
+            } => {
+                let Some(idx) = self.tracked_local_idx.get(dest.index()).copied().flatten() else {
+                    return;
+                };
+                let Some(expr) = call.expr else {
+                    panic!("borrow-handle call must carry its ExprId for analysis");
+                };
+                let Some(&call_value) = body.expr_values.get(&expr) else {
+                    panic!("missing value id for call expr {expr:?}");
+                };
+                let Some(&loan) = self.call_loan_for_value.get(&call_value) else {
+                    panic!("missing loan id for borrow-handle call expr {expr:?}");
+                };
+
+                state[idx].clear();
+                state[idx].insert(loan);
+            }
             MirInst::Assign {
                 dest: Some(dest),
                 rvalue,
@@ -428,6 +610,14 @@ impl<'db, 'a> Borrowck<'db, 'a> {
         state: &[FxHashSet<LoanId>],
         changed: &mut bool,
     ) {
+        if let MirInst::Assign {
+            dest: Some(dest),
+            rvalue: Rvalue::Call(call),
+            ..
+        } = inst
+        {
+            self.update_loan_from_call(state, *dest, call, changed);
+        }
         for value in borrow_values_in_inst(&self.func.body, inst) {
             self.update_loan_from_value(state, value, changed);
         }
@@ -469,11 +659,60 @@ impl<'db, 'a> Borrowck<'db, 'a> {
         self.loans[loan_id.0 as usize].targets.extend(targets);
         *changed |= self.loans[loan_id.0 as usize].targets.len() != before;
 
-        if let Some(parent) = self.parent_loan_for_place_base(state, place.base) {
-            self.loans[loan_id.0 as usize]
-                .parent_candidates
-                .insert(parent);
+        let parents = self.mut_loans_for_handle_value(state, place.base);
+        let before = self.loans[loan_id.0 as usize].parents.len();
+        self.loans[loan_id.0 as usize].parents.extend(parents);
+        *changed |= self.loans[loan_id.0 as usize].parents.len() != before;
+    }
+
+    fn update_loan_from_call(
+        &mut self,
+        state: &[FxHashSet<LoanId>],
+        dest: LocalId,
+        call: &CallOrigin<'db>,
+        changed: &mut bool,
+    ) {
+        if ty_is_borrow(self.db, self.func.body.local(dest).ty).is_none() {
+            return;
         }
+        let Some(expr) = call.expr else {
+            panic!("borrow-handle call must carry its ExprId for analysis");
+        };
+        let Some(&call_value) = self.func.body.expr_values.get(&expr) else {
+            panic!("missing value id for call expr {expr:?}");
+        };
+        let Some(&loan_id) = self.call_loan_for_value.get(&call_value) else {
+            panic!("missing loan id for borrow-handle call expr {expr:?}");
+        };
+        let Some(callee) = call.resolved_name.as_ref() else {
+            panic!("borrow-handle call must have a resolved callee name");
+        };
+        let Some(summary) = self.summaries.get(callee) else {
+            panic!("missing borrow summary for callee `{callee}`");
+        };
+
+        let mut targets = FxHashSet::default();
+        let mut parents = FxHashSet::default();
+        for transform in summary {
+            let Some(&arg) = call.args.get(transform.param_index as usize) else {
+                panic!("borrow summary index out of bounds for `{callee}`");
+            };
+            parents.extend(self.mut_loans_for_handle_value(state, arg));
+            for base in self.canonicalize_base(state, arg) {
+                targets.insert(CanonPlace {
+                    root: base.root,
+                    proj: base.proj.concat(&transform.proj),
+                });
+            }
+        }
+
+        let before = self.loans[loan_id.0 as usize].targets.len();
+        self.loans[loan_id.0 as usize].targets.extend(targets);
+        *changed |= self.loans[loan_id.0 as usize].targets.len() != before;
+
+        let before = self.loans[loan_id.0 as usize].parents.len();
+        self.loans[loan_id.0 as usize].parents.extend(parents);
+        *changed |= self.loans[loan_id.0 as usize].parents.len() != before;
     }
 
     fn canonicalize_place(
@@ -564,27 +803,15 @@ impl<'db, 'a> Borrowck<'db, 'a> {
             .unwrap_or_default()
     }
 
-    fn parent_loan_for_place_base(
+    fn mut_loans_for_handle_value(
         &self,
         state: &[FxHashSet<LoanId>],
-        base: ValueId,
-    ) -> Option<LoanId> {
-        let mut value = base;
-        loop {
-            match &self.func.body.value(value).origin {
-                ValueOrigin::TransparentCast { value: inner } => value = *inner,
-                _ => break,
-            }
-        }
-        if !ty_is_borrow(self.db, self.func.body.value(value).ty).is_some() {
-            return None;
-        }
-        let loans = self.loans_for_handle_value(state, value);
-        if loans.len() != 1 {
-            return None;
-        }
-        let parent = *loans.iter().next().unwrap();
-        matches!(self.loans[parent.0 as usize].kind, BorrowKind::Mut).then_some(parent)
+        value: ValueId,
+    ) -> FxHashSet<LoanId> {
+        self.loans_for_handle_value(state, value)
+            .into_iter()
+            .filter(|loan| matches!(self.loans[loan.0 as usize].kind, BorrowKind::Mut))
+            .collect()
     }
 
     fn active_loans(
@@ -603,13 +830,12 @@ impl<'db, 'a> Borrowck<'db, 'a> {
 
     fn suspended_loans(&self, active: &FxHashSet<LoanId>) -> FxHashSet<LoanId> {
         let mut suspended = FxHashSet::default();
-        for &loan in active {
-            let mut current = loan;
-            while let Some(parent) = self.loans[current.0 as usize].parent {
-                if !suspended.insert(parent) {
-                    break;
+        let mut worklist: Vec<_> = active.iter().copied().collect();
+        while let Some(current) = worklist.pop() {
+            for &parent in &self.loans[current.0 as usize].parents {
+                if suspended.insert(parent) {
+                    worklist.push(parent);
                 }
-                current = parent;
             }
         }
         suspended
@@ -636,17 +862,62 @@ impl<'db, 'a> Borrowck<'db, 'a> {
         out
     }
 
+    fn call_loan_in_inst(&self, inst: &MirInst<'db>) -> Option<LoanId> {
+        let MirInst::Assign {
+            rvalue: Rvalue::Call(call),
+            ..
+        } = inst
+        else {
+            return None;
+        };
+        let expr = call.expr?;
+        let call_value = *self.func.body.expr_values.get(&expr)?;
+        self.call_loan_for_value.get(&call_value).copied()
+    }
+
     fn check_borrow_creations(
         &self,
         inst: &MirInst<'db>,
         active: &FxHashSet<LoanId>,
         suspended: &FxHashSet<LoanId>,
     ) -> Option<String> {
+        if let Some(loan) = self.call_loan_in_inst(inst)
+            && let Some(err) = self.check_loan_creation(loan, active, suspended)
+        {
+            return Some(err);
+        }
         self.check_borrow_creations_in_values(
             &borrow_values_in_inst(&self.func.body, inst),
             active,
             suspended,
         )
+    }
+
+    fn check_loan_creation(
+        &self,
+        loan: LoanId,
+        active: &FxHashSet<LoanId>,
+        suspended: &FxHashSet<LoanId>,
+    ) -> Option<String> {
+        if suspended.contains(&loan) {
+            return None;
+        }
+        let kind = self.loans[loan.0 as usize].kind;
+        let parents = &self.loans[loan.0 as usize].parents;
+        for &other in active {
+            if other == loan || parents.contains(&other) || suspended.contains(&other) {
+                continue;
+            }
+            if loans_overlap(&self.loans[loan.0 as usize], &self.loans[other.0 as usize])
+                && match kind {
+                    BorrowKind::Mut => true,
+                    BorrowKind::Ref => matches!(self.loans[other.0 as usize].kind, BorrowKind::Mut),
+                }
+            {
+                return Some("borrow conflict: cannot create overlapping loan".to_string());
+            }
+        }
+        None
     }
 
     fn check_borrow_creations_in_values(
@@ -659,22 +930,8 @@ impl<'db, 'a> Borrowck<'db, 'a> {
             let Some(&loan) = self.loan_for_value.get(value) else {
                 continue;
             };
-            let kind = self.loans[loan.0 as usize].kind;
-            let parent = self.loans[loan.0 as usize].parent;
-            for &other in active {
-                if other == loan || Some(other) == parent || suspended.contains(&other) {
-                    continue;
-                }
-                if loans_overlap(&self.loans[loan.0 as usize], &self.loans[other.0 as usize])
-                    && match kind {
-                        BorrowKind::Mut => true,
-                        BorrowKind::Ref => {
-                            matches!(self.loans[other.0 as usize].kind, BorrowKind::Mut)
-                        }
-                    }
-                {
-                    return Some("borrow conflict: cannot create overlapping loan".to_string());
-                }
+            if let Some(err) = self.check_loan_creation(loan, active, suspended) {
+                return Some(err);
             }
         }
         None
