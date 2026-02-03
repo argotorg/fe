@@ -81,6 +81,13 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         }
     }
 
+    fn lower_index_source(&mut self, expr: ExprId) -> IndexSource<ValueId> {
+        self.u256_lit_from_expr(expr)
+            .and_then(|lit| lit.to_usize())
+            .map(IndexSource::Constant)
+            .unwrap_or_else(|| IndexSource::Dynamic(self.lower_expr(expr)))
+    }
+
     fn contract_field_slot_offset(&self, contract_name: &str, field_idx: usize) -> Option<usize> {
         let top_mod = self.body.top_mod(self.db);
         let contract = top_mod
@@ -884,16 +891,14 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                     return value_id;
                 };
                 let base_value = self.lower_expr(*lhs);
-                let index_value = self.lower_expr(*rhs);
+                let index_source = self.lower_index_source(*rhs);
                 if self.current_block().is_none() {
                     return value_id;
                 }
                 let addr_space = self.value_address_space(base_value);
                 let place = Place::new(
                     base_value,
-                    MirProjectionPath::from_projection(Projection::Index(IndexSource::Dynamic(
-                        index_value,
-                    ))),
+                    MirProjectionPath::from_projection(Projection::Index(index_source)),
                 );
 
                 if self.is_by_ref_ty(elem_ty) {
@@ -1191,7 +1196,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         };
 
         let base_value = self.lower_expr(lhs);
-        let index_value = self.lower_expr(rhs);
+        let index_source = self.lower_index_source(rhs);
         if self.current_block().is_none() {
             return value_id;
         }
@@ -1208,9 +1213,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         let addr_space = self.value_address_space(base_value);
         let place = Place::new(
             base_value,
-            MirProjectionPath::from_projection(Projection::Index(IndexSource::Dynamic(
-                index_value,
-            ))),
+            MirProjectionPath::from_projection(Projection::Index(index_source)),
         );
 
         if self.is_by_ref_ty(elem_ty) {
@@ -1300,8 +1303,8 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                     base,
                     mut projection,
                 } = self.place_for_borrow_expr(*lhs)?;
-                let index_value = self.lower_expr(*rhs);
-                projection.push(Projection::Index(IndexSource::Dynamic(index_value)));
+                let index_source = self.lower_index_source(*rhs);
+                projection.push(Projection::Index(index_source));
                 Some(Place::new(base, projection))
             }
             _ => None,
@@ -1405,12 +1408,10 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                 } else {
                     addr_value
                 };
-                let index_value = self.lower_expr(*rhs);
+                let index_source = self.lower_index_source(*rhs);
                 Some(Place::new(
                     addr_value,
-                    MirProjectionPath::from_projection(Projection::Index(IndexSource::Dynamic(
-                        index_value,
-                    ))),
+                    MirProjectionPath::from_projection(Projection::Index(index_source)),
                 ))
             }
             _ => None,

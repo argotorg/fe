@@ -1,3 +1,4 @@
+pub mod borrowck;
 pub mod call_graph;
 pub mod contract_graph;
 pub mod noesc;

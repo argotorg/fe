@@ -193,6 +193,16 @@ pub fn lower_module<'db>(
                 diagnostics,
             });
         }
+        if let Some(diagnostics) = crate::analysis::borrowck::check_borrows(db, func) {
+            let func_name = match func.origin {
+                crate::ir::MirFunctionOrigin::Hir(hir_func) => hir_func.pretty_print_signature(db),
+                crate::ir::MirFunctionOrigin::Synthetic(_) => func.symbol_name.clone(),
+            };
+            return Err(MirLowerError::MirDiagnostics {
+                func_name,
+                diagnostics,
+            });
+        }
     }
     Ok(MirModule { top_mod, functions })
 }
