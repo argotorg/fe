@@ -197,18 +197,20 @@ pub fn lower_module<'db>(
         }
     }
     let borrow_summaries = crate::analysis::borrowck::compute_borrow_summaries(db, &functions)
-        .map_err(|err| MirLowerError::MirDiagnostics {
-            func_name: err.func_name,
-            diagnostics: err.diagnostics,
+        .map_err(|err| {
+            let diagnostics = hir::analysis::diagnostics::format_diags(db, [&err.diagnostic]);
+            MirLowerError::MirDiagnostics {
+                func_name: err.func_name,
+                diagnostics,
+            }
         })?;
     for func in &functions {
-        if let Some(diagnostics) =
-            crate::analysis::borrowck::check_borrows(db, func, &borrow_summaries)
-        {
+        if let Some(diag) = crate::analysis::borrowck::check_borrows(db, func, &borrow_summaries) {
             let func_name = match func.origin {
                 crate::ir::MirFunctionOrigin::Hir(hir_func) => hir_func.pretty_print_signature(db),
                 crate::ir::MirFunctionOrigin::Synthetic(_) => func.symbol_name.clone(),
             };
+            let diagnostics = hir::analysis::diagnostics::format_diags(db, [&diag]);
             return Err(MirLowerError::MirDiagnostics {
                 func_name,
                 diagnostics,

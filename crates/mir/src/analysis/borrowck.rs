@@ -4,6 +4,9 @@
 //! restrictions. The handles themselves are copyable; soundness comes from enforcing aliasing
 //! rules over the *places* they can point to.
 
+use common::diagnostics::{
+    CompleteDiagnostic, DiagnosticPass, GlobalErrorCode, LabelStyle, Severity, SubDiagnostic,
+};
 use hir::analysis::ty::ty_def::BorrowKind;
 use hir::analysis::{
     HirAnalysisDb,
@@ -15,7 +18,7 @@ use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::ir::{
     AddressSpaceKind, BasicBlockId, CallOrigin, LocalId, MirBody, MirFunction, MirInst, Place,
-    Rvalue, Terminator, ValueId, ValueOrigin, ValueRepr,
+    Rvalue, SourceInfoId, Terminator, ValueId, ValueOrigin, ValueRepr,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -52,7 +55,7 @@ pub type BorrowSummaryMap<'db> = FxHashMap<String, BorrowSummary<'db>>;
 #[derive(Debug)]
 pub struct BorrowSummaryError {
     pub func_name: String,
-    pub diagnostics: String,
+    pub diagnostic: CompleteDiagnostic,
 }
 
 pub fn compute_borrow_summaries<'db>(
@@ -76,7 +79,7 @@ pub fn compute_borrow_summaries<'db>(
                 .borrow_summary()
                 .map_err(|err| BorrowSummaryError {
                     func_name,
-                    diagnostics: err,
+                    diagnostic: err,
                 })?;
 
             let Some(summary) = summary else {
@@ -102,7 +105,7 @@ pub fn check_borrows<'db>(
     db: &'db dyn HirAnalysisDb,
     func: &MirFunction<'db>,
     summaries: &BorrowSummaryMap<'db>,
-) -> Option<String> {
+) -> Option<CompleteDiagnostic> {
     Borrowck::new(db, func, summaries).check()
 }
 
@@ -195,7 +198,7 @@ impl<'db, 'a> Borrowck<'db, 'a> {
         self.compute_loan_targets_and_parents();
     }
 
-    fn borrow_summary(mut self) -> Result<Option<BorrowSummary<'db>>, String> {
+    fn borrow_summary(mut self) -> Result<Option<BorrowSummary<'db>>, CompleteDiagnostic> {
         if ty_is_borrow(self.db, self.func.ret_ty).is_none() {
             return Ok(None);
         }
@@ -203,11 +206,67 @@ impl<'db, 'a> Borrowck<'db, 'a> {
         self.compute_return_summary().map(Some)
     }
 
-    fn check(mut self) -> Option<String> {
+    fn check(mut self) -> Option<CompleteDiagnostic> {
         self.analyze();
         self.compute_moved_entry_states();
         self.compute_liveness();
         self.check_conflicts()
+    }
+
+    fn diag_at_span(
+        &self,
+        local_code: u16,
+        span: Option<common::diagnostics::Span>,
+        msg: String,
+    ) -> CompleteDiagnostic {
+        let span = span
+            .or_else(|| {
+                self.func
+                    .body
+                    .source_infos
+                    .iter()
+                    .find_map(|info| info.span.clone())
+            })
+            .expect("borrowck diagnostic missing a span");
+        CompleteDiagnostic::new(
+            Severity::Error,
+            msg.clone(),
+            vec![SubDiagnostic::new(LabelStyle::Primary, msg, Some(span))],
+            Vec::new(),
+            GlobalErrorCode::new(DiagnosticPass::Mir, local_code),
+        )
+    }
+
+    fn diag_at_source(
+        &self,
+        local_code: u16,
+        source: SourceInfoId,
+        msg: String,
+    ) -> CompleteDiagnostic {
+        self.diag_at_span(local_code, self.func.body.source_span(source), msg)
+    }
+
+    fn diag_at_inst(
+        &self,
+        local_code: u16,
+        inst: &MirInst<'db>,
+        msg: String,
+    ) -> CompleteDiagnostic {
+        self.diag_at_source(local_code, inst_source(inst), msg)
+    }
+
+    fn diag_at_value(&self, local_code: u16, value: ValueId, msg: String) -> CompleteDiagnostic {
+        let source = self.func.body.value(value).source;
+        self.diag_at_source(local_code, source, msg)
+    }
+
+    fn diag_at_terminator(
+        &self,
+        local_code: u16,
+        term: &Terminator<'db>,
+        msg: String,
+    ) -> CompleteDiagnostic {
+        self.diag_at_source(local_code, terminator_source(term), msg)
     }
 
     fn init_loans(&mut self) {
@@ -333,7 +392,7 @@ impl<'db, 'a> Borrowck<'db, 'a> {
         }
     }
 
-    fn compute_return_summary(&self) -> Result<BorrowSummary<'db>, String> {
+    fn compute_return_summary(&self) -> Result<BorrowSummary<'db>, CompleteDiagnostic> {
         let body = &self.func.body;
         let mut out = FxHashSet::default();
         for (bb_idx, block) in body.blocks.iter().enumerate() {
@@ -349,9 +408,11 @@ impl<'db, 'a> Borrowck<'db, 'a> {
             };
             for place in self.canonicalize_base(&state, *value) {
                 let Root::Param(param_index) = place.root else {
-                    return Err(
-                        "return borrow must be derived from explicit borrow params".to_string()
-                    );
+                    return Err(self.diag_at_value(
+                        3,
+                        *value,
+                        "return borrow must be derived from explicit borrow params".to_string(),
+                    ));
                 };
                 if !self
                     .borrow_param
@@ -359,18 +420,22 @@ impl<'db, 'a> Borrowck<'db, 'a> {
                     .copied()
                     .unwrap_or(false)
                 {
-                    return Err(
-                        "return borrow must be derived from explicit borrow params".to_string()
-                    );
+                    return Err(self.diag_at_value(
+                        3,
+                        *value,
+                        "return borrow must be derived from explicit borrow params".to_string(),
+                    ));
                 }
                 for proj in place.proj.iter() {
                     if let hir::projection::Projection::Index(
                         hir::projection::IndexSource::Dynamic(_),
                     ) = proj
                     {
-                        return Err(
-                            "return borrows with dynamic indices are not supported".to_string()
-                        );
+                        return Err(self.diag_at_value(
+                            3,
+                            *value,
+                            "return borrows with dynamic indices are not supported".to_string(),
+                        ));
                     }
                 }
                 out.insert(BorrowTransform {
@@ -557,10 +622,10 @@ impl<'db, 'a> Borrowck<'db, 'a> {
         moved: &FxHashSet<CanonPlace<'db>>,
         active: &FxHashSet<LoanId>,
         suspended: &FxHashSet<LoanId>,
-    ) -> Option<String> {
+    ) -> Option<CompleteDiagnostic> {
         for place in move_places_in_inst(&self.func.body, inst) {
             if let Some(err) = self.check_move_out_place(&place, state, moved, active, suspended) {
-                return Some(err);
+                return Some(self.diag_at_inst(2, inst, err));
             }
         }
 
@@ -573,7 +638,11 @@ impl<'db, 'a> Borrowck<'db, 'a> {
             };
             let accessed = self.canonicalize_place(state, place);
             if place_set_overlaps(&accessed, moved) {
-                return Some("move conflict: borrow of moved place".to_string());
+                return Some(self.diag_at_value(
+                    2,
+                    value,
+                    "move conflict: borrow of moved place".to_string(),
+                ));
             }
         }
 
@@ -584,13 +653,17 @@ impl<'db, 'a> Borrowck<'db, 'a> {
             } => {
                 let accessed = self.canonicalize_place(state, place);
                 if place_set_overlaps(&accessed, moved) {
-                    return Some("move conflict: use after move".to_string());
+                    return Some(self.diag_at_inst(
+                        2,
+                        inst,
+                        "move conflict: use after move".to_string(),
+                    ));
                 }
             }
             MirInst::Store { place, .. } | MirInst::InitAggregate { place, .. } => {
                 let written = self.canonicalize_place(state, place);
                 if let Some(err) = self.check_write_through_moved_parent(&written, moved) {
-                    return Some(err);
+                    return Some(self.diag_at_inst(2, inst, err));
                 }
             }
             _ => {}
@@ -626,10 +699,10 @@ impl<'db, 'a> Borrowck<'db, 'a> {
         moved: &FxHashSet<CanonPlace<'db>>,
         active: &FxHashSet<LoanId>,
         suspended: &FxHashSet<LoanId>,
-    ) -> Option<String> {
+    ) -> Option<CompleteDiagnostic> {
         for place in move_places_in_terminator(&self.func.body, term) {
             if let Some(err) = self.check_move_out_place(&place, state, moved, active, suspended) {
-                return Some(err);
+                return Some(self.diag_at_terminator(2, term, err));
             }
         }
 
@@ -642,7 +715,11 @@ impl<'db, 'a> Borrowck<'db, 'a> {
             };
             let accessed = self.canonicalize_place(state, place);
             if place_set_overlaps(&accessed, moved) {
-                return Some("move conflict: borrow of moved place".to_string());
+                return Some(self.diag_at_value(
+                    2,
+                    value,
+                    "move conflict: borrow of moved place".to_string(),
+                ));
             }
         }
 
@@ -659,7 +736,7 @@ impl<'db, 'a> Borrowck<'db, 'a> {
         &self,
         value: ValueId,
         moved: &FxHashSet<CanonPlace<'db>>,
-    ) -> Option<String> {
+    ) -> Option<CompleteDiagnostic> {
         let mut locals = FxHashSet::default();
         collect_value_locals_in_value(&self.func.body, value, &mut locals);
         for local in locals {
@@ -668,7 +745,11 @@ impl<'db, 'a> Borrowck<'db, 'a> {
                 proj: crate::MirProjectionPath::new(),
             };
             if moved.iter().any(|m| places_overlap(m, &accessed)) {
-                return Some("move conflict: use after move".to_string());
+                return Some(self.diag_at_value(
+                    2,
+                    value,
+                    "move conflict: use after move".to_string(),
+                ));
             }
         }
         None
@@ -678,7 +759,7 @@ impl<'db, 'a> Borrowck<'db, 'a> {
         &self,
         path: &crate::MirProjectionPath<'db>,
         moved: &FxHashSet<CanonPlace<'db>>,
-    ) -> Option<String> {
+    ) -> Option<CompleteDiagnostic> {
         for proj in path.iter() {
             if let hir::projection::Projection::Index(hir::projection::IndexSource::Dynamic(value)) =
                 proj
@@ -748,7 +829,7 @@ impl<'db, 'a> Borrowck<'db, 'a> {
         None
     }
 
-    fn check_conflicts(self) -> Option<String> {
+    fn check_conflicts(self) -> Option<CompleteDiagnostic> {
         let body = &self.func.body;
         for (bb_idx, block) in body.blocks.iter().enumerate() {
             let mut state = self.entry_states[bb_idx].clone();
@@ -757,7 +838,7 @@ impl<'db, 'a> Borrowck<'db, 'a> {
                 let mut active = self.active_loans(&state, &self.live_before[bb_idx][inst_idx]);
                 let temp = self.borrow_loans_in_inst(inst);
                 active.extend(temp.iter().copied());
-                if let Some(loan) = self.call_loan_in_inst(inst) {
+                if let Some((_, loan)) = self.call_loan_in_inst(inst) {
                     active.insert(loan);
                 }
                 let suspended = self.suspended_loans(&active);
@@ -772,8 +853,12 @@ impl<'db, 'a> Borrowck<'db, 'a> {
                 {
                     return Some(err);
                 }
-                if let Some(err) = self.check_active_set(&effective) {
-                    return Some(err);
+                if self.active_set_has_conflicts(&effective) {
+                    return Some(self.diag_at_inst(
+                        2,
+                        inst,
+                        "borrow conflict: overlapping active loans".to_string(),
+                    ));
                 }
                 if let Some(err) = self.check_borrow_creations(inst, &active, &suspended) {
                     return Some(err);
@@ -808,8 +893,12 @@ impl<'db, 'a> Borrowck<'db, 'a> {
             ) {
                 return Some(err);
             }
-            if let Some(err) = self.check_active_set(&effective) {
-                return Some(err);
+            if self.active_set_has_conflicts(&effective) {
+                return Some(self.diag_at_terminator(
+                    2,
+                    &block.terminator,
+                    "borrow conflict: overlapping active loans".to_string(),
+                ));
             }
             if let Some(err) =
                 self.check_borrow_creations_in_values(&term_borrows, &active, &suspended)
@@ -1166,15 +1255,15 @@ impl<'db, 'a> Borrowck<'db, 'a> {
         suspended
     }
 
-    fn check_active_set(&self, active: &[LoanId]) -> Option<String> {
+    fn active_set_has_conflicts(&self, active: &[LoanId]) -> bool {
         for (idx, &a) in active.iter().enumerate() {
             for &b in &active[idx + 1..] {
                 if self.loans_conflict(a, b) {
-                    return Some("borrow conflict: overlapping active loans".to_string());
+                    return true;
                 }
             }
         }
-        None
+        false
     }
 
     fn borrow_loans_in_inst(&self, inst: &MirInst<'db>) -> FxHashSet<LoanId> {
@@ -1187,7 +1276,7 @@ impl<'db, 'a> Borrowck<'db, 'a> {
         out
     }
 
-    fn call_loan_in_inst(&self, inst: &MirInst<'db>) -> Option<LoanId> {
+    fn call_loan_in_inst(&self, inst: &MirInst<'db>) -> Option<(ValueId, LoanId)> {
         let MirInst::Assign {
             rvalue: Rvalue::Call(call),
             ..
@@ -1197,7 +1286,8 @@ impl<'db, 'a> Borrowck<'db, 'a> {
         };
         let expr = call.expr?;
         let call_value = *self.func.body.expr_values.get(&expr)?;
-        self.call_loan_for_value.get(&call_value).copied()
+        let loan = self.call_loan_for_value.get(&call_value).copied()?;
+        Some((call_value, loan))
     }
 
     fn check_borrow_creations(
@@ -1205,11 +1295,15 @@ impl<'db, 'a> Borrowck<'db, 'a> {
         inst: &MirInst<'db>,
         active: &FxHashSet<LoanId>,
         suspended: &FxHashSet<LoanId>,
-    ) -> Option<String> {
-        if let Some(loan) = self.call_loan_in_inst(inst)
-            && let Some(err) = self.check_loan_creation(loan, active, suspended)
+    ) -> Option<CompleteDiagnostic> {
+        if let Some((call_value, loan)) = self.call_loan_in_inst(inst)
+            && self.loan_creation_conflicts(loan, active, suspended)
         {
-            return Some(err);
+            return Some(self.diag_at_value(
+                2,
+                call_value,
+                "borrow conflict: cannot create overlapping loan".to_string(),
+            ));
         }
         self.check_borrow_creations_in_values(
             &borrow_values_in_inst(&self.func.body, inst),
@@ -1218,14 +1312,14 @@ impl<'db, 'a> Borrowck<'db, 'a> {
         )
     }
 
-    fn check_loan_creation(
+    fn loan_creation_conflicts(
         &self,
         loan: LoanId,
         active: &FxHashSet<LoanId>,
         suspended: &FxHashSet<LoanId>,
-    ) -> Option<String> {
+    ) -> bool {
         if suspended.contains(&loan) {
-            return None;
+            return false;
         }
         let kind = self.loans[loan.0 as usize].kind;
         let parents = &self.loans[loan.0 as usize].parents;
@@ -1239,10 +1333,10 @@ impl<'db, 'a> Borrowck<'db, 'a> {
                     BorrowKind::Ref => matches!(self.loans[other.0 as usize].kind, BorrowKind::Mut),
                 }
             {
-                return Some("borrow conflict: cannot create overlapping loan".to_string());
+                return true;
             }
         }
-        None
+        false
     }
 
     fn check_borrow_creations_in_values(
@@ -1250,13 +1344,17 @@ impl<'db, 'a> Borrowck<'db, 'a> {
         values: &FxHashSet<ValueId>,
         active: &FxHashSet<LoanId>,
         suspended: &FxHashSet<LoanId>,
-    ) -> Option<String> {
+    ) -> Option<CompleteDiagnostic> {
         for value in values {
             let Some(&loan) = self.loan_for_value.get(value) else {
                 continue;
             };
-            if let Some(err) = self.check_loan_creation(loan, active, suspended) {
-                return Some(err);
+            if self.loan_creation_conflicts(loan, active, suspended) {
+                return Some(self.diag_at_value(
+                    2,
+                    *value,
+                    "borrow conflict: cannot create overlapping loan".to_string(),
+                ));
             }
         }
         None
@@ -1268,9 +1366,9 @@ impl<'db, 'a> Borrowck<'db, 'a> {
         state: &[FxHashSet<LoanId>],
         active: &FxHashSet<LoanId>,
         suspended: &FxHashSet<LoanId>,
-    ) -> Option<String> {
+    ) -> Option<CompleteDiagnostic> {
         if let Some(err) = self.check_word_value_reads(inst, active, suspended) {
-            return Some(err);
+            return Some(self.diag_at_inst(2, inst, err));
         }
         match inst {
             MirInst::Assign {
@@ -1287,19 +1385,20 @@ impl<'db, 'a> Borrowck<'db, 'a> {
                     active,
                     suspended,
                 )
+                .map(|err| self.diag_at_inst(2, inst, err))
             }
             MirInst::Assign { rvalue, .. } => match rvalue {
-                Rvalue::Load { place } => {
-                    self.check_place_access(state, place, AccessKind::Read, active, suspended)
-                }
+                Rvalue::Load { place } => self
+                    .check_place_access(state, place, AccessKind::Read, active, suspended)
+                    .map(|err| self.diag_at_inst(2, inst, err)),
                 _ => None,
             },
-            MirInst::Store { place, .. } => {
-                self.check_place_access(state, place, AccessKind::Write, active, suspended)
-            }
-            MirInst::InitAggregate { place, .. } => {
-                self.check_place_access(state, place, AccessKind::Write, active, suspended)
-            }
+            MirInst::Store { place, .. } => self
+                .check_place_access(state, place, AccessKind::Write, active, suspended)
+                .map(|err| self.diag_at_inst(2, inst, err)),
+            MirInst::InitAggregate { place, .. } => self
+                .check_place_access(state, place, AccessKind::Write, active, suspended)
+                .map(|err| self.diag_at_inst(2, inst, err)),
             _ => None,
         }
     }
@@ -1417,6 +1516,27 @@ impl<'db, 'a> Borrowck<'db, 'a> {
 enum AccessKind {
     Read,
     Write,
+}
+
+fn inst_source(inst: &MirInst<'_>) -> SourceInfoId {
+    match inst {
+        MirInst::Assign { source, .. }
+        | MirInst::BindValue { source, .. }
+        | MirInst::Store { source, .. }
+        | MirInst::InitAggregate { source, .. }
+        | MirInst::SetDiscriminant { source, .. } => *source,
+    }
+}
+
+fn terminator_source(term: &Terminator<'_>) -> SourceInfoId {
+    match term {
+        Terminator::Return { source, .. }
+        | Terminator::TerminatingCall { source, .. }
+        | Terminator::Goto { source, .. }
+        | Terminator::Branch { source, .. }
+        | Terminator::Switch { source, .. }
+        | Terminator::Unreachable { source, .. } => *source,
+    }
 }
 
 fn successors(term: &Terminator<'_>) -> Vec<BasicBlockId> {
