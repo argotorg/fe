@@ -1,0 +1,8 @@
+---
+source: crates/uitest/tests/mir_check.rs
+assertion_line: 32
+expression: res
+input_file: fixtures/mir_check/move_conflict_borrow.fe
+---
+MIR errors while lowering `pub fn move_conflict_borrow()`:
+move conflict: cannot move out of borrowed place

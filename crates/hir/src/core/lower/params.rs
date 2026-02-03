@@ -157,11 +157,11 @@ impl<'db> GenericParam<'db> {
 
 impl<'db> FuncParam<'db> {
     fn lower_ast(ctxt: &mut FileLowerCtxt<'db>, ast: ast::FuncParam) -> Self {
-        let mode = ast
-            .move_token()
-            .is_some()
-            .then_some(FuncParamMode::Move)
-            .unwrap_or(FuncParamMode::View);
+        let mode = if ast.move_token().is_some() {
+            FuncParamMode::Move
+        } else {
+            FuncParamMode::View
+        };
         let is_mut = ast.mut_token().is_some();
         let is_label_suppressed = ast.is_label_suppressed();
         let name = ast.name().map(|ast| FuncParamName::lower_ast(ctxt, ast));

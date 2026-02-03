@@ -1,0 +1,8 @@
+---
+source: crates/uitest/tests/mir_check.rs
+assertion_line: 32
+expression: res
+input_file: fixtures/mir_check/move_view_param.fe
+---
+MIR errors while lowering `pub fn move_view_param(x: u256) -> u256`:
+move conflict: cannot move out of view param

@@ -1,0 +1,8 @@
+---
+source: crates/mir/tests/lowering_errors.rs
+assertion_line: 27
+expression: err.to_string()
+input_file: tests/fixtures/errors/move_conflict_borrow.fe
+---
+MIR errors while lowering `pub fn move_conflict_borrow()`:
+move conflict: cannot move out of borrowed place

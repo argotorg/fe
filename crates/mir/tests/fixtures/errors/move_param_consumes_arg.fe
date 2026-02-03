@@ -1,0 +1,10 @@
+fn take(move x: u256) {
+    ()
+}
+
+pub fn move_param_consumes_arg() {
+    let mut x: u256 = 0
+    take(x)
+    let y: u256 = x
+}
+

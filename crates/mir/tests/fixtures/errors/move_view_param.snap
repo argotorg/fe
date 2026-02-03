@@ -1,0 +1,8 @@
+---
+source: crates/mir/tests/lowering_errors.rs
+assertion_line: 27
+expression: err.to_string()
+input_file: tests/fixtures/errors/move_view_param.fe
+---
+MIR errors while lowering `pub fn move_view_param(x: u256) -> u256`:
+move conflict: cannot move out of view param

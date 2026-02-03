@@ -677,13 +677,11 @@ impl<'db, 'a> Borrowck<'db, 'a> {
         moved: &FxHashSet<CanonPlace<'db>>,
     ) -> Option<String> {
         for proj in path.iter() {
-            if let hir::projection::Projection::Index(hir::projection::IndexSource::Dynamic(
-                value,
-            )) = proj
+            if let hir::projection::Projection::Index(hir::projection::IndexSource::Dynamic(value)) =
+                proj
+                && let Some(err) = self.check_value_reads_after_move(*value, moved)
             {
-                if let Some(err) = self.check_value_reads_after_move(*value, moved) {
-                    return Some(err);
-                }
+                return Some(err);
             }
         }
         None

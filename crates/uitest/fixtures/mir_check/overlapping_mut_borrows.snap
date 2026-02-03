@@ -1,0 +1,8 @@
+---
+source: crates/uitest/tests/mir_check.rs
+assertion_line: 32
+expression: res
+input_file: fixtures/mir_check/overlapping_mut_borrows.fe
+---
+MIR errors while lowering `pub fn overlapping_mut_borrows()`:
+borrow conflict: overlapping active loans

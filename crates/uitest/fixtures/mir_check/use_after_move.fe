@@ -1,0 +1,5 @@
+pub fn use_after_move() -> u256 {
+    let mut x: u256 = 0
+    move x
+    x
+}
