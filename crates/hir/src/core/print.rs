@@ -355,7 +355,11 @@ impl<'db> FuncParam<'db> {
         let mut result = String::new();
         let name = unwrap_partial(self.name, "FuncParam::name");
 
-        // Mutability comes first
+        if matches!(self.mode, FuncParamMode::Move) {
+            result.push_str("move ");
+        }
+
+        // Mutability comes next
         if self.is_mut {
             result.push_str("mut ");
         }

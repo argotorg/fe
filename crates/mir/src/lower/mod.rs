@@ -940,6 +940,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                 .unwrap_or(LocalBinding::Param {
                     site: ParamSite::Func(func),
                     idx,
+                    mode: param.mode(self.db),
                     ty: param.ty(self.db),
                     is_mut: param.is_mut(self.db),
                 });

@@ -4,6 +4,7 @@
 //! pipeline: HIR remains purely syntactic, while typed contract elaboration drives MIR generation.
 
 use common::{indexmap::IndexMap, ingot::IngotKind};
+use hir::hir_def::params::FuncParamMode;
 use hir::{
     analysis::{
         HirAnalysisDb,
@@ -796,6 +797,7 @@ fn lower_init_handler<'db>(
             .unwrap_or(LocalBinding::Param {
                 site: ParamSite::ContractInit(contract),
                 idx,
+                mode: param.mode,
                 ty: TyId::invalid(db, InvalidCause::Other),
                 is_mut: param.is_mut,
             });
@@ -976,6 +978,7 @@ fn seed_effect_param_locals<'db>(
                 LocalBinding::Param {
                     site: ParamSite::EffectField(effect.binding_site),
                     idx: effect.binding_idx as usize,
+                    mode: FuncParamMode::View,
                     ty,
                     is_mut: effect.is_mut,
                 }
