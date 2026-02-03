@@ -217,10 +217,8 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                         if self.is_unit_ty(ty) {
                             self.assign(None, None, Rvalue::Value(value));
                         } else {
-                            self.push_inst_here(MirInst::BindValue {
-                                source: SourceInfoId::SYNTHETIC,
-                                value,
-                            });
+                            let source = self.source_for_expr(binding.value);
+                            self.push_inst_here(MirInst::BindValue { source, value });
                         }
                     }
                 }
@@ -280,6 +278,16 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                             ValueOrigin::MoveOut { place };
                     }
                     _ => {}
+                }
+                if matches!(
+                    op,
+                    hir::hir_def::expr::UnOp::Mut
+                        | hir::hir_def::expr::UnOp::Ref
+                        | hir::hir_def::expr::UnOp::Move
+                ) && let Some(span) = expr.span(self.body).into_un_expr().op().resolve(self.db)
+                {
+                    self.builder.body.values[value_id.index()].source =
+                        self.source_info_for_span(Some(span));
                 }
 
                 value_id
@@ -486,8 +494,9 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                         value_id,
                         MirProjectionPath::from_projection(Projection::Field(0)),
                     );
+                    let source = self.source_for_expr(expr);
                     self.push_inst_here(MirInst::Store {
-                        source: SourceInfoId::SYNTHETIC,
+                        source,
                         place,
                         value: word_value,
                     });
@@ -577,8 +586,9 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
             receiver_space,
         };
         if ty.is_never(self.db) {
+            let source = self.source_for_expr(expr);
             self.set_current_terminator(Terminator::TerminatingCall {
-                source: SourceInfoId::SYNTHETIC,
+                source,
                 call: crate::ir::TerminatingCall::Call(call_origin),
             });
             self.builder.body.values[value_id.index()].origin = ValueOrigin::Unit;
@@ -1487,8 +1497,11 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
     ) {
         match lvalue {
             RootLvalue::Place(place) => {
+                let source = stmt
+                    .map(|stmt| self.source_for_stmt(stmt))
+                    .unwrap_or(SourceInfoId::SYNTHETIC);
                 self.push_inst_here(MirInst::Store {
-                    source: SourceInfoId::SYNTHETIC,
+                    source,
                     place,
                     value,
                 });
@@ -1695,6 +1708,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
             }
             Stmt::Return(value) => {
                 self.move_to_block(block);
+                let source = self.source_for_stmt(stmt_id);
                 if let Some(expr) = value {
                     let ret_ty = self.return_ty;
                     let returns_value = !self.is_unit_ty(ret_ty) && !ret_ty.is_never(self.db);
@@ -1702,7 +1716,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                         let ret_value = Some(self.lower_expr(*expr));
                         if self.current_block().is_some() {
                             self.set_current_terminator(Terminator::Return {
-                                source: SourceInfoId::SYNTHETIC,
+                                source,
                                 value: ret_value,
                             });
                         }
@@ -1710,14 +1724,14 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                         self.lower_expr_stmt(stmt_id, *expr);
                         if self.current_block().is_some() {
                             self.set_current_terminator(Terminator::Return {
-                                source: SourceInfoId::SYNTHETIC,
+                                source,
                                 value: None,
                             });
                         }
                     }
                 } else if self.current_block().is_some() {
                     self.set_current_terminator(Terminator::Return {
-                        source: SourceInfoId::SYNTHETIC,
+                        source,
                         value: None,
                     });
                 }

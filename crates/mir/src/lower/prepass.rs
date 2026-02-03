@@ -97,6 +97,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
     /// The allocated `ValueId` (lowered call/field/const where applicable).
     pub(super) fn alloc_expr_value(&mut self, expr: ExprId) -> ValueId {
         if let Some(value) = self.try_const_expr(expr) {
+            self.builder.body.values[value.index()].source = self.source_for_expr(expr);
             return value;
         }
 
@@ -173,7 +174,9 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
             _ => ValueOrigin::Expr(expr),
         };
 
-        self.alloc_value(ty, origin, repr)
+        let value_id = self.alloc_value(ty, origin, repr);
+        self.builder.body.values[value_id.index()].source = self.source_for_expr(expr);
+        value_id
     }
 
     /// Collect all argument expressions and their lowered values for a call or method call.

@@ -59,8 +59,9 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
             inits.push((projection, *field_value));
         }
         let place = Place::new(value_id, MirProjectionPath::new());
+        let source = self.source_for_expr(expr);
         self.push_inst_here(MirInst::InitAggregate {
-            source: crate::ir::SourceInfoId::SYNTHETIC,
+            source,
             place,
             inits,
         });
@@ -114,8 +115,9 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
             discr_value,
         )];
         let place = Place::new(value_id, MirProjectionPath::new());
+        let source = self.source_for_expr(expr);
         self.push_inst_here(MirInst::InitAggregate {
-            source: crate::ir::SourceInfoId::SYNTHETIC,
+            source,
             place,
             inits,
         });

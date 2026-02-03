@@ -4,6 +4,7 @@
 
 use std::{error::Error, fmt};
 
+use common::diagnostics::Span;
 use common::ingot::IngotKind;
 use hir::analysis::{
     HirAnalysisDb,
@@ -262,12 +263,13 @@ pub(crate) fn lower_function<'db>(
     if let Some(block) = builder.current_block() {
         let ret_ty = func.return_ty(db);
         let returns_value = !builder.is_unit_ty(ret_ty) && !ret_ty.is_never(db);
+        let source = builder.source_for_expr(body.expr(db));
         if returns_value {
             let ret_val = builder.ensure_value(body.expr(db));
             builder.set_terminator(
                 block,
                 Terminator::Return {
-                    source: crate::ir::SourceInfoId::SYNTHETIC,
+                    source,
                     value: Some(ret_val),
                 },
             );
@@ -275,7 +277,7 @@ pub(crate) fn lower_function<'db>(
             builder.set_terminator(
                 block,
                 Terminator::Return {
-                    source: crate::ir::SourceInfoId::SYNTHETIC,
+                    source,
                     value: None,
                 },
             );
@@ -322,6 +324,7 @@ pub(super) struct MirBuilder<'db, 'a> {
     pub(super) core: CoreLib<'db>,
     pub(super) loop_stack: Vec<LoopScope>,
     pub(super) const_cache: FxHashMap<Const<'db>, ValueId>,
+    pub(super) source_info_cache: FxHashMap<Span, crate::ir::SourceInfoId>,
     pub(super) pat_address_space: FxHashMap<PatId, AddressSpaceKind>,
     pub(super) binding_locals: FxHashMap<LocalBinding<'db>, LocalId>,
     /// For methods, the address space variant being lowered.
@@ -373,6 +376,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
             core,
             loop_stack: Vec::new(),
             const_cache: FxHashMap::default(),
+            source_info_cache: FxHashMap::default(),
             pat_address_space: FxHashMap::default(),
             binding_locals: FxHashMap::default(),
             receiver_space,
@@ -391,6 +395,38 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         builder.seed_signature_locals();
 
         Ok(builder)
+    }
+
+    fn source_info_for_span(&mut self, span: Option<Span>) -> crate::ir::SourceInfoId {
+        let Some(span) = span else {
+            return crate::ir::SourceInfoId::SYNTHETIC;
+        };
+        if let Some(&id) = self.source_info_cache.get(&span) {
+            return id;
+        }
+        let id = self.builder.body.alloc_source_info(Some(span.clone()));
+        self.source_info_cache.insert(span, id);
+        id
+    }
+
+    fn source_for_expr(&mut self, expr: ExprId) -> crate::ir::SourceInfoId {
+        self.source_info_for_span(expr.span(self.body).resolve(self.db))
+    }
+
+    fn source_for_stmt(&mut self, stmt: StmtId) -> crate::ir::SourceInfoId {
+        self.source_info_for_span(stmt.span(self.body).resolve(self.db))
+    }
+
+    fn source_for_pat(&mut self, pat: PatId) -> crate::ir::SourceInfoId {
+        self.source_info_for_span(pat.span(self.body).resolve(self.db))
+    }
+
+    fn source_for_func_param(&mut self, func: Func<'db>, idx: usize) -> crate::ir::SourceInfoId {
+        let span = func
+            .params(self.db)
+            .nth(idx)
+            .and_then(|param| param.span().resolve(self.db));
+        self.source_info_for_span(span)
     }
 
     fn new_for_func(
@@ -618,8 +654,9 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
     }
 
     fn branch(&mut self, cond: ValueId, then_bb: BasicBlockId, else_bb: BasicBlockId) {
+        let source = self.builder.body.value(cond).source;
         self.set_current_terminator(Terminator::Branch {
-            source: crate::ir::SourceInfoId::SYNTHETIC,
+            source,
             cond,
             then_bb,
             else_bb,
@@ -627,8 +664,9 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
     }
 
     fn switch(&mut self, discr: ValueId, targets: Vec<SwitchTarget>, default: BasicBlockId) {
+        let source = self.builder.body.value(discr).source;
         self.set_current_terminator(Terminator::Switch {
-            source: crate::ir::SourceInfoId::SYNTHETIC,
+            source,
             discr,
             targets,
             default,
@@ -663,9 +701,11 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
     }
 
     fn assign(&mut self, stmt: Option<StmtId>, dest: Option<LocalId>, rvalue: Rvalue<'db>) {
-        let _ = stmt;
+        let source = stmt
+            .map(|stmt| self.source_for_stmt(stmt))
+            .unwrap_or(crate::ir::SourceInfoId::SYNTHETIC);
         self.push_inst_here(MirInst::Assign {
-            source: crate::ir::SourceInfoId::SYNTHETIC,
+            source,
             dest,
             rvalue,
         });
@@ -962,6 +1002,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
             return;
         };
         for (idx, param) in func.params(self.db).enumerate() {
+            let source = self.source_info_for_span(param.span().resolve(self.db));
             let binding = self
                 .typed_body
                 .param_binding(idx)
@@ -984,13 +1025,14 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                 name,
                 ty,
                 is_mut: binding.is_mut(),
-                source: crate::ir::SourceInfoId::SYNTHETIC,
+                source,
                 address_space: self.address_space_for_binding(&binding),
             });
             self.builder.body.param_locals.push(local);
             self.binding_locals.insert(binding, local);
         }
 
+        let effects_source = self.source_info_for_span(func.span().effects().resolve(self.db));
         for effect in func.effect_params(self.db) {
             let idx = effect.index();
             let Some(key_path) = effect.key_path(self.db) else {
@@ -1016,7 +1058,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                 name,
                 ty: self.u256_ty(),
                 is_mut: binding.is_mut(),
-                source: crate::ir::SourceInfoId::SYNTHETIC,
+                source: effects_source,
                 address_space: self.address_space_for_binding(&binding),
             });
             self.builder.body.effect_param_locals.push(local);
@@ -1055,11 +1097,20 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
             LocalBinding::Param { ty, is_mut, .. } => (ty, is_mut),
             LocalBinding::EffectParam { is_mut, .. } => (self.u256_ty(), is_mut),
         };
+        let source = match &binding {
+            LocalBinding::Local { pat, .. } => self.source_for_pat(*pat),
+            LocalBinding::Param {
+                site: ParamSite::Func(func),
+                idx,
+                ..
+            } => self.source_for_func_param(*func, *idx),
+            _ => crate::ir::SourceInfoId::SYNTHETIC,
+        };
         let local = self.builder.body.alloc_local(LocalData {
             name,
             ty,
             is_mut,
-            source: crate::ir::SourceInfoId::SYNTHETIC,
+            source,
             address_space: self.address_space_for_binding(&binding),
         });
         if needs_effect_param_local {

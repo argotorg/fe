@@ -32,8 +32,9 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         }
 
         self.builder.body.locals[dest.index()].address_space = AddressSpaceKind::Memory;
+        let source = self.source_for_expr(expr);
         self.push_inst_here(MirInst::Assign {
-            source: crate::ir::SourceInfoId::SYNTHETIC,
+            source,
             dest: Some(dest),
             rvalue: crate::ir::Rvalue::Alloc {
                 address_space: AddressSpaceKind::Memory,
@@ -54,7 +55,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         }
         let place = Place::new(base_value, MirProjectionPath::new());
         self.push_inst_here(MirInst::InitAggregate {
-            source: crate::ir::SourceInfoId::SYNTHETIC,
+            source: self.builder.body.value(base_value).source,
             place,
             inits,
         });
