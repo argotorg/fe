@@ -9,6 +9,7 @@ use hir::analysis::{
     HirAnalysisDb,
     ty::{ty_is_borrow, ty_is_noesc},
 };
+use hir::hir_def::FuncParamMode;
 use hir::projection::Aliasing;
 use rustc_hash::{FxHashMap, FxHashSet};
 
@@ -110,6 +111,7 @@ struct Borrowck<'db, 'a> {
     func: &'a MirFunction<'db>,
     summaries: &'a BorrowSummaryMap<'db>,
     borrow_param: Vec<bool>,
+    param_modes: Vec<FuncParamMode>,
     tracked_local_idx: Vec<Option<usize>>,
     tracked_locals: Vec<LocalId>,
     param_index_of_local: Vec<Option<u32>>,
@@ -118,6 +120,7 @@ struct Borrowck<'db, 'a> {
     call_loan_for_value: FxHashMap<ValueId, LoanId>,
     loans: Vec<Loan<'db>>,
     entry_states: Vec<Vec<FxHashSet<LoanId>>>,
+    moved_entry: Vec<FxHashSet<CanonPlace<'db>>>,
     live_before: Vec<Vec<FxHashSet<LocalId>>>,
     live_before_term: Vec<FxHashSet<LocalId>>,
 }
@@ -149,11 +152,24 @@ impl<'db, 'a> Borrowck<'db, 'a> {
             .map(|local| ty_is_borrow(db, body.local(*local).ty).is_some())
             .collect();
 
+        let param_modes = match func.origin {
+            crate::ir::MirFunctionOrigin::Hir(hir_func) => {
+                hir_func.params(db).map(|param| param.mode(db)).collect()
+            }
+            crate::ir::MirFunctionOrigin::Synthetic(_) => {
+                vec![FuncParamMode::Move; body.param_locals.len()]
+            }
+        };
+        if param_modes.len() != body.param_locals.len() {
+            panic!("param modes length mismatch");
+        }
+
         Self {
             db,
             func,
             summaries,
             borrow_param,
+            param_modes,
             tracked_local_idx,
             tracked_locals,
             param_index_of_local,
@@ -162,6 +178,7 @@ impl<'db, 'a> Borrowck<'db, 'a> {
             call_loan_for_value: FxHashMap::default(),
             loans: Vec::new(),
             entry_states: Vec::new(),
+            moved_entry: Vec::new(),
             live_before: Vec::new(),
             live_before_term: Vec::new(),
         }
@@ -188,6 +205,7 @@ impl<'db, 'a> Borrowck<'db, 'a> {
 
     fn check(mut self) -> Option<String> {
         self.analyze();
+        self.compute_moved_entry_states();
         self.compute_liveness();
         self.check_conflicts()
     }
@@ -439,10 +457,301 @@ impl<'db, 'a> Borrowck<'db, 'a> {
         }
     }
 
+    fn compute_moved_entry_states(&mut self) {
+        // Track which canonical places have been moved-out along each CFG edge. We use a simple
+        // forward union dataflow: if a place is moved on any incoming path, it is treated as
+        // moved after the join.
+        let body = &self.func.body;
+        self.moved_entry = vec![FxHashSet::default(); body.blocks.len()];
+
+        let mut worklist: Vec<BasicBlockId> = vec![body.entry];
+        let mut in_worklist = FxHashSet::default();
+        in_worklist.insert(body.entry);
+
+        while let Some(bb) = worklist.pop() {
+            in_worklist.remove(&bb);
+
+            let mut moved = self.moved_entry[bb.index()].clone();
+            let mut state = self.entry_states[bb.index()].clone();
+            for inst in &body.blocks[bb.index()].insts {
+                self.update_moved_for_inst(inst, &state, &mut moved);
+                self.update_state_for_inst(inst, &mut state);
+            }
+            self.update_moved_for_terminator(
+                &body.blocks[bb.index()].terminator,
+                &state,
+                &mut moved,
+            );
+
+            for succ in successors(&body.blocks[bb.index()].terminator) {
+                if self.join_moved_entry_state(succ, &moved) && in_worklist.insert(succ) {
+                    worklist.push(succ);
+                }
+            }
+        }
+    }
+
+    fn join_moved_entry_state(
+        &mut self,
+        succ: BasicBlockId,
+        moved: &FxHashSet<CanonPlace<'db>>,
+    ) -> bool {
+        let before = self.moved_entry[succ.index()].len();
+        self.moved_entry[succ.index()].extend(moved.iter().cloned());
+        self.moved_entry[succ.index()].len() != before
+    }
+
+    fn update_moved_for_inst(
+        &self,
+        inst: &MirInst<'db>,
+        state: &[FxHashSet<LoanId>],
+        moved: &mut FxHashSet<CanonPlace<'db>>,
+    ) {
+        for place in move_places_in_inst(&self.func.body, inst) {
+            if !self.loans_for_place_base(state, place.base).is_empty() {
+                continue;
+            }
+            moved.extend(self.canonicalize_place(state, &place));
+        }
+
+        match inst {
+            MirInst::Assign {
+                dest: Some(dest), ..
+            } => {
+                let root = self.root_for_local(*dest);
+                moved.retain(|p| p.root != root);
+            }
+            MirInst::Store { place, .. } | MirInst::InitAggregate { place, .. } => {
+                let written = self.canonicalize_place(state, place);
+                moved.retain(|m| {
+                    !written
+                        .iter()
+                        .any(|w| w.root == m.root && w.proj.is_prefix_of(&m.proj))
+                });
+            }
+            _ => {}
+        }
+    }
+
+    fn update_moved_for_terminator(
+        &self,
+        term: &Terminator<'db>,
+        state: &[FxHashSet<LoanId>],
+        moved: &mut FxHashSet<CanonPlace<'db>>,
+    ) {
+        for place in move_places_in_terminator(&self.func.body, term) {
+            if !self.loans_for_place_base(state, place.base).is_empty() {
+                continue;
+            }
+            moved.extend(self.canonicalize_place(state, &place));
+        }
+    }
+
+    fn check_moved_and_moves_in_inst(
+        &self,
+        inst: &MirInst<'db>,
+        state: &[FxHashSet<LoanId>],
+        moved: &FxHashSet<CanonPlace<'db>>,
+        active: &FxHashSet<LoanId>,
+        suspended: &FxHashSet<LoanId>,
+    ) -> Option<String> {
+        for place in move_places_in_inst(&self.func.body, inst) {
+            if let Some(err) = self.check_move_out_place(&place, state, moved, active, suspended) {
+                return Some(err);
+            }
+        }
+
+        for value in borrow_values_in_inst(&self.func.body, inst) {
+            if ty_is_borrow(self.db, self.func.body.value(value).ty).is_none() {
+                continue;
+            }
+            let ValueOrigin::PlaceRef(place) = &self.func.body.value(value).origin else {
+                continue;
+            };
+            let accessed = self.canonicalize_place(state, place);
+            if place_set_overlaps(&accessed, moved) {
+                return Some("move conflict: borrow of moved place".to_string());
+            }
+        }
+
+        match inst {
+            MirInst::Assign {
+                rvalue: Rvalue::Load { place },
+                ..
+            } => {
+                let accessed = self.canonicalize_place(state, place);
+                if place_set_overlaps(&accessed, moved) {
+                    return Some("move conflict: use after move".to_string());
+                }
+            }
+            MirInst::Store { place, .. } | MirInst::InitAggregate { place, .. } => {
+                let written = self.canonicalize_place(state, place);
+                if let Some(err) = self.check_write_through_moved_parent(&written, moved) {
+                    return Some(err);
+                }
+            }
+            _ => {}
+        }
+
+        for value in value_operands_in_inst(inst) {
+            if let Some(err) = self.check_value_reads_after_move(value, moved) {
+                return Some(err);
+            }
+        }
+
+        match inst {
+            MirInst::Store { place, .. }
+            | MirInst::InitAggregate { place, .. }
+            | MirInst::SetDiscriminant { place, .. } => {
+                self.check_place_path_indices_after_move(&place.projection, moved)
+            }
+            MirInst::Assign { rvalue, .. } => {
+                if let Rvalue::Load { place } = rvalue {
+                    self.check_place_path_indices_after_move(&place.projection, moved)
+                } else {
+                    None
+                }
+            }
+            _ => None,
+        }
+    }
+
+    fn check_moved_and_moves_in_terminator(
+        &self,
+        term: &Terminator<'db>,
+        state: &[FxHashSet<LoanId>],
+        moved: &FxHashSet<CanonPlace<'db>>,
+        active: &FxHashSet<LoanId>,
+        suspended: &FxHashSet<LoanId>,
+    ) -> Option<String> {
+        for place in move_places_in_terminator(&self.func.body, term) {
+            if let Some(err) = self.check_move_out_place(&place, state, moved, active, suspended) {
+                return Some(err);
+            }
+        }
+
+        for value in borrow_values_in_terminator(&self.func.body, term) {
+            if ty_is_borrow(self.db, self.func.body.value(value).ty).is_none() {
+                continue;
+            }
+            let ValueOrigin::PlaceRef(place) = &self.func.body.value(value).origin else {
+                continue;
+            };
+            let accessed = self.canonicalize_place(state, place);
+            if place_set_overlaps(&accessed, moved) {
+                return Some("move conflict: borrow of moved place".to_string());
+            }
+        }
+
+        for value in value_operands_in_terminator(term) {
+            if let Some(err) = self.check_value_reads_after_move(value, moved) {
+                return Some(err);
+            }
+        }
+
+        None
+    }
+
+    fn check_value_reads_after_move(
+        &self,
+        value: ValueId,
+        moved: &FxHashSet<CanonPlace<'db>>,
+    ) -> Option<String> {
+        let mut locals = FxHashSet::default();
+        collect_value_locals_in_value(&self.func.body, value, &mut locals);
+        for local in locals {
+            let accessed = CanonPlace {
+                root: self.root_for_local(local),
+                proj: crate::MirProjectionPath::new(),
+            };
+            if moved.iter().any(|m| places_overlap(m, &accessed)) {
+                return Some("move conflict: use after move".to_string());
+            }
+        }
+        None
+    }
+
+    fn check_place_path_indices_after_move(
+        &self,
+        path: &crate::MirProjectionPath<'db>,
+        moved: &FxHashSet<CanonPlace<'db>>,
+    ) -> Option<String> {
+        for proj in path.iter() {
+            if let hir::projection::Projection::Index(hir::projection::IndexSource::Dynamic(
+                value,
+            )) = proj
+            {
+                if let Some(err) = self.check_value_reads_after_move(*value, moved) {
+                    return Some(err);
+                }
+            }
+        }
+        None
+    }
+
+    fn check_write_through_moved_parent(
+        &self,
+        written: &FxHashSet<CanonPlace<'db>>,
+        moved: &FxHashSet<CanonPlace<'db>>,
+    ) -> Option<String> {
+        for w in written {
+            for m in moved {
+                if w.root == m.root && m.proj.is_prefix_of(&w.proj) && m.proj != w.proj {
+                    return Some("move conflict: write through moved place".to_string());
+                }
+            }
+        }
+        None
+    }
+
+    fn check_move_out_place(
+        &self,
+        place: &Place<'db>,
+        state: &[FxHashSet<LoanId>],
+        moved: &FxHashSet<CanonPlace<'db>>,
+        active: &FxHashSet<LoanId>,
+        suspended: &FxHashSet<LoanId>,
+    ) -> Option<String> {
+        if !self.loans_for_place_base(state, place.base).is_empty() {
+            return Some("move conflict: cannot move out through borrow handle".to_string());
+        }
+
+        let targets = self.canonicalize_place(state, place);
+        if place_set_overlaps(&targets, moved) {
+            return Some("move conflict: use after move".to_string());
+        }
+
+        for target in &targets {
+            let Root::Param(idx) = target.root else {
+                continue;
+            };
+            let mode = self
+                .param_modes
+                .get(idx as usize)
+                .copied()
+                .unwrap_or_else(|| panic!("missing param mode"));
+            if mode == FuncParamMode::View {
+                return Some("move conflict: cannot move out of view param".to_string());
+            }
+        }
+
+        for &loan in active {
+            if suspended.contains(&loan) {
+                continue;
+            }
+            if place_set_overlaps(&self.loans[loan.0 as usize].targets, &targets) {
+                return Some("move conflict: cannot move out of borrowed place".to_string());
+            }
+        }
+
+        None
+    }
+
     fn check_conflicts(self) -> Option<String> {
         let body = &self.func.body;
         for (bb_idx, block) in body.blocks.iter().enumerate() {
             let mut state = self.entry_states[bb_idx].clone();
+            let mut moved = self.moved_entry[bb_idx].clone();
             for (inst_idx, inst) in block.insts.iter().enumerate() {
                 let mut active = self.active_loans(&state, &self.live_before[bb_idx][inst_idx]);
                 let temp = self.borrow_loans_in_inst(inst);
@@ -457,6 +766,11 @@ impl<'db, 'a> Borrowck<'db, 'a> {
                     .filter(|l| !suspended.contains(l))
                     .collect();
 
+                if let Some(err) =
+                    self.check_moved_and_moves_in_inst(inst, &state, &moved, &active, &suspended)
+                {
+                    return Some(err);
+                }
                 if let Some(err) = self.check_active_set(&effective) {
                     return Some(err);
                 }
@@ -467,6 +781,7 @@ impl<'db, 'a> Borrowck<'db, 'a> {
                     return Some(err);
                 }
 
+                self.update_moved_for_inst(inst, &state, &mut moved);
                 self.update_state_for_inst(inst, &mut state);
             }
 
@@ -483,6 +798,15 @@ impl<'db, 'a> Borrowck<'db, 'a> {
                 .copied()
                 .filter(|l| !suspended.contains(l))
                 .collect();
+            if let Some(err) = self.check_moved_and_moves_in_terminator(
+                &block.terminator,
+                &state,
+                &moved,
+                &active,
+                &suspended,
+            ) {
+                return Some(err);
+            }
             if let Some(err) = self.check_active_set(&effective) {
                 return Some(err);
             }
@@ -1213,6 +1537,46 @@ fn collect_locals_in_value<'db>(body: &MirBody<'db>, value: ValueId, out: &mut F
     inner(body, value, out, &mut FxHashSet::default());
 }
 
+fn collect_value_locals_in_value<'db>(
+    body: &MirBody<'db>,
+    value: ValueId,
+    out: &mut FxHashSet<LocalId>,
+) {
+    fn inner<'db>(
+        body: &MirBody<'db>,
+        value: ValueId,
+        out: &mut FxHashSet<LocalId>,
+        visiting: &mut FxHashSet<ValueId>,
+    ) {
+        if !visiting.insert(value) {
+            return;
+        }
+        match &body.value(value).origin {
+            ValueOrigin::Local(local) => {
+                out.insert(*local);
+            }
+            ValueOrigin::TransparentCast { value } => inner(body, *value, out, visiting),
+            ValueOrigin::Unary { inner: dep, .. } => inner(body, *dep, out, visiting),
+            ValueOrigin::Binary { lhs, rhs, .. } => {
+                inner(body, *lhs, out, visiting);
+                inner(body, *rhs, out, visiting);
+            }
+            ValueOrigin::PlaceRef(place) | ValueOrigin::MoveOut { place } => {
+                for proj in place.projection.iter() {
+                    if let hir::projection::Projection::Index(
+                        hir::projection::IndexSource::Dynamic(idx),
+                    ) = proj
+                    {
+                        inner(body, *idx, out, visiting);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    inner(body, value, out, &mut FxHashSet::default());
+}
+
 fn collect_word_locals_in_value<'db>(
     body: &MirBody<'db>,
     value: ValueId,
@@ -1271,6 +1635,24 @@ fn value_operands_in_inst(inst: &MirInst<'_>) -> Vec<ValueId> {
         MirInst::InitAggregate { inits, .. } => inits.iter().map(|(_, v)| *v).collect(),
         MirInst::BindValue { value } => vec![*value],
         MirInst::SetDiscriminant { .. } => Vec::new(),
+    }
+}
+
+fn value_operands_in_terminator(term: &Terminator<'_>) -> Vec<ValueId> {
+    match term {
+        Terminator::Return(Some(value)) => vec![*value],
+        Terminator::TerminatingCall(call) => match call {
+            crate::TerminatingCall::Call(call) => call
+                .args
+                .iter()
+                .chain(call.effect_args.iter())
+                .copied()
+                .collect(),
+            crate::TerminatingCall::Intrinsic { args, .. } => args.clone(),
+        },
+        Terminator::Branch { cond, .. } => vec![*cond],
+        Terminator::Switch { discr, .. } => vec![*discr],
+        Terminator::Return(None) | Terminator::Goto { .. } | Terminator::Unreachable => Vec::new(),
     }
 }
 
@@ -1356,6 +1738,133 @@ fn borrow_values_in_terminator<'db>(
         Terminator::Return(None) | Terminator::Goto { .. } | Terminator::Unreachable => {}
     }
     out
+}
+
+fn move_places_in_inst<'db>(body: &MirBody<'db>, inst: &MirInst<'db>) -> Vec<Place<'db>> {
+    let mut out = Vec::new();
+    match inst {
+        MirInst::Assign { rvalue, .. } => match rvalue {
+            Rvalue::Value(value) => collect_move_places(body, *value, &mut out),
+            Rvalue::Load { place } => {
+                collect_move_places(body, place.base, &mut out);
+                collect_move_places_in_place_path(body, &place.projection, &mut out);
+            }
+            Rvalue::Call(call) => {
+                for arg in call.args.iter().chain(call.effect_args.iter()) {
+                    collect_move_places(body, *arg, &mut out);
+                }
+            }
+            Rvalue::Intrinsic { args, .. } => {
+                for arg in args {
+                    collect_move_places(body, *arg, &mut out);
+                }
+            }
+            Rvalue::ZeroInit | Rvalue::Alloc { .. } => {}
+        },
+        MirInst::Store { place, value } => {
+            collect_move_places(body, place.base, &mut out);
+            collect_move_places_in_place_path(body, &place.projection, &mut out);
+            collect_move_places(body, *value, &mut out);
+        }
+        MirInst::InitAggregate { place, inits } => {
+            collect_move_places(body, place.base, &mut out);
+            collect_move_places_in_place_path(body, &place.projection, &mut out);
+            for (path, value) in inits {
+                collect_move_places_in_place_path(body, path, &mut out);
+                collect_move_places(body, *value, &mut out);
+            }
+        }
+        MirInst::SetDiscriminant { place, .. } => {
+            collect_move_places(body, place.base, &mut out);
+            collect_move_places_in_place_path(body, &place.projection, &mut out);
+        }
+        MirInst::BindValue { value } => collect_move_places(body, *value, &mut out),
+    }
+    out
+}
+
+fn move_places_in_terminator<'db>(body: &MirBody<'db>, term: &Terminator<'db>) -> Vec<Place<'db>> {
+    let mut out = Vec::new();
+    match term {
+        Terminator::Return(Some(value)) => collect_move_places(body, *value, &mut out),
+        Terminator::TerminatingCall(call) => match call {
+            crate::TerminatingCall::Call(call) => {
+                for arg in call.args.iter().chain(call.effect_args.iter()) {
+                    collect_move_places(body, *arg, &mut out);
+                }
+            }
+            crate::TerminatingCall::Intrinsic { args, .. } => {
+                for arg in args {
+                    collect_move_places(body, *arg, &mut out);
+                }
+            }
+        },
+        Terminator::Branch { cond, .. } | Terminator::Switch { discr: cond, .. } => {
+            collect_move_places(body, *cond, &mut out);
+        }
+        Terminator::Return(None) | Terminator::Goto { .. } | Terminator::Unreachable => {}
+    }
+    out
+}
+
+fn collect_move_places_in_place_path<'db>(
+    body: &MirBody<'db>,
+    path: &crate::MirProjectionPath<'db>,
+    out: &mut Vec<Place<'db>>,
+) {
+    for proj in path.iter() {
+        if let hir::projection::Projection::Index(hir::projection::IndexSource::Dynamic(value)) =
+            proj
+        {
+            collect_move_places(body, *value, out);
+        }
+    }
+}
+
+fn collect_move_places<'db>(body: &MirBody<'db>, value: ValueId, out: &mut Vec<Place<'db>>) {
+    fn inner<'db>(
+        body: &MirBody<'db>,
+        value: ValueId,
+        out: &mut Vec<Place<'db>>,
+        visiting: &mut FxHashSet<ValueId>,
+    ) {
+        if !visiting.insert(value) {
+            return;
+        }
+        match &body.value(value).origin {
+            ValueOrigin::MoveOut { place } => {
+                out.push(place.clone());
+                inner(body, place.base, out, visiting);
+                for proj in place.projection.iter() {
+                    if let hir::projection::Projection::Index(
+                        hir::projection::IndexSource::Dynamic(idx),
+                    ) = proj
+                    {
+                        inner(body, *idx, out, visiting);
+                    }
+                }
+            }
+            ValueOrigin::TransparentCast { value } => inner(body, *value, out, visiting),
+            ValueOrigin::Unary { inner: dep, .. } => inner(body, *dep, out, visiting),
+            ValueOrigin::Binary { lhs, rhs, .. } => {
+                inner(body, *lhs, out, visiting);
+                inner(body, *rhs, out, visiting);
+            }
+            ValueOrigin::PlaceRef(place) => {
+                inner(body, place.base, out, visiting);
+                for proj in place.projection.iter() {
+                    if let hir::projection::Projection::Index(
+                        hir::projection::IndexSource::Dynamic(idx),
+                    ) = proj
+                    {
+                        inner(body, *idx, out, visiting);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    inner(body, value, out, &mut FxHashSet::default());
 }
 
 fn collect_borrow_values<'db>(body: &MirBody<'db>, value: ValueId, out: &mut FxHashSet<ValueId>) {
