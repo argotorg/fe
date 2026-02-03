@@ -1,0 +1,8 @@
+// Writing a place while a `mut` loan is live should be rejected.
+
+pub fn borrowck_write_under_mut() {
+    let mut x: u256 = 0
+    let p: mut u256 = mut x
+    x = 1
+    p = 2
+}

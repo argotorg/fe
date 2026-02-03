@@ -1,8 +1,12 @@
 ---
 source: crates/mir/tests/lowering_errors.rs
-assertion_line: 27
 expression: err.to_string()
 input_file: tests/fixtures/errors/noesc_storage_escape.fe
 ---
-MIR errors while lowering `fn noesc_storage_escape() uses (mut slot: Esc)`:
-cannot store NoEsc value `Esc` into `Storage`
+error[10-0001]: cannot store `Esc` in `Storage`
+  ┌─ noesc_storage_escape.fe:9:5
+  │
+9 │     slot = e
+  │     ^^^^^^^^ this value cannot be written to `Storage`
+  │
+  = note: this value contains a borrow handle (`mut`/`ref`)

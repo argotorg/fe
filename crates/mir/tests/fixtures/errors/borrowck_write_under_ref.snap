@@ -4,5 +4,10 @@ assertion_line: 27
 expression: err.to_string()
 input_file: tests/fixtures/errors/borrowck_write_under_ref.fe
 ---
-MIR errors while lowering `pub fn borrowck_write_under_ref()`:
-borrow conflict: write through active `ref` loan
+error[10-0002]: borrow conflict in `fn borrowck_write_under_ref`
+  ┌─ borrowck_write_under_ref.fe:4:5
+  │
+3 │     let r: ref u256 = ref x
+  │                           - `x` is borrowed here
+4 │     x = 1
+  │     ^^^^^ cannot write through an active `ref` borrow

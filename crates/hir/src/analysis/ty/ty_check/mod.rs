@@ -156,6 +156,7 @@ impl<'db> TyChecker<'db> {
 
     fn run(&mut self) {
         self.check_effect_param_keys_resolve();
+        self.check_move_param_types();
 
         if let BodyOwner::ContractRecvArm {
             contract,
@@ -183,6 +184,50 @@ impl<'db> TyChecker<'db> {
 
         let root_expr = self.env.body().expr(self.db);
         self.check_expr(root_expr, self.expected);
+    }
+
+    fn check_move_param_types(&mut self) {
+        match self.env.owner() {
+            BodyOwner::Func(func) => {
+                for param in func.params(self.db) {
+                    if param.mode(self.db) != crate::hir_def::params::FuncParamMode::Move {
+                        continue;
+                    }
+                    let ty = param.ty(self.db);
+                    if ty.as_borrow(self.db).is_some() {
+                        self.push_diag(BodyDiag::MoveParamCannotBeBorrow {
+                            primary: param.span().ty().into(),
+                            ty,
+                        });
+                    }
+                }
+            }
+            BodyOwner::ContractInit { contract } => {
+                let Some(init) = contract.init(self.db) else {
+                    return;
+                };
+                let scope = self.env.scope();
+                let assumptions = self.env.assumptions();
+                for (idx, param) in init.params(self.db).data(self.db).iter().enumerate() {
+                    if param.mode != crate::hir_def::params::FuncParamMode::Move {
+                        continue;
+                    }
+                    let Some(hir_ty) = param.ty.to_opt() else {
+                        continue;
+                    };
+                    let ty = lower_hir_ty(self.db, hir_ty, scope, assumptions);
+                    if ty.as_borrow(self.db).is_some() {
+                        self.push_diag(BodyDiag::MoveParamCannotBeBorrow {
+                            primary: contract.span().init_block().params().param(idx).ty().into(),
+                            ty,
+                        });
+                    }
+                }
+            }
+            BodyOwner::Const(_)
+            | BodyOwner::AnonConstBody { .. }
+            | BodyOwner::ContractRecvArm { .. } => {}
+        }
     }
 
     fn check_effect_param_keys_resolve(&mut self) {

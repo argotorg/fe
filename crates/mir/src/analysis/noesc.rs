@@ -1,12 +1,15 @@
-//! MIR validation for NoEsc (stack-only) values.
+//! MIR validation for stack-only values.
 //!
-//! NoEsc values (e.g. `mut T` / `ref T`) may live in locals/temps, but must not be stored into
-//! non-memory address spaces such as storage.
+//! Stack-only values (e.g. `mut T` / `ref T`) may live in locals/temps, but must not be stored
+//! into non-memory address spaces such as storage.
 
 use common::diagnostics::{
     CompleteDiagnostic, DiagnosticPass, GlobalErrorCode, LabelStyle, Severity, SubDiagnostic,
 };
-use hir::analysis::{HirAnalysisDb, ty::ty_is_noesc};
+use hir::analysis::{
+    HirAnalysisDb,
+    ty::{ty_is_borrow, ty_is_noesc},
+};
 
 use crate::{
     MirFunction, MirInst, ValueId,
@@ -67,6 +70,12 @@ fn check_store<'db>(
         return None;
     }
 
+    let reason = if ty_is_borrow(db, ty).is_some() {
+        "note: borrow handles (`mut`/`ref`) cannot be stored".to_string()
+    } else {
+        "note: this value contains a borrow handle (`mut`/`ref`)".to_string()
+    };
+
     let span = func
         .body
         .source_span(source)
@@ -76,19 +85,16 @@ fn check_store<'db>(
                 .iter()
                 .find_map(|info| info.span.clone())
         })
-        .expect("NoEsc diagnostic missing a span");
+        .expect("escape diagnostic missing a span");
     Some(CompleteDiagnostic::new(
         Severity::Error,
-        format!(
-            "cannot store NoEsc value `{}` into `{space:?}`",
-            ty.pretty_print(db)
-        ),
+        format!("cannot store `{}` in `{space:?}`", ty.pretty_print(db)),
         vec![SubDiagnostic::new(
             LabelStyle::Primary,
-            "NoEsc value escapes here".to_string(),
+            format!("this value cannot be written to `{space:?}`"),
             Some(span),
         )],
-        Vec::new(),
+        vec![reason],
         GlobalErrorCode::new(DiagnosticPass::Mir, 1),
     ))
 }

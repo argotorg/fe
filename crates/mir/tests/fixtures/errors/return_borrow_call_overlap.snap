@@ -4,5 +4,10 @@ assertion_line: 27
 expression: err.to_string()
 input_file: tests/fixtures/errors/return_borrow_call_overlap.fe
 ---
-MIR errors while lowering `pub fn return_borrow_call_overlap()`:
-borrow conflict: overlapping active loans
+error[10-0002]: borrow conflict in `fn return_borrow_call_overlap`
+   ┌─ return_borrow_call_overlap.fe:13:5
+   │
+12 │     let p: mut u256 = borrow_a(mut s)
+   │                       --------------- borrow created here
+13 │     let q: mut u256 = mut s.a
+   │     ^^^^^^^^^^^^^^^^^^^^^^^^^ cannot mutably borrow this place while a mut borrow is active

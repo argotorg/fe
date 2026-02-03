@@ -4,5 +4,10 @@ assertion_line: 27
 expression: err.to_string()
 input_file: tests/fixtures/errors/return_borrow_local.fe
 ---
-MIR errors while lowering `fn borrow_local() -> mut u256`:
-return borrow must be derived from explicit borrow params
+error[10-0003]: invalid return borrow in `fn borrow_local`
+  ┌─ return_borrow_local.fe:3:5
+  │
+2 │     let mut x: u256 = 0
+  │         ----- `x` is a local value created here
+3 │     mut x
+  │     ^^^ cannot return a borrow to local `x`

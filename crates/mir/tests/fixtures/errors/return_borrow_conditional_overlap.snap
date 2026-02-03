@@ -4,5 +4,18 @@ assertion_line: 27
 expression: err.to_string()
 input_file: tests/fixtures/errors/return_borrow_conditional_overlap.fe
 ---
-MIR errors while lowering `pub fn return_borrow_conditional_overlap(b: bool)`:
-borrow conflict: overlapping active loans
+error[8-0068]: explicit reborrow required
+   ┌─ return_borrow_conditional_overlap.fe:10:33
+   │
+10 │     let p: mut u256 = choose(b, px, py)
+   │                                 ^^ this argument must be explicitly borrowed as `mut`
+   │
+   = help: use `mut <place>` when passing a place to a `mut` parameter
+
+error[8-0068]: explicit reborrow required
+   ┌─ return_borrow_conditional_overlap.fe:10:37
+   │
+10 │     let p: mut u256 = choose(b, px, py)
+   │                                     ^^ this argument must be explicitly borrowed as `mut`
+   │
+   = help: use `mut <place>` when passing a place to a `mut` parameter

@@ -1,8 +1,12 @@
 ---
 source: crates/mir/tests/lowering_errors.rs
-assertion_line: 27
 expression: err.to_string()
 input_file: tests/fixtures/errors/move_param_consumes_arg.fe
 ---
-MIR errors while lowering `pub fn move_param_consumes_arg()`:
-move conflict: use after move
+error[10-0002]: move conflict in `fn move_param_consumes_arg`
+  ┌─ move_param_consumes_arg.fe:8:19
+  │
+7 │     take(move x)
+  │               - `x` is moved here
+8 │     let y: u256 = x
+  │                   ^ cannot use a value after it was moved

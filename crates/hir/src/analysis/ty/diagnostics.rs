@@ -2,7 +2,7 @@ use super::{
     adt_def::AdtCycleMember,
     trait_def::TraitInstId,
     ty_check::{RecordLike, TraitOps},
-    ty_def::{Kind, TyId},
+    ty_def::{BorrowKind, Kind, TyId},
 };
 use crate::visitor::prelude::*;
 use crate::{analysis::HirAnalysisDb, hir_def::Trait};
@@ -348,6 +348,34 @@ pub enum BodyDiag<'db> {
         binding: Option<(IdentId<'db>, DynLazySpan<'db>)>,
     },
 
+    /// A call argument is a place, but the callee requires an explicit `move`-out.
+    ///
+    /// We enforce this at type-check time (rather than MIR) so call sites are explicit and the
+    /// borrow checker can reason about ownership transfer precisely.
+    ExplicitMoveRequired {
+        primary: DynLazySpan<'db>,
+    },
+
+    /// A call argument is a place, but the callee requires an explicit borrow handle (`mut`/`ref`).
+    ///
+    /// This makes reborrows explicit at the call site and prevents unsound aliasing when
+    /// copyable borrow handles are passed around.
+    ExplicitReborrowRequired {
+        primary: DynLazySpan<'db>,
+        kind: BorrowKind,
+    },
+
+    /// `move <expr>` is only valid for owned places, not for borrow-handle places (`mut`/`ref`).
+    MoveOnBorrowHandle {
+        primary: DynLazySpan<'db>,
+    },
+
+    /// `move` parameters must have owned types. Borrow-handle types (`mut`/`ref`) are not owned.
+    MoveParamCannotBeBorrow {
+        primary: DynLazySpan<'db>,
+        ty: TyId<'db>,
+    },
+
     NonAssignableExpr(DynLazySpan<'db>),
 
     ImmutableAssignment {
@@ -631,6 +659,10 @@ impl<'db> BodyDiag<'db> {
             Self::UnsupportedUnaryPlus(..) => 52,
             Self::BorrowFromNonPlace { .. } => 65,
             Self::CannotBorrowMut { .. } => 66,
+            Self::ExplicitMoveRequired { .. } => 67,
+            Self::ExplicitReborrowRequired { .. } => 68,
+            Self::MoveOnBorrowHandle { .. } => 69,
+            Self::MoveParamCannotBeBorrow { .. } => 70,
             Self::NonAssignableExpr(..) => 17,
             Self::ImmutableAssignment { .. } => 18,
             Self::LoopControlOutsideOfLoop { .. } => 19,

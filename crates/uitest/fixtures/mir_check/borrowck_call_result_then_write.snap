@@ -1,0 +1,13 @@
+---
+source: crates/uitest/tests/mir_check.rs
+assertion_line: 32
+expression: res
+input_file: fixtures/mir_check/borrowck_call_result_then_write.fe
+---
+error[10-0002]: borrow conflict in `fn borrowck_call_result_then_write`
+   ┌─ borrowck_call_result_then_write.fe:15:5
+   │
+14 │     let p: mut u256 = borrow_a(mut s)
+   │                       --------------- borrow created here
+15 │     s.a = 1
+   │     ^^^^^^^ access overlaps an active `mut` borrow

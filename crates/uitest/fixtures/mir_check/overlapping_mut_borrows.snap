@@ -4,5 +4,10 @@ assertion_line: 32
 expression: res
 input_file: fixtures/mir_check/overlapping_mut_borrows.fe
 ---
-MIR errors while lowering `pub fn overlapping_mut_borrows()`:
-borrow conflict: overlapping active loans
+error[10-0002]: borrow conflict in `fn overlapping_mut_borrows`
+  ┌─ overlapping_mut_borrows.fe:4:5
+  │
+3 │     let p: mut u256 = mut x
+  │                           - `x` is borrowed here
+4 │     let q: mut u256 = mut x
+  │     ^^^^^^^^^^^^^^^^^^^^^^^ cannot mutably borrow `x` while a mut borrow is active

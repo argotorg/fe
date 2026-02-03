@@ -2432,6 +2432,71 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                 }
             }
 
+            Self::ExplicitMoveRequired { primary } => CompleteDiagnostic {
+                severity: Severity::Error,
+                message: "explicit move required".to_string(),
+                sub_diagnostics: vec![SubDiagnostic {
+                    style: LabelStyle::Primary,
+                    message: "this argument must be explicitly moved".to_string(),
+                    span: primary.resolve(db),
+                }],
+                notes: vec![
+                    "help: use `move <place>` when passing an owned place to a `move` parameter"
+                        .to_string(),
+                ],
+                error_code,
+            },
+
+            Self::ExplicitReborrowRequired { primary, kind } => {
+                let kw = match kind {
+                    crate::analysis::ty::ty_def::BorrowKind::Mut => "mut",
+                    crate::analysis::ty::ty_def::BorrowKind::Ref => "ref",
+                };
+
+                CompleteDiagnostic {
+                    severity: Severity::Error,
+                    message: "explicit reborrow required".to_string(),
+                    sub_diagnostics: vec![SubDiagnostic {
+                        style: LabelStyle::Primary,
+                        message: format!("this argument must be explicitly borrowed as `{kw}`"),
+                        span: primary.resolve(db),
+                    }],
+                    notes: vec![format!(
+                        "help: use `{kw} <place>` when passing a place to a `{kw}` parameter"
+                    )],
+                    error_code,
+                }
+            }
+
+            Self::MoveOnBorrowHandle { primary } => CompleteDiagnostic {
+                severity: Severity::Error,
+                message: "cannot move a borrow handle".to_string(),
+                sub_diagnostics: vec![SubDiagnostic {
+                    style: LabelStyle::Primary,
+                    message: "`move` is only allowed on owned places".to_string(),
+                    span: primary.resolve(db),
+                }],
+                notes: vec!["borrow handles (`mut`/`ref`) are copyable; remove `move`".to_string()],
+                error_code,
+            },
+
+            Self::MoveParamCannotBeBorrow { primary, ty } => CompleteDiagnostic {
+                severity: Severity::Error,
+                message: "invalid `move` parameter".to_string(),
+                sub_diagnostics: vec![SubDiagnostic {
+                    style: LabelStyle::Primary,
+                    message: format!(
+                        "`move` parameters must have owned types (found `{}`)",
+                        ty.pretty_print(db)
+                    ),
+                    span: primary.resolve(db),
+                }],
+                notes: vec![
+                    "remove `move`, or change the parameter type to an owned type".to_string(),
+                ],
+                error_code,
+            },
+
             Self::NonAssignableExpr(primary) => CompleteDiagnostic {
                 severity: Severity::Error,
                 message: "not assignable left-hand side of assignment".to_string(),

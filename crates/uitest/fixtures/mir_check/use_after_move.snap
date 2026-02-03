@@ -4,5 +4,10 @@ assertion_line: 32
 expression: res
 input_file: fixtures/mir_check/use_after_move.fe
 ---
-MIR errors while lowering `pub fn use_after_move() -> u256`:
-move conflict: use after move
+error[10-0002]: move conflict in `fn use_after_move`
+  ┌─ use_after_move.fe:4:5
+  │
+3 │     move x
+  │          - `x` is moved here
+4 │     x
+  │     ^ cannot use a value after it was moved

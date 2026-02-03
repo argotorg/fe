@@ -1,11 +1,9 @@
 ---
 source: crates/mir/tests/lowering_snapshots.rs
-assertion_line: 26
 expression: mir_output
 ---
 fn borrow_a(v0: mut Pair) -> mut u256:
   bb0:
-    v1: u256 = load mem[v0].0
     ret &mem[v0].0
 
 fn return_borrow_direct() -> ():

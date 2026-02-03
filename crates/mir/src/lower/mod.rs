@@ -81,17 +81,15 @@ impl fmt::Display for MirLowerError {
                 write!(f, "function `{func_name}` is missing a body")
             }
             MirLowerError::AnalysisDiagnostics {
-                func_name,
+                func_name: _,
                 diagnostics,
             } => {
-                writeln!(f, "analysis errors while lowering `{func_name}`:")?;
                 write!(f, "{diagnostics}")
             }
             MirLowerError::MirDiagnostics {
-                func_name,
+                func_name: _,
                 diagnostics,
             } => {
-                writeln!(f, "MIR errors while lowering `{func_name}`:")?;
                 write!(f, "{diagnostics}")
             }
             MirLowerError::UnloweredHirExpr { func_name, expr } => {

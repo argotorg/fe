@@ -4,5 +4,10 @@ assertion_line: 27
 expression: err.to_string()
 input_file: tests/fixtures/errors/borrowck_read_under_mut.fe
 ---
-MIR errors while lowering `pub fn borrowck_read_under_mut()`:
-borrow conflict: access overlaps active `mut` loan
+error[10-0002]: borrow conflict in `fn borrowck_read_under_mut`
+  ┌─ borrowck_read_under_mut.fe:4:5
+  │
+3 │     let p: mut u256 = mut x
+  │                           - `x` is borrowed here
+4 │     let y: u256 = x
+  │     ^^^^^^^^^^^^^^^ access overlaps an active `mut` borrow

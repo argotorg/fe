@@ -1,5 +1,5 @@
 use crate::{
-    hir_def::{CallArg as HirCallArg, ExprId, GenericArgListId, IdentId},
+    hir_def::{CallArg as HirCallArg, Expr, ExprId, GenericArgListId, IdentId, Partial, UnOp},
     span::{
         DynLazySpan,
         expr::{LazyCallArgListSpan, LazyCallArgSpan},
@@ -16,12 +16,14 @@ use crate::analysis::{
         fold::{AssocTySubst, TyFoldable, TyFolder},
         trait_def::TraitInstId,
         trait_resolution::constraint::collect_func_def_constraints,
+        ty_def::BorrowKind,
         ty_def::{TyBase, TyData, TyId},
         ty_lower::lower_generic_arg_list,
         visitor::{TyVisitable, TyVisitor},
     },
 };
 use crate::hir_def::CallableDef;
+use crate::hir_def::params::FuncParamMode;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Update)]
 pub struct Callable<'db> {
@@ -189,6 +191,7 @@ impl<'db> Callable<'db> {
             let mut args = Vec::with_capacity(call_args.len() + 1);
             let arg = CallArg::new(
                 IdentId::make_self(db).into(),
+                receiver_expr,
                 receiver_prop,
                 None,
                 receiver_expr.span(tc.body()).into(),
@@ -209,6 +212,29 @@ impl<'db> Callable<'db> {
         }
 
         let expected_arg_tys = self.callable_def.arg_tys(db);
+        let func_params: Option<Vec<_>> = match self.callable_def {
+            CallableDef::Func(func) => {
+                let params: Vec<_> = func.params(db).collect();
+                if params.len() != expected_arg_tys.len() {
+                    panic!(
+                        "callable param length mismatch: expected {} param tys but have {} params",
+                        expected_arg_tys.len(),
+                        params.len()
+                    );
+                }
+                Some(params)
+            }
+            CallableDef::VariantCtor(_) => None,
+        };
+
+        let body = tc.body();
+        let is_unary = |expr: ExprId, op: UnOp| {
+            matches!(
+                expr.data(db, body),
+                Partial::Present(Expr::Un(_, found)) if *found == op
+            )
+        };
+
         for (i, (given, expected)) in args.into_iter().zip(expected_arg_tys.iter()).enumerate() {
             // Only check labels when the caller explicitly provides one.
             // If no label is provided (given.label is None), it's a positional argument.
@@ -232,6 +258,51 @@ impl<'db> Callable<'db> {
                 expected = expected.fold_with(db, &mut subst);
             }
             let expected = tc.normalize_ty(expected);
+
+            // Enforce explicit call-site borrow/move syntax for places.
+            //
+            // Borrow handles are copyable values, and `move` parameters consume their argument.
+            // Requiring explicit `ref`/`mut`/`move` on *place* arguments makes ownership/aliasing
+            // visible at the call site, and ensures MIR borrow checking sees the right loan/move
+            // operations to preserve soundness.
+            if let Some(params) = func_params.as_ref() {
+                let arg_is_place = tc.env.expr_place(given.expr).is_some();
+
+                if let Some((kind, _)) = expected.as_borrow(db)
+                    && arg_is_place
+                    && !is_unary(
+                        given.expr,
+                        match kind {
+                            BorrowKind::Mut => UnOp::Mut,
+                            BorrowKind::Ref => UnOp::Ref,
+                        },
+                    )
+                {
+                    tc.push_diag(BodyDiag::ExplicitReborrowRequired {
+                        primary: given.expr_span.clone(),
+                        kind,
+                    });
+                }
+
+                let mode = params
+                    .get(i)
+                    .copied()
+                    .unwrap_or_else(|| panic!("missing func param at index {i}"))
+                    .mode(db);
+                if mode == FuncParamMode::Move {
+                    if expected.as_borrow(db).is_some() {
+                        tc.push_diag(BodyDiag::MoveParamCannotBeBorrow {
+                            primary: given.expr_span.clone(),
+                            ty: expected,
+                        });
+                    } else if arg_is_place && !is_unary(given.expr, UnOp::Move) {
+                        tc.push_diag(BodyDiag::ExplicitMoveRequired {
+                            primary: given.expr_span.clone(),
+                        });
+                    }
+                }
+            }
+
             tc.equate_ty(given.expr_prop.ty, expected, given.expr_span);
         }
     }
@@ -240,6 +311,7 @@ impl<'db> Callable<'db> {
 /// The lowered representation of [`HirCallArg`]
 struct CallArg<'db> {
     label: Option<IdentId<'db>>,
+    expr: ExprId,
     expr_prop: ExprProp<'db>,
     label_span: Option<DynLazySpan<'db>>,
     expr_span: DynLazySpan<'db>,
@@ -269,17 +341,19 @@ impl<'db> CallArg<'db> {
         let label_span = arg.label.is_some().then(|| span.clone().label().into());
         let expr_span = span.expr().into();
 
-        Self::new(label, expr_prop, label_span, expr_span)
+        Self::new(label, arg.expr, expr_prop, label_span, expr_span)
     }
 
     fn new(
         label: Option<IdentId<'db>>,
+        expr: ExprId,
         expr_prop: ExprProp<'db>,
         label_span: Option<DynLazySpan<'db>>,
         expr_span: DynLazySpan<'db>,
     ) -> Self {
         Self {
             label,
+            expr,
             expr_prop,
             label_span,
             expr_span,

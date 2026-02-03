@@ -1,0 +1,9 @@
+// After creating a reborrowed `mut` handle, using the original handle is rejected.
+
+pub fn borrowck_use_reborrowed_mut_handle() {
+    let mut x: u256 = 0
+    let p: mut u256 = mut x
+    let q: mut u256 = mut p
+    p = 1
+    q = 2
+}
