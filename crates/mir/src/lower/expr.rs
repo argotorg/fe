@@ -2413,7 +2413,8 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
             Expr::Assign(target, value) => {
                 self.move_to_block(block);
                 let value_id = self.lower_expr(*value);
-                if let Some(binding) = self.typed_body.expr_prop(self.db, *target).binding
+                if self.place_for_expr(*target).is_none()
+                    && let Some(binding) = self.typed_body.expr_prop(self.db, *target).binding
                     && let LocalBinding::Local { pat, .. } = binding
                 {
                     let pat_ty = self.typed_body.pat_ty(self.db, pat);
@@ -2432,7 +2433,8 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
             Expr::AugAssign(target, value, op) => {
                 self.move_to_block(block);
                 let value_id = self.lower_expr(*value);
-                if let Some(binding) = self.typed_body.expr_prop(self.db, *target).binding
+                if self.place_for_expr(*target).is_none()
+                    && let Some(binding) = self.typed_body.expr_prop(self.db, *target).binding
                     && let LocalBinding::Local { pat, .. } = binding
                 {
                     let pat_ty = self.typed_body.pat_ty(self.db, pat);
