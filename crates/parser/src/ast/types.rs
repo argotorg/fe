@@ -8,6 +8,7 @@ ast_node! {
     /// If you want to match a specific kind of type, use `[Type::kind]`.
     pub struct Type,
     SK::PtrType
+    | SK::ModeType
     | SK::PathType
     | SK::SelfType
     | SK::TupleType
@@ -18,6 +19,7 @@ impl Type {
     pub fn kind(&self) -> TypeKind {
         match self.syntax().kind() {
             SK::PtrType => TypeKind::Ptr(AstNode::cast(self.syntax().clone()).unwrap()),
+            SK::ModeType => TypeKind::Mode(AstNode::cast(self.syntax().clone()).unwrap()),
             SK::PathType => TypeKind::Path(AstNode::cast(self.syntax().clone()).unwrap()),
             SK::TupleType => TypeKind::Tuple(AstNode::cast(self.syntax().clone()).unwrap()),
             SK::ArrayType => TypeKind::Array(AstNode::cast(self.syntax().clone()).unwrap()),
@@ -25,6 +27,41 @@ impl Type {
             _ => unreachable!(),
         }
     }
+}
+
+ast_node! {
+    /// A mode type.
+    /// `ref T`, `mut T`, `own T`
+    pub struct ModeType,
+    SK::ModeType,
+}
+impl ModeType {
+    pub fn mode_token(&self) -> Option<SyntaxToken> {
+        support::token(self.syntax(), SK::MutKw)
+            .or_else(|| support::token(self.syntax(), SK::RefKw))
+            .or_else(|| support::token(self.syntax(), SK::OwnKw))
+    }
+
+    pub fn mode(&self) -> Option<TypeMode> {
+        let token = self.mode_token()?;
+        match token.kind() {
+            SK::MutKw => Some(TypeMode::Mut(token)),
+            SK::RefKw => Some(TypeMode::Ref(token)),
+            SK::OwnKw => Some(TypeMode::Own(token)),
+            _ => None,
+        }
+    }
+
+    pub fn inner(&self) -> Option<Type> {
+        support::child(self.syntax())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum TypeMode {
+    Mut(SyntaxToken),
+    Ref(SyntaxToken),
+    Own(SyntaxToken),
 }
 
 ast_node! {
@@ -115,6 +152,7 @@ ast_node! {
 #[derive(Debug, Clone, PartialEq, Eq, Hash, derive_more::From, derive_more::TryInto)]
 pub enum TypeKind {
     Ptr(PtrType),
+    Mode(ModeType),
     Path(PathType),
     Tuple(TupleType),
     Array(ArrayType),
@@ -203,5 +241,13 @@ mod tests {
             TypeKind::Tuple(_)
         ));
         assert!(array_ty.len().is_some());
+    }
+
+    #[test]
+    #[wasm_bindgen_test]
+    fn mode_type() {
+        let mode_ty: ModeType = parse_type("ref Foo");
+        assert!(matches!(mode_ty.mode().unwrap(), TypeMode::Ref(_)));
+        assert!(matches!(mode_ty.inner().unwrap().kind(), TypeKind::Path(_)));
     }
 }

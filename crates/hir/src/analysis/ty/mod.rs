@@ -15,7 +15,7 @@ use diagnostics::{DefConflictError, TraitLowerDiag, TyLowerDiag};
 use rustc_hash::{FxHashMap, FxHashSet};
 use smallvec1::SmallVec;
 use trait_resolution::constraint::super_trait_cycle;
-use ty_def::{InvalidCause, TyData, TyId};
+use ty_def::{BorrowKind, InvalidCause, TyData, TyId};
 use ty_lower::lower_type_alias;
 
 use crate::analysis::name_resolution::{PathRes, resolve_path};
@@ -57,6 +57,13 @@ pub mod visitor;
 pub use msg_selector::MsgSelectorAnalysisPass;
 
 const DEFAULT_TARGET_TY_PATH: &[&str] = &["std", "evm", "EvmTarget"];
+
+pub fn ty_is_borrow<'db>(
+    db: &'db dyn HirAnalysisDb,
+    ty: TyId<'db>,
+) -> Option<(BorrowKind, TyId<'db>)> {
+    ty.as_borrow(db)
+}
 
 /// An analysis pass for type definitions.
 pub struct AdtDefAnalysisPass {}

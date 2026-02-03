@@ -16,6 +16,9 @@ pub fn parse_type<S: TokenStream>(
 ) -> Result<Checkpoint, Recovery<ErrProof>> {
     match parser.current_kind() {
         Some(SyntaxKind::Star) => parser.parse_cp(PtrTypeScope::default(), checkpoint),
+        Some(SyntaxKind::MutKw | SyntaxKind::RefKw | SyntaxKind::OwnKw) => {
+            parser.parse_cp(ModeTypeScope::default(), checkpoint)
+        }
         Some(SyntaxKind::LParen) => parser.parse_cp(TupleTypeScope::default(), checkpoint),
         Some(SyntaxKind::LBracket) => parser.parse_cp(ArrayTypeScope::default(), checkpoint),
         Some(SyntaxKind::Not) => parser
@@ -30,6 +33,7 @@ pub(crate) fn is_type_start(kind: SyntaxKind) -> bool {
         SyntaxKind::Star | SyntaxKind::SelfTypeKw | SyntaxKind::LParen | SyntaxKind::LBracket => {
             true
         }
+        SyntaxKind::MutKw | SyntaxKind::RefKw | SyntaxKind::OwnKw => true,
         kind if is_path_segment(kind) => true,
         _ => false,
     }
@@ -41,6 +45,20 @@ impl super::Parse for PtrTypeScope {
     fn parse<S: TokenStream>(&mut self, parser: &mut Parser<S>) -> Result<(), Self::Error> {
         parser.set_newline_as_trivia(false);
         parser.bump_expected(SyntaxKind::Star);
+        parse_type(parser, None).map(|_| ())
+    }
+}
+
+define_scope!(ModeTypeScope, ModeType);
+impl super::Parse for ModeTypeScope {
+    type Error = Recovery<ErrProof>;
+    fn parse<S: TokenStream>(&mut self, parser: &mut Parser<S>) -> Result<(), Self::Error> {
+        parser.set_newline_as_trivia(false);
+        parser.expect(
+            &[SyntaxKind::MutKw, SyntaxKind::RefKw, SyntaxKind::OwnKw],
+            None,
+        )?;
+        parser.bump();
         parse_type(parser, None).map(|_| ())
     }
 }

@@ -339,6 +339,15 @@ pub enum BodyDiag<'db> {
     },
     UnsupportedUnaryPlus(DynLazySpan<'db>),
 
+    BorrowFromNonPlace {
+        primary: DynLazySpan<'db>,
+    },
+
+    CannotBorrowMut {
+        primary: DynLazySpan<'db>,
+        binding: Option<(IdentId<'db>, DynLazySpan<'db>)>,
+    },
+
     NonAssignableExpr(DynLazySpan<'db>),
 
     ImmutableAssignment {
@@ -620,6 +629,8 @@ impl<'db> BodyDiag<'db> {
             Self::AccessedFieldNotFound { .. } => 15,
             Self::OpsTraitNotImplemented { .. } => 16,
             Self::UnsupportedUnaryPlus(..) => 52,
+            Self::BorrowFromNonPlace { .. } => 65,
+            Self::CannotBorrowMut { .. } => 66,
             Self::NonAssignableExpr(..) => 17,
             Self::ImmutableAssignment { .. } => 18,
             Self::LoopControlOutsideOfLoop { .. } => 19,

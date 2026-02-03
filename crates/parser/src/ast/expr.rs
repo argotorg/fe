@@ -563,6 +563,12 @@ pub enum UnOp {
     Not(SyntaxToken),
     /// `~`
     BitNot(SyntaxToken),
+    /// `mut`
+    Mut(SyntaxToken),
+    /// `ref`
+    Ref(SyntaxToken),
+    /// `move`
+    Move(SyntaxToken),
 }
 impl UnOp {
     pub fn syntax(&self) -> SyntaxToken {
@@ -571,6 +577,9 @@ impl UnOp {
             UnOp::Minus(token) => token.clone(),
             UnOp::Not(token) => token.clone(),
             UnOp::BitNot(token) => token.clone(),
+            UnOp::Mut(token) => token.clone(),
+            UnOp::Ref(token) => token.clone(),
+            UnOp::Move(token) => token.clone(),
         }
     }
 
@@ -580,6 +589,9 @@ impl UnOp {
             SK::Minus => Some(Self::Minus(token)),
             SK::Not => Some(Self::Not(token)),
             SK::Tilde => Some(Self::BitNot(token)),
+            SK::MutKw => Some(Self::Mut(token)),
+            SK::RefKw => Some(Self::Ref(token)),
+            SK::MoveKw => Some(Self::Move(token)),
             _ => None,
         }
     }
@@ -794,6 +806,22 @@ mod tests {
         let un_expr: UnExpr = parse_expr("-1");
         assert!(matches!(un_expr.op().unwrap(), UnOp::Minus(_)));
         assert!(matches!(un_expr.expr().unwrap().kind(), ExprKind::Lit(_)));
+    }
+
+    #[test]
+    #[wasm_bindgen_test]
+    fn un_expr_place_ops() {
+        let un_expr: UnExpr = parse_expr("mut x");
+        assert!(matches!(un_expr.op().unwrap(), UnOp::Mut(_)));
+        assert!(matches!(un_expr.expr().unwrap().kind(), ExprKind::Path(_)));
+
+        let un_expr: UnExpr = parse_expr("ref x");
+        assert!(matches!(un_expr.op().unwrap(), UnOp::Ref(_)));
+        assert!(matches!(un_expr.expr().unwrap().kind(), ExprKind::Path(_)));
+
+        let un_expr: UnExpr = parse_expr("move x");
+        assert!(matches!(un_expr.op().unwrap(), UnOp::Move(_)));
+        assert!(matches!(un_expr.expr().unwrap().kind(), ExprKind::Path(_)));
     }
 
     #[test]

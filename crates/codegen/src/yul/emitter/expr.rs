@@ -103,6 +103,9 @@ impl<'db> FunctionEmitter<'db> {
                     UnOp::Not => Ok(format!("iszero({value})")),
                     UnOp::Plus => Ok(value),
                     UnOp::BitNot => Ok(format!("not({value})")),
+                    UnOp::Move => todo!(),
+                    UnOp::Mut => todo!(),
+                    UnOp::Ref => todo!(),
                 }
             }
             ValueOrigin::Binary { op, lhs, rhs } => {
@@ -174,6 +177,7 @@ impl<'db> FunctionEmitter<'db> {
             ValueOrigin::Synthetic(synth) => self.lower_synthetic_value(synth),
             ValueOrigin::FieldPtr(field_ptr) => self.lower_field_ptr(field_ptr, state),
             ValueOrigin::PlaceRef(place) => self.lower_place_ref(place, state),
+            ValueOrigin::MoveOut { place } => self.lower_place_load(place, value.ty, state),
             ValueOrigin::TransparentCast { value } => self.lower_value(*value, state),
         }
     }
@@ -378,10 +382,13 @@ impl<'db> FunctionEmitter<'db> {
                     // Full-width signed doesn't need masking, sign is already there
                     raw_load.to_string()
                 }
-                // String, Array, Tuple, Ptr are aggregate/pointer types - no conversion
-                PrimTy::String | PrimTy::Array | PrimTy::Tuple(_) | PrimTy::Ptr => {
-                    raw_load.to_string()
-                }
+                // Aggregate/pointer-like types - no conversion
+                PrimTy::String
+                | PrimTy::Array
+                | PrimTy::Tuple(_)
+                | PrimTy::Ptr
+                | PrimTy::BorrowMut
+                | PrimTy::BorrowRef => raw_load.to_string(),
             }
         } else {
             // Non-primitive types (aggregates, etc.) - no conversion
@@ -411,9 +418,12 @@ impl<'db> FunctionEmitter<'db> {
                 | PrimTy::I128
                 | PrimTy::I256
                 | PrimTy::Isize => raw_value.to_string(),
-                PrimTy::String | PrimTy::Array | PrimTy::Tuple(_) | PrimTy::Ptr => {
-                    raw_value.to_string()
-                }
+                PrimTy::String
+                | PrimTy::Array
+                | PrimTy::Tuple(_)
+                | PrimTy::Ptr
+                | PrimTy::BorrowMut
+                | PrimTy::BorrowRef => raw_value.to_string(),
             }
         } else {
             raw_value.to_string()

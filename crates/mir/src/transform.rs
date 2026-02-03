@@ -295,13 +295,18 @@ pub(crate) fn canonicalize_transparent_newtypes<'db>(
 
     let initial_values_len = values.len();
     for idx in 0..initial_values_len {
-        let place = match &values[idx].origin {
-            ValueOrigin::PlaceRef(place) => Some(place.clone()),
-            _ => None,
+        let (place, is_move_out) = match &values[idx].origin {
+            ValueOrigin::PlaceRef(place) => (Some(place.clone()), false),
+            ValueOrigin::MoveOut { place } => (Some(place.clone()), true),
+            _ => (None, false),
         };
         if let Some(place) = place {
             let updated = canonicalize_place(db, values, locals, place);
-            values[idx].origin = ValueOrigin::PlaceRef(updated);
+            values[idx].origin = if is_move_out {
+                ValueOrigin::MoveOut { place: updated }
+            } else {
+                ValueOrigin::PlaceRef(updated)
+            };
         }
     }
 
@@ -563,7 +568,7 @@ fn value_deps_in_eval_order(origin: &ValueOrigin<'_>) -> Vec<ValueId> {
         ValueOrigin::Unary { inner, .. } => vec![*inner],
         ValueOrigin::Binary { lhs, rhs, .. } => vec![*lhs, *rhs],
         ValueOrigin::FieldPtr(field_ptr) => vec![field_ptr.base],
-        ValueOrigin::PlaceRef(place) => {
+        ValueOrigin::PlaceRef(place) | ValueOrigin::MoveOut { place } => {
             let mut deps = vec![place.base];
             for proj in place.projection.iter() {
                 if let Projection::Index(IndexSource::Dynamic(value)) = proj {

@@ -226,6 +226,9 @@ fn format_value_inner(
                 UnOp::Minus => format!("(-{inner})"),
                 UnOp::Not => format!("(!{inner})"),
                 UnOp::BitNot => format!("(~{inner})"),
+                UnOp::Mut => format!("(mut {inner})"),
+                UnOp::Ref => format!("(ref {inner})"),
+                UnOp::Move => format!("(move {inner})"),
             }
         }
         ValueOrigin::Binary { op, lhs, rhs } => {
@@ -261,6 +264,7 @@ fn format_value_inner(
             }
         }
         ValueOrigin::PlaceRef(place) => format!("&{}", format_place(body, place)),
+        ValueOrigin::MoveOut { place } => format!("move_out({})", format_place(body, place)),
         ValueOrigin::TransparentCast { value } => {
             format_value_inner(body, *value, stack, depth + 1)
         }

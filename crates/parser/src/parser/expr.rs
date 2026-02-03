@@ -134,7 +134,7 @@ fn parse_expr_atom<S: TokenStream>(
 fn prefix_binding_power(kind: SyntaxKind) -> Option<u8> {
     use SyntaxKind::*;
     match kind {
-        Not | Plus | Minus | Tilde => Some(145),
+        Not | Plus | Minus | Tilde | MutKw | RefKw | MoveKw => Some(145),
         _ => None,
     }
 }

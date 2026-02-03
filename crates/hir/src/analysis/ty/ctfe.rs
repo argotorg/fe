@@ -412,6 +412,10 @@ impl<'db> CtfeInterpreter<'db> {
                 };
                 Ok(lit_int(self.db, ty, out))
             }
+
+            UnOp::Mut | UnOp::Ref | UnOp::Move => {
+                Err(InvalidCause::ConstEvalUnsupported { body, expr }.into())
+            }
         }
     }
 

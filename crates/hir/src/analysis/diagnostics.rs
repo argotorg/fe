@@ -2396,6 +2396,42 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                 error_code,
             },
 
+            Self::BorrowFromNonPlace { primary } => CompleteDiagnostic {
+                severity: Severity::Error,
+                message: "cannot borrow from this expression".to_string(),
+                sub_diagnostics: vec![SubDiagnostic {
+                    style: LabelStyle::Primary,
+                    message: "expected a place expression".to_string(),
+                    span: primary.resolve(db),
+                }],
+                notes: vec![],
+                error_code,
+            },
+
+            Self::CannotBorrowMut { primary, binding } => {
+                let mut sub_diagnostics = vec![SubDiagnostic {
+                    style: LabelStyle::Primary,
+                    message: "cannot borrow as `mut`".to_string(),
+                    span: primary.resolve(db),
+                }];
+
+                if let Some((name, span)) = binding {
+                    sub_diagnostics.push(SubDiagnostic {
+                        style: LabelStyle::Secondary,
+                        message: format!("try changing to `let mut {}`", name.data(db)),
+                        span: span.resolve(db),
+                    });
+                }
+
+                CompleteDiagnostic {
+                    severity: Severity::Error,
+                    message: "mutable borrow requires a mutable place".to_string(),
+                    sub_diagnostics,
+                    notes: vec![],
+                    error_code,
+                }
+            }
+
             Self::NonAssignableExpr(primary) => CompleteDiagnostic {
                 severity: Severity::Error,
                 message: "not assignable left-hand side of assignment".to_string(),

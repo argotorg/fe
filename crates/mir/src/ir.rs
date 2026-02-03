@@ -177,6 +177,7 @@ pub(crate) fn try_value_address_space_in<'db>(
         }
         ValueOrigin::FieldPtr(field_ptr) => Some(field_ptr.addr_space),
         ValueOrigin::PlaceRef(place) => try_value_address_space_in(values, locals, place.base),
+        ValueOrigin::MoveOut { place } => try_value_address_space_in(values, locals, place.base),
         _ => None,
     }
 }
@@ -445,6 +446,10 @@ pub enum ValueOrigin<'db> {
     FieldPtr(FieldPtrOrigin),
     /// Reference to a place (for aggregates - pointer arithmetic only, no load).
     PlaceRef(Place<'db>),
+    /// Marker for `move <place>` expressions (runtime no-op, analysis hook).
+    MoveOut {
+        place: Place<'db>,
+    },
     /// A representation-preserving coercion (e.g. transparent wrapper construction).
     ///
     /// This keeps the logical type of the value (`ValueData::ty`) while reusing the runtime

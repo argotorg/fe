@@ -30,7 +30,7 @@ use crate::analysis::ty::{
         is_goal_satisfiable,
     },
     ty_check::callable::Callable,
-    ty_def::{PrimTy, TyBase, TyData, prim_int_bits},
+    ty_def::{BorrowKind, PrimTy, TyBase, TyData, prim_int_bits},
 };
 use crate::analysis::{
     HirAnalysisDb, Spanned,
@@ -241,6 +241,40 @@ impl<'db> TyChecker<'db> {
         if prop.ty.is_integral_var(self.db) && matches!(op, UnOp::Plus | UnOp::Minus | UnOp::BitNot)
         {
             return prop;
+        }
+
+        if matches!(op, UnOp::Mut | UnOp::Ref | UnOp::Move) {
+            if self.env.expr_place(*lhs).is_none() {
+                self.push_diag(BodyDiag::BorrowFromNonPlace {
+                    primary: expr.span(self.body()).into(),
+                });
+                return ExprProp::invalid(self.db);
+            }
+
+            let place_ty = prop
+                .ty
+                .as_borrow(self.db)
+                .map(|(_, inner)| inner)
+                .unwrap_or(prop.ty);
+
+            return match op {
+                UnOp::Ref => ExprProp::new(TyId::borrow_ref_of(self.db, place_ty), false),
+                UnOp::Mut => {
+                    if !prop.is_mut {
+                        let binding = self.find_base_binding(*lhs).map(|binding| {
+                            (binding.binding_name(&self.env), binding.def_span(&self.env))
+                        });
+                        self.push_diag(BodyDiag::CannotBorrowMut {
+                            primary: expr.span(self.body()).into(),
+                            binding,
+                        });
+                        return ExprProp::invalid(self.db);
+                    }
+                    ExprProp::new(TyId::borrow_mut_of(self.db, place_ty), true)
+                }
+                UnOp::Move => ExprProp::new(place_ty, true),
+                _ => unreachable!(),
+            };
         }
 
         let base_ty = prop.ty.base_ty(self.db);
@@ -528,9 +562,15 @@ impl<'db> TyChecker<'db> {
             return ExprProp::invalid(self.db);
         }
 
-        if matches!(op, BinOp::Index) && lhs.ty.is_array(self.db) {
+        let lhs_place_ty = lhs
+            .ty
+            .as_borrow(self.db)
+            .map(|(_, inner)| inner)
+            .unwrap_or(lhs.ty);
+
+        if matches!(op, BinOp::Index) && lhs_place_ty.is_array(self.db) {
             // Built-in array indexing (TODO: move to trait impl)
-            let args = lhs.ty.generic_args(self.db);
+            let args = lhs_place_ty.generic_args(self.db);
             let elem_ty = args[0];
             let index_ty = args[1].const_ty_ty(self.db).unwrap();
             self.check_expr(rhs_expr, index_ty);
@@ -1493,7 +1533,10 @@ impl<'db> TyChecker<'db> {
         match res {
             ResolvedPathInBody::Binding(binding) => {
                 let ty = self.env.lookup_binding_ty(&binding);
-                let is_mut = binding.is_mut();
+                let mut is_mut = binding.is_mut();
+                if let Some((kind, _)) = ty.as_borrow(self.db) {
+                    is_mut = matches!(kind, BorrowKind::Mut);
+                }
                 ExprProp::new_binding_ref(ty, is_mut, binding)
             }
             ResolvedPathInBody::NewBinding(ident) => {
@@ -1880,14 +1923,18 @@ impl<'db> TyChecker<'db> {
         let lhs_ty = self.fresh_ty();
         let typed_lhs = self.check_expr(*lhs, lhs_ty);
         let lhs_ty = typed_lhs.ty;
+        let lhs_place_ty = lhs_ty
+            .as_borrow(self.db)
+            .map(|(_, inner)| inner)
+            .unwrap_or(lhs_ty);
         // let lhs_ty = normalize_ty(self.db, lhs_ty, self.env.scope(), self.env.assumptions());
 
-        let (ty_base, ty_args) = lhs_ty.decompose_ty_app(self.db);
+        let (ty_base, ty_args) = lhs_place_ty.decompose_ty_app(self.db);
 
         if ty_base.has_invalid(self.db) {
             return ExprProp::invalid(self.db);
         }
-        let ty_base = lhs_ty;
+        let ty_base = lhs_place_ty;
 
         if ty_base.is_ty_var(self.db) {
             let diag = BodyDiag::TypeMustBeKnown(lhs.span(self.body()).into());
@@ -1897,7 +1944,7 @@ impl<'db> TyChecker<'db> {
 
         match field {
             FieldIndex::Ident(label) => {
-                let record_like = RecordLike::from_ty(lhs_ty);
+                let record_like = RecordLike::from_ty(lhs_place_ty);
                 if let Some(field_ty) = record_like.record_field_ty(self.db, *label) {
                     if let Some(scope) = record_like.record_field_scope(self.db, *label)
                         && !is_scope_visible_from(self.db, scope, self.env.scope())
@@ -1928,7 +1975,7 @@ impl<'db> TyChecker<'db> {
 
         let diag = BodyDiag::AccessedFieldNotFound {
             primary: expr.span(self.body()).into(),
-            given_ty: lhs_ty,
+            given_ty: lhs_place_ty,
             index: *field,
         };
         self.push_diag(diag);
@@ -2142,8 +2189,12 @@ impl<'db> TyChecker<'db> {
             unreachable!()
         };
 
-        let lhs_ty = self.fresh_ty();
-        let typed_lhs = self.check_expr(*lhs, lhs_ty);
+        let typed_lhs = self.check_expr_unknown(*lhs);
+        let lhs_ty = typed_lhs
+            .ty
+            .as_borrow(self.db)
+            .map(|(_, inner)| inner)
+            .unwrap_or(typed_lhs.ty);
         self.check_expr(*rhs, lhs_ty);
 
         self.check_assign_lhs(*lhs, &typed_lhs);
@@ -2160,25 +2211,29 @@ impl<'db> TyChecker<'db> {
 
         let typed_lhs = self.check_expr_unknown(*lhs);
         let lhs_ty = typed_lhs.ty;
+        let lhs_place_ty = lhs_ty
+            .as_borrow(self.db)
+            .map(|(_, inner)| inner)
+            .unwrap_or(lhs_ty);
         if lhs_ty.has_invalid(self.db) {
             return unit;
         }
         self.check_assign_lhs(*lhs, &typed_lhs);
 
         // Avoid 'type must be known' diagnostics for unknown integer ty
-        if lhs_ty.is_integral_var(self.db) {
-            self.check_expr(*rhs, lhs_ty);
+        if lhs_place_ty.is_integral_var(self.db) {
+            self.check_expr(*rhs, lhs_place_ty);
             return unit;
         }
 
-        let lhs_base_ty = lhs_ty.base_ty(self.db);
+        let lhs_base_ty = lhs_place_ty.base_ty(self.db);
         if lhs_base_ty.is_ty_var(self.db) {
             let diag = BodyDiag::TypeMustBeKnown(lhs.span(self.body()).into());
             self.push_diag(diag);
             return unit;
         }
 
-        self.check_ops_trait(expr, lhs_ty, &AugAssignOp(*op), Some(*rhs));
+        self.check_ops_trait(expr, lhs_place_ty, &AugAssignOp(*op), Some(*rhs));
 
         // Return unit ty even if trait resolution fails
         unit
@@ -2577,6 +2632,9 @@ impl TraitOps for UnOp {
             UnOp::Minus => ["Neg", "neg", "-"],
             UnOp::Not => ["Not", "not", "!"],
             UnOp::BitNot => ["BitNot", "bit_not", "~"],
+            UnOp::Mut => ["MutBorrow", "mut_borrow", "mut"],
+            UnOp::Ref => ["RefBorrow", "ref_borrow", "ref"],
+            UnOp::Move => ["Move", "move", "move"],
         }
     }
 }

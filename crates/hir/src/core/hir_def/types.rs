@@ -10,10 +10,12 @@ pub struct TypeId<'db> {
 
 impl<'db> TypeId<'db> {
     pub fn is_self_ty(self, db: &dyn HirDb) -> bool {
-        if let TypeKind::Path(path) = self.data(db) {
-            (|| Some(path.to_opt()?.as_ident(db)?.data(db) == "Self"))().unwrap_or(false)
-        } else {
-            false
+        match self.data(db) {
+            TypeKind::Path(path) => {
+                (|| Some(path.to_opt()?.as_ident(db)?.data(db) == "Self"))().unwrap_or(false)
+            }
+            TypeKind::Mode(_, inner) => inner.to_opt().is_some_and(|ty| ty.is_self_ty(db)),
+            _ => false,
         }
     }
 
@@ -35,6 +37,7 @@ impl<'db> TypeId<'db> {
 
         match self.data(db) {
             TypeKind::Ptr(t) => format!("*{}", print_ty(t)),
+            TypeKind::Mode(mode, t) => format!("{} {}", mode.keyword(), print_ty(t)),
             TypeKind::Path(p) => p
                 .to_opt()
                 .map_or_else(|| "<missing>".into(), |p| p.pretty_print(db)),
@@ -68,9 +71,27 @@ impl<'db> TypeId<'db> {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum TypeMode {
+    Mut,
+    Ref,
+    Own,
+}
+
+impl TypeMode {
+    pub fn keyword(self) -> &'static str {
+        match self {
+            TypeMode::Mut => "mut",
+            TypeMode::Ref => "ref",
+            TypeMode::Own => "own",
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum TypeKind<'db> {
     Ptr(Partial<TypeId<'db>>),
+    Mode(TypeMode, Partial<TypeId<'db>>),
     Path(Partial<PathId<'db>>),
     Tuple(TupleTypeId<'db>),
     /// The first `TypeId` is the element type, the second `Body` is the length.

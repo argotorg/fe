@@ -142,6 +142,9 @@ impl<'db, 'a> FunctionHasher<'db, 'a> {
                     hir::hir_def::expr::UnOp::Not => 1,
                     hir::hir_def::expr::UnOp::Plus => 2,
                     hir::hir_def::expr::UnOp::BitNot => 3,
+                    hir::hir_def::expr::UnOp::Mut => 4,
+                    hir::hir_def::expr::UnOp::Ref => 5,
+                    hir::hir_def::expr::UnOp::Move => 6,
                 });
                 let inner = self.placeholder_value(*inner);
                 self.write_u32(inner);
@@ -223,6 +226,10 @@ impl<'db, 'a> FunctionHasher<'db, 'a> {
             }
             ValueOrigin::PlaceRef(place) => {
                 self.write_u8(0x0F);
+                self.hash_place(place);
+            }
+            ValueOrigin::MoveOut { place } => {
+                self.write_u8(0x12);
                 self.hash_place(place);
             }
             ValueOrigin::TransparentCast { value } => {

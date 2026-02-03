@@ -218,6 +218,15 @@ pub enum SyntaxKind {
     /// `mut`
     #[token("mut")]
     MutKw,
+    /// `ref`
+    #[token("ref")]
+    RefKw,
+    /// `own`
+    #[token("own")]
+    OwnKw,
+    /// `move`
+    #[token("move")]
+    MoveKw,
     /// `use`
     #[token("use")]
     UseKw,
@@ -419,6 +428,8 @@ pub enum SyntaxKind {
     // Types. These are non-leaf nodes.
     /// `*i32`
     PtrType,
+    /// `ref T`, `mut T`, `own T`
+    ModeType,
     /// `foo::Type<T, U + 2>`
     PathType,
     /// `Self`
@@ -637,6 +648,9 @@ impl SyntaxKind {
             SyntaxKind::TypeKw => "`type`",
             SyntaxKind::LetKw => "`let`",
             SyntaxKind::MutKw => "`mut`",
+            SyntaxKind::RefKw => "`ref`",
+            SyntaxKind::OwnKw => "`own`",
+            SyntaxKind::MoveKw => "`move`",
             SyntaxKind::UseKw => "`use`",
             SyntaxKind::ExternKw => "`extern`",
             SyntaxKind::UnsafeKw => "`unsafe`",
@@ -744,6 +758,7 @@ impl SyntaxKind {
             SyntaxKind::ExternItemList => "`extern` body",
             SyntaxKind::ItemList => "item list",
             SyntaxKind::PtrType => "pointer type",
+            SyntaxKind::ModeType => "mode type",
             SyntaxKind::SelfType => "`Self` type",
             SyntaxKind::TupleType => "tuple type definition",
             SyntaxKind::NeverType => "never type",
@@ -849,6 +864,9 @@ impl SyntaxKind {
                 | SyntaxKind::TypeKw
                 | SyntaxKind::LetKw
                 | SyntaxKind::MutKw
+                | SyntaxKind::RefKw
+                | SyntaxKind::OwnKw
+                | SyntaxKind::MoveKw
                 | SyntaxKind::UseKw
                 | SyntaxKind::ExternKw
                 | SyntaxKind::UnsafeKw
