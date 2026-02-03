@@ -1,0 +1,8 @@
+---
+source: crates/mir/tests/lowering_errors.rs
+assertion_line: 27
+expression: err.to_string()
+input_file: tests/fixtures/errors/noesc_storage_escape.fe
+---
+MIR errors while lowering `fn noesc_storage_escape() uses (mut slot: Esc)`:
+cannot store NoEsc value `Esc` into `Storage`

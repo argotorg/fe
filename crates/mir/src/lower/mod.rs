@@ -184,8 +184,12 @@ pub fn lower_module<'db>(
     }
     for func in &functions {
         if let Some(diagnostics) = crate::analysis::noesc::check_noesc_escapes(db, func) {
+            let func_name = match func.origin {
+                crate::ir::MirFunctionOrigin::Hir(hir_func) => hir_func.pretty_print_signature(db),
+                crate::ir::MirFunctionOrigin::Synthetic(_) => func.symbol_name.clone(),
+            };
             return Err(MirLowerError::MirDiagnostics {
-                func_name: func.symbol_name.clone(),
+                func_name,
                 diagnostics,
             });
         }
