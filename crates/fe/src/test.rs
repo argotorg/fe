@@ -10,6 +10,7 @@ use common::InputDb;
 use contract_harness::{ExecutionOptions, RuntimeInstance};
 use driver::DriverDataBase;
 use hir::hir_def::{HirIngot, TopLevelMod};
+use rustc_hash::FxHashSet;
 use solc_runner::compile_single_contract;
 use url::Url;
 
@@ -103,7 +104,7 @@ impl TestDebugOptions {
         }
     }
 
-    fn configure_per_test_env(&self, test_name: &str) {
+    fn configure_per_test_env(&self, test_suite: Option<&str>, test_name: &str) {
         let Some(dir) = &self.debug_dir else {
             return;
         };
@@ -111,7 +112,15 @@ impl TestDebugOptions {
             return;
         }
 
-        let mut file = sanitize_filename(test_name);
+        let mut file = String::new();
+        if let Some(suite) = test_suite {
+            let suite = sanitize_filename(suite);
+            if !suite.is_empty() {
+                file.push_str(&suite);
+                file.push_str("__");
+            }
+        }
+        file.push_str(&sanitize_filename(test_name));
         if file.is_empty() {
             file = "test".to_string();
         }
@@ -138,31 +147,51 @@ fn sanitize_filename(component: &str) -> String {
 /// Run tests in the given path.
 ///
 /// # Arguments
-/// * `path` - Path to a .fe file or directory containing an ingot
+/// * `paths` - Paths to .fe files or directories containing ingots (supports globs)
 /// * `filter` - Optional filter pattern for test names
 /// * `show_logs` - Whether to show event logs from test execution
 /// * `backend` - Codegen backend for test artifacts ("yul" or "sonatina")
 ///
 /// Returns nothing; exits the process on invalid input or test failures.
 pub fn run_tests(
-    path: &Utf8PathBuf,
+    paths: &[Utf8PathBuf],
     filter: Option<&str>,
     show_logs: bool,
     backend: &str,
     debug: &TestDebugOptions,
 ) {
     debug.configure_process_env();
-    let mut db = DriverDataBase::default();
+    let input_paths = expand_test_paths(paths);
 
-    // Determine if we're dealing with a single file or an ingot directory
-    let test_results = if path.is_file() && path.extension() == Some("fe") {
-        run_tests_single_file(&mut db, path, filter, show_logs, backend, debug)
-    } else if path.is_dir() {
-        run_tests_ingot(&mut db, path, filter, show_logs, backend, debug)
-    } else {
-        eprintln!("Error: Path must be either a .fe file or a directory containing fe.toml");
-        std::process::exit(1);
-    };
+    let mut test_results = Vec::new();
+    let multi = input_paths.len() > 1;
+    if multi {
+        println!("running `fe test` for {} inputs\n", input_paths.len());
+    }
+
+    for path in input_paths {
+        let suite = suite_name_for_path(&path);
+
+        if multi {
+            println!("==> {path}");
+        }
+
+        let mut db = DriverDataBase::default();
+        let suite_results = if path.is_file() && path.extension() == Some("fe") {
+            run_tests_single_file(&mut db, &path, &suite, filter, show_logs, backend, debug)
+        } else if path.is_dir() {
+            run_tests_ingot(&mut db, &path, &suite, filter, show_logs, backend, debug)
+        } else {
+            eprintln!("Error: Path must be either a .fe file or a directory containing fe.toml");
+            std::process::exit(1);
+        };
+
+        if suite_results.is_empty() {
+            eprintln!("No tests found in {path}");
+        } else {
+            test_results.extend(suite_results);
+        }
+    }
 
     // Print summary
     print_summary(&test_results);
@@ -184,6 +213,7 @@ pub fn run_tests(
 fn run_tests_single_file(
     db: &mut DriverDataBase,
     file_path: &Utf8PathBuf,
+    suite: &str,
     filter: Option<&str>,
     show_logs: bool,
     backend: &str,
@@ -228,7 +258,7 @@ fn run_tests_single_file(
     }
 
     // Discover and run tests
-    discover_and_run_tests(db, top_mod, filter, show_logs, backend, debug)
+    discover_and_run_tests(db, top_mod, suite, filter, show_logs, backend, debug)
 }
 
 /// Runs tests in an ingot directory (containing `fe.toml`).
@@ -242,6 +272,7 @@ fn run_tests_single_file(
 fn run_tests_ingot(
     db: &mut DriverDataBase,
     dir_path: &Utf8PathBuf,
+    suite: &str,
     filter: Option<&str>,
     show_logs: bool,
     backend: &str,
@@ -281,7 +312,7 @@ fn run_tests_ingot(
     }
 
     let root_mod = ingot.root_mod(db);
-    discover_and_run_tests(db, root_mod, filter, show_logs, backend, debug)
+    discover_and_run_tests(db, root_mod, suite, filter, show_logs, backend, debug)
 }
 
 /// Discovers `#[test]` functions, compiles them, and executes each one.
@@ -295,6 +326,7 @@ fn run_tests_ingot(
 fn discover_and_run_tests(
     db: &DriverDataBase,
     top_mod: TopLevelMod<'_>,
+    suite: &str,
     filter: Option<&str>,
     show_logs: bool,
     backend: &str,
@@ -323,7 +355,6 @@ fn discover_and_run_tests(
     };
 
     if output.tests.is_empty() {
-        eprintln!("No tests found");
         return Vec::new();
     }
 
@@ -342,7 +373,7 @@ fn discover_and_run_tests(
         // Print test name
         print!("test {} ... ", case.display_name);
 
-        debug.configure_per_test_env(&case.display_name);
+        debug.configure_per_test_env(Some(suite), &case.display_name);
 
         // Compile and run the test
         let outcome = compile_and_run_test(case, show_logs, backend.as_str());
@@ -372,6 +403,87 @@ fn discover_and_run_tests(
     }
 
     results
+}
+
+fn suite_name_for_path(path: &Utf8PathBuf) -> String {
+    let raw = if path.is_file() {
+        path.file_stem()
+            .map(|s| s.to_string())
+            .unwrap_or_else(|| "tests".to_string())
+    } else {
+        path.file_name()
+            .map(|s| s.to_string())
+            .unwrap_or_else(|| "tests".to_string())
+    };
+    let sanitized = sanitize_filename(&raw);
+    if sanitized.is_empty() {
+        "tests".to_string()
+    } else {
+        sanitized
+    }
+}
+
+fn expand_test_paths(inputs: &[Utf8PathBuf]) -> Vec<Utf8PathBuf> {
+    let mut expanded = Vec::new();
+    let mut seen: FxHashSet<String> = FxHashSet::default();
+
+    for input in inputs {
+        if input.exists() {
+            let key = input.as_str().to_string();
+            if seen.insert(key) {
+                expanded.push(input.clone());
+            }
+            continue;
+        }
+
+        let pattern = input.as_str();
+        if !looks_like_glob(pattern) {
+            eprintln!("Error: path does not exist: {input}");
+            std::process::exit(1);
+        }
+
+        let mut matches = Vec::new();
+        let entries = glob::glob(pattern).unwrap_or_else(|err| {
+            eprintln!("Error: invalid glob pattern `{pattern}`: {err}");
+            std::process::exit(1);
+        });
+        for entry in entries {
+            let path = match entry {
+                Ok(path) => path,
+                Err(err) => {
+                    eprintln!("Error: glob entry error for `{pattern}`: {err}");
+                    std::process::exit(1);
+                }
+            };
+            let utf8 = match Utf8PathBuf::from_path_buf(path) {
+                Ok(path) => path,
+                Err(path) => {
+                    eprintln!("Error: non-utf8 path matched by `{pattern}`: {path:?}");
+                    std::process::exit(1);
+                }
+            };
+            matches.push(utf8);
+        }
+
+        if matches.is_empty() {
+            eprintln!("Error: glob pattern matched no paths: `{pattern}`");
+            std::process::exit(1);
+        }
+
+        matches.sort();
+        for path in matches {
+            let key = path.as_str().to_string();
+            if seen.insert(key) {
+                expanded.push(path);
+            }
+        }
+    }
+
+    expanded
+}
+
+fn looks_like_glob(pattern: &str) -> bool {
+    pattern.contains('*') || pattern.contains('?') || pattern.contains('[')
 }
 
 /// Compiles a test function to bytecode and executes it in revm.
