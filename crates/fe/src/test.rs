@@ -11,48 +11,19 @@ use contract_harness::{ExecutionOptions, RuntimeInstance};
 use driver::DriverDataBase;
 use hir::hir_def::{HirIngot, TopLevelMod};
 use mir::{fmt as mir_fmt, lower_module};
+use crate::report::{
+    PanicHookGuard, copy_input_into_report, create_dir_all_utf8, install_panic_hook,
+    normalize_report_out_path, panic_payload_to_string, sanitize_filename, tar_gz_dir,
+};
 use rustc_hash::FxHashSet;
 use solc_runner::compile_single_contract;
 use url::Url;
-
-fn panic_payload_to_string(payload: &(dyn std::any::Any + Send)) -> String {
-    if let Some(s) = payload.downcast_ref::<&'static str>() {
-        (*s).to_string()
-    } else if let Some(s) = payload.downcast_ref::<String>() {
-        s.clone()
-    } else {
-        "panic payload is not a string".to_string()
-    }
-}
-
-struct PanicHookGuard {
-    old: Option<Box<dyn Fn(&std::panic::PanicHookInfo) + Send + Sync + 'static>>,
-}
-
-impl Drop for PanicHookGuard {
-    fn drop(&mut self) {
-        if let Some(old) = self.old.take() {
-            std::panic::set_hook(old);
-        }
-    }
-}
 
 fn install_report_panic_hook(report: &ReportContext, filename: &str) -> PanicHookGuard {
     let dir = report.root_dir.join("errors");
     create_dir_all_utf8(&dir);
     let path = dir.join(filename);
-
-    let old = std::panic::take_hook();
-    std::panic::set_hook(Box::new(move |info| {
-        let bt = std::backtrace::Backtrace::force_capture();
-        let mut msg = String::new();
-        msg.push_str("panic while running `fe test`\n\n");
-        msg.push_str(&format!("{info}\n\n"));
-        msg.push_str(&format!("backtrace:\n{bt:?}\n"));
-        let _ = std::fs::write(&path, msg);
-    }));
-
-    PanicHookGuard { old: Some(old) }
+    install_panic_hook(path)
 }
 
 /// Result of running a single test.
@@ -197,13 +168,6 @@ fn truncate_file(path: &Utf8PathBuf) {
     }
 }
 
-fn sanitize_filename(component: &str) -> String {
-    component
-        .chars()
-        .map(|ch| if ch.is_ascii_alphanumeric() { ch } else { '_' })
-        .collect()
-}
-
 fn unique_report_path(dir: &Utf8PathBuf, suite: &str) -> Utf8PathBuf {
     let base = sanitize_filename(suite);
     let base = if base.is_empty() { "tests".to_string() } else { base };
@@ -256,7 +220,7 @@ pub fn run_tests(
 
     let report_root = report_out.map(|out| {
         let staging = create_report_staging_dir();
-        let out = out.clone();
+        let out = normalize_report_out_path(out);
         (out, staging)
     });
 
@@ -969,105 +933,7 @@ fn write_report_manifest(staging: &Utf8PathBuf, backend: &str, filter: Option<&s
 }
 
 fn create_report_staging_dir() -> Utf8PathBuf {
-    let base = Utf8PathBuf::from("target/fe-test-report-staging");
-    let _ = std::fs::create_dir_all(&base);
-    let pid = std::process::id();
-    let nanos = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_nanos())
-        .unwrap_or(0);
-    let dir = base.join(format!("report-{pid}-{nanos}"));
-    create_dir_all_utf8(&dir);
-    dir
-}
-
-fn tar_gz_dir(staging: &Utf8PathBuf, out: &Utf8PathBuf) -> Result<(), String> {
-    let parent = staging.parent().ok_or_else(|| "missing staging parent".to_string())?;
-    let name = staging
-        .file_name()
-        .ok_or_else(|| "missing staging basename".to_string())?;
-
-    let status = std::process::Command::new("tar")
-        .arg("-czf")
-        .arg(out.as_str())
-        .arg("-C")
-        .arg(parent.as_str())
-        .arg(name)
-        .status()
-        .map_err(|err| format!("failed to run tar: {err}"))?;
-
-    if !status.success() {
-        return Err(format!("tar exited with status {status}"));
-    }
-    Ok(())
-}
-
-fn create_dir_all_utf8(path: &Utf8PathBuf) {
-    if let Err(err) = std::fs::create_dir_all(path) {
-        eprintln!("Error: failed to create dir `{path}`: {err}");
-        std::process::exit(1);
-    }
-}
-
-fn copy_input_into_report(input: &Utf8PathBuf, inputs_dir: &Utf8PathBuf) {
-    if input.is_file() {
-        let name = input
-            .file_name()
-            .map(|s| s.to_string())
-            .unwrap_or_else(|| "input.fe".to_string());
-        let dest = inputs_dir.join(name);
-        if let Err(err) = std::fs::copy(input, &dest) {
-            eprintln!("Error: failed to copy `{input}` to `{dest}`: {err}");
-            std::process::exit(1);
-        }
-        return;
-    }
-
-    if !input.is_dir() {
-        return;
-    }
-
-    // Keep the report small but useful: include `fe.toml` and all `.fe` sources under `src/`.
-    let fe_toml = input.join("fe.toml");
-    if fe_toml.is_file() {
-        let dest = inputs_dir.join("fe.toml");
-        let _ = std::fs::copy(fe_toml, dest);
-    }
-
-    let src_dir = input.join("src");
-    if !src_dir.is_dir() {
-        return;
-    }
-
-    let dest_src = inputs_dir.join("src");
-    create_dir_all_utf8(&dest_src);
-
-    for entry in walkdir::WalkDir::new(src_dir.as_std_path())
-        .follow_links(false)
-        .into_iter()
-        .filter_map(Result::ok)
-    {
-        let path = entry.path();
-        if !path.is_file() {
-            continue;
-        }
-        if path.extension().and_then(|s| s.to_str()) != Some("fe") {
-            continue;
-        }
-        let rel = match path.strip_prefix(src_dir.as_std_path()) {
-            Ok(rel) => rel,
-            Err(_) => continue,
-        };
-        let rel = match Utf8PathBuf::from_path_buf(rel.to_path_buf()) {
-            Ok(p) => p,
-            Err(_) => continue,
-        };
-        let dest = dest_src.join(rel);
-        if let Some(parent) = dest.parent() {
-            let _ = std::fs::create_dir_all(parent);
-        }
-        let _ = std::fs::copy(path, dest);
-    }
+    crate::report::create_report_staging_dir("target/fe-test-report-staging")
 }
 
 /// Deploys and executes compiled test bytecode in revm.

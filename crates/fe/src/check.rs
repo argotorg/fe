@@ -3,10 +3,35 @@ use codegen::{Backend, BackendKind};
 use common::InputDb;
 use driver::DriverDataBase;
 use hir::hir_def::{HirIngot, TopLevelMod};
-use mir::{layout, lower_module};
+use mir::{fmt as mir_fmt, layout, lower_module};
 use url::Url;
 
-pub fn check(path: &Utf8PathBuf, dump_mir: bool, emit_yul_min: bool, backend_name: &str) {
+use crate::report::{
+    copy_input_into_report, create_dir_all_utf8, create_report_staging_dir, install_panic_hook,
+    normalize_report_out_path, panic_payload_to_string, tar_gz_dir,
+};
+
+#[derive(Debug, Clone)]
+struct ReportContext {
+    root_dir: Utf8PathBuf,
+}
+
+fn write_report_file(report: &ReportContext, rel: &str, contents: &str) {
+    let path = report.root_dir.join(rel);
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let _ = std::fs::write(path, contents);
+}
+
+pub fn check(
+    path: &Utf8PathBuf,
+    dump_mir: bool,
+    emit_yul_min: bool,
+    backend_name: &str,
+    report_out: Option<&Utf8PathBuf>,
+    report_failed_only: bool,
+) {
     // Parse backend selection
     let backend_kind: BackendKind = match backend_name.parse() {
         Ok(kind) => kind,
@@ -18,15 +43,71 @@ pub fn check(path: &Utf8PathBuf, dump_mir: bool, emit_yul_min: bool, backend_nam
     let backend = backend_kind.create();
     let mut db = DriverDataBase::default();
 
+    let report_root = report_out.map(|out| {
+        let staging = create_report_staging_dir("target/fe-check-report-staging");
+        let out = normalize_report_out_path(out);
+        (out, staging)
+    });
+
+    let report_ctx = report_root.as_ref().map(|(_, staging)| {
+        let inputs_dir = staging.join("inputs");
+        create_dir_all_utf8(&inputs_dir);
+        copy_input_into_report(path, &inputs_dir);
+        create_dir_all_utf8(&staging.join("artifacts"));
+        create_dir_all_utf8(&staging.join("errors"));
+        ReportContext {
+            root_dir: staging.clone(),
+        }
+    });
+
     // Determine if we're dealing with a single file or an ingot directory
     let has_errors = if path.is_file() && path.extension() == Some("fe") {
-        check_single_file(&mut db, path, dump_mir, emit_yul_min, backend.as_ref())
+        check_single_file(
+            &mut db,
+            path,
+            dump_mir,
+            emit_yul_min,
+            backend_kind,
+            backend.as_ref(),
+            report_ctx.as_ref(),
+        )
     } else if path.is_dir() {
-        check_ingot(&mut db, path, dump_mir, emit_yul_min, backend.as_ref())
+        check_ingot(
+            &mut db,
+            path,
+            dump_mir,
+            emit_yul_min,
+            backend_kind,
+            backend.as_ref(),
+            report_ctx.as_ref(),
+        )
     } else {
         eprintln!("❌ Error: Path must be either a .fe file or a directory containing fe.toml");
         std::process::exit(1);
     };
+
+    if let Some((out, staging)) = report_root {
+        let should_write = !report_failed_only || has_errors;
+        if should_write {
+            write_check_manifest(
+                &staging,
+                path,
+                dump_mir,
+                emit_yul_min,
+                backend_name,
+                has_errors,
+            );
+            if let Err(err) = tar_gz_dir(&staging, &out) {
+                eprintln!("Error: failed to write report `{out}`: {err}");
+                eprintln!("Report staging directory left at `{staging}`");
+            } else {
+                let _ = std::fs::remove_dir_all(&staging);
+                println!("wrote report: {out}");
+            }
+        } else {
+            let _ = std::fs::remove_dir_all(&staging);
+        }
+    }
 
     if has_errors {
         std::process::exit(1);
@@ -38,7 +119,9 @@ fn check_single_file(
     file_path: &Utf8PathBuf,
     dump_mir: bool,
     emit_yul_min: bool,
+    backend_kind: BackendKind,
     backend: &dyn Backend,
+    report: Option<&ReportContext>,
 ) -> bool {
     // Create a file URL for the single .fe file
     let file_url = match Url::from_file_path(file_path.canonicalize_utf8().unwrap()) {
@@ -69,6 +152,10 @@ fn check_single_file(
             eprintln!("errors in {file_url}");
             eprintln!();
             diags.emit(db);
+            if let Some(report) = report {
+                let formatted = diags.format_diags(db);
+                write_report_file(report, "errors/diagnostics.txt", &formatted);
+            }
             return true;
         }
         if dump_mir {
@@ -76,6 +163,9 @@ fn check_single_file(
         }
         if emit_yul_min {
             emit_codegen(db, top_mod, backend);
+        }
+        if let Some(report) = report {
+            write_check_artifacts(db, top_mod, backend_kind, backend, report);
         }
     } else {
         eprintln!("❌ Error: Could not process file {file_path}");
@@ -90,7 +180,9 @@ fn check_ingot(
     dir_path: &Utf8PathBuf,
     dump_mir: bool,
     emit_yul_min: bool,
+    backend_kind: BackendKind,
     backend: &dyn Backend,
+    report: Option<&ReportContext>,
 ) -> bool {
     let canonical_path = match dir_path.canonicalize_utf8() {
         Ok(path) => path,
@@ -110,6 +202,13 @@ fn check_ingot(
     };
     let had_init_diagnostics = driver::init_ingot(db, &ingot_url);
     if had_init_diagnostics {
+        if let Some(report) = report {
+            write_report_file(
+                report,
+                "errors/diagnostics.txt",
+                "compilation errors while initializing ingot",
+            );
+        }
         return true;
     }
 
@@ -148,6 +247,10 @@ fn check_ingot(
 
     if !diags.is_empty() {
         diags.emit(db);
+        if let Some(report) = report {
+            let formatted = diags.format_diags(db);
+            write_report_file(report, "errors/diagnostics.txt", &formatted);
+        }
         has_errors = true;
     } else {
         let root_mod = ingot.root_mod(db);
@@ -156,6 +259,9 @@ fn check_ingot(
         }
         if emit_yul_min {
             emit_codegen(db, root_mod, backend);
+        }
+        if let Some(report) = report {
+            write_check_artifacts(db, root_mod, backend_kind, backend, report);
         }
     }
 
@@ -179,6 +285,16 @@ fn check_ingot(
             eprintln!("❌ Error in downstream ingot");
         } else {
             eprintln!("❌ Errors in downstream ingots");
+        }
+
+        if let Some(report) = report {
+            let mut out = String::new();
+            for (dependency_url, diags) in &dependency_errors {
+                out.push_str(&format!("dependency: {dependency_url}\n"));
+                out.push_str(&diags.format_diags(db));
+                out.push('\n');
+            }
+            write_report_file(report, "errors/dependency_diagnostics.txt", &out);
         }
 
         for (dependency_url, diags) in dependency_errors {
@@ -233,8 +349,106 @@ fn dump_module_mir(db: &DriverDataBase, top_mod: TopLevelMod<'_>) {
     match lower_module(db, top_mod) {
         Ok(mir_module) => {
             println!("=== MIR for module ===");
-            print!("{}", mir::fmt::format_module(db, &mir_module));
+            print!("{}", mir_fmt::format_module(db, &mir_module));
         }
         Err(err) => eprintln!("failed to lower MIR: {err}"),
+    }
+}
+
+fn write_check_manifest(
+    staging: &Utf8PathBuf,
+    path: &Utf8PathBuf,
+    dump_mir: bool,
+    emit_yul_min: bool,
+    backend: &str,
+    has_errors: bool,
+) {
+    let mut out = String::new();
+    out.push_str("fe check report\n");
+    out.push_str(&format!("path: {path}\n"));
+    out.push_str(&format!("backend: {backend}\n"));
+    out.push_str(&format!("dump_mir: {dump_mir}\n"));
+    out.push_str(&format!("emit_yul_min: {emit_yul_min}\n"));
+    out.push_str(&format!("status: {}\n", if has_errors { "failed" } else { "ok" }));
+    out.push_str(&format!("fe_version: {}\n", env!("CARGO_PKG_VERSION")));
+    let _ = std::fs::write(staging.join("manifest.txt"), out);
+}
+
+fn write_check_artifacts(
+    db: &DriverDataBase,
+    top_mod: TopLevelMod<'_>,
+    backend_kind: BackendKind,
+    backend: &dyn Backend,
+    report: &ReportContext,
+) {
+    match lower_module(db, top_mod) {
+        Ok(mir) => {
+            write_report_file(report, "artifacts/mir.txt", &mir_fmt::format_module(db, &mir));
+        }
+        Err(err) => {
+            write_report_file(report, "artifacts/mir_error.txt", &format!("{err}"));
+        }
+    }
+
+    match backend_kind {
+        BackendKind::Yul => match codegen::emit_module_yul(db, top_mod) {
+            Ok(yul) => write_report_file(report, "artifacts/yul_module.yul", &yul),
+            Err(err) => write_report_file(report, "artifacts/yul_module_error.txt", &format!("{err}")),
+        },
+        BackendKind::Sonatina => {
+            match codegen::emit_module_sonatina_ir(db, top_mod) {
+                Ok(ir) => write_report_file(report, "artifacts/sonatina_ir.txt", &ir),
+                Err(err) => write_report_file(
+                    report,
+                    "artifacts/sonatina_ir_error.txt",
+                    &format!("{err}"),
+                ),
+            }
+            match codegen::validate_module_sonatina_ir(db, top_mod) {
+                Ok(v) => write_report_file(report, "artifacts/sonatina_validate.txt", &v),
+                Err(err) => write_report_file(
+                    report,
+                    "artifacts/sonatina_validate_error.txt",
+                    &format!("{err}"),
+                ),
+            }
+        }
+    }
+
+    let _hook = report
+        .root_dir
+        .join("errors")
+        .join("codegen_panic_full.txt");
+    let _hook = install_panic_hook(_hook);
+
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        backend.compile(db, top_mod, layout::EVM_LAYOUT)
+    })) {
+        Ok(Ok(output)) => match output {
+            codegen::BackendOutput::Yul(yul) => {
+                write_report_file(report, "artifacts/backend_output.yul", &yul);
+            }
+            codegen::BackendOutput::Bytecode(bytes) => {
+                write_report_file(report, "artifacts/backend_bytecode.hex", &hex::encode(&bytes));
+                write_report_file(
+                    report,
+                    "artifacts/backend_bytecode_len.txt",
+                    &format!("{}\n", bytes.len()),
+                );
+            }
+        },
+        Ok(Err(err)) => {
+            write_report_file(report, "errors/codegen_error.txt", &format!("{err}"));
+        }
+        Err(payload) => {
+            write_report_file(
+                report,
+                "errors/codegen_panic.txt",
+                &format!(
+                    "backend panicked while compiling: {}",
+                    panic_payload_to_string(payload.as_ref())
+                ),
+            );
+        }
     }
 }

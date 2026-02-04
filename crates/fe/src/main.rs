@@ -1,6 +1,7 @@
 #![allow(clippy::print_stderr, clippy::print_stdout)]
 mod check;
 mod cli;
+mod report;
 mod test;
 #[cfg(not(target_arch = "wasm32"))]
 mod tree;
@@ -42,6 +43,14 @@ pub enum Command {
         /// Code generation backend to use (yul or sonatina).
         #[arg(long, default_value = "yul")]
         backend: String,
+        /// Write a debugging report as a `.tar.gz` file (includes sources, IR, backend output).
+        ///
+        /// If no path is provided, defaults to `fe-check-report.tar.gz` in the current directory.
+        #[arg(long, value_name = "OUT", num_args = 0..=1, default_missing_value = "fe-check-report.tar.gz")]
+        report: Option<Utf8PathBuf>,
+        /// When used with `--report`, only write the report if `fe check` fails.
+        #[arg(long, requires = "report")]
+        report_failed_only: bool,
     },
     #[cfg(not(target_arch = "wasm32"))]
     Tree {
@@ -164,9 +173,18 @@ pub fn run(opts: &Options) {
             dump_mir,
             emit_yul_min,
             backend,
+            report,
+            report_failed_only,
         } => {
             //: TODO readd custom core
-            check(path, *dump_mir, *emit_yul_min, backend);
+            check(
+                path,
+                *dump_mir,
+                *emit_yul_min,
+                backend,
+                report.as_ref(),
+                *report_failed_only,
+            );
         }
         #[cfg(not(target_arch = "wasm32"))]
         Command::Tree { path } => {
