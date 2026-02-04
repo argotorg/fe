@@ -1,0 +1,28 @@
+// Marker traits for language-level behavior.
+//
+// `Copy` is used by the compiler's ownership model: values of `Copy` types can be
+// duplicated implicitly (e.g. when assigning from a place or passing to a `move`
+// parameter), while non-`Copy` types require an explicit `move` to transfer
+// ownership out of a place.
+
+pub trait Copy {}
+
+// Built-in primitive types are trivially copyable.
+impl Copy for bool {}
+
+impl Copy for u8 {}
+impl Copy for u16 {}
+impl Copy for u32 {}
+impl Copy for u64 {}
+impl Copy for u128 {}
+impl Copy for u256 {}
+impl Copy for usize {}
+
+impl Copy for i8 {}
+impl Copy for i16 {}
+impl Copy for i32 {}
+impl Copy for i64 {}
+impl Copy for i128 {}
+impl Copy for i256 {}
+impl Copy for isize {}
+
