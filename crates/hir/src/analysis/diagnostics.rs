@@ -2437,11 +2437,11 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                 message: "explicit move required".to_string(),
                 sub_diagnostics: vec![SubDiagnostic {
                     style: LabelStyle::Primary,
-                    message: "this argument must be explicitly moved".to_string(),
+                    message: "this value must be explicitly moved".to_string(),
                     span: primary.resolve(db),
                 }],
                 notes: vec![
-                    "help: use `move <place>` when passing an owned place to a `move` parameter"
+                    "help: use `move <place>` to move a non-`Copy` value out of a place"
                         .to_string(),
                 ],
                 error_code,
@@ -2493,6 +2493,24 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                 }],
                 notes: vec![
                     "remove `move`, or change the parameter type to an owned type".to_string(),
+                ],
+                error_code,
+            },
+
+            Self::ArrayRepeatRequiresCopy { primary, ty } => CompleteDiagnostic {
+                severity: Severity::Error,
+                message: "array repetition requires `Copy`".to_string(),
+                sub_diagnostics: vec![SubDiagnostic {
+                    style: LabelStyle::Primary,
+                    message: format!(
+                        "the element type `{}` does not implement `Copy`",
+                        ty.pretty_print(db)
+                    ),
+                    span: primary.resolve(db),
+                }],
+                notes: vec![
+                    "build the array with an explicit literal, or use a `Copy` element type"
+                        .to_string(),
                 ],
                 error_code,
             },

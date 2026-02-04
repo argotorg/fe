@@ -184,6 +184,7 @@ impl<'db> TyChecker<'db> {
 
         let root_expr = self.env.body().expr(self.db);
         self.check_expr(root_expr, self.expected);
+        self.require_explicit_move_for_owned_expr(root_expr, self.expected);
     }
 
     fn check_move_param_types(&mut self) {
@@ -818,6 +819,73 @@ impl<'db> TyChecker<'db> {
 
     fn body(&self) -> Body<'db> {
         self.env.body()
+    }
+
+    fn ty_is_copy(&self, ty: TyId<'db>) -> bool {
+        crate::analysis::ty::ty_is_copy(self.db, self.env.scope(), ty, self.env.assumptions())
+    }
+
+    /// In "owned" contexts, non-`Copy` values must be moved explicitly from places.
+    ///
+    /// This prevents implicit duplication of non-`Copy` values (which would create aliasing for
+    /// by-reference aggregates). `Copy` values may be duplicated implicitly.
+    fn require_explicit_move_for_owned_expr(&mut self, expr: ExprId, ty: TyId<'db>) {
+        let ty = ty.fold_with(self.db, &mut self.table);
+        let ty = self.normalize_ty(ty);
+        if ty.has_invalid(self.db) || ty == TyId::unit(self.db) || ty.is_never(self.db) {
+            return;
+        }
+        if self.ty_is_copy(ty) {
+            return;
+        }
+
+        self.require_explicit_move_for_owned_expr_inner(expr);
+    }
+
+    fn require_explicit_move_for_owned_expr_inner(&mut self, expr: ExprId) {
+        let db = self.db;
+        let body = self.body();
+        let Partial::Present(expr_data) = expr.data(db, body) else {
+            return;
+        };
+
+        match expr_data {
+            Expr::Un(_, crate::hir_def::expr::UnOp::Move) => {}
+            Expr::Block(stmts) => {
+                let Some(last) = stmts.last() else {
+                    return;
+                };
+                let Partial::Present(stmt) = last.data(db, body) else {
+                    return;
+                };
+                let crate::hir_def::Stmt::Expr(tail) = stmt else {
+                    return;
+                };
+                self.require_explicit_move_for_owned_expr_inner(*tail);
+            }
+            Expr::With(_, body_expr) | Expr::Cast(body_expr, _) | Expr::If(_, body_expr, None) => {
+                self.require_explicit_move_for_owned_expr_inner(*body_expr);
+            }
+            Expr::If(_, then_expr, Some(else_expr)) => {
+                self.require_explicit_move_for_owned_expr_inner(*then_expr);
+                self.require_explicit_move_for_owned_expr_inner(*else_expr);
+            }
+            Expr::Match(_, arms) => {
+                let Partial::Present(arms) = arms else {
+                    return;
+                };
+                for arm in arms {
+                    self.require_explicit_move_for_owned_expr_inner(arm.body);
+                }
+            }
+            _ => {
+                if self.env.expr_place(expr).is_some() {
+                    self.push_diag(BodyDiag::ExplicitMoveRequired {
+                        primary: expr.span(body).into(),
+                    });
+                }
+            }
+        }
     }
 
     fn lit_ty(&mut self, lit: &LitKind<'db>) -> TyId<'db> {

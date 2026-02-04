@@ -348,10 +348,10 @@ pub enum BodyDiag<'db> {
         binding: Option<(IdentId<'db>, DynLazySpan<'db>)>,
     },
 
-    /// A call argument is a place, but the callee requires an explicit `move`-out.
+    /// A non-`Copy` place is used in a context that requires an owned value.
     ///
-    /// We enforce this at type-check time (rather than MIR) so call sites are explicit and the
-    /// borrow checker can reason about ownership transfer precisely.
+    /// `Copy` types can be duplicated implicitly; non-`Copy` types must be moved explicitly with
+    /// `move <place>` so ownership transfer is visible to the borrow checker.
     ExplicitMoveRequired {
         primary: DynLazySpan<'db>,
     },
@@ -372,6 +372,14 @@ pub enum BodyDiag<'db> {
 
     /// `move` parameters must have owned types. Borrow-handle types (`mut`/`ref`) are not owned.
     MoveParamCannotBeBorrow {
+        primary: DynLazySpan<'db>,
+        ty: TyId<'db>,
+    },
+
+    /// Array repetition literals (`[x; N]`) duplicate the element value.
+    ///
+    /// Duplicating a value requires that the element type implement `core::marker::Copy`.
+    ArrayRepeatRequiresCopy {
         primary: DynLazySpan<'db>,
         ty: TyId<'db>,
     },
@@ -663,6 +671,7 @@ impl<'db> BodyDiag<'db> {
             Self::ExplicitReborrowRequired { .. } => 68,
             Self::MoveOnBorrowHandle { .. } => 69,
             Self::MoveParamCannotBeBorrow { .. } => 70,
+            Self::ArrayRepeatRequiresCopy { .. } => 71,
             Self::NonAssignableExpr(..) => 17,
             Self::ImmutableAssignment { .. } => 18,
             Self::LoopControlOutsideOfLoop { .. } => 19,

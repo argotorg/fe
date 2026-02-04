@@ -96,7 +96,36 @@ impl<'db> TyChecker<'db> {
         };
 
         if let Some(expr) = expr {
-            self.check_expr(*expr, ascription);
+            let prop = self.check_expr(*expr, ascription);
+
+            fn pat_binds_any<'db>(
+                db: &'db dyn HirAnalysisDb,
+                body: crate::hir_def::Body<'db>,
+                pat: crate::hir_def::PatId,
+            ) -> bool {
+                let Partial::Present(pat_data) = pat.data(db, body) else {
+                    return false;
+                };
+                match pat_data {
+                    crate::hir_def::Pat::WildCard
+                    | crate::hir_def::Pat::Rest
+                    | crate::hir_def::Pat::Lit(_) => false,
+                    crate::hir_def::Pat::Path(..) => true,
+                    crate::hir_def::Pat::Tuple(pats) | crate::hir_def::Pat::PathTuple(_, pats) => {
+                        pats.iter().any(|p| pat_binds_any(db, body, *p))
+                    }
+                    crate::hir_def::Pat::Record(_, fields) => fields
+                        .iter()
+                        .any(|field| pat_binds_any(db, body, field.pat)),
+                    crate::hir_def::Pat::Or(a, b) => {
+                        pat_binds_any(db, body, *a) || pat_binds_any(db, body, *b)
+                    }
+                }
+            }
+
+            if pat_binds_any(self.db, self.body(), *pat) {
+                self.require_explicit_move_for_owned_expr(*expr, prop.ty);
+            }
         }
 
         self.check_pat(*pat, ascription);
@@ -325,20 +354,21 @@ impl<'db> TyChecker<'db> {
             unreachable!()
         };
 
-        let (returned_ty, had_child_err) = if let Some(expr) = expr {
+        let (returned_expr, returned_ty, had_child_err) = if let Some(expr) = expr {
             let before = self.diags.len();
             let expected = self.fresh_ty();
             self.check_expr(*expr, expected);
             let ty = expected.fold_with(self.db, &mut self.table);
-            (ty, self.diags.len() > before)
+            (Some(*expr), ty, self.diags.len() > before)
         } else {
-            (TyId::unit(self.db), false)
+            (None, TyId::unit(self.db), false)
         };
 
-        if !had_child_err
+        let ret_ty_ok = !had_child_err
             && !returned_ty.has_invalid(self.db)
-            && self.table.unify(returned_ty, self.expected).is_err()
-        {
+            && self.table.unify(returned_ty, self.expected).is_ok();
+
+        if !had_child_err && !returned_ty.has_invalid(self.db) && !ret_ty_ok {
             let func = self.env.func();
             let span = stmt.span(self.env.body());
             let diag = BodyDiag::ReturnedTypeMismatch {
@@ -349,6 +379,8 @@ impl<'db> TyChecker<'db> {
             };
 
             self.push_diag(diag);
+        } else if ret_ty_ok && let Some(expr) = returned_expr {
+            self.require_explicit_move_for_owned_expr(expr, self.expected);
         }
 
         TyId::never(self.db)

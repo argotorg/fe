@@ -295,20 +295,13 @@ impl<'db> Callable<'db> {
                             primary: given.expr_span.clone(),
                             ty: expected,
                         });
-                    } else if arg_is_place
-                        && !is_unary(given.expr, UnOp::Move)
-                        && !crate::analysis::ty::ty_is_copy(
-                            db,
-                            tc.env.scope(),
-                            expected,
-                            tc.env.assumptions(),
-                        )
-                    {
-                        tc.push_diag(BodyDiag::ExplicitMoveRequired {
-                            primary: given.expr_span.clone(),
-                        });
+                    } else {
+                        tc.require_explicit_move_for_owned_expr(given.expr, expected);
                     }
                 }
+            } else {
+                // Variant constructors materialize their fields immediately (owned context).
+                tc.require_explicit_move_for_owned_expr(given.expr, expected);
             }
 
             tc.equate_ty(given.expr_prop.ty, expected, given.expr_span);

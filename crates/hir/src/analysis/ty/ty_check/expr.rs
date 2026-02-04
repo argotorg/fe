@@ -1913,7 +1913,10 @@ impl<'db> TyChecker<'db> {
                 }
             };
 
-            rec_checker.tc.check_expr(field.expr, expected);
+            let prop = rec_checker.tc.check_expr(field.expr, expected);
+            rec_checker
+                .tc
+                .require_explicit_move_for_owned_expr(field.expr, prop.ty);
         }
 
         if let Err(diag) = rec_checker.finalize(span.into(), false) {
@@ -2008,7 +2011,8 @@ impl<'db> TyChecker<'db> {
         };
 
         for (elem, elem_ty) in elems.iter().zip(elem_tys.iter()) {
-            self.check_expr(*elem, *elem_ty);
+            let prop = self.check_expr(*elem, *elem_ty);
+            self.require_explicit_move_for_owned_expr(*elem, prop.ty);
         }
 
         let ty = TyId::tuple_with_elems(self.db, &elem_tys);
@@ -2031,7 +2035,9 @@ impl<'db> TyChecker<'db> {
         };
 
         for elem in elems {
-            expected_elem_ty = self.check_expr(*elem, expected_elem_ty).ty;
+            let prop = self.check_expr(*elem, expected_elem_ty);
+            expected_elem_ty = prop.ty;
+            self.require_explicit_move_for_owned_expr(*elem, expected_elem_ty);
         }
 
         let ty = TyId::array_with_len(self.db, expected_elem_ty, elems.len());
@@ -2053,7 +2059,14 @@ impl<'db> TyChecker<'db> {
             _ => self.fresh_ty(),
         };
 
-        expected_elem_ty = self.check_expr(*elem, expected_elem_ty).ty;
+        let prop = self.check_expr(*elem, expected_elem_ty);
+        expected_elem_ty = prop.ty;
+        if !expected_elem_ty.has_invalid(self.db) && !self.ty_is_copy(expected_elem_ty) {
+            self.push_diag(BodyDiag::ArrayRepeatRequiresCopy {
+                primary: elem.span(self.body()).into(),
+                ty: expected_elem_ty,
+            });
+        }
 
         let array = TyId::array(self.db, expected_elem_ty);
         let ty = if let Some(len_body) = len.to_opt() {
@@ -2204,9 +2217,10 @@ impl<'db> TyChecker<'db> {
             .as_borrow(self.db)
             .map(|(_, inner)| inner)
             .unwrap_or(typed_lhs.ty);
-        self.check_expr(*rhs, lhs_ty);
+        let rhs_prop = self.check_expr(*rhs, lhs_ty);
 
         self.check_assign_lhs(*lhs, &typed_lhs);
+        self.require_explicit_move_for_owned_expr(*rhs, rhs_prop.ty);
 
         ExprProp::new(TyId::unit(self.db), true)
     }
