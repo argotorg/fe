@@ -26,6 +26,6 @@ where S<T>: Trait {
 fn bar() {
     let t: i32 = 1
     let s = S { t }
-    let s2 = S2 { s }
+    let s2 = S2 { s: move s }
     let _ = s2.f()
 }
