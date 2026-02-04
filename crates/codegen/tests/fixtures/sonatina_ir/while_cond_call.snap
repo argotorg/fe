@@ -21,11 +21,13 @@ func public %while_cond_call() -> i256 {
         br v2 block2 block3;
 
     block2:
-        v5.i256 = add v1 1.i256;
+        v3.i256 = phi (v1 block1);
+        v5.i256 = add v3 1.i256;
         jump block1;
 
     block3:
-        return v1;
+        v6.i256 = phi (v1 block1);
+        return v6;
 }
 
 func public %__fe_sonatina_entry() {

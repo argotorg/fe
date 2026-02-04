@@ -26,7 +26,8 @@ func public %match_enum(v0.i256) -> i256 {
         jump block2;
 
     block6:
-        v8.i256 = mload v0 i256;
+        v7.i256 = phi (v0 block0);
+        v8.i256 = mload v7 i256;
         v9.i256 = eq v8 0.i256;
         br v9 block1 block7;
 

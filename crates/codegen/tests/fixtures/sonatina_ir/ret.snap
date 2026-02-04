@@ -13,14 +13,16 @@ func public %retfoo(v0.i256, v1.i256) -> i256 {
         return 0.i256;
 
     block2:
-        v5.i256 = lt v1 5.i256;
+        v3.i256 = phi (v1 block0);
+        v5.i256 = lt v3 5.i256;
         br v5 block3 block4;
 
     block3:
         return 1.i256;
 
     block4:
-        v8.i256 = sub v1 1.i256;
+        v7.i256 = phi (v3 block2);
+        v8.i256 = sub v7 1.i256;
         v10.i256 = eq v8 42.i256;
         br v10 block5 block6;
 
@@ -28,7 +30,8 @@ func public %retfoo(v0.i256, v1.i256) -> i256 {
         return 2.i256;
 
     block6:
-        v13.i256 = add v8 1.i256;
+        v12.i256 = phi (v8 block4);
+        v13.i256 = add v12 1.i256;
         return v13;
 }
 

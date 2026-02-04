@@ -29,14 +29,16 @@ func public %match_nested_tuple(v0.i256) -> i256 {
         jump block2;
 
     block7:
-        v9.i256 = mload v0 i256;
+        v8.i256 = phi (v0 block0);
+        v9.i256 = mload v8 i256;
         v10.i1 = ne v9 0.i256;
         v11.i256 = zext v10 i256;
         v12.i256 = eq v11 1.i256;
         br v12 block8 block15;
 
     block8:
-        v15.i256 = add v0 1.i256;
+        v14.i256 = phi (v8 block7);
+        v15.i256 = add v14 1.i256;
         v16.i256 = mload v15 i256;
         v17.i1 = ne v16 0.i256;
         v18.i256 = zext v17 i256;
@@ -44,7 +46,8 @@ func public %match_nested_tuple(v0.i256) -> i256 {
         br v19 block9 block16;
 
     block9:
-        v22.i256 = add v0 2.i256;
+        v21.i256 = phi (v14 block8);
+        v22.i256 = add v21 2.i256;
         v23.i256 = mload v22 i256;
         v24.i1 = ne v23 0.i256;
         v25.i256 = zext v24 i256;
@@ -58,7 +61,8 @@ func public %match_nested_tuple(v0.i256) -> i256 {
         evm_invalid;
 
     block12:
-        v29.i256 = add v0 2.i256;
+        v28.i256 = phi (v35 block15);
+        v29.i256 = add v28 2.i256;
         v30.i256 = mload v29 i256;
         v31.i1 = ne v30 0.i256;
         v32.i256 = zext v31 i256;
@@ -72,6 +76,7 @@ func public %match_nested_tuple(v0.i256) -> i256 {
         evm_invalid;
 
     block15:
+        v35.i256 = phi (v8 block7);
         v13.i256 = eq v11 0.i256;
         br v13 block12 block14;
 
@@ -106,14 +111,16 @@ func public %match_deeply_nested(v0.i256) -> i256 {
         jump block2;
 
     block5:
-        v6.i256 = mload v0 i256;
+        v5.i256 = phi (v0 block0);
+        v6.i256 = mload v5 i256;
         v7.i1 = ne v6 0.i256;
         v8.i256 = zext v7 i256;
         v10.i256 = eq v8 1.i256;
         br v10 block6 block10;
 
     block6:
-        v14.i256 = add v0 3.i256;
+        v12.i256 = phi (v5 block5);
+        v14.i256 = add v12 3.i256;
         v15.i256 = mload v14 i256;
         v16.i1 = ne v15 0.i256;
         v17.i256 = zext v16 i256;
@@ -121,7 +128,8 @@ func public %match_deeply_nested(v0.i256) -> i256 {
         br v18 block7 block3;
 
     block7:
-        v21.i256 = add v0 2.i256;
+        v19.i256 = phi (v12 block6);
+        v21.i256 = add v19 2.i256;
         v22.i256 = mload v21 i256;
         v23.i1 = ne v22 0.i256;
         v24.i256 = zext v23 i256;
@@ -129,7 +137,8 @@ func public %match_deeply_nested(v0.i256) -> i256 {
         br v25 block8 block3;
 
     block8:
-        v27.i256 = add v0 1.i256;
+        v26.i256 = phi (v19 block7);
+        v27.i256 = add v26 1.i256;
         v28.i256 = mload v27 i256;
         v29.i1 = ne v28 0.i256;
         v30.i256 = zext v29 i256;

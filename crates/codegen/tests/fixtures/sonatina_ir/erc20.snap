@@ -178,7 +178,11 @@ func public %__CoolCoin_init_contract(v0.i256, v1.i256, v2.i256, v3.i256, v4.i25
         br v9 block1 block2;
 
     block1:
-        call %mint__StorPtr_TokenStore___6cde5b1e4cc29186 v1 v0 v2 v5;
+        v13.i256 = phi (v5 block0);
+        v12.i256 = phi (v2 block0);
+        v11.i256 = phi (v0 block0);
+        v10.i256 = phi (v1 block0);
+        call %mint__StorPtr_TokenStore___6cde5b1e4cc29186 v10 v11 v12 v13;
         jump block2;
 
     block2:
@@ -329,27 +333,42 @@ func public %__CoolCoin_init() {
         v5.i256 = sym_size &__CoolCoin_runtime;
         v6.i256 = evm_code_size;
         v7.i256 = add v4 v5;
-        v8.i256 = lt v6 v7;
-        br v8 block1 block2;
+        v8.i256 = add v4 v5;
+        v9.i256 = lt v6 v8;
+        br v9 block1 block2;
 
     block1:
         call %evm_contracthost_abort;
         evm_invalid;
 
     block2:
-        v10.i256 = sub v6 v7;
-        v11.i256 = evm_malloc v10;
-        evm_code_copy v11 v7 v10;
-        v13.i256 = evm_malloc 64.i256;
-        mstore v13 v11 i256;
-        v15.i256 = add v13 32.i256;
-        mstore v15 v10 i256;
-        v16.i256 = call %sol_abi_decoder_new__MemoryBytes__b48f82585f3ed728 v13;
-        v17.i256 = call %u256_decode_decode__Sol_SolDecoder_MemoryBytes___c66d50dfccf37f39 v16;
-        v18.i256 = call %address_decode_decode__Sol_SolDecoder_MemoryBytes___c66d50dfccf37f39 v16;
-        call %__CoolCoin_init_contract v17 v18 v1 v3 0.i256 0.i256;
-        evm_code_copy 0.i256 v4 v5;
-        evm_return 0.i256 v5;
+        v32.i256 = phi (v3 block0);
+        v31.i256 = phi (v1 block0);
+        v13.i256 = phi (v6 block0);
+        v11.i256 = phi (v5 block0);
+        v10.i256 = phi (v4 block0);
+        v12.i256 = add v10 v11;
+        v14.i256 = add v10 v11;
+        v15.i256 = sub v13 v14;
+        v16.i256 = add v10 v11;
+        v17.i256 = sub v13 v16;
+        v18.i256 = evm_malloc v17;
+        v19.i256 = add v10 v11;
+        v20.i256 = add v10 v11;
+        v21.i256 = sub v13 v20;
+        evm_code_copy v18 v19 v21;
+        v23.i256 = evm_malloc 64.i256;
+        mstore v23 v18 i256;
+        v24.i256 = add v10 v11;
+        v25.i256 = sub v13 v24;
+        v27.i256 = add v23 32.i256;
+        mstore v27 v25 i256;
+        v28.i256 = call %sol_abi_decoder_new__MemoryBytes__b48f82585f3ed728 v23;
+        v29.i256 = call %u256_decode_decode__Sol_SolDecoder_MemoryBytes___c66d50dfccf37f39 v28;
+        v30.i256 = call %address_decode_decode__Sol_SolDecoder_MemoryBytes___c66d50dfccf37f39 v28;
+        call %__CoolCoin_init_contract v29 v30 v31 v32 0.i256 0.i256;
+        evm_code_copy 0.i256 v10 v11;
+        evm_return 0.i256 v11;
 }
 
 func public %__CoolCoin_runtime() {
@@ -366,138 +385,188 @@ func public %__CoolCoin_runtime() {
         evm_invalid;
 
     block2:
-        v35.i256 = call %transfer_decode_decode__SolDecoder_CallData___c1e4510fd444b966 v5;
-        v37.i256 = call %__CoolCoin_recv_0_0 v35 0.i256 v1 0.i256;
+        v36.i256 = phi (v1 block0);
+        v34.i256 = phi (v5 block0);
+        v35.i256 = call %transfer_decode_decode__SolDecoder_CallData___c1e4510fd444b966 v34;
+        v37.i256 = call %__CoolCoin_recv_0_0 v35 0.i256 v36 0.i256;
         call %return_value__Evm_Sol_bool__261f3a707fad09c8 v37;
         evm_invalid;
 
     block3:
-        v39.i256 = call %approve_decode_decode__SolDecoder_CallData___c1e4510fd444b966 v5;
-        v41.i256 = call %__CoolCoin_recv_0_1 v39 0.i256 v1 0.i256;
+        v40.i256 = phi (v85 block16);
+        v38.i256 = phi (v84 block16);
+        v39.i256 = call %approve_decode_decode__SolDecoder_CallData___c1e4510fd444b966 v38;
+        v41.i256 = call %__CoolCoin_recv_0_1 v39 0.i256 v40 0.i256;
         call %return_value__Evm_Sol_bool__261f3a707fad09c8 v41;
         evm_invalid;
 
     block4:
-        v43.i256 = call %transferfrom_decode_decode__SolDecoder_CallData___c1e4510fd444b966 v5;
-        v45.i256 = call %__CoolCoin_recv_0_2 v43 0.i256 v1 0.i256;
+        v44.i256 = phi (v87 block17);
+        v42.i256 = phi (v86 block17);
+        v43.i256 = call %transferfrom_decode_decode__SolDecoder_CallData___c1e4510fd444b966 v42;
+        v45.i256 = call %__CoolCoin_recv_0_2 v43 0.i256 v44 0.i256;
         call %return_value__Evm_Sol_bool__261f3a707fad09c8 v45;
         evm_invalid;
 
     block5:
-        v47.i256 = call %balanceof_decode_decode__SolDecoder_CallData___c1e4510fd444b966 v5;
-        v49.i256 = call %__CoolCoin_recv_0_3 v47 v1;
+        v48.i256 = phi (v89 block18);
+        v46.i256 = phi (v88 block18);
+        v47.i256 = call %balanceof_decode_decode__SolDecoder_CallData___c1e4510fd444b966 v46;
+        v49.i256 = call %__CoolCoin_recv_0_3 v47 v48;
         call %return_value__Evm_Sol_u256__fe091c64bccbbbf1 v49;
         evm_invalid;
 
     block6:
-        v51.i256 = call %allowance_decode_decode__SolDecoder_CallData___c1e4510fd444b966 v5;
-        v53.i256 = call %__CoolCoin_recv_0_4 v51 v1;
+        v52.i256 = phi (v91 block19);
+        v50.i256 = phi (v90 block19);
+        v51.i256 = call %allowance_decode_decode__SolDecoder_CallData___c1e4510fd444b966 v50;
+        v53.i256 = call %__CoolCoin_recv_0_4 v51 v52;
         call %return_value__Evm_Sol_u256__fe091c64bccbbbf1 v53;
         evm_invalid;
 
     block7:
-        call %totalsupply_decode_decode__SolDecoder_CallData___c1e4510fd444b966 v5;
-        v56.i256 = call %__CoolCoin_recv_0_5 v1;
+        v55.i256 = phi (v93 block20);
+        v54.i256 = phi (v92 block20);
+        call %totalsupply_decode_decode__SolDecoder_CallData___c1e4510fd444b966 v54;
+        v56.i256 = call %__CoolCoin_recv_0_5 v55;
         call %return_value__Evm_Sol_u256__fe091c64bccbbbf1 v56;
         evm_invalid;
 
     block8:
-        call %name_decode_decode__SolDecoder_CallData___c1e4510fd444b966 v5;
+        v57.i256 = phi (v94 block21);
+        call %name_decode_decode__SolDecoder_CallData___c1e4510fd444b966 v57;
         v58.i256 = call %__CoolCoin_recv_0_6;
         call %return_value__Evm_Sol_String_32___fce5fd9d073f47ee v58;
         evm_invalid;
 
     block9:
-        call %symbol_decode_decode__SolDecoder_CallData___c1e4510fd444b966 v5;
+        v59.i256 = phi (v95 block22);
+        call %symbol_decode_decode__SolDecoder_CallData___c1e4510fd444b966 v59;
         v60.i256 = call %__CoolCoin_recv_0_7;
         call %return_value__Evm_Sol_String_8___90b3a09bdf47bf15 v60;
         evm_invalid;
 
     block10:
-        call %decimals_decode_decode__SolDecoder_CallData___c1e4510fd444b966 v5;
+        v61.i256 = phi (v96 block23);
+        call %decimals_decode_decode__SolDecoder_CallData___c1e4510fd444b966 v61;
         v62.i256 = call %__CoolCoin_recv_0_8;
         call %return_value__Evm_Sol_u8__d483d38efd15a73d v62;
         evm_invalid;
 
     block11:
-        v64.i256 = call %mint_decode_decode__SolDecoder_CallData___c1e4510fd444b966 v5;
-        v67.i256 = call %__CoolCoin_recv_1_0 v64 0.i256 v1 0.i256 v3;
+        v66.i256 = phi (v99 block24);
+        v65.i256 = phi (v98 block24);
+        v63.i256 = phi (v97 block24);
+        v64.i256 = call %mint_decode_decode__SolDecoder_CallData___c1e4510fd444b966 v63;
+        v67.i256 = call %__CoolCoin_recv_1_0 v64 0.i256 v65 0.i256 v66;
         call %return_value__Evm_Sol_bool__261f3a707fad09c8 v67;
         evm_invalid;
 
     block12:
-        v69.i256 = call %burn_decode_decode__SolDecoder_CallData___c1e4510fd444b966 v5;
-        v71.i256 = call %__CoolCoin_recv_1_1 v69 0.i256 v1 0.i256;
+        v70.i256 = phi (v101 block25);
+        v68.i256 = phi (v100 block25);
+        v69.i256 = call %burn_decode_decode__SolDecoder_CallData___c1e4510fd444b966 v68;
+        v71.i256 = call %__CoolCoin_recv_1_1 v69 0.i256 v70 0.i256;
         call %return_value__Evm_Sol_bool__261f3a707fad09c8 v71;
         evm_invalid;
 
     block13:
-        v73.i256 = call %burnfrom_decode_decode__SolDecoder_CallData___c1e4510fd444b966 v5;
-        v75.i256 = call %__CoolCoin_recv_1_2 v73 0.i256 v1 0.i256;
+        v74.i256 = phi (v103 block26);
+        v72.i256 = phi (v102 block26);
+        v73.i256 = call %burnfrom_decode_decode__SolDecoder_CallData___c1e4510fd444b966 v72;
+        v75.i256 = call %__CoolCoin_recv_1_2 v73 0.i256 v74 0.i256;
         call %return_value__Evm_Sol_bool__261f3a707fad09c8 v75;
         evm_invalid;
 
     block14:
-        v77.i256 = call %increaseallowance_decode_decode__SolDecoder_CallData___c1e4510fd444b966 v5;
-        v79.i256 = call %__CoolCoin_recv_1_3 v77 0.i256 v1 0.i256;
+        v78.i256 = phi (v105 block27);
+        v76.i256 = phi (v104 block27);
+        v77.i256 = call %increaseallowance_decode_decode__SolDecoder_CallData___c1e4510fd444b966 v76;
+        v79.i256 = call %__CoolCoin_recv_1_3 v77 0.i256 v78 0.i256;
         call %return_value__Evm_Sol_bool__261f3a707fad09c8 v79;
         evm_invalid;
 
     block15:
-        v81.i256 = call %decreaseallowance_decode_decode__SolDecoder_CallData___c1e4510fd444b966 v5;
-        v83.i256 = call %__CoolCoin_recv_1_4 v81 0.i256 v1 0.i256;
+        v82.i256 = phi (v107 block28);
+        v80.i256 = phi (v106 block28);
+        v81.i256 = call %decreaseallowance_decode_decode__SolDecoder_CallData___c1e4510fd444b966 v80;
+        v83.i256 = call %__CoolCoin_recv_1_4 v81 0.i256 v82 0.i256;
         call %return_value__Evm_Sol_bool__261f3a707fad09c8 v83;
         evm_invalid;
 
     block16:
+        v85.i256 = phi (v1 block0);
+        v84.i256 = phi (v5 block0);
         v21.i256 = eq v4 157198259.i256;
         br v21 block3 block17;
 
     block17:
+        v87.i256 = phi (v85 block16);
+        v86.i256 = phi (v84 block16);
         v22.i256 = eq v4 599290589.i256;
         br v22 block4 block18;
 
     block18:
+        v89.i256 = phi (v87 block17);
+        v88.i256 = phi (v86 block17);
         v23.i256 = eq v4 1889567281.i256;
         br v23 block5 block19;
 
     block19:
+        v91.i256 = phi (v89 block18);
+        v90.i256 = phi (v88 block18);
         v24.i256 = eq v4 3714247998.i256;
         br v24 block6 block20;
 
     block20:
+        v93.i256 = phi (v91 block19);
+        v92.i256 = phi (v90 block19);
         v25.i256 = eq v4 404098525.i256;
         br v25 block7 block21;
 
     block21:
+        v94.i256 = phi (v92 block20);
         v26.i256 = eq v4 117300739.i256;
         br v26 block8 block22;
 
     block22:
+        v95.i256 = phi (v94 block21);
         v27.i256 = eq v4 2514000705.i256;
         br v27 block9 block23;
 
     block23:
+        v96.i256 = phi (v95 block22);
         v28.i256 = eq v4 826074471.i256;
         br v28 block10 block24;
 
     block24:
+        v99.i256 = phi (v3 block23);
+        v98.i256 = phi (v93 block23);
+        v97.i256 = phi (v96 block23);
         v29.i256 = eq v4 1086394137.i256;
         br v29 block11 block25;
 
     block25:
+        v101.i256 = phi (v98 block24);
+        v100.i256 = phi (v97 block24);
         v30.i256 = eq v4 1117154408.i256;
         br v30 block12 block26;
 
     block26:
+        v103.i256 = phi (v101 block25);
+        v102.i256 = phi (v100 block25);
         v31.i256 = eq v4 2043438992.i256;
         br v31 block13 block27;
 
     block27:
+        v105.i256 = phi (v103 block26);
+        v104.i256 = phi (v102 block26);
         v32.i256 = eq v4 961581905.i256;
         br v32 block14 block28;
 
     block28:
+        v107.i256 = phi (v105 block27);
+        v106.i256 = phi (v104 block27);
         v33.i256 = eq v4 2757214935.i256;
         br v33 block15 block1;
 }
@@ -608,10 +677,12 @@ func public %alloc(v0.i256) -> i256 {
         br v6 block1 block2;
 
     block1:
+        v7.i256 = phi (v5 block0);
         jump block2;
 
     block2:
-        v8.i256 = phi (v3 block0) (v5 block1);
+        v17.i256 = phi (v0 block0) (v0 block1);
+        v8.i256 = phi (v3 block0) (v7 block1);
         v9.i256 = eq v8 0.i256;
         br v9 block3 block4;
 
@@ -621,7 +692,7 @@ func public %alloc(v0.i256) -> i256 {
         br v12 block5 block6;
 
     block4:
-        v14.i256 = phi (v0 block2) (v0 block6);
+        v14.i256 = phi (v17 block2) (v18 block6);
         v13.i256 = phi (v8 block2) (v16 block6);
         v15.i256 = add v13 v14;
         mstore 64.i256 v15 i256;
@@ -631,6 +702,7 @@ func public %alloc(v0.i256) -> i256 {
         jump block6;
 
     block6:
+        v18.i256 = phi (v17 block3) (v17 block5);
         v16.i256 = phi (v10 block3) (8192.i256 block5);
         jump block4;
 }
@@ -677,7 +749,8 @@ func public %runtime_selector__Evm_Sol__2533f5c49b57a682() -> i256 {
         evm_invalid;
 
     block2:
-        v6.i256 = call %calldata_byteinput_word_at v1 0.i256;
+        v5.i256 = phi (v1 block0);
+        v6.i256 = call %calldata_byteinput_word_at v5 0.i256;
         v7.i256 = call %sol_abi_selector_from_prefix v6;
         return v7;
 }
@@ -992,11 +1065,13 @@ func public %soldecoder_i__abidecoder_read_word__MemoryBytes__b48f82585f3ed728(v
         evm_revert 0.i256 0.i256;
 
     block2:
-        v14.i256 = add v0 64.i256;
+        v17.i256 = phi (v7 block0);
+        v13.i256 = phi (v0 block0);
+        v14.i256 = add v13 64.i256;
         v15.i256 = mload v14 i256;
-        v16.i256 = call %memorybytes_byteinput_word_at v0 v15;
-        v18.i256 = add v0 64.i256;
-        mstore v18 v7 i256;
+        v16.i256 = call %memorybytes_byteinput_word_at v13 v15;
+        v18.i256 = add v13 64.i256;
+        mstore v18 v17 i256;
         return v16;
 }
 
@@ -1074,14 +1149,16 @@ func public %bool_encode_encode__Sol_SolEncoder__dce63ad1a1fe4ae2(v0.i256, v1.i2
         br v0 block1 block3;
 
     block1:
-        call %solencoder_abiencoder_write_word v1 1.i256;
+        v3.i256 = phi (v1 block0);
+        call %solencoder_abiencoder_write_word v3 1.i256;
         jump block2;
 
     block2:
         return;
 
     block3:
-        call %solencoder_abiencoder_write_word v1 0.i256;
+        v5.i256 = phi (v1 block0);
+        call %solencoder_abiencoder_write_word v5 0.i256;
         jump block2;
 }
 
@@ -1226,12 +1303,14 @@ func public %soldecoder_i__abidecoder_read_word__CallData__b9ab8dc8a4b2f9e(v0.i2
         evm_revert 0.i256 0.i256;
 
     block2:
-        v14.i256 = mload v0 i256;
-        v15.i256 = add v0 32.i256;
+        v18.i256 = phi (v7 block0);
+        v13.i256 = phi (v0 block0);
+        v14.i256 = mload v13 i256;
+        v15.i256 = add v13 32.i256;
         v16.i256 = mload v15 i256;
         v17.i256 = call %calldata_byteinput_word_at v14 v16;
-        v19.i256 = add v0 32.i256;
-        mstore v19 v7 i256;
+        v19.i256 = add v13 32.i256;
+        mstore v19 v18 i256;
         return v17;
 }
 
@@ -1253,12 +1332,14 @@ func public %solencoder_ensure_init_mem(v0.i256, v1.i256) {
         br v4 block1 block2;
 
     block1:
-        v6.i256 = evm_malloc v1;
-        mstore v0 v6 i256;
-        v9.i256 = add v0 32.i256;
+        v7.i256 = phi (v0 block0);
+        v5.i256 = phi (v1 block0);
+        v6.i256 = evm_malloc v5;
+        mstore v7 v6 i256;
+        v9.i256 = add v7 32.i256;
         mstore v9 v6 i256;
-        v10.i256 = add v6 v1;
-        v12.i256 = add v0 64.i256;
+        v10.i256 = add v6 v5;
+        v12.i256 = add v7 64.i256;
         mstore v12 v10 i256;
         jump block2;
 
