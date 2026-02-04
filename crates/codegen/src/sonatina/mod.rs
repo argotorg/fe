@@ -135,6 +135,99 @@ pub fn emit_module_sonatina_ir(
     Ok(writer.dump_string())
 }
 
+/// Compiles a Fe module to Sonatina IR and returns a validation report.
+///
+/// This is intended for debugging malformed IR: it checks that every `ValueId` used as an operand
+/// refers to a defining instruction that is still present in the function layout.
+pub fn validate_module_sonatina_ir(
+    db: &DriverDataBase,
+    top_mod: TopLevelMod<'_>,
+) -> Result<String, LowerError> {
+    let layout = layout::EVM_LAYOUT;
+    let module = compile_module(db, top_mod, layout)?;
+    Ok(validate_sonatina_module_layout(&module))
+}
+
+fn validate_sonatina_module_layout(module: &Module) -> String {
+    use std::fmt::Write as _;
+
+    let mut out = String::new();
+    let mut any = false;
+
+    for func in module.funcs() {
+        let name = module.ctx.func_sig(func, |sig| sig.name().to_string());
+
+        let (dangling, total) = module.func_store.view(func, |function| {
+            use sonatina_ir::ir_writer::{FuncWriteCtx, IrWrite as _};
+
+            let write_inst = |inst: sonatina_ir::InstId| -> String {
+                let ctx = FuncWriteCtx::new(function, func);
+                let mut buf = Vec::new();
+                let _ = inst.write(&mut buf, &ctx);
+                String::from_utf8_lossy(&buf).into_owned()
+            };
+
+            let mut total_operands: usize = 0;
+            let mut dangling_operands: Vec<(
+                ValueId,
+                sonatina_ir::InstId,
+                String,
+                sonatina_ir::InstId,
+                String,
+            )> = Vec::new();
+
+            for block in function.layout.iter_block() {
+                for inst in function.layout.iter_inst(block) {
+                    let user_dbg = write_inst(inst);
+                    function.dfg.inst(inst).for_each_value(&mut |operand| {
+                        total_operands += 1;
+                        let sonatina_ir::Value::Inst { inst: def_inst, .. } =
+                            function.dfg.value(operand)
+                        else {
+                            return;
+                        };
+                        if !function.layout.is_inst_inserted(*def_inst) {
+                            let def_dbg = write_inst(*def_inst);
+                            dangling_operands.push((
+                                operand,
+                                *def_inst,
+                                def_dbg,
+                                inst,
+                                user_dbg.clone(),
+                            ));
+                        }
+                    });
+                }
+            }
+
+            (dangling_operands, total_operands)
+        });
+
+        if dangling.is_empty() {
+            continue;
+        }
+        any = true;
+        let _ = writeln!(
+            &mut out,
+            "=== {name} ===\ninvalid_operands: {}/{}\n",
+            dangling.len(),
+            total
+        );
+        for (operand, def_inst, def_dbg, user_inst, user_dbg) in dangling {
+            let _ = writeln!(
+                &mut out,
+                "- operand={operand:?} def_inst={def_inst:?} def={def_dbg} used_by={user_inst:?} user={user_dbg}"
+            );
+        }
+        out.push('\n');
+    }
+
+    if !any {
+        out.push_str("ok\n");
+    }
+    out
+}
+
 /// Lowers an entire MIR module to Sonatina IR.
 struct ModuleLowerer<'db, 'a> {
     db: &'db DriverDataBase,
@@ -148,6 +241,11 @@ struct ModuleLowerer<'db, 'a> {
     name_map: FxHashMap<String, FuncRef>,
     /// Maps function symbol names to whether they return a value.
     returns_value_map: FxHashMap<String, bool>,
+    /// Maps function symbol names to a parameter mask indicating which MIR arguments are
+    /// runtime-visible (not erased) and therefore must be passed on the EVM stack.
+    ///
+    /// The mask is in the same order as `param_locals` followed by `effect_param_locals`.
+    runtime_param_masks: FxHashMap<String, Vec<bool>>,
     /// Indices of functions executed directly by the EVM (empty stack).
     ///
     /// These entry functions emit `evm_stop` instead of internal `Return`.
@@ -171,6 +269,7 @@ impl<'db, 'a> ModuleLowerer<'db, 'a> {
             func_map: FxHashMap::default(),
             name_map: FxHashMap::default(),
             returns_value_map: FxHashMap::default(),
+            runtime_param_masks: FxHashMap::default(),
             entry_func_idxs: FxHashSet::default(),
         }
     }
@@ -201,7 +300,7 @@ impl<'db, 'a> ModuleLowerer<'db, 'a> {
                 continue;
             }
             let name = &func.symbol_name;
-            let sig = self.lower_signature(func)?;
+            let (sig, mask) = self.lower_signature_and_mask(func)?;
 
             let func_ref = self.builder.declare_function(sig).map_err(|e| {
                 LowerError::Internal(format!("failed to declare function {name}: {e}"))
@@ -211,12 +310,16 @@ impl<'db, 'a> ModuleLowerer<'db, 'a> {
             self.name_map.insert(name.clone(), func_ref);
             self.returns_value_map
                 .insert(name.clone(), func.returns_value);
+            self.runtime_param_masks.insert(name.clone(), mask);
         }
         Ok(())
     }
 
     /// Lower function signatures.
-    fn lower_signature(&self, func: &mir::MirFunction<'db>) -> Result<Signature, LowerError> {
+    fn lower_signature_and_mask(
+        &self,
+        func: &mir::MirFunction<'db>,
+    ) -> Result<(Signature, Vec<bool>), LowerError> {
         use mir::ir::{ContractFunctionKind, MirFunctionOrigin, SyntheticId};
 
         let name = &func.symbol_name;
@@ -237,10 +340,12 @@ impl<'db, 'a> ModuleLowerer<'db, 'a> {
             )
         );
 
-        // Convert parameter types - all EVM parameters are 256-bit words.
+        // Compute which MIR parameters are runtime-visible (stack words).
         // Entry functions have no parameters since the EVM starts with an empty stack.
-        let mut params = Vec::new();
-        if !is_contract_entry {
+        let mut mask = Vec::new();
+        if is_contract_entry {
+            // Keep it empty; callers should never pass arguments to EVM entrypoints.
+        } else {
             for local_id in func.body.param_locals.iter().copied() {
                 let local_ty = func
                     .body
@@ -250,10 +355,7 @@ impl<'db, 'a> ModuleLowerer<'db, 'a> {
                         LowerError::Internal(format!("unknown param local: {local_id:?}"))
                     })?
                     .ty;
-                if is_erased_runtime_ty(self.db, &self.target_layout, local_ty) {
-                    continue;
-                }
-                params.push(types::word_type());
+                mask.push(!is_erased_runtime_ty(self.db, &self.target_layout, local_ty));
             }
             for local_id in func.body.effect_param_locals.iter().copied() {
                 let local_ty = func
@@ -264,9 +366,14 @@ impl<'db, 'a> ModuleLowerer<'db, 'a> {
                         LowerError::Internal(format!("unknown effect param local: {local_id:?}"))
                     })?
                     .ty;
-                if is_erased_runtime_ty(self.db, &self.target_layout, local_ty) {
-                    continue;
-                }
+                mask.push(!is_erased_runtime_ty(self.db, &self.target_layout, local_ty));
+            }
+        }
+
+        // Convert parameter types - all EVM parameters are 256-bit words.
+        let mut params = Vec::new();
+        for keep in &mask {
+            if *keep {
                 params.push(types::word_type());
             }
         }
@@ -278,7 +385,7 @@ impl<'db, 'a> ModuleLowerer<'db, 'a> {
             types::unit_type()
         };
 
-        Ok(Signature::new(name, linkage, &params, ret_ty))
+        Ok((Signature::new(name, linkage, &params, ret_ty), mask))
     }
 
     /// Lower all function bodies.
@@ -812,6 +919,7 @@ impl<'db, 'a> ModuleLowerer<'db, 'a> {
                     &local_vars,
                     &self.name_map,
                     &self.returns_value_map,
+                    &self.runtime_param_masks,
                     is,
                 )?;
             }
@@ -827,6 +935,7 @@ impl<'db, 'a> ModuleLowerer<'db, 'a> {
                 &mut value_map,
                 &local_vars,
                 &self.name_map,
+                &self.runtime_param_masks,
                 is,
                 is_entry,
             )?;
@@ -851,6 +960,7 @@ fn lower_instruction<'db, C: sonatina_ir::func_cursor::FuncCursor>(
     local_vars: &FxHashMap<mir::LocalId, Variable>,
     name_map: &FxHashMap<String, FuncRef>,
     returns_value_map: &FxHashMap<String, bool>,
+    runtime_param_masks: &FxHashMap<String, Vec<bool>>,
     is: &sonatina_ir::inst::evm::inst_set::EvmInstSet,
 ) -> Result<(), LowerError> {
     use mir::MirInst;
@@ -882,6 +992,7 @@ fn lower_instruction<'db, C: sonatina_ir::func_cursor::FuncCursor>(
                 local_vars,
                 name_map,
                 returns_value_map,
+                runtime_param_masks,
                 is,
             )?;
             if let (Some(dest_local), Some(result_val)) = (dest, result) {
@@ -977,6 +1088,7 @@ fn lower_rvalue<'db, C: sonatina_ir::func_cursor::FuncCursor>(
     local_vars: &FxHashMap<mir::LocalId, Variable>,
     name_map: &FxHashMap<String, FuncRef>,
     returns_value_map: &FxHashMap<String, bool>,
+    runtime_param_masks: &FxHashMap<String, Vec<bool>>,
     is: &sonatina_ir::inst::evm::inst_set::EvmInstSet,
 ) -> Result<Option<ValueId>, LowerError> {
     use mir::Rvalue;
@@ -1574,40 +1686,66 @@ fn lower_rvalue<'db, C: sonatina_ir::func_cursor::FuncCursor>(
 
             // Lower arguments (regular args + effect args)
             let mut args = Vec::with_capacity(call.args.len() + call.effect_args.len());
-            for &arg in &call.args {
-                let arg_ty = body
-                    .values
-                    .get(arg.index())
-                    .ok_or_else(|| LowerError::Internal("unknown call argument".to_string()))?
-                    .ty;
-                if is_erased_runtime_ty(db, target_layout, arg_ty) {
-                    continue;
+            if let Some(mask) = runtime_param_masks.get(callee_name) {
+                let all_args: Vec<_> = call
+                    .args
+                    .iter()
+                    .chain(call.effect_args.iter())
+                    .copied()
+                    .collect();
+                if mask.len() != all_args.len() {
+                    return Err(LowerError::Internal(format!(
+                        "call to `{callee_name}` has mismatched arg mask length (mask={}, call_args={})",
+                        mask.len(),
+                        all_args.len()
+                    )));
                 }
-                let val = lower_value(fb, db, target_layout, arg, body, value_map, local_vars, is)?;
-                args.push(val);
-            }
-            for &effect_arg in &call.effect_args {
-                let arg_ty = body
-                    .values
-                    .get(effect_arg.index())
-                    .ok_or_else(|| {
-                        LowerError::Internal("unknown call effect argument".to_string())
-                    })?
-                    .ty;
-                if is_erased_runtime_ty(db, target_layout, arg_ty) {
-                    continue;
+                for (keep, arg) in mask.iter().zip(all_args) {
+                    if !*keep {
+                        continue;
+                    }
+                    let val =
+                        lower_value(fb, db, target_layout, arg, body, value_map, local_vars, is)?;
+                    args.push(val);
                 }
-                let val = lower_value(
-                    fb,
-                    db,
-                    target_layout,
-                    effect_arg,
-                    body,
-                    value_map,
-                    local_vars,
-                    is,
-                )?;
-                args.push(val);
+            } else {
+                // Fallback for callees without a declared signature/mask (e.g. externs).
+                for &arg in &call.args {
+                    let arg_ty = body
+                        .values
+                        .get(arg.index())
+                        .ok_or_else(|| LowerError::Internal("unknown call argument".to_string()))?
+                        .ty;
+                    if is_erased_runtime_ty(db, target_layout, arg_ty) {
+                        continue;
+                    }
+                    let val =
+                        lower_value(fb, db, target_layout, arg, body, value_map, local_vars, is)?;
+                    args.push(val);
+                }
+                for &effect_arg in &call.effect_args {
+                    let arg_ty = body
+                        .values
+                        .get(effect_arg.index())
+                        .ok_or_else(|| {
+                            LowerError::Internal("unknown call effect argument".to_string())
+                        })?
+                        .ty;
+                    if is_erased_runtime_ty(db, target_layout, arg_ty) {
+                        continue;
+                    }
+                    let val = lower_value(
+                        fb,
+                        db,
+                        target_layout,
+                        effect_arg,
+                        body,
+                        value_map,
+                        local_vars,
+                        is,
+                    )?;
+                    args.push(val);
+                }
             }
 
             // If the caller erased some compile-time-only arguments but the callee signature still
@@ -1705,21 +1843,15 @@ fn lower_value<'db, C: sonatina_ir::func_cursor::FuncCursor>(
 ) -> Result<ValueId, LowerError> {
     let value_data = &body.values[value_id.index()];
 
-    // Some origins depend on the current SSA state / current block; avoid caching them
-    // across the whole function.
-    // Avoid caching immediates: some backends treat operand lists as a set rather than a multiset,
-    // so reusing the same `ValueId` for repeated immediates can lead to missing stack items when an
-    // instruction needs multiple copies (e.g., `create2` with `value=0` and `salt=0`).
-    let cacheable = !matches!(
-        value_data.origin,
-        mir::ValueOrigin::Local(_)
-            | mir::ValueOrigin::PlaceRef(_)
-            | mir::ValueOrigin::Synthetic(_)
-            | mir::ValueOrigin::Unit
-    );
-    if cacheable && let Some(&val) = value_map.get(&value_id) {
-        return Ok(val);
-    }
+    // Note: We intentionally avoid caching lowered MIR values across the function.
+    //
+    // Sonatina's SSA builder may rewrite/remove placeholder `phi`s during sealing; caching a value
+    // that (transitively) comes from `use_var` can leave us holding a `ValueId` whose defining
+    // instruction was removed from the layout, producing malformed IR.
+    //
+    // This can be revisited once we have a robust notion of which MIR values are stable across
+    // blocks after SSA sealing.
+    let cacheable = false;
 
     let result = lower_value_origin(
         fb,
@@ -2486,6 +2618,7 @@ fn lower_terminator<'db, C: sonatina_ir::func_cursor::FuncCursor>(
     value_map: &mut FxHashMap<mir::ValueId, ValueId>,
     local_vars: &FxHashMap<mir::LocalId, Variable>,
     name_map: &FxHashMap<String, FuncRef>,
+    runtime_param_masks: &FxHashMap<String, Vec<bool>>,
     is: &sonatina_ir::inst::evm::inst_set::EvmInstSet,
     is_entry: bool,
 ) -> Result<(), LowerError> {
@@ -2637,47 +2770,80 @@ fn lower_terminator<'db, C: sonatina_ir::func_cursor::FuncCursor>(
                 })?;
 
                 let mut args = Vec::with_capacity(call.args.len() + call.effect_args.len());
-                for &arg in &call.args {
-                    let arg_ty = body
-                        .values
-                        .get(arg.index())
-                        .ok_or_else(|| LowerError::Internal("unknown call argument".to_string()))?
-                        .ty;
-                    if is_erased_runtime_ty(db, target_layout, arg_ty) {
-                        continue;
+                if let Some(mask) = runtime_param_masks.get(callee_name) {
+                    let all_args: Vec<_> = call
+                        .args
+                        .iter()
+                        .chain(call.effect_args.iter())
+                        .copied()
+                        .collect();
+                    if mask.len() != all_args.len() {
+                        return Err(LowerError::Internal(format!(
+                            "terminating call to `{callee_name}` has mismatched arg mask length (mask={}, call_args={})",
+                            mask.len(),
+                            all_args.len()
+                        )));
                     }
-                    args.push(lower_value(
-                        fb,
-                        db,
-                        target_layout,
-                        arg,
-                        body,
-                        value_map,
-                        local_vars,
-                        is,
-                    )?);
-                }
-                for &arg in &call.effect_args {
-                    let arg_ty = body
-                        .values
-                        .get(arg.index())
-                        .ok_or_else(|| {
-                            LowerError::Internal("unknown call effect argument".to_string())
-                        })?
-                        .ty;
-                    if is_erased_runtime_ty(db, target_layout, arg_ty) {
-                        continue;
+                    for (keep, arg) in mask.iter().zip(all_args) {
+                        if !*keep {
+                            continue;
+                        }
+                        args.push(lower_value(
+                            fb,
+                            db,
+                            target_layout,
+                            arg,
+                            body,
+                            value_map,
+                            local_vars,
+                            is,
+                        )?);
                     }
-                    args.push(lower_value(
-                        fb,
-                        db,
-                        target_layout,
-                        arg,
-                        body,
-                        value_map,
-                        local_vars,
-                        is,
-                    )?);
+                } else {
+                    for &arg in &call.args {
+                        let arg_ty = body
+                            .values
+                            .get(arg.index())
+                            .ok_or_else(|| {
+                                LowerError::Internal("unknown call argument".to_string())
+                            })?
+                            .ty;
+                        if is_erased_runtime_ty(db, target_layout, arg_ty) {
+                            continue;
+                        }
+                        args.push(lower_value(
+                            fb,
+                            db,
+                            target_layout,
+                            arg,
+                            body,
+                            value_map,
+                            local_vars,
+                            is,
+                        )?);
+                    }
+                    for &arg in &call.effect_args {
+                        let arg_ty = body
+                            .values
+                            .get(arg.index())
+                            .ok_or_else(|| {
+                                LowerError::Internal("unknown call effect argument".to_string())
+                            })?
+                            .ty;
+                        if is_erased_runtime_ty(db, target_layout, arg_ty) {
+                            continue;
+                        }
+                        args.push(lower_value(
+                            fb,
+                            db,
+                            target_layout,
+                            arg,
+                            body,
+                            value_map,
+                            local_vars,
+                            is,
+                        )?);
+                    }
                 }
 
                 let expected_argc = fb

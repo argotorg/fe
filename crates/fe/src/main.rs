@@ -106,6 +106,23 @@ pub enum Command {
         /// If no path is provided, defaults to `fe-test-report.tar.gz` in the current directory.
         #[arg(long, value_name = "OUT", num_args = 0..=1, default_missing_value = "fe-test-report.tar.gz")]
         report: Option<Utf8PathBuf>,
+        /// Write one `.tar.gz` report per input suite into this directory.
+        ///
+        /// Useful when running a glob over many fixtures: each failing suite can be shared as a
+        /// standalone artifact.
+        ///
+        /// If no directory is provided, defaults to `target/fe-test-reports`.
+        #[arg(
+            long,
+            value_name = "DIR",
+            num_args = 0..=1,
+            default_missing_value = "target/fe-test-reports",
+            conflicts_with = "report"
+        )]
+        report_dir: Option<Utf8PathBuf>,
+        /// When used with `--report-dir`, only write reports for suites that failed.
+        #[arg(long, requires = "report_dir")]
+        report_failed_only: bool,
     },
     /// Create a new ingot or workspace.
     New {
@@ -173,6 +190,8 @@ pub fn run(opts: &Options) {
             sonatina_transient_malloc_filter,
             debug_dir,
             report,
+            report_dir,
+            report_failed_only,
         } => {
             let debug = TestDebugOptions {
                 trace_evm: *trace_evm,
@@ -197,6 +216,8 @@ pub fn run(opts: &Options) {
                 backend,
                 &debug,
                 report.as_ref(),
+                report_dir.as_ref(),
+                *report_failed_only,
             );
         }
         Command::New {
