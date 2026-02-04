@@ -20,7 +20,8 @@ func public %match_bool(v0.i256) -> i256 {
         jump block2;
 
     block4:
-        v6.i256 = eq v0 1.i256;
+        v5.i256 = phi (v0 block0);
+        v6.i256 = eq v5 1.i256;
         br v6 block1 block3;
 }
 
@@ -42,11 +43,12 @@ func public %match_u8(v0.i256) -> i256 {
         jump block2;
 
     block5:
-        v8.i256 = eq v0 0.i256;
+        v6.i256 = phi (v0 block0);
+        v8.i256 = eq v6 0.i256;
         br v8 block1 block6;
 
     block6:
-        v9.i256 = eq v0 255.i256;
+        v9.i256 = eq v6 255.i256;
         br v9 block3 block4;
 }
 
@@ -68,11 +70,12 @@ func public %match_u16(v0.i256) -> i256 {
         jump block2;
 
     block5:
-        v9.i256 = eq v0 4660.i256;
+        v6.i256 = phi (v0 block0);
+        v9.i256 = eq v6 4660.i256;
         br v9 block1 block6;
 
     block6:
-        v10.i256 = eq v0 43981.i256;
+        v10.i256 = eq v6 43981.i256;
         br v10 block3 block4;
 }
 
@@ -94,11 +97,12 @@ func public %match_u32(v0.i256) -> i256 {
         jump block2;
 
     block5:
-        v9.i256 = eq v0 3735928559.i256;
+        v6.i256 = phi (v0 block0);
+        v9.i256 = eq v6 3735928559.i256;
         br v9 block1 block6;
 
     block6:
-        v10.i256 = eq v0 3405691582.i256;
+        v10.i256 = eq v6 3405691582.i256;
         br v10 block3 block4;
 }
 
@@ -120,11 +124,12 @@ func public %match_u64(v0.i256) -> i256 {
         jump block2;
 
     block5:
-        v8.i256 = eq v0 0.i256;
+        v6.i256 = phi (v0 block0);
+        v8.i256 = eq v6 0.i256;
         br v8 block1 block6;
 
     block6:
-        v9.i256 = eq v0 18446744073709551615.i256;
+        v9.i256 = eq v6 18446744073709551615.i256;
         br v9 block3 block4;
 }
 
@@ -146,11 +151,12 @@ func public %match_u128(v0.i256) -> i256 {
         jump block2;
 
     block5:
-        v8.i256 = eq v0 0.i256;
+        v6.i256 = phi (v0 block0);
+        v8.i256 = eq v6 0.i256;
         br v8 block1 block6;
 
     block6:
-        v9.i256 = eq v0 340282366920938463463374607431768211455.i256;
+        v9.i256 = eq v6 340282366920938463463374607431768211455.i256;
         br v9 block3 block4;
 }
 
@@ -172,11 +178,12 @@ func public %match_u256(v0.i256) -> i256 {
         jump block2;
 
     block5:
-        v8.i256 = eq v0 0.i256;
+        v6.i256 = phi (v0 block0);
+        v8.i256 = eq v6 0.i256;
         br v8 block1 block6;
 
     block6:
-        v9.i256 = eq v0 -1.i256;
+        v9.i256 = eq v6 -1.i256;
         br v9 block3 block4;
 }
 
@@ -198,11 +205,12 @@ func public %match_i8(v0.i256) -> i256 {
         jump block2;
 
     block5:
-        v8.i256 = eq v0 0.i256;
+        v6.i256 = phi (v0 block0);
+        v8.i256 = eq v6 0.i256;
         br v8 block1 block6;
 
     block6:
-        v9.i256 = eq v0 99.i256;
+        v9.i256 = eq v6 99.i256;
         br v9 block3 block4;
 }
 
@@ -224,11 +232,12 @@ func public %match_i16(v0.i256) -> i256 {
         jump block2;
 
     block5:
-        v8.i256 = eq v0 0.i256;
+        v6.i256 = phi (v0 block0);
+        v8.i256 = eq v6 0.i256;
         br v8 block1 block6;
 
     block6:
-        v9.i256 = eq v0 32000.i256;
+        v9.i256 = eq v6 32000.i256;
         br v9 block3 block4;
 }
 
@@ -250,11 +259,12 @@ func public %match_i32(v0.i256) -> i256 {
         jump block2;
 
     block5:
-        v8.i256 = eq v0 0.i256;
+        v6.i256 = phi (v0 block0);
+        v8.i256 = eq v6 0.i256;
         br v8 block1 block6;
 
     block6:
-        v9.i256 = eq v0 2000000000.i256;
+        v9.i256 = eq v6 2000000000.i256;
         br v9 block3 block4;
 }
 
@@ -276,11 +286,12 @@ func public %match_i64(v0.i256) -> i256 {
         jump block2;
 
     block5:
-        v8.i256 = eq v0 0.i256;
+        v6.i256 = phi (v0 block0);
+        v8.i256 = eq v6 0.i256;
         br v8 block1 block6;
 
     block6:
-        v9.i256 = eq v0 9223372036854775807.i256;
+        v9.i256 = eq v6 9223372036854775807.i256;
         br v9 block3 block4;
 }
 
@@ -302,11 +313,12 @@ func public %match_i128(v0.i256) -> i256 {
         jump block2;
 
     block5:
-        v8.i256 = eq v0 0.i256;
+        v6.i256 = phi (v0 block0);
+        v8.i256 = eq v6 0.i256;
         br v8 block1 block6;
 
     block6:
-        v9.i256 = eq v0 170141183460469231731687303715884105727.i256;
+        v9.i256 = eq v6 170141183460469231731687303715884105727.i256;
         br v9 block3 block4;
 }
 
@@ -328,11 +340,12 @@ func public %match_i256(v0.i256) -> i256 {
         jump block2;
 
     block5:
-        v8.i256 = eq v0 0.i256;
+        v6.i256 = phi (v0 block0);
+        v8.i256 = eq v6 0.i256;
         br v8 block1 block6;
 
     block6:
-        v9.i256 = eq v0 -1.i256;
+        v9.i256 = eq v6 -1.i256;
         br v9 block3 block4;
 }
 

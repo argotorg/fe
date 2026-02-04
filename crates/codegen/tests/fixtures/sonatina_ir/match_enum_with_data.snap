@@ -21,7 +21,8 @@ func public %match_option(v0.i256) -> i256 {
         jump block4;
 
     block1:
-        v4.i256 = add v0 32.i256;
+        v2.i256 = phi (v9 block4);
+        v4.i256 = add v2 32.i256;
         v5.i256 = mload v4 i256;
         v6.i64 = trunc v5 i64;
         v7.i256 = zext v6 i256;
@@ -35,7 +36,8 @@ func public %match_option(v0.i256) -> i256 {
         jump block2;
 
     block4:
-        v10.i256 = mload v0 i256;
+        v9.i256 = phi (v0 block0);
+        v10.i256 = mload v9 i256;
         v12.i256 = eq v10 1.i256;
         br v12 block1 block6;
 

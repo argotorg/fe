@@ -45,11 +45,15 @@ func public %transfer__StorPtr_StorageMap_u256__u256__0____4a2331212cb04e60(v0.i
         return 1.i256;
 
     block2:
-        v9.i256 = call %storagemap_k__v__const_salt__u256__get__u256_u256_0__6a346ad3c930d971 v1;
-        v13.i256 = sub v5 v2;
-        call %storagemap_k__v__const_salt__u256__set__u256_u256_0__6a346ad3c930d971 v0 v13;
-        v14.i256 = add v9 v2;
-        call %storagemap_k__v__const_salt__u256__set__u256_u256_0__6a346ad3c930d971 v1 v14;
+        v12.i256 = phi (v2 block0);
+        v11.i256 = phi (v5 block0);
+        v10.i256 = phi (v0 block0);
+        v8.i256 = phi (v1 block0);
+        v9.i256 = call %storagemap_k__v__const_salt__u256__get__u256_u256_0__6a346ad3c930d971 v8;
+        v13.i256 = sub v11 v12;
+        call %storagemap_k__v__const_salt__u256__set__u256_u256_0__6a346ad3c930d971 v10 v13;
+        v14.i256 = add v9 v12;
+        call %storagemap_k__v__const_salt__u256__set__u256_u256_0__6a346ad3c930d971 v8 v14;
         return 0.i256;
 }
 
@@ -107,23 +111,24 @@ func public %runtime__StorPtr_Evm___207f35a85ac4062e() {
         evm_return 0.i256 0.i256;
 
     block7:
-        v25.i256 = eq v3 2630350600.i256;
+        v19.i256 = phi (v3 block0);
+        v25.i256 = eq v19 2630350600.i256;
         br v25 block1 block8;
 
     block8:
-        v26.i256 = eq v3 1246470123.i256;
+        v26.i256 = eq v19 1246470123.i256;
         br v26 block2 block9;
 
     block9:
-        v27.i256 = eq v3 2430412327.i256;
+        v27.i256 = eq v19 2430412327.i256;
         br v27 block3 block10;
 
     block10:
-        v28.i256 = eq v3 3378517838.i256;
+        v28.i256 = eq v19 3378517838.i256;
         br v28 block4 block11;
 
     block11:
-        v29.i256 = eq v3 197806145.i256;
+        v29.i256 = eq v19 197806145.i256;
         br v29 block5 block6;
 }
 
@@ -187,11 +192,15 @@ func public %transfer__MemPtr_StorageMap_u256__u256__0____3cd7ace0c4584833(v0.i2
         return 1.i256;
 
     block2:
-        v9.i256 = call %storagemap_k__v__const_salt__u256__get__u256_u256_0__6a346ad3c930d971 v1;
-        v13.i256 = sub v5 v2;
-        call %storagemap_k__v__const_salt__u256__set__u256_u256_0__6a346ad3c930d971 v0 v13;
-        v14.i256 = add v9 v2;
-        call %storagemap_k__v__const_salt__u256__set__u256_u256_0__6a346ad3c930d971 v1 v14;
+        v12.i256 = phi (v2 block0);
+        v11.i256 = phi (v5 block0);
+        v10.i256 = phi (v0 block0);
+        v8.i256 = phi (v1 block0);
+        v9.i256 = call %storagemap_k__v__const_salt__u256__get__u256_u256_0__6a346ad3c930d971 v8;
+        v13.i256 = sub v11 v12;
+        call %storagemap_k__v__const_salt__u256__set__u256_u256_0__6a346ad3c930d971 v10 v13;
+        v14.i256 = add v9 v12;
+        call %storagemap_k__v__const_salt__u256__set__u256_u256_0__6a346ad3c930d971 v8 v14;
         return 0.i256;
 }
 

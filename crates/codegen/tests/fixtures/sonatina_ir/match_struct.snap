@@ -17,31 +17,35 @@ func public %match_struct_fields(v0.i256) -> i256 {
         return v2;
 
     block3:
-        v5.i256 = add v0 1.i256;
+        v3.i256 = phi (v33 block8);
+        v5.i256 = add v3 1.i256;
         v6.i256 = mload v5 i256;
         v7.i8 = trunc v6 i8;
         v8.i256 = zext v7 i256;
         jump block2;
 
     block4:
-        v10.i256 = mload v0 i256;
+        v9.i256 = phi (v28 block7);
+        v10.i256 = mload v9 i256;
         v11.i8 = trunc v10 i8;
         v12.i256 = zext v11 i256;
         jump block2;
 
     block5:
-        v14.i256 = add v0 1.i256;
+        v13.i256 = phi (v33 block8);
+        v14.i256 = add v13 1.i256;
         v15.i256 = mload v14 i256;
         v16.i8 = trunc v15 i8;
         v17.i256 = zext v16 i256;
-        v18.i256 = mload v0 i256;
+        v18.i256 = mload v13 i256;
         v19.i8 = trunc v18 i8;
         v20.i256 = zext v19 i256;
         v21.i256 = add v20 v17;
         jump block2;
 
     block6:
-        v23.i256 = add v0 1.i256;
+        v22.i256 = phi (v0 block0);
+        v23.i256 = add v22 1.i256;
         v24.i256 = mload v23 i256;
         v25.i8 = trunc v24 i8;
         v26.i256 = zext v25 i256;
@@ -49,14 +53,16 @@ func public %match_struct_fields(v0.i256) -> i256 {
         br v27 block7 block8;
 
     block7:
-        v29.i256 = mload v0 i256;
+        v28.i256 = phi (v22 block6);
+        v29.i256 = mload v28 i256;
         v30.i8 = trunc v29 i8;
         v31.i256 = zext v30 i256;
         v32.i256 = eq v31 0.i256;
         br v32 block1 block4;
 
     block8:
-        v34.i256 = mload v0 i256;
+        v33.i256 = phi (v22 block6);
+        v34.i256 = mload v33 i256;
         v35.i8 = trunc v34 i8;
         v36.i256 = zext v35 i256;
         v37.i256 = eq v36 0.i256;
@@ -81,14 +87,16 @@ func public %match_struct_wildcard(v0.i256) -> i256 {
         jump block2;
 
     block5:
-        v7.i256 = mload v0 i256;
+        v6.i256 = phi (v0 block0);
+        v7.i256 = mload v6 i256;
         v8.i8 = trunc v7 i8;
         v9.i256 = zext v8 i256;
         v10.i256 = eq v9 0.i256;
         br v10 block1 block6;
 
     block6:
-        v12.i256 = add v0 1.i256;
+        v11.i256 = phi (v6 block5);
+        v12.i256 = add v11 1.i256;
         v13.i256 = mload v12 i256;
         v14.i8 = trunc v13 i8;
         v15.i256 = zext v14 i256;

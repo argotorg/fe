@@ -16,7 +16,8 @@ func public %f(v0.i256, v1.i256) {
         evm_return 0.i256 0.i256;
 
     block3:
-        v4.i256 = mload v0 i256;
+        v3.i256 = phi (v0 block0);
+        v4.i256 = mload v3 i256;
         v6.i256 = eq v4 0.i256;
         br v6 block1 block5;
 

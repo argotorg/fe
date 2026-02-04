@@ -61,7 +61,8 @@ func public %dispatch__StorPtr_Evm___207f35a85ac4062e() {
         evm_invalid;
 
     block2:
-        v25.i256 = eq v3 2066295049.i256;
+        v23.i256 = phi (v3 block0);
+        v25.i256 = eq v23 2066295049.i256;
         br v25 block3 block4;
 
     block3:

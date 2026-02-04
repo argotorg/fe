@@ -44,13 +44,15 @@ func public %runtime__StorPtr_Evm___207f35a85ac4062e() {
         jump block5;
 
     block1:
+        v7.i256 = phi (v19 block5);
         v6.i256 = evm_calldata_load 4.i256;
-        call %write_inner__StorPtr_Outer___dab28b9da6c3e28 v6 v1;
+        call %write_inner__StorPtr_Outer___dab28b9da6c3e28 v6 v7;
         call %abi_encode v6 0.i256;
         evm_invalid;
 
     block2:
-        v9.i256 = call %read_inner__StorPtr_Outer___dab28b9da6c3e28 v1;
+        v8.i256 = phi (v20 block6);
+        v9.i256 = call %read_inner__StorPtr_Outer___dab28b9da6c3e28 v8;
         call %abi_encode v9 0.i256;
         evm_invalid;
 
@@ -64,15 +66,18 @@ func public %runtime__StorPtr_Evm___207f35a85ac4062e() {
         evm_return 0.i256 0.i256;
 
     block5:
-        v16.i256 = eq v4 3091856072.i256;
+        v19.i256 = phi (v1 block0);
+        v12.i256 = phi (v4 block0);
+        v16.i256 = eq v12 3091856072.i256;
         br v16 block1 block6;
 
     block6:
-        v17.i256 = eq v4 3513050253.i256;
+        v20.i256 = phi (v19 block5);
+        v17.i256 = eq v12 3513050253.i256;
         br v17 block2 block7;
 
     block7:
-        v18.i256 = eq v4 2154770637.i256;
+        v18.i256 = eq v12 2154770637.i256;
         br v18 block3 block4;
 }
 

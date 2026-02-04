@@ -13,14 +13,16 @@ func public %match_newtype_nested(v0.i256) -> i256 {
         jump block2;
 
     block2:
-        v2.i256 = phi (0.i256 block1) (v0 block3);
+        v2.i256 = phi (0.i256 block1) (v3 block3);
         return v2;
 
     block3:
+        v3.i256 = phi (v4 block4);
         jump block2;
 
     block4:
-        v5.i256 = eq v0 0.i256;
+        v4.i256 = phi (v0 block0);
+        v5.i256 = eq v4 0.i256;
         br v5 block1 block3;
 }
 

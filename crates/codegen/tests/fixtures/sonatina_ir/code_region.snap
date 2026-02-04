@@ -39,11 +39,12 @@ func public %runtime__StorPtr_Evm___207f35a85ac4062e() {
         jump block2;
 
     block5:
-        v5.i256 = eq v1 305419896.i256;
+        v2.i256 = phi (v1 block0);
+        v5.i256 = eq v2 305419896.i256;
         br v5 block1 block6;
 
     block6:
-        v6.i256 = eq v1 591751049.i256;
+        v6.i256 = eq v2 591751049.i256;
         br v6 block3 block4;
 }
 
@@ -71,8 +72,9 @@ func public %allocate(v0.i256, v1.i256) -> i256 {
         jump block2;
 
     block2:
+        v8.i256 = phi (v0 block0) (v0 block1);
         v7.i256 = phi (v4 block0) (96.i256 block1);
-        v9.i256 = add v7 v0;
+        v9.i256 = add v7 v8;
         mstore 64.i256 v9 i256;
         return v7;
 }

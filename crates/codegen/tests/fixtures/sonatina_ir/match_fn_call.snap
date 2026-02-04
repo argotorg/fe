@@ -24,11 +24,12 @@ func public %example(v0.i256) -> i256 {
         jump block2;
 
     block5:
-        v10.i256 = eq v2 305419896.i256;
+        v7.i256 = phi (v2 block0);
+        v10.i256 = eq v7 305419896.i256;
         br v10 block1 block6;
 
     block6:
-        v11.i256 = eq v2 591751049.i256;
+        v11.i256 = eq v7 591751049.i256;
         br v11 block3 block4;
 }
 
