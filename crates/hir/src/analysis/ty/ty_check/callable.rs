@@ -295,7 +295,15 @@ impl<'db> Callable<'db> {
                             primary: given.expr_span.clone(),
                             ty: expected,
                         });
-                    } else if arg_is_place && !is_unary(given.expr, UnOp::Move) {
+                    } else if arg_is_place
+                        && !is_unary(given.expr, UnOp::Move)
+                        && !crate::analysis::ty::ty_is_copy(
+                            db,
+                            tc.env.scope(),
+                            expected,
+                            tc.env.assumptions(),
+                        )
+                    {
                         tc.push_diag(BodyDiag::ExplicitMoveRequired {
                             primary: given.expr_span.clone(),
                         });

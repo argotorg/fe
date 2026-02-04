@@ -65,6 +65,31 @@ pub fn ty_is_borrow<'db>(
     ty.as_borrow(db)
 }
 
+pub fn ty_is_copy<'db>(
+    db: &'db dyn HirAnalysisDb,
+    scope: ScopeId<'db>,
+    ty: TyId<'db>,
+    assumptions: PredicateListId<'db>,
+) -> bool {
+    // Borrow handles (`mut`/`ref`) are always copyable, even without an explicit `Copy` impl.
+    if ty.as_borrow(db).is_some() {
+        return true;
+    }
+
+    let Some(copy_trait) = corelib::resolve_core_trait(db, scope, &["marker", "Copy"]) else {
+        return false;
+    };
+    let ingot = scope.top_mod(db).ingot(db);
+
+    let inst = trait_def::TraitInstId::new_simple(db, copy_trait, vec![ty]);
+    let inst = inst.normalize(db, scope, assumptions);
+    let canonical_inst = Canonicalized::new(db, inst);
+    matches!(
+        is_goal_satisfiable(db, ingot, canonical_inst.value, assumptions),
+        GoalSatisfiability::Satisfied(_)
+    )
+}
+
 pub fn ty_is_noesc<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> bool {
     fn inner<'db>(
         db: &'db dyn HirAnalysisDb,
