@@ -101,6 +101,11 @@ pub enum Command {
         /// Directory to write debug outputs (traces, symtabs) into.
         #[arg(long)]
         debug_dir: Option<Utf8PathBuf>,
+        /// Write a debugging report as a `.tar.gz` file (includes sources, IR, bytecode, traces).
+        ///
+        /// If no path is provided, defaults to `fe-test-report.tar.gz` in the current directory.
+        #[arg(long, value_name = "OUT", num_args = 0..=1, default_missing_value = "fe-test-report.tar.gz")]
+        report: Option<Utf8PathBuf>,
     },
     /// Create a new ingot or workspace.
     New {
@@ -167,6 +172,7 @@ pub fn run(opts: &Options) {
             sonatina_transient_malloc_trace,
             sonatina_transient_malloc_filter,
             debug_dir,
+            report,
         } => {
             let debug = TestDebugOptions {
                 trace_evm: *trace_evm,
@@ -184,7 +190,14 @@ pub fn run(opts: &Options) {
             } else {
                 paths.clone()
             };
-            test::run_tests(&paths, filter.as_deref(), *show_logs, backend, &debug);
+            test::run_tests(
+                &paths,
+                filter.as_deref(),
+                *show_logs,
+                backend,
+                &debug,
+                report.as_ref(),
+            );
         }
         Command::New {
             path,

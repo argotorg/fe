@@ -28,6 +28,11 @@ struct TestOutcome {
     logs: Vec<String>,
 }
 
+#[derive(Debug, Clone)]
+struct ReportContext {
+    root_dir: Utf8PathBuf,
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct TestDebugOptions {
     pub trace_evm: bool,
@@ -151,6 +156,7 @@ fn sanitize_filename(component: &str) -> String {
 /// * `filter` - Optional filter pattern for test names
 /// * `show_logs` - Whether to show event logs from test execution
 /// * `backend` - Codegen backend for test artifacts ("yul" or "sonatina")
+/// * `report_out` - Optional report output path (`.tar.gz`)
 ///
 /// Returns nothing; exits the process on invalid input or test failures.
 pub fn run_tests(
@@ -159,8 +165,8 @@ pub fn run_tests(
     show_logs: bool,
     backend: &str,
     debug: &TestDebugOptions,
+    report_out: Option<&Utf8PathBuf>,
 ) {
-    debug.configure_process_env();
     let input_paths = expand_test_paths(paths);
 
     let mut test_results = Vec::new();
@@ -169,6 +175,12 @@ pub fn run_tests(
         println!("running `fe test` for {} inputs\n", input_paths.len());
     }
 
+    let report_root = report_out.map(|out| {
+        let staging = create_report_staging_dir();
+        let out = out.clone();
+        (out, staging)
+    });
+
     for path in input_paths {
         let suite = suite_name_for_path(&path);
 
@@ -176,11 +188,52 @@ pub fn run_tests(
             println!("==> {path}");
         }
 
+        let report_ctx = report_root.as_ref().map(|(_, staging)| {
+            let suite_dir = staging.join("suites").join(&suite);
+            create_dir_all_utf8(&suite_dir);
+            let inputs_dir = suite_dir.join("inputs");
+            create_dir_all_utf8(&inputs_dir);
+            copy_input_into_report(&path, &inputs_dir);
+            ReportContext {
+                root_dir: suite_dir,
+            }
+        });
+
+        let mut suite_debug = debug.clone();
+        if report_ctx.is_some() {
+            // Reports should be self-contained and actionable by default.
+            suite_debug.trace_evm = true;
+            suite_debug.sonatina_symtab = true;
+            suite_debug.sonatina_transient_malloc_trace = true;
+            suite_debug.debug_dir = report_ctx
+                .as_ref()
+                .map(|ctx| ctx.root_dir.join("debug"));
+        }
+        suite_debug.configure_process_env();
+
         let mut db = DriverDataBase::default();
         let suite_results = if path.is_file() && path.extension() == Some("fe") {
-            run_tests_single_file(&mut db, &path, &suite, filter, show_logs, backend, debug)
+            run_tests_single_file(
+                &mut db,
+                &path,
+                &suite,
+                filter,
+                show_logs,
+                backend,
+                &suite_debug,
+                report_ctx.as_ref(),
+            )
         } else if path.is_dir() {
-            run_tests_ingot(&mut db, &path, &suite, filter, show_logs, backend, debug)
+            run_tests_ingot(
+                &mut db,
+                &path,
+                &suite,
+                filter,
+                show_logs,
+                backend,
+                &suite_debug,
+                report_ctx.as_ref(),
+            )
         } else {
             eprintln!("Error: Path must be either a .fe file or a directory containing fe.toml");
             std::process::exit(1);
@@ -190,6 +243,18 @@ pub fn run_tests(
             eprintln!("No tests found in {path}");
         } else {
             test_results.extend(suite_results);
+        }
+    }
+
+    if let Some((out, staging)) = report_root {
+        write_report_manifest(&staging, backend, filter, &test_results);
+        if let Err(err) = tar_gz_dir(&staging, &out) {
+            eprintln!("Error: failed to write report `{out}`: {err}");
+            eprintln!("Report staging directory left at `{staging}`");
+        } else {
+            // Best-effort cleanup.
+            let _ = std::fs::remove_dir_all(&staging);
+            println!("wrote report: {out}");
         }
     }
 
@@ -218,6 +283,7 @@ fn run_tests_single_file(
     show_logs: bool,
     backend: &str,
     debug: &TestDebugOptions,
+    report: Option<&ReportContext>,
 ) -> Vec<TestResult> {
     // Create a file URL for the single .fe file
     let file_url = match Url::from_file_path(file_path.canonicalize_utf8().unwrap()) {
@@ -258,7 +324,8 @@ fn run_tests_single_file(
     }
 
     // Discover and run tests
-    discover_and_run_tests(db, top_mod, suite, filter, show_logs, backend, debug)
+    maybe_write_suite_ir(db, top_mod, backend, report);
+    discover_and_run_tests(db, top_mod, suite, filter, show_logs, backend, debug, report)
 }
 
 /// Runs tests in an ingot directory (containing `fe.toml`).
@@ -277,6 +344,7 @@ fn run_tests_ingot(
     show_logs: bool,
     backend: &str,
     debug: &TestDebugOptions,
+    report: Option<&ReportContext>,
 ) -> Vec<TestResult> {
     let canonical_path = match dir_path.canonicalize_utf8() {
         Ok(path) => path,
@@ -312,7 +380,8 @@ fn run_tests_ingot(
     }
 
     let root_mod = ingot.root_mod(db);
-    discover_and_run_tests(db, root_mod, suite, filter, show_logs, backend, debug)
+    maybe_write_suite_ir(db, root_mod, backend, report);
+    discover_and_run_tests(db, root_mod, suite, filter, show_logs, backend, debug, report)
 }
 
 /// Discovers `#[test]` functions, compiles them, and executes each one.
@@ -331,6 +400,7 @@ fn discover_and_run_tests(
     show_logs: bool,
     backend: &str,
     debug: &TestDebugOptions,
+    report: Option<&ReportContext>,
 ) -> Vec<TestResult> {
     let backend = backend.to_lowercase();
     let output = match backend.as_str() {
@@ -376,7 +446,7 @@ fn discover_and_run_tests(
         debug.configure_per_test_env(Some(suite), &case.display_name);
 
         // Compile and run the test
-        let outcome = compile_and_run_test(case, show_logs, backend.as_str());
+        let outcome = compile_and_run_test(case, show_logs, backend.as_str(), report);
 
         if outcome.result.passed {
             println!("{}", "ok".green());
@@ -403,6 +473,33 @@ fn discover_and_run_tests(
     }
 
     results
+}
+
+fn maybe_write_suite_ir(
+    db: &DriverDataBase,
+    top_mod: TopLevelMod<'_>,
+    backend: &str,
+    report: Option<&ReportContext>,
+) {
+    let Some(report) = report else {
+        return;
+    };
+
+    let artifacts_dir = report.root_dir.join("artifacts");
+    create_dir_all_utf8(&artifacts_dir);
+
+    if backend.eq_ignore_ascii_case("sonatina") {
+        match codegen::emit_module_sonatina_ir(db, top_mod) {
+            Ok(ir) => {
+                let path = artifacts_dir.join("sonatina_ir.txt");
+                let _ = std::fs::write(&path, ir);
+            }
+            Err(err) => {
+                let path = artifacts_dir.join("sonatina_ir_error.txt");
+                let _ = std::fs::write(&path, format!("{err}"));
+            }
+        }
+    }
 }
 
 fn suite_name_for_path(path: &Utf8PathBuf) -> String {
@@ -486,14 +583,12 @@ fn looks_like_glob(pattern: &str) -> bool {
     pattern.contains('*') || pattern.contains('?') || pattern.contains('[')
 }
 
-/// Compiles a test function to bytecode and executes it in revm.
-///
-/// * `case` - Test metadata describing the Yul object and parameters.
-/// * `show_logs` - Whether to capture EVM logs for the test run.
-/// * `backend` - Backend selection ("yul" or "sonatina").
-///
-/// Returns the test outcome (result + logs).
-fn compile_and_run_test(case: &TestMetadata, show_logs: bool, backend: &str) -> TestOutcome {
+fn compile_and_run_test(
+    case: &TestMetadata,
+    show_logs: bool,
+    backend: &str,
+    report: Option<&ReportContext>,
+) -> TestOutcome {
     if case.value_param_count > 0 {
         return TestOutcome {
             result: TestResult {
@@ -537,6 +632,10 @@ fn compile_and_run_test(case: &TestMetadata, show_logs: bool, backend: &str) -> 
             };
         }
 
+        if let Some(report) = report {
+            write_sonatina_case_artifacts(report, case);
+        }
+
         let bytecode_hex = hex::encode(&case.bytecode);
         let (result, logs) = execute_test(&case.display_name, &bytecode_hex, show_logs);
         return TestOutcome { result, logs };
@@ -552,6 +651,10 @@ fn compile_and_run_test(case: &TestMetadata, show_logs: bool, backend: &str) -> 
             },
             logs: Vec::new(),
         };
+    }
+
+    if let Some(report) = report {
+        write_yul_case_artifacts(report, case);
     }
 
     let bytecode = match compile_single_contract(&case.object_name, &case.yul, false, true) {
@@ -571,6 +674,209 @@ fn compile_and_run_test(case: &TestMetadata, show_logs: bool, backend: &str) -> 
     // Execute the test bytecode in revm
     let (result, logs) = execute_test(&case.display_name, &bytecode, show_logs);
     TestOutcome { result, logs }
+}
+
+fn write_sonatina_case_artifacts(report: &ReportContext, case: &TestMetadata) {
+    let dir = report
+        .root_dir
+        .join("artifacts")
+        .join("tests")
+        .join(sanitize_filename(&case.display_name))
+        .join("sonatina");
+    create_dir_all_utf8(&dir);
+
+    let init_path = dir.join("initcode.hex");
+    let _ = std::fs::write(&init_path, hex::encode(&case.bytecode));
+
+    if let Some(runtime) = extract_runtime_from_sonatina_initcode(&case.bytecode) {
+        let _ = std::fs::write(dir.join("runtime.bin"), runtime);
+        let _ = std::fs::write(dir.join("runtime.hex"), hex::encode(runtime));
+    }
+}
+
+fn write_yul_case_artifacts(report: &ReportContext, case: &TestMetadata) {
+    let dir = report
+        .root_dir
+        .join("artifacts")
+        .join("tests")
+        .join(sanitize_filename(&case.display_name))
+        .join("yul");
+    create_dir_all_utf8(&dir);
+
+    let _ = std::fs::write(dir.join("source.yul"), &case.yul);
+
+    let unopt = compile_single_contract(&case.object_name, &case.yul, false, true);
+    if let Ok(contract) = unopt {
+        let _ = std::fs::write(dir.join("bytecode.unopt.hex"), &contract.bytecode);
+        let _ = std::fs::write(
+            dir.join("runtime.unopt.hex"),
+            &contract.runtime_bytecode,
+        );
+    }
+
+    let opt = compile_single_contract(&case.object_name, &case.yul, true, true);
+    if let Ok(contract) = opt {
+        let _ = std::fs::write(dir.join("bytecode.opt.hex"), &contract.bytecode);
+        let _ = std::fs::write(dir.join("runtime.opt.hex"), &contract.runtime_bytecode);
+    }
+}
+
+fn extract_runtime_from_sonatina_initcode(init: &[u8]) -> Option<&[u8]> {
+    // Matches the init code produced by `fe-codegen` Sonatina tests:
+    // PUSHn <len>, PUSH2 <off>, PUSH1 0, CODECOPY, PUSHn <len>, PUSH1 0, RETURN, <runtime...>
+    //
+    // Returns the appended runtime slice if parsing succeeds.
+    let mut idx = 0;
+    let push_opcode = *init.get(idx)?;
+    if !(0x60..=0x7f).contains(&push_opcode) {
+        return None;
+    }
+    let len_n = (push_opcode - 0x5f) as usize;
+    idx += 1;
+    if idx + len_n > init.len() {
+        return None;
+    }
+    let mut len: usize = 0;
+    for &b in init.get(idx..idx + len_n)? {
+        len = (len << 8) | (b as usize);
+    }
+    idx += len_n;
+
+    if *init.get(idx)? != 0x61 {
+        return None;
+    }
+    idx += 1;
+    let off_hi = *init.get(idx)? as usize;
+    let off_lo = *init.get(idx + 1)? as usize;
+    let off = (off_hi << 8) | off_lo;
+    if off > init.len() {
+        return None;
+    }
+    if off + len > init.len() {
+        return None;
+    }
+    Some(&init[off..off + len])
+}
+
+fn write_report_manifest(staging: &Utf8PathBuf, backend: &str, filter: Option<&str>, results: &[TestResult]) {
+    let mut out = String::new();
+    out.push_str("fe test report\n");
+    out.push_str(&format!("backend: {backend}\n"));
+    out.push_str(&format!("filter: {}\n", filter.unwrap_or("<none>")));
+    out.push_str(&format!("tests: {}\n", results.len()));
+    let passed = results.iter().filter(|r| r.passed).count();
+    out.push_str(&format!("passed: {passed}\n"));
+    out.push_str(&format!("failed: {}\n", results.len() - passed));
+    out.push_str("\nfailures:\n");
+    for r in results.iter().filter(|r| !r.passed) {
+        out.push_str(&format!("- {}\n", r.name));
+        if let Some(msg) = &r.error_message {
+            out.push_str(&format!("  {}\n", msg));
+        }
+    }
+    let _ = std::fs::write(staging.join("manifest.txt"), out);
+}
+
+fn create_report_staging_dir() -> Utf8PathBuf {
+    let base = Utf8PathBuf::from("target/fe-test-report-staging");
+    let _ = std::fs::create_dir_all(&base);
+    let pid = std::process::id();
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    let dir = base.join(format!("report-{pid}-{nanos}"));
+    create_dir_all_utf8(&dir);
+    dir
+}
+
+fn tar_gz_dir(staging: &Utf8PathBuf, out: &Utf8PathBuf) -> Result<(), String> {
+    let parent = staging.parent().ok_or_else(|| "missing staging parent".to_string())?;
+    let name = staging
+        .file_name()
+        .ok_or_else(|| "missing staging basename".to_string())?;
+
+    let status = std::process::Command::new("tar")
+        .arg("-czf")
+        .arg(out.as_str())
+        .arg("-C")
+        .arg(parent.as_str())
+        .arg(name)
+        .status()
+        .map_err(|err| format!("failed to run tar: {err}"))?;
+
+    if !status.success() {
+        return Err(format!("tar exited with status {status}"));
+    }
+    Ok(())
+}
+
+fn create_dir_all_utf8(path: &Utf8PathBuf) {
+    if let Err(err) = std::fs::create_dir_all(path) {
+        eprintln!("Error: failed to create dir `{path}`: {err}");
+        std::process::exit(1);
+    }
+}
+
+fn copy_input_into_report(input: &Utf8PathBuf, inputs_dir: &Utf8PathBuf) {
+    if input.is_file() {
+        let name = input
+            .file_name()
+            .map(|s| s.to_string())
+            .unwrap_or_else(|| "input.fe".to_string());
+        let dest = inputs_dir.join(name);
+        if let Err(err) = std::fs::copy(input, &dest) {
+            eprintln!("Error: failed to copy `{input}` to `{dest}`: {err}");
+            std::process::exit(1);
+        }
+        return;
+    }
+
+    if !input.is_dir() {
+        return;
+    }
+
+    // Keep the report small but useful: include `fe.toml` and all `.fe` sources under `src/`.
+    let fe_toml = input.join("fe.toml");
+    if fe_toml.is_file() {
+        let dest = inputs_dir.join("fe.toml");
+        let _ = std::fs::copy(fe_toml, dest);
+    }
+
+    let src_dir = input.join("src");
+    if !src_dir.is_dir() {
+        return;
+    }
+
+    let dest_src = inputs_dir.join("src");
+    create_dir_all_utf8(&dest_src);
+
+    for entry in walkdir::WalkDir::new(src_dir.as_std_path())
+        .follow_links(false)
+        .into_iter()
+        .filter_map(Result::ok)
+    {
+        let path = entry.path();
+        if !path.is_file() {
+            continue;
+        }
+        if path.extension().and_then(|s| s.to_str()) != Some("fe") {
+            continue;
+        }
+        let rel = match path.strip_prefix(src_dir.as_std_path()) {
+            Ok(rel) => rel,
+            Err(_) => continue,
+        };
+        let rel = match Utf8PathBuf::from_path_buf(rel.to_path_buf()) {
+            Ok(p) => p,
+            Err(_) => continue,
+        };
+        let dest = dest_src.join(rel);
+        if let Some(parent) = dest.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        let _ = std::fs::copy(path, dest);
+    }
 }
 
 /// Deploys and executes compiled test bytecode in revm.
