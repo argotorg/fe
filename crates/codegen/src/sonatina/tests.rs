@@ -566,6 +566,7 @@ impl<'db, 'a> ModuleLowerer<'db, 'a> {
             let linkage = sonatina_ir::Linkage::Public;
 
             let mut params = Vec::new();
+            let mut mask = Vec::new();
             for local_id in func.body.param_locals.iter().copied() {
                 let local_ty = func
                     .body
@@ -578,8 +579,10 @@ impl<'db, 'a> ModuleLowerer<'db, 'a> {
                 if layout::ty_size_bytes_in(self.db, &layout::EVM_LAYOUT, local_ty)
                     .is_some_and(|s| s == 0)
                 {
+                    mask.push(false);
                     continue;
                 }
+                mask.push(true);
                 params.push(super::types::word_type());
             }
             for local_id in func.body.effect_param_locals.iter().copied() {
@@ -594,8 +597,10 @@ impl<'db, 'a> ModuleLowerer<'db, 'a> {
                 if layout::ty_size_bytes_in(self.db, &layout::EVM_LAYOUT, local_ty)
                     .is_some_and(|s| s == 0)
                 {
+                    mask.push(false);
                     continue;
                 }
+                mask.push(true);
                 params.push(super::types::word_type());
             }
 
@@ -614,6 +619,7 @@ impl<'db, 'a> ModuleLowerer<'db, 'a> {
             self.name_map.insert(name.clone(), func_ref);
             self.returns_value_map
                 .insert(name.clone(), func.returns_value);
+            self.runtime_param_masks.insert(name.clone(), mask);
         }
         Ok(())
     }

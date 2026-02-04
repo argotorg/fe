@@ -10,9 +10,50 @@ use common::InputDb;
 use contract_harness::{ExecutionOptions, RuntimeInstance};
 use driver::DriverDataBase;
 use hir::hir_def::{HirIngot, TopLevelMod};
+use mir::{fmt as mir_fmt, lower_module};
 use rustc_hash::FxHashSet;
 use solc_runner::compile_single_contract;
 use url::Url;
+
+fn panic_payload_to_string(payload: &(dyn std::any::Any + Send)) -> String {
+    if let Some(s) = payload.downcast_ref::<&'static str>() {
+        (*s).to_string()
+    } else if let Some(s) = payload.downcast_ref::<String>() {
+        s.clone()
+    } else {
+        "panic payload is not a string".to_string()
+    }
+}
+
+struct PanicHookGuard {
+    old: Option<Box<dyn Fn(&std::panic::PanicHookInfo) + Send + Sync + 'static>>,
+}
+
+impl Drop for PanicHookGuard {
+    fn drop(&mut self) {
+        if let Some(old) = self.old.take() {
+            std::panic::set_hook(old);
+        }
+    }
+}
+
+fn install_report_panic_hook(report: &ReportContext, filename: &str) -> PanicHookGuard {
+    let dir = report.root_dir.join("errors");
+    create_dir_all_utf8(&dir);
+    let path = dir.join(filename);
+
+    let old = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        let bt = std::backtrace::Backtrace::force_capture();
+        let mut msg = String::new();
+        msg.push_str("panic while running `fe test`\n\n");
+        msg.push_str(&format!("{info}\n\n"));
+        msg.push_str(&format!("backtrace:\n{bt:?}\n"));
+        let _ = std::fs::write(&path, msg);
+    }));
+
+    PanicHookGuard { old: Some(old) }
+}
 
 /// Result of running a single test.
 #[derive(Debug)]
@@ -26,6 +67,20 @@ pub struct TestResult {
 struct TestOutcome {
     result: TestResult,
     logs: Vec<String>,
+}
+
+fn suite_error_result(suite: &str, kind: &str, message: String) -> Vec<TestResult> {
+    vec![TestResult {
+        name: format!("{suite}::{kind}"),
+        passed: false,
+        error_message: Some(message),
+    }]
+}
+
+fn write_report_error(report: &ReportContext, filename: &str, contents: &str) {
+    let dir = report.root_dir.join("errors");
+    create_dir_all_utf8(&dir);
+    let _ = std::fs::write(dir.join(filename), contents);
 }
 
 #[derive(Debug, Clone)]
@@ -149,6 +204,23 @@ fn sanitize_filename(component: &str) -> String {
         .collect()
 }
 
+fn unique_report_path(dir: &Utf8PathBuf, suite: &str) -> Utf8PathBuf {
+    let base = sanitize_filename(suite);
+    let base = if base.is_empty() { "tests".to_string() } else { base };
+    let mut candidate = dir.join(format!("{base}.tar.gz"));
+    if !candidate.exists() {
+        return candidate;
+    }
+
+    for idx in 1.. {
+        candidate = dir.join(format!("{base}-{idx}.tar.gz"));
+        if !candidate.exists() {
+            return candidate;
+        }
+    }
+    unreachable!()
+}
+
 /// Run tests in the given path.
 ///
 /// # Arguments
@@ -166,6 +238,8 @@ pub fn run_tests(
     backend: &str,
     debug: &TestDebugOptions,
     report_out: Option<&Utf8PathBuf>,
+    report_dir: Option<&Utf8PathBuf>,
+    report_failed_only: bool,
 ) {
     let input_paths = expand_test_paths(paths);
 
@@ -173,6 +247,11 @@ pub fn run_tests(
     let multi = input_paths.len() > 1;
     if multi {
         println!("running `fe test` for {} inputs\n", input_paths.len());
+    }
+
+    if let Some(dir) = report_dir {
+        // Used only for per-suite report output; create it eagerly to fail fast on invalid paths.
+        create_dir_all_utf8(dir);
     }
 
     let report_root = report_out.map(|out| {
@@ -188,16 +267,26 @@ pub fn run_tests(
             println!("==> {path}");
         }
 
-        let report_ctx = report_root.as_ref().map(|(_, staging)| {
-            let suite_dir = staging.join("suites").join(&suite);
-            create_dir_all_utf8(&suite_dir);
-            let inputs_dir = suite_dir.join("inputs");
-            create_dir_all_utf8(&inputs_dir);
-            copy_input_into_report(&path, &inputs_dir);
-            ReportContext {
-                root_dir: suite_dir,
-            }
+        let suite_report = report_dir.map(|dir| {
+            let staging = create_report_staging_dir();
+            let out = unique_report_path(dir, &suite);
+            (out, staging)
         });
+
+        let report_ctx = suite_report
+            .as_ref()
+            .map(|(_, staging)| staging)
+            .or_else(|| report_root.as_ref().map(|(_, staging)| staging))
+            .map(|staging| {
+                let suite_dir = staging.join("suites").join(&suite);
+                create_dir_all_utf8(&suite_dir);
+                let inputs_dir = suite_dir.join("inputs");
+                create_dir_all_utf8(&inputs_dir);
+                copy_input_into_report(&path, &inputs_dir);
+                ReportContext {
+                    root_dir: suite_dir,
+                }
+            });
 
         let mut suite_debug = debug.clone();
         if report_ctx.is_some() {
@@ -238,6 +327,22 @@ pub fn run_tests(
             eprintln!("Error: Path must be either a .fe file or a directory containing fe.toml");
             std::process::exit(1);
         };
+
+        if let Some((out, staging)) = suite_report {
+            let should_write = !report_failed_only || suite_results.iter().any(|r| !r.passed);
+            if should_write {
+                write_report_manifest(&staging, backend, filter, &suite_results);
+                if let Err(err) = tar_gz_dir(&staging, &out) {
+                    eprintln!("Error: failed to write report `{out}`: {err}");
+                    eprintln!("Report staging directory left at `{staging}`");
+                } else {
+                    let _ = std::fs::remove_dir_all(&staging);
+                    println!("wrote report: {out}");
+                }
+            } else {
+                let _ = std::fs::remove_dir_all(&staging);
+            }
+        }
 
         if suite_results.is_empty() {
             eprintln!("No tests found in {path}");
@@ -317,10 +422,18 @@ fn run_tests_single_file(
     // Check for compilation errors first
     let diags = db.run_on_top_mod(top_mod);
     if !diags.is_empty() {
+        let formatted = diags.format_diags(db);
         eprintln!("Compilation errors in {file_url}");
         eprintln!();
         diags.emit(db);
-        std::process::exit(1);
+        if let Some(report) = report {
+            write_report_error(report, "compilation_errors.txt", &formatted);
+        }
+        return suite_error_result(
+            suite,
+            "compile",
+            format!("Compilation errors in {file_url}"),
+        );
     }
 
     // Discover and run tests
@@ -364,7 +477,12 @@ fn run_tests_ingot(
 
     let had_init_diagnostics = driver::init_ingot(db, &ingot_url);
     if had_init_diagnostics {
-        std::process::exit(1);
+        let msg = format!("Compilation errors while initializing ingot `{dir_path}`");
+        eprintln!("{msg}");
+        if let Some(report) = report {
+            write_report_error(report, "compilation_errors.txt", &msg);
+        }
+        return suite_error_result(suite, "compile", msg);
     }
 
     let Some(ingot) = db.workspace().containing_ingot(db, ingot_url.clone()) else {
@@ -375,8 +493,12 @@ fn run_tests_ingot(
     // Check for compilation errors
     let diags = db.run_on_ingot(ingot);
     if !diags.is_empty() {
+        let formatted = diags.format_diags(db);
         diags.emit(db);
-        std::process::exit(1);
+        if let Some(report) = report {
+            write_report_error(report, "compilation_errors.txt", &formatted);
+        }
+        return suite_error_result(suite, "compile", "Compilation errors".to_string());
     }
 
     let root_mod = ingot.root_mod(db);
@@ -404,18 +526,54 @@ fn discover_and_run_tests(
 ) -> Vec<TestResult> {
     let backend = backend.to_lowercase();
     let output = match backend.as_str() {
-        "yul" => match emit_test_module_yul(db, top_mod) {
-            Ok(output) => output,
-            Err(err) => {
-                eprintln!("Failed to emit test Yul: {err}");
-                std::process::exit(1);
+        "yul" => match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _hook = report.map(|r| install_report_panic_hook(r, "codegen_panic_full.txt"));
+            emit_test_module_yul(db, top_mod)
+        })) {
+            Ok(Ok(output)) => output,
+            Ok(Err(err)) => {
+                let msg = format!("Failed to emit test Yul: {err}");
+                eprintln!("{msg}");
+                if let Some(report) = report {
+                    write_report_error(report, "codegen_error.txt", &msg);
+                }
+                return suite_error_result(suite, "codegen", msg);
+            }
+            Err(payload) => {
+                let msg = format!(
+                    "Yul backend panicked while emitting test module: {}",
+                    panic_payload_to_string(payload.as_ref())
+                );
+                eprintln!("{msg}");
+                if let Some(report) = report {
+                    write_report_error(report, "codegen_panic.txt", &msg);
+                }
+                return suite_error_result(suite, "codegen", msg);
             }
         },
-        "sonatina" => match emit_test_module_sonatina(db, top_mod) {
-            Ok(output) => output,
-            Err(err) => {
-                eprintln!("Failed to emit test Sonatina bytecode: {err}");
-                std::process::exit(1);
+        "sonatina" => match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _hook = report.map(|r| install_report_panic_hook(r, "codegen_panic_full.txt"));
+            emit_test_module_sonatina(db, top_mod)
+        })) {
+            Ok(Ok(output)) => output,
+            Ok(Err(err)) => {
+                let msg = format!("Failed to emit test Sonatina bytecode: {err}");
+                eprintln!("{msg}");
+                if let Some(report) = report {
+                    write_report_error(report, "codegen_error.txt", &msg);
+                }
+                return suite_error_result(suite, "codegen", msg);
+            }
+            Err(payload) => {
+                let msg = format!(
+                    "Sonatina backend panicked while emitting test module: {}",
+                    panic_payload_to_string(payload.as_ref())
+                );
+                eprintln!("{msg}");
+                if let Some(report) = report {
+                    write_report_error(report, "codegen_panic.txt", &msg);
+                }
+                return suite_error_result(suite, "codegen", msg);
             }
         },
         other => {
@@ -488,6 +646,17 @@ fn maybe_write_suite_ir(
     let artifacts_dir = report.root_dir.join("artifacts");
     create_dir_all_utf8(&artifacts_dir);
 
+    match lower_module(db, top_mod) {
+        Ok(mir) => {
+            let path = artifacts_dir.join("mir.txt");
+            let _ = std::fs::write(&path, mir_fmt::format_module(db, &mir));
+        }
+        Err(err) => {
+            let path = artifacts_dir.join("mir_error.txt");
+            let _ = std::fs::write(&path, format!("{err}"));
+        }
+    }
+
     if backend.eq_ignore_ascii_case("sonatina") {
         match codegen::emit_module_sonatina_ir(db, top_mod) {
             Ok(ir) => {
@@ -496,6 +665,28 @@ fn maybe_write_suite_ir(
             }
             Err(err) => {
                 let path = artifacts_dir.join("sonatina_ir_error.txt");
+                let _ = std::fs::write(&path, format!("{err}"));
+            }
+        }
+
+        match codegen::validate_module_sonatina_ir(db, top_mod) {
+            Ok(report) => {
+                let path = artifacts_dir.join("sonatina_validate.txt");
+                let _ = std::fs::write(&path, report);
+            }
+            Err(err) => {
+                let path = artifacts_dir.join("sonatina_validate_error.txt");
+                let _ = std::fs::write(&path, format!("{err}"));
+            }
+        }
+    } else if backend.eq_ignore_ascii_case("yul") {
+        match codegen::emit_module_yul(db, top_mod) {
+            Ok(yul) => {
+                let path = artifacts_dir.join("yul_module.yul");
+                let _ = std::fs::write(&path, yul);
+            }
+            Err(err) => {
+                let path = artifacts_dir.join("yul_module_error.txt");
                 let _ = std::fs::write(&path, format!("{err}"));
             }
         }
