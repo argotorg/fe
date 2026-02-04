@@ -1,0 +1,13 @@
+---
+source: crates/fe/tests/cli_output.rs
+expression: output
+input_file: tests/fixtures/cli_output/workspaces/build_contract_ambiguity/build_contract_ambiguity_contract_ambiguous.case
+---
+=== STDERR ===
+Error: Contract "Foo" is defined in multiple workspace members
+Matches:
+  - a (ingots/a)
+  - b (ingots/b)
+Hint: build a specific member by name or path instead.
+
+=== EXIT CODE: 1 ===

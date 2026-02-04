@@ -1,4 +1,5 @@
 pub mod cache;
+pub mod color;
 pub mod config;
 pub mod dependencies;
 pub mod diagnostics;

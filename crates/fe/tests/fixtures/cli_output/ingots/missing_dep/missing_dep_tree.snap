@@ -1,11 +1,12 @@
 ---
 source: crates/fe/tests/cli_output.rs
+assertion_line: 528
 expression: output
 ---
 === STDOUT ===
 missingdep v0.0.1
 
 === STDERR ===
-❌ Failed to resolve ingot dependency 'file://<project>/crates/fe/tests/fixtures/cli_output/ingots/nonexistent/': Directory does not exist: file://<project>/crates/fe/tests/fixtures/cli_output/ingots/nonexistent/
+Error: Failed to resolve ingot dependency 'file://<project>/crates/fe/tests/fixtures/cli_output/ingots/nonexistent/': Directory does not exist: file://<project>/crates/fe/tests/fixtures/cli_output/ingots/nonexistent/
 
-=== EXIT CODE: 0 ===
+=== EXIT CODE: 1 ===

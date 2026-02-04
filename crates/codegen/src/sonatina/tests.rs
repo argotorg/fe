@@ -31,7 +31,7 @@ use std::io::Write as _;
 
 use crate::{ExpectedRevert, OptLevel, TestMetadata, TestModuleOutput};
 
-use super::{LowerError, ModuleLowerer};
+use super::{ContractObjectSelection, LowerError, ModuleLowerer};
 
 #[derive(Debug, Clone)]
 pub struct SonatinaTestDebugConfig {
@@ -429,7 +429,14 @@ fn compile_test_objects(
     let ctx = ModuleCtx::new(&isa);
     let builder = ModuleBuilder::new(ctx);
 
-    let mut lowerer = ModuleLowerer::new(db, builder, mir_module, &isa, layout::EVM_LAYOUT);
+    let mut lowerer = ModuleLowerer::new(
+        db,
+        builder,
+        mir_module,
+        &isa,
+        layout::EVM_LAYOUT,
+        ContractObjectSelection::All,
+    );
     lowerer.declare_all_functions_for_tests()?;
 
     let code_regions_object = create_code_regions_object(

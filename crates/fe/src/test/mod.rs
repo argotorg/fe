@@ -21,7 +21,7 @@ use driver::DriverDataBase;
 use hir::hir_def::{HirIngot, TopLevelMod};
 use mir::{fmt as mir_fmt, lower_module};
 use rustc_hash::{FxHashMap, FxHashSet};
-use solc_runner::compile_single_contract;
+use solc_runner::compile_single_contract_with_solc;
 use std::{
     fmt::Write as _,
     sync::{
@@ -775,6 +775,8 @@ pub fn run_tests(
     jobs: usize,
     show_logs: bool,
     backend: &str,
+    yul_optimize: bool,
+    solc: Option<&str>,
     opt_level: OptLevel,
     debug: &TestDebugOptions,
     report_out: Option<&Utf8PathBuf>,
@@ -821,6 +823,8 @@ pub fn run_tests(
                 filter,
                 show_logs,
                 backend,
+                yul_optimize,
+                solc,
                 opt_level,
                 debug,
                 report_failed_only,
@@ -847,6 +851,8 @@ pub fn run_tests(
                             filter,
                             show_logs,
                             backend,
+                            yul_optimize,
+                            solc,
                             opt_level,
                             debug,
                             report_failed_only,
@@ -889,7 +895,7 @@ pub fn run_tests(
 
         let suite_failed = results.iter().any(|r| !r.passed);
         if results.is_empty() {
-            eprintln!("No tests found in {path}");
+            eprintln!("Warning: No tests found in {path}");
         } else {
             test_results.extend(results);
         }
@@ -913,8 +919,15 @@ pub fn run_tests(
     }
 
     if let Some((out, staging)) = report_root {
-        gas::write_run_gas_comparison_summary(&staging.root_dir, opt_level);
-        write_report_manifest(&staging.root_dir, backend, opt_level, filter, &test_results);
+        gas::write_run_gas_comparison_summary(&staging.root_dir, backend, yul_optimize, opt_level);
+        write_report_manifest(
+            &staging.root_dir,
+            backend,
+            yul_optimize,
+            opt_level,
+            filter,
+            &test_results,
+        );
         if let Err(err) = tar_gz_dir(&staging.root_dir, &out) {
             eprintln!("Error: failed to write report `{out}`: {err}");
             eprintln!("Report staging directory left at `{}`", staging.temp_dir);
@@ -935,6 +948,8 @@ fn run_single_suite(
     filter: Option<&str>,
     show_logs: bool,
     backend: &str,
+    yul_optimize: bool,
+    solc: Option<&str>,
     opt_level: OptLevel,
     debug: &TestDebugOptions,
     report_failed_only: bool,
@@ -980,6 +995,8 @@ fn run_single_suite(
             filter,
             show_logs,
             backend,
+            yul_optimize,
+            solc,
             opt_level,
             &suite_debug,
             &sonatina_debug,
@@ -995,6 +1012,8 @@ fn run_single_suite(
             filter,
             show_logs,
             backend,
+            yul_optimize,
+            solc,
             opt_level,
             &suite_debug,
             &sonatina_debug,
@@ -1015,6 +1034,7 @@ fn run_single_suite(
             write_report_manifest(
                 &staging.root_dir,
                 backend,
+                yul_optimize,
                 opt_level,
                 filter,
                 &suite_results,
@@ -1064,6 +1084,8 @@ fn run_tests_single_file(
     filter: Option<&str>,
     show_logs: bool,
     backend: &str,
+    yul_optimize: bool,
+    solc: Option<&str>,
     opt_level: OptLevel,
     debug: &TestDebugOptions,
     sonatina_debug: &SonatinaTestDebugConfig,
@@ -1141,6 +1163,8 @@ fn run_tests_single_file(
         filter,
         show_logs,
         backend,
+        solc,
+        yul_optimize,
         opt_level,
         debug,
         sonatina_debug,
@@ -1166,6 +1190,8 @@ fn run_tests_ingot(
     filter: Option<&str>,
     show_logs: bool,
     backend: &str,
+    yul_optimize: bool,
+    solc: Option<&str>,
     opt_level: OptLevel,
     debug: &TestDebugOptions,
     sonatina_debug: &SonatinaTestDebugConfig,
@@ -1233,6 +1259,8 @@ fn run_tests_ingot(
         filter,
         show_logs,
         backend,
+        solc,
+        yul_optimize,
         opt_level,
         debug,
         sonatina_debug,
@@ -1295,6 +1323,8 @@ fn discover_and_run_tests(
     filter: Option<&str>,
     show_logs: bool,
     backend: &str,
+    solc: Option<&str>,
+    yul_optimize: bool,
     opt_level: OptLevel,
     debug: &TestDebugOptions,
     sonatina_debug: &SonatinaTestDebugConfig,
@@ -1378,7 +1408,8 @@ fn discover_and_run_tests(
             case,
             show_logs,
             backend.as_str(),
-            opt_level.yul_optimize(),
+            yul_optimize,
+            solc,
             evm_trace.as_ref(),
             report,
             call_trace,
@@ -1429,6 +1460,7 @@ fn discover_and_run_tests(
         gas::write_gas_comparison_report(
             report,
             backend.as_str(),
+            yul_optimize,
             opt_level,
             cases,
             &primary_measurements,
@@ -1599,6 +1631,7 @@ pub(super) fn compile_and_run_test(
     show_logs: bool,
     backend: &str,
     yul_optimize: bool,
+    solc: Option<&str>,
     evm_trace: Option<&EvmTraceOptions>,
     report: Option<&ReportContext>,
     call_trace: bool,
@@ -1714,14 +1747,15 @@ pub(super) fn compile_and_run_test(
     }
 
     if let Some(report) = report {
-        write_yul_case_artifacts(report, case);
+        write_yul_case_artifacts(report, case, solc);
     }
 
-    let (bytecode, runtime_metrics) = match compile_single_contract(
+    let (bytecode, runtime_metrics) = match compile_single_contract_with_solc(
         &case.object_name,
         &case.yul,
         yul_optimize,
         YUL_VERIFY_RUNTIME,
+        solc,
     ) {
         Ok(contract) => (
             contract.bytecode,
@@ -1791,7 +1825,11 @@ fn write_sonatina_case_artifacts(report: &ReportContext, case: &TestMetadata) {
     }
 }
 
-pub(super) fn write_yul_case_artifacts(report: &ReportContext, case: &TestMetadata) {
+pub(super) fn write_yul_case_artifacts(
+    report: &ReportContext,
+    case: &TestMetadata,
+    solc: Option<&str>,
+) {
     let dir = report
         .root_dir
         .join("artifacts")
@@ -1802,13 +1840,25 @@ pub(super) fn write_yul_case_artifacts(report: &ReportContext, case: &TestMetada
 
     let _ = std::fs::write(dir.join("source.yul"), &case.yul);
 
-    let unopt = compile_single_contract(&case.object_name, &case.yul, false, YUL_VERIFY_RUNTIME);
+    let unopt = compile_single_contract_with_solc(
+        &case.object_name,
+        &case.yul,
+        false,
+        YUL_VERIFY_RUNTIME,
+        solc,
+    );
     if let Ok(contract) = unopt {
         let _ = std::fs::write(dir.join("bytecode.unopt.hex"), &contract.bytecode);
         let _ = std::fs::write(dir.join("runtime.unopt.hex"), &contract.runtime_bytecode);
     }
 
-    let opt = compile_single_contract(&case.object_name, &case.yul, true, YUL_VERIFY_RUNTIME);
+    let opt = compile_single_contract_with_solc(
+        &case.object_name,
+        &case.yul,
+        true,
+        YUL_VERIFY_RUNTIME,
+        solc,
+    );
     if let Ok(contract) = opt {
         let _ = std::fs::write(dir.join("bytecode.opt.hex"), &contract.bytecode);
         let _ = std::fs::write(dir.join("runtime.opt.hex"), &contract.runtime_bytecode);
@@ -1855,6 +1905,7 @@ fn extract_runtime_from_sonatina_initcode(init: &[u8]) -> Option<&[u8]> {
 fn write_report_manifest(
     staging: &Utf8PathBuf,
     backend: &str,
+    yul_optimize: bool,
     opt_level: OptLevel,
     filter: Option<&str>,
     results: &[TestResult],
@@ -1862,6 +1913,7 @@ fn write_report_manifest(
     let mut out = String::new();
     out.push_str("fe test report\n");
     out.push_str(&format!("backend: {backend}\n"));
+    out.push_str(&format!("yul_optimize: {yul_optimize}\n"));
     out.push_str(&format!("opt_level: {opt_level}\n"));
     out.push_str(&format!("filter: {}\n", filter.unwrap_or("<none>")));
     out.push_str(&format!("fe_version: {}\n", env!("CARGO_PKG_VERSION")));

@@ -1,5 +1,17 @@
+use core::abi::{Abi, AbiEncoder, AbiSize, Encode}
 use lib::foo
+use std::abi::Sol
 
-pub fn main() {
-    foo()
+msg FooMsg {
+    #[selector = 0x12345678]
+    Ping -> u256,
+}
+
+pub contract Foo {
+    recv FooMsg {
+        Ping -> u256 {
+            foo()
+            return 1
+        }
+    }
 }

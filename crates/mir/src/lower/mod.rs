@@ -5,7 +5,7 @@
 use std::{error::Error, fmt};
 
 use common::diagnostics::{CompleteDiagnostic, Span};
-use common::ingot::IngotKind;
+use common::ingot::{Ingot, IngotKind};
 use hir::analysis::{
     HirAnalysisDb,
     diagnostics::SpannedHirAnalysisDb,
@@ -22,7 +22,7 @@ use hir::analysis::{
 };
 use hir::hir_def::{
     Attr, AttrArg, AttrArgValue, Body, CallableDef, Const, Expr, ExprId, Field, FieldIndex, Func,
-    IdentId, ItemKind, LitKind, MatchArm, Partial, Pat, PatId, Stmt, StmtId, TopLevelMod,
+    HirIngot, IdentId, ItemKind, LitKind, MatchArm, Partial, Pat, PatId, Stmt, StmtId, TopLevelMod,
     VariantKind, expr::BinOp,
 };
 
@@ -339,6 +339,112 @@ pub fn lower_module<'db>(
         crate::transform::canonicalize_zero_sized(db, &mut func.body);
     }
     Ok(MirModule { top_mod, functions })
+}
+
+/// Lowers every function within every top-level module of an ingot into MIR.
+///
+/// This is primarily useful for emitting artifacts (e.g. `fe build`) across a whole ingot: all
+/// contracts and contract entrypoints in any source file should be considered part of the same
+/// compilation scope.
+pub fn lower_ingot<'db>(
+    db: &'db dyn SpannedHirAnalysisDb,
+    ingot: Ingot<'db>,
+) -> MirLowerResult<MirModule<'db>> {
+    let mut templates = Vec::new();
+    let mut funcs_to_lower = Vec::new();
+    let mut seen = FxHashSet::default();
+
+    let mut queue_func = |func: Func<'db>| {
+        if seen.insert(func) {
+            funcs_to_lower.push(func);
+        }
+    };
+
+    for &top_mod in ingot.all_modules(db).iter() {
+        // Skip associated functions here to avoid pulling in trait methods (which may refer to
+        // abstract associated items) as MIR templates. Impl/impl-trait functions are queued below.
+        for &func in top_mod.all_funcs(db) {
+            if !func.is_associated_func(db) {
+                queue_func(func);
+            }
+        }
+
+        for &impl_block in top_mod.all_impls(db) {
+            for func in impl_block.funcs(db) {
+                queue_func(func);
+            }
+        }
+        for &impl_trait in top_mod.all_impl_traits(db) {
+            for func in impl_trait.methods(db) {
+                queue_func(func);
+            }
+        }
+    }
+
+    for func in funcs_to_lower {
+        if func.body(db).is_none() {
+            continue;
+        }
+        let (diags, typed_body) = check_func_body(db, func);
+        if !diags.is_empty() {
+            let func_name = func
+                .name(db)
+                .to_opt()
+                .map(|ident| ident.data(db).to_string())
+                .unwrap_or_else(|| "<anonymous>".to_string());
+            let rendered = diagnostics::format_func_body_diags(db, diags);
+            return Err(MirLowerError::AnalysisDiagnostics {
+                func_name,
+                diagnostics: rendered,
+            });
+        }
+        let lowered = lower_function(db, func, typed_body.clone(), None, Vec::new(), Vec::new())?;
+        templates.push(lowered);
+    }
+
+    for &top_mod in ingot.all_modules(db).iter() {
+        templates.extend(contracts::lower_contract_templates(db, top_mod)?);
+    }
+
+    // Run MIR diagnostics on the generic templates as well as the monomorphized instances. This
+    // ensures borrow/move errors are surfaced even when a generic function is never instantiated.
+    run_borrow_checks_or_error(db, &templates)?;
+
+    let mut functions = monomorphize_functions(db, templates);
+    for func in &mut functions {
+        crate::transform::canonicalize_transparent_newtypes(db, &mut func.body);
+        crate::transform::insert_temp_binds(db, &mut func.body);
+    }
+
+    for func in &functions {
+        if let Some(diag) = crate::analysis::noesc::check_noesc_escapes(db, func) {
+            let diagnostics = hir::analysis::diagnostics::format_diags(db, [&diag]);
+            return Err(MirLowerError::MirDiagnostics {
+                func_name: mir_func_name(db, func),
+                diagnostics,
+            });
+        }
+    }
+    run_borrow_checks_or_error(db, &functions)?;
+
+    // Lower semantic capability MIR into backend-specific representation MIR for codegen.
+    let root_mod = ingot.root_mod(db);
+    let core = CoreLib::new(db, root_mod.scope());
+    for func in &mut functions {
+        crate::transform::lower_capability_to_repr(
+            db,
+            &core,
+            crate::ir::MirBackend::EvmYul,
+            &mut func.body,
+        );
+        crate::transform::canonicalize_transparent_newtypes(db, &mut func.body);
+        crate::transform::insert_temp_binds(db, &mut func.body);
+        crate::transform::canonicalize_zero_sized(db, &mut func.body);
+    }
+    Ok(MirModule {
+        top_mod: root_mod,
+        functions,
+    })
 }
 
 /// Lowers a single HIR function (with its typed body) into a MIR function template.

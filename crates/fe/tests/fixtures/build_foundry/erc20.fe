@@ -1,0 +1,132 @@
+use std::evm::{Address, Ctx, Log, StorageMap, mem}
+use core::abi::{Abi, AbiEncoder, AbiSize, Encode}
+use std::abi::Sol
+use std::evm::ops::mstore
+
+// Standard ERC20 event signature hashes.
+const TRANSFER_EVENT_TOPIC0: u256 =
+    0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef
+const APPROVAL_EVENT_TOPIC0: u256 =
+    0x8c5be1e5ebec7d5bd14f71427d1e84f3dd0314c0f7b2291e5b200ac8c7c3b925
+
+msg Erc20 {
+    #[selector = 0x06fdde03]
+    Name -> u256,
+    #[selector = 0x95d89b41]
+    Symbol -> u256,
+    #[selector = 0x313ce567]
+    Decimals -> u8,
+    #[selector = 0x18160ddd]
+    TotalSupply -> u256,
+    #[selector = 0x70a08231]
+    BalanceOf { account: Address } -> u256,
+    #[selector = 0xdd62ed3e]
+    Allowance { owner: Address, spender: Address } -> u256,
+    #[selector = 0xa9059cbb]
+    Transfer { to: Address, amount: u256 } -> bool,
+    #[selector = 0x095ea7b3]
+    Approve { spender: Address, amount: u256 } -> bool,
+    #[selector = 0x23b872dd]
+    TransferFrom { from: Address, to: Address, amount: u256 } -> bool,
+}
+
+msg Erc20Extended {
+    #[selector = 0x40c10f19]
+    Mint { to: Address, amount: u256 } -> bool,
+}
+
+struct TokenStore {
+    total_supply: u256,
+    balances: StorageMap<Address, u256, 0>,
+    allowances: StorageMap<(Address, Address), u256, 1>,
+}
+
+pub contract CoolCoin uses (ctx: Ctx, log: mut Log) {
+    mut store: TokenStore
+
+    init(initial_supply: u256, owner: Address) uses (mut store, mut log) {
+        if initial_supply > 0 {
+            store.total_supply = initial_supply
+            store.balances.set(key: owner, value: initial_supply)
+            emit_transfer(from: Address::zero(), to: owner, value: initial_supply)
+        }
+    }
+
+    recv Erc20 {
+        Name -> u256 { 0x436f6f6c436f696e }
+        Symbol -> u256 { 0x434f4f4c }
+        Decimals -> u8 { 18 }
+        TotalSupply -> u256 uses store { store.total_supply }
+        BalanceOf { account } -> u256 uses store { store.balances.get(key: account) }
+        Allowance { owner, spender } -> u256 uses store { store.allowances.get(key: (owner, spender)) }
+
+        Transfer { to, amount } -> bool uses (mut store, ctx, mut log) {
+            let sender = ctx.caller()
+            let sender_bal = store.balances.get(key: sender)
+            if sender_bal < amount {
+                return false
+            }
+            store.balances.set(key: sender, value: sender_bal - amount)
+            store.balances.set(key: to, value: store.balances.get(key: to) + amount)
+            emit_transfer(from: sender, to: to, value: amount)
+            return true
+        }
+
+        Approve { spender, amount } -> bool uses (mut store, ctx, mut log) {
+            let sender = ctx.caller()
+            store.allowances.set(key: (sender, spender), value: amount)
+            emit_approval(owner: sender, spender: spender, value: amount)
+            return true
+        }
+
+        TransferFrom { from, to, amount } -> bool uses (mut store, ctx, mut log) {
+            let spender = ctx.caller()
+            let allowed = store.allowances.get(key: (from, spender))
+            if allowed < amount {
+                return false
+            }
+            let from_bal = store.balances.get(key: from)
+            if from_bal < amount {
+                return false
+            }
+            store.allowances.set(key: (from, spender), value: allowed - amount)
+            store.balances.set(key: from, value: from_bal - amount)
+            store.balances.set(key: to, value: store.balances.get(key: to) + amount)
+            emit_transfer(from: from, to: to, value: amount)
+            return true
+        }
+    }
+
+    recv Erc20Extended {
+        Mint { to, amount } -> bool uses (mut store, mut log) {
+            store.total_supply += amount
+            store.balances.set(key: to, value: store.balances.get(key: to) + amount)
+            emit_transfer(from: Address::zero(), to: to, value: amount)
+            return true
+        }
+    }
+}
+
+fn emit_transfer(from: Address, to: Address, value: u256) uses (log: mut Log) {
+    emit_event(
+        topic0: TRANSFER_EVENT_TOPIC0,
+        topic1: from.inner,
+        topic2: to.inner,
+        data0: value,
+    )
+}
+
+fn emit_approval(owner: Address, spender: Address, value: u256) uses (log: mut Log) {
+    emit_event(
+        topic0: APPROVAL_EVENT_TOPIC0,
+        topic1: owner.inner,
+        topic2: spender.inner,
+        data0: value,
+    )
+}
+
+fn emit_event(topic0: u256, topic1: u256, topic2: u256, data0: u256) uses (log: mut Log) {
+    let ptr = mem::alloc(32)
+    mstore(ptr, data0)
+    log.log3(offset: ptr, len: 32, topic0: topic0, topic1: topic1, topic2: topic2)
+}

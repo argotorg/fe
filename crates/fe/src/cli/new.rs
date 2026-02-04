@@ -42,7 +42,7 @@ pub fn run(
         match workspace_member_suggestion(&root, &target) {
             Ok(Some(message)) => println!("{message}"),
             Ok(None) => {}
-            Err(err) => eprintln!("⚠️  failed to check workspace members: {err}"),
+            Err(err) => eprintln!("Warning: failed to check workspace members: {err}"),
         }
     }
 

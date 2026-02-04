@@ -3,8 +3,9 @@ use std::fmt;
 use crate::yul::errors::YulError;
 
 pub use module::{
-    ExpectedRevert, TestMetadata, TestModuleOutput, emit_module_yul, emit_module_yul_with_layout,
-    emit_test_module_yul, emit_test_module_yul_with_layout,
+    ExpectedRevert, TestMetadata, TestModuleOutput, emit_ingot_yul, emit_ingot_yul_with_layout,
+    emit_module_yul, emit_module_yul_with_layout, emit_test_module_yul,
+    emit_test_module_yul_with_layout,
 };
 
 mod control_flow;

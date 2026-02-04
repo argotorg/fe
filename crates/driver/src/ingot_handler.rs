@@ -30,7 +30,6 @@ pub struct IngotHandler<'a> {
     pub db: &'a mut dyn InputDb,
     ingot_urls: HashMap<IngotDescriptor, Url>,
     had_diagnostics: bool,
-    verbose_enabled: bool,
     reported_checkouts: HashSet<GitDescription>,
     dependency_contexts: HashMap<IngotDescriptor, Vec<DependencyContext>>,
     emitted_diagnostics: HashSet<String>,
@@ -64,16 +63,10 @@ impl<'a> IngotHandler<'a> {
             db,
             ingot_urls: HashMap::new(),
             had_diagnostics: false,
-            verbose_enabled: false,
             reported_checkouts: HashSet::new(),
             dependency_contexts: HashMap::new(),
             emitted_diagnostics: HashSet::new(),
         }
-    }
-
-    pub fn with_verbose(mut self, verbose_enabled: bool) -> Self {
-        self.verbose_enabled = verbose_enabled;
-        self
     }
 
     pub fn had_diagnostics(&self) -> bool {
@@ -108,7 +101,7 @@ impl<'a> IngotHandler<'a> {
         }
         self.had_diagnostics = true;
         tracing::warn!(target: "resolver", "{diagnostic_string}");
-        eprintln!("❌ {diagnostic_string}");
+        eprintln!("Error: {diagnostic_string}");
     }
 
     fn report_error(&mut self, diagnostic: IngotInitDiagnostics) {
@@ -118,7 +111,7 @@ impl<'a> IngotHandler<'a> {
         }
         self.had_diagnostics = true;
         tracing::error!(target: "resolver", "{diagnostic_string}");
-        eprintln!("❌ {diagnostic_string}");
+        eprintln!("Error: {diagnostic_string}");
     }
 
     fn record_files(&mut self, files: &[resolver::files::File]) {
@@ -616,6 +609,46 @@ impl<'a> IngotHandler<'a> {
             .map_err(|err| format!("Failed to parse {config_url}: {err}"))
     }
 
+    fn ensure_phantom_lib_file(&mut self, ingot_url: &Url) {
+        let lib_url = match ingot_url.join("src/lib.fe") {
+            Ok(url) => url,
+            Err(_) => return,
+        };
+
+        if self.db.workspace().get(self.db, &lib_url).is_some() {
+            return;
+        }
+
+        // If `src/lib.fe` exists on disk but couldn't be read, don't hide that error by
+        // synthesizing a replacement.
+        if lib_url
+            .to_file_path()
+            .ok()
+            .is_some_and(|path| path.is_file())
+        {
+            return;
+        }
+
+        let src_prefix = match ingot_url.join("src/") {
+            Ok(url) => url,
+            Err(_) => return,
+        };
+
+        let has_sources = self
+            .db
+            .workspace()
+            .items_at_base(self.db, src_prefix)
+            .iter()
+            .any(|(url, _)| url.as_str().ends_with(".fe"));
+        if !has_sources {
+            return;
+        }
+
+        self.db
+            .workspace()
+            .touch(self.db, lib_url, Some(String::new()));
+    }
+
     fn effective_metadata_for_ingot(
         &mut self,
         ingot_url: &Url,
@@ -955,6 +988,8 @@ impl<'a> ResolutionHandler<IngotResolverImpl> for IngotHandler<'a> {
                 }
             };
         }
+
+        self.ensure_phantom_lib_file(&ingot_url);
 
         self.db.dependency_graph().ensure_node(self.db, &ingot_url);
 

@@ -18,5 +18,5 @@ pub use ir::{
 };
 pub use lower::{
     MirDiagnosticsMode, MirDiagnosticsOutput, MirLowerError, MirLowerResult,
-    collect_mir_diagnostics, lower_module,
+    collect_mir_diagnostics, lower_ingot, lower_module,
 };
