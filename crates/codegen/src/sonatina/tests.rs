@@ -91,6 +91,7 @@ pub fn emit_test_module_sonatina(
             bytecode: init_bytecode,
             value_param_count: test.value_param_count,
             effect_param_count: test.effect_param_count,
+            expected_revert: None,
         });
     }
 
