@@ -134,8 +134,9 @@ func public %alloc(v0.i256) -> i256 {
         br v12 block5 block6;
 
     block4:
+        v14.i256 = phi (v0 block2) (v0 block6);
         v13.i256 = phi (v8 block2) (v16 block6);
-        v15.i256 = add v13 v0;
+        v15.i256 = add v13 v14;
         mstore 64.i256 v15 i256;
         return v13;
 

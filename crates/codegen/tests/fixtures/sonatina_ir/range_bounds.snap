@@ -12,8 +12,9 @@ func public %sum_const() -> i256 {
 
     block1:
         v14.i256 = phi (0.i256 block0) (v8 block3);
+        v3.i256 = phi (v1 block0) (v3 block3);
         v2.i256 = phi (0.i256 block0) (v11 block3);
-        v4.i256 = lt v2 v1;
+        v4.i256 = lt v2 v3;
         br v4 block2 block4;
 
     block2:
@@ -38,8 +39,9 @@ func public %sum_dynamic_end(v0.i256) -> i256 {
 
     block1:
         v17.i256 = phi (0.i256 block0) (v11 block3);
+        v6.i256 = phi (v4 block0) (v6 block3);
         v5.i256 = phi (0.i256 block0) (v14 block3);
-        v7.i256 = lt v5 v4;
+        v7.i256 = lt v5 v6;
         br v7 block2 block4;
 
     block2:
@@ -64,12 +66,14 @@ func public %sum_dynamic_start(v0.i256) -> i256 {
 
     block1:
         v20.i256 = phi (0.i256 block0) (v12 block3);
+        v18.i256 = phi (v3 block0) (v18 block3);
+        v6.i256 = phi (v4 block0) (v6 block3);
         v5.i256 = phi (0.i256 block0) (v15 block3);
-        v7.i256 = lt v5 v4;
+        v7.i256 = lt v5 v6;
         br v7 block2 block4;
 
     block2:
-        v10.i256 = call %range_unknown__known_const_e__usize___seq_get__4__f248ae0e02044d7e v3 v5;
+        v10.i256 = call %range_unknown__known_const_e__usize___seq_get__4__f248ae0e02044d7e v18 v5;
         v12.i256 = add v20 v10;
         jump block3;
 
@@ -92,12 +96,14 @@ func public %sum_dynamic(v0.i256, v1.i256) -> i256 {
 
     block1:
         v23.i256 = phi (0.i256 block0) (v15 block3);
+        v21.i256 = phi (v4 block0) (v21 block3);
+        v9.i256 = phi (v7 block0) (v9 block3);
         v8.i256 = phi (0.i256 block0) (v18 block3);
-        v10.i256 = lt v8 v7;
+        v10.i256 = lt v8 v9;
         br v10 block2 block4;
 
     block2:
-        v13.i256 = call %range_unknown__known_const_e__usize___seq_get__4__f248ae0e02044d7e v4 v8;
+        v13.i256 = call %range_unknown__known_const_e__usize___seq_get__4__f248ae0e02044d7e v21 v8;
         v15.i256 = add v23 v13;
         jump block3;
 

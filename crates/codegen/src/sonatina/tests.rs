@@ -75,6 +75,7 @@ pub fn emit_test_module_sonatina(
         &region_reachable,
         &region_deps,
     )?;
+    super::ensure_module_sonatina_ir_valid(&module)?;
 
     let mut output_tests = Vec::with_capacity(tests.len());
     for test in tests {
