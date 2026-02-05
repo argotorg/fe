@@ -830,15 +830,7 @@ impl<'db> TyChecker<'db> {
     /// This prevents implicit duplication of non-`Copy` values (which would create aliasing for
     /// by-reference aggregates). `Copy` values may be duplicated implicitly.
     fn require_explicit_move_for_owned_expr(&mut self, expr: ExprId, ty: TyId<'db>) {
-        let ty = ty.fold_with(self.db, &mut self.table);
-        let ty = self.normalize_ty(ty);
-        if ty.has_invalid(self.db) || ty == TyId::unit(self.db) || ty.is_never(self.db) {
-            return;
-        }
-        if self.ty_is_copy(ty) {
-            return;
-        }
-
+        let _ = ty;
         self.require_explicit_move_for_owned_expr_inner(expr);
     }
 
@@ -879,11 +871,25 @@ impl<'db> TyChecker<'db> {
                 }
             }
             _ => {
-                if self.env.expr_place(expr).is_some() {
-                    self.push_diag(BodyDiag::ExplicitMoveRequired {
-                        primary: expr.span(body).into(),
-                    });
+                if self.env.expr_place(expr).is_none() {
+                    return;
                 }
+
+                let Some(prop) = self.env.typed_expr(expr) else {
+                    return;
+                };
+                let ty = prop.ty.fold_with(self.db, &mut self.table);
+                let ty = self.normalize_ty(ty);
+                if ty.has_invalid(self.db) || ty == TyId::unit(self.db) || ty.is_never(self.db) {
+                    return;
+                }
+                if self.ty_is_copy(ty) {
+                    return;
+                }
+
+                self.push_diag(BodyDiag::ExplicitMoveRequired {
+                    primary: expr.span(body).into(),
+                });
             }
         }
     }

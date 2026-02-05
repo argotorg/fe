@@ -10,7 +10,7 @@ use crate::{
         FuncParamName, GenericArgListId, GenericParam, GenericParamListId, IdentId, ImplTrait,
         IntegerId, ItemKind, LitKind, Mod, Partial, Pat, PatId, PathId, RecordPatField, Stmt,
         StmtId, Struct, TopLevelMod, TrackedItemId, TrackedItemVariant, TraitRefId, TypeBound,
-        TypeGenericParam, TypeId, TypeKind, Visibility, WhereClauseId, expr::CallArg,
+        TypeGenericParam, TypeId, TypeKind, UnOp, Visibility, WhereClauseId, expr::CallArg,
     },
     span::{DesugaredOrigin, HirOrigin},
 };
@@ -572,6 +572,7 @@ where
 
         let db = self.db();
         let self_expr = self.path_expr(PathId::from_ident(db, IdentId::make_self(db)));
+        let self_expr = self.push_expr(Expr::Un(self_expr, UnOp::Move));
 
         let record_fields = fields
             .iter()

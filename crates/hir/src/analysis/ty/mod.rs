@@ -76,6 +76,26 @@ pub fn ty_is_copy<'db>(
         return true;
     }
 
+    // Built-in primitives are always `Copy`, independent of trait solving.
+    if ty == TyId::unit(db) || ty.is_bool(db) || ty.is_integral(db) {
+        return true;
+    }
+
+    // Arrays/tuples are `Copy` if all element types are `Copy`.
+    if ty.is_array(db) {
+        let (_, args) = ty.decompose_ty_app(db);
+        return args
+            .first()
+            .copied()
+            .is_some_and(|elem| ty_is_copy(db, scope, elem, assumptions));
+    }
+    if ty.is_tuple(db) {
+        return ty
+            .field_types(db)
+            .into_iter()
+            .all(|field_ty| ty_is_copy(db, scope, field_ty, assumptions));
+    }
+
     let Some(copy_trait) = corelib::resolve_core_trait(db, scope, &["marker", "Copy"]) else {
         return false;
     };

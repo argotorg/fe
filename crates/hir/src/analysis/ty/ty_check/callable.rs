@@ -259,6 +259,9 @@ impl<'db> Callable<'db> {
             }
             let expected = tc.normalize_ty(expected);
 
+            tc.equate_ty(given.expr_prop.ty, expected, given.expr_span.clone());
+            let expected = tc.normalize_ty(expected);
+
             // Enforce explicit call-site borrow/move syntax for places.
             //
             // Borrow handles are copyable values, and `move` parameters consume their argument.
@@ -303,8 +306,6 @@ impl<'db> Callable<'db> {
                 // Variant constructors materialize their fields immediately (owned context).
                 tc.require_explicit_move_for_owned_expr(given.expr, expected);
             }
-
-            tc.equate_ty(given.expr_prop.ty, expected, given.expr_span);
         }
     }
 }
