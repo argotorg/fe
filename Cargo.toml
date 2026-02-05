@@ -42,6 +42,9 @@ tracing-tree = "0.4.0"
 wasm-bindgen-test = "0.3"
 semver = "1.0.26"
 petgraph = "0.8"
+sonatina-ir = { git = "https://github.com/fe-lang/sonatina", branch = "main" }
+sonatina-triple = { git = "https://github.com/fe-lang/sonatina", branch = "main" }
+sonatina-codegen = { git = "https://github.com/fe-lang/sonatina", branch = "main" }
 
 [profile.dev]
 # Set to 0 to make the build faster and debugging more difficult.
