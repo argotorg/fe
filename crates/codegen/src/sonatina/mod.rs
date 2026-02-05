@@ -2952,7 +2952,14 @@ fn lower_alloc<C: sonatina_ir::func_cursor::FuncCursor>(
         .ok_or_else(|| LowerError::Internal(format!("unknown local: {dest:?}")))?
         .ty;
 
-    let size_bytes = layout::ty_size_bytes_or_word_aligned_in(db, target_layout, alloc_ty);
+    let Some(size_bytes) = layout::ty_size_bytes_or_word_aligned_in(db, target_layout, alloc_ty)
+    else {
+        return Err(LowerError::Unsupported(format!(
+            "cannot determine allocation size for `{}`",
+            alloc_ty.pretty_print(db)
+        )));
+    };
+
     if size_bytes == 0 {
         return Ok(fb.make_imm_value(I256::zero()));
     }
