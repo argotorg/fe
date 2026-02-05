@@ -20,7 +20,7 @@ fn flip(ok: Ok) -> Ok {
 
 impl Eq for Ok {
     fn eq(self, _ other: Ok) -> bool {
-        match (self, other) {
+        match (move self, move other) {
             (Ok::Yes, Ok::Yes) | (Ok::No, Ok::No) => true
             _ => false
          }
@@ -77,7 +77,7 @@ fn f(a: Point, b: Point) {
     let c2 = Add::add(a, b)
     // let c3 = Add::add(a, 100) TODO: fix `type annotation is needed`
     let d = c + as_i32(100)
-    let x = d[0]
+    let x = move d[0]
 }
 
 fn as_i32(_ x: i32) -> i32 { x }

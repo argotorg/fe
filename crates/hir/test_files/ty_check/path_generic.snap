@@ -1,7 +1,8 @@
 ---
-source: crates/hir-analysis/tests/ty_check.rs
+source: crates/hir/tests/ty_check.rs
+assertion_line: 40
 expression: res
-input_file: crates/hir-analysis/test_files/ty_check/path_generic.fe
+input_file: test_files/ty_check/path_generic.fe
 ---
 note: 
    ┌─ path_generic.fe:10:22
@@ -44,54 +45,66 @@ note:
    │  
 29 │       fn gimme<U>(_ val: U) -> E<U> {
    │ ╭───────────────────────────────────^
-30 │ │         E::B(val)
+30 │ │         E::B(move val)
 31 │ │     }
    │ ╰─────^ E<U>
 
 note: 
    ┌─ path_generic.fe:30:9
    │
-30 │         E::B(val)
+30 │         E::B(move val)
    │         ^^^^ fn B<U>
 
 note: 
    ┌─ path_generic.fe:30:9
    │
-30 │         E::B(val)
-   │         ^^^^^^^^^ E<U>
+30 │         E::B(move val)
+   │         ^^^^^^^^^^^^^^ E<U>
 
 note: 
    ┌─ path_generic.fe:30:14
    │
-30 │         E::B(val)
-   │              ^^^ U
+30 │         E::B(move val)
+   │              ^^^^^^^^ U
+
+note: 
+   ┌─ path_generic.fe:30:19
+   │
+30 │         E::B(move val)
+   │                   ^^^ U
 
 note: 
    ┌─ path_generic.fe:39:57
    │  
 39 │       fn replace<T, U>(self: Self<T>, with: U) -> Self<U> {
    │ ╭─────────────────────────────────────────────────────────^
-40 │ │         Self::B(with)
+40 │ │         Self::B(move with)
 41 │ │     }
    │ ╰─────^ E<U>
 
 note: 
    ┌─ path_generic.fe:40:9
    │
-40 │         Self::B(with)
+40 │         Self::B(move with)
    │         ^^^^^^^ fn B<U>
 
 note: 
    ┌─ path_generic.fe:40:9
    │
-40 │         Self::B(with)
-   │         ^^^^^^^^^^^^^ E<U>
+40 │         Self::B(move with)
+   │         ^^^^^^^^^^^^^^^^^^ E<U>
 
 note: 
    ┌─ path_generic.fe:40:17
    │
-40 │         Self::B(with)
-   │                 ^^^^ U
+40 │         Self::B(move with)
+   │                 ^^^^^^^^^ U
+
+note: 
+   ┌─ path_generic.fe:40:22
+   │
+40 │         Self::B(move with)
+   │                      ^^^^ U
 
 note: 
    ┌─ path_generic.fe:44:10

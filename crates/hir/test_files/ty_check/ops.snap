@@ -1,5 +1,6 @@
 ---
-source: crates/hir-analysis/tests/ty_check.rs
+source: crates/hir/tests/ty_check.rs
+assertion_line: 40
 expression: res
 input_file: test_files/ty_check/ops.fe
 ---
@@ -80,7 +81,7 @@ note:
    │  
 22 │       fn eq(self, _ other: Ok) -> bool {
    │ ╭──────────────────────────────────────^
-23 │ │         match (self, other) {
+23 │ │         match (move self, move other) {
 24 │ │             (Ok::Yes, Ok::Yes) | (Ok::No, Ok::No) => true
 25 │ │             _ => false
 26 │ │          }
@@ -90,7 +91,7 @@ note:
 note: 
    ┌─ ops.fe:23:9
    │  
-23 │ ╭         match (self, other) {
+23 │ ╭         match (move self, move other) {
 24 │ │             (Ok::Yes, Ok::Yes) | (Ok::No, Ok::No) => true
 25 │ │             _ => false
 26 │ │          }
@@ -99,20 +100,32 @@ note:
 note: 
    ┌─ ops.fe:23:15
    │
-23 │         match (self, other) {
-   │               ^^^^^^^^^^^^^ (Ok, Ok)
+23 │         match (move self, move other) {
+   │               ^^^^^^^^^^^^^^^^^^^^^^^ (Ok, Ok)
 
 note: 
    ┌─ ops.fe:23:16
    │
-23 │         match (self, other) {
-   │                ^^^^ Ok
+23 │         match (move self, move other) {
+   │                ^^^^^^^^^ Ok
 
 note: 
-   ┌─ ops.fe:23:22
+   ┌─ ops.fe:23:21
    │
-23 │         match (self, other) {
-   │                      ^^^^^ Ok
+23 │         match (move self, move other) {
+   │                     ^^^^ Ok
+
+note: 
+   ┌─ ops.fe:23:27
+   │
+23 │         match (move self, move other) {
+   │                           ^^^^^^^^^^ Ok
+
+note: 
+   ┌─ ops.fe:23:32
+   │
+23 │         match (move self, move other) {
+   │                                ^^^^^ Ok
 
 note: 
    ┌─ ops.fe:24:13
@@ -531,7 +544,7 @@ note:
 77 │ │     let c2 = Add::add(a, b)
 78 │ │     // let c3 = Add::add(a, 100) TODO: fix `type annotation is needed`
 79 │ │     let d = c + as_i32(100)
-80 │ │     let x = d[0]
+80 │ │     let x = move d[0]
 81 │ │ }
    │ ╰─^ ()
 
@@ -628,26 +641,32 @@ note:
 note: 
    ┌─ ops.fe:80:9
    │
-80 │     let x = d[0]
+80 │     let x = move d[0]
    │         ^ Option<i32>
 
 note: 
    ┌─ ops.fe:80:13
    │
-80 │     let x = d[0]
-   │             ^ Point
+80 │     let x = move d[0]
+   │             ^^^^^^^^^ Option<i32>
 
 note: 
-   ┌─ ops.fe:80:13
+   ┌─ ops.fe:80:18
    │
-80 │     let x = d[0]
-   │             ^^^^ Option<i32>
+80 │     let x = move d[0]
+   │                  ^ Point
 
 note: 
-   ┌─ ops.fe:80:15
+   ┌─ ops.fe:80:18
    │
-80 │     let x = d[0]
-   │               ^ usize
+80 │     let x = move d[0]
+   │                  ^^^^ Option<i32>
+
+note: 
+   ┌─ ops.fe:80:20
+   │
+80 │     let x = move d[0]
+   │                    ^ usize
 
 note: 
    ┌─ ops.fe:83:28

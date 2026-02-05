@@ -7,7 +7,7 @@ pub fn use_add() -> i32 {
 }
 
 pub fn make_pair<T, U>(first: T, second: U) -> (T, U) {
-    (first, second)
+    (move first, move second)
 }
 
 pub fn use_make_pair() -> (i32, bool) {

@@ -1,5 +1,6 @@
 ---
-source: crates/hir-analysis/tests/ty_check.rs
+source: crates/hir/tests/ty_check.rs
+assertion_line: 40
 expression: res
 input_file: test_files/ty_check/trait_assoc_ty_bounds.fe
 ---
@@ -8,33 +9,39 @@ note:
    │  
 18 │       fn next(self) -> Option<T> {
    │ ╭────────────────────────────────^
-19 │ │         Option::Some(self.val)
+19 │ │         Option::Some(move self.val)
 20 │ │     }
    │ ╰─────^ Option<T>
 
 note: 
    ┌─ trait_assoc_ty_bounds.fe:19:9
    │
-19 │         Option::Some(self.val)
+19 │         Option::Some(move self.val)
    │         ^^^^^^^^^^^^ fn Some<T>
 
 note: 
    ┌─ trait_assoc_ty_bounds.fe:19:9
    │
-19 │         Option::Some(self.val)
-   │         ^^^^^^^^^^^^^^^^^^^^^^ Option<T>
+19 │         Option::Some(move self.val)
+   │         ^^^^^^^^^^^^^^^^^^^^^^^^^^^ Option<T>
 
 note: 
    ┌─ trait_assoc_ty_bounds.fe:19:22
    │
-19 │         Option::Some(self.val)
-   │                      ^^^^ Repeat<T>
+19 │         Option::Some(move self.val)
+   │                      ^^^^^^^^^^^^^ T
 
 note: 
-   ┌─ trait_assoc_ty_bounds.fe:19:22
+   ┌─ trait_assoc_ty_bounds.fe:19:27
    │
-19 │         Option::Some(self.val)
-   │                      ^^^^^^^^ T
+19 │         Option::Some(move self.val)
+   │                           ^^^^ Repeat<T>
+
+note: 
+   ┌─ trait_assoc_ty_bounds.fe:19:27
+   │
+19 │         Option::Some(move self.val)
+   │                           ^^^^^^^^ T
 
 note: 
    ┌─ trait_assoc_ty_bounds.fe:23:49

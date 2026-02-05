@@ -1,5 +1,7 @@
 struct Foo {}
 
+impl core::marker::Copy for Foo {}
+
 fn foo() {
     let i_array: [i32; 2] = [1, 2]
     let b_array = [true, false]

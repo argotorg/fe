@@ -1,5 +1,6 @@
 ---
-source: crates/hir-analysis/tests/ty_check.rs
+source: crates/hir/tests/ty_check.rs
+assertion_line: 40
 expression: res
 input_file: test_files/ty_check/assoc_type_subst.fe
 ---
@@ -8,21 +9,27 @@ note:
    │  
 18 │       fn get(self) -> Self::Output {
    │ ╭──────────────────────────────────^
-19 │ │         self.value
+19 │ │         move self.value
 20 │ │     }
    │ ╰─────^ T
 
 note: 
    ┌─ assoc_type_subst.fe:19:9
    │
-19 │         self.value
-   │         ^^^^ SimpleImpl<T>
+19 │         move self.value
+   │         ^^^^^^^^^^^^^^^ T
 
 note: 
-   ┌─ assoc_type_subst.fe:19:9
+   ┌─ assoc_type_subst.fe:19:14
    │
-19 │         self.value
-   │         ^^^^^^^^^^ T
+19 │         move self.value
+   │              ^^^^ SimpleImpl<T>
+
+note: 
+   ┌─ assoc_type_subst.fe:19:14
+   │
+19 │         move self.value
+   │              ^^^^^^^^^^ T
 
 note: 
    ┌─ assoc_type_subst.fe:38:49
@@ -90,4 +97,3 @@ note:
    │
 46 │     let result: u32 = n.get_nested()
    │                       ^^^^^^^^^^^^^^ u32
-

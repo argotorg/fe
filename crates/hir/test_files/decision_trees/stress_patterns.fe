@@ -54,7 +54,7 @@ fn test_complex_tuple_decision_tree(data: ((u8, bool), (Color, u8))) -> u8 {
 
 // Test decision tree for struct patterns
 fn test_struct_decision_tree(point: Point, color: Color) -> u8 {
-    match (point, color) {
+    match (move point, move color) {
         (Point { x: 0, y: 0 }, Color::Red) => 100
         (Point { x: 0, y: _ }, Color::Green) => 200
         (Point { x: _, y: 0 }, Color::Blue) => 300

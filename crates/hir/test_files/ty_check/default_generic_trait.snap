@@ -1,43 +1,62 @@
 ---
-source: crates/hir-analysis/tests/ty_check.rs
+source: crates/hir/tests/ty_check.rs
+assertion_line: 40
 expression: res
 input_file: test_files/ty_check/default_generic_trait.fe
 ---
 note: 
    ┌─ default_generic_trait.fe:16:45
    │
-16 │     fn add(self: Self, _ rhs: Self) -> Self { self }
-   │                                             ^^^^^^^^ Foo
+16 │     fn add(self: Self, _ rhs: Self) -> Self { move self }
+   │                                             ^^^^^^^^^^^^^ Foo
 
 note: 
    ┌─ default_generic_trait.fe:16:47
    │
-16 │     fn add(self: Self, _ rhs: Self) -> Self { self }
-   │                                               ^^^^ Foo
+16 │     fn add(self: Self, _ rhs: Self) -> Self { move self }
+   │                                               ^^^^^^^^^ Foo
+
+note: 
+   ┌─ default_generic_trait.fe:16:52
+   │
+16 │     fn add(self: Self, _ rhs: Self) -> Self { move self }
+   │                                                    ^^^^ Foo
 
 note: 
    ┌─ default_generic_trait.fe:19:45
    │
-19 │     fn sub(self: Self, _ rhs: Self) -> Self { self }
-   │                                             ^^^^^^^^ Foo
+19 │     fn sub(self: Self, _ rhs: Self) -> Self { move self }
+   │                                             ^^^^^^^^^^^^^ Foo
 
 note: 
    ┌─ default_generic_trait.fe:19:47
    │
-19 │     fn sub(self: Self, _ rhs: Self) -> Self { self }
-   │                                               ^^^^ Foo
+19 │     fn sub(self: Self, _ rhs: Self) -> Self { move self }
+   │                                               ^^^^^^^^^ Foo
+
+note: 
+   ┌─ default_generic_trait.fe:19:52
+   │
+19 │     fn sub(self: Self, _ rhs: Self) -> Self { move self }
+   │                                                    ^^^^ Foo
 
 note: 
    ┌─ default_generic_trait.fe:22:45
    │
-22 │     fn add(self: Self, _ rhs: Self) -> Self { self }
-   │                                             ^^^^^^^^ Bar
+22 │     fn add(self: Self, _ rhs: Self) -> Self { move self }
+   │                                             ^^^^^^^^^^^^^ Bar
 
 note: 
    ┌─ default_generic_trait.fe:22:47
    │
-22 │     fn add(self: Self, _ rhs: Self) -> Self { self }
-   │                                               ^^^^ Bar
+22 │     fn add(self: Self, _ rhs: Self) -> Self { move self }
+   │                                               ^^^^^^^^^ Bar
+
+note: 
+   ┌─ default_generic_trait.fe:22:52
+   │
+22 │     fn add(self: Self, _ rhs: Self) -> Self { move self }
+   │                                                    ^^^^ Bar
 
 note: 
    ┌─ default_generic_trait.fe:25:29

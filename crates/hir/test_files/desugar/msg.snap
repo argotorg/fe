@@ -60,7 +60,7 @@ mod CounterMsg {
     impl core::abi::Encode<std::abi::Sol> for Set {
     
         fn encode<E: core::abi::AbiEncoder<std::abi::Sol>>(self, mut _ e: E) {
-            let Self { val } = self
+            let Self { val } = move self
             val.encode(e)
         }
     }

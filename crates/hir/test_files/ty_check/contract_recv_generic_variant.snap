@@ -9,7 +9,7 @@ note:
    │  
 10 │       fn encode<E: core::abi::AbiEncoder<std::abi::Sol>>(self, mut _ e: E) {
    │ ╭──────────────────────────────────────────────────────────────────────────^
-11 │ │         let Self { value } = self
+11 │ │         let Self { value } = move self
 12 │ │         value.encode(e)
 13 │ │     }
    │ ╰─────^ ()
@@ -17,20 +17,26 @@ note:
 note: 
    ┌─ contract_recv_generic_variant.fe:11:13
    │
-11 │         let Self { value } = self
+11 │         let Self { value } = move self
    │             ^^^^^^^^^^^^^^ GenericMsg<T>
 
 note: 
    ┌─ contract_recv_generic_variant.fe:11:20
    │
-11 │         let Self { value } = self
+11 │         let Self { value } = move self
    │                    ^^^^^ T
 
 note: 
    ┌─ contract_recv_generic_variant.fe:11:30
    │
-11 │         let Self { value } = self
-   │                              ^^^^ GenericMsg<T>
+11 │         let Self { value } = move self
+   │                              ^^^^^^^^^ GenericMsg<T>
+
+note: 
+   ┌─ contract_recv_generic_variant.fe:11:35
+   │
+11 │         let Self { value } = move self
+   │                                   ^^^^ GenericMsg<T>
 
 note: 
    ┌─ contract_recv_generic_variant.fe:12:9
@@ -56,7 +62,7 @@ note:
 19 │       fn decode<D: core::abi::AbiDecoder<std::abi::Sol>>(mut _ d: D) -> Self {
    │ ╭────────────────────────────────────────────────────────────────────────────^
 20 │ │         let value = T::decode(d)
-21 │ │         Self { value }
+21 │ │         Self { value: move value }
 22 │ │     }
    │ ╰─────^ GenericMsg<T>
 
@@ -87,14 +93,20 @@ note:
 note: 
    ┌─ contract_recv_generic_variant.fe:21:9
    │
-21 │         Self { value }
-   │         ^^^^^^^^^^^^^^ GenericMsg<T>
+21 │         Self { value: move value }
+   │         ^^^^^^^^^^^^^^^^^^^^^^^^^^ GenericMsg<T>
 
 note: 
-   ┌─ contract_recv_generic_variant.fe:21:16
+   ┌─ contract_recv_generic_variant.fe:21:23
    │
-21 │         Self { value }
-   │                ^^^^^ T
+21 │         Self { value: move value }
+   │                       ^^^^^^^^^^ T
+
+note: 
+   ┌─ contract_recv_generic_variant.fe:21:28
+   │
+21 │         Self { value: move value }
+   │                            ^^^^^ T
 
 note: 
    ┌─ contract_recv_generic_variant.fe:44:9

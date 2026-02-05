@@ -136,12 +136,12 @@ fn test_multiple_matches() -> i32 {
         Option::Some(a) => {
             match opt2 {
                 Option::Some(b) => a + b
-                Option::None => a
+                Option::None => move a
             }
         }
         Option::None => {
             match opt2 {
-                Option::Some(b) => b
+                Option::Some(b) => move b
                 Option::None => 0
             }
         }
@@ -192,7 +192,7 @@ fn test_unknown_error_type() -> i32 {
 
 // Generic function return without context
 fn identity<T>(_ value: T) -> T {
-    value
+    move value
 }
 
 fn test_generic_return() -> i32 {

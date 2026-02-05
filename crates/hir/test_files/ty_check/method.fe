@@ -16,17 +16,17 @@ pub enum Option<T> {
 impl<T> Option<T> {
     pub fn and<U>(self, rhs: Option<U>) -> Option<U> {
         match self {
-            Self::Some(t) => rhs
+            Self::Some(t) => move rhs
             Self::None => Option::None
         }
     }
 
     pub fn get_or_insert(mut self, inner: T) -> T {
         match self {
-            Self::Some(t) => t
+            Self::Some(t) => move t
             Self::None => {
-                self = Self::Some(inner)
-                inner
+                self = Self::Some(move inner)
+                move inner
             }
         }
     }
@@ -36,7 +36,7 @@ impl Option {
     pub fn unwrap<T>(self: Self<T>) -> T {
         match self {
             Self::None => evm::abort()
-            Self::Some(t) => t
+            Self::Some(t) => move t
         }
     }
 }

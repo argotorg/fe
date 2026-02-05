@@ -1,7 +1,7 @@
 fn foo<T>(x: T) -> T
   uses (balance: u256)
 {
-    x
+    move x
 }
 
 struct Bar {
@@ -10,12 +10,12 @@ struct Bar {
 
 impl Bar {
     fn id<T>(self, x: T) -> T {
-        x
+        move x
     }
 }
 
 fn test() {
     let f = foo<u256>
     let m = Bar::id<u256>
-    let _ = (f, m)
+    let _ = (move f, move m)
 }

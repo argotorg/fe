@@ -24,7 +24,7 @@ mod TokenMsg {
 
     impl core::abi::Encode<std::abi::Sol> for Transfer {
         fn encode<E: core::abi::AbiEncoder<std::abi::Sol>>(self, mut _ e: E) {
-            let Self { to, amount } = self
+            let Self { to, amount } = move self
             to.encode(e)
             amount.encode(e)
         }
@@ -49,7 +49,7 @@ mod TokenMsg {
 
     impl core::abi::Encode<std::abi::Sol> for Balance {
         fn encode<E: core::abi::AbiEncoder<std::abi::Sol>>(self, mut _ e: E) {
-            let Self { addr } = self
+            let Self { addr } = move self
             addr.encode(e)
         }
     }
@@ -76,7 +76,7 @@ struct CustomQuery {
 
 impl core::abi::Encode<std::abi::Sol> for CustomQuery {
     fn encode<E: core::abi::AbiEncoder<std::abi::Sol>>(self, mut _ e: E) {
-        let Self { key } = self
+        let Self { key } = move self
         key.encode(e)
     }
 }

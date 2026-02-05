@@ -1,5 +1,6 @@
 ---
 source: crates/hir/tests/decision_tree.rs
+assertion_line: 157
 expression: res
 input_file: test_files/decision_trees/stress_patterns.fe
 ---
@@ -77,7 +78,7 @@ note:
 note: 
    ┌─ stress_patterns.fe:57:5
    │  
-57 │ ╭     match (point, color) {
+57 │ ╭     match (move point, move color) {
 58 │ │         (Point { x: 0, y: 0 }, Color::Red) => 100
 59 │ │         (Point { x: 0, y: _ }, Color::Green) => 200
 60 │ │         (Point { x: _, y: 0 }, Color::Blue) => 300

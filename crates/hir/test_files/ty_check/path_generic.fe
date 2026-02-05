@@ -27,7 +27,7 @@ enum E<T> {
 
 impl<T> E<T> {
     fn gimme<U>(_ val: U) -> E<U> {
-        E::B(val)
+        E::B(move val)
     }
 }
 
@@ -37,7 +37,7 @@ trait F where Self: * -> * {
 
 impl F for E {
     fn replace<T, U>(self: Self<T>, with: U) -> Self<U> {
-        Self::B(with)
+        Self::B(move with)
     }
 }
 

@@ -16,7 +16,7 @@ struct SimpleImpl<T> {
 impl<T> Simple for SimpleImpl<T> {
     type Output = T
     fn get(self) -> Self::Output {
-        self.value
+        move self.value
     }
 }
 

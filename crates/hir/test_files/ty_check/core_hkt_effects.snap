@@ -1,5 +1,6 @@
 ---
 source: crates/hir/tests/ty_check.rs
+assertion_line: 40
 expression: res
 input_file: test_files/ty_check/core_hkt_effects.fe
 ---
@@ -336,14 +337,20 @@ note:
 note: 
    ┌─ core_hkt_effects.fe:43:9
    │
-43 │     let value: Result<(), i32> = functor_mapped
+43 │     let value: Result<(), i32> = move functor_mapped
    │         ^^^^^ Result<(), i32>
 
 note: 
    ┌─ core_hkt_effects.fe:43:34
    │
-43 │     let value: Result<(), i32> = functor_mapped
-   │                                  ^^^^^^^^^^^^^^ Result<(), i32>
+43 │     let value: Result<(), i32> = move functor_mapped
+   │                                  ^^^^^^^^^^^^^^^^^^^ Result<(), i32>
+
+note: 
+   ┌─ core_hkt_effects.fe:43:39
+   │
+43 │     let value: Result<(), i32> = move functor_mapped
+   │                                       ^^^^^^^^^^^^^^ Result<(), i32>
 
 note: 
    ┌─ core_hkt_effects.fe:44:9
@@ -517,7 +524,7 @@ note:
    ┌─ core_hkt_effects.fe:69:5
    │  
 69 │ ╭     match res_chain {
-70 │ │         Ok(_) => Ok(opt_chain)
+70 │ │         Ok(_) => Ok(move opt_chain)
 71 │ │         Err(e) => Err(e)
 72 │ │     }
    │ ╰─────^ Result<(), Option<i32>>
@@ -531,32 +538,38 @@ note:
 note: 
    ┌─ core_hkt_effects.fe:70:9
    │
-70 │         Ok(_) => Ok(opt_chain)
+70 │         Ok(_) => Ok(move opt_chain)
    │         ^^^^^ Result<(), i32>
 
 note: 
    ┌─ core_hkt_effects.fe:70:12
    │
-70 │         Ok(_) => Ok(opt_chain)
+70 │         Ok(_) => Ok(move opt_chain)
    │            ^ i32
 
 note: 
    ┌─ core_hkt_effects.fe:70:18
    │
-70 │         Ok(_) => Ok(opt_chain)
+70 │         Ok(_) => Ok(move opt_chain)
    │                  ^^ fn Ok<(), Option<i32>>
 
 note: 
    ┌─ core_hkt_effects.fe:70:18
    │
-70 │         Ok(_) => Ok(opt_chain)
-   │                  ^^^^^^^^^^^^^ Result<(), Option<i32>>
+70 │         Ok(_) => Ok(move opt_chain)
+   │                  ^^^^^^^^^^^^^^^^^^ Result<(), Option<i32>>
 
 note: 
    ┌─ core_hkt_effects.fe:70:21
    │
-70 │         Ok(_) => Ok(opt_chain)
-   │                     ^^^^^^^^^ Option<i32>
+70 │         Ok(_) => Ok(move opt_chain)
+   │                     ^^^^^^^^^^^^^^ Option<i32>
+
+note: 
+   ┌─ core_hkt_effects.fe:70:26
+   │
+70 │         Ok(_) => Ok(move opt_chain)
+   │                          ^^^^^^^^^ Option<i32>
 
 note: 
    ┌─ core_hkt_effects.fe:71:9

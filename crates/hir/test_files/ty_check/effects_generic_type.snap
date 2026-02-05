@@ -1,5 +1,6 @@
 ---
-source: crates/hir-analysis/tests/ty_check.rs
+source: crates/hir/tests/ty_check.rs
+assertion_line: 40
 expression: res
 input_file: test_files/ty_check/effects_generic_type.fe
 ---
@@ -8,7 +9,7 @@ note:
    │  
  9 │ ╭ {
 10 │ │     let _ = ctx
-11 │ │     st.value = amount
+11 │ │     st.value = move amount
 12 │ │ }
    │ ╰─^ ()
 
@@ -27,26 +28,32 @@ note:
 note: 
    ┌─ effects_generic_type.fe:11:5
    │
-11 │     st.value = amount
+11 │     st.value = move amount
    │     ^^ Storage<T>
 
 note: 
    ┌─ effects_generic_type.fe:11:5
    │
-11 │     st.value = amount
+11 │     st.value = move amount
    │     ^^^^^^^^ T
 
 note: 
    ┌─ effects_generic_type.fe:11:5
    │
-11 │     st.value = amount
-   │     ^^^^^^^^^^^^^^^^^ ()
+11 │     st.value = move amount
+   │     ^^^^^^^^^^^^^^^^^^^^^^ ()
 
 note: 
    ┌─ effects_generic_type.fe:11:16
    │
-11 │     st.value = amount
-   │                ^^^^^^ T
+11 │     st.value = move amount
+   │                ^^^^^^^^^^^ T
+
+note: 
+   ┌─ effects_generic_type.fe:11:21
+   │
+11 │     st.value = move amount
+   │                     ^^^^^^ T
 
 note: 
    ┌─ effects_generic_type.fe:14:28

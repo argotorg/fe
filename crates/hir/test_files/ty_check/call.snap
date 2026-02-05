@@ -1,7 +1,8 @@
 ---
-source: crates/hir-analysis/tests/ty_check.rs
+source: crates/hir/tests/ty_check.rs
+assertion_line: 40
 expression: res
-input_file: crates/hir-analysis/test_files/ty_check/call.fe
+input_file: test_files/ty_check/call.fe
 ---
 note: 
   ┌─ call.fe:1:35
@@ -68,27 +69,39 @@ note:
    │  
  9 │   pub fn make_pair<T, U>(first: T, second: U) -> (T, U) {
    │ ╭───────────────────────────────────────────────────────^
-10 │ │     (first, second)
+10 │ │     (move first, move second)
 11 │ │ }
    │ ╰─^ (T, U)
 
 note: 
    ┌─ call.fe:10:5
    │
-10 │     (first, second)
-   │     ^^^^^^^^^^^^^^^ (T, U)
+10 │     (move first, move second)
+   │     ^^^^^^^^^^^^^^^^^^^^^^^^^ (T, U)
 
 note: 
    ┌─ call.fe:10:6
    │
-10 │     (first, second)
-   │      ^^^^^ T
+10 │     (move first, move second)
+   │      ^^^^^^^^^^ T
 
 note: 
-   ┌─ call.fe:10:13
+   ┌─ call.fe:10:11
    │
-10 │     (first, second)
-   │             ^^^^^^ U
+10 │     (move first, move second)
+   │           ^^^^^ T
+
+note: 
+   ┌─ call.fe:10:18
+   │
+10 │     (move first, move second)
+   │                  ^^^^^^^^^^^ U
+
+note: 
+   ┌─ call.fe:10:23
+   │
+10 │     (move first, move second)
+   │                       ^^^^^^ U
 
 note: 
    ┌─ call.fe:13:39

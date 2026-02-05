@@ -23,7 +23,7 @@ note:
    │  
 26 │           fn encode<E: core::abi::AbiEncoder<std::abi::Sol>>(self, mut _ e: E) {
    │ ╭──────────────────────────────────────────────────────────────────────────────^
-27 │ │             let Self { to, amount } = self
+27 │ │             let Self { to, amount } = move self
 28 │ │             to.encode(e)
 29 │ │             amount.encode(e)
 30 │ │         }
@@ -32,26 +32,32 @@ note:
 note: 
    ┌─ contract_recv_variants.fe:27:17
    │
-27 │             let Self { to, amount } = self
+27 │             let Self { to, amount } = move self
    │                 ^^^^^^^^^^^^^^^^^^^ Transfer
 
 note: 
    ┌─ contract_recv_variants.fe:27:24
    │
-27 │             let Self { to, amount } = self
+27 │             let Self { to, amount } = move self
    │                        ^^ u64
 
 note: 
    ┌─ contract_recv_variants.fe:27:28
    │
-27 │             let Self { to, amount } = self
+27 │             let Self { to, amount } = move self
    │                            ^^^^^^ u64
 
 note: 
    ┌─ contract_recv_variants.fe:27:39
    │
-27 │             let Self { to, amount } = self
-   │                                       ^^^^ Transfer
+27 │             let Self { to, amount } = move self
+   │                                       ^^^^^^^^^ Transfer
+
+note: 
+   ┌─ contract_recv_variants.fe:27:44
+   │
+27 │             let Self { to, amount } = move self
+   │                                            ^^^^ Transfer
 
 note: 
    ┌─ contract_recv_variants.fe:28:13
@@ -171,7 +177,7 @@ note:
    │  
 51 │           fn encode<E: core::abi::AbiEncoder<std::abi::Sol>>(self, mut _ e: E) {
    │ ╭──────────────────────────────────────────────────────────────────────────────^
-52 │ │             let Self { addr } = self
+52 │ │             let Self { addr } = move self
 53 │ │             addr.encode(e)
 54 │ │         }
    │ ╰─────────^ ()
@@ -179,20 +185,26 @@ note:
 note: 
    ┌─ contract_recv_variants.fe:52:17
    │
-52 │             let Self { addr } = self
+52 │             let Self { addr } = move self
    │                 ^^^^^^^^^^^^^ Balance
 
 note: 
    ┌─ contract_recv_variants.fe:52:24
    │
-52 │             let Self { addr } = self
+52 │             let Self { addr } = move self
    │                        ^^^^ u64
 
 note: 
    ┌─ contract_recv_variants.fe:52:33
    │
-52 │             let Self { addr } = self
-   │                                 ^^^^ Balance
+52 │             let Self { addr } = move self
+   │                                 ^^^^^^^^^ Balance
+
+note: 
+   ┌─ contract_recv_variants.fe:52:38
+   │
+52 │             let Self { addr } = move self
+   │                                      ^^^^ Balance
 
 note: 
    ┌─ contract_recv_variants.fe:53:13
@@ -263,7 +275,7 @@ note:
    │  
 78 │       fn encode<E: core::abi::AbiEncoder<std::abi::Sol>>(self, mut _ e: E) {
    │ ╭──────────────────────────────────────────────────────────────────────────^
-79 │ │         let Self { key } = self
+79 │ │         let Self { key } = move self
 80 │ │         key.encode(e)
 81 │ │     }
    │ ╰─────^ ()
@@ -271,20 +283,26 @@ note:
 note: 
    ┌─ contract_recv_variants.fe:79:13
    │
-79 │         let Self { key } = self
+79 │         let Self { key } = move self
    │             ^^^^^^^^^^^^ CustomQuery
 
 note: 
    ┌─ contract_recv_variants.fe:79:20
    │
-79 │         let Self { key } = self
+79 │         let Self { key } = move self
    │                    ^^^ u64
 
 note: 
    ┌─ contract_recv_variants.fe:79:28
    │
-79 │         let Self { key } = self
-   │                            ^^^^ CustomQuery
+79 │         let Self { key } = move self
+   │                            ^^^^^^^^^ CustomQuery
+
+note: 
+   ┌─ contract_recv_variants.fe:79:33
+   │
+79 │         let Self { key } = move self
+   │                                 ^^^^ CustomQuery
 
 note: 
    ┌─ contract_recv_variants.fe:80:9

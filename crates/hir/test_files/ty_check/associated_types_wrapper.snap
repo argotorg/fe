@@ -1,5 +1,6 @@
 ---
-source: crates/hir-analysis/tests/ty_check.rs
+source: crates/hir/tests/ty_check.rs
+assertion_line: 40
 expression: res
 input_file: test_files/ty_check/associated_types_wrapper.fe
 ---
@@ -58,7 +59,7 @@ note:
    │ ╭───────────^
 28 │ │     let w = Wrapper { inner: S{} }
 29 │ │     let wa = w.make_foo()
-30 │ │     let a: A = wa.inner
+30 │ │     let a: A = move wa.inner
 31 │ │ }
    │ ╰─^ ()
 
@@ -101,17 +102,23 @@ note:
 note: 
    ┌─ associated_types_wrapper.fe:30:9
    │
-30 │     let a: A = wa.inner
+30 │     let a: A = move wa.inner
    │         ^ A
 
 note: 
    ┌─ associated_types_wrapper.fe:30:16
    │
-30 │     let a: A = wa.inner
-   │                ^^ Wrapper<A>
+30 │     let a: A = move wa.inner
+   │                ^^^^^^^^^^^^^ A
 
 note: 
-   ┌─ associated_types_wrapper.fe:30:16
+   ┌─ associated_types_wrapper.fe:30:21
    │
-30 │     let a: A = wa.inner
-   │                ^^^^^^^^ A
+30 │     let a: A = move wa.inner
+   │                     ^^ Wrapper<A>
+
+note: 
+   ┌─ associated_types_wrapper.fe:30:21
+   │
+30 │     let a: A = move wa.inner
+   │                     ^^^^^^^^ A

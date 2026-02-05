@@ -1,7 +1,8 @@
 ---
-source: crates/hir-analysis/tests/ty_check.rs
+source: crates/hir/tests/ty_check.rs
+assertion_line: 40
 expression: res
-input_file: crates/hir-analysis/test_files/ty_check/field_access.fe
+input_file: test_files/ty_check/field_access.fe
 ---
 note: 
   ┌─ field_access.fe:1:31
@@ -36,94 +37,124 @@ note:
    │  
  6 │   fn swap<T, U>(x: (T, U)) -> (U, T) {
    │ ╭────────────────────────────────────^
- 7 │ │     let elem0 = x.0
- 8 │ │     let elem1 = x.1
- 9 │ │     (elem1, elem0)
+ 7 │ │     let elem0 = move x.0
+ 8 │ │     let elem1 = move x.1
+ 9 │ │     (move elem1, move elem0)
 10 │ │ }
    │ ╰─^ (U, T)
 
 note: 
   ┌─ field_access.fe:7:9
   │
-7 │     let elem0 = x.0
+7 │     let elem0 = move x.0
   │         ^^^^^ T
 
 note: 
   ┌─ field_access.fe:7:17
   │
-7 │     let elem0 = x.0
-  │                 ^ (T, U)
+7 │     let elem0 = move x.0
+  │                 ^^^^^^^^ T
 
 note: 
-  ┌─ field_access.fe:7:17
+  ┌─ field_access.fe:7:22
   │
-7 │     let elem0 = x.0
-  │                 ^^^ T
+7 │     let elem0 = move x.0
+  │                      ^ (T, U)
+
+note: 
+  ┌─ field_access.fe:7:22
+  │
+7 │     let elem0 = move x.0
+  │                      ^^^ T
 
 note: 
   ┌─ field_access.fe:8:9
   │
-8 │     let elem1 = x.1
+8 │     let elem1 = move x.1
   │         ^^^^^ U
 
 note: 
   ┌─ field_access.fe:8:17
   │
-8 │     let elem1 = x.1
-  │                 ^ (T, U)
+8 │     let elem1 = move x.1
+  │                 ^^^^^^^^ U
 
 note: 
-  ┌─ field_access.fe:8:17
+  ┌─ field_access.fe:8:22
   │
-8 │     let elem1 = x.1
-  │                 ^^^ U
+8 │     let elem1 = move x.1
+  │                      ^ (T, U)
+
+note: 
+  ┌─ field_access.fe:8:22
+  │
+8 │     let elem1 = move x.1
+  │                      ^^^ U
 
 note: 
   ┌─ field_access.fe:9:5
   │
-9 │     (elem1, elem0)
-  │     ^^^^^^^^^^^^^^ (U, T)
+9 │     (move elem1, move elem0)
+  │     ^^^^^^^^^^^^^^^^^^^^^^^^ (U, T)
 
 note: 
   ┌─ field_access.fe:9:6
   │
-9 │     (elem1, elem0)
-  │      ^^^^^ U
+9 │     (move elem1, move elem0)
+  │      ^^^^^^^^^^ U
 
 note: 
-  ┌─ field_access.fe:9:13
+  ┌─ field_access.fe:9:11
   │
-9 │     (elem1, elem0)
-  │             ^^^^^ T
+9 │     (move elem1, move elem0)
+  │           ^^^^^ U
+
+note: 
+  ┌─ field_access.fe:9:18
+  │
+9 │     (move elem1, move elem0)
+  │                  ^^^^^^^^^^ T
+
+note: 
+  ┌─ field_access.fe:9:23
+  │
+9 │     (move elem1, move elem0)
+  │                       ^^^^^ T
 
 note: 
    ┌─ field_access.fe:17:46
    │  
 17 │   fn swap2<T>(bar: Bar<T, i32>) -> Bar<i32, T> {
    │ ╭──────────────────────────────────────────────^
-18 │ │     let u = bar.t
+18 │ │     let u = move bar.t
 19 │ │     let t = bar.u
-20 │ │     Bar {t, u}
+20 │ │     Bar {t, u: move u}
 21 │ │ }
    │ ╰─^ Bar<i32, T>
 
 note: 
    ┌─ field_access.fe:18:9
    │
-18 │     let u = bar.t
+18 │     let u = move bar.t
    │         ^ T
 
 note: 
    ┌─ field_access.fe:18:13
    │
-18 │     let u = bar.t
-   │             ^^^ Bar<T, i32>
+18 │     let u = move bar.t
+   │             ^^^^^^^^^^ T
 
 note: 
-   ┌─ field_access.fe:18:13
+   ┌─ field_access.fe:18:18
    │
-18 │     let u = bar.t
-   │             ^^^^^ T
+18 │     let u = move bar.t
+   │                  ^^^ Bar<T, i32>
+
+note: 
+   ┌─ field_access.fe:18:18
+   │
+18 │     let u = move bar.t
+   │                  ^^^^^ T
 
 note: 
    ┌─ field_access.fe:19:9
@@ -146,17 +177,23 @@ note:
 note: 
    ┌─ field_access.fe:20:5
    │
-20 │     Bar {t, u}
-   │     ^^^^^^^^^^ Bar<i32, T>
+20 │     Bar {t, u: move u}
+   │     ^^^^^^^^^^^^^^^^^^ Bar<i32, T>
 
 note: 
    ┌─ field_access.fe:20:10
    │
-20 │     Bar {t, u}
+20 │     Bar {t, u: move u}
    │          ^ i32
 
 note: 
-   ┌─ field_access.fe:20:13
+   ┌─ field_access.fe:20:16
    │
-20 │     Bar {t, u}
-   │             ^ T
+20 │     Bar {t, u: move u}
+   │                ^^^^^^ T
+
+note: 
+   ┌─ field_access.fe:20:21
+   │
+20 │     Bar {t, u: move u}
+   │                     ^ T
