@@ -1,4 +1,5 @@
 use core::abi::ByteInput
+use core::Copy
 use core::num::IntDowncast
 use ingot::evm::ops::mload
 
@@ -6,6 +7,8 @@ pub struct MemoryBytes {
     pub base: u256,
     pub len: u256,
 }
+
+impl Copy for MemoryBytes {}
 
 impl ByteInput for MemoryBytes {
     fn len(self) -> u256 {

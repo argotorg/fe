@@ -1,3 +1,4 @@
+use ingot::Copy
 use ingot::num::IntDowncast
 
 /// Errors returned by ABI decoding/encoding helpers.
@@ -17,7 +18,7 @@ pub enum AbiError {
 ///
 /// Implementations may return padded values (e.g. EVM calldata loads) so callers
 /// must use `len()` to enforce bounds/canonicality.
-pub trait ByteInput {
+pub trait ByteInput: Copy {
     fn len(self) -> u256
     fn word_at(self, byte_offset: u256) -> u256
     fn byte_at(self, byte_offset: u256) -> u8
@@ -47,14 +48,14 @@ impl<I> Cursor<I>
 {
     pub fn new(input: I) -> Self {
         Cursor {
-            input: move input,
+            input,
             pos: 0,
         }
     }
 
     pub fn fork(self, pos: u256) -> Self {
         Cursor {
-            input: move self.input,
+            input: self.input,
             pos,
         }
     }
