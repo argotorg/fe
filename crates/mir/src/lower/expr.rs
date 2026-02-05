@@ -269,11 +269,14 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                             ValueRepr::Ptr(AddressSpaceKind::Memory);
                     }
                     hir::hir_def::expr::UnOp::Move => {
-                        let Some(place) = self.place_for_borrow_expr(*inner) else {
-                            panic!("move operand must lower to a place");
-                        };
-                        self.builder.body.values[value_id.index()].origin =
-                            ValueOrigin::MoveOut { place };
+                        if let Some(place) = self.place_for_expr(*inner) {
+                            self.builder.body.values[value_id.index()].origin =
+                                ValueOrigin::MoveOut { place };
+                        } else {
+                            let inner_value = self.lower_expr(*inner);
+                            self.builder.body.values[value_id.index()].origin =
+                                ValueOrigin::TransparentCast { value: inner_value };
+                        }
                     }
                     _ => {
                         let _ = self.lower_expr(*inner);
