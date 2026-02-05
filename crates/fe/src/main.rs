@@ -44,11 +44,17 @@ pub enum Command {
         #[arg(long, default_value = "yul")]
         backend: String,
         /// Write a debugging report as a `.tar.gz` file (includes sources, IR, backend output).
-        ///
-        /// If no path is provided, defaults to `fe-check-report.tar.gz` in the current directory.
-        #[arg(long, value_name = "OUT", num_args = 0..=1, default_missing_value = "fe-check-report.tar.gz")]
-        report: Option<Utf8PathBuf>,
-        /// When used with `--report`, only write the report if `fe check` fails.
+        #[arg(long)]
+        report: bool,
+        /// Output path for `--report` (must end with `.tar.gz`).
+        #[arg(
+            long,
+            value_name = "OUT",
+            default_value = "fe-check-report.tar.gz",
+            requires = "report"
+        )]
+        report_out: Utf8PathBuf,
+        /// Only write the report if `fe check` fails.
         #[arg(long, requires = "report")]
         report_failed_only: bool,
     },
@@ -111,23 +117,21 @@ pub enum Command {
         #[arg(long)]
         debug_dir: Option<Utf8PathBuf>,
         /// Write a debugging report as a `.tar.gz` file (includes sources, IR, bytecode, traces).
-        ///
-        /// If no path is provided, defaults to `fe-test-report.tar.gz` in the current directory.
-        #[arg(long, value_name = "OUT", num_args = 0..=1, default_missing_value = "fe-test-report.tar.gz")]
-        report: Option<Utf8PathBuf>,
+        #[arg(long)]
+        report: bool,
+        /// Output path for `--report` (must end with `.tar.gz`).
+        #[arg(
+            long,
+            value_name = "OUT",
+            default_value = "fe-test-report.tar.gz",
+            requires = "report"
+        )]
+        report_out: Utf8PathBuf,
         /// Write one `.tar.gz` report per input suite into this directory.
         ///
         /// Useful when running a glob over many fixtures: each failing suite can be shared as a
         /// standalone artifact.
-        ///
-        /// If no directory is provided, defaults to `target/fe-test-reports`.
-        #[arg(
-            long,
-            value_name = "DIR",
-            num_args = 0..=1,
-            default_missing_value = "target/fe-test-reports",
-            conflicts_with = "report"
-        )]
+        #[arg(long, value_name = "DIR", conflicts_with = "report")]
         report_dir: Option<Utf8PathBuf>,
         /// When used with `--report-dir`, only write reports for suites that failed.
         #[arg(long, requires = "report_dir")]
@@ -174,6 +178,7 @@ pub fn run(opts: &Options) {
             emit_yul_min,
             backend,
             report,
+            report_out,
             report_failed_only,
         } => {
             //: TODO readd custom core
@@ -182,7 +187,7 @@ pub fn run(opts: &Options) {
                 *dump_mir,
                 *emit_yul_min,
                 backend,
-                report.as_ref(),
+                (*report).then_some(report_out),
                 *report_failed_only,
             );
         }
@@ -208,6 +213,7 @@ pub fn run(opts: &Options) {
             sonatina_transient_malloc_filter,
             debug_dir,
             report,
+            report_out,
             report_dir,
             report_failed_only,
         } => {
@@ -233,7 +239,7 @@ pub fn run(opts: &Options) {
                 *show_logs,
                 backend,
                 &debug,
-                report.as_ref(),
+                (*report).then_some(report_out),
                 report_dir.as_ref(),
                 *report_failed_only,
             );

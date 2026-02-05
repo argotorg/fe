@@ -35,13 +35,11 @@ func public %runtime__StorPtr_Evm___207f35a85ac4062e() {
         jump block6;
 
     block2:
-        v13.i256 = phi (v3 block0);
-        v15.i256 = eq v13 1163776883.i256;
+        v15.i256 = eq v3 1163776883.i256;
         br v15 block8 block9;
 
     block3:
-        v16.i256 = phi (v20 block6);
-        v17.i256 = add v16 32.i256;
+        v17.i256 = add v9 32.i256;
         v18.i256 = mload v17 i256;
         jump block4;
 
@@ -54,8 +52,7 @@ func public %runtime__StorPtr_Evm___207f35a85ac4062e() {
         jump block4;
 
     block6:
-        v20.i256 = phi (v9 block1);
-        v21.i256 = mload v20 i256;
+        v21.i256 = mload v9 i256;
         v22.i256 = eq v21 1.i256;
         br v22 block3 block22;
 
@@ -68,13 +65,11 @@ func public %runtime__StorPtr_Evm___207f35a85ac4062e() {
         jump block13;
 
     block9:
-        v25.i256 = phi (v13 block2);
-        v27.i256 = eq v25 3572425762.i256;
+        v27.i256 = eq v3 3572425762.i256;
         br v27 block15 block16;
 
     block10:
-        v28.i256 = phi (v32 block13);
-        v29.i256 = add v28 32.i256;
+        v29.i256 = add v24 32.i256;
         v30.i256 = mload v29 i256;
         jump block11;
 
@@ -87,8 +82,7 @@ func public %runtime__StorPtr_Evm___207f35a85ac4062e() {
         jump block11;
 
     block13:
-        v32.i256 = phi (v24 block8);
-        v33.i256 = mload v32 i256;
+        v33.i256 = mload v24 i256;
         v34.i256 = eq v33 1.i256;
         br v34 block10 block23;
 
@@ -118,8 +112,7 @@ func public %runtime__StorPtr_Evm___207f35a85ac4062e() {
         jump block18;
 
     block20:
-        v40.i256 = phi (v37 block15);
-        v41.i256 = mload v40 i256;
+        v41.i256 = mload v37 i256;
         v42.i256 = eq v41 1.i256;
         br v42 block17 block24;
 

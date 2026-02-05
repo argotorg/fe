@@ -16,13 +16,11 @@ func public %f(v0.i256) -> i256 {
         jump block3;
 
     block3:
-        v3.i256 = phi (1.i256 block2);
-        v4.i256 = add v3 1.i256;
+        v4.i256 = add 1.i256 1.i256;
         return v4;
 
     block4:
-        v5.i256 = phi (v0 block0);
-        v6.i256 = mload v5 i256;
+        v6.i256 = mload v0 i256;
         v7.i256 = eq v6 0.i256;
         br v7 block1 block6;
 
