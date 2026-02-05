@@ -1,5 +1,7 @@
 struct Zst {}
 
+impl core::marker::Copy for Zst {}
+
 struct Counter {
     i: usize,
 }
