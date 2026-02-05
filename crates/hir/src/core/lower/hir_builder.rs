@@ -6,11 +6,11 @@ use crate::{
     HirDb,
     hir_def::{
         AssocConstDef, AssocTyDef, AttrListId, Body, BodyKind, EffectParamListId, Expr, ExprId,
-        FieldDefListId, Func, FuncModifiers, FuncParam, FuncParamListId, FuncParamMode,
+        FieldDefListId, FieldIndex, Func, FuncModifiers, FuncParam, FuncParamListId, FuncParamMode,
         FuncParamName, GenericArgListId, GenericParam, GenericParamListId, IdentId, ImplTrait,
-        IntegerId, ItemKind, LitKind, Mod, Partial, Pat, PatId, PathId, RecordPatField, Stmt,
-        StmtId, Struct, TopLevelMod, TrackedItemId, TrackedItemVariant, TraitRefId, TypeBound,
-        TypeGenericParam, TypeId, TypeKind, UnOp, Visibility, WhereClauseId, expr::CallArg,
+        IntegerId, ItemKind, LitKind, Mod, Partial, Pat, PatId, PathId, Stmt, StmtId, Struct,
+        TopLevelMod, TrackedItemId, TrackedItemVariant, TraitRefId, TypeBound, TypeGenericParam,
+        TypeId, TypeKind, Visibility, WhereClauseId, expr::CallArg,
     },
     span::{DesugaredOrigin, HirOrigin},
 };
@@ -565,45 +565,22 @@ where
         ))
     }
 
-    pub(super) fn let_self_record(&mut self, fields: &[IdentId<'db>]) {
-        if fields.is_empty() {
-            return;
-        }
-
-        let db = self.db();
-        let self_expr = self.path_expr(PathId::from_ident(db, IdentId::make_self(db)));
-        let self_expr = self.push_expr(Expr::Un(self_expr, UnOp::Move));
-
-        let record_fields = fields
-            .iter()
-            .copied()
-            .map(|field_name| {
-                let pat = self.push_pat(Pat::Path(
-                    Partial::Present(PathId::from_ident(db, field_name)),
-                    false,
-                ));
-                RecordPatField {
-                    label: Partial::Present(field_name),
-                    pat,
-                }
-            })
-            .collect();
-
-        let bind_pat = self.push_pat(Pat::Record(
-            Partial::Present(PathId::from_ident(db, IdentId::make_self_ty(db))),
-            record_fields,
-        ));
-        self.emit_stmt(Stmt::Let(bind_pat, None, Some(self_expr)));
-    }
-
     pub(super) fn encode_fields(&mut self, fields: &[IdentId<'db>], encoder_ident: IdentId<'db>) {
         if fields.is_empty() {
             return;
         }
 
+        // `core::abi::Encode::encode` takes `self` as a view parameter, so we must avoid any
+        // desugaring that would move out of `self` (e.g. destructuring via `let Self { .. }`).
+        // Encoding each field directly keeps this method read-only.
+        let db = self.db();
+        let self_expr = self.path_expr(PathId::from_ident(db, IdentId::make_self(db)));
         let encode_ident = IdentId::new(self.db(), "encode".to_string());
         for field in fields.iter().copied() {
-            let receiver = self.ident_expr(field);
+            let receiver = self.push_expr(Expr::Field(
+                self_expr,
+                Partial::Present(FieldIndex::Ident(field)),
+            ));
             let encoder_expr = self.ident_expr(encoder_ident);
             let call = self.method_call_expr(receiver, encode_ident, vec![encoder_expr]);
             self.emit_expr_stmt(call);

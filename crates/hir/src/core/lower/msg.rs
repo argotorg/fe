@@ -165,7 +165,6 @@ fn lower_msg_variant_encode_impl<'db>(
             None,
             FuncModifiers::new(Visibility::Private, false, false, false),
             |body| {
-                body.let_self_record(&field_names);
                 body.encode_fields(&field_names, encoder_ident);
             },
         );
