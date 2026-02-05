@@ -30,11 +30,10 @@ pub struct Prefix {
 }
 
 pub fn prefix<I: ByteInput>(input: I) -> Prefix {
-    let p = Prefix {
+    Prefix {
         len: input.len(),
         word0: input.word_at(0),
     }
-    p
 }
 
 /// Generic cursor over a `ByteInput`.
@@ -47,16 +46,17 @@ impl<I> Cursor<I>
     where I: ByteInput
 {
     pub fn new(input: I) -> Self {
-        let cur = Cursor { input, pos: 0 }
-        cur
+        Cursor {
+            input: move input,
+            pos: 0,
+        }
     }
 
     pub fn fork(self, pos: u256) -> Self {
-        let cur = Cursor {
-            input: self.input,
+        Cursor {
+            input: move self.input,
             pos,
         }
-        cur
     }
 
     pub fn read_u8(mut self) -> u8 {
@@ -590,8 +590,7 @@ impl<A: Abi, T0> Decode<A> for (T0,)
     where T0: Decode<A>
 {
     fn decode<D: AbiDecoder<A>>(mut _ d: D) -> Self {
-        let v0 = T0::decode(d)
-        (v0,)
+        (T0::decode(d),)
     }
 }
 
@@ -599,7 +598,7 @@ impl<A: Abi, T0> Encode<A> for (T0,)
     where T0: Encode<A>
 {
     fn encode<E: AbiEncoder<A>>(self, mut _ e: E) {
-        let (v0,) = self
+        let (v0,) = move self
         v0.encode(e)
     }
 }
@@ -608,9 +607,7 @@ impl<A: Abi, T0, T1> Decode<A> for (T0, T1)
     where T0: Decode<A>, T1: Decode<A>
 {
     fn decode<D: AbiDecoder<A>>(mut _ d: D) -> Self {
-        let v0 = T0::decode(d)
-        let v1 = T1::decode(d)
-        (v0, v1)
+        (T0::decode(d), T1::decode(d))
     }
 }
 
@@ -618,7 +615,7 @@ impl<A: Abi, T0, T1> Encode<A> for (T0, T1)
     where T0: Encode<A>, T1: Encode<A>
 {
     fn encode<E: AbiEncoder<A>>(self, mut _ e: E) {
-        let (v0, v1) = self
+        let (v0, v1) = move self
         v0.encode(e)
         v1.encode(e)
     }
@@ -628,10 +625,7 @@ impl<A: Abi, T0, T1, T2> Decode<A> for (T0, T1, T2)
     where T0: Decode<A>, T1: Decode<A>, T2: Decode<A>
 {
     fn decode<D: AbiDecoder<A>>(mut _ d: D) -> Self {
-        let v0 = T0::decode(d)
-        let v1 = T1::decode(d)
-        let v2 = T2::decode(d)
-        (v0, v1, v2)
+        (T0::decode(d), T1::decode(d), T2::decode(d))
     }
 }
 
@@ -639,7 +633,7 @@ impl<A: Abi, T0, T1, T2> Encode<A> for (T0, T1, T2)
     where T0: Encode<A>, T1: Encode<A>, T2: Encode<A>
 {
     fn encode<E: AbiEncoder<A>>(self, mut _ e: E) {
-        let (v0, v1, v2) = self
+        let (v0, v1, v2) = move self
         v0.encode(e)
         v1.encode(e)
         v2.encode(e)
@@ -650,11 +644,7 @@ impl<A: Abi, T0, T1, T2, T3> Decode<A> for (T0, T1, T2, T3)
     where T0: Decode<A>, T1: Decode<A>, T2: Decode<A>, T3: Decode<A>
 {
     fn decode<D: AbiDecoder<A>>(mut _ d: D) -> Self {
-        let v0 = T0::decode(d)
-        let v1 = T1::decode(d)
-        let v2 = T2::decode(d)
-        let v3 = T3::decode(d)
-        (v0, v1, v2, v3)
+        (T0::decode(d), T1::decode(d), T2::decode(d), T3::decode(d))
     }
 }
 
@@ -662,7 +652,7 @@ impl<A: Abi, T0, T1, T2, T3> Encode<A> for (T0, T1, T2, T3)
     where T0: Encode<A>, T1: Encode<A>, T2: Encode<A>, T3: Encode<A>
 {
     fn encode<E: AbiEncoder<A>>(self, mut _ e: E) {
-        let (v0, v1, v2, v3) = self
+        let (v0, v1, v2, v3) = move self
         v0.encode(e)
         v1.encode(e)
         v2.encode(e)
@@ -674,12 +664,13 @@ impl<A: Abi, T0, T1, T2, T3, T4> Decode<A> for (T0, T1, T2, T3, T4)
     where T0: Decode<A>, T1: Decode<A>, T2: Decode<A>, T3: Decode<A>, T4: Decode<A>
 {
     fn decode<D: AbiDecoder<A>>(mut _ d: D) -> Self {
-        let v0 = T0::decode(d)
-        let v1 = T1::decode(d)
-        let v2 = T2::decode(d)
-        let v3 = T3::decode(d)
-        let v4 = T4::decode(d)
-        (v0, v1, v2, v3, v4)
+        (
+            T0::decode(d),
+            T1::decode(d),
+            T2::decode(d),
+            T3::decode(d),
+            T4::decode(d),
+        )
     }
 }
 
@@ -687,7 +678,7 @@ impl<A: Abi, T0, T1, T2, T3, T4> Encode<A> for (T0, T1, T2, T3, T4)
     where T0: Encode<A>, T1: Encode<A>, T2: Encode<A>, T3: Encode<A>, T4: Encode<A>
 {
     fn encode<E: AbiEncoder<A>>(self, mut _ e: E) {
-        let (v0, v1, v2, v3, v4) = self
+        let (v0, v1, v2, v3, v4) = move self
         v0.encode(e)
         v1.encode(e)
         v2.encode(e)
@@ -700,13 +691,14 @@ impl<A: Abi, T0, T1, T2, T3, T4, T5> Decode<A> for (T0, T1, T2, T3, T4, T5)
     where T0: Decode<A>, T1: Decode<A>, T2: Decode<A>, T3: Decode<A>, T4: Decode<A>, T5: Decode<A>
 {
     fn decode<D: AbiDecoder<A>>(mut _ d: D) -> Self {
-        let v0 = T0::decode(d)
-        let v1 = T1::decode(d)
-        let v2 = T2::decode(d)
-        let v3 = T3::decode(d)
-        let v4 = T4::decode(d)
-        let v5 = T5::decode(d)
-        (v0, v1, v2, v3, v4, v5)
+        (
+            T0::decode(d),
+            T1::decode(d),
+            T2::decode(d),
+            T3::decode(d),
+            T4::decode(d),
+            T5::decode(d),
+        )
     }
 }
 
@@ -714,7 +706,7 @@ impl<A: Abi, T0, T1, T2, T3, T4, T5> Encode<A> for (T0, T1, T2, T3, T4, T5)
     where T0: Encode<A>, T1: Encode<A>, T2: Encode<A>, T3: Encode<A>, T4: Encode<A>, T5: Encode<A>
 {
     fn encode<E: AbiEncoder<A>>(self, mut _ e: E) {
-        let (v0, v1, v2, v3, v4, v5) = self
+        let (v0, v1, v2, v3, v4, v5) = move self
         v0.encode(e)
         v1.encode(e)
         v2.encode(e)
@@ -728,14 +720,15 @@ impl<A: Abi, T0, T1, T2, T3, T4, T5, T6> Decode<A> for (T0, T1, T2, T3, T4, T5, 
     where T0: Decode<A>, T1: Decode<A>, T2: Decode<A>, T3: Decode<A>, T4: Decode<A>, T5: Decode<A>, T6: Decode<A>
 {
     fn decode<D: AbiDecoder<A>>(mut _ d: D) -> Self {
-        let v0 = T0::decode(d)
-        let v1 = T1::decode(d)
-        let v2 = T2::decode(d)
-        let v3 = T3::decode(d)
-        let v4 = T4::decode(d)
-        let v5 = T5::decode(d)
-        let v6 = T6::decode(d)
-        (v0, v1, v2, v3, v4, v5, v6)
+        (
+            T0::decode(d),
+            T1::decode(d),
+            T2::decode(d),
+            T3::decode(d),
+            T4::decode(d),
+            T5::decode(d),
+            T6::decode(d),
+        )
     }
 }
 
@@ -743,7 +736,7 @@ impl<A: Abi, T0, T1, T2, T3, T4, T5, T6> Encode<A> for (T0, T1, T2, T3, T4, T5, 
     where T0: Encode<A>, T1: Encode<A>, T2: Encode<A>, T3: Encode<A>, T4: Encode<A>, T5: Encode<A>, T6: Encode<A>
 {
     fn encode<E: AbiEncoder<A>>(self, mut _ e: E) {
-        let (v0, v1, v2, v3, v4, v5, v6) = self
+        let (v0, v1, v2, v3, v4, v5, v6) = move self
         v0.encode(e)
         v1.encode(e)
         v2.encode(e)
@@ -758,15 +751,16 @@ impl<A: Abi, T0, T1, T2, T3, T4, T5, T6, T7> Decode<A> for (T0, T1, T2, T3, T4, 
     where T0: Decode<A>, T1: Decode<A>, T2: Decode<A>, T3: Decode<A>, T4: Decode<A>, T5: Decode<A>, T6: Decode<A>, T7: Decode<A>
 {
     fn decode<D: AbiDecoder<A>>(mut _ d: D) -> Self {
-        let v0 = T0::decode(d)
-        let v1 = T1::decode(d)
-        let v2 = T2::decode(d)
-        let v3 = T3::decode(d)
-        let v4 = T4::decode(d)
-        let v5 = T5::decode(d)
-        let v6 = T6::decode(d)
-        let v7 = T7::decode(d)
-        (v0, v1, v2, v3, v4, v5, v6, v7)
+        (
+            T0::decode(d),
+            T1::decode(d),
+            T2::decode(d),
+            T3::decode(d),
+            T4::decode(d),
+            T5::decode(d),
+            T6::decode(d),
+            T7::decode(d),
+        )
     }
 }
 
@@ -774,7 +768,7 @@ impl<A: Abi, T0, T1, T2, T3, T4, T5, T6, T7> Encode<A> for (T0, T1, T2, T3, T4, 
     where T0: Encode<A>, T1: Encode<A>, T2: Encode<A>, T3: Encode<A>, T4: Encode<A>, T5: Encode<A>, T6: Encode<A>, T7: Encode<A>
 {
     fn encode<E: AbiEncoder<A>>(self, mut _ e: E) {
-        let (v0, v1, v2, v3, v4, v5, v6, v7) = self
+        let (v0, v1, v2, v3, v4, v5, v6, v7) = move self
         v0.encode(e)
         v1.encode(e)
         v2.encode(e)
@@ -790,16 +784,17 @@ impl<A: Abi, T0, T1, T2, T3, T4, T5, T6, T7, T8> Decode<A> for (T0, T1, T2, T3, 
     where T0: Decode<A>, T1: Decode<A>, T2: Decode<A>, T3: Decode<A>, T4: Decode<A>, T5: Decode<A>, T6: Decode<A>, T7: Decode<A>, T8: Decode<A>
 {
     fn decode<D: AbiDecoder<A>>(mut _ d: D) -> Self {
-        let v0 = T0::decode(d)
-        let v1 = T1::decode(d)
-        let v2 = T2::decode(d)
-        let v3 = T3::decode(d)
-        let v4 = T4::decode(d)
-        let v5 = T5::decode(d)
-        let v6 = T6::decode(d)
-        let v7 = T7::decode(d)
-        let v8 = T8::decode(d)
-        (v0, v1, v2, v3, v4, v5, v6, v7, v8)
+        (
+            T0::decode(d),
+            T1::decode(d),
+            T2::decode(d),
+            T3::decode(d),
+            T4::decode(d),
+            T5::decode(d),
+            T6::decode(d),
+            T7::decode(d),
+            T8::decode(d),
+        )
     }
 }
 
@@ -807,7 +802,7 @@ impl<A: Abi, T0, T1, T2, T3, T4, T5, T6, T7, T8> Encode<A> for (T0, T1, T2, T3, 
     where T0: Encode<A>, T1: Encode<A>, T2: Encode<A>, T3: Encode<A>, T4: Encode<A>, T5: Encode<A>, T6: Encode<A>, T7: Encode<A>, T8: Encode<A>
 {
     fn encode<E: AbiEncoder<A>>(self, mut _ e: E) {
-        let (v0, v1, v2, v3, v4, v5, v6, v7, v8) = self
+        let (v0, v1, v2, v3, v4, v5, v6, v7, v8) = move self
         v0.encode(e)
         v1.encode(e)
         v2.encode(e)
@@ -825,17 +820,18 @@ impl<A: Abi, T0, T1, T2, T3, T4, T5, T6, T7, T8, T9> Decode<A>
     where T0: Decode<A>, T1: Decode<A>, T2: Decode<A>, T3: Decode<A>, T4: Decode<A>, T5: Decode<A>, T6: Decode<A>, T7: Decode<A>, T8: Decode<A>, T9: Decode<A>
 {
     fn decode<D: AbiDecoder<A>>(mut _ d: D) -> Self {
-        let v0 = T0::decode(d)
-        let v1 = T1::decode(d)
-        let v2 = T2::decode(d)
-        let v3 = T3::decode(d)
-        let v4 = T4::decode(d)
-        let v5 = T5::decode(d)
-        let v6 = T6::decode(d)
-        let v7 = T7::decode(d)
-        let v8 = T8::decode(d)
-        let v9 = T9::decode(d)
-        (v0, v1, v2, v3, v4, v5, v6, v7, v8, v9)
+        (
+            T0::decode(d),
+            T1::decode(d),
+            T2::decode(d),
+            T3::decode(d),
+            T4::decode(d),
+            T5::decode(d),
+            T6::decode(d),
+            T7::decode(d),
+            T8::decode(d),
+            T9::decode(d),
+        )
     }
 }
 
@@ -844,7 +840,7 @@ impl<A: Abi, T0, T1, T2, T3, T4, T5, T6, T7, T8, T9> Encode<A>
     where T0: Encode<A>, T1: Encode<A>, T2: Encode<A>, T3: Encode<A>, T4: Encode<A>, T5: Encode<A>, T6: Encode<A>, T7: Encode<A>, T8: Encode<A>, T9: Encode<A>
 {
     fn encode<E: AbiEncoder<A>>(self, mut _ e: E) {
-        let (v0, v1, v2, v3, v4, v5, v6, v7, v8, v9) = self
+        let (v0, v1, v2, v3, v4, v5, v6, v7, v8, v9) = move self
         v0.encode(e)
         v1.encode(e)
         v2.encode(e)
@@ -863,18 +859,19 @@ impl<A: Abi, T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10> Decode<A>
     where T0: Decode<A>, T1: Decode<A>, T2: Decode<A>, T3: Decode<A>, T4: Decode<A>, T5: Decode<A>, T6: Decode<A>, T7: Decode<A>, T8: Decode<A>, T9: Decode<A>, T10: Decode<A>
 {
     fn decode<D: AbiDecoder<A>>(mut _ d: D) -> Self {
-        let v0 = T0::decode(d)
-        let v1 = T1::decode(d)
-        let v2 = T2::decode(d)
-        let v3 = T3::decode(d)
-        let v4 = T4::decode(d)
-        let v5 = T5::decode(d)
-        let v6 = T6::decode(d)
-        let v7 = T7::decode(d)
-        let v8 = T8::decode(d)
-        let v9 = T9::decode(d)
-        let v10 = T10::decode(d)
-        (v0, v1, v2, v3, v4, v5, v6, v7, v8, v9, v10)
+        (
+            T0::decode(d),
+            T1::decode(d),
+            T2::decode(d),
+            T3::decode(d),
+            T4::decode(d),
+            T5::decode(d),
+            T6::decode(d),
+            T7::decode(d),
+            T8::decode(d),
+            T9::decode(d),
+            T10::decode(d),
+        )
     }
 }
 
@@ -883,7 +880,7 @@ impl<A: Abi, T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10> Encode<A>
     where T0: Encode<A>, T1: Encode<A>, T2: Encode<A>, T3: Encode<A>, T4: Encode<A>, T5: Encode<A>, T6: Encode<A>, T7: Encode<A>, T8: Encode<A>, T9: Encode<A>, T10: Encode<A>
 {
     fn encode<E: AbiEncoder<A>>(self, mut _ e: E) {
-        let (v0, v1, v2, v3, v4, v5, v6, v7, v8, v9, v10) = self
+        let (v0, v1, v2, v3, v4, v5, v6, v7, v8, v9, v10) = move self
         v0.encode(e)
         v1.encode(e)
         v2.encode(e)
@@ -903,19 +900,20 @@ impl<A: Abi, T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11> Decode<A>
     where T0: Decode<A>, T1: Decode<A>, T2: Decode<A>, T3: Decode<A>, T4: Decode<A>, T5: Decode<A>, T6: Decode<A>, T7: Decode<A>, T8: Decode<A>, T9: Decode<A>, T10: Decode<A>, T11: Decode<A>
 {
     fn decode<D: AbiDecoder<A>>(mut _ d: D) -> Self {
-        let v0 = T0::decode(d)
-        let v1 = T1::decode(d)
-        let v2 = T2::decode(d)
-        let v3 = T3::decode(d)
-        let v4 = T4::decode(d)
-        let v5 = T5::decode(d)
-        let v6 = T6::decode(d)
-        let v7 = T7::decode(d)
-        let v8 = T8::decode(d)
-        let v9 = T9::decode(d)
-        let v10 = T10::decode(d)
-        let v11 = T11::decode(d)
-        (v0, v1, v2, v3, v4, v5, v6, v7, v8, v9, v10, v11)
+        (
+            T0::decode(d),
+            T1::decode(d),
+            T2::decode(d),
+            T3::decode(d),
+            T4::decode(d),
+            T5::decode(d),
+            T6::decode(d),
+            T7::decode(d),
+            T8::decode(d),
+            T9::decode(d),
+            T10::decode(d),
+            T11::decode(d),
+        )
     }
 }
 
@@ -924,7 +922,7 @@ impl<A: Abi, T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11> Encode<A>
     where T0: Encode<A>, T1: Encode<A>, T2: Encode<A>, T3: Encode<A>, T4: Encode<A>, T5: Encode<A>, T6: Encode<A>, T7: Encode<A>, T8: Encode<A>, T9: Encode<A>, T10: Encode<A>, T11: Encode<A>
 {
     fn encode<E: AbiEncoder<A>>(self, mut _ e: E) {
-        let (v0, v1, v2, v3, v4, v5, v6, v7, v8, v9, v10, v11) = self
+        let (v0, v1, v2, v3, v4, v5, v6, v7, v8, v9, v10, v11) = move self
         v0.encode(e)
         v1.encode(e)
         v2.encode(e)

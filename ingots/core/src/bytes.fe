@@ -26,10 +26,7 @@ impl<T0, T1> AsBytes for (T0, T1)
 {
     const N: usize = T0::N + T1::N
     const fn as_bytes(self) -> [u8; Self::N] {
-        let a: [u8; T0::N] = self.0.as_bytes()
-        let b: [u8; T1::N] = self.1.as_bytes()
-        let out: [u8; Self::N] = intrinsic::__as_bytes((a, b))
-        out
+        intrinsic::__as_bytes((self.0.as_bytes(), self.1.as_bytes()))
     }
 }
 
@@ -40,11 +37,7 @@ impl<T0, T1, T2> AsBytes for (T0, T1, T2)
 {
     const N: usize = T0::N + T1::N + T2::N
     const fn as_bytes(self) -> [u8; Self::N] {
-        let a: [u8; T0::N] = self.0.as_bytes()
-        let b: [u8; T1::N] = self.1.as_bytes()
-        let c: [u8; T2::N] = self.2.as_bytes()
-        let out: [u8; Self::N] = intrinsic::__as_bytes((a, b, c))
-        out
+        intrinsic::__as_bytes((self.0.as_bytes(), self.1.as_bytes(), self.2.as_bytes()))
     }
 }
 
@@ -56,12 +49,12 @@ impl<T0, T1, T2, T3> AsBytes for (T0, T1, T2, T3)
 {
     const N: usize = T0::N + T1::N + T2::N + T3::N
     const fn as_bytes(self) -> [u8; Self::N] {
-        let a: [u8; T0::N] = self.0.as_bytes()
-        let b: [u8; T1::N] = self.1.as_bytes()
-        let c: [u8; T2::N] = self.2.as_bytes()
-        let d: [u8; T3::N] = self.3.as_bytes()
-        let out: [u8; Self::N] = intrinsic::__as_bytes((a, b, c, d))
-        out
+        intrinsic::__as_bytes((
+            self.0.as_bytes(),
+            self.1.as_bytes(),
+            self.2.as_bytes(),
+            self.3.as_bytes(),
+        ))
     }
 }
 
