@@ -228,7 +228,7 @@ pub trait Create {
             ops::revert(ret_ptr, ret_len)
         }
 
-        addr
+        move addr
     }
 
     /// Deploy a high-level contract using `CREATE2`, bubbling revert data on failure.
@@ -255,7 +255,7 @@ pub trait Create {
             ops::revert(ret_ptr, ret_len)
         }
 
-        addr
+        move addr
     }
 }
 

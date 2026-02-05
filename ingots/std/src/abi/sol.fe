@@ -49,15 +49,17 @@ impl<I> SolDecoder<I>
     where I: ByteInput
 {
     pub fn new(input: I) -> Self {
-        let cur = Cursor::new(input)
-        let d = SolDecoder { cur, base: 0 }
-        d
+        SolDecoder {
+            cur: Cursor::new(input),
+            base: 0,
+        }
     }
 
     pub fn with_base(input: I, base: u256) -> Self {
-        let cur = Cursor::new(input).fork(base)
-        let d = SolDecoder { cur, base }
-        d
+        SolDecoder {
+            cur: Cursor::new(input).fork(base),
+            base,
+        }
     }
 }
 
@@ -67,7 +69,7 @@ impl<I> AbiDecoder<Sol> for SolDecoder<I>
     type Input = I
 
     fn input(self) -> Self::Input {
-        self.cur.input
+        move self.cur.input
     }
 
     fn base(self) -> u256 {
@@ -126,12 +128,11 @@ pub struct SolEncoder {
 
 impl SolEncoder {
     pub fn new() -> Self {
-        let e = SolEncoder {
+        SolEncoder {
             start: 0,
             pos: 0,
             end: 0,
         }
-        e
     }
 
     fn ensure_init(mut self, bytes: u256) {
