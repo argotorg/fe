@@ -148,6 +148,17 @@ pub fn validate_module_sonatina_ir(
     Ok(validate_sonatina_module_layout(&module))
 }
 
+pub(crate) fn ensure_module_sonatina_ir_valid(module: &Module) -> Result<(), LowerError> {
+    let report = validate_sonatina_module_layout(module);
+    if report.trim() == "ok" {
+        return Ok(());
+    }
+
+    Err(LowerError::Internal(format!(
+        "invalid Sonatina IR emitted by Fe:\n{report}"
+    )))
+}
+
 fn validate_sonatina_module_layout(module: &Module) -> String {
     use std::fmt::Write as _;
 
@@ -355,7 +366,11 @@ impl<'db, 'a> ModuleLowerer<'db, 'a> {
                         LowerError::Internal(format!("unknown param local: {local_id:?}"))
                     })?
                     .ty;
-                mask.push(!is_erased_runtime_ty(self.db, &self.target_layout, local_ty));
+                mask.push(!is_erased_runtime_ty(
+                    self.db,
+                    &self.target_layout,
+                    local_ty,
+                ));
             }
             for local_id in func.body.effect_param_locals.iter().copied() {
                 let local_ty = func
@@ -366,7 +381,11 @@ impl<'db, 'a> ModuleLowerer<'db, 'a> {
                         LowerError::Internal(format!("unknown effect param local: {local_id:?}"))
                     })?
                     .ty;
-                mask.push(!is_erased_runtime_ty(self.db, &self.target_layout, local_ty));
+                mask.push(!is_erased_runtime_ty(
+                    self.db,
+                    &self.target_layout,
+                    local_ty,
+                ));
             }
         }
 

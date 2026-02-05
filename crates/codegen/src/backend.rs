@@ -215,6 +215,7 @@ impl Backend for SonatinaBackend {
 
         // Lower to Sonatina IR
         let module = crate::sonatina::compile_module(db, top_mod, layout)?;
+        crate::sonatina::ensure_module_sonatina_ir_valid(&module)?;
 
         // Check if there are any objects to compile
         if module.objects.is_empty() {

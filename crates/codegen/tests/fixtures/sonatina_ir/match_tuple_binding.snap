@@ -69,21 +69,23 @@ func public %match_nested_extract(v0.i256) -> i256 {
         return v8;
 
     block3:
-        v11.i256 = add v0 1.i256;
+        v9.i256 = phi (v0 block7) (v0 block8);
+        v11.i256 = add v9 1.i256;
         v12.i256 = mload v11 i256;
         v13.i8 = trunc v12 i8;
         v14.i256 = zext v13 i256;
-        v15.i256 = mload v0 i256;
+        v15.i256 = mload v9 i256;
         v16.i8 = trunc v15 i8;
         v17.i256 = zext v16 i256;
         v18.i256 = add v17 v14;
         jump block2;
 
     block4:
-        v20.i256 = mload v0 i256;
+        v19.i256 = phi (v0 block7) (v0 block8);
+        v20.i256 = mload v19 i256;
         v21.i8 = trunc v20 i8;
         v22.i256 = zext v21 i256;
-        v23.i256 = add v0 2.i256;
+        v23.i256 = add v19 2.i256;
         v24.i256 = mload v23 i256;
         v25.i8 = trunc v24 i8;
         v26.i256 = zext v25 i256;
