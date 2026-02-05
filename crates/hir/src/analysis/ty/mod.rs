@@ -83,6 +83,13 @@ pub fn ty_is_copy<'db>(
 
     let inst = trait_def::TraitInstId::new_simple(db, copy_trait, vec![ty]);
     let inst = inst.normalize(db, scope, assumptions);
+    if assumptions
+        .list(db)
+        .iter()
+        .any(|&pred| pred.normalize(db, scope, assumptions) == inst)
+    {
+        return true;
+    }
     let canonical_inst = Canonicalized::new(db, inst);
     matches!(
         is_goal_satisfiable(db, ingot, canonical_inst.value, assumptions),
