@@ -9,11 +9,20 @@ use std::fs;
 
 use camino::Utf8PathBuf;
 use check::check;
+use clap::ValueEnum;
 use clap::{Parser, Subcommand};
 use colored::Colorize;
 use fmt as fe_fmt;
 use similar::{ChangeTag, TextDiff};
 use walkdir::WalkDir;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum TestDebug {
+    /// Print Yul output for any failing test.
+    Failures,
+    /// Print Yul output for all executed tests.
+    All,
+}
 
 #[derive(Debug, Clone, Parser)]
 #[command(version, about, long_about = None)]
@@ -62,6 +71,15 @@ pub enum Command {
         /// Show event logs from test execution.
         #[arg(long)]
         show_logs: bool,
+        /// Print Yul output (`failures` or `all`).
+        #[arg(
+            long,
+            value_enum,
+            num_args = 0..=1,
+            default_missing_value = "failures",
+            require_equals = true
+        )]
+        debug: Option<TestDebug>,
     },
     /// Create a new ingot or workspace.
     New {
@@ -114,8 +132,9 @@ pub fn run(opts: &Options) {
             path,
             filter,
             show_logs,
+            debug,
         } => {
-            test::run_tests(path, filter.as_deref(), *show_logs);
+            test::run_tests(path, filter.as_deref(), *show_logs, *debug);
         }
         Command::New {
             path,

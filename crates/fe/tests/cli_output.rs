@@ -26,13 +26,13 @@ fn run_fe_tree(path: &str) -> (String, i32) {
     run_fe_command("tree", path)
 }
 
-/// Helper to run `fe test` on a fixture path.
+/// Helper to run `fe test --debug` on a fixture path.
 ///
 /// * `path` - File or directory path passed to the CLI.
 ///
 /// Returns the combined CLI output and exit code.
 fn run_fe_test(path: &str) -> (String, i32) {
-    run_fe_command("test", path)
+    run_fe_command_with_args("test", path, &["--debug"])
 }
 
 // Helper function to run fe binary with specified subcommand
@@ -211,13 +211,18 @@ fn test_fe_test(fixture: Fixture<&str>) {
     assert_eq!(exit_code, 0, "fe test failed:\n{}", output);
 }
 
-/// Runs `fe test` and snapshots the output to verify behavior of passing/failing tests and logs.
+/// Runs `fe test --debug` and snapshots the output to verify behavior of passing/failing tests and logs.
 #[dir_test(
     dir: "$CARGO_MANIFEST_DIR/tests/fixtures/fe_test_runner",
     glob: "*.fe",
 )]
 fn test_fe_test_runner(fixture: Fixture<&str>) {
+    if fixture.path().ends_with("_debug.fe") {
+        return;
+    }
+
     let mut args = vec!["test"];
+    args.push("--debug");
     if fixture.path().contains("logs.fe") {
         args.push("--show-logs");
     }
@@ -483,4 +488,15 @@ fn test_cli_workspace_exclude_skips_member() {
     let snapshot_path = root.join("exclude_patterns_skip_member.case");
     let (output, _) = run_fe_main_in_dir(&["check"], &root);
     snap_test!(output, snapshot_path.to_str().unwrap());
+}
+
+/// Runs `fe test --debug` and snapshots the output to validate Yul dumping.
+#[dir_test(
+    dir: "$CARGO_MANIFEST_DIR/tests/fixtures/fe_test_runner",
+    glob: "*_debug.fe",
+)]
+fn test_fe_test_runner_debug(fixture: Fixture<&str>) {
+    let args = ["test", "--debug", fixture.path()];
+    let (output, _) = run_fe_main(&args);
+    snap_test!(output, fixture.path());
 }
