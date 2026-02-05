@@ -40,6 +40,8 @@ impl core::ops::Eq for Address {
     }
 }
 
+impl Copy for Address {}
+
 impl AbiSize for Address {
     const ENCODED_SIZE: u256 = 32
 }

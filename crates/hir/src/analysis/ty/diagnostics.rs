@@ -4,8 +4,10 @@ use super::{
     ty_check::{RecordLike, TraitOps},
     ty_def::{BorrowKind, Kind, TyId},
 };
-use crate::visitor::prelude::*;
-use crate::{analysis::HirAnalysisDb, hir_def::Trait};
+use crate::{
+    analysis::HirAnalysisDb,
+    hir_def::{Body, Trait},
+};
 use crate::{analysis::diagnostics::DiagnosticVoucher, hir_def::PathId};
 use crate::{analysis::name_resolution::diagnostics::PathResDiag, hir_def::ItemKind};
 use crate::{analysis::ty::ty_check::EffectParamOwner, span::DynLazySpan};
@@ -15,6 +17,7 @@ use crate::{
     },
     hir_def::TypeAlias,
 };
+use crate::{hir_def::ExprId, visitor::prelude::*};
 use either::Either;
 use salsa::Update;
 use smallvec1::SmallVec;
@@ -354,6 +357,9 @@ pub enum BodyDiag<'db> {
     /// `move <place>` so ownership transfer is visible to the borrow checker.
     ExplicitMoveRequired {
         primary: DynLazySpan<'db>,
+        body: Body<'db>,
+        expr: ExprId,
+        ty: TyId<'db>,
     },
 
     /// A call argument is a place, but the callee requires an explicit borrow handle (`mut`/`ref`).

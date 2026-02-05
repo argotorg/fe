@@ -1,6 +1,5 @@
 ---
 source: crates/codegen/tests/yul.rs
-assertion_line: 33
 expression: output
 input_file: tests/fixtures/newtype_storage_byplace_effect_arg.fe
 ---
@@ -55,8 +54,7 @@ object "NewtypeByPlaceEffectArg" {
       mstore(v0, mload(v1))
       mstore(add(v0, 32), mload(add(v1, 32)))
       mstore(add(v0, 64), 0)
-      let v2 := v0
-      ret := v2
+      ret := v0
       leave
     }
     function $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_abort($self) {
@@ -99,8 +97,7 @@ object "NewtypeByPlaceEffectArg" {
       mstore(add(v1, 32), mload(add(v2, 32)))
       mstore(add(v1, 64), mload(add(v2, 64)))
       mstore(add(v1, 96), 0)
-      let v3 := v1
-      ret := v3
+      ret := v1
       leave
     }
     function $stor_ptr__Evm_hef0af3106e109414_Wrap_haf9e70905fcbd513__fd5231d549c91f24($self, $slot) -> ret {
@@ -182,8 +179,7 @@ object "NewtypeByPlaceEffectArg" {
         mstore(0x40, add(v1, 64))
         mstore(v1, v0)
         mstore(add(v1, 32), $pos)
-        let v2 := v1
-        ret := v2
+        ret := v1
         leave
       }
       function $cursor_i__h140a998c67d6d59c_new__CallData_hf71d505b6ff5dc81__e6d5f05c3478f563($input) -> ret {
@@ -194,8 +190,7 @@ object "NewtypeByPlaceEffectArg" {
         mstore(0x40, add(v0, 64))
         mstore(v0, $input)
         mstore(add(v0, 32), 0)
-        let v1 := v0
-        ret := v1
+        ret := v0
         leave
       }
       function $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_abort($self) {
@@ -279,8 +274,7 @@ object "NewtypeByPlaceEffectArg" {
         mstore(v2, mload(v3))
         mstore(add(v2, 32), mload(add(v3, 32)))
         mstore(add(v2, 64), $base)
-        let v4 := v2
-        ret := v4
+        ret := v2
         leave
       }
       function $solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_finish($self) -> ret {
@@ -328,8 +322,7 @@ object "NewtypeByPlaceEffectArg" {
         mstore(v0, 0)
         mstore(add(v0, 32), 0)
         mstore(add(v0, 64), 0)
-        let v1 := v0
-        ret := v1
+        ret := v0
         leave
       }
       function $stor_ptr__Evm_hef0af3106e109414_Wrap_haf9e70905fcbd513__fd5231d549c91f24($self, $slot) -> ret {

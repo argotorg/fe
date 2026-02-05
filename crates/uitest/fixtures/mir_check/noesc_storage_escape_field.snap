@@ -6,7 +6,7 @@ input_file: fixtures/mir_check/noesc_storage_escape_field.fe
 error[10-0001]: cannot store `Wrapper` in `Storage`
    ┌─ noesc_storage_escape_field.fe:15:5
    │
-15 │     slot.e = e
-   │     ^^^^^^^^^^ this value cannot be written to `Storage`
+15 │     slot.e = move e
+   │     ^^^^^^^^^^^^^^^ this value cannot be written to `Storage`
    │
    = note: this value contains a borrow handle (`mut`/`ref`)

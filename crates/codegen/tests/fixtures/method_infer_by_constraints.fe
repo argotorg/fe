@@ -6,7 +6,7 @@ trait Foo<T, U> {
     fn foo(self) -> (T, U)
 }
 
-impl<T> Foo<T, u64> for S<T> {
+impl<T> Foo<T, u64> for S<T> where T: Copy {
     fn foo(self) -> (T, u64) {
         (self.t, 1)
     }

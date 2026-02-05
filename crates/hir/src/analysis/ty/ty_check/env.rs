@@ -11,7 +11,7 @@ use crate::hir_def::CallableDef;
 use crate::hir_def::params::FuncParamMode;
 use common::indexmap::IndexMap;
 use num_bigint::BigUint;
-use rustc_hash::FxHashMap;
+use rustc_hash::{FxHashMap, FxHashSet};
 use salsa::Update;
 use smallvec1::SmallVec;
 use thin_vec::ThinVec;
@@ -41,6 +41,7 @@ pub(super) struct TyCheckEnv<'db> {
 
     pat_ty: FxHashMap<PatId, TyId<'db>>,
     expr_ty: FxHashMap<ExprId, ExprProp<'db>>,
+    implicit_moves: FxHashSet<ExprId>,
     const_refs: FxHashMap<ExprId, ConstRef<'db>>,
     callables: FxHashMap<ExprId, Callable<'db>>,
 
@@ -131,6 +132,7 @@ impl<'db> TyCheckEnv<'db> {
             body,
             pat_ty: FxHashMap::default(),
             expr_ty: FxHashMap::default(),
+            implicit_moves: FxHashSet::default(),
             const_refs: FxHashMap::default(),
             callables: FxHashMap::default(),
             deferred: Vec::new(),
@@ -871,6 +873,10 @@ impl<'db> TyCheckEnv<'db> {
         self.deferred.push(DeferredTask::Method(pending))
     }
 
+    pub(super) fn record_implicit_move(&mut self, expr: ExprId) {
+        self.implicit_moves.insert(expr);
+    }
+
     /// Completes the type checking environment by finalizing pending trait
     /// confirmations and folding types with the unification table.
     ///
@@ -926,6 +932,7 @@ impl<'db> TyCheckEnv<'db> {
             body: Some(self.body),
             pat_ty: self.pat_ty,
             expr_ty: self.expr_ty,
+            implicit_moves: self.implicit_moves,
             const_refs: self.const_refs,
             callables,
             call_effect_args: self.call_effect_args,

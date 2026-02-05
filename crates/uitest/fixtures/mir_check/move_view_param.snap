@@ -4,11 +4,10 @@ assertion_line: 32
 expression: res
 input_file: fixtures/mir_check/move_view_param.fe
 ---
-error[10-0002]: move conflict in `fn move_view_param`
-  ┌─ move_view_param.fe:1:41
-  │  
-1 │   pub fn move_view_param(x: u256) -> u256 {
-  │ ╭─────────────────────────────────────────^
-2 │ │     move x
-3 │ │ }
-  │ ╰─^ cannot move out of a view parameter
+error[10-0002]: move conflict in `fn make_pair`
+  ┌─ move_view_param.fe:2:6
+  │
+2 │     (move a, move b)
+  │      ^^^^    ^^^^ cannot move out of a view parameter
+  │      │        
+  │      cannot move out of a view parameter

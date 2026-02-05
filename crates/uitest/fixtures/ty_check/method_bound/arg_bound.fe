@@ -31,9 +31,9 @@ struct S<T> {
     __priv: T
 }
 impl<T> S<T> {
-    fn new(_ t: T) -> Self {
+    fn new(move _ t: T) -> Self {
         Self {
-            __priv: t
+            __priv: move t
         }
     }
 }

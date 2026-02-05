@@ -3,7 +3,7 @@
 
 pub trait Seq<T> {
     fn len(self) -> usize
-    fn get(self, i: usize) -> T
+    fn get(ref self, i: usize) -> ref T
 }
 
 // This works because the impl scope is entered before lowering the target type,
@@ -12,7 +12,7 @@ impl<T, const N: usize> Seq<T> for [T; N] {
     fn len(self) -> usize {
         N
     }
-    fn get(self, i: usize) -> T {
-        self[i]
+    fn get(ref self, i: usize) -> ref T {
+        ref self[i]
     }
 }

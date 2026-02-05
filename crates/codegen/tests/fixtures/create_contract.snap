@@ -1,6 +1,5 @@
 ---
 source: crates/codegen/tests/yul.rs
-assertion_line: 33
 expression: output
 input_file: tests/fixtures/create_contract.fe
 ---
@@ -81,11 +80,9 @@ object "Factory" {
       }
       function $_t0__t1__h61373471174c18a_encode_hab7243eccf2714fb_encode__Sol_hfd482bb803ad8c5f_u256_u256_SolEncoder_h1b9228b90dad6928__9e0831f7c11d9f64($self, $e) {
         let v0 := mload($self)
-        let v1 := v0
-        let v2 := mload(add($self, 32))
-        let v3 := v2
+        $u256_h3271ca15373d4483_encode_hab7243eccf2714fb_encode__Sol_hfd482bb803ad8c5f_SolEncoder_h1b9228b90dad6928__1a070c3866d16383(v0, $e)
+        let v1 := mload(add($self, 32))
         $u256_h3271ca15373d4483_encode_hab7243eccf2714fb_encode__Sol_hfd482bb803ad8c5f_SolEncoder_h1b9228b90dad6928__1a070c3866d16383(v1, $e)
-        $u256_h3271ca15373d4483_encode_hab7243eccf2714fb_encode__Sol_hfd482bb803ad8c5f_SolEncoder_h1b9228b90dad6928__1a070c3866d16383(v3, $e)
         leave
       }
       function $address_h257056268eac7027_encode_hab7243eccf2714fb_encode__Sol_hfd482bb803ad8c5f_SolEncoder_h1b9228b90dad6928__1a070c3866d16383($self, $e) {
@@ -179,8 +176,7 @@ object "Factory" {
         mstore(0x40, add(v1, 64))
         mstore(v1, v0)
         mstore(add(v1, 32), $pos)
-        let v2 := v1
-        ret := v2
+        ret := v1
         leave
       }
       function $cursor_i__h140a998c67d6d59c_new__CallData_hf71d505b6ff5dc81__e6d5f05c3478f563($input) -> ret {
@@ -191,8 +187,7 @@ object "Factory" {
         mstore(0x40, add(v0, 64))
         mstore(v0, $input)
         mstore(add(v0, 32), 0)
-        let v1 := v0
-        ret := v1
+        ret := v0
         leave
       }
       function $deploy2_ha2b981aa2f8bf9fd_decode_h624c3cd8c996d995_decode__SolDecoder_CallData___c1e4510fd444b966($d) -> ret {
@@ -321,8 +316,7 @@ object "Factory" {
         mstore(v2, mload(v3))
         mstore(add(v2, 32), mload(add(v3, 32)))
         mstore(add(v2, 64), $base)
-        let v4 := v2
-        ret := v4
+        ret := v2
         leave
       }
       function $solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_finish($self) -> ret {
@@ -370,8 +364,7 @@ object "Factory" {
         mstore(v0, 0)
         mstore(add(v0, 32), 0)
         mstore(add(v0, 64), 0)
-        let v1 := v0
-        ret := v1
+        ret := v0
         leave
       }
       function $u256_h3271ca15373d4483_decode_hb2fe2bf528775e55_decode__Sol_hfd482bb803ad8c5f_SolDecoder_CallData___fe17857f71623b98($d) -> ret {
@@ -448,8 +441,7 @@ object "Factory" {
           mstore(v0, mload(v1))
           mstore(add(v0, 32), mload(add(v1, 32)))
           mstore(add(v0, 64), 0)
-          let v2 := v0
-          ret := v2
+          ret := v0
           leave
         }
         function $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_abort($self) {
@@ -508,8 +500,7 @@ object "Factory" {
           mstore(add(v1, 32), mload(add(v2, 32)))
           mstore(add(v1, 64), mload(add(v2, 64)))
           mstore(add(v1, 96), 0)
-          let v3 := v1
-          ret := v3
+          ret := v1
           leave
         }
         function $stor_ptr__Evm_hef0af3106e109414_Pair_h956dff41e88ee341__18f2eb617f185785($self, $slot) -> ret {
@@ -559,8 +550,7 @@ object "Factory" {
             mstore(0x40, add(v1, 64))
             mstore(v1, v0)
             mstore(add(v1, 32), $pos)
-            let v2 := v1
-            ret := v2
+            ret := v1
             leave
           }
           function $cursor_i__h140a998c67d6d59c_new__CallData_hf71d505b6ff5dc81__e6d5f05c3478f563($input) -> ret {
@@ -571,8 +561,7 @@ object "Factory" {
             mstore(0x40, add(v0, 64))
             mstore(v0, $input)
             mstore(add(v0, 32), 0)
-            let v1 := v0
-            ret := v1
+            ret := v0
             leave
           }
           function $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_abort($self) {
@@ -633,8 +622,7 @@ object "Factory" {
             mstore(v2, mload(v3))
             mstore(add(v2, 32), mload(add(v3, 32)))
             mstore(add(v2, 64), $base)
-            let v4 := v2
-            ret := v4
+            ret := v2
             leave
           }
           function $stor_ptr__Evm_hef0af3106e109414_Pair_h956dff41e88ee341__18f2eb617f185785($self, $slot) -> ret {

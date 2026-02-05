@@ -1,3 +1,15 @@
-pub fn move_view_param(x: u256) -> u256 {
-    move x
+fn make_pair<A, B>(a: A, b: B) -> (A, B) {
+    (move a, move b)
+}
+
+fn make_pair_copy<A, B>(a: A, b: B) -> (A, B)
+where
+    A: Copy,
+    B: Copy,
+{
+    (a, b)
+}
+
+fn make_pair2<A, B>(a: A, b: B) -> (A, B) {
+    (move a, move b)
 }

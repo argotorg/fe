@@ -2,8 +2,8 @@
 //
 // `Copy` is used by the compiler's ownership model: values of `Copy` types can be
 // duplicated implicitly (e.g. when assigning from a place or passing to a `move`
-// parameter), while non-`Copy` types require an explicit `move` to transfer
-// ownership out of a place.
+// parameter). Values of non-`Copy` types are moved (consumed) when used in an
+// owned context; the `move` keyword can be used to make this explicit.
 
 pub trait Copy {}
 

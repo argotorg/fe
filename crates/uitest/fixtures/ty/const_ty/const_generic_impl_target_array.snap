@@ -3,3 +3,14 @@ source: crates/uitest/tests/ty.rs
 expression: diags
 input_file: fixtures/ty/const_ty/const_generic_impl_target_array.fe
 ---
+error[1-0001]: unexpected syntax while parsing function parameter
+  ┌─ const_generic_impl_target_array.fe:6:12
+  │
+6 │     fn get(ref self, i: usize) -> ref T
+  │            ^^^ unexpected
+
+error[1-0001]: unexpected syntax while parsing function parameter
+   ┌─ const_generic_impl_target_array.fe:15:12
+   │
+15 │     fn get(ref self, i: usize) -> ref T {
+   │            ^^^ unexpected

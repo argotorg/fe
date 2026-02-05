@@ -2432,7 +2432,12 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                 }
             }
 
-            Self::ExplicitMoveRequired { primary } => CompleteDiagnostic {
+            Self::ExplicitMoveRequired {
+                primary,
+                body,
+                expr,
+                ty,
+            } => CompleteDiagnostic {
                 severity: Severity::Error,
                 message: "explicit move required".to_string(),
                 sub_diagnostics: vec![SubDiagnostic {
@@ -2441,8 +2446,14 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                     span: primary.resolve(db),
                 }],
                 notes: vec![
-                    "help: use `move <place>` to move a non-`Copy` value out of a place"
-                        .to_string(),
+                    format!(
+                        "`{}` doesn't implement the `Copy` trait",
+                        ty.pretty_print(db)
+                    ),
+                    format!(
+                        "try `move {}`",
+                        expr.data(db, *body).unwrap_ref().pretty_print(db, *body, 0)
+                    ),
                 ],
                 error_code,
             },

@@ -1012,22 +1012,46 @@ impl<'db, 'a> Borrowck<'db, 'a> {
         active: &FxHashSet<LoanId>,
         suspended: &FxHashSet<LoanId>,
     ) -> Option<CompleteDiagnostic> {
-        for (place, _) in move_places_in_inst(&self.func.body, inst) {
+        let mut no_note_conflicts = Vec::new();
+        for (place, move_value) in move_places_in_inst(&self.func.body, inst) {
             if let Some(MoveConflict { label, note }) =
                 self.check_move_out_place(&place, state, moved, active, suspended)
             {
-                let mut diag = self.diag_at_inst(2, inst, self.move_conflict_header(), label);
                 match note {
                     Some(MoveConflictNote::Moved { moved, moved_name }) => {
-                        self.push_move_origin_label(&mut diag, moved, moved_name)
+                        let mut diag =
+                            self.diag_at_inst(2, inst, self.move_conflict_header(), label);
+                        self.push_move_origin_label(&mut diag, moved, moved_name);
+                        return Some(diag);
                     }
                     Some(MoveConflictNote::Loan(loan)) => {
-                        self.push_loan_origin_label(&mut diag, loan)
+                        let mut diag =
+                            self.diag_at_inst(2, inst, self.move_conflict_header(), label);
+                        self.push_loan_origin_label(&mut diag, loan);
+                        return Some(diag);
                     }
-                    None => {}
+                    None => {
+                        no_note_conflicts.push((move_value, label));
+                    }
                 }
-                return Some(diag);
             }
+        }
+        if let Some((first_value, first_label)) = no_note_conflicts.first() {
+            let mut diag = self.diag_at_value(
+                2,
+                *first_value,
+                self.move_conflict_header(),
+                first_label.clone(),
+            );
+            for (value, label) in no_note_conflicts.into_iter().skip(1) {
+                let span = self.span_for_source(self.func.body.value(value).source);
+                diag.sub_diagnostics.push(SubDiagnostic::new(
+                    LabelStyle::Primary,
+                    label,
+                    Some(span),
+                ));
+            }
+            return Some(diag);
         }
 
         for value in borrow_values_in_inst(&self.func.body, inst) {
@@ -1570,10 +1594,14 @@ impl<'db, 'a> Borrowck<'db, 'a> {
             panic!("missing loan id for borrow-handle call expr {expr:?}");
         };
         let Some(callee) = call.resolved_name.as_ref() else {
-            panic!("borrow-handle call must have a resolved callee name");
+            // Generic templates may contain unresolved call targets; skip summary application in
+            // that case so we can still report local borrow/move conflicts.
+            return;
         };
         let Some(summary) = self.summaries.get(callee) else {
-            panic!("missing borrow summary for callee `{callee}`");
+            // If we don't have a summary (e.g. callee not in this analysis set), treat it as not
+            // contributing any borrow transforms.
+            return;
         };
 
         let mut targets = FxHashSet::default();

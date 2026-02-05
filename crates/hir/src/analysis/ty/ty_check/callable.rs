@@ -262,12 +262,11 @@ impl<'db> Callable<'db> {
             tc.equate_ty(given.expr_prop.ty, expected, given.expr_span.clone());
             let expected = tc.normalize_ty(expected);
 
-            // Enforce explicit call-site borrow/move syntax for places.
+            // Enforce explicit call-site borrow syntax for places.
             //
             // Borrow handles are copyable values, and `move` parameters consume their argument.
-            // Requiring explicit `ref`/`mut`/`move` on *place* arguments makes ownership/aliasing
-            // visible at the call site, and ensures MIR borrow checking sees the right loan/move
-            // operations to preserve soundness.
+            // Requiring explicit `ref`/`mut` on *place* arguments makes aliasing visible at the
+            // call site, and ensures MIR borrow checking sees the right loan operations.
             if let Some(params) = func_params.as_ref() {
                 let arg_is_place = tc.env.expr_place(given.expr).is_some();
 
@@ -299,12 +298,12 @@ impl<'db> Callable<'db> {
                             ty: expected,
                         });
                     } else {
-                        tc.require_explicit_move_for_owned_expr(given.expr, expected);
+                        tc.record_implicit_move_for_owned_expr(given.expr, expected);
                     }
                 }
             } else {
                 // Variant constructors materialize their fields immediately (owned context).
-                tc.require_explicit_move_for_owned_expr(given.expr, expected);
+                tc.record_implicit_move_for_owned_expr(given.expr, expected);
             }
         }
     }

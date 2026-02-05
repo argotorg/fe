@@ -184,7 +184,7 @@ impl<'db> TyChecker<'db> {
 
         let root_expr = self.env.body().expr(self.db);
         self.check_expr(root_expr, self.expected);
-        self.require_explicit_move_for_owned_expr(root_expr, self.expected);
+        self.record_implicit_move_for_owned_expr(root_expr, self.expected);
     }
 
     fn check_move_param_types(&mut self) {
@@ -825,16 +825,15 @@ impl<'db> TyChecker<'db> {
         crate::analysis::ty::ty_is_copy(self.db, self.env.scope(), ty, self.env.assumptions())
     }
 
-    /// In "owned" contexts, non-`Copy` values must be moved explicitly from places.
+    /// In "owned" contexts, non-`Copy` values are implicitly moved from places.
     ///
-    /// This prevents implicit duplication of non-`Copy` values (which would create aliasing for
-    /// by-reference aggregates). `Copy` values may be duplicated implicitly.
-    fn require_explicit_move_for_owned_expr(&mut self, expr: ExprId, ty: TyId<'db>) {
+    /// `Copy` values may be duplicated implicitly.
+    fn record_implicit_move_for_owned_expr(&mut self, expr: ExprId, ty: TyId<'db>) {
         let _ = ty;
-        self.require_explicit_move_for_owned_expr_inner(expr);
+        self.record_implicit_move_for_owned_expr_inner(expr);
     }
 
-    fn require_explicit_move_for_owned_expr_inner(&mut self, expr: ExprId) {
+    fn record_implicit_move_for_owned_expr_inner(&mut self, expr: ExprId) {
         let db = self.db;
         let body = self.body();
         let Partial::Present(expr_data) = expr.data(db, body) else {
@@ -853,21 +852,21 @@ impl<'db> TyChecker<'db> {
                 let crate::hir_def::Stmt::Expr(tail) = stmt else {
                     return;
                 };
-                self.require_explicit_move_for_owned_expr_inner(*tail);
+                self.record_implicit_move_for_owned_expr_inner(*tail);
             }
             Expr::With(_, body_expr) | Expr::Cast(body_expr, _) | Expr::If(_, body_expr, None) => {
-                self.require_explicit_move_for_owned_expr_inner(*body_expr);
+                self.record_implicit_move_for_owned_expr_inner(*body_expr);
             }
             Expr::If(_, then_expr, Some(else_expr)) => {
-                self.require_explicit_move_for_owned_expr_inner(*then_expr);
-                self.require_explicit_move_for_owned_expr_inner(*else_expr);
+                self.record_implicit_move_for_owned_expr_inner(*then_expr);
+                self.record_implicit_move_for_owned_expr_inner(*else_expr);
             }
             Expr::Match(_, arms) => {
                 let Partial::Present(arms) = arms else {
                     return;
                 };
                 for arm in arms {
-                    self.require_explicit_move_for_owned_expr_inner(arm.body);
+                    self.record_implicit_move_for_owned_expr_inner(arm.body);
                 }
             }
             _ => {
@@ -887,9 +886,7 @@ impl<'db> TyChecker<'db> {
                     return;
                 }
 
-                self.push_diag(BodyDiag::ExplicitMoveRequired {
-                    primary: expr.span(body).into(),
-                });
+                self.env.record_implicit_move(expr);
             }
         }
     }
@@ -1239,6 +1236,7 @@ pub struct TypedBody<'db> {
     body: Option<Body<'db>>,
     pat_ty: FxHashMap<PatId, TyId<'db>>,
     expr_ty: FxHashMap<ExprId, ExprProp<'db>>,
+    implicit_moves: FxHashSet<ExprId>,
     const_refs: FxHashMap<ExprId, ConstRef<'db>>,
     callables: FxHashMap<ExprId, Callable<'db>>,
     call_effect_args: FxHashMap<ExprId, Vec<ResolvedEffectArg<'db>>>,
@@ -1308,6 +1306,7 @@ impl<'db> TyFoldable<'db> for TypedBody<'db> {
             body: self.body,
             pat_ty,
             expr_ty,
+            implicit_moves: self.implicit_moves,
             const_refs,
             callables,
             call_effect_args: self.call_effect_args,
@@ -1332,6 +1331,10 @@ impl<'db> TypedBody<'db> {
             .get(&expr)
             .cloned()
             .unwrap_or_else(|| ExprProp::invalid(db))
+    }
+
+    pub fn is_implicit_move(&self, expr: ExprId) -> bool {
+        self.implicit_moves.contains(&expr)
     }
 
     pub fn expr_const_ref(&self, expr: ExprId) -> Option<ConstRef<'db>> {
@@ -1438,6 +1441,7 @@ impl<'db> TypedBody<'db> {
             body: None,
             pat_ty: FxHashMap::default(),
             expr_ty: FxHashMap::default(),
+            implicit_moves: FxHashSet::default(),
             const_refs: FxHashMap::default(),
             callables: FxHashMap::default(),
             call_effect_args: FxHashMap::default(),

@@ -193,6 +193,21 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
             return self.ensure_value(expr);
         }
 
+        if self.typed_body.is_implicit_move(expr) {
+            let assumptions =
+                hir::analysis::ty::trait_resolution::PredicateListId::empty_list(self.db);
+            let ty = self.typed_body.expr_ty(self.db, expr);
+            if hir::analysis::ty::ty_is_copy(self.db, self.core.scope, ty, assumptions) {
+                return self.ensure_value(expr);
+            }
+
+            let value_id = self.ensure_value(expr);
+            if let Some(place) = self.place_for_borrow_expr(expr) {
+                self.builder.body.values[value_id.index()].origin = ValueOrigin::MoveOut { place };
+                return value_id;
+            }
+        }
+
         if let Some(value) = self.try_lower_variant_ctor(expr, None) {
             return value;
         }
@@ -269,7 +284,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                             ValueRepr::Ptr(AddressSpaceKind::Memory);
                     }
                     hir::hir_def::expr::UnOp::Move => {
-                        if let Some(place) = self.place_for_expr(*inner) {
+                        if let Some(place) = self.place_for_borrow_expr(*inner) {
                             self.builder.body.values[value_id.index()].origin =
                                 ValueOrigin::MoveOut { place };
                         } else {
@@ -832,6 +847,14 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
             return value_id;
         }
 
+        if self.typed_body.is_implicit_move(expr) {
+            let value_id = self.lower_expr(expr);
+            if self.current_block().is_some() {
+                self.assign(Some(stmt), Some(dest), Rvalue::Value(value_id));
+            }
+            return value_id;
+        }
+
         match expr.data(self.db, self.body) {
             Partial::Present(Expr::Call(..) | Expr::MethodCall(..)) => {
                 self.lower_call_expr_inner(expr, Some(dest), Some(stmt))
@@ -1085,7 +1108,8 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         };
 
         // Transparent newtype access: field 0 is a representation-preserving cast.
-        if info.field_idx == 0
+        if !lhs_is_borrow
+            && info.field_idx == 0
             && crate::repr::transparent_newtype_field_ty(self.db, lhs_place_ty).is_some()
         {
             let base_repr = self.builder.body.value(base_value).repr;

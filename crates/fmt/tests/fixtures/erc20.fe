@@ -1,3 +1,5 @@
+use std::evm::effects::Address
+
 // roles
 const MINTER: u256 = 1
 const BURNER: u256 = 2
@@ -258,18 +260,6 @@ struct ApprovalEvent {
 // stubs for missing std lib stuff
 extern {
     fn assert(_: bool, _: String<64>)
-}
-
-pub struct Address { inner: u256 }
-impl Address {
-    pub fn zero() -> Self {
-        Address { inner: 0 }
-    }
-}
-impl core::ops::Eq for Address {
-    fn eq(self, _ other: Address) -> bool {
-        self.inner == other.inner
-    }
 }
 
 pub struct Map<K, V> {}

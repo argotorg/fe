@@ -1,6 +1,5 @@
 ---
 source: crates/codegen/tests/yul.rs
-assertion_line: 33
 expression: output
 input_file: tests/fixtures/erc20_low_level.fe
 ---
@@ -50,12 +49,10 @@ object "Erc20Contract" {
     code {
       function $_a__b__h47f120de72304a2d_storagekey_hf9e3d38a13ff4409_write_key__Address_h257056268eac7027_Address_h257056268eac7027__af929e62fa4c68f2($ptr, $self) -> ret {
         let v0 := mload($self)
-        let v1 := v0
+        let v1 := $address_h257056268eac7027_storagekey_hf9e3d38a13ff4409_write_key($ptr, v0)
         let v2 := mload(add($self, 32))
-        let v3 := v2
-        let v4 := $address_h257056268eac7027_storagekey_hf9e3d38a13ff4409_write_key($ptr, v1)
-        let v5 := $address_h257056268eac7027_storagekey_hf9e3d38a13ff4409_write_key(add($ptr, v4), v3)
-        ret := add(v4, v5)
+        let v3 := $address_h257056268eac7027_storagekey_hf9e3d38a13ff4409_write_key(add($ptr, v1), v2)
+        ret := add(v1, v3)
         leave
       }
       function $abi_encode_string__Evm_hef0af3106e109414__3af54274b2985741($word, $len, $ops) {

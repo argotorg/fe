@@ -175,6 +175,32 @@ pub fn lower_module<'db>(
 
     templates.extend(contracts::lower_contract_templates(db, top_mod)?);
 
+    // Run MIR diagnostics on the generic templates as well as the monomorphized instances. This
+    // ensures borrow/move errors are surfaced even when a generic function is never instantiated.
+    let template_borrow_summaries =
+        crate::analysis::borrowck::compute_borrow_summaries(db, &templates).map_err(|err| {
+            let diagnostics = hir::analysis::diagnostics::format_diags(db, [&err.diagnostic]);
+            MirLowerError::MirDiagnostics {
+                func_name: err.func_name,
+                diagnostics,
+            }
+        })?;
+    for func in &templates {
+        if let Some(diag) =
+            crate::analysis::borrowck::check_borrows(db, func, &template_borrow_summaries)
+        {
+            let func_name = match func.origin {
+                crate::ir::MirFunctionOrigin::Hir(hir_func) => hir_func.pretty_print_signature(db),
+                crate::ir::MirFunctionOrigin::Synthetic(_) => func.symbol_name.clone(),
+            };
+            let diagnostics = hir::analysis::diagnostics::format_diags(db, [&diag]);
+            return Err(MirLowerError::MirDiagnostics {
+                func_name,
+                diagnostics,
+            });
+        }
+    }
+
     let mut functions = monomorphize_functions(db, templates);
     for func in &mut functions {
         crate::transform::canonicalize_transparent_newtypes(db, &mut func.body);

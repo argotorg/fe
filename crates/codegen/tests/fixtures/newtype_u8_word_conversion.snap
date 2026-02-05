@@ -1,5 +1,6 @@
 ---
 source: crates/codegen/tests/yul.rs
+assertion_line: 33
 expression: output
 input_file: tests/fixtures/newtype_u8_word_conversion.fe
 ---
@@ -12,7 +13,8 @@ function $newtype_u8_roundtrip($x) -> ret {
   mstore(v0, and($x, 0xff))
   mstore(add(v0, 1), 0)
   let v1 := v0
-  let v2 := and(mload(v1), 0xff)
-  ret := v2
+  let v2 := v1
+  let v3 := and(mload(v2), 0xff)
+  ret := v3
   leave
 }

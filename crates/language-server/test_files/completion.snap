@@ -10,6 +10,7 @@ note:
    │         ^ cursor 1
 
 completions:
+  - Copy (Interface)
   - Default (Interface)
   - Drawable (Interface)
   - Err (EnumMember)

@@ -124,7 +124,7 @@ impl<'db> TyChecker<'db> {
             }
 
             if pat_binds_any(self.db, self.body(), *pat) {
-                self.require_explicit_move_for_owned_expr(*expr, prop.ty);
+                self.record_implicit_move_for_owned_expr(*expr, prop.ty);
             }
         }
 
@@ -380,7 +380,7 @@ impl<'db> TyChecker<'db> {
 
             self.push_diag(diag);
         } else if ret_ty_ok && let Some(expr) = returned_expr {
-            self.require_explicit_move_for_owned_expr(expr, self.expected);
+            self.record_implicit_move_for_owned_expr(expr, self.expected);
         }
 
         TyId::never(self.db)

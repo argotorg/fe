@@ -21,9 +21,9 @@ function $test_module_qualifier_flatten_collision() -> ret {
 function $test_generic_type_collision() -> ret {
   let v0 := 1
   let v1 := 2
-  let v2 := $generic_fn__S_h730d9dc564aaaf27__8d32801e7ec9d42b(v0)
+  let v2 := $generic_fn__S_h730d9dc564aaaf27__8d32801e7ec9d42b(and(v0, 0xffffffff))
   pop(v2)
-  let v3 := $generic_fn__S_h2db58d011b97b333__42a13489a1ec39e8(v1)
+  let v3 := $generic_fn__S_h2db58d011b97b333__42a13489a1ec39e8(and(v1, 0xffffffffffffffff))
   pop(v3)
   ret := 42
   leave
@@ -120,10 +120,10 @@ function $main() -> ret {
   leave
 }
 function $generic_fn__S_h730d9dc564aaaf27__8d32801e7ec9d42b($val) -> ret {
-  ret := $val
+  ret := and($val, 0xffffffff)
   leave
 }
 function $generic_fn__S_h2db58d011b97b333__42a13489a1ec39e8($val) -> ret {
-  ret := $val
+  ret := and($val, 0xffffffffffffffff)
   leave
 }
