@@ -11,29 +11,22 @@ func public %sum_const() -> i256 {
         jump block1;
 
     block1:
-        v14.i256 = phi (0.i256 block0) (v15 block3);
-        v3.i256 = phi (v1 block0) (v13 block3);
+        v14.i256 = phi (0.i256 block0) (v8 block3);
         v2.i256 = phi (0.i256 block0) (v11 block3);
-        v4.i256 = lt v2 v3;
+        v4.i256 = lt v2 v1;
         br v4 block2 block4;
 
     block2:
-        v7.i256 = phi (v14 block1);
-        v5.i256 = phi (v2 block1);
-        v6.i256 = call %range_known_const_s__usize___known_const_e__usize___seq_get__0_4__f9605efabd18106c v5;
-        v8.i256 = add v7 v6;
+        v6.i256 = call %range_known_const_s__usize___known_const_e__usize___seq_get__0_4__f9605efabd18106c v2;
+        v8.i256 = add v14 v6;
         jump block3;
 
     block3:
-        v15.i256 = phi (v8 block2);
-        v13.i256 = phi (v3 block2);
-        v9.i256 = phi (v5 block2);
-        v11.i256 = add v9 1.i256;
+        v11.i256 = add v2 1.i256;
         jump block1;
 
     block4:
-        v12.i256 = phi (v14 block1);
-        return v12;
+        return v14;
 }
 
 func public %sum_dynamic_end(v0.i256) -> i256 {
@@ -44,29 +37,22 @@ func public %sum_dynamic_end(v0.i256) -> i256 {
         jump block1;
 
     block1:
-        v17.i256 = phi (0.i256 block0) (v18 block3);
-        v6.i256 = phi (v4 block0) (v16 block3);
+        v17.i256 = phi (0.i256 block0) (v11 block3);
         v5.i256 = phi (0.i256 block0) (v14 block3);
-        v7.i256 = lt v5 v6;
+        v7.i256 = lt v5 v4;
         br v7 block2 block4;
 
     block2:
-        v10.i256 = phi (v17 block1);
-        v8.i256 = phi (v5 block1);
-        v9.i256 = call %range_known_const_s__usize___known_const_e__usize___seq_get__0_4__f9605efabd18106c v8;
-        v11.i256 = add v10 v9;
+        v9.i256 = call %range_known_const_s__usize___known_const_e__usize___seq_get__0_4__f9605efabd18106c v5;
+        v11.i256 = add v17 v9;
         jump block3;
 
     block3:
-        v18.i256 = phi (v11 block2);
-        v16.i256 = phi (v6 block2);
-        v12.i256 = phi (v8 block2);
-        v14.i256 = add v12 1.i256;
+        v14.i256 = add v5 1.i256;
         jump block1;
 
     block4:
-        v15.i256 = phi (v17 block1);
-        return v15;
+        return v17;
 }
 
 func public %sum_dynamic_start(v0.i256) -> i256 {
@@ -77,32 +63,22 @@ func public %sum_dynamic_start(v0.i256) -> i256 {
         jump block1;
 
     block1:
-        v20.i256 = phi (0.i256 block0) (v21 block3);
-        v18.i256 = phi (v3 block0) (v19 block3);
-        v6.i256 = phi (v4 block0) (v17 block3);
+        v20.i256 = phi (0.i256 block0) (v12 block3);
         v5.i256 = phi (0.i256 block0) (v15 block3);
-        v7.i256 = lt v5 v6;
+        v7.i256 = lt v5 v4;
         br v7 block2 block4;
 
     block2:
-        v11.i256 = phi (v20 block1);
-        v9.i256 = phi (v5 block1);
-        v8.i256 = phi (v18 block1);
-        v10.i256 = call %range_unknown__known_const_e__usize___seq_get__4__f248ae0e02044d7e v8 v9;
-        v12.i256 = add v11 v10;
+        v10.i256 = call %range_unknown__known_const_e__usize___seq_get__4__f248ae0e02044d7e v3 v5;
+        v12.i256 = add v20 v10;
         jump block3;
 
     block3:
-        v21.i256 = phi (v12 block2);
-        v19.i256 = phi (v8 block2);
-        v17.i256 = phi (v6 block2);
-        v13.i256 = phi (v9 block2);
-        v15.i256 = add v13 1.i256;
+        v15.i256 = add v5 1.i256;
         jump block1;
 
     block4:
-        v16.i256 = phi (v20 block1);
-        return v16;
+        return v20;
 }
 
 func public %sum_dynamic(v0.i256, v1.i256) -> i256 {
@@ -115,32 +91,22 @@ func public %sum_dynamic(v0.i256, v1.i256) -> i256 {
         jump block1;
 
     block1:
-        v23.i256 = phi (0.i256 block0) (v24 block3);
-        v21.i256 = phi (v4 block0) (v22 block3);
-        v9.i256 = phi (v7 block0) (v20 block3);
+        v23.i256 = phi (0.i256 block0) (v15 block3);
         v8.i256 = phi (0.i256 block0) (v18 block3);
-        v10.i256 = lt v8 v9;
+        v10.i256 = lt v8 v7;
         br v10 block2 block4;
 
     block2:
-        v14.i256 = phi (v23 block1);
-        v12.i256 = phi (v8 block1);
-        v11.i256 = phi (v21 block1);
-        v13.i256 = call %range_unknown__known_const_e__usize___seq_get__4__f248ae0e02044d7e v11 v12;
-        v15.i256 = add v14 v13;
+        v13.i256 = call %range_unknown__known_const_e__usize___seq_get__4__f248ae0e02044d7e v4 v8;
+        v15.i256 = add v23 v13;
         jump block3;
 
     block3:
-        v24.i256 = phi (v15 block2);
-        v22.i256 = phi (v11 block2);
-        v20.i256 = phi (v9 block2);
-        v16.i256 = phi (v12 block2);
-        v18.i256 = add v16 1.i256;
+        v18.i256 = add v8 1.i256;
         jump block1;
 
     block4:
-        v19.i256 = phi (v23 block1);
-        return v19;
+        return v23;
 }
 
 func public %range_known_const_s__usize___known_const_e__usize___seq_len__0_4__f9605efabd18106c() -> i256 {
@@ -182,8 +148,7 @@ func public %range_known_const_s__usize___unknown__seq_len__0__fc6647014fb554e5(
         jump block3;
 
     block2:
-        v7.i256 = phi (v11 block4) (v11 block4);
-        v8.i256 = mload v7 i256;
+        v8.i256 = mload v0 i256;
         v9.i256 = sub v8 0.i256;
         jump block3;
 
@@ -192,7 +157,6 @@ func public %range_known_const_s__usize___unknown__seq_len__0__fc6647014fb554e5(
         return v10;
 
     block4:
-        v11.i256 = phi (v0 block0);
         v6.i256 = eq v3 0.i256;
         br v6 block2 block2;
 }
@@ -208,8 +172,7 @@ func public %range_unknown__known_const_e__usize___seq_len__4__f248ae0e02044d7e(
         jump block3;
 
     block2:
-        v8.i256 = phi (v12 block4) (v12 block4);
-        v9.i256 = mload v8 i256;
+        v9.i256 = mload v0 i256;
         v10.i256 = sub 4.i256 v9;
         jump block3;
 
@@ -218,7 +181,6 @@ func public %range_unknown__known_const_e__usize___seq_len__4__f248ae0e02044d7e(
         return v11;
 
     block4:
-        v12.i256 = phi (v0 block0);
         v7.i256 = eq v4 0.i256;
         br v7 block2 block2;
 }
@@ -243,10 +205,9 @@ func public %range_unknown__unknown__seq_len(v0.i256) -> i256 {
         jump block3;
 
     block2:
-        v10.i256 = phi (v16 block4) (v16 block4);
-        v11.i256 = add v10 32.i256;
+        v11.i256 = add v0 32.i256;
         v12.i256 = mload v11 i256;
-        v13.i256 = mload v10 i256;
+        v13.i256 = mload v0 i256;
         v14.i256 = sub v12 v13;
         jump block3;
 
@@ -255,7 +216,6 @@ func public %range_unknown__unknown__seq_len(v0.i256) -> i256 {
         return v15;
 
     block4:
-        v16.i256 = phi (v0 block0);
         v9.i256 = eq v6 0.i256;
         br v9 block2 block2;
 }

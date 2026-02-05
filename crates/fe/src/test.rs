@@ -3,6 +3,11 @@
 //! Discovers functions marked with `#[test]` attribute, compiles them, and
 //! executes them using revm.
 
+use crate::report::{
+    PanicReportGuard, ReportStaging, copy_input_into_report, create_dir_all_utf8,
+    create_report_staging_root, enable_panic_report, normalize_report_out_path,
+    panic_payload_to_string, sanitize_filename, tar_gz_dir, write_report_meta,
+};
 use camino::Utf8PathBuf;
 use codegen::{TestMetadata, emit_test_module_sonatina, emit_test_module_yul};
 use colored::Colorize;
@@ -11,19 +16,15 @@ use contract_harness::{ExecutionOptions, RuntimeInstance};
 use driver::DriverDataBase;
 use hir::hir_def::{HirIngot, TopLevelMod};
 use mir::{fmt as mir_fmt, lower_module};
-use crate::report::{
-    PanicHookGuard, copy_input_into_report, create_dir_all_utf8, install_panic_hook,
-    normalize_report_out_path, panic_payload_to_string, sanitize_filename, tar_gz_dir,
-};
 use rustc_hash::FxHashSet;
 use solc_runner::compile_single_contract;
 use url::Url;
 
-fn install_report_panic_hook(report: &ReportContext, filename: &str) -> PanicHookGuard {
+fn install_report_panic_hook(report: &ReportContext, filename: &str) -> PanicReportGuard {
     let dir = report.root_dir.join("errors");
     create_dir_all_utf8(&dir);
     let path = dir.join(filename);
-    install_panic_hook(path)
+    enable_panic_report(path)
 }
 
 /// Result of running a single test.
@@ -170,7 +171,11 @@ fn truncate_file(path: &Utf8PathBuf) {
 
 fn unique_report_path(dir: &Utf8PathBuf, suite: &str) -> Utf8PathBuf {
     let base = sanitize_filename(suite);
-    let base = if base.is_empty() { "tests".to_string() } else { base };
+    let base = if base.is_empty() {
+        "tests".to_string()
+    } else {
+        base
+    };
     let mut candidate = dir.join(format!("{base}.tar.gz"));
     if !candidate.exists() {
         return candidate;
@@ -219,10 +224,18 @@ pub fn run_tests(
     }
 
     let report_root = report_out.map(|out| {
-        let staging = create_report_staging_dir();
+        let staging = create_run_report_staging();
         let out = normalize_report_out_path(out);
         (out, staging)
     });
+
+    if let Some((_, staging)) = report_root.as_ref() {
+        let root = &staging.root_dir;
+        create_dir_all_utf8(&root.join("passed"));
+        create_dir_all_utf8(&root.join("failed"));
+        create_dir_all_utf8(&root.join("tmp"));
+        write_report_meta(root, "fe test report", None);
+    }
 
     for path in input_paths {
         let suite = suite_name_for_path(&path);
@@ -232,25 +245,34 @@ pub fn run_tests(
         }
 
         let suite_report = report_dir.map(|dir| {
-            let staging = create_report_staging_dir();
+            let staging = create_suite_report_staging(&suite);
             let out = unique_report_path(dir, &suite);
             (out, staging)
         });
 
-        let report_ctx = suite_report
-            .as_ref()
-            .map(|(_, staging)| staging)
-            .or_else(|| report_root.as_ref().map(|(_, staging)| staging))
-            .map(|staging| {
-                let suite_dir = staging.join("suites").join(&suite);
-                create_dir_all_utf8(&suite_dir);
-                let inputs_dir = suite_dir.join("inputs");
-                create_dir_all_utf8(&inputs_dir);
-                copy_input_into_report(&path, &inputs_dir);
-                ReportContext {
-                    root_dir: suite_dir,
-                }
-            });
+        let report_ctx = if let Some((_, staging)) = suite_report.as_ref() {
+            let suite_dir = staging.root_dir.clone();
+            write_report_meta(&suite_dir, "fe test report (suite)", Some(&suite));
+            let inputs_dir = suite_dir.join("inputs");
+            create_dir_all_utf8(&inputs_dir);
+            copy_input_into_report(&path, &inputs_dir);
+            Some(ReportContext {
+                root_dir: suite_dir,
+            })
+        } else if let Some((_, staging)) = report_root.as_ref() {
+            let root = &staging.root_dir;
+            let suite_dir = root.join("tmp").join(&suite);
+            create_dir_all_utf8(&suite_dir);
+            write_report_meta(&suite_dir, "fe test report (suite)", Some(&suite));
+            let inputs_dir = suite_dir.join("inputs");
+            create_dir_all_utf8(&inputs_dir);
+            copy_input_into_report(&path, &inputs_dir);
+            Some(ReportContext {
+                root_dir: suite_dir,
+            })
+        } else {
+            None
+        };
 
         let mut suite_debug = debug.clone();
         if report_ctx.is_some() {
@@ -258,9 +280,7 @@ pub fn run_tests(
             suite_debug.trace_evm = true;
             suite_debug.sonatina_symtab = true;
             suite_debug.sonatina_transient_malloc_trace = true;
-            suite_debug.debug_dir = report_ctx
-                .as_ref()
-                .map(|ctx| ctx.root_dir.join("debug"));
+            suite_debug.debug_dir = report_ctx.as_ref().map(|ctx| ctx.root_dir.join("debug"));
         }
         suite_debug.configure_process_env();
 
@@ -295,16 +315,33 @@ pub fn run_tests(
         if let Some((out, staging)) = suite_report {
             let should_write = !report_failed_only || suite_results.iter().any(|r| !r.passed);
             if should_write {
-                write_report_manifest(&staging, backend, filter, &suite_results);
-                if let Err(err) = tar_gz_dir(&staging, &out) {
+                write_report_manifest(&staging.root_dir, backend, filter, &suite_results);
+                if let Err(err) = tar_gz_dir(&staging.root_dir, &out) {
                     eprintln!("Error: failed to write report `{out}`: {err}");
-                    eprintln!("Report staging directory left at `{staging}`");
+                    eprintln!("Report staging directory left at `{}`", staging.temp_dir);
                 } else {
-                    let _ = std::fs::remove_dir_all(&staging);
+                    let _ = std::fs::remove_dir_all(&staging.temp_dir);
                     println!("wrote report: {out}");
                 }
             } else {
-                let _ = std::fs::remove_dir_all(&staging);
+                let _ = std::fs::remove_dir_all(&staging.temp_dir);
+            }
+        }
+
+        if let Some((_, staging)) = &report_root
+            && report_ctx.is_some()
+        {
+            let root = &staging.root_dir;
+            let status_dir = if suite_results.iter().any(|r| !r.passed) {
+                "failed"
+            } else {
+                "passed"
+            };
+            let from = root.join("tmp").join(&suite);
+            let to = root.join(status_dir).join(&suite);
+            if from.exists() {
+                let _ = std::fs::remove_dir_all(&to);
+                let _ = std::fs::rename(&from, &to);
             }
         }
 
@@ -316,13 +353,16 @@ pub fn run_tests(
     }
 
     if let Some((out, staging)) = report_root {
-        write_report_manifest(&staging, backend, filter, &test_results);
-        if let Err(err) = tar_gz_dir(&staging, &out) {
+        // Clean up tmp dir, if any suites were moved.
+        let _ = std::fs::remove_dir_all(staging.root_dir.join("tmp"));
+
+        write_report_manifest(&staging.root_dir, backend, filter, &test_results);
+        if let Err(err) = tar_gz_dir(&staging.root_dir, &out) {
             eprintln!("Error: failed to write report `{out}`: {err}");
-            eprintln!("Report staging directory left at `{staging}`");
+            eprintln!("Report staging directory left at `{}`", staging.temp_dir);
         } else {
             // Best-effort cleanup.
-            let _ = std::fs::remove_dir_all(&staging);
+            let _ = std::fs::remove_dir_all(&staging.temp_dir);
             println!("wrote report: {out}");
         }
     }
@@ -402,7 +442,9 @@ fn run_tests_single_file(
 
     // Discover and run tests
     maybe_write_suite_ir(db, top_mod, backend, report);
-    discover_and_run_tests(db, top_mod, suite, filter, show_logs, backend, debug, report)
+    discover_and_run_tests(
+        db, top_mod, suite, filter, show_logs, backend, debug, report,
+    )
 }
 
 /// Runs tests in an ingot directory (containing `fe.toml`).
@@ -467,7 +509,9 @@ fn run_tests_ingot(
 
     let root_mod = ingot.root_mod(db);
     maybe_write_suite_ir(db, root_mod, backend, report);
-    discover_and_run_tests(db, root_mod, suite, filter, show_logs, backend, debug, report)
+    discover_and_run_tests(
+        db, root_mod, suite, filter, show_logs, backend, debug, report,
+    )
 }
 
 /// Discovers `#[test]` functions, compiles them, and executes each one.
@@ -738,6 +782,15 @@ fn looks_like_glob(pattern: &str) -> bool {
     pattern.contains('*') || pattern.contains('?') || pattern.contains('[')
 }
 
+fn create_run_report_staging() -> ReportStaging {
+    create_report_staging_root("target/fe-test-report-staging", "fe-test-report")
+}
+
+fn create_suite_report_staging(suite: &str) -> ReportStaging {
+    let name = format!("fe-test-report-{}", sanitize_filename(suite));
+    create_report_staging_root("target/fe-test-report-staging", &name)
+}
+
 fn compile_and_run_test(
     case: &TestMetadata,
     show_logs: bool,
@@ -863,10 +916,7 @@ fn write_yul_case_artifacts(report: &ReportContext, case: &TestMetadata) {
     let unopt = compile_single_contract(&case.object_name, &case.yul, false, true);
     if let Ok(contract) = unopt {
         let _ = std::fs::write(dir.join("bytecode.unopt.hex"), &contract.bytecode);
-        let _ = std::fs::write(
-            dir.join("runtime.unopt.hex"),
-            &contract.runtime_bytecode,
-        );
+        let _ = std::fs::write(dir.join("runtime.unopt.hex"), &contract.runtime_bytecode);
     }
 
     let opt = compile_single_contract(&case.object_name, &case.yul, true, true);
@@ -913,11 +963,18 @@ fn extract_runtime_from_sonatina_initcode(init: &[u8]) -> Option<&[u8]> {
     Some(&init[off..off + len])
 }
 
-fn write_report_manifest(staging: &Utf8PathBuf, backend: &str, filter: Option<&str>, results: &[TestResult]) {
+fn write_report_manifest(
+    staging: &Utf8PathBuf,
+    backend: &str,
+    filter: Option<&str>,
+    results: &[TestResult],
+) {
     let mut out = String::new();
     out.push_str("fe test report\n");
     out.push_str(&format!("backend: {backend}\n"));
     out.push_str(&format!("filter: {}\n", filter.unwrap_or("<none>")));
+    out.push_str(&format!("fe_version: {}\n", env!("CARGO_PKG_VERSION")));
+    out.push_str("details: see `meta/args.txt` and `meta/git.txt` for exact repro context\n");
     out.push_str(&format!("tests: {}\n", results.len()));
     let passed = results.iter().filter(|r| r.passed).count();
     out.push_str(&format!("passed: {passed}\n"));
@@ -930,10 +987,6 @@ fn write_report_manifest(staging: &Utf8PathBuf, backend: &str, filter: Option<&s
         }
     }
     let _ = std::fs::write(staging.join("manifest.txt"), out);
-}
-
-fn create_report_staging_dir() -> Utf8PathBuf {
-    crate::report::create_report_staging_dir("target/fe-test-report-staging")
 }
 
 /// Deploys and executes compiled test bytecode in revm.

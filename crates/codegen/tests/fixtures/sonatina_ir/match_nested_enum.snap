@@ -17,30 +17,26 @@ func public %match_nested_enum(v0.i256) -> i256 {
         return v2;
 
     block3:
-        v3.i256 = phi (v25 block10);
-        v5.i256 = add v3 64.i256;
+        v5.i256 = add v0 64.i256;
         v6.i256 = mload v5 i256;
         v7.i8 = trunc v6 i8;
         v8.i256 = zext v7 i256;
         jump block2;
 
     block4:
-        v9.i256 = phi (v26 block9);
-        v11.i256 = add v9 32.i256;
+        v11.i256 = add v0 32.i256;
         v12.i256 = mload v11 i256;
         v13.i8 = trunc v12 i8;
         v14.i256 = zext v13 i256;
         jump block2;
 
     block5:
-        v15.i256 = phi (v0 block0);
-        v16.i256 = mload v15 i256;
+        v16.i256 = mload v0 i256;
         v18.i256 = eq v16 0.i256;
         br v18 block6 block9;
 
     block6:
-        v20.i256 = phi (v15 block5);
-        v21.i256 = add v20 32.i256;
+        v21.i256 = add v0 32.i256;
         v22.i256 = mload v21 i256;
         v23.i256 = eq v22 0.i256;
         br v23 block1 block10;
@@ -52,12 +48,10 @@ func public %match_nested_enum(v0.i256) -> i256 {
         evm_invalid;
 
     block9:
-        v26.i256 = phi (v15 block5);
         v19.i256 = eq v16 1.i256;
         br v19 block4 block8;
 
     block10:
-        v25.i256 = phi (v20 block6);
         v24.i256 = eq v22 1.i256;
         br v24 block3 block7;
 }

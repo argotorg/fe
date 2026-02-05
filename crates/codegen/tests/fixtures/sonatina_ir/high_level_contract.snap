@@ -45,32 +45,28 @@ func public %__EchoContract_init() {
         evm_invalid;
 
     block2:
-        v29.i256 = phi (v1 block0);
-        v11.i256 = phi (v4 block0);
-        v9.i256 = phi (v3 block0);
-        v8.i256 = phi (v2 block0);
-        v10.i256 = add v8 v9;
-        v12.i256 = add v8 v9;
-        v13.i256 = sub v11 v12;
-        v14.i256 = add v8 v9;
-        v15.i256 = sub v11 v14;
+        v10.i256 = add v2 v3;
+        v12.i256 = add v2 v3;
+        v13.i256 = sub v4 v12;
+        v14.i256 = add v2 v3;
+        v15.i256 = sub v4 v14;
         v16.i256 = evm_malloc v15;
-        v17.i256 = add v8 v9;
-        v18.i256 = add v8 v9;
-        v19.i256 = sub v11 v18;
+        v17.i256 = add v2 v3;
+        v18.i256 = add v2 v3;
+        v19.i256 = sub v4 v18;
         evm_code_copy v16 v17 v19;
         v21.i256 = evm_malloc 64.i256;
         mstore v21 v16 i256;
-        v22.i256 = add v8 v9;
-        v23.i256 = sub v11 v22;
+        v22.i256 = add v2 v3;
+        v23.i256 = sub v4 v22;
         v25.i256 = add v21 32.i256;
         mstore v25 v23 i256;
         v26.i256 = call %sol_abi_decoder_new__MemoryBytes__b48f82585f3ed728 v21;
         v27.i256 = call %u256_decode_decode__Sol_SolDecoder_MemoryBytes___c66d50dfccf37f39 v26;
         v28.i256 = call %u256_decode_decode__Sol_SolDecoder_MemoryBytes___c66d50dfccf37f39 v26;
-        call %__EchoContract_init_contract v27 v28 v29;
-        evm_code_copy 0.i256 v8 v9;
-        evm_return 0.i256 v9;
+        call %__EchoContract_init_contract v27 v28 v1;
+        evm_code_copy 0.i256 v2 v3;
+        evm_return 0.i256 v3;
 }
 
 func public %__EchoContract_runtime() {
@@ -86,35 +82,28 @@ func public %__EchoContract_runtime() {
         evm_invalid;
 
     block2:
-        v10.i256 = phi (v3 block0);
-        call %answer_decode_decode__SolDecoder_CallData___c1e4510fd444b966 v10;
+        call %answer_decode_decode__SolDecoder_CallData___c1e4510fd444b966 v3;
         v11.i256 = call %__EchoContract_recv_0_0;
         call %return_value__Evm_Sol_u256__fe091c64bccbbbf1 v11;
         evm_invalid;
 
     block3:
-        v12.i256 = phi (v18 block5);
-        v13.i256 = call %echo_decode_decode__SolDecoder_CallData___c1e4510fd444b966 v12;
+        v13.i256 = call %echo_decode_decode__SolDecoder_CallData___c1e4510fd444b966 v3;
         v14.i256 = call %__EchoContract_recv_0_1 v13;
         call %return_value__Evm_Sol_u256__fe091c64bccbbbf1 v14;
         evm_invalid;
 
     block4:
-        v16.i256 = phi (v20 block6);
-        v15.i256 = phi (v19 block6);
-        call %getx_decode_decode__SolDecoder_CallData___c1e4510fd444b966 v15;
-        v17.i256 = call %__EchoContract_recv_0_2 v16;
+        call %getx_decode_decode__SolDecoder_CallData___c1e4510fd444b966 v3;
+        v17.i256 = call %__EchoContract_recv_0_2 v1;
         call %return_value__Evm_Sol_u256__fe091c64bccbbbf1 v17;
         evm_invalid;
 
     block5:
-        v18.i256 = phi (v3 block0);
         v8.i256 = eq v2 2.i256;
         br v8 block3 block6;
 
     block6:
-        v20.i256 = phi (v1 block5);
-        v19.i256 = phi (v18 block5);
         v9.i256 = eq v2 3.i256;
         br v9 block4 block1;
 }
@@ -150,12 +139,10 @@ func public %alloc(v0.i256) -> i256 {
         br v6 block1 block2;
 
     block1:
-        v7.i256 = phi (v5 block0);
         jump block2;
 
     block2:
-        v17.i256 = phi (v0 block0) (v0 block1);
-        v8.i256 = phi (v3 block0) (v7 block1);
+        v8.i256 = phi (v3 block0) (v5 block1);
         v9.i256 = eq v8 0.i256;
         br v9 block3 block4;
 
@@ -165,9 +152,8 @@ func public %alloc(v0.i256) -> i256 {
         br v12 block5 block6;
 
     block4:
-        v14.i256 = phi (v17 block2) (v18 block6);
         v13.i256 = phi (v8 block2) (v16 block6);
-        v15.i256 = add v13 v14;
+        v15.i256 = add v13 v0;
         mstore 64.i256 v15 i256;
         return v13;
 
@@ -175,7 +161,6 @@ func public %alloc(v0.i256) -> i256 {
         jump block6;
 
     block6:
-        v18.i256 = phi (v17 block3) (v17 block5);
         v16.i256 = phi (v10 block3) (8192.i256 block5);
         jump block4;
 }
@@ -210,8 +195,7 @@ func public %runtime_selector__Evm_Sol__2533f5c49b57a682() -> i256 {
         evm_invalid;
 
     block2:
-        v5.i256 = phi (v1 block0);
-        v6.i256 = call %calldata_byteinput_word_at v5 0.i256;
+        v6.i256 = call %calldata_byteinput_word_at v1 0.i256;
         v7.i256 = call %sol_abi_selector_from_prefix v6;
         return v7;
 }
@@ -288,13 +272,11 @@ func public %soldecoder_i__abidecoder_read_word__MemoryBytes__b48f82585f3ed728(v
         evm_revert 0.i256 0.i256;
 
     block2:
-        v17.i256 = phi (v7 block0);
-        v13.i256 = phi (v0 block0);
-        v14.i256 = add v13 64.i256;
+        v14.i256 = add v0 64.i256;
         v15.i256 = mload v14 i256;
-        v16.i256 = call %memorybytes_byteinput_word_at v13 v15;
-        v18.i256 = add v13 64.i256;
-        mstore v18 v17 i256;
+        v16.i256 = call %memorybytes_byteinput_word_at v0 v15;
+        v18.i256 = add v0 64.i256;
+        mstore v18 v7 i256;
         return v16;
 }
 
@@ -454,14 +436,12 @@ func public %solencoder_ensure_init_mem(v0.i256, v1.i256) {
         br v4 block1 block2;
 
     block1:
-        v7.i256 = phi (v0 block0);
-        v5.i256 = phi (v1 block0);
-        v6.i256 = evm_malloc v5;
-        mstore v7 v6 i256;
-        v9.i256 = add v7 32.i256;
+        v6.i256 = evm_malloc v1;
+        mstore v0 v6 i256;
+        v9.i256 = add v0 32.i256;
         mstore v9 v6 i256;
-        v10.i256 = add v6 v5;
-        v12.i256 = add v7 64.i256;
+        v10.i256 = add v6 v1;
+        v12.i256 = add v0 64.i256;
         mstore v12 v10 i256;
         jump block2;
 
@@ -498,14 +478,12 @@ func public %soldecoder_i__abidecoder_read_word__CallData__b9ab8dc8a4b2f9e(v0.i2
         evm_revert 0.i256 0.i256;
 
     block2:
-        v18.i256 = phi (v7 block0);
-        v13.i256 = phi (v0 block0);
-        v14.i256 = mload v13 i256;
-        v15.i256 = add v13 32.i256;
+        v14.i256 = mload v0 i256;
+        v15.i256 = add v0 32.i256;
         v16.i256 = mload v15 i256;
         v17.i256 = call %calldata_byteinput_word_at v14 v16;
-        v19.i256 = add v13 32.i256;
-        mstore v19 v18 i256;
+        v19.i256 = add v0 32.i256;
+        mstore v19 v7 i256;
         return v17;
 }
 

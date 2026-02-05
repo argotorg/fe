@@ -7,8 +7,8 @@ use mir::{fmt as mir_fmt, layout, lower_module};
 use url::Url;
 
 use crate::report::{
-    copy_input_into_report, create_dir_all_utf8, create_report_staging_dir, install_panic_hook,
-    normalize_report_out_path, panic_payload_to_string, tar_gz_dir,
+    copy_input_into_report, create_dir_all_utf8, create_report_staging_dir, enable_panic_report,
+    normalize_report_out_path, panic_payload_to_string, tar_gz_dir, write_report_meta,
 };
 
 #[derive(Debug, Clone)]
@@ -55,6 +55,7 @@ pub fn check(
         copy_input_into_report(path, &inputs_dir);
         create_dir_all_utf8(&staging.join("artifacts"));
         create_dir_all_utf8(&staging.join("errors"));
+        write_report_meta(staging, "fe check report", None);
         ReportContext {
             root_dir: staging.clone(),
         }
@@ -369,7 +370,10 @@ fn write_check_manifest(
     out.push_str(&format!("backend: {backend}\n"));
     out.push_str(&format!("dump_mir: {dump_mir}\n"));
     out.push_str(&format!("emit_yul_min: {emit_yul_min}\n"));
-    out.push_str(&format!("status: {}\n", if has_errors { "failed" } else { "ok" }));
+    out.push_str(&format!(
+        "status: {}\n",
+        if has_errors { "failed" } else { "ok" }
+    ));
     out.push_str(&format!("fe_version: {}\n", env!("CARGO_PKG_VERSION")));
     let _ = std::fs::write(staging.join("manifest.txt"), out);
 }
@@ -383,7 +387,11 @@ fn write_check_artifacts(
 ) {
     match lower_module(db, top_mod) {
         Ok(mir) => {
-            write_report_file(report, "artifacts/mir.txt", &mir_fmt::format_module(db, &mir));
+            write_report_file(
+                report,
+                "artifacts/mir.txt",
+                &mir_fmt::format_module(db, &mir),
+            );
         }
         Err(err) => {
             write_report_file(report, "artifacts/mir_error.txt", &format!("{err}"));
@@ -393,16 +401,16 @@ fn write_check_artifacts(
     match backend_kind {
         BackendKind::Yul => match codegen::emit_module_yul(db, top_mod) {
             Ok(yul) => write_report_file(report, "artifacts/yul_module.yul", &yul),
-            Err(err) => write_report_file(report, "artifacts/yul_module_error.txt", &format!("{err}")),
+            Err(err) => {
+                write_report_file(report, "artifacts/yul_module_error.txt", &format!("{err}"))
+            }
         },
         BackendKind::Sonatina => {
             match codegen::emit_module_sonatina_ir(db, top_mod) {
                 Ok(ir) => write_report_file(report, "artifacts/sonatina_ir.txt", &ir),
-                Err(err) => write_report_file(
-                    report,
-                    "artifacts/sonatina_ir_error.txt",
-                    &format!("{err}"),
-                ),
+                Err(err) => {
+                    write_report_file(report, "artifacts/sonatina_ir_error.txt", &format!("{err}"))
+                }
             }
             match codegen::validate_module_sonatina_ir(db, top_mod) {
                 Ok(v) => write_report_file(report, "artifacts/sonatina_validate.txt", &v),
@@ -415,11 +423,12 @@ fn write_check_artifacts(
         }
     }
 
-    let _hook = report
-        .root_dir
-        .join("errors")
-        .join("codegen_panic_full.txt");
-    let _hook = install_panic_hook(_hook);
+    let _hook = enable_panic_report(
+        report
+            .root_dir
+            .join("errors")
+            .join("codegen_panic_full.txt"),
+    );
 
     match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         backend.compile(db, top_mod, layout::EVM_LAYOUT)
@@ -429,7 +438,11 @@ fn write_check_artifacts(
                 write_report_file(report, "artifacts/backend_output.yul", &yul);
             }
             codegen::BackendOutput::Bytecode(bytes) => {
-                write_report_file(report, "artifacts/backend_bytecode.hex", &hex::encode(&bytes));
+                write_report_file(
+                    report,
+                    "artifacts/backend_bytecode.hex",
+                    &hex::encode(&bytes),
+                );
                 write_report_file(
                     report,
                     "artifacts/backend_bytecode_len.txt",
