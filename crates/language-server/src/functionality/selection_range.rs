@@ -112,3 +112,178 @@ pub async fn handle_selection_range(
 
     Ok(Some(results))
 }
+
+/// Build a selection range chain for a cursor position in a module.
+fn build_selection_ranges_at(
+    db: &driver::DriverDataBase,
+    top_mod: hir::hir_def::TopLevelMod,
+    cursor: parser::TextSize,
+) -> Option<SelectionRange> {
+    let scope_graph = top_mod.scope_graph(db);
+    let mut containing_spans = Vec::new();
+
+    for item in scope_graph.items_dfs(db) {
+        let item_span: hir::span::DynLazySpan = item.span().into();
+        if let Some(span) = item_span.resolve(db) {
+            let start: usize = span.range.start().into();
+            let end: usize = span.range.end().into();
+            if start <= cursor.into() && usize::from(cursor) <= end {
+                if let Ok(range) = to_lsp_range_from_span(span.clone(), db) {
+                    containing_spans.push((end - start, range));
+                }
+            }
+        }
+
+        if let Some(name_span) = item.name_span() {
+            if let Some(span) = name_span.resolve(db) {
+                let start: usize = span.range.start().into();
+                let end: usize = span.range.end().into();
+                if start <= cursor.into() && usize::from(cursor) <= end {
+                    if let Ok(range) = to_lsp_range_from_span(span, db) {
+                        containing_spans.push((end - start, range));
+                    }
+                }
+            }
+        }
+
+        if let ItemKind::Func(func) = item {
+            if let Some(body) = func.body(db) {
+                let body_span: hir::span::DynLazySpan = body.span().into();
+                if let Some(span) = body_span.resolve(db) {
+                    let start: usize = span.range.start().into();
+                    let end: usize = span.range.end().into();
+                    if start <= cursor.into() && usize::from(cursor) <= end {
+                        if let Ok(range) = to_lsp_range_from_span(span, db) {
+                            containing_spans.push((end - start, range));
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    containing_spans.sort_by_key(|(size, _)| *size);
+    containing_spans.dedup_by_key(|(_, range)| *range);
+
+    containing_spans
+        .into_iter()
+        .rev()
+        .fold(None, |parent, (_, range)| {
+            Some(SelectionRange {
+                range,
+                parent: parent.map(Box::new),
+            })
+        })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use driver::DriverDataBase;
+    use hir::lower::map_file_to_mod;
+    use url::Url;
+
+    /// Count the depth of nested selection ranges.
+    fn selection_depth(sel: &SelectionRange) -> usize {
+        let mut depth = 1;
+        let mut current = sel;
+        while let Some(parent) = &current.parent {
+            depth += 1;
+            current = parent;
+        }
+        depth
+    }
+
+    #[test]
+    fn test_selection_range_on_function_name() {
+        let mut db = DriverDataBase::default();
+        let code = "fn hello() -> i32 {\n    42\n}\n";
+        let file = db.workspace().touch(
+            &mut db,
+            Url::parse("file:///test.fe").unwrap(),
+            Some(code.to_string()),
+        );
+        let top_mod = map_file_to_mod(&db, file);
+
+        // Cursor on "hello" (offset 3)
+        let cursor = parser::TextSize::from(3);
+        let sel = build_selection_ranges_at(&db, top_mod, cursor);
+        assert!(sel.is_some(), "should have selection ranges on function name");
+
+        let sel = sel.unwrap();
+        // Innermost should be the name "hello", outermost should be the whole function
+        assert!(selection_depth(&sel) >= 2, "should have at least name and function spans");
+    }
+
+    #[test]
+    fn test_selection_range_inside_body() {
+        let mut db = DriverDataBase::default();
+        let code = "fn compute() -> i32 {\n    42\n}\n";
+        let file = db.workspace().touch(
+            &mut db,
+            Url::parse("file:///test.fe").unwrap(),
+            Some(code.to_string()),
+        );
+        let top_mod = map_file_to_mod(&db, file);
+
+        // Cursor inside body (on "42", offset ~26)
+        let offset = code.find("42").unwrap() as u32;
+        let cursor = parser::TextSize::from(offset);
+        let sel = build_selection_ranges_at(&db, top_mod, cursor);
+        assert!(sel.is_some(), "should have selection ranges inside body");
+
+        let sel = sel.unwrap();
+        // Should have at least body and function
+        assert!(selection_depth(&sel) >= 2, "should have body and function spans");
+    }
+
+    #[test]
+    fn test_selection_range_nested_items() {
+        let mut db = DriverDataBase::default();
+        let code = r#"struct Wrapper {
+    value: i32
+}
+
+impl Wrapper {
+    fn get(self) -> i32 {
+        self.value
+    }
+}
+"#;
+        let file = db.workspace().touch(
+            &mut db,
+            Url::parse("file:///test.fe").unwrap(),
+            Some(code.to_string()),
+        );
+        let top_mod = map_file_to_mod(&db, file);
+
+        // Cursor on "get" method name
+        let offset = code.find("get").unwrap() as u32;
+        let cursor = parser::TextSize::from(offset);
+        let sel = build_selection_ranges_at(&db, top_mod, cursor);
+        assert!(sel.is_some(), "should have selection ranges on method name");
+
+        let sel = sel.unwrap();
+        // Should have: method name -> method -> impl block (at least 3)
+        assert!(selection_depth(&sel) >= 3, "should have name, method, and impl spans, got {}", selection_depth(&sel));
+    }
+
+    #[test]
+    fn test_selection_range_outside_items() {
+        let mut db = DriverDataBase::default();
+        let code = "\n\nfn foo() {}\n";
+        let file = db.workspace().touch(
+            &mut db,
+            Url::parse("file:///test.fe").unwrap(),
+            Some(code.to_string()),
+        );
+        let top_mod = map_file_to_mod(&db, file);
+
+        // Cursor at offset 0 (before any items)
+        let cursor = parser::TextSize::from(0);
+        let sel = build_selection_ranges_at(&db, top_mod, cursor);
+        // May or may not find ranges depending on top-level module span
+        // The important thing is it doesn't crash
+        let _ = sel;
+    }
+}
